@@ -64,7 +64,7 @@ describe("classifyHeldKey — identity only on the three routes; device-key only
     expect(acq.heldKey).toEqual({ kind: "identity", basis: "rooted" });
   });
 
-  it("route 2: a refusal whose evidence names the held key is identity (on-chain); malformed and no-key are unconfirmed", async () => {
+  it("a refusal is never identity — even one whose evidence names the held key (a device-only key can sign its own successor); malformed and no-key are unconfirmed", async () => {
     const a = await generateKeypair();
     const b = await generateKeypair();
     const relay = new FakeRelay();
@@ -72,7 +72,7 @@ describe("classifyHeldKey — identity only on the three routes; device-key only
     const m = c2Machine(relay, a);
     const acq = await m.roster.acquire();
     expect(acq.kind).toBe("refused");
-    expect(classifyHeldKey(acq)).toEqual({ kind: "identity", basis: "on-chain" });
+    expect(classifyHeldKey(acq)).toEqual({ kind: "unconfirmed", why: "refused" });
     expect(classifyHeldKey({ kind: "no-key" })).toEqual({ kind: "unconfirmed", why: "no-key" });
     expect(
       classifyHeldKey({
@@ -472,7 +472,7 @@ describe("the rotation link (F7) and the class words", () => {
 
   it("heldKeyText covers every class", () => {
     expect(heldKeyText({ kind: "identity", basis: "rooted" })).toBeNull();
-    expect(heldKeyText({ kind: "identity", basis: "on-chain" })).toBeNull();
+    expect(heldKeyText({ kind: "unconfirmed", why: "refused" })).toBeNull();
     expect(heldKeyText({ kind: "unconfirmed", why: "no-key" })).toBeNull();
     expect(heldKeyText({ kind: "unconfirmed", why: "malformed" })).toMatch(/malformed/);
     expect(heldKeyText({ kind: "identity", basis: "relay" })).toBe("identity key per the relay");

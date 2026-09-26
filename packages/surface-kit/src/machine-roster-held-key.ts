@@ -14,10 +14,7 @@
  *   - **identity** — any one of:
  *       1. the resolved chain is `rooted` (it ends at a key that binds to
  *          the sovereign id: works offline, unforgeable for sovereign ids);
- *       2. resolution refused `held_key_superseded`, `duplicate_key` or
- *          `fork_at_held` — each needs a verified record naming the held
- *          key, so the held key is on the chain (the refusal renders as is);
- *       3. LEGACY id only: the relay's `current_public_key` names the held
+ *       2. LEGACY id only: the relay's `current_public_key` names the held
  *          key — disclosed "identity key per the relay".
  *   - **device-key** — only on POSITIVE evidence: the relay names another
  *     key as current, no verified record on the resolved chain touches the
@@ -42,9 +39,7 @@ import { emptyReplica, type MachineRosterReplica } from "./machine-roster-replic
 export type IdentityBasis =
   /** Route 1: the resolved chain roots at the sovereign id's genesis key. */
   | "rooted"
-  /** Route 2: the refusal's own evidence names the held key. */
-  | "on-chain"
-  /** Route 3 (legacy ids): the relay names the held key as current. */
+  /** Route 2 (legacy ids): the relay names the held key as current. */
   | "relay";
 
 export type HeldKeyClass =
@@ -58,7 +53,7 @@ export type HeldKeyClass =
        * `legacy-unproven`: a legacy id whose relay names no key for it;
        * `unrooted`: a sovereign id whose chain this device cannot root.
        */
-      why: "no-key" | "malformed" | "legacy-unproven" | "unrooted";
+      why: "no-key" | "malformed" | "refused" | "legacy-unproven" | "unrooted";
     };
 
 /**
@@ -93,7 +88,7 @@ export function classifyResolved(input: {
     (r) => r.old_public_key === held || r.new_public_key === held,
   );
   if (hint != null && hint !== held && !touches) return { kind: "device-key" };
-  // Route 3 — legacy ids only.
+  // Route 2 — legacy ids only.
   if (!chain.sovereign_id && hint === held) return { kind: "identity", basis: "relay" };
   return { kind: "unconfirmed", why: chain.sovereign_id ? "unrooted" : "legacy-unproven" };
 }
@@ -102,10 +97,13 @@ export function classifyResolved(input: {
 export function classifyHeldKey(acq: RosterAcquisition): HeldKeyClass {
   if (acq.kind === "no-key") return { kind: "unconfirmed", why: "no-key" };
   if (acq.kind === "refused") {
-    // Route 2: each of these needs a verified record naming the held key.
-    return acq.reason === "malformed_input"
-      ? { kind: "unconfirmed", why: "malformed" }
-      : { kind: "identity", basis: "on-chain" };
+    // A refusal is never evidence of identity (#797 decisive review): a
+    // device-only key that signed its own successor (or a cycle) is refused
+    // `held_key_superseded` / `duplicate_key` too — a verified record naming
+    // the held key proves the key is on SOME chain, not the identity's. The
+    // refusal renders itself; the class stays unconfirmed so nothing that
+    // reads `identity` as authority can act on it.
+    return { kind: "unconfirmed", why: acq.reason === "malformed_input" ? "malformed" : "refused" };
   }
   return classifyResolved({
     held: acq.signer.publicKeyHex,
@@ -132,6 +130,8 @@ export function heldKeyText(c: HeldKeyClass): string | null {
           return "this device cannot trace its key back to this identity's genesis key (the key chain it can see is incomplete), so no count is shown and nothing can be retired or enrolled from here";
         case "malformed":
           return "the roster call was malformed on this device";
+        case "refused":
+          return null;
         case "no-key":
           return null;
       }

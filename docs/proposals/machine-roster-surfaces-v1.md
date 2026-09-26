@@ -142,6 +142,8 @@ Each surface adds a thin adapter (ports) plus its render. `check-surface-control
   - A device-only key rotated through the relay's device rung renders the kit's refusal (only the class name is off).
   - The Rotate action on a C-2 surface states the C-1 cost: "your machines will need `enroll` under the new key".
 
+**A refusal is never evidence of identity (#797 decisive review).** §1A's second route, where resolution refused `held_key_superseded`, `duplicate_key` or `fork_at_held`, is **removed**. A device-only key that signs its own successor, or a cycle, is refused in the same way. A verified record naming the held key proves the key is on _some_ chain, not that it is on the identity's chain. Since a refused acquisition carries no verdict, this reachable state never produced a count, but `classifyHeldKey` is exported and C-2b/C-2c must not read `identity` as authority from it. A refusal now classes `unconfirmed` (`refused`) and renders itself. The identity routes are rooted, and a legacy relay hint equal to the held key.
+
 ## 2. Increments
 
 - **C-2a:** the shared section/state holder, plus the web adapter and render (Web Locks, IndexedDB). Web first, because it has the fewest platform constraints to prove the section on.
