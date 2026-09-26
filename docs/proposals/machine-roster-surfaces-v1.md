@@ -220,7 +220,7 @@ These record where the desktop build departs from, or adds to, the text above an
 - **Rotation (F7).** `rotateDesktopKey`'s `onCommitted` now receives the succession `record` and is awaited. `IdentityManager.rotateKey` appends the link to the replica there, best-effort. The Rotate dialog states N3's cost.
 - **Render.** `machines-render-model.ts` holds every rule and is unit-tested, a copy of the phone's model. `ui/machines-section.ts` only lays it out, as a card after the identity card in Settings → Identity.
 - **The file-key rule is defense in depth.** With `pinnedGuardian` null, an unpinned recovery cannot make a successor, so the #799 probe stays green even without the rule. A unit case pins the rule on its own: a file self-signed by a key other than the held one, carrying genuine verifying records, contributes nothing.
-- **Gate and shared names.** The desktop adapter is in `check-surface-controller-adoption` (357 lines, ceiling 360). `machine-roster.desktop.json`, `.corrupt-<t>`, `.lock` and `.lease` have a row in `key-file-durability-v1.md`'s shared-names table.
+- **Gate and shared names.** The desktop adapter is in `check-surface-controller-adoption` (at its 360-line ceiling, by the gate's count; no headroom left). `machine-roster.desktop.json`, `.corrupt-<t>`, `.lock` and `.lease` have a row in `key-file-durability-v1.md`'s shared-names table.
 - **Decisions (lead, C-2c review):**
   - **Multi-process presenting: accepted.** The shared cadence record in the replica file bounds it; there is no leader lock.
   - **Guardian-recovered identities stay `unconfirmed` on the desktop.** Stated cost, the same as on the phone.

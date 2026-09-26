@@ -118,7 +118,10 @@ export async function nextPresentationRecord(
       ? { ...prev, retry_until: boundedRetryUntil(prev, now) }
       : { digest: null, taken_at: 0, retry_until: 0 };
   if (report.retryAfterMs != null) {
-    const wait = Math.min(Math.max(0, report.retryAfterMs), MAX_RETRY_AFTER_MS);
+    // A NaN wait is read as the longest bounded wait, like Infinity, so the
+    // write rule is total (#801 round 2).
+    const asked = Number.isNaN(report.retryAfterMs) ? MAX_RETRY_AFTER_MS : report.retryAfterMs;
+    const wait = Math.min(Math.max(0, asked), MAX_RETRY_AFTER_MS);
     return { ...base, retry_until: now + wait };
   }
   if (replica != null && report.notTaken.length === 0) {

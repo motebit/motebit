@@ -569,6 +569,14 @@ describe("F8 — the presentation cadence", () => {
     );
     expect(huge?.retry_until).toBe(NOW + MAX_RETRY_AFTER_MS);
     expect(MAX_RETRY_AFTER_MS).toBe(60 * 60 * 1000);
+    // A NaN wait is stored as the longest bounded wait, never as NaN.
+    const nan = await nextPresentationRecord(
+      null,
+      { ...empty, retryAfterMs: Number.NaN },
+      replica,
+      NOW,
+    );
+    expect(nan?.retry_until).toBe(NOW + MAX_RETRY_AFTER_MS);
     // An out-of-bound value already stored is not carried into the next record.
     const planted = { digest: null, taken_at: 0, retry_until: NOW + 10 * 365 * 86_400_000 };
     const next = await nextPresentationRecord(planted, { ...empty, taken: 1 }, replica, NOW);
