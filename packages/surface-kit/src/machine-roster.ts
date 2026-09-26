@@ -310,6 +310,36 @@ export function mayMint(acq: RosterAcquired): boolean {
   return acq.served != null && acq.omitted.length === 0 && acq.cache !== "corrupt";
 }
 
+/**
+ * True iff an AUTOMATIC mint (C3 on announce, the rotation hook) may run:
+ * everything `mayMint` needs, AND this acquisition read the relay's
+ * succession chain. Without it the chain may be only `[held]`, the
+ * device's own older-key lines come back unplaceable, and "no line" is a
+ * blind spot, not a fact — a retired machine that lost its replica would
+ * re-enrol itself. A failed `/succession` is a failed read, like a failed
+ * roster GET (R27). Explicit acts (`enroll`, `retire`) use `mayMint`.
+ */
+export function mayAutoMint(acq: RosterAcquired): boolean {
+  return mayMint(acq) && acq.succession.served;
+}
+
+/**
+ * Rule 2: enrolments naming `deviceId` in the reduced input that the
+ * verdict could not place (any rejection: an older key this surface
+ * cannot place, a junk copy). While any exists, "no line" is not a fact
+ * about this machine, and it is never auto-minted.
+ */
+export function unplacedOwnEnrollments(
+  verdict: HostRosterVerdict,
+  index: ReadonlyArray<{ id: string; device_id: string }>,
+  deviceId: string,
+): number {
+  const rejected = new Set(
+    verdict.rejected.filter((r) => r.kind === "enrollment" && r.id != null).map((r) => r.id!),
+  );
+  return index.filter((e) => e.device_id === deviceId && rejected.has(e.id)).length;
+}
+
 export type ThisDeviceStatus = "active" | "retired" | "superseded" | "none";
 
 export function statusOf(
@@ -337,10 +367,15 @@ export type EnsureEnrolledOutcome =
   | { kind: "retired"; presented: PresentReport }
   /** Superseded and no frozen `active` for its epoch: not covered until `enroll`. */
   | { kind: "superseded"; frozen: FrozenValue | null; presented: PresentReport }
+  /**
+   * No placeable line, but the input holds enrolments of this device the
+   * chain cannot place (rule 2): not auto-minted — `enroll` is the act.
+   */
+  | { kind: "unplaced"; count: number; presented: PresentReport }
   /** Minting was the answer, but the state could not be read reliably enough to mint. */
   | {
       kind: "unknown";
-      why: "fetch-failed" | "omission" | "cache-corrupt";
+      why: "fetch-failed" | "succession-unread" | "omission" | "cache-corrupt";
       status: ThisDeviceStatus;
       detail: string;
     };
@@ -402,6 +437,8 @@ interface Item {
 }
 
 const pairKey = (deviceId: string, key: string): string => JSON.stringify([deviceId, key]);
+
+type FrozenVerdictEntry = MachineRosterReplica["frozen"][number];
 
 export class MachineRoster {
   constructor(private readonly ports: MachineRosterPorts) {}
@@ -578,7 +615,10 @@ export class MachineRoster {
   }
 
   /** The C3 status table over one acquisition. */
-  private async decide(acq: RosterAcquired): Promise<EnsureEnrolledOutcome> {
+  private async decide(
+    acq: RosterAcquired,
+    rotation?: FrozenVerdictEntry,
+  ): Promise<EnsureEnrolledOutcome> {
     const { status, epoch } = statusOf(acq.verdict, acq.deviceId);
 
     if (status === "active") return { kind: "active", presented: await this.present(acq) };
@@ -608,19 +648,39 @@ export class MachineRoster {
                 status,
                 detail: omissionDetail(acq.omitted.length),
               }
-            : null;
+            : !acq.succession.served
+              ? {
+                  kind: "unknown",
+                  why: "succession-unread",
+                  status,
+                  detail:
+                    "the relay's key chain could not be read, so this machine's older lines cannot be placed",
+                }
+              : null;
 
     if (status === "superseded") {
       // R22 — read only the value keyed by the key of this machine's CURRENT H.
       const hKey = acq.chain.chain[epoch!]!;
-      const frozen = frozenFor(acq.replica, acq.deviceId, hKey);
+      const frozen =
+        rotation != null && rotation.pre_rotation_key === hKey
+          ? "active"
+          : frozenFor(acq.replica, acq.deviceId, hKey);
       if (frozen !== "active") {
         return { kind: "superseded", frozen, presented: await this.present(acq) };
       }
-      return blockedFromMinting() ?? this.mintOwn(acq, false);
+      return blockedFromMinting() ?? this.mintOwn(acq, false, rotation);
     }
 
-    // No line at all: the first enrolment.
+    // Rule 2 — "no line" is a fact only when nothing of this device is unplaced.
+    const unplaced = unplacedOwnEnrollments(acq.verdict, acq.enrollmentIndex, acq.deviceId);
+    if (unplaced > 0) {
+      return { kind: "unplaced", count: unplaced, presented: await this.present(acq) };
+    }
+    // No line at all: the first enrolment. (Never from the rotation hook:
+    // its frozen `active` exists only for a device that had a line.)
+    if (rotation != null) {
+      return { kind: "superseded", frozen: null, presented: await this.present(acq) };
+    }
     return blockedFromMinting() ?? this.mintOwn(acq, true);
   }
 
@@ -747,7 +807,7 @@ export class MachineRoster {
     const pre = acq.chain.chain.slice(0, -1);
     let value: FrozenValue = "absent";
     // A failed GET, or one that counts as failed (R27), freezes `absent`.
-    if (pre.length > 0 && pre[pre.length - 1] === oldKey && mayMint(acq) && !corruptAtStart) {
+    if (pre.length > 0 && pre[pre.length - 1] === oldKey && mayAutoMint(acq) && !corruptAtStart) {
       const preVerdict = await verifyHostRoster({
         motebitId,
         keyChain: pre,
@@ -759,12 +819,30 @@ export class MachineRoster {
           ? "active"
           : "not-active";
     }
-    const f = await freeze(value, acq.replica);
-    // Then the C3 table itself, on the CURRENT verdict, for a host only: a
-    // frozen `active` mints only on a superseded line — a retirement that
-    // reached this device (under any key at or above its epoch) wins (R14).
-    const decided = f.value === "active" ? await this.decide({ ...acq, replica: f.replica }) : null;
-    return { kind: "frozen", value: f.value, decided };
+    const prior = frozenFor(acq.replica, deviceId, oldKey);
+    if (value !== "active" || (prior != null && prior !== "active")) {
+      // First write wins; and nothing but a frozen `active` goes further.
+      const f = await freeze(value, acq.replica);
+      return { kind: "frozen", value: f.value, decided: null };
+    }
+    // A frozen `active` is NEVER persisted on its own (F2): it is saved in
+    // the mint's own critical section, in the same save as the head-key
+    // line it authorizes — or as `not-active` if, under the lock, the
+    // machine turns out retired in the current verdict (R14). An
+    // interruption before that save leaves no `active` behind.
+    const decided = await this.decide(acq, {
+      device_id: deviceId,
+      pre_rotation_key: oldKey,
+      value: "active",
+      taken_at: this.now(),
+    });
+    let persisted: FrozenValue;
+    if (decided.kind === "minted" || decided.kind === "active") persisted = "active";
+    else if (decided.kind === "retired") persisted = "not-active";
+    else {
+      persisted = (await freeze("absent", acq.replica)).value;
+    }
+    return { kind: "frozen", value: persisted, decided };
   }
 
   /** C5 — present this replica's presentation set, in chunks. */
@@ -774,9 +852,15 @@ export class MachineRoster {
 
   // ── internals ──────────────────────────────────────────────────────
 
-  private async mintOwn(acq: RosterAcquired, firstLine: boolean): Promise<EnsureEnrolledOutcome> {
-    const m = await this.mint(acq, acq.deviceId, "auto");
+  private async mintOwn(
+    acq: RosterAcquired,
+    firstLine: boolean,
+    rotation?: FrozenVerdictEntry,
+  ): Promise<EnsureEnrolledOutcome> {
+    const m = await this.mint(acq, acq.deviceId, "auto", rotation);
     switch (m.kind) {
+      case "unplaced":
+        return { kind: "unplaced", count: m.count, presented: m.presented };
       case "minted":
         return { kind: "minted", enrollmentId: m.id, firstLine, presented: m.presented };
       case "held":
@@ -808,17 +892,27 @@ export class MachineRoster {
     acq: RosterAcquired,
     deviceId: string,
     mode: "auto" | "explicit",
+    rotation?: FrozenVerdictEntry,
   ): Promise<
     | { kind: "minted" | "held"; id: string; presented: PresentReport }
     | { kind: "retired"; presented: PresentReport }
     | { kind: "superseded"; frozen: FrozenValue | null; presented: PresentReport }
+    | { kind: "unplaced"; count: number; presented: PresentReport }
     | { kind: "cache-corrupt" }
   > {
     type Decision =
       | { kind: "minted" | "held"; id: string; replica: MachineRosterReplica }
       | { kind: "retired"; replica: MachineRosterReplica }
       | { kind: "superseded"; frozen: FrozenValue | null; replica: MachineRosterReplica }
+      | { kind: "unplaced"; count: number; replica: MachineRosterReplica }
       | { kind: "cache-corrupt" };
+    // The rotation hook's frozen verdict is persisted INSIDE this critical
+    // section, in the same save as what it authorizes: `active` only beside
+    // the head-key line (minted here, or already held), `not-active` when
+    // the machine turned out retired. An interruption anywhere before that
+    // save leaves no frozen `active` behind (F2).
+    const frozenAs = (value: FrozenValue): Partial<MachineRosterReplica> =>
+      rotation != null ? { frozen: [{ ...rotation, value }] } : {};
     const decided = await this.ports.cache.exclusive(async (): Promise<Decision> => {
       const read = await this.ports.cache.load();
       if (read.kind === "corrupt") return { kind: "cache-corrupt" };
@@ -838,15 +932,46 @@ export class MachineRoster {
           ...(acq.served?.retirements ?? []),
         ] as HostRetirement[],
       });
+      const persist = async (
+        extra: Partial<MachineRosterReplica>,
+      ): Promise<MachineRosterReplica> => {
+        const next = mergeReplicas(replica, { ...emptyReplica(acq.motebitId), ...extra });
+        if (extra.frozen != null || extra.enrollments != null) await this.ports.cache.save(next);
+        return next;
+      };
       if (now.ok) {
         const line = now.active.find((m) => m.device_id === deviceId);
-        if (line) return { kind: "held", id: line.entries[0]!.enrollment_id, replica };
+        if (line) {
+          return {
+            kind: "held",
+            id: line.entries[0]!.enrollment_id,
+            replica: await persist(frozenAs("active")),
+          };
+        }
         if (mode === "auto") {
           const { status, epoch } = statusOf(now, deviceId);
-          if (status === "retired") return { kind: "retired", replica };
+          if (status === "retired") {
+            return { kind: "retired", replica: await persist(frozenAs("not-active")) };
+          }
           if (status === "superseded") {
-            const frozen = frozenFor(replica, deviceId, acq.chain.chain[epoch!]!);
+            const hKey = acq.chain.chain[epoch!]!;
+            const frozen =
+              rotation != null && rotation.pre_rotation_key === hKey
+                ? "active"
+                : frozenFor(replica, deviceId, hKey);
             if (frozen !== "active") return { kind: "superseded", frozen, replica };
+          }
+          if (status === "none") {
+            // Rule 2, re-applied over the re-read input.
+            const index: Array<{ id: string; device_id: string }> = [];
+            for (const e of [...replica.enrollments, ...(acq.served?.enrollments ?? [])]) {
+              if (isHostEnrollment(e) && e.device_id === deviceId) {
+                index.push({ id: await hostEnrollmentId(e), device_id: e.device_id });
+              }
+            }
+            const count = unplacedOwnEnrollments(now, index, deviceId);
+            if (count > 0) return { kind: "unplaced", count, replica };
+            if (rotation != null) return { kind: "superseded", frozen: null, replica };
           }
         }
       }
@@ -872,9 +997,11 @@ export class MachineRoster {
         ...emptyReplica(acq.motebitId),
         enrollments: [enrollment],
         own_device_ids: deviceId === acq.deviceId ? [deviceId] : [],
+        ...frozenAs("active"),
       });
       // Cached BEFORE it is presented, and before the lock is released: a
       // machine re-presents what it holds rather than minting per start.
+      // One save: the enrolment and the frozen verdict that authorized it.
       await this.ports.cache.save(next);
       return { kind: "minted", id, replica: next };
     });
@@ -885,6 +1012,7 @@ export class MachineRoster {
       return { kind: "superseded", frozen: decided.frozen, presented };
     }
     if (decided.kind === "retired") return { kind: "retired", presented };
+    if (decided.kind === "unplaced") return { kind: "unplaced", count: decided.count, presented };
     return { kind: decided.kind, id: decided.id, presented };
   }
 
