@@ -468,6 +468,9 @@ Commands:
                             (+ time window for tokens). [--json]
   register [--sync-url <url>]  Register this identity with the relay (enables discovery)
   rotate [--reason "..."]   Rotate Ed25519 keypair with cryptographic succession chain
+  machines [--json]         The machines this motebit runs unattended work on (reduced here, never by the relay)
+  machines retire <device_id>  Sign a retirement for a machine's line (undo: machines enroll)
+  machines enroll <device_id> [--force]  Rejoin a retired line, or enrol an id explicitly
   migrate-keyring [--force] Re-encrypt a plaintext ~/.motebit/dev-keyring.json
                             under a passphrase (recovery path when
                             cli_encrypted_key was lost from config but

@@ -70,6 +70,11 @@ motebit wallet swap <sol>            # Convert SOL → USDC working capital
 motebit export                       # Export signed identity bundle (motebit.md)
 motebit verify motebit.md            # Verify an identity file signature
 motebit rotate --reason "scheduled"  # Rotate keypair with succession chain
+motebit machines                     # The machines this motebit runs unattended work on
+                                     #   (run/serve enrol on start; reduced here, never
+                                     #   by the relay) [--json]
+motebit machines retire <device_id>  # Retire a machine's line (undo: machines enroll)
+motebit machines enroll <device_id>  # Rejoin a retired line [--force for an unknown id]
 motebit seed                         # Recovery-seed backup status
 motebit seed reveal                  # Print the seed once (passphrase-gated) for paper
 motebit keychain enroll              # Opt-in: store the passphrase in the macOS login
