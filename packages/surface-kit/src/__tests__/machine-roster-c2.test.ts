@@ -1005,6 +1005,25 @@ describe("notices — every outcome has words", () => {
       /The relay refused 1 entry as bad signature, which this device could not confirm; kept here and presented again\./,
     );
     expect(claimed).not.toMatch(/Not yet taken/);
+    // #813 round 2 — asked to wait AND a claim not confirmed: one sentence, one promise.
+    const waiting = retireNotice({
+      kind: "retired",
+      deviceId: "d",
+      retirementIds: ["r"],
+      advisory: false,
+      presented: {
+        ...presented,
+        taken: 0,
+        retryAfterMs: 5,
+        notTaken: [
+          { id: "r", reason: "bad_signature", unconfirmed: "bad_signature" },
+          { id: "q", reason: "rate limited (429)" },
+        ],
+      },
+    }).text;
+    expect(waiting).toBe(
+      "Retired d. The relay refused 1 entry as bad signature, which this device could not confirm, and asked to wait; kept here and presented later. Enroll undoes it — enrolled from this surface; the machine's own next rotation won't carry it.",
+    );
     expect(claimed).not.toMatch(/will not hold/);
     expect(retireNotice({ kind: "already-retired", deviceId: "d" }).tone).toBe("done");
     expect(retireNotice({ kind: "not-enrolled", deviceId: "d", socketOpen: true }).text).toMatch(

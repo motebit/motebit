@@ -373,11 +373,17 @@ export interface RosterAcquired {
    * (`roster_full`, or for their own bytes), with the reason. Not an
    * omission: the relay said so. The entries stay members — membership is
    * what the sovereign signed — and are not presented again (#802).
+   * Empty unless the relay's roster was READ this acquisition: without the
+   * served set, "will not hold" cannot be told apart from "now holds"
+   * (#813 round 2).
    */
   relayWillNotHold: Array<{
     id: string;
     reason: string;
-    /** The law admits it on its own under the resolved chain: it is counted (#813 F2). */
+    kind: "enrollment" | "retirement";
+    /** The law admits it on its own under the resolved chain (#813 F2). */
+    admitted: boolean;
+    /** An admitted ENROLMENT: a member the count includes. Retirements are never counted members. */
     counted: boolean;
   }>;
   /**
@@ -910,10 +916,12 @@ export class MachineRoster<Gate extends HeldKeyRefusal = never> {
       ...replica.roster_full.map((id): [string, string] => [id, "roster_full"]),
       ...replica.relay_refused.map((r): [string, string] => [r.id, r.reason]),
     ]);
-    const holds = served != null ? await servedIdsOf(served) : new Set<string>();
+    // Only over a roster READ this acquisition (#813 round 2): with no served
+    // set, an entry the relay now holds would be said to be one it will not.
+    const holds = served != null ? await servedIdsOf(served) : null;
     const relayWillNotHold: RosterAcquired["relayWillNotHold"] = [];
-    for (const i of await this.presentationSet(reduced.verdict, replica)) {
-      if (!refusedWhy.has(i.id) || holds.has(i.id)) continue;
+    for (const i of holds == null ? [] : await this.presentationSet(reduced.verdict, replica)) {
+      if (!refusedWhy.has(i.id) || holds!.has(i.id)) continue;
       // #813 F2 — "counted" only for what the law counts.
       const alone = await verifyHostRoster({
         motebitId,
@@ -921,10 +929,13 @@ export class MachineRoster<Gate extends HeldKeyRefusal = never> {
         enrollments: i.kind === "enrollment" ? [i.artifact as HostEnrollment] : [],
         retirements: i.kind === "retirement" ? [i.artifact as HostRetirement] : [],
       });
+      const admitted = alone.ok && alone.rejected.length === 0;
       relayWillNotHold.push({
         id: i.id,
         reason: refusedWhy.get(i.id)!,
-        counted: alone.ok && alone.rejected.length === 0,
+        kind: i.kind,
+        admitted,
+        counted: admitted && i.kind === "enrollment",
       });
     }
 

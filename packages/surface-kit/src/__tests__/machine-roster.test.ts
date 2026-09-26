@@ -1252,7 +1252,9 @@ describe("#802 — a refusal for the entry's own bytes is permanent; an unknown 
       // Not an omission: the relay said so, and this device agrees. The count stands.
       expect(acq.omitted).toEqual([]);
       expect(acq.suppressed).not.toContain("relay_omission");
-      expect(acq.relayWillNotHold).toEqual([{ id, reason, counted }]);
+      expect(acq.relayWillNotHold).toEqual([
+        { id, reason, kind: "enrollment", admitted: counted, counted },
+      ]);
       const view = buildRosterView(acq, NOW);
       if (view.kind !== "roster") throw new Error(view.kind);
       // Membership is what the law admits: the oversized line is a member; a
@@ -1272,7 +1274,9 @@ describe("#802 — a refusal for the entry's own bytes is permanent; an unknown 
       ]);
       expect(out.willNotHold).toEqual([]);
       expect(out.notTaken).toEqual([]);
-      expect(again.relayWillNotHold).toEqual([{ id, reason, counted }]);
+      expect(again.relayWillNotHold).toEqual([
+        { id, reason, kind: "enrollment", admitted: counted, counted },
+      ]);
     },
   );
 
@@ -1348,7 +1352,9 @@ describe("#802 — a refusal for the entry's own bytes is permanent; an unknown 
     const id = await hostEnrollmentId(vps);
     relay.full.add(id);
     const first = await acquired(m);
-    expect(first.relayWillNotHold).toEqual([{ id, reason: "roster_full", counted: true }]);
+    expect(first.relayWillNotHold).toEqual([
+      { id, reason: "roster_full", kind: "enrollment", admitted: true, counted: true },
+    ]);
     // Another key presented the same bytes: they landed in another bucket.
     relay.full.delete(id);
     await relay.hold(vps);
@@ -1357,6 +1363,61 @@ describe("#802 — a refusal for the entry's own bytes is permanent; an unknown 
     const view = buildRosterView(now, NOW);
     expect(view.kind === "roster" && view.notes.some((n) => n.kind === "relay-will-not-hold")).toBe(
       false,
+    );
+  });
+
+  it("#813 round 2 — with the relay's roster unread, no entry is said to be one the relay will not hold", async () => {
+    const a = await generateKeypair();
+    const relay = new FakeRelay();
+    const m = machine(relay, a);
+    await m.roster.ensureEnrolled();
+    const other = await enrol(a, "dev-other");
+    await m.cache.save({ ...emptyReplica(MID), enrollments: [other] });
+    const id = await hostEnrollmentId(other);
+    relay.full.add(id);
+    expect((await acquired(m)).relayWillNotHold).toHaveLength(1);
+    // The relay later holds it (another key presented it) — and then this read fails.
+    relay.full.delete(id);
+    await relay.hold(other);
+    relay.getFails = true;
+    const acq = await acquired(m);
+    expect(acq.suppressed).toContain("relay_unread");
+    expect(acq.relayWillNotHold).toEqual([]);
+    const view = buildRosterView(acq, NOW);
+    if (view.kind !== "roster") throw new Error(view.kind);
+    expect(view.notes.some((n) => n.kind === "relay-will-not-hold")).toBe(false);
+    expect(view.notes.map((n) => n.kind)).toContain("relay-unread");
+  });
+
+  it("#813 round 2 — under a suppression an admitted enrolment 'would be counted'; a retirement is only 'kept here'", async () => {
+    const a = await generateKeypair();
+    const relay = new FakeRelay();
+    const m = machine(relay, a);
+    await m.roster.ensureEnrolled();
+    const vps = await enrol(a, "vps");
+    const ret = await retireEntry(a, await enrol(a, "gone"));
+    const omitted = await enrol(a, "omitted");
+    await m.cache.save({ ...emptyReplica(MID), enrollments: [vps, omitted], retirements: [ret] });
+    relay.full.add(await hostEnrollmentId(vps));
+    relay.full.add(await hostRetirementId(ret));
+    // A separate entry the relay silently drops keeps the count suppressed.
+    relay.omit.add(await hostEnrollmentId(omitted));
+    const acq = await acquired(m);
+    expect(acq.suppressed).toContain("relay_omission");
+    const view = buildRosterView(acq, NOW);
+    if (view.kind !== "roster") throw new Error(view.kind);
+    const texts = view.notes.filter((n) => n.kind === "relay-will-not-hold").map((n) => n.text);
+    expect(texts).toEqual([
+      "the relay will not hold 1 entry this device holds (roster_full); kept here; would be counted, not presented again",
+      "the relay will not hold 1 entry this device holds (roster_full); kept here, not presented again",
+    ]);
+    for (const t of texts) expect(t).not.toMatch(/and counted/);
+    // With the suppression gone, the same enrolment is "counted".
+    relay.omit.clear();
+    const clear = buildRosterView(await acquired(m), NOW);
+    if (clear.kind !== "roster") throw new Error(clear.kind);
+    expect(clear.notes.map((n) => n.text)).toContain(
+      "the relay will not hold 1 entry this device holds (roster_full); kept here and counted, not presented again",
     );
   });
 
