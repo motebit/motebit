@@ -379,7 +379,24 @@ export interface WebSocketDeps {
    */
   keyThatVerifiesNow: (motebitId: string, did: string) => string | null;
   logger: ReturnType<typeof createLogger>;
-  onCommandResponse?: (commandId: string, result: unknown) => void;
+  /**
+   * A `command_response` frame arrived. `from` describes the socket it
+   * arrived ON — the route's path id, the device id it DECLARED (null if it
+   * declared none: never the relay-made one), and the `did` of the signed
+   * token that admitted it — never fields of the frame. A pending request is
+   * settled only by an answer from the motebit it was sent to and the
+   * delivered peer's stable identity (#691 item 6). The verdict lets this
+   * handler log a refused frame beside the fact it has.
+   */
+  onCommandResponse?: (
+    commandId: string,
+    result: unknown,
+    from: {
+      motebitId: string;
+      declaredDeviceId: string | null;
+      authenticatedDid: string | null;
+    },
+  ) => "settled" | "no_pending" | "foreign_motebit" | "foreign_device";
   /**
    * A connection was finalized, or re-announced its capabilities. Called
    * with the peer as it now is. The machine roster's liveness record is
@@ -838,7 +855,22 @@ export function registerWebSocketRoutes(deps: WebSocketDeps): void {
               typeof (msg as Record<string, unknown>).id === "string"
             ) {
               const cmdMsg = msg as unknown as { id: string; result: unknown };
-              deps.onCommandResponse?.(cmdMsg.id, cmdMsg.result);
+              const verdict = deps.onCommandResponse?.(cmdMsg.id, cmdMsg.result, {
+                motebitId,
+                declaredDeviceId,
+                authenticatedDid: registeredPeer?.authenticatedDid ?? null,
+              });
+              if (verdict === "foreign_motebit" || verdict === "foreign_device") {
+                // An answer to ANOTHER motebit's request: refused, like a
+                // task_claim for another motebit's task. Not an auth event
+                // (no token was presented or refused — rule 6's record is
+                // about credentials), so it is logged, never acted on.
+                logger.warn(`ws.command_response_${verdict}`, {
+                  motebitId,
+                  deviceId,
+                  commandId: cmdMsg.id,
+                });
+              }
             }
 
             // Agent protocol: task_claim
