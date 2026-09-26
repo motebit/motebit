@@ -382,3 +382,36 @@ describe("F (#786) — the CLI's words for lines this device cannot place", () =
     expect(unknown).not.toMatch(/daemon|this start/);
   });
 });
+
+describe("#790 round 1 — CLI wording", () => {
+  const p = { taken: 1, notTaken: [], rosterFull: [] };
+
+  it("P1: the unplaced start/rotate line says what is known, never 'not enrolled'", () => {
+    for (const ctx of ["start", "rotate"] as const) {
+      const line = describeEnsureOutcome({ kind: "unplaced", count: 1, presented: p }, "vps", ctx);
+      expect(line).toMatch(
+        /under keys this device cannot place in its key chain, or could not be verified/,
+      );
+      expect(line).toMatch(
+        ctx === "rotate" ? /not updated after the rotation/ : /not updated this start/,
+      );
+      expect(line).not.toMatch(/not enrolled/);
+    }
+  });
+
+  it("a retirement the relay refused as unauthorized is not 'presented again'", () => {
+    const own = "a".repeat(64);
+    const out = describeRetire({
+      kind: "retired",
+      deviceId: "vps",
+      retirementIds: [own],
+      advisory: false,
+      presented: { taken: 0, notTaken: [{ id: own, reason: "status 401" }], rosterFull: [] },
+    });
+    const text = out.lines.join("\n");
+    expect(text).toMatch(
+      /refused this retirement \(not authorized\): this device's key may have been rotated away/,
+    );
+    expect(text).not.toMatch(/presented again/);
+  });
+});
