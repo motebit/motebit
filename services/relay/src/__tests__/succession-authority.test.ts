@@ -1503,6 +1503,87 @@ describe("a recorded rotation ends the old key here", () => {
     expect(holderKey(mid)).toBe(hex(k1));
   });
 
+  it("the history includes the holder key: a writer caller that skipped departure cannot land on it", async () => {
+    // At the route this is unreachable — with a holder, departure requires
+    // old = holder, so new = holder goes nowhere — which is exactly why the
+    // writer must hold the line itself.
+    const k1 = await generateKeypair();
+    const mid = await deriveSovereignMotebitId(hex(k1));
+    expect(await registerSelf(mid, `${mid}-laptop`, k1)).toBe(201);
+    expect(await registerAgent(mid, k1)).toBe(200);
+    const other = await generateKeypair();
+    relay.moteDb.db
+      .prepare("UPDATE agent_registry SET public_key = ? WHERE motebit_id = ?")
+      .run(hex(other), mid);
+    expect(holderKey(mid)).toBe(hex(k1));
+    const ontoHolder = await signKeySuccession(
+      other.privateKey,
+      k1.privateKey,
+      k1.publicKey,
+      other.publicKey,
+    );
+    let thrown: unknown;
+    try {
+      applySuccession(relay.moteDb.db, mid, ontoHolder, () => {});
+    } catch (err) {
+      thrown = err;
+    }
+    expect(thrown).toBeInstanceOf(SuccessionRefused);
+    expect((thrown as SuccessionRefused).reason).toBe("reuses_key");
+    expect(successions(mid)).toBe(0);
+    expect(registryKey(mid)).toBe(hex(other));
+  });
+
+  it("refuses a link that DEPARTS from a retired key — a holder-less identity cannot fork its chain (K1→K2, then K1→K3)", async () => {
+    // A legacy identity with no holder row, whose registry is emptied by a
+    // keyless master-token registration and then re-filled with the retired
+    // K1 by whoever still holds it. Departure (main's rule: the registry
+    // key) admits K1 again; only the history can say K1 is retired.
+    const mid = crypto.randomUUID();
+    const k1 = await generateKeypair();
+    const k2 = await generateKeypair();
+    const k3 = await generateKeypair();
+    const master = async (body: Record<string, unknown>): Promise<number> =>
+      (
+        await relay.app.request("/api/v1/agents/register", {
+          method: "POST",
+          headers: JSON_AUTH,
+          body: JSON.stringify({
+            motebit_id: mid,
+            endpoint_url: "http://localhost:9999/mcp",
+            capabilities: [],
+            ...body,
+          }),
+        })
+      ).status;
+    expect(await master({ public_key: hex(k1) })).toBe(200);
+    relay.moteDb.db.prepare("DELETE FROM identity_keys WHERE motebit_id = ?").run(mid);
+    expect(holderKey(mid)).toBeUndefined();
+
+    const toK2 = await signKeySuccession(k1.privateKey, k2.privateKey, k2.publicKey, k1.publicKey);
+    const r1 = await relay.app.request(`/api/v1/agents/${mid}/rotate-key`, {
+      method: "POST",
+      headers: JSON_AUTH,
+      body: JSON.stringify(toK2),
+    });
+    expect(r1.status).toBe(200);
+    expect(registryKey(mid)).toBe(hex(k2));
+
+    expect(await master({})).toBe(200);
+    expect(registryKey(mid)).toBe("");
+    expect(await registerSelf(mid, `${mid}-laptop`, k1)).toBe(201);
+    expect(await registerAgent(mid, k1)).toBe(200);
+    expect(registryKey(mid)).toBe(hex(k1));
+
+    const fork = await signKeySuccession(k1.privateKey, k3.privateKey, k3.publicKey, k1.publicKey);
+    expect(await present(mid, `${mid}-laptop`, k1, mid, fork)).toBe(409);
+    expect(successions(mid)).toBe(1);
+    expect(registryKey(mid)).toBe(hex(k1));
+    expect(successionRefusals()).toEqual([
+      { motebit_id: mid, reason: "succession:departs_from_retired_key" },
+    ]);
+  });
+
   it("a rotation recorded at /rotate-key reaches federation, and a retry does not repeat it", async () => {
     const { mid, k1, k2 } = await rotated();
     expect(events(mid, "key_rotated")).toBe(1);
