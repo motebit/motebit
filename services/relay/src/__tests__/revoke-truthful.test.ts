@@ -1,6 +1,6 @@
 /**
  * `/revoke` answers from what it RECORDED, for every identity the relay
- * authenticates (#787), and the revocation is terminal (#788).
+ * authenticates (#787); it is terminal only under authority the relay can verify (#788, #794).
  *
  * The defect: `/revoke` recorded the revocation only as
  * `agent_registry.revoked = 1`. For an identity with no registry row — one
@@ -10,11 +10,10 @@
  *
  * The fix: `relay_identity_revocations` (identity-revocation.ts), written by
  * `/revoke` for every KNOWN identity (404 otherwise), read by `isAgentRevoked`
- * beside the registry mark, never cleared. The doors that could otherwise
- * clear it or re-shelve the identity — restore-listing, the master-token
- * `/agents/register`, accept-migration — refuse. restore-listing clears only
- * the operator's own hold: not a self-revocation, not a migration departure
- * still in effect.
+ * beside the registry mark. A TERMINAL record (operator, holder, or a key the
+ * id sovereign-binds to) is never cleared: restore-listing, the master-token
+ * `/agents/register` and accept-migration refuse. A LIFTABLE record (any other
+ * key) takes effect at once but a verified arrival or restore-listing lifts it.
  *
  * Driven through the REAL routes over REAL sockets (`createTestRelay` behind
  * `@hono/node-server`, `ws` clients presenting signed `sync` tokens), plus a
@@ -655,6 +654,19 @@ describe("terminality follows authority the relay can verify (#794)", () => {
     expect(standing(mid)).toBe("liftable");
     expect((await operator(mid, "restore-listing")).status).toBe(200);
     expect(standing(mid)).toBe("none");
+  });
+
+  it("two concurrent /revoke calls under a first-come key never upgrade to terminal (the upsert's excluded.authoritative guard)", async () => {
+    const owner = await generateKeypair();
+    const stranger = await generateKeypair();
+    const mid = await deriveSovereignMotebitId(hex(owner));
+    await registerSelf(mid, "evil", stranger);
+    const [a, b] = await Promise.all([
+      revokeAs(mid, "evil", stranger),
+      revokeAs(mid, "evil", stranger),
+    ]);
+    expect([a.status, b.status].filter((st) => st === 200).length).toBeGreaterThanOrEqual(1);
+    expect(standing(mid)).toBe("liftable");
   });
 
   it("the lift statement itself cannot touch a terminal record", async () => {

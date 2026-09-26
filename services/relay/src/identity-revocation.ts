@@ -27,16 +27,22 @@
  *  - AUTHORITATIVE — the operator (master token acting for the id), or a token
  *    that verified under the identity's PROVEN key: the holder when there is
  *    one (`identity_keys`; a rotated-away genesis key is not it), else a key
- *    the id sovereign-binds to (`verifySovereignBinding`), else the registry
- *    key. Terminal: never cleared, and accept-migration, `/agents/register`
- *    and restore-listing refuse the identity.
+ *    the id sovereign-binds to (`verifySovereignBinding`). NOT the registry
+ *    key: a device token can write it after a first-come squat (#794).
+ *    Terminal: never cleared, and accept-migration, `/agents/register` and
+ *    restore-listing refuse the identity.
  *  - LIFTABLE — any other key (a first-come device row). Lifted
  *    (`liftRevocation`, the one DELETE, `authoritative = 0` in the statement)
  *    by accept-migration after it verified the sovereign binding — the owner
  *    proved the key — or by the operator's restore-listing.
  *
- * A later authoritative `/revoke` upgrades a liftable record; nothing
- * downgrades one. The registry mark stays the carrier of the two REVERSIBLE
+ * An authoritative `/revoke` arriving AFTER a liftable one upgrades it, but in
+ * practice only the operator (master token) can deliver it: once revoked, the
+ * identity's own tokens are refused by the verifier before the route runs.
+ * Nothing downgrades a record. So restore-listing CAN reverse an owner's own
+ * revocation in two cases — revoked from a paired device's own key (liftable),
+ * or a holder-less non-sovereign id (no key is provable) — the same as main;
+ * the operator is the remedy's authority there. The registry mark stays the carrier of the two REVERSIBLE
  * registry revocations — the operator's moderation hold (revoke-listing ↔
  * restore-listing) and migration departure (undone only by the identity
  * arriving back, accept-migration).
