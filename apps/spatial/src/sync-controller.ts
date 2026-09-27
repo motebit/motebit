@@ -32,7 +32,7 @@ import {
   verifyAgentCommandEnvelope,
 } from "@motebit/runtime";
 import { DeviceCapability } from "@motebit/sdk";
-import type { SyncStatus as SyncEngineStatus } from "@motebit/sync-engine";
+import type { CredentialSource, SyncStatus as SyncEngineStatus } from "@motebit/sync-engine";
 import { deriveSyncEncryptionKey, secureErase } from "@motebit/encryption";
 import {
   HttpEventStoreAdapter,
@@ -58,6 +58,8 @@ type InternalSyncStatus =
   "disconnected" | "connecting" | "connected" | "syncing" | "error" | "conflict";
 
 const HEARTBEAT_INTERVAL_MS = 5 * 60_000; // 5 minutes
+/** Sync-socket token refresh cadence: signed sync tokens expire at 5 min. */
+export const WS_TOKEN_REFRESH_MS = 4.5 * 60_000;
 
 export interface SpatialSyncControllerDeps {
   getRuntime: () => MotebitRuntime | null;
@@ -86,6 +88,13 @@ export class SpatialSyncController {
   private _wsTokenRefreshTimer: ReturnType<typeof setInterval> | null = null;
   private _wsUnsubOnEvent: (() => void) | null = null;
   private _syncUnsubscribe: (() => void) | null = null;
+  /**
+   * Bumped by every connectRelay and disconnectRelay. A connectRelay that
+   * finds the epoch moved on across one of its awaits has been superseded
+   * and must not build or connect a socket — that socket would belong to
+   * nobody (#816).
+   */
+  private _wsEpoch = 0;
 
   private _planSyncEngine: PlanSyncEngine | null = null;
   private _convSyncEngine: ConversationSyncEngine | null = null;
@@ -126,6 +135,7 @@ export class SpatialSyncController {
   async connectRelay(): Promise<void> {
     const { relayUrl, showNetwork } = this.deps.getNetworkSettings();
     if (relayUrl === "" || !showNetwork) return;
+    const epoch = ++this._wsEpoch;
 
     this.setSyncStatus("connecting");
 
@@ -224,10 +234,44 @@ export class SpatialSyncController {
           "/ws/sync/" +
           motebitId;
 
+        // Superseded while awaiting (disconnectRelay, or a newer
+        // connectRelay): building a socket now would open one nothing owns.
+        if (epoch !== this._wsEpoch) return;
+        // One sync socket per controller: a re-entered connectRelay replaces
+        // the running socket and its refresh timer (#816).
+        if (this._wsTokenRefreshTimer != null) {
+          clearInterval(this._wsTokenRefreshTimer);
+          this._wsTokenRefreshTimer = null;
+        }
+        if (this._wsUnsubOnEvent) {
+          this._wsUnsubOnEvent();
+          this._wsUnsubOnEvent = null;
+        }
+        if (this._wsAdapter) {
+          this._wsAdapter.disconnect();
+          this._wsAdapter = null;
+        }
+
+        // The token minted above serves the first connect; every later
+        // connect — the 4.5-minute refresh and any drop-and-reconnect —
+        // mints a fresh one, so a reconnect never presents an expired token.
+        let initialToken: string | null = authToken;
+        const wsCredentialSource: CredentialSource = {
+          getCredential: async () => {
+            if (initialToken != null && initialToken !== "") {
+              const t = initialToken;
+              initialToken = null;
+              return t;
+            }
+            const tf = this.deps.getTokenFactory();
+            return tf ? tf() : null;
+          },
+        };
+
         const wsAdapter = new WebSocketEventStoreAdapter({
           url: wsUrl,
           motebitId,
-          authToken,
+          credentialSource: wsCredentialSource,
           capabilities: [DeviceCapability.HttpMcp],
           httpFallback: encryptedHttp,
           localStore: localEventStore ?? undefined,
@@ -380,59 +424,14 @@ export class SpatialSyncController {
         // Adversarial onboarding: run self-test once after first relay connection
         void this.runOnboardingSelfTest(relayUrl, authToken ?? "");
 
-        // 7. Token refresh every 4.5 min — rebuild WS with fresh auth
+        // 7. Token refresh every 4.5 min. The SAME adapter swaps its socket
+        // and re-mints the credential, so the command handler, the
+        // inbound-event handler and the delegation adapter's subscription
+        // all stay attached, and the replaced socket is the one that closes
+        // (#816). Never build a second adapter here.
         this._wsTokenRefreshTimer = setInterval(() => {
-          void (async () => {
-            try {
-              const tf = this.deps.getTokenFactory();
-              const pk = this.deps.getPrivKey();
-              if (!this._wsAdapter || !tf || !pk) return;
-              this._wsAdapter.disconnect();
-
-              const freshToken = await tf();
-              const freshEncKey = await deriveSyncEncryptionKey(pk);
-
-              const freshWs = new WebSocketEventStoreAdapter({
-                url: wsUrl,
-                motebitId,
-                authToken: freshToken,
-                capabilities: [DeviceCapability.HttpMcp],
-                httpFallback: encryptedHttp,
-                localStore: localEventStore ?? undefined,
-              });
-
-              // Re-wire delegation with fresh WS
-              const freshDelegation = new RelayDelegationAdapter({
-                syncUrl: relayUrl,
-                motebitId,
-                authToken: freshToken ?? undefined,
-                sendRaw: (data: string) => freshWs.sendRaw(data),
-                onCustomMessage: (cb) => freshWs.onCustomMessage(cb),
-                getExplorationDrive: () => this.deps.getRuntime()?.getPrecision().explorationDrive,
-              });
-              this.deps.getRuntime()?.setDelegationAdapter(freshDelegation);
-
-              if (this._wsUnsubOnEvent) this._wsUnsubOnEvent();
-              this._wsUnsubOnEvent = freshWs.onEvent((raw) => {
-                void (async () => {
-                  if (!localEventStore) return;
-                  const dec = await decryptEventPayload(raw, freshEncKey);
-                  await localEventStore.append(dec);
-                })();
-              });
-
-              const freshEncrypted = new EncryptedEventStoreAdapter({
-                inner: freshWs,
-                key: freshEncKey,
-              });
-              this.deps.getRuntime()?.connectSync(freshEncrypted);
-              freshWs.connect();
-              this._wsAdapter = freshWs;
-            } catch {
-              // Token refresh failed — WS will retry on reconnect
-            }
-          })();
-        }, 4.5 * 60_000);
+          wsAdapter.refreshConnection();
+        }, WS_TOKEN_REFRESH_MS);
       } catch {
         // Sync setup failed — fall back to delegation-only
         this.setSyncStatus("error");
@@ -469,6 +468,7 @@ export class SpatialSyncController {
    * Disconnect from the relay: stop sync, close WebSocket, deregister.
    */
   async disconnectRelay(): Promise<void> {
+    this._wsEpoch++;
     // Stop token refresh
     if (this._wsTokenRefreshTimer) {
       clearInterval(this._wsTokenRefreshTimer);
