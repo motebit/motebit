@@ -60,7 +60,8 @@
  *   commands  — commands answered (probed while running)
  *   events    — distinct outbound events delivered on their own identity,
  *               to the target relay, while running
- *   misrouted — outbound events pushed on another identity's socket
+ *   misrouted — outbound events pushed on another identity's socket, or
+ *               over HTTP to another identity's `/sync/<id>/push`
  *   inbound   — distinct inbound events that reached the local store,
  *               counting those published while running to the relay and
  *               identity the user ends on; if the sequence ends stopped,
@@ -69,15 +70,20 @@
  *               probe granularity — the catch-up pull's real job)
  *   http      — OVERDUE time (lower is better): while running, how long the
  *               surface went past its 30 s cadence (+5 s grace) with no HTTP
- *               sync (`/sync/…`) to the target relay
+ *               sync (`/sync/<id>/…`) to the target relay for the target
+ *               identity
  *   firstHttp — time from the LAST run's start to its first HTTP sync
  *   openEnd   — sockets the relay has admitted and still holds at the end
  *               (a socket mid-handshake at that instant is not counted)
  *   leak      — sockets open at all after a final stop (only when the last
  *               op is a stop)
  *   zombies   — sockets that outlived a stop, were opened while stopped,
+ *               were opened by the client in the instant it closed a zombie
+ *               of the same relay and identity (its continuation),
  *               were opened for a relay or identity the surface had already
- *               left (and are still off target when admitted), stayed open
+ *               left (even if the user later returns to it), were opened by
+ *               a zombie's refresh timer (REFRESH_MS after the zombie, same
+ *               relay and identity), stayed open
  *               20 s after the surface moved away from their relay or
  *               identity, or stayed admitted 20 s after a newer socket of the
  *               same relay and identity was admitted (a duplicate: the relay
@@ -202,6 +208,8 @@ let surfaceIdentity = FIRST_IDENTITY;
 let reap = false;
 let stallUntil = 0;
 let admissionOrder = 0;
+/** The last client-side close of a zombie socket (see `RelaySocket.close`). */
+let lastZombieClose: { time: number; relay: string; motebit: string } | null = null;
 
 /** Events other devices published, per relay and identity (the relay's sync log). */
 const relayLogs = new Map<string, Array<Record<string, unknown>>>();
@@ -261,6 +269,8 @@ export class RelaySocket {
   readonly bornStopped: boolean;
   /** Opened for a relay or identity the surface had already left. */
   readonly bornStale: boolean;
+  /** Fake-clock time the client opened it. */
+  readonly createdAt: number = Date.now();
   /** When the surface moved away from this socket's relay or identity. */
   staleSince: number | null;
   sent: Frame[] = [];
@@ -271,6 +281,40 @@ export class RelaySocket {
     this.bornStale = this.relay !== surfaceTarget || this.motebit !== surfaceIdentity;
     this.staleSince = this.bornStale ? Date.now() : null;
     RelaySocket.all.push(this);
+    // A socket the client opens in the same instant it closes a zombie of
+    // the same relay and identity is that zombie's continuation (a refresh
+    // timer or reconnect of an adapter the surface should have shut): it is
+    // a zombie too. Without this, reaping a zombie's socket still left its
+    // adapter's timers running, and their next socket served in the reaped
+    // baseline as if main had never leaked.
+    const z = lastZombieClose;
+    if (z && z.time === Date.now() && z.relay === this.relay && z.motebit === this.motebit) {
+      markZombie(this);
+    }
+    // Opened for a relay or identity the surface had already left: a start
+    // the user superseded (a stop, a switch) still built it. It is a zombie
+    // from birth, like one opened while stopped — even if the user later
+    // returns to that target, it was never the returning start's socket.
+    if (this.bornStale) markZombie(this);
+    // A zombie's refresh timer: main arms a 4.5-min refresh when it opens a
+    // socket, and a zombie's timer outlives the zombie (the reaper closes
+    // the socket, not the timer). A socket opened exactly REFRESH_MS after a
+    // zombie of the same relay and identity — when no live socket of that
+    // relay and identity was opened in the same instant as the zombie — is
+    // that timer's socket: a zombie too.
+    const now = Date.now();
+    const sameTarget = (o: RelaySocket) => o.relay === this.relay && o.motebit === this.motebit;
+    const parent = RelaySocket.all.find(
+      (o) => o !== this && o.zombie && sameTarget(o) && o.createdAt + REFRESH_MS === now,
+    );
+    if (
+      parent &&
+      !RelaySocket.all.some(
+        (o) => o !== this && !o.zombie && sameTarget(o) && o.createdAt === parent.createdAt,
+      )
+    ) {
+      markZombie(this);
+    }
   }
   /** Close silently: the adapter is not told (so it does not reconnect). */
   blackhole(): void {
@@ -289,6 +333,9 @@ export class RelaySocket {
   close(): void {
     if (this.closedAt == null) this.closedAt = tick();
     this.readyState = 3;
+    if (this.zombie) {
+      lastZombieClose = { time: Date.now(), relay: this.relay, motebit: this.motebit };
+    }
   }
   /** The relay drops the connection. */
   drop(): void {
@@ -343,6 +390,8 @@ export interface HarnessEnv {
   httpSyncs: Array<{ at: number; url: string }>;
   /** Events the surface delivered over HTTP (`/sync/…/push` bodies), if any. */
   httpDelivered?: Set<string>;
+  /** Events pushed over HTTP to another identity's `/sync/<id>/push` (misrouted). */
+  httpMisrouted?: number;
 }
 
 export function openSockets(): RelaySocket[] {
@@ -364,8 +413,7 @@ function relayTick(): void {
     if (s.closedAt != null) continue;
     if (now < stallUntil) continue;
     if (s.readyState === 1 && !s.accepted && s.sentAuth) {
-      const offTarget = s.relay !== surfaceTarget || s.motebit !== surfaceIdentity;
-      if (s.bornStopped || (s.bornStale && offTarget)) {
+      if (s.bornStopped || s.zombie) {
         // Reaped: the client is told it is up, then the relay goes silent —
         // as if the surface had closed it. Black-holing it mid-handshake
         // instead would fire the client's auth timeout and its reconnect: a
@@ -478,6 +526,7 @@ export async function runCell(
   seqNo = 0;
   admissionOrder = 0;
   stallUntil = 0;
+  lastZombieClose = null;
   reap = opts.reap === true;
   surfaceRunning = false;
   surfaceTarget = RELAY_A;
@@ -500,9 +549,12 @@ export async function runCell(
    * same millisecond as a stop, but before it, was sent while running.
    */
   const targetLine: Array<[number, boolean, string, string]> = [];
+  /** The same marks by clock time, with identity (for HTTP syncs). */
+  const timelineIds: Array<[number, boolean, string, string]> = [];
   const mark = () => {
     timeline.push([Date.now(), running, target]);
     targetLine.push([seqNo, running, target, identity]);
+    timelineIds.push([Date.now(), running, target, identity]);
   };
   const startRun = (relay: string, motebit = identity) => {
     const moved = relay !== target || motebit !== identity;
@@ -573,7 +625,15 @@ export async function runCell(
       timestamp: 1,
       event_type: "state_updated",
       payload: { n },
-      version_clock: 1000 + n,
+      // Spaced far above anything this device can assign itself: the relay
+      // stores device-assigned clocks, and a pull cursor is the local max
+      // clock, so an event another device publishes with the SAME clock as
+      // one this device appended meanwhile is never pulled (a pre-existing
+      // SyncEngine property, unchanged by #816 and demonstrated on its own by
+      // a sync-engine probe). With adjacent clocks, whether that race fires
+      // depends only on when a controller happens to pull — noise in a
+      // comparison of controllers, not a controller difference.
+      version_clock: 1_000_000 * n,
       tombstoned: false,
     };
     log.push(inbound);
@@ -679,7 +739,7 @@ export async function runCell(
   // --- outbound events: delivered on their own identity's admitted socket,
   // to the relay and identity the running surface targets at that moment ---
   const delivered = new Set<string>(env.httpDelivered ?? []);
-  let misrouted = 0;
+  let misrouted = env.httpMisrouted ?? 0;
   const targetAt = (seq: number): { running: boolean; relay: string; motebit: string } => {
     let st = { running: false, relay: RELAY_A, motebit: firstIdentity };
     for (const [markSeq, r, tg, id] of targetLine) {
@@ -741,17 +801,21 @@ export async function runCell(
   }
 
   // --- HTTP: overdue time and first sync of the last run ---
-  const stateAt = (t: number): [boolean, string] => {
-    let st: [boolean, string] = [false, RELAY_A];
-    for (const [at, r, tg] of timeline) if (at <= t) st = [r, tg];
+  // The run state at a time, by clock (HTTP syncs carry no frame sequence):
+  // running, target relay, target identity.
+  const stateAt = (t: number): [boolean, string, string] => {
+    let st: [boolean, string, string] = [false, RELAY_A, firstIdentity];
+    for (const [markSeqTime, r, tg, id] of timelineIds) if (markSeqTime <= t) st = [r, tg, id];
     return st;
   };
   let firstInLastRun: number | null = null;
   const legit: Array<{ at: number; url: string }> = [];
   for (const { at, url } of env.httpSyncs) {
     if (at >= drainFrom) continue;
-    const [isRunning, tgt] = stateAt(at);
-    if (!isRunning || !url.startsWith(tgt)) continue;
+    const [isRunning, tgt, id] = stateAt(at);
+    // A sync the user asked for: running, to the target relay, for the
+    // target identity (a pull for an identity the surface has left is not).
+    if (!isRunning || !url.startsWith(tgt) || motebitOf(url) !== id) continue;
     legit.push({ at, url });
     if (at >= lastRunStart && firstInLastRun == null) firstInLastRun = at - lastRunStart;
   }

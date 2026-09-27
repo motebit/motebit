@@ -29,7 +29,7 @@ rejects, ignores a late auth timeout or `auth_result` from a replaced
 socket, and queues a `sendRaw` made while it is not authenticated (sent on
 its next authentication, bounded) instead of dropping it. New:
 `drain(ms)` serves out the current socket, never reconnects, and
-disconnects after `ms`.
+disconnects after `ms`; `resume()` undoes a drain.
 
 Every socket replacement is make-before-break. A re-entered `startSync`
 (web, desktop), `connectRelay` (spatial) or a newer sync cycle (mobile)
@@ -46,7 +46,9 @@ or relay the app has LEFT is never retired into the new one; it drains
 closes 15 s later, whether or not the new socket is up by then (counted
 from the moment the app left it on spatial and mobile, whose new socket
 can come long after; from the new start's claim on web and desktop, which
-claim before their slow awaits). A start for an identity the app no
+claim before their slow awaits). If the app comes back to that target
+before the drain ends (spatial, mobile), the socket resumes instead of
+closing — main kept it throughout. A start for an identity the app no
 longer holds (desktop), or for a relay or identity it has since left
 (spatial), builds no socket.
 
@@ -66,7 +68,13 @@ run (spatial, same identity only) until the newer start replaces it.
 Mobile keeps main's 30-second cadence (every cycle runs its HTTP sync)
 and owns only the socket; a cycle whose run was replaced finishes its HTTP
 sync on the current run's engines only when the current run targets the
-same relay, and never connects its socket.
+same identity and relay, and never connects its socket. A cycle's one slow
+await (the relay-key pin, which depends only on the relay) now comes
+first, and everything bound to an identity — its token, its adapters, its
+socket URL — is built after it from the identity current then: a cycle
+that outlives a pairing to another identity on the same relay serves the
+new identity, and never syncs the new identity's engines to the old
+identity's `/sync/<id>/push` (which main's cycle could do).
 
 Desktop resolves its socket credential per connect (the caller's token
 first, a freshly minted one after), except that a configured relay master
@@ -88,8 +96,14 @@ beside the test). The check that a cell where raw main does better holds
 a zombie socket verifies the zombie's presence in that cell, not that it
 caused the lead; the reaped comparison supplies the causation. By default
 the test runs sequences of up to two operations (one on web);
-`INTERLEAVING_MAX_OPS` widens it. On the full matrix (three operations,
-two on web) this controller is not worse than reaped main in any of
-22,220 cells on desktop; on web in 0 and 3 of 2,220 cells in two runs
-(web cells vary run to run); and worse in 28 of 22,220 cells on spatial
-and 104 of 22,220 on mobile, not all root-caused (see each test's header).
+`scripts/sync-interleavings-full.sh` records origin/main's baselines for
+the full matrix (three operations, two on web) and runs it. On the full
+matrix this controller is worse than reaped main in 0 of 22,220 cells on
+desktop, spatial and mobile, with 0 invariant breaks; on web in 1 and 2
+of 2,220 cells in two runs, each of which, re-run alone, is no worse than
+main (web cells vary with host load).
+
+Found while root-causing, not changed here: `SyncEngine`'s pull cursor is
+the local max `version_clock`, so an event another device publishes with
+the same clock as one this device appended meanwhile is never pulled
+(`sync-cursor-same-clock.test.ts` characterizes it).

@@ -266,6 +266,21 @@ export class WebSocketEventStoreAdapter implements EventStoreAdapter {
   }
 
   /**
+   * Undo `drain()`: the surface came back to this socket's relay and
+   * identity before the drain ended, so it serves (and reconnects) again.
+   * A socket that dropped during the drain reconnects now.
+   */
+  resume(): void {
+    if (!this.drainOnly) return;
+    this.drainOnly = false;
+    if (this.drainAllTimer) {
+      clearTimeout(this.drainAllTimer);
+      this.drainAllTimer = null;
+    }
+    if (!this.ws) this.connect();
+  }
+
+  /**
    * Notified each time this adapter's socket is authenticated (the relay's
    * `auth_result` ok) — the moment it can carry frames. A surface replacing a
    * socket retires the old one here, not at the replacement's `connect()`.

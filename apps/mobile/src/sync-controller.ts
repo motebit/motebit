@@ -98,19 +98,20 @@ export class MobileSyncController {
    * runs its HTTP sync.
    *
    * Runs: `_runEpoch` moves when a run's engines are created and on stop;
-   * `_runUrl` is the relay the current run syncs with and `_runTarget` its
-   * identity and relay (`"<motebitId> <relayUrl>"`); both null when stopped.
-   * A cycle whose run was replaced never connects its socket. Its HTTP
-   * sync continues — on the CURRENT run's engines — when the current run
-   * targets the same relay (a stop and restart, a re-entered startSync, or a
-   * pairing, to the same relay: main syncs there too). It does nothing
-   * further when the controller is stopped or the current run targets
-   * another relay: its token and URL belong to a relay the user left.
+   * `_runTarget` is the identity and relay the current run syncs
+   * (`"<motebitId> <relayUrl>"`; null when stopped). A cycle whose run was
+   * replaced never connects its socket. Its HTTP sync continues — on the
+   * CURRENT run's engines — when the current run targets the same identity
+   * and relay (a stop and restart, or a re-entered startSync, to the same
+   * relay: main syncs there too). It does nothing further when the
+   * controller is stopped or the current run targets another relay or
+   * identity: its token, its URL and its adapters' identity belong to a
+   * target the user left — continuing would push the new identity's events
+   * to the old identity's `/sync/<id>/push`.
    */
   private _cycleSeq = 0;
   private _socketCycle = 0;
   private _runEpoch = 0;
-  private _runUrl: string | null = null;
   private _runTarget: string | null = null;
   /** Engines that have a remote (a live socket's, or an HTTP fallback). */
   private _enginesWithRemote = new WeakSet<SyncEngine>();
@@ -136,6 +137,8 @@ export class MobileSyncController {
   >();
   /** When each left socket's drain ends (set when the app leaves its target). */
   private _leftDeadline = new WeakMap<WebSocketEventStoreAdapter, number>();
+  /** The running socket while it drains for the target the app left. */
+  private _draining: { adapter: WebSocketEventStoreAdapter; run: string } | null = null;
   private _syncEncKey: Uint8Array | null = null;
 
   // Serving state
@@ -313,9 +316,10 @@ export class MobileSyncController {
     // A run for another identity or relay: the running socket serves one the
     // app has left. It drains (see LEFT_TARGET_DRAIN_MS) and closes, unless
     // a cycle of this run connects its own socket first.
-    if (this._runTarget !== target) this.drainLeftSocket(this._runTarget);
+    if (this._runTarget !== target && !this.resumeReturned(target)) {
+      this.drainLeftSocket(this._runTarget);
+    }
     this._runTarget = target;
-    this._runUrl = url;
 
     this._syncStatus = "idle";
     this._syncStatusCallback?.("idle", this._lastSyncTime);
@@ -389,17 +393,40 @@ export class MobileSyncController {
     }
   }
 
-  /** Close the running socket after the drain period if it still serves a left target. */
+  /**
+   * The running socket serves a target the app just left: it drains (see
+   * LEFT_TARGET_DRAIN_MS) and closes, unless a newer socket replaces it
+   * first or the app comes back to its target (`resumeReturned`).
+   */
   private drainLeftSocket(left: string | null): void {
     const leaving = this._wsAdapter;
     if (!leaving || left == null) return;
     this._leftDeadline.set(leaving, Date.now() + LEFT_TARGET_DRAIN_MS);
     // It serves out what it holds but never reopens for the target left.
     leaving.drain(LEFT_TARGET_DRAIN_MS);
+    this._draining = { adapter: leaving, run: left };
     setTimeout(() => {
-      // Still the running socket (no newer socket claimed): its drain is over.
-      if (this._wsAdapter === leaving) this.closeSockets();
+      // Still the running socket (no newer socket claimed) and still
+      // draining (the app did not come back): its drain is over.
+      if (this._wsAdapter === leaving && this._draining?.adapter === leaving) {
+        this._draining = null;
+        this.closeSockets();
+      }
     }, LEFT_TARGET_DRAIN_MS);
+  }
+
+  /**
+   * The app came back to the target the running socket drains for, before
+   * the drain ended: that socket is this run's again — it resumes instead
+   * of closing and being rebuilt (main kept it throughout).
+   */
+  private resumeReturned(run: string): boolean {
+    const d = this._draining;
+    if (!d || d.adapter !== this._wsAdapter || d.run !== run) return false;
+    this._draining = null;
+    this._leftDeadline.delete(d.adapter);
+    d.adapter.resume();
+    return true;
   }
 
   private drainLeft(adapter: WebSocketEventStoreAdapter, unsubEvent: (() => void) | null): void {
@@ -447,7 +474,6 @@ export class MobileSyncController {
     this.closeSockets();
     this._runEpoch++;
     this._runTarget = null;
-    this._runUrl = null;
     this.deps.stopPushLifecycle();
     if (this.syncTimer) {
       clearInterval(this.syncTimer);
@@ -561,11 +587,40 @@ export class MobileSyncController {
     if (!storage) return;
     const run = this._runEpoch;
     const cycle = ++this._cycleSeq;
+    // The cycle's one slow await comes FIRST, and depends only on the relay:
+    // resolve the PINNED relay key (TOFU) via AsyncStorage so a paid P2P
+    // delegation derives the fee-leg treasury from a key trusted at first
+    // connect, never a fetched value (the irreversible-payment MITM surface);
+    // undefined → P2P disabled, relay-mode still serves the task. Everything
+    // bound to an IDENTITY — the token, the adapters, the socket URL — is
+    // built after it, from the identity current then: a cycle that outlives a
+    // pairing to another identity on the same relay serves the new identity
+    // (as a fresh cycle would, without paying the await again), and never
+    // syncs the new identity's engines under the old identity's id.
+    const pinRuntime = this.deps.getRuntime();
+    let pinnedRelayKey: string | undefined;
+    // A failed pin fails the cycle, as it did where it used to be awaited.
+    let pinFailed = false;
+    try {
+      pinnedRelayKey = pinRuntime
+        ? ((await getOrPinRelayKey(syncUrl, {
+            storage: {
+              getItem: (k) => AsyncStorage.getItem(k),
+              setItem: (k, v) => AsyncStorage.setItem(k, v),
+            },
+          })) ?? undefined)
+        : undefined;
+    } catch {
+      pinFailed = true;
+    }
+    const motebitId = this.deps.getMotebitId();
+    const target = `${motebitId} ${syncUrl}`;
     // The engines this cycle may drive, read at each use: the current run's,
-    // while it syncs with this cycle's relay; null once the controller is
-    // stopped or the current run targets another relay (see `_runUrl`).
+    // while it syncs this cycle's identity and relay; null once the
+    // controller is stopped or the current run targets another relay or
+    // identity (see `_runTarget`).
     const live = (): { engine: SyncEngine; convEngine: ConversationSyncEngine } | null =>
-      this._runUrl === syncUrl && this.syncEngine && this.conversationSyncEngine
+      this._runTarget === target && this.syncEngine && this.conversationSyncEngine
         ? { engine: this.syncEngine, convEngine: this.conversationSyncEngine }
         : null;
     const stale = (): boolean => live() == null;
@@ -573,12 +628,12 @@ export class MobileSyncController {
       engine.connectRemote(remote);
       this._enginesWithRemote.add(engine);
     };
-    const motebitId = this.deps.getMotebitId();
 
     this._syncStatus = "syncing";
     this._syncStatusCallback?.("syncing", this._lastSyncTime);
 
     try {
+      if (pinFailed) throw new Error("relay key pin failed");
       const token = await this.deps.createSyncToken();
       // Staleness is judged where the cycle USES the run (its socket, its
       // engines), not here: a stop and a restart to this cycle's relay may
@@ -646,17 +701,8 @@ export class MobileSyncController {
           });
 
           // Enable interactive delegation — lets the AI transparently delegate
-          // tasks to remote agents during conversation. Resolve the PINNED
-          // relay key (TOFU) via AsyncStorage so a paid P2P delegation derives
-          // the fee-leg treasury from a key trusted at first connect, never a
-          // fetched value (the irreversible-payment MITM surface). undefined →
-          // P2P disabled, relay-mode still serves the task.
-          const pinnedRelayKey = await getOrPinRelayKey(syncUrl, {
-            storage: {
-              getItem: (k) => AsyncStorage.getItem(k),
-              setItem: (k, v) => AsyncStorage.setItem(k, v),
-            },
-          });
+          // tasks to remote agents during conversation (relay key pinned at
+          // the top of the cycle).
           if (stale()) {
             unsubEvent();
             wsAdapter.disconnect();

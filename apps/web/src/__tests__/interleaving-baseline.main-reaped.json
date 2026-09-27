@@ -194,7 +194,7 @@
   "31000|0|start>identity": {
     "commands": 1,
     "events": 1,
-    "misrouted": 3,
+    "misrouted": 0,
     "inbound": 4,
     "timely": 3,
     "zombies": 1,
@@ -530,7 +530,7 @@
   "31000|1000|start>identity": {
     "commands": 1,
     "events": 1,
-    "misrouted": 3,
+    "misrouted": 0,
     "inbound": 4,
     "timely": 3,
     "zombies": 1,
@@ -866,7 +866,7 @@
   "31000|2000|start>identity": {
     "commands": 1,
     "events": 1,
-    "misrouted": 3,
+    "misrouted": 0,
     "inbound": 4,
     "timely": 3,
     "zombies": 1,
@@ -1202,7 +1202,7 @@
   "31000|15000|start>identity": {
     "commands": 1,
     "events": 1,
-    "misrouted": 3,
+    "misrouted": 0,
     "inbound": 4,
     "timely": 3,
     "zombies": 1,
@@ -1538,7 +1538,7 @@
   "40000|0|start>identity": {
     "commands": 1,
     "events": 1,
-    "misrouted": 3,
+    "misrouted": 0,
     "inbound": 4,
     "timely": 3,
     "zombies": 1,
@@ -1862,7 +1862,7 @@
   "40000|1000|start>identity": {
     "commands": 1,
     "events": 1,
-    "misrouted": 3,
+    "misrouted": 0,
     "inbound": 4,
     "timely": 3,
     "zombies": 1,
@@ -2186,7 +2186,7 @@
   "40000|2000|start>identity": {
     "commands": 1,
     "events": 1,
-    "misrouted": 3,
+    "misrouted": 0,
     "inbound": 4,
     "timely": 3,
     "zombies": 1,
@@ -2510,7 +2510,7 @@
   "40000|15000|start>identity": {
     "commands": 1,
     "events": 1,
-    "misrouted": 3,
+    "misrouted": 0,
     "inbound": 4,
     "timely": 3,
     "zombies": 1,

@@ -123,6 +123,8 @@ export class SpatialSyncController {
   >();
   /** When each left socket's drain ends (set when the app leaves its target). */
   private _leftDeadline = new WeakMap<WebSocketEventStoreAdapter, number>();
+  /** The running socket while it drains for the target the app left. */
+  private _draining: { adapter: WebSocketEventStoreAdapter; run: string } | null = null;
   private _syncUnsubscribe: (() => void) | null = null;
   /**
    * Socket ownership across overlapping starts (#816). Every start takes a
@@ -235,7 +237,7 @@ export class SpatialSyncController {
     // target moves to another identity or relay, the running socket serves
     // one the app has left: it drains (see LEFT_TARGET_DRAIN_MS) and closes,
     // unless this start's socket replaces it first.
-    if (this._activeRun !== run) this.drainLeftSocket(this._activeRun);
+    if (this._activeRun !== run && !this.resumeReturned(run)) this.drainLeftSocket(this._activeRun);
     this._activeRun = run;
 
     this.setSyncStatus("connecting");
@@ -595,19 +597,39 @@ export class SpatialSyncController {
   }
 
   /**
-   * Disconnect from the relay: stop sync, close WebSocket, deregister.
+   * The running socket serves a target the app just left: it drains (see
+   * LEFT_TARGET_DRAIN_MS) and closes, unless a newer socket replaces it
+   * first or the app comes back to its target (`resumeReturned`).
    */
-  /** Close the running socket after the drain period if it still serves a left target. */
   private drainLeftSocket(left: string | null): void {
     const leaving = this._wsAdapter;
     if (!leaving || left == null) return;
     this._leftDeadline.set(leaving, Date.now() + LEFT_TARGET_DRAIN_MS);
     // It serves out what it holds but never reopens for the target left.
     leaving.drain(LEFT_TARGET_DRAIN_MS);
+    this._draining = { adapter: leaving, run: left };
     setTimeout(() => {
-      // Still the running socket (no newer socket claimed): its drain is over.
-      if (this._wsAdapter === leaving) this.closeSockets();
+      // Still the running socket (no newer socket claimed) and still
+      // draining (the app did not come back): its drain is over.
+      if (this._wsAdapter === leaving && this._draining?.adapter === leaving) {
+        this._draining = null;
+        this.closeSockets();
+      }
     }, LEFT_TARGET_DRAIN_MS);
+  }
+
+  /**
+   * The app came back to the target the running socket drains for, before
+   * the drain ended: that socket is this run's again — it resumes instead
+   * of closing and being rebuilt (main kept it throughout).
+   */
+  private resumeReturned(run: string): boolean {
+    const d = this._draining;
+    if (!d || d.adapter !== this._wsAdapter || d.run !== run) return false;
+    this._draining = null;
+    this._leftDeadline.delete(d.adapter);
+    d.adapter.resume();
+    return true;
   }
 
   private drainLeft(adapter: WebSocketEventStoreAdapter, unsubEvent: (() => void) | null): void {
@@ -655,6 +677,9 @@ export class SpatialSyncController {
     }
   }
 
+  /**
+   * Disconnect from the relay: stop sync, close WebSocket, deregister.
+   */
   async disconnectRelay(): Promise<void> {
     this._retireOnAuth?.();
     this._retireOnAuth = null;

@@ -223,6 +223,36 @@ describe("spatial sync socket across token refreshes (#816)", () => {
     await ctrl.disconnectRelay();
   });
 
+  it("leaving for another relay and coming back before the drain ends: the running socket stays", async () => {
+    let relayUrl = "https://relay.test";
+    const deps = makeDeps();
+    deps.getNetworkSettings = () => ({ relayUrl, showNetwork: true });
+    const ctrl = new SpatialSyncController(deps);
+    await connectAndAccept(ctrl);
+    const first = latest();
+    // Every later start is slow (its bootstrap POST hangs), so no socket of
+    // theirs replaces the first one here.
+    const fetchBefore = globalThis.fetch;
+    globalThis.fetch = (async (url: string, init?: unknown) => {
+      if (String(url).endsWith("/api/v1/agents/bootstrap")) await new Promise<void>(() => {});
+      return (fetchBefore as (u: string, i?: unknown) => Promise<unknown>)(url, init);
+    }) as unknown as typeof fetch;
+    relayUrl = "https://relay-b.test";
+    void ctrl.connectRelay();
+    await flush();
+    relayUrl = "https://relay.test"; // back to the first relay, 5 s later
+    await vi.advanceTimersByTimeAsync(5_000);
+    void ctrl.connectRelay();
+    await vi.advanceTimersByTimeAsync(30_000); // well past the 15 s drain
+    // Main kept this socket throughout; so does this controller.
+    expect(first.closed).toBe(false);
+    first.deliver({ type: "command_request", id: "back", command: "state" });
+    await flush();
+    expect(commandResponses(first)).toEqual([{ id: "back", result: { summary: "ran state" } }]);
+    globalThis.fetch = fetchBefore;
+    await ctrl.disconnectRelay();
+  });
+
   it("disconnectRelay while connectRelay is still awaiting leaves no socket behind", async () => {
     const ctrl = new SpatialSyncController(makeDeps());
     const connecting = ctrl.connectRelay();

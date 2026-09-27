@@ -14,16 +14,15 @@
  * restore both files and rebuild.
  *
  * Matrix size: by default every sequence of up to 1 operation(s) (the
- * committed baselines cover exactly that). `INTERLEAVING_MAX_OPS=2` runs
- * the full matrix (2,220 cells, with four command execution times); record
- * both baselines at that size first (`INTERLEAVING_MAX_OPS=2` with
- * `INTERLEAVING_RECORD`, and `INTERLEAVING_REAP=1` for the reaped one). The
- * full matrix is too slow for every test run. Its result on #816, against
- * main reaped, in two runs: 0 and 3 cells worse (the 3 among the cells that
- * vary run to run: two branch runs differed in 19 of 2,220 cells, by up to
- * 6 s of HTTP overdue time, 6 s of first sync, and one command). Web cells
- * also vary with host load: a run beside three other matrices once failed
- * the default matrix on one cell by 4 s of first sync.
+ * committed baselines cover exactly that). The full matrix — 2 operations,
+ * 2,220 cells with four command execution times — is too slow for every
+ * test run: `scripts/sync-interleavings-full.sh all web` records origin/main's
+ * full baselines (raw and reaped) and runs this file against them
+ * (`INTERLEAVING_MAX_OPS=2`, `INTERLEAVING_BASELINE_DIR`). Its result on
+ * #816, against main reaped: in two runs, 1 and 2 cells worse and 0 invariant
+ * breaks; each of those three cells, re-run alone three times on this
+ * controller and on reaped main, is no worse than main (web cells vary with
+ * host load; they are jitter).
  */
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { IDBFactory } from "fake-indexeddb";
@@ -246,8 +245,16 @@ vi.mock("../providers.js", () => ({
 
 const MAX_OPS = Number(harnessEnv["INTERLEAVING_MAX_OPS"] ?? 1);
 const RECORD = harnessEnv["INTERLEAVING_RECORD"];
-const BASELINE = new URL("./interleaving-baseline.main.json", import.meta.url);
-const BASELINE_REAPED = new URL("./interleaving-baseline.main-reaped.json", import.meta.url);
+// `INTERLEAVING_BASELINE_DIR`: baselines recorded elsewhere (the full matrix —
+// `scripts/sync-interleavings-full.sh` records them as <dir>/web.main.json and
+// <dir>/web.main-reaped.json).
+const BASELINE_DIR = harnessEnv["INTERLEAVING_BASELINE_DIR"];
+const BASELINE = BASELINE_DIR
+  ? new URL(`file://${BASELINE_DIR}/web.main.json`)
+  : new URL("./interleaving-baseline.main.json", import.meta.url);
+const BASELINE_REAPED = BASELINE_DIR
+  ? new URL(`file://${BASELINE_DIR}/web.main-reaped.json`)
+  : new URL("./interleaving-baseline.main-reaped.json", import.meta.url);
 
 /** Record main with zombie sockets black-holed (see interleaving-harness.ts). */
 const REAP = harnessEnv["INTERLEAVING_REAP"] === "1";

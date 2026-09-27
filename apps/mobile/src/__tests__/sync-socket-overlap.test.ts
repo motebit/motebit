@@ -14,7 +14,17 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
 const h = vi.hoisted(() => ({
-  sockets: [] as Array<{ connected: boolean; everConnected: boolean; url: string }>,
+  sockets: [] as Array<{
+    connected: boolean;
+    everConnected: boolean;
+    url: string;
+    authed?: boolean;
+    handedOff?: boolean;
+    drained?: boolean;
+    auth?: () => void;
+  }>,
+  /** When set, a connected socket authenticates only when its `auth()` is called. */
+  deferAuth: false,
   /** Every relay-key fetch takes this long (fake time). */
   pinDelayMs: 0,
   /** Per-call override: the Nth relay-key fetch takes this long. */
@@ -27,6 +37,8 @@ const h = vi.hoisted(() => ({
   log: [] as Array<[number, string]>,
   /** Conversation-engine syncs only: [ms since t0, relay url]. */
   convLog: [] as Array<[number, string]>,
+  /** [ms since t0, motebit id] per HTTP sync adapter built. */
+  httpAdapters: [] as Array<[number, string]>,
   t0: 0,
 }));
 
@@ -65,20 +77,25 @@ vi.mock("@motebit/sync-engine", () => {
     });
   }
   class WebSocketEventStoreAdapter {
-    state: { connected: boolean; everConnected: boolean; url: string };
+    state: (typeof h.sockets)[number];
     constructor(cfg: { url: string }) {
       this.state = { connected: false, everConnected: false, url: cfg.url };
       h.sockets.push(this.state);
     }
     authCbs = new Set<() => void>();
-    // The relay admits a socket at once here: connected ⇒ authenticated.
+    // The relay admits a socket at once here (connected ⇒ authenticated),
+    // unless `h.deferAuth`: then its `auth()` admits it.
     connect = vi.fn(() => {
       this.state.connected = true;
       this.state.everConnected = true;
-      for (const cb of [...this.authCbs]) cb();
+      this.state.auth = () => {
+        this.state.authed = true;
+        for (const cb of [...this.authCbs]) cb();
+      };
+      if (!h.deferAuth) this.state.auth();
     });
     get isConnected(): boolean {
-      return this.state.connected;
+      return this.state.connected && this.state.authed === true;
     }
     get endpoint(): string {
       return this.state.url;
@@ -92,6 +109,13 @@ vi.mock("@motebit/sync-engine", () => {
     });
     handOffTo = vi.fn(() => {
       this.state.connected = false;
+      this.state.handedOff = true;
+    });
+    drain = vi.fn(() => {
+      this.state.drained = true;
+    });
+    resume = vi.fn(() => {
+      this.state.drained = false;
     });
     onEvent = vi.fn(() => vi.fn());
     onCustomMessage = vi.fn(() => vi.fn());
@@ -102,8 +126,12 @@ vi.mock("@motebit/sync-engine", () => {
   const Plain = vi.fn().mockImplementation(function (cfg: {
     baseUrl?: string;
     url?: string;
+    motebitId?: string;
     inner?: { url?: string; state?: { url: string } };
   }) {
+    if (cfg?.baseUrl != null && cfg.motebitId != null) {
+      h.httpAdapters.push([Date.now() - h.t0, cfg.motebitId]);
+    }
     const inner = cfg?.inner;
     const wsUrl = inner?.state?.url;
     const url =
@@ -199,6 +227,7 @@ function expectNoOrphan(): void {
 beforeEach(() => {
   vi.useFakeTimers();
   h.sockets.length = 0;
+  h.deferAuth = false;
   h.pinDelayMs = 0;
   h.pinDelayFor = null;
   h.pinCalls = 0;
@@ -206,6 +235,7 @@ beforeEach(() => {
   h.syncHook = null;
   h.log = [];
   h.convLog = [];
+  h.httpAdapters = [];
   h.t0 = Date.now();
   store.clear();
   vi.stubGlobal(
@@ -219,6 +249,29 @@ afterEach(() => {
 });
 
 describe("mobile sync cycles overlapping (#816): main's cadence, one socket", () => {
+  it("a pairing to another identity mid-cycle: the cycle serves the NEW identity, never syncs it under the old id", async () => {
+    // A cycle suspended on the relay key when a pairing adopts another
+    // identity (same relay). Its identity-bound work — token, adapters —
+    // is built after that await, for the identity current then.
+    h.pinDelayMs = 31_000;
+    let id = "mote-1";
+    const deps = { ...makeDeps(), getMotebitId: () => id };
+    const ctrl = new MobileSyncController(deps);
+    await ctrl.startSync("https://relay.test");
+    await vi.advanceTimersByTimeAsync(13_000); // the first cycle waits on the relay key
+    id = "mote-2";
+    await ctrl.startSync("https://relay.test"); // completePairing → startSync
+    await runFor(40_000);
+    // Every HTTP adapter carries the new identity: nothing of mote-2's
+    // engines is ever synced to /sync/mote-1/…
+    expect(h.httpAdapters.length).toBeGreaterThan(0);
+    for (const [, who] of h.httpAdapters) expect(who).toBe("mote-2");
+    // …and the in-flight cycle served mote-2 when its await ended (34 s),
+    // as a fresh cycle would, instead of mote-2 waiting for its own.
+    expect(h.convLog[0]?.[0]).toBe(34_000);
+    ctrl.stopSync();
+  });
+
   it("relay key slower than the interval (40 s): main's sync count, one socket, no orphan", async () => {
     h.pinDelayMs = 40_000;
     const ctrl = new MobileSyncController(makeDeps());
@@ -287,8 +340,10 @@ describe("mobile sync cycles overlapping (#816): main's cadence, one socket", ()
     await ctrl.startSync("https://relay.test");
     const maxOpen = await runFor(60_000);
 
-    expect(h.sockets[0]!.everConnected).toBe(false);
-    expect(h.sockets[1]!.connected).toBe(true);
+    // A cycle builds its socket after the relay key resolves: cycle 2's
+    // (35 s) is the first socket, cycle 1's (53 s) the second.
+    expect(h.sockets[0]!.connected).toBe(true);
+    expect(h.sockets[1]!.everConnected).toBe(false);
     expect(maxOpen).toBe(1);
     expectNoOrphan();
     // Both cycles ran their HTTP sync (event + conversation each).
@@ -305,6 +360,46 @@ describe("mobile sync cycles overlapping (#816): main's cadence, one socket", ()
     await vi.advanceTimersByTimeAsync(60_000);
     expect(openSockets()).toHaveLength(0);
     expect(h.sockets.every((s) => !s.everConnected)).toBe(true);
+  });
+
+  it("make-before-break: the replaced socket stays open until the next cycle's socket authenticates, then is handed off", async () => {
+    h.deferAuth = true;
+    const ctrl = new MobileSyncController(makeDeps());
+    await ctrl.startSync("https://relay.test");
+    await vi.advanceTimersByTimeAsync(3_000); // first cycle connects its socket
+    const first = h.sockets[0]!;
+    first.auth!();
+    await vi.advanceTimersByTimeAsync(30_000); // the next cycle connects its own
+    const second = h.sockets[1]!;
+    expect(second.connected).toBe(true);
+    // The new socket is still handshaking: the relay's admitted socket is the
+    // first one, which keeps serving — not closed, not yet handed off.
+    expect(first.connected).toBe(true);
+    expect(first.handedOff).not.toBe(true);
+    second.auth!();
+    expect(first.handedOff).toBe(true);
+    ctrl.stopSync();
+  });
+
+  it("a socket for a relay the app left drains after the new relay's socket authenticates, then closes", async () => {
+    let relay = "https://relay-a.test";
+    const ctrl = new MobileSyncController(makeDeps());
+    await ctrl.startSync(relay);
+    await vi.advanceTimersByTimeAsync(3_000);
+    const a = h.sockets[0]!;
+    expect(a.connected).toBe(true);
+    relay = "https://relay-b.test";
+    await ctrl.startSync(relay); // re-entered: another relay
+    await vi.advanceTimersByTimeAsync(3_000); // relay B's first cycle connects
+    expect(h.sockets.some((s) => s.url.includes("relay-b") && s.connected)).toBe(true);
+    // Relay A's socket is never handed to relay B's; it serves out its
+    // in-flight work and closes 15 s after the app left it.
+    expect(a.handedOff).not.toBe(true);
+    expect(a.drained).toBe(true);
+    expect(a.connected).toBe(true);
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(a.connected).toBe(false);
+    ctrl.stopSync();
   });
 
   it("stop and restart to the SAME relay mid-cycle: the in-flight cycle still syncs (main's counts and first sync)", async () => {

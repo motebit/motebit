@@ -16,12 +16,12 @@
  * restore both files and rebuild.
  *
  * Matrix size: by default every sequence of up to 2 operation(s) (the
- * committed baselines cover exactly that). `INTERLEAVING_MAX_OPS=3` runs
- * the full matrix (22,220 cells, with four command execution times); record
- * both baselines at that size first (`INTERLEAVING_MAX_OPS=3` with
- * `INTERLEAVING_RECORD`, and `INTERLEAVING_REAP=1` for the reaped one). The
- * full matrix is too slow for every test run. Its result on #816, against
- * main reaped: 104 cells (all three-operation cells with a 31 s or 40 s relay-key await: 96 end in a relay stall, where the branch misses inbound events published during the stall that main's parallel sockets pick up; 8 are a later first HTTP sync after a pairing, refresh and drop; not fully root-caused).
+ * committed baselines cover exactly that). The full matrix — 3 operations,
+ * 22,220 cells with four command execution times — is too slow for every
+ * test run: `scripts/sync-interleavings-full.sh all mobile` records origin/main's
+ * full baselines (raw and reaped) and runs this file against them
+ * (`INTERLEAVING_MAX_OPS=3`, `INTERLEAVING_BASELINE_DIR`). Its result on
+ * #816, against main reaped: 0 cells worse, 0 invariant breaks.
  */
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { InMemoryEventStore } from "@motebit/event-log";
@@ -100,8 +100,16 @@ import {
 
 const MAX_OPS = Number(harnessEnv["INTERLEAVING_MAX_OPS"] ?? 2);
 const RECORD = harnessEnv["INTERLEAVING_RECORD"];
-const BASELINE = new URL("./interleaving-baseline.main.json", import.meta.url);
-const BASELINE_REAPED = new URL("./interleaving-baseline.main-reaped.json", import.meta.url);
+// `INTERLEAVING_BASELINE_DIR`: baselines recorded elsewhere (the full matrix —
+// `scripts/sync-interleavings-full.sh` records them as <dir>/mobile.main.json and
+// <dir>/mobile.main-reaped.json).
+const BASELINE_DIR = harnessEnv["INTERLEAVING_BASELINE_DIR"];
+const BASELINE = BASELINE_DIR
+  ? new URL(`file://${BASELINE_DIR}/mobile.main.json`)
+  : new URL("./interleaving-baseline.main.json", import.meta.url);
+const BASELINE_REAPED = BASELINE_DIR
+  ? new URL(`file://${BASELINE_DIR}/mobile.main-reaped.json`)
+  : new URL("./interleaving-baseline.main-reaped.json", import.meta.url);
 
 /** Record main with zombie sockets black-holed (see interleaving-harness.ts). */
 const REAP = harnessEnv["INTERLEAVING_REAP"] === "1";
@@ -153,7 +161,15 @@ function makeDriver(env: HarnessEnv): Driver {
     if (u.includes("/sync/")) {
       env.httpSyncs.push({ at: Date.now(), url: u });
       if (u.endsWith("/push") && init?.body) {
-        for (const m of init.body.matchAll(/"event_id":"(evt-\d+)"/g)) httpDelivered.add(m[1]!);
+        const target = /\/sync\/([^/?]+)\//.exec(u)?.[1];
+        const body = JSON.parse(init.body) as {
+          events?: Array<{ event_id?: string; motebit_id?: string }>;
+        };
+        for (const e of body.events ?? []) {
+          if (e.event_id == null || !e.event_id.startsWith("evt-")) continue;
+          if (e.motebit_id !== target) env.httpMisrouted = (env.httpMisrouted ?? 0) + 1;
+          else httpDelivered.add(e.event_id);
+        }
       }
       return {
         ok: true,

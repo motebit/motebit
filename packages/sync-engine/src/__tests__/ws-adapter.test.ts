@@ -973,6 +973,26 @@ describe("WebSocketEventStoreAdapter", () => {
     expect(handshaking.closed).toBe(true);
   });
 
+  it("resume() after drain(): the socket keeps serving past the drain, and reconnects after a drop", async () => {
+    const adapter = new WebSocketEventStoreAdapter({
+      url: WS_URL,
+      motebitId: MOTEBIT_ID,
+      credentialSource: countingSource(),
+      reconnectBaseMs: 100,
+    });
+    adapter.connect();
+    await vi.advanceTimersByTimeAsync(0);
+    const serving = lastWS();
+    serving.simulateOpenWithAuth();
+    adapter.drain(15_000);
+    adapter.resume();
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(serving.closed).toBe(false);
+    serving.simulateClose();
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(MockWebSocket.instances).toHaveLength(2); // reconnected
+  });
+
   it("a replaced socket drains for at most REFRESH_DRAIN_MAX_MS, and a second refresh closes it first", async () => {
     const adapter = new WebSocketEventStoreAdapter({
       url: WS_URL,
