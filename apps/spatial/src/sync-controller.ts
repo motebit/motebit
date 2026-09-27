@@ -96,12 +96,17 @@ export class SpatialSyncController {
   private _wsUnsubOnEvent: (() => void) | null = null;
   private _syncUnsubscribe: (() => void) | null = null;
   /**
-   * Bumped by every connectRelay and disconnectRelay. A connectRelay that
-   * finds the epoch moved on across one of its awaits has been superseded
-   * and must not build or connect a socket — that socket would belong to
-   * nobody (#816).
+   * Socket ownership across overlapping starts (#816). Every start takes a
+   * request number; a start CLAIMS the socket only once it has passed its
+   * early-return checks and is about to build one, so a newer start that
+   * bails early never supersedes a running one. A start whose request is
+   * not newer than the current owner (a newer start already claimed, or a
+   * stop came after it) builds nothing; a start that loses ownership across
+   * an await tears down only its own socket, and only if it is still the
+   * current one. A stop makes every earlier request stale.
    */
-  private _wsEpoch = 0;
+  private _wsRequestSeq = 0;
+  private _wsOwner = 0;
 
   private _planSyncEngine: PlanSyncEngine | null = null;
   private _convSyncEngine: ConversationSyncEngine | null = null;
@@ -142,7 +147,7 @@ export class SpatialSyncController {
   async connectRelay(): Promise<void> {
     const { relayUrl, showNetwork } = this.deps.getNetworkSettings();
     if (relayUrl === "" || !showNetwork) return;
-    const epoch = ++this._wsEpoch;
+    const request = ++this._wsRequestSeq;
 
     this.setSyncStatus("connecting");
 
@@ -232,11 +237,19 @@ export class SpatialSyncController {
         const storage = this.deps.getStorage();
         const localEventStore = storage?.eventStore ?? null;
 
-        // HTTP fallback adapter (for initial sync / offline recovery)
+        // HTTP fallback adapter (for initial sync / offline recovery). It
+        // backs the socket's catch-up pull after every refresh, so it mints
+        // per request — a static 5-minute token was refused from the second
+        // refresh on and a refresh gap's events were never pulled (#816).
         const httpAdapter = new HttpEventStoreAdapter({
           baseUrl: relayUrl,
           motebitId,
-          authToken,
+          credentialSource: {
+            getCredential: async () => {
+              const tf = this.deps.getTokenFactory();
+              return tf ? tf() : authToken;
+            },
+          },
         });
         const encryptedHttp = new EncryptedEventStoreAdapter({ inner: httpAdapter, key: encKey });
 
@@ -246,9 +259,12 @@ export class SpatialSyncController {
           "/ws/sync/" +
           motebitId;
 
-        // Superseded while awaiting (disconnectRelay, or a newer
-        // connectRelay): building a socket now would open one nothing owns.
-        if (epoch !== this._wsEpoch) return;
+        // Claim the socket HERE, past every early return: a connectRelay that
+        // bails earlier never supersedes a running one. One already
+        // superseded (disconnectRelay, or a newer connectRelay that claimed
+        // first) builds nothing — that socket would belong to nobody.
+        if (request <= this._wsOwner) return;
+        this._wsOwner = request;
         // One sync socket per controller: a re-entered connectRelay replaces
         // the running socket and its refresh timer (#816).
         if (this._wsTokenRefreshTimer != null) {
@@ -480,7 +496,7 @@ export class SpatialSyncController {
    * Disconnect from the relay: stop sync, close WebSocket, deregister.
    */
   async disconnectRelay(): Promise<void> {
-    this._wsEpoch++;
+    this._wsOwner = ++this._wsRequestSeq;
     // Stop token refresh
     if (this._wsTokenRefreshTimer) {
       clearInterval(this._wsTokenRefreshTimer);

@@ -100,11 +100,17 @@ export class SyncController {
   private _wsUnsubOnEvent: (() => void) | null = null;
   private _wsUnsubOnCustom: (() => void) | null = null;
   /**
-   * Bumped by every startSync and stopSync. A startSync that finds the epoch
-   * moved on across one of its awaits has been superseded and must not build,
-   * wire, or connect a socket — that socket would belong to nobody (#816).
+   * Socket ownership across overlapping starts (#816). Every start takes a
+   * request number; a start CLAIMS the socket only once it has passed its
+   * early-return checks and is about to build one, so a newer start that
+   * bails early never supersedes a running one. A start whose request is
+   * not newer than the current owner (a newer start already claimed, or a
+   * stop came after it) builds nothing; a start that loses ownership across
+   * an await tears down only its own socket, and only if it is still the
+   * current one. A stop makes every earlier request stale.
    */
-  private _wsEpoch = 0;
+  private _wsRequestSeq = 0;
+  private _wsOwner = 0;
   private _serving = false;
   private _servingPrivateKey: Uint8Array | null = null;
   private _servingSyncUrl: string | null = null;
@@ -239,7 +245,7 @@ export class SyncController {
     authToken?: string,
     masterToken?: string,
   ): Promise<void> {
-    const epoch = ++this._wsEpoch;
+    const request = ++this._wsRequestSeq;
     const runtime = this.deps.getRuntime();
     if (!runtime) return;
     const motebitId = this.deps.getMotebitId();
@@ -270,10 +276,16 @@ export class SyncController {
     }
 
     // Build adapter stack: HTTP (fallback) → Encrypted HTTP → WS → Encrypted WS
+    // The HTTP adapter backs the socket's catch-up pull, which runs after
+    // every refresh — so it mints per request. A static 5-minute token here
+    // was refused from the second refresh on, and events published in a
+    // refresh gap were never pulled (#816).
     const httpAdapter = new HttpEventStoreAdapter({
       baseUrl: syncUrl,
       motebitId,
-      authToken: token,
+      credentialSource: {
+        getCredential: () => this.deps.createSyncToken(keypair.privateKey),
+      },
     });
     const encryptedHttp = new EncryptedEventStoreAdapter({ inner: httpAdapter, key: encKey });
 
@@ -293,7 +305,11 @@ export class SyncController {
     // One sync socket per controller: a re-entered startSync (pairing, the
     // relay-URL "Connect" button) replaces the running socket instead of
     // leaving it open beside the new one (#816).
-    if (epoch !== this._wsEpoch) return;
+    // The claim happens HERE, past every early return: a start that bails
+    // earlier never supersedes a running one. A start already superseded
+    // (a stop, or a newer start that claimed first) builds nothing.
+    if (request <= this._wsOwner) return;
+    this._wsOwner = request;
     this.teardownWs();
 
     // The caller's token (possibly the relay master token) serves the first
@@ -386,7 +402,10 @@ export class SyncController {
     // Superseded while awaiting (stopSync, or a newer startSync): wiring
     // handlers onto this socket now would revive one that was deliberately
     // closed.
-    if (epoch !== this._wsEpoch) return;
+    if (this._wsOwner !== request) {
+      if (this._wsAdapter === wsAdapter) this.teardownWs();
+      return;
+    }
     runtime.enableInteractiveDelegation({
       syncUrl,
       // Honor the audience the runtime asks for — `task:submit` to submit,
@@ -763,7 +782,7 @@ export class SyncController {
 
   /** Stop background event sync. */
   stopSync(): void {
-    this._wsEpoch++;
+    this._wsOwner = ++this._wsRequestSeq;
     this.teardownWs();
     if (this._syncUnsubscribe) {
       this._syncUnsubscribe();
