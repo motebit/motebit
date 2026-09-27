@@ -37,6 +37,7 @@ vi.mock("@motebit/sync-engine", () => {
     opts: { onCatchUp?: (pulled: number) => void };
     connect = vi.fn(() => {});
     disconnect = vi.fn(() => {});
+    refreshConnection = vi.fn(() => {});
     sendRaw = vi.fn(() => {});
     eventHandlers: Array<(raw: unknown) => void> = [];
     customHandlers: Array<(msg: { type: string; task?: unknown }) => void> = [];

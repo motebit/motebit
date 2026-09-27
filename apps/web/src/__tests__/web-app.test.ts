@@ -6,7 +6,7 @@
  * the full app lifecycle without a browser or canvas.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { WebApp, COLOR_PRESETS } from "../web-app.js";
+import { WebApp, COLOR_PRESETS, WS_TOKEN_REFRESH_MS } from "../web-app.js";
 import type { StreamChunk } from "@motebit/runtime";
 
 // Stub ThreeJSAdapter — WebApp creates one internally (requires canvas)
@@ -928,6 +928,205 @@ describe("Machine roster (machine-roster-surfaces-v1 C-2a)", () => {
     const r = app.machineRoster();
     expect(r).not.toBeNull();
     expect(app.machineRoster()).toBe(r);
+    app.stop();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #816 — the sync socket across token refreshes. The REAL
+// WebSocketEventStoreAdapter against a fake global WebSocket that plays the
+// relay's side of the handshake. The defect: each 4.5-minute refresh built a
+// new adapter, left the command/task handler on the first one, and closed
+// the first one every time — so after one refresh the tab answered no
+// command and every refreshed socket stayed open and deaf.
+// ---------------------------------------------------------------------------
+
+class RelaySocket {
+  static instances: RelaySocket[] = [];
+  readyState = 0;
+  onopen: (() => void) | null = null;
+  onclose: (() => void) | null = null;
+  onerror: (() => void) | null = null;
+  onmessage: ((e: { data: string }) => void) | null = null;
+  sent: string[] = [];
+  closed = false;
+  constructor(public url: string) {
+    RelaySocket.instances.push(this);
+  }
+  send(data: string): void {
+    this.sent.push(data);
+  }
+  close(): void {
+    this.closed = true;
+    this.readyState = 3;
+  }
+  accept(): void {
+    this.readyState = 1;
+    this.onopen?.();
+    this.deliver({ type: "auth_result", ok: true });
+  }
+  deliver(msg: unknown): void {
+    this.onmessage?.({ data: JSON.stringify(msg) });
+  }
+}
+
+describe("Sync socket across token refreshes (#816)", () => {
+  const RELAY = "https://relay.example.com";
+  const openSockets = () => RelaySocket.instances.filter((s) => !s.closed);
+  const latest = () => RelaySocket.instances[RelaySocket.instances.length - 1]!;
+  /** Real-timer wait until `pred` holds (credential minting is async WebCrypto). */
+  async function until(pred: () => boolean): Promise<void> {
+    for (let i = 0; i < 200 && !pred(); i++) await new Promise((r) => setTimeout(r, 5));
+    expect(pred()).toBe(true);
+  }
+
+  let originalWebSocket: typeof globalThis.WebSocket;
+  beforeEach(() => {
+    RelaySocket.instances = [];
+    originalWebSocket = globalThis.WebSocket;
+    globalThis.WebSocket = RelaySocket as unknown as typeof WebSocket;
+    vi.spyOn(globalThis, "fetch").mockImplementation(
+      async () =>
+        new Response("{}", { status: 503, headers: { "content-type": "application/json" } }),
+    );
+  });
+  afterEach(() => {
+    globalThis.WebSocket = originalWebSocket;
+    vi.useRealTimers();
+  });
+
+  async function bootAndSync(): Promise<WebApp> {
+    const app = new WebApp();
+    await app.init(null as unknown as HTMLCanvasElement);
+    await app.bootstrap();
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    await app.startSync(RELAY);
+    await until(() => RelaySocket.instances.length === 1);
+    latest().accept();
+    return app;
+  }
+
+  async function refresh(): Promise<RelaySocket> {
+    const before = latest();
+    const count = RelaySocket.instances.length;
+    vi.advanceTimersByTime(WS_TOKEN_REFRESH_MS);
+    await until(() => RelaySocket.instances.length === count + 1);
+    latest().accept();
+    return before;
+  }
+
+  function commandResponses(sock: RelaySocket): Array<{ id: string; result: unknown }> {
+    return sock.sent
+      .map((raw) => JSON.parse(raw) as { type: string; id: string; result: unknown })
+      .filter((m) => m.type === "command_response")
+      .map(({ id, result }) => ({ id, result }));
+  }
+
+  it("keeps exactly one socket open across N refreshes and closes each replaced one", async () => {
+    const app = await bootAndSync();
+    for (let i = 0; i < 4; i++) {
+      const replaced = await refresh();
+      expect(replaced.closed).toBe(true);
+      expect(openSockets()).toEqual([latest()]);
+    }
+    app.stopSync();
+    expect(openSockets()).toHaveLength(0);
+    app.stop();
+  });
+
+  it("answers a signed command_request after 2+ refreshes, on the socket it arrived on", async () => {
+    const app = await bootAndSync();
+    await refresh();
+    await refresh();
+    await refresh();
+
+    const privHex = (await (
+      app as unknown as { keyStore: { loadPrivateKey(): Promise<string | null> } }
+    ).keyStore.loadPrivateKey())!;
+    const { signAgentCommandEnvelope, hexToBytes } = await import("@motebit/crypto");
+    const envelope = await signAgentCommandEnvelope({
+      command: "state",
+      motebitId: app.motebitId,
+      identityPrivateKey: hexToBytes(privHex),
+    });
+
+    const current = latest();
+    current.deliver({ type: "command_request", id: "cmd-9", command: "state", envelope });
+    await until(() => commandResponses(current).length === 1);
+    const [answer] = commandResponses(current);
+    expect(answer!.id).toBe("cmd-9");
+    // Executed, not refused: the runtime's state came back (a refusal
+    // carries only the verifier's reason).
+    expect((answer!.result as { data?: { state?: unknown } }).data?.state).toBeDefined();
+    for (const s of RelaySocket.instances.slice(0, -1)) expect(commandResponses(s)).toEqual([]);
+    app.stopSync();
+    app.stop();
+  });
+
+  it("stopSync while startSync awaits the relay key leaves no socket and no refresh timer behind", async () => {
+    const app = new WebApp();
+    await app.init(null as unknown as HTMLCanvasElement);
+    await app.bootstrap();
+    // Gate the relay-key pin fetch — the await that follows building the
+    // socket adapter (announce fetches the same descriptor earlier, before
+    // any adapter exists, so gate only once the adapter is there).
+    const adapterBuilt = () => (app as unknown as { _wsAdapter: unknown })._wsAdapter != null;
+    let release!: () => void;
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    let keyFetchStarted!: () => void;
+    const started = new Promise<void>((r) => {
+      keyFetchStarted = r;
+    });
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      if (url.endsWith("/.well-known/motebit.json") && adapterBuilt()) {
+        keyFetchStarted();
+        await gate;
+      }
+      return new Response("{}", { status: 503, headers: { "content-type": "application/json" } });
+    });
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    const starting = app.startSync(RELAY);
+    await started;
+    app.stopSync();
+    release();
+    await starting;
+    vi.advanceTimersByTime(WS_TOKEN_REFRESH_MS * 3);
+    await new Promise((r) => setTimeout(r, 200));
+    expect(RelaySocket.instances).toHaveLength(0);
+    app.stop();
+  });
+
+  it("stopSync before startSync has built its socket leaves no socket behind", async () => {
+    const app = new WebApp();
+    await app.init(null as unknown as HTMLCanvasElement);
+    await app.bootstrap();
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    const starting = app.startSync(RELAY);
+    app.stopSync(); // startSync is still awaiting the private key
+    await starting;
+    vi.advanceTimersByTime(WS_TOKEN_REFRESH_MS * 3);
+    await new Promise((r) => setTimeout(r, 200));
+    expect(RelaySocket.instances).toHaveLength(0);
+    app.stop();
+  });
+
+  it("a re-entered startSync replaces the running socket and its refresh timer", async () => {
+    const app = await bootAndSync();
+    const first = latest();
+    await app.startSync(RELAY);
+    await until(() => RelaySocket.instances.length === 2);
+    latest().accept();
+    expect(first.closed).toBe(true);
+    expect(openSockets()).toEqual([latest()]);
+
+    await refresh();
+    // One timer ⇒ one new socket per refresh window.
+    expect(RelaySocket.instances).toHaveLength(3);
+    expect(openSockets()).toHaveLength(1);
+    app.stopSync();
     app.stop();
   });
 });
