@@ -1058,25 +1058,33 @@ export async function mintTaskDispatchToken(
 }
 
 /**
- * Whether an MCP forward PRESENTED the task to the worker (#811).
+ * What an MCP forward left behind (#811 v3): whether the worker's `tools/call`
+ * answer carried a receipt the relay stored.
  *
- * `not_presented` — the `tools/call` carrying the task never reached the
- * worker, or the worker refused it at the transport (a non-2xx answer):
- * outbound URL refused, no dispatch token, `initialize` refused or
- * unreachable, `notifications/initialized` failed, `tools/call` non-2xx.
+ * `receipt` — `tools/call` was answered 2xx with a receipt the relay parsed
+ * and stored on the queue entry: the task is complete.
  *
- * `presented` — the `tools/call` was answered 2xx (with or without a
- * receipt), OR it was sent and then failed without an answer (timeout,
- * reset). The last is ambiguous: the worker may be executing it, so it is
- * counted as presented — at-most-once is the side a task must fail on.
+ * `no_receipt` — everything else: the outbound URL refused, no dispatch
+ * token, `initialize` refused or unreachable, a connection refused or reset
+ * or timed out at ANY step (including `tools/call`), a non-2xx answer, or a
+ * 2xx answer with no receipt in it (an admission refusal, a tool error, an
+ * unparseable receipt).
+ *
+ * The caller holds the task's presentation mark only while the forward is in
+ * flight and releases it when the forward settles, whatever this says
+ * (`presentViaMcp` in tasks.ts). There is deliberately no "sent, then died ⇒
+ * presented" outcome: keeping the mark on an ambiguous failure stranded tasks
+ * that main executes and settles through reconnect recovery (the #849
+ * review). When the worker DID run the task and only the answer was lost,
+ * recovery runs it a second time — as main does.
  */
-export type McpForwardOutcome = "presented" | "not_presented";
+export type McpForwardOutcome = "receipt" | "no_receipt";
 
 /**
  * Forward a task to an agent's MCP endpoint via HTTP StreamableHTTP.
  * Called as fire-and-forget when no WebSocket connection is available.
  * On success, stores the receipt in the task queue for polling. Resolves to
- * whether the task was presented (`McpForwardOutcome`); never rejects.
+ * whether a receipt was stored (`McpForwardOutcome`); never rejects.
  */
 export async function forwardTaskViaMcp(
   endpointUrl: string,
@@ -1112,7 +1120,7 @@ export async function forwardTaskViaMcp(
       endpoint: endpointUrl,
       reason: outbound.reason,
     });
-    return "not_presented";
+    return "no_receipt";
   }
   if (dispatchToken == null) {
     logger.warn("task.mcp_forward_refused", {
@@ -1121,7 +1129,7 @@ export async function forwardTaskViaMcp(
       endpoint: endpointUrl,
       reason: "no_dispatch_token",
     });
-    return "not_presented";
+    return "no_receipt";
   }
   const mcpEndpoint = endpointUrl.endsWith("/mcp") ? endpointUrl : `${endpointUrl}/mcp`;
   const mcpHeaders: Record<string, string> = {
@@ -1158,9 +1166,8 @@ export async function forwardTaskViaMcp(
     });
   }
 
-  // Set the moment the `tools/call` carrying the task is sent: before it,
-  // any failure means the worker never received the task.
-  let toolsCallSent = false;
+  // Whether the answer's receipt was stored on the queue entry.
+  let receiptStored = false;
   try {
     // Step 1: Initialize MCP session
     const initResp = await fetch(mcpEndpoint, {
@@ -1197,7 +1204,7 @@ export async function forwardTaskViaMcp(
         status: initResp.status,
         detail: detail.slice(0, 200),
       });
-      return "not_presented";
+      return "no_receipt";
     }
     const sessionId = initResp.headers.get("mcp-session-id");
     if (sessionId) mcpHeaders["Mcp-Session-Id"] = sessionId;
@@ -1211,7 +1218,6 @@ export async function forwardTaskViaMcp(
     });
 
     // Step 3: Call motebit_task
-    toolsCallSent = true;
     const taskResp = await fetch(mcpEndpoint, {
       method: "POST",
       headers: mcpHeaders,
@@ -1241,7 +1247,7 @@ export async function forwardTaskViaMcp(
         status: taskResp.status,
         detail: detail.slice(0, 200),
       });
-      return "not_presented";
+      return "no_receipt";
     }
 
     // Step 4: Parse JSON-RPC response (SSE or plain JSON)
@@ -1258,6 +1264,7 @@ export async function forwardTaskViaMcp(
             qEntry.task.status = "completed";
             qEntry.receipt = receiptData;
             taskQueue.set(taskId, qEntry); // Persist to durable queue
+            receiptStored = true;
             logger.info("task.mcp_forward_completed", {
               correlationId: taskId,
               agent: agentId,
@@ -1287,16 +1294,19 @@ export async function forwardTaskViaMcp(
         }
       }
     }
-    return "presented";
+    return receiptStored ? "receipt" : "no_receipt";
   } catch (err: unknown) {
     logger.warn("task.mcp_forward_failed", {
       correlationId: taskId,
       agent: agentId,
       endpoint: mcpEndpoint,
       error: err instanceof Error ? err.message : String(err),
-      presented: toolsCallSent,
     });
-    return toolsCallSent ? "presented" : "not_presented";
+    // A refused, reset or timed-out connection at any step — including one
+    // whose `tools/call` was already sent — is not a presentation the relay
+    // can stand on (#811 v3). The receipt, if one was stored before a later
+    // step threw, still counts.
+    return receiptStored ? "receipt" : "no_receipt";
   }
 }
 
