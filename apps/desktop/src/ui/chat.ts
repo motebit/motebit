@@ -847,7 +847,14 @@ export function initChat(ctx: DesktopContext, callbacks: ChatCallbacks): ChatAPI
       const keypair = await ctx.app.getDeviceKeypair(config.invoke);
       if (!keypair) return null;
       const token = await ctx.app.createSyncToken(keypair.privateKey);
-      return { relayUrl: config.syncUrl, authToken: token, motebitId: ctx.app.motebitId };
+      // `mintToken` lets the command layer mint each route's own audience;
+      // the `sync` token alone was refused by `/balance` (#827).
+      return {
+        relayUrl: config.syncUrl,
+        authToken: token,
+        motebitId: ctx.app.motebitId,
+        mintToken: (audience) => ctx.app.createSyncToken(keypair.privateKey, audience),
+      };
     } catch {
       return null;
     }

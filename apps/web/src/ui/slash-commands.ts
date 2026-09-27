@@ -13,7 +13,15 @@ async function getRelayConfig(ctx: WebContext): Promise<RelayConfig | null> {
   if (!syncUrl) return null;
   const token = await ctx.app.createSyncToken();
   if (!token) return null;
-  return { relayUrl: syncUrl, authToken: token, motebitId: ctx.app.motebitId };
+  // `mintToken` lets the command layer mint each route's own audience
+  // (`/balance` needs `account:balance`, `/proposals` needs `proposal`); the
+  // single `sync` token alone was refused by both (#827).
+  return {
+    relayUrl: syncUrl,
+    authToken: token,
+    motebitId: ctx.app.motebitId,
+    mintToken: async (audience) => (await ctx.app.createSyncToken(audience)) ?? "",
+  };
 }
 
 /**

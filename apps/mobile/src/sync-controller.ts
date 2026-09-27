@@ -140,11 +140,14 @@ export class MobileSyncController {
       .map((t: { name: string }) => t.name);
 
     try {
+      // Registration is the agent-registry family: `admin:query`. The cached
+      // `sync` token was refused, so `/serve` never registered (#827).
+      const registerToken = await this.deps.createSyncToken("admin:query");
       const res = await fetch(`${this._servingSyncUrl}/api/v1/agents/register`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          Authorization: `Bearer ${this._servingAuthToken}`,
+          Authorization: `Bearer ${registerToken}`,
         },
         body: JSON.stringify({
           motebit_id: this.deps.getMotebitId(),
@@ -464,10 +467,12 @@ export class MobileSyncController {
         // Wire delegation adapter so PlanEngine can delegate steps to capable devices
         const runtime = this.deps.getRuntime();
         if (runtime) {
+          // A per-audience provider: the adapter submits (`task:submit`) and
+          // polls (`task:query`). The static `sync` token failed both (#827).
           const delegationAdapter = new RelayDelegationAdapter({
             syncUrl,
             motebitId,
-            authToken: token ?? undefined,
+            authToken: (audience: TokenAudience) => this.deps.createSyncToken(audience),
             sendRaw: (data: string) => wsAdapter.sendRaw(data),
             onCustomMessage: (cb) => wsAdapter.onCustomMessage(cb),
             getExplorationDrive: () => this.deps.getRuntime()?.getPrecision().explorationDrive,
@@ -488,7 +493,12 @@ export class MobileSyncController {
           });
           runtime.enableInteractiveDelegation({
             syncUrl,
-            authToken: () => this.deps.createSyncToken("task:submit"),
+            // Honor the audience the runtime asks for — `task:submit` to
+            // submit, `task:query` to poll, `market:listing` for the P2P
+            // pre-flight. A closure that ignored it sent `task:submit` to all
+            // three, and the poll and pre-flight were refused (#827).
+            authToken: (audience?: TokenAudience) =>
+              this.deps.createSyncToken(audience ?? "task:submit"),
             ...(pinnedRelayKey != null ? { relayPublicKey: pinnedRelayKey } : {}),
             // Forward the cold-start opt-in as a LIVE getter (reads the in-memory
             // mirror of MobileSettings.coldStartOptIn) so the Governance toggle
@@ -587,7 +597,8 @@ export class MobileSyncController {
                 }
 
                 if (receipt && this._servingSyncUrl) {
-                  const freshToken = await this.deps.createSyncToken("task:submit");
+                  // The result route verifies `task:result` (#827).
+                  const freshToken = await this.deps.createSyncToken("task:result");
                   await fetch(
                     `${this._servingSyncUrl}/agent/${motebitId}/task/${task.task_id}/result`,
                     {

@@ -215,8 +215,12 @@ export async function handleMigrate(config: CliConfig): Promise<void> {
   // signed BalanceWaiver. Check the balance; if positive and --waive
   // was passed, sign a waiver with the identity key and attach it.
   let departBody: Record<string, unknown> = {};
+  // The balance route verifies `account:balance`, not the `admin:query` the
+  // migration steps use — reusing `sourceHeaders` was refused without a master
+  // token (#827).
+  const balanceHeaders = await getRelayAuthHeaders(config, { aud: "account:balance" });
   const balanceRes = await fetch(`${sourceRelayUrl}/api/v1/agents/${motebitId}/balance`, {
-    headers: sourceHeaders,
+    headers: balanceHeaders,
   });
   if (balanceRes.ok) {
     const balancePayload = (await balanceRes.json()) as { balance?: number };
