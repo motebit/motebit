@@ -24,6 +24,9 @@ import { describe, it, expect, afterEach } from "vitest";
 import { createServer } from "node:http";
 import type { Server } from "node:http";
 import type { AddressInfo } from "node:net";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { serve } from "@hono/node-server";
 import type { Hono } from "hono";
 import WebSocket from "ws";
@@ -604,4 +607,152 @@ describe("forwardTaskViaMcp reports whether it presented the task", () => {
     const url = await scripted((res) => res.socket?.destroy());
     expect(await fwd(url)).toBe("presented");
   });
+});
+
+describe("marks are process-scoped: a restart's recovery behaves as main's", () => {
+  /**
+   * A worker MCP endpoint whose `tools/call` never answers — the forward is
+   * in flight for as long as the test runs.
+   */
+  async function hangingEndpoint(): Promise<{ url: string; toolsCalls: () => number }> {
+    let toolsCalls = 0;
+    const srv: Server = createServer((req, res) => {
+      if (req.method === "GET") {
+        res.end("ok");
+        return;
+      }
+      let body = "";
+      req.on("data", (c: Buffer) => (body += c.toString()));
+      req.on("end", () => {
+        const method = (JSON.parse(body) as { method: string }).method;
+        if (method === "initialize") {
+          res.setHeader("content-type", "application/json");
+          res.end(JSON.stringify({ jsonrpc: "2.0", id: 1, result: {} }));
+          return;
+        }
+        if (method === "tools/call") {
+          toolsCalls++; // never answered
+          return;
+        }
+        res.statusCode = 202;
+        res.end();
+      });
+    });
+    await new Promise<void>((r) => srv.listen(0, "127.0.0.1", () => r()));
+    cleanups.push(
+      () =>
+        new Promise<void>((r) => {
+          srv.closeAllConnections();
+          srv.close(() => r());
+        }),
+    );
+    return {
+      url: `http://127.0.0.1:${(srv.address() as AddressInfo).port}`,
+      toolsCalls: () => toolsCalls,
+    };
+  }
+
+  async function serveRelay(
+    dbPath: string,
+  ): Promise<{ relay: SyncRelay; port: number; stop: () => Promise<void> }> {
+    const relay = await createTestRelay({ dbPath });
+    const server = serve({ fetch: relay.app.fetch, port: 0, hostname: "127.0.0.1" });
+    (relay.app as Hono & { injectWebSocket: (s: unknown) => void }).injectWebSocket(server);
+    await new Promise<void>((r) => (server.listening ? r() : server.once("listening", () => r())));
+    let stopped = false;
+    const stop = async (): Promise<void> => {
+      if (stopped) return;
+      stopped = true;
+      await relay.close();
+      (server as unknown as Server).closeAllConnections();
+      await new Promise<void>((r) => server.close(() => r()));
+    };
+    cleanups.push(stop);
+    return { relay, port: (server.address() as AddressInfo).port, stop };
+  }
+
+  /** Connect a device of `worker` and count the task_request frames for `taskId`. */
+  async function framesOnConnect(
+    relay: SyncRelay,
+    port: number,
+    worker: string,
+    taskId: string,
+  ): Promise<number> {
+    const before = relay.connections.get(worker)?.length ?? 0;
+    const ws = new WebSocket(
+      `ws://127.0.0.1:${port}/ws/sync/${worker}?token=${API_TOKEN}&capabilities=web_search`,
+    );
+    ws.on("error", () => {});
+    let n = 0;
+    ws.on("message", (raw: Buffer) => {
+      const f = JSON.parse(raw.toString()) as { type?: string; task?: { task_id: string } };
+      if (f.type === "task_request" && f.task?.task_id === taskId) n++;
+    });
+    cleanups.push(async () => ws.terminate());
+    await waitFor(() => (relay.connections.get(worker)?.length ?? 0) > before);
+    await sleep(300);
+    return n;
+  }
+
+  /** Queue a caps task whose MCP forward to `endpoint` hangs mid tools/call. */
+  async function inFlightTask(
+    relay: SyncRelay,
+    endpoint: { url: string; toolsCalls: () => number },
+  ): Promise<{ worker: string; taskId: string }> {
+    const { motebitId: worker } = await createAgent(
+      relay,
+      bytesToHex((await generateKeypair()).publicKey),
+    );
+    await relay.app.request("/api/v1/agents/register", {
+      method: "POST",
+      headers: JSON_AUTH,
+      body: JSON.stringify({
+        motebit_id: worker,
+        endpoint_url: endpoint.url,
+        capabilities: ["web_search"],
+      }),
+    });
+    const res = await relay.app.request(`/agent/${worker}/task`, {
+      method: "POST",
+      headers: jsonAuthWithIdempotency(),
+      body: JSON.stringify({ prompt: "in flight", required_capabilities: ["web_search"] }),
+    });
+    expect(res.status).toBe(201);
+    const { task_id: taskId } = (await res.json()) as { task_id: string };
+    expect(await waitFor(() => endpoint.toolsCalls() === 1)).toBe(true);
+    return { worker, taskId };
+  }
+
+  it(
+    "same process: a task whose MCP forward is in flight is NOT handed to a connecting device",
+    async () => {
+      const endpoint = await hangingEndpoint();
+      const dbPath = join(mkdtempSync(join(tmpdir(), "motebit-presented-")), "relay.db");
+      const a = await serveRelay(dbPath);
+      const { worker, taskId } = await inFlightTask(a.relay, endpoint);
+      expect(await framesOnConnect(a.relay, a.port, worker, taskId)).toBe(0);
+    },
+    T,
+  );
+
+  it(
+    "restart: a new relay on the same database ignores the old boot's mark — the reconnecting device gets the task once, as on main",
+    async () => {
+      const endpoint = await hangingEndpoint();
+      const dbPath = join(mkdtempSync(join(tmpdir(), "motebit-presented-")), "relay.db");
+      const a = await serveRelay(dbPath);
+      const { worker, taskId } = await inFlightTask(a.relay, endpoint);
+      await a.stop();
+
+      const b = await serveRelay(dbPath);
+      // The old boot's mark is still in the row: the restart test exercises a
+      // stale mark, not an absent one.
+      const row = b.relay.moteDb.db
+        .prepare("SELECT task_json FROM relay_task_queue WHERE task_id = ?")
+        .get(taskId) as { task_json: string } | undefined;
+      expect(row?.task_json).toContain('"presented"');
+      expect(await framesOnConnect(b.relay, b.port, worker, taskId)).toBe(1);
+    },
+    T,
+  );
 });

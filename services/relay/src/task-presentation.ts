@@ -21,9 +21,17 @@
  * A door that turns out NOT to have presented releases its mark
  * (`releasePresentation`), and the sockets whose recovery the mark held back
  * are handed the task then — exactly what recovery would have done without
- * the mark. The mark is persisted with the entry (`task_json`): after a
- * restart the relay no longer holds the forward, but the worker may still be
- * executing it, and at-most-once is the side a paid task must fail on.
+ * the mark.
+ *
+ * A mark is PROCESS-scoped. It records the boot id of the relay instance that
+ * set it, and every check treats a mark from another boot as absent: after a
+ * restart the relay no longer holds the forward it marked, so recovery
+ * behaves exactly as main does and re-sends the task. (Persisting a mark
+ * across boots stranded an in-flight task until its TTL — a task main
+ * completed.) The mark is still written into the entry's `task_json`,
+ * because the production queue is SQLite-backed with no in-memory copy: a
+ * mark kept anywhere else would not be seen by recovery's read of the same
+ * process.
  *
  * The incidental dispatch token (handed to a submitter because nothing
  * routed) is deliberately NOT a mark: the relay cannot see whether that
@@ -53,6 +61,8 @@ export interface TaskPresentation {
   seq: number;
   /** Identity of this mark, so a stale release never clears a newer one. */
   id: string;
+  /** Boot id of the relay instance that set it; any other boot ignores it. */
+  boot: string;
 }
 
 let connectionSeq = 0;
@@ -75,6 +85,7 @@ export function markPresented(
   queue: Map<string, TaskQueueEntry>,
   taskId: string,
   via: PresentedVia,
+  bootId: string,
 ): TaskPresentation | null {
   const entry = queue.get(taskId);
   if (entry == null) return null;
@@ -83,6 +94,7 @@ export function markPresented(
     at: Date.now(),
     seq: nextConnectionSeq(),
     id: crypto.randomUUID(),
+    boot: bootId,
   };
   entry.presented = mark;
   queue.set(taskId, entry);
@@ -90,11 +102,24 @@ export function markPresented(
 }
 
 /**
- * Whether reconnect recovery may hand this entry to a newly connected socket
- * of its motebit: still Pending, no receipt, and no other presenter.
+ * Whether `entry` carries a mark set by THIS relay instance. A mark from
+ * another boot (a restart, or a mark with no boot id) is absent.
  */
-export function recoverableOnReconnect(entry: TaskQueueEntry): boolean {
-  return entry.task.status === AgentTaskStatus.Pending && !entry.receipt && entry.presented == null;
+export function presentedInThisBoot(entry: TaskQueueEntry, bootId: string): boolean {
+  return entry.presented != null && entry.presented.boot === bootId;
+}
+
+/**
+ * Whether reconnect recovery may hand this entry to a newly connected socket
+ * of its motebit: still Pending, no receipt, and no other presenter in this
+ * boot.
+ */
+export function recoverableOnReconnect(entry: TaskQueueEntry, bootId: string): boolean {
+  return (
+    entry.task.status === AgentTaskStatus.Pending &&
+    !entry.receipt &&
+    !presentedInThisBoot(entry, bootId)
+  );
 }
 
 /**
@@ -113,7 +138,7 @@ export function releasePresentation(
   if (entry?.presented?.id !== mark.id) return 0;
   entry.presented = undefined;
   queue.set(taskId, entry);
-  if (!recoverableOnReconnect(entry)) return 0;
+  if (!recoverableOnReconnect(entry, mark.boot)) return 0;
   return sendToEach(
     connections.get(entry.task.motebit_id),
     JSON.stringify({ type: "task_request", task: entry.task }),

@@ -197,6 +197,11 @@ export interface TasksDeps {
   relayIdentity: RelayIdentity;
   connections: Map<string, ConnectedDevice[]>;
   /**
+   * This relay instance's boot id. Task-presentation marks carry it, and a
+   * mark from another boot is ignored (`task-presentation.ts`).
+   */
+  relayBootId: string;
+  /**
    * The production queue is `TaskQueue` (SQLite-backed) whose indexed
    * `countBySubmitter` the fairness check uses (#459 — the Map-iteration
    * fallback is a full-table scan there). Tests may inject a plain Map;
@@ -1844,6 +1849,7 @@ export async function handleReceiptIngestion(
 export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
   const {
     app,
+    relayBootId,
     moteDb,
     identityManager,
     eventStore,
@@ -2621,7 +2627,7 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
     // A submitter that chose to present is the one presenter from the moment
     // the task exists — before any await below lets a worker socket connect
     // and be handed it by reconnect recovery (#811).
-    if (submitterPresenter) markPresented(taskQueue, taskId, "submitter");
+    if (submitterPresenter) markPresented(taskQueue, taskId, "submitter", relayBootId);
 
     logger.info("task.submitted", {
       correlationId: taskId,
@@ -2813,7 +2819,7 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
     // that never reached the worker releases the mark, and the sockets it
     // held back get the task, as recovery would have given it.
     const presentViaMcp = async (endpointUrl: string, workerId: string): Promise<void> => {
-      const mark = markPresented(taskQueue, taskId, "mcp");
+      const mark = markPresented(taskQueue, taskId, "mcp", relayBootId);
       const token = await dispatchTokenFor(workerId);
       void forwardTaskViaMcp(
         endpointUrl,
@@ -3158,7 +3164,7 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
 
           // The peer relay presents it from here (#811): recovery must not
           // hand the same task to a local socket while the forward runs.
-          const fedP2pMark = markPresented(taskQueue, taskId, "federation");
+          const fedP2pMark = markPresented(taskQueue, taskId, "federation", relayBootId);
           const forwardBody = {
             task_id: taskId,
             origin_relay: relayIdentity.relayMotebitId,
@@ -3367,7 +3373,7 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
                 // The peer relay presents it from here (#811). A timeout keeps
                 // the mark — the peer may have accepted, the same reason the
                 // local phases stay suppressed; only a refusal releases it.
-                const fedMark = markPresented(taskQueue, taskId, "federation");
+                const fedMark = markPresented(taskQueue, taskId, "federation", relayBootId);
                 try {
                   const forwardBody = {
                     task_id: taskId,

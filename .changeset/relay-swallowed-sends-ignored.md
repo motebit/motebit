@@ -19,6 +19,8 @@
 
   Each mark is set before the door's first await, and recovery skips a marked entry.
 
+  A mark belongs to one relay process. It carries that process's boot id, and any other boot treats it as absent. After a restart the relay no longer holds the forward it marked, so recovery re-sends the task exactly as on main, and a task main would complete is never left pending until its TTL. The mark is written into `task_json` only because the queue is SQLite-backed and recovery in the same process reads the row.
+
 - **When a forward never reached the worker, the mark is released.** `forwardTaskViaMcp` now returns `McpForwardOutcome`:
   - **`not_presented`:** the outbound URL was refused, `initialize` was refused or unreachable, or `tools/call` was answered non-2xx.
   - **`presented`:** `tools/call` was answered 2xx, or it was sent and then died unanswered. The worker may be running it.
