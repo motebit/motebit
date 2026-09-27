@@ -1033,10 +1033,13 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
     // roster entry the relay can hold and never retire (#814).
     const overlong = refuseInvalidIds({ motebitId, deviceId: body.device_id });
     if (overlong) {
-      logger.warn("agent.bootstrap.refused_id_too_long", {
-        field: overlong.field,
-        length: overlong.length,
-      });
+      // The reason, the field and (for a string) its length — never the value.
+      logger.warn(
+        overlong.code === "ID_TOO_LONG"
+          ? "agent.bootstrap.refused_id_too_long"
+          : "agent.bootstrap.refused_id_not_string",
+        { field: overlong.field, length: overlong.length },
+      );
       throw new HTTPException(400, { message: overlong.error });
     }
     // A NEW key must arrive canonical — lowercase hex (DA1/DB4); a key already
@@ -1185,10 +1188,12 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
     // The id this registration writes a registry row under (#814).
     const overlongId = refuseInvalidIds({ motebitId });
     if (overlongId) {
-      logger.warn("agent.register.refused_id_too_long", {
-        length: overlongId.length,
-        caller: callerMotebitId ?? null,
-      });
+      logger.warn(
+        overlongId.code === "ID_TOO_LONG"
+          ? "agent.register.refused_id_too_long"
+          : "agent.register.refused_id_not_string",
+        { length: overlongId.length, caller: callerMotebitId ?? null },
+      );
       throw new HTTPException(400, { message: overlongId.error });
     }
     // A revoked identity is not registered (#787). Its own tokens are already

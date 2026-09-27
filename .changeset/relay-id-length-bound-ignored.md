@@ -2,7 +2,7 @@
 "@motebit/relay": patch
 ---
 
-Bound `motebit_id` and `device_id` length at every relay door that writes an identity, device, registration or push-token row (#814).
+Bound `motebit_id` and `device_id` length at every relay door that writes an identity, device, registry or push-token row (#814). Not every caller-chosen id: the roster ingest stores a caller-chosen `device_id` inside a signed enrolment, bounded only by the 4096-byte entry cap, which is harmless to retirability because a retirement carries no `device_id`.
 
 A machine-roster retirement names the `motebit_id` plus a 64-hex `enrollment_id`, so for a short `device_id` it is larger than the enrolment it ends. The relay refuses roster entries over 4096 bytes, so with ids unbounded an identity could enrol a machine the relay held and never hold its retirement — the retired machine stayed active on every surface.
 

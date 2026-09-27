@@ -1,6 +1,12 @@
 /**
- * How long a caller-chosen `motebit_id` or `device_id` may be at a door
- * that writes it into this relay's durable state (#814).
+ * What a `motebit_id` or `device_id` must be at every door that writes an
+ * identity, device, registry or push-token row (#814): a string, no longer
+ * than its bound.
+ *
+ * Not every caller-chosen id: the roster ingest stores a caller-chosen
+ * `device_id` inside a signed enrolment, bounded only by the 4096-byte
+ * entry cap. That is harmless to retirability — a retirement carries no
+ * `device_id`, only the `motebit_id` and the enrolment's 64-hex id.
  *
  * Why a bound at all: the machine roster (`host-roster-store.ts`) refuses
  * an entry whose canonical JSON exceeds `MAX_ROSTER_ENTRY_BYTES` (4096) as
@@ -26,8 +32,8 @@
  * its rows and keeps authenticating; every door in the inventory that
  * would write under it again refuses (push-token included: it bounds the
  * caller's id, not only the body's), so it gains no new device,
- * registration or push-token row. The roster ingest is NOT one of these doors: it takes the
- * path id of an identity already held, and a refusal there would also
+ * registration or push-token row. The roster ingest is NOT one of these
+ * doors: it takes the path id of an identity already held, and a refusal there would also
  * refuse the retirements that identity needs. Such an identity can exist
  * only if an earlier relay admitted it.
  */
