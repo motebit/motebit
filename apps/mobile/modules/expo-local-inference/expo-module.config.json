@@ -1,9 +1,0 @@
-{
-  "platforms": ["apple", "android", "web"],
-  "apple": {
-    "modules": ["ExpoLocalInferenceModule"]
-  },
-  "android": {
-    "modules": ["expo.modules.localinference.ExpoLocalInferenceModule"]
-  }
-}

@@ -1,0 +1,11 @@
+{
+  "name": "@fx/hoisted",
+  "type": "module",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "node build.mjs"
+  },
+  "dependencies": {
+    "@fx/proto": "workspace:*"
+  }
+}

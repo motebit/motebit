@@ -1,0 +1,9 @@
+{
+  "name": "@fx/proto",
+  "type": "module",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "node build.mjs"
+  },
+  "dependencies": {}
+}
