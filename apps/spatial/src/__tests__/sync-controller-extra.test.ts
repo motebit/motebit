@@ -40,6 +40,7 @@ vi.mock("@motebit/sync-engine", () => {
     connect = vi.fn();
     disconnect = vi.fn();
     refreshConnection = vi.fn();
+    handOffTo = vi.fn();
   }
   class EncryptedEventStoreAdapter {
     constructor(public cfg: unknown) {}

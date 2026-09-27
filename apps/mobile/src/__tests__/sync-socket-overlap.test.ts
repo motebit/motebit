@@ -77,6 +77,9 @@ vi.mock("@motebit/sync-engine", () => {
     disconnect = vi.fn(() => {
       this.state.connected = false;
     });
+    handOffTo = vi.fn(() => {
+      this.state.connected = false;
+    });
     onEvent = vi.fn(() => vi.fn());
     onCustomMessage = vi.fn(() => vi.fn());
     sendRaw = vi.fn();

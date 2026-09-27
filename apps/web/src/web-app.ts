@@ -443,14 +443,19 @@ export class UnbootedWebApp {
    * early-return checks and is about to build one, so a newer start that
    * bails early never supersedes a running one. A start whose request is
    * not newer than the current owner (a newer start already claimed, or a
-   * stop came after it) builds nothing. A start that loses ownership across
-   * the relay-key await has already built (not yet connected) its adapter; it tears
-   * that adapter down (only its own, and only if still current), wires no
-   * handler and sets no timer — nothing stays open.
-   * A stop makes every earlier request stale.
+   * stop came after it) builds nothing. A claiming start builds, wires and
+   * connects its socket in one synchronous step and only then retires the
+   * running one (make-before-break — `retireWs` hands the old adapter's
+   * queued events and in-flight replies to the new one). What it does after
+   * the relay-key await (delegation config, sync status, plan/conversation
+   * sync) is skipped if it has lost ownership meanwhile; its socket was by
+   * then already closed by the stop, or retired into the newer start's
+   * socket. A stop makes every earlier request stale.
    */
   private _wsRequestSeq = 0;
   private _wsOwner = 0;
+  /** The relay the running sync targets; null once stopped. */
+  private _activeRelayUrl: string | null = null;
   private _serving = false;
   private _servingSyncUrl: string | null = null;
   private _activeTaskCount = 0;
@@ -3734,7 +3739,12 @@ export class UnbootedWebApp {
     // (a stop, or a newer start that claimed first) builds nothing.
     if (request <= this._wsOwner) return;
     this._wsOwner = request;
-    this.teardownWs();
+    this._activeRelayUrl = relayUrl;
+    // Make-before-break: the running socket (a re-entered start) stays live —
+    // its handlers, its refresh timer, and the runtime's sync remote — until
+    // this start's socket is fully wired below; only then is it retired, in
+    // one synchronous step, handing its queued events and in-flight replies
+    // to the new adapter (#816).
     const wsAdapter = new WebSocketEventStoreAdapter({
       url: wsUrl,
       motebitId: this._motebitId,
@@ -3743,7 +3753,6 @@ export class UnbootedWebApp {
       httpFallback: encryptedHttp,
       localStore: localEventStore ?? undefined,
     });
-    this._wsAdapter = wsAdapter;
 
     // Wire delegation adapter so PlanEngine can delegate steps to capable
     // devices. Same staleness fix: a fresh-token provider that re-mints per
@@ -3757,57 +3766,8 @@ export class UnbootedWebApp {
       onCustomMessage: (cb) => wsAdapter.onCustomMessage(cb),
       getExplorationDrive: () => this.runtime?.getPrecision().explorationDrive,
     });
-    this.runtime.setDelegationAdapter(delegationAdapter);
-
-    // Enable interactive delegation — lets the AI transparently delegate
-    // tasks to remote agents during conversation.
-    const delegationAuthToken = async (audience?: TokenAudience) => {
-      const aud = audience ?? "task:submit";
-      const t = await this.createSyncToken(aud);
-      return t ?? "";
-    };
-    // Resolve the PINNED relay key (trust-on-first-use) so a paid P2P
-    // delegation derives the fee-leg treasury from a key trusted at first
-    // connect, never a per-delegation fetch (the irreversible-payment MITM
-    // surface — see @motebit/runtime relay-key-pin + off-ramp-as-user-action.md
-    // § Arc 3.5). undefined → paid P2P stays disabled and delegation uses
-    // relay-mode (e.g. a fail-closed key mismatch); relay-mode still serves
-    // every task. Shared by both delegation entry points below.
-    const pinnedRelayKey = await getOrPinRelayKey(relayUrl, { storage: localStorage });
-    // Superseded while awaiting (stopSync, or a newer startSync): wiring
-    // handlers onto this socket now would revive one that was deliberately
-    // closed.
-    if (this._wsOwner !== request) {
-      if (this._wsAdapter === wsAdapter) this.teardownWs();
-      return;
-    }
-
-    this.runtime.enableInteractiveDelegation({
-      syncUrl: relayUrl,
-      authToken: delegationAuthToken,
-      ...(pinnedRelayKey != null ? { relayPublicKey: pinnedRelayKey } : {}),
-      // Forward the cold-start opt-in as a LIVE getter so the "Pay new agents
-      // directly" toggle governs chat-driven (delegate_to_agent) delegation,
-      // not just the deterministic invokeCapability path. Read per call → no
-      // re-enable needed when the user flips it.
-      acknowledgeNoHistoryRisk: () => loadColdStartOptIn(),
-    });
-
-    // Enable the deterministic surface-determinism path — chip taps, slash
-    // commands, scene clicks. Shares the relay coordinates with interactive
-    // delegation; differs only in the invocation_origin each path stamps.
-    // See docs/doctrine/surface-determinism.md.
-    this.runtime.enableInvokeCapability({
-      syncUrl: relayUrl,
-      authToken: delegationAuthToken,
-      ...(pinnedRelayKey != null ? { relayPublicKey: pinnedRelayKey } : {}),
-    });
-
-    this._servingSyncUrl = relayUrl;
-
     // Wire task handler — accept delegations while the tab is open.
-    if (this._wsUnsubOnCustom) this._wsUnsubOnCustom();
-    this._wsUnsubOnCustom = wsAdapter.onCustomMessage((msg) => {
+    const unsubCustom = wsAdapter.onCustomMessage((msg) => {
       // Handle remote command requests (forwarded by relay)
       if (msg.type === "command_request" && this.runtime) {
         // Fail-closed remote ingress: only a signed-request-envelope@1.0
@@ -3829,7 +3789,7 @@ export class UnbootedWebApp {
               identityPublicKey: this._publicKeyHex,
             });
             if (!verdict.ok) {
-              this._wsAdapter?.sendRaw(
+              wsAdapter.sendRaw(
                 JSON.stringify({
                   type: "command_response",
                   id: cmdMsg.id,
@@ -3840,11 +3800,9 @@ export class UnbootedWebApp {
             }
             // The one door for a relay frame.
             const result = await executeRemoteCommand(this.runtime!, cmdMsg.command, cmdMsg.args);
-            this._wsAdapter?.sendRaw(
-              JSON.stringify({ type: "command_response", id: cmdMsg.id, result }),
-            );
+            wsAdapter.sendRaw(JSON.stringify({ type: "command_response", id: cmdMsg.id, result }));
           } catch (err: unknown) {
-            this._wsAdapter?.sendRaw(
+            wsAdapter.sendRaw(
               JSON.stringify({
                 type: "command_response",
                 id: cmdMsg.id,
@@ -3864,7 +3822,7 @@ export class UnbootedWebApp {
       const task = msg.task as AgentTask;
       const runtime = this.runtime;
 
-      this._wsAdapter?.sendRaw(JSON.stringify({ type: "task_claim", task_id: task.task_id }));
+      wsAdapter.sendRaw(JSON.stringify({ type: "task_claim", task_id: task.task_id }));
       this._activeTaskCount++;
 
       void (async () => {
@@ -3912,7 +3870,7 @@ export class UnbootedWebApp {
     const encryptedWs = new EncryptedEventStoreAdapter({ inner: wsAdapter, key: encKey });
 
     // Inbound real-time events: decrypt and write to local store
-    this._wsUnsubOnEvent = wsAdapter.onEvent((raw) => {
+    const unsubEvent = wsAdapter.onEvent((raw) => {
       void (async () => {
         if (!localEventStore) return;
         const dec = await decryptEventPayload(raw, encKey);
@@ -3929,9 +3887,66 @@ export class UnbootedWebApp {
     // handler, and the delegation adapter's subscription all stay attached,
     // and the replaced socket is the one that closes (#816). Never build a
     // second adapter here.
-    this._wsTokenRefreshTimer = setInterval(() => {
+    const refreshTimer = setInterval(() => {
       wsAdapter.refreshConnection();
     }, WS_TOKEN_REFRESH_MS);
+
+    // Fully wired: retire the socket this one replaces (none on a first start).
+    const replaced = this.takeWs();
+    this._wsAdapter = wsAdapter;
+    this._wsUnsubOnEvent = unsubEvent;
+    this._wsUnsubOnCustom = unsubCustom;
+    this._wsTokenRefreshTimer = refreshTimer;
+    this.runtime.setDelegationAdapter(delegationAdapter);
+    this.retireWs(replaced, wsAdapter);
+
+    // Enable interactive delegation — lets the AI transparently delegate
+    // tasks to remote agents during conversation.
+    const delegationAuthToken = async (audience?: TokenAudience) => {
+      const aud = audience ?? "task:submit";
+      const t = await this.createSyncToken(aud);
+      return t ?? "";
+    };
+    // Resolve the PINNED relay key (trust-on-first-use) so a paid P2P
+    // delegation derives the fee-leg treasury from a key trusted at first
+    // connect, never a per-delegation fetch (the irreversible-payment MITM
+    // surface — see @motebit/runtime relay-key-pin + off-ramp-as-user-action.md
+    // § Arc 3.5). undefined → paid P2P stays disabled and delegation uses
+    // relay-mode (e.g. a fail-closed key mismatch); relay-mode still serves
+    // every task. Shared by both delegation entry points below.
+    const pinnedRelayKey = await getOrPinRelayKey(relayUrl, { storage: localStorage });
+    // Superseded while awaiting: a stop already closed this socket, or a newer
+    // start already retired it into its own. Its socket is never revived. The
+    // HTTP side below (delegation config, sync engines) is still this app's
+    // work when the running sync targets the SAME relay — a stop and restart,
+    // or a re-entered start, to this relay — so it is done now rather than
+    // when the newer start's own relay-key await ends (the newer start then
+    // replaces the engines). Stopped, or restarted against another relay:
+    // nothing further.
+    if (this._wsOwner !== request && this._activeRelayUrl !== relayUrl) return;
+
+    this.runtime.enableInteractiveDelegation({
+      syncUrl: relayUrl,
+      authToken: delegationAuthToken,
+      ...(pinnedRelayKey != null ? { relayPublicKey: pinnedRelayKey } : {}),
+      // Forward the cold-start opt-in as a LIVE getter so the "Pay new agents
+      // directly" toggle governs chat-driven (delegate_to_agent) delegation,
+      // not just the deterministic invokeCapability path. Read per call → no
+      // re-enable needed when the user flips it.
+      acknowledgeNoHistoryRisk: () => loadColdStartOptIn(),
+    });
+
+    // Enable the deterministic surface-determinism path — chip taps, slash
+    // commands, scene clicks. Shares the relay coordinates with interactive
+    // delegation; differs only in the invocation_origin each path stamps.
+    // See docs/doctrine/surface-determinism.md.
+    this.runtime.enableInvokeCapability({
+      syncUrl: relayUrl,
+      authToken: delegationAuthToken,
+      ...(pinnedRelayKey != null ? { relayPublicKey: pinnedRelayKey } : {}),
+    });
+
+    this._servingSyncUrl = relayUrl;
 
     // Subscribe to SyncEngine status changes
     if (this._syncUnsubscribe) this._syncUnsubscribe();
@@ -3953,6 +3968,8 @@ export class UnbootedWebApp {
     // Wire plan sync — push/pull plans to relay for cross-device visibility
     if (this._planStore) {
       const planSyncStore = new IdbPlanSyncStore(this._planStore, this._motebitId);
+      // A re-entered startSync replaces the running engine; never two pollers.
+      this._planSyncEngine?.stop();
       this._planSyncEngine = new PlanSyncEngine(planSyncStore, this._motebitId);
       const httpPlanAdapter = new HttpPlanSyncAdapter({
         baseUrl: relayUrl,
@@ -3977,6 +3994,7 @@ export class UnbootedWebApp {
       // Preload all conversation messages so sync push includes locally-modified data
       await this._convStore.preloadAllMessages();
       const convSyncStore = new IdbConversationSyncStore(this._convStore, this._motebitId);
+      this._conversationSyncEngine?.stop();
       this._conversationSyncEngine = new ConversationSyncEngine(convSyncStore, this._motebitId);
       const httpConvAdapter = new HttpConversationSyncAdapter({
         baseUrl: relayUrl,
@@ -4184,8 +4202,40 @@ export class UnbootedWebApp {
     }
   }
 
+  /** Detach the current socket's state from the app (to be retired). */
+  private takeWs(): {
+    adapter: WebSocketEventStoreAdapter | null;
+    unsubEvent: (() => void) | null;
+    unsubCustom: (() => void) | null;
+    timer: ReturnType<typeof setInterval> | null;
+  } {
+    const taken = {
+      adapter: this._wsAdapter,
+      unsubEvent: this._wsUnsubOnEvent,
+      unsubCustom: this._wsUnsubOnCustom,
+      timer: this._wsTokenRefreshTimer,
+    };
+    this._wsAdapter = null;
+    this._wsUnsubOnEvent = null;
+    this._wsUnsubOnCustom = null;
+    this._wsTokenRefreshTimer = null;
+    return taken;
+  }
+
+  /** Retire a replaced socket into its (already wired) successor. */
+  private retireWs(
+    old: ReturnType<UnbootedWebApp["takeWs"]>,
+    successor: WebSocketEventStoreAdapter,
+  ): void {
+    if (old.timer != null) clearInterval(old.timer);
+    old.unsubEvent?.();
+    old.unsubCustom?.();
+    old.adapter?.handOffTo(successor);
+  }
+
   stopSync(): void {
     this._wsOwner = ++this._wsRequestSeq;
+    this._activeRelayUrl = null;
     this._serving = false;
     this.teardownWs();
     if (this._syncUnsubscribe) {

@@ -37,6 +37,7 @@ vi.mock("@motebit/sync-engine", () => {
   class WebSocketEventStoreAdapter {
     connect = vi.fn();
     disconnect = vi.fn();
+    handOffTo = vi.fn();
     onEvent = vi.fn(() => vi.fn());
     onCustomMessage = vi.fn(() => vi.fn());
     sendRaw = vi.fn();

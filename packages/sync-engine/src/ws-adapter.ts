@@ -89,6 +89,8 @@ export class WebSocketEventStoreAdapter implements EventStoreAdapter {
   private stabilityTimer: ReturnType<typeof setTimeout> | null = null;
   private connected = false;
   private pendingEvents: EventLogEntry[] = [];
+  /** Set by `handOffTo`: this adapter is retired and forwards to its successor. */
+  private successor: WebSocketEventStoreAdapter | null = null;
   /**
    * Bumped by every `disconnect()`. A connect that is still resolving its
    * credential (or the `ws` import) when the adapter is disconnected must
@@ -110,6 +112,7 @@ export class WebSocketEventStoreAdapter implements EventStoreAdapter {
   // === Lifecycle ===
 
   connect(): void {
+    if (this.successor) return;
     if (this.ws) return;
 
     // If a credentialSource is provided, resolve the token asynchronously
@@ -167,6 +170,31 @@ export class WebSocketEventStoreAdapter implements EventStoreAdapter {
   refreshConnection(): void {
     this.disconnect();
     this.connect();
+  }
+
+  /**
+   * Retire this adapter in favour of `next`, which must already be wired (its
+   * handlers attached and, if it replaces this adapter as a sync remote,
+   * already connected as that remote). Make-before-break for a REPLACED
+   * adapter, the counterpart of `refreshConnection` for a replaced socket:
+   *
+   *  - the socket closes and never reopens (`connect()` becomes a no-op);
+   *  - events still queued here (appended while this socket was not yet
+   *    authenticated) move to `next` instead of being dropped with it;
+   *  - anything that still holds this adapter — a sync push already in
+   *    flight, a command reply being sent by a handler that closed over it —
+   *    is forwarded to `next`, so nothing is written into a closed socket.
+   *
+   * Without it, replacing a live adapter dropped its queued events (the
+   * sync cursor had already advanced past them) and any reply still being
+   * produced for a command it received (#816).
+   */
+  handOffTo(next: WebSocketEventStoreAdapter): void {
+    if (next === this) return;
+    this.disconnect();
+    this.successor = next;
+    const queued = this.pendingEvents.splice(0);
+    for (const entry of queued) void next.append(entry);
   }
 
   /** Internal: establish the WebSocket connection with an already-resolved token. */
@@ -353,6 +381,10 @@ export class WebSocketEventStoreAdapter implements EventStoreAdapter {
    * Used by agent protocol for task_claim messages.
    */
   sendRaw(data: string): void {
+    if (this.successor) {
+      this.successor.sendRaw(data);
+      return;
+    }
     if (!this.ws || this.ws.readyState !== 1 /* WebSocket.OPEN */) return;
     this.ws.send(data);
   }
@@ -371,6 +403,7 @@ export class WebSocketEventStoreAdapter implements EventStoreAdapter {
   // === EventStoreAdapter ===
 
   append(entry: EventLogEntry): Promise<void> {
+    if (this.successor) return this.successor.append(entry);
     if (this.connected && this.ws) {
       this.sendPush([entry]);
     } else {
