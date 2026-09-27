@@ -10,9 +10,11 @@
  * controller and its per-cell results committed as baselines; the acceptance
  * test asserts, cell by cell, that the branch is never worse than main.
  *
- * The file is duplicated verbatim in each surface's __tests__/ (desktop,
- * web, spatial, mobile) — apps cannot import each other's test code — and
- * each copy is paired with that surface's driver and baselines.
+ * One source for the four surfaces (desktop, web, spatial, mobile), which
+ * import it as `@motebit/sync-engine/testing` — test support, never runtime
+ * code. Each surface pairs it with its own driver and baselines in its
+ * `src/__tests__/sync-interleavings.test.ts`, and hands it that test's
+ * vitest `vi` with `useVitest(vi)` (the fake clock must be the test's own).
  *
  * ## Operations
  * Every sequence begins with `start` (relay A, identity 1) and continues
@@ -106,7 +108,14 @@
  * that cell, not that it caused the lead; the reaped comparison does that).
  * The branch must have no zombie and no misrouted event.
  */
-import { vi } from "vitest";
+import type { vi as Vitest } from "vitest";
+
+/** The running test's vitest `vi` (its fake clock); set by `useVitest`. */
+let vi: typeof Vitest;
+/** Hand the harness the test file's `vi` — call once, before `runCell`. */
+export function useVitest(v: typeof Vitest): void {
+  vi = v;
+}
 
 // ---------------------------------------------------------------------------
 // Node I/O without Node types: the browser surfaces (web, spatial) typecheck
@@ -629,8 +638,8 @@ export async function runCell(
       // stores device-assigned clocks, and a pull cursor is the local max
       // clock, so an event another device publishes with the SAME clock as
       // one this device appended meanwhile is never pulled (a pre-existing
-      // SyncEngine property, unchanged by #816 and demonstrated on its own by
-      // a sync-engine probe). With adjacent clocks, whether that race fires
+      // SyncEngine property, #868 — unchanged by #816 and characterized on its
+      // own by sync-cursor-same-clock.test.ts). With adjacent clocks, whether that race fires
       // depends only on when a controller happens to pull — noise in a
       // comparison of controllers, not a controller difference.
       version_clock: 1_000_000 * n,

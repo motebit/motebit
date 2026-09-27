@@ -1,6 +1,6 @@
 /**
  * #816 acceptance: the spatial sync controller across every interleaving of
- * lifecycle operations (see ./interleaving-harness.ts), compared cell by
+ * lifecycle operations (see @motebit/sync-engine/testing), compared cell by
  * cell with origin/main's controller.
  *
  * Spatial has no relay-key await; the harness latency applies to its
@@ -82,7 +82,10 @@ import {
   type HarnessEnv,
   type Latency,
   type Op,
-} from "./interleaving-harness";
+  useVitest,
+} from "@motebit/sync-engine/testing";
+
+useVitest(vi);
 
 const MAX_OPS = Number(harnessEnv["INTERLEAVING_MAX_OPS"] ?? 2);
 const RECORD = harnessEnv["INTERLEAVING_RECORD"];
@@ -97,7 +100,7 @@ const BASELINE_REAPED = BASELINE_DIR
   ? new URL(`file://${BASELINE_DIR}/spatial.main-reaped.json`)
   : new URL("./interleaving-baseline.main-reaped.json", import.meta.url);
 
-/** Record main with zombie sockets black-holed (see interleaving-harness.ts). */
+/** Record main with zombie sockets black-holed (see @motebit/sync-engine/testing). */
 const REAP = harnessEnv["INTERLEAVING_REAP"] === "1";
 
 function makeDriver(env: HarnessEnv): Driver {

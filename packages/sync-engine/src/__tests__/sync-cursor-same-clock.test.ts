@@ -1,6 +1,6 @@
 /**
- * Characterization of a PRE-EXISTING SyncEngine property (not introduced by
- * #816, recorded while root-causing it): the pull cursor is the local max
+ * Characterization of a PRE-EXISTING SyncEngine property — #868 (not
+ * introduced by #816, recorded while root-causing it): the pull cursor is the local max
  * `version_clock`, and the relay stores device-assigned clocks. When this
  * device appends its own event and another device publishes one with the
  * SAME clock before the next pull, the other device's event is never

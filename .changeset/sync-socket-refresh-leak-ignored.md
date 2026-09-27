@@ -105,5 +105,9 @@ main (web cells vary with host load).
 
 Found while root-causing, not changed here: `SyncEngine`'s pull cursor is
 the local max `version_clock`, so an event another device publishes with
-the same clock as one this device appended meanwhile is never pulled
-(`sync-cursor-same-clock.test.ts` characterizes it).
+the same clock as one this device appended meanwhile is never pulled —
+#868 (`sync-cursor-same-clock.test.ts` characterizes it).
+
+The interleaving harness is one source, `@motebit/sync-engine/testing` (a
+new test-support subpath, excluded from the package's coverage), imported
+by all four surfaces' matrices.

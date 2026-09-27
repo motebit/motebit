@@ -1,7 +1,7 @@
 /**
  * #816 acceptance: the web sync lifecycle (`WebApp.startSync` / `stopSync`)
  * across every interleaving of lifecycle operations (see
- * ./interleaving-harness.ts), compared cell by cell with origin/main's
+ * @motebit/sync-engine/testing), compared cell by cell with origin/main's
  * web-app.ts. Each cell boots a fresh WebApp (real runtime, fake-indexeddb)
  * and drives it over the fake relay and fake clock. Commands carry a real
  * signed envelope (the tab's own key); a bailing start is a startSync whose
@@ -46,7 +46,10 @@ import {
   type HarnessEnv,
   type Latency,
   type Op,
-} from "./interleaving-harness";
+  useVitest,
+} from "@motebit/sync-engine/testing";
+
+useVitest(vi);
 
 // Stub ThreeJSAdapter — WebApp creates one internally (requires canvas)
 vi.mock("@motebit/render-engine", () => {
@@ -256,7 +259,7 @@ const BASELINE_REAPED = BASELINE_DIR
   ? new URL(`file://${BASELINE_DIR}/web.main-reaped.json`)
   : new URL("./interleaving-baseline.main-reaped.json", import.meta.url);
 
-/** Record main with zombie sockets black-holed (see interleaving-harness.ts). */
+/** Record main with zombie sockets black-holed (see @motebit/sync-engine/testing). */
 const REAP = harnessEnv["INTERLEAVING_REAP"] === "1";
 
 interface Remote {
