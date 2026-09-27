@@ -9,6 +9,7 @@ import type { TokenAudience } from "@motebit/protocol";
 import { HTTPException } from "hono/http-exception";
 import { createLogger } from "./logger.js";
 import { admitKey, isCanonicalKey } from "./identity-keys.js";
+import { refuseOverlongIds } from "./id-bounds.js";
 import type { IdentityManager } from "@motebit/core-identity";
 import type { DatabaseDriver } from "@motebit/persistence";
 import type { ReconcileKeyConnections } from "./connection-ports.js";
@@ -275,6 +276,13 @@ export function registerPairingRoutes(deps: PairingDeps): void {
       throw new HTTPException(409, {
         message: `Cannot approve — status is '${String(session.status)}'`,
       });
+    }
+    // Approval writes a new device row under the session's identity
+    // (#814): an id already held past the bound gains no new device. The
+    // device id itself is minted here, never the caller's.
+    const overlong = refuseOverlongIds({ motebitId: session.motebit_id });
+    if (overlong) {
+      throw new HTTPException(400, { message: overlong.error });
     }
 
     // Accept optional key_transfer payload from Device A (encrypted identity seed)

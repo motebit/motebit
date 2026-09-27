@@ -26,6 +26,7 @@ import {
 import { verifyBySuite } from "@motebit/crypto";
 import { isSuiteId } from "@motebit/protocol";
 import { createLogger } from "./logger.js";
+import { refuseOverlongIds } from "./id-bounds.js";
 import { refusePublicDeviceRegistration } from "./device-registration-guard.js";
 import type { ConnectedDevice } from "./index.js";
 import { admitKey, proveSovereignFirstKey, recordFirstIdentityKey } from "./identity-keys.js";
@@ -154,6 +155,12 @@ export function registerSyncRoutes(deps: SyncRoutesDeps): void {
     if (!body.motebit_id) {
       throw new HTTPException(400, { message: "Missing 'motebit_id' field" });
     }
+    // A new device row under this id (#814): an id already held past the
+    // bound gains no new device.
+    const overlong = refuseOverlongIds({ motebitId: body.motebit_id });
+    if (overlong) {
+      throw new HTTPException(400, { message: overlong.error });
+    }
     if (
       body.public_key !== undefined &&
       (typeof body.public_key !== "string" ||
@@ -212,6 +219,26 @@ export function registerSyncRoutes(deps: SyncRoutesDeps): void {
     const body = (await c.req.json().catch(() => null)) as SignableDeviceRegistration | null;
     if (!body) {
       throw new HTTPException(400, { message: "Body must be JSON" });
+    }
+
+    // Both ids enter durable state here; one past its bound would make a
+    // roster entry the relay can hold and never retire (#814). Refused
+    // before the signature is checked: it needs no trust decision.
+    const overlong = refuseOverlongIds({ motebitId: body.motebit_id, deviceId: body.device_id });
+    if (overlong) {
+      logger.warn("device.self_register.rejected", {
+        reason: "id_too_long",
+        field: overlong.field,
+        length: overlong.length,
+      });
+      return c.json(
+        {
+          error: overlong.error,
+          code: "DEVICE_REGISTRATION_REJECTED",
+          reason: "id_too_long",
+        },
+        400,
+      );
     }
 
     const verified = await verifyDeviceRegistration(body);

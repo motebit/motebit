@@ -140,6 +140,7 @@ import {
   buildSignedRevocationFeed,
 } from "./agent-revocation.js";
 import { createLogger } from "./logger.js";
+import { refuseOverlongIds } from "./id-bounds.js";
 
 const logger = createLogger({ service: "agents" });
 
@@ -1028,6 +1029,16 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
       throw new HTTPException(400, { message: "Missing 'public_key' field" });
     }
     const motebitId = body.motebit_id.trim();
+    // Both ids enter durable state here; one past its bound would make a
+    // roster entry the relay can hold and never retire (#814).
+    const overlong = refuseOverlongIds({ motebitId, deviceId: body.device_id });
+    if (overlong) {
+      logger.warn("agent.bootstrap.refused_id_too_long", {
+        field: overlong.field,
+        length: overlong.length,
+      });
+      throw new HTTPException(400, { message: overlong.error });
+    }
     // A NEW key must arrive canonical — lowercase hex (DA1/DB4); a key already
     // on file for this identity is admitted in its stored spelling (continuity).
     // `hexToBytes` is lenient, so an alternate spelling of a key is not refused
@@ -1170,6 +1181,15 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
     const motebitId = callerMotebitId ?? body.motebit_id;
     if (!motebitId || typeof motebitId !== "string") {
       throw new HTTPException(400, { message: "Missing motebit_id" });
+    }
+    // The id this registration writes a registry row under (#814).
+    const overlongId = refuseOverlongIds({ motebitId });
+    if (overlongId) {
+      logger.warn("agent.register.refused_id_too_long", {
+        length: overlongId.length,
+        caller: callerMotebitId ?? null,
+      });
+      throw new HTTPException(400, { message: overlongId.error });
     }
     // A revoked identity is not registered (#787). Its own tokens are already
     // refused (`isAgentRevoked`); this is the master token's path, which would
@@ -2202,6 +2222,10 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
     }>();
     if (!body.device_id || !body.push_token || !body.platform) {
       throw new HTTPException(400, { message: "device_id, push_token, and platform are required" });
+    }
+    const overlongDevice = refuseOverlongIds({ deviceId: body.device_id });
+    if (overlongDevice) {
+      throw new HTTPException(400, { message: overlongDevice.error });
     }
     if (!["fcm", "apns", "expo"].includes(body.platform)) {
       throw new HTTPException(400, { message: "platform must be fcm, apns, or expo" });
