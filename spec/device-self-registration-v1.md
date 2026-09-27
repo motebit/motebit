@@ -54,6 +54,8 @@ Every conformant relay MUST accept the following JSON shape on the registration 
 | `suite`       | string | yes      | Cryptosuite identifier (`SuiteId` from `@motebit/protocol`). For this artifact today: `"motebit-jcs-ed25519-b64-v1"` — JCS canonicalization, Ed25519 primitive, base64url signature encoding. Adding a suite is additive (`spec/auth-token-v1.md` §10 cryptosuite agility convention). |
 | `signature`   | string | yes      | base64url-encoded Ed25519 signature over the canonical-JSON serialization of the body with `signature` removed (§4).                                                                                                                                                                   |
 
+The wire format bounds no string length. A relay MAY bound the ids it admits, and MUST refuse over-long ones with 400 before persisting anything. The reference relay refuses a `motebit_id` or `device_id` longer than **256** UTF-16 code units (`reason: "id_too_long"`), at every door that writes one, so that every machine-roster entry it can hold can also be retired (`spec/machine-roster-v1.md` §11).
+
 The TypeScript binding is `DeviceRegistrationRequest` in `@motebit/protocol`.
 
 #### Storage (reference convention — non-binding)
