@@ -38,11 +38,14 @@ handler, sets no refresh timer, and nothing stays open.
 Mobile keeps main's cadence — every 30-second tick starts a cycle and
 every cycle runs its HTTP sync, however slow the previous one is — and
 owns only the socket: a cycle may connect its socket only if no newer
-cycle has connected one, connecting closes the socket it replaces, and
-an overtaken cycle releases its unconnected socket and still syncs over
-HTTP. A cycle of a stopped or restarted run does nothing further, so a
-stop and restart to another relay no longer lets the old cycle drive the
-new run's engines at the old relay.
+cycle has connected one and its own run is still current, connecting
+closes the socket it replaces, and an overtaken cycle releases its
+unconnected socket and still syncs over HTTP. A cycle whose run was
+replaced by a stop and restart (or a re-entered `startSync`) to the SAME
+relay finishes its HTTP sync on the current run's engines, as main does;
+one whose controller is stopped, or whose run now targets ANOTHER relay,
+does nothing further, so the old cycle never syncs the new run at the
+old relay.
 
 The socket's catch-up pull now authenticates: desktop and spatial give
 the HTTP fallback a per-request credential (web already did), so events
@@ -57,3 +60,8 @@ after one refresh spatial answered no command. It now calls
 `refreshConnection()` on its one adapter with a per-connect credential,
 tears down a running socket on a re-entered `connectRelay`, and builds no
 socket for a `connectRelay` superseded by `disconnectRelay`.
+
+Spatial's plan-step delegation now presents a fresh token of the audience
+the relay requires (`task:submit` / `task:query`), minted per call. It
+had been handed the connect-time sync-audience token — 600 s old by the
+second refresh, and the wrong audience from the first call.

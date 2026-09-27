@@ -31,7 +31,7 @@ import {
   RelayDelegationAdapter,
   verifyAgentCommandEnvelope,
 } from "@motebit/runtime";
-import { DeviceCapability } from "@motebit/sdk";
+import { DeviceCapability, type TokenAudience } from "@motebit/sdk";
 import type { CredentialSource, SyncStatus as SyncEngineStatus } from "@motebit/sync-engine";
 import { deriveSyncEncryptionKey, secureErase } from "@motebit/encryption";
 import {
@@ -75,6 +75,14 @@ export interface SpatialSyncControllerDeps {
   clearPrivKey: () => void;
   /** Signed-token factory, null if identity not bootstrapped. */
   getTokenFactory: () => (() => Promise<string>) | null;
+  /**
+   * Mint a fresh signed token for a given audience, null if identity is not
+   * unlocked. The relay delegation adapter asks per call for the audience
+   * the relay requires (`task:submit`, `task:query`); the sync-audience
+   * `getTokenFactory` token is refused there. Optional: when absent the
+   * sync-audience factory is used (the pre-#816 behaviour).
+   */
+  mintToken?: (aud: TokenAudience) => Promise<string | null>;
 }
 
 export class SpatialSyncController {
@@ -123,6 +131,18 @@ export class SpatialSyncController {
       this._syncStatusListeners.delete(cb);
     };
   }
+
+  /**
+   * The delegation adapter's credential: a fresh token of the audience the
+   * relay requires, minted per call — never a connect-time token (600 s old
+   * by the second refresh) and never the sync audience (#816).
+   */
+  private delegationToken = async (audience?: TokenAudience): Promise<string> => {
+    const aud = audience ?? "task:submit";
+    if (this.deps.mintToken) return (await this.deps.mintToken(aud)) ?? "";
+    const tf = this.deps.getTokenFactory();
+    return tf ? tf() : "";
+  };
 
   private setSyncStatus(status: InternalSyncStatus): void {
     this._syncStatus = status;
@@ -298,7 +318,7 @@ export class SpatialSyncController {
         const delegationAdapter = new RelayDelegationAdapter({
           syncUrl: relayUrl,
           motebitId,
-          authToken: authToken ?? undefined,
+          authToken: this.delegationToken,
           sendRaw: (data: string) => wsAdapter.sendRaw(data),
           onCustomMessage: (cb) => wsAdapter.onCustomMessage(cb),
           getExplorationDrive: () => this.deps.getRuntime()?.getPrecision().explorationDrive,
@@ -457,7 +477,7 @@ export class SpatialSyncController {
           const inner = new RelayDelegationAdapter({
             syncUrl: relayUrl,
             motebitId,
-            authToken: tf,
+            authToken: this.delegationToken,
             sendRaw: () => {},
             onCustomMessage: () => () => {},
             getExplorationDrive: () => this.deps.getRuntime()?.getPrecision().explorationDrive,
@@ -470,7 +490,7 @@ export class SpatialSyncController {
       const inner = new RelayDelegationAdapter({
         syncUrl: relayUrl,
         motebitId,
-        authToken: tokenFactory,
+        authToken: this.delegationToken,
         sendRaw: () => {},
         onCustomMessage: () => () => {},
         getExplorationDrive: () => this.deps.getRuntime()?.getPrecision().explorationDrive,

@@ -25,6 +25,8 @@ const h = vi.hoisted(() => ({
   syncHook: null as null | ((n: number) => Promise<void>),
   /** [ms since t0, the engine remote's relay url] per engine sync. */
   log: [] as Array<[number, string]>,
+  /** Conversation-engine syncs only: [ms since t0, relay url]. */
+  convLog: [] as Array<[number, string]>,
   t0: 0,
 }));
 
@@ -45,6 +47,7 @@ vi.mock("@motebit/runtime", () => ({
 
 vi.mock("@motebit/sync-engine", () => {
   class Base {
+    kind = "event";
     remote: { url?: string } | null = null;
     connectRemote = vi.fn((r: { url?: string }) => {
       this.remote = r;
@@ -52,8 +55,11 @@ vi.mock("@motebit/sync-engine", () => {
     start = vi.fn();
     stop = vi.fn();
     sync = vi.fn(async () => {
+      // As in the real SyncEngine, a sync with no remote is a no-op.
+      if (this.kind === "event" && this.remote == null) return { pushed: 0, pulled: 0 };
       const n = ++h.syncCalls;
       h.log.push([Date.now() - h.t0, this.remote?.url ?? "?"]);
+      if (this.kind === "conv") h.convLog.push([Date.now() - h.t0, this.remote?.url ?? "?"]);
       if (h.syncHook) await h.syncHook(n);
       return { pushed: 0, pulled: 0 };
     });
@@ -92,7 +98,9 @@ vi.mock("@motebit/sync-engine", () => {
   });
   return {
     SyncEngine: Base,
-    ConversationSyncEngine: Base,
+    ConversationSyncEngine: class extends Base {
+      kind = "conv";
+    },
     PlanSyncEngine: Base,
     HttpEventStoreAdapter: Plain,
     WebSocketEventStoreAdapter,
@@ -181,6 +189,7 @@ beforeEach(() => {
   h.syncCalls = 0;
   h.syncHook = null;
   h.log = [];
+  h.convLog = [];
   h.t0 = Date.now();
   store.clear();
   vi.stubGlobal(
@@ -280,5 +289,63 @@ describe("mobile sync cycles overlapping (#816): main's cadence, one socket", ()
     await vi.advanceTimersByTimeAsync(60_000);
     expect(openSockets()).toHaveLength(0);
     expect(h.sockets.every((s) => !s.everConnected)).toBe(true);
+  });
+
+  it("stop and restart to the SAME relay mid-cycle: the in-flight cycle still syncs (main's counts and first sync)", async () => {
+    h.pinDelayMs = 31_000;
+    const ctrl = new MobileSyncController(makeDeps());
+    await ctrl.startSync("https://relay-a.test");
+    await vi.advanceTimersByTimeAsync(13_000); // the first cycle is in flight
+    ctrl.stopSync();
+    await ctrl.startSync("https://relay-a.test");
+    const maxOpen = await runFor(150_000);
+
+    // origin/main: conversation syncs at 34, 47, 74, 104, 134 s — the first
+    // is the in-flight cycle, finishing on the restarted run's engines.
+    expect(h.convLog.map(([t]) => t / 1000)).toEqual([34, 47, 74, 104, 134]);
+    expect(h.syncCalls).toBe(10); // origin/main: 5 event + 5 conversation
+    expect(maxOpen).toBe(1); // origin/main: 5 open
+    // The in-flight cycle belongs to the stopped run: it syncs, but its
+    // socket never connects.
+    expect(h.sockets[0]!.everConnected).toBe(false);
+    expectNoOrphan();
+    ctrl.stopSync();
+    expect(openSockets()).toHaveLength(0);
+  });
+
+  it("startSync re-entered mid-cycle (same relay, no stop): main's counts, one socket", async () => {
+    h.pinDelayMs = 31_000;
+    const ctrl = new MobileSyncController(makeDeps());
+    await ctrl.startSync("https://relay-a.test");
+    await vi.advanceTimersByTimeAsync(13_000);
+    await ctrl.startSync("https://relay-a.test");
+    const maxOpen = await runFor(150_000);
+
+    // origin/main: 34, 47, 61, 74, 91, 104, 121, 134, 151 s (the first run's
+    // interval keeps ticking beside the second's — pre-existing, kept).
+    expect(h.convLog.map(([t]) => t / 1000)).toEqual([34, 47, 61, 74, 91, 104, 121, 134, 151]);
+    expect(h.syncCalls).toBe(18);
+    expect(maxOpen).toBe(1); // origin/main: 9 open
+    expectNoOrphan();
+    ctrl.stopSync();
+  });
+
+  it("a startSync that bails early does not displace the running run's socket", async () => {
+    h.pinDelayMs = 31_000;
+    let storageAvailable = true;
+    const deps = makeDeps();
+    const storage = deps.getStorage();
+    deps.getStorage = () => (storageAvailable ? storage : null);
+    const ctrl = new MobileSyncController(deps);
+    await ctrl.startSync("https://relay-a.test");
+    await vi.advanceTimersByTimeAsync(13_000); // the first cycle is in flight
+    storageAvailable = false;
+    await ctrl.startSync("https://relay-a.test"); // bails: no storage
+    storageAvailable = true;
+    await vi.advanceTimersByTimeAsync(25_000); // the first cycle resumes at 34 s
+
+    expect(h.sockets[0]!.everConnected).toBe(true);
+    expect(openSockets()).toHaveLength(1);
+    ctrl.stopSync();
   });
 });

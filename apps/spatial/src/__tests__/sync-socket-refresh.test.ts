@@ -73,10 +73,18 @@ let pullTokens: string[];
 /** When set, the FIRST bootstrap POST waits on it (holds connectRelay A mid-await). */
 let bootstrapGate: Promise<void> | null;
 let bootstrapStarted: (() => void) | null;
+/** Task submissions seen by the fake relay: [token, its audience, its age in ms]. */
+let taskSubmits: Array<[string, string | undefined, number]>;
+const mintedAud = new Map<string, string>();
+let installedDelegation: {
+  delegateStep: (step: unknown, timeoutMs: number) => Promise<unknown>;
+} | null;
 function makeDeps(): SpatialSyncControllerDeps {
   const runtime = {
     getToolRegistry: () => ({ list: () => [] }),
-    setDelegationAdapter: vi.fn(),
+    setDelegationAdapter: vi.fn((a: unknown) => {
+      installedDelegation = a as typeof installedDelegation;
+    }),
     connectSync: vi.fn(),
     startSync: vi.fn(),
     sync: { onStatusChange: vi.fn(() => () => {}), stop: vi.fn() },
@@ -97,6 +105,13 @@ function makeDeps(): SpatialSyncControllerDeps {
     getTokenFactory: () => async () => {
       const t = `minted-${++minted}`;
       mintedAt.set(t, Date.now());
+      mintedAud.set(t, "sync");
+      return t;
+    },
+    mintToken: async (aud) => {
+      const t = `minted-${++minted}`;
+      mintedAt.set(t, Date.now());
+      mintedAud.set(t, aud);
       return t;
     },
   };
@@ -115,6 +130,9 @@ beforeEach(() => {
   pullTokens = [];
   bootstrapGate = null;
   bootstrapStarted = null;
+  taskSubmits = [];
+  mintedAud.clear();
+  installedDelegation = null;
   originalWebSocket = globalThis.WebSocket;
   globalThis.WebSocket = FakeSocket as unknown as typeof WebSocket;
   globalThis.fetch = vi.fn(async (url: string, init?: { headers?: Record<string, string> }) => {
@@ -123,6 +141,11 @@ beforeEach(() => {
       bootstrapGate = null;
       bootstrapStarted?.();
       await gate;
+    }
+    if (String(url).endsWith("/agent/motebit-1/task")) {
+      const token = (init?.headers?.["Authorization"] ?? "").replace(/^Bearer /, "");
+      taskSubmits.push([token, mintedAud.get(token), Date.now() - (mintedAt.get(token) ?? NaN)]);
+      return { ok: false, status: 401, text: async () => "refused", json: async () => ({}) };
     }
     if (String(url).includes("/sync/motebit-1/pull")) {
       const token = (init?.headers?.["Authorization"] ?? "").replace(/^Bearer /, "");
@@ -296,6 +319,45 @@ describe("spatial sync socket across token refreshes (#816)", () => {
       (c) => (c as unknown as [{ event_id: string }])[0].event_id,
     );
     expect(appended).toContain("gap-event");
+    await ctrl.disconnectRelay();
+  });
+
+  it("plan-step delegation after refreshes past 5 minutes presents a fresh task:submit token", async () => {
+    const ctrl = new SpatialSyncController(makeDeps());
+    await connectAndAccept(ctrl);
+    await refresh();
+    await refresh();
+    await vi.advanceTimersByTimeAsync(60_000); // ~10 min after connect
+
+    expect(installedDelegation).not.toBeNull();
+    await installedDelegation!
+      .delegateStep(
+        { step_id: "s1", description: "d", prompt: "p", required_capabilities: [] },
+        1_000,
+      )
+      .catch(() => {}); // the fake relay refuses; only the presented token matters
+    expect(taskSubmits.length).toBeGreaterThan(0);
+    for (const [, aud, age] of taskSubmits) {
+      expect(aud).toBe("task:submit"); // origin/main: the sync-audience connect-time token
+      expect(age).toBeLessThan(TOKEN_TTL_MS); // origin/main: 600 s old
+    }
+    await ctrl.disconnectRelay();
+  });
+
+  it("delegation-only (no private key): plan-step delegation presents a task:submit token", async () => {
+    const deps = makeDeps();
+    deps.getPrivKey = () => null;
+    const ctrl = new SpatialSyncController(deps);
+    await ctrl.connectRelay();
+    expect(FakeSocket.instances).toHaveLength(0);
+    await installedDelegation!
+      .delegateStep(
+        { step_id: "s1", description: "d", prompt: "p", required_capabilities: [] },
+        1_000,
+      )
+      .catch(() => {});
+    expect(taskSubmits.length).toBeGreaterThan(0);
+    for (const [, aud] of taskSubmits) expect(aud).toBe("task:submit"); // origin/main: sync
     await ctrl.disconnectRelay();
   });
 });
