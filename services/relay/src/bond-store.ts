@@ -120,15 +120,21 @@ export async function recordBondCommitment(
   // artifact — never a re-typed column projection.
   const commitmentJson = canonicalJson(commitment);
 
-  db.prepare(
-    `INSERT INTO relay_bond_commitments (
+  // Scoped to the row's owner (#846 v3): `bond_id` is chosen by the bond's
+  // author, so a conflict can land on a bond another identity recorded. The
+  // update used to assign `motebit_id = excluded.motebit_id` — identity X's
+  // own validly-signed bond, carrying V's `bond_id`, re-filed V's bond row
+  // under X. Now a held `bond_id` is updated only by its owner; for anyone
+  // else no row changes and the bond is refused.
+  const written = db
+    .prepare(
+      `INSERT INTO relay_bond_commitments (
        bond_id, motebit_id, bonded_address, bonded_public_key,
        bond_amount_micro, asset, chain, issued_at, expires_at,
        suite, signature, commitment_json,
        backing_state, backed_amount_micro, last_checked_at, recorded_at
      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', NULL, NULL, ?)
      ON CONFLICT(bond_id) DO UPDATE SET
-       motebit_id        = excluded.motebit_id,
        bonded_address    = excluded.bonded_address,
        bonded_public_key = excluded.bonded_public_key,
        bond_amount_micro = excluded.bond_amount_micro,
@@ -142,22 +148,31 @@ export async function recordBondCommitment(
        backing_state     = 'pending',
        backed_amount_micro = NULL,
        last_checked_at   = NULL,
-       recorded_at       = excluded.recorded_at`,
-  ).run(
-    commitment.bond_id,
-    commitment.motebit_id,
-    commitment.bonded_address,
-    commitment.bonded_public_key,
-    commitment.bond_amount_micro,
-    commitment.asset,
-    commitment.chain,
-    commitment.issued_at,
-    commitment.expires_at,
-    commitment.suite,
-    commitment.signature,
-    commitmentJson,
-    now(),
-  );
+       recorded_at       = excluded.recorded_at
+     WHERE relay_bond_commitments.motebit_id = excluded.motebit_id`,
+    )
+    .run(
+      commitment.bond_id,
+      commitment.motebit_id,
+      commitment.bonded_address,
+      commitment.bonded_public_key,
+      commitment.bond_amount_micro,
+      commitment.asset,
+      commitment.chain,
+      commitment.issued_at,
+      commitment.expires_at,
+      commitment.suite,
+      commitment.signature,
+      commitmentJson,
+      now(),
+    );
+  if (written.changes === 0) {
+    logger.warn("bond_store.bond_id_held_by_another_identity", {
+      bondId: commitment.bond_id,
+      motebitId: commitment.motebit_id,
+    });
+    return { ok: false, reason: "bond_id_held_by_another_identity" };
+  }
 
   logger.info("bond_store.recorded", {
     bondId: commitment.bond_id,

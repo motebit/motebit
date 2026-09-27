@@ -163,6 +163,40 @@ export function createAuthEventSink(
 /** The per-request slot a master-token presentation is marked in. */
 const MASTER_RECORDED = "authEventMasterTokenRecorded" as never;
 
+/** The per-request slot that says the master token authenticated this request. */
+export const OPERATOR_PRESENTED = "authOperatorPresented" as never;
+
+/**
+ * Record a refusal an auth layer makes BEFORE any token is verified: no
+ * credential at all (`missing_token`), a bearer that does not parse as a
+ * signed token (`unparseable_token`), or a legacy plain-UUID device token
+ * (`legacy_token`). Rule 6 names the master token and refused signed tokens;
+ * these refusals were the one class that left no row, so "every refusal is
+ * recorded" was false exactly at the doors #846 closed — a no-credential
+ * cancel, export or approval wrote nothing (#846 v3). `motebitId` is null:
+ * nothing was claimed (a parsed-but-unverified `mid` is passed only by the
+ * caller that has one, and is labelled claimed by this table's contract).
+ */
+export function recordRefusalBeforeVerify(
+  c: { req: { method: string; path: string; header(name: string): string | undefined } },
+  record: ((event: AuthEvent) => void) | undefined,
+  event: {
+    kind: "agent_token_rejected" | "device_token_rejected";
+    audience: string | null;
+    reason: "missing_token" | "unparseable_token" | "legacy_token";
+  },
+): void {
+  record?.({
+    kind: event.kind,
+    method: c.req.method,
+    path: c.req.path,
+    motebitId: null,
+    audience: event.audience,
+    reason: event.reason,
+    correlationId: c.req.header("x-correlation-id") ?? null,
+  });
+}
+
 /**
  * Record a master-token presentation at most ONCE per request. Several auth
  * layers can wrap one route (the agent-route middleware and the account
@@ -176,6 +210,12 @@ export function recordMasterTokenOnce(
   record: ((event: AuthEvent) => void) | undefined,
   event: Omit<AuthEvent, "kind">,
 ): void {
+  // Every master-token door passes through here, so this is where the
+  // request is marked as the OPERATOR's (identity-binding.ts reads it): an
+  // unset caller id alone must never read as "operator" (#846 — the
+  // subscription routes had no auth at all, and an unset caller id was
+  // indistinguishable from the master token).
+  c.set(OPERATOR_PRESENTED, true as never);
   if (record == null || c.get(MASTER_RECORDED) === true) return;
   c.set(MASTER_RECORDED, true as never);
   record({ kind: "master_token", ...event });

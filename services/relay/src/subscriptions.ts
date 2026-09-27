@@ -29,6 +29,8 @@ import {
   fromMicro,
 } from "./accounts.js";
 import type { SubscriptionEventAdapter } from "./webhooks/stripe-webhook-adapter.js";
+import type { AuthEvent } from "./auth-events.js";
+import { bindCaller, unwrapBound, type BoundIdentity } from "./identity-binding.js";
 
 const logger = createLogger({ service: "relay", module: "proxy-tokens" });
 
@@ -189,6 +191,37 @@ export async function issueProxyToken(
   return toBase64Url(payloadBytes) + "." + toBase64Url(signature);
 }
 
+/**
+ * Move an identity's subscription row from `from` to `to` — the only writer
+ * the owner-facing routes (cancel, resubscribe) use. `owner` is a
+ * `BoundIdentity`: the route proved the caller is this identity (or the
+ * operator) before it can call this (#846). Stripe-rooted writers (the
+ * webhook, session-status) answer to Stripe's signature / server-side
+ * session read instead and do not come through here.
+ */
+export function setSubscriptionStatus(
+  db: DatabaseDriver,
+  owner: BoundIdentity,
+  from: string,
+  to: string,
+  periodEnd?: number | null,
+): boolean {
+  const id = unwrapBound(owner);
+  const res =
+    periodEnd === undefined
+      ? db
+          .prepare(
+            "UPDATE relay_subscriptions SET status = ?, updated_at = ? WHERE motebit_id = ? AND status = ?",
+          )
+          .run(to, Date.now(), id, from)
+      : db
+          .prepare(
+            "UPDATE relay_subscriptions SET status = ?, current_period_end = ?, updated_at = ? WHERE motebit_id = ? AND status = ?",
+          )
+          .run(to, periodEnd, Date.now(), id, from);
+  return res.changes > 0;
+}
+
 // ── Route registration ──────────────────────────────────────────────────
 
 export function registerProxyTokenRoutes(
@@ -204,6 +237,8 @@ export function registerProxyTokenRoutes(
    * relay's shared Stripe client.
    */
   subscriptionEventAdapter: SubscriptionEventAdapter | null = null,
+  /** Relay rule 6: a refused cancel/resubscribe is recorded (#846). */
+  recordAuthEvent?: (event: AuthEvent) => void,
 ): void {
   // ── POST /api/v1/agents/:motebitId/proxy-token ────────────────────────
   // Issue a signed proxy token carrying the agent's current balance.
@@ -664,7 +699,17 @@ export function registerProxyTokenRoutes(
   // Cancel subscription at period end. User keeps remaining credits.
   /** @internal */
   app.post("/api/v1/subscriptions/:motebitId/cancel", async (c) => {
+    // Owner-only (#846): this route had NO authentication — the
+    // /api/v1/subscriptions/ prefix is carved out of the master-token
+    // catch-all for the Stripe webhook and checkout — so anyone could cancel
+    // any identity's subscription. The caller's `account:checkout` token
+    // (middleware.ts dualAuth) must name this identity, or the operator acts.
     const motebitId = c.req.param("motebitId");
+    const owner = bindCaller(c, motebitId, {
+      recordAuthEvent,
+      reason: "subscription:cancel",
+      audience: "account:checkout",
+    });
 
     const row = db
       .prepare(
@@ -683,9 +728,7 @@ export function registerProxyTokenRoutes(
       });
 
       const periodEnd = subscriptionPeriodEndMs(updated);
-      db.prepare(
-        "UPDATE relay_subscriptions SET status = 'cancelling', current_period_end = ?, updated_at = ? WHERE motebit_id = ?",
-      ).run(periodEnd, Date.now(), motebitId);
+      setSubscriptionStatus(db, owner, "active", "cancelling", periodEnd);
 
       logger.info("subscription.cancel_scheduled", { motebitId, activeUntil: periodEnd });
 
@@ -703,7 +746,13 @@ export function registerProxyTokenRoutes(
   // Undo cancellation — resume the existing subscription.
   /** @internal */
   app.post("/api/v1/subscriptions/:motebitId/resubscribe", async (c) => {
+    // Owner-only (#846) — the same door as cancel, the same binding.
     const motebitId = c.req.param("motebitId");
+    const owner = bindCaller(c, motebitId, {
+      recordAuthEvent,
+      reason: "subscription:resubscribe",
+      audience: "account:checkout",
+    });
 
     const row = db
       .prepare(
@@ -721,9 +770,7 @@ export function registerProxyTokenRoutes(
         cancel_at_period_end: false,
       });
 
-      db.prepare(
-        "UPDATE relay_subscriptions SET status = 'active', updated_at = ? WHERE motebit_id = ?",
-      ).run(Date.now(), motebitId);
+      setSubscriptionStatus(db, owner, "cancelling", "active");
 
       logger.info("subscription.resubscribed", { motebitId });
 
@@ -747,7 +794,9 @@ export function registerProxyTokenRoutes(
       .prepare("SELECT status, current_period_end FROM relay_subscriptions WHERE motebit_id = ?")
       .get(motebitId) as { status: string; current_period_end: number | null } | undefined;
 
-    const account = getOrCreateAccount(db, motebitId);
+    // A read: it must not create an account row for whatever id a caller
+    // names (this route takes no credential; #846 v2 audit).
+    const account = { balance: getAccountBalance(db, motebitId)?.balance ?? 0 };
 
     return c.json({
       motebit_id: motebitId,

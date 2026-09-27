@@ -21,11 +21,15 @@ import {
   floorSyncPlan,
   floorSyncPlanStep,
 } from "./data-sync-redaction.js";
+import type { AuthEvent } from "./auth-events.js";
+import { bindSyncEntries, unwrapBound, type BoundIdentity } from "./identity-binding.js";
 
 export interface DataSyncDeps {
   db: DatabaseDriver;
   app: Hono;
   connections: Map<string, ConnectedDevice[]>;
+  /** Relay rule 6: a refused cross-identity push is recorded (#846). */
+  recordAuthEvent: (event: AuthEvent) => void;
 }
 
 /**
@@ -124,7 +128,21 @@ export function createDataSyncTables(db: DatabaseDriver): void {
 
 // === Conversation Sync Helpers ===
 
-export function upsertSyncConversation(db: DatabaseDriver, raw: SyncConversation): void {
+/**
+ * Rows are keyed by a client-chosen id, so each upsert below is scoped to the
+ * row's owner: a push naming an id another identity holds changes nothing
+ * (#846). The door (`bindSyncEntries`) binds the entry to the pusher and
+ * mints the `BoundIdentity` each helper takes as `owner` (an entry naming
+ * another owner is skipped);
+ * this binds the ROW to the entry.
+ */
+export function upsertSyncConversation(
+  db: DatabaseDriver,
+  owner: BoundIdentity,
+  raw: SyncConversation,
+): void {
+  const id = unwrapBound(owner);
+  if (raw.motebit_id !== id) return;
   // Fail-closed floor: plaintext free-text fields never persist (the client
   // encrypts them; see data-sync-redaction.ts). Storage is safe for any caller.
   const conv = floorSyncConversation(raw);
@@ -135,10 +153,11 @@ export function upsertSyncConversation(db: DatabaseDriver, raw: SyncConversation
          last_active_at = MAX(excluded.last_active_at, sync_conversations.last_active_at),
          title = CASE WHEN excluded.last_active_at >= sync_conversations.last_active_at THEN excluded.title ELSE sync_conversations.title END,
          summary = CASE WHEN excluded.last_active_at >= sync_conversations.last_active_at THEN excluded.summary ELSE sync_conversations.summary END,
-         message_count = MAX(excluded.message_count, sync_conversations.message_count)`,
+         message_count = MAX(excluded.message_count, sync_conversations.message_count)
+       WHERE sync_conversations.motebit_id = excluded.motebit_id`,
   ).run(
     conv.conversation_id,
-    conv.motebit_id,
+    id,
     conv.started_at,
     conv.last_active_at,
     conv.title,
@@ -147,7 +166,13 @@ export function upsertSyncConversation(db: DatabaseDriver, raw: SyncConversation
   );
 }
 
-export function upsertSyncMessage(db: DatabaseDriver, raw: SyncConversationMessage): void {
+export function upsertSyncMessage(
+  db: DatabaseDriver,
+  owner: BoundIdentity,
+  raw: SyncConversationMessage,
+): void {
+  const id = unwrapBound(owner);
+  if (raw.motebit_id !== id) return;
   const msg = floorSyncMessage(raw);
   db.prepare(
     `INSERT OR IGNORE INTO sync_conversation_messages
@@ -156,7 +181,7 @@ export function upsertSyncMessage(db: DatabaseDriver, raw: SyncConversationMessa
   ).run(
     msg.message_id,
     msg.conversation_id,
-    msg.motebit_id,
+    id,
     msg.role,
     msg.content,
     msg.tool_calls,
@@ -177,7 +202,10 @@ const STEP_STATUS_ORDER: Record<string, number> = {
   skipped: 2,
 };
 
-function upsertSyncPlan(db: DatabaseDriver, raw: SyncPlan): void {
+/** @internal exported for the #846 forgery test. */
+export function upsertSyncPlan(db: DatabaseDriver, owner: BoundIdentity, raw: SyncPlan): void {
+  const id = unwrapBound(owner);
+  if (raw.motebit_id !== id) return;
   const plan = floorSyncPlan(raw);
   db.prepare(
     `INSERT INTO sync_plans (plan_id, goal_id, motebit_id, title, status, created_at, updated_at, current_step_index, total_steps, proposal_id, collaborative)
@@ -189,11 +217,12 @@ function upsertSyncPlan(db: DatabaseDriver, raw: SyncPlan): void {
          current_step_index = CASE WHEN excluded.updated_at >= sync_plans.updated_at THEN excluded.current_step_index ELSE sync_plans.current_step_index END,
          total_steps = MAX(excluded.total_steps, sync_plans.total_steps),
          proposal_id = CASE WHEN excluded.updated_at >= sync_plans.updated_at THEN excluded.proposal_id ELSE sync_plans.proposal_id END,
-         collaborative = CASE WHEN excluded.updated_at >= sync_plans.updated_at THEN excluded.collaborative ELSE sync_plans.collaborative END`,
+         collaborative = CASE WHEN excluded.updated_at >= sync_plans.updated_at THEN excluded.collaborative ELSE sync_plans.collaborative END
+       WHERE sync_plans.motebit_id = excluded.motebit_id`,
   ).run(
     plan.plan_id,
     plan.goal_id,
-    plan.motebit_id,
+    id,
     plan.title,
     plan.status,
     plan.created_at,
@@ -205,14 +234,24 @@ function upsertSyncPlan(db: DatabaseDriver, raw: SyncPlan): void {
   );
 }
 
-function upsertSyncPlanStep(db: DatabaseDriver, raw: SyncPlanStep): void {
+/** @internal exported for the #846 forgery test. */
+export function upsertSyncPlanStep(
+  db: DatabaseDriver,
+  owner: BoundIdentity,
+  raw: SyncPlanStep,
+): void {
+  const id = unwrapBound(owner);
+  if (raw.motebit_id !== id) return;
   const step = floorSyncPlanStep(raw);
   // Check existing status for monotonicity
   const existing = db
-    .prepare(`SELECT status, updated_at FROM sync_plan_steps WHERE step_id = ?`)
-    .get(step.step_id) as { status: string; updated_at: number } | undefined;
+    .prepare(`SELECT motebit_id, status, updated_at FROM sync_plan_steps WHERE step_id = ?`)
+    .get(step.step_id) as { motebit_id: string; status: string; updated_at: number } | undefined;
 
   if (existing) {
+    // A row another identity owns is never replaced (#846) — `INSERT OR
+    // REPLACE` would delete it and file the step under the pusher.
+    if (existing.motebit_id !== id) return;
     const incomingOrder = STEP_STATUS_ORDER[step.status] ?? 0;
     const existingOrder = STEP_STATUS_ORDER[existing.status] ?? 0;
     // Never regress status
@@ -230,7 +269,7 @@ function upsertSyncPlanStep(db: DatabaseDriver, raw: SyncPlanStep): void {
   ).run(
     step.step_id,
     step.plan_id,
-    step.motebit_id,
+    id,
     step.ordinal,
     step.description,
     step.prompt,
@@ -266,8 +305,10 @@ export function registerDataSyncRoutes(deps: DataSyncDeps): void {
         message: "Missing or invalid 'conversations' field (must be array)",
       });
     }
+    // #846: every entry must name the identity this push authenticated as.
+    const owner = bindSyncEntries(c, body.conversations, motebitId, deps.recordAuthEvent);
     for (const conv of body.conversations) {
-      upsertSyncConversation(db, conv);
+      upsertSyncConversation(db, owner, conv);
     }
 
     // Fan out to WebSocket clients, skipping the sender device
@@ -309,8 +350,10 @@ export function registerDataSyncRoutes(deps: DataSyncDeps): void {
         message: "Missing or invalid 'messages' field (must be array)",
       });
     }
+    // #846: every entry must name the identity this push authenticated as.
+    const owner = bindSyncEntries(c, body.messages, motebitId, deps.recordAuthEvent);
     for (const msg of body.messages) {
-      upsertSyncMessage(db, msg);
+      upsertSyncMessage(db, owner, msg);
     }
 
     // Fan out to WebSocket clients, skipping the sender device
@@ -359,8 +402,10 @@ export function registerDataSyncRoutes(deps: DataSyncDeps): void {
     if (!Array.isArray(body.plans)) {
       throw new HTTPException(400, { message: "Missing or invalid 'plans' field (must be array)" });
     }
+    // #846: every entry must name the identity this push authenticated as.
+    const owner = bindSyncEntries(c, body.plans, motebitId, deps.recordAuthEvent);
     for (const plan of body.plans) {
-      upsertSyncPlan(db, plan);
+      upsertSyncPlan(db, owner, plan);
     }
 
     // Fan out to WebSocket clients
@@ -397,8 +442,10 @@ export function registerDataSyncRoutes(deps: DataSyncDeps): void {
     if (!Array.isArray(body.steps)) {
       throw new HTTPException(400, { message: "Missing or invalid 'steps' field (must be array)" });
     }
+    // #846: every entry must name the identity this push authenticated as.
+    const owner = bindSyncEntries(c, body.steps, motebitId, deps.recordAuthEvent);
     for (const step of body.steps) {
-      upsertSyncPlanStep(db, step);
+      upsertSyncPlanStep(db, owner, step);
     }
 
     // Fan out to WebSocket clients

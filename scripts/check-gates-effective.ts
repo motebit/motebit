@@ -2338,6 +2338,72 @@ export async function probeFetch(): Promise<unknown> {
       ),
   },
   {
+    script: "check-identity-authority-writers",
+    proves:
+      "flags an identity-row writer that reads its owner around `unwrapBound` — #846 v4 makes BoundIdentity a runtime capability (an ES-private-field object only identity-binding.ts constructs), and a forgery throws only because every registered writer reads its owner through `unwrapBound`, the private-brand check. A writer that casts `owner` to a string instead accepts any forged value (the #860 review's six forgeries all reach it). Probe rewrites setSubscriptionStatus's `unwrapBound(owner)` into `owner as unknown as string`; the OWNER READ AROUND arm must fire. byte-identical restoration via mutateFile.",
+    perturb: () =>
+      mutateFile(`services/relay/src/subscriptions.ts`, (src) =>
+        src.replace("  const id = unwrapBound(owner);", "  const id = owner as unknown as string;"),
+      ),
+  },
+  {
+    script: "check-identity-authority-writers",
+    proves:
+      "flags an upsert that re-files through a QUOTED identity column — the #860 review's V1: `\"motebit_id\" = excluded.motebit_id` in the bond upsert's DO UPDATE SET passed v3's bare-name regex, and in real SQLite moves another identity's bond row to the inserter. The SET-target reader normalizes quoting; REFILE (upsert) must fire. byte-identical restoration via mutateFile.",
+    perturb: () =>
+      mutateFile(`services/relay/src/bond-store.ts`, (src) =>
+        src.replace(
+          "       bonded_address    = excluded.bonded_address,\n",
+          '       bonded_address    = excluded.bonded_address,\n       "motebit_id" = excluded.motebit_id,\n',
+        ),
+      ),
+  },
+  {
+    script: "check-identity-authority-writers",
+    proves:
+      "flags an upsert that re-files through a ROW-VALUE target — the #860 review's V2: `(motebit_id, bonded_address) = (excluded.motebit_id, excluded.bonded_address)` passed v3 because the item did not START with the column name. The reader parses row-value targets; REFILE (upsert) must fire. byte-identical restoration via mutateFile.",
+    perturb: () =>
+      mutateFile(`services/relay/src/bond-store.ts`, (src) =>
+        src.replace(
+          "       bonded_address    = excluded.bonded_address,\n",
+          "       (motebit_id, bonded_address) = (excluded.motebit_id, excluded.bonded_address),\n",
+        ),
+      ),
+  },
+  {
+    script: "check-identity-authority-writers",
+    proves:
+      "flags an upsert whose owner scope is weakened by OR — the #860 review's V3: `WHERE t.motebit_id = excluded.motebit_id OR t.backing_state != 'backed'` still CONTAINED the owner conjunct, which is all v3 looked for, and updates another identity's row whenever the disjunct holds. The WHERE must be a pure conjunction; OWNER SCOPE WEAKENED must fire. byte-identical restoration via mutateFile.",
+    perturb: () =>
+      mutateFile(`services/relay/src/bond-store.ts`, (src) =>
+        src.replace(
+          "     WHERE relay_bond_commitments.motebit_id = excluded.motebit_id`,",
+          "     WHERE relay_bond_commitments.motebit_id = excluded.motebit_id OR relay_bond_commitments.backing_state != 'backed'`,",
+        ),
+      ),
+  },
+  {
+    script: "check-identity-authority-writers",
+    proves:
+      "flags the BoundIdentity minting path escaping its module — the capability is unforgeable only while the constructor's key is module-private. Probe exports MINT_KEY from identity-binding.ts (any module could then construct a BoundIdentity for any identity); PRIVATE MINT EXPORTED must fire. byte-identical restoration via mutateFile.",
+    perturb: () =>
+      mutateFile(`services/relay/src/identity-binding.ts`, (src) =>
+        src.replace("const MINT_KEY: unique symbol", "export const MINT_KEY: unique symbol"),
+      ),
+  },
+  {
+    script: "check-identity-authority-writers",
+    proves:
+      "flags an upsert that re-files another identity's row — the #853 review's second bypass: `ON CONFLICT(conversation_id) DO UPDATE SET motebit_id = excluded.motebit_id` is an UPDATE the UPDATE regex never saw, so a push naming another identity's conversation_id moved that row to the pusher. The upsert arm must fire (REFILE). Probe adds the assignment to the sync conversation upsert in data-sync.ts. byte-identical restoration via mutateFile.",
+    perturb: () =>
+      mutateFile(`services/relay/src/data-sync.ts`, (src) =>
+        src.replace(
+          "ON CONFLICT(conversation_id) DO UPDATE SET\n",
+          "ON CONFLICT(conversation_id) DO UPDATE SET\n         motebit_id = excluded.motebit_id,\n",
+        ),
+      ),
+  },
+  {
     script: "check-money-authority",
     proves:
       "flags the R4 standing-authority block disappearing from policy-gate.ts — the invariant that an R4_MONEY tool call never auto-executes without a verified standing-delegation grant. Drift class: a refactor that deletes or inverts the grant check (or reorders it ahead of the trust-level switch) silently re-opens 'Trusted caller auto-executes money'. Probe inverts the null-check (`== null` → `!= null`) so the gate's ordered marker regex no longer matches; assertion 1 must fire. byte-identical restoration via mutateFile.",

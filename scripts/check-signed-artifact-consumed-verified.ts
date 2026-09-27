@@ -104,7 +104,6 @@ const REQUIRED_USAGE: ReadonlyArray<{
   {
     file: "services/relay/src/migration.ts",
     verifiers: [
-      "verifyMigrationRequest",
       "verifyMigrationToken",
       "verifyDepartureAttestation",
       "verifyCredentialBundle",
@@ -112,7 +111,12 @@ const REQUIRED_USAGE: ReadonlyArray<{
       "verifyMigratingKeyBinding",
       "verifyRelayMetadata",
     ],
-    note: "/migrate verifies the agent's signed MigrationRequest (§4.1 — the departure authorization) + accept-migration (§8.2 steps 2-6: token + attestation + bundle signature + key↔id binding via verifyMigratingKeyBinding — sovereign genesis OR sovereign-rooted succession) + depart balance waiver + source-relay metadata tier-2 trust root",
+    note: "accept-migration (§8.2 steps 2-6: token + attestation + bundle signature + key↔id binding via verifyMigratingKeyBinding — sovereign genesis OR sovereign-rooted succession) + depart balance waiver + source-relay metadata tier-2 trust root",
+  },
+  {
+    file: "services/relay/src/identity-binding.ts",
+    verifiers: ["verifyMigrationRequest"],
+    note: "/migrate's signed MigrationRequest (§4.1 — the departure authorization) is verified inside bindBySignature, the only producer of the migration door's BoundIdentity (#846) — migration.ts receives a capability, never an unverified request",
   },
   {
     file: "services/relay/src/disputes.ts",

@@ -224,7 +224,7 @@ The reference relay writes a single `relay_disputes` row with JSON resolution da
 
 #### Client polling contract
 
-A relay MAY return `202 Accepted` from `POST /api/v1/disputes/:disputeId/resolve` when the federation orchestration is in flight (deferred). The body carries the orchestration state:
+`POST /api/v1/disputes/:disputeId/resolve` is the adjudicator's act (§6.1: on a single relay the operator's resolution IS the adjudication; the §6.2 orchestration is driven by the relay itself). A conforming relay MUST refuse it from any caller other than its operator — a party's device token is refused (`403`), a request with no credential is refused (`401`) — and MUST record the refusal. A relay MAY return `202 Accepted` from it to the operator when the federation orchestration is in flight (deferred). The body carries the orchestration state:
 
 ```text
 {
@@ -240,7 +240,7 @@ A relay MAY return `202 Accepted` from `POST /api/v1/disputes/:disputeId/resolve
 }
 ```
 
-Clients SHOULD poll `POST /api/v1/disputes/:disputeId/resolve` (idempotent — repeated calls drive additional attempts) or `GET /api/v1/disputes/:disputeId` (read-only, returns cached resolution once finalized) until the resolution is available. The orchestrator's background worker drives retries independently of client polls — the dispute will eventually resolve (or §6.6 timeout-fallback) regardless of whether any client is actively polling.
+Parties SHOULD poll `GET /api/v1/disputes/:disputeId` (read-only, returns the cached resolution once finalized) until the resolution is available. The operator MAY re-POST `/resolve` (idempotent — repeated calls drive additional attempts); a party MUST NOT expect to, since the relay refuses it. The orchestrator's background worker drives retries independently of client polls — the dispute will eventually resolve (or §6.6 timeout-fallback) regardless of whether any client is actively polling.
 
 ## 7. Fund Handling
 
@@ -390,7 +390,7 @@ The six routes below are the binding cross-implementation contract for the dispu
 
 - `POST /api/v1/allocations/:allocationId/dispute` — file a dispute against a budget allocation (§4).
 - `POST /api/v1/disputes/:disputeId/evidence` — submit additional evidence to an open dispute (§5).
-- `POST /api/v1/disputes/:disputeId/resolve` — adjudicator submits resolution (§6).
+- `POST /api/v1/disputes/:disputeId/resolve` — adjudicator submits resolution (§6). Operator only: refused, and recorded, for any other caller (§6.6 client polling contract).
 - `POST /api/v1/disputes/:disputeId/appeal` — appeal a resolution (§8).
 - `GET /api/v1/disputes/:disputeId` — read dispute state, including the latest signed resolution (round 2 if appealed, else round 1).
 - `GET /api/v1/disputes/:disputeId/resolutions` — read all signed resolution rows for the dispute, ordered by round ascending. Round-1 + round-2 (after §8.3 appeal) coexist per migration 19's `UNIQUE(dispute_id, round)`. Audit-history surface; the singular endpoint preserves the one-resolution wire-format contract.
@@ -444,3 +444,7 @@ The two gates are the structural defense against a backdated `filed_at` widening
 | market@1.0            | Virtual account balances are locked during dispute. Resolution credits/debits virtual accounts.                                                                                                                                             |
 | identity@1.0          | All dispute messages are signed by the party's Ed25519 identity key.                                                                                                                                                                        |
 | auth-token@1.0        | Dispute API endpoints require signed bearer tokens with appropriate audience binding.                                                                                                                                                       |
+
+## Change Log
+
+- **1.0 (2026-09-27)** — Clarification, no wire change: `POST /api/v1/disputes/:disputeId/resolve` is the operator's act and is refused for any other caller (§6.6 client polling contract, §9.5). Parties poll `GET /api/v1/disputes/:disputeId`; the earlier text told clients to poll the `POST`, which the reference relay had never authenticated (#846).
