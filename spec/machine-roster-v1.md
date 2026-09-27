@@ -590,6 +590,15 @@ store's refusal, not a verdict on validity, decided before the signature is
 checked), and refuses a request body over **266,240 bytes** (64 entries × 4096,
 plus slack) whole with 413. A well-formed entry is about 400 bytes.
 
+**A store that caps entries must make every enrolment it holds retirable.** A
+retirement names the `motebit_id` and a 64-hex `enrollment_id`, so for a short
+`device_id` it is larger than the enrolment it ends: with ids unbounded, an
+enrolment can fit the cap while its retirement never will, and the machine
+stays active everywhere. The reference relay bounds `motebit_id` and
+`device_id` at 256 UTF-16 code units at every door that admits an identity or a
+device; at that bound the largest enrolment is 3,388 bytes and the largest
+retirement 1,919.
+
 **The retrieval.** `GET` returns:
 
 ```
