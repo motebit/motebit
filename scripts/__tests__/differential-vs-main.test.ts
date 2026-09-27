@@ -100,10 +100,23 @@ const inside = (dir: string, p: string) => {
 /** git subcommands that never write a repository. */
 const GIT_READS = new Set(["rev-parse", "show", "ls-files", "cat-file", "log", "rev-list"]);
 
+/** `-c maintenance.auto=false` as environment: no background git outlives an fxGit call. */
+const NO_AUTO_MAINTENANCE = {
+  GIT_CONFIG_COUNT: "1",
+  GIT_CONFIG_KEY_0: "maintenance.auto",
+  GIT_CONFIG_VALUE_0: "false",
+};
+
 /**
  * Run git in `cwd` (which must be inside `jail`) with every GIT_* from
  * `baseEnv` removed, discovery fenced at `jail`, and — for anything that
  * writes — a check that the repository it would write resolves inside `jail`.
+ *
+ * Auto-maintenance is off for every call (through the environment, so no
+ * repository's config is written): `git commit` otherwise starts a DETACHED
+ * `git maintenance run --auto` that outlives the call. Under git 2.55 its
+ * `objects/maintenance.lock` was caught by the decoy's "before" snapshot and
+ * gone by "after" — main went red on a decoy nothing had touched.
  */
 function fxGit(
   jail: string,
@@ -114,6 +127,7 @@ function fxGit(
   if (!inside(jail, cwd)) throw new Error(`fxGit: cwd ${cwd} is outside ${jail}`);
   const env = cleanEnv(opts.baseEnv ?? process.env, {
     GIT_CEILING_DIRECTORIES: realpathSync(jail),
+    ...NO_AUTO_MAINTENANCE,
     ...opts.extraEnv,
   });
   const run = (a: string[], input?: string) => {
@@ -891,7 +905,49 @@ function snapshotDir(dir: string): string {
   return JSON.stringify(files);
 }
 
+/**
+ * The decoy paths that differ between two snapshots, one line each (added,
+ * removed, or changed with both sizes), so a red decoy assertion names the file
+ * that was written instead of a truncated blob diff.
+ */
+function snapshotDiff(before: string, after: string): string {
+  const a = JSON.parse(before) as Record<string, string>;
+  const b = JSON.parse(after) as Record<string, string>;
+  const size = (v: string) => (v.startsWith("link:") ? v : `${Buffer.from(v, "base64").length}B`);
+  const lines: string[] = [];
+  for (const k of [...new Set([...Object.keys(a), ...Object.keys(b)])].sort()) {
+    if (!(k in b)) lines.push(`  removed  ${k} (${size(a[k]!)})`);
+    else if (!(k in a)) lines.push(`  added    ${k} (${size(b[k]!)})`);
+    else if (a[k] !== b[k]) lines.push(`  changed  ${k} (${size(a[k]!)} -> ${size(b[k]!)})`);
+  }
+  return lines.length === 0
+    ? "decoy unchanged"
+    : `the decoy was written — ${lines.length} path(s) differ:\n${lines.join("\n")}`;
+}
+
 describe("differential-vs-main safety (decoy repository)", () => {
+  it("an fxGit commit starts no background maintenance, so nothing writes the decoy after its snapshot", () => {
+    const jail = realpathSync(mkdtempSync(join(tmpdir(), "diff-maint-")));
+    try {
+      const repo = join(jail, "repo");
+      write(join(repo, "README"), "x\n");
+      const trace = join(jail, "trace2.txt");
+      const g = (...args: string[]) => fxGit(jail, repo, args, { extraEnv: { GIT_TRACE2: trace } });
+      g("init", "-q", "-b", "main");
+      g("config", "user.email", "m@example.invalid");
+      g("config", "user.name", "m");
+      g("config", "commit.gpgsign", "false");
+      g("add", "-A");
+      g("commit", "-q", "-m", "x");
+      const children = readFileSync(trace, "utf-8")
+        .split("\n")
+        .filter((l) => l.includes("child_start"));
+      expect(children.filter((l) => l.includes("maintenance"))).toEqual([]);
+    } finally {
+      rmSync(jail, { recursive: true, force: true });
+    }
+  });
+
   it("with every GIT_* aimed at a decoy, the fixture and the script leave the decoy byte-identical — and a transitive bundle and a root-hoisted package read DIFF over stale working-tree dists", () => {
     const decoyJail = realpathSync(mkdtempSync(join(tmpdir(), "diff-decoy-")));
     const fxJail = realpathSync(mkdtempSync(join(tmpdir(), "diff-decoy-fixture-")));
@@ -930,7 +986,8 @@ describe("differential-vs-main safety (decoy repository)", () => {
         failure = err;
       }
       // First, whatever happened above: every byte of the decoy is unchanged.
-      expect(snapshotDir(decoy)).toBe(before);
+      const after = snapshotDir(decoy);
+      expect(after === before, snapshotDiff(before, after)).toBe(true);
       if (failure != null) throw failure;
       expect(r!.status, show(r!)).toBe(0);
       const rep = JSON.parse(readFileSync(out, "utf-8")) as Report;
