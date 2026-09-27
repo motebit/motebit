@@ -438,11 +438,17 @@ export class UnbootedWebApp {
   private _wsUnsubOnEvent: (() => void) | null = null;
   private _wsUnsubOnCustom: (() => void) | null = null;
   /**
-   * Bumped by every startSync and stopSync. A startSync that finds the epoch
-   * moved on across one of its awaits has been superseded and must not build,
-   * wire, or connect a socket — that socket would belong to nobody (#816).
+   * Socket ownership across overlapping starts (#816). Every start takes a
+   * request number; a start CLAIMS the socket only once it has passed its
+   * early-return checks and is about to build one, so a newer start that
+   * bails early never supersedes a running one. A start whose request is
+   * not newer than the current owner (a newer start already claimed, or a
+   * stop came after it) builds nothing; a start that loses ownership across
+   * an await tears down only its own socket, and only if it is still the
+   * current one. A stop makes every earlier request stale.
    */
-  private _wsEpoch = 0;
+  private _wsRequestSeq = 0;
+  private _wsOwner = 0;
   private _serving = false;
   private _servingSyncUrl: string | null = null;
   private _activeTaskCount = 0;
@@ -3611,7 +3617,7 @@ export class UnbootedWebApp {
   }
 
   async startSync(relayUrl: string): Promise<void> {
-    const epoch = ++this._wsEpoch;
+    const request = ++this._wsRequestSeq;
     if (!this.runtime) throw new Error("Runtime not initialized");
 
     this.setSyncStatus("connecting");
@@ -3721,7 +3727,11 @@ export class UnbootedWebApp {
     // One sync socket per app: a re-entered startSync (pairing, the relay
     // settings panel) replaces the running socket instead of leaving it open
     // beside the new one (#816).
-    if (epoch !== this._wsEpoch) return;
+    // The claim happens HERE, past every early return: a start that bails
+    // earlier never supersedes a running one. A start already superseded
+    // (a stop, or a newer start that claimed first) builds nothing.
+    if (request <= this._wsOwner) return;
+    this._wsOwner = request;
     this.teardownWs();
     const wsAdapter = new WebSocketEventStoreAdapter({
       url: wsUrl,
@@ -3765,7 +3775,10 @@ export class UnbootedWebApp {
     // Superseded while awaiting (stopSync, or a newer startSync): wiring
     // handlers onto this socket now would revive one that was deliberately
     // closed.
-    if (epoch !== this._wsEpoch) return;
+    if (this._wsOwner !== request) {
+      if (this._wsAdapter === wsAdapter) this.teardownWs();
+      return;
+    }
 
     this.runtime.enableInteractiveDelegation({
       syncUrl: relayUrl,
@@ -4170,7 +4183,7 @@ export class UnbootedWebApp {
   }
 
   stopSync(): void {
-    this._wsEpoch++;
+    this._wsOwner = ++this._wsRequestSeq;
     this._serving = false;
     this.teardownWs();
     if (this._syncUnsubscribe) {

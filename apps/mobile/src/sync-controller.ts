@@ -76,6 +76,7 @@ export class MobileSyncController {
   private syncEngine: SyncEngine | null = null;
   private conversationSyncEngine: ConversationSyncEngine | null = null;
   private syncTimer: ReturnType<typeof setInterval> | null = null;
+  private _cycleInFlight = false;
   private _syncStatus: SyncStatus = "offline";
   private _syncStatusCallback: ((status: SyncStatus, lastSync: number) => void) | null = null;
   private _lastSyncTime = 0;
@@ -401,6 +402,13 @@ export class MobileSyncController {
     if (!this.syncEngine || !this.conversationSyncEngine) return;
     const storage = this.deps.getStorage();
     if (!storage) return;
+    // One cycle at a time. A cycle outlives the 30 s interval when the relay
+    // key fetch is slow; an overlapping cycle would tear down the socket the
+    // running one is still building, so every cycle would be overtaken and
+    // no socket would ever connect (#816). The skipped tick's work is done by
+    // the cycle in flight and the next tick.
+    if (this._cycleInFlight) return;
+    this._cycleInFlight = true;
     const motebitId = this.deps.getMotebitId();
 
     this._syncStatus = "syncing";
@@ -461,6 +469,7 @@ export class MobileSyncController {
           })();
         });
 
+        let wsSuperseded = false;
         // Wire delegation adapter so PlanEngine can delegate steps to capable devices
         const runtime = this.deps.getRuntime();
         if (runtime) {
@@ -486,11 +495,11 @@ export class MobileSyncController {
               setItem: (k, v) => AsyncStorage.setItem(k, v),
             },
           });
-          // Superseded while awaiting: a later cycle (every 30 s — a slow
-          // relay-key fetch outlives one) or stopSync already replaced this
-          // socket. Connecting it now would open a socket nothing owns — open
-          // at the relay, counted in its liveness, never closed (#816).
-          if (this._wsAdapter !== wsAdapter) return;
+          // Superseded while awaiting (stopSync replaced this socket):
+          // connecting it now would open a socket nothing owns — open at the
+          // relay, counted in its liveness, never closed (#816). Only the
+          // socket is skipped; the HTTP sync below still runs.
+          wsSuperseded = this._wsAdapter !== wsAdapter;
           runtime.enableInteractiveDelegation({
             syncUrl,
             authToken: () => this.deps.createSyncToken("task:submit"),
@@ -614,8 +623,12 @@ export class MobileSyncController {
           });
         }
 
-        this.syncEngine.connectRemote(encryptedWs);
-        wsAdapter.connect();
+        if (wsSuperseded) {
+          this.syncEngine.connectRemote(encryptedHttp);
+        } else {
+          this.syncEngine.connectRemote(encryptedWs);
+          wsAdapter.connect();
+        }
 
         // Recover any delegated steps orphaned by a previous app close
         if (runtime) {
@@ -676,6 +689,8 @@ export class MobileSyncController {
     } catch {
       this._syncStatus = "error";
       this._syncStatusCallback?.("error", this._lastSyncTime);
+    } finally {
+      this._cycleInFlight = false;
     }
   }
 }

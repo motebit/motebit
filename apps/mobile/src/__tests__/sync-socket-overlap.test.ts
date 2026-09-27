@@ -1,9 +1,10 @@
 /**
  * #816 (mobile sibling) — mobile rebuilds its sync socket every 30-second
  * cycle and closes the CURRENT one first, so the ordinary path does not leak.
- * The leak door is an overlapping cycle: a cycle suspended on the relay-key
- * fetch (which can outlive the 30 s interval) is torn down by the next
- * cycle, then resumes and connects its socket — one nothing owns or closes.
+ * The hazard is a cycle that outlives the interval (a slow relay-key fetch):
+ * an overlapping cycle would tear down the socket the running one is still
+ * building. Cycles now run one at a time; the HTTP sync still runs on every
+ * cycle and exactly one socket is connected.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
@@ -11,6 +12,9 @@ const h = vi.hoisted(() => ({
   sockets: [] as Array<{ connected: boolean; everConnected: boolean }>,
   pinCalls: 0,
   firstPinGate: null as Promise<void> | null,
+  /** When set, every relay-key fetch takes this long (fake time). */
+  pinDelayMs: 0,
+  syncCalls: 0,
 }));
 
 vi.mock("@motebit/runtime", () => ({
@@ -23,6 +27,7 @@ vi.mock("@motebit/runtime", () => ({
   getOrPinRelayKey: vi.fn(async () => {
     h.pinCalls++;
     if (h.pinCalls === 1 && h.firstPinGate) await h.firstPinGate;
+    if (h.pinDelayMs > 0) await new Promise((r) => setTimeout(r, h.pinDelayMs));
     return undefined;
   }),
 }));
@@ -32,7 +37,10 @@ vi.mock("@motebit/sync-engine", () => {
     connectRemote = vi.fn();
     start = vi.fn();
     stop = vi.fn();
-    sync = vi.fn(async () => ({ pushed: 0, pulled: 0 }));
+    sync = vi.fn(async () => {
+      h.syncCalls++;
+      return { pushed: 0, pulled: 0 };
+    });
   }
   class WebSocketEventStoreAdapter {
     state = { connected: false, everConnected: false };
@@ -123,6 +131,8 @@ beforeEach(() => {
   h.sockets.length = 0;
   h.pinCalls = 0;
   h.firstPinGate = null;
+  h.pinDelayMs = 0;
+  h.syncCalls = 0;
   store.clear();
   vi.stubGlobal(
     "fetch",
@@ -135,23 +145,29 @@ afterEach(() => {
 });
 
 describe("mobile sync socket under overlapping cycles (#816)", () => {
-  it("a cycle superseded while awaiting the relay key never connects its socket", async () => {
-    let release!: () => void;
-    h.firstPinGate = new Promise<void>((r) => {
-      release = r;
-    });
+  it("a relay key slower than the interval: HTTP sync runs every cycle, exactly one socket is connected", async () => {
+    h.pinDelayMs = 40_000; // every cycle outlives the 30 s interval
     const ctrl = new MobileSyncController(makeDeps());
     await ctrl.startSync("https://relay.test");
+    let maxOpen = 0;
+    for (let t = 0; t < 5 * 60; t++) {
+      await vi.advanceTimersByTimeAsync(1_000);
+      maxOpen = Math.max(maxOpen, openSockets().length);
+    }
 
-    await vi.advanceTimersByTimeAsync(3_000); // cycle A: suspended on the relay key
-    expect(h.sockets).toHaveLength(1);
-    await vi.advanceTimersByTimeAsync(30_000); // cycle B: replaces A's socket, connects
-    expect(h.sockets).toHaveLength(2);
-    release(); // cycle A resumes
-    await vi.advanceTimersByTimeAsync(0);
-
-    expect(h.sockets[0]!.everConnected).toBe(false);
-    expect(openSockets()).toHaveLength(1);
+    // Each cycle takes ~40 s and a tick is skipped while one is in flight,
+    // so over 5 minutes a cycle completes about every 60 s, each running
+    // the event and conversation HTTP sync.
+    expect(h.syncCalls).toBeGreaterThanOrEqual(8);
+    // Never two sockets at once, and every cycle's socket did connect
+    // (the last may still be awaiting its relay key).
+    expect(maxOpen).toBe(1);
+    const settled = h.sockets.slice(0, -1);
+    expect(settled.length).toBeGreaterThanOrEqual(3);
+    for (const sock of settled) {
+      expect(sock.everConnected).toBe(true);
+      expect(sock.connected).toBe(false);
+    }
     ctrl.stopSync();
     expect(openSockets()).toHaveLength(0);
   });

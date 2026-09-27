@@ -26,10 +26,21 @@ resolving, and it retries when the credential source rejects.
 
 Siblings closed in the same pass: a re-entered `startSync` on web and
 desktop now closes the running socket and refresh timer before building
-a new one, and a `startSync` superseded across an await (by `stopSync`
-or a newer `startSync`) no longer connects its socket. Mobile, which
-rebuilds its socket each 30-second cycle, no longer connects the socket
-of a cycle that a later cycle superseded while it awaited the relay key.
+a new one. A start claims the socket only once it has passed its early
+checks, so a newer start that bails (no runtime, no keypair, a failed
+token) never orphans a running one, and a start superseded across an
+await (by `stopSync` or a newer start that claimed) builds or connects
+nothing. Mobile runs one sync cycle at a time, so a relay-key fetch
+slower than the 30-second interval no longer lets cycles overtake each
+other; if a cycle's socket is superseded it skips only the socket and
+still runs the HTTP sync.
+
+The socket's catch-up pull now authenticates: desktop and spatial give
+the HTTP fallback a per-request credential (web already did), so events
+published in a refresh gap are pulled after the first token expires. A
+late auth timeout or `auth_result` from a replaced socket no longer acts
+on the adapter: stopping mid-handshake no longer reopens a socket 5 s
+later, and a refresh mid-handshake no longer kills the new socket.
 
 Spatial had the same deaf-handler shape: its refresh closed the current
 socket but built a new adapter without the `command_request` handler, so

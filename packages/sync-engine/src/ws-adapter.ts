@@ -96,6 +96,8 @@ export class WebSocketEventStoreAdapter implements EventStoreAdapter {
    * open at the relay, counted in its liveness, and never closed.
    */
   private connectGeneration = 0;
+  /** The pending auth-handshake timeout of the current socket, if any. */
+  private authTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(config: WebSocketAdapterConfig) {
     this.config = {
@@ -145,11 +147,19 @@ export class WebSocketEventStoreAdapter implements EventStoreAdapter {
    *
    * Order: the old socket closes before the new one opens, so the relay
    * never holds two sockets for this adapter. Events published in the gap
-   * are not lost — the new socket's auth success runs the catch-up pull
+   * are recovered by the catch-up pull the new socket runs on auth success
    * (`httpFallback` + `localStore`), the same path an ordinary drop and
-   * reconnect takes. A relay frame addressed to this device during the gap
-   * finds no socket and is answered by the relay ("Agent not connected"),
-   * not silently delivered to a socket nobody reads.
+   * reconnect takes — PROVIDED the `httpFallback` can still authenticate:
+   * give it a per-request credential source too, or a pull made after its
+   * static token expired is refused and the gap is lost.
+   *
+   * A relay command addressed to this device during the gap is not
+   * answered by this adapter. The relay either no longer lists the socket
+   * (404 "Agent not connected" when it was the device's only one, or
+   * another of the owner's sockets takes it), or still lists it as open
+   * while the close is in flight, in which case the frame is swallowed and
+   * the caller gets a 504 (no answer, or "closed_after_delivery"). Either
+   * way the caller is told nothing answered — never a false success.
    *
    * Use a `credentialSource` for a refresh to carry a new token; with a
    * static `authToken` it reconnects with the same one.
@@ -181,36 +191,47 @@ export class WebSocketEventStoreAdapter implements EventStoreAdapter {
     // Resolve WebSocket impl (async for Node <22 where ws must be imported).
     // If globalThis.WebSocket exists (Node 22+, browsers, tests), use it synchronously.
     // Otherwise, import ws and re-enter connectWithToken().
+    let ws: WebSocket;
     if (typeof globalThis.WebSocket !== "undefined") {
-      this.ws = new globalThis.WebSocket(url);
+      ws = new globalThis.WebSocket(url);
     } else if (_wsPackage) {
-      this.ws = new _wsPackage(url);
+      ws = new _wsPackage(url);
     } else {
       void resolveWebSocket().then(() => this.connectWithToken(token, generation));
       return;
     }
+    this.ws = ws;
+    // Every callback below belongs to THIS socket of THIS connect. After a
+    // disconnect() or a refresh, a late callback of the replaced socket must
+    // not touch the adapter: an auth timeout firing on a stopped adapter
+    // would schedule a reconnect (a socket after stop), and one firing after
+    // a refresh would close the NEW, authenticated socket.
+    const stale = (): boolean => generation !== this.connectGeneration || this.ws !== ws;
 
-    this.ws.onopen = () => {
+    ws.onopen = () => {
+      if (stale()) return;
       // Post-connect auth: if we have a token, send it as the first frame and
       // wait for auth_result before considering the connection ready. Fail-closed:
       // rejection or 5s timeout closes the connection.
       if (token != null && token !== "") {
-        this.ws!.send(JSON.stringify({ type: "auth", token }));
+        ws.send(JSON.stringify({ type: "auth", token }));
 
-        const authTimeout = setTimeout(() => {
+        this.clearAuthTimer();
+        this.authTimer = setTimeout(() => {
+          this.authTimer = null;
+          if (stale()) return;
           // Auth timed out — fail-closed
-          if (this.ws) {
-            this.ws.onclose = null;
-            this.ws.close();
-            this.ws = null;
-          }
+          ws.onclose = null;
+          ws.close();
+          this.ws = null;
           this.connected = false;
           this.scheduleReconnect();
         }, 5_000);
 
         // Temporarily override onmessage to intercept auth_result
-        const originalOnMessage = this.ws!.onmessage;
-        this.ws!.onmessage = (event: MessageEvent) => {
+        const originalOnMessage = ws.onmessage;
+        ws.onmessage = (event: MessageEvent) => {
+          if (stale()) return;
           try {
             const msg = JSON.parse(String(event.data)) as {
               type: string;
@@ -218,20 +239,18 @@ export class WebSocketEventStoreAdapter implements EventStoreAdapter {
               error?: string;
             };
             if (msg.type === "auth_result") {
-              clearTimeout(authTimeout);
+              this.clearAuthTimer();
               if (!msg.ok) {
                 // Auth rejected — close and schedule reconnect
-                if (this.ws) {
-                  this.ws.onclose = null;
-                  this.ws.close();
-                  this.ws = null;
-                }
+                ws.onclose = null;
+                ws.close();
+                this.ws = null;
                 this.connected = false;
                 this.scheduleReconnect();
                 return;
               }
               // Auth succeeded — restore normal message handler and mark ready
-              this.ws!.onmessage = originalOnMessage;
+              ws.onmessage = originalOnMessage;
               this.onAuthSuccess();
               return;
             }
@@ -239,7 +258,7 @@ export class WebSocketEventStoreAdapter implements EventStoreAdapter {
             // Non-JSON or unexpected message during auth — ignore
           }
           // Forward non-auth messages to the normal handler
-          if (this.ws) originalOnMessage?.call(this.ws, event);
+          originalOnMessage?.call(ws, event);
         };
         return;
       }
@@ -248,7 +267,8 @@ export class WebSocketEventStoreAdapter implements EventStoreAdapter {
       this.onAuthSuccess();
     };
 
-    this.ws.onmessage = (event: MessageEvent) => {
+    ws.onmessage = (event: MessageEvent) => {
+      if (stale()) return;
       try {
         const msg = JSON.parse(String(event.data)) as { type: string; [key: string]: unknown };
 
@@ -267,7 +287,9 @@ export class WebSocketEventStoreAdapter implements EventStoreAdapter {
       }
     };
 
-    this.ws.onclose = () => {
+    ws.onclose = () => {
+      if (stale()) return;
+      this.clearAuthTimer();
       this.connected = false;
       this.ws = null;
       // Cancel stability timer — connection dropped before 30s, keep backoff elevated
@@ -278,13 +300,14 @@ export class WebSocketEventStoreAdapter implements EventStoreAdapter {
       this.scheduleReconnect();
     };
 
-    this.ws.onerror = () => {
+    ws.onerror = () => {
       // onclose will fire after onerror
     };
   }
 
   disconnect(): void {
     this.connectGeneration++;
+    this.clearAuthTimer();
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
@@ -371,6 +394,13 @@ export class WebSocketEventStoreAdapter implements EventStoreAdapter {
   }
 
   // === Internal ===
+
+  private clearAuthTimer(): void {
+    if (this.authTimer) {
+      clearTimeout(this.authTimer);
+      this.authTimer = null;
+    }
+  }
 
   /** Called when auth succeeds (or is skipped for unauthenticated connections). */
   private onAuthSuccess(): void {

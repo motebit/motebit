@@ -65,6 +65,14 @@ const latest = (): FakeSocket => FakeSocket.instances[FakeSocket.instances.lengt
 const flush = () => vi.advanceTimersByTimeAsync(0);
 
 let minted = 0;
+/** When each minted token was minted (fake clock) — the relay's expiry model. */
+const mintedAt = new Map<string, number>();
+const TOKEN_TTL_MS = 5 * 60_000;
+let relayEvents: unknown[];
+let pullTokens: string[];
+/** When set, the FIRST bootstrap POST waits on it (holds connectRelay A mid-await). */
+let bootstrapGate: Promise<void> | null;
+let bootstrapStarted: (() => void) | null;
 function makeDeps(): SpatialSyncControllerDeps {
   const runtime = {
     getToolRegistry: () => ({ list: () => [] }),
@@ -86,24 +94,46 @@ function makeDeps(): SpatialSyncControllerDeps {
     getPlanStore: () => null,
     getPrivKey: () => new Uint8Array(32).fill(7),
     clearPrivKey: () => {},
-    getTokenFactory: () => async () => `minted-${++minted}`,
+    getTokenFactory: () => async () => {
+      const t = `minted-${++minted}`;
+      mintedAt.set(t, Date.now());
+      return t;
+    },
   };
 }
 
 let originalWebSocket: typeof globalThis.WebSocket;
 
 beforeEach(() => {
-  vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "setTimeout", "clearTimeout"] });
+  vi.useFakeTimers({
+    toFake: ["setInterval", "clearInterval", "setTimeout", "clearTimeout", "Date"],
+  });
   FakeSocket.instances = [];
   minted = 0;
+  mintedAt.clear();
+  relayEvents = [];
+  pullTokens = [];
+  bootstrapGate = null;
+  bootstrapStarted = null;
   originalWebSocket = globalThis.WebSocket;
   globalThis.WebSocket = FakeSocket as unknown as typeof WebSocket;
-  globalThis.fetch = vi.fn(async () => ({
-    ok: false,
-    status: 503,
-    text: async () => "",
-    json: async () => ({}),
-  })) as unknown as typeof fetch;
+  globalThis.fetch = vi.fn(async (url: string, init?: { headers?: Record<string, string> }) => {
+    if (String(url).endsWith("/api/v1/agents/bootstrap") && bootstrapGate) {
+      const gate = bootstrapGate;
+      bootstrapGate = null;
+      bootstrapStarted?.();
+      await gate;
+    }
+    if (String(url).includes("/sync/motebit-1/pull")) {
+      const token = (init?.headers?.["Authorization"] ?? "").replace(/^Bearer /, "");
+      pullTokens.push(token);
+      const at = mintedAt.get(token);
+      const live = at != null && Date.now() - at < TOKEN_TTL_MS;
+      if (!live) return { ok: false, status: 401, statusText: "expired", json: async () => ({}) };
+      return { ok: true, status: 200, json: async () => ({ events: relayEvents }) };
+    }
+    return { ok: false, status: 404, text: async () => "", json: async () => ({}) };
+  }) as unknown as typeof fetch;
 });
 
 afterEach(() => {
@@ -197,6 +227,75 @@ describe("spatial sync socket across token refreshes (#816)", () => {
     await refresh();
     expect(FakeSocket.instances.length).toBe(count + 1);
     expect(open()).toHaveLength(1);
+    await ctrl.disconnectRelay();
+  });
+
+  it("a newer connectRelay that builds no socket does not orphan the running one: commands still answered", async () => {
+    // The reviewer's probe: connectRelay A is mid-await when connectRelay B
+    // runs and builds no socket (no private key -> delegation-only).
+    let release!: () => void;
+    bootstrapGate = new Promise<void>((r) => {
+      release = r;
+    });
+    const started = new Promise<void>((r) => {
+      bootstrapStarted = r;
+    });
+    let keyAvailable = true;
+    const deps = makeDeps();
+    deps.getPrivKey = () => (keyAvailable ? new Uint8Array(32).fill(7) : null);
+    const ctrl = new SpatialSyncController(deps);
+
+    const connectA = ctrl.connectRelay();
+    await started;
+    keyAvailable = false;
+    await ctrl.connectRelay(); // B: no socket
+    keyAvailable = true;
+    release();
+    await connectA;
+    await flush();
+    expect(FakeSocket.instances).toHaveLength(1);
+    latest().accept();
+
+    latest().deliver({ type: "command_request", id: "cmd-a", command: "state" });
+    await flush();
+    expect(commandResponses(latest())).toEqual([{ id: "cmd-a", result: { summary: "ran state" } }]);
+    await ctrl.disconnectRelay();
+  });
+
+  it("the catch-up pull after refreshes past 5 minutes presents a live token and pulls the gap event", async () => {
+    const localStore = {
+      getLatestClock: vi.fn(async () => 0),
+      append: vi.fn(async () => {}),
+    };
+    const deps = makeDeps();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    deps.getStorage = () => ({ eventStore: localStore }) as any;
+    const ctrl = new SpatialSyncController(deps);
+    await connectAndAccept(ctrl);
+    await refresh(); // 4.5 min
+    relayEvents = [
+      {
+        event_id: "gap-event",
+        motebit_id: "motebit-1",
+        device_id: "other-device",
+        timestamp: 1,
+        event_type: "state_updated",
+        payload: { x: 1 },
+        version_clock: 5,
+        tombstoned: false,
+      },
+    ];
+    pullTokens = [];
+    await refresh(); // 9 min — the connect-time token is long expired
+    await flush();
+
+    expect(pullTokens.length).toBeGreaterThan(0);
+    const lastPull = pullTokens[pullTokens.length - 1]!;
+    expect(Date.now() - mintedAt.get(lastPull)!).toBeLessThan(TOKEN_TTL_MS);
+    const appended = localStore.append.mock.calls.map(
+      (c) => (c as unknown as [{ event_id: string }])[0].event_id,
+    );
+    expect(appended).toContain("gap-event");
     await ctrl.disconnectRelay();
   });
 });

@@ -81,6 +81,9 @@ function makeRuntime(): any {
 }
 
 let minted = 0;
+/** When each minted token was minted (fake clock) — the relay's expiry model. */
+const mintedAt = new Map<string, number>();
+const TOKEN_TTL_MS = 5 * 60_000;
 function makeDeps(runtime = makeRuntime()): SyncControllerDeps {
   return {
     getRuntime: () => runtime,
@@ -90,7 +93,11 @@ function makeDeps(runtime = makeRuntime()): SyncControllerDeps {
     getPlanStore: () => null,
     getLocalEventStore: () => null,
     getDeviceKeypair: async () => ({ publicKey: "a".repeat(64), privateKey: "b".repeat(64) }),
-    createSyncToken: vi.fn(async () => `minted-${++minted}`),
+    createSyncToken: vi.fn(async () => {
+      const t = `minted-${++minted}`;
+      mintedAt.set(t, Date.now());
+      return t;
+    }),
   };
 }
 
@@ -100,21 +107,37 @@ const flush = () => vi.advanceTimersByTimeAsync(0);
 let originalWebSocket: typeof globalThis.WebSocket;
 let relayKeyFetch: Promise<unknown> | null;
 let relayKeyFetchStarted: (() => void) | null;
+/** Events the fake relay serves on /pull to a caller with a live token. */
+let relayEvents: unknown[];
+let pullTokens: string[];
 
 beforeEach(() => {
-  vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "setTimeout", "clearTimeout"] });
+  vi.useFakeTimers({
+    toFake: ["setInterval", "clearInterval", "setTimeout", "clearTimeout", "Date"],
+  });
   FakeSocket.instances = [];
   minted = 0;
+  mintedAt.clear();
+  relayEvents = [];
+  pullTokens = [];
   relayKeyFetch = null;
   relayKeyFetchStarted = null;
   originalWebSocket = globalThis.WebSocket;
   globalThis.WebSocket = FakeSocket as unknown as typeof WebSocket;
-  globalThis.fetch = vi.fn(async (url: string) => {
+  globalThis.fetch = vi.fn(async (url: string, init?: { headers?: Record<string, string> }) => {
     if (String(url).endsWith("/.well-known/motebit.json") && relayKeyFetch) {
       relayKeyFetchStarted?.();
       await relayKeyFetch;
     }
-    return { ok: false, status: 503, text: async () => "", json: async () => ({}) };
+    if (String(url).includes("/sync/motebit-1/pull")) {
+      const token = (init?.headers?.["Authorization"] ?? "").replace(/^Bearer /, "");
+      pullTokens.push(token);
+      const at = mintedAt.get(token);
+      const live = at != null && Date.now() - at < TOKEN_TTL_MS;
+      if (!live) return { ok: false, status: 401, statusText: "expired", json: async () => ({}) };
+      return { ok: true, status: 200, json: async () => ({ events: relayEvents }) };
+    }
+    return { ok: false, status: 404, text: async () => "", json: async () => ({}) };
   }) as unknown as typeof fetch;
   const store = new Map<string, string>();
   (globalThis as { localStorage?: unknown }).localStorage = {
@@ -244,5 +267,83 @@ describe("desktop sync socket across token refreshes (#816)", () => {
     await flush();
     await vi.advanceTimersByTimeAsync(WS_TOKEN_REFRESH_MS * 3);
     expect(FakeSocket.instances).toHaveLength(0);
+  });
+
+  it("a newer startSync that bails early does not orphan the running one: commands still answered", async () => {
+    // The reviewer's probe: start A is awaiting the relay key when start B
+    // begins and bails before building anything (no keypair).
+    let release!: () => void;
+    relayKeyFetch = new Promise<void>((r) => {
+      release = r;
+    });
+    const started = new Promise<void>((r) => {
+      relayKeyFetchStarted = r;
+    });
+    let keypairAvailable = true;
+    const deps = makeDeps();
+    deps.getDeviceKeypair = async () =>
+      keypairAvailable ? { publicKey: "a".repeat(64), privateKey: "b".repeat(64) } : null;
+    const ctrl = new SyncController(deps);
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const startA = ctrl.startSync(vi.fn() as any, "https://relay.test");
+    await started;
+    keypairAvailable = false;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await ctrl.startSync(vi.fn() as any, "https://relay.test"); // B bails
+    relayKeyFetch = null;
+    release();
+    await startA;
+    await flush();
+    latest().accept();
+
+    expect(open()).toHaveLength(1);
+    latest().deliver({ type: "command_request", id: "cmd-a", command: "state" });
+    await flush();
+    expect(commandResponses(latest())).toEqual([{ id: "cmd-a", result: { summary: "ran state" } }]);
+    // And the refresh timer is A's: a refresh still leaves one answering socket.
+    await refresh();
+    latest().deliver({ type: "command_request", id: "cmd-b", command: "state" });
+    await flush();
+    expect(commandResponses(latest())).toEqual([{ id: "cmd-b", result: { summary: "ran state" } }]);
+    ctrl.stopSync();
+  });
+
+  it("the catch-up pull after refreshes past 5 minutes presents a live token and pulls the gap event", async () => {
+    const localStore = {
+      getLatestClock: vi.fn(async () => 0),
+      append: vi.fn(async () => {}),
+    };
+    const deps = makeDeps();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    deps.getLocalEventStore = () => localStore as any;
+    const ctrl = new SyncController(deps);
+    await startAndAccept(ctrl);
+    await refresh(); // 4.5 min
+    // An event lands on the relay while the socket is being swapped.
+    relayEvents = [
+      {
+        event_id: "gap-event",
+        motebit_id: "motebit-1",
+        device_id: "other-device",
+        timestamp: 1,
+        event_type: "state_updated",
+        payload: { x: 1 },
+        version_clock: 5,
+        tombstoned: false,
+      },
+    ];
+    pullTokens = [];
+    await refresh(); // 9 min — the first token is long expired
+    await flush();
+
+    expect(pullTokens.length).toBeGreaterThan(0);
+    const lastPull = pullTokens[pullTokens.length - 1]!;
+    expect(Date.now() - mintedAt.get(lastPull)!).toBeLessThan(TOKEN_TTL_MS);
+    const appended = localStore.append.mock.calls.map(
+      (c) => (c as unknown as [{ event_id: string }])[0].event_id,
+    );
+    expect(appended).toContain("gap-event");
+    ctrl.stopSync();
   });
 });
