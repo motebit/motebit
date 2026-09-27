@@ -58,6 +58,7 @@ import { LIVENESS_SESSION_GAP_MS } from "./runtime-coverage.js";
 import { handleRelayCommandFrame } from "./relay-command-frame.js";
 import { fromHex, loadActiveSigningKey, IdentityKeyError } from "./identity.js";
 import { registerWithRelay, type RelayRegistrationHandle } from "./relay-registration.js";
+import { createRelaySyncSocket } from "./relay-sync-socket.js";
 import { enrollOnAnnounce } from "./machine-roster.js";
 import {
   electAttachOrCoordinate,
@@ -417,23 +418,10 @@ export async function handleRun(config: CliConfig): Promise<void> {
       }
     }
 
-    // Set up WebSocket adapter for real-time task dispatch
-    const wsUrl = syncUrl.replace(/^http/, "ws") + `/ws/sync/${motebitId}`;
-
-    // Create a signed auth token for the WS connection
-    let authToken = syncToken;
-    if (privKeyBytes && fullConfig.device_id) {
-      try {
-        authToken = (
-          await mintAudienceToken(
-            { mid: motebitId, did: fullConfig.device_id, aud: "sync" },
-            privKeyBytes,
-          )
-        ).token;
-      } catch {
-        // Fall back to sync token
-      }
-    }
+    // The WebSocket for real-time task dispatch is built below by
+    // `createRelaySyncSocket`, which mints a fresh signed sync token on
+    // EVERY (re)connect (#820) — a token minted once here expired after
+    // five minutes, and every later reconnect was refused for good.
 
     const httpAdapter = new HttpEventStoreAdapter({
       baseUrl: syncUrl,
@@ -458,16 +446,25 @@ export async function handleRun(config: CliConfig): Promise<void> {
       DeviceCapability.RunLedger,
     ];
 
-    wsAdapter = new WebSocketEventStoreAdapter({
-      url: wsUrl,
+    wsAdapter = createRelaySyncSocket({
+      syncUrl,
       motebitId,
-      authToken,
-      capabilities: cliCapabilities,
       // Declared, not invented. The relay groups peers by machine to
       // decide whether two unattended runtimes share a database; without
       // this it assigns a random id per connection and reads this
       // process and `motebit serve` as two separate machines.
-      ...(fullConfig.device_id != null ? { deviceId: fullConfig.device_id } : {}),
+      deviceId: fullConfig.device_id ?? undefined,
+      // Read at each mint. Shutdown zero-fills the key AND drops this
+      // reference, so a reconnect after it falls back instead of minting
+      // from zeroed bytes (the source also refuses an all-zero key).
+      privateKey: () => privKeyBytes,
+      ...(syncToken != null ? { fallbackToken: syncToken } : {}),
+      onMintError: (err: unknown) => {
+        console.warn(
+          `Warning: could not mint a relay sync token (${err instanceof Error ? err.message : String(err)}) — connecting with the configured token instead`,
+        );
+      },
+      capabilities: cliCapabilities,
       httpFallback: httpAdapter,
       localStore: moteDb.eventStore,
     });
@@ -626,7 +623,9 @@ export async function handleRun(config: CliConfig): Promise<void> {
         }
       });
 
-      console.log(`Agent surface: active (WS → ${wsUrl.replace(/token=.*/, "token=***")})`);
+      console.log(
+        `Agent surface: active (WS → ${syncUrl.replace(/^http/, "ws")}/ws/sync/${motebitId})`,
+      );
     } else {
       console.log("Agent surface: inactive — passphrase required to sign auth tokens");
     }
@@ -767,8 +766,13 @@ export async function handleRun(config: CliConfig): Promise<void> {
       void runtimeHostServer.close().catch(() => {});
       runtime.stop();
       moteDb.close();
-      // Erase long-lived private key bytes from daemon scope
-      if (privKeyBytes) secureErase(privKeyBytes);
+      // Erase long-lived private key bytes from daemon scope, and drop the
+      // reference: the relay socket's credential source reads it at each
+      // mint, and must see "no key", never a zero-filled one.
+      if (privKeyBytes) {
+        secureErase(privKeyBytes);
+        privKeyBytes = undefined;
+      }
     } catch (err: unknown) {
       console.error("Shutdown error:", err instanceof Error ? err.message : String(err));
     }
@@ -1484,22 +1488,9 @@ export async function handleServe(config: CliConfig): Promise<void> {
     const masterToken = config.syncToken ?? process.env["MOTEBIT_API_TOKEN"];
 
     if (servePrivateKey && deps.handleAgentTask) {
-      const wsUrl = syncUrl.replace(/^http/, "ws") + `/ws/sync/${motebitId}`;
-
-      // Mint a signed auth token if we have device_id + private key
-      let wsAuthToken = masterToken;
-      if (fullConfigForServe.device_id) {
-        try {
-          wsAuthToken = (
-            await mintAudienceToken(
-              { mid: motebitId, did: fullConfigForServe.device_id, aud: "sync" },
-              servePrivateKey,
-            )
-          ).token;
-        } catch {
-          // Fall back to master token
-        }
-      }
+      // Built below by `createRelaySyncSocket`: a fresh signed sync token
+      // on every (re)connect, the master token only when none can be
+      // minted (#820 — the same once-minted token as `motebit run`'s).
 
       const httpAdapter = new HttpEventStoreAdapter({
         baseUrl: syncUrl,
@@ -1507,10 +1498,18 @@ export async function handleServe(config: CliConfig): Promise<void> {
         authToken: masterToken,
       });
 
-      serveWsAdapter = new WebSocketEventStoreAdapter({
-        url: wsUrl,
+      serveWsAdapter = createRelaySyncSocket({
+        syncUrl,
         motebitId,
-        authToken: wsAuthToken,
+        // Read at each mint; shutdown zero-fills the key and drops this
+        // reference, as `motebit run` does.
+        privateKey: () => servePrivateKey,
+        ...(masterToken != null ? { fallbackToken: masterToken } : {}),
+        onMintError: (err: unknown) => {
+          log(
+            `Warning: could not mint a relay sync token (${err instanceof Error ? err.message : String(err)}) — connecting with the master token instead`,
+          );
+        },
         // Serve mode wires the halt store and executes relay-dispatched
         // work, so it is an unattended runtime and says so — without
         // this the relay refuses to route a halt here at all, and a
@@ -1519,7 +1518,7 @@ export async function handleServe(config: CliConfig): Promise<void> {
         capabilities: [DeviceCapability.HttpMcp, DeviceCapability.UnattendedRuntime],
         // Same machine as `motebit run` when both are local — see the
         // daemon's own socket above.
-        ...(fullConfigForServe.device_id != null ? { deviceId: fullConfigForServe.device_id } : {}),
+        deviceId: fullConfigForServe.device_id ?? undefined,
         httpFallback: httpAdapter,
         localStore: moteDb.eventStore,
       });
@@ -1751,6 +1750,12 @@ export async function handleServe(config: CliConfig): Promise<void> {
       unregisterServeHalt?.();
       runtime.stop();
       moteDb.close();
+      // Erase the long-lived private key, as `motebit run` does, and drop
+      // the reference the relay socket's credential source reads.
+      if (servePrivateKey) {
+        secureErase(servePrivateKey);
+        servePrivateKey = undefined;
+      }
     } catch (err: unknown) {
       log(`Shutdown error: ${err instanceof Error ? err.message : String(err)}`);
     }
