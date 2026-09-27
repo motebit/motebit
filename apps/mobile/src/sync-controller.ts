@@ -84,12 +84,23 @@ export class MobileSyncController {
    * cycle takes a number, and a cycle may connect its socket only if no
    * newer cycle has connected one already; connecting closes the socket it
    * replaces. An overtaken cycle releases its unconnected socket and still
-   * runs its HTTP sync. `_runEpoch` moves on every start and stop, so a
-   * cycle of a stopped (or restarted) run does nothing further.
+   * runs its HTTP sync.
+   *
+   * Runs: `_runEpoch` moves when a run's engines are created and on stop;
+   * `_runUrl` is the relay the current run syncs with (null when stopped).
+   * A cycle whose run was replaced never connects its socket. Its HTTP
+   * sync continues — on the CURRENT run's engines — when the current run
+   * targets the same relay (a stop and restart, or a re-entered startSync,
+   * to the same relay: main syncs there too). It does nothing further when
+   * the controller is stopped or the current run targets another relay:
+   * its token and URL belong to a relay the user left.
    */
   private _cycleSeq = 0;
   private _socketCycle = 0;
   private _runEpoch = 0;
+  private _runUrl: string | null = null;
+  /** Engines that have a remote (a live socket's, or an HTTP fallback). */
+  private _enginesWithRemote = new WeakSet<SyncEngine>();
   private _syncStatus: SyncStatus = "offline";
   private _syncStatusCallback: ((status: SyncStatus, lastSync: number) => void) | null = null;
   private _lastSyncTime = 0;
@@ -239,7 +250,6 @@ export class MobileSyncController {
   }
 
   async startSync(syncUrl?: string): Promise<void> {
-    this._runEpoch++;
     const url = syncUrl != null && syncUrl !== "" ? syncUrl : await this.getSyncUrl();
     const storage = this.deps.getStorage();
     if (url == null || url === "" || !storage) return;
@@ -263,6 +273,10 @@ export class MobileSyncController {
       motebitId,
       { sync_interval_ms: SYNC_INTERVAL_MS },
     );
+    // A new run begins only here, past every early return: a startSync that
+    // bails never replaces the running one.
+    this._runEpoch++;
+    this._runUrl = url;
 
     this._syncStatus = "idle";
     this._syncStatusCallback?.("idle", this._lastSyncTime);
@@ -338,6 +352,7 @@ export class MobileSyncController {
 
   stopSync(): void {
     this._runEpoch++;
+    this._runUrl = null;
     this.deps.stopPushLifecycle();
     if (this.syncTimer) {
       clearInterval(this.syncTimer);
@@ -414,17 +429,23 @@ export class MobileSyncController {
   }
 
   private async syncCycle(syncUrl: string): Promise<void> {
-    // This cycle's engines and run: after a stop (or a stop and a restart to
-    // another relay) a resumed cycle must not drive the new run's engines
-    // against its own, old URL.
-    const engine = this.syncEngine;
-    const convEngine = this.conversationSyncEngine;
-    if (!engine || !convEngine) return;
+    if (!this.syncEngine || !this.conversationSyncEngine) return;
     const storage = this.deps.getStorage();
     if (!storage) return;
     const run = this._runEpoch;
     const cycle = ++this._cycleSeq;
-    const stale = (): boolean => run !== this._runEpoch;
+    // The engines this cycle may drive, read at each use: the current run's,
+    // while it syncs with this cycle's relay; null once the controller is
+    // stopped or the current run targets another relay (see `_runUrl`).
+    const live = (): { engine: SyncEngine; convEngine: ConversationSyncEngine } | null =>
+      this._runUrl === syncUrl && this.syncEngine && this.conversationSyncEngine
+        ? { engine: this.syncEngine, convEngine: this.conversationSyncEngine }
+        : null;
+    const stale = (): boolean => live() == null;
+    const giveRemote = (engine: SyncEngine, remote: EventStoreAdapter): void => {
+      engine.connectRemote(remote);
+      this._enginesWithRemote.add(engine);
+    };
     const motebitId = this.deps.getMotebitId();
 
     this._syncStatus = "syncing";
@@ -633,7 +654,13 @@ export class MobileSyncController {
           });
         }
 
-        if (cycle > this._socketCycle) {
+        const current = live();
+        if (!current) {
+          unsubEvent();
+          wsAdapter.disconnect();
+          return;
+        }
+        if (run === this._runEpoch && cycle > this._socketCycle) {
           // Newest ready socket: it replaces the live one (make-before-break
           // at the cycle level — the replaced socket closes here, not at the
           // start of the cycle).
@@ -643,15 +670,20 @@ export class MobileSyncController {
           this._wsUnsubOnEvent = unsubEvent;
           this._socketCycle = cycle;
           if (runtime && delegationAdapter) runtime.setDelegationAdapter(delegationAdapter);
-          engine.connectRemote(encryptedWs);
+          giveRemote(current.engine, encryptedWs);
           wsAdapter.connect();
         } else {
-          // A newer cycle already connected its socket: connecting this one
-          // would open a socket nothing owns — open at the relay, counted in
-          // its liveness, never closed (#816). Release it; the HTTP sync
-          // below still runs, against the live socket's remote.
+          // A newer cycle already connected its socket, or this cycle's run
+          // was replaced: connecting this one would open a socket nothing
+          // owns — open at the relay, counted in its liveness, never closed
+          // (#816). Release it; the HTTP sync below still runs, against the
+          // live socket's remote (or over HTTP if no socket has connected
+          // for the current engines yet).
           unsubEvent();
           wsAdapter.disconnect();
+          if (!this._enginesWithRemote.has(current.engine)) {
+            giveRemote(current.engine, encryptedHttp);
+          }
         }
 
         // Recover any delegated steps orphaned by a previous app close
@@ -668,7 +700,9 @@ export class MobileSyncController {
         }
       } else {
         // Fallback: no encryption key available
-        engine.connectRemote(httpAdapter);
+        const current = live();
+        if (!current) return;
+        giveRemote(current.engine, httpAdapter);
       }
 
       // Conversation sync (encrypted at relay boundary)
@@ -677,15 +711,18 @@ export class MobileSyncController {
         motebitId,
         authToken: token,
       });
-      convEngine.connectRemote(
+      const forConv = live();
+      if (!forConv) return;
+      forConv.convEngine.connectRemote(
         encKey
           ? new EncryptedConversationSyncAdapter({ inner: convHttpAdapter, key: encKey })
           : convHttpAdapter,
       );
 
-      await engine.sync();
-      if (stale()) return;
-      await convEngine.sync();
+      await forConv.engine.sync();
+      const afterEvent = live();
+      if (!afterEvent) return;
+      await afterEvent.convEngine.sync();
       if (stale()) return;
 
       // Plan sync — push/pull plans for cross-device visibility

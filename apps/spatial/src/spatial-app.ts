@@ -328,6 +328,7 @@ export class SpatialApp {
         this._privKeyBytes = null;
       },
       getTokenFactory: () => this.tokenFactory,
+      mintToken: (aud) => this.createSyncToken(aud),
     });
 
     // Wire voice pipeline callbacks
