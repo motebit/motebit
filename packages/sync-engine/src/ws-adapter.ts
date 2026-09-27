@@ -89,6 +89,13 @@ export class WebSocketEventStoreAdapter implements EventStoreAdapter {
   private stabilityTimer: ReturnType<typeof setTimeout> | null = null;
   private connected = false;
   private pendingEvents: EventLogEntry[] = [];
+  /**
+   * Bumped by every `disconnect()`. A connect that is still resolving its
+   * credential (or the `ws` import) when the adapter is disconnected must
+   * not open a socket afterwards — that socket would belong to nobody:
+   * open at the relay, counted in its liveness, and never closed.
+   */
+  private connectGeneration = 0;
 
   constructor(config: WebSocketAdapterConfig) {
     this.config = {
@@ -105,20 +112,57 @@ export class WebSocketEventStoreAdapter implements EventStoreAdapter {
 
     // If a credentialSource is provided, resolve the token asynchronously
     // before establishing the connection. Falls back to static authToken.
+    const generation = this.connectGeneration;
     if (this.config.credentialSource) {
       const request: CredentialRequest = { serverUrl: this.config.url };
-      void this.config.credentialSource.getCredential(request).then((token) => {
-        this.connectWithToken(token ?? undefined);
-      });
+      void this.config.credentialSource.getCredential(request).then(
+        (token) => {
+          this.connectWithToken(token ?? undefined, generation);
+        },
+        () => {
+          // No credential this time — retry with backoff, unless this
+          // connect was abandoned by a disconnect() meanwhile.
+          if (generation === this.connectGeneration) this.scheduleReconnect();
+        },
+      );
       return;
     }
 
-    this.connectWithToken(this.config.authToken ?? undefined);
+    this.connectWithToken(this.config.authToken ?? undefined, generation);
+  }
+
+  /**
+   * Replace the socket with a fresh one, re-resolving the credential.
+   *
+   * This is the token-refresh door. It keeps the ADAPTER and swaps only the
+   * socket, so every `onEvent` / `onCustomMessage` handler, the pending
+   * outbound events, and the config callbacks (`onCatchUp`) carry over by
+   * construction — a refresh cannot leave a handler behind, and it cannot
+   * leave the replaced socket open. (Building a new adapter per refresh did
+   * both: the handlers stayed on the first adapter, and the refresh closed
+   * the first adapter's socket every time, so every intermediate socket
+   * stayed open and deaf — #816.)
+   *
+   * Order: the old socket closes before the new one opens, so the relay
+   * never holds two sockets for this adapter. Events published in the gap
+   * are not lost — the new socket's auth success runs the catch-up pull
+   * (`httpFallback` + `localStore`), the same path an ordinary drop and
+   * reconnect takes. A relay frame addressed to this device during the gap
+   * finds no socket and is answered by the relay ("Agent not connected"),
+   * not silently delivered to a socket nobody reads.
+   *
+   * Use a `credentialSource` for a refresh to carry a new token; with a
+   * static `authToken` it reconnects with the same one.
+   */
+  refreshConnection(): void {
+    this.disconnect();
+    this.connect();
   }
 
   /** Internal: establish the WebSocket connection with an already-resolved token. */
-  private connectWithToken(token: string | undefined): void {
+  private connectWithToken(token: string | undefined, generation: number): void {
     if (this.ws) return;
+    if (generation !== this.connectGeneration) return;
 
     // Post-connect auth: never put tokens in the URL. Auth is sent as the first
     // WebSocket frame after the connection opens, avoiding exposure in server logs,
@@ -142,7 +186,7 @@ export class WebSocketEventStoreAdapter implements EventStoreAdapter {
     } else if (_wsPackage) {
       this.ws = new _wsPackage(url);
     } else {
-      void resolveWebSocket().then(() => this.connectWithToken(token));
+      void resolveWebSocket().then(() => this.connectWithToken(token, generation));
       return;
     }
 
@@ -240,6 +284,7 @@ export class WebSocketEventStoreAdapter implements EventStoreAdapter {
   }
 
   disconnect(): void {
+    this.connectGeneration++;
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
