@@ -687,6 +687,10 @@ describe("forwardTaskViaMcp reports whether it stored a receipt", () => {
     let srv: Server | undefined;
     let toolsCalls = 0;
     srv = createServer((req, res) => {
+      if (req.method === "GET") {
+        res.end("ok");
+        return;
+      }
       let body = "";
       req.on("data", (c: Buffer) => (body += c.toString()));
       req.on("end", () => {
