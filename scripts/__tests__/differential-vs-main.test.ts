@@ -32,7 +32,7 @@
  *     by the root package.json — surface-kit ← semiring. proto and hoisted
  *     build with the real `tsc -b`, so the staleness repair is exercised
  *     against tsc's real skip behaviour.
- *   - Real-repo smoke (opt-in, `MOTEBIT_DIFFERENTIAL_SMOKE=1`, ~90 s once the
+ *   - Real-repo smoke (opt-in, `MOTEBIT_DIFFERENTIAL_SMOKE=1`, 2-3 min once the
  *     working tree is built): a planted protocol change observed through
  *     mobile's creature bundle and through semiring from surface-kit. The
  *     planted base commit lives in a temp bare repository whose object store
