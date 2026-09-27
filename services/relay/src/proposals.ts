@@ -6,15 +6,22 @@ import type { Hono } from "hono";
 import { HTTPException } from "hono/http-exception";
 import type { MotebitDatabase } from "@motebit/persistence";
 import type { ConnectedDevice } from "./index.js";
+import type { AuthEvent } from "./auth-events.js";
 
 export interface ProposalsDeps {
   app: Hono;
   moteDb: MotebitDatabase;
   connections: Map<string, ConnectedDevice[]>;
+  /**
+   * Durable auth-event record (rule 6): a response refused because the
+   * responder is not a named participant (spec/proposals-v1.md §3.2) is
+   * recorded. Required, so a refactor cannot drop it silently.
+   */
+  recordAuthEvent: (event: AuthEvent) => void;
 }
 
 export function registerProposalRoutes(deps: ProposalsDeps): void {
-  const { app, moteDb, connections } = deps;
+  const { app, moteDb, connections, recordAuthEvent } = deps;
 
   /** @spec motebit/proposals@1.0 */
   app.post("/api/v1/proposals", async (c) => {
@@ -134,6 +141,31 @@ export function registerProposalRoutes(deps: ProposalsDeps): void {
       .prepare("SELECT * FROM relay_proposals WHERE proposal_id = ?")
       .get(proposalId) as Record<string, unknown> | undefined;
     if (!proposal) throw new HTTPException(404, { message: "Proposal not found" });
+
+    // §3.2 participant binding: a relay MUST reject a response from a motebit
+    // the proposal does not name. Checked before anything is written or sent —
+    // a non-participant used to get 200 (its UPDATE matched no row) and the
+    // initiator still received a `proposal_response` frame in its name (#827).
+    const isParticipant =
+      moteDb.db
+        .prepare(
+          "SELECT 1 FROM relay_proposal_participants WHERE proposal_id = ? AND motebit_id = ?",
+        )
+        .get(proposalId, responderId) != null;
+    if (!isParticipant) {
+      recordAuthEvent({
+        kind: "agent_token_rejected",
+        method: "POST",
+        path: c.req.path,
+        // The subject of a refusal is whoever presented it.
+        motebitId: callerMotebitId ?? null,
+        audience: "proposal",
+        reason: "proposal:not_a_participant",
+        correlationId: c.req.header("x-correlation-id") ?? null,
+      });
+      throw new HTTPException(403, { message: "Responder is not a participant in this proposal" });
+    }
+
     if (proposal.status !== "pending")
       throw new HTTPException(409, {
         message: `Proposal is ${proposal.status as string}, cannot respond`,

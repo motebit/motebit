@@ -1127,6 +1127,12 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     isAgentRevoked,
     verifySignedTokenForDevice: verifySignedTokenForDeviceWithFallback,
     parseTokenPayloadUnsafe,
+    // Every dualAuth door (task submit, the account family, market
+    // candidates, the browser-sandbox grant) records its master-token
+    // presentations and refusals (rule 6). This recorder was never passed,
+    // so those doors recorded nothing — invisible until #827 carved the
+    // browser-sandbox grant out of the catch-all, which HAD recorded it.
+    recordAuthEvent: authEvents.record,
   });
 
   // --- Federation routes ---
@@ -1532,7 +1538,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
 
   // --- Listings & market routes ---
   // --- Collaborative proposal routes ---
-  registerProposalRoutes({ app, moteDb, connections });
+  registerProposalRoutes({ app, moteDb, connections, recordAuthEvent: authEvents.record });
 
   // --- Key rotation, revocation & approval routes ---
   registerKeyRotationRoutes({

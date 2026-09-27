@@ -214,7 +214,22 @@ export class SyncController {
    * Start full sync: event-level background polling + one-shot conversation sync.
    * Call after pairing completes or at app startup when syncUrl is configured.
    */
-  async startSync(invoke: InvokeFn, syncUrl: string, authToken?: string): Promise<void> {
+  /**
+   * @param authToken the socket bearer — normally the device `sync` token
+   *   `registerWithRelay` returned, else the operator master token.
+   * @param masterToken the operator's master token, ONLY when one is
+   *   configured. The serving calls (registration, task results) send it when
+   *   present; otherwise they mint the audience their route verifies. They
+   *   used to treat `authToken` as the master token, so a normal desktop sent
+   *   its `sync` token to `/agents/register` (admin:query) and the result
+   *   route (task:result) and both were refused (#827).
+   */
+  async startSync(
+    invoke: InvokeFn,
+    syncUrl: string,
+    authToken?: string,
+    masterToken?: string,
+  ): Promise<void> {
     const runtime = this.deps.getRuntime();
     if (!runtime) return;
     const motebitId = this.deps.getMotebitId();
@@ -360,9 +375,9 @@ export class SyncController {
     this._servingPrivateKey = servingPrivKey;
     this._servingSyncUrl = syncUrl;
     this._servingAuthToken = token;
-    const masterToken = authToken != null && authToken !== "" ? authToken : null;
+    const master = masterToken != null && masterToken !== "" ? masterToken : null;
     this._servingToken = async (audience) =>
-      masterToken ?? this.deps.createSyncToken(privKeyHex, audience);
+      master ?? this.deps.createSyncToken(privKeyHex, audience);
 
     // Wire task handler — accept delegations from the network.
     // The liquescent droplet becomes a body that works, not just a face that talks.
