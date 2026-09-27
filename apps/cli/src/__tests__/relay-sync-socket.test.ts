@@ -10,8 +10,10 @@
  *
  * Driven against a real relay (`createSyncRelay` behind `@hono/node-server`)
  * over real sockets, with a short injected TTL: connect, let the token
- * expire, have the relay drop the socket, and prove the daemon is back —
- * registered, verified, and answering a signed command.
+ * expire, then close the socket from the relay's side — the TEST closes it;
+ * the relay does not close a socket when its token expires, a flap or a
+ * deploy does — and prove the daemon is back: registered, verified, and
+ * answering a signed command.
  */
 import { describe, it, expect, afterEach } from "vitest";
 import type { AddressInfo } from "node:net";
@@ -22,6 +24,7 @@ import {
   bytesToHex,
   deriveSovereignMotebitId,
   generateKeypair,
+  secureErase,
   signAgentCommandEnvelope,
 } from "@motebit/encryption";
 import type { KeyPair } from "@motebit/encryption";
@@ -148,7 +151,8 @@ describe.each([
     expect(first.deviceIdVerified).toBe(true);
 
     // Outlive the token, then lose the connection the way a flap or a
-    // relay restart does: the server side goes away.
+    // relay restart does: the test closes the server side (the relay
+    // itself never closes a socket because its token expired).
     await new Promise((r) => setTimeout(r, 1_000));
     first.ws.close(1001, "going away");
 
@@ -179,6 +183,11 @@ describe("both daemon paths build their relay socket through createRelaySyncSock
     expect(src.match(/createRelaySyncSocket\(\{/g) ?? []).toHaveLength(2);
     expect(src).not.toMatch(/new WebSocketEventStoreAdapter\(/);
     expect(src).not.toMatch(/aud: "sync"/);
+    // A failed mint is logged on both paths.
+    expect(src.match(/\bonMintError: \(err: unknown\) =>/g) ?? []).toHaveLength(2);
+    // Shutdown drops the reference the credential source reads, on both paths.
+    expect(src).toMatch(/secureErase\(privKeyBytes\);\s*privKeyBytes = undefined;/);
+    expect(src).toMatch(/secureErase\(servePrivateKey\);\s*servePrivateKey = undefined;/);
   });
 });
 
@@ -213,17 +222,71 @@ describe("deviceSyncCredentialSource", () => {
     expect(await noDevice.getCredential({ serverUrl: "ws://x" })).toBeNull();
   });
 
-  it("never rejects: a failed mint falls back and is reported", async () => {
+  it("never rejects: a failed mint falls back and is reported ONCE PER failure", async () => {
     const errors: unknown[] = [];
     const source = deviceSyncCredentialSource({
       motebitId: "m",
       deviceId: "d",
-      privateKey: () => new Uint8Array(3), // not a key
+      privateKey: () => new Uint8Array([1, 2, 3]), // not a key
       fallbackToken: MASTER,
       onMintError: (err) => errors.push(err),
     });
     expect(await source.getCredential({ serverUrl: "ws://x" })).toBe(MASTER);
     expect(errors).toHaveLength(1);
+    expect(await source.getCredential({ serverUrl: "ws://x" })).toBe(MASTER);
+    expect(errors).toHaveLength(2);
+  });
+
+  it("an ERASED key (zero-filled in place, reference still held) is never minted from: the fallback", async () => {
+    const kp = await generateKeypair();
+    const key = kp.privateKey;
+    const errors: unknown[] = [];
+    const source = deviceSyncCredentialSource({
+      motebitId: "m",
+      deviceId: "d",
+      privateKey: () => key,
+      fallbackToken: MASTER,
+      onMintError: (err) => errors.push(err),
+    });
+    const before = await source.getCredential({ serverUrl: "ws://x" });
+    expect(before).not.toBe(MASTER);
+    secureErase(key);
+    expect(key.every((b) => b === 0)).toBe(true);
+    // No token minted from an all-zero seed: the fallback, and no mint was tried.
+    expect(await source.getCredential({ serverUrl: "ws://x" })).toBe(MASTER);
+    expect(errors).toHaveLength(0);
+  });
+
+  it("after shutdown's erase-and-drop, a live reconnect takes the fallback (the master token)", async () => {
+    const syncUrl = await startRelay();
+    const { mid, deviceId, kp } = await registeredDevice();
+    let held: Uint8Array | undefined = kp.privateKey;
+    const socket = createRelaySyncSocket({
+      syncUrl,
+      motebitId: mid,
+      deviceId,
+      privateKey: () => held,
+      fallbackToken: MASTER,
+      capabilities: ["unattended_runtime"],
+      reconnectBaseMs: 50,
+    });
+    sockets.push(socket);
+    socket.connect();
+    await waitFor(() => peers(mid).length === 1, "the first connection");
+    const first = peers(mid)[0]!;
+    expect(first.deviceIdVerified).toBe(true);
+
+    // What the daemon's shutdown does: zero-fill in place, then drop.
+    secureErase(held!);
+    held = undefined;
+    first.ws.close(1001, "going away");
+    await waitFor(
+      () => peers(mid).length === 1 && peers(mid)[0] !== first,
+      "the reconnect on the fallback",
+    );
+    // Admitted by the master token, not by a token minted from zeroed bytes.
+    expect(peers(mid)[0]!.deviceIdVerified).toBe(false);
+    expect(peers(mid)[0]!.authenticatedUnder).toBeUndefined();
   });
 
   it("with no key the socket still connects on the static fallback (the master token)", async () => {

@@ -454,9 +454,16 @@ export async function handleRun(config: CliConfig): Promise<void> {
       // this it assigns a random id per connection and reads this
       // process and `motebit serve` as two separate machines.
       deviceId: fullConfig.device_id ?? undefined,
-      // Read at each mint, never captured: the key is erased on shutdown.
+      // Read at each mint. Shutdown zero-fills the key AND drops this
+      // reference, so a reconnect after it falls back instead of minting
+      // from zeroed bytes (the source also refuses an all-zero key).
       privateKey: () => privKeyBytes,
       ...(syncToken != null ? { fallbackToken: syncToken } : {}),
+      onMintError: (err: unknown) => {
+        console.warn(
+          `Warning: could not mint a relay sync token (${err instanceof Error ? err.message : String(err)}) — connecting with the configured token instead`,
+        );
+      },
       capabilities: cliCapabilities,
       httpFallback: httpAdapter,
       localStore: moteDb.eventStore,
@@ -759,8 +766,13 @@ export async function handleRun(config: CliConfig): Promise<void> {
       void runtimeHostServer.close().catch(() => {});
       runtime.stop();
       moteDb.close();
-      // Erase long-lived private key bytes from daemon scope
-      if (privKeyBytes) secureErase(privKeyBytes);
+      // Erase long-lived private key bytes from daemon scope, and drop the
+      // reference: the relay socket's credential source reads it at each
+      // mint, and must see "no key", never a zero-filled one.
+      if (privKeyBytes) {
+        secureErase(privKeyBytes);
+        privKeyBytes = undefined;
+      }
     } catch (err: unknown) {
       console.error("Shutdown error:", err instanceof Error ? err.message : String(err));
     }
@@ -1489,8 +1501,15 @@ export async function handleServe(config: CliConfig): Promise<void> {
       serveWsAdapter = createRelaySyncSocket({
         syncUrl,
         motebitId,
+        // Read at each mint; shutdown zero-fills the key and drops this
+        // reference, as `motebit run` does.
         privateKey: () => servePrivateKey,
         ...(masterToken != null ? { fallbackToken: masterToken } : {}),
+        onMintError: (err: unknown) => {
+          log(
+            `Warning: could not mint a relay sync token (${err instanceof Error ? err.message : String(err)}) — connecting with the master token instead`,
+          );
+        },
         // Serve mode wires the halt store and executes relay-dispatched
         // work, so it is an unattended runtime and says so — without
         // this the relay refuses to route a halt here at all, and a
@@ -1731,6 +1750,12 @@ export async function handleServe(config: CliConfig): Promise<void> {
       unregisterServeHalt?.();
       runtime.stop();
       moteDb.close();
+      // Erase the long-lived private key, as `motebit run` does, and drop
+      // the reference the relay socket's credential source reads.
+      if (servePrivateKey) {
+        secureErase(servePrivateKey);
+        servePrivateKey = undefined;
+      }
     } catch (err: unknown) {
       log(`Shutdown error: ${err instanceof Error ? err.message : String(err)}`);
     }

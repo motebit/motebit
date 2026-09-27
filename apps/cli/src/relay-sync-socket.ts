@@ -13,8 +13,22 @@
  *
  * So the adapter gets a `CredentialSource` instead of a string. The
  * adapter resolves it on every (re)connect, and this one mints a fresh
- * token from the device key each time. The key is read through a getter,
- * never captured: the daemon erases it on shutdown.
+ * token from the device key each time.
+ *
+ * The key is read through a getter at each mint. On shutdown the daemon
+ * zero-fills the key buffer in place (`secureErase`) and then drops its
+ * reference, so the getter returns nothing and the source falls back. The
+ * source also refuses an all-zero key outright: a reconnect that reads the
+ * buffer after it was zero-filled, before the reference was dropped, must
+ * not mint a token from an all-zero seed (the relay would refuse it, and
+ * the configured fallback would never be tried).
+ *
+ * Known residual, not this module's: the adapter's `connect()` awaits the
+ * credential without a connect-generation check, so a `disconnect()` that
+ * lands while a reconnect is minting can leave that socket open. `run`
+ * exits synchronously after disconnecting and cannot hit it; `serve`'s
+ * window is milliseconds before `process.exit`. #816's adapter rebuild
+ * (a connect-generation guard in `ws-adapter.ts`) closes it.
  */
 import { mintAudienceToken } from "@motebit/encryption";
 import { WebSocketEventStoreAdapter } from "@motebit/sync-engine";
@@ -35,7 +49,10 @@ export interface DeviceSyncCredentialOptions {
   fallbackToken?: string;
   /** Token lifetime. Default: `mintAudienceToken`'s own (5 minutes). A test seam. */
   ttlMs?: number;
-  /** Told when a mint fails and the fallback is used instead. */
+  /**
+   * Told when a mint fails and the fallback is used instead — once per
+   * failed mint. Never passed the token or the key.
+   */
   onMintError?: (err: unknown) => void;
 }
 
@@ -48,7 +65,7 @@ export function deviceSyncCredentialSource(opts: DeviceSyncCredentialOptions): C
   return {
     async getCredential(): Promise<string | null> {
       const key = opts.privateKey();
-      if (key != null && opts.deviceId != null && opts.deviceId !== "") {
+      if (key != null && !isErased(key) && opts.deviceId != null && opts.deviceId !== "") {
         try {
           return (
             await mintAudienceToken(
@@ -68,6 +85,11 @@ export function deviceSyncCredentialSource(opts: DeviceSyncCredentialOptions): C
       return opts.fallbackToken ?? null;
     },
   };
+}
+
+/** A zero-filled buffer is an erased key, not a key: never mint from it. */
+function isErased(key: Uint8Array): boolean {
+  return key.every((b) => b === 0);
 }
 
 export interface RelaySyncSocketOptions extends DeviceSyncCredentialOptions {
