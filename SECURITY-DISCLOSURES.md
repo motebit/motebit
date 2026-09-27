@@ -121,6 +121,32 @@ The socket now acts on nothing until the connection is registered, and registrat
 
 ---
 
+## 2026-09-27 — an authenticated identity could write another identity's rows
+
+**Fixed in [#865](https://github.com/motebit/motebit/pull/865), live in relay release v994.**
+
+Several relay routes checked who was calling and then wrote rows keyed by an identity that came from somewhere else: the request body, the entries in a batch, or an identifier the caller chose. They never compared that identity with the caller. Every caller in the cases below held a valid token of its own. The weakness was in what the token was allowed to touch.
+
+- **Sync.** A signed-in identity could push events, conversations, messages and plans naming another identity. That identity's own devices then pulled them as their own. By naming another identity's conversation, plan or step identifier while pushing as itself, it could also rewrite that identity's existing rows, changing titles and message counts and marking plans failed. This is the same harm as the entry above, putting words into someone else's agent's history, through doors the earlier fix did not cover.
+- **Subscriptions.** Cancelling and resubscribing acted on whatever identity was named in the path, and needed no credential at all.
+- **Migration, approvals and plan step results.** Departing, cancelling a migration, exporting its record, writing approval records and overwriting a collaborator's step result each acted on the identity named, not the caller.
+- **Dispute resolution** needed no credential. It is now reserved to the operator.
+- **Commitment bonds.** Recording a bond whose identifier another identity already held moved that bond to the caller.
+
+Every one of these writes now goes through a single rule. The relay mints a runtime capability for an identity only after it has verified the caller as that identity, and each of these writers accepts only that capability. A value that did not come from a verification, whatever its type claims, makes the write throw before any row changes. Upserts may no longer reassign the identity a row belongs to. A request refused for a missing or unreadable credential is now recorded too.
+
+**What we checked, 2026-09-27, against the production database.** We looked for the rows these doors could have written:
+
+- 20,543 synced events and 842 messages: **none** matches a detectable cross-identity pattern.
+- 4 subscriptions, all active: **none** was cancelled or cancelling in the last 30 days.
+- Migrations, approvals, disputes, dispute resolutions, plan step results and bonds: **zero** of each has ever been recorded.
+
+**What that check cannot see.** Most of the sync case. No stored row records which identity pushed it, so a well-formed foreign entry is indistinguishable from the identity's own. These doors also recorded no refusals before this fix. The zeros elsewhere are strong evidence, because a feature that has never been used cannot have been abused. The sync counts are only an absence of anything obviously out of place.
+
+**How it was found.** An audit of every relay route that writes per-identity data, after the entry above. Three rounds of adversarial review then found more. The first found the encoded-identity bypass, disclosed above. The second found that a type-level guard could be forged in ordinary code; that is why the rule is now enforced when the program runs, not only when it compiles. The rule's own check then found the bond case.
+
+---
+
 ## 2026-09-27 — an encoded identity could read and write another identity's synced data
 
 **Fixed in [#858](https://github.com/motebit/motebit/pull/858), live in relay release v992.**
@@ -164,6 +190,5 @@ We do not only publish what we have finished. Weaknesses we have found and not y
 - [#715](https://github.com/motebit/motebit/issues/715) — a setting we publish as an anti-sybil boundary is read by nothing, so the posture it declares is not the posture we hold.
 - [#767](https://github.com/motebit/motebit/issues/767) — rotating an identity's key does not end connections already open under the old key.
 - [#772](https://github.com/motebit/motebit/issues/772) — the sync socket allows some activity before a connection has proven itself; none of it reaches another identity's data.
-- [#846](https://github.com/motebit/motebit/issues/846) — several routes that write an identity's data did not bind the written rows to the caller; a fix is in review.
-- [#850](https://github.com/motebit/motebit/issues/850) — further routes of that class, each needing a design decision before it can be closed.
+- [#850](https://github.com/motebit/motebit/issues/850) — further routes where the relay acts on an identity without proving a relationship to it, each needing a design decision before it can be closed.
 - [#855](https://github.com/motebit/motebit/issues/855) — some routes exempted from the operator token are matched more broadly than intended.
