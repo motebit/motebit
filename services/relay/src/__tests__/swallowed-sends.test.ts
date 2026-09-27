@@ -271,24 +271,27 @@ describe("task dispatch — Phase 2 broadcast (no capabilities, no endpoint)", (
     await waitFor(() => live.of("task_request").length === 1, "the task_request");
   });
 
-  it("B3: only CLOSED sockets ⇒ NOT routed: the submitter gets the token, the task stays queued and reaches the agent on reconnect", async () => {
+  it("B3: only CLOSED sockets ⇒ HELD for reconnect: no incidental token, and the reconnect gets the task exactly once", async () => {
     const s = await startRelay();
     const worker = await agent(s);
     await stale(s, worker);
     const r = await submit(s, worker, {});
     expect(r.status).toBe(201);
-    // Exactly the no-socket answer: the submitter presents.
-    expect(typeof r.dispatch_token).toBe("string");
+    // Not the no-socket answer: the agent WAS connected, so reconnect
+    // recovery is the presenter, as it was on main. A token here would be a
+    // second presenter beside it (#845).
+    expect(r.dispatch_token).toBeUndefined();
 
-    // Still pending, and the reconnect's task recovery delivers it.
     const back = await connect(s, worker);
     await waitFor(
       () => back.of("task_request").some((f) => f.task?.task_id === r.task_id),
       "task recovery on reconnect",
     );
+    await settle();
+    expect(back.of("task_request").filter((f) => f.task?.task_id === r.task_id)).toHaveLength(1);
   });
 
-  it("B0 (control): no socket at all ⇒ the same answer as B3", async () => {
+  it("B0 (control): no socket at all ⇒ the incidental token, as on main", async () => {
     const s = await startRelay();
     const worker = await agent(s);
     const r = await submit(s, worker, {});

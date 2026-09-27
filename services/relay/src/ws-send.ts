@@ -7,7 +7,7 @@
  * `peer.ws.send(payload)` on a stale entry swallows the frame and the caller
  * cannot tell. Task dispatch then set `routed = true` for a task that no
  * socket received, which skipped every fallback (the MCP endpoint forward,
- * the push wake) and withheld the submitter's dispatch token.
+ * the push wake): a pinned or ranked task was stranded with no execution.
  *
  * So every peer send asks `readyState` first and reports whether the frame
  * was actually handed to an OPEN socket. Callers derive `routed` / status
