@@ -48,9 +48,12 @@
  * `src/__tests__/zz-differential.test.ts`, runs that package's `pretest` if it
  * has one (e.g. apps/mobile's creature bundle, generated from render-engine's
  * browser bundle), runs the probe with the package's own vitest config, and
- * prints per-observation SAME / DIFF. Nothing is written to the working tree
- * (except with --head-from-working-tree, where the probe file is placed there
- * and always removed). Exit 0 when both runs produced observations; exit 1
+ * prints per-observation SAME / DIFF. Each tree runs its tools through its OWN
+ * `node_modules/.bin` shims and NODE_PATH (the tree's `.pnpm/node_modules`),
+ * so CommonJS `require` never falls back to the working tree (#840). A
+ * default run writes nothing to the working tree; --head-from-working-tree
+ * writes the probe file there (always removed), the package's `pretest`
+ * output and vitest's `node_modules/.vite` cache. Exit 0 when both runs produced observations; exit 1
  * when either did not, or when the run was REFUSED — "unknown" is not a
  * result. A DIFF is information, not failure: the reviewer decides.
  *
@@ -102,12 +105,13 @@ import { tmpdir } from "node:os";
 import { basename, join, relative, resolve } from "node:path";
 import {
   buildTrees,
-  cleanEnv,
+  binPath,
   DifferentialRefusal,
   packageDirOf,
   readGit,
   readPackage,
   runPretest,
+  treeEnv,
   workspaceRoots,
 } from "./lib/differential-tree.js";
 
@@ -194,9 +198,19 @@ async function runProbe(
   }
   copyFileSync(probe, target);
   try {
-    execFileSync("npx", ["vitest", "run", PROBE_NAME], {
+    // The tree's OWN vitest shim (its NODE_PATH re-homed into the tree), with
+    // NODE_PATH set to the tree's own .pnpm/node_modules — never the working tree's.
+    const shim = [
+      join(pkgDir, "node_modules", ".bin", "vitest"),
+      join(treeDir, "node_modules", ".bin", "vitest"),
+    ].find((f) => existsSync(f));
+    if (shim == null) throw new Error(`no vitest in ${host}'s or the root node_modules/.bin`);
+    execFileSync(shim, ["run", PROBE_NAME], {
       cwd: pkgDir,
-      env: cleanEnv(process.env, { PROBE_OUT: obsFile, DIFFERENTIAL_SIDE: label }),
+      env: treeEnv(treeDir, binPath(treeDir, host), {
+        PROBE_OUT: obsFile,
+        DIFFERENTIAL_SIDE: label,
+      }),
       stdio: ["ignore", "pipe", "pipe"],
       maxBuffer: 64 * 1024 * 1024,
     });

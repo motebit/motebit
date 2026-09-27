@@ -356,6 +356,30 @@ export function installLevelDifferences(
   return out.sort();
 }
 
+/** `basePkg` with every INSTALL_LEVEL_PACKAGE_FIELDS value replaced by `headPkg`'s (absent stays absent). */
+export function mergeInstallFields(basePkg: string, headPkg: string): Record<string, unknown> {
+  const read = (f: string) =>
+    existsSync(f) ? (JSON.parse(readFileSync(f, "utf-8")) as Record<string, unknown>) : {};
+  const out = read(basePkg);
+  const head = read(headPkg);
+  for (const path of INSTALL_LEVEL_PACKAGE_FIELDS) {
+    const keys = path.split(".");
+    const value = fieldAt(head, path);
+    let target = out;
+    for (const k of keys.slice(0, -1)) {
+      if (target[k] == null || typeof target[k] !== "object") {
+        if (value === undefined) break;
+        target[k] = {};
+      }
+      target = target[k] as Record<string, unknown>;
+    }
+    const last = keys[keys.length - 1]!;
+    if (value === undefined) delete target[last];
+    else target[last] = value;
+  }
+  return out;
+}
+
 export interface TreeDifference {
   /** Workspace packages with any differing file (either direction). */
   packages: string[];
@@ -393,25 +417,84 @@ export function compareTrees(root: string, baseTree: string, roots: string[]): T
 /** `node_modules` entries that are caches: never mirrored (they would write into the working tree). */
 const MIRRORED_DOT_ENTRIES = new Set([".bin", ".pnpm"]);
 
+/** Re-home a mirror: absolute paths under `from` (the working tree) become paths under `to` (the tree). */
+export interface Rehome {
+  from: string;
+  to: string;
+}
+
 /**
  * Recreate `src` (a pnpm `node_modules`) at `dst` so resolution from `dst`'s
- * position lands where the aperture says it should: symlinks are recreated
- * with the SAME target text (relative targets now resolve inside the base
- * tree — `@motebit/sdk -> ../../../sdk` reaches the base tree's sdk), scope
- * directories are recursed, `.bin` and `.pnpm` are linked absolutely to the
- * working tree's, and every other dot-entry (`.vite`, `.vite-temp`,
- * `.modules.yaml`, caches) is skipped.
+ * position lands in `dst`'s tree:
+ *   - symlinks are recreated with the SAME target text (relative targets now
+ *     resolve inside the tree — `@motebit/sdk -> ../../../sdk` reaches the
+ *     tree's own sdk); scope directories are recursed;
+ *   - `.bin` is a real directory of REWRITTEN shims: pnpm shims export an
+ *     absolute NODE_PATH into the working tree's `.pnpm/node_modules`, where
+ *     CommonJS `require` falls back to the working tree's copy of every
+ *     workspace package (#840); each absolute `rehome.from/` becomes
+ *     `rehome.to/`;
+ *   - `.pnpm` is a real directory: every store entry is linked absolutely to
+ *     the working tree's (third-party code, one install), and
+ *     `.pnpm/node_modules` — pnpm's hoisted fallback, which links every
+ *     workspace package — is itself mirrored, so its relative workspace
+ *     links land on the tree's own packages;
+ *   - every other dot-entry (`.vite`, `.vite-temp`, `.modules.yaml`) is skipped.
  */
-export function mirrorNodeModules(src: string, dst: string): void {
+export function mirrorNodeModules(src: string, dst: string, rehome?: Rehome): void {
   mkdirSync(dst, { recursive: true });
   for (const e of readdirSync(src, { withFileTypes: true })) {
     if (e.name.startsWith(".") && !MIRRORED_DOT_ENTRIES.has(e.name)) continue;
     const s = join(src, e.name);
     const d = join(dst, e.name);
     if (e.isSymbolicLink()) symlinkSync(readlinkSync(s), d);
-    else if (e.isDirectory() && e.name.startsWith("@")) mirrorNodeModules(s, d);
+    else if (e.isDirectory() && e.name.startsWith("@")) mirrorNodeModules(s, d, rehome);
+    else if (e.isDirectory() && e.name === ".bin" && rehome != null) rewriteBin(s, d, rehome);
+    else if (e.isDirectory() && e.name === ".pnpm" && rehome != null) mirrorPnpmStore(s, d, rehome);
     else symlinkSync(s, d);
   }
+}
+
+function rewriteBin(src: string, dst: string, rehome: Rehome): void {
+  mkdirSync(dst, { recursive: true });
+  for (const e of readdirSync(src, { withFileTypes: true })) {
+    const s = join(src, e.name);
+    const d = join(dst, e.name);
+    if (e.isSymbolicLink()) {
+      symlinkSync(readlinkSync(s), d);
+      continue;
+    }
+    const text = readFileSync(s, "utf-8");
+    writeFileSync(d, text.split(`${rehome.from}/`).join(`${rehome.to}/`), { mode: 0o755 });
+  }
+}
+
+function mirrorPnpmStore(src: string, dst: string, rehome: Rehome): void {
+  mkdirSync(dst, { recursive: true });
+  for (const e of readdirSync(src, { withFileTypes: true })) {
+    const s = join(src, e.name);
+    const d = join(dst, e.name);
+    if (e.name === "node_modules" && e.isDirectory()) mirrorNodeModules(s, d, rehome);
+    else if (e.isSymbolicLink()) symlinkSync(readlinkSync(s), d);
+    else symlinkSync(s, d);
+  }
+}
+
+/**
+ * The environment every child in a tree runs with: GIT_* scrubbed, the tree's
+ * `.bin` dirs first on PATH, and NODE_PATH set to the TREE's own
+ * `.pnpm/node_modules` (never the working tree's).
+ */
+export function treeEnv(
+  treeDir: string,
+  extraPath: string[],
+  extra: Record<string, string> = {},
+): NodeJS.ProcessEnv {
+  return cleanEnv(process.env, {
+    PATH: [...extraPath, process.env.PATH ?? ""].join(":"),
+    NODE_PATH: join(treeDir, "node_modules", ".pnpm", "node_modules"),
+    ...extra,
+  });
 }
 
 // ── Builds ───────────────────────────────────────────────────────────
@@ -458,13 +541,17 @@ function explain(what: string, cmd: string, cwd: string, out: string, err?: unkn
   );
 }
 
-function runAsync(cmd: string, cwd: string, extraPath: string[], what: string): Promise<void> {
+function runAsync(
+  cmd: string,
+  cwd: string,
+  treeDir: string,
+  extraPath: string[],
+  what: string,
+): Promise<void> {
   return new Promise((resolvePromise, reject) => {
     const child = spawn("sh", ["-c", cmd], {
       cwd,
-      env: cleanEnv(process.env, {
-        PATH: [...extraPath, process.env.PATH ?? ""].join(":"),
-      }),
+      env: treeEnv(treeDir, extraPath),
       stdio: ["ignore", "pipe", "pipe"],
     });
     let out = "";
@@ -484,6 +571,7 @@ export async function runPretest(treeDir: string, pkg: WorkspacePackage | null):
   await runAsync(
     cmd,
     join(treeDir, pkg!.dir),
+    treeDir,
     binPath(treeDir, pkg!.dir),
     `pretest for ${pkg!.dir}`,
   );
@@ -514,12 +602,16 @@ async function buildAll(
       log(`  building ${d} (${side} tree): ${cmd}`);
       running.set(
         d,
-        runAsync(cmd, join(treeDir, d), binPath(treeDir, d), `${side}-tree build of ${d}`).then(
-          () => {
-            done.add(d);
-            running.delete(d);
-          },
-        ),
+        runAsync(
+          cmd,
+          join(treeDir, d),
+          treeDir,
+          binPath(treeDir, d),
+          `${side}-tree build of ${d}`,
+        ).then(() => {
+          done.add(d);
+          running.delete(d);
+        }),
       );
     }
     if (running.size === 0)
@@ -594,13 +686,14 @@ function copyFiles(root: string, files: string[], into: string): void {
 
 /** Mirror the working tree's root and per-package node_modules into `tree`. */
 function wireNodeModules(root: string, tree: string, dirs: string[]): void {
+  const rehome: Rehome = { from: root, to: tree };
   if (existsSync(join(root, "node_modules"))) {
-    mirrorNodeModules(join(root, "node_modules"), join(tree, "node_modules"));
+    mirrorNodeModules(join(root, "node_modules"), join(tree, "node_modules"), rehome);
   }
   for (const d of dirs) {
     const nm = join(root, d, "node_modules");
     if (existsSync(nm) && existsSync(join(tree, d))) {
-      mirrorNodeModules(nm, join(tree, d, "node_modules"));
+      mirrorNodeModules(nm, join(tree, d, "node_modules"), rehome);
     }
   }
 }
@@ -666,13 +759,16 @@ export async function buildTrees(opts: BuildTreesOptions): Promise<Trees> {
   const held = difference.rootPaths.filter((p) =>
     installDiffs.some((d) => d === p || (p === "package.json" && d.startsWith("package.json "))),
   );
-  copyFiles(
-    root,
-    held.filter((p) => existsSync(join(root, p))),
-    baseTree,
-  );
   for (const p of held) {
-    if (!existsSync(join(root, p))) rmSync(join(baseTree, p), { force: true });
+    if (p === "package.json") {
+      // Hold ONLY the install fields: base's package.json with the working
+      // tree's dependency fields merged in; scripts and every other field stay base's.
+      writeFileSync(
+        join(baseTree, p),
+        `${JSON.stringify(mergeInstallFields(join(baseTree, p), join(root, p)), null, 2)}\n`,
+      );
+    } else if (existsSync(join(root, p))) copyFiles(root, [p], baseTree);
+    else rmSync(join(baseTree, p), { force: true });
   }
 
   const requested = opts.fromMain === "diff" ? difference.packages : opts.fromMain;

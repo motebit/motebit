@@ -274,13 +274,29 @@ describe("differential-tree units", () => {
       const nm = join(t, "head", "pkgs", "a", "node_modules");
       mkdirSync(join(nm, "@m"), { recursive: true });
       symlinkSync("../../../b", join(nm, "@m", "b")); // pnpm's shape
-      mkdirSync(join(nm, ".bin"));
       mkdirSync(join(nm, ".vite"));
       mkdirSync(join(nm, ".vite-temp"));
+      // A pnpm shim whose NODE_PATH points into the working tree's hoisted store.
+      write(
+        join(nm, ".bin", "tool"),
+        `#!/bin/sh\nexport NODE_PATH="${join(t, "head")}/node_modules/.pnpm/node_modules"\n`,
+      );
+      // pnpm's hoisted fallback: a relative workspace link, and a store entry.
+      mkdirSync(join(nm, ".pnpm", "node_modules", "@m"), { recursive: true });
+      symlinkSync("../../../../../b", join(nm, ".pnpm", "node_modules", "@m", "b"));
+      mkdirSync(join(nm, ".pnpm", "thing@1.0.0"));
       const out = join(t, "base", "pkgs", "a", "node_modules");
-      mirrorNodeModules(nm, out);
+      mirrorNodeModules(nm, out, { from: join(t, "head"), to: join(t, "base") });
       expect(readFileSync(join(out, "@m", "b", "who"), "utf-8")).toBe("base");
-      expect(realpathSync(join(out, ".bin"))).toBe(join(nm, ".bin"));
+      expect(readFileSync(join(out, ".bin", "tool"), "utf-8")).toContain(
+        `NODE_PATH="${join(t, "base")}/node_modules/.pnpm/node_modules"`,
+      );
+      expect(readFileSync(join(out, ".pnpm", "node_modules", "@m", "b", "who"), "utf-8")).toBe(
+        "base",
+      );
+      expect(realpathSync(join(out, ".pnpm", "thing@1.0.0"))).toBe(
+        join(nm, ".pnpm", "thing@1.0.0"),
+      );
       expect(existsSync(join(out, ".vite"))).toBe(false);
       expect(existsSync(join(out, ".vite-temp"))).toBe(false);
     } finally {
@@ -416,7 +432,17 @@ writeFileSync("src/bundle.generated.txt", BUNDLED);
   const tsDir = realpathSync(join(ROOT, "node_modules", "typescript"));
   symlinkSync(vitestDir, join(nm, "vitest"));
   symlinkSync(tsDir, join(nm, "typescript"));
-  write(join(nm, ".bin", "vitest"), `#!/bin/sh\nexec node "${vitestDir}/vitest.mjs" "$@"\n`);
+  // pnpm's shape: the shim exports NODE_PATH into the hoisted store, which links
+  // EVERY workspace package — the #840 leak when it points at the working tree.
+  const hoistedStore = join(nm, ".pnpm", "node_modules");
+  write(
+    join(nm, ".bin", "vitest"),
+    `#!/bin/sh\nif [ -z "$NODE_PATH" ]; then export NODE_PATH="${hoistedStore}"; else export NODE_PATH="${hoistedStore}:$NODE_PATH"; fi\nexec node "${vitestDir}/vitest.mjs" "$@"\n`,
+  );
+  mkdirSync(join(hoistedStore, "@fx"), { recursive: true });
+  for (const p of ["proto", "hoisted", "bundler"]) {
+    symlinkSync(`../../../../packages/${p}`, join(hoistedStore, "@fx", p));
+  }
   write(join(nm, ".bin", "tsc"), `#!/bin/sh\nexec node "${tsDir}/bin/tsc" "$@"\n`);
   fxRun(jail, root, "chmod", ["+x", join(nm, ".bin", "vitest"), join(nm, ".bin", "tsc")], baseEnv);
   const link = (from: string, name: string, target: string) => {
@@ -455,12 +481,24 @@ function plantStaleDists(fx: Fixture): void {
 }
 
 const FIXTURE_PROBE = `import { afterAll, it } from "vitest";
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, realpathSync, writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
+import { resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 const obs: Record<string, unknown> = {};
 it("observes", async () => {
   if (process.env.FX_MODE === "mobile") {
     obs.throughBundle = readFileSync("src/bundle.generated.txt", "utf-8");
     obs.throughRootHoisted = ((await import("@fx/hoisted")) as { VALUE: string }).VALUE;
+    // mobile never declares @fx/proto: CommonJS require reaches it only through NODE_PATH.
+    const where = realpathSync(createRequire(import.meta.url).resolve("@fx/proto"));
+    obs.undeclaredInOwnTree = where.startsWith(realpathSync(resolve(process.cwd(), "../..")) + "/");
+    obs.undeclaredValue = ((await import(pathToFileURL(where).href)) as { VALUE: string }).VALUE;
+  } else if (process.env.FX_MODE === "rootpkg") {
+    const pkg = JSON.parse(readFileSync("../../package.json", "utf-8"));
+    obs.description = pkg.description ?? null;
+    obs.scripts = pkg.scripts ?? null;
+    obs.devDependencies = pkg.devDependencies ?? null;
   } else if (process.env.FX_MODE === "emit") {
     // What tsc EMITTED for hoisted in this side's tree, under this side's tsconfig.base.json.
     obs.hoistedEmitKeepsComment = readFileSync("../../packages/hoisted/dist/index.js", "utf-8").includes("fx-comment");
@@ -580,8 +618,18 @@ describe("differential-vs-main behaviour (fixture)", () => {
       const r = runScript(fx.root, mobileArgs(fx, out), fxEnv({ FX_MODE: "mobile" }));
       expect(r.status, show(r)).toBe(0);
       const rep = JSON.parse(readFileSync(out, "utf-8")) as Report;
-      expect(rep.head).toEqual({ throughBundle: "head", throughRootHoisted: "head" });
-      expect(rep.baseObs).toEqual({ throughBundle: "main", throughRootHoisted: "main" });
+      expect(rep.head).toEqual({
+        throughBundle: "head",
+        throughRootHoisted: "head",
+        undeclaredInOwnTree: true,
+        undeclaredValue: "head",
+      });
+      expect(rep.baseObs).toEqual({
+        throughBundle: "main",
+        throughRootHoisted: "main",
+        undeclaredInOwnTree: true,
+        undeclaredValue: "main",
+      });
       expect(rep.aperture.builtBase).toEqual([
         "packages/proto",
         "packages/hoisted",
@@ -606,7 +654,12 @@ describe("differential-vs-main behaviour (fixture)", () => {
       expect(r.status, show(r)).toBe(0);
       const rep = JSON.parse(readFileSync(out, "utf-8")) as Report;
       expect(rep.head.throughBundle).toBe("stale-working-tree-bundle");
-      expect(rep.baseObs).toEqual({ throughBundle: "main", throughRootHoisted: "main" });
+      expect(rep.baseObs).toEqual({
+        throughBundle: "main",
+        throughRootHoisted: "main",
+        undeclaredInOwnTree: true,
+        undeclaredValue: "main",
+      });
       expect(rep.aperture.headFromWorkingTree).toBe(true);
       expect(r.stdout).toContain("NOT freshness-checked");
     },
@@ -731,6 +784,39 @@ describe("differential-vs-main behaviour (fixture)", () => {
     },
     180_000,
   );
+  it.skipIf(!FIXTURE)(
+    "--root-from-head holds ONLY the dependency fields of the root package.json; its other fields and scripts stay per side",
+    () => {
+      const pkgJson = join(fx.root, "package.json");
+      const original = readFileSync(pkgJson, "utf-8");
+      try {
+        const changed = { ...JSON.parse(original) };
+        changed.description = "head description";
+        changed.scripts = { hello: "echo head" };
+        changed.devDependencies = { ...changed.devDependencies, "left-pad": "1.3.0" };
+        write(pkgJson, json(changed));
+        const out = join(fx.jail, "rootpkg.json");
+        const r = runScript(
+          fx.root,
+          [...mobileArgs(fx, out), "--root-from-head"],
+          fxEnv({ FX_MODE: "rootpkg" }),
+        );
+        expect(r.status, show(r)).toBe(0);
+        const rep = JSON.parse(readFileSync(out, "utf-8")) as Report;
+        expect(rep.aperture.rootHeldAtHead).toEqual(["package.json (devDependencies)"]);
+        // Held: the dependency field is the working tree's on both sides.
+        expect(rep.baseObs.devDependencies).toEqual(rep.head.devDependencies);
+        // Not held: everything else in the file is each side's own.
+        expect(rep.head.description).toBe("head description");
+        expect(rep.baseObs.description).toBeNull();
+        expect(rep.head.scripts).toEqual({ hello: "echo head" });
+        expect(rep.baseObs.scripts).toBeNull();
+      } finally {
+        write(pkgJson, original);
+      }
+    },
+    120_000,
+  );
 });
 
 // ── Decoy: the fixture and the script must never touch a repository they did not create ──
@@ -793,8 +879,18 @@ describe("differential-vs-main safety (decoy repository)", () => {
       if (failure != null) throw failure;
       expect(r!.status, show(r!)).toBe(0);
       const rep = JSON.parse(readFileSync(out, "utf-8")) as Report;
-      expect(rep.head).toEqual({ throughBundle: "head", throughRootHoisted: "head" });
-      expect(rep.baseObs).toEqual({ throughBundle: "main", throughRootHoisted: "main" });
+      expect(rep.head).toEqual({
+        throughBundle: "head",
+        throughRootHoisted: "head",
+        undeclaredInOwnTree: true,
+        undeclaredValue: "head",
+      });
+      expect(rep.baseObs).toEqual({
+        throughBundle: "main",
+        throughRootHoisted: "main",
+        undeclaredInOwnTree: true,
+        undeclaredValue: "main",
+      });
       // The fixture's history went to the fixture's own repository.
       expect(fxGit(fxJail, fx!.root, ["rev-list", "--count", "HEAD"]).trim()).toBe("2");
     } finally {
