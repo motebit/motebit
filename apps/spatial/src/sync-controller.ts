@@ -101,12 +101,18 @@ export class SpatialSyncController {
    * early-return checks and is about to build one, so a newer start that
    * bails early never supersedes a running one. A start whose request is
    * not newer than the current owner (a newer start already claimed, or a
-   * stop came after it) builds nothing; a start that loses ownership across
-   * an await tears down only its own socket, and only if it is still the
-   * current one. A stop makes every earlier request stale.
+   * stop came after it) builds nothing — with one exception: a start a stop
+   * overtook may still build when the controller has since been restarted
+   * against the SAME relay and no newer start has built yet (its work is
+   * the restarted run's work, done sooner; the newer start then replaces it,
+   * make-before-break). A stop makes every earlier request stale.
    */
   private _wsRequestSeq = 0;
   private _wsOwner = 0;
+  /** The highest request that has built a socket. */
+  private _wsClaimed = 0;
+  /** The relay the current run targets; null once disconnected. */
+  private _activeRelayUrl: string | null = null;
 
   private _planSyncEngine: PlanSyncEngine | null = null;
   private _convSyncEngine: ConversationSyncEngine | null = null;
@@ -148,6 +154,7 @@ export class SpatialSyncController {
     const { relayUrl, showNetwork } = this.deps.getNetworkSettings();
     if (relayUrl === "" || !showNetwork) return;
     const request = ++this._wsRequestSeq;
+    this._activeRelayUrl = relayUrl;
 
     this.setSyncStatus("connecting");
 
@@ -263,22 +270,23 @@ export class SpatialSyncController {
         // bails earlier never supersedes a running one. One already
         // superseded (disconnectRelay, or a newer connectRelay that claimed
         // first) builds nothing — that socket would belong to nobody.
-        if (request <= this._wsOwner) return;
-        this._wsOwner = request;
+        const newest = request > this._wsOwner;
+        const restartedSameRelay =
+          !newest && request > this._wsClaimed && this._activeRelayUrl === relayUrl;
+        if (!newest && !restartedSameRelay) return;
+        if (newest) this._wsOwner = request;
+        this._wsClaimed = request;
         // One sync socket per controller: a re-entered connectRelay replaces
-        // the running socket and its refresh timer (#816).
-        if (this._wsTokenRefreshTimer != null) {
-          clearInterval(this._wsTokenRefreshTimer);
-          this._wsTokenRefreshTimer = null;
-        }
-        if (this._wsUnsubOnEvent) {
-          this._wsUnsubOnEvent();
-          this._wsUnsubOnEvent = null;
-        }
-        if (this._wsAdapter) {
-          this._wsAdapter.disconnect();
-          this._wsAdapter = null;
-        }
+        // the running socket and its refresh timer (#816) — make-before-break:
+        // the running socket stays live until this one is wired and connected
+        // below, then is retired into it (queued events and in-flight replies
+        // handed over).
+        const replaced = {
+          adapter: this._wsAdapter,
+          unsubEvent: this._wsUnsubOnEvent,
+          timer: this._wsTokenRefreshTimer,
+        };
+        this._wsTokenRefreshTimer = null;
 
         // The token minted above serves the first connect; every later
         // connect — the 4.5-minute refresh and any drop-and-reconnect —
@@ -387,6 +395,9 @@ export class SpatialSyncController {
 
         runtime.connectSync(encryptedWs);
         wsAdapter.connect();
+        if (replaced.timer != null) clearInterval(replaced.timer);
+        replaced.unsubEvent?.();
+        replaced.adapter?.handOffTo(wsAdapter);
 
         // Subscribe to sync engine status
         if (this._syncUnsubscribe) this._syncUnsubscribe();
@@ -404,6 +415,8 @@ export class SpatialSyncController {
         const planStore = this.deps.getPlanStore();
         if (planStore) {
           const planSyncStore = new IdbPlanSyncStore(planStore, motebitId);
+          // A re-entered connectRelay replaces the running engine; never two pollers.
+          this._planSyncEngine?.stop();
           this._planSyncEngine = new PlanSyncEngine(planSyncStore, motebitId);
           const httpPlanAdapter = new HttpPlanSyncAdapter({
             baseUrl: relayUrl,
@@ -423,6 +436,7 @@ export class SpatialSyncController {
             storage.conversationStore as IdbConversationStore,
             motebitId,
           );
+          this._convSyncEngine?.stop();
           this._convSyncEngine = new ConversationSyncEngine(convSyncStore, motebitId);
           const httpConvAdapter = new HttpConversationSyncAdapter({
             baseUrl: relayUrl,
@@ -497,6 +511,7 @@ export class SpatialSyncController {
    */
   async disconnectRelay(): Promise<void> {
     this._wsOwner = ++this._wsRequestSeq;
+    this._activeRelayUrl = null;
     // Stop token refresh
     if (this._wsTokenRefreshTimer) {
       clearInterval(this._wsTokenRefreshTimer);

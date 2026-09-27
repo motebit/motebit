@@ -18,11 +18,14 @@
  * the conversation poll 403'd on `/sync/:id/conversations`. A textbook
  * sibling-boundary miss: the staleness fix landed on two of four sync adapters.
  *
- * This is WEB-ONLY by construction. Desktop/CLI authenticate with a static
- * `syncMasterToken` (panels rule 3) that is long-lived by design; mobile uses
- * none. So the rotating-token-must-stay-fresh invariant binds the web surface
- * alone — scanning other surfaces would false-positive on their legitimate
- * static-token strategy.
+ * This is WEB-ONLY by construction. Desktop and the CLI can authenticate with
+ * a static `syncMasterToken` (panels rule 3) that is long-lived by design, and
+ * keep static-token paths for it (their sync sockets now mint per connect —
+ * #816, #820 — but not every adapter they build does); mobile rebuilds its
+ * adapters with a freshly minted token every 30-second cycle. So the
+ * rotating-token-must-stay-fresh invariant is enforced on the web surface
+ * alone — scanning the others would false-positive on legitimate static-token
+ * paths.
  *
  * Invariant: in `apps/web/src/**`, every construction of a long-lived sync
  * adapter (`HttpEventStoreAdapter`, `HttpPlanSyncAdapter`,
@@ -30,8 +33,8 @@
  * `credentialSource` in its config object. Exit 1 on any that does not.
  *
  * See `docs/drift-defenses.md` invariant #128 and the per-construction comments
- * at `apps/web/src/web-app.ts`. The `web-app.ts:3474` comment documents the
- * fresh-token pattern this gate locks.
+ * at `apps/web/src/web-app.ts`: the `syncCredentialSource` comment in
+ * `startSync` documents the fresh-token pattern this gate locks.
  */
 
 import { readdirSync, readFileSync, statSync } from "node:fs";
@@ -159,8 +162,8 @@ if (violations.length > 0) {
   process.stderr.write(
     "\n  The web surface mints rotating 5-minute JWTs (createSyncToken). A long-lived\n" +
       "  polling adapter must take `credentialSource: syncCredentialSource` (re-mints per\n" +
-      "  request), never a captured `authToken` string. See apps/web/src/web-app.ts:3474\n" +
-      "  and docs/drift-defenses.md invariant #128.\n\n",
+      "  request), never a captured `authToken` string. See `syncCredentialSource` in\n" +
+      "  apps/web/src/web-app.ts (startSync) and docs/drift-defenses.md invariant #128.\n\n",
   );
   process.exit(1);
 }

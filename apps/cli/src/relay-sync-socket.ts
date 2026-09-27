@@ -23,12 +23,11 @@
  * not mint a token from an all-zero seed (the relay would refuse it, and
  * the configured fallback would never be tried).
  *
- * Known residual, not this module's: the adapter's `connect()` awaits the
- * credential without a connect-generation check, so a `disconnect()` that
- * lands while a reconnect is minting can leave that socket open. `run`
- * exits synchronously after disconnecting and cannot hit it; `serve`'s
- * window is milliseconds before `process.exit`. #816's adapter rebuild
- * (a connect-generation guard in `ws-adapter.ts`) closes it.
+ * A `disconnect()` that lands while a reconnect is still minting opens no
+ * socket afterwards: the adapter's `connect()` checks a connect generation
+ * that `disconnect()` bumps before it opens one, and a pending auth timeout
+ * from the closed socket no longer acts on the adapter (`ws-adapter.ts`,
+ * #816).
  */
 import { mintAudienceToken } from "@motebit/encryption";
 import { WebSocketEventStoreAdapter } from "@motebit/sync-engine";

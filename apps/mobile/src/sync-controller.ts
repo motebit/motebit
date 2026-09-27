@@ -456,7 +456,9 @@ export class MobileSyncController {
 
     try {
       const token = await this.deps.createSyncToken();
-      if (stale()) return;
+      // Staleness is judged where the cycle USES the run (its socket, its
+      // engines), not here: a stop and a restart to this cycle's relay may
+      // still land before the relay key resolves.
       const encKey = this._syncEncKey;
 
       // The previous socket (its token about to expire) stays up until this
@@ -676,7 +678,9 @@ export class MobileSyncController {
           // at the cycle level — the replaced socket closes here, not at the
           // start of the cycle).
           if (this._wsUnsubOnEvent) this._wsUnsubOnEvent();
-          if (this._wsAdapter) this._wsAdapter.disconnect();
+          // Retire the replaced socket INTO this one: its queued events and
+          // in-flight replies move over instead of dying with it.
+          if (this._wsAdapter) this._wsAdapter.handOffTo(wsAdapter);
           this._wsAdapter = wsAdapter;
           this._wsUnsubOnEvent = unsubEvent;
           this._socketCycle = cycle;

@@ -105,11 +105,14 @@ export class SyncController {
    * early-return checks and is about to build one, so a newer start that
    * bails early never supersedes a running one. A start whose request is
    * not newer than the current owner (a newer start already claimed, or a
-   * stop came after it) builds nothing. A start that loses ownership across
-   * the relay-key await has already built and connected its adapter; it tears
-   * that adapter down (only its own, and only if still current), wires no
-   * handler and sets no timer — nothing stays open.
-   * A stop makes every earlier request stale.
+   * stop came after it) builds nothing. A claiming start builds, wires and
+   * connects its socket in one synchronous step and only then retires the
+   * running one (make-before-break — `retireWs` hands the old adapter's
+   * queued events and in-flight replies to the new one). What it does after
+   * the relay-key await (delegation config) is skipped if it has lost
+   * ownership meanwhile; its socket was by then already closed by the stop,
+   * or retired into the newer start's socket. A stop makes every earlier
+   * request stale.
    */
   private _wsRequestSeq = 0;
   private _wsOwner = 0;
@@ -306,13 +309,17 @@ export class SyncController {
 
     // One sync socket per controller: a re-entered startSync (pairing, the
     // relay-URL "Connect" button) replaces the running socket instead of
-    // leaving it open beside the new one (#816).
-    // The claim happens HERE, past every early return: a start that bails
-    // earlier never supersedes a running one. A start already superseded
-    // (a stop, or a newer start that claimed first) builds nothing.
+    // leaving it open beside the new one (#816). The claim happens HERE,
+    // past every early return: a start that bails earlier never supersedes
+    // a running one. A start already superseded (a stop, or a newer start
+    // that claimed first) builds nothing.
     if (request <= this._wsOwner) return;
     this._wsOwner = request;
-    this.teardownWs();
+    // Make-before-break: the running socket (a re-entered start) stays live —
+    // its handlers, its refresh timer, and the runtime's sync remote — until
+    // this start's socket is fully wired below; only then is it retired, in
+    // one synchronous step, handing its queued events and in-flight replies
+    // to the new adapter (#816).
 
     // The caller's token (possibly the relay master token) serves the first
     // connect, exactly as before; every later connect — the 4.5-minute
@@ -347,13 +354,12 @@ export class SyncController {
         }
       },
     });
-    this._wsAdapter = wsAdapter;
 
     // Encrypted wrapper around WS adapter for outbound events
     const encryptedWs = new EncryptedEventStoreAdapter({ inner: wsAdapter, key: encKey });
 
     // Inbound real-time events: decrypt and write to local store
-    this._wsUnsubOnEvent = wsAdapter.onEvent((raw) => {
+    const unsubEvent = wsAdapter.onEvent((raw) => {
       void (async () => {
         if (!localEventStore) return;
         const dec = await decryptEventPayload(raw, encKey);
@@ -361,69 +367,7 @@ export class SyncController {
       })();
     });
 
-    // Wire the encrypted WS adapter as the sync remote and start
-    runtime.connectSync(encryptedWs);
-    wsAdapter.connect();
-
-    // Subscribe to SyncEngine status changes
-    if (this._syncUnsubscribe) this._syncUnsubscribe();
-    this._syncUnsubscribe = runtime.sync.onStatusChange((engineStatus: SyncStatus) => {
-      if (engineStatus === "syncing") {
-        this.emitSyncStatus({ status: "syncing" });
-      } else if (engineStatus === "idle") {
-        const conflicts = this.deps.getRuntime()?.sync.getConflicts() ?? [];
-        this.emitSyncStatus({
-          status: conflicts.length > 0 ? "conflict" : "connected",
-          lastSyncAt: Date.now(),
-          conflictCount: conflicts.length,
-        });
-      } else if (engineStatus === "error") {
-        this.emitSyncStatus({ status: "error", error: "Sync cycle failed" });
-      } else if (engineStatus === "offline") {
-        this.emitSyncStatus({ status: "disconnected" });
-      }
-    });
-
-    runtime.startSync();
-    this.emitSyncStatus({ status: "connected" });
-
-    // Enable interactive delegation — lets the AI transparently delegate tasks
-    // to remote agents during conversation via the delegate_to_agent tool.
-    // Resolve the PINNED relay key (TOFU) so a paid P2P delegation derives the
-    // fee-leg treasury from a key trusted at first connect, never a fetched
-    // value (the irreversible-payment MITM surface). undefined → P2P disabled,
-    // relay-mode still serves the task. localStorage may be unavailable in some
-    // desktop contexts (see runSelfTestOnce) — guard so it never blocks sync.
     const privKeyHex = keypair.privateKey;
-    let pinnedRelayKey: string | undefined;
-    try {
-      pinnedRelayKey = await getOrPinRelayKey(syncUrl, { storage: localStorage });
-    } catch {
-      pinnedRelayKey = undefined;
-    }
-    // Superseded while awaiting (stopSync, or a newer startSync): wiring
-    // handlers onto this socket now would revive one that was deliberately
-    // closed.
-    if (this._wsOwner !== request) {
-      if (this._wsAdapter === wsAdapter) this.teardownWs();
-      return;
-    }
-    runtime.enableInteractiveDelegation({
-      syncUrl,
-      // Honor the audience the runtime asks for — `task:submit` to submit,
-      // `task:query` to poll, `market:listing` for the P2P pre-flight. A
-      // closure that ignored it sent `task:submit` to all three, and the poll
-      // and pre-flight were refused (#827).
-      authToken: async (audience?: TokenAudience) =>
-        this.deps.createSyncToken(privKeyHex, audience ?? "task:submit"),
-      ...(pinnedRelayKey != null ? { relayPublicKey: pinnedRelayKey } : {}),
-      // Forward the cold-start opt-in as a LIVE getter so the "Pay new agents
-      // directly" Governance toggle governs chat-driven (delegate_to_agent) P2P
-      // delegation, not just the relay-mode fallback. Without this the toggle is
-      // a no-op for the AI-loop path (the bug closed on web by d6cab601, now at
-      // parity here). Read per call → no re-enable needed when the user flips it.
-      acknowledgeNoHistoryRisk: () => loadColdStartOptIn(),
-    });
 
     // Store serving state for task handler
     const servingPrivKey = new Uint8Array(privKeyHex.length / 2);
@@ -439,8 +383,7 @@ export class SyncController {
 
     // Wire task handler — accept delegations from the network.
     // The liquescent droplet becomes a body that works, not just a face that talks.
-    if (this._wsUnsubOnCustom) this._wsUnsubOnCustom();
-    this._wsUnsubOnCustom = wsAdapter.onCustomMessage((msg) => {
+    const unsubCustom = wsAdapter.onCustomMessage((msg) => {
       const rt = this.deps.getRuntime();
       // Handle remote command requests (forwarded by relay)
       if (msg.type === "command_request" && rt) {
@@ -463,7 +406,7 @@ export class SyncController {
               identityPublicKey: keypair.publicKey,
             });
             if (!verdict.ok) {
-              this._wsAdapter?.sendRaw(
+              wsAdapter.sendRaw(
                 JSON.stringify({
                   type: "command_response",
                   id: cmdMsg.id,
@@ -476,11 +419,9 @@ export class SyncController {
             // closes the return view's membrane, neither of which a
             // caller has to remember.
             const result = await executeRemoteCommand(rt, cmdMsg.command, cmdMsg.args);
-            this._wsAdapter?.sendRaw(
-              JSON.stringify({ type: "command_response", id: cmdMsg.id, result }),
-            );
+            wsAdapter.sendRaw(JSON.stringify({ type: "command_response", id: cmdMsg.id, result }));
           } catch (err: unknown) {
-            this._wsAdapter?.sendRaw(
+            wsAdapter.sendRaw(
               JSON.stringify({
                 type: "command_response",
                 id: cmdMsg.id,
@@ -502,7 +443,7 @@ export class SyncController {
       const authToken = this._servingAuthToken;
 
       // Claim the task
-      this._wsAdapter?.sendRaw(JSON.stringify({ type: "task_claim", task_id: task.task_id }));
+      wsAdapter.sendRaw(JSON.stringify({ type: "task_claim", task_id: task.task_id }));
       this._activeTaskCount++;
 
       // Execute — creature glow will rise from processing state
@@ -555,14 +496,82 @@ export class SyncController {
       })();
     });
 
+    // Wire the encrypted WS adapter as the sync remote and start
+    runtime.connectSync(encryptedWs);
+    wsAdapter.connect();
+
     // Token refresh every 4.5 min (tokens expire at 5 min). The SAME
     // adapter swaps its socket and re-mints the credential, so the
     // command/task handler above, the inbound-event handler, and onCatchUp
     // all stay attached, and the replaced socket is the one that closes
     // (#816). Never build a second adapter here.
-    this._wsTokenRefreshTimer = setInterval(() => {
+    const refreshTimer = setInterval(() => {
       wsAdapter.refreshConnection();
     }, WS_TOKEN_REFRESH_MS);
+
+    // Fully wired: retire the socket this one replaces (none on a first start).
+    const replaced = this.takeWs();
+    this._wsAdapter = wsAdapter;
+    this._wsUnsubOnEvent = unsubEvent;
+    this._wsUnsubOnCustom = unsubCustom;
+    this._wsTokenRefreshTimer = refreshTimer;
+    this.retireWs(replaced, wsAdapter);
+
+    // Subscribe to SyncEngine status changes
+    if (this._syncUnsubscribe) this._syncUnsubscribe();
+    this._syncUnsubscribe = runtime.sync.onStatusChange((engineStatus: SyncStatus) => {
+      if (engineStatus === "syncing") {
+        this.emitSyncStatus({ status: "syncing" });
+      } else if (engineStatus === "idle") {
+        const conflicts = this.deps.getRuntime()?.sync.getConflicts() ?? [];
+        this.emitSyncStatus({
+          status: conflicts.length > 0 ? "conflict" : "connected",
+          lastSyncAt: Date.now(),
+          conflictCount: conflicts.length,
+        });
+      } else if (engineStatus === "error") {
+        this.emitSyncStatus({ status: "error", error: "Sync cycle failed" });
+      } else if (engineStatus === "offline") {
+        this.emitSyncStatus({ status: "disconnected" });
+      }
+    });
+
+    runtime.startSync();
+    this.emitSyncStatus({ status: "connected" });
+
+    // Enable interactive delegation — lets the AI transparently delegate tasks
+    // to remote agents during conversation via the delegate_to_agent tool.
+    // Resolve the PINNED relay key (TOFU) so a paid P2P delegation derives the
+    // fee-leg treasury from a key trusted at first connect, never a fetched
+    // value (the irreversible-payment MITM surface). undefined → P2P disabled,
+    // relay-mode still serves the task. localStorage may be unavailable in some
+    // desktop contexts (see runSelfTestOnce) — guard so it never blocks sync.
+    let pinnedRelayKey: string | undefined;
+    try {
+      pinnedRelayKey = await getOrPinRelayKey(syncUrl, { storage: localStorage });
+    } catch {
+      pinnedRelayKey = undefined;
+    }
+    // Superseded while awaiting: a stop already closed this socket, or a newer
+    // start already retired it into its own. Nothing of this start remains to
+    // configure.
+    if (this._wsOwner !== request) return;
+    runtime.enableInteractiveDelegation({
+      syncUrl,
+      // Honor the audience the runtime asks for — `task:submit` to submit,
+      // `task:query` to poll, `market:listing` for the P2P pre-flight. A
+      // closure that ignored it sent `task:submit` to all three, and the poll
+      // and pre-flight were refused (#827).
+      authToken: async (audience?: TokenAudience) =>
+        this.deps.createSyncToken(privKeyHex, audience ?? "task:submit"),
+      ...(pinnedRelayKey != null ? { relayPublicKey: pinnedRelayKey } : {}),
+      // Forward the cold-start opt-in as a LIVE getter so the "Pay new agents
+      // directly" Governance toggle governs chat-driven (delegate_to_agent) P2P
+      // delegation, not just the relay-mode fallback. Without this the toggle is
+      // a no-op for the AI-loop path (the bug closed on web by d6cab601, now at
+      // parity here). Read per call → no re-enable needed when the user flips it.
+      acknowledgeNoHistoryRisk: () => loadColdStartOptIn(),
+    });
 
     // One-shot conversation sync (encrypted, stays HTTP — no WS needed for conversations)
     void this.syncConversations(syncUrl, token, encKey)
@@ -780,6 +789,37 @@ export class SyncController {
       this._wsAdapter.disconnect();
       this._wsAdapter = null;
     }
+  }
+
+  /** Detach the current socket's state from the controller (to be retired). */
+  private takeWs(): {
+    adapter: WebSocketEventStoreAdapter | null;
+    unsubEvent: (() => void) | null;
+    unsubCustom: (() => void) | null;
+    timer: ReturnType<typeof setInterval> | null;
+  } {
+    const taken = {
+      adapter: this._wsAdapter,
+      unsubEvent: this._wsUnsubOnEvent,
+      unsubCustom: this._wsUnsubOnCustom,
+      timer: this._wsTokenRefreshTimer,
+    };
+    this._wsAdapter = null;
+    this._wsUnsubOnEvent = null;
+    this._wsUnsubOnCustom = null;
+    this._wsTokenRefreshTimer = null;
+    return taken;
+  }
+
+  /** Retire a replaced socket into its (already wired) successor. */
+  private retireWs(
+    old: ReturnType<SyncController["takeWs"]>,
+    successor: WebSocketEventStoreAdapter,
+  ): void {
+    if (old.timer) clearInterval(old.timer);
+    old.unsubEvent?.();
+    old.unsubCustom?.();
+    old.adapter?.handOffTo(successor);
   }
 
   /** Stop background event sync. */

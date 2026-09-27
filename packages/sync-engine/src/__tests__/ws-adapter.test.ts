@@ -1010,4 +1010,65 @@ describe("WebSocketEventStoreAdapter", () => {
     lastWS().simulateOpenWithAuth();
     expect(adapter.isConnected).toBe(true);
   });
+
+  // --- handOffTo (#816): make-before-break for a replaced adapter ---
+
+  it("handOffTo moves queued events to the successor, which pushes them once authenticated", async () => {
+    const old = new WebSocketEventStoreAdapter({
+      url: WS_URL,
+      motebitId: MOTEBIT_ID,
+      authToken: "a",
+    });
+    old.connect();
+    const oldSocket = lastWS();
+    oldSocket.simulateOpen(); // not yet authenticated: appends queue
+    await old.append(makeEvent(1));
+
+    const next = new WebSocketEventStoreAdapter({
+      url: WS_URL,
+      motebitId: MOTEBIT_ID,
+      authToken: "b",
+    });
+    next.connect();
+    const nextSocket = lastWS();
+    old.handOffTo(next);
+    expect(oldSocket.closed).toBe(true);
+
+    nextSocket.simulateOpenWithAuth();
+    const pushed = nextSocket.sent
+      .map((raw) => JSON.parse(raw) as { type: string; events?: EventLogEntry[] })
+      .filter((m) => m.type === "push")
+      .flatMap((m) => m.events ?? [])
+      .map((e) => e.event_id);
+    expect(pushed).toEqual(["event-1"]);
+  });
+
+  it("a retired adapter forwards later appends and replies to its successor and never reconnects", async () => {
+    const old = new WebSocketEventStoreAdapter({
+      url: WS_URL,
+      motebitId: MOTEBIT_ID,
+      authToken: "a",
+    });
+    old.connect();
+    lastWS().simulateOpenWithAuth();
+    const next = new WebSocketEventStoreAdapter({
+      url: WS_URL,
+      motebitId: MOTEBIT_ID,
+      authToken: "b",
+    });
+    next.connect();
+    const nextSocket = lastWS();
+    nextSocket.simulateOpenWithAuth();
+    old.handOffTo(next);
+
+    await old.append(makeEvent(2)); // a sync push already holding the old adapter
+    old.sendRaw(JSON.stringify({ type: "command_response", id: "c1" })); // a reply in flight
+    old.connect();
+    old.refreshConnection();
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    expect(MockWebSocket.instances).toHaveLength(2);
+    expect(nextSocket.sent.some((raw) => raw.includes("event-2"))).toBe(true);
+    expect(nextSocket.sent.some((raw) => raw.includes('"id":"c1"'))).toBe(true);
+  });
 });
