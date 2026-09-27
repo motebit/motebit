@@ -388,14 +388,23 @@ describe("task dispatch — listed worker with an endpoint (Phase 1 ranking, Pha
     expect(posts()).toBe(0);
   });
 
-  it("L2: only CLOSED sockets ⇒ the no-socket path: forwarded to the MCP endpoint", async () => {
+  it("L2: only CLOSED sockets ⇒ HELD for reconnect, as main: no Phase 3 MCP forward, no token, the reconnect gets it once", async () => {
+    // #811 v3: v2 fell through to Phase 3 here, and a flaky endpoint then
+    // stranded a task main completes through reconnect recovery.
     const s = await startRelay();
     const { worker, posts } = await listedWorker(s);
     await stale(s, worker, "read_url");
     const r = await submit(s, worker, { required_capabilities: ["read_url"] });
     expect(r.status).toBe(201);
     expect(r.dispatch_token).toBeUndefined();
-    await waitFor(() => posts() > 0, "the MCP forward");
+    const back = await connect(s, worker, "read_url");
+    await waitFor(
+      () => back.of("task_request").some((f) => f.task?.task_id === r.task_id),
+      "task recovery on reconnect",
+    );
+    await settle();
+    expect(posts()).toBe(0);
+    expect(back.of("task_request").filter((f) => f.task?.task_id === r.task_id)).toHaveLength(1);
   });
 });
 

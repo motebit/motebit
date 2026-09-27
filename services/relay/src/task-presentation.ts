@@ -18,10 +18,19 @@
  * connects while the forward is in flight is not handed a second copy.
  * Recovery skips a marked entry.
  *
- * A door that turns out NOT to have presented releases its mark
- * (`releasePresentation`), and the sockets whose recovery the mark held back
- * are handed the task then — exactly what recovery would have done without
- * the mark.
+ * A relay forward's mark (MCP or federation) is held only while that forward
+ * is in flight (#811 v3). When the forward settles without handing the task
+ * on for good — an MCP forward that did not store a receipt, a federation
+ * forward the peer did not accept, any refused, reset or timed-out
+ * connection — the mark is released (`releasePresentation`), and the sockets
+ * whose recovery it held back are handed the task then: exactly what
+ * recovery would have done without the mark. Keeping it after an ambiguous
+ * failure ("the tools/call was sent, then the connection died") stranded
+ * tasks that main executes and settles through recovery; the one-presenter
+ * rule never makes a task worse off than main. The accepted residual, shared
+ * with main: a worker that ran the task but whose answer was lost runs it
+ * again when recovery hands it over. Only the submitter's chosen mark and an
+ * accepted federation forward's mark outlive the request.
  *
  * A mark is PROCESS-scoped. It records the boot id of the relay instance that
  * set it, and every check treats a mark from another boot as absent: after a
@@ -123,8 +132,9 @@ export function recoverableOnReconnect(entry: TaskQueueEntry, bootId: string): b
 }
 
 /**
- * The door named by `mark` did NOT present the task (the forward never
- * reached the worker). Clear the mark — only if it is still this one — and
+ * The door named by `mark` is no longer presenting the task (its forward
+ * settled without handing it on for good). Clear the mark — only if it is
+ * still this one — and
  * hand the task to every OPEN socket of its motebit that registered while
  * the mark held recovery back. Returns how many sockets took it.
  */

@@ -120,7 +120,19 @@ type Mode =
   | "chosen" // presenter: "submitter" — the submitter is the one presenter
   | "pinned" // Phase 0 pinned paid P2P dispatch
   | "ranked" // Phase 1: submitted to another agent's URL, ranking selects the worker
-  | "failing"; // caps, but the worker's MCP endpoint refuses `initialize` (slowly)
+  | "failing"; // caps, but the worker's MCP endpoint fails (slowly) — see `FailAt`
+
+/**
+ * How the "failing" endpoint fails, 700 ms in — so the device reconnects
+ * while the forward is still in flight:
+ *   - initialize: `initialize` answered 503;
+ *   - reset:      `tools/call` read, then the socket destroyed unanswered;
+ *   - refused:    the server closes after `notifications/initialized`, so
+ *                 `tools/call` gets ECONNREFUSED;
+ *   - error200:   `tools/call` answered 2xx with an error result and no
+ *                 receipt (an admission refusal: the worker never ran it).
+ */
+type FailAt = "initialize" | "reset" | "refused" | "error200";
 
 interface Outcome {
   submitterToken: boolean;
@@ -130,12 +142,14 @@ interface Outcome {
   settlementRows: number;
   /** task_request frames received by a socket that was open all along. */
   bystanderFrames: number;
+  /** POSTs the "failing" endpoint received (0: the relay never forwarded to it). */
+  endpointPosts: number;
 }
 
 async function scenario(
   kind: Kind,
   mode: Mode,
-  opts: { bystander?: boolean } = {},
+  opts: { bystander?: boolean; fail?: FailAt } = {},
 ): Promise<Outcome> {
   const { relay, port } = await startRelay();
   const kp = await generateKeypair();
@@ -148,19 +162,70 @@ async function scenario(
   const mcpPort = nextPort++;
   let mcpExec = 0;
   let endpoint = `http://127.0.0.1:${mcpPort}`;
+  let endpointPosts = 0;
 
   if (mode === "failing") {
-    // Answers /health, then refuses `initialize` after a delay long enough
-    // that the device reconnects while the forward is still in flight.
+    // Answers /health, then fails as `opts.fail` says after a delay long
+    // enough that the device reconnects while the forward is still in flight.
+    const fail = opts.fail ?? "initialize";
     const srv: Server = createServer((req, res) => {
       if (req.method === "GET") {
         res.end("ok");
         return;
       }
-      setTimeout(() => {
-        res.statusCode = 503;
-        res.end("cold");
-      }, 700);
+      endpointPosts++;
+      let body = "";
+      req.on("data", (c: Buffer) => (body += c.toString()));
+      req.on("end", () => {
+        const method = (JSON.parse(body) as { method: string }).method;
+        if (fail === "initialize") {
+          setTimeout(() => {
+            res.statusCode = 503;
+            res.end("cold");
+          }, 700);
+          return;
+        }
+        if (method === "initialize") {
+          res.setHeader("content-type", "application/json");
+          res.end(JSON.stringify({ jsonrpc: "2.0", id: 1, result: {} }));
+          return;
+        }
+        if (method === "tools/call") {
+          setTimeout(() => {
+            if (fail === "reset") {
+              req.socket.destroy();
+              return;
+            }
+            res.setHeader("content-type", "application/json");
+            res.end(
+              JSON.stringify({
+                jsonrpc: "2.0",
+                id: 2,
+                result: {
+                  isError: true,
+                  content: [
+                    { type: "text", text: "task admission refused: dispatch token invalid" },
+                  ],
+                },
+              }),
+            );
+          }, 700);
+          return;
+        }
+        // notifications/initialized
+        if (fail === "refused") {
+          setTimeout(() => {
+            res.statusCode = 202;
+            res.end(() => {
+              srv.close();
+              srv.closeAllConnections();
+            });
+          }, 700);
+          return;
+        }
+        res.statusCode = 202;
+        res.end();
+      });
     });
     await new Promise<void>((r) => srv.listen(0, "127.0.0.1", () => r()));
     cleanups.push(() => new Promise<void>((r) => srv.close(() => r())));
@@ -374,6 +439,7 @@ async function scenario(
     total: mcpExec + wsExec,
     settlementRows,
     bystanderFrames,
+    endpointPosts,
   };
 }
 
@@ -391,10 +457,10 @@ const T = 20_000;
 
 describe("an MCP forward is the one presenter — recovery skips the entry", () => {
   it(
-    "caps.closed ⇒ 1 execution (MCP), none on the reconnect",
+    "caps.closed ⇒ held for reconnect, as main: no MCP forward, the reconnect executes it once",
     async () => {
       const o = await scenario("closed", "caps");
-      expect(o).toMatchObject({ mcpExecutions: 1, wsExecutions: 0, total: 1, settlementRows: 1 });
+      expect(o).toMatchObject({ mcpExecutions: 0, wsExecutions: 1, total: 1, settlementRows: 1 });
     },
     T,
   );
@@ -418,10 +484,10 @@ describe("an MCP forward is the one presenter — recovery skips the entry", () 
   );
 
   it(
-    "other.closed ⇒ 1 execution (main: 2)",
+    "other.closed — Phase 1 ranks the OTHER agent and forwards to it ⇒ 1 execution (main: 2)",
     async () => {
       const o = await scenario("closed", "other");
-      expect(o).toMatchObject({ total: 1, settlementRows: 1 });
+      expect(o).toMatchObject({ mcpExecutions: 1, wsExecutions: 0, total: 1, settlementRows: 1 });
     },
     T,
   );
@@ -520,7 +586,7 @@ describe("a submitter that CHOSE to present is the one presenter", () => {
   );
 });
 
-describe("a forward that never presented releases its mark", () => {
+describe("a forward that ends without a receipt releases its mark — never worse than main (#811 v3)", () => {
   it(
     "failing.none with a bystander socket open all along ⇒ only the held-back device gets it",
     async () => {
@@ -538,9 +604,39 @@ describe("a forward that never presented releases its mark", () => {
     },
     T,
   );
+
+  // The #849 review: v2 kept the mark once `tools/call` was sent, so these
+  // tasks sat `pending` until their TTL with zero executions — where main
+  // executes and settles them through reconnect recovery.
+  for (const fail of ["reset", "refused", "error200"] as const) {
+    it(
+      `failing.none — ${fail} at tools/call after the device reconnected ⇒ the held-back device gets it, 1 execution, settled (as main)`,
+      async () => {
+        const o = await scenario("none", "failing", { fail });
+        expect(o.endpointPosts).toBeGreaterThanOrEqual(2); // it did reach the endpoint
+        expect(o).toMatchObject({ mcpExecutions: 0, wsExecutions: 1, total: 1, settlementRows: 1 });
+      },
+      T,
+    );
+  }
+
+  it(
+    "failing.closed — held for reconnect: the flaky endpoint is never contacted, the reconnect executes it once (as main)",
+    async () => {
+      const o = await scenario("closed", "failing", { fail: "reset" });
+      expect(o).toMatchObject({
+        endpointPosts: 0,
+        mcpExecutions: 0,
+        wsExecutions: 1,
+        total: 1,
+        settlementRows: 1,
+      });
+    },
+    T,
+  );
 });
 
-describe("forwardTaskViaMcp reports whether it presented the task", () => {
+describe("forwardTaskViaMcp reports whether it stored a receipt", () => {
   /** An MCP endpoint scripted per JSON-RPC method. */
   async function scripted(
     onToolsCall: (res: import("node:http").ServerResponse) => void,
@@ -574,38 +670,97 @@ describe("forwardTaskViaMcp reports whether it presented the task", () => {
     return `http://127.0.0.1:${(srv.address() as AddressInfo).port}`;
   }
   const quiet = { info: () => {}, warn: () => {} };
-  const fwd = (url: string) =>
-    forwardTaskViaMcp(url, "t1", "p", "w", new Map() as never, quiet, undefined, undefined, "tok", {
+  const fwd = (url: string, queue: Map<string, unknown> = new Map()) =>
+    forwardTaskViaMcp(url, "t1", "p", "w", queue as never, quiet, undefined, undefined, "tok", {
       allowPrivateNetwork: true,
     } as never);
 
-  it("initialize refused ⇒ not_presented", async () => {
-    expect(await fwd(await scripted(() => {}, 503))).toBe("not_presented");
+  it("initialize refused ⇒ no_receipt", async () => {
+    expect(await fwd(await scripted(() => {}, 503))).toBe("no_receipt");
   });
 
-  it("unreachable endpoint ⇒ not_presented", async () => {
-    expect(await fwd("http://127.0.0.1:1")).toBe("not_presented");
+  it("unreachable endpoint ⇒ no_receipt", async () => {
+    expect(await fwd("http://127.0.0.1:1")).toBe("no_receipt");
   });
 
-  it("tools/call answered non-2xx ⇒ not_presented", async () => {
+  it("connection REFUSED at tools/call (the server went away after notifications/initialized) ⇒ no_receipt", async () => {
+    let srv: Server | undefined;
+    let toolsCalls = 0;
+    srv = createServer((req, res) => {
+      let body = "";
+      req.on("data", (c: Buffer) => (body += c.toString()));
+      req.on("end", () => {
+        const method = (JSON.parse(body) as { method: string }).method;
+        if (method === "initialize") {
+          res.setHeader("content-type", "application/json");
+          res.end(JSON.stringify({ jsonrpc: "2.0", id: 1, result: {} }));
+          return;
+        }
+        if (method === "tools/call") toolsCalls++;
+        res.statusCode = 202;
+        res.end(() => {
+          srv?.close();
+          srv?.closeAllConnections();
+          srv = undefined;
+        });
+      });
+    });
+    const live = srv;
+    await new Promise<void>((r) => live.listen(0, "127.0.0.1", () => r()));
+    cleanups.push(async () => {
+      live.closeAllConnections();
+      await new Promise<void>((r) => live.close(() => r()));
+    });
+    const url = `http://127.0.0.1:${(live.address() as AddressInfo).port}`;
+    expect(await fwd(url)).toBe("no_receipt");
+    expect(toolsCalls).toBe(0); // the worker never received the task
+  });
+
+  it("tools/call answered non-2xx ⇒ no_receipt", async () => {
     const url = await scripted((res) => {
       res.statusCode = 500;
       res.end("no");
     });
-    expect(await fwd(url)).toBe("not_presented");
+    expect(await fwd(url)).toBe("no_receipt");
   });
 
-  it("tools/call answered 2xx ⇒ presented", async () => {
+  it("tools/call answered 2xx with no receipt (an error result: admission refused) ⇒ no_receipt", async () => {
     const url = await scripted((res) => {
       res.setHeader("content-type", "application/json");
-      res.end(JSON.stringify({ jsonrpc: "2.0", id: 2, result: { content: [] } }));
+      res.end(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id: 2,
+          result: { isError: true, content: [{ type: "text", text: "admission refused" }] },
+        }),
+      );
     });
-    expect(await fwd(url)).toBe("presented");
+    expect(await fwd(url)).toBe("no_receipt");
   });
 
-  it("tools/call sent, then the connection dies unanswered ⇒ presented (the worker may be running it)", async () => {
+  it("tools/call sent, then the connection dies unanswered ⇒ no_receipt (the #849 strand: never classified presented)", async () => {
     const url = await scripted((res) => res.socket?.destroy());
-    expect(await fwd(url)).toBe("presented");
+    expect(await fwd(url)).toBe("no_receipt");
+  });
+
+  it("tools/call answered 2xx with a receipt ⇒ receipt, stored on the entry", async () => {
+    const kp = await generateKeypair();
+    const receipt = await signReceipt(kp, "w", "t1", "p", "mcp");
+    const url = await scripted((res) => {
+      res.setHeader("content-type", "application/json");
+      res.end(
+        JSON.stringify({
+          jsonrpc: "2.0",
+          id: 2,
+          result: { content: [{ type: "text", text: JSON.stringify(receipt) }] },
+        }),
+      );
+    });
+    const queue = new Map<string, { task: { status: string }; receipt?: unknown }>([
+      ["t1", { task: { status: "pending" } }],
+    ]);
+    expect(await fwd(url, queue)).toBe("receipt");
+    expect(queue.get("t1")).toMatchObject({ task: { status: "completed" } });
   });
 });
 
