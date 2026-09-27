@@ -31,7 +31,7 @@ import { refusePublicDeviceRegistration } from "./device-registration-guard.js";
 import type { ConnectedDevice } from "./index.js";
 import { admitKey, proveSovereignFirstKey, recordFirstIdentityKey } from "./identity-keys.js";
 import type { AuthEvent } from "./auth-events.js";
-import { refuseForeignSyncEntries } from "./sync-ingest-binding.js";
+import { appendBoundEvent, bindSyncEntries } from "./identity-binding.js";
 
 const logger = createLogger({ service: "sync-routes" });
 
@@ -74,7 +74,7 @@ export function registerSyncRoutes(deps: SyncRoutesDeps): void {
       });
     }
     // #846: every event must name the identity this push authenticated as.
-    refuseForeignSyncEntries(c, body.events, motebitId, deps.recordAuthEvent);
+    const owner = bindSyncEntries(c, body.events, motebitId, deps.recordAuthEvent);
     // Ingress redaction: memory content above the sync-safe ceiling must
     // never reach the relay's event store (fail-closed privacy; transparency
     // declaration). Redact once, then append + fan out the safe events.
@@ -96,7 +96,7 @@ export function registerSyncRoutes(deps: SyncRoutesDeps): void {
           continue;
         }
       }
-      await eventStore.append(event);
+      if (!(await appendBoundEvent(eventStore, owner, event))) continue;
       accepted++;
       // Deletion propagation: a synced DeleteRequested for a memory
       // node erases the relay-stored memory_formed content for that

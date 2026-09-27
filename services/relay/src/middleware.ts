@@ -28,7 +28,7 @@ import { requestContext, enrichRequestContext } from "./request-context.js";
 import type { RequestContext } from "./request-context.js";
 import { RelayError, RateLimitError, AuthenticationError, AuthorizationError } from "./errors.js";
 import { recordMasterTokenOnce } from "./auth-events.js";
-import { SYNC_PRESENTER_KEY } from "./sync-ingest-binding.js";
+import { SYNC_PRESENTER_KEY } from "./identity-binding.js";
 
 const logger = createLogger({ service: "middleware" });
 
@@ -838,6 +838,59 @@ export function registerAuthMiddleware(
 ): void {
   const { app, apiToken } = deps;
   const dualAuth = createDualAuth(deps);
+
+  // Subscription owner routes (#846): cancel and resubscribe act on ONE
+  // identity's Stripe subscription, so they take that identity's device token
+  // (`account:checkout` — the billing-mutation audience the web/desktop/
+  // mobile billing panels already mint for checkout) or the master token.
+  // The prefix stays out of the master-token catch-all for the Stripe webhook
+  // (signature-verified) and checkout/session-status; these two are the
+  // owner-facing mutations. The handler binds the caller to `:motebitId`
+  // (identity-binding.ts). Installed before the no-apiToken early return:
+  // with no master token configured a device token must still be verified.
+  for (const sub of ["cancel", "resubscribe"]) {
+    app.use(`/api/v1/subscriptions/:motebitId/${sub}`, async (c, next) => {
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-argument -- Hono context type variance
+      return dualAuth(c, next, ACCOUNT_CHECKOUT_AUDIENCE);
+    });
+  }
+
+  // Dispute adjudication is the OPERATOR's act (spec/dispute-v1.md §6: on a
+  // single relay the operator's body IS the resolution; the federation path
+  // is driven by the relay itself). `/api/v1/disputes/` is carved out of the
+  // master-token catch-all for the parties' signed filing, evidence and
+  // appeal, and nothing else authenticated `/resolve`: any caller could set
+  // the verdict, fund action and split ratio of any dispute (#846 v2 audit).
+  // Master token only; with no master token configured it is refused.
+  app.use("/api/v1/disputes/:disputeId/resolve", async (c, next) => {
+    const header = c.req.header("authorization");
+    const presented = header != null && header.startsWith("Bearer ") ? header.slice(7) : null;
+    const path = new URL(c.req.url, "http://localhost").pathname;
+    if (apiToken != null && apiToken !== "" && presented === apiToken) {
+      recordMasterTokenOnce(c, deps.recordAuthEvent, {
+        method: c.req.method,
+        path,
+        correlationId: c.req.header("x-correlation-id") ?? null,
+      });
+      await next();
+      return;
+    }
+    const claimed =
+      presented != null ? (deps.parseTokenPayloadUnsafe(presented)?.mid ?? null) : null;
+    logger.warn("auth.dispute_resolve_refused", { path, presenter: claimed });
+    deps.recordAuthEvent({
+      kind: "agent_token_rejected",
+      method: c.req.method,
+      path,
+      motebitId: claimed,
+      reason:
+        presented == null ? "dispute:resolve:unauthenticated" : "dispute:resolve:operator_only",
+      correlationId: c.req.header("x-correlation-id") ?? null,
+    });
+    throw new HTTPException(presented == null ? 401 : 403, {
+      message: "Dispute resolution is the operator's act",
+    });
+  });
 
   if (apiToken == null || apiToken === "") return;
 

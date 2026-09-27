@@ -101,10 +101,19 @@ export function initSubscription(ctx: WebContext): SubscriptionAPI {
                   btn.disabled = true;
                   btn.textContent = "Resuming…";
                 }
-                fetch(`${relayUrl}/api/v1/subscriptions/${mid}/resubscribe`, {
-                  method: "POST",
-                  headers: { "Content-Type": "application/json" },
-                })
+                // The relay binds resubscribe to the caller's own identity
+                // (`account:checkout`); it used to take no token at all (#846).
+                ctx.app
+                  .createSyncToken("account:checkout")
+                  .then((token) =>
+                    fetch(`${relayUrl}/api/v1/subscriptions/${mid}/resubscribe`, {
+                      method: "POST",
+                      headers: {
+                        "Content-Type": "application/json",
+                        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+                      },
+                    }),
+                  )
                   .then((res) => {
                     if (res.ok) {
                       ctx.showToast("Plan resumed");
@@ -296,10 +305,19 @@ export function initSubscription(ctx: WebContext): SubscriptionAPI {
         btn.textContent = "Cancelling…";
       }
 
-      fetch(`${relayUrl}/api/v1/subscriptions/${motebitId}/cancel`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-      })
+      // The relay binds cancel to the caller's own identity (`account:checkout`);
+      // it used to take no token at all, so anyone could cancel anyone (#846).
+      ctx.app
+        .createSyncToken("account:checkout")
+        .then((token) =>
+          fetch(`${relayUrl}/api/v1/subscriptions/${motebitId}/cancel`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              ...(token ? { Authorization: `Bearer ${token}` } : {}),
+            },
+          }),
+        )
         .then((res) => {
           if (res.ok) {
             void res.json().then((data: { active_until?: number }) => {
