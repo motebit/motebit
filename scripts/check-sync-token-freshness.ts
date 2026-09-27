@@ -24,10 +24,10 @@
  * alone — scanning other surfaces would false-positive on their legitimate
  * static-token strategy.
  *
- * Invariant: in `apps/web/src/**`, every construction of a long-lived HTTP sync
+ * Invariant: in `apps/web/src/**`, every construction of a long-lived sync
  * adapter (`HttpEventStoreAdapter`, `HttpPlanSyncAdapter`,
- * `HttpConversationSyncAdapter`) MUST pass `credentialSource` in its config
- * object. Exit 1 on any that does not.
+ * `HttpConversationSyncAdapter`, `WebSocketEventStoreAdapter`) MUST pass
+ * `credentialSource` in its config object. Exit 1 on any that does not.
  *
  * See `docs/drift-defenses.md` invariant #128 and the per-construction comments
  * at `apps/web/src/web-app.ts`. The `web-app.ts:3474` comment documents the
@@ -45,15 +45,20 @@ const ROOT = resolve(__dirname, "..");
 // token by design (panels rule 3) and are out of scope by construction.
 const SCAN_ROOT = resolve(ROOT, "apps/web/src");
 
-// The long-lived, relay-polling HTTP sync adapters. Each holds its config for
-// the session and re-requests on a timer, so each must resolve a token freshly.
-// (WebSocketEventStoreAdapter is deliberately excluded: it carries a distinct
-// valid pattern — a 4.5-min refresh timer that reconstructs the adapter with a
-// freshly minted token — not a static capture.)
+// The long-lived sync adapters. Each holds its config for the session: the HTTP
+// ones re-request on a timer, and the WebSocket one reconnects — on every drop
+// and on the 4.5-min token refresh, which calls `refreshConnection()` to swap
+// the socket INSIDE the one adapter and re-resolve its credential (#816). So
+// each must resolve a token freshly: a per-request / per-connect
+// `credentialSource`, never a captured string. (The WS adapter was once
+// excluded on the belief that its refresh rebuilt the adapter with a freshly
+// minted token; that rebuild was the #816 deaf-socket leak, and a static WS
+// token presents an expired signature on every reconnect past minute 5.)
 const POLLING_ADAPTERS = [
   "HttpEventStoreAdapter",
   "HttpPlanSyncAdapter",
   "HttpConversationSyncAdapter",
+  "WebSocketEventStoreAdapter",
 ] as const;
 
 interface Violation {
@@ -108,7 +113,9 @@ function lineOf(src: string, index: number): number {
 
 const violations: Violation[] = [];
 
+let scanned = 0;
 for (const file of walk(SCAN_ROOT)) {
+  scanned++;
   const src = readFileSync(file, "utf-8");
   for (const adapter of POLLING_ADAPTERS) {
     const needle = `new ${adapter}(`;
@@ -159,5 +166,5 @@ if (violations.length > 0) {
 }
 
 process.stdout.write(
-  "✓ check-sync-token-freshness: every web HTTP sync adapter resolves a fresh token per request.\n",
+  `✓ check-sync-token-freshness: every web sync adapter (${POLLING_ADAPTERS.join(", ")}) resolves a fresh token per request or connect, across ${scanned} file(s) in apps/web/src.\n`,
 );
