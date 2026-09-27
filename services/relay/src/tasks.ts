@@ -87,6 +87,8 @@ import {
 } from "./multihop-depth.js";
 import type { ConnectedDevice } from "./index.js";
 import { sendToEach } from "./ws-send.js";
+import { markPresented, releasePresentation } from "./task-presentation.js";
+import type { TaskPresentation } from "./task-presentation.js";
 import { checkIdempotency, completeIdempotency } from "./idempotency.js";
 import { createLogger } from "./logger.js";
 import type { TaskQueue } from "./task-queue.js";
@@ -171,6 +173,13 @@ export type TaskQueueEntry = {
    * already ran when this entry exists. Advisory id, never authority.
    */
   grant_id?: string;
+  /**
+   * Set when a door other than a WebSocket frame presented the task — the
+   * relay's MCP forward, a federation forward, or a submitter that chose to
+   * present (`presenter: "submitter"`). Reconnect recovery skips a marked
+   * entry: one admission, one presenter (#811; `task-presentation.ts`).
+   */
+  presented?: TaskPresentation;
 };
 
 // Platform fee rate is no longer a module-level variable. It lives in the
@@ -2597,6 +2606,10 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
       target_agent: body.target_agent,
       grant_id: body.grant_id,
     });
+    // A submitter that chose to present is the one presenter from the moment
+    // the task exists — before any await below lets a worker socket connect
+    // and be handed it by reconnect recovery (#811).
+    if (submitterPresenter) markPresented(taskQueue, taskId, "submitter");
 
     logger.info("task.submitted", {
       correlationId: taskId,
@@ -2781,8 +2794,58 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
     // of one admission are mutually exclusive at the worker (single-use `sub`).
     const dispatchTokenFor = (workerId: string): Promise<string> =>
       mintTaskDispatchToken(relayIdentity, workerId, taskId, body.prompt);
+    // Every relay MCP forward goes through here. The entry is marked presented
+    // BEFORE the first await (the token mint), so a worker socket that
+    // connects while the forward is in flight is not handed a second copy by
+    // reconnect recovery — one admission, one presenter (#811). A forward
+    // that never reached the worker releases the mark, and the sockets it
+    // held back get the task, as recovery would have given it.
+    const presentViaMcp = async (endpointUrl: string, workerId: string): Promise<void> => {
+      const mark = markPresented(taskQueue, taskId, "mcp");
+      const token = await dispatchTokenFor(workerId);
+      void forwardTaskViaMcp(
+        endpointUrl,
+        taskId,
+        body.prompt,
+        workerId,
+        taskQueue,
+        logger,
+        apiToken,
+        async (receiptCandidate: ReceiptCandidate) => {
+          const mcpEntry = taskQueue.get(taskId);
+          if (!mcpEntry || mcpEntry.settled) return;
+          await handleReceiptIngestion(
+            receiptCandidate as unknown as ExecutionReceipt,
+            taskId,
+            mcpEntry.task.motebit_id,
+            mcpEntry,
+            ingestionDeps,
+          );
+        },
+        token,
+        outboundPolicy,
+      ).then((outcome) => {
+        if (outcome !== "not_presented" || mark == null) return;
+        // Detached from the request: a relay that shut down meanwhile has a
+        // closed queue, and a throw here would be an unhandled rejection.
+        try {
+          releasePresentation(taskQueue, connections, taskId, mark);
+        } catch (err: unknown) {
+          logger.warn("task.presentation_release_failed", {
+            correlationId: taskId,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      });
+    };
     let routed = false;
     let federationAttempted = false;
+    // The broadcast found sockets for this agent but every one was CLOSING or
+    // CLOSED (#811). Main counted that as routed: it handed no token and the
+    // agent's reconnect recovery delivered the task. The relay stays that
+    // presenter here — so no incidental token goes to the submitter, which
+    // would be a second presenter beside recovery.
+    let heldForReconnect = false;
     let routingChoice:
       | {
           selected_agent: string;
@@ -2839,28 +2902,7 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
           )
           .get(pinnedId, Date.now()) as { endpoint_url: string } | undefined;
         if (pinnedReg?.endpoint_url?.trim()) {
-          void forwardTaskViaMcp(
-            pinnedReg.endpoint_url,
-            taskId,
-            body.prompt,
-            pinnedId,
-            taskQueue,
-            logger,
-            apiToken,
-            async (receiptCandidate: ReceiptCandidate) => {
-              const mcpEntry = taskQueue.get(taskId);
-              if (!mcpEntry || mcpEntry.settled) return;
-              await handleReceiptIngestion(
-                receiptCandidate as unknown as ExecutionReceipt,
-                taskId,
-                mcpEntry.task.motebit_id,
-                mcpEntry,
-                ingestionDeps,
-              );
-            },
-            await dispatchTokenFor(pinnedId),
-            outboundPolicy,
-          );
+          await presentViaMcp(pinnedReg.endpoint_url, pinnedId);
           routed = true;
           logger.info("task.p2p_pinned_dispatched", {
             correlationId: taskId,
@@ -3102,6 +3144,9 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
             alternatives_considered: 0,
           };
 
+          // The peer relay presents it from here (#811): recovery must not
+          // hand the same task to a local socket while the forward runs.
+          const fedP2pMark = markPresented(taskQueue, taskId, "federation");
           const forwardBody = {
             task_id: taskId,
             origin_relay: relayIdentity.relayMotebitId,
@@ -3141,6 +3186,10 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
               });
             } else {
               taskRouter.recordPeerForwardResult(peerEndpoint, false);
+              // Refused by the peer: it will not present the task.
+              if (fedP2pMark != null) {
+                releasePresentation(taskQueue, connections, taskId, fedP2pMark);
+              }
               // The task did not settle (no result came back), so no settlement
               // row exists for this proof — the delegator may resubmit the SAME
               // payment_proof to retry without re-paying (the replay guard keys
@@ -3303,6 +3352,10 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
                   });
                 }
 
+                // The peer relay presents it from here (#811). A timeout keeps
+                // the mark — the peer may have accepted, the same reason the
+                // local phases stay suppressed; only a refusal releases it.
+                const fedMark = markPresented(taskQueue, taskId, "federation");
                 try {
                   const forwardBody = {
                     task_id: taskId,
@@ -3340,6 +3393,9 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
                     });
                   } else {
                     taskRouter.recordPeerForwardResult(peerEndpoint, false);
+                    if (fedMark != null) {
+                      releasePresentation(taskQueue, connections, taskId, fedMark);
+                    }
                     // Loud, not silent: this rejection sets `federationAttempted`,
                     // which suppresses every local fallback phase — an unlogged
                     // branch here strands the task with zero forensic trail
@@ -3375,28 +3431,7 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
                     )
                     .get(selId, Date.now()) as { endpoint_url: string } | undefined;
                   if (regRow?.endpoint_url?.trim()) {
-                    void forwardTaskViaMcp(
-                      regRow.endpoint_url,
-                      taskId,
-                      body.prompt,
-                      selId,
-                      taskQueue,
-                      logger,
-                      apiToken,
-                      async (receiptCandidate: ReceiptCandidate) => {
-                        const mcpEntry = taskQueue.get(taskId);
-                        if (!mcpEntry || mcpEntry.settled) return;
-                        await handleReceiptIngestion(
-                          receiptCandidate as unknown as ExecutionReceipt,
-                          taskId,
-                          mcpEntry.task.motebit_id,
-                          mcpEntry,
-                          ingestionDeps,
-                        );
-                      },
-                      await dispatchTokenFor(selId),
-                      outboundPolicy,
-                    );
+                    await presentViaMcp(regRow.endpoint_url, selId);
                     routed = true;
                   }
                 }
@@ -3417,15 +3452,18 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
     // Also skip for pinned-local paid tasks (Phase 0): fan-out could execute the
     // paid task on a worker the delegator never paid.
     if (!submitterPresenter && !pinnedLocalHandled && !routed && !federationAttempted) {
-      // Routed only when an OPEN socket took the frame (#811): a broadcast
-      // that only reached CLOSING/CLOSED sockets falls through to Phase 3/4
-      // and hands the submitter its token, as when no socket is connected.
-      const delivered = sendToEach(connections.get(motebitId), payload, (peer) =>
+      // Routed only when an OPEN socket took the frame (#811). A broadcast
+      // that reached only CLOSING/CLOSED sockets falls through to Phase 3/4
+      // (an MCP forward there is marked presented, so recovery skips it);
+      // if nothing else takes it, reconnect recovery is its presenter, as on
+      // main — see `heldForReconnect`.
+      const eligible = (peer: ConnectedDevice): boolean =>
         requiredCaps.length > 0 && peer.capabilities
           ? requiredCaps.every((c) => peer.capabilities!.includes(c))
-          : true,
-      );
+          : true;
+      const delivered = sendToEach(connections.get(motebitId), payload, eligible);
       if (delivered > 0) routed = true;
+      else if ((connections.get(motebitId) ?? []).some(eligible)) heldForReconnect = true;
     }
 
     // Phase 3: HTTP MCP fallback — when no WebSocket routed the task,
@@ -3454,28 +3492,7 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
         .get(now, submittedBy ?? "", capFilter) as
         { motebit_id: string; endpoint_url: string } | undefined;
       if (httpCandidate?.endpoint_url?.trim()) {
-        void forwardTaskViaMcp(
-          httpCandidate.endpoint_url,
-          taskId,
-          body.prompt,
-          httpCandidate.motebit_id,
-          taskQueue,
-          logger,
-          apiToken,
-          async (receiptCandidate: ReceiptCandidate) => {
-            const mcpEntry = taskQueue.get(taskId);
-            if (!mcpEntry || mcpEntry.settled) return;
-            await handleReceiptIngestion(
-              receiptCandidate as unknown as ExecutionReceipt,
-              taskId,
-              mcpEntry.task.motebit_id,
-              mcpEntry,
-              ingestionDeps,
-            );
-          },
-          await dispatchTokenFor(httpCandidate.motebit_id),
-          outboundPolicy,
-        );
+        await presentViaMcp(httpCandidate.endpoint_url, httpCandidate.motebit_id);
         routed = true;
       }
     }
@@ -3497,10 +3514,15 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
     // the task anywhere (no WebSocket, no MCP endpoint, no federation). A
     // routed task's token travelled with the forward; handing the submitter a
     // second one would race the relay's own dispatch at the worker.
-    const submitterPresents = !routed && !federationAttempted;
+    const submitterPresents = !routed && !federationAttempted && !heldForReconnect;
+    if (heldForReconnect && !routed) {
+      logger.info("task.held_for_reconnect", { correlationId: taskId, motebitId });
+    }
     if (submitterPresenter) {
       // Chosen, not incidental: the submitter asked to present. Nothing above
-      // routed (every phase is guarded), so the token below is the ONLY one.
+      // routed (every phase is guarded), so the token below is the ONLY one —
+      // and reconnect recovery does not hand the task to the worker's socket
+      // as well: the entry was marked presented when it was queued (#811).
       logger.info("task.submitter_presents", {
         correlationId: taskId,
         worker:

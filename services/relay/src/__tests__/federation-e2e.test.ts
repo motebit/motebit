@@ -1319,6 +1319,62 @@ describe("Federation E2E", () => {
   // --- Full Pipeline: Happy Path ---
 
   describe("Full Pipeline", () => {
+    it("a task forwarded to a peer relay is not handed to the URL agent's reconnecting device (#811)", async () => {
+      // The peer relay is the task's presenter once the forward is accepted.
+      // Before #811 reconnect recovery on the ORIGIN relay re-sent the same
+      // queued task to any socket of the URL agent that connected afterwards
+      // — a second presenter, and a second execution if that device runs it.
+      const bob = await registerAgent(relayB, "bob", ["quantum-computing"]);
+      const bobWs = { readyState: 1, send: vi.fn(), close: vi.fn() };
+      relayB.connections.set(bob.motebitId, [{ ws: bobWs as never, deviceId: "bob-device" }]);
+      await establishPeering(relayA, relayB);
+      const alice = await registerAgent(relayA, "alice", ["web-search"]);
+
+      const taskRes = await relayA.app.request(`/agent/${alice.motebitId}/task`, {
+        method: "POST",
+        headers: jsonAuthWithIdempotency(),
+        body: JSON.stringify({
+          prompt: "forwarded once",
+          required_capabilities: ["quantum-computing"],
+        }),
+      });
+      expect(taskRes.status).toBe(201);
+      const { task_id: taskId } = (await taskRes.json()) as { task_id: string };
+      expect(bobWs.send).toHaveBeenCalled();
+
+      // Alice's device connects to Relay A over a real socket.
+      const { serve } = await import("@hono/node-server");
+      const { default: WebSocket } = await import("ws");
+      const server = serve({ fetch: relayA.app.fetch, port: 0, hostname: "127.0.0.1" });
+      (relayA.app as unknown as { injectWebSocket: (s: unknown) => void }).injectWebSocket(server);
+      await new Promise<void>((r) =>
+        server.listening ? r() : server.once("listening", () => r()),
+      );
+      const port = (server.address() as import("node:net").AddressInfo).port;
+      const frames: Array<{ type?: string; task?: { task_id: string } }> = [];
+      const ws = new WebSocket(
+        `ws://127.0.0.1:${port}/ws/sync/${alice.motebitId}?token=${API_TOKEN}`,
+      );
+      ws.on("error", () => {});
+      ws.on("message", (raw: Buffer) =>
+        frames.push(JSON.parse(raw.toString()) as (typeof frames)[0]),
+      );
+      try {
+        const start = Date.now();
+        while ((relayA.connections.get(alice.motebitId)?.length ?? 0) === 0) {
+          if (Date.now() - start > 3000) throw new Error("socket never registered");
+          await new Promise((r) => setTimeout(r, 10));
+        }
+        await new Promise((r) => setTimeout(r, 200));
+        expect(
+          frames.filter((f) => f.type === "task_request" && f.task?.task_id === taskId),
+        ).toEqual([]);
+      } finally {
+        ws.terminate();
+        await new Promise<void>((r) => server.close(() => r()));
+      }
+    });
+
     it("task submitted on Relay A routes to agent on Relay B and result returns", async () => {
       // 1. Register agent Bob on Relay B with unique capability
       const bob = await registerAgent(relayB, "bob", ["quantum-computing"]);

@@ -1058,9 +1058,25 @@ export async function mintTaskDispatchToken(
 }
 
 /**
+ * Whether an MCP forward PRESENTED the task to the worker (#811).
+ *
+ * `not_presented` — the `tools/call` carrying the task never reached the
+ * worker, or the worker refused it at the transport (a non-2xx answer):
+ * outbound URL refused, no dispatch token, `initialize` refused or
+ * unreachable, `notifications/initialized` failed, `tools/call` non-2xx.
+ *
+ * `presented` — the `tools/call` was answered 2xx (with or without a
+ * receipt), OR it was sent and then failed without an answer (timeout,
+ * reset). The last is ambiguous: the worker may be executing it, so it is
+ * counted as presented — at-most-once is the side a task must fail on.
+ */
+export type McpForwardOutcome = "presented" | "not_presented";
+
+/**
  * Forward a task to an agent's MCP endpoint via HTTP StreamableHTTP.
  * Called as fire-and-forget when no WebSocket connection is available.
- * On success, stores the receipt in the task queue for polling.
+ * On success, stores the receipt in the task queue for polling. Resolves to
+ * whether the task was presented (`McpForwardOutcome`); never rejects.
  */
 export async function forwardTaskViaMcp(
   endpointUrl: string,
@@ -1085,7 +1101,7 @@ export async function forwardTaskViaMcp(
   dispatchToken?: string,
   /** Outbound URL law (`buildOutboundPolicy`); absent ⇒ literals + names only. */
   outboundPolicy?: OutboundUrlOptions,
-): Promise<void> {
+): Promise<McpForwardOutcome> {
   // Re-check at CONNECT time, not only at registration: the registry row is
   // months old by the time a task arrives, and this forward carries a bearer.
   const outbound = await checkOutboundUrl(endpointUrl, outboundPolicy);
@@ -1096,7 +1112,7 @@ export async function forwardTaskViaMcp(
       endpoint: endpointUrl,
       reason: outbound.reason,
     });
-    return;
+    return "not_presented";
   }
   if (dispatchToken == null) {
     logger.warn("task.mcp_forward_refused", {
@@ -1105,7 +1121,7 @@ export async function forwardTaskViaMcp(
       endpoint: endpointUrl,
       reason: "no_dispatch_token",
     });
-    return;
+    return "not_presented";
   }
   const mcpEndpoint = endpointUrl.endsWith("/mcp") ? endpointUrl : `${endpointUrl}/mcp`;
   const mcpHeaders: Record<string, string> = {
@@ -1142,6 +1158,9 @@ export async function forwardTaskViaMcp(
     });
   }
 
+  // Set the moment the `tools/call` carrying the task is sent: before it,
+  // any failure means the worker never received the task.
+  let toolsCallSent = false;
   try {
     // Step 1: Initialize MCP session
     const initResp = await fetch(mcpEndpoint, {
@@ -1178,7 +1197,7 @@ export async function forwardTaskViaMcp(
         status: initResp.status,
         detail: detail.slice(0, 200),
       });
-      return;
+      return "not_presented";
     }
     const sessionId = initResp.headers.get("mcp-session-id");
     if (sessionId) mcpHeaders["Mcp-Session-Id"] = sessionId;
@@ -1192,6 +1211,7 @@ export async function forwardTaskViaMcp(
     });
 
     // Step 3: Call motebit_task
+    toolsCallSent = true;
     const taskResp = await fetch(mcpEndpoint, {
       method: "POST",
       headers: mcpHeaders,
@@ -1221,7 +1241,7 @@ export async function forwardTaskViaMcp(
         status: taskResp.status,
         detail: detail.slice(0, 200),
       });
-      return;
+      return "not_presented";
     }
 
     // Step 4: Parse JSON-RPC response (SSE or plain JSON)
@@ -1267,13 +1287,16 @@ export async function forwardTaskViaMcp(
         }
       }
     }
+    return "presented";
   } catch (err: unknown) {
     logger.warn("task.mcp_forward_failed", {
       correlationId: taskId,
       agent: agentId,
       endpoint: mcpEndpoint,
       error: err instanceof Error ? err.message : String(err),
+      presented: toolsCallSent,
     });
+    return toolsCallSent ? "presented" : "not_presented";
   }
 }
 
