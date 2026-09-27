@@ -140,6 +140,7 @@ import {
   buildSignedRevocationFeed,
 } from "./agent-revocation.js";
 import { createLogger } from "./logger.js";
+import { recordMasterTokenOnce } from "./auth-events.js";
 import { refuseInvalidIds, refuseNonStringText } from "./id-bounds.js";
 
 const logger = createLogger({ service: "agents" });
@@ -572,8 +573,7 @@ export function registerAgentAuthMiddleware(deps: AgentAuthMiddlewareDeps): void
     // on an agent route is exactly the shape the retirement arc closed, so it
     // must be visible if it ever comes back.
     if (apiToken != null && apiToken !== "" && token === apiToken) {
-      recordAuthEvent?.({
-        kind: "master_token",
+      recordMasterTokenOnce(c, recordAuthEvent, {
         method,
         path,
         correlationId: c.req.header("x-correlation-id") ?? null,
@@ -680,8 +680,7 @@ export function registerAgentAuthMiddleware(deps: AgentAuthMiddlewareDeps): void
     const token = authHeader.slice(7);
 
     if (apiToken != null && apiToken !== "" && token === apiToken) {
-      recordAuthEvent?.({
-        kind: "master_token",
+      recordMasterTokenOnce(c, recordAuthEvent, {
         method,
         path,
         correlationId: c.req.header("x-correlation-id") ?? null,
@@ -727,7 +726,9 @@ export function registerAgentAuthMiddleware(deps: AgentAuthMiddlewareDeps): void
     c.set("callerMotebitId" as never, claims.mid);
     await next();
   };
-  app.use("/api/v1/proposals", proposalAuth);
+  // ONE registration: Hono's `/api/v1/proposals/*` also matches the bare
+  // `/api/v1/proposals`, so registering both ran this twice on the bare path
+  // (two verifications, two master-token rows).
   app.use("/api/v1/proposals/*", proposalAuth);
 }
 

@@ -27,6 +27,7 @@ import type { AuthEvent } from "./auth-events.js";
 import { requestContext, enrichRequestContext } from "./request-context.js";
 import type { RequestContext } from "./request-context.js";
 import { RelayError, RateLimitError, AuthenticationError, AuthorizationError } from "./errors.js";
+import { recordMasterTokenOnce } from "./auth-events.js";
 
 const logger = createLogger({ service: "middleware" });
 
@@ -185,8 +186,7 @@ export function createDualAuth(deps: MiddlewareDeps) {
         path: new URL(c.req.url, "http://localhost").pathname,
         ip: c.req.header("x-forwarded-for") ?? c.req.header("x-real-ip") ?? "unknown",
       });
-      deps.recordAuthEvent?.({
-        kind: "master_token",
+      recordMasterTokenOnce(c, deps.recordAuthEvent, {
         method: c.req.method,
         path: new URL(c.req.url, "http://localhost").pathname,
         correlationId: c.req.header("x-correlation-id") ?? null,
@@ -493,8 +493,7 @@ export function registerMiddleware(deps: MiddlewareDeps): MiddlewareResult {
 
       // Master token bypass
       if (apiToken != null && apiToken !== "" && token === apiToken) {
-        deps.recordAuthEvent?.({
-          kind: "master_token",
+        recordMasterTokenOnce(c, deps.recordAuthEvent, {
           method: c.req.method,
           path: new URL(c.req.url, "http://localhost").pathname,
           correlationId: c.req.header("x-correlation-id") ?? null,
@@ -644,8 +643,7 @@ export function registerMiddleware(deps: MiddlewareDeps): MiddlewareResult {
       const mw = bearerAuth({ token: apiToken });
       const presented = c.req.header("authorization");
       if (presented === `Bearer ${apiToken}`) {
-        deps.recordAuthEvent?.({
-          kind: "master_token",
+        recordMasterTokenOnce(c, deps.recordAuthEvent, {
           method: c.req.method,
           path: c.req.path,
           correlationId: c.req.header("x-correlation-id") ?? null,
@@ -825,7 +823,15 @@ export function registerMiddleware(deps: MiddlewareDeps): MiddlewareResult {
 // registerMiddleware but before route handlers that need dualAuth)
 // ---------------------------------------------------------------------------
 
-export function registerAuthMiddleware(deps: MiddlewareDeps): void {
+/**
+ * `recordAuthEvent` is REQUIRED here (optional on the shared deps type): every
+ * door below authenticates, and a door that authenticates without recording
+ * is invisible to the relay's own posture record (rule 6). It was optional,
+ * and index.ts never passed it (#827).
+ */
+export function registerAuthMiddleware(
+  deps: MiddlewareDeps & { recordAuthEvent: NonNullable<MiddlewareDeps["recordAuthEvent"]> },
+): void {
   const { app, apiToken } = deps;
   const dualAuth = createDualAuth(deps);
 

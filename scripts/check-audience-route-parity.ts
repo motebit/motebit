@@ -42,6 +42,10 @@
  *      the audience from the table — they are listed in DERIVING_SEAMS.
  *   R6 a direct `fetch` to a route that verifies a device token, with nothing
  *      minted in scope, visibly sends no `Authorization` — always refused.
+ *   R7 an inline bearer on such a route that falls back to `""`.
+ *   R8 spec/auth-token-v1.md §5's Endpoint column is the table, verbatim
+ *      (`--write-spec` regenerates it), and its public-routes block is
+ *      RELAY_PUBLIC_ROUTES.
  *
  * Aperture, stated on every run: R2 checks only calls whose token is minted
  * in the same scope chain; a token minted elsewhere and passed in (a
@@ -53,7 +57,7 @@
  * Usage: tsx scripts/check-audience-route-parity.ts   (exit 1 on violation)
  */
 
-import { readFileSync, readdirSync } from "node:fs";
+import { readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join, relative } from "node:path";
 import { pathToFileURL } from "node:url";
 import ts from "typescript";
@@ -420,34 +424,153 @@ function derivesFromTable(scope: ts.Node): boolean {
   return found;
 }
 
-/** The HTTP method of the call a path literal feeds, or `*` when unknown. */
-function methodFor(lit: ts.Node): string {
+/** Climb from a literal through the expressions that only wrap it. */
+function wrapperTop(lit: ts.Node): ts.Node {
   let n: ts.Node = lit;
   while (
     n.parent != null &&
     (ts.isBinaryExpression(n.parent) ||
       ts.isParenthesizedExpression(n.parent) ||
       ts.isTemplateSpan(n.parent) ||
-      ts.isTemplateExpression(n.parent))
+      ts.isTemplateExpression(n.parent) ||
+      ts.isAsExpression(n.parent))
   ) {
     n = n.parent;
   }
-  const call = n.parent;
-  if (call != null && ts.isCallExpression(call) && call.arguments.includes(n as ts.Expression)) {
-    for (const a of call.arguments) {
-      if (ts.isStringLiteral(a) && METHODS.includes(a.text.toUpperCase())) {
-        return a.text.toUpperCase(); // positional: fetchRelayJson(url, headers, "POST")
-      }
-      const m = objectProp(a, "method");
-      if (m != null) {
-        return ts.isStringLiteral(m) || ts.isNoSubstitutionTemplateLiteral(m)
-          ? m.text.toUpperCase()
-          : "*";
-      }
-    }
-    return "GET";
+  return n;
+}
+
+/** The nearest enclosing function body, or the source file. */
+function bindingScope(n: ts.Node): ts.Node {
+  for (let p = n.parent; p != null; p = p.parent) {
+    if (isFunctionLike(p) || ts.isSourceFile(p)) return p;
   }
-  return "*";
+  return n.getSourceFile();
+}
+
+interface CallSite {
+  call: ts.CallExpression | ts.NewExpression;
+  /** The argument the URL arrives in (the literal's wrapper, or the binding). */
+  arg: ts.Expression;
+  /** Whether the URL reached the call through a `const`/`let` binding. */
+  viaBinding: boolean;
+}
+
+/**
+ * The call a path literal feeds — directly (`fetch(\`${u}/…\`, init)`), or
+ * through one simple binding in the same function (`const url = \`…\`;
+ * fetch(url, init)`). A binding used by several calls resolves to the first.
+ */
+function callSiteFor(lit: ts.Node): CallSite | null {
+  const n = wrapperTop(lit);
+  const parent = n.parent;
+  if (
+    parent != null &&
+    (ts.isCallExpression(parent) || ts.isNewExpression(parent)) &&
+    (parent.arguments ?? []).includes(n as ts.Expression)
+  ) {
+    return { call: parent, arg: n as ts.Expression, viaBinding: false };
+  }
+  if (
+    parent != null &&
+    ts.isVariableDeclaration(parent) &&
+    parent.initializer === n &&
+    ts.isIdentifier(parent.name)
+  ) {
+    const name = parent.name.text;
+    let found: CallSite | null = null;
+    const visit = (m: ts.Node): void => {
+      if (found != null) return;
+      if (
+        (ts.isCallExpression(m) || ts.isNewExpression(m)) &&
+        m.pos > parent.end &&
+        (m.arguments ?? []).some((a) => ts.isIdentifier(a) && a.text === name)
+      ) {
+        const arg = (m.arguments ?? []).find((a) => ts.isIdentifier(a) && a.text === name)!;
+        found = { call: m, arg, viaBinding: true };
+        return;
+      }
+      m.forEachChild(visit);
+    };
+    bindingScope(parent).forEachChild(visit);
+    return found;
+  }
+  return null;
+}
+
+/** The HTTP method of the call a path literal feeds, or `*` when unknown. */
+function methodFor(lit: ts.Node): string {
+  const site = callSiteFor(lit);
+  if (site == null) return "*";
+  // A `new Request(url, init)` or a URL passed on to another helper is only
+  // judged when it is fetch-like: its method (or GET) is read from the args.
+  for (const a of site.call.arguments ?? []) {
+    if (ts.isStringLiteral(a) && METHODS.includes(a.text.toUpperCase())) {
+      return a.text.toUpperCase(); // positional: fetchRelayJson(url, headers, "POST")
+    }
+    const m = objectProp(a, "method");
+    if (m != null) {
+      return ts.isStringLiteral(m) || ts.isNoSubstitutionTemplateLiteral(m)
+        ? m.text.toUpperCase()
+        : "*";
+    }
+  }
+  return "GET";
+}
+
+function isGlobalFetch(call: ts.CallExpression | ts.NewExpression): call is ts.CallExpression {
+  if (!ts.isCallExpression(call)) return false;
+  const callee = call.expression;
+  return (
+    (ts.isIdentifier(callee) && callee.text === "fetch") ||
+    (ts.isPropertyAccessExpression(callee) &&
+      callee.name.text === "fetch" &&
+      ts.isIdentifier(callee.expression) &&
+      callee.expression.text === "globalThis")
+  );
+}
+
+/** The inline `Authorization` value of a global-fetch site, if written inline. */
+function inlineAuthorization(site: CallSite): ts.Expression | null {
+  if (!isGlobalFetch(site.call) || site.call.arguments[0] !== site.arg) return null;
+  const headers = objectProp(site.call.arguments[1], "headers");
+  if (headers == null || !ts.isObjectLiteralExpression(headers)) return null;
+  for (const p of headers.properties) {
+    if (
+      ts.isPropertyAssignment(p) &&
+      ((ts.isIdentifier(p.name) && /^authorization$/i.test(p.name.text)) ||
+        (ts.isStringLiteral(p.name) && /^authorization$/i.test(p.name.text)))
+    ) {
+      return p.initializer;
+    }
+  }
+  return null;
+}
+
+/**
+ * Whether a bearer expression can be the empty string: a `?? ""` / `|| ""`
+ * fallback inside it. An empty bearer is always refused — a device-token
+ * route reached with `Bearer ${masterToken ?? ""}` works only for an operator
+ * and is silently refused for everyone else (#827: the CLI daemon's receipts).
+ */
+function bearerCanBeEmpty(e: ts.Expression): boolean {
+  let empty = false;
+  const visit = (n: ts.Node): void => {
+    if (empty) return;
+    if (
+      ts.isBinaryExpression(n) &&
+      (n.operatorToken.kind === ts.SyntaxKind.QuestionQuestionToken ||
+        n.operatorToken.kind === ts.SyntaxKind.BarBarToken) &&
+      (ts.isStringLiteral(n.right) || ts.isNoSubstitutionTemplateLiteral(n.right)) &&
+      n.right.text === ""
+    ) {
+      empty = true;
+      return;
+    }
+    n.forEachChild(visit);
+  };
+  visit(e);
+  return empty;
 }
 
 /**
@@ -456,25 +579,10 @@ function methodFor(lit: ts.Node): string {
  * literal headers with no `Authorization` key and no spread. Headers built
  * elsewhere (an identifier, a call) are not judged.
  */
-function sendsNoBearer(lit: ts.Node): boolean {
-  let n: ts.Node = lit;
-  while (
-    n.parent != null &&
-    (ts.isParenthesizedExpression(n.parent) || ts.isBinaryExpression(n.parent))
-  )
-    n = n.parent;
-  const call = n.parent;
-  // The global fetch only — `adapter.fetch(path)` attaches its own bearer.
-  if (call == null || !ts.isCallExpression(call)) return false;
-  const callee = call.expression;
-  const isGlobalFetch =
-    (ts.isIdentifier(callee) && callee.text === "fetch") ||
-    (ts.isPropertyAccessExpression(callee) &&
-      callee.name.text === "fetch" &&
-      ts.isIdentifier(callee.expression) &&
-      callee.expression.text === "globalThis");
-  if (!isGlobalFetch || call.arguments[0] !== n) return false;
-  const init = call.arguments[1];
+function sendsNoBearer(site: CallSite | null): boolean {
+  if (site == null || !isGlobalFetch(site.call) || site.call.arguments[0] !== site.arg)
+    return false;
+  const init = site.call.arguments[1];
   if (init == null) return true;
   if (!ts.isObjectLiteralExpression(init)) return false;
   if (
@@ -521,6 +629,7 @@ interface Stats {
   declared: number;
   prefixes: number;
   knownDead: number;
+  viaBinding: number;
   mintSites: number;
   ports: number;
 }
@@ -575,7 +684,14 @@ function scanFile(file: string, sites: string[], stats: Stats): void {
             stats.derived++;
           } else {
             const mints = scopes.flatMap((fn) => mintsIn(fn, sf));
-            if (mints.length === 0 && sendsNoBearer(n)) {
+            const site = callSiteFor(n);
+            if (site?.viaBinding === true) stats.viaBinding++;
+            const bearer = site != null ? inlineAuthorization(site) : null;
+            if (bearer != null && bearerCanBeEmpty(bearer)) {
+              sites.push(
+                `${rel}:${lineOf(n)}: ${method} ${path} verifies ${[...auds].join("|")}, but its bearer falls back to "" — refused for anyone without that token; mint the route's audience [R7]`,
+              );
+            } else if (mints.length === 0 && sendsNoBearer(site)) {
               sites.push(
                 `${rel}:${lineOf(n)}: ${method} ${path} verifies ${[...auds].join("|")}, but this fetch sends no Authorization and nothing in scope mints a token [R6]`,
               );
@@ -636,7 +752,121 @@ function scanFile(file: string, sites: string[], stats: Stats): void {
   visit(sf);
 }
 
+/** Whether a file CALLS `name(` — read from the AST, so a comment or a
+ *  string mentioning it does not count. */
+function callsFunction(src: string, file: string, name: string): boolean {
+  const sf = ts.createSourceFile(
+    file,
+    src,
+    ts.ScriptTarget.Latest,
+    true,
+    file.endsWith(".tsx") ? ts.ScriptKind.TSX : ts.ScriptKind.TS,
+  );
+  let found = false;
+  const visit = (n: ts.Node): void => {
+    if (found) return;
+    if (ts.isCallExpression(n) && calleeName(n) === name) {
+      found = true;
+      return;
+    }
+    n.forEachChild(visit);
+  };
+  visit(sf);
+  return found;
+}
+
+// --- R8: spec/auth-token-v1.md §5 is generated from the table ------------
+
+const SPEC_FILE = "spec/auth-token-v1.md";
+const PUBLIC_BEGIN = "<!-- relay-public-routes:begin (generated from RELAY_PUBLIC_ROUTES) -->";
+const PUBLIC_END = "<!-- relay-public-routes:end -->";
+
+/** `:motebitId` → `{id}`, any other `:param` → `{param}` — the spec's spelling. */
+function specPath(path: string): string {
+  return path.replace(/:motebitId\b/g, "{id}").replace(/:([A-Za-z]+)/g, "{$1}");
+}
+
+/** The Endpoint cell §5 must carry for an audience the relay verifies. */
+function specEndpointCell(audience: string): string | null {
+  const routes = RELAY_ROUTE_AUDIENCES.filter((e) => e.audience === audience);
+  if (routes.length === 0) return null;
+  return routes.map((e) => `\`${e.method} ${specPath(e.path)}\``).join(", ");
+}
+
+function specPublicBlock(): string {
+  return (
+    // Blank lines around the paragraph: the form prettier leaves it in.
+    `${PUBLIC_BEGIN}\n\n` +
+    "Routes in the same families that take no token (public reads, and requests that authenticate themselves): " +
+    RELAY_PUBLIC_ROUTES.map((r) => `\`${r.method} ${specPath(r.path)}\``).join(", ") +
+    `.\n\n${PUBLIC_END}`
+  );
+}
+
+const ROW = /^\| `([^`]+)`(\s*)\| (.*?) \|(.*)\|\s*$/;
+
+/**
+ * Check (or, with `write`, rewrite) §5 against the table: every relay-verified
+ * audience's Endpoint cell is exactly the table's routes for it; an audience
+ * the relay never verifies names no relay path; the public-routes block is
+ * exactly `RELAY_PUBLIC_ROUTES`. Returns the violations.
+ */
+function checkSpec(write: boolean): { violations: string[]; rows: number } {
+  const text = readFileSync(join(ROOT, SPEC_FILE), "utf8");
+  const lines = text.split("\n");
+  const violations: string[] = [];
+  let rows = 0;
+  const seen = new Set<string>();
+  for (let i = 0; i < lines.length; i++) {
+    const m = ROW.exec(lines[i]!);
+    if (m == null || !ALL_AUDIENCES.has(m[1]!)) continue;
+    rows++;
+    const aud = m[1]!;
+    seen.add(aud);
+    const want = specEndpointCell(aud);
+    const have = m[3]!.trim();
+    if (want != null && have !== want) {
+      if (write) lines[i] = `| \`${aud}\` | ${want} |${m[4]}|`;
+      else
+        violations.push(
+          `${SPEC_FILE}:${i + 1}: \`${aud}\` endpoints differ from RELAY_ROUTE_AUDIENCES [R8]`,
+        );
+    }
+    if (want == null && /\/(api|agent|sync|ws|pairing)\//.test(have)) {
+      violations.push(
+        `${SPEC_FILE}:${i + 1}: \`${aud}\` names a relay path, but no relay route verifies it [R8]`,
+      );
+    }
+  }
+  for (const aud of TABLE_AUDIENCES) {
+    if (!seen.has(aud)) violations.push(`${SPEC_FILE}: §5 has no row for \`${aud}\` [R8]`);
+  }
+  let out = lines.join("\n");
+  const b = out.indexOf(PUBLIC_BEGIN);
+  const e = out.indexOf(PUBLIC_END);
+  if (b === -1 || e === -1) {
+    violations.push(`${SPEC_FILE}: §5 public-routes block markers missing [R8]`);
+  } else {
+    const block = out.slice(b, e + PUBLIC_END.length);
+    if (block !== specPublicBlock()) {
+      if (write) out = out.slice(0, b) + specPublicBlock() + out.slice(e + PUBLIC_END.length);
+      else
+        violations.push(
+          `${SPEC_FILE}: §5 public-routes block differs from RELAY_PUBLIC_ROUTES [R8]`,
+        );
+    }
+  }
+  if (write) writeFileSync(join(ROOT, SPEC_FILE), out);
+  return { violations, rows };
+}
+
 function main(): void {
+  if (process.argv.includes("--write-spec")) {
+    const { violations } = checkSpec(true);
+    for (const v of violations) console.error(v);
+    console.log(`Rewrote ${SPEC_FILE} §5 from RELAY_ROUTE_AUDIENCES; run prettier on it.`);
+    process.exit(violations.length > 0 ? 1 : 0);
+  }
   const files: string[] = [];
   for (const r of SCAN_ROOTS) walk(join(ROOT, r), files);
 
@@ -650,6 +880,7 @@ function main(): void {
     declared: 0,
     prefixes: 0,
     knownDead: 0,
+    viaBinding: 0,
     mintSites: 0,
     ports: 0,
   };
@@ -664,20 +895,26 @@ function main(): void {
       sites.push(`${s.file}: listed in DERIVING_SEAMS but missing — update the list [R5]`);
       continue;
     }
-    if (!/\brelayRouteAudience\(/.test(src)) {
+    if (!callsFunction(src, s.file, "relayRouteAudience")) {
       sites.push(
         `${s.file}: ${s.seam} forwards a caller's path but does not resolve its audience with relayRouteAudience() [R5]`,
       );
     }
   }
 
+  // R8 — the spec's §5 endpoint column is the table, verbatim.
+  const spec = checkSpec(false);
+  sites.push(...spec.violations);
+
   const aperture =
     `${stats.files} file(s) scanned; ${stats.relaySites} relay-path site(s) ` +
     `(${stats.paired} paired with a local mint, ${stats.derived} table-derived, ` +
     `${stats.unpaired} existence-checked only, ${stats.prefixes} URL head(s), ${stats.declared} declared public/operator-only, ` +
-    `${stats.knownDead} known dead call(s) listed in KNOWN_DEAD_CALLS); ` +
+    `${stats.knownDead} known dead call(s) listed in KNOWN_DEAD_CALLS; ` +
+    `${stats.viaBinding} reached through a const/let binding); ` +
     `${stats.mintSites} mint site(s); ${stats.ports} audience-port closure(s); ` +
-    `${DERIVING_SEAMS.length} deriving seam(s); ${RELAY_ROUTE_AUDIENCES.length} table route(s).`;
+    `${DERIVING_SEAMS.length} deriving seam(s); ${RELAY_ROUTE_AUDIENCES.length} table route(s); ` +
+    `${spec.rows} spec §5 audience row(s) diffed.`;
 
   if (sites.length > 0) {
     process.stderr.write(
@@ -690,7 +927,8 @@ function main(): void {
         fix:
           "mint the audience the table names for the route (or resolve it with relayRouteAudience(method, path) from @motebit/sdk); point a call at a route the table names; " +
           "pass token ports a factory that takes the audience. If the relay route itself changed, update the table and its conformance test in the same change; " +
-          "a route that is genuinely public or operator-only goes in DECLARED_NON_TABLE in scripts/check-audience-route-parity.ts with its reason.",
+          "a route that is genuinely public or operator-only goes in DECLARED_NON_TABLE in scripts/check-audience-route-parity.ts with its reason. " +
+          "For [R8], regenerate the spec with `npx tsx scripts/check-audience-route-parity.ts --write-spec` then `pnpm exec prettier --write spec/auth-token-v1.md`.",
         doctrine: "spec/auth-token-v1.md §5; services/relay/CLAUDE.md rule 6",
       }),
     );

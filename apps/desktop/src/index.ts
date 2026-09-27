@@ -2421,8 +2421,13 @@ export class DesktopApp {
   }
 
   /** Start full sync: event-level WS + one-shot conversation sync. */
-  async startSync(invoke: InvokeFn, syncUrl: string, authToken?: string): Promise<void> {
-    await this.sync.startSync(invoke, syncUrl, authToken);
+  async startSync(
+    invoke: InvokeFn,
+    syncUrl: string,
+    authToken?: string,
+    masterToken?: string,
+  ): Promise<void> {
+    await this.sync.startSync(invoke, syncUrl, authToken, masterToken);
     // S4 — the roster is read (and presented, when due) whenever this
     // desktop connects. Under its own device:auth token, never `authToken`.
     if (this.sync.syncStatus.status === "connected") {

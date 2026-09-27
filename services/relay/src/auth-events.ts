@@ -159,3 +159,24 @@ export function createAuthEventSink(
     },
   };
 }
+
+/** The per-request slot a master-token presentation is marked in. */
+const MASTER_RECORDED = "authEventMasterTokenRecorded" as never;
+
+/**
+ * Record a master-token presentation at most ONCE per request. Several auth
+ * layers can wrap one route (the agent-route middleware and the account
+ * family's dualAuth; proposals' `/api/v1/proposals` and `/*` registrations
+ * both matching the bare path), and each records the presentation it sees —
+ * so one request wrote two rows and the posture record over-counted (#827).
+ * The first layer to see it records; the rest find the mark.
+ */
+export function recordMasterTokenOnce(
+  c: { get(key: never): unknown; set(key: never, value: never): void },
+  record: ((event: AuthEvent) => void) | undefined,
+  event: Omit<AuthEvent, "kind">,
+): void {
+  if (record == null || c.get(MASTER_RECORDED) === true) return;
+  c.set(MASTER_RECORDED, true as never);
+  record({ kind: "master_token", ...event });
+}
