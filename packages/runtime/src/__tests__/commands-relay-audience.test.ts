@@ -66,11 +66,12 @@ describe("shared market commands mint per-route audiences", () => {
     ]);
   });
 
-  it("without mintToken (an operator's master token) the one bearer is sent as before", async () => {
+  it("mintToken: null (an operator's master token, no device key) sends the one bearer", async () => {
     await executeCommand(noRuntime, "balance", undefined, {
       relayUrl: "http://relay",
       authToken: "master",
       motebitId: "m1",
+      mintToken: null,
     });
     expect(seen[0]?.bearer).toBe("master");
   });

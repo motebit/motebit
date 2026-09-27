@@ -93,6 +93,7 @@ describe("clients mint the audience their route verifies (#827)", () => {
         relayUrl: "http://relay",
         authToken: await mint(a, "sync"),
         motebitId: a.motebitId,
+        mintToken: null,
       };
       await expect(executeCommand(NO_RUNTIME, "balance", undefined, syncOnly)).rejects.toThrow(
         /^401/,

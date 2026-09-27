@@ -214,9 +214,15 @@ function specificity(pattern: string, path: string): number {
  * `RELAY_ROUTE_AUDIENCES` matches — the route does not exist, or it does not
  * accept a device token at all. Pure lookup over the frozen tables; the query
  * string is ignored.
+ *
+ * `HEAD` resolves as `GET`: HTTP servers (Hono included) answer a HEAD with
+ * the GET handler, so a HEAD must be authenticated exactly as its GET is. A
+ * table with no HEAD rows let a HEAD fall to the `admin:query` default and be
+ * served by the GET handler with the wrong audience (#836 review).
  */
 export function relayRouteAudience(method: string, path: string): TokenAudience | undefined {
-  const m = method.toUpperCase();
+  const upper = method.toUpperCase();
+  const m = upper === "HEAD" ? "GET" : upper;
   for (const pub of RELAY_PUBLIC_ROUTES) {
     if (pub.method === m && specificity(pub.path, path) >= 0) return undefined;
   }

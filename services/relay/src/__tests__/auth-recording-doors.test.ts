@@ -152,6 +152,79 @@ describe("auth doors record, once (#827)", () => {
       ]);
     });
 
+    it("withdraw by a non-initiator → 403, recorded as proposal:not_initiator, still pending", async () => {
+      const initiator = await seedAgent(relay);
+      const participant = await seedAgent(relay);
+      const id = await seedProposal(initiator, participant);
+      const res = await relay.app.request(`/api/v1/proposals/${id}/withdraw`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${await mint(participant, "proposal")}` },
+      });
+      expect(res.status).toBe(403);
+      expect(rows(relay, "agent_token_rejected", `/api/v1/proposals/${id}/withdraw`)).toEqual([
+        expect.objectContaining({
+          motebit_id: participant.motebitId,
+          reason: "proposal:not_initiator",
+        }),
+      ]);
+      const status = relay.moteDb.db
+        .prepare("SELECT status FROM relay_proposals WHERE proposal_id = ?")
+        .get(id) as { status: string };
+      expect(status.status).toBe("pending");
+    });
+
+    it("step-result by a non-participant → 403, recorded as proposal:not_a_participant", async () => {
+      const initiator = await seedAgent(relay);
+      const participant = await seedAgent(relay);
+      const stranger = await seedAgent(relay);
+      const id = await seedProposal(initiator, participant);
+      const res = await relay.app.request(`/api/v1/proposals/${id}/step-result`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${await mint(stranger, "proposal")}`,
+        },
+        body: JSON.stringify({ step_id: "s0", status: "completed" }),
+      });
+      expect(res.status).toBe(403);
+      expect(rows(relay, "agent_token_rejected", `/api/v1/proposals/${id}/step-result`)).toEqual([
+        expect.objectContaining({
+          motebit_id: stranger.motebitId,
+          reason: "proposal:not_a_participant",
+        }),
+      ]);
+    });
+
+    it("§3.5: a participant's response after expires_at → 410, status unchanged, no frame", async () => {
+      const initiator = await seedAgent(relay);
+      const participant = await seedAgent(relay);
+      const id = await seedProposal(initiator, participant);
+      relay.moteDb.db
+        .prepare("UPDATE relay_proposals SET expires_at = ? WHERE proposal_id = ?")
+        .run(Date.now() - 1000, id);
+      const frames = captureFrames(initiator.motebitId);
+      const res = await relay.app.request(`/api/v1/proposals/${id}/respond`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${await mint(participant, "proposal")}`,
+        },
+        body: JSON.stringify({ response: "accept" }),
+      });
+      expect(res.status).toBe(410);
+      expect(frames).toEqual([]);
+      const row = relay.moteDb.db
+        .prepare("SELECT status FROM relay_proposals WHERE proposal_id = ?")
+        .get(id) as { status: string };
+      expect(row.status).toBe("pending");
+      const resp = relay.moteDb.db
+        .prepare(
+          "SELECT response FROM relay_proposal_participants WHERE proposal_id = ? AND motebit_id = ?",
+        )
+        .get(id, participant.motebitId) as { response: string | null };
+      expect(resp.response).toBeNull();
+    });
+
     it("the master token naming a non-participant responder is refused too", async () => {
       const initiator = await seedAgent(relay);
       const participant = await seedAgent(relay);

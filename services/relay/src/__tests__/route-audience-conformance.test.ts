@@ -171,6 +171,95 @@ describe("RELAY_ROUTE_AUDIENCES conforms to the relay (#827)", () => {
   );
 });
 
+// HEAD is served by the GET handler (Hono), so it must be authenticated
+// exactly as its GET. The table has no HEAD rows; before `relayRouteAudience`
+// mapped HEAD → GET, a HEAD fell to the `admin:query` default and an
+// admin:query token read `/credentials`, `/receipts`, `/p2p-eligibility`,
+// `/roster` — and, on a relay with no master token (no dualAuth layer),
+// `/balance`, `/settlements`, `/withdrawals` (#836 review). Both relay shapes.
+describe("HEAD is authenticated as its GET (#836)", () => {
+  const GET_ENTRIES = HTTP_ENTRIES.filter((e) => e.method === "GET");
+
+  async function head(relay: SyncRelay, path: string, token: string | null): Promise<number> {
+    const res = await relay.app.request(path, {
+      method: "HEAD",
+      headers: token != null ? { Authorization: `Bearer ${token}` } : {},
+    });
+    return res.status;
+  }
+
+  for (const master of [true, false]) {
+    describe(master ? "master-token relay" : "relay with no master token", () => {
+      let relay: SyncRelay;
+      beforeEach(async () => {
+        relay = master ? await createTestRelay() : await createTestRelay({ apiToken: undefined });
+      });
+      afterEach(async () => {
+        await relay.close();
+      });
+
+      it.each(GET_ENTRIES.map((e) => [`HEAD ${e.path}`, e] as const))(
+        "%s is refused exactly when its GET is",
+        async (_label, entry) => {
+          // For each token — the table's audience, another, none — HEAD and
+          // GET must agree on refusal. (On a relay with no master token some
+          // routes have no auth layer at all, for GET too; parity is the
+          // invariant, and the master-token relay also pins the audience.)
+          const a = await seedAgent(relay);
+          const path = concretePath(entry.path, a);
+          const wrongAud: TokenAudience = entry.audience === "admin:query" ? "sync" : "admin:query";
+          const refused = (s: number) => s === 401 || s === 403;
+          for (const aud of [entry.audience, wrongAud, null] as const) {
+            const token = aud == null ? null : await mint(a, aud);
+            const getStatus = (
+              await relay.app.request(path, {
+                headers: token != null ? { Authorization: `Bearer ${token}` } : {},
+              })
+            ).status;
+            const headStatus = await head(relay, path, token);
+            expect(
+              refused(headStatus),
+              `${String(aud)}: HEAD ${headStatus} vs GET ${getStatus}`,
+            ).toBe(refused(getStatus));
+            if (master && aud === entry.audience) expect(headStatus).not.toBe(401);
+            if (master && aud !== entry.audience) expect(refused(headStatus)).toBe(true);
+          }
+        },
+      );
+    });
+  }
+
+  it.each(["credentials", "receipts", "p2p-eligibility", "roster"])(
+    "the #836 cells: admin:query on HEAD /%s is refused (master relay)",
+    async (sub) => {
+      const relay = await createTestRelay();
+      try {
+        const a = await seedAgent(relay);
+        expect(
+          await head(relay, `/api/v1/agents/${a.motebitId}/${sub}`, await mint(a, "admin:query")),
+        ).toBe(401);
+      } finally {
+        await relay.close();
+      }
+    },
+  );
+
+  it.each(["balance", "settlements", "withdrawals"])(
+    "the #836 cells: admin:query on HEAD /%s is refused (no-master relay)",
+    async (sub) => {
+      const relay = await createTestRelay({ apiToken: undefined });
+      try {
+        const a = await seedAgent(relay);
+        expect(
+          await head(relay, `/api/v1/agents/${a.motebitId}/${sub}`, await mint(a, "admin:query")),
+        ).toBe(401);
+      } finally {
+        await relay.close();
+      }
+    },
+  );
+});
+
 // The agent-route middleware used to pick the audience with `includes` /
 // `endsWith` on the path alone. A four-segment path whose id equals a
 // sub-route name — `GET /api/v1/agents/roster` — was authenticated with the

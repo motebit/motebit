@@ -32,14 +32,20 @@ export interface RelayConfig {
   authToken: string;
   motebitId: string;
   /**
-   * Mint a device-signed token for an audience. When present, `relayFetch`
-   * mints the audience the relay route requires — resolved from
-   * `@motebit/protocol`'s `RELAY_ROUTE_AUDIENCES` — instead of reusing
-   * `authToken`, which a single-audience device token cannot serve for
-   * `/balance` (`account:balance`) and `/proposals` (`proposal`) alike
-   * (#827: every surface's `/balance` 401'd on a `sync` token).
+   * Mint a device-signed token for an audience. `relayFetch` mints the
+   * audience the relay route requires — resolved from `@motebit/protocol`'s
+   * `RELAY_ROUTE_AUDIENCES` — instead of reusing `authToken`, which a
+   * single-audience device token cannot serve for `/balance`
+   * (`account:balance`) and `/proposals` (`proposal`) alike (#827: every
+   * surface's `/balance` 401'd on a `sync` token).
+   *
+   * REQUIRED, and `null` is a deliberate answer: "this caller holds no
+   * device key; `authToken` is an operator token that passes every route".
+   * Optional, a surface that forgot it type-checked and silently fell back
+   * to its `sync` token (#836 review: web, desktop and spatial reverted
+   * cleanly and every gate stayed green).
    */
-  mintToken?: (audience: TokenAudience) => Promise<string>;
+  mintToken: ((audience: TokenAudience) => Promise<string>) | null;
 }
 
 /**

@@ -2,7 +2,7 @@
  * Collaborative Plan Proposal routes — multi-agent negotiation protocol.
  */
 
-import type { Hono } from "hono";
+import type { Context, Hono } from "hono";
 import { HTTPException } from "hono/http-exception";
 import type { MotebitDatabase } from "@motebit/persistence";
 import type { ConnectedDevice } from "./index.js";
@@ -22,6 +22,22 @@ export interface ProposalsDeps {
 
 export function registerProposalRoutes(deps: ProposalsDeps): void {
   const { app, moteDb, connections, recordAuthEvent } = deps;
+
+  /**
+   * Record an authorization refusal on a proposal route (rule 6). The subject
+   * is whoever PRESENTED the request — never the proposal's parties.
+   */
+  function refuse(c: Context, presenter: string | null, reason: string): void {
+    recordAuthEvent({
+      kind: "agent_token_rejected",
+      method: c.req.method,
+      path: c.req.path,
+      motebitId: presenter,
+      audience: "proposal",
+      reason,
+      correlationId: c.req.header("x-correlation-id") ?? null,
+    });
+  }
 
   /** @spec motebit/proposals@1.0 */
   app.post("/api/v1/proposals", async (c) => {
@@ -153,16 +169,7 @@ export function registerProposalRoutes(deps: ProposalsDeps): void {
         )
         .get(proposalId, responderId) != null;
     if (!isParticipant) {
-      recordAuthEvent({
-        kind: "agent_token_rejected",
-        method: "POST",
-        path: c.req.path,
-        // The subject of a refusal is whoever presented it.
-        motebitId: callerMotebitId ?? null,
-        audience: "proposal",
-        reason: "proposal:not_a_participant",
-        correlationId: c.req.header("x-correlation-id") ?? null,
-      });
+      refuse(c, callerMotebitId ?? null, "proposal:not_a_participant");
       throw new HTTPException(403, { message: "Responder is not a participant in this proposal" });
     }
 
@@ -172,6 +179,13 @@ export function registerProposalRoutes(deps: ProposalsDeps): void {
       });
 
     const now = Date.now();
+    // §3.5: past `expires_at` a proposal is terminal-no-decision — a relay
+    // MUST reject new responses with 410 and MUST NOT change its status. This
+    // is a lifecycle refusal, not an authorization one (the responder is a
+    // named participant, checked above), so it is not an auth event.
+    if (typeof proposal.expires_at === "number" && now > proposal.expires_at) {
+      throw new HTTPException(410, { message: "Proposal has expired; responses are closed" });
+    }
     moteDb.db
       .prepare(
         `UPDATE relay_proposal_participants SET response = ?, counter_steps = ?, responded_at = ?, signature = ? WHERE proposal_id = ? AND motebit_id = ?`,
@@ -246,8 +260,10 @@ export function registerProposalRoutes(deps: ProposalsDeps): void {
       .get(proposalId) as Record<string, unknown> | undefined;
     if (!proposal) throw new HTTPException(404, { message: "Proposal not found" });
     const callerMotebitId = c.get("callerMotebitId" as never) as string | undefined;
-    if (callerMotebitId && callerMotebitId !== proposal.initiator_motebit_id)
+    if (callerMotebitId && callerMotebitId !== proposal.initiator_motebit_id) {
+      refuse(c, callerMotebitId, "proposal:not_initiator");
       throw new HTTPException(403, { message: "Only the initiator can withdraw a proposal" });
+    }
     if (proposal.status !== "pending")
       throw new HTTPException(409, {
         message: `Proposal is ${proposal.status as string}, cannot withdraw`,
@@ -320,8 +336,10 @@ export function registerProposalRoutes(deps: ProposalsDeps): void {
       .prepare("SELECT 1 FROM relay_proposal_participants WHERE proposal_id = ? AND motebit_id = ?")
       .get(proposalId, motebitId);
     // eslint-disable-next-line @typescript-eslint/strict-boolean-expressions
-    if (!isParticipant && motebitId !== stepProposal.initiator_motebit_id)
+    if (!isParticipant && motebitId !== stepProposal.initiator_motebit_id) {
+      refuse(c, callerMotebitId ?? null, "proposal:not_a_participant");
       throw new HTTPException(403, { message: "Caller is not a participant in this proposal" });
+    }
 
     const now = Date.now();
     moteDb.db

@@ -65,6 +65,15 @@ describe("relayRouteAudience", () => {
     expect(relayRouteAudience("GET", "/api/v1/goals/m1")).toBeUndefined();
   });
 
+  it("resolves HEAD exactly as GET (servers answer HEAD with the GET handler)", () => {
+    for (const e of RELAY_ROUTE_AUDIENCES.filter((r) => r.method === "GET")) {
+      const concrete = e.path.replace(/:[A-Za-z]+/g, "x");
+      expect(relayRouteAudience("HEAD", concrete), e.path).toBe(e.audience);
+      expect(relayRouteAudience("head", concrete), e.path).toBe(e.audience);
+    }
+    expect(relayRouteAudience("HEAD", "/api/v1/agents/discover")).toBeUndefined();
+  });
+
   it("matches the method, case-insensitively", () => {
     expect(relayRouteAudience("get", "/api/v1/agents/m1/withdrawals")).toBe("account:withdrawals");
     expect(relayRouteAudience("GET", "/api/v1/agents/m1/withdraw")).toBeUndefined();

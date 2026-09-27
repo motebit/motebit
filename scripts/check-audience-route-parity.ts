@@ -395,12 +395,36 @@ function opensScope(n: ts.Node): boolean {
   return isFunctionLike(n) || ts.isCaseClause(n) || ts.isDefaultClause(n);
 }
 
+/** A function expression that is the value of a `mint…:` property. */
+function isDeferredMint(n: ts.Node): boolean {
+  if (!ts.isArrowFunction(n) && !ts.isFunctionExpression(n)) return false;
+  // Through `cond ? fn : null` and parentheses to the property it is the value of.
+  let v: ts.Node = n;
+  while (
+    v.parent != null &&
+    (ts.isConditionalExpression(v.parent) || ts.isParenthesizedExpression(v.parent))
+  ) {
+    v = v.parent;
+  }
+  const prop = v.parent;
+  return (
+    prop != null &&
+    ts.isPropertyAssignment(prop) &&
+    prop.initializer === v &&
+    ts.isIdentifier(prop.name) &&
+    /^mint/i.test(prop.name.text)
+  );
+}
+
 /** The mints made DIRECTLY in a scope — not inside a nested function or
  *  `case` arm, which are scopes of their own. */
 function mintsIn(scope: ts.Node, sf: ts.SourceFile): Mint[] {
   const out: Mint[] = [];
   const visit = (n: ts.Node): void => {
-    if (opensScope(n)) return;
+    // A closure handed over as a `mint…:` property IS this scope's mint,
+    // deferred (`taskResultBearer({ mintTaskResult: async () => mint… })`);
+    // every other nested function is a scope of its own.
+    if (opensScope(n) && !isDeferredMint(n)) return;
     if (ts.isCallExpression(n)) {
       const aud = mintOf(n);
       if (aud != null) {

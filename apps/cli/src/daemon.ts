@@ -60,6 +60,7 @@ import { fromHex, loadActiveSigningKey, IdentityKeyError } from "./identity.js";
 import { registerWithRelay, type RelayRegistrationHandle } from "./relay-registration.js";
 import { createRelaySyncSocket } from "./relay-sync-socket.js";
 import { enrollOnAnnounce } from "./machine-roster.js";
+import { taskResultBearer } from "./task-result-bearer.js";
 import {
   electAttachOrCoordinate,
   electCoordinatorRole,
@@ -601,19 +602,23 @@ export async function handleRun(config: CliConfig): Promise<void> {
               }
 
               if (receipt) {
-                // POST receipt to relay. The route verifies `task:result`:
-                // mint it with the key in hand. The master-token-or-empty
-                // bearer this sent was refused whenever no master token was
-                // configured, so no receipt reached the relay (#827).
+                // POST receipt to relay: a configured master token first,
+                // else a minted `task:result` (#827; taskResultBearer).
                 const resultUrl = `${syncUrl}/agent/${motebitId}/task/${task.task_id}/result`;
-                const resultToken = fullConfig.device_id
-                  ? (
-                      await mintAudienceToken(
-                        { mid: motebitId, did: fullConfig.device_id, aud: "task:result" },
-                        privateKey,
-                      )
-                    ).token
-                  : (syncToken ?? "");
+                const deviceId = fullConfig.device_id;
+                const resultToken = await taskResultBearer({
+                  masterToken: syncToken,
+                  mintTaskResult:
+                    deviceId != null
+                      ? async () =>
+                          (
+                            await mintAudienceToken(
+                              { mid: motebitId, did: deviceId, aud: "task:result" },
+                              privateKey,
+                            )
+                          ).token
+                      : null,
+                });
                 await fetch(resultUrl, {
                   method: "POST",
                   headers: {
@@ -1608,18 +1613,24 @@ export async function handleServe(config: CliConfig): Promise<void> {
               const resultHeaders: Record<string, string> = {
                 "Content-Type": "application/json",
               };
-              // The route verifies `task:result`: mint it with the serve key.
-              // With no master token this sent no Authorization at all and
-              // was refused, so no served receipt reached the relay (#827).
-              const resultToken =
-                servePrivateKey && fullConfigForServe.device_id
-                  ? (
-                      await mintAudienceToken(
-                        { mid: motebitId, did: fullConfigForServe.device_id, aud: "task:result" },
-                        servePrivateKey,
-                      )
-                    ).token
-                  : masterToken;
+              // A configured master token first (a relay with device auth
+              // off refuses device tokens here), else a minted `task:result`
+              // with the serve key — matching desktop (#827; taskResultBearer).
+              const serveKey = servePrivateKey;
+              const serveDeviceId = fullConfigForServe.device_id;
+              const resultToken = await taskResultBearer({
+                masterToken,
+                mintTaskResult:
+                  serveKey != null && serveDeviceId != null
+                    ? async () =>
+                        (
+                          await mintAudienceToken(
+                            { mid: motebitId, did: serveDeviceId, aud: "task:result" },
+                            serveKey,
+                          )
+                        ).token
+                    : null,
+              });
               if (resultToken) resultHeaders["Authorization"] = `Bearer ${resultToken}`;
               await fetch(`${syncUrl}/agent/${motebitId}/task/${task.task_id}/result`, {
                 method: "POST",

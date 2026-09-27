@@ -24,7 +24,12 @@ import type { CommandResult, RelayConfig } from "./types.js";
 export type MintToken = (audience: TokenAudience) => Promise<string>;
 
 export interface SelfTestConfig {
-  relay: RelayConfig;
+  /**
+   * Where and as whom. Self-test mints every bearer through `mintToken`
+   * below and never uses `relay.authToken` or `relay.mintToken`, so the
+   * command layer's per-route minter is not required here.
+   */
+  relay: Pick<RelayConfig, "relayUrl" | "authToken" | "motebitId">;
   /** Surface-provided token minter for audience-scoped auth. */
   mintToken: MintToken;
   /** Timeout in ms for polling completion. Default: 30_000. */
