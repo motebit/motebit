@@ -12,6 +12,8 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 
+const gate = vi.hoisted(() => ({ command: null as Promise<void> | null }));
+
 vi.mock("@motebit/runtime", async () => {
   const actual = await vi.importActual<object>("@motebit/runtime");
   return {
@@ -20,9 +22,10 @@ vi.mock("@motebit/runtime", async () => {
     // `@motebit/crypto` tests own): accept every envelope, answer a
     // recognisable result.
     verifyAgentCommandEnvelope: vi.fn(async () => ({ ok: true })),
-    executeRemoteCommand: vi.fn(async (_rt: unknown, command: string) => ({
-      summary: `ran ${command}`,
-    })),
+    executeRemoteCommand: vi.fn(async (_rt: unknown, command: string) => {
+      if (gate.command) await gate.command; // a command that takes a while
+      return { summary: `ran ${command}` };
+    }),
     cmdSelfTest: vi.fn(async () => ({ summary: "ok", data: { status: "passed" } })),
   };
 });
@@ -94,7 +97,7 @@ function makeDeps(runtime = makeRuntime()): SyncControllerDeps {
     getLocalEventStore: () => null,
     getDeviceKeypair: async () => ({ publicKey: "a".repeat(64), privateKey: "b".repeat(64) }),
     createSyncToken: vi.fn(async () => {
-      const t = `minted-${++minted}`;
+      const t = `minted-${++minted}.sig`; // a signed token has a "."
       mintedAt.set(t, Date.now());
       return t;
     }),
@@ -209,13 +212,13 @@ describe("desktop sync socket across token refreshes (#816)", () => {
   it("each refresh presents a freshly minted token; the caller's token serves the first connect", async () => {
     const deps = makeDeps();
     const ctrl = new SyncController(deps);
-    await startAndAccept(ctrl, "caller-token");
-    expect(latest().authToken()).toBe("caller-token");
-    const seen = new Set<string>(["caller-token"]);
+    await startAndAccept(ctrl, "caller.token");
+    expect(latest().authToken()).toBe("caller.token");
+    const seen = new Set<string>(["caller.token"]);
     for (let i = 0; i < 3; i++) {
       await refresh();
       const t = latest().authToken()!;
-      expect(t).toMatch(/^minted-\d+$/);
+      expect(t).toMatch(/^minted-\d+\.sig$/);
       expect(seen.has(t)).toBe(false);
       seen.add(t);
     }
@@ -344,6 +347,158 @@ describe("desktop sync socket across token refreshes (#816)", () => {
       (c) => (c as unknown as [{ event_id: string }])[0].event_id,
     );
     expect(appended).toContain("gap-event");
+    ctrl.stopSync();
+  });
+});
+
+describe("desktop: commands and tokens across socket replacement (#816, #842 review)", () => {
+  function responses(id: string): number {
+    return FakeSocket.instances.reduce(
+      (n, s) =>
+        n + s.sent.filter((f) => f.includes('"command_response"') && f.includes(`"${id}"`)).length,
+      0,
+    );
+  }
+
+  it("W1: a command in flight across stop + start (same relay) is answered on the new socket", async () => {
+    const ctrl = new SyncController(makeDeps());
+    await startAndAccept(ctrl);
+    const first = latest();
+    let release!: () => void;
+    gate.command = new Promise<void>((r) => {
+      release = r;
+    });
+    first.deliver({ type: "command_request", id: "c1", command: "state" });
+    await flush();
+    ctrl.stopSync(); // Disconnect …
+    await startAndAccept(ctrl); // … Connect, same relay
+    const second = latest();
+    expect(second).not.toBe(first);
+    release();
+    await flush();
+    gate.command = null;
+    // The relay accepts the same runtime's answer on its new socket until the
+    // command's deadline (#812/#819); main answered here too.
+    expect(second.sent.filter((f) => f.includes('"c1"')).length).toBe(1);
+    ctrl.stopSync();
+  });
+
+  it("a command the relay routes to the refreshed socket during the new handshake is answered", async () => {
+    const ctrl = new SyncController(makeDeps());
+    await startAndAccept(ctrl);
+    const first = latest();
+    await vi.advanceTimersByTimeAsync(WS_TOKEN_REFRESH_MS);
+    await flush();
+    const second = latest();
+    expect(second).not.toBe(first);
+    // The new socket is still handshaking: the relay's admitted socket is the old one.
+    expect(first.closed).toBe(false);
+    first.deliver({ type: "command_request", id: "rd", command: "state" });
+    await flush();
+    expect(first.sent.filter((f) => f.includes('"rd"')).length).toBe(1);
+    second.accept();
+    expect(first.closed).toBe(true);
+    ctrl.stopSync();
+  });
+
+  it("a command executing when the app moves to another relay is answered on the left relay's socket, which then drains and closes", async () => {
+    const ctrl = new SyncController(makeDeps());
+    await startAndAccept(ctrl);
+    const first = latest();
+    let release!: () => void;
+    gate.command = new Promise<void>((r) => {
+      release = r;
+    });
+    first.deliver({ type: "command_request", id: "ld", command: "state" });
+    await flush();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await ctrl.startSync(vi.fn() as any, "https://relay-b.test");
+    await flush();
+    const second = latest();
+    second.accept();
+    await flush();
+    // Another relay: never retired INTO the new socket, but not cut off mid-command.
+    expect(first.closed).toBe(false);
+    release();
+    await flush();
+    gate.command = null;
+    expect(first.sent.filter((f) => f.includes('"ld"')).length).toBe(1);
+    expect(second.sent.some((f) => f.includes('"ld"'))).toBe(false);
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(first.closed).toBe(true);
+    expect(open()).toEqual([second]);
+    ctrl.stopSync();
+  });
+
+  it("a start whose identity a pairing replaced while it awaited builds no socket", async () => {
+    let id = "motebit-1";
+    let releaseKeypair!: () => void;
+    const keypairGate = new Promise<void>((r) => {
+      releaseKeypair = r;
+    });
+    const deps: SyncControllerDeps = {
+      ...makeDeps(),
+      getMotebitId: () => id,
+      getDeviceKeypair: async () => {
+        await keypairGate;
+        return { publicKey: "a".repeat(64), privateKey: "b".repeat(64) };
+      },
+    };
+    const ctrl = new SyncController(deps);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    void ctrl.startSync(vi.fn() as any, "https://relay.test");
+    await flush();
+    id = "motebit-2"; // a pairing adopted another identity meanwhile
+    releaseKeypair();
+    await flush();
+    expect(FakeSocket.instances.filter((s) => s.url.includes("motebit-1"))).toHaveLength(0);
+    ctrl.stopSync();
+  });
+
+  it("W2': the running socket answers until the replacement has authenticated", async () => {
+    const ctrl = new SyncController(makeDeps());
+    await startAndAccept(ctrl);
+    const first = latest();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await ctrl.startSync(vi.fn() as any, "https://relay.test"); // re-entered
+    await flush();
+    const second = latest();
+    expect(second).not.toBe(first);
+    // Before the new socket's auth_result, the old one is still the relay's
+    // admitted socket — and still answers.
+    expect(first.closed).toBe(false);
+    first.deliver({ type: "command_request", id: "w2", command: "state" });
+    await flush();
+    expect(responses("w2")).toBe(1);
+    second.accept();
+    await flush();
+    expect(first.closed).toBe(true); // retired once the new one authenticated
+    expect(open()).toEqual([second]);
+    ctrl.stopSync();
+  });
+
+  it("F4: a configured master token keeps being presented on every connect and catch-up pull", async () => {
+    const deps = makeDeps();
+    const localStore = { getLatestClock: vi.fn(async () => 0), append: vi.fn(async () => {}) };
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    deps.getLocalEventStore = () => localStore as any;
+    const ctrl = new SyncController(deps);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await ctrl.startSync(vi.fn() as any, "https://relay.test", "MASTER", "MASTER");
+    await flush();
+    latest().accept();
+    await flush();
+    // drop → reconnect
+    const s = latest();
+    s.close();
+    s.onclose?.();
+    await vi.advanceTimersByTimeAsync(2_000);
+    latest().accept();
+    await flush();
+    await refresh();
+    expect(FakeSocket.instances.map((x) => x.authToken())).toEqual(["MASTER", "MASTER", "MASTER"]);
+    expect(pullTokens.length).toBeGreaterThan(0);
+    expect(new Set(pullTokens)).toEqual(new Set(["MASTER"]));
     ctrl.stopSync();
   });
 });

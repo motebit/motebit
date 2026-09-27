@@ -62,6 +62,17 @@ const HEARTBEAT_INTERVAL_MS = 5 * 60_000; // 5 minutes
 /** Sync-socket token refresh cadence: signed sync tokens expire at 5 min. */
 export const WS_TOKEN_REFRESH_MS = 4.5 * 60_000;
 
+/**
+ * How long a socket for an identity or relay the app has LEFT keeps serving
+ * (#816): long enough to answer a command already executing and to flush
+ * what it has queued, as main's socket did until the new start replaced it;
+ * never indefinitely — a socket for a place the user left must close even
+ * when the new start's socket is slow or never comes. It is never retired
+ * INTO the new socket (another identity or relay must not carry its events
+ * or replies — `handOffTo` refuses), so it simply drains and closes.
+ */
+const LEFT_TARGET_DRAIN_MS = 15_000;
+
 export interface SpatialSyncControllerDeps {
   getRuntime: () => MotebitRuntime | null;
   getMotebitId: () => string;
@@ -94,6 +105,24 @@ export class SpatialSyncController {
   private _wsAdapter: WebSocketEventStoreAdapter | null = null;
   private _wsTokenRefreshTimer: ReturnType<typeof setInterval> | null = null;
   private _wsUnsubOnEvent: (() => void) | null = null;
+  /**
+   * Sockets a re-entered connectRelay replaced, still open and answering
+   * until the replacement AUTHENTICATES (#816): retiring one at the
+   * replacement's `connect()` left the relay no admitted socket for the
+   * handshake's round trip.
+   */
+  private _retiring: Array<{
+    adapter: WebSocketEventStoreAdapter;
+    unsubEvent: (() => void) | null;
+  }> = [];
+  private _retireOnAuth: (() => void) | null = null;
+  /** Sockets for an identity or relay the app left, draining until their timer closes them. */
+  private _leftSockets = new Map<
+    WebSocketEventStoreAdapter,
+    { unsubEvent: (() => void) | null; timer: ReturnType<typeof setTimeout> }
+  >();
+  /** When each left socket's drain ends (set when the app leaves its target). */
+  private _leftDeadline = new WeakMap<WebSocketEventStoreAdapter, number>();
   private _syncUnsubscribe: (() => void) | null = null;
   /**
    * Socket ownership across overlapping starts (#816). Every start takes a
@@ -111,8 +140,12 @@ export class SpatialSyncController {
   private _wsOwner = 0;
   /** The highest request that has built a socket. */
   private _wsClaimed = 0;
-  /** The relay the current run targets; null once disconnected. */
-  private _activeRelayUrl: string | null = null;
+  /**
+   * The identity and relay the current run targets (`"<motebitId> <relayUrl>"`);
+   * null once disconnected. A superseded start continues only while this still
+   * names its own identity and relay — never across a pairing to another id.
+   */
+  private _activeRun: string | null = null;
 
   private _planSyncEngine: PlanSyncEngine | null = null;
   private _convSyncEngine: ConversationSyncEngine | null = null;
@@ -137,6 +170,48 @@ export class SpatialSyncController {
     };
   }
 
+  /** Retire replaced sockets into `successor` once it authenticates. */
+  private retireAfterAuth(successor: WebSocketEventStoreAdapter): void {
+    this._retireOnAuth?.();
+    this._retireOnAuth = null;
+    // A socket for another identity or relay is never retired into this
+    // one: it drains (answers what it is executing, flushes what it holds)
+    // and closes when its LEFT_TARGET_DRAIN_MS since the app left it are up.
+    this._retiring = this._retiring.filter((r) => {
+      if (r.adapter.endpoint === successor.endpoint) return true;
+      this.drainLeft(r.adapter, r.unsubEvent);
+      return false;
+    });
+    if (this._retiring.length === 0) return;
+    const retire = () => {
+      this._retireOnAuth?.();
+      this._retireOnAuth = null;
+      for (const old of this._retiring.splice(0)) {
+        old.unsubEvent?.();
+        old.adapter.handOffTo(successor);
+      }
+    };
+    if (successor.isConnected) retire();
+    else this._retireOnAuth = successor.onAuthenticated(retire);
+  }
+
+  /**
+   * Where a reply to a relay frame goes, decided when it is SENT: the relay
+   * accepts an answer from the same runtime on any of its sockets until the
+   * command's deadline, so it goes out on whichever socket of that relay and
+   * identity is authenticated now — the current one, else one still retiring
+   * — and otherwise waits in the current one's queue.
+   */
+  private replyChannel(arrival: WebSocketEventStoreAdapter): WebSocketEventStoreAdapter {
+    const candidates = [
+      this._wsAdapter,
+      ...this._retiring.map((r) => r.adapter),
+      ...this._leftSockets.keys(),
+      arrival,
+    ].filter((a): a is WebSocketEventStoreAdapter => a != null && a.endpoint === arrival.endpoint);
+    return candidates.find((a) => a.isConnected) ?? candidates[0] ?? arrival;
+  }
+
   private setSyncStatus(status: InternalSyncStatus): void {
     this._syncStatus = status;
     for (const cb of this._syncStatusListeners) cb(status);
@@ -154,11 +229,17 @@ export class SpatialSyncController {
     const { relayUrl, showNetwork } = this.deps.getNetworkSettings();
     if (relayUrl === "" || !showNetwork) return;
     const request = ++this._wsRequestSeq;
-    this._activeRelayUrl = relayUrl;
+    const motebitId = this.deps.getMotebitId();
+    const run = `${motebitId} ${relayUrl}`;
+    // Past the early return, this start targets the app's sync. When that
+    // target moves to another identity or relay, the running socket serves
+    // one the app has left: it drains (see LEFT_TARGET_DRAIN_MS) and closes,
+    // unless this start's socket replaces it first.
+    if (this._activeRun !== run) this.drainLeftSocket(this._activeRun);
+    this._activeRun = run;
 
     this.setSyncStatus("connecting");
 
-    const motebitId = this.deps.getMotebitId();
     const tokenFactory = this.deps.getTokenFactory();
 
     // Mint an initial token
@@ -270,9 +351,13 @@ export class SpatialSyncController {
         // bails earlier never supersedes a running one. One already
         // superseded (disconnectRelay, or a newer connectRelay that claimed
         // first) builds nothing — that socket would belong to nobody.
+        // A start whose target the app has since left — a newer start for
+        // another relay, or for another identity (a pairing) — builds
+        // nothing: its socket would serve a place the user left, or carry
+        // the new identity's events and commands under the old one.
+        if (this._activeRun !== run) return;
         const newest = request > this._wsOwner;
-        const restartedSameRelay =
-          !newest && request > this._wsClaimed && this._activeRelayUrl === relayUrl;
+        const restartedSameRelay = !newest && request > this._wsClaimed && this._activeRun === run;
         if (!newest && !restartedSameRelay) return;
         if (newest) this._wsOwner = request;
         this._wsClaimed = request;
@@ -359,7 +444,7 @@ export class SpatialSyncController {
                 identityPublicKey: this.deps.getPublicKey(),
               });
               if (!verdict.ok) {
-                wsAdapter.sendRaw(
+                this.replyChannel(wsAdapter).sendRaw(
                   JSON.stringify({
                     type: "command_response",
                     id: cmdMsg.id,
@@ -376,11 +461,11 @@ export class SpatialSyncController {
               // lets a view that masks for the wire decide it is not on
               // one.
               const result = await executeRemoteCommand(rt, cmdMsg.command, cmdMsg.args);
-              wsAdapter.sendRaw(
+              this.replyChannel(wsAdapter).sendRaw(
                 JSON.stringify({ type: "command_response", id: cmdMsg.id, result }),
               );
             } catch (err: unknown) {
-              wsAdapter.sendRaw(
+              this.replyChannel(wsAdapter).sendRaw(
                 JSON.stringify({
                   type: "command_response",
                   id: cmdMsg.id,
@@ -395,9 +480,12 @@ export class SpatialSyncController {
 
         runtime.connectSync(encryptedWs);
         wsAdapter.connect();
+        // The replaced socket keeps serving until this one authenticates.
         if (replaced.timer != null) clearInterval(replaced.timer);
-        replaced.unsubEvent?.();
-        replaced.adapter?.handOffTo(wsAdapter);
+        if (replaced.adapter) {
+          this._retiring.push({ adapter: replaced.adapter, unsubEvent: replaced.unsubEvent });
+        }
+        this.retireAfterAuth(wsAdapter);
 
         // Subscribe to sync engine status
         if (this._syncUnsubscribe) this._syncUnsubscribe();
@@ -509,9 +597,74 @@ export class SpatialSyncController {
   /**
    * Disconnect from the relay: stop sync, close WebSocket, deregister.
    */
+  /** Close the running socket after the drain period if it still serves a left target. */
+  private drainLeftSocket(left: string | null): void {
+    const leaving = this._wsAdapter;
+    if (!leaving || left == null) return;
+    this._leftDeadline.set(leaving, Date.now() + LEFT_TARGET_DRAIN_MS);
+    // It serves out what it holds but never reopens for the target left.
+    leaving.drain(LEFT_TARGET_DRAIN_MS);
+    setTimeout(() => {
+      // Still the running socket (no newer socket claimed): its drain is over.
+      if (this._wsAdapter === leaving) this.closeSockets();
+    }, LEFT_TARGET_DRAIN_MS);
+  }
+
+  private drainLeft(adapter: WebSocketEventStoreAdapter, unsubEvent: (() => void) | null): void {
+    const deadline = this._leftDeadline.get(adapter) ?? Date.now() + LEFT_TARGET_DRAIN_MS;
+    const close = (): void => {
+      this._leftSockets.delete(adapter);
+      unsubEvent?.();
+      adapter.disconnect();
+    };
+    const remaining = Math.max(0, deadline - Date.now());
+    // Serve out the socket, never reopen it; `close` detaches the handler.
+    adapter.drain(remaining);
+    this._leftSockets.set(adapter, { unsubEvent, timer: setTimeout(close, remaining) });
+  }
+
+  private closeLeftSockets(): void {
+    for (const [left, { unsubEvent, timer }] of this._leftSockets) {
+      clearTimeout(timer);
+      unsubEvent?.();
+      left.disconnect();
+    }
+    this._leftSockets.clear();
+  }
+
+  /** Close the running socket, any retiring one, and the refresh timer. */
+  private closeSockets(): void {
+    this._retireOnAuth?.();
+    this._retireOnAuth = null;
+    for (const old of this._retiring.splice(0)) {
+      old.unsubEvent?.();
+      old.adapter.disconnect();
+    }
+    this.closeLeftSockets();
+    if (this._wsTokenRefreshTimer != null) {
+      clearInterval(this._wsTokenRefreshTimer);
+      this._wsTokenRefreshTimer = null;
+    }
+    if (this._wsUnsubOnEvent) {
+      this._wsUnsubOnEvent();
+      this._wsUnsubOnEvent = null;
+    }
+    if (this._wsAdapter) {
+      this._wsAdapter.disconnect();
+      this._wsAdapter = null;
+    }
+  }
+
   async disconnectRelay(): Promise<void> {
+    this._retireOnAuth?.();
+    this._retireOnAuth = null;
+    for (const old of this._retiring.splice(0)) {
+      old.unsubEvent?.();
+      old.adapter.disconnect();
+    }
+    this.closeLeftSockets();
     this._wsOwner = ++this._wsRequestSeq;
-    this._activeRelayUrl = null;
+    this._activeRun = null;
     // Stop token refresh
     if (this._wsTokenRefreshTimer) {
       clearInterval(this._wsTokenRefreshTimer);

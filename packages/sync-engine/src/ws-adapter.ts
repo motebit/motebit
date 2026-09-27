@@ -43,6 +43,15 @@ export interface WebSocketAdapterConfig {
   onCatchUp?: (pulled: number) => void;
 }
 
+/** Raw frames held while unauthenticated (see `pendingRaw`). */
+const MAX_PENDING_RAW = 100;
+/**
+ * The longest a refreshed socket keeps serving while its replacement
+ * connects (see `refreshConnection`): the auth handshake's own timeout plus
+ * margin. It closes sooner, the moment the replacement authenticates.
+ */
+const REFRESH_DRAIN_MAX_MS = 10_000;
+
 export type EventReceivedCallback = (event: EventLogEntry) => void;
 export type CustomMessageCallback = (msg: { type: string; [key: string]: unknown }) => void;
 
@@ -92,6 +101,16 @@ export class WebSocketEventStoreAdapter implements EventStoreAdapter {
   /** Set by `handOffTo`: this adapter is retired and forwards to its successor. */
   private successor: WebSocketEventStoreAdapter | null = null;
   /**
+   * Raw frames (a command reply, a task claim) sent while this adapter is not
+   * authenticated. The relay ignores frames on a socket it has not admitted,
+   * and it accepts a command's answer from the same runtime on a reconnect
+   * until the command's deadline — so a reply produced while the socket is
+   * between connections waits for the next authentication instead of being
+   * dropped. Bounded: the oldest go first.
+   */
+  private pendingRaw: string[] = [];
+  private onAuthenticatedCallbacks: Set<() => void> = new Set();
+  /**
    * Bumped by every `disconnect()`. A connect that is still resolving its
    * credential (or the `ws` import) when the adapter is disconnected must
    * not open a socket afterwards — that socket would belong to nobody:
@@ -100,6 +119,16 @@ export class WebSocketEventStoreAdapter implements EventStoreAdapter {
   private connectGeneration = 0;
   /** The pending auth-handshake timeout of the current socket, if any. */
   private authTimer: ReturnType<typeof setTimeout> | null = null;
+  /**
+   * The socket a `refreshConnection` replaced, still authenticated and still
+   * serving (relay frames in, pushes and replies out) until the replacement
+   * authenticates or `REFRESH_DRAIN_MAX_MS` passes.
+   */
+  private draining: WebSocket | null = null;
+  private drainTimer: ReturnType<typeof setTimeout> | null = null;
+  /** Set by `drain()`: this adapter serves out its current socket and never reconnects. */
+  private drainOnly = false;
+  private drainAllTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(config: WebSocketAdapterConfig) {
     this.config = {
@@ -112,7 +141,7 @@ export class WebSocketEventStoreAdapter implements EventStoreAdapter {
   // === Lifecycle ===
 
   connect(): void {
-    if (this.successor) return;
+    if (this.successor || this.drainOnly) return;
     if (this.ws) return;
 
     // If a credentialSource is provided, resolve the token asynchronously
@@ -148,27 +177,37 @@ export class WebSocketEventStoreAdapter implements EventStoreAdapter {
    * the first adapter's socket every time, so every intermediate socket
    * stayed open and deaf — #816.)
    *
-   * Order: the old socket closes before the new one opens, so the relay
-   * never holds two sockets for this adapter. Events published in the gap
-   * are recovered by the catch-up pull the new socket runs on auth success
-   * (`httpFallback` + `localStore`), the same path an ordinary drop and
-   * reconnect takes — PROVIDED the `httpFallback` can still authenticate:
-   * give it a per-request credential source too, or a pull made after its
-   * static token expired is refused and the gap is lost.
-   *
-   * A relay command addressed to this device during the gap is not
-   * answered by this adapter. The relay either no longer lists the socket
-   * (404 "Agent not connected" when it was the device's only one, or
-   * another of the owner's sockets takes it), or still lists it as open
-   * while the close is in flight, in which case the frame is swallowed and
-   * the caller gets a 504 (no answer, or "closed_after_delivery"). Either
-   * way the caller is told nothing answered — never a false success.
+   * Order: make-before-break. An authenticated socket keeps serving — relay
+   * frames in, pushes and replies out — while the new one connects, and
+   * closes the moment the new one authenticates (at the latest after
+   * `REFRESH_DRAIN_MAX_MS`), so a command the relay routes to it during the
+   * handshake is still answered. The relay briefly holds two sockets for
+   * this adapter; never more, since a further refresh first closes any
+   * socket still draining. Events published while neither socket carries
+   * them are recovered by the catch-up pull the new socket runs on auth
+   * success (`httpFallback` + `localStore`), the same path an ordinary drop
+   * and reconnect takes — PROVIDED the `httpFallback` can still
+   * authenticate: give it a per-request credential source too, or a pull
+   * made after its static token expired is refused and the gap is lost.
    *
    * Use a `credentialSource` for a refresh to carry a new token; with a
    * static `authToken` it reconnects with the same one.
    */
   refreshConnection(): void {
-    this.disconnect();
+    if (this.successor || this.drainOnly) return;
+    const live =
+      this.connected && this.ws != null && this.ws.readyState === 1 /* OPEN */ ? this.ws : null;
+    if (live) {
+      // The authenticated socket keeps serving until its replacement is up.
+      this.closeDraining();
+      this.draining = live;
+      this.ws = null;
+      this.drainTimer = setTimeout(() => this.closeDraining(), REFRESH_DRAIN_MAX_MS);
+    }
+    // A socket that is not authenticated serves nothing: abandon it and any
+    // connect in progress (a draining socket keeps draining).
+    this.abandonConnect();
+    this.connected = false;
     this.connect();
   }
 
@@ -192,9 +231,50 @@ export class WebSocketEventStoreAdapter implements EventStoreAdapter {
   handOffTo(next: WebSocketEventStoreAdapter): void {
     if (next === this) return;
     this.disconnect();
+    // Only to the same identity on the same relay. A successor for another
+    // motebit (a pairing switched identity) or another relay must never carry
+    // this adapter's events or replies: they belong to an identity and a relay
+    // the surface has left. Retired without a successor, as main closed it.
+    if (next.endpoint !== this.endpoint) return;
     this.successor = next;
+    const queuedRaw = this.pendingRaw.splice(0);
+    for (const frame of queuedRaw) next.sendRaw(frame);
     const queued = this.pendingEvents.splice(0);
     for (const entry of queued) void next.append(entry);
+  }
+
+  /**
+   * Serve out the current socket — commands already executing are answered,
+   * queued frames flushed — but never reconnect, and disconnect after `ms`
+   * (or as soon as the socket drops). For a socket whose relay or identity
+   * the surface has LEFT: it is not handed to a successor (`handOffTo`
+   * refuses another endpoint), and reopening it would serve a place the user
+   * left. A socket not yet authenticated has nothing to serve and closes now.
+   */
+  drain(ms: number): void {
+    this.drainOnly = true;
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+    if (!this.connected) {
+      this.disconnect();
+      return;
+    }
+    if (this.drainAllTimer) clearTimeout(this.drainAllTimer);
+    this.drainAllTimer = setTimeout(() => this.disconnect(), ms);
+  }
+
+  /**
+   * Notified each time this adapter's socket is authenticated (the relay's
+   * `auth_result` ok) — the moment it can carry frames. A surface replacing a
+   * socket retires the old one here, not at the replacement's `connect()`.
+   */
+  onAuthenticated(callback: () => void): () => void {
+    this.onAuthenticatedCallbacks.add(callback);
+    return () => {
+      this.onAuthenticatedCallbacks.delete(callback);
+    };
   }
 
   /** Internal: establish the WebSocket connection with an already-resolved token. */
@@ -234,7 +314,9 @@ export class WebSocketEventStoreAdapter implements EventStoreAdapter {
     // not touch the adapter: an auth timeout firing on a stopped adapter
     // would schedule a reconnect (a socket after stop), and one firing after
     // a refresh would close the NEW, authenticated socket.
-    const stale = (): boolean => generation !== this.connectGeneration || this.ws !== ws;
+    // A socket draining after a refresh is still this adapter's until it closes.
+    const stale = (): boolean =>
+      this.draining !== ws && (generation !== this.connectGeneration || this.ws !== ws);
 
     ws.onopen = () => {
       if (stale()) return;
@@ -316,6 +398,11 @@ export class WebSocketEventStoreAdapter implements EventStoreAdapter {
     };
 
     ws.onclose = () => {
+      if (this.draining === ws) {
+        // The draining socket dropped: its replacement is already connecting.
+        this.closeDraining();
+        return;
+      }
       if (stale()) return;
       this.clearAuthTimer();
       this.connected = false;
@@ -334,22 +421,57 @@ export class WebSocketEventStoreAdapter implements EventStoreAdapter {
   }
 
   disconnect(): void {
+    if (this.drainAllTimer) {
+      clearTimeout(this.drainAllTimer);
+      this.drainAllTimer = null;
+    }
+    this.abandonConnect();
+    this.closeDraining();
+    if (this.stabilityTimer) {
+      clearTimeout(this.stabilityTimer);
+      this.stabilityTimer = null;
+    }
+    this.connected = false;
+  }
+
+  /** Abandon the current socket and any connect in progress (not a draining socket). */
+  private abandonConnect(): void {
     this.connectGeneration++;
     this.clearAuthTimer();
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
     }
-    if (this.stabilityTimer) {
-      clearTimeout(this.stabilityTimer);
-      this.stabilityTimer = null;
-    }
     if (this.ws) {
       this.ws.onclose = null;
       this.ws.close();
       this.ws = null;
     }
-    this.connected = false;
+  }
+
+  private closeDraining(): void {
+    if (this.drainTimer) {
+      clearTimeout(this.drainTimer);
+      this.drainTimer = null;
+    }
+    const d = this.draining;
+    this.draining = null;
+    if (d) {
+      d.onclose = null;
+      d.close();
+    }
+  }
+
+  /** The socket that can carry a frame now: the authenticated one, else one draining. */
+  private carrier(): WebSocket | null {
+    if (this.connected && this.ws && this.ws.readyState === 1 /* OPEN */) return this.ws;
+    if (this.draining && this.draining.readyState === 1 /* OPEN */) return this.draining;
+    return null;
+  }
+
+  /** The identity and relay this adapter speaks for: `"<motebitId> <url>"`. */
+  get endpoint(): string {
+    return `${this.config.motebitId} ${this.config.url}`;
   }
 
   get isConnected(): boolean {
@@ -385,8 +507,13 @@ export class WebSocketEventStoreAdapter implements EventStoreAdapter {
       this.successor.sendRaw(data);
       return;
     }
-    if (!this.ws || this.ws.readyState !== 1 /* WebSocket.OPEN */) return;
-    this.ws.send(data);
+    const carrier = this.carrier();
+    if (carrier) {
+      carrier.send(data);
+      return;
+    }
+    this.pendingRaw.push(data);
+    if (this.pendingRaw.length > MAX_PENDING_RAW) this.pendingRaw.shift();
   }
 
   /**
@@ -404,7 +531,7 @@ export class WebSocketEventStoreAdapter implements EventStoreAdapter {
 
   append(entry: EventLogEntry): Promise<void> {
     if (this.successor) return this.successor.append(entry);
-    if (this.connected && this.ws) {
+    if (this.carrier()) {
       this.sendPush([entry]);
     } else {
       this.pendingEvents.push(entry);
@@ -438,6 +565,8 @@ export class WebSocketEventStoreAdapter implements EventStoreAdapter {
   /** Called when auth succeeds (or is skipped for unauthenticated connections). */
   private onAuthSuccess(): void {
     this.connected = true;
+    // The replacement carries frames now: the refreshed socket retires.
+    this.closeDraining();
     // Stability hysteresis: don't reset backoff immediately — require 30s of
     // sustained connection. Prevents rapid reconnect cycles on flaky networks
     // from resetting the exponential backoff counter on each brief success.
@@ -446,11 +575,15 @@ export class WebSocketEventStoreAdapter implements EventStoreAdapter {
       this.reconnectAttempt = 0;
     }, 30_000);
 
-    // Flush pending events
+    // Flush frames held while not authenticated, then pending events
+    if (this.pendingRaw.length > 0 && this.ws) {
+      for (const frame of this.pendingRaw.splice(0)) this.ws.send(frame);
+    }
     if (this.pendingEvents.length > 0) {
       const events = this.pendingEvents.splice(0);
       this.sendPush(events);
     }
+    for (const cb of [...this.onAuthenticatedCallbacks]) cb();
 
     // Catch-up pull (fire and forget)
     void this.catchUp();
@@ -477,11 +610,17 @@ export class WebSocketEventStoreAdapter implements EventStoreAdapter {
   }
 
   private sendPush(events: EventLogEntry[]): void {
-    if (!this.ws || this.ws.readyState !== 1 /* WebSocket.OPEN */) return;
-    this.ws.send(JSON.stringify({ type: "push", events }));
+    const carrier = this.carrier();
+    if (!carrier) return;
+    carrier.send(JSON.stringify({ type: "push", events }));
   }
 
   private scheduleReconnect(): void {
+    if (this.drainOnly) {
+      // A draining adapter's socket dropped: the drain is over.
+      this.disconnect();
+      return;
+    }
     if (this.reconnectTimer) return;
 
     const delay = Math.min(

@@ -159,6 +159,18 @@ import {
 } from "@motebit/sdk";
 import type { InteriorColor } from "@motebit/sdk";
 export { COLOR_PRESETS };
+
+/**
+ * How long a socket for an identity or relay the app has LEFT keeps serving
+ * (#816): long enough to answer a command already executing and to flush
+ * what it has queued, as main's socket did until the new start replaced it;
+ * never indefinitely — a socket for a place the user left must close even
+ * when the new start's socket is slow or never comes. It is never retired
+ * INTO the new socket (another identity or relay must not carry its events
+ * or replies — `handOffTo` refuses), so it simply drains and closes.
+ */
+const LEFT_TARGET_DRAIN_MS = 15_000;
+
 export type { InteriorColor };
 
 // Re-export provider utilities
@@ -438,15 +450,29 @@ export class UnbootedWebApp {
   private _wsUnsubOnEvent: (() => void) | null = null;
   private _wsUnsubOnCustom: (() => void) | null = null;
   /**
+   * Sockets a newer start replaced, still open and still answering until the
+   * replacement AUTHENTICATES (#816): retiring one at the replacement's
+   * `connect()` left the relay no admitted socket for the handshake's round
+   * trip, and a command in that window found none.
+   */
+  private _retiring: Array<ReturnType<UnbootedWebApp["takeWs"]>> = [];
+  private _retireOnAuth: (() => void) | null = null;
+  /** Sockets for an identity or relay the app left, draining until their timer closes them. */
+  private _leftSockets = new Map<
+    ReturnType<UnbootedWebApp["takeWs"]>,
+    ReturnType<typeof setTimeout>
+  >();
+  /**
    * Socket ownership across overlapping starts (#816). Every start takes a
    * request number; a start CLAIMS the socket only once it has passed its
    * early-return checks and is about to build one, so a newer start that
    * bails early never supersedes a running one. A start whose request is
    * not newer than the current owner (a newer start already claimed, or a
    * stop came after it) builds nothing. A claiming start builds, wires and
-   * connects its socket in one synchronous step and only then retires the
-   * running one (make-before-break — `retireWs` hands the old adapter's
-   * queued events and in-flight replies to the new one). What it does after
+   * connects its socket in one synchronous step; the running one keeps
+   * serving until the new one AUTHENTICATES and is only then retired into it
+   * (make-before-break — `retireAfterAuth` / `handOffTo` move the old
+   * adapter's queued events and replies to the new one). What it does after
    * the relay-key await (delegation config, sync status, plan/conversation
    * sync) is skipped if it has lost ownership meanwhile; its socket was by
    * then already closed by the stop, or retired into the newer start's
@@ -454,7 +480,16 @@ export class UnbootedWebApp {
    */
   private _wsRequestSeq = 0;
   private _wsOwner = 0;
-  /** The relay the running sync targets; null once stopped. */
+  /**
+   * The relay the running sync targets; null once stopped. A superseded
+   * start's HTTP-side work continues only while this still names its relay.
+   * That work reads the app's CURRENT identity (`_motebitId`, the credential
+   * source) when it runs, so it is the running identity's own sync, never
+   * the superseded start's; its socket was claimed, or not, before the await.
+   * Its encryption key is the one derived when that start began: after a
+   * pairing that transferred another device key, the continuation encrypts
+   * under the old key, as main's did (unchanged here; not covered by a test).
+   */
   private _activeRelayUrl: string | null = null;
   private _serving = false;
   private _servingSyncUrl: string | null = null;
@@ -3789,7 +3824,7 @@ export class UnbootedWebApp {
               identityPublicKey: this._publicKeyHex,
             });
             if (!verdict.ok) {
-              wsAdapter.sendRaw(
+              this.replyChannel(wsAdapter).sendRaw(
                 JSON.stringify({
                   type: "command_response",
                   id: cmdMsg.id,
@@ -3800,9 +3835,11 @@ export class UnbootedWebApp {
             }
             // The one door for a relay frame.
             const result = await executeRemoteCommand(this.runtime!, cmdMsg.command, cmdMsg.args);
-            wsAdapter.sendRaw(JSON.stringify({ type: "command_response", id: cmdMsg.id, result }));
+            this.replyChannel(wsAdapter).sendRaw(
+              JSON.stringify({ type: "command_response", id: cmdMsg.id, result }),
+            );
           } catch (err: unknown) {
-            wsAdapter.sendRaw(
+            this.replyChannel(wsAdapter).sendRaw(
               JSON.stringify({
                 type: "command_response",
                 id: cmdMsg.id,
@@ -3822,7 +3859,9 @@ export class UnbootedWebApp {
       const task = msg.task as AgentTask;
       const runtime = this.runtime;
 
-      wsAdapter.sendRaw(JSON.stringify({ type: "task_claim", task_id: task.task_id }));
+      this.replyChannel(wsAdapter).sendRaw(
+        JSON.stringify({ type: "task_claim", task_id: task.task_id }),
+      );
       this._activeTaskCount++;
 
       void (async () => {
@@ -3894,14 +3933,16 @@ export class UnbootedWebApp {
       wsAdapter.refreshConnection();
     }, WS_TOKEN_REFRESH_MS);
 
-    // Fully wired: retire the socket this one replaces (none on a first start).
+    // Fully wired: the socket this one replaces (none on a first start) is
+    // retired once this one AUTHENTICATES — until then it stays open and
+    // answering, so the relay always has an admitted socket (#816).
     const replaced = this.takeWs();
     this._wsAdapter = wsAdapter;
     this._wsUnsubOnEvent = unsubEvent;
     this._wsUnsubOnCustom = unsubCustom;
     this._wsTokenRefreshTimer = refreshTimer;
     this.runtime.setDelegationAdapter(delegationAdapter);
-    this.retireWs(replaced, wsAdapter);
+    this.retireAfterAuth(replaced, wsAdapter);
 
     // Enable interactive delegation — lets the AI transparently delegate
     // tasks to remote agents during conversation.
@@ -3922,7 +3963,7 @@ export class UnbootedWebApp {
     // start already retired it into its own. Its socket is never revived. The
     // HTTP side below (delegation config, sync engines) is still this app's
     // work when the running sync targets the SAME relay — a stop and restart,
-    // or a re-entered start, to this relay — so it is done now rather than
+    // a re-entered start or a pairing, to this relay — so it is done now rather than
     // when the newer start's own relay-key await ends (the newer start then
     // replaces the engines). Stopped, or restarted against another relay:
     // nothing further.
@@ -4189,6 +4230,20 @@ export class UnbootedWebApp {
    * open that nothing reads.
    */
   private teardownWs(): void {
+    this._retireOnAuth?.();
+    this._retireOnAuth = null;
+    for (const old of this._retiring.splice(0)) {
+      old.unsubEvent?.();
+      old.unsubCustom?.();
+      old.adapter?.disconnect();
+    }
+    for (const [left, timer] of this._leftSockets) {
+      clearTimeout(timer);
+      left.unsubEvent?.();
+      left.unsubCustom?.();
+      left.adapter?.disconnect();
+    }
+    this._leftSockets.clear();
     if (this._wsTokenRefreshTimer != null) {
       clearInterval(this._wsTokenRefreshTimer);
       this._wsTokenRefreshTimer = null;
@@ -4227,15 +4282,75 @@ export class UnbootedWebApp {
     return taken;
   }
 
-  /** Retire a replaced socket into its (already wired) successor. */
-  private retireWs(
+  /**
+   * Retire replaced sockets into `successor` once it authenticates. Their
+   * refresh timers stop now (the successor has its own); their handlers and
+   * sockets keep serving until then.
+   */
+  private retireAfterAuth(
     old: ReturnType<UnbootedWebApp["takeWs"]>,
     successor: WebSocketEventStoreAdapter,
   ): void {
     if (old.timer != null) clearInterval(old.timer);
-    old.unsubEvent?.();
-    old.unsubCustom?.();
-    old.adapter?.handOffTo(successor);
+    old.timer = null;
+    if (old.adapter) this._retiring.push(old);
+    this._retireOnAuth?.();
+    this._retireOnAuth = null;
+    // A socket for another identity or relay is never retired into this
+    // one: it drains (answers what it is executing, flushes what it holds)
+    // and closes after LEFT_TARGET_DRAIN_MS.
+    this._retiring = this._retiring.filter((r) => {
+      if (r.adapter?.endpoint === successor.endpoint) return true;
+      this.drainLeft(r);
+      return false;
+    });
+    if (this._retiring.length === 0) return;
+    if (successor.isConnected) {
+      this.retireAll(successor);
+      return;
+    }
+    this._retireOnAuth = successor.onAuthenticated(() => this.retireAll(successor));
+  }
+
+  private drainLeft(r: ReturnType<UnbootedWebApp["takeWs"]>): void {
+    const close = (): void => {
+      this._leftSockets.delete(r);
+      r.unsubEvent?.();
+      r.unsubCustom?.();
+      r.adapter?.disconnect();
+    };
+    // Serve out the socket, never reopen it; `close` detaches the handlers.
+    r.adapter?.drain(LEFT_TARGET_DRAIN_MS);
+    this._leftSockets.set(r, setTimeout(close, LEFT_TARGET_DRAIN_MS));
+  }
+
+  private retireAll(successor: WebSocketEventStoreAdapter): void {
+    this._retireOnAuth?.();
+    this._retireOnAuth = null;
+    for (const old of this._retiring.splice(0)) {
+      old.unsubEvent?.();
+      old.unsubCustom?.();
+      old.adapter?.handOffTo(successor);
+    }
+  }
+
+  /**
+   * Where a reply to a relay frame goes, decided when the reply is SENT: the
+   * relay accepts an answer from the same runtime on any of its sockets until
+   * the command's deadline, so the reply goes out on whichever socket of that
+   * relay and identity is authenticated now — the current one, else one still
+   * retiring — and otherwise waits in the current one's queue (sent on its
+   * next authentication). Replying through the socket the frame arrived on
+   * lost every answer that outlived it (a stop and restart mid-command).
+   */
+  private replyChannel(arrival: WebSocketEventStoreAdapter): WebSocketEventStoreAdapter {
+    const candidates = [
+      this._wsAdapter,
+      ...this._retiring.map((r) => r.adapter),
+      ...[...this._leftSockets.keys()].map((r) => r.adapter),
+      arrival,
+    ].filter((a): a is WebSocketEventStoreAdapter => a != null && a.endpoint === arrival.endpoint);
+    return candidates.find((a) => a.isConnected) ?? candidates[0] ?? arrival;
   }
 
   stopSync(): void {

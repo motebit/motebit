@@ -774,7 +774,7 @@ describe("WebSocketEventStoreAdapter", () => {
     return src;
   }
 
-  it("refreshConnection keeps exactly one socket open across N refreshes and closes each replaced one", async () => {
+  it("refreshConnection is make-before-break across N refreshes: the replaced socket serves until the new one authenticates, then closes", async () => {
     const credentialSource = countingSource();
     const adapter = new WebSocketEventStoreAdapter({
       url: WS_URL,
@@ -790,9 +790,12 @@ describe("WebSocketEventStoreAdapter", () => {
       const replaced = lastWS();
       adapter.refreshConnection();
       await vi.advanceTimersByTimeAsync(0);
-      expect(replaced.closed).toBe(true);
       expect(lastWS()).not.toBe(replaced);
+      // Handshake in progress: the replaced socket is still open, never more than two.
+      expect(replaced.closed).toBe(false);
+      expect(openSockets()).toHaveLength(2);
       lastWS().simulateOpenWithAuth();
+      expect(replaced.closed).toBe(true);
       expect(openSockets()).toHaveLength(1);
       expect(openSockets()[0]).toBe(lastWS());
     }
@@ -877,15 +880,121 @@ describe("WebSocketEventStoreAdapter", () => {
     await vi.advanceTimersByTimeAsync(0);
     lastWS().simulateOpenWithAuth();
 
+    const serving = lastWS();
     adapter.refreshConnection();
     await adapter.append(makeEvent(3));
     await vi.advanceTimersByTimeAsync(0);
     lastWS().simulateOpenWithAuth();
-    const pushes = lastWS()
-      .sent.map((raw) => JSON.parse(raw) as { type: string; events?: EventLogEntry[] })
-      .filter((m) => m.type === "push");
-    expect(pushes).toHaveLength(1);
-    expect(pushes[0]!.events![0]!.event_id).toBe("event-3");
+    const pushesOn = (ws: MockWebSocket) =>
+      ws.sent
+        .map((raw) => JSON.parse(raw) as { type: string; events?: EventLogEntry[] })
+        .filter((m) => m.type === "push");
+    // Still authenticated during the handshake: the replaced socket carried it, once.
+    expect(pushesOn(serving)).toHaveLength(1);
+    expect(pushesOn(serving)[0]!.events![0]!.event_id).toBe("event-3");
+    expect(pushesOn(lastWS())).toHaveLength(0);
+  });
+
+  it("a command arriving on the replaced socket during the refresh handshake is answered", async () => {
+    const adapter = new WebSocketEventStoreAdapter({
+      url: WS_URL,
+      motebitId: MOTEBIT_ID,
+      credentialSource: countingSource(),
+    });
+    adapter.onCustomMessage((msg) => {
+      if (msg.type === "command_request") {
+        adapter.sendRaw(JSON.stringify({ type: "command_response", id: msg.id, result: "ok" }));
+      }
+    });
+    adapter.connect();
+    await vi.advanceTimersByTimeAsync(0);
+    const serving = lastWS();
+    serving.simulateOpenWithAuth();
+    adapter.refreshConnection();
+    await vi.advanceTimersByTimeAsync(0);
+    // The relay still routes to the admitted socket while the new one handshakes.
+    serving.simulateMessage({ type: "command_request", id: "cmd-1", command: "state" });
+    expect(serving.sent.some((raw) => raw.includes('"command_response"'))).toBe(true);
+    lastWS().simulateOpenWithAuth();
+    expect(serving.closed).toBe(true);
+  });
+
+  it("drain(): serves out the current socket, never reconnects, and closes after the drain period", async () => {
+    const adapter = new WebSocketEventStoreAdapter({
+      url: WS_URL,
+      motebitId: MOTEBIT_ID,
+      credentialSource: countingSource(),
+      reconnectBaseMs: 100,
+    });
+    adapter.onCustomMessage((msg) => {
+      if (msg.type === "command_request") {
+        adapter.sendRaw(JSON.stringify({ type: "command_response", id: msg.id, result: "ok" }));
+      }
+    });
+    adapter.connect();
+    await vi.advanceTimersByTimeAsync(0);
+    const serving = lastWS();
+    serving.simulateOpenWithAuth();
+    adapter.drain(15_000);
+    // Still serving: a command already routed here is answered.
+    serving.simulateMessage({ type: "command_request", id: "cmd-1", command: "state" });
+    expect(serving.sent.some((raw) => raw.includes('"command_response"'))).toBe(true);
+    await vi.advanceTimersByTimeAsync(15_000);
+    expect(serving.closed).toBe(true);
+    // And never reopened.
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(MockWebSocket.instances).toHaveLength(1);
+
+    // A drained adapter whose socket drops does not reconnect either.
+    const other = new WebSocketEventStoreAdapter({
+      url: WS_URL,
+      motebitId: MOTEBIT_ID,
+      credentialSource: countingSource(),
+      reconnectBaseMs: 100,
+    });
+    other.connect();
+    await vi.advanceTimersByTimeAsync(0);
+    lastWS().simulateOpenWithAuth();
+    other.drain(15_000);
+    lastWS().simulateClose();
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(MockWebSocket.instances).toHaveLength(2);
+
+    // One not yet authenticated has nothing to serve: it closes now.
+    const pending = new WebSocketEventStoreAdapter({
+      url: WS_URL,
+      motebitId: MOTEBIT_ID,
+      credentialSource: countingSource(),
+    });
+    pending.connect();
+    await vi.advanceTimersByTimeAsync(0);
+    const handshaking = lastWS();
+    pending.drain(15_000);
+    expect(handshaking.closed).toBe(true);
+  });
+
+  it("a replaced socket drains for at most REFRESH_DRAIN_MAX_MS, and a second refresh closes it first", async () => {
+    const adapter = new WebSocketEventStoreAdapter({
+      url: WS_URL,
+      motebitId: MOTEBIT_ID,
+      credentialSource: countingSource(),
+    });
+    adapter.connect();
+    await vi.advanceTimersByTimeAsync(0);
+    const first = lastWS();
+    first.simulateOpenWithAuth();
+    adapter.refreshConnection();
+    await vi.advanceTimersByTimeAsync(0);
+    const second = lastWS();
+    second.simulateOpenWithAuth();
+    // A second refresh while nothing drains: the second socket drains now.
+    adapter.refreshConnection();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(first.closed).toBe(true);
+    expect(second.closed).toBe(false);
+    // Its replacement never authenticates: the drain ends on its own.
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(second.closed).toBe(true);
   });
 
   it("disconnect() while the credential is still resolving opens no socket afterwards", async () => {
@@ -1070,5 +1179,52 @@ describe("WebSocketEventStoreAdapter", () => {
     expect(MockWebSocket.instances).toHaveLength(2);
     expect(nextSocket.sent.some((raw) => raw.includes("event-2"))).toBe(true);
     expect(nextSocket.sent.some((raw) => raw.includes('"id":"c1"'))).toBe(true);
+  });
+
+  it("handOffTo refuses a successor for another identity or relay: nothing crosses", async () => {
+    const old = new WebSocketEventStoreAdapter({
+      url: WS_URL,
+      motebitId: MOTEBIT_ID,
+      authToken: "a",
+    });
+    old.connect();
+    const oldSocket = lastWS();
+    oldSocket.simulateOpen(); // unauthenticated: appends and replies queue
+    await old.append(makeEvent(1));
+    old.sendRaw(JSON.stringify({ type: "command_response", id: "c-old" }));
+
+    // A pairing switched identity: the new adapter speaks for another motebit.
+    const other = new WebSocketEventStoreAdapter({
+      url: "ws://localhost:3000/sync/other-motebit",
+      motebitId: "other-motebit",
+      authToken: "b",
+    });
+    other.connect();
+    const otherSocket = lastWS();
+    old.handOffTo(other);
+    expect(oldSocket.closed).toBe(true);
+    otherSocket.simulateOpenWithAuth();
+    await old.append(makeEvent(2)); // late push holding the old adapter
+    expect(otherSocket.sent.some((f) => f.includes("event-1") || f.includes("event-2"))).toBe(
+      false,
+    );
+    expect(otherSocket.sent.some((f) => f.includes("c-old"))).toBe(false);
+  });
+
+  it("a reply sent while unauthenticated waits for the next authentication instead of vanishing", async () => {
+    const adapter = new WebSocketEventStoreAdapter({
+      url: WS_URL,
+      motebitId: MOTEBIT_ID,
+      authToken: "a",
+    });
+    const authed = vi.fn();
+    adapter.onAuthenticated(authed);
+    adapter.connect();
+    lastWS().simulateOpen(); // open, auth pending
+    adapter.sendRaw(JSON.stringify({ type: "command_response", id: "late" }));
+    expect(lastWS().sent.some((f) => f.includes("late"))).toBe(false); // never pre-auth
+    lastWS().simulateMessage({ type: "auth_result", ok: true });
+    expect(lastWS().sent.some((f) => f.includes("late"))).toBe(true);
+    expect(authed).toHaveBeenCalledTimes(1);
   });
 });

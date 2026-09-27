@@ -102,16 +102,10 @@ function makeDeps(): SpatialSyncControllerDeps {
     getPlanStore: () => null,
     getPrivKey: () => new Uint8Array(32).fill(7),
     clearPrivKey: () => {},
-    getTokenFactory: () => async () => {
+    getTokenFactory: () => async (aud?: string) => {
       const t = `minted-${++minted}`;
       mintedAt.set(t, Date.now());
-      mintedAud.set(t, "sync");
-      return t;
-    },
-    mintToken: async (aud) => {
-      const t = `minted-${++minted}`;
-      mintedAt.set(t, Date.now());
-      mintedAud.set(t, aud);
+      mintedAud.set(t, aud ?? "sync");
       return t;
     },
   };

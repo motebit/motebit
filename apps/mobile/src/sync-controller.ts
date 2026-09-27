@@ -56,6 +56,17 @@ export type SyncStatus = SyncEngineStatus;
 const SYNC_URL_KEY = "@motebit/sync_url";
 const SYNC_INTERVAL_MS = 30_000;
 
+/**
+ * How long a socket for an identity or relay the app has LEFT keeps serving
+ * (#816): long enough to answer a command already executing and to flush
+ * what it has queued, as main's socket did until the new start replaced it;
+ * never indefinitely — a socket for a place the user left must close even
+ * when the new start's socket is slow or never comes. It is never retired
+ * INTO the new socket (another identity or relay must not carry its events
+ * or replies — `handOffTo` refuses), so it simply drains and closes.
+ */
+const LEFT_TARGET_DRAIN_MS = 15_000;
+
 export interface SyncControllerDeps {
   getRuntime: () => MotebitRuntime | null;
   getMotebitId: () => string;
@@ -87,18 +98,20 @@ export class MobileSyncController {
    * runs its HTTP sync.
    *
    * Runs: `_runEpoch` moves when a run's engines are created and on stop;
-   * `_runUrl` is the relay the current run syncs with (null when stopped).
+   * `_runUrl` is the relay the current run syncs with and `_runTarget` its
+   * identity and relay (`"<motebitId> <relayUrl>"`); both null when stopped.
    * A cycle whose run was replaced never connects its socket. Its HTTP
    * sync continues — on the CURRENT run's engines — when the current run
-   * targets the same relay (a stop and restart, or a re-entered startSync,
-   * to the same relay: main syncs there too). It does nothing further when
-   * the controller is stopped or the current run targets another relay:
-   * its token and URL belong to a relay the user left.
+   * targets the same relay (a stop and restart, a re-entered startSync, or a
+   * pairing, to the same relay: main syncs there too). It does nothing
+   * further when the controller is stopped or the current run targets
+   * another relay: its token and URL belong to a relay the user left.
    */
   private _cycleSeq = 0;
   private _socketCycle = 0;
   private _runEpoch = 0;
   private _runUrl: string | null = null;
+  private _runTarget: string | null = null;
   /** Engines that have a remote (a live socket's, or an HTTP fallback). */
   private _enginesWithRemote = new WeakSet<SyncEngine>();
   private _syncStatus: SyncStatus = "offline";
@@ -106,6 +119,23 @@ export class MobileSyncController {
   private _lastSyncTime = 0;
   private _wsAdapter: WebSocketEventStoreAdapter | null = null;
   private _wsUnsubOnEvent: (() => void) | null = null;
+  /**
+   * Sockets a newer cycle replaced, still open and answering until the
+   * replacement AUTHENTICATES (#816) — the relay always has an admitted
+   * socket, and the replaced one is then retired into the new one.
+   */
+  private _retiring: Array<{
+    adapter: WebSocketEventStoreAdapter;
+    unsubEvent: (() => void) | null;
+  }> = [];
+  private _retireOnAuth: (() => void) | null = null;
+  /** Sockets for an identity or relay the app left, draining until their timer closes them. */
+  private _leftSockets = new Map<
+    WebSocketEventStoreAdapter,
+    { unsubEvent: (() => void) | null; timer: ReturnType<typeof setTimeout> }
+  >();
+  /** When each left socket's drain ends (set when the app leaves its target). */
+  private _leftDeadline = new WeakMap<WebSocketEventStoreAdapter, number>();
   private _syncEncKey: Uint8Array | null = null;
 
   // Serving state
@@ -279,6 +309,12 @@ export class MobileSyncController {
     // A new run begins only here, past every early return: a startSync that
     // bails never replaces the running one.
     this._runEpoch++;
+    const target = `${motebitId} ${url}`;
+    // A run for another identity or relay: the running socket serves one the
+    // app has left. It drains (see LEFT_TARGET_DRAIN_MS) and closes, unless
+    // a cycle of this run connects its own socket first.
+    if (this._runTarget !== target) this.drainLeftSocket(this._runTarget);
+    this._runTarget = target;
     this._runUrl = url;
 
     this._syncStatus = "idle";
@@ -353,14 +389,50 @@ export class MobileSyncController {
     }
   }
 
-  stopSync(): void {
-    this._runEpoch++;
-    this._runUrl = null;
-    this.deps.stopPushLifecycle();
-    if (this.syncTimer) {
-      clearInterval(this.syncTimer);
-      this.syncTimer = null;
+  /** Close the running socket after the drain period if it still serves a left target. */
+  private drainLeftSocket(left: string | null): void {
+    const leaving = this._wsAdapter;
+    if (!leaving || left == null) return;
+    this._leftDeadline.set(leaving, Date.now() + LEFT_TARGET_DRAIN_MS);
+    // It serves out what it holds but never reopens for the target left.
+    leaving.drain(LEFT_TARGET_DRAIN_MS);
+    setTimeout(() => {
+      // Still the running socket (no newer socket claimed): its drain is over.
+      if (this._wsAdapter === leaving) this.closeSockets();
+    }, LEFT_TARGET_DRAIN_MS);
+  }
+
+  private drainLeft(adapter: WebSocketEventStoreAdapter, unsubEvent: (() => void) | null): void {
+    const deadline = this._leftDeadline.get(adapter) ?? Date.now() + LEFT_TARGET_DRAIN_MS;
+    const close = (): void => {
+      this._leftSockets.delete(adapter);
+      unsubEvent?.();
+      adapter.disconnect();
+    };
+    const remaining = Math.max(0, deadline - Date.now());
+    // Serve out the socket, never reopen it; `close` detaches the handler.
+    adapter.drain(remaining);
+    this._leftSockets.set(adapter, { unsubEvent, timer: setTimeout(close, remaining) });
+  }
+
+  private closeLeftSockets(): void {
+    for (const [left, { unsubEvent, timer }] of this._leftSockets) {
+      clearTimeout(timer);
+      unsubEvent?.();
+      left.disconnect();
     }
+    this._leftSockets.clear();
+  }
+
+  /** Close the running socket and any retiring one. */
+  private closeSockets(): void {
+    this._retireOnAuth?.();
+    this._retireOnAuth = null;
+    for (const old of this._retiring.splice(0)) {
+      old.unsubEvent?.();
+      old.adapter.disconnect();
+    }
+    this.closeLeftSockets();
     if (this._wsUnsubOnEvent) {
       this._wsUnsubOnEvent();
       this._wsUnsubOnEvent = null;
@@ -368,6 +440,18 @@ export class MobileSyncController {
     if (this._wsAdapter) {
       this._wsAdapter.disconnect();
       this._wsAdapter = null;
+    }
+  }
+
+  stopSync(): void {
+    this.closeSockets();
+    this._runEpoch++;
+    this._runTarget = null;
+    this._runUrl = null;
+    this.deps.stopPushLifecycle();
+    if (this.syncTimer) {
+      clearInterval(this.syncTimer);
+      this.syncTimer = null;
     }
     this.syncEngine?.stop();
     this.conversationSyncEngine?.stop();
@@ -429,6 +513,46 @@ export class MobileSyncController {
       conversations_pushed: convResult.conversations_pushed,
       conversations_pulled: convResult.conversations_pulled,
     };
+  }
+
+  /** Retire replaced sockets into `successor` once it authenticates. */
+  private retireAfterAuth(successor: WebSocketEventStoreAdapter): void {
+    this._retireOnAuth?.();
+    this._retireOnAuth = null;
+    // A socket for another identity or relay is never retired into this
+    // one: it drains (answers what it is executing, flushes what it holds)
+    // and closes when its LEFT_TARGET_DRAIN_MS since the app left it are up.
+    this._retiring = this._retiring.filter((r) => {
+      if (r.adapter.endpoint === successor.endpoint) return true;
+      this.drainLeft(r.adapter, r.unsubEvent);
+      return false;
+    });
+    if (this._retiring.length === 0) return;
+    const retire = () => {
+      this._retireOnAuth?.();
+      this._retireOnAuth = null;
+      for (const old of this._retiring.splice(0)) {
+        old.unsubEvent?.();
+        old.adapter.handOffTo(successor);
+      }
+    };
+    if (successor.isConnected) retire();
+    else this._retireOnAuth = successor.onAuthenticated(retire);
+  }
+
+  /**
+   * Where a reply to a relay frame goes, decided when it is SENT: whichever
+   * socket of that relay and identity is authenticated now — the current one,
+   * else one still retiring — otherwise the current one's queue.
+   */
+  private replyChannel(arrival: WebSocketEventStoreAdapter): WebSocketEventStoreAdapter {
+    const candidates = [
+      this._wsAdapter,
+      ...this._retiring.map((r) => r.adapter),
+      ...this._leftSockets.keys(),
+      arrival,
+    ].filter((a): a is WebSocketEventStoreAdapter => a != null && a.endpoint === arrival.endpoint);
+    return candidates.find((a) => a.isConnected) ?? candidates[0] ?? arrival;
   }
 
   private async syncCycle(syncUrl: string): Promise<void> {
@@ -582,7 +706,7 @@ export class MobileSyncController {
                     identityPublicKey: this.deps.getPublicKey(),
                   });
                   if (!verdict.ok) {
-                    this._wsAdapter?.sendRaw(
+                    this.replyChannel(wsAdapter).sendRaw(
                       JSON.stringify({
                         type: "command_response",
                         id: cmdMsg.id,
@@ -593,11 +717,11 @@ export class MobileSyncController {
                   }
                   // The one door for a relay frame.
                   const result = await executeRemoteCommand(rt, cmdMsg.command, cmdMsg.args);
-                  this._wsAdapter?.sendRaw(
+                  this.replyChannel(wsAdapter).sendRaw(
                     JSON.stringify({ type: "command_response", id: cmdMsg.id, result }),
                   );
                 } catch (err: unknown) {
-                  this._wsAdapter?.sendRaw(
+                  this.replyChannel(wsAdapter).sendRaw(
                     JSON.stringify({
                       type: "command_response",
                       id: cmdMsg.id,
@@ -617,7 +741,9 @@ export class MobileSyncController {
             const task = msg.task as AgentTask;
             const runtimeRef = rt;
 
-            this._wsAdapter?.sendRaw(JSON.stringify({ type: "task_claim", task_id: task.task_id }));
+            this.replyChannel(wsAdapter).sendRaw(
+              JSON.stringify({ type: "task_claim", task_id: task.task_id }),
+            );
             this._activeTaskCount++;
 
             void (async () => {
@@ -677,11 +803,15 @@ export class MobileSyncController {
           // Newest ready socket: it replaces the live one (make-before-break
           // at the cycle level — the replaced socket closes here, not at the
           // start of the cycle).
-          if (this._wsUnsubOnEvent) this._wsUnsubOnEvent();
-          // Retire the replaced socket INTO this one: its queued events and
-          // in-flight replies move over instead of dying with it.
-          if (this._wsAdapter) this._wsAdapter.handOffTo(wsAdapter);
+          // The replaced socket keeps serving until this one authenticates,
+          // then is retired INTO it: its queued events and in-flight replies
+          // move over instead of dying with it.
+          if (this._wsAdapter) {
+            this._retiring.push({ adapter: this._wsAdapter, unsubEvent: this._wsUnsubOnEvent });
+          }
+          this._wsUnsubOnEvent = null;
           this._wsAdapter = wsAdapter;
+          this.retireAfterAuth(wsAdapter);
           this._wsUnsubOnEvent = unsubEvent;
           this._socketCycle = cycle;
           if (runtime && delegationAdapter) runtime.setDelegationAdapter(delegationAdapter);

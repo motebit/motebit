@@ -70,9 +70,22 @@ vi.mock("@motebit/sync-engine", () => {
       this.state = { connected: false, everConnected: false, url: cfg.url };
       h.sockets.push(this.state);
     }
+    authCbs = new Set<() => void>();
+    // The relay admits a socket at once here: connected ⇒ authenticated.
     connect = vi.fn(() => {
       this.state.connected = true;
       this.state.everConnected = true;
+      for (const cb of [...this.authCbs]) cb();
+    });
+    get isConnected(): boolean {
+      return this.state.connected;
+    }
+    get endpoint(): string {
+      return this.state.url;
+    }
+    onAuthenticated = vi.fn((cb: () => void) => {
+      this.authCbs.add(cb);
+      return () => this.authCbs.delete(cb);
     });
     disconnect = vi.fn(() => {
       this.state.connected = false;
