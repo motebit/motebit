@@ -2104,9 +2104,14 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
   );
 
   // Mobile push-wake adapter — env-gated like the Solana/x402 capabilities.
-  // The full chain is already live (mobile registers Expo tokens via
-  // POST /api/v1/agents/push-token → relay_push_tokens; attemptPushWake reads
-  // them); this is the one construction that activates it. Absent token →
+  // Mobile registers Expo tokens via POST /api/v1/agents/push-token (a
+  // `push:register` device token) → relay_push_tokens; attemptPushWake reads
+  // them. Until #825 that route demanded `admin:query`, so no phone ever
+  // registered (production held zero rows) and push-wake had nothing to
+  // wake. Mobile caches its token only on a 2xx, so a phone re-registers on
+  // its next launch or foreground return once the fix is deployed; until
+  // then no phone is reachable. This is the one construction that activates
+  // the adapter itself. Absent token →
   // undefined → attemptPushWake cleanly no-ops (no push, no dishonest claim).
   const pushAdapter = process.env.EXPO_ACCESS_TOKEN
     ? new ExpoPushAdapter({ accessToken: process.env.EXPO_ACCESS_TOKEN })

@@ -621,6 +621,16 @@ export function registerAgentAuthMiddleware(deps: AgentAuthMiddlewareDeps): void
       agentAudience = "account:withdraw";
     } else if (path.endsWith("/checkout")) {
       agentAudience = "account:checkout";
+    } else if (path === "/api/v1/agents/push-token" && (method === "POST" || method === "DELETE")) {
+      // The audience `@motebit/protocol` names for push-notification token
+      // registration, and the one mobile's push-token-manager mints. It
+      // defaulted to `admin:query`, so every phone's registration 401'd and
+      // `relay_push_tokens` held zero rows in production (#825) — the same
+      // client-names-one / route-defaults-to-another shape as #460 and #702.
+      // Only the two methods the push-token routes register: any other
+      // method on this path is `GET /api/v1/agents/:motebitId` with the id
+      // "push-token" (or a 404), and must keep the default audience.
+      agentAudience = "push:register";
     } else if (path.endsWith("/roster")) {
       // The machine roster (spec/machine-roster-v1.md §11): a per-DEVICE
       // credential, because the route needs the key a device row holds (its
