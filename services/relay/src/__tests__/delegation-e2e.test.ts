@@ -161,7 +161,7 @@ describe("Delegation E2E", () => {
     const adapter = new RelayDelegationAdapter({
       syncUrl: "http://relay",
       motebitId: MOTEBIT_ID,
-      authToken: API_TOKEN,
+      authToken: async () => API_TOKEN,
       sendRaw: () => {},
       onCustomMessage: dispatcher.onCustomMessage,
     });
@@ -286,7 +286,7 @@ describe("Delegation E2E", () => {
     const adapter = new RelayDelegationAdapter({
       syncUrl: "http://relay",
       motebitId: MOTEBIT_ID,
-      authToken: API_TOKEN,
+      authToken: async () => API_TOKEN,
       sendRaw: () => {},
       onCustomMessage: dispatcher.onCustomMessage,
     });
@@ -362,7 +362,7 @@ describe("Delegation E2E", () => {
     const adapter = new RelayDelegationAdapter({
       syncUrl: "http://relay",
       motebitId: MOTEBIT_ID,
-      authToken: API_TOKEN,
+      authToken: async () => API_TOKEN,
       sendRaw: () => {},
       onCustomMessage: dispatcher.onCustomMessage,
     });
@@ -417,7 +417,7 @@ describe("Delegation E2E", () => {
     const adapter = new RelayDelegationAdapter({
       syncUrl: "http://relay",
       motebitId: MOTEBIT_ID,
-      authToken: API_TOKEN,
+      authToken: async () => API_TOKEN,
       sendRaw: () => {},
       onCustomMessage: dispatcher.onCustomMessage,
     });
@@ -510,7 +510,7 @@ describe("Delegation E2E", () => {
     const adapter = new RelayDelegationAdapter({
       syncUrl: "http://relay",
       motebitId: MOTEBIT_ID,
-      authToken: API_TOKEN,
+      authToken: async () => API_TOKEN,
       sendRaw: () => {},
       onCustomMessage: dispatcher.onCustomMessage,
       maxDelegationRetries: 0, // No retries — test verifies single failure propagation

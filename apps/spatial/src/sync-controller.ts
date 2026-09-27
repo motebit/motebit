@@ -32,6 +32,7 @@ import {
   verifyAgentCommandEnvelope,
 } from "@motebit/runtime";
 import { DeviceCapability } from "@motebit/sdk";
+import type { TokenAudience } from "@motebit/sdk";
 import type { SyncStatus as SyncEngineStatus } from "@motebit/sync-engine";
 import { deriveSyncEncryptionKey, secureErase } from "@motebit/encryption";
 import {
@@ -71,8 +72,14 @@ export interface SpatialSyncControllerDeps {
   getPrivKey: () => Uint8Array | null;
   /** Erase the private key bytes owned by SpatialApp. Called on disconnectRelay. */
   clearPrivKey: () => void;
-  /** Signed-token factory, null if identity not bootstrapped. */
-  getTokenFactory: () => (() => Promise<string>) | null;
+  /**
+   * Signed-token factory, null if identity not bootstrapped. Takes the
+   * audience the relay route verifies (default `sync`, the socket's own):
+   * register / heartbeat / deregister verify `admin:query`, task submit and
+   * poll `task:submit` / `task:query`. A factory hard-coded to `sync` sent
+   * the socket's audience to every one of them and all were refused (#827).
+   */
+  getTokenFactory: () => ((audience?: TokenAudience) => Promise<string>) | null;
 }
 
 export class SpatialSyncController {
@@ -169,9 +176,14 @@ export class SpatialSyncController {
         .list()
         .map((t) => t.name) ?? [];
     try {
+      // Registration is the agent-registry family: `admin:query`.
+      const regToken = tokenFactory ? await tokenFactory("admin:query") : null;
       const regResp = await fetch(`${relayUrl}/api/v1/agents/register`, {
         method: "POST",
-        headers,
+        headers: {
+          "Content-Type": "application/json",
+          ...(regToken ? { Authorization: `Bearer ${regToken}` } : {}),
+        },
         body: JSON.stringify({
           motebit_id: motebitId,
           endpoint_url: relayUrl,
@@ -185,7 +197,7 @@ export class SpatialSyncController {
           void (async () => {
             try {
               const tf = this.deps.getTokenFactory();
-              const freshToken = tf ? await tf() : authToken;
+              const freshToken = tf ? await tf("admin:query") : null;
               const hbHeaders: Record<string, string> = { "Content-Type": "application/json" };
               if (freshToken) hbHeaders["Authorization"] = `Bearer ${freshToken}`;
               await fetch(`${relayUrl}/api/v1/agents/heartbeat`, {
@@ -238,7 +250,7 @@ export class SpatialSyncController {
         const delegationAdapter = new RelayDelegationAdapter({
           syncUrl: relayUrl,
           motebitId,
-          authToken: authToken ?? undefined,
+          ...(tokenFactory != null ? { authToken: (aud: TokenAudience) => tokenFactory(aud) } : {}),
           sendRaw: (data: string) => wsAdapter.sendRaw(data),
           onCustomMessage: (cb) => wsAdapter.onCustomMessage(cb),
           getExplorationDrive: () => this.deps.getRuntime()?.getPrecision().explorationDrive,
@@ -405,7 +417,7 @@ export class SpatialSyncController {
               const freshDelegation = new RelayDelegationAdapter({
                 syncUrl: relayUrl,
                 motebitId,
-                authToken: freshToken ?? undefined,
+                authToken: (aud: TokenAudience) => tf(aud),
                 sendRaw: (data: string) => freshWs.sendRaw(data),
                 onCustomMessage: (cb) => freshWs.onCustomMessage(cb),
                 getExplorationDrive: () => this.deps.getRuntime()?.getPrecision().explorationDrive,
@@ -516,8 +528,12 @@ export class SpatialSyncController {
     const { relayUrl } = this.deps.getNetworkSettings();
     if (relayUrl !== "") {
       try {
+        // `admin:query`, like register; the cached `sync` socket token was
+        // refused (#827).
+        const tf = this.deps.getTokenFactory();
+        const token = tf ? await tf("admin:query") : null;
         const headers: Record<string, string> = {};
-        if (this.relayAuthToken) headers["Authorization"] = `Bearer ${this.relayAuthToken}`;
+        if (token) headers["Authorization"] = `Bearer ${token}`;
         await fetch(`${relayUrl}/api/v1/agents/deregister`, { method: "DELETE", headers });
       } catch {
         // Best-effort
@@ -552,8 +568,10 @@ export class SpatialSyncController {
 
     try {
       const tokenFactory = this.deps.getTokenFactory();
-      const mintToken = async (): Promise<string> => {
-        if (tokenFactory) return tokenFactory();
+      // Honors the audience cmdSelfTest asks for (`task:submit`, then
+      // `task:query`); a factory that ignored it sent `sync` to both (#827).
+      const mintToken = async (audience?: TokenAudience): Promise<string> => {
+        if (tokenFactory) return tokenFactory(audience);
         return authToken;
       };
       const token = await mintToken();

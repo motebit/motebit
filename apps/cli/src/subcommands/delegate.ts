@@ -234,8 +234,11 @@ async function handleDelegatePlan(
       while (Date.now() < deadline) {
         await new Promise<void>((r) => setTimeout(r, 2000));
         try {
+          // The poll route verifies `task:query`; the submission's
+          // `task:submit` headers were refused without a master token (#827).
+          const pollHeaders = await getRelayAuthHeaders(config, { aud: "task:query" });
           const pollResp = await fetch(`${relayUrl}/agent/${motebitId}/task/${taskId}`, {
-            headers: authHeaders,
+            headers: pollHeaders,
           });
           if (!pollResp.ok) continue;
           const data = (await pollResp.json()) as {
@@ -449,9 +452,12 @@ export async function handleDelegate(config: CliConfig): Promise<void> {
   if (!targetMotebitId) {
     try {
       const maxBudget = config.budget ? parseFloat(config.budget) : 10;
+      // Candidate discovery verifies `market:query` (#827: the `task:submit`
+      // headers were refused without a master token).
+      const discoverHeaders = await getRelayAuthHeaders(config, { aud: "market:query" });
       const discoverRes = await fetch(
         `${relayUrl}/api/v1/market/candidates?capability=${encodeURIComponent(capability)}&max_budget=${maxBudget}&limit=5`,
-        { headers },
+        { headers: discoverHeaders },
       );
       if (!discoverRes.ok) {
         const text = await discoverRes.text();
@@ -526,8 +532,11 @@ export async function handleDelegate(config: CliConfig): Promise<void> {
   for (let poll = 0; poll < MAX_POLLS; poll++) {
     await new Promise<void>((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
     try {
+      // `task:query`, minted per poll (#827: the `task:submit` headers were
+      // refused on every poll without a master token).
+      const pollHeaders = await getRelayAuthHeaders(config, { aud: "task:query" });
       const pollRes = await fetch(`${relayUrl}/agent/${targetMotebitId}/task/${taskId}`, {
-        headers,
+        headers: pollHeaders,
       });
       if (!pollRes.ok) {
         process.stdout.write(".");

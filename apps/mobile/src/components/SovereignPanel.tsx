@@ -14,7 +14,7 @@ import {
   Linking,
 } from "react-native";
 import type { MobileApp } from "../mobile-app";
-import type { TokenAudience } from "@motebit/sdk";
+import { relayRouteAudience } from "@motebit/sdk";
 import { useTheme, type ThemeColors } from "../theme";
 import {
   createSovereignController,
@@ -95,14 +95,12 @@ async function bootstrapAnchor(syncUrl: string): Promise<TransparencyAnchor | un
   }
 }
 
-// Owner-private credential routes (2026-07-07) need their least-privilege
-// audience so a sync token can't read/present another agent's credentials.
-// Mirror of web's audienceForPath.
-function audienceForPath(path: string): TokenAudience {
-  if (path.includes("/presentation")) return "credentials:present";
-  if (path.includes("/credentials")) return "credentials";
-  return "sync";
-}
+// The audience each relay route verifies is `@motebit/protocol`'s
+// RELAY_ROUTE_AUDIENCES, resolved per request — never guessed here. The
+// guess this replaced sent `sync` to `/balance` (verifies `account:balance`)
+// and to the sweep-config PATCH (verifies `admin:query`), so both were
+// always refused (#827). A route the table does not name takes no device
+// token (public, or operator-only), so none is sent.
 
 // Mobile's sync URL comes from AsyncStorage (async). The adapter's `syncUrl`
 // getter is synchronous, so we cache the URL in a ref and prime it in the
@@ -121,7 +119,8 @@ function createMobileAdapter(
     async fetch(path: string, init?: SovereignFetchInit) {
       const syncUrl = syncUrlRef.current;
       if (!syncUrl) throw new Error("No relay URL configured");
-      const token = await app.createSyncToken(audienceForPath(path));
+      const audience = relayRouteAudience(init?.method ?? "GET", path);
+      const token = audience != null ? await app.createSyncToken(audience) : null;
       const headers: Record<string, string> = {
         "Content-Type": "application/json",
         ...(init?.headers ?? {}),

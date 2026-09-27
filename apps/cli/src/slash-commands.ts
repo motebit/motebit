@@ -317,7 +317,13 @@ async function buildRelayConfig(
   if (!token) return undefined;
   const motebitId = repl?.motebitId ?? "";
   if (!motebitId) return undefined;
-  return { relayUrl, authToken: token, motebitId };
+  // Each shared command's route verifies its own audience (#827).
+  return {
+    relayUrl,
+    authToken: token,
+    motebitId,
+    mintToken: async (audience) => (await getRelayToken(config, repl, audience)) ?? token,
+  };
 }
 
 /**
@@ -2428,7 +2434,9 @@ export async function handleSlashCommand(
         break;
       }
       try {
-        const depHeaders = await makeRelayHeaders(config, repl);
+        // The balance route verifies `account:balance`; the helper's
+        // `admin:query` default was refused without a master token (#827).
+        const depHeaders = await makeRelayHeaders(config, repl, { aud: "account:balance" });
         const depResult = await relayFetch<{
           transactions: Array<{
             type: string;

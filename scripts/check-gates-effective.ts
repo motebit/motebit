@@ -2644,6 +2644,21 @@ export async function probeFetch(): Promise<unknown> {
       ),
   },
   {
+    script: "check-audience-route-parity",
+    proves:
+      "flags a client minting an audience its relay route does not verify — the #827 class. Reverts web's served-task receipt to the `task:submit` token it posted with (the result route verifies `task:result`); the gate names the call, the route's audience and the minted one.",
+    perturb: () =>
+      mutateFile("apps/web/src/web-app.ts", (src) => {
+        const anchor = 'const token = await this.createSyncToken("task:result");';
+        if (!src.includes(anchor)) {
+          throw new Error(
+            "probe vacuous: apps/web/src/web-app.ts no longer mints task:result for the result post — retarget the probe",
+          );
+        }
+        return src.replace(anchor, 'const token = await this.createSyncToken("task:submit");');
+      }),
+  },
+  {
     script: "check-worker-no-master-token",
     proves:
       "flags a worker reading the relay master token again — the 2026-09-13 blast-radius class (every first-party worker held MOTEBIT_API_TOKEN, so a compromised worker container was a compromised relay). Probe reinstates the env read in research's config loader; byte-identical restoration on cleanup.",

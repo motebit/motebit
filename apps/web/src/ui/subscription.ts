@@ -154,9 +154,15 @@ export function initSubscription(ctx: WebContext): SubscriptionAPI {
     if (topupStatus) topupStatus.textContent = "Opening checkout…";
 
     try {
+      // The checkout route verifies `account:checkout`; this sent no token at
+      // all and was always refused (#827).
+      const token = await ctx.app.createSyncToken("account:checkout");
       const res = await fetch(`${relayUrl}/api/v1/agents/${motebitId}/checkout`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
         body: JSON.stringify({ amount, return_url: window.location.origin }),
       });
 
@@ -197,7 +203,15 @@ export function initSubscription(ctx: WebContext): SubscriptionAPI {
         return;
       }
 
-      void fetch(`${relayUrl}/api/v1/agents/${motebitId}/balance`)
+      // `account:balance`, minted per poll (a token outlives 5 minutes of
+      // polling otherwise); this sent none and was always refused (#827).
+      void ctx.app
+        .createSyncToken("account:balance")
+        .then((token) =>
+          fetch(`${relayUrl}/api/v1/agents/${motebitId}/balance`, {
+            headers: token ? { Authorization: `Bearer ${token}` } : {},
+          }),
+        )
         .then((res) => (res.ok ? res.json() : null))
         .then((data: { balance?: number } | null) => {
           if (data?.balance != null) {

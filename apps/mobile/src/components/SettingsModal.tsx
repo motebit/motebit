@@ -291,6 +291,7 @@ export function SettingsModal({
               motebitId={identity.motebitId}
               relayUrl={billingRelayUrl}
               balanceUsd={0}
+              mintToken={(audience) => app.createSyncToken(audience)}
             />
           )}
           {tab === "appearance" && (

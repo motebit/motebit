@@ -3426,6 +3426,12 @@ export const REFERENCE_TRUST_THRESHOLDS: TrustTransitionThresholds;
 export const RegulatoryRiskSemiring: Semiring<number>;
 
 // @public
+export const RELAY_PUBLIC_ROUTES: readonly RelayPublicRoute[];
+
+// @public
+export const RELAY_ROUTE_AUDIENCES: readonly RelayRouteAudience[];
+
+// @public
 export interface RelayMetadata {
     agent_count?: number;
     capabilities?: string[];
@@ -3445,6 +3451,29 @@ export interface RelayMetadataPeer {
     endpoint_url: string;
     relay_id: string;
 }
+
+// @public
+export interface RelayPublicRoute {
+    // (undocumented)
+    readonly method: RelayRouteMethod;
+    // (undocumented)
+    readonly path: string;
+}
+
+// @public
+export interface RelayRouteAudience {
+    // (undocumented)
+    readonly audience: TokenAudience;
+    // (undocumented)
+    readonly method: RelayRouteMethod;
+    readonly path: string;
+}
+
+// @public
+export function relayRouteAudience(method: string, path: string): TokenAudience | undefined;
+
+// @public
+export type RelayRouteMethod = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
 
 // @public
 export const ReliabilitySemiring: Semiring<number>;

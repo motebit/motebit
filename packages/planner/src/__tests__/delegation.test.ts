@@ -848,4 +848,32 @@ describe("RelayDelegationAdapter retry with failover", () => {
 
     vi.unstubAllGlobals();
   });
+
+  it("asks the factory for task:query when polling, and sends exactly what it returns (#827)", async () => {
+    // The poll route verifies `task:query`. The adapter used to accept a static
+    // token too, and three surfaces passed their `sync` socket token, which
+    // both routes refuse — the type now admits only a per-audience factory.
+    const tokenFactory = vi.fn(async (audience: string) => `tok-${audience}`);
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({ task: { status: "completed" }, receipt: null }), {
+        status: 200,
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const adapter = new RelayDelegationAdapter({
+      syncUrl: "http://localhost:3000",
+      motebitId: "test-mote",
+      authToken: tokenFactory,
+      sendRaw: vi.fn(),
+      onCustomMessage: () => () => {},
+    });
+
+    await adapter.pollTaskResult("task-1", "step-1");
+    expect(tokenFactory).toHaveBeenCalledWith("task:query");
+    const init = fetchMock.mock.calls[0]![1] as RequestInit;
+    expect((init.headers as Record<string, string>)["Authorization"]).toBe("Bearer tok-task:query");
+
+    vi.unstubAllGlobals();
+  });
 });

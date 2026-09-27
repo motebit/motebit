@@ -1,6 +1,7 @@
 import type { DesktopContext } from "../types";
 import { formatTimeAgo } from "../types";
-import { toMicro } from "@motebit/sdk";
+import { toMicro, relayRouteAudience } from "@motebit/sdk";
+import { relayBearer } from "./relay-bearer";
 import {
   createSovereignController,
   type LedgerManifest,
@@ -105,7 +106,7 @@ async function bootstrapAnchor(syncUrl: string): Promise<TransparencyAnchor | un
 }
 
 function createDesktopAdapter(ctx: DesktopContext): SovereignFetchAdapter {
-  const buildRequest = (path: string, init?: SovereignFetchInit): Request | null => {
+  const buildRequest = async (path: string, init?: SovereignFetchInit): Promise<Request | null> => {
     const config = ctx.getConfig();
     const syncUrl = config?.syncUrl;
     if (!syncUrl) return null;
@@ -113,7 +114,10 @@ function createDesktopAdapter(ctx: DesktopContext): SovereignFetchAdapter {
       "Content-Type": "application/json",
       ...(init?.headers ?? {}),
     };
-    if (config.syncMasterToken) headers["Authorization"] = `Bearer ${config.syncMasterToken}`;
+    // Master token when configured, else a device token for the audience
+    // this route verifies (the protocol's route table) — see relay-bearer.ts.
+    const bearer = await relayBearer(ctx, relayRouteAudience(init?.method ?? "GET", path));
+    if (bearer) headers["Authorization"] = `Bearer ${bearer}`;
     return new Request(`${syncUrl}${path}`, {
       method: init?.method ?? "GET",
       headers,
@@ -129,7 +133,7 @@ function createDesktopAdapter(ctx: DesktopContext): SovereignFetchAdapter {
       return ctx.app.motebitId || null;
     },
     async fetch(path, init) {
-      const req = buildRequest(path, init);
+      const req = await buildRequest(path, init);
       if (!req) throw new Error("No relay configured");
       return fetch(req);
     },

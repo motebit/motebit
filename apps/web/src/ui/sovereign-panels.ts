@@ -6,8 +6,7 @@
 // web-specific affordances (Fund sovereign onramp, top-up hint).
 
 import type { WebContext } from "../types";
-import type { TokenAudience } from "@motebit/sdk";
-import { toMicro, ACCOUNT_BALANCE_AUDIENCE } from "@motebit/sdk";
+import { toMicro, relayRouteAudience } from "@motebit/sdk";
 import { loadSyncUrl } from "../storage";
 import { fetchSolanaBalanceUsdc, openSovereignFundingFlow } from "./wallet-balance";
 import { setEmptyPulse } from "./empty-states";
@@ -93,25 +92,14 @@ async function bootstrapAnchor(syncUrl: string): Promise<TransparencyAnchor | un
 
 // --- Adapter ---
 
-// Audience binding is per-endpoint (relay CLAUDE.md rule 5 — a token minted
-// for one purpose is rejected by an endpoint expecting another). The balance
-// endpoint's `dualAuth` enforces `account:balance` (services/relay/middleware.ts);
-// a `sync`-audience token there fails verification → 401, which the controller
-// swallowed into a null balance → the panel showed a false `0.00` operating
-// balance even with funds in the relay ledger. Mint the audience the route
-// expects. Default stays `sync` (the general relay-state audience) for every
-// other path. Only canonical `TokenAudience` values appear here so
-// `check-audience-canonical` stays green.
-function audienceForPath(path: string): TokenAudience {
-  if (path.includes("/balance")) return ACCOUNT_BALANCE_AUDIENCE;
-  // Owner-private credential routes (2026-07-07): mint the least-privilege
-  // audience the relay enforces so a sync token can't read/present another
-  // agent's credentials. Presentation before credentials — /presentation
-  // also contains no "/credentials" substring, but order-guard anyway.
-  if (path.includes("/presentation")) return "credentials:present";
-  if (path.includes("/credentials")) return "credentials";
-  return "sync";
-}
+// Audience binding is per-endpoint: a token minted for one audience is
+// refused by a route that verifies another. The audience each relay route
+// verifies is `@motebit/protocol`'s RELAY_ROUTE_AUDIENCES, resolved per
+// request — never guessed here. The guess this replaced sent `sync` to the
+// sweep-config PATCH, which verifies `admin:query`, so every sweep edit was
+// refused (#827); before that it sent `sync` to `/balance` (a false 0.00).
+// A route the table does not name takes no device token (public, or
+// operator-only), so none is sent.
 
 // Web's sync auth is a rotating signed token minted per-call (`createSyncToken`).
 // The controller asks the adapter for `fetch(path, init)`; this closure mints
@@ -127,7 +115,8 @@ function createWebAdapter(ctx: WebContext): SovereignFetchAdapter {
     async fetch(path: string, init?: SovereignFetchInit) {
       const syncUrl = loadSyncUrl();
       if (!syncUrl) throw new Error("No relay URL configured");
-      const token = await ctx.app.createSyncToken(audienceForPath(path));
+      const audience = relayRouteAudience(init?.method ?? "GET", path);
+      const token = audience != null ? await ctx.app.createSyncToken(audience) : null;
       const headers: Record<string, string> = {
         "Content-Type": "application/json",
         ...(init?.headers ?? {}),

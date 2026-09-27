@@ -100,6 +100,14 @@ export class SyncController {
   private _servingPrivateKey: Uint8Array | null = null;
   private _servingSyncUrl: string | null = null;
   private _servingAuthToken: string | null = null;
+  /**
+   * Mints the bearer for a serving-side relay call, for the audience that
+   * call's route verifies: an operator's master token when one was supplied,
+   * else a device token for exactly that audience. The cached socket token
+   * (`sync`) was reused for the result post (`task:result`) and registration
+   * (`admin:query`), and both were refused (#827).
+   */
+  private _servingToken: ((audience: TokenAudience) => Promise<string>) | null = null;
   private _activeTaskCount = 0;
 
   constructor(private deps: SyncControllerDeps) {}
@@ -329,7 +337,12 @@ export class SyncController {
     }
     runtime.enableInteractiveDelegation({
       syncUrl,
-      authToken: async () => this.deps.createSyncToken(privKeyHex, "task:submit"),
+      // Honor the audience the runtime asks for — `task:submit` to submit,
+      // `task:query` to poll, `market:listing` for the P2P pre-flight. A
+      // closure that ignored it sent `task:submit` to all three, and the poll
+      // and pre-flight were refused (#827).
+      authToken: async (audience?: TokenAudience) =>
+        this.deps.createSyncToken(privKeyHex, audience ?? "task:submit"),
       ...(pinnedRelayKey != null ? { relayPublicKey: pinnedRelayKey } : {}),
       // Forward the cold-start opt-in as a LIVE getter so the "Pay new agents
       // directly" Governance toggle governs chat-driven (delegate_to_agent) P2P
@@ -347,6 +360,9 @@ export class SyncController {
     this._servingPrivateKey = servingPrivKey;
     this._servingSyncUrl = syncUrl;
     this._servingAuthToken = token;
+    const masterToken = authToken != null && authToken !== "" ? authToken : null;
+    this._servingToken = async (audience) =>
+      masterToken ?? this.deps.createSyncToken(privKeyHex, audience);
 
     // Wire task handler — accept delegations from the network.
     // The liquescent droplet becomes a body that works, not just a face that talks.
@@ -434,11 +450,14 @@ export class SyncController {
 
           if (receipt) {
             const resultUrl = `${syncUrl}/agent/${motebitId}/task/${task.task_id}/result`;
+            const resultToken = this._servingToken
+              ? await this._servingToken("task:result")
+              : authToken;
             await fetch(resultUrl, {
               method: "POST",
               headers: {
                 "Content-Type": "application/json",
-                Authorization: `Bearer ${authToken}`,
+                Authorization: `Bearer ${resultToken}`,
               },
               body: JSON.stringify(receipt),
             });
@@ -596,11 +615,14 @@ export class SyncController {
       .map((t: { name: string }) => t.name);
 
     try {
+      const registerToken = this._servingToken
+        ? await this._servingToken("admin:query")
+        : this._servingAuthToken;
       const res = await fetch(`${this._servingSyncUrl}/api/v1/agents/register`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          Authorization: `Bearer ${this._servingAuthToken}`,
+          Authorization: `Bearer ${registerToken}`,
         },
         body: JSON.stringify({
           motebit_id: this.deps.getMotebitId(),
