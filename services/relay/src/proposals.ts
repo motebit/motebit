@@ -6,6 +6,7 @@ import type { Context, Hono } from "hono";
 import { HTTPException } from "hono/http-exception";
 import type { MotebitDatabase } from "@motebit/persistence";
 import type { ConnectedDevice } from "./index.js";
+import { sendToEach } from "./ws-send.js";
 import type { AuthEvent } from "./auth-events.js";
 
 export interface ProposalsDeps {
@@ -95,9 +96,7 @@ export function registerProposalRoutes(deps: ProposalsDeps): void {
           initiator_motebit_id: initiatorId,
           assigned_steps: p.assigned_steps,
         });
-        for (const peer of peers) {
-          peer.ws.send(payload);
-        }
+        sendToEach(peers, payload);
       }
     }
 
@@ -227,9 +226,7 @@ export function registerProposalRoutes(deps: ProposalsDeps): void {
         response: body.response,
         counter_steps: body.counter_steps ?? null,
       });
-      for (const peer of initiatorPeers) {
-        peer.ws.send(payload);
-      }
+      sendToEach(initiatorPeers, payload);
     }
 
     if (newStatus === "accepted") {
@@ -242,9 +239,7 @@ export function registerProposalRoutes(deps: ProposalsDeps): void {
             plan_id: proposal.plan_id,
             status: "accepted",
           });
-          for (const peer of peers) {
-            peer.ws.send(payload);
-          }
+          sendToEach(peers, payload);
         }
       }
     }
@@ -376,9 +371,7 @@ export function registerProposalRoutes(deps: ProposalsDeps): void {
           status: body.status,
           result_summary: body.result_summary ?? null,
         });
-        for (const peer of peers) {
-          peer.ws.send(payload);
-        }
+        sendToEach(peers, payload);
       }
     }
 

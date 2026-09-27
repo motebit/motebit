@@ -117,7 +117,7 @@ describe("auth doors record, once (#827)", () => {
     function captureFrames(motebitId: string): string[] {
       const frames: string[] = [];
       relay.connections.set(motebitId, [
-        { ws: { send: (d: string) => frames.push(d), close: () => {} } } as never,
+        { ws: { readyState: 1, send: (d: string) => frames.push(d), close: () => {} } } as never,
       ]);
       return frames;
     }

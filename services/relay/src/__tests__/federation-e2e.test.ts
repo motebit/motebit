@@ -1101,7 +1101,7 @@ describe("Federation E2E", () => {
     it("rejects duplicate task_id on peer relay (idempotency)", async () => {
       // Register agent on Relay B
       const bob = await registerAgent(relayB, "bob-dedup", ["dedup-cap"]);
-      const bobWs = { send: vi.fn(), close: vi.fn() };
+      const bobWs = { readyState: 1, send: vi.fn(), close: vi.fn() };
       relayB.connections.set(bob.motebitId, [{ ws: bobWs as never, deviceId: "bob-device" }]);
 
       await establishPeering(relayA, relayB);
@@ -1148,7 +1148,7 @@ describe("Federation E2E", () => {
     it("circuit breaker: repeated forward failures suspend the peer", async () => {
       // Register agent on Relay B
       const bob = await registerAgent(relayB, "bob-circuit", ["circuit-cap"]);
-      const bobWs = { send: vi.fn(), close: vi.fn() };
+      const bobWs = { readyState: 1, send: vi.fn(), close: vi.fn() };
       relayB.connections.set(bob.motebitId, [{ ws: bobWs as never, deviceId: "bob-device" }]);
 
       await establishPeering(relayA, relayB);
@@ -1211,7 +1211,7 @@ describe("Federation E2E", () => {
       // Directly test the idempotency check by queuing a task, then calling
       // onTaskForwarded with the same task_id through the relay's task queue.
       const bob = await registerAgent(relayB, "bob-dup-direct", ["dup-cap"]);
-      const bobWs = { send: vi.fn(), close: vi.fn() };
+      const bobWs = { readyState: 1, send: vi.fn(), close: vi.fn() };
       relayB.connections.set(bob.motebitId, [{ ws: bobWs as never, deviceId: "bob-device" }]);
 
       // Submit a task directly on Relay B to put it in the queue
@@ -1324,7 +1324,7 @@ describe("Federation E2E", () => {
       const bob = await registerAgent(relayB, "bob", ["quantum-computing"]);
 
       // Simulate Bob being "connected" to Relay B via WebSocket
-      const bobWs = { send: vi.fn(), close: vi.fn() };
+      const bobWs = { readyState: 1, send: vi.fn(), close: vi.fn() };
       relayB.connections.set(bob.motebitId, [{ ws: bobWs as never, deviceId: "bob-device" }]);
 
       // 2. Peer the relays
@@ -1452,7 +1452,7 @@ describe("Federation E2E", () => {
           "UPDATE agent_registry SET settlement_address = ?, settlement_modes = 'p2p' WHERE motebit_id = ?",
         )
         .run(WORKER_ADDR, bob.motebitId);
-      const bobWs = { send: vi.fn(), close: vi.fn() };
+      const bobWs = { readyState: 1, send: vi.fn(), close: vi.fn() };
       relayB.connections.set(bob.motebitId, [{ ws: bobWs as never, deviceId: "bob-device" }]);
 
       await establishPeering(relayA, relayB);
@@ -1684,7 +1684,7 @@ describe("Federation E2E", () => {
           "UPDATE agent_registry SET settlement_address = ?, settlement_modes = 'p2p' WHERE motebit_id = ?",
         )
         .run(WORKER_ADDR, bob.motebitId);
-      const bobWs = { send: vi.fn(), close: vi.fn() };
+      const bobWs = { readyState: 1, send: vi.fn(), close: vi.fn() };
       relayB.connections.set(bob.motebitId, [{ ws: bobWs as never, deviceId: "bob-device" }]);
 
       await establishPeering(relayA, relayB);
@@ -1788,7 +1788,7 @@ describe("Federation E2E", () => {
       relayB.moteDb.db
         .prepare("UPDATE agent_registry SET settlement_address = ? WHERE motebit_id = ?")
         .run(WORKER_ADDR, bob.motebitId);
-      const bobWs = { send: vi.fn(), close: vi.fn() };
+      const bobWs = { readyState: 1, send: vi.fn(), close: vi.fn() };
       relayB.connections.set(bob.motebitId, [{ ws: bobWs as never, deviceId: "bob-device" }]);
       await establishPeering(relayA, relayB);
 
@@ -1905,7 +1905,7 @@ describe("Federation E2E", () => {
       relayB.moteDb.db
         .prepare("UPDATE agent_registry SET settlement_address = ? WHERE motebit_id = ?")
         .run(WORKER_ADDR, bob.motebitId);
-      const bobWs = { send: vi.fn(), close: vi.fn() };
+      const bobWs = { readyState: 1, send: vi.fn(), close: vi.fn() };
       relayB.connections.set(bob.motebitId, [{ ws: bobWs as never, deviceId: "bob-device" }]);
 
       await establishPeering(relayA, relayB);
@@ -2025,7 +2025,7 @@ describe("Federation E2E", () => {
         ["noproof-cap"],
         [{ capability: "noproof-cap", unit_cost: 1.0, currency: "USD", per: "task" }],
       );
-      const bobWs = { send: vi.fn(), close: vi.fn() };
+      const bobWs = { readyState: 1, send: vi.fn(), close: vi.fn() };
       relayB.connections.set(bob.motebitId, [{ ws: bobWs as never, deviceId: "bob-device" }]);
       await establishPeering(relayA, relayB);
 
@@ -2083,7 +2083,7 @@ describe("Federation E2E", () => {
         .prepare("UPDATE agent_registry SET settlement_address = ? WHERE motebit_id = ?")
         .run(WORKER_ADDR, bob.motebitId);
       relayB.connections.set(bob.motebitId, [
-        { ws: { send: vi.fn(), close: vi.fn() } as never, deviceId: "bob-device" },
+        { ws: { readyState: 1, send: vi.fn(), close: vi.fn() } as never, deviceId: "bob-device" },
       ]);
       await establishPeering(relayA, relayB);
       const idA = (await (await relayA.app.request("/federation/v1/identity")).json()) as {
@@ -2173,7 +2173,7 @@ describe("Federation E2E", () => {
     it("federation forward timeout does not fall through to local broadcast", async () => {
       // Register agent on Relay B with a unique capability only bob has
       const bob = await registerAgent(relayB, "bob-timeout", ["exotic-timeout-cap"]);
-      const bobWs = { send: vi.fn(), close: vi.fn() };
+      const bobWs = { readyState: 1, send: vi.fn(), close: vi.fn() };
       relayB.connections.set(bob.motebitId, [{ ws: bobWs as never, deviceId: "bob-device" }]);
 
       await establishPeering(relayA, relayB);
@@ -2182,7 +2182,7 @@ describe("Federation E2E", () => {
       // Without the fix, a federation timeout would fall through to broadcast,
       // and this local device would receive the task — causing double-execution.
       const submitter = await registerAgent(relayA, "submitter-timeout", ["web-search"]);
-      const localWs = { send: vi.fn(), close: vi.fn() };
+      const localWs = { readyState: 1, send: vi.fn(), close: vi.fn() };
       relayA.connections.set(submitter.motebitId, [
         { ws: localWs as never, deviceId: "local-device", capabilities: ["exotic-timeout-cap"] },
       ]);
