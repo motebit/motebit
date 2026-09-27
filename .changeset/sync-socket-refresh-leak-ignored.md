@@ -28,12 +28,21 @@ Siblings closed in the same pass: a re-entered `startSync` on web and
 desktop now closes the running socket and refresh timer before building
 a new one. A start claims the socket only once it has passed its early
 checks, so a newer start that bails (no runtime, no keypair, a failed
-token) never orphans a running one, and a start superseded across an
-await (by `stopSync` or a newer start that claimed) builds or connects
-nothing. Mobile runs one sync cycle at a time, so a relay-key fetch
-slower than the 30-second interval no longer lets cycles overtake each
-other; if a cycle's socket is superseded it skips only the socket and
-still runs the HTTP sync.
+token) never orphans a running one. A start superseded before it reaches
+that point builds nothing. One superseded across the relay-key await
+(by `stopSync` or a newer start that claimed) has already built its
+adapter — and on desktop connected it, since desktop connects before
+that await — so it is torn down after the await instead: it wires no
+handler, sets no refresh timer, and nothing stays open.
+
+Mobile keeps main's cadence — every 30-second tick starts a cycle and
+every cycle runs its HTTP sync, however slow the previous one is — and
+owns only the socket: a cycle may connect its socket only if no newer
+cycle has connected one, connecting closes the socket it replaces, and
+an overtaken cycle releases its unconnected socket and still syncs over
+HTTP. A cycle of a stopped or restarted run does nothing further, so a
+stop and restart to another relay no longer lets the old cycle drive the
+new run's engines at the old relay.
 
 The socket's catch-up pull now authenticates: desktop and spatial give
 the HTTP fallback a per-request credential (web already did), so events
