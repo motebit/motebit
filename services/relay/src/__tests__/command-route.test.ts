@@ -588,6 +588,14 @@ describe("sendToOne: main's pick, a verified pick swapped for its own machine's 
     expect(open.got).toEqual(["f"]);
   });
 
+  it("a same-device verified socket that is not OPEN is never a swap target (a CLOSING one would swallow the frame)", () => {
+    const pick = peer("pick", 1, { verified: true, deviceId: "laptop" });
+    const closing = peer("closing", 2, { verified: true, deviceId: "laptop" });
+    expect(sendToOne([pick.p, closing.p], "f")).toBe(pick.p);
+    expect(pick.got).toEqual(["f"]);
+    expect(closing.got).toEqual([]);
+  });
+
   it("a swap target that throws falls back to main's own verified pick", () => {
     const pick = peer("pick", 1, { verified: true, deviceId: "laptop" });
     const newer = peer("newer", 1, { verified: true, deviceId: "laptop", throws: true });

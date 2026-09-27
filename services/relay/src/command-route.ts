@@ -537,10 +537,13 @@ export function markCommandsDeliveredTo(peer: ConnectedDevice): number {
  * a peer is pushed when its connection is finalized), whose `readyState` is
  * OPEN and whose `send` does not throw. That order is kept exactly, because
  * every reordering ACROSS peer kinds lost an answer main returns (#812,
- * #815): for undeclared web and desktop clients the OLDEST socket is the
- * one listening (they attach their command handler to their first adapter,
- * and a token refresh leaves it open), and a newer verified socket can be a
- * half-open one while an older phone or daemon is live.
+ * #815). For undeclared peers the newest socket is not the live one: web
+ * and desktop attach their command handler only to their original adapter,
+ * a token refresh disconnects that adapter, and every later refreshed
+ * socket stays open and deaf — so after the first refresh they answer no
+ * command at all (pre-existing, #816), and moving the frame to a newer
+ * socket of theirs would only move it onto a deaf one. And a newer verified
+ * socket can be a half-open one while an older phone or daemon is live.
  *
  * The one substitution: when main's pick is a VERIFIED peer (declared device
  * id === its signed token's `did`), it is swapped for the NEWEST open

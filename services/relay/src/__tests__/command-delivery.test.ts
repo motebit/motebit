@@ -416,8 +416,9 @@ describe("main's pick across peer kinds — the older live peer answers, as on m
 
   // No verified peer at all: main's oldest-first. For undeclared clients the
   // newest socket is NOT the live one — web and desktop attach their command
-  // handler only to their FIRST adapter, and a token refresh leaves the
-  // earlier socket open, so newer sockets are deaf.
+  // handler only to their original adapter, and the sockets later token
+  // refreshes open stay deaf (#816). These cases model an older socket that
+  // answers beside a newer deaf one, and pin that main's pick is kept.
   async function oldestAnswersNewerDeaf(
     s: Stack,
     who: Identity,
@@ -647,6 +648,27 @@ describe("item 4 — the delivered socket leaving settles nothing; a valid answe
     expect(ms).toBeGreaterThanOrEqual(550);
   });
 
+  it("an UNRELATED socket closing marks nothing: the delivered command's deadline 504 stays `silent`", async () => {
+    const s = await startRelay({ commandTimeoutMs: 600 });
+    const who = await identity(s);
+    const phone = await ownKeyDevice(s, who);
+    const bystander = await daemon(s, who, {
+      token: phone.token,
+      deviceId: null,
+      caps: "push_wake",
+    });
+    const delivered = await daemon(s, who);
+
+    const pending = post(s, who, "halt");
+    await waitFor(() => delivered.commands().length === 1, "delivery to the daemon");
+    expect(bystander.commands()).toEqual([]);
+    await drop(s, who, bystander);
+    const { status, json } = await pending;
+
+    expect(status).toBe(504);
+    expect(json.outcome).toBe("silent");
+  });
+
   it("a delivered socket that stays open and silent ⇒ 504 silent (the mark is the only difference)", async () => {
     const s = await startRelay({ commandTimeoutMs: 400 });
     const who = await identity(s);
@@ -690,6 +712,35 @@ describe("F2 — a relay shutting down settles what it still has pending", () =>
     expect(status).toBe(504);
     expect(json.outcome).toBe("closed_after_delivery");
     expect(ms).toBeLessThan(3_000);
+  });
+});
+
+describe("F2 — a relay's close() settles only its OWN pending commands", () => {
+  it("two relays in one process: A.close() settles A's command and leaves B's, whose answer still lands", async () => {
+    const a = await startRelay({ commandTimeoutMs: 10_000 });
+    const b = await startRelay({ commandTimeoutMs: 10_000 });
+    const onA = await identity(a);
+    const onB = await identity(b);
+    const sockA = await daemon(a, onA);
+    const sockB = await daemon(b, onB);
+
+    const pendingA = post(a, onA, "halt");
+    const pendingB = tracked(post(b, onB, "halt"));
+    await waitFor(
+      () => sockA.commands().length === 1 && sockB.commands().length === 1,
+      "both deliveries",
+    );
+
+    a.relayClosed = true;
+    await a.relay.close();
+    expect((await pendingA).json.outcome).toBe("closed_after_delivery");
+    await new Promise((r) => setTimeout(r, 50));
+    expect(pendingB.settled()).toBe(false);
+
+    sockB.answer(sockB.commands()[0]!.id!, { summary: "Halted." });
+    const { status, json } = await pendingB.p;
+    expect(status).toBe(200);
+    expect(json.summary).toBe("Halted.");
   });
 });
 
