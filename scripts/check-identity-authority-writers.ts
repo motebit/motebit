@@ -32,7 +32,9 @@
  * Scope, stated because a green gate's claim is only as wide as what it
  * scanned (`docs/doctrine/gate-repair-instructions.md`): it reads
  * `services/relay/src` and `packages/persistence/src`, skipping `__tests__`
- * and `dist`, for INSERT/UPDATE against four tables. An `UPDATE agent_registry`
+ * and `dist`, for INSERT/UPDATE against the authority tables, and for INSERT
+ * into the identity-owned sync tables (#846: a row filed under an identity by
+ * the entry's own `motebit_id` is authority over that identity's store). An `UPDATE agent_registry`
  * counts only when its SET clause touches an authority column — a heartbeat
  * refresh is not an authority write. It cannot see a write built by string
  * concatenation at runtime, or one issued from another package.
@@ -46,6 +48,15 @@ import { failWithRepair } from "./lib/gate-report.js";
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const SCAN_ROOTS = ["services/relay/src", "packages/persistence/src"];
 
+/** Tables whose rows are filed under an identity by a client-supplied `motebit_id`. */
+const OWNED_TABLES = [
+  "events",
+  "sync_conversations",
+  "sync_conversation_messages",
+  "sync_plans",
+  "sync_plan_steps",
+] as const;
+
 /** Tables whose rows decide who an identity is, or whether it may act. */
 const TABLES = [
   "agent_registry",
@@ -54,6 +65,13 @@ const TABLES = [
   "relay_revoked_credentials",
   "identity_keys",
   "relay_identity_revocations",
+  // Identity-OWNED rows (#846): not authority over who an identity is, but
+  // filing a row under an identity is authority over that identity's store.
+  // A device authenticated as A filed events, conversations and plans under B
+  // because the entry's own `motebit_id` was never compared to A. Only the
+  // INSERT counts for these: it is the statement that decides the owner (an
+  // UPDATE here is a redaction migration or a tombstone, never a re-filing).
+  ...OWNED_TABLES,
 ] as const;
 
 /** Columns that carry authority. An UPDATE touching none of these is routine. */
@@ -184,6 +202,46 @@ const WRITERS: readonly Writer[] = [
       "the identity itself — departure is initiated by the identity's own migration token; the row is marked revoked because the identity now lives elsewhere",
   },
   {
+    file: "services/relay/src/data-sync.ts",
+    verb: "INSERT",
+    table: "sync_conversations",
+    count: 1,
+    principal:
+      "the path identity — `upsertSyncConversation`, called only by POST /sync/:motebitId/conversations and the WS `push_conversations` frame, each of which first refuses (403 / error frame, recorded) any entry whose motebit_id is not the identity the token was verified for (`refuseForeignSyncEntries` / `firstForeignSyncEntry`, #846); the upsert never rewrites a row another identity owns (DO UPDATE ... WHERE owner = excluded owner)",
+  },
+  {
+    file: "services/relay/src/data-sync.ts",
+    verb: "INSERT",
+    table: "sync_conversation_messages",
+    count: 1,
+    principal:
+      "the path identity — `upsertSyncMessage`, called only by POST /sync/:motebitId/messages and the WS `push_messages` frame after the #846 entry binding; INSERT OR IGNORE never overwrites a held id",
+  },
+  {
+    file: "services/relay/src/data-sync.ts",
+    verb: "INSERT",
+    table: "sync_plans",
+    count: 1,
+    principal:
+      "the path identity — POST /sync/:motebitId/plans after the #846 entry binding; the upsert never rewrites a row another identity owns",
+  },
+  {
+    file: "services/relay/src/data-sync.ts",
+    verb: "INSERT",
+    table: "sync_plan_steps",
+    count: 1,
+    principal:
+      "the path identity — POST /sync/:motebitId/plan-steps after the #846 entry binding; a step_id another identity holds is never replaced (the owner is read before INSERT OR REPLACE)",
+  },
+  {
+    file: "packages/persistence/src/index.ts",
+    verb: "INSERT",
+    table: "events",
+    count: 2,
+    principal:
+      "the event store's `append` / `appendWithClock`, which file an entry under its own motebit_id and prove nothing themselves. Relay callers: the sync push doors (POST /sync/:motebitId/push, WS `push`), which refuse any entry not naming the verified identity first (#846); and tasks.ts's relay-authored TrustLevelChanged, filed under the task's own delegator. INSERT OR IGNORE never overwrites a held event_id",
+  },
+  {
     file: "packages/persistence/src/index.ts",
     verb: "INSERT",
     table: "devices",
@@ -212,7 +270,7 @@ interface Found {
 
 function scan(): { found: Found[]; filesScanned: number } {
   const pattern = new RegExp(
-    `(INSERT\\s+(?:OR\\s+\\w+\\s+)?INTO|UPDATE)\\s+(${TABLES.join("|")})([\\s\\S]{0,200})`,
+    `(INSERT\\s+(?:OR\\s+\\w+\\s+)?INTO|UPDATE)\\s+(${TABLES.join("|")})\\b([\\s\\S]{0,200})`,
     "gi",
   );
   const found: Found[] = [];
@@ -224,6 +282,7 @@ function scan(): { found: Found[]; filesScanned: number } {
       for (const m of src.matchAll(pattern)) {
         const verb = m[1]!.toUpperCase().startsWith("INSERT") ? "INSERT" : "UPDATE";
         const table = m[2]!;
+        if (verb === "UPDATE" && (OWNED_TABLES as readonly string[]).includes(table)) continue;
         if (verb === "UPDATE" && table === "agent_registry") {
           const setClause = m[3]!.split(/WHERE/i)[0]!;
           if (!AUTHORITY_COLUMNS.some((c) => setClause.includes(c))) continue;
@@ -294,6 +353,7 @@ process.stdout.write(
     `  Aperture: ${filesScanned} .ts file(s) scanned under ${SCAN_ROOTS.join(", ")} ` +
     `(excluding __tests__/dist) for INSERT/UPDATE against ${TABLES.length} table(s) ` +
     `(${TABLES.join(", ")}); an UPDATE of agent_registry counts only when its SET clause ` +
-    `touches ${AUTHORITY_COLUMNS.join("/")}. Blind to a statement assembled at runtime, ` +
+    `touches ${AUTHORITY_COLUMNS.join("/")}, and for the identity-owned tables ` +
+    `(${OWNED_TABLES.join(", ")}) only the INSERT counts. Blind to a statement assembled at runtime, ` +
     `and to writes issued from any other package.\n`,
 );

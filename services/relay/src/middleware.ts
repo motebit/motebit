@@ -28,6 +28,7 @@ import { requestContext, enrichRequestContext } from "./request-context.js";
 import type { RequestContext } from "./request-context.js";
 import { RelayError, RateLimitError, AuthenticationError, AuthorizationError } from "./errors.js";
 import { recordMasterTokenOnce } from "./auth-events.js";
+import { SYNC_PRESENTER_KEY } from "./sync-ingest-binding.js";
 
 const logger = createLogger({ service: "middleware" });
 
@@ -551,6 +552,9 @@ export function registerMiddleware(deps: MiddlewareDeps): MiddlewareResult {
           "Device not authorized for this motebit",
         );
       }
+      // The presenter: the verifier bound the token's `mid` to the path id.
+      // A refused cross-identity push is recorded under it (#846).
+      c.set(SYNC_PRESENTER_KEY as never, motebitId);
       await next();
     });
   } else if (apiToken != null && apiToken !== "") {

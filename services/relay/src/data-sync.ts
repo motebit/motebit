@@ -20,11 +20,15 @@ import {
   floorSyncPlan,
   floorSyncPlanStep,
 } from "./data-sync-redaction.js";
+import type { AuthEvent } from "./auth-events.js";
+import { refuseForeignSyncEntries } from "./sync-ingest-binding.js";
 
 export interface DataSyncDeps {
   db: DatabaseDriver;
   app: Hono;
   connections: Map<string, ConnectedDevice[]>;
+  /** Relay rule 6: a refused cross-identity push is recorded (#846). */
+  recordAuthEvent: (event: AuthEvent) => void;
 }
 
 /**
@@ -123,6 +127,12 @@ export function createDataSyncTables(db: DatabaseDriver): void {
 
 // === Conversation Sync Helpers ===
 
+/**
+ * Rows are keyed by a client-chosen id, so each upsert below is scoped to the
+ * row's owner: a push naming an id another identity holds changes nothing
+ * (#846). The door (`refuseForeignSyncEntries`) binds the entry to the pusher;
+ * this binds the ROW to the entry.
+ */
 export function upsertSyncConversation(db: DatabaseDriver, raw: SyncConversation): void {
   // Fail-closed floor: plaintext free-text fields never persist (the client
   // encrypts them; see data-sync-redaction.ts). Storage is safe for any caller.
@@ -134,7 +144,8 @@ export function upsertSyncConversation(db: DatabaseDriver, raw: SyncConversation
          last_active_at = MAX(excluded.last_active_at, sync_conversations.last_active_at),
          title = CASE WHEN excluded.last_active_at >= sync_conversations.last_active_at THEN excluded.title ELSE sync_conversations.title END,
          summary = CASE WHEN excluded.last_active_at >= sync_conversations.last_active_at THEN excluded.summary ELSE sync_conversations.summary END,
-         message_count = MAX(excluded.message_count, sync_conversations.message_count)`,
+         message_count = MAX(excluded.message_count, sync_conversations.message_count)
+       WHERE sync_conversations.motebit_id = excluded.motebit_id`,
   ).run(
     conv.conversation_id,
     conv.motebit_id,
@@ -188,7 +199,8 @@ function upsertSyncPlan(db: DatabaseDriver, raw: SyncPlan): void {
          current_step_index = CASE WHEN excluded.updated_at >= sync_plans.updated_at THEN excluded.current_step_index ELSE sync_plans.current_step_index END,
          total_steps = MAX(excluded.total_steps, sync_plans.total_steps),
          proposal_id = CASE WHEN excluded.updated_at >= sync_plans.updated_at THEN excluded.proposal_id ELSE sync_plans.proposal_id END,
-         collaborative = CASE WHEN excluded.updated_at >= sync_plans.updated_at THEN excluded.collaborative ELSE sync_plans.collaborative END`,
+         collaborative = CASE WHEN excluded.updated_at >= sync_plans.updated_at THEN excluded.collaborative ELSE sync_plans.collaborative END
+       WHERE sync_plans.motebit_id = excluded.motebit_id`,
   ).run(
     plan.plan_id,
     plan.goal_id,
@@ -208,10 +220,13 @@ function upsertSyncPlanStep(db: DatabaseDriver, raw: SyncPlanStep): void {
   const step = floorSyncPlanStep(raw);
   // Check existing status for monotonicity
   const existing = db
-    .prepare(`SELECT status, updated_at FROM sync_plan_steps WHERE step_id = ?`)
-    .get(step.step_id) as { status: string; updated_at: number } | undefined;
+    .prepare(`SELECT motebit_id, status, updated_at FROM sync_plan_steps WHERE step_id = ?`)
+    .get(step.step_id) as { motebit_id: string; status: string; updated_at: number } | undefined;
 
   if (existing) {
+    // A row another identity owns is never replaced (#846) — `INSERT OR
+    // REPLACE` would delete it and file the step under the pusher.
+    if (existing.motebit_id !== step.motebit_id) return;
     const incomingOrder = STEP_STATUS_ORDER[step.status] ?? 0;
     const existingOrder = STEP_STATUS_ORDER[existing.status] ?? 0;
     // Never regress status
@@ -265,6 +280,8 @@ export function registerDataSyncRoutes(deps: DataSyncDeps): void {
         message: "Missing or invalid 'conversations' field (must be array)",
       });
     }
+    // #846: every entry must name the identity this push authenticated as.
+    refuseForeignSyncEntries(c, body.conversations, motebitId, deps.recordAuthEvent);
     for (const conv of body.conversations) {
       upsertSyncConversation(db, conv);
     }
@@ -312,6 +329,8 @@ export function registerDataSyncRoutes(deps: DataSyncDeps): void {
         message: "Missing or invalid 'messages' field (must be array)",
       });
     }
+    // #846: every entry must name the identity this push authenticated as.
+    refuseForeignSyncEntries(c, body.messages, motebitId, deps.recordAuthEvent);
     for (const msg of body.messages) {
       upsertSyncMessage(db, msg);
     }
@@ -366,6 +385,8 @@ export function registerDataSyncRoutes(deps: DataSyncDeps): void {
     if (!Array.isArray(body.plans)) {
       throw new HTTPException(400, { message: "Missing or invalid 'plans' field (must be array)" });
     }
+    // #846: every entry must name the identity this push authenticated as.
+    refuseForeignSyncEntries(c, body.plans, motebitId, deps.recordAuthEvent);
     for (const plan of body.plans) {
       upsertSyncPlan(db, plan);
     }
@@ -408,6 +429,8 @@ export function registerDataSyncRoutes(deps: DataSyncDeps): void {
     if (!Array.isArray(body.steps)) {
       throw new HTTPException(400, { message: "Missing or invalid 'steps' field (must be array)" });
     }
+    // #846: every entry must name the identity this push authenticated as.
+    refuseForeignSyncEntries(c, body.steps, motebitId, deps.recordAuthEvent);
     for (const step of body.steps) {
       upsertSyncPlanStep(db, step);
     }
