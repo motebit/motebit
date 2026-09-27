@@ -3,6 +3,7 @@
 "@motebit/web": patch
 "@motebit/desktop": patch
 "@motebit/mobile": patch
+"@motebit/spatial": patch
 ---
 
 Sync socket token refresh no longer leaks deaf sockets (#816).
@@ -29,3 +30,10 @@ a new one, and a `startSync` superseded across an await (by `stopSync`
 or a newer `startSync`) no longer connects its socket. Mobile, which
 rebuilds its socket each 30-second cycle, no longer connects the socket
 of a cycle that a later cycle superseded while it awaited the relay key.
+
+Spatial had the same deaf-handler shape: its refresh closed the current
+socket but built a new adapter without the `command_request` handler, so
+after one refresh spatial answered no command. It now calls
+`refreshConnection()` on its one adapter with a per-connect credential,
+tears down a running socket on a re-entered `connectRelay`, and builds no
+socket for a `connectRelay` superseded by `disconnectRelay`.
