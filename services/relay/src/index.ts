@@ -192,6 +192,7 @@ import {
   handleCommandResponse,
   markCommandsDeliveredTo,
 } from "./command-route.js";
+import { sendToEach } from "./ws-send.js";
 import { registerDelegationRevocationRoutes } from "./delegation-revocations.js";
 import Stripe from "stripe";
 import {
@@ -2171,15 +2172,8 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
       reconnect_after_ms: DRAIN_GRACE_MS,
     });
     for (const peers of connections.values()) {
-      for (const peer of peers) {
-        try {
-          if (peer.ws.readyState === 1) {
-            peer.ws.send(drainingMsg);
-          }
-        } catch {
-          // Best-effort — client may already be disconnected
-        }
-      }
+      // Best-effort: a socket already closing is skipped, a throw is absorbed.
+      sendToEach(peers, drainingMsg);
     }
 
     // Phase 2: Grace period — wait for clients to disconnect voluntarily

@@ -40,6 +40,8 @@ import type { TaskQueueEntry } from "./tasks.js";
 import type { ConnectedDevice } from "./index.js";
 import { createLogger } from "./logger.js";
 import { verificationKeyFor } from "./identity-keys.js";
+import { sendToEach } from "./ws-send.js";
+import { routeToSockets } from "./task-presentation.js";
 
 const logger = createLogger({ service: "federation-callbacks" });
 
@@ -163,10 +165,14 @@ export function createFederationCallbacks(deps: FederationCallbackDeps) {
           : {}),
       });
 
-      const agentPeers = connections.get(verified.targetAgent);
-      if (agentPeers && agentPeers.length > 0) {
-        const payload = JSON.stringify({ type: "task_request", task });
-        for (const p of agentPeers) p.ws.send(payload);
+      // "routed" only when an OPEN socket took the frame (#811). Sockets that
+      // are all CLOSING/CLOSED are held for reconnect recovery — this relay
+      // has no other door here, on main or now — and answer "pending", as
+      // when none is connected: the task stays queued and is re-dispatched
+      // when the agent reconnects. The same socket rule as every dispatch
+      // site (`routeToSockets`, task-presentation.ts).
+      const payload = JSON.stringify({ type: "task_request", task });
+      if (routeToSockets(connections.get(verified.targetAgent), payload) === "delivered") {
         return { status: "routed" as const };
       }
       return { status: "pending" as const };
@@ -266,15 +272,14 @@ export function createFederationCallbacks(deps: FederationCallbackDeps) {
       // Fan out to submitter
       const submittedBy = entry.submitted_by ?? entry.task.submitted_by;
       if (submittedBy) {
-        const peers = connections.get(submittedBy);
-        if (peers) {
-          const msg = JSON.stringify({
+        sendToEach(
+          connections.get(submittedBy),
+          JSON.stringify({
             type: "task_result",
             task_id: verified.taskId,
             receipt: verified.receipt,
-          });
-          for (const p of peers) p.ws.send(msg);
-        }
+          }),
+        );
       }
 
       // Trust update via evaluateTrustTransition

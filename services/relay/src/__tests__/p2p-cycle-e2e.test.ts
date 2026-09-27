@@ -160,7 +160,7 @@ describe("P2P Settlement Cycle E2E", () => {
     });
 
     // Worker connection so the accepted P2P task dispatches over ws.
-    const workerWs = { send: vi.fn(), close: vi.fn() };
+    const workerWs = { readyState: 1, send: vi.fn(), close: vi.fn() };
     relay.connections.set(worker.motebitId, [{ ws: workerWs as never, deviceId: worker.deviceId }]);
 
     // Real wallet rail + fake adapter (no Solana). Single-op P2P = 2 legs.
@@ -262,7 +262,7 @@ describe("P2P Settlement Cycle E2E", () => {
       .prepare("DELETE FROM agent_trust WHERE motebit_id = ? AND remote_motebit_id = ?")
       .run(delegator.motebitId, worker.motebitId);
     relay.connections.set(worker.motebitId, [
-      { ws: { send: vi.fn(), close: vi.fn() } as never, deviceId: worker.deviceId },
+      { ws: { readyState: 1, send: vi.fn(), close: vi.fn() } as never, deviceId: worker.deviceId },
     ]);
 
     // Distinct tx per run — a real delegation never reuses a signature, and

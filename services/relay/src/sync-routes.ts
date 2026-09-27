@@ -29,6 +29,7 @@ import { createLogger } from "./logger.js";
 import { refuseInvalidIds, refuseNonStringText } from "./id-bounds.js";
 import { refusePublicDeviceRegistration } from "./device-registration-guard.js";
 import type { ConnectedDevice } from "./index.js";
+import { sendToEach } from "./ws-send.js";
 import { admitKey, proveSovereignFirstKey, recordFirstIdentityKey } from "./identity-keys.js";
 
 const logger = createLogger({ service: "sync-routes" });
@@ -106,11 +107,7 @@ export function registerSyncRoutes(deps: SyncRoutesDeps): void {
     if (peers) {
       for (const event of safeEvents) {
         const payload = JSON.stringify({ type: "event", event });
-        for (const peer of peers) {
-          if (peer.deviceId !== senderDeviceId) {
-            peer.ws.send(payload);
-          }
-        }
+        sendToEach(peers, payload, (peer) => peer.deviceId !== senderDeviceId);
       }
     }
 
