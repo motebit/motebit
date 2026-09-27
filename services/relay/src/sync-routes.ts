@@ -30,6 +30,8 @@ import { refuseInvalidIds, refuseNonStringText } from "./id-bounds.js";
 import { refusePublicDeviceRegistration } from "./device-registration-guard.js";
 import type { ConnectedDevice } from "./index.js";
 import { admitKey, proveSovereignFirstKey, recordFirstIdentityKey } from "./identity-keys.js";
+import type { AuthEvent } from "./auth-events.js";
+import { refuseForeignSyncEntries } from "./sync-ingest-binding.js";
 
 const logger = createLogger({ service: "sync-routes" });
 
@@ -43,6 +45,8 @@ export interface SyncRoutesDeps {
   eventStore: EventStore;
   identityManager: IdentityManager;
   connections: Map<string, ConnectedDevice[]>;
+  /** Relay rule 6: a refused cross-identity push is recorded (#846). */
+  recordAuthEvent: (event: AuthEvent) => void;
 }
 
 // ---------------------------------------------------------------------------
@@ -69,6 +73,8 @@ export function registerSyncRoutes(deps: SyncRoutesDeps): void {
         message: "Missing or invalid 'events' field (must be array)",
       });
     }
+    // #846: every event must name the identity this push authenticated as.
+    refuseForeignSyncEntries(c, body.events, motebitId, deps.recordAuthEvent);
     // Ingress redaction: memory content above the sync-safe ceiling must
     // never reach the relay's event store (fail-closed privacy; transparency
     // declaration). Redact once, then append + fan out the safe events.

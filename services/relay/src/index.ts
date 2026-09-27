@@ -1107,7 +1107,14 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
   });
 
   // --- Sync routes (HTTP fallback, device registration, identity CRUD) ---
-  registerSyncRoutes({ app, moteDb, eventStore, identityManager, connections });
+  registerSyncRoutes({
+    app,
+    moteDb,
+    eventStore,
+    identityManager,
+    connections,
+    recordAuthEvent: authEvents.record,
+  });
 
   // --- Intake routes (self-signed motebit announcement → durable intake ledger) ---
   // Auth-less by design (signature is the auth); registered before the bearer-token
@@ -1558,7 +1565,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
   registerBrowserSandboxRoutes({ app, relayIdentity });
 
   // --- Data sync routes (conversations, messages, plans, plan steps) ---
-  registerDataSyncRoutes({ db: moteDb.db, app, connections });
+  registerDataSyncRoutes({ db: moteDb.db, app, connections, recordAuthEvent: authEvents.record });
 
   // --- A2A protocol bridge ---
   // Federation endpoint: explicit config > localhost fallback for dev. No
