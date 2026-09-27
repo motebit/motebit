@@ -22,7 +22,9 @@
  *
  * Layers:
  *   - Unit (always on, milliseconds).
- *   - Behavioural fixture (always on, in `pnpm test:gates`; ~40 s): a
+ *   - Behavioural fixture: in `pnpm test:gates`, ONE case (bundle +
+ *     root-hoisted ⇒ DIFF) next to the decoy safety test; every case with
+ *     MOTEBIT_DIFFERENTIAL_FIXTURE=1 (`pnpm test:differential`). It is a
  *     five-package mini-workspace in a temp dir with its own git history. The
  *     change between its "main" commit and its head commit is one string in
  *     `@fx/proto`; the probe (in `apps/mobile`) sees it only (a) through
@@ -486,6 +488,14 @@ function mobileArgs(fx: Fixture, out: string, fromMain = "packages/proto"): stri
 
 const fxEnv = (extra: Record<string, string> = {}) => cleanEnv(process.env, extra);
 
+/**
+ * The rest of the fixture runs only with MOTEBIT_DIFFERENTIAL_FIXTURE=1
+ * (`pnpm test:differential`), so every pre-push `pnpm test:gates` pays only
+ * for the units, the decoy safety test and one behavioural case. Run
+ * `pnpm test:differential` when reviewing a change to the differential tooling.
+ */
+const FIXTURE = process.env.MOTEBIT_DIFFERENTIAL_FIXTURE === "1";
+
 describe("differential-vs-main behaviour (fixture)", () => {
   let fx: Fixture;
   beforeAll(() => {
@@ -513,81 +523,93 @@ describe("differential-vs-main behaviour (fixture)", () => {
     expect(r.stdout).not.toMatch(/reach a [0-9a-f]/);
   }, 120_000);
 
-  it("a probe outside the workspace with no --pkg runs in services/relay, and says so", () => {
-    const out = join(fx.jail, "relay.json");
-    const r = runScript(
-      fx.root,
-      [
-        "--probe",
-        join(fx.jail, "fixture.probe.ts"),
-        "--base",
-        fx.mainSha,
-        "--from-main",
-        "host",
-        "--out",
-        out,
-      ],
-      fxEnv(),
-    );
-    expect(r.status, show(r)).toBe(0);
-    const rep = JSON.parse(readFileSync(out, "utf-8")) as Report;
-    expect(rep.pkg).toBe("services/relay");
-    expect(rep.pkgReason).toMatch(/default/);
-    expect(rep.baseObs.cwdTail).toBe("services/relay");
-    expect(r.stdout).toContain("default: the probe is outside every workspace package");
-  }, 120_000);
-
-  it("a root file builds read (tsconfig.base.json) differing from main refuses; --root-from-head says it is not differentialled", () => {
-    const file = join(fx.root, "tsconfig.base.json");
-    write(
-      file,
-      TSCONFIG_BASE.replace('"strict": true', '"strict": true,\n    "removeComments": true'),
-    );
-    try {
-      const out = join(fx.jail, "root.json");
-      const refused = runScript(fx.root, mobileArgs(fx, out), fxEnv({ FX_MODE: "mobile" }));
-      expect(refused.status).toBe(1);
-      expect(refused.stderr).toContain("refused");
-      expect(refused.stderr).toContain("tsconfig.base.json");
-      expect(existsSync(out)).toBe(false);
-
-      const held = runScript(
+  it.skipIf(!FIXTURE)(
+    "a probe outside the workspace with no --pkg runs in services/relay, and says so",
+    () => {
+      const out = join(fx.jail, "relay.json");
+      const r = runScript(
         fx.root,
-        [...mobileArgs(fx, out), "--root-from-head"],
-        fxEnv({ FX_MODE: "mobile" }),
+        [
+          "--probe",
+          join(fx.jail, "fixture.probe.ts"),
+          "--base",
+          fx.mainSha,
+          "--from-main",
+          "host",
+          "--out",
+          out,
+        ],
+        fxEnv(),
       );
-      expect(held.status, show(held)).toBe(0);
-      const rep = JSON.parse(readFileSync(out, "utf-8")) as Report;
-      expect(rep.aperture.rootHeldAtHead).toEqual(["tsconfig.base.json"]);
-      expect(held.stdout).toContain("NOT differentialled");
-    } finally {
-      write(file, TSCONFIG_BASE);
-    }
-  }, 120_000);
-
-  it("a changed build input outside src/ refuses until rebuilt, then reads DIFF", () => {
-    const file = join(fx.root, "packages", "bundler", "build.mjs");
-    write(file, BUNDLER_BUILD.replace("JSON.stringify(VALUE)", 'JSON.stringify("v2:" + VALUE)'));
-    try {
-      const out = join(fx.jail, "outside-src.json");
-      const args = mobileArgs(fx, out, "packages/bundler");
-      const refused = runScript(fx.root, args, fxEnv({ FX_MODE: "mobile" }));
-      expect(refused.status).toBe(1);
-      expect(refused.stderr).toContain("packages/bundler");
-      const repair = /Fix: (pnpm .*)$/m.exec(refused.stderr)?.[1];
-      expect(repair).toContain("--filter ./packages/bundler");
-      fxRun(fx.jail, fx.root, "sh", ["-c", repair!]);
-
-      const r = runScript(fx.root, args, fxEnv({ FX_MODE: "mobile" }));
       expect(r.status, show(r)).toBe(0);
       const rep = JSON.parse(readFileSync(out, "utf-8")) as Report;
-      expect(rep.head.throughBundle).toBe("v2:head");
-      expect(rep.baseObs.throughBundle).toBe("head"); // main's build.mjs, over the working tree's proto
-    } finally {
-      write(file, BUNDLER_BUILD);
-      buildAll(fx);
-    }
-  }, 180_000);
+      expect(rep.pkg).toBe("services/relay");
+      expect(rep.pkgReason).toMatch(/default/);
+      expect(rep.baseObs.cwdTail).toBe("services/relay");
+      expect(r.stdout).toContain("default: the probe is outside every workspace package");
+    },
+    120_000,
+  );
+
+  it.skipIf(!FIXTURE)(
+    "a root file builds read (tsconfig.base.json) differing from main refuses; --root-from-head says it is not differentialled",
+    () => {
+      const file = join(fx.root, "tsconfig.base.json");
+      write(
+        file,
+        TSCONFIG_BASE.replace('"strict": true', '"strict": true,\n    "removeComments": true'),
+      );
+      try {
+        const out = join(fx.jail, "root.json");
+        const refused = runScript(fx.root, mobileArgs(fx, out), fxEnv({ FX_MODE: "mobile" }));
+        expect(refused.status).toBe(1);
+        expect(refused.stderr).toContain("refused");
+        expect(refused.stderr).toContain("tsconfig.base.json");
+        expect(existsSync(out)).toBe(false);
+
+        const held = runScript(
+          fx.root,
+          [...mobileArgs(fx, out), "--root-from-head"],
+          fxEnv({ FX_MODE: "mobile" }),
+        );
+        expect(held.status, show(held)).toBe(0);
+        const rep = JSON.parse(readFileSync(out, "utf-8")) as Report;
+        expect(rep.aperture.rootHeldAtHead).toEqual(["tsconfig.base.json"]);
+        expect(held.stdout).toContain("NOT differentialled");
+      } finally {
+        write(file, TSCONFIG_BASE);
+      }
+    },
+    120_000,
+  );
+
+  it.skipIf(!FIXTURE)(
+    "a changed build input outside src/ refuses until rebuilt, then reads DIFF",
+    () => {
+      const file = join(fx.root, "packages", "bundler", "build.mjs");
+      write(file, BUNDLER_BUILD.replace("JSON.stringify(VALUE)", 'JSON.stringify("v2:" + VALUE)'));
+      try {
+        const out = join(fx.jail, "outside-src.json");
+        const args = mobileArgs(fx, out, "packages/bundler");
+        const refused = runScript(fx.root, args, fxEnv({ FX_MODE: "mobile" }));
+        expect(refused.status).toBe(1);
+        expect(refused.stderr).toContain("packages/bundler");
+        const repair = /Fix: (pnpm .*)$/m.exec(refused.stderr)?.[1];
+        expect(repair).toContain("--filter ./packages/bundler");
+        fxRun(fx.jail, fx.root, "sh", ["-c", repair!]);
+
+        const r = runScript(fx.root, args, fxEnv({ FX_MODE: "mobile" }));
+        expect(r.status, show(r)).toBe(0);
+        const rep = JSON.parse(readFileSync(out, "utf-8")) as Report;
+        expect(rep.head.throughBundle).toBe("v2:head");
+        expect(rep.baseObs.throughBundle).toBe("head"); // main's build.mjs, over the working tree's proto
+      } finally {
+        write(file, BUNDLER_BUILD);
+        buildAll(fx);
+      }
+    },
+    180_000,
+  );
 
   /**
    * Every build input older than every build (proto built before its
@@ -607,37 +629,45 @@ describe("differential-vs-main behaviour (fixture)", () => {
     utimesSync(touched, now - 30, now - 30);
   }
 
-  it("the printed repair clears a staleness refusal in one round", () => {
-    touchProtoSource();
-    const out = join(fx.jail, "repair.json");
-    const refused = runScript(fx.root, mobileArgs(fx, out), fxEnv({ FX_MODE: "mobile" }));
-    expect(refused.status).toBe(1);
-    expect(refused.stderr).toContain("refused");
-    expect(refused.stderr).toContain("packages/proto");
-    const repair = /Fix: (pnpm .*)$/m.exec(refused.stderr)?.[1];
-    expect(repair).toBeDefined();
-    fxRun(fx.jail, fx.root, "sh", ["-c", repair!]);
+  it.skipIf(!FIXTURE)(
+    "the printed repair clears a staleness refusal in one round",
+    () => {
+      touchProtoSource();
+      const out = join(fx.jail, "repair.json");
+      const refused = runScript(fx.root, mobileArgs(fx, out), fxEnv({ FX_MODE: "mobile" }));
+      expect(refused.status).toBe(1);
+      expect(refused.stderr).toContain("refused");
+      expect(refused.stderr).toContain("packages/proto");
+      const repair = /Fix: (pnpm .*)$/m.exec(refused.stderr)?.[1];
+      expect(repair).toBeDefined();
+      fxRun(fx.jail, fx.root, "sh", ["-c", repair!]);
 
-    const r = runScript(fx.root, mobileArgs(fx, out), fxEnv({ FX_MODE: "mobile" }));
-    expect(r.status, `after \`${repair}\`:\n${show(r)}`).toBe(0);
-  }, 180_000);
+      const r = runScript(fx.root, mobileArgs(fx, out), fxEnv({ FX_MODE: "mobile" }));
+      expect(r.status, `after \`${repair}\`:\n${show(r)}`).toBe(0);
+    },
+    180_000,
+  );
 
-  it("a dependency re-checked without re-emitting does not make its dependents stale", () => {
-    // The #835 regression: rebuilding ONLY proto refreshes its tsbuildinfo, not
-    // its output; hoisted consumes that output, which did not change, and
-    // tsc -b will never touch hoisted for it. A check against proto's
-    // tsbuildinfo would refuse forever; the check reads proto's emitted output.
-    touchProtoSource();
-    fxRun(
-      fx.jail,
-      join(fx.root, "packages", "proto"),
-      join(fx.root, "node_modules", ".bin", "tsc"),
-      ["-b"],
-    );
-    const out = join(fx.jail, "recheck.json");
-    const r = runScript(fx.root, mobileArgs(fx, out), fxEnv({ FX_MODE: "mobile" }));
-    expect(r.status, show(r)).toBe(0);
-  }, 180_000);
+  it.skipIf(!FIXTURE)(
+    "a dependency re-checked without re-emitting does not make its dependents stale",
+    () => {
+      // The #835 regression: rebuilding ONLY proto refreshes its tsbuildinfo, not
+      // its output; hoisted consumes that output, which did not change, and
+      // tsc -b will never touch hoisted for it. A check against proto's
+      // tsbuildinfo would refuse forever; the check reads proto's emitted output.
+      touchProtoSource();
+      fxRun(
+        fx.jail,
+        join(fx.root, "packages", "proto"),
+        join(fx.root, "node_modules", ".bin", "tsc"),
+        ["-b"],
+      );
+      const out = join(fx.jail, "recheck.json");
+      const r = runScript(fx.root, mobileArgs(fx, out), fxEnv({ FX_MODE: "mobile" }));
+      expect(r.status, show(r)).toBe(0);
+    },
+    180_000,
+  );
 });
 
 // ── Decoy: the fixture and the script must never touch a repository they did not create ──
