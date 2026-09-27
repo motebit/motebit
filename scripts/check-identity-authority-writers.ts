@@ -24,41 +24,44 @@
  * None was a logic error inside a function. Each was a door cut beside the
  * doors that already had the rule, without the rule.
  *
- * What this gate asserts, in four parts:
+ * What this gate asserts, in four parts — and only these:
  *
  *   1. SQL writers are a CLOSED set. Every INSERT, INSERT OR REPLACE /
- *      REPLACE, UPDATE and DELETE against a table that carries an identity is
- *      registered — file, verb, table, count — with the principal that may
- *      cause it. The table set is DERIVED, not listed: every `CREATE TABLE`
- *      in the scanned roots with a column naming an identity (`motebit_id`,
- *      `*_motebit_id`, `agent_id`, `worker_id`, `submitted_by`,
- *      `submitter_id`, `delegator_id`, `filed_by`, `respondent`,
- *      `approver_id`, `owner_id`, `revoked_by`) joins it, plus the authority
- *      tables below. A new per-identity table widens the gate by existing.
- *   2. No UPDATE re-files a row: a SET clause that assigns an identity column
- *      is refused outright (no registry entry can excuse it). An upsert's
- *      `ON CONFLICT … DO UPDATE SET` is an UPDATE too (#846 v3 review: the
- *      UPDATE regex never saw it): it may not assign an identity column, and
- *      when its conflict key is a client-chosen id rather than the identity,
- *      it must carry `WHERE <table>.<identity col> = excluded.<identity col>`
- *      so a conflict on another identity's id rewrites nothing.
- *   3. Binding mints are a CLOSED set. `identity-binding.ts` is the only
- *      place a request's principal is compared to the identity it writes, and
- *      its result is the `BoundIdentity` type the per-identity write helpers
- *      (`upsertSync*`, `appendBoundEvent`, `setSubscriptionStatus`,
- *      `updateMigrationState`, `insertApproval`) require — a door that calls
- *      one without a binding does not compile. Every call of a mint
- *      (`bindCaller`, `bindBySignature`, `bindSyncEntries`,
- *      `bindSocketEntries`) is registered per file with its door, and each
- *      helper's signature is checked to still demand the brand. tsc alone
- *      does not make the brand unforgeable (`victim as never` compiles), so
- *      the gate reads the relay's TYPES with the TypeScript checker: every
- *      BoundIdentity slot must receive a branded value, no assertion may
- *      produce the brand, no bare-type-parameter return may yield it, and a
- *      branded helper may only be called (see "brand flow" below).
+ *      REPLACE, UPDATE [OR …] and DELETE against a table that carries an
+ *      identity is registered — file, verb, table, count — with the principal
+ *      that may cause it. The table set is DERIVED, not listed: every `CREATE
+ *      TABLE` in the scanned roots with a column naming an identity
+ *      (`motebit_id`, `*_motebit_id`, `agent_id`, `worker_id`,
+ *      `submitted_by`, `submitter_id`, `delegator_id`, `filed_by`,
+ *      `respondent`, `approver_id`, `owner_id`, `revoked_by`) joins it, plus
+ *      the authority tables below. A new per-identity table widens the gate
+ *      by existing. The total found must equal the total registered.
+ *   2. No write re-files a row. A SET list — an UPDATE's, or an upsert's
+ *      `ON CONFLICT … DO UPDATE SET` — may not assign an identity column in
+ *      any spelling SQLite accepts (bare, "quoted", `backticked`, [bracketed],
+ *      table-qualified, or inside a row-value target `(a, b) = (…)`); an
+ *      unreadable SET item in such a statement is refused. An upsert whose
+ *      conflict key is not an identity column (an id the request chooses) must
+ *      carry the owner conjunct `<table>.<id col> = excluded.<id col>` at the
+ *      top level of its DO UPDATE WHERE, ANDed, with no depth-0 OR anywhere in
+ *      the conjunction (#860 review: `<owner> OR <anything>` passed v3).
+ *   3. `BoundIdentity` is structurally intact (K1–K4 below): a class with an
+ *      ES private field and a module-private minting path in
+ *      `identity-binding.ts`; mints only in registered producers, and binding
+ *      calls (`bindCaller`, `bindBySignature`, `bindSyncEntries`,
+ *      `bindSocketEntries`) only at registered doors; every function with a
+ *      `BoundIdentity` parameter is a registered writer that reads it ONLY as
+ *      `unwrapBound(owner)`. The gate does NOT claim a forged BoundIdentity is
+ *      caught here — the type cannot be made unforgeable (#860: six forgeries
+ *      in ordinary TypeScript). A forgery is refused at RUNTIME: `unwrapBound`
+ *      performs the private-brand check and throws, proven against every
+ *      writer by `services/relay/src/__tests__/identity-binding-forgery.test.ts`.
  *   4. Event-store appends are a CLOSED set: `EventStore.append` takes the
  *      entry's own `motebit_id`, so the relay may call it only through
  *      `appendBoundEvent` or at a registered relay-authored site.
+ *
+ * Every number the gate prints is one it asserts on (a registered total, a
+ * must-read list, or a sum it checks).
  *
  * That is deliberately not a proof that a site is correct — a gate cannot
  * read an authorization. It forces the question to be answered in writing at
@@ -67,8 +70,10 @@
  * Scope, stated because a green gate's claim is only as wide as what it
  * scanned (`docs/doctrine/gate-repair-instructions.md`): it reads
  * `services/relay/src` and `packages/persistence/src`, skipping `__tests__`
- * and `dist`. It cannot see a statement assembled at runtime from a table
- * name held in a variable, or a write issued from another package.
+ * and `dist`, syntactically (no type checker). It cannot see a statement
+ * assembled at runtime (a table name in a variable, a SET item interpolated
+ * with `${…}` — counted and printed), a statement split by `+`
+ * concatenation, or a write issued from another package.
  */
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative, resolve, dirname } from "node:path";
@@ -1134,7 +1139,7 @@ const MINTS: readonly Mint[] = [
     file: R + "migration.ts",
     mint: "bindBySignature",
     count: 1,
-    door: "POST /migrate after verifyMigrationRequest under the identity's key",
+    door: "POST /migrate — the binder itself verifies the signed MigrationRequest under the identity's key",
   },
   {
     file: R + "key-rotation.ts",
@@ -1144,22 +1149,60 @@ const MINTS: readonly Mint[] = [
   },
 ];
 
-/** The helpers that write per-identity rows — each must still demand the brand. */
-const BRANDED_HELPERS: ReadonlyArray<{ file: string; fn: string }> = [
-  { file: R + "data-sync.ts", fn: "upsertSyncConversation" },
-  { file: R + "data-sync.ts", fn: "upsertSyncMessage" },
-  { file: R + "data-sync.ts", fn: "upsertSyncPlan" },
-  { file: R + "data-sync.ts", fn: "upsertSyncPlanStep" },
-  { file: R + "identity-binding.ts", fn: "appendBoundEvent" },
-  { file: R + "subscriptions.ts", fn: "setSubscriptionStatus" },
-  { file: R + "migration.ts", fn: "updateMigrationState" },
-  { file: R + "key-rotation.ts", fn: "insertApproval" },
+const BINDING_FILE = R + "identity-binding.ts";
+
+/**
+ * The registered identity-row writers: every function in the relay with a
+ * parameter annotated `BoundIdentity`, and the name of that parameter. The
+ * set is closed in both directions — a registered writer that loses the
+ * parameter, and a function that gains one unregistered, both fail.
+ */
+const WRITER_HELPERS: ReadonlyArray<{ file: string; fn: string; param: string }> = [
+  { file: R + "data-sync.ts", fn: "upsertSyncConversation", param: "owner" },
+  { file: R + "data-sync.ts", fn: "upsertSyncMessage", param: "owner" },
+  { file: R + "data-sync.ts", fn: "upsertSyncPlan", param: "owner" },
+  { file: R + "data-sync.ts", fn: "upsertSyncPlanStep", param: "owner" },
+  { file: BINDING_FILE, fn: "appendBoundEvent", param: "owner" },
+  { file: R + "subscriptions.ts", fn: "setSubscriptionStatus", param: "owner" },
+  { file: R + "migration.ts", fn: "updateMigrationState", param: "owner" },
+  { file: R + "key-rotation.ts", fn: "insertApproval", param: "owner" },
+];
+
+/**
+ * The private minting path inside identity-binding.ts: the key the
+ * constructor demands and the two closures its static block assigns. None
+ * may be exported, and no other scanned file may name one.
+ */
+const PRIVATE_MINT_NAMES = ["MINT_KEY", "mintBound", "readBound"] as const;
+
+/**
+ * Every call of the module-private `mint(` inside identity-binding.ts, per
+ * producer. A mint outside a registered producer is a new way to obtain the
+ * capability.
+ */
+const PRODUCER_MINTS: Readonly<Record<string, number>> = {
+  bindCaller: 2,
+  bindBySignature: 1,
+  bindSocketEntries: 1,
+  bindSyncEntries: 1,
+};
+
+/**
+ * Upserts that must be seen and read by the upsert rule — the owned upserts
+ * keyed by a client-chosen id. A parser that stops seeing one fails here
+ * instead of passing by reading nothing.
+ */
+const MUST_READ_UPSERTS: ReadonlyArray<{ file: string; table: string }> = [
+  { file: R + "data-sync.ts", table: "sync_conversations" },
+  { file: R + "data-sync.ts", table: "sync_plans" },
+  { file: R + "bond-store.ts", table: "relay_bond_commitments" },
+  { file: R + "proposals.ts", table: "relay_collaborative_step_results" },
 ];
 
 /** Every call of `.append(` / `.appendWithClock(` in the relay. */
 const EVENT_APPENDS: ReadonlyArray<{ file: string; count: number; why: string }> = [
   {
-    file: R + "identity-binding.ts",
+    file: BINDING_FILE,
     count: 1,
     why: "`appendBoundEvent` — the sync doors' only path, owner = BoundIdentity",
   },
@@ -1235,43 +1278,206 @@ interface Found {
   table: string;
 }
 
-/** An identity column assigned by one SET item: `col =` at the item's start, never `t.col`. */
-const ASSIGNS_IDENTITY =
-  /^\s*(motebit_id|\w+_motebit_id|agent_id|worker_id|submitted_by|submitter_id|delegator_id|filed_by|respondent|approver_id|owner_id|revoked_by)\s*=(?!=)/i;
+// ── SQL reading ───────────────────────────────────────────────────────────
+//
+// A deliberately small reader, not a SQL parser: enough to find the targets
+// of a SET list and the top-level conjuncts of a WHERE, in every spelling
+// SQLite accepts for an identifier (`col`, "col", `col`, [col]) and for a
+// SET target (a column, or a row-value `(a, b) = (…)`). Anything it cannot
+// read in an owned statement is REFUSED (UNPARSED), never passed.
+
+/** An identity column name, whatever table it is on. */
+const IDENTITY_NAME =
+  /^(motebit_id|\w+_motebit_id|agent_id|worker_id|submitted_by|submitter_id|delegator_id|filed_by|respondent|approver_id|owner_id|revoked_by)$/i;
 
 /**
- * The SQL string literal a statement at `index` sits in, from `index` to the
- * literal's closing delimiter (the nearest backtick or double quote before
- * it). A statement split across a `+` concatenation is read to the first
- * closing delimiter only — the upsert checks then see no `DO UPDATE` and the
- * upsert is reported by `UNPARSED UPSERT` below rather than passed.
+ * Blank out SQL comments and the insides of '…' string literals (same
+ * length, so indexes still line up) — a keyword or `=` inside a literal is
+ * never read as SQL.
  */
-function literalFrom(src: string, index: number): string {
-  const back = Math.max(src.lastIndexOf("`", index), src.lastIndexOf('"', index));
-  const delim = back >= 0 ? src[back]! : "`";
-  const end = src.indexOf(delim, index);
-  return src.slice(index, end < 0 ? undefined : end);
+function maskSql(sql: string): string {
+  return sql
+    .replace(/--[^\n]*/g, (m) => " ".repeat(m.length))
+    .replace(/\/\*[\s\S]*?\*\//g, (m) => " ".repeat(m.length))
+    .replace(/'(?:[^']|'')*'/g, (m) => "'" + " ".repeat(Math.max(0, m.length - 2)) + "'");
 }
 
-/** Split `text` at the first `WHERE` outside parentheses. */
-function splitTopLevelWhere(text: string): { head: string; where: string | null } {
+/** One identifier, unquoted and lowercased: `"motebit_id"`, `motebit_id`, [motebit_id] → motebit_id. */
+function normIdent(raw: string): string {
+  return raw
+    .trim()
+    .split(".")
+    .map((part) => {
+      const p = part.trim();
+      const q = /^"(.*)"$|^`(.*)`$|^\[(.*)\]$/s.exec(p);
+      return (q ? (q[1] ?? q[2] ?? q[3] ?? "") : p).trim().toLowerCase();
+    })
+    .join(".");
+}
+
+/** Is `text` one parenthesized group, `( … )`, the closer at the very end? */
+function wrapped(text: string): boolean {
+  const t = text.trim();
+  if (!t.startsWith("(") || !t.endsWith(")")) return false;
+  let depth = 0;
+  for (let i = 0; i < t.length; i++) {
+    if (t[i] === "(") depth++;
+    else if (t[i] === ")") depth--;
+    if (depth === 0 && i < t.length - 1) return false;
+  }
+  return true;
+}
+
+/**
+ * Split `text` at every depth-0 match of `sep` (a sticky regex). A keyword
+ * separator (one that starts with a letter) must not continue a word on its
+ * left (`FOR` is not `OR`); punctuation separators split anywhere. Returns
+ * the parts and the separators, in order.
+ */
+function splitTopLevel(text: string, sep: RegExp): { parts: string[]; seps: string[] } {
+  const keyword = /^[A-Za-z(]/.test(sep.source);
+  const parts: string[] = [];
+  const seps: string[] = [];
+  let depth = 0;
+  let start = 0;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (ch === "(") depth++;
+    else if (ch === ")") depth--;
+    else if (depth === 0 && !(keyword && /\w/.test(text[i - 1] ?? " "))) {
+      sep.lastIndex = i;
+      const m = sep.exec(text);
+      if (m !== null) {
+        parts.push(text.slice(start, i));
+        seps.push(m[0]);
+        i += m[0].length - 1;
+        start = i + 1;
+      }
+    }
+  }
+  parts.push(text.slice(start));
+  return { parts, seps };
+}
+
+/** The index of the first depth-0 `=` that is an assignment/equality (not `==`'s twin, `<=`, `>=`, `!=`). */
+function topLevelEquals(text: string): number {
   let depth = 0;
   for (let i = 0; i < text.length; i++) {
     const ch = text[i];
     if (ch === "(") depth++;
     else if (ch === ")") depth--;
-    else if (depth === 0 && /^WHERE\b/i.test(text.slice(i)) && /\W/.test(text[i - 1] ?? " ")) {
-      return { head: text.slice(0, i), where: text.slice(i + 5) };
+    else if (depth === 0 && ch === "=") {
+      const prev = text[i - 1] ?? "";
+      if (prev === "<" || prev === ">" || prev === "!" || prev === "=") continue;
+      return i;
     }
   }
-  return { head: text, where: null };
+  return -1;
+}
+
+/**
+ * The columns one SET list assigns, in every spelling. `null` when an item
+ * cannot be read (no depth-0 `=`); items holding a JS interpolation (`${…}`)
+ * are counted as dynamic and skipped — the gate cannot see a SET assembled
+ * at runtime, and says so in its aperture.
+ */
+let dynamicSetItems = 0;
+function setTargets(setList: string): string[] | null {
+  const cols: string[] = [];
+  for (const item of splitTopLevel(setList, /,/y).parts) {
+    if (item.trim() === "") continue;
+    if (item.includes("${")) {
+      dynamicSetItems++;
+      continue;
+    }
+    const eq = topLevelEquals(item);
+    if (eq < 0) return null;
+    const lhs = item.slice(0, eq).trim();
+    if (wrapped(lhs)) {
+      for (const c of lhs.trim().slice(1, -1).split(",")) cols.push(normIdent(c));
+    } else {
+      cols.push(normIdent(lhs));
+    }
+  }
+  return cols;
+}
+
+/** Does any assigned column name an identity (the global rule, or one of this table's identity columns)? */
+function assignsIdentity(cols: readonly string[], table: string): string | null {
+  const idCols = IDENTITY_COLUMNS.get(table) ?? new Set<string>();
+  for (const c of cols) {
+    const bare = c.split(".").pop()!;
+    if (IDENTITY_NAME.test(bare) || idCols.has(bare)) return bare;
+  }
+  return null;
+}
+
+/**
+ * The top-level conjuncts of a WHERE: `null` when a depth-0 `OR` appears at
+ * any level of the conjunction (a disjunction weakens any owner conjunct it
+ * sits beside), else every conjunct, parentheses unwrapped.
+ */
+function conjuncts(expr: string): string[] | null {
+  let e = expr.trim();
+  while (wrapped(e)) e = e.slice(1, -1).trim();
+  const { parts, seps } = splitTopLevel(e, /(AND|OR)\b/iy);
+  if (seps.some((s) => /^or$/i.test(s))) return null;
+  if (parts.length === 1) return [e];
+  const out: string[] = [];
+  for (const p of parts) {
+    const c = conjuncts(p);
+    if (c === null) return null;
+    out.push(...c);
+  }
+  return out;
+}
+
+/** Is `conjunct` exactly `<t>.<col> = excluded.<col>` (either side), for a name of the target table and one of its identity columns? */
+function isOwnerConjunct(conjunct: string, names: readonly string[], idCols: Set<string>): boolean {
+  const eq = topLevelEquals(conjunct);
+  if (eq < 0) return false;
+  let rhsStart = eq + 1;
+  if (conjunct[rhsStart] === "=") rhsStart++; // `==`
+  const a = normIdent(conjunct.slice(0, eq));
+  const b = normIdent(conjunct.slice(rhsStart));
+  for (const col of idCols) {
+    for (const t of names) {
+      const own = `${t}.${col}`;
+      const ex = `excluded.${col}`;
+      if ((a === own && b === ex) || (a === ex && b === own)) return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * The SQL string literal a statement at `index` sits in, from `index` to the
+ * literal's closing delimiter (the nearest backtick or double quote before
+ * it). A statement split across a `+` concatenation is read to the first
+ * closing delimiter only — an upsert whose DO UPDATE is cut off is then
+ * reported UNPARSED below rather than passed.
+ */
+function literalFrom(src: string, index: number): string {
+  const back = Math.max(src.lastIndexOf("`", index), src.lastIndexOf('"', index));
+  const delim = back >= 0 ? src[back]! : "`";
+  // The closing delimiter is the first UNESCAPED one: an escaped \` or \"
+  // inside the literal (a quoted identifier) does not end it.
+  let end = src.indexOf(delim, index);
+  while (end > 0 && src[end - 1] === "\\") end = src.indexOf(delim, end + 1);
+  return src.slice(index, end < 0 ? undefined : end).replace(/\\(["`])/g, "$1");
+}
+
+/** Cut `text` at the first depth-0 occurrence of one of `keywords`. */
+function cutAt(text: string, keywords: RegExp): string {
+  const { parts } = splitTopLevel(text, keywords);
+  return parts[0]!;
 }
 
 /**
  * Upserts on a per-identity table whose conflict target is NOT an identity
  * column, and whose `DO UPDATE` is deliberately NOT scoped to the row's
- * owner — each with the reason. Every other such upsert must carry
- * `WHERE <table>.<identity column> = excluded.<identity column>`.
+ * owner — each with the reason. Every other such upsert must carry the
+ * owner conjunct.
  */
 const UNSCOPED_UPSERT_ALLOWED: ReadonlyArray<{ file: string; table: string; reason: string }> = [
   {
@@ -1282,87 +1488,133 @@ const UNSCOPED_UPSERT_ALLOWED: ReadonlyArray<{ file: string; table: string; reas
   },
 ];
 
+let upsertClauses = 0;
+let ownerScopedUpserts = 0;
+let identityKeyedUpserts = 0;
+let unscopedAllowedUpserts = 0;
+const upsertsRead: Array<{ file: string; table: string }> = [];
+
 /**
- * Check one `INSERT … ON CONFLICT(…) DO UPDATE SET …` (the upsert's update
- * half is an UPDATE the UPDATE regex never sees): it must not re-file the
- * row (assign an identity column), and — when the conflict key is a
- * client-chosen id rather than the identity — it must only update a row the
- * inserting identity already owns.
+ * Check every `ON CONFLICT … DO UPDATE SET …` clause of one INSERT (the
+ * upsert's update half is an UPDATE of the conflicting row):
+ *   - its SET list may not assign an identity column, in any quoting or as a
+ *     row-value target — the conflicting row may be another identity's;
+ *   - when its conflict target does not include an identity column (the key
+ *     is an id the request chooses), its WHERE must hold the owner conjunct
+ *     `<t>.<id col> = excluded.<id col>` at the top level, ANDed, with no
+ *     depth-0 OR anywhere in the conjunction.
+ * A conflict target that includes an identity column needs no WHERE: the
+ * conflicting row equals the inserted one on that column by definition.
  */
-function checkUpsert(file: string, line: number, table: string, statement: string): string[] {
+function checkUpsert(
+  file: string,
+  line: number,
+  table: string,
+  alias: string | null,
+  raw: string,
+): string[] {
   const out: string[] = [];
-  const m = /ON\s+CONFLICT\s*\(([^)]*)\)\s*DO\s+UPDATE\s+SET\b([\s\S]*)$/i.exec(statement);
-  if (m === null) {
-    if (/\bDO\s+UPDATE\b/i.test(statement)) {
-      out.push(
-        `UNPARSED UPSERT: ${table} in ${file}:${line} has a DO UPDATE the gate cannot read (a conflict target without columns?) — spell it \`ON CONFLICT(<cols>) DO UPDATE SET …\` so its owner scope can be checked`,
-      );
-    }
-    return out;
-  }
-  const conflictCols = m[1]!.split(",").map((c) => c.trim().toLowerCase());
-  const { head: setClause, where } = splitTopLevelWhere(m[2]!);
+  const statement = maskSql(raw);
+  const clauses = statement.split(/\bON\s+CONFLICT\b/i).slice(1);
   const idCols = IDENTITY_COLUMNS.get(table) ?? new Set<string>(["motebit_id"]);
-  // Item by item (a fragment inside `MAX(a, b)` starts with an expression, never `col =`).
-  const refile = setClause.split(",").some((item) => ASSIGNS_IDENTITY.test(item));
-  if (refile && !REFILE_ALLOWED.some((a) => a.file === file && a.table === table)) {
-    out.push(
-      `REFILE (upsert): INSERT INTO ${table} … DO UPDATE SET in ${file}:${line} assigns an identity column — a conflict on an id another identity holds would re-file that identity's row under the inserter. Drop the assignment; scope the update to the owner (WHERE ${table}.<identity column> = excluded.<identity column>)`,
-    );
-  }
-  const conflictOnIdentity = conflictCols.some((c) => idCols.has(c));
-  if (!conflictOnIdentity) {
-    const scoped =
-      where !== null &&
-      [...idCols].some((col) =>
-        new RegExp(
-          `\\b${table}\\.${col}\\s*=\\s*excluded\\.${col}\\b|\\bexcluded\\.${col}\\s*=\\s*${table}\\.${col}\\b`,
-          "i",
-        ).test(where),
-      );
-    if (!scoped && !UNSCOPED_UPSERT_ALLOWED.some((a) => a.file === file && a.table === table)) {
+  const names = alias !== null ? [table.toLowerCase(), alias.toLowerCase()] : [table.toLowerCase()];
+  for (const clause of clauses) {
+    if (!/\bDO\s+UPDATE\b/i.test(clause)) continue;
+    upsertClauses++;
+    const m = /^\s*\(([^)]*)\)\s*(?:WHERE\b[\s\S]*?)?\bDO\s+UPDATE\s+SET\b([\s\S]*)$/i.exec(clause);
+    if (m === null) {
       out.push(
-        `OWNER SCOPE: INSERT INTO ${table} … ON CONFLICT(${conflictCols.join(", ")}) DO UPDATE in ${file}:${line} is keyed by an id the request chooses, and its update is not scoped to the row's owner — an identity naming another identity's id rewrites that row. Add \`WHERE ${table}.${[...idCols][0]} = excluded.${[...idCols][0]}\` to the DO UPDATE (and refuse when no row changed)`,
+        `UNPARSED UPSERT: ${table} in ${file}:${line} has a DO UPDATE the gate cannot read (a conflict target without columns?) — spell it \`ON CONFLICT(<cols>) DO UPDATE SET …\` so its re-filing and owner scope can be checked`,
+      );
+      continue;
+    }
+    upsertsRead.push({ file, table });
+    const conflictCols = m[1]!.split(",").map((c) => normIdent(c));
+    const body = cutAt(m[2]!, /RETURNING\b/iy);
+    const { parts, seps } = splitTopLevel(body, /WHERE\b/iy);
+    const setList = parts[0]!;
+    const where = seps.length > 0 ? parts.slice(1).join(" WHERE ") : null;
+    const targets = setTargets(setList);
+    if (targets === null) {
+      out.push(
+        `UNPARSED UPSERT: INSERT INTO ${table} … DO UPDATE SET in ${file}:${line} has a SET item with no \`=\` the gate can read — spell each item \`col = expr\` or \`(a, b) = (…)\``,
+      );
+      continue;
+    }
+    const refiled = assignsIdentity(targets, table);
+    if (refiled !== null && !REFILE_ALLOWED.some((a) => a.file === file && a.table === table)) {
+      out.push(
+        `REFILE (upsert): INSERT INTO ${table} … DO UPDATE SET in ${file}:${line} assigns the identity column \`${refiled}\` — a conflict on an id another identity holds would re-file that identity's row under the inserter. Drop the assignment (in every spelling: quoted, bracketed, or inside a row-value \`(a, b) = (…)\`); scope the update to the owner (WHERE ${table}.<identity column> = excluded.<identity column>)`,
       );
     }
+    if (conflictCols.some((c) => idCols.has(c.split(".").pop()!))) {
+      identityKeyedUpserts++;
+      continue;
+    }
+    if (UNSCOPED_UPSERT_ALLOWED.some((a) => a.file === file && a.table === table)) {
+      unscopedAllowedUpserts++;
+      continue;
+    }
+    const conj = where === null ? [] : conjuncts(where);
+    if (conj === null) {
+      out.push(
+        `OWNER SCOPE WEAKENED: INSERT INTO ${table} … ON CONFLICT(${conflictCols.join(", ")}) DO UPDATE in ${file}:${line} has a depth-0 OR in its WHERE — \`<owner> OR <anything>\` updates another identity's row whenever <anything> holds. The WHERE must be a conjunction (AND only) that includes \`${table}.${[...idCols][0]} = excluded.${[...idCols][0]}\``,
+      );
+      continue;
+    }
+    if (!conj.some((c) => isOwnerConjunct(c, names, idCols))) {
+      out.push(
+        `OWNER SCOPE: INSERT INTO ${table} … ON CONFLICT(${conflictCols.join(", ")}) DO UPDATE in ${file}:${line} is keyed by an id the request chooses, and its WHERE has no top-level conjunct \`${table}.<identity column> = excluded.<identity column>\` — an identity naming another identity's id rewrites that row. Add \`WHERE ${table}.${[...idCols][0]} = excluded.${[...idCols][0]}\` (ANDed, never ORed) to the DO UPDATE, and refuse when no row changed`,
+      );
+      continue;
+    }
+    ownerScopedUpserts++;
   }
   return out;
 }
 
-let upserts = 0;
+/** A table name in any SQLite identifier spelling. */
+const TABLE_TOKEN = String.raw`(?:"(\w+)"|\x60(\w+)\x60|\[(\w+)\]|(\w+))`;
+
 function scanWrites(): { found: Found[]; refiles: string[] } {
-  const pattern =
-    /\b(INSERT\s+OR\s+REPLACE\s+INTO|REPLACE\s+INTO|INSERT\s+(?:OR\s+\w+\s+)?INTO|UPDATE|DELETE\s+FROM)\s+(\w+)\b(?=([\s\S]{0,300}))/gi;
+  const pattern = new RegExp(
+    String.raw`\b(INSERT\s+OR\s+REPLACE\s+INTO|REPLACE\s+INTO|INSERT\s+(?:OR\s+\w+\s+)?INTO|UPDATE(?:\s+OR\s+\w+)?|DELETE\s+FROM)\s+` +
+      TABLE_TOKEN +
+      String.raw`(?:\s+AS\s+(\w+))?`,
+    "gi",
+  );
   const found: Found[] = [];
   const refiles: string[] = [];
   for (const [file, src] of SOURCES) {
     for (const m of src.matchAll(pattern)) {
-      const table = m[2]!;
+      const table = m[2] ?? m[3] ?? m[4] ?? m[5]!;
       if (!TABLES.has(table)) continue;
       const head = m[1]!.toUpperCase().replace(/\s+/g, " ");
-      const verb: Verb = head.includes("REPLACE")
-        ? "REPLACE"
-        : head.startsWith("INSERT")
-          ? "INSERT"
-          : head.startsWith("UPDATE")
-            ? "UPDATE"
-            : "DELETE";
+      const verb: Verb =
+        head.includes("REPLACE") && !head.startsWith("UPDATE")
+          ? "REPLACE"
+          : head.startsWith("INSERT")
+            ? "INSERT"
+            : head.startsWith("UPDATE")
+              ? "UPDATE"
+              : "DELETE";
       const line = lineOf(src, m.index);
       found.push({ file, line, verb, table });
+      const statement = literalFrom(src, m.index);
       if (verb === "INSERT" || verb === "REPLACE") {
-        const statement = literalFrom(src, m.index);
-        if (/\bON\s+CONFLICT\b/i.test(statement)) upserts++;
-        refiles.push(...checkUpsert(file, line, table, statement));
+        refiles.push(...checkUpsert(file, line, table, m[6] ?? null, statement));
       }
       if (verb === "UPDATE") {
-        const setClause = (m[3] ?? "").split(/\bWHERE\b/i)[0]!;
-        const assigns =
-          /\bSET\b[\s\S]*?\b(motebit_id|\w+_motebit_id|agent_id|worker_id|submitted_by|submitter_id|delegator_id|filed_by|respondent|approver_id|owner_id)\s*=/i.test(
-            setClause,
-          );
-        if (assigns && !REFILE_ALLOWED.some((a) => a.file === file && a.table === table)) {
+        const masked = maskSql(statement);
+        const set = /\bSET\b([\s\S]*)$/i.exec(masked);
+        if (set === null) continue;
+        const setList = cutAt(set[1]!, /(WHERE|RETURNING|FROM)\b/iy);
+        const targets = setTargets(setList);
+        const refiled =
+          targets === null ? "<unreadable SET item>" : assignsIdentity(targets, table);
+        if (refiled !== null && !REFILE_ALLOWED.some((a) => a.file === file && a.table === table)) {
           refiles.push(
-            `REFILE: UPDATE ${table} in ${file}:${line} assigns an identity column — a row is never re-filed under another identity; insert a new row under the bound owner instead`,
+            `REFILE: UPDATE ${table} in ${file}:${line} assigns ${refiled === "<unreadable SET item>" ? "a SET item the gate cannot read" : `the identity column \`${refiled}\``} — a row is never re-filed under another identity; insert a new row under the bound owner instead (every spelling is read: quoted, bracketed, row-value)`,
           );
         }
       }
@@ -1391,6 +1643,13 @@ for (const t of MUST_COVER) {
     );
   }
 }
+for (const u of MUST_READ_UPSERTS) {
+  if (!upsertsRead.some((r) => r.file === u.file && r.table === u.table)) {
+    violations.push(
+      `APERTURE LOST: the owned upsert into ${u.table} in ${u.file} was not read by the upsert rule — the statement scan or the ON CONFLICT parse no longer sees it`,
+    );
+  }
+}
 
 for (const [k, sites] of actual) {
   const registered = WRITERS.find((w) => key(w) === k);
@@ -1414,8 +1673,23 @@ for (const w of WRITERS) {
     );
   }
 }
+const registeredSites = WRITERS.reduce((n, w) => n + w.count, 0);
+if (violations.length === 0 && found.length !== registeredSites) {
+  violations.push(
+    `APERTURE MISMATCH: ${found.length} write site(s) found, ${registeredSites} registered — the per-door counts and the total disagree`,
+  );
+}
 
-// ── binding mints ─────────────────────────────────────────────────────────
+if (
+  violations.length === 0 &&
+  upsertClauses !== ownerScopedUpserts + identityKeyedUpserts + unscopedAllowedUpserts
+) {
+  violations.push(
+    `APERTURE MISMATCH: ${upsertClauses} DO UPDATE clause(s) read, but ${ownerScopedUpserts} owner-scoped + ${identityKeyedUpserts} identity-keyed + ${unscopedAllowedUpserts} allowed-unscoped do not add up`,
+  );
+}
+
+// ── binding mints (call sites outside identity-binding.ts) ────────────────
 const MINT_NAMES = [
   "bindCaller",
   "bindBySignature",
@@ -1424,7 +1698,7 @@ const MINT_NAMES = [
 ] as const;
 let mintSites = 0;
 for (const [file, src] of SOURCES) {
-  if (file === R + "identity-binding.ts") continue;
+  if (file === BINDING_FILE) continue;
   for (const name of MINT_NAMES) {
     const calls = [...src.matchAll(new RegExp(`\\b${name}\\(`, "g"))];
     if (calls.length === 0) continue;
@@ -1447,224 +1721,324 @@ for (const m of MINTS) {
     violations.push(`STALE MINT: ${m.mint} in ${m.file} is registered but not called`);
   }
 }
-
-// ── branded helpers ───────────────────────────────────────────────────────
-for (const h of BRANDED_HELPERS) {
-  const src = SOURCES.get(h.file) ?? "";
-  const sig = new RegExp(`function ${h.fn}\\(([^)]*)\\)`).exec(src);
-  if (sig === null || !/:\s*BoundIdentity\b/.test(sig[1]!)) {
-    violations.push(
-      `UNBRANDED HELPER: ${h.fn} in ${h.file} no longer takes a \`BoundIdentity\` owner — a door could call it without a binding`,
-    );
-  }
-}
-
-// ── brand casts: only identity-binding.ts mints a BoundIdentity ─────────
-for (const [file, src] of SOURCES) {
-  if (file === R + "identity-binding.ts") continue;
-  const casts = [...src.matchAll(/\bas\s+BoundIdentity\b|<BoundIdentity>/g)];
-  if (casts.length > 0) {
-    violations.push(
-      `BRAND CAST: ${file} (lines ${casts.map((c) => lineOf(src, c.index)).join(", ")}) casts to BoundIdentity — only identity-binding.ts mints one, after the comparison`,
-    );
-  }
-}
-
-// ── brand flow: a `BoundIdentity` slot receives only a minted value ──────
-//
-// The brand is a unique symbol only `identity-binding.ts` can name, so no
-// other file can SPELL a BoundIdentity. It can still SMUGGLE one: `x as
-// never`, `x as any`, `x as unknown as T`, a value typed `any`, a generic
-// that returns its type parameter, or a branded helper passed where its
-// parameter reads as `string` (method bivariance). tsc accepts each; the
-// #853 review forged `setSubscriptionStatus(db, victim as never, …)` past
-// tsc, eslint and the name-based cast check above. So the gate reads the
-// TYPES, with the relay's own compiler options:
-//   B1 every expression whose contextual type carries the brand (a helper's
-//      owner argument, an annotated initializer, a return, an object
-//      property) must itself have a branded type — not any / unknown /
-//      never, not a plain string under `@ts-expect-error`, not an assertion;
-//   B2 no type assertion outside identity-binding.ts produces a branded type
-//      (whatever alias it is spelled through);
-//   B3 no call whose declared return type is a bare type parameter yields a
-//      branded value (the generic launder);
-//   B4 a function with a branded parameter is only ever CALLED — never
-//      referenced as a value, where its parameter can be re-typed.
-const BINDING_FILE = R + "identity-binding.ts";
-let brandSlots = 0;
-let brandFunctions = 0;
-let brandFilesChecked = 0;
-function brandFlow(): string[] {
-  const out: string[] = [];
-  const cfgPath = resolve(ROOT, "services/relay/tsconfig.json");
-  const cfg = ts.readConfigFile(cfgPath, (p) => ts.sys.readFile(p));
-  const parsed = ts.parseJsonConfigFileContent(cfg.config, ts.sys, dirname(cfgPath));
-  const roots = FILES.filter((f) => relative(ROOT, f).startsWith(R));
-  const program = ts.createProgram({
-    rootNames: roots,
-    options: {
-      ...parsed.options,
-      noEmit: true,
-      composite: false,
-      incremental: false,
-      declaration: false,
-      declarationMap: false,
-      sourceMap: false,
-    },
-  });
-  const checker = program.getTypeChecker();
-  const bindingSf = program.getSourceFile(resolve(ROOT, BINDING_FILE));
-  if (bindingSf === undefined) {
-    return [
-      `APERTURE LOST: ${BINDING_FILE} is not in the relay program — the brand cannot be read`,
-    ];
-  }
-  const TYPE_ESCAPES = ts.TypeFlags.Any | ts.TypeFlags.Unknown | ts.TypeFlags.Never;
-  const NULLISH = ts.TypeFlags.Null | ts.TypeFlags.Undefined | ts.TypeFlags.Void;
-
-  /** The brand's own property: `[BOUND]`, declared in identity-binding.ts. */
-  const isBrandProp = (p: ts.Symbol): boolean =>
-    (p.declarations ?? []).some(
-      (d) =>
-        d.getSourceFile() === bindingSf &&
-        ts.isPropertySignature(d) &&
-        ts.isComputedPropertyName(d.name),
-    );
-  const hasBrand = (t: ts.Type): boolean =>
-    !(t.flags & TYPE_ESCAPES) && checker.getPropertiesOfType(t).some(isBrandProp);
-  /** Some constituent carries the brand (a slot typed `BoundIdentity | null` is a brand slot). */
-  const slotWantsBrand = (t: ts.Type | undefined): boolean =>
-    t !== undefined && (t.isUnion() ? t.types.some(hasBrand) : hasBrand(t));
-  /** Every non-nullish constituent carries the brand, and nothing escapes the checker. */
-  const valueIsBranded = (t: ts.Type): boolean => {
-    if (t.flags & TYPE_ESCAPES) return false;
-    const parts = t.isUnion() ? t.types : [t];
-    return parts.every((p) => (p.flags & NULLISH) !== 0 || hasBrand(p));
-  };
-  const isAssertion = (n: ts.Node): boolean =>
-    ts.isAsExpression(n) || ts.isTypeAssertionExpression(n);
-
-  // Functions (anywhere in the program) with a branded parameter.
-  const brandedFns = new Set<ts.Symbol>();
-  for (const sf of program.getSourceFiles()) {
-    if (!relative(ROOT, sf.fileName).startsWith(R)) continue;
-    const visit = (n: ts.Node): void => {
-      if (
-        ts.isFunctionLike(n) &&
-        n.parameters.some((p) => slotWantsBrand(checker.getTypeAtLocation(p)))
-      ) {
-        const named =
-          (n as ts.FunctionDeclaration).name ??
-          (ts.isVariableDeclaration(n.parent) ? n.parent.name : undefined);
-        const sym = named !== undefined ? checker.getSymbolAtLocation(named) : undefined;
-        if (sym !== undefined) brandedFns.add(sym);
-      }
-      ts.forEachChild(n, visit);
-    };
-    visit(sf);
-  }
-  brandFunctions = brandedFns.size;
-
-  for (const sf of program.getSourceFiles()) {
-    const file = relative(ROOT, sf.fileName);
-    if (!file.startsWith(R) || file === BINDING_FILE) continue;
-    brandFilesChecked++;
-    const where = (n: ts.Node): string =>
-      `${file}:${sf.getLineAndCharacterOfPosition(n.getStart(sf)).line + 1}`;
-    const visit = (n: ts.Node): void => {
-      if (ts.isExpression(n) && !ts.isParenthesizedExpression(n) && !ts.isOmittedExpression(n)) {
-        let ctx: ts.Type | undefined;
-        try {
-          ctx = checker.getContextualType(n);
-        } catch {
-          ctx = undefined;
-        }
-        // B1: a brand slot receives a branded value, never an escape or an assertion.
-        if (slotWantsBrand(ctx)) {
-          brandSlots++;
-          const inner = ts.skipPartiallyEmittedExpressions(n);
-          if (isAssertion(inner)) {
-            out.push(
-              `BRAND FORGED: ${where(n)} passes a type assertion (\`${n.getText(sf).slice(0, 60)}\`) into a BoundIdentity slot — only identity-binding.ts mints one, after the comparison`,
-            );
-          } else if (!valueIsBranded(checker.getTypeAtLocation(n))) {
-            out.push(
-              `BRAND FORGED: ${where(n)} passes \`${n.getText(sf).slice(0, 60)}\` (type ${checker.typeToString(checker.getTypeAtLocation(n))}) into a BoundIdentity slot — the value was not minted by a binding`,
-            );
-          }
-        }
-        // B2: no assertion produces a branded type.
-        if (isAssertion(n) && hasBrand(checker.getTypeAtLocation(n))) {
-          out.push(
-            `BRAND CAST: ${where(n)} asserts a branded type (\`${n.getText(sf).slice(0, 60)}\`) — only identity-binding.ts mints a BoundIdentity`,
-          );
-        }
-        // B3: a generic whose return is its bare type parameter cannot yield a brand.
-        if (ts.isCallExpression(n) && slotWantsBrand(checker.getTypeAtLocation(n))) {
-          const decl = checker.getResolvedSignature(n)?.getDeclaration();
-          const declared =
-            decl !== undefined && !ts.isJSDocSignature(decl)
-              ? checker.getSignatureFromDeclaration(decl)
-              : undefined;
-          const ret =
-            declared !== undefined ? checker.getReturnTypeOfSignature(declared) : undefined;
-          if (
-            ret !== undefined &&
-            (ret.flags & (ts.TypeFlags.TypeParameter | TYPE_ESCAPES)) !== 0
-          ) {
-            out.push(
-              `BRAND LAUNDERED: ${where(n)} obtains a BoundIdentity from a call whose declared return type is \`${checker.typeToString(ret)}\` — a generic or untyped return can carry any string; only identity-binding.ts mints one`,
-            );
-          }
-        }
-      }
-      // B4: a branded-parameter function is called, never passed as a value.
-      if (ts.isIdentifier(n)) {
-        let sym = checker.getSymbolAtLocation(n);
-        if (sym !== undefined && sym.flags & ts.SymbolFlags.Alias)
-          sym = checker.getAliasedSymbol(sym);
-        if (sym !== undefined && brandedFns.has(sym)) {
-          const p = n.parent;
-          const callee =
-            (ts.isCallExpression(p) && p.expression === n) ||
-            (ts.isPropertyAccessExpression(p) &&
-              p.name === n &&
-              ts.isCallExpression(p.parent) &&
-              p.parent.expression === p);
-          const declaration =
-            ts.isImportSpecifier(p) ||
-            ts.isExportSpecifier(p) ||
-            ts.isImportClause(p) ||
-            // `typeof helper` in a type position names its type, never the value
-            ts.isTypeQueryNode(p) ||
-            ((ts.isFunctionDeclaration(p) || ts.isVariableDeclaration(p)) && p.name === n);
-          if (!callee && !declaration) {
-            out.push(
-              `BRANDED HELPER AS VALUE: ${where(n)} references \`${n.text}\` without calling it — passed as a value its BoundIdentity parameter can be re-typed (method bivariance); call it directly with a minted owner`,
-            );
-          }
-        }
-      }
-      ts.forEachChild(n, visit);
-    };
-    visit(sf);
-  }
-  return out;
-}
-violations.push(...brandFlow());
-// A brand check that reads no slot passes by seeing nothing (an unresolved
-// program, a renamed brand). Every registered helper must be seen as branded.
-if (brandFunctions < BRANDED_HELPERS.length || brandSlots === 0) {
+const registeredMints = MINTS.reduce((n, m) => n + m.count, 0);
+if (mintSites !== registeredMints) {
   violations.push(
-    `APERTURE LOST: the brand-flow check saw ${brandFunctions} branded-parameter function(s) (expected ≥ ${BRANDED_HELPERS.length}, the registered helpers) and ${brandSlots} brand slot(s) — it is not reading the relay's types`,
+    `APERTURE MISMATCH: ${mintSites} binding mint call(s) found outside ${BINDING_FILE}, ${registeredMints} registered`,
   );
 }
 
+// ── the capability: BoundIdentity is a runtime object only one module mints ─
+//
+// A type brand cannot be made unforgeable in TypeScript (the #860 review:
+// row casts, type predicates, `asserts` functions, overloads, JSON.parse,
+// tuple casts — each compiles). So the guarantee is not in the type and not
+// in this gate: `BoundIdentity` is a class with an ES private field whose
+// constructor demands a module-private key, and `unwrapBound` performs the
+// private-brand check (`#id in b`) and throws on anything else. The runtime
+// tests (`identity-binding-forgery.test.ts`) prove each forgery throws at the
+// real writer and writes nothing. What THIS gate checks is only structure,
+// syntactically (no type checker):
+//   K1 identity-binding.ts declares `class BoundIdentity` with a `#id`
+//      private field, a constructor that names MINT_KEY, and `unwrapBound`;
+//      MINT_KEY / mintBound / readBound are not exported, and no other
+//      scanned file names them;
+//   K2 inside identity-binding.ts, `mint(` is called only in the registered
+//      producers, the registered number of times;
+//   K3 every function with a parameter annotated `BoundIdentity` is a
+//      registered writer, and every registered writer has one, with that
+//      name, annotated exactly `BoundIdentity` imported from
+//      ./identity-binding.js (not a local type of that name);
+//   K4 inside each registered writer, the parameter is read ONLY as the sole
+//      argument of `unwrapBound(…)`, at least once; it is never shadowed,
+//      and the body never touches `arguments`.
+function parse(file: string): ts.SourceFile {
+  return ts.createSourceFile(
+    file,
+    SOURCES.get(file) ?? "",
+    ts.ScriptTarget.ES2022,
+    true,
+    ts.ScriptKind.TS,
+  );
+}
+function isExported(n: ts.Node): boolean {
+  return (ts.getCombinedModifierFlags(n as ts.Declaration) & ts.ModifierFlags.Export) !== 0;
+}
+const lineAt = (sf: ts.SourceFile, n: ts.Node): number =>
+  sf.getLineAndCharacterOfPosition(n.getStart(sf)).line + 1;
+
+// K1
+{
+  const sf = parse(BINDING_FILE);
+  let classOk = false;
+  let unwrapOk = false;
+  const visit = (n: ts.Node): void => {
+    if (ts.isClassDeclaration(n) && n.name?.text === "BoundIdentity") {
+      const hasPrivateId = n.members.some(
+        (m) =>
+          ts.isPropertyDeclaration(m) && ts.isPrivateIdentifier(m.name) && m.name.text === "#id",
+      );
+      const ctor = n.members.find(ts.isConstructorDeclaration);
+      const ctorNamesKey =
+        ctor !== undefined &&
+        /\bMINT_KEY\b/.test(ctor.getText(sf)) &&
+        /\bthrow\b/.test(ctor.getText(sf));
+      const brandCheck = /#id\s+in\b/.test(n.getText(sf));
+      classOk = hasPrivateId && ctorNamesKey && brandCheck && isExported(n);
+    }
+    if (ts.isFunctionDeclaration(n) && n.name?.text === "unwrapBound" && isExported(n)) {
+      unwrapOk = /\breadBound\(/.test(n.body?.getText(sf) ?? "");
+    }
+    if (ts.isVariableStatement(n) && isExported(n)) {
+      for (const d of n.declarationList.declarations) {
+        if (
+          ts.isIdentifier(d.name) &&
+          (PRIVATE_MINT_NAMES as readonly string[]).includes(d.name.text)
+        ) {
+          violations.push(
+            `PRIVATE MINT EXPORTED: ${BINDING_FILE}:${lineAt(sf, d)} exports \`${d.name.text}\` — the minting path must stay module-private, or any module can construct a BoundIdentity`,
+          );
+        }
+      }
+    }
+    if (ts.isExportDeclaration(n)) {
+      const names =
+        n.exportClause === undefined
+          ? ["*"]
+          : ts.isNamedExports(n.exportClause)
+            ? n.exportClause.elements.map((e) => (e.propertyName ?? e.name).text)
+            : ["*"];
+      for (const x of names) {
+        if (x === "*" || (PRIVATE_MINT_NAMES as readonly string[]).includes(x)) {
+          violations.push(
+            `PRIVATE MINT EXPORTED: ${BINDING_FILE}:${lineAt(sf, n)} re-exports \`${x}\` — the minting path must stay module-private`,
+          );
+        }
+      }
+    }
+    ts.forEachChild(n, visit);
+  };
+  visit(sf);
+  if (!classOk) {
+    violations.push(
+      `CAPABILITY LOST: ${BINDING_FILE} no longer declares an exported \`class BoundIdentity\` with a \`#id\` private field, a constructor that checks MINT_KEY and throws, and a \`#id in\` private-brand check — the runtime guarantee the writers rely on is gone`,
+    );
+  }
+  if (!unwrapOk) {
+    violations.push(
+      `CAPABILITY LOST: ${BINDING_FILE} no longer exports \`unwrapBound\` reading through the class's private-brand check (\`readBound\`)`,
+    );
+  }
+  for (const [file, src] of SOURCES) {
+    if (file === BINDING_FILE) continue;
+    for (const name of PRIVATE_MINT_NAMES) {
+      const hits = [...src.matchAll(new RegExp(`\\b${name}\\b`, "g"))];
+      if (hits.length > 0) {
+        violations.push(
+          `PRIVATE MINT REFERENCED: ${file} (lines ${hits.map((h) => lineOf(src, h.index)).join(", ")}) names \`${name}\` — only ${BINDING_FILE} may touch the minting path`,
+        );
+      }
+    }
+  }
+}
+
+// K2
+let producerMints = 0;
+{
+  const sf = parse(BINDING_FILE);
+  const seen: Record<string, number> = {};
+  const visit = (n: ts.Node, fn: string | null): void => {
+    let here = fn;
+    if (ts.isFunctionDeclaration(n) && n.name !== undefined) here = n.name.text;
+    if (ts.isCallExpression(n) && ts.isIdentifier(n.expression) && n.expression.text === "mint") {
+      producerMints++;
+      const owner = here ?? "<module>";
+      seen[owner] = (seen[owner] ?? 0) + 1;
+      if (!(owner in PRODUCER_MINTS)) {
+        violations.push(
+          `UNREGISTERED PRODUCER: ${BINDING_FILE}:${lineAt(sf, n)} mints a BoundIdentity in \`${owner}\` — a new way to obtain the capability; register it in PRODUCER_MINTS with what it compares`,
+        );
+      }
+    }
+    ts.forEachChild(n, (c) => visit(c, here));
+  };
+  visit(sf, null);
+  // `mint` is the only path to the constructor: one `mintBound(` (inside
+  // `mint`) and one `new BoundIdentity(` (inside the static block).
+  const bsrc = SOURCES.get(BINDING_FILE) ?? "";
+  for (const [re, what] of [
+    [/\bmintBound\(/g, "mintBound("],
+    [/\bnew\s+BoundIdentity\(/g, "new BoundIdentity("],
+  ] as const) {
+    const n = [...bsrc.matchAll(re)].length;
+    if (n !== 1) {
+      violations.push(
+        `UNREGISTERED PRODUCER: ${BINDING_FILE} calls \`${what}\` ${n} time(s) — exactly one is the minting path (\`mint\` → \`mintBound\` → the constructor); any other is a mint outside the registered producers`,
+      );
+    }
+  }
+  for (const [fn, count] of Object.entries(PRODUCER_MINTS)) {
+    if ((seen[fn] ?? 0) !== count) {
+      violations.push(
+        `PRODUCER COUNT CHANGED: \`${fn}\` in ${BINDING_FILE} mints ${seen[fn] ?? 0} time(s), registered ${count}`,
+      );
+    }
+  }
+}
+
+// K3 + K4
+let writersChecked = 0;
+let unwrapReads = 0;
+{
+  const typedParams: Array<{ file: string; fn: string; param: string; line: number }> = [];
+  const isBoundType = (t: ts.TypeNode | undefined): boolean =>
+    t !== undefined && /\bBoundIdentity\b/.test(t.getText());
+  for (const file of SOURCES.keys()) {
+    if (!file.startsWith(R)) continue;
+    const src = SOURCES.get(file)!;
+    if (!/\bBoundIdentity\b/.test(src)) continue;
+    const sf = parse(file);
+    const visit = (n: ts.Node): void => {
+      if (ts.isFunctionLike(n)) {
+        for (const p of n.parameters) {
+          if (isBoundType(p.type)) {
+            const named =
+              (n as ts.FunctionDeclaration).name ??
+              (ts.isVariableDeclaration(n.parent) ? n.parent.name : undefined);
+            typedParams.push({
+              file,
+              fn: named !== undefined && ts.isIdentifier(named) ? named.text : "<anonymous>",
+              param: ts.isIdentifier(p.name) ? p.name.text : "<pattern>",
+              line: lineAt(sf, p),
+            });
+          }
+        }
+      }
+      ts.forEachChild(n, visit);
+    };
+    visit(sf);
+  }
+  for (const t of typedParams) {
+    // `unwrapBound` itself is the reader every writer goes through.
+    if (t.file === BINDING_FILE && t.fn === "unwrapBound") continue;
+    if (!WRITER_HELPERS.some((w) => w.file === t.file && w.fn === t.fn && w.param === t.param)) {
+      violations.push(
+        `UNREGISTERED WRITER: ${t.file}:${t.line} — \`${t.fn}\` takes a BoundIdentity parameter \`${t.param}\` and is not registered in WRITER_HELPERS; register it, and read the parameter only through unwrapBound(${t.param})`,
+      );
+    }
+  }
+
+  for (const w of WRITER_HELPERS) {
+    const sf = parse(w.file);
+    const src = SOURCES.get(w.file) ?? "";
+    let decl: ts.FunctionLikeDeclaration | undefined;
+    const find = (n: ts.Node): void => {
+      if (ts.isFunctionDeclaration(n) && n.name?.text === w.fn) decl = n;
+      ts.forEachChild(n, find);
+    };
+    find(sf);
+    const repair = `every registered writer takes its owner as \`${w.param}: BoundIdentity\` and reads it only as \`unwrapBound(${w.param})\``;
+    if (decl === undefined || decl.body === undefined) {
+      violations.push(
+        `WRITER MISSING: \`${w.fn}\` is registered in ${w.file} but no function declaration of that name was found — ${repair}`,
+      );
+      continue;
+    }
+    const p = decl.parameters.find((q) => ts.isIdentifier(q.name) && q.name.text === w.param);
+    if (
+      p === undefined ||
+      p.type === undefined ||
+      !ts.isTypeReferenceNode(p.type) ||
+      p.type.getText(sf) !== "BoundIdentity"
+    ) {
+      violations.push(
+        `UNBOUND WRITER: \`${w.fn}\` in ${w.file}:${lineAt(sf, decl)} has no parameter \`${w.param}\` typed exactly \`BoundIdentity\` — ${repair}`,
+      );
+      continue;
+    }
+    // BoundIdentity must be the real one: imported from ./identity-binding.js
+    // (or declared there), never a local type or value of that name.
+    if (w.file !== BINDING_FILE) {
+      const imported = new RegExp(
+        String.raw`import\s*(?:type\s*)?\{[^}]*\bBoundIdentity\b[^}]*\}\s*from\s*["']\./identity-binding\.js["']`,
+      ).test(src);
+      const unwrapImported = new RegExp(
+        String.raw`import\s*\{[^}]*\bunwrapBound\b[^}]*\}\s*from\s*["']\./identity-binding\.js["']`,
+      ).test(src);
+      const localDecl = new RegExp(
+        String.raw`\b(?:type|interface|class|const|let|var|function|enum|namespace)\s+(?:BoundIdentity|unwrapBound)\b`,
+      ).test(src.replace(/^import\b[^;]*;/gm, ""));
+      if (!imported || !unwrapImported || localDecl) {
+        violations.push(
+          `UNBOUND WRITER: ${w.file} must import \`BoundIdentity\` and \`unwrapBound\` from ./identity-binding.js and declare neither itself — a local type or function of that name is not the capability`,
+        );
+        continue;
+      }
+    }
+    writersChecked++;
+    let reads = 0;
+    const body = decl.body;
+    const walk = (n: ts.Node): void => {
+      if (ts.isIdentifier(n) && n.text === "arguments") {
+        violations.push(
+          `OWNER READ AROUND unwrapBound: \`${w.fn}\` in ${w.file}:${lineAt(sf, n)} reads \`arguments\` — the owner can be reached without unwrapBound`,
+        );
+      }
+      if (ts.isIdentifier(n) && n.text === w.param) {
+        const parent = n.parent;
+        const isDeclName =
+          (ts.isVariableDeclaration(parent) ||
+            ts.isParameter(parent) ||
+            ts.isBindingElement(parent) ||
+            ts.isFunctionDeclaration(parent) ||
+            ts.isClassDeclaration(parent)) &&
+          (parent as ts.NamedDeclaration).name === n;
+        const isPropName =
+          (ts.isPropertyAccessExpression(parent) && parent.name === n) ||
+          (ts.isPropertyAssignment(parent) && parent.name === n);
+        if (isDeclName) {
+          violations.push(
+            `OWNER SHADOWED: \`${w.fn}\` in ${w.file}:${lineAt(sf, n)} re-declares \`${w.param}\` — a shadowing name can carry any value past the unwrapBound rule`,
+          );
+        } else if (!isPropName) {
+          const ok =
+            ts.isCallExpression(parent) &&
+            ts.isIdentifier(parent.expression) &&
+            parent.expression.text === "unwrapBound" &&
+            parent.arguments.length === 1 &&
+            parent.arguments[0] === n;
+          if (ok) reads++;
+          else {
+            violations.push(
+              `OWNER READ AROUND unwrapBound: \`${w.fn}\` in ${w.file}:${lineAt(sf, n)} uses \`${w.param}\` as \`${parent.getText(sf).slice(0, 60)}\` — ${repair}; any other use (a comparison, a SQL bind, a property read, String(), a spread) takes the owner without the private-brand check`,
+            );
+          }
+        }
+      }
+      ts.forEachChild(n, walk);
+    };
+    walk(body);
+    if (reads === 0) {
+      violations.push(
+        `OWNER UNREAD: \`${w.fn}\` in ${w.file} never calls unwrapBound(${w.param}) — a writer that ignores its bound owner writes under whatever identity its other arguments name; ${repair}`,
+      );
+    }
+    unwrapReads += reads;
+  }
+  if (writersChecked !== WRITER_HELPERS.length && violations.length === 0) {
+    violations.push(
+      `APERTURE MISMATCH: ${writersChecked} writer(s) checked, ${WRITER_HELPERS.length} registered`,
+    );
+  }
+}
+
 // ── event-store appends ───────────────────────────────────────────────────
+let appendSites = 0;
 for (const [file, src] of SOURCES) {
   if (!file.startsWith(R)) continue;
   const calls = [...src.matchAll(/\.(append|appendWithClock)\(/g)];
   if (calls.length === 0) continue;
+  appendSites += calls.length;
   const reg = EVENT_APPENDS.find((e) => e.file === file);
   if (reg === undefined || reg.count !== calls.length) {
     violations.push(
@@ -1676,25 +2050,27 @@ for (const [file, src] of SOURCES) {
 if (violations.length > 0) {
   failWithRepair({
     invariant:
-      "a door that writes a row filed under an identity, or that decides who an identity is, must name the principal that authorizes it — and a per-identity write helper is reachable only through a binding",
+      "a door that writes a row filed under an identity, or that decides who an identity is, must name the principal that authorizes it — and a per-identity write helper reads its owner only from a BoundIdentity a binding minted",
     canonical:
-      "scripts/check-identity-authority-writers.ts (WRITERS, MINTS, BRANDED_HELPERS, EVENT_APPENDS) and services/relay/src/identity-binding.ts",
+      "scripts/check-identity-authority-writers.ts (WRITERS, MINTS, WRITER_HELPERS, PRODUCER_MINTS, EVENT_APPENDS) and services/relay/src/identity-binding.ts",
     sites: violations,
-    fix: "Answer one question in writing, then add the entry: WHO may cause this write, and what IN THE REQUEST proves they are that? Route an owner-facing door through identity-binding.ts (`bindCaller` / `bindSyncEntries` / `bindSocketEntries` / `bindBySignature`) and write through a helper that takes a `BoundIdentity`. A signature proves authorship, not authority (#713). A path segment is chosen by the caller (#719). An identifier in a body is not a relationship to the object it names (#701, #846). If the honest answer is 'nothing in the request proves it', the door is the defect and the registry entry is not the fix.",
+    fix: "Answer one question in writing, then add the entry: WHO may cause this write, and what IN THE REQUEST proves they are that? Route an owner-facing door through identity-binding.ts (`bindCaller` / `bindSyncEntries` / `bindSocketEntries` / `bindBySignature`) and write through a helper that takes `owner: BoundIdentity` and reads it only as `unwrapBound(owner)`. A signature proves authorship, not authority (#713). A path segment is chosen by the caller (#719). An identifier in a body is not a relationship to the object it names (#701, #846). If the honest answer is 'nothing in the request proves it', the door is the defect and the registry entry is not the fix.",
     doctrine:
-      "services/relay/CLAUDE.md rule 6 and rule 21; docs/doctrine/memory-never-confers-authority.md — only a named principal, proven by the request, may act on an identity's rows.",
+      "services/relay/CLAUDE.md rule 6, rule 21 and rule 26; docs/doctrine/memory-never-confers-authority.md — only a named principal, proven by the request, may act on an identity's rows.",
   });
 }
 
 process.stdout.write(
-  `✓ check-identity-authority-writers: ${found.length} write site(s) across ${WRITERS.length} registered door(s), each naming its principal; ` +
-    `${mintSites} binding mint call(s) in ${MINTS.length} registered door(s); ${BRANDED_HELPERS.length} branded helper(s); ` +
-    `${EVENT_APPENDS.length} event-append site(s); ${upserts} upsert(s) read for re-filing and owner scope; ` +
-    `brand flow typed over ${brandFilesChecked} relay file(s): ${brandSlots} BoundIdentity slot(s), ${brandFunctions} branded-parameter function(s).\n` +
+  `✓ check-identity-authority-writers: ${found.length} write site(s) = the ${registeredSites} registered across ${WRITERS.length} door(s), each naming its principal; ` +
+    `${mintSites} binding mint call(s) = the ${registeredMints} registered in ${MINTS.length} door(s); ` +
+    `${producerMints} internal mint(s) in ${Object.keys(PRODUCER_MINTS).length} registered producer(s); ` +
+    `${writersChecked}/${WRITER_HELPERS.length} registered writer(s) take \`owner: BoundIdentity\` and read it only through unwrapBound (${unwrapReads} read(s)); ` +
+    `${appendSites} event-append call(s) in ${EVENT_APPENDS.length} registered file(s); ` +
+    `${upsertClauses} DO UPDATE clause(s) read: none assigns an identity column in any spelling, ${ownerScopedUpserts} carry a top-level ANDed owner conjunct, ${identityKeyedUpserts} are keyed on an identity column, ${unscopedAllowedUpserts} unscoped by registered exception.\n` +
     `  Aperture: ${SOURCES.size} .ts file(s) scanned under ${SCAN_ROOTS.join(", ")} ` +
-    `(excluding __tests__/dist) for INSERT / INSERT OR REPLACE / REPLACE / UPDATE / DELETE against ` +
-    `${TABLES.size} table(s): ${AUTHORITY_TABLES.length} authority tables plus every CREATE TABLE with an identity column ` +
-    `(${Object.keys(NOT_PER_IDENTITY).length} excluded with a reason). An UPDATE, or an upsert's DO UPDATE SET, assigning an identity column is refused outright; ` +
-    `an upsert keyed by a client-chosen id must scope its update to the row's owner. ` +
-    `Blind to a statement assembled at runtime from a table name in a variable, and to writes issued from any other package.\n`,
+    `(excluding __tests__/dist) for INSERT / INSERT OR REPLACE / REPLACE / UPDATE [OR …] / DELETE against ` +
+    `${TABLES.size} table(s) (any identifier quoting): ${AUTHORITY_TABLES.length} authority tables plus every CREATE TABLE with an identity column ` +
+    `(${Object.keys(NOT_PER_IDENTITY).length} excluded with a reason). ` +
+    `Not enforced here: that a forged BoundIdentity throws — that is the runtime capability, proven by identity-binding-forgery.test.ts. ` +
+    `Blind to ${dynamicSetItems} SET item(s) assembled at runtime (\`\${…}\`), to a statement split by \`+\`, to a table name held in a variable, and to writes issued from any other package.\n`,
 );

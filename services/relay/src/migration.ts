@@ -9,12 +9,16 @@
  */
 import type { Context, Hono } from "hono";
 import type { AuthEvent } from "./auth-events.js";
-import { bindBySignature, bindCaller, type BoundIdentity } from "./identity-binding.js";
+import {
+  bindBySignature,
+  bindCaller,
+  unwrapBound,
+  type BoundIdentity,
+} from "./identity-binding.js";
 import { HTTPException } from "hono/http-exception";
 import { sign, canonicalJson, hexToBytes } from "@motebit/encryption";
 import {
   verifyBalanceWaiver,
-  verifyMigrationRequest,
   verifyMigrationToken,
   verifyDepartureAttestation,
   verifyRelayMetadata,
@@ -131,6 +135,7 @@ export function updateMigrationState(
   tokenId: string,
   state: MigrationState,
 ): void {
+  const id = unwrapBound(owner);
   const extras: Record<string, unknown> = {};
   if (state === "departed") extras.departed_at = Date.now();
   if (state === "cancelled") extras.cancelled_at = Date.now();
@@ -139,12 +144,12 @@ export function updateMigrationState(
     const setClauses = [`state = ?`, ...Object.keys(extras).map((k) => `${k} = ?`)];
     db.prepare(
       `UPDATE relay_migrations SET ${setClauses.join(", ")} WHERE token_id = ? AND motebit_id = ?`,
-    ).run(state, ...Object.values(extras), tokenId, owner);
+    ).run(state, ...Object.values(extras), tokenId, id);
   } else {
     db.prepare("UPDATE relay_migrations SET state = ? WHERE token_id = ? AND motebit_id = ?").run(
       state,
       tokenId,
-      owner,
+      id,
     );
   }
 }
@@ -238,15 +243,12 @@ export function registerMigrationRoutes(deps: MigrationDeps): void {
     // (§4.1). No registered key ⇒ cannot authorize departure ⇒ reject.
     // Holder, else main's registry read (§5f verification reader).
     const departingKey = verificationKeyFor(db, motebitId, agent.public_key);
-    if (
-      departingKey === null ||
-      !(await verifyMigrationRequest(request, hexToBytes(departingKey)))
-    ) {
+    // The request's own signature, verified under the identity's key inside
+    // the binder, is what binds this door to the identity (§4.1).
+    const owner = await bindBySignature(request, departingKey);
+    if (owner === null) {
       throw new HTTPException(401, { message: "MigrationRequest signature invalid" });
     }
-    // The request's own signature, verified under the identity's key just
-    // above, is what binds this door to the identity (§4.1).
-    const owner = bindBySignature(motebitId);
 
     // Check no active migration in progress (§4.4: one active token per agent)
     const existing = getActiveMigration(db, motebitId);

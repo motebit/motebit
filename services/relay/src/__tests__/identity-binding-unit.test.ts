@@ -19,6 +19,7 @@ import {
   bindSocketEntries,
   bindSyncEntries,
   SYNC_PRESENTER_KEY,
+  unwrapBound,
   type BoundIdentity,
 } from "../identity-binding.js";
 import { upsertSyncConversation, upsertSyncMessage } from "../data-sync.js";
@@ -31,7 +32,13 @@ function fakeContext(vars: Record<string, unknown>): Context {
   } as unknown as Context;
 }
 
-const bound = (id: string) => id as BoundIdentity;
+/** A genuine mint: the socket binder with no entries binds the socket's identity. */
+const bound = (id: string): BoundIdentity => {
+  const b = bindSocketEntries([], id);
+  if (b === null) throw new Error("unreachable");
+  return b;
+};
+const idOf = (b: BoundIdentity | null): string | null => (b === null ? null : unwrapBound(b));
 
 describe("bindCaller", () => {
   const record: AuthEvent[] = [];
@@ -41,7 +48,7 @@ describe("bindCaller", () => {
   });
 
   it("binds a caller whose verified mid is the path identity", () => {
-    expect(bindCaller(fakeContext({ callerMotebitId: "B" }), "B", opts)).toBe("B");
+    expect(unwrapBound(bindCaller(fakeContext({ callerMotebitId: "B" }), "B", opts))).toBe("B");
     expect(record).toEqual([]);
   });
 
@@ -68,13 +75,15 @@ describe("bindCaller", () => {
   });
 
   it("binds the operator only when the master token was marked", () => {
-    expect(bindCaller(fakeContext({ [OPERATOR_PRESENTED as string]: true }), "B", opts)).toBe("B");
+    expect(
+      unwrapBound(bindCaller(fakeContext({ [OPERATOR_PRESENTED as string]: true }), "B", opts)),
+    ).toBe("B");
   });
 });
 
 describe("bindSocketEntries", () => {
   it("mints only when every entry names the socket's identity", () => {
-    expect(bindSocketEntries([{ motebit_id: "A" }], "A")).toBe("A");
+    expect(idOf(bindSocketEntries([{ motebit_id: "A" }], "A"))).toBe("A");
     expect(bindSocketEntries([{ motebit_id: "A" }, { motebit_id: "B" }], "A")).toBeNull();
     expect(bindSocketEntries([null], "A")).toBeNull();
   });
@@ -97,7 +106,7 @@ describe("bindSyncEntries (#846 v3)", () => {
 
   it("binds when the verified identity is the path identity and every entry names it", () => {
     const c = fakeContext({ [SYNC_PRESENTER_KEY]: "A" });
-    expect(bindSyncEntries(c, [{ motebit_id: "A" }], "A", rec)).toBe("A");
+    expect(unwrapBound(bindSyncEntries(c, [{ motebit_id: "A" }], "A", rec))).toBe("A");
     expect(record).toEqual([]);
   });
 
@@ -125,7 +134,9 @@ describe("bindSyncEntries (#846 v3)", () => {
   });
 
   it("the master token (no presenter) binds to the path identity", () => {
-    expect(bindSyncEntries(fakeContext({}), [{ motebit_id: "B" }], "B", rec)).toBe("B");
+    expect(unwrapBound(bindSyncEntries(fakeContext({}), [{ motebit_id: "B" }], "B", rec))).toBe(
+      "B",
+    );
   });
 });
 

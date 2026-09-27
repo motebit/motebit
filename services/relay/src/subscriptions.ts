@@ -30,7 +30,7 @@ import {
 } from "./accounts.js";
 import type { SubscriptionEventAdapter } from "./webhooks/stripe-webhook-adapter.js";
 import type { AuthEvent } from "./auth-events.js";
-import { bindCaller, type BoundIdentity } from "./identity-binding.js";
+import { bindCaller, unwrapBound, type BoundIdentity } from "./identity-binding.js";
 
 const logger = createLogger({ service: "relay", module: "proxy-tokens" });
 
@@ -206,18 +206,19 @@ export function setSubscriptionStatus(
   to: string,
   periodEnd?: number | null,
 ): boolean {
+  const id = unwrapBound(owner);
   const res =
     periodEnd === undefined
       ? db
           .prepare(
             "UPDATE relay_subscriptions SET status = ?, updated_at = ? WHERE motebit_id = ? AND status = ?",
           )
-          .run(to, Date.now(), owner, from)
+          .run(to, Date.now(), id, from)
       : db
           .prepare(
             "UPDATE relay_subscriptions SET status = ?, current_period_end = ?, updated_at = ? WHERE motebit_id = ? AND status = ?",
           )
-          .run(to, periodEnd, Date.now(), owner, from);
+          .run(to, periodEnd, Date.now(), id, from);
   return res.changes > 0;
 }
 

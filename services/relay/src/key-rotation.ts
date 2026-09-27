@@ -29,13 +29,14 @@ import type { AuthEvent } from "./auth-events.js";
 import type { CloseIdentityConnections, CloseTokenConnections } from "./connection-ports.js";
 import { admitKey, identityGuardianFor, identityKey, verificationKeyFor } from "./identity-keys.js";
 import { isKnownIdentity, recordIdentityRevocation } from "./identity-revocation.js";
-import { bindCaller, type BoundIdentity } from "./identity-binding.js";
+import { bindCaller, unwrapBound, type BoundIdentity } from "./identity-binding.js";
 
 /**
  * File an approval request under its owner. `owner` is a `BoundIdentity`:
  * the route proved the caller is that identity or the operator (#846).
+ * @internal exported for the #846 forgery test.
  */
-function insertApproval(
+export function insertApproval(
   db: DatabaseDriver,
   owner: BoundIdentity,
   a: {
@@ -47,11 +48,12 @@ function insertApproval(
     quorumHash: string;
   },
 ): void {
+  const id = unwrapBound(owner);
   db.prepare(
     "INSERT INTO relay_approval_metadata (approval_id, motebit_id, tool_name, args_hash, quorum_required, quorum_approvers, quorum_hash) VALUES (?, ?, ?, ?, ?, ?, ?)",
   ).run(
     a.approvalId,
-    owner,
+    id,
     a.toolName,
     a.argsHash,
     a.quorumRequired,

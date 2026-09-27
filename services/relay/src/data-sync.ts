@@ -22,7 +22,7 @@ import {
   floorSyncPlanStep,
 } from "./data-sync-redaction.js";
 import type { AuthEvent } from "./auth-events.js";
-import { bindSyncEntries, type BoundIdentity } from "./identity-binding.js";
+import { bindSyncEntries, unwrapBound, type BoundIdentity } from "./identity-binding.js";
 
 export interface DataSyncDeps {
   db: DatabaseDriver;
@@ -141,7 +141,8 @@ export function upsertSyncConversation(
   owner: BoundIdentity,
   raw: SyncConversation,
 ): void {
-  if (raw.motebit_id !== owner) return;
+  const id = unwrapBound(owner);
+  if (raw.motebit_id !== id) return;
   // Fail-closed floor: plaintext free-text fields never persist (the client
   // encrypts them; see data-sync-redaction.ts). Storage is safe for any caller.
   const conv = floorSyncConversation(raw);
@@ -156,7 +157,7 @@ export function upsertSyncConversation(
        WHERE sync_conversations.motebit_id = excluded.motebit_id`,
   ).run(
     conv.conversation_id,
-    conv.motebit_id,
+    id,
     conv.started_at,
     conv.last_active_at,
     conv.title,
@@ -170,7 +171,8 @@ export function upsertSyncMessage(
   owner: BoundIdentity,
   raw: SyncConversationMessage,
 ): void {
-  if (raw.motebit_id !== owner) return;
+  const id = unwrapBound(owner);
+  if (raw.motebit_id !== id) return;
   const msg = floorSyncMessage(raw);
   db.prepare(
     `INSERT OR IGNORE INTO sync_conversation_messages
@@ -179,7 +181,7 @@ export function upsertSyncMessage(
   ).run(
     msg.message_id,
     msg.conversation_id,
-    msg.motebit_id,
+    id,
     msg.role,
     msg.content,
     msg.tool_calls,
@@ -200,8 +202,10 @@ const STEP_STATUS_ORDER: Record<string, number> = {
   skipped: 2,
 };
 
-function upsertSyncPlan(db: DatabaseDriver, owner: BoundIdentity, raw: SyncPlan): void {
-  if (raw.motebit_id !== owner) return;
+/** @internal exported for the #846 forgery test. */
+export function upsertSyncPlan(db: DatabaseDriver, owner: BoundIdentity, raw: SyncPlan): void {
+  const id = unwrapBound(owner);
+  if (raw.motebit_id !== id) return;
   const plan = floorSyncPlan(raw);
   db.prepare(
     `INSERT INTO sync_plans (plan_id, goal_id, motebit_id, title, status, created_at, updated_at, current_step_index, total_steps, proposal_id, collaborative)
@@ -218,7 +222,7 @@ function upsertSyncPlan(db: DatabaseDriver, owner: BoundIdentity, raw: SyncPlan)
   ).run(
     plan.plan_id,
     plan.goal_id,
-    plan.motebit_id,
+    id,
     plan.title,
     plan.status,
     plan.created_at,
@@ -230,8 +234,14 @@ function upsertSyncPlan(db: DatabaseDriver, owner: BoundIdentity, raw: SyncPlan)
   );
 }
 
-function upsertSyncPlanStep(db: DatabaseDriver, owner: BoundIdentity, raw: SyncPlanStep): void {
-  if (raw.motebit_id !== owner) return;
+/** @internal exported for the #846 forgery test. */
+export function upsertSyncPlanStep(
+  db: DatabaseDriver,
+  owner: BoundIdentity,
+  raw: SyncPlanStep,
+): void {
+  const id = unwrapBound(owner);
+  if (raw.motebit_id !== id) return;
   const step = floorSyncPlanStep(raw);
   // Check existing status for monotonicity
   const existing = db
@@ -241,7 +251,7 @@ function upsertSyncPlanStep(db: DatabaseDriver, owner: BoundIdentity, raw: SyncP
   if (existing) {
     // A row another identity owns is never replaced (#846) — `INSERT OR
     // REPLACE` would delete it and file the step under the pusher.
-    if (existing.motebit_id !== step.motebit_id) return;
+    if (existing.motebit_id !== id) return;
     const incomingOrder = STEP_STATUS_ORDER[step.status] ?? 0;
     const existingOrder = STEP_STATUS_ORDER[existing.status] ?? 0;
     // Never regress status
@@ -259,7 +269,7 @@ function upsertSyncPlanStep(db: DatabaseDriver, owner: BoundIdentity, raw: SyncP
   ).run(
     step.step_id,
     step.plan_id,
-    step.motebit_id,
+    id,
     step.ordinal,
     step.description,
     step.prompt,

@@ -12,14 +12,21 @@
  * subscription routes authenticated nothing; `migrate/cancel`, `migrate/depart`
  * and `approvals` read a token's `mid` and never compared it to the path.
  *
- * The comparison lives here, and its RESULT is a type. `BoundIdentity` is a
- * string only this module mints, and only after the comparison passed. The
- * write helpers for per-identity rows (`upsertSync*`, `appendBoundEvent`,
- * `setSubscriptionStatus`, `updateMigrationState`, `insertApproval`) take a
- * `BoundIdentity` as the owner — so a new door that calls one without going
- * through a binding does not compile. The mints themselves are registered
- * per file in `scripts/check-identity-authority-writers.ts`, so a new mint
- * site is a visible decision too.
+ * The comparison lives here, and its RESULT is a runtime capability.
+ * `BoundIdentity` is an object with an ES private field that only this
+ * module can construct (the constructor demands a module-private key), and
+ * only after the comparison passed. The write helpers for per-identity rows
+ * (`upsertSync*`, `appendBoundEvent`, `setSubscriptionStatus`,
+ * `updateMigrationState`, `insertApproval`) take a `BoundIdentity` as the
+ * owner and read the identity ONLY through `unwrapBound`, which performs the
+ * private-brand check (`#id in b`) and throws on anything this module did not
+ * mint. A type assertion, a type predicate, an `asserts` function, an
+ * overload, a value parsed from JSON, a tuple cast (the #860 review's
+ * forgeries) — each still type-checks, and each is a value that throws at
+ * the write and writes nothing. The type is not the guarantee; the object
+ * is. The mint call sites are registered per file in
+ * `scripts/check-identity-authority-writers.ts`, so a new door that mints is
+ * a visible decision too.
  *
  * Every refusal is recorded (relay rule 6) under the PRESENTER — the identity
  * whose token verified, or null for the master token / no credential — never
@@ -29,20 +36,73 @@ import type { Context } from "hono";
 import { HTTPException } from "hono/http-exception";
 import type { EventLogEntry } from "@motebit/sdk";
 import type { EventStore } from "@motebit/event-log";
+import type { MigrationRequest } from "@motebit/protocol";
+import { hexToBytes } from "@motebit/encryption";
+import { verifyMigrationRequest } from "@motebit/crypto";
 import { OPERATOR_PRESENTED, type AuthEvent } from "./auth-events.js";
 import { createLogger } from "./logger.js";
 
 const logger = createLogger({ service: "identity-binding" });
 
-declare const BOUND: unique symbol;
-/**
- * An identity the current request has been PROVEN to act for. Minted only by
- * the binding functions below; a write helper that takes one cannot be
- * reached without a binding.
- */
-export type BoundIdentity = string & { readonly [BOUND]: true };
+/** Module-private: the constructor refuses any caller that cannot name it. */
+const MINT_KEY: unique symbol = Symbol("identity-binding.mint");
 
-const mint = (motebitId: string): BoundIdentity => motebitId as BoundIdentity;
+// Assigned once, by the class's static block (declared first: the block runs
+// when the class is defined). Neither is exported.
+// eslint-disable-next-line prefer-const
+let readBound: (b: unknown) => string;
+// eslint-disable-next-line prefer-const
+let mintBound: (motebitId: string) => BoundIdentity;
+
+/**
+ * An identity the current request has been PROVEN to act for — a runtime
+ * capability, not a type brand. Constructible only inside this module (the
+ * constructor demands `MINT_KEY`, which is never exported), after a binding
+ * compared the request's principal to the identity. Read it with
+ * `unwrapBound`; nothing else can.
+ */
+export class BoundIdentity {
+  readonly #id: string;
+  private constructor(key: typeof MINT_KEY, id: string) {
+    if (key !== MINT_KEY || typeof id !== "string" || id === "") {
+      throw new TypeError("BoundIdentity is minted only by identity-binding.ts");
+    }
+    this.#id = id;
+    Object.freeze(this);
+  }
+
+  /** @internal the private-brand read behind `unwrapBound`. */
+  static #read(b: unknown): string {
+    if (typeof b === "object" && b !== null && #id in b) return b.#id;
+    throw new TypeError(
+      "not a BoundIdentity: an identity-row writer accepts only an identity a binding in identity-binding.ts minted (#846)",
+    );
+  }
+
+  static {
+    readBound = (b) => BoundIdentity.#read(b);
+    mintBound = (id) => new BoundIdentity(MINT_KEY, id);
+  }
+
+  /** Never render the identity by accident (a template literal, a log line, a SQL bind). */
+  toString(): string {
+    return "[BoundIdentity]";
+  }
+  toJSON(): string {
+    return "[BoundIdentity]";
+  }
+}
+
+/**
+ * The ONLY way to read the identity a `BoundIdentity` carries. Throws on any
+ * value this module did not mint — whatever its static type says — so a
+ * writer that reads its owner through this cannot be fed a forged one.
+ */
+export function unwrapBound(b: BoundIdentity): string {
+  return readBound(b);
+}
+
+const mint = (motebitId: string): BoundIdentity => mintBound(motebitId);
 
 type Record = ((event: AuthEvent) => void) | undefined;
 
@@ -100,13 +160,25 @@ function refuse(
 }
 
 /**
- * Bind to `motebitId` on the strength of a signature this request carried
- * and the caller has ALREADY verified under that identity's own key (a
- * signed MigrationRequest). The caller asserts the verification by calling
- * this; the call site is registered in the authority-writers gate.
+ * Bind to the identity a signed MigrationRequest names, on the strength of
+ * its signature under that identity's own key (spec/migration-v1.md §4.1).
+ * The verification happens HERE, so this mint cannot be reached with a bare
+ * string: `null` when there is no key or the signature does not verify.
+ * `publicKeyHex` is the identity's current verification key, read by the
+ * caller (`verificationKeyFor`).
  */
-export function bindBySignature(motebitId: string): BoundIdentity {
-  return mint(motebitId);
+export async function bindBySignature(
+  request: MigrationRequest,
+  publicKeyHex: string | null,
+): Promise<BoundIdentity | null> {
+  if (publicKeyHex === null || typeof request.motebit_id !== "string") return null;
+  let ok = false;
+  try {
+    ok = await verifyMigrationRequest(request, hexToBytes(publicKeyHex));
+  } catch {
+    ok = false;
+  }
+  return ok ? mint(request.motebit_id) : null;
 }
 
 // ---------------------------------------------------------------------------
@@ -224,7 +296,7 @@ export async function appendBoundEvent(
   owner: BoundIdentity,
   entry: EventLogEntry,
 ): Promise<boolean> {
-  if (entry.motebit_id !== owner) return false;
+  if (entry.motebit_id !== unwrapBound(owner)) return false;
   await eventStore.append(entry);
   return true;
 }

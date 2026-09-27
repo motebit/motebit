@@ -2340,13 +2340,55 @@ export async function probeFetch(): Promise<unknown> {
   {
     script: "check-identity-authority-writers",
     proves:
-      "flags a forged BoundIdentity — the #853 review's bypass of #846 v2: `setSubscriptionStatus(db, victim as never, …)` in a new function passed tsc, eslint and the name-based brand-cast check, so any door could write another identity's subscription without a binding. The gate reads the relay's TYPES with the TypeScript checker; the brand-slot arm (B1) must fire on the assertion. Probe appends the reviewer's exact forge to subscriptions.ts. byte-identical restoration via mutateFile.",
+      "flags an identity-row writer that reads its owner around `unwrapBound` — #846 v4 makes BoundIdentity a runtime capability (an ES-private-field object only identity-binding.ts constructs), and a forgery throws only because every registered writer reads its owner through `unwrapBound`, the private-brand check. A writer that casts `owner` to a string instead accepts any forged value (the #860 review's six forgeries all reach it). Probe rewrites setSubscriptionStatus's `unwrapBound(owner)` into `owner as unknown as string`; the OWNER READ AROUND arm must fire. byte-identical restoration via mutateFile.",
     perturb: () =>
-      mutateFile(
-        `services/relay/src/subscriptions.ts`,
-        (src) =>
-          src +
-          '\nexport function probeForge(db: DatabaseDriver, victim: string): boolean {\n  return setSubscriptionStatus(db, victim as never, "active", "cancelled");\n}\n',
+      mutateFile(`services/relay/src/subscriptions.ts`, (src) =>
+        src.replace("  const id = unwrapBound(owner);", "  const id = owner as unknown as string;"),
+      ),
+  },
+  {
+    script: "check-identity-authority-writers",
+    proves:
+      "flags an upsert that re-files through a QUOTED identity column — the #860 review's V1: `\"motebit_id\" = excluded.motebit_id` in the bond upsert's DO UPDATE SET passed v3's bare-name regex, and in real SQLite moves another identity's bond row to the inserter. The SET-target reader normalizes quoting; REFILE (upsert) must fire. byte-identical restoration via mutateFile.",
+    perturb: () =>
+      mutateFile(`services/relay/src/bond-store.ts`, (src) =>
+        src.replace(
+          "       bonded_address    = excluded.bonded_address,\n",
+          '       bonded_address    = excluded.bonded_address,\n       "motebit_id" = excluded.motebit_id,\n',
+        ),
+      ),
+  },
+  {
+    script: "check-identity-authority-writers",
+    proves:
+      "flags an upsert that re-files through a ROW-VALUE target — the #860 review's V2: `(motebit_id, bonded_address) = (excluded.motebit_id, excluded.bonded_address)` passed v3 because the item did not START with the column name. The reader parses row-value targets; REFILE (upsert) must fire. byte-identical restoration via mutateFile.",
+    perturb: () =>
+      mutateFile(`services/relay/src/bond-store.ts`, (src) =>
+        src.replace(
+          "       bonded_address    = excluded.bonded_address,\n",
+          "       (motebit_id, bonded_address) = (excluded.motebit_id, excluded.bonded_address),\n",
+        ),
+      ),
+  },
+  {
+    script: "check-identity-authority-writers",
+    proves:
+      "flags an upsert whose owner scope is weakened by OR — the #860 review's V3: `WHERE t.motebit_id = excluded.motebit_id OR t.backing_state != 'backed'` still CONTAINED the owner conjunct, which is all v3 looked for, and updates another identity's row whenever the disjunct holds. The WHERE must be a pure conjunction; OWNER SCOPE WEAKENED must fire. byte-identical restoration via mutateFile.",
+    perturb: () =>
+      mutateFile(`services/relay/src/bond-store.ts`, (src) =>
+        src.replace(
+          "     WHERE relay_bond_commitments.motebit_id = excluded.motebit_id`,",
+          "     WHERE relay_bond_commitments.motebit_id = excluded.motebit_id OR relay_bond_commitments.backing_state != 'backed'`,",
+        ),
+      ),
+  },
+  {
+    script: "check-identity-authority-writers",
+    proves:
+      "flags the BoundIdentity minting path escaping its module — the capability is unforgeable only while the constructor's key is module-private. Probe exports MINT_KEY from identity-binding.ts (any module could then construct a BoundIdentity for any identity); PRIVATE MINT EXPORTED must fire. byte-identical restoration via mutateFile.",
+    perturb: () =>
+      mutateFile(`services/relay/src/identity-binding.ts`, (src) =>
+        src.replace("const MINT_KEY: unique symbol", "export const MINT_KEY: unique symbol"),
       ),
   },
   {
