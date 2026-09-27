@@ -40,6 +40,40 @@ import type { TreasuryReconciliationStore } from "@motebit/treasury-reconciliati
 
 // === Helpers ===
 
+/**
+ * Connect a real socket for `motebitId` to `relay` and count the
+ * `task_request` frames for `taskId` that reconnect recovery hands it.
+ */
+async function taskRequestsOnConnect(
+  relay: SyncRelay,
+  motebitId: string,
+  taskId: string,
+): Promise<number> {
+  const { serve } = await import("@hono/node-server");
+  const { default: WebSocket } = await import("ws");
+  const server = serve({ fetch: relay.app.fetch, port: 0, hostname: "127.0.0.1" });
+  (relay.app as unknown as { injectWebSocket: (s: unknown) => void }).injectWebSocket(server);
+  await new Promise<void>((r) => (server.listening ? r() : server.once("listening", () => r())));
+  const port = (server.address() as import("node:net").AddressInfo).port;
+  const frames: Array<{ type?: string; task?: { task_id: string } }> = [];
+  const before = relay.connections.get(motebitId)?.length ?? 0;
+  const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/sync/${motebitId}?token=${API_TOKEN}`);
+  ws.on("error", () => {});
+  ws.on("message", (raw: Buffer) => frames.push(JSON.parse(raw.toString()) as (typeof frames)[0]));
+  try {
+    const start = Date.now();
+    while ((relay.connections.get(motebitId)?.length ?? 0) <= before) {
+      if (Date.now() - start > 3000) throw new Error("socket never registered");
+      await new Promise((r) => setTimeout(r, 10));
+    }
+    await new Promise((r) => setTimeout(r, 200));
+    return frames.filter((f) => f.type === "task_request" && f.task?.task_id === taskId).length;
+  } finally {
+    ws.terminate();
+    await new Promise<void>((r) => server.close(() => r()));
+  }
+}
+
 const RELAY_A_URL = "http://relay-a.test:3000";
 const RELAY_B_URL = "http://relay-b.test:3001";
 
@@ -1343,36 +1377,37 @@ describe("Federation E2E", () => {
       expect(bobWs.send).toHaveBeenCalled();
 
       // Alice's device connects to Relay A over a real socket.
-      const { serve } = await import("@hono/node-server");
-      const { default: WebSocket } = await import("ws");
-      const server = serve({ fetch: relayA.app.fetch, port: 0, hostname: "127.0.0.1" });
-      (relayA.app as unknown as { injectWebSocket: (s: unknown) => void }).injectWebSocket(server);
-      await new Promise<void>((r) =>
-        server.listening ? r() : server.once("listening", () => r()),
-      );
-      const port = (server.address() as import("node:net").AddressInfo).port;
-      const frames: Array<{ type?: string; task?: { task_id: string } }> = [];
-      const ws = new WebSocket(
-        `ws://127.0.0.1:${port}/ws/sync/${alice.motebitId}?token=${API_TOKEN}`,
-      );
-      ws.on("error", () => {});
-      ws.on("message", (raw: Buffer) =>
-        frames.push(JSON.parse(raw.toString()) as (typeof frames)[0]),
-      );
-      try {
-        const start = Date.now();
-        while ((relayA.connections.get(alice.motebitId)?.length ?? 0) === 0) {
-          if (Date.now() - start > 3000) throw new Error("socket never registered");
-          await new Promise((r) => setTimeout(r, 10));
+      expect(await taskRequestsOnConnect(relayA, alice.motebitId, taskId)).toBe(0);
+    });
+
+    it("a forward the peer REFUSES releases its mark: the URL agent's reconnect gets the task once, as on main (#811)", async () => {
+      const bob = await registerAgent(relayB, "bob", ["quantum-computing"]);
+      const bobWs = { readyState: 1, send: vi.fn(), close: vi.fn() };
+      relayB.connections.set(bob.motebitId, [{ ws: bobWs as never, deviceId: "bob-device" }]);
+      await establishPeering(relayA, relayB);
+      const alice = await registerAgent(relayA, "alice", ["web-search"]);
+
+      // Relay B refuses every task forward.
+      const routed = globalThis.fetch;
+      vi.stubGlobal("fetch", async (input: string | URL | Request, init?: RequestInit) => {
+        const url =
+          typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+        if (url.endsWith("/federation/v1/task/forward")) {
+          return new Response("refused", { status: 503 });
         }
-        await new Promise((r) => setTimeout(r, 200));
-        expect(
-          frames.filter((f) => f.type === "task_request" && f.task?.task_id === taskId),
-        ).toEqual([]);
-      } finally {
-        ws.terminate();
-        await new Promise<void>((r) => server.close(() => r()));
-      }
+        return routed(input, init);
+      });
+
+      const taskRes = await relayA.app.request(`/agent/${alice.motebitId}/task`, {
+        method: "POST",
+        headers: jsonAuthWithIdempotency(),
+        body: JSON.stringify({ prompt: "refused", required_capabilities: ["quantum-computing"] }),
+      });
+      expect(taskRes.status).toBe(201);
+      const { task_id: taskId } = (await taskRes.json()) as { task_id: string };
+      expect(bobWs.send).not.toHaveBeenCalled();
+
+      expect(await taskRequestsOnConnect(relayA, alice.motebitId, taskId)).toBe(1);
     });
 
     it("task submitted on Relay A routes to agent on Relay B and result returns", async () => {
@@ -1561,6 +1596,13 @@ describe("Federation E2E", () => {
         }),
       });
       expect(taskRes.status, await taskRes.clone().text()).toBe(201);
+
+      // The peer relay presents this paid task (#811): the origin relay's
+      // reconnect recovery must not hand it to a device of the URL agent too.
+      {
+        const { task_id: originTaskId } = (await taskRes.clone().json()) as { task_id: string };
+        expect(await taskRequestsOnConnect(relayA, alice.motebitId, originTaskId)).toBe(0);
+      }
 
       const fwdTaskId = bobWs.send.mock.calls
         .map(

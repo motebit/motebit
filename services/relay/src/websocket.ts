@@ -356,6 +356,8 @@ export interface WebSocketDeps {
   upgradeWebSocket: ReturnType<typeof createNodeWebSocket>["upgradeWebSocket"];
   connections: Map<string, ConnectedDevice[]>;
   taskQueue: Map<string, TaskQueueEntry>;
+  /** This relay instance's boot id; a task-presentation mark from another is ignored. */
+  relayBootId: string;
   eventStore: EventStore;
   identityManager: IdentityManager;
   db: DatabaseDriver;
@@ -430,6 +432,7 @@ export function registerWebSocketRoutes(deps: WebSocketDeps): void {
     upgradeWebSocket,
     connections,
     taskQueue,
+    relayBootId,
     eventStore,
     identityManager,
     db,
@@ -728,7 +731,7 @@ export function registerWebSocketRoutes(deps: WebSocketDeps): void {
         // here would be a second presentation of one admission, and the
         // worker's admission ledger never sees a WebSocket frame (#811).
         for (const [, entry] of taskQueue) {
-          if (entry.task.motebit_id === motebitId && recoverableOnReconnect(entry)) {
+          if (entry.task.motebit_id === motebitId && recoverableOnReconnect(entry, relayBootId)) {
             ws.send(JSON.stringify({ type: "task_request", task: entry.task }));
             logger.info("task.recovery_on_reconnect", {
               correlationId: entry.task.task_id,
