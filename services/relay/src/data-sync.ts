@@ -14,6 +14,7 @@ import type {
 import { asMotebitId } from "@motebit/sdk";
 import type { DatabaseDriver } from "@motebit/persistence";
 import type { ConnectedDevice } from "./index.js";
+import { sendToEach } from "./ws-send.js";
 import {
   floorSyncConversation,
   floorSyncMessage,
@@ -278,11 +279,7 @@ export function registerDataSyncRoutes(deps: DataSyncDeps): void {
           type: "conversation",
           conversation: floorSyncConversation(conv),
         });
-        for (const peer of peers) {
-          if (peer.deviceId !== senderDeviceId) {
-            peer.ws.send(payload);
-          }
-        }
+        sendToEach(peers, payload, (peer) => peer.deviceId !== senderDeviceId);
       }
     }
 
@@ -325,11 +322,7 @@ export function registerDataSyncRoutes(deps: DataSyncDeps): void {
           type: "conversation_message",
           message: floorSyncMessage(msg),
         });
-        for (const peer of peers) {
-          if (peer.deviceId !== senderDeviceId) {
-            peer.ws.send(payload);
-          }
-        }
+        sendToEach(peers, payload, (peer) => peer.deviceId !== senderDeviceId);
       }
     }
 
@@ -376,11 +369,7 @@ export function registerDataSyncRoutes(deps: DataSyncDeps): void {
     if (peers) {
       for (const plan of body.plans) {
         const payload = JSON.stringify({ type: "plan", plan: floorSyncPlan(plan) });
-        for (const peer of peers) {
-          if (peer.deviceId !== senderDeviceId) {
-            peer.ws.send(payload);
-          }
-        }
+        sendToEach(peers, payload, (peer) => peer.deviceId !== senderDeviceId);
       }
     }
 
@@ -418,11 +407,7 @@ export function registerDataSyncRoutes(deps: DataSyncDeps): void {
     if (peers) {
       for (const step of body.steps) {
         const payload = JSON.stringify({ type: "plan_step", step: floorSyncPlanStep(step) });
-        for (const peer of peers) {
-          if (peer.deviceId !== senderDeviceId) {
-            peer.ws.send(payload);
-          }
-        }
+        sendToEach(peers, payload, (peer) => peer.deviceId !== senderDeviceId);
       }
     }
 
