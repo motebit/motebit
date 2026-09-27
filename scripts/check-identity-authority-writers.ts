@@ -36,7 +36,12 @@
  *      `approver_id`, `owner_id`, `revoked_by`) joins it, plus the authority
  *      tables below. A new per-identity table widens the gate by existing.
  *   2. No UPDATE re-files a row: a SET clause that assigns an identity column
- *      is refused outright (no registry entry can excuse it).
+ *      is refused outright (no registry entry can excuse it). An upsert's
+ *      `ON CONFLICT … DO UPDATE SET` is an UPDATE too (#846 v3 review: the
+ *      UPDATE regex never saw it): it may not assign an identity column, and
+ *      when its conflict key is a client-chosen id rather than the identity,
+ *      it must carry `WHERE <table>.<identity col> = excluded.<identity col>`
+ *      so a conflict on another identity's id rewrites nothing.
  *   3. Binding mints are a CLOSED set. `identity-binding.ts` is the only
  *      place a request's principal is compared to the identity it writes, and
  *      its result is the `BoundIdentity` type the per-identity write helpers
@@ -45,7 +50,12 @@
  *      one without a binding does not compile. Every call of a mint
  *      (`bindCaller`, `bindBySignature`, `bindSyncEntries`,
  *      `bindSocketEntries`) is registered per file with its door, and each
- *      helper's signature is checked to still demand the brand.
+ *      helper's signature is checked to still demand the brand. tsc alone
+ *      does not make the brand unforgeable (`victim as never` compiles), so
+ *      the gate reads the relay's TYPES with the TypeScript checker: every
+ *      BoundIdentity slot must receive a branded value, no assertion may
+ *      produce the brand, no bare-type-parameter return may yield it, and a
+ *      branded helper may only be called (see "brand flow" below).
  *   4. Event-store appends are a CLOSED set: `EventStore.append` takes the
  *      entry's own `motebit_id`, so the relay may call it only through
  *      `appendBoundEvent` or at a registered relay-authored site.
@@ -63,6 +73,8 @@
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative, resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+
+import ts from "typescript";
 
 import { failWithRepair } from "./lib/gate-report.js";
 
@@ -765,7 +777,7 @@ const WRITERS: readonly Writer[] = [
     table: "relay_bond_commitments",
     count: 1,
     principal:
-      "the identity itself — POST /bond: body motebit_id must equal the path, and `recordBondCommitment` verifies the bond's signature under the identity's registered key",
+      "the identity itself — POST /bond: body motebit_id must equal the path, and `recordBondCommitment` verifies the bond's signature under the identity's registered key. The upsert on the author-chosen `bond_id` updates only a row the same identity owns (#846 v3: it assigned `motebit_id`, re-filing another identity's bond); a held bond_id is refused",
   },
   {
     file: R + "bond-store.ts",
@@ -1008,7 +1020,7 @@ const WRITERS: readonly Writer[] = [
     table: "relay_collaborative_step_results",
     count: 1,
     principal:
-      "a participant — its own row; a step another participant reported is refused 409, recorded (#846 v2: `INSERT OR REPLACE` let any participant re-file another's result)",
+      "a participant — its own row; the upsert updates only the reporter's own row, and a step another participant reported changes nothing and is refused 409, recorded (#846 v2: `INSERT OR REPLACE` let any participant re-file another's result)",
   },
   // ── persistence: surface-side stores (the relay never writes these from a route)
   ...(
@@ -1174,10 +1186,15 @@ const FILES = SCAN_ROOTS.flatMap((r) => tsFiles(resolve(ROOT, r)));
 const SOURCES = new Map(FILES.map((f) => [relative(ROOT, f), readFileSync(f, "utf-8")]));
 const lineOf = (src: string, index: number): number => src.slice(0, index).split("\n").length;
 
-/** Derive the per-identity table set from every CREATE TABLE in the scanned roots. */
-function deriveTables(): Set<string> {
-  const out = new Set<string>(AUTHORITY_TABLES);
+/**
+ * The identity columns each table declares (the same column rule as the
+ * table derivation), read from every CREATE TABLE in the scanned roots. The
+ * upsert checks below need them: an upsert's owner scope names one.
+ */
+function deriveIdentityColumns(): Map<string, Set<string>> {
+  const out = new Map<string, Set<string>>();
   const create = /CREATE TABLE(?:\s+IF NOT EXISTS)?\s+(\w+)\s*\(/gi;
+  const column = new RegExp(IDENTITY_COLUMN.source, "gm");
   for (const src of SOURCES.values()) {
     for (const m of src.matchAll(create)) {
       let i = m.index + m[0].length;
@@ -1188,8 +1205,23 @@ function deriveTables(): Set<string> {
         i++;
       }
       const body = src.slice(m.index + m[0].length, i - 1);
-      if (IDENTITY_COLUMN.test(body) && !(m[1]! in NOT_PER_IDENTITY)) out.add(m[1]!);
+      for (const c of body.matchAll(column)) {
+        const set = out.get(m[1]!) ?? new Set<string>();
+        set.add(c[1]!.toLowerCase());
+        out.set(m[1]!, set);
+      }
     }
+  }
+  return out;
+}
+
+const IDENTITY_COLUMNS = deriveIdentityColumns();
+
+/** Derive the per-identity table set from every CREATE TABLE in the scanned roots. */
+function deriveTables(): Set<string> {
+  const out = new Set<string>(AUTHORITY_TABLES);
+  for (const table of IDENTITY_COLUMNS.keys()) {
+    if (!(table in NOT_PER_IDENTITY)) out.add(table);
   }
   return out;
 }
@@ -1203,6 +1235,101 @@ interface Found {
   table: string;
 }
 
+/** An identity column assigned by one SET item: `col =` at the item's start, never `t.col`. */
+const ASSIGNS_IDENTITY =
+  /^\s*(motebit_id|\w+_motebit_id|agent_id|worker_id|submitted_by|submitter_id|delegator_id|filed_by|respondent|approver_id|owner_id|revoked_by)\s*=(?!=)/i;
+
+/**
+ * The SQL string literal a statement at `index` sits in, from `index` to the
+ * literal's closing delimiter (the nearest backtick or double quote before
+ * it). A statement split across a `+` concatenation is read to the first
+ * closing delimiter only — the upsert checks then see no `DO UPDATE` and the
+ * upsert is reported by `UNPARSED UPSERT` below rather than passed.
+ */
+function literalFrom(src: string, index: number): string {
+  const back = Math.max(src.lastIndexOf("`", index), src.lastIndexOf('"', index));
+  const delim = back >= 0 ? src[back]! : "`";
+  const end = src.indexOf(delim, index);
+  return src.slice(index, end < 0 ? undefined : end);
+}
+
+/** Split `text` at the first `WHERE` outside parentheses. */
+function splitTopLevelWhere(text: string): { head: string; where: string | null } {
+  let depth = 0;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (ch === "(") depth++;
+    else if (ch === ")") depth--;
+    else if (depth === 0 && /^WHERE\b/i.test(text.slice(i)) && /\W/.test(text[i - 1] ?? " ")) {
+      return { head: text.slice(0, i), where: text.slice(i + 5) };
+    }
+  }
+  return { head: text, where: null };
+}
+
+/**
+ * Upserts on a per-identity table whose conflict target is NOT an identity
+ * column, and whose `DO UPDATE` is deliberately NOT scoped to the row's
+ * owner — each with the reason. Every other such upsert must carry
+ * `WHERE <table>.<identity column> = excluded.<identity column>`.
+ */
+const UNSCOPED_UPSERT_ALLOWED: ReadonlyArray<{ file: string; table: string; reason: string }> = [
+  {
+    file: P,
+    table: "conversations",
+    reason:
+      "the surface's local store: one database per identity, written by that identity's own sync pull; the relay never calls it",
+  },
+];
+
+/**
+ * Check one `INSERT … ON CONFLICT(…) DO UPDATE SET …` (the upsert's update
+ * half is an UPDATE the UPDATE regex never sees): it must not re-file the
+ * row (assign an identity column), and — when the conflict key is a
+ * client-chosen id rather than the identity — it must only update a row the
+ * inserting identity already owns.
+ */
+function checkUpsert(file: string, line: number, table: string, statement: string): string[] {
+  const out: string[] = [];
+  const m = /ON\s+CONFLICT\s*\(([^)]*)\)\s*DO\s+UPDATE\s+SET\b([\s\S]*)$/i.exec(statement);
+  if (m === null) {
+    if (/\bDO\s+UPDATE\b/i.test(statement)) {
+      out.push(
+        `UNPARSED UPSERT: ${table} in ${file}:${line} has a DO UPDATE the gate cannot read (a conflict target without columns?) — spell it \`ON CONFLICT(<cols>) DO UPDATE SET …\` so its owner scope can be checked`,
+      );
+    }
+    return out;
+  }
+  const conflictCols = m[1]!.split(",").map((c) => c.trim().toLowerCase());
+  const { head: setClause, where } = splitTopLevelWhere(m[2]!);
+  const idCols = IDENTITY_COLUMNS.get(table) ?? new Set<string>(["motebit_id"]);
+  // Item by item (a fragment inside `MAX(a, b)` starts with an expression, never `col =`).
+  const refile = setClause.split(",").some((item) => ASSIGNS_IDENTITY.test(item));
+  if (refile && !REFILE_ALLOWED.some((a) => a.file === file && a.table === table)) {
+    out.push(
+      `REFILE (upsert): INSERT INTO ${table} … DO UPDATE SET in ${file}:${line} assigns an identity column — a conflict on an id another identity holds would re-file that identity's row under the inserter. Drop the assignment; scope the update to the owner (WHERE ${table}.<identity column> = excluded.<identity column>)`,
+    );
+  }
+  const conflictOnIdentity = conflictCols.some((c) => idCols.has(c));
+  if (!conflictOnIdentity) {
+    const scoped =
+      where !== null &&
+      [...idCols].some((col) =>
+        new RegExp(
+          `\\b${table}\\.${col}\\s*=\\s*excluded\\.${col}\\b|\\bexcluded\\.${col}\\s*=\\s*${table}\\.${col}\\b`,
+          "i",
+        ).test(where),
+      );
+    if (!scoped && !UNSCOPED_UPSERT_ALLOWED.some((a) => a.file === file && a.table === table)) {
+      out.push(
+        `OWNER SCOPE: INSERT INTO ${table} … ON CONFLICT(${conflictCols.join(", ")}) DO UPDATE in ${file}:${line} is keyed by an id the request chooses, and its update is not scoped to the row's owner — an identity naming another identity's id rewrites that row. Add \`WHERE ${table}.${[...idCols][0]} = excluded.${[...idCols][0]}\` to the DO UPDATE (and refuse when no row changed)`,
+      );
+    }
+  }
+  return out;
+}
+
+let upserts = 0;
 function scanWrites(): { found: Found[]; refiles: string[] } {
   const pattern =
     /\b(INSERT\s+OR\s+REPLACE\s+INTO|REPLACE\s+INTO|INSERT\s+(?:OR\s+\w+\s+)?INTO|UPDATE|DELETE\s+FROM)\s+(\w+)\b(?=([\s\S]{0,300}))/gi;
@@ -1222,6 +1349,11 @@ function scanWrites(): { found: Found[]; refiles: string[] } {
             : "DELETE";
       const line = lineOf(src, m.index);
       found.push({ file, line, verb, table });
+      if (verb === "INSERT" || verb === "REPLACE") {
+        const statement = literalFrom(src, m.index);
+        if (/\bON\s+CONFLICT\b/i.test(statement)) upserts++;
+        refiles.push(...checkUpsert(file, line, table, statement));
+      }
       if (verb === "UPDATE") {
         const setClause = (m[3] ?? "").split(/\bWHERE\b/i)[0]!;
         const assigns =
@@ -1338,6 +1470,196 @@ for (const [file, src] of SOURCES) {
   }
 }
 
+// ── brand flow: a `BoundIdentity` slot receives only a minted value ──────
+//
+// The brand is a unique symbol only `identity-binding.ts` can name, so no
+// other file can SPELL a BoundIdentity. It can still SMUGGLE one: `x as
+// never`, `x as any`, `x as unknown as T`, a value typed `any`, a generic
+// that returns its type parameter, or a branded helper passed where its
+// parameter reads as `string` (method bivariance). tsc accepts each; the
+// #853 review forged `setSubscriptionStatus(db, victim as never, …)` past
+// tsc, eslint and the name-based cast check above. So the gate reads the
+// TYPES, with the relay's own compiler options:
+//   B1 every expression whose contextual type carries the brand (a helper's
+//      owner argument, an annotated initializer, a return, an object
+//      property) must itself have a branded type — not any / unknown /
+//      never, not a plain string under `@ts-expect-error`, not an assertion;
+//   B2 no type assertion outside identity-binding.ts produces a branded type
+//      (whatever alias it is spelled through);
+//   B3 no call whose declared return type is a bare type parameter yields a
+//      branded value (the generic launder);
+//   B4 a function with a branded parameter is only ever CALLED — never
+//      referenced as a value, where its parameter can be re-typed.
+const BINDING_FILE = R + "identity-binding.ts";
+let brandSlots = 0;
+let brandFunctions = 0;
+let brandFilesChecked = 0;
+function brandFlow(): string[] {
+  const out: string[] = [];
+  const cfgPath = resolve(ROOT, "services/relay/tsconfig.json");
+  const cfg = ts.readConfigFile(cfgPath, (p) => ts.sys.readFile(p));
+  const parsed = ts.parseJsonConfigFileContent(cfg.config, ts.sys, dirname(cfgPath));
+  const roots = FILES.filter((f) => relative(ROOT, f).startsWith(R));
+  const program = ts.createProgram({
+    rootNames: roots,
+    options: {
+      ...parsed.options,
+      noEmit: true,
+      composite: false,
+      incremental: false,
+      declaration: false,
+      declarationMap: false,
+      sourceMap: false,
+    },
+  });
+  const checker = program.getTypeChecker();
+  const bindingSf = program.getSourceFile(resolve(ROOT, BINDING_FILE));
+  if (bindingSf === undefined) {
+    return [
+      `APERTURE LOST: ${BINDING_FILE} is not in the relay program — the brand cannot be read`,
+    ];
+  }
+  const TYPE_ESCAPES = ts.TypeFlags.Any | ts.TypeFlags.Unknown | ts.TypeFlags.Never;
+  const NULLISH = ts.TypeFlags.Null | ts.TypeFlags.Undefined | ts.TypeFlags.Void;
+
+  /** The brand's own property: `[BOUND]`, declared in identity-binding.ts. */
+  const isBrandProp = (p: ts.Symbol): boolean =>
+    (p.declarations ?? []).some(
+      (d) =>
+        d.getSourceFile() === bindingSf &&
+        ts.isPropertySignature(d) &&
+        ts.isComputedPropertyName(d.name),
+    );
+  const hasBrand = (t: ts.Type): boolean =>
+    !(t.flags & TYPE_ESCAPES) && checker.getPropertiesOfType(t).some(isBrandProp);
+  /** Some constituent carries the brand (a slot typed `BoundIdentity | null` is a brand slot). */
+  const slotWantsBrand = (t: ts.Type | undefined): boolean =>
+    t !== undefined && (t.isUnion() ? t.types.some(hasBrand) : hasBrand(t));
+  /** Every non-nullish constituent carries the brand, and nothing escapes the checker. */
+  const valueIsBranded = (t: ts.Type): boolean => {
+    if (t.flags & TYPE_ESCAPES) return false;
+    const parts = t.isUnion() ? t.types : [t];
+    return parts.every((p) => (p.flags & NULLISH) !== 0 || hasBrand(p));
+  };
+  const isAssertion = (n: ts.Node): boolean =>
+    ts.isAsExpression(n) || ts.isTypeAssertionExpression(n);
+
+  // Functions (anywhere in the program) with a branded parameter.
+  const brandedFns = new Set<ts.Symbol>();
+  for (const sf of program.getSourceFiles()) {
+    if (!relative(ROOT, sf.fileName).startsWith(R)) continue;
+    const visit = (n: ts.Node): void => {
+      if (
+        ts.isFunctionLike(n) &&
+        n.parameters.some((p) => slotWantsBrand(checker.getTypeAtLocation(p)))
+      ) {
+        const named =
+          (n as ts.FunctionDeclaration).name ??
+          (ts.isVariableDeclaration(n.parent) ? n.parent.name : undefined);
+        const sym = named !== undefined ? checker.getSymbolAtLocation(named) : undefined;
+        if (sym !== undefined) brandedFns.add(sym);
+      }
+      ts.forEachChild(n, visit);
+    };
+    visit(sf);
+  }
+  brandFunctions = brandedFns.size;
+
+  for (const sf of program.getSourceFiles()) {
+    const file = relative(ROOT, sf.fileName);
+    if (!file.startsWith(R) || file === BINDING_FILE) continue;
+    brandFilesChecked++;
+    const where = (n: ts.Node): string =>
+      `${file}:${sf.getLineAndCharacterOfPosition(n.getStart(sf)).line + 1}`;
+    const visit = (n: ts.Node): void => {
+      if (ts.isExpression(n) && !ts.isParenthesizedExpression(n) && !ts.isOmittedExpression(n)) {
+        let ctx: ts.Type | undefined;
+        try {
+          ctx = checker.getContextualType(n);
+        } catch {
+          ctx = undefined;
+        }
+        // B1: a brand slot receives a branded value, never an escape or an assertion.
+        if (slotWantsBrand(ctx)) {
+          brandSlots++;
+          const inner = ts.skipPartiallyEmittedExpressions(n);
+          if (isAssertion(inner)) {
+            out.push(
+              `BRAND FORGED: ${where(n)} passes a type assertion (\`${n.getText(sf).slice(0, 60)}\`) into a BoundIdentity slot — only identity-binding.ts mints one, after the comparison`,
+            );
+          } else if (!valueIsBranded(checker.getTypeAtLocation(n))) {
+            out.push(
+              `BRAND FORGED: ${where(n)} passes \`${n.getText(sf).slice(0, 60)}\` (type ${checker.typeToString(checker.getTypeAtLocation(n))}) into a BoundIdentity slot — the value was not minted by a binding`,
+            );
+          }
+        }
+        // B2: no assertion produces a branded type.
+        if (isAssertion(n) && hasBrand(checker.getTypeAtLocation(n))) {
+          out.push(
+            `BRAND CAST: ${where(n)} asserts a branded type (\`${n.getText(sf).slice(0, 60)}\`) — only identity-binding.ts mints a BoundIdentity`,
+          );
+        }
+        // B3: a generic whose return is its bare type parameter cannot yield a brand.
+        if (ts.isCallExpression(n) && slotWantsBrand(checker.getTypeAtLocation(n))) {
+          const decl = checker.getResolvedSignature(n)?.getDeclaration();
+          const declared =
+            decl !== undefined && !ts.isJSDocSignature(decl)
+              ? checker.getSignatureFromDeclaration(decl)
+              : undefined;
+          const ret =
+            declared !== undefined ? checker.getReturnTypeOfSignature(declared) : undefined;
+          if (
+            ret !== undefined &&
+            (ret.flags & (ts.TypeFlags.TypeParameter | TYPE_ESCAPES)) !== 0
+          ) {
+            out.push(
+              `BRAND LAUNDERED: ${where(n)} obtains a BoundIdentity from a call whose declared return type is \`${checker.typeToString(ret)}\` — a generic or untyped return can carry any string; only identity-binding.ts mints one`,
+            );
+          }
+        }
+      }
+      // B4: a branded-parameter function is called, never passed as a value.
+      if (ts.isIdentifier(n)) {
+        let sym = checker.getSymbolAtLocation(n);
+        if (sym !== undefined && sym.flags & ts.SymbolFlags.Alias)
+          sym = checker.getAliasedSymbol(sym);
+        if (sym !== undefined && brandedFns.has(sym)) {
+          const p = n.parent;
+          const callee =
+            (ts.isCallExpression(p) && p.expression === n) ||
+            (ts.isPropertyAccessExpression(p) &&
+              p.name === n &&
+              ts.isCallExpression(p.parent) &&
+              p.parent.expression === p);
+          const declaration =
+            ts.isImportSpecifier(p) ||
+            ts.isExportSpecifier(p) ||
+            ts.isImportClause(p) ||
+            // `typeof helper` in a type position names its type, never the value
+            ts.isTypeQueryNode(p) ||
+            ((ts.isFunctionDeclaration(p) || ts.isVariableDeclaration(p)) && p.name === n);
+          if (!callee && !declaration) {
+            out.push(
+              `BRANDED HELPER AS VALUE: ${where(n)} references \`${n.text}\` without calling it — passed as a value its BoundIdentity parameter can be re-typed (method bivariance); call it directly with a minted owner`,
+            );
+          }
+        }
+      }
+      ts.forEachChild(n, visit);
+    };
+    visit(sf);
+  }
+  return out;
+}
+violations.push(...brandFlow());
+// A brand check that reads no slot passes by seeing nothing (an unresolved
+// program, a renamed brand). Every registered helper must be seen as branded.
+if (brandFunctions < BRANDED_HELPERS.length || brandSlots === 0) {
+  violations.push(
+    `APERTURE LOST: the brand-flow check saw ${brandFunctions} branded-parameter function(s) (expected ≥ ${BRANDED_HELPERS.length}, the registered helpers) and ${brandSlots} brand slot(s) — it is not reading the relay's types`,
+  );
+}
+
 // ── event-store appends ───────────────────────────────────────────────────
 for (const [file, src] of SOURCES) {
   if (!file.startsWith(R)) continue;
@@ -1367,10 +1689,12 @@ if (violations.length > 0) {
 process.stdout.write(
   `✓ check-identity-authority-writers: ${found.length} write site(s) across ${WRITERS.length} registered door(s), each naming its principal; ` +
     `${mintSites} binding mint call(s) in ${MINTS.length} registered door(s); ${BRANDED_HELPERS.length} branded helper(s); ` +
-    `${EVENT_APPENDS.length} event-append site(s).\n` +
+    `${EVENT_APPENDS.length} event-append site(s); ${upserts} upsert(s) read for re-filing and owner scope; ` +
+    `brand flow typed over ${brandFilesChecked} relay file(s): ${brandSlots} BoundIdentity slot(s), ${brandFunctions} branded-parameter function(s).\n` +
     `  Aperture: ${SOURCES.size} .ts file(s) scanned under ${SCAN_ROOTS.join(", ")} ` +
     `(excluding __tests__/dist) for INSERT / INSERT OR REPLACE / REPLACE / UPDATE / DELETE against ` +
     `${TABLES.size} table(s): ${AUTHORITY_TABLES.length} authority tables plus every CREATE TABLE with an identity column ` +
-    `(${Object.keys(NOT_PER_IDENTITY).length} excluded with a reason). An UPDATE assigning an identity column is refused outright. ` +
+    `(${Object.keys(NOT_PER_IDENTITY).length} excluded with a reason). An UPDATE, or an upsert's DO UPDATE SET, assigning an identity column is refused outright; ` +
+    `an upsert keyed by a client-chosen id must scope its update to the row's owner. ` +
     `Blind to a statement assembled at runtime from a table name in a variable, and to writes issued from any other package.\n`,
 );

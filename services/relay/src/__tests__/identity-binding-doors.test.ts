@@ -85,6 +85,17 @@ const refusals = (reasonPrefix: string) =>
     `${reasonPrefix}%`,
   );
 
+/**
+ * The no-credential refusal's row (#846 v3): rule 6's "every refusal is
+ * recorded" was false exactly here — the auth layer threw 401 before any
+ * token was parsed, and wrote nothing. Presenter null: nothing was claimed.
+ */
+const missingTokenRows = (path: string) =>
+  q<{ kind: string; motebit_id: string | null; reason: string }>(
+    "SELECT kind, motebit_id, reason FROM relay_auth_events WHERE reason = 'missing_token' AND path = ?",
+    path,
+  );
+
 async function post(path: string, bearer: string | null, body?: unknown): Promise<Response> {
   return relay.app.request(path, {
     method: "POST",
@@ -141,6 +152,9 @@ describe("subscription cancel / resubscribe bind to the caller's own identity", 
       expect(res.status).toBe(401);
       expect(stripeCalls).toHaveLength(0);
       expect(statusOf(B.id)).toBe(from);
+      expect(missingTokenRows(`/api/v1/subscriptions/${B.id}/${route}`)).toEqual([
+        { kind: "device_token_rejected", motebit_id: null, reason: "missing_token" },
+      ]);
     });
 
     it(`${route}: another identity's token is refused 403, recorded — no Stripe call, no row change`, async () => {
@@ -252,6 +266,9 @@ describe("migration routes bind to the identity itself", () => {
       const res = await call(d.method, `/api/v1/agents/${B.id}/${d.path}`, null);
       expect(res.status).toBe(401);
       expect(state(B.id)).toEqual(["initiated"]);
+      expect(missingTokenRows(`/api/v1/agents/${B.id}/${d.path}`)).toEqual([
+        { kind: "agent_token_rejected", motebit_id: null, reason: "missing_token" },
+      ]);
     });
 
     it(`${d.name}: the identity's own token is unchanged`, async () => {
@@ -320,6 +337,9 @@ describe("approval requests are filed only by their own identity", () => {
     const res = await post(`/api/v1/agents/${B.id}/approvals`, null, body(B.id));
     expect(res.status).toBe(401);
     expect(rows(B.id)).toBe(0);
+    expect(missingTokenRows(`/api/v1/agents/${B.id}/approvals`)).toEqual([
+      { kind: "agent_token_rejected", motebit_id: null, reason: "missing_token" },
+    ]);
   });
 
   it("the identity's own token, and the operator's, are unchanged", async () => {

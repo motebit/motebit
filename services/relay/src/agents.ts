@@ -140,7 +140,7 @@ import {
   buildSignedRevocationFeed,
 } from "./agent-revocation.js";
 import { createLogger } from "./logger.js";
-import { recordMasterTokenOnce } from "./auth-events.js";
+import { recordMasterTokenOnce, recordRefusalBeforeVerify } from "./auth-events.js";
 import { refuseInvalidIds, refuseNonStringText } from "./id-bounds.js";
 
 const logger = createLogger({ service: "agents" });
@@ -565,6 +565,11 @@ export function registerAgentAuthMiddleware(deps: AgentAuthMiddlewareDeps): void
 
     const authHeader = c.req.header("authorization");
     if (authHeader == null || !authHeader.startsWith("Bearer ")) {
+      recordRefusalBeforeVerify(c, recordAuthEvent, {
+        kind: "agent_token_rejected",
+        audience: relayRouteAudience(method, path) ?? "admin:query",
+        reason: "missing_token",
+      });
       throw new HTTPException(401, { message: "Missing auth token" });
     }
     const token = authHeader.slice(7);
@@ -584,6 +589,11 @@ export function registerAgentAuthMiddleware(deps: AgentAuthMiddlewareDeps): void
 
     const claims = parseTokenPayloadUnsafe(token);
     if (!claims?.mid) {
+      recordRefusalBeforeVerify(c, recordAuthEvent, {
+        kind: "agent_token_rejected",
+        audience: relayRouteAudience(method, path) ?? "admin:query",
+        reason: "unparseable_token",
+      });
       throw new HTTPException(401, { message: "Invalid token" });
     }
 
@@ -675,6 +685,11 @@ export function registerAgentAuthMiddleware(deps: AgentAuthMiddlewareDeps): void
     const method = c.req.method;
     const authHeader = c.req.header("authorization");
     if (authHeader == null || !authHeader.startsWith("Bearer ")) {
+      recordRefusalBeforeVerify(c, recordAuthEvent, {
+        kind: "agent_token_rejected",
+        audience: "proposal",
+        reason: "missing_token",
+      });
       throw new HTTPException(401, { message: "Missing auth token" });
     }
     const token = authHeader.slice(7);
@@ -691,6 +706,11 @@ export function registerAgentAuthMiddleware(deps: AgentAuthMiddlewareDeps): void
 
     const claims = parseTokenPayloadUnsafe(token);
     if (!claims?.mid) {
+      recordRefusalBeforeVerify(c, recordAuthEvent, {
+        kind: "agent_token_rejected",
+        audience: "proposal",
+        reason: "unparseable_token",
+      });
       throw new HTTPException(401, { message: "Invalid token" });
     }
     const valid = await verifySignedTokenForDevice(

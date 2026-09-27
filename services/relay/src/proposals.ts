@@ -344,24 +344,15 @@ export function registerProposalRoutes(deps: ProposalsDeps): void {
     // A step result is filed under the participant who reports it, and a
     // step another participant already reported is theirs: `INSERT OR
     // REPLACE` let any participant overwrite (re-file under itself) another
-    // participant's result (#846 v2 audit). Refused, recorded.
-    const heldBy = moteDb.db
-      .prepare(
-        "SELECT motebit_id FROM relay_collaborative_step_results WHERE proposal_id = ? AND step_id = ?",
-      )
-      .get(proposalId, body.step_id) as { motebit_id: string } | undefined;
-    if (heldBy != null && heldBy.motebit_id !== motebitId) {
-      refuse(c, callerMotebitId ?? null, "proposal:step_result_held_by_another");
-      throw new HTTPException(409, {
-        message: "This step's result was reported by another participant",
-      });
-    }
-
+    // participant's result (#846 v2 audit). The write itself is the check
+    // (#846 v3): the update half is scoped to the row's owner, so a step
+    // another participant holds changes no row — refused 409, recorded.
     const now = Date.now();
-    moteDb.db
+    const written = moteDb.db
       .prepare(
         `INSERT INTO relay_collaborative_step_results (proposal_id, step_id, motebit_id, status, result_summary, receipt, completed_at) VALUES (?, ?, ?, ?, ?, ?, ?)
-         ON CONFLICT(proposal_id, step_id) DO UPDATE SET status = excluded.status, result_summary = excluded.result_summary, receipt = excluded.receipt, completed_at = excluded.completed_at`,
+         ON CONFLICT(proposal_id, step_id) DO UPDATE SET status = excluded.status, result_summary = excluded.result_summary, receipt = excluded.receipt, completed_at = excluded.completed_at
+         WHERE relay_collaborative_step_results.motebit_id = excluded.motebit_id`,
       )
       .run(
         proposalId,
@@ -372,6 +363,12 @@ export function registerProposalRoutes(deps: ProposalsDeps): void {
         body.receipt != null ? JSON.stringify(body.receipt) : null,
         now,
       );
+    if (written.changes === 0) {
+      refuse(c, callerMotebitId ?? null, "proposal:step_result_held_by_another");
+      throw new HTTPException(409, {
+        message: "This step's result was reported by another participant",
+      });
+    }
 
     const participants = moteDb.db
       .prepare("SELECT motebit_id FROM relay_proposal_participants WHERE proposal_id = ?")

@@ -309,6 +309,28 @@ describe("#846 HTTP sync push routes bind every entry to the path identity", () 
       ]);
     });
 
+    it(`POST /sync/:id/${door.route}: no credential is refused 401 and recorded (#846 v3) — no row`, async () => {
+      const own = "OWN-" + crypto.randomUUID();
+      const res = await relay.app.request(`/sync/${A.id}/${door.route}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ [door.name]: [door.build(A.id, own)] }),
+      });
+      expect(res.status).toBe(401);
+      expect(rowsFor(door, A.id, own)).toHaveLength(0);
+      const rows = relay.moteDb.db
+        .prepare("SELECT kind, motebit_id, audience, reason FROM relay_auth_events WHERE path = ?")
+        .all(`/sync/${A.id}/${door.route}`);
+      expect(rows).toEqual([
+        {
+          kind: "device_token_rejected",
+          motebit_id: null,
+          audience: "sync",
+          reason: "missing_token",
+        },
+      ]);
+    });
+
     it(`POST /sync/:id/${door.route}: own-identity entries are unchanged — 200, stored, fanned out`, async () => {
       const peer = await socket(A, "a-phone");
       const own = "OWN-" + crypto.randomUUID();
