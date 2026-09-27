@@ -126,13 +126,39 @@ describe("push-token route auth (#825)", () => {
     },
   );
 
-  it("a push:register token is not accepted on an unrelated agent route (no audience widening)", async () => {
-    const phone = await seedAgent(relay);
-    const token = await mintAsMobile(phone, "push:register");
-    const res = await relay.app.request("/api/v1/agents/deregister", {
-      method: "DELETE",
-      headers: { Authorization: `Bearer ${token}` },
+  // Every other method on the push-token path is NOT a push-token route:
+  // GET is `GET /api/v1/agents/:motebitId` with the id "push-token" (a
+  // squattable id), and PUT/PATCH match no route. The branch is guarded to
+  // POST/DELETE so these keep main's default `admin:query` exactly: a
+  // push:register token must not reach them, and an admin:query token still
+  // does, with main's status.
+  function onPath(method: string, token: string) {
+    return relay.app.request("/api/v1/agents/push-token", {
+      method,
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      ...(method === "GET" ? {} : { body: "{}" }),
     });
-    expect(res.status).toBe(401);
-  });
+  }
+
+  it.each(["GET", "PUT", "PATCH"])(
+    "%s on the push-token path refuses a push:register token (default audience, as main)",
+    async (method) => {
+      const phone = await seedAgent(relay);
+      const res = await onPath(method, await mintAsMobile(phone, "push:register"));
+      expect(res.status).toBe(401);
+    },
+  );
+
+  it.each([
+    ["GET", 404],
+    ["PUT", 404],
+    ["PATCH", 404],
+  ] as const)(
+    "%s on the push-token path still passes auth with an admin:query token (→ %i, as main)",
+    async (method, status) => {
+      const phone = await seedAgent(relay);
+      const res = await onPath(method, await mintAsMobile(phone, "admin:query"));
+      expect(res.status).toBe(status);
+    },
+  );
 });

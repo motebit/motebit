@@ -348,7 +348,7 @@ describe("#814 the doors", () => {
     const mid = crypto.randomUUID();
     const did = crypto.randomUUID();
     expect((await bootstrap(mid, did, kp)).status).toBe(201);
-    const { token } = await mintAudienceToken({ mid, did, aud: "admin:query" }, kp.privateKey);
+    const { token } = await mintAudienceToken({ mid, did, aud: "push:register" }, kp.privateKey);
     return post(
       "/api/v1/agents/push-token",
       { device_id: deviceId, push_token: "t", platform: "expo" },
@@ -507,7 +507,7 @@ describe("#814 the doors", () => {
       const mid = crypto.randomUUID();
       const did = crypto.randomUUID();
       expect((await bootstrap(mid, did, kp)).status).toBe(201);
-      const { token } = await mintAudienceToken({ mid, did, aud: "admin:query" }, kp.privateKey);
+      const { token } = await mintAudienceToken({ mid, did, aud: "push:register" }, kp.privateKey);
       const auth = { Authorization: `Bearer ${token}` };
       const t = await refusedWritingNothing(() =>
         post(
@@ -542,7 +542,7 @@ describe("#814 the doors", () => {
     const kp = await generateKeypair();
     const did = crypto.randomUUID();
     seedHeld(mid, did, kp);
-    const { token } = await mintAudienceToken({ mid, did, aud: "admin:query" }, kp.privateKey);
+    const { token } = await mintAudienceToken({ mid, did, aud: "push:register" }, kp.privateKey);
     return post(
       "/api/v1/agents/push-token",
       { device_id: did, push_token: "t", platform: "expo" },
