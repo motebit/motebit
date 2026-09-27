@@ -183,6 +183,14 @@ function main(): void {
     }
   }
 
+  // Aperture: react-native is the package #844 broke on. A check that skipped it
+  // (an empty or truncated SDK table) is not a pass.
+  if (!checked.includes("react-native")) {
+    violations.push(
+      `react-native was not checked — ${TABLE} has no react-native entry (${Object.keys(table).length} entries); the SDK table is missing or truncated, so no alignment was verified`,
+    );
+  }
+
   if (violations.length > 0) {
     failWithRepair({
       invariant: `every ${IMPORTER} dependency the installed Expo SDK versions must resolve inside the range that SDK names — a react-native past the SDK line ships syntax the SDK's Metro/Hermes cannot parse, and no iOS or Android bundle can be built (#844)`,
