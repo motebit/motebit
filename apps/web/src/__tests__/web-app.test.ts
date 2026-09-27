@@ -1099,6 +1099,60 @@ describe("Sync socket across token refreshes (#816)", () => {
     app.stop();
   });
 
+  it("a newer startSync that bails early does not orphan the running one: socket present, commands answered", async () => {
+    // The reviewer's probe: start A is awaiting the relay key (its socket
+    // built) when start B begins and bails before building (no keypair).
+    const app = new WebApp();
+    await app.init(null as unknown as HTMLCanvasElement);
+    await app.bootstrap();
+    const adapterBuilt = () => (app as unknown as { _wsAdapter: unknown })._wsAdapter != null;
+    let release!: () => void;
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    let keyFetchStarted!: () => void;
+    const started = new Promise<void>((r) => {
+      keyFetchStarted = r;
+    });
+    let gated = false;
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      if (url.endsWith("/.well-known/motebit.json") && adapterBuilt() && !gated) {
+        gated = true;
+        keyFetchStarted();
+        await gate;
+      }
+      return new Response("{}", { status: 503, headers: { "content-type": "application/json" } });
+    });
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    const keyStore = (app as unknown as { keyStore: { loadPrivateKey(): Promise<string | null> } })
+      .keyStore;
+    const privHex = (await keyStore.loadPrivateKey())!;
+
+    const startA = app.startSync(RELAY);
+    await started;
+    const load = vi.spyOn(keyStore, "loadPrivateKey").mockResolvedValueOnce(null);
+    await expect(app.startSync(RELAY)).rejects.toThrow(); // B bails
+    load.mockRestore();
+    release();
+    await startA;
+    await until(() => RelaySocket.instances.length === 1);
+    latest().accept();
+
+    const { signAgentCommandEnvelope, hexToBytes } = await import("@motebit/crypto");
+    const envelope = await signAgentCommandEnvelope({
+      command: "state",
+      motebitId: app.motebitId,
+      identityPrivateKey: hexToBytes(privHex),
+    });
+    latest().deliver({ type: "command_request", id: "cmd-p", command: "state", envelope });
+    await until(() => commandResponses(latest()).length === 1);
+    expect(commandResponses(latest())[0]!.id).toBe("cmd-p");
+    expect(openSockets()).toHaveLength(1);
+    app.stopSync();
+    app.stop();
+  });
+
   it("stopSync before startSync has built its socket leaves no socket behind", async () => {
     const app = new WebApp();
     await app.init(null as unknown as HTMLCanvasElement);

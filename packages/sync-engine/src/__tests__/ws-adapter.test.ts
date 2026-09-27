@@ -922,10 +922,13 @@ describe("WebSocketEventStoreAdapter", () => {
     adapter.connect();
     adapter.refreshConnection();
     adapter.refreshConnection();
-    // Resolve newest first, then the abandoned ones.
-    resolvers[2]!("t3");
+    // Oldest first: without the generation guard the abandoned connect
+    // would open the socket with the stale token and the newest could not.
     resolvers[0]!("t1");
+    await vi.advanceTimersByTimeAsync(0);
     resolvers[1]!("t2");
+    await vi.advanceTimersByTimeAsync(0);
+    resolvers[2]!("t3");
     await vi.advanceTimersByTimeAsync(0);
     expect(MockWebSocket.instances).toHaveLength(1);
     lastWS().simulateOpen();
@@ -948,5 +951,63 @@ describe("WebSocketEventStoreAdapter", () => {
     fail = false;
     await vi.advanceTimersByTimeAsync(1_000);
     expect(MockWebSocket.instances).toHaveLength(1);
+  });
+
+  it("disconnect() mid-auth: the pending auth timeout opens no socket afterwards", async () => {
+    const adapter = new WebSocketEventStoreAdapter({
+      url: WS_URL,
+      motebitId: MOTEBIT_ID,
+      authToken: "tok",
+    });
+    adapter.connect();
+    lastWS().simulateOpen(); // auth frame sent, no auth_result yet
+    adapter.disconnect();
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(MockWebSocket.instances).toHaveLength(1);
+    expect(adapter.isConnected).toBe(false);
+  });
+
+  it("refresh mid-auth: the replaced socket's auth timeout does not kill the new socket", async () => {
+    const adapter = new WebSocketEventStoreAdapter({
+      url: WS_URL,
+      motebitId: MOTEBIT_ID,
+      credentialSource: countingSource(),
+    });
+    adapter.connect();
+    await vi.advanceTimersByTimeAsync(0);
+    const first = lastWS();
+    first.simulateOpen(); // auth pending on the first socket; its 5 s timeout armed
+    await vi.advanceTimersByTimeAsync(3_000);
+
+    adapter.refreshConnection();
+    await vi.advanceTimersByTimeAsync(0);
+    const second = lastWS();
+    expect(second).not.toBe(first);
+    // The new socket is still opening when the first socket's timeout is due.
+    await vi.advanceTimersByTimeAsync(3_000);
+    second.simulateOpenWithAuth();
+    await vi.advanceTimersByTimeAsync(10_000);
+
+    expect(second.closed).toBe(false);
+    expect(adapter.isConnected).toBe(true);
+    expect(MockWebSocket.instances).toHaveLength(2);
+  });
+
+  it("a late auth_result on the replaced socket does not mark the adapter connected", async () => {
+    const adapter = new WebSocketEventStoreAdapter({
+      url: WS_URL,
+      motebitId: MOTEBIT_ID,
+      credentialSource: countingSource(),
+    });
+    adapter.connect();
+    await vi.advanceTimersByTimeAsync(0);
+    const first = lastWS();
+    first.simulateOpen();
+    adapter.refreshConnection();
+    await vi.advanceTimersByTimeAsync(0);
+    first.simulateMessage({ type: "auth_result", ok: true });
+    expect(adapter.isConnected).toBe(false);
+    lastWS().simulateOpenWithAuth();
+    expect(adapter.isConnected).toBe(true);
   });
 });
