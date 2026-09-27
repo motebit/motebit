@@ -1,7 +1,9 @@
 /**
  * What a `motebit_id` or `device_id` must be at every door that writes an
  * identity, device, registry or push-token row (#814): a string, no longer
- * than its bound.
+ * than its bound, made only of `CANONICAL_ID_PATTERN`'s characters (#853).
+ * And what a guard that reads an identity from a URL path must see there:
+ * a literal segment (`pathIdentity`, #853).
  *
  * Not every caller-chosen id: the roster ingest stores a caller-chosen
  * `device_id` inside a signed enrolment, bounded only by the 4096-byte
@@ -44,9 +46,39 @@ export const MAX_MOTEBIT_ID_LENGTH = 256;
 /** The longest `device_id` a writing door admits, in UTF-16 code units. */
 export const MAX_DEVICE_ID_LENGTH = 256;
 
+/**
+ * The characters a `motebit_id` or `device_id` may hold at a door that
+ * writes one (#853): ASCII letters, digits, `-` and `_`.
+ *
+ * Why: the relay binds an identity named in a URL path, and two readers
+ * of that path disagreed about a percent-encoded one. The `/sync/*` device
+ * auth read the RAW segment (`%37f3…`) and verified the token against it;
+ * the route handler read Hono's DECODED param (`7f3…`) and acted on that
+ * identity. An attacker bootstrapped the id `%37f3…` — a spelling of a
+ * victim's id — minted its own `sync` token, and read and wrote the
+ * victim's events and conversations. An id from this set is its own URI
+ * encoding (`encodeURIComponent(id) === id`, and every decoder is the
+ * identity function on it), so no two readers of a path can disagree
+ * about it. `pathIdentity` below is the other half: a guard that reads an
+ * id from a path refuses a segment that is not literal.
+ *
+ * What real clients mint, all inside the set: sovereign UUIDv8
+ * (`deriveSovereignMotebitId`), legacy UUIDv7, `crypto.randomUUID()`
+ * device ids, and fixed device names (`bootstrap-device`, `mobile-local`,
+ * `research-service`, …). Every motebit_id held in production on
+ * 2026-09-27 is inside it. Not admitted: a `did:key:…` motebit_id — the
+ * sovereign-binding law accepts one, but no client mints one, and `:` is
+ * a reserved URI character the two path decoders treat differently.
+ *
+ * Existing rows are not touched, as with the length bound: an id already
+ * held outside the set keeps its rows and authenticates wherever its path
+ * segment is literal, and gains no new row at a door that runs this check.
+ */
+export const CANONICAL_ID_PATTERN = /^[0-9A-Za-z_-]+$/;
+
 export interface IdBoundRefusal {
   error: string;
-  code: "ID_TOO_LONG" | "ID_NOT_STRING";
+  code: "ID_TOO_LONG" | "ID_NOT_STRING" | "ID_NOT_CANONICAL";
   field: "motebit_id" | "device_id";
   /** Length in UTF-16 code units; absent when the value is not a string. */
   length?: number;
@@ -60,7 +92,8 @@ export interface IdBoundRefusal {
  * present must be a string: an array, object, number, boolean or `null` is
  * refused. The storage layer binds a one-element array as its text, so
  * `["z"x5000]` reached a device row whole, past a length check that looked
- * only at strings (#814 round 2). A string past its bound is refused.
+ * only at strings (#814 round 2). A string past its bound is refused, and
+ * so is one with a character outside `CANONICAL_ID_PATTERN` (#853).
  */
 export function refuseInvalidIds(ids: {
   motebitId?: unknown;
@@ -75,15 +108,26 @@ export function refuseInvalidIds(ids: {
     if (typeof value !== "string") {
       return { error: `${field} must be a string`, code: "ID_NOT_STRING", field, limit };
     }
-    return value.length > limit
-      ? {
-          error: `${field} is ${value.length} characters; this relay admits at most ${limit}`,
-          code: "ID_TOO_LONG",
-          field,
-          length: value.length,
-          limit,
-        }
-      : null;
+    if (value.length > limit) {
+      return {
+        error: `${field} is ${value.length} characters; this relay admits at most ${limit}`,
+        code: "ID_TOO_LONG",
+        field,
+        length: value.length,
+        limit,
+      };
+    }
+    // Empty is each door's own "missing" refusal, as `undefined` is.
+    if (value !== "" && !CANONICAL_ID_PATTERN.test(value)) {
+      return {
+        error: `${field} may contain only ASCII letters, digits, '-' and '_'`,
+        code: "ID_NOT_CANONICAL",
+        field,
+        length: value.length,
+        limit,
+      };
+    }
+    return null;
   };
   return (
     check("motebit_id", ids.motebitId, MAX_MOTEBIT_ID_LENGTH) ??
@@ -100,4 +144,24 @@ export function refuseNonStringText(field: string, value: unknown): string | nul
   return value === undefined || value === null || typeof value === "string"
     ? null
     : `${field} must be a string`;
+}
+
+/**
+ * The identity a URL path segment names, for a guard that reads it from
+ * the raw path instead of from the route's param (#853). Returns the
+ * segment when it is literal (no `%`) and `null` otherwise; the caller
+ * refuses on `null`.
+ *
+ * Why literal is enough: Hono routes on the path decoded with `decodeURI`
+ * and hands each param through `decodeURIComponent`; both change a string
+ * only at a `%`. The URL a guard reads (`c.req.url`) is the same
+ * normalized string Hono reads. So for a segment with no `%`, the guard's
+ * value, the routed path's value and the handler's `c.req.param()` are one
+ * string: the identity a token is verified against IS the identity the
+ * handler acts on. A segment with a `%` is refused rather than decoded.
+ * No canonical id needs one (`CANONICAL_ID_PATTERN`), and re-implementing
+ * Hono's two-stage decode would be one more reader that could drift.
+ */
+export function pathIdentity(segment: string): string | null {
+  return segment.includes("%") ? null : segment;
 }

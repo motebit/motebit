@@ -1078,15 +1078,15 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
     const motebitId = body.motebit_id.trim();
     // Both ids enter durable state here; one past its bound would make a
     // roster entry the relay can hold and never retire (#814).
+    // Outside the canonical charset, an id could be a percent-encoded
+    // spelling of another identity's id in a URL path (#853).
     const overlong = refuseInvalidIds({ motebitId, deviceId: body.device_id });
     if (overlong) {
       // The reason, the field and (for a string) its length — never the value.
-      logger.warn(
-        overlong.code === "ID_TOO_LONG"
-          ? "agent.bootstrap.refused_id_too_long"
-          : "agent.bootstrap.refused_id_not_string",
-        { field: overlong.field, length: overlong.length },
-      );
+      logger.warn(`agent.bootstrap.refused_${overlong.code.toLowerCase()}`, {
+        field: overlong.field,
+        length: overlong.length,
+      });
       throw new HTTPException(400, { message: overlong.error });
     }
     // A NEW key must arrive canonical — lowercase hex (DA1/DB4); a key already
@@ -1168,14 +1168,23 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
       throw new HTTPException(400, { message: "Missing motebit_id" });
     }
     // The id this registration writes a registry row under (#814).
+    // And one outside the canonical charset (#853). This door records its
+    // refusals (rule 6), naming the presenter — the token's `mid`, or null
+    // for the master token.
     const overlongId = refuseInvalidIds({ motebitId });
     if (overlongId) {
-      logger.warn(
-        overlongId.code === "ID_TOO_LONG"
-          ? "agent.register.refused_id_too_long"
-          : "agent.register.refused_id_not_string",
-        { length: overlongId.length, caller: callerMotebitId ?? null },
-      );
+      logger.warn(`agent.register.refused_${overlongId.code.toLowerCase()}`, {
+        length: overlongId.length,
+        caller: callerMotebitId ?? null,
+      });
+      deps.recordAuthEvent({
+        kind: "agent_token_rejected",
+        method: "POST",
+        path: c.req.path,
+        motebitId: callerMotebitId ?? null,
+        reason: `register:${overlongId.code.toLowerCase()}`,
+        correlationId: c.req.header("x-correlation-id") ?? null,
+      });
       throw new HTTPException(400, { message: overlongId.error });
     }
     // A revoked identity is not registered (#787). Its own tokens are already

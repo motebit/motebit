@@ -88,6 +88,7 @@ import {
 import type { ConnectedDevice } from "./index.js";
 import { checkIdempotency, completeIdempotency } from "./idempotency.js";
 import { createLogger } from "./logger.js";
+import { pathIdentity } from "./id-bounds.js";
 import type { TaskQueue } from "./task-queue.js";
 import { ExecutionReceiptSchema } from "@motebit/wire-schemas";
 import {
@@ -1975,7 +1976,18 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
     app.use("*", async (c, next) => {
       const isTaskPost = c.req.method === "POST" && /\/agent\/[^/]+\/task/.test(c.req.path);
       if (!isTaskPost) return next();
-      const agentId = extractMotebitIdFromPath(c.req.path);
+      // `c.req.path` is decoded with `decodeURI`, the handler's param with
+      // `decodeURIComponent`: a segment still holding a `%` here (`%3A`, …)
+      // is one the two disagree about, so this gate would price one agent
+      // and the handler serve another. Refused, never priced as free (#853).
+      const pathAgentId = extractMotebitIdFromPath(c.req.path);
+      const agentId = pathAgentId == null ? null : pathIdentity(pathAgentId);
+      if (pathAgentId != null && agentId == null) {
+        return c.json(
+          { error: "motebitId in the path must be literal — no percent-encoding" },
+          400,
+        );
+      }
       currentPricing = agentId ? getAgentPricing(moteDb, agentId) : null;
       if (!currentPricing) return next(); // Free — no x402
 
