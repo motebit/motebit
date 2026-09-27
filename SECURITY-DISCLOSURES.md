@@ -121,6 +121,38 @@ The socket now acts on nothing until the connection is registered, and registrat
 
 ---
 
+## 2026-09-27 — an encoded identity could read and write another identity's synced data
+
+**Fixed in [#858](https://github.com/motebit/motebit/pull/858), live in relay release v992.**
+
+The relay's HTTP sync routes check that a request's token belongs to the identity named in the path. The check read the path as it arrived on the wire. The route handlers read it after percent-decoding. Those are two different strings whenever the path contains an escape: `%37` is how a URL writes the character `7`.
+
+The registration doors accepted any string as an identity id. So a party could register an identity whose id was another identity's id with its first character escaped. It then held ordinary tokens for that registered spelling. The check compared the token against the escaped spelling and found a match. The handler decoded the path and acted on the real identity. Through that gap the party could read the other identity's synced events and conversations, add events to its log, and overwrite its conversation records.
+
+The fix has two layers, and each closes the hole on its own. The registration doors now accept only ids drawn from letters, digits, `-` and `_`, which is the alphabet every shipped client already mints from. And every check that takes an identity from the URL now reads the same decoded value the handler acts on, refusing a path segment that contains an escape at all.
+
+**What we checked, 2026-09-27, against the production database.** Exploiting this required registering an identity whose id contains `%`, and a registration leaves a durable record. **No** identity, device, synced event or conversation has an id outside the canonical alphabet, and **no** recorded authentication event has an escaped path. This was not exploited.
+
+**What that check cannot see.** It relies on the registration record surviving. An identity registered, used and then deregistered would leave its device and registry rows removed. The synced data it wrote would stay under the victim's id and be indistinguishable from the victim's own, because no stored row records which identity pushed it.
+
+---
+
+## 2026-09-27 — a query string skipped authentication on task submission
+
+**Fixed in [#858](https://github.com/motebit/motebit/pull/858), live in relay release v992.**
+
+Task submission is authenticated. The one exception is the result route beneath it, where a worker posts its receipt under its own check. The guard decided which route it was looking at by asking whether the request's full URL contained `/result`. The full URL includes the query string. So a submission with `?x=/result` appended skipped authentication, and the relay queued the task and returned a dispatch token.
+
+With no token, the relay takes the submitter from the request body, so the submitter was whatever the caller wrote there. A paid task naming another agent as the worker is refused at submission unless payment has already been proven onchain, so no party could make one identity pay another this way. What remained was a task of the caller's choosing run by an agent, with any price for that agent's own listing drawn from its own balance and the relay's fee taken from it. The defect predates the relay's current name. It was already present when `services/api` was renamed to `services/relay` on 2026-04-27.
+
+The guard now exempts only a path that is exactly the result route, read from the path alone and never from the query.
+
+**What we checked, 2026-09-27.** Nothing. There is no record that could show this. The bypass skipped the code that records authentication, so it left no refusal and no acceptance behind. The task queue is pruned once tasks finish; it held **no** rows when we looked. And no stored settlement or allocation records whether its submission carried a token. We cannot say whether this was used.
+
+**What that check cannot see.** Everything above. The fix is verified in production: every variant we found is refused with 401. The history is not recoverable.
+
+---
+
 ## Known and open
 
 We do not only publish what we have finished. Weaknesses we have found and not yet closed are tracked in the open, without the detail that would help someone use them before we do:
@@ -132,3 +164,6 @@ We do not only publish what we have finished. Weaknesses we have found and not y
 - [#715](https://github.com/motebit/motebit/issues/715) — a setting we publish as an anti-sybil boundary is read by nothing, so the posture it declares is not the posture we hold.
 - [#767](https://github.com/motebit/motebit/issues/767) — rotating an identity's key does not end connections already open under the old key.
 - [#772](https://github.com/motebit/motebit/issues/772) — the sync socket allows some activity before a connection has proven itself; none of it reaches another identity's data.
+- [#846](https://github.com/motebit/motebit/issues/846) — several routes that write an identity's data did not bind the written rows to the caller; a fix is in review.
+- [#850](https://github.com/motebit/motebit/issues/850) — further routes of that class, each needing a design decision before it can be closed.
+- [#855](https://github.com/motebit/motebit/issues/855) — some routes exempted from the operator token are matched more broadly than intended.
