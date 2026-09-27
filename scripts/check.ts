@@ -1004,6 +1004,12 @@ const GATES: ReadonlyArray<Gate> = [
     script: "check-registry-never-deleted",
   },
   {
+    name: "check-audience-route-parity",
+    defends:
+      "a client mints the audience the relay route it calls verifies, and calls a route that exists. `RELAY_ROUTE_AUDIENCES` in @motebit/protocol names every relay route that accepts a device-signed token and its audience (proven against the relay's own middleware by services/relay/src/__tests__/route-audience-conformance.test.ts); this gate checks every non-test source in apps/, packages/, services/ against it: a relay path literal must resolve (or be a declared public/operator-only route), the audience minted in its scope must be the route's, no client mints an audience no route verifies, no audience-requesting token port gets a closure that ignores the audience, the path-forwarding seams resolve from the table, a direct fetch to a device-token route never goes out bare or with a bearer that falls back to an empty string, and spec/auth-token-v1.md §5 is the table verbatim. #827: sweep-config, balance, pairing, task results, registration, delegation polls, checkout and a proposals route that never existed were all refused on every call, across five surfaces, while every test passed. Nothing fails when a client names the wrong audience except the relay's rejection log. Invariant #163, added 2026-09-26",
+    script: "check-audience-route-parity",
+  },
+  {
     name: "check-docs-script-claims",
     defends:
       "every package script a docs page tells the reader to run exists in the manifest it would run against: `pnpm --filter <pkg> <script>` resolves to a workspace package by name and one of its `scripts`; `pnpm run <script>` resolves against the most recent `cd <workspace-dir>` in the same fenced block (else the repo root); `npm run <script>` resolves against the scripts the create-motebit scaffold generates. The 2026-09-14 docs-vs-code cross-audit (#667) found three of the five app pages OPENING with a command that did not exist or did something other than the sentence claimed — the first command a new contributor types was the least-checked sentence on the site; `check-docs-tree` enforced the directory listing and `check-docs-cli-claims` the CLI subcommands, but nothing tied a documented script to a package.json. Invariant #157, added 2026-09-14",

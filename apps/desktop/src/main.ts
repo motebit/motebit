@@ -358,7 +358,10 @@ async function trySyncRegistration(
     const token = await app.registerWithRelay(invoke, syncUrl, masterToken);
     // Start background sync polling after successful registration.
     // Safe to call before AI init — startSync no-ops when runtime is absent.
-    await app.startSync(invoke, syncUrl, token ?? masterToken);
+    // `token` is the device `sync` token registration returned; the master
+    // token is passed separately and only when configured, so serving calls
+    // never mistake the sync token for it (#827).
+    await app.startSync(invoke, syncUrl, token ?? masterToken, masterToken || undefined);
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
     addActionMessage(`Sync relay connection failed: ${msg}`, [
@@ -1109,7 +1112,12 @@ function initSyncStatusIndicator(ctx: DesktopContext): void {
           invoke: invokeFn,
           syncUrl: url,
         });
-        await ctx.app.startSync(invokeFn, url, prev?.syncMasterToken);
+        await ctx.app.startSync(
+          invokeFn,
+          url,
+          prev?.syncMasterToken,
+          prev?.syncMasterToken || undefined,
+        );
         statusText.textContent = "";
         statusText.classList.remove("error");
       } catch (err: unknown) {

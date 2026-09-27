@@ -60,6 +60,7 @@ import { fromHex, loadActiveSigningKey, IdentityKeyError } from "./identity.js";
 import { registerWithRelay, type RelayRegistrationHandle } from "./relay-registration.js";
 import { createRelaySyncSocket } from "./relay-sync-socket.js";
 import { enrollOnAnnounce } from "./machine-roster.js";
+import { taskResultBearer } from "./task-result-bearer.js";
 import {
   electAttachOrCoordinate,
   electCoordinatorRole,
@@ -601,13 +602,28 @@ export async function handleRun(config: CliConfig): Promise<void> {
               }
 
               if (receipt) {
-                // POST receipt to relay
+                // POST receipt to relay: a configured master token first,
+                // else a minted `task:result` (#827; taskResultBearer).
                 const resultUrl = `${syncUrl}/agent/${motebitId}/task/${task.task_id}/result`;
+                const deviceId = fullConfig.device_id;
+                const resultToken = await taskResultBearer({
+                  masterToken: syncToken,
+                  mintTaskResult:
+                    deviceId != null
+                      ? async () =>
+                          (
+                            await mintAudienceToken(
+                              { mid: motebitId, did: deviceId, aud: "task:result" },
+                              privateKey,
+                            )
+                          ).token
+                      : null,
+                });
                 await fetch(resultUrl, {
                   method: "POST",
                   headers: {
                     "Content-Type": "application/json",
-                    Authorization: `Bearer ${syncToken ?? ""}`,
+                    Authorization: `Bearer ${resultToken}`,
                   },
                   body: JSON.stringify(receipt),
                 });
@@ -1597,7 +1613,25 @@ export async function handleServe(config: CliConfig): Promise<void> {
               const resultHeaders: Record<string, string> = {
                 "Content-Type": "application/json",
               };
-              if (masterToken) resultHeaders["Authorization"] = `Bearer ${masterToken}`;
+              // A configured master token first (a relay with device auth
+              // off refuses device tokens here), else a minted `task:result`
+              // with the serve key — matching desktop (#827; taskResultBearer).
+              const serveKey = servePrivateKey;
+              const serveDeviceId = fullConfigForServe.device_id;
+              const resultToken = await taskResultBearer({
+                masterToken,
+                mintTaskResult:
+                  serveKey != null && serveDeviceId != null
+                    ? async () =>
+                        (
+                          await mintAudienceToken(
+                            { mid: motebitId, did: serveDeviceId, aud: "task:result" },
+                            serveKey,
+                          )
+                        ).token
+                    : null,
+              });
+              if (resultToken) resultHeaders["Authorization"] = `Bearer ${resultToken}`;
               await fetch(`${syncUrl}/agent/${motebitId}/task/${task.task_id}/result`, {
                 method: "POST",
                 headers: resultHeaders,

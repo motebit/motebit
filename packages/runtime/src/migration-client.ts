@@ -42,10 +42,16 @@ export interface MigrationClientDeps {
    *  rotated key to the motebit_id via the file's succession chain (§8.2 step 6).
    *  Omit for a never-rotated sovereign identity (bound directly via the id). */
   readonly identityFile?: MotebitIdentityFile;
-  /** Bearer token authenticating the agent to the SOURCE relay (its sync auth).
+  /** Bearer token authenticating the agent to the SOURCE relay. Every source
+   *  route this client calls (migrate, attestation, export) verifies the
+   *  `admin:query` audience (`relayRouteAudience`, spec/auth-token-v1.md §5) —
+   *  a `sync` token is refused, which this comment used to suggest (#827).
    *  A string or a per-call minter (web mints a fresh signed token per request). */
   readonly sourceAuth: string | (() => Promise<string>);
-  /** Bearer token for the DESTINATION's accept endpoint, when it requires one. */
+  /** Bearer token for the DESTINATION's accept endpoint. Known gap (#827):
+   *  that route sits behind the agent-route middleware (`admin:query`), and an
+   *  arriving agent's device token cannot verify at a relay that does not yet
+   *  hold its key — today only an operator token passes it. */
   readonly destAuth?: string | (() => Promise<string>);
   /** Optional human-readable migration reason (recorded by the source relay). */
   readonly reason?: string;

@@ -25,10 +25,15 @@ export interface RelayDelegationConfig {
   syncUrl: string;
   motebitId: string;
   /**
-   * Static auth token or an async factory that mints fresh tokens.
-   * Use a factory for long-running daemons to avoid 5-minute expiry.
+   * Mints the bearer for one relay call, given the audience that call's route
+   * verifies: `task:submit` for the submission, `task:query` for the poll.
+   * A factory, never a static token: a device token is bound to ONE audience,
+   * so any single string fails one of the two routes. Static strings were
+   * accepted here and three surfaces passed their `sync` socket token, so
+   * plan-step delegation was refused on both routes (#827). An operator with a
+   * master token passes `async () => masterToken`.
    */
-  authToken?: string | ((audience?: TokenAudience) => Promise<string>);
+  authToken?: (audience: TokenAudience) => Promise<string>;
   sendRaw: (data: string) => void;
   onCustomMessage: (cb: (msg: { type: string; [key: string]: unknown }) => void) => () => void;
   /** Optional: returns agent's current exploration drive [0-1] from intelligence gradient, passed to relay for routing. */
@@ -49,11 +54,11 @@ export interface RelayDelegationConfig {
 export class RelayDelegationAdapter implements StepDelegationAdapter {
   constructor(private config: RelayDelegationConfig) {}
 
-  private async buildHeaders(audience?: TokenAudience): Promise<Record<string, string>> {
+  private async buildHeaders(audience: TokenAudience): Promise<Record<string, string>> {
     const headers: Record<string, string> = { "Content-Type": "application/json" };
     const { authToken } = this.config;
-    if (authToken != null && authToken !== "") {
-      const token = typeof authToken === "function" ? await authToken(audience) : authToken;
+    if (authToken != null) {
+      const token = await authToken(audience);
       if (token !== "") headers["Authorization"] = `Bearer ${token}`;
     }
     return headers;

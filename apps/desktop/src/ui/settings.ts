@@ -1,6 +1,7 @@
 import type { DesktopAIConfig } from "../index";
 import { getMcpServersConfig } from "./mcp-connections";
 import type { DesktopContext } from "../types";
+import { relayBearer } from "./relay-bearer";
 import { formatTimeAgo } from "../types";
 import { parseJsonSafe, classifyDecision, ipcString } from "./audit-utils";
 import { addMessage } from "./chat";
@@ -1259,9 +1260,15 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
     const messageEl = document.getElementById("billing-message");
     if (messageEl) messageEl.textContent = "Opening checkout…";
     try {
+      // The checkout route verifies `account:checkout`; this sent no token
+      // and was always refused (#827).
+      const bearer = await relayBearer(ctx, "account:checkout");
       const res = await fetch(`${syncUrl}/api/v1/agents/${motebitId}/checkout`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          ...(bearer ? { Authorization: `Bearer ${bearer}` } : {}),
+        },
         body: JSON.stringify({ amount, return_url: window.location.origin }),
       });
       const data = (await res.json()) as { checkout_url?: string; error?: string };

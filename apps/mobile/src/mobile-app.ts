@@ -45,6 +45,7 @@ import {
   migrateVoiceConfig,
   migrateAppearanceConfig,
   inferenceIsFreeToUser,
+  relayRouteAudience,
   type ProviderSpec,
   type ResolverEnv,
   type UnifiedProviderConfig,
@@ -1601,11 +1602,19 @@ export class MobileApp {
     return this.runtime?.pendingApprovalInfo ?? null;
   }
 
-  /** Fetch from relay API with signed token auth. */
+  /**
+   * GET from the relay API with signed token auth. The token is minted for
+   * the audience the route verifies (`relayRouteAudience`, the protocol's
+   * route table) — `/balance` verifies `account:balance`, `/proposals`
+   * `proposal`. A single `sync` token was sent to every path here, so the
+   * `/balance` and `/deposits` slash commands were always refused (#827). A
+   * route the table does not name takes no device token, so none is sent.
+   */
   async relayFetch(path: string): Promise<unknown> {
     const syncUrl = await this.getSyncUrl();
     if (!syncUrl) throw new Error("No relay configured — connect in Settings > Sync");
-    const token = await this.createSyncToken();
+    const audience = relayRouteAudience("GET", path);
+    const token = audience != null ? await this.createSyncToken(audience) : null;
     const headers: Record<string, string> = { "Content-Type": "application/json" };
     if (token) headers["Authorization"] = `Bearer ${token}`;
     const res = await fetch(`${syncUrl}${path}`, { headers });
@@ -2699,7 +2708,9 @@ TaskManager.defineTask(BACKGROUND_TASK_WAKE, async () => {
 
           // POST receipt if we got one (even on timeout — partial work is valuable)
           if (receipt) {
-            const freshToken = await app.createSyncToken("task:submit");
+            // The result route verifies `task:result`; `task:submit` was
+            // refused, so no receipt this phone served reached the relay (#827).
+            const freshToken = await app.createSyncToken("task:result");
             await fetch(`${syncUrl}/agent/${app.motebitId}/task/${task.task_id}/result`, {
               method: "POST",
               headers: {

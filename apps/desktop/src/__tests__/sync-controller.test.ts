@@ -487,3 +487,61 @@ describe("SyncController.stopSync", () => {
     expect(statuses[statuses.length - 1]).toBe("disconnected");
   });
 });
+
+// ---------------------------------------------------------------------------
+// Serving bearer (#827): registration and task results mint the audience
+// their route verifies; the master token is used only when configured.
+// ---------------------------------------------------------------------------
+
+describe("SyncController serving bearer (#827)", () => {
+  async function serveOneTask(masterToken?: string): Promise<Array<{ url: string; auth: string }>> {
+    const calls: Array<{ url: string; auth: string }> = [];
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    globalThis.fetch = vi.fn(async (url: string, init?: RequestInit) => {
+      const h = (init?.headers ?? {}) as Record<string, string>;
+      calls.push({ url, auth: h["Authorization"] ?? "" });
+      return mockCtrl.fetchResponse;
+    }) as any;
+    const runtime = makeRuntime();
+    const ctrl = new SyncController(
+      makeDeps({
+        getRuntime: () => runtime,
+        createSyncToken: async (_pk: string, aud?: string) => `minted:${aud ?? "sync"}`,
+      }),
+    );
+    // Exactly what main.ts does: the socket bearer is the device `sync` token
+    // registerWithRelay returned; the master token rides separately.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await ctrl.startSync(vi.fn() as any, "https://relay.test", "device-sync-token", masterToken);
+    expect((await ctrl.startServing("pk")).ok).toBe(true);
+    const ws = mockCtrl.wsInstances[mockCtrl.wsInstances.length - 1]!;
+    for (const h of ws.customHandlers) {
+      h({ type: "task_request", task: { task_id: "t-1", prompt: "p" } });
+    }
+    await vi.waitFor(() => {
+      expect(calls.some((c) => c.url.endsWith("/task/t-1/result"))).toBe(true);
+    });
+    ctrl.stopServing();
+    ctrl.stopSync();
+    return calls;
+  }
+
+  it("with no master token, register mints admin:query and the result mints task:result", async () => {
+    const calls = await serveOneTask();
+    expect(calls.find((c) => c.url.endsWith("/api/v1/agents/register"))?.auth).toBe(
+      "Bearer minted:admin:query",
+    );
+    expect(calls.find((c) => c.url.endsWith("/task/t-1/result"))?.auth).toBe(
+      "Bearer minted:task:result",
+    );
+    expect(calls.every((c) => c.auth !== "Bearer device-sync-token")).toBe(true);
+  });
+
+  it("with a configured master token, both send it", async () => {
+    const calls = await serveOneTask("MASTER");
+    expect(calls.find((c) => c.url.endsWith("/api/v1/agents/register"))?.auth).toBe(
+      "Bearer MASTER",
+    );
+    expect(calls.find((c) => c.url.endsWith("/task/t-1/result"))?.auth).toBe("Bearer MASTER");
+  });
+});

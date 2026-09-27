@@ -4361,6 +4361,23 @@ export {
   RUNTIME_ATTACH_AUDIENCE,
 } from "./audience.js";
 
+// Relay route → token audience — which `aud` each relay route requires of a
+// device-signed token. The vocabulary above says what can be minted; this
+// table says what each route verifies. Clients resolve with
+// `relayRouteAudience`; `check-audience-route-parity` checks client call
+// sites against it; the relay's conformance test proves it. See
+// `./relay-route-audience.ts` header.
+export type {
+  RelayPublicRoute,
+  RelayRouteAudience,
+  RelayRouteMethod,
+} from "./relay-route-audience.js";
+export {
+  RELAY_PUBLIC_ROUTES,
+  RELAY_ROUTE_AUDIENCES,
+  relayRouteAudience,
+} from "./relay-route-audience.js";
+
 // Content-artifact types — closed registry of `artifact_type` claim
 // values for the C2PA-shape content-provenance primitive
 // (`ContentArtifactManifest` in `@motebit/crypto`). Producer-declared

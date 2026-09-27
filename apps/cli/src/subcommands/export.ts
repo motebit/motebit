@@ -206,8 +206,8 @@ export async function handleExport(config: CliConfig): Promise<void> {
   // audience. Mint both (per-call signed tokens are cheap).
   const credHeaders = await getRelayAuthHeaders(config, { aud: "credentials" });
   const vpHeaders = await getRelayAuthHeaders(config, { aud: "credentials:present" });
-  // Other relay reads below (e.g. /budget) keep the default admin:query.
-  const headers = await getRelayAuthHeaders(config);
+  // The balance summary below verifies `account:balance`.
+  const balanceHeaders = await getRelayAuthHeaders(config, { aud: "account:balance" });
   const baseUrl = syncUrl ? syncUrl.replace(/\/$/, "") : null;
 
   if (!baseUrl) {
@@ -261,18 +261,23 @@ export async function handleExport(config: CliConfig): Promise<void> {
       skipped.push("OSSA manifest (generation failed)");
     }
 
-    // 6. Budget summary
-    const budgetResult = await fetchRelayJson(`${baseUrl}/agent/${motebitId}/budget`, headers);
-    if (budgetResult.ok) {
-      const budgetPath = path.join(outputDir, "budget.json");
-      fs.writeFileSync(budgetPath, JSON.stringify(budgetResult.data, null, 2), "utf-8");
-      const budgetData = budgetResult.data as {
-        allocations?: Array<Record<string, unknown>>;
+    // 6. Balance summary. This read `/agent/:id/budget`, a route the relay
+    // does not have, so it was skipped on every export (#827); the virtual
+    // account is `/api/v1/agents/:id/balance` (`account:balance`).
+    const balanceResult = await fetchRelayJson(
+      `${baseUrl}/api/v1/agents/${motebitId}/balance`,
+      balanceHeaders,
+    );
+    if (balanceResult.ok) {
+      const balancePath = path.join(outputDir, "balance.json");
+      fs.writeFileSync(balancePath, JSON.stringify(balanceResult.data, null, 2), "utf-8");
+      const balanceData = balanceResult.data as {
+        transactions?: Array<Record<string, unknown>>;
       };
-      const allocCount = budgetData.allocations?.length ?? 0;
-      exported.push(`budget (${allocCount} allocation${allocCount !== 1 ? "s" : ""})`);
+      const txCount = balanceData.transactions?.length ?? 0;
+      exported.push(`balance (${txCount} transaction${txCount !== 1 ? "s" : ""})`);
     } else {
-      skipped.push(`budget (${budgetResult.error})`);
+      skipped.push(`balance (${balanceResult.error})`);
     }
   }
 

@@ -147,7 +147,7 @@ export async function handleSmokeX402(config: CliConfig): Promise<void> {
   //    non-zero unit_cost. Without this guard, a listing-write bug
   //    would silently produce a free task (x402 gate skipped) and
   //    the smoke would falsely report success.
-  await assertListingValid(relayUrl, worker.motebitId);
+  await assertListingValid(relayUrl, worker);
 
   // 5. Buyer submits paid task via @x402/fetch. The wrapped fetch
   //    handles the 402 → sign → resubmit dance automatically using
@@ -372,8 +372,19 @@ async function postWorkerListing(
   }
 }
 
-async function assertListingValid(relayUrl: string, workerId: string): Promise<void> {
-  const res = await fetch(`${relayUrl}/api/v1/agents/${encodeURIComponent(workerId)}/listing`);
+async function assertListingValid(relayUrl: string, worker: BootstrappedMotebit): Promise<void> {
+  // The listing read verifies `market:listing`, like the write; an
+  // unauthenticated GET was refused and aborted every smoke run (#827).
+  const token = await mintSignedToken({
+    motebitId: worker.motebitId,
+    deviceId: worker.deviceId,
+    privateKey: worker.privateKey,
+    audience: "market:listing",
+  });
+  const res = await fetch(
+    `${relayUrl}/api/v1/agents/${encodeURIComponent(worker.motebitId)}/listing`,
+    { headers: { Authorization: `Bearer ${token}` } },
+  );
   if (!res.ok) {
     throw new Error(`listing GET failed (${String(res.status)})`);
   }

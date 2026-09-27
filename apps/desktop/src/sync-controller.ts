@@ -100,6 +100,14 @@ export class SyncController {
   private _servingPrivateKey: Uint8Array | null = null;
   private _servingSyncUrl: string | null = null;
   private _servingAuthToken: string | null = null;
+  /**
+   * Mints the bearer for a serving-side relay call, for the audience that
+   * call's route verifies: an operator's master token when one was supplied,
+   * else a device token for exactly that audience. The cached socket token
+   * (`sync`) was reused for the result post (`task:result`) and registration
+   * (`admin:query`), and both were refused (#827).
+   */
+  private _servingToken: ((audience: TokenAudience) => Promise<string>) | null = null;
   private _activeTaskCount = 0;
 
   constructor(private deps: SyncControllerDeps) {}
@@ -206,7 +214,22 @@ export class SyncController {
    * Start full sync: event-level background polling + one-shot conversation sync.
    * Call after pairing completes or at app startup when syncUrl is configured.
    */
-  async startSync(invoke: InvokeFn, syncUrl: string, authToken?: string): Promise<void> {
+  /**
+   * @param authToken the socket bearer — normally the device `sync` token
+   *   `registerWithRelay` returned, else the operator master token.
+   * @param masterToken the operator's master token, ONLY when one is
+   *   configured. The serving calls (registration, task results) send it when
+   *   present; otherwise they mint the audience their route verifies. They
+   *   used to treat `authToken` as the master token, so a normal desktop sent
+   *   its `sync` token to `/agents/register` (admin:query) and the result
+   *   route (task:result) and both were refused (#827).
+   */
+  async startSync(
+    invoke: InvokeFn,
+    syncUrl: string,
+    authToken?: string,
+    masterToken?: string,
+  ): Promise<void> {
     const runtime = this.deps.getRuntime();
     if (!runtime) return;
     const motebitId = this.deps.getMotebitId();
@@ -329,7 +352,12 @@ export class SyncController {
     }
     runtime.enableInteractiveDelegation({
       syncUrl,
-      authToken: async () => this.deps.createSyncToken(privKeyHex, "task:submit"),
+      // Honor the audience the runtime asks for — `task:submit` to submit,
+      // `task:query` to poll, `market:listing` for the P2P pre-flight. A
+      // closure that ignored it sent `task:submit` to all three, and the poll
+      // and pre-flight were refused (#827).
+      authToken: async (audience?: TokenAudience) =>
+        this.deps.createSyncToken(privKeyHex, audience ?? "task:submit"),
       ...(pinnedRelayKey != null ? { relayPublicKey: pinnedRelayKey } : {}),
       // Forward the cold-start opt-in as a LIVE getter so the "Pay new agents
       // directly" Governance toggle governs chat-driven (delegate_to_agent) P2P
@@ -347,6 +375,9 @@ export class SyncController {
     this._servingPrivateKey = servingPrivKey;
     this._servingSyncUrl = syncUrl;
     this._servingAuthToken = token;
+    const master = masterToken != null && masterToken !== "" ? masterToken : null;
+    this._servingToken = async (audience) =>
+      master ?? this.deps.createSyncToken(privKeyHex, audience);
 
     // Wire task handler — accept delegations from the network.
     // The liquescent droplet becomes a body that works, not just a face that talks.
@@ -434,11 +465,14 @@ export class SyncController {
 
           if (receipt) {
             const resultUrl = `${syncUrl}/agent/${motebitId}/task/${task.task_id}/result`;
+            const resultToken = this._servingToken
+              ? await this._servingToken("task:result")
+              : authToken;
             await fetch(resultUrl, {
               method: "POST",
               headers: {
                 "Content-Type": "application/json",
-                Authorization: `Bearer ${authToken}`,
+                Authorization: `Bearer ${resultToken}`,
               },
               body: JSON.stringify(receipt),
             });
@@ -596,11 +630,14 @@ export class SyncController {
       .map((t: { name: string }) => t.name);
 
     try {
+      const registerToken = this._servingToken
+        ? await this._servingToken("admin:query")
+        : this._servingAuthToken;
       const res = await fetch(`${this._servingSyncUrl}/api/v1/agents/register`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          Authorization: `Bearer ${this._servingAuthToken}`,
+          Authorization: `Bearer ${registerToken}`,
         },
         body: JSON.stringify({
           motebit_id: this.deps.getMotebitId(),

@@ -32,10 +32,9 @@ export async function cmdDeposits(relay: RelayConfig): Promise<CommandResult> {
 }
 
 export async function cmdDiscover(relay: RelayConfig): Promise<CommandResult> {
-  const data = (await relayFetch(relay, "/api/v1/agents/discover", {
-    method: "POST",
-    body: JSON.stringify({ capability: "web_search" }),
-  })) as {
+  // Discovery is a public GET. This used to POST, and the relay has no POST
+  // discover route, so the command was always refused (#827).
+  const data = (await relayFetch(relay, "/api/v1/agents/discover")) as {
     agents: Array<{ motebit_id: string; capabilities: string[]; endpoint_url: string }>;
   };
   const agents = data.agents ?? [];
@@ -53,11 +52,14 @@ export async function cmdDiscover(relay: RelayConfig): Promise<CommandResult> {
 }
 
 export async function cmdProposals(relay: RelayConfig): Promise<CommandResult> {
-  const data = (await relayFetch(relay, `/api/v1/agents/${relay.motebitId}/proposals`)) as {
+  // Proposals live at `/api/v1/proposals`, scoped to the caller's own token
+  // (initiator or participant). There is no `/api/v1/agents/:id/proposals`
+  // route; this command called one and was always refused (#827).
+  const data = (await relayFetch(relay, "/api/v1/proposals")) as {
     proposals: Array<{
       proposal_id: string;
       status: string;
-      goal: string;
+      plan_id?: string;
       created_at: number;
     }>;
   };
@@ -65,7 +67,10 @@ export async function cmdProposals(relay: RelayConfig): Promise<CommandResult> {
   if (proposals.length === 0) return { summary: "No active proposals." };
   const lines = proposals
     .slice(0, 10)
-    .map((p) => `${p.proposal_id.slice(0, 8)}... [${p.status}] — ${(p.goal ?? "").slice(0, 60)}`);
+    .map(
+      (p) =>
+        `${p.proposal_id.slice(0, 8)}... [${p.status}] — plan ${(p.plan_id ?? "").slice(0, 8)}`,
+    );
   return {
     summary: `${proposals.length} proposals`,
     detail: lines.join("\n"),

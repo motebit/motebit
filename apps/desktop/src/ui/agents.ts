@@ -22,6 +22,7 @@ import {
   type SortKey,
 } from "@motebit/panels";
 import { deriveAgentSigil } from "@motebit/sdk";
+import { relayBearer } from "./relay-bearer";
 import { sigilToSvg } from "./agent-sigil";
 import {
   verifiedSettlementSummaryFetch,
@@ -159,9 +160,8 @@ function createDesktopAgentsAdapter(ctx: DesktopContext): AgentsFetchAdapter {
       const motebitId = ctx.app.motebitId;
       if (!syncUrl || !motebitId) return null;
       const anchor = await settlementAnchor(syncUrl);
-      const init = config.syncMasterToken
-        ? { headers: { Authorization: `Bearer ${config.syncMasterToken}` } }
-        : undefined;
+      const bearer = await relayBearer(ctx, "account:balance");
+      const init = bearer ? { headers: { Authorization: `Bearer ${bearer}` } } : undefined;
       const res = await verifiedSettlementSummaryFetch(syncUrl, motebitId, { anchor, init });
       return res.verification.valid ? res.body : null;
     },
@@ -187,11 +187,10 @@ export function initAgents(ctx: DesktopContext): AgentsAPI {
     if (!syncUrl || !motebitId) return null;
 
     const headers: Record<string, string> = { "Content-Type": "application/json" };
-    if (config.syncMasterToken) {
-      headers["Authorization"] = `Bearer ${config.syncMasterToken}`;
-    }
 
     try {
+      const bearer = await relayBearer(ctx, "account:balance");
+      if (bearer) headers["Authorization"] = `Bearer ${bearer}`;
       const resp = await fetch(`${syncUrl}/api/v1/agents/${motebitId}/balance`, { headers });
       if (!resp.ok) return null;
       const data = (await resp.json()) as { balance: number; currency: string };

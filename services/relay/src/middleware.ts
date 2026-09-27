@@ -27,6 +27,7 @@ import type { AuthEvent } from "./auth-events.js";
 import { requestContext, enrichRequestContext } from "./request-context.js";
 import type { RequestContext } from "./request-context.js";
 import { RelayError, RateLimitError, AuthenticationError, AuthorizationError } from "./errors.js";
+import { recordMasterTokenOnce } from "./auth-events.js";
 
 const logger = createLogger({ service: "middleware" });
 
@@ -185,8 +186,7 @@ export function createDualAuth(deps: MiddlewareDeps) {
         path: new URL(c.req.url, "http://localhost").pathname,
         ip: c.req.header("x-forwarded-for") ?? c.req.header("x-real-ip") ?? "unknown",
       });
-      deps.recordAuthEvent?.({
-        kind: "master_token",
+      recordMasterTokenOnce(c, deps.recordAuthEvent, {
         method: c.req.method,
         path: new URL(c.req.url, "http://localhost").pathname,
         correlationId: c.req.header("x-correlation-id") ?? null,
@@ -493,8 +493,7 @@ export function registerMiddleware(deps: MiddlewareDeps): MiddlewareResult {
 
       // Master token bypass
       if (apiToken != null && apiToken !== "" && token === apiToken) {
-        deps.recordAuthEvent?.({
-          kind: "master_token",
+        recordMasterTokenOnce(c, deps.recordAuthEvent, {
           method: c.req.method,
           path: new URL(c.req.url, "http://localhost").pathname,
           correlationId: c.req.header("x-correlation-id") ?? null,
@@ -611,6 +610,18 @@ export function registerMiddleware(deps: MiddlewareDeps): MiddlewareResult {
         // token or master) above — agents discovering workers don't hold the
         // master token. /api/v1/market/revenue is NOT carved out (operator-only).
         c.req.path === "/api/v1/market/candidates" ||
+        // Two more routes whose own device-token auth this catch-all used to
+        // shadow, so a device token was refused before it ever reached them
+        // (#827) — the same shape as the market/candidates carve-out above:
+        //   - collaborative proposals: `proposal` audience, installed by
+        //     registerAgentAuthMiddleware (agents.ts) before the routes;
+        //   - the browser-sandbox grant exchange: `browser-sandbox-grant`
+        //     dualAuth in registerAuthMiddleware below.
+        // Both still refuse a missing or wrong-audience token; the relay's
+        // route-audience conformance test proves it for every route.
+        c.req.path === "/api/v1/proposals" ||
+        c.req.path.startsWith("/api/v1/proposals/") ||
+        c.req.path === "/api/v1/browser-sandbox/token" ||
         c.req.path.startsWith("/api/v1/allocations/") ||
         c.req.path.startsWith("/api/v1/disputes/") ||
         // Skills registry (spec/skills-registry-v1.md §5): permissive-by-
@@ -632,8 +643,7 @@ export function registerMiddleware(deps: MiddlewareDeps): MiddlewareResult {
       const mw = bearerAuth({ token: apiToken });
       const presented = c.req.header("authorization");
       if (presented === `Bearer ${apiToken}`) {
-        deps.recordAuthEvent?.({
-          kind: "master_token",
+        recordMasterTokenOnce(c, deps.recordAuthEvent, {
           method: c.req.method,
           path: c.req.path,
           correlationId: c.req.header("x-correlation-id") ?? null,
@@ -813,7 +823,15 @@ export function registerMiddleware(deps: MiddlewareDeps): MiddlewareResult {
 // registerMiddleware but before route handlers that need dualAuth)
 // ---------------------------------------------------------------------------
 
-export function registerAuthMiddleware(deps: MiddlewareDeps): void {
+/**
+ * `recordAuthEvent` is REQUIRED here (optional on the shared deps type): every
+ * door below authenticates, and a door that authenticates without recording
+ * is invisible to the relay's own posture record (rule 6). It was optional,
+ * and index.ts never passed it (#827).
+ */
+export function registerAuthMiddleware(
+  deps: MiddlewareDeps & { recordAuthEvent: NonNullable<MiddlewareDeps["recordAuthEvent"]> },
+): void {
   const { app, apiToken } = deps;
   const dualAuth = createDualAuth(deps);
 
