@@ -9,14 +9,18 @@
  * nothing received it — skipping the MCP endpoint forward, the push wake and
  * the submitter's dispatch token.
  *
- * Every peer send now goes through `ws-send.ts` (`sendIfOpen` / `sendToEach`)
- * and `routed` / status is derived from the count it returns. The contract,
- * per site, is never-worse-than-main:
+ * Every peer send now goes through `ws-send.ts` (`sendIfOpen` / `sendToEach`),
+ * and every task dispatch site through `routeToSockets` (task-presentation.ts),
+ * which names the door the send leaves it at. The contract, per site, is
+ * never-worse-than-main:
  *   - only OPEN sockets        ⇒ unchanged (the frame arrives, routed);
  *   - a CLOSED one beside OPEN ⇒ the OPEN one gets the frame (a fan-out
  *     already did on main, and still does);
- *   - only CLOSED sockets      ⇒ NOT routed: the caller takes exactly the
- *     path main takes when no socket is connected at all.
+ *   - only CLOSED sockets      ⇒ HELD for reconnect recovery, exactly as main
+ *     held it: no MCP forward, no push wake, no incidental token
+ *     (`mainWouldRecover`, #811 v4 — a forward there is a second presenter
+ *     beside recovery; `presentation-matrix.probe.ts` is the cell-by-cell
+ *     proof). The federation site answers "pending" instead of "routed".
  *
  * A stale socket is made the only way one can reach `connections` for
  * real: a live connection is registered, its client closes it, the relay
@@ -362,7 +366,10 @@ describe("task dispatch — listed worker with an endpoint (Phase 1 ranking, Pha
     expect(posts()).toBe(0);
   });
 
-  it("R2: Phase 1 selects the worker; only CLOSED sockets ⇒ the no-socket branch: forwarded to its MCP endpoint", async () => {
+  it("R2: Phase 1 selects the worker; only CLOSED sockets ⇒ HELD for reconnect, as main: no MCP forward, no token", async () => {
+    // #811 v1–v3 forwarded here. The URL agent's reconnect recovery is main's
+    // presenter for this task (it serves `task.motebit_id`, here `via`), so a
+    // forward is a second one: #854 ran the task twice.
     const s = await startRelay();
     const { via, worker, posts } = await ranked(s);
     await stale(s, worker, "read_url");
@@ -372,7 +379,13 @@ describe("task dispatch — listed worker with an endpoint (Phase 1 ranking, Pha
       (r as { routing_choice?: { selected_agent: string } }).routing_choice?.selected_agent,
     ).toBe(worker);
     expect(r.dispatch_token).toBeUndefined();
-    await waitFor(() => posts() > 0, "the MCP forward");
+    const back = await connect(s, via, "read_url");
+    await waitFor(
+      () => back.of("task_request").some((f) => f.task?.task_id === r.task_id),
+      "recovery to the URL agent's reconnecting device",
+    );
+    await settle();
+    expect(posts()).toBe(0);
   });
 
   it("L1: a CLOSED socket beside an OPEN one ⇒ the OPEN one gets it; no MCP forward", async () => {
@@ -479,10 +492,20 @@ describe("task dispatch — Phase 0 pinned paid dispatch", () => {
     expect(posts()).toBe(0);
   });
 
-  it("Z2: only CLOSED sockets ⇒ the no-socket path: dispatched to the pinned worker's MCP endpoint", async () => {
+  it("Z2: only CLOSED sockets ⇒ HELD for reconnect, as main: no MCP dispatch, no token", async () => {
     const s = await startRelay();
     const { delegator, worker, posts } = await pinned(s);
     await stale(s, worker);
+    const r = await submitPaid(s, delegator, worker);
+    expect(r.status).toBe(201);
+    expect(r.dispatch_token).toBeUndefined();
+    await settle();
+    expect(posts()).toBe(0);
+  });
+
+  it("Z0 (control): no socket at all ⇒ main's no-socket path: dispatched to the pinned worker's MCP endpoint", async () => {
+    const s = await startRelay();
+    const { delegator, worker, posts } = await pinned(s);
     const r = await submitPaid(s, delegator, worker);
     expect(r.status).toBe(201);
     await waitFor(() => posts() > 0, "the pinned MCP dispatch");

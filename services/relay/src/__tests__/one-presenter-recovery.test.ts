@@ -35,6 +35,7 @@ import {
   bytesToHex,
   signExecutionReceipt,
   verifySignedToken,
+  createSignedToken,
   hash as sha256,
   // eslint-disable-next-line no-restricted-imports -- tests need direct keypair generation
 } from "@motebit/encryption";
@@ -120,6 +121,7 @@ type Mode =
   | "chosen" // presenter: "submitter" — the submitter is the one presenter
   | "pinned" // Phase 0 pinned paid P2P dispatch
   | "ranked" // Phase 1: submitted to another agent's URL, ranking selects the worker
+  | "rankedSelf" // Phase 1: submitted to the WORKER's URL by another agent (#854)
   | "failing"; // caps, but the worker's MCP endpoint fails (slowly) — see `FailAt`
 
 /**
@@ -278,7 +280,7 @@ async function scenario(
       ...(paid ? { settlement_address: WORKER_SOLANA_ADDR, settlement_modes: "relay,p2p" } : {}),
     }),
   });
-  if (paid || mode === "ranked") {
+  if (paid || mode === "ranked" || mode === "rankedSelf") {
     await relay.app.request(`/api/v1/agents/${worker}/listing`, {
       method: "POST",
       headers: JSON_AUTH,
@@ -384,6 +386,33 @@ async function scenario(
         payment_proof: proof,
         required_capabilities: ["web_search"],
       }),
+    });
+  } else if (mode === "rankedSelf") {
+    // The #854 cell: ranking picks the worker, and the worker IS the URL
+    // agent, so reconnect recovery reaches it — main's presenter.
+    const dkp = await generateKeypair();
+    const del = await createAgent(relay, bytesToHex(dkp.publicKey));
+    trust(relay, del.motebitId, worker);
+    const now = Date.now();
+    const tok = await createSignedToken(
+      {
+        mid: del.motebitId,
+        did: del.deviceId,
+        iat: now,
+        exp: now + 300_000,
+        jti: crypto.randomUUID(),
+        aud: "task:submit",
+      },
+      dkp.privateKey,
+    );
+    res = await relay.app.request(`/agent/${worker}/task`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${tok}`,
+        "Content-Type": "application/json",
+        "Idempotency-Key": crypto.randomUUID(),
+      },
+      body: JSON.stringify({ prompt, submitted_by: del.motebitId, ...caps }),
     });
   } else if (mode === "ranked") {
     const via = await createAgent(relay, bytesToHex((await generateKeypair()).publicKey));
@@ -493,12 +522,16 @@ describe("an MCP forward is the one presenter — recovery skips the entry", () 
   );
 });
 
-describe("pinned and ranked dispatch — closed-only now executes, exactly once", () => {
+// #811 v4: a closed-only socket is HELD for reconnect recovery at every
+// dispatch site (`mainWouldRecover`), as main held it — never forwarded. v1–v3
+// forwarded here; when the forward's worker ran the task and the answer was
+// lost, recovery ran it again (#854: two executions where main had one).
+describe("pinned and ranked dispatch — a closed-only socket is held, as main", () => {
   it(
-    "pinned.closed ⇒ 1 execution via MCP (main: 0 — the paid task stranded)",
+    "pinned.closed ⇒ held: no MCP forward; the worker's reconnect recovers nothing (the task is queued under the delegator) ⇒ 0, as main",
     async () => {
       const o = await scenario("closed", "pinned");
-      expect(o).toMatchObject({ mcpExecutions: 1, wsExecutions: 0, total: 1, settlementRows: 1 });
+      expect(o).toMatchObject({ mcpExecutions: 0, wsExecutions: 0, total: 0, settlementRows: 0 });
     },
     T,
   );
@@ -513,9 +546,27 @@ describe("pinned and ranked dispatch — closed-only now executes, exactly once"
   );
 
   it(
-    "ranked.closed ⇒ 1 execution via MCP",
+    "ranked.closed ⇒ held: no MCP forward ⇒ 0, as main",
     async () => {
       const o = await scenario("closed", "ranked");
+      expect(o).toMatchObject({ mcpExecutions: 0, wsExecutions: 0, total: 0 });
+    },
+    T,
+  );
+
+  it(
+    "rankedSelf.closed (#854) ⇒ held: no MCP forward, the worker's reconnect executes it once, settled (as main)",
+    async () => {
+      const o = await scenario("closed", "rankedSelf");
+      expect(o).toMatchObject({ mcpExecutions: 0, wsExecutions: 1, total: 1, settlementRows: 1 });
+    },
+    T,
+  );
+
+  it(
+    "rankedSelf.none ⇒ the MCP forward (main's door), the mid-flight reconnect held back ⇒ 1",
+    async () => {
+      const o = await scenario("none", "rankedSelf");
       expect(o).toMatchObject({ mcpExecutions: 1, wsExecutions: 0, total: 1, settlementRows: 1 });
     },
     T,
