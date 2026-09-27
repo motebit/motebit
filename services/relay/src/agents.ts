@@ -3,7 +3,7 @@
  */
 
 import type { Hono, Context } from "hono";
-import type { TokenAudience } from "@motebit/protocol";
+import { relayRouteAudience, type TokenAudience } from "@motebit/protocol";
 import { HTTPException } from "hono/http-exception";
 import { refusePublicDeviceRegistration } from "./device-registration-guard.js";
 import type { MotebitDatabase, DatabaseDriver } from "@motebit/persistence";
@@ -587,60 +587,31 @@ export function registerAgentAuthMiddleware(deps: AgentAuthMiddlewareDeps): void
       throw new HTTPException(401, { message: "Invalid token" });
     }
 
-    // Expected audience by route family. The account family (balance /
-    // settlements / withdraw / withdrawals / checkout) MUST name the same
-    // audience middleware.ts's dedicated dualAuth expects — the two layers
-    // both wrap these routes, and a disagreement means no device token can
-    // ever satisfy the composition (#460: the admin:query default here vs
-    // account:balance there 401'd every sovereign balance read). Terminal
-    // segments use endsWith — `/withdrawals` contains `/withdraw`.
-    let agentAudience: TokenAudience;
-    if (path.includes("/p2p-eligibility")) {
-      agentAudience = "market:listing";
-    } else if (path.includes("/listing")) {
-      agentAudience = "market:listing";
-    } else if (path.includes("/credentials")) {
-      agentAudience = "credentials";
-    } else if (path.includes("/presentation")) {
-      agentAudience = "credentials:present";
-    } else if (path.endsWith("/rotate-key")) {
-      // The audience `spec/auth-token-v1.md` §9 already names for this
-      // route. It defaulted to `admin:query`, so the only tokens that ever
-      // reached it were the operator's — every signed client 401'd, and
-      // key rotation has never once been recorded here (#702).
-      agentAudience = "rotate-key";
-    } else if (path.includes("/proxy-token")) {
-      agentAudience = "proxy:token";
-    } else if (path.includes("/receipts")) {
-      agentAudience = "receipts:read";
-    } else if (path.endsWith("/balance") || path.endsWith("/settlements")) {
-      agentAudience = "account:balance";
-    } else if (path.endsWith("/withdrawals")) {
-      agentAudience = "account:withdrawals";
-    } else if (path.endsWith("/withdraw")) {
-      agentAudience = "account:withdraw";
-    } else if (path.endsWith("/checkout")) {
-      agentAudience = "account:checkout";
-    } else if (path === "/api/v1/agents/push-token" && (method === "POST" || method === "DELETE")) {
-      // The audience `@motebit/protocol` names for push-notification token
-      // registration, and the one mobile's push-token-manager mints. It
-      // defaulted to `admin:query`, so every phone's registration 401'd and
-      // `relay_push_tokens` held zero rows in production (#825) — the same
-      // client-names-one / route-defaults-to-another shape as #460 and #702.
-      // Only the two methods the push-token routes register: any other
-      // method on this path is `GET /api/v1/agents/:motebitId` with the id
-      // "push-token" (or a 404), and must keep the default audience.
-      agentAudience = "push:register";
-    } else if (path.endsWith("/roster")) {
-      // The machine roster (spec/machine-roster-v1.md §11): a per-DEVICE
-      // credential, because the route needs the key a device row holds (its
-      // own cap bucket, D5 of docs/proposals/machine-roster-relay-v1.md).
-      // An existing audience, named explicitly — never the admin:query
-      // default; the doctrine keeps the roster off a new audience.
-      agentAudience = "device:auth";
-    } else {
-      agentAudience = "admin:query";
-    }
+    // Expected audience. A per-agent sub-route (`/api/v1/agents/:id/<sub>…`)
+    // takes the audience `@motebit/protocol`'s RELAY_ROUTE_AUDIENCES names
+    // for its METHOD and PATTERN — the same table clients mint from, and the
+    // one the conformance test proves (route-audience-conformance.test.ts).
+    // Everything else — the registry family and `GET /api/v1/agents/:id` —
+    // takes `admin:query` (spec/auth-token-v1.md §5).
+    //
+    // This replaced a chain of `includes`/`endsWith` tests on the path alone.
+    // They ignored the method and the path's SHAPE, so a four-segment path
+    // whose id equals a sub-route name — `GET /api/v1/agents/roster`,
+    // `/balance`, `/credentials`, `/receipts`… — was authenticated with the
+    // sub-route's audience and then served by the `:motebitId` handler, which
+    // expects `admin:query` (#827, found in the #828 review). The account
+    // family still agrees with middleware.ts's dualAuth, now by construction
+    // (#460: a disagreement there 401'd every balance read); rotate-key still
+    // takes `rotate-key` (#702) and the roster `device:auth` (machine roster
+    // §11) — both entries in the table.
+    //
+    // The four-segment registry family resolves from the same table: POST and
+    // DELETE `/api/v1/agents/push-token` take `push:register` (#825/#830 —
+    // the audience mobile mints; it defaulted to `admin:query` and no phone
+    // ever registered), and every other method on that path is `GET
+    // /api/v1/agents/:motebitId` with the id "push-token" (admin:query) or
+    // no route at all (the default).
+    const agentAudience: TokenAudience = relayRouteAudience(method, path) ?? "admin:query";
 
     // The key the token verified under, from the row that verified it —
     // captured here, never re-read by a route (auth.ts `onVerified`).
@@ -689,6 +660,75 @@ export function registerAgentAuthMiddleware(deps: AgentAuthMiddlewareDeps): void
     }
     await next();
   });
+
+  // Collaborative proposals (`/api/v1/proposals`, `/api/v1/proposals/*`) take
+  // a device token for the `proposal` audience (spec/auth-token-v1.md §5).
+  // This used to be registered inside registerAgentRoutes — AFTER
+  // registerProposalRoutes had registered the handlers, and Hono runs an
+  // `app.use` only for routes registered after it — so it never ran: with a
+  // master token configured the /api/v1/* catch-all refused every device
+  // token (#827: the CLI's /propose, /proposals, /proposal always 401'd), and
+  // without one the routes were open. Installed here, before any route file,
+  // and carved out of the catch-all in middleware.ts.
+  const proposalAuth = async (c: Context, next: () => Promise<void>): Promise<void> => {
+    const path = c.req.path;
+    const method = c.req.method;
+    const authHeader = c.req.header("authorization");
+    if (authHeader == null || !authHeader.startsWith("Bearer ")) {
+      throw new HTTPException(401, { message: "Missing auth token" });
+    }
+    const token = authHeader.slice(7);
+
+    if (apiToken != null && apiToken !== "" && token === apiToken) {
+      recordAuthEvent?.({
+        kind: "master_token",
+        method,
+        path,
+        correlationId: c.req.header("x-correlation-id") ?? null,
+      });
+      await next();
+      return;
+    }
+
+    const claims = parseTokenPayloadUnsafe(token);
+    if (!claims?.mid) {
+      throw new HTTPException(401, { message: "Invalid token" });
+    }
+    const valid = await verifySignedTokenForDevice(
+      token,
+      claims.mid,
+      identityManager,
+      "proposal",
+      isTokenBlacklisted,
+      isAgentRevoked,
+      undefined,
+      (reason) => {
+        logger.warn("auth.agent_token_rejected", {
+          reason,
+          expectedAudience: "proposal",
+          mid: claims.mid,
+          path,
+        });
+        recordAuthEvent?.({
+          kind: "agent_token_rejected",
+          method,
+          path,
+          motebitId: claims.mid,
+          audience: "proposal",
+          reason,
+          correlationId: c.req.header("x-correlation-id") ?? null,
+        });
+      },
+    );
+    if (!valid) {
+      throw new HTTPException(401, { message: "Token verification failed" });
+    }
+
+    c.set("callerMotebitId" as never, claims.mid);
+    await next();
+  };
+  app.use("/api/v1/proposals", proposalAuth);
+  app.use("/api/v1/proposals/*", proposalAuth);
 }
 
 export function registerAgentRoutes(deps: AgentsDeps): void {
@@ -699,14 +739,10 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
     relayIdentity,
     connections,
     taskRouter,
-    apiToken,
     platformFeeRate,
     federationConfig,
     federationQueryCache,
     parseTokenPayloadUnsafe,
-    verifySignedTokenForDevice,
-    isTokenBlacklisted,
-    isAgentRevoked,
   } = deps;
   // Fee rate for the P2P eligibility pre-flight's expected-fee hint — the SAME
   // rate the submission gate uses, so the hint cannot disagree with what the
@@ -1111,71 +1147,6 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
       },
       existing ? 200 : 201,
     );
-  });
-
-  // Auth middleware for proposal routes
-  app.use("/api/v1/proposals/*", async (c, next) => {
-    const authHeader = c.req.header("authorization");
-    if (authHeader == null || !authHeader.startsWith("Bearer ")) {
-      throw new HTTPException(401, { message: "Missing auth token" });
-    }
-    const token = authHeader.slice(7);
-
-    if (apiToken != null && apiToken !== "" && token === apiToken) {
-      await next();
-      return;
-    }
-
-    const claims = parseTokenPayloadUnsafe(token);
-    if (!claims?.mid) {
-      throw new HTTPException(401, { message: "Invalid token" });
-    }
-    const valid = await verifySignedTokenForDevice(
-      token,
-      claims.mid,
-      identityManager,
-      "proposal",
-      isTokenBlacklisted,
-      isAgentRevoked,
-    );
-    if (!valid) {
-      throw new HTTPException(401, { message: "Token verification failed" });
-    }
-
-    c.set("callerMotebitId" as never, claims.mid);
-    await next();
-  });
-
-  app.use("/api/v1/proposals", async (c, next) => {
-    const authHeader = c.req.header("authorization");
-    if (authHeader == null || !authHeader.startsWith("Bearer ")) {
-      throw new HTTPException(401, { message: "Missing auth token" });
-    }
-    const token = authHeader.slice(7);
-
-    if (apiToken != null && apiToken !== "" && token === apiToken) {
-      await next();
-      return;
-    }
-
-    const claims = parseTokenPayloadUnsafe(token);
-    if (!claims?.mid) {
-      throw new HTTPException(401, { message: "Invalid token" });
-    }
-    const valid = await verifySignedTokenForDevice(
-      token,
-      claims.mid,
-      identityManager,
-      "proposal",
-      isTokenBlacklisted,
-      isAgentRevoked,
-    );
-    if (!valid) {
-      throw new HTTPException(401, { message: "Token verification failed" });
-    }
-
-    c.set("callerMotebitId" as never, claims.mid);
-    await next();
   });
 
   // POST /api/v1/agents/register — register/refresh an agent's MCP endpoint

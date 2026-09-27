@@ -611,6 +611,18 @@ export function registerMiddleware(deps: MiddlewareDeps): MiddlewareResult {
         // token or master) above — agents discovering workers don't hold the
         // master token. /api/v1/market/revenue is NOT carved out (operator-only).
         c.req.path === "/api/v1/market/candidates" ||
+        // Two more routes whose own device-token auth this catch-all used to
+        // shadow, so a device token was refused before it ever reached them
+        // (#827) — the same shape as the market/candidates carve-out above:
+        //   - collaborative proposals: `proposal` audience, installed by
+        //     registerAgentAuthMiddleware (agents.ts) before the routes;
+        //   - the browser-sandbox grant exchange: `browser-sandbox-grant`
+        //     dualAuth in registerAuthMiddleware below.
+        // Both still refuse a missing or wrong-audience token; the relay's
+        // route-audience conformance test proves it for every route.
+        c.req.path === "/api/v1/proposals" ||
+        c.req.path.startsWith("/api/v1/proposals/") ||
+        c.req.path === "/api/v1/browser-sandbox/token" ||
         c.req.path.startsWith("/api/v1/allocations/") ||
         c.req.path.startsWith("/api/v1/disputes/") ||
         // Skills registry (spec/skills-registry-v1.md §5): permissive-by-

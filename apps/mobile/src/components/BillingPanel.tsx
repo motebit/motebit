@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useMemo, useCallback } from "react";
 import { View, Text, TouchableOpacity, StyleSheet, ActivityIndicator, Linking } from "react-native";
+import type { TokenAudience } from "@motebit/sdk";
 import { useTheme, type ThemeColors } from "../theme";
 
 interface BillingPanelProps {
@@ -8,6 +9,13 @@ interface BillingPanelProps {
   /** Current cached balance in USD */
   balanceUsd: number;
   onBalanceUpdate?: (balanceUsd: number) => void;
+  /**
+   * Mints a device token for the audience a relay route verifies. The
+   * checkout route verifies `account:checkout` and the balance route
+   * `account:balance`; both calls here sent no token and were always
+   * refused (#827).
+   */
+  mintToken: (audience: TokenAudience) => Promise<string>;
 }
 
 const LOW_BALANCE_THRESHOLD = 5;
@@ -18,6 +26,7 @@ export function BillingPanel({
   relayUrl,
   balanceUsd: initialBalance,
   onBalanceUpdate,
+  mintToken,
 }: BillingPanelProps): React.ReactElement {
   const colors = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
@@ -93,9 +102,10 @@ export function BillingPanel({
       if (!motebitId || !relayUrl) return;
       setTopupMessage("Opening checkout…");
       try {
+        const token = await mintToken("account:checkout");
         const res = await fetch(`${relayUrl}/api/v1/agents/${motebitId}/checkout`, {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
           body: JSON.stringify({ amount }),
         });
         const data = (await res.json()) as { checkout_url?: string; error?: string };
@@ -110,7 +120,7 @@ export function BillingPanel({
         setTopupMessage("Network error");
       }
     },
-    [motebitId, relayUrl],
+    [motebitId, relayUrl, mintToken],
   );
 
   const handleCancel = useCallback(async () => {
@@ -166,7 +176,10 @@ export function BillingPanel({
       }
       void (async () => {
         try {
-          const res = await fetch(`${relayUrl}/api/v1/agents/${motebitId}/balance`);
+          const token = await mintToken("account:balance");
+          const res = await fetch(`${relayUrl}/api/v1/agents/${motebitId}/balance`, {
+            headers: { Authorization: `Bearer ${token}` },
+          });
           if (!res.ok) return;
           const data = (await res.json()) as { balance?: number };
           if (data.balance != null) {
@@ -183,7 +196,7 @@ export function BillingPanel({
         }
       })();
     }, 2000);
-  }, [motebitId, relayUrl, balance, onBalanceUpdate]);
+  }, [motebitId, relayUrl, balance, onBalanceUpdate, mintToken]);
 
   if (status === "loading") {
     return (

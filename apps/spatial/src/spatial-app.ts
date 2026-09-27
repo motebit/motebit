@@ -262,7 +262,7 @@ export class SpatialApp {
   // Relay auth state — tokenFactory is populated during initAI, privKeyBytes
   // during bootstrap. Both are read by the sync controller through getters,
   // and exportIdentity also reads privKeyBytes for motebit.md generation.
-  private tokenFactory: (() => Promise<string>) | null = null;
+  private tokenFactory: ((aud?: TokenAudience) => Promise<string>) | null = null;
   private _privKeyBytes: Uint8Array | null = null;
 
   /**
@@ -270,8 +270,7 @@ export class SpatialApp {
    * audience. Public so surface code (app.ts loadCredentials) can
    * authenticate owner-private relay reads (credentials became
    * caller===:motebitId-authed 2026-07-07). Returns null before the
-   * identity is unlocked. Sibling of the sync-controller's tokenFactory
-   * (which is hardcoded to `sync`).
+   * identity is unlocked. Sibling of the sync-controller's tokenFactory.
    */
   async createSyncToken(aud: TokenAudience = "sync"): Promise<string | null> {
     if (this._privKeyBytes == null || this.motebitId === "spatial-local") return null;
@@ -489,10 +488,9 @@ export class SpatialApp {
       this._privKeyBytes = privKeyBytes;
       const motebitId = this.motebitId;
       const deviceId = this.deviceId;
-      this.tokenFactory = async (): Promise<string> => {
-        return (
-          await mintAudienceToken({ mid: motebitId, did: deviceId, aud: "sync" }, privKeyBytes)
-        ).token;
+      this.tokenFactory = async (aud: TokenAudience = "sync"): Promise<string> => {
+        return (await mintAudienceToken({ mid: motebitId, did: deviceId, aud }, privKeyBytes))
+          .token;
       };
     }
 
@@ -1070,7 +1068,14 @@ export class SpatialApp {
     const { relayUrl } = this.networkSettings;
     const authToken = this.sync.lastAuthToken;
     if (!relayUrl || !authToken) return null;
-    return { relayUrl, authToken, motebitId: this.motebitId };
+    // `mintToken` lets the command layer mint each route's own audience; the
+    // socket's `sync` token alone was refused by `/balance` (#827).
+    return {
+      relayUrl,
+      authToken,
+      motebitId: this.motebitId,
+      mintToken: async (audience) => (await this.createSyncToken(audience)) ?? "",
+    };
   }
 
   // === Messaging ===

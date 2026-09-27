@@ -3857,7 +3857,10 @@ export class UnbootedWebApp {
           secureErase(privKeyBytes);
 
           if (receipt) {
-            const token = await this.createSyncToken("task:submit");
+            // The result route verifies `task:result` — a `task:submit` token
+            // here was refused, so no receipt this browser served ever
+            // reached the relay (#827).
+            const token = await this.createSyncToken("task:result");
             await fetch(`${relayUrl}/agent/${this._motebitId}/task/${task.task_id}/result`, {
               method: "POST",
               headers: {
@@ -3984,10 +3987,15 @@ export class UnbootedWebApp {
           });
 
           // Re-wire delegation adapter with fresh wsAdapter
+          // A per-audience provider, as at first wiring: the adapter asks for
+          // `task:submit` and `task:query`, and a static `sync` string here
+          // (the refreshed socket's token) failed both after the first
+          // refresh (#827).
           const freshDelegation = new RelayDelegationAdapter({
             syncUrl: relayUrl,
             motebitId: this._motebitId,
-            authToken: freshToken ?? undefined,
+            authToken: (audience?: TokenAudience) =>
+              this.createSyncToken(audience ?? "task:submit").then((t) => t ?? ""),
             sendRaw: (data: string) => freshWs.sendRaw(data),
             onCustomMessage: (cb) => freshWs.onCustomMessage(cb),
             getExplorationDrive: () => this.runtime?.getPrecision().explorationDrive,
@@ -4135,7 +4143,9 @@ export class UnbootedWebApp {
       .map((t: { name: string }) => t.name);
 
     try {
-      const token = await this.createSyncToken();
+      // Registration is the agent-registry family: `admin:query`
+      // (spec/auth-token-v1.md §5). The `sync` default was refused (#827).
+      const token = await this.createSyncToken("admin:query");
       const res = await fetch(`${this._servingSyncUrl}/api/v1/agents/register`, {
         method: "POST",
         headers: {
@@ -4198,9 +4208,14 @@ export class UnbootedWebApp {
   }
 
   // --- Pairing (multi-device) ---
+  //
+  // The relay's pairing routes verify `device:auth` (pairing.ts
+  // verifyPairingAuth), as desktop and mobile mint. Web minted `pair`, which
+  // no relay route accepts, so every web pairing initiate / get / approve /
+  // deny was refused (#827).
 
   async initiatePairing(syncUrl: string): Promise<{ pairingCode: string; pairingId: string }> {
-    const token = await this.createSyncToken("pair");
+    const token = await this.createSyncToken("device:auth");
     if (!token) throw new Error("No signing key — initialize identity first");
     const client = new PairingClient({ relayUrl: syncUrl });
     const result = await client.initiate(token);
@@ -4208,14 +4223,14 @@ export class UnbootedWebApp {
   }
 
   async getPairingSession(syncUrl: string, pairingId: string): Promise<PairingSession> {
-    const token = await this.createSyncToken("pair");
+    const token = await this.createSyncToken("device:auth");
     if (!token) throw new Error("No signing key");
     const client = new PairingClient({ relayUrl: syncUrl });
     return client.getSession(pairingId, token);
   }
 
   async approvePairing(syncUrl: string, pairingId: string): Promise<{ deviceId: string }> {
-    const token = await this.createSyncToken("pair");
+    const token = await this.createSyncToken("device:auth");
     if (!token) throw new Error("No signing key");
     const client = new PairingClient({ relayUrl: syncUrl });
 
@@ -4244,7 +4259,7 @@ export class UnbootedWebApp {
   }
 
   async denyPairing(syncUrl: string, pairingId: string): Promise<void> {
-    const token = await this.createSyncToken("pair");
+    const token = await this.createSyncToken("device:auth");
     if (!token) throw new Error("No signing key");
     const client = new PairingClient({ relayUrl: syncUrl });
     await client.deny(pairingId, token);

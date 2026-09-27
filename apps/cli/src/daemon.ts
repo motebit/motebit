@@ -601,13 +601,24 @@ export async function handleRun(config: CliConfig): Promise<void> {
               }
 
               if (receipt) {
-                // POST receipt to relay
+                // POST receipt to relay. The route verifies `task:result`:
+                // mint it with the key in hand. The master-token-or-empty
+                // bearer this sent was refused whenever no master token was
+                // configured, so no receipt reached the relay (#827).
                 const resultUrl = `${syncUrl}/agent/${motebitId}/task/${task.task_id}/result`;
+                const resultToken = fullConfig.device_id
+                  ? (
+                      await mintAudienceToken(
+                        { mid: motebitId, did: fullConfig.device_id, aud: "task:result" },
+                        privateKey,
+                      )
+                    ).token
+                  : (syncToken ?? "");
                 await fetch(resultUrl, {
                   method: "POST",
                   headers: {
                     "Content-Type": "application/json",
-                    Authorization: `Bearer ${syncToken ?? ""}`,
+                    Authorization: `Bearer ${resultToken}`,
                   },
                   body: JSON.stringify(receipt),
                 });
@@ -1597,7 +1608,19 @@ export async function handleServe(config: CliConfig): Promise<void> {
               const resultHeaders: Record<string, string> = {
                 "Content-Type": "application/json",
               };
-              if (masterToken) resultHeaders["Authorization"] = `Bearer ${masterToken}`;
+              // The route verifies `task:result`: mint it with the serve key.
+              // With no master token this sent no Authorization at all and
+              // was refused, so no served receipt reached the relay (#827).
+              const resultToken =
+                servePrivateKey && fullConfigForServe.device_id
+                  ? (
+                      await mintAudienceToken(
+                        { mid: motebitId, did: fullConfigForServe.device_id, aud: "task:result" },
+                        servePrivateKey,
+                      )
+                    ).token
+                  : masterToken;
+              if (resultToken) resultHeaders["Authorization"] = `Bearer ${resultToken}`;
               await fetch(`${syncUrl}/agent/${motebitId}/task/${task.task_id}/result`, {
                 method: "POST",
                 headers: resultHeaders,

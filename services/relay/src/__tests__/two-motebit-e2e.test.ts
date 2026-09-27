@@ -214,7 +214,7 @@ describe("Two-Motebit Delegation E2E", () => {
     const adapter = new RelayDelegationAdapter({
       syncUrl: "http://relay",
       motebitId: alice.motebitId,
-      authToken: API_TOKEN,
+      authToken: async () => API_TOKEN,
       sendRaw: () => {},
       onCustomMessage: aliceBridge.onCustomMessage,
     });
@@ -327,7 +327,7 @@ describe("Two-Motebit Delegation E2E", () => {
       const adapter = new RelayDelegationAdapter({
         syncUrl: "http://relay",
         motebitId: alice.motebitId,
-        authToken: API_TOKEN,
+        authToken: async () => API_TOKEN,
         sendRaw: () => {},
         onCustomMessage: aliceBridge.onCustomMessage,
       });
@@ -473,7 +473,7 @@ describe("Two-Motebit Delegation E2E", () => {
     const adapter1 = new RelayDelegationAdapter({
       syncUrl: "http://relay",
       motebitId: alice.motebitId,
-      authToken: API_TOKEN,
+      authToken: async () => API_TOKEN,
       sendRaw: () => {},
       onCustomMessage: aliceBridge1.onCustomMessage,
     });
@@ -555,7 +555,7 @@ describe("Two-Motebit Delegation E2E", () => {
     const adapter2 = new RelayDelegationAdapter({
       syncUrl: "http://relay",
       motebitId: bob.motebitId,
-      authToken: API_TOKEN,
+      authToken: async () => API_TOKEN,
       sendRaw: () => {},
       onCustomMessage: bobBridge2.onCustomMessage,
     });

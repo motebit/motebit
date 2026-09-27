@@ -9,6 +9,9 @@
  * - API: returns as JSON
  */
 
+import { relayRouteAudience } from "@motebit/sdk";
+import type { TokenAudience } from "@motebit/sdk";
+
 export interface CommandResult {
   /** One-line summary suitable for TTS or inline display. */
   summary: string;
@@ -20,19 +23,41 @@ export interface CommandResult {
 
 export interface RelayConfig {
   relayUrl: string;
+  /**
+   * The bearer sent when no per-audience token can be minted: an operator's
+   * master token, or a token for a public route. A device-signed token here
+   * is bound to ONE audience, so it passes only the routes that verify that
+   * audience — pass `mintToken` for everything else.
+   */
   authToken: string;
   motebitId: string;
+  /**
+   * Mint a device-signed token for an audience. When present, `relayFetch`
+   * mints the audience the relay route requires — resolved from
+   * `@motebit/protocol`'s `RELAY_ROUTE_AUDIENCES` — instead of reusing
+   * `authToken`, which a single-audience device token cannot serve for
+   * `/balance` (`account:balance`) and `/proposals` (`proposal`) alike
+   * (#827: every surface's `/balance` 401'd on a `sync` token).
+   */
+  mintToken?: (audience: TokenAudience) => Promise<string>;
 }
 
-/** Fetch JSON from relay with auth. Throws on non-ok response. */
+/**
+ * Fetch JSON from relay with auth. Throws on non-ok response. The bearer is a
+ * token minted for the route's own audience when `relay.mintToken` is given
+ * and the route takes a device token; otherwise `relay.authToken`.
+ */
 export async function relayFetch(
   relay: RelayConfig,
   path: string,
   options?: RequestInit,
 ): Promise<unknown> {
+  const audience = relayRouteAudience(options?.method ?? "GET", path);
+  const bearer =
+    audience != null && relay.mintToken != null ? await relay.mintToken(audience) : relay.authToken;
   const headers: Record<string, string> = {
     "Content-Type": "application/json",
-    Authorization: `Bearer ${relay.authToken}`,
+    Authorization: `Bearer ${bearer}`,
     ...(options?.headers as Record<string, string> | undefined),
   };
   const res = await fetch(`${relay.relayUrl}${path}`, { ...options, headers });

@@ -665,8 +665,10 @@ export function runSlashCommand(command: string, args: string, deps: SlashComman
     case "proposals":
       void (async () => {
         try {
-          const data = (await a.relayFetch(`/api/v1/agents/${a.motebitId}/proposals`)) as {
-            proposals: Array<{ proposal_id: string; status: string; goal: string }>;
+          // The relay's proposals live at `/api/v1/proposals`, scoped to the
+          // caller's token; `/api/v1/agents/:id/proposals` never existed (#827).
+          const data = (await a.relayFetch("/api/v1/proposals")) as {
+            proposals: Array<{ proposal_id: string; status: string; plan_id?: string }>;
           };
           const proposals = data.proposals ?? [];
           if (proposals.length === 0) {
@@ -676,7 +678,7 @@ export function runSlashCommand(command: string, args: string, deps: SlashComman
               .slice(0, 10)
               .map(
                 (p) =>
-                  `  ${p.proposal_id.slice(0, 8)}... [${p.status}] — ${(p.goal ?? "").slice(0, 60)}`,
+                  `  ${p.proposal_id.slice(0, 8)}... [${p.status}] — plan ${(p.plan_id ?? "").slice(0, 8)}`,
               );
             addSystemMessage(`Proposals (${proposals.length}):\n${lines.join("\n")}`);
           }
