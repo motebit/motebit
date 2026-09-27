@@ -1,1 +1,1 @@
-export const VALUE = "main";
+export const VALUE = "head";
