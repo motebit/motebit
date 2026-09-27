@@ -76,7 +76,20 @@ export class MobileSyncController {
   private syncEngine: SyncEngine | null = null;
   private conversationSyncEngine: ConversationSyncEngine | null = null;
   private syncTimer: ReturnType<typeof setInterval> | null = null;
-  private _cycleInFlight = false;
+  /**
+   * Sync-socket ownership across overlapping cycles (#816). Every tick
+   * starts a cycle, exactly as before — a cycle that outlives the 30 s
+   * interval (a slow relay-key fetch, a slow or hung sync) never delays or
+   * suppresses the next one's HTTP sync. Only the SOCKET is owned: each
+   * cycle takes a number, and a cycle may connect its socket only if no
+   * newer cycle has connected one already; connecting closes the socket it
+   * replaces. An overtaken cycle releases its unconnected socket and still
+   * runs its HTTP sync. `_runEpoch` moves on every start and stop, so a
+   * cycle of a stopped (or restarted) run does nothing further.
+   */
+  private _cycleSeq = 0;
+  private _socketCycle = 0;
+  private _runEpoch = 0;
   private _syncStatus: SyncStatus = "offline";
   private _syncStatusCallback: ((status: SyncStatus, lastSync: number) => void) | null = null;
   private _lastSyncTime = 0;
@@ -229,6 +242,7 @@ export class MobileSyncController {
   }
 
   async startSync(syncUrl?: string): Promise<void> {
+    this._runEpoch++;
     const url = syncUrl != null && syncUrl !== "" ? syncUrl : await this.getSyncUrl();
     const storage = this.deps.getStorage();
     if (url == null || url === "" || !storage) return;
@@ -326,6 +340,7 @@ export class MobileSyncController {
   }
 
   stopSync(): void {
+    this._runEpoch++;
     this.deps.stopPushLifecycle();
     if (this.syncTimer) {
       clearInterval(this.syncTimer);
@@ -402,16 +417,17 @@ export class MobileSyncController {
   }
 
   private async syncCycle(syncUrl: string): Promise<void> {
-    if (!this.syncEngine || !this.conversationSyncEngine) return;
+    // This cycle's engines and run: after a stop (or a stop and a restart to
+    // another relay) a resumed cycle must not drive the new run's engines
+    // against its own, old URL.
+    const engine = this.syncEngine;
+    const convEngine = this.conversationSyncEngine;
+    if (!engine || !convEngine) return;
     const storage = this.deps.getStorage();
     if (!storage) return;
-    // One cycle at a time. A cycle outlives the 30 s interval when the relay
-    // key fetch is slow; an overlapping cycle would tear down the socket the
-    // running one is still building, so every cycle would be overtaken and
-    // no socket would ever connect (#816). The skipped tick's work is done by
-    // the cycle in flight and the next tick.
-    if (this._cycleInFlight) return;
-    this._cycleInFlight = true;
+    const run = this._runEpoch;
+    const cycle = ++this._cycleSeq;
+    const stale = (): boolean => run !== this._runEpoch;
     const motebitId = this.deps.getMotebitId();
 
     this._syncStatus = "syncing";
@@ -419,17 +435,11 @@ export class MobileSyncController {
 
     try {
       const token = await this.deps.createSyncToken();
+      if (stale()) return;
       const encKey = this._syncEncKey;
 
-      // Tear down previous WS connection (token expired)
-      if (this._wsUnsubOnEvent) {
-        this._wsUnsubOnEvent();
-        this._wsUnsubOnEvent = null;
-      }
-      if (this._wsAdapter) {
-        this._wsAdapter.disconnect();
-        this._wsAdapter = null;
-      }
+      // The previous socket (its token about to expire) stays up until this
+      // cycle's socket is ready to replace it — see the connect step below.
 
       // Build adapter stack with encryption
       const httpAdapter = new HttpEventStoreAdapter({
@@ -459,12 +469,11 @@ export class MobileSyncController {
           httpFallback: encryptedHttp,
           localStore: localEventStore ?? undefined,
         });
-        this._wsAdapter = wsAdapter;
 
         const encryptedWs = new EncryptedEventStoreAdapter({ inner: wsAdapter, key: encKey });
 
         // Inbound real-time events
-        this._wsUnsubOnEvent = wsAdapter.onEvent((raw) => {
+        const unsubEvent = wsAdapter.onEvent((raw) => {
           void (async () => {
             if (!localEventStore) return;
             const dec = await decryptEventPayload(raw, encKey);
@@ -472,13 +481,15 @@ export class MobileSyncController {
           })();
         });
 
-        let wsSuperseded = false;
-        // Wire delegation adapter so PlanEngine can delegate steps to capable devices
+        // Wire delegation adapter so PlanEngine can delegate steps to capable
+        // devices — installed when this cycle's socket connects (below), so
+        // it is always bound to the live socket.
+        let delegationAdapter: RelayDelegationAdapter | null = null;
         const runtime = this.deps.getRuntime();
         if (runtime) {
           // A per-audience provider: the adapter submits (`task:submit`) and
           // polls (`task:query`). The static `sync` token failed both (#827).
-          const delegationAdapter = new RelayDelegationAdapter({
+          delegationAdapter = new RelayDelegationAdapter({
             syncUrl,
             motebitId,
             authToken: (audience: TokenAudience) => this.deps.createSyncToken(audience),
@@ -486,7 +497,6 @@ export class MobileSyncController {
             onCustomMessage: (cb) => wsAdapter.onCustomMessage(cb),
             getExplorationDrive: () => this.deps.getRuntime()?.getPrecision().explorationDrive,
           });
-          runtime.setDelegationAdapter(delegationAdapter);
 
           // Enable interactive delegation — lets the AI transparently delegate
           // tasks to remote agents during conversation. Resolve the PINNED
@@ -500,11 +510,11 @@ export class MobileSyncController {
               setItem: (k, v) => AsyncStorage.setItem(k, v),
             },
           });
-          // Superseded while awaiting (stopSync replaced this socket):
-          // connecting it now would open a socket nothing owns — open at the
-          // relay, counted in its liveness, never closed (#816). Only the
-          // socket is skipped; the HTTP sync below still runs.
-          wsSuperseded = this._wsAdapter !== wsAdapter;
+          if (stale()) {
+            unsubEvent();
+            wsAdapter.disconnect();
+            return;
+          }
           runtime.enableInteractiveDelegation({
             syncUrl,
             // Honor the audience the runtime asks for — `task:submit` to
@@ -634,11 +644,25 @@ export class MobileSyncController {
           });
         }
 
-        if (wsSuperseded) {
-          this.syncEngine.connectRemote(encryptedHttp);
-        } else {
-          this.syncEngine.connectRemote(encryptedWs);
+        if (cycle > this._socketCycle) {
+          // Newest ready socket: it replaces the live one (make-before-break
+          // at the cycle level — the replaced socket closes here, not at the
+          // start of the cycle).
+          if (this._wsUnsubOnEvent) this._wsUnsubOnEvent();
+          if (this._wsAdapter) this._wsAdapter.disconnect();
+          this._wsAdapter = wsAdapter;
+          this._wsUnsubOnEvent = unsubEvent;
+          this._socketCycle = cycle;
+          if (runtime && delegationAdapter) runtime.setDelegationAdapter(delegationAdapter);
+          engine.connectRemote(encryptedWs);
           wsAdapter.connect();
+        } else {
+          // A newer cycle already connected its socket: connecting this one
+          // would open a socket nothing owns — open at the relay, counted in
+          // its liveness, never closed (#816). Release it; the HTTP sync
+          // below still runs, against the live socket's remote.
+          unsubEvent();
+          wsAdapter.disconnect();
         }
 
         // Recover any delegated steps orphaned by a previous app close
@@ -655,7 +679,7 @@ export class MobileSyncController {
         }
       } else {
         // Fallback: no encryption key available
-        this.syncEngine.connectRemote(httpAdapter);
+        engine.connectRemote(httpAdapter);
       }
 
       // Conversation sync (encrypted at relay boundary)
@@ -664,14 +688,16 @@ export class MobileSyncController {
         motebitId,
         authToken: token,
       });
-      this.conversationSyncEngine.connectRemote(
+      convEngine.connectRemote(
         encKey
           ? new EncryptedConversationSyncAdapter({ inner: convHttpAdapter, key: encKey })
           : convHttpAdapter,
       );
 
-      await this.syncEngine.sync();
-      await this.conversationSyncEngine.sync();
+      await engine.sync();
+      if (stale()) return;
+      await convEngine.sync();
+      if (stale()) return;
 
       // Plan sync — push/pull plans for cross-device visibility
       if (storage.planStore != null) {
@@ -694,14 +720,14 @@ export class MobileSyncController {
         }
       }
 
+      if (stale()) return;
       this._lastSyncTime = Date.now();
       this._syncStatus = "idle";
       this._syncStatusCallback?.("idle", this._lastSyncTime);
     } catch {
+      if (stale()) return;
       this._syncStatus = "error";
       this._syncStatusCallback?.("error", this._lastSyncTime);
-    } finally {
-      this._cycleInFlight = false;
     }
   }
 }
