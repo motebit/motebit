@@ -92,6 +92,7 @@ const RELAY_PREFIXES = [
   "/sync/",
   "/ws/sync/",
   "/pairing/",
+  "/api/v1/subscriptions/",
 ];
 
 /**
@@ -113,6 +114,20 @@ const DECLARED_NON_TABLE: ReadonlyArray<{ method: string; path: string; reason: 
   // a read of its own ledger is an auth-design decision, not a parity fix.
   { method: "*", path: "/agent/:id/ledger/:goalId", reason: "operator-only (#827 residual)" },
   { method: "*", path: "/agent/:id/settlements", reason: "operator-only" },
+  // Subscriptions (#846). The owner mutations (cancel, resubscribe) are in the
+  // table; these take no device token. The webhook is Stripe-signed; checkout
+  // and session-status are the Stripe checkout flow (session-status acts on
+  // the session's paid state, read server-side from Stripe). status is an
+  // unauthenticated read that also creates an empty account row — an open
+  // residual named in the #846 report, not a parity fix.
+  { method: "POST", path: "/api/v1/subscriptions/webhook", reason: "Stripe signature" },
+  { method: "POST", path: "/api/v1/subscriptions/checkout", reason: "Stripe checkout flow" },
+  { method: "GET", path: "/api/v1/subscriptions/session-status", reason: "Stripe checkout flow" },
+  {
+    method: "GET",
+    path: "/api/v1/subscriptions/:id/status",
+    reason: "unauthenticated read (#846 residual)",
+  },
 ];
 
 /**

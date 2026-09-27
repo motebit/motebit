@@ -7,7 +7,9 @@
  *   GET  /api/v1/agents/:motebitId/migration/export — credential bundle export (§6)
  *   POST /api/v1/agents/accept-migration            — validate MigrationPresentation at destination (§8)
  */
-import type { Hono } from "hono";
+import type { Context, Hono } from "hono";
+import type { AuthEvent } from "./auth-events.js";
+import { bindBySignature, bindCaller, type BoundIdentity } from "./identity-binding.js";
 import { HTTPException } from "hono/http-exception";
 import { sign, canonicalJson, hexToBytes } from "@motebit/encryption";
 import {
@@ -116,20 +118,34 @@ function getActiveMigration(
     { token_id: string; state: MigrationState; expires_at: number } | undefined;
 }
 
-function updateMigrationState(db: DatabaseDriver, tokenId: string, state: MigrationState): void {
+/**
+ * Advance an identity's migration. `owner` is a `BoundIdentity` (#846): the
+ * route proved the request is the identity's own — its signed
+ * MigrationRequest (`/migrate`) or its own token / the operator (every other
+ * migration route) — and the row must be that identity's.
+ */
+/** @internal exported for its owner-scoping unit test. */
+export function updateMigrationState(
+  db: DatabaseDriver,
+  owner: BoundIdentity,
+  tokenId: string,
+  state: MigrationState,
+): void {
   const extras: Record<string, unknown> = {};
   if (state === "departed") extras.departed_at = Date.now();
   if (state === "cancelled") extras.cancelled_at = Date.now();
 
   if (Object.keys(extras).length > 0) {
     const setClauses = [`state = ?`, ...Object.keys(extras).map((k) => `${k} = ?`)];
-    db.prepare(`UPDATE relay_migrations SET ${setClauses.join(", ")} WHERE token_id = ?`).run(
-      state,
-      ...Object.values(extras),
-      tokenId,
-    );
+    db.prepare(
+      `UPDATE relay_migrations SET ${setClauses.join(", ")} WHERE token_id = ? AND motebit_id = ?`,
+    ).run(state, ...Object.values(extras), tokenId, owner);
   } else {
-    db.prepare("UPDATE relay_migrations SET state = ? WHERE token_id = ?").run(state, tokenId);
+    db.prepare("UPDATE relay_migrations SET state = ? WHERE token_id = ? AND motebit_id = ?").run(
+      state,
+      tokenId,
+      owner,
+    );
   }
 }
 
@@ -152,6 +168,11 @@ export interface MigrationDeps {
    * credential admitted is closed after the write (#776). Required.
    */
   closeIdentityConnections: CloseIdentityConnections;
+  /**
+   * Relay rule 6: a migration route refused because the caller is not the
+   * identity (#846) is recorded, naming the presenter. Required.
+   */
+  recordAuthEvent: (event: AuthEvent) => void;
 }
 
 // === Route Registration ===
@@ -164,7 +185,23 @@ export function registerMigrationRoutes(deps: MigrationDeps): void {
     federationConfig,
     reconcileKeyConnections,
     closeIdentityConnections,
+    recordAuthEvent,
   } = deps;
+
+  /**
+   * Every per-identity migration route after `/migrate` acts for the path
+   * identity only (spec/migration-v1.md §3.2: the AGENT cancels, departs,
+   * exports). The agent-route middleware verifies the token and sets its
+   * `mid`, but never compares it to the path — so any identity's
+   * `admin:query` token cancelled B's migration, exported B's credentials and
+   * attestation, and departed B (revoking B here and closing B's sockets).
+   */
+  const bindMigrationCaller = (c: Context, motebitId: string, route: string): BoundIdentity =>
+    bindCaller(c, motebitId, {
+      recordAuthEvent,
+      reason: `migration:${route}`,
+      audience: "admin:query",
+    });
 
   // ── POST /api/v1/agents/:motebitId/migrate (§4) ──
   // Initiate migration. Issues a MigrationToken.
@@ -207,12 +244,15 @@ export function registerMigrationRoutes(deps: MigrationDeps): void {
     ) {
       throw new HTTPException(401, { message: "MigrationRequest signature invalid" });
     }
+    // The request's own signature, verified under the identity's key just
+    // above, is what binds this door to the identity (§4.1).
+    const owner = bindBySignature(motebitId);
 
     // Check no active migration in progress (§4.4: one active token per agent)
     const existing = getActiveMigration(db, motebitId);
     if (existing) {
       // Replace previous token (§4.4 convention)
-      updateMigrationState(db, existing.token_id, "cancelled");
+      updateMigrationState(db, owner, existing.token_id, "cancelled");
     }
 
     // Issue MigrationToken (§4.2)
@@ -265,6 +305,7 @@ export function registerMigrationRoutes(deps: MigrationDeps): void {
   /** @spec motebit/migration@1.0 */
   app.get("/api/v1/agents/:motebitId/migration/attestation", async (c) => {
     const motebitId = c.req.param("motebitId");
+    const owner = bindMigrationCaller(c, motebitId, "attestation");
 
     // Verify active migration token
     const migration = getActiveMigration(db, motebitId);
@@ -273,7 +314,7 @@ export function registerMigrationRoutes(deps: MigrationDeps): void {
     }
 
     // Advance state
-    updateMigrationState(db, migration.token_id, "attesting");
+    updateMigrationState(db, owner, migration.token_id, "attesting");
 
     // Gather agent data
     const agent = db
@@ -360,6 +401,7 @@ export function registerMigrationRoutes(deps: MigrationDeps): void {
   /** @spec motebit/migration@1.0 */
   app.get("/api/v1/agents/:motebitId/migration/export", async (c) => {
     const motebitId = c.req.param("motebitId");
+    const owner = bindMigrationCaller(c, motebitId, "export");
 
     // Verify active migration token
     const migration = getActiveMigration(db, motebitId);
@@ -368,7 +410,7 @@ export function registerMigrationRoutes(deps: MigrationDeps): void {
     }
 
     // Advance state
-    updateMigrationState(db, migration.token_id, "exporting");
+    updateMigrationState(db, owner, migration.token_id, "exporting");
 
     // Fetch all credentials for this agent
     const credentials = db
@@ -678,11 +720,12 @@ export function registerMigrationRoutes(deps: MigrationDeps): void {
   /** @spec motebit/migration@1.0 */
   app.post("/api/v1/agents/:motebitId/migrate/cancel", (c) => {
     const motebitId = c.req.param("motebitId");
+    const owner = bindMigrationCaller(c, motebitId, "cancel");
     const migration = getActiveMigration(db, motebitId);
     if (!migration) {
       throw new HTTPException(404, { message: "No active migration" });
     }
-    updateMigrationState(db, migration.token_id, "cancelled");
+    updateMigrationState(db, owner, migration.token_id, "cancelled");
     logger.info("migration.cancelled", { motebitId, tokenId: migration.token_id });
     return c.json({ ok: true, motebit_id: motebitId });
   });
@@ -696,6 +739,7 @@ export function registerMigrationRoutes(deps: MigrationDeps): void {
   /** @spec motebit/migration@1.0 */
   app.post("/api/v1/agents/:motebitId/migrate/depart", async (c) => {
     const motebitId = c.req.param("motebitId");
+    const owner = bindMigrationCaller(c, motebitId, "depart");
     const migration = getActiveMigration(db, motebitId);
     if (!migration) {
       throw new HTTPException(404, { message: "No active migration" });
@@ -833,7 +877,7 @@ export function registerMigrationRoutes(deps: MigrationDeps): void {
         migration.token_id,
       );
     }
-    updateMigrationState(db, migration.token_id, "departed");
+    updateMigrationState(db, owner, migration.token_id, "departed");
 
     // Mark agent as inactive on this relay — and off the shelf, in the same
     // statement (registry-delist.ts). The row stays: the identity now lives

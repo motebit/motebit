@@ -24,7 +24,12 @@ import { propagateDeletionForEvent } from "./deletion-propagation.js";
 import type { TaskQueueEntry } from "./tasks.js";
 import type { createLogger } from "./logger.js";
 import type { AuthEvent } from "./auth-events.js";
-import { firstForeignSyncEntry, foreignSyncEntryEvent } from "./sync-ingest-binding.js";
+import {
+  appendBoundEvent,
+  bindSocketEntries,
+  foreignSyncEntryEvent,
+  type BoundIdentity,
+} from "./identity-binding.js";
 
 /** `WebSocket.OPEN` — the only state in which a socket is registered or counted. */
 export const WS_OPEN = 1;
@@ -656,8 +661,9 @@ export function registerWebSocketRoutes(deps: WebSocketDeps): void {
        * as. Recorded (rule 6) under the presenter: this identity when a
        * signed token admitted the socket, null for the master token / no auth.
        */
-      function refusedForeignEntries(ws: WSContext, frame: string, entries: unknown[]): boolean {
-        if (firstForeignSyncEntry(entries, motebitId) === -1) return false;
+      function bindFrame(ws: WSContext, frame: string, entries: unknown[]): BoundIdentity | null {
+        const owner = bindSocketEntries(entries, motebitId);
+        if (owner != null) return owner;
         const presenter = verifiedKey != null ? motebitId : null;
         logger.warn("ws.foreign_entry_refused", { motebitId, deviceId, frame, presenter });
         deps.recordAuthEvent?.(foreignSyncEntryEvent({ path: `/ws/sync/${motebitId}`, presenter }));
@@ -667,7 +673,7 @@ export function registerWebSocketRoutes(deps: WebSocketDeps): void {
             message: `${frame} refused: every entry's motebit_id must be the authenticated identity`,
           }),
         );
-        return true;
+        return null;
       }
 
       /** Tell the observer a peer is bound (or re-announced); never let it take the socket down. */
@@ -958,7 +964,8 @@ export function registerWebSocketRoutes(deps: WebSocketDeps): void {
             }
 
             if (msg.type === "push" && Array.isArray(msg.events)) {
-              if (refusedForeignEntries(ws, msg.type, msg.events)) return;
+              const owner = bindFrame(ws, msg.type, msg.events);
+              if (owner == null) return;
               // Ingress redaction: memory content above the sync-safe ceiling
               // must never reach the event store OR other connected devices
               // unredacted (the previous fan-out below sent raw entries).
@@ -975,7 +982,7 @@ export function registerWebSocketRoutes(deps: WebSocketDeps): void {
                   });
                   if (isDuplicate) continue;
                 }
-                await eventStore.append(entry);
+                if (!(await appendBoundEvent(eventStore, owner, entry))) continue;
                 wsAccepted++;
                 // Deletion propagation — per-event best-effort on the WS
                 // path (a dropped propagation here is recovered by the
@@ -1011,9 +1018,10 @@ export function registerWebSocketRoutes(deps: WebSocketDeps): void {
             }
 
             if (msg.type === "push_conversations" && Array.isArray(msg.conversations)) {
-              if (refusedForeignEntries(ws, msg.type, msg.conversations)) return;
+              const owner = bindFrame(ws, msg.type, msg.conversations);
+              if (owner == null) return;
               for (const conv of msg.conversations) {
-                upsertSyncConversation(db, conv);
+                upsertSyncConversation(db, owner, conv);
               }
               ws.send(
                 JSON.stringify({ type: "ack_conversations", accepted: msg.conversations.length }),
@@ -1037,9 +1045,10 @@ export function registerWebSocketRoutes(deps: WebSocketDeps): void {
             }
 
             if (msg.type === "push_messages" && Array.isArray(msg.messages)) {
-              if (refusedForeignEntries(ws, msg.type, msg.messages)) return;
+              const owner = bindFrame(ws, msg.type, msg.messages);
+              if (owner == null) return;
               for (const m of msg.messages) {
-                upsertSyncMessage(db, m);
+                upsertSyncMessage(db, owner, m);
               }
               ws.send(JSON.stringify({ type: "ack_messages", accepted: msg.messages.length }));
 

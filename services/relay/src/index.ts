@@ -1212,6 +1212,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     federationConfig,
     reconcileKeyConnections,
     closeIdentityConnections,
+    recordAuthEvent: authEvents.record,
   });
 
   // --- Dispute routes (dispute-v1.md) ---
@@ -1274,7 +1275,13 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
   });
 
   // --- Proxy token + balance routes ---
-  registerProxyTokenRoutes(app, moteDb.db, relayIdentity, subscriptionEventAdapter);
+  registerProxyTokenRoutes(
+    app,
+    moteDb.db,
+    relayIdentity,
+    subscriptionEventAdapter,
+    authEvents.record,
+  );
 
   // --- Credential routes ---
   registerCredentialRoutes({

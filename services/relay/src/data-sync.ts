@@ -21,7 +21,7 @@ import {
   floorSyncPlanStep,
 } from "./data-sync-redaction.js";
 import type { AuthEvent } from "./auth-events.js";
-import { refuseForeignSyncEntries } from "./sync-ingest-binding.js";
+import { bindSyncEntries, type BoundIdentity } from "./identity-binding.js";
 
 export interface DataSyncDeps {
   db: DatabaseDriver;
@@ -130,10 +130,17 @@ export function createDataSyncTables(db: DatabaseDriver): void {
 /**
  * Rows are keyed by a client-chosen id, so each upsert below is scoped to the
  * row's owner: a push naming an id another identity holds changes nothing
- * (#846). The door (`refuseForeignSyncEntries`) binds the entry to the pusher;
+ * (#846). The door (`bindSyncEntries`) binds the entry to the pusher and
+ * mints the `BoundIdentity` each helper takes as `owner` (an entry naming
+ * another owner is skipped);
  * this binds the ROW to the entry.
  */
-export function upsertSyncConversation(db: DatabaseDriver, raw: SyncConversation): void {
+export function upsertSyncConversation(
+  db: DatabaseDriver,
+  owner: BoundIdentity,
+  raw: SyncConversation,
+): void {
+  if (raw.motebit_id !== owner) return;
   // Fail-closed floor: plaintext free-text fields never persist (the client
   // encrypts them; see data-sync-redaction.ts). Storage is safe for any caller.
   const conv = floorSyncConversation(raw);
@@ -157,7 +164,12 @@ export function upsertSyncConversation(db: DatabaseDriver, raw: SyncConversation
   );
 }
 
-export function upsertSyncMessage(db: DatabaseDriver, raw: SyncConversationMessage): void {
+export function upsertSyncMessage(
+  db: DatabaseDriver,
+  owner: BoundIdentity,
+  raw: SyncConversationMessage,
+): void {
+  if (raw.motebit_id !== owner) return;
   const msg = floorSyncMessage(raw);
   db.prepare(
     `INSERT OR IGNORE INTO sync_conversation_messages
@@ -187,7 +199,8 @@ const STEP_STATUS_ORDER: Record<string, number> = {
   skipped: 2,
 };
 
-function upsertSyncPlan(db: DatabaseDriver, raw: SyncPlan): void {
+function upsertSyncPlan(db: DatabaseDriver, owner: BoundIdentity, raw: SyncPlan): void {
+  if (raw.motebit_id !== owner) return;
   const plan = floorSyncPlan(raw);
   db.prepare(
     `INSERT INTO sync_plans (plan_id, goal_id, motebit_id, title, status, created_at, updated_at, current_step_index, total_steps, proposal_id, collaborative)
@@ -216,7 +229,8 @@ function upsertSyncPlan(db: DatabaseDriver, raw: SyncPlan): void {
   );
 }
 
-function upsertSyncPlanStep(db: DatabaseDriver, raw: SyncPlanStep): void {
+function upsertSyncPlanStep(db: DatabaseDriver, owner: BoundIdentity, raw: SyncPlanStep): void {
+  if (raw.motebit_id !== owner) return;
   const step = floorSyncPlanStep(raw);
   // Check existing status for monotonicity
   const existing = db
@@ -281,9 +295,9 @@ export function registerDataSyncRoutes(deps: DataSyncDeps): void {
       });
     }
     // #846: every entry must name the identity this push authenticated as.
-    refuseForeignSyncEntries(c, body.conversations, motebitId, deps.recordAuthEvent);
+    const owner = bindSyncEntries(c, body.conversations, motebitId, deps.recordAuthEvent);
     for (const conv of body.conversations) {
-      upsertSyncConversation(db, conv);
+      upsertSyncConversation(db, owner, conv);
     }
 
     // Fan out to WebSocket clients, skipping the sender device
@@ -330,9 +344,9 @@ export function registerDataSyncRoutes(deps: DataSyncDeps): void {
       });
     }
     // #846: every entry must name the identity this push authenticated as.
-    refuseForeignSyncEntries(c, body.messages, motebitId, deps.recordAuthEvent);
+    const owner = bindSyncEntries(c, body.messages, motebitId, deps.recordAuthEvent);
     for (const msg of body.messages) {
-      upsertSyncMessage(db, msg);
+      upsertSyncMessage(db, owner, msg);
     }
 
     // Fan out to WebSocket clients, skipping the sender device
@@ -386,9 +400,9 @@ export function registerDataSyncRoutes(deps: DataSyncDeps): void {
       throw new HTTPException(400, { message: "Missing or invalid 'plans' field (must be array)" });
     }
     // #846: every entry must name the identity this push authenticated as.
-    refuseForeignSyncEntries(c, body.plans, motebitId, deps.recordAuthEvent);
+    const owner = bindSyncEntries(c, body.plans, motebitId, deps.recordAuthEvent);
     for (const plan of body.plans) {
-      upsertSyncPlan(db, plan);
+      upsertSyncPlan(db, owner, plan);
     }
 
     // Fan out to WebSocket clients
@@ -430,9 +444,9 @@ export function registerDataSyncRoutes(deps: DataSyncDeps): void {
       throw new HTTPException(400, { message: "Missing or invalid 'steps' field (must be array)" });
     }
     // #846: every entry must name the identity this push authenticated as.
-    refuseForeignSyncEntries(c, body.steps, motebitId, deps.recordAuthEvent);
+    const owner = bindSyncEntries(c, body.steps, motebitId, deps.recordAuthEvent);
     for (const step of body.steps) {
-      upsertSyncPlanStep(db, step);
+      upsertSyncPlanStep(db, owner, step);
     }
 
     // Fan out to WebSocket clients
