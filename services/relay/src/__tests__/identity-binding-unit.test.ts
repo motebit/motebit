@@ -17,6 +17,8 @@ import {
   appendBoundEvent,
   bindCaller,
   bindSocketEntries,
+  bindSyncEntries,
+  SYNC_PRESENTER_KEY,
   type BoundIdentity,
 } from "../identity-binding.js";
 import { upsertSyncConversation, upsertSyncMessage } from "../data-sync.js";
@@ -75,6 +77,55 @@ describe("bindSocketEntries", () => {
     expect(bindSocketEntries([{ motebit_id: "A" }], "A")).toBe("A");
     expect(bindSocketEntries([{ motebit_id: "A" }, { motebit_id: "B" }], "A")).toBeNull();
     expect(bindSocketEntries([null], "A")).toBeNull();
+  });
+});
+
+describe("bindSyncEntries (#846 v3)", () => {
+  const record: AuthEvent[] = [];
+  const rec = (e: AuthEvent) => record.push(e);
+  beforeEach(() => {
+    record.length = 0;
+  });
+  const status = (fn: () => unknown): number => {
+    try {
+      fn();
+    } catch (err) {
+      return (err as HTTPException).status;
+    }
+    return 0;
+  };
+
+  it("binds when the verified identity is the path identity and every entry names it", () => {
+    const c = fakeContext({ [SYNC_PRESENTER_KEY]: "A" });
+    expect(bindSyncEntries(c, [{ motebit_id: "A" }], "A", rec)).toBe("A");
+    expect(record).toEqual([]);
+  });
+
+  // The #853 shape, one layer down: the middleware verified the token for
+  // one identity and the handler hands the binder another. The binder does
+  // not trust the two readers to agree — it compares them, and refuses even
+  // when every entry names the handler's identity.
+  it("refuses 403 when the handler's path identity is not the identity the middleware verified", () => {
+    const c = fakeContext({ [SYNC_PRESENTER_KEY]: "X" });
+    expect(status(() => bindSyncEntries(c, [{ motebit_id: "V" }], "V", rec))).toBe(403);
+    expect(record).toEqual([
+      expect.objectContaining({
+        motebitId: "X",
+        reason: "sync:path_identity_not_verified_identity",
+      }),
+    ]);
+  });
+
+  it("refuses 403 an entry naming another identity, recorded under the presenter", () => {
+    const c = fakeContext({ [SYNC_PRESENTER_KEY]: "A" });
+    expect(status(() => bindSyncEntries(c, [{ motebit_id: "B" }], "A", rec))).toBe(403);
+    expect(record).toEqual([
+      expect.objectContaining({ motebitId: "A", reason: "sync:foreign_motebit_id" }),
+    ]);
+  });
+
+  it("the master token (no presenter) binds to the path identity", () => {
+    expect(bindSyncEntries(fakeContext({}), [{ motebit_id: "B" }], "B", rec)).toBe("B");
   });
 });
 

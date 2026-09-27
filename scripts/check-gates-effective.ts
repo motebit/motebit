@@ -2338,6 +2338,30 @@ export async function probeFetch(): Promise<unknown> {
       ),
   },
   {
+    script: "check-identity-authority-writers",
+    proves:
+      "flags a forged BoundIdentity — the #853 review's bypass of #846 v2: `setSubscriptionStatus(db, victim as never, …)` in a new function passed tsc, eslint and the name-based brand-cast check, so any door could write another identity's subscription without a binding. The gate reads the relay's TYPES with the TypeScript checker; the brand-slot arm (B1) must fire on the assertion. Probe appends the reviewer's exact forge to subscriptions.ts. byte-identical restoration via mutateFile.",
+    perturb: () =>
+      mutateFile(
+        `services/relay/src/subscriptions.ts`,
+        (src) =>
+          src +
+          '\nexport function probeForge(db: DatabaseDriver, victim: string): boolean {\n  return setSubscriptionStatus(db, victim as never, "active", "cancelled");\n}\n',
+      ),
+  },
+  {
+    script: "check-identity-authority-writers",
+    proves:
+      "flags an upsert that re-files another identity's row — the #853 review's second bypass: `ON CONFLICT(conversation_id) DO UPDATE SET motebit_id = excluded.motebit_id` is an UPDATE the UPDATE regex never saw, so a push naming another identity's conversation_id moved that row to the pusher. The upsert arm must fire (REFILE). Probe adds the assignment to the sync conversation upsert in data-sync.ts. byte-identical restoration via mutateFile.",
+    perturb: () =>
+      mutateFile(`services/relay/src/data-sync.ts`, (src) =>
+        src.replace(
+          "ON CONFLICT(conversation_id) DO UPDATE SET\n",
+          "ON CONFLICT(conversation_id) DO UPDATE SET\n         motebit_id = excluded.motebit_id,\n",
+        ),
+      ),
+  },
+  {
     script: "check-money-authority",
     proves:
       "flags the R4 standing-authority block disappearing from policy-gate.ts — the invariant that an R4_MONEY tool call never auto-executes without a verified standing-delegation grant. Drift class: a refactor that deletes or inverts the grant check (or reorders it ahead of the trust-level switch) silently re-opens 'Trusted caller auto-executes money'. Probe inverts the null-check (`== null` → `!= null`) so the gate's ordered marker regex no longer matches; assertion 1 must fire. byte-identical restoration via mutateFile.",

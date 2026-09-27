@@ -165,8 +165,17 @@ export function bindSocketEntries(
 
 /**
  * The HTTP door: bind a push's entries to the path identity, or throw 403 —
- * before any write — recording the refusal first. The path identity is
- * already bound to the token by the `/sync/*` middleware.
+ * before any write — recording the refusal first.
+ *
+ * The path identity is bound to the token by the `/sync/*` middleware, which
+ * reads the raw segment through `pathIdentity` (id-bounds.ts, #853: a `%`
+ * is refused, so the raw segment IS the decoded `:motebitId` the handler
+ * passes here) and sets `SYNC_PRESENTER_KEY` to the identity it verified.
+ * This binder does not take that on trust: when a device token was verified,
+ * the handler's `motebitId` must be exactly the verified identity, or the
+ * push is refused as not the caller's own (a regression in either reader
+ * fails closed here instead of filing under someone else). The master token
+ * sets no presenter — the operator acts for the path identity.
  */
 export function bindSyncEntries(
   c: Context,
@@ -174,8 +183,23 @@ export function bindSyncEntries(
   motebitId: string,
   recordAuthEvent: Record,
 ): BoundIdentity {
-  if (firstForeignSyncEntry(entries, motebitId) === -1) return mint(motebitId);
   const presenter = (c.get(SYNC_PRESENTER_KEY as never) as string | undefined) ?? null;
+  if (presenter !== null && presenter !== motebitId) {
+    logger.warn("sync.path_identity_mismatch", { motebitId, presenter, path: c.req.path });
+    recordAuthEvent?.({
+      ...foreignSyncEntryEvent({
+        path: c.req.path,
+        method: c.req.method,
+        presenter,
+        correlationId: c.req.header("x-correlation-id") ?? null,
+      }),
+      reason: "sync:path_identity_not_verified_identity",
+    });
+    throw new HTTPException(403, {
+      message: "The path identity is not the identity the token was verified for",
+    });
+  }
+  if (firstForeignSyncEntry(entries, motebitId) === -1) return mint(motebitId);
   logger.warn("sync.foreign_entry_refused", { motebitId, presenter, path: c.req.path });
   recordAuthEvent?.(
     foreignSyncEntryEvent({

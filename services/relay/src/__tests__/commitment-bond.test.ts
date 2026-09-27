@@ -188,6 +188,51 @@ describe("bond-store — verify + persist", () => {
     expect(res.reason).toBe("bond_signature_or_binding_invalid");
   });
 
+  // #846 v3: `bond_id` is author-chosen and the upsert used to assign
+  // `motebit_id = excluded.motebit_id`, so X's own validly-signed bond
+  // carrying V's bond_id re-filed V's bond row under X (V lost its bond; X
+  // took over V's backing record). The update is now scoped to the owner.
+  it("a bond naming another identity's bond_id is refused — the holder's row is not re-filed", async () => {
+    const v = await makeWorkerKeys();
+    const x = await makeWorkerKeys();
+    await registerAgent(relay, "bond-victim", v.pubHex, { settlementAddress: WORKER_ADDR });
+    await registerAgent(relay, "bond-attacker", x.pubHex, { settlementAddress: WORKER_ADDR });
+    const shared = "01900000-0000-7000-8000-0000000000bb";
+    expect(
+      (
+        await recordBondCommitment(
+          relay.moteDb.db,
+          await v.signBond({ bondId: shared, motebitId: "bond-victim" }),
+        )
+      ).ok,
+    ).toBe(true);
+
+    const res = await recordBondCommitment(
+      relay.moteDb.db,
+      await x.signBond({ bondId: shared, motebitId: "bond-attacker", amountMicro: 1 }),
+    );
+    expect(res).toEqual({ ok: false, reason: "bond_id_held_by_another_identity" });
+    const row = relay.moteDb.db
+      .prepare("SELECT motebit_id, bond_amount_micro FROM relay_bond_commitments WHERE bond_id = ?")
+      .get(shared);
+    expect(row).toEqual({ motebit_id: "bond-victim", bond_amount_micro: 10_000_000 });
+    expect(getBestLiveBond(relay.moteDb.db, "bond-victim", Date.now())?.bond_id).toBe(shared);
+    expect(getBestLiveBond(relay.moteDb.db, "bond-attacker", Date.now())).toBeNull();
+  });
+
+  it("the owner re-recording its own bond_id is unchanged (idempotent upsert)", async () => {
+    const w = await makeWorkerKeys();
+    await registerAgent(relay, "bond-worker", w.pubHex, { settlementAddress: WORKER_ADDR });
+    expect((await recordBondCommitment(relay.moteDb.db, await w.signBond())).ok).toBe(true);
+    expect(
+      (await recordBondCommitment(relay.moteDb.db, await w.signBond({ amountMicro: 20_000_000 })))
+        .ok,
+    ).toBe(true);
+    expect(getBestLiveBond(relay.moteDb.db, "bond-worker", Date.now())?.bond_amount_micro).toBe(
+      20_000_000,
+    );
+  });
+
   it("sums a worker's in-flight pending p2p value (cross-ticket exposure input)", () => {
     insertPendingP2p(relay.moteDb.db, "bond-worker", "t1", 1_000_000);
     insertPendingP2p(relay.moteDb.db, "bond-worker", "t2", 2_500_000);

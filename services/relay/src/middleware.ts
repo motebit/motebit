@@ -27,7 +27,7 @@ import type { AuthEvent } from "./auth-events.js";
 import { requestContext, enrichRequestContext } from "./request-context.js";
 import type { RequestContext } from "./request-context.js";
 import { RelayError, RateLimitError, AuthenticationError, AuthorizationError } from "./errors.js";
-import { recordMasterTokenOnce } from "./auth-events.js";
+import { recordMasterTokenOnce, recordRefusalBeforeVerify } from "./auth-events.js";
 import { pathIdentity } from "./id-bounds.js";
 import { SYNC_PRESENTER_KEY } from "./identity-binding.js";
 
@@ -176,6 +176,11 @@ export function createDualAuth(deps: MiddlewareDeps) {
   ): Promise<Response | void> {
     const authHeader = c.req.header("authorization");
     if (authHeader == null || !authHeader.startsWith("Bearer ")) {
+      recordRefusalBeforeVerify(c, deps.recordAuthEvent, {
+        kind: "device_token_rejected",
+        audience: expectedAudience,
+        reason: "missing_token",
+      });
       throw new AuthenticationError("AUTH_MISSING_TOKEN", "Missing authorization");
     }
     const token = authHeader.slice(7);
@@ -200,6 +205,11 @@ export function createDualAuth(deps: MiddlewareDeps) {
     // Signed device token path
     const claims = deps.parseTokenPayloadUnsafe(token);
     if (!claims?.mid) {
+      recordRefusalBeforeVerify(c, deps.recordAuthEvent, {
+        kind: "device_token_rejected",
+        audience: expectedAudience,
+        reason: "unparseable_token",
+      });
       throw new AuthenticationError("AUTH_INVALID_TOKEN", "Invalid token");
     }
     const valid = await deps.verifySignedTokenForDevice(
@@ -489,6 +499,11 @@ export function registerMiddleware(deps: MiddlewareDeps): MiddlewareResult {
     app.use("/sync/*", async (c, next) => {
       const authHeader = c.req.header("authorization");
       if (authHeader == null || !authHeader.startsWith("Bearer ")) {
+        recordRefusalBeforeVerify(c, deps.recordAuthEvent, {
+          kind: "device_token_rejected",
+          audience: "sync",
+          reason: "missing_token",
+        });
         throw new AuthenticationError("AUTH_MISSING_TOKEN", "Missing device token");
       }
       const token = authHeader.slice(7);
@@ -540,6 +555,11 @@ export function registerMiddleware(deps: MiddlewareDeps): MiddlewareResult {
 
       if (!token.includes(".")) {
         // Legacy device tokens (plain UUIDs) are no longer accepted — signed JWTs only
+        recordRefusalBeforeVerify(c, deps.recordAuthEvent, {
+          kind: "device_token_rejected",
+          audience: "sync",
+          reason: "legacy_token",
+        });
         throw new AuthenticationError(
           "AUTH_LEGACY_TOKEN",
           "Legacy device tokens are no longer accepted — use signed JWTs",
