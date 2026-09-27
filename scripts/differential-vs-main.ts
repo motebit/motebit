@@ -267,6 +267,9 @@ async function main(): Promise<void> {
     `  Aperture, probe in ${host} (${hostWhy}):`,
     `    from ${base}: ${list(aperture.fromMain)}; every other workspace package is the working tree's SOURCE on both sides.`,
     `    built from source in the base tree: ${list(aperture.builtBase)}.`,
+    aperture.fromMainUnbuilt.length > 0
+      ? `    from ${base}, NOT built (outside the probe's declared reach — a require of it will fail on both sides): ${list(aperture.fromMainUnbuilt)}.`
+      : "",
     aperture.headFromWorkingTree
       ? "    head side: the WORKING TREE's own builds (--head-from-working-tree) — NOT freshness-checked."
       : `    built from source in the head tree: ${list(aperture.builtHead)}.`,

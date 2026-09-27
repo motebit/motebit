@@ -67,6 +67,7 @@ import {
   mirrorNodeModules,
   packageDirOf,
   readGit,
+  shimLeaks,
   topoOrder,
   type WorkspacePackage,
 } from "../lib/differential-tree.js";
@@ -230,6 +231,40 @@ describe("differential-tree units", () => {
     }
   });
 
+  it("a rewritten shim that still names a path outside its tree and the store refuses", () => {
+    const rehome = { from: "/work/repo", to: "/tmp/tree" };
+    const ok = `#!/bin/sh\nexport NODE_PATH="/tmp/tree/node_modules/.pnpm/node_modules:/tmp/tree/node_modules/.pnpm/vitest@4/node_modules:$NODE_PATH"\nexec node "$basedir/../vitest/vitest.mjs" "$@"\n`;
+    expect(shimLeaks(ok, rehome)).toEqual([]);
+    // A store entry of the working tree's install is allowed; its hoisted fallback is not.
+    expect(
+      shimLeaks(
+        'export NODE_PATH="/work/repo/node_modules/.pnpm/esbuild@0.2/node_modules"',
+        rehome,
+      ),
+    ).toEqual([]);
+    expect(
+      shimLeaks('export NODE_PATH="/work/repo/node_modules/.pnpm/node_modules"', rehome),
+    ).toEqual(["/work/repo/node_modules/.pnpm/node_modules"]);
+    // A moved or copied install: the shim names ANOTHER checkout, which the rewrite cannot re-home.
+    const moved = `#!/bin/sh\nexport NODE_PATH="/old/checkout/node_modules/.pnpm/node_modules"\nexec node "/old/checkout/node_modules/vitest/vitest.mjs"\n`;
+    expect(shimLeaks(moved, rehome)).toEqual([
+      "/old/checkout/node_modules/.pnpm/node_modules",
+      "/old/checkout/node_modules/vitest/vitest.mjs",
+    ]);
+    const t = realpathSync(mkdtempSync(join(tmpdir(), "diff-shim-")));
+    try {
+      write(join(t, "src", ".bin", "vitest"), moved);
+      expect(() =>
+        mirrorNodeModules(join(t, "src"), join(t, "dst"), {
+          from: join(t, "src"),
+          to: join(t, "dst"),
+        }),
+      ).toThrow(/names a path outside its tree/);
+    } finally {
+      rmSync(t, { recursive: true, force: true });
+    }
+  });
+
   it("orders builds dependencies first", () => {
     const byDir = new Map([
       pkg("packages/a", "@m/a", ["@m/b"]),
@@ -323,9 +358,17 @@ writeFileSync("dist/index.d.ts", "export declare const VALUE: string;\\n");
 `;
 /** Inlines hoisted's VALUE — proto's, TRANSITIVELY — at build time (render-engine's browser bundle). */
 const BUNDLER_BUILD = `import { VALUE } from "@fx/hoisted";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+// bundler never declares @fx/proto: a build step reaches it only through NODE_PATH
+// (as esbuild's resolver falls back to it). Its value goes into the output.
+const protoMain = createRequire(import.meta.url).resolve("@fx/proto");
+const UNDECLARED = /VALUE = "([^"]*)"/.exec(readFileSync(protoMain, "utf-8"))[1];
 mkdirSync("dist", { recursive: true });
-writeFileSync("dist/index.js", "export const BUNDLED = " + JSON.stringify(VALUE) + ";\\n");
+writeFileSync(
+  "dist/index.js",
+  "export const BUNDLED = " + JSON.stringify(VALUE) + ";\\nexport const UNDECLARED = " + JSON.stringify(UNDECLARED) + ";\\n",
+);
 `;
 const TSCONFIG_BASE = json({
   compilerOptions: {
@@ -437,13 +480,16 @@ writeFileSync("src/bundle.generated.txt", BUNDLED);
   const hoistedStore = join(nm, ".pnpm", "node_modules");
   write(
     join(nm, ".bin", "vitest"),
-    `#!/bin/sh\nif [ -z "$NODE_PATH" ]; then export NODE_PATH="${hoistedStore}"; else export NODE_PATH="${hoistedStore}:$NODE_PATH"; fi\nexec node "${vitestDir}/vitest.mjs" "$@"\n`,
+    `#!/bin/sh\nbasedir=$(dirname "$0")\nif [ -z "$NODE_PATH" ]; then export NODE_PATH="${hoistedStore}"; else export NODE_PATH="${hoistedStore}:$NODE_PATH"; fi\nexec node "$basedir/../vitest/vitest.mjs" "$@"\n`,
   );
   mkdirSync(join(hoistedStore, "@fx"), { recursive: true });
   for (const p of ["proto", "hoisted", "bundler"]) {
     symlinkSync(`../../../../packages/${p}`, join(hoistedStore, "@fx", p));
   }
-  write(join(nm, ".bin", "tsc"), `#!/bin/sh\nexec node "${tsDir}/bin/tsc" "$@"\n`);
+  write(
+    join(nm, ".bin", "tsc"),
+    `#!/bin/sh\nbasedir=$(dirname "$0")\nexec node "$basedir/../typescript/bin/tsc" "$@"\n`,
+  );
   fxRun(jail, root, "chmod", ["+x", join(nm, ".bin", "vitest"), join(nm, ".bin", "tsc")], baseEnv);
   const link = (from: string, name: string, target: string) => {
     mkdirSync(join(root, from, "node_modules", "@fx"), { recursive: true });
@@ -494,6 +540,7 @@ it("observes", async () => {
     const where = realpathSync(createRequire(import.meta.url).resolve("@fx/proto"));
     obs.undeclaredInOwnTree = where.startsWith(realpathSync(resolve(process.cwd(), "../..")) + "/");
     obs.undeclaredValue = ((await import(pathToFileURL(where).href)) as { VALUE: string }).VALUE;
+    obs.bundlerUndeclared = ((await import("@fx/bundler")) as { UNDECLARED?: string }).UNDECLARED ?? null;
   } else if (process.env.FX_MODE === "rootpkg") {
     const pkg = JSON.parse(readFileSync("../../package.json", "utf-8"));
     obs.description = pkg.description ?? null;
@@ -519,6 +566,7 @@ interface Report {
     rootWorkspaceDeps: string[];
     rootHeldAtHead: string[];
     rootPerSide: string[];
+    fromMainUnbuilt: string[];
     headFromWorkingTree: boolean;
   };
   head: Record<string, unknown>;
@@ -623,12 +671,14 @@ describe("differential-vs-main behaviour (fixture)", () => {
         throughRootHoisted: "head",
         undeclaredInOwnTree: true,
         undeclaredValue: "head",
+        bundlerUndeclared: "head",
       });
       expect(rep.baseObs).toEqual({
         throughBundle: "main",
         throughRootHoisted: "main",
         undeclaredInOwnTree: true,
         undeclaredValue: "main",
+        bundlerUndeclared: "main",
       });
       expect(rep.aperture.builtBase).toEqual([
         "packages/proto",
@@ -659,6 +709,7 @@ describe("differential-vs-main behaviour (fixture)", () => {
         throughRootHoisted: "main",
         undeclaredInOwnTree: true,
         undeclaredValue: "main",
+        bundlerUndeclared: "main",
       });
       expect(rep.aperture.headFromWorkingTree).toBe(true);
       expect(r.stdout).toContain("NOT freshness-checked");
@@ -690,7 +741,7 @@ describe("differential-vs-main behaviour (fixture)", () => {
   );
 
   it.skipIf(!FIXTURE)(
-    "a probe outside the workspace with no --pkg runs in services/relay, and says so",
+    "a probe outside the workspace with no --pkg runs in services/relay, says so, and lists a from-main package it never built",
     () => {
       const out = join(fx.jail, "relay.json");
       const r = runScript(
@@ -701,7 +752,7 @@ describe("differential-vs-main behaviour (fixture)", () => {
           "--base",
           fx.mainSha,
           "--from-main",
-          "host",
+          "packages/bundler",
           "--out",
           out,
         ],
@@ -709,6 +760,10 @@ describe("differential-vs-main behaviour (fixture)", () => {
       );
       expect(r.status, show(r)).toBe(0);
       const rep = JSON.parse(readFileSync(out, "utf-8")) as Report;
+      // bundler is from main but outside relay's declared + root-hoisted reach:
+      // the aperture must say it was NOT built, not just "from main".
+      expect(rep.aperture.fromMainUnbuilt).toEqual(["packages/bundler"]);
+      expect(r.stdout).toMatch(/NOT built[^\n]*packages\/bundler/);
       expect(rep.pkg).toBe("services/relay");
       expect(rep.pkgReason).toMatch(/default/);
       expect(rep.baseObs.cwdTail).toBe("services/relay");
@@ -884,12 +939,14 @@ describe("differential-vs-main safety (decoy repository)", () => {
         throughRootHoisted: "head",
         undeclaredInOwnTree: true,
         undeclaredValue: "head",
+        bundlerUndeclared: "head",
       });
       expect(rep.baseObs).toEqual({
         throughBundle: "main",
         throughRootHoisted: "main",
         undeclaredInOwnTree: true,
         undeclaredValue: "main",
+        bundlerUndeclared: "main",
       });
       // The fixture's history went to the fixture's own repository.
       expect(fxGit(fxJail, fx!.root, ["rev-list", "--count", "HEAD"]).trim()).toBe("2");

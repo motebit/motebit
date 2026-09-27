@@ -455,6 +455,30 @@ export function mirrorNodeModules(src: string, dst: string, rehome?: Rehome): vo
   }
 }
 
+/**
+ * Absolute paths a rewritten shim still names that point OUTSIDE its tree and
+ * outside the working tree's store entries (`<from>/node_modules/.pnpm/<entry>/…`,
+ * the one shared install). The hoisted fallback `<from>/node_modules/.pnpm/node_modules`
+ * is NOT allowed: it links every workspace package in the working tree (#840).
+ * A non-empty result means the install was moved or copied from another
+ * checkout and the rewrite cannot re-home it. System paths (/bin, /usr, /dev)
+ * are ignored; the shebang line is skipped.
+ */
+export function shimLeaks(text: string, rehome: Rehome): string[] {
+  const store = `${rehome.from}/node_modules/.pnpm/`;
+  const leaks: string[] = [];
+  for (const line of text.split("\n").slice(text.startsWith("#!") ? 1 : 0)) {
+    for (const m of line.matchAll(/(?:^|[\s"'=:])(\/[^\s"':$`]+)/g)) {
+      const path = m[1]!;
+      if (/^\/(bin|usr|dev)\//.test(path)) continue;
+      if (path.startsWith(`${rehome.to}/`)) continue;
+      if (path.startsWith(store) && !path.slice(store.length).startsWith("node_modules")) continue;
+      leaks.push(path);
+    }
+  }
+  return leaks;
+}
+
 function rewriteBin(src: string, dst: string, rehome: Rehome): void {
   mkdirSync(dst, { recursive: true });
   for (const e of readdirSync(src, { withFileTypes: true })) {
@@ -464,8 +488,16 @@ function rewriteBin(src: string, dst: string, rehome: Rehome): void {
       symlinkSync(readlinkSync(s), d);
       continue;
     }
-    const text = readFileSync(s, "utf-8");
-    writeFileSync(d, text.split(`${rehome.from}/`).join(`${rehome.to}/`), { mode: 0o755 });
+    const text = readFileSync(s, "utf-8").split(`${rehome.from}/`).join(`${rehome.to}/`);
+    const leaks = shimLeaks(text, rehome);
+    if (leaks.length > 0) {
+      throw new DifferentialRefusal([
+        `differential-vs-main: refused — the shim ${s} names a path outside its tree after re-homing: ${leaks.join(", ")}.`,
+        "A shim that exports NODE_PATH (or runs a tool) from another checkout would let CommonJS require resolve that checkout's packages on both sides (#840).",
+        "Fix: reinstall in this checkout (`pnpm install`) so every shim names this working tree.",
+      ]);
+    }
+    writeFileSync(d, text, { mode: 0o755 });
   }
 }
 
@@ -627,6 +659,12 @@ export interface Aperture {
   fromMain: string[];
   /** Requested from the base ref but absent there (new on this branch). */
   absentOnBase: string[];
+  /**
+   * From-main packages with a build that the base tree did NOT build: outside
+   * the probe's declared + root-hoisted reach. A require of one (e.g. an
+   * undeclared CommonJS require) finds no build and fails on both sides.
+   */
+  fromMainUnbuilt: string[];
   /** Packages built inside the base tree, in build order. */
   builtBase: string[];
   /** Packages built inside the head tree, in build order (empty with headFromWorkingTree). */
@@ -819,6 +857,12 @@ export async function buildTrees(opts: BuildTreesOptions): Promise<Trees> {
       fromMain,
       absentOnBase,
       builtBase: baseOrder,
+      fromMainUnbuilt: fromMain.filter(
+        (d) =>
+          d !== host &&
+          !baseOrder.includes(d) &&
+          baseBuildCommand(baseGraph.get(d)?.scripts.build) != null,
+      ),
       builtHead: headOrder,
       baseOnly,
       rootWorkspaceDeps: implicit,
