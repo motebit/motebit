@@ -34,6 +34,8 @@ A brief for either type names the scope fence, the tests to run, and, for a revi
 
 [`scripts/differential-vs-main.ts`](../../scripts/differential-vs-main.ts) runs one `*.probe.ts` against the working tree and against `origin/main`, and diffs the observations. Each DIFF must be an intended, stated change. The first probe, `services/relay/src/__tests__/identity-keys.probe.ts`, is the one #703 build 3 was built and reviewed with (`docs/proposals/identity-key-state-v1.md` §5g–§5i). Its value is on a branch: run on main it reports every observation SAME.
 
+The probe can live in any workspace package: the package it sits in is where it runs, or pass `--pkg`. By default the base side takes every workspace package the diff against `origin/main` touches from `origin/main`, and rebuilds any of them the probe's package imports. To choose, pass `--from-main services/relay,packages/surface-kit,apps/web` (or `host` for only the probe's package). Every run prints its aperture: what came from main, what was rebuilt, and which working-tree packages were rewired to import the main versions. Everything else, including third-party dependencies, is this checkout's build on both sides, so build the probe package's dependencies first (`pnpm --filter <pkg>... build`). The smoke test is `MOTEBIT_DIFFERENTIAL_SMOKE=1 npx vitest run --dir scripts/__tests__ differential-vs-main` and takes about 25 s.
+
 ## Stopping rules
 
 Write the rule **before** the first review round. The pattern is: define a wrong answer; allow one round of fixes; a second round that finds another of the same kind means withdraw; and a design review loop that has not converged after three rounds escalates to the founder. That is what kept #703's review loops bounded. See the proposal's §8, §5d and §5e.
