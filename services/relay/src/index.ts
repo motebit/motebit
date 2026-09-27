@@ -753,10 +753,6 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
   const MAX_TASK_QUEUE_SIZE = 100_000;
   const MAX_TASKS_PER_SUBMITTER = config.maxTasksPerSubmitter ?? 1_000;
   const taskQueue = new TaskQueue(moteDb.db);
-  // This relay instance's boot. Task-presentation marks carry it and are
-  // ignored by any other boot, so a restart's recovery behaves as main's
-  // (task-presentation.ts, #811).
-  const relayBootId = crypto.randomUUID();
 
   // --- Relay Identity: persistent Ed25519 keypair ---
   // One outbound URL policy for every persisted callback the relay will contact.
@@ -1070,7 +1066,6 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     upgradeWebSocket,
     connections,
     taskQueue,
-    relayBootId,
     eventStore,
     identityManager,
     db: moteDb.db,
@@ -2133,7 +2128,6 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
   // --- Task routes (submission, polling, receipt settlement) ---
   await registerTaskRoutes({
     app,
-    relayBootId,
     outboundPolicy,
     moteDb,
     identityManager,

@@ -250,7 +250,6 @@ export class TaskQueue implements Map<string, TaskQueueEntry> {
       settlement_mode: entry.settlement_mode,
       p2p_payment_proof: entry.p2p_payment_proof,
       target_agent: entry.target_agent,
-      presented: entry.presented,
       // receipt is stored in its own column for queryability
     };
   }
@@ -275,7 +274,6 @@ export class TaskQueue implements Map<string, TaskQueueEntry> {
       p2p_payment_proof:
         (stored.p2p_payment_proof as TaskQueueEntry["p2p_payment_proof"]) ?? undefined,
       target_agent: (stored.target_agent as string) ?? undefined,
-      presented: (stored.presented as TaskQueueEntry["presented"]) ?? undefined,
     };
 
     // Restore receipt from its own column (may be updated independently)

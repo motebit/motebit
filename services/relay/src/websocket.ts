@@ -25,7 +25,7 @@ import type { TaskQueueEntry } from "./tasks.js";
 import type { createLogger } from "./logger.js";
 import type { AuthEvent } from "./auth-events.js";
 import { sendToEach, WS_OPEN } from "./ws-send.js";
-import { nextConnectionSeq, recoverableOnReconnect } from "./task-presentation.js";
+import { recoverableOnReconnect } from "./task-presentation.js";
 
 /**
  * `WebSocket.OPEN` — the only state in which a socket is registered or
@@ -343,12 +343,6 @@ export interface ConnectedDevice {
    */
   retired?: boolean;
   capabilities?: string[];
-  /**
-   * Registration order (`nextConnectionSeq`), shared with task-presentation
-   * marks: a socket registered after a mark is one whose reconnect recovery
-   * that mark held back, and is owed the task if the mark is released.
-   */
-  connectionSeq?: number;
 }
 
 export interface WebSocketDeps {
@@ -356,8 +350,6 @@ export interface WebSocketDeps {
   upgradeWebSocket: ReturnType<typeof createNodeWebSocket>["upgradeWebSocket"];
   connections: Map<string, ConnectedDevice[]>;
   taskQueue: Map<string, TaskQueueEntry>;
-  /** This relay instance's boot id; a task-presentation mark from another is ignored. */
-  relayBootId: string;
   eventStore: EventStore;
   identityManager: IdentityManager;
   db: DatabaseDriver;
@@ -432,7 +424,6 @@ export function registerWebSocketRoutes(deps: WebSocketDeps): void {
     upgradeWebSocket,
     connections,
     taskQueue,
-    relayBootId,
     eventStore,
     identityManager,
     db,
@@ -716,7 +707,6 @@ export function registerWebSocketRoutes(deps: WebSocketDeps): void {
           ...(verifiedKey != null && verifiedDid != null ? { authenticatedDid: verifiedDid } : {}),
           ...(verifiedKey != null && verifiedJti != null ? { authenticatedJti: verifiedJti } : {}),
           capabilities,
-          connectionSeq: nextConnectionSeq(),
         };
         connections.get(motebitId)!.push(peer);
         registeredPeer = peer;
@@ -726,12 +716,9 @@ export function registerWebSocketRoutes(deps: WebSocketDeps): void {
         // newly connected device. Covers reconnection after disconnect (e.g.
         // cellular→WiFi handoff) and federation-forwarded tasks that arrived
         // while no device was connected.
-        // An entry another door already presented (MCP forward, federation
-        // forward, a submitter that chose to present) is skipped: sending it
-        // here would be a second presentation of one admission, and the
-        // worker's admission ledger never sees a WebSocket frame (#811).
+        // Main's predicate, named in task-presentation.ts (#811).
         for (const [, entry] of taskQueue) {
-          if (entry.task.motebit_id === motebitId && recoverableOnReconnect(entry, relayBootId)) {
+          if (entry.task.motebit_id === motebitId && recoverableOnReconnect(entry)) {
             ws.send(JSON.stringify({ type: "task_request", task: entry.task }));
             logger.info("task.recovery_on_reconnect", {
               correlationId: entry.task.task_id,

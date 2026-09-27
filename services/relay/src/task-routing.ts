@@ -1058,33 +1058,9 @@ export async function mintTaskDispatchToken(
 }
 
 /**
- * What an MCP forward left behind (#811 v3): whether the worker's `tools/call`
- * answer carried a receipt the relay stored.
- *
- * `receipt` — `tools/call` was answered 2xx with a receipt the relay parsed
- * and stored on the queue entry: the task is complete.
- *
- * `no_receipt` — everything else: the outbound URL refused, no dispatch
- * token, `initialize` refused or unreachable, a connection refused or reset
- * or timed out at ANY step (including `tools/call`), a non-2xx answer, or a
- * 2xx answer with no receipt in it (an admission refusal, a tool error, an
- * unparseable receipt).
- *
- * The caller holds the task's presentation mark only while the forward is in
- * flight and releases it when the forward settles, whatever this says
- * (`presentViaMcp` in tasks.ts). There is deliberately no "sent, then died ⇒
- * presented" outcome: keeping the mark on an ambiguous failure stranded tasks
- * that main executes and settles through reconnect recovery (the #849
- * review). When the worker DID run the task and only the answer was lost,
- * recovery runs it a second time — as main does.
- */
-export type McpForwardOutcome = "receipt" | "no_receipt";
-
-/**
  * Forward a task to an agent's MCP endpoint via HTTP StreamableHTTP.
  * Called as fire-and-forget when no WebSocket connection is available.
- * On success, stores the receipt in the task queue for polling. Resolves to
- * whether a receipt was stored (`McpForwardOutcome`); never rejects.
+ * On success, stores the receipt in the task queue for polling.
  */
 export async function forwardTaskViaMcp(
   endpointUrl: string,
@@ -1109,7 +1085,7 @@ export async function forwardTaskViaMcp(
   dispatchToken?: string,
   /** Outbound URL law (`buildOutboundPolicy`); absent ⇒ literals + names only. */
   outboundPolicy?: OutboundUrlOptions,
-): Promise<McpForwardOutcome> {
+): Promise<void> {
   // Re-check at CONNECT time, not only at registration: the registry row is
   // months old by the time a task arrives, and this forward carries a bearer.
   const outbound = await checkOutboundUrl(endpointUrl, outboundPolicy);
@@ -1120,7 +1096,7 @@ export async function forwardTaskViaMcp(
       endpoint: endpointUrl,
       reason: outbound.reason,
     });
-    return "no_receipt";
+    return;
   }
   if (dispatchToken == null) {
     logger.warn("task.mcp_forward_refused", {
@@ -1129,7 +1105,7 @@ export async function forwardTaskViaMcp(
       endpoint: endpointUrl,
       reason: "no_dispatch_token",
     });
-    return "no_receipt";
+    return;
   }
   const mcpEndpoint = endpointUrl.endsWith("/mcp") ? endpointUrl : `${endpointUrl}/mcp`;
   const mcpHeaders: Record<string, string> = {
@@ -1166,8 +1142,6 @@ export async function forwardTaskViaMcp(
     });
   }
 
-  // Whether the answer's receipt was stored on the queue entry.
-  let receiptStored = false;
   try {
     // Step 1: Initialize MCP session
     const initResp = await fetch(mcpEndpoint, {
@@ -1204,7 +1178,7 @@ export async function forwardTaskViaMcp(
         status: initResp.status,
         detail: detail.slice(0, 200),
       });
-      return "no_receipt";
+      return;
     }
     const sessionId = initResp.headers.get("mcp-session-id");
     if (sessionId) mcpHeaders["Mcp-Session-Id"] = sessionId;
@@ -1247,7 +1221,7 @@ export async function forwardTaskViaMcp(
         status: taskResp.status,
         detail: detail.slice(0, 200),
       });
-      return "no_receipt";
+      return;
     }
 
     // Step 4: Parse JSON-RPC response (SSE or plain JSON)
@@ -1264,7 +1238,6 @@ export async function forwardTaskViaMcp(
             qEntry.task.status = "completed";
             qEntry.receipt = receiptData;
             taskQueue.set(taskId, qEntry); // Persist to durable queue
-            receiptStored = true;
             logger.info("task.mcp_forward_completed", {
               correlationId: taskId,
               agent: agentId,
@@ -1294,7 +1267,6 @@ export async function forwardTaskViaMcp(
         }
       }
     }
-    return receiptStored ? "receipt" : "no_receipt";
   } catch (err: unknown) {
     logger.warn("task.mcp_forward_failed", {
       correlationId: taskId,
@@ -1302,11 +1274,6 @@ export async function forwardTaskViaMcp(
       endpoint: mcpEndpoint,
       error: err instanceof Error ? err.message : String(err),
     });
-    // A refused, reset or timed-out connection at any step — including one
-    // whose `tools/call` was already sent — is not a presentation the relay
-    // can stand on (#811 v3). The receipt, if one was stored before a later
-    // step threw, still counts.
-    return receiptStored ? "receipt" : "no_receipt";
   }
 }
 

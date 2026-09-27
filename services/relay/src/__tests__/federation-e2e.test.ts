@@ -40,40 +40,6 @@ import type { TreasuryReconciliationStore } from "@motebit/treasury-reconciliati
 
 // === Helpers ===
 
-/**
- * Connect a real socket for `motebitId` to `relay` and count the
- * `task_request` frames for `taskId` that reconnect recovery hands it.
- */
-async function taskRequestsOnConnect(
-  relay: SyncRelay,
-  motebitId: string,
-  taskId: string,
-): Promise<number> {
-  const { serve } = await import("@hono/node-server");
-  const { default: WebSocket } = await import("ws");
-  const server = serve({ fetch: relay.app.fetch, port: 0, hostname: "127.0.0.1" });
-  (relay.app as unknown as { injectWebSocket: (s: unknown) => void }).injectWebSocket(server);
-  await new Promise<void>((r) => (server.listening ? r() : server.once("listening", () => r())));
-  const port = (server.address() as import("node:net").AddressInfo).port;
-  const frames: Array<{ type?: string; task?: { task_id: string } }> = [];
-  const before = relay.connections.get(motebitId)?.length ?? 0;
-  const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/sync/${motebitId}?token=${API_TOKEN}`);
-  ws.on("error", () => {});
-  ws.on("message", (raw: Buffer) => frames.push(JSON.parse(raw.toString()) as (typeof frames)[0]));
-  try {
-    const start = Date.now();
-    while ((relay.connections.get(motebitId)?.length ?? 0) <= before) {
-      if (Date.now() - start > 3000) throw new Error("socket never registered");
-      await new Promise((r) => setTimeout(r, 10));
-    }
-    await new Promise((r) => setTimeout(r, 200));
-    return frames.filter((f) => f.type === "task_request" && f.task?.task_id === taskId).length;
-  } finally {
-    ws.terminate();
-    await new Promise<void>((r) => server.close(() => r()));
-  }
-}
-
 const RELAY_A_URL = "http://relay-a.test:3000";
 const RELAY_B_URL = "http://relay-b.test:3001";
 
@@ -1353,101 +1319,6 @@ describe("Federation E2E", () => {
   // --- Full Pipeline: Happy Path ---
 
   describe("Full Pipeline", () => {
-    it("a task forwarded to a peer relay is not handed to the URL agent's reconnecting device (#811)", async () => {
-      // The peer relay is the task's presenter once the forward is accepted.
-      // Before #811 reconnect recovery on the ORIGIN relay re-sent the same
-      // queued task to any socket of the URL agent that connected afterwards
-      // — a second presenter, and a second execution if that device runs it.
-      const bob = await registerAgent(relayB, "bob", ["quantum-computing"]);
-      const bobWs = { readyState: 1, send: vi.fn(), close: vi.fn() };
-      relayB.connections.set(bob.motebitId, [{ ws: bobWs as never, deviceId: "bob-device" }]);
-      await establishPeering(relayA, relayB);
-      const alice = await registerAgent(relayA, "alice", ["web-search"]);
-
-      const taskRes = await relayA.app.request(`/agent/${alice.motebitId}/task`, {
-        method: "POST",
-        headers: jsonAuthWithIdempotency(),
-        body: JSON.stringify({
-          prompt: "forwarded once",
-          required_capabilities: ["quantum-computing"],
-        }),
-      });
-      expect(taskRes.status).toBe(201);
-      const { task_id: taskId } = (await taskRes.json()) as { task_id: string };
-      expect(bobWs.send).toHaveBeenCalled();
-
-      // Alice's device connects to Relay A over a real socket.
-      expect(await taskRequestsOnConnect(relayA, alice.motebitId, taskId)).toBe(0);
-    });
-
-    it("a forward the peer REFUSES releases its mark: the URL agent's reconnect gets the task once, as on main (#811)", async () => {
-      const bob = await registerAgent(relayB, "bob", ["quantum-computing"]);
-      const bobWs = { readyState: 1, send: vi.fn(), close: vi.fn() };
-      relayB.connections.set(bob.motebitId, [{ ws: bobWs as never, deviceId: "bob-device" }]);
-      await establishPeering(relayA, relayB);
-      const alice = await registerAgent(relayA, "alice", ["web-search"]);
-
-      // Relay B refuses every task forward.
-      const routed = globalThis.fetch;
-      vi.stubGlobal("fetch", async (input: string | URL | Request, init?: RequestInit) => {
-        const url =
-          typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
-        if (url.endsWith("/federation/v1/task/forward")) {
-          return new Response("refused", { status: 503 });
-        }
-        return routed(input, init);
-      });
-
-      const taskRes = await relayA.app.request(`/agent/${alice.motebitId}/task`, {
-        method: "POST",
-        headers: jsonAuthWithIdempotency(),
-        body: JSON.stringify({ prompt: "refused", required_capabilities: ["quantum-computing"] }),
-      });
-      expect(taskRes.status).toBe(201);
-      const { task_id: taskId } = (await taskRes.json()) as { task_id: string };
-      expect(bobWs.send).not.toHaveBeenCalled();
-
-      expect(await taskRequestsOnConnect(relayA, alice.motebitId, taskId)).toBe(1);
-    });
-
-    // #811 v3: v2 kept the mark when the peer fetch THREW (refused, reset,
-    // timeout), so the URL agent's reconnect never got the task — where main
-    // hands it over. The mark lives only while the forward is in flight.
-    for (const [label, failure] of [
-      [
-        "connection refused",
-        () => new TypeError("fetch failed", { cause: new Error("ECONNREFUSED") }),
-      ],
-      ["timeout", () => new DOMException("The operation was aborted", "AbortError")],
-    ] as const) {
-      it(`a forward whose fetch THROWS (${label}) releases its mark: the URL agent's reconnect gets the task once, as on main (#811 v3)`, async () => {
-        const bob = await registerAgent(relayB, "bob", ["quantum-computing"]);
-        const bobWs = { readyState: 1, send: vi.fn(), close: vi.fn() };
-        relayB.connections.set(bob.motebitId, [{ ws: bobWs as never, deviceId: "bob-device" }]);
-        await establishPeering(relayA, relayB);
-        const alice = await registerAgent(relayA, "alice", ["web-search"]);
-
-        const routed = globalThis.fetch;
-        vi.stubGlobal("fetch", async (input: string | URL | Request, init?: RequestInit) => {
-          const url =
-            typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
-          if (url.endsWith("/federation/v1/task/forward")) throw failure();
-          return routed(input, init);
-        });
-
-        const taskRes = await relayA.app.request(`/agent/${alice.motebitId}/task`, {
-          method: "POST",
-          headers: jsonAuthWithIdempotency(),
-          body: JSON.stringify({ prompt: "thrown", required_capabilities: ["quantum-computing"] }),
-        });
-        expect(taskRes.status).toBe(201);
-        const { task_id: taskId } = (await taskRes.json()) as { task_id: string };
-        expect(bobWs.send).not.toHaveBeenCalled();
-
-        expect(await taskRequestsOnConnect(relayA, alice.motebitId, taskId)).toBe(1);
-      });
-    }
-
     it("task submitted on Relay A routes to agent on Relay B and result returns", async () => {
       // 1. Register agent Bob on Relay B with unique capability
       const bob = await registerAgent(relayB, "bob", ["quantum-computing"]);
@@ -1634,13 +1505,6 @@ describe("Federation E2E", () => {
         }),
       });
       expect(taskRes.status, await taskRes.clone().text()).toBe(201);
-
-      // The peer relay presents this paid task (#811): the origin relay's
-      // reconnect recovery must not hand it to a device of the URL agent too.
-      {
-        const { task_id: originTaskId } = (await taskRes.clone().json()) as { task_id: string };
-        expect(await taskRequestsOnConnect(relayA, alice.motebitId, originTaskId)).toBe(0);
-      }
 
       const fwdTaskId = bobWs.send.mock.calls
         .map(
@@ -2018,66 +1882,6 @@ describe("Federation E2E", () => {
       expect(res3.status, await res3.clone().text()).toBe(409);
       const err = (await res3.json()) as { error?: string; code?: string };
       expect(JSON.stringify(err)).toMatch(/already settled|REPLAYED/i);
-    });
-
-    it("PHASE 3 P2P: a forward whose fetch THROWS answers 502 and leaves NO presentation mark on the queued task, as main (#811 v3)", async () => {
-      // v2 kept the federation mark when the peer fetch threw; the mark lives
-      // only while the forward is in flight, and is released unless the peer
-      // accepted.
-      const bob = await registerSovereignWorker(
-        relayB,
-        "bob-throw",
-        ["throw-cap"],
-        [{ capability: "throw-cap", unit_cost: 1.0, currency: "USD", per: "task" }],
-      );
-      await establishPeering(relayA, relayB);
-      const idA = (await (await relayA.app.request("/federation/v1/identity")).json()) as {
-        public_key: string;
-      };
-      const idB = (await (await relayB.app.request("/federation/v1/identity")).json()) as {
-        public_key: string;
-      };
-      const alice = await registerAgent(relayA, "alice-throw", ["web-search"]);
-
-      const routed = globalThis.fetch;
-      vi.stubGlobal("fetch", async (input: string | URL | Request, init?: RequestInit) => {
-        const url =
-          typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
-        if (url.endsWith("/federation/v1/task/forward")) {
-          throw new TypeError("fetch failed", { cause: new Error("ECONNREFUSED") });
-        }
-        return routed(input, init);
-      });
-
-      const res = await relayA.app.request(`/agent/${alice.motebitId}/task`, {
-        method: "POST",
-        headers: jsonAuthWithIdempotency(),
-        body: JSON.stringify({
-          prompt: "p2p forward throws",
-          required_capabilities: ["throw-cap"],
-          submitted_by: alice.motebitId,
-          target_agent: bob.motebitId,
-          payment_proof: {
-            tx_hash: "5vERYvaLiDsLaNaTransaCtiNSignaTuReHashThatis88charsLng1234567891abcDEFghijk",
-            chain: "solana",
-            network: "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
-            to_address: bob.settlementAddress,
-            amount_micro: 902_500,
-            fee_to_address: deriveSolanaAddress(hexToBytes(idA.public_key)),
-            fee_amount_micro: 50_000,
-            b_fee_to_address: deriveSolanaAddress(hexToBytes(idB.public_key)),
-            b_fee_amount_micro: 47_500,
-          },
-        }),
-      });
-      expect(res.status, await res.clone().text()).toBe(502);
-
-      const rows = relayA.moteDb.db
-        .prepare("SELECT task_json FROM relay_task_queue")
-        .all() as Array<{ task_json: string }>;
-      const mine = rows.filter((r) => r.task_json.includes("p2p forward throws"));
-      expect(mine).toHaveLength(1); // the forward ran: the task was queued
-      expect(mine[0]!.task_json).not.toContain('"presented"');
     });
 
     it("PHASE 2: origin relay rejects a forwarded result whose worker receipt signature is invalid", async () => {

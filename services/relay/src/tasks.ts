@@ -87,8 +87,7 @@ import {
 } from "./multihop-depth.js";
 import type { ConnectedDevice } from "./index.js";
 import { sendToEach } from "./ws-send.js";
-import { markPresented, releasePresentation, routeToSockets } from "./task-presentation.js";
-import type { TaskPresentation } from "./task-presentation.js";
+import { routeToSockets } from "./task-presentation.js";
 import { checkIdempotency, completeIdempotency } from "./idempotency.js";
 import { createLogger } from "./logger.js";
 import { pathIdentity } from "./id-bounds.js";
@@ -174,13 +173,6 @@ export type TaskQueueEntry = {
    * already ran when this entry exists. Advisory id, never authority.
    */
   grant_id?: string;
-  /**
-   * Set when a door other than a WebSocket frame presented the task — the
-   * relay's MCP forward, a federation forward, or a submitter that chose to
-   * present (`presenter: "submitter"`). Reconnect recovery skips a marked
-   * entry: one admission, one presenter (#811; `task-presentation.ts`).
-   */
-  presented?: TaskPresentation;
 };
 
 // Platform fee rate is no longer a module-level variable. It lives in the
@@ -196,11 +188,6 @@ export interface TasksDeps {
   eventStore: EventStore;
   relayIdentity: RelayIdentity;
   connections: Map<string, ConnectedDevice[]>;
-  /**
-   * This relay instance's boot id. Task-presentation marks carry it, and a
-   * mark from another boot is ignored (`task-presentation.ts`).
-   */
-  relayBootId: string;
   /**
    * The production queue is `TaskQueue` (SQLite-backed) whose indexed
    * `countBySubmitter` the fairness check uses (#459 — the Map-iteration
@@ -1849,7 +1836,6 @@ export async function handleReceiptIngestion(
 export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
   const {
     app,
-    relayBootId,
     moteDb,
     identityManager,
     eventStore,
@@ -2624,10 +2610,6 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
       target_agent: body.target_agent,
       grant_id: body.grant_id,
     });
-    // A submitter that chose to present is the one presenter from the moment
-    // the task exists — before any await below lets a worker socket connect
-    // and be handed it by reconnect recovery (#811).
-    if (submitterPresenter) markPresented(taskQueue, taskId, "submitter", relayBootId);
 
     logger.info("task.submitted", {
       correlationId: taskId,
@@ -2812,44 +2794,13 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
     // of one admission are mutually exclusive at the worker (single-use `sub`).
     const dispatchTokenFor = (workerId: string): Promise<string> =>
       mintTaskDispatchToken(relayIdentity, workerId, taskId, body.prompt);
-    // Release a presentation mark, detached from the request: a relay that
-    // shut down meanwhile has a closed queue, and a throw here would be an
-    // unhandled rejection.
-    const release = (mark: TaskPresentation | null): void => {
-      if (mark == null) return;
-      try {
-        releasePresentation(taskQueue, connections, taskId, mark);
-      } catch (err: unknown) {
-        logger.warn("task.presentation_release_failed", {
-          correlationId: taskId,
-          error: err instanceof Error ? err.message : String(err),
-        });
-      }
-    };
-    // Every relay MCP forward goes through here. The entry is marked presented
-    // BEFORE the first await (the token mint), so a worker socket that
-    // connects while the forward is in flight is not handed a second copy by
-    // reconnect recovery — one admission, one presenter (#811).
-    //
-    // The mark lives only while the forward is in flight (#811 v3). When the
-    // forward settles it is released, whatever the outcome, and the sockets
-    // it held back are handed the task — exactly what recovery would have
-    // done on main. A forward that stored a receipt leaves nothing to hand
-    // over (recovery sends only Pending, receipt-less entries). Every other
-    // ending — refused, reset, timed out, non-2xx, or a 2xx with no receipt
-    // (an admission refusal, a tool error) — goes back to recovery, because
-    // main completes those tasks through recovery and keeping the mark
-    // stranded them until their TTL. Residual, as on main: a worker that ran
-    // the task but whose answer was lost runs it again on reconnect.
+    // Every relay MCP forward goes through here (fire-and-forget, as on main).
+    // Reconnect recovery is not held back while it runs: holding it stranded
+    // tasks main completes when the forward failed and the held-back device
+    // had left (#811; presentation-matrix.probe.ts). Shared with main: a
+    // device that reconnects mid-forward can run the task beside the forward.
     const presentViaMcp = async (endpointUrl: string, workerId: string): Promise<void> => {
-      const mark = markPresented(taskQueue, taskId, "mcp", relayBootId);
-      let token: string;
-      try {
-        token = await dispatchTokenFor(workerId);
-      } catch (err: unknown) {
-        release(mark);
-        throw err;
-      }
+      const token = await dispatchTokenFor(workerId);
       void forwardTaskViaMcp(
         endpointUrl,
         taskId,
@@ -2871,17 +2822,6 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
         },
         token,
         outboundPolicy,
-      ).then(
-        () => release(mark),
-        (err: unknown) => {
-          // Documented never to reject; if it does, the forward is over all the same.
-          logger.warn("task.mcp_forward_failed", {
-            correlationId: taskId,
-            agent: workerId,
-            error: err instanceof Error ? err.message : String(err),
-          });
-          release(mark);
-        },
       );
     };
     // `routed` means what it meant on main: a presenter exists — an OPEN
@@ -3197,81 +3137,66 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
             alternatives_considered: 0,
           };
 
-          // The peer relay presents it from here (#811): recovery must not
-          // hand the same task to a local socket while the forward runs. The
-          // mark lives only while the forward is in flight (#811 v3): it is
-          // released unless the peer ACCEPTED — a refusal, a thrown fetch
-          // (refused, reset, timeout) or a failed signature all hand the task
-          // back to recovery, as on main.
-          const fedP2pMark = markPresented(taskQueue, taskId, "federation", relayBootId);
-          let fedP2pAccepted = false;
+          const forwardBody = {
+            task_id: taskId,
+            origin_relay: relayIdentity.relayMotebitId,
+            target_agent: targetId,
+            task_payload: {
+              prompt: body.prompt,
+              required_capabilities: requiredCaps,
+              submitted_by: submittedBy,
+              wall_clock_ms: body.wall_clock_ms,
+            },
+            // The proof rides the SIGNED forward body — the executor relay
+            // verifies A's signature over canonicalJson(body), so the proof is
+            // integrity-protected peer-to-peer (no separate channel).
+            payment_proof: proof,
+            routing_choice: routingChoice,
+            timestamp: Date.now(),
+          };
+          const forwardBytes = new TextEncoder().encode(canonicalJson(forwardBody));
+          const forwardSig = await sign(forwardBytes, relayIdentity.privateKey);
           try {
-            const forwardBody = {
-              task_id: taskId,
-              origin_relay: relayIdentity.relayMotebitId,
-              target_agent: targetId,
-              task_payload: {
-                prompt: body.prompt,
-                required_capabilities: requiredCaps,
-                submitted_by: submittedBy,
-                wall_clock_ms: body.wall_clock_ms,
-              },
-              // The proof rides the SIGNED forward body — the executor relay
-              // verifies A's signature over canonicalJson(body), so the proof is
-              // integrity-protected peer-to-peer (no separate channel).
-              payment_proof: proof,
-              routing_choice: routingChoice,
-              timestamp: Date.now(),
-            };
-            const forwardBytes = new TextEncoder().encode(canonicalJson(forwardBody));
-            const forwardSig = await sign(forwardBytes, relayIdentity.privateKey);
-            try {
-              const resp = await fetch(`${peerEndpoint}/federation/v1/task/forward`, {
-                method: "POST",
-                headers: { "Content-Type": "application/json", "X-Correlation-ID": taskId },
-                body: JSON.stringify({ ...forwardBody, signature: bytesToHex(forwardSig) }),
-                signal: AbortSignal.timeout(10000),
-              });
-              if (resp.ok) {
-                routed = true;
-                fedP2pAccepted = true;
-                taskRouter.recordPeerForwardResult(peerEndpoint, true);
-                logger.info("task.federated_p2p_forwarded", {
-                  correlationId: taskId,
-                  peerRelay: peerEndpoint,
-                  targetAgent: targetId,
-                  workerNetMicro,
-                  aFeeMicro,
-                  bFeeMicro,
-                });
-              } else {
-                taskRouter.recordPeerForwardResult(peerEndpoint, false);
-                // Refused by the peer: it will not present the task (the mark is
-                // released below).
-                // The task did not settle (no result came back), so no settlement
-                // row exists for this proof — the delegator may resubmit the SAME
-                // payment_proof to retry without re-paying (the replay guard keys
-                // on settled proofs, not attempted ones).
-                throw new HTTPException(502, {
-                  message: `Executor relay rejected the forwarded task (HTTP ${resp.status}) — retryable: resubmit the same payment_proof`,
-                });
-              }
-            } catch (fwdErr) {
-              if (fwdErr instanceof HTTPException) throw fwdErr;
-              taskRouter.recordPeerForwardResult(peerEndpoint, false);
-              logger.warn("task.federated_p2p_forward_failed", {
+            const resp = await fetch(`${peerEndpoint}/federation/v1/task/forward`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json", "X-Correlation-ID": taskId },
+              body: JSON.stringify({ ...forwardBody, signature: bytesToHex(forwardSig) }),
+              signal: AbortSignal.timeout(10000),
+            });
+            if (resp.ok) {
+              routed = true;
+              taskRouter.recordPeerForwardResult(peerEndpoint, true);
+              logger.info("task.federated_p2p_forwarded", {
                 correlationId: taskId,
                 peerRelay: peerEndpoint,
                 targetAgent: targetId,
-                error: fwdErr instanceof Error ? fwdErr.message : String(fwdErr),
+                workerNetMicro,
+                aFeeMicro,
+                bFeeMicro,
               });
+            } else {
+              taskRouter.recordPeerForwardResult(peerEndpoint, false);
+              // The task did not settle (no result came back), so no settlement
+              // row exists for this proof — the delegator may resubmit the SAME
+              // payment_proof to retry without re-paying (the replay guard keys
+              // on settled proofs, not attempted ones).
               throw new HTTPException(502, {
-                message:
-                  "Failed to forward federated P2P task to the executor relay — retryable: resubmit the same payment_proof",
+                message: `Executor relay rejected the forwarded task (HTTP ${resp.status}) — retryable: resubmit the same payment_proof`,
               });
             }
-          } finally {
-            if (!fedP2pAccepted) release(fedP2pMark);
+          } catch (fwdErr) {
+            if (fwdErr instanceof HTTPException) throw fwdErr;
+            taskRouter.recordPeerForwardResult(peerEndpoint, false);
+            logger.warn("task.federated_p2p_forward_failed", {
+              correlationId: taskId,
+              peerRelay: peerEndpoint,
+              targetAgent: targetId,
+              error: fwdErr instanceof Error ? fwdErr.message : String(fwdErr),
+            });
+            throw new HTTPException(502, {
+              message:
+                "Failed to forward federated P2P task to the executor relay — retryable: resubmit the same payment_proof",
+            });
           }
         } else if (allProfiles.length > 0) {
           // Apply gradient-informed precision to routing weights when provided
@@ -3413,15 +3338,6 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
                   });
                 }
 
-                // The peer relay presents it from here (#811). The mark lives
-                // only while the forward is in flight (#811 v3): it is released
-                // unless the peer ACCEPTED. A refusal or a thrown fetch
-                // (refused, reset, timeout) hands the task back to reconnect
-                // recovery, as on main — keeping it on a timeout stranded a
-                // task main completes. The local phases stay suppressed either
-                // way (`federationAttempted`), as on main.
-                const fedMark = markPresented(taskQueue, taskId, "federation", relayBootId);
-                let fedAccepted = false;
                 try {
                   const forwardBody = {
                     task_id: taskId,
@@ -3451,7 +3367,6 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
 
                   if (resp.ok) {
                     routed = true;
-                    fedAccepted = true;
                     taskRouter.recordPeerForwardResult(peerEndpoint, true);
                     logger.info("task.forwarded", {
                       correlationId: taskId,
@@ -3479,8 +3394,6 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
                     targetAgent: selId,
                     error: fwdErr instanceof Error ? fwdErr.message : String(fwdErr),
                   });
-                } finally {
-                  if (!fedAccepted) release(fedMark);
                 }
               } else {
                 // Local agent: route via WebSocket first, HTTP MCP fallback.
@@ -3595,9 +3508,10 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
     }
     if (submitterPresenter) {
       // Chosen, not incidental: the submitter asked to present. Nothing above
-      // routed (every phase is guarded), so the token below is the ONLY one —
-      // and reconnect recovery does not hand the task to the worker's socket
-      // as well: the entry was marked presented when it was queued (#811).
+      // routed (every phase is guarded), so the token below is the ONLY one.
+      // Reconnect recovery still hands the task to a worker socket that
+      // registers, as on main: withholding it strands the task whenever the
+      // submitter never presents (#811; presentation-matrix.probe.ts).
       logger.info("task.submitter_presents", {
         correlationId: taskId,
         worker:
