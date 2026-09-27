@@ -59,28 +59,54 @@ updates:
       # native-module review, real metro bundle, app boot on the consent-root
       # surface), never a lockfile merge. Remove when the SDK-57 arc is
       # scheduled; the RN companions below ride the same arc.
+      #
+      # expo and its modules version as <SDK>.<minor>.<patch>, so a minor is
+      # off the SDK line too (#844, below); patches flow inside the SDK's ~
+      # ranges.
       - dependency-name: "expo"
-        update-types: ["version-update:semver-major"]
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
       - dependency-name: "expo-*"
-        update-types: ["version-update:semver-major"]
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
       - dependency-name: "@expo/*"
-        update-types: ["version-update:semver-major"]
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
       - dependency-name: "react-native-*"
         update-types: ["version-update:semver-major"]
-      - dependency-name: "@react-native-async-storage/async-storage"
-        update-types: ["version-update:semver-major"]
-      # Not a major, and not a decision against the library — an upstream type
-      # regression. 13.16.2 changed the default type parameter from
-      # `WebView<P = {}>` to `WebView<P = undefined>`, and the class extends
-      # `Component<WebViewProps & P>`. TypeScript reduces `WebViewProps &
-      # undefined` to `never`, so every prop on a plain `<WebView …/>` fails to
-      # typecheck ("Type 'X' is not assignable to type 'never'"). 13.17.0 still
-      # carries it, so `apps/mobile` pins the exact last-good 13.16.1 rather
-      # than contorting the call site with an explicit generic. Remove the pin
-      # and this ignore together, once a release declares a default type
-      # parameter that does not collapse the props type.
+      # The Expo SDK line (#844). An Expo SDK pins ONE React Native line and the
+      # Metro/Hermes that can parse it, and names exact or ~ versions for its
+      # native modules (apps/mobile/node_modules/expo/bundledNativeModules.json).
+      # A bump off that line is not a smaller SDK upgrade — it is an app that
+      # cannot be bundled: dependabot moved react-native 0.83.10 -> 0.87.0
+      # under SDK 55 and no iOS/Android build could be produced (Metro's
+      # hermes-parser cannot read RN 0.87's Flow). These versions move only
+      # through `CI=1 npx expo install --fix` in apps/mobile, inside the SDK
+      # arc (#416). `pnpm check-mobile-expo-alignment` (invariant #164) holds
+      # the lockfile to the SDK table, so anything these rules miss goes red
+      # in CI. Remove/re-scope each rule when the SDK-57 arc lands, against
+      # that SDK's table.
+      #
+      # react-native: only apps/mobile uses it, and the SDK names it exactly,
+      # so every bump leaves the line.
+      - dependency-name: "react-native"
+      # SDK-pinned exactly (or to one patch) — every bump leaves the line.
+      # react-native-webview was also held for an upstream type regression:
+      # 13.16.2 changed the default type parameter from `WebView<P = {}>` to
+      # `WebView<P = undefined>`, which reduces `WebViewProps & undefined` to
+      # `never` so every prop on a plain `<WebView …/>` fails to typecheck;
+      # 13.17.0 still carries it. SDK 55 pins 13.16.0, before the regression.
+      - dependency-name: "react-native-svg"
       - dependency-name: "react-native-webview"
-        update-types: ["version-update:semver-minor", "version-update:semver-patch"]
+      - dependency-name: "@react-native-async-storage/async-storage"
+      - dependency-name: "react-native-get-random-values"
+        update-types: ["version-update:semver-minor"]
+      # react is shared with web / docs / operator / inspector / proxy, so
+      # patches keep flowing for them; a minor or major leaves SDK 55's
+      # `react 19.2.0`. apps/mobile pins react exactly: a react patch PR that
+      # also rewrites mobile's pin goes red on check-mobile-expo-alignment —
+      # keep mobile's pin at the SDK's version in that PR.
+      - dependency-name: "react"
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+      - dependency-name: "react-dom"
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
     # Grouping strategy: isolate blast radius.
     #
     # Crypto deps are security-critical — any compromise undermines the thesis,

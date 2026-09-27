@@ -86,10 +86,29 @@ config.resolver.resolveRequest = (context, moduleName, platform) => {
   if (moduleName.startsWith("node:") || emptyBuiltins.has(moduleName)) {
     return { type: "sourceFile", filePath: emptyModule };
   }
+  // Local ONNX embeddings cannot run under Hermes (the package uses
+  // `import.meta`, which fails the Hermes transform, and needs onnxruntime).
+  // memory-graph reaches it only through a lazy dynamic import after the
+  // remote /v1/embed backend, inside a try that falls back to hash
+  // embeddings; the empty module's no-op `pipeline` yields no extractor, the
+  // call throws, and the fallback runs (#844).
+  if (moduleName === "@xenova/transformers") {
+    return { type: "sourceFile", filePath: emptyModule };
+  }
 
   try {
     return context.resolveRequest(context, moduleName, platform);
   } catch (defaultError) {
+    // Relative `./x.js` naming a `./x.ts` source (the NodeNext/ESM spelling
+    // tsc accepts). Metro does not map `.js` to `.ts`, so retry without the
+    // extension and let Metro's sourceExts find the TypeScript file (#844).
+    if (moduleName.startsWith(".") && moduleName.endsWith(".js")) {
+      try {
+        return context.resolveRequest(context, moduleName.slice(0, -3), platform);
+      } catch {
+        throw defaultError;
+      }
+    }
     // Fallback: manual resolution for pnpm symlink edge cases
     const parts = moduleName.split("/");
     let pkgName, subPath;

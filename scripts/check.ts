@@ -1010,6 +1010,12 @@ const GATES: ReadonlyArray<Gate> = [
     script: "check-audience-route-parity",
   },
   {
+    name: "check-mobile-expo-alignment",
+    defends:
+      "every apps/mobile dependency the installed Expo SDK versions (expo's bundledNativeModules.json) resolves in pnpm-lock.yaml inside the range that SDK names — the `expo install --check` verdict, read from the lockfile and offline so it moves only when the lockfile does. An SDK pins one React Native line and the Metro/Hermes that can parse it; a react-native past the line ships Flow syntax the SDK's hermes-parser cannot read and NO iOS or Android bundle can be built. #844: dependabot moved react-native 0.83.10 → 0.87.0 (plus react and a dozen expo-* modules) under SDK 55 and every check stayed green, because nothing in CI bundles the mobile app; found when a Release build on a phone died at 92% of Metro. Invariant #164, added 2026-09-27",
+    script: "check-mobile-expo-alignment",
+  },
+  {
     name: "check-docs-script-claims",
     defends:
       "every package script a docs page tells the reader to run exists in the manifest it would run against: `pnpm --filter <pkg> <script>` resolves to a workspace package by name and one of its `scripts`; `pnpm run <script>` resolves against the most recent `cd <workspace-dir>` in the same fenced block (else the repo root); `npm run <script>` resolves against the scripts the create-motebit scaffold generates. The 2026-09-14 docs-vs-code cross-audit (#667) found three of the five app pages OPENING with a command that did not exist or did something other than the sentence claimed — the first command a new contributor types was the least-checked sentence on the site; `check-docs-tree` enforced the directory listing and `check-docs-cli-claims` the CLI subcommands, but nothing tied a documented script to a package.json. Invariant #157, added 2026-09-14",
