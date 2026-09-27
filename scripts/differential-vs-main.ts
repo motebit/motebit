@@ -10,13 +10,18 @@
  *     [--from-main diff | host | <dir>,<dir>,…]
  *                                       # which workspace packages come from the base ref;
  *                                       #   default `diff` (see Aperture)
- *     [--base origin/main] [--base-repo <path>] [--root-from-head] [--out report.json]
+ *     [--base origin/main] [--base-repo <path>] [--root-from-head]
+ *     [--head-from-working-tree] [--out report.json]
  *
  *   --base-repo    read the base ref from another repository (default: this one).
  *   --root-from-head
- *                  when paths outside the workspace packages differ from the base
- *                  ref, hold the working tree's copy of each on BOTH sides and list
- *                  them as NOT differentialled, instead of refusing.
+ *                  when build-affecting paths outside the workspace packages differ
+ *                  from the base ref, hold the working tree's copy of each on BOTH
+ *                  sides and list them as NOT differentialled, instead of refusing.
+ *   --head-from-working-tree
+ *                  fast path: run the head side in the working tree on its OWN
+ *                  builds instead of a fresh-from-source head tree. Those builds are
+ *                  NOT freshness-checked — the aperture says so. Default off.
  *
  * Why this exists: a behaviour-preserving change (a refactor, a new authority
  * model, a migration) is proven by showing where it DIFFERS from main and that
@@ -32,64 +37,51 @@
  * paths with role names before recording, or every observation differs
  * trivially. `process.env.DIFFERENTIAL_SIDE` is `head` or `base`.
  *
- * What it does: refuses (exit 1, naming the cause and the repair) when it
- * cannot state its aperture truthfully — when a working-tree build the probe
- * can reach is stale against any of its build inputs or its dependencies'
- * emitted output, or when a path outside the workspace packages differs from
- * the base ref; otherwise builds a base tree in a temp dir
- * (scripts/lib/differential-tree.ts has the mechanics and the #818/#833/#835
- * history); drops the probe into the host package on both trees
- * as `src/__tests__/zz-differential.test.ts`; runs the host's `pretest` script
- * if it has one (generated inputs, e.g. apps/mobile's creature bundle, which
- * inlines render-engine's browser bundle); runs the probe with the host's own
- * vitest config in each; always removes it from the working tree; and prints
- * per-observation SAME / DIFF. Exit 0 when both runs produced observations;
- * exit 1 when either did not or the run was refused — "unknown" is not a
- * result. A DIFF is information, not failure: the reviewer decides whether
- * each is intended.
+ * What it does (scripts/lib/differential-tree.ts has the mechanics and the
+ * #818/#833/#835/#837 history): builds TWO trees in a temp dir, each FRESH
+ * FROM SOURCE — a head tree (the working tree's tracked + untracked-not-ignored
+ * files) and a base tree (the base ref, with every package not taken from it
+ * replaced by the working tree's source) — and builds every package the probe
+ * can reach in each, dependencies first, with the same build logic. The
+ * working tree's own `dist` is read by neither side. It then drops the probe
+ * into the probe's package in each tree as
+ * `src/__tests__/zz-differential.test.ts`, runs that package's `pretest` if it
+ * has one (e.g. apps/mobile's creature bundle, generated from render-engine's
+ * browser bundle), runs the probe with the package's own vitest config, and
+ * prints per-observation SAME / DIFF. Nothing is written to the working tree
+ * (except with --head-from-working-tree, where the probe file is placed there
+ * and always removed). Exit 0 when both runs produced observations; exit 1
+ * when either did not, or when the run was REFUSED — "unknown" is not a
+ * result. A DIFF is information, not failure: the reviewer decides.
  *
- * Aperture — exactly what the base side swaps, printed on every run:
- *   - Paths OUTSIDE the workspace packages (root `package.json`,
- *     `tsconfig.base.json`, `pnpm-lock.yaml`, `vitest.shared.ts`, `spec/`, …)
- *     are identical on both sides: the run refuses if any differs from the
- *     base ref, unless `--root-from-head` holds the working tree's copy on both
- *     sides — then every such path is listed as NOT differentialled.
- *   - The workspace packages in `--from-main` are the base ref's source. `diff`
- *     (default) = every package with any file whose content differs between
- *     the base ref and the working tree (uncommitted and untracked-not-ignored
- *     files included); `host` = only the probe's package. The host package is
- *     always from the base ref.
- *   - Every working-tree package that can REACH a from-main package — through
- *     its declared workspace deps, or through the root package.json's
- *     workspace deps, which node resolves from any package — is copied into
- *     the base tree as SOURCE and rebuilt there, so whatever its build bundles
- *     or inlines is the base tree's version. A working-tree `dist` is never
- *     copied into the base tree.
- *   - Every from-main or copied package the probe can reach is built inside
- *     the base tree, dependencies first (`tsc -b` runs as `tsc -p
- *     tsconfig.json`, so a stale reference is never rebuilt into the working
- *     tree; tsup, esbuild and `build:browser` steps run as written).
- *   - Every other working-tree package cannot reach a from-main package: it is
- *     linked, and read from its working-tree build on both sides — which is why
- *     a stale build refuses the run.
- *   - Packages only on the base ref that were not requested stay the base
- *     ref's source, unbuilt; the aperture lists them.
- *   - Third-party dependencies are the working tree's install on both sides
- *     (one lockfile). A change that moved a third-party version is not
- *     differentialled by this script, and a third-party package that imports
- *     an `@motebit/*` package would resolve it to the working tree.
+ * Refusals (exit 1, naming the cause and the fix):
+ *   - the probe's package is new on this branch: nothing on the base to compare;
+ *   - a build-affecting path outside the workspace packages differs from the
+ *     base ref (tsconfig.base.json, package.json, pnpm-lock.yaml, patches/,
+ *     root configs): the install is shared by both sides, so the change cannot
+ *     be assigned to one. `.changeset/*.md`, `docs/**`, `.claude/**` and
+ *     `*.md` outside packages never refuse; each side reads its own copy.
+ *
+ * Aperture — printed on every run:
+ *   - the packages taken from the base ref: `diff` (default) = every package
+ *     with any file whose content differs; `host` = only the probe's package.
+ *     The probe's package is always from the base ref.
+ *   - what was built in each tree (the probe's reach, including the root
+ *     package.json's workspace deps, which node resolves from any package);
+ *   - differing ignorable root paths (each side has its own copy), or root
+ *     paths held at the working tree's copy (--root-from-head);
+ *   - third-party dependencies: the working tree's install on both sides (one
+ *     lockfile), so a third-party version change is not differentialled.
  *
  * Safety: every child process (git, builds, vitest) runs with EVERY `GIT_*`
  * variable removed and an explicit `cwd`, and only read-only git subcommands
  * (rev-parse, archive, ls-files) are allowed — a git hook's GIT_DIR can never
  * point this script at a repository it did not mean (#835).
  *
- * Tests: `pnpm test:gates` runs the unit half and a behavioural fixture (a
- * mini-workspace in a temp dir, whose git runs are scrubbed and guarded; see
- * the test file for the cases and timing). The real-repo smoke is opt-in:
+ * Tests: `pnpm test:gates` runs the units, the decoy-repository safety test
+ * (which also asserts the bundle + root-hoisted DIFF); `pnpm test:differential`
+ * runs every fixture case. The real-repo smoke is opt-in:
  *   MOTEBIT_DIFFERENTIAL_SMOKE=1 npx vitest run --dir scripts/__tests__ differential-vs-main
- * (a planted protocol change observed through mobile's creature bundle and
- * through semiring from surface-kit).
  */
 import { execFileSync } from "node:child_process";
 import {
@@ -104,19 +96,14 @@ import {
 import { tmpdir } from "node:os";
 import { basename, join, relative, resolve } from "node:path";
 import {
-  buildBaseTree,
+  buildTrees,
   cleanEnv,
-  dependencyClosure,
   DifferentialRefusal,
-  headFiles,
   packageDirOf,
   readGit,
   readPackage,
-  repairCommand,
-  rootWorkspaceDeps,
+  ROOT_IGNORED,
   runPretest,
-  staleBuilds,
-  workspaceGraph,
   workspaceRoots,
 } from "./lib/differential-tree.js";
 
@@ -146,6 +133,7 @@ const roots = workspaceRoots(root);
 const base = arg("base", "origin/main")!;
 const baseRepo = arg("base-repo") != null ? realpathSync(resolve(arg("base-repo")!)) : root;
 const rootFromHead = process.argv.includes("--root-from-head");
+const headFromWorkingTree = process.argv.includes("--head-from-working-tree");
 /** The package a probe outside the workspace runs in (the script's first and commonest subject). */
 const DEFAULT_HOST = "services/relay";
 const probeHome = packageDirOf(relative(root, realpathSync(probe)), roots);
@@ -183,7 +171,6 @@ for (const d of fromMain === "diff" ? [] : fromMain) {
 const out = arg("out", join(tmpdir(), `differential-${Date.now()}.json`))!;
 
 const work = realpathSync(mkdtempSync(join(tmpdir(), "motebit-differential-")));
-const tree = join(work, "tree");
 const PROBE_NAME = "src/__tests__/zz-differential.test.ts";
 
 async function runProbe(
@@ -240,56 +227,41 @@ async function main(): Promise<void> {
     `▸ differential-vs-main — probe ${basename(probe)} in ${host} (${hostWhy}): working tree (${headSha}+) vs ${base} (${baseSha})`,
   );
 
-  // The head side reads the working tree's builds of everything the probe can
-  // reach; a stale one would hide a real change.
-  const headGraph = workspaceGraph(root, roots);
-  const headReach = [...dependencyClosure(host, headGraph, rootWorkspaceDeps(root))].filter(
-    (d) => d !== host,
-  );
-  const stale = staleBuilds(root, headReach, headGraph, headFiles(root));
-  if (stale.length > 0) {
-    throw new DifferentialRefusal([
-      `differential-vs-main: refused — working-tree builds the probe reads are stale (built before a change to one of their build inputs, or before a dependency last emitted output): ${stale.join(", ")}.`,
-      "A stale build is read on the head side (and on the base side wherever it is linked), so a real change would report SAME.",
-      `Fix: ${repairCommand(stale, headReach, headGraph)}`,
-    ]);
-  }
-
   const started = Date.now();
-  const aperture = await buildBaseTree({
+  const { baseTree, headTree, aperture } = await buildTrees({
     root,
     baseRepo,
     base,
-    treeDir: tree,
+    workDir: work,
     host,
     fromMain,
     rootFromHead,
+    headFromWorkingTree,
     log: (l) => console.log(l),
   });
-  console.log(`  base tree assembled in ${((Date.now() - started) / 1000).toFixed(1)}s`);
+  console.log(`  trees built from source in ${((Date.now() - started) / 1000).toFixed(1)}s`);
 
-  const head = await runProbe(root, "head");
-  const baseObs = await runProbe(tree, "base");
+  const head = await runProbe(headTree, "head");
+  const baseObs = await runProbe(baseTree, "base");
 
   const list = (xs: string[]) => (xs.length > 0 ? xs.join(", ") : "none");
   const apertureLines = [
-    `  Aperture (base side), probe in ${host} (${hostWhy}):`,
-    `    from ${base}: ${list(aperture.fromMain)}.`,
-    aperture.rootHeldAtHead.length > 0
-      ? `    NOT differentialled (--root-from-head: the working tree's copy on BOTH sides): ${list(aperture.rootHeldAtHead)}.`
-      : `    paths outside the workspace packages: identical to ${base} (checked by content).`,
-    `    built inside the base tree from ${base} source: ${list(aperture.rebuiltFromMain)}.`,
-    `    built inside the base tree from working-tree SOURCE (they reach a package taken from ${base}; bundles included): ${list(aperture.rebuiltFromHead)}.`,
-    aperture.copiedUnbuilt.length > 0
-      ? `    working-tree source copied but unbuilt (they reach a package taken from ${base}; the probe cannot reach them, so loading one fails loudly): ${list(aperture.copiedUnbuilt)}.`
-      : "",
+    `  Aperture, probe in ${host} (${hostWhy}):`,
+    `    from ${base}: ${list(aperture.fromMain)}; every other workspace package is the working tree's SOURCE on both sides.`,
+    `    built from source in the base tree: ${list(aperture.builtBase)}.`,
+    aperture.headFromWorkingTree
+      ? "    head side: the WORKING TREE's own builds (--head-from-working-tree) — NOT freshness-checked."
+      : `    built from source in the head tree: ${list(aperture.builtHead)}.`,
     aperture.absentOnBase.length > 0
       ? `    requested but absent on ${base} (new on this branch): ${list(aperture.absentOnBase)}.`
       : "",
     aperture.baseOnly.length > 0
       ? `    on ${base} only, not requested (its source, unbuilt): ${list(aperture.baseOnly)}.`
       : "",
-    `    linked from the working tree, read from its build on both sides (they cannot reach a package taken from ${base}): ${aperture.linkedFromHead} package(s).`,
+    aperture.rootHeldAtHead.length > 0
+      ? `    NOT differentialled (--root-from-head: the working tree's copy on BOTH sides): ${list(aperture.rootHeldAtHead)}.`
+      : `    build-affecting paths outside the workspace packages: identical to ${base} (checked by content).`,
+    `    never refused, each side reads its own copy (${ROOT_IGNORED.map((r) => r.label).join(", ")}): ${aperture.rootIgnoredDiffering.length} differing path(s)${aperture.rootIgnoredDiffering.length > 0 ? ` — ${aperture.rootIgnoredDiffering.slice(0, 10).join(", ")}${aperture.rootIgnoredDiffering.length > 10 ? ", …" : ""}` : ""}.`,
     `    root package.json workspace deps, treated as reachable from every package: ${list(aperture.rootWorkspaceDeps)}.`,
     "    Third-party dependencies: the working tree's install on both sides.",
   ].filter(Boolean);
@@ -297,49 +269,50 @@ async function main(): Promise<void> {
   if (head == null || baseObs == null) {
     for (const l of apertureLines) console.error(l);
     console.error(
-      `differential-vs-main: ${head == null ? "the working tree" : base} produced no observations — no comparison is possible.`,
+      `differential-vs-main: ${head == null ? "the head side" : base} produced no observations — no comparison is possible.`,
     );
     console.error(
       "Fix: the probe must write a JSON object to process.env.PROBE_OUT in afterAll, and must use only surfaces that exist on both trees (the run output above names the failure).",
     );
     exitCode = 1;
-  } else {
-    const keys = [...new Set([...Object.keys(baseObs), ...Object.keys(head)])].sort();
-    let diffs = 0;
-    for (const k of keys) {
-      const same = JSON.stringify(baseObs[k]) === JSON.stringify(head[k]);
-      if (!same) diffs++;
-      console.log(`\n== ${k} [${same ? "SAME" : "DIFF"}]`);
-      console.log(`  ${base}: ${JSON.stringify(baseObs[k])}`);
-      console.log(`  head: ${JSON.stringify(head[k])}`);
-    }
-    writeFileSync(
-      out,
-      JSON.stringify(
-        {
-          base,
-          baseRepo,
-          baseSha,
-          headSha,
-          pkg: host,
-          pkgReason: hostWhy,
-          probe,
-          aperture,
-          // Deleted when the run ends; kept so paths recorded in observations can be read.
-          baseTree: tree,
-          baseTreeDeleted: true,
-          head,
-          baseObs,
-        },
-        null,
-        2,
-      ),
-    );
-    console.log(
-      `\n✓ differential-vs-main: ${keys.length} observation(s), ${diffs} DIFF. Every DIFF must be an intended, stated change — the reviewer decides. Report: ${out}`,
-    );
-    for (const l of apertureLines) console.log(l);
+    return;
   }
+  const keys = [...new Set([...Object.keys(baseObs), ...Object.keys(head)])].sort();
+  let diffs = 0;
+  for (const k of keys) {
+    const same = JSON.stringify(baseObs[k]) === JSON.stringify(head[k]);
+    if (!same) diffs++;
+    console.log(`\n== ${k} [${same ? "SAME" : "DIFF"}]`);
+    console.log(`  ${base}: ${JSON.stringify(baseObs[k])}`);
+    console.log(`  head: ${JSON.stringify(head[k])}`);
+  }
+  writeFileSync(
+    out,
+    JSON.stringify(
+      {
+        base,
+        baseRepo,
+        baseSha,
+        headSha,
+        pkg: host,
+        pkgReason: hostWhy,
+        probe,
+        aperture,
+        // Deleted when the run ends; kept so paths recorded in observations can be read.
+        baseTree,
+        headTree,
+        treesDeleted: true,
+        head,
+        baseObs,
+      },
+      null,
+      2,
+    ),
+  );
+  console.log(
+    `\n✓ differential-vs-main: ${keys.length} observation(s), ${diffs} DIFF. Every DIFF must be an intended, stated change — the reviewer decides. Report: ${out}`,
+  );
+  for (const l of apertureLines) console.log(l);
 }
 
 main()
@@ -350,9 +323,8 @@ main()
       return;
     }
     console.error(
-      `differential-vs-main: could not assemble the base tree: ${err instanceof Error ? err.message : String(err)}`,
+      `differential-vs-main: could not build the trees: ${err instanceof Error ? err.message : String(err)}`,
     );
-    exitCode = 1;
   })
   .finally(() => {
     rmSync(work, { recursive: true, force: true });

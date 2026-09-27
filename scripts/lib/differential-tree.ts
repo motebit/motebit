@@ -1,72 +1,53 @@
 /**
- * differential-tree — assemble the BASE tree `scripts/differential-vs-main.ts`
- * runs a probe in: the base ref's files, with a chosen set of workspace
- * packages taken from the base ref and every other workspace package taken
- * from this checkout, wired so that every import the probe can reach resolves
- * to exactly that mix — or refuse, loudly, when it cannot say that truthfully.
+ * differential-tree — assemble the two trees `scripts/differential-vs-main.ts`
+ * runs a probe in, BOTH built fresh from source in temp dirs:
  *
- * History (#818; the #833 and #835 reviews each withdrew a fix):
+ *   - the HEAD tree: the working tree's tracked + untracked-not-ignored files;
+ *   - the BASE tree: the base ref's files, with every workspace package NOT
+ *     taken from the base ref replaced by the working tree's source.
+ *
+ * In each tree every package the probe can reach is rebuilt in dependency
+ * order by the same build logic. The working tree's own `dist` is never read
+ * by either side, so no freshness judgement is ever made — or the run
+ * refuses, loudly, when it cannot say what it compared.
+ *
+ * History (#818; the #833, #835 and #837 reviews each withdrew a fix):
  *
  *   1. The original archived ONE package. A package whose `tsconfig.json`
- *      lists `references` failed to transform any test on the base side
- *      (vite's oxc transform follows every reference, and the siblings were
- *      not in the temp tree), and its `node_modules` was a link to the working
- *      tree's, so no other package could come from the base ref.
- *   2. #833: working-tree packages between the probe and a from-main package
- *      were copied WITH their `dist`, and a bundle (render-engine's
- *      `browser.iife.js`, crypto's tsup, create-motebit, the CLI) had already
- *      inlined the working tree's version of the from-main package ⇒ false
- *      SAME. Rule: a working-tree `dist` never enters the base tree; every
- *      working-tree package that can reach a from-main package is copied as
- *      SOURCE and rebuilt there.
- *   3. #833: "can reach" ignored the root package.json's workspace deps
- *      (runtime, semiring, verifier, wallet-solana), which node resolves from
- *      ANY package ⇒ false SAME. Rule: they are implicit edges of every package.
- *   4. #835: (a) paths outside the workspace packages (tsconfig.base.json,
- *      root package.json, pnpm-lock.yaml, patches/, root configs) were taken
- *      from the base ref, but every LINKED package had been built by the
- *      working tree against the working tree's copies, so a change there read
- *      SAME while the aperture claimed those paths came from main. Rule: when
- *      any such path differs, REFUSE (or, with an explicit flag, hold the
- *      working tree's copy on BOTH sides and say that those paths are not
- *      differentialled). (b) the staleness check read only `src/`, so a
- *      changed build input elsewhere (`scripts/build-browser.mjs`, tsup
- *      config, package.json) read SAME. Rule: every tracked non-test file of
- *      the package except `dist`. (c) its repair line could not clear it:
- *      `tsc -b` skips an up-to-date dependent without touching its
- *      tsbuildinfo, so "older than a dependency's tsbuildinfo" never cleared.
- *      Rule: compare against the dependency's EMITTED output, which is what
- *      the dependent consumes, and repair the stale packages together with
- *      their dependents. (d) its fixture test ran `git init`/`config`/
- *      `commit` with the caller's GIT_DIR in the environment and, from a
- *      pre-push hook in a linked worktree, rewrote the real repository. Rule:
- *      every child process gets an environment with EVERY `GIT_*` variable
- *      removed and an explicit `cwd`, and this module runs only read-only git
- *      subcommands (an allowlist, enforced).
+ *      lists `references` failed to transform any test on the base side (oxc
+ *      follows every reference; the siblings were not in the temp tree), and
+ *      its `node_modules` linked to the working tree's, so no other package
+ *      could come from the base ref.
+ *   2. #833: working-tree packages were copied WITH their `dist`; a bundle
+ *      (render-engine's `browser.iife.js`, crypto's tsup, create-motebit, the
+ *      CLI) had already inlined the working tree's version of a from-main
+ *      package ⇒ false SAME. And "can reach" ignored the root package.json's
+ *      workspace deps (runtime, semiring, verifier, wallet-solana), which node
+ *      resolves from ANY package ⇒ false SAME.
+ *   3. #835: root files (tsconfig.base.json, package.json, …) were claimed to
+ *      come from main while linked packages had been built against the working
+ *      tree's copies; and the fixture test rewrote the real repository through
+ *      an inherited GIT_DIR. Rules kept: refuse on a differing root path that
+ *      can affect a build or probe; every child runs with EVERY `GIT_*` removed
+ *      and an explicit cwd; this module runs only read-only git (enforced).
+ *   4. #837: the working tree's builds were judged fresh by mtimes. That can't
+ *      be cleared on the real repo (tsup always re-emits; `tsc -b` dependents
+ *      skip without touching tsbuildinfo) and it missed transitive bundle
+ *      inputs; and a probe package NEW on the branch was linked to the working
+ *      tree on the base side ⇒ silent SAME. Rules now: both sides are built
+ *      from source in isolated trees (no freshness judgement exists); a probe
+ *      package absent on the base ref refuses.
  *
- * Each workspace package in the base tree is one of:
+ * Node resolves a module from its REAL path, so each tree is self-contained:
+ * package sources are copied, and `node_modules` are MIRRORED from the working
+ * tree's install (same relative link targets, so `@motebit/*` links land on
+ * the same tree's copy of that package; third-party deps land in the working
+ * tree's `.pnpm` store).
  *
- *   - from-main: the base ref's source, with a `node_modules` that MIRRORS
- *     the working tree's (same relative link targets, so `@motebit/*` links
- *     land on the base tree's copy of that package; third-party deps land in
- *     the working tree's `.pnpm` store). Rebuilt inside the base tree when the
- *     probe can reach it.
- *   - head source, rebuilt: a working-tree package that can reach a from-main
- *     package. Its tracked + untracked-not-ignored files are copied (never
- *     `dist`, `*.tsbuildinfo` or ignored/generated files) and it is rebuilt
- *     inside the base tree when the probe can reach it; when the probe cannot,
- *     it stays unbuilt, so loading it fails loudly instead of quietly.
- *   - linked: a working-tree package that cannot reach any from-main package.
- *     A symlink is exact: nothing it loads differs between the two trees.
- *   - base-only: exists only on the base ref and was not requested. Left as
- *     the base ref's source, unbuilt.
- *
- * Node resolves a module from its REAL path, which is why a package that can
- * reach a from-main package must live inside the base tree.
- *
- * Residual, stated: third-party packages live in the working tree's `.pnpm`
- * store on both sides, so a third-party package that itself imports an
- * `@motebit/*` package would resolve it to the working tree.
+ * Residual, stated: third-party packages come from the working tree's install
+ * on both sides (one lockfile), so a third-party version change is not
+ * differentialled, and a third-party package that imports an `@motebit/*`
+ * package would resolve it to the working tree.
  */
 import { execFileSync, spawn } from "node:child_process";
 import {
@@ -78,7 +59,6 @@ import {
   readdirSync,
   readlinkSync,
   rmSync,
-  statSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
@@ -289,11 +269,48 @@ function sameFile(a: string, b: string): boolean {
   return readFileSync(a).equals(readFileSync(b));
 }
 
+/**
+ * Paths outside the workspace packages whose difference from the base ref
+ * does NOT refuse the run. Each side's tree holds its OWN copy of these
+ * (both trees are built from source), so a probe that reads one still sees
+ * each side's version; the refusal exists only for root paths that are
+ * consumed through the shared install or that no single side can own. Every
+ * pattern is listed in the aperture of every run.
+ */
+export const ROOT_IGNORED: ReadonlyArray<{ pattern: RegExp; label: string; why: string }> = [
+  {
+    pattern: /^\.changeset\/[^/]+\.md$/,
+    label: ".changeset/*.md",
+    why: "release notes consumed only by `changeset version`; no build, test or probe reads them",
+  },
+  {
+    pattern: /^docs\//,
+    label: "docs/**",
+    why: "prose; no package build reads docs/ (the self-knowledge corpus is committed inside its package)",
+  },
+  {
+    pattern: /^\.claude\//,
+    label: ".claude/**",
+    why: "agent configuration; read by no build, test or probe",
+  },
+  {
+    pattern: /^[^/]*\.md$|\/[^/]*\.md$/,
+    label: "*.md outside packages",
+    why: "markdown is not a build input; a test that reads one (runtime's emergent-interior eval reads THE_EMERGENT_INTERIOR.md) reads its own tree's copy",
+  },
+];
+
+export function isIgnorableRootPath(path: string): boolean {
+  return ROOT_IGNORED.some((r) => r.pattern.test(path));
+}
+
 export interface TreeDifference {
   /** Workspace packages with any differing file (either direction). */
   packages: string[];
-  /** Differing paths outside every workspace package. */
+  /** Differing paths outside every workspace package that can affect a build or probe. */
   rootPaths: string[];
+  /** Differing paths outside every workspace package that match ROOT_IGNORED. */
+  ignoredRootPaths: string[];
 }
 
 /**
@@ -313,12 +330,18 @@ export function compareTrees(root: string, baseTree: string, roots: string[]): T
   }
   const packages = new Set<string>();
   const rootPaths: string[] = [];
+  const ignoredRootPaths: string[] = [];
   for (const f of differing) {
     const d = packageDirOf(f, roots);
     if (d != null) packages.add(d);
+    else if (isIgnorableRootPath(f)) ignoredRootPaths.push(f);
     else rootPaths.push(f);
   }
-  return { packages: [...packages].sort(), rootPaths: rootPaths.sort() };
+  return {
+    packages: [...packages].sort(),
+    rootPaths: rootPaths.sort(),
+    ignoredRootPaths: ignoredRootPaths.sort(),
+  };
 }
 
 // ── node_modules ─────────────────────────────────────────────────────
@@ -377,112 +400,6 @@ function rewriteScripts(pkgDir: string): void {
   writeFileSync(file, `${JSON.stringify(m, null, 2)}\n`);
 }
 
-function newestMtime(dir: string): number {
-  if (!existsSync(dir)) return -1;
-  let newest = -1;
-  const walk = (d: string) => {
-    for (const e of readdirSync(d, { withFileTypes: true })) {
-      const p = join(d, e.name);
-      if (e.isDirectory()) walk(p);
-      else if (e.isFile()) newest = Math.max(newest, statSync(p).mtimeMs);
-    }
-  };
-  walk(dir);
-  return newest;
-}
-
-/** What a dependent consumes: the newest file the package EMITTED into `dist` (-1 if none). */
-export function emittedTime(pkgDir: string): number {
-  return newestMtime(join(pkgDir, "dist"));
-}
-
-/**
- * When the package's own build last ran: its newest `dist` file or
- * package-root `*.tsbuildinfo` (`tsc -b` refreshes the tsbuildinfo when it
- * re-checks changed inputs without re-emitting). -1 if never.
- */
-export function buildTime(pkgDir: string): number {
-  let t = emittedTime(pkgDir);
-  if (existsSync(pkgDir)) {
-    for (const f of readdirSync(pkgDir)) {
-      if (f.endsWith(".tsbuildinfo")) t = Math.max(t, statSync(join(pkgDir, f)).mtimeMs);
-    }
-  }
-  return t;
-}
-
-/** A build input: every tracked or untracked-not-ignored file of the package except `dist/` and tests. */
-export function isBuildInput(pathInPackage: string): boolean {
-  if (pathInPackage.startsWith("dist/")) return false;
-  const parts = pathInPackage.split("/");
-  if (parts.includes("__tests__")) return false;
-  return !/\.(test|spec|probe)\.[cm]?[jt]sx?$/.test(parts[parts.length - 1] ?? "");
-}
-
-/**
- * Working-tree packages among `dirs` whose build is stale: a buildable
- * package that was never built, or was last built before one of its build
- * inputs changed (any tracked non-test file outside `dist` — source, build
- * scripts, tsconfig, tsup config, package.json), or before a workspace
- * package it declares last EMITTED output (a bundling build inlines its
- * dependencies, so re-emitted dependency output makes it stale even when its
- * own inputs did not move). Both sides of a differential read these builds,
- * so a stale one makes a real change read as SAME.
- */
-export function staleBuilds(
-  root: string,
-  dirs: Iterable<string>,
-  byDir: Map<string, WorkspacePackage>,
-  files: string[],
-): string[] {
-  const byName = new Map([...byDir.values()].map((p) => [p.name, p.dir]));
-  const inputsOf = new Map<string, number>();
-  for (const f of files) {
-    const parts = f.split("/");
-    if (parts.length < 3) continue;
-    const d = `${parts[0]}/${parts[1]}`;
-    if (!byDir.has(d) || !isBuildInput(parts.slice(2).join("/"))) continue;
-    inputsOf.set(d, Math.max(inputsOf.get(d) ?? -1, lstatSync(join(root, f)).mtimeMs));
-  }
-  const stale: string[] = [];
-  for (const d of dirs) {
-    const pkg = byDir.get(d);
-    if (baseBuildCommand(pkg?.scripts.build) == null) continue;
-    const built = buildTime(join(root, d));
-    const depEmitted = Math.max(
-      -1,
-      ...(pkg?.deps ?? [])
-        .map((n) => byName.get(n))
-        .filter((x): x is string => x != null && x !== d)
-        .map((x) => emittedTime(join(root, x))),
-    );
-    if (built < 0 || built < (inputsOf.get(d) ?? -1) || built < depEmitted) stale.push(d);
-  }
-  return stale.sort();
-}
-
-/**
- * The command that clears a staleness refusal: the stale packages AND every
- * package in `reach` that depends on one of them (its build consumes theirs),
- * built by pnpm in dependency order.
- */
-export function repairCommand(
-  stale: string[],
-  reach: Iterable<string>,
-  byDir: Map<string, WorkspacePackage>,
-): string {
-  const set = new Set(stale);
-  for (const d of reach) {
-    if (baseBuildCommand(byDir.get(d)?.scripts.build) == null) continue;
-    const closure = dependencyClosure(d, byDir);
-    if ([...closure].some((x) => x !== d && stale.includes(x))) set.add(d);
-  }
-  return `pnpm ${[...set]
-    .sort()
-    .map((d) => `--filter ./${d}`)
-    .join(" ")} run build`;
-}
-
 /** The PATH entries a package's scripts expect: its own and the root `.bin`. */
 export function binPath(treeDir: string, dir: string): string[] {
   return [join(treeDir, dir, "node_modules", ".bin"), join(treeDir, "node_modules", ".bin")];
@@ -492,7 +409,7 @@ function explain(what: string, cmd: string, cwd: string, out: string, err?: unkn
   const tail = out.split("\n").filter(Boolean).slice(-30).join("\n");
   return new Error(
     `${what} failed (\`${cmd}\` in ${cwd}):\n${tail}\n` +
-      "Fix: the command must succeed on the base ref; the working tree's builds it reads must be current.",
+      "Fix: the command must succeed on this side's source (it runs in a temp tree built from source).",
     { cause: err },
   );
 }
@@ -533,7 +450,7 @@ async function buildAll(
   order: string[],
   byDir: Map<string, WorkspacePackage>,
   treeDir: string,
-  label: (d: string) => string,
+  side: "base" | "head",
   log: (line: string) => void,
 ): Promise<void> {
   const byName = new Map([...byDir.values()].map((p) => [p.name, p.dir]));
@@ -550,13 +467,15 @@ async function buildAll(
       if (running.size >= limit) break;
       if (done.has(d) || running.has(d) || !waitsOn(d).every((x) => done.has(x))) continue;
       const cmd = baseBuildCommand(byDir.get(d)?.scripts.build)!;
-      log(`  building ${d} (${label(d)}): ${cmd}`);
+      log(`  building ${d} (${side} tree): ${cmd}`);
       running.set(
         d,
-        runAsync(cmd, join(treeDir, d), binPath(treeDir, d), `base-tree build of ${d}`).then(() => {
-          done.add(d);
-          running.delete(d);
-        }),
+        runAsync(cmd, join(treeDir, d), binPath(treeDir, d), `${side}-tree build of ${d}`).then(
+          () => {
+            done.add(d);
+            running.delete(d);
+          },
+        ),
       );
     }
     if (running.size === 0)
@@ -565,69 +484,134 @@ async function buildAll(
   }
 }
 
-// ── The base tree ────────────────────────────────────────────────────
+// ── The two trees ────────────────────────────────────────────────────
 
 export interface Aperture {
   /** Workspace packages taken from the base ref (present on it). */
   fromMain: string[];
   /** Requested from the base ref but absent there (new on this branch). */
   absentOnBase: string[];
-  /** From-main packages rebuilt from base sources, in build order. */
-  rebuiltFromMain: string[];
-  /** Working-tree packages rebuilt FROM SOURCE inside the base tree (they reach a from-main package). */
-  rebuiltFromHead: string[];
-  /** Working-tree sources copied because they reach a from-main package, left unbuilt (the probe cannot reach them). */
-  copiedUnbuilt: string[];
-  /** Working-tree packages linked in unchanged (they cannot reach any from-main package). */
-  linkedFromHead: number;
+  /** Packages built inside the base tree, in build order. */
+  builtBase: string[];
+  /** Packages built inside the head tree, in build order (empty with headFromWorkingTree). */
+  builtHead: string[];
   /** On the base ref only, not requested: the base ref's source, unbuilt. */
   baseOnly: string[];
   /** Workspace deps of the root package.json, reachable from every package. */
   rootWorkspaceDeps: string[];
   /**
-   * Paths outside the workspace packages that differ from the base ref and
-   * were held at the WORKING TREE's copy on both sides (`rootFromHead`): not
-   * differentialled. Empty unless the caller opted in; otherwise the run
-   * refuses.
+   * Root paths that differ from the base ref and were held at the WORKING
+   * TREE's copy on both sides (`rootFromHead`): not differentialled. Empty
+   * unless the caller opted in; otherwise the run refuses.
    */
   rootHeldAtHead: string[];
+  /** Differing root paths in ROOT_IGNORED: each side's tree holds its own copy. */
+  rootIgnoredDiffering: string[];
+  /** The ROOT_IGNORED patterns, for the report. */
+  rootIgnoredPatterns: string[];
+  /** The head side read the working tree's own builds: NOT freshness-checked. */
+  headFromWorkingTree: boolean;
 }
 
-export interface BuildBaseTreeOptions {
+export interface BuildTreesOptions {
   root: string;
   /** Repository the base ref is read from (default `root`). */
   baseRepo?: string;
   base: string;
-  /** Directory the base tree is created in (must be empty or absent). */
-  treeDir: string;
+  /** Empty temp directory the trees are created in. */
+  workDir: string;
   /** Workspace package the probe runs in; always from the base ref. */
   host: string;
   /** Workspace packages from the base ref, or `diff`: every package whose files differ. */
   fromMain: string[] | "diff";
-  /** Hold differing paths outside the workspace packages at the working tree's copy instead of refusing. */
+  /** Hold differing build-affecting root paths at the working tree's copy instead of refusing. */
   rootFromHead?: boolean;
+  /** Fast path: the head side runs in the working tree on its own builds (NOT freshness-checked). */
+  headFromWorkingTree?: boolean;
   log?: (line: string) => void;
 }
 
-export async function buildBaseTree(opts: BuildBaseTreeOptions): Promise<Aperture> {
-  const { root, base, treeDir, host } = opts;
+export interface Trees {
+  baseTree: string;
+  /** The head tree, or the working tree itself with headFromWorkingTree. */
+  headTree: string;
+  aperture: Aperture;
+}
+
+/** Copy repo-relative `files` from `root` into `into` (symlinks as symlinks). */
+function copyFiles(root: string, files: string[], into: string): void {
+  for (const f of files) {
+    const from = join(root, f);
+    const to = join(into, f);
+    mkdirSync(dirname(to), { recursive: true });
+    rmSync(to, { force: true });
+    if (lstatSync(from).isSymbolicLink()) symlinkSync(readlinkSync(from), to);
+    else copyFileSync(from, to);
+  }
+}
+
+/** Mirror the working tree's root and per-package node_modules into `tree`. */
+function wireNodeModules(root: string, tree: string, dirs: string[]): void {
+  if (existsSync(join(root, "node_modules"))) {
+    mirrorNodeModules(join(root, "node_modules"), join(tree, "node_modules"));
+  }
+  for (const d of dirs) {
+    const nm = join(root, d, "node_modules");
+    if (existsSync(nm) && existsSync(join(tree, d))) {
+      mirrorNodeModules(nm, join(tree, d, "node_modules"));
+    }
+  }
+}
+
+/** The probe's reach in `graph`, as the buildable packages to build, dependencies first. */
+function buildOrder(
+  host: string,
+  graph: Map<string, WorkspacePackage>,
+  implicit: string[],
+): string[] {
+  const reach = dependencyClosure(host, graph, implicit);
+  // The host is imported by relative path; build it only if something else it reaches imports it.
+  const hostImported = [...reach].some(
+    (d) => d !== host && dependencyClosure(d, graph, implicit).has(host),
+  );
+  return topoOrder(
+    [...reach].filter(
+      (d) => (d !== host || hostImported) && baseBuildCommand(graph.get(d)?.scripts.build) != null,
+    ),
+    graph,
+  );
+}
+
+export async function buildTrees(opts: BuildTreesOptions): Promise<Trees> {
+  const { root, base, workDir, host } = opts;
   const baseRepo = opts.baseRepo ?? root;
   const log = opts.log ?? (() => {});
-  mkdirSync(treeDir, { recursive: true });
+  const baseTree = join(workDir, "base");
+  mkdirSync(baseTree, { recursive: true });
 
-  // 1. The whole base ref, so every path a tsconfig/vitest config/test reads exists.
-  const tar = `${treeDir}.tar`;
+  // 1. The whole base ref.
+  const tar = join(workDir, "base.tar");
   readGit(baseRepo, ["archive", `--output=${tar}`, base]);
-  execFileSync("tar", ["-xf", tar, "-C", treeDir], { env: cleanEnv() });
+  execFileSync("tar", ["-xf", tar, "-C", baseTree], { env: cleanEnv() });
   rmSync(tar, { force: true });
 
   const roots = workspaceRoots(root);
   const files = headFiles(root);
+  const headDirs = listWorkspaceDirs(root, roots);
+  const baseDirs = listWorkspaceDirs(baseTree, roots);
 
-  // 2. What differs, by content. Outside the workspace packages, a difference
-  //    cannot be represented honestly (linked packages were built by the
-  //    working tree against its own copy), so refuse unless told to hold it.
-  const difference = compareTrees(root, treeDir, roots);
+  // 2. The probe's package must exist on the base ref: there is nothing else to compare.
+  if (!baseDirs.includes(host)) {
+    throw new DifferentialRefusal([
+      `differential-vs-main: refused — the probe's package ${host} is new on this branch: there is nothing on ${base} to compare.`,
+      `Fix: put the probe in a package that exists on ${base} (--pkg <dir>), or compare this package's behaviour some other way.`,
+    ]);
+  }
+
+  // 3. What differs, by content. A differing root path that can affect a build
+  //    or probe cannot be assigned to one side (the install is shared), so refuse
+  //    unless told to hold it at the working tree's copy.
+  const difference = compareTrees(root, baseTree, roots);
   if (difference.rootPaths.length > 0 && opts.rootFromHead !== true) {
     throw new DifferentialRefusal([
       `differential-vs-main: refused — ${difference.rootPaths.length} path(s) outside the workspace packages differ from ${base}:`,
@@ -635,123 +619,75 @@ export async function buildBaseTree(opts: BuildBaseTreeOptions): Promise<Apertur
       ...(difference.rootPaths.length > 40
         ? [`    … and ${difference.rootPaths.length - 40} more`]
         : []),
-      "Builds and tests read root files (tsconfig.base.json, package.json, pnpm-lock.yaml, patches/, root configs). Every linked working-tree package was built against the working tree's copies, so a change here would read SAME while the base side claimed main's.",
-      `Fix: compare a tree whose paths outside the workspace packages equal ${base}'s (rebase, or stash those changes), or pass --root-from-head to hold the working tree's copy of every path above on BOTH sides — they are then listed as NOT differentialled.`,
+      "Builds, installs and tests read root files (tsconfig.base.json, package.json, pnpm-lock.yaml, patches/, root configs); the install is shared by both sides, so a change here cannot be assigned to one side.",
+      `Not refused (each side reads its own copy): ${ROOT_IGNORED.map((r) => r.label).join(", ")}.`,
+      `Fix: compare a tree whose other root paths equal ${base}'s (rebase, or stash those changes), or pass --root-from-head to hold the working tree's copy of every path above on BOTH sides — they are then listed as NOT differentialled.`,
     ]);
   }
+  copyFiles(
+    root,
+    difference.rootPaths.filter((p) => existsSync(join(root, p))),
+    baseTree,
+  );
   for (const p of difference.rootPaths) {
-    const into = join(treeDir, p);
-    rmSync(into, { force: true });
-    const from = join(root, p);
-    if (!existsSync(from)) continue;
-    mkdirSync(dirname(into), { recursive: true });
-    if (lstatSync(from).isSymbolicLink()) symlinkSync(readlinkSync(from), into);
-    else copyFileSync(from, into);
+    if (!existsSync(join(root, p))) rmSync(join(baseTree, p), { force: true });
   }
 
-  const headDirs = listWorkspaceDirs(root, roots);
-  const baseDirs = listWorkspaceDirs(treeDir, roots);
   const requested = opts.fromMain === "diff" ? difference.packages : opts.fromMain;
   const fromMainSet = new Set([...requested, host]);
   const fromMain = [...fromMainSet].filter((d) => baseDirs.includes(d)).sort();
   const absentOnBase = [...fromMainSet].filter((d) => !baseDirs.includes(d)).sort();
-  // The root node_modules is mirrored from the working tree, so these are what it links.
-  const implicit = rootWorkspaceDeps(root);
-
-  // 3. The package graph as the base tree will see it: from-main packages
-  //    declare their base deps, everything else its working-tree deps.
-  const byDir = new Map<string, WorkspacePackage>();
-  for (const d of new Set([...headDirs, ...baseDirs])) {
-    const p = fromMain.includes(d) ? readPackage(treeDir, d) : readPackage(root, d);
-    if (p != null) byDir.set(d, p);
-  }
-  const reachesFromMain = (d: string) =>
-    [...dependencyClosure(d, byDir, implicit)].some((x) => x !== d && fromMain.includes(x));
-  const headSource = headDirs.filter((d) => !fromMainSet.has(d) && reachesFromMain(d)).sort();
-  const probeReach = dependencyClosure(host, byDir, implicit);
   const baseOnly = baseDirs.filter((d) => !headDirs.includes(d) && !fromMainSet.has(d)).sort();
 
-  // 4. A linked working-tree package the probe can reach is read from its
-  //    working-tree build on the base side too: refuse if that build is stale.
-  const linkedReach = [...probeReach].filter(
-    (d) => headDirs.includes(d) && !fromMainSet.has(d) && !headSource.includes(d),
-  );
-  const stale = staleBuilds(root, linkedReach, byDir, files);
-  if (stale.length > 0) {
-    throw new DifferentialRefusal([
-      `differential-vs-main: refused — working-tree builds the base side reads are stale: ${stale.join(", ")}.`,
-      `Fix: ${repairCommand(stale, linkedReach, byDir)}`,
-    ]);
+  // 4. The base tree: every package NOT taken from the base ref is the working
+  //    tree's SOURCE (never its dist).
+  for (const d of headDirs) {
+    if (fromMainSet.has(d)) continue;
+    rmSync(join(baseTree, d), { recursive: true, force: true });
+    copyFiles(
+      root,
+      files.filter((f) => f.startsWith(`${d}/`)),
+      baseTree,
+    );
+  }
+  wireNodeModules(root, baseTree, [...new Set([...headDirs, ...baseDirs])]);
+
+  // 5. The head tree: the working tree's source, unless the caller opted into
+  //    reading the working tree's own builds.
+  const headTree = opts.headFromWorkingTree === true ? root : join(workDir, "head");
+  if (opts.headFromWorkingTree !== true) {
+    copyFiles(root, files, headTree);
+    wireNodeModules(root, headTree, headDirs);
   }
 
-  // 5. Root node_modules, mirrored so root-level workspace links land in the base tree.
-  if (existsSync(join(root, "node_modules"))) {
-    mirrorNodeModules(join(root, "node_modules"), join(treeDir, "node_modules"));
-  }
-
-  // 6. Every workspace package, per the aperture.
-  let linkedFromHead = 0;
-  for (const d of new Set([...headDirs, ...baseDirs])) {
-    const target = join(treeDir, d);
-    const headNm = join(root, d, "node_modules");
-    if (fromMain.includes(d)) {
-      rewriteScripts(target);
-      if (existsSync(headNm)) mirrorNodeModules(headNm, join(target, "node_modules"));
-      else
-        log(
-          `  ! ${d}: no node_modules in the working tree (new on ${base}?) — its imports may not resolve`,
-        );
-      continue;
-    }
-    if (!headDirs.includes(d)) continue; // base-only, not requested: left as extracted
-    rmSync(target, { recursive: true, force: true });
-    if (headSource.includes(d)) {
-      // SOURCE only — a head dist may have inlined the working tree's version of a from-main package.
-      for (const f of files) {
-        if (!f.startsWith(`${d}/`)) continue;
-        mkdirSync(dirname(join(treeDir, f)), { recursive: true });
-        const from = join(root, f);
-        if (lstatSync(from).isSymbolicLink()) symlinkSync(readlinkSync(from), join(treeDir, f));
-        else copyFileSync(from, join(treeDir, f));
-      }
-      rewriteScripts(target);
-      if (existsSync(headNm)) mirrorNodeModules(headNm, join(target, "node_modules"));
-    } else {
-      symlinkSync(join(root, d), target);
-      linkedFromHead++;
-    }
-  }
-
-  // 7. Rebuild inside the base tree every from-main or head-source package the
-  //    probe can reach, dependencies first. The host is imported by relative
-  //    path, so it is built only when something else the probe reaches imports it.
-  const hostImported = [...probeReach].some(
-    (d) => d !== host && dependencyClosure(d, byDir, implicit).has(host),
-  );
-  const candidates = [...probeReach].filter(
-    (d) =>
-      (fromMain.includes(d) || headSource.includes(d)) &&
-      (d !== host || hostImported) &&
-      baseBuildCommand(byDir.get(d)?.scripts.build) != null,
-  );
-  const order = topoOrder(candidates, byDir);
-  await buildAll(
-    order,
-    byDir,
-    treeDir,
-    (d) => (fromMain.includes(d) ? `${base} source` : "working-tree source"),
-    log,
-  );
+  // 6. Build the probe's reach in each tree from source, the same way.
+  //    The root node_modules is the working tree's install, so these are what it links.
+  const implicit = rootWorkspaceDeps(root);
+  const baseGraph = workspaceGraph(baseTree, roots);
+  const baseOrder = buildOrder(host, baseGraph, implicit);
+  const headGraph = workspaceGraph(headTree, roots);
+  const headOrder = opts.headFromWorkingTree === true ? [] : buildOrder(host, headGraph, implicit);
+  for (const d of baseOrder) rewriteScripts(join(baseTree, d));
+  for (const d of headOrder) rewriteScripts(join(headTree, d));
+  await Promise.all([
+    buildAll(baseOrder, baseGraph, baseTree, "base", log),
+    buildAll(headOrder, headGraph, headTree, "head", log),
+  ]);
 
   return {
-    fromMain,
-    absentOnBase,
-    rebuiltFromMain: order.filter((d) => fromMain.includes(d)),
-    rebuiltFromHead: order.filter((d) => headSource.includes(d)),
-    copiedUnbuilt: headSource.filter((d) => !order.includes(d)),
-    linkedFromHead,
-    baseOnly,
-    rootWorkspaceDeps: implicit,
-    rootHeldAtHead: difference.rootPaths,
+    baseTree,
+    headTree,
+    aperture: {
+      fromMain,
+      absentOnBase,
+      builtBase: baseOrder,
+      builtHead: headOrder,
+      baseOnly,
+      rootWorkspaceDeps: implicit,
+      rootHeldAtHead: difference.rootPaths,
+      rootIgnoredDiffering: difference.ignoredRootPaths,
+      rootIgnoredPatterns: ROOT_IGNORED.map((r) => r.label),
+      headFromWorkingTree: opts.headFromWorkingTree === true,
+    },
   };
 }
