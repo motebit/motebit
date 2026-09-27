@@ -443,9 +443,11 @@ export class UnbootedWebApp {
    * early-return checks and is about to build one, so a newer start that
    * bails early never supersedes a running one. A start whose request is
    * not newer than the current owner (a newer start already claimed, or a
-   * stop came after it) builds nothing; a start that loses ownership across
-   * an await tears down only its own socket, and only if it is still the
-   * current one. A stop makes every earlier request stale.
+   * stop came after it) builds nothing. A start that loses ownership across
+   * the relay-key await has already built (not yet connected) its adapter; it tears
+   * that adapter down (only its own, and only if still current), wires no
+   * handler and sets no timer — nothing stays open.
+   * A stop makes every earlier request stale.
    */
   private _wsRequestSeq = 0;
   private _wsOwner = 0;
