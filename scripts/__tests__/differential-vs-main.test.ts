@@ -30,7 +30,7 @@
  *     ← protocol), and through `@fx/hoisted` itself, declared only by the root
  *     package.json (surface-kit ← semiring). The working tree's packages are
  *     never built; the cases plant wrong `dist` output there instead.
- *     In `pnpm test:gates`: the new-package refusal and the decoy test (which
+ *     In `pnpm test:gates`: the new-package and dependency-change refusals and the decoy test (which
  *     also asserts the bundle + root-hoisted DIFF). Every case with
  *     MOTEBIT_DIFFERENTIAL_FIXTURE=1 (`pnpm test:differential`).
  *   - Real-repo smoke (opt-in, `MOTEBIT_DIFFERENTIAL_SMOKE=1`; minutes): a
@@ -63,7 +63,7 @@ import {
   baseBuildCommand,
   cleanEnv,
   dependencyClosure,
-  isIgnorableRootPath,
+  installLevelDifferences,
   mirrorNodeModules,
   packageDirOf,
   readGit,
@@ -195,23 +195,38 @@ describe("differential-tree units", () => {
     expect(packageDirOf("tsconfig.base.json", ROOTS)).toBeNull();
   });
 
-  it("only prose and agent config are ignorable root paths", () => {
-    for (const p of [".changeset/brave-owls.md", "docs/ops/agentic-lanes.md", "docs/x.png"]) {
-      expect(isIgnorableRootPath(p), p).toBe(true);
-    }
-    for (const p of [".claude/agents/cold-reviewer.md", "README.md", "spec/relay-v1.md"]) {
-      expect(isIgnorableRootPath(p), p).toBe(true);
-    }
-    for (const p of [
-      "tsconfig.base.json",
-      "package.json",
-      "pnpm-lock.yaml",
-      "vitest.shared.ts",
-      "patches/x.patch",
-      ".changeset/config.json",
-      "scripts/check.ts",
-    ]) {
-      expect(isIgnorableRootPath(p), p).toBe(false);
+  it("install-level root differences: dependency fields structurally, lock/workspace/patch/npm files; nothing else", () => {
+    const t = realpathSync(mkdtempSync(join(tmpdir(), "diff-install-")));
+    try {
+      const pj = (dir: string, v: unknown) => write(join(t, dir, "package.json"), json(v));
+      const base = { name: "r", scripts: { a: "x" }, devDependencies: { a: "1", b: "2" } };
+      pj("base", base);
+      // Scripts-only change, and dependency keys merely reordered: per side, not shared.
+      pj("head", { ...base, scripts: { a: "y", b: "z" }, devDependencies: { b: "2", a: "1" } });
+      const rootPaths = ["package.json", "tsconfig.base.json", "scripts/x.ts", "docs/a.md"];
+      expect(installLevelDifferences(join(t, "head"), join(t, "base"), rootPaths)).toEqual([]);
+      pj("head", { ...base, devDependencies: { a: "1", b: "3" }, pnpm: { overrides: { c: "1" } } });
+      expect(installLevelDifferences(join(t, "head"), join(t, "base"), rootPaths)).toEqual([
+        "package.json (devDependencies, pnpm.overrides)",
+      ]);
+      expect(
+        installLevelDifferences(join(t, "head"), join(t, "base"), [
+          "pnpm-lock.yaml",
+          "pnpm-workspace.yaml",
+          "patches/x.patch",
+          ".npmrc",
+          ".pnpmfile.cjs",
+          "vitest.shared.ts",
+        ]),
+      ).toEqual([
+        ".npmrc",
+        ".pnpmfile.cjs",
+        "patches/x.patch",
+        "pnpm-lock.yaml",
+        "pnpm-workspace.yaml",
+      ]);
+    } finally {
+      rmSync(t, { recursive: true, force: true });
     }
   });
 
@@ -362,7 +377,8 @@ function buildFixture(jail: string, baseEnv: NodeJS.ProcessEnv = process.env): F
       compilerOptions: { outDir: "dist", rootDir: "src" },
       include: ["src"],
     }),
-    "src/index.ts": 'export { VALUE } from "@fx/proto";\n',
+    "src/index.ts":
+      '// fx-comment: emitted unless tsconfig.base.json sets removeComments\nexport { VALUE } from "@fx/proto";\n',
   });
   lib("bundler", ["@fx/hoisted"], "node build.mjs", {
     "build.mjs": BUNDLER_BUILD,
@@ -445,6 +461,9 @@ it("observes", async () => {
   if (process.env.FX_MODE === "mobile") {
     obs.throughBundle = readFileSync("src/bundle.generated.txt", "utf-8");
     obs.throughRootHoisted = ((await import("@fx/hoisted")) as { VALUE: string }).VALUE;
+  } else if (process.env.FX_MODE === "emit") {
+    // What tsc EMITTED for hoisted in this side's tree, under this side's tsconfig.base.json.
+    obs.hoistedEmitKeepsComment = readFileSync("../../packages/hoisted/dist/index.js", "utf-8").includes("fx-comment");
   } else {
     obs.cwdTail = process.cwd().split("/").slice(-2).join("/");
   }
@@ -461,7 +480,7 @@ interface Report {
     builtHead: string[];
     rootWorkspaceDeps: string[];
     rootHeldAtHead: string[];
-    rootIgnoredDiffering: string[];
+    rootPerSide: string[];
     headFromWorkingTree: boolean;
   };
   head: Record<string, unknown>;
@@ -532,6 +551,24 @@ describe("differential-vs-main behaviour (fixture)", () => {
       expect(existsSync(join(fx.jail, "newhost.json"))).toBe(false);
     } finally {
       rmSync(d, { recursive: true, force: true });
+    }
+  }, 60_000);
+
+  it("a dependency change in the root package.json refuses: the install is shared by both sides", () => {
+    const pkgJson = join(fx.root, "package.json");
+    const original = readFileSync(pkgJson, "utf-8");
+    try {
+      const withDep = { ...JSON.parse(original) };
+      withDep.devDependencies = { ...withDep.devDependencies, "left-pad": "1.3.0" };
+      write(pkgJson, json(withDep));
+      const out = join(fx.jail, "dep.json");
+      const r = runScript(fx.root, mobileArgs(fx, out), fxEnv());
+      expect(r.status, show(r)).toBe(1);
+      expect(r.stderr).toContain("install-level root files differ");
+      expect(r.stderr).toContain("package.json (devDependencies)");
+      expect(existsSync(out)).toBe(false);
+    } finally {
+      write(pkgJson, original);
     }
   }, 60_000);
 
@@ -628,49 +665,68 @@ describe("differential-vs-main behaviour (fixture)", () => {
   );
 
   it.skipIf(!FIXTURE)(
-    "a build-affecting root file (tsconfig.base.json) differing refuses; prose (docs/**, .changeset/*.md) does not; --root-from-head holds it",
+    "a root build file (tsconfig.base.json) is per side: it runs, and the emitted output reads DIFF",
     () => {
       const tsconfig = join(fx.root, "tsconfig.base.json");
-      const notes = join(fx.root, "docs", "notes.md");
-      const changeset = join(fx.root, ".changeset", "brave-owls.md");
-      write(notes, "# notes, edited\n");
-      write(changeset, "---\n---\nA change.\n");
+      write(
+        tsconfig,
+        TSCONFIG_BASE.replace('"strict": true', '"strict": true,\n    "removeComments": true'),
+      );
       try {
-        // Prose only: runs, and the aperture names what it ignored.
-        const prose = join(fx.jail, "prose.json");
-        const ok = runScript(fx.root, mobileArgs(fx, prose), fxEnv({ FX_MODE: "mobile" }));
+        const out = join(fx.jail, "tsconfig.json");
+        const r = runScript(fx.root, mobileArgs(fx, out), fxEnv({ FX_MODE: "emit" }));
+        expect(r.status, show(r)).toBe(0);
+        const rep = JSON.parse(readFileSync(out, "utf-8")) as Report;
+        expect(rep.head.hoistedEmitKeepsComment).toBe(false);
+        expect(rep.baseObs.hoistedEmitKeepsComment).toBe(true);
+        expect(rep.aperture.rootPerSide).toContain("tsconfig.base.json");
+        expect(rep.aperture.rootHeldAtHead).toEqual([]);
+        expect(r.stdout).toContain("install-level files are shared and identical");
+      } finally {
+        write(tsconfig, TSCONFIG_BASE);
+      }
+    },
+    120_000,
+  );
+
+  it.skipIf(!FIXTURE)(
+    "a scripts-only root package.json change runs; a lockfile change refuses; --root-from-head holds a dependency change",
+    () => {
+      const pkgJson = join(fx.root, "package.json");
+      const original = readFileSync(pkgJson, "utf-8");
+      const lock = join(fx.root, "pnpm-lock.yaml");
+      try {
+        write(pkgJson, json({ ...JSON.parse(original), scripts: { hello: "echo hi" } }));
+        const out = join(fx.jail, "scripts-only.json");
+        const ok = runScript(fx.root, mobileArgs(fx, out), fxEnv({ FX_MODE: "mobile" }));
         expect(ok.status, show(ok)).toBe(0);
-        const rep0 = JSON.parse(readFileSync(prose, "utf-8")) as Report;
-        expect(rep0.aperture.rootIgnoredDiffering).toEqual([
-          ".changeset/brave-owls.md",
-          "docs/notes.md",
-        ]);
-
-        write(
-          tsconfig,
-          TSCONFIG_BASE.replace('"strict": true', '"strict": true,\n    "removeComments": true'),
+        expect((JSON.parse(readFileSync(out, "utf-8")) as Report).aperture.rootPerSide).toContain(
+          "package.json",
         );
-        const out = join(fx.jail, "root.json");
-        const refused = runScript(fx.root, mobileArgs(fx, out), fxEnv({ FX_MODE: "mobile" }));
-        expect(refused.status).toBe(1);
-        expect(refused.stderr).toContain("refused");
-        expect(refused.stderr).toContain("tsconfig.base.json");
-        expect(refused.stderr).not.toContain("docs/notes.md\n");
-        expect(existsSync(out)).toBe(false);
 
+        write(lock, "lockfileVersion: '9.0'\n");
+        const refused = runScript(fx.root, mobileArgs(fx, join(fx.jail, "lock.json")), fxEnv());
+        expect(refused.status).toBe(1);
+        expect(refused.stderr).toContain("install-level root files differ");
+        expect(refused.stderr).toContain("pnpm-lock.yaml");
+        rmSync(lock, { force: true });
+
+        const withDep = { ...JSON.parse(original) };
+        withDep.devDependencies = { ...withDep.devDependencies, "left-pad": "1.3.0" };
+        write(pkgJson, json(withDep));
+        const heldOut = join(fx.jail, "held.json");
         const held = runScript(
           fx.root,
-          [...mobileArgs(fx, out), "--root-from-head"],
+          [...mobileArgs(fx, heldOut), "--root-from-head"],
           fxEnv({ FX_MODE: "mobile" }),
         );
         expect(held.status, show(held)).toBe(0);
-        const rep = JSON.parse(readFileSync(out, "utf-8")) as Report;
-        expect(rep.aperture.rootHeldAtHead).toEqual(["tsconfig.base.json"]);
+        const rep = JSON.parse(readFileSync(heldOut, "utf-8")) as Report;
+        expect(rep.aperture.rootHeldAtHead).toEqual(["package.json (devDependencies)"]);
         expect(held.stdout).toContain("NOT differentialled");
       } finally {
-        write(tsconfig, TSCONFIG_BASE);
-        write(notes, "# notes\n");
-        rmSync(join(fx.root, ".changeset"), { recursive: true, force: true });
+        write(pkgJson, original);
+        rmSync(lock, { force: true });
       }
     },
     180_000,

@@ -15,9 +15,9 @@
  *
  *   --base-repo    read the base ref from another repository (default: this one).
  *   --root-from-head
- *                  when build-affecting paths outside the workspace packages differ
- *                  from the base ref, hold the working tree's copy of each on BOTH
- *                  sides and list them as NOT differentialled, instead of refusing.
+ *                  when INSTALL-LEVEL root files differ from the base ref, hold the
+ *                  working tree's copy of each on BOTH sides and list them as NOT
+ *                  differentialled, instead of refusing.
  *   --head-from-working-tree
  *                  fast path: run the head side in the working tree on its OWN
  *                  builds instead of a fresh-from-source head tree. Those builds are
@@ -56,11 +56,15 @@
  *
  * Refusals (exit 1, naming the cause and the fix):
  *   - the probe's package is new on this branch: nothing on the base to compare;
- *   - a build-affecting path outside the workspace packages differs from the
- *     base ref (tsconfig.base.json, package.json, pnpm-lock.yaml, patches/,
- *     root configs): the install is shared by both sides, so the change cannot
- *     be assigned to one. `.changeset/*.md`, `docs/**`, `.claude/**` and
- *     `*.md` outside packages never refuse; each side reads its own copy.
+ *   - an INSTALL-LEVEL root file differs from the base ref: a dependency field
+ *     of the root package.json (dependencies, devDependencies,
+ *     optionalDependencies, peerDependencies, pnpm.overrides, resolutions —
+ *     compared structurally), pnpm-lock.yaml, pnpm-workspace.yaml, patches/**,
+ *     .npmrc or .pnpmfile.cjs. node_modules is mirrored from the working
+ *     tree's single install into both trees, so such a change cannot be
+ *     assigned to one side. Every other root path (tsconfig.base.json,
+ *     vitest.shared.ts, scripts/**, docs, .changeset, a scripts-only
+ *     package.json change, …) never refuses: each tree builds from its own copy.
  *
  * Aperture — printed on every run:
  *   - the packages taken from the base ref: `diff` (default) = every package
@@ -68,8 +72,9 @@
  *     The probe's package is always from the base ref.
  *   - what was built in each tree (the probe's reach, including the root
  *     package.json's workspace deps, which node resolves from any package);
- *   - differing ignorable root paths (each side has its own copy), or root
- *     paths held at the working tree's copy (--root-from-head);
+ *   - root files: each side reads its own copy (the differing ones are
+ *     listed); install-level files are shared and identical, or held at the
+ *     working tree's copy (--root-from-head);
  *   - third-party dependencies: the working tree's install on both sides (one
  *     lockfile), so a third-party version change is not differentialled.
  *
@@ -102,7 +107,6 @@ import {
   packageDirOf,
   readGit,
   readPackage,
-  ROOT_IGNORED,
   runPretest,
   workspaceRoots,
 } from "./lib/differential-tree.js";
@@ -258,10 +262,7 @@ async function main(): Promise<void> {
     aperture.baseOnly.length > 0
       ? `    on ${base} only, not requested (its source, unbuilt): ${list(aperture.baseOnly)}.`
       : "",
-    aperture.rootHeldAtHead.length > 0
-      ? `    NOT differentialled (--root-from-head: the working tree's copy on BOTH sides): ${list(aperture.rootHeldAtHead)}.`
-      : `    build-affecting paths outside the workspace packages: identical to ${base} (checked by content).`,
-    `    never refused, each side reads its own copy (${ROOT_IGNORED.map((r) => r.label).join(", ")}): ${aperture.rootIgnoredDiffering.length} differing path(s)${aperture.rootIgnoredDiffering.length > 0 ? ` — ${aperture.rootIgnoredDiffering.slice(0, 10).join(", ")}${aperture.rootIgnoredDiffering.length > 10 ? ", …" : ""}` : ""}.`,
+    `    root files: each side reads its own copy (${aperture.rootPerSide.length} differ${aperture.rootPerSide.length > 0 ? `: ${aperture.rootPerSide.slice(0, 10).join(", ")}${aperture.rootPerSide.length > 10 ? ", …" : ""}` : ""}); install-level files are shared and ${aperture.rootHeldAtHead.length > 0 ? `HELD at the working tree's copy on both sides (--root-from-head), so NOT differentialled: ${list(aperture.rootHeldAtHead)}` : "identical"}.`,
     `    root package.json workspace deps, treated as reachable from every package: ${list(aperture.rootWorkspaceDeps)}.`,
     "    Third-party dependencies: the working tree's install on both sides.",
   ].filter(Boolean);

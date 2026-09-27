@@ -27,9 +27,13 @@
  *   3. #835: root files (tsconfig.base.json, package.json, …) were claimed to
  *      come from main while linked packages had been built against the working
  *      tree's copies; and the fixture test rewrote the real repository through
- *      an inherited GIT_DIR. Rules kept: refuse on a differing root path that
- *      can affect a build or probe; every child runs with EVERY `GIT_*` removed
- *      and an explicit cwd; this module runs only read-only git (enforced).
+ *      an inherited GIT_DIR. Rules kept: every child runs with EVERY `GIT_*`
+ *      removed and an explicit cwd; this module runs only read-only git
+ *      (enforced). Root files are now per side (each tree builds from its own
+ *      copy); only INSTALL-LEVEL root files (dependency fields of the root
+ *      package.json, pnpm-lock.yaml, pnpm-workspace.yaml, patches/, .npmrc,
+ *      .pnpmfile.cjs) are shared by the mirrored install, and a difference in
+ *      them refuses.
  *   4. #837: the working tree's builds were judged fresh by mtimes. That can't
  *      be cleared on the real repo (tsup always re-emits; `tsc -b` dependents
  *      skip without touching tsbuildinfo) and it missed transitive bundle
@@ -270,47 +274,93 @@ function sameFile(a: string, b: string): boolean {
 }
 
 /**
- * Paths outside the workspace packages whose difference from the base ref
- * does NOT refuse the run. Each side's tree holds its OWN copy of these
- * (both trees are built from source), so a probe that reads one still sees
- * each side's version; the refusal exists only for root paths that are
- * consumed through the shared install or that no single side can own. Every
- * pattern is listed in the aperture of every run.
+ * Root paths that are SHARED by the two sides, because every tree's
+ * `node_modules` is mirrored from the working tree's single install: a
+ * difference in any of them cannot be assigned to one side, so it refuses
+ * (or, with --root-from-head, is held at the working tree's copy on both
+ * sides and listed as not differentialled). Every OTHER root path —
+ * tsconfig.base.json, vitest.shared.ts, scripts/**, docs, .changeset, … — is
+ * represented per side: each tree holds its own copy and builds from it.
  */
-export const ROOT_IGNORED: ReadonlyArray<{ pattern: RegExp; label: string; why: string }> = [
-  {
-    pattern: /^\.changeset\/[^/]+\.md$/,
-    label: ".changeset/*.md",
-    why: "release notes consumed only by `changeset version`; no build, test or probe reads them",
-  },
-  {
-    pattern: /^docs\//,
-    label: "docs/**",
-    why: "prose; no package build reads docs/ (the self-knowledge corpus is committed inside its package)",
-  },
-  {
-    pattern: /^\.claude\//,
-    label: ".claude/**",
-    why: "agent configuration; read by no build, test or probe",
-  },
-  {
-    pattern: /^[^/]*\.md$|\/[^/]*\.md$/,
-    label: "*.md outside packages",
-    why: "markdown is not a build input; a test that reads one (runtime's emergent-interior eval reads THE_EMERGENT_INTERIOR.md) reads its own tree's copy",
-  },
+export const INSTALL_LEVEL_FILES: ReadonlyArray<{ pattern: RegExp; why: string }> = [
+  { pattern: /^pnpm-lock\.yaml$/, why: "the resolved install both sides share" },
+  { pattern: /^pnpm-workspace\.yaml$/, why: "what the install links as workspace packages" },
+  { pattern: /^patches\//, why: "applied to the shared install by pnpm" },
+  { pattern: /^\.npmrc$/, why: "install settings (hoisting, linking)" },
+  { pattern: /^\.pnpmfile\.cjs$/, why: "install hooks" },
 ];
 
-export function isIgnorableRootPath(path: string): boolean {
-  return ROOT_IGNORED.some((r) => r.pattern.test(path));
+/** The root package.json fields the install reads; a change anywhere else in it (scripts, …) is per-side. */
+export const INSTALL_LEVEL_PACKAGE_FIELDS = [
+  "dependencies",
+  "devDependencies",
+  "optionalDependencies",
+  "peerDependencies",
+  "pnpm.overrides",
+  "resolutions",
+] as const;
+
+function fieldAt(manifest: Record<string, unknown>, path: string): unknown {
+  let v: unknown = manifest;
+  for (const k of path.split(".")) {
+    v = v != null && typeof v === "object" ? (v as Record<string, unknown>)[k] : undefined;
+  }
+  return v;
+}
+
+/** Order-independent structural equality for JSON values. */
+function sameJson(a: unknown, b: unknown): boolean {
+  const canon = (v: unknown): unknown =>
+    Array.isArray(v)
+      ? v.map(canon)
+      : v != null && typeof v === "object"
+        ? Object.fromEntries(
+            Object.keys(v as object)
+              .sort()
+              .map((k) => [k, canon((v as Record<string, unknown>)[k])]),
+          )
+        : v;
+  return JSON.stringify(canon(a)) === JSON.stringify(canon(b));
+}
+
+/**
+ * The install-level differences among `rootPaths` (root paths that differ by
+ * content): install-level files as their path, and the root package.json as
+ * `package.json (<field>, …)` only when one of its install fields differs
+ * STRUCTURALLY — a scripts-only change is per-side, not shared.
+ */
+export function installLevelDifferences(
+  headRoot: string,
+  baseTree: string,
+  rootPaths: string[],
+): string[] {
+  const out: string[] = [];
+  for (const p of rootPaths) {
+    if (p === "package.json") {
+      const read = (dir: string): Record<string, unknown> => {
+        const f = join(dir, p);
+        return existsSync(f)
+          ? (JSON.parse(readFileSync(f, "utf-8")) as Record<string, unknown>)
+          : {};
+      };
+      const h = read(headRoot);
+      const b = read(baseTree);
+      const fields = INSTALL_LEVEL_PACKAGE_FIELDS.filter(
+        (k) => !sameJson(fieldAt(h, k), fieldAt(b, k)),
+      );
+      if (fields.length > 0) out.push(`package.json (${fields.join(", ")})`);
+    } else if (INSTALL_LEVEL_FILES.some((r) => r.pattern.test(p))) {
+      out.push(p);
+    }
+  }
+  return out.sort();
 }
 
 export interface TreeDifference {
   /** Workspace packages with any differing file (either direction). */
   packages: string[];
-  /** Differing paths outside every workspace package that can affect a build or probe. */
+  /** Differing paths outside every workspace package (each side reads its own copy). */
   rootPaths: string[];
-  /** Differing paths outside every workspace package that match ROOT_IGNORED. */
-  ignoredRootPaths: string[];
 }
 
 /**
@@ -330,18 +380,12 @@ export function compareTrees(root: string, baseTree: string, roots: string[]): T
   }
   const packages = new Set<string>();
   const rootPaths: string[] = [];
-  const ignoredRootPaths: string[] = [];
   for (const f of differing) {
     const d = packageDirOf(f, roots);
     if (d != null) packages.add(d);
-    else if (isIgnorableRootPath(f)) ignoredRootPaths.push(f);
     else rootPaths.push(f);
   }
-  return {
-    packages: [...packages].sort(),
-    rootPaths: rootPaths.sort(),
-    ignoredRootPaths: ignoredRootPaths.sort(),
-  };
+  return { packages: [...packages].sort(), rootPaths: rootPaths.sort() };
 }
 
 // ── node_modules ─────────────────────────────────────────────────────
@@ -499,16 +543,14 @@ export interface Aperture {
   baseOnly: string[];
   /** Workspace deps of the root package.json, reachable from every package. */
   rootWorkspaceDeps: string[];
+  /** Differing root paths: each side's tree holds and builds from its own copy. */
+  rootPerSide: string[];
   /**
-   * Root paths that differ from the base ref and were held at the WORKING
+   * Install-level differences (shared by both sides) held at the WORKING
    * TREE's copy on both sides (`rootFromHead`): not differentialled. Empty
    * unless the caller opted in; otherwise the run refuses.
    */
   rootHeldAtHead: string[];
-  /** Differing root paths in ROOT_IGNORED: each side's tree holds its own copy. */
-  rootIgnoredDiffering: string[];
-  /** The ROOT_IGNORED patterns, for the report. */
-  rootIgnoredPatterns: string[];
   /** The head side read the working tree's own builds: NOT freshness-checked. */
   headFromWorkingTree: boolean;
 }
@@ -524,7 +566,7 @@ export interface BuildTreesOptions {
   host: string;
   /** Workspace packages from the base ref, or `diff`: every package whose files differ. */
   fromMain: string[] | "diff";
-  /** Hold differing build-affecting root paths at the working tree's copy instead of refusing. */
+  /** Hold install-level root differences at the working tree's copy instead of refusing. */
   rootFromHead?: boolean;
   /** Fast path: the head side runs in the working tree on its own builds (NOT freshness-checked). */
   headFromWorkingTree?: boolean;
@@ -608,28 +650,28 @@ export async function buildTrees(opts: BuildTreesOptions): Promise<Trees> {
     ]);
   }
 
-  // 3. What differs, by content. A differing root path that can affect a build
-  //    or probe cannot be assigned to one side (the install is shared), so refuse
-  //    unless told to hold it at the working tree's copy.
+  // 3. What differs, by content. Root paths are per side (each tree holds its
+  //    own copy) EXCEPT install-level ones: node_modules is mirrored from the
+  //    working tree's single install, so those cannot be assigned to one side.
   const difference = compareTrees(root, baseTree, roots);
-  if (difference.rootPaths.length > 0 && opts.rootFromHead !== true) {
+  const installDiffs = installLevelDifferences(root, baseTree, difference.rootPaths);
+  if (installDiffs.length > 0 && opts.rootFromHead !== true) {
     throw new DifferentialRefusal([
-      `differential-vs-main: refused — ${difference.rootPaths.length} path(s) outside the workspace packages differ from ${base}:`,
-      ...difference.rootPaths.slice(0, 40).map((p) => `    ${p}`),
-      ...(difference.rootPaths.length > 40
-        ? [`    … and ${difference.rootPaths.length - 40} more`]
-        : []),
-      "Builds, installs and tests read root files (tsconfig.base.json, package.json, pnpm-lock.yaml, patches/, root configs); the install is shared by both sides, so a change here cannot be assigned to one side.",
-      `Not refused (each side reads its own copy): ${ROOT_IGNORED.map((r) => r.label).join(", ")}.`,
-      `Fix: compare a tree whose other root paths equal ${base}'s (rebase, or stash those changes), or pass --root-from-head to hold the working tree's copy of every path above on BOTH sides — they are then listed as NOT differentialled.`,
+      `differential-vs-main: refused — install-level root files differ from ${base}: ${installDiffs.join(", ")}.`,
+      "Both trees use the working tree's single install (node_modules is mirrored into each), so a dependency, lockfile, workspace, patch or install-setting change cannot be assigned to one side.",
+      "Every other root path (tsconfig.base.json, vitest.shared.ts, scripts/, docs/, a scripts-only package.json change, …) is compared per side and does not refuse.",
+      `Fix: compare a tree whose install-level files equal ${base}'s, or pass --root-from-head to hold the working tree's copy of them on BOTH sides — they are then listed as NOT differentialled.`,
     ]);
   }
+  const held = difference.rootPaths.filter((p) =>
+    installDiffs.some((d) => d === p || (p === "package.json" && d.startsWith("package.json "))),
+  );
   copyFiles(
     root,
-    difference.rootPaths.filter((p) => existsSync(join(root, p))),
+    held.filter((p) => existsSync(join(root, p))),
     baseTree,
   );
-  for (const p of difference.rootPaths) {
+  for (const p of held) {
     if (!existsSync(join(root, p))) rmSync(join(baseTree, p), { force: true });
   }
 
@@ -684,9 +726,8 @@ export async function buildTrees(opts: BuildTreesOptions): Promise<Trees> {
       builtHead: headOrder,
       baseOnly,
       rootWorkspaceDeps: implicit,
-      rootHeldAtHead: difference.rootPaths,
-      rootIgnoredDiffering: difference.ignoredRootPaths,
-      rootIgnoredPatterns: ROOT_IGNORED.map((r) => r.label),
+      rootPerSide: difference.rootPaths.filter((p) => !held.includes(p)),
+      rootHeldAtHead: installDiffs,
       headFromWorkingTree: opts.headFromWorkingTree === true,
     },
   };
