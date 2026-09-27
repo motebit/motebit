@@ -49,7 +49,7 @@ import {
   EncryptedEventStoreAdapter,
   decryptEventPayload,
 } from "@motebit/sync-engine";
-import type { SyncStatus } from "@motebit/sync-engine";
+import type { CredentialSource, SyncStatus } from "@motebit/sync-engine";
 import type { PlanStoreAdapter } from "@motebit/planner";
 import {
   TauriConversationSyncStoreAdapter,
@@ -57,6 +57,9 @@ import {
 } from "./tauri-sync-adapters.js";
 import type { InvokeFn, TauriConversationStore, TauriPlanStore } from "./tauri-storage.js";
 import { loadColdStartOptIn } from "./cold-start-optin.js";
+
+/** Sync-socket token refresh cadence: signed sync tokens expire at 5 min. */
+export const WS_TOKEN_REFRESH_MS = 4.5 * 60_000;
 
 export type SyncIndicatorStatus =
   "disconnected" | "connecting" | "connected" | "syncing" | "conflict" | "error";
@@ -96,6 +99,12 @@ export class SyncController {
   private _wsTokenRefreshTimer: ReturnType<typeof setInterval> | null = null;
   private _wsUnsubOnEvent: (() => void) | null = null;
   private _wsUnsubOnCustom: (() => void) | null = null;
+  /**
+   * Bumped by every startSync and stopSync. A startSync that finds the epoch
+   * moved on across one of its awaits has been superseded and must not build,
+   * wire, or connect a socket — that socket would belong to nobody (#816).
+   */
+  private _wsEpoch = 0;
   private _serving = false;
   private _servingPrivateKey: Uint8Array | null = null;
   private _servingSyncUrl: string | null = null;
@@ -230,6 +239,7 @@ export class SyncController {
     authToken?: string,
     masterToken?: string,
   ): Promise<void> {
+    const epoch = ++this._wsEpoch;
     const runtime = this.deps.getRuntime();
     if (!runtime) return;
     const motebitId = this.deps.getMotebitId();
@@ -280,10 +290,33 @@ export class SyncController {
       DeviceCapability.Background,
     ];
 
+    // One sync socket per controller: a re-entered startSync (pairing, the
+    // relay-URL "Connect" button) replaces the running socket instead of
+    // leaving it open beside the new one (#816).
+    if (epoch !== this._wsEpoch) return;
+    this.teardownWs();
+
+    // The caller's token (possibly the relay master token) serves the first
+    // connect, exactly as before; every later connect — the 4.5-minute
+    // refresh and any drop-and-reconnect — mints a fresh signed token, so a
+    // reconnect never presents an expired one.
+    let initialToken: string | undefined = token;
+    const privateKeyForToken = keypair.privateKey;
+    const wsCredentialSource: CredentialSource = {
+      getCredential: async () => {
+        if (initialToken != null && initialToken !== "") {
+          const t = initialToken;
+          initialToken = undefined;
+          return t;
+        }
+        return this.deps.createSyncToken(privateKeyForToken);
+      },
+    };
+
     const wsAdapter = new WebSocketEventStoreAdapter({
       url: wsUrl,
       motebitId,
-      authToken: token,
+      credentialSource: wsCredentialSource,
       capabilities: desktopCapabilities,
       httpFallback: encryptedHttp,
       localStore: localEventStore ?? undefined,
@@ -350,6 +383,10 @@ export class SyncController {
     } catch {
       pinnedRelayKey = undefined;
     }
+    // Superseded while awaiting (stopSync, or a newer startSync): wiring
+    // handlers onto this socket now would revive one that was deliberately
+    // closed.
+    if (epoch !== this._wsEpoch) return;
     runtime.enableInteractiveDelegation({
       syncUrl,
       // Honor the audience the runtime asks for — `task:submit` to submit,
@@ -497,40 +534,14 @@ export class SyncController {
       })();
     });
 
-    // Token refresh: rebuild WS connection every 4.5 min (tokens expire at 5 min)
+    // Token refresh every 4.5 min (tokens expire at 5 min). The SAME
+    // adapter swaps its socket and re-mints the credential, so the
+    // command/task handler above, the inbound-event handler, and onCatchUp
+    // all stay attached, and the replaced socket is the one that closes
+    // (#816). Never build a second adapter here.
     this._wsTokenRefreshTimer = setInterval(() => {
-      void (async () => {
-        try {
-          wsAdapter.disconnect();
-          const freshToken = await this.deps.createSyncToken(keypair.privateKey);
-          const freshWs = new WebSocketEventStoreAdapter({
-            url: wsUrl,
-            motebitId,
-            authToken: freshToken,
-            capabilities: desktopCapabilities,
-            httpFallback: encryptedHttp,
-            localStore: localEventStore ?? undefined,
-          });
-
-          // Swap onEvent listener
-          if (this._wsUnsubOnEvent) this._wsUnsubOnEvent();
-          this._wsUnsubOnEvent = freshWs.onEvent((raw) => {
-            void (async () => {
-              if (!localEventStore) return;
-              const dec = await decryptEventPayload(raw, encKey);
-              await localEventStore.append(dec);
-            })();
-          });
-
-          const freshEncrypted = new EncryptedEventStoreAdapter({ inner: freshWs, key: encKey });
-          this.deps.getRuntime()?.connectSync(freshEncrypted);
-          freshWs.connect();
-          this._wsAdapter = freshWs;
-        } catch {
-          // Token refresh failed — WS will reconnect on its own
-        }
-      })();
-    }, 4.5 * 60_000);
+      wsAdapter.refreshConnection();
+    }, WS_TOKEN_REFRESH_MS);
 
     // One-shot conversation sync (encrypted, stays HTTP — no WS needed for conversations)
     void this.syncConversations(syncUrl, token, encKey)
@@ -725,8 +736,13 @@ export class SyncController {
     }
   }
 
-  /** Stop background event sync. */
-  stopSync(): void {
+  /**
+   * Close the sync socket and everything bound to it: the refresh timer, the
+   * inbound-event and command/task handlers, and the adapter itself. Shared
+   * by stopSync and a re-entered startSync so neither can leave a socket
+   * open that nothing reads.
+   */
+  private teardownWs(): void {
     if (this._wsTokenRefreshTimer) {
       clearInterval(this._wsTokenRefreshTimer);
       this._wsTokenRefreshTimer = null;
@@ -735,10 +751,20 @@ export class SyncController {
       this._wsUnsubOnEvent();
       this._wsUnsubOnEvent = null;
     }
+    if (this._wsUnsubOnCustom) {
+      this._wsUnsubOnCustom();
+      this._wsUnsubOnCustom = null;
+    }
     if (this._wsAdapter) {
       this._wsAdapter.disconnect();
       this._wsAdapter = null;
     }
+  }
+
+  /** Stop background event sync. */
+  stopSync(): void {
+    this._wsEpoch++;
+    this.teardownWs();
     if (this._syncUnsubscribe) {
       this._syncUnsubscribe();
       this._syncUnsubscribe = null;

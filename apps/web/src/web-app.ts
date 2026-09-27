@@ -167,6 +167,9 @@ export { createProvider, WebLLMProvider };
 // Legacy Tier 1 localStorage key — will be migrated to cryptographic identity
 const LEGACY_MOTEBIT_ID_KEY = "motebit-web-id";
 
+/** Sync-socket token refresh cadence: signed sync tokens expire at 5 min. */
+export const WS_TOKEN_REFRESH_MS = 4.5 * 60_000;
+
 export type WebSyncStatus =
   "offline" | "connecting" | "connected" | "syncing" | "error" | "disconnected";
 
@@ -434,6 +437,12 @@ export class UnbootedWebApp {
   private _wsTokenRefreshTimer: ReturnType<typeof setInterval> | null = null;
   private _wsUnsubOnEvent: (() => void) | null = null;
   private _wsUnsubOnCustom: (() => void) | null = null;
+  /**
+   * Bumped by every startSync and stopSync. A startSync that finds the epoch
+   * moved on across one of its awaits has been superseded and must not build,
+   * wire, or connect a socket — that socket would belong to nobody (#816).
+   */
+  private _wsEpoch = 0;
   private _serving = false;
   private _servingSyncUrl: string | null = null;
   private _activeTaskCount = 0;
@@ -3602,6 +3611,7 @@ export class UnbootedWebApp {
   }
 
   async startSync(relayUrl: string): Promise<void> {
+    const epoch = ++this._wsEpoch;
     if (!this.runtime) throw new Error("Runtime not initialized");
 
     this.setSyncStatus("connecting");
@@ -3708,6 +3718,11 @@ export class UnbootedWebApp {
       this._motebitId;
 
     const localEventStore = this._localEventStore;
+    // One sync socket per app: a re-entered startSync (pairing, the relay
+    // settings panel) replaces the running socket instead of leaving it open
+    // beside the new one (#816).
+    if (epoch !== this._wsEpoch) return;
+    this.teardownWs();
     const wsAdapter = new WebSocketEventStoreAdapter({
       url: wsUrl,
       motebitId: this._motebitId,
@@ -3747,6 +3762,10 @@ export class UnbootedWebApp {
     // relay-mode (e.g. a fail-closed key mismatch); relay-mode still serves
     // every task. Shared by both delegation entry points below.
     const pinnedRelayKey = await getOrPinRelayKey(relayUrl, { storage: localStorage });
+    // Superseded while awaiting (stopSync, or a newer startSync): wiring
+    // handlers onto this socket now would revive one that was deliberately
+    // closed.
+    if (epoch !== this._wsEpoch) return;
 
     this.runtime.enableInteractiveDelegation({
       syncUrl: relayUrl,
@@ -3892,6 +3911,16 @@ export class UnbootedWebApp {
     this.runtime.connectSync(encryptedWs);
     wsAdapter.connect();
 
+    // Token refresh every 4.5 min (signed sync tokens expire at 5 min). The
+    // SAME adapter swaps its socket and re-mints the credential through
+    // syncCredentialSource, so the command/task handler, the inbound-event
+    // handler, and the delegation adapter's subscription all stay attached,
+    // and the replaced socket is the one that closes (#816). Never build a
+    // second adapter here.
+    this._wsTokenRefreshTimer = setInterval(() => {
+      wsAdapter.refreshConnection();
+    }, WS_TOKEN_REFRESH_MS);
+
     // Subscribe to SyncEngine status changes
     if (this._syncUnsubscribe) this._syncUnsubscribe();
     this._syncUnsubscribe = this.runtime.sync.onStatusChange((engineStatus: SyncStatus) => {
@@ -3962,63 +3991,6 @@ export class UnbootedWebApp {
         // Recovery is best-effort — don't break sync startup
       }
     })();
-
-    // Token refresh every 4.5 min
-    this._wsTokenRefreshTimer = setInterval(() => {
-      void (async () => {
-        try {
-          // Unsubscribe old event handler before disconnect to prevent
-          // orphaned callbacks firing during the refresh window.
-          if (this._wsUnsubOnEvent) {
-            this._wsUnsubOnEvent();
-            this._wsUnsubOnEvent = null;
-          }
-          wsAdapter.disconnect();
-          const freshToken = await this.createSyncToken();
-          if (freshToken == null) return;
-
-          const freshWs = new WebSocketEventStoreAdapter({
-            url: wsUrl,
-            motebitId: this._motebitId,
-            authToken: freshToken,
-            capabilities: [DeviceCapability.HttpMcp],
-            httpFallback: encryptedHttp,
-            localStore: localEventStore ?? undefined,
-          });
-
-          // Re-wire delegation adapter with fresh wsAdapter
-          // A per-audience provider, as at first wiring: the adapter asks for
-          // `task:submit` and `task:query`, and a static `sync` string here
-          // (the refreshed socket's token) failed both after the first
-          // refresh (#827).
-          const freshDelegation = new RelayDelegationAdapter({
-            syncUrl: relayUrl,
-            motebitId: this._motebitId,
-            authToken: (audience?: TokenAudience) =>
-              this.createSyncToken(audience ?? "task:submit").then((t) => t ?? ""),
-            sendRaw: (data: string) => freshWs.sendRaw(data),
-            onCustomMessage: (cb) => freshWs.onCustomMessage(cb),
-            getExplorationDrive: () => this.runtime?.getPrecision().explorationDrive,
-          });
-          this.runtime?.setDelegationAdapter(freshDelegation);
-
-          this._wsUnsubOnEvent = freshWs.onEvent((raw) => {
-            void (async () => {
-              if (!localEventStore) return;
-              const dec = await decryptEventPayload(raw, encKey);
-              await localEventStore.append(dec);
-            })();
-          });
-
-          const freshEncrypted = new EncryptedEventStoreAdapter({ inner: freshWs, key: encKey });
-          this.runtime?.connectSync(freshEncrypted);
-          freshWs.connect();
-          this._wsAdapter = freshWs;
-        } catch {
-          // Token refresh failed — WS adapter reconnect will retry
-        }
-      })();
-    }, 4.5 * 60_000);
 
     // Adversarial onboarding: run self-test once after first relay connection
     void this.runOnboardingSelfTest(relayUrl);
@@ -4177,8 +4149,13 @@ export class UnbootedWebApp {
     return this._serving;
   }
 
-  stopSync(): void {
-    this._serving = false;
+  /**
+   * Close the sync socket and everything bound to it: the refresh timer, the
+   * inbound-event and command/task handlers, and the adapter itself. Shared
+   * by stopSync and a re-entered startSync so neither can leave a socket
+   * open that nothing reads.
+   */
+  private teardownWs(): void {
     if (this._wsTokenRefreshTimer != null) {
       clearInterval(this._wsTokenRefreshTimer);
       this._wsTokenRefreshTimer = null;
@@ -4187,10 +4164,20 @@ export class UnbootedWebApp {
       this._wsUnsubOnEvent();
       this._wsUnsubOnEvent = null;
     }
+    if (this._wsUnsubOnCustom) {
+      this._wsUnsubOnCustom();
+      this._wsUnsubOnCustom = null;
+    }
     if (this._wsAdapter) {
       this._wsAdapter.disconnect();
       this._wsAdapter = null;
     }
+  }
+
+  stopSync(): void {
+    this._wsEpoch++;
+    this._serving = false;
+    this.teardownWs();
     if (this._syncUnsubscribe) {
       this._syncUnsubscribe();
       this._syncUnsubscribe = null;

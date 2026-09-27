@@ -491,6 +491,11 @@ export class MobileSyncController {
               setItem: (k, v) => AsyncStorage.setItem(k, v),
             },
           });
+          // Superseded while awaiting: a later cycle (every 30 s — a slow
+          // relay-key fetch outlives one) or stopSync already replaced this
+          // socket. Connecting it now would open a socket nothing owns — open
+          // at the relay, counted in its liveness, never closed (#816).
+          if (this._wsAdapter !== wsAdapter) return;
           runtime.enableInteractiveDelegation({
             syncUrl,
             // Honor the audience the runtime asks for — `task:submit` to
