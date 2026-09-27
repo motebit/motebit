@@ -756,4 +756,197 @@ describe("WebSocketEventStoreAdapter", () => {
     expect(received).toHaveLength(1);
     expect(received[0]!.event_id).toBe("event-1");
   });
+
+  // --- refreshConnection (#816): one adapter, one socket, handlers carried ---
+
+  function openSockets(): MockWebSocket[] {
+    return MockWebSocket.instances.filter((w) => !w.closed);
+  }
+
+  function countingSource(): CredentialSource & { calls: number } {
+    const src = {
+      calls: 0,
+      getCredential: () => {
+        src.calls++;
+        return Promise.resolve(`token-${src.calls}`);
+      },
+    };
+    return src;
+  }
+
+  it("refreshConnection keeps exactly one socket open across N refreshes and closes each replaced one", async () => {
+    const credentialSource = countingSource();
+    const adapter = new WebSocketEventStoreAdapter({
+      url: WS_URL,
+      motebitId: MOTEBIT_ID,
+      credentialSource,
+    });
+    adapter.connect();
+    await vi.advanceTimersByTimeAsync(0);
+    lastWS().simulateOpenWithAuth();
+
+    const N = 5;
+    for (let i = 0; i < N; i++) {
+      const replaced = lastWS();
+      adapter.refreshConnection();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(replaced.closed).toBe(true);
+      expect(lastWS()).not.toBe(replaced);
+      lastWS().simulateOpenWithAuth();
+      expect(openSockets()).toHaveLength(1);
+      expect(openSockets()[0]).toBe(lastWS());
+    }
+    expect(MockWebSocket.instances).toHaveLength(N + 1);
+    // Each refresh re-resolved the credential: the current socket carries a fresh token.
+    expect(JSON.parse(lastWS().sent[0]!)).toEqual({ type: "auth", token: `token-${N + 1}` });
+    expect(adapter.isConnected).toBe(true);
+  });
+
+  it("a command_request after N refreshes reaches the handler registered before them and is answered on the current socket", async () => {
+    const adapter = new WebSocketEventStoreAdapter({
+      url: WS_URL,
+      motebitId: MOTEBIT_ID,
+      credentialSource: countingSource(),
+    });
+    adapter.onCustomMessage((msg) => {
+      if (msg.type === "command_request") {
+        adapter.sendRaw(JSON.stringify({ type: "command_response", id: msg.id, result: "ok" }));
+      }
+    });
+    adapter.connect();
+    await vi.advanceTimersByTimeAsync(0);
+    lastWS().simulateOpenWithAuth();
+    for (let i = 0; i < 3; i++) {
+      adapter.refreshConnection();
+      await vi.advanceTimersByTimeAsync(0);
+      lastWS().simulateOpenWithAuth();
+    }
+
+    const current = lastWS();
+    current.simulateMessage({ type: "command_request", id: "cmd-1", command: "state" });
+    const responses = current.sent
+      .map((raw) => JSON.parse(raw) as { type: string; id?: string })
+      .filter((m) => m.type === "command_response");
+    expect(responses).toEqual([{ type: "command_response", id: "cmd-1", result: "ok" }]);
+    // No replaced socket carried the answer.
+    for (const ws of MockWebSocket.instances.slice(0, -1)) {
+      expect(ws.sent.some((raw) => raw.includes("command_response"))).toBe(false);
+    }
+  });
+
+  it("refreshConnection keeps onEvent handlers and onCatchUp, and catch-up covers the gap", async () => {
+    const localStore = new InMemoryEventStore();
+    const missed = makeEvent(7);
+    const httpFallback = new InMemoryEventStore();
+    await httpFallback.append(missed);
+    const onCatchUp = vi.fn();
+    const adapter = new WebSocketEventStoreAdapter({
+      url: WS_URL,
+      motebitId: MOTEBIT_ID,
+      credentialSource: countingSource(),
+      httpFallback,
+      localStore,
+      onCatchUp,
+    });
+    const received: string[] = [];
+    adapter.onEvent((e) => received.push(e.event_id));
+    adapter.connect();
+    await vi.advanceTimersByTimeAsync(0);
+    lastWS().simulateOpenWithAuth();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(onCatchUp).toHaveBeenCalledTimes(1);
+
+    adapter.refreshConnection();
+    await vi.advanceTimersByTimeAsync(0);
+    lastWS().simulateOpenWithAuth();
+    await vi.advanceTimersByTimeAsync(0);
+    // The catch-up after the refreshed socket authenticated ran on the same config.
+    expect(onCatchUp).toHaveBeenCalledTimes(2);
+
+    lastWS().simulateMessage({ type: "event", event: makeEvent(9) });
+    expect(received).toContain("event-9");
+  });
+
+  it("an event appended during the refresh gap is flushed on the new socket", async () => {
+    const adapter = new WebSocketEventStoreAdapter({
+      url: WS_URL,
+      motebitId: MOTEBIT_ID,
+      credentialSource: countingSource(),
+    });
+    adapter.connect();
+    await vi.advanceTimersByTimeAsync(0);
+    lastWS().simulateOpenWithAuth();
+
+    adapter.refreshConnection();
+    await adapter.append(makeEvent(3));
+    await vi.advanceTimersByTimeAsync(0);
+    lastWS().simulateOpenWithAuth();
+    const pushes = lastWS()
+      .sent.map((raw) => JSON.parse(raw) as { type: string; events?: EventLogEntry[] })
+      .filter((m) => m.type === "push");
+    expect(pushes).toHaveLength(1);
+    expect(pushes[0]!.events![0]!.event_id).toBe("event-3");
+  });
+
+  it("disconnect() while the credential is still resolving opens no socket afterwards", async () => {
+    let resolve!: (t: string) => void;
+    const adapter = new WebSocketEventStoreAdapter({
+      url: WS_URL,
+      motebitId: MOTEBIT_ID,
+      credentialSource: {
+        getCredential: () =>
+          new Promise<string>((r) => {
+            resolve = r;
+          }),
+      },
+    });
+    adapter.connect();
+    adapter.disconnect();
+    resolve("late-token");
+    await vi.advanceTimersByTimeAsync(0);
+    expect(MockWebSocket.instances).toHaveLength(0);
+  });
+
+  it("two refreshes while the credential is resolving open one socket, not two", async () => {
+    const resolvers: Array<(t: string) => void> = [];
+    const adapter = new WebSocketEventStoreAdapter({
+      url: WS_URL,
+      motebitId: MOTEBIT_ID,
+      credentialSource: {
+        getCredential: () =>
+          new Promise<string>((r) => {
+            resolvers.push(r);
+          }),
+      },
+    });
+    adapter.connect();
+    adapter.refreshConnection();
+    adapter.refreshConnection();
+    // Resolve newest first, then the abandoned ones.
+    resolvers[2]!("t3");
+    resolvers[0]!("t1");
+    resolvers[1]!("t2");
+    await vi.advanceTimersByTimeAsync(0);
+    expect(MockWebSocket.instances).toHaveLength(1);
+    lastWS().simulateOpen();
+    expect(JSON.parse(lastWS().sent[0]!)).toEqual({ type: "auth", token: "t3" });
+  });
+
+  it("a rejected credential schedules a reconnect instead of leaving the adapter dead", async () => {
+    let fail = true;
+    const adapter = new WebSocketEventStoreAdapter({
+      url: WS_URL,
+      motebitId: MOTEBIT_ID,
+      credentialSource: {
+        getCredential: () =>
+          fail ? Promise.reject(new Error("mint failed")) : Promise.resolve("ok"),
+      },
+    });
+    adapter.connect();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(MockWebSocket.instances).toHaveLength(0);
+    fail = false;
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(MockWebSocket.instances).toHaveLength(1);
+  });
 });
