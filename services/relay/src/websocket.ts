@@ -24,9 +24,13 @@ import { propagateDeletionForEvent } from "./deletion-propagation.js";
 import type { TaskQueueEntry } from "./tasks.js";
 import type { createLogger } from "./logger.js";
 import type { AuthEvent } from "./auth-events.js";
+import { sendToEach, WS_OPEN } from "./ws-send.js";
 
-/** `WebSocket.OPEN` — the only state in which a socket is registered or counted. */
-export const WS_OPEN = 1;
+/**
+ * `WebSocket.OPEN` — the only state in which a socket is registered or
+ * counted. Defined once in `ws-send.ts`, beside the send rule that uses it.
+ */
+export { WS_OPEN };
 
 /**
  * Close code for a socket whose admitting key was retired by a key
@@ -979,11 +983,7 @@ export function registerWebSocketRoutes(deps: WebSocketDeps): void {
               if (peers) {
                 for (const entry of safeEvents) {
                   const payload = JSON.stringify({ type: "event", event: entry });
-                  for (const peer of peers) {
-                    if (peer.ws !== ws && peer.ws.readyState === 1) {
-                      peer.ws.send(payload);
-                    }
-                  }
+                  sendToEach(peers, payload, (peer) => peer.ws !== ws);
                 }
               }
             }
@@ -1004,11 +1004,7 @@ export function registerWebSocketRoutes(deps: WebSocketDeps): void {
                     type: "conversation",
                     conversation: floorSyncConversation(conv),
                   });
-                  for (const peer of peers) {
-                    if (peer.ws !== ws && peer.ws.readyState === 1) {
-                      peer.ws.send(payload);
-                    }
-                  }
+                  sendToEach(peers, payload, (peer) => peer.ws !== ws);
                 }
               }
             }
@@ -1027,11 +1023,7 @@ export function registerWebSocketRoutes(deps: WebSocketDeps): void {
                     type: "conversation_message",
                     message: floorSyncMessage(m),
                   });
-                  for (const peer of peers) {
-                    if (peer.ws !== ws && peer.ws.readyState === 1) {
-                      peer.ws.send(payload);
-                    }
-                  }
+                  sendToEach(peers, payload, (peer) => peer.ws !== ws);
                 }
               }
             }

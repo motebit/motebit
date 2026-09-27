@@ -86,6 +86,7 @@ import {
   settlementTreeDepths,
 } from "./multihop-depth.js";
 import type { ConnectedDevice } from "./index.js";
+import { sendToEach } from "./ws-send.js";
 import { checkIdempotency, completeIdempotency } from "./idempotency.js";
 import { createLogger } from "./logger.js";
 import type { TaskQueue } from "./task-queue.js";
@@ -1733,13 +1734,10 @@ export async function handleReceiptIngestion(
   taskQueue.set(taskId, entry);
 
   // --- WebSocket fan-out ---
-  const peers = connections.get(motebitId);
-  if (peers) {
-    const payload = JSON.stringify({ type: "task_result", task_id: taskId, receipt });
-    for (const peer of peers) {
-      peer.ws.send(payload);
-    }
-  }
+  sendToEach(
+    connections.get(motebitId),
+    JSON.stringify({ type: "task_result", task_id: taskId, receipt }),
+  );
 
   // --- Federation result forwarding ---
   if (entry.origin_relay) {
@@ -2824,11 +2822,10 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
         routing_paths: [[pinnedId]],
         alternatives_considered: 0,
       };
-      const pinnedPeers = connections.get(pinnedId);
-      if (pinnedPeers && pinnedPeers.length > 0) {
-        for (const peer of pinnedPeers) {
-          peer.ws.send(payload);
-        }
+      // Routed only when an OPEN socket took the frame (#811). Sockets that
+      // are all CLOSING/CLOSED take the no-socket path below, exactly as if
+      // none were connected: the MCP endpoint, else queued and logged.
+      if (sendToEach(connections.get(pinnedId), payload) > 0) {
         routed = true;
         logger.info("task.p2p_pinned_dispatched", {
           correlationId: taskId,
@@ -2878,7 +2875,7 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
           logger.error("task.p2p_pinned_unroutable", {
             correlationId: taskId,
             worker: pinnedId,
-            reason: "no WebSocket connection and no registered endpoint_url",
+            reason: "no open WebSocket connection and no registered endpoint_url",
           });
         }
       }
@@ -3365,14 +3362,13 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
                 }
               } else {
                 // Local agent: route via WebSocket first, HTTP MCP fallback
-                const localPeers = connections.get(selId);
-                if (localPeers && localPeers.length > 0) {
-                  for (const peer of localPeers) {
-                    peer.ws.send(payload);
-                  }
+                // Routed only when an OPEN socket took the frame (#811); a
+                // worker whose sockets are all CLOSING/CLOSED takes the
+                // no-WebSocket path, as if none were connected.
+                if (sendToEach(connections.get(selId), payload) > 0) {
                   routed = true;
                 } else {
-                  // No WebSocket — try HTTP MCP forwarding via registered endpoint_url
+                  // No open WebSocket — try HTTP MCP forwarding via registered endpoint_url
                   const regRow = moteDb.db
                     .prepare(
                       `SELECT endpoint_url FROM agent_registry WHERE motebit_id = ? AND expires_at > ?${ON_SHELF}`,
@@ -3421,17 +3417,15 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
     // Also skip for pinned-local paid tasks (Phase 0): fan-out could execute the
     // paid task on a worker the delegator never paid.
     if (!submitterPresenter && !pinnedLocalHandled && !routed && !federationAttempted) {
-      const peers = connections.get(motebitId);
-      if (peers) {
-        for (const peer of peers) {
-          if (requiredCaps.length > 0 && peer.capabilities) {
-            const hasAll = requiredCaps.every((c) => peer.capabilities!.includes(c));
-            if (!hasAll) continue;
-          }
-          peer.ws.send(payload);
-          routed = true;
-        }
-      }
+      // Routed only when an OPEN socket took the frame (#811): a broadcast
+      // that only reached CLOSING/CLOSED sockets falls through to Phase 3/4
+      // and hands the submitter its token, as when no socket is connected.
+      const delivered = sendToEach(connections.get(motebitId), payload, (peer) =>
+        requiredCaps.length > 0 && peer.capabilities
+          ? requiredCaps.every((c) => peer.capabilities!.includes(c))
+          : true,
+      );
+      if (delivered > 0) routed = true;
     }
 
     // Phase 3: HTTP MCP fallback — when no WebSocket routed the task,

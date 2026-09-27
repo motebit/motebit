@@ -43,6 +43,7 @@ import type { ConnectedDevice } from "./websocket.js";
 import type { DatabaseDriver } from "@motebit/persistence";
 import type { createLogger } from "./logger.js";
 import { verificationKeyFor } from "./identity-keys.js";
+import { sendIfOpen } from "./ws-send.js";
 
 /** Commands the relay can answer from its own database. */
 const RELAY_SIDE_COMMANDS = new Set(["balance", "deposits", "discover", "proposals"]);
@@ -583,14 +584,12 @@ export function sendToOne(
 ): ConnectedDevice | null {
   const trySend = (peer: ConnectedDevice): boolean => {
     onAttempt?.(peer);
-    try {
-      peer.ws.send(payload);
-      return true;
-    } catch {
-      // CONNECTING throws.
-      onAttempt?.(null);
-      return false;
-    }
+    // The shared send primitive (#811). Every `peer` reaching here was just
+    // read OPEN, so its own OPEN check changes no selection; a throw
+    // (CONNECTING) reads as not handed off, as before.
+    if (sendIfOpen(peer.ws, payload)) return true;
+    onAttempt?.(null);
+    return false;
   };
   for (const peer of candidates) {
     if (peer.ws.readyState !== 1) continue;
