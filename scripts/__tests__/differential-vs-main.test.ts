@@ -1,46 +1,44 @@
 /**
- * differential-vs-main — the base side must run the same probe the head side
- * runs, every package the aperture says came from the base ref must be what
- * the probe observes, the run must refuse whenever it cannot say that, and
- * nothing here may touch a repository it did not create (#818, #833, #835).
+ * differential-vs-main — both sides are built fresh from source, every
+ * package the aperture says came from the base ref must be what the probe
+ * observes, the run must refuse whenever it cannot say that, and nothing here
+ * may touch a repository it did not create (#818, #833, #835, #837).
  *
  * SAFETY (#835): this file's fixture once ran `git init`/`config`/`commit`
  * with the caller's environment. Under `pnpm test:gates` from a pre-push hook
  * in a linked worktree, GIT_DIR pointed at the real repository, so those
- * commands rewrote the real repository (core.bare=true, user=fixture, and a
- * commit deleting every tracked file, which was then pushed). Rules now:
+ * commands rewrote the real repository. Rules now:
  *   - every child process gets `cleanEnv()` (EVERY `GIT_*` removed) and an
  *     explicit `cwd` inside this test's temp dir;
  *   - every git command runs through `fxGit`, which sets
  *     GIT_CEILING_DIRECTORIES to the temp dir and, before any command that
- *     writes, asserts `git rev-parse --absolute-git-dir` resolves inside the
- *     temp dir (and throws otherwise);
- *   - the "decoy" test runs the whole fixture and the script with GIT_DIR /
- *     GIT_WORK_TREE / GIT_INDEX_FILE / GIT_OBJECT_DIRECTORY / GIT_COMMON_DIR
- *     aimed at a DECOY repository in another temp dir, and asserts the decoy's
- *     config, HEAD, refs and index are byte-identical afterwards.
+ *     writes (init included), asserts `git rev-parse --absolute-git-dir`
+ *     resolves inside the temp dir, and throws otherwise;
+ *   - the decoy test aims GIT_DIR / GIT_WORK_TREE / GIT_INDEX_FILE /
+ *     GIT_OBJECT_DIRECTORY / GIT_COMMON_DIR at a DECOY repository in another
+ *     temp dir, runs the whole fixture and the script, and asserts EVERY byte
+ *     of the decoy (work tree and all of .git, objects included) is unchanged.
  *
  * Layers:
  *   - Unit (always on, milliseconds).
- *   - Behavioural fixture: in `pnpm test:gates`, ONE case (bundle +
- *     root-hoisted ⇒ DIFF) next to the decoy safety test; every case with
- *     MOTEBIT_DIFFERENTIAL_FIXTURE=1 (`pnpm test:differential`). It is a
- *     five-package mini-workspace in a temp dir with its own git history. The
- *     change between its "main" commit and its head commit is one string in
- *     `@fx/proto`; the probe (in `apps/mobile`) sees it only (a) through
- *     `@fx/bundler`, whose build INLINES proto's value, via a `pretest` that
- *     generates a file from the bundle — apps/mobile ← render-engine's
- *     browser.iife.js ← protocol — and (b) through `@fx/hoisted`, declared only
- *     by the root package.json — surface-kit ← semiring. proto and hoisted
- *     build with the real `tsc -b`, so the staleness repair is exercised
- *     against tsc's real skip behaviour.
- *   - Real-repo smoke (opt-in, `MOTEBIT_DIFFERENTIAL_SMOKE=1`, 2-3 min once the
- *     working tree is built): a planted protocol change observed through
- *     mobile's creature bundle and through semiring from surface-kit. The
- *     planted base commit lives in a temp bare repository whose object store
- *     borrows the real one READ-ONLY through `objects/info/alternates`; the
- *     script reads it with `--base-repo`. Nothing is written to the real
- *     repository.
+ *   - Fixture: a five-package mini-workspace in a temp dir with its own git
+ *     history. The change between its "main" and head commits is one string
+ *     in `@fx/proto`, built tsup-like (it re-emits on every build, as crypto
+ *     does). apps/mobile sees it only through `@fx/bundler`, which INLINES it
+ *     transitively via `@fx/hoisted` (tsc -b) at build time and feeds a
+ *     `pretest`-generated file (apps/mobile ← render-engine's browser.iife.js
+ *     ← protocol), and through `@fx/hoisted` itself, declared only by the root
+ *     package.json (surface-kit ← semiring). The working tree's packages are
+ *     never built; the cases plant wrong `dist` output there instead.
+ *     In `pnpm test:gates`: the new-package refusal and the decoy test (which
+ *     also asserts the bundle + root-hoisted DIFF). Every case with
+ *     MOTEBIT_DIFFERENTIAL_FIXTURE=1 (`pnpm test:differential`).
+ *   - Real-repo smoke (opt-in, `MOTEBIT_DIFFERENTIAL_SMOKE=1`; minutes): a
+ *     planted protocol change observed through mobile's creature bundle and
+ *     through semiring from surface-kit. The planted base commit lives in a
+ *     temp bare repository whose object store borrows the real one READ-ONLY
+ *     through `objects/info/alternates`; the script reads it with
+ *     `--base-repo`. Nothing is written to the real repository.
  */
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { spawnSync } from "node:child_process";
@@ -51,10 +49,10 @@ import {
   mkdtempSync,
   readFileSync,
   readdirSync,
+  readlinkSync,
   realpathSync,
   rmSync,
   symlinkSync,
-  utimesSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -65,7 +63,7 @@ import {
   baseBuildCommand,
   cleanEnv,
   dependencyClosure,
-  isBuildInput,
+  isIgnorableRootPath,
   mirrorNodeModules,
   packageDirOf,
   readGit,
@@ -161,7 +159,6 @@ function fxRun(
   if (r.status !== 0) throw new Error(`${cmd} ${args.join(" ")} failed:\n${show(r)}`);
   return r.stdout;
 }
-
 // ── Units ──────────────────────────────────────────────────────────────
 
 const pkg = (dir: string, name: string, deps: string[]): [string, WorkspacePackage] => [
@@ -198,17 +195,27 @@ describe("differential-tree units", () => {
     expect(packageDirOf("tsconfig.base.json", ROOTS)).toBeNull();
   });
 
-  it("build inputs are every non-test file outside dist", () => {
-    expect(isBuildInput("src/index.ts")).toBe(true);
-    expect(isBuildInput("scripts/build-browser.mjs")).toBe(true);
-    expect(isBuildInput("package.json")).toBe(true);
-    expect(isBuildInput("tsup.config.ts")).toBe(true);
-    expect(isBuildInput("dist/index.js")).toBe(false);
-    expect(isBuildInput("src/__tests__/x.ts")).toBe(false);
-    expect(isBuildInput("src/a.test.ts")).toBe(false);
+  it("only prose and agent config are ignorable root paths", () => {
+    for (const p of [".changeset/brave-owls.md", "docs/ops/agentic-lanes.md", "docs/x.png"]) {
+      expect(isIgnorableRootPath(p), p).toBe(true);
+    }
+    for (const p of [".claude/agents/cold-reviewer.md", "README.md", "spec/relay-v1.md"]) {
+      expect(isIgnorableRootPath(p), p).toBe(true);
+    }
+    for (const p of [
+      "tsconfig.base.json",
+      "package.json",
+      "pnpm-lock.yaml",
+      "vitest.shared.ts",
+      "patches/x.patch",
+      ".changeset/config.json",
+      "scripts/check.ts",
+    ]) {
+      expect(isIgnorableRootPath(p), p).toBe(false);
+    }
   });
 
-  it("orders rebuilds dependencies first", () => {
+  it("orders builds dependencies first", () => {
     const byDir = new Map([
       pkg("packages/a", "@m/a", ["@m/b"]),
       pkg("packages/b", "@m/b", ["@m/c"]),
@@ -233,7 +240,7 @@ describe("differential-tree units", () => {
     );
   });
 
-  it("rewrites tsc build mode so a base rebuild never walks into the working tree", () => {
+  it("rewrites tsc build mode to a single-project build", () => {
     expect(baseBuildCommand("tsc -b")).toBe("tsc -p tsconfig.json");
     expect(baseBuildCommand("tsc -b && pnpm run build:browser")).toBe(
       "tsc -p tsconfig.json && pnpm run build:browser",
@@ -276,7 +283,15 @@ function write(file: string, content: string): void {
 
 const json = (v: unknown) => `${JSON.stringify(v, null, 2)}\n`;
 
-const BUNDLER_BUILD = `import { VALUE } from "@fx/proto";
+/** tsup-like: re-emits dist on every build, whatever the mtimes say (crypto's shape). */
+const PROTO_BUILD = `import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+const value = /VALUE: string = "([^"]*)"/.exec(readFileSync("src/index.ts", "utf-8"))[1];
+mkdirSync("dist", { recursive: true });
+writeFileSync("dist/index.js", "export const VALUE = " + JSON.stringify(value) + ";\\n");
+writeFileSync("dist/index.d.ts", "export declare const VALUE: string;\\n");
+`;
+/** Inlines hoisted's VALUE — proto's, TRANSITIVELY — at build time (render-engine's browser bundle). */
+const BUNDLER_BUILD = `import { VALUE } from "@fx/hoisted";
 import { mkdirSync, writeFileSync } from "node:fs";
 mkdirSync("dist", { recursive: true });
 writeFileSync("dist/index.js", "export const BUNDLED = " + JSON.stringify(VALUE) + ";\\n");
@@ -302,9 +317,11 @@ interface Fixture {
 
 /**
  * A mini-workspace whose only difference between `main` and head is one
- * string in @fx/proto, reachable from apps/mobile only through a bundle and
- * through a root-hoisted package. Every git and build command is jailed to
- * `jail` and runs with GIT_* scrubbed from `baseEnv`.
+ * string in @fx/proto (built tsup-like). apps/mobile sees it only through
+ * @fx/bundler, which INLINES it transitively via @fx/hoisted (tsc -b), and
+ * through @fx/hoisted itself, declared only by the root package.json. The
+ * working tree's packages are NOT built: the tool must never need them.
+ * Every git and child command is jailed to `jail` and scrubbed of GIT_*.
  */
 function buildFixture(jail: string, baseEnv: NodeJS.ProcessEnv = process.env): Fixture {
   const root = join(jail, "repo");
@@ -318,6 +335,7 @@ function buildFixture(jail: string, baseEnv: NodeJS.ProcessEnv = process.env): F
   );
   write(join(root, ".gitignore"), "node_modules\ndist\n*.tsbuildinfo\n*.generated.txt\n");
   write(join(root, "tsconfig.base.json"), TSCONFIG_BASE);
+  write(join(root, "docs", "notes.md"), "# notes\n");
 
   const lib = (name: string, deps: string[], build: string, files: Record<string, string>) => {
     const d = join(root, "packages", name);
@@ -334,26 +352,21 @@ function buildFixture(jail: string, baseEnv: NodeJS.ProcessEnv = process.env): F
     );
     for (const [f, c] of Object.entries(files)) write(join(d, f), c);
   };
-  const tsconfig = (refs: string[]) =>
-    json({
+  lib("proto", [], "node build.mjs", {
+    "build.mjs": PROTO_BUILD,
+    "src/index.ts": 'export const VALUE: string = "main";\n',
+  });
+  lib("hoisted", ["@fx/proto"], "tsc -b", {
+    "tsconfig.json": json({
       extends: "../../tsconfig.base.json",
       compilerOptions: { outDir: "dist", rootDir: "src" },
       include: ["src"],
-      references: refs.map((path) => ({ path })),
-    });
-  lib("proto", [], "tsc -b", {
-    "tsconfig.json": tsconfig([]),
-    "src/index.ts": 'export const VALUE: string = "main";\n',
-  });
-  // The bundler INLINES proto's value at build time (render-engine's browser bundle).
-  lib("bundler", ["@fx/proto"], "node build.mjs", {
-    "build.mjs": BUNDLER_BUILD,
-    "src/index.js": "// Bundled at build time from @fx/proto; see build.mjs.\n",
-  });
-  // Re-exports proto at runtime; declared only by the ROOT package.json (semiring).
-  lib("hoisted", ["@fx/proto"], "tsc -b", {
-    "tsconfig.json": tsconfig(["../proto"]),
+    }),
     "src/index.ts": 'export { VALUE } from "@fx/proto";\n',
+  });
+  lib("bundler", ["@fx/hoisted"], "node build.mjs", {
+    "build.mjs": BUNDLER_BUILD,
+    "src/index.js": "// Bundled at build time; see build.mjs.\n",
   });
 
   const mobile = join(root, "apps", "mobile");
@@ -394,8 +407,8 @@ writeFileSync("src/bundle.generated.txt", BUNDLED);
     mkdirSync(join(root, from, "node_modules", "@fx"), { recursive: true });
     symlinkSync(target, join(root, from, "node_modules", "@fx", name));
   };
-  link("packages/bundler", "proto", "../../../proto");
   link("packages/hoisted", "proto", "../../../proto");
+  link("packages/bundler", "hoisted", "../../../hoisted");
   link("apps/mobile", "bundler", "../../../../packages/bundler");
 
   const git = (...args: string[]) => fxGit(jail, root, args, { baseEnv }).trim();
@@ -411,31 +424,18 @@ writeFileSync("src/bundle.generated.txt", BUNDLED);
     'export const VALUE: string = "head";\n',
   );
   git("commit", "-q", "-am", "head: proto says head");
-  const fx = { jail, root, mainSha };
-  buildAll(fx, baseEnv);
-  return fx;
+  return { jail, root, mainSha };
 }
 
-/** Build the fixture's head packages in dependency order, as a developer would. */
-function buildAll(fx: Fixture, baseEnv: NodeJS.ProcessEnv = process.env): void {
-  const tsc = join(fx.root, "node_modules", ".bin", "tsc");
-  fxRun(fx.jail, join(fx.root, "packages", "proto"), tsc, ["-b"], baseEnv);
-  fxRun(fx.jail, join(fx.root, "packages", "hoisted"), tsc, ["-b"], baseEnv);
-  fxRun(fx.jail, join(fx.root, "packages", "bundler"), "node", ["build.mjs"], baseEnv);
-}
-
-/** Set the mtime of every file under `dir` (skipping node_modules) to `t` seconds. */
-function setTimes(dir: string, t: number, pick: (rel: string) => boolean): void {
-  const walk = (d: string, rel: string) => {
-    for (const e of readdirSync(d, { withFileTypes: true })) {
-      if (e.name === "node_modules") continue;
-      const p = join(d, e.name);
-      const r = rel === "" ? e.name : `${rel}/${e.name}`;
-      if (e.isDirectory()) walk(p, r);
-      else if (lstatSync(p).isFile() && pick(r)) utimesSync(p, t, t);
-    }
-  };
-  walk(dir, "");
+/** Wrong, half-built working-tree output: the tool must never read it. */
+function plantStaleDists(fx: Fixture): void {
+  const stale = 'export const VALUE = "stale-working-tree-dist";\n';
+  write(join(fx.root, "packages", "proto", "dist", "index.js"), stale);
+  write(join(fx.root, "packages", "hoisted", "dist", "index.js"), stale);
+  write(
+    join(fx.root, "packages", "bundler", "dist", "index.js"),
+    'export const BUNDLED = "stale-working-tree-bundle";\n',
+  );
 }
 
 const FIXTURE_PROBE = `import { afterAll, it } from "vitest";
@@ -457,10 +457,12 @@ interface Report {
   pkgReason: string;
   aperture: {
     fromMain: string[];
-    rebuiltFromMain: string[];
-    rebuiltFromHead: string[];
+    builtBase: string[];
+    builtHead: string[];
     rootWorkspaceDeps: string[];
     rootHeldAtHead: string[];
+    rootIgnoredDiffering: string[];
+    headFromWorkingTree: boolean;
   };
   head: Record<string, unknown>;
   baseObs: Record<string, unknown>;
@@ -489,9 +491,10 @@ function mobileArgs(fx: Fixture, out: string, fromMain = "packages/proto"): stri
 const fxEnv = (extra: Record<string, string> = {}) => cleanEnv(process.env, extra);
 
 /**
- * The rest of the fixture runs only with MOTEBIT_DIFFERENTIAL_FIXTURE=1
- * (`pnpm test:differential`), so every pre-push `pnpm test:gates` pays only
- * for the units, the decoy safety test and one behavioural case. Run
+ * The slower fixture cases run only with MOTEBIT_DIFFERENTIAL_FIXTURE=1
+ * (`pnpm test:differential`), so every pre-push `pnpm test:gates` pays only for
+ * the units, the new-package refusal and the decoy test (which also asserts the
+ * bundle + root-hoisted DIFF over stale working-tree dists). Run
  * `pnpm test:differential` when reviewing a change to the differential tooling.
  */
 const FIXTURE = process.env.MOTEBIT_DIFFERENTIAL_FIXTURE === "1";
@@ -505,23 +508,96 @@ describe("differential-vs-main behaviour (fixture)", () => {
   }, 60_000);
   afterAll(() => rmSync(fx.jail, { recursive: true, force: true }));
 
-  it("a change reachable only through a bundle, and only through a root-hoisted package, reads DIFF", () => {
-    const out = join(fx.jail, "mobile.json");
-    const r = runScript(fx.root, mobileArgs(fx, out), fxEnv({ FX_MODE: "mobile" }));
-    expect(r.status, show(r)).toBe(0);
-    const rep = JSON.parse(readFileSync(out, "utf-8")) as Report;
-    expect(rep.head).toEqual({ throughBundle: "head", throughRootHoisted: "head" });
-    // The aperture says proto came from main; the probe must SEE main's proto both ways.
-    expect(rep.baseObs).toEqual({ throughBundle: "main", throughRootHoisted: "main" });
-    expect(rep.aperture.fromMain).toEqual(["apps/mobile", "packages/proto"]);
-    expect(rep.aperture.rebuiltFromMain).toEqual(["packages/proto"]);
-    expect([...rep.aperture.rebuiltFromHead].sort()).toEqual([
-      "packages/bundler",
-      "packages/hoisted",
-    ]);
-    expect(rep.aperture.rootHeldAtHead).toEqual([]);
-    expect(r.stdout).not.toMatch(/reach a [0-9a-f]/);
-  }, 120_000);
+  it("a probe package that is new on this branch refuses: nothing on the base to compare", () => {
+    const d = join(fx.root, "apps", "newhost");
+    write(join(d, "package.json"), json({ name: "@fx/newhost", type: "module" }));
+    write(join(d, "src", "__tests__", ".gitkeep"), "");
+    try {
+      const r = runScript(
+        fx.root,
+        [
+          "--probe",
+          join(fx.jail, "fixture.probe.ts"),
+          "--pkg",
+          "apps/newhost",
+          "--base",
+          fx.mainSha,
+          "--out",
+          join(fx.jail, "newhost.json"),
+        ],
+        fxEnv(),
+      );
+      expect(r.status, show(r)).toBe(1);
+      expect(r.stderr).toContain("apps/newhost is new on this branch");
+      expect(existsSync(join(fx.jail, "newhost.json"))).toBe(false);
+    } finally {
+      rmSync(d, { recursive: true, force: true });
+    }
+  }, 60_000);
+
+  it.skipIf(!FIXTURE)(
+    "stale working-tree dists are never read: the transitive bundle and the root-hoisted package both read DIFF",
+    () => {
+      plantStaleDists(fx);
+      const out = join(fx.jail, "mobile.json");
+      const r = runScript(fx.root, mobileArgs(fx, out), fxEnv({ FX_MODE: "mobile" }));
+      expect(r.status, show(r)).toBe(0);
+      const rep = JSON.parse(readFileSync(out, "utf-8")) as Report;
+      expect(rep.head).toEqual({ throughBundle: "head", throughRootHoisted: "head" });
+      expect(rep.baseObs).toEqual({ throughBundle: "main", throughRootHoisted: "main" });
+      expect(rep.aperture.builtBase).toEqual([
+        "packages/proto",
+        "packages/hoisted",
+        "packages/bundler",
+      ]);
+      expect(rep.aperture.builtHead).toEqual(rep.aperture.builtBase);
+      expect(r.stdout).not.toMatch(/reach a [0-9a-f]/);
+    },
+    120_000,
+  );
+
+  it.skipIf(!FIXTURE)(
+    "--head-from-working-tree reads the working tree's own builds, and says they are not freshness-checked",
+    () => {
+      plantStaleDists(fx);
+      const out = join(fx.jail, "fast.json");
+      const r = runScript(
+        fx.root,
+        [...mobileArgs(fx, out), "--head-from-working-tree"],
+        fxEnv({ FX_MODE: "mobile" }),
+      );
+      expect(r.status, show(r)).toBe(0);
+      const rep = JSON.parse(readFileSync(out, "utf-8")) as Report;
+      expect(rep.head.throughBundle).toBe("stale-working-tree-bundle");
+      expect(rep.baseObs).toEqual({ throughBundle: "main", throughRootHoisted: "main" });
+      expect(rep.aperture.headFromWorkingTree).toBe(true);
+      expect(r.stdout).toContain("NOT freshness-checked");
+    },
+    120_000,
+  );
+
+  it.skipIf(!FIXTURE)(
+    "a changed build input outside src/ (build.mjs) reads DIFF, with no refusal and no rebuild by hand",
+    () => {
+      const file = join(fx.root, "packages", "bundler", "build.mjs");
+      write(file, BUNDLER_BUILD.replace("JSON.stringify(VALUE)", 'JSON.stringify("v2:" + VALUE)'));
+      try {
+        const out = join(fx.jail, "outside-src.json");
+        const r = runScript(
+          fx.root,
+          mobileArgs(fx, out, "packages/bundler"),
+          fxEnv({ FX_MODE: "mobile" }),
+        );
+        expect(r.status, show(r)).toBe(0);
+        const rep = JSON.parse(readFileSync(out, "utf-8")) as Report;
+        expect(rep.head.throughBundle).toBe("v2:head");
+        expect(rep.baseObs.throughBundle).toBe("head"); // main's build.mjs over the working tree's proto
+      } finally {
+        write(file, BUNDLER_BUILD);
+      }
+    },
+    120_000,
+  );
 
   it.skipIf(!FIXTURE)(
     "a probe outside the workspace with no --pkg runs in services/relay, and says so",
@@ -552,19 +628,34 @@ describe("differential-vs-main behaviour (fixture)", () => {
   );
 
   it.skipIf(!FIXTURE)(
-    "a root file builds read (tsconfig.base.json) differing from main refuses; --root-from-head says it is not differentialled",
+    "a build-affecting root file (tsconfig.base.json) differing refuses; prose (docs/**, .changeset/*.md) does not; --root-from-head holds it",
     () => {
-      const file = join(fx.root, "tsconfig.base.json");
-      write(
-        file,
-        TSCONFIG_BASE.replace('"strict": true', '"strict": true,\n    "removeComments": true'),
-      );
+      const tsconfig = join(fx.root, "tsconfig.base.json");
+      const notes = join(fx.root, "docs", "notes.md");
+      const changeset = join(fx.root, ".changeset", "brave-owls.md");
+      write(notes, "# notes, edited\n");
+      write(changeset, "---\n---\nA change.\n");
       try {
+        // Prose only: runs, and the aperture names what it ignored.
+        const prose = join(fx.jail, "prose.json");
+        const ok = runScript(fx.root, mobileArgs(fx, prose), fxEnv({ FX_MODE: "mobile" }));
+        expect(ok.status, show(ok)).toBe(0);
+        const rep0 = JSON.parse(readFileSync(prose, "utf-8")) as Report;
+        expect(rep0.aperture.rootIgnoredDiffering).toEqual([
+          ".changeset/brave-owls.md",
+          "docs/notes.md",
+        ]);
+
+        write(
+          tsconfig,
+          TSCONFIG_BASE.replace('"strict": true', '"strict": true,\n    "removeComments": true'),
+        );
         const out = join(fx.jail, "root.json");
         const refused = runScript(fx.root, mobileArgs(fx, out), fxEnv({ FX_MODE: "mobile" }));
         expect(refused.status).toBe(1);
         expect(refused.stderr).toContain("refused");
         expect(refused.stderr).toContain("tsconfig.base.json");
+        expect(refused.stderr).not.toContain("docs/notes.md\n");
         expect(existsSync(out)).toBe(false);
 
         const held = runScript(
@@ -577,94 +668,10 @@ describe("differential-vs-main behaviour (fixture)", () => {
         expect(rep.aperture.rootHeldAtHead).toEqual(["tsconfig.base.json"]);
         expect(held.stdout).toContain("NOT differentialled");
       } finally {
-        write(file, TSCONFIG_BASE);
+        write(tsconfig, TSCONFIG_BASE);
+        write(notes, "# notes\n");
+        rmSync(join(fx.root, ".changeset"), { recursive: true, force: true });
       }
-    },
-    120_000,
-  );
-
-  it.skipIf(!FIXTURE)(
-    "a changed build input outside src/ refuses until rebuilt, then reads DIFF",
-    () => {
-      const file = join(fx.root, "packages", "bundler", "build.mjs");
-      write(file, BUNDLER_BUILD.replace("JSON.stringify(VALUE)", 'JSON.stringify("v2:" + VALUE)'));
-      try {
-        const out = join(fx.jail, "outside-src.json");
-        const args = mobileArgs(fx, out, "packages/bundler");
-        const refused = runScript(fx.root, args, fxEnv({ FX_MODE: "mobile" }));
-        expect(refused.status).toBe(1);
-        expect(refused.stderr).toContain("packages/bundler");
-        const repair = /Fix: (pnpm .*)$/m.exec(refused.stderr)?.[1];
-        expect(repair).toContain("--filter ./packages/bundler");
-        fxRun(fx.jail, fx.root, "sh", ["-c", repair!]);
-
-        const r = runScript(fx.root, args, fxEnv({ FX_MODE: "mobile" }));
-        expect(r.status, show(r)).toBe(0);
-        const rep = JSON.parse(readFileSync(out, "utf-8")) as Report;
-        expect(rep.head.throughBundle).toBe("v2:head");
-        expect(rep.baseObs.throughBundle).toBe("head"); // main's build.mjs, over the working tree's proto
-      } finally {
-        write(file, BUNDLER_BUILD);
-        buildAll(fx);
-      }
-    },
-    180_000,
-  );
-
-  /**
-   * Every build input older than every build (proto built before its
-   * dependents, so they are up to date with it), then proto's source touched
-   * without changing its content. tsc -b re-checks proto, emits NOTHING and
-   * refreshes only proto's tsbuildinfo.
-   */
-  function touchProtoSource(): void {
-    const now = Date.now() / 1000;
-    for (const p of ["proto", "hoisted", "bundler"]) {
-      const d = join(fx.root, "packages", p);
-      setTimes(d, now - 120, (r) => !r.startsWith("dist/") && !r.endsWith(".tsbuildinfo"));
-      const built = p === "proto" ? now - 90 : now - 60;
-      setTimes(d, built, (r) => r.startsWith("dist/") || r.endsWith(".tsbuildinfo"));
-    }
-    const touched = join(fx.root, "packages", "proto", "src", "index.ts");
-    utimesSync(touched, now - 30, now - 30);
-  }
-
-  it.skipIf(!FIXTURE)(
-    "the printed repair clears a staleness refusal in one round",
-    () => {
-      touchProtoSource();
-      const out = join(fx.jail, "repair.json");
-      const refused = runScript(fx.root, mobileArgs(fx, out), fxEnv({ FX_MODE: "mobile" }));
-      expect(refused.status).toBe(1);
-      expect(refused.stderr).toContain("refused");
-      expect(refused.stderr).toContain("packages/proto");
-      const repair = /Fix: (pnpm .*)$/m.exec(refused.stderr)?.[1];
-      expect(repair).toBeDefined();
-      fxRun(fx.jail, fx.root, "sh", ["-c", repair!]);
-
-      const r = runScript(fx.root, mobileArgs(fx, out), fxEnv({ FX_MODE: "mobile" }));
-      expect(r.status, `after \`${repair}\`:\n${show(r)}`).toBe(0);
-    },
-    180_000,
-  );
-
-  it.skipIf(!FIXTURE)(
-    "a dependency re-checked without re-emitting does not make its dependents stale",
-    () => {
-      // The #835 regression: rebuilding ONLY proto refreshes its tsbuildinfo, not
-      // its output; hoisted consumes that output, which did not change, and
-      // tsc -b will never touch hoisted for it. A check against proto's
-      // tsbuildinfo would refuse forever; the check reads proto's emitted output.
-      touchProtoSource();
-      fxRun(
-        fx.jail,
-        join(fx.root, "packages", "proto"),
-        join(fx.root, "node_modules", ".bin", "tsc"),
-        ["-b"],
-      );
-      const out = join(fx.jail, "recheck.json");
-      const r = runScript(fx.root, mobileArgs(fx, out), fxEnv({ FX_MODE: "mobile" }));
-      expect(r.status, show(r)).toBe(0);
     },
     180_000,
   );
@@ -672,21 +679,23 @@ describe("differential-vs-main behaviour (fixture)", () => {
 
 // ── Decoy: the fixture and the script must never touch a repository they did not create ──
 
-function snapshotRepo(gitDir: string): string {
+/** Every file of the decoy — its work tree and ALL of .git, objects included. */
+function snapshotDir(dir: string): string {
   const files: Record<string, string> = {};
-  const add = (rel: string) => {
-    const p = join(gitDir, rel);
-    if (!existsSync(p)) return;
-    if (lstatSync(p).isDirectory()) {
-      for (const e of readdirSync(p)) add(`${rel}/${e}`);
-    } else files[rel] = readFileSync(p).toString("base64");
+  const walk = (rel: string) => {
+    const p = rel === "" ? dir : join(dir, rel);
+    const st = lstatSync(p);
+    if (st.isDirectory()) {
+      for (const e of readdirSync(p).sort()) walk(rel === "" ? e : `${rel}/${e}`);
+    } else if (st.isSymbolicLink()) files[rel] = `link:${readlinkSync(p)}`;
+    else files[rel] = readFileSync(p).toString("base64");
   };
-  for (const rel of ["config", "HEAD", "index", "packed-refs", "refs"]) add(rel);
+  walk("");
   return JSON.stringify(files);
 }
 
 describe("differential-vs-main safety (decoy repository)", () => {
-  it("with GIT_DIR/GIT_WORK_TREE/GIT_INDEX_FILE/… aimed at a decoy, the fixture and the script leave the decoy byte-identical", () => {
+  it("with every GIT_* aimed at a decoy, the fixture and the script leave the decoy byte-identical — and a transitive bundle and a root-hoisted package read DIFF over stale working-tree dists", () => {
     const decoyJail = realpathSync(mkdtempSync(join(tmpdir(), "diff-decoy-")));
     const fxJail = realpathSync(mkdtempSync(join(tmpdir(), "diff-decoy-fixture-")));
     try {
@@ -700,9 +709,9 @@ describe("differential-vs-main safety (decoy repository)", () => {
       dg("add", "-A");
       dg("commit", "-q", "-m", "decoy");
       const gitDir = join(decoy, ".git");
-      const before = snapshotRepo(gitDir);
+      const before = snapshotDir(decoy);
 
-      // What a pre-push hook in a linked worktree exports.
+      // What a pre-push hook in a linked worktree exports, and more.
       const hostile: NodeJS.ProcessEnv = {
         ...process.env,
         GIT_DIR: gitDir,
@@ -717,16 +726,18 @@ describe("differential-vs-main safety (decoy repository)", () => {
       const out = join(fxJail, "decoy.json");
       try {
         fx = buildFixture(fxJail, hostile);
+        plantStaleDists(fx);
         writeFileSync(join(fxJail, "fixture.probe.ts"), FIXTURE_PROBE);
         r = runScript(fx.root, mobileArgs(fx, out), { ...hostile, FX_MODE: "mobile" });
       } catch (err) {
         failure = err;
       }
-      // First and whatever happened above: the decoy is byte-identical.
-      expect(snapshotRepo(gitDir)).toBe(before);
+      // First, whatever happened above: every byte of the decoy is unchanged.
+      expect(snapshotDir(decoy)).toBe(before);
       if (failure != null) throw failure;
       expect(r!.status, show(r!)).toBe(0);
       const rep = JSON.parse(readFileSync(out, "utf-8")) as Report;
+      expect(rep.head).toEqual({ throughBundle: "head", throughRootHoisted: "head" });
       expect(rep.baseObs).toEqual({ throughBundle: "main", throughRootHoisted: "main" });
       // The fixture's history went to the fixture's own repository.
       expect(fxGit(fxJail, fx!.root, ["rev-list", "--count", "HEAD"]).trim()).toBe("2");
@@ -849,7 +860,8 @@ describe.skipIf(!SMOKE)(
       const rep = run(["--pkg", "apps/mobile", "--from-main", "packages/protocol"], "mobile");
       expect(rep.head.plantedInCreatureBundle).toBe(false);
       expect(rep.baseObs.plantedInCreatureBundle).toBe(true);
-      expect(rep.aperture.rebuiltFromHead).toContain("packages/render-engine");
+      expect(rep.aperture.builtBase).toContain("packages/render-engine");
+      expect(rep.aperture.builtHead).toContain("packages/render-engine");
     }, 1_200_000);
 
     it("a protocol change seen through root-hoisted semiring from surface-kit reads DIFF", () => {
@@ -859,7 +871,8 @@ describe.skipIf(!SMOKE)(
       );
       expect(rep.head.trustedScoreViaSemiring).toBe(0.9);
       expect(rep.baseObs.trustedScoreViaSemiring).toBe(PLANT_SCORE);
-      expect(rep.aperture.rebuiltFromHead).toContain("packages/semiring");
+      expect(rep.aperture.builtBase).toContain("packages/semiring");
+      expect(rep.aperture.builtHead).toContain("packages/semiring");
     }, 1_200_000);
   },
 );
