@@ -232,7 +232,14 @@ export function registerSyncRoutes(deps: SyncRoutesDeps): void {
     if (overlong) {
       // A non-string id is what the verifier calls `malformed`; refused
       // here first because nothing may reach the write path unchecked.
-      const reason = overlong.code === "ID_TOO_LONG" ? "id_too_long" : "malformed";
+      // An id outside the canonical charset could be a percent-encoded
+      // spelling of another identity's id in a URL path (#853).
+      const reason =
+        overlong.code === "ID_TOO_LONG"
+          ? "id_too_long"
+          : overlong.code === "ID_NOT_CANONICAL"
+            ? "id_not_canonical"
+            : "malformed";
       logger.warn("device.self_register.rejected", {
         reason,
         field: overlong.field,

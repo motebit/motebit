@@ -447,7 +447,9 @@ export function registerMigrationRoutes(deps: MigrationDeps): void {
     // refused before any network fetch or verification is spent on it.
     const overlong = refuseInvalidIds({ motebitId: body.motebit_id });
     if (overlong) {
-      logger.warn("migration.accept.refused_id_too_long", { length: overlong.length });
+      logger.warn(`migration.accept.refused_${overlong.code.toLowerCase()}`, {
+        length: overlong.length,
+      });
       throw new HTTPException(400, { message: overlong.error });
     }
 

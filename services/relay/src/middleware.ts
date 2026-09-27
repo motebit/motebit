@@ -28,6 +28,7 @@ import { requestContext, enrichRequestContext } from "./request-context.js";
 import type { RequestContext } from "./request-context.js";
 import { RelayError, RateLimitError, AuthenticationError, AuthorizationError } from "./errors.js";
 import { recordMasterTokenOnce } from "./auth-events.js";
+import { pathIdentity } from "./id-bounds.js";
 
 const logger = createLogger({ service: "middleware" });
 
@@ -502,11 +503,38 @@ export function registerMiddleware(deps: MiddlewareDeps): MiddlewareResult {
         return;
       }
 
-      // Extract motebitId from URL path (/sync/:motebitId/...)
+      // Extract motebitId from URL path (/sync/:motebitId/...). This reads
+      // the RAW segment; the handlers read Hono's DECODED param. The token
+      // must be verified against the identity the handler acts on, so a
+      // segment the two readers could disagree about is refused (#853: the
+      // raw `%37f3…` verified an attacker's own token while the handler
+      // served the victim `7f3…`).
       const pathParts = new URL(c.req.url, "http://localhost").pathname.split("/");
-      const motebitId = pathParts[2];
-      if (motebitId == null || motebitId === "") {
+      const rawSegment = pathParts[2];
+      if (rawSegment == null || rawSegment === "") {
         throw new HTTPException(400, { message: "Missing motebitId" });
+      }
+      const motebitId = pathIdentity(rawSegment);
+      if (motebitId == null) {
+        const presenter = deps.parseTokenPayloadUnsafe(token)?.mid ?? null;
+        logger.warn("auth.device_token_rejected", {
+          correlationId: c.req.header("x-correlation-id") ?? "none",
+          reason: "path_id_not_literal",
+          expectedAudience: "sync",
+          mid: presenter,
+        });
+        deps.recordAuthEvent?.({
+          kind: "device_token_rejected",
+          method: c.req.method,
+          path: new URL(c.req.url, "http://localhost").pathname,
+          motebitId: presenter,
+          audience: "sync",
+          reason: "path_id_not_literal",
+          correlationId: c.req.header("x-correlation-id") ?? null,
+        });
+        throw new HTTPException(400, {
+          message: "motebitId in the path must be literal — no percent-encoding",
+        });
       }
 
       if (!token.includes(".")) {
@@ -823,6 +851,9 @@ export function registerMiddleware(deps: MiddlewareDeps): MiddlewareResult {
 // registerMiddleware but before route handlers that need dualAuth)
 // ---------------------------------------------------------------------------
 
+/** `POST /agent/:motebitId/task/:taskId/result` — the one POST under `/agent/*\/task` that is not a submission. */
+const TASK_RESULT_PATH = /^\/agent\/[^/]+\/task\/[^/]+\/result$/;
+
 /**
  * `recordAuthEvent` is REQUIRED here (optional on the shared deps type): every
  * door below authenticates, and a door that authenticates without recording
@@ -839,8 +870,12 @@ export function registerAuthMiddleware(
 
   // POST /agent/:motebitId/task — submit a task (master token or signed device token)
   app.use("/agent/*/task", async (c, next) => {
-    // Only apply auth to POST (submit) requests, not to /result sub-routes
-    if (c.req.method === "POST" && !c.req.url.includes("/result")) {
+    // Only apply auth to POST (submit) requests, not to /result sub-routes.
+    // Decided on `c.req.path` — the path the router routes — never on the
+    // raw URL: `c.req.url.includes("/result")` also matched a QUERY string,
+    // so `POST /agent/:id/task?x=/result` reached the submit handler with
+    // no authentication at all (found in the #853 audit).
+    if (c.req.method === "POST" && !TASK_RESULT_PATH.test(c.req.path)) {
       // eslint-disable-next-line @typescript-eslint/no-unsafe-argument -- Hono context type variance
       return dualAuth(c, next, TASK_SUBMIT_AUDIENCE);
     }
