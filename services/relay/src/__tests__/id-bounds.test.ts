@@ -401,4 +401,166 @@ describe("#814 the doors", () => {
     expect(res.status).toBe(400);
     expect(await res.text()).not.toContain("characters; this relay admits");
   });
+
+  // ── #814 round 2: a present id that is not a string ──
+  //
+  // The storage layer binds a one-element array as its text, so a length
+  // check that looked only at strings let `["z"×5000]` through whole.
+
+  const SPELLINGS: [string, unknown][] = [
+    ["array", ["z".repeat(5000)]],
+    ["object", { id: "z" }],
+    ["number", 7],
+    ["boolean", true],
+    ["null", null],
+  ];
+
+  const TABLES = ["identities", "devices", "agent_registry", "relay_push_tokens"];
+  const counts = () =>
+    TABLES.map(
+      (t) => (relay.moteDb.db.prepare(`SELECT COUNT(*) AS n FROM ${t}`).get() as { n: number }).n,
+    );
+
+  /** The request is refused 400 and no table gained a row. */
+  async function refusedWritingNothing(send: () => Response | Promise<Response>): Promise<string> {
+    const before = counts();
+    const res = await send();
+    const text = await res.text();
+    expect(res.status, text).toBe(400);
+    expect(counts()).toEqual(before);
+    return text;
+  }
+
+  for (const [name, value] of SPELLINGS) {
+    it(`bootstrap refuses a ${name} motebit_id or device_id`, async () => {
+      const kp = await generateKeypair();
+      const pk = bytesToHex(kp.publicKey);
+      await refusedWritingNothing(() =>
+        post("/api/v1/agents/bootstrap", { motebit_id: value, device_id: "d", public_key: pk }),
+      );
+      const t = await refusedWritingNothing(() =>
+        post("/api/v1/agents/bootstrap", {
+          motebit_id: crypto.randomUUID(),
+          device_id: value,
+          public_key: pk,
+        }),
+      );
+      expect(t).toContain("device_id must be a string");
+    });
+
+    it(`register-self refuses a ${name} id, device_name or owner_id — validly signed`, async () => {
+      const kp = await generateKeypair();
+      const signed = (fields: Record<string, unknown>) =>
+        signDeviceRegistration(
+          {
+            motebit_id: crypto.randomUUID(),
+            device_id: crypto.randomUUID(),
+            public_key: bytesToHex(kp.publicKey),
+            timestamp: Date.now(),
+            ...fields,
+          } as never,
+          kp.privateKey,
+        );
+      for (const field of ["motebit_id", "device_id"]) {
+        const body = await signed({ [field]: value });
+        await refusedWritingNothing(() => post("/api/v1/devices/register-self", body));
+      }
+      if (value !== null) {
+        // null is "absent" for the optional text fields.
+        for (const field of ["device_name", "owner_id"]) {
+          const body = await signed({ [field]: value });
+          const t = await refusedWritingNothing(() => post("/api/v1/devices/register-self", body));
+          expect(t).toContain(`${field} must be a string`);
+        }
+      }
+    });
+
+    it(`/agents/register refuses a ${name} motebit_id`, async () => {
+      await refusedWritingNothing(() =>
+        post(
+          "/api/v1/agents/register",
+          { motebit_id: value, endpoint_url: "http://127.0.0.1:9/mcp", capabilities: [] },
+          AUTH_HEADER,
+        ),
+      );
+    });
+
+    it(`/device/register refuses a ${name} motebit_id or device_name`, async () => {
+      const kp = await generateKeypair();
+      const mid = crypto.randomUUID();
+      seedHeld(mid, crypto.randomUUID(), kp);
+      // The array spelling wraps a HELD id — the probe that found this.
+      const idValue = Array.isArray(value) ? [mid] : value;
+      await refusedWritingNothing(() =>
+        post("/device/register", { motebit_id: idValue, device_name: "x" }, AUTH_HEADER),
+      );
+      if (value !== null) {
+        const t = await refusedWritingNothing(() =>
+          post("/device/register", { motebit_id: mid, device_name: value }, AUTH_HEADER),
+        );
+        expect(t).toContain("device_name must be a string");
+      }
+    });
+
+    it(`push-token refuses a ${name} device_id or push_token`, async () => {
+      const kp = await generateKeypair();
+      const mid = crypto.randomUUID();
+      const did = crypto.randomUUID();
+      expect((await bootstrap(mid, did, kp)).status).toBe(201);
+      const { token } = await mintAudienceToken({ mid, did, aud: "admin:query" }, kp.privateKey);
+      const auth = { Authorization: `Bearer ${token}` };
+      const t = await refusedWritingNothing(() =>
+        post(
+          "/api/v1/agents/push-token",
+          { device_id: value, push_token: "t", platform: "expo" },
+          auth,
+        ),
+      );
+      // A falsy spelling (null) is refused as missing, which predates the check.
+      if (value !== null) {
+        expect(t).toContain("device_id must be a string");
+        const t2 = await refusedWritingNothing(() =>
+          post(
+            "/api/v1/agents/push-token",
+            { device_id: "d", push_token: value, platform: "expo" },
+            auth,
+          ),
+        );
+        expect(t2).toContain("push_token must be a string");
+      }
+    });
+
+    it(`migration arrival refuses a ${name} motebit_id first`, async () => {
+      const t = await refusedWritingNothing(() => arrive(value as string));
+      expect(t).toContain("motebit_id must be a string");
+    });
+  }
+
+  // ── push-token under the CALLER's id ──
+
+  async function pushAsHeld(mid: string) {
+    const kp = await generateKeypair();
+    const did = crypto.randomUUID();
+    seedHeld(mid, did, kp);
+    const { token } = await mintAudienceToken({ mid, did, aud: "admin:query" }, kp.privateKey);
+    return post(
+      "/api/v1/agents/push-token",
+      { device_id: did, push_token: "t", platform: "expo" },
+      { Authorization: `Bearer ${token}` },
+    );
+  }
+
+  it("push-token admits a caller id at the bound", async () => {
+    expect((await pushAsHeld("m".repeat(MAX_MOTEBIT_ID_LENGTH))).status).toBe(200);
+  });
+
+  it("push-token gives a caller id held past the bound no new row", async () => {
+    const res = await pushAsHeld("m".repeat(300));
+    expect(res.status).toBe(400);
+    expect(await res.text()).toContain("motebit_id is 300 characters");
+    const n = relay.moteDb.db.prepare("SELECT COUNT(*) AS n FROM relay_push_tokens").get() as {
+      n: number;
+    };
+    expect(n.n).toBe(0);
+  });
 });

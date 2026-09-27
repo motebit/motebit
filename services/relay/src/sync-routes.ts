@@ -26,7 +26,7 @@ import {
 import { verifyBySuite } from "@motebit/crypto";
 import { isSuiteId } from "@motebit/protocol";
 import { createLogger } from "./logger.js";
-import { refuseOverlongIds } from "./id-bounds.js";
+import { refuseInvalidIds, refuseNonStringText } from "./id-bounds.js";
 import { refusePublicDeviceRegistration } from "./device-registration-guard.js";
 import type { ConnectedDevice } from "./index.js";
 import { admitKey, proveSovereignFirstKey, recordFirstIdentityKey } from "./identity-keys.js";
@@ -157,9 +157,13 @@ export function registerSyncRoutes(deps: SyncRoutesDeps): void {
     }
     // A new device row under this id (#814): an id already held past the
     // bound gains no new device.
-    const overlong = refuseOverlongIds({ motebitId: body.motebit_id });
+    const overlong = refuseInvalidIds({ motebitId: body.motebit_id });
     if (overlong) {
       throw new HTTPException(400, { message: overlong.error });
+    }
+    const badName = refuseNonStringText("device_name", body.device_name);
+    if (badName !== null) {
+      throw new HTTPException(400, { message: badName });
     }
     if (
       body.public_key !== undefined &&
@@ -224,19 +228,27 @@ export function registerSyncRoutes(deps: SyncRoutesDeps): void {
     // Both ids enter durable state here; one past its bound would make a
     // roster entry the relay can hold and never retire (#814). Refused
     // before the signature is checked: it needs no trust decision.
-    const overlong = refuseOverlongIds({ motebitId: body.motebit_id, deviceId: body.device_id });
+    const overlong = refuseInvalidIds({ motebitId: body.motebit_id, deviceId: body.device_id });
     if (overlong) {
+      // A non-string id is what the verifier calls `malformed`; refused
+      // here first because nothing may reach the write path unchecked.
+      const reason = overlong.code === "ID_TOO_LONG" ? "id_too_long" : "malformed";
       logger.warn("device.self_register.rejected", {
-        reason: "id_too_long",
+        reason,
         field: overlong.field,
         length: overlong.length,
       });
+      return c.json({ error: overlong.error, code: "DEVICE_REGISTRATION_REJECTED", reason }, 400);
+    }
+    // The optional text fields are written beside the ids (the device row's
+    // name, the identity row's owner) — strings or absent, nothing else.
+    const badText =
+      refuseNonStringText("device_name", (body as { device_name?: unknown }).device_name) ??
+      refuseNonStringText("owner_id", (body as { owner_id?: unknown }).owner_id);
+    if (badText !== null) {
+      logger.warn("device.self_register.rejected", { reason: "malformed", detail: badText });
       return c.json(
-        {
-          error: overlong.error,
-          code: "DEVICE_REGISTRATION_REJECTED",
-          reason: "id_too_long",
-        },
+        { error: badText, code: "DEVICE_REGISTRATION_REJECTED", reason: "malformed" },
         400,
       );
     }

@@ -140,7 +140,7 @@ import {
   buildSignedRevocationFeed,
 } from "./agent-revocation.js";
 import { createLogger } from "./logger.js";
-import { refuseOverlongIds } from "./id-bounds.js";
+import { refuseInvalidIds, refuseNonStringText } from "./id-bounds.js";
 
 const logger = createLogger({ service: "agents" });
 
@@ -1031,7 +1031,7 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
     const motebitId = body.motebit_id.trim();
     // Both ids enter durable state here; one past its bound would make a
     // roster entry the relay can hold and never retire (#814).
-    const overlong = refuseOverlongIds({ motebitId, deviceId: body.device_id });
+    const overlong = refuseInvalidIds({ motebitId, deviceId: body.device_id });
     if (overlong) {
       logger.warn("agent.bootstrap.refused_id_too_long", {
         field: overlong.field,
@@ -1183,7 +1183,7 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
       throw new HTTPException(400, { message: "Missing motebit_id" });
     }
     // The id this registration writes a registry row under (#814).
-    const overlongId = refuseOverlongIds({ motebitId });
+    const overlongId = refuseInvalidIds({ motebitId });
     if (overlongId) {
       logger.warn("agent.register.refused_id_too_long", {
         length: overlongId.length,
@@ -2223,9 +2223,19 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
     if (!body.device_id || !body.push_token || !body.platform) {
       throw new HTTPException(400, { message: "device_id, push_token, and platform are required" });
     }
-    const overlongDevice = refuseOverlongIds({ deviceId: body.device_id });
+    // The row is written under the CALLER's id and the body's device id:
+    // both bounded, so an id already held past the bound gains no new row
+    // here either (#814).
+    const overlongDevice = refuseInvalidIds({
+      motebitId: callerMotebitId,
+      deviceId: body.device_id,
+    });
     if (overlongDevice) {
       throw new HTTPException(400, { message: overlongDevice.error });
+    }
+    const badToken = refuseNonStringText("push_token", body.push_token);
+    if (badToken !== null) {
+      throw new HTTPException(400, { message: badToken });
     }
     if (!["fcm", "apns", "expo"].includes(body.platform)) {
       throw new HTTPException(400, { message: "platform must be fcm, apns, or expo" });

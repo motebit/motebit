@@ -24,8 +24,9 @@
  *
  * Existing rows are not touched. An id already held past the bound keeps
  * its rows and keeps authenticating; every door in the inventory that
- * would write under it again refuses, so it gains no new device or
- * registration. The roster ingest is NOT one of these doors: it takes the
+ * would write under it again refuses (push-token included: it bounds the
+ * caller's id, not only the body's), so it gains no new device,
+ * registration or push-token row. The roster ingest is NOT one of these doors: it takes the
  * path id of an identity already held, and a refusal there would also
  * refuse the retirements that identity needs. Such an identity can exist
  * only if an earlier relay admitted it.
@@ -39,27 +40,36 @@ export const MAX_DEVICE_ID_LENGTH = 256;
 
 export interface IdBoundRefusal {
   error: string;
-  code: "ID_TOO_LONG";
+  code: "ID_TOO_LONG" | "ID_NOT_STRING";
   field: "motebit_id" | "device_id";
-  length: number;
+  /** Length in UTF-16 code units; absent when the value is not a string. */
+  length?: number;
   limit: number;
 }
 
 /**
- * The one check every writing door runs. A non-string or absent value is
- * not this function's concern (each door already refuses a missing id in
- * its own words); a string past its bound is refused.
+ * The one check every writing door runs, before any write. `undefined`
+ * means the caller did not supply the field (JSON has no `undefined`), and
+ * each door refuses a MISSING id in its own words. Any value that IS
+ * present must be a string: an array, object, number, boolean or `null` is
+ * refused. The storage layer binds a one-element array as its text, so
+ * `["z"x5000]` reached a device row whole, past a length check that looked
+ * only at strings (#814 round 2). A string past its bound is refused.
  */
-export function refuseOverlongIds(ids: {
+export function refuseInvalidIds(ids: {
   motebitId?: unknown;
   deviceId?: unknown;
 }): IdBoundRefusal | null {
-  const over = (
+  const check = (
     field: IdBoundRefusal["field"],
     value: unknown,
     limit: number,
-  ): IdBoundRefusal | null =>
-    typeof value === "string" && value.length > limit
+  ): IdBoundRefusal | null => {
+    if (value === undefined) return null;
+    if (typeof value !== "string") {
+      return { error: `${field} must be a string`, code: "ID_NOT_STRING", field, limit };
+    }
+    return value.length > limit
       ? {
           error: `${field} is ${value.length} characters; this relay admits at most ${limit}`,
           code: "ID_TOO_LONG",
@@ -68,8 +78,20 @@ export function refuseOverlongIds(ids: {
           limit,
         }
       : null;
+  };
   return (
-    over("motebit_id", ids.motebitId, MAX_MOTEBIT_ID_LENGTH) ??
-    over("device_id", ids.deviceId, MAX_DEVICE_ID_LENGTH)
+    check("motebit_id", ids.motebitId, MAX_MOTEBIT_ID_LENGTH) ??
+    check("device_id", ids.deviceId, MAX_DEVICE_ID_LENGTH)
   );
+}
+
+/**
+ * An optional free-text field a door writes beside an id (`device_name`,
+ * `owner_id`, `push_token`): absent (`undefined` or `null`) is allowed, any
+ * other non-string is refused, for the same reason as above.
+ */
+export function refuseNonStringText(field: string, value: unknown): string | null {
+  return value === undefined || value === null || typeof value === "string"
+    ? null
+    : `${field} must be a string`;
 }

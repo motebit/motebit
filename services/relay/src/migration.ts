@@ -43,7 +43,7 @@ import {
 } from "@motebit/wire-schemas";
 import { admitKey, recordIdentityKey, verificationKeyFor } from "./identity-keys.js";
 import { liftRevocation } from "./identity-revocation.js";
-import { refuseOverlongIds } from "./id-bounds.js";
+import { refuseInvalidIds } from "./id-bounds.js";
 import type { CloseIdentityConnections, ReconcileKeyConnections } from "./connection-ports.js";
 
 const logger = createLogger({ service: "relay", module: "migration" });
@@ -445,7 +445,7 @@ export function registerMigrationRoutes(deps: MigrationDeps): void {
 
     // The id arrival writes a registry row and a key record under (#814) —
     // refused before any network fetch or verification is spent on it.
-    const overlong = refuseOverlongIds({ motebitId: body.motebit_id });
+    const overlong = refuseInvalidIds({ motebitId: body.motebit_id });
     if (overlong) {
       logger.warn("migration.accept.refused_id_too_long", { length: overlong.length });
       throw new HTTPException(400, { message: overlong.error });
