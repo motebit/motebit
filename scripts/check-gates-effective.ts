@@ -2673,6 +2673,23 @@ export async function probeFetch(): Promise<unknown> {
         return src.replace(anchor, `${anchor}\n    apiToken: process.env["MOTEBIT_API_TOKEN"],`);
       }),
   },
+  {
+    script: "check-mobile-expo-alignment",
+    proves:
+      "flags an apps/mobile dependency the lockfile resolves off the Expo SDK line — the #844 shape (react-native 0.87.0 under SDK 55). Perturbs by PREDICATE: bumps the minor of whatever react-native version the `apps/mobile` importer in pnpm-lock.yaml resolves (the SDK names react-native exactly, so any other minor is off-line), never a literal version. Throws if the importer or its react-native entry is missing.",
+    perturb: () =>
+      mutateFile("pnpm-lock.yaml", (src) => {
+        const re =
+          /(\n  apps\/mobile:\n(?:(?!\n  \S)[\s\S])*?\n      react-native:\n        specifier: [^\n]*\n        version: )(\d+)\.(\d+)\.(\d+)/;
+        const m = re.exec(src);
+        if (m == null) {
+          throw new Error(
+            "probe vacuous: pnpm-lock.yaml has no apps/mobile importer resolving react-native — retarget the probe",
+          );
+        }
+        return src.replace(re, `$1$2.${Number(m[3]) + 1}.$4`);
+      }),
+  },
 ];
 
 /**
