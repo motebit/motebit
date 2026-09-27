@@ -297,9 +297,19 @@ export function attachRuntime(
         // machine sent it. Attribution arrives with the broadcast
         // (issue #681), and this call gains that argument then — which
         // is the point at which the harness can assert who answered and
-        // who stayed silent.
+        // who stayed silent. The motebit and the declared device it arrived
+        // from are already required: the relay settles a request only from
+        // the motebit it was sent to and the delivered peer's stable
+        // identity (#691 item 6), as its socket handler passes them.
         try {
-          handleCommandResponse(msg.id, msg.result);
+          handleCommandResponse(msg.id, msg.result, {
+            motebitId: deps.motebitId,
+            // What the relay's socket handler passes: the DECLARED id (none
+            // for an undeclared peer) and no token `did` (the harness
+            // authenticates nothing).
+            declaredDeviceId: (opts.deviceIdDeclared ?? true) ? opts.deviceId : null,
+            authenticatedDid: null,
+          });
         } catch (err) {
           // Never swallowed. A reply that cannot be delivered is the
           // harness being broken, not the subject.
