@@ -4,7 +4,7 @@
 
 import type { Hono } from "hono";
 import { HTTPException } from "hono/http-exception";
-import type { MotebitDatabase } from "@motebit/persistence";
+import type { DatabaseDriver, MotebitDatabase } from "@motebit/persistence";
 import type { KeySuccessionRecord } from "@motebit/encryption";
 import {
   verifyKeySuccession,
@@ -29,6 +29,36 @@ import type { AuthEvent } from "./auth-events.js";
 import type { CloseIdentityConnections, CloseTokenConnections } from "./connection-ports.js";
 import { admitKey, identityGuardianFor, identityKey, verificationKeyFor } from "./identity-keys.js";
 import { isKnownIdentity, recordIdentityRevocation } from "./identity-revocation.js";
+import { bindCaller, type BoundIdentity } from "./identity-binding.js";
+
+/**
+ * File an approval request under its owner. `owner` is a `BoundIdentity`:
+ * the route proved the caller is that identity or the operator (#846).
+ */
+function insertApproval(
+  db: DatabaseDriver,
+  owner: BoundIdentity,
+  a: {
+    approvalId: string;
+    toolName: string;
+    argsHash: string;
+    quorumRequired: number;
+    quorumApprovers: string;
+    quorumHash: string;
+  },
+): void {
+  db.prepare(
+    "INSERT INTO relay_approval_metadata (approval_id, motebit_id, tool_name, args_hash, quorum_required, quorum_approvers, quorum_hash) VALUES (?, ?, ?, ?, ?, ?, ?)",
+  ).run(
+    a.approvalId,
+    owner,
+    a.toolName,
+    a.argsHash,
+    a.quorumRequired,
+    a.quorumApprovers,
+    a.quorumHash,
+  );
+}
 
 const logger = createLogger({ service: "key-rotation" });
 
@@ -514,6 +544,15 @@ export function registerKeyRotationRoutes(deps: KeyRotationDeps): void {
   /** @spec motebit/identity@1.0 */
   app.post("/api/v1/agents/:motebitId/approvals", async (c) => {
     const motebitId = c.req.param("motebitId");
+    // An approval request is filed under the identity whose tool call it
+    // gates, so only that identity (or the operator) may file one (#846).
+    // The route read the token's `mid` and never compared it to the path:
+    // A's token filed approvals — with A's own quorum — under B.
+    const owner = bindCaller(c, motebitId, {
+      recordAuthEvent,
+      reason: "approval:create",
+      audience: "admin:query",
+    });
     const body = await c.req.json<{
       approval_id: string;
       tool_name: string;
@@ -566,19 +605,14 @@ export function registerKeyRotationRoutes(deps: KeyRotationDeps): void {
     }
 
     const qHash = await computeQuorumHash(quorumRequired, body.quorum_approvers ?? []);
-    moteDb.db
-      .prepare(
-        "INSERT INTO relay_approval_metadata (approval_id, motebit_id, tool_name, args_hash, quorum_required, quorum_approvers, quorum_hash) VALUES (?, ?, ?, ?, ?, ?, ?)",
-      )
-      .run(
-        body.approval_id,
-        motebitId,
-        body.tool_name,
-        body.args_hash,
-        quorumRequired,
-        quorumApprovers,
-        qHash,
-      );
+    insertApproval(moteDb.db, owner, {
+      approvalId: body.approval_id,
+      toolName: body.tool_name,
+      argsHash: body.args_hash,
+      quorumRequired,
+      quorumApprovers,
+      quorumHash: qHash,
+    });
 
     return c.json({ ok: true, approval_id: body.approval_id, quorum_hash: qHash });
   });

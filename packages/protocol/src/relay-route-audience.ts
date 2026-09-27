@@ -114,6 +114,16 @@ export const RELAY_ROUTE_AUDIENCES: readonly RelayRouteAudience[] = Object.freez
   { method: "GET", path: `${A}/withdrawals`, audience: "account:withdrawals" },
   { method: "POST", path: `${A}/checkout`, audience: "account:checkout" },
 
+  // --- Subscription owner routes (#846): the identity's own billing mutation.
+  // They had no authentication at all; `account:checkout` is the existing
+  // billing-mutation audience every billing panel already mints.
+  { method: "POST", path: "/api/v1/subscriptions/:motebitId/cancel", audience: "account:checkout" },
+  {
+    method: "POST",
+    path: "/api/v1/subscriptions/:motebitId/resubscribe",
+    audience: "account:checkout",
+  },
+
   { method: "GET", path: `${A}/roster`, audience: "device:auth" },
   { method: "POST", path: `${A}/roster`, audience: "device:auth" },
 

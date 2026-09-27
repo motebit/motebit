@@ -25,7 +25,7 @@ import WebSocket from "ws";
 import { generateKeypair, bytesToHex, mintAudienceToken } from "@motebit/crypto";
 import type { SyncRelay } from "../index.js";
 import { API_TOKEN, createTestRelay } from "./test-helpers.js";
-import { FOREIGN_SYNC_ENTRY_REASON, firstForeignSyncEntry } from "../sync-ingest-binding.js";
+import { FOREIGN_SYNC_ENTRY_REASON, firstForeignSyncEntry } from "../identity-binding.js";
 
 let relay: SyncRelay;
 let server: ReturnType<typeof serve>;

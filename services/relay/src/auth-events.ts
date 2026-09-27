@@ -163,6 +163,9 @@ export function createAuthEventSink(
 /** The per-request slot a master-token presentation is marked in. */
 const MASTER_RECORDED = "authEventMasterTokenRecorded" as never;
 
+/** The per-request slot that says the master token authenticated this request. */
+export const OPERATOR_PRESENTED = "authOperatorPresented" as never;
+
 /**
  * Record a master-token presentation at most ONCE per request. Several auth
  * layers can wrap one route (the agent-route middleware and the account
@@ -176,6 +179,12 @@ export function recordMasterTokenOnce(
   record: ((event: AuthEvent) => void) | undefined,
   event: Omit<AuthEvent, "kind">,
 ): void {
+  // Every master-token door passes through here, so this is where the
+  // request is marked as the OPERATOR's (identity-binding.ts reads it): an
+  // unset caller id alone must never read as "operator" (#846 — the
+  // subscription routes had no auth at all, and an unset caller id was
+  // indistinguishable from the master token).
+  c.set(OPERATOR_PRESENTED, true as never);
   if (record == null || c.get(MASTER_RECORDED) === true) return;
   c.set(MASTER_RECORDED, true as never);
   record({ kind: "master_token", ...event });

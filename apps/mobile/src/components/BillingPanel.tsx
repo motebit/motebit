@@ -13,7 +13,8 @@ interface BillingPanelProps {
    * Mints a device token for the audience a relay route verifies. The
    * checkout route verifies `account:checkout` and the balance route
    * `account:balance`; both calls here sent no token and were always
-   * refused (#827).
+   * refused (#827). Subscription cancel/resubscribe verify
+   * `account:checkout` too since #846 (they took no token at all).
    */
   mintToken: (audience: TokenAudience) => Promise<string>;
 }
@@ -127,9 +128,12 @@ export function BillingPanel({
     if (!motebitId || !relayUrl) return;
     setLoading(true);
     try {
+      // Bound to the caller's own identity (`account:checkout`); it took no
+      // token at all before #846.
+      const token = await mintToken("account:checkout");
       const res = await fetch(`${relayUrl}/api/v1/subscriptions/${motebitId}/cancel`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
       });
       if (res.ok) {
         void fetchStatus();
@@ -141,15 +145,18 @@ export function BillingPanel({
     } finally {
       setLoading(false);
     }
-  }, [motebitId, relayUrl, fetchStatus]);
+  }, [motebitId, relayUrl, fetchStatus, mintToken]);
 
   const handleResubscribe = useCallback(async () => {
     if (!motebitId || !relayUrl) return;
     setLoading(true);
     try {
+      // Bound to the caller's own identity (`account:checkout`); it took no
+      // token at all before #846.
+      const token = await mintToken("account:checkout");
       const res = await fetch(`${relayUrl}/api/v1/subscriptions/${motebitId}/resubscribe`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
       });
       if (res.ok) {
         void fetchStatus();
@@ -161,7 +168,7 @@ export function BillingPanel({
     } finally {
       setLoading(false);
     }
-  }, [motebitId, relayUrl, fetchStatus]);
+  }, [motebitId, relayUrl, fetchStatus, mintToken]);
 
   const pollBalance = useCallback(() => {
     if (!motebitId || !relayUrl) return;

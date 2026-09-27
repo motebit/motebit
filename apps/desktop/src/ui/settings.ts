@@ -1180,34 +1180,52 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
             actionsEl.innerHTML =
               '<button id="billing-resubscribe" style="padding:6px 20px;border:1px solid var(--text-heading);border-radius:6px;background:transparent;color:var(--text-heading);cursor:pointer;font-size:13px;font-family:inherit;">Resubscribe</button>';
             document.getElementById("billing-resubscribe")?.addEventListener("click", () => {
-              void fetch(`${syncUrl}/api/v1/subscriptions/${motebitId}/resubscribe`, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-              }).then((res) => {
-                if (res.ok) {
-                  addMessage("system", "Plan resumed");
-                  populateBillingTab();
-                } else if (messageEl) {
-                  messageEl.textContent = "Failed to resume";
-                }
-              });
+              // Bound to the caller's own identity (`account:checkout`); it
+              // took no token at all before #846.
+              void relayBearer(ctx, "account:checkout")
+                .then((bearer) =>
+                  fetch(`${syncUrl}/api/v1/subscriptions/${motebitId}/resubscribe`, {
+                    method: "POST",
+                    headers: {
+                      "Content-Type": "application/json",
+                      ...(bearer ? { Authorization: `Bearer ${bearer}` } : {}),
+                    },
+                  }),
+                )
+                .then((res) => {
+                  if (res.ok) {
+                    addMessage("system", "Plan resumed");
+                    populateBillingTab();
+                  } else if (messageEl) {
+                    messageEl.textContent = "Failed to resume";
+                  }
+                });
             });
           } else {
             actionsEl.innerHTML =
               '<a href="#" id="billing-cancel" style="font-size:11px;color:var(--text-muted);opacity:0.5;text-decoration:none;cursor:pointer;">Cancel plan</a>';
             document.getElementById("billing-cancel")?.addEventListener("click", (e) => {
               e.preventDefault();
-              void fetch(`${syncUrl}/api/v1/subscriptions/${motebitId}/cancel`, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-              }).then((res) => {
-                if (res.ok) {
-                  addMessage("system", "Plan cancelled — credits remain until used");
-                  populateBillingTab();
-                } else if (messageEl) {
-                  messageEl.textContent = "Cancel failed";
-                }
-              });
+              // Bound to the caller's own identity (`account:checkout`); it
+              // took no token at all before #846.
+              void relayBearer(ctx, "account:checkout")
+                .then((bearer) =>
+                  fetch(`${syncUrl}/api/v1/subscriptions/${motebitId}/cancel`, {
+                    method: "POST",
+                    headers: {
+                      "Content-Type": "application/json",
+                      ...(bearer ? { Authorization: `Bearer ${bearer}` } : {}),
+                    },
+                  }),
+                )
+                .then((res) => {
+                  if (res.ok) {
+                    addMessage("system", "Plan cancelled — credits remain until used");
+                    populateBillingTab();
+                  } else if (messageEl) {
+                    messageEl.textContent = "Cancel failed";
+                  }
+                });
             });
           }
         },
