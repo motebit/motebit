@@ -82,6 +82,10 @@ TaskResponse {
 - `task_id` is assigned by the relay and is unique within that relay's namespace.
 - `submitted_by` identifies the delegator for trust tracking and budget allocation.
 - The response must include `task_id` and `status`. All other fields are optional.
+- A relay-mediated submission carries an `Idempotency-Key` (required by the reference relay; missing ⇒ 400). The relay retains a key for a declared retention window (24 hours in the reference relay). Within that window, for a given (`Idempotency-Key`, `motebit_id` of the submission route), at most one task is admitted, and a replay under the same key returns that task's `task_id` and the response the first submission received, including a failure response. After the window the key is free, and a submission under it is a new submission. The key's namespace is that `motebit_id`, shared across the relay's idempotent routes (task submission, ledger, withdrawal), not per route: a client MUST NOT reuse one key across routes, and the result of doing so is undefined (the reference relay may replay another route's response).
+  - A submission that admitted a task and then failed carries the admitted `task_id` in its error body; a same-key replay returns that same error. Examples: the federation forward was rejected or timed out (502), or an internal error occurred after admission. To try again after such a failure, a client uses a new key.
+  - A refusal made before any task was admitted admits nothing and leaves the key free, so a corrected same-key retry is a fresh submission. Such refusals include validation, a settlement gate, insufficient funds, and, for a federated P2P submission, an undiscoverable pinned worker, an unbound settlement address, a missing priced listing, an unresolvable executor treasury, a mismatched proof leg, or an open circuit to the executor relay.
+  - A request under a key whose earlier submission has not recorded its response receives 409. When that submission already admitted a task, the 409 carries its `task_id`. This happens while the submission is still in flight, or if it ended (for example in a relay crash) between admitting the task and recording its response; in the latter case the key answers 409 until the retention window ends, and the client polls the named task.
 
 ## 4. Task Lifecycle
 
@@ -408,6 +412,7 @@ The eight routes below are the binding cross-implementation contract for delegat
 
 ## Change Log
 
+- **1.3 (2026-09-28)** — Normative: task-submission idempotency (§3.3). Within the key's retention window (24 hours in the reference relay), one `Idempotency-Key` admits at most one task, and a replay returns that task's id together with the first submission's response, including a failure response. A submission that fails after admitting a task names the admitted `task_id` in its error body, and so does a 409 for a key whose admitted task has no recorded response. A refusal made before admission frees the key. Previously the reference relay released the key when a submission threw after enqueueing, so a same-key retry could admit a second task (#888).
 - **1.2 (2026-09-13)** — Additive: optional `presenter` on `AgentTask` (§3.1). `"submitter"` asks the relay to admit but not route, so the submitter is the one presenter and always receives `dispatch_token`. Closes the race where a bound sub-delegation was routed by the relay AND presented directly by the submitter (two presentations of one admission). Doctrine: `docs/doctrine/task-admission.md` § "Where it flows".
 - **1.1 (2026-09-12)** — Additive: optional `dispatch_token` on `TaskResponse` (§3.2), returned only when the relay did not dispatch the task itself. Task admission arc (`docs/doctrine/task-admission.md`).
 - **1.0** — Initial.

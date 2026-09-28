@@ -88,7 +88,12 @@ import {
 import type { ConnectedDevice } from "./index.js";
 import { sendToEach } from "./ws-send.js";
 import { routeToSockets } from "./task-presentation.js";
-import { checkIdempotency, completeIdempotency } from "./idempotency.js";
+import {
+  bindIdempotencyClaimToTask,
+  checkIdempotency,
+  completeIdempotency,
+  recordAdmittedOutcome,
+} from "./idempotency.js";
 import { createLogger } from "./logger.js";
 import { pathIdentity } from "./id-bounds.js";
 import type { TaskQueue } from "./task-queue.js";
@@ -374,6 +379,75 @@ export async function refreshDispatchTokenOnReplay(
     reason: claims.exp <= now ? "expired" : "expiring",
   });
   return { ...replayed, dispatch_token: fresh };
+}
+
+/** Context key the submit handler stamps once its admission transaction commits (#888). */
+export const ADMITTED_TASK_KEY = "idempotencyAdmittedTask";
+
+/** The task a submission admitted, and the idempotency claim that names it. */
+export interface AdmittedTask {
+  key: string;
+  motebitId: string;
+  taskId: string;
+}
+
+/**
+ * One Idempotency-Key admits at most one task (#888). Runs after the submit
+ * handler on EVERY exit — the 201, a thrown error rendered by the error
+ * boundary, or any other response — and, when the request admitted a task,
+ * records the response the client is about to receive as the claim's terminal
+ * outcome, with the admitted `task_id` added to it. A same-key replay then
+ * returns that response and that task id; it never finds the key free and
+ * admits a second task.
+ *
+ * It used to be that a submission throwing after enqueue (a federation forward
+ * rejected or timed out, a 402 from the ranking loop, a token mint) released
+ * its claim at the error boundary while its task stayed queued, so a client
+ * whose response was lost and who retried with the same key was admitted a
+ * second task. Recording at this one seam, rather than at each throw point, is
+ * what makes the rule hold for throw points added later. A refusal that needs
+ * no admitted task (funding, the federated-P2P discovery and validation) runs
+ * BEFORE admission instead, so it frees the key for a corrected retry.
+ *
+ * A 201 has already completed its claim in the handler; the write here then
+ * matches nothing and the response is left exactly as it was.
+ */
+export async function recordAdmissionOutcome(
+  db: Parameters<typeof recordAdmittedOutcome>[0],
+  admitted: AdmittedTask,
+  res: Response,
+): Promise<Response> {
+  let body: Record<string, unknown>;
+  try {
+    const parsed: unknown = await res.clone().json();
+    body =
+      parsed != null && typeof parsed === "object" && !Array.isArray(parsed)
+        ? (parsed as Record<string, unknown>)
+        : { error: "Task admission did not complete", status: res.status };
+  } catch {
+    body = { error: "Task admission did not complete", status: res.status };
+  }
+  const outcome = { ...body, task_id: admitted.taskId };
+  const serialized = JSON.stringify(outcome);
+  const recorded = recordAdmittedOutcome(
+    db,
+    admitted.key,
+    admitted.motebitId,
+    admitted.taskId,
+    res.status,
+    serialized,
+  );
+  if (!recorded) return res; // the handler completed its claim (201) — nothing to add
+  logger.warn("task.admitted_then_failed", {
+    correlationId: admitted.taskId,
+    taskId: admitted.taskId,
+    motebitId: admitted.motebitId,
+    status: res.status,
+  });
+  const headers = new Headers(res.headers);
+  headers.delete("content-length");
+  headers.set("content-type", "application/json");
+  return new Response(serialized, { status: res.status, headers });
 }
 
 /**
@@ -2076,6 +2150,30 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
     });
   }
 
+  // --- Admission outcome (#888): one Idempotency-Key, at most one task ---
+  // Registered before the submit route so it wraps the handler: after the
+  // handler returns or throws (Hono renders the throw through onError first),
+  // a request that ADMITTED a task records its response as the key's terminal
+  // outcome. See `recordAdmissionOutcome`.
+  app.use("/agent/:motebitId/task", async (c, next) => {
+    await next();
+    if (c.req.method !== "POST") return;
+    const admitted = c.get(ADMITTED_TASK_KEY as never) as AdmittedTask | undefined;
+    if (admitted == null) return;
+    try {
+      const outcome = await recordAdmissionOutcome(moteDb.db, admitted, c.res);
+      if (outcome !== c.res) c.res = outcome;
+    } catch (err) {
+      // The claim stays bound to its task (never released), so a replay gets
+      // 409 until the 24h sweep — never a second task. Say so loudly.
+      logger.error("task.admission_outcome_unrecorded", {
+        correlationId: admitted.taskId,
+        taskId: admitted.taskId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  });
+
   // --- POST /agent/:motebitId/task — submit a task (master token or signed device token) ---
   /** @spec motebit/delegation@1.0 */
   app.post("/agent/:motebitId/task", async (c) => {
@@ -2102,6 +2200,20 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
       return c.json(replayed, idempCheck.status as 201);
     }
     if (idempCheck.action === "conflict") {
+      if (idempCheck.taskId != null) {
+        // The key already admitted a task whose outcome is not recorded yet
+        // (its request is in flight, or ended before recording it). Name the
+        // task, so a client can poll it instead of waiting out the key (#888).
+        return c.json(
+          {
+            error: "A request with this idempotency key already admitted a task",
+            code: "TASK_CONFLICT",
+            status: 409,
+            task_id: idempCheck.taskId,
+          },
+          409,
+        );
+      }
       throw new TaskError(
         "TASK_CONFLICT",
         "A request with this idempotency key is already being processed",
@@ -2112,7 +2224,10 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
     // error boundary can release it if the handler throws before
     // completeIdempotency — else the key is stranded and an honest
     // same-key retry gets 409 until the 24h sweep (#459). Set only on the
-    // claiming request; a conflict above never reaches this line.
+    // claiming request; a conflict above never reaches this line. The release
+    // reopens the key only while no task is admitted: once the admission
+    // transaction below binds the claim to a task, the claim is kept and the
+    // request's outcome is recorded instead (#888).
     c.set("idempotencyClaim" as never, { key: idempotencyKey, motebitId } as never);
 
     const body = await c.req.json<{
@@ -2606,29 +2721,183 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
       );
     }
 
-    taskQueue.set(taskId, {
-      task,
-      expiresAt: now + TASK_TTL_MS,
-      submitted_by: submittedBy,
-      price_snapshot: priceSnapshot,
-      x402_tx_hash: x402TxHash,
-      x402_network: x402Net,
-      settlement_mode: settlementMode,
-      p2p_payment_proof: p2pPaymentProof,
-      target_agent: body.target_agent,
-      grant_id: body.grant_id,
-    });
+    // === Federated P2P: discover and validate BEFORE admission (#888 r2) ===
+    // A paid delegation to a pinned REMOTE worker is refused here, before any
+    // task exists, when the worker is not discoverable, its settlement address
+    // is not identity-bound, it has no priced listing, the executor relay's
+    // treasury cannot be resolved, any of the three proof legs mismatch, or the
+    // executor relay's circuit is open. A refusal therefore admits nothing:
+    // the error boundary releases the key, and the delegator's corrected
+    // same-key retry (a transient discovery miss, a fixed fee leg) is admitted
+    // — once. Everything the forward needs is captured in `federatedP2pPlan`,
+    // so what is forwarded after admission is exactly what was validated here
+    // (nothing is re-read). Skipped when the submitter presents (no forward).
+    // Doctrine: docs/doctrine/off-ramp-as-user-action.md § federated P2P.
+    let federatedP2pPlan:
+      | {
+          peerEndpoint: string;
+          targetId: string;
+          budgetMicro: number;
+          workerNetMicro: number;
+          aFeeMicro: number;
+          bFeeMicro: number;
+        }
+      | undefined;
+    if (federatedP2pIntent && !submitterPresenter) {
+      const proof = p2pPaymentProof!;
+      const targetId = body.target_agent!;
+      const fedCaps = task.required_capabilities ?? [];
+      // Same exclusion the ranking path applies (exclude_agents + the
+      // submitter itself, #459): a pinned target on that list is not placed.
+      const fedExclude = new Set(
+        Array.isArray(body.exclude_agents)
+          ? body.exclude_agents.filter((a): a is string => typeof a === "string")
+          : [],
+      );
+      if (submittedBy) fedExclude.add(submittedBy);
+      let fc:
+        | {
+            profile: CandidateProfile;
+            _source_relay_endpoint: string;
+            _settlement_address: string | null;
+            _public_key: string | null;
+          }
+        | undefined;
+      try {
+        const fedResult = await taskRouter.fetchFederatedCandidates(fedCaps, callerMotebitId);
+        fc = fedResult.candidates.find(
+          (c) => c.profile.motebit_id === targetId && !fedExclude.has(c.profile.motebit_id),
+        );
+      } catch {
+        // Discovery is best-effort; a miss is the 404 below, which frees the key.
+      }
+      if (fc == null) {
+        throw new HTTPException(404, {
+          message:
+            "Pinned remote worker not discoverable on any active peer — cannot place the paid federated task",
+        });
+      }
+      const peerEndpoint = fc._source_relay_endpoint;
+      const workerAddr = fc._settlement_address;
+      const fedPrice = fc.profile.listing?.pricing.find((p) =>
+        (fedCaps as readonly string[]).includes(p.capability),
+      );
+      if (!workerAddr) {
+        throw new HTTPException(400, {
+          message: "Discovered remote worker has no settlement_address",
+        });
+      }
 
-    logger.info("task.submitted", {
-      correlationId: taskId,
-      taskId,
-      motebitId,
-      capabilities: task.required_capabilities ?? [],
-      invocationOrigin: task.invocation_origin,
-    });
+      // SETTLEMENT-AUTHORITY BINDING at the cross-org boundary. Unlike the
+      // local leg, `workerAddr` here is asserted by a PEER — this relay has no
+      // authed registration proving the worker chose it, so a malicious peer
+      // could redirect the worker's payments. Bind it fail-closed
+      // (docs/doctrine/settlement-authority-binding.md, derived rung): the
+      // peer-forwarded key must (1) sovereign-bind to the worker's motebit_id
+      // — a peer can't forge a key the id commits to — and (2) be the key the
+      // address derives from. Both hold ⇒ the address is the worker's own,
+      // beyond the peer's power to forge. A non-sovereign / rotated / distinct-
+      // wallet worker fails closed here until the signed-bound rung transports
+      // the succession-verified binding (Inc 2/3); prod has no external peers,
+      // so that deferral is latent.
+      const { isDerivedSettlementBinding, deriveSolanaAddress } =
+        await import("@motebit/wallet-solana");
+      const { verifySovereignBinding } = await import("@motebit/crypto");
+      const boundOk =
+        fc._public_key != null &&
+        isDerivedSettlementBinding(workerAddr, fc._public_key) &&
+        (await verifySovereignBinding(targetId, fc._public_key));
+      if (!boundOk) {
+        throw new HTTPException(400, {
+          message:
+            "Remote worker settlement address is not identity-bound (peer-asserted address rejected; no derived+sovereign or signed binding)",
+        });
+      }
+      if (fedPrice == null || fedPrice.unit_cost <= 0) {
+        throw new HTTPException(400, {
+          message: "Remote worker has no priced listing for the requested capability",
+        });
+      }
 
-    // Persist budget allocation so settlement can verify the lock exists.
+      // Fee-from-budget split (spec relay-federation-v1 §7.1): the listed
+      // unit_cost IS the chain budget. A takes 5% of the budget, forwards
+      // the remainder; B takes 5% of that; the worker nets the rest.
+      // $1.00 → A $0.05 / B $0.0475 / worker $0.9025. The canonical
+      // `computeFederatedFeeSplit` (@motebit/protocol) is shared with the
+      // delegator client that builds the proof so the two cannot drift.
+      const budgetMicro = toMicro(fedPrice.unit_cost);
+      const {
+        originFeeMicro: aFeeMicro,
+        executorFeeMicro: bFeeMicro,
+        workerNetMicro,
+      } = computeFederatedFeeSplit(budgetMicro, platformFeeRate);
+
+      // Resolve treasuries: A = our identity-derived Solana address; B = the
+      // hosting peer's relay-identity-derived address (relay_peers.public_key).
+      const aTreasury = deriveSolanaAddress(relayIdentity.publicKey);
+      const peerRow = moteDb.db
+        .prepare("SELECT public_key FROM relay_peers WHERE endpoint_url = ? AND state = 'active'")
+        .get(peerEndpoint) as { public_key: string } | undefined;
+      if (!peerRow?.public_key) {
+        throw new HTTPException(400, {
+          message: "Cannot resolve executor relay treasury (peer public key missing)",
+        });
+      }
+      const bTreasury = deriveSolanaAddress(hexToBytes(peerRow.public_key));
+
+      // Validate all three legs of the delegator's atomic tx against the
+      // resolved addresses + the deterministic fee split. Any mismatch is
+      // a fail-closed reject — the relay forwards only a proof it can stand
+      // behind (and that the executor relay will independently re-verify).
+      const legErr =
+        proof.to_address !== workerAddr
+          ? "worker leg address"
+          : proof.amount_micro !== workerNetMicro
+            ? `worker leg amount (${proof.amount_micro} ≠ ${workerNetMicro})`
+            : proof.fee_to_address !== aTreasury
+              ? "origin-fee leg address"
+              : proof.fee_amount_micro !== aFeeMicro
+                ? `origin-fee leg amount (${proof.fee_amount_micro} ≠ ${aFeeMicro})`
+                : proof.b_fee_to_address !== bTreasury
+                  ? "executor-fee leg address"
+                  : proof.b_fee_amount_micro !== bFeeMicro
+                    ? `executor-fee leg amount (${proof.b_fee_amount_micro} ≠ ${bFeeMicro})`
+                    : null;
+      if (legErr) {
+        throw new HTTPException(400, {
+          message: `Federated P2P payment_proof leg mismatch: ${legErr}`,
+        });
+      }
+      // Conservation: the three legs sum to the budget exactly.
+      if (workerNetMicro + aFeeMicro + bFeeMicro !== budgetMicro) {
+        throw new HTTPException(500, { message: "Fee split does not conserve budget" });
+      }
+      // The circuit is checked here, before admission, so an open circuit
+      // frees the key. It is NOT re-checked after admission: a re-check there
+      // would lock the key on a refusal that made no attempt. If the circuit
+      // opens in the window between this check and the forward, the forward
+      // is attempted anyway and its failure is an honest post-attempt 502.
+      if (!taskRouter.canForward(peerEndpoint)) {
+        throw new HTTPException(503, {
+          message: "Executor relay temporarily unavailable (circuit open) — retry shortly",
+        });
+      }
+      federatedP2pPlan = {
+        peerEndpoint,
+        targetId,
+        budgetMicro,
+        workerNetMicro,
+        aFeeMicro,
+        bFeeMicro,
+      };
+    }
+
+    // Budget allocation, decided BEFORE admission (#888). Everything here can
+    // refuse the task (insufficient funds, a failed deposit), and a refusal
+    // must leave no task behind: the task is enqueued only by the admission
+    // transaction below, which commits the hold's writes in the same step.
     // P2P tasks skip allocation — money already moved onchain.
+    let fundingWrites: (() => void) | undefined;
     if (settlementMode !== "p2p" && priceSnapshot != null && priceSnapshot > 0) {
       // Payment is required BY DEFINITION here: this branch is guarded by
       // `priceSnapshot > 0`, and `priceSnapshot` derives from the listing's
@@ -2732,14 +3001,14 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
 
         if (allocation) {
           // Round to integer micro-units (allocateBudget may produce fractional from risk multiplier)
-          allocation.amount_locked = Math.round(allocation.amount_locked);
-          // Lock the risk-buffered amount
-          moteDb.db.exec("BEGIN");
-          try {
+          const amountLocked = Math.round(allocation.amount_locked);
+          // Lock the risk-buffered amount — committed by the admission
+          // transaction below, atomically with the task it funds.
+          fundingWrites = () => {
             debitSpendableAccount(
               moteDb.db,
               delegatorId,
-              allocation.amount_locked, // Uses risk-buffered amount (rounded to micro-unit)
+              amountLocked, // Uses risk-buffered amount (rounded to micro-unit)
               "allocation_hold",
               `x402-${taskId}`,
               `Hold for task ${taskId} to ${motebitId}`,
@@ -2748,14 +3017,8 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
               .prepare(
                 "INSERT OR IGNORE INTO relay_allocations (allocation_id, task_id, motebit_id, amount_locked, status, created_at) VALUES (?, ?, ?, ?, 'locked', ?)",
               )
-              .run(`x402-${taskId}`, taskId, motebitId, allocation.amount_locked, now);
-            moteDb.db.exec("COMMIT");
-          } catch (holdErr) {
-            moteDb.db.exec("ROLLBACK");
-            throw new AllocationError("ALLOCATION_HOLD_FAILED", "Allocation hold failed", {
-              cause: holdErr,
-            });
-          }
+              .run(`x402-${taskId}`, taskId, motebitId, amountLocked, now);
+          };
         } else if (requiresPayment && !x402TxHash) {
           // Paid agent, no virtual balance, no x402 payment — 402
           throw new InsufficientFundsError(
@@ -2763,12 +3026,15 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
           );
         } else {
           // Either free agent (best-effort allocation) or x402 deposited (balance should be sufficient).
-          // Persist allocation record for settlement audit.
-          moteDb.db
-            .prepare(
-              "INSERT OR IGNORE INTO relay_allocations (allocation_id, task_id, motebit_id, amount_locked, status, created_at) VALUES (?, ?, ?, ?, 'locked', ?)",
-            )
-            .run(`x402-${taskId}`, taskId, motebitId, priceSnapshot, now);
+          // Persist allocation record for settlement audit — committed by the
+          // admission transaction below.
+          fundingWrites = () => {
+            moteDb.db
+              .prepare(
+                "INSERT OR IGNORE INTO relay_allocations (allocation_id, task_id, motebit_id, amount_locked, status, created_at) VALUES (?, ?, ?, ?, 'locked', ?)",
+              )
+              .run(`x402-${taskId}`, taskId, motebitId, priceSnapshot, now);
+          };
         }
       } catch (err) {
         // Re-throw intentional errors (RelayError, HTTPException)
@@ -2790,6 +3056,55 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
         // Free agent — best-effort allocation, don't block task submission
       }
     }
+
+    // === Admission (#888): the ONE step that makes a task exist ===
+    // One transaction: the budget hold (if any), the idempotency claim bound
+    // to this task, and the queued task. All commit or none does, so a key
+    // never names a task that is not queued, and a queued task is never
+    // unnamed by its key. Once committed, the claim is never released
+    // (`releaseIdempotency` leaves a bound claim alone), and whatever response
+    // this request ends with — the 201, or any error thrown below, including
+    // throw points added later — is recorded by the admission-outcome
+    // middleware (`recordAdmissionOutcome`), so a same-key replay returns
+    // this task's id and never admits a second task.
+    moteDb.db.exec("BEGIN");
+    try {
+      fundingWrites?.();
+      bindIdempotencyClaimToTask(moteDb.db, idempotencyKey, motebitId, taskId);
+      taskQueue.set(taskId, {
+        task,
+        expiresAt: now + TASK_TTL_MS,
+        submitted_by: submittedBy,
+        // A federated P2P task's snapshot is the chain budget (A's p2p audit
+        // row reads it in onTaskResultReceived).
+        price_snapshot: federatedP2pPlan?.budgetMicro ?? priceSnapshot,
+        x402_tx_hash: x402TxHash,
+        x402_network: x402Net,
+        settlement_mode: settlementMode,
+        p2p_payment_proof: p2pPaymentProof,
+        target_agent: body.target_agent,
+        grant_id: body.grant_id,
+      });
+      moteDb.db.exec("COMMIT");
+    } catch (admitErr) {
+      moteDb.db.exec("ROLLBACK");
+      if (fundingWrites != null) {
+        throw new AllocationError("ALLOCATION_HOLD_FAILED", "Allocation hold failed", {
+          cause: admitErr,
+        });
+      }
+      throw admitErr;
+    }
+    const admitted: AdmittedTask = { key: idempotencyKey, motebitId, taskId };
+    c.set(ADMITTED_TASK_KEY as never, admitted as never);
+
+    logger.info("task.submitted", {
+      correlationId: taskId,
+      taskId,
+      motebitId,
+      capabilities: task.required_capabilities ?? [],
+      invocationOrigin: task.invocation_origin,
+    });
 
     const requiredCaps = task.required_capabilities ?? [];
     const payload = JSON.stringify({ type: "task_request", task });
@@ -2924,8 +3239,92 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
       }
     }
 
+    // Phase 0b: Federated P2P forward — the plan was discovered and validated
+    // BEFORE admission (above), so the only step left is the forward itself.
+    // Its failure comes after an attempt, and the peer may have accepted, so
+    // it is a post-admission outcome recorded under the key.
+    if (federatedP2pPlan != null) {
+      const { peerEndpoint, targetId, workerNetMicro, aFeeMicro, bFeeMicro } = federatedP2pPlan;
+      const proof = p2pPaymentProof!;
+      federationAttempted = true;
+      routingChoice = {
+        selected_agent: targetId,
+        composite_score: 1,
+        sub_scores: {},
+        routing_paths: [],
+        alternatives_considered: 0,
+      };
+
+      const forwardBody = {
+        task_id: taskId,
+        origin_relay: relayIdentity.relayMotebitId,
+        target_agent: targetId,
+        task_payload: {
+          prompt: body.prompt,
+          required_capabilities: requiredCaps,
+          submitted_by: submittedBy,
+          wall_clock_ms: body.wall_clock_ms,
+        },
+        // The proof rides the SIGNED forward body — the executor relay
+        // verifies A's signature over canonicalJson(body), so the proof is
+        // integrity-protected peer-to-peer (no separate channel).
+        payment_proof: proof,
+        routing_choice: routingChoice,
+        timestamp: Date.now(),
+      };
+      const forwardBytes = new TextEncoder().encode(canonicalJson(forwardBody));
+      const forwardSig = await sign(forwardBytes, relayIdentity.privateKey);
+      try {
+        const resp = await fetch(`${peerEndpoint}/federation/v1/task/forward`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "X-Correlation-ID": taskId },
+          body: JSON.stringify({ ...forwardBody, signature: bytesToHex(forwardSig) }),
+          signal: AbortSignal.timeout(10000),
+        });
+        if (resp.ok) {
+          routed = true;
+          taskRouter.recordPeerForwardResult(peerEndpoint, true);
+          logger.info("task.federated_p2p_forwarded", {
+            correlationId: taskId,
+            peerRelay: peerEndpoint,
+            targetAgent: targetId,
+            workerNetMicro,
+            aFeeMicro,
+            bFeeMicro,
+          });
+        } else {
+          taskRouter.recordPeerForwardResult(peerEndpoint, false);
+          // The task did not settle (no result came back), so no settlement
+          // row exists for this proof — the delegator may resubmit the SAME
+          // payment_proof to retry without re-paying (the replay guard keys
+          // on settled proofs, not attempted ones).
+          throw new HTTPException(502, {
+            message: `Executor relay rejected the forwarded task (HTTP ${resp.status}) — retryable: resubmit the same payment_proof under a new Idempotency-Key (this key replays this answer)`,
+          });
+        }
+      } catch (fwdErr) {
+        if (fwdErr instanceof HTTPException) throw fwdErr;
+        taskRouter.recordPeerForwardResult(peerEndpoint, false);
+        logger.warn("task.federated_p2p_forward_failed", {
+          correlationId: taskId,
+          peerRelay: peerEndpoint,
+          targetAgent: targetId,
+          error: fwdErr instanceof Error ? fwdErr.message : String(fwdErr),
+        });
+        throw new HTTPException(502, {
+          message:
+            "Failed to forward federated P2P task to the executor relay — retryable: resubmit the same payment_proof under a new Idempotency-Key (this key replays this answer)",
+        });
+      }
+    }
+
     // Phase 1: Scored routing — find best service agents from listings
-    if (!submitterPresenter && !pinnedLocalHandled && requiredCaps.length > 0) {
+    if (
+      !submitterPresenter &&
+      !pinnedLocalHandled &&
+      !federatedP2pIntent &&
+      requiredCaps.length > 0
+    ) {
       try {
         const { profiles, requirements } = taskRouter.buildCandidateProfiles(
           requiredCaps[0],
@@ -3006,207 +3405,7 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
           .map((fc) => fc.profile);
         const allProfiles = [...eligibleProfiles, ...federatedProfiles];
 
-        if (federatedP2pIntent) {
-          // ── Cross-operator federated P2P: forward directly to the pinned
-          // remote worker WITH the delegator's 3-leg proof. No ranking — the
-          // delegator already discovered + paid this worker onchain. The relay
-          // validates the three legs against the discovered worker address +
-          // both operator treasuries, then forwards. It NEVER transmits funds
-          // cross-operator; the delegator paid all legs in one atomic tx.
-          // Doctrine: docs/doctrine/off-ramp-as-user-action.md § federated P2P.
-          const proof = p2pPaymentProof!;
-          const targetId = body.target_agent!;
-          const fc = federatedCandidates.find((c) => c.profile.motebit_id === targetId);
-          if (fc == null || !remoteAgentRelay.has(targetId)) {
-            throw new HTTPException(404, {
-              message:
-                "Pinned remote worker not discoverable on any active peer — cannot place the paid federated task",
-            });
-          }
-          const peerEndpoint = remoteAgentRelay.get(targetId)!;
-          const workerAddr = fc._settlement_address;
-          const fedPrice = fc.profile.listing?.pricing.find((p) =>
-            (requiredCaps as readonly string[]).includes(p.capability),
-          );
-          if (!workerAddr) {
-            throw new HTTPException(400, {
-              message: "Discovered remote worker has no settlement_address",
-            });
-          }
-
-          // SETTLEMENT-AUTHORITY BINDING at the cross-org boundary. Unlike the
-          // local leg, `workerAddr` here is asserted by a PEER — this relay has no
-          // authed registration proving the worker chose it, so a malicious peer
-          // could redirect the worker's payments. Bind it fail-closed
-          // (docs/doctrine/settlement-authority-binding.md, derived rung): the
-          // peer-forwarded key must (1) sovereign-bind to the worker's motebit_id
-          // — a peer can't forge a key the id commits to — and (2) be the key the
-          // address derives from. Both hold ⇒ the address is the worker's own,
-          // beyond the peer's power to forge. A non-sovereign / rotated / distinct-
-          // wallet worker fails closed here until the signed-bound rung transports
-          // the succession-verified binding (Inc 2/3); prod has no external peers,
-          // so that deferral is latent.
-          const { isDerivedSettlementBinding } = await import("@motebit/wallet-solana");
-          const { verifySovereignBinding } = await import("@motebit/crypto");
-          const boundOk =
-            fc._public_key != null &&
-            isDerivedSettlementBinding(workerAddr, fc._public_key) &&
-            (await verifySovereignBinding(targetId, fc._public_key));
-          if (!boundOk) {
-            throw new HTTPException(400, {
-              message:
-                "Remote worker settlement address is not identity-bound (peer-asserted address rejected; no derived+sovereign or signed binding)",
-            });
-          }
-          if (fedPrice == null || fedPrice.unit_cost <= 0) {
-            throw new HTTPException(400, {
-              message: "Remote worker has no priced listing for the requested capability",
-            });
-          }
-
-          // Fee-from-budget split (spec relay-federation-v1 §7.1): the listed
-          // unit_cost IS the chain budget. A takes 5% of the budget, forwards
-          // the remainder; B takes 5% of that; the worker nets the rest.
-          // $1.00 → A $0.05 / B $0.0475 / worker $0.9025. The canonical
-          // `computeFederatedFeeSplit` (@motebit/protocol) is shared with the
-          // delegator client that builds the proof so the two cannot drift.
-          const budgetMicro = toMicro(fedPrice.unit_cost);
-          const {
-            originFeeMicro: aFeeMicro,
-            executorFeeMicro: bFeeMicro,
-            workerNetMicro,
-          } = computeFederatedFeeSplit(budgetMicro, platformFeeRate);
-
-          // Resolve treasuries: A = our identity-derived Solana address; B = the
-          // hosting peer's relay-identity-derived address (relay_peers.public_key).
-          const { deriveSolanaAddress } = await import("@motebit/wallet-solana");
-          const aTreasury = deriveSolanaAddress(relayIdentity.publicKey);
-          const peerRow = moteDb.db
-            .prepare(
-              "SELECT public_key FROM relay_peers WHERE endpoint_url = ? AND state = 'active'",
-            )
-            .get(peerEndpoint) as { public_key: string } | undefined;
-          if (!peerRow?.public_key) {
-            throw new HTTPException(400, {
-              message: "Cannot resolve executor relay treasury (peer public key missing)",
-            });
-          }
-          const bTreasury = deriveSolanaAddress(hexToBytes(peerRow.public_key));
-
-          // Validate all three legs of the delegator's atomic tx against the
-          // resolved addresses + the deterministic fee split. Any mismatch is
-          // a fail-closed reject — the relay forwards only a proof it can stand
-          // behind (and that the executor relay will independently re-verify).
-          const legErr =
-            proof.to_address !== workerAddr
-              ? "worker leg address"
-              : proof.amount_micro !== workerNetMicro
-                ? `worker leg amount (${proof.amount_micro} ≠ ${workerNetMicro})`
-                : proof.fee_to_address !== aTreasury
-                  ? "origin-fee leg address"
-                  : proof.fee_amount_micro !== aFeeMicro
-                    ? `origin-fee leg amount (${proof.fee_amount_micro} ≠ ${aFeeMicro})`
-                    : proof.b_fee_to_address !== bTreasury
-                      ? "executor-fee leg address"
-                      : proof.b_fee_amount_micro !== bFeeMicro
-                        ? `executor-fee leg amount (${proof.b_fee_amount_micro} ≠ ${bFeeMicro})`
-                        : null;
-          if (legErr) {
-            throw new HTTPException(400, {
-              message: `Federated P2P payment_proof leg mismatch: ${legErr}`,
-            });
-          }
-          // Conservation: the three legs sum to the budget exactly.
-          if (workerNetMicro + aFeeMicro + bFeeMicro !== budgetMicro) {
-            throw new HTTPException(500, { message: "Fee split does not conserve budget" });
-          }
-
-          // Stamp A's price_snapshot (the budget) so onTaskResultReceived has
-          // the amounts for A's p2p audit row. taskQueue is SQLite-backed —
-          // mutate then set() (a get() result alone does not persist).
-          const p2pEntry = taskQueue.get(taskId);
-          if (p2pEntry) {
-            p2pEntry.price_snapshot = budgetMicro;
-            taskQueue.set(taskId, p2pEntry);
-          }
-
-          if (!taskRouter.canForward(peerEndpoint)) {
-            throw new HTTPException(503, {
-              message: "Executor relay temporarily unavailable (circuit open) — retry shortly",
-            });
-          }
-
-          federationAttempted = true;
-          routingChoice = {
-            selected_agent: targetId,
-            composite_score: 1,
-            sub_scores: {},
-            routing_paths: [],
-            alternatives_considered: 0,
-          };
-
-          const forwardBody = {
-            task_id: taskId,
-            origin_relay: relayIdentity.relayMotebitId,
-            target_agent: targetId,
-            task_payload: {
-              prompt: body.prompt,
-              required_capabilities: requiredCaps,
-              submitted_by: submittedBy,
-              wall_clock_ms: body.wall_clock_ms,
-            },
-            // The proof rides the SIGNED forward body — the executor relay
-            // verifies A's signature over canonicalJson(body), so the proof is
-            // integrity-protected peer-to-peer (no separate channel).
-            payment_proof: proof,
-            routing_choice: routingChoice,
-            timestamp: Date.now(),
-          };
-          const forwardBytes = new TextEncoder().encode(canonicalJson(forwardBody));
-          const forwardSig = await sign(forwardBytes, relayIdentity.privateKey);
-          try {
-            const resp = await fetch(`${peerEndpoint}/federation/v1/task/forward`, {
-              method: "POST",
-              headers: { "Content-Type": "application/json", "X-Correlation-ID": taskId },
-              body: JSON.stringify({ ...forwardBody, signature: bytesToHex(forwardSig) }),
-              signal: AbortSignal.timeout(10000),
-            });
-            if (resp.ok) {
-              routed = true;
-              taskRouter.recordPeerForwardResult(peerEndpoint, true);
-              logger.info("task.federated_p2p_forwarded", {
-                correlationId: taskId,
-                peerRelay: peerEndpoint,
-                targetAgent: targetId,
-                workerNetMicro,
-                aFeeMicro,
-                bFeeMicro,
-              });
-            } else {
-              taskRouter.recordPeerForwardResult(peerEndpoint, false);
-              // The task did not settle (no result came back), so no settlement
-              // row exists for this proof — the delegator may resubmit the SAME
-              // payment_proof to retry without re-paying (the replay guard keys
-              // on settled proofs, not attempted ones).
-              throw new HTTPException(502, {
-                message: `Executor relay rejected the forwarded task (HTTP ${resp.status}) — retryable: resubmit the same payment_proof`,
-              });
-            }
-          } catch (fwdErr) {
-            if (fwdErr instanceof HTTPException) throw fwdErr;
-            taskRouter.recordPeerForwardResult(peerEndpoint, false);
-            logger.warn("task.federated_p2p_forward_failed", {
-              correlationId: taskId,
-              peerRelay: peerEndpoint,
-              targetAgent: targetId,
-              error: fwdErr instanceof Error ? fwdErr.message : String(fwdErr),
-            });
-            throw new HTTPException(502, {
-              message:
-                "Failed to forward federated P2P task to the executor relay — retryable: resubmit the same payment_proof",
-            });
-          }
-        } else if (allProfiles.length > 0) {
+        if (allProfiles.length > 0) {
           // Apply gradient-informed precision to routing weights when provided
           const explorationWeight =
             typeof body.exploration_drive === "number"
