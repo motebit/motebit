@@ -2406,7 +2406,7 @@ describe("Federation E2E", () => {
      * of forward attempts.
      */
     function stubForward(
-      onForward: () => Promise<Response>,
+      onForward: (passThrough: () => Promise<Response>) => Promise<Response>,
       onDiscover?: () => Promise<void>,
     ): () => number {
       const routed = globalThis.fetch;
@@ -2415,12 +2415,37 @@ describe("Federation E2E", () => {
         const url = urlOf(input);
         if (url.includes("/federation/v1/task/forward")) {
           forwards++;
-          return onForward();
+          return onForward(() => routed(input, init));
         }
         if (url.includes("/federation/v1/discover") && onDiscover) await onDiscover();
         return routed(input, init);
       });
       return () => forwards;
+    }
+
+    /**
+     * A refusal made BEFORE admission frees the key: the first answer admits
+     * nothing, and the corrected same-key retry is admitted exactly once and
+     * forwarded exactly once (#888 round 2 — main's behaviour for these cases).
+     */
+    async function expectRefusalThenOneTask(
+      url: string,
+      key: string,
+      first: { body: Record<string, unknown>; status: number },
+      retryBody: Record<string, unknown>,
+      forwards: () => number,
+    ): Promise<void> {
+      const prompt = retryBody["prompt"] as string;
+      const res1 = await submitA(url, key, first.body);
+      expect(res1.status, await res1.clone().text()).toBe(first.status);
+      expect(tasksOnA(prompt), "a pre-admission refusal admits nothing").toEqual([]);
+      expect(forwards(), "nothing was forwarded").toBe(0);
+
+      const res2 = await submitA(url, key, retryBody);
+      expect(res2.status, await res2.clone().text()).toBe(201);
+      const { task_id } = (await res2.json()) as { task_id: string };
+      expect(tasksOnA(prompt), "the corrected retry admits exactly one task").toEqual([task_id]);
+      expect(forwards(), "and forwards it exactly once").toBe(1);
     }
 
     /** A paid, sovereign worker on B, an origin delegator on A, and a valid 3-leg proof body. */
@@ -2512,7 +2537,51 @@ describe("Federation E2E", () => {
       expect(forwards()).toBe(1);
     });
 
-    it("the executor relay's circuit opens between discovery and forward (503): one task, replayed", async () => {
+    it("S1: a wrong origin-fee leg (49_999) is refused before admission; the corrected same-key retry admits one task, forwarded once", async () => {
+      const { alice, body } = await paidFederated("cap-888-s1");
+      const forwards = stubForward((passThrough) => passThrough());
+      const prompt = `888 s1 ${crypto.randomUUID()}`;
+      const good = body(prompt);
+      const bad = {
+        ...good,
+        payment_proof: {
+          ...(good["payment_proof"] as Record<string, unknown>),
+          fee_amount_micro: 49_999,
+        },
+      };
+      await expectRefusalThenOneTask(
+        `/agent/${alice}/task`,
+        crypto.randomUUID(),
+        { body: bad, status: 400 },
+        good,
+        forwards,
+      );
+    });
+
+    it("S2: discovery fails once (404) before admission; the same-key retry after it recovers admits one task, forwarded once", async () => {
+      const { alice, body } = await paidFederated("cap-888-s2");
+      let failDiscovery = true;
+      const forwards = stubForward(
+        (passThrough) => passThrough(),
+        () => {
+          if (failDiscovery) {
+            failDiscovery = false;
+            return Promise.reject(new Error("transient discovery failure"));
+          }
+          return Promise.resolve();
+        },
+      );
+      const good = body(`888 s2 ${crypto.randomUUID()}`);
+      await expectRefusalThenOneTask(
+        `/agent/${alice}/task`,
+        crypto.randomUUID(),
+        { body: good, status: 404 },
+        good,
+        forwards,
+      );
+    });
+
+    it("an open circuit toward the executor relay (503) is refused before admission: no task, and the key is not locked to the 503", async () => {
       const { alice, body } = await paidFederated("cap-888-circuit");
       // A free remote worker whose forwards fail, used to trip A's breaker for B.
       const freeBob = await registerAgent(relayB, "bob-888-free", ["cap-888-free"]);
@@ -2549,11 +2618,20 @@ describe("Federation E2E", () => {
             .run(RELAY_B_URL);
         },
       );
-      await expectOneTaskPerKey(
-        `/agent/${alice}/task`,
-        body(`888 circuit ${crypto.randomUUID()}`),
-        503,
-      );
+      const key = crypto.randomUUID();
+      const paid = body(`888 circuit ${crypto.randomUUID()}`);
+      const first = await submitA(`/agent/${alice}/task`, key, paid);
+      expect(first.status, await first.clone().text()).toBe(503);
+      expect(tasksOnA(paid["prompt"] as string), "no task was admitted").toEqual([]);
+      const claim = relayA.moteDb.db
+        .prepare("SELECT 1 FROM relay_idempotency_keys WHERE idempotency_key = ?")
+        .get(key);
+      expect(claim, "the key was released").toBeUndefined();
+      // The same key is evaluated afresh, not replayed: with the circuit still
+      // open, discovery now skips the peer (404) — and still admits nothing.
+      const retry = await submitA(`/agent/${alice}/task`, key, paid);
+      expect(retry.status, await retry.clone().text()).toBe(404);
+      expect(tasksOnA(paid["prompt"] as string)).toEqual([]);
     });
 
     it("the ranking loop refuses a proofless paid federated candidate (402): one task, replayed", async () => {

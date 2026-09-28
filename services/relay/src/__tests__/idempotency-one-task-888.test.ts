@@ -10,10 +10,14 @@
  *   for a given (Idempotency-Key, motebit_id) at most one task is ever
  *   admitted, and a replay returns that task's id.
  *
- * Three mechanisms, each tested here (the federation throw points — 502, 503,
- * timeout, the ranking loop's 402 — are in federation-e2e.test.ts § #888):
- *   1. Funding refusals run BEFORE admission, so they admit nothing and the
- *      key stays free (a same-key retry after funding succeeds).
+ * Three mechanisms, each tested here (the federation cases — the post-attempt
+ * forward 502s and the ranking loop's 402, and the pre-admission refusals S1
+ * wrong fee leg, S2 discovery miss, and circuit-open 503 — are in
+ * federation-e2e.test.ts § #888):
+ *   1. Refusals run BEFORE admission — funding (402, failed deposit) and the
+ *      federated-P2P discovery/binding/listing/treasury/leg/circuit checks —
+ *      so they admit nothing and the key stays free (a corrected same-key
+ *      retry succeeds, as on main).
  *   2. Admission is one transaction: hold + claim bound to the task + queued
  *      task. A failure rolls all of it back.
  *   3. Once admitted, the claim is never released; the admission-outcome
@@ -245,7 +249,7 @@ describe("#888 one Idempotency-Key admits at most one task (submit route)", () =
     expect(claimRow(relay, key, worker)).toMatchObject({ status: "completed", task_id: tasks[0] });
   });
 
-  it("a federated P2P submission refused after admission (pinned remote worker not discoverable, 404) replays the same answer and task id", async () => {
+  it("a federated P2P refusal (pinned remote worker not discoverable, 404) comes before admission: no task, the key is released", async () => {
     const delegator = await newAgent(relay);
     const prompt = `888 fed 404 ${crypto.randomUUID()}`;
     const key = crypto.randomUUID();
@@ -270,14 +274,38 @@ describe("#888 one Idempotency-Key admits at most one task (submit route)", () =
     const first = await submit(delegator, key, body);
     expect(first.status, await first.clone().text()).toBe(404);
     const b1 = (await first.json()) as { task_id?: string };
-    expect(tasksWithPrompt(relay, prompt)).toHaveLength(1);
+    expect(b1.task_id, "a pre-admission refusal names no task").toBeUndefined();
+    expect(tasksWithPrompt(relay, prompt), "a pre-admission refusal admits nothing").toEqual([]);
+    expect(claimRow(relay, key, delegator), "and releases the key").toBeUndefined();
 
+    // The same key is evaluated afresh (still undiscoverable here — the
+    // corrected-retry-succeeds half is federation-e2e § #888 S1/S2).
     const retry = await submit(delegator, key, body);
-    const tasks = tasksWithPrompt(relay, prompt);
-    expect(tasks, "exactly one task under one key").toHaveLength(1);
     expect(retry.status).toBe(404);
-    expect(b1.task_id).toBe(tasks[0]);
-    expect(await retry.json()).toEqual(b1);
+    expect(tasksWithPrompt(relay, prompt)).toEqual([]);
+  });
+
+  it("a replay of a claim that admitted a task but never recorded its outcome (a crash) is a 409 that names the task", async () => {
+    const worker = await newAgent(relay);
+    const key = crypto.randomUUID();
+    // The state a crash between the admission commit and the outcome record leaves.
+    checkIdempotency(relay.moteDb.db, key, worker);
+    bindIdempotencyClaimToTask(relay.moteDb.db, key, worker, "task-admitted-before-crash");
+
+    const replay = await submit(worker, key, { prompt: "888 crash replay" });
+    expect(replay.status).toBe(409);
+    expect(await replay.json()).toMatchObject({
+      code: "TASK_CONFLICT",
+      task_id: "task-admitted-before-crash",
+    });
+    expect(tasksWithPrompt(relay, "888 crash replay"), "no second task").toEqual([]);
+
+    // A claim that admitted nothing yet is still a bare 409.
+    const key2 = crypto.randomUUID();
+    checkIdempotency(relay.moteDb.db, key2, worker);
+    const inFlight = await submit(worker, key2, { prompt: "888 crash replay" });
+    expect(inFlight.status).toBe(409);
+    expect(((await inFlight.json()) as { task_id?: string }).task_id).toBeUndefined();
   });
 
   it("a funding refusal (402) admits nothing: no task is queued, and the same key succeeds once funded — one task, one hold", async () => {

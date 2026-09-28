@@ -41,7 +41,14 @@ export interface IdempotencyRecord {
 export type IdempotencyCheckResult =
   | { action: "proceed" }
   | { action: "replay"; status: number; body: string }
-  | { action: "conflict" };
+  | {
+      action: "conflict";
+      /**
+       * The task this still-processing claim already admitted (#888), when it
+       * has one — so a 409 can name it. Absent while nothing is admitted yet.
+       */
+      taskId?: string;
+    };
 
 /** Create the idempotency keys table. Idempotent. */
 export function createIdempotencyTable(db: DatabaseDriver): void {
@@ -97,13 +104,14 @@ export function checkIdempotency(
   // Row already exists — check its status.
   const existing = db
     .prepare(
-      "SELECT status, response_status, response_body FROM relay_idempotency_keys WHERE idempotency_key = ? AND motebit_id = ?",
+      "SELECT status, response_status, response_body, task_id FROM relay_idempotency_keys WHERE idempotency_key = ? AND motebit_id = ?",
     )
     .get(key, motebitId) as
     | {
         status: string;
         response_status: number | null;
         response_body: string | null;
+        task_id: string | null;
       }
     | undefined;
 
@@ -126,9 +134,13 @@ export function checkIdempotency(
     };
   }
 
-  // Still processing — concurrent request.
-  logger.info("idempotency.conflict", { key, motebitId });
-  return { action: "conflict" };
+  // Still processing — concurrent request. A claim already bound to a task
+  // names it (#888): that is the task this key admitted, whether its request
+  // is still in flight or died between admission and recording its outcome.
+  logger.info("idempotency.conflict", { key, motebitId, taskId: existing.task_id });
+  return existing.task_id != null
+    ? { action: "conflict", taskId: existing.task_id }
+    : { action: "conflict" };
 }
 
 /**
