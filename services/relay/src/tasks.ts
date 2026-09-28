@@ -104,7 +104,12 @@ import {
 } from "./errors.js";
 import { isGrantRevokedBy } from "./delegation-revocations.js";
 import { ON_SHELF, ON_SHELF_PREDICATE } from "./registry-delist.js";
-import { identityGuardianFor, verificationKeyFor } from "./identity-keys.js";
+import {
+  identityGuardianFor,
+  recordRegistryKeyEvidence,
+  registryKeyOf,
+  verificationKeyFor,
+} from "./identity-keys.js";
 import type { ReconcileKeyConnections } from "./connection-ports.js";
 
 const logger = createLogger({ service: "tasks" });
@@ -544,6 +549,18 @@ export async function handleReceiptIngestion(
         moteDb.db
           .prepare("UPDATE agent_registry SET public_key = ? WHERE motebit_id = ?")
           .run(receipt.public_key, receipt.motebit_id);
+        // The heal's key is PROVEN by this request: a signature under it over
+        // a receipt naming this identity verified just above. Record the
+        // registry key's provenance (#875 review round 4) so it is SERVED as
+        // main serves it — serving ≠ binding: no holder is written.
+        if (registryKeyOf(moteDb.db, receipt.motebit_id) === receipt.public_key) {
+          recordRegistryKeyEvidence(moteDb.db, {
+            motebitId: receipt.motebit_id,
+            publicKey: receipt.public_key,
+            evidence: "receipt_signature",
+            now: Date.now(),
+          });
+        }
         logger.info("receipt.public_key_updated", {
           correlationId: taskId,
           motebitId: receipt.motebit_id,

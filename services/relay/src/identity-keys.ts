@@ -227,6 +227,7 @@ export const REGISTRY_KEY_EVIDENCE = [
   "succession",
   "sovereign",
   "operator",
+  "receipt_signature",
 ] as const;
 export type RegistryKeyEvidence = (typeof REGISTRY_KEY_EVIDENCE)[number];
 

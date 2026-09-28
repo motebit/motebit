@@ -330,7 +330,7 @@ A keyless registration writes neither a device row's key nor the caller's own ke
 **The law: a device row is never evidence of the identity's key.** Only three things are: proof carried by the request, the key the bearer's token verified under, and the proven holder. The rule binds every value the relay records, serves or attributes as an identity's key, starting with the registry value and the issuer check on credential revocation. The key the relay SERVES as an identity's comes from one rule, applied in order:
 
 1. the proven holder;
-2. else the registry key, but only when a request PROVED it and the registry still holds exactly that key. Proof here means one of: the bearer's verified key, the holder, a verified `succession`, a verified `key_proof`, a proven sovereign key, or the operator's authority. The relay records that provenance. Serving the key does not bind it: it is not recorded as the holder;
+2. else the registry key, but only when a request PROVED it and the registry still holds exactly that key. Proof here means one of: the bearer's verified key, the holder, a verified `succession`, a verified `key_proof`, a proven sovereign key, a verified receipt signature under that key over a receipt naming the identity, or the operator's authority. The relay records that provenance. Serving the key does not bind it: it is not recorded as the holder;
 3. else, only for an identity that has never rotated (no recorded succession), a key on file that the `motebit_id` is the sovereign commitment to;
 4. else `""`.
 

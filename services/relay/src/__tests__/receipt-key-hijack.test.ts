@@ -147,7 +147,7 @@ describe("receipt ingestion — cross-identity registry-key hijack is refused", 
     expect(registryKey(relay, victim.motebitId)).toBe(victimPubHex);
   });
 
-  it("a paired device's own-key receipt verifies and heals the registry exactly as main — and the paired key is never served (#703 build 4)", async () => {
+  it("a paired device's own-key receipt verifies and heals the registry exactly as main — discovery serves the healed key (proven by its signature), the holder-read bundle never does", async () => {
     const ownerKp = await generateKeypair();
     const pairedKp = await generateKeypair();
     const ownerPubHex = bytesToHex(ownerKp.publicKey);
@@ -231,5 +231,19 @@ describe("receipt ingestion — cross-identity registry-key hijack is refused", 
         ? ((await bundle.json()) as { current_public_key: string }).current_public_key
         : "";
     expect(served).not.toBe(pairedPubHex);
+    // Discovery SERVES the healed registry key, as main does: the heal's
+    // signature proved it, and that provenance is recorded (#875 review round
+    // 4, `receipt_signature`) — served, never bound as the holder.
+    const disc = (await (
+      await relay.app.request(`/api/v1/discover/${owner.motebitId}`)
+    ).json()) as {
+      public_key: string;
+    };
+    expect(disc.public_key).toBe(pairedPubHex);
+    expect(
+      relay.moteDb.db
+        .prepare("SELECT evidence FROM relay_registry_key_evidence WHERE motebit_id = ?")
+        .get(owner.motebitId),
+    ).toEqual({ evidence: "receipt_signature" });
   });
 });

@@ -2051,7 +2051,9 @@ export const relayMigrations: Migration[] = [
       // One row per identity naming the registry key a request PROVED and the
       // evidence that proved it: `bearer` (the key the caller's token verified
       // under), `holder`, `key_proof`, `succession` (a verified link's new
-      // key), `sovereign` (E-sov) or `operator` (E-op / the master token's own
+      // key), `sovereign` (E-sov), `receipt_signature` (the receipt heal: a
+      // signature under the key over a receipt naming the identity) or
+      // `operator` (E-op / the master token's own
       // authority). The served key (`servedIdentityKey`) reads the registry
       // only while it still EQUALS the proven key here — serving ≠ binding: a
       // proven registry key is served, never recorded as the holder (#703
