@@ -49,6 +49,7 @@
  */
 
 import type { MotebitRuntime, StreamChunk } from "@motebit/runtime";
+import { paymentNoticeCopy } from "@motebit/runtime";
 import { PlanStatus } from "@motebit/sdk";
 import type { PlanChunk, PlanEngine, PlanStoreAdapter } from "@motebit/planner";
 import {
@@ -129,6 +130,15 @@ function formatTimeAgo(ms: number): string {
   if (ms < 3_600_000) return `${Math.round(ms / 60_000)}m ago`;
   if (ms < 86_400_000) return `${Math.round(ms / 3_600_000)}h ago`;
   return `${Math.round(ms / 86_400_000)}d ago`;
+}
+
+/**
+ * The outcome summary the owner reads (#885): a money warning from a hire in
+ * the run leads it, so the 500/200-char previews never truncate it away. The
+ * signed response artifact keeps the model's text alone.
+ */
+function ownerSummary(r: { responseText: string; paymentNotice?: string }): string {
+  return r.paymentNotice != null ? `${r.paymentNotice} ${r.responseText}` : r.responseText;
 }
 
 export class GoalScheduler {
@@ -630,7 +640,7 @@ export class GoalScheduler {
           goal.goal_id,
           motebitId,
           now,
-          result.responseText.slice(0, 500),
+          ownerSummary(result).slice(0, 500),
           result.toolCallsMade,
           result.tokensUsed ?? null,
           // Preserve the full artifact bytes per
@@ -655,7 +665,7 @@ export class GoalScheduler {
         goalId: goal.goal_id,
         prompt: goal.prompt,
         status: "completed",
-        summary: result.responseText.slice(0, 200),
+        summary: ownerSummary(result).slice(0, 200),
         error: null,
         planTitle: result.planTitle,
         stepsCompleted: result.stepsCompleted,
@@ -726,6 +736,8 @@ export class GoalScheduler {
     stepsCompleted?: number;
     totalSteps?: number;
     tokensUsed?: number;
+    /** #885: owner-facing money warning(s) from a hire in this run. */
+    paymentNotice?: string;
   }> {
     const runtime = this.deps.getRuntime()!;
     const loopDeps = runtime.getLoopDeps();
@@ -822,6 +834,9 @@ export class GoalScheduler {
     let accumulated = "";
     let toolCallsMade = 0;
     let tokensUsed = 0;
+    // #885: a money warning from a hire in this run — carried on the result
+    // (the outcome summary + onGoalComplete), never into the signed artifact.
+    const notices: string[] = [];
 
     // Phase 3 of the goal-results arc — annotate the resting slab
     // item with goalContext so it's *legible* as the goal's artifact
@@ -838,6 +853,8 @@ export class GoalScheduler {
       }
       if (chunk.type === "text") {
         accumulated += chunk.text;
+      } else if (chunk.type === "payment_notice") {
+        notices.push(paymentNoticeCopy(chunk));
       } else if (chunk.type === "tool_status" && chunk.status === "calling") {
         toolCallsMade++;
         if (toolCallsMade > MAX_TOOL_CALLS_PER_RUN) {
@@ -869,6 +886,7 @@ export class GoalScheduler {
           toolCallsMade,
           responseText: accumulated,
           tokensUsed: tokensUsed > 0 ? tokensUsed : undefined,
+          ...(notices.length > 0 ? { paymentNotice: notices.join(" ") } : {}),
         };
       }
     }
@@ -878,6 +896,7 @@ export class GoalScheduler {
       toolCallsMade,
       responseText: accumulated,
       tokensUsed: tokensUsed > 0 ? tokensUsed : undefined,
+      ...(notices.length > 0 ? { paymentNotice: notices.join(" ") } : {}),
     };
   }
 

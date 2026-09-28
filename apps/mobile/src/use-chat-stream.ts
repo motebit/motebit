@@ -42,6 +42,7 @@
 
 import { useCallback } from "react";
 import type { StreamChunk } from "@motebit/runtime";
+import { ignoreChunk, paymentNoticeCopy } from "@motebit/runtime";
 import { stripTags, stripPartialActionTag } from "@motebit/ai-core";
 import type { ExecutionReceipt } from "@motebit/sdk";
 import type { MobileApp } from "./mobile-app";
@@ -236,6 +237,13 @@ export function useChatStream(deps: UseChatStreamDeps): UseChatStreamResult {
               break;
             }
 
+            case "payment_notice":
+              // #885: a hire's wallet sent another payment, or a payment could
+              // not be recorded — the owner must see it, not only the model.
+              // Chat and the post-approval resume both stream through here.
+              addSystemMessage(paymentNoticeCopy(chunk));
+              break;
+
             case "injection_warning":
               addSystemMessage(`Warning: injection patterns detected in ${chunk.tool_name}`);
               break;
@@ -256,6 +264,11 @@ export function useChatStream(deps: UseChatStreamDeps): UseChatStreamResult {
                     : m,
                 ),
               );
+              break;
+
+            default:
+              // #885: every other chunk is ignorable; a payment_notice is not (compile error).
+              ignoreChunk(chunk);
               break;
           }
         }

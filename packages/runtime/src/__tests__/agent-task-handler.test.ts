@@ -144,6 +144,32 @@ describe("handleAgentTask (direct)", () => {
     keypair = await generateKeypair();
   });
 
+  it("#885: a payment_notice while serving another principal's task is logged loudly", async () => {
+    async function* withNotice(): AsyncGenerator<StreamChunk> {
+      yield {
+        type: "payment_notice",
+        notice: "This hire's wallet ALSO sent another payment (tx sigA, landed)",
+        extra_payments: [{ tx_hash: "sigA", status: "landed" }],
+      };
+      yield* mockStream("done");
+    }
+    const warn = vi.fn();
+    const deps = createMockDeps({
+      logger: { warn },
+      sendMessageStreaming: vi.fn().mockReturnValue(withNotice()),
+    });
+    await getTaskResult(
+      handleAgentTask(deps, createMockTask(), keypair.privateKey, "device-001", keypair.publicKey),
+    );
+    expect(warn).toHaveBeenCalledWith(
+      "delegation.payment_notice",
+      expect.objectContaining({
+        task_id: "task-abc-123",
+        extra_payments: [{ tx_hash: "sigA", status: "landed" }],
+      }),
+    );
+  });
+
   it("produces a signed receipt with correct fields", async () => {
     const deps = createMockDeps();
     const task = createMockTask();

@@ -21,6 +21,7 @@
 // not the AI loop — the same doctrine applies.
 
 import type { MotebitRuntime, StreamChunk } from "@motebit/runtime";
+import { ignoreChunk, paymentNoticeCopy } from "@motebit/runtime";
 
 import {
   archiveReceipt,
@@ -155,9 +156,16 @@ async function drainInvokeStream(
         if (chunk.message) out(dim(`    ${chunk.message}`));
         break;
       }
+      case "payment_notice":
+        // #885: a hire's wallet sent another payment, or a payment could not
+        // be recorded — the owner must see it.
+        out(warn(`  ⚠ ${paymentNoticeCopy(chunk)}`));
+        break;
       default:
         // Other chunk types (tool_status, result, approval_request) don't
-        // apply to the deterministic single-capability path. Ignore.
+        // apply to the deterministic single-capability path. Ignore — but
+        // `ignoreChunk` refuses a payment_notice at compile time (#885).
+        ignoreChunk(chunk);
         break;
     }
   }

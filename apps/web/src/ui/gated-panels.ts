@@ -6,6 +6,8 @@
 // engine. Recurring goals tick in the engine; once goals execute on demand,
 // streaming plan progress inline; results surface through the slab.
 
+import { paymentNoticeCopy } from "@motebit/runtime";
+import { latestPaymentNotice } from "../goal-engine.js";
 import type { WebContext } from "../types";
 import type { WebSyncStatus } from "../web-app";
 import {
@@ -608,6 +610,18 @@ export function initGatedPanels(ctx: WebContext, hooks: GatedPanelsHooks = {}): 
         card.appendChild(receipt);
       }
 
+      // #885: the latest finished fire's money warning — a hire in it sent
+      // another payment, or a payment could not be recorded. Shown on the
+      // collapsed card (glanceable), never folded into the artifact.
+      const latestNotice = latestPaymentNotice(runs, goal.goal_id);
+      if (latestNotice != null) {
+        const warn = document.createElement("div");
+        warn.className = "goal-card-payment-notice";
+        warn.style.color = "var(--status-error-fg)";
+        warn.textContent = latestNotice;
+        card.appendChild(warn);
+      }
+
       // Budget envelope \u2014 axis-native unit is the headline ("12k / 50k
       // tokens"); cost translation would land as additive disclosure
       // when computable, never as the headline (per panel-temporal-
@@ -875,6 +889,17 @@ export function initGatedPanels(ctx: WebContext, hooks: GatedPanelsHooks = {}): 
         const stepsEl = document.getElementById(`goal-steps-${goalId}`);
         if (!stepsEl) return;
         if (chunk != null && typeof chunk === "object" && "type" in chunk) {
+          // #885: a recurring goal's runNow streams runtime chunks here too;
+          // a money warning is rendered live, not dropped by the plan view.
+          if ((chunk as { type: string }).type === "payment_notice") {
+            const el = document.createElement("div");
+            el.className = "goal-step failed";
+            el.textContent = paymentNoticeCopy(
+              chunk as unknown as Parameters<typeof paymentNoticeCopy>[0],
+            );
+            stepsEl.appendChild(el);
+            return;
+          }
           renderPlanChunk(stepsEl, chunk as PlanChunk);
         }
       });

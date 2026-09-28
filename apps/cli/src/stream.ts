@@ -1,6 +1,7 @@
 // --- Streaming consumer and approval flow ---
 
 import type { MotebitRuntime, StreamChunk } from "@motebit/runtime";
+import { ignoreChunk, paymentNoticeCopy } from "@motebit/runtime";
 import { action, meta, warn, dim, prompt as promptColor } from "./colors.js";
 import { writeOutput, writeLine, writeGap, askQuestion } from "./terminal.js";
 import { startStatus, type StatusHandle } from "./statusline.js";
@@ -169,6 +170,13 @@ export async function consumeStream(
           }
           break;
 
+        case "payment_notice":
+          // #885: a hire's wallet sent another payment, or a payment could
+          // not be recorded — the owner must see it, not only the model.
+          stopStatus();
+          writeLine(`  ${warn("⚠")} ${warn(paymentNoticeCopy(chunk))}`);
+          break;
+
         case "injection_warning":
           writeLine(`  ${warn("⚠")} ${warn("suspicious content in " + chunk.tool_name)}`);
           break;
@@ -221,6 +229,10 @@ export async function consumeStream(
           }
           break;
         }
+        default:
+          // #885: every other chunk is ignorable; a payment_notice is not (compile error).
+          ignoreChunk(chunk);
+          break;
       }
     }
   } finally {

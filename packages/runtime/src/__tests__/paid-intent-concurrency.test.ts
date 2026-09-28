@@ -247,9 +247,19 @@ describe("a ledger write never aborts a paid flow (#874 round 2)", () => {
     const r = await p;
     expect(r.ok).toBe(true);
     expect(relay.submits()).toBe(1);
-    const w = warns.find(([m]) => m === "paid_intent_ledger.write_failed");
-    expect(w?.[1]).toMatchObject({ op: "record_in_flight", taskId: "task-1" });
-    expect(String(w?.[1]?.txHash)).toMatch(/^tx-/);
+    // Every write failed and was logged: the broadcast-time record (#885) and
+    // the admission hand-over, each with its handle and the tx.
+    const failed = warns.filter(([m]) => m === "paid_intent_ledger.write_failed").map((w) => w[1]);
+    expect(failed).toContainEqual(
+      expect.objectContaining({
+        op: "record_broadcast",
+        taskId: expect.stringMatching(/^p2p-payment:tx-\d+$/),
+      }),
+    );
+    expect(failed).toContainEqual(
+      expect.objectContaining({ op: "record_in_flight", taskId: "task-1" }),
+    );
+    for (const f of failed) expect(String(f?.txHash)).toMatch(/^tx-/);
   });
 
   it("record throws and the poll fails → the error still carries the settlement (tx + task id)", async () => {

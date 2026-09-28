@@ -25,6 +25,16 @@ export interface SendUsdcResult {
   slot: number;
   /** Whether the network has reached the configured commitment level. */
   confirmed: boolean;
+  /**
+   * True ONLY when every transaction this send broadcast before the returned
+   * `signature` is proven dead on chain — either there was exactly one
+   * broadcast, or each earlier attempt got a decisive, slot-consistent
+   * `expired` verdict (`getSignatureOutcome`) before the re-sign. Absent
+   * means UNKNOWN: an adapter that cannot prove it leaves it unset, and a
+   * caller must then treat an earlier broadcast as possibly landed. A relay
+   * refunds a landed-and-failed send only when this is `true` (#885 / #920).
+   */
+  earlierBroadcastsDead?: boolean;
 }
 
 /**
@@ -40,6 +50,12 @@ export interface SendUsdcBatchItemResult {
   signature: string | null;
   slot: number;
   reason: string | null;
+  /**
+   * `SendUsdcResult.earlierBroadcastsDead` for the transaction that carried
+   * this item. Absent when the item has no transaction outcome (its chunk
+   * threw or was never sent) — unknown, never assumed.
+   */
+  earlierBroadcastsDead?: boolean;
 }
 
 /**
@@ -144,7 +160,66 @@ export type OutgoingTransferLookup =
   | { status: "ambiguous"; signatures: string[] }
   | { status: "rpc_error"; reason: string };
 
+/**
+ * A transaction that has been SIGNED and is about to be broadcast (#885).
+ * A Solana signature is fixed the moment the transaction is signed, so a
+ * payer can record the exact transaction it is about to send before any
+ * money moves — and, if the send throws, ask the chain about THAT
+ * transaction instead of guessing from matching transfers.
+ */
+export interface SignedTransactionRef {
+  /** Base58 transaction signature (the transaction id). */
+  signature: string;
+  /** The block height after which this transaction can never land. */
+  lastValidBlockHeight: number;
+}
+
+/**
+ * Hooks around a broadcast. `beforeBroadcast` runs once per signed
+ * transaction, after signing and BEFORE it is sent; a retry that re-signs
+ * (blockhash expiry) calls it again with the new signature. If it throws,
+ * that transaction is never sent — a payer that cannot record a payment
+ * does not make it.
+ */
+export interface BroadcastHooks {
+  beforeBroadcast?: (tx: SignedTransactionRef) => void | Promise<void>;
+}
+
+/**
+ * What the chain says about ONE signed transaction (#885). READ-ONLY.
+ *
+ *   - `landed` — confirmed at the adapter's commitment and succeeded.
+ *   - `failed` — confirmed, but the transaction errored: it moved nothing.
+ *   - `expired` — not on chain and its blockhash is past
+ *     `lastValidBlockHeight`: it can never land.
+ *   - `pending` — not (yet) confirmed and still able to land; `seen`
+ *     when a node reported it in a block.
+ *   - `rpc_error` — the lookup could not be completed. Never absence.
+ */
+export type SignatureOutcome =
+  | { status: "landed"; slot: number }
+  | { status: "failed" }
+  | { status: "expired" }
+  /**
+   * `seen: true` — a node reported the transaction IN A BLOCK (not yet at
+   * the adapter's commitment). A caller asking again MUST NOT accept a
+   * later `expired` for it: a slot-number comparison cannot tell a lagging
+   * or minority-fork node from the canonical chain, and a transaction some
+   * node has seen may well land (#885 round 5).
+   */
+  | { status: "pending"; seen?: true }
+  | { status: "rpc_error"; reason: string };
+
 export interface SolanaRpcAdapter {
+  /**
+   * `true` ONLY for an adapter whose send paths call `hooks.beforeBroadcast`
+   * for every transaction they sign, before sending it (#885). A payer
+   * infers "nothing was sent" from "no signature was reported" — sound only
+   * for an adapter that declares this. `SolanaWalletRail` exposes
+   * `confirmP2pPayment` only over such an adapter.
+   */
+  readonly honorsBroadcastHooks?: boolean;
+
   /** The wallet's own base58 address (derived from the keypair seed). */
   readonly ownAddress: string;
 
@@ -178,7 +253,7 @@ export interface SolanaRpcAdapter {
    * reads them as proof that nothing was broadcast (#887), so an
    * implementation must never throw either after a broadcast.
    */
-  sendUsdc(args: SendUsdcArgs): Promise<SendUsdcResult>;
+  sendUsdc(args: SendUsdcArgs, hooks?: BroadcastHooks): Promise<SendUsdcResult>;
 
   /**
    * Send USDC to multiple counterparties in as few Solana transactions
@@ -189,7 +264,10 @@ export interface SolanaRpcAdapter {
    * Chunking is internal. Fail-fast: if any chunk fails, subsequent
    * chunks are NOT submitted; their items return ok=false.
    */
-  sendUsdcBatch(items: readonly SendUsdcArgs[]): Promise<SendUsdcBatchItemResult[]>;
+  sendUsdcBatch(
+    items: readonly SendUsdcArgs[],
+    hooks?: BroadcastHooks,
+  ): Promise<SendUsdcBatchItemResult[]>;
 
   /**
    * Fetch a transaction by signature and extract transfer details
@@ -212,6 +290,14 @@ export interface SolanaRpcAdapter {
    * (fail-closed — the caller must never pay again).
    */
   findOutgoingTransfer?(query: OutgoingTransferQuery): Promise<OutgoingTransferLookup>;
+
+  /**
+   * The chain's answer about ONE signed transaction (#885) — the recovery
+   * read a payer runs when a send it recorded by signature threw. Read-only.
+   * Optional: an adapter without it leaves every such failure undecidable
+   * (the payer must not pay again).
+   */
+  getSignatureOutcome?(tx: SignedTransactionRef): Promise<SignatureOutcome>;
 
   /** Whether the RPC endpoint is reachable. Best-effort, no retries. */
   isReachable(): Promise<boolean>;

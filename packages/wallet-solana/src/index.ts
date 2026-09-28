@@ -24,6 +24,8 @@ export {
   type SendResult,
   type ConfirmSendQuery,
   type SendConfirmation,
+  type ConfirmP2pPaymentQuery,
+  type P2pPaymentConfirmation,
   SOLANA_TX_LANDING_HORIZON_MS,
   createSolanaWalletRail,
 } from "./rail.js";
@@ -36,6 +38,9 @@ export {
   type ConfirmedTransferLeg,
   type OutgoingTransferQuery,
   type OutgoingTransferLookup,
+  type BroadcastHooks,
+  type SignedTransactionRef,
+  type SignatureOutcome,
 } from "./adapter.js";
 
 export {

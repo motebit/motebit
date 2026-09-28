@@ -11,6 +11,7 @@ import type { ScheduledGoal } from "@motebit/panels";
 
 import type { GoalRunRecord } from "../goal-engine.js";
 import { createWebGoalsScheduler } from "../goal-scheduler.js";
+import { latestPaymentNotice } from "../goal-engine.js";
 import type { WebApp } from "../web-app.js";
 
 const HOURLY = 3_600_000;
@@ -148,6 +149,34 @@ describe("createWebGoalsScheduler — fire() routing by mode", () => {
     const result = await engine.runNow(goal.goal_id);
     expect(result.outcome).toBe("error");
     if (result.outcome === "error") expect(result.error).toContain("executeGoal blew up");
+  });
+
+  it("#885: a recurring fire's payment_notice rides its own field — the run record — never the artifact", async () => {
+    const app = makeApp({
+      async *sendMessageStreaming() {
+        yield {
+          type: "payment_notice",
+          notice: "This hire's wallet ALSO sent another payment (tx sigAAAAAAAAAAAA, landed)",
+          extra_payments: [{ tx_hash: "sigAAAAAAAAAAAA", status: "landed" }],
+        } as unknown as { type: string };
+        yield { type: "text", text: "the goal's answer" };
+      },
+    });
+    const engine = createWebGoalsScheduler(app as unknown as WebApp);
+    engine.addGoal({ prompt: "hire", mode: "recurring", interval_ms: HOURLY });
+    const goal = engine.getState().goals[0]!;
+    const result = await engine.runNow(goal.goal_id);
+    expect(result.outcome).toBe("fired");
+    if (result.outcome === "fired") {
+      expect(result.paymentNotice).toMatch(/^Your wallet also sent another payment/);
+      expect(result.responseFull).toBe("the goal's answer");
+    }
+    const run = engine.getState().runs.find((r) => r.goal_id === goal.goal_id);
+    expect(run?.payment_notice).toMatch(/^Your wallet also sent another payment/);
+    expect(latestPaymentNotice(engine.getState().runs, goal.goal_id)).toMatch(
+      /^Your wallet also sent another payment/,
+    );
+    expect(engine.getState().goals[0]?.last_response_full).toBe("the goal's answer");
   });
 
   it("recurring mode accumulates text chunks and returns fired", async () => {

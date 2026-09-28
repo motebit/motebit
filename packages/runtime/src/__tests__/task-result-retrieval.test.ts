@@ -593,6 +593,51 @@ describe("result command + paidResultsNotice", () => {
   });
 });
 
+describe("result command — a payment with no confirmed relay task (#885)", () => {
+  it("lists it under a unique short id, answers it without a relay read, and dismisses it", async () => {
+    const store = new InMemoryPaidIntentStore();
+    const ledger = new PaidIntentLedger(store, ME);
+    for (const tx of ["TxAAAAAAAA111", "TxBBBBBBBB222"]) {
+      ledger.recordBroadcast({
+        workerMotebitId: WORKER,
+        capability: "web_search",
+        txHash: tx,
+        paidMicro: 250_000,
+        feeMicro: 13_158,
+        recordedAt: 1,
+      });
+      ledger.recordSettledUnretrieved({
+        workerMotebitId: WORKER,
+        capability: "web_search",
+        taskId: `p2p-payment:${tx}`,
+        txHash: tx,
+        paidMicro: 250_000,
+        feeMicro: 13_158,
+        recordedAt: 1,
+      });
+    }
+    const runtime = makeRuntime(store);
+    runtime.enableInteractiveDelegation({ syncUrl: RELAY, authToken: async () => "t" });
+    const reads = vi.fn();
+    globalThis.fetch = reads as unknown as typeof fetch;
+
+    const list = await executeCommand(runtime, "result", "");
+    // Two entries, two DISTINCT short ids — eight characters would name both.
+    expect(list?.detail).toContain("p2p-payment:TxAAAAAA");
+    expect(list?.detail).toContain("p2p-payment:TxBBBBBB");
+
+    const one = await executeCommand(runtime, "result", "p2p-payment:TxAAAAAA");
+    expect(one?.summary).toContain("No relay task is confirmed for this payment");
+    expect(one?.detail).toContain("Hiring again would pay a second time");
+    expect(one?.detail).toContain("tx TxAAAAAAAA111");
+    expect(reads).not.toHaveBeenCalled();
+
+    const gone = await executeCommand(runtime, "result", "dismiss p2p-payment:TxAAAAAA");
+    expect(gone?.summary).toContain("Dismissed");
+    expect(runtime.outstandingPaidResults().map((e) => e.txHash)).toEqual(["TxBBBBBBBB222"]);
+  });
+});
+
 // ---------------------------------------------------------------------------
 // 5. Across a restart — the #874 shape end to end through delegate_to_agent
 // ---------------------------------------------------------------------------

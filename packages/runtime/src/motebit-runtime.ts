@@ -241,6 +241,7 @@ import {
   SovereignPayForwardDisabledError,
 } from "./sovereign-pay-forward-gate.js";
 import {
+  p2pPaymentConfirmerOf,
   resolveAndSubmitP2pDelegation,
   resolveP2pPaymentRequest,
   retrieveDelegationResult,
@@ -1157,6 +1158,8 @@ export class MotebitRuntime {
         this.assertSensitivityPermitsAiCall(entry, toolName),
       getLocalCapabilities: () => this._localCapabilities,
       getTaskRouter: () => this.taskRouter,
+      // #885: lazy — interactiveDelegation is constructed just below.
+      drainPaymentNotices: () => this.interactiveDelegation.drainPaymentNotices(),
     });
 
     // Interactive delegation — delegate_to_agent tool + receipt stash
@@ -1448,6 +1451,7 @@ export class MotebitRuntime {
         count: () => this.interactiveDelegation.stashedReceiptCount,
         peekSince: (n) => this.interactiveDelegation.peekReceiptsSince(n),
       },
+      drainPaymentNotices: () => this.interactiveDelegation.drainPaymentNotices(),
       redactText: (text) => {
         if (typeof this.policy.redact === "function") {
           return this.policy.redact(text);
@@ -2371,6 +2375,17 @@ export class MotebitRuntime {
       this.conversation.clearSessionInfo();
       return result;
     } finally {
+      // #885: the non-streaming turn has no chunk stream to carry a money
+      // warning (a hire's wallet sent another payment, or a payment could
+      // not be recorded) — log each one loudly instead of leaving it stashed
+      // for some later streaming turn.
+      for (const n of this.interactiveDelegation.drainPaymentNotices()) {
+        this._logger.warn("delegation.payment_notice", {
+          notice: n.notice,
+          ...(n.extra_payments != null ? { extra_payments: n.extra_payments } : {}),
+          ...(n.ledger_write_failed === true ? { ledger_write_failed: true } : {}),
+        });
+      }
       this.state.pushUpdate({ processing: 0.1, attention: 0.3 });
       this._isProcessing = false;
       this._foreignTurn = false;
@@ -5670,9 +5685,15 @@ export class MotebitRuntime {
     const buildP2pPayment = rawBuildP2pPayment
       ? wrapP2pPaymentWithMeter(rawBuildP2pPayment, () => this._activeTurnGrant, this.moneyMeter)
       : undefined;
+    // The same rail's read-only recovery lookup (#885): a builder that
+    // throws is not proof nothing moved. Read-only, so it needs no meter.
+    const confirmP2pPayment = buildP2pPayment
+      ? p2pPaymentConfirmerOf(this._solanaWallet)
+      : undefined;
     this.interactiveDelegation.enable({
       ...config,
       ...(buildP2pPayment ? { buildP2pPayment } : {}),
+      ...(confirmP2pPayment ? { confirmP2pPayment } : {}),
       getActiveGrantId: () => this._activeTurnGrant?.grant_id ?? null,
       paidIntentLedger: this._paidIntentLedger,
       retrieveTaskResult: (taskId) => this.retrieveDelegationResult(taskId),
@@ -5943,6 +5964,8 @@ export class MotebitRuntime {
         () => this._activeTurnGrant,
         this.moneyMeter,
       );
+      // #885: read-only "did it land anyway?" — needs no meter (never pays).
+      const confirmP2pPayment = p2pPaymentConfirmerOf(this._solanaWallet);
       const result = await resolveAndSubmitP2pDelegation({
         motebitId: this.motebitId,
         syncUrl: coords.syncUrl,
@@ -5951,6 +5974,7 @@ export class MotebitRuntime {
         prompt: params.prompt,
         capability: params.capability,
         buildP2pPayment,
+        ...(confirmP2pPayment != null ? { confirmP2pPayment } : {}),
         grantId: presentedGrant.grant_id,
         invocationOrigin: "agent-to-agent",
         ...(params.targetWorkerId != null ? { targetWorkerId: params.targetWorkerId } : {}),
@@ -5996,6 +6020,17 @@ export class MotebitRuntime {
           ...(result.error.settledPayment != null
             ? { settledPayment: result.error.settledPayment }
             : {}),
+          // #885: every money fact the failure carries reaches the
+          // human-absent caller — an unconfirmed payment, another payment
+          // the wallet sent, a record that could not be written.
+          ...(result.error.unconfirmedPayment != null
+            ? { unconfirmedPayment: result.error.unconfirmedPayment }
+            : {}),
+          ...(result.error.extraPayments != null
+            ? { extraPayments: result.error.extraPayments }
+            : {}),
+          ...(result.error.ledgerWriteFailed === true ? { ledgerWriteFailed: true as const } : {}),
+          ...(result.error.notice != null ? { notice: result.error.notice } : {}),
         };
       }
       // Accumulate first-person trust in the worker we just hired — the write
@@ -6069,6 +6104,7 @@ export class MotebitRuntime {
     // cross-agent capability settles peer-to-peer instead of relay-custody;
     // without it, every delegation uses the relay-mediated path (unchanged).
     const buildP2pPayment = this._solanaWallet?.buildP2pPayment?.bind(this._solanaWallet);
+    const confirmP2pPayment = p2pPaymentConfirmerOf(this._solanaWallet);
     this.invokeCapabilityManager = new InvokeCapabilityManager(
       {
         motebitId: this.motebitId,
@@ -6079,6 +6115,8 @@ export class MotebitRuntime {
         // chain — composition preserved.
         stashReceipt: (receipt) => this.interactiveDelegation.pushReceipt(receipt),
         ...(buildP2pPayment ? { buildP2pPayment } : {}),
+        // #885: the rail's read-only "did it land anyway?" lookup.
+        ...(buildP2pPayment && confirmP2pPayment != null ? { confirmP2pPayment } : {}),
         // The user-tap path is a paid path too: without the ledger, a tap
         // could re-buy work whose result is still outstanding (#874 sibling).
         paidIntentLedger: this._paidIntentLedger,

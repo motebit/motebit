@@ -22,11 +22,19 @@
 
 import { fromMicro } from "@motebit/protocol";
 import type { MotebitRuntime } from "../index.js";
-import type { UnretrievedPayment } from "../paid-intent-ledger.js";
+import { isPaymentWithoutTaskId, type UnretrievedPayment } from "../paid-intent-ledger.js";
 import type { TaskRetrieval } from "../relay-delegation.js";
 import type { CommandResult } from "./types.js";
 
-const short = (id: string): string => id.slice(0, 8);
+/**
+ * A short, still-unique handle for an id. A ledger id for a payment with no
+ * relay task (#885) keeps its whole prefix — eight characters of
+ * `p2p-payment:…` would name every such entry at once.
+ */
+const short = (id: string): string => {
+  const colon = id.indexOf(":");
+  return isPaymentWithoutTaskId(id) ? id.slice(0, colon + 9) : id.slice(0, 8);
+};
 const usd = (micro: number): string => `$${fromMicro(micro).toFixed(4)}`;
 
 function describePayment(e: UnretrievedPayment): string {
@@ -113,6 +121,19 @@ function renderRetrieval(
       };
     case "not_connected":
       return { summary: "Not connected to a relay — nothing could be read.", data };
+    case "not_admitted":
+      // #885: a payment with no confirmed relay task. The relay offers no
+      // read by payment, so nothing more can be learned from here; the one
+      // wrong move is hiring again.
+      return {
+        summary: `No relay task is confirmed for this payment — there is nothing to fetch by this id.`,
+        detail:
+          `${paidNote}The relay refused the task, or its admission (or the payment's own ` +
+          `landing) was never confirmed to this device. Hiring again would pay a second time. ` +
+          `Check the transaction in your wallet's history; once it is reconciled: ` +
+          `/result dismiss ${short(r.taskId)}`,
+        data,
+      };
   }
 }
 

@@ -94,6 +94,27 @@ describe("handleInvokeCommand — affordance routing", () => {
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
+  it("#885: renders a payment_notice from the invoke stream", async () => {
+    const runtime = {
+      invokeCapability: vi.fn(() =>
+        chunks([
+          {
+            type: "payment_notice" as const,
+            notice: "This hire's wallet ALSO sent another payment (tx sigAAAAAAAAAAAA, landed)",
+            extra_payments: [{ tx_hash: "sigAAAAAAAAAAAA", status: "landed" as const }],
+          },
+        ]),
+      ),
+      sendMessageStreaming: vi.fn(),
+    } as unknown as MotebitRuntime;
+    const out: string[] = [];
+    await handleInvokeCommand("review_pr https://github.com/x/y/pull/1", {
+      runtime,
+      out: (line) => out.push(line),
+    });
+    expect(out.some((l) => l.includes("Your wallet also sent another payment"))).toBe(true);
+  });
+
   it("shows usage on missing args", async () => {
     const runtime = {
       invokeCapability: vi.fn(),

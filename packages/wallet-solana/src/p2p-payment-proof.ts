@@ -20,7 +20,7 @@
  */
 
 import type { P2pPaymentProof } from "@motebit/protocol";
-import type { SolanaRpcAdapter } from "./adapter.js";
+import type { BroadcastHooks, SolanaRpcAdapter } from "./adapter.js";
 import { SOLANA_MAINNET_CAIP2 } from "./memo-submitter.js";
 
 export interface BuildP2pPaymentProofArgs {
@@ -72,33 +72,12 @@ export interface BuildP2pPaymentProofArgs {
 export async function buildP2pPaymentProof(
   adapter: SolanaRpcAdapter,
   args: BuildP2pPaymentProofArgs,
+  hooks?: BroadcastHooks,
 ): Promise<P2pPaymentProof> {
-  // Federated (cross-operator) P2P adds a third leg — the executor relay's fee.
-  // Both executor fields travel together; reject a half-specified executor leg
-  // so a caller can't silently drop the leg the executor relay will require.
-  const isFederated = args.executorTreasuryAddress != null || args.executorFeeAmountMicro != null;
-  if (
-    isFederated &&
-    (args.executorTreasuryAddress == null || args.executorFeeAmountMicro == null)
-  ) {
-    throw new Error(
-      "Federated P2P proof requires BOTH executorTreasuryAddress and executorFeeAmountMicro",
-    );
-  }
-
-  const legs = [
-    { toAddress: args.workerAddress, microAmount: BigInt(args.amountMicro) },
-    { toAddress: args.treasuryAddress, microAmount: BigInt(args.feeAmountMicro) },
-    ...(isFederated
-      ? [
-          {
-            toAddress: args.executorTreasuryAddress!,
-            microAmount: BigInt(args.executorFeeAmountMicro!),
-          },
-        ]
-      : []),
-  ];
-  const results = await adapter.sendUsdcBatch(legs);
+  const legs = p2pPaymentLegs(args);
+  // `hooks.beforeBroadcast` sees each signed transaction before it is sent
+  // (#885) — the payer records the exact payment before money can move.
+  const results = await adapter.sendUsdcBatch(legs, hooks);
 
   const workerLeg = results[0];
   // Every leg must confirm under ONE shared signature — the relay verifiers walk
@@ -116,8 +95,55 @@ export async function buildP2pPaymentProof(
     );
   }
 
+  return assembleP2pPaymentProof(args, sig);
+}
+
+/**
+ * The legs of the atomic P2P payment, in broadcast order: worker, origin-relay
+ * fee, and (federated only) executor-relay fee. The ONE definition shared by
+ * the broadcaster (`buildP2pPaymentProof`) and the read-only recovery lookup
+ * (`SolanaWalletRail.confirmP2pPayment`, #885), so a landed transaction is
+ * checked against exactly the transfer set the broadcaster sends.
+ *
+ * @throws when the executor leg is half-specified.
+ */
+export function p2pPaymentLegs(
+  args: BuildP2pPaymentProofArgs,
+): Array<{ toAddress: string; microAmount: bigint }> {
+  // Federated (cross-operator) P2P adds a third leg — the executor relay's fee.
+  // Both executor fields travel together; reject a half-specified executor leg
+  // so a caller can't silently drop the leg the executor relay will require.
+  const isFederated = args.executorTreasuryAddress != null || args.executorFeeAmountMicro != null;
+  if (
+    isFederated &&
+    (args.executorTreasuryAddress == null || args.executorFeeAmountMicro == null)
+  ) {
+    throw new Error(
+      "Federated P2P proof requires BOTH executorTreasuryAddress and executorFeeAmountMicro",
+    );
+  }
+  return [
+    { toAddress: args.workerAddress, microAmount: BigInt(args.amountMicro) },
+    { toAddress: args.treasuryAddress, microAmount: BigInt(args.feeAmountMicro) },
+    ...(isFederated
+      ? [
+          {
+            toAddress: args.executorTreasuryAddress!,
+            microAmount: BigInt(args.executorFeeAmountMicro!),
+          },
+        ]
+      : []),
+  ];
+}
+
+/** The `P2pPaymentProof` for `args` paid by the transaction `signature`. */
+export function assembleP2pPaymentProof(
+  args: BuildP2pPaymentProofArgs,
+  signature: string,
+): P2pPaymentProof {
+  const isFederated = args.executorTreasuryAddress != null && args.executorFeeAmountMicro != null;
   return {
-    tx_hash: sig,
+    tx_hash: signature,
     chain: "solana",
     network: args.network ?? SOLANA_MAINNET_CAIP2,
     to_address: args.workerAddress,

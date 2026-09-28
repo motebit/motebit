@@ -22,6 +22,7 @@
  * "running" pulse) and the once-goal `runNow(onChunk)` live-progress path.
  */
 
+import { paymentNoticeCopy } from "@motebit/runtime";
 import type { ScheduledGoal } from "@motebit/panels";
 import { slabTurnIdForRun } from "@motebit/runtime";
 
@@ -195,6 +196,11 @@ export function createWebGoalsScheduler(app: UnbootedWebApp): GoalsEngine {
       // `tool_status: "calling"` chunk), not calls that succeeded.
       let toolCallsMade = 0;
       let memoriesFormed: number | undefined;
+      // #885: a money warning from a hire in this fire — its OWN field on the
+      // result (the owner's goal card), never mixed into the artifact.
+      const notices: string[] = [];
+      const noticeField = (): { paymentNotice?: string } =>
+        notices.length > 0 ? { paymentNotice: notices.join(" ") } : {};
       try {
         for await (const chunk of app.sendMessageStreaming(goal.prompt, runId, {
           suppressHistory: true,
@@ -202,6 +208,7 @@ export function createWebGoalsScheduler(app: UnbootedWebApp): GoalsEngine {
         })) {
           onChunk?.(chunk);
           if (chunk.type === "text") accumulated += chunk.text;
+          else if (chunk.type === "payment_notice") notices.push(paymentNoticeCopy(chunk));
           else if (chunk.type === "tool_status" && chunk.status === "calling") toolCallsMade++;
           else if (chunk.type === "result") {
             if (typeof chunk.result.totalTokens === "number") {
@@ -217,7 +224,12 @@ export function createWebGoalsScheduler(app: UnbootedWebApp): GoalsEngine {
         writeJson(`${ARTIFACT_MANIFEST_PREFIX}${goal.goal_id}`, null);
         const msg = err instanceof Error ? err.message : String(err);
         emitExecuted({ error: msg });
-        return { outcome: "error", error: msg, ...(tokensUsed != null ? { tokensUsed } : {}) };
+        return {
+          outcome: "error",
+          error: msg,
+          ...(tokensUsed != null ? { tokensUsed } : {}),
+          ...noticeField(),
+        };
       }
       const trimmed = accumulated.trim();
       const responsePreview = trimmed.slice(0, 160) || null;
@@ -267,6 +279,7 @@ export function createWebGoalsScheduler(app: UnbootedWebApp): GoalsEngine {
         turnId: slabTurnIdForRun(runId),
         manifestSigned,
         ...(tokensUsed != null ? { tokensUsed } : {}),
+        ...noticeField(),
       };
     },
   };

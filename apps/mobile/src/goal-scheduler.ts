@@ -31,6 +31,7 @@
  */
 
 import type { MotebitRuntime, StreamChunk } from "@motebit/runtime";
+import { paymentNoticeCopy } from "@motebit/runtime";
 import type { PlanChunk, PlanEngine } from "@motebit/planner";
 import { PlanStatus } from "@motebit/sdk";
 import type { ExpoGoalStore } from "./adapters/expo-sqlite";
@@ -460,9 +461,17 @@ export class MobileGoalScheduler {
 
     let accumulated = "";
     let tokensUsed: number | null = null;
+    // #885: a money warning from a hire in this run — carried at the FRONT of
+    // the outcome summary (the row and onGoalComplete the owner sees), never
+    // into the signed response artifact.
+    const notices: string[] = [];
+    const summarize = (): string =>
+      (notices.length > 0 ? `${notices.join(" ")} ${accumulated}` : accumulated).slice(0, 500);
     for await (const chunk of runtime.sendMessageStreaming(context)) {
       if (chunk.type === "text") {
         accumulated += chunk.text;
+      } else if (chunk.type === "payment_notice") {
+        notices.push(paymentNoticeCopy(chunk));
       } else if (chunk.type === "result" && typeof chunk.result.totalTokens === "number") {
         // TurnResult.totalTokens is sum across the agentic loop's LLM
         // calls in this turn. Feeds the runtime register's budget
@@ -483,7 +492,7 @@ export class MobileGoalScheduler {
         });
         return {
           suspended: true,
-          summary: accumulated.slice(0, 500),
+          summary: summarize(),
           responseFull: accumulated,
           tokensUsed,
         };
@@ -492,7 +501,7 @@ export class MobileGoalScheduler {
 
     return {
       suspended: false,
-      summary: accumulated.slice(0, 500),
+      summary: summarize(),
       responseFull: accumulated,
       tokensUsed,
     };

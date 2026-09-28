@@ -13,11 +13,13 @@
 
 import type { ExecutionReceipt, IntentOrigin } from "@motebit/sdk";
 import type { TokenAudience } from "@motebit/protocol";
-import type { P2pPaymentProof, SovereignP2pPaymentRequest } from "@motebit/protocol";
 
 import type { StreamChunk } from "./runtime-config.js";
 import {
   selectAndRunDelegation,
+  paymentNoticeChunk,
+  type ConfirmP2pPayment,
+  type BuildP2pPayment,
   type DelegationError,
   type DelegationErrorCode,
   type DelegationResult,
@@ -39,7 +41,12 @@ export interface InvokeCapabilityDeps {
    * a paid cross-agent capability settles peer-to-peer instead of relay-custody;
    * absent → every delegation uses the relay-mediated path.
    */
-  buildP2pPayment?: (request: SovereignP2pPaymentRequest) => Promise<P2pPaymentProof>;
+  buildP2pPayment?: BuildP2pPayment;
+  /**
+   * The same rail's read-only "did the payment land anyway?" lookup (#885).
+   * Absent ⇒ a builder error is `payment_status_unknown` (recorded, never retried).
+   */
+  confirmP2pPayment?: ConfirmP2pPayment;
   /**
    * The runtime's paid-intent ledger (#435/#874). A user tap is a paid path
    * like the AI loop's: threading the ledger here means a tap cannot re-buy
@@ -157,7 +164,10 @@ export class InvokeCapabilityManager {
       options.targetWorkerId,
     );
 
+    // #885: a money warning is the owner's, whatever the outcome.
+    const notice = paymentNoticeChunk(result);
     if (!result.ok) {
+      if (notice != null) yield notice;
       yield { type: "invoke_error", ...result.error };
       return;
     }
@@ -183,6 +193,9 @@ export class InvokeCapabilityManager {
     if (receipt.result != null && receipt.result.length > 0) {
       yield { type: "text", text: receipt.result };
     }
+    // #885: another transaction from this hire may have moved money, or the
+    // payment record could not be written — shown, never only logged.
+    if (notice != null) yield notice;
 
     yield {
       type: "delegation_complete",
@@ -232,6 +245,7 @@ export class InvokeCapabilityManager {
       requiredCapabilities: [capability],
       ...(targetWorkerId != null ? { targetWorkerId } : {}),
       ...(this.deps.buildP2pPayment ? { buildP2pPayment: this.deps.buildP2pPayment } : {}),
+      ...(this.deps.confirmP2pPayment ? { confirmP2pPayment: this.deps.confirmP2pPayment } : {}),
       ...(this.config.relayPublicKey != null ? { relayPublicKey: this.config.relayPublicKey } : {}),
       ...(ack === true ? { acknowledgeNoHistoryRisk: true } : {}),
       ...(this.config.routingStrategy ? { routingStrategy: this.config.routingStrategy } : {}),

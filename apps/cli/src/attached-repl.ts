@@ -6,6 +6,9 @@
 // (docs/doctrine/daemon-desktop-unification.md).
 
 import type { RuntimeHostClient } from "@motebit/runtime-host";
+import { paymentNoticeCopy, type StreamChunk } from "@motebit/runtime";
+
+type PaymentNoticeChunk = Extract<StreamChunk, { type: "payment_notice" }>;
 import { action, dim, warn, meta, prompt as promptColor } from "./colors.js";
 import {
   askQuestion,
@@ -119,6 +122,12 @@ async function renderStream(
             );
           }
           thinking = startStatus("thinking");
+          break;
+        case "payment_notice":
+          // #885: the coordinator's money warning reaches an attached
+          // frontend's owner too — never only the model.
+          stopStatus();
+          writeLine(`${warn("⚠")} ${warn(paymentNoticeCopy(chunk as PaymentNoticeChunk))}`);
           break;
         case "injection_warning":
           writeLine(`${warn("⚠")} suspicious content in ${chunk.tool_name ?? "tool"} output`);

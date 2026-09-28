@@ -402,6 +402,50 @@ describe("GoalScheduler.runNow", () => {
     expect(completed.mock.calls[0]?.[0]?.status).toBe("completed");
   });
 
+  it("#885: a payment_notice from the run leads the outcome summary and the completion event", async () => {
+    const runtime = makeRuntime({
+      sendMessageStreaming: vi.fn(async function* () {
+        yield {
+          type: "payment_notice",
+          notice: "This hire's wallet ALSO sent another payment (tx sigAAAAAAAAAAAA, landed)",
+          extra_payments: [{ tx_hash: "sigAAAAAAAAAAAA", status: "landed" }],
+        };
+        yield { type: "text", text: "the goal's answer" };
+      }),
+    });
+    const completed = vi.fn();
+    const s = new GoalScheduler(makeDeps({ getRuntime: () => runtime }));
+    s.onGoalComplete(completed);
+    const invoke = makeInvoke({
+      goals: [
+        {
+          goal_id: "g1",
+          motebit_id: "motebit-1",
+          prompt: "hire",
+          interval_ms: 3_600_000,
+          last_run_at: Date.now(),
+          enabled: 1,
+          status: "active",
+          mode: "recurring",
+          parent_goal_id: null,
+          max_retries: 3,
+          consecutive_failures: 0,
+        },
+      ],
+    });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await s.runNow(invoke as any, "g1");
+    const insert = invoke.mock.calls.find(
+      ([cmd, a]) =>
+        cmd === "db_execute" &&
+        String((a as { sql: string }).sql).includes("INSERT INTO goal_outcomes"),
+    );
+    const params = (insert?.[1] as { params: unknown[] }).params;
+    expect(String(params[4])).toMatch(/^Your wallet also sent another payment/); // summary
+    expect(String(params[7])).toBe("the goal's answer"); // response_full: the model's text alone
+    expect(completed.mock.calls[0]?.[0]?.summary).toMatch(/^Your wallet also sent another payment/);
+  });
+
   it("silently no-ops when another goal is executing", async () => {
     const runtime = makeRuntime();
     const s = new GoalScheduler(makeDeps({ getRuntime: () => runtime }));

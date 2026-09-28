@@ -200,6 +200,12 @@ export interface StreamingDeps {
     count(): number;
     peekSince(count: number): import("@motebit/sdk").ExecutionReceipt[];
   };
+  /**
+   * #885: money warnings a delegate_to_agent call produced (an extra
+   * payment, an unwritten payment record). Drained and emitted as
+   * `payment_notice` chunks right after that call, so the OWNER sees them.
+   */
+  drainPaymentNotices?: () => Array<Extract<StreamChunk, { type: "payment_notice" }>>;
   /** Motebit ID. */
   motebitId: string;
   /**
@@ -661,6 +667,9 @@ export class StreamingManager {
           // them; this yields BEFORE the tool_status done chunk below,
           // the same ordering the MCP path produces, so consumers' guard
           // for the stray-done twin already composes.
+          if (chunk.name === "delegate_to_agent") {
+            for (const n of this.deps.drainPaymentNotices?.() ?? []) yield n;
+          }
           if (chunk.name === "delegate_to_agent" && delegateStashMark != null) {
             const mark = delegateStashMark;
             delegateStashMark = null;
@@ -974,6 +983,9 @@ export class StreamingManager {
         // delegation_complete-then-stray-done ordering the MCP path
         // produces, which every consumer's twin guard already handles.
         // Peek, never drain (parent-chain composition owns the drain).
+        if (pending.toolName === "delegate_to_agent") {
+          for (const n of this.deps.drainPaymentNotices?.() ?? []) yield n;
+        }
         if (approvedStashMark != null) {
           const stashed = this.deps.delegationReceiptStash?.peekSince(approvedStashMark) ?? [];
           for (const receipt of stashed) {

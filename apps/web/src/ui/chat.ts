@@ -3,6 +3,7 @@ import { hasCeilingBeenShown, markCeilingShown } from "../storage";
 import { StreamingTTSQueue, WebSpeechTTSProvider } from "@motebit/voice";
 import type { TTSProvider } from "@motebit/voice";
 import { stripInternalTags } from "@motebit/ai-core";
+import { ignoreChunk, paymentNoticeCopy } from "@motebit/runtime";
 import type { ExecutionReceipt, AccrualBasis } from "@motebit/sdk";
 import { buildReceiptArtifact } from "@motebit/render-engine";
 import { resolveAccrualAttribution } from "@motebit/panels";
@@ -684,6 +685,14 @@ function failureCopy(code: string, retryAfterSeconds?: number): string {
       return "That agent isn't set up to be paid right now (no price or settlement address).";
     case "payment_broadcast_failed":
       return "The onchain payment didn't go through — no funds moved. Check your balance and try again.";
+    // #885: money may have moved in the next three. Never invite a retry —
+    // a second attempt would pay twice.
+    case "payment_status_unknown":
+      return "The payment may have left your wallet — check its history before hiring this agent again.";
+    case "payment_not_admitted":
+      return "Paid, but the relay refused the task. Don't hire again — it would pay twice.";
+    case "payment_admission_unconfirmed":
+      return "Paid, but the relay hasn't confirmed taking the task. Don't hire again — it would pay twice.";
     case "trust_threshold_unmet":
       return "Trust below threshold for that capability. Reviews accumulate trust over time.";
     case "no_routing":
@@ -965,10 +974,20 @@ export function initChat(ctx: WebContext, callbacks: ChatCallbacks): ChatAPI {
                 if (resumeChunk.status === "calling")
                   showToolStatus(resumeChunk.name, resumeChunk.context);
                 else if (resumeChunk.status === "done") completeToolStatus(resumeChunk.name);
+              } else if (resumeChunk.type === "payment_notice") {
+                // #885: a money warning — the owner's, as a system message.
+                addMessage("system", paymentNoticeCopy(resumeChunk));
               } else if (resumeChunk.type === "result") {
                 streamingTTS.flush();
               }
             }
+            break;
+          }
+
+          case "payment_notice": {
+            // #885: a hire's wallet sent another payment, or a payment could
+            // not be recorded — the owner must see it, not only the model.
+            addMessage("system", paymentNoticeCopy(chunk));
             break;
           }
 
@@ -1071,6 +1090,10 @@ export function initChat(ctx: WebContext, callbacks: ChatCallbacks): ChatAPI {
             }
             break;
           }
+          default:
+            // #885: every other chunk is ignorable; a payment_notice is not (compile error).
+            ignoreChunk(chunk);
+            break;
         }
       }
       // Force the final coalesced paint so the last tokens (which may have
@@ -1302,6 +1325,11 @@ export function initChat(ctx: WebContext, callbacks: ChatCallbacks): ChatAPI {
             completeToolStatus("invoke_capability");
             break;
           }
+          case "payment_notice": {
+            // #885: a money warning on the user-tap path — a system message.
+            addMessage("system", paymentNoticeCopy(chunk));
+            break;
+          }
           case "invoke_error": {
             // Reach the failure taxonomy from docs/doctrine/surface-determinism.md.
             // Each code gets its own copy; we never fall through to the AI loop
@@ -1311,6 +1339,10 @@ export function initChat(ctx: WebContext, callbacks: ChatCallbacks): ChatAPI {
             addMessage("system", failureCopy(chunk.code, chunk.retryAfterSeconds));
             return;
           }
+          default:
+            // #885: every other chunk is ignorable; a payment_notice is not (compile error).
+            ignoreChunk(chunk);
+            break;
         }
       }
     } catch (err: unknown) {

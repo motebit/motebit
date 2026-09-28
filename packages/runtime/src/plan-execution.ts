@@ -46,6 +46,17 @@ export interface PlanExecutionDeps {
   getLocalCapabilities(): DeviceCapability[];
   /** Resolve task router for model selection (may be null). */
   getTaskRouter?(): TaskRouter | null;
+  /**
+   * #885: money warnings a plan step's `delegate_to_agent` produced. The
+   * planner's chunk stream has no `payment_notice` variant, so after each
+   * plan stream the manager drains them and logs them loudly — never left
+   * stashed for some later, unrelated turn to surface.
+   */
+  drainPaymentNotices?: () => Array<{
+    notice: string;
+    extra_payments?: Array<{ tx_hash: string; status: "landed" | "unconfirmed" }>;
+    ledger_write_failed?: true;
+  }>;
 }
 
 /**
@@ -70,6 +81,17 @@ export class PlanExecutionManager {
   private _stepDelegationTaskIds = new Map<string, string>();
 
   constructor(private readonly deps: PlanExecutionDeps) {}
+
+  /** #885: log every money warning a plan step produced (see `drainPaymentNotices`). */
+  private flushPaymentNotices(): void {
+    for (const n of this.deps.drainPaymentNotices?.() ?? []) {
+      this.deps.logger.warn("delegation.payment_notice", {
+        notice: n.notice,
+        ...(n.extra_payments != null ? { extra_payments: n.extra_payments } : {}),
+        ...(n.ledger_write_failed === true ? { ledger_write_failed: true } : {}),
+      });
+    }
+  }
 
   /**
    * Create and execute a plan for a goal. Yields PlanChunk events as execution proceeds.
@@ -129,6 +151,7 @@ export class PlanExecutionManager {
       else if (chunk.type === "plan_failed") finalStatus = "failed";
       yield chunk;
     }
+    this.flushPaymentNotices();
 
     // Build execution manifest from PlanEngine timeline + tool audit data
     try {
@@ -308,6 +331,7 @@ export class PlanExecutionManager {
       this._logPlanChunkEvent(chunk, goalId);
       yield chunk;
     }
+    this.flushPaymentNotices();
   }
 
   /**
@@ -324,6 +348,7 @@ export class PlanExecutionManager {
       this._logPlanChunkEvent(chunk);
       yield chunk;
     }
+    this.flushPaymentNotices();
   }
 
   /**

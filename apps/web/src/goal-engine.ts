@@ -50,6 +50,8 @@ export interface GoalRunRecord {
   status: "running" | "fired" | "skipped" | "error";
   response_preview?: string | null;
   error_message?: string | null;
+  /** #885: a money warning from a hire in this fire (owner-facing only). */
+  payment_notice?: string | null;
 }
 
 /**
@@ -91,9 +93,12 @@ export type GoalFireResult =
        *  the indicator. Doctrine: `docs/doctrine/goal-results.md`. */
       manifestSigned?: boolean;
       tokensUsed?: number;
+      /** #885: a money warning from a hire in this fire — the owner's goal
+       *  card renders it; never part of the artifact. */
+      paymentNotice?: string;
     }
   | { outcome: "skipped" }
-  | { outcome: "error"; error: string; tokensUsed?: number };
+  | { outcome: "error"; error: string; tokensUsed?: number; paymentNotice?: string };
 
 // ── Engine ──────────────────────────────────────────────────────────────────
 
@@ -323,9 +328,11 @@ export function createGoalsEngine(
       status: runStatus,
       response_preview: result.outcome === "fired" ? (result.responsePreview ?? null) : null,
       error_message: result.outcome === "error" ? result.error : null,
+      payment_notice: result.outcome === "skipped" ? null : (result.paymentNotice ?? null),
     });
 
     const patch: Partial<ScheduledGoal> = { last_run_at: finishedAt };
+
     // Roll up `spent_tokens` from the fire's reported usage. Adapters
     // that don't carry token attribution (legacy / plan-mode) report
     // `undefined`; absent treated as zero so the rollup stays monotonic
@@ -472,4 +479,20 @@ export function createGoalsEngine(
     stop,
     dispose,
   };
+}
+
+/**
+ * The money warning (#885) of a goal's most recent finished fire, if any —
+ * run records are web-local and carry it; `ScheduledGoal` (panels) does not.
+ */
+export function latestPaymentNotice(
+  runs: ReadonlyArray<GoalRunRecord>,
+  goalId: string,
+): string | null {
+  let latest: GoalRunRecord | null = null;
+  for (const r of runs) {
+    if (r.goal_id !== goalId || r.finished_at == null) continue;
+    if (latest == null || (r.finished_at ?? 0) > (latest.finished_at ?? 0)) latest = r;
+  }
+  return latest?.payment_notice ?? null;
 }

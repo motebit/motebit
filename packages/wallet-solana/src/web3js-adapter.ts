@@ -74,7 +74,7 @@ export function isDerivedSettlementBinding(
   return bytes != null && settlementAddress === deriveSolanaAddress(bytes);
 }
 import {
-  createAssociatedTokenAccountInstruction,
+  createAssociatedTokenAccountIdempotentInstruction,
   createTransferInstruction,
   getAccount,
   getAssociatedTokenAddress,
@@ -89,6 +89,9 @@ import type {
   TxVerificationResult,
   OutgoingTransferQuery,
   OutgoingTransferLookup,
+  BroadcastHooks,
+  SignedTransactionRef,
+  SignatureOutcome,
 } from "./adapter.js";
 import {
   USDC_MINT_MAINNET,
@@ -121,11 +124,20 @@ const OUTGOING_LOOKUP_PAGE = 50;
 const OUTGOING_LOOKUP_SKEW_MS = 30_000;
 
 /**
- * True only for the AUTHORITATIVE permanent-expiry signal: the transaction's
- * blockhash passed its `lastValidBlockHeight` without confirming, so it was NOT
- * and can NEVER be included. That is the one broadcast failure known safe to
- * retry — a rebuild with a fresh blockhash produces a NEW signature the expired
- * one can never race, so there is no double-spend window.
+ * Blocks past `lastValidBlockHeight` before absence counts as expiry (#885).
+ * Absorbs commitment skew between the height read and the status read; a few
+ * seconds of extra wait against a wrongly-voided payment.
+ */
+const EXPIRY_HEIGHT_MARGIN = 10;
+
+/**
+ * True for web3.js's `TransactionExpiredBlockheightExceededError`: the
+ * confirmation wait saw the block height pass `lastValidBlockHeight` without
+ * HEARING that the transaction confirmed. It is NOT proof the transaction did
+ * not land (#885 round 3): web3.js checks the status once when it subscribes
+ * and then relies on a websocket notification that can be missed. So this is
+ * only the trigger to ASK the chain (`getSignatureOutcome`) — a re-sign
+ * follows only a definitive `expired` answer (see `signSendConfirm`).
  *
  * Deliberately NOT a generic "expired"/"timeout" match: a confirmation TIMEOUT
  * ("was not confirmed in N seconds") means the transaction may still land, so
@@ -143,13 +155,42 @@ export interface Web3JsRpcAdapterConfig {
   identitySeed: Uint8Array;
   usdcMint?: string;
   commitment?: Commitment;
+  /**
+   * How long `signSendConfirm` keeps asking the chain after a blockhash
+   * expiry before giving up (#885 round 4). Tests inject `sleep`/`now`.
+   */
+  expiryConfirm?: {
+    pollMs?: number;
+    maxWaitMs?: number;
+    sleep?: (ms: number) => Promise<void>;
+    now?: () => number;
+  };
 }
 
+/**
+ * After a blockhash expiry, how often and how long to ask the chain about
+ * the transaction just sent (#885 round 4). web3.js raises the expiry as
+ * soon as the block height passes `lastValidBlockHeight` (it polls height
+ * about once a second), so the first ask lands at lastValid+1 or +2 —
+ * inside the `EXPIRY_HEIGHT_MARGIN`, where absence is not yet proof. At
+ * ~400ms a block the margin clears in ~4-5s; 30s is a generous cap for a
+ * slow cluster before the send is handed back as undecidable.
+ */
+const EXPIRY_CONFIRM_POLL_MS = 1_500;
+const EXPIRY_CONFIRM_MAX_WAIT_MS = 30_000;
+
 export class Web3JsRpcAdapter implements SolanaRpcAdapter {
+  /** #885: `beforeBroadcast` runs after signing and before every send. */
+  readonly honorsBroadcastHooks = true as const;
   private readonly connection: Connection;
   private readonly keypair: Keypair;
   private readonly mint: PublicKey;
   private readonly commitment: Commitment;
+  private readonly decisionCommitment: "confirmed" | "finalized";
+  private readonly expiryPollMs: number;
+  private readonly expiryMaxWaitMs: number;
+  private readonly sleep: (ms: number) => Promise<void>;
+  private readonly now: () => number;
 
   constructor(config: Web3JsRpcAdapterConfig) {
     if (config.identitySeed.length !== 32) {
@@ -158,7 +199,18 @@ export class Web3JsRpcAdapter implements SolanaRpcAdapter {
       );
     }
     this.commitment = config.commitment ?? "confirmed";
+    // #885 round 5: whether a payment LANDED or EXPIRED is never decided at
+    // "processed" — a single node's processed view can be a minority fork.
+    // A "processed" adapter still reads and sends at "processed"; its
+    // confirmation and expiry decisions run at "confirmed". (The type keeps
+    // "processed" because the relay's read-only reconcilers pass it.)
+    this.decisionCommitment = this.commitment === "finalized" ? "finalized" : "confirmed";
     this.connection = new Connection(config.rpcUrl, this.commitment);
+    this.expiryPollMs = config.expiryConfirm?.pollMs ?? EXPIRY_CONFIRM_POLL_MS;
+    this.expiryMaxWaitMs = config.expiryConfirm?.maxWaitMs ?? EXPIRY_CONFIRM_MAX_WAIT_MS;
+    this.sleep =
+      config.expiryConfirm?.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
+    this.now = config.expiryConfirm?.now ?? Date.now;
     // Keypair.fromSeed is the standard Ed25519 seed → keypair derivation.
     // The resulting public key is identical to the motebit identity
     // public key derived from the same seed via @noble/ed25519.
@@ -228,7 +280,7 @@ export class Web3JsRpcAdapter implements SolanaRpcAdapter {
     }
   }
 
-  async sendUsdc(args: SendUsdcArgs): Promise<SendUsdcResult> {
+  async sendUsdc(args: SendUsdcArgs, hooks?: BroadcastHooks): Promise<SendUsdcResult> {
     // 1. Validate recipient.
     let recipient: PublicKey;
     try {
@@ -259,8 +311,10 @@ export class Web3JsRpcAdapter implements SolanaRpcAdapter {
       if (!(err instanceof TokenAccountNotFoundError)) throw err;
     }
     if (!destExists) {
+      // Idempotent (#885): a re-signed transaction must never land-and-fail
+      // because an earlier attempt already created the account.
       instructions.push(
-        createAssociatedTokenAccountInstruction(
+        createAssociatedTokenAccountIdempotentInstruction(
           this.keypair.publicKey, // payer
           destAta,
           recipient,
@@ -275,32 +329,72 @@ export class Web3JsRpcAdapter implements SolanaRpcAdapter {
 
     // 5-6. Fetch a fresh blockhash, sign, submit, confirm — retrying with a new
     // blockhash on the (safe) permanent-expiry flake. See signSendConfirm.
-    return this.signSendConfirm(instructions);
+    return this.signSendConfirm(instructions, hooks);
   }
 
   /**
    * Build a transaction from `instructions`, sign it over a FRESH recent
-   * blockhash, broadcast, and await confirmation — retrying with a new blockhash
-   * on a `TransactionExpiredBlockheightExceededError` (the permanent-expiry
-   * flake). Each attempt rebuilds the transaction from the instructions so no
-   * stale blockhash/signature state carries over; the expired attempt can never
-   * land (`isBlockhashExpiry`), so the retry cannot double-spend. Any non-expiry
-   * error propagates immediately (conservative — only the known-safe failure is
-   * retried).
+   * blockhash, report its signature (`hooks.beforeBroadcast`), broadcast, and
+   * await confirmation.
+   *
+   * On a `TransactionExpiredBlockheightExceededError` it does NOT assume the
+   * transaction failed to land (#885). web3.js raises that error when it
+   * stopped HEARING about the transaction before the block height passed —
+   * it checks the status once when it subscribes and then relies on a
+   * websocket notification that can be lost — so the transaction may well
+   * have landed. Before any re-sign, the adapter asks the chain about the
+   * transaction it just sent (`getSignatureOutcome`):
+   *
+   *   - `landed`  ⇒ that transaction IS the payment; return it. No re-sign.
+   *   - `expired` ⇒ authoritatively not on chain and past its last valid
+   *     height (the slot-anchored rule in `getSignatureOutcome`): it can
+   *     never be included, so a re-sign with a fresh blockhash is the only
+   *     transaction that can move the money — no double-spend.
+   *   - `failed`  ⇒ it was included and errored: a failed Solana transaction
+   *     applies none of its instructions (only the fee is charged), so no
+   *     funds moved. The failure is definitive and usually deterministic
+   *     (a retry would fail the same way), so it is returned as
+   *     `confirmed: false` — exactly what a confirmed-with-error send
+   *     returns — and never retried.
+   *   - `pending` / `rpc_error` ⇒ asked again every ~1.5s for up to 30s
+   *     (`awaitDecisiveOutcome`) — web3.js reports the expiry at
+   *     lastValid+1, inside the absence margin, so the first answer is
+   *     usually `pending`. Still undecidable at the cap ⇒ the original error
+   *     is thrown and the caller's own-signature confirmation decides
+   *     later. Never a re-sign on a maybe.
+   *
+   * Any non-expiry error propagates immediately.
    */
   private async signSendConfirm(
     instructions: readonly TransactionInstruction[],
+    hooks?: BroadcastHooks,
   ): Promise<SendUsdcResult> {
-    let lastErr: unknown;
-    for (let attempt = 1; attempt <= BROADCAST_MAX_ATTEMPTS; attempt++) {
-      try {
-        const tx = new Transaction();
-        for (const ix of instructions) tx.add(ix);
-        const latest = await this.connection.getLatestBlockhash(this.commitment);
-        tx.recentBlockhash = latest.blockhash;
-        tx.feePayer = this.keypair.publicKey;
-        tx.sign(this.keypair);
+    // The chain's verdict on every attempt broadcast before the current one.
+    // `earlierBroadcastsDead` is derived from this EVIDENCE, not from the
+    // control flow: true only if each earlier attempt was decisively
+    // `expired` (for the first attempt the list is empty — one broadcast).
+    const earlierVerdicts: SignatureOutcome["status"][] = [];
+    const earlierBroadcastsDead = (): boolean =>
+      earlierVerdicts.every((status) => status === "expired");
+    for (let attempt = 1; ; attempt++) {
+      const tx = new Transaction();
+      for (const ix of instructions) tx.add(ix);
+      const latest = await this.connection.getLatestBlockhash(this.commitment);
+      tx.recentBlockhash = latest.blockhash;
+      tx.feePayer = this.keypair.publicKey;
+      tx.sign(this.keypair);
+      const rawSig = tx.signature;
+      if (rawSig == null) throw new Error("signed transaction has no signature");
+      const signed: SignedTransactionRef = {
+        signature: base58Encode(new Uint8Array(rawSig)),
+        lastValidBlockHeight: latest.lastValidBlockHeight,
+      };
 
+      // #885: the signature is fixed now, before anything is sent. The payer
+      // records THIS transaction first; if it cannot, nothing is sent.
+      if (hooks?.beforeBroadcast != null) await hooks.beforeBroadcast(signed);
+
+      try {
         const signature = await this.connection.sendRawTransaction(tx.serialize());
         const confirmation = await this.connection.confirmTransaction(
           {
@@ -308,23 +402,72 @@ export class Web3JsRpcAdapter implements SolanaRpcAdapter {
             blockhash: latest.blockhash,
             lastValidBlockHeight: latest.lastValidBlockHeight,
           },
-          this.commitment,
+          this.decisionCommitment,
         );
         return {
           signature,
           slot: confirmation.context.slot,
           confirmed: confirmation.value.err === null,
+          earlierBroadcastsDead: earlierBroadcastsDead(),
         };
       } catch (err) {
-        lastErr = err;
-        // Retry ONLY the authoritative permanent-expiry, and only with attempts
-        // left. A fresh blockhash is the fix; the expired tx can never race it.
-        if (attempt < BROADCAST_MAX_ATTEMPTS && isBlockhashExpiry(err)) continue;
-        throw err;
+        if (!isBlockhashExpiry(err)) throw err;
+        const outcome = await this.awaitDecisiveOutcome(signed);
+        switch (outcome.status) {
+          case "landed":
+            return {
+              signature: signed.signature,
+              slot: outcome.slot,
+              confirmed: true,
+              earlierBroadcastsDead: earlierBroadcastsDead(),
+            };
+          case "failed":
+            return {
+              signature: signed.signature,
+              slot: 0,
+              confirmed: false,
+              earlierBroadcastsDead: earlierBroadcastsDead(),
+            };
+          case "expired":
+            earlierVerdicts.push(outcome.status);
+            if (attempt < BROADCAST_MAX_ATTEMPTS) continue;
+            throw err;
+          case "pending":
+          case "rpc_error":
+            throw err;
+        }
       }
     }
-    // Unreachable: the loop returns on success or throws on the final attempt.
-    throw lastErr;
+  }
+
+  /**
+   * Ask the chain about `signed` until the answer is decisive (`landed`,
+   * `failed`, `expired`) or `expiryMaxWaitMs` passes (#885 round 4). Right
+   * after web3.js reports an expiry the height is only just past
+   * `lastValidBlockHeight`, so the first answer is usually `pending` (inside
+   * the margin); a few more blocks settle it. This poll is where the
+   * devnet-flake blockhash-expiry retry now lives: an expired first attempt
+   * becomes `expired` here, and only then does `signSendConfirm` re-sign.
+   * Still `pending` (or `rpc_error`) at the cap ⇒ returned as is, and the
+   * caller throws — never a re-sign on a maybe.
+   */
+  private async awaitDecisiveOutcome(signed: SignedTransactionRef): Promise<SignatureOutcome> {
+    const deadline = this.now() + this.expiryMaxWaitMs;
+    // Sticky pending (#885 round 5): once ANY read has seen this signature
+    // in a block, an `expired` answer for it is never accepted — the
+    // expiry rule compares slot NUMBERS, not fork membership, and a
+    // load-balanced RPC can answer from a node on a minority fork. The
+    // transaction then lands (returned) or the cap is reached (thrown).
+    let seen = false;
+    for (;;) {
+      let outcome = await this.getSignatureOutcome(signed);
+      if (outcome.status === "pending" && outcome.seen === true) seen = true;
+      if (outcome.status === "expired" && seen) outcome = { status: "pending", seen: true };
+      if (outcome.status === "landed" || outcome.status === "failed") return outcome;
+      if (outcome.status === "expired") return outcome;
+      if (this.now() + this.expiryPollMs > deadline) return outcome;
+      await this.sleep(this.expiryPollMs);
+    }
   }
 
   /**
@@ -339,11 +482,24 @@ export class Web3JsRpcAdapter implements SolanaRpcAdapter {
    */
   private static readonly MAX_TRANSFERS_PER_TX = 8;
 
-  async sendUsdcBatch(items: readonly SendUsdcArgs[]): Promise<SendUsdcBatchItemResult[]> {
+  async sendUsdcBatch(
+    items: readonly SendUsdcArgs[],
+    hooks?: BroadcastHooks,
+  ): Promise<SendUsdcBatchItemResult[]> {
     if (items.length === 0) return [];
     if (items.length === 1) {
-      const r = await this.sendUsdc(items[0]!);
-      return [{ ok: r.confirmed, signature: r.signature, slot: r.slot, reason: null }];
+      const r = await this.sendUsdc(items[0]!, hooks);
+      return [
+        {
+          ok: r.confirmed,
+          signature: r.signature,
+          slot: r.slot,
+          reason: null,
+          ...(r.earlierBroadcastsDead !== undefined
+            ? { earlierBroadcastsDead: r.earlierBroadcastsDead }
+            : {}),
+        },
+      ];
     }
 
     const totalAmount = items.reduce((s, i) => s + i.microAmount, 0n);
@@ -391,7 +547,7 @@ export class Web3JsRpcAdapter implements SolanaRpcAdapter {
           }
           if (!destExists) {
             instructions.push(
-              createAssociatedTokenAccountInstruction(
+              createAssociatedTokenAccountIdempotentInstruction(
                 this.keypair.publicKey,
                 destAta,
                 recipient,
@@ -406,13 +562,17 @@ export class Web3JsRpcAdapter implements SolanaRpcAdapter {
 
         // Same fresh-blockhash retry as the single-leg path — the atomic P2P
         // multi-output tx is exactly what the devnet expiry flake was killing.
-        const { signature, slot, confirmed } = await this.signSendConfirm(instructions);
+        const { signature, slot, confirmed, earlierBroadcastsDead } = await this.signSendConfirm(
+          instructions,
+          hooks,
+        );
         for (let i = start; i < end; i++) {
           results[i] = {
             ok: confirmed,
             signature,
             slot,
             reason: confirmed ? null : "tx failed",
+            ...(earlierBroadcastsDead !== undefined ? { earlierBroadcastsDead } : {}),
           };
         }
         if (!confirmed) aborted = true;
@@ -600,6 +760,57 @@ export class Web3JsRpcAdapter implements SolanaRpcAdapter {
       if (matches.length === 1) return { status: "found", signature: matches[0]! };
       if (matches.length > 1) return { status: "ambiguous", signatures: matches };
       return { status: "not_found" };
+    } catch (err) {
+      return { status: "rpc_error", reason: err instanceof Error ? err.message : String(err) };
+    }
+  }
+
+  /**
+   * What the chain says about ONE signed transaction (#885). Read-only.
+   * Status is looked up with full history search, so a transaction that
+   * landed long ago is still found. Absence becomes authoritative only
+   * once the chain's block height is past the transaction's
+   * `lastValidBlockHeight`: from then on it can never be included.
+   */
+  async getSignatureOutcome(tx: SignedTransactionRef): Promise<SignatureOutcome> {
+    try {
+      // Height and slot come from ONE read (#885 round 3). The absence of a
+      // signature proves "never landed" only if the node answering the status
+      // query had already seen every slot where it could have landed:
+      //
+      //   1. `epoch.blockHeight > lastValidBlockHeight + margin` ⇒ every block
+      //      the transaction could be in (block height ≤ lastValidBlockHeight)
+      //      is at a slot ≤ `epoch.absoluteSlot`.
+      //   2. The status response's `context.slot ≥ epoch.absoluteSlot` ⇒ the
+      //      answering node has processed all of those slots, and
+      //      `searchTransactionHistory` makes it look through them.
+      //   3. So `value[0] === null` from that response means the transaction
+      //      is in none of them, and never can be.
+      //
+      // A node lagging behind (context.slot < absoluteSlot) proves nothing:
+      // `pending`. The margin absorbs commitment-level skew between the two
+      // reads (a block counted at `processed` by one node, not yet at
+      // `confirmed` by another).
+      const epoch = await this.connection.getEpochInfo(this.decisionCommitment);
+      const resp = await this.connection.getSignatureStatuses([tx.signature], {
+        searchTransactionHistory: true,
+      });
+      const status = resp.value[0];
+      const settled =
+        status != null &&
+        (status.confirmationStatus === "finalized" ||
+          (this.commitment !== "finalized" && status.confirmationStatus === "confirmed"));
+      if (status != null && settled) {
+        return status.err == null ? { status: "landed", slot: status.slot } : { status: "failed" };
+      }
+      // In a block, not yet at commitment. `seen` makes every later
+      // "absent" read for this signature untrustworthy (sticky pending).
+      if (status != null) return { status: "pending", seen: true };
+      const pastLastValid =
+        epoch.blockHeight != null &&
+        epoch.blockHeight > tx.lastValidBlockHeight + EXPIRY_HEIGHT_MARGIN;
+      const nodeCaughtUp = resp.context.slot >= epoch.absoluteSlot;
+      return pastLastValid && nodeCaughtUp ? { status: "expired" } : { status: "pending" };
     } catch (err) {
       return { status: "rpc_error", reason: err instanceof Error ? err.message : String(err) };
     }

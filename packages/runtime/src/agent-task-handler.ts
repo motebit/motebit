@@ -127,6 +127,18 @@ export async function* handleAgentTask(
         if (!toolsUsed.includes(chunk.name)) {
           toolsUsed.push(chunk.name);
         }
+      } else if (chunk.type === "payment_notice") {
+        // #885: serving another principal's task, this motebit's own wallet
+        // sent another payment (or a payment could not be recorded). The
+        // owner is not watching this stream — the serving surfaces read only
+        // the task_result — so it is logged loudly here, once for every
+        // serving surface; the owed payment is already in the ledger.
+        deps.logger.warn("delegation.payment_notice", {
+          task_id: task.task_id,
+          notice: chunk.notice,
+          ...(chunk.extra_payments != null ? { extra_payments: chunk.extra_payments } : {}),
+          ...(chunk.ledger_write_failed === true ? { ledger_write_failed: true } : {}),
+        });
       } else if (chunk.type === "result") {
         responseText = chunk.result.response;
         memoriesFormed = chunk.result.memoriesFormed.length;

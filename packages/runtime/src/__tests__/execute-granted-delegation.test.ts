@@ -11,7 +11,12 @@
  * docs/doctrine/memory-never-confers-authority.md.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { MotebitRuntime, NullRenderer, createInMemoryStorage } from "../index";
+import {
+  InMemoryPaidIntentStore,
+  MotebitRuntime,
+  NullRenderer,
+  createInMemoryStorage,
+} from "../index";
 import { explorationStrengthForStakes } from "../motebit-runtime.js";
 import type { PlatformAdapters, StreamChunk } from "../index";
 import type { StreamingProvider } from "@motebit/ai-core";
@@ -1143,6 +1148,152 @@ describe("explorationStrengthForStakes — explore where mistakes are cheap", ()
   it("degenerate inputs (NaN / negative) fail safe to full exploration", () => {
     expect(explorationStrengthForStakes(Number.NaN)).toBe(1);
     expect(explorationStrengthForStakes(-5)).toBe(1);
+  });
+});
+
+// #885 composition: the granted door hands the wallet's own-transaction
+// confirmer to the payment path. A lost send whose own signed tx landed is
+// submitted with THAT tx — one broadcast. Unwired, the same run ends
+// `payment_status_unknown` (fail-closed, but the landed payment is stranded).
+describe("executeGrantedDelegation — lost send, own tx landed (#885)", () => {
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  it("confirms the hire's OWN signed transaction and proceeds with it", async () => {
+    const operator = await generateKeypair();
+    const clerk = await generateKeypair();
+    const grant = await makeGrant(operator, clerk);
+    const token = await mintTick(grant, operator);
+    const submitted: string[] = [];
+    globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      if (url.endsWith("/task") && init?.method === "POST") {
+        submitted.push(
+          (JSON.parse(init.body as string) as { payment_proof: P2pPaymentProof }).payment_proof
+            .tx_hash,
+        );
+      }
+      return relayFetch()(url);
+    }) as typeof fetch;
+
+    const buildP2pPayment = vi.fn(
+      async (
+        _r: SovereignP2pPaymentRequest,
+        hooks?: {
+          beforeBroadcast?: (t: { signature: string; lastValidBlockHeight: number }) => unknown;
+        },
+      ): Promise<P2pPaymentProof> => {
+        await hooks?.beforeBroadcast?.({ signature: "ownSig", lastValidBlockHeight: 9 });
+        throw new Error("was not confirmed in 30.00 seconds");
+      },
+    );
+    const confirmP2pPayment = vi.fn(
+      async (q: { request: SovereignP2pPaymentRequest; transaction: { signature: string } }) => ({
+        status: "landed" as const,
+        proof: {
+          tx_hash: q.transaction.signature,
+          chain: "solana",
+          network: "solana:x",
+          to_address: q.request.workerAddress,
+          amount_micro: q.request.amountMicro,
+          fee_to_address: q.request.treasuryAddress,
+          fee_amount_micro: q.request.feeAmountMicro,
+        },
+      }),
+    );
+    const wallet = { buildP2pPayment, confirmP2pPayment } as unknown as SovereignWalletRail;
+    const runtime = clerkRuntime(wallet);
+
+    const result = await runtime.executeGrantedDelegation({
+      capability: "research",
+      prompt: "survey the topic",
+      delegation: { token, grant },
+      dryRun: false,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(buildP2pPayment).toHaveBeenCalledTimes(1);
+    expect(confirmP2pPayment.mock.calls[0]?.[0].transaction.signature).toBe("ownSig");
+    expect(submitted).toEqual(["ownSig"]);
+  });
+});
+
+// #885 round 4: the granted door's FAILURE result carries every money fact
+// the payment path produced — not only `code` + `settledPayment`.
+describe("executeGrantedDelegation — failure carries the money facts (#885)", () => {
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  it("unconfirmed payment + an unwritten record reach the human-absent caller", async () => {
+    const operator = await generateKeypair();
+    const clerk = await generateKeypair();
+    const grant = await makeGrant(operator, clerk);
+    const token = await mintTick(grant, operator);
+    globalThis.fetch = (async (input: string | URL | Request) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      return relayFetch()(url);
+    }) as typeof fetch;
+
+    const buildP2pPayment = vi.fn(
+      async (
+        _r: SovereignP2pPaymentRequest,
+        hooks?: {
+          beforeBroadcast?: (t: { signature: string; lastValidBlockHeight: number }) => unknown;
+        },
+      ): Promise<P2pPaymentProof> => {
+        await hooks?.beforeBroadcast?.({ signature: "grantSig", lastValidBlockHeight: 9 });
+        throw new Error("was not confirmed in 30.00 seconds");
+      },
+    );
+    const confirmP2pPayment = vi.fn(async () => ({
+      status: "unknown" as const,
+      reason: "429 Too Many Requests",
+    }));
+    const wallet = { buildP2pPayment, confirmP2pPayment } as unknown as SovereignWalletRail;
+    /** Accepts the in-flight write at signing; fails the durable "owed" write. */
+    class OwedWriteFails extends InMemoryPaidIntentStore {
+      override record(entry: Parameters<InMemoryPaidIntentStore["record"]>[0]): void {
+        if (entry.state === "unretrieved") throw new Error("SQLITE_FULL");
+        super.record(entry);
+      }
+    }
+    const runtime = new MotebitRuntime(
+      {
+        motebitId: "clerk-001",
+        tickRateHz: 0,
+        policy: { requireApprovalAbove: RiskLevel.R1_DRAFT, denyAbove: RiskLevel.R4_MONEY },
+        solanaWallet: wallet,
+      },
+      {
+        ...createAdapters(),
+        storage: { ...createInMemoryStorage(), paidIntentStore: new OwedWriteFails() },
+      },
+    );
+    runtime.enableInteractiveDelegation({
+      syncUrl: "https://mock-relay.test",
+      authToken: async () => "test-token",
+      relayPublicKey: PINNED_HEX,
+      acknowledgeNoHistoryRisk: true,
+    });
+
+    const result = await runtime.executeGrantedDelegation({
+      capability: "research",
+      prompt: "survey the topic",
+      delegation: { token, grant },
+      dryRun: false,
+    });
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.code).toBe("payment_status_unknown");
+      expect(result.unconfirmedPayment?.ledgerId).toBe("p2p-payment:grantSig");
+      expect(result.unconfirmedPayment?.reason).toMatch(/429/);
+      expect(result.ledgerWriteFailed).toBe(true);
+      expect(result.notice).toMatch(/could NOT be written/);
+    }
+    expect(buildP2pPayment).toHaveBeenCalledTimes(1);
   });
 });
 

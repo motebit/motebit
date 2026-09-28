@@ -20,10 +20,15 @@ import type {
   SovereignP2pPaymentRequest,
   P2pPaymentProof,
 } from "@motebit/protocol";
-import type { SolanaRpcAdapter } from "./adapter.js";
+import type { BroadcastHooks, SignedTransactionRef, SolanaRpcAdapter } from "./adapter.js";
 import type { SendUsdcResult, SendUsdcBatchItemResult } from "./adapter.js";
 import { Web3JsRpcAdapter } from "./web3js-adapter.js";
-import { buildP2pPaymentProof } from "./p2p-payment-proof.js";
+import {
+  buildP2pPaymentProof,
+  p2pPaymentLegs,
+  assembleP2pPaymentProof,
+  type BuildP2pPaymentProofArgs,
+} from "./p2p-payment-proof.js";
 import { InsufficientUsdcBalanceError, InvalidSolanaAddressError } from "./constants.js";
 
 export type SendResult = SendUsdcResult;
@@ -55,6 +60,34 @@ export type SendConfirmation =
   | { status: "landed"; signature: string }
   | { status: "absent" }
   | { status: "pending"; recheckAtMs: number }
+  | { status: "unknown"; reason: string };
+
+/** Input to {@link SolanaWalletRail.confirmP2pPayment}. */
+export interface ConfirmP2pPaymentQuery {
+  /** The payment request `buildP2pPayment` was called with — a landed tx must pay exactly it. */
+  request: SovereignP2pPaymentRequest;
+  /**
+   * THE transaction this payer signed, as reported to it by
+   * `buildP2pPayment`'s `beforeBroadcast` hook before sending. The verdict
+   * is about this transaction only — never about some other transaction
+   * whose transfers happen to look the same.
+   */
+  transaction: SignedTransactionRef;
+}
+
+/** How long to wait before asking again about a still-pending transaction. */
+const P2P_PENDING_RECHECK_MS = 5_000;
+
+/**
+ * Closed verdict of {@link SolanaWalletRail.confirmP2pPayment}. `landed`
+ * carries the full proof, assembled exactly as `buildP2pPayment` would have
+ * returned it for that transaction.
+ */
+export type P2pPaymentConfirmation =
+  | { status: "landed"; proof: P2pPaymentProof }
+  | { status: "absent" }
+  /** `seen`: a node reported it in a block — never accept a later `absent` for it. */
+  | { status: "pending"; recheckAtMs: number; seen?: true }
   | { status: "unknown"; reason: string };
 
 /**
@@ -102,6 +135,17 @@ export class SolanaWalletRail implements SovereignWalletRail {
   private readonly web3Adapter: Web3JsRpcAdapter | null;
   private readonly now: () => number;
 
+  /**
+   * After `buildP2pPayment` threw: did THIS payer's transaction land? (#885)
+   * See {@link confirmOwnP2pPayment}. PRESENT ONLY when the adapter declares
+   * `honorsBroadcastHooks` — i.e. every transaction it signs is reported
+   * through `beforeBroadcast` before it is sent. A payer reads "no signature
+   * reported" as "nothing was sent" only when this is present; over an
+   * adapter that does not report, the confirmer is absent and every failed
+   * build is undecidable (the caller must not pay again).
+   */
+  readonly confirmP2pPayment?: (query: ConfirmP2pPaymentQuery) => Promise<P2pPaymentConfirmation>;
+
   constructor(
     private readonly adapter: SolanaRpcAdapter,
     opts?: { autoGas?: boolean; now?: () => number },
@@ -109,6 +153,9 @@ export class SolanaWalletRail implements SovereignWalletRail {
     this.autoGas = opts?.autoGas ?? false;
     this.now = opts?.now ?? Date.now;
     this.web3Adapter = adapter instanceof Web3JsRpcAdapter ? adapter : null;
+    if (adapter.honorsBroadcastHooks === true) {
+      this.confirmP2pPayment = (query) => this.confirmOwnP2pPayment(query);
+    }
   }
 
   /** The wallet's own base58 address. Equivalent to the motebit identity public key. */
@@ -222,24 +269,20 @@ export class SolanaWalletRail implements SovereignWalletRail {
    * rail only layers gas management on top. Two legs for single-operator P2P
    * (worker + relay treasury); three for cross-operator federated P2P when
    * the executor-relay fields are present.
+   *
+   * `hooks.beforeBroadcast` (#885) is told each transaction's signature
+   * after signing and before sending. A payer records it there, so a throw
+   * afterwards is resolved by asking about that exact transaction
+   * (`confirmP2pPayment`); if the hook throws, nothing is sent.
    */
-  async buildP2pPayment(request: SovereignP2pPaymentRequest): Promise<P2pPaymentProof> {
+  async buildP2pPayment(
+    request: SovereignP2pPaymentRequest,
+    hooks?: BroadcastHooks,
+  ): Promise<P2pPaymentProof> {
     if (this.autoGas) {
       await this.ensureGas();
     }
-    return buildP2pPaymentProof(this.adapter, {
-      workerAddress: request.workerAddress,
-      amountMicro: request.amountMicro,
-      treasuryAddress: request.treasuryAddress,
-      feeAmountMicro: request.feeAmountMicro,
-      ...(request.executorTreasuryAddress != null
-        ? { executorTreasuryAddress: request.executorTreasuryAddress }
-        : {}),
-      ...(request.executorFeeAmountMicro != null
-        ? { executorFeeAmountMicro: request.executorFeeAmountMicro }
-        : {}),
-      ...(request.network != null ? { network: request.network } : {}),
-    });
+    return buildP2pPaymentProof(this.adapter, proofArgs(request), hooks);
   }
 
   /**
@@ -296,10 +339,115 @@ export class SolanaWalletRail implements SovereignWalletRail {
     }
   }
 
+  /**
+   * After `buildP2pPayment` threw: did THIS payer's transaction land? (#885)
+   *
+   * Bound to one signature — the one `buildP2pPayment` reported through its
+   * `beforeBroadcast` hook before sending. It never looks for "a transaction
+   * that pays these legs": two concurrent hires of the same worker at the
+   * same price produce identical leg sets, and a leg match would hand one
+   * hire the other's payment. Read-only: it never signs or broadcasts.
+   *
+   *   - `landed` — the transaction is confirmed, succeeded, and pays exactly
+   *     the requested legs; `proof` is its proof.
+   *   - `absent` — it can never move money: it is past its last valid block
+   *     height and not on chain, or it landed and failed.
+   *   - `pending` — not yet confirmed and still able to land.
+   *   - `unknown` — undecidable (RPC error, an adapter without the status
+   *     read, a landed transaction that does not pay the requested legs or
+   *     cannot be read). A payer MUST NOT pay again.
+   */
+  private async confirmOwnP2pPayment(
+    query: ConfirmP2pPaymentQuery,
+  ): Promise<P2pPaymentConfirmation> {
+    if (typeof this.adapter.getSignatureOutcome !== "function") {
+      return {
+        status: "unknown",
+        reason: "this wallet adapter cannot read a transaction's status",
+      };
+    }
+    const signature = query.transaction.signature;
+    const outcome = await this.adapter.getSignatureOutcome(query.transaction);
+    switch (outcome.status) {
+      case "rpc_error":
+        return { status: "unknown", reason: outcome.reason };
+      case "pending":
+        return {
+          status: "pending",
+          recheckAtMs: this.now() + P2P_PENDING_RECHECK_MS,
+          ...(outcome.seen === true ? { seen: true as const } : {}),
+        };
+      case "failed":
+      case "expired":
+        return { status: "absent" };
+      case "landed":
+        break;
+    }
+    // Landed: money moved. It becomes this hire's payment proof only if the
+    // transaction pays exactly what was requested.
+    const args = proofArgs(query.request);
+    let legs: Array<{ toAddress: string; microAmount: bigint }>;
+    try {
+      legs = p2pPaymentLegs(args);
+    } catch (err: unknown) {
+      return { status: "unknown", reason: err instanceof Error ? err.message : String(err) };
+    }
+    const tx = await this.adapter.getTransaction(signature);
+    if (tx.status !== "confirmed") {
+      return {
+        status: "unknown",
+        reason: `transaction ${signature} landed but could not be read (${tx.status === "rpc_error" ? tx.reason : "not found"})`,
+      };
+    }
+    if (tx.from !== this.adapter.ownAddress || !paysExactly(tx.transfers, legs)) {
+      return {
+        status: "unknown",
+        reason: `transaction ${signature} landed but does not pay exactly the requested legs`,
+      };
+    }
+    return { status: "landed", proof: assembleP2pPaymentProof(args, signature) };
+  }
+
   /** Whether the RPC endpoint is reachable right now. */
   isAvailable(): Promise<boolean> {
     return this.adapter.isReachable();
   }
+}
+
+/**
+ * Does a confirmed transaction's transfer set equal `legs` exactly — same
+ * recipients, same amounts, nothing else leaving the wallet?
+ */
+function paysExactly(
+  transfers: ReadonlyArray<{ to: string; amountMicro: bigint }>,
+  legs: ReadonlyArray<{ toAddress: string; microAmount: bigint }>,
+): boolean {
+  const remaining = [...transfers];
+  for (const leg of legs) {
+    const i = remaining.findIndex(
+      (t) => t.to === leg.toAddress && t.amountMicro === leg.microAmount,
+    );
+    if (i < 0) return false;
+    remaining.splice(i, 1);
+  }
+  return remaining.length === 0;
+}
+
+/** The builder's arguments for a rail-level request — one mapping for broadcast and lookup. */
+function proofArgs(request: SovereignP2pPaymentRequest): BuildP2pPaymentProofArgs {
+  return {
+    workerAddress: request.workerAddress,
+    amountMicro: request.amountMicro,
+    treasuryAddress: request.treasuryAddress,
+    feeAmountMicro: request.feeAmountMicro,
+    ...(request.executorTreasuryAddress != null
+      ? { executorTreasuryAddress: request.executorTreasuryAddress }
+      : {}),
+    ...(request.executorFeeAmountMicro != null
+      ? { executorFeeAmountMicro: request.executorFeeAmountMicro }
+      : {}),
+    ...(request.network != null ? { network: request.network } : {}),
+  };
 }
 
 /**

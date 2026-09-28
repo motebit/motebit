@@ -10,13 +10,15 @@ import type { ExecutionReceipt, ToolRegistry } from "@motebit/sdk";
 import type { TokenAudience } from "@motebit/protocol";
 
 import {
+  paymentNoticeChunk,
   retrieveDelegationResult,
   selectAndRunDelegation,
+  type ConfirmP2pPayment,
+  type BuildP2pPayment,
   type DelegationSettlement,
   type TaskRetrieval,
 } from "./relay-delegation.js";
 import { fromMicro, RiskLevel, SideEffect } from "@motebit/protocol";
-import type { P2pPaymentProof, SovereignP2pPaymentRequest } from "@motebit/protocol";
 
 /**
  * Render the settlement fact as a sentence the model can relay verbatim. The
@@ -38,7 +40,11 @@ function formatSettlementNote(settlement: DelegationSettlement | undefined): str
     settlement.paidMicro != null ? `$${fromMicro(settlement.paidMicro).toFixed(6)}` : "—";
   const fee = settlement.feeMicro != null ? `$${fromMicro(settlement.feeMicro).toFixed(6)}` : "—";
   const tx = settlement.txHash ? ` Transaction: ${settlement.txHash}.` : "";
-  return `[settlement] Paid ${paid} to the worker + ${fee} platform fee, peer-to-peer onchain.${tx}`;
+  // #885: another transaction from this hire may have moved money, or the
+  // payment record could not be written — the user must be told.
+  const warning =
+    settlement.notice != null ? `\n[WARNING — tell the user] ${settlement.notice}` : "";
+  return `[settlement] Paid ${paid} to the worker + ${fee} platform fee, peer-to-peer onchain.${tx}${warning}`;
 }
 
 /** ToolRegistry extended with `has()` — matches SimpleToolRegistry in MotebitRuntime. */
@@ -85,7 +91,13 @@ export interface InteractiveDelegationConfig {
    * from its `SovereignWalletRail` at enable time. Present only when a sovereign
    * wallet is configured.
    */
-  buildP2pPayment?: (request: SovereignP2pPaymentRequest) => Promise<P2pPaymentProof>;
+  buildP2pPayment?: BuildP2pPayment;
+  /**
+   * The same rail's read-only "did the payment land anyway?" lookup (#885),
+   * bound by the runtime beside `buildP2pPayment`. Absent ⇒ a builder error
+   * is `payment_status_unknown` (recorded, never retried).
+   */
+  confirmP2pPayment?: ConfirmP2pPayment;
   /**
    * Cold-start opt-in: whether the user has consented to pay a worker they have
    * NO trust history with directly, peer-to-peer (the Arc-3 acknowledgment).
@@ -162,6 +174,11 @@ export function renderTaskRetrieval(
     invalid_task_id:
       "That is not a task id. Ask the user for the id (or use /result to list them).",
     not_connected: "No relay is connected on this device, so nothing could be read.",
+    not_admitted:
+      "This is a payment with NO confirmed relay task: the relay refused it, or its admission " +
+      "(or the payment's landing) was never confirmed. There is nothing to fetch by this id. Do " +
+      "NOT re-delegate — that would pay again. Tell the user the payment is outstanding and let " +
+      "them reconcile it.",
   };
   const out: Record<string, unknown> = {
     task_id: r.taskId,
@@ -196,6 +213,15 @@ export function renderTaskRetrieval(
 
 export class InteractiveDelegationManager {
   private receipts: ExecutionReceipt[] = [];
+  /** #885: money warnings from delegate_to_agent calls, drained by the stream. */
+  private paymentNotices: Array<NonNullable<ReturnType<typeof paymentNoticeChunk>>> = [];
+
+  /** Take the pending payment notices (the streaming layer emits them). */
+  drainPaymentNotices(): Array<NonNullable<ReturnType<typeof paymentNoticeChunk>>> {
+    const out = this.paymentNotices;
+    this.paymentNotices = [];
+    return out;
+  }
 
   constructor(private readonly deps: InteractiveDelegationDeps) {}
 
@@ -371,6 +397,7 @@ export class InteractiveDelegationManager {
           prompt,
           ...(requiredCapabilities ? { requiredCapabilities } : {}),
           ...(config.buildP2pPayment ? { buildP2pPayment: config.buildP2pPayment } : {}),
+          ...(config.confirmP2pPayment ? { confirmP2pPayment: config.confirmP2pPayment } : {}),
           ...(config.relayPublicKey != null ? { relayPublicKey: config.relayPublicKey } : {}),
           ...(ack === true ? { acknowledgeNoHistoryRisk: true } : {}),
           ...(config.routingStrategy ? { routingStrategy: config.routingStrategy } : {}),
@@ -383,6 +410,11 @@ export class InteractiveDelegationManager {
             routeDegrade.current = degrade;
           },
         });
+        // #885: a money warning reaches the OWNER as a typed stream chunk
+        // (drained by the streaming layer after this call), not only the
+        // model through the tool text below.
+        const notice = paymentNoticeChunk(result);
+        if (notice != null) this.paymentNotices.push(notice);
 
         if (!result.ok) {
           // A failure AFTER the onchain payment settled is categorically
@@ -423,6 +455,39 @@ export class InteractiveDelegationManager {
                 `Do NOT re-delegate. Call retrieve_task_result with task_id ${settled.taskId} ` +
                 `(free, read-only) to fetch it; if that does not deliver, tell the user the work ` +
                 `was already paid for and its result is outstanding, and let them decide.`,
+            };
+          }
+          // #885: the money left the wallet but the relay never admitted the
+          // task — there is no task id to fetch. Not "the hire succeeded".
+          if (
+            (result.error.code === "payment_not_admitted" ||
+              result.error.code === "payment_admission_unconfirmed") &&
+            settled
+          ) {
+            const refused = result.error.code === "payment_not_admitted";
+            return {
+              ok: false,
+              error:
+                `${refused ? "PAYMENT_NOT_ADMITTED" : "PAYMENT_ADMISSION_UNCONFIRMED"} — you have ` +
+                `ALREADY PAID ${(settled.paidMicro / 1_000_000).toFixed(4)} USDC (+ ` +
+                `${(settled.feeMicro / 1_000_000).toFixed(4)} fee) onchain, tx ${settled.txHash}, ` +
+                (refused
+                  ? `and the relay refused the task. `
+                  : `and the relay has not confirmed admitting the task (it may have, without ` +
+                    `the answer arriving). `) +
+                `No task id is known, so there is nothing to fetch. Do NOT delegate this task ` +
+                `again — a second delegation pays a SECOND time. Tell the user the payment went ` +
+                `out (${result.error.message}), and let them decide.`,
+            };
+          }
+          if (result.error.code === "payment_status_unknown") {
+            return {
+              ok: false,
+              error:
+                `PAYMENT_STATUS_UNKNOWN — the payment step failed and the wallet could not ` +
+                `confirm whether money left it. Nothing was submitted. Do NOT delegate this task ` +
+                `again — if the payment landed, a second delegation pays twice. Tell the user to ` +
+                `check the wallet's history (${result.error.message}).`,
             };
           }
           if (settled) {

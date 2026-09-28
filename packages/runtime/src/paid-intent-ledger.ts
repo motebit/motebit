@@ -26,9 +26,12 @@
  *   "same job, same worker, re-hired". A different worker for one
  *   outstanding payment is legitimate fan-out and passes; the suspend
  *   threshold bounds the pathological case.
- * - Recorded ONLY from a `settledPayment` fact (the money independently
- *   verified as moved), never from an intent or a prompt. No unverified
- *   state can lock anything.
+ * - Recorded ONLY from a money fact produced by the payment path — never
+ *   from an intent or a prompt: a `settledPayment`, a payment proof in hand
+ *   (recorded at broadcast, before the task is submitted — #885), or a
+ *   payment builder that threw with the chain unable to rule out that the
+ *   money moved (#885, `p2p-unconfirmed:`). Nothing a model says can lock
+ *   anything.
  * - An entry leaves the ledger only by RETRIEVAL (the signed result was
  *   fetched — `retrieveDelegationResult`) or an owner's explicit
  *   DISMISSAL. Never by elapsed time, never by a 404: a 404 has followed
@@ -62,6 +65,40 @@ export type PaidIntentVerdict =
       scope: "pair" | "session";
       prior: UnretrievedPayment;
     };
+
+/**
+ * Ledger ids for payments that have no confirmed relay task (#885). The
+ * ledger is keyed by task, but a P2P payment exists BEFORE the relay admits
+ * its task — from the moment its transaction is signed — so it gets an
+ * entry under a synthetic id that can never collide with a relay task id:
+ *
+ *   - `p2p-payment:<signature>` — a transaction this device signed for a
+ *     hire. Recorded after signing and BEFORE it is sent (in flight, this
+ *     session). Handed over to the real task id when the relay admits it;
+ *     voided when the chain confirms it can never land; otherwise it stays
+ *     and locks the pair — it may have moved money, and no relay task is
+ *     confirmed for it (the relay rejected it, or admission is unconfirmed).
+ *   - `p2p-unconfirmed:<...>` — a rail that does not report its transactions
+ *     threw, and nothing could be confirmed. Money may have left the wallet.
+ *
+ * Neither is fetchable from the relay by that id; `retrieveDelegationResult`
+ * answers them locally (`not_admitted`) without a relay read.
+ */
+export const PAYMENT_ENTRY_PREFIX = "p2p-payment:";
+export const UNCONFIRMED_TASK_PREFIX = "p2p-unconfirmed:";
+
+/** The ledger id of a signed P2P payment transaction with no confirmed relay task. */
+export function paymentEntryId(signature: string): string {
+  return `${PAYMENT_ENTRY_PREFIX}${signature}`;
+}
+
+/** True for a ledger id that names a payment with no confirmed relay task (either kind). */
+export function isPaymentWithoutTaskId(taskId: string): boolean {
+  return taskId.startsWith(PAYMENT_ENTRY_PREFIX) || taskId.startsWith(UNCONFIRMED_TASK_PREFIX);
+}
+
+/** The `tx_hash` recorded for a payment whose transaction is not known. */
+export const UNKNOWN_TX_HASH = "unknown";
 
 /**
  * Outstanding-payment count at which ALL new paid delegation is refused,
@@ -194,6 +231,94 @@ export class PaidIntentLedger {
   }
 
   /**
+   * Record a P2P payment transaction the moment it is SIGNED — before it is
+   * sent, so before any money can move (#885). `txHash` is its signature,
+   * and the entry lives under `paymentEntryId(txHash)`. It is in flight:
+   * this session is paying and submitting it and nothing locks here, but a
+   * process that dies before the relay admits the task leaves it on record
+   * and every later session refuses the re-hire. On admission it is handed
+   * over to the task (`admitted`); if the chain says the transaction can
+   * never land it is voided (`voidUnsent`); if the submission is given up
+   * or the payment's fate is unknown it becomes unretrieved
+   * (`recordSettledUnretrieved` with the same id). A caller that cannot
+   * write this record must not send the transaction.
+   */
+  recordBroadcast(entry: Omit<UnretrievedPayment, "taskId">): void {
+    this.write({ ...entry, taskId: paymentEntryId(entry.txHash) }, "in_flight");
+  }
+
+  /**
+   * The relay admitted the task a recorded payment bought: the task entry
+   * takes over (in flight, polled by this session) and the pre-admission
+   * entry stops locking. The task entry is written first, so a crash in
+   * between leaves two entries for one payment — over-locking, never
+   * under-locking.
+   *
+   * The pre-admission entry is resolved `retrieved` because the record's
+   * resolution vocabulary (`@motebit/sdk` `PaidIntentRecord`) has only
+   * retrieved / dismissed; what it means here is "carried by the task entry".
+   */
+  admitted(txHash: string, task: UnretrievedPayment): void {
+    this.recordInFlight(task);
+    this.store.resolve(this.motebitId, paymentEntryId(txHash), "retrieved", Date.now());
+  }
+
+  /**
+   * Record a payment whose builder threw and whose landing the chain could
+   * not confirm or rule out (#885). Money may have left the wallet, and no
+   * transaction is known, so the entry is unretrieved at once — it locks
+   * the pair in this session too — until the owner reconciles the wallet
+   * and dismisses it. Returns the entry's ledger id.
+   */
+  recordUnconfirmed(entry: Omit<UnretrievedPayment, "taskId" | "txHash">): {
+    taskId: string;
+    durable: boolean;
+  } {
+    const taskId =
+      `${UNCONFIRMED_TASK_PREFIX}${entry.recordedAt.toString(36)}-` +
+      newSessionId()
+        .replace(/[^A-Za-z0-9]/g, "")
+        .slice(0, 12);
+    const durable = this.recordOwed({ ...entry, taskId, txHash: UNKNOWN_TX_HASH });
+    return { taskId, durable };
+  }
+
+  /**
+   * Payments owed whose durable write FAILED (#885 round 3), held in memory
+   * for the life of this process. Without this, a failed write leaves at
+   * most this session's own in-flight row — which locks nothing for this
+   * session — so a human-absent loop could buy the same work again.
+   */
+  private readonly held = new Map<string, UnretrievedPayment>();
+
+  /**
+   * Record a payment as owed (unretrieved) — fail-CLOSED. If the durable
+   * write throws, the entry is held in memory instead: it locks the pair
+   * (and counts toward the session suspend) for as long as this process
+   * runs, and `outstanding()` lists it. Returns whether the write was
+   * durable; a caller must tell the owner when it was not.
+   */
+  recordOwed(entry: UnretrievedPayment): boolean {
+    try {
+      this.recordSettledUnretrieved(entry);
+      return true;
+    } catch {
+      this.held.set(entry.taskId, entry);
+      return false;
+    }
+  }
+
+  /**
+   * A transaction recorded at signing turned out never to move money: the
+   * chain says it expired unsent or failed onchain (#885). Its entry stops
+   * locking. Resolved `dismissed` — the record's resolution vocabulary
+   * (`@motebit/sdk`) has no "never sent"; the row stays as history.
+   */
+  voidUnsent(signature: string): boolean {
+    return this.store.resolve(this.motebitId, paymentEntryId(signature), "dismissed", Date.now());
+  }
+
+  /**
    * May a NEW paid delegation to this worker+capability broadcast?
    * Fail-closed: any lock verdict must refuse before money moves. Only
    * genuinely unretrieved payments count — this session's own in-flight
@@ -213,7 +338,8 @@ export class PaidIntentLedger {
 
   /** The result of `taskId` was retrieved — the entry stops locking. */
   resolve(taskId: string): boolean {
-    return this.store.resolve(this.motebitId, taskId, "retrieved", Date.now());
+    const wasHeld = this.held.delete(taskId);
+    return this.store.resolve(this.motebitId, taskId, "retrieved", Date.now()) || wasHeld;
   }
 
   /**
@@ -221,13 +347,14 @@ export class PaidIntentLedger {
    * the result is unrecoverable). An explicit human act, never automatic.
    */
   dismiss(taskId: string): boolean {
-    return this.store.resolve(this.motebitId, taskId, "dismissed", Date.now());
+    const wasHeld = this.held.delete(taskId);
+    return this.store.resolve(this.motebitId, taskId, "dismissed", Date.now()) || wasHeld;
   }
 
   /** The unresolved entry for `taskId` — unretrieved or in flight — if any. */
   find(taskId: string): UnretrievedPayment | null {
     const r = this.store.listOutstanding(this.motebitId).find((e) => e.task_id === taskId);
-    return r != null ? fromRecord(r) : null;
+    return r != null ? fromRecord(r) : (this.held.get(taskId) ?? null);
   }
 
   get outstandingCount(): number {
@@ -240,10 +367,12 @@ export class PaidIntentLedger {
    * another session (a process that died mid-poll).
    */
   outstanding(): UnretrievedPayment[] {
-    return this.store
+    const stored = this.store
       .listOutstanding(this.motebitId)
       .filter((r) => r.state === "unretrieved" || r.session_id !== this.sessionId)
       .map(fromRecord);
+    const seen = new Set(stored.map((e) => e.taskId));
+    return [...stored, ...[...this.held.values()].filter((e) => !seen.has(e.taskId))];
   }
 
   /** This session's own hires still being polled — owed nothing yet, locking nothing. */
