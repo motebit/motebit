@@ -34,6 +34,9 @@ export interface RecallMemoriesResult {
 /** @internal */
 export const recallMemoriesDefinition: ToolDefinition = {
   name: "recall_memories",
+  // Owner interior (reads the owner's memory graph; remote callers get the capped motebit_recall): never served to another
+  // principal, never offered to a foreign principal's turn (#880).
+  localOnly: true,
   mode: "api",
   description:
     "Search your own memory graph for relevant information. Use when you need to " +

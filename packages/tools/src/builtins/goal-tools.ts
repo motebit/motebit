@@ -4,6 +4,9 @@ import { RiskLevel, DataClass, SideEffect } from "@motebit/sdk";
 /** @internal */
 export const createSubGoalDefinition: ToolDefinition = {
   name: "create_sub_goal",
+  // Owner interior (mutates the owner's goals): never served to another
+  // principal, never offered to a foreign principal's turn (#880).
+  localOnly: true,
   mode: "api",
   description:
     "Create a child sub-goal under the current goal. Use to decompose complex goals into smaller, focused tasks.",
@@ -41,6 +44,9 @@ export const createSubGoalDefinition: ToolDefinition = {
 /** @internal */
 export const completeGoalDefinition: ToolDefinition = {
   name: "complete_goal",
+  // Owner interior (mutates the owner's goals): never served to another
+  // principal, never offered to a foreign principal's turn (#880).
+  localOnly: true,
   mode: "api",
   description:
     "Mark the current goal as completed. Use when the goal's objective has been fully achieved.",
@@ -61,6 +67,9 @@ export const completeGoalDefinition: ToolDefinition = {
 /** @internal */
 export const reportProgressDefinition: ToolDefinition = {
   name: "report_progress",
+  // Owner interior (writes the owner's goal progress): never served to another
+  // principal, never offered to a foreign principal's turn (#880).
+  localOnly: true,
   mode: "api",
   description:
     "Log a progress observation for the current goal. Use to record intermediate findings or status.",

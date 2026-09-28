@@ -1327,6 +1327,17 @@ export class MemoryGraph {
    * tombstone) — so a tool-superseded node no longer ends up tombstoned
    * locally yet live on every peer.
    *
+   * Provenance is the REWRITE's, never the superseded node's (#880). The
+   * replacement content is authored by whoever called this — on the
+   * `rewrite_memory` tool path, the agent — so it is stamped with the
+   * `source` the forming code path declares, defaulting to
+   * `agent_inferred`. Inheriting the old node's tier let a rewrite launder
+   * new content into `user_stated`: a peer (or an injected page) that
+   * reached the tool could replace a user's statement and have it keep
+   * rendering `[from:user]` (docs/doctrine/memory-provenance.md — source
+   * is assigned by the forming path, never carried over). A caller that
+   * acts for another principal passes `"peer_agent"`.
+   *
    * Returns the new node id. Throws when `oldNodeId` is unknown, already
    * superseded (`valid_until` set), or tombstoned (deleted) — the tool
    * handler turns that into a user-surface error.
@@ -1335,6 +1346,7 @@ export class MemoryGraph {
     oldNodeId: string,
     newContent: string,
     reason: string,
+    source: AttributedMemoryCandidate["source"] = "agent_inferred",
   ): Promise<string> {
     const oldNode = await this.storage.getNode(oldNodeId);
     if (!oldNode) throw new Error(`No memory node with id ${oldNodeId}`);
@@ -1347,8 +1359,10 @@ export class MemoryGraph {
 
     // Embed the new content so retrieval works against the replacement
     // immediately. Sensitivity + memory_type inherit from the old node —
-    // the rewrite is a correction, not a re-classification. Uses the injected
-    // embedder (defaults to the model-backed `embedText`).
+    // the rewrite is a correction, not a re-classification (and inheriting
+    // sensitivity can only keep it at or above the old floor). Provenance
+    // does NOT inherit: see the doc comment. Uses the injected embedder
+    // (defaults to the model-backed `embedText`).
     const embedding = await this.embed(newContent);
 
     // Stamp once, BEFORE forming the new node, so the new node's `valid_from`
@@ -1361,12 +1375,10 @@ export class MemoryGraph {
         confidence: oldNode.confidence,
         sensitivity: oldNode.sensitivity,
         memory_type: oldNode.memory_type,
-        // Provenance inherits from the superseded node — the rewrite is a
-        // correction, not a re-classification; the corrected fact has the
-        // same epistemic origin. A pre-provenance legacy node stays
-        // declared-unknown (never fabricate).
-        source: oldNode.source,
-        source_turn_id: oldNode.source_turn_id,
+        // The rewrite's author, declared by the forming path — never the
+        // superseded node's tier (#880). No `source_turn_id`: the old
+        // node's turn did not form this content.
+        source,
       },
       embedding,
       oldNode.half_life,

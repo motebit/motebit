@@ -20,6 +20,9 @@ import type { ToolDefinition, ToolHandler } from "@motebit/sdk";
 /** @internal */
 export const searchConversationsDefinition: ToolDefinition = {
   name: "search_conversations",
+  // Owner interior (reads the owner's verbatim conversation transcripts): never served to another
+  // principal, never offered to a foreign principal's turn (#880).
+  localOnly: true,
   mode: "api",
   description:
     "Search your conversation history (verbatim user + assistant messages) by keyword. " +

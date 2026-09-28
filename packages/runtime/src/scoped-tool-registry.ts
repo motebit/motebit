@@ -32,6 +32,10 @@ export interface ScopedToolRegistryOptions {
    *  The function is allowed to capture mutable presence state by
    *  reference; the decorator does not memoize the predicate. */
   allows: (toolName: string) => boolean;
+  /** Optional refusal text for a refused `execute()` — names WHY this
+   *  scope refuses (e.g. a foreign principal's turn, #880). Absent or
+   *  undefined falls back to the presence-mode message. */
+  refusal?: (toolName: string) => string | undefined;
 }
 
 export class ScopedToolRegistry implements ToolRegistry {
@@ -48,7 +52,7 @@ export class ScopedToolRegistry implements ToolRegistry {
     if (!this.opts.allows(name)) {
       return {
         ok: false,
-        error: `Tool "${name}" not available in current presence mode`,
+        error: this.opts.refusal?.(name) ?? `Tool "${name}" not available in current presence mode`,
       };
     }
     return this.inner.execute(name, args);

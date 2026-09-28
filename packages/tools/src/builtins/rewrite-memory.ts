@@ -23,10 +23,14 @@
  */
 
 import type { ToolDefinition, ToolHandler } from "@motebit/sdk";
+import { RiskLevel, DataClass, SideEffect } from "@motebit/sdk";
 
 /** @internal */
 export const rewriteMemoryDefinition: ToolDefinition = {
   name: "rewrite_memory",
+  // Owner interior (mutates the owner's memory graph): never served to another
+  // principal, never offered to a foreign principal's turn (#880).
+  localOnly: true,
   mode: "api",
   description:
     "Correct a stale or incorrect memory by superseding it with new content. " +
@@ -56,6 +60,15 @@ export const rewriteMemoryDefinition: ToolDefinition = {
       },
     },
     required: ["node_id", "new_content", "reason"],
+  },
+  // A memory WRITE, declared rather than inferred (#880): the name
+  // matches no risk pattern (`rewrite` is not `\bwrite\b`) and the
+  // description's "recall" fell through to R0_READ, so a supersede of
+  // the owner's beliefs auto-executed as a read in every preset.
+  riskHint: {
+    risk: RiskLevel.R2_WRITE,
+    dataClass: DataClass.PRIVATE,
+    sideEffect: SideEffect.REVERSIBLE,
   },
 };
 

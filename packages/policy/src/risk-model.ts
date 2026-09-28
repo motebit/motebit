@@ -16,9 +16,14 @@ const RISK_RULES: { pattern: RegExp; profile: Partial<ToolRiskProfile> }[] = [
     pattern: /\b(shell|exec|run|command|deploy|restart|kill)\b/i,
     profile: { risk: RiskLevel.R3_EXECUTE, sideEffect: SideEffect.IRREVERSIBLE },
   },
-  // R2 Write
+  // R2 Write. Rewriting, overwriting, superseding, forgetting, pruning
+  // and erasing are writes too (#880): `\bwrite\b` does not match inside
+  // `rewrite`, so `rewrite_memory` ("…by superseding it…") fell through
+  // to the R0 "recall" rule and a supersede of the owner's beliefs
+  // auto-executed as a read.
   {
-    pattern: /\b(write|create|update|delete|remove|send|post|push|merge)\b/i,
+    pattern:
+      /\b(write|rewrit(?:e|es|ing|ten)|overwrit(?:e|es|ing|ten)|supersed(?:e|es|ed|ing)|forget|prune|erase|create|update|delete|remove|send|post|push|merge)\b/i,
     profile: { risk: RiskLevel.R2_WRITE, sideEffect: SideEffect.REVERSIBLE },
   },
   // R1 Draft

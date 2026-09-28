@@ -18,6 +18,9 @@ import type { ToolDefinition, ToolHandler } from "@motebit/sdk";
 /** @internal */
 export const recallSelfDefinition: ToolDefinition = {
   name: "recall_self",
+  // Owner interior (the interior tier of the owner's answer engine): never served to another
+  // principal, never offered to a foreign principal's turn (#880).
+  localOnly: true,
   mode: "api",
   description:
     "Search your own committed knowledge about Motebit — who you are, how you work, the doctrine you live by. Use this BEFORE web_search when the user asks about Motebit, about yourself, or about any concept in your own documentation.",

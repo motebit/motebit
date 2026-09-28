@@ -616,7 +616,8 @@ describe("McpServerAdapter — tool execution", () => {
     await handler({ city: "Paris" });
 
     expect(validateTool).toHaveBeenCalledWith(tool, { city: "Paris" }, undefined);
-    expect(executeTool).toHaveBeenCalledWith("with-args", { city: "Paris" });
+    // Third argument: the request's caller — none on stdio (#880).
+    expect(executeTool).toHaveBeenCalledWith("with-args", { city: "Paris" }, undefined);
   });
 });
 
@@ -859,7 +860,7 @@ describe("McpServerAdapter — integration", () => {
     expect(validateTool).toHaveBeenCalledWith(tool, { expression: "6*7" }, undefined);
 
     // 2. Tool was executed
-    expect(executeTool).toHaveBeenCalledWith("calculator", { expression: "6*7" });
+    expect(executeTool).toHaveBeenCalledWith("calculator", { expression: "6*7" }, undefined);
 
     // 3. Audit was logged
     expect(logToolCall).toHaveBeenCalledWith(
@@ -1742,18 +1743,20 @@ describe("McpServerAdapter — mutual authentication", () => {
     const adapter = new McpServerAdapter(makeConfig(), deps);
     await adapter.start();
 
-    // Simulate setting lastVerifiedCaller (as would happen during HTTP auth)
-    const adapterAny = adapter as unknown as {
-      lastVerifiedCaller: { motebitId: string; trustLevel: string } | null;
-    };
-    adapterAny.lastVerifiedCaller = {
-      motebitId: "caller-mote-id",
-      trustLevel: ATL.Verified,
+    // The HTTP handler attaches the verified caller to ITS request as the
+    // SDK's per-request `authInfo` (#880) — simulate that request context.
+    const extra = {
+      authInfo: {
+        token: "t",
+        clientId: "caller-mote-id",
+        scopes: [],
+        extra: { motebit_caller: { motebitId: "caller-mote-id", trustLevel: ATL.Verified } },
+      },
     };
 
     // Invoke the tool handler
     const handler = registrations.tools.get("test_tool")!.handler;
-    await handler({ x: "hello" });
+    await handler({ x: "hello" }, extra);
 
     // validateTool should receive the caller identity
     expect(validateTool).toHaveBeenCalledWith(
@@ -1787,6 +1790,24 @@ describe("McpServerAdapter — mutual authentication", () => {
 
     // No motebit auth, so caller is undefined
     expect(validateTool).toHaveBeenCalledWith(tool, { y: 42 }, undefined);
+  });
+
+  it("an HTTP tool call with no request auth context is refused, never judged as the owner (#880)", async () => {
+    const validateTool = vi.fn(() => ({ allowed: true, requiresApproval: false }));
+    const executeTool = vi.fn(async () => ({ ok: true, data: "ran" }));
+    const tool = toolDef("plain_tool");
+    const adapter = new McpServerAdapter(
+      makeConfig({ transport: "http", port: 0, authToken: "t" }),
+      makeDeps({ listTools: () => [tool], filterTools: (t) => t, validateTool, executeTool }),
+    );
+    // The mocked McpServer never binds; build the tool table directly.
+    await (adapter as unknown as { createServer(): Promise<unknown> }).createServer();
+    const handler = registrations.tools.get("plain_tool")!.handler;
+    const result = (await handler({})) as { isError?: boolean; content: Array<{ text: string }> };
+    expect(result.isError).toBe(true);
+    expect(result.content[0]!.text).toMatch(/no authenticated caller context/);
+    expect(validateTool).not.toHaveBeenCalled();
+    expect(executeTool).not.toHaveBeenCalled();
   });
 });
 

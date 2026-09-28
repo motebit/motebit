@@ -14,6 +14,9 @@ export interface WriteFileConfig {
 /** @internal */
 export const writeFileDefinition: ToolDefinition = {
   name: "write_file",
+  // Owner interior (writes this machine's filesystem): never served to another
+  // principal, never offered to a foreign principal's turn (#880).
+  localOnly: true,
   mode: "api",
   description:
     "Write content to a local file. Creates directories if needed. Requires user approval.",

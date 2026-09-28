@@ -85,6 +85,9 @@ const MODIFIERS_SCHEMA = {
 /** @spec motebit/computer-use@1.0 */
 export const computerDefinition: ToolDefinition = {
   name: "computer",
+  // Owner interior (drives the owner's real OS or cloud browser session): never served to another
+  // principal, never offered to a foreign principal's turn (#880).
+  localOnly: true,
   mode: "pixels",
   description:
     "Observe or act on the user's computer — screenshot, click, type, scroll, navigate. Available on desktop (drives the user's OS via xcap+enigo) and on web (drives a cloud-browser sandbox via Playwright). On the cloud-browser surface, use `navigate` to reach a URL — there's no address bar for `key`/`type` to drive. Every observation and action emits a signed receipt and flows through the governance gate. See spec/computer-use-v1.md.",

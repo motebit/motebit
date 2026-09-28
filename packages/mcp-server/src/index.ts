@@ -104,7 +104,18 @@ interface MotebitServerDeps {
     args: Record<string, unknown>,
     caller?: CallerIdentity,
   ): PolicyDecision | Promise<PolicyDecision>;
-  executeTool(name: string, args: Record<string, unknown>): Promise<ToolResult>;
+  /**
+   * Execute a served tool. `caller` is the verified caller of THIS request
+   * (absent for stdio and static-bearer callers) — the same identity
+   * `validateTool` saw, so a deps implementation that re-validates at
+   * execution (an attached frontend's coordinator) evaluates the same
+   * principal (#880).
+   */
+  executeTool(
+    name: string,
+    args: Record<string, unknown>,
+    caller?: CallerIdentity,
+  ): Promise<ToolResult>;
 
   // Resources
   getState(): Record<string, unknown> | Promise<Record<string, unknown>>;
@@ -449,6 +460,65 @@ export function jsonSchemaToZodShape(
   return shape;
 }
 
+// === Per-request caller context (#880) ===
+
+/**
+ * The HTTP handler hands each request's verified caller to the MCP SDK as
+ * `req.auth` (the SDK's own per-request channel: `AuthInfo`, surfaced to a
+ * tool callback as `extra.authInfo`). The caller rides the request it
+ * authenticated, so two concurrent requests can never read each other's
+ * identity. The previous design kept it in ONE adapter field
+ * (`lastVerifiedCaller`) written at auth time and read at tool-call time:
+ * a request whose body was still streaming could have its tool call
+ * evaluated under whichever caller authenticated next.
+ */
+const MOTEBIT_CALLER_KEY = "motebit_caller";
+
+interface RequestAuthContext {
+  token: string;
+  clientId: string;
+  scopes: string[];
+  extra: Record<string, unknown>;
+}
+
+function requestAuthContext(caller: CallerIdentity | null, token: string): RequestAuthContext {
+  return {
+    token,
+    clientId: caller?.motebitId ?? "bearer",
+    scopes: [],
+    extra: { [MOTEBIT_CALLER_KEY]: caller },
+  };
+}
+
+/**
+ * The caller a tool callback runs for. `"none"` means the request carried
+ * no motebit caller (stdio, or a static / pluggable bearer) — the pre-#880
+ * meaning of an empty caller. `"missing"` means an HTTP request reached a
+ * tool with no auth context at all, which the adapter never produces; it
+ * fails closed.
+ */
+function callerFromExtra(
+  extra: unknown,
+  transport: "stdio" | "http",
+): { kind: "caller"; caller: CallerIdentity } | { kind: "none" } | { kind: "missing" } {
+  const authInfo = (extra as { authInfo?: { extra?: Record<string, unknown> } } | undefined)
+    ?.authInfo;
+  if (authInfo == null) return transport === "stdio" ? { kind: "none" } : { kind: "missing" };
+  const c = authInfo.extra?.[MOTEBIT_CALLER_KEY] as CallerIdentity | null | undefined;
+  if (c == null) return { kind: "none" };
+  return { kind: "caller", caller: c };
+}
+
+const NO_REQUEST_CONTEXT = {
+  content: [
+    {
+      type: "text" as const,
+      text: "Refused: this request carried no authenticated caller context.",
+    },
+  ],
+  isError: true as const,
+};
+
 // === McpServerAdapter ===
 
 export class McpServerAdapter {
@@ -458,7 +528,6 @@ export class McpServerAdapter {
   private httpServer?: import("node:http").Server;
   /** #459: loopback self-check that exits the process when unservable. */
   private selfWatchdog?: import("./self-watchdog.js").SelfWatchdogHandle;
-  private lastVerifiedCaller: CallerIdentity | null = null;
   /** Single-use record of admitted relay task ids (injected or in-process). */
   private readonly admittedTasks: AdmittedTaskStore;
   /**
@@ -559,8 +628,8 @@ export class McpServerAdapter {
           tool.description,
           zodShape,
           annotations,
-          async (args: Record<string, unknown>) => {
-            return this.handleToolCall(tool, args);
+          async (args: Record<string, unknown>, extra: unknown) => {
+            return this.handleToolCall(tool, args, extra);
           },
         );
       } else if (hasArgs) {
@@ -568,25 +637,31 @@ export class McpServerAdapter {
           tool.name,
           tool.description,
           zodShape,
-          async (args: Record<string, unknown>) => {
-            return this.handleToolCall(tool, args);
+          async (args: Record<string, unknown>, extra: unknown) => {
+            return this.handleToolCall(tool, args, extra);
           },
         );
       } else if (hasAnnotations) {
-        server.tool(tool.name, tool.description, annotations, async () => {
-          return this.handleToolCall(tool, {});
+        server.tool(tool.name, tool.description, annotations, async (extra: unknown) => {
+          return this.handleToolCall(tool, {}, extra);
         });
       } else {
-        server.tool(tool.name, tool.description, async () => {
-          return this.handleToolCall(tool, {});
+        server.tool(tool.name, tool.description, async (extra: unknown) => {
+          return this.handleToolCall(tool, {}, extra);
         });
       }
     }
   }
 
+  /** The transport this adapter serves — decides what an absent auth context means. */
+  private get transportKind(): "stdio" | "http" {
+    return this.config.transport === "stdio" ? "stdio" : "http";
+  }
+
   private async handleToolCall(
     tool: ToolDefinition,
     args: Record<string, unknown>,
+    extra?: unknown,
   ): Promise<{
     content: Array<{ type: "text"; text: string }>;
     isError?: boolean;
@@ -597,8 +672,12 @@ export class McpServerAdapter {
         isError: true,
       };
     }
-    // Policy check
-    const decision = await this.deps.validateTool(tool, args, this.lastVerifiedCaller ?? undefined);
+    const ctx = callerFromExtra(extra, this.transportKind);
+    if (ctx.kind === "missing") return NO_REQUEST_CONTEXT;
+    const caller = ctx.kind === "caller" ? ctx.caller : undefined;
+
+    // Policy check — under THIS request's caller.
+    const decision = await this.deps.validateTool(tool, args, caller);
 
     if (!decision.allowed && !decision.requiresApproval) {
       return {
@@ -625,7 +704,7 @@ export class McpServerAdapter {
     }
 
     // Execute
-    const result = await this.deps.executeTool(tool.name, args);
+    const result = await this.deps.executeTool(tool.name, args, caller);
 
     // Audit
     this.deps.logToolCall(tool.name, args, result);
@@ -665,11 +744,14 @@ export class McpServerAdapter {
   private async validateSyntheticTool(
     toolDef: ToolDefinition,
     args: Record<string, unknown>,
+    extra: unknown,
   ): Promise<{ content: Array<{ type: "text"; text: string }>; isError: true } | null> {
+    const ctx = callerFromExtra(extra, this.transportKind);
+    if (ctx.kind === "missing") return NO_REQUEST_CONTEXT;
     const decision = await this.deps.validateTool(
       toolDef,
       args,
-      this.lastVerifiedCaller ?? undefined,
+      ctx.kind === "caller" ? ctx.caller : undefined,
     );
 
     if (!decision.allowed && !decision.requiresApproval) {
@@ -726,8 +808,8 @@ export class McpServerAdapter {
         "motebit_query",
         "Ask this motebit a question — AI response with memory context",
         { message: z.string().describe("The question or message to send") },
-        async (args: { message: string }) => {
-          const denied = await this.validateSyntheticTool(toolDef, args);
+        async (args: { message: string }, extra: unknown) => {
+          const denied = await this.validateSyntheticTool(toolDef, args, extra);
           if (denied) return denied;
 
           const result = await sendMessage(args.message);
@@ -753,8 +835,8 @@ export class McpServerAdapter {
           content: z.string().describe("The content to remember"),
           sensitivity: z.string().optional().describe("Sensitivity level (none, personal)"),
         },
-        async (args: { content: string; sensitivity?: string }) => {
-          const denied = await this.validateSyntheticTool(toolDef, args);
+        async (args: { content: string; sensitivity?: string }, extra: unknown) => {
+          const denied = await this.validateSyntheticTool(toolDef, args, extra);
           if (denied) return denied;
 
           // Fail-closed: external callers cannot store high-sensitivity memories
@@ -792,8 +874,8 @@ export class McpServerAdapter {
           query: z.string().describe("Semantic search query"),
           limit: z.number().optional().describe("Max results to return"),
         },
-        async (args: { query: string; limit?: number }) => {
-          const denied = await this.validateSyntheticTool(toolDef, args);
+        async (args: { query: string; limit?: number }, extra: unknown) => {
+          const denied = await this.validateSyntheticTool(toolDef, args, extra);
           if (denied) return denied;
 
           const results = await queryMemories(args.query, args.limit);
@@ -840,14 +922,17 @@ export class McpServerAdapter {
               "Relay-signed task admission token (aud task:dispatch). Required by workers that admit work only through their relay.",
             ),
         },
-        async (args: {
-          prompt: string;
-          delegation_token?: string;
-          required_capabilities?: unknown;
-          relay_task_id?: string;
-          dispatch_token?: string;
-        }) => {
-          const denied = await this.validateSyntheticTool(toolDef, args);
+        async (
+          args: {
+            prompt: string;
+            delegation_token?: string;
+            required_capabilities?: unknown;
+            relay_task_id?: string;
+            dispatch_token?: string;
+          },
+          extra: unknown,
+        ) => {
+          const denied = await this.validateSyntheticTool(toolDef, args, extra);
           if (denied) return denied;
 
           // Halted? Refuse before admission is claimed.
@@ -1072,30 +1157,34 @@ export class McpServerAdapter {
     );
     /** @spec motebit/agent-mcp-surface@1.0 */
     // eslint-disable-next-line @typescript-eslint/require-await -- MCP SDK expects async handler
-    server.tool("motebit_identity", "Return this motebit's identity information", async () => {
-      const denied = await this.validateSyntheticTool(identityToolDef, {});
-      if (denied) return denied;
+    server.tool(
+      "motebit_identity",
+      "Return this motebit's identity information",
+      async (extra: unknown) => {
+        const denied = await this.validateSyntheticTool(identityToolDef, {}, extra);
+        if (denied) return denied;
 
-      this.deps.logToolCall("motebit_identity", {}, { ok: true, data: "identity" });
-      if (this.deps.identityFileContent) {
-        return fmt(this.deps.identityFileContent);
-      }
-      const identity: Record<string, unknown> = {
-        motebit_id: this.deps.motebitId,
-        public_key: this.deps.publicKeyHex ?? null,
-      };
-      if (this.deps.publicKeyHex) {
-        try {
-          identity.did = hexPublicKeyToDidKey(this.deps.publicKeyHex);
-        } catch {
-          // Non-fatal
+        this.deps.logToolCall("motebit_identity", {}, { ok: true, data: "identity" });
+        if (this.deps.identityFileContent) {
+          return fmt(this.deps.identityFileContent);
         }
-      }
-      if (this.config.motebitType) {
-        identity.motebit_type = this.config.motebitType;
-      }
-      return fmt(identity);
-    });
+        const identity: Record<string, unknown> = {
+          motebit_id: this.deps.motebitId,
+          public_key: this.deps.publicKeyHex ?? null,
+        };
+        if (this.deps.publicKeyHex) {
+          try {
+            identity.did = hexPublicKeyToDidKey(this.deps.publicKeyHex);
+          } catch {
+            // Non-fatal
+          }
+        }
+        if (this.config.motebitType) {
+          identity.motebit_type = this.config.motebitType;
+        }
+        return fmt(identity);
+      },
+    );
 
     // motebit_tools — read-only, audit logging only (no side effects)
     const toolsToolDef = McpServerAdapter.syntheticToolDef(
@@ -1105,18 +1194,22 @@ export class McpServerAdapter {
     );
     /** @spec motebit/agent-mcp-surface@1.0 */
     // eslint-disable-next-line @typescript-eslint/require-await -- MCP SDK expects async handler
-    server.tool("motebit_tools", "List available tools with risk levels", async () => {
-      const denied = await this.validateSyntheticTool(toolsToolDef, {});
-      if (denied) return denied;
+    server.tool(
+      "motebit_tools",
+      "List available tools with risk levels",
+      async (extra: unknown) => {
+        const denied = await this.validateSyntheticTool(toolsToolDef, {}, extra);
+        if (denied) return denied;
 
-      const tools = (await this.deps.listTools()).filter(isServableTool).map((t) => ({
-        name: t.name,
-        description: t.description,
-        risk: t.riskHint?.risk ?? null,
-      }));
-      this.deps.logToolCall("motebit_tools", {}, { ok: true, data: tools });
-      return fmt(tools);
-    });
+        const tools = (await this.deps.listTools()).filter(isServableTool).map((t) => ({
+          name: t.name,
+          description: t.description,
+          risk: t.riskHint?.risk ?? null,
+        }));
+        this.deps.logToolCall("motebit_tools", {}, { ok: true, data: tools });
+        return fmt(tools);
+      },
+    );
 
     // motebit_service_listing — read-only, returns this agent's service listing
     // motebit_credentials — returns a signed Verifiable Presentation
@@ -1132,8 +1225,8 @@ export class McpServerAdapter {
       server.tool(
         "motebit_credentials",
         "Get this agent's signed verifiable credentials (gradient, reputation)",
-        async () => {
-          const denied = await this.validateSyntheticTool(credentialsToolDef, {});
+        async (extra: unknown) => {
+          const denied = await this.validateSyntheticTool(credentialsToolDef, {}, extra);
           if (denied) return denied;
 
           const vp = await getCredentials();
@@ -1158,8 +1251,8 @@ export class McpServerAdapter {
       server.tool(
         "motebit_service_listing",
         "Get this agent's service listing (capabilities, pricing, SLA)",
-        async () => {
-          const denied = await this.validateSyntheticTool(listingToolDef, {});
+        async (extra: unknown) => {
+          const denied = await this.validateSyntheticTool(listingToolDef, {}, extra);
           if (denied) return denied;
 
           const listing = await getServiceListing();
@@ -1521,9 +1614,6 @@ export class McpServerAdapter {
         if (handled) return;
       }
 
-      // Reset caller identity for each request to prevent stale state
-      this.lastVerifiedCaller = null;
-
       // Bearer token auth (skip /health and custom routes, already handled above)
       const authHeader = req.headers["authorization"];
       const bearerToken = authHeader?.startsWith("Bearer ") ? authHeader.slice(7) : undefined;
@@ -1541,7 +1631,11 @@ export class McpServerAdapter {
           res.end(JSON.stringify({ error: "invalid motebit token" }));
           return;
         }
-        this.lastVerifiedCaller = callerInfo;
+        // The verified caller rides THIS request (see RequestAuthContext).
+        (req as { auth?: RequestAuthContext }).auth = requestAuthContext(
+          callerInfo,
+          bearerToken.slice(8),
+        );
       } else {
         // Non-motebit token — resolve verifier (pluggable > static > none)
         const verifier =
@@ -1561,6 +1655,9 @@ export class McpServerAdapter {
             res.end(JSON.stringify({ error: "unauthorized" }));
             return;
           }
+          // Authenticated, but not as a motebit: no caller identity —
+          // carried explicitly, so its absence is never an accident.
+          (req as { auth?: RequestAuthContext }).auth = requestAuthContext(null, bearerToken!);
         } else {
           // No auth configured and no valid token — reject by default.
           // Open access is never safe for HTTP transport. Operators must

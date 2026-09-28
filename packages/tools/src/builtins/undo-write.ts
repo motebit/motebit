@@ -7,6 +7,9 @@ import { backupExisting } from "./write-file.js";
 /** @internal */
 export const undoWriteDefinition: ToolDefinition = {
   name: "undo_write",
+  // Owner interior (rewrites this machine's files from local backups): never served to another
+  // principal, never offered to a foreign principal's turn (#880).
+  localOnly: true,
   mode: "api",
   description:
     "Undo the last write_file operation by restoring from backup. Requires user approval.",

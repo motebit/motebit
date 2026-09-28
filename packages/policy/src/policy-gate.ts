@@ -864,6 +864,25 @@ export class PolicyGate {
     }
     // collaborative: use standard policy (no adjustment), logged via normal audit
 
+    // 8a. A tool's own approval floor binds every REMOTE caller (#880).
+    // Band mode derives approval from risk alone, so a tool that declares
+    // `requiresApproval: true` (write_file, shell_exec, undo_write, an MCP
+    // tool marked destructive) auto-executed for a remote caller whenever
+    // the owner's preset put its risk under `requireApprovalAbove` — and
+    // the Trusted / service adjustments above could clear it in legacy
+    // mode too. The owner's own turns keep band semantics: a preset is the
+    // owner's choice about the owner's turns, and it is not narrowed here.
+    // A call made by another principal is not the owner's turn, so the
+    // tool's declared floor holds. It runs AFTER every approval-lowering
+    // adjustment so none of them can clear it (same ordering discipline as
+    // 8b). "Remote" is any caller fact on the context — a verified caller
+    // id, a trust level, or a remote motebit type.
+    const remoteCaller =
+      ctx.callerMotebitId != null || ctx.callerTrustLevel != null || ctx.remoteMotebitType != null;
+    if (remoteCaller && tool.requiresApproval === true && !needsApproval) {
+      needsApproval = true;
+    }
+
     // 8b. Standing-authority invariant — memory never confers authority.
     // An R4_MONEY tool call may auto-execute (no human approval) ONLY
     // when the turn carries a cryptographically verified live

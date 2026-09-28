@@ -3,6 +3,9 @@ import type { ToolDefinition, ToolHandler } from "@motebit/sdk";
 /** @internal */
 export const listEventsDefinition: ToolDefinition = {
   name: "list_events",
+  // Owner interior (reads the owner's event log): never served to another
+  // principal, never offered to a foreign principal's turn (#880).
+  localOnly: true,
   mode: "api",
   description:
     "Query your event log for recent activity. Useful for understanding what happened recently.",

@@ -11,6 +11,7 @@ import {
   cmdSelfTest,
   PLANNING_TASK_ROUTER,
   createRelayCapabilitiesFetcher,
+  servedToolNames,
 } from "@motebit/runtime";
 import type { MintToken } from "@motebit/runtime";
 import { buildHardwareVerifiers } from "@motebit/verify";
@@ -689,10 +690,11 @@ export async function handleRun(config: CliConfig): Promise<void> {
     // heartbeat), never with the operator's sync token and never
     // unauthenticated. See relay-registration.ts.
     if (privKeyBytes && fullConfig.device_id && fullConfig.device_public_key) {
-      const toolNames = runtime
-        .getToolRegistry()
-        .list()
-        .map((t) => t.name);
+      // Advertise only what another principal may be served (#880) — the
+      // same `localOnly` rule web / desktop / mobile advertise by. A
+      // relay-dispatched task runs with no localOnly tool, so advertising
+      // one invites work this motebit will refuse.
+      const toolNames = servedToolNames(runtime.getToolRegistry().list());
       const regBody: Record<string, unknown> = {
         motebit_id: motebitId,
         endpoint_url: syncUrl,
@@ -813,6 +815,15 @@ export async function handleRun(config: CliConfig): Promise<void> {
  * coordinator's governance with hardcoded `peer_agent` provenance —
  * identical to the local serve path.
  */
+/** The wire form of an MCP request's verified caller for the attached frames. */
+function attachedCaller(caller: { motebitId: string; trustLevel: string } | undefined): {
+  caller?: { motebit_id: string; trust_level: string };
+} {
+  return caller == null
+    ? {}
+    : { caller: { motebit_id: caller.motebitId, trust_level: caller.trustLevel } };
+}
+
 async function runServeAttached(
   client: import("@motebit/runtime-host").RuntimeHostClient,
   motebitId: string,
@@ -851,13 +862,21 @@ async function runServeAttached(
     listTools: async () => (await client.query("tools_filtered")) as ToolDefinition[],
     // tools_filtered is already policy-filtered on the coordinator.
     filterTools: (tools) => tools,
-    validateTool: async (tool, args) =>
+    // The request's verified caller travels with every policy question and
+    // every execution (#880): the coordinator re-validates at execution, and
+    // without the caller it judged a remote call as the owner's own turn.
+    validateTool: async (tool, args, caller) =>
       (await client.query("policy_validate", {
         name: tool.name,
         args,
+        ...attachedCaller(caller),
       })) as import("@motebit/sdk").PolicyDecision,
-    executeTool: async (name, args) =>
-      (await client.act("tool_execute", { name, args })) as import("@motebit/sdk").ToolResult,
+    executeTool: async (name, args, caller) =>
+      (await client.act("tool_execute", {
+        name,
+        args,
+        ...attachedCaller(caller),
+      })) as import("@motebit/sdk").ToolResult,
 
     getState: async () => (await client.query("state")) as Record<string, unknown>,
 
@@ -1233,8 +1252,18 @@ export async function handleServe(config: CliConfig): Promise<void> {
 
     listTools: () => runtime.getToolRegistry().list(),
     filterTools: (tools) => runtime.policy.filterTools(tools),
-    validateTool: (tool, args) =>
-      runtime.policy.validate(tool, args, runtime.policy.createTurnContext()),
+    // The request's verified caller is part of the policy question (#880).
+    // Dropping it judged every remote call as the owner's own turn, so no
+    // caller-scoped rule — Blocked, Unknown ⇒ approval, a tool's own
+    // approval floor for remote callers — could fire on `motebit serve`.
+    validateTool: (tool, args, caller) => {
+      const ctx = runtime.policy.createTurnContext();
+      if (caller) {
+        ctx.callerMotebitId = caller.motebitId;
+        ctx.callerTrustLevel = caller.trustLevel;
+      }
+      return runtime.policy.validate(tool, args, ctx);
+    },
     executeTool: (name, args) => runtime.getToolRegistry().execute(name, args),
 
     getState: () => runtime.getState() as unknown as Record<string, unknown>,
@@ -1271,9 +1300,11 @@ export async function handleServe(config: CliConfig): Promise<void> {
       void runtime.events.append(entry).catch(() => {});
     },
 
-    // Synthetic tool backends
+    // Synthetic tool backends. `motebit_query` runs a CALLER's words
+    // through this motebit's loop, so the turn is foreign: no `localOnly`
+    // tool is offered to it (#880).
     sendMessage: async (text: string) => {
-      const result = await runtime.sendMessage(text);
+      const result = await runtime.sendMessage(text, undefined, { foreignPrincipal: true });
       return { response: result.response, memoriesFormed: result.memoriesFormed.length };
     },
 
@@ -1359,13 +1390,15 @@ export async function handleServe(config: CliConfig): Promise<void> {
 
           // Find the tool to execute
           const allTools = runtime.getToolRegistry().list();
+          // A caller's prompt never selects an owner-interior tool (#880).
+          const servable = allTools.filter((t) => t.localOnly !== true);
           const loadedTools = config.tools
-            ? allTools.filter(
+            ? servable.filter(
                 (t) =>
                   // Prefer externally loaded tools; fall back to first tool
                   !["read_file", "write_file", "list_directory", "run_command"].includes(t.name),
               )
-            : allTools;
+            : servable;
           const tool = loadedTools[0];
           if (!tool) {
             yield {
@@ -1480,8 +1513,10 @@ export async function handleServe(config: CliConfig): Promise<void> {
   await mcpServer.start();
 
   const toolList = runtime.getToolRegistry().list();
-  const toolCount = toolList.length;
-  if (toolCount > 0) {
+  // "Exposed" counts what a caller can reach — `localOnly` tools are loaded
+  // for this motebit's own loop but never served (#880).
+  const toolCount = servedToolNames(toolList).length;
+  if (toolList.length > 0) {
     log(`Tools loaded: ${toolList.map((t) => t.name).join(", ")}`);
   }
   if (transport === "stdio") {
@@ -1651,10 +1686,8 @@ export async function handleServe(config: CliConfig): Promise<void> {
     }
 
     try {
-      const toolNames = runtime
-        .getToolRegistry()
-        .list()
-        .map((t) => t.name);
+      // Served tools only (#880) — see the daemon registration above.
+      const toolNames = servedToolNames(runtime.getToolRegistry().list());
 
       // Signed as THIS motebit — bootstrap → register → listing → heartbeat —
       // never with the operator's master token and never unauthenticated

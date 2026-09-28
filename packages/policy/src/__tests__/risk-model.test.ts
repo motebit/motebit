@@ -184,3 +184,31 @@ describe("isToolAllowed", () => {
     ).toBe(false);
   });
 });
+
+describe("memory-mutation verbs classify as writes (#880)", () => {
+  // `\bwrite\b` does not match inside "rewrite", so rewrite_memory's
+  // description ("…by superseding it… drops out of current recall…")
+  // fell through to the R0 "recall" rule and auto-executed as a read.
+  it("a rewrite/supersede description is R2_WRITE, not R0_READ", () => {
+    const profile = classifyTool(
+      makeTool(
+        "rewrite_memory",
+        "Correct a stale or incorrect memory by superseding it with new content. " +
+          "The original memory is superseded but kept, so it drops out of current recall.",
+      ),
+    );
+    expect(profile.risk).toBe(RiskLevel.R2_WRITE);
+    expect(profile.requiresApproval).toBe(true);
+  });
+
+  it.each([
+    ["Rewrite the stored summary"],
+    ["Overwrites the cached entry"],
+    ["Supersedes the older record"],
+    ["Forget a remembered fact"],
+    ["Prune stale entries"],
+    ["Erase the history"],
+  ])("%s → R2_WRITE", (description) => {
+    expect(classifyTool(makeTool("t", description)).risk).toBe(RiskLevel.R2_WRITE);
+  });
+});

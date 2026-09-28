@@ -164,16 +164,13 @@ function formatState(state: Record<string, unknown>): string {
   return lines.join("\n");
 }
 
-// Tools excluded from network exposure when /serve is active.
-// Internal tools have synthetic counterparts for remote callers:
-//   delegate_to_agent → motebit_task (prevents open relay — remote callers go through agentic loop)
-//   recall_memories   → motebit_recall (privacy-filtered, sensitivity-capped)
-//   list_events       → no remote equivalent needed (event history is internal)
-//   read_file         → no remote equivalent (filesystem access)
-// The rule is the runtime's `isServedTool` — each tool's own `localOnly`
-// declaration (#874), plus the builtins not yet carrying it — so this
-// surface and every other one exclude the same set. (This list had been
-// missing `discover_agents` while web/desktop/mobile excluded it.)
+// Tools excluded from network exposure when /serve is active: every tool
+// whose definition declares `localOnly` (#874, #880) — the runtime's
+// `isServedTool`, the same rule every surface and every MCP server
+// applies. Several have synthetic counterparts for remote callers
+// (delegate_to_agent → motebit_task, recall_memories → the capped
+// motebit_recall). There is no name list here: this surface's old list
+// had never named `write_file`, so `/serve --operator` served it (#880).
 let isServing = false;
 
 /** Resolve the relay sync URL from config, env, or saved config. */
@@ -949,8 +946,9 @@ export async function handleSlashCommand(
         publicKeyHex: pubHex,
       });
 
-      // Security: exclude local-only tools from network exposure.
-      // read_file gives filesystem access — safe for local REPL, dangerous for remote callers.
+      // Security: exclude local-only tools from network exposure — the
+      // filesystem, shell, memory and transcript tools act for the owner
+      // (each declares `localOnly`). McpServerAdapter refuses them too.
       const origListTools = serveDeps.listTools.bind(serveDeps);
       serveDeps.listTools = async () => (await origListTools()).filter(isServedTool);
       const origFilterTools = serveDeps.filterTools.bind(serveDeps);
