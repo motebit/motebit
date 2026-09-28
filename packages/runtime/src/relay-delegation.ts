@@ -880,9 +880,13 @@ export interface SubmitP2pDelegationParams {
    * transient submission failure it retries with the SAME proof itself
    * (`submitRetry`, #885), never rebuilding: rebuilding broadcasts a second
    * payment, whereas resubmitting the same `tx_hash` is safe (the relay
-   * dedupes on it as the `Idempotency-Key` — a completed 201 replays, a
-   * failed attempt releases its claim — and its replay guard rejects only a
-   * *settled* proof). Separating the irreversible broadcast from the
+   * dedupes on it as the `Idempotency-Key`: a refusal made before admission
+   * frees the key, and once a task is admitted the key replays that
+   * submission's answer, 201 or failure, and never admits a second task
+   * (#888). The proof itself is bound to the task it admitted, under any
+   * key, and is never released: a later submission of it is 409
+   * `TASK_P2P_PROOF_ALREADY_ADMITTED`, or `TASK_P2P_PROOF_REPLAYED` once
+   * that task settled (#918)). Separating the irreversible broadcast from the
    * retryable submit is what makes "no double-pay" structural rather than a
    * convention.
    */
@@ -934,8 +938,9 @@ const defaultSleep = (ms: number): Promise<void> =>
  * May a failed submission of an ALREADY-PAID proof be tried again with the
  * same proof? (#885.) Retrying is always money-safe — the proof is the
  * same payment and the relay dedupes on the tx hash (`Idempotency-Key`;
- * services/relay/src/tasks.ts replays a completed 201 and releases a
- * failed claim) — so the only question is whether another attempt could
+ * services/relay/src/tasks.ts frees a key refused before admission and
+ * replays an admitted submission's answer, #888; the proof is bound to its
+ * admitted task, #918) — so the only question is whether another attempt could
  * succeed. Transient: network, 5xx, 408, 429, 401 (a fresh token is minted
  * per attempt), and a 409 that is the relay still processing the same key.
  * A 409 `TASK_P2P_PROOF_REPLAYED` (the proof already settled a task),

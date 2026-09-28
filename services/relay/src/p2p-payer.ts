@@ -71,6 +71,11 @@ export function paymentChainFromAdapter(
     /**
      * Bound on one payer read. A hung RPC must answer the submitter a
      * retryable 503, not hold the request (and its idempotency claim) open.
+     * This stops the WAIT, not the request: `SolanaRpcAdapter.getTransaction`
+     * takes no AbortSignal and `Web3JsRpcAdapter` builds its web3.js
+     * `Connection` without a fetch hook, so the underlying HTTP call runs
+     * on until web3.js/undici gives up. Aborting it needs a signal on the
+     * wallet-solana adapter (outside this module).
      */
     timeoutMs?: number;
   } = {},
