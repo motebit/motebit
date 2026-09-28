@@ -75,6 +75,18 @@ export interface WithdrawalRequest {
    * still be in flight.
    */
   claimed_at?: number | null;
+  /**
+   * The claimed payout's own declared horizon (#921): the latest moment the
+   * payload a rail was handed can still land. Null when the relay broadcasts
+   * the payout itself. Not a wire field.
+   */
+  payout_valid_until?: number | null;
+  /**
+   * 1 on a row that was `pending` when the ledger first gained
+   * claim-before-send (#921): its payout may have been attempted with no
+   * claim recorded. Not a wire field.
+   */
+  pre_claim_review?: number | null;
 }
 
 /**

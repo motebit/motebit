@@ -239,8 +239,15 @@ export function claimWithdrawalForPayout(
   db: DatabaseDriver,
   withdrawalId: string,
   claimedAt: number = Date.now(),
+  payoutValidUntil: number | null = null,
 ): boolean {
-  return pkgClaimWithdrawalForPayout(sqliteAccountStoreFor(db), withdrawalId, claimedAt, logger);
+  return pkgClaimWithdrawalForPayout(
+    sqliteAccountStoreFor(db),
+    withdrawalId,
+    claimedAt,
+    logger,
+    payoutValidUntil,
+  );
 }
 
 /**

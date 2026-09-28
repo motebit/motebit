@@ -6,6 +6,7 @@ import {
   reconcileWithdrawal,
   reconcilableAt,
   isPayoutInFlight,
+  inFlightOpensAt,
   type ReconcileOutcome,
   type WithdrawalRequest,
   ApiError,
@@ -43,6 +44,8 @@ interface ReconcileDraft {
   outcome: ReconcileOutcome;
   attestation: string;
   payoutReference: string;
+  /** Inline state after the relay answered "payout in flight" (#921). */
+  notice?: string;
 }
 
 export function WithdrawalsPanel(): React.ReactElement {
@@ -128,18 +131,41 @@ export function WithdrawalsPanel(): React.ReactElement {
     [act],
   );
 
+  /**
+   * Submit the reconcile. A 409 "payout in flight" keeps the form and says,
+   * inline, when the door opens — the operator's attestation is not lost and
+   * the answer is a state, not an error.
+   */
   const onSubmitReconcile = useCallback(async () => {
     if (draft == null) return;
     const d = draft;
-    const ok = await act(d.withdrawalId, () =>
-      reconcileWithdrawal(d.withdrawalId, {
+    setBusy(d.withdrawalId);
+    try {
+      await reconcileWithdrawal(d.withdrawalId, {
         outcome: d.outcome,
         attestation: d.attestation.trim(),
         payoutReference: d.payoutReference.trim(),
-      }),
-    );
-    if (ok) setDraft(null);
-  }, [act, draft]);
+      });
+      setDraft(null);
+      await refresh();
+    } catch (err) {
+      if (isPayoutInFlight(err)) {
+        const opensAt = inFlightOpensAt(err);
+        setDraft({
+          ...d,
+          notice:
+            opensAt != null
+              ? `payout still in flight — opens in ${formatAge(opensAt - Date.now())}`
+              : "payout still in flight — the relay is still handling it",
+        });
+        await refresh();
+      } else {
+        setError(err instanceof ApiError ? err.message : String(err));
+      }
+    } finally {
+      setBusy(null);
+    }
+  }, [draft, refresh]);
 
   if (!loaded) {
     return React.createElement(
@@ -196,6 +222,10 @@ export function WithdrawalsPanel(): React.ReactElement {
     if (w.status === "processing") {
       const at = reconcilableAt(w, minAgeMs) ?? 0;
       const ready = now >= at;
+      const waitText =
+        at === Number.POSITIVE_INFINITY
+          ? "The relay is still handling this payout"
+          : `Reconcile opens in ${formatAge(at - now)} — the payout may still land`;
       return React.createElement(
         "td",
         null,
@@ -204,9 +234,7 @@ export function WithdrawalsPanel(): React.ReactElement {
           {
             className: "action-btn",
             disabled: !ready || busy === w.withdrawal_id,
-            title: ready
-              ? "Settle this payout from what the chain shows"
-              : `Reconcile opens in ${formatAge(at - now)} — the payout may still be in flight`,
+            title: ready ? "Settle this payout from what the chain shows" : waitText,
             onClick: () =>
               setDraft({
                 withdrawalId: w.withdrawal_id,
@@ -266,6 +294,13 @@ export function WithdrawalsPanel(): React.ReactElement {
         },
       },
       React.createElement("h3", null, `Reconcile ${d.withdrawalId.slice(0, 12)}…`),
+      d.notice != null
+        ? React.createElement(
+            "p",
+            { className: "reconcile-notice", style: { color: "var(--yellow)" } },
+            d.notice,
+          )
+        : null,
       React.createElement(
         "label",
         null,

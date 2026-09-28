@@ -6,6 +6,7 @@ import {
   reconcileWithdrawal,
   fetchPreClaimWithdrawals,
   isPayoutInFlight,
+  inFlightOpensAt,
   reconcilableAt,
   fetchFederationPeers,
   fetchRelayIdentity,
@@ -146,6 +147,22 @@ describe("isPayoutInFlight / reconcilableAt (#921)", () => {
     expect(isPayoutInFlight(new Error("WITHDRAWAL_PAYOUT_IN_FLIGHT"))).toBe(false);
   });
 
+  it("reads the opening time from a 409 payout-in-flight body", () => {
+    expect(
+      inFlightOpensAt(
+        new ApiError(
+          409,
+          "Conflict",
+          '{"error":"WITHDRAWAL_PAYOUT_IN_FLIGHT","reconcile_opens_at":123}',
+        ),
+      ),
+    ).toBe(123);
+    expect(
+      inFlightOpensAt(new ApiError(409, "Conflict", '{"error":"WITHDRAWAL_PAYOUT_IN_FLIGHT"}')),
+    ).toBeNull();
+    expect(inFlightOpensAt(new ApiError(500, "Error", "x"))).toBeNull();
+  });
+
   it("opens reconcile at claim + window, only for processing rows", () => {
     const base = {
       withdrawal_id: "w",
@@ -157,6 +174,19 @@ describe("isPayoutInFlight / reconcilableAt (#921)", () => {
     expect(reconcilableAt({ ...base, status: "processing", claimed_at: 1_000 }, 500)).toBe(1_500);
     expect(reconcilableAt({ ...base, status: "processing", claimed_at: null }, 500)).toBe(0);
     expect(reconcilableAt({ ...base, status: "pending" }, 500)).toBeNull();
+    // The relay's per-row horizon wins over claim + floor.
+    expect(
+      reconcilableAt(
+        { ...base, status: "processing", claimed_at: 1_000, reconcile_opens_at: 9_999 },
+        500,
+      ),
+    ).toBe(9_999);
+    expect(
+      reconcilableAt(
+        { ...base, status: "processing", claimed_at: 1_000, payout_in_flight_here: true },
+        500,
+      ),
+    ).toBe(Number.POSITIVE_INFINITY);
     expect(reconcilableAt(base, 500)).toBeNull();
   });
 });

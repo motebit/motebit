@@ -135,7 +135,9 @@ export function createWithdrawalTables(db: DatabaseDriver): void {
       failure_reason TEXT,
       relay_signature TEXT,
       relay_public_key TEXT,
-      claimed_at INTEGER
+      claimed_at INTEGER,
+      payout_valid_until INTEGER,
+      pre_claim_review INTEGER NOT NULL DEFAULT 0
     );
     CREATE INDEX IF NOT EXISTS idx_relay_withdrawals_motebit
       ON relay_withdrawals (motebit_id, requested_at DESC);
@@ -155,36 +157,28 @@ export function createWithdrawalTables(db: DatabaseDriver): void {
   if (!colNames.has("relay_public_key")) {
     db.exec("ALTER TABLE relay_withdrawals ADD COLUMN relay_public_key TEXT");
   }
-  // #921: when a payout claimed the withdrawal (`pending → processing`).
-  // NULL on every row written before the claim existed.
-  if (!colNames.has("claimed_at")) {
-    db.exec("ALTER TABLE relay_withdrawals ADD COLUMN claimed_at INTEGER");
+  // #921: `payout_valid_until` — the payout's own declared horizon (the
+  // latest moment the payload a rail was handed can still land), recorded at
+  // the claim; NULL for a relay-broadcast payout (Solana), whose horizon is
+  // bound to this process (budget.ts `reconcileOpensAt`).
+  if (!colNames.has("payout_valid_until")) {
+    db.exec("ALTER TABLE relay_withdrawals ADD COLUMN payout_valid_until INTEGER");
   }
-
-  // #921: the moment this ledger first ran with claim-before-send. A
-  // `pending` withdrawal requested BEFORE it, to a destination an automated
-  // path pays (Solana / 0x), may have had its payout attempted with no claim
-  // recorded — the operator must check the chain before failing it. Written
-  // once (first boot of the claiming code), never updated.
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS relay_withdrawal_claim_epoch (
-      id INTEGER PRIMARY KEY CHECK (id = 1),
-      since INTEGER NOT NULL
-    );
-  `);
-  db.prepare("INSERT OR IGNORE INTO relay_withdrawal_claim_epoch (id, since) VALUES (1, ?)").run(
-    Date.now(),
-  );
-}
-
-/**
- * When this ledger began claiming payouts before sending them (#921). See
- * `createWithdrawalTables`. Null only if the table was never created.
- */
-export function getWithdrawalClaimEpoch(db: DatabaseDriver): number | null {
-  const row = db.prepare("SELECT since FROM relay_withdrawal_claim_epoch WHERE id = 1").get() as
-    { since: number } | undefined;
-  return row?.since ?? null;
+  // #921: `pre_claim_review` marks a row that was `pending` when this ledger
+  // first gained claim-before-send. Before it, an automated send left no
+  // claim, so any such row's payout may have been attempted — the operator
+  // checks the chain before failing it. Marked ONCE, in the same step that
+  // adds `claimed_at` (a durable per-row fact, not a clock comparison: a
+  // rollback-and-redeploy or a host clock move cannot unmark a row).
+  if (!colNames.has("pre_claim_review")) {
+    db.exec("ALTER TABLE relay_withdrawals ADD COLUMN pre_claim_review INTEGER NOT NULL DEFAULT 0");
+  }
+  if (!colNames.has("claimed_at")) {
+    db.transaction(() => {
+      db.exec("ALTER TABLE relay_withdrawals ADD COLUMN claimed_at INTEGER");
+      db.exec("UPDATE relay_withdrawals SET pre_claim_review = 1 WHERE status = 'pending'");
+    });
+  }
 }
 
 /** Create agent wallet table. Idempotent. Reserved for sovereign-rail wiring. */
@@ -432,16 +426,20 @@ export class SqliteAccountStore implements AccountStore {
     return info.changes > 0;
   }
 
-  claimWithdrawalForPayout(id: string, claimedAt: number): boolean {
+  claimWithdrawalForPayout(
+    id: string,
+    claimedAt: number,
+    payoutValidUntil: number | null = null,
+  ): boolean {
     // Issue #921: the claim that must precede any payout send. A
     // compare-and-set on `pending` only, so of two claimants (a concurrent
     // handler, or the operator's manual complete/fail racing the handler's
     // pre-send awaits) exactly one moves the row; the loser must not send.
     const info = this.db
       .prepare(
-        "UPDATE relay_withdrawals SET status = 'processing', claimed_at = ? WHERE withdrawal_id = ? AND status = 'pending'",
+        "UPDATE relay_withdrawals SET status = 'processing', claimed_at = ?, payout_valid_until = ? WHERE withdrawal_id = ? AND status = 'pending'",
       )
-      .run(claimedAt, id);
+      .run(claimedAt, payoutValidUntil, id);
     return info.changes > 0;
   }
 

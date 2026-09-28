@@ -2,6 +2,7 @@
 "@motebit/relay": patch
 "@motebit/virtual-accounts": minor
 "@motebit/operator": patch
+"@motebit/settlement-rails": minor
 ---
 
 A withdrawal payout is sent only after it CLAIMS the withdrawal, and the operator can no longer refund a payout that may still land (#921).
@@ -33,3 +34,16 @@ Now:
   - A 409 `WITHDRAWAL_PAYOUT_IN_FLIGHT` re-reads the queue and shows the row's state instead of an error.
   - A pre-claim pending row carries the warning "a payout may have been attempted — check the chain before failing", in the row and in the fail confirmation.
   - Amounts are shown as the decimal USD the relay sends; the panel had been dividing them by 10^6 a second time.
+
+Round 3 (cold review):
+
+- A payout stays "in flight" (reconcile refused) from its claim until its outcome is WRITTEN, not only until the send returns. Before this, a reconcile during the receipt signing could refund a payout that had landed.
+- The reconcile door opens at the payout's own horizon (`payout-horizon.ts`), never at a fixed 15 minutes:
+  - x402: the signed authorization's `validBefore` (1h) plus a margin.
+  - Solana: the last moment this relay could have broadcast, plus a blockhash lifetime, plus a margin.
+  - A batch rail that declares no horizon: 24h.
+  - `RECONCILE_MIN_AGE_MS` is now only a floor. A refusal carries `reconcile_opens_at`, and `/pending` reports it per row.
+- `@motebit/settlement-rails`: `X402_WITHDRAWAL_VALIDITY_SECONDS`, `isManualPayoutRail` and `payoutValidityMsOf`. Stripe declares `payoutMode: "manual"`; x402 declares `payoutMode: "sent"` and `payoutValidityMs`.
+- Batch: a manual rail's fire stays `pending`, so admin `/complete` and `/fail` work (main parity).
+- Pre-claim rows are marked durably (`pre_claim_review`), once, by the migration that adds `claimed_at`. The earlier wall-clock epoch is gone. A pending row with a payout reference is flagged too.
+- Operator: a reconcile 409 says inline "payout still in flight — opens in Xm", keeping the form. Gating reads the relay's per-row `reconcile_opens_at`.

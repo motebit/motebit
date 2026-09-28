@@ -35,44 +35,46 @@ import {
   fromMicro,
 } from "./accounts.js";
 import { checkIdempotency, completeIdempotency } from "./idempotency.js";
-import { getWithdrawalClaimEpoch } from "./account-store-sqlite.js";
 import Stripe from "stripe";
-import type { SettlementRailRegistry, StripeSettlementRail } from "@motebit/settlement-rails";
+import {
+  payoutValidityMsOf,
+  type SettlementRailRegistry,
+  type StripeSettlementRail,
+} from "@motebit/settlement-rails";
 import type { WithdrawalRequest } from "@motebit/virtual-accounts";
 
 const logger = createLogger({ service: "budget" });
 
-/**
- * How long after a payout claimed a withdrawal (`pending → processing`,
- * #921) the operator's reconcile door stays shut. A send in flight in THIS
- * process is refused regardless of age (`payoutsInFlight`); this window
- * covers a send the process can no longer see — another process, or one
- * whose await never returned. Far above a Solana send's bound (blockhash
- * lifetime plus the adapter's post-expiry poll) and an x402 facilitator
- * round trip.
- */
-export const RECONCILE_MIN_AGE_MS = 15 * 60 * 1000;
+export {
+  RECONCILE_MIN_AGE_MS,
+  SOLANA_BLOCKHASH_VALIDITY_MS,
+  PAYOUT_HORIZON_MARGIN_MS,
+  UNDECLARED_PAYOUT_HORIZON_MS,
+  reconcileOpensAt,
+} from "./payout-horizon.js";
+import {
+  RECONCILE_MIN_AGE_MS,
+  UNDECLARED_PAYOUT_HORIZON_MS,
+  reconcileOpensAt,
+} from "./payout-horizon.js";
 
 /** Destination shapes an automated payout path serves: Path 0 (Solana base58), Path 1 (EVM 0x). */
 const SOLANA_DEST_RE = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
 const EVM_DEST_RE = /^0x[0-9a-fA-F]{40}$/;
 
 /**
- * A `pending` withdrawal written before this ledger claimed payouts (#921),
- * to a destination an automated path pays: its payout may have been
- * attempted (and may have landed) with no claim recorded, so a manual
- * `/fail` could refund a payout that paid. Over-inclusive by design — a row
- * whose automated path was not configured is listed too.
+ * A `pending` withdrawal whose payout may have been attempted with no claim
+ * recorded (#921): marked durably when the ledger first gained
+ * claim-before-send (`pre_claim_review`), or one already carrying a payout
+ * reference. A manual `/fail` on it could refund a payout that paid — check
+ * the chain first.
  */
 export function payoutMayHaveBeenAttempted(
-  w: Pick<WithdrawalRequest, "status" | "requested_at" | "destination">,
-  claimEpoch: number | null,
+  w: Pick<WithdrawalRequest, "status" | "payout_reference" | "pre_claim_review">,
 ): boolean {
   return (
     w.status === "pending" &&
-    claimEpoch !== null &&
-    w.requested_at < claimEpoch &&
-    (SOLANA_DEST_RE.test(w.destination) || EVM_DEST_RE.test(w.destination))
+    ((w.pre_claim_review ?? 0) === 1 || (w.payout_reference != null && w.payout_reference !== ""))
   );
 }
 
@@ -86,9 +88,14 @@ export function payoutMayHaveBeenAttempted(
  * surfaced field is added in one place, not two.
  */
 function toWithdrawalRecord(w: WithdrawalRequest, relayId: string): AccountWithdrawalRecord {
-  // `claimed_at` (#921) is ledger bookkeeping for the operator's reconcile
-  // door, not a §2.9 wire field.
-  const { claimed_at: _claimedAt, ...wire } = w;
+  // `claimed_at`, `payout_valid_until`, `pre_claim_review` (#921) are ledger
+  // bookkeeping for the operator's reconcile door, not §2.9 wire fields.
+  const {
+    claimed_at: _claimedAt,
+    payout_valid_until: _validUntil,
+    pre_claim_review: _review,
+    ...wire
+  } = w;
   return {
     ...wire,
     amount: fromMicro(w.amount),
@@ -214,11 +221,32 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
   const stripeRail = railRegistry?.get("stripe") as StripeSettlementRail | undefined;
 
   /**
-   * Withdrawals whose automated payout this process is awaiting right now
-   * (#921). The reconcile door refuses them outright: while the send is
-   * pending here, its outcome will settle the row.
+   * Withdrawals whose automated payout this process is handling right now
+   * (#921) — from the claim until the payout's outcome is WRITTEN (the
+   * completion, the refund or the unresolved note), not merely until the
+   * send returns: between the two the handler still awaits the receipt
+   * signature, and a reconcile landing there would refund a payout that the
+   * next line records as paid. The reconcile door refuses them outright.
    */
   const payoutsInFlight = new Set<string>();
+
+  /**
+   * When this process's send call for a still-`processing` withdrawal
+   * returned or threw — the last moment the relay could have broadcast it
+   * (`reconcileOpensAt`). In-memory: a claim from an earlier process life is
+   * bounded by the process start instead.
+   */
+  const payoutSendEndedAt = new Map<string, number>();
+
+  /** Release a payout from this process: its outcome is written (or could not be). */
+  const releasePayout = (withdrawalId: string): void => {
+    payoutsInFlight.delete(withdrawalId);
+    if (getWithdrawalById(moteDb.db, withdrawalId)?.status === "processing") {
+      payoutSendEndedAt.set(withdrawalId, Date.now());
+    } else {
+      payoutSendEndedAt.delete(withdrawalId);
+    }
+  };
 
   // NOTE: the self-declared `POST /api/v1/agents/:id/deposit` route was
   // removed (2026-07-01). It credited spendable balance from a client-
@@ -412,9 +440,23 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
 
     // The claim (#921). Returns true only when THIS request moved the row
     // `pending → processing`; the caller sends nothing on false.
-    const claimPayout = (path: "solana" | "x402"): boolean => {
-      const claimed = claimWithdrawalForPayout(moteDb.db, result.withdrawal_id, Date.now());
-      if (!claimed) {
+    //
+    // `payoutValidUntil` is the payout's own horizon: the latest moment what
+    // the rail is handed can still land (x402: the authorization's
+    // `validBefore`); null for a payout the relay broadcasts itself (Solana),
+    // whose horizon is bound to this process (`reconcileOpensAt`). On a won
+    // claim the payout is in flight here until `releasePayout`.
+    const claimPayout = (path: "solana" | "x402", payoutValidUntil: number | null): boolean => {
+      const claimedAt = Date.now();
+      const claimed = claimWithdrawalForPayout(
+        moteDb.db,
+        result.withdrawal_id,
+        claimedAt,
+        payoutValidUntil,
+      );
+      if (claimed) {
+        payoutsInFlight.add(result.withdrawal_id);
+      } else {
         const current = getWithdrawalById(moteDb.db, result.withdrawal_id);
         logger.error("withdrawal.payout_claim_lost", {
           correlationId,
@@ -496,21 +538,15 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
       let claimed = false;
       try {
         const available = await operatorSolanaTransfer.isAvailable();
-        if (available && claimPayout("solana")) {
+        if (available && claimPayout("solana", null)) {
           claimed = true;
-          payoutsInFlight.add(result.withdrawal_id);
-          let sendResult: Awaited<ReturnType<typeof operatorSolanaTransfer.sendUsdc>>;
-          try {
-            sendResult = await operatorSolanaTransfer.sendUsdc(
-              result.destination,
-              // result.amount is stored in micro-units; the operator-side
-              // adapter takes micro-units as bigint (same unit convention
-              // as everywhere in the ledger).
-              BigInt(result.amount),
-            );
-          } finally {
-            payoutsInFlight.delete(result.withdrawal_id);
-          }
+          const sendResult = await operatorSolanaTransfer.sendUsdc(
+            result.destination,
+            // result.amount is stored in micro-units; the operator-side
+            // adapter takes micro-units as bigint (same unit convention
+            // as everywhere in the ledger).
+            BigInt(result.amount),
+          );
 
           if (sendResult.confirmed === true) {
             // Outcome 1 — funds moved.
@@ -633,6 +669,10 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
           claimed,
           error,
         });
+      } finally {
+        // Only now — after the outcome's write (or the note) — may the
+        // reconcile door see this payout as no longer in flight (#921).
+        if (claimed) releasePayout(result.withdrawal_id);
       }
     }
 
@@ -656,21 +696,19 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
         let claimed = false;
         try {
           const available = await x402Rail.isAvailable();
-          if (available && claimPayout("x402")) {
+          // The authorization the rail signs stays submittable until its
+          // declared validity; a rail declaring none gets the conservative
+          // floor — never a shorter horizon.
+          const validityMs = payoutValidityMsOf(x402Rail) ?? UNDECLARED_PAYOUT_HORIZON_MS;
+          if (available && claimPayout("x402", Date.now() + validityMs)) {
             claimed = true;
-            payoutsInFlight.add(result.withdrawal_id);
-            let withdrawResult: Awaited<ReturnType<typeof x402Rail.withdraw>>;
-            try {
-              withdrawResult = await x402Rail.withdraw(
-                motebitId,
-                body.amount,
-                "USDC",
-                result.destination,
-                result.withdrawal_id,
-              );
-            } finally {
-              payoutsInFlight.delete(result.withdrawal_id);
-            }
+            const withdrawResult = await x402Rail.withdraw(
+              motebitId,
+              body.amount,
+              "USDC",
+              result.destination,
+              result.withdrawal_id,
+            );
 
             const completedAt = Date.now();
             const relayPublicKeyHex = bytesToHex(relayIdentity.publicKey);
@@ -741,6 +779,8 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
             claimed,
             error,
           });
+        } finally {
+          if (claimed) releasePayout(result.withdrawal_id);
         }
       }
     }
@@ -804,39 +844,42 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
   // --- Admin: pending withdrawals ---
   /** @internal */
   // Lists `pending` AND `processing` rows. Each carries `status` and
-  // `claimed_at`; `reconcile_min_age_ms` lets the console gate its reconcile
-  // action on the same window the route enforces, and
+  // `claimed_at`; a `processing` row carries `reconcile_opens_at` — the same
+  // moment the reconcile route enforces (`reconcileOpensAt`), or null while
+  // its payout is in flight in this process — and
   // `payout_may_have_been_attempted` flags a pre-#921 row (see
-  // `payoutMayHaveBeenAttempted`).
+  // `payoutMayHaveBeenAttempted`). `reconcile_min_age_ms` is the floor only.
   app.get("/api/v1/admin/withdrawals/pending", (c) => {
-    const claimEpoch = getWithdrawalClaimEpoch(moteDb.db);
     const withdrawals = getPendingWithdrawals(moteDb.db).map((w) => ({
       ...w,
       amount: fromMicro(w.amount),
-      payout_may_have_been_attempted: payoutMayHaveBeenAttempted(w, claimEpoch),
+      payout_may_have_been_attempted: payoutMayHaveBeenAttempted(w),
+      reconcile_opens_at:
+        w.status !== "processing" || payoutsInFlight.has(w.withdrawal_id)
+          ? null
+          : reconcileOpensAt(w, payoutSendEndedAt.get(w.withdrawal_id)),
+      payout_in_flight_here: payoutsInFlight.has(w.withdrawal_id),
     }));
     return c.json({
       withdrawals,
       count: withdrawals.length,
       reconcile_min_age_ms: RECONCILE_MIN_AGE_MS,
-      claim_epoch: claimEpoch,
     });
   });
 
   // --- Admin: pre-#921 withdrawals to check on chain (read-only) ---
   //
-  // Every `pending` withdrawal requested before this ledger claimed payouts,
-  // to a Solana or 0x destination. Before #921 an automated send left no
-  // claim, so any of these may have been paid; check the chain for each
-  // before the first manual /fail after deploy. Read-only.
+  // Every `pending` withdrawal that was already `pending` when this ledger
+  // gained claim-before-send (marked durably, once, by the migration that
+  // added `claimed_at`), or that carries a payout reference. Before #921 an
+  // automated send left no claim, so any of these may have been paid; check
+  // the chain for each before the first manual /fail after deploy. Read-only.
   /** @internal */
   app.get("/api/v1/admin/withdrawals/pre-claim", (c) => {
-    const claimEpoch = getWithdrawalClaimEpoch(moteDb.db);
     const withdrawals = getPendingWithdrawals(moteDb.db)
-      .filter((w) => payoutMayHaveBeenAttempted(w, claimEpoch))
+      .filter((w) => payoutMayHaveBeenAttempted(w))
       .map((w) => ({ ...w, amount: fromMicro(w.amount) }));
     return c.json({
-      claim_epoch: claimEpoch,
       withdrawals,
       count: withdrawals.length,
       note: "a payout may have been attempted for each of these before claims were recorded — check the chain before failing",
@@ -854,21 +897,30 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
   //     manual fail could refund a payout that then pays (the #921 double
   //     pay), and a manual complete could record a second payout.
   //   - /reconcile acts on a `processing` withdrawal only, and only once its
-  //     payout can no longer be in flight: never while this process is
-  //     still awaiting the send, never within RECONCILE_MIN_AGE_MS of the
-  //     claim (a send in another process, or one this process lost track
-  //     of), and only on an explicit operator attestation of what the chain
-  //     shows. This is the door for a payout whose outcome is unknown — the
+  //     payout can no longer land: never while this process is still
+  //     handling it (claim → outcome written), never before
+  //     `reconcileOpensAt` — the payout's own horizon (x402: the signed
+  //     authorization's validity; Solana: the last moment this relay could
+  //     have broadcast, plus a blockhash lifetime), floored at
+  //     RECONCILE_MIN_AGE_MS after the claim — and only on an explicit
+  //     operator attestation of what the chain shows. This is the door for a payout whose outcome is unknown — the
   //     send threw, or the process died mid-send — so a crash never strands
   //     a withdrawal with no way out, and it is never a blind refund.
 
-  const payoutInFlightResponse = (c: Context, withdrawalId: string): Response =>
+  const payoutInFlightResponse = (
+    c: Context,
+    withdrawalId: string,
+    opensAt: number | null = null,
+  ): Response =>
     c.json(
       {
         error: "WITHDRAWAL_PAYOUT_IN_FLIGHT",
         message:
-          "payout in flight — reconcile after the send resolves (POST /api/v1/admin/withdrawals/:withdrawalId/reconcile)",
+          opensAt !== null
+            ? `payout may still land — reconcile opens at ${new Date(opensAt).toISOString()}`
+            : "payout in flight — reconcile after the send resolves (POST /api/v1/admin/withdrawals/:withdrawalId/reconcile)",
         withdrawal_id: withdrawalId,
+        reconcile_opens_at: opensAt,
         status: 409,
       },
       409,
@@ -1099,19 +1151,26 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
         409,
       );
     }
-    const claimedAt = withdrawal.claimed_at ?? null;
     const now = Date.now();
-    if (
-      payoutsInFlight.has(withdrawalId) ||
-      (claimedAt !== null && now - claimedAt < RECONCILE_MIN_AGE_MS)
-    ) {
+    if (payoutsInFlight.has(withdrawalId)) {
       logger.warn("withdrawal.admin.reconcile_refused_in_flight", {
         correlationId,
         withdrawalId,
-        inProcess: payoutsInFlight.has(withdrawalId),
-        claimedAt,
+        inProcess: true,
       });
       return payoutInFlightResponse(c, withdrawalId);
+    }
+    const opensAt = reconcileOpensAt(withdrawal, payoutSendEndedAt.get(withdrawalId));
+    if (now < opensAt) {
+      logger.warn("withdrawal.admin.reconcile_refused_in_flight", {
+        correlationId,
+        withdrawalId,
+        inProcess: false,
+        claimedAt: withdrawal.claimed_at ?? null,
+        payoutValidUntil: withdrawal.payout_valid_until ?? null,
+        opensAt,
+      });
+      return payoutInFlightResponse(c, withdrawalId, opensAt);
     }
 
     if (outcome === "paid") {

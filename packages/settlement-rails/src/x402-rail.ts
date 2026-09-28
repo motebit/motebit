@@ -10,6 +10,7 @@
  * client interface. Does not reimplement the protocol.
  */
 
+import { X402_WITHDRAWAL_VALIDITY_SECONDS } from "./payout-horizon.js";
 import { toMicro } from "@motebit/protocol";
 import type { WithdrawableGuestRail, PaymentProof, WithdrawalResult } from "@motebit/sdk";
 import { type RailLogger, NOOP_LOGGER } from "./logger.js";
@@ -54,6 +55,14 @@ export class X402SettlementRail implements WithdrawableGuestRail {
   readonly supportsDeposit = false as const;
   readonly supportsWithdraw = true as const;
   readonly supportsBatch = false as const;
+  /** `withdraw()` hands a signed payload to the facilitator (#921, payout-horizon.ts). */
+  readonly payoutMode = "sent" as const;
+  /**
+   * The authorization `withdraw()` signs is valid for this long: a
+   * facilitator that accepted it and then timed out may still submit it
+   * until then (#921).
+   */
+  readonly payoutValidityMs = X402_WITHDRAWAL_VALIDITY_SECONDS * 1000;
 
   private readonly facilitator: X402FacilitatorClient;
   readonly network: string;
@@ -109,7 +118,7 @@ export class X402SettlementRail implements WithdrawableGuestRail {
           to: destination,
           value: String(toMicro(amount)), // USDC 6 decimals
           validAfter: 0,
-          validBefore: Math.floor(Date.now() / 1000) + 3600,
+          validBefore: Math.floor(Date.now() / 1000) + X402_WITHDRAWAL_VALIDITY_SECONDS,
           nonce: idempotencyKey,
         },
       },

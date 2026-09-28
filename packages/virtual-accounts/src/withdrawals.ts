@@ -182,9 +182,11 @@ export function claimWithdrawalForPayout(
   withdrawalId: string,
   claimedAt: number = Date.now(),
   logger: WithdrawalsLogger = NOOP_LOGGER,
+  payoutValidUntil: number | null = null,
 ): boolean {
-  const ok = store.claimWithdrawalForPayout(withdrawalId, claimedAt);
-  if (ok) logger.info("withdrawal.claimed_for_payout", { withdrawalId, claimedAt });
+  const ok = store.claimWithdrawalForPayout(withdrawalId, claimedAt, payoutValidUntil);
+  if (ok)
+    logger.info("withdrawal.claimed_for_payout", { withdrawalId, claimedAt, payoutValidUntil });
   return ok;
 }
 

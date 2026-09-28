@@ -68,14 +68,22 @@ export interface WithdrawalRequest {
    * before failing it.
    */
   payout_may_have_been_attempted?: boolean;
+  /**
+   * On a `processing` row: when the relay's reconcile door opens — the
+   * payout's own horizon (the rail's signed validity, or the last moment the
+   * relay could have broadcast plus a blockhash lifetime), floored. Null
+   * while the relay is still handling the payout itself.
+   */
+  reconcile_opens_at?: number | null;
+  /** The relay is handling this payout right now (claim → outcome written). */
+  payout_in_flight_here?: boolean;
 }
 
 export interface PendingWithdrawalsResponse {
   withdrawals: WithdrawalRequest[];
   count: number;
-  /** How long after its claim a `processing` row becomes reconcilable. */
+  /** The reconcile floor after a claim; the per-row `reconcile_opens_at` is authoritative. */
   reconcile_min_age_ms?: number;
-  claim_epoch?: number | null;
 }
 
 export function fetchPendingWithdrawals(signal?: AbortSignal): Promise<PendingWithdrawalsResponse> {
@@ -89,7 +97,7 @@ export function fetchPendingWithdrawals(signal?: AbortSignal): Promise<PendingWi
  */
 export function fetchPreClaimWithdrawals(
   signal?: AbortSignal,
-): Promise<{ claim_epoch: number | null; withdrawals: WithdrawalRequest[]; count: number }> {
+): Promise<{ withdrawals: WithdrawalRequest[]; count: number }> {
   return apiFetch(`/api/v1/admin/withdrawals/pre-claim`, { signal });
 }
 
@@ -132,13 +140,27 @@ export function isPayoutInFlight(err: unknown): boolean {
 }
 
 /**
- * When a `processing` withdrawal becomes reconcilable — its claim plus the
- * relay's window — or null when it is not `processing`. A row with no
- * recorded claim time is reconcilable now (the relay treats it the same).
+ * When a `processing` withdrawal becomes reconcilable, or null when it is
+ * not `processing`. The relay's own `reconcile_opens_at` is authoritative;
+ * a payout the relay is still handling is never reconcilable (Infinity).
+ * Only an older relay that reports neither falls back to claim + floor.
  */
 export function reconcilableAt(w: WithdrawalRequest, minAgeMs: number): number | null {
   if (w.status !== "processing") return null;
+  if (w.payout_in_flight_here === true) return Number.POSITIVE_INFINITY;
+  if (w.reconcile_opens_at != null) return w.reconcile_opens_at;
   return w.claimed_at != null ? w.claimed_at + minAgeMs : 0;
+}
+
+/** The `reconcile_opens_at` a 409 payout-in-flight answer carries, if any. */
+export function inFlightOpensAt(err: unknown): number | null {
+  if (!isPayoutInFlight(err)) return null;
+  try {
+    const body = JSON.parse((err as ApiError).body) as { reconcile_opens_at?: unknown };
+    return typeof body.reconcile_opens_at === "number" ? body.reconcile_opens_at : null;
+  } catch {
+    return null;
+  }
 }
 
 export function completeWithdrawal(

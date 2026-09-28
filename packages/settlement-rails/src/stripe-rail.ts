@@ -37,6 +37,8 @@ export class StripeSettlementRail implements DepositableGuestRail, WithdrawableG
   readonly supportsDeposit = true as const;
   readonly supportsWithdraw = true as const;
   readonly supportsBatch = false as const;
+  /** `withdraw()` sends nothing — an operator pays out by hand (#921, payout-horizon.ts). */
+  readonly payoutMode = "manual" as const;
 
   private readonly stripe: Stripe;
   readonly webhookSecret: string;

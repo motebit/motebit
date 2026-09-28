@@ -16,6 +16,12 @@ export type { StripeRailConfig } from "./stripe-rail.js";
 export { X402SettlementRail } from "./x402-rail.js";
 export type { X402RailConfig, X402FacilitatorClient } from "./x402-rail.js";
 export { BridgeSettlementRail } from "./bridge-rail.js";
+export {
+  X402_WITHDRAWAL_VALIDITY_SECONDS,
+  isManualPayoutRail,
+  payoutValidityMsOf,
+  type PayoutHorizonDeclaration,
+} from "./payout-horizon.js";
 export type { BridgeRailConfig, BridgeClient, BridgeTransfer } from "./bridge-rail.js";
 
 export class SettlementRailRegistry {

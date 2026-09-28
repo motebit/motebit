@@ -114,8 +114,16 @@ export interface AccountStore {
    * true only when THIS call moved the row. A payout MUST NOT be sent unless
    * the claim returned true — a lost claim means someone else (the operator,
    * a concurrent handler) already owns the withdrawal's outcome.
+   * `payoutValidUntil` is the payout's own declared horizon — the latest
+   * moment what the rail is handed can still land — or null when the relay
+   * itself broadcasts it (its horizon is then bound to the broadcasting
+   * process).
    */
-  claimWithdrawalForPayout(id: string, claimedAt: number): boolean;
+  claimWithdrawalForPayout(
+    id: string,
+    claimedAt: number,
+    payoutValidUntil?: number | null,
+  ): boolean;
   setWithdrawalSignature(id: string, signature: string, publicKey: string): void;
   /**
    * `from → completed`, a compare-and-set on exactly `from` (#921). Returns
@@ -481,11 +489,16 @@ export class InMemoryAccountStore implements AccountStore {
     w.relay_public_key = publicKey;
   }
 
-  claimWithdrawalForPayout(id: string, claimedAt: number): boolean {
+  claimWithdrawalForPayout(
+    id: string,
+    claimedAt: number,
+    payoutValidUntil: number | null = null,
+  ): boolean {
     const w = this.withdrawals.get(id);
     if (!w || w.status !== "pending") return false;
     w.status = "processing";
     w.claimed_at = claimedAt;
+    w.payout_valid_until = payoutValidUntil;
     return true;
   }
 

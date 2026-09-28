@@ -231,21 +231,60 @@ describe("WithdrawalsPanel — payout in flight (#921)", () => {
     expect(screen.queryByText(/^Error:/)).toBeNull();
   });
 
-  it("a 409 payout-in-flight on reconcile keeps the form open without an error", async () => {
+  it("a 409 payout-in-flight on reconcile says inline when the door opens, keeping the form and its attestation", async () => {
     const state: { listing: unknown } = {
       listing: { withdrawals: [processing(20 * 60_000)], reconcile_min_age_ms: MIN_AGE },
     };
     routeFetch(state, {
-      "/reconcile": { status: 409, body: { error: "WITHDRAWAL_PAYOUT_IN_FLIGHT" } },
+      "/reconcile": {
+        status: 409,
+        body: {
+          error: "WITHDRAWAL_PAYOUT_IN_FLIGHT",
+          reconcile_opens_at: Date.now() + 42 * 60_000 + 30_000,
+        },
+      },
     });
     render(React.createElement(WithdrawalsPanel));
     await waitFor(() => expect(screen.getByText("reconcile")).toBeTruthy());
     fireEvent.click(screen.getByText("reconcile"));
-    fireEvent.change(screen.getByLabelText("attestation"), { target: { value: "x" } });
+    fireEvent.change(screen.getByLabelText("attestation"), { target: { value: "checked sig" } });
     fireEvent.click(screen.getByText("submit reconcile"));
-    await waitFor(() => expect(screen.getByText("payout in flight")).toBeTruthy());
+    await waitFor(() =>
+      expect(screen.getByText(/payout still in flight — opens in 4[12]m/)).toBeTruthy(),
+    );
     expect(screen.queryByText(/^Error:/)).toBeNull();
     expect(screen.getByText("submit reconcile")).toBeTruthy();
+    expect((screen.getByLabelText("attestation") as HTMLTextAreaElement).value).toBe("checked sig");
+  });
+
+  it("gates on the relay's per-row reconcile_opens_at, not claim + floor", async () => {
+    mockJson({
+      withdrawals: [
+        // Claimed 20 minutes ago — past the 15-minute floor — but an x402
+        // authorization that stays submittable for another 45 minutes.
+        { ...processing(20 * 60_000), reconcile_opens_at: Date.now() + 45 * 60_000 },
+      ],
+      reconcile_min_age_ms: MIN_AGE,
+    });
+    render(React.createElement(WithdrawalsPanel));
+    await waitFor(() => expect(screen.getByText("reconcile")).toBeTruthy());
+    const btn = screen.getByText("reconcile") as HTMLButtonElement;
+    expect(btn.disabled).toBe(true);
+    expect(btn.title).toMatch(/Reconcile opens in 4[45]m — the payout may still land/);
+  });
+
+  it("a payout the relay is still handling is never reconcilable from the panel", async () => {
+    mockJson({
+      withdrawals: [
+        { ...processing(3 * 60 * 60_000), reconcile_opens_at: null, payout_in_flight_here: true },
+      ],
+      reconcile_min_age_ms: MIN_AGE,
+    });
+    render(React.createElement(WithdrawalsPanel));
+    await waitFor(() => expect(screen.getByText("reconcile")).toBeTruthy());
+    const btn = screen.getByText("reconcile") as HTMLButtonElement;
+    expect(btn.disabled).toBe(true);
+    expect(btn.title).toBe("The relay is still handling this payout");
   });
 });
 

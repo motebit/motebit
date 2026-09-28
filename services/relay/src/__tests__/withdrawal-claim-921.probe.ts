@@ -14,6 +14,11 @@
  *   - send_throws: the send throws; status, then admin /fail's answer.
  *   - batch_unconfirmed: a batch fire the rail has not confirmed; status and
  *     admin /fail's answer.
+ *   - signing_gap (round 3): the operator's refund attempt while the handler
+ *     is parked in the receipt signature, clock hours on.
+ *   - x402_throw_then_20m (round 3): refund attempt 20 minutes after an x402
+ *     withdraw threw (its authorization is valid for an hour).
+ *   - batch_manual (round 3): a manual rail's fire; admin /complete answer.
  * Surfaces used exist on both trees: /withdraw, admin /fail and /complete,
  * the injected OperatorSolanaTransfer, batch-withdrawals exports, the
  * accounts shim reads.
@@ -22,6 +27,22 @@ import { it, afterAll, vi } from "vitest";
 import { writeFileSync } from "node:fs";
 import { generateKeypair, bytesToHex } from "@motebit/encryption";
 import { OperatorSolanaTransfer, type SolanaRpcAdapter } from "@motebit/wallet-solana";
+
+// Round 3: hold the receipt signature (the gap between the send returning
+// and the outcome's write). Present on both trees: budget.ts signs through
+// ../accounts.js `signWithdrawalReceipt` on main and here.
+const signingGate: { hold: Promise<void> | null } = { hold: null };
+vi.mock("../accounts.js", async (importOriginal) => {
+  const original = await importOriginal<typeof import("../accounts.js")>();
+  return {
+    ...original,
+    signWithdrawalReceipt: async (...args: Parameters<typeof original.signWithdrawalReceipt>) => {
+      if (signingGate.hold) await signingGate.hold;
+      return original.signWithdrawalReceipt(...args);
+    },
+  };
+});
+
 import type { SyncRelay } from "../index.js";
 import { creditAccount, getAccountBalance, getTransactions } from "../accounts.js";
 import { enqueuePendingWithdrawal, evaluateAndFireRail } from "../batch-withdrawals.js";
@@ -276,4 +297,128 @@ it("zz921 probe", async () => {
     };
     await relay.close();
   }
-}, 60_000);
+
+  // ── signing_gap (round 3) ──
+  // The send confirmed; the handler is parked in the receipt signature; the
+  // clock is hours on. The operator tries to refund: /reconcile on this tree,
+  // /fail on main (main has no reconcile). Paid AND refunded is the defect.
+  {
+    let release!: () => void;
+    signingGate.hold = new Promise<void>((r) => (release = r));
+    let sent = false;
+    const sendUsdc = vi.fn().mockImplementation(() => {
+      sent = true;
+      return Promise.resolve({ signature: SIG, slot: 1, confirmed: true });
+    });
+    const relay = await createTestRelay({
+      enableDeviceAuth: false,
+      operatorSolanaTransfer: operatorWith(sendUsdc),
+    });
+    const mid = "zz921-probe-signing";
+    await fund(relay, mid);
+    const pending = withdraw(relay, mid);
+    await until(() => sent);
+    await new Promise((r) => setTimeout(r, 10));
+    const [id] = withdrawalIds(relay, mid);
+    const realNow = Date.now.bind(Date);
+    const spy = vi.spyOn(Date, "now").mockImplementation(() => realNow() + 6 * 60 * 60 * 1000);
+    const rec = await adminCall(relay, id!, "reconcile", {
+      outcome: "not_paid",
+      attestation: "nothing seen",
+    });
+    const fail = rec.status === 404 ? await adminCall(relay, id!, "fail", { reason: "x" }) : null;
+    release();
+    await pending;
+    spy.mockRestore();
+    signingGate.hold = null;
+    obs["signing_gap"] = {
+      refund_attempt_status: fail ? fail.status : rec.status,
+      ...outcome(relay, mid, id!, true),
+    };
+    await relay.close();
+  }
+
+  // ── x402_throw_then_20m (round 3) ──
+  // The x402 withdraw threw after the facilitator may have accepted the
+  // authorization (valid 1h). 20 minutes later the operator tries to refund.
+  {
+    const { X402SettlementRail } = await import("@motebit/settlement-rails");
+    const avail = vi.spyOn(X402SettlementRail.prototype, "isAvailable").mockResolvedValue(true);
+    const wd = vi
+      .spyOn(X402SettlementRail.prototype, "withdraw")
+      .mockRejectedValue(new Error("facilitator timeout"));
+    const relay = await createTestRelay({ enableDeviceAuth: false });
+    const mid = "zz921-probe-x402";
+    await fund(relay, mid);
+    await withdraw(
+      relay,
+      mid,
+      jsonAuthWithIdempotency(),
+      "0x1234567890abcdef1234567890abcdef12345678",
+    );
+    const [id] = withdrawalIds(relay, mid);
+    const realNow = Date.now.bind(Date);
+    const spy = vi.spyOn(Date, "now").mockImplementation(() => realNow() + 20 * 60 * 1000);
+    const rec = await adminCall(relay, id!, "reconcile", {
+      outcome: "not_paid",
+      attestation: "nothing seen",
+    });
+    const fail = rec.status === 404 ? await adminCall(relay, id!, "fail", { reason: "x" }) : null;
+    spy.mockRestore();
+    avail.mockRestore();
+    wd.mockRestore();
+    obs["x402_throw_then_20m"] = {
+      refund_attempt_status: fail ? fail.status : rec.status,
+      // The authorization may still be submitted for ~40 more minutes.
+      ...outcome(relay, mid, id!, true),
+    };
+    await relay.close();
+  }
+
+  // ── batch_manual (round 3) — main parity expected ──
+  {
+    const relay = await createTestRelay({ enableDeviceAuth: false });
+    const mid = "zz921-probe-manual";
+    await fund(relay, mid);
+    enqueuePendingWithdrawal(relay.moteDb.db, {
+      motebitId: mid,
+      amountMicro: MICRO,
+      destination: "0x1234567890abcdef1234567890abcdef12345678",
+      rail: "zz921-probe-manual-rail",
+      source: "user",
+    });
+    const rail = {
+      name: "zz921-probe-manual-rail",
+      railType: "fiat",
+      custody: "relay",
+      supportsDeposit: false,
+      supportsWithdraw: true,
+      supportsBatch: false,
+      payoutMode: "manual",
+      isAvailable: () => Promise.resolve(true),
+      attachProof: () => Promise.resolve(),
+      withdraw: () =>
+        Promise.resolve({
+          amount: MICRO / 1_000_000,
+          currency: "USDC",
+          proof: { reference: "pending:x", railType: "fiat", confirmedAt: 0 },
+        }),
+    };
+    await evaluateAndFireRail(
+      relay.moteDb.db,
+      rail as unknown as Parameters<typeof evaluateAndFireRail>[1],
+      {
+        policy: { minAggregateMicro: 0, feeJustificationMultiplier: 1, maxAgeMs: 0 },
+      } as unknown as Parameters<typeof evaluateAndFireRail>[2],
+    );
+    const [id] = withdrawalIds(relay, mid);
+    const status = (
+      relay.moteDb.db
+        .prepare("SELECT status FROM relay_withdrawals WHERE withdrawal_id = ?")
+        .get(id) as { status: string } | undefined
+    )?.status;
+    const done = await adminCall(relay, id!, "complete", { payout_reference: "stripe-po" });
+    obs["batch_manual"] = { status_after_fire: status, admin_complete_status: done.status };
+    await relay.close();
+  }
+}, 120_000);
