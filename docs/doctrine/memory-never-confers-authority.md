@@ -32,7 +32,7 @@ Two compounding gaps, both verified from the bytes during the memory-architectur
 
 ## Scope honesty and triggers
 
-Today no caller presents `DelegationToken`s to the runtime and no grant store exists. The seam and the invariant ship now; net effect: **R4 never auto-executes** — which is the invariant, expressed as the degenerate case. The UX cost is one approval tap per money-moving call (the `approval_request` chunk already renders risk level). Deferred, behind the standing-delegation proposal's named triggers: the grant store, inbound-token presentation on delegated tasks, and the relay revocation feed. When those land, `verifyGrantForTurn` is already the verification chain they call.
+Today no caller presents `DelegationToken`s to the runtime and no grant store exists. The seam and the invariant ship now; net effect: **R4 never auto-executes** — which is the invariant, expressed as the degenerate case. The UX cost is one approval tap per money-moving call (the `approval_request` chunk already renders risk level). That tap exists only on the owner's own turns. In a turn that runs another principal's words (a customer's `motebit_task`, a caller's `motebit_query`), no human is there to answer, so a call that would pause for approval is refused outright instead (#880, the policy gate's no-approval-channel view). A foreign task's approval never outlives the task, and the "denied" is on its signed receipt. An MCP caller was already treated this way. Deferred, behind the standing-delegation proposal's named triggers: the grant store, inbound-token presentation on delegated tasks, and the relay revocation feed. When those land, `verifyGrantForTurn` is already the verification chain they call.
 
 ## Failure modes, named
 

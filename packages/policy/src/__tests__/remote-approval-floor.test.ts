@@ -133,3 +133,35 @@ describe("a tool's own approval floor binds remote callers (#880 C)", () => {
     expect(d.allowed).toBe(false);
   });
 });
+
+describe("no approval channel: a would-pause call is denied (#880)", () => {
+  it("the view denies what the gate would pause, with the typed reason", () => {
+    const gate = autonomousGate();
+    const paused = gate.validate(WRITE_FILE, {}, ctx(remote(AgentTrustLevel.Verified)));
+    expect(paused.requiresApproval).toBe(true);
+    const denied = gate
+      .withoutApprovalChannel()
+      .validate(WRITE_FILE, {}, ctx(remote(AgentTrustLevel.Verified)));
+    expect(denied.allowed).toBe(false);
+    expect(denied.requiresApproval).toBe(false);
+    expect(denied.reason).toContain(
+      "requires the owner's approval — not available to another principal's task",
+    );
+  });
+
+  it("only narrows: what the gate auto-allows the view auto-allows", () => {
+    const view = autonomousGate().withoutApprovalChannel();
+    const d = view.validate(PLAIN_WRITE, {}, ctx(remote(AgentTrustLevel.Verified)));
+    expect(d.allowed).toBe(true);
+    expect(d.requiresApproval).toBe(false);
+  });
+
+  it("the view shares the gate's state: its other methods are the gate's own", () => {
+    const gate = autonomousGate();
+    const view = gate.withoutApprovalChannel();
+    expect(view.classify(WRITE_FILE)).toEqual(gate.classify(WRITE_FILE));
+    expect(view.filterTools([WRITE_FILE, PLAIN_WRITE])).toEqual(
+      gate.filterTools([WRITE_FILE, PLAIN_WRITE]),
+    );
+  });
+});

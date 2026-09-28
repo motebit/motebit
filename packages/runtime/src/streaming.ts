@@ -308,6 +308,9 @@ interface PendingApproval {
    * The paused turn ran ANOTHER principal's words (#880). The resume —
    * the approved call and the continuation that re-runs the same prompt —
    * stays foreign: no `localOnly` tool, however long the owner took.
+   * Defense in depth: a foreign turn is validated through the gate's
+   * no-approval-channel view, so it refuses rather than pausing and no
+   * new foreign approval is ever created.
    */
   foreignPrincipal?: boolean;
 }

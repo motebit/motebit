@@ -36,7 +36,7 @@ export {
 } from "./audit.js";
 export type { AuditLogSink, AuditStatsSince, ChainedAuditSinkOptions } from "./audit.js";
 export { PolicyGate, DEFAULT_POLICY } from "./policy-gate.js";
-export type { PolicyConfig } from "./policy-gate.js";
+export type { PolicyConfig, ValidateOptions } from "./policy-gate.js";
 export { MemoryGovernor, MemoryClass, DEFAULT_MEMORY_GOVERNANCE } from "./memory-governance.js";
 export type { MemoryGovernanceConfig, MemoryDecision } from "./memory-governance.js";
 export { computeReputationScore } from "./reputation.js";

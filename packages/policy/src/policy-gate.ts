@@ -39,6 +39,17 @@ function parseScopeSet(scope: string): Set<string> {
 
 // === Policy Configuration ===
 
+/** Per-call options for `PolicyGate.validate`. */
+export interface ValidateOptions {
+  /**
+   * No human can answer an approval for this call (#880): it runs inside
+   * another principal's turn. A decision that would PAUSE for approval is
+   * returned as a denial instead. Only narrows — it never lowers an
+   * approval to an allow.
+   */
+  noApprovalChannel?: boolean;
+}
+
 export interface PolicyConfig {
   /** Operator Mode: when false, only R0/R1 tools are available (ambient companion).
    *  When true, R2+ become available with full enforcement (operator). */
@@ -595,10 +606,30 @@ export class PolicyGate {
    * hold that ambiguity (`findUnresolvedActions` in audit.ts), never
    * treat it as safe to retry.
    */
-  validate(tool: ToolDefinition, args: Record<string, unknown>, ctx: TurnContext): PolicyDecision {
+  validate(
+    tool: ToolDefinition,
+    args: Record<string, unknown>,
+    ctx: TurnContext,
+    opts?: ValidateOptions,
+  ): PolicyDecision {
     const callId = crypto.randomUUID();
-    const decision = this.evaluate(tool, args, ctx, callId);
+    const decision = this.evaluate(tool, args, ctx, callId, opts);
     return { ...decision, callId };
+  }
+
+  /**
+   * A view of this gate for a turn that no human can approve — another
+   * principal's turn (#880). Every method is this gate's; only `validate`
+   * differs: a call that would pause for approval is DENIED instead (see
+   * `ValidateOptions.noApprovalChannel`). The runtime hands this view to the
+   * agent loop for a foreign turn, so an approval can never outlive the task
+   * that raised it.
+   */
+  withoutApprovalChannel(): PolicyGate {
+    const view = Object.create(this) as PolicyGate;
+    view.validate = (tool, args, ctx) =>
+      this.validate(tool, args, ctx, { noApprovalChannel: true });
+    return view;
   }
 
   /**
@@ -677,6 +708,7 @@ export class PolicyGate {
     args: Record<string, unknown>,
     ctx: TurnContext,
     callId: string,
+    opts?: ValidateOptions,
   ): PolicyDecision {
     const profile = this.classify(tool);
     const maxRisk = this.getEffectiveMaxRisk();
@@ -963,6 +995,24 @@ export class PolicyGate {
         : quorumMeta != null
           ? quorumShortfallDelta(quorumMeta.required - quorumMeta.collected.length)
           : undefined;
+
+    // 10. No approval channel (#880). The turn runs another principal's
+    // words — a customer's task, a caller's query — so no human is waiting
+    // to answer an approval, and a pause would outlive the task that raised
+    // it: the approval would later resume that principal's prompt inside the
+    // OWNER's conversation. The call is refused now instead, as a hard
+    // governance denial (the loop counts it; a task that did nothing else
+    // signs a `denied` receipt). This is exactly how an MCP caller is
+    // already treated: the MCP surface has no approval channel either.
+    if (needsApproval && opts?.noApprovalChannel === true) {
+      const decision: PolicyDecision = {
+        allowed: false,
+        requiresApproval: false,
+        reason: `Tool "${tool.name}" requires the owner's approval — not available to another principal's task`,
+      };
+      this.audit.logDecision(ctx.turnId, callId, tool.name, args, decision, ctx.runId);
+      return decision;
+    }
 
     const decision: PolicyDecision = {
       allowed: true,

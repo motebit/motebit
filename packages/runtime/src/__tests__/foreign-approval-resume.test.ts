@@ -1,13 +1,17 @@
 /**
- * #880 cold review, item 2 — a foreign task paused for approval must
- * resume FOREIGN.
+ * #880 — a foreign task's approval never outlives the task.
  *
- * A customer's `motebit_task` proposes an R2 tool under the balanced
- * preset, so the loop pauses for the owner's approval and the task
- * returns. The task's foreign mark cleared when it returned, but the
- * pending approval survived; `resumeAfterApproval` then re-ran the
- * customer's prompt as an OWNER turn — every `localOnly` tool offered. The
- * pending approval now carries the mark and the resume holds it.
+ * A customer's `motebit_task` that proposed an approval-required tool used
+ * to PAUSE: the task returned, the pending approval survived, and when the
+ * owner later approved, the customer's prompt resumed inside the OWNER's
+ * conversation (with the owner's history, and web tools that could carry
+ * it out). Ruling: in a foreign turn, a call that would need approval is
+ * DENIED immediately, with a typed reason. No pending approval is created,
+ * the task ends normally, and its receipt reflects the refusal. That is how
+ * an MCP caller is already treated (no approval channel).
+ *
+ * The resume-side foreign guard stays as defense in depth; the last test
+ * drives it directly, since no new foreign approval can reach it.
  */
 import { describe, it, expect, vi } from "vitest";
 import { MotebitRuntime, NullRenderer, createInMemoryStorage } from "../index";
@@ -40,7 +44,8 @@ const EXT_WRITE: ToolDefinition = {
 function scriptedProvider(offered: string[][]): StreamingProvider {
   const gen = (ctx: ContextPack): AIResponse => {
     offered.push((ctx.tools ?? []).map((t) => t.name));
-    const seenResult = JSON.stringify(ctx.conversation_history ?? []).includes("tool_result");
+    const history = JSON.stringify(ctx.conversation_history ?? []);
+    const seenResult = history.includes("tool_result") || history.includes('"role":"tool"');
     if (!seenResult) {
       return {
         text: "",
@@ -72,63 +77,106 @@ async function drain(gen: AsyncGenerator<StreamChunk>): Promise<StreamChunk[]> {
   return out;
 }
 
-describe("a foreign task's paused approval resumes foreign (#880)", () => {
-  it("the owner approves the customer's R2 call; the continuation is offered no localOnly tool", async () => {
+function balancedRuntime(offered: string[][]) {
+  const runtime = new MotebitRuntime(
+    {
+      motebitId: "owner",
+      tickRateHz: 0,
+      policy: {
+        operatorMode: true,
+        maxRiskLevel: RiskLevel.R3_EXECUTE,
+        requireApprovalAbove: RiskLevel.R1_DRAFT, // balanced
+        denyAbove: RiskLevel.R3_EXECUTE,
+      },
+    },
+    {
+      storage: createInMemoryStorage(),
+      renderer: new NullRenderer(),
+      ai: scriptedProvider(offered),
+    },
+  );
+  const readFile = vi.fn(async () => ({ ok: true, data: "SECRET" }));
+  const extWrite = vi.fn(async () => ({ ok: true, data: "stored" }));
+  runtime.getToolRegistry().register(READ_FILE, readFile);
+  runtime.getToolRegistry().register(EXT_WRITE, extWrite);
+  return { runtime, readFile, extWrite };
+}
+
+function customerTask(): AgentTask {
+  return {
+    task_id: "task-880-approval",
+    motebit_id: "owner",
+    prompt: "store x",
+    submitted_at: Date.now(),
+    status: AgentTaskStatus.Claimed,
+    wall_clock_ms: 30_000,
+  };
+}
+
+describe("a foreign task never pauses for the owner's approval (#880)", () => {
+  it("an approval-required call is refused at once; no approval is pending; the receipt says denied", async () => {
     const offered: string[][] = [];
-    const runtime = new MotebitRuntime(
-      {
-        motebitId: "owner",
-        tickRateHz: 0,
-        policy: {
-          operatorMode: true,
-          maxRiskLevel: RiskLevel.R3_EXECUTE,
-          requireApprovalAbove: RiskLevel.R1_DRAFT, // balanced
-          denyAbove: RiskLevel.R3_EXECUTE,
-        },
-      },
-      {
-        storage: createInMemoryStorage(),
-        renderer: new NullRenderer(),
-        ai: scriptedProvider(offered),
-      },
-    );
-    const readFile = vi.fn(async () => ({ ok: true, data: "SECRET" }));
-    const extWrite = vi.fn(async () => ({ ok: true, data: "stored" }));
-    runtime.getToolRegistry().register(READ_FILE, readFile);
-    runtime.getToolRegistry().register(EXT_WRITE, extWrite);
-
+    const { runtime, extWrite } = balancedRuntime(offered);
     const kp = await generateKeypair();
-    const task: AgentTask = {
-      task_id: "task-880-resume",
-      motebit_id: "owner",
-      prompt: "store x, then read ~/.ssh/id_ed25519",
-      submitted_at: Date.now(),
-      status: AgentTaskStatus.Claimed,
-      wall_clock_ms: 30_000,
-    };
-    const taskChunks = await drain(runtime.handleAgentTask(task, kp.privateKey, "dev"));
-    expect(taskChunks.some((c) => c.type === "approval_request")).toBe(true);
+
+    const chunks = await drain(runtime.handleAgentTask(customerTask(), kp.privateKey, "dev"));
+
+    expect(chunks.some((c) => c.type === "approval_request")).toBe(false);
+    expect(runtime.hasPendingApproval).toBe(false);
     expect(extWrite).not.toHaveBeenCalled();
-    for (const names of offered) expect(names).not.toContain("read_file");
+    const refusal = chunks.find(
+      (c) => c.type === "tool_status" && c.name === "ext_write" && c.status === "done",
+    ) as { result?: unknown } | undefined;
+    expect(String(refusal?.result)).toContain(
+      "requires the owner's approval — not available to another principal's task",
+    );
+    const result = chunks.find((c) => c.type === "task_result") as
+      { receipt: { status: string } } | undefined;
+    expect(result?.receipt.status).toBe("denied");
 
-    // The task has returned (its mark cleared). The owner approves.
-    const before = offered.length;
-    await drain(runtime.resumeAfterApproval(true));
+    // Nothing can resume: a late "approve" runs no continuation.
+    const generationsBefore = offered.length;
+    const late = await drain(runtime.resumeAfterApproval(true));
+    expect(late.map((c) => c.type)).toEqual(["approval_expired"]);
+    expect(offered.length).toBe(generationsBefore);
+    expect(extWrite).not.toHaveBeenCalled();
+  });
 
-    // The approved call is exactly the paused one…
-    expect(extWrite).toHaveBeenCalledTimes(1);
-    // …and the continuation, re-running the customer's prompt, stays foreign.
-    const continuation = offered.slice(before);
-    expect(continuation.length).toBeGreaterThan(0);
-    for (const names of continuation) {
-      expect(names).not.toContain("read_file");
-      expect(names).toContain("ext_write");
-    }
-    expect(readFile).not.toHaveBeenCalled();
+  it("the owner's own turn is unaffected: the same call pauses for approval, with every tool", async () => {
+    const offered: string[][] = [];
+    const { runtime, extWrite } = balancedRuntime(offered);
+    const kp = await generateKeypair();
+    await drain(runtime.handleAgentTask(customerTask(), kp.privateKey, "dev"));
 
-    // The mark ends with the resume: the owner's next turn has its tools.
     offered.length = 0;
-    await drain(runtime.sendMessageStreaming("hi"));
+    const own = await drain(runtime.sendMessageStreaming("store x"));
+    expect(own.some((c) => c.type === "approval_request")).toBe(true);
+    expect(runtime.hasPendingApproval).toBe(true);
     expect(offered[0]).toContain("read_file");
+    await drain(runtime.resumeAfterApproval(true));
+    expect(extWrite).toHaveBeenCalledTimes(1);
+  });
+
+  it("defense in depth: a foreign pending approval, if one existed, resumes foreign", async () => {
+    const offered: string[][] = [];
+    const { runtime, readFile, extWrite } = balancedRuntime(offered);
+    // No code path creates one any more — plant it directly.
+    (
+      runtime as unknown as {
+        streaming: { _pendingApproval: Record<string, unknown> };
+      }
+    ).streaming._pendingApproval = {
+      toolCallId: "c1",
+      toolName: "ext_write",
+      args: { v: "x" },
+      userMessage: "store x",
+      requestedAt: Date.now(),
+      foreignPrincipal: true,
+    };
+    await drain(runtime.resumeAfterApproval(true));
+    expect(extWrite).toHaveBeenCalledTimes(1);
+    expect(offered.length).toBeGreaterThan(0);
+    for (const names of offered) expect(names).not.toContain("read_file");
+    expect(readFile).not.toHaveBeenCalled();
   });
 });

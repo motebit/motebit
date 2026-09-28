@@ -1615,6 +1615,18 @@ export class MotebitRuntime {
     return this._foreignTasksInFlight > 0 || this._foreignTurn || this._foreignResumesInFlight > 0;
   }
 
+  /**
+   * The loop dependencies for the turn about to start. A foreign
+   * principal's turn gets the policy gate's no-approval-channel view
+   * (#880): a call that would pause for the owner's approval is refused
+   * instead, so no approval can outlive the task and later resume that
+   * principal's prompt inside the owner's conversation.
+   */
+  private loopDepsForTurn<D extends { policyGate?: unknown }>(deps: D): D {
+    if (!this.isForeignPrincipalTurn()) return deps;
+    return { ...deps, policyGate: this.policy.withoutApprovalChannel() };
+  }
+
   /** True when `toolName` is registered with `localOnly: true`. */
   private isLocalOnlyTool(toolName: string): boolean {
     return this.toolRegistry.list().some((t) => t.name === toolName && t.localOnly === true);
@@ -2320,7 +2332,7 @@ export class MotebitRuntime {
       const selfAwareness = this.buildSelfAwareness();
       const selectedSkills = await this.resolveSkillsForTurn(text);
       await this.emitSkillLoadEvents(selectedSkills, runId);
-      const result = await runTurn(clearedLoopDeps, text, {
+      const result = await runTurn(this.loopDepsForTurn(clearedLoopDeps), text, {
         conversationHistory: trimmed,
         previousCues: this.latestCues,
         runId,
@@ -2870,7 +2882,7 @@ export class MotebitRuntime {
       // turn that verified it.
       this._activeTurnGrant = presentedGrant ?? options?.verifiedGrant ?? null;
 
-      const stream = runTurnStreaming(clearedLoopDeps, text, {
+      const stream = runTurnStreaming(this.loopDepsForTurn(clearedLoopDeps), text, {
         conversationHistory: trimmed,
         previousCues: this.latestCues,
         runId,
