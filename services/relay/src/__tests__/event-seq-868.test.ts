@@ -417,12 +417,15 @@ describe("#868 migration v46 — backfill and restart", () => {
       relay = await createTestRelay({ dbPath });
       // Put the database back to its pre-v46 shape: no sequence, no triggers,
       // v46 not applied — then events land the way a pre-v46 relay stored them.
+      // Every LATER migration is un-recorded too: the runner skips any version
+      // at or below the recorded maximum, so a recorded v47+ would keep v46
+      // from re-running. (Later migrations are idempotent and re-run cleanly.)
       relay.moteDb.db.exec(`
         DROP TRIGGER relay_event_seq_stamp;
         DROP TRIGGER relay_event_seq_unstamp;
         DROP TABLE relay_event_seq;
         DROP TABLE relay_event_seq_counter;
-        DELETE FROM relay_schema_migrations WHERE version = 46;
+        DELETE FROM relay_schema_migrations WHERE version >= 46;
       `);
       await push(mid, [ev(mid, "old-b", 4, "dev-b"), ev(mid, "old-a", 4, "dev-a")]);
       await push(mid, [ev(mid, "old-c", 2, "dev-c")]);

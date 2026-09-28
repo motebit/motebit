@@ -923,6 +923,23 @@ const WRITERS: readonly Writer[] = [
   },
   {
     file: R + "idempotency.ts",
+    verb: "INSERT",
+    table: "relay_p2p_proof_claims",
+    count: 1,
+    principal:
+      "`bindP2pProofToTask` (#918), called only inside an admission transaction that enqueues the task it names: the task-submit door, whose `submitted_by` is `submissionTerms`' submitter (the dualAuth-verified caller, else the operator's master-token-asserted body field), and the federation forward door after the origin peer's signature verified (its `submitted_by` is the payload's, else `relay:<origin>`). The row is keyed by the proof's tx hash, `INSERT OR IGNORE`, never overwritten or deleted: it grants nothing to the identity it names, which is read only to decide whether a refusal may disclose the task id to a caller whose VERIFIED token is that identity (or the operator)",
+  },
+  {
+    file: R + "migrations.ts",
+    verb: "INSERT",
+    table: "relay_p2p_proof_claims",
+    count: 2,
+    principal:
+      MIGRATION +
+      " (v47 backfills proof claims (#918) from tasks already queued and proofs already settled, copying each row's own submitter — never chosen)",
+  },
+  {
+    file: R + "idempotency.ts",
     verb: "DELETE",
     table: "relay_idempotency_keys",
     count: 2,

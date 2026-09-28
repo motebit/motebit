@@ -237,3 +237,79 @@ export function cleanupIdempotencyKeys(db: DatabaseDriver): number {
   const info = db.prepare("DELETE FROM relay_idempotency_keys WHERE created_at < ?").run(cutoff);
   return info.changes;
 }
+
+// ── One P2P payment proof admits at most one task (#918) ──────────────────
+//
+// An Idempotency-Key binds a REQUEST to the task it admits (#888). It says
+// nothing about the money. A P2P submission's money is its `payment_proof`,
+// and one onchain payment funds exactly one task, so the proof is bound to
+// the task it admits, in the SAME admission transaction that enqueues it,
+// under a unique claim on the proof's tx hash. Any later admission of that
+// proof — under any key, by any submitter, through any door (a relay
+// submission, a sub-hop, a federated forward received from a peer) — is
+// refused.
+//
+// The claim exists exactly when its task was admitted. It is written inside
+// the admission transaction, so a refusal inside that transaction rolls it
+// back with the task, and a refusal before admission never writes it. Nothing
+// deletes a claim: after admission the proof is spent on that task, whatever
+// becomes of it (a failed forward, an expired task, a paid failure). The retry
+// of a failed admitted submission is the same-key replay (#888) or the task's
+// result, never the same proof under a new key.
+//
+// Before this, the only reuse guard read `relay_settlements.p2p_tx_hash`, so
+// it saw SETTLED proofs only: one unsettled payment admitted and dispatched a
+// task per fresh key. The unique settlement index stopped the second
+// settlement, not the second execution.
+
+/**
+ * The claim key of a P2P payment proof: its tx hash, byte-for-byte. That is
+ * exactly what settlement records as `relay_settlements.p2p_tx_hash` (never
+ * trimmed or case-folded; a base58 signature is case-sensitive). One function,
+ * so the admission claim and the settled-proof guard compare the same bytes.
+ */
+export function p2pProofKey(txHash: string): string {
+  return txHash;
+}
+
+/** The task a P2P payment proof was admitted for, and who submitted it. */
+export interface P2pProofClaim {
+  task_id: string;
+  submitted_by: string;
+}
+
+/** The admitted claim on this proof, if any (#918). */
+export function findP2pProofClaim(db: DatabaseDriver, txHash: string): P2pProofClaim | undefined {
+  return db
+    .prepare("SELECT task_id, submitted_by FROM relay_p2p_proof_claims WHERE tx_hash = ?")
+    .get(p2pProofKey(txHash)) as P2pProofClaim | undefined;
+}
+
+/**
+ * Bind a P2P payment proof to the task it admits (#918). Call INSIDE the
+ * transaction that enqueues the task, so a rollback undoes the claim with the
+ * task. Idempotent for the same task (a peer re-forwarding the same task_id).
+ * Returns the existing claim when the proof is already bound to a DIFFERENT
+ * task; the caller must then refuse and roll back, never admit.
+ */
+export function bindP2pProofToTask(
+  db: DatabaseDriver,
+  txHash: string,
+  taskId: string,
+  submittedBy: string,
+): { bound: true } | { bound: false; existing: P2pProofClaim } {
+  const key = p2pProofKey(txHash);
+  const info = db
+    .prepare(
+      "INSERT OR IGNORE INTO relay_p2p_proof_claims (tx_hash, task_id, submitted_by, claimed_at) VALUES (?, ?, ?, ?)",
+    )
+    .run(key, taskId, submittedBy, Date.now());
+  if (info.changes > 0) return { bound: true };
+  const existing = findP2pProofClaim(db, key);
+  if (existing == null) {
+    // The IGNORE saw a row the SELECT cannot: fail closed, never admit.
+    throw new Error(`p2p proof claim for ${key} is unreadable; refusing to admit task ${taskId}`);
+  }
+  if (existing.task_id === taskId) return { bound: true };
+  return { bound: false, existing };
+}

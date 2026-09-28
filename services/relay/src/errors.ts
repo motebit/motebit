@@ -159,6 +159,7 @@ export class TaskError extends RelayError {
       | "TASK_P2P_FEE_AMOUNT_MISMATCH"
       | "TASK_P2P_PROOF_REQUIRED"
       | "TASK_P2P_PROOF_REPLAYED"
+      | "TASK_P2P_PROOF_ALREADY_ADMITTED"
       | "TASK_GRANT_REVOKED",
     message: string,
     statusCode: number = 400,
@@ -166,5 +167,28 @@ export class TaskError extends RelayError {
   ) {
     super(code, message, statusCode, options);
     this.name = "TaskError";
+  }
+}
+
+/**
+ * A P2P payment proof that is already bound to an admitted task (#918): one
+ * onchain payment funds exactly one task. A refusal before admission (the key
+ * is freed). `existingTaskId` is set only when the caller is entitled to see
+ * that task (its own submission, or the operator); another principal's task
+ * id is never disclosed (cf. #903).
+ */
+export class P2pProofAlreadyAdmittedError extends TaskError {
+  readonly existingTaskId?: string;
+  constructor(existingTaskId: string | undefined, options?: ErrorOptions) {
+    super(
+      "TASK_P2P_PROOF_ALREADY_ADMITTED",
+      existingTaskId != null
+        ? `This payment proof (tx_hash) already funds task ${existingTaskId}; each onchain payment funds exactly one task. Poll that task's result, or replay the Idempotency-Key that admitted it. A new task needs a new payment.`
+        : "This payment proof (tx_hash) already funds another task; each onchain payment funds exactly one task. A new task needs a new payment.",
+      409,
+      options,
+    );
+    this.name = "P2pProofAlreadyAdmittedError";
+    if (existingTaskId != null) this.existingTaskId = existingTaskId;
   }
 }

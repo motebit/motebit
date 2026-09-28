@@ -90,10 +90,15 @@ import { sendToEach } from "./ws-send.js";
 import { routeToSockets } from "./task-presentation.js";
 import {
   bindIdempotencyClaimToTask,
+  bindP2pProofToTask,
   checkIdempotency,
   completeIdempotency,
+  findP2pProofClaim,
+  p2pProofKey,
   recordAdmittedOutcome,
+  type P2pProofClaim,
 } from "./idempotency.js";
+import { OPERATOR_PRESENTED } from "./auth-events.js";
 import { createLogger } from "./logger.js";
 import { pathIdentity } from "./id-bounds.js";
 import type { TaskQueue } from "./task-queue.js";
@@ -106,6 +111,7 @@ import {
   SettlementError,
   AllocationError,
   TaskError,
+  P2pProofAlreadyAdmittedError,
 } from "./errors.js";
 import { isGrantRevokedBy } from "./delegation-revocations.js";
 import { ON_SHELF, ON_SHELF_PREDICATE } from "./registry-delist.js";
@@ -1141,7 +1147,7 @@ export async function handleReceiptIngestion(
               "completed",
               subP2pSettledAt,
               "p2p",
-              subP2pProof?.tx_hash ?? null,
+              subP2pProof != null ? p2pProofKey(subP2pProof.tx_hash) : null,
               "pending",
               subEntry.submitted_by ?? null,
               signedSubP2p.issuer_relay_id,
@@ -1500,7 +1506,7 @@ export async function handleReceiptIngestion(
             "completed",
             p2pSettledAt,
             "p2p",
-            p2pProof?.tx_hash ?? null,
+            p2pProof != null ? p2pProofKey(p2pProof.tx_hash) : null,
             "pending",
             entry.submitted_by ?? null,
             signedP2pAudit.issuer_relay_id,
@@ -2571,6 +2577,21 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
     // (`submissionTerms`: the verified caller, else a non-empty `submitted_by`.)
     const submittedBy = terms.submitter;
 
+    // A P2P proof already bound to an admitted task (#918). The refusal names
+    // that task only to a caller entitled to see it: the identity whose
+    // verified token submitted it, or the operator (marked positively by the
+    // master-token door, never inferred from an unset caller id). Another
+    // principal's task id is never disclosed (cf. #903); a body-asserted
+    // `submitted_by` proves nothing here.
+    const proofAlreadyAdmitted = (existing: P2pProofClaim): P2pProofAlreadyAdmittedError => {
+      const entitled =
+        c.get(OPERATOR_PRESENTED) === true ||
+        (typeof callerMotebitId === "string" &&
+          callerMotebitId !== "" &&
+          callerMotebitId === existing.submitted_by);
+      return new P2pProofAlreadyAdmittedError(entitled ? existing.task_id : undefined);
+    };
+
     // Snapshot the listing price at submission time so the settlement audit
     // matches what the delegator actually paid. Price against the WORKER, not
     // the URL agent: a P2P proof submission carries `target_agent` (the worker)
@@ -2677,13 +2698,10 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
       // workers to execute for ONE payment. Rejecting at SUBMISSION means the
       // worker never does replayed work; the partial UNIQUE index on
       // relay_settlements(p2p_tx_hash) (migration v30) is the structural
-      // backstop that also closes the concurrent-submission race. A paid task
-      // that was NOT settled (e.g. a federated forward that failed) has no
-      // settlement row, so resubmitting the same proof to retry is still
-      // allowed — only a SETTLED proof counts as replay.
+      // backstop for a second SETTLEMENT.
       const alreadySettled = moteDb.db
         .prepare("SELECT 1 FROM relay_settlements WHERE p2p_tx_hash = ? LIMIT 1")
-        .get(proof.tx_hash);
+        .get(p2pProofKey(proof.tx_hash));
       if (alreadySettled != null) {
         throw new TaskError(
           "TASK_P2P_PROOF_REPLAYED",
@@ -2691,6 +2709,15 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
           409,
         );
       }
+      // A settlement row exists only once a task SETTLED, so the check above
+      // cannot see a proof whose task is admitted and still running (or whose
+      // forward failed): that proof would fund a second task and a second
+      // execution under a fresh Idempotency-Key (#918). The ADMISSION claim
+      // sees it. This read refuses early, before eligibility and discovery;
+      // the binding inside the admission transaction below is the law (it
+      // also closes the race between two concurrent submissions).
+      const admittedClaim = findP2pProofClaim(moteDb.db, proof.tx_hash);
+      if (admittedClaim != null) throw proofAlreadyAdmitted(admittedClaim);
 
       // Is the target worker LOCAL to this relay? A local worker has a
       // settlement_address in our agent_registry. A REMOTE worker (hosted
@@ -3257,6 +3284,20 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
     try {
       fundingWrites?.();
       bindIdempotencyClaimToTask(moteDb.db, idempotencyKey, motebitId, taskId);
+      // One proof admits one task (#918), bound in this same transaction: a
+      // proof already bound to another task refuses here and the rollback
+      // below undoes the hold, the key binding and the task with it. A
+      // submission that concurrently passed the early read above loses here.
+      if (p2pPaymentProof != null) {
+        const proofBinding = bindP2pProofToTask(
+          moteDb.db,
+          p2pPaymentProof.tx_hash,
+          taskId,
+          // The P2P branch runs only with a submitter (`terms.p2p`).
+          submittedBy!,
+        );
+        if (!proofBinding.bound) throw proofAlreadyAdmitted(proofBinding.existing);
+      }
       taskQueue.set(taskId, {
         task,
         expiresAt: now + TASK_TTL_MS,
@@ -3278,6 +3319,9 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
       // short) is a 402, not an allocation fault: the client funds and
       // retries under the same key, which this rollback left free (#901).
       if (admitErr instanceof InsufficientFundsError) throw admitErr;
+      // A proof already bound to another task (#918): a 409 refusal, and the
+      // rollback left this key free.
+      if (admitErr instanceof P2pProofAlreadyAdmittedError) throw admitErr;
       if (fundingWrites != null) {
         throw new AllocationError("ALLOCATION_HOLD_FAILED", "Allocation hold failed", {
           cause: admitErr,
@@ -3484,12 +3528,13 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
           });
         } else {
           taskRouter.recordPeerForwardResult(peerEndpoint, false);
-          // The task did not settle (no result came back), so no settlement
-          // row exists for this proof — the delegator may resubmit the SAME
-          // payment_proof to retry without re-paying (the replay guard keys
-          // on settled proofs, not attempted ones).
+          // Post-admission: the proof is bound to THIS task (#918) and funds
+          // no other. This used to invite "the same payment_proof under a new
+          // Idempotency-Key", which admitted and dispatched a second task on
+          // one payment. The key replays this answer (#888), and the body
+          // names this task (`recordAdmissionOutcome`).
           throw new HTTPException(502, {
-            message: `Executor relay rejected the forwarded task (HTTP ${resp.status}) — retryable: resubmit the same payment_proof under a new Idempotency-Key (this key replays this answer)`,
+            message: `Executor relay rejected the forwarded task (HTTP ${resp.status}). This payment_proof is bound to this task (task_id in this response) and funds no other task: resubmitting it under any Idempotency-Key is refused, and this key replays this answer. A new task needs a new payment.`,
           });
         }
       } catch (fwdErr) {
@@ -3501,9 +3546,12 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
           targetAgent: targetId,
           error: fwdErr instanceof Error ? fwdErr.message : String(fwdErr),
         });
+        // The executor relay may have accepted the forward (a timeout after
+        // delivery), so the task's result may still arrive: the retry is to
+        // poll this task, never the proof under a new key (#918).
         throw new HTTPException(502, {
           message:
-            "Failed to forward federated P2P task to the executor relay — retryable: resubmit the same payment_proof under a new Idempotency-Key (this key replays this answer)",
+            "Failed to forward the federated P2P task to the executor relay; it may still have been accepted. This payment_proof is bound to this task (task_id in this response): poll that task's result. Resubmitting the proof under any Idempotency-Key is refused, and this key replays this answer.",
         });
       }
     }

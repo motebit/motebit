@@ -32,6 +32,7 @@ import {
   AuthenticationError,
   AuthorizationError,
   InsufficientFundsError,
+  P2pProofAlreadyAdmittedError,
 } from "./errors.js";
 import { recordMasterTokenOnce, recordRefusalBeforeVerify } from "./auth-events.js";
 import { pathIdentity } from "./id-bounds.js";
@@ -981,6 +982,19 @@ export function registerMiddleware(deps: MiddlewareDeps): MiddlewareResult {
             code: err.code,
             status: err.statusCode,
             payment_credited: err.creditedPayment,
+          },
+          status,
+        );
+      }
+      // A proof already bound to an admitted task names that task only when
+      // the caller is entitled to see it (#918); the error decides that.
+      if (err instanceof P2pProofAlreadyAdmittedError && err.existingTaskId != null) {
+        return c.json(
+          {
+            error: err.message,
+            code: err.code,
+            status: err.statusCode,
+            task_id: err.existingTaskId,
           },
           status,
         );
