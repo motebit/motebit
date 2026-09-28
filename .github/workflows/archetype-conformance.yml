@@ -9,10 +9,16 @@
 # (protected by the production environment's required reviewers).
 #
 # Secrets (staging environment):
-#   STG_AUTH_TOKEN            relay bearer for discover/task reads
-#   PROBE_DELEGATOR_ID        dedicated probe identity (controls nothing else)
-#   PROBE_DELEGATOR_SEED_HEX  probe's Solana seed — devnet-funded only
+#   PROBE_DELEGATOR_SEED_HEX  the probe's ONE secret — devnet-funded only. It is
+#                             the delegator's identity key, its Solana wallet,
+#                             and (deriveSovereignMotebitId) its motebit_id: the
+#                             probe bootstraps that sovereign identity and signs
+#                             its own relay tokens, so the wallet that pays IS
+#                             the submitter's identity-derived wallet (#955).
 #   STG_SOLANA_RPC_URL        devnet RPC matching the staging relay's verifier
+# No operator credential: the probe holds no master token (discover is public),
+# and PROBE_DELEGATOR_ID / STG_AUTH_TOKEN are no longer read (2026-09-28 — an
+# asserted id whose key was not the paying wallet's was refused, correctly).
 name: Archetype conformance
 
 on:
@@ -49,9 +55,7 @@ jobs:
         run: npx tsx scripts/archetype-conformance.ts
         env:
           RELAY_URL: https://motebit-sync-stg.fly.dev
-          AUTH_TOKEN: ${{ secrets.STG_AUTH_TOKEN }}
           DELEGATE: "1"
-          DELEGATOR_MOTEBIT_ID: ${{ secrets.PROBE_DELEGATOR_ID }}
           DELEGATOR_SEED_HEX: ${{ secrets.PROBE_DELEGATOR_SEED_HEX }}
           SOLANA_RPC_URL: ${{ secrets.STG_SOLANA_RPC_URL }}
           SOLANA_USDC_MINT: 4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU # devnet USDC
