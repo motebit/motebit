@@ -417,10 +417,10 @@ const WRITERS: readonly Writer[] = [
     file: R + "migrations.ts",
     verb: "UPDATE",
     table: "relay_settlements",
-    count: 1,
+    count: 2,
     principal:
       MIGRATION +
-      " (v48, #959: returns a corrected P2P row the verifier failed on its worker leg — checked against the payer's wallet — to 'pending'; verification columns only, never the payee)",
+      " (v48, #959: backfills `p2p_worker_leg = 'remote'` on a pre-#959 federated-ORIGIN row where durable data determines it, and returns a corrected P2P row the verifier failed on its worker leg — checked against the payer's wallet — to 'pending'; scope / verification columns only, never the payee)",
   },
   {
     file: R + "migrations.ts",

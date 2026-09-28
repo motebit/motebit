@@ -72,6 +72,13 @@ export function receiptDischargesP2p(
  */
 export interface P2pAdmission {
   worker_leg: "local" | "remote";
+  /**
+   * `"remote"` only: the executor relay the BUILT federated plan was
+   * forwarded to and that accepted it. A `"remote"` admission without it
+   * reads as `"local"` (#959 round 3) — the scope is remote only when a plan
+   * was built AND forwarded.
+   */
+  forwarded_to?: string;
   worker_address?: string;
   worker_address_rung?: "derived" | "registered";
 }
@@ -80,12 +87,17 @@ export interface P2pAdmission {
  * Which relay verifies the worker leg of this entry's settlement. An entry
  * admitted before #959 round 2 carries no admission record and reads as
  * `"local"` — the fail-closed side: the worker leg is checked, and a worker
- * this relay does not host reads `unverifiable`, never verified.
+ * this relay does not host reads `unverifiable`, never verified. `"remote"`
+ * requires BOTH a built federated plan (the admission record) and an
+ * accepted forward (`forwarded_to`).
  */
 export function p2pWorkerLegScope(
   entry: Pick<TaskQueueEntry, "p2p_admission">,
 ): "local" | "remote" {
-  return entry.p2p_admission?.worker_leg ?? "local";
+  const a = entry.p2p_admission;
+  return a?.worker_leg === "remote" && a.forwarded_to != null && a.forwarded_to !== ""
+    ? "remote"
+    : "local";
 }
 
 /**

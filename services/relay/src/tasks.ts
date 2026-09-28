@@ -100,6 +100,7 @@ import {
 } from "./idempotency.js";
 import { CALLER_VERIFIED_KEY, OPERATOR_PRESENTED } from "./auth-events.js";
 import { payerCandidates } from "./p2p-payer.js";
+import { isDerivedSettlementBinding } from "@motebit/wallet-solana";
 import {
   localWorkerAdmission,
   p2pPayeeOf,
@@ -2869,19 +2870,22 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
       const admittedClaim = findP2pProofClaim(moteDb.db, proof.tx_hash);
       if (admittedClaim != null) throw proofAlreadyAdmitted(admittedClaim);
 
-      // Is the target worker LOCAL to this relay? A local worker has a
-      // settlement_address in our agent_registry. A REMOTE worker (hosted
-      // on a peer operator, discovered via federation) does not — that is
-      // the cross-operator federated P2P path, which carries a third
-      // (executor-relay) fee leg and is validated at the forward site
-      // (where the worker's address + the peer relay's treasury resolve
-      // via discovery). See docs/doctrine/off-ramp-as-user-action.md
-      // § federated P2P.
+      // Is the target worker LOCAL to this relay? A worker REGISTERED here
+      // (an `agent_registry` row, whatever its settlement_address) is local
+      // and ALWAYS takes the local branch (#959 round 3): choosing the
+      // federated path by the absence of a registered address let a payer
+      // steer a locally hosted worker into a "remote" row whose worker leg
+      // nobody checks. Only a worker this relay does not host is federated —
+      // the cross-operator path, which carries a third (executor-relay) fee
+      // leg and is validated at the forward site (where the worker's address
+      // + the peer relay's treasury resolve via discovery). See
+      // docs/doctrine/off-ramp-as-user-action.md § federated P2P.
       const workerReg = moteDb.db
-        .prepare("SELECT settlement_address FROM agent_registry WHERE motebit_id = ?")
-        .get(body.target_agent) as { settlement_address: string | null } | undefined;
+        .prepare("SELECT settlement_address, public_key FROM agent_registry WHERE motebit_id = ?")
+        .get(body.target_agent) as
+        { settlement_address: string | null; public_key: string | null } | undefined;
 
-      if (workerReg?.settlement_address) {
+      if (workerReg != null) {
         // ── Single-operator P2P (local worker): the existing 2-leg path. ──
         // A 2-leg proof carries no executor-relay fee leg. One that does is
         // refused before anything is read or admitted (#959 round 2): the
@@ -2929,10 +2933,29 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
         // binding is required here; the federated leg (below) is where a PEER
         // asserts a DIFFERENT agent's address and binding must be enforced.
         // docs/doctrine/settlement-authority-binding.md.
-        if (proof.to_address !== workerReg.settlement_address) {
+        //
+        // A local worker with NO registered address is paid at its derived-
+        // bound address — the Solana address its identity key derives — and at
+        // nothing else (#959 round 3): with no address of its own choosing, the
+        // only destination bound to it is the one its key proves.
+        const derivedOk = (): boolean => {
+          // Holder, else main's registry read (§5f verification reader).
+          const workerKey = verificationKeyFor(
+            moteDb.db,
+            body.target_agent!,
+            workerReg.public_key ?? undefined,
+          );
+          return workerKey != null && isDerivedSettlementBinding(proof.to_address, workerKey);
+        };
+        const addressOk = workerReg.settlement_address
+          ? proof.to_address === workerReg.settlement_address
+          : derivedOk();
+        if (!addressOk) {
           throw new TaskError(
             "TASK_P2P_ADDRESS_MISMATCH",
-            "Payment proof to_address does not match worker's settlement address",
+            workerReg.settlement_address
+              ? "Payment proof to_address does not match worker's settlement address"
+              : "Payment proof to_address is not the worker's identity-derived address (the worker has no registered settlement address)",
             400,
           );
         }
@@ -3026,12 +3049,27 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
           );
         }
 
+        // The federated plan (discovery, the settlement-authority binding and
+        // the three-leg check) runs only when the RELAY presents: it is the
+        // relay's forward that carries the proof to the executor relay. With
+        // the submitter presenting, nothing would validate the legs or
+        // forward the task — and no legitimate flow needs it: a dispatch
+        // token this relay mints is verified by the worker against its OWN
+        // relay's key, so the submitter could not present it to a remote
+        // worker anyway. Refused before admission (#959 round 3).
+        if (submitterPresenter) {
+          throw new TaskError(
+            "TASK_INVALID_INPUT",
+            'A cross-operator P2P task is presented by the relay (its forward carries the proof to the executor relay); presenter "submitter" is not available for a worker this relay does not host',
+            400,
+          );
+        }
+
         settlementMode = "p2p";
         p2pPaymentProof = proof;
         federatedP2pIntent = true;
-        // This relay originates the task; the executor relay hosts the worker
-        // and verifies its leg.
-        p2pAdmission = { worker_leg: "remote" };
+        // `p2pAdmission` is set only once the federated plan is BUILT (below);
+        // it is never chosen here, at branch selection.
 
         logger.info("task.federated_p2p_pending", {
           correlationId: taskId,
@@ -3154,8 +3192,7 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
       // wallet worker fails closed here until the signed-bound rung transports
       // the succession-verified binding (Inc 2/3); prod has no external peers,
       // so that deferral is latent.
-      const { isDerivedSettlementBinding, deriveSolanaAddress } =
-        await import("@motebit/wallet-solana");
+      const { deriveSolanaAddress } = await import("@motebit/wallet-solana");
       const { verifySovereignBinding } = await import("@motebit/crypto");
       const boundOk =
         fc._public_key != null &&
@@ -3244,6 +3281,22 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
         aFeeMicro,
         bFeeMicro,
       };
+      // This relay originates the task; the executor relay hosts the worker
+      // and verifies its leg. Declared from the BUILT plan; the scope becomes
+      // effective only once the forward is accepted (`forwarded_to`, set at
+      // the forward site — `p2pWorkerLegScope`).
+      p2pAdmission = { worker_leg: "remote" };
+    }
+
+    // Every P2P admission names how its worker leg is verified: a local
+    // worker binding, or a built federated plan. One that ends with neither is
+    // refused — never admitted with a guessed scope (#959 round 3).
+    if (settlementMode === "p2p" && p2pAdmission == null) {
+      throw new TaskError(
+        "TASK_INVALID_INPUT",
+        "P2P admission produced neither a local worker binding nor a federated plan; refusing rather than guessing how the worker leg is verified",
+        400,
+      );
     }
 
     // Budget allocation, decided BEFORE admission (#888). Everything here can
@@ -3685,6 +3738,16 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
         if (resp.ok) {
           routed = true;
           taskRouter.recordPeerForwardResult(peerEndpoint, true);
+          // The worker leg becomes the executor relay's only now that the
+          // plan was forwarded and accepted (#959 round 3).
+          const forwardedEntry = taskQueue.get(taskId);
+          if (forwardedEntry?.p2p_admission?.worker_leg === "remote") {
+            forwardedEntry.p2p_admission = {
+              ...forwardedEntry.p2p_admission,
+              forwarded_to: peerEndpoint,
+            };
+            taskQueue.set(taskId, forwardedEntry);
+          }
           logger.info("task.federated_p2p_forwarded", {
             correlationId: taskId,
             peerRelay: peerEndpoint,

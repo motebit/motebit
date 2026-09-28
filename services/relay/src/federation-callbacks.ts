@@ -94,13 +94,20 @@ export function createFederationCallbacks(deps: FederationCallbackDeps) {
   const platformFeeRate = deps.platformFeeRate ?? SDK_DEFAULT_PLATFORM_FEE_RATE;
 
   /** The executor relay's admission record for a federated P2P task's hosted worker (#959). */
-  const executorWorkerAdmission = (workerId: string): P2pAdmission => {
+  // The executor relay HOSTS the worker, so its scope is always `local` —
+  // with or without a registered address (#959 round 3). The recorded address
+  // is the worker's registered one; with none, the proof's worker-leg address
+  // when the worker's key derives it; with neither, no address is recorded
+  // and the verifier checks the derived address alone.
+  const executorWorkerAdmission = (workerId: string, proofToAddress: string): P2pAdmission => {
     const reg = moteDb.db
       .prepare("SELECT settlement_address FROM agent_registry WHERE motebit_id = ?")
       .get(workerId) as { settlement_address: string | null } | undefined;
-    return reg?.settlement_address
-      ? localWorkerAdmission(moteDb.db, workerId, reg.settlement_address)
-      : { worker_leg: "local" };
+    if (reg?.settlement_address) {
+      return localWorkerAdmission(moteDb.db, workerId, reg.settlement_address);
+    }
+    const derived = localWorkerAdmission(moteDb.db, workerId, proofToAddress);
+    return derived.worker_address_rung === "derived" ? derived : { worker_leg: "local" };
   };
 
   return {
@@ -184,7 +191,10 @@ export function createFederationCallbacks(deps: FederationCallbackDeps) {
                 // (#959). The address is the one this relay holds for its
                 // worker at admission; with none, the verifier falls back to
                 // the derived address and the current registry address.
-                p2p_admission: executorWorkerAdmission(verified.targetAgent),
+                p2p_admission: executorWorkerAdmission(
+                  verified.targetAgent,
+                  verified.paymentProof.to_address,
+                ),
               }
             : {}),
         });

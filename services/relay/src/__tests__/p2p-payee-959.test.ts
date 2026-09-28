@@ -24,7 +24,12 @@ import {
   hash as sha256,
 } from "@motebit/encryption";
 import type { ExecutionReceipt, MotebitId, DeviceId } from "@motebit/sdk";
-import type { SolanaRpcAdapter, TxVerificationResult } from "@motebit/wallet-solana";
+import {
+  deriveSolanaAddress,
+  type SolanaRpcAdapter,
+  type TxVerificationResult,
+} from "@motebit/wallet-solana";
+import { p2pWorkerLegScope } from "../p2p-payee.js";
 import {
   createTestRelay,
   createAgent,
@@ -475,6 +480,181 @@ describe("#959 round 2 — a refused receipt never overwrites the delivered resu
   });
 });
 
+describe("#959 round 3 — a worker hosted here is never 'remote'; remote needs a built AND forwarded plan", () => {
+  /** A local worker registered WITHOUT a settlement address. */
+  async function registerNoAddress(caps: string[]): Promise<Agent & { publicKey: Uint8Array }> {
+    const kp = await generateKeypair();
+    const a = await createAgent(relay, bytesToHex(kp.publicKey));
+    const res = await relay.app.request("/api/v1/agents/register", {
+      method: "POST",
+      headers: JSON_AUTH,
+      body: JSON.stringify({
+        motebit_id: a.motebitId,
+        endpoint_url: "http://localhost:3200/mcp",
+        capabilities: caps,
+      }),
+    });
+    expect(res.status).toBeLessThan(300);
+    // The registry key the derived-bound rung reads.
+    relay.moteDb.db
+      .prepare(
+        "UPDATE agent_registry SET public_key = ?, settlement_address = NULL WHERE motebit_id = ?",
+      )
+      .run(bytesToHex(kp.publicKey), a.motebitId);
+    return { ...a, privateKey: kp.privateKey, publicKey: kp.publicKey };
+  }
+
+  async function submitRaw(worker: string, proof: object, extra = {}) {
+    return relay.app.request(`/agent/${A.motebitId}/task`, {
+      method: "POST",
+      headers: jsonAuthWithIdempotency(),
+      body: JSON.stringify({
+        prompt: "web_search please",
+        submitted_by: A.motebitId,
+        target_agent: worker,
+        required_capabilities: ["web_search"],
+        payment_proof: proof,
+        ...extra,
+      }),
+    });
+  }
+
+  it("the reviewer's cell: a local $0.50 worker with no address, 1µ/1µ legs + b_fee ⇒ refused before admission", async () => {
+    const L = await registerNoAddress(["web_search"]);
+    await list(L, "web_search", B_PRICE, "unused");
+    setTrust(A, L);
+    const base = buildP2pPaymentProof(relay, { unitCostMicro: 1, workerAddress: B_ADDR });
+    const cell = {
+      ...base,
+      amount_micro: 1,
+      fee_amount_micro: 1,
+      b_fee_to_address: "SomeExecutorRe1ayTreasury111111111111111111",
+      b_fee_amount_micro: 1,
+    };
+    const res = await submitRaw(L.motebitId, cell);
+    expect(res.status).toBe(400);
+    expect(await res.text()).toMatch(/executor-relay fee leg/);
+    // …and without the b_fee fields, the local branch still refuses the
+    // underpaid, wrongly addressed proof — never a guessed 'remote' admission.
+    const noB = { ...base, amount_micro: 1, fee_amount_micro: 1, tx_hash: fakeSolanaTxHash() };
+    const res2 = await submitRaw(L.motebitId, noB);
+    expect(res2.status).toBe(400);
+    expect(await res2.text()).toMatch(/identity-derived address/);
+  });
+
+  it("a derived-address-only local worker, paid correctly at its derived address ⇒ admitted local (rung 'derived') ⇒ verified", async () => {
+    const D = await registerNoAddress(["web_search"]);
+    const derived = deriveSolanaAddress(D.publicKey);
+    await list(D, "web_search", B_PRICE, derived);
+    setTrust(A, D);
+    const proof = buildP2pPaymentProof(relay, {
+      unitCostMicro: toMicro(B_PRICE),
+      workerAddress: derived,
+    });
+    const res = await submitRaw(D.motebitId, proof);
+    expect(res.status, await res.clone().text()).toBe(201);
+    const { task_id: taskId } = (await res.json()) as { task_id: string };
+    expect((await postResult(A, taskId, await receiptFrom(D, taskId, "work"))).status).toBe(200);
+    const row = relay.moteDb.db
+      .prepare(
+        "SELECT p2p_worker_leg, p2p_worker_address, p2p_worker_address_rung FROM relay_settlements WHERE task_id = ?",
+      )
+      .get(taskId);
+    expect(row).toEqual({
+      p2p_worker_leg: "local",
+      p2p_worker_address: derived,
+      p2p_worker_address_rung: "derived",
+    });
+
+    await tickVerifier({
+      status: "confirmed",
+      from: A_ADDR,
+      transfers: [
+        { to: derived, amountMicro: BigInt(proof.amount_micro) },
+        { to: p2pTreasuryAddress(relay), amountMicro: BigInt(proof.fee_amount_micro) },
+      ],
+      slot: 1,
+      asset: "USDC",
+    });
+    expect(rowsFor(taskId)[0]!.payment_verification_status).toBe("verified");
+  });
+
+  it('presenter "submitter" on a cross-operator task ⇒ 400 before admission (the federated plan must run)', async () => {
+    const proof = {
+      ...buildP2pPaymentProof(relay, { unitCostMicro: 902_500, workerAddress: B_ADDR }),
+      b_fee_to_address: "SomeExecutorRe1ayTreasury111111111111111111",
+      b_fee_amount_micro: 47_500,
+    };
+    const res = await submitRaw("worker-hosted-elsewhere", proof, { presenter: "submitter" });
+    expect(res.status).toBe(400);
+    expect(await res.text()).toMatch(/presented by the relay/);
+    const claimed = relay.moteDb.db
+      .prepare("SELECT 1 FROM relay_p2p_proof_claims WHERE tx_hash = ?")
+      .get(proof.tx_hash);
+    expect(claimed).toBeUndefined();
+  });
+
+  it("a 'remote' admission is 'remote' only once forwarded", () => {
+    expect(p2pWorkerLegScope({ p2p_admission: { worker_leg: "remote" } })).toBe("local");
+    expect(
+      p2pWorkerLegScope({ p2p_admission: { worker_leg: "remote", forwarded_to: "https://b" } }),
+    ).toBe("remote");
+  });
+
+  it("the EXECUTOR relay's admission is 'local' even when its worker has no registered address", async () => {
+    const W = await registerNoAddress(["web_search"]);
+    const queue = new Map<string, TaskQueueEntry>();
+    const cb = createFederationCallbacks({
+      moteDb: relay.moteDb,
+      identityManager: { listDevices: async () => [] } as never,
+      relayIdentity: relay.relayIdentity as never,
+      connections: relay.connections,
+      taskQueue: queue,
+      issueCredentials: false,
+      maxTaskQueueSize: 100,
+      maxTasksPerSubmitter: 100,
+      taskTtlMs: 600_000,
+    });
+    const taskId = crypto.randomUUID();
+    cb.onTaskForwarded({
+      taskId,
+      originRelay: "origin-relay",
+      targetAgent: W.motebitId,
+      payload: { prompt: "federated", submitted_by: A.motebitId },
+      paymentProof: {
+        ...buildP2pPaymentProof(relay, {
+          unitCostMicro: 902_500,
+          workerAddress: deriveSolanaAddress(W.publicKey),
+        }),
+        b_fee_to_address: "SomeExecutorRe1ayTreasury111111111111111111",
+        b_fee_amount_micro: 47_500,
+      },
+    });
+    const entry = queue.get(taskId)!;
+    expect(entry.p2p_admission?.worker_leg).toBe("local");
+    expect(entry.p2p_admission?.worker_address_rung).toBe("derived");
+    expect(p2pWorkerLegScope(entry)).toBe("local");
+
+    // …and when the forwarded proof pays some OTHER address, still local —
+    // with no admitted address, so the verifier checks the derived one.
+    const taskId2 = crypto.randomUUID();
+    cb.onTaskForwarded({
+      taskId: taskId2,
+      originRelay: "origin-relay",
+      targetAgent: W.motebitId,
+      payload: { prompt: "federated 2", submitted_by: A.motebitId },
+      paymentProof: {
+        ...buildP2pPaymentProof(relay, { unitCostMicro: 902_500, workerAddress: B_ADDR }),
+        b_fee_to_address: "SomeExecutorRe1ayTreasury111111111111111111",
+        b_fee_amount_micro: 47_500,
+      },
+    });
+    const entry2 = queue.get(taskId2)!;
+    expect(entry2.p2p_admission).toEqual({ worker_leg: "local" });
+    expect(p2pWorkerLegScope(entry2)).toBe("local");
+  });
+});
+
 describe("#959 round 2 — the federated ORIGIN refuses a result not signed by the paid worker", () => {
   function originEntry(taskId: string): TaskQueueEntry {
     return {
@@ -496,7 +676,7 @@ describe("#959 round 2 — the federated ORIGIN refuses a result not signed by t
         b_fee_to_address: "SomeExecutorRe1ayTreasury111111111111111111",
         b_fee_amount_micro: 47_500,
       },
-      p2p_admission: { worker_leg: "remote" },
+      p2p_admission: { worker_leg: "remote", forwarded_to: "https://executor.example" },
     };
   }
   // The origin relay's signing identity (the booted relay does not expose its
@@ -755,6 +935,96 @@ describe("#959 — historic rows: corrected beside the signed record, never rewr
     migrationV48.up(relay.moteDb.db);
     expect(correction(legacy.settlementId)?.prior_verification_status).toBe("verified");
     expect(rowsFor(legacy.taskId)[0]!.payment_verification_status).toBe("verified");
+  });
+
+  /** A pre-#959 federated-ORIGIN row: payee = the remote worker, no scope, no archived receipt. */
+  function seedLegacyOriginRow(opts: { archiveReceipt?: boolean } = {}): {
+    taskId: string;
+    fee: number;
+  } {
+    const taskId = `legacy-origin-${crypto.randomUUID()}`;
+    const fee = 50_000;
+    const worker = "remote-worker-legacy";
+    const txHash = fakeSolanaTxHash();
+    relay.moteDb.db
+      .prepare(
+        `INSERT INTO relay_settlements
+          (settlement_id, allocation_id, task_id, motebit_id, receipt_hash, amount_settled,
+           platform_fee, platform_fee_rate, status, settled_at, settlement_mode, p2p_tx_hash,
+           payment_verification_status, delegator_id, record_json)
+         VALUES (?, ?, ?, ?, 'rh', 902500, ?, 0.05, 'completed', ?, 'p2p', ?, 'pending', ?, '{}')`,
+      )
+      .run(
+        crypto.randomUUID(),
+        `p2p-${taskId}`,
+        taskId,
+        worker,
+        fee,
+        Date.now(),
+        txHash,
+        A.motebitId,
+      );
+    relay.moteDb.db
+      .prepare(
+        `INSERT INTO relay_task_queue (task_id, status, prompt, created_at, expires_at, task_json)
+         VALUES (?, 'completed', 'p', ?, ?, ?)`,
+      )
+      .run(
+        taskId,
+        Date.now(),
+        Date.now() + 3_600_000,
+        JSON.stringify({
+          task: { task_id: taskId, motebit_id: A.motebitId },
+          expiresAt: Date.now() + 3_600_000,
+          submitted_by: A.motebitId,
+          settlement_mode: "p2p",
+          target_agent: worker,
+          p2p_payment_proof: {
+            tx_hash: txHash,
+            to_address: B_ADDR,
+            amount_micro: 902_500,
+            fee_to_address: p2pTreasuryAddress(relay),
+            fee_amount_micro: fee,
+            b_fee_to_address: "SomeExecutorRe1ayTreasury111111111111111111",
+            b_fee_amount_micro: 47_500,
+          },
+        }),
+      );
+    if (opts.archiveReceipt === true) {
+      relay.moteDb.db
+        .prepare(
+          `INSERT INTO relay_receipts (motebit_id, task_id, parent_task_id, depth, status, suite,
+             public_key, signature, invocation_origin, receipt_json, received_at)
+           VALUES (?, ?, NULL, 0, 'completed', 'motebit-jcs-ed25519-b64-v1', '', 's', NULL, '{}', ?)`,
+        )
+        .run(worker, taskId, Date.now());
+    }
+    return { taskId, fee };
+  }
+
+  it("a legacy forwarded ORIGIN row is backfilled 'remote' and, all legs paid, verifies — main parity", async () => {
+    const { taskId, fee } = seedLegacyOriginRow();
+    migrationV48.up(relay.moteDb.db);
+    expect(rowsFor(taskId)[0]!.p2p_worker_leg).toBe("remote");
+
+    await tickVerifier({
+      status: "confirmed",
+      from: A_ADDR,
+      transfers: [
+        { to: B_ADDR, amountMicro: 902_500n },
+        { to: p2pTreasuryAddress(relay), amountMicro: BigInt(fee) },
+        { to: "SomeExecutorRe1ayTreasury111111111111111111", amountMicro: 47_500n },
+      ],
+      slot: 1,
+      asset: "USDC",
+    });
+    expect(rowsFor(taskId)[0]!.payment_verification_status).toBe("verified");
+  });
+
+  it("a legacy row whose receipt WAS archived here is not an origin row — the backfill leaves it NULL (fail-closed)", () => {
+    const { taskId } = seedLegacyOriginRow({ archiveReceipt: true });
+    migrationV48.up(relay.moteDb.db);
+    expect(rowsFor(taskId)[0]!.p2p_worker_leg).toBeNull();
   });
 
   it("ambiguity corrects nothing — two distinct signers for the task", async () => {

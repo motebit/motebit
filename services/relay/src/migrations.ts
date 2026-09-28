@@ -2258,6 +2258,40 @@ export const relayMigrations: Migration[] = [
         null;
       if (!has("relay_settlements") || !has("relay_receipts")) return;
 
+      // 1b. Backfill `p2p_worker_leg = 'remote'` for a pre-#959 ORIGIN row of
+      //     a cross-operator task — only where durable data determines it
+      //     (#959 round 3; main verified these on the fee leg alone, and a
+      //     NULL scope would now read 'local' ⇒ 'unverifiable', drifting the
+      //     treasury reconciler). Two independent facts must agree:
+      //       - the row was written WITHOUT archiving a receipt for its task:
+      //         every other P2P writer (root ingestion, `settleSubReceipt`
+      //         via the parent's archive) archives the receipt first; only
+      //         the federated-origin writer (`onTaskResultReceived`) does not;
+      //       - the queued task still shows the forward's shape: P2P, no
+      //         `origin_relay` (this relay originated it), a three-leg proof,
+      //         and the row's payee is its pinned `target_agent`.
+      //     Anything else stays NULL ⇒ read 'local' ⇒ fail-closed.
+      if (has("relay_task_queue")) {
+        db.exec(`
+          UPDATE relay_settlements
+             SET p2p_worker_leg = 'remote'
+           WHERE settlement_mode = 'p2p'
+             AND p2p_worker_leg IS NULL
+             AND NOT EXISTS (
+                   SELECT 1 FROM relay_receipts r WHERE r.task_id = relay_settlements.task_id
+                 )
+             AND EXISTS (
+                   SELECT 1 FROM relay_task_queue q
+                    WHERE q.task_id = relay_settlements.task_id
+                      AND json_valid(q.task_json)
+                      AND json_extract(q.task_json, '$.settlement_mode') = 'p2p'
+                      AND json_extract(q.task_json, '$.origin_relay') IS NULL
+                      AND json_extract(q.task_json, '$.p2p_payment_proof.b_fee_to_address') IS NOT NULL
+                      AND json_extract(q.task_json, '$.target_agent') = relay_settlements.motebit_id
+                 )
+        `);
+      }
+
       // Recoverable ⇔ exactly ONE identity other than the recorded payee
       // signed an archived receipt for this task whose result_hash is the
       // record's receipt_hash. Ambiguity corrects nothing — the verifier then

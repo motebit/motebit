@@ -335,6 +335,25 @@ describe("p2p-verifier — a failed payment is the payer's, recorded first-perso
     );
   });
 
+  it("a 'remote' row with no fee leg has nothing for this relay to verify ⇒ unverifiable, never verified", async () => {
+    relay.moteDb.db
+      .prepare(
+        `INSERT INTO relay_settlements
+           (settlement_id, allocation_id, task_id, motebit_id, receipt_hash,
+            amount_settled, platform_fee, platform_fee_rate, status, settled_at,
+            settlement_mode, p2p_tx_hash, payment_verification_status, delegator_id, p2p_worker_leg)
+         VALUES ('stl-remote-nofee', 'a', 't-remote-nofee', ?, '', 500000, 0, 0, 'completed', ?,
+                 'p2p', ?, 'pending', ?, 'remote')`,
+      )
+      .run(WORKER, Date.now(), TX_HASH, DELEGATOR);
+
+    await tickVerifierOnce(relay, makeStubAdapter(bothLegsPaid()));
+
+    const row = settlement(relay.moteDb.db, "stl-remote-nofee");
+    expect(row.payment_verification_status).toBe("unverifiable");
+    expect(row.payment_verification_error).toMatch(/No leg for this relay to verify/);
+  });
+
   it("a local worker leg whose payee has no bound address here is unverifiable, not passed on the fee leg", async () => {
     insertPendingP2pSettlement(relay.moteDb.db, "stl-unreg", "task-unreg", "worker-not-registered");
     const adapter = makeStubAdapter(bothLegsPaid());

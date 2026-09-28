@@ -28,7 +28,13 @@ describe("p2pPayeeOf", () => {
 describe("p2pWorkerLegScope — declared by admission, never inferred from the proof", () => {
   it("reads the admission record", () => {
     expect(p2pWorkerLegScope({ p2p_admission: { worker_leg: "local" } })).toBe("local");
-    expect(p2pWorkerLegScope({ p2p_admission: { worker_leg: "remote" } })).toBe("remote");
+    expect(
+      p2pWorkerLegScope({ p2p_admission: { worker_leg: "remote", forwarded_to: "https://b" } }),
+    ).toBe("remote");
+  });
+
+  it("a 'remote' plan that was never forwarded reads local (#959 round 3)", () => {
+    expect(p2pWorkerLegScope({ p2p_admission: { worker_leg: "remote" } })).toBe("local");
   });
 
   it("ignores the proof's shape: a local admission whose proof carries b_fee fields stays local", () => {

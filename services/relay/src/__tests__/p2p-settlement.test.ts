@@ -103,7 +103,7 @@ describe("evaluateSettlementEligibility", () => {
     }
   });
 
-  it("rejects when worker has no settlement address (both branches)", async () => {
+  it("a worker with no registered address but an identity key is payable at its derived address (#959 round 3)", async () => {
     const kp = await generateKeypair();
     await registerAgent(relay, "wrk-noaddr", bytesToHex(kp.publicKey), {
       settlementModes: "relay,p2p",
@@ -111,6 +111,22 @@ describe("evaluateSettlementEligibility", () => {
     setTrust(relay.moteDb.db, "del-elig", "wrk-noaddr", "trusted", 20);
 
     const result = await evaluateSettlementEligibility(relay.moteDb.db, "del-elig", "wrk-noaddr");
+    expect(result.allowed).toBe(true);
+  });
+
+  it("rejects when the worker has neither a settlement address nor a key (both branches)", async () => {
+    const now = Date.now();
+    relay.moteDb.db
+      .prepare(
+        `INSERT INTO agent_registry
+           (motebit_id, public_key, endpoint_url, capabilities, registered_at, last_heartbeat,
+            expires_at, settlement_address, settlement_modes)
+         VALUES ('wrk-nothing', '', 'http://localhost:9/mcp', 'web_search', ?, ?, ?, NULL, 'relay,p2p')`,
+      )
+      .run(now, now, now + 3_600_000);
+    setTrust(relay.moteDb.db, "del-elig", "wrk-nothing", "trusted", 20);
+
+    const result = await evaluateSettlementEligibility(relay.moteDb.db, "del-elig", "wrk-nothing");
     expect(result.allowed).toBe(false);
     expect(result.reason).toContain("settlement address");
 
@@ -118,7 +134,7 @@ describe("evaluateSettlementEligibility", () => {
     const withAck = await evaluateSettlementEligibility(
       relay.moteDb.db,
       "del-elig",
-      "wrk-noaddr",
+      "wrk-nothing",
       true,
     );
     expect(withAck.allowed).toBe(false);
