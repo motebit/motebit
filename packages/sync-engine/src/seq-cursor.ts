@@ -19,12 +19,14 @@
  *      again (the whole pre-rotation history, after a key rotation).
  *   2. DECODE each remaining event on its own (an E2E source decrypts it). One
  *      event that cannot be decoded never stops the stream: it is RECORDED
- *      (event_id, seq, reason) where the cursor lives, reported, NOT applied,
+ *      (event_id, seq, reason) where the cursor lives — the most recent
+ *      SKIPPED_SYNC_EVENTS_KEPT per key, plus a running total — reported, NOT applied,
  *      and the cursor moves past it.
  *   3. A RAW source (no decoding) never applies an E2E-encrypted payload: the
  *      ciphertext is useless here, and — held under its event_id — it would
  *      make the E2E path over the same store drop the real event as a
- *      duplicate. It is recorded as skipped instead. Raw and E2E pulls also
+ *      duplicate. It is COUNTED (expected there, not an error; no row per
+ *      event) and passed. Raw and E2E pulls also
  *      keep separate cursors (the mode is in the key), so neither advances
  *      the other past an event it never applied.
  *   4. APPEND the rest; only then advance the cursor.
@@ -88,9 +90,7 @@ export interface SeqPullSource {
 /** Why a pulled event was not applied. */
 export type SkippedSyncEventReason =
   /** An E2E source could not decrypt it (key rotated away, unknown key version, corrupt ciphertext). */
-  | "undecryptable"
-  /** A raw source saw an E2E-encrypted payload; the E2E path over the same store applies it. */
-  | "encrypted_on_raw_path";
+  "undecryptable";
 
 /** A pulled event the client moved past without applying — recorded, never silent. */
 export interface SkippedSyncEvent {
@@ -109,11 +109,14 @@ export interface SyncSeqCursorStore {
   /** Record `seq` for `key`. Called only after the events up to it were processed. */
   setSyncSeqCursor(key: string, seq: number): Promise<void>;
   /**
-   * Durably record an event the stream moved past without applying. Optional
-   * for backward compatibility; `pullBySeq` also reports every skip through
-   * its `onSkipped` callback either way.
+   * Durably record an event the stream moved past because it could not be
+   * decrypted. A store keeps at most `SKIPPED_SYNC_EVENTS_KEPT` rows per key
+   * (the most recent), pruning in the same write, plus a running total.
+   * Optional; `pullBySeq` also reports every skip through `onSkipped`.
    */
   recordSkippedSyncEvent?(key: string, skipped: SkippedSyncEvent): Promise<void>;
+  /** Every undecryptable skip ever recorded for `key`, including rows since pruned. */
+  countSkippedSyncEvents?(key: string): Promise<number>;
 }
 
 /**
@@ -174,9 +177,22 @@ export class InMemorySyncSeqCursorStore implements SyncSeqCursorStore {
     this.cursors.set(key, seq);
     return Promise.resolve();
   }
+  private totals = new Map<string, number>();
   recordSkippedSyncEvent(key: string, skipped: SkippedSyncEvent): Promise<void> {
+    if (this.skipped.some((s) => s.key === key && s.event_id === skipped.event_id)) {
+      return Promise.resolve();
+    }
     this.skipped.push({ key, ...skipped });
+    this.totals.set(key, (this.totals.get(key) ?? 0) + 1);
+    const mine = this.skipped.filter((s) => s.key === key);
+    for (const old of mine.slice(0, Math.max(0, mine.length - SKIPPED_SYNC_EVENTS_KEPT))) {
+      this.skipped.splice(this.skipped.indexOf(old), 1);
+    }
     return Promise.resolve();
+  }
+  /** Every skip ever recorded for `key`, including the pruned ones. */
+  countSkippedSyncEvents(key: string): Promise<number> {
+    return Promise.resolve(this.totals.get(key) ?? 0);
   }
 }
 
@@ -251,9 +267,22 @@ export interface SeqPullOutcome {
   mode: "seq" | "clock";
   /** The events appended locally that were not held before, decoded, in pull order. */
   fresh: EventLogEntry[];
-  /** The events moved past without being applied (also recorded and reported). */
+  /** The events moved past without being applied because they could not be decrypted (also recorded and reported). */
   skipped: SkippedSyncEvent[];
+  /**
+   * E2E-encrypted events a RAW path passed (the E2E path over the same store
+   * applies them). Expected, not an error: counted, never recorded per event.
+   */
+  encryptedOnRawPath: number;
 }
+
+/**
+ * How many undecryptable-event rows a store keeps per cursor key; the oldest
+ * past this are pruned in the same write, beside a running total of every
+ * skip recorded (spec/memory-delta-v1.md §3.6). Each surface's store inlines
+ * this number.
+ */
+export const SKIPPED_SYNC_EVENTS_KEPT = 1000;
 
 /**
  * Pull everything after the stored cursor from `source` into `localStore`,
@@ -277,6 +306,7 @@ export async function pullBySeq(opts: {
   let cursor = (await cursorStore.getSyncSeqCursor(key)) ?? 0;
   const fresh: EventLogEntry[] = [];
   const skipped: SkippedSyncEvent[] = [];
+  let encryptedOnRawPath = 0;
   let resetOnce = false;
   const maxPages = opts.maxPages ?? MAX_SEQ_PAGES_PER_PULL;
 
@@ -303,11 +333,10 @@ export async function pullBySeq(opts: {
           continue;
         }
       } else if (isEncryptedPayload(transport.payload)) {
-        await skip({
-          event_id: transport.event_id,
-          seq: seqOf(transport.event_id),
-          reason: "encrypted_on_raw_path",
-        });
+        // Expected on a raw path, not an error: counted, never recorded per
+        // event (a raw daemon beside an E2E device would otherwise write a
+        // row for every event that device ever wrote).
+        encryptedOnRawPath++;
         continue;
       } else {
         entry = transport;
@@ -322,7 +351,7 @@ export async function pullBySeq(opts: {
     if (res.kind === "clock") {
       const unseen = await filterUnseen(localStore, motebitId, res.events);
       await apply(unseen, () => null);
-      return { mode: "clock", fresh, skipped };
+      return { mode: "clock", fresh, skipped, encryptedOnRawPath };
     }
     if (res.latestSeq < cursor && !resetOnce) {
       // The relay's sequence is BELOW this cursor: its database went back
@@ -349,5 +378,5 @@ export async function pullBySeq(opts: {
     }
     if (!res.hasMore) break;
   }
-  return { mode: "seq", fresh, skipped };
+  return { mode: "seq", fresh, skipped, encryptedOnRawPath };
 }

@@ -172,10 +172,19 @@ export function openMotebitDB(dbName = "motebit"): Promise<IDBDatabase> {
       if (!db.objectStoreNames.contains("sync_seq_cursors")) {
         db.createObjectStore("sync_seq_cursors", { keyPath: "cursor_key" });
       }
-      // Pulled events the stream moved past without applying (undecryptable,
-      // or E2E on a raw path) — recorded, never silent (#868, v9).
+      // Pulled events the stream moved past without applying because they
+      // could not be decrypted — recorded, never silent (#868, v9). Keyed by
+      // an auto-increment (insertion order, for the prune); one row per
+      // (cursor_key, event_id). BOUNDED: the newest 1000 per cursor_key are
+      // kept, pruned in the write that adds one; `sync_skipped_totals` keeps
+      // the count of every skip.
       if (!db.objectStoreNames.contains("sync_skipped_events")) {
-        db.createObjectStore("sync_skipped_events", { keyPath: ["cursor_key", "event_id"] });
+        const skipped = db.createObjectStore("sync_skipped_events", { autoIncrement: true });
+        skipped.createIndex("key_event", ["cursor_key", "event_id"], { unique: true });
+        skipped.createIndex("cursor_key", "cursor_key");
+      }
+      if (!db.objectStoreNames.contains("sync_skipped_totals")) {
+        db.createObjectStore("sync_skipped_totals", { keyPath: "cursor_key" });
       }
     };
 

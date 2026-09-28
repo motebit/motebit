@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach } from "vitest";
 import Database from "better-sqlite3";
 import {
   TauriEventStore,
+  SKIPPED_SYNC_EVENTS_KEPT,
   TauriMemoryStorage,
   TauriPlanStore,
   type InvokeFn,
@@ -154,6 +155,24 @@ describe("TauriEventStore", () => {
     expect(db.prepare("SELECT event_id, seq, reason FROM sync_skipped_events").all()).toEqual([
       { event_id: "x", seq: 3, reason: "undecryptable" },
     ]);
+  });
+
+  it("bounds the skipped-event record: N+5 skips leave the newest N rows and a total of N+5 (#868)", async () => {
+    for (const sql of DESKTOP_MIGRATIONS.find((m) => m.version === 8)!.statements) db.exec(sql);
+    const N = SKIPPED_SYNC_EVENTS_KEPT;
+    for (let i = 1; i <= N + 5; i++) {
+      await store.recordSkippedSyncEvent("k", {
+        event_id: `x${i}`,
+        seq: i,
+        reason: "undecryptable",
+      });
+    }
+    const rows = db
+      .prepare("SELECT event_id FROM sync_skipped_events WHERE cursor_key = 'k' ORDER BY rowid")
+      .all() as Array<{ event_id: string }>;
+    expect(rows).toHaveLength(N);
+    expect(rows[0]!.event_id).toBe("x6");
+    expect(await store.countSkippedSyncEvents("k")).toBe(N + 5);
   });
 
   it("append + query round-trip", async () => {

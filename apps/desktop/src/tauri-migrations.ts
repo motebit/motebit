@@ -163,8 +163,8 @@ export const DESKTOP_MIGRATIONS: readonly Migration[] = [
         seq INTEGER NOT NULL,
         updated_at INTEGER NOT NULL
       )`,
-      // Pulled events the stream moved past without applying (undecryptable,
-      // or E2E on a raw path) — recorded, never silent.
+      // Pulled events the stream moved past without applying (undecryptable:
+      // key rotated away, corrupt ciphertext) — recorded, never silent.
       `CREATE TABLE IF NOT EXISTS sync_skipped_events (
         cursor_key TEXT NOT NULL,
         event_id TEXT NOT NULL,
@@ -173,6 +173,12 @@ export const DESKTOP_MIGRATIONS: readonly Migration[] = [
         detail TEXT,
         recorded_at INTEGER NOT NULL,
         PRIMARY KEY (cursor_key, event_id)
+      )`,
+      // Bounded: the newest 1000 rows per cursor_key are kept (pruned in the
+      // write that adds one); this keeps the count of every skip.
+      `CREATE TABLE IF NOT EXISTS sync_skipped_totals (
+        cursor_key TEXT PRIMARY KEY,
+        total INTEGER NOT NULL
       )`,
     ],
   },

@@ -17,6 +17,7 @@ import {
   isSeqPullSource,
   pullBySeq,
   resolveSeqCursorStore,
+  SKIPPED_SYNC_EVENTS_KEPT,
 } from "../index.js";
 import type { SeqPullSource } from "../index.js";
 import { FakeRelay } from "./fake-relay.js";
@@ -340,6 +341,43 @@ describe("#868 seq cursor", () => {
       expect(out.skipped).toEqual([]);
     });
 
+    it("a raw path records no row for an E2E payload — it counts it", async () => {
+      for (let i = 1; i <= 3; i++) {
+        await new EncryptedEventStoreAdapter({ inner: http, key: k1 }).append(entry(`s${i}`, i));
+      }
+      const cursors = new InMemorySyncSeqCursorStore();
+      const record = vi.spyOn(cursors, "recordSkippedSyncEvent");
+      const onSkipped = vi.fn();
+      const out = await pullBySeq({
+        source: http,
+        localStore: new CursorStore(),
+        cursorStore: cursors,
+        motebitId: MID,
+        fallbackAfterClock: 0,
+        onSkipped,
+      });
+      expect(out.encryptedOnRawPath).toBe(3);
+      expect(record).not.toHaveBeenCalled();
+      expect(onSkipped).not.toHaveBeenCalled();
+      expect(await cursors.getSyncSeqCursor(http.seqCursorKey)).toBe(3);
+    });
+
+    it(`the undecryptable record is bounded: N+5 skips leave the newest N rows and a total of N+5 (in-memory store)`, async () => {
+      const store = new InMemorySyncSeqCursorStore();
+      const N = SKIPPED_SYNC_EVENTS_KEPT;
+      for (let i = 1; i <= N + 5; i++) {
+        await store.recordSkippedSyncEvent("k", {
+          event_id: `x${i}`,
+          seq: i,
+          reason: "undecryptable",
+        });
+      }
+      const rows = store.skipped.filter((s) => s.key === "k");
+      expect(rows).toHaveLength(N);
+      expect(rows[0]!.event_id).toBe("x6");
+      expect(await store.countSkippedSyncEvents("k")).toBe(N + 5);
+    });
+
     it("the raw path never applies an E2E payload, and never advances the E2E cursor: the E2E path then applies it decrypted (rawThenEnc)", async () => {
       await new EncryptedEventStoreAdapter({ inner: http, key: k1 }).append(entry("sib", 1));
       const local = new CursorStore();
@@ -352,7 +390,9 @@ describe("#868 seq cursor", () => {
         fallbackAfterClock: 0,
       });
       expect(raw.fresh).toEqual([]);
-      expect(raw.skipped.map((s) => s.reason)).toEqual(["encrypted_on_raw_path"]);
+      // Counted, never recorded per event: expected on a raw path, not an error.
+      expect(raw.skipped).toEqual([]);
+      expect(raw.encryptedOnRawPath).toBe(1);
       expect(await local.query({})).toEqual([]);
       // …then the E2E engine over the SAME store.
       const enc = new EncryptedEventStoreAdapter({ inner: http, key: k1 });

@@ -358,6 +358,14 @@ function initSchema(db: DatabaseDriver): void {
   db.exec(SCHEMA_INDEXES);
 }
 
+/**
+ * How many undecryptable-event rows the store keeps per sync cursor key
+ * (#868; `SKIPPED_SYNC_EVENTS_KEPT` in @motebit/sync-engine, spec
+ * memory-delta §3.6). Older rows are pruned in the write that adds one;
+ * `sync_skipped_totals` keeps the count of every skip.
+ */
+export const SKIPPED_SYNC_EVENTS_KEPT = 1000;
+
 // === SqliteEventStore ===
 
 export class SqliteEventStore implements EventStoreAdapter {
@@ -483,20 +491,56 @@ export class SqliteEventStore implements EventStoreAdapter {
       .run(key, seq, Date.now());
   }
 
-  /** Record a pulled event the sync stream moved past without applying (#868, v50). */
+  /**
+   * Record a pulled event the sync stream moved past because it could not
+   * be decrypted (#868, v50). One transaction: the row (once per event_id),
+   * the running total, and the prune to the newest `SKIPPED_SYNC_EVENTS_KEPT`
+   * rows for this cursor key.
+   */
   async recordSkippedSyncEvent(
     key: string,
     skipped: { event_id: string; seq: number | null; reason: string; detail?: string },
   ): Promise<void> {
-    this.db
-      .prepare(
-        `INSERT OR REPLACE INTO sync_skipped_events (cursor_key, event_id, seq, reason, detail, recorded_at)
-         VALUES (?, ?, ?, ?, ?, ?)`,
-      )
-      .run(key, skipped.event_id, skipped.seq, skipped.reason, skipped.detail ?? null, Date.now());
+    this.db.transaction(() => {
+      const inserted = this.db
+        .prepare(
+          `INSERT OR IGNORE INTO sync_skipped_events (cursor_key, event_id, seq, reason, detail, recorded_at)
+           VALUES (?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          key,
+          skipped.event_id,
+          skipped.seq,
+          skipped.reason,
+          skipped.detail ?? null,
+          Date.now(),
+        );
+      if (inserted.changes === 0) return;
+      this.db
+        .prepare(
+          `INSERT INTO sync_skipped_totals (cursor_key, total) VALUES (?, 1)
+           ON CONFLICT (cursor_key) DO UPDATE SET total = total + 1`,
+        )
+        .run(key);
+      this.db
+        .prepare(
+          `DELETE FROM sync_skipped_events WHERE cursor_key = ? AND rowid NOT IN (
+             SELECT rowid FROM sync_skipped_events WHERE cursor_key = ? ORDER BY rowid DESC LIMIT ?
+           )`,
+        )
+        .run(key, key, SKIPPED_SYNC_EVENTS_KEPT);
+    });
   }
 
-  /** The skipped-event record for one relay stream (#868). */
+  /** Every undecryptable skip recorded for `key`, including rows since pruned (#868). */
+  async countSkippedSyncEvents(key: string): Promise<number> {
+    const row = this.db
+      .prepare("SELECT total FROM sync_skipped_totals WHERE cursor_key = ?")
+      .get(key) as { total: number } | undefined;
+    return row?.total ?? 0;
+  }
+
+  /** The kept skipped-event rows for one relay stream, oldest first (#868). */
   async listSkippedSyncEvents(
     key: string,
   ): Promise<
@@ -504,7 +548,7 @@ export class SqliteEventStore implements EventStoreAdapter {
   > {
     return this.db
       .prepare(
-        "SELECT event_id, seq, reason, detail FROM sync_skipped_events WHERE cursor_key = ? ORDER BY recorded_at, event_id",
+        "SELECT event_id, seq, reason, detail FROM sync_skipped_events WHERE cursor_key = ? ORDER BY rowid",
       )
       .all(key) as Array<{
       event_id: string;

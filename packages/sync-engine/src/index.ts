@@ -19,6 +19,7 @@ export {
   MAX_SEQ_PAGES_PER_PULL,
   isEncryptedPayload,
   warnSkippedSyncEvent,
+  SKIPPED_SYNC_EVENTS_KEPT,
 } from "./seq-cursor.js";
 export type {
   SeqPullResult,
@@ -137,12 +138,18 @@ export interface SyncResult {
   pulled: number;
   conflicts: ConflictEdge[];
   /**
-   * Pulled events moved past WITHOUT being applied this cycle (#868) — an
-   * E2E event this device cannot decrypt, or an encrypted payload on a raw
-   * path. Each is recorded where the cursor lives and reported through
-   * `SyncConfig.onSkippedEvent`. Absent when none.
+   * Pulled events moved past WITHOUT being applied this cycle because this
+   * device cannot decrypt them (#868). Each is recorded where the cursor
+   * lives (bounded) and reported through `SyncConfig.onSkippedEvent`.
+   * Absent when none.
    */
   skipped?: SkippedSyncEvent[];
+  /**
+   * E2E-encrypted events this RAW pull passed without applying (the E2E
+   * path over the same store applies them). Expected, not an error; counted,
+   * never recorded per event. Absent when none.
+   */
+  encryptedOnRawPath?: number;
 }
 
 export interface SyncStatusListener {
@@ -239,6 +246,7 @@ export class SyncEngine {
         pulled: pulled.count,
         conflicts,
         ...(pulled.skipped && pulled.skipped.length > 0 ? { skipped: pulled.skipped } : {}),
+        ...(pulled.encryptedOnRawPath ? { encryptedOnRawPath: pulled.encryptedOnRawPath } : {}),
       };
     } catch {
       this.setStatus("error");
@@ -299,6 +307,7 @@ export class SyncEngine {
     count: number;
     events: EventLogEntry[];
     skipped?: SkippedSyncEvent[];
+    encryptedOnRawPath?: number;
   }> {
     if (this.remoteStore === null) return { count: 0, events: [] };
 
@@ -306,7 +315,7 @@ export class SyncEngine {
     // the transport cursor — never by this device's clock. The clock below
     // is sent only as the fallback an older relay answers.
     if (isSeqPullSource(this.remoteStore)) {
-      const { fresh, skipped } = await pullBySeq({
+      const { fresh, skipped, encryptedOnRawPath } = await pullBySeq({
         source: this.remoteStore,
         localStore: this.localStore,
         cursorStore: this.seqCursorStore,
@@ -314,7 +323,7 @@ export class SyncEngine {
         fallbackAfterClock: this.cursor.last_version_clock,
         onSkipped: this.config.onSkippedEvent ?? warnSkippedSyncEvent,
       });
-      return { count: fresh.length, events: fresh, skipped };
+      return { count: fresh.length, events: fresh, skipped, encryptedOnRawPath };
     }
 
     const remoteEvents = await this.remoteStore.query({

@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach } from "vitest";
 import { EventType } from "@motebit/sdk";
 import type { EventLogEntry } from "@motebit/sdk";
 import { openMotebitDB } from "../idb.js";
-import { IdbEventStore } from "../event-store.js";
+import { IdbEventStore, SKIPPED_SYNC_EVENTS_KEPT } from "../event-store.js";
 
 describe("IdbEventStore", () => {
   let store: IdbEventStore;
@@ -48,6 +48,26 @@ describe("IdbEventStore", () => {
     await expect(
       store.recordSkippedSyncEvent("k", { event_id: "x", seq: 2, reason: "undecryptable" }),
     ).resolves.toBeUndefined();
+  });
+
+  it("bounds the skipped-event record: N+5 skips leave the newest N rows and a total of N+5 (#868)", async () => {
+    const N = SKIPPED_SYNC_EVENTS_KEPT;
+    for (let i = 1; i <= N + 5; i++) {
+      await store.recordSkippedSyncEvent("k", {
+        event_id: `x${i}`,
+        seq: i,
+        reason: "undecryptable",
+      });
+    }
+    await store.recordSkippedSyncEvent("k", {
+      event_id: `x${N + 5}`,
+      seq: N + 5,
+      reason: "undecryptable",
+    });
+    const rows = await store.listSkippedSyncEvents("k");
+    expect(rows).toHaveLength(N);
+    expect(rows[0]!.event_id).toBe("x6");
+    expect(await store.countSkippedSyncEvents("k")).toBe(N + 5);
   });
 
   it("appends and queries events", async () => {

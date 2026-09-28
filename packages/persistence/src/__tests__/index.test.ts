@@ -86,8 +86,38 @@ describe("SqliteEventStore", () => {
       reason: "undecryptable",
     });
     expect(await mdb.eventStore.listSkippedSyncEvents(key)).toEqual([
-      { event_id: "x", seq: 4, reason: "undecryptable", detail: null },
+      {
+        event_id: "x",
+        seq: 4,
+        reason: "undecryptable",
+        detail: "Encryption key not found for version 1",
+      },
     ]);
+  });
+
+  it("bounds the skipped-event record: N+5 skips leave the newest N rows and a total of N+5 (#868)", async () => {
+    const { SKIPPED_SYNC_EVENTS_KEPT: N } = await import("../index.js");
+    const key = "e2e:raw:http://relay.one#motebit-1";
+    for (let i = 1; i <= N + 5; i++) {
+      await mdb.eventStore.recordSkippedSyncEvent(key, {
+        event_id: `x${i}`,
+        seq: i,
+        reason: "undecryptable",
+      });
+    }
+    const rows = await mdb.eventStore.listSkippedSyncEvents(key);
+    expect(rows).toHaveLength(N);
+    expect(rows[0]!.event_id).toBe("x6");
+    expect(rows[rows.length - 1]!.event_id).toBe(`x${N + 5}`);
+    expect(await mdb.eventStore.countSkippedSyncEvents(key)).toBe(N + 5);
+    // Another stream's rows are untouched by this stream's prune.
+    await mdb.eventStore.recordSkippedSyncEvent("other", {
+      event_id: "o",
+      seq: 1,
+      reason: "undecryptable",
+    });
+    expect(await mdb.eventStore.listSkippedSyncEvents("other")).toHaveLength(1);
+    expect(await mdb.eventStore.listSkippedSyncEvents(key)).toHaveLength(N);
   });
 
   it("appends and queries events", async () => {

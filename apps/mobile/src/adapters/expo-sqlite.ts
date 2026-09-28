@@ -382,6 +382,9 @@ function rowToAudit(row: AuditRow): AuditRecord {
 
 // === EventStore Adapter ===
 
+/** Undecryptable-event rows kept per sync cursor key (#868; spec memory-delta §3.6). */
+export const SKIPPED_SYNC_EVENTS_KEPT = 1000;
+
 export class ExpoSqliteEventStore implements EventStoreAdapter {
   constructor(private db: SQLite.SQLiteDatabase) {}
 
@@ -461,11 +464,34 @@ export class ExpoSqliteEventStore implements EventStoreAdapter {
     key: string,
     skipped: { event_id: string; seq: number | null; reason: string; detail?: string },
   ): Promise<void> {
-    this.db.runSync(
-      `INSERT OR REPLACE INTO sync_skipped_events (cursor_key, event_id, seq, reason, detail, recorded_at)
+    // Row once per event_id; then the running total and the prune to the
+    // newest SKIPPED_SYNC_EVENTS_KEPT rows for this key.
+    const inserted = this.db.runSync(
+      `INSERT OR IGNORE INTO sync_skipped_events (cursor_key, event_id, seq, reason, detail, recorded_at)
        VALUES (?, ?, ?, ?, ?, ?)`,
       [key, skipped.event_id, skipped.seq, skipped.reason, skipped.detail ?? null, Date.now()],
     );
+    if (inserted.changes === 0) return;
+    this.db.runSync(
+      `INSERT INTO sync_skipped_totals (cursor_key, total) VALUES (?, 1)
+       ON CONFLICT (cursor_key) DO UPDATE SET total = total + 1`,
+      [key],
+    );
+    this.db.runSync(
+      `DELETE FROM sync_skipped_events WHERE cursor_key = ? AND rowid NOT IN (
+         SELECT rowid FROM sync_skipped_events WHERE cursor_key = ? ORDER BY rowid DESC LIMIT ?
+       )`,
+      [key, key, SKIPPED_SYNC_EVENTS_KEPT],
+    );
+  }
+
+  /** Every undecryptable skip recorded for `key`, including rows since pruned (#868). */
+  async countSkippedSyncEvents(key: string): Promise<number> {
+    const row = this.db.getFirstSync<{ total: number }>(
+      "SELECT total FROM sync_skipped_totals WHERE cursor_key = ?",
+      [key],
+    );
+    return row?.total ?? 0;
   }
 
   /** Which of `eventIds` this store holds — primary-key lookups, never a log scan (#868). */

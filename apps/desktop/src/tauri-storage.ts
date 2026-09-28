@@ -124,6 +124,9 @@ function rowToEvent(row: EventRow): EventLogEntry {
   return entry;
 }
 
+/** Undecryptable-event rows kept per sync cursor key (#868; spec memory-delta §3.6). */
+export const SKIPPED_SYNC_EVENTS_KEPT = 1000;
+
 export class TauriEventStore implements EventStoreAdapter {
   constructor(private invoke: InvokeFn) {}
 
@@ -209,12 +212,40 @@ export class TauriEventStore implements EventStoreAdapter {
     key: string,
     skipped: { event_id: string; seq: number | null; reason: string; detail?: string },
   ): Promise<void> {
-    await dbExecute(
+    // Row once per event_id; then the running total and the prune to the
+    // newest SKIPPED_SYNC_EVENTS_KEPT rows for this key (each statement is
+    // atomic over IPC; the prune is idempotent, so a crash between them
+    // leaves at most a few extra rows until the next skip).
+    const inserted = await dbExecute(
       this.invoke,
-      `INSERT OR REPLACE INTO sync_skipped_events (cursor_key, event_id, seq, reason, detail, recorded_at)
+      `INSERT OR IGNORE INTO sync_skipped_events (cursor_key, event_id, seq, reason, detail, recorded_at)
        VALUES (?, ?, ?, ?, ?, ?)`,
       [key, skipped.event_id, skipped.seq, skipped.reason, skipped.detail ?? null, Date.now()],
     );
+    if (inserted === 0) return;
+    await dbExecute(
+      this.invoke,
+      `INSERT INTO sync_skipped_totals (cursor_key, total) VALUES (?, 1)
+       ON CONFLICT (cursor_key) DO UPDATE SET total = total + 1`,
+      [key],
+    );
+    await dbExecute(
+      this.invoke,
+      `DELETE FROM sync_skipped_events WHERE cursor_key = ? AND rowid NOT IN (
+         SELECT rowid FROM sync_skipped_events WHERE cursor_key = ? ORDER BY rowid DESC LIMIT ?
+       )`,
+      [key, key, SKIPPED_SYNC_EVENTS_KEPT],
+    );
+  }
+
+  /** Every undecryptable skip recorded for `key`, including rows since pruned (#868). */
+  async countSkippedSyncEvents(key: string): Promise<number> {
+    const rows = await dbQuery<{ total: number }>(
+      this.invoke,
+      "SELECT total FROM sync_skipped_totals WHERE cursor_key = ?",
+      [key],
+    );
+    return rows[0]?.total ?? 0;
   }
 
   /** Which of `eventIds` this store holds — primary-key lookups, never a log scan (#868). */

@@ -18,9 +18,9 @@ The event-sync transport cursor is the relay ingest sequence, not a device clock
   - A pull without `after_seq` is served byte for byte as before.
 - `@motebit/sync-engine`: new `seq-cursor.ts` (`pullBySeq`, `SeqPullSource`, `SyncSeqCursorStore`, `SkippedSyncEvent`, `HeldEventIdLookup`, `filterUnseen`, `isEncryptedPayload`).
   - A page is processed in a fixed order: dedup by `event_id` on the transport form, before any decryption; then decode each event on its own; then append; only then advance the cursor.
-  - An undecryptable event is recorded (`event_id`, `seq`, reason), reported through `onSkippedEvent` (default `console.warn`), and passed.
-  - A raw path never applies an E2E envelope, and raw and E2E keep separate cursors (`raw:…` / `e2e:raw:…`).
+  - An undecryptable event is recorded (`event_id`, `seq`, reason), reported through `onSkippedEvent` (default `console.warn`), and passed. The record is bounded: the newest `SKIPPED_SYNC_EVENTS_KEPT` (1000) rows per cursor key, pruned in the same write, plus a running total (`countSkippedSyncEvents`).
+  - A raw path never applies an E2E envelope. It counts it (`SeqPullOutcome.encryptedOnRawPath`, `SyncResult.encryptedOnRawPath`) and writes no row per event. Raw and E2E keep separate cursors (`raw:…` / `e2e:raw:…`).
   - `HttpEventStoreAdapter.pullAfterSeq` sends both cursors in one request.
   - `EncryptedEventStoreAdapter` returns the transport form and exposes `decodeEvent`.
   - `SyncEngine` and the `WebSocketEventStoreAdapter` catch-up both pull by seq. `SyncResult.skipped` is new.
-- `@motebit/persistence` (v50), `@motebit/desktop` (v8), `@motebit/mobile` (v28), `@motebit/browser-persistence` (IndexedDB v9): new `sync_seq_cursors` and `sync_skipped_events` tables or stores beside `events`. Each surface's event store gains `getSyncSeqCursor` / `setSyncSeqCursor`, `recordSkippedSyncEvent`, and `getHeldEventIds` (key lookups rather than a scan of the log).
+- `@motebit/persistence` (v50), `@motebit/desktop` (v8), `@motebit/mobile` (v28), `@motebit/browser-persistence` (IndexedDB v9): new `sync_seq_cursors`, `sync_skipped_events` and `sync_skipped_totals` tables or stores beside `events`. Each surface's event store gains `getSyncSeqCursor` / `setSyncSeqCursor`, `recordSkippedSyncEvent` (bounded), `countSkippedSyncEvents`, and `getHeldEventIds` (key lookups rather than a scan of the log).
