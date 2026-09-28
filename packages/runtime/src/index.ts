@@ -341,9 +341,9 @@ export type {
 } from "./relay-delegation.js";
 // The session paid-intent interlock (#435/#436) — enforced inside the shared
 // submit chokepoint; exported for surfaces/tests that render or probe it.
-// The interior delegation tools every surface's serve path must keep off
-// the network (spread it; never re-list names).
-export { INTERACTIVE_DELEGATION_TOOLS } from "./interactive-delegation.js";
+// What a serving surface may offer another principal (#874): derived from
+// `ToolDefinition.localOnly`, never from a per-surface name list.
+export { isServedTool, servedToolNames, LOCAL_TOOL_NAMES } from "./serve-exposure.js";
 export {
   PaidIntentLedger,
   InMemoryPaidIntentStore,

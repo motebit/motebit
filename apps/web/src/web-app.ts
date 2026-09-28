@@ -9,7 +9,7 @@ import {
   createRelayBackedSandboxTokenSource,
   getOrPinRelayKey,
   verifyAgentCommandEnvelope,
-  INTERACTIVE_DELEGATION_TOOLS,
+  servedToolNames,
 } from "@motebit/runtime";
 import type { TokenAudience } from "@motebit/sdk";
 import { createSolanaWalletRail, createSolanaMemoSubmitter } from "@motebit/wallet-solana";
@@ -4129,20 +4129,10 @@ export class UnbootedWebApp {
     }
     if (this._serving) return { ok: true };
 
-    const LOCAL_ONLY = new Set<string>([
-      "read_file",
-      "recall_memories",
-      "list_events",
-      "self_reflect",
-      // The interior delegation tools (hire, live roster read, fetch a
-      // result already paid for) — never a sellable capability. Spread from
-      // the runtime's canonical list so a new one cannot leak (#874).
-      ...INTERACTIVE_DELEGATION_TOOLS,
-    ]);
-    const tools = this.runtime.getToolRegistry().list();
-    const capabilities = tools
-      .filter((t: { name: string }) => !LOCAL_ONLY.has(t.name))
-      .map((t: { name: string }) => t.name);
+    // What this surface offers other principals is derived from each
+    // tool's own `localOnly` declaration (#874) — one rule for every
+    // surface, never a per-surface name list that can forget a tool.
+    const capabilities = servedToolNames(this.runtime.getToolRegistry().list());
 
     try {
       // Registration is the agent-registry family: `admin:query`

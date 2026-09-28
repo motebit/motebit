@@ -185,7 +185,15 @@ export async function resolveAttachedRead(
     case "tools_filtered":
       // Policy filtering runs HERE — an attached MCP frontend exposes
       // exactly what the coordinator's gate says is visible.
-      return runtime.policy.filterTools(runtime.getToolRegistry().list());
+      // `localOnly` tools (#874) act for the owner against this motebit's
+      // own interior; an attached MCP frontend serves OTHER principals, so
+      // they never cross this frame.
+      return runtime.policy.filterTools(
+        runtime
+          .getToolRegistry()
+          .list()
+          .filter((t) => t.localOnly !== true),
+      );
     case "policy_validate": {
       const name = reqString(kind, params, "name");
       const def = runtime
@@ -296,6 +304,9 @@ export async function resolveAttachedAct(
         .list()
         .find((t) => t.name === name);
       if (def === undefined) return { ok: false, error: `Unknown tool: ${name}` };
+      // Same exposure rule as tools_filtered: an attached frontend serves
+      // other principals, so a localOnly tool is never executed for it.
+      if (def.localOnly === true) return { ok: false, error: `Tool "${name}" is not served.` };
       // Defense in depth: the gate runs here regardless of any
       // pre-flight the frontend claims to have done.
       const decision = runtime.policy.validate(def, args, runtime.policy.createTurnContext());

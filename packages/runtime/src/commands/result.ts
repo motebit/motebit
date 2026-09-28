@@ -129,7 +129,9 @@ export async function cmdResult(
 
   if (words.length === 0) {
     if (outstanding.length === 0) {
-      return { summary: "No paid results waiting.", data: { outstanding: [] } };
+      // Never assert a negative the ledger cannot know: it holds only the
+      // payments THIS device made (same rule as `already_paid: "unknown"`).
+      return { summary: "No paid result is known on this device.", data: { outstanding: [] } };
     }
     return {
       summary:

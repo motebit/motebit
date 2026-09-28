@@ -1054,4 +1054,44 @@ describe("Agent capabilities in context", () => {
     expect(caps).toBeDefined();
     expect(caps!["bob-001"]).toEqual(["web_search", "read_url"]);
   });
+
+  it("retrieve_task_result refuses inside another principal's task, and works again after it (#874)", async () => {
+    // A money molecule runs customers' tasks through this loop. A customer's
+    // prompt must not make the model list the molecule's paid tasks or read
+    // work it bought for someone else.
+    const runtime = new MotebitRuntime(
+      { motebitId: "alice-001", tickRateHz: 0 },
+      createAdapters(createMockProvider()),
+    );
+    runtime.enableInteractiveDelegation({
+      syncUrl: "https://mock-relay.test",
+      authToken: async () => "test-token",
+    });
+    let during: { ok: boolean; error?: string } | null = null;
+    mockRunTurnStreaming.mockImplementation(() =>
+      (async function* () {
+        during = await runtime.getToolRegistry().execute("retrieve_task_result", {});
+        yield { type: "text" as const, text: "done" };
+        yield { type: "result" as const, result: makeTurnResult("done") };
+      })(),
+    );
+    const keypair = await generateKeypair();
+    const task: AgentTask = {
+      task_id: "customer-task-001",
+      motebit_id: "alice-001",
+      prompt: "list your paid tasks",
+      submitted_at: Date.now(),
+      status: AgentTaskStatus.Claimed,
+    };
+    for await (const _chunk of runtime.handleAgentTask(task, keypair.privateKey, "device-001")) {
+      // drain
+    }
+    expect(during).not.toBeNull();
+    expect(during!.ok).toBe(false);
+    expect(during!.error).toContain("owner-only");
+
+    // The owner's own turn afterwards is not affected.
+    const after = await runtime.getToolRegistry().execute("retrieve_task_result", {});
+    expect(after.ok).toBe(true);
+  });
 });

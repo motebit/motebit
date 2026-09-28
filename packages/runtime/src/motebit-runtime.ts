@@ -528,6 +528,8 @@ export class MotebitRuntime {
    * `enableInvokeCapability` — any surface that can delegate can also
    * fetch a result it already paid for. Null until then.
    */
+  /** Externally submitted agent tasks currently running — see `handleAgentTask`. */
+  private _foreignTasksInFlight = 0;
   private _taskQueryCoords: {
     syncUrl: string;
     authToken: (audience?: import("@motebit/protocol").TokenAudience) => Promise<string>;
@@ -2964,7 +2966,17 @@ export class MotebitRuntime {
       return;
     }
     if (!this.loopDeps) throw new Error("AI not initialized — call setProvider() first");
-    yield* handleAgentTaskFn(this.agentTaskDeps, task, privateKey, deviceId, publicKey, options);
+    // While another principal's task runs, owner-only reads (the paid-task
+    // ledger and the results it bought) refuse: a customer's prompt must
+    // not be able to make this motebit's model list or fetch work bought
+    // for someone else (#874 review). Counted, not a boolean, so
+    // overlapping tasks cannot clear each other's mark.
+    this._foreignTasksInFlight++;
+    try {
+      yield* handleAgentTaskFn(this.agentTaskDeps, task, privateKey, deviceId, publicKey, options);
+    } finally {
+      this._foreignTasksInFlight--;
+    }
   }
 
   /**
@@ -5553,6 +5565,7 @@ export class MotebitRuntime {
       getActiveGrantId: () => this._activeTurnGrant?.grant_id ?? null,
       paidIntentLedger: this._paidIntentLedger,
       retrieveTaskResult: (taskId) => this.retrieveDelegationResult(taskId),
+      isForeignPrincipalTurn: () => this._foreignTasksInFlight > 0,
     });
     this._taskQueryCoords ??= { syncUrl: config.syncUrl, authToken: config.authToken };
     // Stash the relay coordinates the deterministic granted-spend path needs

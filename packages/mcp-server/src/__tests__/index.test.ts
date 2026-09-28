@@ -1274,6 +1274,29 @@ describe("McpServerAdapter — synthetic tool execution", () => {
     expect(text).toContain("execute");
   });
 
+  it("never serves a localOnly tool — even when the deps a surface built pass it through (#874)", async () => {
+    // Raw deps that filter nothing, as the daemon's hand-built deps and an
+    // attached frontend's do: the adapter itself is the chokepoint.
+    const tools: ToolDefinition[] = [
+      toolDef("search"),
+      toolDef("retrieve_task_result", { localOnly: true }),
+      toolDef("delegate_to_agent", { localOnly: true }),
+    ];
+    const deps = makeDeps({ listTools: () => tools, filterTools: (t) => t });
+    const adapter = new McpServerAdapter(makeConfig(), deps);
+    await adapter.start();
+
+    expect(registrations.tools.has("search")).toBe(true);
+    expect(registrations.tools.has("retrieve_task_result")).toBe(false);
+    expect(registrations.tools.has("delegate_to_agent")).toBe(false);
+
+    const handler = registrations.tools.get("motebit_tools")!.handler;
+    const text = ((await handler()) as { content: Array<{ text: string }> }).content[0]!.text;
+    expect(text).toContain("search");
+    expect(text).not.toContain("retrieve_task_result");
+    expect(text).not.toContain("delegate_to_agent");
+  });
+
   it("synthetic tools log via logToolCall", async () => {
     const logToolCall = vi.fn();
     const deps = makeDeps({

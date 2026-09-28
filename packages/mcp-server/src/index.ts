@@ -23,6 +23,7 @@ import {
 } from "@motebit/encryption";
 import type { DelegationToken } from "@motebit/encryption";
 import { startSelfWatchdog } from "./self-watchdog.js";
+import { isServableTool } from "./serve-exposure.js";
 
 // Re-export for consumers
 export type { MotebitServerDeps, McpServerConfig, InboundCredentialVerifier };
@@ -33,6 +34,7 @@ export { StaticTokenVerifier };
 export { wireServerDeps, startServiceServer } from "./service.js";
 export { startSelfWatchdog, type SelfWatchdogHandle } from "./self-watchdog.js";
 export { buildServiceReceipt } from "./build-receipt.js";
+export { isServableTool } from "./serve-exposure.js";
 export type { BuildServiceReceiptInput } from "./build-receipt.js";
 export { bootstrapAndEmitIdentity } from "./bootstrap-service.js";
 export type {
@@ -535,8 +537,13 @@ export class McpServerAdapter {
   // --- Tool Registration ---
 
   private async registerToolsOn(server: McpServer): Promise<void> {
-    const allTools = await this.deps.listTools();
-    const visibleTools = this.deps.filterTools(allTools);
+    // A `localOnly` tool acts for this motebit's owner against its own
+    // interior (#874) — never served to a caller, whatever `deps` a
+    // surface assembled. Enforced here because every MCP server, however
+    // its deps were built (wireServerDeps, the daemon, an attached
+    // frontend), registers its tools through this one method.
+    const allTools = (await this.deps.listTools()).filter(isServableTool);
+    const visibleTools = this.deps.filterTools(allTools).filter(isServableTool);
 
     for (const tool of visibleTools) {
       const annotations = riskToAnnotations(tool.riskHint);
@@ -584,6 +591,12 @@ export class McpServerAdapter {
     content: Array<{ type: "text"; text: string }>;
     isError?: boolean;
   }> {
+    if (!isServableTool(tool)) {
+      return {
+        content: [{ type: "text" as const, text: `Tool "${tool.name}" is not served.` }],
+        isError: true,
+      };
+    }
     // Policy check
     const decision = await this.deps.validateTool(tool, args, this.lastVerifiedCaller ?? undefined);
 
@@ -1096,7 +1109,7 @@ export class McpServerAdapter {
       const denied = await this.validateSyntheticTool(toolsToolDef, {});
       if (denied) return denied;
 
-      const tools = (await this.deps.listTools()).map((t) => ({
+      const tools = (await this.deps.listTools()).filter(isServableTool).map((t) => ({
         name: t.name,
         description: t.description,
         risk: t.riskHint?.risk ?? null,

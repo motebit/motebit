@@ -788,6 +788,14 @@ export interface SubmitP2pDelegationParams {
   logger: { warn(message: string, context?: Record<string, unknown>): void };
   /** Abort the poll loop early. */
   signal?: AbortSignal;
+  /**
+   * Called once, synchronously, the moment the relay accepts the paid
+   * submission — BEFORE the first poll. The payment has settled and the
+   * task exists, so this is when "paid, result pending" becomes a fact a
+   * caller must be able to recover from even if the process dies mid-poll
+   * (#874 review: recording only on poll failure lost the entry to a quit).
+   */
+  onTaskAccepted?: (taskId: string) => void;
 }
 
 /**
@@ -899,6 +907,9 @@ export async function submitP2pDelegation(
       },
     };
   }
+
+  // Money moved and the relay holds the task: record before polling.
+  params.onTaskAccepted?.(taskId);
 
   const result = await pollForReceipt({
     syncUrl: params.syncUrl,
@@ -1574,12 +1585,33 @@ export async function resolveAndSubmitP2pDelegation(
     ...(params.timeoutMs != null ? { timeoutMs: params.timeoutMs } : {}),
     logger: params.logger,
     ...(params.signal ? { signal: params.signal } : {}),
+    // 5a. Ledger write AT SETTLE TIME (#874 review): the payment is
+    //     confirmed and the relay accepted the task, so the entry reads
+    //     "paid, result pending" from this moment. A process that dies
+    //     mid-poll leaves it on record; the next session refuses a re-hire
+    //     and `/result` can recover the work. Resolved below on delivery.
+    ...(params.paidIntentLedger != null
+      ? {
+          onTaskAccepted: (taskId: string) =>
+            params.paidIntentLedger!.recordSettledUnretrieved({
+              workerMotebitId: resolved.workerMotebitId,
+              capability: params.capability,
+              taskId,
+              txHash: proof.tx_hash,
+              paidMicro: proof.amount_micro,
+              feeMicro: proof.fee_amount_micro + (proof.b_fee_amount_micro ?? 0),
+              recordedAt: Date.now(),
+            }),
+        }
+      : {}),
   });
 
-  // 6. Ledger write — a settled-but-unretrieved payment arms the interlock so
-  //    the NEXT delegation to this worker+capability refuses pre-broadcast.
-  //    Recorded only from the settledPayment fact (money verifiably moved),
-  //    never from an intent.
+  // 6. Delivered ⇒ the work is no longer outstanding. Any other outcome
+  //    leaves the settle-time entry in place (the backstop below re-records
+  //    idempotently, for a caller that bypassed `onTaskAccepted`).
+  if (params.paidIntentLedger != null && submitted.ok) {
+    params.paidIntentLedger.resolve(submitted.taskId);
+  }
   if (params.paidIntentLedger != null && !submitted.ok && submitted.error.settledPayment != null) {
     const sp = submitted.error.settledPayment;
     params.paidIntentLedger.recordSettledUnretrieved({

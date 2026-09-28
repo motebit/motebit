@@ -41,20 +41,6 @@ function formatSettlementNote(settlement: DelegationSettlement | undefined): str
   return `[settlement] Paid ${paid} to the worker + ${fee} platform fee, peer-to-peer onchain.${tx}`;
 }
 
-/**
- * The tools `InteractiveDelegationManager.enable` registers. All three are
- * interior: they act for THIS motebit against its relay (hire, read the
- * roster, fetch a result it paid for) and are never a sellable capability.
- * Every surface's "serve" path excludes them from what it advertises —
- * spread this constant rather than re-listing names, so a tool added here
- * cannot leak onto the network through a list that forgot it.
- */
-export const INTERACTIVE_DELEGATION_TOOLS = [
-  "delegate_to_agent",
-  "discover_agents",
-  "retrieve_task_result",
-] as const;
-
 /** ToolRegistry extended with `has()` — matches SimpleToolRegistry in MotebitRuntime. */
 interface ToolRegistryWithHas extends ToolRegistry {
   has(name: string): boolean;
@@ -138,6 +124,13 @@ export interface InteractiveDelegationConfig {
    * resolution itself.
    */
   retrieveTaskResult?: (taskId: string) => Promise<TaskRetrieval>;
+  /**
+   * True while the loop is running ANOTHER principal's task (the runtime's
+   * `handleAgentTask`). `retrieve_task_result` is owner-only: it refuses
+   * then, so a customer's prompt cannot list this motebit's paid tasks or
+   * read work it bought for someone else. Absent ⇒ never foreign.
+   */
+  isForeignPrincipalTurn?: () => boolean;
 }
 
 /**
@@ -320,6 +313,9 @@ export class InteractiveDelegationManager {
         // sweeps exported Definition consts) — tagged here so the registry
         // sort still prefers it over pixel-tier fallbacks.
         mode: "api",
+        // Interior: hires and pays FOR THIS motebit's owner. Never served
+        // to another principal over MCP, never advertised (#874).
+        localOnly: true,
         // Risk classification is explicit, never inferred: with a
         // payment rail configured, a paid delegation settles real money
         // onchain (R4_MONEY, irreversible) — the name/description
@@ -514,6 +510,11 @@ export class InteractiveDelegationManager {
           // reveals the question being asked, nothing more. Read-class.
           outbound: true,
           mode: "api",
+          // Interior: reads the relay with THIS motebit's token for its own
+          // hiring decisions. The web, desktop and mobile serve paths
+          // already refused it by name; the CLI and molecule MCP servers
+          // served it (#874). Never a sellable capability.
+          localOnly: true,
           riskHint: { risk: RiskLevel.R0_READ, sideEffect: SideEffect.NONE },
         },
         async (args: Record<string, unknown>) => {
@@ -629,9 +630,21 @@ export class InteractiveDelegationManager {
           // boundary as discover_agents, and never a sellable capability.
           outbound: true,
           mode: "api",
+          // Interior: lists this motebit's own paid tasks and returns work
+          // bought for its owner (or, on a molecule, for its customers).
+          // Never served over MCP, never advertised (#874 review).
+          localOnly: true,
           riskHint: { risk: RiskLevel.R0_READ, sideEffect: SideEffect.NONE },
         },
         async (args: Record<string, unknown>) => {
+          if (config.isForeignPrincipalTurn?.() === true) {
+            return {
+              ok: false,
+              error:
+                "retrieve_task_result is owner-only and this turn is running another principal's " +
+                "task — nothing was read.",
+            };
+          }
           const raw = typeof args.task_id === "string" ? args.task_id.trim() : "";
           const outstanding = ledger?.outstanding() ?? [];
           if (raw === "") {
@@ -651,7 +664,8 @@ export class InteractiveDelegationManager {
                   outstanding.length > 0
                     ? "Each of these was paid for and its result never arrived. Call " +
                       "retrieve_task_result with its task_id — never re-delegate."
-                    : "No paid task on this device is waiting on a result.",
+                    : "No paid result is known on this device. Its ledger records only " +
+                      "payments made here, so this is not proof that no task is owed a result.",
               }),
             };
           }

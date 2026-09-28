@@ -27,7 +27,10 @@ import {
   retrieveDelegationResult,
   executeCommand,
   paidResultsNotice,
-  INTERACTIVE_DELEGATION_TOOLS,
+  servedToolNames,
+  resolveAttachedRead,
+  resolveAttachedAct,
+  selectAndRunDelegation,
 } from "../index";
 import type { PlatformAdapters, StreamChunk } from "../index";
 import { RiskLevel, SideEffect } from "@motebit/protocol";
@@ -423,8 +426,53 @@ describe("retrieve_task_result — the model's free route to a paid result", () 
       .list()
       .find((t) => t.name === "delegate_to_agent");
     expect(delegate?.description).toContain("use retrieve_task_result");
-    // Every serve path excludes it through the canonical list.
-    expect(INTERACTIVE_DELEGATION_TOOLS).toContain("retrieve_task_result");
+  });
+
+  it("is never offered to another principal — by any serve path the runtime owns", async () => {
+    const runtime = makeRuntime(new InMemoryPaidIntentStore());
+    runtime.enableInteractiveDelegation({ syncUrl: RELAY, authToken: async () => "t" });
+    const owned = ["retrieve_task_result", "delegate_to_agent", "discover_agents"];
+    const defs = runtime.getToolRegistry().list();
+    for (const name of owned) {
+      expect(defs.find((t) => t.name === name)?.localOnly, name).toBe(true);
+    }
+
+    // 1. What web / desktop / mobile advertise when serving.
+    const advertised = servedToolNames(defs);
+    for (const name of owned) expect(advertised, name).not.toContain(name);
+
+    // 2. What an attached MCP frontend (`motebit serve` attached) lists…
+    const filtered = (await resolveAttachedRead(runtime, "tools_filtered")) as Array<{
+      name: string;
+    }>;
+    for (const name of owned)
+      expect(
+        filtered.map((t) => t.name),
+        name,
+      ).not.toContain(name);
+    // …and what it may execute on the coordinator.
+    const calls = stubTaskRead(delivered);
+    const refused = (await resolveAttachedAct(runtime, "tool_execute", {
+      name: "retrieve_task_result",
+      args: {},
+    })) as { ok: boolean };
+    expect(refused.ok).toBe(false);
+    expect(calls).toHaveLength(0);
+  });
+
+  it("refuses while the loop runs another principal's task (a customer cannot read the ledger)", async () => {
+    const store = new InMemoryPaidIntentStore();
+    seedPaid(store);
+    const runtime = makeRuntime(store);
+    runtime.enableInteractiveDelegation({ syncUrl: RELAY, authToken: async () => "t" });
+    const calls = stubTaskRead(delivered);
+    (runtime as unknown as { _foreignTasksInFlight: number })._foreignTasksInFlight = 1;
+    const r = await runtime.getToolRegistry().execute("retrieve_task_result", {});
+    expect(r.ok).toBe(false);
+    expect(r.error).toContain("owner-only");
+    expect(JSON.stringify(r)).not.toContain("XaMuKuMCtx");
+    expect(calls).toHaveLength(0);
+    expect(runtime.outstandingPaidResults()).toHaveLength(1);
   });
 
   it("delivers a paid result by short id with typed fields (already_paid, status, free)", async () => {
@@ -510,7 +558,9 @@ describe("result command + paidResultsNotice", () => {
     const got = await executeCommand(runtime, "result", "ed665235");
     expect(got?.summary).toContain("Free read");
     expect(got?.detail).toContain("The paid research answer.");
-    expect((await executeCommand(runtime, "result", ""))?.summary).toBe("No paid results waiting.");
+    expect((await executeCommand(runtime, "result", ""))?.summary).toBe(
+      "No paid result is known on this device.",
+    );
 
     seedPaid(store); // idempotent on task id — already resolved, stays resolved
     expect(runtime.outstandingPaidResults()).toHaveLength(0);
@@ -611,6 +661,87 @@ describe("paid, undelivered, restarted (#874 end to end)", () => {
     // One payment, one submission — the whole way through.
     expect(buildP2pPayment).toHaveBeenCalledTimes(1);
     expect(relay.submits()).toBe(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 5b. Recorded at SETTLE time — a quit mid-poll still leaves the entry
+// ---------------------------------------------------------------------------
+
+describe("paid, then killed mid-poll (#874 review: record at settle time)", () => {
+  it("the entry exists before the first poll; a new runtime refuses the re-hire and lists it", async () => {
+    const store = new InMemoryPaidIntentStore();
+    const buildP2pPayment = vi.fn(async () => proof);
+    // The relay accepted the paid task; the worker has not answered yet.
+    const relay = stubRelay(() => json(200, { task: { status: "running" }, receipt: null }));
+    const ledger = new PaidIntentLedger(store, ME);
+    const controller = new AbortController();
+
+    const inFlight = selectAndRunDelegation({
+      motebitId: ME,
+      syncUrl: RELAY,
+      authToken: async () => "t",
+      prompt: "research X",
+      requiredCapabilities: ["web_search"],
+      relayPublicKey: "07".repeat(32),
+      buildP2pPayment,
+      acknowledgeNoHistoryRisk: true,
+      paidIntentLedger: ledger,
+      timeoutMs: 60_000,
+      logger: { warn: () => {} },
+      signal: controller.signal,
+    });
+    // Wait until the submission landed, then "kill" the process mid-poll.
+    await vi.waitFor(() => expect(relay.submits()).toBe(1));
+    expect(ledger.outstanding().map((e) => e.taskId)).toEqual([TASK]);
+    controller.abort();
+    await inFlight;
+
+    // A NEW runtime over the same store: the payment is on record…
+    const next = makeRuntime(store);
+    next.enableInteractiveDelegation({
+      syncUrl: RELAY,
+      authToken: async () => "t",
+      relayPublicKey: "07".repeat(32),
+      buildP2pPayment,
+      acknowledgeNoHistoryRisk: true,
+    });
+    expect(next.outstandingPaidResults().map((e) => e.txHash)).toEqual(["XaMuKuMCtx"]);
+    // …the re-hire is refused before broadcast…
+    const rehire = await next.getToolRegistry().execute("delegate_to_agent", {
+      prompt: "research X",
+      required_capabilities: ["web_search"],
+    });
+    expect(rehire.error).toContain("INTENT_ALREADY_PAID");
+    expect(buildP2pPayment).toHaveBeenCalledTimes(1);
+    expect(relay.submits()).toBe(1);
+    // …and /result lists it.
+    const list = await executeCommand(next, "result", "");
+    expect(list?.detail).toContain("ed665235");
+  });
+
+  it("a delivered hire leaves nothing outstanding (resolved on delivery)", async () => {
+    const store = new InMemoryPaidIntentStore();
+    const ledger = new PaidIntentLedger(store, ME);
+    stubRelay(delivered);
+    vi.useFakeTimers();
+    const hire = selectAndRunDelegation({
+      motebitId: ME,
+      syncUrl: RELAY,
+      authToken: async () => "t",
+      prompt: "research X",
+      requiredCapabilities: ["web_search"],
+      relayPublicKey: "07".repeat(32),
+      buildP2pPayment: vi.fn(async () => proof),
+      acknowledgeNoHistoryRisk: true,
+      paidIntentLedger: ledger,
+      timeoutMs: 10_000,
+      logger: { warn: () => {} },
+    });
+    await vi.advanceTimersByTimeAsync(5000);
+    const r = await hire;
+    expect(r.ok).toBe(true);
+    expect(ledger.outstandingCount).toBe(0);
   });
 });
 
