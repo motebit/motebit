@@ -875,8 +875,9 @@ const WRITERS: readonly Writer[] = [
     file: R + "idempotency.ts",
     verb: "UPDATE",
     table: "relay_idempotency_keys",
-    count: 1,
-    principal: "the same caller's completion, scoped by motebit_id",
+    count: 3,
+    principal:
+      "the same caller's completion, the binding of its claim to the task it admits, and the recording of that admitted request's outcome (#888) — all scoped by the claim's (key, motebit_id)",
   },
   {
     file: R + "idempotency.ts",

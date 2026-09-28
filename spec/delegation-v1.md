@@ -82,6 +82,7 @@ TaskResponse {
 - `task_id` is assigned by the relay and is unique within that relay's namespace.
 - `submitted_by` identifies the delegator for trust tracking and budget allocation.
 - The response must include `task_id` and `status`. All other fields are optional.
+- A relay-mediated submission carries an `Idempotency-Key` (required by the reference relay; missing ⇒ 400). For a given (`Idempotency-Key`, `motebit_id` of the submission route), at most one task is ever admitted. A replay under the same key returns that task's `task_id` and the response the first submission received, including a failure response: a submission that admitted a task and then failed (for example a federation forward answering 502/503) carries the admitted `task_id` in its error body, and a same-key replay returns that same error. A refusal made before any task was admitted (validation, a settlement gate, insufficient funds) admits nothing, and the key stays free for a retry. To retry after a failure that admitted a task, a client uses a new key. A request under a key whose first submission is still being processed receives 409.
 
 ## 4. Task Lifecycle
 
@@ -408,6 +409,7 @@ The eight routes below are the binding cross-implementation contract for delegat
 
 ## Change Log
 
+- **1.3 (2026-09-28)** — Normative: task-submission idempotency (§3.3). One `Idempotency-Key` admits at most one task, and a replay returns that task's id together with the first submission's response, including a failure response. A submission that fails after admitting a task names the admitted `task_id` in its error body. Previously the reference relay released the key when a submission threw after enqueueing, so a same-key retry could admit a second task (#888).
 - **1.2 (2026-09-13)** — Additive: optional `presenter` on `AgentTask` (§3.1). `"submitter"` asks the relay to admit but not route, so the submitter is the one presenter and always receives `dispatch_token`. Closes the race where a bound sub-delegation was routed by the relay AND presented directly by the submitter (two presentations of one admission). Doctrine: `docs/doctrine/task-admission.md` § "Where it flows".
 - **1.1 (2026-09-12)** — Additive: optional `dispatch_token` on `TaskResponse` (§3.2), returned only when the relay did not dispatch the task itself. Task admission arc (`docs/doctrine/task-admission.md`).
 - **1.0** — Initial.
