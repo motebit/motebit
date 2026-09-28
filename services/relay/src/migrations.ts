@@ -2070,10 +2070,17 @@ export const relayMigrations: Migration[] = [
       // roll back together, and every writer — the sync doors, the
       // relay-authored trust event in tasks.ts, any later one — is stamped
       // without knowing the sequence exists. `INSERT OR IGNORE` on a
-      // duplicate `event_id` inserts no row and fires no trigger. `OR
-      // REPLACE` on the seq table: a row that becomes visible again (deleted
-      // by retention, then re-pushed) takes a FRESH seq above every earlier
-      // one, so every device sees it again.
+      // duplicate `event_id` inserts no row and fires no trigger. A row that
+      // becomes visible again (deleted by retention, then re-pushed) takes a
+      // FRESH seq above every earlier one because the UNSTAMP trigger below
+      // removed its seq row on delete — NOT because of `OR REPLACE`: SQLite
+      // lets the outer statement's conflict policy override a trigger body's,
+      // and every events writer is `INSERT OR IGNORE`, so the `OR REPLACE`
+      // below runs as OR IGNORE and does no work. Consequence: any future
+      // migration that removes `events` rows WITHOUT firing row triggers
+      // (a table rebuild, a bulk copy) must clear `relay_event_seq` for those
+      // rows too, or a re-pushed event keeps an old seq below clients'
+      // cursors and is never pulled.
       //
       // The events table belongs to @motebit/persistence's schema, created at
       // boot before relay migrations run (index.ts); a harness that runs

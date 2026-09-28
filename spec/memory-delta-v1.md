@@ -90,7 +90,7 @@ As-of reconstruction: given a query validity-time `T`, a conforming implementati
   3. A raw path MUST NOT apply an end-to-end-encrypted payload. That ciphertext is useless there, and holding it under its `event_id` would make the encrypted path over the same store discard the real event as a duplicate. On a raw path this is expected, not an error. The client counts such events and moves past them, and it writes no row per event. The encrypted path over the same store applies them under its own cursor.
   4. It appends the remaining events. Only then does it advance the cursor.
 
-  A missing, lost or lagging cursor costs a re-download and never loses an event, so pulling from `seq` 0 is always safe. `seq` is transport metadata, and a client MUST NOT store it in the entry. If `latest_seq` is below the client's cursor, the relay's sequence went backwards (for example, a restored database), and the client restarts from 0.
+  A missing, lost or lagging cursor costs a re-download and never loses an event, so pulling from `seq` 0 is always safe. A pull from 0 also re-appends events the client had compacted out of its local log (deduplication is against what the store holds); this regrows the log until the next compaction and has no state effect, because appended events never overwrite state. `seq` is transport metadata, and a client MUST NOT store it in the entry. If `latest_seq` is below the client's cursor, the relay's sequence went backwards (for example, a restored database), and the client restarts from 0.
 
 ---
 
