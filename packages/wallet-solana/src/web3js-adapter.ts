@@ -155,7 +155,29 @@ export interface Web3JsRpcAdapterConfig {
   identitySeed: Uint8Array;
   usdcMint?: string;
   commitment?: Commitment;
+  /**
+   * How long `signSendConfirm` keeps asking the chain after a blockhash
+   * expiry before giving up (#885 round 4). Tests inject `sleep`/`now`.
+   */
+  expiryConfirm?: {
+    pollMs?: number;
+    maxWaitMs?: number;
+    sleep?: (ms: number) => Promise<void>;
+    now?: () => number;
+  };
 }
+
+/**
+ * After a blockhash expiry, how often and how long to ask the chain about
+ * the transaction just sent (#885 round 4). web3.js raises the expiry as
+ * soon as the block height passes `lastValidBlockHeight` (it polls height
+ * about once a second), so the first ask lands at lastValid+1 or +2 —
+ * inside the `EXPIRY_HEIGHT_MARGIN`, where absence is not yet proof. At
+ * ~400ms a block the margin clears in ~4-5s; 30s is a generous cap for a
+ * slow cluster before the send is handed back as undecidable.
+ */
+const EXPIRY_CONFIRM_POLL_MS = 1_500;
+const EXPIRY_CONFIRM_MAX_WAIT_MS = 30_000;
 
 export class Web3JsRpcAdapter implements SolanaRpcAdapter {
   /** #885: `beforeBroadcast` runs after signing and before every send. */
@@ -164,6 +186,10 @@ export class Web3JsRpcAdapter implements SolanaRpcAdapter {
   private readonly keypair: Keypair;
   private readonly mint: PublicKey;
   private readonly commitment: Commitment;
+  private readonly expiryPollMs: number;
+  private readonly expiryMaxWaitMs: number;
+  private readonly sleep: (ms: number) => Promise<void>;
+  private readonly now: () => number;
 
   constructor(config: Web3JsRpcAdapterConfig) {
     if (config.identitySeed.length !== 32) {
@@ -173,6 +199,11 @@ export class Web3JsRpcAdapter implements SolanaRpcAdapter {
     }
     this.commitment = config.commitment ?? "confirmed";
     this.connection = new Connection(config.rpcUrl, this.commitment);
+    this.expiryPollMs = config.expiryConfirm?.pollMs ?? EXPIRY_CONFIRM_POLL_MS;
+    this.expiryMaxWaitMs = config.expiryConfirm?.maxWaitMs ?? EXPIRY_CONFIRM_MAX_WAIT_MS;
+    this.sleep =
+      config.expiryConfirm?.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
+    this.now = config.expiryConfirm?.now ?? Date.now;
     // Keypair.fromSeed is the standard Ed25519 seed → keypair derivation.
     // The resulting public key is identical to the motebit identity
     // public key derived from the same seed via @noble/ed25519.
@@ -316,9 +347,12 @@ export class Web3JsRpcAdapter implements SolanaRpcAdapter {
    *     (a retry would fail the same way), so it is returned as
    *     `confirmed: false` — exactly what a confirmed-with-error send
    *     returns — and never retried.
-   *   - `pending` / `rpc_error` ⇒ undecidable: the original error is thrown
-   *     and the caller's own-signature confirmation decides later. Never a
-   *     re-sign on a maybe.
+   *   - `pending` / `rpc_error` ⇒ asked again every ~1.5s for up to 30s
+   *     (`awaitDecisiveOutcome`) — web3.js reports the expiry at
+   *     lastValid+1, inside the absence margin, so the first answer is
+   *     usually `pending`. Still undecidable at the cap ⇒ the original error
+   *     is thrown and the caller's own-signature confirmation decides
+   *     later. Never a re-sign on a maybe.
    *
    * Any non-expiry error propagates immediately.
    */
@@ -361,7 +395,7 @@ export class Web3JsRpcAdapter implements SolanaRpcAdapter {
         };
       } catch (err) {
         if (!isBlockhashExpiry(err)) throw err;
-        const outcome = await this.getSignatureOutcome(signed);
+        const outcome = await this.awaitDecisiveOutcome(signed);
         switch (outcome.status) {
           case "landed":
             return { signature: signed.signature, slot: outcome.slot, confirmed: true };
@@ -375,6 +409,28 @@ export class Web3JsRpcAdapter implements SolanaRpcAdapter {
             throw err;
         }
       }
+    }
+  }
+
+  /**
+   * Ask the chain about `signed` until the answer is decisive (`landed`,
+   * `failed`, `expired`) or `expiryMaxWaitMs` passes (#885 round 4). Right
+   * after web3.js reports an expiry the height is only just past
+   * `lastValidBlockHeight`, so the first answer is usually `pending` (inside
+   * the margin); a few more blocks settle it. This poll is where the
+   * devnet-flake blockhash-expiry retry now lives: an expired first attempt
+   * becomes `expired` here, and only then does `signSendConfirm` re-sign.
+   * Still `pending` (or `rpc_error`) at the cap ⇒ returned as is, and the
+   * caller throws — never a re-sign on a maybe.
+   */
+  private async awaitDecisiveOutcome(signed: SignedTransactionRef): Promise<SignatureOutcome> {
+    const deadline = this.now() + this.expiryMaxWaitMs;
+    for (;;) {
+      const outcome = await this.getSignatureOutcome(signed);
+      if (outcome.status === "landed" || outcome.status === "failed") return outcome;
+      if (outcome.status === "expired") return outcome;
+      if (this.now() + this.expiryPollMs > deadline) return outcome;
+      await this.sleep(this.expiryPollMs);
     }
   }
 

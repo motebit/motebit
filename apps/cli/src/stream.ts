@@ -1,7 +1,7 @@
 // --- Streaming consumer and approval flow ---
 
 import type { MotebitRuntime, StreamChunk } from "@motebit/runtime";
-import { paymentNoticeCopy } from "@motebit/runtime";
+import { ignoreChunk, paymentNoticeCopy } from "@motebit/runtime";
 import { action, meta, warn, dim, prompt as promptColor } from "./colors.js";
 import { writeOutput, writeLine, writeGap, askQuestion } from "./terminal.js";
 import { startStatus, type StatusHandle } from "./statusline.js";
@@ -229,6 +229,10 @@ export async function consumeStream(
           }
           break;
         }
+        default:
+          // #885: every other chunk is ignorable; a payment_notice is not (compile error).
+          ignoreChunk(chunk);
+          break;
       }
     }
   } finally {

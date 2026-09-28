@@ -131,10 +131,53 @@ describe("Web3JsRpcAdapter", () => {
 // web3.js plumbing.
 
 function makeAdapterForTx(): Web3JsRpcAdapter {
+  // A virtual clock for the post-expiry poll: `sleep` advances `now`, so a
+  // 30s cap costs no real time.
+  let t = 0;
   return new Web3JsRpcAdapter({
     rpcUrl: "https://api.devnet.solana.com",
     identitySeed: ZERO_SEED,
+    expiryConfirm: {
+      now: () => t,
+      sleep: (ms) => {
+        t += ms;
+        return Promise.resolve();
+      },
+    },
   });
+}
+
+/**
+ * The chain as web3.js actually meets it (#885 round 4): the expiry is
+ * raised at lastValid+1, and each later read sees the chain further along
+ * (`step` blocks, one slot per block). `landedSigs` are confirmed.
+ */
+function advancingChain(
+  conn: ReturnType<Web3JsRpcAdapter["getConnection"]>,
+  c: { lastValid: number; step: number; landed?: ReadonlySet<string> },
+): { reads: () => number } {
+  let reads = 0;
+  let height = c.lastValid + 1;
+  let slot = 10_000;
+  vi.spyOn(conn, "getEpochInfo").mockImplementation(async () => {
+    reads++;
+    const r = { blockHeight: height, absoluteSlot: slot };
+    height += c.step;
+    slot += c.step;
+    return r as never;
+  });
+  vi.spyOn(conn, "getSignatureStatuses").mockImplementation(
+    async (sigs) =>
+      ({
+        context: { slot },
+        value: [
+          c.landed?.has(sigs[0]!) === true
+            ? { confirmationStatus: "confirmed", err: null, slot: 42, confirmations: 1 }
+            : null,
+        ],
+      }) as never,
+  );
+  return { reads: () => reads };
 }
 
 /**
@@ -832,6 +875,86 @@ describe("Web3JsRpcAdapter.sendUsdc", () => {
     const r = await adapter.sendUsdc({ toAddress: validBase58Address(), microAmount: 1n });
     expect(r.confirmed).toBe(false);
     expect(sendSpy).toHaveBeenCalledTimes(1);
+  });
+
+  // ── Realistic heights (#885 round 4): web3.js raises the expiry at
+  //    lastValid+1 — inside the absence margin — so the adapter must keep
+  //    asking until the chain is decisive.
+
+  it("REALISTIC: expiry at lastValid+1, first tx dead, chain advancing ⇒ re-signs once past the margin; 2 sends", async () => {
+    const adapter = makeAdapterForTx();
+    const conn = adapter.getConnection();
+    getAccountMock
+      .mockResolvedValueOnce({ amount: 10_000_000n })
+      .mockResolvedValueOnce({ amount: 0n });
+    vi.spyOn(conn, "getLatestBlockhash").mockResolvedValue({
+      blockhash: validBlockhash(),
+      lastValidBlockHeight: 100,
+    });
+    const chain = advancingChain(conn, { lastValid: 100, step: 3 });
+    const sendSpy = vi
+      .spyOn(conn, "sendRawTransaction")
+      .mockResolvedValueOnce("sigA")
+      .mockResolvedValue("sigB");
+    vi.spyOn(conn, "confirmTransaction")
+      .mockRejectedValueOnce(new Error("Signature sigA has expired: block height exceeded."))
+      .mockResolvedValue({ context: { slot: 99 }, value: { err: null } });
+
+    const r = await adapter.sendUsdc({ toAddress: validBase58Address(), microAmount: 1n });
+    expect(r).toEqual({ signature: "sigB", slot: 99, confirmed: true });
+    expect(sendSpy).toHaveBeenCalledTimes(2);
+    expect(chain.reads()).toBeGreaterThan(1); // it waited out the margin
+  });
+
+  it("REALISTIC: expiry at lastValid+1 and the first tx LANDED ⇒ returns it; 1 send", async () => {
+    const adapter = makeAdapterForTx();
+    const conn = adapter.getConnection();
+    getAccountMock
+      .mockResolvedValueOnce({ amount: 10_000_000n })
+      .mockResolvedValueOnce({ amount: 0n });
+    vi.spyOn(conn, "getLatestBlockhash").mockResolvedValue({
+      blockhash: validBlockhash(),
+      lastValidBlockHeight: 100,
+    });
+    const sendSpy = vi.spyOn(conn, "sendRawTransaction");
+    let first = "";
+    sendSpy.mockImplementation(async (raw) => {
+      first = base58Encode(new Uint8Array(Transaction.from(raw as Buffer).signature!));
+      return first;
+    });
+    const landed = new Set<string>();
+    vi.spyOn(conn, "confirmTransaction").mockImplementation(async () => {
+      landed.add(first);
+      throw new Error("Signature x has expired: block height exceeded.");
+    });
+    advancingChain(conn, { lastValid: 100, step: 1, landed });
+
+    const r = await adapter.sendUsdc({ toAddress: validBase58Address(), microAmount: 1n });
+    expect(r.confirmed).toBe(true);
+    expect(r.signature).toBe(first);
+    expect(sendSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("REALISTIC: still inside the margin when the poll cap ends ⇒ throws; 1 send, never a re-sign on a maybe", async () => {
+    const adapter = makeAdapterForTx();
+    const conn = adapter.getConnection();
+    getAccountMock
+      .mockResolvedValueOnce({ amount: 10_000_000n })
+      .mockResolvedValueOnce({ amount: 0n });
+    vi.spyOn(conn, "getLatestBlockhash").mockResolvedValue({
+      blockhash: validBlockhash(),
+      lastValidBlockHeight: 100,
+    });
+    const chain = advancingChain(conn, { lastValid: 100, step: 0 }); // a stalled chain
+    const sendSpy = vi.spyOn(conn, "sendRawTransaction").mockResolvedValue("sigA");
+    vi.spyOn(conn, "confirmTransaction").mockRejectedValue(
+      new Error("Signature sigA has expired: block height exceeded."),
+    );
+    await expect(
+      adapter.sendUsdc({ toAddress: validBase58Address(), microAmount: 1n }),
+    ).rejects.toThrow("block height exceeded");
+    expect(sendSpy).toHaveBeenCalledTimes(1);
+    expect(chain.reads()).toBeGreaterThan(5); // it did poll, then gave up at the cap
   });
 
   it("gives up after BROADCAST_MAX_ATTEMPTS when every attempt is confirmed dead", async () => {

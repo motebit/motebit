@@ -337,6 +337,14 @@ export type GrantedDelegationResult =
        * failure code, indistinguishable from never-hired (#436 finding 1).
        */
       settledPayment?: DelegationError["settledPayment"];
+      /** #885: money may have moved and could not be confirmed (see `DelegationError`). */
+      unconfirmedPayment?: DelegationError["unconfirmedPayment"];
+      /** #885: other transactions this hire sent that may have moved money. */
+      extraPayments?: DelegationError["extraPayments"];
+      /** #885: a payment owed could not be written durably — held in memory only. */
+      ledgerWriteFailed?: true;
+      /** #885: the owner-facing statement of the fields above. */
+      notice?: string;
     };
 
 export interface SubmitAndPollParams {
@@ -2074,7 +2082,7 @@ export async function resolveAndSubmitP2pDelegation(
             `history before paying this worker again` +
             (ledgerId != null ? ` (then /result dismiss ${ledgerId}).` : ".") +
             (durable ? "" : NOT_DURABLE_NOTE),
-          ...(durable ? {} : { ledgerWriteFailed: true as const }),
+          ...(durable ? {} : { ledgerWriteFailed: true as const, notice: NOT_DURABLE_NOTE.trim() }),
           unconfirmedPayment: {
             paidMicro,
             feeMicro,
@@ -2244,6 +2252,19 @@ export function paymentNoticeChunk(result: DelegationResult): {
     ...(src.ledgerWriteFailed === true ? { ledger_write_failed: true as const } : {}),
   };
 }
+
+/**
+ * The `default:` of a `switch (chunk.type)` over stream chunks (#885):
+ * accepts every chunk EXCEPT `payment_notice`, so a consumer that forgets
+ * to render the money warning fails to compile instead of dropping it.
+ */
+export function ignoreChunk(
+  _chunk: Exclude<StreamChunkForNotice, { type: "payment_notice" }>,
+): void {
+  // Deliberately nothing — the point is the parameter type.
+}
+
+type StreamChunkForNotice = import("./runtime-config.js").StreamChunk;
 
 /**
  * The owner-facing line for a `payment_notice` chunk (#885) — one short

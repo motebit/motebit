@@ -6007,6 +6007,17 @@ export class MotebitRuntime {
           ...(result.error.settledPayment != null
             ? { settledPayment: result.error.settledPayment }
             : {}),
+          // #885: every money fact the failure carries reaches the
+          // human-absent caller — an unconfirmed payment, another payment
+          // the wallet sent, a record that could not be written.
+          ...(result.error.unconfirmedPayment != null
+            ? { unconfirmedPayment: result.error.unconfirmedPayment }
+            : {}),
+          ...(result.error.extraPayments != null
+            ? { extraPayments: result.error.extraPayments }
+            : {}),
+          ...(result.error.ledgerWriteFailed === true ? { ledgerWriteFailed: true as const } : {}),
+          ...(result.error.notice != null ? { notice: result.error.notice } : {}),
         };
       }
       // Accumulate first-person trust in the worker we just hired — the write

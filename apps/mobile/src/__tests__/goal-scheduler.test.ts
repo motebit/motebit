@@ -142,6 +142,34 @@ describe("MobileGoalScheduler start/stop", () => {
 });
 
 describe("MobileGoalScheduler.goalTick (via start)", () => {
+  it("#885: a payment_notice from the run leads the outcome summary and the completion event", async () => {
+    const deps = makeDeps();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (deps._runtime as any).sendMessageStreaming = vi.fn(async function* () {
+      yield {
+        type: "payment_notice",
+        notice: "This hire's wallet ALSO sent another payment (tx sigAAAAAAAAAAAA, landed)",
+        extra_payments: [{ tx_hash: "sigAAAAAAAAAAAA", status: "landed" }],
+      };
+      yield { type: "text", text: "the goal's answer" };
+    });
+    deps._goalStore.setActive([
+      { goal_id: "g1", prompt: "hire", mode: "recurring", interval_ms: 1000, last_run_at: null },
+    ]);
+    const sched = new MobileGoalScheduler(deps);
+    const completeEvents: Array<{ summary: string | null }> = [];
+    sched.onGoalComplete((e) => completeEvents.push(e as { summary: string | null }));
+    sched.start();
+    await vi.advanceTimersByTimeAsync(6000);
+    sched.stop();
+    await vi.runAllTimersAsync().catch(() => {});
+    const row = deps._goalStore.outcomes[0] as { summary: string; response_full?: string };
+    expect(row.summary).toMatch(/^Your wallet also sent another payment/);
+    // The signed artifact is the model's text alone.
+    expect(row.response_full ?? "").not.toMatch(/wallet also sent/);
+    expect(completeEvents[0]?.summary).toMatch(/^Your wallet also sent another payment/);
+  });
+
   it("runs a single-turn goal and records success", async () => {
     const deps = makeDeps();
     deps._goalStore.setActive([

@@ -42,7 +42,7 @@
 
 import { useCallback } from "react";
 import type { StreamChunk } from "@motebit/runtime";
-import { paymentNoticeCopy } from "@motebit/runtime";
+import { ignoreChunk, paymentNoticeCopy } from "@motebit/runtime";
 import { stripTags, stripPartialActionTag } from "@motebit/ai-core";
 import type { ExecutionReceipt } from "@motebit/sdk";
 import type { MobileApp } from "./mobile-app";
@@ -264,6 +264,11 @@ export function useChatStream(deps: UseChatStreamDeps): UseChatStreamResult {
                     : m,
                 ),
               );
+              break;
+
+            default:
+              // #885: every other chunk is ignorable; a payment_notice is not (compile error).
+              ignoreChunk(chunk);
               break;
           }
         }

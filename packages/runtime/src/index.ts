@@ -326,6 +326,7 @@ export {
   retrieveDelegationResult,
   p2pPaymentConfirmerOf,
   paymentNoticeCopy,
+  ignoreChunk,
 } from "./relay-delegation.js";
 export type {
   ConfirmP2pPayment,

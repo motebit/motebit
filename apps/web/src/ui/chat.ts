@@ -3,7 +3,7 @@ import { hasCeilingBeenShown, markCeilingShown } from "../storage";
 import { StreamingTTSQueue, WebSpeechTTSProvider } from "@motebit/voice";
 import type { TTSProvider } from "@motebit/voice";
 import { stripInternalTags } from "@motebit/ai-core";
-import { paymentNoticeCopy } from "@motebit/runtime";
+import { ignoreChunk, paymentNoticeCopy } from "@motebit/runtime";
 import type { ExecutionReceipt, AccrualBasis } from "@motebit/sdk";
 import { buildReceiptArtifact } from "@motebit/render-engine";
 import { resolveAccrualAttribution } from "@motebit/panels";
@@ -1090,6 +1090,10 @@ export function initChat(ctx: WebContext, callbacks: ChatCallbacks): ChatAPI {
             }
             break;
           }
+          default:
+            // #885: every other chunk is ignorable; a payment_notice is not (compile error).
+            ignoreChunk(chunk);
+            break;
         }
       }
       // Force the final coalesced paint so the last tokens (which may have
@@ -1335,6 +1339,10 @@ export function initChat(ctx: WebContext, callbacks: ChatCallbacks): ChatAPI {
             addMessage("system", failureCopy(chunk.code, chunk.retryAfterSeconds));
             return;
           }
+          default:
+            // #885: every other chunk is ignorable; a payment_notice is not (compile error).
+            ignoreChunk(chunk);
+            break;
         }
       }
     } catch (err: unknown) {
