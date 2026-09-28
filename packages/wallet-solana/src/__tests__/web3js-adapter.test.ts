@@ -390,6 +390,129 @@ describe("Web3JsRpcAdapter.getTransaction", () => {
   });
 });
 
+// ── #887: findOutgoingTransfer — the read-only "did my send land?" lookup ──
+
+describe("Web3JsRpcAdapter.findOutgoingTransfer", () => {
+  const SINCE_MS = 1_700_000_000_000;
+  const T = Math.floor(SINCE_MS / 1000) + 5; // a block time just after the send began
+  const worker = "9xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgBBB";
+
+  type Sig = { signature: string; blockTime: number | null; err: unknown };
+  type Tx =
+    | { status: "confirmed"; from: string; to: string; amount: bigint }
+    | { status: "not_found" }
+    | { status: "rpc_error" };
+
+  function setup(sigs: Sig[], txs: Record<string, Tx>) {
+    const adapter = makeAdapterForTx();
+    const own = adapter.ownAddress;
+    const conn = adapter.getConnection();
+    const getSigs = vi.spyOn(conn, "getSignaturesForAddress").mockResolvedValue(sigs as never);
+    vi.spyOn(adapter, "getTransaction").mockImplementation((sig: string) => {
+      const t = txs[sig] ?? { status: "not_found" };
+      if (t.status === "confirmed") {
+        return Promise.resolve({
+          status: "confirmed",
+          from: t.from === "OWN" ? own : t.from,
+          transfers: [{ to: t.to, amountMicro: t.amount }],
+          slot: 1,
+          asset: "USDC",
+        });
+      }
+      if (t.status === "rpc_error") return Promise.resolve({ status: "rpc_error", reason: "boom" });
+      return Promise.resolve({ status: "not_found" });
+    });
+    return { adapter, getSigs };
+  }
+
+  const q = { toAddress: worker, microAmount: 250_000n, sinceMs: SINCE_MS };
+
+  it("exactly one landed transfer from this wallet with the exact amount ⇒ found", async () => {
+    const { adapter } = setup([{ signature: "s1", blockTime: T, err: null }], {
+      s1: { status: "confirmed", from: "OWN", to: worker, amount: 250_000n },
+    });
+    await expect(adapter.findOutgoingTransfer(q)).resolves.toEqual({
+      status: "found",
+      signature: "s1",
+    });
+  });
+
+  it("another payer, another amount, another recipient, an errored tx, or an older tx ⇒ not_found", async () => {
+    const { adapter } = setup(
+      [
+        { signature: "other-payer", blockTime: T, err: null },
+        { signature: "wrong-amount", blockTime: T, err: null },
+        { signature: "wrong-to", blockTime: T, err: null },
+        { signature: "errored", blockTime: T, err: { InstructionError: [0, "x"] } },
+        { signature: "too-old", blockTime: T - 3_600, err: null },
+      ],
+      {
+        "other-payer": { status: "confirmed", from: "Someone", to: worker, amount: 250_000n },
+        "wrong-amount": { status: "confirmed", from: "OWN", to: worker, amount: 250_001n },
+        "wrong-to": { status: "confirmed", from: "OWN", to: "Elsewhere", amount: 250_000n },
+        errored: { status: "confirmed", from: "OWN", to: worker, amount: 250_000n },
+        "too-old": { status: "confirmed", from: "OWN", to: worker, amount: 250_000n },
+      },
+    );
+    await expect(adapter.findOutgoingTransfer(q)).resolves.toEqual({ status: "not_found" });
+  });
+
+  it("a signature the caller already accounts for is skipped", async () => {
+    const { adapter } = setup([{ signature: "mine-before", blockTime: T, err: null }], {
+      "mine-before": { status: "confirmed", from: "OWN", to: worker, amount: 250_000n },
+    });
+    await expect(
+      adapter.findOutgoingTransfer({ ...q, excludeSignatures: ["mine-before"] }),
+    ).resolves.toEqual({ status: "not_found" });
+  });
+
+  it("two matches ⇒ ambiguous (never guess which one is ours)", async () => {
+    const { adapter } = setup(
+      [
+        { signature: "a", blockTime: T, err: null },
+        { signature: "b", blockTime: T + 1, err: null },
+      ],
+      {
+        a: { status: "confirmed", from: "OWN", to: worker, amount: 250_000n },
+        b: { status: "confirmed", from: "OWN", to: worker, amount: 250_000n },
+      },
+    );
+    await expect(adapter.findOutgoingTransfer(q)).resolves.toEqual({
+      status: "ambiguous",
+      signatures: ["a", "b"],
+    });
+  });
+
+  it("an RPC error on any candidate ⇒ rpc_error, never absence", async () => {
+    const { adapter } = setup([{ signature: "s1", blockTime: T, err: null }], {
+      s1: { status: "rpc_error" },
+    });
+    await expect(adapter.findOutgoingTransfer(q)).resolves.toMatchObject({ status: "rpc_error" });
+  });
+
+  it("the signature listing throwing ⇒ rpc_error", async () => {
+    const { adapter, getSigs } = setup([], {});
+    getSigs.mockRejectedValue(new Error("429 Too Many Requests"));
+    await expect(adapter.findOutgoingTransfer(q)).resolves.toEqual({
+      status: "rpc_error",
+      reason: "429 Too Many Requests",
+    });
+  });
+
+  it("a full page that does not reach back to the send ⇒ rpc_error (window not covered)", async () => {
+    const page = Array.from({ length: 50 }, (_, i) => ({
+      signature: `n${i}`,
+      blockTime: T + 100 - i,
+      err: null,
+    }));
+    const { adapter } = setup(page, {});
+    await expect(adapter.findOutgoingTransfer(q)).resolves.toMatchObject({
+      status: "rpc_error",
+      reason: expect.stringMatching(/window not covered/),
+    });
+  });
+});
+
 // ── Balances ──────────────────────────────────────────────────────────────
 //
 // `getSolBalance` is a one-line BigInt wrap; `getUsdcBalance` exercises

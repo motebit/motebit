@@ -32,6 +32,7 @@ import {
   InvalidSolanaAddressError,
   Web3JsRpcAdapter,
   createSolanaWalletRail,
+  SOLANA_TX_LANDING_HORIZON_MS,
 } from "../index.js";
 
 beforeEach(() => {
@@ -433,5 +434,96 @@ describe("SolanaWalletRail.swapSolToUsdc — the owner-invoked funding-side swap
     } as never;
     const rail = new SolanaWalletRail(adapter, { autoGas: false });
     await expect(rail.swapSolToUsdc(1_000_000n)).rejects.toThrow(/without a web3 adapter/);
+  });
+});
+
+// ── #887: confirmSend — a thrown send is not proof that nothing moved ──
+
+describe("SolanaWalletRail.confirmSend", () => {
+  const base = {
+    toAddress: "Worker111",
+    microAmount: 250_000n,
+    sentAtMs: 1_000,
+    failedAtMs: 2_000,
+    error: new Error("confirmation timed out"),
+  };
+
+  it("a landed matching transfer ⇒ landed with its signature; own payments excluded", async () => {
+    const find = vi.fn().mockResolvedValue({ status: "found", signature: "sigX" });
+    const rail = new SolanaWalletRail(makeAdapter({ findOutgoingTransfer: find }), {
+      now: () => 2_500,
+    });
+    await expect(rail.confirmSend({ ...base, excludeSignatures: ["old"] })).resolves.toEqual({
+      status: "landed",
+      signature: "sigX",
+    });
+    expect(find).toHaveBeenCalledWith({
+      toAddress: "Worker111",
+      microAmount: 250_000n,
+      sinceMs: 1_000,
+      excludeSignatures: ["old"],
+    });
+  });
+
+  it("no match while a broadcast could still land ⇒ pending until the landing horizon", async () => {
+    const rail = new SolanaWalletRail(
+      makeAdapter({ findOutgoingTransfer: vi.fn().mockResolvedValue({ status: "not_found" }) }),
+      { now: () => 2_000 + SOLANA_TX_LANDING_HORIZON_MS - 1 },
+    );
+    await expect(rail.confirmSend(base)).resolves.toEqual({
+      status: "pending",
+      recheckAtMs: 2_000 + SOLANA_TX_LANDING_HORIZON_MS,
+    });
+  });
+
+  it("no match after the landing horizon ⇒ absent (authoritative)", async () => {
+    const rail = new SolanaWalletRail(
+      makeAdapter({ findOutgoingTransfer: vi.fn().mockResolvedValue({ status: "not_found" }) }),
+      { now: () => 2_000 + SOLANA_TX_LANDING_HORIZON_MS },
+    );
+    await expect(rail.confirmSend(base)).resolves.toEqual({ status: "absent" });
+  });
+
+  it.each([
+    [{ status: "ambiguous", signatures: ["a", "b"] }, /2 matching transfers/],
+    [{ status: "rpc_error", reason: "ECONNRESET" }, /ECONNRESET/],
+  ])("an undecidable lookup (%o) ⇒ unknown, never absent", async (lookup, reason) => {
+    const rail = new SolanaWalletRail(
+      makeAdapter({ findOutgoingTransfer: vi.fn().mockResolvedValue(lookup) }),
+      { now: () => Number.MAX_SAFE_INTEGER },
+    );
+    const v = await rail.confirmSend(base);
+    expect(v.status).toBe("unknown");
+    expect(v.status === "unknown" ? v.reason : "").toMatch(reason);
+  });
+
+  it("an adapter without the lookup ⇒ unknown (fail-closed)", async () => {
+    const rail = new SolanaWalletRail(makeAdapter(), { now: () => Number.MAX_SAFE_INTEGER });
+    await expect(rail.confirmSend(base)).resolves.toMatchObject({ status: "unknown" });
+  });
+
+  it.each([
+    ["InsufficientUsdcBalanceError", new InsufficientUsdcBalanceError(0n, 250_000n)],
+    ["InvalidSolanaAddressError", new InvalidSolanaAddressError("bad")],
+  ])("%s is thrown only before signing ⇒ absent without a lookup", async (_n, error) => {
+    const find = vi.fn();
+    const rail = new SolanaWalletRail(makeAdapter({ findOutgoingTransfer: find }), {
+      now: () => 0,
+    });
+    await expect(rail.confirmSend({ ...base, error })).resolves.toEqual({ status: "absent" });
+    expect(find).not.toHaveBeenCalled();
+  });
+
+  it("an error that merely MENTIONS insufficient funds is not treated as pre-broadcast", async () => {
+    const rail = new SolanaWalletRail(
+      makeAdapter({ findOutgoingTransfer: vi.fn().mockResolvedValue({ status: "not_found" }) }),
+      { now: () => 2_000 },
+    );
+    await expect(
+      rail.confirmSend({
+        ...base,
+        error: new Error("Insufficient USDC balance (after broadcast)"),
+      }),
+    ).resolves.toMatchObject({ status: "pending" });
   });
 });

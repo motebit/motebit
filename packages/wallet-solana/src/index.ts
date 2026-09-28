@@ -22,6 +22,9 @@ export {
   SolanaWalletRail,
   type SolanaWalletRailConfig,
   type SendResult,
+  type ConfirmSendQuery,
+  type SendConfirmation,
+  SOLANA_TX_LANDING_HORIZON_MS,
   createSolanaWalletRail,
 } from "./rail.js";
 
@@ -31,6 +34,8 @@ export {
   type SendUsdcBatchItemResult,
   type TxVerificationResult,
   type ConfirmedTransferLeg,
+  type OutgoingTransferQuery,
+  type OutgoingTransferLookup,
 } from "./adapter.js";
 
 export {

@@ -24,8 +24,38 @@ import type { SolanaRpcAdapter } from "./adapter.js";
 import type { SendUsdcResult, SendUsdcBatchItemResult } from "./adapter.js";
 import { Web3JsRpcAdapter } from "./web3js-adapter.js";
 import { buildP2pPaymentProof } from "./p2p-payment-proof.js";
+import { InsufficientUsdcBalanceError, InvalidSolanaAddressError } from "./constants.js";
 
 export type SendResult = SendUsdcResult;
+
+/**
+ * How long after a failed `send` a transaction it broadcast could still
+ * land. A Solana transaction is valid for ~151 blocks after its blockhash
+ * (~60-90s); 150s is that window with a wide margin for slow slots. After
+ * it, a transfer not visible onchain will never be (#887).
+ */
+export const SOLANA_TX_LANDING_HORIZON_MS = 150_000;
+
+/** Input to {@link SolanaWalletRail.confirmSend}. */
+export interface ConfirmSendQuery {
+  toAddress: string;
+  microAmount: bigint;
+  /** Epoch ms when `send` was called — the lookup window starts here. */
+  sentAtMs: number;
+  /** Epoch ms when `send` threw — the landing horizon runs from here. */
+  failedAtMs: number;
+  /** What `send` threw. */
+  error: unknown;
+  /** Signatures the caller already accounts for (its own earlier payments). */
+  excludeSignatures?: readonly string[];
+}
+
+/** Closed verdict of {@link SolanaWalletRail.confirmSend}. */
+export type SendConfirmation =
+  | { status: "landed"; signature: string }
+  | { status: "absent" }
+  | { status: "pending"; recheckAtMs: number }
+  | { status: "unknown"; reason: string };
 
 /**
  * Minimum SOL balance in lamports to consider gas sufficient.
@@ -70,12 +100,14 @@ export class SolanaWalletRail implements SovereignWalletRail {
 
   private readonly autoGas: boolean;
   private readonly web3Adapter: Web3JsRpcAdapter | null;
+  private readonly now: () => number;
 
   constructor(
     private readonly adapter: SolanaRpcAdapter,
-    opts?: { autoGas?: boolean },
+    opts?: { autoGas?: boolean; now?: () => number },
   ) {
     this.autoGas = opts?.autoGas ?? false;
+    this.now = opts?.now ?? Date.now;
     this.web3Adapter = adapter instanceof Web3JsRpcAdapter ? adapter : null;
   }
 
@@ -208,6 +240,60 @@ export class SolanaWalletRail implements SovereignWalletRail {
         : {}),
       ...(request.network != null ? { network: request.network } : {}),
     });
+  }
+
+  /**
+   * After `send` threw: did the payment land anyway? (#887)
+   *
+   * A thrown `send` is not proof that no money moved — the transaction may
+   * have landed and only the confirmation was lost. A payer that reads the
+   * throw as "not paid" and pays someone else pays twice. This read (it
+   * never signs or broadcasts) is what a payer consults before any
+   * retry:
+   *
+   *   - `landed` — exactly one matching transfer from this wallet landed
+   *     since the send began; the payment happened, with that signature.
+   *   - `absent` — authoritatively not paid: the error is one `sendUsdc`
+   *     throws only before signing, or no match is visible after
+   *     `SOLANA_TX_LANDING_HORIZON_MS` (every blockhash the send could
+   *     have used has expired, so nothing it broadcast can still land).
+   *   - `pending` — no match yet, but a broadcast could still land; look
+   *     again at `recheckAtMs`.
+   *   - `unknown` — the lookup could not decide (RPC error, ambiguous
+   *     matches, an adapter without the lookup). A payer MUST NOT pay again.
+   */
+  async confirmSend(query: ConfirmSendQuery): Promise<SendConfirmation> {
+    if (
+      query.error instanceof InsufficientUsdcBalanceError ||
+      query.error instanceof InvalidSolanaAddressError
+    ) {
+      return { status: "absent" };
+    }
+    if (typeof this.adapter.findOutgoingTransfer !== "function") {
+      return { status: "unknown", reason: "this wallet adapter cannot look up past transfers" };
+    }
+    const lookup = await this.adapter.findOutgoingTransfer({
+      toAddress: query.toAddress,
+      microAmount: query.microAmount,
+      sinceMs: query.sentAtMs,
+      ...(query.excludeSignatures != null ? { excludeSignatures: query.excludeSignatures } : {}),
+    });
+    switch (lookup.status) {
+      case "found":
+        return { status: "landed", signature: lookup.signature };
+      case "ambiguous":
+        return {
+          status: "unknown",
+          reason: `${lookup.signatures.length} matching transfers since the send (${lookup.signatures.join(", ")})`,
+        };
+      case "rpc_error":
+        return { status: "unknown", reason: lookup.reason };
+      case "not_found": {
+        const settledAt = query.failedAtMs + SOLANA_TX_LANDING_HORIZON_MS;
+        if (this.now() >= settledAt) return { status: "absent" };
+        return { status: "pending", recheckAtMs: settledAt };
+      }
+    }
   }
 
   /** Whether the RPC endpoint is reachable right now. */
