@@ -529,9 +529,9 @@ const WRITERS: readonly Writer[] = [
     file: R + "tasks.ts",
     verb: "INSERT",
     table: "relay_allocations",
-    count: 2,
+    count: 1,
     principal:
-      "task submission — the budget is locked from `submittedBy = callerMotebitId` (dualAuth task:submit) or the operator's body value",
+      "task submission — the budget is locked from `submittedBy = callerMotebitId` (dualAuth task:submit) or the operator's body value; written only after the hold's debit succeeded (#901 removed the unfunded best-effort insert)",
   },
   {
     file: R + "tasks.ts",

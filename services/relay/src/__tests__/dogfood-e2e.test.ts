@@ -1101,7 +1101,7 @@ describe("x402 Payment Gate", () => {
         pricing: [{ capability: "web_search", unit_cost: 0.5, currency: "USD", per: "task" }],
         sla: { max_latency_ms: 2000, availability_guarantee: 0.99 },
         description: "Free agent — no pay_to_address",
-        // No pay_to_address → getAgentPricing returns null → bypass x402
+        // No pay_to_address → not x402-chargeable (priceSubmission payTo null) → bypass x402
       }),
     });
     expect(listingRes.status).toBe(200);

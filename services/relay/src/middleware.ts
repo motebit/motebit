@@ -26,7 +26,13 @@ import { createLogger } from "./logger.js";
 import type { AuthEvent } from "./auth-events.js";
 import { requestContext, enrichRequestContext } from "./request-context.js";
 import type { RequestContext } from "./request-context.js";
-import { RelayError, RateLimitError, AuthenticationError, AuthorizationError } from "./errors.js";
+import {
+  RelayError,
+  RateLimitError,
+  AuthenticationError,
+  AuthorizationError,
+  InsufficientFundsError,
+} from "./errors.js";
 import { recordMasterTokenOnce, recordRefusalBeforeVerify } from "./auth-events.js";
 import { pathIdentity } from "./id-bounds.js";
 import { SYNC_PRESENTER_KEY } from "./identity-binding.js";
@@ -965,6 +971,19 @@ export function registerMiddleware(deps: MiddlewareDeps): MiddlewareResult {
       const status = err.statusCode as 400;
       if (err instanceof RateLimitError) {
         c.header("Retry-After", String(err.retryAfter));
+      }
+      // A funding refusal after this request's own payment was credited names
+      // that payment, so the client does not pay again (#901). Additive field.
+      if (err instanceof InsufficientFundsError && err.creditedPayment != null) {
+        return c.json(
+          {
+            error: err.message,
+            code: err.code,
+            status: err.statusCode,
+            payment_credited: err.creditedPayment,
+          },
+          status,
+        );
       }
       return c.json({ error: err.message, code: err.code, status: err.statusCode }, status);
     }

@@ -55,10 +55,30 @@ export class AuthorizationError extends RelayError {
 
 // ── Economic boundary ───────────────────────────────────────────────────────
 
+/**
+ * A payment this request already made, credited to the payer's virtual account
+ * before the request was refused (#901): the refusal body names it so the
+ * client does not pay again.
+ */
+export interface CreditedPayment {
+  /** Amount credited, integer micro-units. */
+  amount_micro: number;
+  /** Ledger reference of the credit (`relay_transactions.reference_id`). */
+  reference: string;
+  /** The account it sits in. */
+  motebit_id: string;
+}
+
 export class InsufficientFundsError extends RelayError {
-  constructor(message: string = "Insufficient funds", options?: ErrorOptions) {
+  /** Set when this request's own payment was credited before the refusal. */
+  readonly creditedPayment?: CreditedPayment;
+  constructor(
+    message: string = "Insufficient funds",
+    options?: ErrorOptions & { creditedPayment?: CreditedPayment },
+  ) {
     super("INSUFFICIENT_FUNDS", message, 402, options);
     this.name = "InsufficientFundsError";
+    if (options?.creditedPayment != null) this.creditedPayment = options.creditedPayment;
   }
 }
 
