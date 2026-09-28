@@ -28,7 +28,10 @@
  * they do not (`receiptDischargesP2p`): a receipt from any other identity is
  * not the work the payment bought.
  */
+import type { DatabaseDriver } from "@motebit/persistence";
+import { isDerivedSettlementBinding } from "@motebit/wallet-solana";
 import type { TaskQueueEntry } from "./tasks.js";
+import { verificationKeyFor } from "./identity-keys.js";
 
 /** The worker a P2P task's onchain payment paid: the admitted, pinned worker. */
 export function p2pPayeeOf(entry: Pick<TaskQueueEntry, "target_agent" | "task">): string {
@@ -46,24 +49,65 @@ export function receiptDischargesP2p(
 }
 
 /**
- * Which relay verifies the worker leg of this P2P settlement, frozen on the
- * row at write time (`relay_settlements.p2p_worker_leg`):
+ * What P2P admission decided about the worker leg, stamped on the queue entry
+ * by the admission branch that accepted the proof and frozen onto the
+ * settlement row by the writer (#959 round 2).
  *
- *   - `"local"` — the worker is hosted here: a single-operator P2P task, or
- *     the EXECUTOR relay of a federated one (`origin_relay` set). This relay
- *     checks the worker leg against the worker's bound addresses.
- *   - `"remote"` — this relay ORIGINATED a cross-operator federated task (a
- *     3-leg proof, `b_fee_*` present, no `origin_relay`). The worker is hosted
- *     by the executor relay, which verifies the worker leg; this relay
- *     verifies only its own fee leg.
+ *   - `worker_leg` — which relay verifies the worker leg. `"local"`: the
+ *     worker is hosted here (single-operator admission, or the executor relay
+ *     of a federated task). `"remote"`: this relay ORIGINATED a cross-operator
+ *     task (the `federatedP2pIntent` branch); the executor relay verifies the
+ *     worker leg and this relay only its own fee leg.
+ *   - `worker_address` / `worker_address_rung` — the address the proof's
+ *     worker leg was validated against AT ADMISSION, and the settlement-
+ *     authority rung it reached then (`"derived"`: the worker's identity key
+ *     derives it; `"registered"`: the worker's own write-authorized registry
+ *     address). The verifier checks against this, so a worker that changes
+ *     its address mid-flight does not turn a correctly paid payer into a
+ *     failure.
  *
- * Declared, never inferred from the worker's absence in `agent_registry`:
- * inferring "not applicable" from a missing row is how the worker leg passed
- * unverified when the recorded payee was an unregistered delegator.
+ * Decided by the ADMISSION BRANCH, never inferred from the proof's shape: the
+ * proof is payer-supplied, and inferring `"remote"` from a `b_fee_*` field let
+ * a payer switch the worker-leg check off on a local task (cold review).
+ */
+export interface P2pAdmission {
+  worker_leg: "local" | "remote";
+  worker_address?: string;
+  worker_address_rung?: "derived" | "registered";
+}
+
+/**
+ * Which relay verifies the worker leg of this entry's settlement. An entry
+ * admitted before #959 round 2 carries no admission record and reads as
+ * `"local"` — the fail-closed side: the worker leg is checked, and a worker
+ * this relay does not host reads `unverifiable`, never verified.
  */
 export function p2pWorkerLegScope(
-  entry: Pick<TaskQueueEntry, "origin_relay" | "p2p_payment_proof">,
+  entry: Pick<TaskQueueEntry, "p2p_admission">,
 ): "local" | "remote" {
-  if (entry.origin_relay != null) return "local";
-  return entry.p2p_payment_proof?.b_fee_to_address != null ? "remote" : "local";
+  return entry.p2p_admission?.worker_leg ?? "local";
+}
+
+/**
+ * The admission record for a LOCAL worker whose proof's worker leg was just
+ * validated against `address` (the worker's own registry address). The rung
+ * is `"derived"` when the worker's identity key derives that address, else
+ * `"registered"`.
+ */
+export function localWorkerAdmission(
+  db: DatabaseDriver,
+  workerId: string,
+  address: string,
+): P2pAdmission {
+  const reg = db
+    .prepare("SELECT public_key FROM agent_registry WHERE motebit_id = ?")
+    .get(workerId) as { public_key: string | null } | undefined;
+  // Holder, else main's registry read (§5f verification reader).
+  const key = verificationKeyFor(db, workerId, reg?.public_key);
+  const derived = key != null && isDerivedSettlementBinding(address, key);
+  return {
+    worker_leg: "local",
+    worker_address: address,
+    worker_address_rung: derived ? "derived" : "registered",
+  };
 }

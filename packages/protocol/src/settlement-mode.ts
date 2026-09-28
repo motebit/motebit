@@ -186,8 +186,13 @@ export interface P2pPaymentProof {
 
 // === Payment Verification ===
 
-/** Verification status of an onchain payment proof. */
-export type PaymentVerificationStatus = "pending" | "verified" | "failed";
+/**
+ * Verification status of an onchain payment proof. `"unverifiable"`
+ * (additive, #959): a leg the recording relay is responsible for could not be
+ * checked (e.g. the payee has no bound address there) — never counted as
+ * `"verified"`, and names no one as failing. `spec/settlement-v1.md` §11.1.
+ */
+export type PaymentVerificationStatus = "pending" | "verified" | "failed" | "unverifiable";
 
 // === Solvency Proof ===
 

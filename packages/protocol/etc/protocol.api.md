@@ -3003,7 +3003,7 @@ export interface PaymentProof {
 }
 
 // @public
-export type PaymentVerificationStatus = "pending" | "verified" | "failed";
+export type PaymentVerificationStatus = "pending" | "verified" | "failed" | "unverifiable";
 
 // @public (undocumented)
 export interface Plan {

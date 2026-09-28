@@ -2211,6 +2211,17 @@ export const relayMigrations: Migration[] = [
       if (settlementCols.length > 0 && !settlementCols.includes("p2p_worker_leg")) {
         db.exec("ALTER TABLE relay_settlements ADD COLUMN p2p_worker_leg TEXT");
       }
+      //    `p2p_worker_address` / `p2p_worker_address_rung` — the worker-leg
+      //    address ADMISSION validated the proof against, and the settlement-
+      //    authority rung it reached then ('derived' | 'registered'). The
+      //    verifier checks against it, so a worker that changes its address
+      //    mid-flight does not fail a correctly paid payer. NULL on earlier rows.
+      if (settlementCols.length > 0 && !settlementCols.includes("p2p_worker_address")) {
+        db.exec("ALTER TABLE relay_settlements ADD COLUMN p2p_worker_address TEXT");
+      }
+      if (settlementCols.length > 0 && !settlementCols.includes("p2p_worker_address_rung")) {
+        db.exec("ALTER TABLE relay_settlements ADD COLUMN p2p_worker_address_rung TEXT");
+      }
 
       // 2. Corrections, never rewrites. A P2P row's `record_json` is the
       //    relay-signed SettlementRecord and is anchored (its SHA-256 is a

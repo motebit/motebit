@@ -100,7 +100,13 @@ import {
 } from "./idempotency.js";
 import { CALLER_VERIFIED_KEY, OPERATOR_PRESENTED } from "./auth-events.js";
 import { payerCandidates } from "./p2p-payer.js";
-import { p2pPayeeOf, p2pWorkerLegScope, receiptDischargesP2p } from "./p2p-payee.js";
+import {
+  localWorkerAdmission,
+  p2pPayeeOf,
+  p2pWorkerLegScope,
+  receiptDischargesP2p,
+  type P2pAdmission,
+} from "./p2p-payee.js";
 import { createLogger } from "./logger.js";
 import { pathIdentity } from "./id-bounds.js";
 import type { TaskQueue } from "./task-queue.js";
@@ -180,6 +186,12 @@ export type TaskQueueEntry = {
   };
   /** Target agent for p2p tasks (pinned routing). */
   target_agent?: string;
+  /**
+   * What P2P ADMISSION decided about the worker leg (#959) — stamped by the
+   * admission branch that accepted the proof, never inferred from the proof's
+   * (payer-supplied) shape. Every P2P settlement writer reads it.
+   */
+  p2p_admission?: P2pAdmission;
   /**
    * Standing-delegation grant the task was declared under (checkpoint D4).
    * Persisted for audit lineage; the acceptance-time revocation fence
@@ -1211,8 +1223,8 @@ export async function handleReceiptIngestion(
                (settlement_id, allocation_id, task_id, motebit_id, receipt_hash,
                 amount_settled, platform_fee, platform_fee_rate, status, settled_at,
                 settlement_mode, p2p_tx_hash, payment_verification_status, delegator_id,
-                p2p_worker_leg, issuer_relay_id, suite, signature, record_json)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                p2p_worker_leg, p2p_worker_address, p2p_worker_address_rung, issuer_relay_id, suite, signature, record_json)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             )
             .run(
               subP2pSettlementId,
@@ -1230,6 +1242,8 @@ export async function handleReceiptIngestion(
               "pending",
               subEntry.submitted_by ?? null,
               p2pWorkerLegScope(subEntry),
+              subEntry.p2p_admission?.worker_address ?? null,
+              subEntry.p2p_admission?.worker_address_rung ?? null,
               signedSubP2p.issuer_relay_id,
               signedSubP2p.suite,
               signedSubP2p.signature,
@@ -1575,8 +1589,8 @@ export async function handleReceiptIngestion(
              (settlement_id, allocation_id, task_id, motebit_id, receipt_hash,
               amount_settled, platform_fee, platform_fee_rate, status, settled_at,
               settlement_mode, p2p_tx_hash, payment_verification_status, delegator_id,
-              p2p_worker_leg, issuer_relay_id, suite, signature, record_json)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+              p2p_worker_leg, p2p_worker_address, p2p_worker_address_rung, issuer_relay_id, suite, signature, record_json)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           )
           .run(
             p2pSettlementId,
@@ -1594,6 +1608,8 @@ export async function handleReceiptIngestion(
             "pending",
             entry.submitted_by ?? null,
             p2pWorkerLegScope(entry),
+            entry.p2p_admission?.worker_address ?? null,
+            entry.p2p_admission?.worker_address_rung ?? null,
             signedP2pAudit.issuer_relay_id,
             signedP2pAudit.suite,
             signedP2pAudit.signature,
@@ -2758,6 +2774,9 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
     // P2P): routing forwards directly to the worker's operator with the proof
     // rather than ranking. Set in the remote branch below.
     let federatedP2pIntent = false;
+    // What admission decided about the worker leg (#959) — set by the branch
+    // that accepts the proof, never inferred later from the proof's shape.
+    let p2pAdmission: P2pAdmission | undefined;
 
     if (terms.p2p && body.payment_proof && body.target_agent && submittedBy) {
       const proof = body.payment_proof;
@@ -2864,6 +2883,17 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
 
       if (workerReg?.settlement_address) {
         // ── Single-operator P2P (local worker): the existing 2-leg path. ──
+        // A 2-leg proof carries no executor-relay fee leg. One that does is
+        // refused before anything is read or admitted (#959 round 2): the
+        // fields mean nothing here, and a proof shape the payer controls must
+        // never steer how the relay verifies the payment.
+        if (proof.b_fee_to_address != null || proof.b_fee_amount_micro != null) {
+          throw new TaskError(
+            "TASK_INVALID_INPUT",
+            "An executor-relay fee leg (b_fee_to_address, b_fee_amount_micro) applies only to a cross-operator P2P task; this worker is hosted by this relay — submit a 2-leg proof",
+            400,
+          );
+        }
         // Policy-based eligibility check
         // Arc 3: pass the delegator's cold-start acknowledgment through to
         // the eligibility gate. Established pairs ignore it; new pairs
@@ -2958,6 +2988,7 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
 
         settlementMode = "p2p";
         p2pPaymentProof = proof;
+        p2pAdmission = localWorkerAdmission(moteDb.db, body.target_agent, proof.to_address);
 
         logger.info("task.p2p_settlement", {
           correlationId: taskId,
@@ -2998,6 +3029,9 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
         settlementMode = "p2p";
         p2pPaymentProof = proof;
         federatedP2pIntent = true;
+        // This relay originates the task; the executor relay hosts the worker
+        // and verifies its leg.
+        p2pAdmission = { worker_leg: "remote" };
 
         logger.info("task.federated_p2p_pending", {
           correlationId: taskId,
@@ -3441,6 +3475,7 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
         x402_network: x402Net,
         settlement_mode: settlementMode,
         p2p_payment_proof: p2pPaymentProof,
+        p2p_admission: p2pAdmission,
         target_agent: body.target_agent,
         grant_id: body.grant_id,
       });
@@ -4300,6 +4335,21 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
         "TASK_INVALID_INPUT",
         "Receipt missing relay_task_id — cryptographic task binding is required. Ensure your motebit runtime is up to date.",
         400,
+      );
+    }
+
+    // A P2P task was paid to ONE worker (#959): a receipt signed by anyone
+    // else is refused BEFORE it touches the entry, so it can never overwrite
+    // the result the paid worker delivered. (Ingestion refuses it too.)
+    if (entry.settlement_mode === "p2p" && !receiptDischargesP2p(entry, receipt.motebit_id)) {
+      logger.error("settlement.p2p_receipt_not_from_payee", {
+        correlationId: taskId,
+        payee: p2pPayeeOf(entry),
+        signer: receipt.motebit_id,
+      });
+      throw new AuthorizationError(
+        "AUTHZ_INVALID_CREDENTIALS",
+        `Receipt verification failed: receipt is signed by ${receipt.motebit_id}, not by the worker this P2P task was paid to`,
       );
     }
 

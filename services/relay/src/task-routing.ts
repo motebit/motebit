@@ -1509,7 +1509,8 @@ async function bondCoversTicket(
  * that abuses it loses trust through its receipts (failed or low-quality
  * work lands on the delegator's `[delegator, worker]` edge at ingestion);
  * the p2p verifier's onchain check is about the PAYER's payment, and a
- * proven failure there is recorded on `[worker, delegator]` (#959). The
+ * proven failure there is recorded on the settlement row, moving no trust
+ * edge (#959). The
  * trust graph closes the residual economic gap the structural type
  * system can't reach.
  *

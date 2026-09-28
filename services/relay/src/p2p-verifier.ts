@@ -93,9 +93,9 @@ export interface P2pVerifierConfig {
  * fetches the Solana transaction via RPC, and transitions to 'verified', 'failed'
  * or 'unverifiable' (see `handleVerificationResult`).
  *
- * On failure: records the PAYER's failed obligation in the harmed party's
- * first-person ledger (`recordPayerFailure`) — never a penalty on the worker
- * for the payer's payment, never a change to anyone's `settlement_modes`.
+ * On failure: records the PAYER's failed obligation on the settlement row
+ * (the leg and the reason) and in a warn log — no trust edge moves and no
+ * `settlement_modes` change (`markFailed`).
  */
 export function startP2pVerifierLoop(
   db: DatabaseDriver,
@@ -134,7 +134,7 @@ export function startP2pVerifierLoop(
           .prepare(
             `SELECT s.settlement_id, s.task_id,
                     COALESCE(c.corrected_motebit_id, s.motebit_id) AS motebit_id,
-                    s.delegator_id, s.p2p_worker_leg, s.p2p_tx_hash,
+                    s.delegator_id, s.p2p_worker_leg, s.p2p_worker_address, s.p2p_tx_hash,
                     s.amount_settled, s.platform_fee,
                     a.settlement_address, a.public_key
              FROM relay_settlements s
@@ -188,12 +188,17 @@ interface PendingP2pRow {
   motebit_id: string;
   /** The payer. */
   delegator_id: string | null;
-  /** Which relay verifies the worker leg — frozen at write time; NULL on rows written before #959. */
+  /**
+   * Which relay verifies the worker leg — declared by admission and frozen on
+   * the row at write time. NULL ⇔ the row was written before #959.
+   */
   p2p_worker_leg: "local" | "remote" | null;
+  /** The worker-leg address admission validated the proof against (NULL before #959 round 2). */
+  p2p_worker_address: string | null;
   p2p_tx_hash: string;
   amount_settled: number;
   platform_fee: number;
-  /** The payee's registry `settlement_address` (local, write-authorized by the worker itself). */
+  /** The payee's CURRENT registry `settlement_address` — read only for rows with no admitted address. */
   settlement_address: string | null;
   /** The payee's registry `public_key` (main's read; the holder key wins — `verificationKeyFor`). */
   public_key: string | null;
@@ -203,41 +208,59 @@ interface PendingP2pRow {
 type FailedObligation = "worker_leg" | "fee_leg" | "transaction";
 
 /**
- * The addresses at which a payment to the worker counts as a payment to the
- * worker (#959, settlement-authority binding). Never a peer-asserted or
- * otherwise unverified string:
+ * Whether a transfer to `to` pays the worker (#959, settlement-authority
+ * binding). Two destinations are bound to the payee, and nothing else is:
  *
  *   - **derived-bound** — the Solana address the worker's identity key
  *     derives (`isDerivedSettlementBinding`): tautological and offline.
- *   - **write-authorized** — the worker's OWN registry `settlement_address`.
- *     `register` / `sweep-config` are caller===motebit_id authed, so on this
- *     relay the write-auth IS the authorization — the local rung of
- *     `docs/doctrine/settlement-authority-binding.md` § "Where binding is
- *     enforced" (custody separation is legitimate; requiring derivation here
- *     would forbid it). It is also the address the proof's worker leg was
- *     checked against at admission.
+ *   - **the worker's own locally registered address** — as ADMITTED: the
+ *     address the proof's worker leg was validated against when the task was
+ *     admitted (`p2p_worker_address`), so a worker that changes its address
+ *     mid-flight does not turn a correctly paid payer into a failure. Rows
+ *     written before that column existed fall back to the worker's current
+ *     registry address.
  *
- * A peer-asserted string (a federated candidate's address) never counts:
- * this relay only verifies the worker leg of a worker it HOSTS, whose
- * address the worker wrote itself. That the self-registered address is a
- * valid destination alongside the derived one is a confirmed decision
- * (#959), grounded in settlement-authority-binding: the doctrine enforces
- * identity-binding at the federated boundary, where a party OTHER than the
- * worker asserts its destination, and explicitly not at the local leg.
- * Mirrored in `spec/settlement-v1.md` §11.1.
- *
- * The signed-bound rung (a `SettlementBinding` artifact) is not built
- * (settlement-authority Inc 2); when it lands it joins this predicate.
+ * Why the self-registered address counts (a CONFIRMED decision, #959): it is
+ * written under the worker's own authenticated write (`register` /
+ * `sweep-config` are caller === motebit_id), so on this relay the write-auth
+ * IS the authorization — `docs/doctrine/settlement-authority-binding.md` §
+ * "Where binding is enforced": binding to the identity key is enforced at the
+ * federated boundary, where a party OTHER than the worker asserts its
+ * destination, and deliberately not at the local leg (custody separation is
+ * legitimate). A peer-asserted string never counts: this relay verifies only
+ * the worker leg of a worker it HOSTS. Mirrored in `spec/settlement-v1.md`
+ * §11.1. The signed-bound rung (a `SettlementBinding` artifact,
+ * settlement-authority Inc 2) is not built; when it lands it joins here.
  */
 function paysWorker(
   to: string,
-  row: Pick<PendingP2pRow, "settlement_address">,
+  row: Pick<PendingP2pRow, "settlement_address" | "p2p_worker_address">,
   workerKey: string | null,
 ): boolean {
-  if (row.settlement_address != null && row.settlement_address !== "") {
-    if (to === row.settlement_address) return true;
-  }
+  const registered = row.p2p_worker_address ?? row.settlement_address;
+  if (registered != null && registered !== "" && to === registered) return true;
   return workerKey != null && isDerivedSettlementBinding(to, workerKey);
+}
+
+/**
+ * A pre-#959 row that names its own payer as payee could not be corrected
+ * from the receipt archive. That is the #959 bug shape — UNLESS the payer
+ * really did delegate to itself, which the archive shows as a receipt for
+ * the task signed by that same identity.
+ */
+function isUncorrectedLegacySelfPayee(db: DatabaseDriver, row: PendingP2pRow): boolean {
+  if (row.p2p_worker_leg != null) return false; // written after #959: admission decided the payee
+  if (row.delegator_id == null || row.delegator_id === "" || row.motebit_id !== row.delegator_id) {
+    return false;
+  }
+  try {
+    const selfSigned = db
+      .prepare("SELECT 1 FROM relay_receipts WHERE task_id = ? AND motebit_id = ? LIMIT 1")
+      .get(row.task_id, row.motebit_id);
+    return selfSigned == null;
+  } catch {
+    return true;
+  }
 }
 
 /**
@@ -248,23 +271,21 @@ function paysWorker(
  *   - **Fee leg** — always, when `platform_fee > 0` (legacy pre-Arc-2 rows
  *     carry 0 and skip it): a transfer to THIS relay's treasury of exactly
  *     `platform_fee`.
- *   - **Worker leg** — when the row's `p2p_worker_leg` is `local` (or NULL on
- *     a row written before #959): a transfer of exactly `amount_settled` to an
- *     address that pays the PAYEE (`paysWorker` — derived-bound or the
- *     worker's own write-authorized address). A `remote` row (this relay
- *     originated a cross-operator task) leaves the worker leg to the executor
- *     relay, which hosts the worker.
+ *   - **Worker leg** — when the row's admission-declared `p2p_worker_leg` is
+ *     `local` (or NULL on a row written before #959): a transfer of exactly
+ *     `amount_settled` to an address bound to the PAYEE (`paysWorker`). A
+ *     `remote` row (this relay originated a cross-operator task) leaves the
+ *     worker leg to the executor relay, which hosts the worker.
  *
  * State machine:
  *   - `confirmed` + every leg this relay verifies matches → `verified`
  *   - `confirmed` + the fee leg missing / wrong → `failed` (fee_leg)
  *   - `confirmed` + the worker leg missing / wrong → `failed` (worker_leg)
- *   - `confirmed` + the worker leg is this relay's to verify but CANNOT be
- *     checked — the payee resolves to no key and no address, or the row names
- *     its own payer as payee (a pre-#959 record that could not be corrected)
- *     → `unverifiable`. Fail-closed: never `verified`, and no one is
- *     penalized, because nothing shows anyone failed. Terminal, so an
- *     unverifiable row cannot starve the per-cycle budget.
+ *   - `confirmed` + nothing this relay can check: a `remote` row with no fee
+ *     leg; a `local` payee with no key and no address here; a pre-#959 row
+ *     naming its own payer that the archive does not show as a real
+ *     self-delegation → `unverifiable`. Fail-closed: never `verified`, and no
+ *     one is named as failing. Terminal, so it cannot starve the budget.
  *   - `not_found` → `failed` (transaction)
  *   - `rpc_error` → stay pending, retry next cycle (NEVER a failure —
  *     `spec/settlement-v1.md` §11.1 Foundation Law)
@@ -294,8 +315,7 @@ function handleVerificationResult(
         return;
       }
 
-      const workerLegIsOurs = row.p2p_worker_leg !== "remote";
-      if (!workerLegIsOurs) {
+      if (row.p2p_worker_leg === "remote") {
         if (!expectFeeLeg) {
           markUnverifiable(
             db,
@@ -308,22 +328,18 @@ function handleVerificationResult(
         return;
       }
 
-      if (
-        row.delegator_id != null &&
-        row.delegator_id !== "" &&
-        row.motebit_id === row.delegator_id
-      ) {
+      if (isUncorrectedLegacySelfPayee(db, row)) {
         markUnverifiable(
           db,
           row,
-          "Worker leg unverifiable: the record names its own payer as payee (a pre-#959 record whose worker could not be recovered)",
+          "Worker leg unverifiable: a pre-#959 record names its own payer as payee and its worker could not be recovered",
         );
         return;
       }
 
       // Holder, else main's registry read (§5f verification reader).
       const workerKey = verificationKeyFor(db, row.motebit_id, row.public_key);
-      const hasAddress = row.settlement_address != null && row.settlement_address !== "";
+      const hasAddress = (row.p2p_worker_address ?? row.settlement_address ?? "") !== "";
       if (workerKey == null && !hasAddress) {
         markUnverifiable(
           db,
@@ -355,7 +371,7 @@ function handleVerificationResult(
       return;
 
     case "rpc_error":
-      // Transient — do NOT mark as failed, do NOT record a failure. Retry next cycle.
+      // Transient — do NOT mark as failed. Retry next cycle.
       logger.warn("p2p_verifier.rpc_error", {
         settlementId: row.settlement_id,
         txHash: row.p2p_tx_hash,
@@ -403,6 +419,28 @@ function markUnverifiable(db: DatabaseDriver, row: PendingP2pRow, reason: string
   });
 }
 
+/**
+ * Record a P2P payment that did not land as declared (#959).
+ *
+ * Every leg of a P2P settlement is the PAYER's obligation: the delegator
+ * broadcasts one atomic transaction paying the worker and the relay's
+ * treasury, and the relay confirmed at admission that the transaction was
+ * theirs (#918). The relay records the payer's failure on the settlement
+ * row — the ledger of record: `failed`, with the leg and the reason — and in
+ * a warn-level log naming the payer and the leg. It moves NO trust edge:
+ *
+ *   - not `[delegator, worker]` — the worker was the one not paid; charging
+ *     it for the payer's failure is the pre-#959 `downgradeP2pTrust` error;
+ *   - not `[worker, delegator]` — `failed_tasks` there is a COMPETENCE signal
+ *     about the delegator as a worker (paid-failure-recourse: "a competence
+ *     signal, not a relationship verdict"; first-person-worker-routing ranks
+ *     on it), and the relay writing a payer-side fact into the worker's
+ *     first-person ledger is sanctioned by no doctrine;
+ *   - never any party's `settlement_modes`.
+ *
+ * A worker's own runtime MAY learn from its own settlement history — its
+ * first-person choice (spec §11.1), not the relay's.
+ */
 function markFailed(
   db: DatabaseDriver,
   row: PendingP2pRow,
@@ -417,11 +455,12 @@ function markFailed(
          payment_verification_error = ?
      WHERE settlement_id = ?`,
   ).run(Date.now(), error, row.settlement_id);
-  logger.warn("p2p_verifier.failed", {
+  logger.warn("p2p_verifier.payer_failure", {
     settlementId: row.settlement_id,
+    taskId: row.task_id,
     txHash: row.p2p_tx_hash,
-    payee: row.motebit_id,
-    delegatorId: row.delegator_id,
+    payerId: row.delegator_id,
+    payeeId: row.motebit_id,
     obligation,
     error,
     ...(result.status === "confirmed"
@@ -433,91 +472,6 @@ function markFailed(
         }
       : {}),
   });
-  recordPayerFailure(db, row, obligation);
-}
-
-// === Failure attribution ===
-
-/**
- * Record, in the trust graph, that a P2P payment the relay was told about did
- * not land as declared (#959).
- *
- * Every leg of a P2P settlement is the PAYER's obligation: the delegator
- * broadcasts one atomic transaction paying the worker and the relay's
- * treasury, and the relay confirmed at admission that the transaction was
- * theirs (#918). So a failed verification is the payer's failure, and its
- * consequence lands where `docs/doctrine/paid-failure-recourse.md` puts every
- * recourse — the harmed party's FIRST-PERSON ledger, never a relay-wide score
- * and never a reversal:
- *
- *   - `worker_leg` / `transaction` — the worker was not shown to be paid. The
- *     worker's own edge about the payer, `[worker, delegator]`, takes one
- *     failure (when the relay holds that edge; the relay never mints a
- *     relationship the worker has not had).
- *   - `fee_leg` — the worker WAS paid; only the relay's fee is missing. The
- *     relay is the harmed party and its record is the `failed` row itself
- *     (the treasury reconciler already excludes it). No agent edge moves.
- *
- * What it never does (the pre-#959 behaviour, both halves wrong):
- *   - charge the WORKER in the payer's ledger (`[delegator, worker]`) for the
- *     payer's own payment failing — that is a paid-for worker punished for
- *     not being paid, and it feeds the routing posterior of
- *     `first-person-worker-routing.md` with a failure the worker never had;
- *   - strip any party's `settlement_modes`. Those are what an agent RECEIVES
- *     through (`agent_registry`, advertised in discovery); a payer's failed
- *     payment says nothing about how it may be paid, and after Arc 3 the
- *     field is vestigial for eligibility anyway.
- */
-function recordPayerFailure(
-  db: DatabaseDriver,
-  row: PendingP2pRow,
-  obligation: FailedObligation,
-): void {
-  const delegatorId = row.delegator_id;
-  const workerId = row.motebit_id;
-  if (obligation === "fee_leg") {
-    logger.warn("p2p_verifier.fee_leg_unpaid", {
-      settlementId: row.settlement_id,
-      taskId: row.task_id,
-      delegatorId,
-      workerId,
-    });
-    return;
-  }
-  if (delegatorId == null || delegatorId === "" || delegatorId === workerId) {
-    logger.warn("p2p_verifier.payer_failure_unattributable", {
-      settlementId: row.settlement_id,
-      taskId: row.task_id,
-      delegatorId,
-      workerId,
-      obligation,
-    });
-    return;
-  }
-  try {
-    const updated = db
-      .prepare(
-        `UPDATE agent_trust
-         SET failed_tasks = COALESCE(failed_tasks, 0) + 1,
-             last_seen_at = ?
-         WHERE motebit_id = ? AND remote_motebit_id = ?`,
-      )
-      .run(Date.now(), workerId, delegatorId);
-    logger.info("p2p_verifier.payer_failure_recorded", {
-      settlementId: row.settlement_id,
-      taskId: row.task_id,
-      payerId: delegatorId,
-      payeeId: workerId,
-      obligation,
-      edgeUpdated: updated.changes > 0,
-    });
-  } catch (err) {
-    logger.error("p2p_verifier.payer_failure_error", {
-      settlementId: row.settlement_id,
-      taskId: row.task_id,
-      error: err instanceof Error ? err.message : String(err),
-    });
-  }
 }
 
 // === Admin Reporting ===
@@ -531,6 +485,8 @@ export interface SettlementModeStats {
   verified_count: number;
   pending_count: number;
   failed_count: number;
+  /** P2P rows whose worker leg this relay owns but could not check (#959). */
+  unverifiable_count: number;
 }
 
 /**
@@ -548,7 +504,8 @@ export function getSettlementStatsByMode(db: DatabaseDriver): SettlementModeStat
            COALESCE(SUM(platform_fee), 0) as total_fees,
            COUNT(CASE WHEN payment_verification_status = 'verified' THEN 1 END) as verified_count,
            COUNT(CASE WHEN payment_verification_status = 'pending' THEN 1 END) as pending_count,
-           COUNT(CASE WHEN payment_verification_status = 'failed' THEN 1 END) as failed_count
+           COUNT(CASE WHEN payment_verification_status = 'failed' THEN 1 END) as failed_count,
+           COUNT(CASE WHEN payment_verification_status = 'unverifiable' THEN 1 END) as unverifiable_count
          FROM relay_settlements
          GROUP BY COALESCE(settlement_mode, 'relay')
          ORDER BY count DESC`,

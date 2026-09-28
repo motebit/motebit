@@ -37,6 +37,8 @@ import {
 import { toMicro } from "../accounts.js";
 import { startP2pVerifierLoop } from "../p2p-verifier.js";
 import { relayMigrations } from "../migrations.js";
+import { createFederationCallbacks } from "../federation-callbacks.js";
+import type { TaskQueueEntry } from "../tasks.js";
 
 const A_ADDR = "De1egatorSo1anaAddr11111111111111111111111";
 const B_ADDR = "7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgHkv";
@@ -288,7 +290,7 @@ describe("#959 — the parent P2P record names the worker", () => {
     expect(modesOf(A)).toBe("relay,p2p");
   });
 
-  it("a worker leg paid to the DELEGATOR's wallet is a failed worker leg, charged to the payer, not the worker", async () => {
+  it("a worker leg paid to the DELEGATOR's wallet is a failed worker leg on the row — and no trust edge moves", async () => {
     const { taskId } = await submitP2p(A, B, "web_search", B_PRICE, B_ADDR);
     await postResult(A, taskId, await receiptFrom(B, taskId, "search results"));
     setTrust(B, A); // the worker's own edge about the payer
@@ -301,8 +303,9 @@ describe("#959 — the parent P2P record names the worker", () => {
           .get(from.motebitId, to.motebitId) as { f: number }
       ).f;
     // Receipt ingestion already scored the work (the quality gate); the
-    // verifier's own contribution is the delta.
+    // verifier must add nothing to either edge.
     const payerViewBefore = edge(A, B);
+    const workerViewBefore = edge(B, A);
     const fee = buildP2pPaymentProof(relay, {
       unitCostMicro: toMicro(B_PRICE),
       workerAddress: B_ADDR,
@@ -326,10 +329,235 @@ describe("#959 — the parent P2P record names the worker", () => {
       .get(taskId) as { payment_verification_status: string; payment_verification_error: string };
     expect(row.payment_verification_status).toBe("failed");
     expect(row.payment_verification_error).toMatch(/^Worker leg/);
-    expect(edge(B, A)).toBe(1);
+    expect(edge(B, A)).toBe(workerViewBefore);
     expect(edge(A, B)).toBe(payerViewBefore);
     expect(modesOf(A)).toBe("relay,p2p");
     expect(modesOf(B)).toBe("relay,p2p");
+  });
+});
+
+describe("#959 round 2 — admission declares the worker leg; the payer's proof shape cannot", () => {
+  const fee = () =>
+    buildP2pPaymentProof(relay, { unitCostMicro: toMicro(B_PRICE), workerAddress: B_ADDR })
+      .fee_amount_micro;
+
+  it("a local 2-leg submission carrying b_fee fields is refused 400 before admission", async () => {
+    const proof = {
+      ...buildP2pPaymentProof(relay, { unitCostMicro: toMicro(B_PRICE), workerAddress: B_ADDR }),
+      b_fee_to_address: "SomeExecutorRe1ayTreasury111111111111111111",
+      b_fee_amount_micro: 1,
+    };
+    const res = await relay.app.request(`/agent/${A.motebitId}/task`, {
+      method: "POST",
+      headers: jsonAuthWithIdempotency(),
+      body: JSON.stringify({
+        prompt: "web_search please",
+        submitted_by: A.motebitId,
+        target_agent: B.motebitId,
+        required_capabilities: ["web_search"],
+        payment_proof: proof,
+      }),
+    });
+    expect(res.status).toBe(400);
+    expect(await res.text()).toMatch(/executor-relay fee leg/);
+    const claimed = relay.moteDb.db
+      .prepare("SELECT 1 FROM relay_p2p_proof_claims WHERE tx_hash = ?")
+      .get(proof.tx_hash);
+    expect(claimed).toBeUndefined();
+  });
+
+  it("a b_fee field smuggled onto an admitted local entry cannot turn its worker leg off: still 'local' ⇒ failed when unpaid", async () => {
+    const { taskId } = await submitP2p(A, B, "web_search", B_PRICE, B_ADDR);
+    relay.moteDb.db
+      .prepare(
+        `UPDATE relay_task_queue
+            SET task_json = json_set(task_json,
+                  '$.p2p_payment_proof.b_fee_to_address', 'SomeExecutorRe1ayTreasury111111111111111111',
+                  '$.p2p_payment_proof.b_fee_amount_micro', 1)
+          WHERE task_id = ?`,
+      )
+      .run(taskId);
+    await postResult(A, taskId, await receiptFrom(B, taskId, "search results"));
+    const row = rowsFor(taskId)[0]!;
+    expect(row.p2p_worker_leg).toBe("local");
+
+    // Only the fee leg landed; the worker was never paid.
+    await tickVerifier({
+      status: "confirmed",
+      from: A_ADDR,
+      transfers: [{ to: p2pTreasuryAddress(relay), amountMicro: BigInt(fee()) }],
+      slot: 1,
+      asset: "USDC",
+    });
+    expect(rowsFor(taskId)[0]!.payment_verification_status).toBe("failed");
+  });
+
+  it("the row carries the ADMITTED worker address; a worker re-registering before verification does not fail its payer", async () => {
+    const { taskId } = await submitP2p(A, B, "web_search", B_PRICE, B_ADDR);
+    await postResult(A, taskId, await receiptFrom(B, taskId, "search results"));
+    const admitted = relay.moteDb.db
+      .prepare(
+        "SELECT p2p_worker_address, p2p_worker_address_rung FROM relay_settlements WHERE task_id = ?",
+      )
+      .get(taskId) as { p2p_worker_address: string; p2p_worker_address_rung: string };
+    expect(admitted).toEqual({ p2p_worker_address: B_ADDR, p2p_worker_address_rung: "registered" });
+
+    relay.moteDb.db
+      .prepare("UPDATE agent_registry SET settlement_address = ? WHERE motebit_id = ?")
+      .run("NewWa11etAddressAfterAdmission1111111111111", B.motebitId);
+    await tickVerifier({
+      status: "confirmed",
+      from: A_ADDR,
+      transfers: [
+        { to: B_ADDR, amountMicro: BigInt(toMicro(B_PRICE)) },
+        { to: p2pTreasuryAddress(relay), amountMicro: BigInt(fee()) },
+      ],
+      slot: 1,
+      asset: "USDC",
+    });
+    expect(rowsFor(taskId)[0]!.payment_verification_status).toBe("verified");
+  });
+
+  it("a P2P self-delegation (target = submitter, both legs paid) verifies — main parity", async () => {
+    const proof = buildP2pPaymentProof(relay, {
+      unitCostMicro: toMicro(B_PRICE),
+      workerAddress: A_ADDR,
+    });
+    const res = await relay.app.request(`/agent/${A.motebitId}/task`, {
+      method: "POST",
+      headers: jsonAuthWithIdempotency(),
+      body: JSON.stringify({
+        prompt: "self please",
+        submitted_by: A.motebitId,
+        target_agent: A.motebitId,
+        delegator_acknowledges_no_history_risk: true,
+        payment_proof: proof,
+      }),
+    });
+    expect(res.status, await res.clone().text()).toBe(201);
+    const { task_id: taskId } = (await res.json()) as { task_id: string };
+    expect((await postResult(A, taskId, await receiptFrom(A, taskId, "own work"))).status).toBe(
+      200,
+    );
+
+    await tickVerifier({
+      status: "confirmed",
+      from: A_ADDR,
+      transfers: [
+        { to: A_ADDR, amountMicro: BigInt(proof.amount_micro) },
+        { to: p2pTreasuryAddress(relay), amountMicro: BigInt(proof.fee_amount_micro) },
+      ],
+      slot: 1,
+      asset: "USDC",
+    });
+    const row = rowsFor(taskId)[0]!;
+    expect(row.motebit_id).toBe(A.motebitId);
+    expect(row.payment_verification_status).toBe("verified");
+  });
+});
+
+describe("#959 round 2 — a refused receipt never overwrites the delivered result", () => {
+  it("the paid worker delivers; a stranger's receipt afterwards is refused and the poll still returns the worker's", async () => {
+    const { taskId } = await submitP2p(A, B, "web_search", B_PRICE, B_ADDR);
+    expect(
+      (await postResult(A, taskId, await receiptFrom(B, taskId, "the bought work"))).status,
+    ).toBe(200);
+    expect((await postResult(A, taskId, await receiptFrom(X, taskId, "overwrite"))).status).toBe(
+      403,
+    );
+
+    const poll = await relay.app.request(`/agent/${A.motebitId}/task/${taskId}`, {
+      headers: JSON_AUTH,
+    });
+    const body = (await poll.json()) as { receipt: { motebit_id: string; result: string } | null };
+    expect(body.receipt?.motebit_id).toBe(B.motebitId);
+    expect(body.receipt?.result).toBe("the bought work");
+  });
+});
+
+describe("#959 round 2 — the federated ORIGIN refuses a result not signed by the paid worker", () => {
+  function originEntry(taskId: string): TaskQueueEntry {
+    return {
+      task: {
+        task_id: taskId,
+        motebit_id: A.motebitId,
+        prompt: "federated",
+        submitted_at: Date.now(),
+        submitted_by: A.motebitId,
+        status: "pending",
+      } as never,
+      expiresAt: Date.now() + 600_000,
+      submitted_by: A.motebitId,
+      settlement_mode: "p2p",
+      target_agent: B.motebitId,
+      p2p_payment_proof: {
+        ...buildP2pPaymentProof(relay, { unitCostMicro: 902_500, workerAddress: B_ADDR }),
+        fee_amount_micro: 50_000,
+        b_fee_to_address: "SomeExecutorRe1ayTreasury111111111111111111",
+        b_fee_amount_micro: 47_500,
+      },
+      p2p_admission: { worker_leg: "remote" },
+    };
+  }
+  // The origin relay's signing identity (the booted relay does not expose its
+  // private key, and the origin writer signs the settlement record).
+  let originIdentity: {
+    relayMotebitId: string;
+    publicKey: Uint8Array;
+    privateKey: Uint8Array;
+    publicKeyHex: string;
+    did: string;
+  };
+  beforeEach(async () => {
+    const kp = await generateKeypair();
+    originIdentity = {
+      relayMotebitId: "origin-relay",
+      publicKey: kp.publicKey,
+      privateKey: kp.privateKey,
+      publicKeyHex: bytesToHex(kp.publicKey),
+      did: "did:key:origin",
+    };
+  });
+  function callbacks(queue: Map<string, TaskQueueEntry>) {
+    return createFederationCallbacks({
+      moteDb: relay.moteDb,
+      identityManager: { listDevices: async () => [] } as never,
+      relayIdentity: originIdentity,
+      connections: relay.connections,
+      taskQueue: queue,
+      issueCredentials: false,
+      maxTaskQueueSize: 100,
+      maxTasksPerSubmitter: 100,
+      taskTtlMs: 600_000,
+    });
+  }
+
+  it("a stranger-signed result is refused 403 before it touches the entry; nothing is recorded", async () => {
+    const taskId = crypto.randomUUID();
+    const queue = new Map([[taskId, originEntry(taskId)]]);
+    await expect(
+      callbacks(queue).onTaskResultReceived({
+        taskId,
+        originRelay: "peer-relay",
+        receipt: await receiptFrom(X, taskId, "not the bought work"),
+      }),
+    ).rejects.toMatchObject({ status: 403 });
+    expect(queue.get(taskId)!.receipt).toBeUndefined();
+    expect(rowsFor(taskId)).toHaveLength(0);
+  });
+
+  it("control: the paid worker's result records the origin row, payee = the worker, worker leg 'remote'", async () => {
+    const taskId = crypto.randomUUID();
+    const queue = new Map([[taskId, originEntry(taskId)]]);
+    await callbacks(queue).onTaskResultReceived({
+      taskId,
+      originRelay: "peer-relay",
+      receipt: await receiptFrom(B, taskId, "the bought work"),
+    });
+    const rows = rowsFor(taskId);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.motebit_id).toBe(B.motebitId);
+    expect(rows[0]!.p2p_worker_leg).toBe("remote");
   });
 });
 
@@ -533,5 +761,27 @@ describe("#959 — historic rows: corrected beside the signed record, never rewr
     const legacy = await seedLegacyRow({ status: "pending", signers: [B, X] });
     migrationV48.up(relay.moteDb.db);
     expect(correction(legacy.settlementId)).toBeUndefined();
+  });
+
+  it("only a receipt whose result_hash IS the record's receipt_hash counts — another signer's different work is ignored", async () => {
+    const legacy = await seedLegacyRow({ status: "pending", signers: [B] });
+    // X also has an archived receipt for the task, for DIFFERENT work.
+    const other = await receiptFrom(X, legacy.taskId, "some other result entirely");
+    relay.moteDb.db
+      .prepare(
+        `INSERT INTO relay_receipts (motebit_id, task_id, parent_task_id, depth, status, suite,
+           public_key, signature, invocation_origin, receipt_json, received_at)
+         VALUES (?, ?, NULL, 0, 'completed', ?, '', ?, NULL, ?, ?)`,
+      )
+      .run(
+        X.motebitId,
+        legacy.taskId,
+        other.suite,
+        other.signature,
+        JSON.stringify(other),
+        Date.now(),
+      );
+    migrationV48.up(relay.moteDb.db);
+    expect(correction(legacy.settlementId)?.corrected_motebit_id).toBe(B.motebitId);
   });
 });

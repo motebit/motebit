@@ -25,18 +25,23 @@ describe("p2pPayeeOf", () => {
   });
 });
 
-describe("p2pWorkerLegScope", () => {
-  const twoLeg = { to_address: "w", fee_to_address: "t" };
-  const threeLeg = { ...twoLeg, b_fee_to_address: "tb" };
-  it("single-operator P2P: the worker is local", () => {
-    expect(p2pWorkerLegScope({ p2p_payment_proof: twoLeg as never })).toBe("local");
+describe("p2pWorkerLegScope — declared by admission, never inferred from the proof", () => {
+  it("reads the admission record", () => {
+    expect(p2pWorkerLegScope({ p2p_admission: { worker_leg: "local" } })).toBe("local");
+    expect(p2pWorkerLegScope({ p2p_admission: { worker_leg: "remote" } })).toBe("remote");
   });
-  it("the executor relay of a federated task hosts the worker", () => {
-    expect(
-      p2pWorkerLegScope({ origin_relay: "relay-a", p2p_payment_proof: threeLeg as never }),
-    ).toBe("local");
+
+  it("ignores the proof's shape: a local admission whose proof carries b_fee fields stays local", () => {
+    // Cold review, #959 round 2: inferring 'remote' from payer-supplied b_fee_*
+    // let a payer switch the worker-leg check off on a local task.
+    const entry = {
+      p2p_admission: { worker_leg: "local" as const },
+      p2p_payment_proof: { b_fee_to_address: "tb", b_fee_amount_micro: 1 },
+    };
+    expect(p2pWorkerLegScope(entry as never)).toBe("local");
   });
-  it("the origin relay of a federated task does not", () => {
-    expect(p2pWorkerLegScope({ p2p_payment_proof: threeLeg as never })).toBe("remote");
+
+  it("an entry admitted before round 2 (no admission record) reads local — the fail-closed side", () => {
+    expect(p2pWorkerLegScope({})).toBe("local");
   });
 });

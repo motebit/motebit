@@ -662,15 +662,6 @@ const WRITERS: readonly Writer[] = [
       ": the p2p verifier's state transitions (verified / unverifiable / failed) from an onchain READ; the SET lists touch only verification columns, never the payee (#959)",
   },
   {
-    file: R + "p2p-verifier.ts",
-    verb: "UPDATE",
-    table: "agent_trust",
-    count: 1,
-    principal:
-      LOOP +
-      ": a failed onchain verification is the PAYER's failed obligation, recorded on the harmed payee's own edge `[payee, payer]` only — never the payer's edge about the worker, never any `settlement_modes` (#959)",
-  },
-  {
     file: R + "anchoring.ts",
     verb: "UPDATE",
     table: "relay_settlements",
@@ -1158,7 +1149,7 @@ const WRITERS: readonly Writer[] = [
         : table === "agent_trust"
           ? "the identity's own first-person trust ledger. " +
             ADAPTER +
-            " except the p2p verifier loop and tasks.ts's verified-receipt update"
+            " except tasks.ts's verified-receipt update (the p2p verifier writes no trust edge since #959)"
           : table === "memory_nodes"
             ? "the identity's own memory. " +
               ADAPTER +

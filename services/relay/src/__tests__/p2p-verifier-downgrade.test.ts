@@ -1,40 +1,35 @@
 /**
- * P2P verifier — who a failed verification is charged to (#959).
+ * P2P verifier — what a failed verification does, and does not do (#959).
  *
  * Every leg of a P2P settlement is the PAYER's obligation: the delegator
  * broadcasts one atomic transaction paying the worker and the relay's
- * treasury. So when the verifier proves onchain that the payment did not land
- * as declared, the failure is the payer's, and per
- * `docs/doctrine/paid-failure-recourse.md` its consequence lands in the
- * harmed party's FIRST-PERSON ledger:
+ * treasury. When the verifier proves onchain that the payment did not land as
+ * declared, it records the payer's failure on the settlement row — the ledger
+ * of record (`failed`, the leg, the reason) — and moves NO trust edge:
  *
- *   - worker leg missing / tx not found → the worker's own edge about the
- *     payer, `[worker, delegator]`, takes one failure;
- *   - fee leg missing (worker paid) → no agent edge moves; the relay's record
- *     is the `failed` row.
- *
- * What it must never do again (the pre-#959 `downgradeP2pTrust`):
- *   - charge the WORKER in the payer's ledger (`[delegator, worker]`) for the
- *     payer's own payment failing;
- *   - strip anyone's `settlement_modes` — observed live on staging, where the
- *     row named the delegator as payee and a registered delegator (the
- *     Researcher paying its own sub-hops) lost its receiving `p2p` mode for a
- *     payment it MADE.
+ *   - not `[delegator, worker]` — the unpaid worker did nothing wrong (the
+ *     pre-#959 `downgradeP2pTrust` charged it there);
+ *   - not `[worker, delegator]` — that `failed_tasks` is a competence signal
+ *     about the delegator AS A WORKER (paid-failure-recourse; first-person-
+ *     worker-routing ranks on it), and a payer-side fact written by the relay
+ *     into the worker's first-person ledger is sanctioned by no doctrine;
+ *   - never anyone's `settlement_modes` — observed live on staging, where a
+ *     registered delegator lost its receiving `p2p` mode for a payment it MADE.
  *
  * Foundation Law: an `rpc_error` is the relay's OWN failure to read the chain,
  * not evidence of non-payment — nothing changes.
  *
- * Also here, the verifier's worker-leg address rule: a transfer pays the
- * worker when it lands at the worker's derived-bound address (its identity
- * key's Solana address) or its own write-authorized registry address — and a
- * worker leg this relay cannot check is `unverifiable`, never `verified`.
+ * Also here, the worker-leg address rule: a transfer pays the worker when it
+ * lands at the worker's derived-bound address or at the address ADMISSION
+ * validated (its own write-authorized registry address then) — and a worker
+ * leg this relay cannot check is `unverifiable`, never `verified`.
  *
- * SEVERING (recorded in the #959 report): restore the old attribution
- * (`[delegator, worker]` + strip modes) → the edge / modes assertions go red;
- * drop `recordPayerFailure` → the `[worker, delegator]` assertions go red;
- * drop the derived-bound rung from `paysWorker` → the derived test goes red;
- * treat an absent payee address as "not applicable" → the unverifiable tests
- * go red.
+ * SEVERING (recorded in the #959 reports): any trust-edge write on failure →
+ * `expectNothingPenalized` goes red; drop the derived-bound rung → the derived
+ * test goes red; verify against the CURRENT registry address → the
+ * re-registration test goes red; apply the self-payee rule to new rows → the
+ * self-delegation test goes red; treat an absent payee address as "not
+ * applicable" → the unverifiable tests go red.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import type { SyncRelay } from "../index.js";
@@ -101,14 +96,27 @@ function insertPendingP2pSettlement(
   settlementId: string,
   taskId: string,
   payee: string = WORKER,
+  workerLeg: "local" | null = "local",
+  admittedAddress: string | null = null,
 ): void {
   db.prepare(
     `INSERT OR IGNORE INTO relay_settlements
        (settlement_id, allocation_id, task_id, motebit_id, receipt_hash,
         amount_settled, platform_fee, platform_fee_rate, status, settled_at,
-        settlement_mode, p2p_tx_hash, payment_verification_status, delegator_id, p2p_worker_leg)
-     VALUES (?, ?, ?, ?, '', 500000, 26316, 0.05, 'completed', ?, 'p2p', ?, 'pending', ?, 'local')`,
-  ).run(settlementId, `alloc-${taskId}`, taskId, payee, Date.now(), TX_HASH, DELEGATOR);
+        settlement_mode, p2p_tx_hash, payment_verification_status, delegator_id,
+        p2p_worker_leg, p2p_worker_address)
+     VALUES (?, ?, ?, ?, '', 500000, 26316, 0.05, 'completed', ?, 'p2p', ?, 'pending', ?, ?, ?)`,
+  ).run(
+    settlementId,
+    `alloc-${taskId}`,
+    taskId,
+    payee,
+    Date.now(),
+    TX_HASH,
+    DELEGATOR,
+    workerLeg,
+    admittedAddress,
+  );
 }
 
 /** Run one verifier cycle against a fake adapter. */
@@ -185,7 +193,20 @@ describe("p2p-verifier — a failed payment is the payer's, recorded first-perso
     await relay?.close();
   });
 
-  it("worker leg unpaid → failed on the worker leg; the WORKER's edge about the payer takes the failure", async () => {
+  /** No trust edge anywhere moved, and nobody's modes changed. */
+  function expectNothingPenalized(): void {
+    const untouched = { failed_tasks: 0, successful_tasks: 5 };
+    expect(readEdge(relay.moteDb.db, WORKER, DELEGATOR)).toEqual(untouched);
+    expect(readEdge(relay.moteDb.db, DELEGATOR, WORKER)).toEqual(untouched);
+    const edges = relay.moteDb.db.prepare("SELECT COUNT(*) AS n FROM agent_trust").get() as {
+      n: number;
+    };
+    expect(edges.n).toBe(2);
+    expect(readModes(relay.moteDb.db, DELEGATOR)).toBe("relay,p2p");
+    expect(readModes(relay.moteDb.db, WORKER)).toBe("relay,p2p");
+  }
+
+  it("worker leg unpaid → failed on the worker leg, recorded on the row; no trust edge moves anywhere", async () => {
     insertPendingP2pSettlement(relay.moteDb.db, "stl-dg-1", "task-dg-1");
     const adapter = makeStubAdapter(bothLegsPaid("SomeOtherAddressNotTheWorker11111111111111"));
 
@@ -194,28 +215,56 @@ describe("p2p-verifier — a failed payment is the payer's, recorded first-perso
     const row = settlement(relay.moteDb.db, "stl-dg-1");
     expect(row.payment_verification_status).toBe("failed");
     expect(row.payment_verification_error).toMatch(/^Worker leg/);
-    // Charged to the payer, in the harmed worker's own ledger.
-    expect(readEdge(relay.moteDb.db, WORKER, DELEGATOR)?.failed_tasks).toBe(1);
-    // Never to the worker in the payer's ledger — the worker did nothing wrong.
-    expect(readEdge(relay.moteDb.db, DELEGATOR, WORKER)).toEqual({
-      failed_tasks: 0,
-      successful_tasks: 5,
-    });
-    // Nobody's receiving modes change.
-    expect(readModes(relay.moteDb.db, DELEGATOR)).toBe("relay,p2p");
-    expect(readModes(relay.moteDb.db, WORKER)).toBe("relay,p2p");
+    // The payer's failure lives on the ledger of record (the row), not in any
+    // agent's trust edge: not the worker's competence ledger about the payer,
+    // and never the payer's ledger about the (unpaid) worker.
+    expectNothingPenalized();
   });
 
-  it("transaction not found → failed; the worker's edge about the payer takes the failure, no modes change", async () => {
+  it("transaction not found → failed on the row; no trust edge moves, no modes change", async () => {
     insertPendingP2pSettlement(relay.moteDb.db, "stl-dg-2", "task-dg-2");
     const adapter = makeStubAdapter({ status: "not_found" } as TxVerificationResult);
 
     await tickVerifierOnce(relay, adapter);
 
-    expect(settlement(relay.moteDb.db, "stl-dg-2").payment_verification_status).toBe("failed");
-    expect(readEdge(relay.moteDb.db, WORKER, DELEGATOR)?.failed_tasks).toBe(1);
-    expect(readEdge(relay.moteDb.db, DELEGATOR, WORKER)?.failed_tasks).toBe(0);
-    expect(readModes(relay.moteDb.db, DELEGATOR)).toBe("relay,p2p");
+    const row = settlement(relay.moteDb.db, "stl-dg-2");
+    expect(row.payment_verification_status).toBe("failed");
+    expect(row.payment_verification_error).toMatch(/not found/);
+    expectNothingPenalized();
+  });
+
+  it("the worker leg is checked against the ADMITTED address — a worker that re-registers mid-flight does not fail its payer", async () => {
+    insertPendingP2pSettlement(
+      relay.moteDb.db,
+      "stl-moved",
+      "task-moved",
+      WORKER,
+      "local",
+      WORKER_ADDR,
+    );
+    // After admission, the worker points its registry at a new wallet.
+    relay.moteDb.db
+      .prepare("UPDATE agent_registry SET settlement_address = ? WHERE motebit_id = ?")
+      .run("NewWa11etAddressAfterAdmission1111111111111", WORKER);
+
+    await tickVerifierOnce(relay, makeStubAdapter(bothLegsPaid(WORKER_ADDR)));
+
+    expect(settlement(relay.moteDb.db, "stl-moved").payment_verification_status).toBe("verified");
+  });
+
+  it("a NEW self-delegation row (admission-declared payee = payer) verifies normally — main parity", async () => {
+    insertPendingP2pSettlement(
+      relay.moteDb.db,
+      "stl-own",
+      "task-own",
+      DELEGATOR,
+      "local",
+      DELEGATOR_ADDR,
+    );
+
+    await tickVerifierOnce(relay, makeStubAdapter(bothLegsPaid(DELEGATOR_ADDR)));
+
+    expect(settlement(relay.moteDb.db, "stl-own").payment_verification_status).toBe("verified");
   });
 
   it("fee leg unpaid (worker paid) → failed on the fee leg; no agent edge moves", async () => {
@@ -233,9 +282,7 @@ describe("p2p-verifier — a failed payment is the payer's, recorded first-perso
     const row = settlement(relay.moteDb.db, "stl-dg-fee");
     expect(row.payment_verification_status).toBe("failed");
     expect(row.payment_verification_error).toMatch(/^Fee leg/);
-    expect(readEdge(relay.moteDb.db, WORKER, DELEGATOR)?.failed_tasks).toBe(0);
-    expect(readEdge(relay.moteDb.db, DELEGATOR, WORKER)?.failed_tasks).toBe(0);
-    expect(readModes(relay.moteDb.db, DELEGATOR)).toBe("relay,p2p");
+    expectNothingPenalized();
   });
 
   it("an RPC error changes nothing — trust moves only on positive evidence, never on our own RPC failure", async () => {
@@ -245,16 +292,15 @@ describe("p2p-verifier — a failed payment is the payer's, recorded first-perso
     await tickVerifierOnce(relay, adapter);
 
     expect(settlement(relay.moteDb.db, "stl-dg-3").payment_verification_status).toBe("pending");
-    expect(readEdge(relay.moteDb.db, WORKER, DELEGATOR)?.failed_tasks).toBe(0);
-    expect(readEdge(relay.moteDb.db, DELEGATOR, WORKER)?.failed_tasks).toBe(0);
-    expect(readModes(relay.moteDb.db, DELEGATOR)).toBe("relay,p2p");
+    expectNothingPenalized();
   });
 
   it("the staging shape: a pre-#959 row naming the payer as payee is unverifiable — never verified, never penalized", async () => {
     // Settlement 31d973b4 on staging: motebit_id = delegator_id, and the
     // delegator is registered. The old verifier checked the worker leg against
     // the DELEGATOR's wallet, failed it, and stripped the delegator's p2p mode.
-    insertPendingP2pSettlement(relay.moteDb.db, "stl-self", "task-self", DELEGATOR);
+    // Pre-#959 rows carry no admission declaration (p2p_worker_leg NULL).
+    insertPendingP2pSettlement(relay.moteDb.db, "stl-self", "task-self", DELEGATOR, null);
     const adapter = makeStubAdapter(bothLegsPaid());
 
     await tickVerifierOnce(relay, adapter);
@@ -264,6 +310,29 @@ describe("p2p-verifier — a failed payment is the payer's, recorded first-perso
     expect(row.payment_verification_error).toMatch(/names its own payer/);
     expect(readModes(relay.moteDb.db, DELEGATOR)).toBe("relay,p2p");
     expect(readEdge(relay.moteDb.db, DELEGATOR, DELEGATOR)).toBeUndefined();
+  });
+
+  it("a pre-#959 row naming its payer is a REAL self-delegation when the archive shows the payer signed the receipt — it verifies", async () => {
+    insertPendingP2pSettlement(
+      relay.moteDb.db,
+      "stl-legacy-own",
+      "task-legacy-own",
+      DELEGATOR,
+      null,
+    );
+    relay.moteDb.db
+      .prepare(
+        `INSERT INTO relay_receipts (motebit_id, task_id, parent_task_id, depth, status, suite,
+           public_key, signature, invocation_origin, receipt_json, received_at)
+         VALUES (?, 'task-legacy-own', NULL, 0, 'completed', 'motebit-jcs-ed25519-b64-v1', '', 'sig', NULL, '{}', ?)`,
+      )
+      .run(DELEGATOR, Date.now());
+
+    await tickVerifierOnce(relay, makeStubAdapter(bothLegsPaid(DELEGATOR_ADDR)));
+
+    expect(settlement(relay.moteDb.db, "stl-legacy-own").payment_verification_status).toBe(
+      "verified",
+    );
   });
 
   it("a local worker leg whose payee has no bound address here is unverifiable, not passed on the fee leg", async () => {
