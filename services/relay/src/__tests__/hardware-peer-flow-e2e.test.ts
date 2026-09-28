@@ -41,6 +41,7 @@ import {
   signVerifiableCredential,
   hexPublicKeyToDidKey,
   bytesToHex,
+  deriveSovereignMotebitId,
 } from "@motebit/encryption";
 import type { KeyPair, VerifiableCredential } from "@motebit/encryption";
 import { signBySuite, mintSecureEnclaveReceiptForTest } from "@motebit/crypto";
@@ -62,9 +63,12 @@ interface BootstrapResult {
 
 async function bootstrapAgent(relay: SyncRelay): Promise<BootstrapResult> {
   const keypair = await generateKeypair();
-  const motebitId = crypto.randomUUID();
-  const deviceId = crypto.randomUUID();
   const publicKeyHex = bytesToHex(keypair.publicKey);
+  // A sovereign id (the default mint since 2026-05-22): a peer credential's
+  // did:key subject binds only by evidence — the sovereign commitment or a
+  // proven holder key (#850).
+  const motebitId = await deriveSovereignMotebitId(publicKeyHex);
+  const deviceId = crypto.randomUUID();
 
   const body = await signDeviceRegistration(
     {

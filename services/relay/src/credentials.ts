@@ -11,6 +11,7 @@ import {
   issueReputationCredential,
   verifyVerifiableCredential,
   createPresentation,
+  canonicalJson,
 } from "@motebit/encryption";
 import type { VerifiableCredential } from "@motebit/encryption";
 import { asMotebitId, AgentTrustLevel } from "@motebit/sdk";
@@ -22,6 +23,16 @@ import type { IdentityManager } from "@motebit/core-identity";
 import type { Hono } from "hono";
 import type { RelayIdentity } from "./federation.js";
 import { insertRevocationEvent } from "./federation.js";
+import {
+  bindCredentialSubject,
+  didKeyProvenFor,
+  unwrapBound,
+  type BoundIdentity,
+} from "./identity-binding.js";
+import type { AuthEvent } from "./auth-events.js";
+import { createLogger } from "./logger.js";
+
+const logger = createLogger({ service: "credentials" });
 
 export interface CredentialDeps {
   db: DatabaseDriver;
@@ -30,6 +41,12 @@ export interface CredentialDeps {
   identityManager: IdentityManager;
   /** When true, relay issues reputation credentials on demand. Default: false (peer-issued). */
   issueCredentials?: boolean;
+  /**
+   * Durable auth-event record (auth-events.ts) for a submission whose
+   * credential names another identity (relay rule 6, #850). Required: a
+   * refusal stops being recorded the day a refactor drops an optional one.
+   */
+  recordAuthEvent: (event: AuthEvent) => void;
 }
 
 /** Returns the relay's persistent keypair for credential signing. */
@@ -43,9 +60,64 @@ export function getRelayKeypair(relayIdentity: RelayIdentity): {
   };
 }
 
+/**
+ * File a submitted credential under its bound subject (#850). `owner` is the
+ * identity `bindCredentialSubject` proved the credential is about; it is
+ * read only through `unwrapBound`. Idempotent: `true` when the row is new or
+ * is this exact credential under this owner already; `false` when the
+ * `credential_id` is held by a different credential or another identity —
+ * the caller refuses it rather than report a silent no-op as accepted.
+ */
+export function insertSubmittedCredential(
+  db: DatabaseDriver,
+  owner: BoundIdentity,
+  row: { credentialId: string; issuerDid: string; credentialType: string; credentialJson: string },
+): boolean {
+  const subject = unwrapBound(owner);
+  const result = db
+    .prepare(
+      `INSERT OR IGNORE INTO relay_credentials
+       (credential_id, subject_motebit_id, issuer_did, credential_type, credential_json, issued_at)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+    )
+    .run(
+      row.credentialId,
+      subject,
+      row.issuerDid,
+      row.credentialType,
+      row.credentialJson,
+      Date.now(),
+    );
+  if (result.changes > 0) return true;
+  const held = db
+    .prepare(
+      "SELECT subject_motebit_id, credential_json FROM relay_credentials WHERE credential_id = ?",
+    )
+    .get(row.credentialId) as { subject_motebit_id: string; credential_json: string } | undefined;
+  // The SAME credential re-submitted is idempotent even when its keys arrive
+  // in another order (spec §7.1 step 6): compare the JCS canonical forms, not
+  // the stored bytes.
+  if (held === undefined || held.subject_motebit_id !== subject) return false;
+  try {
+    return (
+      canonicalJson(JSON.parse(held.credential_json)) ===
+      canonicalJson(JSON.parse(row.credentialJson))
+    );
+  } catch {
+    return false;
+  }
+}
+
 /** Register all credential endpoints on the Hono app. */
 export function registerCredentialRoutes(deps: CredentialDeps): void {
-  const { db, app, relayIdentity, identityManager, issueCredentials = false } = deps;
+  const {
+    db,
+    app,
+    relayIdentity,
+    identityManager,
+    issueCredentials = false,
+    recordAuthEvent,
+  } = deps;
 
   // POST /api/v1/credentials/:motebitId/reputation — compute reputation, issue VC
   // Only available when relay credential issuance is enabled.
@@ -428,15 +500,19 @@ export function registerCredentialRoutes(deps: CredentialDeps): void {
   // it indexes what peers produce.
   //
   // Each credential is verified (Ed25519 signature check) before storage. Self-issued credentials
-  // (issuer === subject) are rejected — they carry no trust signal and the sybil defense layer
-  // would filter them anyway, but rejecting at ingestion is cleaner.
+  // (issued by a key the subject identity itself holds) are rejected — they carry no trust signal.
+  //
+  // The row is filed under the path identity, and `revoke-credential` reads that row's subject as
+  // the identity allowed to revoke it (spec/credential-v1.md §6.2). So the path identity must be
+  // the one the credential's OWN `credentialSubject.id` names (`bindCredentialSubject`, #850) —
+  // before, X filed V's credential under X and then revoked it, relay-wide, as its "subject".
   /** @spec motebit/credential@1.0 */
   app.post("/api/v1/agents/:motebitId/credentials/submit", async (c) => {
     const motebitId = c.req.param("motebitId");
 
-    // Any authenticated agent can submit credentials about any subject.
-    // The issuing agent submits credentials about agents it delegated to.
-    // The relay verifies each credential's Ed25519 signature regardless of who submits.
+    // Any party may SUBMIT (the route is public — the issuer's signature is the auth; the
+    // issuing agent submits credentials about agents it delegated to). What is bound is the
+    // TARGET: each credential is filed only under the identity its own subject names.
 
     const body = await c.req.json<{ credentials: VerifiableCredential[] }>();
     if (!Array.isArray(body.credentials) || body.credentials.length === 0) {
@@ -451,6 +527,17 @@ export function registerCredentialRoutes(deps: CredentialDeps): void {
     let accepted = 0;
     let rejected = 0;
     const errors: string[] = [];
+    const refuse = (error: string, reason: string, credentialId?: string): void => {
+      rejected++;
+      errors.push(error);
+      // Rule 6: a refusal is logged as loudly as an acceptance.
+      logger.warn("credential.submit.refused", {
+        motebitId,
+        reason,
+        credentialId: credentialId ?? null,
+        correlationId: c.req.header("x-correlation-id") ?? null,
+      });
+    };
 
     for (const vc of body.credentials) {
       // Basic shape check
@@ -462,27 +549,51 @@ export function registerCredentialRoutes(deps: CredentialDeps): void {
         vc.credentialSubject == null ||
         vc.proof == null
       ) {
-        rejected++;
-        errors.push("invalid credential shape");
+        refuse("invalid credential shape", "invalid_shape");
         continue;
       }
 
-      // Self-attestation rejection: issuer === subject carries no trust signal
       const subjectId =
         typeof vc.credentialSubject === "object" && "id" in vc.credentialSubject
-          ? (vc.credentialSubject as { id: string }).id
+          ? (vc.credentialSubject as { id: unknown }).id
           : undefined;
-      if (subjectId && vc.issuer === subjectId) {
-        rejected++;
-        errors.push("self-issued credential rejected");
+      const issuerDid = typeof vc.issuer === "string" ? vc.issuer : "";
+
+      // Self-attestation rejection: issuer === subject carries no trust signal. Compared by
+      // IDENTITY as well as by DID string: the `did:key` of V's own key issuing about
+      // `did:motebit:V` is the same party under two spellings.
+      if (
+        (typeof subjectId === "string" && issuerDid === subjectId) ||
+        (issuerDid.startsWith("did:key:") && (await didKeyProvenFor(db, issuerDid, motebitId)))
+      ) {
+        refuse("self-issued credential rejected", "self_issued");
         continue;
       }
 
       // Verify Ed25519 signature — don't index unverified credentials
       const valid = await verifyVerifiableCredential(vc);
       if (!valid) {
-        rejected++;
-        errors.push("signature verification failed");
+        refuse("signature verification failed", "signature_invalid");
+        continue;
+      }
+
+      // The target: the path identity must be the identity this credential is ABOUT.
+      const binding = await bindCredentialSubject(db, subjectId, motebitId);
+      if ("refused" in binding) {
+        // The reason code rides in the body so a best-effort submitter (the
+        // runtime logs `errors`) can see WHY, not just that it was refused.
+        refuse(`credential subject is not this identity (${binding.refused})`, binding.refused);
+        // Rule 6: recorded durably. The route takes no token, so there is no
+        // presenter (null); the target is in `path`.
+        recordAuthEvent({
+          kind: "agent_token_rejected",
+          method: c.req.method,
+          path: c.req.path,
+          motebitId: null,
+          audience: null,
+          reason: binding.refused,
+          correlationId: c.req.header("x-correlation-id") ?? null,
+        });
         continue;
       }
 
@@ -493,26 +604,28 @@ export function registerCredentialRoutes(deps: CredentialDeps): void {
         .prepare("SELECT 1 FROM relay_revoked_credentials WHERE credential_id = ?")
         .get(credId);
       if (revokedRow != null) {
-        rejected++;
-        errors.push("credential is revoked");
+        refuse("credential is revoked", "revoked", credId);
         continue;
       }
 
       // Determine credential type
       const credType = vc.type.find((t: string) => t !== "VerifiableCredential") ?? "Unknown";
-      const issuerDid = typeof vc.issuer === "string" ? vc.issuer : "";
 
-      // Upsert: if credential_id already exists, skip (idempotent)
       try {
-        db.prepare(
-          `INSERT OR IGNORE INTO relay_credentials
-           (credential_id, subject_motebit_id, issuer_did, credential_type, credential_json, issued_at)
-           VALUES (?, ?, ?, ?, ?, ?)`,
-        ).run(credId, motebitId, issuerDid, credType, JSON.stringify(vc), Date.now());
+        const stored = insertSubmittedCredential(db, binding.bound, {
+          credentialId: credId,
+          issuerDid,
+          credentialType: credType,
+          credentialJson: JSON.stringify(vc),
+        });
+        if (!stored) {
+          refuse("credential_id is already held by a different credential", "id_conflict", credId);
+          continue;
+        }
         accepted++;
+        logger.info("credential.submit.recorded", { motebitId, credentialId: credId });
       } catch {
-        rejected++;
-        errors.push("storage error");
+        refuse("storage error", "storage_error", credId);
       }
     }
 

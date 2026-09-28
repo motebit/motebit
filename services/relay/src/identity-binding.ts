@@ -37,9 +37,16 @@ import { HTTPException } from "hono/http-exception";
 import type { EventLogEntry } from "@motebit/sdk";
 import type { EventStore } from "@motebit/event-log";
 import type { MigrationRequest } from "@motebit/protocol";
-import { hexToBytes } from "@motebit/encryption";
-import { verifyMigrationRequest } from "@motebit/crypto";
+import type { DatabaseDriver } from "@motebit/persistence";
+import { bytesToHex, didKeyToPublicKey, hexToBytes } from "@motebit/encryption";
+import {
+  deriveSovereignMotebitId,
+  verifyDelegationRevocation,
+  verifyMigrationRequest,
+  type DelegationRevocation,
+} from "@motebit/crypto";
 import { OPERATOR_PRESENTED, type AuthEvent } from "./auth-events.js";
+import { identityKey, keysHeldBy } from "./identity-keys.js";
 import { createLogger } from "./logger.js";
 
 const logger = createLogger({ service: "identity-binding" });
@@ -179,6 +186,149 @@ export async function bindBySignature(
     ok = false;
   }
   return ok ? mint(request.motebit_id) : null;
+}
+
+// ---------------------------------------------------------------------------
+// Signed artifacts: the row is filed under the identity the ARTIFACT names,
+// proven against the keys the relay holds for it (#850)
+// ---------------------------------------------------------------------------
+
+/** The canonical lowercase hex key a `did:key` URI names, or null when it is not a well-formed Ed25519 `did:key`. */
+function didKeyHex(did: string): string | null {
+  try {
+    return bytesToHex(didKeyToPublicKey(did));
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Is the `did:key` URI `did` PROVEN to be `motebitId`'s key? Only evidence
+ * counts (#850 review):
+ *
+ *  - (a) `motebitId` is the sovereign commitment to the key
+ *    (`deriveSovereignMotebitId(key) === motebitId`) — the id commits to its
+ *    genesis key, offline, whoever registered what; or
+ *  - (b) the key is the identity's HOLDER key (`identityKey`, identity-keys.ts
+ *    — the #703 authority state, written only by evidence: E-sov, E-link,
+ *    E-mig, E-op, E-main).
+ *
+ * The registry column and device rows are NOT evidence: `/agents/bootstrap`
+ * and `/agents/register` write any `public_key` without proof of possession,
+ * so a key there proves nothing about who holds it. They never bind, and —
+ * because nothing another identity writes can veto — they never block
+ * either: there is no "no other identity holds it" check (a squatter's
+ * bootstrap under V's key used to refuse every credential about V).
+ *
+ * A legacy (non-sovereign) identity with no holder has no proven key, so no
+ * `did:key` names it; `did:motebit:<id>` still does.
+ */
+export async function didKeyProvenFor(
+  db: DatabaseDriver,
+  did: string,
+  motebitId: string,
+): Promise<boolean> {
+  const hex = didKeyHex(did);
+  if (hex === null) return false;
+  if ((await deriveSovereignMotebitId(hex)) === motebitId) return true;
+  const holder = identityKey(db, motebitId)?.publicKey;
+  // The holder's stored spelling may predate the lowercase rule (E-main
+  // transplants as-is); both sides name the same 32 bytes.
+  return typeof holder === "string" && holder.toLowerCase() === hex;
+}
+
+/** Why a credential's subject did not bind to the path identity (`bindCredentialSubject`). */
+export type CredentialSubjectRefusal =
+  | "credential_subject:missing"
+  | "credential_subject:not_path_identity"
+  | "credential_subject:key_not_proven_for_path_identity"
+  | "credential_subject:unsupported_did";
+
+/**
+ * `POST /api/v1/agents/:motebitId/credentials/submit` files a credential
+ * under the path identity, and that row is what `revoke-credential` later
+ * reads as "the subject" (spec/credential-v1.md §6.2). The route is public
+ * (the issuer's signature is the auth, §7.1), so nothing about the SUBMITTER
+ * can be bound — the binding is between the target and the CREDENTIAL: the
+ * path identity must be the identity the credential's own
+ * `credentialSubject.id` names.
+ *
+ *  - `did:motebit:<id>` names `<id>`; it must be exactly the path identity.
+ *  - `did:key:z…` names a key; it must be PROVEN the path identity's key —
+ *    the path id is its sovereign commitment, or it is the identity's holder
+ *    key (`didKeyProvenFor`). Registry and device-row keys never bind.
+ *  - anything else, or no subject id at all, binds nobody.
+ *
+ * Before #850 the row was filed under the path alone: X filed V's credential
+ * under X, then revoked it as its "subject" — relay-wide, for V.
+ */
+export async function bindCredentialSubject(
+  db: DatabaseDriver,
+  subjectId: unknown,
+  pathId: string,
+): Promise<{ bound: BoundIdentity } | { refused: CredentialSubjectRefusal }> {
+  if (typeof subjectId !== "string" || subjectId === "") {
+    return { refused: "credential_subject:missing" };
+  }
+  if (subjectId.startsWith("did:motebit:")) {
+    if (subjectId.slice("did:motebit:".length) !== pathId) {
+      return { refused: "credential_subject:not_path_identity" };
+    }
+  } else if (subjectId.startsWith("did:key:")) {
+    if (!(await didKeyProvenFor(db, subjectId, pathId))) {
+      return { refused: "credential_subject:key_not_proven_for_path_identity" };
+    }
+  } else {
+    return { refused: "credential_subject:unsupported_did" };
+  }
+  return { bound: mint(pathId) };
+}
+
+/** Why a delegation revocation did not bind to its delegator (`bindByDelegationRevocation`). */
+export type DelegationRevocationRefusal =
+  "delegation_revocation:signature_invalid" | "delegation_revocation:key_not_held_by_delegator";
+
+/**
+ * Bind a `DelegationRevocation` to the delegator it names
+ * (spec/standing-delegation-v1.md §5.1: "Only the grant's delegator may sign
+ * one"). The signature must verify AND the key it verifies under must be one
+ * this relay holds for `delegator_id` (`keysHeldBy` — so a rotated-out key
+ * no longer speaks for the identity). The key is looked up HERE, never taken
+ * from the caller: the key embedded in the artifact proves only that
+ * SOMEONE signed it.
+ *
+ * Before #850 the relay verified the revocation against its own embedded
+ * key alone, so a stranger with a fresh keypair could file a revocation
+ * naming any delegator and any `grant_id`, and the acceptance fence refused
+ * that grant's tasks.
+ */
+export async function bindByDelegationRevocation(
+  db: DatabaseDriver,
+  revocation: DelegationRevocation,
+): Promise<{ bound: BoundIdentity } | { refused: DelegationRevocationRefusal }> {
+  let ok = false;
+  try {
+    ok = await verifyDelegationRevocation(revocation);
+  } catch {
+    ok = false;
+  }
+  if (!ok) return { refused: "delegation_revocation:signature_invalid" };
+  // Case-insensitive: a legacy device row may store UPPER(K) (#758 —
+  // device-registration-guard.ts admits it), and both spellings name the same
+  // 32 bytes the signature just verified under. Same rule as didKeyProvenFor.
+  const signer =
+    typeof revocation.delegator_public_key === "string"
+      ? revocation.delegator_public_key.toLowerCase()
+      : "";
+  if (
+    typeof revocation.delegator_id !== "string" ||
+    revocation.delegator_id === "" ||
+    signer === "" ||
+    ![...keysHeldBy(db, revocation.delegator_id)].some((k) => k.toLowerCase() === signer)
+  ) {
+    return { refused: "delegation_revocation:key_not_held_by_delegator" };
+  }
+  return { bound: mint(revocation.delegator_id) };
 }
 
 // ---------------------------------------------------------------------------
