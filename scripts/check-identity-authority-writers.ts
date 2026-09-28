@@ -414,6 +414,31 @@ const WRITERS: readonly Writer[] = [
     principal: MIGRATION + " (de-duplication of settlement rows)",
   },
   {
+    file: R + "migrations.ts",
+    verb: "INSERT",
+    table: "relay_event_seq",
+    count: 1,
+    principal:
+      MIGRATION +
+      " (v46 backfills the ingest sequence (#868): one seq row per held event, filed under that event's OWN motebit_id, copied — never chosen)",
+  },
+  {
+    file: R + "migrations.ts",
+    verb: "REPLACE",
+    table: "relay_event_seq",
+    count: 1,
+    principal:
+      "the `relay_event_seq_stamp` TRIGGER (v46, #868) — fires only inside an INSERT into `events` and copies NEW.motebit_id, so its principal is exactly the principal of the event write it stamps (EVENT_APPENDS: `appendBoundEvent`, owner minted by the entry binding; tasks.ts's relay-authored event). It cannot file a seq under any identity but the event's own",
+  },
+  {
+    file: R + "migrations.ts",
+    verb: "DELETE",
+    table: "relay_event_seq",
+    count: 1,
+    principal:
+      "the `relay_event_seq_unstamp` TRIGGER (v46, #868) — fires only inside a DELETE from `events` and removes exactly that event's seq row; its principal is the event deletion's (compaction / horizon truncation, relay loop only)",
+  },
+  {
     file: P,
     verb: "INSERT",
     table: "events",
@@ -1122,8 +1147,8 @@ const MINTS: readonly Mint[] = [
   {
     file: R + "sync-routes.ts",
     mint: "bindSyncEntries",
-    count: 1,
-    door: "POST /sync/:id/push",
+    count: 2,
+    door: "POST /sync/:id/push, and GET /sync/:id/pull?after_seq= (#868: the seq read binds over no entries — the same presenter check, so it reads only the identity the token was verified for, or the path identity under the operator's master token)",
   },
   {
     file: R + "data-sync.ts",
@@ -1189,6 +1214,9 @@ const WRITER_HELPERS: ReadonlyArray<{ file: string; fn: string; param: string }>
   { file: R + "data-sync.ts", fn: "upsertSyncPlan", param: "owner" },
   { file: R + "data-sync.ts", fn: "upsertSyncPlanStep", param: "owner" },
   { file: BINDING_FILE, fn: "appendBoundEvent", param: "owner" },
+  // A READER, registered because it takes the capability: the seq pull
+  // returns only the bound identity's events (#868).
+  { file: R + "event-seq.ts", fn: "readEventsAfterSeq", param: "owner" },
   { file: R + "subscriptions.ts", fn: "setSubscriptionStatus", param: "owner" },
   { file: R + "migration.ts", fn: "updateMigrationState", param: "owner" },
   { file: R + "key-rotation.ts", fn: "insertApproval", param: "owner" },

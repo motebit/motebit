@@ -25,6 +25,20 @@ describe("IdbEventStore", () => {
     };
   }
 
+  it("keeps the event-sync seq cursor per relay stream, beside the events (#868, v9)", async () => {
+    const name = `test-cursor-${crypto.randomUUID()}`;
+    const s1 = new IdbEventStore(await openMotebitDB(name));
+    const a = "http://relay.one#mote-1";
+    expect(await s1.getSyncSeqCursor(a)).toBeNull();
+    await s1.setSyncSeqCursor(a, 4);
+    await s1.setSyncSeqCursor(a, 11);
+    await s1.setSyncSeqCursor("http://relay.two#mote-1", 2);
+    // A new page load opens the database again and reads the same cursor.
+    const s2 = new IdbEventStore(await openMotebitDB(name));
+    expect(await s2.getSyncSeqCursor(a)).toBe(11);
+    expect(await s2.getSyncSeqCursor("http://relay.two#mote-1")).toBe(2);
+  });
+
   it("appends and queries events", async () => {
     const e1 = makeEvent({ version_clock: 1 });
     const e2 = makeEvent({ version_clock: 2 });

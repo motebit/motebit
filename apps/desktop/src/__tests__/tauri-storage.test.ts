@@ -6,6 +6,7 @@ import {
   TauriPlanStore,
   type InvokeFn,
 } from "../tauri-storage";
+import { DESKTOP_MIGRATIONS } from "../tauri-migrations";
 
 // Schema matching main.rs SCHEMA constant
 const SCHEMA = `
@@ -128,6 +129,17 @@ describe("TauriEventStore", () => {
     db = new Database(":memory:");
     db.exec(SCHEMA);
     store = new TauriEventStore(createMockInvoke(db));
+  });
+
+  it("keeps the event-sync seq cursor once desktop migration v8 has run (#868)", async () => {
+    // This fixture's schema is partial, so apply v8 on its own.
+    for (const sql of DESKTOP_MIGRATIONS.find((m) => m.version === 8)!.statements) db.exec(sql);
+    const key = "http://relay.one#m1";
+    expect(await store.getSyncSeqCursor(key)).toBeNull();
+    await store.setSyncSeqCursor(key, 5);
+    await store.setSyncSeqCursor(key, 8);
+    expect(await store.getSyncSeqCursor(key)).toBe(8);
+    expect(await new TauriEventStore(createMockInvoke(db)).getSyncSeqCursor(key)).toBe(8);
   });
 
   it("append + query round-trip", async () => {

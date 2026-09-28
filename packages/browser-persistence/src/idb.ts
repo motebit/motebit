@@ -5,7 +5,7 @@
  * memory edges, identities, devices, and audit log.
  */
 
-const DB_VERSION = 8;
+const DB_VERSION = 9;
 
 export function openMotebitDB(dbName = "motebit"): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
@@ -161,6 +161,16 @@ export function openMotebitDB(dbName = "motebit"): Promise<IDBDatabase> {
         skillAudit.createIndex("skill_name", "skill_name");
         skillAudit.createIndex("at", "at");
         skillAudit.createIndex("type", "type");
+      }
+
+      // Event-sync pull cursor (#868, v9) — the largest relay ingest
+      // sequence this database has durably applied, per relay stream
+      // (`cursor_key` = relay origin + '#' + motebit_id). The cursor is the
+      // relay's sequence, never this device's clock. Beside the events it
+      // describes, so clearing site data clears both. Sibling of
+      // persistence v50 / desktop v8 / mobile v28.
+      if (!db.objectStoreNames.contains("sync_seq_cursors")) {
+        db.createObjectStore("sync_seq_cursors", { keyPath: "cursor_key" });
       }
     };
 

@@ -447,6 +447,23 @@ export class ExpoSqliteEventStore implements EventStoreAdapter {
     return row?.max_clock ?? 0;
   }
 
+  /** The event-sync pull cursor (#868; mobile migration v28) — a `SyncSeqCursorStore`. */
+  async getSyncSeqCursor(key: string): Promise<number | null> {
+    const row = this.db.getFirstSync<{ seq: number }>(
+      "SELECT seq FROM sync_seq_cursors WHERE cursor_key = ?",
+      [key],
+    );
+    return row?.seq ?? null;
+  }
+
+  async setSyncSeqCursor(key: string, seq: number): Promise<void> {
+    this.db.runSync(
+      `INSERT INTO sync_seq_cursors (cursor_key, seq, updated_at) VALUES (?, ?, ?)
+       ON CONFLICT (cursor_key) DO UPDATE SET seq = excluded.seq, updated_at = excluded.updated_at`,
+      [key, seq, Date.now()],
+    );
+  }
+
   async tombstone(eventId: string, motebitId: string): Promise<void> {
     this.db.runSync("UPDATE events SET tombstoned = 1 WHERE event_id = ? AND motebit_id = ?", [
       eventId,

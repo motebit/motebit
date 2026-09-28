@@ -106,6 +106,21 @@ export class IdbEventStore implements EventStoreAdapter {
     });
   }
 
+  /** The event-sync pull cursor (#868; IDB v9) — a `SyncSeqCursorStore`. */
+  async getSyncSeqCursor(key: string): Promise<number | null> {
+    const tx = this.db.transaction("sync_seq_cursors", "readonly");
+    const row = (await idbRequest(tx.objectStore("sync_seq_cursors").get(key))) as
+      { cursor_key: string; seq: number } | undefined;
+    return typeof row?.seq === "number" ? row.seq : null;
+  }
+
+  async setSyncSeqCursor(key: string, seq: number): Promise<void> {
+    const tx = this.db.transaction("sync_seq_cursors", "readwrite");
+    await idbRequest(
+      tx.objectStore("sync_seq_cursors").put({ cursor_key: key, seq, updated_at: Date.now() }),
+    );
+  }
+
   async tombstone(eventId: string, _motebitId: string): Promise<void> {
     const tx = this.db.transaction("events", "readwrite");
     const store = tx.objectStore("events");

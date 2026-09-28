@@ -665,4 +665,23 @@ export const PERSISTENCE_MIGRATIONS: readonly Migration[] = [
       "CREATE INDEX IF NOT EXISTS idx_paid_intent_outstanding ON paid_intent_ledger (motebit_id, resolution, recorded_at)",
     ],
   },
+  {
+    version: 50,
+    description: "sync_seq_cursors — the event-sync pull cursor (relay ingest sequence)",
+    statements: [
+      // #868: a device pulled `after_clock = <its own max clock>`, and clocks
+      // are device-assigned, so a sibling device's event at an equal clock
+      // was skipped forever. The pull cursor is now the relay's ingest
+      // sequence: the largest seq this database has durably applied, per
+      // relay stream (`cursor_key` = relay origin + '#' + motebit_id). Kept
+      // beside the events it describes, so a wiped or restored database
+      // takes its cursor with it. A missing row is seq 0: re-pull, deduped
+      // by event_id. Local private state, never on a wire.
+      `CREATE TABLE IF NOT EXISTS sync_seq_cursors (
+        cursor_key TEXT PRIMARY KEY,
+        seq INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      )`,
+    ],
+  },
 ];

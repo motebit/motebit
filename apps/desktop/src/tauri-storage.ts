@@ -194,6 +194,25 @@ export class TauriEventStore implements EventStoreAdapter {
     return rows[0]?.max_clock ?? 0;
   }
 
+  /** The event-sync pull cursor (#868; desktop migration v8) — a `SyncSeqCursorStore`. */
+  async getSyncSeqCursor(key: string): Promise<number | null> {
+    const rows = await dbQuery<{ seq: number }>(
+      this.invoke,
+      "SELECT seq FROM sync_seq_cursors WHERE cursor_key = ?",
+      [key],
+    );
+    return rows[0]?.seq ?? null;
+  }
+
+  async setSyncSeqCursor(key: string, seq: number): Promise<void> {
+    await dbExecute(
+      this.invoke,
+      `INSERT INTO sync_seq_cursors (cursor_key, seq, updated_at) VALUES (?, ?, ?)
+       ON CONFLICT (cursor_key) DO UPDATE SET seq = excluded.seq, updated_at = excluded.updated_at`,
+      [key, seq, Date.now()],
+    );
+  }
+
   async tombstone(eventId: string, motebitId: string): Promise<void> {
     await dbExecute(
       this.invoke,

@@ -53,6 +53,20 @@ describe("SqliteEventStore", () => {
     ...overrides,
   });
 
+  it("keeps the event-sync seq cursor per relay stream, beside the events (#868, v50)", async () => {
+    const a = "http://relay.one#motebit-1";
+    const b = "http://relay.two#motebit-1";
+    expect(await mdb.eventStore.getSyncSeqCursor(a)).toBeNull();
+    await mdb.eventStore.setSyncSeqCursor(a, 7);
+    await mdb.eventStore.setSyncSeqCursor(b, 3);
+    await mdb.eventStore.setSyncSeqCursor(a, 9);
+    expect(await mdb.eventStore.getSyncSeqCursor(a)).toBe(9);
+    expect(await mdb.eventStore.getSyncSeqCursor(b)).toBe(3);
+    // A second store over the same database (a new process) reads the same cursor.
+    const { SqliteEventStore } = await import("../index.js");
+    expect(await new SqliteEventStore(mdb.db).getSyncSeqCursor(a)).toBe(9);
+  });
+
   it("appends and queries events", async () => {
     const event = makeEvent();
     await mdb.eventStore.append(event);

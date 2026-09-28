@@ -2043,4 +2043,64 @@ export const relayMigrations: Migration[] = [
       `);
     },
   },
+  {
+    version: 46,
+    name: "event_ingest_sequence",
+    up: (db) => {
+      // The relay ingest sequence — the event-sync transport cursor (#868;
+      // the law and the cursor-visibility argument are in `event-seq.ts`).
+      // Clients pulled `after_clock = <their own max clock>`, and clocks are
+      // device-assigned, so a sibling device's event at an equal clock was
+      // skipped forever.
+      //
+      // `seq` is AUTOINCREMENT, never a bare rowid: a seq is never reused,
+      // even after the largest row is deleted, so a cursor past a deleted seq
+      // cannot miss a later row that took its number.
+      //
+      // The stamp is a TRIGGER on `events`, so it is part of every INSERT
+      // statement: the event row and its seq commit or roll back together,
+      // and every writer — the sync doors, the relay-authored trust event in
+      // tasks.ts, any later one — is stamped without knowing the sequence
+      // exists. `INSERT OR IGNORE` on a duplicate `event_id` inserts no row
+      // and fires no trigger. `OR REPLACE` on the seq table: a row that
+      // becomes visible again (deleted by retention, then re-pushed) takes a
+      // FRESH seq above every earlier one, so every device sees it again.
+      //
+      // The events table belongs to @motebit/persistence's schema, created at
+      // boot before relay migrations run (index.ts); a harness that runs
+      // relayMigrations against a bare driver has no events to sequence.
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS relay_event_seq (
+          seq INTEGER PRIMARY KEY AUTOINCREMENT,
+          event_id TEXT NOT NULL UNIQUE,
+          motebit_id TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_relay_event_seq_identity
+          ON relay_event_seq (motebit_id, seq);
+      `);
+      const hasEvents = db
+        .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'events'")
+        .get() as { name: string } | undefined;
+      if (!hasEvents) return;
+      // Backfill: every event already held, in the order the relay received
+      // it (rowid — `events` is a rowid table, and the relay only ever
+      // appends), deterministically. A client's first seq pull is from 0, so
+      // a backfill that skipped a row would lose it for every new client.
+      db.exec(`
+        INSERT OR IGNORE INTO relay_event_seq (event_id, motebit_id)
+          SELECT event_id, motebit_id FROM events ORDER BY rowid ASC;
+        CREATE TRIGGER IF NOT EXISTS relay_event_seq_stamp
+          AFTER INSERT ON events
+        BEGIN
+          INSERT OR REPLACE INTO relay_event_seq (event_id, motebit_id)
+            VALUES (NEW.event_id, NEW.motebit_id);
+        END;
+        CREATE TRIGGER IF NOT EXISTS relay_event_seq_unstamp
+          AFTER DELETE ON events
+        BEGIN
+          DELETE FROM relay_event_seq WHERE event_id = OLD.event_id;
+        END;
+      `);
+    },
+  },
 ];

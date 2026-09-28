@@ -1,6 +1,7 @@
 import type { EventLogEntry } from "@motebit/sdk";
 import type { EventStoreAdapter, EventFilter } from "@motebit/event-log";
 import { encrypt, decrypt, type EncryptedPayload } from "@motebit/encryption";
+import { isSeqPullSource, type SeqPullResult } from "./seq-cursor.js";
 
 /**
  * Provides versioned encryption keys for key rotation.
@@ -103,6 +104,25 @@ export class EncryptedEventStoreAdapter implements EventStoreAdapter {
   async query(filter: EventFilter): Promise<EventLogEntry[]> {
     const entries = await this.inner.query(filter);
     return Promise.all(entries.map((e) => this.decryptEntry(e)));
+  }
+
+  /**
+   * The inner source's seq-cursor key, when the inner adapter pulls by the
+   * relay ingest sequence (#868); otherwise undefined, and this adapter is
+   * not a seq source (`isSeqPullSource` is false).
+   */
+  get seqCursorKey(): string | undefined {
+    return isSeqPullSource(this.inner) ? this.inner.seqCursorKey : undefined;
+  }
+
+  /** Pull by seq through the inner source, decrypting each entry. */
+  async pullAfterSeq(afterSeq: number, fallbackAfterClock: number): Promise<SeqPullResult> {
+    if (!isSeqPullSource(this.inner)) {
+      throw new Error("encrypted-adapter: the inner adapter does not pull by seq");
+    }
+    const res = await this.inner.pullAfterSeq(afterSeq, fallbackAfterClock);
+    const events = await Promise.all(res.events.map((e) => this.decryptEntry(e)));
+    return { ...res, events };
   }
 
   async appendWithClock(entry: Omit<EventLogEntry, "version_clock">): Promise<number> {

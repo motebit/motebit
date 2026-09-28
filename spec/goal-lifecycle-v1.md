@@ -1,8 +1,8 @@
 # motebit/goal-lifecycle@1.0
 
 **Status:** Stable
-**Version:** 1.1
-**Date:** 2026-04-19
+**Version:** 1.2
+**Date:** 2026-09-28
 
 ---
 
@@ -53,7 +53,7 @@ A conforming goal-lifecycle event log MUST be append-only. Events are identified
 
 ### §3.2 Replay-safe invariant
 
-Given a complete event log in timestamp + `version_clock` order, a conforming implementation MUST reconstruct the same goal set (ids, prompts, scheduling metadata, terminal states) as the emitting motebit. Events MAY arrive out of order across sync paths; consumers MUST tolerate reordering up to `version_clock` resolution.
+Given a complete event log in timestamp + `version_clock` order, a conforming implementation MUST reconstruct the same goal set (ids, prompts, scheduling metadata, terminal states) as the emitting motebit. Events MAY arrive out of order across sync paths; consumers MUST tolerate reordering up to `version_clock` resolution. A log is complete across devices only if it was pulled by the relay ingest sequence and not by `version_clock`. The sync transport cursor law is `motebit/memory-delta@1.0` §3.6.
 
 ### §3.3 Identity binding
 
@@ -277,3 +277,4 @@ None. The three convergence items tracked by v1.0 as §9.1 (failed-run emission)
 | ------- | ---------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | 1.0     | 2026-04-19 | Initial spec.                                                                                                                                                                                                                                 |
 | 1.1     | 2026-04-19 | Additive: `error` field on `GoalExecutedPayload` distinguishes failed runs from successful ones. Convergence: `runtime.goals.*` primitive lands in `@motebit/runtime`; terminal-state guard enforced in-runtime. Closes 1.0's §9.1/§9.2/§9.3. |
+| 1.2     | 2026-09-28 | Clarifying: §3.2's "complete event log" across devices depends on the sync transport cursor, which is the relay ingest sequence and never `version_clock` (`motebit/memory-delta@1.0` §3.6, #868). No wire change.                            |

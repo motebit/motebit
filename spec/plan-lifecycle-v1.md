@@ -1,8 +1,8 @@
 # motebit/plan-lifecycle@1.0
 
 **Status:** Stable
-**Version:** 1.1
-**Date:** 2026-04-19
+**Version:** 1.2
+**Date:** 2026-09-28
 
 ---
 
@@ -51,7 +51,7 @@ A conforming plan-lifecycle event log MUST be append-only. Events are identified
 
 ### §3.2 Replay-safe invariant
 
-Given a complete event log in timestamp + `version_clock` order, a conforming implementation MUST reconstruct the same plan state — total steps, each step's terminal status, `tool_calls_made` per step, and the plan's terminal state — as the emitting motebit. Events MAY arrive out of order across sync paths; consumers MUST tolerate reordering up to `version_clock` resolution.
+Given a complete event log in timestamp + `version_clock` order, a conforming implementation MUST reconstruct the same plan state — total steps, each step's terminal status, `tool_calls_made` per step, and the plan's terminal state — as the emitting motebit. Events MAY arrive out of order across sync paths; consumers MUST tolerate reordering up to `version_clock` resolution. A log is complete across devices only if it was pulled by the relay ingest sequence and not by `version_clock`. The sync transport cursor law is `motebit/memory-delta@1.0` §3.6.
 
 ### §3.3 Identity binding
 
@@ -310,3 +310,4 @@ None. The two convergence items tracked by v1.0 as §8.1 (structural step-lifecy
 | ------- | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | 1.0     | 2026-04-19 | Initial spec.                                                                                                                                                                                                                   |
 | 1.1     | 2026-04-19 | Additive: `task_id` on `PlanStepCompletedPayload` / `PlanStepFailedPayload` when the terminal event closes a delegated step (§3.7). Convergence: in-emitter step-lifecycle state machine enforces §3.4. Closes 1.0's §8.1/§8.2. |
+| 1.2     | 2026-09-28 | Clarifying: §3.2's "complete event log" across devices depends on the sync transport cursor, which is the relay ingest sequence and never `version_clock` (`motebit/memory-delta@1.0` §3.6, #868). No wire change.              |

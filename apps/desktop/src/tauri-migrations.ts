@@ -150,6 +150,21 @@ export const DESKTOP_MIGRATIONS: readonly Migration[] = [
       "ALTER TABLE memory_nodes ADD COLUMN source_turn_id TEXT",
     ],
   },
+  {
+    version: 8,
+    description: "sync_seq_cursors — the event-sync pull cursor (relay ingest sequence)",
+    statements: [
+      // Sibling of persistence v50 + mobile v28 (#868). The pull cursor is
+      // the relay's ingest sequence, never this device's clock; kept beside
+      // the events it describes. A missing row is seq 0 (re-pull, deduped
+      // by event_id).
+      `CREATE TABLE IF NOT EXISTS sync_seq_cursors (
+        cursor_key TEXT PRIMARY KEY,
+        seq INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      )`,
+    ],
+  },
 ];
 
 interface UserVersionRow {

@@ -461,6 +461,28 @@ export class SqliteEventStore implements EventStoreAdapter {
     return row.max_clock ?? 0;
   }
 
+  /**
+   * The event-sync pull cursor (#868): the largest relay ingest sequence this
+   * database has durably applied for the relay stream `key`, or null. Read
+   * by `@motebit/sync-engine` (structurally — it is a `SyncSeqCursorStore`).
+   */
+  async getSyncSeqCursor(key: string): Promise<number | null> {
+    const row = this.db
+      .prepare("SELECT seq FROM sync_seq_cursors WHERE cursor_key = ?")
+      .get(key) as { seq: number } | undefined;
+    return row?.seq ?? null;
+  }
+
+  /** Record the pull cursor for `key`; called only after the pulled events were appended. */
+  async setSyncSeqCursor(key: string, seq: number): Promise<void> {
+    this.db
+      .prepare(
+        `INSERT INTO sync_seq_cursors (cursor_key, seq, updated_at) VALUES (?, ?, ?)
+         ON CONFLICT (cursor_key) DO UPDATE SET seq = excluded.seq, updated_at = excluded.updated_at`,
+      )
+      .run(key, seq, Date.now());
+  }
+
   async tombstone(eventId: string, motebitId: string): Promise<void> {
     this.stmtTombstone.run(eventId, motebitId);
   }
