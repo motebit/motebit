@@ -114,7 +114,7 @@ async function provisionDevice(baseUrl: string): Promise<Provisioned> {
 }
 
 /** Queue a free self-delegation task and return its id. Unlisted worker ⇒
- * `getAgentPricing` is null ⇒ the x402 gate short-circuits (free); the
+ * `priceSubmission` prices it 0 ⇒ the x402 gate short-circuits (free); the
  * self-delegation submission carve-out means no P2P proof is required. */
 async function queueSelfTask(baseUrl: string, worker: Provisioned): Promise<string> {
   const res = await fetch(`${baseUrl}/agent/${worker.motebitId}/task`, {

@@ -9,7 +9,7 @@
  * handler's `callerMotebitId !== :motebitId → 403` guard reads a value
  * only the middleware sets, so it silently no-op'd. Result: anyone
  * could overwrite any agent's listing, including `pay_to_address` —
- * the settlement destination `getAgentPricing` (tasks.ts) reads to
+ * the destination `priceSubmission` (tasks.ts) reads for x402 to
  * route payment. The fix registers listings after the middleware; this
  * suite hits the REAL app so the fix can never silently regress on a
  * future re-order.
@@ -73,7 +73,7 @@ describe("service-listing route auth (regression lock for the 2026-07-07 orderin
       body: LISTING_BODY,
     });
     expect(res.status).toBe(401);
-    // And nothing was written — getAgentPricing would find no listing.
+    // And nothing was written — priceSubmission would find no listing.
     const row = relay.moteDb.db
       .prepare("SELECT 1 FROM relay_service_listings WHERE motebit_id = ?")
       .get(a.motebitId);

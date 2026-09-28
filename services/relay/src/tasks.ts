@@ -65,6 +65,7 @@ import {
   debitSpendableAccount,
   getAllocationHoldRemaining,
   getSpendableBalance,
+  fromMicro,
   toMicro,
 } from "./accounts.js";
 import { attemptPushWake } from "./push-adapter.js";
@@ -286,6 +287,73 @@ export function getListingUnitCost(
   }
 }
 
+/** What a task submission costs, and who is being paid for it. */
+export interface SubmissionPrice {
+  /** The agent whose listing prices the task: `target_agent` when set, else the path agent. */
+  pricingAgent: string;
+  /** The single capability a pinned delegation prices, when it names exactly one. */
+  pricingCapability: string | undefined;
+  /** Listing unit cost in dollars (net to the worker). 0 = free. */
+  unitCost: number;
+  /** Gross price (unit cost + platform fee) in integer micro-units. 0 = free. */
+  grossMicro: number;
+  /**
+   * The pricing agent's onchain `pay_to_address`, or null when it publishes
+   * none. This answers "can this task be charged ONCHAIN via x402?" — there
+   * is no arming an onchain gate with no destination — and NOTHING else. It
+   * is not "does this agent charge": the relay-custody lane credits the
+   * worker's VIRTUAL ACCOUNT and never reads it, so a priced agent with no
+   * payout address still charges (`grossMicro > 0`). Reading it as "free"
+   * made "priced and unpayable" representable (`priced-unpayable-listing.test.ts`).
+   */
+  payTo: string | null;
+}
+
+/**
+ * The ONE price of a task submission (#901 round 2). The submit handler's
+ * `price_snapshot` (which the budget hold, the x402 deposit credit and
+ * settlement all read) and the x402 gate (what it charges onchain, and
+ * whether the delegator's spendable balance lets it skip x402) both call this.
+ *
+ * They used to price differently: the gate summed every capability the PATH
+ * agent lists; the handler prices `target_agent` when one is set, and the one
+ * capability a pinned delegation names. When the two disagreed the gate could
+ * send to x402 a task the handler then funded from the virtual account — the
+ * onchain payment settles after a 2xx, so the delegator paid twice — or ask
+ * x402 for less than the deposit the handler credits.
+ *
+ * Price against the WORKER, not the URL agent: a P2P proof submission carries
+ * `target_agent` (the worker) and POSTs to the DELEGATOR's own endpoint, so the
+ * URL agent is the delegator — pricing by it would validate the hop against the
+ * delegator's own listing (a $0.25 researcher paying a $0.003 atom would be
+ * checked against $0.25). And price the SPECIFIC capability the delegation
+ * pins, not the sum of the worker's listings. A submission with no
+ * `target_agent` prices the URL agent (the worker), summed, as before.
+ */
+export function priceSubmission(
+  moteDb: MotebitDatabase,
+  pathAgentId: string,
+  body: { target_agent?: unknown; required_capabilities?: unknown },
+  platformFeeRate: number,
+): SubmissionPrice {
+  const pinned = typeof body.target_agent === "string" && body.target_agent.length > 0;
+  const pricingAgent = pinned ? (body.target_agent as string) : pathAgentId;
+  const pricingCapability =
+    pinned && Array.isArray(body.required_capabilities) && body.required_capabilities.length === 1
+      ? String(body.required_capabilities[0])
+      : undefined;
+  const unitCost = getListingUnitCost(moteDb, pricingAgent, pricingCapability);
+  const grossMicro = unitCost > 0 ? toMicro(computeGrossAmount(unitCost, platformFeeRate)) : 0;
+  const row = moteDb.db
+    .prepare(
+      "SELECT pay_to_address FROM relay_service_listings WHERE motebit_id = ? ORDER BY updated_at DESC LIMIT 1",
+    )
+    .get(pricingAgent) as { pay_to_address: string | null } | undefined;
+  const payTo =
+    row?.pay_to_address != null && row.pay_to_address !== "" ? row.pay_to_address : null;
+  return { pricingAgent, pricingCapability, unitCost, grossMicro, payTo };
+}
+
 /**
  * Arc 3.5 P2P-by-default gate predicate. Returns `true` ⟺ a submission must be
  * rejected with `TASK_P2P_PROOF_REQUIRED` (402): paid direct delegation to a
@@ -447,48 +515,6 @@ export async function recordAdmissionOutcome(
   headers.delete("content-length");
   headers.set("content-type", "application/json");
   return new Response(serialized, { status: res.status, headers });
-}
-
-/**
- * x402-chargeability, NOT "does this agent charge money".
- *
- * Returns null without a `pay_to_address` — correctly, because the x402 gate it
- * feeds is an ONCHAIN payment path and `pay_to_address` is where the money
- * goes. There is no arming an onchain gate with no destination.
- *
- * **Do not reuse this as a general "is this agent paid" predicate.** That is a
- * different question with a different answer: the relay-custody lane credits
- * the worker's VIRTUAL ACCOUNT and never reads `pay_to_address`, so an agent
- * can charge for relay-custody work while publishing no onchain address at all.
- * For "does this agent charge", read the price — `getListingUnitCost(...) > 0`,
- * the same source `price_snapshot` derives from, so the two cannot disagree.
- *
- * Conflating the two made "priced and unpayable" representable and produced the
- * unfunded-allocation mint: priced enough to book `amount_locked`, not priced
- * enough to demand payment, leaving a locked allocation with no debit behind it
- * for every downstream payout site to trust. See the `requiresPayment` comment
- * at the allocation branch, and `priced-unpayable-listing.test.ts`.
- *
- * Sole caller: the x402 middleware wrapper.
- */
-function getAgentPricing(
-  moteDb: MotebitDatabase,
-  agentId: string,
-): { unitCost: number; payTo: string } | null {
-  const row = moteDb.db
-    .prepare(
-      "SELECT pricing, pay_to_address FROM relay_service_listings WHERE motebit_id = ? ORDER BY updated_at DESC LIMIT 1",
-    )
-    .get(agentId) as { pricing: string; pay_to_address: string | null } | undefined;
-  if (!row || !row.pay_to_address) return null;
-  try {
-    const pricing = JSON.parse(row.pricing) as CapabilityPrice[];
-    const totalCost = pricing.reduce((sum, p) => sum + (p.unit_cost ?? 0), 0);
-    if (totalCost <= 0) return null;
-    return { unitCost: totalCost, payTo: row.pay_to_address };
-  } catch {
-    return null;
-  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1947,7 +1973,9 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
   };
 
   // Capture x402 settlement proof so the task handler can link it to the task queue entry.
-  // Same single-threaded pattern as currentPricing — set by hook, read by handler, no interleaving.
+  // Set by the settle hook, read-and-cleared by the next submit handler. The x402
+  // library settles AFTER the handler (see the x402 branch), so a handler reads
+  // the PREVIOUS settlement's hash, if any — #907.
   let lastSettleTxHash: string | undefined;
   let lastSettleNetwork: string | undefined;
 
@@ -1975,29 +2003,41 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
       return Promise.resolve();
     });
 
-    // Single DB lookup per request. The wrapper sets currentPricing before
-    // calling x402Gate; the price/payTo callbacks read it synchronously within
-    // the same tick (x402 resolves route config before any await). Safe in
-    // Node's single-threaded model — no interleaving between set and read.
-    let currentPricing: { unitCost: number; payTo: string } | null = null;
+    // The x402 price of each request is its `priceSubmission` quote (#901
+    // round 2), held PER REQUEST: the wrapper stores the quote under a fresh
+    // nonce and stamps the nonce on the request it hands the gate (overwriting
+    // any client-sent value), and the price/payTo callbacks read the quote back
+    // through the request adapter. A single shared "current pricing" variable
+    // was set before awaits (the body read, the facilitator init), so a
+    // concurrent submission could replace it and one request was charged
+    // another's price.
+    type X402Quote = { unitCost: number; grossMicro: number; payTo: string };
+    const x402Quotes = new Map<string, X402Quote>();
+    const X402_QUOTE_HEADER = "x-motebit-x402-quote";
+    type QuoteContext = { adapter?: { getHeader(name: string): string | undefined } };
+    const quoteOf = (ctx: QuoteContext): X402Quote | null => {
+      const nonce = ctx.adapter?.getHeader(X402_QUOTE_HEADER);
+      return nonce != null ? (x402Quotes.get(nonce) ?? null) : null;
+    };
+    const requireQuote = (ctx: QuoteContext): X402Quote => {
+      const quote = quoteOf(ctx);
+      // Fail closed: a request the wrapper did not quote is never priced as free.
+      if (quote == null) throw new Error("x402: no price quote for this request");
+      return quote;
+    };
 
     const x402Routes = {
       "POST /agent/*/task": {
         accepts: {
           scheme: "exact" as const,
           network,
-          price: () => {
-            if (!currentPricing) return "$0";
-            const gross = computeGrossAmount(currentPricing.unitCost, platformFeeRate);
-            return `$${gross.toFixed(6)}`;
-          },
-          payTo: () => {
-            return currentPricing?.payTo ?? x402Config.payToAddress;
-          },
+          // Exactly the handler's `price_snapshot` (integer micro-units).
+          price: (ctx: QuoteContext) => `$${fromMicro(requireQuote(ctx).grossMicro).toFixed(6)}`,
+          payTo: (ctx: QuoteContext) => requireQuote(ctx).payTo,
         },
         description: "Submit a task to a motebit agent",
         mimeType: "application/json",
-        unpaidResponseBody: (ctx: { path: string }) => {
+        unpaidResponseBody: (ctx: { path: string } & QuoteContext) => {
           const agentId = extractMotebitIdFromPath(ctx.path);
           return {
             contentType: "application/json",
@@ -2005,7 +2045,7 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
               error: "payment_required",
               message: "Task submission requires USDC payment via x402",
               agent: agentId,
-              estimated_cost: currentPricing?.unitCost ?? 0,
+              estimated_cost: quoteOf(ctx)?.unitCost ?? 0,
               platform_fee_rate: platformFeeRate,
               network: x402Config.network,
             },
@@ -2041,7 +2081,7 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
       false, // syncFacilitatorOnStart — already initialized above with error handling
     );
 
-    // Wrap x402: single getAgentPricing() call per request.
+    // Wrap x402: one priceSubmission() quote per request.
     // Free tasks (no listing / zero price) bypass payment gate entirely.
     // Virtual account bypass: if the delegator has sufficient virtual balance,
     // skip x402 — the task handler will debit the virtual account directly.
@@ -2060,78 +2100,86 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
           400,
         );
       }
-      currentPricing = agentId ? getAgentPricing(moteDb, agentId) : null;
-      if (!currentPricing) return next(); // Free — no x402
+      if (agentId == null) return next();
+      // Only a task SUBMISSION is priced (the x402 route pattern, `POST
+      // /agent/*/task`, matches no deeper path — receipts pass through).
+      if (!/^\/agent\/[^/]+\/task$/.test(c.req.path)) return next();
 
-      // Virtual account bypass: check if the delegator has sufficient virtual
-      // balance to cover the cost. If so, skip x402 and let the handler debit
-      // the virtual account directly.
-      //
-      // Step 1: Try the auth token (signed tokens contain the caller's motebit_id).
-      // Step 2: If master token (no caller identity in token), peek at the body
-      //         using arrayBuffer() which allows re-reading via a fresh Request.
+      // Read the body ONCE and hand the handler an identical request: the
+      // price depends on it (`target_agent`, `required_capabilities`), and so
+      // do the delegator (`submitted_by`) and the P2P bypass (`payment_proof`).
+      // The request is rebuilt with the same bytes and with the quote header
+      // stripped (only this wrapper sets it, below).
+      const bodyText = new TextDecoder().decode(await c.req.raw.arrayBuffer());
+      const headers = new Headers(c.req.raw.headers);
+      headers.delete(X402_QUOTE_HEADER);
+      const rebuild = (): void => {
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-explicit-any -- Hono internals: replacing raw request for body re-read
+        (c.req as any).raw = new Request(c.req.raw.url, {
+          method: c.req.raw.method,
+          headers,
+          body: bodyText,
+        });
+      };
+      rebuild();
+      let peek: {
+        submitted_by?: unknown;
+        target_agent?: unknown;
+        required_capabilities?: unknown;
+        payment_proof?: unknown;
+      };
       try {
-        let delegatorId: string | undefined;
-        const authHeader = c.req.header("authorization");
-        if (authHeader?.startsWith("Bearer ")) {
-          const token = authHeader.slice(7);
-          const claims = parseTokenPayloadUnsafe(token);
-          if (claims?.mid) {
-            delegatorId = claims.mid;
-          }
+        const parsed: unknown = JSON.parse(bodyText);
+        if (parsed == null || typeof parsed !== "object" || Array.isArray(parsed)) {
+          return next(); // not a submission body — charge nothing; the handler refuses it
         }
-
-        // If token didn't yield a delegator, peek at body for submitted_by
-        if (!delegatorId) {
-          const buf = await c.req.raw.arrayBuffer();
-          const bodyText = new TextDecoder().decode(buf);
-          // Reconstruct the request with the same body so x402 and handler can read it
-          const newReq = new Request(c.req.raw.url, {
-            method: c.req.raw.method,
-            headers: c.req.raw.headers,
-            body: bodyText,
-          });
-          // Replace the raw request on the context so downstream can re-read body
-          // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access, @typescript-eslint/no-explicit-any -- Hono internals: replacing raw request for body re-read
-          (c.req as any).raw = newReq;
-          const body = JSON.parse(bodyText) as { submitted_by?: string };
-          delegatorId = body.submitted_by;
-        }
-
-        if (delegatorId) {
-          const grossMicro = toMicro(computeGrossAmount(currentPricing.unitCost, platformFeeRate));
-          // SPENDABLE, the number the handler's hold is debited against —
-          // never the raw balance (#901). A raw read skipped x402 for an
-          // account whose balance is under the escrow hold; the handler then
-          // refused it 402 "pay via x402", and every retry skipped x402 again.
-          if (getSpendableBalance(moteDb.db, delegatorId) >= grossMicro) {
-            return next();
-          }
-        }
-
-        // P2P bypass: if the body contains payment_proof, money moved onchain — skip x402.
-        // This check runs after balance check fails, so p2p is only used when
-        // the delegator can't pay through virtual accounts.
-        try {
-          const buf2 = await c.req.raw.clone().arrayBuffer();
-          const peekBody = JSON.parse(new TextDecoder().decode(buf2)) as {
-            payment_proof?: unknown;
-          };
-          if (peekBody.payment_proof != null) {
-            return next();
-          }
-        } catch {
-          // Fall through to x402
-        }
+        peek = parsed;
       } catch {
-        // Parse failed — fall through to x402
+        // Fail closed: an unparseable body is charged nothing and never priced
+        // as free — the handler reads the same bytes and rejects them.
+        return next();
       }
 
-      // Guard: if facilitator is unreachable, the x402 gate throws (500) instead
-      // of returning a proper 402. Only task submission (/agent/*/task, no further
-      // path segments) goes through x402 — receipt endpoints pass through to next().
-      const isExactTaskSubmission = /\/agent\/[^/]+\/task$/.test(c.req.path);
-      if (isExactTaskSubmission) {
+      // The SAME price the handler snapshots (`priceSubmission`). Free, or a
+      // priced agent with no onchain destination, is not x402-chargeable: the
+      // handler decides (a priced task it cannot fund is refused 402).
+      const price = priceSubmission(moteDb, agentId, peek, platformFeeRate);
+      if (price.grossMicro <= 0 || price.payTo == null) return next();
+
+      // Virtual account bypass: the delegator the handler will debit (the
+      // token's identity, else the body's `submitted_by`, else the path agent
+      // — the handler's `submittedBy ?? motebitId`) can pay from its SPENDABLE
+      // balance, the number the hold is debited against, never the raw
+      // balance (#901). A raw read skipped x402 for an account whose balance is
+      // under the escrow hold; the handler then refused it 402 "pay via x402",
+      // and every retry skipped x402 again.
+      let delegatorId: string = agentId;
+      const authHeader = c.req.header("authorization");
+      const claims = authHeader?.startsWith("Bearer ")
+        ? parseTokenPayloadUnsafe(authHeader.slice(7))
+        : null;
+      if (typeof claims?.mid === "string" && claims.mid !== "") delegatorId = claims.mid;
+      else if (typeof peek.submitted_by === "string" && peek.submitted_by !== "") {
+        delegatorId = peek.submitted_by;
+      }
+      if (getSpendableBalance(moteDb.db, delegatorId) >= price.grossMicro) return next();
+
+      // P2P bypass: a body carrying payment_proof paid onchain — skip x402.
+      // Checked after the balance, so p2p is used only when the delegator
+      // cannot pay through its virtual account.
+      if (peek.payment_proof != null) return next();
+
+      const nonce = crypto.randomUUID();
+      x402Quotes.set(nonce, {
+        unitCost: price.unitCost,
+        grossMicro: price.grossMicro,
+        payTo: price.payTo,
+      });
+      headers.set(X402_QUOTE_HEADER, nonce);
+      rebuild();
+      try {
+        // Guard: if the facilitator is unreachable, the x402 gate throws (500)
+        // instead of returning a proper 402.
         await x402InitPromise;
         if (!x402Initialized) {
           return c.json(
@@ -2139,16 +2187,18 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
               error: "payment_required",
               message:
                 "Payment facilitator unavailable — deposit to virtual account or retry later",
-              estimated_cost: currentPricing?.unitCost ?? 0,
+              estimated_cost: price.unitCost,
               platform_fee_rate: platformFeeRate,
               network: x402Config.network,
             },
             402,
           );
         }
+        // eslint-disable-next-line @typescript-eslint/no-unsafe-argument -- Hono context type variance
+        return await x402Gate(c, next);
+      } finally {
+        x402Quotes.delete(nonce);
       }
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-argument -- Hono context type variance
-      return x402Gate(c, next);
     });
   }
 
@@ -2423,20 +2473,18 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
     // delegation pins, not the sum of the worker's listings. A non-P2P task has
     // no `target_agent` and prices the URL agent (the worker) as before.
     // unit_cost is in dollars from the listing JSON. Convert to micro-units for accounting.
-    const isP2pProofSubmission =
-      typeof body.target_agent === "string" && body.target_agent.length > 0;
-    const pricingAgent = isP2pProofSubmission ? (body.target_agent as string) : motebitId;
-    const pricingCapability =
-      isP2pProofSubmission &&
-      Array.isArray(body.required_capabilities) &&
-      body.required_capabilities.length === 1
-        ? String(body.required_capabilities[0])
-        : undefined;
-    const unitCostAtSubmission = getListingUnitCost(moteDb, pricingAgent, pricingCapability);
-    const priceSnapshot =
-      unitCostAtSubmission > 0
-        ? toMicro(computeGrossAmount(unitCostAtSubmission, platformFeeRate)) // gross in micro-units
-        : undefined;
+    //
+    // ONE price per submission (#901 round 2): `priceSubmission` is also what
+    // the x402 gate charges and what its virtual-account bypass compares
+    // against, so the gate can never divert to x402 a task the handler would
+    // fund from the account (a double charge), nor ask x402 for less than the
+    // handler credits.
+    const {
+      pricingCapability,
+      unitCost: unitCostAtSubmission,
+      grossMicro,
+    } = priceSubmission(moteDb, motebitId, body, platformFeeRate);
+    const priceSnapshot = grossMicro > 0 ? grossMicro : undefined;
 
     // Capture x402 payment proof from the settlement hook (set during middleware).
     // Read-and-clear so the next request starts fresh.
@@ -2905,14 +2953,14 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
       // `priceSnapshot > 0`, and `priceSnapshot` derives from the listing's
       // own `pricing` column (`getListingUnitCost`). A priced agent charges.
       //
-      // This used to ask `getAgentPricing(...) != null`, which additionally
+      // This used to ask an x402-chargeability read (`!= null`), which additionally
       // required a `pay_to_address` — and that made a priced listing WITHOUT a
       // payout address read as FREE. It is the same listing row answering two
       // different questions:
       //
       //   - the x402 middleware asks "can this agent be charged ONCHAIN?" —
       //     which genuinely needs `pay_to_address`, because that is where the
-      //     money goes. `getAgentPricing` still serves that question, unchanged.
+      //     money goes. `priceSubmission(...).payTo` serves that question.
       //   - this branch asks "does this agent charge AT ALL?" — which does not,
       //     because the relay-custody lane credits the worker's VIRTUAL ACCOUNT
       //     and never touches `pay_to_address`.
@@ -2984,6 +3032,35 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
         // down to what can really be debited, or the task is refused.
         const spendable = getSpendableBalance(moteDb.db, delegatorId);
 
+        // A funding refusal. When THIS request's x402 payment was credited
+        // above, the refusal says so — the amount, that it sits in the
+        // delegator's account, that it becomes withdrawable once the account's
+        // dispute-escrow hold clears — and never invites a second payment.
+        // Under the x402 library's real ordering (settle AFTER the handler, only
+        // on a status < 400) a request reaches this branch with a tx hash only
+        // through the stale hash a previous settlement left behind (#907); the
+        // wording holds either way, because the credit above is committed.
+        const fundingRefusal = (): InsufficientFundsError => {
+          if (!x402TxHash) {
+            return new InsufficientFundsError(
+              "Insufficient spendable funds — deposit to virtual account or pay via x402",
+            );
+          }
+          return new InsufficientFundsError(
+            `Insufficient spendable funds for this task. This request's x402 payment of ` +
+              `${priceSnapshot} micro-units was credited to account ${delegatorId} and remains ` +
+              `there; it is withdrawable once the account's dispute-escrow hold clears. Do not ` +
+              `pay again: resubmit when the account's spendable balance covers the price.`,
+            {
+              creditedPayment: {
+                amount_micro: priceSnapshot,
+                reference: `x402-${taskId}`,
+                motebit_id: delegatorId,
+              },
+            },
+          );
+        };
+
         // Use allocateBudget to compute lock amount with risk buffer
         const allocation = allocateBudget(
           {
@@ -3002,10 +3079,8 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
           // path too. (That path used to book a `locked` allocation with no
           // debit here, as a "best-effort" hold: an unfunded row every payout
           // site trusts.) An x402 payment already credited above stays in
-          // the delegator's virtual account.
-          throw new InsufficientFundsError(
-            "Insufficient funds — deposit to virtual account or pay via x402",
-          );
+          // the delegator's virtual account, and the refusal says so.
+          throw fundingRefusal();
         }
         // Round to integer micro-units (allocateBudget may produce fractional from risk multiplier)
         const amountLocked = Math.round(allocation.amount_locked);
@@ -3027,9 +3102,7 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
           // refusal, spec/delegation-v1.md §3.3). Never book a hold the
           // ledger did not take.
           if (afterHold === null) {
-            throw new InsufficientFundsError(
-              "Insufficient spendable funds for the budget hold — deposit to virtual account or pay via x402",
-            );
+            throw fundingRefusal();
           }
           moteDb.db
             .prepare(

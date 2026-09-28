@@ -31,10 +31,26 @@ import { PLATFORM_FEE_RATE } from "@motebit/protocol";
 import { createAgent, createTestRelay, JSON_AUTH, seedBalance } from "./test-helpers.js";
 import { creditAccount, getSpendableBalance, toMicro } from "../accounts.js";
 
-const x402 = vi.hoisted(() => ({ settled: 0 }));
+/**
+ * The facilitator stand-in's state. `ordering`:
+ *  - "before": settle, run the settle hook, then the handler — the ordering the
+ *    submit handler's x402 branch is written for (it reads the hook's tx hash).
+ *  - "after": the REAL `@x402/hono` ordering for `ExactEvmScheme` (eip3009,
+ *    the "authorization" flow): run the handler, then settle only when its
+ *    response is < 400.
+ * `settled` counts onchain settlements; `quoted` records the price and payTo
+ * the relay's route config returned for each paid request.
+ */
+const x402 = vi.hoisted(() => ({
+  settled: 0,
+  ordering: "before" as "before" | "after",
+  quoted: [] as { price: string; payTo: string }[],
+}));
 
 vi.mock("@x402/hono", () => {
   type SettleHook = (ctx: { result: { transaction: string; network: string } }) => Promise<void>;
+  type Ctx = { adapter: { getHeader(n: string): string | undefined }; path: string };
+  type Accepts = { price: (ctx: Ctx) => string; payTo: (ctx: Ctx) => string };
   class x402ResourceServer {
     hooks: SettleHook[] = [];
     register(): this {
@@ -46,7 +62,10 @@ vi.mock("@x402/hono", () => {
     }
   }
   class x402HTTPResourceServer {
-    constructor(readonly resourceServer: x402ResourceServer) {}
+    constructor(
+      readonly resourceServer: x402ResourceServer,
+      readonly routes: Record<string, { accepts: Accepts }>,
+    ) {}
     initialize(): Promise<void> {
       return Promise.resolve();
     }
@@ -54,19 +73,32 @@ vi.mock("@x402/hono", () => {
   function paymentMiddlewareFromHTTPServer(httpServer: x402HTTPResourceServer) {
     return async (
       c: {
-        req: { header: (n: string) => string | undefined };
+        req: { header: (n: string) => string | undefined; path: string };
+        res: Response;
         json: (b: unknown, s: number) => Response;
       },
       next: () => Promise<void>,
     ): Promise<Response | undefined> => {
+      const accepts = httpServer.routes["POST /agent/*/task"]!.accepts;
+      const ctx: Ctx = { adapter: { getHeader: (n) => c.req.header(n) }, path: c.req.path };
+      const quote = { price: accepts.price(ctx), payTo: accepts.payTo(ctx) };
       if (!c.req.header("X-PAYMENT")) return c.json({ error: "payment_required" }, 402);
-      x402.settled += 1;
-      let tx = "0x";
-      for (let i = 0; i < 64; i++) tx += "0123456789abcdef"[Math.floor(Math.random() * 16)];
-      for (const h of httpServer.resourceServer.hooks) {
-        await h({ result: { transaction: tx, network: "eip155:84532" } });
+      x402.quoted.push(quote);
+      const settle = async (): Promise<void> => {
+        x402.settled += 1;
+        let tx = "0x";
+        for (let i = 0; i < 64; i++) tx += "0123456789abcdef"[Math.floor(Math.random() * 16)];
+        for (const h of httpServer.resourceServer.hooks) {
+          await h({ result: { transaction: tx, network: "eip155:84532" } });
+        }
+      };
+      if (x402.ordering === "before") {
+        await settle();
+        await next();
+      } else {
+        await next();
+        if (c.res.status < 400) await settle();
       }
-      await next();
       return undefined;
     };
   }
@@ -81,6 +113,8 @@ let relay: SyncRelay;
 beforeEach(async () => {
   relay = await createTestRelay({ enableDeviceAuth: false });
   x402.settled = 0;
+  x402.ordering = "before";
+  x402.quoted = [];
 });
 afterEach(async () => {
   await relay.close();
@@ -196,7 +230,20 @@ describe("#901 funding: the check and the debit read one spendable balance", () 
     const refused = await submit(worker, key, body, { pay: true });
     expect(x402.settled, "the x402 payment was taken").toBe(1);
     expect(refused.status, await refused.clone().text()).toBe(402);
-    expect(((await refused.json()) as { code?: string }).code).toBe("INSUFFICIENT_FUNDS");
+    const refusal = (await refused.json()) as {
+      code?: string;
+      error?: string;
+      payment_credited?: { amount_micro: number; reference: string; motebit_id: string };
+    };
+    expect(refusal.code).toBe("INSUFFICIENT_FUNDS");
+    // The refusal names the payment this request made, where it sits, and
+    // never invites a second payment.
+    expect(refusal.payment_credited).toMatchObject({ amount_micro: GROSS, motebit_id: delegator });
+    expect(refusal.payment_credited?.reference).toMatch(/^x402-/);
+    expect(refusal.error).toMatch(/was credited to account/);
+    expect(refusal.error).toMatch(/withdrawable once the account's dispute-escrow hold clears/);
+    expect(refusal.error).toMatch(/Do not pay again/);
+    expect(refusal.error).not.toMatch(/pay via x402/);
     expect(tasksWithPrompt(prompt), "a refused task is never queued").toEqual([]);
     expect(
       relay.moteDb.db
@@ -313,5 +360,168 @@ describe("#901 funding: the check and the debit read one spendable balance", () 
     expect(allocs).toHaveLength(1);
     expect(holdDebited(task_id)).toBe(allocs[0]!.amount_locked);
     expect(balanceOf(worker)).toBe(funded - allocs[0]!.amount_locked);
+  });
+});
+
+// ── Round 2: the gate and the handler price a submission the same way ──────
+
+const PAY_TO_T = "0x00000000000000000000000000000000000000b2";
+const PAY_TO_W = "0x00000000000000000000000000000000000000c3";
+
+/** Publish a listing with the given per-capability prices (dollars). */
+async function listing(id: string, prices: Record<string, number>, payTo: string): Promise<void> {
+  const caps = Object.keys(prices);
+  await relay.app.request(`/api/v1/agents/${id}/listing`, {
+    method: "POST",
+    headers: JSON_AUTH,
+    body: JSON.stringify({
+      capabilities: caps,
+      pricing: caps.map((cap) => ({
+        capability: cap,
+        unit_cost: prices[cap],
+        currency: "USD",
+        per: "task",
+      })),
+      sla: { max_latency_ms: 5000, availability_guarantee: 0.99 },
+      description: "901 round 2",
+      pay_to_address: payTo,
+    }),
+  });
+}
+const dollars = (micro: number) => `$${(micro / 1_000_000).toFixed(6)}`;
+
+describe("#901 round 2: one price for the x402 gate and the handler", () => {
+  it("reviewer's cell (real ordering): a pinned self-delegation the account can fund is admitted from the account — the gate never diverts it to x402, so it is never charged twice", async () => {
+    x402.ordering = "after";
+    const t = await newAgent();
+    await listing(t, { web_search: 1.0 }, PAY_TO_T);
+    const w = await newAgent();
+    // W's own listing sums to $2 — what the gate used to price the path agent at.
+    await listing(w, { web_search: 1.0, read_url: 1.0 }, PAY_TO_W);
+    // Raw 2.2·G1, spendable 1.1·G1: covers T's $1 capability, not W's $2 sum.
+    seedEscrowHold(w, Math.round(1.1 * GROSS), true);
+    creditAccount(relay.moteDb.db, w, Math.round(1.1 * GROSS), "deposit", null, "901 r2");
+    const spendableBefore = getSpendableBalance(relay.moteDb.db, w);
+    const prompt = `901 r2 reviewer ${crypto.randomUUID()}`;
+    const body = {
+      prompt,
+      submitted_by: w,
+      target_agent: t,
+      required_capabilities: ["web_search"],
+    };
+
+    // No X-PAYMENT: a client that can pay from its account never needs one.
+    const res = await submit(w, crypto.randomUUID(), body);
+    expect(res.status, await res.clone().text()).toBe(201);
+    const { task_id } = (await res.json()) as { task_id: string };
+    expect(x402.settled, "never charged onchain").toBe(0);
+    expect(x402.quoted, "never even asked to pay").toEqual([]);
+    const allocs = allocationsForTasks([task_id]);
+    expect(allocs).toHaveLength(1);
+    expect(holdDebited(task_id), "funded once, from the account").toBe(allocs[0]!.amount_locked);
+    expect(getSpendableBalance(relay.moteDb.db, w)).toBe(
+      spendableBefore - allocs[0]!.amount_locked,
+    );
+  });
+
+  it("the x402 charge is the handler's price: a pinned capability priced above the path agent's listing is charged at that capability's price, to its agent's payTo (the gate used to ask for the path agent's lower sum)", async () => {
+    const t = await newAgent();
+    await listing(t, { web_search: 1.0 }, PAY_TO_T);
+    const w = await newAgent();
+    await listing(w, { web_search: 0.5 }, PAY_TO_W);
+    const prompt = `901 r2 undercharge ${crypto.randomUUID()}`;
+    const body = {
+      prompt,
+      submitted_by: w,
+      target_agent: t,
+      required_capabilities: ["web_search"],
+    };
+
+    const res = await submit(w, crypto.randomUUID(), body, { pay: true });
+    expect(res.status, await res.clone().text()).toBe(201);
+    expect(x402.quoted).toEqual([{ price: dollars(GROSS), payTo: PAY_TO_T }]);
+    // What was credited is exactly what was charged.
+    const credited = relay.moteDb.db
+      .prepare(
+        "SELECT COALESCE(SUM(amount), 0) AS t FROM relay_transactions WHERE motebit_id = ? AND type = 'deposit' AND reference_id LIKE 'x402-%'",
+      )
+      .get(w) as { t: number };
+    expect(credited.t).toBe(GROSS);
+  });
+
+  it("an unparseable body is charged nothing and priced as nothing — the handler rejects it", async () => {
+    const worker = await pricedWorker(true);
+    const res = await relay.app.request(`/agent/${worker}/task`, {
+      method: "POST",
+      headers: { ...JSON_AUTH, "Idempotency-Key": crypto.randomUUID(), "X-PAYMENT": "x" },
+      body: "{not json",
+    });
+    expect(res.status).toBeGreaterThanOrEqual(400);
+    expect(x402.quoted).toEqual([]);
+    expect(x402.settled).toBe(0);
+  });
+
+  it("a client-sent quote header is ignored: the gate prices the request itself", async () => {
+    const worker = await pricedWorker(true);
+    const d = await newAgent();
+    const res = await relay.app.request(`/agent/${worker}/task`, {
+      method: "POST",
+      headers: {
+        ...JSON_AUTH,
+        "Idempotency-Key": crypto.randomUUID(),
+        "X-PAYMENT": "x",
+        "x-motebit-x402-quote": "forged",
+      },
+      body: JSON.stringify({ prompt: `901 r2 forged ${crypto.randomUUID()}`, submitted_by: d }),
+    });
+    expect(res.status, await res.clone().text()).toBe(201);
+    expect(x402.quoted).toEqual([
+      { price: dollars(GROSS), payTo: "0x00000000000000000000000000000000000000a1" },
+    ]);
+  });
+});
+
+describe("#901 what production does today (real x402 ordering: settle after the handler, only on < 400)", () => {
+  it("cell A — raw ≥ price > spendable, paid via x402: refused before any settlement; nothing charged, credited, held or queued", async () => {
+    x402.ordering = "after";
+    const worker = await pricedWorker(true);
+    const delegator = await newAgent();
+    seedEscrowHold(delegator, GROSS / 2, false);
+    const prompt = `901 real A ${crypto.randomUUID()}`;
+    const res = await submit(
+      worker,
+      crypto.randomUUID(),
+      { prompt, submitted_by: delegator },
+      { pay: true },
+    );
+    // The handler sees no tx hash of its own (settlement comes after it), so a
+    // cross-agent relay-custody task needs a P2P proof.
+    expect(res.status).toBe(402);
+    expect(((await res.json()) as { code?: string }).code).toBe("TASK_P2P_PROOF_REQUIRED");
+    expect(x402.settled, "a >= 400 response cancels settlement").toBe(0);
+    expect(balanceOf(delegator), "nothing credited").toBe(0);
+    expect(tasksWithPrompt(prompt)).toEqual([]);
+  });
+
+  it("cell D — a fully escrow-held balance, paid via x402: asked to pay, then refused before settlement; nothing charged", async () => {
+    x402.ordering = "after";
+    const worker = await pricedWorker(true);
+    const delegator = await newAgent();
+    seedEscrowHold(delegator, 2 * GROSS, true);
+    const prompt = `901 real D ${crypto.randomUUID()}`;
+    const unpaid = await submit(worker, crypto.randomUUID(), { prompt, submitted_by: delegator });
+    expect(unpaid.status).toBe(402);
+    expect(await unpaid.json()).toEqual({ error: "payment_required" });
+    const paid = await submit(
+      worker,
+      crypto.randomUUID(),
+      { prompt, submitted_by: delegator },
+      { pay: true },
+    );
+    expect(paid.status).toBe(402);
+    expect(((await paid.json()) as { code?: string }).code).toBe("TASK_P2P_PROOF_REQUIRED");
+    expect(x402.settled).toBe(0);
+    expect(balanceOf(delegator)).toBe(2 * GROSS);
+    expect(tasksWithPrompt(prompt)).toEqual([]);
   });
 });

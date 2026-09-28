@@ -29,8 +29,19 @@ import type { SyncRelay } from "../index.js";
 import { createAgent, createTestRelay, JSON_AUTH, seedBalance } from "./test-helpers.js";
 import { creditAccount, toMicro } from "../accounts.js";
 
+// `ordering` "before": settle then handler (what the handler's x402 branch is
+// written for). "after": the REAL @x402/hono eip3009 ordering — handler first,
+// settle only on a < 400 response. `quoted` records the price/payTo asked.
+const x402 = vi.hoisted(() => ({
+  settled: 0,
+  ordering: "before" as "before" | "after",
+  quoted: [] as { price: string; payTo: string }[],
+}));
+
 vi.mock("@x402/hono", () => {
   type SettleHook = (ctx: { result: { transaction: string; network: string } }) => Promise<void>;
+  type Ctx = { adapter: { getHeader(n: string): string | undefined }; path: string };
+  type Accepts = { price: (ctx: Ctx) => string; payTo: (ctx: Ctx) => string };
   class x402ResourceServer {
     hooks: SettleHook[] = [];
     register(): this {
@@ -42,7 +53,10 @@ vi.mock("@x402/hono", () => {
     }
   }
   class x402HTTPResourceServer {
-    constructor(readonly resourceServer: x402ResourceServer) {}
+    constructor(
+      readonly resourceServer: x402ResourceServer,
+      readonly routes: Record<string, { accepts: Accepts }>,
+    ) {}
     initialize(): Promise<void> {
       return Promise.resolve();
     }
@@ -50,18 +64,32 @@ vi.mock("@x402/hono", () => {
   function paymentMiddlewareFromHTTPServer(httpServer: x402HTTPResourceServer) {
     return async (
       c: {
-        req: { header: (n: string) => string | undefined };
+        req: { header: (n: string) => string | undefined; path: string };
+        res: Response;
         json: (b: unknown, s: number) => Response;
       },
       next: () => Promise<void>,
     ): Promise<Response | undefined> => {
+      const accepts = httpServer.routes["POST /agent/*/task"]!.accepts;
+      const ctx: Ctx = { adapter: { getHeader: (n) => c.req.header(n) }, path: c.req.path };
+      const quote = { price: accepts.price(ctx), payTo: accepts.payTo(ctx) };
       if (!c.req.header("X-PAYMENT")) return c.json({ error: "payment_required" }, 402);
-      let tx = "0x";
-      for (let i = 0; i < 64; i++) tx += "0123456789abcdef"[Math.floor(Math.random() * 16)];
-      for (const h of httpServer.resourceServer.hooks) {
-        await h({ result: { transaction: tx, network: "eip155:84532" } });
+      x402.quoted.push(quote);
+      const settle = async (): Promise<void> => {
+        x402.settled += 1;
+        let tx = "0x";
+        for (let i = 0; i < 64; i++) tx += "0123456789abcdef"[Math.floor(Math.random() * 16)];
+        for (const h of httpServer.resourceServer.hooks) {
+          await h({ result: { transaction: tx, network: "eip155:84532" } });
+        }
+      };
+      if (x402.ordering === "before") {
+        await settle();
+        await next();
+      } else {
+        await next();
+        if (c.res.status < 400) await settle();
       }
-      await next();
       return undefined;
     };
   }
@@ -159,6 +187,9 @@ it("A: x402, raw ≥ price > spendable; then the same key paid again", async () 
   const key = crypto.randomUUID();
   const r1 = await submit(w, key, { prompt, submitted_by: d }, true);
   obs["A1_status"] = r1.status;
+  const a1 = (await r1.json()) as { error?: string; payment_credited?: unknown };
+  obs["A1_refusal_names_credit"] = a1.payment_credited != null;
+  obs["A1_refusal_invites_repay"] = /pay via x402/.test(a1.error ?? "");
   obs["A1_ledger"] = ledger(w, prompt);
   obs["A1_key_held"] = claimHeld(key, w);
   const r2 = await submit(w, key, { prompt, submitted_by: d }, true);
@@ -203,4 +234,92 @@ it("D: a balance that is entirely escrow-held, unpaid and then paid via x402", a
   const r2 = await submit(w, crypto.randomUUID(), { prompt: "901-D", submitted_by: d }, true);
   obs["D2_status"] = r2.status;
   obs["D2_ledger"] = ledger(w, "901-D");
+});
+
+// ── Round 2: the gate and the handler price a submission the same way ──────
+
+async function listing(id: string, prices: Record<string, number>, payTo: string): Promise<void> {
+  const caps = Object.keys(prices);
+  await relay.app.request(`/api/v1/agents/${id}/listing`, {
+    method: "POST",
+    headers: JSON_AUTH,
+    body: JSON.stringify({
+      capabilities: caps,
+      pricing: caps.map((cap) => ({
+        capability: cap,
+        unit_cost: prices[cap],
+        currency: "USD",
+        per: "task",
+      })),
+      sla: { max_latency_ms: 5000, availability_guarantee: 0.99 },
+      description: "901 r2 probe",
+      pay_to_address: payTo,
+    }),
+  });
+}
+const PAY_T = "0x00000000000000000000000000000000000000b2";
+const PAY_W = "0x00000000000000000000000000000000000000c3";
+const payee = (a: string) => (a === PAY_T ? "target" : a === PAY_W ? "path" : "other");
+const quotedGross = () =>
+  x402.quoted.map((q) => ({
+    gross: inGross(Math.round(Number(q.price.slice(1)) * 1_000_000)),
+    payee: payee(q.payTo),
+  }));
+
+it("R: reviewer's cell, real ordering — pinned self-delegation the account can fund, W's listing sums above T's capability", async () => {
+  x402.ordering = "after";
+  x402.settled = 0;
+  x402.quoted = [];
+  const t = await agent();
+  await listing(t, { web_search: 1.0 }, PAY_T);
+  const w = await agent();
+  await listing(w, { web_search: 1.0, read_url: 1.0 }, PAY_W);
+  hold(w, Math.round(1.1 * GROSS), true);
+  creditAccount(relay.moteDb.db, w, Math.round(1.1 * GROSS), "deposit", null, "probe");
+  const body = {
+    prompt: "901-R",
+    submitted_by: w,
+    target_agent: t,
+    required_capabilities: ["web_search"],
+  };
+  const r1 = await submit(w, crypto.randomUUID(), body);
+  obs["R1_unpaid_status"] = r1.status;
+  // A client told to pay does so (same body, X-PAYMENT).
+  const r2 = r1.status === 402 ? await submit(w, crypto.randomUUID(), body, true) : null;
+  obs["R2_paid_status"] = r2?.status ?? "not-needed";
+  obs["R_onchain_settlements"] = x402.settled;
+  const debit = -(
+    q(
+      "SELECT COALESCE(SUM(amount), 0) AS t FROM relay_transactions WHERE motebit_id = ? AND type = 'allocation_hold'",
+      w,
+    )[0] as { t: number }
+  ).t;
+  obs["R_account_debited_gross"] = inGross(debit);
+  obs["R_charged_twice"] = x402.settled > 0 && debit > 0;
+  x402.ordering = "before";
+});
+
+it("U: x402 charge vs the handler's price — pinned capability ($1) above the path agent's listing ($0.50)", async () => {
+  x402.settled = 0;
+  x402.quoted = [];
+  const t = await agent();
+  await listing(t, { web_search: 1.0 }, PAY_T);
+  const w = await agent();
+  await listing(w, { web_search: 0.5 }, PAY_W);
+  const body = {
+    prompt: "901-U",
+    submitted_by: w,
+    target_agent: t,
+    required_capabilities: ["web_search"],
+  };
+  const r = await submit(w, crypto.randomUUID(), body, true);
+  obs["U_status"] = r.status;
+  obs["U_quoted"] = quotedGross();
+  const credited = (
+    q(
+      "SELECT COALESCE(SUM(amount), 0) AS t FROM relay_transactions WHERE motebit_id = ? AND type = 'deposit' AND reference_id LIKE 'x402-%'",
+      w,
+    )[0] as { t: number }
+  ).t;
+  obs["U_credited_gross"] = inGross(credited);
 });
