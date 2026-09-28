@@ -72,17 +72,9 @@ async function provisionVictim(baseUrl: string): Promise<Victim> {
   expect([200, 201], "arrange: identity creation").toContain(idRes.status);
   const { motebit_id: motebitId } = (await idRes.json()) as { motebit_id: string };
 
-  const devRes = await fetch(`${baseUrl}/device/register`, {
-    method: "POST",
-    headers,
-    body: JSON.stringify({
-      motebit_id: motebitId,
-      device_name: "booted",
-      public_key: publicKeyHex,
-    }),
-  });
-  expect([200, 201], "arrange: device registration").toContain(devRes.status);
-
+  // Registered BEFORE its device row, so the operator's registration of a bare
+  // service identity records its proven holder (E-op). Discover SERVES only a
+  // proven key (#875 review round 3), and this is the key a peer must not move.
   const regRes = await fetch(`${baseUrl}/api/v1/agents/register`, {
     method: "POST",
     headers,
@@ -96,6 +88,17 @@ async function provisionVictim(baseUrl: string): Promise<Victim> {
   expect([200, 201], "arrange: agent_registry row — the row a peer must not touch").toContain(
     regRes.status,
   );
+
+  const devRes = await fetch(`${baseUrl}/device/register`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify({
+      motebit_id: motebitId,
+      device_name: "booted",
+      public_key: publicKeyHex,
+    }),
+  });
+  expect([200, 201], "arrange: device registration").toContain(devRes.status);
 
   return { motebitId, publicKeyHex };
 }

@@ -45,6 +45,8 @@ import {
   recordIdentityGuardian,
   recordOperatorServiceKey,
   registryKeyOf,
+  servedIdentityKey,
+  withServedKeys,
   verificationKeyFor,
 } from "./identity-keys.js";
 
@@ -865,14 +867,13 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
     const onlinePeers = connections.get(motebitId);
     const onlineCount = onlinePeers ? onlinePeers.length : 0;
 
-    // The identity's key as this route SERVES it: the proven holder, else the
-    // registry's discovery copy (written only on evidence since #875), else
-    // ''. Never a device row (#875 review): `/pairing/claim` writes any key
-    // unsigned, so "the first device with a key" served a laundered key as
-    // this identity's `public_key` and `did`. The per-device list below is a
-    // list of rows, each attested by its own credential, not an identity key.
-    const publicKey =
-      holderKeyOf(moteDb.db, motebitId) ?? registryKeyOf(moteDb.db, motebitId) ?? "";
+    // The identity's key as this route SERVES it (`servedIdentityKey`): the
+    // proven holder, else a key on file the id commits to, else ''. Never a
+    // device row (`/pairing/claim` writes any key unsigned) and never the bare
+    // registry column (a relay before #875 wrote it unproven) — #875 review.
+    // The per-device list below is a list of rows, each attested by its own
+    // credential, not an identity key.
+    const publicKey = (await servedIdentityKey(moteDb.db, motebitId)) ?? "";
 
     let did: string | undefined;
     try {
@@ -1366,42 +1367,32 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
     // device token, never for the master token.
     const callerVerifiedKey = c.get("callerVerifiedKey" as never) as string | undefined;
 
-    // Keyless (#875 review): a device row is NEVER evidence of the identity's
-    // key — `/pairing/claim` writes any canonical key unsigned, and main's
-    // "first-listed keyed device row" let X launder V's key into X's registry
-    // (pair claiming K_V, re-register-self to reorder rows, register keyless).
-    // So the keyless value is, in order: the proven holder; else the registry
-    // key already on file, UNCHANGED (no key enters); else the key this
-    // bearer's token verified under (its own device row — proven by the
-    // token's signature in this request); else ''.
+    // Keyless (#875 review rounds 2–3): a keyless registration NEVER
+    // introduces a key. It writes the proven holder, else the registry key
+    // already on file UNCHANGED, else '' — never a device row (`/pairing/claim`
+    // writes any canonical key unsigned; main's "first-listed keyed device
+    // row" let X launder V's key into X's registry), and never the bearer's
+    // own key (round 3: a paired device B registering keyless first would
+    // pin the registry to K_B, and the owner A's keyed registration would
+    // then be refused forever for want of a K_B→K_A succession). Keys enter
+    // only through a keyed, proven registration — or E-sov below, which fills
+    // the holder (and so this value) from the bearer's proven sovereign key.
     //
     // G1a / departure (§5i build 4 wanted main's INPUTS for an unfilled
     // identity's departure). Departure reads holder → registry → chain →
     // device row. With a registry key on file the value is main's (main either
     // wrote the same key or refused for want of a succession). With none,
     // main wrote whichever row happened to be listed first — a choice any
-    // device of the identity can steer (re-registering its own row reorders
-    // them, the reviewer's repro), so main's owner protection there was never
-    // more than row order. Writing the bearer's own proven key is exactly what
-    // that device's KEYED registration (body = its own key, admitted as the
-    // bearer's key) writes on main and here, so the keyless door grants no
-    // device anything its keyed door did not. The one outcome that differs
-    // from main: a paired (no-key-transfer) device that registers keyless
-    // FIRST on an identity with no registry row now writes its own key where
-    // main might have written the owner's by row order. That is the stated
-    // G1a cost, not a departure requirement.
+    // device can steer by re-registering its own row — and '' leaves
+    // departure to the device rung: every device row departs from its own
+    // key, exactly as main does for a device-only identity. A later KEYED
+    // registration by the bearer's own key sets the registry on proof, as on
+    // main. No departure main allows is refused because of this value.
     let publicKey: string;
     if (keyFromBody) {
       publicKey = rawBodyKey;
     } else {
-      publicKey =
-        holderKeyOf(moteDb.db, motebitId) ??
-        registryKeyOf(moteDb.db, motebitId) ??
-        (callerVerifiedKey !== undefined &&
-        callerDeviceKey !== undefined &&
-        callerDeviceKey.toLowerCase() === callerVerifiedKey
-          ? callerDeviceKey
-          : "");
+      publicKey = holderKeyOf(moteDb.db, motebitId) ?? registryKeyOf(moteDb.db, motebitId) ?? "";
     }
 
     // --- Succession chain validation on re-registration ---
@@ -1670,6 +1661,13 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
     const sovereignProof =
       possessedKey !== undefined ? await proveSovereignFirstKey(motebitId, possessedKey) : null;
     const isOperatorBearer = c.get("callerMotebitId" as never) == null;
+    // A keyless registration that is E-sov (the bearer proved the key its
+    // sovereign id commits to) publishes that key for discovery: the holder
+    // write below makes it the identity's key in this same request, so the
+    // registry is discovery's copy of a PROVEN key, not a device row's word.
+    if (!keyFromBody && publicKey === "" && sovereignProof !== null) {
+      publicKey = sovereignProof.publicKey;
+    }
 
     const federationVisible = (body as Record<string, unknown>).federation_visible;
     const fedVisibleVal = federationVisible === false ? 0 : 1;
@@ -1978,9 +1976,15 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
     // the record is never erased, only the default shelf is curated.
     const includeAll = c.req.query("include") === "all";
 
-    const localAgents = taskRouter
-      .queryLocalAgents(capability ?? undefined, motebitId ?? undefined, limit, false, includeAll)
-      .filter((a) => includeAll || a.motebit_id !== relayIdentity.relayMotebitId);
+    // Each row's key as SERVED (#875 review round 3): holder, else a key the
+    // id commits to — never the bare registry column.
+    const localAgents = await withServedKeys(
+      moteDb.db,
+      taskRouter
+        .queryLocalAgents(capability ?? undefined, motebitId ?? undefined, limit, false, includeAll)
+        .filter((a) => includeAll || a.motebit_id !== relayIdentity.relayMotebitId),
+      hexPublicKeyToDidKey,
+    );
 
     // Add source_relay metadata to local results
     const localResults = localAgents.map((a) => ({
@@ -2371,7 +2375,7 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
 
   // GET /api/v1/agents/:motebitId — get specific agent
   /** @spec motebit/identity@1.0 */
-  app.get("/api/v1/agents/:motebitId", (c) => {
+  app.get("/api/v1/agents/:motebitId", async (c) => {
     const motebitId = asMotebitId(c.req.param("motebitId"));
 
     // A KEY reader, not a shelf reader: public-key lookups for receipt
@@ -2393,7 +2397,8 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
 
     return c.json({
       motebit_id: row.motebit_id,
-      public_key: row.public_key,
+      // The SERVED key (#875 review round 3), never the bare registry column.
+      public_key: (await servedIdentityKey(moteDb.db, motebitId)) ?? "",
       endpoint_url: row.endpoint_url,
       capabilities: JSON.parse(row.capabilities as string) as string[],
       // eslint-disable-next-line @typescript-eslint/strict-boolean-expressions -- DB row field is untyped

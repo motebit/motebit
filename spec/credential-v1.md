@@ -369,7 +369,7 @@ The eight routes below are the binding cross-implementation contract for credent
 
 - `POST /api/v1/credentials/:motebitId/reputation` — compute and issue a ReputationCredential from settlement records.
 - `POST /api/v1/credentials/verify` — verify a credential's Ed25519 signature.
-- `POST /api/v1/agents/:motebitId/revoke-credential` — revoke a credential (subject or issuer only).
+- `POST /api/v1/agents/:motebitId/revoke-credential` — revoke a credential (subject or issuer only). The caller is the ISSUER only when the issuer's `did:key` names a key this request proves the caller holds. That is the key the caller's token verified under, or the caller's proven holder key. By design, "a key on one of the caller's device rows" does not qualify. The consequence: device A of an identity cannot revoke a credential that its sibling device B issued under B's own key, and neither can the identity's holder key. Only B can, or the subject. Accepting any device key as the identity's issuer key would reverse the #875 laundering: plant V's key as a device row through an unsigned pairing claim, then revoke every credential V issued.
 - `POST /api/v1/credentials/batch-status` — check revocation status of up to 100 credentials.
 - `GET /api/v1/credentials/:credentialId/status` — public revocation status for a single credential.
 - `GET /api/v1/agents/:motebitId/credentials` — list credentials for an agent (filterable by type, limit 200).

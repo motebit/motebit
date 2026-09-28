@@ -31,7 +31,7 @@ import {
 } from "./identity-binding.js";
 import type { AuthEvent } from "./auth-events.js";
 import { createLogger } from "./logger.js";
-import { holderKeyOf } from "./identity-keys.js";
+import { holderKeyOf, servedIdentityKey } from "./identity-keys.js";
 
 const logger = createLogger({ service: "credentials" });
 
@@ -188,12 +188,13 @@ export function registerCredentialRoutes(deps: CredentialDeps): void {
     const reputation = computeServiceReputation(motebitId, samples, trustRecord);
 
     // The subject is named by evidence only (#875 review): the identity's
-    // proven holder key as `did:key`, else `did:motebit:<id>`. Never a
-    // device row — `/pairing/claim` writes any key unsigned, and `devices[0]`
-    // let X make the relay issue X's reputation about V's key.
-    const holderKey = holderKeyOf(db, motebitId);
+    // served key (`servedIdentityKey` — holder, else a key the id commits to)
+    // as `did:key`, else `did:motebit:<id>`. Never a device row —
+    // `/pairing/claim` writes any key unsigned, and `devices[0]` let X make
+    // the relay issue X's reputation about V's key.
+    const servedKey = await servedIdentityKey(db, motebitId);
     const subjectDid =
-      holderKey !== null ? hexPublicKeyToDidKey(holderKey) : `did:motebit:${motebitId}`;
+      servedKey !== null ? hexPublicKeyToDidKey(servedKey) : `did:motebit:${motebitId}`;
 
     const relayKeys = getRelayKeypair(relayIdentity);
     const avgLatency =

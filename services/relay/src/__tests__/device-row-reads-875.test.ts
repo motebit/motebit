@@ -1,145 +1,351 @@
 /**
- * #875 review round 2 — a device row is never evidence of an identity's key.
+ * #875 review — a device row is never evidence of an identity's key.
  *
  * `/pairing/claim` takes any canonical key without a signature, and the
- * approving device's approval writes it as a device row. Such a row may
- * verify only that device's own tokens and signatures. It must never become
- * what the relay records, serves, binds or attributes as the IDENTITY's key:
- * the registry value, a served `public_key`/`did`, a credential subject or
- * issuer, or a departure authority beyond that row itself. The relay laundered
- * a stranger's key through both the keyed and the keyless `/agents/register`,
- * through the capabilities route, through the relay-issued reputation
- * subject, and through revoke-credential's issuer check.
+ * approving device's approval writes it as a device row. Such a row verifies
+ * only that device's own tokens and signatures. It must never become what the
+ * relay records, serves, binds or attributes as the IDENTITY's key: the
+ * registry value, a served `public_key`/`did`, a credential subject or
+ * issuer. The review laundered a stranger's key through the keyed and keyless
+ * `/agents/register`, the capabilities route, the relay-issued reputation
+ * subject and revoke-credential's issuer check.
  *
  * This is a structural inventory, in the shape of
- * `check-identity-authority-writers`: every read of the `devices` table in
- * relay source is registered here, per file, with the verdict that justifies
- * it. A NEW read fails until it is classified, which is the point: a reader
- * that takes "the first keyed device row" as the identity's key must be
- * written against evidence (`callerVerifiedKey`, `holderKeyOf`) instead.
- * Structure only — the behaviour is proven in
- * `key-proof-of-possession-875.test.ts`, each law tampered and seen red.
+ * `check-identity-authority-writers`. Every read of a device row in relay
+ * source is registered here as a SITE, with the verdict that justifies it.
+ * A read counts as: a core-identity device loader, raw SQL over `devices`
+ * (any case), or an identity-keys helper that returns device-row keys. A
+ * site is identified by file, enclosing function and the normalized line,
+ * so an unsafe read swapped in for a sanctioned one in the same file is a
+ * new site and goes red, as does a stale entry. Structure only; the
+ * behaviour is proven in `key-proof-of-possession-875.test.ts`, each law
+ * tampered and seen red.
  */
 import { describe, it, expect } from "vitest";
-import { readFileSync, readdirSync, statSync } from "node:fs";
-import { join, relative } from "node:path";
+import { join } from "node:path";
+import { scanDeviceRowSites, type DeviceRowSite } from "./device-row-sites.js";
 
 const SRC = join(__dirname, "..");
 
-/** What counts as a read of a device row (and so possibly of its key). */
-const DEVICE_ROW_READ =
-  /listDevices\(|loadDeviceById\(|getDevice\(|FROM\s+devices\b|JOIN\s+devices\b|readDeviceKeys\(|relay_devices\b/g;
+type Registered = DeviceRowSite & { verdict: string };
 
-/**
- * Every device-row read in relay source, per file, with its verdict. Keep
- * the count exact; add a file only with a reason a reviewer can check.
- */
-const DEVICE_ROW_READS: Record<string, { count: number; verdict: string }> = {
-  "auth.ts": {
-    count: 1,
+/** Every device-row read site in relay source, with its verdict. */
+const DEVICE_ROW_SITES: Registered[] = [
+  {
+    file: "agents.ts",
+    fn: "/agent/:motebitId/capabilities",
+    snippet: "const devices = await identityManager.listDevices(motebitId);",
     verdict:
-      "PER-DEVICE: verifySignedTokenForDevice verifies a token against the row its own `did` names",
+      "ROWS AS ROWS: the per-device hardware-attestation list; the served identity key is servedIdentityKey",
   },
-  "index.ts": {
-    count: 1,
-    verdict: "PER-DEVICE: the WS verifier's synchronous twin — the row for the token's `did`",
-  },
-  "agents.ts": {
-    count: 3,
+  {
+    file: "agents.ts",
+    fn: "/agent/:motebitId/verify-receipt",
+    snippet: "const devices = await identityManager.listDevices(motebitId);",
     verdict:
-      "capabilities: the per-device hardware-attestation LIST (rows as rows; the served identity key is holder ?? registry); verify-receipt: signature reader, the receipt's own device row else main's first keyed row (DB3, public verdict kept); /agents/register: the bearer's own device row (callerDeviceKey, per-device)",
+      "SIGNATURE READER: the receipt's own device row, else main's first keyed row (DB3) — acceptance needs that key's own signature",
   },
-  "tasks.ts": {
-    count: 4,
+  {
+    file: "agents.ts",
+    fn: "/api/v1/agents/register",
+    snippet: "const signer = await identityManager.loadDeviceById(bearerClaims.did, motebitId);",
     verdict:
-      "signature readers (receipt ingest, two sub-receipt checks): verify a signature under a row's key — acceptance needs that key's own signature; receipt heal: moves the registry only to an embedded key whose signature over THIS receipt verifies (request-carried proof)",
+      "PER-DEVICE / GUARD: the bearer's own device row (callerDeviceKey, E-sov possession); keysHeldBy only decides whether the identity holds NO key (the sovereign-squat check) — never an exemption",
   },
-  "federation-callbacks.ts": {
-    count: 1,
-    verdict: "signature reader: a forwarded result's inner receipt, verified under a row's key",
-  },
-  "migration.ts": {
-    count: 1,
-    verdict: "signature reader: a balance waiver's signature (legacy `relay_devices` read)",
-  },
-  "device-registration-guard.ts": {
-    count: 1,
-    verdict: "PER-DEVICE: conflict check on the claimed device_id's own row",
-  },
-  "pairing.ts": {
-    count: 2,
+  {
+    file: "agents.ts",
+    fn: "/api/v1/agents/register",
+    snippet:
+      "const heldBefore = new Set([...keysHeldBy(moteDb.db, motebitId)].map((k) => k.toLowerCase()));",
     verdict:
-      "PER-DEVICE: the approver's own row (approverKeyMatches); update-key's target device row",
+      "PER-DEVICE / GUARD: the bearer's own device row (callerDeviceKey, E-sov possession); keysHeldBy only decides whether the identity holds NO key (the sovereign-squat check) — never an exemption",
   },
-  "sync-routes.ts": {
-    count: 2,
+  {
+    file: "auth.ts",
+    fn: "verifySignedTokenForDevice",
+    snippet: "const device = await identityManager.loadDeviceById(claims.did, motebitId);",
+    verdict: "PER-DEVICE: a token verified against the row its own `did` names",
+  },
+  {
+    file: "device-registration-guard.ts",
+    fn: "refusePublicDeviceRegistration",
+    snippet: "const holder = await deps.identityManager.getDevice(req.deviceId);",
+    verdict: "GUARD: conflict on the claimed device_id's own row; the held-key SET only blocks",
+  },
+  {
+    file: "device-registration-guard.ts",
+    fn: "refusePublicDeviceRegistration",
+    snippet:
+      "const held = new Set([...keysHeldBy(deps.db, req.motebitId)].map((k) => k.toLowerCase()));",
+    verdict: "GUARD: conflict on the claimed device_id's own row; the held-key SET only blocks",
+  },
+  {
+    file: "federation-callbacks.ts",
+    fn: "createFederationCallbacks",
+    snippet: "const devices = await identityManager.listDevices(",
+    verdict: "SIGNATURE READER: a forwarded result's inner receipt, verified under a row's key",
+  },
+  {
+    file: "health-summary.ts",
+    fn: "identityKeyPopulation",
+    snippet: "UNION SELECT motebit_id FROM devices",
+    verdict: "METRICS: counts, no key used",
+  },
+  {
+    file: "health-summary.ts",
+    fn: "identityKeyPopulation",
+    snippet: "(SELECT COUNT(DISTINCT d.public_key) FROM devices d",
+    verdict: "METRICS: counts, no key used",
+  },
+  {
+    file: "identity-binding.ts",
+    fn: "bindByDelegationRevocation",
+    snippet:
+      "![...keysHeldBy(db, revocation.delegator_id)].some((k) => k.toLowerCase() === signer)",
     verdict:
-      "PER-DEVICE: register-self's own device row; hardware-attestation verified under that device's own row",
+      "SIGNATURE READER: a revocation must verify under a key the relay holds for its delegator — acceptance needs that key's signature",
   },
-  "succession-apply.ts": {
-    count: 1,
+  {
+    file: "identity-keys.ts",
+    fn: "readDeviceKeys",
+    snippet: "function readDeviceKeys(db: DatabaseDriver, motebitId: string): string[] {",
+    verdict: "DEFINITION: the raw read behind keysHeldBy / admitKey / E-op",
+  },
+  {
+    file: "identity-keys.ts",
+    fn: "readDeviceKeys",
+    snippet:
+      ".prepare(\"SELECT DISTINCT public_key FROM devices WHERE motebit_id = ? AND public_key != ''\")",
+    verdict: "DEFINITION: the raw read behind keysHeldBy / admitKey / E-op",
+  },
+  {
+    file: "identity-keys.ts",
+    fn: "keysHeldBy",
+    snippet: "export function keysHeldBy(db: DatabaseDriver, motebitId: string): Set<string> {",
+    verdict: "DEFINITION: the guard SET (holder ∪ registry ∪ device rows)",
+  },
+  {
+    file: "identity-keys.ts",
+    fn: "add",
+    snippet: "for (const k of readDeviceKeys(db, motebitId)) add(k);",
+    verdict: "DEFINITION: keysHeldBy's device-row members",
+  },
+  {
+    file: "identity-keys.ts",
+    fn: "servedIdentityKey",
+    snippet: "for (const key of keysHeldBy(db, motebitId)) {",
     verdict:
-      "departure device rung (#736, main's rule): a rotation signed by that row's key departs that row only; never the holder",
+      "SERVED KEY: a key on file is served only when the id is its sovereign commitment (arithmetic), never as a row's word",
   },
-  "identity-keys.ts": {
-    count: 9,
+  {
+    file: "identity-keys.ts",
+    fn: "admitKey",
+    snippet: "readDeviceKeys(db, motebitId).includes(key)",
+    verdict: "SPELLING CONTINUITY: admits an already-stored exact spelling; returns a boolean",
+  },
+  {
+    file: "identity-keys.ts",
+    fn: "recordFirstIdentityKey",
+    snippet: "for (const held of keysHeldBy(db, id)) {",
+    verdict: "GUARD: E-sov's predicate — any other held key BLOCKS the write",
+  },
+  {
+    file: "identity-keys.ts",
+    fn: "recordOperatorServiceKey",
+    snippet: "if (readDeviceKeys(db, id).length > 0) return false;",
+    verdict: "GUARD: E-op's predicate — any device row BLOCKS the write",
+  },
+  {
+    file: "identity-keys.ts",
+    fn: "recordOperatorServiceKey",
+    snippet:
+      'if (db.prepare("SELECT 1 FROM devices WHERE motebit_id = ? LIMIT 1").get(id) != null) {',
+    verdict: "GUARD: E-op's predicate — any device row BLOCKS the write",
+  },
+  {
+    file: "identity-keys.ts",
+    fn: "IDENTITY_KEYS_BACKFILL_SQL",
+    snippet:
+      "(SELECT MIN(d.registered_at) FROM devices d WHERE d.motebit_id = i.motebit_id) AS first_device",
     verdict:
-      "keysHeldBy / admitKey / E-op / E-main predicates and the v42 backfill: guard SETS and spelling continuity that BLOCK or admit an already-held key; never a value written as authority",
+      "GUARD / TIMESTAMP: the one-time v42 transplant — device rows only BLOCK (HEAL-F) or date it",
   },
-  "identity-revocation.ts": {
-    count: 1,
-    verdict: "existence only: does the relay know this identity at all",
+  {
+    file: "identity-keys.ts",
+    fn: "IDENTITY_KEYS_BACKFILL_SQL",
+    snippet: "UNION SELECT motebit_id FROM devices",
+    verdict:
+      "GUARD / TIMESTAMP: the one-time v42 transplant — device rows only BLOCK (HEAL-F) or date it",
   },
-  "health-summary.ts": {
-    count: 2,
-    verdict: "operator metrics: counts, no key used",
+  {
+    file: "identity-keys.ts",
+    fn: "IDENTITY_KEYS_BACKFILL_SQL",
+    snippet: "SELECT 1 FROM devices d",
+    verdict:
+      "GUARD / TIMESTAMP: the one-time v42 transplant — device rows only BLOCK (HEAL-F) or date it",
   },
-  "state-export.ts": {
-    count: 1,
-    verdict: "signed export of the device LIST as rows, not an identity key",
+  {
+    file: "identity-revocation.ts",
+    fn: "isKnownIdentity",
+    snippet: "UNION ALL SELECT 1 FROM devices WHERE motebit_id = ?",
+    verdict: "EXISTENCE: does the relay know this identity at all",
   },
-};
+  {
+    file: "index.ts",
+    fn: "keyThatVerifiesNow",
+    snippet: '.prepare("SELECT public_key FROM devices WHERE device_id = ? AND motebit_id = ?")',
+    verdict: "PER-DEVICE: the WS verifier's twin — the row for the token's `did`",
+  },
+  {
+    file: "migration.ts",
+    fn: "/api/v1/agents/:motebitId/migrate/depart",
+    snippet:
+      '"SELECT public_key FROM relay_devices WHERE motebit_id = ? AND public_key IS NOT NULL LIMIT 1",',
+    verdict: "SIGNATURE READER: a balance waiver's signature (legacy `relay_devices` read)",
+  },
+  {
+    file: "pairing.ts",
+    fn: "approverKeyMatches",
+    snippet: "const row = await identityManager.loadDeviceById(deviceId, motebitId);",
+    verdict: "PER-DEVICE: the approver's own row",
+  },
+  {
+    file: "pairing.ts",
+    fn: "/pairing/:pairingId/update-key",
+    snippet: "const device = await identityManager.getDevice(deviceId);",
+    verdict: "PER-DEVICE: update-key's target device row",
+  },
+  {
+    file: "state-export.ts",
+    fn: "/api/v1/devices/:motebitId",
+    snippet: "const devices = await identityManager.listDevices(motebitId);",
+    verdict: "ROWS AS ROWS: signed export of the device list",
+  },
+  {
+    file: "succession-apply.ts",
+    fn: "departureFrom",
+    snippet: '.prepare("SELECT 1 FROM devices WHERE motebit_id = ? AND public_key = ? LIMIT 1")',
+    verdict:
+      "DEPARTURE DEVICE RUNG (#736, main's rule): a rotation signed by that row's key departs that row only; never the holder",
+  },
+  {
+    file: "sync-routes.ts",
+    fn: "/api/v1/devices/register-self",
+    snippet:
+      "const existingDevice = await identityManager.loadDeviceById(body.device_id, body.motebit_id);",
+    verdict: "PER-DEVICE: register-self's own device row",
+  },
+  {
+    file: "sync-routes.ts",
+    fn: "/api/v1/agents/:motebitId/devices/:deviceId/hardware-attestation",
+    snippet: "const device = await identityManager.loadDeviceById(deviceId, motebitId);",
+    verdict: "PER-DEVICE: hardware attestation verified under that device's own row",
+  },
+  {
+    file: "tasks.ts",
+    fn: "handleReceiptIngestion",
+    snippet: "const devices = await identityManager.listDevices(receipt.motebit_id);",
+    verdict:
+      "SIGNATURE READER / RECEIPT HEAL: receipt and sub-receipt keys — acceptance needs that key's signature; the heal moves the registry only to an embedded key whose signature over THIS receipt verifies",
+  },
+  {
+    file: "tasks.ts",
+    fn: "handleReceiptIngestion",
+    snippet: "const devices = await identityManager.listDevices(receipt.motebit_id);",
+    verdict:
+      "SIGNATURE READER / RECEIPT HEAL: receipt and sub-receipt keys — acceptance needs that key's signature; the heal moves the registry only to an embedded key whose signature over THIS receipt verifies",
+  },
+  {
+    file: "tasks.ts",
+    fn: "handleReceiptIngestion",
+    snippet: "const subDevices = await identityManager.listDevices(asMotebitId(sub.motebit_id));",
+    verdict:
+      "SIGNATURE READER / RECEIPT HEAL: receipt and sub-receipt keys — acceptance needs that key's signature; the heal moves the registry only to an embedded key whose signature over THIS receipt verifies",
+  },
+  {
+    file: "tasks.ts",
+    fn: "handleReceiptIngestion",
+    snippet: "const subDevices = await identityManager.listDevices(asMotebitId(sub.motebit_id));",
+    verdict:
+      "SIGNATURE READER / RECEIPT HEAL: receipt and sub-receipt keys — acceptance needs that key's signature; the heal moves the registry only to an embedded key whose signature over THIS receipt verifies",
+  },
+];
 
-function sourceFiles(dir: string): string[] {
-  const out: string[] = [];
-  for (const name of readdirSync(dir)) {
-    const p = join(dir, name);
-    if (statSync(p).isDirectory()) {
-      if (name === "__tests__") continue;
-      out.push(...sourceFiles(p));
-    } else if (name.endsWith(".ts") && !name.endsWith(".d.ts")) {
-      out.push(p);
-    }
-  }
-  return out;
+const key = (s: DeviceRowSite): string => `${s.file} | ${s.fn} | ${s.snippet}`;
+
+function multiset(keys: string[]): Map<string, number> {
+  const m = new Map<string, number>();
+  for (const k of keys) m.set(k, (m.get(k) ?? 0) + 1);
+  return m;
 }
 
-describe("a device row is never evidence of the identity's key — every read is classified (#875)", () => {
-  it("each file's device-row reads equal its registered, justified count", () => {
-    const files = sourceFiles(SRC);
-    const found: Record<string, number> = {};
-    for (const f of files) {
-      const n = (readFileSync(f, "utf8").match(DEVICE_ROW_READ) ?? []).length;
-      if (n > 0) found[relative(SRC, f)] = n;
+/** The problems the inventory reports for `found` sites against the registry. */
+export function deviceRowProblems(found: DeviceRowSite[]): string[] {
+  const have = multiset(found.map(key));
+  const want = multiset(DEVICE_ROW_SITES.map(key));
+  const problems: string[] = [];
+  for (const [k, n] of have) {
+    const w = want.get(k) ?? 0;
+    if (n > w) {
+      problems.push(
+        `UNCLASSIFIED device-row read: ${k}. A device row is never evidence of the identity's key (#875: /pairing/claim writes unproven rows). Use the bearer's verified key (c.get("callerVerifiedKey")), the proven holder (holderKeyOf) or the served key (servedIdentityKey); if this read verifies only that device's own token/signature, or is a guard that blocks, register it in DEVICE_ROW_SITES with its verdict.`,
+      );
     }
-    const problems: string[] = [];
-    for (const [file, n] of Object.entries(found)) {
-      const reg = DEVICE_ROW_READS[file];
-      if (reg === undefined || reg.count !== n) {
-        problems.push(
-          `${file}: ${n} device-row read(s), registered ${reg?.count ?? 0}. A device row is never evidence of the identity's key (#875: /pairing/claim writes unproven rows). Use the bearer's verified key (c.get("callerVerifiedKey")) or the proven holder (holderKeyOf) — or, if this read verifies only that device's own token/signature, register it in DEVICE_ROW_READS with its verdict.`,
-        );
-      }
+  }
+  for (const [k, w] of want) {
+    if ((have.get(k) ?? 0) < w) {
+      problems.push(`STALE entry: ${k} — no such read any more; remove or update the entry.`);
     }
-    for (const file of Object.keys(DEVICE_ROW_READS)) {
-      if (found[file] === undefined) {
-        problems.push(`${file}: registered but has no device-row read — remove the stale entry.`);
-      }
-    }
+  }
+  return problems;
+}
+
+describe("a device row is never evidence of the identity's key — every read site is classified (#875)", () => {
+  it("the device-row read sites equal the registered, justified sites", () => {
+    const { files, sites } = scanDeviceRowSites(SRC);
     // Aperture: what was examined.
     console.log(
-      `device-row reads: ${files.length} relay source file(s) scanned (excluding __tests__), ${Object.values(found).reduce((a, b) => a + b, 0)} read(s) in ${Object.keys(found).length} file(s), all classified`,
+      `device-row reads: ${files} relay source file(s) scanned (excluding __tests__), ${sites.length} read site(s), ${DEVICE_ROW_SITES.length} registered`,
     );
-    expect(problems).toEqual([]);
+    expect(deviceRowProblems(sites)).toEqual([]);
+  });
+
+  it("bites: a lowercase SELECT, a loadDevice(…)?.public_key, a [...keysHeldBy()][0], and a same-file swap are each unclassified", () => {
+    const { sites } = scanDeviceRowSites(SRC);
+    const plant = (file: string, fn: string, line: string): DeviceRowSite[] => [
+      ...sites,
+      { file, fn, snippet: line },
+    ];
+    // Each tamper is a line the scanner would find (the regex is exercised).
+    const tampers = [
+      'const k = db.prepare("select public_key from devices where motebit_id = ?").get(id);',
+      "const k = (await identityManager.loadDevice(d))?.public_key;",
+      "const k = [...keysHeldBy(db, motebitId)][0];",
+    ];
+    for (const t of tampers) {
+      expect(scanLine(t), t).toBe(true);
+      expect(
+        deviceRowProblems(plant("credentials.ts", "/api/v1/credentials/:motebitId/reputation", t))
+          .length,
+      ).toBe(1);
+    }
+    // A same-file swap: the capabilities route's sanctioned list read replaced
+    // by a first-row key read — the sanctioned site goes stale AND the new one
+    // is unclassified.
+    const swapped = sites.map((s) =>
+      s.file === "agents.ts" && s.fn === "/agent/:motebitId/capabilities"
+        ? {
+            ...s,
+            snippet:
+              'const publicKey = (await identityManager.listDevices(motebitId))[0]?.public_key ?? "";',
+          }
+        : s,
+    );
+    expect(deviceRowProblems(swapped).length).toBe(2);
   });
 });
+
+import { DEVICE_ROW_READ } from "./device-row-sites.js";
+function scanLine(line: string): boolean {
+  return DEVICE_ROW_READ.test(line);
+}

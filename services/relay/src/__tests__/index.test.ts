@@ -2031,7 +2031,7 @@ describe("Sync Relay — agent discovery registry", () => {
   });
 
   it("register → discover finds the agent", async () => {
-    const { motebitId, token, pubKeyHex } = await setupIdentityAndToken();
+    const { motebitId, token } = await setupIdentityAndToken();
 
     // Register
     const regRes = await relay.app.request("/api/v1/agents/register", {
@@ -2070,7 +2070,9 @@ describe("Sync Relay — agent discovery registry", () => {
     };
     expect(discoverBody.agents).toHaveLength(1);
     expect(discoverBody.agents[0]!.motebit_id).toBe(motebitId);
-    expect(discoverBody.agents[0]!.public_key).toBe(pubKeyHex);
+    // A legacy id with no proven holder: discover SERVES no key (#875 review
+    // round 3 — holder, else a key the id commits to; never the bare registry).
+    expect(discoverBody.agents[0]!.public_key).toBe("");
     expect(discoverBody.agents[0]!.endpoint_url).toBe("https://example.com/mcp");
     expect(discoverBody.agents[0]!.capabilities).toEqual(["query", "remember"]);
     expect(discoverBody.agents[0]!.metadata).toEqual({
@@ -2123,7 +2125,12 @@ describe("Sync Relay — agent discovery registry", () => {
     await relay.app.request("/api/v1/agents/register", {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-      body: JSON.stringify({ endpoint_url: "https://example.com/mcp", capabilities: ["query"] }),
+      // Keyed by the bearer's own key: a keyless registration introduces no key (#875).
+      body: JSON.stringify({
+        endpoint_url: "https://example.com/mcp",
+        capabilities: ["query"],
+        public_key: pubKeyHex,
+      }),
     });
 
     // Deregister

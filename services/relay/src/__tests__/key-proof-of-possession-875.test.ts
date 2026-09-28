@@ -556,18 +556,148 @@ describe("a device row is never evidence of the identity's key (#875 review roun
         .get(mid) as { public_key: string } | undefined
     )?.public_key;
 
-  it("keyless /agents/register writes the bearer's own verified key, never the laundered device row; discover serves X's key", async () => {
+  it("keyless /agents/register introduces no key — never the laundered device row; discover never serves V's key", async () => {
     const { x, xKp, vKp } = await launder();
     const first = relay.moteDb.db
       .prepare("SELECT public_key FROM devices WHERE motebit_id = ? AND public_key != '' LIMIT 1")
       .get(x) as { public_key: string };
     expect(first.public_key, "arrange: V's key is the first-listed row").toBe(hex(vKp));
     expect((await registerAsDevice(x, "x-own", xKp, {})).status).toBe(200);
-    expect(registryKey(x)).toBe(hex(xKp));
+    expect(registryKey(x)).toBe("");
     const disc = (await (await relay.app.request(`/api/v1/discover/${x}`)).json()) as {
       public_key?: string;
     };
     expect(disc.public_key).not.toBe(hex(vKp));
+  });
+
+  it("a paired device's keyless registration FIRST cannot pin the registry: the owner's keyed registration afterwards succeeds (#875 review round 3)", async () => {
+    const aKp = await generateKeypair();
+    const bKp = await generateKeypair();
+    const id = `legacy-${crypto.randomUUID()}`;
+    expect((await registerSelf(id, "a-dev", aKp)).status).toBe(201);
+    // B: a device paired without key transfer (its own key on its own row).
+    relay.moteDb.db
+      .prepare(
+        "INSERT INTO devices (device_id, motebit_id, device_token, public_key, registered_at) VALUES (?, ?, ?, ?, ?)",
+      )
+      .run("b-dev", id, "tok-b", hex(bKp), 1);
+    expect((await registerAsDevice(id, "b-dev", bKp, {})).status).toBe(200);
+    expect(registryKey(id)).toBe("");
+    expect((await registerAsDevice(id, "a-dev", aKp, { public_key: hex(aKp) })).status).toBe(200);
+    expect(registryKey(id)).toBe(hex(aKp));
+  });
+
+  it("GET /api/v1/discover/:id, GET /api/v1/agents/:id, the discover list and the A2A card never serve an unproven registry key (a pre-#875 row)", async () => {
+    const vKp = await generateKeypair();
+    const x = `legacy-${crypto.randomUUID()}`;
+    // X's registry row carrying V's key, as a relay before #875 admitted it.
+    relay.moteDb.db
+      .prepare(
+        "INSERT INTO agent_registry (motebit_id, public_key, endpoint_url, capabilities, registered_at, last_heartbeat, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+      )
+      .run(
+        x,
+        hex(vKp),
+        "http://127.0.0.1:9999/mcp",
+        JSON.stringify(["svc"]),
+        Date.now(),
+        Date.now(),
+        Date.now() + 86_400_000,
+      );
+    const get = async (path: string) => (await relay.app.request(path)).json();
+    expect(((await get(`/api/v1/discover/${x}`)) as { public_key?: string }).public_key).toBe("");
+    expect(
+      (
+        (await (await relay.app.request(`/api/v1/agents/${x}`, { headers: JSON_AUTH })).json()) as {
+          public_key: string;
+        }
+      ).public_key,
+    ).toBe("");
+    const list = (await (
+      await relay.app.request(`/api/v1/agents/discover?motebit_id=${x}&include=all`)
+    ).json()) as { agents: Array<{ motebit_id: string; public_key: string; did?: string }> };
+    const row = list.agents.find((a) => a.motebit_id === x);
+    expect(row?.public_key).toBe("");
+    expect(row?.did).toBeUndefined();
+    const card = (await get(`/a2a/agents/${x}/agent.json`)) as {
+      "x-motebit": { public_key: string; did: string };
+    };
+    expect(card["x-motebit"].public_key).toBe("");
+    expect(card["x-motebit"].did).toBe(`did:motebit:${x}`);
+    // The capabilities route answers only for an identity the relay knows.
+    relay.moteDb.db
+      .prepare(
+        "INSERT INTO identities (motebit_id, owner_id, created_at, version_clock) VALUES (?, ?, ?, 0)",
+      )
+      .run(x, `self:${x}`, 1);
+    const caps = (await get(`/agent/${x}/capabilities`)) as { public_key: string };
+    expect(caps.public_key).toBe("");
+  });
+
+  it("the federation discover response serves the same key — never the bare registry column", async () => {
+    await relay.close();
+    relay = await createTestRelay({
+      // The unsigned-discover rollout window: this test is about the KEY the
+      // response serves, not about peer authentication.
+      federation: {
+        endpointUrl: "https://home.example",
+        displayName: "Home",
+        requireDiscoverSignature: false,
+      },
+    });
+    const vKp = await generateKeypair();
+    const x = `legacy-${crypto.randomUUID()}`;
+    relay.moteDb.db
+      .prepare(
+        "INSERT INTO agent_registry (motebit_id, public_key, endpoint_url, capabilities, registered_at, last_heartbeat, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+      )
+      .run(
+        x,
+        hex(vKp),
+        "http://127.0.0.1:9999/mcp",
+        JSON.stringify(["svc"]),
+        Date.now(),
+        Date.now(),
+        Date.now() + 86_400_000,
+      );
+    const res = await relay.app.request("/federation/v1/discover", {
+      method: "POST",
+      headers: JSON_HEADERS,
+      body: JSON.stringify({
+        query: { motebit_id: x },
+        hop_count: 0,
+        max_hops: 1,
+        visited: [],
+        query_id: `q-${crypto.randomUUID()}`,
+        origin_relay: "peer-relay-1",
+      }),
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      agents: Array<{ motebit_id: string; public_key: string }>;
+    };
+    const row = body.agents.find((a) => a.motebit_id === x);
+    expect(row, JSON.stringify(body)).toBeDefined();
+    expect(row!.public_key).toBe("");
+  });
+
+  it("a sovereign identity's key on file is served when it has no holder — the id commits to it", async () => {
+    const s = await sovereign();
+    // A device row for the genesis key, as a relay before the holder existed left it.
+    relay.moteDb.db
+      .prepare(
+        "INSERT INTO identities (motebit_id, owner_id, created_at, version_clock) VALUES (?, ?, ?, 0)",
+      )
+      .run(s.mid, `self:${s.mid}`, 1);
+    relay.moteDb.db
+      .prepare(
+        "INSERT INTO devices (device_id, motebit_id, device_token, public_key, registered_at) VALUES (?, ?, ?, ?, ?)",
+      )
+      .run("s-dev", s.mid, "tok-s", hex(s.kp), 1);
+    const caps = (await (await relay.app.request(`/agent/${s.mid}/capabilities`)).json()) as {
+      public_key: string;
+    };
+    expect(caps.public_key).toBe(hex(s.kp));
   });
 
   it("the operator's keyless registration writes '' rather than any device row", async () => {

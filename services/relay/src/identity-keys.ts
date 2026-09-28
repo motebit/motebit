@@ -187,6 +187,51 @@ export function keysHeldBy(db: DatabaseDriver, motebitId: string): Set<string> {
 }
 
 /**
+ * The key a relay route SERVES as this identity's (#875 review round 3): the
+ * proven holder; else a key on file that the id is the sovereign commitment
+ * to (arithmetic, true whoever wrote the row); else null. Never the bare
+ * registry column, which a relay before #875 wrote without proof, and never
+ * an arbitrary device row, which `/pairing/claim` writes unsigned. Every
+ * route that hands an identity's key to a third party — discover, the agent
+ * record, capabilities, the A2A card, a relay-issued credential's subject —
+ * reads it here, so they cannot disagree.
+ */
+export async function servedIdentityKey(
+  db: DatabaseDriver,
+  motebitId: string,
+): Promise<string | null> {
+  const holder = holderKeyOf(db, motebitId);
+  if (holder !== null) return holder;
+  for (const key of keysHeldBy(db, motebitId)) {
+    if ((await proveSovereignFirstKey(motebitId, key)) !== null) return key;
+  }
+  return null;
+}
+
+/**
+ * A discovery listing's rows with `public_key` (and `did`) replaced by the
+ * SERVED key (`servedIdentityKey`) — the listing is assembled from registry
+ * rows, whose column a relay before #875 wrote without proof. An identity
+ * with no served key lists `''` and no `did`.
+ */
+export async function withServedKeys<
+  T extends { motebit_id: string; public_key: string; did?: string },
+>(db: DatabaseDriver, agents: T[], toDid: (publicKeyHex: string) => string): Promise<T[]> {
+  const out: T[] = [];
+  for (const a of agents) {
+    const served = (await servedIdentityKey(db, a.motebit_id)) ?? "";
+    let did: string | undefined;
+    try {
+      if (served !== "") did = toDid(served);
+    } catch {
+      did = undefined;
+    }
+    out.push({ ...a, public_key: served, did });
+  }
+  return out;
+}
+
+/**
  * DA1/DB4 — may this key ENTER through a door? Canonical lowercase hex, or a
  * key that EXACTLY equals one already on file for the identity (holder,
  * registry, chain head, a device row) — continuity, so a legacy identity

@@ -319,14 +319,15 @@ The seven routes below are the binding cross-implementation contract for the dis
 
 Otherwise the relay refuses with `400` (`KEY_PROOF_REQUIRED`). The operator's master token registers a key on its own authority.
 
-A registration that names no `public_key` writes one of the following, in order:
+A registration that names no `public_key` never introduces a key. It writes, in order:
 
 1. the proven holder key;
 2. else the registry key already on file, unchanged;
-3. else the key the caller's device token verified under;
-4. else `""`. The operator's keyless registration proves no key and so writes `""`.
+3. else `""`.
 
-**The law: a device row is never evidence of the identity's key.** Only three things are: proof carried by the request, the key the bearer's token verified under, and the proven holder. The rule binds every value the relay records, serves or attributes as an identity's key. That covers the registry value and the `public_key` / `did` served by `discover` and `GET /agent/:motebitId/capabilities`. It covers the subject of a relay-issued credential and the issuer check on credential revocation. A device row's key verifies only that device's own tokens and signatures.
+A keyless registration writes neither a device row's key nor the caller's own key: a paired device registering keyless first would otherwise pin the registry and lock out the owner's keyed registration. Keys enter only through a keyed, proven registration. The one exception is a registration that proves the key a sovereign id commits to; that key becomes the identity's proven holder in the same request.
+
+**The law: a device row is never evidence of the identity's key.** Only three things are: proof carried by the request, the key the bearer's token verified under, and the proven holder. The rule binds every value the relay records, serves or attributes as an identity's key, starting with the registry value and the issuer check on credential revocation. The key the relay SERVES as an identity's comes from one rule: the proven holder, else a key on file that the `motebit_id` is the sovereign commitment to, else `""`. It is never the bare registry column. That rule governs `GET /api/v1/discover/:motebitId`, `GET /api/v1/agents/discover`, the federation discover response, `GET /api/v1/agents/:motebitId`, `GET /agent/:motebitId/capabilities`, the A2A agent card, and the subject of a relay-issued credential. A device row's key verifies only that device's own tokens and signatures.
 
 **Residual.** The reference relay's pairing claim (`POST /pairing/claim`) takes a device `public_key` with no signature, and the approving device's approval writes it as a device row. Nobody has proven they hold that key, so the row verifies only that device's own tokens, and by the law above it never reaches the identity's key. Closing the residual needs a possession proof at claim, which every client surface must send. An approved key transfer is bounded to the approver's own key. For an identity that holds no key, a `motebit_id` shaped as a sovereign commitment (a UUIDv8) is refused (`409`, `SOVEREIGN_ID_KEY_MISMATCH`) unless it is exactly `deriveSovereignMotebitId(public_key)`.
 

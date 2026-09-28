@@ -484,12 +484,13 @@ describe("identity-keys", () => {
       plantDevice(db, "kl-keep", "kk1", A);
       expect((await registerAsOperator("kl-keep", {})).status).toBe(200);
       expect(registryKey(db, "kl-keep")).toBe(B);
-      // A device's keyless registration writes the key its own token verified under.
+      // A device's keyless registration introduces no key either — not even its
+      // own (#875 review round 3): keys enter only on a keyed, proven registration.
       const own = await generateKeypair();
       plantDevice(db, "kl-own", "stranger-row", A);
       plantDevice(db, "kl-own", "own", hex(own));
       expect((await registerAsDevice("kl-own", "own", own, {})).status).toBe(200);
-      expect(registryKey(db, "kl-own")).toBe(hex(own));
+      expect(registryKey(db, "kl-own")).toBe("");
       // "" is absent, not malformed (DB4); a malformed non-empty key is refused.
       expect((await registerAsOperator("kl-dis", { public_key: "" })).status).toBe(200);
       expect((await registerAsOperator("kl-dis", { public_key: "zz" })).status).toBe(400);
