@@ -31,7 +31,14 @@ jobs:
     # below), so lowering it would only slow the suite; headroom is the lever.
     # Precedent: the deploy jobs carry 30 for the same cold-build class. Revisit
     # (make the suite faster / shard) if this trends toward the ceiling again.
-    timeout-minutes: 20
+    #
+    # 30, not 20 (2026-09-28): it trended back. Successful `check` runs took
+    # 8.8–17.8 min over the last 12 green runs; with 2–3 CI runs sharing the
+    # runners it crossed 20 six times in one day (#899, #930, #932, #936 ×2,
+    # and main itself — which blocked a production relay deploy, since deploys
+    # are CI-gated). Every timed-out run passed on rerun. Headroom now; the
+    # structural fix — shard the suite — is tracked separately.
+    timeout-minutes: 30
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
