@@ -935,6 +935,80 @@ describe("Web3JsRpcAdapter.sendUsdc", () => {
     expect(sendSpy).toHaveBeenCalledTimes(1);
   });
 
+  it("REVIEWER PROBE S1 (sticky pending): seen in a block, then 'absent' from a caught-up node ⇒ never re-signed; 1 send", async () => {
+    const adapter = makeAdapterForTx();
+    const conn = adapter.getConnection();
+    getAccountMock
+      .mockResolvedValueOnce({ amount: 10_000_000n })
+      .mockResolvedValueOnce({ amount: 0n });
+    vi.spyOn(conn, "getLatestBlockhash").mockResolvedValue({
+      blockhash: validBlockhash(),
+      lastValidBlockHeight: 100,
+    });
+    // Read 1: the tx is in a block (processed). Read 2 onward: a node on a
+    // minority fork, caught up by slot NUMBER, answers null — at lastValid+12.
+    let reads = 0;
+    vi.spyOn(conn, "getEpochInfo").mockImplementation(async () => {
+      reads++;
+      return (
+        reads === 1
+          ? { blockHeight: 101, absoluteSlot: 5_000 }
+          : { blockHeight: 112, absoluteSlot: 5_011 }
+      ) as never;
+    });
+    vi.spyOn(conn, "getSignatureStatuses").mockImplementation(
+      async () =>
+        (reads === 1
+          ? {
+              context: { slot: 5_000 },
+              value: [
+                { confirmationStatus: "processed", err: null, slot: 4_999, confirmations: 0 },
+              ],
+            }
+          : { context: { slot: 5_011 }, value: [null] }) as never,
+    );
+    const sendSpy = vi.spyOn(conn, "sendRawTransaction").mockResolvedValue("sigA");
+    vi.spyOn(conn, "confirmTransaction").mockRejectedValue(
+      new Error("Signature sigA has expired: block height exceeded."),
+    );
+    await expect(
+      adapter.sendUsdc({ toAddress: validBase58Address(), microAmount: 1n }),
+    ).rejects.toThrow("block height exceeded");
+    expect(sendSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("a 'processed' adapter never DECIDES at processed: confirmation and the height read run at confirmed", async () => {
+    let t = 0;
+    const adapter = new Web3JsRpcAdapter({
+      rpcUrl: "https://api.devnet.solana.com",
+      identitySeed: ZERO_SEED,
+      commitment: "processed",
+      expiryConfirm: { now: () => t, sleep: (ms) => ((t += ms), Promise.resolve()) },
+    });
+    const conn = adapter.getConnection();
+    getAccountMock
+      .mockResolvedValueOnce({ amount: 10_000_000n })
+      .mockResolvedValueOnce({ amount: 0n });
+    vi.spyOn(conn, "getLatestBlockhash").mockResolvedValue({
+      blockhash: validBlockhash(),
+      lastValidBlockHeight: 100,
+    });
+    vi.spyOn(conn, "sendRawTransaction").mockResolvedValue("sigA");
+    const confirm = vi
+      .spyOn(conn, "confirmTransaction")
+      .mockRejectedValue(new Error("Signature sigA has expired: block height exceeded."));
+    const epoch = vi
+      .spyOn(conn, "getEpochInfo")
+      .mockResolvedValue({ blockHeight: 500, absoluteSlot: 9_000 } as never);
+    vi.spyOn(conn, "getSignatureStatuses").mockResolvedValue({
+      context: { slot: 9_000 },
+      value: [{ confirmationStatus: "confirmed", err: null, slot: 42, confirmations: 1 }],
+    } as never);
+    await adapter.sendUsdc({ toAddress: validBase58Address(), microAmount: 1n });
+    expect(confirm.mock.calls[0]?.[1]).toBe("confirmed");
+    expect(epoch.mock.calls[0]?.[0]).toBe("confirmed");
+  });
+
   it("REALISTIC: still inside the margin when the poll cap ends ⇒ throws; 1 send, never a re-sign on a maybe", async () => {
     const adapter = makeAdapterForTx();
     const conn = adapter.getConnection();
@@ -1113,6 +1187,31 @@ describe("Web3JsRpcAdapter.getSignatureOutcome — about ONE transaction", () =>
     await expect(gone.adapter.getSignatureOutcome(ref)).resolves.toEqual({ status: "expired" });
   });
 
+  it("a tx that landed LONG ago (aged out of the recent status cache) still reads landed — history search is required", async () => {
+    const adapter = makeAdapterForTx();
+    const conn = adapter.getConnection();
+    vi.spyOn(conn, "getEpochInfo").mockResolvedValue({
+      blockHeight: 900_000,
+      absoluteSlot: 1_000_000,
+    } as never);
+    // Only a history search finds it; the recent-status cache returns null.
+    vi.spyOn(conn, "getSignatureStatuses").mockImplementation(
+      async (_sigs, opts) =>
+        (opts?.searchTransactionHistory === true
+          ? {
+              context: { slot: 1_000_000 },
+              value: [
+                { confirmationStatus: "finalized", err: null, slot: 77, confirmations: null },
+              ],
+            }
+          : { context: { slot: 1_000_000 }, value: [null] }) as never,
+    );
+    await expect(adapter.getSignatureOutcome(ref)).resolves.toEqual({
+      status: "landed",
+      slot: 77,
+    });
+  });
+
   it("REVIEWER PROBE: absent from a LAGGING node (context.slot behind the height read) ⇒ pending, never expired", async () => {
     // height=101 > lastValid=100, but the status came from a node at slot 4990
     // while the height was read at slot 5000: that node had not seen every
@@ -1139,7 +1238,10 @@ describe("Web3JsRpcAdapter.getSignatureOutcome — about ONE transaction", () =>
       height: 500,
       status: { confirmationStatus: "processed", err: null, slot: 3 },
     });
-    await expect(proc.adapter.getSignatureOutcome(ref)).resolves.toEqual({ status: "pending" });
+    await expect(proc.adapter.getSignatureOutcome(ref)).resolves.toEqual({
+      status: "pending",
+      seen: true, // in a block: a later "absent" for it is never believed
+    });
     const adapter = makeAdapterForTx();
     vi.spyOn(adapter.getConnection(), "getEpochInfo").mockRejectedValue(new Error("429"));
     await expect(adapter.getSignatureOutcome(ref)).resolves.toEqual({

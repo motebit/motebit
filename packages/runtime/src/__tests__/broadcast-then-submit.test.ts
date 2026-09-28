@@ -526,6 +526,26 @@ describe("#885 — the builder throws", () => {
     expect(ledger.outstandingCount).toBe(1);
   });
 
+  it("sticky pending: once a look SAW the tx in a block, a later 'absent' is never believed ⇒ unknown, kept on record", async () => {
+    const r = relay();
+    const pay = railFor(new Chain(["dead"]));
+    let look = 0;
+    const flipFlop = vi.fn(async () =>
+      look++ === 0
+        ? ({ status: "pending", recheckAtMs: 0, seen: true } as const)
+        : ({ status: "absent" } as const),
+    );
+    const store = new InMemoryPaidIntentStore();
+    const res = await hire(new PaidIntentLedger(store, ME, "s1"), pay, "x", {
+      confirmP2pPayment: flipFlop,
+      paymentConfirmMaxWaitMs: 60_000,
+    });
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.error.code).toBe("payment_status_unknown");
+    expect(r.submits).toHaveLength(0);
+    expect(new PaidIntentLedger(store, ME, "later").outstandingCount).toBe(1);
+  });
+
   it("still pending when the wait ends ⇒ unknown, never read as absent", async () => {
     relay();
     const pay = railFor(new Chain(["dead"]));

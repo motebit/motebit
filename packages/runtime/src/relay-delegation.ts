@@ -1339,7 +1339,8 @@ export type ConfirmP2pPayment = (query: {
 export type P2pPaymentConfirmation =
   | { status: "landed"; proof: P2pPaymentProof }
   | { status: "absent" }
-  | { status: "pending"; recheckAtMs: number }
+  /** `seen`: a node reported it in a block — a later `absent` is never accepted. */
+  | { status: "pending"; recheckAtMs: number; seen?: true }
   | { status: "unknown"; reason: string };
 
 /** The rail's confirmer, when the rail has one — read structurally, never assumed. */
@@ -2448,12 +2449,20 @@ async function confirmOwnTransactions(args: {
   const undecided: string[] = [];
   for (const tx of args.transactions) {
     let final: P2pPaymentConfirmation | null = null;
+    // Sticky pending (#885 round 5): once a look has seen this transaction
+    // in a block, a later `absent` for it is not believed — it stays
+    // pending until it lands or the wait ends (⇒ unknown).
+    let seen = false;
     for (let look = 0; look < MAX_CONFIRM_LOOKS; look++) {
       let v: P2pPaymentConfirmation;
       try {
         v = await args.confirm({ request: args.request, transaction: tx });
       } catch (err: unknown) {
         v = { status: "unknown", reason: err instanceof Error ? err.message : String(err) };
+      }
+      if (v.status === "pending" && v.seen === true) seen = true;
+      if (v.status === "absent" && seen) {
+        v = { status: "pending", recheckAtMs: args.now() + 5_000, seen: true };
       }
       if (v.status !== "pending") {
         final = v;

@@ -86,7 +86,8 @@ const P2P_PENDING_RECHECK_MS = 5_000;
 export type P2pPaymentConfirmation =
   | { status: "landed"; proof: P2pPaymentProof }
   | { status: "absent" }
-  | { status: "pending"; recheckAtMs: number }
+  /** `seen`: a node reported it in a block — never accept a later `absent` for it. */
+  | { status: "pending"; recheckAtMs: number; seen?: true }
   | { status: "unknown"; reason: string };
 
 /**
@@ -371,7 +372,11 @@ export class SolanaWalletRail implements SovereignWalletRail {
       case "rpc_error":
         return { status: "unknown", reason: outcome.reason };
       case "pending":
-        return { status: "pending", recheckAtMs: this.now() + P2P_PENDING_RECHECK_MS };
+        return {
+          status: "pending",
+          recheckAtMs: this.now() + P2P_PENDING_RECHECK_MS,
+          ...(outcome.seen === true ? { seen: true as const } : {}),
+        };
       case "failed":
       case "expired":
         return { status: "absent" };

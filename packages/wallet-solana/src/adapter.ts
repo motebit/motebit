@@ -176,14 +176,22 @@ export interface BroadcastHooks {
  *   - `failed` — confirmed, but the transaction errored: it moved nothing.
  *   - `expired` — not on chain and its blockhash is past
  *     `lastValidBlockHeight`: it can never land.
- *   - `pending` — not (yet) confirmed and still able to land.
+ *   - `pending` — not (yet) confirmed and still able to land; `seen`
+ *     when a node reported it in a block.
  *   - `rpc_error` — the lookup could not be completed. Never absence.
  */
 export type SignatureOutcome =
   | { status: "landed"; slot: number }
   | { status: "failed" }
   | { status: "expired" }
-  | { status: "pending" }
+  /**
+   * `seen: true` — a node reported the transaction IN A BLOCK (not yet at
+   * the adapter's commitment). A caller asking again MUST NOT accept a
+   * later `expired` for it: a slot-number comparison cannot tell a lagging
+   * or minority-fork node from the canonical chain, and a transaction some
+   * node has seen may well land (#885 round 5).
+   */
+  | { status: "pending"; seen?: true }
   | { status: "rpc_error"; reason: string };
 
 export interface SolanaRpcAdapter {

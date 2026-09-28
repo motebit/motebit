@@ -186,6 +186,7 @@ export class Web3JsRpcAdapter implements SolanaRpcAdapter {
   private readonly keypair: Keypair;
   private readonly mint: PublicKey;
   private readonly commitment: Commitment;
+  private readonly decisionCommitment: "confirmed" | "finalized";
   private readonly expiryPollMs: number;
   private readonly expiryMaxWaitMs: number;
   private readonly sleep: (ms: number) => Promise<void>;
@@ -198,6 +199,12 @@ export class Web3JsRpcAdapter implements SolanaRpcAdapter {
       );
     }
     this.commitment = config.commitment ?? "confirmed";
+    // #885 round 5: whether a payment LANDED or EXPIRED is never decided at
+    // "processed" — a single node's processed view can be a minority fork.
+    // A "processed" adapter still reads and sends at "processed"; its
+    // confirmation and expiry decisions run at "confirmed". (The type keeps
+    // "processed" because the relay's read-only reconcilers pass it.)
+    this.decisionCommitment = this.commitment === "finalized" ? "finalized" : "confirmed";
     this.connection = new Connection(config.rpcUrl, this.commitment);
     this.expiryPollMs = config.expiryConfirm?.pollMs ?? EXPIRY_CONFIRM_POLL_MS;
     this.expiryMaxWaitMs = config.expiryConfirm?.maxWaitMs ?? EXPIRY_CONFIRM_MAX_WAIT_MS;
@@ -386,7 +393,7 @@ export class Web3JsRpcAdapter implements SolanaRpcAdapter {
             blockhash: latest.blockhash,
             lastValidBlockHeight: latest.lastValidBlockHeight,
           },
-          this.commitment,
+          this.decisionCommitment,
         );
         return {
           signature,
@@ -425,8 +432,16 @@ export class Web3JsRpcAdapter implements SolanaRpcAdapter {
    */
   private async awaitDecisiveOutcome(signed: SignedTransactionRef): Promise<SignatureOutcome> {
     const deadline = this.now() + this.expiryMaxWaitMs;
+    // Sticky pending (#885 round 5): once ANY read has seen this signature
+    // in a block, an `expired` answer for it is never accepted — the
+    // expiry rule compares slot NUMBERS, not fork membership, and a
+    // load-balanced RPC can answer from a node on a minority fork. The
+    // transaction then lands (returned) or the cap is reached (thrown).
+    let seen = false;
     for (;;) {
-      const outcome = await this.getSignatureOutcome(signed);
+      let outcome = await this.getSignatureOutcome(signed);
+      if (outcome.status === "pending" && outcome.seen === true) seen = true;
+      if (outcome.status === "expired" && seen) outcome = { status: "pending", seen: true };
       if (outcome.status === "landed" || outcome.status === "failed") return outcome;
       if (outcome.status === "expired") return outcome;
       if (this.now() + this.expiryPollMs > deadline) return outcome;
@@ -741,7 +756,7 @@ export class Web3JsRpcAdapter implements SolanaRpcAdapter {
       // `pending`. The margin absorbs commitment-level skew between the two
       // reads (a block counted at `processed` by one node, not yet at
       // `confirmed` by another).
-      const epoch = await this.connection.getEpochInfo(this.commitment);
+      const epoch = await this.connection.getEpochInfo(this.decisionCommitment);
       const resp = await this.connection.getSignatureStatuses([tx.signature], {
         searchTransactionHistory: true,
       });
@@ -753,7 +768,9 @@ export class Web3JsRpcAdapter implements SolanaRpcAdapter {
       if (status != null && settled) {
         return status.err == null ? { status: "landed", slot: status.slot } : { status: "failed" };
       }
-      if (status != null) return { status: "pending" }; // in a block, not yet at commitment
+      // In a block, not yet at commitment. `seen` makes every later
+      // "absent" read for this signature untrustworthy (sticky pending).
+      if (status != null) return { status: "pending", seen: true };
       const pastLastValid =
         epoch.blockHeight != null &&
         epoch.blockHeight > tx.lastValidBlockHeight + EXPIRY_HEIGHT_MARGIN;

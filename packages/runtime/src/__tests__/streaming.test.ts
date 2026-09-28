@@ -3887,4 +3887,28 @@ describe("delegate_to_agent payment notice (#885)", () => {
     expect(notice?.extra_payments?.[0]?.tx_hash).toBe("sigA");
     expect(manager.paymentNotices).toHaveLength(0); // drained, never repeated
   });
+
+  it("the NON-streaming sendMessage logs a stashed notice loudly (no stream to carry it)", async () => {
+    const warn = vi.fn();
+    const runtime = new MotebitRuntime(
+      { motebitId: "notice-test-2", tickRateHz: 0, logger: { warn } } as never,
+      createAdapters(createMockProvider()),
+    );
+    const manager = (
+      runtime as unknown as {
+        interactiveDelegation: { paymentNotices: Array<Record<string, unknown>> };
+      }
+    ).interactiveDelegation;
+    manager.paymentNotices.push({
+      type: "payment_notice",
+      notice: "This hire's wallet ALSO sent another payment (tx sigB, landed)",
+      extra_payments: [{ tx_hash: "sigB", status: "landed" }],
+    });
+    await runtime.sendMessage("hire");
+    expect(warn).toHaveBeenCalledWith(
+      "delegation.payment_notice",
+      expect.objectContaining({ extra_payments: [{ tx_hash: "sigB", status: "landed" }] }),
+    );
+    expect(manager.paymentNotices).toHaveLength(0);
+  });
 });

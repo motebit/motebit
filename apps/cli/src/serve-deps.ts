@@ -41,6 +41,8 @@ export interface AttachedServeClient {
  */
 export function attachedServePrincipalDeps(
   client: AttachedServeClient,
+  /** Operator log for a served turn's money notice (#885). */
+  log: (line: string) => void = (line) => console.warn(line),
 ): Pick<MotebitServerDeps, "validateTool" | "executeTool" | "sendMessage"> {
   return {
     validateTool: async (tool, args, caller) =>
@@ -61,8 +63,14 @@ export function attachedServePrincipalDeps(
     sendMessage: async (text: string) => {
       let response = "";
       for await (const chunk of client.chat(text, { foreignPrincipal: true })) {
-        const c = chunk as { type?: string; text?: string };
+        const c = chunk as { type?: string; text?: string; notice?: string };
         if (c.type === "text" && typeof c.text === "string") response += c.text;
+        // #885: the coordinator's wallet sent another payment (or a payment
+        // could not be recorded) inside a served turn — the operator reads
+        // the serve log, never the MCP caller's response.
+        else if (c.type === "payment_notice" && typeof c.notice === "string") {
+          log(`[warning] payment: ${c.notice}`);
+        }
       }
       return { response, memoriesFormed: 0 };
     },

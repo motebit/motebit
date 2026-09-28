@@ -167,6 +167,27 @@ describe("MotebitRuntime.executePlan", () => {
     expect(types).toContain("plan_completed");
   });
 
+  it("#885: a money warning a plan step stashed is logged loudly when the plan stream ends", async () => {
+    setupStreamMock(["research result", "summary result"]);
+    const warn = vi.fn();
+    const rt = new MotebitRuntime(
+      { motebitId: "plan-notice", tickRateHz: 0, logger: { warn } } as never,
+      createAdapters(createMockProvider()),
+    );
+    (
+      rt as unknown as { interactiveDelegation: { paymentNotices: Array<Record<string, unknown>> } }
+    ).interactiveDelegation.paymentNotices.push({
+      type: "payment_notice",
+      notice: "This hire's wallet ALSO sent another payment (tx sigP, landed)",
+      extra_payments: [{ tx_hash: "sigP", status: "landed" }],
+    });
+    await collectChunks(rt.executePlan("goal-1", "Research and summarize"));
+    expect(warn).toHaveBeenCalledWith(
+      "delegation.payment_notice",
+      expect.objectContaining({ extra_payments: [{ tx_hash: "sigP", status: "landed" }] }),
+    );
+  });
+
   it("plan_created chunk includes plan and steps", async () => {
     setupStreamMock(["step 1 done", "step 2 done"]);
 

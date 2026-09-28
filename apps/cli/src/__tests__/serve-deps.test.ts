@@ -199,6 +199,23 @@ describe("attachedServePrincipalDeps (#880 item 3)", () => {
     await attachedServePrincipalDeps(client).sendMessage!("q");
     expect(client.chats[0]).toEqual(["q", { foreignPrincipal: true }]);
   });
+
+  it("logs a served turn's payment notice to the operator, never into the caller's response (#885)", async () => {
+    const client = fakeClient();
+    client.chat = async function* () {
+      yield { type: "text", text: "answer" };
+      yield {
+        type: "payment_notice",
+        notice: "Your wallet also sent another payment (tx abcd1234…).",
+      };
+    };
+    const lines: string[] = [];
+    const out = await attachedServePrincipalDeps(client, (l) => lines.push(l)).sendMessage!("q");
+    expect(out.response).toBe("answer");
+    expect(lines).toEqual([
+      "[warning] payment: Your wallet also sent another payment (tx abcd1234…).",
+    ]);
+  });
 });
 
 describe("servePrincipalDeps (#880 item 3)", () => {

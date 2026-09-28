@@ -857,7 +857,7 @@ async function runServeAttached(
     // The request's verified caller travels with every policy question and
     // every execution, and `motebit_query` is a foreign turn (#880) —
     // serve-deps.ts, locked by serve-deps.test.ts.
-    ...attachedServePrincipalDeps(client),
+    ...attachedServePrincipalDeps(client, log),
 
     getState: async () => (await client.query("state")) as Record<string, unknown>,
 

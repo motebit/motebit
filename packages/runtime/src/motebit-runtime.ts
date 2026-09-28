@@ -1158,6 +1158,8 @@ export class MotebitRuntime {
         this.assertSensitivityPermitsAiCall(entry, toolName),
       getLocalCapabilities: () => this._localCapabilities,
       getTaskRouter: () => this.taskRouter,
+      // #885: lazy — interactiveDelegation is constructed just below.
+      drainPaymentNotices: () => this.interactiveDelegation.drainPaymentNotices(),
     });
 
     // Interactive delegation — delegate_to_agent tool + receipt stash
@@ -2373,6 +2375,17 @@ export class MotebitRuntime {
       this.conversation.clearSessionInfo();
       return result;
     } finally {
+      // #885: the non-streaming turn has no chunk stream to carry a money
+      // warning (a hire's wallet sent another payment, or a payment could
+      // not be recorded) — log each one loudly instead of leaving it stashed
+      // for some later streaming turn.
+      for (const n of this.interactiveDelegation.drainPaymentNotices()) {
+        this._logger.warn("delegation.payment_notice", {
+          notice: n.notice,
+          ...(n.extra_payments != null ? { extra_payments: n.extra_payments } : {}),
+          ...(n.ledger_write_failed === true ? { ledger_write_failed: true } : {}),
+        });
+      }
       this.state.pushUpdate({ processing: 0.1, attention: 0.3 });
       this._isProcessing = false;
       this._foreignTurn = false;
