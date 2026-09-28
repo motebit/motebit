@@ -37,9 +37,15 @@ import { HTTPException } from "hono/http-exception";
 import type { EventLogEntry } from "@motebit/sdk";
 import type { EventStore } from "@motebit/event-log";
 import type { MigrationRequest } from "@motebit/protocol";
-import { hexToBytes } from "@motebit/encryption";
-import { verifyMigrationRequest } from "@motebit/crypto";
+import type { DatabaseDriver } from "@motebit/persistence";
+import { bytesToHex, didKeyToPublicKey, hexToBytes } from "@motebit/encryption";
+import {
+  verifyDelegationRevocation,
+  verifyMigrationRequest,
+  type DelegationRevocation,
+} from "@motebit/crypto";
 import { OPERATOR_PRESENTED, type AuthEvent } from "./auth-events.js";
+import { keysHeldBy } from "./identity-keys.js";
 import { createLogger } from "./logger.js";
 
 const logger = createLogger({ service: "identity-binding" });
@@ -179,6 +185,138 @@ export async function bindBySignature(
     ok = false;
   }
   return ok ? mint(request.motebit_id) : null;
+}
+
+// ---------------------------------------------------------------------------
+// Signed artifacts: the row is filed under the identity the ARTIFACT names,
+// proven against the keys the relay holds for it (#850)
+// ---------------------------------------------------------------------------
+
+/** The canonical lowercase hex key a `did:key` URI names, or null when it is not a well-formed Ed25519 `did:key`. */
+function didKeyHex(did: string): string | null {
+  try {
+    return bytesToHex(didKeyToPublicKey(did));
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Does the `did:key` URI `did` name a key `motebitId` holds (`keysHeldBy`,
+ * compared exactly)? Not exclusive — see `didKeyHeldOnlyBy` for the binding
+ * question. Used to recognise the identity itself behind a second spelling.
+ */
+export function didKeyHeldBy(db: DatabaseDriver, did: string, motebitId: string): boolean {
+  const hex = didKeyHex(did);
+  return hex !== null && keysHeldBy(db, motebitId).has(hex);
+}
+
+/**
+ * Does the `did:key` URI `did` name a key that `motebitId` holds — and that
+ * no OTHER identity on this relay holds? The held set is `keysHeldBy` (the
+ * holder, the registry's key, every keyed device row; a rotation retires the
+ * old key from all three), compared exactly against the canonical lowercase
+ * hex the DID decodes to. A key some other identity also answers to names
+ * nobody in particular, so it binds nobody (fail closed). Anything that is
+ * not a well-formed Ed25519 `did:key` is false.
+ */
+export function didKeyHeldOnlyBy(db: DatabaseDriver, did: string, motebitId: string): boolean {
+  const hex = didKeyHex(did);
+  if (hex === null || !keysHeldBy(db, motebitId).has(hex)) return false;
+  const other = db
+    .prepare(
+      `SELECT motebit_id FROM devices WHERE LOWER(public_key) = ? AND motebit_id != ?
+       UNION SELECT motebit_id FROM agent_registry WHERE LOWER(public_key) = ? AND motebit_id != ?
+       UNION SELECT motebit_id FROM identity_keys WHERE LOWER(public_key) = ? AND motebit_id != ?
+       LIMIT 1`,
+    )
+    .get(hex, motebitId, hex, motebitId, hex, motebitId);
+  return other == null;
+}
+
+/** Why a credential's subject did not bind to the path identity (`bindCredentialSubject`). */
+export type CredentialSubjectRefusal =
+  | "credential_subject:missing"
+  | "credential_subject:not_path_identity"
+  | "credential_subject:key_not_held_by_path_identity"
+  | "credential_subject:unsupported_did";
+
+/**
+ * `POST /api/v1/agents/:motebitId/credentials/submit` files a credential
+ * under the path identity, and that row is what `revoke-credential` later
+ * reads as "the subject" (spec/credential-v1.md §6.2). The route is public
+ * (the issuer's signature is the auth, §7.1), so nothing about the SUBMITTER
+ * can be bound — the binding is between the target and the CREDENTIAL: the
+ * path identity must be the identity the credential's own
+ * `credentialSubject.id` names.
+ *
+ *  - `did:motebit:<id>` names `<id>`; it must be exactly the path identity.
+ *  - `did:key:z…` names a key; the path identity must hold it and no other
+ *    identity may (`didKeyHeldOnlyBy`).
+ *  - anything else, or no subject id at all, binds nobody.
+ *
+ * Before #850 the row was filed under the path alone: X filed V's credential
+ * under X, then revoked it as its "subject" — relay-wide, for V.
+ */
+export function bindCredentialSubject(
+  db: DatabaseDriver,
+  subjectId: unknown,
+  pathId: string,
+): { bound: BoundIdentity } | { refused: CredentialSubjectRefusal } {
+  if (typeof subjectId !== "string" || subjectId === "") {
+    return { refused: "credential_subject:missing" };
+  }
+  if (subjectId.startsWith("did:motebit:")) {
+    if (subjectId.slice("did:motebit:".length) !== pathId) {
+      return { refused: "credential_subject:not_path_identity" };
+    }
+  } else if (subjectId.startsWith("did:key:")) {
+    if (!didKeyHeldOnlyBy(db, subjectId, pathId)) {
+      return { refused: "credential_subject:key_not_held_by_path_identity" };
+    }
+  } else {
+    return { refused: "credential_subject:unsupported_did" };
+  }
+  return { bound: mint(pathId) };
+}
+
+/** Why a delegation revocation did not bind to its delegator (`bindByDelegationRevocation`). */
+export type DelegationRevocationRefusal =
+  "delegation_revocation:signature_invalid" | "delegation_revocation:key_not_held_by_delegator";
+
+/**
+ * Bind a `DelegationRevocation` to the delegator it names
+ * (spec/standing-delegation-v1.md §5.1: "Only the grant's delegator may sign
+ * one"). The signature must verify AND the key it verifies under must be one
+ * this relay holds for `delegator_id` (`keysHeldBy` — so a rotated-out key
+ * no longer speaks for the identity). The key is looked up HERE, never taken
+ * from the caller: the key embedded in the artifact proves only that
+ * SOMEONE signed it.
+ *
+ * Before #850 the relay verified the revocation against its own embedded
+ * key alone, so a stranger with a fresh keypair could file a revocation
+ * naming any delegator and any `grant_id`, and the acceptance fence refused
+ * that grant's tasks.
+ */
+export async function bindByDelegationRevocation(
+  db: DatabaseDriver,
+  revocation: DelegationRevocation,
+): Promise<{ bound: BoundIdentity } | { refused: DelegationRevocationRefusal }> {
+  let ok = false;
+  try {
+    ok = await verifyDelegationRevocation(revocation);
+  } catch {
+    ok = false;
+  }
+  if (!ok) return { refused: "delegation_revocation:signature_invalid" };
+  if (
+    typeof revocation.delegator_id !== "string" ||
+    revocation.delegator_id === "" ||
+    !keysHeldBy(db, revocation.delegator_id).has(revocation.delegator_public_key)
+  ) {
+    return { refused: "delegation_revocation:key_not_held_by_delegator" };
+  }
+  return { bound: mint(revocation.delegator_id) };
 }
 
 // ---------------------------------------------------------------------------

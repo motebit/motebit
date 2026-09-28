@@ -11,13 +11,19 @@
  * trust root.
  *
  * Security is in the ARTIFACT, not the transport (the `POST /bond` class):
- * ingestion verifies the revocation's own Ed25519 signature
- * (`verifyDelegationRevocation`), and a stored revocation only ever has
- * authority over grants whose `delegator_public_key` matches it
- * (`findGrantRevocation` at the consumer). A third party "propagating" someone
- * else's valid revocation is a feature — revocation wants to travel; the worst
- * a hostile submitter can do is store self-signed revocations of grant_ids
- * nobody issued, which revoke nothing. Invalid signatures are rejected 422.
+ * ingestion verifies the revocation's Ed25519 signature AND that the key it
+ * verifies under is one this relay holds for the `delegator_id` it names
+ * (`bindByDelegationRevocation`, identity-binding.ts — #850; the bond route's
+ * "bonded key must be the key we know for this motebit_id" rule). A third
+ * party "propagating" someone else's valid revocation is a feature —
+ * revocation wants to travel — and still works: the delegator's key signed
+ * it. Invalid signatures are rejected 422; a signature under a key the
+ * named delegator does not hold is refused 403.
+ *
+ * Before #850 the signature was checked against the key EMBEDDED in the
+ * revocation alone, and the acceptance fence (`listRevokedGrantIds`) matches
+ * on `grant_id` alone — so a stranger with a fresh keypair who knew a
+ * `grant_id` could make the relay refuse that grant's tasks.
  *
  * Why this exists NOW (Inc 3a of the money-execution arc): before autonomous
  * money moves under a standing grant, the coordinator at the settlement
@@ -37,26 +43,38 @@ import type { Hono } from "hono";
 import { HTTPException } from "hono/http-exception";
 import type { DatabaseDriver } from "@motebit/persistence";
 import { canonicalJson } from "@motebit/encryption";
-import { verifyDelegationRevocation, type DelegationRevocation } from "@motebit/crypto";
+import type { DelegationRevocation } from "@motebit/crypto";
 import { DelegationRevocationSchema } from "@motebit/wire-schemas";
+import { bindByDelegationRevocation, unwrapBound, type BoundIdentity } from "./identity-binding.js";
 import { createLogger } from "./logger.js";
 
 const logger = createLogger({ service: "delegation-revocations" });
 
 /**
- * Record a verified revocation. Append-only, idempotent on the signature
- * (Ed25519 is deterministic: same body + same key ⇒ same signature, so a
- * re-submission is a no-op, not a duplicate row). `record_json` stores the
- * byte-identical canonical artifact (`relay_receipts.receipt_json`
- * discipline, CLAUDE.md rule 11) so consumers re-verify exactly what the
- * delegator signed. Returns `true` when newly recorded, `false` when already
- * present. The CALLER must have verified the signature first.
+ * Record a revocation under the delegator it was bound to. Append-only,
+ * idempotent on the signature (Ed25519 is deterministic: same body + same
+ * key ⇒ same signature, so a re-submission is a no-op, not a duplicate row).
+ * `record_json` stores the byte-identical canonical artifact
+ * (`relay_receipts.receipt_json` discipline, CLAUDE.md rule 11) so consumers
+ * re-verify exactly what the delegator signed. Returns `true` when newly
+ * recorded, `false` when already present.
+ *
+ * `owner` is the delegator `bindByDelegationRevocation` proved signed it —
+ * the signature verified under a key the relay holds for that identity. A
+ * revocation that does not name `owner` as its delegator is refused here
+ * (throws, writes nothing), so the row and the binding agree.
  */
 export function insertDelegationRevocation(
   db: DatabaseDriver,
+  owner: BoundIdentity,
   revocation: DelegationRevocation,
   receivedAt: number = Date.now(),
 ): boolean {
+  if (revocation.delegator_id !== unwrapBound(owner)) {
+    throw new TypeError(
+      "insertDelegationRevocation: the revocation's delegator_id is not the bound delegator (#850)",
+    );
+  }
   const result = db
     .prepare(
       `INSERT OR IGNORE INTO relay_delegation_revocations
@@ -130,19 +148,39 @@ export function registerDelegationRevocationRoutes(deps: { app: Hono; db: Databa
     }
     const revocation = parsed.data;
 
-    if (!(await verifyDelegationRevocation(revocation))) {
-      // Fail-closed: parsed shape but the Ed25519 signature does not verify
-      // against its own delegator_public_key — not a signed statement.
-      throw new HTTPException(422, { message: "Revocation signature invalid" });
-    }
-
-    const recorded = insertDelegationRevocation(db, revocation);
-    if (recorded) {
-      logger.info("delegation.revocation.recorded", {
+    // The binder verifies the signature and that the key is one this relay
+    // holds for the named delegator (never the embedded key alone, #850).
+    const binding = await bindByDelegationRevocation(db, revocation);
+    if ("refused" in binding) {
+      // Rule 6: a refusal is logged as loudly as a recording.
+      logger.warn("delegation.revocation.refused", {
         grant_id: revocation.grant_id,
         delegator_id: revocation.delegator_id,
+        reason: binding.refused,
+        correlationId: c.req.header("x-correlation-id") ?? null,
+      });
+      if (binding.refused === "delegation_revocation:signature_invalid") {
+        // Fail-closed: parsed shape but the Ed25519 signature does not verify
+        // against its delegator_public_key — not a signed statement.
+        throw new HTTPException(422, { message: "Revocation signature invalid" });
+      }
+      // A signed statement, but not by the delegator it names: the key is not
+      // one this relay holds for `delegator_id` (a stranger's own keypair, a
+      // rotated-out key, or a delegator this relay does not know).
+      throw new HTTPException(403, {
+        message:
+          "Revocation is not signed by a key this relay holds for its delegator_id — only the grant's delegator may revoke it",
       });
     }
+
+    const recorded = insertDelegationRevocation(db, binding.bound, revocation);
+    logger.info(
+      recorded ? "delegation.revocation.recorded" : "delegation.revocation.already_recorded",
+      {
+        grant_id: revocation.grant_id,
+        delegator_id: revocation.delegator_id,
+      },
+    );
     return c.json({
       ok: true,
       grant_id: revocation.grant_id,

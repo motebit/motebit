@@ -2,12 +2,14 @@
  * Delegation-revocation cache — ingestion + incremental read (standing-
  * delegation §5/§6 D2; Inc 3a of the money-execution arc, checkpoint D4).
  *
- * The artifact is the security boundary: a validly-signed revocation from ANY
- * submitter is recorded (revocation propagation is a feature); an invalid
- * signature is rejected fail-closed; a stored revocation only has authority
- * over grants whose delegator key matches (the consumer-side
- * `findGrantRevocation` law, proven in @motebit/crypto's suite — not re-proven
- * here).
+ * The artifact is the security boundary: a revocation signed by a key this
+ * relay holds for its delegator is recorded from ANY submitter (revocation
+ * propagation is a feature); an invalid signature is rejected fail-closed; a
+ * signature under a key the delegator does not hold is refused (#850 —
+ * `credential-and-revocation-binding-850.test.ts`); a stored revocation only
+ * has authority over grants whose delegator key matches (the consumer-side
+ * `findGrantRevocation` law, proven in @motebit/crypto's suite — not
+ * re-proven here).
  */
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import type { SyncRelay } from "../index.js";
@@ -25,7 +27,14 @@ import {
   jsonAuthWithIdempotency,
 } from "./test-helpers.js";
 
-type Kp = { publicKey: Uint8Array; privateKey: Uint8Array };
+type Kp = { publicKey: Uint8Array; privateKey: Uint8Array; motebitId: string };
+
+/** A delegator this relay knows: an identity whose device row holds the key. */
+async function registeredDelegator(relay: SyncRelay): Promise<Kp> {
+  const kp = await generateKeypair();
+  const { motebitId } = await createAgent(relay, bytesToHex(kp.publicKey));
+  return { ...kp, motebitId };
+}
 
 async function makeRevocation(
   delegator: Kp,
@@ -35,7 +44,7 @@ async function makeRevocation(
   return signDelegationRevocation(
     {
       grant_id: grantId,
-      delegator_id: "did:motebit:alice",
+      delegator_id: delegator.motebitId,
       delegator_public_key: bytesToHex(delegator.publicKey),
       revoked_at: revokedAt,
     },
@@ -73,7 +82,7 @@ describe("delegation-revocation cache", () => {
   });
 
   it("records a validly-signed revocation and serves it back verbatim", async () => {
-    const alice = await generateKeypair();
+    const alice = await registeredDelegator(relay);
     const revocation = await makeRevocation(alice, "grant-1");
 
     const res = await post(relay, revocation);
@@ -87,7 +96,7 @@ describe("delegation-revocation cache", () => {
   });
 
   it("re-submission is idempotent — one row, status already_recorded", async () => {
-    const alice = await generateKeypair();
+    const alice = await registeredDelegator(relay);
     const revocation = await makeRevocation(alice, "grant-1");
 
     await post(relay, revocation);
@@ -99,7 +108,7 @@ describe("delegation-revocation cache", () => {
   });
 
   it("rejects a tampered revocation fail-closed (422) and stores nothing", async () => {
-    const alice = await generateKeypair();
+    const alice = await registeredDelegator(relay);
     const revocation = await makeRevocation(alice, "grant-1");
     const tampered = { ...revocation, grant_id: "some-other-grant" };
 
@@ -119,16 +128,17 @@ describe("delegation-revocation cache", () => {
 
   it("a third party may propagate someone else's valid revocation (feature, not forgery)", async () => {
     // "Submitter" identity is irrelevant — there is no auth on the route; the
-    // artifact's own signature is the entire security boundary. A revocation
-    // signed by alice is accepted no matter who carries it.
-    const alice = await generateKeypair();
+    // artifact is the security boundary (its signature, under a key the relay
+    // holds for alice). A revocation signed by alice is accepted no matter who
+    // carries it.
+    const alice = await registeredDelegator(relay);
     const revocation = await makeRevocation(alice, "grant-alice");
     const res = await post(relay, revocation);
     expect(res.status).toBe(200);
   });
 
   it("`since` is an incremental cursor over the relay receipt clock", async () => {
-    const alice = await generateKeypair();
+    const alice = await registeredDelegator(relay);
     await post(relay, await makeRevocation(alice, "grant-1"));
 
     const first = (await (await get(relay)).json()) as FeedBody;
@@ -148,7 +158,7 @@ describe("delegation-revocation cache", () => {
   });
 
   it("listRevokedGrantIds exposes the settlement-time isRevoked seam input", async () => {
-    const alice = await generateKeypair();
+    const alice = await registeredDelegator(relay);
     await post(relay, await makeRevocation(alice, "grant-1"));
     await post(relay, await makeRevocation(alice, "grant-2"));
 
@@ -192,10 +202,11 @@ describe("acceptance-time revocation fence (checkpoint D4)", () => {
   }
 
   it("refuses a task declared under a REVOKED grant before any hold commits (403)", async () => {
-    const alice = await generateKeypair();
-    const worker = await createAgent(relay, bytesToHex(alice.publicKey));
+    const kp = await generateKeypair();
+    const worker = await createAgent(relay, bytesToHex(kp.publicKey));
+    const alice = { ...kp, motebitId: worker.motebitId };
     await registerWorker(worker.motebitId);
-    await post(relay, await makeRevocation(alice, "grant-money-1"));
+    expect((await post(relay, await makeRevocation(alice, "grant-money-1"))).status).toBe(200);
 
     const res = await submitTask(worker.motebitId, "grant-money-1");
     expect(res.status).toBe(403);
@@ -204,10 +215,11 @@ describe("acceptance-time revocation fence (checkpoint D4)", () => {
   });
 
   it("accepts a task under an unrevoked grant and a grantless task unchanged", async () => {
-    const alice = await generateKeypair();
-    const worker = await createAgent(relay, bytesToHex(alice.publicKey));
+    const kp = await generateKeypair();
+    const worker = await createAgent(relay, bytesToHex(kp.publicKey));
+    const alice = { ...kp, motebitId: worker.motebitId };
     await registerWorker(worker.motebitId);
-    await post(relay, await makeRevocation(alice, "some-other-grant"));
+    expect((await post(relay, await makeRevocation(alice, "some-other-grant"))).status).toBe(200);
 
     const ok = await submitTask(worker.motebitId, "grant-money-1");
     expect(ok.status).toBe(201);

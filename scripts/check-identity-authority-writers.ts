@@ -20,6 +20,10 @@
  *     `migrate/depart`, the migration exports and `approvals` read a token's
  *     `mid` and never compared it to the path; `disputes/:id/resolve` took
  *     an operator's verdict from anyone.
+ *   - #850 — `credentials/submit` filed a credential under the PATH id, never
+ *     its own subject, so X filed V's credential under X and revoked it as
+ *     its "subject"; a delegation revocation was verified against the key
+ *     embedded in it, never a key the relay holds for its delegator.
  *
  * None was a logic error inside a function. Each was a door cut beside the
  * doors that already had the rule, without the rule.
@@ -49,7 +53,8 @@
  *      ES private field and a module-private minting path in
  *      `identity-binding.ts`; mints only in registered producers, and binding
  *      calls (`bindCaller`, `bindBySignature`, `bindSyncEntries`,
- *      `bindSocketEntries`) only at registered doors; every function with a
+ *      `bindSocketEntries`, `bindCredentialSubject`,
+ *      `bindByDelegationRevocation`) only at registered doors; every function with a
  *      `BoundIdentity` parameter is a registered writer that reads it ONLY as
  *      `unwrapBound(owner)`. The gate does NOT claim a forged BoundIdentity is
  *      caught here — the type cannot be made unforgeable (#860: six forgeries
@@ -260,7 +265,7 @@ const WRITERS: readonly Writer[] = [
     table: "relay_revoked_credentials",
     count: 1,
     principal:
-      "the credential's subject or its issuer, resolved from the credential row itself, or the operator; never the identity named in the path (#719). KNOWN GAP (#846 v2 audit): the subject is the path id the credential was SUBMITTED under, and submit does not bind the credential's own subject",
+      "the credential's subject or its issuer, resolved from the credential row itself, or the operator; never the identity named in the path (#719). The row's subject is the identity the credential's OWN `credentialSubject.id` names — submit binds it (`bindCredentialSubject`, #850)",
   },
   {
     file: R + "succession-apply.ts",
@@ -797,7 +802,7 @@ const WRITERS: readonly Writer[] = [
     table: "relay_credentials",
     count: 1,
     principal:
-      "credentials/submit: the VC's signature verifies. KNOWN GAP (#846 v2 audit): filed under the PATH id, never compared to the credential's own subject — reported, not fixed here",
+      "credentials/submit, through `insertSubmittedCredential(db, owner: BoundIdentity, …)`: the VC's issuer signature verifies (the route is public — any party may carry it), and the row is filed only under the identity the credential's own `credentialSubject.id` names — `bindCredentialSubject` (#850): `did:motebit:<id>` must be the path id exactly; a `did:key` must be a key the path identity holds (`keysHeldBy`) and no other identity holds. Before #850 it was filed under the PATH id, so X filed V's credential under X and could revoke it as its subject",
   },
   {
     file: R + "credential-anchoring.ts",
@@ -820,7 +825,7 @@ const WRITERS: readonly Writer[] = [
     table: "relay_delegation_revocations",
     count: 1,
     principal:
-      "the revocation's signature. KNOWN GAP (#846 v2 audit): verified against the key EMBEDDED in the revocation, never the delegator's registered key — reported, not fixed here",
+      "the delegator it names, through `insertDelegationRevocation(db, owner: BoundIdentity, …)`: `bindByDelegationRevocation` (#850) verifies the signature AND that its key is one this relay holds for `delegator_id` (`keysHeldBy` — a rotated-out key no longer speaks), looked up by the binder, never taken from the artifact alone. Anyone may carry the delegator's signed revocation. NOT bound here: that the revoking delegator is the delegator of the GRANT — the relay holds no grants, and the acceptance fence (`listRevokedGrantIds`, tasks.ts) matches on `grant_id` alone",
   },
   {
     file: R + "skill-registry.ts",
@@ -1100,7 +1105,13 @@ const REFILE_ALLOWED: ReadonlyArray<{ file: string; table: string; reason: strin
 /** Every call of a binding mint, per file. A new mint site is a new door. */
 interface Mint {
   file: string;
-  mint: "bindCaller" | "bindBySignature" | "bindSyncEntries" | "bindSocketEntries";
+  mint:
+    | "bindCaller"
+    | "bindBySignature"
+    | "bindSyncEntries"
+    | "bindSocketEntries"
+    | "bindCredentialSubject"
+    | "bindByDelegationRevocation";
   count: number;
   door: string;
 }
@@ -1147,6 +1158,18 @@ const MINTS: readonly Mint[] = [
     count: 1,
     door: "POST /api/v1/agents/:id/approvals",
   },
+  {
+    file: R + "credentials.ts",
+    mint: "bindCredentialSubject",
+    count: 1,
+    door: "POST /api/v1/agents/:id/credentials/submit — the path identity is the one the credential's own subject names (#850)",
+  },
+  {
+    file: R + "delegation-revocations.ts",
+    mint: "bindByDelegationRevocation",
+    count: 1,
+    door: "POST /api/v1/delegations/revocations — the binder verifies the revocation under a key the relay holds for its delegator (#850)",
+  },
 ];
 
 const BINDING_FILE = R + "identity-binding.ts";
@@ -1166,6 +1189,8 @@ const WRITER_HELPERS: ReadonlyArray<{ file: string; fn: string; param: string }>
   { file: R + "subscriptions.ts", fn: "setSubscriptionStatus", param: "owner" },
   { file: R + "migration.ts", fn: "updateMigrationState", param: "owner" },
   { file: R + "key-rotation.ts", fn: "insertApproval", param: "owner" },
+  { file: R + "credentials.ts", fn: "insertSubmittedCredential", param: "owner" },
+  { file: R + "delegation-revocations.ts", fn: "insertDelegationRevocation", param: "owner" },
 ];
 
 /**
@@ -1185,6 +1210,8 @@ const PRODUCER_MINTS: Readonly<Record<string, number>> = {
   bindBySignature: 1,
   bindSocketEntries: 1,
   bindSyncEntries: 1,
+  bindCredentialSubject: 1,
+  bindByDelegationRevocation: 1,
 };
 
 /**
@@ -1695,6 +1722,8 @@ const MINT_NAMES = [
   "bindBySignature",
   "bindSyncEntries",
   "bindSocketEntries",
+  "bindCredentialSubject",
+  "bindByDelegationRevocation",
 ] as const;
 let mintSites = 0;
 for (const [file, src] of SOURCES) {
@@ -2054,7 +2083,7 @@ if (violations.length > 0) {
     canonical:
       "scripts/check-identity-authority-writers.ts (WRITERS, MINTS, WRITER_HELPERS, PRODUCER_MINTS, EVENT_APPENDS) and services/relay/src/identity-binding.ts",
     sites: violations,
-    fix: "Answer one question in writing, then add the entry: WHO may cause this write, and what IN THE REQUEST proves they are that? Route an owner-facing door through identity-binding.ts (`bindCaller` / `bindSyncEntries` / `bindSocketEntries` / `bindBySignature`) and write through a helper that takes `owner: BoundIdentity` and reads it only as `unwrapBound(owner)`. A signature proves authorship, not authority (#713). A path segment is chosen by the caller (#719). An identifier in a body is not a relationship to the object it names (#701, #846). If the honest answer is 'nothing in the request proves it', the door is the defect and the registry entry is not the fix.",
+    fix: "Answer one question in writing, then add the entry: WHO may cause this write, and what IN THE REQUEST proves they are that? Route an owner-facing door through identity-binding.ts (`bindCaller` / `bindSyncEntries` / `bindSocketEntries` / `bindBySignature` / `bindCredentialSubject` / `bindByDelegationRevocation`) and write through a helper that takes `owner: BoundIdentity` and reads it only as `unwrapBound(owner)`. A signature proves authorship, not authority (#713). A path segment is chosen by the caller (#719). An identifier in a body is not a relationship to the object it names (#701, #846). If the honest answer is 'nothing in the request proves it', the door is the defect and the registry entry is not the fix.",
     doctrine:
       "services/relay/CLAUDE.md rule 6, rule 21 and rule 26; docs/doctrine/memory-never-confers-authority.md — only a named principal, proven by the request, may act on an identity's rows.",
   });

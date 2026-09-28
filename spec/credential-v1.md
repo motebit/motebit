@@ -348,7 +348,7 @@ or:
 
 ### 6.2 Revocation Rules
 
-- The credential **subject** or **issuer** may revoke a credential.
+- The credential **subject** or **issuer** may revoke a credential. The subject is the identity the credential's own `credentialSubject.id` names — which is why submission binds it (§7.1 step 4): a relay that filed a credential under whatever identity the submission path named would let that identity revoke someone else's credential as its "subject".
 - Revocation is recorded in `relay_revoked_credentials` with credential ID, revoking agent, timestamp, and optional reason.
 - Revocation events are propagated across federated relays.
 - Revoked credentials are excluded from routing aggregation (§4.2).
@@ -389,13 +389,14 @@ The eight routes below are the binding cross-implementation contract for credent
 
 ### 7.1 Credential Submission
 
-When an agent receives credentials from peers (e.g., after completing a delegated task), it submits them to the relay for indexing. The relay validates each credential:
+Credentials are submitted for relay indexing by any party that holds them — typically the issuer, about the agent it delegated to, or the subject itself. The route takes no bearer token: the issuer's signature is the authentication. What the relay binds is the TARGET: a credential is stored only under the identity it is about. The relay validates each credential:
 
 1. **Shape validation.** Requires `@context`, `type`, `issuer`, `credentialSubject`, `proof`.
-2. **Self-attestation rejection.** If `issuer === credentialSubject.id`, the credential is rejected.
+2. **Self-attestation rejection.** If `issuer === credentialSubject.id`, or the issuer's `did:key` names a key the path identity (`:motebitId`) itself holds, the credential is rejected — the same party under two spellings carries no trust signal.
 3. **Signature verification.** Ed25519 proof is verified using the issuer's embedded public key.
-4. **Revocation check.** Revoked credentials are rejected.
-5. **Idempotent storage.** Accepted credentials are stored with INSERT OR IGNORE semantics.
+4. **Subject binding.** `credentialSubject.id` MUST name the path identity `:motebitId`: a `did:motebit:<id>` subject MUST have `<id> === :motebitId`; a `did:key` subject MUST name a key the relay holds for `:motebitId` (its current identity key, registry key, or a device key — a key rotated away from no longer names it) and for no other identity. A credential with no subject id, or any other DID method, is rejected. The stored subject is therefore always the identity the credential names, never merely the identity the request named.
+5. **Revocation check.** Revoked credentials are rejected.
+6. **Idempotent storage.** Accepted credentials are stored with INSERT OR IGNORE semantics. Re-submitting the same credential under the same subject is accepted; a DIFFERENT credential under a `credential_id` already held is rejected, never reported as accepted.
 
 Submissions accept up to 50 credentials per request.
 
@@ -441,7 +442,7 @@ Agents store credentials locally via `CredentialStoreAdapter`:
 Self-issued credentials are excluded at three layers:
 
 1. **Issuance.** Reputation and trust credentials skip self-delegation (delegator === executor).
-2. **Submission.** The relay rejects credentials where `issuer === credentialSubject.id`.
+2. **Submission.** The relay rejects credentials where `issuer === credentialSubject.id`, or where the issuer's key is one the subject identity holds (§7.1 step 2).
 3. **Aggregation.** Credential weighting skips self-attestation during routing.
 
 ### 9.2 Issuer Trust Threshold

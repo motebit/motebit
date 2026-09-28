@@ -32,6 +32,8 @@ import {
 } from "../data-sync.js";
 import { updateMigrationState } from "../migration.js";
 import { insertApproval } from "../key-rotation.js";
+import { insertSubmittedCredential } from "../credentials.js";
+import { insertDelegationRevocation } from "../delegation-revocations.js";
 
 const VICTIM = "victim-motebit";
 
@@ -220,6 +222,8 @@ describe("every registered identity-row writer refuses a forged owner (#846 v4)"
       "relay_migrations",
       "relay_approval_metadata",
       "events",
+      "relay_credentials",
+      "relay_delegation_revocations",
     ];
     return tables.reduce(
       (n, t) => n + (db.prepare(`SELECT COUNT(*) AS n FROM ${t}`).get() as { n: number }).n,
@@ -281,6 +285,28 @@ describe("every registered identity-row writer refuses a forged owner (#846 v4)"
           quorumApprovers: "[]",
           quorumHash: "",
         }),
+    ],
+    [
+      "insertSubmittedCredential",
+      () =>
+        insertSubmittedCredential(db, forged, {
+          credentialId: "urn:uuid:forged",
+          issuerDid: "did:key:zIssuer",
+          credentialType: "AgentReputationCredential",
+          credentialJson: "{}",
+        }),
+    ],
+    [
+      "insertDelegationRevocation",
+      () =>
+        insertDelegationRevocation(db, forged, {
+          grant_id: "g1",
+          delegator_id: VICTIM,
+          delegator_public_key: "00".repeat(32),
+          revoked_at: 1,
+          suite: "motebit-jcs-ed25519-b64-v1",
+          signature: "sig",
+        } as never),
     ],
   ];
 
