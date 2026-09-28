@@ -248,6 +248,22 @@ it("E2E socket catch-up: rotation, poison, raw-then-E2E; and the per-identity se
       await catchUp(mid, store, K2);
       obs["rotatedWs: held after the post-rotation catch-up"] = await plainHeld(store, mid);
     }
+    // rotatedWs (upgrade): old-1 is already held from before this client
+    // pulled by seq (so its first seq pull starts at 0); the key rotates;
+    // new-2 is written under k2.
+    {
+      const mid = crypto.randomUUID();
+      const store = new InMemoryEventStore();
+      const old1 = ev(mid, "old-1", 1, "a");
+      await store.append(old1);
+      await encPush(mid, K1, old1);
+      await encPush(mid, K2, ev(mid, "new-2", 2, "a"));
+      await catchUp(mid, store, K2);
+      obs["rotatedWs (upgrade, old-1 held before the first seq pull)"] = await plainHeld(
+        store,
+        mid,
+      );
+    }
     // poisonWs: this device holds its own events to clock 5; an event no key
     // opens sits at clock 3; a sibling writes sib-9 at clock 9.
     {
