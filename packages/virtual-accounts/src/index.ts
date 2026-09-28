@@ -33,6 +33,7 @@ export {
   completeWithdrawal,
   computeWithdrawableAvailable,
   failWithdrawal,
+  noteWithdrawalPayoutUnresolved,
   getAccountBalanceDetailed,
   linkWithdrawalTransfer,
   requestWithdrawal,

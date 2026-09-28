@@ -449,6 +449,17 @@ export class SqliteAccountStore implements AccountStore {
     });
   }
 
+  noteWithdrawalPayoutUnresolved(id: string, note: string): boolean {
+    // Issue #920: an unresolved automated payout. Status and balance are
+    // untouched — only the operator's reconciliation may complete or fail it.
+    const info = this.db
+      .prepare(
+        "UPDATE relay_withdrawals SET failure_reason = ? WHERE withdrawal_id = ? AND status IN ('pending', 'processing')",
+      )
+      .run(note, id);
+    return info.changes > 0;
+  }
+
   getWithdrawalById(id: string): WithdrawalRequest | null {
     return (
       (this.db.prepare("SELECT * FROM relay_withdrawals WHERE withdrawal_id = ?").get(id) as

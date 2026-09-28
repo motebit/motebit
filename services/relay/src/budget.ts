@@ -23,6 +23,7 @@ import {
   completeWithdrawal,
   signWithdrawalReceipt,
   failWithdrawal,
+  noteWithdrawalPayoutUnresolved,
   getWithdrawals,
   getWithdrawalById,
   getPendingWithdrawals,
@@ -339,9 +340,10 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
     //
     // Fail-safe: if settlement's outcome is unknown (the send threw), the
     // withdrawal stays pending for admin resolution. Funds are already held
-    // by requestWithdrawal — no double-spend risk. Only a DEFINITIVE
-    // failure (Path 0: the tx landed and failed on-chain) fails the
-    // withdrawal and refunds, atomically — see the outcome rule below.
+    // by requestWithdrawal — no double-spend risk. Only a PROVEN
+    // failure (Path 0: the tx landed and failed on-chain AND no earlier
+    // broadcast can land) fails the withdrawal and refunds, atomically —
+    // see the outcome rule below.
     let autoSettled = false;
     const isSolanaDest =
       result.destination !== "pending" && /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(result.destination);
@@ -363,23 +365,28 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
     // Doctrine: docs/doctrine/off-ramp-as-user-action.md (landing this arc).
     // Operator primitive: packages/wallet-solana/src/operator-transfer.ts.
     //
-    // Settlement-outcome rule (issue #920; spec/market-v1.md §10.4). The
-    // send has THREE outcomes and each maps to exactly one ledger action:
+    // Settlement-outcome rule (issue #920; spec/market-v1.md §10.4). Each
+    // send outcome maps to exactly one ledger action:
     //
-    //   1. confirmed:true  — the transfer landed without error: USDC moved.
-    //      Complete the withdrawal with the tx signature and a signed receipt.
-    //   2. confirmed:false with a landed slot — the tx was processed and
-    //      FAILED on-chain. Solana txs are atomic: only the fee was charged,
-    //      no USDC moved. This is definitive, so fail the withdrawal and
-    //      refund the user's balance in ONE transaction
-    //      (`failWithdrawal` → `AccountStore.failWithdrawalAndRefund`), with
-    //      the tx signature and the failure recorded as the reason.
-    //   3. anything else — the send threw (RPC timeout, blockhash expiry
-    //      after retries, network), or reported confirmed:false with no
-    //      landed slot: the outcome is UNKNOWN; the transfer may yet land.
-    //      Leave the withdrawal pending for admin / reconciliation, exactly
-    //      as before. NEVER refund on an unknown: if it landed, a refund
-    //      pays the user twice.
+    //   1. confirmed:true — the reported signature landed without error:
+    //      USDC moved. Complete with that signature as payout_reference and a
+    //      signed receipt.
+    //   2. confirmed:false AND earlierBroadcastsDead === true — the reported
+    //      signature landed and FAILED on chain (Solana txs are atomic: only
+    //      the fee was charged) AND the adapter proved no earlier broadcast of
+    //      this payout can land. Nothing was paid, so fail the withdrawal and
+    //      refund in ONE transaction (`failWithdrawal` →
+    //      `AccountStore.failWithdrawalAndRefund`, at most once).
+    //   3. everything else — UNKNOWN; the withdrawal stays pending, the
+    //      balance stays debited, never refunded:
+    //        - the send threw (timeout, expiry on the last attempt, network);
+    //        - confirmed:false with earlierBroadcastsDead false/absent. The
+    //          adapter re-signs after a blockhash expiry, and expiry can win
+    //          the race against a first broadcast that in fact LANDED and
+    //          paid; the re-broadcast then lands-and-fails (its create-ATA
+    //          instruction is not idempotent). `confirmed:false` describes the
+    //          LAST signature only, so refunding here would pay twice. The
+    //          reason is recorded on the pending row for the operator.
     //
     // Before #920 outcome 2 was recorded as outcome 1: a completed, signed
     // withdrawal whose funds never moved, with the balance still debited.
@@ -429,14 +436,19 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
               txSignature: sendResult.signature,
               slot: sendResult.slot,
               confirmed: sendResult.confirmed,
+              // A confirmed signature paid. If earlier broadcasts are not
+              // proven dead, one of them may ALSO have paid — the log keeps
+              // that visible for reconciliation.
+              earlierBroadcastsDead: sendResult.earlierBroadcastsDead ?? null,
               destination: result.destination,
             });
-          } else if (sendResult.slot > 0) {
-            // Outcome 2 — landed and failed; definitive, nothing moved.
+          } else if (sendResult.earlierBroadcastsDead === true) {
+            // Outcome 2 — landed and failed, and no earlier broadcast can
+            // land: provably nothing moved.
             const refunded = failWithdrawal(
               moteDb.db,
               result.withdrawal_id,
-              `solana transfer ${sendResult.signature} landed at slot ${sendResult.slot} but failed on-chain (confirmed:false); no USDC moved, amount returned to balance`,
+              `solana transfer ${sendResult.signature} landed at slot ${sendResult.slot} but failed on-chain (confirmed:false), and no earlier broadcast of this payout can land; no USDC moved, amount returned to balance`,
             );
             logger.warn("withdrawal.solana.landed_failed", {
               correlationId,
@@ -448,13 +460,23 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
               refunded,
             });
           } else {
-            // Outcome 3 (reported) — no landed slot: unknown. Stay pending.
-            logger.warn("withdrawal.solana.outcome_unknown", {
+            // Outcome 3 (reported) — the last broadcast failed, but an earlier
+            // broadcast of this payout is not proven dead and may have paid.
+            // Stay pending, no refund; record why for the operator.
+            const noted = noteWithdrawalPayoutUnresolved(
+              moteDb.db,
+              result.withdrawal_id,
+              `unresolved payout: solana transfer ${sendResult.signature} landed at slot ${sendResult.slot} and failed on-chain (confirmed:false), but earlier broadcasts of this payout are not proven dead (earlierBroadcastsDead=${String(sendResult.earlierBroadcastsDead)}) and may have paid; reconcile on chain before completing or failing`,
+            );
+            logger.warn("withdrawal.solana.outcome_unresolved", {
               correlationId,
               motebitId,
               withdrawalId: result.withdrawal_id,
               txSignature: sendResult.signature,
+              slot: sendResult.slot,
+              earlierBroadcastsDead: sendResult.earlierBroadcastsDead ?? null,
               destination: result.destination,
+              noted,
             });
           }
         }

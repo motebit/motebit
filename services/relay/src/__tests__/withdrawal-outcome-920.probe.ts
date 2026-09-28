@@ -12,7 +12,12 @@
 import { it, afterAll, vi } from "vitest";
 import { writeFileSync } from "node:fs";
 import { generateKeypair, bytesToHex } from "@motebit/encryption";
-import { OperatorSolanaTransfer, type SolanaRpcAdapter } from "@motebit/wallet-solana";
+import {
+  OperatorSolanaTransfer,
+  Web3JsRpcAdapter,
+  deriveSolanaAddress,
+  type SolanaRpcAdapter,
+} from "@motebit/wallet-solana";
 import type { SyncRelay } from "../index.js";
 import { creditAccount, getAccountBalance, getTransactions } from "../accounts.js";
 import { AUTH_HEADER, createTestRelay, jsonAuthWithIdempotency } from "./test-helpers.js";
@@ -25,14 +30,23 @@ afterAll(() => {
 const FUNDED = 5_000_000;
 const SIG =
   "5VfYdxYhWnD8X7K2YgHmBpDXJqJ1JmZj7rL2KkXg8sM3QfvN9P1bZw6cM5J8nT4rA7uW9eR6yU2dE1pV3hG4oS9k";
-const DEST = "GJmrQzyZumWWkdBuVH3Z1hnGvjrcDMbx7ptF5t5UAAAA";
+// An on-curve address: the real adapter derives its ATA and refuses an off-curve owner.
+const DEST = deriveSolanaAddress(new Uint8Array(32).fill(9));
 
 async function cell(
   name: string,
-  sendUsdc: SolanaRpcAdapter["sendUsdc"],
+  sendUsdc: SolanaRpcAdapter["sendUsdc"] | { operator: OperatorSolanaTransfer },
   after?: (relay: SyncRelay, id: string) => Promise<void>,
 ): Promise<void> {
-  const adapter: SolanaRpcAdapter = {
+  const operator =
+    typeof sendUsdc === "object" && "operator" in sendUsdc
+      ? sendUsdc.operator
+      : new OperatorSolanaTransfer(fakeAdapter(sendUsdc));
+  await runCell(name, operator, after);
+}
+
+function fakeAdapter(sendUsdc: SolanaRpcAdapter["sendUsdc"]): SolanaRpcAdapter {
+  return {
     ownAddress: "RelayTreasuryAddressBase58",
     getUsdcBalance: vi.fn().mockResolvedValue(10_000_000_000n),
     getUsdcBalanceOf: vi.fn().mockResolvedValue(10_000_000_000n),
@@ -42,9 +56,16 @@ async function cell(
     getTransaction: vi.fn().mockResolvedValue({ status: "not_found" }),
     isReachable: vi.fn().mockResolvedValue(true),
   };
+}
+
+async function runCell(
+  name: string,
+  operator: OperatorSolanaTransfer,
+  after?: (relay: SyncRelay, id: string) => Promise<void>,
+): Promise<void> {
   const relay = await createTestRelay({
     enableDeviceAuth: false,
-    operatorSolanaTransfer: new OperatorSolanaTransfer(adapter),
+    operatorSolanaTransfer: operator,
   });
   try {
     const id = "probe-user";
@@ -100,9 +121,9 @@ it("confirmed:true", async () => {
   );
 });
 
-it("confirmed:false landed", async () => {
+it("confirmed:false, earlierBroadcastsDead absent", async () => {
   await cell(
-    "confirmed_false_landed",
+    "confirmed_false_field_absent",
     vi.fn().mockResolvedValue({ signature: SIG, slot: 7, confirmed: false }),
   );
 });
@@ -118,9 +139,9 @@ it("send throws", async () => {
   await cell("send_throws", vi.fn().mockRejectedValue(new Error("was not confirmed in 30s")));
 });
 
-it("confirmed:false landed, then operator fail replay", async () => {
+it("confirmed:false unresolved, then operator reconciles and fails", async () => {
   await cell(
-    "confirmed_false_then_admin_fail",
+    "unresolved_then_operator_fail",
     vi.fn().mockResolvedValue({ signature: SIG, slot: 7, confirmed: false }),
     async (relay, wid) => {
       const r = await relay.app.request(`/api/v1/admin/withdrawals/${wid}/fail`, {
@@ -128,7 +149,73 @@ it("confirmed:false landed, then operator fail replay", async () => {
         headers: { "Content-Type": "application/json", ...AUTH_HEADER },
         body: JSON.stringify({ reason: "operator replay" }),
       });
-      obs["confirmed_false_then_admin_fail_http"] = r.status;
+      obs["unresolved_then_operator_fail_http"] = r.status;
     },
   );
+});
+
+it("confirmed:false + earlierBroadcastsDead:true (proven single broadcast)", async () => {
+  await cell(
+    "confirmed_false_earlier_dead",
+    vi.fn().mockResolvedValue({
+      signature: SIG,
+      slot: 7,
+      confirmed: false,
+      earlierBroadcastsDead: true,
+    }),
+  );
+});
+
+it("confirmed:false + earlierBroadcastsDead:false", async () => {
+  await cell(
+    "confirmed_false_earlier_unproven",
+    vi.fn().mockResolvedValue({
+      signature: SIG,
+      slot: 7,
+      confirmed: false,
+      earlierBroadcastsDead: false,
+    }),
+  );
+});
+
+/**
+ * The #920 cold reviewer's cell, on the REAL Web3JsRpcAdapter with a stubbed
+ * Connection: attempt 1 broadcasts sig1 and its confirmation loses the race to
+ * "block height exceeded" (sig1 may have LANDED and paid); the adapter
+ * re-signs, and attempt 2 (its create-ATA instruction now invalid) lands and
+ * fails. The adapter reports sig2 with confirmed:false and no
+ * earlierBroadcastsDead. Head must leave it pending and never refund.
+ */
+it("real adapter: blockhash-expiry retry, second broadcast lands and fails", async () => {
+  const adapter = new Web3JsRpcAdapter({
+    rpcUrl: "http://127.0.0.1:1",
+    identitySeed: new Uint8Array(32).fill(7),
+  });
+  let sends = 0;
+  let confirms = 0;
+  const conn = {
+    getLatestBlockhash: vi.fn().mockResolvedValue({
+      blockhash: "GHtXQBsoZHVnNFa9YevAzFr17DJjgHXk3ycTKD5xD3Zi",
+      lastValidBlockHeight: 100,
+    }),
+    getAccountInfo: vi.fn().mockResolvedValue(null), // dest ATA missing: create-ATA ix
+    sendRawTransaction: vi.fn().mockImplementation(() => {
+      sends++;
+      return Promise.resolve(sends === 1 ? "sig1" + SIG.slice(4) : SIG);
+    }),
+    confirmTransaction: vi.fn().mockImplementation(() => {
+      confirms++;
+      if (confirms === 1)
+        return Promise.reject(new Error("Signature sig1 has expired: block height exceeded."));
+      return Promise.resolve({
+        context: { slot: 4242 },
+        value: { err: { InstructionError: [0, { Custom: 0 }] } },
+      });
+    }),
+  };
+  (adapter as unknown as { connection: unknown }).connection = conn;
+  (adapter as unknown as { getUsdcBalance: () => Promise<bigint> }).getUsdcBalance = () =>
+    Promise.resolve(10_000_000_000n);
+  await cell("real_adapter_expiry_retry", { operator: new OperatorSolanaTransfer(adapter) });
+  obs["real_adapter_expiry_retry_broadcasts"] = sends;
 });

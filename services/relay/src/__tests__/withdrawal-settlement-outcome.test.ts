@@ -3,11 +3,16 @@
  *
  * The settlement-outcome rule (spec/market-v1.md §10.4, budget.ts Path 0):
  *
- *   1. confirmed:true                 ⇒ completed, signed, balance stays debited
- *   2. confirmed:false, landed slot   ⇒ failed + balance refunded, ONCE,
- *                                        atomically with the status change
- *   3. throw / confirmed:false slot 0 ⇒ pending, balance NOT refunded
- *                                        (unknown: the transfer may land)
+ *   1. confirmed:true                    ⇒ completed, signed, stays debited
+ *   2. confirmed:false AND
+ *      earlierBroadcastsDead === true    ⇒ failed + refunded ONCE, atomically
+ *   3. throw, or confirmed:false with
+ *      earlierBroadcastsDead false/absent ⇒ pending, NOT refunded, reason noted
+ *
+ * Round 2 (#920 cold review): an adapter that re-signs after a blockhash
+ * expiry can report `confirmed:false` for its LAST broadcast while its FIRST
+ * broadcast landed and paid. `confirmed:false` alone never proves nothing
+ * was paid, so the refund needs `earlierBroadcastsDead === true`.
  *
  * The store half proves the refund is one transaction with the status
  * change (a failure mid-refund leaves the row pending and the balance
@@ -18,7 +23,12 @@ import { describe, it, expect, afterEach, vi } from "vitest";
 import { generateKeypair, bytesToHex } from "@motebit/encryption";
 import { createMotebitDatabase, type MotebitDatabase } from "@motebit/persistence";
 import { requestWithdrawal, failWithdrawal } from "@motebit/virtual-accounts";
-import { OperatorSolanaTransfer, type SolanaRpcAdapter } from "@motebit/wallet-solana";
+import {
+  OperatorSolanaTransfer,
+  Web3JsRpcAdapter,
+  deriveSolanaAddress,
+  type SolanaRpcAdapter,
+} from "@motebit/wallet-solana";
 
 import type { SyncRelay } from "../index.js";
 import { creditAccount, getAccountBalance, getTransactions } from "../accounts.js";
@@ -231,8 +241,13 @@ describe("Path 0 settlement outcome (#920)", () => {
     expect(refundCount(relay, "zz920-ok", body.withdrawal.withdrawal_id)).toBe(0);
   });
 
-  it("confirmed:false (landed and failed) ⇒ failed with the tx recorded, balance refunded exactly once", async () => {
-    const send = vi.fn().mockResolvedValue({ signature: TX_SIG, slot: 12345, confirmed: false });
+  it("confirmed:false + earlierBroadcastsDead:true ⇒ failed with the tx recorded, balance refunded exactly once", async () => {
+    const send = vi.fn().mockResolvedValue({
+      signature: TX_SIG,
+      slot: 12345,
+      confirmed: false,
+      earlierBroadcastsDead: true,
+    });
     const { operator } = makeOperator(send);
     relay = await createTestRelay({ enableDeviceAuth: false, operatorSolanaTransfer: operator });
     await registerAndFund(relay, "zz920-fail");
@@ -293,16 +308,115 @@ describe("Path 0 settlement outcome (#920)", () => {
     expect(refundCount(relay, "zz920-unknown", body.withdrawal.withdrawal_id)).toBe(0);
   });
 
-  it("confirmed:false with no landed slot (unknown) ⇒ pending, balance NOT refunded", async () => {
-    const { operator } = makeOperator(
-      vi.fn().mockResolvedValue({ signature: TX_SIG, slot: 0, confirmed: false }),
-    );
-    relay = await createTestRelay({ enableDeviceAuth: false, operatorSolanaTransfer: operator });
-    await registerAndFund(relay, "zz920-noslot");
+  // The reviewer's cell: the adapter re-signed after a "block height
+  // exceeded", the first broadcast may have landed, and the re-broadcast
+  // (its create-ATA instruction no longer valid) landed and failed. The
+  // result describes sig2 only and says nothing about sig1.
+  for (const [label, field] of [
+    ["absent", undefined],
+    ["false", false],
+  ] as const) {
+    it(`confirmed:false + earlierBroadcastsDead ${label} (retry cell) ⇒ pending, NOT refunded, reason noted`, async () => {
+      const result: Record<string, unknown> = { signature: TX_SIG, slot: 12345, confirmed: false };
+      if (field !== undefined) result["earlierBroadcastsDead"] = field;
+      const send = vi.fn().mockResolvedValue(result);
+      const { operator } = makeOperator(send);
+      relay = await createTestRelay({ enableDeviceAuth: false, operatorSolanaTransfer: operator });
+      const mid = `zz920-retry-${label}`;
+      await registerAndFund(relay, mid);
 
-    const body = await withdraw(relay, "zz920-noslot");
+      const headers = jsonAuthWithIdempotency();
+      const body = await withdraw(relay, mid, headers);
+      const id = body.withdrawal.withdrawal_id;
+      expect(body.withdrawal.status).toBe("pending");
+
+      const row = relay.moteDb.db
+        .prepare(
+          "SELECT status, relay_signature, completed_at, payout_reference, failure_reason FROM relay_withdrawals WHERE withdrawal_id = ?",
+        )
+        .get(id) as {
+        status: string;
+        relay_signature: string | null;
+        completed_at: number | null;
+        payout_reference: string | null;
+        failure_reason: string | null;
+      };
+      expect(row.status).toBe("pending");
+      expect(row.relay_signature).toBeNull();
+      expect(row.completed_at).toBeNull();
+      // sig2 is not a payout: it is not recorded as the payout reference.
+      expect(row.payout_reference).toBeNull();
+      // The operator can see why it is stuck.
+      expect(row.failure_reason).toContain("unresolved payout");
+      expect(row.failure_reason).toContain(TX_SIG);
+      expect(balance(relay, mid)).toBe(FUNDED - WITHDRAW_MICRO);
+      expect(refundCount(relay, mid, id)).toBe(0);
+
+      // A replay of the handler changes nothing.
+      await withdraw(relay, mid, headers);
+      expect(send).toHaveBeenCalledTimes(1);
+      expect(balance(relay, mid)).toBe(FUNDED - WITHDRAW_MICRO);
+      expect(refundCount(relay, mid, id)).toBe(0);
+    });
+  }
+
+  // The reviewer's cell on the REAL adapter (stubbed Connection): attempt 1's
+  // confirmation loses the race to "block height exceeded" (sig1 may have
+  // landed and paid), the adapter re-signs, and attempt 2 — whose create-ATA
+  // instruction is no longer valid — lands and fails. Main recorded this as a
+  // completed withdrawal citing sig2; a naive `confirmed:false ⇒ refund` rule
+  // would refund it (a double pay if sig1 landed). It must stay pending.
+  it("real adapter, expiry retry whose re-broadcast lands and fails ⇒ pending, NOT refunded", async () => {
+    const adapter = new Web3JsRpcAdapter({
+      rpcUrl: "http://127.0.0.1:1",
+      identitySeed: new Uint8Array(32).fill(7),
+    });
+    let sends = 0;
+    let confirms = 0;
+    const conn = {
+      getLatestBlockhash: vi.fn().mockResolvedValue({
+        blockhash: "GHtXQBsoZHVnNFa9YevAzFr17DJjgHXk3ycTKD5xD3Zi",
+        lastValidBlockHeight: 100,
+      }),
+      getAccountInfo: vi.fn().mockResolvedValue(null), // dest ATA missing: create-ATA ix
+      sendRawTransaction: vi.fn().mockImplementation(() => {
+        sends++;
+        return Promise.resolve(sends === 1 ? "sig1" + TX_SIG.slice(4) : TX_SIG);
+      }),
+      confirmTransaction: vi.fn().mockImplementation(() => {
+        confirms++;
+        if (confirms === 1)
+          return Promise.reject(new Error("Signature sig1 has expired: block height exceeded."));
+        return Promise.resolve({
+          context: { slot: 4242 },
+          value: { err: { InstructionError: [0, { Custom: 0 }] } },
+        });
+      }),
+    };
+    (adapter as unknown as { connection: unknown }).connection = conn;
+    (adapter as unknown as { getUsdcBalance: () => Promise<bigint> }).getUsdcBalance = () =>
+      Promise.resolve(10_000_000_000n);
+    relay = await createTestRelay({
+      enableDeviceAuth: false,
+      operatorSolanaTransfer: new OperatorSolanaTransfer(adapter),
+    });
+    const mid = "zz920-real-retry";
+    await registerAndFund(relay, mid);
+
+    // An on-curve destination: the real adapter derives its ATA.
+    const res = await relay.app.request(`/api/v1/agents/${mid}/withdraw`, {
+      method: "POST",
+      headers: jsonAuthWithIdempotency(),
+      body: JSON.stringify({
+        amount: WITHDRAW_USD,
+        destination: deriveSolanaAddress(new Uint8Array(32).fill(9)),
+      }),
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { withdrawal: { withdrawal_id: string; status: string } };
+    expect(sends).toBe(2);
     expect(body.withdrawal.status).toBe("pending");
-    expect(balance(relay, "zz920-noslot")).toBe(FUNDED - WITHDRAW_MICRO);
-    expect(refundCount(relay, "zz920-noslot", body.withdrawal.withdrawal_id)).toBe(0);
+    expect(balance(relay, mid)).toBe(FUNDED - WITHDRAW_MICRO);
+    expect(refundCount(relay, mid, body.withdrawal.withdrawal_id)).toBe(0);
   });
 });

@@ -133,6 +133,15 @@ export interface AccountStore {
     reason: string,
     failedAt?: number,
   ): { motebitId: string; amount: number } | null;
+  /**
+   * Record why a withdrawal's automated payout is UNRESOLVED, leaving it
+   * `pending` and its balance debited (issue #920): e.g. the last broadcast
+   * landed-and-failed but an earlier broadcast of the same payout is not
+   * proven dead and may have paid. Writes `failure_reason` only while the
+   * withdrawal is `pending | processing`; never changes status or balance.
+   * Returns false when the withdrawal is missing or already terminal.
+   */
+  noteWithdrawalPayoutUnresolved(id: string, note: string): boolean;
   getWithdrawalById(id: string): WithdrawalRequest | null;
   getWithdrawalByIdempotencyKey(motebitId: string, key: string): WithdrawalRequest | null;
   getWithdrawals(motebitId: string, limit?: number): WithdrawalRequest[];
@@ -484,6 +493,14 @@ export class InMemoryAccountStore implements AccountStore {
     w.completed_at = failedAt;
     this.credit(w.motebit_id, w.amount, "withdrawal", id, `Withdrawal failed: ${reason}`);
     return { motebitId: w.motebit_id, amount: w.amount };
+  }
+
+  noteWithdrawalPayoutUnresolved(id: string, note: string): boolean {
+    const w = this.withdrawals.get(id);
+    if (!w) return false;
+    if (w.status !== "pending" && w.status !== "processing") return false;
+    w.failure_reason = note;
+    return true;
   }
 
   getWithdrawalById(id: string): WithdrawalRequest | null {

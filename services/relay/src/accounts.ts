@@ -23,6 +23,7 @@ import type { DatabaseDriver } from "@motebit/persistence";
 import {
   completeWithdrawal as pkgCompleteWithdrawal,
   failWithdrawal as pkgFailWithdrawal,
+  noteWithdrawalPayoutUnresolved as pkgNoteWithdrawalPayoutUnresolved,
   getAccountBalanceDetailed as pkgGetAccountBalanceDetailed,
   requestWithdrawal as pkgRequestWithdrawal,
   signWithdrawalReceipt as pkgSignWithdrawalReceipt,
@@ -244,6 +245,14 @@ export function signWithdrawalReceipt(
 
 export function failWithdrawal(db: DatabaseDriver, withdrawalId: string, reason: string): boolean {
   return pkgFailWithdrawal(sqliteAccountStoreFor(db), withdrawalId, reason, logger);
+}
+
+export function noteWithdrawalPayoutUnresolved(
+  db: DatabaseDriver,
+  withdrawalId: string,
+  note: string,
+): boolean {
+  return pkgNoteWithdrawalPayoutUnresolved(sqliteAccountStoreFor(db), withdrawalId, note, logger);
 }
 
 export function getWithdrawals(

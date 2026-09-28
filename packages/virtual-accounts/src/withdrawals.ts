@@ -235,6 +235,23 @@ export function failWithdrawal(
 }
 
 /**
+ * Record, on a withdrawal that stays `pending`, why its automated payout is
+ * unresolved (issue #920). No status or balance change — the operator
+ * reconciles on chain and then completes or fails it. Returns false when the
+ * withdrawal is missing or already terminal.
+ */
+export function noteWithdrawalPayoutUnresolved(
+  store: AccountStore,
+  withdrawalId: string,
+  note: string,
+  logger: WithdrawalsLogger = NOOP_LOGGER,
+): boolean {
+  const ok = store.noteWithdrawalPayoutUnresolved(withdrawalId, note);
+  if (ok) logger.info("withdrawal.payout_unresolved", { withdrawalId, note });
+  return ok;
+}
+
+/**
  * Composite read used by balance-detail endpoints. Combines the ledger
  * balance with pending withdrawals, pending allocations, dispute-window
  * hold, and sovereign-sweep configuration.
