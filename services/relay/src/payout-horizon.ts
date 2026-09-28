@@ -56,7 +56,8 @@ export const UNDECLARED_PAYOUT_HORIZON_MS = 24 * 60 * 60 * 1000;
 const PROCESS_STARTED_AT = Date.now();
 
 /**
- * When the operator's reconcile may act on a `processing` withdrawal — the
+ * When the operator's reconcile may act on a `processing` withdrawal, or
+ * null while that cannot be determined yet (fail closed) — the
  * latest of: the claim + the floor; the payout's declared horizon (+ margin)
  * when it has one; and, for a relay-broadcast payout (no declared horizon),
  * the last moment this relay could have broadcast it + a blockhash lifetime
@@ -68,19 +69,36 @@ const PROCESS_STARTED_AT = Date.now();
 export function reconcileOpensAt(
   w: Pick<WithdrawalRequest, "claimed_at" | "payout_valid_until">,
   sendEndedAt: number | undefined,
-  processStartedAt: number = PROCESS_STARTED_AT,
-): number {
+  opts: { now?: number; processStartedAt?: number } = {},
+): number | null {
+  const now = opts.now ?? Date.now();
+  const processStartedAt = opts.processStartedAt ?? PROCESS_STARTED_AT;
   const claimedAt = w.claimed_at ?? 0;
-  let opens = claimedAt + RECONCILE_MIN_AGE_MS;
+  const floor = claimedAt + RECONCILE_MIN_AGE_MS;
   if (w.payout_valid_until != null) {
-    opens = Math.max(opens, w.payout_valid_until + PAYOUT_HORIZON_MARGIN_MS);
-  } else {
-    const lastBroadcastBound =
-      sendEndedAt ?? (claimedAt < processStartedAt ? processStartedAt : Number.POSITIVE_INFINITY);
-    opens = Math.max(
-      opens,
-      lastBroadcastBound + SOLANA_BLOCKHASH_VALIDITY_MS + PAYOUT_HORIZON_MARGIN_MS,
-    );
+    return Math.max(floor, w.payout_valid_until + PAYOUT_HORIZON_MARGIN_MS);
   }
-  return opens;
+  let lastBroadcastBound: number;
+  if (sendEndedAt !== undefined) {
+    lastBroadcastBound = sendEndedAt;
+  } else if (claimedAt < processStartedAt) {
+    // Claimed in an earlier process life: every broadcast preceded this start.
+    lastBroadcastBound = processStartedAt;
+  } else if (now >= floor) {
+    // Not in flight here and no send end recorded, yet the claim reads as
+    // from THIS process life — only possible when the host clock stepped
+    // backwards across a restart. A claim this process never made is from
+    // an earlier life; once the floor has passed, bound it as one (its
+    // broadcasts all preceded this process, whose start the clock cannot
+    // place before the claim, so the claim itself is the bound).
+    lastBroadcastBound = Math.max(claimedAt, processStartedAt);
+  } else {
+    // Undeterminable yet — fail closed. Never a timestamp (and never
+    // Infinity, which no caller can render).
+    return null;
+  }
+  return Math.max(
+    floor,
+    lastBroadcastBound + SOLANA_BLOCKHASH_VALIDITY_MS + PAYOUT_HORIZON_MARGIN_MS,
+  );
 }

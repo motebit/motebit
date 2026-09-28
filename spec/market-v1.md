@@ -663,7 +663,7 @@ POST /api/v1/admin/withdrawals/:withdrawalId/reconcile
 - until the payout's own horizon has passed. For a payload a third party can still submit (e.g. a signed transfer authorization), the horizon is the payload's validity, such as its `validBefore`. For a transfer the relay broadcasts itself, it is the last moment the relay could have broadcast plus the transaction's validity (e.g. a Solana blockhash lifetime). A payout whose horizon is not declared gets a conservative bound no shorter than the rail's documented maximum;
 - within a fixed floor after the claim (the reference relay: 15 minutes). The floor is only a floor: it is never the argument that a payout can no longer land.
 
-The action MUST also refuse without an attestation. A refusal SHOULD state when the action opens. It is never a blind refund, and it is the door that keeps a crash mid-send from stranding a withdrawal.
+When the implementation cannot yet determine a payout's horizon, the action stays closed (fail closed) and the refusal states no time. The action MUST also refuse without an attestation. A refusal SHOULD state when the action opens. It is never a blind refund, and it is the door that keeps a crash mid-send from stranding a withdrawal.
 
 ### 10.3 — Withdrawal States
 

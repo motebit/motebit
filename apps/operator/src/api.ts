@@ -77,6 +77,13 @@ export interface WithdrawalRequest {
   reconcile_opens_at?: number | null;
   /** The relay is handling this payout right now (claim → outcome written). */
   payout_in_flight_here?: boolean;
+  /**
+   * The relay's verdict on a `processing` row's reconcile door:
+   * `in_flight_here` (the relay is handling it), `undetermined` (the relay
+   * cannot place the payout's horizon yet — fail closed), `horizon` (closed
+   * until `reconcile_opens_at`), `open`. Absent on an older relay.
+   */
+  reconcile_state?: "in_flight_here" | "undetermined" | "horizon" | "open" | null;
 }
 
 export interface PendingWithdrawalsResponse {
@@ -148,8 +155,36 @@ export function isPayoutInFlight(err: unknown): boolean {
 export function reconcilableAt(w: WithdrawalRequest, minAgeMs: number): number | null {
   if (w.status !== "processing") return null;
   if (w.payout_in_flight_here === true) return Number.POSITIVE_INFINITY;
+  if (w.reconcile_state === "in_flight_here" || w.reconcile_state === "undetermined") {
+    return Number.POSITIVE_INFINITY;
+  }
   if (w.reconcile_opens_at != null) return w.reconcile_opens_at;
+  // Only a relay that reports no verdict at all falls back to claim + floor;
+  // a relay that says "unknown" is never second-guessed.
+  if (w.reconcile_state !== undefined) return Number.POSITIVE_INFINITY;
   return w.claimed_at != null ? w.claimed_at + minAgeMs : 0;
+}
+
+/** Why a `processing` row's reconcile is closed, in the operator's words. */
+export function reconcileClosedReason(w: WithdrawalRequest): string | null {
+  if (w.payout_in_flight_here === true || w.reconcile_state === "in_flight_here") {
+    return "The relay is still handling this payout";
+  }
+  if (w.reconcile_state === "undetermined") {
+    return "Cannot open yet — the relay can't determine the payout's horizon";
+  }
+  return null;
+}
+
+/** The `reason` a 409 payout-in-flight answer carries, if any. */
+export function inFlightReason(err: unknown): string | null {
+  if (!isPayoutInFlight(err)) return null;
+  try {
+    const body = JSON.parse((err as ApiError).body) as { reason?: unknown };
+    return typeof body.reason === "string" ? body.reason : null;
+  } catch {
+    return null;
+  }
 }
 
 /** The `reconcile_opens_at` a 409 payout-in-flight answer carries, if any. */

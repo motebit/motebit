@@ -107,7 +107,9 @@ describe("#921 round 3: in flight until the outcome is written", () => {
       headers: { "Content-Type": "application/json", ...AUTH_HEADER },
       body: JSON.stringify({ outcome: "not_paid", attestation: "explorer shows nothing yet" }),
     });
+    // Refused BY the in-flight mark itself — not by a horizon, not by an error.
     expect(reconcile.status).toBe(409);
+    expect(((await reconcile.json()) as { reason: string }).reason).toBe("in_flight_here");
 
     release();
     const res = await pending;

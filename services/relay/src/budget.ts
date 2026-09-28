@@ -854,10 +854,7 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
       ...w,
       amount: fromMicro(w.amount),
       payout_may_have_been_attempted: payoutMayHaveBeenAttempted(w),
-      reconcile_opens_at:
-        w.status !== "processing" || payoutsInFlight.has(w.withdrawal_id)
-          ? null
-          : reconcileOpensAt(w, payoutSendEndedAt.get(w.withdrawal_id)),
+      ...reconcileStateOf(w),
       payout_in_flight_here: payoutsInFlight.has(w.withdrawal_id),
     }));
     return c.json({
@@ -907,24 +904,64 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
   //     send threw, or the process died mid-send — so a crash never strands
   //     a withdrawal with no way out, and it is never a blind refund.
 
+  /**
+   * Why a `processing` withdrawal cannot be reconciled yet (#921):
+   *   - `in_flight_here`: this relay is still handling its payout;
+   *   - `undetermined`: the relay cannot place the payout's horizon yet
+   *     (fail closed; see `reconcileOpensAt`);
+   *   - `horizon`: the payout may still land until `reconcile_opens_at`.
+   * `open` means the reconcile door is open now.
+   */
+  type ReconcileState = "in_flight_here" | "undetermined" | "horizon" | "open";
+
+  function reconcileStateOf(w: WithdrawalRequest): {
+    reconcile_state: ReconcileState | null;
+    reconcile_opens_at: number | null;
+  } {
+    if (w.status !== "processing") return { reconcile_state: null, reconcile_opens_at: null };
+    if (payoutsInFlight.has(w.withdrawal_id)) {
+      return { reconcile_state: "in_flight_here", reconcile_opens_at: null };
+    }
+    const now = Date.now();
+    const opensAt = reconcileOpensAt(w, payoutSendEndedAt.get(w.withdrawal_id), { now });
+    if (opensAt === null) return { reconcile_state: "undetermined", reconcile_opens_at: null };
+    return { reconcile_state: now >= opensAt ? "open" : "horizon", reconcile_opens_at: opensAt };
+  }
+
+  const PAYOUT_IN_FLIGHT_MESSAGES: Record<Exclude<ReconcileState, "open"> | "processing", string> =
+    {
+      processing:
+        "payout in flight — reconcile after the send resolves (POST /api/v1/admin/withdrawals/:withdrawalId/reconcile)",
+      in_flight_here:
+        "payout in flight — the relay is still handling this payout; reconcile after its outcome is recorded",
+      undetermined:
+        "payout horizon cannot be determined yet — the relay cannot place when this payout stops being able to land; reconcile stays closed",
+      horizon: "payout may still land — reconcile opens at",
+    };
+
   const payoutInFlightResponse = (
     c: Context,
     withdrawalId: string,
+    reason: Exclude<ReconcileState, "open"> | "processing" = "processing",
     opensAt: number | null = null,
-  ): Response =>
-    c.json(
+  ): Response => {
+    const at =
+      reason === "horizon" && opensAt !== null && Number.isFinite(opensAt) ? opensAt : null;
+    return c.json(
       {
         error: "WITHDRAWAL_PAYOUT_IN_FLIGHT",
+        reason,
         message:
-          opensAt !== null
-            ? `payout may still land — reconcile opens at ${new Date(opensAt).toISOString()}`
-            : "payout in flight — reconcile after the send resolves (POST /api/v1/admin/withdrawals/:withdrawalId/reconcile)",
+          at !== null
+            ? `${PAYOUT_IN_FLIGHT_MESSAGES.horizon} ${new Date(at).toISOString()}`
+            : PAYOUT_IN_FLIGHT_MESSAGES[reason === "horizon" ? "undetermined" : reason],
         withdrawal_id: withdrawalId,
-        reconcile_opens_at: opensAt,
+        reconcile_opens_at: at,
         status: 409,
       },
       409,
     );
+  };
 
   /**
    * Store the proof record of an operator-recorded payout (manual complete or
@@ -1158,9 +1195,17 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
         withdrawalId,
         inProcess: true,
       });
-      return payoutInFlightResponse(c, withdrawalId);
+      return payoutInFlightResponse(c, withdrawalId, "in_flight_here");
     }
-    const opensAt = reconcileOpensAt(withdrawal, payoutSendEndedAt.get(withdrawalId));
+    const opensAt = reconcileOpensAt(withdrawal, payoutSendEndedAt.get(withdrawalId), { now });
+    if (opensAt === null) {
+      logger.warn("withdrawal.admin.reconcile_refused_undetermined", {
+        correlationId,
+        withdrawalId,
+        claimedAt: withdrawal.claimed_at ?? null,
+      });
+      return payoutInFlightResponse(c, withdrawalId, "undetermined");
+    }
     if (now < opensAt) {
       logger.warn("withdrawal.admin.reconcile_refused_in_flight", {
         correlationId,
@@ -1170,7 +1215,7 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
         payoutValidUntil: withdrawal.payout_valid_until ?? null,
         opensAt,
       });
-      return payoutInFlightResponse(c, withdrawalId, opensAt);
+      return payoutInFlightResponse(c, withdrawalId, "horizon", opensAt);
     }
 
     if (outcome === "paid") {

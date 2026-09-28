@@ -7,6 +7,8 @@ import {
   reconcilableAt,
   isPayoutInFlight,
   inFlightOpensAt,
+  inFlightReason,
+  reconcileClosedReason,
   type ReconcileOutcome,
   type WithdrawalRequest,
   ApiError,
@@ -75,7 +77,12 @@ export function WithdrawalsPanel(): React.ReactElement {
   useEffect(() => {
     const controller = new AbortController();
     void refresh(controller.signal);
-    const tick = setInterval(() => setNow(Date.now()), CLOCK_TICK_MS);
+    // Re-read the clock AND the queue: an in-flight row settles (or its
+    // horizon arrives) without the operator reloading.
+    const tick = setInterval(() => {
+      setNow(Date.now());
+      void refresh();
+    }, CLOCK_TICK_MS);
     return () => {
       controller.abort();
       clearInterval(tick);
@@ -156,7 +163,9 @@ export function WithdrawalsPanel(): React.ReactElement {
           notice:
             opensAt != null
               ? `payout still in flight — opens in ${formatAge(opensAt - Date.now())}`
-              : "payout still in flight — the relay is still handling it",
+              : inFlightReason(err) === "undetermined"
+                ? "cannot open yet — the relay can't determine the payout's horizon"
+                : "payout still in flight — the relay is still handling it",
         });
         await refresh();
       } else {
@@ -223,9 +232,10 @@ export function WithdrawalsPanel(): React.ReactElement {
       const at = reconcilableAt(w, minAgeMs) ?? 0;
       const ready = now >= at;
       const waitText =
-        at === Number.POSITIVE_INFINITY
-          ? "The relay is still handling this payout"
-          : `Reconcile opens in ${formatAge(at - now)} — the payout may still land`;
+        reconcileClosedReason(w) ??
+        (at === Number.POSITIVE_INFINITY
+          ? "Cannot open yet — the relay can't determine the payout's horizon"
+          : `Reconcile opens in ${formatAge(at - now)} — the payout may still land`);
       return React.createElement(
         "td",
         null,

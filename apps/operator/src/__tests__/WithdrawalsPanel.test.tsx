@@ -273,6 +273,25 @@ describe("WithdrawalsPanel — payout in flight (#921)", () => {
     expect(btn.title).toMatch(/Reconcile opens in 4[45]m — the payout may still land/);
   });
 
+  it("a relay verdict of 'undetermined' keeps reconcile shut — never the claim + 15min fallback", async () => {
+    mockJson({
+      withdrawals: [
+        {
+          ...processing(3 * 60 * 60_000), // claimed 3h ago: the fallback would light the button
+          reconcile_opens_at: null,
+          payout_in_flight_here: false,
+          reconcile_state: "undetermined",
+        },
+      ],
+      reconcile_min_age_ms: MIN_AGE,
+    });
+    render(React.createElement(WithdrawalsPanel));
+    await waitFor(() => expect(screen.getByText("reconcile")).toBeTruthy());
+    const btn = screen.getByText("reconcile") as HTMLButtonElement;
+    expect(btn.disabled).toBe(true);
+    expect(btn.title).toBe("Cannot open yet — the relay can't determine the payout's horizon");
+  });
+
   it("a payout the relay is still handling is never reconcilable from the panel", async () => {
     mockJson({
       withdrawals: [

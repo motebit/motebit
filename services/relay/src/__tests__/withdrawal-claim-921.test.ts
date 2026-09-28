@@ -665,12 +665,28 @@ describe("#921 round 3: the reconcile door waits for the payout's own horizon", 
     // Solana, claimed in an earlier process life: bounded by this process's start.
     const started = claim + 10 * 60 * 60 * 1000;
     expect(
-      reconcileOpensAt({ claimed_at: claim, payout_valid_until: null }, undefined, started),
+      reconcileOpensAt({ claimed_at: claim, payout_valid_until: null }, undefined, {
+        processStartedAt: started,
+        now: started,
+      }),
     ).toBe(started + SOLANA_BLOCKHASH_VALIDITY_MS + PAYOUT_HORIZON_MARGIN_MS);
-    // Solana, claimed in this life with no recorded end: never (it is still in flight).
-    expect(
-      reconcileOpensAt({ claimed_at: claim, payout_valid_until: null }, undefined, claim - 1),
-    ).toBe(Number.POSITIVE_INFINITY);
+  });
+
+  it("round 4: a claim this process never made but whose time reads as this life (clock stepped back) is UNDETERMINED — null, never Infinity — until the floor passes, then bounded by the claim", () => {
+    const start = 5_000_000;
+    const claim = start + 60_000; // reads as after this process started
+    const w = { claimed_at: claim, payout_valid_until: null };
+    const before = reconcileOpensAt(w, undefined, {
+      processStartedAt: start,
+      now: claim + RECONCILE_MIN_AGE_MS - 1,
+    });
+    expect(before).toBeNull();
+    const after = reconcileOpensAt(w, undefined, {
+      processStartedAt: start,
+      now: claim + RECONCILE_MIN_AGE_MS,
+    });
+    expect(after).toBe(claim + RECONCILE_MIN_AGE_MS);
+    expect(Number.isFinite(after)).toBe(true);
   });
 });
 
@@ -879,5 +895,131 @@ describe("#921 round 3: pre-claim rows are marked durably, once, at migration", 
     ).json()) as { withdrawals: Array<Record<string, unknown>> };
     expect(own.withdrawals[0]).not.toHaveProperty("pre_claim_review");
     expect(own.withdrawals[0]).not.toHaveProperty("payout_valid_until");
+  });
+});
+
+describe("#921 round 4: undetermined horizon, x402 in-flight mark, send-end after re-signs", () => {
+  it("a stepped-back clock: reconcile answers 409 undetermined (no 500, no timestamp), /pending says undetermined; after the floor the door opens", async () => {
+    relay = await createTestRelay({ enableDeviceAuth: false });
+    const mid = "zz921-undetermined";
+    await registerAndFund(relay, mid);
+    const body = (await (
+      await startWithdraw(relay, mid, { destination: "pending" })
+    ).json()) as WithdrawBody;
+    const id = body.withdrawal.withdrawal_id;
+    // A Solana-shaped claim this process never made (no in-flight mark, no
+    // send end), stamped AFTER this process started — the clock stepped back
+    // across a restart. Written by hand: no live path produces it.
+    const claimedAt = Date.now() + 60_000;
+    relay.moteDb.db
+      .prepare(
+        "UPDATE relay_withdrawals SET status = 'processing', claimed_at = ?, payout_valid_until = NULL WHERE withdrawal_id = ?",
+      )
+      .run(claimedAt, id);
+    jumpClock(2 * 60_000); // past the claim, inside the floor
+
+    const res = await admin(relay, id, "reconcile", { outcome: "not_paid", attestation: "x" });
+    expect(res.status).toBe(409);
+    const r = (await res.json()) as {
+      reason: string;
+      message: string;
+      reconcile_opens_at: number | null;
+    };
+    expect(r.reason).toBe("undetermined");
+    expect(r.reconcile_opens_at).toBeNull();
+    expect(r.message).toMatch(/cannot be determined/);
+
+    const listing = (await (
+      await relay.app.request("/api/v1/admin/withdrawals/pending", { headers: AUTH_HEADER })
+    ).json()) as {
+      withdrawals: Array<{
+        withdrawal_id: string;
+        reconcile_state: string | null;
+        reconcile_opens_at: number | null;
+      }>;
+    };
+    const mine = listing.withdrawals.find((x) => x.withdrawal_id === id)!;
+    expect(mine.reconcile_state).toBe("undetermined");
+    expect(mine.reconcile_opens_at).toBeNull();
+
+    // The operator's way out: once the floor has passed, the claim is bounded
+    // as one from an earlier process life.
+    jumpClock(RECONCILE_MIN_AGE_MS);
+    const ok = await admin(relay, id, "reconcile", {
+      outcome: "not_paid",
+      attestation: "treasury shows no transfer to the destination",
+    });
+    expect(ok.status).toBe(200);
+    expectExactlyOneOutcome(relay, mid, id);
+  });
+
+  it("an x402 withdraw still running past payout_valid_until + margin is refused by the in-flight mark", async () => {
+    const landed = deferred<Awaited<ReturnType<X402SettlementRail["withdraw"]>>>();
+    vi.spyOn(X402SettlementRail.prototype, "isAvailable").mockResolvedValue(true);
+    const withdraw = vi
+      .spyOn(X402SettlementRail.prototype, "withdraw")
+      .mockReturnValue(landed.promise);
+    vi.spyOn(X402SettlementRail.prototype, "attachProof").mockResolvedValue(undefined);
+    relay = await createTestRelay({ enableDeviceAuth: false });
+    const mid = "zz921-x402-inflight";
+    await registerAndFund(relay, mid);
+    const pending = startWithdraw(relay, mid, { destination: EVM_DEST });
+    await until(() => withdraw.mock.calls.length === 1);
+    const id = onlyWithdrawalId(relay, mid);
+    const validUntil = (
+      relay.moteDb.db
+        .prepare("SELECT payout_valid_until FROM relay_withdrawals WHERE withdrawal_id = ?")
+        .get(id) as { payout_valid_until: number }
+    ).payout_valid_until;
+    // Every horizon has passed — only the in-flight mark stands in the way.
+    jumpClock(validUntil + PAYOUT_HORIZON_MARGIN_MS - Date.now() + 60_000);
+    const res = await admin(relay, id, "reconcile", { outcome: "not_paid", attestation: "x" });
+    expect(res.status).toBe(409);
+    expect(((await res.json()) as { reason: string }).reason).toBe("in_flight_here");
+
+    landed.resolve({
+      amount: WITHDRAW_USD,
+      currency: "USDC",
+      proof: { reference: "0xlate", railType: "protocol", network: "eip155:84532", confirmedAt: 1 },
+    } as Awaited<ReturnType<X402SettlementRail["withdraw"]>>);
+    await pending;
+    expect(row(relay, id).status).toBe("completed");
+    expect(refundCount(relay, mid, id)).toBe(0);
+  });
+
+  it("a Solana send that re-signs for longer than the floor: reconcile stays closed until send-END + blockhash lifetime + margin", async () => {
+    const RESIGN_MS = 8 * 60_000; // each attempt longer than floor / 2
+    const sendUsdc = vi.fn().mockImplementation(async () => {
+      for (let i = 0; i < 3; i++) jumpClock(RESIGN_MS); // three re-signs
+      await Promise.resolve();
+      throw new Error("block height exceeded on the last attempt");
+    });
+    const { operator } = makeOperator(sendUsdc);
+    relay = await createTestRelay({ enableDeviceAuth: false, operatorSolanaTransfer: operator });
+    const mid = "zz921-resign";
+    await registerAndFund(relay, mid);
+    const body = (await (await startWithdraw(relay, mid)).json()) as WithdrawBody;
+    const id = body.withdrawal.withdrawal_id;
+    expect(body.withdrawal.status).toBe("processing");
+    const claimedAt = row(relay, id).claimed_at!;
+    const sendEnd = claimedAt + 3 * RESIGN_MS; // (approximately: the clock at release)
+
+    // Past the floor (claim + 24 min), but the last broadcast may still land.
+    jumpClock(2 * 60_000);
+    const early = await admin(relay, id, "reconcile", { outcome: "not_paid", attestation: "x" });
+    expect(early.status).toBe(409);
+    const e = (await early.json()) as { reason: string; reconcile_opens_at: number };
+    expect(e.reason).toBe("horizon");
+    expect(e.reconcile_opens_at).toBeGreaterThanOrEqual(
+      sendEnd + SOLANA_BLOCKHASH_VALIDITY_MS + PAYOUT_HORIZON_MARGIN_MS,
+    );
+    expect(refundCount(relay, mid, id)).toBe(0);
+
+    jumpClock(e.reconcile_opens_at - Date.now() + 1_000);
+    expect(
+      (await admin(relay, id, "reconcile", { outcome: "not_paid", attestation: "none landed" }))
+        .status,
+    ).toBe(200);
+    expectExactlyOneOutcome(relay, mid, id);
   });
 });
