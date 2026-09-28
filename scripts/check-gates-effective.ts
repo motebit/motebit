@@ -2743,6 +2743,24 @@ export async function probeFetch(): Promise<unknown> {
       }),
   },
   {
+    script: "check-master-token-carve-outs",
+    proves:
+      'flags an `endsWith` exemption in the agent-route middleware — the #855 sibling. Reinstates `path.endsWith("/solvency-proof")` beside `isPublicAgentRoute` (the closure that let `GET /api/v1/agents/solvency-proof` be served tokenless by `GET /api/v1/agents/:motebitId`); the gate names the path test.',
+    perturb: () =>
+      mutateFile("services/relay/src/agents.ts", (src) => {
+        const anchor = "if (isPublicAgentRoute(c.req.method, c.req.path)) {";
+        if (!src.includes(anchor)) {
+          throw new Error(
+            "probe vacuous: services/relay/src/agents.ts no longer decides the agent door by isPublicAgentRoute — retarget the probe",
+          );
+        }
+        return src.replace(
+          anchor,
+          'if (isPublicAgentRoute(c.req.method, c.req.path) || path.endsWith("/solvency-proof")) {',
+        );
+      }),
+  },
+  {
     script: "check-worker-no-master-token",
     proves:
       "flags a worker reading the relay master token again — the 2026-09-13 blast-radius class (every first-party worker held MOTEBIT_API_TOKEN, so a compromised worker container was a compromised relay). Probe reinstates the env read in research's config loader; byte-identical restoration on cleanup.",

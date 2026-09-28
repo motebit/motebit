@@ -549,10 +549,24 @@ export function carveOutPattern(path: string): RegExp {
   return new RegExp(`^${body}$`);
 }
 
-const COMPILED_CARVE_OUTS = MASTER_TOKEN_CARVE_OUTS.map((e) => ({
-  method: e.method,
-  pattern: carveOutPattern(e.path),
-}));
+/**
+ * The one matcher for a route table of exact carve-outs (#855): a request
+ * matches an entry when its method is the entry's (HEAD as GET — Hono serves
+ * HEAD with the GET handler) and its path matches the entry's pattern
+ * anchored at both ends. Used by the master-token catch-all and by the
+ * agent-route middleware's PUBLIC_AGENT_ROUTES (agents.ts).
+ */
+export function routeTableMatcher(
+  entries: ReadonlyArray<{ method: CarveOutMethod; path: string }>,
+): (method: string, path: string) => boolean {
+  const compiled = entries.map((e) => ({ method: e.method, pattern: carveOutPattern(e.path) }));
+  return (method, path) => {
+    const m = method === "HEAD" ? "GET" : method;
+    return compiled.some((e) => e.method === m && e.pattern.test(path));
+  };
+}
+
+const matchMasterTokenCarveOut = routeTableMatcher(MASTER_TOKEN_CARVE_OUTS);
 
 /**
  * Whether the /api/v1/* catch-all lets `method path` through without the
@@ -560,8 +574,7 @@ const COMPILED_CARVE_OUTS = MASTER_TOKEN_CARVE_OUTS.map((e) => ({
  * dispatches on, so the route this admits is the route the handler serves.
  */
 export function isMasterTokenCarveOut(method: string, path: string): boolean {
-  const m = method === "HEAD" ? "GET" : method;
-  return COMPILED_CARVE_OUTS.some((e) => e.method === m && e.pattern.test(path));
+  return matchMasterTokenCarveOut(method, path);
 }
 
 // ---------------------------------------------------------------------------

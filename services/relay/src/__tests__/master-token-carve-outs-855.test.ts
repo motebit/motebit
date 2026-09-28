@@ -25,6 +25,7 @@ import { describe, it, expect, beforeEach, afterEach, beforeAll, afterAll } from
 import type { SyncRelay } from "../index.js";
 import { AUTH_HEADER, createTestRelay } from "./test-helpers.js";
 import { MASTER_TOKEN_CARVE_OUTS, carveOutPattern, isMasterTokenCarveOut } from "../middleware.js";
+import { PUBLIC_AGENT_ROUTES, isPublicAgentRoute } from "../agents.js";
 
 type Req = readonly [method: string, path: string];
 
@@ -158,21 +159,6 @@ describe("#855 the catch-all refuses every over-match", () => {
   });
 });
 
-/**
- * GET routes whose HEAD a LATER door refuses, unchanged by #855: the
- * agent-route middleware's PUBLIC_AGENT_ROUTES (agents.ts) matches these by
- * `m === "GET"`, so a bare HEAD falls to the authenticated branch there and
- * gets that door's 401 — on main too, where the catch-all's `/api/v1/agents`
- * prefix let every HEAD through. The catch-all's own HEAD handling is pinned
- * by the pure test above and by every other GET entry here.
- */
-const HEAD_REFUSED_PAST_THE_CATCH_ALL = new Set([
-  "/api/v1/agents/discover",
-  "/api/v1/agents/revocations",
-  "/api/v1/agents/:motebitId/solvency-proof",
-  "/api/v1/agents/:motebitId/succession",
-]);
-
 describe("#855 every declared carve-out still passes the catch-all with no token", () => {
   let relay: SyncRelay;
   beforeEach(async () => {
@@ -191,7 +177,7 @@ describe("#855 every declared carve-out still passes the catch-all with no token
       const text = await res.clone().text();
       expect(res.status, `rate-limited, proves nothing: ${text}`).not.toBe(429);
       expect(await refusedByCatchAll(res), `refused by the catch-all: ${text}`).toBe(false);
-      if (e.method === "GET" && !HEAD_REFUSED_PAST_THE_CATCH_ALL.has(e.path)) {
+      if (e.method === "GET") {
         // A HEAD response has no body, so the fingerprint cannot be read.
         // Hono serves HEAD with the GET handler, so past the catch-all a HEAD
         // is answered exactly as its GET was; a catch-all refusal would be a
@@ -326,5 +312,184 @@ describe("#855 carve-outs against the relay's registered routes", () => {
     expect(
       intersects("/api/v1/credentials/verify", "/api/v1/credentials/:motebitId/reputation"),
     ).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The sibling door: the agent-route middleware's PUBLIC_AGENT_ROUTES
+// ---------------------------------------------------------------------------
+
+/**
+ * The agent-route middleware's own refusal of a tokenless request. The
+ * catch-all carves every agent route out, so a request refused HERE got past
+ * it — and was then refused by the door that holds PUBLIC_AGENT_ROUTES.
+ */
+async function refusedByAgentDoor(res: Response): Promise<boolean> {
+  if (res.status !== 401) return false;
+  const text = await res.clone().text();
+  return text === JSON.stringify({ error: "Missing auth token", status: 401 });
+}
+
+/**
+ * Requests the old closures (`endsWith("/solvency-proof")`,
+ * `endsWith("/succession")`, method-blind `bootstrap` and
+ * `credentials/submit`) let through with no token, each served by a route the
+ * entry never named.
+ */
+const AGENT_OVER_MATCHES: ReadonlyArray<readonly [label: string, req: Req]> = [
+  ["solvency-proof as an agent id", ["GET", "/api/v1/agents/solvency-proof"]],
+  ["succession as an agent id", ["GET", "/api/v1/agents/succession"]],
+  ["bootstrap read as an agent id (method-blind)", ["GET", "/api/v1/agents/bootstrap"]],
+  ["receipts/solvency-proof", ["GET", "/api/v1/agents/probe-a/receipts/solvency-proof"]],
+  ["receipts/succession", ["GET", "/api/v1/agents/probe-a/receipts/succession"]],
+  ["approvals/solvency-proof", ["GET", "/api/v1/agents/probe-a/approvals/solvency-proof"]],
+  ["path-to/solvency-proof", ["GET", "/api/v1/agents/probe-a/path-to/solvency-proof"]],
+  ["path-to/succession", ["GET", "/api/v1/agents/probe-a/path-to/succession"]],
+  [
+    "GET on credentials/submit (method-blind)",
+    ["GET", "/api/v1/agents/probe-a/credentials/submit"],
+  ],
+];
+
+describe("#855 sibling: PUBLIC_AGENT_ROUTES is exact", () => {
+  it.each(AGENT_OVER_MATCHES)("%s is not public", (_label, [method, path]) => {
+    expect(isPublicAgentRoute(method, path)).toBe(false);
+  });
+
+  it.each(PUBLIC_AGENT_ROUTES.map((e) => [`${e.method} ${e.path}`, e] as const))(
+    "%s is public (and HEAD with its GET)",
+    (_label, e) => {
+      expect(isPublicAgentRoute(e.method, concrete(e.path))).toBe(true);
+      if (e.method === "GET") expect(isPublicAgentRoute("HEAD", concrete(e.path))).toBe(true);
+    },
+  );
+
+  it.each(PUBLIC_AGENT_ROUTES.map((e) => [`${e.method} ${e.path}`, e] as const))(
+    "%s is also a master-token carve-out (else the catch-all refuses it first)",
+    (_label, e) => {
+      expect(isMasterTokenCarveOut(e.method, concrete(e.path))).toBe(true);
+    },
+  );
+});
+
+// With no master token configured there is no catch-all, so the agent door is
+// the only thing between these requests and the routes they reach.
+describe("#855 sibling: the agent door refuses every over-match with no token (relay with no master token)", () => {
+  let relay: SyncRelay;
+  beforeEach(async () => {
+    relay = await createTestRelay({ apiToken: undefined });
+  });
+  afterEach(async () => {
+    await relay.close();
+  });
+
+  it("the fingerprint is the agent door's: an authenticated agent route with no token", async () => {
+    const res = await send(relay, ["GET", "/api/v1/agents/probe-a/balance"]);
+    expect(await refusedByAgentDoor(res)).toBe(true);
+  });
+
+  it.each(AGENT_OVER_MATCHES)("%s → the agent door's 401", async (_label, req) => {
+    const res = await send(relay, req);
+    const text = await res.clone().text();
+    expect(await refusedByAgentDoor(res), `${req[0]} ${req[1]}: ${res.status} ${text}`).toBe(true);
+  });
+});
+
+describe("#855 sibling: every public agent route still works with no token", () => {
+  let relay: SyncRelay;
+  beforeEach(async () => {
+    relay = await createTestRelay();
+  });
+  afterEach(async () => {
+    await relay.close();
+  });
+
+  it.each(PUBLIC_AGENT_ROUTES.map((e) => [`${e.method} ${e.path}`, e] as const))(
+    "%s",
+    async (_label, e) => {
+      const res = await send(relay, [e.method, concrete(e.path)]);
+      const text = await res.clone().text();
+      expect(res.status, `rate-limited, proves nothing: ${text}`).not.toBe(429);
+      expect(await refusedByCatchAll(res), `refused by the catch-all: ${text}`).toBe(false);
+      expect(await refusedByAgentDoor(res), `refused by the agent door: ${text}`).toBe(false);
+      if (e.method === "GET") {
+        // HEAD of a public GET is public: past both doors it is answered as its GET.
+        const head = await send(relay, ["HEAD", concrete(e.path)]);
+        expect(head.status, `HEAD answered unlike its GET (${res.status})`).toBe(res.status);
+      }
+    },
+  );
+});
+
+describe("#855 sibling: PUBLIC_AGENT_ROUTES against the relay's registered routes", () => {
+  let relay: SyncRelay;
+  let ordered: Array<{ method: string; path: string; index: number }>;
+
+  beforeAll(async () => {
+    relay = await createTestRelay();
+    ordered = relay.app.routes
+      .map((r, index) => ({ method: r.method, path: r.path, index }))
+      .filter((r) => r.method !== "ALL" && r.path.startsWith("/api/v1/agents/"));
+  });
+  afterAll(async () => {
+    await relay.close();
+  });
+
+  const key = (method: string, path: string): string => `${method} ${shape(path).join("/")}`;
+
+  it.each(PUBLIC_AGENT_ROUTES.map((e) => [`${e.method} ${e.path}`, e] as const))(
+    "%s names a registered route",
+    (_label, e) => {
+      expect(ordered.some((r) => key(r.method, r.path) === key(e.method, e.path))).toBe(true);
+    },
+  );
+
+  it("every route main's closures made public for an ordinary id is still public, and nothing more", () => {
+    // main's PUBLIC_AGENT_ROUTES closures, verbatim in effect. Over the
+    // registered routes with ordinary `probe-…` ids they name exactly the
+    // routes the entries were meant for; the over-matches need a crafted id.
+    const mainPublic = (p: string, m: string): boolean =>
+      p === "/api/v1/agents/bootstrap" ||
+      (p.endsWith("/succession") && m === "GET") ||
+      (p === "/api/v1/agents/discover" && m === "GET") ||
+      (p === "/api/v1/agents/revocations" && m === "GET") ||
+      p.endsWith("/credentials/submit") ||
+      (/\/devices\/[^/]+\/hardware-attestation$/.test(p) && m === "POST") ||
+      (p.endsWith("/debit") && m === "POST") ||
+      (p.endsWith("/solvency-proof") && m === "GET");
+    const lost = ordered
+      .filter((r) => mainPublic(concrete(r.path), r.method))
+      .filter((r) => !isPublicAgentRoute(r.method, concrete(r.path)))
+      .map((r) => `${r.method} ${r.path}`);
+    expect(lost).toEqual([]);
+    const gained = PUBLIC_AGENT_ROUTES.filter((e) => !mainPublic(concrete(e.path), e.method)).map(
+      (e) => `${e.method} ${e.path}`,
+    );
+    expect(gained).toEqual([]);
+  });
+
+  it("no public entry reaches a route it does not name (Hono serves the first-registered match)", () => {
+    const declared = new Set(PUBLIC_AGENT_ROUTES.map((e) => key(e.method, e.path)));
+    const reached: string[] = [];
+    for (const e of PUBLIC_AGENT_ROUTES) {
+      const own = ordered.filter((r) => key(r.method, r.path) === key(e.method, e.path));
+      const first = Math.min(...own.map((r) => r.index));
+      for (const r of ordered) {
+        if (r.method !== e.method || declared.has(key(r.method, r.path))) continue;
+        // A shared path goes to the earlier registration: the entry reaches an
+        // undeclared route only if that route is registered first.
+        if (intersects(e.path, r.path) && r.index < first) {
+          reached.push(`${e.method} ${e.path} reaches ${r.path}`);
+        }
+      }
+    }
+    expect(reached).toEqual([]);
+  });
+
+  it("the literal public routes that share paths with GET /api/v1/agents/:motebitId are registered first", () => {
+    const idx = (p: string): number =>
+      ordered.find((r) => r.method === "GET" && r.path === p)?.index ?? Infinity;
+    expect(idx("/api/v1/agents/discover")).toBeLessThan(idx("/api/v1/agents/:motebitId"));
+    expect(idx("/api/v1/agents/revocations")).toBeLessThan(idx("/api/v1/agents/:motebitId"));
   });
 });
