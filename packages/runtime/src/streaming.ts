@@ -115,6 +115,13 @@ export interface StreamingDeps {
    * returned release is called (#880) — the resume of a foreign approval.
    */
   enterForeignPrincipalTurn?(): () => void;
+  /**
+   * The loop dependencies for the turn about to run (#880): the runtime
+   * swaps in the policy gate's no-approval-channel view for a foreign
+   * turn. The resumed continuation passes through it too, so a foreign
+   * continuation can never chain another pending approval.
+   */
+  loopDepsForTurn?<D extends { policyGate?: unknown }>(deps: D): D;
   /** Policy gate — sanitize tool results. */
   sanitizeToolResult(
     result: ToolResult,
@@ -1051,14 +1058,18 @@ export class StreamingManager {
       // the human's refusal) into the fresh loop, so its closing floor
       // can never deny the action (#521 — witnessed live 2026-08-01:
       // "I didn't take any action" after a completed $0.25 hire).
-      const stream = runTurnStreaming(loopDeps, pending.userMessage, {
-        conversationHistory: this.deps.getLiveHistory(),
-        previousCues: this.deps.getLatestCues(),
-        runId: pending.runId,
-        priorTurnActions: approved
-          ? { completedToolName: pending.toolName }
-          : { humanRefusedToolName: pending.toolName },
-      });
+      const stream = runTurnStreaming(
+        this.deps.loopDepsForTurn?.(loopDeps) ?? loopDeps,
+        pending.userMessage,
+        {
+          conversationHistory: this.deps.getLiveHistory(),
+          previousCues: this.deps.getLatestCues(),
+          runId: pending.runId,
+          priorTurnActions: approved
+            ? { completedToolName: pending.toolName }
+            : { humanRefusedToolName: pending.toolName },
+        },
+      );
       yield* this.processStream(stream, pending.userMessage, pending.runId);
     } finally {
       releaseForeign?.();

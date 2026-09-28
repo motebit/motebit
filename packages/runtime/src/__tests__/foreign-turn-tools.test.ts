@@ -134,7 +134,7 @@ describe("a foreign principal's turn is offered no localOnly tool (#880 D)", () 
         };
       }
     ).scopedToolRegistry;
-    (runtime as unknown as { _foreignTasksInFlight: number })._foreignTasksInFlight = 1;
+    (runtime as unknown as { _foreignTurn: boolean })._foreignTurn = true;
     const r = await scoped.execute("read_file", { path: "/etc/passwd" });
     expect(r.ok).toBe(false);
     expect(r.error).toContain("not available to another principal's task");

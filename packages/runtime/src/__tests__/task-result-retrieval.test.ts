@@ -466,7 +466,7 @@ describe("retrieve_task_result — the model's free route to a paid result", () 
     const runtime = makeRuntime(store);
     runtime.enableInteractiveDelegation({ syncUrl: RELAY, authToken: async () => "t" });
     const calls = stubTaskRead(delivered);
-    (runtime as unknown as { _foreignTasksInFlight: number })._foreignTasksInFlight = 1;
+    (runtime as unknown as { _foreignTurn: boolean })._foreignTurn = true;
     const r = await runtime.getToolRegistry().execute("retrieve_task_result", {});
     expect(r.ok).toBe(false);
     expect(r.error).toContain("owner-only");

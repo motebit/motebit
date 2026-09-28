@@ -324,7 +324,7 @@ describe("inside another principal's task, the owner's prior payment is not disc
     });
     const args = { prompt: "research X", required_capabilities: ["web_search"] };
 
-    (runtime as unknown as { _foreignTasksInFlight: number })._foreignTasksInFlight = 1;
+    (runtime as unknown as { _foreignTurn: boolean })._foreignTurn = true;
     const foreign = await runtime.getToolRegistry().execute("delegate_to_agent", args);
     expect(foreign.ok).toBe(false);
     expect(foreign.error).toContain("INTENT_ALREADY_PAID");
@@ -333,7 +333,7 @@ describe("inside another principal's task, the owner's prior payment is not disc
     }
 
     // The owner's own turn still gets the full, actionable refusal.
-    (runtime as unknown as { _foreignTasksInFlight: number })._foreignTasksInFlight = 0;
+    (runtime as unknown as { _foreignTurn: boolean })._foreignTurn = false;
     const own = await runtime.getToolRegistry().execute("delegate_to_agent", args);
     expect(own.error).toContain("owner-task-7");
     expect(pay).not.toHaveBeenCalled();

@@ -532,16 +532,18 @@ export class MotebitRuntime {
    * `enableInvokeCapability` — any surface that can delegate can also
    * fetch a result it already paid for. Null until then.
    */
-  /** Externally submitted agent tasks currently running — see `handleAgentTask`. */
-  private _foreignTasksInFlight = 0;
   /**
-   * True while the in-flight turn runs ANOTHER principal's words — a
-   * `sendMessage*` call made with `foreignPrincipal: true`. Single-writer
-   * by the `_isProcessing` guard.
+   * True while the in-flight TURN runs ANOTHER principal's words — a
+   * `sendMessage*` call made with `foreignPrincipal: true` (every
+   * `handleAgentTask` turn passes it). Set only after the `_isProcessing`
+   * guard admits the turn and cleared in its `finally`, so it belongs to
+   * exactly one turn: a foreign task's post-turn tail (receipt, trust
+   * bump, events) or a foreign call refused by the guard never marks an
+   * owner turn (#880 round 2).
    */
   private _foreignTurn = false;
-  /** Resumes of a foreign principal's paused approval in flight (#880). */
-  private _foreignResumesInFlight = 0;
+  /** True while resuming a foreign principal's paused approval (#880). Same single-writer rule. */
+  private _foreignResume = false;
   private _taskQueryCoords: {
     syncUrl: string;
     authToken: (audience?: import("@motebit/protocol").TokenAudience) => Promise<string>;
@@ -1369,14 +1371,12 @@ export class MotebitRuntime {
       getToolRegistry: () => this.toolRegistry,
       isForeignPrincipalTurn: () => this.isForeignPrincipalTurn(),
       enterForeignPrincipalTurn: () => {
-        this._foreignResumesInFlight++;
-        let released = false;
+        this._foreignResume = true;
         return () => {
-          if (released) return;
-          released = true;
-          this._foreignResumesInFlight--;
+          this._foreignResume = false;
         };
       },
+      loopDepsForTurn: (deps) => this.loopDepsForTurn(deps),
       sanitizeToolResult: (result, toolName) => {
         if (typeof this.policy.sanitizeAndCheck === "function") {
           const check = this.policy.sanitizeAndCheck(result, toolName);
@@ -1604,15 +1604,20 @@ export class MotebitRuntime {
    * the tool crosses the withholding line exactly when it can move money.
    */
   /**
-   * True while this runtime is running another principal's words: a
-   * relay- or MCP-dispatched task (`handleAgentTask`, counted) or a
-   * turn started with `foreignPrincipal: true`, or the resume of such a
-   * turn's paused approval. The one predicate every
-   * foreign-turn guard reads — the loop's tool scope (#880) and the
-   * owner-only delegation reads (#874).
+   * True while the in-flight turn runs another principal's words: a turn
+   * started with `foreignPrincipal: true` (every relay- or MCP-dispatched
+   * `handleAgentTask` turn, and `motebit_query`), or the resume of such a
+   * turn's paused approval. TURN-scoped, never runtime-wide: it reads only
+   * flags that the turn itself set under the `_isProcessing` guard (#880
+   * round 2 — a runtime-wide task counter stayed up through a task's tail
+   * and leaked the foreign scope onto an owner turn started in it). The
+   * one predicate every foreign-turn decision reads: the loop's tool
+   * scope, the no-approval-channel gate view, the pending-approval mark,
+   * and the owner-only delegation reads (#874), which run as tool handlers
+   * inside a turn.
    */
   private isForeignPrincipalTurn(): boolean {
-    return this._foreignTasksInFlight > 0 || this._foreignTurn || this._foreignResumesInFlight > 0;
+    return this._foreignTurn || this._foreignResume;
   }
 
   /**
@@ -3066,17 +3071,13 @@ export class MotebitRuntime {
       return;
     }
     if (!this.loopDeps) throw new Error("AI not initialized — call setProvider() first");
-    // While another principal's task runs, owner-only reads (the paid-task
-    // ledger and the results it bought) refuse: a customer's prompt must
-    // not be able to make this motebit's model list or fetch work bought
-    // for someone else (#874 review). Counted, not a boolean, so
-    // overlapping tasks cannot clear each other's mark.
-    this._foreignTasksInFlight++;
-    try {
-      yield* handleAgentTaskFn(this.agentTaskDeps, task, privateKey, deviceId, publicKey, options);
-    } finally {
-      this._foreignTasksInFlight--;
-    }
+    // The task's turn is foreign: `handleAgentTaskFn` starts it with
+    // `foreignPrincipal: true`, so while it runs, owner-only reads (the
+    // paid-task ledger, #874) refuse and no `localOnly` tool is offered
+    // (#880). The mark is the TURN's — it ends with the turn, before this
+    // task's receipt tail, so an owner turn admitted during the tail is
+    // the owner's (#880 round 2).
+    yield* handleAgentTaskFn(this.agentTaskDeps, task, privateKey, deviceId, publicKey, options);
   }
 
   /**
