@@ -418,9 +418,9 @@ describe("Two-Motebit Delegation E2E", () => {
     const found = agents.find((a) => a.motebit_id === bob.motebitId);
     expect(found).toBeDefined();
     expect(found!.capabilities).toContain("web_search");
-    // A legacy (non-sovereign) id with no proven holder: discover SERVES no key
-    // (#875 review round 3 — holder, else a key the id commits to).
-    expect(found!.public_key).toBe("");
+    // Registered by the operator with its key (evidence `operator`): the proven
+    // registry key is SERVED (#875 review round 4 — serving ≠ binding).
+    expect(found!.public_key).toBe(bob.publicKeyHex);
 
     // Alice should NOT appear (she doesn't have web_search)
     const aliceFound = agents.find((a) => a.motebit_id === alice.motebitId);

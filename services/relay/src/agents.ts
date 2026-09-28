@@ -47,6 +47,8 @@ import {
   registryKeyOf,
   servedIdentityKey,
   withServedKeys,
+  recordRegistryKeyEvidence,
+  type RegistryKeyEvidence,
   verificationKeyFor,
 } from "./identity-keys.js";
 
@@ -1421,6 +1423,7 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
     // all an identity's FIRST key — carries `key_proof`: a device-registration
     // request signed by that key (`verifyKeyPossession`, register-self's
     // verifier and window).
+    let registryEvidence: RegistryKeyEvidence | null = null;
     if (keyFromBody) {
       const lowered = publicKey.toLowerCase();
       const heldBefore = new Set([...keysHeldBy(moteDb.db, motebitId)].map((k) => k.toLowerCase()));
@@ -1489,6 +1492,19 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
           );
         }
       }
+      // The evidence this request carried for the key, recorded beside the
+      // registry write (round 4): it is what lets the SERVED key include a
+      // proven registry key without writing a holder.
+      registryEvidence =
+        callerVerifiedKey !== undefined && callerVerifiedKey === lowered
+          ? "bearer"
+          : holderKey !== null && holderKey.toLowerCase() === lowered
+            ? "holder"
+            : carriedBySuccession
+              ? "succession"
+              : operatorPresented
+                ? "operator"
+                : "key_proof";
     }
 
     if (keyOnFileForRegister && publicKey && keyOnFileForRegister !== publicKey) {
@@ -1775,6 +1791,21 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
         settlementModes ?? "relay",
         sweepThreshold,
       );
+
+    // The registry key's provenance (#875 review round 4): recorded only when
+    // this request carried evidence for it — a keyed, proven key, or the
+    // proven sovereign key of a keyless E-sov registration. Keyless
+    // registrations that kept the key on file add nothing.
+    const evidenceForWrite: RegistryKeyEvidence | null =
+      registryEvidence ?? (!keyFromBody && sovereignProof !== null ? "sovereign" : null);
+    if (evidenceForWrite !== null && publicKey !== "") {
+      recordRegistryKeyEvidence(moteDb.db, {
+        motebitId,
+        publicKey,
+        evidence: evidenceForWrite,
+        now,
+      });
+    }
 
     // Every verified guardian attestation reaches the holder, whatever the key
     // evidence (DA6): the registry just took it, and a holder left on an older

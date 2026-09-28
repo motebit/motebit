@@ -31,12 +31,13 @@ import {
   hexPublicKeyToDidKey,
   mintAudienceToken,
   signDeviceRegistration,
+  signKeySuccession,
   signVerifiableCredential,
   type KeyPair,
   type VerifiableCredential,
 } from "@motebit/crypto";
 import type { SyncRelay } from "../index.js";
-import { keysHeldBy } from "../identity-keys.js";
+import { keysHeldBy, recordIdentityKey, recordRegistryKeyEvidence } from "../identity-keys.js";
 import { claimsSovereignId } from "../device-registration-guard.js";
 import { JSON_AUTH, createTestRelay, keyProof, signedBootstrapBody } from "./test-helpers.js";
 
@@ -782,5 +783,184 @@ describe("a device row is never evidence of the identity's key (#875 review roun
     // (holder-else-registry fallback), and that is the bearer's verified key.
     const res = await registerAsDevice(svc, "svc-no-row", kp, { public_key: hex(kp) });
     expect(res.status, JSON.stringify(res.json)).toBe(200);
+  });
+});
+
+describe("the served key: holder > proven registry > sovereign commitment (#875 review round 4)", () => {
+  const plantDevice = (mid: string, did: string, key: string) =>
+    relay.moteDb.db
+      .prepare(
+        "INSERT INTO devices (device_id, motebit_id, device_token, public_key, registered_at) VALUES (?, ?, ?, ?, ?)",
+      )
+      .run(did, mid, `tok-${did}`, key, 1);
+  const plantRegistry = (mid: string, key: string) =>
+    relay.moteDb.db
+      .prepare(
+        "INSERT INTO agent_registry (motebit_id, public_key, endpoint_url, capabilities, registered_at, last_heartbeat, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?)",
+      )
+      .run(
+        mid,
+        key,
+        "http://127.0.0.1:9999/mcp",
+        JSON.stringify(["svc"]),
+        1,
+        1,
+        Date.now() + 86_400_000,
+      );
+  const plantIdentity = (mid: string) =>
+    relay.moteDb.db
+      .prepare(
+        "INSERT INTO identities (motebit_id, owner_id, created_at, version_clock) VALUES (?, ?, ?, 0)",
+      )
+      .run(mid, `self:${mid}`, 1);
+
+  it("C1: a legacy id that registers after #875 with a key it PROVES is served that key on every route, and a worker's resolveCallerKey verifies it", async () => {
+    const kp = await generateKeypair();
+    const x = `legacy-${crypto.randomUUID()}`;
+    expect((await registerSelf(x, "x-own", kp)).status).toBe(201);
+    expect(
+      (await registerAsDevice(x, "x-own", kp, { public_key: hex(kp), capabilities: ["svc"] }))
+        .status,
+    ).toBe(200);
+    expect(rowsFor(x).holder, "serving ≠ binding: no holder is written").toBe(0);
+
+    const get = async (path: string, headers: Record<string, string> = {}) =>
+      (await relay.app.request(path, { headers })).json();
+    expect(((await get(`/api/v1/discover/${x}`)) as { public_key: string }).public_key).toBe(
+      hex(kp),
+    );
+    expect(
+      ((await get(`/api/v1/agents/${x}`, JSON_AUTH)) as { public_key: string }).public_key,
+    ).toBe(hex(kp));
+    const list = (await get(`/api/v1/agents/discover?motebit_id=${x}&include=all`)) as {
+      agents: Array<{ motebit_id: string; public_key: string }>;
+    };
+    expect(list.agents.find((a) => a.motebit_id === x)?.public_key).toBe(hex(kp));
+    expect(((await get(`/agent/${x}/capabilities`)) as { public_key: string }).public_key).toBe(
+      hex(kp),
+    );
+    expect(
+      ((await get(`/a2a/agents/${x}/agent.json`)) as { "x-motebit": { public_key: string } })[
+        "x-motebit"
+      ].public_key,
+    ).toBe(hex(kp));
+
+    // A worker resolving this caller through the relay (packages/mcp-server
+    // service.ts resolveCallerKey: bundle → discover list → agents/:id).
+    const { wireServerDeps } = await import("@motebit/mcp-server");
+    const realFetch = globalThis.fetch;
+    globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      const path = url.replace("http://relay.test", "");
+      return relay.app.request(path, init);
+    }) as typeof fetch;
+    try {
+      const worker = await generateKeypair();
+      const deps = wireServerDeps(
+        {
+          getToolRegistry: () => ({ list: () => [] }),
+          policy: { filterTools: (t: unknown) => t },
+        } as never,
+        {
+          motebitId: `worker-${crypto.randomUUID()}`,
+          publicKeyHex: hex(worker),
+          syncUrl: "http://relay.test",
+        },
+      );
+      const resolved = await deps.resolveCallerKey!(x);
+      expect(resolved?.publicKey).toBe(hex(kp));
+    } finally {
+      globalThis.fetch = realFetch;
+    }
+  });
+
+  it("C1: a registry key a relay before #875 wrote (no provenance) is still not served", async () => {
+    const v = await generateKeypair();
+    const x = `legacy-${crypto.randomUUID()}`;
+    plantRegistry(x, hex(v));
+    expect(
+      ((await (await relay.app.request(`/api/v1/discover/${x}`)).json()) as { public_key: string })
+        .public_key,
+    ).toBe("");
+  });
+
+  it("C2: a holder-less sovereign identity that has ROTATED is never served its stale genesis key from a device row", async () => {
+    const k1 = await generateKeypair();
+    const k2 = await generateKeypair();
+    const mid = await deriveSovereignMotebitId(hex(k1));
+    plantIdentity(mid);
+    plantDevice(mid, "left-behind", hex(k1));
+    relay.moteDb.db
+      .prepare(
+        `INSERT INTO relay_key_successions (motebit_id, old_public_key, new_public_key, timestamp, reason, old_key_signature, new_key_signature, recovery, guardian_signature)
+         VALUES (?, ?, ?, ?, ?, ?, ?, 0, NULL)`,
+      )
+      .run(mid, hex(k1), hex(k2), Date.now(), "rotation", "00", "00");
+    const caps = (await (await relay.app.request(`/agent/${mid}/capabilities`)).json()) as {
+      public_key: string;
+    };
+    expect(caps.public_key).not.toBe(hex(k1));
+    expect(caps.public_key).toBe("");
+  });
+
+  it("C2: a real rotation of a holder-less identity with a registry row serves the NEW key (the succession proved it)", async () => {
+    const k1 = await generateKeypair();
+    const k2 = await generateKeypair();
+    const mid = await deriveSovereignMotebitId(hex(k1));
+    plantIdentity(mid);
+    plantDevice(mid, "d1", hex(k1));
+    plantRegistry(mid, hex(k1)); // a pre-#875 row: no provenance, no holder
+    const record = await signKeySuccession(
+      k1.privateKey,
+      k2.privateKey,
+      k2.publicKey,
+      k1.publicKey,
+    );
+    const { token } = await mintAudienceToken({ mid, did: "d1", aud: "rotate-key" }, k1.privateKey);
+    const rot = await relay.app.request(`/api/v1/agents/${mid}/rotate-key`, {
+      method: "POST",
+      headers: { ...JSON_HEADERS, Authorization: `Bearer ${token}` },
+      body: JSON.stringify(record),
+    });
+    expect(rot.status).toBe(200);
+    expect(rowsFor(mid).holder).toBe(0);
+    const disc = (await (await relay.app.request(`/api/v1/discover/${mid}`)).json()) as {
+      public_key: string;
+    };
+    expect(disc.public_key).toBe(hex(k2));
+  });
+
+  it("C3: precedence — holder over proven registry over sovereign commitment", async () => {
+    const s = await sovereign(); // the id commits to s.kp
+    const reg = await generateKeypair();
+    const holder = await generateKeypair();
+    plantIdentity(s.mid);
+    plantDevice(s.mid, "s-dev", hex(s.kp));
+    plantRegistry(s.mid, hex(reg));
+    const served = async () =>
+      (
+        (await (await relay.app.request(`/agent/${s.mid}/capabilities`)).json()) as {
+          public_key: string;
+        }
+      ).public_key;
+
+    // Sovereign commitment only (the registry row has no provenance).
+    expect(await served()).toBe(hex(s.kp));
+    // A proven registry key outranks the sovereign commitment.
+    recordRegistryKeyEvidence(relay.moteDb.db, {
+      motebitId: s.mid,
+      publicKey: hex(reg),
+      evidence: "key_proof",
+      now: 1,
+    });
+    expect(await served()).toBe(hex(reg));
+    // The holder outranks both.
+    recordIdentityKey(relay.moteDb.db, {
+      motebitId: s.mid,
+      publicKey: hex(holder),
+      source: "succession",
+      now: 1,
+    });
+    expect(await served()).toBe(hex(holder));
   });
 });

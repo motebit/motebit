@@ -2070,8 +2070,8 @@ describe("Sync Relay — agent discovery registry", () => {
     };
     expect(discoverBody.agents).toHaveLength(1);
     expect(discoverBody.agents[0]!.motebit_id).toBe(motebitId);
-    // A legacy id with no proven holder: discover SERVES no key (#875 review
-    // round 3 — holder, else a key the id commits to; never the bare registry).
+    // A keyless registration introduces no key, and a legacy id has no holder:
+    // discover SERVES none (#875 review rounds 3–4; never the bare registry).
     expect(discoverBody.agents[0]!.public_key).toBe("");
     expect(discoverBody.agents[0]!.endpoint_url).toBe("https://example.com/mcp");
     expect(discoverBody.agents[0]!.capabilities).toEqual(["query", "remember"]);
