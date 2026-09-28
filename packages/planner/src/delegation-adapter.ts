@@ -145,11 +145,7 @@ export class RelayDelegationAdapter implements StepDelegationAdapter {
 
     const headers = await this.buildHeaders("task:submit");
     headers["Idempotency-Key"] = idempotencyKey;
-    const resp = await fetch(`${syncUrl}/agent/${motebitId}/task`, {
-      method: "POST",
-      headers,
-      body: JSON.stringify(body),
-    });
+    const resp = await submitUnderKey(`${syncUrl}/agent/${motebitId}/task`, headers, body);
 
     if (!resp.ok) {
       const text = await resp.text();
@@ -167,10 +163,13 @@ export class RelayDelegationAdapter implements StepDelegationAdapter {
       throw new Error(`Relay task submission failed (${resp.status}): ${text}`);
     }
 
-    const taskResp = (await resp.json()) as {
-      task_id: string;
-      routing_choice?: DelegatedStepResult["routing_choice"];
-    };
+    let taskResp: { task_id: string; routing_choice?: DelegatedStepResult["routing_choice"] };
+    try {
+      taskResp = (await resp.json()) as typeof taskResp;
+    } catch (err: unknown) {
+      // Admitted (2xx), but the answer never arrived whole: same key again.
+      throw deliveryUncertain("Relay task submission unconfirmed: response body lost", err);
+    }
     const { task_id } = taskResp;
     const routingChoice = taskResp.routing_choice;
 
@@ -321,3 +320,47 @@ interface DelegationError extends Error {
 
 /** While the relay reports a timed-out task as still running, how often to ask again. */
 const RESULT_POLL_INTERVAL_MS = 15_000;
+
+/** A 409 on a submission: how many times to back off and resubmit under the same key. */
+const SUBMIT_CONFLICT_RETRIES = 4;
+/** First backoff after a 409; doubles each time (1s, 2s, 4s, 8s). */
+const SUBMIT_CONFLICT_BACKOFF_MS = 1_000;
+
+function deliveryUncertain(message: string, cause?: unknown): DelegationError {
+  const err: DelegationError = new Error(message, cause !== undefined ? { cause } : undefined);
+  err.deliveryUncertain = true;
+  return err;
+}
+
+/**
+ * POST a task submission under its Idempotency-Key. Two answers are not a
+ * relay rejection, and neither means "not admitted" (#816):
+ * - the fetch throws — the request may have reached the relay and the
+ *   response been lost;
+ * - 409 — the relay is still processing an earlier request under the same
+ *   key.
+ * A 409 is retried here after a short backoff, under the same key: once the
+ * earlier request finishes, the relay replays its 201 with the same task_id.
+ * A thrown fetch, or a 409 that outlasts the backoff, is thrown as
+ * delivery-uncertain, so the caller's retry keeps the key too. Every other
+ * response is returned for the caller to judge.
+ */
+async function submitUnderKey(
+  url: string,
+  headers: Record<string, string>,
+  body: Record<string, unknown>,
+): Promise<Response> {
+  for (let conflict = 0; ; conflict++) {
+    let resp: Response;
+    try {
+      resp = await fetch(url, { method: "POST", headers, body: JSON.stringify(body) });
+    } catch (err: unknown) {
+      throw deliveryUncertain("Relay task submission unconfirmed: no response", err);
+    }
+    if (resp.status !== 409) return resp;
+    if (conflict >= SUBMIT_CONFLICT_RETRIES) {
+      throw deliveryUncertain("Relay task submission unconfirmed: still being processed (409)");
+    }
+    await new Promise<void>((r) => setTimeout(r, SUBMIT_CONFLICT_BACKOFF_MS * 2 ** conflict));
+  }
+}

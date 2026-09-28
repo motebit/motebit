@@ -231,62 +231,98 @@ describe("RelayDelegationAdapter: a lost result frame is recovered, not resubmit
 });
 
 /**
- * The relay answers a same-key resubmission with 409 ("a request with this
- * idempotency key is already being processed") while the original is still
- * in its handler. Documented, not changed (#816 review): a 409 is treated as
- * a non-retryable submission failure today.
+ * Two submission answers that are NOT "not admitted" (#816): the fetch
+ * throws (the request may have reached the relay, the response was lost),
+ * or 409 (the relay is still processing an earlier request under the same
+ * key). Both keep the Idempotency-Key, so the relay never admits a second
+ * task, and neither ends the step while the admitted task may complete.
  */
-describe("RelayDelegationAdapter: a 409 on a same-key retry", () => {
+describe("RelayDelegationAdapter: an unconfirmed submission keeps its key", () => {
   let relay: ReturnType<typeof fakeRelay>;
-  let posts = 0;
   beforeEach(() => {
     vi.useFakeTimers();
     relay = fakeRelay();
-    posts = 0;
-    // Attempt 1 is admitted as task-1; its result frame is lost and the relay
-    // cannot answer the query. The same-key retry meets a 409.
-    relay.setTaskState(() => json({}, 503));
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (url: string, init?: RequestInit) => {
-        if (init?.method === "POST" && ++posts > 1) {
-          relay.keys.push((init.headers as Record<string, string>)["Idempotency-Key"]!);
-          return new Response("already being processed", { status: 409 });
-        }
-        return relay.fetchMock(url, init);
-      }),
-    );
   });
   afterEach(() => {
     vi.useRealTimers();
     vi.unstubAllGlobals();
   });
 
-  it("does not admit a second task", async () => {
-    const { adapter } = makeAdapter();
+  it("the relay admits the POST but the response is lost: the retry reuses the key, one task, resolves", async () => {
+    let posts = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        const resp = await relay.fetchMock(url, init);
+        if (init?.method === "POST" && ++posts === 1) throw new TypeError("fetch failed");
+        return resp;
+      }),
+    );
+    const { adapter, push } = makeAdapter();
     const p = adapter.delegateStep(step, TIMEOUT);
-    p.catch(() => {});
-    await vi.advanceTimersByTimeAsync(TIMEOUT + 1);
-
-    await expect(p).rejects.toThrow(/Relay task submission failed \(409\)/);
+    await vi.advanceTimersByTimeAsync(10);
     expect(relay.keys).toHaveLength(2);
     expect(relay.keys[1]).toBe(relay.keys[0]);
-    expect(relay.admittedCount()).toBe(1);
-  });
-
-  // KNOWN GAP (reported, not changed): the 409 ends the step as a hard
-  // failure even though task-1 is still running and later completes. Marked
-  // `fails`: it turns red — as an unexpected pass — once the 409 path learns
-  // to wait on the task it already admitted.
-  it.fails("resolves when the relay later reports the admitted task completed", async () => {
-    const { adapter } = makeAdapter();
-    const p = adapter.delegateStep(step, TIMEOUT);
-    p.catch(() => {});
-    await vi.advanceTimersByTimeAsync(TIMEOUT + 1);
-    relay.setTaskState((id) => json({ task: { status: "completed" }, receipt: receipt(id) }));
-    await vi.advanceTimersByTimeAsync(TIMEOUT);
+    push({ type: "task_result", task_id: "task-1", receipt: receipt("task-1") });
 
     const r = await p;
     expect(r.task_id).toBe("task-1");
+    expect(relay.admittedCount()).toBe(1);
+  });
+
+  it("a 409 on the same-key retry backs off and resubmits: the relay replays the task, one task, resolves", async () => {
+    // Attempt 1 is admitted as task-1; its result frame is lost and the
+    // relay cannot answer the query. The same-key retry meets a 409 once
+    // (the key still processing); the next same-key POST replays task-1.
+    relay.setTaskState(() => json({}, 503));
+    let posts = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        if (init?.method === "POST" && ++posts === 2) {
+          relay.keys.push((init.headers as Record<string, string>)["Idempotency-Key"]!);
+          return new Response("already being processed", { status: 409 });
+        }
+        return relay.fetchMock(url, init);
+      }),
+    );
+    const { adapter } = makeAdapter();
+    const p = adapter.delegateStep(step, TIMEOUT);
+    p.catch(() => {});
+    await vi.advanceTimersByTimeAsync(TIMEOUT + 1); // attempt 1 times out; retry meets 409
+    await vi.advanceTimersByTimeAsync(2_000); // backoff; the resubmit replays task-1
+    expect(new Set(relay.keys).size).toBe(1);
+    expect(relay.admittedCount()).toBe(1);
+
+    // The admitted task completes; the relay now reports it.
+    relay.setTaskState((id) => json({ task: { status: "completed" }, receipt: receipt(id) }));
+    await vi.advanceTimersByTimeAsync(TIMEOUT + 1);
+
+    const r = await p;
+    expect(r.task_id).toBe("task-1");
+    expect(relay.admittedCount()).toBe(1);
+  });
+
+  it("a 409 that outlasts the backoff is still not a hard submission failure", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        if (init?.method === "POST") {
+          relay.keys.push((init.headers as Record<string, string>)["Idempotency-Key"]!);
+          return new Response("already being processed", { status: 409 });
+        }
+        return relay.fetchMock(url, init);
+      }),
+    );
+    const { adapter } = makeAdapter();
+    const p = adapter.delegateStep(step, TIMEOUT);
+    p.catch(() => {});
+    await vi.advanceTimersByTimeAsync(10 * 60_000);
+
+    await expect(p).rejects.toThrow(/still being processed \(409\)/);
+    await expect(p).rejects.not.toThrow(/Relay task submission failed/);
+    // Bounded: (1 + SUBMIT_CONFLICT_RETRIES) POSTs per attempt, 2 attempts.
+    expect(relay.keys).toHaveLength(10);
+    expect(new Set(relay.keys).size).toBe(1);
   });
 });
