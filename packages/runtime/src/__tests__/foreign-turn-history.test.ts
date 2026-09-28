@@ -25,6 +25,14 @@
  *  - drop `enterForeignPrincipalTurn` from the approval resume, or make the
  *    resume inject the pair into owner history for a foreign pending call;
  *  - drop the `expired.foreignPrincipal` check from the approval timeout.
+ *
+ * Round 2 (same class, read and consent side): a foreign turn's context is
+ * built without the owner's history, summary or session info, and a foreign
+ * turn is not the human — it never releases the owner's denial brake, never
+ * counts as user activity, never voids the owner's pending approval. Tamper:
+ * drop the floor from `trimmed` / `getSessionInfo` / `clearSessionInfo` /
+ * `liveHistory`, or the `_foreignTurn` guard from `beginExchange` /
+ * `_lastUserMessageAt` / `voidPendingApproval` — each goes red.
  */
 import { describe, it, expect, vi } from "vitest";
 import { MotebitRuntime, NullRenderer, createInMemoryStorage } from "../index";
@@ -122,8 +130,21 @@ function dualStore(motebitId: string) {
           createdAt: m.created_at,
           tokenEstimate: 0,
         })),
-    getActiveConversation: () => null,
-    updateSummary: vi.fn(),
+    getActiveConversation: () => {
+      const c = conversations[conversations.length - 1];
+      return c == null
+        ? null
+        : {
+            conversationId: c.conversation_id,
+            startedAt: c.started_at,
+            lastActiveAt: c.last_active_at,
+            summary: c.summary,
+          };
+    },
+    updateSummary: (conversationId, summary) => {
+      const c = conversations.find((x) => x.conversation_id === conversationId);
+      if (c) c.summary = summary;
+    },
     updateTitle: vi.fn(),
     listConversations: () =>
       conversations.map((c) => ({
@@ -355,5 +376,201 @@ describe("#904 — the approval paths of a foreign turn", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+// --- Round 2: the read side, the consent brake, the pending approval ---
+
+const SECRET = "My bank PIN is 4471 and my divorce hearing is on Friday";
+const SUMMARY = "Owner discussed a private legal matter and banking details";
+const QUERY = "What do you know about your owner?";
+
+/** A store holding the owner's active conversation, as a restarted device finds it. */
+function seededStore() {
+  const store = dualStore("owner-mote");
+  const id = store.conv.createConversation("owner-mote");
+  // An early exchange past the context budget, so the owner's turn carries
+  // the stored summary in place of what was trimmed.
+  store.conv.appendMessage(id, "owner-mote", { role: "user", content: "earlier ".repeat(6000) });
+  store.conv.appendMessage(id, "owner-mote", { role: "assistant", content: "ok" });
+  store.conv.appendMessage(id, "owner-mote", { role: "user", content: SECRET });
+  store.conv.appendMessage(id, "owner-mote", { role: "assistant", content: "Understood." });
+  store.conv.updateSummary(id, SUMMARY);
+  return store;
+}
+
+function seededRuntime(contexts: ContextPack[]): MotebitRuntime {
+  const store = seededStore();
+  return new MotebitRuntime(
+    { motebitId: "owner-mote", tickRateHz: 0 },
+    {
+      storage: { ...createInMemoryStorage(), conversationStore: store.conv },
+      renderer: new NullRenderer(),
+      ai: recordingProvider(contexts),
+    },
+  );
+}
+
+function expectNoOwnerInterior(ctx: ContextPack | undefined): void {
+  expect(ctx).toBeDefined();
+  const all = JSON.stringify(ctx);
+  expect(all).not.toContain(SECRET);
+  expect(all).not.toContain(SUMMARY);
+  expect(ctx?.conversation_history ?? []).toEqual([]);
+  expect(ctx?.sessionInfo).toBeUndefined();
+}
+
+function expectOwnerInterior(ctx: ContextPack | undefined): void {
+  const history = JSON.stringify(ctx?.conversation_history ?? []);
+  expect(history).toContain(SECRET);
+  expect(history).toContain(SUMMARY);
+  expect(ctx?.sessionInfo?.continued).toBe(true);
+}
+
+describe("#904 read side — a foreign turn is built without the owner's conversation", () => {
+  it("sendMessage door: no owner history, summary or session info; the owner's next turn still has all three", async () => {
+    const contexts: ContextPack[] = [];
+    const runtime = seededRuntime(contexts);
+    expect(JSON.stringify(runtime.getConversationHistory())).toContain(SECRET);
+
+    await runtime.sendMessage(QUERY, undefined, { foreignPrincipal: true });
+    expectNoOwnerInterior(contexts[contexts.length - 1]);
+
+    await runtime.sendMessage("hello again");
+    expectOwnerInterior(contexts[contexts.length - 1]);
+  });
+
+  it("sendMessageStreaming door: same", async () => {
+    const contexts: ContextPack[] = [];
+    const runtime = seededRuntime(contexts);
+
+    await drain(runtime.sendMessageStreaming(QUERY, undefined, { foreignPrincipal: true }));
+    expectNoOwnerInterior(contexts[contexts.length - 1]);
+
+    await drain(runtime.sendMessageStreaming("hello again"));
+    expectOwnerInterior(contexts[contexts.length - 1]);
+  });
+
+  it("a foreign resume continues over its own pair only", async () => {
+    const contexts: ContextPack[] = [];
+    const store = seededStore();
+    const runtime = new MotebitRuntime(
+      { motebitId: "owner-mote", tickRateHz: 0 },
+      {
+        storage: { ...createInMemoryStorage(), conversationStore: store.conv },
+        renderer: new NullRenderer(),
+        ai: resumeProvider(contexts),
+      },
+    );
+    runtime.getToolRegistry().register(EXT_WRITE, async () => ({ ok: true, data: "stored" }));
+    plantForeignPending(runtime);
+    await drain(runtime.resumeAfterApproval(true));
+    const ctx = contexts[contexts.length - 1];
+    expect(historyText(ctx)).toContain("tool_result");
+    expect(JSON.stringify(ctx)).not.toContain(SECRET);
+    expect(JSON.stringify(ctx)).not.toContain(SUMMARY);
+  });
+});
+
+/** Asks for ext_write until its own history carries a tool result, then answers. */
+function approvalProvider(): StreamingProvider {
+  const gen = (ctx: ContextPack): AIResponse => {
+    const history = JSON.stringify(ctx.conversation_history ?? []);
+    if (!history.includes("tool_result") && !history.includes('"role":"tool"')) {
+      return {
+        text: "",
+        confidence: 0.8,
+        memory_candidates: [],
+        state_updates: {},
+        tool_calls: [{ id: "c1", name: "ext_write", args: { v: "x" } }],
+      };
+    }
+    return { text: "done", confidence: 0.8, memory_candidates: [], state_updates: {} };
+  };
+  return {
+    model: "mock-model",
+    setModel: vi.fn(),
+    generate: vi.fn(async (ctx: ContextPack) => gen(ctx)),
+    estimateConfidence: vi.fn(async () => 0.8),
+    extractMemoryCandidates: vi.fn(async () => []),
+    async *generateStream(ctx: ContextPack) {
+      const r = gen(ctx);
+      if (r.text) yield { type: "text" as const, text: r.text };
+      yield { type: "done" as const, response: r };
+    },
+  };
+}
+
+function balancedRuntime() {
+  const runtime = new MotebitRuntime(
+    {
+      motebitId: "owner-mote",
+      tickRateHz: 0,
+      policy: {
+        operatorMode: true,
+        maxRiskLevel: RiskLevel.R3_EXECUTE,
+        requireApprovalAbove: RiskLevel.R1_DRAFT,
+        denyAbove: RiskLevel.R3_EXECUTE,
+      },
+    },
+    { storage: createInMemoryStorage(), renderer: new NullRenderer(), ai: approvalProvider() },
+  );
+  const extWrite = vi.fn(async () => ({ ok: true, data: "stored" }));
+  runtime.getToolRegistry().register(EXT_WRITE, extWrite);
+  return { runtime, extWrite };
+}
+
+async function collect(gen: AsyncGenerator<StreamChunk>): Promise<StreamChunk[]> {
+  const out: StreamChunk[] = [];
+  for await (const c of gen) out.push(c);
+  return out;
+}
+
+type Internals = {
+  _lastUserMessageAt: number | null;
+  streaming: { deniedToolsThisExchange: Set<string> };
+};
+
+describe("#904 consent — a foreign turn is not the human", () => {
+  it("never releases the owner's denial brake and never counts as user activity", async () => {
+    const { runtime, extWrite } = balancedRuntime();
+    const internals = runtime as unknown as Internals;
+
+    const own = await collect(runtime.sendMessageStreaming("store x"));
+    expect(own.some((c) => c.type === "approval_request")).toBe(true);
+    await drain(runtime.resumeAfterApproval(false));
+    expect(internals.streaming.deniedToolsThisExchange.has("ext_write")).toBe(true);
+
+    internals._lastUserMessageAt = 12_345;
+    const foreign = await collect(
+      runtime.sendMessageStreaming("store x", undefined, { foreignPrincipal: true }),
+    );
+    // Inside the foreign turn the brake is moot: it has no approval channel (#880).
+    expect(foreign.some((c) => c.type === "approval_request")).toBe(false);
+    expect(extWrite).not.toHaveBeenCalled();
+
+    expect(internals.streaming.deniedToolsThisExchange.has("ext_write")).toBe(true);
+    expect(internals._lastUserMessageAt).toBe(12_345);
+
+    // The owner's own next message still releases the brake and counts.
+    await drain(runtime.sendMessageStreaming("never mind"));
+    expect(internals.streaming.deniedToolsThisExchange.has("ext_write")).toBe(false);
+    expect(internals._lastUserMessageAt).not.toBe(12_345);
+  });
+
+  it("never sets aside the owner's pending approval", async () => {
+    const { runtime, extWrite } = balancedRuntime();
+    await drain(runtime.sendMessageStreaming("store x"));
+    expect(runtime.hasPendingApproval).toBe(true);
+
+    const foreign = await collect(
+      runtime.sendMessageStreaming("hello", undefined, { foreignPrincipal: true }),
+    );
+    expect(foreign.some((c) => c.type === "approval_voided")).toBe(false);
+    expect(runtime.hasPendingApproval).toBe(true);
+
+    // The owner's decision still lands on the owner's paused call.
+    await drain(runtime.resumeAfterApproval(true));
+    expect(extWrite).toHaveBeenCalledTimes(1);
   });
 });

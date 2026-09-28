@@ -2844,19 +2844,29 @@ export class MotebitRuntime {
     // scheduler's quiet-window check (idle-tick.ts). Only set on
     // user-initiated turns — not on `generateActivation`, which is
     // system-triggered and should not reset the quiet window.
-    this._lastUserMessageAt = Date.now();
+    // A foreign principal's turn is not user activity (#904): it does not
+    // reset the idle-tick quiet window nor count as new activity for
+    // reflection.
+    if (!this._foreignTurn) this._lastUserMessageAt = Date.now();
     this._currentTypedIntent = options?.userActionAttestation ?? null;
     // A genuine user message releases the exchange-scoped denial brake
     // (#470): the human can re-open a line they closed — and only the human.
     // This sits ONLY on the user-initiated path; proactive/system turns
     // (generateActivation, consolidation) must not launder a "no".
-    this.streaming.beginExchange();
+    //
+    // A foreign principal's turn is NOT the human (#904): it never releases
+    // the owner's brake, and never sets aside the owner's pending approval
+    // (#462 — only a user-initiated turn may void it; the non-streaming door
+    // never voided either). Inside the foreign turn the brake is moot: its
+    // gate view has no approval channel (#880), so a call that would need
+    // approval is refused outright rather than re-prompting anyone.
+    if (!this._foreignTurn) this.streaming.beginExchange();
     // A new user turn sets aside any pending approval — but never silently
     // (#462): the void renders on THIS stream via the typed chunk below, and
     // the owning surface hears it through the onApprovalVoided callback. A
     // void is not a refusal — nothing executes, nothing is recorded as
     // denied, and re-proposal re-prompts the human.
-    const voidedApproval = this.streaming.voidPendingApproval();
+    const voidedApproval = this._foreignTurn ? null : this.streaming.voidPendingApproval();
     this.state.pushUpdate({ processing: 0.9, attention: 0.8 });
     this.behavior.setSpeaking(true);
 

@@ -147,6 +147,12 @@ export interface ConversationDeps {
    * conversation reaches it through this class, so one predicate here
    * covers every door, including one added later.
    *
+   * The READ side is the same floor: while it is true, `trimmed()` and
+   * `liveHistory` return `[]` and `getSessionInfo()` returns null, so a
+   * foreign turn's context carries none of the owner's conversation,
+   * summary or session facts, and `clearSessionInfo()` leaves the owner's
+   * marker alone.
+   *
    * The foreign exchange is NOT kept anywhere as conversation. What a
    * foreign turn did is recorded where it belongs — the signed
    * `ExecutionReceipt` (`motebit_task`), the tool audit, and `peer_agent`
@@ -170,6 +176,11 @@ export class ConversationManager {
 
   constructor(private readonly deps: ConversationDeps) {}
 
+  /** The #904 floor: is the in-flight turn another principal's? See `ConversationDeps.isForeignPrincipalTurn`. */
+  private isForeignTurn(): boolean {
+    return this.deps.isForeignPrincipalTurn?.() === true;
+  }
+
   /**
    * Compute the sensitivity tier to stamp on a newly-persisted
    * message. Floors the operator-manifest default at the runtime's
@@ -179,11 +190,6 @@ export class ConversationManager {
    * conversation-write egress shape (parallel to memory-write floor
    * in `ai-core/loop.ts`).
    */
-  /** The #904 floor: is the in-flight turn another principal's? See `ConversationDeps.isForeignPrincipalTurn`. */
-  private isForeignTurn(): boolean {
-    return this.deps.isForeignPrincipalTurn?.() === true;
-  }
-
   private resolveMessageSensitivity(): SensitivityLevel {
     const baseline = this.deps.defaultSensitivity ?? SensitivityLevel.Personal;
     const effective = this.deps.getEffectiveSensitivity?.() ?? SensitivityLevel.None;
@@ -222,10 +228,15 @@ export class ConversationManager {
   }
 
   getSessionInfo(): { continued: boolean; lastActiveAt: number } | null {
+    // #904 read side: the owner's session facts are the owner's interior.
+    if (this.isForeignTurn()) return null;
     return this.sessionInfo;
   }
 
   clearSessionInfo(): void {
+    // #904: a foreign turn never consumes the owner's "first message after
+    // resume" marker — it was never shown that turn.
+    if (this.isForeignTurn()) return;
     this.sessionInfo = null;
   }
 
@@ -301,6 +312,11 @@ export class ConversationManager {
    * into BYOK without this filter.
    */
   trimmed(): ConversationMessage[] {
+    // #904 read side: a foreign principal's turn is built WITHOUT the owner's
+    // conversation — no history, no stored summary (the same isolation
+    // `handleAgentTask` gets from `clearForTask`). The owner's interior is
+    // never served to another principal (#880).
+    if (this.isForeignTurn()) return [];
     const summary = this.getStoredSummary();
     const effective = this.deps.getEffectiveSensitivity?.() ?? SensitivityLevel.None;
     const filtered = this.history.filter(
@@ -629,6 +645,8 @@ export class ConversationManager {
 
   /** Return the raw live history reference for continuation turns. */
   get liveHistory(): ConversationMessage[] {
+    // #904 read side: a foreign resume continues over its own pair only.
+    if (this.isForeignTurn()) return [];
     return this.history;
   }
 
