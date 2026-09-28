@@ -134,15 +134,16 @@ The endpoint MUST NOT require an `Authorization` header — the request's signat
 
 The relay's response semantics:
 
-| Condition                                                                                               | Response                                                                                                   |
-| ------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
-| Verification per §4.2 passes; `motebit_id` unknown                                                      | 201; create identity (with `owner_id` from request, defaulting to `"self:<motebit_id>"`); register device. |
-| Verification passes; identity exists; device exists; `public_key` matches                               | 200; refresh `registered_at`. Idempotent re-registration.                                                  |
-| Verification passes; identity exists; device exists; `public_key` differs                               | 409; key-rotation MUST go through `spec/auth-token-v1.md` §9 (`/api/v1/agents/:motebit_id/rotate-key`).    |
-| Verification passes; identity exists; device is new; `public_key` is one the identity already holds     | 200; register the device. A second machine after key transfer, or a restore from seed.                     |
-| Verification passes; identity exists; device is new; `public_key` is NOT one the identity already holds | 409 `IDENTITY_KEY_CONFLICT`; nothing is persisted. See §6.3.                                               |
-| Verification passes; `device_id` is registered to a DIFFERENT `motebit_id`                              | 409 `DEVICE_ID_TAKEN`; nothing is persisted. See §6.3.                                                     |
-| Verification fails (any §4.2 reason)                                                                    | 400 with `{ "code": "DEVICE_REGISTRATION_REJECTED", "reason": "<code>" }`.                                 |
+| Condition                                                                                                       | Response                                                                                                   |
+| --------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- |
+| Verification per §4.2 passes; `motebit_id` unknown                                                              | 201; create identity (with `owner_id` from request, defaulting to `"self:<motebit_id>"`); register device. |
+| Verification passes; identity exists; device exists; `public_key` matches                                       | 200; refresh `registered_at`. Idempotent re-registration.                                                  |
+| Verification passes; identity exists; device exists; `public_key` differs                                       | 409; key-rotation MUST go through `spec/auth-token-v1.md` §9 (`/api/v1/agents/:motebit_id/rotate-key`).    |
+| Verification passes; identity exists; device is new; `public_key` is one the identity already holds             | 200; register the device. A second machine after key transfer, or a restore from seed.                     |
+| Verification passes; identity exists; device is new; `public_key` is NOT one the identity already holds         | 409 `IDENTITY_KEY_CONFLICT`; nothing is persisted. See §6.3.                                               |
+| Verification passes; `device_id` is registered to a DIFFERENT `motebit_id`                                      | 409 `DEVICE_ID_TAKEN`; nothing is persisted. See §6.3.                                                     |
+| Verification passes; identity holds no key; `motebit_id` is a UUIDv8 that is NOT the commitment to `public_key` | 409 `SOVEREIGN_ID_KEY_MISMATCH`; nothing is persisted. See §6.2.                                           |
+| Verification fails (any §4.2 reason)                                                                            | 400 with `{ "code": "DEVICE_REGISTRATION_REJECTED", "reason": "<code>" }`.                                 |
 
 The relay MUST NOT return `200` (or `201`) without persisting both the identity (if newly created) and the device. The response IS the operator's commitment that the binding is recorded.
 
@@ -172,6 +173,13 @@ The 5-minute timestamp window (§4.2 step 2) is the only replay defense at the w
 ### 6.2 — Sybil cost
 
 Self-registration is uncapped at the wire level — anyone can register any `motebit_id` they have no prior claim to. The design assumption is that `motebit_id`s are opaque UUIDv7s that no one is squatting on, and that _trust_ — accumulated via signed receipts, credentials, and onchain anchors — is what makes a registration economically meaningful. A Sybil flood produces zero-trust registrations the relay routes nothing to.
+
+That assumption does not hold for a **sovereign** `motebit_id` — a UUIDv8 that is the commitment to its genesis key (`deriveSovereignMotebitId`, `spec/identity-v1.md`). Its id is public before its owner registers anywhere, and a self-signature proves only possession of the key it carries, so a stranger could take the owner's id under the stranger's own key. For an identity that holds no key, the relay MUST therefore refuse (409 `SOVEREIGN_ID_KEY_MISMATCH`, persisting nothing) a `motebit_id` shaped as a UUIDv8, in any letter case, unless it is exactly `deriveSovereignMotebitId(public_key)`. **Stated cost: a rotated sovereign identity cannot first-register.** Suppose a sovereign identity has rotated away from its genesis key and now presents its current key to a relay that has never seen it. The relay refuses it at every registration door (409 `SOVEREIGN_ID_KEY_MISMATCH`): the id commits to the genesis key, and no registration body carries the succession chain that would link the two. There are two ways in:
+
+- **Migration** (`spec/migration-v1.md`). This needs a source relay that holds the identity and issues its `MigrationToken` and `DepartureAttestation`.
+- **The genesis key.** If the owner still holds the genesis private key, it can register with that key and then rotate forward (`spec/auth-token-v1.md` §9).
+
+An identity that has neither has no path to a new relay today. That is a known gap. The reference relay applies the same possession and sovereign-id rules to its other registration doors (`POST /api/v1/agents/bootstrap`, which takes exactly this request body, and `POST /api/v1/agents/register`, `spec/discovery-v1.md` §6.5).
 
 Operators concerned about registration spam SHOULD apply IP-based rate limiting (the reference relay uses `authLimiter`'s 30/min tier) and MAY add proof-of-work or operator approval for higher-trust onboarding paths. Both are policy layered on top of the protocol; the protocol itself is permissive by design.
 

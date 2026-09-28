@@ -27,7 +27,7 @@ import {
   signHostRetirement,
 } from "@motebit/crypto";
 import type { KeyPair } from "@motebit/crypto";
-import { AUTH_HEADER, createTestRelay } from "./test-helpers.js";
+import { AUTH_HEADER, createTestRelay, keyProof } from "./test-helpers.js";
 import { MAX_ROSTER_ENTRY_BYTES } from "../host-roster-store.js";
 import { MAX_DEVICE_ID_LENGTH, MAX_MOTEBIT_ID_LENGTH } from "../id-bounds.js";
 
@@ -118,12 +118,14 @@ describe("#814 the doors", () => {
       body: JSON.stringify(body),
     });
 
-  const bootstrap = (motebitId: string, deviceId: string, kp: KeyPair) =>
-    post("/api/v1/agents/bootstrap", {
-      motebit_id: motebitId,
-      device_id: deviceId,
-      public_key: bytesToHex(kp.publicKey),
-    });
+  const bootstrap = async (motebitId: string, deviceId: string, kp: KeyPair) =>
+    post(
+      "/api/v1/agents/bootstrap",
+      await keyProof(
+        { motebit_id: motebitId, device_id: deviceId, public_key: bytesToHex(kp.publicKey) },
+        kp.privateKey,
+      ),
+    );
 
   /** An identity + device row written directly — one an earlier relay admitted. */
   function seedHeld(motebitId: string, deviceId: string, kp: KeyPair) {

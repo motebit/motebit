@@ -14,6 +14,7 @@ import {
   jsonAuthWithIdempotency,
   createTestRelay,
   seedBalance,
+  signedBootstrapBody,
 } from "./test-helpers.js";
 import { readIdentityBindings } from "../identity-transparency.js";
 
@@ -2030,7 +2031,7 @@ describe("Sync Relay — agent discovery registry", () => {
   });
 
   it("register → discover finds the agent", async () => {
-    const { motebitId, token, pubKeyHex } = await setupIdentityAndToken();
+    const { motebitId, token } = await setupIdentityAndToken();
 
     // Register
     const regRes = await relay.app.request("/api/v1/agents/register", {
@@ -2069,7 +2070,9 @@ describe("Sync Relay — agent discovery registry", () => {
     };
     expect(discoverBody.agents).toHaveLength(1);
     expect(discoverBody.agents[0]!.motebit_id).toBe(motebitId);
-    expect(discoverBody.agents[0]!.public_key).toBe(pubKeyHex);
+    // A keyless registration introduces no key, and a legacy id has no holder:
+    // discover SERVES none (#875 review rounds 3–4; never the bare registry).
+    expect(discoverBody.agents[0]!.public_key).toBe("");
     expect(discoverBody.agents[0]!.endpoint_url).toBe("https://example.com/mcp");
     expect(discoverBody.agents[0]!.capabilities).toEqual(["query", "remember"]);
     expect(discoverBody.agents[0]!.metadata).toEqual({
@@ -2122,7 +2125,12 @@ describe("Sync Relay — agent discovery registry", () => {
     await relay.app.request("/api/v1/agents/register", {
       method: "POST",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-      body: JSON.stringify({ endpoint_url: "https://example.com/mcp", capabilities: ["query"] }),
+      // Keyed by the bearer's own key: a keyless registration introduces no key (#875).
+      body: JSON.stringify({
+        endpoint_url: "https://example.com/mcp",
+        capabilities: ["query"],
+        public_key: pubKeyHex,
+      }),
     });
 
     // Deregister
@@ -2688,7 +2696,10 @@ describe("Sync Relay — bootstrap endpoint", () => {
     const res = await relay.app.request("/api/v1/agents/bootstrap", {
       method: "POST",
       headers: { "Content-Type": "application/json" }, // no Authorization header
-      body: JSON.stringify({ motebit_id: motebitId, public_key: pubKeyHex }),
+      body: await signedBootstrapBody(
+        { device_id: "bootstrap-device", motebit_id: motebitId, public_key: pubKeyHex },
+        keypair.privateKey,
+      ),
     });
 
     expect(res.status).toBe(201);
@@ -2711,7 +2722,10 @@ describe("Sync Relay — bootstrap endpoint", () => {
     const res1 = await relay.app.request("/api/v1/agents/bootstrap", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ motebit_id: motebitId, public_key: pubKeyHex }),
+      body: await signedBootstrapBody(
+        { device_id: "bootstrap-device", motebit_id: motebitId, public_key: pubKeyHex },
+        keypair.privateKey,
+      ),
     });
     expect(res1.status).toBe(201);
 
@@ -2719,7 +2733,10 @@ describe("Sync Relay — bootstrap endpoint", () => {
     const res2 = await relay.app.request("/api/v1/agents/bootstrap", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ motebit_id: motebitId, public_key: pubKeyHex }),
+      body: await signedBootstrapBody(
+        { device_id: "bootstrap-device", motebit_id: motebitId, public_key: pubKeyHex },
+        keypair.privateKey,
+      ),
     });
     expect(res2.status).toBe(200);
     const body2 = (await res2.json()) as { motebit_id: string; registered: boolean };
@@ -2736,7 +2753,14 @@ describe("Sync Relay — bootstrap endpoint", () => {
     const res1 = await relay.app.request("/api/v1/agents/bootstrap", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ motebit_id: motebitId, public_key: bytesToHex(keypairA.publicKey) }),
+      body: await signedBootstrapBody(
+        {
+          device_id: "bootstrap-device",
+          motebit_id: motebitId,
+          public_key: bytesToHex(keypairA.publicKey),
+        },
+        keypairA.privateKey,
+      ),
     });
     expect(res1.status).toBe(201);
 
@@ -2744,7 +2768,14 @@ describe("Sync Relay — bootstrap endpoint", () => {
     const res2 = await relay.app.request("/api/v1/agents/bootstrap", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ motebit_id: motebitId, public_key: bytesToHex(keypairB.publicKey) }),
+      body: await signedBootstrapBody(
+        {
+          device_id: "bootstrap-device",
+          motebit_id: motebitId,
+          public_key: bytesToHex(keypairB.publicKey),
+        },
+        keypairB.privateKey,
+      ),
     });
     expect(res2.status).toBe(409);
     const body2 = (await res2.json()) as { error: string };
@@ -2778,7 +2809,14 @@ describe("Sync Relay — bootstrap endpoint", () => {
     const bootstrapRes = await relay.app.request("/api/v1/agents/bootstrap", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ motebit_id: motebitIdA, public_key: bytesToHex(keypairA.publicKey) }),
+      body: await signedBootstrapBody(
+        {
+          device_id: "bootstrap-device",
+          motebit_id: motebitIdA,
+          public_key: bytesToHex(keypairA.publicKey),
+        },
+        keypairA.privateKey,
+      ),
     });
     expect(bootstrapRes.status).toBe(201);
     const { device_id: deviceIdA } = (await bootstrapRes.json()) as { device_id: string };
@@ -2802,7 +2840,14 @@ describe("Sync Relay — bootstrap endpoint", () => {
     await relay.app.request("/api/v1/agents/bootstrap", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ motebit_id: motebitIdB, public_key: bytesToHex(keypairB.publicKey) }),
+      body: await signedBootstrapBody(
+        {
+          device_id: "bootstrap-device",
+          motebit_id: motebitIdB,
+          public_key: bytesToHex(keypairB.publicKey),
+        },
+        keypairB.privateKey,
+      ),
     });
 
     // Agent A submits a task targeting agent B using its signed token (not master token)

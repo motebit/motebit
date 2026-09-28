@@ -40,6 +40,7 @@ import {
   holderKeyOf,
   identityKey,
   recordIdentityKey,
+  recordRegistryKeyEvidence,
   registryKeyOf,
 } from "./identity-keys.js";
 
@@ -391,6 +392,17 @@ export function applySuccession(
     db.prepare(
       "UPDATE agent_registry SET public_key = ? WHERE motebit_id = ? AND (public_key = ? OR COALESCE(public_key, '') = '')",
     ).run(record.new_public_key, motebitId, record.old_public_key);
+    // The registry now carries a key the verified link's `new_key_signature`
+    // PROVED (#875 review round 4): record its provenance so the served key
+    // follows the rotation (never the stale genesis a device row may keep).
+    if (registryKeyOf(db, motebitId) === record.new_public_key) {
+      recordRegistryKeyEvidence(db, {
+        motebitId,
+        publicKey: record.new_public_key,
+        evidence: "succession",
+        now: Date.now(),
+      });
+    }
     // The holder moves ONLY for E-link (§5f): a link departing from the key it
     // HOLDS. Never into an empty slot — an identity with no holder departed by
     // main's rule (registry, chain head or a device row), none of which is

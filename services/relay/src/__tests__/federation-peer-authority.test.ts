@@ -139,7 +139,14 @@ async function resolve(
     public_key?: string;
     agent?: { public_key?: string };
   };
-  return { found: body.found === true, publicKey: body.public_key ?? body.agent?.public_key };
+  // The key a peer's `key_rotated` would overwrite is the registry column —
+  // read it where it is stored. Discover SERVES only a proven key (#875
+  // review round 3: holder, else a key the id commits to), and this legacy
+  // victim has neither, so the served key is '' whatever a peer does.
+  const row = relay.moteDb.db
+    .prepare("SELECT public_key FROM agent_registry WHERE motebit_id = ?")
+    .get(motebitId) as { public_key: string } | undefined;
+  return { found: body.found === true, publicKey: row?.public_key };
 }
 
 describe("federation — a peer has no authority over a locally held identity", () => {

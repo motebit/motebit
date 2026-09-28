@@ -23,6 +23,7 @@ import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { readIdentityBindings } from "../identity-transparency.js";
 import { aggregateHealthSummary } from "../health-summary.js";
+import { recordIdentityKey } from "../identity-keys.js";
 import { createTestRelay, AUTH_HEADER } from "./test-helpers.js";
 
 const KEY_A = "a".repeat(64);
@@ -110,6 +111,9 @@ describe("registry-delist — off the shelf, never forgotten", () => {
 
   it("every shelf reader excludes a delisted row: discover list, the A2A card, the relay card count — and the key reader still answers", async () => {
     insertServing(db, "mote-shelf", now, "summarize");
+    // A proven holder, so the key reader SERVES a key (#875 review round 3:
+    // never the bare registry column).
+    recordIdentityKey(db, { motebitId: "mote-shelf", publicKey: KEY_A, source: "succession", now });
     delistRegistration(db, "mote-shelf", now);
 
     const list = await relay.app.request("/api/v1/agents/discover?capability=summarize", {

@@ -25,7 +25,7 @@ import {
   signDeviceRegistration,
 } from "@motebit/crypto";
 import type { KeyPair } from "@motebit/crypto";
-import { AUTH_HEADER, createTestRelay } from "./test-helpers.js";
+import { AUTH_HEADER, createTestRelay, keyProof } from "./test-helpers.js";
 import { CANONICAL_ID_PATTERN, pathIdentity, refuseInvalidIds } from "../id-bounds.js";
 
 const JSON_HEADERS = { "Content-Type": "application/json" };
@@ -114,12 +114,15 @@ describe("#853 through the relay", () => {
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     });
 
-  const bootstrap = (motebitId: string, deviceId: string, kp: KeyPair) =>
-    req("POST", "/api/v1/agents/bootstrap", {
-      motebit_id: motebitId,
-      device_id: deviceId,
-      public_key: bytesToHex(kp.publicKey),
-    });
+  const bootstrap = async (motebitId: string, deviceId: string, kp: KeyPair) =>
+    req(
+      "POST",
+      "/api/v1/agents/bootstrap",
+      await keyProof(
+        { motebit_id: motebitId, device_id: deviceId, public_key: bytesToHex(kp.publicKey) },
+        kp.privateKey,
+      ),
+    );
 
   /** An identity + device row written directly — one an earlier relay admitted. */
   function seedHeld(motebitId: string, deviceId: string, kp: KeyPair) {
