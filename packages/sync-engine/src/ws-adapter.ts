@@ -104,19 +104,32 @@ const DEFAULT_PUSH_ACK_TIMEOUT_MS = 15_000;
 const MAX_EVENTS_PER_PUSH_FRAME = 500;
 /**
  * Push-frame pacing (#914 round 2). The relay admits 100 messages per 10 s
- * per connection (services/relay/src/middleware.ts `wsLimiter`) and answers
- * the excess with "Rate limit exceeded", dropping the frame. Pushes use at
- * most half of that budget, leaving the rest for every other frame.
+ * per DEVICE — its limiter key is `ws:<motebit_id>:<device_id>`
+ * (services/relay/src/websocket.ts), shared by every socket that device
+ * opens — and answers the excess with `{type:"error", message:"Rate limit
+ * exceeded"}`, dropping the frame unprocessed. Pushes use at most half of
+ * that budget, leaving the rest for every other frame.
+ *
+ * The budget is kept per (socket URL, device id) for the whole process
+ * (`sharedPushBudgets`), not per adapter: a token refresh opens a second
+ * adapter for the same device, and both draw on the one relay budget. Two
+ * PROCESSES of one device (a desktop app and a daemon sharing a device id)
+ * cannot share it; each paces itself, and a burst from both can still reach
+ * the relay's limit — then the refusal below fails the frame fast.
  */
 const PUSH_FRAMES_PER_WINDOW = 50;
 const PUSH_WINDOW_MS = 10_000;
 /**
- * While a backlog streams (a push was acked within PUSH_STREAMING_MS), the
- * first event of the next batch waits PUSH_LINGER_MS for the rest of it, so
- * a batch goes out as one frame rather than one event and then the others.
+ * Push coalescing (#914 round 3). An append does not send at once: the frame
+ * goes when no further append has arrived for PUSH_LINGER_MS, or
+ * PUSH_LINGER_MAX_MS after the first, or when the frame is full — so a batch
+ * appended together (the sync engine's `batch_size`) goes out as one frame.
  */
-const PUSH_LINGER_MS = 25;
-const PUSH_STREAMING_MS = 1_000;
+const PUSH_LINGER_MS = 15;
+const PUSH_LINGER_MAX_MS = 100;
+
+/** Push-frame send times per (socket URL, device id), shared by every adapter in the process. */
+const sharedPushBudgets = new Map<string, number[]>();
 
 /** One caller waiting on the relay's acknowledgment of an appended event. */
 interface PushWaiter {
@@ -146,6 +159,13 @@ function settleWaiter(w: PushWaiter, err?: Error): void {
   w.settled = true;
   if (err) w.reject(err);
   else w.resolve();
+}
+
+function clearWaiterTimer(w: PushWaiter): void {
+  if (w.timer) {
+    clearTimeout(w.timer);
+    w.timer = null;
+  }
 }
 
 function settle(item: PendingPush, err?: Error): void {
@@ -233,12 +253,11 @@ export class WebSocketEventStoreAdapter implements EventStoreAdapter {
   /** Appended events not yet in a frame (queued while offline, or behind the frame in flight). */
   private outbox: PendingPush[] = [];
   /** The one push frame awaiting its `ack`, and the socket it went out on. */
-  /** When recent push frames were sent (the pacing window). */
-  private pushSentAt: number[] = [];
-  /** When the relay last acked a push frame. */
-  private lastPushAckAt = -Infinity;
-  /** A deferred flush (linger or pacing). */
+  /** A deferred flush (pacing). */
   private flushTimer: ReturnType<typeof setTimeout> | null = null;
+  /** The linger: the idle timer (reset per append) and the cap (from the first). */
+  private lingerIdle: ReturnType<typeof setTimeout> | null = null;
+  private lingerCap: ReturnType<typeof setTimeout> | null = null;
   private inFlight: {
     socket: WebSocket;
     items: PendingPush[];
@@ -407,6 +426,12 @@ export class WebSocketEventStoreAdapter implements EventStoreAdapter {
             // The relay refused the frame in flight (it answers a push with
             // an ack OR this error, never both).
             this.onPushAnswered(thisSocket, new Error(`sync push: ${msg.message}`));
+          } else if (
+            msg.type === "error" &&
+            msg.message === "Rate limit exceeded" &&
+            this.inFlight?.socket === thisSocket
+          ) {
+            this.onPushRateLimited(thisSocket);
           }
           // Dispatch unrecognized message types to custom handlers
           for (const cb of this.onCustomMessageCallbacks) {
@@ -420,6 +445,7 @@ export class WebSocketEventStoreAdapter implements EventStoreAdapter {
 
     this.ws.onclose = () => {
       this.failInFlight(new Error("sync push: the socket closed before the relay acknowledged"));
+      for (const item of this.outbox) for (const w of item.waiters) this.armQueueDeadline(w);
       this.connected = false;
       this.ws = null;
       // The auth timer belongs to the socket that just closed.
@@ -464,6 +490,7 @@ export class WebSocketEventStoreAdapter implements EventStoreAdapter {
       clearTimeout(this.flushTimer);
       this.flushTimer = null;
     }
+    this.endLinger();
     // Nothing this adapter still holds will be acknowledged through it. The
     // queued events stay queued for `takePendingEvents`; their appends
     // reject now, so the sync engine's cursor stays below them (#914).
@@ -555,12 +582,10 @@ export class WebSocketEventStoreAdapter implements EventStoreAdapter {
     // A caller that hands events over without awaiting (a token refresh)
     // must not raise an unhandled rejection; an awaiting caller still sees it.
     acked.catch(() => {});
-    waiter.timer = setTimeout(() => {
-      waiter.timer = null;
-      // Unknown whether the relay has it: the caller retries. A queued event
-      // stays queued and still goes out on the next connection.
-      settleWaiter(waiter, new Error("sync push: not acknowledged in time"));
-    }, this.ackTimeoutMs);
+    // The ack deadline runs from when the event's FRAME is sent (the frame's
+    // timer). While there is no connection to send it on, the wait is bounded
+    // from now instead.
+    if (!this.connected) this.armQueueDeadline(waiter);
     const queued = this.outbox.find((i) => i.entry.event_id === entry.event_id);
     if (queued) {
       queued.entry = entry;
@@ -568,12 +593,7 @@ export class WebSocketEventStoreAdapter implements EventStoreAdapter {
     } else {
       this.outbox.push({ entry, waiters: [waiter] });
     }
-    const streaming = Date.now() - this.lastPushAckAt < PUSH_STREAMING_MS;
-    if (streaming && this.outbox.length === 1 && !this.inFlight) {
-      this.deferFlush(PUSH_LINGER_MS); // the rest of this batch is on its way
-    } else {
-      this.flushPush();
-    }
+    this.linger();
     return acked;
   }
 
@@ -673,19 +693,24 @@ export class WebSocketEventStoreAdapter implements EventStoreAdapter {
     const socket = this.ws;
     if (!this.connected || !socket || socket.readyState !== 1 /* WebSocket.OPEN */) return;
     if (this.inFlight || this.outbox.length === 0) return;
-    // Pace: never more than PUSH_FRAMES_PER_WINDOW push frames per window.
+    if (this.lingerIdle || this.lingerCap) return; // the batch is still arriving
+    // Pace: never more than PUSH_FRAMES_PER_WINDOW push frames per window,
+    // counted per device across every adapter in this process.
     const now = Date.now();
-    this.pushSentAt = this.pushSentAt.filter((t) => now - t < PUSH_WINDOW_MS);
-    if (this.pushSentAt.length >= PUSH_FRAMES_PER_WINDOW) {
-      this.deferFlush(this.pushSentAt[0]! + PUSH_WINDOW_MS - now);
+    const sent = this.pushBudget().filter((t) => now - t < PUSH_WINDOW_MS);
+    sharedPushBudgets.set(this.pushBudgetKey, sent);
+    if (sent.length >= PUSH_FRAMES_PER_WINDOW) {
+      this.deferFlush(sent[0]! + PUSH_WINDOW_MS - now);
       return;
     }
     if (this.flushTimer) {
       clearTimeout(this.flushTimer);
       this.flushTimer = null;
     }
-    this.pushSentAt.push(now);
+    sent.push(now);
     const items = this.outbox.splice(0, MAX_EVENTS_PER_PUSH_FRAME);
+    // From here the frame's own deadline governs each event.
+    for (const item of items) for (const w of item.waiters) clearWaiterTimer(w);
     // In flight BEFORE the send: an ack delivered during `send` is this frame's.
     this.inFlight = {
       socket,
@@ -701,6 +726,56 @@ export class WebSocketEventStoreAdapter implements EventStoreAdapter {
         }),
       );
     }
+  }
+
+  private get pushBudgetKey(): string {
+    return `${this.config.url}|${this.config.deviceId ?? ""}`;
+  }
+
+  private pushBudget(): number[] {
+    return sharedPushBudgets.get(this.pushBudgetKey) ?? [];
+  }
+
+  /**
+   * Hold the frame for the rest of the batch: send when no append has come
+   * for PUSH_LINGER_MS, PUSH_LINGER_MAX_MS after the first, or at once when a
+   * frame's worth is queued.
+   */
+  private linger(): void {
+    // Offline, nothing lingers: the queue goes out whole on the connection.
+    if (!this.connected) return;
+    if (this.outbox.length >= MAX_EVENTS_PER_PUSH_FRAME) {
+      this.endLinger();
+      this.flushPush();
+      return;
+    }
+    if (this.lingerIdle) clearTimeout(this.lingerIdle);
+    this.lingerIdle = setTimeout(() => {
+      this.endLinger();
+      this.flushPush();
+    }, PUSH_LINGER_MS);
+    this.lingerCap ??= setTimeout(() => {
+      this.endLinger();
+      this.flushPush();
+    }, PUSH_LINGER_MAX_MS);
+  }
+
+  private endLinger(): void {
+    if (this.lingerIdle) clearTimeout(this.lingerIdle);
+    if (this.lingerCap) clearTimeout(this.lingerCap);
+    this.lingerIdle = null;
+    this.lingerCap = null;
+  }
+
+  /** Bound a waiter while its event cannot be sent (no connection). */
+  private armQueueDeadline(w: PushWaiter): void {
+    if (w.settled || w.timer) return;
+    w.timer = setTimeout(() => {
+      w.timer = null;
+      // Unknown whether the relay has it: the caller retries. A queued event
+      // stays queued and still goes out on the next connection.
+      settleWaiter(w, new Error("sync push: not acknowledged in time (not connected)"));
+    }, this.ackTimeoutMs);
   }
 
   /** Flush after `ms`, unless a deferred flush is already pending. */
@@ -721,7 +796,6 @@ export class WebSocketEventStoreAdapter implements EventStoreAdapter {
     if (!frame || frame.socket !== socket) return;
     clearTimeout(frame.timer);
     this.inFlight = null;
-    if (!refused) this.lastPushAckAt = Date.now();
     for (const item of frame.items) settle(item, refused);
     this.flushPush();
   }
@@ -736,17 +810,42 @@ export class WebSocketEventStoreAdapter implements EventStoreAdapter {
   }
 
   /**
+   * The relay refused a message over its rate limit (#914 round 3) while a
+   * push frame was in flight. The relay drops such a frame unprocessed, so it
+   * is a definite answer: the frame fails at once rather than after the ack
+   * deadline, and the budget is treated as spent for a whole window. The
+   * refusal names no frame — it may have been another message's — so the
+   * socket is taken down too, as on a timeout: an ack that still arrives for
+   * this frame can never be credited to the next.
+   */
+  private onPushRateLimited(socket: WebSocket): void {
+    const now = Date.now();
+    sharedPushBudgets.set(
+      this.pushBudgetKey,
+      Array.from({ length: PUSH_FRAMES_PER_WINDOW }, () => now),
+    );
+    this.failInFlight(new Error("sync push: the relay's rate limit refused the frame"));
+    this.dropSocket(socket);
+  }
+
+  /**
    * No ack in time. The frame's events are rejected, and the socket is taken
    * down: an ack arriving late on it must never be read as the next frame's.
    */
   private onPushTimeout(socket: WebSocket): void {
     if (!this.inFlight || this.inFlight.socket !== socket) return;
     this.failInFlight(new Error("sync push: not acknowledged in time"));
+    this.dropSocket(socket);
+  }
+
+  /** Close `socket` (if still current) and reconnect on the usual backoff. */
+  private dropSocket(socket: WebSocket): void {
     if (this.ws !== socket) return;
     socket.onclose = null;
     socket.close();
     this.ws = null;
     this.connected = false;
+    for (const item of this.outbox) for (const w of item.waiters) this.armQueueDeadline(w);
     if (this.stabilityTimer) {
       clearTimeout(this.stabilityTimer);
       this.stabilityTimer = null;

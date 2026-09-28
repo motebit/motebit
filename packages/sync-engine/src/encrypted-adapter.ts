@@ -84,6 +84,17 @@ export class EncryptedEventStoreAdapter implements EventStoreAdapter {
     }
   }
 
+  /**
+   * Wire activity of the inner adapter, when it reports any (the HTTP
+   * adapter does) — the sync engine's watchdog counts it as progress.
+   */
+  onActivity(listener: () => void): () => void {
+    const inner = this.inner as EventStoreAdapter & {
+      onActivity?: (l: () => void) => () => void;
+    };
+    return typeof inner.onActivity === "function" ? inner.onActivity(listener) : () => {};
+  }
+
   /** Settles when the previous append has been handed to the inner adapter. */
   private handedOn: Promise<void> = Promise.resolve();
 

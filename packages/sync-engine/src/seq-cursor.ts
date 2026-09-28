@@ -292,6 +292,12 @@ export async function pullBySeq(opts: {
   maxPages?: number;
   /** Told of every event moved past without being applied. */
   onSkipped?: (skipped: SkippedSyncEvent) => void;
+  /**
+   * Told after each page is applied, with the events it appended (#914 round
+   * 3): a caller can count the page as progress, and learn which events the
+   * relay holds before the pull as a whole returns.
+   */
+  onPage?: (fresh: readonly EventLogEntry[]) => void;
 }): Promise<SeqPullOutcome> {
   const { source, localStore, cursorStore, motebitId, fallbackAfterClock } = opts;
   const key = source.seqCursorKey;
@@ -345,6 +351,7 @@ export async function pullBySeq(opts: {
     if (res.kind === "clock") {
       const unseen = await filterUnseen(localStore, motebitId, res.events);
       await apply(unseen, () => null);
+      opts.onPage?.(fresh);
       return { mode: "clock", fresh, skipped, encryptedOnRawPath };
     }
     if (res.latestSeq < cursor && !resetOnce) {
@@ -362,7 +369,9 @@ export async function pullBySeq(opts: {
       motebitId,
       res.entries.map((x) => x.event),
     );
+    const before = fresh.length;
     await apply(unseen, (id) => seqs.get(id) ?? null);
+    opts.onPage?.(fresh.slice(before));
     // Only now, with the page processed (applied or recorded), may the cursor pass it.
     if (res.nextSeq > cursor) {
       cursor = res.nextSeq;

@@ -157,3 +157,37 @@ it("socketAppendSettlesBeforeAck: does a socket append resolve before the relay 
   ws.disconnect();
   vi.unstubAllGlobals();
 });
+
+it("slowBodyPull: a pull page whose body trickles in (#914 round 3: parity with main)", async () => {
+  const relay = miniRelay();
+  relay.held.push({
+    event_id: "slow-1",
+    motebit_id: MID as EventLogEntry["motebit_id"],
+    timestamp: 0,
+    event_type: "state_updated" as EventLogEntry["event_type"],
+    payload: { pad: "x".repeat(2000) },
+    version_clock: 1,
+    tombstoned: false,
+  });
+  vi.stubGlobal("fetch", async (input: string | URL, init?: RequestInit) => {
+    const res = await relay.fetchImpl(input, init);
+    if (!String(input).includes("/pull")) return res;
+    const bytes = new Uint8Array(await res.arrayBuffer());
+    let i = 0;
+    const body = new ReadableStream<Uint8Array>({
+      async pull(ctrl) {
+        await new Promise((r) => setTimeout(r, 30));
+        ctrl.enqueue(bytes.slice(i, i + 200));
+        i += 200;
+        if (i >= bytes.length) ctrl.close();
+      },
+    });
+    return new Response(body, { status: res.status, headers: res.headers });
+  });
+  const engine = new SyncEngine(new InMemoryEventStore(), MID);
+  engine.connectRemote(http());
+  const r = await engine.sync();
+  obs["slowBodyPull.pulled"] = r.pulled;
+  obs["slowBodyPull.status"] = engine.getStatus();
+  vi.unstubAllGlobals();
+});

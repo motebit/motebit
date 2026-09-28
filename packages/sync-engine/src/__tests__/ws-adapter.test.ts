@@ -267,6 +267,9 @@ describe("WebSocketEventStoreAdapter", () => {
     const pushed = adapter.append(event).then(() => {
       acked = true;
     });
+    // #914 round 3: the frame waits a moment for the rest of its batch.
+    expect(lastWS().sent).toHaveLength(0);
+    await vi.advanceTimersByTimeAsync(20);
 
     expect(lastWS().sent).toHaveLength(1);
     const msg = JSON.parse(lastWS().sent[0]!) as { type: string; events: EventLogEntry[] };

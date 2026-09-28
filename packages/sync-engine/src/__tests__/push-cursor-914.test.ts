@@ -349,10 +349,12 @@ describe("#914 WebSocketEventStoreAdapter — an append resolves on the relay's 
     const a = adapter();
     const s = lastSocket();
     const p1 = track(a.append(entry("e1", 1)));
+    await vi.advanceTimersByTimeAsync(20); // the linger
+    expect(s.frames()).toEqual([["e1"]]);
     const p2 = track(a.append(entry("e2", 2)));
     const p3 = track(a.append(entry("e3", 3)));
-    expect(s.frames()).toEqual([["e1"]]);
-    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(20);
+    expect(s.frames()).toEqual([["e1"]]); // behind the frame in flight
     expect([p1.state, p2.state, p3.state]).toEqual(["pending", "pending", "pending"]);
 
     s.answer({ type: "ack", accepted: 1 });
@@ -370,7 +372,9 @@ describe("#914 WebSocketEventStoreAdapter — an append resolves on the relay's 
     const a = adapter();
     const s = lastSocket();
     const p1 = track(a.append(entry("e1", 1)));
+    await vi.advanceTimersByTimeAsync(20);
     const p2 = track(a.append(entry("e2", 2)));
+    await vi.advanceTimersByTimeAsync(20);
     s.drop();
     await vi.advanceTimersByTimeAsync(0);
     expect(p1.state).toBe("err");
@@ -390,7 +394,8 @@ describe("#914 WebSocketEventStoreAdapter — an append resolves on the relay's 
     const a = adapter();
     const s = lastSocket();
     const p1 = track(a.append(entry("e1", 1)));
-    await vi.advanceTimersByTimeAsync(1_000);
+    await vi.advanceTimersByTimeAsync(20); // sent
+    await vi.advanceTimersByTimeAsync(1_000); // the frame's deadline, from its send
     expect(p1.state).toBe("err");
     expect(s.closed).toBe(true);
 
@@ -398,6 +403,7 @@ describe("#914 WebSocketEventStoreAdapter — an append resolves on the relay's 
     const s2 = lastSocket();
     s2.open();
     const p2 = track(a.append(entry("e2", 2)));
+    await vi.advanceTimersByTimeAsync(20);
     expect(s2.frames()).toEqual([["e2"]]);
     s.answer({ type: "ack", accepted: 1 }); // the late ack, on the dead socket
     await vi.advanceTimersByTimeAsync(0);
@@ -407,16 +413,39 @@ describe("#914 WebSocketEventStoreAdapter — an append resolves on the relay's 
     expect(p2.state).toBe("ok");
   });
 
-  it("a push refusal rejects the frame; a rate-limit error does not stand in for an ack", async () => {
+  it("a push refusal rejects the frame", async () => {
     const a = adapter();
     const s = lastSocket();
     const p1 = track(a.append(entry("e1", 1)));
-    s.answer({ type: "error", message: "Rate limit exceeded" });
-    await vi.advanceTimersByTimeAsync(0);
-    expect(p1.state).toBe("pending");
+    await vi.advanceTimersByTimeAsync(20);
     s.answer({ type: "error", message: "push refused: every entry's motebit_id must be …" });
     await vi.advanceTimersByTimeAsync(0);
     expect(p1.state).toBe("err");
+    expect(s.closed).toBe(false);
+  });
+
+  it("a rate-limit refusal is a definite answer: the frame fails at once, the socket is replaced, the next frame waits a window", async () => {
+    const a = adapter();
+    const s = lastSocket();
+    const p1 = track(a.append(entry("e1", 1)));
+    await vi.advanceTimersByTimeAsync(20);
+    // The relay's reply shape (services/relay/src/websocket.ts).
+    s.answer({ type: "error", message: "Rate limit exceeded" });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(p1.state).toBe("err"); // not after the 1 s ack deadline
+    expect(s.closed).toBe(true); // a late ack can never be credited to the next frame
+
+    await vi.advanceTimersByTimeAsync(20);
+    const s2 = lastSocket();
+    s2.open();
+    const p2 = track(a.append(entry("e2", 2)));
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(s2.frames()).toEqual([]); // the budget is spent for the window
+    await vi.advanceTimersByTimeAsync(5_100);
+    expect(s2.frames()).toEqual([["e2"]]);
+    s2.answer({ type: "ack", accepted: 1 });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(p2.state).toBe("ok");
   });
 
   it("offline: the append rejects at its deadline, the event stays queued once, and goes out on connect", async () => {

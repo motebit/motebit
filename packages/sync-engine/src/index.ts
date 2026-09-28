@@ -288,6 +288,25 @@ export class SyncEngine {
     this.remoteStore = remoteStore;
     // What one relay served says nothing about what another holds.
     this.knownRemote.clear();
+    // Wire activity (a request attempt, its headers, each body chunk) is
+    // progress to the stall watchdog: a slow but live cycle is never abandoned.
+    this.unsubscribeActivity?.();
+    const reporting = remoteStore as EventStoreAdapter & {
+      onActivity?: (l: () => void) => () => void;
+    };
+    this.unsubscribeActivity =
+      typeof reporting.onActivity === "function"
+        ? reporting.onActivity(() => this.progress())
+        : null;
+  }
+
+  private unsubscribeActivity: (() => void) | null = null;
+
+  /** The relay holds these (it served them): a push counts them acknowledged. */
+  private noteHeldByRelay(events: readonly EventLogEntry[]): void {
+    // Bounded: forgetting one only costs a harmless re-push.
+    if (this.knownRemote.size > MAX_KNOWN_REMOTE) this.knownRemote.clear();
+    for (const e of events) this.knownRemote.set(e.event_id, e.version_clock);
   }
 
   /**
@@ -340,17 +359,26 @@ export class SyncEngine {
           timer = setTimeout(check, stallMs - idle);
           return;
         }
-        if (this.cycle === cycle) {
-          this.setStatus("error");
-          this.cycle++; // the abandoned cycle's late status writes are ignored
-        }
         resolve({ pushed: 0, pulled: 0, conflicts: [] });
+        if (this.cycle === cycle) {
+          this.cycle++; // the abandoned cycle's late status writes are ignored
+          this.setStatus("error");
+        }
       };
       timer = setTimeout(check, stallMs);
-      void run.then((result) => {
-        if (timer) clearTimeout(timer);
-        resolve(result);
-      });
+      run.then(
+        (result) => {
+          if (timer) clearTimeout(timer);
+          resolve(result);
+        },
+        () => {
+          // runSync reports its own failures; this is a last line, never an
+          // unhandled rejection and never a wedged `running`.
+          if (timer) clearTimeout(timer);
+          resolve({ pushed: 0, pulled: 0, conflicts: [] });
+          if (this.cycle === cycle) this.setStatus("error");
+        },
+      );
     });
   }
 
@@ -378,12 +406,11 @@ export class SyncEngine {
       const pushed = await this.pushEvents(remote);
 
       // Pull: get remote events we haven't seen
+      // Each page's events are noted as held by the relay as the page is
+      // applied (never pushed back, even by a concurrent cycle), and each
+      // page is progress to the watchdog.
       const pulled = await this.pullEvents();
       this.progress();
-      // The relay served these, so it holds them: never pushed back.
-      // Bounded: forgetting one only costs a harmless re-push.
-      if (this.knownRemote.size > MAX_KNOWN_REMOTE) this.knownRemote.clear();
-      for (const e of pulled.events) this.knownRemote.set(e.event_id, e.version_clock);
 
       // Detect conflicts
       const conflicts = this.detectConflicts(pushed.events, pulled.events);
@@ -535,6 +562,10 @@ export class SyncEngine {
         motebitId: this.cursor.motebit_id,
         fallbackAfterClock: this.pullAfterClock,
         onSkipped: this.config.onSkippedEvent ?? warnSkippedSyncEvent,
+        onPage: (page) => {
+          this.noteHeldByRelay(page);
+          this.progress();
+        },
       });
       return { count: fresh.length, events: fresh, skipped, encryptedOnRawPath };
     }
@@ -552,6 +583,7 @@ export class SyncEngine {
     for (const event of newEvents) {
       await this.localStore.append(event);
     }
+    this.noteHeldByRelay(newEvents);
 
     return { count: newEvents.length, events: newEvents };
   }
@@ -575,10 +607,22 @@ export class SyncEngine {
     return conflicts;
   }
 
+  /**
+   * Set the status and tell the listeners. A listener that throws is
+   * reported and passed over: it never breaks a sync cycle, the watchdog, or
+   * the next sync (#914 round 3).
+   */
   private setStatus(status: SyncStatus): void {
     this.status = status;
     for (const listener of this.statusListeners) {
-      listener(status);
+      try {
+        listener(status);
+      } catch (err: unknown) {
+        // eslint-disable-next-line no-console -- the runtime's pluggable-logger default (CLAUDE.md conventions)
+        console.warn(
+          `sync: a status listener threw on "${status}": ${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
     }
   }
 }

@@ -246,7 +246,16 @@ describe("spatial sync token refresh (#816)", () => {
     await vi.advanceTimersByTimeAsync(REFRESH_MS);
     await vi.advanceTimersByTimeAsync(10);
 
-    await currentRemote(runtime).append(entry("e-before", 1));
+    // #914: the append resolves on the ack; its frame waits a short linger
+    // (fake time) after the encryption (real time).
+    const before = currentRemote(runtime).append(entry("e-before", 1));
+    let sent = false;
+    void before.finally(() => (sent = true));
+    for (let i = 0; i < 200 && !sent; i++) {
+      await vi.advanceTimersByTimeAsync(5);
+      await new Promise((r) => realSetTimeout(r, 1));
+    }
+    await before;
     await vi.advanceTimersByTimeAsync(10);
     expect(relay.pushed).toContain("e-before");
 
