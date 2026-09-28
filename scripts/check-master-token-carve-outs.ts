@@ -1,8 +1,9 @@
 #!/usr/bin/env tsx
 /**
  * check-master-token-carve-outs — every relay auth door that waves a request
- * through without a token does it from an exact route table, and no entry
- * reaches a route it does not name (#855).
+ * through without a token does it from an exact route table, decided by one
+ * matcher call and nothing else, and no entry reaches a route it does not
+ * name (#855).
  *
  * Two doors exempt requests from authentication, and both did it with
  * prefixes, `endsWith` closures and unanchored regexes, so an exemption
@@ -26,8 +27,8 @@
  *
  * Rules, for each table:
  *   R1 the table is literal: every entry an object literal with exactly the
- *      string-literal fields `method`, `path` and a literal-or-constant
- *      `auth` — a closure (the pre-#855 `match:` form) is refused.
+ *      fields `method`, `path` (string literals) and `auth` — a closure (the
+ *      pre-#855 `match:` form) is refused.
  *   R2 every entry's path is under the door's scope and made of literal and
  *      `:param` segments only — no `*`, no regex param, no optional param.
  *   R3 no duplicate entries.
@@ -41,14 +42,34 @@
  *      shared path to it (`GET /api/v1/agents/discover` before
  *      `GET /api/v1/agents/:motebitId`). A registered route this gate cannot
  *      model (a wildcard or regex segment) in the scope is refused.
- *   R6 the door decides its exemption through its table and nothing else.
- *      The catch-all: every read of the request's path, URL, method or params
- *      is an argument of `isMasterTokenCarveOut` or a `path:` / `method:`
- *      field of a record. The agent-route door: no string test (`startsWith`,
- *      `endsWith`, `includes`, `match`, `test`, …), equality or `switch` on
- *      the path or method, and the table is never read directly. Both call
- *      their matcher exactly once, as `(c.req.method, c.req.path)`.
- *   R7 every route registration in the relay has a literal path.
+ *   R6 the door decides its exemption through its table and NOTHING else —
+ *      an ALLOWLIST, not a list of banned tests. The door handler
+ *      `app.use(<door>, async (c, next) => …)`, and the agent door's named
+ *      authenticator `authenticateAgentRoute`, may only:
+ *        - open with exactly `if (<matcher>(c.req.method, c.req.path)) {
+ *          await next(); return; }` (the handler; no `||`, `&&`, `?:` — the
+ *          exemption expression IS the matcher call);
+ *        - call the fixed callee set listed in DOORS below (nothing else — a
+ *          same-file helper such as `isLegacyPublic(c)` is refused);
+ *        - touch `c` only as `c.req.method` / `c.req.path` in a matcher call,
+ *          a `relayRouteAudience(…)` call or a `method:` / `path:` record
+ *          field; `c.req.header("authorization" | "x-correlation-id")`;
+ *          `c.set(…)`; or `c` passed whole to a listed recorder /
+ *          authenticator. Any other read is refused: an identifier bound
+ *          from `c` or `c.req` (`const p = c.req.path`, `const { path } =
+ *          c.req`), element access (`c.req["path"]`), any other header.
+ *        - reach `next` only through the guard, as an argument of the listed
+ *          authenticator, or — in the authenticator — as `await next();` at
+ *          the end of its body or inside the master-token branch whose
+ *          condition is exactly `apiToken != null && apiToken !== "" &&
+ *          token === apiToken`;
+ *        - contain no nested function other than the arrow callbacks passed
+ *          to `verifySignedTokenForDevice`.
+ *   R7 every route registration in the relay has a literal path, and any
+ *      `get/post/put/patch/delete/options/all/on/use/route/basePath` call
+ *      whose first argument is a literal starting "/api/v1" is on a receiver
+ *      named `app` or `*.app` — an aliased Hono (`const hono = app`) would be
+ *      a route this gate cannot see, so it is refused, not skipped.
  *   R8 every public agent route is also a master-token carve-out (else the
  *      catch-all refuses it first and "public" is a claim, not a fact).
  *
@@ -83,18 +104,31 @@ interface TableSpec {
   scope: string;
   /** The `app.use(<door>, handler)` whose handler decides the exemption. */
   door: string;
-  /** strict: the handler reads the request only via the matcher or into a record. */
-  mode: "strict" | "no-path-tests";
+  /** Callees the door handler may call (beyond the matcher and `next`). */
+  handlerCalls: readonly string[];
+  /** Calls in the handler that may take `c` / `next` as an argument. */
+  handlerPassesContext: readonly string[];
+  /** The named authenticator the handler delegates to, if any, and its allowlist. */
+  authenticator?: {
+    name: string;
+    calls: readonly string[];
+    passesContext: readonly string[];
+    /** The one condition under which the authenticator may call next() before its end. */
+    masterBranch: string;
+  };
 }
 
-const TABLES: readonly TableSpec[] = [
+const MASTER_BRANCH = 'apiToken != null && apiToken !== "" && token === apiToken';
+
+const DOORS: readonly TableSpec[] = [
   {
     name: "MASTER_TOKEN_CARVE_OUTS",
     file: "services/relay/src/middleware.ts",
     matcher: "isMasterTokenCarveOut",
     scope: "/api/v1/",
     door: "/api/v1/*",
-    mode: "strict",
+    handlerCalls: ["bearerAuth", "mw", "c.req.header", "recordMasterTokenOnce"],
+    handlerPassesContext: ["mw", "recordMasterTokenOnce"],
   },
   {
     name: "PUBLIC_AGENT_ROUTES",
@@ -102,13 +136,35 @@ const TABLES: readonly TableSpec[] = [
     matcher: "isPublicAgentRoute",
     scope: "/api/v1/agents/",
     door: "/api/v1/agents/*",
-    mode: "no-path-tests",
+    handlerCalls: ["authenticateAgentRoute"],
+    handlerPassesContext: ["authenticateAgentRoute"],
+    authenticator: {
+      name: "authenticateAgentRoute",
+      calls: [
+        "c.req.header",
+        "c.set",
+        "authHeader.startsWith",
+        "authHeader.slice",
+        "recordRefusalBeforeVerify",
+        "recordMasterTokenOnce",
+        "relayRouteAudience",
+        "parseTokenPayloadUnsafe",
+        "verifySignedTokenForDevice",
+        "logger.warn",
+        "recordAuthEvent",
+        "HTTPException",
+      ],
+      passesContext: ["recordRefusalBeforeVerify", "recordMasterTokenOnce"],
+      masterBranch: MASTER_BRANCH,
+    },
   },
 ];
 
 const VERBS = new Set(["get", "post", "put", "patch", "delete", "options", "all", "on"]);
+const REGISTRARS = new Set([...VERBS, "use", "route", "basePath"]);
 const PLAIN_SEGMENT = /^([A-Za-z0-9._~-]+|:[A-Za-z0-9_]+)$/;
 const ENTRY_FIELDS = new Set(["method", "path", "auth"]);
+const HEADERS = new Set(["authorization", "x-correlation-id"]);
 
 interface Entry {
   method: string;
@@ -178,9 +234,26 @@ function unwrap(e: ts.Expression): ts.Expression {
     ts.isAsExpression(cur) ||
     ts.isSatisfiesExpression(cur) ||
     ts.isParenthesizedExpression(cur) ||
-    ts.isTypeAssertionExpression(cur)
+    ts.isTypeAssertionExpression(cur) ||
+    ts.isNonNullExpression(cur)
   ) {
     cur = cur.expression;
+  }
+  return cur;
+}
+
+/** Climb out of `as` / parens / `!` wrappers. */
+function outer(n: ts.Node): ts.Node {
+  let cur = n;
+  while (
+    cur.parent != null &&
+    (ts.isAsExpression(cur.parent) ||
+      ts.isParenthesizedExpression(cur.parent) ||
+      ts.isTypeAssertionExpression(cur.parent) ||
+      ts.isNonNullExpression(cur.parent) ||
+      ts.isSatisfiesExpression(cur.parent))
+  ) {
+    cur = cur.parent;
   }
   return cur;
 }
@@ -193,6 +266,10 @@ function topLevelFunctionOf(n: ts.Node): string {
     cur = cur.parent;
   }
   return name;
+}
+
+function norm(s: string): string {
+  return s.replace(/\s+/g, " ").trim();
 }
 
 // ---------------------------------------------------------------------------
@@ -280,60 +357,227 @@ function readTable(spec: TableSpec): { entries: Entry[]; sf: ts.SourceFile } {
 }
 
 // ---------------------------------------------------------------------------
-// 2. The door decides only through its matcher (R6)
+// 2. The door decides only through its matcher (R6) — an allowlist
 // ---------------------------------------------------------------------------
 
-/** A `c.req.<field>` read: request data a routing decision could be made on. */
-const REQUEST_FIELDS = new Set([
-  "path",
-  "url",
-  "raw",
-  "method",
-  "routePath",
-  "matchedRoutes",
-  "param",
-  "query",
-  "queries",
-  "routeIndex",
-]);
-const PATH_ALIASES = new Set(["path", "method", "pathname", "url"]);
-const STRING_TESTS = new Set([
-  "startsWith",
-  "endsWith",
-  "includes",
-  "match",
-  "matchAll",
-  "test",
-  "exec",
-  "search",
-  "indexOf",
-  "lastIndexOf",
-  "localeCompare",
-  "split",
-  "slice",
-  "substring",
-]);
+type Fn = ts.ArrowFunction | ts.FunctionExpression | ts.FunctionDeclaration;
 
-function isRequestRead(e: ts.Node): e is ts.PropertyAccessExpression {
+function isFn(n: ts.Node): n is Fn {
+  return ts.isArrowFunction(n) || ts.isFunctionExpression(n) || ts.isFunctionDeclaration(n);
+}
+
+/** The callee as written: `foo`, `a.b.c`; `new X()` → `X`. */
+function calleeText(n: ts.CallExpression | ts.NewExpression, sf: ts.SourceFile): string {
+  return unwrap(n.expression).getText(sf).replace(/\?\./g, ".").replace(/\s+/g, "");
+}
+
+let contextReads = 0;
+
+interface BodyRules {
+  what: string;
+  calls: ReadonlySet<string>;
+  passesContext: ReadonlySet<string>;
+  matcher: string;
+  /** "handler": next only in the guard or passed on; "authenticator": next at the end or in the master branch. */
+  kind: "handler" | "authenticator";
+  masterBranch?: string;
+}
+
+function checkBody(fn: Fn, rules: BodyRules, spec: TableSpec, sf: ts.SourceFile): void {
+  const at = (n: ts.Node): string => `${spec.file}:${lineOf(sf, n)} R6 ${rules.what}`;
+  const params = fn.parameters.map((p) => p.name);
+  if (params.length < 2 || !params.every((p) => ts.isIdentifier(p))) {
+    violations.push(`${at(fn)} must take two plain parameters (c, next) — no destructuring`);
+    return;
+  }
+  const cName = (params[0] as ts.Identifier).text;
+  const nextName = (params[1] as ts.Identifier).text;
+  const body = fn.body;
+  if (body == null || !ts.isBlock(body)) {
+    violations.push(`${at(fn)} must have a block body`);
+    return;
+  }
+
+  // The guard: the handler's first statement is exactly the matcher call.
+  let guard: ts.IfStatement | null = null;
+  if (rules.kind === "handler") {
+    const first = body.statements[0];
+    const guardText = `if(${rules.matcher}(${cName}.req.method,${cName}.req.path)){await${nextName}();return;}`;
+    if (
+      first != null &&
+      ts.isIfStatement(first) &&
+      first.elseStatement == null &&
+      first.getText(sf).replace(/\s+/g, "") === guardText
+    ) {
+      guard = first;
+    } else {
+      violations.push(
+        `${at(first ?? fn)} must open with exactly \`if (${rules.matcher}(${cName}.req.method, ${cName}.req.path)) { await ${nextName}(); return; }\` — ` +
+          `the exemption expression is the matcher call and nothing else (no ||, &&, ?:, helper)`,
+      );
+    }
+  }
+  const lastStmt = body.statements[body.statements.length - 1];
+
+  const visit = (n: ts.Node): void => {
+    // Nested functions: only verifySignedTokenForDevice's callbacks.
+    if (isFn(n) && n !== fn) {
+      const p = outer(n).parent;
+      const ok =
+        p != null &&
+        ts.isCallExpression(p) &&
+        calleeText(p, sf) === "verifySignedTokenForDevice" &&
+        p.arguments.some((a) => a === outer(n));
+      if (!ok) {
+        violations.push(`${at(n)} declares a nested function — a door body holds no helper`);
+        return;
+      }
+    }
+
+    // Calls: a fixed callee set.
+    if (ts.isCallExpression(n) || ts.isNewExpression(n)) {
+      const callee = calleeText(n, sf);
+      const allowed = callee === rules.matcher || callee === nextName || rules.calls.has(callee);
+      if (!allowed) {
+        violations.push(`${at(n)} calls \`${callee}\` — not in the door's allowlist`);
+      }
+    }
+
+    if (ts.isIdentifier(n) && n.text === spec.name) {
+      violations.push(`${at(n)} reads ${spec.name} directly — decide through ${spec.matcher}`);
+    }
+
+    // `c`: a fixed set of shapes.
+    if (ts.isIdentifier(n) && n.text === cName && n !== params[0]) {
+      contextReads++;
+      if (!contextUseAllowed(n, cName, rules, guard)) {
+        // The whole access chain the read belongs to (`c.req["path"].startsWith(…)`).
+        let ctx: ts.Node = outer(n);
+        while (
+          ctx.parent != null &&
+          ((ts.isPropertyAccessExpression(ctx.parent) && ctx.parent.expression === ctx) ||
+            (ts.isElementAccessExpression(ctx.parent) && ctx.parent.expression === ctx) ||
+            (ts.isCallExpression(ctx.parent) && ctx.parent.expression === ctx))
+        ) {
+          ctx = ctx.parent;
+        }
+        if (ctx === outer(n) && ctx.parent != null) ctx = ctx.parent;
+        violations.push(
+          `${at(n)} reads the request as \`${ctx.getText(sf).slice(0, 80)}\` — only c.req.method/c.req.path ` +
+            `(matcher, relayRouteAudience, record field), c.req.header("authorization"|"x-correlation-id"), c.set, ` +
+            `or c passed to a listed recorder/authenticator`,
+        );
+      }
+    }
+
+    // `next`: only the guard, the listed pass-through, or the authenticator's two exits.
+    if (ts.isIdentifier(n) && n.text === nextName && n !== params[1]) {
+      if (!nextUseAllowed(n, rules, guard, lastStmt, sf)) {
+        violations.push(
+          `${at(n)} reaches next outside the allowed exits — an exemption decided here is not in ${spec.name}`,
+        );
+      }
+    }
+    n.forEachChild(visit);
+  };
+  body.forEachChild(visit);
+}
+
+function contextUseAllowed(
+  id: ts.Identifier,
+  cName: string,
+  rules: BodyRules,
+  guard: ts.IfStatement | null,
+): boolean {
+  const o = outer(id);
+  const p = o.parent;
+  if (p == null) return false;
+  // c passed whole to a listed recorder / authenticator.
+  if (ts.isCallExpression(p) && p.arguments.some((a) => a === o)) {
+    return rules.passesContext.has(calleeText(p, id.getSourceFile()));
+  }
+  if (!ts.isPropertyAccessExpression(p) || p.expression !== o) return false;
+  // c.set(...)
+  if (p.name.text === "set") {
+    return ts.isCallExpression(p.parent) && p.parent.expression === p;
+  }
+  if (p.name.text !== "req") return false;
+  const q = p.parent;
+  if (q == null || !ts.isPropertyAccessExpression(q) || q.expression !== p) return false;
+  const field = q.name.text;
+  if (field === "header") {
+    const call = q.parent;
+    return (
+      call != null &&
+      ts.isCallExpression(call) &&
+      call.expression === q &&
+      call.arguments.length === 1 &&
+      HEADERS.has(literalText(call.arguments[0]) ?? "")
+    );
+  }
+  if (field !== "method" && field !== "path") return false;
+  const use = outer(q);
+  const r = use.parent;
+  if (r == null) return false;
+  if (ts.isCallExpression(r) && r.arguments.some((a) => a === use)) {
+    const callee = calleeText(r, id.getSourceFile());
+    if (callee === "relayRouteAudience") return true;
+    // The matcher call: only the guard's.
+    if (callee === rules.matcher) return guard != null && r === guard.expression;
+    return false;
+  }
+  if (ts.isPropertyAssignment(r) && r.initializer === use && ts.isIdentifier(r.name)) {
+    return r.name.text === field;
+  }
+  void cName;
+  return false;
+}
+
+function nextUseAllowed(
+  id: ts.Identifier,
+  rules: BodyRules,
+  guard: ts.IfStatement | null,
+  lastStmt: ts.Statement | undefined,
+  sf: ts.SourceFile,
+): boolean {
+  const o = outer(id);
+  const p = o.parent;
+  if (p == null) return false;
+  // Passed on to a listed continuation (mw / authenticator).
+  if (ts.isCallExpression(p) && p.arguments.some((a) => a === o)) {
+    return rules.passesContext.has(calleeText(p, sf));
+  }
+  // `await next();` as a statement.
+  const isAwaitStmt =
+    ts.isCallExpression(p) &&
+    p.expression === o &&
+    p.arguments.length === 0 &&
+    p.parent != null &&
+    ts.isAwaitExpression(p.parent) &&
+    p.parent.parent != null &&
+    ts.isExpressionStatement(p.parent.parent);
+  if (!isAwaitStmt) return false;
+  const stmt = (p.parent as ts.AwaitExpression).parent as ts.ExpressionStatement;
+  if (rules.kind === "handler") {
+    return guard != null && stmt.parent === guard.thenStatement;
+  }
+  if (stmt === lastStmt) return true;
+  const block = stmt.parent;
+  const iff = block?.parent;
   return (
-    ts.isPropertyAccessExpression(e) &&
-    REQUEST_FIELDS.has(e.name.text) &&
-    ts.isPropertyAccessExpression(e.expression) &&
-    e.expression.name.text === "req"
+    block != null &&
+    ts.isBlock(block) &&
+    iff != null &&
+    ts.isIfStatement(iff) &&
+    iff.thenStatement === block &&
+    rules.masterBranch != null &&
+    norm(iff.expression.getText(sf)) === norm(rules.masterBranch)
   );
 }
 
-function isPathish(e: ts.Expression): boolean {
-  const u = unwrap(e);
-  if (ts.isIdentifier(u)) return PATH_ALIASES.has(u.text);
-  return isRequestRead(u);
-}
-
-let requestReads = 0;
-
 function checkDoor(spec: TableSpec, sf: ts.SourceFile): void {
   let doors = 0;
-  let matcherCalls = 0;
+  let authenticatorFound = false;
   sf.forEachChild(function visit(n): void {
     if (
       ts.isCallExpression(n) &&
@@ -343,79 +587,54 @@ function checkDoor(spec: TableSpec, sf: ts.SourceFile): void {
       literalText(n.arguments[0]) === spec.door
     ) {
       doors++;
-      const handler = n.arguments[1];
-      if (handler == null) return;
-      handler.forEachChild(function inner(m): void {
-        const at = `${spec.file}:${lineOf(sf, m)} R6`;
-        if (
-          ts.isCallExpression(m) &&
-          ts.isIdentifier(m.expression) &&
-          m.expression.text === spec.matcher
-        ) {
-          const args = m.arguments.map((a) => a.getText(sf));
-          if (args.length === 2 && args[0] === "c.req.method" && args[1] === "c.req.path") {
-            matcherCalls++;
-          } else {
-            violations.push(
-              `${at} ${spec.matcher} must be called as ${spec.matcher}(c.req.method, c.req.path) — the routed path, never the raw URL`,
-            );
-          }
-        }
-        if (ts.isIdentifier(m) && m.text === spec.name) {
-          violations.push(
-            `${at} the ${spec.door} door reads ${spec.name} directly — decide through ${spec.matcher}`,
-          );
-        }
-        if (spec.mode === "strict" && isRequestRead(m)) {
-          requestReads++;
-          const parent = m.parent;
-          const inMatcher =
-            ts.isCallExpression(parent) &&
-            ts.isIdentifier(parent.expression) &&
-            parent.expression.text === spec.matcher &&
-            parent.arguments.some((a) => a === m);
-          const inRecord =
-            ts.isPropertyAssignment(parent) &&
-            parent.initializer === m &&
-            ts.isIdentifier(parent.name) &&
-            (parent.name.text === "path" || parent.name.text === "method");
-          if (!inMatcher && !inRecord) {
-            violations.push(
-              `${at} the ${spec.door} door reads \`${m.getText(sf)}\` outside ${spec.matcher}(…) — an exemption decided on it is not in ${spec.name}`,
-            );
-          }
-        }
-        if (spec.mode === "no-path-tests") {
-          if (
-            ts.isCallExpression(m) &&
-            ts.isPropertyAccessExpression(m.expression) &&
-            STRING_TESTS.has(m.expression.name.text) &&
-            (isPathish(m.expression.expression) || m.arguments.some((a) => isPathish(a)))
-          ) {
-            violations.push(
-              `${at} the ${spec.door} door tests the path: \`${m.getText(sf).slice(0, 80)}\` — declare the route in ${spec.name} instead`,
-            );
-          }
-          if (
-            ts.isBinaryExpression(m) &&
-            [
-              ts.SyntaxKind.EqualsEqualsEqualsToken,
-              ts.SyntaxKind.ExclamationEqualsEqualsToken,
-              ts.SyntaxKind.EqualsEqualsToken,
-              ts.SyntaxKind.ExclamationEqualsToken,
-            ].includes(m.operatorToken.kind) &&
-            (isPathish(m.left) || isPathish(m.right))
-          ) {
-            violations.push(
-              `${at} the ${spec.door} door compares the path or method: \`${m.getText(sf).slice(0, 80)}\` — declare the route in ${spec.name} instead`,
-            );
-          }
-          if (ts.isSwitchStatement(m) && isPathish(m.expression)) {
-            violations.push(`${at} the ${spec.door} door switches on the path or method`);
-          }
-        }
-        m.forEachChild(inner);
-      });
+      const handler = n.arguments[1] != null ? unwrap(n.arguments[1]) : undefined;
+      if (handler == null || !isFn(handler) || n.arguments.length !== 2) {
+        violations.push(
+          `${spec.file}:${lineOf(sf, n)} R6 the ${spec.door} door must be app.use("${spec.door}", async (c, next) => { … }) with an inline handler`,
+        );
+        return;
+      }
+      checkBody(
+        handler,
+        {
+          what: `the ${spec.door} door`,
+          calls: new Set(spec.handlerCalls),
+          passesContext: new Set(spec.handlerPassesContext),
+          matcher: spec.matcher,
+          kind: "handler",
+        },
+        spec,
+        sf,
+      );
+      return;
+    }
+    const a = spec.authenticator;
+    if (
+      a != null &&
+      ts.isVariableDeclaration(n) &&
+      ts.isIdentifier(n.name) &&
+      n.name.text === a.name &&
+      n.initializer != null
+    ) {
+      const fn = unwrap(n.initializer);
+      if (!isFn(fn)) {
+        violations.push(`${spec.file}:${lineOf(sf, n)} R6 ${a.name} is not a function literal`);
+        return;
+      }
+      authenticatorFound = true;
+      checkBody(
+        fn,
+        {
+          what: a.name,
+          calls: new Set(a.calls),
+          passesContext: new Set(a.passesContext),
+          matcher: spec.matcher,
+          kind: "authenticator",
+          masterBranch: a.masterBranch,
+        },
+        spec,
+        sf,
+      );
       return;
     }
     n.forEachChild(visit);
@@ -424,9 +643,10 @@ function checkDoor(spec: TableSpec, sf: ts.SourceFile): void {
     violations.push(
       `${spec.file} R6 expected exactly one app.use("${spec.door}", …) door, found ${doors}`,
     );
-  } else if (matcherCalls !== 1) {
+  }
+  if (spec.authenticator != null && !authenticatorFound) {
     violations.push(
-      `${spec.file} R6 the ${spec.door} door must decide by ${spec.matcher}(c.req.method, c.req.path), exactly once (found ${matcherCalls})`,
+      `${spec.file} R6 the ${spec.door} door's authenticator \`${spec.authenticator.name}\` is not declared as a const function in this file`,
     );
   }
 }
@@ -439,45 +659,69 @@ const files = walk(RELAY_SRC);
 const routes: Route[] = [];
 for (const file of files) {
   const src = readFileSync(file, "utf8");
-  if (!/\bapp\.(get|post|put|patch|delete|options|all|on)\(/.test(src)) continue;
+  if (
+    !src.includes("/api/v1") &&
+    !/\bapp\.(get|post|put|patch|delete|options|all|on)\(/.test(src)
+  ) {
+    continue;
+  }
   const sf = ts.createSourceFile(file, src, ts.ScriptTarget.Latest, true);
   const rel = relative(ROOT, file);
   sf.forEachChild(function visit(n): void {
     if (
       ts.isCallExpression(n) &&
       ts.isPropertyAccessExpression(n.expression) &&
-      VERBS.has(n.expression.name.text) &&
-      isAppReceiver(n.expression.expression)
+      REGISTRARS.has(n.expression.name.text)
     ) {
       const verb = n.expression.name.text;
       const site = `${rel}:${lineOf(sf, n)}`;
-      const pathArg = verb === "on" ? n.arguments[1] : n.arguments[0];
-      const path = literalText(pathArg);
-      let methods: string[];
-      if (verb === "on") {
-        const m = n.arguments[0];
-        if (m != null && ts.isArrayLiteralExpression(m)) {
-          methods = m.elements.map((e) => literalText(e)?.toUpperCase() ?? "ALL");
-        } else {
-          methods = [literalText(m)?.toUpperCase() ?? "ALL"];
-        }
-      } else {
-        methods = [verb === "all" ? "ALL" : verb.toUpperCase()];
-      }
-      if (path == null) {
+      const onApp = isAppReceiver(n.expression.expression);
+      const first = literalText(n.arguments[0]);
+      // An /api/v1 registration on anything but `app` is invisible to R4/R5.
+      if (!onApp && first != null && first.startsWith("/api/v1")) {
         violations.push(
-          `${site} R7 route registered with a computed path \`${pathArg?.getText(sf) ?? "?"}\` — this gate cannot see which route it is`,
+          `${site} R7 \`${n.expression.getText(sf)}("${first}", …)\` registers on a receiver that is not \`app\` / \`*.app\` — register on app so the gate can see the route`,
         );
-      } else {
-        for (const method of methods) {
-          routes.push({
-            method,
-            path,
-            site,
-            file: rel,
-            pos: n.getStart(sf),
-            scopeFn: topLevelFunctionOf(n),
-          });
+      }
+      if (
+        onApp &&
+        (verb === "route" || verb === "basePath") &&
+        first != null &&
+        first.startsWith("/api/v1")
+      ) {
+        violations.push(
+          `${site} R7 app.${verb}("${first}", …) mounts routes this gate cannot see — register them on app directly`,
+        );
+      }
+      if (onApp && VERBS.has(verb)) {
+        const pathArg = verb === "on" ? n.arguments[1] : n.arguments[0];
+        const path = literalText(pathArg);
+        let methods: string[];
+        if (verb === "on") {
+          const m = n.arguments[0];
+          if (m != null && ts.isArrayLiteralExpression(m)) {
+            methods = m.elements.map((e) => literalText(e)?.toUpperCase() ?? "ALL");
+          } else {
+            methods = [literalText(m)?.toUpperCase() ?? "ALL"];
+          }
+        } else {
+          methods = [verb === "all" ? "ALL" : verb.toUpperCase()];
+        }
+        if (path == null) {
+          violations.push(
+            `${site} R7 route registered with a computed path \`${pathArg?.getText(sf) ?? "?"}\` — this gate cannot see which route it is`,
+          );
+        } else {
+          for (const method of methods) {
+            routes.push({
+              method,
+              path,
+              site,
+              file: rel,
+              pos: n.getStart(sf),
+              scopeFn: topLevelFunctionOf(n),
+            });
+          }
         }
       }
     }
@@ -540,7 +784,7 @@ function checkReach(spec: TableSpec, entries: Entry[]): number {
 // Run
 // ---------------------------------------------------------------------------
 
-const read = TABLES.map((spec) => ({ spec, ...readTable(spec) }));
+const read = DOORS.map((spec) => ({ spec, ...readTable(spec) }));
 const summary: string[] = [];
 for (const { spec, entries, sf } of read) {
   checkDoor(spec, sf);
@@ -567,14 +811,16 @@ if (master != null && pub != null) {
 if (violations.length > 0) {
   failWithRepair({
     invariant:
-      "A relay door that exempts a request from authentication does it from an exact route table — one method, one registered route pattern, matched anchored — and no entry reaches a route it does not name",
+      "A relay door that exempts a request from authentication does it from an exact route table — one method, one registered route pattern, matched anchored — decided by one matcher call and nothing else, and no entry reaches a route it does not name",
     canonical:
-      "MASTER_TOKEN_CARVE_OUTS + isMasterTokenCarveOut in services/relay/src/middleware.ts; PUBLIC_AGENT_ROUTES + isPublicAgentRoute in services/relay/src/agents.ts (both via routeTableMatcher)",
+      "MASTER_TOKEN_CARVE_OUTS + isMasterTokenCarveOut in services/relay/src/middleware.ts; PUBLIC_AGENT_ROUTES + isPublicAgentRoute (+ authenticateAgentRoute) in services/relay/src/agents.ts (both via routeTableMatcher)",
     fix:
       "Declare the exemption as an entry naming the route's method and its exact registered pattern " +
-      "(`{ method, path, auth }`, literal strings) and remove any other path test from the door — never a startsWith, " +
-      "an endsWith, an unanchored regex, a closure or a raw-URL check. Remove an entry whose route is gone. If an entry reaches a route it does not name, " +
-      "declare that route too (it must authenticate by its own door), register the entry's route first in the same function, or make the patterns disjoint. " +
+      "(`{ method, path, auth }`, literal strings) and keep the door's exemption to the single guard " +
+      "`if (<matcher>(c.req.method, c.req.path)) { await next(); return; }` — no startsWith/endsWith/regex, no helper, " +
+      "no alias or destructuring of c / c.req, no other header, no extra `next()`. Remove an entry whose route is gone. " +
+      "If an entry reaches a route it does not name, declare that route too (it must authenticate by its own door), " +
+      "register the entry's route first in the same function, or make the patterns disjoint. Register /api/v1 routes on `app`. " +
       "Run `pnpm --filter @motebit/relay test -- master-token-carve-outs-855` to check the running relay.",
     sites: violations,
     doctrine: "#855; services/relay/CLAUDE.md rules 6 and 25; docs/doctrine/security-boundaries.md",
@@ -583,6 +829,6 @@ if (violations.length > 0) {
 
 console.log(
   `Auth carve-outs OK — ${summary.join("; ")} (${routes.length} route registration(s) across ${files.length} relay source file(s)); ` +
-    `each entry names its route and reaches no other. The /api/v1/* catch-all reads the request ${requestReads} time(s), only through isMasterTokenCarveOut or into a record; ` +
-    `the /api/v1/agents/* door tests no path outside isPublicAgentRoute.`,
+    `each entry names its route and reaches no other. Both doors decide their exemption by one matcher guard; ` +
+    `${contextReads} read(s) of the request context across the door handlers and authenticateAgentRoute, all on the allowlist.`,
 );

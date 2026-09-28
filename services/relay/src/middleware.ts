@@ -915,9 +915,16 @@ export function registerMiddleware(deps: MiddlewareDeps): MiddlewareResult {
   // Every /api/v1 route is master-only except the routes MASTER_TOKEN_CARVE_OUTS
   // names, each by one method and its exact route pattern, matched anchored
   // against the routed path (#855). The exemption is decided by that table and
-  // nothing else: `check-master-token-carve-outs` refuses any other read of the
-  // path in this handler, and any carve-out that reaches a route it does not
-  // name.
+  // nothing else. `check-master-token-carve-outs` (R6) holds this handler to an
+  // allowlist: its first statement is exactly the guard below — the matcher
+  // called on `(c.req.method, c.req.path)`, its block `await next(); return;`,
+  // nothing or'd, and'd or ternaried beside it — it calls only
+  // isMasterTokenCarveOut / bearerAuth / mw / c.req.header /
+  // recordMasterTokenOnce, it reads `c` only as `c.req.method` / `c.req.path`
+  // (matcher arguments or record fields), `c.req.header("authorization" |
+  // "x-correlation-id")`, or as an argument of recordMasterTokenOnce / mw, and
+  // `next` is reached only by the guard or through `mw`. The gate also refuses
+  // any carve-out that reaches a route it does not name.
   if (apiToken != null && apiToken !== "") {
     app.use("/api/v1/*", async (c, next) => {
       if (isMasterTokenCarveOut(c.req.method, c.req.path)) {

@@ -582,21 +582,18 @@ export function registerAgentAuthMiddleware(deps: AgentAuthMiddlewareDeps): void
     recordAuthEvent,
   } = deps;
 
-  app.use("/api/v1/agents/*", async (c, next) => {
-    const path = c.req.path;
-    const method = c.req.method;
-
-    // Explicit public / self-authenticating carve-outs.
-    if (isPublicAgentRoute(c.req.method, c.req.path)) {
-      await next();
-      return;
-    }
-
+  // Everything after the public check: a request reaches `next()` here only
+  // with the master token or a verified device token. Kept out of the door's
+  // handler so the door's exemption is ONE matcher call and nothing else
+  // (#855; `check-master-token-carve-outs` R6 holds this body to a fixed set
+  // of calls and request reads, and its `next()` to the two authenticated
+  // exits).
+  const authenticateAgentRoute = async (c: Context, next: () => Promise<void>): Promise<void> => {
     const authHeader = c.req.header("authorization");
     if (authHeader == null || !authHeader.startsWith("Bearer ")) {
       recordRefusalBeforeVerify(c, recordAuthEvent, {
         kind: "agent_token_rejected",
-        audience: relayRouteAudience(method, path) ?? "admin:query",
+        audience: relayRouteAudience(c.req.method, c.req.path) ?? "admin:query",
         reason: "missing_token",
       });
       throw new HTTPException(401, { message: "Missing auth token" });
@@ -608,8 +605,8 @@ export function registerAgentAuthMiddleware(deps: AgentAuthMiddlewareDeps): void
     // must be visible if it ever comes back.
     if (apiToken != null && apiToken !== "" && token === apiToken) {
       recordMasterTokenOnce(c, recordAuthEvent, {
-        method,
-        path,
+        method: c.req.method,
+        path: c.req.path,
         correlationId: c.req.header("x-correlation-id") ?? null,
       });
       await next();
@@ -620,7 +617,7 @@ export function registerAgentAuthMiddleware(deps: AgentAuthMiddlewareDeps): void
     if (!claims?.mid) {
       recordRefusalBeforeVerify(c, recordAuthEvent, {
         kind: "agent_token_rejected",
-        audience: relayRouteAudience(method, path) ?? "admin:query",
+        audience: relayRouteAudience(c.req.method, c.req.path) ?? "admin:query",
         reason: "unparseable_token",
       });
       throw new HTTPException(401, { message: "Invalid token" });
@@ -650,7 +647,8 @@ export function registerAgentAuthMiddleware(deps: AgentAuthMiddlewareDeps): void
     // ever registered), and every other method on that path is `GET
     // /api/v1/agents/:motebitId` with the id "push-token" (admin:query) or
     // no route at all (the default).
-    const agentAudience: TokenAudience = relayRouteAudience(method, path) ?? "admin:query";
+    const agentAudience: TokenAudience =
+      relayRouteAudience(c.req.method, c.req.path) ?? "admin:query";
 
     // The key the token verified under, from the row that verified it —
     // captured here, never re-read by a route (auth.ts `onVerified`).
@@ -671,12 +669,12 @@ export function registerAgentAuthMiddleware(deps: AgentAuthMiddlewareDeps): void
           reason,
           expectedAudience: agentAudience,
           mid: claims.mid,
-          path,
+          path: c.req.path,
         });
         recordAuthEvent?.({
           kind: "agent_token_rejected",
-          method,
-          path,
+          method: c.req.method,
+          path: c.req.path,
           motebitId: claims.mid,
           audience: agentAudience,
           reason,
@@ -698,6 +696,18 @@ export function registerAgentAuthMiddleware(deps: AgentAuthMiddlewareDeps): void
       c.set("callerVerifiedKeySource" as never, verified.via);
     }
     await next();
+  };
+
+  // The door. Its exemption is exactly PUBLIC_AGENT_ROUTES, decided by one
+  // anchored matcher call on the routed path; every other request is
+  // authenticated (#855).
+  app.use("/api/v1/agents/*", async (c, next) => {
+    if (isPublicAgentRoute(c.req.method, c.req.path)) {
+      await next();
+      return;
+    }
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-argument -- Hono context type variance
+    return authenticateAgentRoute(c, next);
   });
 
   // Collaborative proposals (`/api/v1/proposals`, `/api/v1/proposals/*`) take

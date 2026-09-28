@@ -98,6 +98,13 @@ const OVER_MATCHES: ReadonlyArray<readonly [label: string, req: Req]> = [
   ["DELETE on revocations", ["DELETE", "/api/v1/delegations/revocations"]],
   ["GET on the Stripe webhook", ["GET", "/api/v1/stripe/webhook"]],
   ["PUT on register-self", ["PUT", "/api/v1/devices/register-self"]],
+  // Found by the cold review: main's method-blind `=== "/api/v1/devices/register-self"`
+  // let a tokenless GET through, and `GET /api/v1/devices/:motebitId` served
+  // it with the id "register-self" — 200 on main.
+  [
+    "GET on register-self (served by GET /devices/:motebitId)",
+    ["GET", "/api/v1/devices/register-self"],
+  ],
 ];
 
 describe("#855 the pure matcher", () => {

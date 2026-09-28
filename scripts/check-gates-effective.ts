@@ -2745,7 +2745,7 @@ export async function probeFetch(): Promise<unknown> {
   {
     script: "check-master-token-carve-outs",
     proves:
-      'flags an `endsWith` exemption in the agent-route middleware — the #855 sibling. Reinstates `path.endsWith("/solvency-proof")` beside `isPublicAgentRoute` (the closure that let `GET /api/v1/agents/solvency-proof` be served tokenless by `GET /api/v1/agents/:motebitId`); the gate names the path test.',
+      'flags an aliased `endsWith` exemption in the agent-route middleware — the #855 sibling, in the shape the cold review used to slip the first gate: `const p = c.req.path; … || p.endsWith("/solvency-proof")` beside `isPublicAgentRoute` (the closure that let `GET /api/v1/agents/solvency-proof` be served tokenless by `GET /api/v1/agents/:motebitId`). R6 is an allowlist, so the alias, the call and the extra `next()` are each refused.',
     perturb: () =>
       mutateFile("services/relay/src/agents.ts", (src) => {
         const anchor = "if (isPublicAgentRoute(c.req.method, c.req.path)) {";
@@ -2756,8 +2756,33 @@ export async function probeFetch(): Promise<unknown> {
         }
         return src.replace(
           anchor,
-          'if (isPublicAgentRoute(c.req.method, c.req.path) || path.endsWith("/solvency-proof")) {',
+          'const p = c.req.path;\n    if (isPublicAgentRoute(c.req.method, c.req.path) || p.endsWith("/solvency-proof")) {',
         );
+      }),
+  },
+  {
+    script: "check-master-token-carve-outs",
+    proves:
+      "flags an exemption moved into a same-file helper in the /api/v1/* catch-all — the cold review's strongest bypass of the first gate (a new `/api/v1/receipts/` prefix passed the gate AND the full relay suite): `|| isLegacyPublic(c)` beside `isMasterTokenCarveOut`, the helper doing `c.req.path.startsWith(…)`. R6 refuses the unlisted callee and the guard that is no longer exactly the matcher call.",
+    perturb: () =>
+      mutateFile("services/relay/src/middleware.ts", (src) => {
+        const anchor = "if (isMasterTokenCarveOut(c.req.method, c.req.path)) {";
+        const helperAnchor =
+          "const matchMasterTokenCarveOut = routeTableMatcher(MASTER_TOKEN_CARVE_OUTS);";
+        if (!src.includes(anchor) || !src.includes(helperAnchor)) {
+          throw new Error(
+            "probe vacuous: services/relay/src/middleware.ts no longer has the catch-all guard or its matcher — retarget the probe",
+          );
+        }
+        return src
+          .replace(
+            helperAnchor,
+            `${helperAnchor}\nfunction isLegacyPublic(c: { req: { path: string } }): boolean {\n  return c.req.path.startsWith("/api/v1/receipts/");\n}`,
+          )
+          .replace(
+            anchor,
+            "if (isMasterTokenCarveOut(c.req.method, c.req.path) || isLegacyPublic(c)) {",
+          );
       }),
   },
   {
