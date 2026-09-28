@@ -1621,15 +1621,23 @@ export class MotebitRuntime {
   }
 
   /**
-   * The loop dependencies for the turn about to start. A foreign
-   * principal's turn gets the policy gate's no-approval-channel view
-   * (#880): a call that would pause for the owner's approval is refused
-   * instead, so no approval can outlive the task and later resume that
-   * principal's prompt inside the owner's conversation.
+   * The loop dependencies for the turn about to start — the ONE place a
+   * turn's deps learn whose words it runs. Every turn entry
+   * (`sendMessage`, `sendMessageStreaming`, and the approval resume in
+   * `StreamingManager`) builds its deps here, after its foreign mark is set.
+   *
+   * - `foreignPrincipal` carries the per-turn mark onto the deps, where
+   *   memory formation reads it: a foreign principal's turn forms
+   *   `peer_agent`, never `user_stated` (#893).
+   * - A foreign principal's turn gets the policy gate's no-approval-channel
+   *   view (#880): a call that would pause for the owner's approval is
+   *   refused instead, so no approval can outlive the task and later resume
+   *   that principal's prompt inside the owner's conversation.
    */
   private loopDepsForTurn<D extends { policyGate?: unknown }>(deps: D): D {
-    if (!this.isForeignPrincipalTurn()) return deps;
-    return { ...deps, policyGate: this.policy.withoutApprovalChannel() };
+    const foreignPrincipal = this.isForeignPrincipalTurn();
+    if (!foreignPrincipal) return { ...deps, foreignPrincipal };
+    return { ...deps, foreignPrincipal, policyGate: this.policy.withoutApprovalChannel() };
   }
 
   /** True when `toolName` is registered with `localOnly: true`. */

@@ -27,6 +27,7 @@ import { isSelfReferential, withStageTimeout, STAGE_TIMEOUTS_MS } from "./core.j
 import { detectDishonestClosing } from "./dishonest-closing.js";
 import type { ToolResultLogEntry } from "./dishonest-closing.js";
 import { validateTaskStepNarration } from "./narration-validation.js";
+import { turnMemorySource } from "./memory-provenance.js";
 
 // === Constants ===
 
@@ -546,6 +547,19 @@ export interface MotebitLoopDependencies {
    * Doctrine: `motebit-computer.md` §"Typed truth on results."
    */
   onPixelOmissionEmitted?: (reason: import("@motebit/sdk").PixelOmittedReason) => void;
+  /**
+   * This turn runs ANOTHER principal's words — a customer's `motebit_task`
+   * or a caller's `motebit_query` — not the owner's (#893). Every memory
+   * the turn forms is stamped `peer_agent` (`turnMemorySource`), never
+   * `user_stated` or `tool_derived`, so a stranger's words can never
+   * surface in the owner's recall as `[from:user]`.
+   *
+   * A per-TURN value, not a getter: the runtime builds the turn's deps
+   * with it (`MotebitRuntime.loopDepsForTurn`), so formation reads the
+   * fact of the turn it belongs to, never runtime-wide state that another
+   * turn could have moved. Absent ⇒ the owner's turn.
+   */
+  foreignPrincipal?: boolean;
 }
 
 /**
@@ -1983,12 +1997,17 @@ export async function* runTurnStreaming(
 
   // Provenance stamping — assigned by the forming code path, never the
   // model (docs/doctrine/memory-provenance.md; the <memory> tag carries
-  // no source attribute by design). A turn whose tools succeeded formed
-  // its candidates under external tool content — tool_derived, an
-  // unverified outside claim. A pure conversational turn is user_stated.
-  // The same signal already caps tool-turn confidence above
-  // (MAX_TOOL_TURN_CONFIDENCE); provenance makes the cause durable.
-  const turnSource = toolCallsSucceeded > 0 ? ("tool_derived" as const) : ("user_stated" as const);
+  // no source attribute by design). `turnMemorySource` is the one
+  // resolver: a turn running another principal's words forms peer_agent
+  // (#893 — a customer's motebit_task must never surface in the owner's
+  // recall as [from:user]); an owner turn whose tools succeeded forms
+  // tool_derived (the same signal caps tool-turn confidence above); a pure
+  // owner conversational turn forms user_stated. The foreign fact arrives
+  // on THIS turn's deps, set by the runtime per turn.
+  const turnSource = turnMemorySource({
+    foreignPrincipal: deps.foreignPrincipal,
+    toolCallsSucceeded,
+  });
   const candidates: AttributedMemoryCandidate[] = governedCandidates.map((c) => ({
     ...c,
     source: turnSource,
