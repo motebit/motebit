@@ -538,6 +538,24 @@ interface StepAttemptError extends Error {
 }
 
 /**
+ * The step's outcome is UNDETERMINED: the relay may have admitted the task,
+ * and it may still complete, but nothing confirmed it within the step's time
+ * budget. Not a failure: no retry and no new task, because running the step
+ * again could run — and pay for — it twice (#816). Twin of the planner's
+ * `DelegationUndeterminedError`.
+ */
+export class DelegationUndeterminedError extends Error {
+  readonly undetermined = true;
+  constructor(stepDescription: string, cause?: unknown) {
+    super(
+      `Submission unconfirmed — the task may still complete; check /result (step "${stepDescription}")`,
+      cause !== undefined ? { cause } : undefined,
+    );
+    this.name = "DelegationUndeterminedError";
+  }
+}
+
+/**
  * Polls the relay for each delegated step's receipt. One Idempotency-Key per
  * logical submission: a retry after a deadline the relay could not resolve
  * reuses it; only a task that conclusively failed gets a new key and excludes
@@ -550,8 +568,8 @@ export function createHttpPollingDelegationAdapter(
   const { relayUrl, motebitId } = opts;
   const maxRetries = opts.maxRetries ?? 2;
   const pollIntervalMs = opts.pollIntervalMs ?? 2000;
-  const conflictRetries = 4;
   const conflictBackoffMs = opts.conflictBackoffMs ?? 1000;
+  const conflictBackoffMaxMs = 30_000;
 
   const unconfirmed = (message: string, cause?: unknown): StepAttemptError => {
     const err: StepAttemptError = new Error(message, cause !== undefined ? { cause } : undefined);
@@ -563,16 +581,20 @@ export function createHttpPollingDelegationAdapter(
    * POST a submission under its Idempotency-Key. A thrown fetch (the request
    * may have reached the relay, the response was lost) and a 409 (an earlier
    * request under the same key is still processing) are not "not admitted":
-   * a 409 is retried after a short backoff under the same key — the relay
-   * then replays its 201 with the same task_id — and a thrown fetch, or a 409
-   * that outlasts the backoff, is delivery-uncertain, so the retry keeps the
-   * key too (#816). Every other response is returned for the caller to judge.
+   * a 409 is retried with backoff under the same key, within the step's time
+   * budget — the relay then replays its 201 with the same task_id — and one
+   * that outlasts the budget ends the step as undetermined. A thrown fetch is
+   * delivery-uncertain, so the retry keeps the key (#816). Every other
+   * response is returned for the caller to judge.
    */
   const submitUnderKey = async (
     url: string,
     headers: Record<string, string>,
     body: Record<string, unknown>,
+    budgetMs: number,
+    stepDescription: string,
   ): Promise<Response> => {
+    let waited = 0;
     for (let conflict = 0; ; conflict++) {
       let resp: Response;
       try {
@@ -581,19 +603,32 @@ export function createHttpPollingDelegationAdapter(
         throw unconfirmed("Relay task submission unconfirmed: no response", err);
       }
       if (resp.status !== 409) return resp;
-      if (conflict >= conflictRetries) {
-        throw unconfirmed("Relay task submission unconfirmed: still being processed (409)");
+      if (waited >= budgetMs) {
+        throw new DelegationUndeterminedError(
+          stepDescription,
+          new Error("Relay task submission still being processed (409)"),
+        );
       }
-      await new Promise<void>((r) => setTimeout(r, conflictBackoffMs * 2 ** conflict));
+      const wait = Math.min(
+        conflictBackoffMs * 2 ** conflict,
+        conflictBackoffMaxMs,
+        budgetMs - waited,
+      );
+      waited += wait;
+      await new Promise<void>((r) => setTimeout(r, wait));
     }
   };
 
-  /** One ask of the relay: the receipt, or null when there is no answer yet. */
-  const query = async (taskId: string): Promise<ExecutionReceipt | null> => {
+  /**
+   * One ask of the relay: the receipt, "gone" (404 — the task left the queue
+   * without a receipt, so none is coming), or null when there is no answer.
+   */
+  const query = async (taskId: string): Promise<ExecutionReceipt | "gone" | null> => {
     try {
       const pollResp = await fetch(`${relayUrl}/agent/${motebitId}/task/${taskId}`, {
         headers: await opts.queryHeaders(),
       });
+      if (pollResp.status === 404) return "gone";
       if (!pollResp.ok) return null;
       const data = (await pollResp.json()) as { receipt: ExecutionReceipt | null };
       return data.receipt ?? null;
@@ -622,6 +657,8 @@ export function createHttpPollingDelegationAdapter(
       `${relayUrl}/agent/${motebitId}/task`,
       { ...opts.submitHeaders, "Idempotency-Key": idempotencyKey },
       body,
+      timeoutMs,
+      step.description,
     );
 
     if (resp.status === 402) throw new Error("Insufficient balance (HTTP 402)");
@@ -630,9 +667,9 @@ export function createHttpPollingDelegationAdapter(
       throw new Error(`Relay task submission failed (${resp.status}): ${text.slice(0, 200)}`);
     }
 
-    let taskResp: { task_id: string };
+    let taskResp: { task_id: string; routing_choice?: { selected_agent?: string } | null };
     try {
-      taskResp = (await resp.json()) as { task_id: string };
+      taskResp = (await resp.json()) as typeof taskResp;
     } catch (err: unknown) {
       // Admitted (2xx), but the answer never arrived whole: same key again.
       throw unconfirmed("Relay task submission unconfirmed: response body lost", err);
@@ -656,17 +693,31 @@ export function createHttpPollingDelegationAdapter(
       };
     };
 
+    const outcome = (answer: ExecutionReceipt | "gone" | null): DelegatedStepResult | null => {
+      if (answer === null) return null;
+      if (answer === "gone") {
+        // Terminal for THIS task: retry as a new task, never replay its id.
+        const err: StepAttemptError = new Error(
+          `Delegated task ${taskId} expired at the relay without a result`,
+        );
+        const agent = taskResp.routing_choice?.selected_agent;
+        if (agent != null && agent !== "") err.failedAgentId = agent;
+        throw err;
+      }
+      return settle(answer);
+    };
+
     // Poll for result
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
       await new Promise<void>((r) => setTimeout(r, pollIntervalMs));
-      const receipt = await query(taskId);
-      if (receipt) return settle(receipt);
+      const done = outcome(await query(taskId));
+      if (done) return done;
     }
     // The deadline says nothing about the task — ask once more, then hand
     // the retry the same key (#816).
-    const last = await query(taskId);
-    if (last) return settle(last);
+    const last = outcome(await query(taskId));
+    if (last) return last;
     throw unconfirmed(`Delegation timed out after ${timeoutMs}ms for step "${step.description}"`);
   };
 
@@ -679,17 +730,24 @@ export function createHttpPollingDelegationAdapter(
       const excludeAgents: string[] = [];
       let lastError: StepAttemptError | undefined;
       let idempotencyKey = crypto.randomUUID();
+      let attempts = 0;
 
       for (let attempt = 0; attempt <= maxRetries; attempt++) {
+        attempts++;
         try {
           return await attemptDelegation(
             step,
             timeoutMs,
             excludeAgents,
             idempotencyKey,
-            attempt === 0 ? onTaskSubmitted : undefined,
+            // Every attempt: a same-key retry can be the first to learn the
+            // task id (attempt 0's POST threw), and recovery needs it.
+            onTaskSubmitted,
           );
         } catch (err: unknown) {
+          // Undetermined: the task may have been admitted and may still
+          // complete. Not a failure — no retry, no new task.
+          if (err instanceof DelegationUndeterminedError) throw err;
           lastError = err instanceof Error ? err : new Error(String(err));
           // Extract failed agent ID from receipt if available
           if (lastError.failedAgentId) excludeAgents.push(lastError.failedAgentId);
@@ -705,8 +763,13 @@ export function createHttpPollingDelegationAdapter(
           if (attempt < maxRetries) opts.onRetry?.(step, attempt + 2, maxRetries + 1);
         }
       }
+      // Out of attempts while the relay never said the task ended: it may
+      // have been admitted and may still complete — not a failure either.
+      if (lastError?.deliveryUncertain === true) {
+        throw new DelegationUndeterminedError(step.description, lastError);
+      }
       throw new Error(
-        `Delegation failed after ${Math.min(excludeAgents.length, maxRetries) + 1} attempt(s): ${lastError?.message ?? "unknown"}`,
+        `Delegation failed after ${attempts} attempt(s): ${lastError?.message ?? "unknown"}`,
         { cause: lastError },
       );
     },
