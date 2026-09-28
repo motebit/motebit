@@ -323,3 +323,73 @@ it("U: x402 charge vs the handler's price — pinned capability ($1) above the p
   ).t;
   obs["U_credited_gross"] = inGross(credited);
 });
+
+// ── Round 3: a target_agent that routes nothing must not price the task ─────
+
+const queuedForW = (w: string) =>
+  (q("SELECT COUNT(*) AS n FROM relay_task_queue WHERE worker_id = ?", w)[0] as { n: number }).n;
+
+async function tCell(
+  name: string,
+  opts: { submittedBy: boolean; payTo: boolean; pay: boolean; target: "bogus" | "cheap" },
+) {
+  x402.settled = 0;
+  x402.quoted = [];
+  const w = await agent();
+  await relay.app.request(`/api/v1/agents/${w}/listing`, {
+    method: "POST",
+    headers: JSON_AUTH,
+    body: JSON.stringify({
+      capabilities: ["web_search"],
+      pricing: [{ capability: "web_search", unit_cost: 1.0, currency: "USD", per: "task" }],
+      sla: { max_latency_ms: 5000, availability_guarantee: 0.99 },
+      description: "901 r3 probe",
+      ...(opts.payTo ? { pay_to_address: PAY_W } : {}),
+    }),
+  });
+  let target = "no-such-agent";
+  if (opts.target === "cheap") {
+    target = await agent();
+    await listing(target, { web_search: 0.01 }, PAY_T);
+  }
+  const d = await agent(); // broke
+  const r = await submit(
+    w,
+    crypto.randomUUID(),
+    {
+      prompt: `901-${name}`,
+      ...(opts.submittedBy ? { submitted_by: d } : {}),
+      target_agent: target,
+      required_capabilities: ["web_search"],
+    },
+    opts.pay,
+  );
+  obs[`${name}_status`] = r.status;
+  obs[`${name}_tasks_for_W`] = queuedForW(w);
+  obs[`${name}_quoted`] = quotedGross();
+  obs[`${name}_onchain_settlements`] = x402.settled;
+}
+
+it("T1: unlisted target_agent on a $1 worker (payTo), broke delegator, no proof", async () => {
+  await tCell("T1", { submittedBy: true, payTo: true, pay: false, target: "bogus" });
+});
+it("T1b: the same without submitted_by", async () => {
+  await tCell("T1b", { submittedBy: false, payTo: true, pay: false, target: "bogus" });
+});
+it("T1c: the same on a $1 worker with no payTo", async () => {
+  await tCell("T1c", { submittedBy: true, payTo: false, pay: false, target: "bogus" });
+});
+it("T2: a cheap target_agent on a $1 worker, paid via x402", async () => {
+  await tCell("T2", { submittedBy: true, payTo: true, pay: true, target: "cheap" });
+});
+it('E: submitted_by "" and a null body', async () => {
+  const w = await worker(true);
+  const r1 = await submit(w, crypto.randomUUID(), { prompt: "901-E", submitted_by: "" });
+  obs["E_empty_submitter_status"] = r1.status;
+  const r2 = await relay.app.request(`/agent/${w}/task`, {
+    method: "POST",
+    headers: { ...JSON_AUTH, "Idempotency-Key": crypto.randomUUID() },
+    body: "null",
+  });
+  obs["E_null_body_status"] = r2.status;
+});

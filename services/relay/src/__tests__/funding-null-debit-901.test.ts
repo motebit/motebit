@@ -45,6 +45,15 @@ const x402 = vi.hoisted(() => ({
   settled: 0,
   ordering: "before" as "before" | "after",
   quoted: [] as { price: string; payTo: string }[],
+  /**
+   * When set, every request entering the facilitator waits on it BEFORE its
+   * price is resolved — the await the real library performs between the
+   * wrapper's quote and the price read. `entered` counts arrivals; `nonces`
+   * records the quote header each request arrived with.
+   */
+  barrier: null as Promise<void> | null,
+  entered: 0,
+  nonces: [] as string[],
 }));
 
 vi.mock("@x402/hono", () => {
@@ -81,6 +90,9 @@ vi.mock("@x402/hono", () => {
     ): Promise<Response | undefined> => {
       const accepts = httpServer.routes["POST /agent/*/task"]!.accepts;
       const ctx: Ctx = { adapter: { getHeader: (n) => c.req.header(n) }, path: c.req.path };
+      x402.entered += 1;
+      x402.nonces.push(c.req.header("x-motebit-x402-quote") ?? "");
+      if (x402.barrier) await x402.barrier;
       const quote = { price: accepts.price(ctx), payTo: accepts.payTo(ctx) };
       if (!c.req.header("X-PAYMENT")) return c.json({ error: "payment_required" }, 402);
       x402.quoted.push(quote);
@@ -115,6 +127,9 @@ beforeEach(async () => {
   x402.settled = 0;
   x402.ordering = "before";
   x402.quoted = [];
+  x402.barrier = null;
+  x402.entered = 0;
+  x402.nonces = [];
 });
 afterEach(async () => {
   await relay.close();
@@ -363,7 +378,7 @@ describe("#901 funding: the check and the debit read one spendable balance", () 
   });
 });
 
-// ── Round 2: the gate and the handler price a submission the same way ──────
+// ── Rounds 2–3: the gate and the handler read a submission the same way ──────
 
 const PAY_TO_T = "0x00000000000000000000000000000000000000b2";
 const PAY_TO_W = "0x00000000000000000000000000000000000000c3";
@@ -390,93 +405,307 @@ async function listing(id: string, prices: Record<string, number>, payTo: string
 }
 const dollars = (micro: number) => `$${(micro / 1_000_000).toFixed(6)}`;
 
-describe("#901 round 2: one price for the x402 gate and the handler", () => {
-  it("reviewer's cell (real ordering): a pinned self-delegation the account can fund is admitted from the account — the gate never diverts it to x402, so it is never charged twice", async () => {
+function queuedFor(workerId: string): number {
+  return (
+    relay.moteDb.db
+      .prepare("SELECT COUNT(*) AS n FROM relay_task_queue WHERE worker_id = ?")
+      .get(workerId) as { n: number }
+  ).n;
+}
+function claimHeld(key: string, motebitId: string): boolean {
+  return claimRow(key, motebitId) !== undefined;
+}
+
+describe("#901 round 3: a task is priced for exactly the worker it is routed to", () => {
+  // target_agent routes a task only on a P2P proof submission. Priced from a
+  // target that routes nothing, the PATH worker worked at the target's price —
+  // free for an unlisted target, or the cheap agent's price.
+  async function freeWorkCell(
+    opts: { submittedBy: boolean; payTo: boolean },
+    target: (w: string) => Promise<string> | string,
+  ) {
+    const w = await newAgent();
+    if (opts.payTo) await listing(w, { web_search: 1.0 }, PAY_TO_W);
+    else {
+      await relay.app.request(`/api/v1/agents/${w}/listing`, {
+        method: "POST",
+        headers: JSON_AUTH,
+        body: JSON.stringify({
+          capabilities: ["web_search"],
+          pricing: [{ capability: "web_search", unit_cost: 1.0, currency: "USD", per: "task" }],
+          sla: { max_latency_ms: 5000, availability_guarantee: 0.99 },
+          description: "901 r3 no payTo",
+        }),
+      });
+    }
+    const d = await newAgent(); // broke
+    const key = crypto.randomUUID();
+    const res = await submit(w, key, {
+      prompt: `901 r3 ${crypto.randomUUID()}`,
+      ...(opts.submittedBy ? { submitted_by: d } : {}),
+      target_agent: await target(w),
+      required_capabilities: ["web_search"],
+    });
+    return { w, key, res };
+  }
+
+  it("T1: an unlisted target_agent on a priced worker (no proof) is refused 400 — nothing queued, no x402 asked, key free", async () => {
+    const { w, key, res } = await freeWorkCell(
+      { submittedBy: true, payTo: true },
+      () => "no-such-agent",
+    );
+    // Checked first: no free work, whatever the status (the priced === routed
+    // assertion alone keeps this at 0 if the refusal is ever lost).
+    expect(queuedFor(w), "no free work").toBe(0);
+    expect(claimHeld(key, w), "a pre-admission refusal frees the key").toBe(false);
+    expect(res.status, await res.clone().text()).toBe(400);
+    expect(x402.quoted).toEqual([]);
+  });
+
+  it("a pinned capability on the path agent itself: the gate charges what the handler prices — an account that can fund the $1 capability is never sent to x402 for the $2 listing sum", async () => {
+    x402.ordering = "after";
+    const w = await newAgent();
+    await listing(w, { web_search: 1.0, read_url: 1.0 }, PAY_TO_W);
+    // Spendable 1.1·G1: covers the $1 capability, not the $2 sum.
+    seedEscrowHold(w, Math.round(1.1 * GROSS), true);
+    creditAccount(relay.moteDb.db, w, Math.round(1.1 * GROSS), "deposit", null, "901 r3");
+    const res = await submit(w, crypto.randomUUID(), {
+      prompt: `901 r3 pinned self ${crypto.randomUUID()}`,
+      submitted_by: w,
+      target_agent: w,
+      required_capabilities: ["web_search"],
+    });
+    expect(res.status, await res.clone().text()).toBe(201);
+    const { task_id } = (await res.json()) as { task_id: string };
+    expect(x402.quoted, "never asked to pay").toEqual([]);
+    expect(x402.settled).toBe(0);
+    expect(holdDebited(task_id), "funded once, from the account").toBe(
+      allocationsForTasks([task_id])[0]!.amount_locked,
+    );
+  });
+
+  it("T1b: the same with no submitted_by — refused 400, nothing queued", async () => {
+    const { w, res } = await freeWorkCell(
+      { submittedBy: false, payTo: true },
+      () => "no-such-agent",
+    );
+    expect(res.status, await res.clone().text()).toBe(400);
+    expect(queuedFor(w)).toBe(0);
+  });
+
+  it("T1c: the same on a priced worker with NO payTo (not x402-chargeable; main's gate never backstopped it) — refused 400, nothing queued", async () => {
+    const { w, res } = await freeWorkCell(
+      { submittedBy: true, payTo: false },
+      () => "no-such-agent",
+    );
+    expect(res.status, await res.clone().text()).toBe(400);
+    expect(queuedFor(w)).toBe(0);
+  });
+
+  it("T2: a cheap target_agent on a $1 worker, paid via x402 — refused 400 before any quote; never charged the cheap price", async () => {
+    const w = await newAgent();
+    await listing(w, { web_search: 1.0 }, PAY_TO_W);
+    const cheap = await newAgent();
+    await listing(cheap, { web_search: 0.01 }, PAY_TO_T);
+    const res = await submit(
+      w,
+      crypto.randomUUID(),
+      {
+        prompt: `901 r3 T2 ${crypto.randomUUID()}`,
+        submitted_by: w,
+        target_agent: cheap,
+        required_capabilities: ["web_search"],
+      },
+      { pay: true },
+    );
+    expect(res.status, await res.clone().text()).toBe(400);
+    expect(x402.quoted, "the gate charges nothing on a refused reading").toEqual([]);
+    expect(x402.settled).toBe(0);
+    expect(queuedFor(w)).toBe(0);
+    expect(queuedFor(cheap)).toBe(0);
+  });
+
+  it("reviewer's round-2 cell: a pinned self-delegation with a differing target_agent and no proof is refused 400 — never admitted, never charged", async () => {
     x402.ordering = "after";
     const t = await newAgent();
     await listing(t, { web_search: 1.0 }, PAY_TO_T);
     const w = await newAgent();
-    // W's own listing sums to $2 — what the gate used to price the path agent at.
     await listing(w, { web_search: 1.0, read_url: 1.0 }, PAY_TO_W);
-    // Raw 2.2·G1, spendable 1.1·G1: covers T's $1 capability, not W's $2 sum.
     seedEscrowHold(w, Math.round(1.1 * GROSS), true);
-    creditAccount(relay.moteDb.db, w, Math.round(1.1 * GROSS), "deposit", null, "901 r2");
-    const spendableBefore = getSpendableBalance(relay.moteDb.db, w);
-    const prompt = `901 r2 reviewer ${crypto.randomUUID()}`;
-    const body = {
-      prompt,
+    creditAccount(relay.moteDb.db, w, Math.round(1.1 * GROSS), "deposit", null, "901 r3");
+    const before = balanceOf(w);
+    const res = await submit(w, crypto.randomUUID(), {
+      prompt: `901 r3 reviewer ${crypto.randomUUID()}`,
       submitted_by: w,
       target_agent: t,
       required_capabilities: ["web_search"],
-    };
+    });
+    expect(res.status, await res.clone().text()).toBe(400);
+    expect(x402.settled).toBe(0);
+    expect(x402.quoted).toEqual([]);
+    expect(balanceOf(w), "never charged").toBe(before);
+    expect(queuedFor(w) + queuedFor(t)).toBe(0);
+  });
 
-    // No X-PAYMENT: a client that can pay from its account never needs one.
-    const res = await submit(w, crypto.randomUUID(), body);
+  it("a target_agent naming the path agent itself is accepted (non-P2P) and priced as that agent", async () => {
+    const w = await newAgent();
+    await listing(w, { web_search: 1.0 }, PAY_TO_W);
+    seedBalance(relay, w, 2);
+    const res = await submit(w, crypto.randomUUID(), {
+      prompt: `901 r3 self-target ${crypto.randomUUID()}`,
+      submitted_by: w,
+      target_agent: w,
+      required_capabilities: ["web_search"],
+    });
     expect(res.status, await res.clone().text()).toBe(201);
     const { task_id } = (await res.json()) as { task_id: string };
-    expect(x402.settled, "never charged onchain").toBe(0);
-    expect(x402.quoted, "never even asked to pay").toEqual([]);
-    const allocs = allocationsForTasks([task_id]);
-    expect(allocs).toHaveLength(1);
-    expect(holdDebited(task_id), "funded once, from the account").toBe(allocs[0]!.amount_locked);
-    expect(getSpendableBalance(relay.moteDb.db, w)).toBe(
-      spendableBefore - allocs[0]!.amount_locked,
-    );
+    expect(holdDebited(task_id)).toBeGreaterThanOrEqual(GROSS);
   });
 
-  it("the x402 charge is the handler's price: a pinned capability priced above the path agent's listing is charged at that capability's price, to its agent's payTo (the gate used to ask for the path agent's lower sum)", async () => {
-    const t = await newAgent();
-    await listing(t, { web_search: 1.0 }, PAY_TO_T);
+  it("a payment_proof + target_agent with NO submitter is not P2P, so the differing target is refused 400", async () => {
     const w = await newAgent();
-    await listing(w, { web_search: 0.5 }, PAY_TO_W);
-    const prompt = `901 r2 undercharge ${crypto.randomUUID()}`;
-    const body = {
-      prompt,
-      submitted_by: w,
-      target_agent: t,
+    await listing(w, { web_search: 1.0 }, PAY_TO_W);
+    const res = await submit(w, crypto.randomUUID(), {
+      prompt: `901 r3 proof-no-submitter ${crypto.randomUUID()}`,
+      target_agent: "no-such-agent",
       required_capabilities: ["web_search"],
-    };
-
-    const res = await submit(w, crypto.randomUUID(), body, { pay: true });
-    expect(res.status, await res.clone().text()).toBe(201);
-    expect(x402.quoted).toEqual([{ price: dollars(GROSS), payTo: PAY_TO_T }]);
-    // What was credited is exactly what was charged.
-    const credited = relay.moteDb.db
-      .prepare(
-        "SELECT COALESCE(SUM(amount), 0) AS t FROM relay_transactions WHERE motebit_id = ? AND type = 'deposit' AND reference_id LIKE 'x402-%'",
-      )
-      .get(w) as { t: number };
-    expect(credited.t).toBe(GROSS);
+      payment_proof: { tx_hash: "x" },
+    });
+    expect(res.status, await res.clone().text()).toBe(400);
+    expect(queuedFor(w)).toBe(0);
   });
 
-  it("an unparseable body is charged nothing and priced as nothing — the handler rejects it", async () => {
-    const worker = await pricedWorker(true);
-    const res = await relay.app.request(`/agent/${worker}/task`, {
-      method: "POST",
-      headers: { ...JSON_AUTH, "Idempotency-Key": crypto.randomUUID(), "X-PAYMENT": "x" },
-      body: "{not json",
+  it("P2P with an unlisted target_agent is refused before admission (the federated branch cannot discover it) — as on main", async () => {
+    const d = await newAgent();
+    const key = crypto.randomUUID();
+    const res = await submit(d, key, {
+      prompt: `901 r3 p2p bogus ${crypto.randomUUID()}`,
+      submitted_by: d,
+      target_agent: "no-such-agent",
+      required_capabilities: ["web_search"],
+      payment_proof: {
+        tx_hash: "5".repeat(88),
+        chain: "solana",
+        network: "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
+        to_address: "7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgHkv",
+        amount_micro: 1_000_000,
+        fee_to_address: "7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgHkv",
+        fee_amount_micro: 52_632,
+        b_fee_to_address: "7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgHkv",
+        b_fee_amount_micro: 50_000,
+      },
     });
     expect(res.status).toBeGreaterThanOrEqual(400);
+    expect(res.status).toBeLessThan(500);
+    expect(queuedFor(d)).toBe(0);
+    expect(claimHeld(key, d), "a pre-admission refusal frees the key").toBe(false);
+  });
+
+  it('submitted_by: "" is refused 400 by the handler and charged nothing by the gate', async () => {
+    const w = await pricedWorker(true);
+    const res = await submit(
+      w,
+      crypto.randomUUID(),
+      { prompt: `901 r3 empty submitter ${crypto.randomUUID()}`, submitted_by: "" },
+      { pay: true },
+    );
+    expect(res.status, await res.clone().text()).toBe(400);
+    expect(x402.quoted).toEqual([]);
+    expect(queuedFor(w)).toBe(0);
+  });
+
+  it("a null, array, or unparseable body is a 400 — never a 500 — and is charged nothing", async () => {
+    const w = await pricedWorker(true);
+    for (const raw of ["null", "[]", "{not json", '"a string"']) {
+      const key = crypto.randomUUID();
+      const res = await relay.app.request(`/agent/${w}/task`, {
+        method: "POST",
+        headers: { ...JSON_AUTH, "Idempotency-Key": key, "X-PAYMENT": "x" },
+        body: raw,
+      });
+      expect(res.status, `${raw}: ${await res.clone().text()}`).toBe(400);
+      expect(claimHeld(key, w), `${raw}: key freed`).toBe(false);
+    }
     expect(x402.quoted).toEqual([]);
     expect(x402.settled).toBe(0);
   });
+});
 
-  it("a client-sent quote header is ignored: the gate prices the request itself", async () => {
-    const worker = await pricedWorker(true);
+describe("#901 round 3: each request is charged its own quote", () => {
+  it("a client-sent quote header naming ANOTHER request's live nonce (a cheaper one) is replaced — the request is charged its own price", async () => {
+    const cheapWorker = await newAgent();
+    await listing(cheapWorker, { web_search: 0.5 }, PAY_TO_T);
+    const dearWorker = await newAgent();
+    await listing(dearWorker, { web_search: 1.0 }, PAY_TO_W);
     const d = await newAgent();
-    const res = await relay.app.request(`/agent/${worker}/task`, {
+    let release!: () => void;
+    x402.barrier = new Promise<void>((r) => (release = r));
+
+    // A: the cheap request, held inside the facilitator with its quote live.
+    const a = submit(
+      cheapWorker,
+      crypto.randomUUID(),
+      { prompt: `901 r3 A ${crypto.randomUUID()}`, submitted_by: d },
+      { pay: true },
+    );
+    await vi.waitFor(() => expect(x402.entered).toBe(1));
+    const aNonce = x402.nonces[0]!;
+    expect(aNonce).not.toBe("");
+
+    // B: the dear request, naming A's live nonce as its own quote.
+    const b = relay.app.request(`/agent/${dearWorker}/task`, {
       method: "POST",
       headers: {
         ...JSON_AUTH,
         "Idempotency-Key": crypto.randomUUID(),
         "X-PAYMENT": "x",
-        "x-motebit-x402-quote": "forged",
+        "x-motebit-x402-quote": aNonce,
       },
-      body: JSON.stringify({ prompt: `901 r2 forged ${crypto.randomUUID()}`, submitted_by: d }),
+      body: JSON.stringify({ prompt: `901 r3 B ${crypto.randomUUID()}`, submitted_by: d }),
     });
-    expect(res.status, await res.clone().text()).toBe(201);
+    await vi.waitFor(() => expect(x402.entered).toBe(2));
+    expect(x402.nonces[1], "B arrives at the facilitator under its OWN quote").not.toBe(aNonce);
+    release();
+    await Promise.all([a, b]);
+    const G_HALF = toMicro(computeGrossAmount(0.5, PLATFORM_FEE_RATE));
     expect(x402.quoted).toEqual([
-      { price: dollars(GROSS), payTo: "0x00000000000000000000000000000000000000a1" },
+      { price: dollars(G_HALF), payTo: PAY_TO_T },
+      { price: dollars(GROSS), payTo: PAY_TO_W },
+    ]);
+  });
+
+  it("two submissions at different prices, interleaved across the facilitator await: each is charged its own price", async () => {
+    const cheapWorker = await newAgent();
+    await listing(cheapWorker, { web_search: 0.5 }, PAY_TO_T);
+    const dearWorker = await newAgent();
+    await listing(dearWorker, { web_search: 1.0 }, PAY_TO_W);
+    const d = await newAgent();
+    let release!: () => void;
+    x402.barrier = new Promise<void>((r) => (release = r));
+    const a = submit(
+      cheapWorker,
+      crypto.randomUUID(),
+      { prompt: `901 r3 C1 ${crypto.randomUUID()}`, submitted_by: d },
+      { pay: true },
+    );
+    await vi.waitFor(() => expect(x402.entered).toBe(1));
+    const b = submit(
+      dearWorker,
+      crypto.randomUUID(),
+      { prompt: `901 r3 C2 ${crypto.randomUUID()}`, submitted_by: d },
+      { pay: true },
+    );
+    await vi.waitFor(() => expect(x402.entered).toBe(2));
+    release(); // both resolve their price only now, A first
+    // Statuses are not asserted: in this stand-in both settle hooks run before
+    // either handler, and the handler's shared read-and-clear of the settle
+    // hash (#907) hands A's hash to A and none to B — the stale-hash defect,
+    // out of this test's scope. The quotes are what this test is about.
+    await Promise.all([a, b]);
+    const G_HALF = toMicro(computeGrossAmount(0.5, PLATFORM_FEE_RATE));
+    expect(x402.quoted).toEqual([
+      { price: dollars(G_HALF), payTo: PAY_TO_T },
+      { price: dollars(GROSS), payTo: PAY_TO_W },
     ]);
   });
 });

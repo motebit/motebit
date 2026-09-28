@@ -310,7 +310,10 @@ export interface SubmissionPrice {
 }
 
 /**
- * The ONE price of a task submission (#901 round 2). The submit handler's
+ * The price of a task submission, for the worker it is routed to — called
+ * only by `submissionTerms`, which decides that worker (#901 round 3).
+ *
+ * One price for every reader (#901 round 2). The submit handler's
  * `price_snapshot` (which the budget hold, the x402 deposit credit and
  * settlement all read) and the x402 gate (what it charges onchain, and
  * whether the delegator's spendable balance lets it skip x402) both call this.
@@ -327,17 +330,17 @@ export interface SubmissionPrice {
  * URL agent is the delegator — pricing by it would validate the hop against the
  * delegator's own listing (a $0.25 researcher paying a $0.003 atom would be
  * checked against $0.25). And price the SPECIFIC capability the delegation
- * pins, not the sum of the worker's listings. A submission with no
- * `target_agent` prices the URL agent (the worker), summed, as before.
+ * pins, not the sum of the worker's listings (`pinned`: the submission names
+ * its worker as `target_agent`). A submission with no `target_agent` prices
+ * the URL agent (the worker), summed, as before.
  */
-export function priceSubmission(
+function priceSubmission(
   moteDb: MotebitDatabase,
-  pathAgentId: string,
-  body: { target_agent?: unknown; required_capabilities?: unknown },
+  pricingAgent: string,
+  pinned: boolean,
+  body: { required_capabilities?: unknown },
   platformFeeRate: number,
 ): SubmissionPrice {
-  const pinned = typeof body.target_agent === "string" && body.target_agent.length > 0;
-  const pricingAgent = pinned ? (body.target_agent as string) : pathAgentId;
   const pricingCapability =
     pinned && Array.isArray(body.required_capabilities) && body.required_capabilities.length === 1
       ? String(body.required_capabilities[0])
@@ -352,6 +355,102 @@ export function priceSubmission(
   const payTo =
     row?.pay_to_address != null && row.pay_to_address !== "" ? row.pay_to_address : null;
   return { pricingAgent, pricingCapability, unitCost, grossMicro, payTo };
+}
+
+/**
+ * Read a task-submission body: a JSON object or a 400 — never a 500 from a
+ * handler dereferencing `null` or an array (#901 round 3).
+ */
+async function readSubmissionBody(c: {
+  req: { json: () => Promise<unknown> };
+}): Promise<Record<string, unknown>> {
+  let parsed: unknown;
+  try {
+    parsed = await c.req.json();
+  } catch {
+    throw new TaskError("TASK_INVALID_INPUT", "Request body must be a JSON object", 400);
+  }
+  if (parsed == null || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new TaskError("TASK_INVALID_INPUT", "Request body must be a JSON object", 400);
+  }
+  return parsed as Record<string, unknown>;
+}
+
+/** How a submission is read: who submits it, which worker it goes to, and what it costs. */
+export type SubmissionTerms =
+  | {
+      ok: true;
+      /** The delegator: the authenticated caller, else the body's `submitted_by`. */
+      submitter: string | undefined;
+      /** A P2P proof submission: `payment_proof` + `target_agent` + a submitter. */
+      p2p: boolean;
+      /**
+       * The worker the task is routed to — the proof's pinned `target_agent`
+       * on P2P, else the path agent. ALWAYS the agent `price` is for.
+       */
+      routedTo: string;
+      price: SubmissionPrice;
+    }
+  | { ok: false; message: string };
+
+/**
+ * The ONE reading of a task submission (#901 rounds 2–3), shared by the x402
+ * gate and the submit handler. It decides the submitter, whether the
+ * submission is P2P, the worker the task is ROUTED to, and the price — and
+ * the price is always for the worker the task is routed to.
+ *
+ * `target_agent` routes a task only on a P2P proof submission (the pinned
+ * dispatch and the federated forward both key on it there, and the proof's
+ * legs are validated against it). Anywhere else the relay routes from the
+ * path agent. Pricing a `target_agent` that routes nothing let any caller
+ * name an unlisted agent (price 0) or a cheap one and have the path agent —
+ * a priced worker — work for free or for the cheap agent's price (#901
+ * round 3). So a non-P2P submission may name only the path agent itself as
+ * `target_agent`; any other target is refused, before admission.
+ *
+ * `submitted_by`, when present, must be a non-empty string (the gate and the
+ * handler used to disagree about `""`). The handler maps a refusal to 400;
+ * the gate charges nothing on a refusal and lets the handler refuse.
+ */
+export function submissionTerms(
+  moteDb: MotebitDatabase,
+  pathAgentId: string,
+  callerMotebitId: string | undefined,
+  body: unknown,
+  platformFeeRate: number,
+): SubmissionTerms {
+  if (body == null || typeof body !== "object" || Array.isArray(body)) {
+    return { ok: false, message: "Request body must be a JSON object" };
+  }
+  const b = body as {
+    submitted_by?: unknown;
+    target_agent?: unknown;
+    payment_proof?: unknown;
+    required_capabilities?: unknown;
+  };
+  if (b.submitted_by != null && (typeof b.submitted_by !== "string" || b.submitted_by === "")) {
+    return { ok: false, message: "submitted_by must be a non-empty string when present" };
+  }
+  if (b.target_agent != null && typeof b.target_agent !== "string") {
+    return { ok: false, message: "target_agent must be a string when present" };
+  }
+  const target =
+    typeof b.target_agent === "string" && b.target_agent !== "" ? b.target_agent : null;
+  const caller =
+    typeof callerMotebitId === "string" && callerMotebitId !== "" ? callerMotebitId : undefined;
+  const submitter = caller ?? (b.submitted_by as string | undefined);
+  const p2p = Boolean(b.payment_proof) && target != null && submitter != null;
+  if (target != null && !p2p && target !== pathAgentId) {
+    return {
+      ok: false,
+      message:
+        "target_agent pins a worker only on a P2P submission (payment_proof + target_agent + submitter); " +
+        "without one the task goes to the agent in the path — POST to /agent/<target>/task instead",
+    };
+  }
+  const routedTo = p2p && target != null ? target : pathAgentId;
+  const price = priceSubmission(moteDb, routedTo, target != null, b, platformFeeRate);
+  return { ok: true, submitter, p2p, routedTo, price };
 }
 
 /**
@@ -2122,52 +2221,49 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
         });
       };
       rebuild();
-      let peek: {
-        submitted_by?: unknown;
-        target_agent?: unknown;
-        required_capabilities?: unknown;
-        payment_proof?: unknown;
-      };
+      let parsed: unknown;
       try {
-        const parsed: unknown = JSON.parse(bodyText);
-        if (parsed == null || typeof parsed !== "object" || Array.isArray(parsed)) {
-          return next(); // not a submission body — charge nothing; the handler refuses it
-        }
-        peek = parsed;
+        parsed = JSON.parse(bodyText);
       } catch {
         // Fail closed: an unparseable body is charged nothing and never priced
         // as free — the handler reads the same bytes and rejects them.
         return next();
       }
-
-      // The SAME price the handler snapshots (`priceSubmission`). Free, or a
-      // priced agent with no onchain destination, is not x402-chargeable: the
-      // handler decides (a priced task it cannot fund is refused 402).
-      const price = priceSubmission(moteDb, agentId, peek, platformFeeRate);
-      if (price.grossMicro <= 0 || price.payTo == null) return next();
-
-      // Virtual account bypass: the delegator the handler will debit (the
-      // token's identity, else the body's `submitted_by`, else the path agent
-      // — the handler's `submittedBy ?? motebitId`) can pay from its SPENDABLE
-      // balance, the number the hold is debited against, never the raw
-      // balance (#901). A raw read skipped x402 for an account whose balance is
-      // under the escrow hold; the handler then refused it 402 "pay via x402",
-      // and every retry skipped x402 again.
-      let delegatorId: string = agentId;
       const authHeader = c.req.header("authorization");
       const claims = authHeader?.startsWith("Bearer ")
         ? parseTokenPayloadUnsafe(authHeader.slice(7))
         : null;
-      if (typeof claims?.mid === "string" && claims.mid !== "") delegatorId = claims.mid;
-      else if (typeof peek.submitted_by === "string" && peek.submitted_by !== "") {
-        delegatorId = peek.submitted_by;
-      }
+      // The SAME reading the handler makes (`submissionTerms`): the submitter,
+      // the worker the task is routed to, and that worker's price. A refused
+      // submission (not an object, an empty `submitted_by`, a `target_agent`
+      // that routes nothing) is charged nothing — the handler refuses it 400.
+      const terms = submissionTerms(
+        moteDb,
+        agentId,
+        typeof claims?.mid === "string" ? claims.mid : undefined,
+        parsed,
+        platformFeeRate,
+      );
+      if (!terms.ok) return next();
+      const { price } = terms;
+      // Free, or a priced agent with no onchain destination, is not
+      // x402-chargeable: the handler decides (a priced task it cannot fund is
+      // refused 402).
+      if (price.grossMicro <= 0 || price.payTo == null) return next();
+
+      // Virtual account bypass: the delegator the handler will debit
+      // (`submitter ?? path agent`) can pay from its SPENDABLE balance, the
+      // number the hold is debited against, never the raw balance (#901). A
+      // raw read skipped x402 for an account whose balance is under the escrow
+      // hold; the handler then refused it 402 "pay via x402", and every retry
+      // skipped x402 again.
+      const delegatorId = terms.submitter ?? agentId;
       if (getSpendableBalance(moteDb.db, delegatorId) >= price.grossMicro) return next();
 
       // P2P bypass: a body carrying payment_proof paid onchain — skip x402.
       // Checked after the balance, so p2p is used only when the delegator
       // cannot pay through its virtual account.
-      if (peek.payment_proof != null) return next();
+      if ((parsed as { payment_proof?: unknown }).payment_proof != null) return next();
 
       const nonce = crypto.randomUUID();
       x402Quotes.set(nonce, {
@@ -2282,7 +2378,7 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
     // request's outcome is recorded instead (#888).
     c.set("idempotencyClaim" as never, { key: idempotencyKey, motebitId } as never);
 
-    const body = await c.req.json<{
+    const body = (await readSubmissionBody(c)) as {
       prompt: string;
       submitted_by?: string;
       wall_clock_ms?: number;
@@ -2368,7 +2464,7 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
         b_fee_to_address?: string;
         b_fee_amount_micro?: number;
       };
-    }>();
+    };
 
     if (body.presenter != null && body.presenter !== "relay" && body.presenter !== "submitter") {
       throw new TaskError(
@@ -2409,6 +2505,19 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
       );
     }
 
+    // The one reading of this submission (#901 round 3) — the same the x402
+    // gate made: the submitter, the worker the task is ROUTED to, and that
+    // worker's price. Refused before admission (the key is freed): a
+    // `target_agent` that routes nothing, an empty `submitted_by`.
+    const terms = submissionTerms(
+      moteDb,
+      motebitId,
+      c.get("callerMotebitId" as never) as string | undefined,
+      body,
+      platformFeeRate,
+    );
+    if (!terms.ok) throw new TaskError("TASK_INVALID_INPUT", terms.message, 400);
+
     // Standing-delegation revocation fence (checkpoint D4). Cache-based,
     // not cryptographic — the runtime's verifyGrantForTurn is the
     // cryptographic gate; this is the coordinator refusing to ACCEPT (and
@@ -2428,8 +2537,7 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
       // settlement uses below (the verified token's identity, else the
       // operator's body field); a body-named submitter can only ever fence
       // the request that names it.
-      const fenceSubmitter =
-        (c.get("callerMotebitId" as never) as string | undefined) ?? body.submitted_by;
+      const fenceSubmitter = terms.submitter;
       if (isGrantRevokedBy(moteDb.db, body.grant_id, fenceSubmitter)) {
         throw new TaskError(
           "TASK_GRANT_REVOKED",
@@ -2461,7 +2569,8 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
     // Capture the submitter identity for receipt fan-out and settlement.
     // Prefer callerMotebitId (from dualAuth signed token) over body.submitted_by.
     const callerMotebitId = c.get("callerMotebitId" as never) as string | undefined;
-    const submittedBy = callerMotebitId ?? body.submitted_by;
+    // (`submissionTerms`: the verified caller, else a non-empty `submitted_by`.)
+    const submittedBy = terms.submitter;
 
     // Snapshot the listing price at submission time so the settlement audit
     // matches what the delegator actually paid. Price against the WORKER, not
@@ -2474,16 +2583,18 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
     // no `target_agent` and prices the URL agent (the worker) as before.
     // unit_cost is in dollars from the listing JSON. Convert to micro-units for accounting.
     //
-    // ONE price per submission (#901 round 2): `priceSubmission` is also what
-    // the x402 gate charges and what its virtual-account bypass compares
+    // ONE price per submission (#901 rounds 2–3): `submissionTerms` is also
+    // what the x402 gate charges and what its virtual-account bypass compares
     // against, so the gate can never divert to x402 a task the handler would
     // fund from the account (a double charge), nor ask x402 for less than the
-    // handler credits.
+    // handler credits — and the price is for the worker the task is ROUTED
+    // to, checked below once the settlement mode is known.
     const {
+      pricingAgent,
       pricingCapability,
       unitCost: unitCostAtSubmission,
       grossMicro,
-    } = priceSubmission(moteDb, motebitId, body, platformFeeRate);
+    } = terms.price;
     const priceSnapshot = grossMicro > 0 ? grossMicro : undefined;
 
     // Capture x402 payment proof from the settlement hook (set during middleware).
@@ -2538,7 +2649,7 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
     // rather than ranking. Set in the remote branch below.
     let federatedP2pIntent = false;
 
-    if (body.payment_proof && body.target_agent && submittedBy) {
+    if (terms.p2p && body.payment_proof && body.target_agent && submittedBy) {
       const proof = body.payment_proof;
 
       // Validate proof completeness — after Arc 2 of the off-ramp arc,
@@ -2743,6 +2854,20 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
           txHash: proof.tx_hash,
         });
       }
+    }
+
+    // Priced === routed (#901 round 3). The task is priced for exactly the
+    // worker it is routed to: the proof's pinned `target_agent` on P2P (the
+    // pinned dispatch and the federated forward key on it), else the path
+    // agent the task is queued for. A pricing that names any other agent is
+    // the free-work class (a priced worker working at an unlisted or cheaper
+    // agent's price), so it is a fault, refused before admission — never a
+    // task.
+    const routedTo = settlementMode === "p2p" ? body.target_agent : motebitId;
+    if (pricingAgent !== routedTo) {
+      throw new Error(
+        `task pricing invariant: priced ${pricingAgent} but routed to ${String(routedTo)} (settlement ${settlementMode})`,
+      );
     }
 
     // === Arc 3.5: P2P-by-default submission gate ===
