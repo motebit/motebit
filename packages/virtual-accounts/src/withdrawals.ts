@@ -201,28 +201,54 @@ export function completeWithdrawal(store: AccountStore, args: CompleteWithdrawal
 /**
  * Fail a withdrawal and atomically return funds to the virtual account.
  * Returns false if the withdrawal isn't in a failable state.
+ *
+ * The status transition and the refund are ONE store operation
+ * (`AccountStore.failWithdrawalAndRefund`) — never a read, then a credit,
+ * then a status write (issue #920: that shape could leave "refunded but
+ * still pending" behind a crash, and a retry would then refund twice). The
+ * refund happens at most once per withdrawal: a second call returns false.
+ *
+ * Only call this when the payout DEFINITIVELY did not move funds (a rail
+ * that reported a landed-and-failed transfer, or an operator who has
+ * checked). An unknown outcome — a send that threw, a timeout — must leave
+ * the withdrawal pending: refunding a payout that in fact landed pays the
+ * user twice.
  */
 export function failWithdrawal(
   store: AccountStore,
   withdrawalId: string,
   reason: string,
   logger: WithdrawalsLogger = NOOP_LOGGER,
+  failedAt?: number,
 ): boolean {
-  const w = store.getWithdrawalById(withdrawalId);
-  if (!w) return false;
-  if (w.status !== "pending" && w.status !== "processing") return false;
-
-  store.credit(w.motebit_id, w.amount, "withdrawal", withdrawalId, `Withdrawal failed: ${reason}`);
-  store.updateWithdrawalStatus(withdrawalId, "failed", reason);
+  const refunded = store.failWithdrawalAndRefund(withdrawalId, reason, failedAt);
+  if (refunded === null) return false;
 
   logger.info("withdrawal.failed", {
     withdrawalId,
-    motebitId: w.motebit_id,
-    amount: w.amount,
+    motebitId: refunded.motebitId,
+    amount: refunded.amount,
     reason,
   });
 
   return true;
+}
+
+/**
+ * Record, on a withdrawal that stays `pending`, why its automated payout is
+ * unresolved (issue #920). No status or balance change — the operator
+ * reconciles on chain and then completes or fails it. Returns false when the
+ * withdrawal is missing or already terminal.
+ */
+export function noteWithdrawalPayoutUnresolved(
+  store: AccountStore,
+  withdrawalId: string,
+  note: string,
+  logger: WithdrawalsLogger = NOOP_LOGGER,
+): boolean {
+  const ok = store.noteWithdrawalPayoutUnresolved(withdrawalId, note);
+  if (ok) logger.info("withdrawal.payout_unresolved", { withdrawalId, note });
+  return ok;
 }
 
 /**

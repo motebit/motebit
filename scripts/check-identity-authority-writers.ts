@@ -516,11 +516,11 @@ const WRITERS: readonly Writer[] = [
     file: R + "account-store-sqlite.ts",
     verb: "UPDATE",
     table: "relay_withdrawals",
-    count: 5,
+    count: 7,
     principal:
-      "withdrawal lifecycle: the operator's admin complete/fail routes (master token) and the relay's rail loops (" +
+      "withdrawal lifecycle: the operator's admin complete/fail routes (master token), the relay's rail loops (" +
       LOOP +
-      ")",
+      "), and /withdraw's Path 0 auto-settle under `requireFirstPerson` on the withdrawal that same request created — completed only on a confirmed send; failed-and-refunded (`failWithdrawalAndRefund`, one transaction, status CAS so at most once) only on a send that landed and failed on-chain AND whose earlier broadcasts the adapter proved dead; otherwise left pending with an unresolved-payout note (`noteWithdrawalPayoutUnresolved`, failure_reason only, no status or balance change) (#920); the outcome comes from the chain adapter, never from the request body",
   },
   {
     file: R + "account-store-sqlite.ts",

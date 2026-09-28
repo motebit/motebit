@@ -18,21 +18,38 @@ export interface SendUsdcArgs {
   microAmount: bigint;
 }
 
+/**
+ * Outcome of one `sendUsdc` call. The call RESOLVES only when the outcome
+ * of the returned `signature` is known; a timeout, an expired blockhash on
+ * the last attempt, or any other unknown outcome REJECTS (throws) — it never
+ * resolves with `confirmed: false`.
+ */
 export interface SendUsdcResult {
-  /** Transaction signature (base58). */
+  /**
+   * Signature (base58) of the LAST transaction broadcast. When the adapter
+   * re-signed and re-broadcast (e.g. after a blockhash expiry), earlier
+   * signatures are not reported here and `confirmed` describes only this one.
+   */
   signature: string;
-  /** Slot the transaction landed in (or 0 if not yet confirmed). */
+  /** Slot of the RPC context that reported the outcome of `signature`. */
   slot: number;
-  /** Whether the network has reached the configured commitment level. */
+  /**
+   * `true`: `signature` landed at the configured commitment with no error —
+   * funds moved. `false`: `signature` LANDED and FAILED on chain (a processed
+   * transaction with an error; Solana transactions are atomic, so it moved no
+   * funds — only the fee was charged). `false` never means "not yet
+   * confirmed" or "unknown": those reject. It says nothing about any EARLIER
+   * broadcast of the same payout — see `earlierBroadcastsDead`.
+   */
   confirmed: boolean;
   /**
-   * True ONLY when every transaction this send broadcast before the returned
-   * `signature` is proven dead on chain — either there was exactly one
-   * broadcast, or each earlier attempt got a decisive, slot-consistent
-   * `expired` verdict (`getSignatureOutcome`) before the re-sign. Absent
-   * means UNKNOWN: an adapter that cannot prove it leaves it unset, and a
-   * caller must then treat an earlier broadcast as possibly landed. A relay
-   * refunds a landed-and-failed send only when this is `true` (#885 / #920).
+   * Whether it is PROVEN that no earlier broadcast of this same payout can
+   * land. `true` only when the adapter broadcast exactly one signature, OR
+   * every earlier signature was proven dead on chain (its blockhash expired,
+   * established by a slot-consistent read). `false` or absent = unknown: an
+   * earlier broadcast may have landed and paid, so a consumer MUST NOT treat
+   * `confirmed: false` as "nothing was paid" (e.g. refund a withdrawal)
+   * unless this is `true` (issue #920).
    */
   earlierBroadcastsDead?: boolean;
 }

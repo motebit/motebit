@@ -83,7 +83,12 @@ export const AccountWithdrawalRecordSchema = z
       .number()
       .nullable()
       .describe("Epoch milliseconds of settlement; null while unsettled."),
-    failure_reason: z.string().nullable().describe("Populated when status is failed; else null."),
+    failure_reason: z
+      .string()
+      .nullable()
+      .describe(
+        "Populated when status is failed; MAY carry an unresolved-payout note while status is pending; otherwise null.",
+      ),
     relay_id: z
       .string()
       .min(1)
