@@ -1089,6 +1089,34 @@ describe("Web3JsRpcAdapter.sendUsdc", () => {
     expect(chain.reads()).toBeGreaterThan(5); // it did poll, then gave up at the cap
   });
 
+  it("the default poll waits on the REAL clock (no injected sleep/now): a stalled chain still ends at the cap, 1 send", async () => {
+    const adapter = new Web3JsRpcAdapter({
+      rpcUrl: "https://api.devnet.solana.com",
+      identitySeed: ZERO_SEED,
+      expiryConfirm: { pollMs: 5, maxWaitMs: 40 }, // default sleep + Date.now
+    });
+    const conn = adapter.getConnection();
+    getAccountMock
+      .mockResolvedValueOnce({ amount: 10_000_000n })
+      .mockResolvedValueOnce({ amount: 0n });
+    vi.spyOn(conn, "getLatestBlockhash").mockResolvedValue({
+      blockhash: validBlockhash(),
+      lastValidBlockHeight: 100,
+    });
+    const chain = advancingChain(conn, { lastValid: 100, step: 0 });
+    const sendSpy = vi.spyOn(conn, "sendRawTransaction").mockResolvedValue("sigA");
+    vi.spyOn(conn, "confirmTransaction").mockRejectedValue(
+      new Error("Signature sigA has expired: block height exceeded."),
+    );
+    const started = Date.now();
+    await expect(
+      adapter.sendUsdc({ toAddress: validBase58Address(), microAmount: 1n }),
+    ).rejects.toThrow("block height exceeded");
+    expect(Date.now() - started).toBeGreaterThanOrEqual(35); // it really waited
+    expect(sendSpy).toHaveBeenCalledTimes(1);
+    expect(chain.reads()).toBeGreaterThan(1);
+  });
+
   it("gives up after BROADCAST_MAX_ATTEMPTS when every attempt is confirmed dead", async () => {
     const adapter = makeAdapterForTx();
     const conn = adapter.getConnection();
