@@ -358,6 +358,14 @@ function initSchema(db: DatabaseDriver): void {
   db.exec(SCHEMA_INDEXES);
 }
 
+/**
+ * How many undecryptable-event rows the store keeps per sync cursor key
+ * (#868; `SKIPPED_SYNC_EVENTS_KEPT` in @motebit/sync-engine, spec
+ * memory-delta §3.6). Older rows are pruned in the write that adds one;
+ * `sync_skipped_totals` keeps the count of every skip.
+ */
+export const SKIPPED_SYNC_EVENTS_KEPT = 1000;
+
 // === SqliteEventStore ===
 
 export class SqliteEventStore implements EventStoreAdapter {
@@ -459,6 +467,113 @@ export class SqliteEventStore implements EventStoreAdapter {
   async getLatestClock(motebitId: string): Promise<number> {
     const row = this.stmtGetLatestClock.get(motebitId) as { max_clock: number | null };
     return row.max_clock ?? 0;
+  }
+
+  /**
+   * The event-sync pull cursor (#868): the largest relay ingest sequence this
+   * database has durably applied for the relay stream `key`, or null. Read
+   * by `@motebit/sync-engine` (structurally — it is a `SyncSeqCursorStore`).
+   */
+  async getSyncSeqCursor(key: string): Promise<number | null> {
+    const row = this.db
+      .prepare("SELECT seq FROM sync_seq_cursors WHERE cursor_key = ?")
+      .get(key) as { seq: number } | undefined;
+    return row?.seq ?? null;
+  }
+
+  /** Record the pull cursor for `key`; called only after the pulled events were appended. */
+  async setSyncSeqCursor(key: string, seq: number): Promise<void> {
+    this.db
+      .prepare(
+        `INSERT INTO sync_seq_cursors (cursor_key, seq, updated_at) VALUES (?, ?, ?)
+         ON CONFLICT (cursor_key) DO UPDATE SET seq = excluded.seq, updated_at = excluded.updated_at`,
+      )
+      .run(key, seq, Date.now());
+  }
+
+  /**
+   * Record a pulled event the sync stream moved past because it could not
+   * be decrypted (#868, v50). One transaction: the row (once per event_id),
+   * the running total, and the prune to the newest `SKIPPED_SYNC_EVENTS_KEPT`
+   * rows for this cursor key.
+   */
+  async recordSkippedSyncEvent(
+    key: string,
+    skipped: { event_id: string; seq: number | null; reason: string; detail?: string },
+  ): Promise<void> {
+    this.db.transaction(() => {
+      const inserted = this.db
+        .prepare(
+          `INSERT OR IGNORE INTO sync_skipped_events (cursor_key, event_id, seq, reason, detail, recorded_at)
+           VALUES (?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          key,
+          skipped.event_id,
+          skipped.seq,
+          skipped.reason,
+          skipped.detail ?? null,
+          Date.now(),
+        );
+      if (inserted.changes === 0) return;
+      this.db
+        .prepare(
+          `INSERT INTO sync_skipped_totals (cursor_key, total) VALUES (?, 1)
+           ON CONFLICT (cursor_key) DO UPDATE SET total = total + 1`,
+        )
+        .run(key);
+      this.db
+        .prepare(
+          `DELETE FROM sync_skipped_events WHERE cursor_key = ? AND rowid NOT IN (
+             SELECT rowid FROM sync_skipped_events WHERE cursor_key = ? ORDER BY rowid DESC LIMIT ?
+           )`,
+        )
+        .run(key, key, SKIPPED_SYNC_EVENTS_KEPT);
+    });
+  }
+
+  /** Every undecryptable skip recorded for `key`, including rows since pruned (#868). */
+  async countSkippedSyncEvents(key: string): Promise<number> {
+    const row = this.db
+      .prepare("SELECT total FROM sync_skipped_totals WHERE cursor_key = ?")
+      .get(key) as { total: number } | undefined;
+    return row?.total ?? 0;
+  }
+
+  /** The kept skipped-event rows for one relay stream, oldest first (#868). */
+  async listSkippedSyncEvents(
+    key: string,
+  ): Promise<
+    Array<{ event_id: string; seq: number | null; reason: string; detail: string | null }>
+  > {
+    return this.db
+      .prepare(
+        "SELECT event_id, seq, reason, detail FROM sync_skipped_events WHERE cursor_key = ? ORDER BY rowid",
+      )
+      .all(key) as Array<{
+      event_id: string;
+      seq: number | null;
+      reason: string;
+      detail: string | null;
+    }>;
+  }
+
+  /**
+   * Which of `eventIds` this store holds — by primary-key lookup, never a
+   * scan of the log (#868: the sync pull dedups each page with this).
+   */
+  async getHeldEventIds(eventIds: readonly string[]): Promise<Set<string>> {
+    const held = new Set<string>();
+    for (let i = 0; i < eventIds.length; i += 500) {
+      const chunk = eventIds.slice(i, i + 500);
+      const rows = this.db
+        .prepare(
+          `SELECT event_id FROM events WHERE event_id IN (${chunk.map(() => "?").join(", ")})`,
+        )
+        .all(...chunk) as Array<{ event_id: string }>;
+      for (const r of rows) held.add(r.event_id);
+    }
+    return held;
   }
 
   async tombstone(eventId: string, motebitId: string): Promise<void> {

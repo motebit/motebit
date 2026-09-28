@@ -33,6 +33,7 @@ import { sendToEach } from "./ws-send.js";
 import { admitKey, proveSovereignFirstKey, recordFirstIdentityKey } from "./identity-keys.js";
 import type { AuthEvent } from "./auth-events.js";
 import { appendBoundEvent, bindSyncEntries } from "./identity-binding.js";
+import { parseSeqCursor, readEventsAfterSeq } from "./event-seq.js";
 
 const logger = createLogger({ service: "sync-routes" });
 
@@ -127,6 +128,23 @@ export function registerSyncRoutes(deps: SyncRoutesDeps): void {
   /** @internal */
   app.get("/sync/:motebitId/pull", async (c) => {
     const motebitId = asMotebitId(c.req.param("motebitId"));
+    // #868: `after_seq` selects the relay-ingest-sequence cursor (event-seq.ts).
+    // Without it, the clock path below is served unchanged, byte for byte.
+    const afterSeq = parseSeqCursor(c.req.query("after_seq"));
+    if (afterSeq === undefined) {
+      throw new HTTPException(400, {
+        message: "'after_seq' must be a non-negative integer",
+      });
+    }
+    if (afterSeq !== null) {
+      // The seq read takes a BoundIdentity: the same presenter check a push
+      // passes (a verified token must name exactly this path identity; the
+      // master token acts for it), over no entries.
+      const owner = bindSyncEntries(c, [], motebitId, deps.recordAuthEvent);
+      const limitRaw = parseSeqCursor(c.req.query("limit"));
+      const limit = typeof limitRaw === "number" && limitRaw > 0 ? limitRaw : undefined;
+      return c.json(readEventsAfterSeq(deps.moteDb.db, owner, afterSeq, limit));
+    }
     const afterClock = Number(c.req.query("after_clock") ?? "0");
     const events = await eventStore.query({
       motebit_id: motebitId,

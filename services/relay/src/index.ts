@@ -8,7 +8,7 @@
  *   GET  /health                                       — health check (public)
  *   WS   /ws/sync/:motebitId                           — bidirectional event stream (primary)
  *   POST /sync/:motebitId/push                         — push events (HTTP fallback)
- *   GET  /sync/:motebitId/pull                         — pull events (HTTP fallback)
+ *   GET  /sync/:motebitId/pull?after_seq=<n>           — pull events (HTTP fallback; after_clock=<n> legacy)
  *   GET  /sync/:motebitId/clock                        — latest version clock
  *   POST /sync/:motebitId/conversations                — push conversations
  *   GET  /sync/:motebitId/conversations?since=<ts>     — pull conversations

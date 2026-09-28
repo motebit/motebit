@@ -5,7 +5,7 @@
  * memory edges, identities, devices, and audit log.
  */
 
-const DB_VERSION = 8;
+const DB_VERSION = 9;
 
 export function openMotebitDB(dbName = "motebit"): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
@@ -161,6 +161,30 @@ export function openMotebitDB(dbName = "motebit"): Promise<IDBDatabase> {
         skillAudit.createIndex("skill_name", "skill_name");
         skillAudit.createIndex("at", "at");
         skillAudit.createIndex("type", "type");
+      }
+
+      // Event-sync pull cursor (#868, v9) — the largest relay ingest
+      // sequence this database has durably applied, per relay stream
+      // (`cursor_key` = relay origin + '#' + motebit_id). The cursor is the
+      // relay's sequence, never this device's clock. Beside the events it
+      // describes, so clearing site data clears both. Sibling of
+      // persistence v50 / desktop v8 / mobile v28.
+      if (!db.objectStoreNames.contains("sync_seq_cursors")) {
+        db.createObjectStore("sync_seq_cursors", { keyPath: "cursor_key" });
+      }
+      // Pulled events the stream moved past without applying because they
+      // could not be decrypted — recorded, never silent (#868, v9). Keyed by
+      // an auto-increment (insertion order, for the prune); one row per
+      // (cursor_key, event_id). BOUNDED: the newest 1000 per cursor_key are
+      // kept, pruned in the write that adds one; `sync_skipped_totals` keeps
+      // the count of every skip.
+      if (!db.objectStoreNames.contains("sync_skipped_events")) {
+        const skipped = db.createObjectStore("sync_skipped_events", { autoIncrement: true });
+        skipped.createIndex("key_event", ["cursor_key", "event_id"], { unique: true });
+        skipped.createIndex("cursor_key", "cursor_key");
+      }
+      if (!db.objectStoreNames.contains("sync_skipped_totals")) {
+        db.createObjectStore("sync_skipped_totals", { keyPath: "cursor_key" });
       }
     };
 

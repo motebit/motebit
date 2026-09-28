@@ -1,5 +1,36 @@
 import type { EventLogEntry, SyncCursor, ConflictEdge } from "@motebit/sdk";
 import type { EventStoreAdapter } from "@motebit/event-log";
+import {
+  isSeqPullSource,
+  pullBySeq,
+  resolveSeqCursorStore,
+  warnSkippedSyncEvent,
+  type SkippedSyncEvent,
+  type SyncSeqCursorStore,
+} from "./seq-cursor.js";
+
+export {
+  InMemorySyncSeqCursorStore,
+  isSeqPullSource,
+  isSyncSeqCursorStore,
+  pullBySeq,
+  resolveSeqCursorStore,
+  filterUnseen,
+  MAX_SEQ_PAGES_PER_PULL,
+  isEncryptedPayload,
+  warnSkippedSyncEvent,
+  SKIPPED_SYNC_EVENTS_KEPT,
+} from "./seq-cursor.js";
+export type {
+  SeqPullResult,
+  SeqPullSource,
+  SeqPullOutcome,
+  SyncSeqCursorStore,
+  SeqPullEntry,
+  SkippedSyncEvent,
+  SkippedSyncEventReason,
+  HeldEventIdLookup,
+} from "./seq-cursor.js";
 
 export { StaticCredentialSource } from "./credential-source.js";
 export type { CredentialRequest, CredentialSource } from "./credential-source.js";
@@ -77,6 +108,18 @@ export interface SyncConfig {
   max_retries: number;
   /** Backoff base (ms) */
   retry_backoff_ms: number;
+  /**
+   * Where the relay-ingest-sequence pull cursor is kept (#868). Default: the
+   * local store itself when it persists cursors, else process memory keyed
+   * by the local store (a new process then re-pulls from seq 0, deduped by
+   * event_id).
+   */
+  seqCursorStore?: SyncSeqCursorStore;
+  /**
+   * Told of every pulled event moved past without being applied (#868).
+   * Default: a `console.warn` line naming the event and the reason.
+   */
+  onSkippedEvent?: (skipped: SkippedSyncEvent) => void;
 }
 
 const DEFAULT_SYNC_CONFIG: SyncConfig = {
@@ -94,6 +137,19 @@ export interface SyncResult {
   pushed: number;
   pulled: number;
   conflicts: ConflictEdge[];
+  /**
+   * Pulled events moved past WITHOUT being applied this cycle because this
+   * device cannot decrypt them (#868). Each is recorded where the cursor
+   * lives (bounded) and reported through `SyncConfig.onSkippedEvent`.
+   * Absent when none.
+   */
+  skipped?: SkippedSyncEvent[];
+  /**
+   * E2E-encrypted events this RAW pull passed without applying (the E2E
+   * path over the same store applies them). Expected, not an error; counted,
+   * never recorded per event. Absent when none.
+   */
+  encryptedOnRawPath?: number;
 }
 
 export interface SyncStatusListener {
@@ -106,7 +162,14 @@ export class SyncEngine {
   private config: SyncConfig;
   private localStore: EventStoreAdapter;
   private remoteStore: EventStoreAdapter | null = null;
+  /**
+   * Clock cursor: what to PUSH (local events after it), and the fallback
+   * `after_clock` for a remote that cannot pull by seq. Never the pull
+   * cursor for a seq remote (#868).
+   */
   private cursor: SyncCursor;
+  /** The relay-ingest-sequence pull cursor, per relay stream (#868). */
+  private seqCursorStore: SyncSeqCursorStore;
   private status: SyncStatus = "idle";
   private statusListeners: Set<SyncStatusListener> = new Set();
   private syncInterval: ReturnType<typeof setInterval> | null = null;
@@ -115,6 +178,7 @@ export class SyncEngine {
   constructor(localStore: EventStoreAdapter, motebitId: string, config: Partial<SyncConfig> = {}) {
     this.config = { ...DEFAULT_SYNC_CONFIG, ...config };
     this.localStore = localStore;
+    this.seqCursorStore = resolveSeqCursorStore(localStore, config.seqCursorStore);
     this.cursor = {
       motebit_id: motebitId,
       last_event_id: "",
@@ -181,6 +245,8 @@ export class SyncEngine {
         pushed: pushed.count,
         pulled: pulled.count,
         conflicts,
+        ...(pulled.skipped && pulled.skipped.length > 0 ? { skipped: pulled.skipped } : {}),
+        ...(pulled.encryptedOnRawPath ? { encryptedOnRawPath: pulled.encryptedOnRawPath } : {}),
       };
     } catch {
       this.setStatus("error");
@@ -237,8 +303,28 @@ export class SyncEngine {
     return { count: localEvents.length, events: localEvents };
   }
 
-  private async pullEvents(): Promise<{ count: number; events: EventLogEntry[] }> {
+  private async pullEvents(): Promise<{
+    count: number;
+    events: EventLogEntry[];
+    skipped?: SkippedSyncEvent[];
+    encryptedOnRawPath?: number;
+  }> {
     if (this.remoteStore === null) return { count: 0, events: [] };
+
+    // #868: a remote that pulls by the relay ingest sequence is read by seq —
+    // the transport cursor — never by this device's clock. The clock below
+    // is sent only as the fallback an older relay answers.
+    if (isSeqPullSource(this.remoteStore)) {
+      const { fresh, skipped, encryptedOnRawPath } = await pullBySeq({
+        source: this.remoteStore,
+        localStore: this.localStore,
+        cursorStore: this.seqCursorStore,
+        motebitId: this.cursor.motebit_id,
+        fallbackAfterClock: this.cursor.last_version_clock,
+        onSkipped: this.config.onSkippedEvent ?? warnSkippedSyncEvent,
+      });
+      return { count: fresh.length, events: fresh, skipped, encryptedOnRawPath };
+    }
 
     const remoteEvents = await this.remoteStore.query({
       motebit_id: this.cursor.motebit_id,

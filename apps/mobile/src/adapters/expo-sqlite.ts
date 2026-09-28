@@ -382,6 +382,9 @@ function rowToAudit(row: AuditRow): AuditRecord {
 
 // === EventStore Adapter ===
 
+/** Undecryptable-event rows kept per sync cursor key (#868; spec memory-delta §3.6). */
+export const SKIPPED_SYNC_EVENTS_KEPT = 1000;
+
 export class ExpoSqliteEventStore implements EventStoreAdapter {
   constructor(private db: SQLite.SQLiteDatabase) {}
 
@@ -445,6 +448,72 @@ export class ExpoSqliteEventStore implements EventStoreAdapter {
       [motebitId],
     );
     return row?.max_clock ?? 0;
+  }
+
+  /** The event-sync pull cursor (#868; mobile migration v28) — a `SyncSeqCursorStore`. */
+  async getSyncSeqCursor(key: string): Promise<number | null> {
+    const row = this.db.getFirstSync<{ seq: number }>(
+      "SELECT seq FROM sync_seq_cursors WHERE cursor_key = ?",
+      [key],
+    );
+    return row?.seq ?? null;
+  }
+
+  /** Record a pulled event the sync stream moved past without applying (#868, mobile v28). */
+  async recordSkippedSyncEvent(
+    key: string,
+    skipped: { event_id: string; seq: number | null; reason: string; detail?: string },
+  ): Promise<void> {
+    // Row once per event_id; then the running total and the prune to the
+    // newest SKIPPED_SYNC_EVENTS_KEPT rows for this key.
+    const inserted = this.db.runSync(
+      `INSERT OR IGNORE INTO sync_skipped_events (cursor_key, event_id, seq, reason, detail, recorded_at)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+      [key, skipped.event_id, skipped.seq, skipped.reason, skipped.detail ?? null, Date.now()],
+    );
+    if (inserted.changes === 0) return;
+    this.db.runSync(
+      `INSERT INTO sync_skipped_totals (cursor_key, total) VALUES (?, 1)
+       ON CONFLICT (cursor_key) DO UPDATE SET total = total + 1`,
+      [key],
+    );
+    this.db.runSync(
+      `DELETE FROM sync_skipped_events WHERE cursor_key = ? AND rowid NOT IN (
+         SELECT rowid FROM sync_skipped_events WHERE cursor_key = ? ORDER BY rowid DESC LIMIT ?
+       )`,
+      [key, key, SKIPPED_SYNC_EVENTS_KEPT],
+    );
+  }
+
+  /** Every undecryptable skip recorded for `key`, including rows since pruned (#868). */
+  async countSkippedSyncEvents(key: string): Promise<number> {
+    const row = this.db.getFirstSync<{ total: number }>(
+      "SELECT total FROM sync_skipped_totals WHERE cursor_key = ?",
+      [key],
+    );
+    return row?.total ?? 0;
+  }
+
+  /** Which of `eventIds` this store holds — primary-key lookups, never a log scan (#868). */
+  async getHeldEventIds(eventIds: readonly string[]): Promise<Set<string>> {
+    const held = new Set<string>();
+    for (let i = 0; i < eventIds.length; i += 500) {
+      const chunk = eventIds.slice(i, i + 500);
+      const rows = this.db.getAllSync<{ event_id: string }>(
+        `SELECT event_id FROM events WHERE event_id IN (${chunk.map(() => "?").join(", ")})`,
+        [...chunk],
+      );
+      for (const r of rows) held.add(r.event_id);
+    }
+    return held;
+  }
+
+  async setSyncSeqCursor(key: string, seq: number): Promise<void> {
+    this.db.runSync(
+      `INSERT INTO sync_seq_cursors (cursor_key, seq, updated_at) VALUES (?, ?, ?)
+       ON CONFLICT (cursor_key) DO UPDATE SET seq = excluded.seq, updated_at = excluded.updated_at`,
+      [key, seq, Date.now()],
+    );
   }
 
   async tombstone(eventId: string, motebitId: string): Promise<void> {

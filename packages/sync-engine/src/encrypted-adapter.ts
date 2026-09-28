@@ -1,6 +1,7 @@
 import type { EventLogEntry } from "@motebit/sdk";
 import type { EventStoreAdapter, EventFilter } from "@motebit/event-log";
 import { encrypt, decrypt, type EncryptedPayload } from "@motebit/encryption";
+import { isSeqPullSource, type SeqPullResult } from "./seq-cursor.js";
 
 /**
  * Provides versioned encryption keys for key rotation.
@@ -103,6 +104,33 @@ export class EncryptedEventStoreAdapter implements EventStoreAdapter {
   async query(filter: EventFilter): Promise<EventLogEntry[]> {
     const entries = await this.inner.query(filter);
     return Promise.all(entries.map((e) => this.decryptEntry(e)));
+  }
+
+  /**
+   * The E2E-mode seq-cursor key over the inner source's stream, when the
+   * inner adapter pulls by the relay ingest sequence (#868); otherwise
+   * undefined, and this adapter is not a seq source. Distinct from the raw
+   * key, so a raw pull over the same store never advances this cursor.
+   */
+  get seqCursorKey(): string | undefined {
+    return isSeqPullSource(this.inner) ? `e2e:${this.inner.seqCursorKey}` : undefined;
+  }
+
+  /**
+   * Pull by seq through the inner source. Returns the TRANSPORT form —
+   * payloads still encrypted — so the caller can drop events it already
+   * holds BEFORE decrypting any; `decodeEvent` decrypts one at a time.
+   */
+  async pullAfterSeq(afterSeq: number, fallbackAfterClock: number): Promise<SeqPullResult> {
+    if (!isSeqPullSource(this.inner)) {
+      throw new Error("encrypted-adapter: the inner adapter does not pull by seq");
+    }
+    return this.inner.pullAfterSeq(afterSeq, fallbackAfterClock);
+  }
+
+  /** Decrypt one pulled entry; throws when it cannot (the caller records and moves past it). */
+  decodeEvent(event: EventLogEntry): Promise<EventLogEntry> {
+    return this.decryptEntry(event);
   }
 
   async appendWithClock(entry: Omit<EventLogEntry, "version_clock">): Promise<number> {

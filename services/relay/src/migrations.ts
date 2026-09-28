@@ -2043,4 +2043,97 @@ export const relayMigrations: Migration[] = [
       `);
     },
   },
+  {
+    version: 46,
+    name: "event_ingest_sequence",
+    up: (db) => {
+      // The relay ingest sequence — the event-sync transport cursor (#868;
+      // the law and the cursor-visibility argument are in `event-seq.ts`).
+      // Clients pulled `after_clock = <their own max clock>`, and clocks are
+      // device-assigned, so a sibling device's event at an equal clock was
+      // skipped forever.
+      //
+      // PER IDENTITY. Each identity's seq counts only its own events, so a
+      // cursor reveals nothing about any other identity's write volume or
+      // timing — impossible by construction, not merely undisclosed. (A
+      // single global counter would put another identity's writes in the gaps
+      // between an identity's own seqs.)
+      //
+      // The counter is a ROW (`relay_event_seq_counter.last_seq`) that only
+      // ever increments — never `MAX(seq) + 1` over the stamped rows, because
+      // retention deletes seq rows (the unstamp trigger), and MAX + 1 would
+      // then REISSUE a deleted top seq: a client whose cursor already sits at
+      // that number would skip the new event forever.
+      //
+      // The stamp is a TRIGGER on `events`, so it is part of every INSERT
+      // statement: the event row, the counter increment and its seq commit or
+      // roll back together, and every writer — the sync doors, the
+      // relay-authored trust event in tasks.ts, any later one — is stamped
+      // without knowing the sequence exists. `INSERT OR IGNORE` on a
+      // duplicate `event_id` inserts no row and fires no trigger. A row that
+      // becomes visible again (deleted by retention, then re-pushed) takes a
+      // FRESH seq above every earlier one because the UNSTAMP trigger below
+      // removed its seq row on delete — NOT because of `OR REPLACE`: SQLite
+      // lets the outer statement's conflict policy override a trigger body's,
+      // and every events writer is `INSERT OR IGNORE`, so the `OR REPLACE`
+      // below runs as OR IGNORE and does no work. Consequence: any future
+      // migration that removes `events` rows WITHOUT firing row triggers
+      // (a table rebuild, a bulk copy) must clear `relay_event_seq` for those
+      // rows too, or a re-pushed event keeps an old seq below clients'
+      // cursors and is never pulled.
+      //
+      // The events table belongs to @motebit/persistence's schema, created at
+      // boot before relay migrations run (index.ts); a harness that runs
+      // relayMigrations against a bare driver has no events to sequence.
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS relay_event_seq (
+          motebit_id TEXT NOT NULL,
+          seq INTEGER NOT NULL,
+          event_id TEXT NOT NULL UNIQUE,
+          PRIMARY KEY (motebit_id, seq)
+        );
+        CREATE TABLE IF NOT EXISTS relay_event_seq_counter (
+          motebit_id TEXT PRIMARY KEY,
+          last_seq INTEGER NOT NULL
+        );
+      `);
+      const hasEvents = db
+        .prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'events'")
+        .get() as { name: string } | undefined;
+      if (!hasEvents) return;
+      // Backfill: every event already held, numbered per identity in the
+      // order the relay received it (rowid — `events` is a rowid table, and
+      // the relay only ever appends), deterministically; then each
+      // identity's counter at its last number. A client's first seq pull is
+      // from 0, so a backfill that skipped a row would lose it for every new
+      // client.
+      db.exec(`
+        INSERT OR IGNORE INTO relay_event_seq (motebit_id, seq, event_id)
+          SELECT motebit_id,
+                 ROW_NUMBER() OVER (PARTITION BY motebit_id ORDER BY rowid ASC),
+                 event_id
+            FROM events;
+        INSERT OR REPLACE INTO relay_event_seq_counter (motebit_id, last_seq)
+          SELECT motebit_id, MAX(seq) FROM relay_event_seq GROUP BY motebit_id;
+        CREATE TRIGGER IF NOT EXISTS relay_event_seq_stamp
+          AFTER INSERT ON events
+        BEGIN
+          INSERT INTO relay_event_seq_counter (motebit_id, last_seq)
+            VALUES (NEW.motebit_id, 1)
+            ON CONFLICT (motebit_id) DO UPDATE SET last_seq = last_seq + 1;
+          INSERT OR REPLACE INTO relay_event_seq (motebit_id, seq, event_id)
+            VALUES (
+              NEW.motebit_id,
+              (SELECT last_seq FROM relay_event_seq_counter WHERE motebit_id = NEW.motebit_id),
+              NEW.event_id
+            );
+        END;
+        CREATE TRIGGER IF NOT EXISTS relay_event_seq_unstamp
+          AFTER DELETE ON events
+        BEGIN
+          DELETE FROM relay_event_seq WHERE event_id = OLD.event_id;
+        END;
+      `);
+    },
+  },
 ];

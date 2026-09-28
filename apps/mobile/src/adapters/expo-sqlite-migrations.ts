@@ -500,4 +500,36 @@ export const MOBILE_MIGRATIONS: readonly Migration[] = [
       "ALTER TABLE memory_nodes ADD COLUMN source_turn_id TEXT",
     ],
   },
+  {
+    version: 28,
+    description: "sync_seq_cursors — the event-sync pull cursor (relay ingest sequence)",
+    statements: [
+      // Sibling of persistence v50 + desktop v8 (#868). The pull cursor is
+      // the relay's ingest sequence, never this device's clock; kept beside
+      // the events it describes. A missing row is seq 0 (re-pull, deduped
+      // by event_id).
+      `CREATE TABLE IF NOT EXISTS sync_seq_cursors (
+        cursor_key TEXT PRIMARY KEY,
+        seq INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      )`,
+      // Pulled events the stream moved past without applying (undecryptable:
+      // key rotated away, corrupt ciphertext) — recorded, never silent.
+      `CREATE TABLE IF NOT EXISTS sync_skipped_events (
+        cursor_key TEXT NOT NULL,
+        event_id TEXT NOT NULL,
+        seq INTEGER,
+        reason TEXT NOT NULL,
+        detail TEXT,
+        recorded_at INTEGER NOT NULL,
+        PRIMARY KEY (cursor_key, event_id)
+      )`,
+      // Bounded: the newest 1000 rows per cursor_key are kept (pruned in the
+      // write that adds one); this keeps the count of every skip.
+      `CREATE TABLE IF NOT EXISTS sync_skipped_totals (
+        cursor_key TEXT PRIMARY KEY,
+        total INTEGER NOT NULL
+      )`,
+    ],
+  },
 ];

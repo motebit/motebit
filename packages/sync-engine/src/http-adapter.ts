@@ -1,6 +1,14 @@
 import type { EventLogEntry } from "@motebit/sdk";
 import type { EventStoreAdapter, EventFilter } from "@motebit/event-log";
 import type { CredentialSource, CredentialRequest } from "./credential-source.js";
+import type { SeqPullResult, SeqPullSource } from "./seq-cursor.js";
+
+/** Drop the relay's transport `seq` from an entry before it is stored anywhere. */
+function stripSeq(e: EventLogEntry & { seq?: unknown }): EventLogEntry {
+  if (!("seq" in e)) return e;
+  const { seq: _seq, ...entry } = e;
+  return entry;
+}
 
 export interface HttpAdapterConfig {
   baseUrl: string;
@@ -30,7 +38,7 @@ function backoffDelay(attempt: number, baseMs: number): Promise<void> {
  * EventStoreAdapter that calls the Motebit API's sync endpoints over HTTP.
  * Retries transient failures with exponential backoff + jitter.
  */
-export class HttpEventStoreAdapter implements EventStoreAdapter {
+export class HttpEventStoreAdapter implements EventStoreAdapter, SeqPullSource {
   private baseUrl: string;
   private motebitId: string;
   private authToken: string | undefined;
@@ -71,6 +79,59 @@ export class HttpEventStoreAdapter implements EventStoreAdapter {
     }
     const body = (await res.json()) as { events: EventLogEntry[] };
     return body.events;
+  }
+
+  /**
+   * The relay stream this adapter reads, in RAW mode: relay origin +
+   * identity (#868). An E2E wrapper keys its own cursor separately.
+   */
+  get seqCursorKey(): string {
+    return `raw:${this.baseUrl}#${this.motebitId}`;
+  }
+
+  /**
+   * Pull by the relay ingest sequence (#868). One request carries both
+   * cursors: a relay that serves `after_seq` answers with seq-stamped
+   * events; an older relay ignores it and answers `after_clock` exactly as
+   * `query` would. Each event's `seq` is carried beside it and stripped from
+   * the entry — it is transport metadata, never part of a stored entry. A
+   * seq page with an entry lacking an integer seq is refused whole.
+   */
+  async pullAfterSeq(afterSeq: number, fallbackAfterClock: number): Promise<SeqPullResult> {
+    const url =
+      `${this.baseUrl}/sync/${this.motebitId}/pull` +
+      `?after_seq=${afterSeq}&after_clock=${fallbackAfterClock}`;
+    const res = await this.fetchWithRetry(url, {
+      method: "GET",
+      headers: await this.headers(),
+    });
+    if (!res.ok) {
+      throw new Error(`Pull failed: ${res.status} ${res.statusText}`);
+    }
+    const body = (await res.json()) as {
+      events: Array<EventLogEntry & { seq?: unknown }>;
+      next_seq?: unknown;
+      has_more?: unknown;
+      latest_seq?: unknown;
+    };
+    const events = Array.isArray(body.events) ? body.events : [];
+    if (typeof body.next_seq !== "number" || typeof body.latest_seq !== "number") {
+      // An older relay: no seq in the answer. It served the clock query.
+      return { kind: "clock", events: events.map(stripSeq) };
+    }
+    const entries = events.map((e) => {
+      if (typeof e.seq !== "number" || !Number.isSafeInteger(e.seq)) {
+        throw new Error("Pull failed: a seq page entry carries no integer seq");
+      }
+      return { seq: e.seq, event: stripSeq(e) };
+    });
+    return {
+      kind: "seq",
+      entries,
+      nextSeq: body.next_seq,
+      hasMore: body.has_more === true,
+      latestSeq: body.latest_seq,
+    };
   }
 
   async getLatestClock(_motebitId: string): Promise<number> {

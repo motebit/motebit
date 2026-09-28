@@ -67,10 +67,11 @@ Retention window: permanent ledger; required for audit, dispute, and settlement 
 
 ### Content
 
-Tables: `events`, `sync_conversations`, `sync_conversation_messages`, `memory_nodes`.
+Tables: `events`, `relay_event_seq`, `relay_event_seq_counter`, `sync_conversations`, `sync_conversation_messages`, `memory_nodes`.
 
 Observable:
 - synced event-log entries, including memory_formed payloads at sensitivity none/personal — content above that ceiling is replaced with [REDACTED] at ingress, before any write (services/relay/src/redaction.ts; historical rows scrubbed by migration v34)
+- the relay's per-identity ingest sequence for each stored event (seq, event_id, motebit_id — no content), and each identity's sequence counter (motebit_id, last seq assigned): the pull cursor devices sync by, counted per identity so no identity's cursor reveals another's write volume or timing; a seq row is written with its event and deleted with it, the counter only ever increases (migration v46, services/relay/src/event-seq.ts)
 - conversation titles, summaries, and message content synced for multi-device continuity — protected by the agent-side outbound sensitivity gate, and stored as opaque ciphertext when the client enables end-to-end encrypted sync
 - memory node projections for cross-device restore, subject to the same sensitivity ceiling
 

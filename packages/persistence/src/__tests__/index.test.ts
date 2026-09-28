@@ -53,6 +53,73 @@ describe("SqliteEventStore", () => {
     ...overrides,
   });
 
+  it("keeps the event-sync seq cursor per relay stream, beside the events (#868, v50)", async () => {
+    const a = "http://relay.one#motebit-1";
+    const b = "http://relay.two#motebit-1";
+    expect(await mdb.eventStore.getSyncSeqCursor(a)).toBeNull();
+    await mdb.eventStore.setSyncSeqCursor(a, 7);
+    await mdb.eventStore.setSyncSeqCursor(b, 3);
+    await mdb.eventStore.setSyncSeqCursor(a, 9);
+    expect(await mdb.eventStore.getSyncSeqCursor(a)).toBe(9);
+    expect(await mdb.eventStore.getSyncSeqCursor(b)).toBe(3);
+    // A second store over the same database (a new process) reads the same cursor.
+    const { SqliteEventStore } = await import("../index.js");
+    expect(await new SqliteEventStore(mdb.db).getSyncSeqCursor(a)).toBe(9);
+  });
+
+  it("answers which event_ids it holds by key, and records skipped sync events (#868, v50)", async () => {
+    await mdb.eventStore.append(makeEvent({ event_id: "held-1" }));
+    await mdb.eventStore.append(makeEvent({ event_id: "held-2" }));
+    const many = Array.from({ length: 1200 }, (_, i) => `absent-${i}`);
+    const held = await mdb.eventStore.getHeldEventIds(["held-1", ...many, "held-2"]);
+    expect([...held].sort()).toEqual(["held-1", "held-2"]);
+    const key = "e2e:raw:http://relay.one#motebit-1";
+    await mdb.eventStore.recordSkippedSyncEvent(key, {
+      event_id: "x",
+      seq: 4,
+      reason: "undecryptable",
+      detail: "Encryption key not found for version 1",
+    });
+    await mdb.eventStore.recordSkippedSyncEvent(key, {
+      event_id: "x",
+      seq: 4,
+      reason: "undecryptable",
+    });
+    expect(await mdb.eventStore.listSkippedSyncEvents(key)).toEqual([
+      {
+        event_id: "x",
+        seq: 4,
+        reason: "undecryptable",
+        detail: "Encryption key not found for version 1",
+      },
+    ]);
+  });
+
+  it("bounds the skipped-event record: N+5 skips leave the newest N rows and a total of N+5 (#868)", async () => {
+    const { SKIPPED_SYNC_EVENTS_KEPT: N } = await import("../index.js");
+    const key = "e2e:raw:http://relay.one#motebit-1";
+    for (let i = 1; i <= N + 5; i++) {
+      await mdb.eventStore.recordSkippedSyncEvent(key, {
+        event_id: `x${i}`,
+        seq: i,
+        reason: "undecryptable",
+      });
+    }
+    const rows = await mdb.eventStore.listSkippedSyncEvents(key);
+    expect(rows).toHaveLength(N);
+    expect(rows[0]!.event_id).toBe("x6");
+    expect(rows[rows.length - 1]!.event_id).toBe(`x${N + 5}`);
+    expect(await mdb.eventStore.countSkippedSyncEvents(key)).toBe(N + 5);
+    // Another stream's rows are untouched by this stream's prune.
+    await mdb.eventStore.recordSkippedSyncEvent("other", {
+      event_id: "o",
+      seq: 1,
+      reason: "undecryptable",
+    });
+    expect(await mdb.eventStore.listSkippedSyncEvents("other")).toHaveLength(1);
+    expect(await mdb.eventStore.listSkippedSyncEvents(key)).toHaveLength(N);
+  });
+
   it("appends and queries events", async () => {
     const event = makeEvent();
     await mdb.eventStore.append(event);

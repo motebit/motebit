@@ -665,4 +665,43 @@ export const PERSISTENCE_MIGRATIONS: readonly Migration[] = [
       "CREATE INDEX IF NOT EXISTS idx_paid_intent_outstanding ON paid_intent_ledger (motebit_id, resolution, recorded_at)",
     ],
   },
+  {
+    version: 50,
+    description: "sync_seq_cursors — the event-sync pull cursor (relay ingest sequence)",
+    statements: [
+      // #868: a device pulled `after_clock = <its own max clock>`, and clocks
+      // are device-assigned, so a sibling device's event at an equal clock
+      // was skipped forever. The pull cursor is now the relay's ingest
+      // sequence: the largest seq this database has durably applied, per
+      // relay stream (`cursor_key` = relay origin + '#' + motebit_id). Kept
+      // beside the events it describes, so a wiped or restored database
+      // takes its cursor with it. A missing row is seq 0: re-pull, deduped
+      // by event_id. Local private state, never on a wire.
+      `CREATE TABLE IF NOT EXISTS sync_seq_cursors (
+        cursor_key TEXT PRIMARY KEY,
+        seq INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      )`,
+      // A pulled event the stream moved past WITHOUT applying because this
+      // device cannot decrypt it (a key rotated away, corrupt ciphertext).
+      // Recorded, never silent: the cursor passes it so one bad event cannot
+      // stop sync, and this row says what was passed and why. BOUNDED: the
+      // most recent 1000 rows per cursor_key are kept, the oldest pruned in
+      // the same write (after a rotation every unheld pre-rotation event
+      // lands here); sync_skipped_totals keeps the count of every skip.
+      `CREATE TABLE IF NOT EXISTS sync_skipped_events (
+        cursor_key TEXT NOT NULL,
+        event_id TEXT NOT NULL,
+        seq INTEGER,
+        reason TEXT NOT NULL,
+        detail TEXT,
+        recorded_at INTEGER NOT NULL,
+        PRIMARY KEY (cursor_key, event_id)
+      )`,
+      `CREATE TABLE IF NOT EXISTS sync_skipped_totals (
+        cursor_key TEXT PRIMARY KEY,
+        total INTEGER NOT NULL
+      )`,
+    ],
+  },
 ];

@@ -2,6 +2,9 @@ import type { EventLogEntry, EventType } from "@motebit/sdk";
 import type { EventStoreAdapter, EventFilter } from "@motebit/event-log";
 import { idbRequest } from "./idb.js";
 
+/** Undecryptable-event rows kept per sync cursor key (#868; spec memory-delta §3.6). */
+export const SKIPPED_SYNC_EVENTS_KEPT = 1000;
+
 export class IdbEventStore implements EventStoreAdapter {
   constructor(private db: IDBDatabase) {}
 
@@ -104,6 +107,103 @@ export class IdbEventStore implements EventStoreAdapter {
       };
       req.onerror = () => reject(req.error ?? new Error("IDB cursor request failed"));
     });
+  }
+
+  /** The event-sync pull cursor (#868; IDB v9) — a `SyncSeqCursorStore`. */
+  async getSyncSeqCursor(key: string): Promise<number | null> {
+    const tx = this.db.transaction("sync_seq_cursors", "readonly");
+    const row = (await idbRequest(tx.objectStore("sync_seq_cursors").get(key))) as
+      { cursor_key: string; seq: number } | undefined;
+    return typeof row?.seq === "number" ? row.seq : null;
+  }
+
+  /**
+   * Record a pulled event the sync stream moved past because it could not
+   * be decrypted (#868, IDB v9). One readwrite transaction: the row (once per
+   * event_id), the running total, and the prune to the newest
+   * `SKIPPED_SYNC_EVENTS_KEPT` rows for this cursor key.
+   */
+  async recordSkippedSyncEvent(
+    key: string,
+    skipped: { event_id: string; seq: number | null; reason: string; detail?: string },
+  ): Promise<void> {
+    const tx = this.db.transaction(["sync_skipped_events", "sync_skipped_totals"], "readwrite");
+    const rows = tx.objectStore("sync_skipped_events");
+    const totals = tx.objectStore("sync_skipped_totals");
+    const held = await idbRequest(rows.index("key_event").getKey([key, skipped.event_id]));
+    if (held !== undefined) return;
+    await idbRequest(
+      rows.add({
+        cursor_key: key,
+        event_id: skipped.event_id,
+        seq: skipped.seq,
+        reason: skipped.reason,
+        detail: skipped.detail ?? null,
+        recorded_at: Date.now(),
+      }),
+    );
+    const prior = (await idbRequest(totals.get(key))) as { total: number } | undefined;
+    await idbRequest(totals.put({ cursor_key: key, total: (prior?.total ?? 0) + 1 }));
+    const count = await idbRequest(rows.index("cursor_key").count(key));
+    let excess = count - SKIPPED_SYNC_EVENTS_KEPT;
+    if (excess <= 0) return;
+    // Oldest first: an index cursor over equal keys walks primary keys
+    // (insertion order) ascending.
+    await new Promise<void>((resolve, reject) => {
+      const req = rows.index("cursor_key").openCursor(IDBKeyRange.only(key));
+      req.onsuccess = () => {
+        const cursor = req.result;
+        if (!cursor || excess <= 0) return resolve();
+        cursor.delete();
+        excess--;
+        cursor.continue();
+      };
+      req.onerror = () => reject(req.error ?? new Error("IDB prune failed"));
+    });
+  }
+
+  /** Every undecryptable skip recorded for `key`, including rows since pruned (#868). */
+  async countSkippedSyncEvents(key: string): Promise<number> {
+    const tx = this.db.transaction("sync_skipped_totals", "readonly");
+    const row = (await idbRequest(tx.objectStore("sync_skipped_totals").get(key))) as
+      { total: number } | undefined;
+    return row?.total ?? 0;
+  }
+
+  /** The kept skipped-event rows for one relay stream, oldest first (#868). */
+  async listSkippedSyncEvents(
+    key: string,
+  ): Promise<Array<{ event_id: string; seq: number | null; reason: string }>> {
+    const tx = this.db.transaction("sync_skipped_events", "readonly");
+    const rows = (await idbRequest(
+      tx.objectStore("sync_skipped_events").index("cursor_key").getAll(IDBKeyRange.only(key)),
+    )) as Array<{ event_id: string; seq: number | null; reason: string }>;
+    return rows.map(({ event_id, seq, reason }) => ({ event_id, seq, reason }));
+  }
+
+  /**
+   * Which of `eventIds` this store holds — one key lookup per id in a single
+   * read transaction, never a `getAll` of the log (#868).
+   */
+  async getHeldEventIds(eventIds: readonly string[]): Promise<Set<string>> {
+    const held = new Set<string>();
+    if (eventIds.length === 0) return held;
+    const tx = this.db.transaction("events", "readonly");
+    const store = tx.objectStore("events");
+    await Promise.all(
+      eventIds.map(async (id) => {
+        const key = await idbRequest(store.getKey(id));
+        if (key !== undefined) held.add(id);
+      }),
+    );
+    return held;
+  }
+
+  async setSyncSeqCursor(key: string, seq: number): Promise<void> {
+    const tx = this.db.transaction("sync_seq_cursors", "readwrite");
+    await idbRequest(
+      tx.objectStore("sync_seq_cursors").put({ cursor_key: key, seq, updated_at: Date.now() }),
+    );
   }
 
   async tombstone(eventId: string, _motebitId: string): Promise<void> {

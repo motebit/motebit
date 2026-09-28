@@ -1,6 +1,14 @@
 import type { EventLogEntry } from "@motebit/sdk";
 import type { EventStoreAdapter, EventFilter } from "@motebit/event-log";
 import type { CredentialSource, CredentialRequest } from "./credential-source.js";
+import {
+  isSeqPullSource,
+  pullBySeq,
+  resolveSeqCursorStore,
+  warnSkippedSyncEvent,
+  type SkippedSyncEvent,
+  type SyncSeqCursorStore,
+} from "./seq-cursor.js";
 
 // Resolve WebSocket: use the global (Node 22+, browsers) or fall back to the `ws` package (Node 20).
 // globalThis.WebSocket is checked every time (tests may mock it). The `ws` import result is cached.
@@ -41,6 +49,18 @@ export interface WebSocketAdapterConfig {
   localStore?: EventStoreAdapter;
   /** Callback when catch-up pull completes */
   onCatchUp?: (pulled: number) => void;
+  /**
+   * Where the catch-up's relay-ingest-sequence cursor is kept (#868).
+   * Default: `localStore` itself when it persists cursors, else process
+   * memory keyed by `localStore` — shared with a replacement adapter over
+   * the same store, so a token refresh does not restart from seq 0.
+   */
+  seqCursorStore?: SyncSeqCursorStore;
+  /**
+   * Told of every caught-up event moved past without being applied (#868) —
+   * one this device cannot decrypt. Default: a `console.warn` line.
+   */
+  onSkippedEvent?: (skipped: SkippedSyncEvent) => void;
 }
 
 export type EventReceivedCallback = (event: EventLogEntry) => void;
@@ -70,6 +90,8 @@ export class WebSocketEventStoreAdapter implements EventStoreAdapter {
       | "httpFallback"
       | "localStore"
       | "onCatchUp"
+      | "seqCursorStore"
+      | "onSkippedEvent"
     >
   > &
     Pick<
@@ -81,6 +103,8 @@ export class WebSocketEventStoreAdapter implements EventStoreAdapter {
       | "httpFallback"
       | "localStore"
       | "onCatchUp"
+      | "seqCursorStore"
+      | "onSkippedEvent"
     >;
   private onEventCallbacks: Set<EventReceivedCallback> = new Set();
   private onCustomMessageCallbacks: Set<CustomMessageCallback> = new Set();
@@ -390,6 +414,32 @@ export class WebSocketEventStoreAdapter implements EventStoreAdapter {
 
   private async catchUp(): Promise<void> {
     if (!this.config.httpFallback || !this.config.localStore) return;
+    const fallback = this.config.httpFallback;
+    const localStore = this.config.localStore;
+    if (isSeqPullSource(fallback)) {
+      // #868: catch up by the relay ingest sequence. The local clock is sent
+      // only as the fallback an older relay answers; it is never the cursor.
+      try {
+        const localClock = await localStore.getLatestClock(this.config.motebitId);
+        const { fresh } = await pullBySeq({
+          source: fallback,
+          localStore,
+          cursorStore: resolveSeqCursorStore(localStore, this.config.seqCursorStore),
+          motebitId: this.config.motebitId,
+          fallbackAfterClock: localClock,
+          onSkipped: this.config.onSkippedEvent ?? warnSkippedSyncEvent,
+        });
+        // Only events this store did not already hold reach the listeners.
+        for (const event of fresh) {
+          for (const cb of this.onEventCallbacks) cb(event);
+        }
+        this.config.onCatchUp?.(fresh.length);
+      } catch {
+        // Catch-up failed; the cursor was not advanced past anything
+        // unapplied. Retried on the next reconnect.
+      }
+      return;
+    }
     try {
       const localClock = await this.config.localStore.getLatestClock(this.config.motebitId);
       const missed = await this.config.httpFallback.query({
