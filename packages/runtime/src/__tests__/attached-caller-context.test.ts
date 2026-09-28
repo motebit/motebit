@@ -16,6 +16,7 @@ import {
 } from "../index";
 import { RiskLevel } from "@motebit/sdk";
 import type { PolicyDecision, ToolDefinition } from "@motebit/sdk";
+import type { MotebitRuntime as MotebitRuntimeType } from "../index";
 
 /** A non-local tool that declares its own approval floor (e.g. an MCP tool marked destructive). */
 const EXT_WRITE: ToolDefinition = {
@@ -98,6 +99,49 @@ describe("attached frontend frames carry the request's caller (#880)", () => {
     })) as { ok: boolean; error?: string };
     expect(r.ok).toBe(false);
     expect(update).not.toHaveBeenCalled();
+  });
+
+  it("the clamp itself: a forwarded `trusted` reaches the gate as `verified` (independent of the gate's own cap)", async () => {
+    // A stub gate that records the context it is asked about, so this
+    // test bites the attached-surface clamp even if the policy gate's
+    // Trusted cap (#880 E) were ever removed.
+    const seen: Array<{ callerMotebitId?: string; callerTrustLevel?: string }> = [];
+    const def = EXT_UPDATE;
+    const stub = {
+      getToolRegistry: () => ({
+        list: () => [def],
+        execute: async () => ({ ok: true, data: "ran" }),
+      }),
+      policy: {
+        createTurnContext: () => ({
+          turnId: "t",
+          toolCallCount: 0,
+          turnStartMs: 0,
+          costAccumulated: 0,
+        }),
+        validate: (_t: unknown, _a: unknown, ctx: (typeof seen)[number]) => {
+          seen.push({
+            callerMotebitId: ctx.callerMotebitId,
+            callerTrustLevel: ctx.callerTrustLevel,
+          });
+          return { allowed: true, requiresApproval: false };
+        },
+      },
+    } as unknown as MotebitRuntimeType;
+    await resolveAttachedAct(stub, "tool_execute", {
+      name: "ext_update",
+      args: {},
+      caller: { motebit_id: "peer", trust_level: "trusted" },
+    });
+    await resolveAttachedRead(stub, "policy_validate", {
+      name: "ext_update",
+      args: {},
+      caller: { motebit_id: "peer", trust_level: "trusted" },
+    });
+    expect(seen).toEqual([
+      { callerMotebitId: "peer", callerTrustLevel: "verified" },
+      { callerMotebitId: "peer", callerTrustLevel: "verified" },
+    ]);
   });
 
   it("no caller (stdio / static bearer) keeps the pre-#880 evaluation", async () => {

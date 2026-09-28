@@ -104,6 +104,17 @@ export interface StreamingDeps {
   getLiveHistory(): ConversationMessage[];
   /** Tool registry for executing approved tools. */
   getToolRegistry(): ToolRegistry;
+  /**
+   * True while the in-flight turn runs ANOTHER principal's words (#880) —
+   * captured into a pending approval so the resumed continuation stays
+   * foreign after the task that raised it has returned.
+   */
+  isForeignPrincipalTurn?(): boolean;
+  /**
+   * Mark the runtime as running a foreign principal's turn until the
+   * returned release is called (#880) — the resume of a foreign approval.
+   */
+  enterForeignPrincipalTurn?(): () => void;
   /** Policy gate — sanitize tool results. */
   sanitizeToolResult(
     result: ToolResult,
@@ -293,6 +304,12 @@ interface PendingApproval {
   auditCallId?: string;
   /** The loop turn the paused decision belongs to (ledger correlation). */
   turnId?: string;
+  /**
+   * The paused turn ran ANOTHER principal's words (#880). The resume —
+   * the approved call and the continuation that re-runs the same prompt —
+   * stays foreign: no `localOnly` tool, however long the owner took.
+   */
+  foreignPrincipal?: boolean;
 }
 
 export class StreamingManager {
@@ -744,6 +761,7 @@ export class StreamingManager {
           requestedAt: Date.now(),
           auditCallId: chunk.audit_call_id,
           turnId: chunk.turn_id,
+          ...(this.deps.isForeignPrincipalTurn?.() === true ? { foreignPrincipal: true } : {}),
         };
 
         // Persist quorum metadata to the approval store (source of truth)
@@ -852,6 +870,12 @@ export class StreamingManager {
     this._isProcessing = true;
     this.deps.pushStateUpdate({ processing: 0.9, attention: 0.8 });
     this.deps.setSpeaking(true);
+    // A foreign principal's paused turn resumes foreign (#880): the task
+    // that raised it has returned and cleared its mark, but the
+    // continuation re-runs that principal's prompt. Held until the
+    // continuation ends.
+    const releaseForeign =
+      pending.foreignPrincipal === true ? this.deps.enterForeignPrincipalTurn?.() : undefined;
 
     try {
       // Record the human's consent as a signed, offline-verifiable decision
@@ -871,6 +895,21 @@ export class StreamingManager {
             ? (this.deps.delegationReceiptStash?.count() ?? null)
             : null;
         const toolRegistry = this.deps.getToolRegistry();
+        // The approved call is exactly the paused one; for a foreign turn it
+        // can never be an owner-interior tool (defense in depth — a foreign
+        // turn is never offered one, so it cannot have proposed one).
+        if (
+          pending.foreignPrincipal === true &&
+          toolRegistry.list().some((t) => t.name === pending.toolName && t.localOnly === true)
+        ) {
+          yield {
+            type: "tool_status" as const,
+            name: pending.toolName,
+            status: "done" as const,
+            result: `Tool "${pending.toolName}" acts for this motebit's owner and is not available to another principal's task`,
+          };
+          return;
+        }
         // Ledger: the paused decision is proceeding — written before the call.
         this.deps.recordApprovalSatisfied?.({
           turnId: pending.turnId,
@@ -1019,6 +1058,7 @@ export class StreamingManager {
       });
       yield* this.processStream(stream, pending.userMessage, pending.runId);
     } finally {
+      releaseForeign?.();
       this.deps.setSpeaking(false);
       this.deps.pushStateUpdate({ processing: 0.1, attention: 0.3 });
       this._isProcessing = false;

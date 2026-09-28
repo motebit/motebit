@@ -51,6 +51,16 @@ describe("pickSafeChatOptions", () => {
   it("passes undefined through untouched", () => {
     expect(pickSafeChatOptions(undefined)).toBeUndefined();
   });
+
+  it("passes foreignPrincipal: true — it only NARROWS the turn (#880)", () => {
+    expect(pickSafeChatOptions({ foreignPrincipal: true })).toEqual({ foreignPrincipal: true });
+  });
+
+  it("never lets a frame assert a turn is NOT foreign — any value but true is dropped (#880)", () => {
+    for (const v of [false, "true", 1, null, {}]) {
+      expect(pickSafeChatOptions({ foreignPrincipal: v })).toEqual({});
+    }
+  });
 });
 
 describe("pickSafeInvokeOptions", () => {

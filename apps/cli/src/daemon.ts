@@ -14,6 +14,7 @@ import {
   servedToolNames,
 } from "@motebit/runtime";
 import type { MintToken } from "@motebit/runtime";
+import { attachedServePrincipalDeps, servePrincipalDeps } from "./serve-deps.js";
 import { buildHardwareVerifiers } from "@motebit/verify";
 import { embedText } from "@motebit/memory-graph";
 
@@ -815,15 +816,6 @@ export async function handleRun(config: CliConfig): Promise<void> {
  * coordinator's governance with hardcoded `peer_agent` provenance —
  * identical to the local serve path.
  */
-/** The wire form of an MCP request's verified caller for the attached frames. */
-function attachedCaller(caller: { motebitId: string; trustLevel: string } | undefined): {
-  caller?: { motebit_id: string; trust_level: string };
-} {
-  return caller == null
-    ? {}
-    : { caller: { motebit_id: caller.motebitId, trust_level: caller.trustLevel } };
-}
-
 async function runServeAttached(
   client: import("@motebit/runtime-host").RuntimeHostClient,
   motebitId: string,
@@ -863,20 +855,9 @@ async function runServeAttached(
     // tools_filtered is already policy-filtered on the coordinator.
     filterTools: (tools) => tools,
     // The request's verified caller travels with every policy question and
-    // every execution (#880): the coordinator re-validates at execution, and
-    // without the caller it judged a remote call as the owner's own turn.
-    validateTool: async (tool, args, caller) =>
-      (await client.query("policy_validate", {
-        name: tool.name,
-        args,
-        ...attachedCaller(caller),
-      })) as import("@motebit/sdk").PolicyDecision,
-    executeTool: async (name, args, caller) =>
-      (await client.act("tool_execute", {
-        name,
-        args,
-        ...attachedCaller(caller),
-      })) as import("@motebit/sdk").ToolResult,
+    // every execution, and `motebit_query` is a foreign turn (#880) —
+    // serve-deps.ts, locked by serve-deps.test.ts.
+    ...attachedServePrincipalDeps(client),
 
     getState: async () => (await client.query("state")) as Record<string, unknown>,
 
@@ -902,16 +883,6 @@ async function runServeAttached(
           ok: result.ok,
         })
         .catch(() => {});
-    },
-
-    // The AI loop is the coordinator's — one turn over the chat frame.
-    sendMessage: async (text: string) => {
-      let response = "";
-      for await (const chunk of client.chat(text)) {
-        const c = chunk as { type?: string; text?: string };
-        if (c.type === "text" && typeof c.text === "string") response += c.text;
-      }
-      return { response, memoriesFormed: 0 };
     },
 
     queryMemories: async (query: string, limit?: number) => {
@@ -1252,18 +1223,9 @@ export async function handleServe(config: CliConfig): Promise<void> {
 
     listTools: () => runtime.getToolRegistry().list(),
     filterTools: (tools) => runtime.policy.filterTools(tools),
-    // The request's verified caller is part of the policy question (#880).
-    // Dropping it judged every remote call as the owner's own turn, so no
-    // caller-scoped rule — Blocked, Unknown ⇒ approval, a tool's own
-    // approval floor for remote callers — could fire on `motebit serve`.
-    validateTool: (tool, args, caller) => {
-      const ctx = runtime.policy.createTurnContext();
-      if (caller) {
-        ctx.callerMotebitId = caller.motebitId;
-        ctx.callerTrustLevel = caller.trustLevel;
-      }
-      return runtime.policy.validate(tool, args, ctx);
-    },
+    // The caller in every policy question, and `motebit_query` as a foreign
+    // turn (#880) — serve-deps.ts, locked by serve-deps.test.ts.
+    ...servePrincipalDeps(runtime),
     executeTool: (name, args) => runtime.getToolRegistry().execute(name, args),
 
     getState: () => runtime.getState() as unknown as Record<string, unknown>,
@@ -1300,14 +1262,7 @@ export async function handleServe(config: CliConfig): Promise<void> {
       void runtime.events.append(entry).catch(() => {});
     },
 
-    // Synthetic tool backends. `motebit_query` runs a CALLER's words
-    // through this motebit's loop, so the turn is foreign: no `localOnly`
-    // tool is offered to it (#880).
-    sendMessage: async (text: string) => {
-      const result = await runtime.sendMessage(text, undefined, { foreignPrincipal: true });
-      return { response: result.response, memoriesFormed: result.memoriesFormed.length };
-    },
-
+    // Synthetic tool backends (`sendMessage` is in servePrincipalDeps above).
     queryMemories: async (query: string, limit?: number) => {
       const embedding = await embedText(query);
       const nodes = await runtime.memory.recallRelevant(embedding, {

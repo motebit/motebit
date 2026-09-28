@@ -540,6 +540,8 @@ export class MotebitRuntime {
    * by the `_isProcessing` guard.
    */
   private _foreignTurn = false;
+  /** Resumes of a foreign principal's paused approval in flight (#880). */
+  private _foreignResumesInFlight = 0;
   private _taskQueryCoords: {
     syncUrl: string;
     authToken: (audience?: import("@motebit/protocol").TokenAudience) => Promise<string>;
@@ -1365,6 +1367,16 @@ export class MotebitRuntime {
       logToolUsed: (n, r) => void this.logToolUsed(n, r),
       getLiveHistory: () => this.conversation.liveHistory,
       getToolRegistry: () => this.toolRegistry,
+      isForeignPrincipalTurn: () => this.isForeignPrincipalTurn(),
+      enterForeignPrincipalTurn: () => {
+        this._foreignResumesInFlight++;
+        let released = false;
+        return () => {
+          if (released) return;
+          released = true;
+          this._foreignResumesInFlight--;
+        };
+      },
       sanitizeToolResult: (result, toolName) => {
         if (typeof this.policy.sanitizeAndCheck === "function") {
           const check = this.policy.sanitizeAndCheck(result, toolName);
@@ -1594,12 +1606,13 @@ export class MotebitRuntime {
   /**
    * True while this runtime is running another principal's words: a
    * relay- or MCP-dispatched task (`handleAgentTask`, counted) or a
-   * turn started with `foreignPrincipal: true`. The one predicate every
+   * turn started with `foreignPrincipal: true`, or the resume of such a
+   * turn's paused approval. The one predicate every
    * foreign-turn guard reads — the loop's tool scope (#880) and the
    * owner-only delegation reads (#874).
    */
   private isForeignPrincipalTurn(): boolean {
-    return this._foreignTasksInFlight > 0 || this._foreignTurn;
+    return this._foreignTasksInFlight > 0 || this._foreignTurn || this._foreignResumesInFlight > 0;
   }
 
   /** True when `toolName` is registered with `localOnly: true`. */
