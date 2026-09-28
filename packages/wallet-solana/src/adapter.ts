@@ -25,6 +25,16 @@ export interface SendUsdcResult {
   slot: number;
   /** Whether the network has reached the configured commitment level. */
   confirmed: boolean;
+  /**
+   * True ONLY when every transaction this send broadcast before the returned
+   * `signature` is proven dead on chain — either there was exactly one
+   * broadcast, or each earlier attempt got a decisive, slot-consistent
+   * `expired` verdict (`getSignatureOutcome`) before the re-sign. Absent
+   * means UNKNOWN: an adapter that cannot prove it leaves it unset, and a
+   * caller must then treat an earlier broadcast as possibly landed. A relay
+   * refunds a landed-and-failed send only when this is `true` (#885 / #920).
+   */
+  earlierBroadcastsDead?: boolean;
 }
 
 /**
@@ -40,6 +50,12 @@ export interface SendUsdcBatchItemResult {
   signature: string | null;
   slot: number;
   reason: string | null;
+  /**
+   * `SendUsdcResult.earlierBroadcastsDead` for the transaction that carried
+   * this item. Absent when the item has no transaction outcome (its chunk
+   * threw or was never sent) — unknown, never assumed.
+   */
+  earlierBroadcastsDead?: boolean;
 }
 
 /**

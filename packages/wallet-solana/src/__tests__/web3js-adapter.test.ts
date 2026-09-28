@@ -31,7 +31,7 @@ vi.mock("@solana/spl-token", async (importOriginal) => {
   };
 });
 
-import { TokenAccountNotFoundError } from "@solana/spl-token";
+import { ASSOCIATED_TOKEN_PROGRAM_ID, TokenAccountNotFoundError } from "@solana/spl-token";
 
 import {
   Web3JsRpcAdapter,
@@ -653,6 +653,13 @@ describe("Web3JsRpcAdapter balance methods", () => {
 // transaction-build + signing stays real so anything that would have
 // crashed at serialize-time still does.
 
+/** The Associated Token Account program instructions in a raw sent transaction. */
+function ataInstructionData(raw: unknown): number[][] {
+  return Transaction.from(raw as Buffer)
+    .instructions.filter((ix) => ix.programId.equals(ASSOCIATED_TOKEN_PROGRAM_ID))
+    .map((ix) => [...ix.data]);
+}
+
 describe("Web3JsRpcAdapter.sendUsdc", () => {
   it("rejects garbage recipient addresses with InvalidSolanaAddressError", async () => {
     const adapter = makeAdapterForTx();
@@ -694,7 +701,12 @@ describe("Web3JsRpcAdapter.sendUsdc", () => {
       toAddress: validBase58Address(),
       microAmount: 1_000_000n,
     });
-    expect(result).toEqual({ signature: "sigHappy", slot: 42, confirmed: true });
+    expect(result).toEqual({
+      signature: "sigHappy",
+      slot: 42,
+      confirmed: true,
+      earlierBroadcastsDead: true,
+    });
   });
 
   it("auto-creates destination ATA when missing (TokenAccountNotFoundError)", async () => {
@@ -717,8 +729,42 @@ describe("Web3JsRpcAdapter.sendUsdc", () => {
       toAddress: validBase58Address(),
       microAmount: 500_000n,
     });
-    expect(result).toEqual({ signature: "sigCreated", slot: 7, confirmed: true });
+    expect(result).toEqual({
+      signature: "sigCreated",
+      slot: 7,
+      confirmed: true,
+      earlierBroadcastsDead: true,
+    });
     expect(sendSpy).toHaveBeenCalledOnce();
+  });
+
+  // ── #885/#920: the ATA creation is IDEMPOTENT ──
+  // A non-idempotent create fails if the account exists, so a re-signed
+  // attempt after an earlier one created it would land-and-fail every time.
+  it("creates a missing destination ATA with the IDEMPOTENT instruction (data [1]), on every attempt", async () => {
+    const adapter = makeAdapterForTx();
+    const conn = adapter.getConnection();
+    getAccountMock
+      .mockResolvedValueOnce({ amount: 10_000_000n })
+      .mockRejectedValueOnce(new TokenAccountNotFoundError());
+    vi.spyOn(conn, "getLatestBlockhash").mockResolvedValue({
+      blockhash: validBlockhash(),
+      lastValidBlockHeight: 100,
+    });
+    chainSays(conn, { height: 500, slot: 1_000, statusSlot: 1_000, status: null });
+    const sendSpy = vi
+      .spyOn(conn, "sendRawTransaction")
+      .mockResolvedValueOnce("sigA")
+      .mockResolvedValue("sigB");
+    vi.spyOn(conn, "confirmTransaction")
+      .mockRejectedValueOnce(new Error("Signature sigA has expired: block height exceeded."))
+      .mockResolvedValue({ context: { slot: 5 }, value: { err: null } });
+
+    await adapter.sendUsdc({ toAddress: validBase58Address(), microAmount: 1n });
+    expect(sendSpy).toHaveBeenCalledTimes(2);
+    for (const call of sendSpy.mock.calls) {
+      expect(ataInstructionData(call[0])).toEqual([[1]]);
+    }
   });
 
   it("rethrows non-TANF errors during the dest ATA existence check", async () => {
@@ -784,7 +830,12 @@ describe("Web3JsRpcAdapter.sendUsdc", () => {
       toAddress: validBase58Address(),
       microAmount: 1_000_000n,
     });
-    expect(result).toEqual({ signature: "sigFresh", slot: 51, confirmed: true });
+    expect(result).toEqual({
+      signature: "sigFresh",
+      slot: 51,
+      confirmed: true,
+      earlierBroadcastsDead: true,
+    });
     expect(blockhashSpy).toHaveBeenCalledTimes(2);
     expect(sendSpy).toHaveBeenCalledTimes(2);
   });
@@ -875,6 +926,8 @@ describe("Web3JsRpcAdapter.sendUsdc", () => {
     const r = await adapter.sendUsdc({ toAddress: validBase58Address(), microAmount: 1n });
     expect(r.confirmed).toBe(false);
     expect(sendSpy).toHaveBeenCalledTimes(1);
+    // One broadcast: nothing earlier can land, so a refund on this failure is safe.
+    expect(r.earlierBroadcastsDead).toBe(true);
   });
 
   // ── Realistic heights (#885 round 4): web3.js raises the expiry at
@@ -901,7 +954,12 @@ describe("Web3JsRpcAdapter.sendUsdc", () => {
       .mockResolvedValue({ context: { slot: 99 }, value: { err: null } });
 
     const r = await adapter.sendUsdc({ toAddress: validBase58Address(), microAmount: 1n });
-    expect(r).toEqual({ signature: "sigB", slot: 99, confirmed: true });
+    expect(r).toEqual({
+      signature: "sigB",
+      slot: 99,
+      confirmed: true,
+      earlierBroadcastsDead: true,
+    });
     expect(sendSpy).toHaveBeenCalledTimes(2);
     expect(chain.reads()).toBeGreaterThan(1); // it waited out the margin
   });
@@ -1276,7 +1334,9 @@ describe("Web3JsRpcAdapter.sendUsdcBatch", () => {
     const results = await adapter.sendUsdcBatch([
       { toAddress: validBase58Address(), microAmount: 1n },
     ]);
-    expect(results).toEqual([{ ok: true, signature: "sigSingle", slot: 1, reason: null }]);
+    expect(results).toEqual([
+      { ok: true, signature: "sigSingle", slot: 1, reason: null, earlierBroadcastsDead: true },
+    ]);
   });
 
   it("throws InsufficientUsdcBalanceError when the total exceeds available balance", async () => {
@@ -1310,8 +1370,8 @@ describe("Web3JsRpcAdapter.sendUsdcBatch", () => {
       { toAddress: validBase58Address(), microAmount: 2n },
     ]);
     expect(results).toEqual([
-      { ok: true, signature: "sigMulti", slot: 200, reason: null },
-      { ok: true, signature: "sigMulti", slot: 200, reason: null },
+      { ok: true, signature: "sigMulti", slot: 200, reason: null, earlierBroadcastsDead: true },
+      { ok: true, signature: "sigMulti", slot: 200, reason: null, earlierBroadcastsDead: true },
     ]);
   });
 
@@ -1374,10 +1434,58 @@ describe("Web3JsRpcAdapter.sendUsdcBatch", () => {
     ]);
     // Both legs settled atomically on the fresh signature.
     expect(results).toEqual([
-      { ok: true, signature: "sigFresh", slot: 210, reason: null },
-      { ok: true, signature: "sigFresh", slot: 210, reason: null },
+      { ok: true, signature: "sigFresh", slot: 210, reason: null, earlierBroadcastsDead: true },
+      { ok: true, signature: "sigFresh", slot: 210, reason: null, earlierBroadcastsDead: true },
     ]);
     expect(blockhashSpy).toHaveBeenCalledTimes(2);
+  });
+
+  it("batch: a missing recipient ATA is created with the IDEMPOTENT instruction", async () => {
+    const adapter = makeAdapterForTx();
+    const conn = adapter.getConnection();
+    getAccountMock
+      .mockResolvedValueOnce({ amount: 10_000_000n })
+      .mockResolvedValueOnce({ amount: 0n })
+      .mockRejectedValueOnce(new TokenAccountNotFoundError());
+    vi.spyOn(conn, "getLatestBlockhash").mockResolvedValue({
+      blockhash: validBlockhash(),
+      lastValidBlockHeight: 1,
+    });
+    const sendSpy = vi.spyOn(conn, "sendRawTransaction").mockResolvedValue("sigIdem");
+    vi.spyOn(conn, "confirmTransaction").mockResolvedValue({
+      context: { slot: 7 },
+      value: { err: null },
+    });
+    await adapter.sendUsdcBatch([
+      { toAddress: validBase58Address(), microAmount: 1n },
+      { toAddress: validBase58Address(), microAmount: 2n },
+    ]);
+    expect(ataInstructionData(sendSpy.mock.calls[0]![0])).toEqual([[1]]);
+  });
+
+  it("batch: a chunk whose send ended undecided carries NO earlierBroadcastsDead (unknown, never assumed)", async () => {
+    const adapter = makeAdapterForTx();
+    const conn = adapter.getConnection();
+    getAccountMock.mockImplementation(async () => ({ amount: 100_000_000n }));
+    vi.spyOn(conn, "getLatestBlockhash").mockResolvedValue({
+      blockhash: validBlockhash(),
+      lastValidBlockHeight: 100,
+    });
+    // The chain cannot say (status node lags) ⇒ the chunk throws.
+    chainSays(conn, { height: 500, slot: 1_000, statusSlot: 900, status: null });
+    const sendSpy = vi.spyOn(conn, "sendRawTransaction").mockResolvedValue("sigMaybe");
+    vi.spyOn(conn, "confirmTransaction").mockRejectedValue(
+      new Error("Signature sigMaybe has expired: block height exceeded."),
+    );
+    const results = await adapter.sendUsdcBatch([
+      { toAddress: validBase58Address(), microAmount: 1n },
+      { toAddress: validBase58Address(), microAmount: 2n },
+    ]);
+    expect(sendSpy).toHaveBeenCalledTimes(1);
+    for (const r of results) {
+      expect(r.ok).toBe(false);
+      expect(r).not.toHaveProperty("earlierBroadcastsDead");
+    }
   });
 
   it("aborts the batch when an invalid mid-batch address is encountered", async () => {

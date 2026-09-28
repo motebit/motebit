@@ -74,7 +74,7 @@ export function isDerivedSettlementBinding(
   return bytes != null && settlementAddress === deriveSolanaAddress(bytes);
 }
 import {
-  createAssociatedTokenAccountInstruction,
+  createAssociatedTokenAccountIdempotentInstruction,
   createTransferInstruction,
   getAccount,
   getAssociatedTokenAddress,
@@ -311,8 +311,10 @@ export class Web3JsRpcAdapter implements SolanaRpcAdapter {
       if (!(err instanceof TokenAccountNotFoundError)) throw err;
     }
     if (!destExists) {
+      // Idempotent (#885): a re-signed transaction must never land-and-fail
+      // because an earlier attempt already created the account.
       instructions.push(
-        createAssociatedTokenAccountInstruction(
+        createAssociatedTokenAccountIdempotentInstruction(
           this.keypair.publicKey, // payer
           destAta,
           recipient,
@@ -367,6 +369,13 @@ export class Web3JsRpcAdapter implements SolanaRpcAdapter {
     instructions: readonly TransactionInstruction[],
     hooks?: BroadcastHooks,
   ): Promise<SendUsdcResult> {
+    // The chain's verdict on every attempt broadcast before the current one.
+    // `earlierBroadcastsDead` is derived from this EVIDENCE, not from the
+    // control flow: true only if each earlier attempt was decisively
+    // `expired` (for the first attempt the list is empty — one broadcast).
+    const earlierVerdicts: SignatureOutcome["status"][] = [];
+    const earlierBroadcastsDead = (): boolean =>
+      earlierVerdicts.every((status) => status === "expired");
     for (let attempt = 1; ; attempt++) {
       const tx = new Transaction();
       for (const ix of instructions) tx.add(ix);
@@ -399,16 +408,28 @@ export class Web3JsRpcAdapter implements SolanaRpcAdapter {
           signature,
           slot: confirmation.context.slot,
           confirmed: confirmation.value.err === null,
+          earlierBroadcastsDead: earlierBroadcastsDead(),
         };
       } catch (err) {
         if (!isBlockhashExpiry(err)) throw err;
         const outcome = await this.awaitDecisiveOutcome(signed);
         switch (outcome.status) {
           case "landed":
-            return { signature: signed.signature, slot: outcome.slot, confirmed: true };
+            return {
+              signature: signed.signature,
+              slot: outcome.slot,
+              confirmed: true,
+              earlierBroadcastsDead: earlierBroadcastsDead(),
+            };
           case "failed":
-            return { signature: signed.signature, slot: 0, confirmed: false };
+            return {
+              signature: signed.signature,
+              slot: 0,
+              confirmed: false,
+              earlierBroadcastsDead: earlierBroadcastsDead(),
+            };
           case "expired":
+            earlierVerdicts.push(outcome.status);
             if (attempt < BROADCAST_MAX_ATTEMPTS) continue;
             throw err;
           case "pending":
@@ -468,7 +489,17 @@ export class Web3JsRpcAdapter implements SolanaRpcAdapter {
     if (items.length === 0) return [];
     if (items.length === 1) {
       const r = await this.sendUsdc(items[0]!, hooks);
-      return [{ ok: r.confirmed, signature: r.signature, slot: r.slot, reason: null }];
+      return [
+        {
+          ok: r.confirmed,
+          signature: r.signature,
+          slot: r.slot,
+          reason: null,
+          ...(r.earlierBroadcastsDead !== undefined
+            ? { earlierBroadcastsDead: r.earlierBroadcastsDead }
+            : {}),
+        },
+      ];
     }
 
     const totalAmount = items.reduce((s, i) => s + i.microAmount, 0n);
@@ -516,7 +547,7 @@ export class Web3JsRpcAdapter implements SolanaRpcAdapter {
           }
           if (!destExists) {
             instructions.push(
-              createAssociatedTokenAccountInstruction(
+              createAssociatedTokenAccountIdempotentInstruction(
                 this.keypair.publicKey,
                 destAta,
                 recipient,
@@ -531,13 +562,17 @@ export class Web3JsRpcAdapter implements SolanaRpcAdapter {
 
         // Same fresh-blockhash retry as the single-leg path — the atomic P2P
         // multi-output tx is exactly what the devnet expiry flake was killing.
-        const { signature, slot, confirmed } = await this.signSendConfirm(instructions, hooks);
+        const { signature, slot, confirmed, earlierBroadcastsDead } = await this.signSendConfirm(
+          instructions,
+          hooks,
+        );
         for (let i = start; i < end; i++) {
           results[i] = {
             ok: confirmed,
             signature,
             slot,
             reason: confirmed ? null : "tx failed",
+            ...(earlierBroadcastsDead !== undefined ? { earlierBroadcastsDead } : {}),
           };
         }
         if (!confirmed) aborted = true;
