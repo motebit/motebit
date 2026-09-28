@@ -60,6 +60,34 @@ describe("wireServerDeps", () => {
     expect((await deps.listTools())[0]!.name).toBe("test_tool");
   });
 
+  it("never lists or executes a localOnly tool (#874)", async () => {
+    const execute = vi.fn().mockResolvedValue({ ok: true, data: "SECRET" });
+    const runtime = makeRuntime({
+      getToolRegistry: () => ({
+        list: () => [
+          { name: "test_tool", description: "A test tool", inputSchema: {} },
+          {
+            name: "retrieve_task_result",
+            description: "owner-only",
+            inputSchema: {},
+            localOnly: true,
+          },
+        ],
+        execute,
+      }),
+    });
+    const deps = wireServerDeps(runtime, { motebitId: "test-id" });
+    const listed = (await deps.listTools()).map((t) => t.name);
+    expect(listed).toEqual(["test_tool"]);
+    expect(deps.filterTools(runtime.getToolRegistry().list()).map((t) => t.name)).toEqual([
+      "test_tool",
+    ]);
+    const refused = await deps.executeTool("retrieve_task_result", {});
+    expect(refused.ok).toBe(false);
+    expect(execute).not.toHaveBeenCalled();
+    expect((await deps.executeTool("test_tool", {})).ok).toBe(true);
+  });
+
   it("filters tombstoned memories", async () => {
     const runtime = makeRuntime();
     const deps = wireServerDeps(runtime, { motebitId: "test-id" });

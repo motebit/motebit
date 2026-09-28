@@ -511,6 +511,71 @@ export interface GradientStoreAdapter {
   list(motebitId: string, limit?: number): GradientSnapshot[];
 }
 
+// === Paid-Unretrieved Ledger ===
+
+/**
+ * A paid delegation whose payment SETTLED onchain but whose result was
+ * never delivered to the delegator (#433/#874). Local private state,
+ * never on a wire: it exists so "never pay twice for the same job" holds
+ * across a restart, and so the owner can be told a result is waiting.
+ *
+ * Recorded only from a settled-payment fact (money verifiably moved),
+ * never from an intent. `resolved_at` is null while the result is
+ * outstanding.
+ */
+export interface PaidIntentRecord {
+  /** The delegator — the identity that paid. The ledger is per identity. */
+  motebit_id: string;
+  /** The relay task the payment bought — the handle to re-fetch, never re-pay. */
+  task_id: string;
+  worker_motebit_id: string;
+  capability: string;
+  tx_hash: string;
+  paid_micro: number;
+  fee_micro: number;
+  recorded_at: number;
+  /**
+   * `in_flight` = the payment settled and the relay accepted the task; the
+   * session that paid is still polling for the result. `unretrieved` = the
+   * poll ended without a result. An `in_flight` entry whose `session_id`
+   * is not the reading session's is treated as unretrieved: the process
+   * that was polling is gone (#874 review).
+   */
+  state: "in_flight" | "unretrieved";
+  /** The runtime session that recorded the entry — a random id per runtime instance. */
+  session_id: string;
+  /**
+   * How the entry stopped being outstanding: `retrieved` = the signed
+   * result was fetched; `dismissed` = the owner cleared it knowingly
+   * (e.g. the relay reaped the task). Null while outstanding.
+   */
+  resolution: "retrieved" | "dismissed" | null;
+  resolved_at: number | null;
+}
+
+/**
+ * Durable store behind the runtime's paid-intent interlock. Surfaces
+ * with a local database pass a durable implementation; without one the
+ * runtime keeps the ledger in memory, which holds only for one process.
+ */
+export interface PaidIntentStoreAdapter {
+  /**
+   * Record a settled payment. Idempotent on (motebit_id, task_id), except
+   * that recording `unretrieved` over an unresolved `in_flight` entry
+   * moves it to `unretrieved` (the poll that owned it failed).
+   */
+  record(entry: Omit<PaidIntentRecord, "resolution" | "resolved_at">): void;
+  /** Outstanding (unresolved) entries for this identity, oldest first. */
+  listOutstanding(motebitId: string): PaidIntentRecord[];
+  /** Mark one outstanding entry resolved. Returns false when no outstanding entry matched. */
+  resolve(
+    motebitId: string,
+    taskId: string,
+    resolution: "retrieved" | "dismissed",
+    resolvedAt: number,
+  ): boolean;
+}
+
 // === Root Storage Container ===
 
 export interface StorageAdapters {
@@ -553,6 +618,13 @@ export interface StorageAdapters {
    * unenforced. The daemon always supplies one.
    */
   haltStore?: HaltStoreAdapter;
+  /**
+   * Durable paid-unretrieved ledger (#874). Optional: without it the
+   * runtime's interlock is in-memory and a restart forgets a settled
+   * payment whose result never arrived — the path that let a restarted
+   * agent propose paying again for work already bought.
+   */
+  paidIntentStore?: PaidIntentStoreAdapter;
   /**
    * Where a run's re-checkable evidence pointers are kept. Optional: a
    * surface without one records no evidence, which every reader must

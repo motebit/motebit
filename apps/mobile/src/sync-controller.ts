@@ -20,6 +20,7 @@ import type { MotebitRuntime } from "@motebit/runtime";
 import {
   executeRemoteCommand,
   cmdSelfTest,
+  servedToolNames,
   RelayDelegationAdapter,
   getOrPinRelayKey,
   verifyAgentCommandEnvelope,
@@ -126,18 +127,10 @@ export class MobileSyncController {
     }
     if (this._serving) return { ok: true };
 
-    const LOCAL_ONLY = new Set([
-      "read_file",
-      "recall_memories",
-      "list_events",
-      "delegate_to_agent",
-      // Local meta-tool (the live roster read) — never a sellable capability.
-      "discover_agents",
-    ]);
-    const tools = runtime.getToolRegistry().list();
-    const capabilities = tools
-      .filter((t: { name: string }) => !LOCAL_ONLY.has(t.name))
-      .map((t: { name: string }) => t.name);
+    // What this surface offers other principals is derived from each
+    // tool's own `localOnly` declaration (#874) — one rule for every
+    // surface, never a per-surface name list that can forget a tool.
+    const capabilities = servedToolNames(runtime.getToolRegistry().list());
 
     try {
       // Registration is the agent-registry family: `admin:query`. The cached

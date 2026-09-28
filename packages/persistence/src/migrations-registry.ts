@@ -628,4 +628,41 @@ export const PERSISTENCE_MIGRATIONS: readonly Migration[] = [
       "CREATE INDEX IF NOT EXISTS idx_runtime_liveness_window ON runtime_liveness (motebit_id, last_seen_at)",
     ],
   },
+  {
+    version: 49,
+    description: "paid_intent_ledger — paid delegations whose results never arrived",
+    statements: [
+      // #874: the paid-intent interlock lived in memory, so a restart
+      // forgot every payment that settled onchain without delivering its
+      // result — and a restarted agent, asked for that result, reached
+      // for a second hire. Durable per identity: the refusal of a re-hire
+      // and the "a paid result is waiting" notice now outlive the process.
+      //
+      // A row is recorded only from a settled-payment fact and is never
+      // deleted: it leaves the interlock by `resolution` ('retrieved' when
+      // the signed result was fetched, 'dismissed' when the owner cleared
+      // it knowingly). The money moved either way; the record stays.
+      // Local private state, never on a wire.
+      `CREATE TABLE IF NOT EXISTS paid_intent_ledger (
+        motebit_id TEXT NOT NULL,
+        task_id TEXT NOT NULL,
+        worker_motebit_id TEXT NOT NULL,
+        capability TEXT NOT NULL,
+        tx_hash TEXT NOT NULL,
+        paid_micro INTEGER NOT NULL,
+        fee_micro INTEGER NOT NULL,
+        recorded_at INTEGER NOT NULL,
+        -- 'in_flight' while the session that paid is still polling;
+        -- 'unretrieved' once that poll ended without the result. An
+        -- in_flight row whose session_id is not the reading session's is
+        -- read as unretrieved: that process died mid-poll.
+        state TEXT NOT NULL DEFAULT 'unretrieved',
+        session_id TEXT NOT NULL DEFAULT '',
+        resolution TEXT,
+        resolved_at INTEGER,
+        PRIMARY KEY (motebit_id, task_id)
+      )`,
+      "CREATE INDEX IF NOT EXISTS idx_paid_intent_outstanding ON paid_intent_ledger (motebit_id, resolution, recorded_at)",
+    ],
+  },
 ];

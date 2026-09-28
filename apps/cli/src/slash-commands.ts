@@ -14,7 +14,7 @@ import { renderIdentityCard } from "./subcommands/id.js";
 import { DEFAULT_SOLANA_RPC_URL, WALLET_GUIDANCE_LINES } from "./subcommands/wallet.js";
 import { renderLedgerSummary } from "./subcommands/ledger.js";
 import { RelayClient, RelayClientError } from "@motebit/relay-client";
-import { executeCommand } from "@motebit/runtime";
+import { executeCommand, isServedTool } from "@motebit/runtime";
 import { narrateEconomicConsequences } from "@motebit/gradient";
 import { computeDecayedConfidence } from "@motebit/memory-graph";
 import type { MotebitDatabase } from "@motebit/persistence";
@@ -170,13 +170,10 @@ function formatState(state: Record<string, unknown>): string {
 //   recall_memories   → motebit_recall (privacy-filtered, sensitivity-capped)
 //   list_events       → no remote equivalent needed (event history is internal)
 //   read_file         → no remote equivalent (filesystem access)
-const LOCAL_ONLY_TOOLS = new Set([
-  "read_file",
-  "delegate_to_agent",
-  "recall_memories",
-  "list_events",
-  "self_reflect",
-]);
+// The rule is the runtime's `isServedTool` — each tool's own `localOnly`
+// declaration (#874), plus the builtins not yet carrying it — so this
+// surface and every other one exclude the same set. (This list had been
+// missing `discover_agents` while web/desktop/mobile excluded it.)
 let isServing = false;
 
 /** Resolve the relay sync URL from config, env, or saved config. */
@@ -955,11 +952,9 @@ export async function handleSlashCommand(
       // Security: exclude local-only tools from network exposure.
       // read_file gives filesystem access — safe for local REPL, dangerous for remote callers.
       const origListTools = serveDeps.listTools.bind(serveDeps);
-      serveDeps.listTools = async () =>
-        (await origListTools()).filter((t) => !LOCAL_ONLY_TOOLS.has(t.name));
+      serveDeps.listTools = async () => (await origListTools()).filter(isServedTool);
       const origFilterTools = serveDeps.filterTools.bind(serveDeps);
-      serveDeps.filterTools = (tools) =>
-        origFilterTools(tools.filter((t) => !LOCAL_ONLY_TOOLS.has(t.name)));
+      serveDeps.filterTools = (tools) => origFilterTools(tools.filter(isServedTool));
 
       // Wire handleAgentTask so the server can execute full agentic tasks
       serveDeps.handleAgentTask = async function* (prompt, options) {
@@ -1061,14 +1056,14 @@ export async function handleSlashCommand(
           report_progress: "Log a progress observation",
           delegate_to_agent: "Delegate a task to a remote agent",
         };
-        const networkCount = tools.filter((t) => !LOCAL_ONLY_TOOLS.has(t.name)).length;
+        const networkCount = tools.filter(isServedTool).length;
         const label = isServing
           ? `\nRegistered tools (${tools.length}, ${networkCount} network-exposed):\n`
           : `\nRegistered tools (${tools.length}):\n`;
         console.log(label);
         const col = Math.max(...tools.map((t) => t.name.length)) + 2;
         for (const tool of tools) {
-          const local = LOCAL_ONLY_TOOLS.has(tool.name);
+          const local = !isServedTool(tool);
           const marker = isServing
             ? local
               ? dim("\u25CB [local]   ")
@@ -2678,6 +2673,15 @@ export async function handleSlashCommand(
       // view the phone gets over a signed envelope, rendered here from
       // this machine's own ledger. One command, one shape, whichever
       // surface a person happens to be holding.
+      await trySharedCommand(runtime, cmd, args, config, fullConfig, repl);
+      break;
+    }
+
+    case "result": {
+      // Delegates to the shared `cmdResult` — the free, read-only fetch of a
+      // delegated task's result by id, and the list of paid results never
+      // retrieved (#874). Deterministic: no model in the path, never
+      // submits, never pays.
       await trySharedCommand(runtime, cmd, args, config, fullConfig, repl);
       break;
     }

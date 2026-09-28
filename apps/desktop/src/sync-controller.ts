@@ -32,6 +32,7 @@ import {
   cmdSelfTest,
   getOrPinRelayKey,
   verifyAgentCommandEnvelope,
+  servedToolNames,
 } from "@motebit/runtime";
 import { DeviceCapability } from "@motebit/sdk";
 import type { AgentTask, ExecutionReceipt } from "@motebit/sdk";
@@ -615,19 +616,10 @@ export class SyncController {
     // Expose only network-safe tools. Operator tools (read_file, recall_memories,
     // list_events, self_reflect, delegate_to_agent) are interior — they don't cross the surface.
     // What remains: MCP tools the user connected + web_search + read_url.
-    const LOCAL_ONLY = new Set([
-      "read_file",
-      "recall_memories",
-      "list_events",
-      "self_reflect",
-      "delegate_to_agent",
-      // Local meta-tool (the live roster read) — never a sellable capability.
-      "discover_agents",
-    ]);
-    const tools = runtime.getToolRegistry().list();
-    const capabilities = tools
-      .filter((t: { name: string }) => !LOCAL_ONLY.has(t.name))
-      .map((t: { name: string }) => t.name);
+    // What this surface offers other principals is derived from each
+    // tool's own `localOnly` declaration (#874) — one rule for every
+    // surface, never a per-surface name list that can forget a tool.
+    const capabilities = servedToolNames(runtime.getToolRegistry().list());
 
     try {
       const registerToken = this._servingToken

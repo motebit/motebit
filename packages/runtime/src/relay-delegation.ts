@@ -478,11 +478,59 @@ interface PollForReceiptArgs {
 }
 
 /**
+ * The outcome of ONE authenticated `task:query` read of
+ * `GET /agent/:taskOwnerId/task/:taskId`. Shared by the poll loop
+ * (`pollForReceipt`) and the single-shot retrieval
+ * (`retrieveDelegationResult`) so the two can never parse the relay's
+ * answer differently.
+ */
+type TaskQueryOutcome =
+  | { kind: "receipt"; receipt: ExecutionReceipt }
+  | { kind: "failed" }
+  | { kind: "pending"; taskStatus: string }
+  | { kind: "http_error"; status: number; body: string }
+  | { kind: "aborted" }
+  | { kind: "network_error"; message: string };
+
+async function queryTaskOnce(args: {
+  syncUrl: string;
+  taskOwnerId: string;
+  taskId: string;
+  authorization: string;
+  signal?: AbortSignal;
+}): Promise<TaskQueryOutcome> {
+  try {
+    const resp = await fetch(`${args.syncUrl}/agent/${args.taskOwnerId}/task/${args.taskId}`, {
+      headers: { Authorization: args.authorization },
+      signal: args.signal,
+    });
+    if (!resp.ok) {
+      return { kind: "http_error", status: resp.status, body: await resp.text().catch(() => "") };
+    }
+    const data = (await resp.json()) as {
+      task: { status: string };
+      receipt: ExecutionReceipt | null;
+    };
+    // Agent-failed status arrives either as receipt.status === "failed" (with
+    // a signed receipt — preferred) or as task.status === "failed" without
+    // one. Both are terminal for a single invocation — no retry.
+    if (data.receipt != null) return { kind: "receipt", receipt: data.receipt };
+    if (data.task.status === "failed") return { kind: "failed" };
+    return { kind: "pending", taskStatus: data.task.status };
+  } catch (err: unknown) {
+    if (err instanceof Error && err.name === "AbortError") return { kind: "aborted" };
+    return { kind: "network_error", message: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+/**
  * Poll the relay for a task's receipt. Tasks are stored under the submitter's
  * motebitId. Returns on the first signed receipt, an explicit agent-failed
  * status, abort, or timeout. Network glitches mid-poll are retried silently
  * (calm-software doctrine). Extracted so the relay-mode and P2P delegation
  * paths share one poll implementation — divergence here was the drift risk.
+ * Each attempt is one `queryTaskOnce` — the same read `retrieveDelegationResult`
+ * makes after the fact.
  */
 async function pollForReceipt(args: PollForReceiptArgs): Promise<DelegationResult> {
   const maxPolls = Math.ceil(args.timeoutMs / POLL_INTERVAL_MS);
@@ -516,43 +564,34 @@ async function pollForReceipt(args: PollForReceiptArgs): Promise<DelegationResul
       continue;
     }
 
-    try {
-      const resp = await fetch(`${args.syncUrl}/agent/${args.motebitId}/task/${args.taskId}`, {
-        headers: { Authorization: queryHeader },
-        signal: args.signal,
-      });
-
-      if (!resp.ok) {
-        args.logger.warn("delegation poll failed", {
-          taskId: args.taskId,
-          status: resp.status,
-          body: await resp.text().catch(() => ""),
-        });
-        continue;
-      }
-
-      const data = (await resp.json()) as {
-        task: { status: string };
-        receipt: ExecutionReceipt | null;
-      };
-
-      // Agent-failed status arrives either as receipt.status === "failed" (with
-      // a signed receipt — preferred) or as task.status === "failed" without
-      // one. Both are terminal for a single invocation — no retry.
-      if (data.receipt != null) {
-        return { ok: true, receipt: data.receipt, taskId: args.taskId };
-      }
-      if (data.task.status === "failed") {
+    const outcome = await queryTaskOnce({
+      syncUrl: args.syncUrl,
+      taskOwnerId: args.motebitId,
+      taskId: args.taskId,
+      authorization: queryHeader,
+      ...(args.signal ? { signal: args.signal } : {}),
+    });
+    switch (outcome.kind) {
+      case "receipt":
+        return { ok: true, receipt: outcome.receipt, taskId: args.taskId };
+      case "failed":
         return {
           ok: false,
           error: { code: "agent_failed", message: "Agent reported failure without a receipt" },
         };
-      }
-    } catch (err: unknown) {
-      if (err instanceof Error && err.name === "AbortError") {
+      case "aborted":
         return { ok: false, error: { code: "timeout", message: "Aborted mid-poll" } };
-      }
-      // Network glitch — silent retry, per calm-software doctrine.
+      case "http_error":
+        args.logger.warn("delegation poll failed", {
+          taskId: args.taskId,
+          status: outcome.status,
+          body: outcome.body,
+        });
+        continue;
+      case "pending":
+      case "network_error":
+        // Still running, or a network glitch — silent retry, per calm-software doctrine.
+        continue;
     }
   }
 
@@ -561,6 +600,130 @@ async function pollForReceipt(args: PollForReceiptArgs): Promise<DelegationResul
     ok: false,
     error: { code: "timeout", message: `No receipt within ${Math.round(elapsedMs / 1000)}s` },
   };
+}
+
+/**
+ * What one retrieval found. Typed truth (docs/doctrine/typed-truth-perception.md):
+ * each status is a distinct fact the caller renders and the model reads —
+ * never collapsed into "failed", because "failed" is what an agent reads as
+ * "hire again" (#433/#874).
+ *
+ * - `delivered` — the worker's signed receipt is held by the relay (its own
+ *   `status` may still be `failed`: a signed failure is a delivered result).
+ * - `pending` — the task exists and has no receipt yet; ask again later.
+ * - `failed` — the relay marked the task failed without a signed receipt.
+ * - `not_found` — HTTP 404: the relay no longer holds the task (reaped
+ *   after its retention window) or the id is wrong. NOT proof the result
+ *   is gone for good — a 404 has followed a transient 503 before (#433).
+ * - `auth_error` — the relay refused the `task:query` token (401/403), or
+ *   no token could be minted.
+ * - `unreachable` — network failure or a relay 5xx/other status.
+ * - `malformed` — a receipt came back bound to a DIFFERENT relay task.
+ * - `invalid_task_id` — the id is not a task id; nothing was sent.
+ * - `not_connected` — this runtime has no relay coordinates; nothing was sent.
+ */
+export type TaskRetrieval =
+  | { status: "delivered"; taskId: string; receipt: ExecutionReceipt }
+  | { status: "pending"; taskId: string; taskStatus: string }
+  | { status: "failed"; taskId: string }
+  | { status: "not_found"; taskId: string; message: string }
+  | { status: "auth_error"; taskId: string; httpStatus?: number; message: string }
+  | { status: "unreachable"; taskId: string; httpStatus?: number; message: string }
+  | { status: "malformed"; taskId: string; message: string }
+  | { status: "invalid_task_id"; taskId: string }
+  | { status: "not_connected"; taskId: string };
+
+export interface RetrieveDelegationResultParams {
+  /** The caller's identity — the submitter the `task:query` token is minted for. */
+  motebitId: string;
+  /** Base URL of the relay. */
+  syncUrl: string;
+  /** Mints audience-scoped auth tokens; called once, for `task:query`. */
+  authToken: (audience?: TokenAudience) => Promise<string>;
+  /** The relay task to read. */
+  taskId: string;
+  /**
+   * The motebit the task is filed under on the relay (the `:motebitId`
+   * path segment). The runtime's own delegation paths file under the
+   * submitter, so it defaults to `motebitId`; `motebit delegate`'s
+   * relay-mode path files under the target worker and passes it here.
+   */
+  taskOwnerId?: string;
+  signal?: AbortSignal;
+}
+
+/** Relay task ids are UUIDs today; accept a conservative id alphabet, never a path. */
+const TASK_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
+
+/**
+ * Retrieve a delegated task's result by id — ONE authenticated `task:query`
+ * GET. The recovery path for a paid delegation whose result was never
+ * delivered (#874): before this, nothing fetched a result by task id, so a
+ * restarted agent's only route to "get my paid result" was hiring again.
+ *
+ * Free and read-only by construction: it mints one `task:query` token and
+ * makes one GET. It never submits a task, never builds or broadcasts a
+ * payment, never retries — a caller that wants to wait asks again.
+ */
+export async function retrieveDelegationResult(
+  params: RetrieveDelegationResultParams,
+): Promise<TaskRetrieval> {
+  const taskId = params.taskId.trim();
+  const taskOwnerId = params.taskOwnerId ?? params.motebitId;
+  if (!TASK_ID_PATTERN.test(taskId) || !TASK_ID_PATTERN.test(taskOwnerId)) {
+    return { status: "invalid_task_id", taskId };
+  }
+
+  let authorization: string;
+  try {
+    authorization = `Bearer ${await params.authToken("task:query")}`;
+  } catch (err: unknown) {
+    return {
+      status: "auth_error",
+      taskId,
+      message: `task:query token mint failed: ${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
+
+  const outcome = await queryTaskOnce({
+    syncUrl: params.syncUrl,
+    taskOwnerId,
+    taskId,
+    authorization,
+    ...(params.signal ? { signal: params.signal } : {}),
+  });
+  switch (outcome.kind) {
+    case "receipt": {
+      // The relay binds a receipt to its economic task via `relay_task_id`
+      // (it refuses a mismatched one at POST). Re-check it here: a receipt
+      // for another task must never clear this task's paid-unretrieved entry.
+      const bound = (outcome.receipt as unknown as { relay_task_id?: unknown }).relay_task_id;
+      if (typeof bound === "string" && bound !== taskId) {
+        return {
+          status: "malformed",
+          taskId,
+          message: `receipt is bound to relay task ${bound}, not ${taskId}`,
+        };
+      }
+      return { status: "delivered", taskId, receipt: outcome.receipt };
+    }
+    case "failed":
+      return { status: "failed", taskId };
+    case "pending":
+      return { status: "pending", taskId, taskStatus: outcome.taskStatus };
+    case "http_error": {
+      const message = classifyRelayError(outcome.status, outcome.body).message;
+      if (outcome.status === 404) return { status: "not_found", taskId, message };
+      if (outcome.status === 401 || outcome.status === 403) {
+        return { status: "auth_error", taskId, httpStatus: outcome.status, message };
+      }
+      return { status: "unreachable", taskId, httpStatus: outcome.status, message };
+    }
+    case "aborted":
+      return { status: "unreachable", taskId, message: "aborted" };
+    case "network_error":
+      return { status: "unreachable", taskId, message: outcome.message };
+  }
 }
 
 export interface SubmitP2pDelegationParams {
@@ -625,6 +788,14 @@ export interface SubmitP2pDelegationParams {
   logger: { warn(message: string, context?: Record<string, unknown>): void };
   /** Abort the poll loop early. */
   signal?: AbortSignal;
+  /**
+   * Called once, synchronously, the moment the relay accepts the paid
+   * submission — BEFORE the first poll. The payment has settled and the
+   * task exists, so this is when "paid, result pending" becomes a fact a
+   * caller must be able to recover from even if the process dies mid-poll
+   * (#874 review: recording only on poll failure lost the entry to a quit).
+   */
+  onTaskAccepted?: (taskId: string) => void;
 }
 
 /**
@@ -735,6 +906,19 @@ export async function submitP2pDelegation(
         message: err instanceof Error ? err.message : String(err),
       },
     };
+  }
+
+  // Money moved and the relay holds the task: record before polling. A
+  // hook failure must never abort a paid flow — the poll, and the
+  // settlement carried on a poll failure below, matter more than the note.
+  try {
+    params.onTaskAccepted?.(taskId);
+  } catch (err: unknown) {
+    params.logger.warn("delegation.task_accepted_hook_failed", {
+      taskId,
+      txHash: params.paymentProof.tx_hash,
+      error: err instanceof Error ? err.message : String(err),
+    });
   }
 
   const result = await pollForReceipt({
@@ -1330,11 +1514,13 @@ export async function resolveAndSubmitP2pDelegation(
             verdict.scope === "pair"
               ? `A payment to this worker for "${prior.capability}" already settled onchain ` +
                 `(tx ${prior.txHash}) and its result was never retrieved (task ${prior.taskId}). ` +
-                `Refused before broadcast — no new money moved. Re-fetch that task; do not re-hire.`
+                `Refused before broadcast — no new money moved. Re-fetch that task for free ` +
+                `(retrieve_task_result, or /result ${prior.taskId}); do not re-hire.`
               : `${params.paidIntentLedger.outstandingCount} paid delegations have settled onchain ` +
-                `without delivering results — all new paid delegation is suspended for this session. ` +
-                `Refused before broadcast — no new money moved. Oldest unretrieved: task ${prior.taskId} ` +
-                `(tx ${prior.txHash}).`,
+                `without delivering results — all new paid delegation is suspended until they are ` +
+                `retrieved or dismissed. Refused before broadcast — no new money moved. Oldest ` +
+                `unretrieved: task ${prior.taskId} (tx ${prior.txHash}) — re-fetch it for free ` +
+                `(retrieve_task_result, or /result ${prior.taskId}).`,
           settledPayment: {
             txHash: prior.txHash,
             paidMicro: prior.paidMicro,
@@ -1393,6 +1579,7 @@ export async function resolveAndSubmitP2pDelegation(
   }
 
   // 5. Submit the pre-built proof (retry-safe; never re-broadcasts).
+  const ledger = params.paidIntentLedger;
   const submitted = await submitP2pDelegation({
     motebitId: params.motebitId,
     syncUrl: params.syncUrl,
@@ -1409,25 +1596,83 @@ export async function resolveAndSubmitP2pDelegation(
     ...(params.timeoutMs != null ? { timeoutMs: params.timeoutMs } : {}),
     logger: params.logger,
     ...(params.signal ? { signal: params.signal } : {}),
+    // 5a. Ledger write AT SETTLE TIME (#874 review): the payment is
+    //     confirmed and the relay accepted the task, so the entry reads
+    //     "paid, result pending" from this moment. A process that dies
+    //     mid-poll leaves it on record; the next session refuses a re-hire
+    //     and `/result` can recover the work. Resolved below on delivery.
+    //     The entry is IN FLIGHT: it locks nothing for this session
+    //     (concurrent hires proceed as before the ledger existed), and any
+    //     later session reads it as unretrieved.
+    ...(ledger != null
+      ? {
+          onTaskAccepted: (taskId: string) =>
+            ledgerWrite(params.logger, "record_in_flight", taskId, proof.tx_hash, () =>
+              ledger.recordInFlight({
+                workerMotebitId: resolved.workerMotebitId,
+                capability: params.capability,
+                taskId,
+                txHash: proof.tx_hash,
+                paidMicro: proof.amount_micro,
+                feeMicro: proof.fee_amount_micro + (proof.b_fee_amount_micro ?? 0),
+                recordedAt: Date.now(),
+              }),
+            ),
+        }
+      : {}),
   });
 
-  // 6. Ledger write — a settled-but-unretrieved payment arms the interlock so
-  //    the NEXT delegation to this worker+capability refuses pre-broadcast.
-  //    Recorded only from the settledPayment fact (money verifiably moved),
-  //    never from an intent.
-  if (params.paidIntentLedger != null && !submitted.ok && submitted.error.settledPayment != null) {
-    const sp = submitted.error.settledPayment;
-    params.paidIntentLedger.recordSettledUnretrieved({
-      workerMotebitId: resolved.workerMotebitId,
-      capability: params.capability,
-      taskId: sp.taskId,
-      txHash: sp.txHash,
-      paidMicro: sp.paidMicro,
-      feeMicro: sp.feeMicro,
-      recordedAt: Date.now(),
+  // 6. Delivered ⇒ the work is no longer outstanding. A poll that ended
+  //    without the result moves the entry to UNRETRIEVED (the pair lock and
+  //    the suspend count now apply). Ledger writes never abort a paid
+  //    flow: a failed write is logged loudly and the result — or the
+  //    settlement carried on the error — is returned regardless.
+  if (ledger != null && submitted.ok) {
+    ledgerWrite(params.logger, "resolve", submitted.taskId, proof.tx_hash, () => {
+      ledger.resolve(submitted.taskId);
     });
   }
+  if (ledger != null && !submitted.ok && submitted.error.settledPayment != null) {
+    const sp = submitted.error.settledPayment;
+    ledgerWrite(params.logger, "record_unretrieved", sp.taskId, sp.txHash, () =>
+      ledger.recordSettledUnretrieved({
+        workerMotebitId: resolved.workerMotebitId,
+        capability: params.capability,
+        taskId: sp.taskId,
+        txHash: sp.txHash,
+        paidMicro: sp.paidMicro,
+        feeMicro: sp.feeMicro,
+        recordedAt: Date.now(),
+      }),
+    );
+  }
   return submitted;
+}
+
+/**
+ * Run one paid-intent ledger write without letting it abort the paid flow
+ * around it (#874 review). The money has already moved when every caller
+ * runs; a SQLITE_BUSY or a full disk must cost the note, never the poll or
+ * the settlement facts the caller returns. Logged loudly with the task and
+ * transaction so the payment can be reconciled by hand.
+ */
+function ledgerWrite(
+  logger: { warn(message: string, context?: Record<string, unknown>): void },
+  op: string,
+  taskId: string,
+  txHash: string,
+  write: () => void,
+): void {
+  try {
+    write();
+  } catch (err: unknown) {
+    logger.warn("paid_intent_ledger.write_failed", {
+      op,
+      taskId,
+      txHash,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
 }
 
 /**

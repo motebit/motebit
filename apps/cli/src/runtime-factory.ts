@@ -156,6 +156,9 @@ export function buildStorageAdapters(moteDb: MotebitDatabase): StorageAdapters {
     credentialStore: moteDb.credentialStore,
     approvalStore: moteDb.approvalStore,
     haltStore: moteDb.haltStore,
+    // Paid delegations whose results never arrived (#874) — durable, so a
+    // restart neither forgets the payment nor lets the agent buy it again.
+    paidIntentStore: moteDb.paidIntentStore,
     // Where the pointers a returning owner re-checks are kept. The
     // daemon is the surface that runs goals with nobody watching, so it
     // is the one that most needs its work to be checkable rather than

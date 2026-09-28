@@ -40,6 +40,13 @@ export interface InvokeCapabilityDeps {
    * absent → every delegation uses the relay-mediated path.
    */
   buildP2pPayment?: (request: SovereignP2pPaymentRequest) => Promise<P2pPaymentProof>;
+  /**
+   * The runtime's paid-intent ledger (#435/#874). A user tap is a paid path
+   * like the AI loop's: threading the ledger here means a tap cannot re-buy
+   * work whose result is still outstanding, and a tap whose payment settles
+   * without a delivered result is recorded for `/result` to recover.
+   */
+  paidIntentLedger?: import("./paid-intent-ledger.js").PaidIntentLedger;
 }
 
 export interface InvokeCapabilityConfig {
@@ -228,6 +235,9 @@ export class InvokeCapabilityManager {
       ...(this.config.relayPublicKey != null ? { relayPublicKey: this.config.relayPublicKey } : {}),
       ...(ack === true ? { acknowledgeNoHistoryRisk: true } : {}),
       ...(this.config.routingStrategy ? { routingStrategy: this.config.routingStrategy } : {}),
+      ...(this.deps.paidIntentLedger != null
+        ? { paidIntentLedger: this.deps.paidIntentLedger }
+        : {}),
       invocationOrigin,
       ...(this.config.timeoutMs != null ? { timeoutMs: this.config.timeoutMs } : {}),
       logger: this.deps.logger,

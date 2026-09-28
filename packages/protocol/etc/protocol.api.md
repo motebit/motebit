@@ -4621,6 +4621,7 @@ export interface ToolDefinition {
     embodimentMode?: string;
     // (undocumented)
     inputSchema: Record<string, unknown>;
+    localOnly?: boolean;
     mode?: ToolMode;
     moneyBinding?: "args" | "late";
     // (undocumented)

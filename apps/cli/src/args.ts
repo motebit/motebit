@@ -415,6 +415,10 @@ export const COMMANDS: CommandEntry[] = [
   { usage: "/operator", desc: "Show operator mode status" },
   { usage: "/invoke <cap> <prompt>", desc: "Invoke a capability deterministically (no AI loop)" },
   {
+    usage: "/result [task-id]",
+    desc: "Fetch a delegated task's result (free, read-only); no id lists paid results not retrieved",
+  },
+  {
     usage: "/receipt [task-id-prefix]",
     desc: "Re-render an archived receipt (offline-verified); no arg = latest",
   },

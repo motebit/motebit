@@ -230,12 +230,18 @@ import {
   InMemoryGrantSpendStore,
 } from "@motebit/policy";
 import { createMoneyMeter, wrapP2pPaymentWithMeter, type MoneyMeter } from "./money-meter.js";
-import { PaidIntentLedger } from "./paid-intent-ledger.js";
+import {
+  InMemoryPaidIntentStore,
+  PaidIntentLedger,
+  type UnretrievedPayment,
+} from "./paid-intent-ledger.js";
 import { verifyGrantForTurn } from "./grant-verifier.js";
 import {
   resolveAndSubmitP2pDelegation,
   resolveP2pPaymentRequest,
+  retrieveDelegationResult,
   type GrantedDelegationResult,
+  type TaskRetrieval,
   type WorkerSelector,
 } from "./relay-delegation.js";
 import type { PolicyConfig, MemoryGovernanceConfig, AuditLogSink } from "@motebit/policy";
@@ -507,13 +513,27 @@ export class MotebitRuntime {
   /** R4 money meter (AND-composition enforcer half) — see money-meter.ts. */
   private moneyMeter: MoneyMeter;
   /**
-   * Session paid-intent interlock (#435/#436): while a paid delegation's
-   * payment has settled onchain without delivering a result, a duplicate
-   * hire refuses BEFORE broadcast — mechanically, on both the loop path
-   * and the granted deterministic path. One instance per runtime = one
-   * session scope; a restart clears it deliberately.
+   * Paid-intent interlock (#435/#436): while a paid delegation's payment
+   * has settled onchain without delivering a result, a duplicate hire
+   * refuses BEFORE broadcast — mechanically, on the loop path, the
+   * deterministic `invokeCapability` path and the granted path. Backed by
+   * the surface's `paidIntentStore` when it has one, so the refusal and
+   * the "result waiting" notice survive a restart (#874); in-memory
+   * otherwise. Assigned in the constructor (needs `motebitId`).
    */
-  private readonly _paidIntentLedger = new PaidIntentLedger();
+  private readonly _paidIntentLedger: PaidIntentLedger;
+  /**
+   * Relay coordinates for the free, read-only `task:query` retrieval
+   * (`retrieveDelegationResult`). Set by `enableInteractiveDelegation` /
+   * `enableInvokeCapability` — any surface that can delegate can also
+   * fetch a result it already paid for. Null until then.
+   */
+  /** Externally submitted agent tasks currently running — see `handleAgentTask`. */
+  private _foreignTasksInFlight = 0;
+  private _taskQueryCoords: {
+    syncUrl: string;
+    authToken: (audience?: import("@motebit/protocol").TokenAudience) => Promise<string>;
+  } | null = null;
   /**
    * The current turn's verified standing authority (null between turns
    * and on grantless turns). Set only from `verifyGrantForTurn`'s output
@@ -1077,6 +1097,10 @@ export class MotebitRuntime {
     // Approval store — persistence-backed quorum state (source of truth for multi-party approval)
     this.approvalStore = adapters.storage.approvalStore ?? null;
     this.haltStore = adapters.storage.haltStore ?? null;
+    this._paidIntentLedger = new PaidIntentLedger(
+      adapters.storage.paidIntentStore ?? new InMemoryPaidIntentStore(),
+      this.motebitId,
+    );
     // Handed to the gate rather than held here: the gate is where a tool
     // result's content-addressed bytes are still in hand, and where the
     // completion row it sits beside is written.
@@ -2942,7 +2966,17 @@ export class MotebitRuntime {
       return;
     }
     if (!this.loopDeps) throw new Error("AI not initialized — call setProvider() first");
-    yield* handleAgentTaskFn(this.agentTaskDeps, task, privateKey, deviceId, publicKey, options);
+    // While another principal's task runs, owner-only reads (the paid-task
+    // ledger and the results it bought) refuse: a customer's prompt must
+    // not be able to make this motebit's model list or fetch work bought
+    // for someone else (#874 review). Counted, not a boolean, so
+    // overlapping tasks cannot clear each other's mark.
+    this._foreignTasksInFlight++;
+    try {
+      yield* handleAgentTaskFn(this.agentTaskDeps, task, privateKey, deviceId, publicKey, options);
+    } finally {
+      this._foreignTasksInFlight--;
+    }
   }
 
   /**
@@ -5530,7 +5564,10 @@ export class MotebitRuntime {
       ...(buildP2pPayment ? { buildP2pPayment } : {}),
       getActiveGrantId: () => this._activeTurnGrant?.grant_id ?? null,
       paidIntentLedger: this._paidIntentLedger,
+      retrieveTaskResult: (taskId) => this.retrieveDelegationResult(taskId),
+      isForeignPrincipalTurn: () => this._foreignTasksInFlight > 0,
     });
+    this._taskQueryCoords ??= { syncUrl: config.syncUrl, authToken: config.authToken };
     // Stash the relay coordinates the deterministic granted-spend path needs
     // (executeGrantedDelegation) — only when a pinned relay key is present, as
     // the P2P treasury derives from it. One source of relay coords for both the
@@ -5915,6 +5952,7 @@ export class MotebitRuntime {
    */
   enableInvokeCapability(config: InvokeCapabilityConfig): void {
     if (this.invokeCapabilityManager != null) return;
+    this._taskQueryCoords ??= { syncUrl: config.syncUrl, authToken: config.authToken };
     // Bind the sovereign rail's atomic-payment builder when a wallet is
     // configured. With it (and a pinned `config.relayPublicKey`), a paid
     // cross-agent capability settles peer-to-peer instead of relay-custody;
@@ -5930,9 +5968,83 @@ export class MotebitRuntime {
         // chain — composition preserved.
         stashReceipt: (receipt) => this.interactiveDelegation.pushReceipt(receipt),
         ...(buildP2pPayment ? { buildP2pPayment } : {}),
+        // The user-tap path is a paid path too: without the ledger, a tap
+        // could re-buy work whose result is still outstanding (#874 sibling).
+        paidIntentLedger: this._paidIntentLedger,
       },
       config,
     );
+  }
+
+  /**
+   * Retrieve a delegated task's result by id (#874) — ONE authenticated
+   * `task:query` read. Free and read-only: never submits, never pays,
+   * never retries. The recovery path for a paid delegation whose result
+   * did not arrive: before it existed, a restarted agent's only route to
+   * "get my paid result" was hiring (and paying) again.
+   *
+   * On `delivered`, a matching paid-unretrieved entry is resolved — the
+   * interlock stops refusing that worker+capability because the work is
+   * no longer outstanding. `acknowledge: false` reads without resolving
+   * (a remote caller that sees only a status, never the result text).
+   * `taskOwnerId` names the motebit the relay filed the task under when
+   * it is not this one (`motebit delegate`'s relay-mode path).
+   */
+  async retrieveDelegationResult(
+    taskId: string,
+    options?: { taskOwnerId?: string; acknowledge?: boolean; signal?: AbortSignal },
+  ): Promise<TaskRetrieval> {
+    const coords = this._taskQueryCoords;
+    if (coords == null) return { status: "not_connected", taskId };
+    const result = await retrieveDelegationResult({
+      motebitId: this.motebitId,
+      syncUrl: coords.syncUrl,
+      authToken: coords.authToken,
+      taskId,
+      ...(options?.taskOwnerId != null ? { taskOwnerId: options.taskOwnerId } : {}),
+      ...(options?.signal ? { signal: options.signal } : {}),
+    });
+    if (result.status === "delivered" && options?.acknowledge !== false) {
+      // The result is in hand; a failed ledger write costs the note, never
+      // the result (#874 review).
+      try {
+        this._paidIntentLedger.resolve(result.taskId);
+      } catch (err: unknown) {
+        this._logger.warn("paid_intent_ledger.write_failed", {
+          op: "resolve",
+          taskId: result.taskId,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+    return result;
+  }
+
+  /**
+   * Paid delegations whose payment settled but whose result never arrived,
+   * oldest first. Durable when the surface supplies a `paidIntentStore`.
+   */
+  outstandingPaidResults(): UnretrievedPayment[] {
+    return this._paidIntentLedger.outstanding();
+  }
+
+  /**
+   * The ledger's unresolved entry for `taskId` — owed or still in flight
+   * in this session — or null when this device holds no record of paying
+   * for it.
+   */
+  paidTask(taskId: string): UnretrievedPayment | null {
+    return this._paidIntentLedger.find(taskId);
+  }
+
+  /**
+   * The owner clears one outstanding entry knowingly — typically after
+   * the relay reaped the task and the result cannot be recovered. An
+   * explicit human act (a slash command), never automatic: nothing here
+   * treats a 404 as proof the result is gone.
+   */
+  dismissPaidResult(taskId: string): boolean {
+    return this._paidIntentLedger.dismiss(taskId);
   }
 
   /**

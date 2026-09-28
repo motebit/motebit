@@ -12,6 +12,7 @@
  */
 
 import { McpServerAdapter } from "./index.js";
+import { isServableTool } from "./serve-exposure.js";
 import type { MotebitServerDeps, TaskAdmissionConfig } from "./index.js";
 import type {
   ToolDefinition,
@@ -174,8 +175,12 @@ export function wireServerDeps(
     motebitId,
     publicKeyHex,
 
-    listTools: () => runtime.getToolRegistry().list(),
-    filterTools: (tools) => runtime.policy.filterTools(tools),
+    // `localOnly` tools never leave this function (#874): a money molecule
+    // registers `retrieve_task_result` for its own recovery, and serving it
+    // let any caller list the molecule's paid tasks and read work bought
+    // for other customers.
+    listTools: () => runtime.getToolRegistry().list().filter(isServableTool),
+    filterTools: (tools) => runtime.policy.filterTools(tools.filter(isServableTool)),
     validateTool: (tool, args, caller?) => {
       const ctx = runtime.policy.createTurnContext() as TurnContext;
       if (caller) {
@@ -184,7 +189,16 @@ export function wireServerDeps(
       }
       return runtime.policy.validate(tool, args, ctx);
     },
-    executeTool: (name, args) => runtime.getToolRegistry().execute(name, args),
+    executeTool: async (name, args) => {
+      const def = runtime
+        .getToolRegistry()
+        .list()
+        .find((t) => t.name === name);
+      if (def != null && !isServableTool(def)) {
+        return { ok: false, error: `Tool "${name}" is not served.` };
+      }
+      return runtime.getToolRegistry().execute(name, args);
+    },
 
     getState: () => runtime.getState() as Record<string, unknown>,
 

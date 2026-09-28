@@ -2,6 +2,7 @@ import { DEFAULT_CONFIG } from "@motebit/ai-core";
 import type { MotebitPersonalityConfig } from "@motebit/ai-core";
 import { deriveSyncEncryptionKey, mintAudienceToken } from "@motebit/encryption";
 import { connectMcpServers } from "@motebit/mcp-client";
+import { paidResultsNotice } from "@motebit/runtime";
 import { admitModelForProvider, MONEY_TOOLS_WITHHELD_NOTICE } from "./model-admission.js";
 import { createSolanaWalletRail } from "@motebit/wallet-solana";
 import { preflightGrant, renderPreflight } from "./grant-preflight.js";
@@ -1110,6 +1111,16 @@ async function main(): Promise<void> {
   // the owner must never discover the difference mid-conversation.
   if (runtime.moneyToolsWithheld) {
     console.log(dim(`  ${MONEY_TOOLS_WITHHELD_NOTICE}`));
+    console.log();
+  }
+
+  // Paid results waiting (#874): a delegation whose payment settled but
+  // whose result never arrived is on record in the durable ledger. One
+  // calm line naming the free fetch — the owner must not have to ask the
+  // agent (whose only other route was hiring, and paying, again).
+  const paidNotice = paidResultsNotice(runtime.outstandingPaidResults());
+  if (paidNotice != null) {
+    console.log(dim(`  ${paidNotice}`));
     console.log();
   }
 

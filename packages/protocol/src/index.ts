@@ -1170,6 +1170,25 @@ export interface ToolDefinition {
    * discipline as `slabProjection`.
    */
   moneyBinding?: "args" | "late";
+  /**
+   * Exposure axis — true when the tool acts for THIS motebit's owner
+   * against its own interior (its ledger, its relay account, its paid
+   * work) and must not be offered to another principal. What that
+   * guarantees, precisely: an MCP server built on `@motebit/mcp-server`
+   * never lists it or executes it as a direct tool call, and a surface
+   * never advertises it as a network capability. It does NOT remove the
+   * tool from the agent loop, which `motebit_task` runs for a caller's
+   * prompt — a tool that must also be unreachable there guards its own
+   * handler (today `retrieve_task_result` refuses outright, and
+   * `delegate_to_agent` withholds the owner's prior-payment details, while
+   * another principal's task is running). Absent ≡ servable (subject to
+   * policy), so existing tools keep their behavior.
+   *
+   * Carried on the definition rather than in per-surface name lists so
+   * the serve chokepoint cannot drift from the tool: a list that forgets
+   * a name leaks it; a definition cannot forget itself (#874).
+   */
+  localOnly?: boolean;
 }
 
 export interface ToolResult {

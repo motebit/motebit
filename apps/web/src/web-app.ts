@@ -9,6 +9,7 @@ import {
   createRelayBackedSandboxTokenSource,
   getOrPinRelayKey,
   verifyAgentCommandEnvelope,
+  servedToolNames,
 } from "@motebit/runtime";
 import type { TokenAudience } from "@motebit/sdk";
 import { createSolanaWalletRail, createSolanaMemoSubmitter } from "@motebit/wallet-solana";
@@ -4128,19 +4129,10 @@ export class UnbootedWebApp {
     }
     if (this._serving) return { ok: true };
 
-    const LOCAL_ONLY = new Set([
-      "read_file",
-      "recall_memories",
-      "list_events",
-      "self_reflect",
-      "delegate_to_agent",
-      // Local meta-tool (the live roster read) — never a sellable capability.
-      "discover_agents",
-    ]);
-    const tools = this.runtime.getToolRegistry().list();
-    const capabilities = tools
-      .filter((t: { name: string }) => !LOCAL_ONLY.has(t.name))
-      .map((t: { name: string }) => t.name);
+    // What this surface offers other principals is derived from each
+    // tool's own `localOnly` declaration (#874) — one rule for every
+    // surface, never a per-surface name list that can forget a tool.
+    const capabilities = servedToolNames(this.runtime.getToolRegistry().list());
 
     try {
       // Registration is the agent-registry family: `admin:query`
