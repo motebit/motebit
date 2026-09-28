@@ -12,6 +12,7 @@ import type {
   TurnContext,
   ConversationMessage,
   AccrualBasis,
+  EventLogEntry,
 } from "@motebit/sdk";
 import { EventType, SensitivityLevel, RiskLevel, rankSensitivity } from "@motebit/sdk";
 import { CONTEXT_SAFE_SENSITIVITY as CANONICAL_CONTEXT_SAFE_SENSITIVITY } from "@motebit/sdk";
@@ -28,6 +29,7 @@ import { detectDishonestClosing } from "./dishonest-closing.js";
 import type { ToolResultLogEntry } from "./dishonest-closing.js";
 import { validateTaskStepNarration } from "./narration-validation.js";
 import { turnMemorySource } from "./memory-provenance.js";
+import { floorForeignTurnOptions } from "./foreign-turn.js";
 
 // === Constants ===
 
@@ -555,6 +557,13 @@ export interface MotebitLoopDependencies {
    * never surfaces in the owner's recall as `[from:user]`. (Scope: this
    * turn's formation only — history and consolidation paths are #904/#905.)
    *
+   * The same mark floors what the turn is SERVED (#943): it recalls none of
+   * the owner's memories, memory index or recent events
+   * (`recallOwnerInterior` is skipped), and every owner-interior option
+   * (trust graph, self-model, curiosity hints, skills, the owner's `[Now]`
+   * facets) is dropped by `floorForeignTurnOptions` before anything is
+   * packed. The owner's interior is never served to another principal.
+   *
    * A per-TURN value, not a getter: the runtime builds the turn's deps
    * with it (`MotebitRuntime.loopDepsForTurn`), so formation reads the
    * fact of the turn it belongs to, never runtime-wide state that another
@@ -969,25 +978,43 @@ function toolContext(name: string, args: Record<string, unknown>): string | unde
   }
 }
 
-export async function* runTurnStreaming(
-  deps: SensitivityCleared<MotebitLoopDependencies>,
-  userMessage: string,
-  options?: TurnOptions,
-): AsyncGenerator<AgenticChunk> {
-  const { motebitId, eventStore, memoryGraph, stateEngine, behaviorEngine, provider } = deps;
+/** What a turn recalls from the owner's interior, plus the stage timings. */
+interface OwnerInteriorRecall {
+  recentEvents: EventLogEntry[];
+  queryEmbedding: number[];
+  relevantMemories: MemoryNode[];
+  memoryIndex: string | undefined;
+  timings: { eventQueryMs: number; embedMs: number; pinnedMs: number; memoryRetrieveMs: number };
+}
 
-  // TTFT instrumentation — content-free wall-clock stamps. `turnStart` anchors
-  // every delta; per-stage durations come from `withStageTimeout`'s sink (one
-  // source); `providerCallStart`/`firstTokenAt` bracket the model segment. See
-  // `TurnLatency`. Observation only — never affects control flow.
-  const turnStart = Date.now();
-  let eventQueryMs = 0;
-  let embedMs = 0;
-  let pinnedMs = 0;
-  let memoryRetrieveMs = 0;
-  let providerCallStart: number | undefined;
-  let contextPipelineMs: number | undefined;
-  let firstTokenAt: number | undefined;
+/**
+ * A foreign principal's turn recalls nothing of the owner's (#943): no
+ * events, no memories, no index — and no embed of the caller's words
+ * against the owner's graph (nor the co-retrieval strengthening that
+ * `recallRelevant` writes back into it).
+ */
+function foreignTurnRecall(): OwnerInteriorRecall {
+  return {
+    recentEvents: [],
+    queryEmbedding: [],
+    relevantMemories: [],
+    memoryIndex: undefined,
+    timings: { eventQueryMs: 0, embedMs: 0, pinnedMs: 0, memoryRetrieveMs: 0 },
+  };
+}
+
+/**
+ * The ONE place the loop reads the owner's memory graph and event log into
+ * a turn's context. `runTurnStreaming` calls it only for an OWNER turn;
+ * a foreign turn gets `foreignTurnRecall()` (#943). Every owner-store read
+ * of loop.ts lives here — the gate holds it.
+ */
+async function recallOwnerInterior(
+  deps: MotebitLoopDependencies,
+  userMessage: string,
+): Promise<OwnerInteriorRecall> {
+  const { motebitId, eventStore, memoryGraph } = deps;
+  const timings = { eventQueryMs: 0, embedMs: 0, pinnedMs: 0, memoryRetrieveMs: 0 };
 
   // 1. Query recent events, embed user message, and fetch pinned memories in parallel.
   // These are independent — no reason to await sequentially.
@@ -1021,7 +1048,7 @@ export async function* runTurnStreaming(
       STAGE_TIMEOUTS_MS.event_query,
       eventStore.query({ motebit_id: motebitId, limit: 10 }),
       (ms) => {
-        eventQueryMs = ms;
+        timings.eventQueryMs = ms;
       },
     ),
     hasMemory
@@ -1030,7 +1057,7 @@ export async function* runTurnStreaming(
           STAGE_TIMEOUTS_MS.embed_user_message,
           embedText(userMessage),
           (ms) => {
-            embedMs = ms;
+            timings.embedMs = ms;
           },
         )
       : Promise.resolve<number[]>([]),
@@ -1040,7 +1067,7 @@ export async function* runTurnStreaming(
           STAGE_TIMEOUTS_MS.pinned_memories,
           memoryGraph.getPinnedMemories(),
           (ms) => {
-            pinnedMs = ms;
+            timings.pinnedMs = ms;
           },
         )
       : Promise.resolve<MemoryNode[]>([]),
@@ -1061,7 +1088,7 @@ export async function* runTurnStreaming(
           sensitivityFilter: CONTEXT_SAFE_SENSITIVITY,
         }),
         (ms) => {
-          memoryRetrieveMs = ms;
+          timings.memoryRetrieveMs = ms;
         },
       )
     : [];
@@ -1070,12 +1097,6 @@ export async function* runTurnStreaming(
   const pinnedIds = new Set(pinnedMemories.map((m) => m.node_id));
   const dedupedSimilarity = similarityMemories.filter((m) => !pinnedIds.has(m.node_id));
   const relevantMemories = [...pinnedMemories.slice(0, 5), ...dedupedSimilarity];
-
-  // The leverage moment (felt-accumulation Inc 2): mint the `recalled_memory`
-  // accrual basis in the memory-graph accrual source — produced-not-authored —
-  // when a recalled memory was consequentially drawn upon. Undefined is the
-  // fail-closed default (no strong recall → no attribution).
-  const recalledBasis = recalledMemoryBasis(queryEmbedding, relevantMemories);
 
   // Layer-1 memory index — best-effort; a failure here must not fail the
   // turn. The agent still gets Layer-2 retrieval via `relevant_memories`.
@@ -1087,6 +1108,52 @@ export async function* runTurnStreaming(
     // Index is a pure projection; a store error is the deps' problem, not
     // the turn's. Swallow and continue.
   }
+
+  return { recentEvents, queryEmbedding, relevantMemories, memoryIndex, timings };
+}
+
+export async function* runTurnStreaming(
+  deps: SensitivityCleared<MotebitLoopDependencies>,
+  userMessage: string,
+  rawOptions?: TurnOptions,
+): AsyncGenerator<AgenticChunk> {
+  const { motebitId, eventStore, memoryGraph, stateEngine, behaviorEngine, provider } = deps;
+
+  // #943: the per-turn foreign mark. A foreign principal's turn is served
+  // none of the owner's interior: its options are floored ONCE here (every
+  // owner-interior block dropped, the [Now] snapshot projected — see
+  // `foreign-turn.ts`), and recall below is skipped. Every later read of the
+  // turn's options goes through `options`, never `rawOptions`.
+  const foreign = deps.foreignPrincipal === true;
+  const options = foreign ? floorForeignTurnOptions(rawOptions) : rawOptions;
+
+  // TTFT instrumentation — content-free wall-clock stamps. `turnStart` anchors
+  // every delta; per-stage durations come from `withStageTimeout`'s sink (one
+  // source); `providerCallStart`/`firstTokenAt` bracket the model segment. See
+  // `TurnLatency`. Observation only — never affects control flow.
+  const turnStart = Date.now();
+  let providerCallStart: number | undefined;
+  let contextPipelineMs: number | undefined;
+  let firstTokenAt: number | undefined;
+
+  // 1–2. The owner's interior this turn draws on: recent events, pinned +
+  // similar memories, the Layer-1 memory index. #943: a FOREIGN principal's
+  // turn (a caller's `motebit_query`, a customer's `motebit_task`, their
+  // approval resumes) recalls none of it — the owner's interior is never
+  // served to another principal (#880). This is the ONE recall chokepoint;
+  // the gate (`check-memory-source-canonical` scan (e)) holds every
+  // owner-store read in this file inside `recallOwnerInterior`.
+  const interior: OwnerInteriorRecall = foreign
+    ? foreignTurnRecall()
+    : await recallOwnerInterior(deps, userMessage);
+  const { recentEvents, queryEmbedding, relevantMemories, memoryIndex } = interior;
+  const { eventQueryMs, embedMs, pinnedMs, memoryRetrieveMs } = interior.timings;
+
+  // The leverage moment (felt-accumulation Inc 2): mint the `recalled_memory`
+  // accrual basis in the memory-graph accrual source — produced-not-authored —
+  // when a recalled memory was consequentially drawn upon. Undefined is the
+  // fail-closed default (no strong recall → no attribution).
+  const recalledBasis = recalledMemoryBasis(queryEmbedding, relevantMemories);
 
   // 3. Pack context and stream from provider (agentic loop)
   const currentState = stateEngine.getState();

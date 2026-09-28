@@ -198,6 +198,7 @@ import type {
   StreamingProvider,
   MotebitLoopDependencies,
   TurnResult,
+  TurnOptions,
   ReflectionResult,
   TaskType,
 } from "@motebit/ai-core";
@@ -2224,6 +2225,70 @@ export class MotebitRuntime {
     return resolveAttachedAct(this, kind, params);
   }
 
+  /**
+   * The owner-interior options a turn is built with — the owner's trust
+   * graph (`buildAgentContext`), the self-model (`gradientManager.buildSelfAwareness`),
+   * curiosity hints (fading owner memories), the first-conversation flag,
+   * the selected skills — plus the `[Now]` snapshot.
+   *
+   * #943: a FOREIGN principal's turn gets none of it. Nothing is read or
+   * resolved (no trust-graph read, no skill selection, so no `SkillLoaded`
+   * event claiming a skill served another principal's turn); only the
+   * `[Now]` snapshot is passed, and the loop projects it to its
+   * foreign-safe facets (`floorForeignTurnOptions` in `@motebit/ai-core`,
+   * the one chokepoint every door — including the approval resume —
+   * reaches). Both `sendMessage*` doors build their owner blocks here and
+   * nowhere else; `check-memory-source-canonical` scan (e) holds that.
+   */
+  private async ownerInteriorForTurn(
+    text: string,
+    runId: string | undefined,
+  ): Promise<
+    Pick<
+      TurnOptions,
+      | "curiosityHints"
+      | "knownAgents"
+      | "agentCapabilities"
+      | "precisionContext"
+      | "firstConversation"
+      | "selectedSkills"
+      | "sessionState"
+    >
+  > {
+    if (this.isForeignPrincipalTurn())
+      return { sessionState: await this.getSessionStateSnapshot() };
+    const { knownAgents, agentCapabilities } = await withStageTimeout(
+      "build_agent_context",
+      STAGE_TIMEOUTS_MS.build_agent_context,
+      this.buildAgentContext(),
+    );
+    const selfAwareness = this.gradientManager.buildSelfAwareness();
+    // When background formation is enabled, ensure any prior turn's
+    // queued formation has drained before we rebuild the retrieval
+    // context — otherwise `recallRelevant` (inside runTurnStreaming)
+    // could miss memories that are mid-formation. Cheap: typical
+    // human-conversation cadence leaves the queue drained by the
+    // time the next message arrives.
+    if (this._deferMemoryFormation) {
+      await this.memoryFormation.idle();
+    }
+    const selectedSkills = await this.resolveSkillsForTurn(text);
+    await this.emitSkillLoadEvents(selectedSkills, runId);
+    return {
+      curiosityHints: this.gradientManager.buildCuriosityHints(),
+      knownAgents,
+      agentCapabilities,
+      precisionContext: selfAwareness || undefined,
+      firstConversation: this._isFirstConversation || undefined,
+      selectedSkills,
+      // Prompt-1 — runtime session-state snapshot threaded into the AI's
+      // prompt every turn. Closes the runtime-state-confabulation
+      // hallucination class (witnessed 2026-05-08: AI claimed
+      // browser was open after a refresh closed the session).
+      sessionState: await this.getSessionStateSnapshot(),
+    };
+  }
+
   private async buildAgentContext(): Promise<{
     knownAgents?: AgentTrustRecord[];
     agentCapabilities?: Record<string, string[]>;
@@ -2244,10 +2309,6 @@ export class MotebitRuntime {
     }
 
     return { knownAgents, agentCapabilities };
-  }
-
-  private buildSelfAwareness(): string {
-    return this.gradientManager.buildSelfAwareness();
   }
 
   /**
@@ -2350,24 +2411,14 @@ export class MotebitRuntime {
 
     try {
       const trimmed = this.conversation.trimmed();
-      const { knownAgents, agentCapabilities } = await this.buildAgentContext();
-      const selfAwareness = this.buildSelfAwareness();
-      const selectedSkills = await this.resolveSkillsForTurn(text);
-      await this.emitSkillLoadEvents(selectedSkills, runId);
+      // #943: none of the owner's interior for a foreign turn.
+      const interior = await this.ownerInteriorForTurn(text, runId);
       const result = await runTurn(this.loopDepsForTurn(clearedLoopDeps), text, {
         conversationHistory: trimmed,
         previousCues: this.latestCues,
         runId,
         sessionInfo: this.conversation.getSessionInfo() ?? undefined,
-        curiosityHints: this.gradientManager.buildCuriosityHints(),
-        knownAgents,
-        agentCapabilities,
-        precisionContext: selfAwareness || undefined,
-        firstConversation: this._isFirstConversation || undefined,
-        selectedSkills,
-        // Prompt-1 — runtime session-state snapshot. Same shape as
-        // the streaming path; non-streaming sendMessage parity.
-        sessionState: await this.getSessionStateSnapshot(),
+        ...interior,
       });
       this.conversation.pushExchange(text, result.response);
       // First-conversation guidance fades after a few exchanges
@@ -2886,25 +2937,8 @@ export class MotebitRuntime {
       }
 
       const trimmed = this.conversation.trimmed();
-      const { knownAgents, agentCapabilities } = await withStageTimeout(
-        "build_agent_context",
-        STAGE_TIMEOUTS_MS.build_agent_context,
-        this.buildAgentContext(),
-      );
-      const selfAwareness = this.buildSelfAwareness();
-
-      // When background formation is enabled, ensure any prior turn's
-      // queued formation has drained before we rebuild the retrieval
-      // context — otherwise `recallRelevant` (inside runTurnStreaming)
-      // could miss memories that are mid-formation. Cheap: typical
-      // human-conversation cadence leaves the queue drained by the
-      // time the next message arrives.
-      if (this._deferMemoryFormation) {
-        await this.memoryFormation.idle();
-      }
-
-      const selectedSkills = await this.resolveSkillsForTurn(text);
-      await this.emitSkillLoadEvents(selectedSkills, runId);
+      // #943: none of the owner's interior for a foreign turn.
+      const interior = await this.ownerInteriorForTurn(text, runId);
 
       // Standing-delegation presentation → verification. Artifacts in,
       // authority derived — only the sole producer mints verifiedGrant.
@@ -2930,10 +2964,7 @@ export class MotebitRuntime {
         previousCues: this.latestCues,
         runId,
         sessionInfo: this.conversation.getSessionInfo() ?? undefined,
-        curiosityHints: this.gradientManager.buildCuriosityHints(),
-        knownAgents,
-        agentCapabilities,
-        precisionContext: selfAwareness || undefined,
+        ...interior,
         // A grant-presented turn is scope-bounded by the SIGNED capability
         // ceiling: tools outside `grant.scope` are denied by the policy
         // gate's delegation-scope machinery. An explicit delegationScope
@@ -2942,14 +2973,7 @@ export class MotebitRuntime {
           options?.delegationScope ??
           (presentedGrant != null ? options?.delegation?.grant.scope : undefined),
         verifiedGrant: presentedGrant ?? options?.verifiedGrant,
-        firstConversation: this._isFirstConversation || undefined,
         deferMemoryFormation: this._deferMemoryFormation,
-        selectedSkills,
-        // Prompt-1 — session-state snapshot threaded into the AI's
-        // prompt every turn. Closes the runtime-state-confabulation
-        // hallucination class (witnessed 2026-05-08: AI claimed
-        // browser was open after a refresh closed the session).
-        sessionState: await this.getSessionStateSnapshot(),
       });
       // Session info applies only to the first message after resume
       this.conversation.clearSessionInfo();
@@ -5113,6 +5137,12 @@ export class MotebitRuntime {
    * and maps to the tool's result shape (`supersededAt` from `valid_until`).
    */
   async recallMemoriesForTool(query: string, opts: ToolRecallOptions): Promise<ToolRecallResult[]> {
+    // #943: a foreign principal's turn recalls none of the owner's memories.
+    // `recall_memories` is `localOnly`, so the scoped registry already
+    // refuses it on such a turn; this is the backend's own floor, so a
+    // surface that wires the backend into a tool without `localOnly` still
+    // cannot serve the owner's memory to another principal.
+    if (this.isForeignPrincipalTurn()) return [];
     const queryEmbedding = await embedText(query);
     const nodes = await this.memory.recallRelevant(queryEmbedding, {
       limit: opts.limit,

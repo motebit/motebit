@@ -578,8 +578,229 @@ function main(): void {
     process.exit(1);
   }
 
+  // === Serving scan (e): a foreign turn is served none of the owner's interior
+  //
+  // #943 (owner decision 2026-09-28, fail closed): a foreign principal's
+  // turn — a caller's `motebit_query`, a customer's `motebit_task`, their
+  // approval resumes — recalls NONE of the owner's memories and receives
+  // NONE of the owner-interior context blocks. The sensitivity ladder
+  // governs egress to the model provider on the owner's behalf; serving to
+  // another principal is a different boundary (#880's law). One chokepoint
+  // per half, both read from the per-turn mark (`deps.foreignPrincipal`):
+  //   (i)   RECALL: in `packages/ai-core/src`, every owner-store read
+  //         (`.hasAnyMemory(` / `.getPinnedMemories(` / `.recallRelevant(` /
+  //         `.getMemoryIndex(` / `eventStore.query(`) lives inside loop.ts's
+  //         `recallOwnerInterior`, and `runTurnStreaming` calls it only as
+  //         `foreign ? foreignTurnRecall() : await recallOwnerInterior(…)`
+  //         with `const foreign = deps.foreignPrincipal === true;`;
+  //   (ii)  OPTIONS: `runTurnStreaming` floors its options ONCE
+  //         (`const options = foreign ? floorForeignTurnOptions(rawOptions)
+  //         : rawOptions;`) and reads `rawOptions` nowhere else;
+  //         `foreign-turn.ts` classifies every `TurnOptions` field
+  //         (`satisfies Record<keyof TurnOptions, …>` — a new field is a
+  //         compile error until classified), the owner-interior set is at
+  //         least the decided eight, `sessionState` is `projected`, and
+  //         `foreignSessionState` reads no snapshot facet but `substrate`;
+  //   (iii) RUNTIME: every call of an owner-interior builder
+  //         (`buildAgentContext(`, `buildSelfAwareness(`,
+  //         `.buildCuriosityHints(`, `resolveSkillsForTurn(`,
+  //         `emitSkillLoadEvents(`) in a non-test runtime file sits inside
+  //         `ownerInteriorForTurn`, which opens with the foreign early
+  //         return; and the `recall_memories` backend
+  //         (`recallMemoriesForTool`) opens with
+  //         `if (this.isForeignPrincipalTurn()) return [];`.
+  // Behavior: `packages/ai-core/src/__tests__/foreign-turn-interior.test.ts`
+  // (the loop, the resume shape) and
+  // `packages/runtime/src/__tests__/foreign-turn-interior.test.ts` (both
+  // doors, the task, the resume, the recall backend, no regression).
+  const interiorViolations: string[] = [];
+  const LOOP = "packages/ai-core/src/loop.ts";
+  const FOREIGN_TURN = "packages/ai-core/src/foreign-turn.ts";
+  const OWNER_STORE_READ =
+    /\.(hasAnyMemory|getPinnedMemories|recallRelevant|getMemoryIndex)\??\.?\(|\beventStore\.query\(/;
+  const bodyOf = (src: string, header: string, close: string): string => {
+    const start = src.indexOf(header);
+    if (start === -1) return "";
+    const end = src.indexOf(close, start);
+    return end === -1 ? "" : src.slice(start, end);
+  };
+  const recallBody = bodyOf(loopSrc, "async function recallOwnerInterior(", "\n}\n");
+  if (recallBody === "") {
+    interiorViolations.push(
+      `${LOOP}: \`async function recallOwnerInterior(\` not found — the one recall chokepoint is gone`,
+    );
+  }
+  let interiorAiCoreFiles = 0;
+  let ownerStoreReads = 0;
+  for (const rel of walkTsFiles("packages/ai-core/src")) {
+    if (rel.includes("__tests__")) continue;
+    interiorAiCoreFiles++;
+    const content = readFile(rel) ?? "";
+    const lines = content.split("\n");
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i] as string;
+      if (/^\s*(\*|\/\/|\/\*)/.test(line)) continue;
+      if (!OWNER_STORE_READ.test(line)) continue;
+      ownerStoreReads++;
+      if (rel !== LOOP || !recallBody.includes(line)) {
+        interiorViolations.push(
+          `${rel}:${i + 1}: reads the owner's memory graph or event log outside \`recallOwnerInterior\` — a foreign turn would recall it: ${line.trim()}`,
+        );
+      }
+    }
+  }
+  if (ownerStoreReads < 5) {
+    interiorViolations.push(
+      `${LOOP}: expected the five owner-store reads (hasAnyMemory, eventStore.query, getPinnedMemories, recallRelevant, getMemoryIndex) inside \`recallOwnerInterior\` — found ${ownerStoreReads}; the scan pattern may have drifted from the code`,
+    );
+  }
+  const rtsBody = bodyOf(loopSrc, "export async function* runTurnStreaming(", "\n}\n");
+  if (!/const foreign = deps\.foreignPrincipal === true;/.test(rtsBody)) {
+    interiorViolations.push(
+      `${LOOP}: runTurnStreaming must read the per-turn mark as \`const foreign = deps.foreignPrincipal === true;\``,
+    );
+  }
+  if (
+    !/const interior: OwnerInteriorRecall = foreign\s*\?\s*foreignTurnRecall\(\)\s*:\s*await recallOwnerInterior\(deps, userMessage\);/.test(
+      rtsBody,
+    )
+  ) {
+    interiorViolations.push(
+      `${LOOP}: runTurnStreaming must recall as \`foreign ? foreignTurnRecall() : await recallOwnerInterior(deps, userMessage)\` — a foreign turn recalls nothing of the owner's`,
+    );
+  }
+  const recallCalls = (loopSrc.match(/\brecallOwnerInterior\(/g) ?? []).length;
+  if (recallCalls !== 2) {
+    interiorViolations.push(
+      `${LOOP}: \`recallOwnerInterior(\` must appear exactly twice (its definition and the one guarded call) — found ${recallCalls}`,
+    );
+  }
+  if (
+    !/const options = foreign \? floorForeignTurnOptions\(rawOptions\) : rawOptions;/.test(rtsBody)
+  ) {
+    interiorViolations.push(
+      `${LOOP}: runTurnStreaming must floor its options once: \`const options = foreign ? floorForeignTurnOptions(rawOptions) : rawOptions;\``,
+    );
+  }
+  const rawOptionUses = rtsBody
+    .split("\n")
+    .filter((l) => !/^\s*(\*|\/\/|\/\*)/.test(l) && /\brawOptions\b/.test(l)).length;
+  if (rawOptionUses !== 2) {
+    interiorViolations.push(
+      `${LOOP}: \`rawOptions\` must appear only in runTurnStreaming's parameter and its floor line — found ${rawOptionUses} code line(s); read the turn's options through the floored \`options\``,
+    );
+  }
+  const ftSrc = readFile(FOREIGN_TURN) ?? "";
+  const DECIDED_OWNER_INTERIOR = [
+    "sessionInfo",
+    "curiosityHints",
+    "knownAgents",
+    "agentCapabilities",
+    "precisionContext",
+    "firstConversation",
+    "activationPrompt",
+    "selectedSkills",
+  ];
+  if (
+    !/satisfies Record<keyof TurnOptions, "owner_interior" \| "projected" \| "turn_own">/.test(
+      ftSrc,
+    )
+  ) {
+    interiorViolations.push(
+      `${FOREIGN_TURN}: \`TURN_OPTION_FOREIGN_CLASS\` must \`satisfies Record<keyof TurnOptions, "owner_interior" | "projected" | "turn_own">\` — every turn input classified, a new one a compile error`,
+    );
+  }
+  let ownerKeysClassified = 0;
+  for (const key of DECIDED_OWNER_INTERIOR) {
+    if (new RegExp(`^\\s*${key}: "owner_interior",`, "m").test(ftSrc)) ownerKeysClassified++;
+    else
+      interiorViolations.push(
+        `${FOREIGN_TURN}: \`${key}\` must be classified \`"owner_interior"\` — the owner decided a foreign turn never receives it (#943)`,
+      );
+  }
+  if (!/^\s*sessionState: "projected",/m.test(ftSrc)) {
+    interiorViolations.push(
+      `${FOREIGN_TURN}: \`sessionState\` must be classified \`"projected"\` — the owner's [Now] facets are projected away on a foreign turn`,
+    );
+  }
+  const fssBody = bodyOf(ftSrc, "export function foreignSessionState(", "\n}\n");
+  const facetReads = [...fssBody.matchAll(/\bsnapshot\.(\w+)/g)].map((m) => m[1]);
+  if (fssBody === "" || facetReads.some((f) => f !== "substrate")) {
+    interiorViolations.push(
+      `${FOREIGN_TURN}: \`foreignSessionState\` may read only \`snapshot.substrate\` — found ${fssBody === "" ? "(function missing)" : facetReads.join(", ")}`,
+    );
+  }
+  const ownerInteriorBody = bodyOf(runtimeSrc, "private async ownerInteriorForTurn(", "\n  }\n");
+  if (
+    ownerInteriorBody === "" ||
+    !/>\s*\{\s*\n\s*if \(this\.isForeignPrincipalTurn\(\)\)\s*\n?\s*return \{ sessionState: await this\.getSessionStateSnapshot\(\) \};/.test(
+      ownerInteriorBody,
+    )
+  ) {
+    interiorViolations.push(
+      `packages/runtime/src/motebit-runtime.ts: \`ownerInteriorForTurn\` must open with \`if (this.isForeignPrincipalTurn()) return { sessionState: await this.getSessionStateSnapshot() };\``,
+    );
+  }
+  const OWNER_BUILDER_CALL =
+    /\b(buildAgentContext|buildSelfAwareness|resolveSkillsForTurn|emitSkillLoadEvents)\(|\.buildCuriosityHints\(/;
+  let builderCalls = 0;
+  let runtimeInteriorFiles = 0;
+  for (const rel of walkTsFiles("packages/runtime/src")) {
+    if (rel.includes("__tests__")) continue;
+    runtimeInteriorFiles++;
+    const lines = (readFile(rel) ?? "").split("\n");
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i] as string;
+      if (/^\s*(\*|\/\/|\/\*)/.test(line)) continue;
+      // Definitions (`private buildX(`, a class member `  buildX(): …`) are not calls.
+      if (
+        /^\s*(private |public )?(async )?(buildAgentContext|buildSelfAwareness|buildCuriosityHints|resolveSkillsForTurn|emitSkillLoadEvents)\(/.test(
+          line,
+        )
+      )
+        continue;
+      if (!OWNER_BUILDER_CALL.test(line)) continue;
+      builderCalls++;
+      if (rel !== "packages/runtime/src/motebit-runtime.ts" || !ownerInteriorBody.includes(line)) {
+        interiorViolations.push(
+          `${rel}:${i + 1}: builds an owner-interior context block outside \`ownerInteriorForTurn\` — a foreign turn would receive it: ${line.trim()}`,
+        );
+      }
+    }
+  }
+  if (builderCalls < 5) {
+    interiorViolations.push(
+      `packages/runtime/src/motebit-runtime.ts: expected the five owner-interior builder calls inside \`ownerInteriorForTurn\` — found ${builderCalls}; the scan pattern may have drifted from the code`,
+    );
+  }
+  const recallToolBody = bodyOf(runtimeSrc, "async recallMemoriesForTool(", "\n  }\n");
+  const recallToolFirst = recallToolBody
+    .split("\n")
+    .slice(1)
+    .find((l) => l.trim() !== "" && !/^\s*(\*|\/\/|\/\*)/.test(l));
+  if (
+    recallToolFirst === undefined ||
+    !/^\s*if \(this\.isForeignPrincipalTurn\(\)\) return \[\];/.test(recallToolFirst)
+  ) {
+    interiorViolations.push(
+      `packages/runtime/src/motebit-runtime.ts: \`recallMemoriesForTool\` (the recall_memories backend) must open with \`if (this.isForeignPrincipalTurn()) return [];\` — found: ${(recallToolFirst ?? "(missing)").trim()}`,
+    );
+  }
+  if (interiorViolations.length > 0) {
+    console.error(
+      "check-memory-source-canonical: a foreign principal's turn could be served the owner's interior (#943):",
+    );
+    for (const v of interiorViolations) console.error(`  - ${v}`);
+    console.error("");
+    console.error(
+      "Repair: a foreign turn recalls none of the owner's memories and receives no owner-interior block. Keep every owner-store read inside ai-core's `recallOwnerInterior` (called only when `deps.foreignPrincipal` is not true), floor the turn's options once with `floorForeignTurnOptions`, classify any new `TurnOptions` field in `TURN_OPTION_FOREIGN_CLASS` (owner-private ⇒ `owner_interior`), and build the runtime's owner blocks only in `ownerInteriorForTurn` behind its foreign early return. A future shareable tier is an explicit owner opt-in, never a default.",
+    );
+    console.error("Doctrine: docs/doctrine/memory-provenance.md § authorship (#943).");
+    process.exit(1);
+  }
+
   console.log(
-    `✓ check-memory-source-canonical: ${MEMORY_SOURCES_REFERENCE.length} memory source(s) locked across union + ALL_MEMORY_SOURCES + gate reference; wire-format-compliant; model/peer authorship scans clean; foreign-turn provenance locked (resolver + ${aiCoreFilesScanned} other ai-core file(s) scanned, 7 wiring links checked); foreign-turn history floor locked (${runtimeFilesScanned} other runtime file(s) scanned for conversation-store writes, ${guardedMethods} ConversationManager writer(s) + ${guardedReaders} reader(s) guarded, ${consentSites} consent site(s) guarded, 4 wiring links checked).`,
+    `✓ check-memory-source-canonical: ${MEMORY_SOURCES_REFERENCE.length} memory source(s) locked across union + ALL_MEMORY_SOURCES + gate reference; wire-format-compliant; model/peer authorship scans clean; foreign-turn provenance locked (resolver + ${aiCoreFilesScanned} other ai-core file(s) scanned, 7 wiring links checked); foreign-turn history floor locked (${runtimeFilesScanned} other runtime file(s) scanned for conversation-store writes, ${guardedMethods} ConversationManager writer(s) + ${guardedReaders} reader(s) guarded, ${consentSites} consent site(s) guarded, 4 wiring links checked); foreign-turn serving floor locked (${interiorAiCoreFiles} ai-core file(s) scanned, ${ownerStoreReads} owner-store read(s) all inside recallOwnerInterior; ${runtimeInteriorFiles} runtime file(s) scanned, ${builderCalls} owner-block builder call(s) all inside ownerInteriorForTurn; ${ownerKeysClassified}/${DECIDED_OWNER_INTERIOR.length} decided owner-interior option(s) classified, recall backend floored).`,
   );
 }
 
