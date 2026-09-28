@@ -1793,11 +1793,16 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
       );
 
     // The registry key's provenance (#875 review round 4): recorded only when
-    // this request carried evidence for it — a keyed, proven key, or the
-    // proven sovereign key of a keyless E-sov registration. Keyless
-    // registrations that kept the key on file add nothing.
+    // this request carried evidence for the key it WROTE — a keyed, proven
+    // key, or, for a keyless E-sov registration, the proven sovereign key and
+    // only when that is the key the registry now holds. A keyless call that
+    // kept a different key on file (one a relay before #875 wrote without
+    // proof) never re-labels it: the request proved K_S, not the column
+    // (round 5). The registry is left as it was; it is simply not evidence.
+    const sovereignEvidence =
+      !keyFromBody && sovereignProof !== null && publicKey === sovereignProof.publicKey;
     const evidenceForWrite: RegistryKeyEvidence | null =
-      registryEvidence ?? (!keyFromBody && sovereignProof !== null ? "sovereign" : null);
+      registryEvidence ?? (sovereignEvidence ? "sovereign" : null);
     if (evidenceForWrite !== null && publicKey !== "") {
       recordRegistryKeyEvidence(moteDb.db, {
         motebitId,

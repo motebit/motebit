@@ -37,7 +37,12 @@ import {
   type VerifiableCredential,
 } from "@motebit/crypto";
 import type { SyncRelay } from "../index.js";
-import { keysHeldBy, recordIdentityKey, recordRegistryKeyEvidence } from "../identity-keys.js";
+import {
+  keysHeldBy,
+  provenRegistryKeyOf,
+  recordIdentityKey,
+  recordRegistryKeyEvidence,
+} from "../identity-keys.js";
 import { claimsSovereignId } from "../device-registration-guard.js";
 import { JSON_AUTH, createTestRelay, keyProof, signedBootstrapBody } from "./test-helpers.js";
 
@@ -962,5 +967,109 @@ describe("the served key: holder > proven registry > sovereign commitment (#875 
       now: 1,
     });
     expect(await served()).toBe(hex(holder));
+  });
+});
+
+describe("registry-key provenance is recorded only for the key the request proved (#875 review round 5)", () => {
+  const db = () => relay.moteDb.db;
+  const plant = (sql: string, ...args: unknown[]) =>
+    db()
+      .prepare(sql)
+      .run(...args);
+  const DEV =
+    "INSERT INTO devices (device_id, motebit_id, device_token, public_key, registered_at) VALUES (?, ?, ?, ?, ?)";
+  const REG =
+    "INSERT INTO agent_registry (motebit_id, public_key, endpoint_url, capabilities, registered_at, last_heartbeat, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?)";
+  const plantIdentity = (mid: string) =>
+    plant(
+      "INSERT INTO identities (motebit_id, owner_id, created_at, version_clock) VALUES (?, ?, ?, 0)",
+      mid,
+      `self:${mid}`,
+      1,
+    );
+  const plantRegistry = (mid: string, key: string) =>
+    plant(REG, mid, key, "http://127.0.0.1:9999/mcp", "[]", 1, 1, Date.now() + 86_400_000);
+  const evidenceOf = (mid: string) =>
+    db()
+      .prepare("SELECT public_key, evidence FROM relay_registry_key_evidence WHERE motebit_id = ?")
+      .get(mid) as { public_key: string; evidence: string } | undefined;
+  const registryKey = (mid: string) =>
+    (
+      db().prepare("SELECT public_key FROM agent_registry WHERE motebit_id = ?").get(mid) as {
+        public_key: string;
+      }
+    ).public_key;
+  const servedOn = async (mid: string) => ({
+    discover: (
+      (await (await relay.app.request(`/api/v1/discover/${mid}`)).json()) as { public_key: string }
+    ).public_key,
+    capabilities: (
+      (await (await relay.app.request(`/agent/${mid}/capabilities`)).json()) as {
+        public_key: string;
+      }
+    ).public_key,
+  });
+
+  it("the owner's keyless E-sov never labels a pre-#875 registry key it did not prove: served stays K_S, no K_V evidence, registry untouched", async () => {
+    const s = await sovereign(); // S = derive(K_S)
+    const kV = await generateKeypair();
+    plantIdentity(s.mid);
+    plant(DEV, "d-own", s.mid, "tok-own", hex(s.kp), 1);
+    plant(DEV, "d-claimed", s.mid, "tok-claimed", hex(kV), 2);
+    // Main wrote K_V (a pairing-claimed device key) into the registry: no holder, no provenance.
+    plantRegistry(s.mid, hex(kV));
+    expect(await servedOn(s.mid)).toEqual({ discover: hex(s.kp), capabilities: hex(s.kp) });
+
+    // The owner (holding only K_S) does its routine keyless registration.
+    expect((await registerAsDevice(s.mid, "d-own", s.kp, { capabilities: ["svc"] })).status).toBe(
+      200,
+    );
+
+    expect(evidenceOf(s.mid), "no provenance for a key the request did not prove").toBeUndefined();
+    expect(registryKey(s.mid), "a keyless call does not overwrite the key on file").toBe(hex(kV));
+    expect(await servedOn(s.mid)).toEqual({ discover: hex(s.kp), capabilities: hex(s.kp) });
+  });
+
+  it("a keyless E-sov registration records 'sovereign' provenance for the proven sovereign key it publishes", async () => {
+    const s = await sovereign();
+    const kV = await generateKeypair();
+    plantIdentity(s.mid);
+    plant(DEV, "d-own", s.mid, "tok-own", hex(s.kp), 1);
+    // A second device key blocks E-sov's HOLDER write (§5f), so the registry
+    // key's provenance is the only record that this request proved K_S.
+    plant(DEV, "d-other", s.mid, "tok-other", hex(kV), 2);
+
+    expect((await registerAsDevice(s.mid, "d-own", s.kp, { capabilities: ["svc"] })).status).toBe(
+      200,
+    );
+    expect(rowsFor(s.mid).holder).toBe(0);
+    expect(registryKey(s.mid)).toBe(hex(s.kp));
+    expect(evidenceOf(s.mid)).toEqual({ public_key: hex(s.kp), evidence: "sovereign" });
+    expect(await servedOn(s.mid)).toEqual({ discover: hex(s.kp), capabilities: hex(s.kp) });
+  });
+
+  it("evidence for K1 does not survive the registry moving to K2 without evidence: neither is served as proven", async () => {
+    const k1 = await generateKeypair();
+    const k2 = await generateKeypair();
+    const x = `legacy-${crypto.randomUUID()}`;
+    plantRegistry(x, hex(k1));
+    recordRegistryKeyEvidence(db(), {
+      motebitId: x,
+      publicKey: hex(k1),
+      evidence: "key_proof",
+      now: 1,
+    });
+    expect(provenRegistryKeyOf(db(), x)).toBe(hex(k1));
+    expect((await servedOn(x)).discover).toBe(hex(k1));
+
+    // The column moves to K2 by a write that records no evidence (a keyless
+    // call on a pre-#875 binary, an operator repair): the K1 row is now stale.
+    plant("UPDATE agent_registry SET public_key = ? WHERE motebit_id = ?", hex(k2), x);
+
+    expect(provenRegistryKeyOf(db(), x)).toBeNull();
+    const served = await servedOn(x);
+    expect(served.discover).not.toBe(hex(k1));
+    expect(served.discover).not.toBe(hex(k2));
+    expect(served.discover).toBe("");
   });
 });
