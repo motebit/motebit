@@ -64,6 +64,22 @@ function make(ownerTool: string, ownerGate?: { p: Promise<void> }, chainTool?: s
   const gen = async (ctx: ContextPack): Promise<AIResponse> => {
     const history = JSON.stringify(ctx.conversation_history ?? []);
     offered.push((ctx.tools ?? []).map((t) => t.name));
+    if (ctx.user_message.startsWith("THROW")) throw new Error("provider down");
+    // A fresh OWNER prompt proposes `ownerTool` whatever earlier turns left
+    // in the history (it answers once its own call's result is the latest).
+    if (ctx.user_message.startsWith("OWNER")) {
+      const last = JSON.stringify((ctx.conversation_history ?? []).at(-1) ?? {});
+      if (!last.includes("tool_result") && !last.includes('"role":"tool"')) {
+        return {
+          text: "",
+          confidence: 0.8,
+          memory_candidates: [],
+          state_updates: {},
+          tool_calls: [{ id: "o1", name: ownerTool, args: {} }],
+        };
+      }
+      return { text: "done", confidence: 0.8, memory_candidates: [], state_updates: {} };
+    }
     if (history.includes("tool_result") || history.includes('"role":"tool"')) {
       // Optionally propose ONE more call after the first result.
       if (chainTool != null && !chained) {
@@ -241,4 +257,50 @@ describe("the foreign scope is the turn's, never the runtime's (#880 round 2)", 
     expect(offered.length).toBeGreaterThan(0);
     for (const names of offered) expect(names).not.toContain("read_file");
   });
+
+  it("the foreign resume's mark is released: the owner's next turn is offered read_file and pauses normally", async () => {
+    const { runtime, offered } = make("ext_write");
+    (
+      runtime as unknown as { streaming: { _pendingApproval: Record<string, unknown> } }
+    ).streaming._pendingApproval = {
+      toolCallId: "c0",
+      toolName: "ext_write",
+      args: {},
+      userMessage: "store x",
+      requestedAt: Date.now(),
+      foreignPrincipal: true,
+    };
+    await drain(runtime.resumeAfterApproval(true));
+    expect(isForeign(runtime)).toBe(false);
+
+    offered.length = 0;
+    const own = await drain(runtime.sendMessageStreaming("OWNER store y"));
+    expect(offered[0]).toContain("read_file");
+    expect(own.some((c) => c.type === "approval_request")).toBe(true);
+    expect(runtime.hasPendingApproval).toBe(true);
+  });
+
+  it("a foreign non-streaming sendMessage (motebit_query) clears its mark — on success and on a throw", async () => {
+    const { runtime, calls } = make("ext_write");
+    const scoped = (
+      runtime as unknown as {
+        scopedToolRegistry: { execute(n: string, a: object): Promise<{ ok: boolean }> };
+      }
+    ).scopedToolRegistry;
+
+    await runtime.sendMessage("TASK q", undefined, { foreignPrincipal: true });
+    expect(isForeign(runtime)).toBe(false);
+    expect((await scoped.execute("read_file", {})).ok).toBe(true);
+
+    await expect(
+      runtime.sendMessage("THROW q", undefined, { foreignPrincipal: true }),
+    ).rejects.toThrow();
+    expect(isForeign(runtime)).toBe(false);
+    expect((await scoped.execute("read_file", {})).ok).toBe(true);
+    expect(calls).toEqual(["read_file", "read_file"]);
+  });
 });
+
+function isForeign(runtime: MotebitRuntime): boolean {
+  return (runtime as unknown as { isForeignPrincipalTurn(): boolean }).isForeignPrincipalTurn();
+}
