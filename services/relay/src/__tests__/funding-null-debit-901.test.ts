@@ -454,8 +454,9 @@ describe("#901 round 3: a task is priced for exactly the worker it is routed to"
       { submittedBy: true, payTo: true },
       () => "no-such-agent",
     );
-    // Checked first: no free work, whatever the status (the priced === routed
-    // assertion alone keeps this at 0 if the refusal is ever lost).
+    // Checked first: no free work, whatever the status. Without the refusal
+    // the task is priced AND routed for the path agent (one reading,
+    // `terms.routedTo`), so it would be charged, not free.
     expect(queuedFor(w), "no free work").toBe(0);
     expect(claimHeld(key, w), "a pre-admission refusal frees the key").toBe(false);
     expect(res.status, await res.clone().text()).toBe(400);
@@ -752,5 +753,65 @@ describe("#901 what production does today (real x402 ordering: settle after the 
     expect(x402.settled).toBe(0);
     expect(balanceOf(delegator)).toBe(2 * GROSS);
     expect(tasksWithPrompt(prompt)).toEqual([]);
+  });
+});
+
+describe("#901 round 3: the gate reads the VERIFIED caller, never a re-parse of the bearer", () => {
+  it("relay without apiToken + a forged bearer naming a broken payer: the funded path agent is debited once, x402 never settles (no double charge)", async () => {
+    await relay.close();
+    relay = await createTestRelay({ enableDeviceAuth: false, apiToken: "" });
+    x402.ordering = "after"; // the real @x402/hono ordering
+    // The listing route needs auth this relay doesn't mount; seed the same
+    // priced listing directly (pricedWorker's shape, with a payTo).
+    const worker = await newAgent();
+    relay.moteDb.db
+      .prepare(
+        `INSERT INTO relay_service_listings (listing_id, motebit_id, capabilities, pricing, description, pay_to_address, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        crypto.randomUUID(),
+        worker,
+        JSON.stringify(["web_search"]),
+        JSON.stringify([
+          { capability: "web_search", unit_cost: UNIT_COST, currency: "USD", per: "task" },
+        ]),
+        "901 priced worker",
+        "0x00000000000000000000000000000000000000a1",
+        Date.now(),
+      );
+    const forgedPayer = await newAgent(); // broke
+    creditAccount(relay.moteDb.db, worker, Math.ceil(GROSS * 1.3), "deposit", null, "901 funded");
+    const b64 = (o: unknown) => Buffer.from(JSON.stringify(o)).toString("base64url");
+    // motebit token shape: `<base64url payload>.<signature>` — a well-formed
+    // payload the gate could read, with a signature nothing verifies.
+    const forged = `${b64({
+      mid: forgedPayer,
+      did: "did:key:forged",
+      iat: Date.now(),
+      exp: Date.now() + 60_000,
+      jti: crypto.randomUUID(),
+      aud: "task:submit",
+    })}.forged-signature`;
+    const prompt = `901 forged bearer ${crypto.randomUUID()}`;
+    const res = await relay.app.request(`/agent/${worker}/task`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${forged}`,
+        "Idempotency-Key": crypto.randomUUID(),
+        "X-PAYMENT": "stand-in",
+      },
+      body: JSON.stringify({ prompt }),
+    });
+    const tasks = tasksWithPrompt(prompt);
+    // Gate and handler agree on the submitter (no verified caller, no
+    // submitted_by ⇒ the path agent itself): one reading, so x402 is never
+    // asked for a task the handler admits on other terms. The forged bearer's
+    // `mid` decides nothing.
+    expect(res.status, await res.clone().text()).toBe(201);
+    expect(tasks).toHaveLength(1);
+    expect(x402.settled, "x402 must not settle: the forged mid is not the payer").toBe(0);
+    expect(x402.quoted, "the gate never quoted the forged payer's task").toHaveLength(0);
   });
 });

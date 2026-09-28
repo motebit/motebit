@@ -2229,10 +2229,6 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
         // as free — the handler reads the same bytes and rejects them.
         return next();
       }
-      const authHeader = c.req.header("authorization");
-      const claims = authHeader?.startsWith("Bearer ")
-        ? parseTokenPayloadUnsafe(authHeader.slice(7))
-        : null;
       // The SAME reading the handler makes (`submissionTerms`): the submitter,
       // the worker the task is routed to, and that worker's price. A refused
       // submission (not an object, an empty `submitted_by`, a `target_agent`
@@ -2240,7 +2236,10 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
       const terms = submissionTerms(
         moteDb,
         agentId,
-        typeof claims?.mid === "string" ? claims.mid : undefined,
+        // The VERIFIED caller dualAuth set — the exact input the handler
+        // passes. Re-parsing the bearer here (unverified) let the gate and
+        // the handler disagree on who pays when auth was not mounted.
+        c.get("callerMotebitId" as never) as string | undefined,
         parsed,
         platformFeeRate,
       );
@@ -2588,13 +2587,8 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
     // against, so the gate can never divert to x402 a task the handler would
     // fund from the account (a double charge), nor ask x402 for less than the
     // handler credits — and the price is for the worker the task is ROUTED
-    // to, checked below once the settlement mode is known.
-    const {
-      pricingAgent,
-      pricingCapability,
-      unitCost: unitCostAtSubmission,
-      grossMicro,
-    } = terms.price;
+    // to (`terms.routedTo`).
+    const { pricingCapability, unitCost: unitCostAtSubmission, grossMicro } = terms.price;
     const priceSnapshot = grossMicro > 0 ? grossMicro : undefined;
 
     // Capture x402 payment proof from the settlement hook (set during middleware).
@@ -2856,19 +2850,12 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
       }
     }
 
-    // Priced === routed (#901 round 3). The task is priced for exactly the
-    // worker it is routed to: the proof's pinned `target_agent` on P2P (the
-    // pinned dispatch and the federated forward key on it), else the path
-    // agent the task is queued for. A pricing that names any other agent is
-    // the free-work class (a priced worker working at an unlisted or cheaper
-    // agent's price), so it is a fault, refused before admission — never a
-    // task.
-    const routedTo = settlementMode === "p2p" ? body.target_agent : motebitId;
-    if (pricingAgent !== routedTo) {
-      throw new Error(
-        `task pricing invariant: priced ${pricingAgent} but routed to ${String(routedTo)} (settlement ${settlementMode})`,
-      );
-    }
+    // Priced === routed holds by construction (#901 round 3): the price is
+    // `terms.price` of `terms.routedTo`, and every later use of the worker —
+    // the pinned P2P dispatch, the audit row, the dispatch token — reads
+    // `terms.routedTo` (the P2P branch runs only when `terms.p2p`, so its
+    // `body.target_agent` IS `terms.routedTo`). No runtime assertion: one that
+    // cannot fire guards nothing.
 
     // === Arc 3.5: P2P-by-default submission gate ===
     // Paid direct delegation to a different worker MUST settle P2P. The
@@ -3924,17 +3911,15 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
       // submitter never presents (#811; presentation-matrix.probe.ts).
       logger.info("task.submitter_presents", {
         correlationId: taskId,
-        worker:
-          typeof body.target_agent === "string" && body.target_agent.length > 0
-            ? body.target_agent
-            : motebitId,
+        worker: terms.routedTo,
         submitted_by: submittedBy ?? null,
       });
     }
-    const intendedWorker =
-      typeof body.target_agent === "string" && body.target_agent.length > 0
-        ? body.target_agent
-        : motebitId;
+    // The worker the dispatch token binds is the one the task was priced and
+    // routed for — `terms.routedTo`, never a re-read of `body.target_agent`
+    // (#901 round 3): one reading of the submission decides price, route and
+    // admission binding, so they cannot diverge.
+    const intendedWorker = terms.routedTo;
     const responseBody = {
       task_id: taskId,
       status: task.status,
