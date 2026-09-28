@@ -401,10 +401,21 @@ describe("Path 0 settlement outcome (#920)", () => {
   // instruction is no longer valid — lands and fails. Main recorded this as a
   // completed withdrawal citing sig2; a naive `confirmed:false ⇒ refund` rule
   // would refund it (a double pay if sig1 landed). It must stay pending.
-  it("real adapter, expiry retry whose re-broadcast lands and fails ⇒ pending, NOT refunded", async () => {
+  /**
+   * The REAL Web3JsRpcAdapter (#885): after web3.js reports "block height
+   * exceeded" it asks the chain about the first signature before any re-sign.
+   * `chain` decides what the status reads say.
+   */
+  async function realAdapterWithdraw(
+    mid: string,
+    chain: "undecidable" | "first_expired",
+  ): Promise<{ r: SyncRelay; sends: number; withdrawalId: string; status: string }> {
+    let t = 0;
     const adapter = new Web3JsRpcAdapter({
       rpcUrl: "http://127.0.0.1:1",
       identitySeed: new Uint8Array(32).fill(7),
+      // Virtual clock: the post-expiry poll's 30s cap costs no real time.
+      expiryConfirm: { now: () => t, sleep: (ms) => ((t += ms), Promise.resolve()) },
     });
     let sends = 0;
     let confirms = 0;
@@ -427,19 +438,29 @@ describe("Path 0 settlement outcome (#920)", () => {
           value: { err: { InstructionError: [0, { Custom: 0 }] } },
         });
       }),
+      // undecidable: the chain is still inside the expiry margin — the first
+      // send may yet land. first_expired: past the margin, the status node
+      // caught up, the signature is nowhere — proven dead.
+      getEpochInfo: vi
+        .fn()
+        .mockResolvedValue(
+          chain === "first_expired"
+            ? { blockHeight: 500, absoluteSlot: 9_000 }
+            : { blockHeight: 101, absoluteSlot: 9_000 },
+        ),
+      getSignatureStatuses: vi.fn().mockResolvedValue({ context: { slot: 9_000 }, value: [null] }),
     };
     (adapter as unknown as { connection: unknown }).connection = conn;
     (adapter as unknown as { getUsdcBalance: () => Promise<bigint> }).getUsdcBalance = () =>
       Promise.resolve(10_000_000_000n);
-    relay = await createTestRelay({
+    const r = await createTestRelay({
       enableDeviceAuth: false,
       operatorSolanaTransfer: new OperatorSolanaTransfer(adapter),
     });
-    const mid = "zz920-real-retry";
-    await registerAndFund(relay, mid);
-
+    relay = r; // closed by afterEach
+    await registerAndFund(r, mid);
     // An on-curve destination: the real adapter derives its ATA.
-    const res = await relay.app.request(`/api/v1/agents/${mid}/withdraw`, {
+    const res = await r.app.request(`/api/v1/agents/${mid}/withdraw`, {
       method: "POST",
       headers: jsonAuthWithIdempotency(),
       body: JSON.stringify({
@@ -449,10 +470,32 @@ describe("Path 0 settlement outcome (#920)", () => {
     });
     expect(res.status).toBe(200);
     const body = (await res.json()) as { withdrawal: { withdrawal_id: string; status: string } };
-    expect(sends).toBe(2);
-    expect(body.withdrawal.status).toBe("pending");
-    expect(balance(relay, mid)).toBe(FUNDED - WITHDRAW_MICRO);
-    expect(refundCount(relay, mid, body.withdrawal.withdrawal_id)).toBe(0);
+    return {
+      r,
+      sends,
+      withdrawalId: body.withdrawal.withdrawal_id,
+      status: body.withdrawal.status,
+    };
+  }
+
+  it("real adapter, expiry while the first send may still land ⇒ never re-signed, pending, NOT refunded", async () => {
+    const mid = "zz920-real-undecidable";
+    const out = await realAdapterWithdraw(mid, "undecidable");
+    expect(out.sends, "no second broadcast while the first may land").toBe(1);
+    expect(out.status).toBe("pending");
+    expect(balance(out.r, mid)).toBe(FUNDED - WITHDRAW_MICRO);
+    expect(refundCount(out.r, mid, out.withdrawalId)).toBe(0);
+  });
+
+  it("real adapter, first send PROVEN expired, re-broadcast lands and fails ⇒ failed and refunded exactly once", async () => {
+    const mid = "zz920-real-proven";
+    const out = await realAdapterWithdraw(mid, "first_expired");
+    expect(out.sends).toBe(2);
+    // earlierBroadcastsDead is true (the adapter proved sig1 dead), and the
+    // re-broadcast landed and failed: nothing was paid — refund once.
+    expect(out.status).toBe("failed");
+    expect(balance(out.r, mid)).toBe(FUNDED);
+    expect(refundCount(out.r, mid, out.withdrawalId)).toBe(1);
   });
 
   it("malformed result (no `confirmed`) with earlierBroadcastsDead:true ⇒ pending, NOT refunded", async () => {
