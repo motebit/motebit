@@ -520,6 +520,8 @@ export interface HttpPollingDelegationOptions {
   pollIntervalMs?: number;
   /** Max retries after the first attempt. Default 2. */
   maxRetries?: number;
+  /** First backoff after a 409 on a submission; doubles each time. Default 1s. */
+  conflictBackoffMs?: number;
 }
 
 /** An error carrying how the retry must treat it. */
@@ -548,6 +550,43 @@ export function createHttpPollingDelegationAdapter(
   const { relayUrl, motebitId } = opts;
   const maxRetries = opts.maxRetries ?? 2;
   const pollIntervalMs = opts.pollIntervalMs ?? 2000;
+  const conflictRetries = 4;
+  const conflictBackoffMs = opts.conflictBackoffMs ?? 1000;
+
+  const unconfirmed = (message: string, cause?: unknown): StepAttemptError => {
+    const err: StepAttemptError = new Error(message, cause !== undefined ? { cause } : undefined);
+    err.deliveryUncertain = true;
+    return err;
+  };
+
+  /**
+   * POST a submission under its Idempotency-Key. A thrown fetch (the request
+   * may have reached the relay, the response was lost) and a 409 (an earlier
+   * request under the same key is still processing) are not "not admitted":
+   * a 409 is retried after a short backoff under the same key — the relay
+   * then replays its 201 with the same task_id — and a thrown fetch, or a 409
+   * that outlasts the backoff, is delivery-uncertain, so the retry keeps the
+   * key too (#816). Every other response is returned for the caller to judge.
+   */
+  const submitUnderKey = async (
+    url: string,
+    headers: Record<string, string>,
+    body: Record<string, unknown>,
+  ): Promise<Response> => {
+    for (let conflict = 0; ; conflict++) {
+      let resp: Response;
+      try {
+        resp = await fetch(url, { method: "POST", headers, body: JSON.stringify(body) });
+      } catch (err: unknown) {
+        throw unconfirmed("Relay task submission unconfirmed: no response", err);
+      }
+      if (resp.status !== 409) return resp;
+      if (conflict >= conflictRetries) {
+        throw unconfirmed("Relay task submission unconfirmed: still being processed (409)");
+      }
+      await new Promise<void>((r) => setTimeout(r, conflictBackoffMs * 2 ** conflict));
+    }
+  };
 
   /** One ask of the relay: the receipt, or null when there is no answer yet. */
   const query = async (taskId: string): Promise<ExecutionReceipt | null> => {
@@ -579,11 +618,11 @@ export function createHttpPollingDelegationAdapter(
     };
     if (excludeAgents.length > 0) body.exclude_agents = excludeAgents;
 
-    const resp = await fetch(`${relayUrl}/agent/${motebitId}/task`, {
-      method: "POST",
-      headers: { ...opts.submitHeaders, "Idempotency-Key": idempotencyKey },
-      body: JSON.stringify(body),
-    });
+    const resp = await submitUnderKey(
+      `${relayUrl}/agent/${motebitId}/task`,
+      { ...opts.submitHeaders, "Idempotency-Key": idempotencyKey },
+      body,
+    );
 
     if (resp.status === 402) throw new Error("Insufficient balance (HTTP 402)");
     if (!resp.ok) {
@@ -591,7 +630,13 @@ export function createHttpPollingDelegationAdapter(
       throw new Error(`Relay task submission failed (${resp.status}): ${text.slice(0, 200)}`);
     }
 
-    const taskResp = (await resp.json()) as { task_id: string };
+    let taskResp: { task_id: string };
+    try {
+      taskResp = (await resp.json()) as { task_id: string };
+    } catch (err: unknown) {
+      // Admitted (2xx), but the answer never arrived whole: same key again.
+      throw unconfirmed("Relay task submission unconfirmed: response body lost", err);
+    }
     const taskId = taskResp.task_id;
     onTaskSubmitted?.(taskId);
 
@@ -622,11 +667,7 @@ export function createHttpPollingDelegationAdapter(
     // the retry the same key (#816).
     const last = await query(taskId);
     if (last) return settle(last);
-    const err: StepAttemptError = new Error(
-      `Delegation timed out after ${timeoutMs}ms for step "${step.description}"`,
-    );
-    err.deliveryUncertain = true;
-    throw err;
+    throw unconfirmed(`Delegation timed out after ${timeoutMs}ms for step "${step.description}"`);
   };
 
   return {
