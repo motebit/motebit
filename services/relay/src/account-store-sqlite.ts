@@ -420,6 +420,35 @@ export class SqliteAccountStore implements AccountStore {
     return info.changes > 0;
   }
 
+  failWithdrawalAndRefund(
+    id: string,
+    reason: string,
+    failedAt: number = Date.now(),
+  ): { motebitId: string; amount: number } | null {
+    // Issue #920: the status transition and the refund commit together or
+    // not at all. The UPDATE is a compare-and-set on the non-terminal
+    // statuses, so of two callers racing (a retried handler, a sweeper, an
+    // admin replay) exactly one sees `changes === 1` and refunds; the other
+    // refunds nothing. `credit` runs INSIDE this transaction (a nested
+    // `transaction()` would be a savepoint; `credit` issues plain statements
+    // on the same connection), so a throw anywhere — the balance UPDATE or
+    // the ledger INSERT — rolls the status back to where it was.
+    return this.db.transaction(() => {
+      const info = this.db
+        .prepare(
+          "UPDATE relay_withdrawals SET status = 'failed', failure_reason = ?, completed_at = ? WHERE withdrawal_id = ? AND status IN ('pending', 'processing')",
+        )
+        .run(reason, failedAt, id);
+      if (info.changes === 0) return null;
+      const w = this.db
+        .prepare("SELECT motebit_id, amount FROM relay_withdrawals WHERE withdrawal_id = ?")
+        .get(id) as { motebit_id: string; amount: number } | undefined;
+      if (!w) throw new Error(`failWithdrawalAndRefund: withdrawal ${id} vanished mid-transaction`);
+      this.credit(w.motebit_id, w.amount, "withdrawal", id, `Withdrawal failed: ${reason}`);
+      return { motebitId: w.motebit_id, amount: w.amount };
+    });
+  }
+
   getWithdrawalById(id: string): WithdrawalRequest | null {
     return (
       (this.db.prepare("SELECT * FROM relay_withdrawals WHERE withdrawal_id = ?").get(id) as

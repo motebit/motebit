@@ -140,7 +140,7 @@ Every conforming implementation MUST enforce all of the following. These are sec
 3. **Dispute-window hold.** The debit MUST respect the dispute-window hold (settlement-v1): funds from recent settlement credits are not withdrawable until the window elapses. Available balance below the requested amount ⇒ 402 with no state change.
 4. **Authorization.** The request MUST carry an `account:withdraw`-audience credential — the account owner's signed device token or the operator master token. A token minted for another audience MUST be rejected (cross-endpoint replay defense, auth-token-v1 §5).
 
-**Non-goal (explicit):** this request does NOT guarantee settlement completion. A `pending` or `processing` status is the fail-safe — the debit already holds the funds, so a settlement-rail failure strands the payout for admin resolution without double-spend risk. Settlement finality is observed via the response record's `status` and `payout_reference`, never assumed from a 200.
+**Non-goal (explicit):** this request does NOT guarantee settlement completion. A `pending` or `processing` status is the fail-safe — the debit already holds the funds, so a settlement-rail failure strands the payout for admin resolution without double-spend risk. Settlement finality is observed via the response record's `status` and `payout_reference`, never assumed from a 200. An automated payout maps its outcome to the record per §10.4: `completed` only on a confirmed transfer, `failed` (refunded atomically) only on a definitive failure, `pending` on an unknown outcome.
 
 #### Wire format (foundation law)
 
@@ -652,6 +652,20 @@ The relay signs the withdrawal receipt with its Ed25519 keypair, providing the w
 | `processing` | Payout initiated with external provider.     |
 | `completed`  | Payout confirmed. Relay signature available. |
 | `failed`     | Payout failed. Funds returned to account.    |
+
+`failed` is terminal and carries the refund: the transition to `failed` and the credit of the withdrawn amount back to the account MUST commit atomically (one transaction), and a withdrawal MUST be refunded at most once — a repeated fail of the same withdrawal (a retried handler, a sweeper, an operator replay) is a no-op.
+
+### 10.4 — Automated Payout Outcome
+
+When the relay pays a withdrawal out itself (e.g. the Path 0 Solana return of custody), the payout's reported outcome determines the state. There are exactly three outcomes:
+
+| Payout outcome                                                                                          | Resulting state | Balance                                |
+| ------------------------------------------------------------------------------------------------------- | --------------- | -------------------------------------- |
+| Confirmed success — the transfer landed without error                                                   | `completed`     | stays debited; receipt signed          |
+| Definitive failure — the transfer landed and failed (an atomic on-chain tx that errored moves no funds) | `failed`        | refunded atomically, once (§10.3)      |
+| Unknown — the send threw, timed out, or reported no landed outcome                                      | `pending`       | stays debited; operator reconciliation |
+
+An implementation MUST NOT mark a withdrawal `completed` on anything but a confirmed success, and MUST NOT refund on an unknown outcome: a transfer that later lands would then pay the user twice. `failure_reason` on a definitive failure SHOULD name the payout reference (the transaction signature) and the failure.
 
 ---
 

@@ -195,6 +195,26 @@ describe("failWithdrawal", () => {
     expect(lastTx.description).toContain("failed");
   });
 
+  it("refunds at most once — a retried fail is a no-op (#920)", () => {
+    const store = seededStore(1_000_000);
+    const r = requestWithdrawal(store, {
+      motebitId: ALICE,
+      amountMicro: 400_000,
+      newId: () => "w1",
+    });
+    if (!r || "existing" in r) throw new Error("expected fresh");
+
+    expect(failWithdrawal(store, "w1", "tx failed")).toBe(true);
+    expect(failWithdrawal(store, "w1", "tx failed (retry)")).toBe(false);
+    expect(store.getOrCreateAccount(ALICE).balance).toBe(1_000_000);
+    const refunds = store
+      .getTransactions(ALICE)
+      .filter((t) => t.reference_id === "w1" && t.amount > 0);
+    expect(refunds).toHaveLength(1);
+    // The first reason is the recorded one; the retry changed nothing.
+    expect(store.getWithdrawalById("w1")!.failure_reason).toBe("tx failed");
+  });
+
   it("returns false for a completed withdrawal", () => {
     const store = seededStore(1_000_000);
     const r = requestWithdrawal(store, {

@@ -337,9 +337,11 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
     // sovereign-rail return-of-custody path (relay treasury → user wallet,
     // no third-party orchestrator, no transmission category).
     //
-    // Fail-safe: if settlement fails, withdrawal stays pending for admin
-    // resolution. Funds are already held by requestWithdrawal — no
-    // double-spend risk.
+    // Fail-safe: if settlement's outcome is unknown (the send threw), the
+    // withdrawal stays pending for admin resolution. Funds are already held
+    // by requestWithdrawal — no double-spend risk. Only a DEFINITIVE
+    // failure (Path 0: the tx landed and failed on-chain) fails the
+    // withdrawal and refunds, atomically — see the outcome rule below.
     let autoSettled = false;
     const isSolanaDest =
       result.destination !== "pending" && /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(result.destination);
@@ -360,6 +362,27 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
     //
     // Doctrine: docs/doctrine/off-ramp-as-user-action.md (landing this arc).
     // Operator primitive: packages/wallet-solana/src/operator-transfer.ts.
+    //
+    // Settlement-outcome rule (issue #920; spec/market-v1.md §10.4). The
+    // send has THREE outcomes and each maps to exactly one ledger action:
+    //
+    //   1. confirmed:true  — the transfer landed without error: USDC moved.
+    //      Complete the withdrawal with the tx signature and a signed receipt.
+    //   2. confirmed:false with a landed slot — the tx was processed and
+    //      FAILED on-chain. Solana txs are atomic: only the fee was charged,
+    //      no USDC moved. This is definitive, so fail the withdrawal and
+    //      refund the user's balance in ONE transaction
+    //      (`failWithdrawal` → `AccountStore.failWithdrawalAndRefund`), with
+    //      the tx signature and the failure recorded as the reason.
+    //   3. anything else — the send threw (RPC timeout, blockhash expiry
+    //      after retries, network), or reported confirmed:false with no
+    //      landed slot: the outcome is UNKNOWN; the transfer may yet land.
+    //      Leave the withdrawal pending for admin / reconciliation, exactly
+    //      as before. NEVER refund on an unknown: if it landed, a refund
+    //      pays the user twice.
+    //
+    // Before #920 outcome 2 was recorded as outcome 1: a completed, signed
+    // withdrawal whose funds never moved, with the balance still debited.
     if (!autoSettled && isSolanaDest && operatorSolanaTransfer) {
       try {
         const available = await operatorSolanaTransfer.isAvailable();
@@ -372,42 +395,71 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
             BigInt(result.amount),
           );
 
-          const completedAt = Date.now();
-          const relayPublicKeyHex = bytesToHex(relayIdentity.publicKey);
-          const signature = await signWithdrawalReceipt(
-            {
-              withdrawal_id: result.withdrawal_id,
-              motebit_id: motebitId,
-              amount: body.amount,
-              currency: result.currency,
-              destination: result.destination,
-              payout_reference: sendResult.signature,
-              completed_at: completedAt,
-              relay_id: relayIdentity.relayMotebitId,
-            },
-            relayIdentity.privateKey,
-          );
-          completeWithdrawal(
-            moteDb.db,
-            result.withdrawal_id,
-            sendResult.signature,
-            signature,
-            relayPublicKeyHex,
-            completedAt,
-          );
+          if (sendResult.confirmed === true) {
+            // Outcome 1 — funds moved.
+            const completedAt = Date.now();
+            const relayPublicKeyHex = bytesToHex(relayIdentity.publicKey);
+            const signature = await signWithdrawalReceipt(
+              {
+                withdrawal_id: result.withdrawal_id,
+                motebit_id: motebitId,
+                amount: body.amount,
+                currency: result.currency,
+                destination: result.destination,
+                payout_reference: sendResult.signature,
+                completed_at: completedAt,
+                relay_id: relayIdentity.relayMotebitId,
+              },
+              relayIdentity.privateKey,
+            );
+            completeWithdrawal(
+              moteDb.db,
+              result.withdrawal_id,
+              sendResult.signature,
+              signature,
+              relayPublicKeyHex,
+              completedAt,
+            );
 
-          autoSettled = true;
-          logger.info("withdrawal.solana.auto_settled", {
-            correlationId,
-            motebitId,
-            withdrawalId: result.withdrawal_id,
-            txSignature: sendResult.signature,
-            slot: sendResult.slot,
-            confirmed: sendResult.confirmed,
-            destination: result.destination,
-          });
+            autoSettled = true;
+            logger.info("withdrawal.solana.auto_settled", {
+              correlationId,
+              motebitId,
+              withdrawalId: result.withdrawal_id,
+              txSignature: sendResult.signature,
+              slot: sendResult.slot,
+              confirmed: sendResult.confirmed,
+              destination: result.destination,
+            });
+          } else if (sendResult.slot > 0) {
+            // Outcome 2 — landed and failed; definitive, nothing moved.
+            const refunded = failWithdrawal(
+              moteDb.db,
+              result.withdrawal_id,
+              `solana transfer ${sendResult.signature} landed at slot ${sendResult.slot} but failed on-chain (confirmed:false); no USDC moved, amount returned to balance`,
+            );
+            logger.warn("withdrawal.solana.landed_failed", {
+              correlationId,
+              motebitId,
+              withdrawalId: result.withdrawal_id,
+              txSignature: sendResult.signature,
+              slot: sendResult.slot,
+              destination: result.destination,
+              refunded,
+            });
+          } else {
+            // Outcome 3 (reported) — no landed slot: unknown. Stay pending.
+            logger.warn("withdrawal.solana.outcome_unknown", {
+              correlationId,
+              motebitId,
+              withdrawalId: result.withdrawal_id,
+              txSignature: sendResult.signature,
+              destination: result.destination,
+            });
+          }
         }
       } catch (err) {
+        // Outcome 3 (thrown) — unknown. Stay pending; never refund here.
         logger.warn("withdrawal.solana.auto_settle_failed", {
           correlationId,
           motebitId,
@@ -510,9 +562,11 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
     // path just persisted — the DB is the single source of truth. Building
     // from the stale pre-completion `result` would return a "completed"
     // withdrawal with null signature, defeating offline self-verifiability.
-    const finalRecord = autoSettled
-      ? (getWithdrawalById(moteDb.db, result.withdrawal_id) ?? result)
-      : result;
+    //
+    // Re-read on EVERY outcome, not only auto-settle: a landed-and-failed
+    // send (#920) moves the row to `failed` with a reason, and the response
+    // must say so rather than echo the stale `pending` record.
+    const finalRecord = getWithdrawalById(moteDb.db, result.withdrawal_id) ?? result;
     const responseBody = {
       motebit_id: motebitId,
       // `satisfies` binds the producer to the market-v1 §2.9 wire law at

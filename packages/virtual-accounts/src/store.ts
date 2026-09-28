@@ -111,6 +111,28 @@ export interface AccountStore {
   linkWithdrawalTransfer(id: string, payoutReference: string): boolean;
   setWithdrawalSignature(id: string, signature: string, publicKey: string): void;
   setWithdrawalCompletion(id: string, payoutReference: string, completedAt: number): boolean;
+  /**
+   * Fail a withdrawal AND return its amount to the account, **atomically**
+   * (issue #920). One compound operation: the status transition
+   * `pending | processing → failed` is a compare-and-set, and the refund
+   * credit (balance update + `withdrawal`-type ledger row, description
+   * `Withdrawal failed: <reason>`) commits in the same transaction as that
+   * transition — or neither does.
+   *
+   * Returns the refunded `{ motebitId, amount }` when THIS call performed the
+   * transition, `null` when the withdrawal is missing or already terminal.
+   * A second call (a retried handler, a sweeper, an admin replay) therefore
+   * refunds nothing: the refund happens at most once per withdrawal.
+   *
+   * Partial state is forbidden in both directions: "failed but not refunded"
+   * strands the user's money; "refunded but still pending" lets the next
+   * fail (or a late completion) refund or pay it a second time.
+   */
+  failWithdrawalAndRefund(
+    id: string,
+    reason: string,
+    failedAt?: number,
+  ): { motebitId: string; amount: number } | null;
   getWithdrawalById(id: string): WithdrawalRequest | null;
   getWithdrawalByIdempotencyKey(motebitId: string, key: string): WithdrawalRequest | null;
   getWithdrawals(motebitId: string, limit?: number): WithdrawalRequest[];
@@ -445,6 +467,23 @@ export class InMemoryAccountStore implements AccountStore {
     w.payout_reference = payoutReference;
     w.completed_at = completedAt;
     return true;
+  }
+
+  failWithdrawalAndRefund(
+    id: string,
+    reason: string,
+    failedAt: number = this._now(),
+  ): { motebitId: string; amount: number } | null {
+    // Synchronous JS: the event loop serializes this whole body, so the
+    // status CAS and the refund credit cannot interleave with another caller.
+    const w = this.withdrawals.get(id);
+    if (!w) return null;
+    if (w.status !== "pending" && w.status !== "processing") return null;
+    w.status = "failed";
+    w.failure_reason = reason;
+    w.completed_at = failedAt;
+    this.credit(w.motebit_id, w.amount, "withdrawal", id, `Withdrawal failed: ${reason}`);
+    return { motebitId: w.motebit_id, amount: w.amount };
   }
 
   getWithdrawalById(id: string): WithdrawalRequest | null {
