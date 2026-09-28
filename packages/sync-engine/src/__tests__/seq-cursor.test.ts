@@ -189,6 +189,34 @@ describe("#868 seq cursor", () => {
     expect([...local.cursors.values()]).toEqual([2]);
   });
 
+  it("dedups by event_id lookup when the store offers one — never by reading the local log", async () => {
+    for (let i = 1; i <= 3; i++) relay.ingest(entry(`e${i}`, i));
+    const local = new CursorStore();
+    await local.append(entry("e2", 2));
+    const lookups: string[][] = [];
+    const store: EventStoreAdapter & {
+      getHeldEventIds(ids: readonly string[]): Promise<Set<string>>;
+    } = {
+      append: (e) => local.append(e),
+      query: () => Promise.reject(new Error("the pull must not scan the local log")),
+      getLatestClock: (m) => local.getLatestClock(m),
+      tombstone: (i, m) => local.tombstone(i, m),
+      getHeldEventIds: (ids) => {
+        lookups.push([...ids]);
+        return Promise.resolve(new Set(ids.filter((id) => id === "e2")));
+      },
+    };
+    const out = await pullBySeq({
+      source: http,
+      localStore: store,
+      cursorStore: new InMemorySyncSeqCursorStore(),
+      motebitId: MID,
+      fallbackAfterClock: 0,
+    });
+    expect(out.fresh.map((e) => e.event_id)).toEqual(["e1", "e3"]);
+    expect(lookups).toEqual([["e1", "e2", "e3"]]);
+  });
+
   it("never applies an event of another identity, whatever the relay returns", async () => {
     relay.ingest(entry("mine", 1));
     const foreign = entry("theirs", 2, "someone-else");
