@@ -32,8 +32,13 @@ import {
   AuthenticationError,
   AuthorizationError,
   InsufficientFundsError,
+  P2pProofAlreadyAdmittedError,
 } from "./errors.js";
-import { recordMasterTokenOnce, recordRefusalBeforeVerify } from "./auth-events.js";
+import {
+  CALLER_VERIFIED_KEY,
+  recordMasterTokenOnce,
+  recordRefusalBeforeVerify,
+} from "./auth-events.js";
 import { pathIdentity } from "./id-bounds.js";
 import { SYNC_PRESENTER_KEY } from "./identity-binding.js";
 
@@ -218,6 +223,7 @@ export function createDualAuth(deps: MiddlewareDeps) {
       });
       throw new AuthenticationError("AUTH_INVALID_TOKEN", "Invalid token");
     }
+    let verifiedKey: string | undefined;
     const valid = await deps.verifySignedTokenForDevice(
       token,
       claims.mid,
@@ -247,12 +253,18 @@ export function createDualAuth(deps: MiddlewareDeps) {
           correlationId: c.req.header("x-correlation-id") ?? null,
         });
       },
+      // The key the token verified under, from the verifier's own read: a
+      // P2P submission's payer must derive from it (#918, p2p-payer.ts).
+      (publicKey) => {
+        verifiedKey = publicKey;
+      },
     );
     if (!valid) {
       throw new AuthenticationError("AUTH_INVALID_TOKEN", "Token verification failed");
     }
 
     c.set("callerMotebitId" as never, claims.mid as never);
+    if (verifiedKey != null) c.set(CALLER_VERIFIED_KEY, verifiedKey as never);
     enrichRequestContext({ motebitId: claims.mid });
     await next();
   };
@@ -981,6 +993,19 @@ export function registerMiddleware(deps: MiddlewareDeps): MiddlewareResult {
             code: err.code,
             status: err.statusCode,
             payment_credited: err.creditedPayment,
+          },
+          status,
+        );
+      }
+      // A proof already bound to an admitted task names that task only when
+      // the caller is entitled to see it (#918); the error decides that.
+      if (err instanceof P2pProofAlreadyAdmittedError && err.existingTaskId != null) {
+        return c.json(
+          {
+            error: err.message,
+            code: err.code,
+            status: err.statusCode,
+            task_id: err.existingTaskId,
           },
           status,
         );

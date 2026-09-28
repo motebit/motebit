@@ -167,6 +167,14 @@ const MASTER_RECORDED = "authEventMasterTokenRecorded" as never;
 export const OPERATOR_PRESENTED = "authOperatorPresented" as never;
 
 /**
+ * The per-request slot holding the public key (lowercase hex) the request's
+ * signed token verified under — set by `dualAuth` from the verifier's own
+ * `onVerified`, never re-read. A P2P submission's payer must derive from it
+ * (#918, p2p-payer.ts).
+ */
+export const CALLER_VERIFIED_KEY = "authCallerVerifiedKey" as never;
+
+/**
  * Record a refusal an auth layer makes BEFORE any token is verified: no
  * credential at all (`missing_token`), a bearer that does not parse as a
  * signed token (`unparseable_token`), or a legacy plain-UUID device token

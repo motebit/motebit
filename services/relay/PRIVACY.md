@@ -46,10 +46,11 @@ Retention window: indefinite — device rows carry no TTL and are never reaped f
 
 ### Operational
 
-Tables: `relay_tasks`, `relay_allocations`, `relay_settlements`, `relay_settlement_proofs`, `relay_receipts`, `relay_pending_withdrawals`, `relay_credentials`, `relay_credential_anchor_batches`, `relay_revocation_events`, `relay_revoked_credentials`, `relay_agent_revocations`, `relay_identity_revocations`, `relay_disputes`, `relay_dispute_evidence`, `relay_dispute_resolutions`, `relay_peers`, `relay_federation_settlements`, `relay_execution_ledgers`, `relay_delegation_edges`, `relay_service_listings`, `relay_accounts`, `relay_subscriptions`, `relay_deposit_log`, `relay_refund_log`, `relay_accepted_migrations`, `relay_treasury_reconciliations`.
+Tables: `relay_tasks`, `relay_allocations`, `relay_settlements`, `relay_settlement_proofs`, `relay_receipts`, `relay_pending_withdrawals`, `relay_credentials`, `relay_credential_anchor_batches`, `relay_revocation_events`, `relay_revoked_credentials`, `relay_agent_revocations`, `relay_identity_revocations`, `relay_disputes`, `relay_dispute_evidence`, `relay_dispute_resolutions`, `relay_peers`, `relay_federation_settlements`, `relay_execution_ledgers`, `relay_delegation_edges`, `relay_service_listings`, `relay_accounts`, `relay_subscriptions`, `relay_deposit_log`, `relay_refund_log`, `relay_accepted_migrations`, `relay_treasury_reconciliations`, `relay_p2p_proof_claims`.
 
 Observable:
 - every delegation request and its routing decision
+- every P2P payment proof bound to the one task it admitted (tx_hash, task_id, submitting motebit_id, whether that submitter was proven by a signed token, claimed_at — no content): one proof funds at most one task; a claim is written in the admission transaction and never deleted (migration v47, #918)
 - every signed execution receipt the relay verified
 - full signed execution receipt JSON, byte-identical to the signer's canonical form, archived per (motebit_id, task_id) for independent audit re-verification
 - every settlement (relay-mediated and p2p audit)

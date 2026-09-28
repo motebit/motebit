@@ -1767,13 +1767,16 @@ describe("Federation E2E", () => {
       ).toBe(BigInt(toMicro(1)));
     });
 
-    it("PHASE 3 P2P: proof replay is rejected after settle, but resubmittable before settle (retry-safe)", async () => {
+    it("PHASE 3 P2P: one proof funds one task — refused once admitted (before settle) and after settle", async () => {
       // One onchain payment funds EXACTLY ONE task. A delegator must not be able
       // to reuse one tx_hash across many tasks (getting N workers to execute for
-      // one payment). But a paid task that did NOT settle — e.g. a federated
-      // forward that failed — must remain resubmittable with the same proof, or
-      // the delegator's only recovery would be to pay again. The guard keys on
-      // SETTLED proofs: unsettled tx → allowed; settled tx → 409.
+      // one payment). This test used to assert the defect #918 closed: the
+      // guard keyed on SETTLED proofs only, so the same proof under a new
+      // Idempotency-Key before settlement admitted and forwarded a SECOND task.
+      // The proof is now bound to the task it admitted: before settlement →
+      // 409 TASK_P2P_PROOF_ALREADY_ADMITTED naming that task; after → 409
+      // TASK_P2P_PROOF_REPLAYED. The retry of an admitted submission is its
+      // same-key replay (#888) or the task's result.
       let WORKER_ADDR = "7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgHkv"; // reassigned to the worker's derived address once it exists
       const FAKE_TX_HASH =
         "4vERYvaLiDsLaNaTransaCtiNSignaTuReHashThatis88charsLng1234567891abcDEFghijk";
@@ -1832,13 +1835,24 @@ describe("Federation E2E", () => {
         )
         .find((m) => m.type === "task_request")!.task!.task_id;
 
-      // (2) RESUBMIT the same proof BEFORE settlement → allowed (retry-safe).
+      const { task_id: admittedTaskId } = (await res1.json()) as { task_id: string };
+
+      // (2) RESUBMIT the same proof under a NEW key BEFORE settlement → 409,
+      // naming the task it already funds (the operator is entitled to see it);
+      // nothing new is admitted and nothing is forwarded again (#918).
       const res2 = await relayA.app.request(`/agent/${alice.motebitId}/task`, {
         method: "POST",
         headers: jsonAuthWithIdempotency(),
         body: JSON.stringify(proofBody()),
       });
-      expect(res2.status, await res2.clone().text()).toBe(201);
+      expect(res2.status, await res2.clone().text()).toBe(409);
+      const err2 = (await res2.json()) as { code?: string; task_id?: string };
+      expect(err2.code).toBe("TASK_P2P_PROOF_ALREADY_ADMITTED");
+      expect(err2.task_id).toBe(admittedTaskId);
+      expect(
+        bobWs.send.mock.calls.filter((c: unknown[]) => String(c[0]).includes('"task_request"')),
+        "the worker is sent the paid task once",
+      ).toHaveLength(1);
 
       // (3) Settle task1: Bob posts his result to B → A + B record p2p audit rows.
       const signedReceipt = await signExecutionReceipt(
@@ -2535,6 +2549,111 @@ describe("Federation E2E", () => {
         502,
       );
       expect(forwards()).toBe(1);
+    });
+
+    // #918: after admission the proof is spent on the admitted task. A failed
+    // forward's retry is its same-key replay (above) or the task's result —
+    // never the same proof under a new key, which the 502 used to advise and
+    // which admitted and forwarded a second task on one payment.
+    for (const [label, onForward] of [
+      ["rejects the forward", () => Promise.resolve(new Response("no", { status: 500 }))],
+      [
+        "times out",
+        () => Promise.reject(new DOMException("The operation timed out", "TimeoutError")),
+      ],
+    ] as const) {
+      it(`#918: the executor relay ${label} (502) — the 502 never invites a new key, and the same proof under one is refused naming the task`, async () => {
+        const { alice, body } = await paidFederated(`cap-918-${label.replace(/\s/g, "-")}`);
+        const forwards = stubForward(onForward);
+        const prompt = `918 ${label} ${crypto.randomUUID()}`;
+        const url = `/agent/${alice}/task`;
+
+        const first = await submitA(url, crypto.randomUUID(), body(prompt));
+        expect(first.status, await first.clone().text()).toBe(502);
+        const b1 = (await first.json()) as { error: string; task_id: string };
+        expect(b1.error).not.toMatch(/new Idempotency-Key/i);
+        expect(b1.error).toMatch(/bound to (it|this task)/);
+        expect(tasksOnA(prompt)).toEqual([b1.task_id]);
+
+        const again = await submitA(url, crypto.randomUUID(), body(prompt));
+        expect(again.status, await again.clone().text()).toBe(409);
+        const b2 = (await again.json()) as { code: string; task_id?: string };
+        expect(b2.code).toBe("TASK_P2P_PROOF_ALREADY_ADMITTED");
+        expect(b2.task_id).toBe(b1.task_id);
+        expect(tasksOnA(prompt), "no second task").toEqual([b1.task_id]);
+        expect(forwards(), "and no second forward").toBe(1);
+      });
+    }
+
+    it("#918: a DEFINITE executor refusal (404) is a paid failure — the proof stays bound, the same proof under a new key is 409, and the worker runs 0 times", async () => {
+      const { alice, body } = await paidFederated("cap-918-refused");
+      const forwards = stubForward(() =>
+        Promise.resolve(new Response("not here", { status: 404 })),
+      );
+      const prompt = `918 refused ${crypto.randomUUID()}`;
+      const url = `/agent/${alice}/task`;
+      const first = await submitA(url, crypto.randomUUID(), body(prompt));
+      expect(first.status, await first.clone().text()).toBe(502);
+      const b1 = (await first.json()) as { error: string; task_id: string };
+      expect(b1.error).toMatch(/refused this task/);
+      expect(b1.error).toMatch(/cannot fund another task/);
+      expect(b1.error).not.toMatch(/new Idempotency-Key|released|No new payment/i);
+
+      const again = await submitA(url, crypto.randomUUID(), body(prompt));
+      expect(again.status, await again.clone().text()).toBe(409);
+      expect(((await again.json()) as { code: string }).code).toBe(
+        "TASK_P2P_PROOF_ALREADY_ADMITTED",
+      );
+      expect(tasksOnA(prompt), "no second task").toEqual([b1.task_id]);
+      expect(forwards(), "nothing forwarded again").toBe(1);
+      const onB = relayB.moteDb.db
+        .prepare("SELECT COUNT(*) AS n FROM relay_task_queue WHERE prompt = ?")
+        .get(prompt) as { n: number };
+      expect(onB.n, "the worker never ran").toBe(0);
+    });
+
+    it("#918: the executor relay refuses a second task_id carrying a proof it already admitted (409); the worker gets one task", async () => {
+      const { alice, body } = await paidFederated("cap-918-executor");
+      stubForward((passThrough) => passThrough());
+      const prompt = `918 executor ${crypto.randomUUID()}`;
+      const tasksOnB = (): string[] =>
+        (
+          relayB.moteDb.db
+            .prepare("SELECT task_id FROM relay_task_queue WHERE prompt = ?")
+            .all(prompt) as { task_id: string }[]
+        ).map((r) => r.task_id);
+
+      const first = await submitA(`/agent/${alice}/task`, crypto.randomUUID(), body(prompt));
+      expect(first.status, await first.clone().text()).toBe(201);
+      const { task_id } = (await first.json()) as { task_id: string };
+      expect(tasksOnB()).toEqual([task_id]);
+
+      // A peer (an older origin relay, or a misbehaving one) forwards the SAME
+      // proof under a second task_id, signed with A's real relay key.
+      const proof = body(prompt)["payment_proof"] as Record<string, unknown>;
+      const forwardBody = {
+        task_id: crypto.randomUUID(),
+        origin_relay: relayA.relayIdentity.relayMotebitId,
+        target_agent: body(prompt)["target_agent"],
+        task_payload: { prompt, required_capabilities: ["cap-918-executor"], submitted_by: alice },
+        payment_proof: proof,
+        timestamp: Date.now(),
+      };
+      const aRelayKey = relayA.moteDb.db
+        .prepare("SELECT private_key_hex FROM relay_identity LIMIT 1")
+        .get() as { private_key_hex: string };
+      const sig = await sign(
+        new TextEncoder().encode(canonicalJson(forwardBody)),
+        hexToBytes(aRelayKey.private_key_hex),
+      );
+      const res = await relayB.app.request("/federation/v1/task/forward", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ ...forwardBody, signature: bytesToHex(sig) }),
+      });
+      expect(res.status, await res.clone().text()).toBe(409);
+      expect(((await res.json()) as { reason?: string }).reason).toBe("p2p_proof_already_admitted");
+      expect(tasksOnB(), "the executor relay admitted one task").toEqual([task_id]);
     });
 
     it("S1: a wrong origin-fee leg (49_999) is refused before admission; the corrected same-key retry admits one task, forwarded once", async () => {

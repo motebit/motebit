@@ -2136,4 +2136,61 @@ export const relayMigrations: Migration[] = [
       `);
     },
   },
+  {
+    version: 47,
+    name: "p2p_proof_admission_claims",
+    up: (db) => {
+      // One P2P payment proof admits at most one task (#918). The claim is
+      // written by the admission transaction that enqueues the task
+      // (`bindP2pProofToTask`, idempotency.ts), keyed on the proof's tx hash
+      // byte-for-byte as settlement records it (`p2pProofKey`). The only
+      // earlier guard read `relay_settlements.p2p_tx_hash`, which exists only
+      // once a task SETTLED, so an unsettled proof admitted a second task
+      // (and a second execution) under a fresh Idempotency-Key. Never pruned:
+      // an onchain payment stays spent.
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS relay_p2p_proof_claims (
+          tx_hash TEXT PRIMARY KEY,
+          task_id TEXT NOT NULL,
+          submitted_by TEXT NOT NULL,
+          -- 1 when submitted_by was proven by the admitting request's signed
+          -- token; 0 when asserted (operator body field, peer forward,
+          -- backfill). Only a verified submitter is shown the task on a refusal.
+          submitter_verified INTEGER NOT NULL DEFAULT 0,
+          claimed_at INTEGER NOT NULL
+        );
+      `);
+      // Backfill every proof this relay already admitted, so a proof spent
+      // before this migration stays spent: first the queued tasks (in
+      // admission order; the earliest task keeps a proof two tasks shared),
+      // then settled proofs whose task has left the queue. Both source tables
+      // are created outside this chain on a fresh database, where there is
+      // nothing to backfill.
+      const has = (name: string): boolean =>
+        db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(name) !=
+        null;
+      if (has("relay_task_queue")) {
+        db.exec(`
+          INSERT OR IGNORE INTO relay_p2p_proof_claims (tx_hash, task_id, submitted_by, claimed_at)
+            SELECT json_extract(task_json, '$.p2p_payment_proof.tx_hash'),
+                   task_id,
+                   COALESCE(submitter_id, json_extract(task_json, '$.submitted_by'), ''),
+                   created_at
+              FROM relay_task_queue
+             WHERE json_valid(task_json)
+               AND json_extract(task_json, '$.p2p_payment_proof.tx_hash') IS NOT NULL
+             ORDER BY created_at ASC, rowid ASC;
+        `);
+      }
+      if (has("relay_settlements")) {
+        db.exec(`
+          INSERT OR IGNORE INTO relay_p2p_proof_claims (tx_hash, task_id, submitted_by, claimed_at)
+            SELECT p2p_tx_hash, task_id, COALESCE(delegator_id, ''), settled_at
+              FROM relay_settlements
+             WHERE p2p_tx_hash IS NOT NULL
+             ORDER BY settled_at ASC, rowid ASC;
+        `);
+      }
+    },
+  },
 ];

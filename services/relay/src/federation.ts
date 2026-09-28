@@ -2350,7 +2350,13 @@ export function registerFederationRoutes(deps: FederationDeps): void {
       return c.json({ task_id: body.task_id, status: "duplicate" }, 409);
     }
     if (result.status === "rejected") {
-      return c.json({ task_id: body.task_id, status: "rejected", reason: result.reason }, 429);
+      // A proof already bound to another task here (#918) is a conflict,
+      // not a rate limit: retrying it later changes nothing.
+      const rejectedStatus = result.reason === "p2p_proof_already_admitted" ? 409 : 429;
+      return c.json(
+        { task_id: body.task_id, status: "rejected", reason: result.reason },
+        rejectedStatus,
+      );
     }
 
     return c.json(

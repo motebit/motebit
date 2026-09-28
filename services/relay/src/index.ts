@@ -203,6 +203,7 @@ import {
 } from "@motebit/settlement-rails";
 import { delistExpired } from "./registry-delist.js";
 import { verificationKeyFor } from "./identity-keys.js";
+import { paymentChainFromEnv } from "./p2p-payer.js";
 
 // === Re-exports for backward compatibility (tests and sibling modules import from index) ===
 
@@ -481,6 +482,13 @@ export interface SyncRelayConfig {
    * leaves this undefined so the auto-construction path runs.
    */
   operatorSolanaTransfer?: import("@motebit/wallet-solana").OperatorSolanaTransfer;
+  /**
+   * The chain the payer of a P2P `payment_proof` is read from at submission
+   * (#918, p2p-payer.ts). Omitted: built from `SOLANA_RPC_URL` (+
+   * `SOLANA_USDC_MINT`); `null` when that is unset, which refuses every P2P
+   * submission. Tests inject a fake chain.
+   */
+  p2pPaymentChain?: import("./p2p-payer.js").P2pPaymentChain | null;
   /**
    * STAGING/development-only: deterministic vote policy for the §6.2
    * federation orchestrator's peer-side vote-request endpoint. When set,
@@ -2168,6 +2176,11 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     railRegistry,
     pushAdapter,
     reconcileKeyConnections,
+    // The payer of a P2P proof is read from the chain (#918). A test
+    // injects a fake chain; production reads SOLANA_RPC_URL, and without
+    // it every P2P submission is refused (fail closed).
+    p2pPaymentChain:
+      config.p2pPaymentChain !== undefined ? config.p2pPaymentChain : paymentChainFromEnv(),
   });
 
   // --- Helper: count all connected WebSocket clients ---

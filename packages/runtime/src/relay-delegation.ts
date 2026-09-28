@@ -139,9 +139,15 @@ export type DelegationErrorCode =
   /**
    * Post-payment (#885). The payment LANDED, and the relay's admission of
    * the task is UNCONFIRMED: every submission of that same proof ended in
-   * a network failure, a 5xx, a 409 (the relay still processing the same
-   * payment, or `TASK_P2P_PROOF_REPLAYED` — this proof already funded a
-   * task), or another answer that does not say the task was refused.
+   * a network failure, a 5xx (including 503 `TASK_P2P_PROOF_UNVERIFIED`,
+   * the relay unable to read the payer from the chain yet), a 409 (the
+   * relay still processing the same payment; `TASK_P2P_PROOF_REPLAYED` —
+   * this proof already settled a task; or `TASK_P2P_PROOF_ALREADY_ADMITTED`
+   * WITHOUT a `task_id` — the proof funds a task the relay will not name to
+   * this caller), or another answer that does not say the task was refused.
+   * A `TASK_P2P_PROOF_ALREADY_ADMITTED` that DOES carry a `task_id` never
+   * ends here: the relay names the task only to its verified submitter, so
+   * the client hands over to that task (records it, polls its result).
    * The relay may have admitted it — the answer never reached this device.
    * Same money facts and same ledger lock as `payment_not_admitted`; the
    * difference is only what can honestly be said about the task.
@@ -874,9 +880,13 @@ export interface SubmitP2pDelegationParams {
    * transient submission failure it retries with the SAME proof itself
    * (`submitRetry`, #885), never rebuilding: rebuilding broadcasts a second
    * payment, whereas resubmitting the same `tx_hash` is safe (the relay
-   * dedupes on it as the `Idempotency-Key` — a completed 201 replays, a
-   * failed attempt releases its claim — and its replay guard rejects only a
-   * *settled* proof). Separating the irreversible broadcast from the
+   * dedupes on it as the `Idempotency-Key`: a refusal made before admission
+   * frees the key, and once a task is admitted the key replays that
+   * submission's answer, 201 or failure, and never admits a second task
+   * (#888). The proof itself is bound to the task it admitted, under any
+   * key, and is never released: a later submission of it is 409
+   * `TASK_P2P_PROOF_ALREADY_ADMITTED`, or `TASK_P2P_PROOF_REPLAYED` once
+   * that task settled (#918)). Separating the irreversible broadcast from the
    * retryable submit is what makes "no double-pay" structural rather than a
    * convention.
    */
@@ -928,16 +938,23 @@ const defaultSleep = (ms: number): Promise<void> =>
  * May a failed submission of an ALREADY-PAID proof be tried again with the
  * same proof? (#885.) Retrying is always money-safe — the proof is the
  * same payment and the relay dedupes on the tx hash (`Idempotency-Key`;
- * services/relay/src/tasks.ts replays a completed 201 and releases a
- * failed claim) — so the only question is whether another attempt could
+ * services/relay/src/tasks.ts frees a key refused before admission and
+ * replays an admitted submission's answer, #888; the proof is bound to its
+ * admitted task, #918) — so the only question is whether another attempt could
  * succeed. Transient: network, 5xx, 408, 429, 401 (a fresh token is minted
  * per attempt), and a 409 that is the relay still processing the same key.
- * A 409 `TASK_P2P_PROOF_REPLAYED` (the proof already settled a task) and
- * every other 4xx will answer the same way again.
+ * A 409 `TASK_P2P_PROOF_REPLAYED` (the proof already settled a task),
+ * `TASK_P2P_PROOF_ALREADY_ADMITTED` (the proof is bound to a task already
+ * admitted — #918: one proof funds at most one task), and every other 4xx
+ * will answer the same way again.
  */
+const FINAL_PROOF_CONFLICTS = new Set([
+  "TASK_P2P_PROOF_REPLAYED",
+  "TASK_P2P_PROOF_ALREADY_ADMITTED",
+]);
 function isRetryableSubmitStatus(status: number, relayCode: string | undefined): boolean {
   if (status >= 500 || status === 408 || status === 429 || status === 401) return true;
-  if (status === 409) return relayCode !== "TASK_P2P_PROOF_REPLAYED";
+  if (status === 409) return relayCode == null || !FINAL_PROOF_CONFLICTS.has(relayCode);
   return false;
 }
 
@@ -1034,18 +1051,36 @@ async function submitP2pOnce(params: SubmitP2pDelegationParams): Promise<SubmitA
       const retryAfter = resp.headers.get("Retry-After");
       const error = classifyRelayError(resp.status, text, retryAfter);
       let relayCode: string | undefined;
+      let boundTaskId: unknown;
       try {
-        relayCode = (JSON.parse(text) as { code?: string }).code;
+        const parsed = JSON.parse(text) as { code?: string; task_id?: unknown };
+        relayCode = parsed.code;
+        boundTaskId = parsed.task_id;
       } catch {
         relayCode = undefined;
+      }
+      // #918: this proof is already bound to an admitted task, and the relay
+      // names it — it does so only to the submitter whose verified token
+      // admitted it, or the operator. That task IS the one this payment
+      // funds (e.g. it was admitted under a key this device no longer
+      // replays), so hand over to it: record it and poll its result, never
+      // end "unconfirmed" on a task the relay has just told us about.
+      if (
+        resp.status === 409 &&
+        relayCode === "TASK_P2P_PROOF_ALREADY_ADMITTED" &&
+        typeof boundTaskId === "string" &&
+        boundTaskId.length > 0
+      ) {
+        return { kind: "accepted", taskId: boundTaskId };
       }
       return {
         kind: "failed",
         error,
         retryable: isRetryableSubmitStatus(resp.status, relayCode),
         // A 409 is never a refusal of THIS payment: either the relay is still
-        // handling the same key, or (TASK_P2P_PROOF_REPLAYED) this very proof
-        // already funded a task — admitted, just not visibly to us.
+        // handling the same key, or (TASK_P2P_PROOF_REPLAYED /
+        // TASK_P2P_PROOF_ALREADY_ADMITTED) this very proof already funded a
+        // task — admitted, just not visibly to us.
         ambiguous: resp.status >= 500 || resp.status === 408 || resp.status === 409,
         ...(error.retryAfterSeconds != null && Number.isFinite(error.retryAfterSeconds)
           ? { retryAfterMs: error.retryAfterSeconds * 1000 }

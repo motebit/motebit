@@ -42,6 +42,7 @@ import { createLogger } from "./logger.js";
 import { verificationKeyFor } from "./identity-keys.js";
 import { sendToEach } from "./ws-send.js";
 import { routeToSockets } from "./task-presentation.js";
+import { bindP2pProofToTask, p2pProofKey } from "./idempotency.js";
 
 const logger = createLogger({ service: "federation-callbacks" });
 
@@ -147,23 +148,69 @@ export function createFederationCallbacks(deps: FederationCallbackDeps) {
           .required_capabilities as AgentTask["required_capabilities"],
       };
 
-      taskQueue.set(verified.taskId, {
-        task,
-        expiresAt: Date.now() + taskTtlMs,
-        submitted_by: task.submitted_by,
-        origin_relay: verified.originRelay,
-        // Cross-operator federated P2P: the origin relay forwarded the
-        // delegator's 3-leg proof. The executor relay settles
-        // `settlement_mode='p2p'` (worker leg + its own executor-fee leg) and
-        // NEVER credits the worker on a virtual account — money already moved
-        // onchain. Absent for free/relay-coordinated federated tasks.
-        ...(verified.paymentProof
-          ? {
-              settlement_mode: "p2p" as const,
-              p2p_payment_proof: verified.paymentProof,
-            }
-          : {}),
-      });
+      const enqueue = (): void => {
+        taskQueue.set(verified.taskId, {
+          task,
+          expiresAt: Date.now() + taskTtlMs,
+          submitted_by: task.submitted_by,
+          origin_relay: verified.originRelay,
+          // Cross-operator federated P2P: the origin relay forwarded the
+          // delegator's 3-leg proof. The executor relay settles
+          // `settlement_mode='p2p'` (worker leg + its own executor-fee leg) and
+          // NEVER credits the worker on a virtual account — money already moved
+          // onchain. Absent for free/relay-coordinated federated tasks.
+          ...(verified.paymentProof
+            ? {
+                settlement_mode: "p2p" as const,
+                p2p_payment_proof: verified.paymentProof,
+              }
+            : {}),
+        });
+      };
+
+      if (verified.paymentProof == null) {
+        enqueue();
+      } else {
+        // One proof admits one task on THIS relay too (#918). The executor
+        // relay is its own admission door: a peer (an older origin relay, or
+        // a misbehaving one) that forwards the same proof under a second
+        // task_id would otherwise get the worker to execute twice for one
+        // payment; the unique settlement index stops only the second
+        // settlement. The claim and the queued task commit together; the
+        // same task_id re-forwarded is idempotent (the duplicate check above
+        // answers it first while the task is queued).
+        const proof = verified.paymentProof;
+        let refused = false;
+        moteDb.db.exec("BEGIN");
+        try {
+          const binding = bindP2pProofToTask(
+            moteDb.db,
+            proof.tx_hash,
+            verified.taskId,
+            federatedSubmitter,
+            // Asserted by the peer, never token-verified on this relay.
+            false,
+          );
+          if (binding.bound) {
+            enqueue();
+          } else {
+            refused = true;
+          }
+          if (refused) moteDb.db.exec("ROLLBACK");
+          else moteDb.db.exec("COMMIT");
+        } catch (err) {
+          moteDb.db.exec("ROLLBACK");
+          throw err;
+        }
+        if (refused) {
+          logger.warn("task.federated_p2p_proof_already_admitted", {
+            correlationId: verified.taskId,
+            originRelay: verified.originRelay,
+            txHash: proof.tx_hash,
+          });
+          return { status: "rejected" as const, reason: "p2p_proof_already_admitted" };
+        }
+      }
 
       // "routed" only when an OPEN socket took the frame (#811). Sockets that
       // are all CLOSING/CLOSED are held for reconnect recovery — this relay
@@ -422,7 +469,7 @@ export function createFederationCallbacks(deps: FederationCallbackDeps) {
               "completed",
               settledAt,
               "p2p",
-              proof.tx_hash,
+              p2pProofKey(proof.tx_hash),
               "pending",
               entry.submitted_by ?? null,
               signed.issuer_relay_id,
