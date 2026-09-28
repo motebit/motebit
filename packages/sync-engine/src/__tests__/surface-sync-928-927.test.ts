@@ -250,8 +250,10 @@ describe("#928 an e2e transport refuses plaintext before it leaves", () => {
       PlaintextPushRefusedError,
     );
     expect(ws.takePendingEvents()).toEqual([]);
-    await ws.append(entry("c", 2, await realEnvelope()));
+    // Queued (never acknowledged: #914 — the append waits for the relay).
+    const queued = ws.append(entry("c", 2, await realEnvelope()));
     expect(ws.takePendingEvents().map((e) => e.event_id)).toEqual(["c"]);
+    await expect(queued).rejects.toThrow(/handed to another adapter/);
   });
 });
 

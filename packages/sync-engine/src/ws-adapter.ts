@@ -82,6 +82,54 @@ export interface WebSocketAdapterConfig {
    * in `e2e` mode. Default `raw`.
    */
   payloads?: RelayPayloadMode;
+  /**
+   * How long an `append` waits for the relay's acknowledgment (#914), from
+   * the call. Past it the append rejects — the sync engine then re-pushes the
+   * event on a later sync — while an event still queued STAYS queued and goes
+   * out on the next connection. A frame on the wire this long without an ack
+   * takes its socket down, so a late ack can never be read as another
+   * frame's. Default 15 000 ms.
+   */
+  pushAckTimeoutMs?: number;
+}
+
+/** The default `pushAckTimeoutMs`. */
+const DEFAULT_PUSH_ACK_TIMEOUT_MS = 15_000;
+/** The most events one push frame carries. */
+const MAX_EVENTS_PER_PUSH_FRAME = 100;
+
+/** One caller waiting on the relay's acknowledgment of an appended event. */
+interface PushWaiter {
+  resolve: () => void;
+  reject: (err: Error) => void;
+  /** The waiter's deadline. */
+  timer: ReturnType<typeof setTimeout> | null;
+  settled: boolean;
+}
+
+/**
+ * An event on its way to the relay, and everyone waiting on its ack. One per
+ * event_id while queued: appending an event already queued joins it, so a
+ * sync engine re-pushing through an outage never grows the queue.
+ */
+interface PendingPush {
+  entry: EventLogEntry;
+  waiters: PushWaiter[];
+}
+
+function settleWaiter(w: PushWaiter, err?: Error): void {
+  if (w.timer) {
+    clearTimeout(w.timer);
+    w.timer = null;
+  }
+  if (w.settled) return;
+  w.settled = true;
+  if (err) w.reject(err);
+  else w.resolve();
+}
+
+function settle(item: PendingPush, err?: Error): void {
+  for (const w of item.waiters) settleWaiter(w, err);
 }
 
 /** The default report of a failed catch-up: one warning line. */
@@ -100,8 +148,18 @@ export type CustomMessageCallback = (msg: { type: string; [key: string]: unknown
  *   Client → Server:  { type: "push", events: EventLogEntry[] }
  *   Server → Client:  { type: "event", event: EventLogEntry }
  *   Server → Client:  { type: "ack", accepted: number }
+ *   Server → Client:  { type: "error", message: "push refused: …" }
  *
- * The adapter pushes events immediately over the WebSocket.
+ * `append` resolves when the relay ACKNOWLEDGED the event (#914) — not when
+ * it was sent or queued. One push frame is on the wire at a time, so the
+ * next `ack` on this socket is that frame's; events appended meanwhile wait
+ * and go out together in the next frame. A frame's `ack` resolves each of
+ * its appends; a `push refused` error, the socket closing, or no `ack` in
+ * `pushAckTimeoutMs` rejects them (the last also takes the socket down, so a
+ * late `ack` cannot be credited to the next frame). An event appended while
+ * disconnected is queued (once per event_id) and goes out on the next
+ * connection, or to a replacement adapter through `takePendingEvents`; its
+ * append rejects at `pushAckTimeoutMs` if no ack came by then.
  * Incoming events from other devices are delivered via the onEvent callback.
  * Query/clock operations fall back to HTTP when the WS is unavailable.
  */
@@ -121,6 +179,7 @@ export class WebSocketEventStoreAdapter implements EventStoreAdapter {
       | "onSkippedEvent"
       | "onCatchUpError"
       | "payloads"
+      | "pushAckTimeoutMs"
     >
   > &
     Pick<
@@ -136,6 +195,7 @@ export class WebSocketEventStoreAdapter implements EventStoreAdapter {
       | "onSkippedEvent"
       | "onCatchUpError"
       | "payloads"
+      | "pushAckTimeoutMs"
     >;
   private onEventCallbacks: Set<EventReceivedCallback> = new Set();
   private onCustomMessageCallbacks: Set<CustomMessageCallback> = new Set();
@@ -150,7 +210,14 @@ export class WebSocketEventStoreAdapter implements EventStoreAdapter {
    */
   private generation = 0;
   private connected = false;
-  private pendingEvents: EventLogEntry[] = [];
+  /** Appended events not yet in a frame (queued while offline, or behind the frame in flight). */
+  private outbox: PendingPush[] = [];
+  /** The one push frame awaiting its `ack`, and the socket it went out on. */
+  private inFlight: {
+    socket: WebSocket;
+    items: PendingPush[];
+    timer: ReturnType<typeof setTimeout>;
+  } | null = null;
 
   constructor(config: WebSocketAdapterConfig) {
     this.config = {
@@ -294,6 +361,7 @@ export class WebSocketEventStoreAdapter implements EventStoreAdapter {
       this.onAuthSuccess();
     };
 
+    const thisSocket = this.ws;
     this.ws.onmessage = (event: MessageEvent) => {
       try {
         const msg = JSON.parse(String(event.data)) as { type: string; [key: string]: unknown };
@@ -302,7 +370,18 @@ export class WebSocketEventStoreAdapter implements EventStoreAdapter {
           for (const cb of this.onEventCallbacks) {
             cb(msg.event as EventLogEntry);
           }
-        } else if (msg.type !== "ack") {
+        } else if (msg.type === "ack") {
+          this.onPushAnswered(thisSocket);
+        } else {
+          if (
+            msg.type === "error" &&
+            typeof msg.message === "string" &&
+            msg.message.startsWith("push refused")
+          ) {
+            // The relay refused the frame in flight (it answers a push with
+            // an ack OR this error, never both).
+            this.onPushAnswered(thisSocket, new Error(`sync push: ${msg.message}`));
+          }
           // Dispatch unrecognized message types to custom handlers
           for (const cb of this.onCustomMessageCallbacks) {
             cb(msg);
@@ -314,6 +393,7 @@ export class WebSocketEventStoreAdapter implements EventStoreAdapter {
     };
 
     this.ws.onclose = () => {
+      this.failInFlight(new Error("sync push: the socket closed before the relay acknowledged"));
       this.connected = false;
       this.ws = null;
       // The auth timer belongs to the socket that just closed.
@@ -354,17 +434,28 @@ export class WebSocketEventStoreAdapter implements EventStoreAdapter {
       this.ws = null;
     }
     this.connected = false;
+    // Nothing this adapter still holds will be acknowledged through it. The
+    // queued events stay queued for `takePendingEvents`; their appends
+    // reject now, so the sync engine's cursor stays below them (#914).
+    const retired = new Error(
+      "sync push: the adapter was disconnected before the relay acknowledged",
+    );
+    this.failInFlight(retired);
+    for (const item of this.outbox) settle(item, retired);
   }
 
   /**
    * Remove and return the events queued while this adapter was not
    * connected. A caller that replaces this adapter with another (a token
-   * refresh) hands them to the replacement; otherwise they are lost with
-   * the retired adapter, since the sync engine has already counted them
-   * as pushed.
+   * refresh) hands them to the replacement. Their appends here reject (the
+   * relay never acknowledged them through this adapter), so the sync engine
+   * pushes them again as well — a harmless duplicate, deduped by event_id.
    */
   takePendingEvents(): EventLogEntry[] {
-    return this.pendingEvents.splice(0);
+    const taken = this.outbox.splice(0);
+    const handed = new Error("sync push: handed to another adapter before the relay acknowledged");
+    for (const item of taken) settle(item, handed);
+    return taken.map((item) => item.entry);
   }
 
   get isConnected(): boolean {
@@ -413,6 +504,12 @@ export class WebSocketEventStoreAdapter implements EventStoreAdapter {
 
   // === EventStoreAdapter ===
 
+  /**
+   * Push one event. Resolves when the relay ACKNOWLEDGED the frame carrying
+   * it (#914); rejects when it cannot know that (see the class comment).
+   * Never resolves on send or on queue: the sync engine moves its push
+   * cursor on this resolution.
+   */
   append(entry: EventLogEntry): Promise<void> {
     // Fail closed before the entry is sent OR queued: an e2e socket never
     // carries plaintext (#928).
@@ -421,12 +518,28 @@ export class WebSocketEventStoreAdapter implements EventStoreAdapter {
     } catch (err: unknown) {
       return Promise.reject(err instanceof Error ? err : new Error(String(err)));
     }
-    if (this.connected && this.ws) {
-      this.sendPush([entry]);
+    let waiter!: PushWaiter;
+    const acked = new Promise<void>((resolve, reject) => {
+      waiter = { resolve, reject, timer: null, settled: false };
+    });
+    // A caller that hands events over without awaiting (a token refresh)
+    // must not raise an unhandled rejection; an awaiting caller still sees it.
+    acked.catch(() => {});
+    waiter.timer = setTimeout(() => {
+      waiter.timer = null;
+      // Unknown whether the relay has it: the caller retries. A queued event
+      // stays queued and still goes out on the next connection.
+      settleWaiter(waiter, new Error("sync push: not acknowledged in time"));
+    }, this.ackTimeoutMs);
+    const queued = this.outbox.find((i) => i.entry.event_id === entry.event_id);
+    if (queued) {
+      queued.entry = entry;
+      queued.waiters.push(waiter);
     } else {
-      this.pendingEvents.push(entry);
+      this.outbox.push({ entry, waiters: [waiter] });
     }
-    return Promise.resolve();
+    this.flushPush();
+    return acked;
   }
 
   query(_filter: EventFilter): Promise<EventLogEntry[]> {
@@ -456,11 +569,8 @@ export class WebSocketEventStoreAdapter implements EventStoreAdapter {
       this.reconnectAttempt = 0;
     }, 30_000);
 
-    // Flush pending events
-    if (this.pendingEvents.length > 0) {
-      const events = this.pendingEvents.splice(0);
-      this.sendPush(events);
-    }
+    // Send what was queued while offline
+    this.flushPush();
 
     // Catch-up pull (fire and forget)
     void this.catchUp();
@@ -515,9 +625,73 @@ export class WebSocketEventStoreAdapter implements EventStoreAdapter {
     }
   }
 
-  private sendPush(events: EventLogEntry[]): void {
-    if (!this.ws || this.ws.readyState !== 1 /* WebSocket.OPEN */) return;
-    this.ws.send(JSON.stringify({ type: "push", events }));
+  private get ackTimeoutMs(): number {
+    return this.config.pushAckTimeoutMs ?? DEFAULT_PUSH_ACK_TIMEOUT_MS;
+  }
+
+  /**
+   * Send the queued events as one frame — when connected, the socket open,
+   * and no frame awaiting its ack. One frame in flight is what makes the
+   * next `ack` on this socket this frame's (the relay's ack names no frame).
+   */
+  private flushPush(): void {
+    const socket = this.ws;
+    if (!this.connected || !socket || socket.readyState !== 1 /* WebSocket.OPEN */) return;
+    if (this.inFlight || this.outbox.length === 0) return;
+    const items = this.outbox.splice(0, MAX_EVENTS_PER_PUSH_FRAME);
+    // In flight BEFORE the send: an ack delivered during `send` is this frame's.
+    this.inFlight = {
+      socket,
+      items,
+      timer: setTimeout(() => this.onPushTimeout(socket), this.ackTimeoutMs),
+    };
+    try {
+      socket.send(JSON.stringify({ type: "push", events: items.map((i) => i.entry) }));
+    } catch (err: unknown) {
+      this.failInFlight(
+        new Error(`sync push: send failed: ${err instanceof Error ? err.message : String(err)}`, {
+          cause: err,
+        }),
+      );
+    }
+  }
+
+  /** The relay answered the frame in flight on `socket`: an ack, or a refusal. */
+  private onPushAnswered(socket: WebSocket, refused?: Error): void {
+    const frame = this.inFlight;
+    if (!frame || frame.socket !== socket) return;
+    clearTimeout(frame.timer);
+    this.inFlight = null;
+    for (const item of frame.items) settle(item, refused);
+    this.flushPush();
+  }
+
+  /** Reject the frame in flight, if any: the relay's answer to it can no longer be read. */
+  private failInFlight(err: Error): void {
+    const frame = this.inFlight;
+    if (!frame) return;
+    clearTimeout(frame.timer);
+    this.inFlight = null;
+    for (const item of frame.items) settle(item, err);
+  }
+
+  /**
+   * No ack in time. The frame's events are rejected, and the socket is taken
+   * down: an ack arriving late on it must never be read as the next frame's.
+   */
+  private onPushTimeout(socket: WebSocket): void {
+    if (!this.inFlight || this.inFlight.socket !== socket) return;
+    this.failInFlight(new Error("sync push: not acknowledged in time"));
+    if (this.ws !== socket) return;
+    socket.onclose = null;
+    socket.close();
+    this.ws = null;
+    this.connected = false;
+    if (this.stabilityTimer) {
+      clearTimeout(this.stabilityTimer);
+      this.stabilityTimer = null;
+    }
+    this.scheduleReconnect();
   }
 
   private scheduleReconnect(): void {

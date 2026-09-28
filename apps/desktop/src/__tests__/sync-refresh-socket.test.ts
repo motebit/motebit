@@ -84,6 +84,14 @@ class FakeSocket {
       }, relay.authDelayMs);
     } else if (msg.type === "push") {
       for (const e of msg.events ?? []) relay.pushed.push(e.event_id);
+      // The relay acknowledges every push frame it processed; the socket
+      // adapter resolves an append only on that ack (#914).
+      void Promise.resolve().then(() => {
+        if (this.readyState !== 1) return;
+        this.onmessage?.({
+          data: JSON.stringify({ type: "ack", accepted: msg.events?.length ?? 0 }),
+        });
+      });
     } else if (msg.type === "command_response") {
       relay.responses.push({ socket: this.index, id: msg.id ?? "" });
     }
@@ -130,6 +138,8 @@ function entry(id: string, clock: number): EventLogEntry {
 }
 
 const REFRESH_MS = 4.5 * 60_000;
+/** The real timer, captured before any test fakes time. */
+const realSetTimeout = globalThis.setTimeout;
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function makeRuntime(): any {
@@ -237,7 +247,11 @@ describe("desktop sync token refresh (#816)", () => {
     // Outage: the relay drops the socket; an event is queued offline.
     relay.down = true;
     for (const s of openSockets()) s.drop();
-    await currentRemote(runtime).append(entry("e-offline", 2));
+    // Queued offline: it resolves only on an ack, and the refresh hands it
+    // to the replacement (#914) — so it is not awaited here.
+    void currentRemote(runtime)
+      .append(entry("e-offline", 2))
+      .catch(() => {});
 
     await vi.advanceTimersByTimeAsync(REFRESH_MS);
     relay.down = false;
@@ -298,6 +312,14 @@ describe("desktop sync token refresh (#816)", () => {
     release("fresh-token");
     // The refresh finishes in microtasks, before the encryption does.
     for (let i = 0; i < 5; i++) await Promise.resolve();
+    // #914: the append resolves on the relay's ack, which needs the fresh
+    // socket to connect (fake time) after the encryption finishes (real time).
+    let acked = false;
+    void appending.finally(() => (acked = true));
+    for (let i = 0; i < 200 && !acked; i++) {
+      await vi.advanceTimersByTimeAsync(5);
+      await new Promise((r) => realSetTimeout(r, 1));
+    }
     await appending;
     await vi.advanceTimersByTimeAsync(10);
 

@@ -34,6 +34,14 @@ export interface HttpAdapterConfig {
   retryBackoffMs?: number;
 }
 
+/**
+ * The most push requests one adapter has on the wire at once. One: events
+ * reach the relay in the order they were appended (clock order, from the
+ * sync engine), exactly as the sequential push before #914 delivered them —
+ * a client still pulling by clock never sees a later clock land first.
+ */
+const MAX_CONCURRENT_PUSHES = 1;
+
 /** Whether an HTTP status is retryable (server error or rate-limited). */
 function isRetryable(status: number): boolean {
   return status >= 500 || status === 429 || status === 408;
@@ -70,17 +78,46 @@ export class HttpEventStoreAdapter implements EventStoreAdapter, SeqPullSource {
     this.payloads = config.payloads ?? "raw";
   }
 
+  /**
+   * Push one event. Resolves only when the relay ACKNOWLEDGED it (a 2xx:
+   * stored, or already held — the relay dedups by event_id); anything else
+   * throws. The sync engine moves its push cursor on that resolution (#914).
+   * Appends made together go out MAX_CONCURRENT_PUSHES at a time, in call
+   * order.
+   */
   async append(entry: EventLogEntry): Promise<void> {
     // Fail closed BEFORE any byte leaves: an e2e transport never carries plaintext (#928).
     assertPushable([entry], this.payloads);
     const url = `${this.baseUrl}/sync/${this.motebitId}/push`;
-    const res = await this.authedFetch(url, {
-      method: "POST",
-      body: JSON.stringify({ events: [entry] }),
-    });
-    if (!res.ok) {
-      throw new Error(`Push failed: ${res.status} ${res.statusText}`);
+    await this.acquirePushSlot();
+    try {
+      const res = await this.authedFetch(url, {
+        method: "POST",
+        body: JSON.stringify({ events: [entry] }),
+      });
+      if (!res.ok) {
+        throw new Error(`Push failed: ${res.status} ${res.statusText}`);
+      }
+    } finally {
+      this.releasePushSlot();
     }
+  }
+
+  private pushesInFlight = 0;
+  private pushWaiters: Array<() => void> = [];
+
+  private acquirePushSlot(): Promise<void> {
+    if (this.pushesInFlight < MAX_CONCURRENT_PUSHES) {
+      this.pushesInFlight++;
+      return Promise.resolve();
+    }
+    return new Promise((resolve) => this.pushWaiters.push(resolve));
+  }
+
+  private releasePushSlot(): void {
+    const next = this.pushWaiters.shift();
+    if (next) next();
+    else this.pushesInFlight--;
   }
 
   async query(filter: EventFilter): Promise<EventLogEntry[]> {

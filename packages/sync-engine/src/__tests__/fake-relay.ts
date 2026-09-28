@@ -16,6 +16,8 @@ export class FakeRelay {
   /** Every pull URL, for asserting which cursor a client sent. */
   pulls: URL[] = [];
   pageMax = 1000;
+  /** Every event a push carried, duplicates included (#914: what a client re-sent). */
+  pushedIds: string[] = [];
 
   constructor(readonly baseUrl = "http://relay.fake") {}
 
@@ -23,6 +25,11 @@ export class FakeRelay {
   ingest(event: EventLogEntry): void {
     if (this.rows.some((r) => r.event.event_id === event.event_id)) return;
     this.rows.push({ seq: this.nextSeq++, event: { ...event } });
+  }
+
+  /** The event_ids the relay holds for `mid`, one row each, in ingest order. */
+  heldIds(mid: string): string[] {
+    return this.rows.filter((r) => r.event.motebit_id === mid).map((r) => r.event.event_id);
   }
 
   /** Simulate a relay database restored from an older backup. */
@@ -36,7 +43,10 @@ export class FakeRelay {
     const [, , mid, op] = url.pathname.split("/");
     if (op === "push" && init?.method === "POST") {
       const body = JSON.parse(init.body as string) as { events: EventLogEntry[] };
-      for (const e of body.events) this.ingest(e);
+      for (const e of body.events) {
+        this.pushedIds.push(e.event_id);
+        this.ingest(e);
+      }
       return Response.json({ motebit_id: mid, accepted: body.events.length });
     }
     if (op === "pull") {

@@ -215,7 +215,7 @@ describe("SyncEngine", () => {
     vi.useRealTimers();
   });
 
-  it("respects batch_size when pushing events", async () => {
+  it("pushes a backlog larger than batch_size in one sync, batch_size at a time (#914)", async () => {
     const remoteStore = new InMemoryEventStore();
     const smallBatchEngine = new SyncEngine(localStore, MOTEBIT_ID, { batch_size: 2 });
     smallBatchEngine.connectRemote(remoteStore);
@@ -225,12 +225,25 @@ describe("SyncEngine", () => {
       await localStore.append(makeEvent({ version_clock: i }));
     }
 
-    // First sync should push at most batch_size events
+    // Before #914 the first batch was pushed and the cursor jumped to the
+    // local max: events 3..5 never left. Now every batch goes out.
+    const inFlight: number[] = [];
+    let open = 0;
+    const append = remoteStore.append.bind(remoteStore);
+    remoteStore.append = async (e) => {
+      open++;
+      inFlight.push(open);
+      await Promise.resolve();
+      open--;
+      return append(e);
+    };
     const result = await smallBatchEngine.sync();
-    expect(result.pushed).toBeLessThanOrEqual(2);
+    expect(result.pushed).toBe(5);
+    expect(Math.max(...inFlight)).toBeLessThanOrEqual(2);
 
     const remoteEvents = await remoteStore.query({ motebit_id: MOTEBIT_ID });
-    expect(remoteEvents.length).toBeLessThanOrEqual(2);
+    expect(remoteEvents).toHaveLength(5);
+    expect(smallBatchEngine.getCursor().last_version_clock).toBe(5);
   });
 
   it("bidirectional sync merges both sides", async () => {

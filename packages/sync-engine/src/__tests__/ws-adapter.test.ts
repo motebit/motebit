@@ -263,21 +263,31 @@ describe("WebSocketEventStoreAdapter", () => {
     lastWS().simulateOpen();
 
     const event = makeEvent(1);
-    await adapter.append(event);
+    let acked = false;
+    const pushed = adapter.append(event).then(() => {
+      acked = true;
+    });
 
     expect(lastWS().sent).toHaveLength(1);
     const msg = JSON.parse(lastWS().sent[0]!) as { type: string; events: EventLogEntry[] };
     expect(msg.type).toBe("push");
     expect(msg.events).toHaveLength(1);
     expect(msg.events[0]!.event_id).toBe("event-1");
+
+    // #914: sent is not acknowledged — the append resolves on the relay's ack.
+    await vi.advanceTimersByTimeAsync(0);
+    expect(acked).toBe(false);
+    lastWS().simulateMessage({ type: "ack", accepted: 1 });
+    await pushed;
+    expect(acked).toBe(true);
   });
 
   it("append() queues events when disconnected", async () => {
     const adapter = new WebSocketEventStoreAdapter({ url: WS_URL, motebitId: MOTEBIT_ID });
     // Don't connect — adapter is disconnected
 
-    await adapter.append(makeEvent(1));
-    await adapter.append(makeEvent(2));
+    void adapter.append(makeEvent(1));
+    void adapter.append(makeEvent(2));
 
     // No WebSocket exists, nothing sent
     expect(MockWebSocket.instances).toHaveLength(0);
@@ -287,8 +297,8 @@ describe("WebSocketEventStoreAdapter", () => {
     const adapter = new WebSocketEventStoreAdapter({ url: WS_URL, motebitId: MOTEBIT_ID });
 
     // Queue events while disconnected
-    await adapter.append(makeEvent(1));
-    await adapter.append(makeEvent(2));
+    void adapter.append(makeEvent(1));
+    void adapter.append(makeEvent(2));
 
     // Now connect
     adapter.connect();
@@ -309,7 +319,7 @@ describe("WebSocketEventStoreAdapter", () => {
     });
 
     // Queue events while disconnected
-    await adapter.append(makeEvent(1));
+    void adapter.append(makeEvent(1));
 
     // Connect — auth frame sent first, events held until auth_result
     adapter.connect();
