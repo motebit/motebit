@@ -362,6 +362,22 @@ export class HttpEventStoreAdapter implements EventStoreAdapter, SeqPullSource {
           this.active();
         }
         reader = undefined;
+      } else if (!nullBody) {
+        // No body stream: React Native's fetch (whatwg-fetch) gives a
+        // Response without `body` — it buffers the whole body (XHR) before
+        // resolving. Read it whole, bounded by one overall deadline: there
+        // are no chunks to measure progress by (#914 round 4).
+        // Read as TEXT: whatwg-fetch's arrayBuffer() needs FileReader's
+        // readAsArrayBuffer, which not every React Native build has; text()
+        // is what its json() uses. Sync bodies are JSON.
+        arm(this.requestTimeoutMs, `${new URL(url).pathname}: body not read`);
+        const text = await Promise.race([r.text(), timedOut]);
+        this.active();
+        return new Response(text, {
+          status: r.status,
+          statusText: r.statusText,
+          headers: r.headers,
+        });
       }
       let size = 0;
       for (const c of chunks) size += c.byteLength;

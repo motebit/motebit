@@ -173,6 +173,12 @@ function byClockThenId(a: EventLogEntry, b: EventLogEntry): number {
  * EVERY local event above `cursor`, sorted by clock, so no event at or below
  * the result is left unacknowledged — a group split across batches, or with
  * one failed member, holds the cursor below it.
+ *
+ * Precondition: every local append takes a clock above every event already
+ * stored (an ATOMIC `appendWithClock`). A store whose clock assignment is a
+ * non-atomic read-max-then-insert (TauriEventStore, ExpoSqliteEventStore
+ * today) can land a concurrent append at or below a clock this cursor has
+ * passed, and that event is never pushed — as on main. Tracked in #964.
  */
 export function ackedPushCursor(
   cursor: number,
@@ -482,7 +488,10 @@ export class SyncEngine {
    * insertion order), and a clock cursor may pass an event only when EVERY
    * event at or below it was read. An event appended after the read carries
    * a clock above everything read (the store's max + 1), so a later push
-   * takes it.
+   * takes it — PROVIDED the store assigns clocks atomically
+   * (`appendWithClock`). The Tauri and Expo stores do not yet: a concurrent
+   * append there can land at or below the cursor and is never pushed, a loss
+   * main shares. Tracked in #964; see `ackedPushCursor`.
    */
   private async pushEvents(
     remote: EventStoreAdapter,

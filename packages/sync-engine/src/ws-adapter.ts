@@ -126,6 +126,8 @@ const PUSH_WINDOW_MS = 10_000;
  * appended together (the sync engine's `batch_size`) goes out as one frame.
  */
 const PUSH_LINGER_MS = 15;
+/** Full frames acked at the known-good frame size before a larger one is tried again. */
+const PUSH_CEILING_PROBE_AFTER = 8;
 const PUSH_LINGER_MAX_MS = 100;
 
 /** Push-frame send times per (socket URL, device id), shared by every adapter in the process. */
@@ -253,6 +255,20 @@ export class WebSocketEventStoreAdapter implements EventStoreAdapter {
   /** Appended events not yet in a frame (queued while offline, or behind the frame in flight). */
   private outbox: PendingPush[] = [];
   /** The one push frame awaiting its `ack`, and the socket it went out on. */
+  /**
+   * The most events the next frame carries (#914 round 4). A frame not acked
+   * in time is re-sent at half its size (down to 1), so a slow link — where
+   * a full frame cannot cross within the deadline — converges instead of
+   * re-sending the same frame forever. It grows back by doubling after full
+   * frames are acked, up to `frameCeiling`: the size known to fit. The
+   * ceiling itself doubles after PUSH_CEILING_PROBE_AFTER full frames at it,
+   * so a link that gets faster is found again.
+   */
+  private frameLimit = MAX_EVENTS_PER_PUSH_FRAME;
+  private frameCeiling = MAX_EVENTS_PER_PUSH_FRAME;
+  private fullFramesAtCeiling = 0;
+  /** Told of every push frame sent or acked — the sync engine's watchdog. */
+  private activityListeners = new Set<() => void>();
   /** A deferred flush (pacing). */
   private flushTimer: ReturnType<typeof setTimeout> | null = null;
   /** The linger: the idle timer (reset per append) and the cap (from the first). */
@@ -624,7 +640,10 @@ export class WebSocketEventStoreAdapter implements EventStoreAdapter {
       this.reconnectAttempt = 0;
     }, 30_000);
 
-    // Send what was queued while offline
+    // Send what was queued while offline. Connected again, a queued event's
+    // wait is bounded by the frames ahead of it (each with its own deadline,
+    // from its send), no longer by the offline deadline.
+    for (const item of this.outbox) for (const w of item.waiters) clearWaiterTimer(w);
     this.flushPush();
 
     // Catch-up pull (fire and forget)
@@ -708,7 +727,7 @@ export class WebSocketEventStoreAdapter implements EventStoreAdapter {
       this.flushTimer = null;
     }
     sent.push(now);
-    const items = this.outbox.splice(0, MAX_EVENTS_PER_PUSH_FRAME);
+    const items = this.outbox.splice(0, this.frameLimit);
     // From here the frame's own deadline governs each event.
     for (const item of items) for (const w of item.waiters) clearWaiterTimer(w);
     // In flight BEFORE the send: an ack delivered during `send` is this frame's.
@@ -719,6 +738,7 @@ export class WebSocketEventStoreAdapter implements EventStoreAdapter {
     };
     try {
       socket.send(JSON.stringify({ type: "push", events: items.map((i) => i.entry) }));
+      this.active();
     } catch (err: unknown) {
       this.failInFlight(
         new Error(`sync push: send failed: ${err instanceof Error ? err.message : String(err)}`, {
@@ -796,6 +816,10 @@ export class WebSocketEventStoreAdapter implements EventStoreAdapter {
     if (!frame || frame.socket !== socket) return;
     clearTimeout(frame.timer);
     this.inFlight = null;
+    if (!refused) {
+      this.active();
+      if (frame.items.length >= this.frameLimit) this.fullFrameAcked();
+    }
     for (const item of frame.items) settle(item, refused);
     this.flushPush();
   }
@@ -833,9 +857,76 @@ export class WebSocketEventStoreAdapter implements EventStoreAdapter {
    * down: an ack arriving late on it must never be read as the next frame's.
    */
   private onPushTimeout(socket: WebSocket): void {
-    if (!this.inFlight || this.inFlight.socket !== socket) return;
-    this.failInFlight(new Error("sync push: not acknowledged in time"));
+    const frame = this.inFlight;
+    if (!frame || frame.socket !== socket) return;
+    const n = frame.items.length;
+    if (n > 1) {
+      // Too big for this link in the deadline: re-send it in halves. Its
+      // appends stay pending — the frame is re-queued at the front, on a new
+      // socket (a late ack on this one must never be credited elsewhere).
+      clearTimeout(frame.timer);
+      this.inFlight = null;
+      this.frameLimit = Math.max(1, Math.floor(n / 2));
+      this.frameCeiling = this.frameLimit;
+      this.fullFramesAtCeiling = 0;
+      this.requeueFront(frame.items);
+    } else {
+      // Not even one event crossed in the deadline: a definite failure.
+      this.frameLimit = 1;
+      this.frameCeiling = 1;
+      this.fullFramesAtCeiling = 0;
+      this.failInFlight(new Error("sync push: not acknowledged in time"));
+    }
     this.dropSocket(socket);
+  }
+
+  /** A full frame was acked: grow toward the ceiling, and probe past it now and then. */
+  private fullFrameAcked(): void {
+    if (this.frameLimit < this.frameCeiling) {
+      this.frameLimit = Math.min(this.frameCeiling, this.frameLimit * 2);
+      return;
+    }
+    if (this.frameCeiling >= MAX_EVENTS_PER_PUSH_FRAME) return;
+    if (++this.fullFramesAtCeiling >= PUSH_CEILING_PROBE_AFTER) {
+      this.fullFramesAtCeiling = 0;
+      this.frameCeiling = Math.min(MAX_EVENTS_PER_PUSH_FRAME, this.frameCeiling * 2);
+      this.frameLimit = this.frameCeiling;
+    }
+  }
+
+  /** Put a timed-out frame's events back at the front, joining any re-append of the same event. */
+  private requeueFront(items: PendingPush[]): void {
+    const back: PendingPush[] = [];
+    for (const item of items) {
+      const dup = this.outbox.findIndex((o) => o.entry.event_id === item.entry.event_id);
+      if (dup >= 0) {
+        item.waiters.push(...this.outbox[dup]!.waiters);
+        this.outbox.splice(dup, 1);
+      }
+      back.push(item);
+    }
+    this.outbox.unshift(...back);
+  }
+
+  /**
+   * Subscribe to push activity (a frame sent, a frame acked); the sync
+   * engine's stall watchdog counts it as progress.
+   */
+  onActivity(listener: () => void): () => void {
+    this.activityListeners.add(listener);
+    return () => {
+      this.activityListeners.delete(listener);
+    };
+  }
+
+  private active(): void {
+    for (const l of this.activityListeners) {
+      try {
+        l();
+      } catch {
+        // a listener never breaks a push
+      }
+    }
   }
 
   /** Close `socket` (if still current) and reconnect on the usual backoff. */
