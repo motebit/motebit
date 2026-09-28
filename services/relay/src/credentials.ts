@@ -24,7 +24,7 @@ import type { RelayIdentity } from "./federation.js";
 import { insertRevocationEvent } from "./federation.js";
 import {
   bindCredentialSubject,
-  didKeyHeldBy,
+  didKeyProvenFor,
   unwrapBound,
   type BoundIdentity,
 } from "./identity-binding.js";
@@ -556,7 +556,7 @@ export function registerCredentialRoutes(deps: CredentialDeps): void {
       // `did:motebit:V` is the same party under two spellings.
       if (
         (typeof subjectId === "string" && issuerDid === subjectId) ||
-        (issuerDid.startsWith("did:key:") && didKeyHeldBy(db, issuerDid, motebitId))
+        (issuerDid.startsWith("did:key:") && (await didKeyProvenFor(db, issuerDid, motebitId)))
       ) {
         refuse("self-issued credential rejected", "self_issued");
         continue;
@@ -570,9 +570,11 @@ export function registerCredentialRoutes(deps: CredentialDeps): void {
       }
 
       // The target: the path identity must be the identity this credential is ABOUT.
-      const binding = bindCredentialSubject(db, subjectId, motebitId);
+      const binding = await bindCredentialSubject(db, subjectId, motebitId);
       if ("refused" in binding) {
-        refuse("credential subject is not this identity", binding.refused);
+        // The reason code rides in the body so a best-effort submitter (the
+        // runtime logs `errors`) can see WHY, not just that it was refused.
+        refuse(`credential subject is not this identity (${binding.refused})`, binding.refused);
         // Rule 6: recorded durably. The route takes no token, so there is no
         // presenter (null); the target is in `path`.
         recordAuthEvent({

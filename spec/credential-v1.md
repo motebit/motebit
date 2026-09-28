@@ -392,9 +392,9 @@ The eight routes below are the binding cross-implementation contract for credent
 Credentials are submitted for relay indexing by any party that holds them — typically the issuer, about the agent it delegated to, or the subject itself. The route takes no bearer token: the issuer's signature is the authentication. What the relay binds is the TARGET: a credential is stored only under the identity it is about. The relay validates each credential:
 
 1. **Shape validation.** Requires `@context`, `type`, `issuer`, `credentialSubject`, `proof`.
-2. **Self-attestation rejection.** If `issuer === credentialSubject.id`, or the issuer's `did:key` names a key the path identity (`:motebitId`) itself holds, the credential is rejected — the same party under two spellings carries no trust signal.
+2. **Self-attestation rejection.** If `issuer === credentialSubject.id`, or the issuer's `did:key` names a key PROVEN to be the path identity's (`:motebitId`) own — by the step 4 evidence — the credential is rejected — the same party under two spellings carries no trust signal.
 3. **Signature verification.** Ed25519 proof is verified using the issuer's embedded public key.
-4. **Subject binding.** `credentialSubject.id` MUST name the path identity `:motebitId`: a `did:motebit:<id>` subject MUST have `<id> === :motebitId`; a `did:key` subject MUST name a key the relay holds for `:motebitId` (its current identity key, registry key, or a device key — a key rotated away from no longer names it) and for no other identity. A credential with no subject id, or any other DID method, is rejected. The stored subject is therefore always the identity the credential names, never merely the identity the request named.
+4. **Subject binding.** `credentialSubject.id` MUST name the path identity `:motebitId`: a `did:motebit:<id>` subject MUST have `<id> === :motebitId`; a `did:key` subject MUST name a key PROVEN to be `:motebitId`'s, by evidence only: either `:motebitId` is the sovereign commitment to that key (`deriveSovereignMotebitId(key) === :motebitId` — the id commits to its genesis key), or the key is the identity's proven holder key (the relay's evidence-written identity-key state: first-key proof, a verified succession, a verified migration, an operator service registration). A key the relay merely has on file — a registry column or a device row, which registration doors may write without proof of possession — neither binds a subject nor prevents another identity's binding. A key rotated away from binds only if it is the genesis key a sovereign id commits to. A non-sovereign identity with no proven holder key is named by `did:motebit:<id>` only; its `did:key` credentials are rejected. A credential with no subject id, or any other DID method, is rejected. The stored subject is therefore always an identity the credential provably names, never merely the identity the request named. A rejection carries its reason code in the response's `errors` entry.
 5. **Revocation check.** Revoked credentials are rejected.
 6. **Idempotent storage.** Accepted credentials are stored with INSERT OR IGNORE semantics. Re-submitting the same credential under the same subject is accepted; a DIFFERENT credential under a `credential_id` already held is rejected, never reported as accepted.
 
@@ -442,7 +442,7 @@ Agents store credentials locally via `CredentialStoreAdapter`:
 Self-issued credentials are excluded at three layers:
 
 1. **Issuance.** Reputation and trust credentials skip self-delegation (delegator === executor).
-2. **Submission.** The relay rejects credentials where `issuer === credentialSubject.id`, or where the issuer's key is one the subject identity holds (§7.1 step 2).
+2. **Submission.** The relay rejects credentials where `issuer === credentialSubject.id`, or where the issuer's key is proven to be the subject identity's own (§7.1 steps 2 and 4).
 3. **Aggregation.** Credential weighting skips self-attestation during routing.
 
 ### 9.2 Issuer Trust Threshold

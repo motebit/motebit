@@ -40,12 +40,13 @@ import type { MigrationRequest } from "@motebit/protocol";
 import type { DatabaseDriver } from "@motebit/persistence";
 import { bytesToHex, didKeyToPublicKey, hexToBytes } from "@motebit/encryption";
 import {
+  deriveSovereignMotebitId,
   verifyDelegationRevocation,
   verifyMigrationRequest,
   type DelegationRevocation,
 } from "@motebit/crypto";
 import { OPERATOR_PRESENTED, type AuthEvent } from "./auth-events.js";
-import { keysHeldBy } from "./identity-keys.js";
+import { identityKey, keysHeldBy } from "./identity-keys.js";
 import { createLogger } from "./logger.js";
 
 const logger = createLogger({ service: "identity-binding" });
@@ -202,43 +203,45 @@ function didKeyHex(did: string): string | null {
 }
 
 /**
- * Does the `did:key` URI `did` name a key `motebitId` holds (`keysHeldBy`,
- * compared exactly)? Not exclusive — see `didKeyHeldOnlyBy` for the binding
- * question. Used to recognise the identity itself behind a second spelling.
+ * Is the `did:key` URI `did` PROVEN to be `motebitId`'s key? Only evidence
+ * counts (#850 review):
+ *
+ *  - (a) `motebitId` is the sovereign commitment to the key
+ *    (`deriveSovereignMotebitId(key) === motebitId`) — the id commits to its
+ *    genesis key, offline, whoever registered what; or
+ *  - (b) the key is the identity's HOLDER key (`identityKey`, identity-keys.ts
+ *    — the #703 authority state, written only by evidence: E-sov, E-link,
+ *    E-mig, E-op, E-main).
+ *
+ * The registry column and device rows are NOT evidence: `/agents/bootstrap`
+ * and `/agents/register` write any `public_key` without proof of possession,
+ * so a key there proves nothing about who holds it. They never bind, and —
+ * because nothing another identity writes can veto — they never block
+ * either: there is no "no other identity holds it" check (a squatter's
+ * bootstrap under V's key used to refuse every credential about V).
+ *
+ * A legacy (non-sovereign) identity with no holder has no proven key, so no
+ * `did:key` names it; `did:motebit:<id>` still does.
  */
-export function didKeyHeldBy(db: DatabaseDriver, did: string, motebitId: string): boolean {
+export async function didKeyProvenFor(
+  db: DatabaseDriver,
+  did: string,
+  motebitId: string,
+): Promise<boolean> {
   const hex = didKeyHex(did);
-  return hex !== null && keysHeldBy(db, motebitId).has(hex);
-}
-
-/**
- * Does the `did:key` URI `did` name a key that `motebitId` holds — and that
- * no OTHER identity on this relay holds? The held set is `keysHeldBy` (the
- * holder, the registry's key, every keyed device row; a rotation retires the
- * old key from all three), compared exactly against the canonical lowercase
- * hex the DID decodes to. A key some other identity also answers to names
- * nobody in particular, so it binds nobody (fail closed). Anything that is
- * not a well-formed Ed25519 `did:key` is false.
- */
-export function didKeyHeldOnlyBy(db: DatabaseDriver, did: string, motebitId: string): boolean {
-  const hex = didKeyHex(did);
-  if (hex === null || !keysHeldBy(db, motebitId).has(hex)) return false;
-  const other = db
-    .prepare(
-      `SELECT motebit_id FROM devices WHERE LOWER(public_key) = ? AND motebit_id != ?
-       UNION SELECT motebit_id FROM agent_registry WHERE LOWER(public_key) = ? AND motebit_id != ?
-       UNION SELECT motebit_id FROM identity_keys WHERE LOWER(public_key) = ? AND motebit_id != ?
-       LIMIT 1`,
-    )
-    .get(hex, motebitId, hex, motebitId, hex, motebitId);
-  return other == null;
+  if (hex === null) return false;
+  if ((await deriveSovereignMotebitId(hex)) === motebitId) return true;
+  const holder = identityKey(db, motebitId)?.publicKey;
+  // The holder's stored spelling may predate the lowercase rule (E-main
+  // transplants as-is); both sides name the same 32 bytes.
+  return typeof holder === "string" && holder.toLowerCase() === hex;
 }
 
 /** Why a credential's subject did not bind to the path identity (`bindCredentialSubject`). */
 export type CredentialSubjectRefusal =
   | "credential_subject:missing"
   | "credential_subject:not_path_identity"
-  | "credential_subject:key_not_held_by_path_identity"
+  | "credential_subject:key_not_proven_for_path_identity"
   | "credential_subject:unsupported_did";
 
 /**
@@ -251,18 +254,19 @@ export type CredentialSubjectRefusal =
  * `credentialSubject.id` names.
  *
  *  - `did:motebit:<id>` names `<id>`; it must be exactly the path identity.
- *  - `did:key:z…` names a key; the path identity must hold it and no other
- *    identity may (`didKeyHeldOnlyBy`).
+ *  - `did:key:z…` names a key; it must be PROVEN the path identity's key —
+ *    the path id is its sovereign commitment, or it is the identity's holder
+ *    key (`didKeyProvenFor`). Registry and device-row keys never bind.
  *  - anything else, or no subject id at all, binds nobody.
  *
  * Before #850 the row was filed under the path alone: X filed V's credential
  * under X, then revoked it as its "subject" — relay-wide, for V.
  */
-export function bindCredentialSubject(
+export async function bindCredentialSubject(
   db: DatabaseDriver,
   subjectId: unknown,
   pathId: string,
-): { bound: BoundIdentity } | { refused: CredentialSubjectRefusal } {
+): Promise<{ bound: BoundIdentity } | { refused: CredentialSubjectRefusal }> {
   if (typeof subjectId !== "string" || subjectId === "") {
     return { refused: "credential_subject:missing" };
   }
@@ -271,8 +275,8 @@ export function bindCredentialSubject(
       return { refused: "credential_subject:not_path_identity" };
     }
   } else if (subjectId.startsWith("did:key:")) {
-    if (!didKeyHeldOnlyBy(db, subjectId, pathId)) {
-      return { refused: "credential_subject:key_not_held_by_path_identity" };
+    if (!(await didKeyProvenFor(db, subjectId, pathId))) {
+      return { refused: "credential_subject:key_not_proven_for_path_identity" };
     }
   } else {
     return { refused: "credential_subject:unsupported_did" };

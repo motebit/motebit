@@ -802,7 +802,7 @@ const WRITERS: readonly Writer[] = [
     table: "relay_credentials",
     count: 1,
     principal:
-      "credentials/submit, through `insertSubmittedCredential(db, owner: BoundIdentity, …)`: the VC's issuer signature verifies (the route is public — any party may carry it), and the row is filed only under the identity the credential's own `credentialSubject.id` names — `bindCredentialSubject` (#850): `did:motebit:<id>` must be the path id exactly; a `did:key` must be a key the path identity holds (`keysHeldBy`) and no other identity holds. Before #850 it was filed under the PATH id, so X filed V's credential under X and could revoke it as its subject",
+      "credentials/submit, through `insertSubmittedCredential(db, owner: BoundIdentity, …)`: the VC's issuer signature verifies (the route is public — any party may carry it), and the row is filed only under the identity the credential's own `credentialSubject.id` names — `bindCredentialSubject` (#850): `did:motebit:<id>` must be the path id exactly; a `did:key` must be PROVEN the path identity's key — the path id is its sovereign commitment, or it is the #703 holder key; registry and device-row keys never bind or veto (#850 review). Before #850 it was filed under the PATH id, so X filed V's credential under X and could revoke it as its subject",
   },
   {
     file: R + "credential-anchoring.ts",

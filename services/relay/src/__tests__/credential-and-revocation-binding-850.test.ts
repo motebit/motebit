@@ -76,10 +76,11 @@ afterEach(async () => {
   await relay.close();
 });
 
-async function identity(): Promise<Identity> {
+/** A registered identity: sovereign by default, or a legacy (non-sovereign) id. */
+async function identity(legacyId?: string): Promise<Identity> {
   const kp = await generateKeypair();
   const hex = bytesToHex(kp.publicKey);
-  const mid = await deriveSovereignMotebitId(hex);
+  const mid = legacyId ?? (await deriveSovereignMotebitId(hex));
   const device = `dev-${crypto.randomUUID()}`;
   const body = await signDeviceRegistration(
     {
@@ -192,7 +193,9 @@ describe("credentials/submit files a credential only under the identity it is ab
 
     const filed = await submit(attacker.mid, [vc]);
     expect(filed.accepted).toBe(0);
-    expect(filed.errors).toContain("credential subject is not this identity");
+    expect(filed.errors).toEqual([
+      "credential subject is not this identity (credential_subject:key_not_proven_for_path_identity)",
+    ]);
     expect(heldSubject(credId)).toBeUndefined();
 
     const res = await revokeCredential(attacker, attacker.mid, credId);
@@ -236,7 +239,7 @@ describe("credentials/submit files a credential only under the identity it is ab
     await submit(attacker.mid, [await credential(issuer, victim.did)]);
     const rows = authEvents(
       `/api/v1/agents/${attacker.mid}/credentials/submit`,
-      "credential_subject:key_not_held_by_path_identity",
+      "credential_subject:key_not_proven_for_path_identity",
     );
     expect(rows).toEqual([{ kind: "agent_token_rejected", motebit_id: null }]);
   });
@@ -259,9 +262,66 @@ describe("credentials/submit files a credential only under the identity it is ab
     expect(out.rejected).toBe(2);
   });
 
-  it("a did:key another identity ALSO holds names nobody in particular — refused (fail closed)", async () => {
+  // ── #850 review: only EVIDENCE binds a did:key — the sovereign commitment
+  // or the #703 holder key. Registry and device-row keys, which bootstrap and
+  // /agents/register write without proof of possession, never bind and never
+  // block. (Probe: scratchpad/probes/rv850.probe.ts, S1/S2.)
+
+  it("F1: an unauthenticated bootstrap squatting V's key under a new id does NOT block V's did:key credentials", async () => {
     const issuer = await identity();
-    const subject = await identity();
+    const victim = await identity();
+    expect((await submit(victim.mid, [await credential(issuer, victim.did)])).accepted).toBe(1);
+
+    const boot = await relay.app.request("/api/v1/agents/bootstrap", {
+      method: "POST",
+      headers: JSON_HEADERS,
+      body: JSON.stringify({
+        motebit_id: `squat-${crypto.randomUUID()}`,
+        device_id: `d-${crypto.randomUUID()}`,
+        public_key: victim.hex,
+      }),
+    });
+    expect(boot.status, "arrange: the squat lands (the writer is a separate door)").toBe(201);
+
+    expect((await submit(victim.mid, [await credential(issuer, victim.did)])).accepted).toBe(1);
+  });
+
+  it("F2: X' registering V's key as its registry key cannot file V's credential under X' or revoke it; V files it later", async () => {
+    const issuer = await identity();
+    const vKp = await generateKeypair();
+    const vHex = bytesToHex(vKp.publicKey);
+    const vDid = hexPublicKeyToDidKey(vHex);
+    // X' is a legacy (non-sovereign) id: no E-sov, so its registry key is
+    // whatever it wrote — here V's key.
+    const xp = await identity(`legacy-${crypto.randomUUID()}`);
+    const reg = await relay.app.request("/api/v1/agents/register", {
+      method: "POST",
+      headers: { ...JSON_HEADERS, Authorization: `Bearer ${await bearer(xp, "admin:query")}` },
+      body: JSON.stringify({
+        endpoint_url: "http://127.0.0.1:9999/mcp",
+        capabilities: [],
+        public_key: vHex,
+      }),
+    });
+    expect(reg.status, "arrange: X' plants V's key in the registry").toBe(200);
+
+    const vc = await credential(issuer, vDid);
+    const credId = (vc as unknown as { id: string }).id;
+    const filed = await submit(xp.mid, [vc]);
+    expect(filed.accepted).toBe(0);
+    expect(heldSubject(credId)).toBeUndefined();
+    expect((await revokeCredential(xp, xp.mid, credId)).status).toBe(404);
+    expect(await isRevoked(credId)).toBe(false);
+
+    // V is sovereign: its id commits to its key, registered here or not.
+    const vMid = await deriveSovereignMotebitId(vHex);
+    expect((await submit(vMid, [vc])).accepted).toBe(1);
+    expect(heldSubject(credId)).toBe(vMid);
+  });
+
+  it("same key under two identities: a device row carrying V's key under X binds nothing for X; V still binds", async () => {
+    const issuer = await identity();
+    const victim = await identity();
     const other = await relay.app.request("/identity", {
       method: "POST",
       headers: JSON_AUTH,
@@ -271,23 +331,113 @@ describe("credentials/submit files a credential only under the identity it is ab
     const dev = await relay.app.request("/device/register", {
       method: "POST",
       headers: JSON_AUTH,
-      body: JSON.stringify({ motebit_id: otherId, device_name: "dup", public_key: subject.hex }),
+      body: JSON.stringify({ motebit_id: otherId, device_name: "dup", public_key: victim.hex }),
     });
-    expect([200, 201], "arrange: a second identity holding the subject's key").toContain(
+    expect([200, 201], "arrange: a second identity's device row holds V's key").toContain(
       dev.status,
     );
-    const vc = await credential(issuer, subject.did);
-    expect((await submit(subject.mid, [vc])).accepted).toBe(0);
+    const vc = await credential(issuer, victim.did);
     expect((await submit(otherId, [vc])).accepted).toBe(0);
+    expect((await submit(victim.mid, [vc])).accepted).toBe(1);
   });
 
-  it("a key the subject rotated away from no longer names it", async () => {
+  it("a holder-keyed (non-sovereign) V binds its did:key; the issuer→subject flow works", async () => {
+    const issuer = await identity();
+    const kp = await generateKeypair();
+    const hex = bytesToHex(kp.publicKey);
+    const svc = `svc-${crypto.randomUUID()}`;
+    // E-op: the operator registers a bare service identity with its key —
+    // one of the evidence kinds that writes the #703 holder.
+    const reg = await relay.app.request("/api/v1/agents/register", {
+      method: "POST",
+      headers: JSON_AUTH,
+      body: JSON.stringify({
+        motebit_id: svc,
+        endpoint_url: "http://127.0.0.1:9999/mcp",
+        capabilities: [],
+        public_key: hex,
+      }),
+    });
+    expect(reg.status).toBe(200);
+    expect(
+      (
+        relay.moteDb.db
+          .prepare("SELECT public_key FROM identity_keys WHERE motebit_id = ?")
+          .get(svc) as { public_key: string } | undefined
+      )?.public_key,
+      "arrange: the holder is written",
+    ).toBe(hex);
+
+    const vc = await credential(issuer, hexPublicKeyToDidKey(hex));
+    expect((await submit(svc, [vc])).accepted).toBe(1);
+    expect(heldSubject((vc as unknown as { id: string }).id)).toBe(svc);
+  });
+
+  it("POPULATION CHANGE (#850 ruling A): a non-sovereign, holder-less subject's did:key credential is refused with key_not_proven_for_path_identity; its did:motebit credential still binds", async () => {
+    // The shape that breaks on purpose: a legacy random id registered through
+    // register-self (possession proven, but no sovereign commitment, so no
+    // #703 holder is written). Main accepted its did:key credentials on the
+    // strength of a device row; only evidence binds now. Remedy for such an
+    // identity: a key rotation (E-link writes a holder).
+    const issuer = await identity();
+    const legacy = await identity(`legacy-${crypto.randomUUID()}`);
+    expect(
+      relay.moteDb.db.prepare("SELECT 1 FROM identity_keys WHERE motebit_id = ?").get(legacy.mid),
+      "arrange: no proven holder",
+    ).toBeUndefined();
+
+    const byKey = await submit(legacy.mid, [await credential(issuer, legacy.did)]);
+    expect(byKey.accepted).toBe(0);
+    expect(byKey.errors).toEqual([
+      "credential subject is not this identity (credential_subject:key_not_proven_for_path_identity)",
+    ]);
+    expect(
+      authEvents(
+        `/api/v1/agents/${legacy.mid}/credentials/submit`,
+        "credential_subject:key_not_proven_for_path_identity",
+      ),
+    ).toEqual([{ kind: "agent_token_rejected", motebit_id: null }]);
+
+    const byId = await submit(legacy.mid, [await credential(issuer, `did:motebit:${legacy.mid}`)]);
+    expect(byId).toEqual({ accepted: 1, rejected: 0 });
+  });
+
+  it("a legacy identity created by the operator (/identity + /device/register) is likewise refused for did:key", async () => {
+    const issuer = await identity();
+    const kp = await generateKeypair();
+    const hex = bytesToHex(kp.publicKey);
+    const created = await relay.app.request("/identity", {
+      method: "POST",
+      headers: JSON_AUTH,
+      body: JSON.stringify({ owner_id: `owner-${crypto.randomUUID()}` }),
+    });
+    const { motebit_id: legacy } = (await created.json()) as { motebit_id: string };
+    await relay.app.request("/device/register", {
+      method: "POST",
+      headers: JSON_AUTH,
+      body: JSON.stringify({ motebit_id: legacy, device_name: "d", public_key: hex }),
+    });
+    expect(
+      (await submit(legacy, [await credential(issuer, hexPublicKeyToDidKey(hex))])).accepted,
+    ).toBe(0);
+    expect(
+      (await submit(legacy, [await credential(issuer, `did:motebit:${legacy}`)])).accepted,
+    ).toBe(1);
+  });
+
+  it("rotation: the genesis key (sovereign commitment) and the current holder key bind; an intermediate retired key does not", async () => {
     const issuer = await identity();
     const subject = await identity();
-    const oldDid = subject.did;
-    await rotate(subject, await generateKeypair());
-    const vc = await credential(issuer, oldDid);
-    expect((await submit(subject.mid, [vc])).accepted).toBe(0);
+    const k1 = subject.kp;
+    const k2 = await generateKeypair();
+    const k3 = await generateKeypair();
+    await rotate(subject, k2);
+    subject.kp = k2;
+    await rotate(subject, k3);
+    const did = (kp: KeyPair) => hexPublicKeyToDidKey(bytesToHex(kp.publicKey));
+    expect((await submit(subject.mid, [await credential(issuer, did(k2))])).accepted).toBe(0);
+    expect((await submit(subject.mid, [await credential(issuer, did(k1))])).accepted).toBe(1);
+    expect((await submit(subject.mid, [await credential(issuer, did(k3))])).accepted).toBe(1);
   });
 
   it("self-issued under two spellings — V's own key about did:motebit:V — is rejected", async () => {

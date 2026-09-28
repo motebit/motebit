@@ -20,6 +20,7 @@ import {
   bytesToHex,
   hexPublicKeyToDidKey,
   publicKeyToDidKey,
+  deriveSovereignMotebitId,
 } from "@motebit/encryption";
 import type { KeyPair, VerifiableCredential } from "@motebit/encryption";
 import type { MotebitId, DeviceId, ReputationCredentialSubject } from "@motebit/sdk";
@@ -116,8 +117,11 @@ describe("Peer Credential E2E — Delegation Loop", () => {
 
     keypairA = await generateKeypair();
     keypairB = await generateKeypair();
-    motebitIdA = crypto.randomUUID();
-    motebitIdB = crypto.randomUUID();
+    // Sovereign ids (the default mint since 2026-05-22): a credential's did:key
+    // subject binds to an id only by evidence — its sovereign commitment or a
+    // proven holder key (#850) — never by a bootstrap-written device row.
+    motebitIdA = await deriveSovereignMotebitId(bytesToHex(keypairA.publicKey));
+    motebitIdB = await deriveSovereignMotebitId(bytesToHex(keypairB.publicKey));
 
     // Bootstrap both agents
     const resA = await relay.app.request("/api/v1/agents/bootstrap", {
