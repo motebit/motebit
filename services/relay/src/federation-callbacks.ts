@@ -43,6 +43,7 @@ import { verificationKeyFor } from "./identity-keys.js";
 import { sendToEach } from "./ws-send.js";
 import { routeToSockets } from "./task-presentation.js";
 import { bindP2pProofToTask, p2pProofKey } from "./idempotency.js";
+import { p2pPayeeOf, p2pWorkerLegScope, receiptDischargesP2p } from "./p2p-payee.js";
 
 const logger = createLogger({ service: "federation-callbacks" });
 
@@ -424,7 +425,19 @@ export function createFederationCallbacks(deps: FederationCallbackDeps) {
       if (entry.settlement_mode === "p2p" && entry.p2p_payment_proof) {
         try {
           const proof = entry.p2p_payment_proof;
-          const workerId = verified.receipt.motebit_id;
+          // Payee = the worker the delegator's proof paid: the pinned
+          // `target_agent` this relay admitted and forwarded (#959). A result
+          // whose receipt is signed by anyone else is not the work paid for —
+          // no settlement is recorded for it.
+          const workerId = p2pPayeeOf(entry);
+          if (!receiptDischargesP2p(entry, verified.receipt.motebit_id)) {
+            logger.error("settlement.federated_p2p_receipt_not_from_payee", {
+              correlationId: verified.taskId,
+              payee: workerId,
+              signer: verified.receipt.motebit_id,
+            });
+            return;
+          }
           const settlementId = crypto.randomUUID();
           const settledAt = Date.now();
           // This relay's recorded fee = the origin-fee leg (→ A's treasury). The
@@ -454,8 +467,8 @@ export function createFederationCallbacks(deps: FederationCallbackDeps) {
                (settlement_id, allocation_id, task_id, motebit_id, receipt_hash,
                 amount_settled, platform_fee, platform_fee_rate, status, settled_at,
                 settlement_mode, p2p_tx_hash, payment_verification_status, delegator_id,
-                issuer_relay_id, suite, signature, record_json)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                p2p_worker_leg, issuer_relay_id, suite, signature, record_json)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             )
             .run(
               settlementId,
@@ -472,6 +485,9 @@ export function createFederationCallbacks(deps: FederationCallbackDeps) {
               p2pProofKey(proof.tx_hash),
               "pending",
               entry.submitted_by ?? null,
+              // The origin relay verifies only its own fee leg; the worker leg
+              // is the executor relay's (the worker is hosted there).
+              p2pWorkerLegScope(entry),
               signed.issuer_relay_id,
               signed.suite,
               signed.signature,

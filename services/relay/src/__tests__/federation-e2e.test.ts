@@ -1583,6 +1583,18 @@ describe("Federation E2E", () => {
       expect(aRow!.p2p_tx_hash).toBe(FAKE_TX_HASH);
       expect(aRow!.delegator_id).toBe(alice.motebitId);
       expect(aRow!.motebit_id).toBe(bob.motebitId);
+      // #959: which relay verifies the worker leg is DECLARED on each row —
+      // B hosts Bob ('local'), A originated the 3-leg task ('remote').
+      const legOf = (relay: SyncRelay): string | null =>
+        (
+          relay.moteDb.db
+            .prepare(
+              "SELECT p2p_worker_leg FROM relay_settlements WHERE task_id = ? AND settlement_mode = 'p2p'",
+            )
+            .get(fwdTaskId) as { p2p_worker_leg: string | null }
+        ).p2p_worker_leg;
+      expect(legOf(relayB)).toBe("local");
+      expect(legOf(relayA)).toBe("remote");
 
       // ── Relay transmitter surface is ZERO: no relay-custody fund movement. ──
       // The funded P2P path bypasses the §7 relay-custody chain entirely.

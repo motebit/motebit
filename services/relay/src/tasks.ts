@@ -100,6 +100,7 @@ import {
 } from "./idempotency.js";
 import { CALLER_VERIFIED_KEY, OPERATOR_PRESENTED } from "./auth-events.js";
 import { payerCandidates } from "./p2p-payer.js";
+import { p2pPayeeOf, p2pWorkerLegScope, receiptDischargesP2p } from "./p2p-payee.js";
 import { createLogger } from "./logger.js";
 import { pathIdentity } from "./id-bounds.js";
 import type { TaskQueue } from "./task-queue.js";
@@ -721,6 +722,24 @@ export async function handleReceiptIngestion(
     return { verified: true, credential_id: null, already_settled: true };
   }
 
+  // --- P2P: only the paid worker's receipt discharges the payment (#959) ---
+  // A P2P task was bought from ONE worker: the proof's worker leg was
+  // validated against its address at admission and the dispatch token binds
+  // it. A receipt signed by any other identity is not that work, so it
+  // neither settles the task nor marks it settled — the paid worker's receipt
+  // still can. Checked before the receipt is archived or any trust is written.
+  if (entry.settlement_mode === "p2p" && !receiptDischargesP2p(entry, receipt.motebit_id)) {
+    logger.error("settlement.p2p_receipt_not_from_payee", {
+      correlationId: taskId,
+      payee: p2pPayeeOf(entry),
+      signer: receipt.motebit_id,
+    });
+    return {
+      verified: false,
+      reason: `receipt is signed by ${receipt.motebit_id}, not by the worker this P2P task was paid to (${p2pPayeeOf(entry)})`,
+    };
+  }
+
   // --- Ed25519 verification ---
   let pubKeyHex: string | undefined;
   const regRow = moteDb.db
@@ -845,9 +864,14 @@ export async function handleReceiptIngestion(
   const newlyArchived = persistReceiptChain(moteDb.db, receipt);
 
   // --- Idempotency: DB settlement check ---
+  // One task settles once, whoever the row names. Keyed on the task alone
+  // (#959): the old `(task_id, motebit_id = path agent)` key missed every row
+  // whose payee is not the path agent — a P2P row (payee = the pinned worker,
+  // path = the delegator), a ranked relay-mode row (payee = the ranked
+  // worker), and a sub-hop row `settleSubReceipt` wrote first.
   const existingSettlement = moteDb.db
-    .prepare("SELECT settlement_id FROM relay_settlements WHERE task_id = ? AND motebit_id = ?")
-    .get(taskId, motebitId) as { settlement_id: string } | undefined;
+    .prepare("SELECT settlement_id FROM relay_settlements WHERE task_id = ? LIMIT 1")
+    .get(taskId) as { settlement_id: string } | undefined;
   if (existingSettlement) {
     entry.settled = true;
     taskQueue.set(taskId, entry); // Persist settled flag to durable queue
@@ -1082,11 +1106,12 @@ export async function handleReceiptIngestion(
           return;
         }
 
+        // One sub-task settles once, whoever the row names (#959) — the same
+        // task-keyed rule as the root ingestion's duplicate check. The sub-task's
+        // own receipt may have settled it first, directly.
         const subExisting = moteDb.db
-          .prepare(
-            "SELECT settlement_id FROM relay_settlements WHERE task_id = ? AND motebit_id = ?",
-          )
-          .get(subRelayTaskId, sub.motebit_id) as { settlement_id: string } | undefined;
+          .prepare("SELECT settlement_id FROM relay_settlements WHERE task_id = ? LIMIT 1")
+          .get(subRelayTaskId) as { settlement_id: string } | undefined;
         if (subExisting) {
           // Already settled at this level — still recurse into nested receipts
           const nestedReceipts = sub.delegation_receipts ?? [];
@@ -1124,6 +1149,25 @@ export async function handleReceiptIngestion(
         // legacy in-flight nested settlements. Doctrine:
         // `docs/doctrine/off-ramp-as-user-action.md` § "Multi-hop-as-P2P — Increment 1".
         if (subEntry.settlement_mode === "p2p") {
+          // Payee = the worker the sub-hop's payment paid (#959): the sub-task's
+          // admitted `target_agent`. A nested receipt signed by anyone else is
+          // not the work B paid for — record nothing for it (the paid worker's
+          // own receipt can still settle the sub-task directly).
+          const subPayee = p2pPayeeOf(subEntry);
+          if (sub.motebit_id !== subPayee) {
+            logger.error("multihop.settlement.p2p_receipt_not_from_payee", {
+              correlationId: parentTaskId,
+              subTaskId: subRelayTaskId,
+              payee: subPayee,
+              signer: sub.motebit_id,
+              depth,
+            });
+            const nestedReceipts = sub.delegation_receipts ?? [];
+            for (const nested of nestedReceipts) {
+              await settleSubReceipt(nested, parentTaskId, depth + 1);
+            }
+            return;
+          }
           const subP2pProof = subEntry.p2p_payment_proof;
           const subWorkerAmount = subP2pProof?.amount_micro ?? 0;
           // Which fee leg funds THIS relay's treasury — mirror the parent-P2P
@@ -1143,8 +1187,9 @@ export async function handleReceiptIngestion(
             {
               settlement_id: subP2pSettlementId,
               allocation_id: `p2p-${subRelayTaskId}` as never,
-              // Payee = the sub-agent that executed and was paid onchain.
-              motebit_id: sub.motebit_id,
+              // Payee = the sub-hop's admitted worker, paid onchain (equal to
+              // the signer, checked above).
+              motebit_id: subPayee,
               receipt_hash: sub.result_hash ?? "",
               ledger_hash: null,
               amount_settled: subWorkerAmount,
@@ -1166,14 +1211,14 @@ export async function handleReceiptIngestion(
                (settlement_id, allocation_id, task_id, motebit_id, receipt_hash,
                 amount_settled, platform_fee, platform_fee_rate, status, settled_at,
                 settlement_mode, p2p_tx_hash, payment_verification_status, delegator_id,
-                issuer_relay_id, suite, signature, record_json)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                p2p_worker_leg, issuer_relay_id, suite, signature, record_json)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             )
             .run(
               subP2pSettlementId,
               `p2p-${subRelayTaskId}`,
               subRelayTaskId,
-              sub.motebit_id,
+              signedSubP2p.motebit_id,
               sub.result_hash ?? "",
               subWorkerAmount,
               subFeeAmount,
@@ -1184,6 +1229,7 @@ export async function handleReceiptIngestion(
               subP2pProof != null ? p2pProofKey(subP2pProof.tx_hash) : null,
               "pending",
               subEntry.submitted_by ?? null,
+              p2pWorkerLegScope(subEntry),
               signedSubP2p.issuer_relay_id,
               signedSubP2p.suite,
               signedSubP2p.signature,
@@ -1500,8 +1546,12 @@ export async function handleReceiptIngestion(
           {
             settlement_id: p2pSettlementId,
             allocation_id: `p2p-${taskId}` as never,
-            // Payee = the worker that executed and was paid onchain.
-            motebit_id: motebitId,
+            // Payee = the worker the onchain payment paid: the task's
+            // admitted `target_agent` (#959) — equal to the receipt signer,
+            // checked at the top of ingestion. NEVER `motebitId`: a P2P
+            // submission posts to the DELEGATOR's own endpoint, so the path
+            // agent is the payer here.
+            motebit_id: p2pPayeeOf(entry),
             receipt_hash: receipt.result_hash ?? "",
             ledger_hash: null,
             amount_settled: p2pWorkerAmount,
@@ -1525,14 +1575,14 @@ export async function handleReceiptIngestion(
              (settlement_id, allocation_id, task_id, motebit_id, receipt_hash,
               amount_settled, platform_fee, platform_fee_rate, status, settled_at,
               settlement_mode, p2p_tx_hash, payment_verification_status, delegator_id,
-              issuer_relay_id, suite, signature, record_json)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+              p2p_worker_leg, issuer_relay_id, suite, signature, record_json)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           )
           .run(
             p2pSettlementId,
             `p2p-${taskId}`,
             taskId,
-            motebitId,
+            signedP2pAudit.motebit_id,
             receipt.result_hash ?? "",
             p2pWorkerAmount,
             p2pFeeAmount,
@@ -1543,6 +1593,7 @@ export async function handleReceiptIngestion(
             p2pProof != null ? p2pProofKey(p2pProof.tx_hash) : null,
             "pending",
             entry.submitted_by ?? null,
+            p2pWorkerLegScope(entry),
             signedP2pAudit.issuer_relay_id,
             signedP2pAudit.suite,
             signedP2pAudit.signature,
@@ -1804,6 +1855,11 @@ export async function handleReceiptIngestion(
               signedSettlement.settlement_id,
               signedSettlement.allocation_id,
               taskId,
+              // KNOWN RESIDUAL (#959, left for its own change): this column is
+              // the PATH agent while the signed body and the credit below name
+              // the receipt signer; they differ whenever scored routing hands
+              // the task to another worker. Existing relay-mode tests read the
+              // row under the path agent, so the fix is not made here.
               motebitId,
               signedSettlement.receipt_hash,
               signedSettlement.ledger_hash,
