@@ -465,3 +465,199 @@ describe("web sync token refresh (#816)", () => {
     app.stop();
   });
 });
+
+// ---------------------------------------------------------------------------
+// A plan-step delegation in flight when its result frame cannot reach it
+// ---------------------------------------------------------------------------
+
+/**
+ * The relay's HTTP side for plan-step delegation: admits one task per NEW
+ * Idempotency-Key (a repeated key replays the task it admitted), and answers
+ * `GET /agent/:id/task/:taskId` with the receipt once the task is done.
+ */
+function stubRelayTasks() {
+  const admitted = new Map<string, string>(); // Idempotency-Key → task_id
+  const done = new Set<string>();
+  const ok = (body: unknown, status = 200) => ({
+    ok: status < 400,
+    status,
+    headers: new Headers(),
+    json: async () => body,
+    text: async () => JSON.stringify(body),
+  });
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(
+      async (
+        url: string,
+        init?: { method?: string; body?: unknown; headers?: Record<string, string> },
+      ) => {
+        const u = String(url);
+        if (/\/agent\/[^/]+\/task$/.test(u) && init?.method === "POST") {
+          if (!String(init.body).includes("plan_engine")) return ok({}, 503);
+          const key = init.headers?.["Idempotency-Key"] ?? "";
+          let id = admitted.get(key);
+          if (id == null) {
+            id = `plan-${admitted.size + 1}`;
+            admitted.set(key, id);
+          }
+          return ok({ task_id: id }, 201);
+        }
+        const m = /\/agent\/[^/]+\/task\/([^/]+)$/.exec(u);
+        if (m && (init?.method ?? "GET") === "GET") {
+          const id = m[1]!;
+          if (![...admitted.values()].includes(id)) return ok({}, 404);
+          return ok({
+            task: { status: done.has(id) ? "completed" : "running" },
+            receipt: done.has(id)
+              ? { task_id: id, status: "completed", result: "ok", motebit_id: "w" }
+              : null,
+          });
+        }
+        return ok({}, 503);
+      },
+    ),
+  );
+  return {
+    /** Distinct tasks the relay admitted — what it would run and charge for. */
+    admitted: () => admitted.size,
+    /** The worker finishes: the relay holds the receipt and fans the result out. */
+    complete(taskId: string): number {
+      done.add(taskId);
+      const targets = relay.sockets.filter((s) => s.readyState === 1 && s.authed);
+      for (const s of targets)
+        s.deliver({
+          type: "task_result",
+          task_id: taskId,
+          receipt: { task_id: taskId, status: "completed", result: "ok", motebit_id: "w" },
+        });
+      return targets.length;
+    },
+  };
+}
+
+type StepAdapter = { delegateStep: (step: unknown, timeoutMs: number) => Promise<unknown> };
+
+function delegate(adapter: StepAdapter): { outcome: string } {
+  const st = { outcome: "pending" };
+  void adapter
+    .delegateStep(
+      { step_id: "s1", description: "d", prompt: "p", required_capabilities: [] },
+      300_000,
+    )
+    .then(
+      () => (st.outcome = "resolved"),
+      (e: Error) => (st.outcome = `rejected: ${e.message}`),
+    );
+  return st;
+}
+
+function latestAdapter(spy: { mock: { calls: unknown[][] } }): StepAdapter {
+  const c = spy.mock.calls;
+  return c[c.length - 1]![0] as StepAdapter;
+}
+
+describe("a plan-step delegation whose result frame cannot reach it (#816)", () => {
+  it("S1: started before refresh 1, completed after it — resolves, one task", async () => {
+    const tasks = stubRelayTasks();
+    const { app, setDelegationAdapter } = await started();
+    const st = delegate(latestAdapter(setDelegationAdapter));
+    await settle();
+    await vi.advanceTimersByTimeAsync(REFRESH_MS);
+    await settle();
+    tasks.complete("plan-1");
+    await settle();
+    await vi.advanceTimersByTimeAsync(310_000);
+    await settle();
+
+    expect(st.outcome).toBe("resolved");
+    expect(tasks.admitted()).toBe(1);
+    app.stopSync();
+    app.stop();
+  });
+
+  it("F2: the result lands while the refresh's replacement is still authenticating — recovered, one task", async () => {
+    const tasks = stubRelayTasks();
+    const { app, setDelegationAdapter } = await started();
+    await vi.advanceTimersByTimeAsync(REFRESH_MS);
+    await settle();
+    const st = delegate(latestAdapter(setDelegationAdapter));
+    await settle();
+    relay.authDelayMs = 3_000;
+    await vi.advanceTimersByTimeAsync(REFRESH_MS);
+    await settle();
+    expect(tasks.complete("plan-1")).toBe(0); // no authenticated socket to carry it
+    await settle();
+    await vi.advanceTimersByTimeAsync(310_000);
+    await settle();
+
+    expect(st.outcome).toBe("resolved");
+    expect(tasks.admitted()).toBe(1);
+    app.stopSync();
+    app.stop();
+  });
+
+  it("F1: startSync again without stopSync — the old session's socket is retired, its delegation recovered, one task", async () => {
+    const tasks = stubRelayTasks();
+    const { app, setDelegationAdapter } = await started();
+    const st = delegate(latestAdapter(setDelegationAdapter));
+    await settle();
+    const again = app.startSync("https://relay.test");
+    await settle();
+    await again;
+    await settle();
+    expect(openSockets()).toHaveLength(1);
+    tasks.complete("plan-1");
+    await settle();
+    await vi.advanceTimersByTimeAsync(310_000);
+    await settle();
+
+    expect(st.outcome).toBe("resolved");
+    expect(tasks.admitted()).toBe(1);
+    app.stopSync();
+    app.stop();
+  });
+
+  it("S5: stopSync then startSync mid-delegation — recovered, one task", async () => {
+    const tasks = stubRelayTasks();
+    const { app, setDelegationAdapter } = await started();
+    await vi.advanceTimersByTimeAsync(REFRESH_MS);
+    await settle();
+    const st = delegate(latestAdapter(setDelegationAdapter));
+    await settle();
+    app.stopSync();
+    const again = app.startSync("https://relay.test");
+    await settle();
+    await again;
+    await settle();
+    tasks.complete("plan-1");
+    await settle();
+    await vi.advanceTimersByTimeAsync(310_000);
+    await settle();
+
+    expect(st.outcome).toBe("resolved");
+    expect(tasks.admitted()).toBe(1);
+    app.stopSync();
+    app.stop();
+  });
+
+  it("S6: a new session's delegation after a second startSync resolves on its first frame, one task", async () => {
+    const tasks = stubRelayTasks();
+    const { app, setDelegationAdapter } = await started();
+    await vi.advanceTimersByTimeAsync(REFRESH_MS);
+    await settle();
+    const again = app.startSync("https://relay.test");
+    await settle();
+    await again;
+    await settle();
+    const st = delegate(latestAdapter(setDelegationAdapter));
+    await settle();
+    tasks.complete("plan-1");
+    await settle();
+
+    expect(st.outcome).toBe("resolved"); // on the frame, no query needed
+    expect(tasks.admitted()).toBe(1);
+    app.stopSync();
+    app.stop();
+  });
+});

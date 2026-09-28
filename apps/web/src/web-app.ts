@@ -3711,6 +3711,26 @@ export class UnbootedWebApp {
       this._motebitId;
 
     const localEventStore = this._localEventStore;
+    // startSync again without stopSync: the previous session ends here, in
+    // one synchronous step, before this one awaits anything. Its frame
+    // handler is detached only TOGETHER with the socket it listens on —
+    // never leaving that socket open and deaf — and its refresh timer stops
+    // (a refresh already minting sees the change and retires its own
+    // socket). A delegation it had in flight asks the relay for its result
+    // (#816).
+    if (this._wsTokenRefreshTimer != null) {
+      clearInterval(this._wsTokenRefreshTimer);
+      this._wsTokenRefreshTimer = null;
+    }
+    if (this._wsUnsubOnCustom) {
+      this._wsUnsubOnCustom();
+      this._wsUnsubOnCustom = null;
+    }
+    if (this._wsUnsubOnEvent) {
+      this._wsUnsubOnEvent();
+      this._wsUnsubOnEvent = null;
+    }
+    this._wsAdapter?.disconnect();
     const wsAdapter = new WebSocketEventStoreAdapter({
       url: wsUrl,
       motebitId: this._motebitId,
@@ -3899,7 +3919,6 @@ export class UnbootedWebApp {
         }
       })();
     };
-    if (this._wsUnsubOnCustom) this._wsUnsubOnCustom();
     this._wsUnsubOnCustom = wsAdapter.onCustomMessage(onRelayFrame);
 
     // Encrypted wrapper for outbound events, over whichever socket adapter is
