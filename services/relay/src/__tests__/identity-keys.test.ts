@@ -466,18 +466,30 @@ describe("identity-keys", () => {
       expect(await rotateOwn(mid, "genesis", kp, next)).toBe(200);
     });
 
-    it("keyless /agents/register writes main's exact registry value (first-listed keyed device) and no holder (build 4, §5i)", async () => {
+    it("keyless /agents/register never writes a device row's key (#875 review): holder, else the registry on file, else the bearer's own verified key, else ''", async () => {
+      // The operator's keyless registration proves no key: a device row is
+      // not evidence (pairing claims write unproven rows), so '' — never
+      // main's first-listed row.
       plantDevice(db, "kl-agree", "d1", A);
       expect((await registerAsOperator("kl-agree", {})).status).toBe(200);
-      expect(registryKey(db, "kl-agree")).toBe(A);
+      expect(registryKey(db, "kl-agree")).toBe("");
       expect(holderRow(db, "kl-agree")).toBeUndefined();
       plantDevice(db, "kl-dis", "kd1", A);
       plantDevice(db, "kl-dis", "kd2", B);
       expect((await registerAsOperator("kl-dis", {})).status).toBe(200);
-      // Main's first-listed row (not DA5's ''): the registry is discovery and
-      // departure input, never served, so it must equal main's exactly.
-      expect(registryKey(db, "kl-dis")).toBe(A);
+      expect(registryKey(db, "kl-dis")).toBe("");
       expect(holderRow(db, "kl-dis")).toBeUndefined();
+      // A registry key already on file is kept, whoever registers keyless.
+      plantRegistry(db, "kl-keep", B);
+      plantDevice(db, "kl-keep", "kk1", A);
+      expect((await registerAsOperator("kl-keep", {})).status).toBe(200);
+      expect(registryKey(db, "kl-keep")).toBe(B);
+      // A device's keyless registration writes the key its own token verified under.
+      const own = await generateKeypair();
+      plantDevice(db, "kl-own", "stranger-row", A);
+      plantDevice(db, "kl-own", "own", hex(own));
+      expect((await registerAsDevice("kl-own", "own", own, {})).status).toBe(200);
+      expect(registryKey(db, "kl-own")).toBe(hex(own));
       // "" is absent, not malformed (DB4); a malformed non-empty key is refused.
       expect((await registerAsOperator("kl-dis", { public_key: "" })).status).toBe(200);
       expect((await registerAsOperator("kl-dis", { public_key: "zz" })).status).toBe(400);
@@ -565,14 +577,16 @@ describe("identity-keys", () => {
   });
 
   describe("G1 — 'no key on file' is not ownerless", () => {
-    it("(a) exactly main's outcome, and nothing unproven is SERVED: the owner's key (first-listed) blocks X; the owner rotates", async () => {
+    it("(a) nothing unproven reaches the registry or is SERVED: X is refused without proof; the owner rotates", async () => {
       const owner = await generateKeypair();
       const paired = await generateKeypair();
       plantDevice(db, "g1a", "owner", hex(owner));
       plantDevice(db, "g1a", "paired", hex(paired));
-      // Keyless: main's first-listed keyed row — here the owner's (build 4, §5i).
+      // Keyless under the operator: no key is proven, so '' (#875 review) —
+      // never main's first-listed row, which any device can steer by
+      // re-registering its own row.
       expect((await registerAsOperator("g1a", {})).status).toBe(200);
-      expect(registryKey(db, "g1a")).toBe(hex(owner));
+      expect(registryKey(db, "g1a")).toBe("");
       const x = await generateKeypair();
       expect((await registerAsDevice("g1a", "paired", paired, { public_key: hex(x) })).status).toBe(
         400,

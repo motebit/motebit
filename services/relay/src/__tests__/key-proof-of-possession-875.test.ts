@@ -513,3 +513,144 @@ describe("/agents/register: a body key the request does not prove never enters",
     expect(rowsFor(svc)).toMatchObject({ registry: 1, holder: 1 });
   });
 });
+
+describe("a device row is never evidence of the identity's key (#875 review round 2)", () => {
+  /** X (legacy, register-self K_X) pairs itself claiming K_V unsigned and approves it. */
+  async function launder() {
+    const xKp = await generateKeypair();
+    const vKp = await generateKeypair();
+    const x = `legacy-${crypto.randomUUID()}`;
+    expect((await registerSelf(x, "x-own", xKp)).status).toBe(201);
+    const dt = (
+      await mintAudienceToken({ mid: x, did: "x-own", aud: "device:auth" }, xKp.privateKey)
+    ).token;
+    const post = async (path: string, body: unknown, auth?: string) => {
+      const res = await relay.app.request(path, {
+        method: "POST",
+        headers: { ...JSON_HEADERS, ...(auth != null ? { Authorization: `Bearer ${auth}` } : {}) },
+        body: JSON.stringify(body),
+      });
+      return {
+        status: res.status,
+        json: (await res.json().catch(() => null)) as Record<string, unknown>,
+      };
+    };
+    const init = await post("/pairing/initiate", {}, dt);
+    await post("/pairing/claim", {
+      pairing_code: init.json.pairing_code,
+      device_name: "fake",
+      public_key: hex(vKp),
+    });
+    expect((await post(`/pairing/${String(init.json.pairing_id)}/approve`, {}, dt)).status).toBe(
+      200,
+    );
+    // Re-register X's own row so the laundered row is listed FIRST (INSERT OR
+    // REPLACE moves X's row to the end) — main's "first-listed" read.
+    expect((await registerSelf(x, "x-own", xKp)).status).toBeLessThan(300);
+    return { x, xKp, vKp };
+  }
+  const registryKey = (mid: string) =>
+    (
+      relay.moteDb.db
+        .prepare("SELECT public_key FROM agent_registry WHERE motebit_id = ?")
+        .get(mid) as { public_key: string } | undefined
+    )?.public_key;
+
+  it("keyless /agents/register writes the bearer's own verified key, never the laundered device row; discover serves X's key", async () => {
+    const { x, xKp, vKp } = await launder();
+    const first = relay.moteDb.db
+      .prepare("SELECT public_key FROM devices WHERE motebit_id = ? AND public_key != '' LIMIT 1")
+      .get(x) as { public_key: string };
+    expect(first.public_key, "arrange: V's key is the first-listed row").toBe(hex(vKp));
+    expect((await registerAsDevice(x, "x-own", xKp, {})).status).toBe(200);
+    expect(registryKey(x)).toBe(hex(xKp));
+    const disc = (await (await relay.app.request(`/api/v1/discover/${x}`)).json()) as {
+      public_key?: string;
+    };
+    expect(disc.public_key).not.toBe(hex(vKp));
+  });
+
+  it("the operator's keyless registration writes '' rather than any device row", async () => {
+    const { x, vKp } = await launder();
+    expect((await registerAsOperator(x, {})).status).toBe(200);
+    expect(registryKey(x)).toBe("");
+    expect(registryKey(x)).not.toBe(hex(vKp));
+  });
+
+  it("GET /agent/:id/capabilities never serves a device row as the identity's public_key or did", async () => {
+    const { x, vKp } = await launder();
+    const caps = (await (await relay.app.request(`/agent/${x}/capabilities`)).json()) as {
+      public_key: string;
+      did?: string;
+    };
+    expect(caps.public_key).not.toBe(hex(vKp));
+    expect(caps.did).not.toBe(hexPublicKeyToDidKey(hex(vKp)));
+  });
+
+  it("revoke-credential as ISSUER needs the key the caller's token verified under — a laundered device row does not make X the issuer of V's credentials", async () => {
+    const { x, xKp, vKp } = await launder();
+    const subject = `subj-${crypto.randomUUID()}`;
+    const credId = `urn:uuid:${crypto.randomUUID()}`;
+    relay.moteDb.db
+      .prepare(
+        `INSERT INTO relay_credentials (credential_id, subject_motebit_id, issuer_did, credential_type, credential_json, issued_at)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        credId,
+        subject,
+        hexPublicKeyToDidKey(hex(vKp)),
+        "AgentReputationCredential",
+        "{}",
+        Date.now(),
+      );
+    const revokeAs = async (mid: string, did: string, kp: KeyPair) => {
+      const { token } = await mintAudienceToken({ mid, did, aud: "admin:query" }, kp.privateKey);
+      return relay.app.request(`/api/v1/agents/${subject}/revoke-credential`, {
+        method: "POST",
+        headers: { ...JSON_HEADERS, Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ credential_id: credId }),
+      });
+    };
+    expect((await revokeAs(x, "x-own", xKp)).status).toBe(403);
+    // V itself — the real issuer, its token verified under K_V — may.
+    const v = `legacy-${crypto.randomUUID()}`;
+    expect((await registerSelf(v, "v-own", vKp)).status).toBe(201);
+    expect((await revokeAs(v, "v-own", vKp)).status).toBe(200);
+  });
+
+  it("the relay's own reputation credential names the subject by evidence (holder or did:motebit), never a device row", async () => {
+    await relay.close();
+    relay = await createTestRelay({ issueCredentials: true });
+    const { x, vKp } = await launder();
+    relay.moteDb.db
+      .prepare(
+        `INSERT INTO relay_settlements (settlement_id, allocation_id, task_id, motebit_id, receipt_hash, ledger_hash, amount_settled, platform_fee, platform_fee_rate, status, settled_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(`s-${crypto.randomUUID()}`, "a", "t", x, "h", null, 0, 0, 0.05, "completed", Date.now());
+    const res = await relay.app.request(`/api/v1/credentials/${x}/reputation`, {
+      method: "POST",
+      headers: JSON_AUTH,
+    });
+    expect(res.status).toBe(200);
+    const vc = ((await res.json()) as { credential: { credentialSubject: { id: string } } })
+      .credential;
+    expect(vc.credentialSubject.id).toBe(`did:motebit:${x}`);
+    expect(vc.credentialSubject.id).not.toBe(hexPublicKeyToDidKey(hex(vKp)));
+  });
+
+  it("the bearer-fallback clause: a service identity with no device row registers the registry key its token verified under", async () => {
+    const kp = await generateKeypair();
+    const svc = `svc-${crypto.randomUUID()}`;
+    relay.moteDb.db
+      .prepare(
+        "INSERT INTO agent_registry (motebit_id, public_key, endpoint_url, capabilities, registered_at, last_heartbeat, expires_at) VALUES (?, ?, ?, '[]', 1, 1, ?)",
+      )
+      .run(svc, hex(kp), "http://127.0.0.1:9999/mcp", Date.now() + 86_400_000);
+    // No device row for this did: the middleware verifies under the registry
+    // (holder-else-registry fallback), and that is the bearer's verified key.
+    const res = await registerAsDevice(svc, "svc-no-row", kp, { public_key: hex(kp) });
+    expect(res.status, JSON.stringify(res.json)).toBe(200);
+  });
+});

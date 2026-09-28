@@ -1710,7 +1710,15 @@ describe("a recorded rotation ends the old key here", () => {
     expect(r1.status).toBe(200);
     expect(registryKey(mid)).toBe(hex(k2));
 
+    // A blanked registry slot — what main's keyless master registration
+    // wrote for a device-less identity. Since #875 a keyless registration
+    // keeps the registry key on file, so the state is planted as a
+    // pre-#875 relay left it; the defense under test is applySuccession's.
     expect(await master({})).toBe(200);
+    expect(registryKey(mid)).toBe(hex(k2));
+    relay.moteDb.db
+      .prepare("UPDATE agent_registry SET public_key = '' WHERE motebit_id = ?")
+      .run(mid);
     expect(registryKey(mid)).toBe("");
     expect(await registerSelf(mid, `${mid}-laptop`, k1)).toBe(201);
     expect(await registerAgent(mid, k1)).toBe(200);

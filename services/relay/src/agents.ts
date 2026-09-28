@@ -865,9 +865,14 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
     const onlinePeers = connections.get(motebitId);
     const onlineCount = onlinePeers ? onlinePeers.length : 0;
 
-    // Find the first device with a public key for capabilities
-    const deviceWithKey = devices.find((d) => d.public_key);
-    const publicKey = deviceWithKey ? deviceWithKey.public_key : "";
+    // The identity's key as this route SERVES it: the proven holder, else the
+    // registry's discovery copy (written only on evidence since #875), else
+    // ''. Never a device row (#875 review): `/pairing/claim` writes any key
+    // unsigned, so "the first device with a key" served a laundered key as
+    // this identity's `public_key` and `did`. The per-device list below is a
+    // list of rows, each attested by its own credential, not an identity key.
+    const publicKey =
+      holderKeyOf(moteDb.db, motebitId) ?? registryKeyOf(moteDb.db, motebitId) ?? "";
 
     let did: string | undefined;
     try {
@@ -1338,26 +1343,6 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
           "Invalid 'public_key' — must be a 64-char LOWERCASE hex string (32 bytes Ed25519 public key)",
       });
     }
-    // Keyless: the holder when the identity has proven one; otherwise EXACTLY
-    // main's value — the first-listed keyed device row, else ''. Build 4 (§5i):
-    // the registry is never SERVED (the holder is), so main's first-listed
-    // write no longer mints a served key (R3's harm); and departure for an
-    // unfilled identity is main's rule, so its INPUT must be main's too — a
-    // different registry value here (DA5's '') refused an owner main admits
-    // (build-4 differential, G1a).
-    let publicKey: string;
-    if (keyFromBody) {
-      publicKey = rawBodyKey;
-    } else {
-      const held = holderKeyOf(moteDb.db, motebitId);
-      if (held !== null) {
-        publicKey = held;
-      } else {
-        const devices = await identityManager.listDevices(motebitId);
-        publicKey = devices.find((d) => d.public_key)?.public_key ?? "";
-      }
-    }
-
     // The key that verified this bearer, when a device row verified it: the
     // row its `did` names. (The middleware falls back to the holder, else the
     // registry, only when no row exists for that did — and then this stays
@@ -1374,6 +1359,49 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
     if (bearerClaims?.mid === motebitId && typeof bearerClaims.did === "string") {
       const signer = await identityManager.loadDeviceById(bearerClaims.did, motebitId);
       if (signer?.public_key) callerDeviceKey = signer.public_key;
+    }
+    // The key the agent-route middleware verified this bearer under
+    // (lowercased; the device row, or its holder-else-registry fallback for a
+    // `did` with no row — auth.ts `onVerified`). Set only for a verified
+    // device token, never for the master token.
+    const callerVerifiedKey = c.get("callerVerifiedKey" as never) as string | undefined;
+
+    // Keyless (#875 review): a device row is NEVER evidence of the identity's
+    // key — `/pairing/claim` writes any canonical key unsigned, and main's
+    // "first-listed keyed device row" let X launder V's key into X's registry
+    // (pair claiming K_V, re-register-self to reorder rows, register keyless).
+    // So the keyless value is, in order: the proven holder; else the registry
+    // key already on file, UNCHANGED (no key enters); else the key this
+    // bearer's token verified under (its own device row — proven by the
+    // token's signature in this request); else ''.
+    //
+    // G1a / departure (§5i build 4 wanted main's INPUTS for an unfilled
+    // identity's departure). Departure reads holder → registry → chain →
+    // device row. With a registry key on file the value is main's (main either
+    // wrote the same key or refused for want of a succession). With none,
+    // main wrote whichever row happened to be listed first — a choice any
+    // device of the identity can steer (re-registering its own row reorders
+    // them, the reviewer's repro), so main's owner protection there was never
+    // more than row order. Writing the bearer's own proven key is exactly what
+    // that device's KEYED registration (body = its own key, admitted as the
+    // bearer's key) writes on main and here, so the keyless door grants no
+    // device anything its keyed door did not. The one outcome that differs
+    // from main: a paired (no-key-transfer) device that registers keyless
+    // FIRST on an identity with no registry row now writes its own key where
+    // main might have written the owner's by row order. That is the stated
+    // G1a cost, not a departure requirement.
+    let publicKey: string;
+    if (keyFromBody) {
+      publicKey = rawBodyKey;
+    } else {
+      publicKey =
+        holderKeyOf(moteDb.db, motebitId) ??
+        registryKeyOf(moteDb.db, motebitId) ??
+        (callerVerifiedKey !== undefined &&
+        callerDeviceKey !== undefined &&
+        callerDeviceKey.toLowerCase() === callerVerifiedKey
+          ? callerDeviceKey
+          : "");
     }
 
     // --- Succession chain validation on re-registration ---
@@ -1405,23 +1433,12 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
     if (keyFromBody) {
       const lowered = publicKey.toLowerCase();
       const heldBefore = new Set([...keysHeldBy(moteDb.db, motebitId)].map((k) => k.toLowerCase()));
-      // The key the bearer's token verified under: its device row, else the
-      // middleware's fallback for a `did` with no row (index.ts
-      // `agentRegistryKeyLookup`: holder, else registry).
-      let bearerVerifiedKey = callerDeviceKey;
-      if (
-        bearerVerifiedKey === undefined &&
-        bearerClaims?.mid === motebitId &&
-        typeof bearerClaims.did === "string" &&
-        (await identityManager.loadDeviceById(bearerClaims.did, motebitId)) == null
-      ) {
-        bearerVerifiedKey =
-          verificationKeyFor(moteDb.db, motebitId, registryKeyOf(moteDb.db, motebitId)) ??
-          undefined;
-      }
+      // The key the bearer's token verified under — its device row, else the
+      // middleware's fallback for a `did` with no row (holder, else
+      // registry) — as the middleware recorded it (`callerVerifiedKey`).
       const holderKey = holderKeyOf(moteDb.db, motebitId);
       const provenByRequest =
-        (bearerVerifiedKey !== undefined && bearerVerifiedKey.toLowerCase() === lowered) ||
+        (callerVerifiedKey !== undefined && callerVerifiedKey === lowered) ||
         (holderKey !== null && holderKey.toLowerCase() === lowered);
       const carriedBySuccession =
         keyOnFileForRegister !== null && keyOnFileForRegister !== publicKey;
