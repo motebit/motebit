@@ -3,6 +3,9 @@ import type { ToolDefinition, ToolHandler } from "@motebit/sdk";
 /** @internal */
 export const selfReflectDefinition: ToolDefinition = {
   name: "self_reflect",
+  // Owner interior (reads and reflects on the owner's interior): never served to another
+  // principal, never offered to a foreign principal's turn (#880).
+  localOnly: true,
   mode: "api",
   description:
     "Reflect on your recent interactions. Produces a self-assessment, insights about your behavior, " +

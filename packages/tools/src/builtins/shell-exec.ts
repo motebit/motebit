@@ -63,6 +63,9 @@ export interface ShellExecConfig {
 /** @internal */
 export const shellExecDefinition: ToolDefinition = {
   name: "shell_exec",
+  // Owner interior (executes commands on this machine): never served to another
+  // principal, never offered to a foreign principal's turn (#880).
+  localOnly: true,
   mode: "api",
   description:
     "Execute a shell command and return stdout/stderr. Requires user approval. Use for running scripts, checking system state, etc.",

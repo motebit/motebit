@@ -22,7 +22,8 @@
 
 import { embedText } from "@motebit/memory-graph";
 import { MemoryClass } from "@motebit/policy";
-import { EventType, SensitivityLevel, isSensitivityLevel } from "@motebit/sdk";
+import { AgentTrustLevel, EventType, SensitivityLevel, isSensitivityLevel } from "@motebit/sdk";
+import type { TurnContext } from "@motebit/sdk";
 import { COMMAND_DEFINITIONS, executeCommand } from "./commands/index.js";
 import type { MotebitRuntime } from "./motebit-runtime.js";
 
@@ -127,6 +128,43 @@ function reqString(kind: string, params: Record<string, unknown>, field: string)
   return value;
 }
 
+const TRUST_LEVELS: ReadonlySet<string> = new Set(Object.values(AgentTrustLevel));
+
+/**
+ * The policy context for an attached MCP frontend's call. The frontend
+ * serves OTHER principals and forwards the verified caller of the
+ * request it is answering (`params.caller`, #880); without it the
+ * coordinator evaluated every remote call as the owner's own turn, so no
+ * caller-scoped rule (Blocked, Unknown ⇒ approval, a tool's own approval
+ * floor for remote callers) could fire on this door.
+ *
+ * A forwarded claim may NARROW the coordinator's evaluation, never widen
+ * it: `trusted` is clamped to `verified`. The policy gate already caps a
+ * Trusted caller at the owner's band (#880 E); the clamp keeps a frontend's
+ * forwarded claim from mattering even if that cap ever regressed.
+ */
+function attachedCallContext(
+  runtime: MotebitRuntime,
+  kind: string,
+  params: Record<string, unknown>,
+): TurnContext {
+  const ctx = runtime.policy.createTurnContext();
+  const caller = optObject(kind, params, "caller");
+  if (caller === undefined) return ctx;
+  const motebitId = caller["motebit_id"];
+  const trust = caller["trust_level"];
+  if (typeof motebitId !== "string" || motebitId === "") {
+    throw bad(kind, 'param "caller.motebit_id" must be a non-empty string');
+  }
+  if (typeof trust !== "string" || !TRUST_LEVELS.has(trust)) {
+    throw bad(kind, 'param "caller.trust_level" must be an agent trust level');
+  }
+  const level = trust as AgentTrustLevel;
+  ctx.callerMotebitId = motebitId;
+  ctx.callerTrustLevel = level === AgentTrustLevel.Trusted ? AgentTrustLevel.Verified : level;
+  return ctx;
+}
+
 function reqBoolean(kind: string, params: Record<string, unknown>, field: string): boolean {
   const value = params[field];
   if (typeof value !== "boolean") throw bad(kind, `param "${field}" must be a boolean`);
@@ -204,7 +242,7 @@ export async function resolveAttachedRead(
       return runtime.policy.validate(
         def,
         optObject(kind, params, "args") ?? {},
-        runtime.policy.createTurnContext(),
+        attachedCallContext(runtime, kind, params),
       );
     }
     case "memory_recall": {
@@ -309,7 +347,11 @@ export async function resolveAttachedAct(
       if (def.localOnly === true) return { ok: false, error: `Tool "${name}" is not served.` };
       // Defense in depth: the gate runs here regardless of any
       // pre-flight the frontend claims to have done.
-      const decision = runtime.policy.validate(def, args, runtime.policy.createTurnContext());
+      const decision = runtime.policy.validate(
+        def,
+        args,
+        attachedCallContext(runtime, kind, params),
+      );
       if (!decision.allowed) {
         return { ok: false, error: `denied by policy: ${decision.reason ?? "denied"}` };
       }

@@ -143,7 +143,13 @@ describe("standing-delegation hard-zero dry-run — the never-reached R4 path, f
     const decision = bandedGate().validate(
       moneyTool,
       {},
-      ctx({ callerTrustLevel: AgentTrustLevel.Trusted, verifiedGrant: verifiedGrant! }),
+      // The grant's signed scope rides the turn, as sendMessageStreaming threads it
+      // (#880 E: the Trusted bypass no longer skips step 8c's scope check).
+      ctx({
+        callerTrustLevel: AgentTrustLevel.Trusted,
+        delegationScope: grant.scope,
+        verifiedGrant: verifiedGrant!,
+      }),
     );
     // step 8b does not re-raise: the verified grant clears R4 auto-execution.
     expect(decision.allowed).toBe(true);
@@ -187,7 +193,13 @@ describe("standing-delegation hard-zero dry-run — the never-reached R4 path, f
     const gateDecision = bandedGate().validate(
       moneyTool,
       {},
-      ctx({ callerTrustLevel: AgentTrustLevel.Trusted, verifiedGrant: verifiedGrant! }),
+      // The grant's signed scope rides the turn, as sendMessageStreaming threads it
+      // (#880 E: the Trusted bypass no longer skips step 8c's scope check).
+      ctx({
+        callerTrustLevel: AgentTrustLevel.Trusted,
+        delegationScope: grant.scope,
+        verifiedGrant: verifiedGrant!,
+      }),
     );
     expect(gateDecision.requiresApproval).toBe(false); // gate says: go
 

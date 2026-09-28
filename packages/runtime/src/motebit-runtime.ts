@@ -532,8 +532,18 @@ export class MotebitRuntime {
    * `enableInvokeCapability` — any surface that can delegate can also
    * fetch a result it already paid for. Null until then.
    */
-  /** Externally submitted agent tasks currently running — see `handleAgentTask`. */
-  private _foreignTasksInFlight = 0;
+  /**
+   * True while the in-flight TURN runs ANOTHER principal's words — a
+   * `sendMessage*` call made with `foreignPrincipal: true` (every
+   * `handleAgentTask` turn passes it). Set only after the `_isProcessing`
+   * guard admits the turn and cleared in its `finally`, so it belongs to
+   * exactly one turn: a foreign task's post-turn tail (receipt, trust
+   * bump, events) or a foreign call refused by the guard never marks an
+   * owner turn (#880 round 2).
+   */
+  private _foreignTurn = false;
+  /** True while resuming a foreign principal's paused approval (#880). Same single-writer rule. */
+  private _foreignResume = false;
   private _taskQueryCoords: {
     syncUrl: string;
     authToken: (audience?: import("@motebit/protocol").TokenAudience) => Promise<string>;
@@ -916,6 +926,14 @@ export class MotebitRuntime {
     this._offerMoneyToolsToMinimalModels = config.offerMoneyToolsToMinimalModels ?? false;
     this.scopedToolRegistry = new ScopedToolRegistry(this.toolRegistry, {
       allows: (toolName) => {
+        // Foreign-principal turn (#880): a customer's `motebit_task`
+        // prompt (or a caller's `motebit_query`) runs this motebit's
+        // loop, and must not be able to steer it into the owner's
+        // interior — read_file into the receipt, rewrite_memory, the
+        // transcripts. Every `localOnly` tool is omitted from list() and
+        // refused on execute() while such a turn is in flight. Composes
+        // by AND with the tier and presence scopes below.
+        if (this.isForeignPrincipalTurn() && this.isLocalOnlyTool(toolName)) return false;
         // Capability tier (#501): a minimal-tier model is never OFFERED an
         // R4_MONEY tool — omitted from list(), fail-closed on execute().
         // Composes by AND with the presence scope below; reads the CURRENT
@@ -933,6 +951,10 @@ export class MotebitRuntime {
         }
         return false;
       },
+      refusal: (toolName) =>
+        this.isForeignPrincipalTurn() && this.isLocalOnlyTool(toolName)
+          ? `Tool "${toolName}" acts for this motebit's owner and is not available to another principal's task`
+          : undefined,
     });
 
     // Core engines
@@ -1347,6 +1369,14 @@ export class MotebitRuntime {
       logToolUsed: (n, r) => void this.logToolUsed(n, r),
       getLiveHistory: () => this.conversation.liveHistory,
       getToolRegistry: () => this.toolRegistry,
+      isForeignPrincipalTurn: () => this.isForeignPrincipalTurn(),
+      enterForeignPrincipalTurn: () => {
+        this._foreignResume = true;
+        return () => {
+          this._foreignResume = false;
+        };
+      },
+      loopDepsForTurn: (deps) => this.loopDepsForTurn(deps),
       sanitizeToolResult: (result, toolName) => {
         if (typeof this.policy.sanitizeAndCheck === "function") {
           const check = this.policy.sanitizeAndCheck(result, toolName);
@@ -1573,6 +1603,40 @@ export class MotebitRuntime {
    * `delegate_to_agent` (R2 without a payment builder) stays offered:
    * the tool crosses the withholding line exactly when it can move money.
    */
+  /**
+   * True while the in-flight turn runs another principal's words: a turn
+   * started with `foreignPrincipal: true` (every relay- or MCP-dispatched
+   * `handleAgentTask` turn, and `motebit_query`), or the resume of such a
+   * turn's paused approval. TURN-scoped, never runtime-wide: it reads only
+   * flags that the turn itself set under the `_isProcessing` guard (#880
+   * round 2 — a runtime-wide task counter stayed up through a task's tail
+   * and leaked the foreign scope onto an owner turn started in it). The
+   * one predicate every foreign-turn decision reads: the loop's tool
+   * scope, the no-approval-channel gate view, the pending-approval mark,
+   * and the owner-only delegation reads (#874), which run as tool handlers
+   * inside a turn.
+   */
+  private isForeignPrincipalTurn(): boolean {
+    return this._foreignTurn || this._foreignResume;
+  }
+
+  /**
+   * The loop dependencies for the turn about to start. A foreign
+   * principal's turn gets the policy gate's no-approval-channel view
+   * (#880): a call that would pause for the owner's approval is refused
+   * instead, so no approval can outlive the task and later resume that
+   * principal's prompt inside the owner's conversation.
+   */
+  private loopDepsForTurn<D extends { policyGate?: unknown }>(deps: D): D {
+    if (!this.isForeignPrincipalTurn()) return deps;
+    return { ...deps, policyGate: this.policy.withoutApprovalChannel() };
+  }
+
+  /** True when `toolName` is registered with `localOnly: true`. */
+  private isLocalOnlyTool(toolName: string): boolean {
+    return this.toolRegistry.list().some((t) => t.name === toolName && t.localOnly === true);
+  }
+
   private tierAllowsTool(toolName: string): boolean {
     if (this._offerMoneyToolsToMinimalModels) return true;
     const model = this.provider?.model ?? null;
@@ -2237,7 +2301,18 @@ export class MotebitRuntime {
     }
   }
 
-  async sendMessage(text: string, runId?: string): Promise<TurnResult> {
+  async sendMessage(
+    text: string,
+    runId?: string,
+    options?: {
+      /**
+       * The text is ANOTHER principal's (serve's `motebit_query`), not the
+       * owner's: the turn is offered no `localOnly` tool (#880). Narrowing
+       * only — it can never widen what a turn may do.
+       */
+      foreignPrincipal?: boolean;
+    },
+  ): Promise<TurnResult> {
     // Privacy doctrine gate (CLAUDE.md): "Medical/financial/secret never
     // reach external AI." Fires BEFORE the loopDeps check so a runtime
     // with elevated session sensitivity + non-sovereign provider
@@ -2249,6 +2324,7 @@ export class MotebitRuntime {
     if (this._isProcessing) throw new Error("Already processing a message");
 
     this._isProcessing = true;
+    this._foreignTurn = options?.foreignPrincipal === true;
     // Preempt any in-flight consolidation cycle; transition presence to
     // responsive so surfaces stop showing the tending indicator. The cycle
     // sees the abort on its next phase checkpoint and yields.
@@ -2261,7 +2337,7 @@ export class MotebitRuntime {
       const selfAwareness = this.buildSelfAwareness();
       const selectedSkills = await this.resolveSkillsForTurn(text);
       await this.emitSkillLoadEvents(selectedSkills, runId);
-      const result = await runTurn(clearedLoopDeps, text, {
+      const result = await runTurn(this.loopDepsForTurn(clearedLoopDeps), text, {
         conversationHistory: trimmed,
         previousCues: this.latestCues,
         runId,
@@ -2289,6 +2365,7 @@ export class MotebitRuntime {
     } finally {
       this.state.pushUpdate({ processing: 0.1, attention: 0.3 });
       this._isProcessing = false;
+      this._foreignTurn = false;
       // Return presence to idle so the next idle-tick can fire. enterIdle
       // is unconditional here — if a cycle is still unwinding, its
       // finally's exitTending will see mode!=tending and no-op.
@@ -2655,6 +2732,13 @@ export class MotebitRuntime {
       delegationScope?: string;
       suppressHistory?: boolean;
       /**
+       * The text is ANOTHER principal's — a relay- or MCP-dispatched task
+       * (`handleAgentTask` sets it) — not the owner's: the turn is offered
+       * no `localOnly` tool, and a call naming one is refused (#880).
+       * Narrowing only — it can never widen what a turn may do.
+       */
+      foreignPrincipal?: boolean;
+      /**
        * Attestation that the user typed-and-sent this message
        * themselves. Surfaces stamp this on every chat-input submit
        * (kind: "user-typed-intent"); the runtime threads it through
@@ -2723,6 +2807,7 @@ export class MotebitRuntime {
     if (this._isProcessing) throw new Error("Already processing a message");
 
     this._isProcessing = true;
+    this._foreignTurn = options?.foreignPrincipal === true;
     // Preempt any in-flight consolidation cycle; transition presence to
     // responsive so surfaces stop showing the tending indicator. The cycle
     // sees the abort on its next phase checkpoint and yields.
@@ -2802,7 +2887,7 @@ export class MotebitRuntime {
       // turn that verified it.
       this._activeTurnGrant = presentedGrant ?? options?.verifiedGrant ?? null;
 
-      const stream = runTurnStreaming(clearedLoopDeps, text, {
+      const stream = runTurnStreaming(this.loopDepsForTurn(clearedLoopDeps), text, {
         conversationHistory: trimmed,
         previousCues: this.latestCues,
         runId,
@@ -2865,6 +2950,7 @@ export class MotebitRuntime {
       this.behavior.setSpeaking(false);
       this.state.pushUpdate({ processing: 0.1, attention: 0.3 });
       this._isProcessing = false;
+      this._foreignTurn = false;
       // Typed-intent consent dies with the turn. Carrying it past the
       // turn boundary would let proactive idle work (which fires
       // through `generateActivation`, never `sendMessageStreaming`)
@@ -2985,17 +3071,13 @@ export class MotebitRuntime {
       return;
     }
     if (!this.loopDeps) throw new Error("AI not initialized — call setProvider() first");
-    // While another principal's task runs, owner-only reads (the paid-task
-    // ledger and the results it bought) refuse: a customer's prompt must
-    // not be able to make this motebit's model list or fetch work bought
-    // for someone else (#874 review). Counted, not a boolean, so
-    // overlapping tasks cannot clear each other's mark.
-    this._foreignTasksInFlight++;
-    try {
-      yield* handleAgentTaskFn(this.agentTaskDeps, task, privateKey, deviceId, publicKey, options);
-    } finally {
-      this._foreignTasksInFlight--;
-    }
+    // The task's turn is foreign: `handleAgentTaskFn` starts it with
+    // `foreignPrincipal: true`, so while it runs, owner-only reads (the
+    // paid-task ledger, #874) refuse and no `localOnly` tool is offered
+    // (#880). The mark is the TURN's — it ends with the turn, before this
+    // task's receipt tail, so an owner turn admitted during the tail is
+    // the owner's (#880 round 2).
+    yield* handleAgentTaskFn(this.agentTaskDeps, task, privateKey, deviceId, publicKey, options);
   }
 
   /**
@@ -4532,8 +4614,10 @@ export class MotebitRuntime {
 
   /**
    * Bump trust level for a remote motebit based on a verified execution receipt.
-   * Trust progression: Unknown → FirstContact (on first interaction) → Verified (after 5+ verified).
-   * Never auto-promotes to Trusted — requires explicit owner action.
+   * Trust progression: Unknown → FirstContact (on first interaction) → Verified (after 5+ verified)
+   * → Trusted (20 successes at ≥0.9, `evaluateTrustTransition` in agent-trust.ts). Trusted IS
+   * auto-earned from this motebit's outbound hires — which is why it must not be read as inbound
+   * authority: the policy gate caps a Trusted caller at the owner's band (#880 E).
    */
   private get agentTaskDeps(): AgentTaskHandlerDeps {
     return {
@@ -5584,7 +5668,7 @@ export class MotebitRuntime {
       getActiveGrantId: () => this._activeTurnGrant?.grant_id ?? null,
       paidIntentLedger: this._paidIntentLedger,
       retrieveTaskResult: (taskId) => this.retrieveDelegationResult(taskId),
-      isForeignPrincipalTurn: () => this._foreignTasksInFlight > 0,
+      isForeignPrincipalTurn: () => this.isForeignPrincipalTurn(),
     });
     this._taskQueryCoords ??= { syncUrl: config.syncUrl, authToken: config.authToken };
     // Stash the relay coordinates the deterministic granted-spend path needs

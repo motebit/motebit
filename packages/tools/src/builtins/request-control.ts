@@ -80,6 +80,9 @@ export type RequestControlFlow = () => Promise<RequestControlOutcome>;
 /** @spec motebit/computer-use@1.0 */
 export const requestControlDefinition: ToolDefinition = {
   name: "request_control",
+  // Owner interior (negotiates co-browse control with the owner): never served to another
+  // principal, never offered to a foreign principal's turn (#880).
+  localOnly: true,
   mode: "api",
   description:
     "Ask the user to grant motebit drive control of the isolated browser. Call this when `computer` failed with reason `not_in_control` — it rings the slab's control band so the user can Grant or Deny. Resolves with one of: `granted` (retry `computer` now), `denied` (ask the user out-of-band), `timeout` (no response), `already_in_control` (you already have it — retry `computer` directly), `request_pending` (an earlier request is still awaiting the user), `session_paused` (ask the user to resume first).",

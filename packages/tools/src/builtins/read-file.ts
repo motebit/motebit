@@ -6,6 +6,9 @@ import { isPathAllowed } from "./path-sandbox.js";
 /** @internal */
 export const readFileDefinition: ToolDefinition = {
   name: "read_file",
+  // Owner interior (reads this machine's filesystem): never served to another
+  // principal, never offered to a foreign principal's turn (#880).
+  localOnly: true,
   mode: "api",
   description: "Read the contents of a local file. Path is relative to the working directory.",
   inputSchema: {

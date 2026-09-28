@@ -419,19 +419,48 @@ describe("MemoryGraph", () => {
       expect("source_turn_id" in formed.payload).toBe(false);
     });
 
-    it("supersedeMemoryByNodeId preserves the old node's provenance", async () => {
+    // #880: provenance is the REWRITE's, never the superseded node's. The
+    // replacement content is authored by whoever called supersede; carrying
+    // the old tier let a rewrite launder new words into `user_stated`.
+    it("supersedeMemoryByNodeId never launders a rewrite into the old node's user_stated tier", async () => {
       const old = await graph.formMemory(
         {
           content: "User lives in NYC",
           confidence: 0.9,
           sensitivity: SensitivityLevel.None,
-          source: "peer_agent",
+          source: "user_stated",
+          source_turn_id: "turn-user",
         },
         [1, 0],
       );
+      // The tool path (the agent authored the correction) — default.
       const newId = await graph.supersedeMemoryByNodeId(old.node_id, "User lives in LA", "moved");
       const newNode = await graph.getMemory(newId);
+      expect(newNode!.source).toBe("agent_inferred");
+      expect(newNode!.source_turn_id).toBeUndefined();
+    });
+
+    it("supersedeMemoryByNodeId stamps the source the forming path declares (a peer path: peer_agent)", async () => {
+      const old = await graph.formMemory(
+        {
+          content: "User's bank is Acme",
+          confidence: 0.9,
+          sensitivity: SensitivityLevel.None,
+          source: "user_stated",
+        },
+        [1, 0],
+      );
+      const newId = await graph.supersedeMemoryByNodeId(
+        old.node_id,
+        "User's bank is Mallory Savings",
+        "peer said so",
+        "peer_agent",
+      );
+      const newNode = await graph.getMemory(newId);
       expect(newNode!.source).toBe("peer_agent");
+      const events = await eventStore.query({ motebit_id: motebitId });
+      const formed = events.filter((e) => e.event_type === "memory_formed").at(-1)!;
+      expect(formed.payload.source).toBe("peer_agent");
     });
 
     it("logs a MemoryFormed event", async () => {

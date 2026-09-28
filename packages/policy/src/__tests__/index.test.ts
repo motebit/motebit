@@ -1676,13 +1676,14 @@ describe("PolicyGate — caller trust level", () => {
     };
   }
 
-  it("Trusted caller: needsApproval=false for R2 tools", () => {
+  it("Trusted caller: capped at the owner's policy — R2 needs approval where the owner's does (#880 E)", () => {
     const gate = new PolicyGate({ operatorMode: true });
     const tool = makeTool("write_file", "Write a file");
     const ctx = trustCtx(AgentTrustLevel.Trusted, "trusted-mote");
     const decision = gate.validate(tool, {}, ctx);
     expect(decision.allowed).toBe(true);
-    expect(decision.requiresApproval).toBe(false);
+    // Legacy mode: the owner's own R2 turn needs approval, so a Trusted caller's does too.
+    expect(decision.requiresApproval).toBe(true);
   });
 
   it("Unknown caller: all tools require approval", () => {
@@ -2262,7 +2263,31 @@ describe("PolicyGate — R4 standing-authority invariant", () => {
     expect(decision.requiresApproval).toBe(true);
   });
 
-  it("R4 + verified grant auto-allows", () => {
+  it("R4 + verified in-scope grant auto-allows", () => {
+    const gate = new PolicyGate({
+      requireApprovalAbove: RiskLevel.R1_DRAFT,
+      denyAbove: RiskLevel.R4_MONEY,
+    });
+    const decision = gate.validate(
+      moneyTool,
+      {},
+      ctx({
+        callerTrustLevel: AgentTrustLevel.Trusted,
+        delegationScope: "pay_invoice",
+        verifiedGrant: {
+          grant_id: "0190a0a0-0000-7000-8000-000000000001",
+          verified_at: Date.now(),
+        },
+      }),
+    );
+    expect(decision.allowed).toBe(true);
+    expect(decision.requiresApproval).toBe(false);
+  });
+
+  it("R4 + Trusted caller + a verified grant that does NOT cover the tool still requires approval (#880 E)", () => {
+    // Before #880 E the Trusted bypass cleared approval first, so step 8c's
+    // grant-scope check never ran: any verified grant, whatever its signed
+    // scope, auto-executed money for a Trusted caller.
     const gate = new PolicyGate({
       requireApprovalAbove: RiskLevel.R1_DRAFT,
       denyAbove: RiskLevel.R4_MONEY,
@@ -2273,13 +2298,13 @@ describe("PolicyGate — R4 standing-authority invariant", () => {
       ctx({
         callerTrustLevel: AgentTrustLevel.Trusted,
         verifiedGrant: {
-          grant_id: "0190a0a0-0000-7000-8000-000000000001",
+          grant_id: "0190a0a0-0000-7000-8000-000000000003",
           verified_at: Date.now(),
         },
       }),
     );
     expect(decision.allowed).toBe(true);
-    expect(decision.requiresApproval).toBe(false);
+    expect(decision.requiresApproval).toBe(true);
   });
 
   it("a grant never overrides denyAbove — hard-deny stays hard", () => {
@@ -2307,7 +2332,7 @@ describe("PolicyGate — R4 standing-authority invariant", () => {
     expect(decision.requiresApproval).toBe(true);
   });
 
-  it("R3 + Trusted is unchanged — the invariant binds R4 only", () => {
+  it("R3 + Trusted follows the owner's band — approval where the owner's own R3 needs it (#880 E)", () => {
     const gate = new PolicyGate({
       requireApprovalAbove: RiskLevel.R1_DRAFT,
       denyAbove: RiskLevel.R4_MONEY,
@@ -2321,6 +2346,6 @@ describe("PolicyGate — R4 standing-authority invariant", () => {
       ctx({ callerTrustLevel: AgentTrustLevel.Trusted, callerMotebitId: "trusted-mote" }),
     );
     expect(decision.allowed).toBe(true);
-    expect(decision.requiresApproval).toBe(false);
+    expect(decision.requiresApproval).toBe(true);
   });
 });

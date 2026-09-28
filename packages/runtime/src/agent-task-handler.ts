@@ -49,7 +49,7 @@ export interface AgentTaskHandlerDeps {
   sendMessageStreaming(
     text: string,
     runId?: string,
-    options?: { delegationScope?: string },
+    options?: { delegationScope?: string; foreignPrincipal?: boolean },
   ): AsyncGenerator<StreamChunk>;
 
   /** Save current conversation context for later restoration. */
@@ -105,8 +105,13 @@ export async function* handleAgentTask(
   let toolCallsDenied = 0;
 
   try {
+    // The prompt is another principal's (a customer's, a caller's), so the
+    // turn is foreign: it is offered no `localOnly` tool — the owner's
+    // filesystem, shell, memory and transcripts stay out of a task's reach,
+    // and out of its signed receipt (#880).
     const stream = deps.sendMessageStreaming(task.prompt, undefined, {
       delegationScope: options?.delegatedScope,
+      foreignPrincipal: true,
     });
 
     for await (const chunk of stream) {

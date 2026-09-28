@@ -15,16 +15,29 @@
  */
 
 /** Narrow wire-supplied chat options to the rendering-safe subset. */
-export function pickSafeChatOptions(
-  options: Record<string, unknown> | undefined,
-): { delegationScope?: string; suppressHistory?: boolean } | undefined {
+export function pickSafeChatOptions(options: Record<string, unknown> | undefined):
+  | {
+      delegationScope?: string;
+      suppressHistory?: boolean;
+      foreignPrincipal?: true;
+    }
+  | undefined {
   if (options === undefined) return undefined;
-  const picked: { delegationScope?: string; suppressHistory?: boolean } = {};
+  const picked: { delegationScope?: string; suppressHistory?: boolean; foreignPrincipal?: true } =
+    {};
   if (typeof options["delegationScope"] === "string") {
     picked.delegationScope = options["delegationScope"];
   }
   if (typeof options["suppressHistory"] === "boolean") {
     picked.suppressHistory = options["suppressHistory"];
+  }
+  // `foreignPrincipal` NARROWS the turn (no `localOnly` tool is offered,
+  // #880): an attached `motebit serve` answering another principal's
+  // `motebit_query` sets it. Only the literal `true` crosses — a frame
+  // can mark a turn foreign, never assert it is NOT foreign (absence
+  // already means "the owner's turn", so any other value is dropped).
+  if (options["foreignPrincipal"] === true) {
+    picked.foreignPrincipal = true;
   }
   return picked;
 }

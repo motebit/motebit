@@ -11,8 +11,10 @@ import {
   cmdSelfTest,
   PLANNING_TASK_ROUTER,
   createRelayCapabilitiesFetcher,
+  servedToolNames,
 } from "@motebit/runtime";
 import type { MintToken } from "@motebit/runtime";
+import { attachedServePrincipalDeps, servePrincipalDeps } from "./serve-deps.js";
 import { buildHardwareVerifiers } from "@motebit/verify";
 import { embedText } from "@motebit/memory-graph";
 
@@ -689,10 +691,11 @@ export async function handleRun(config: CliConfig): Promise<void> {
     // heartbeat), never with the operator's sync token and never
     // unauthenticated. See relay-registration.ts.
     if (privKeyBytes && fullConfig.device_id && fullConfig.device_public_key) {
-      const toolNames = runtime
-        .getToolRegistry()
-        .list()
-        .map((t) => t.name);
+      // Advertise only what another principal may be served (#880) — the
+      // same `localOnly` rule web / desktop / mobile advertise by. A
+      // relay-dispatched task runs with no localOnly tool, so advertising
+      // one invites work this motebit will refuse.
+      const toolNames = servedToolNames(runtime.getToolRegistry().list());
       const regBody: Record<string, unknown> = {
         motebit_id: motebitId,
         endpoint_url: syncUrl,
@@ -851,13 +854,10 @@ async function runServeAttached(
     listTools: async () => (await client.query("tools_filtered")) as ToolDefinition[],
     // tools_filtered is already policy-filtered on the coordinator.
     filterTools: (tools) => tools,
-    validateTool: async (tool, args) =>
-      (await client.query("policy_validate", {
-        name: tool.name,
-        args,
-      })) as import("@motebit/sdk").PolicyDecision,
-    executeTool: async (name, args) =>
-      (await client.act("tool_execute", { name, args })) as import("@motebit/sdk").ToolResult,
+    // The request's verified caller travels with every policy question and
+    // every execution, and `motebit_query` is a foreign turn (#880) —
+    // serve-deps.ts, locked by serve-deps.test.ts.
+    ...attachedServePrincipalDeps(client),
 
     getState: async () => (await client.query("state")) as Record<string, unknown>,
 
@@ -883,16 +883,6 @@ async function runServeAttached(
           ok: result.ok,
         })
         .catch(() => {});
-    },
-
-    // The AI loop is the coordinator's — one turn over the chat frame.
-    sendMessage: async (text: string) => {
-      let response = "";
-      for await (const chunk of client.chat(text)) {
-        const c = chunk as { type?: string; text?: string };
-        if (c.type === "text" && typeof c.text === "string") response += c.text;
-      }
-      return { response, memoriesFormed: 0 };
     },
 
     queryMemories: async (query: string, limit?: number) => {
@@ -1233,8 +1223,9 @@ export async function handleServe(config: CliConfig): Promise<void> {
 
     listTools: () => runtime.getToolRegistry().list(),
     filterTools: (tools) => runtime.policy.filterTools(tools),
-    validateTool: (tool, args) =>
-      runtime.policy.validate(tool, args, runtime.policy.createTurnContext()),
+    // The caller in every policy question, and `motebit_query` as a foreign
+    // turn (#880) — serve-deps.ts, locked by serve-deps.test.ts.
+    ...servePrincipalDeps(runtime),
     executeTool: (name, args) => runtime.getToolRegistry().execute(name, args),
 
     getState: () => runtime.getState() as unknown as Record<string, unknown>,
@@ -1271,12 +1262,7 @@ export async function handleServe(config: CliConfig): Promise<void> {
       void runtime.events.append(entry).catch(() => {});
     },
 
-    // Synthetic tool backends
-    sendMessage: async (text: string) => {
-      const result = await runtime.sendMessage(text);
-      return { response: result.response, memoriesFormed: result.memoriesFormed.length };
-    },
-
+    // Synthetic tool backends (`sendMessage` is in servePrincipalDeps above).
     queryMemories: async (query: string, limit?: number) => {
       const embedding = await embedText(query);
       const nodes = await runtime.memory.recallRelevant(embedding, {
@@ -1359,13 +1345,15 @@ export async function handleServe(config: CliConfig): Promise<void> {
 
           // Find the tool to execute
           const allTools = runtime.getToolRegistry().list();
+          // A caller's prompt never selects an owner-interior tool (#880).
+          const servable = allTools.filter((t) => t.localOnly !== true);
           const loadedTools = config.tools
-            ? allTools.filter(
+            ? servable.filter(
                 (t) =>
                   // Prefer externally loaded tools; fall back to first tool
                   !["read_file", "write_file", "list_directory", "run_command"].includes(t.name),
               )
-            : allTools;
+            : servable;
           const tool = loadedTools[0];
           if (!tool) {
             yield {
@@ -1480,8 +1468,10 @@ export async function handleServe(config: CliConfig): Promise<void> {
   await mcpServer.start();
 
   const toolList = runtime.getToolRegistry().list();
-  const toolCount = toolList.length;
-  if (toolCount > 0) {
+  // "Exposed" counts what a caller can reach — `localOnly` tools are loaded
+  // for this motebit's own loop but never served (#880).
+  const toolCount = servedToolNames(toolList).length;
+  if (toolList.length > 0) {
     log(`Tools loaded: ${toolList.map((t) => t.name).join(", ")}`);
   }
   if (transport === "stdio") {
@@ -1651,10 +1641,8 @@ export async function handleServe(config: CliConfig): Promise<void> {
     }
 
     try {
-      const toolNames = runtime
-        .getToolRegistry()
-        .list()
-        .map((t) => t.name);
+      // Served tools only (#880) — see the daemon registration above.
+      const toolNames = servedToolNames(runtime.getToolRegistry().list());
 
       // Signed as THIS motebit — bootstrap → register → listing → heartbeat —
       // never with the operator's master token and never unauthenticated

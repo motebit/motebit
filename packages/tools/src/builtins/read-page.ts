@@ -71,6 +71,9 @@ export interface ReadPageHandlerOptions {
 /** @spec motebit/computer-use@1.0 */
 export const readPageDefinition: ToolDefinition = {
   name: "read_page",
+  // Owner interior (reads the owner's open browser session): never served to another
+  // principal, never offered to a foreign principal's turn (#880).
+  localOnly: true,
   // Slice 2h — FIRST tool in the ax tier. Registry sorts ax (1)
   // above pixels (2), so when the AI is choosing how to observe an
   // open page, this lands ahead of `computer({kind:"screenshot"})`.

@@ -839,9 +839,10 @@ export interface MemoryCandidate {
  * The key is REQUIRED but the value admits explicit `undefined`: a
  * call site must always write `source: …`, and `source: undefined` is
  * a deliberate declaration of unknown provenance — used only where
- * provenance legitimately cannot be known, e.g. a supersede that
- * inherits from a pre-provenance legacy node. Declared-unknown beats
- * fabricated; omission stays impossible.
+ * provenance legitimately cannot be known. (A supersede no longer
+ * inherits the old node's source at all: the rewrite's own author is
+ * declared, #880.) Declared-unknown beats fabricated; omission stays
+ * impossible.
  */
 export type AttributedMemoryCandidate = MemoryCandidate & {
   source: MemorySource | undefined;
@@ -1175,14 +1176,17 @@ export interface ToolDefinition {
    * against its own interior (its ledger, its relay account, its paid
    * work) and must not be offered to another principal. What that
    * guarantees, precisely: an MCP server built on `@motebit/mcp-server`
-   * never lists it or executes it as a direct tool call, and a surface
-   * never advertises it as a network capability. It does NOT remove the
-   * tool from the agent loop, which `motebit_task` runs for a caller's
-   * prompt — a tool that must also be unreachable there guards its own
-   * handler (today `retrieve_task_result` refuses outright, and
-   * `delegate_to_agent` withholds the owner's prior-payment details, while
-   * another principal's task is running). Absent ≡ servable (subject to
-   * policy), so existing tools keep their behavior.
+   * never lists it or executes it as a direct tool call, a surface
+   * never advertises it as a network capability, and the reference
+   * runtime never offers it to a turn marked as another principal's —
+   * every `handleAgentTask` turn (the loop `motebit_task` runs for a
+   * customer's prompt), and any `sendMessage*` turn a surface starts with
+   * `foreignPrincipal: true` — omitting it from the turn's tools and
+   * refusing a call that names it (#880). A tool that must hold even more tightly
+   * still guards its own handler (`retrieve_task_result` refuses, and
+   * `delegate_to_agent` withholds the owner's prior-payment details,
+   * while another principal's task is running). Absent ≡ servable
+   * (subject to policy), so existing tools keep their behavior.
    *
    * Carried on the definition rather than in per-surface name lists so
    * the serve chokepoint cannot drift from the tool: a list that forgets

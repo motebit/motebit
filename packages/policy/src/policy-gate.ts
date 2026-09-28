@@ -39,6 +39,17 @@ function parseScopeSet(scope: string): Set<string> {
 
 // === Policy Configuration ===
 
+/** Per-call options for `PolicyGate.validate`. */
+export interface ValidateOptions {
+  /**
+   * No human can answer an approval for this call (#880): it runs inside
+   * another principal's turn. A decision that would PAUSE for approval is
+   * returned as a denial instead. Only narrows — it never lowers an
+   * approval to an allow.
+   */
+  noApprovalChannel?: boolean;
+}
+
 export interface PolicyConfig {
   /** Operator Mode: when false, only R0/R1 tools are available (ambient companion).
    *  When true, R2+ become available with full enforcement (operator). */
@@ -595,10 +606,30 @@ export class PolicyGate {
    * hold that ambiguity (`findUnresolvedActions` in audit.ts), never
    * treat it as safe to retry.
    */
-  validate(tool: ToolDefinition, args: Record<string, unknown>, ctx: TurnContext): PolicyDecision {
+  validate(
+    tool: ToolDefinition,
+    args: Record<string, unknown>,
+    ctx: TurnContext,
+    opts?: ValidateOptions,
+  ): PolicyDecision {
     const callId = crypto.randomUUID();
-    const decision = this.evaluate(tool, args, ctx, callId);
+    const decision = this.evaluate(tool, args, ctx, callId, opts);
     return { ...decision, callId };
+  }
+
+  /**
+   * A view of this gate for a turn that no human can approve — another
+   * principal's turn (#880). Every method is this gate's; only `validate`
+   * differs: a call that would pause for approval is DENIED instead (see
+   * `ValidateOptions.noApprovalChannel`). The runtime hands this view to the
+   * agent loop for a foreign turn, so an approval can never outlive the task
+   * that raised it.
+   */
+  withoutApprovalChannel(): PolicyGate {
+    const view = Object.create(this) as PolicyGate;
+    view.validate = (tool, args, ctx) =>
+      this.validate(tool, args, ctx, { noApprovalChannel: true });
+    return view;
   }
 
   /**
@@ -677,6 +708,7 @@ export class PolicyGate {
     args: Record<string, unknown>,
     ctx: TurnContext,
     callId: string,
+    opts?: ValidateOptions,
   ): PolicyDecision {
     const profile = this.classify(tool);
     const maxRisk = this.getEffectiveMaxRisk();
@@ -835,8 +867,16 @@ export class PolicyGate {
           return decision;
         }
         case AgentTrustLevel.Trusted:
-          // Trusted callers get same privileges as local user
-          needsApproval = false;
+          // Trusted callers get the same privileges as the local user — and
+          // no more (#880 E). `needsApproval` here IS the owner's own
+          // answer for this tool (band or legacy), so a Trusted caller
+          // clears exactly what the owner's preset auto-allows and never
+          // skips an approval the owner's own turn would face. Trusted is
+          // auto-earned from this motebit's OUTBOUND hires
+          // (evaluateTrustTransition), so it must not widen INBOUND
+          // authority past the owner's band: it previously set
+          // needsApproval = false, which gave a Trusted caller more than
+          // the owner under the balanced/cautious presets.
           break;
         case AgentTrustLevel.FirstContact:
         case AgentTrustLevel.Unknown:
@@ -863,6 +903,26 @@ export class PolicyGate {
       }
     }
     // collaborative: use standard policy (no adjustment), logged via normal audit
+
+    // 8a. A tool's own approval floor binds every REMOTE caller (#880).
+    // Band mode derives approval from risk alone, so a tool that declares
+    // `requiresApproval: true` (write_file, shell_exec, undo_write, an MCP
+    // tool marked destructive) auto-executed for a remote caller whenever
+    // the owner's preset put its risk under `requireApprovalAbove` — and
+    // the service adjustment above could clear it too. (The Trusted
+    // caller is capped at the owner's band since #880 E, so it no longer
+    // lowers anything on its own.) The owner's own turns keep band semantics: a preset is the
+    // owner's choice about the owner's turns, and it is not narrowed here.
+    // A call made by another principal is not the owner's turn, so the
+    // tool's declared floor holds. It runs AFTER every approval-lowering
+    // adjustment so none of them can clear it (same ordering discipline as
+    // 8b). "Remote" is any caller fact on the context — a verified caller
+    // id, a trust level, or a remote motebit type.
+    const remoteCaller =
+      ctx.callerMotebitId != null || ctx.callerTrustLevel != null || ctx.remoteMotebitType != null;
+    if (remoteCaller && tool.requiresApproval === true && !needsApproval) {
+      needsApproval = true;
+    }
 
     // 8b. Standing-authority invariant — memory never confers authority.
     // An R4_MONEY tool call may auto-execute (no human approval) ONLY
@@ -935,6 +995,24 @@ export class PolicyGate {
         : quorumMeta != null
           ? quorumShortfallDelta(quorumMeta.required - quorumMeta.collected.length)
           : undefined;
+
+    // 10. No approval channel (#880). The turn runs another principal's
+    // words — a customer's task, a caller's query — so no human is waiting
+    // to answer an approval, and a pause would outlive the task that raised
+    // it: the approval would later resume that principal's prompt inside the
+    // OWNER's conversation. The call is refused now instead, as a hard
+    // governance denial (the loop counts it; a task that did nothing else
+    // signs a `denied` receipt). This is exactly how an MCP caller is
+    // already treated: the MCP surface has no approval channel either.
+    if (needsApproval && opts?.noApprovalChannel === true) {
+      const decision: PolicyDecision = {
+        allowed: false,
+        requiresApproval: false,
+        reason: `Tool "${tool.name}" requires the owner's approval — not available to another principal's task`,
+      };
+      this.audit.logDecision(ctx.turnId, callId, tool.name, args, decision, ctx.runId);
+      return decision;
+    }
 
     const decision: PolicyDecision = {
       allowed: true,
