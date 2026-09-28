@@ -24,15 +24,122 @@
  * identity key, fresh device id. Adding a device with a NEW key is the
  * authenticated pairing flow's job (an existing device approves it), and
  * replacing a key is `/rotate-key`'s (the current key signs the new one).
+ *
+ * Before an identity holds a key (#875): both doors prove possession of the
+ * key they name (`verifyKeyPossession` — bootstrap was unsigned until
+ * then), and an id shaped as a sovereign commitment may take only the key
+ * it commits to (`refuseSovereignIdSquat`). `/agents/register` asks the
+ * same two questions of its body key.
  */
 import type { IdentityManager } from "@motebit/core-identity";
 import type { DatabaseDriver } from "@motebit/persistence";
-import { keysHeldBy } from "./identity-keys.js";
+import { verifyDeviceRegistration, type SignableDeviceRegistration } from "@motebit/encryption";
+import { keysHeldBy, proveSovereignFirstKey } from "./identity-keys.js";
+
+/**
+ * What a client must do when a key arrives without proof of possession —
+ * the one repair instruction both writers (#875) return.
+ */
+export const KEY_PROOF_REMEDIATION =
+  "sign the request with the private key of public_key: a device-registration signature " +
+  "(signDeviceRegistration in @motebit/crypto — JCS + Ed25519 over {motebit_id, device_id, " +
+  "public_key, timestamp, suite}, spec/device-self-registration-v1.md) within 5 minutes of " +
+  "the relay's clock. An older client that sends no signature must be upgraded.";
+
+export type KeyPossessionResult =
+  | { proven: true }
+  | {
+      proven: false;
+      reason:
+        | "missing"
+        | "malformed"
+        | "stale"
+        | "unsupported_suite"
+        | "bad_signature"
+        | "motebit_id_mismatch"
+        | "public_key_mismatch";
+    };
+
+/**
+ * Proof of possession (#875): `proof` is a device-registration request
+ * (`spec/device-self-registration-v1.md`) signed by the key it names, fresh
+ * within the same ±5-minute window as `register-self`, and naming EXACTLY
+ * the identity and key the door is about to write. The key is proven by its
+ * own signature — `verifyDeviceRegistration` from `@motebit/crypto`, the
+ * one verifier register-self uses; nothing here trusts the presenter.
+ * Read-only.
+ */
+export async function verifyKeyPossession(
+  proof: unknown,
+  expected: { motebitId: string; publicKey: string },
+  now: number = Date.now(),
+): Promise<KeyPossessionResult> {
+  if (proof == null) return { proven: false, reason: "missing" };
+  if (typeof proof !== "object" || Array.isArray(proof)) {
+    return { proven: false, reason: "malformed" };
+  }
+  const signed = proof as SignableDeviceRegistration;
+  if (signed.signature === undefined && signed.suite === undefined) {
+    return { proven: false, reason: "missing" };
+  }
+  const verdict = await verifyDeviceRegistration(signed, now);
+  if (!verdict.valid) return { proven: false, reason: verdict.reason };
+  if (signed.motebit_id !== expected.motebitId) {
+    return { proven: false, reason: "motebit_id_mismatch" };
+  }
+  if (signed.public_key !== expected.publicKey) {
+    return { proven: false, reason: "public_key_mismatch" };
+  }
+  return { proven: true };
+}
 
 export interface DeviceRegistrationRefusal {
-  code: "DEVICE_ID_TAKEN" | "DEVICE_KEY_CONFLICT" | "IDENTITY_KEY_CONFLICT";
+  code:
+    | "DEVICE_ID_TAKEN"
+    | "DEVICE_KEY_CONFLICT"
+    | "IDENTITY_KEY_CONFLICT"
+    | "SOVEREIGN_ID_KEY_MISMATCH";
   error: string;
   remediation: string;
+}
+
+/**
+ * A sovereign `motebit_id` is a UUIDv8 (`deriveSovereignMotebitId`): the
+ * version nibble is 8. Matched case-INSENSITIVELY on purpose — an upper-case
+ * spelling of V's sovereign id is a distinct row that a case-insensitive
+ * reader (`verifySovereignBinding`) would still read as V's, so it claims
+ * sovereignty too (and, the commitment being lower-case, never equals one).
+ * Legacy ids are UUIDv7 and never match.
+ */
+const SOVEREIGN_ID_SHAPE = /^[0-9a-f]{8}-[0-9a-f]{4}-8[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+/** Whether `motebitId` claims to be the sovereign commitment to some key. */
+export function claimsSovereignId(motebitId: string): boolean {
+  return SOVEREIGN_ID_SHAPE.test(motebitId) || motebitId.startsWith("did:key:");
+}
+
+/**
+ * The pre-registration squat (#875): an id that CLAIMS to be the sovereign
+ * commitment to a key may take its FIRST key only when it is exactly that
+ * commitment to the presented key (`proveSovereignFirstKey`, DA3 — the same
+ * arithmetic E-sov uses). Proof of possession alone does not close the
+ * squat: X proves possession of X's OWN key, and would otherwise take V's
+ * not-yet-registered `deriveSovereignMotebitId(K_V)` under it. `null` when
+ * the first key may proceed. Asked only of an identity that holds no key —
+ * once one does, `refusePublicDeviceRegistration`'s held-key rule answers.
+ */
+export async function refuseSovereignIdSquat(
+  motebitId: string,
+  publicKey: string,
+): Promise<DeviceRegistrationRefusal | null> {
+  if (!claimsSovereignId(motebitId)) return null;
+  if ((await proveSovereignFirstKey(motebitId, publicKey)) !== null) return null;
+  return {
+    code: "SOVEREIGN_ID_KEY_MISMATCH",
+    error: "motebit_id is a sovereign id that is not the commitment to this public_key",
+    remediation:
+      "a sovereign motebit_id must equal deriveSovereignMotebitId(public_key) of its genesis key — register with the genesis key, or arrive through migration",
+  };
 }
 
 /**
@@ -81,7 +188,13 @@ export async function refusePublicDeviceRegistration(
   // identity whose registry key was blank while its holder still answered.
   const held = new Set([...keysHeldBy(deps.db, req.motebitId)].map((k) => k.toLowerCase()));
 
-  if (held.size > 0 && !held.has(key)) {
+  // A fresh identity: nothing is on file, so the one question left is
+  // whether the id itself names a DIFFERENT key (#875).
+  if (held.size === 0) {
+    return refuseSovereignIdSquat(req.motebitId, req.publicKey);
+  }
+
+  if (!held.has(key)) {
     return {
       code: "IDENTITY_KEY_CONFLICT",
       error: "identity is already registered under a different public key",

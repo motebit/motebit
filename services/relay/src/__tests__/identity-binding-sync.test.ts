@@ -24,7 +24,7 @@ import type { Hono } from "hono";
 import WebSocket from "ws";
 import { generateKeypair, bytesToHex, mintAudienceToken } from "@motebit/crypto";
 import type { SyncRelay } from "../index.js";
-import { API_TOKEN, createTestRelay } from "./test-helpers.js";
+import { API_TOKEN, createTestRelay, signedBootstrapBody } from "./test-helpers.js";
 import { FOREIGN_SYNC_ENTRY_REASON, firstForeignSyncEntry } from "../identity-binding.js";
 
 let relay: SyncRelay;
@@ -53,11 +53,10 @@ async function identity(device: string): Promise<Identity> {
   const res = await relay.app.request("/api/v1/agents/bootstrap", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      motebit_id: id,
-      device_id: device,
-      public_key: bytesToHex(kp.publicKey),
-    }),
+    body: await signedBootstrapBody(
+      { motebit_id: id, device_id: device, public_key: bytesToHex(kp.publicKey) },
+      kp.privateKey,
+    ),
   });
   expect(res.status).toBeLessThan(300);
   const tok = (await mintAudienceToken({ mid: id, did: device, aud: "sync" }, kp.privateKey)).token;

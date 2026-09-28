@@ -267,26 +267,35 @@ describe("credentials/submit files a credential only under the identity it is ab
   // /agents/register write without proof of possession, never bind and never
   // block. (Probe: scratchpad/probes/rv850.probe.ts, S1/S2.)
 
-  it("F1: an unauthenticated bootstrap squatting V's key under a new id does NOT block V's did:key credentials", async () => {
+  it("F1: a bootstrap squatting V's key under a new id is refused (#875), and a squat row an earlier relay admitted does NOT block V's did:key credentials", async () => {
     const issuer = await identity();
     const victim = await identity();
     expect((await submit(victim.mid, [await credential(issuer, victim.did)])).accepted).toBe(1);
 
+    const squatId = `squat-${crypto.randomUUID()}`;
     const boot = await relay.app.request("/api/v1/agents/bootstrap", {
       method: "POST",
       headers: JSON_HEADERS,
       body: JSON.stringify({
-        motebit_id: `squat-${crypto.randomUUID()}`,
+        motebit_id: squatId,
         device_id: `d-${crypto.randomUUID()}`,
         public_key: victim.hex,
       }),
     });
-    expect(boot.status, "arrange: the squat lands (the writer is a separate door)").toBe(201);
+    // #875: the writer now demands proof of possession — the squat is refused.
+    expect(boot.status).toBe(400);
+    expect(((await boot.json()) as { code?: string }).code).toBe("KEY_PROOF_REQUIRED");
+    // A squat row a pre-#875 relay admitted still binds nothing and blocks nothing.
+    relay.moteDb.db
+      .prepare(
+        "INSERT INTO devices (device_id, motebit_id, device_token, public_key, registered_at) VALUES (?, ?, ?, ?, ?)",
+      )
+      .run(`d-${crypto.randomUUID()}`, squatId, `tok-${crypto.randomUUID()}`, victim.hex, 1);
 
     expect((await submit(victim.mid, [await credential(issuer, victim.did)])).accepted).toBe(1);
   });
 
-  it("F2: X' registering V's key as its registry key cannot file V's credential under X' or revoke it; V files it later", async () => {
+  it("F2: X' registering V's key is refused (#875); a registry row an earlier relay admitted with V's key cannot file V's credential under X' or revoke it; V files it later", async () => {
     const issuer = await identity();
     const vKp = await generateKeypair();
     const vHex = bytesToHex(vKp.publicKey);
@@ -303,7 +312,15 @@ describe("credentials/submit files a credential only under the identity it is ab
         public_key: vHex,
       }),
     });
-    expect(reg.status, "arrange: X' plants V's key in the registry").toBe(200);
+    // #875: X' holds no proof of possession of V's key — the door refuses.
+    expect(reg.status).toBe(400);
+    expect(((await reg.json()) as { reason?: string }).reason).toBe("key_proof_missing");
+    // A registry row a pre-#875 relay admitted: X' planted V's key there.
+    relay.moteDb.db
+      .prepare(
+        "INSERT INTO agent_registry (motebit_id, public_key, endpoint_url, capabilities, registered_at, last_heartbeat, expires_at) VALUES (?, ?, ?, '[]', 1, 1, ?)",
+      )
+      .run(xp.mid, vHex, "http://127.0.0.1:9999/mcp", Date.now() + 86_400_000);
 
     const vc = await credential(issuer, vDid);
     const credId = (vc as unknown as { id: string }).id;

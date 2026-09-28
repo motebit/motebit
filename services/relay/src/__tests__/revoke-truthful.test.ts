@@ -139,6 +139,36 @@ async function registerSelf(mid: string, deviceId: string, kp: KeyPair): Promise
   expect(res.status).toBe(201);
 }
 
+/**
+ * A stranger's first-come squat of a never-seen SOVEREIGN id under its own
+ * key. Since #875 register-self refuses it (the id is not the commitment to
+ * the stranger's key), so the rows are planted as an earlier relay admitted
+ * them — the lift tests below are about what such a row may do.
+ */
+async function plantSovereignSquat(mid: string, deviceId: string, kp: KeyPair): Promise<void> {
+  const body = await signDeviceRegistration(
+    { motebit_id: mid, device_id: deviceId, public_key: hex(kp), timestamp: Date.now() },
+    kp.privateKey,
+  );
+  const refused = await relay.app.request("/api/v1/devices/register-self", {
+    method: "POST",
+    headers: JSON_HEADERS,
+    body: JSON.stringify(body),
+  });
+  expect(refused.status).toBe(409);
+  expect(((await refused.json()) as { code: string }).code).toBe("SOVEREIGN_ID_KEY_MISMATCH");
+  relay.moteDb.db
+    .prepare(
+      "INSERT INTO identities (motebit_id, owner_id, created_at, version_clock) VALUES (?, ?, ?, 0)",
+    )
+    .run(mid, `self:${mid}`, 1);
+  relay.moteDb.db
+    .prepare(
+      "INSERT INTO devices (device_id, motebit_id, device_token, public_key, registered_at) VALUES (?, ?, ?, ?, ?)",
+    )
+    .run(deviceId, mid, `tok-${deviceId}`, hex(kp), 1);
+}
+
 /** A register-self-only identity: identities + devices rows, NO registry row. */
 async function selfOnlyIdentity() {
   const kp = await generateKeypair();
@@ -558,7 +588,7 @@ describe("the three withdrawn attacks (#794, #796) are all lifted by the owner's
     const owner = await generateKeypair();
     const stranger = await generateKeypair();
     const mid = await deriveSovereignMotebitId(hex(owner));
-    await registerSelf(mid, "evil", stranger);
+    await plantSovereignSquat(mid, "evil", stranger);
     expect((await revokeAs(mid, "evil", stranger)).status).toBe(200);
     expect(await syncStatusAs(mid, "evil", stranger)).toBe(403);
 
@@ -573,7 +603,7 @@ describe("the three withdrawn attacks (#794, #796) are all lifted by the owner's
     const owner = await generateKeypair();
     const stranger = await generateKeypair();
     const mid = await deriveSovereignMotebitId(hex(owner));
-    await registerSelf(mid, "evil", stranger);
+    await plantSovereignSquat(mid, "evil", stranger);
     expect(await tokenRegister(mid, "evil", stranger)).toBe(200);
     expect((await revokeAs(mid, "evil", stranger)).status).toBe(200);
     expect(await syncStatusAs(mid, "evil", stranger)).toBe(403);

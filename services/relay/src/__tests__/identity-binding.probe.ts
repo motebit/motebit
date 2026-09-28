@@ -12,7 +12,7 @@ import type { Hono } from "hono";
 import WebSocket from "ws";
 import { generateKeypair, bytesToHex, mintAudienceToken } from "@motebit/crypto";
 import type { SyncRelay } from "../index.js";
-import { createTestRelay } from "./test-helpers.js";
+import { createTestRelay, signedBootstrapBody } from "./test-helpers.js";
 
 let relay: SyncRelay;
 let server: ReturnType<typeof serve>;
@@ -48,11 +48,10 @@ async function identity(device: string) {
   await relay.app.request("/api/v1/agents/bootstrap", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      motebit_id: id,
-      device_id: device,
-      public_key: bytesToHex(kp.publicKey),
-    }),
+    body: await signedBootstrapBody(
+      { motebit_id: id, device_id: device, public_key: bytesToHex(kp.publicKey) },
+      kp.privateKey,
+    ),
   });
   const tok = (await mintAudienceToken({ mid: id, did: device, aud: "sync" }, kp.privateKey)).token;
   return { id, tok };

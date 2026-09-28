@@ -34,7 +34,7 @@ import {
 import { DeviceCapability } from "@motebit/sdk";
 import type { TokenAudience } from "@motebit/sdk";
 import type { SyncStatus as SyncEngineStatus } from "@motebit/sync-engine";
-import { deriveSyncEncryptionKey, secureErase } from "@motebit/encryption";
+import { deriveSyncEncryptionKey, secureErase, signDeviceRegistration } from "@motebit/encryption";
 import {
   HttpEventStoreAdapter,
   WebSocketEventStoreAdapter,
@@ -153,19 +153,29 @@ export class SpatialSyncController {
     const headers: Record<string, string> = { "Content-Type": "application/json" };
     if (authToken) headers["Authorization"] = `Bearer ${authToken}`;
 
-    // 1. Bootstrap identity on relay
-    try {
-      await fetch(`${relayUrl}/api/v1/agents/bootstrap`, {
-        method: "POST",
-        headers,
-        body: JSON.stringify({
-          motebit_id: motebitId,
-          device_id: this.deps.getDeviceId(),
-          public_key: this.deps.getPublicKey(),
-        }),
-      });
-    } catch {
-      // Best-effort
+    // 1. Bootstrap identity on relay — signed by the key it introduces (#875:
+    //    the relay refuses an unsigned introduction). No private key, no
+    //    bootstrap: there is nothing the relay would admit.
+    const privKey = this.deps.getPrivKey();
+    if (privKey != null) {
+      try {
+        const signed = await signDeviceRegistration(
+          {
+            motebit_id: motebitId,
+            device_id: this.deps.getDeviceId(),
+            public_key: this.deps.getPublicKey(),
+            timestamp: Date.now(),
+          },
+          privKey,
+        );
+        await fetch(`${relayUrl}/api/v1/agents/bootstrap`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify(signed),
+        });
+      } catch {
+        // Best-effort
+      }
     }
 
     // 2. Register capabilities for discovery

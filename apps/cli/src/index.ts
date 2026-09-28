@@ -56,6 +56,7 @@ import {
   destroyTerminal,
 } from "./terminal.js";
 import { renderModeRow } from "./mode-render.js";
+import { signedBootstrapBody } from "./relay-registration.js";
 import { electCliRuntimeHost } from "./runtime-host.js";
 import { runAttachedRepl } from "./attached-repl.js";
 import type { ElectionOutcome } from "@motebit/runtime-host";
@@ -942,10 +943,12 @@ async function main(): Promise<void> {
         const resp = await fetch(`${syncUrl}/api/v1/agents/bootstrap`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            motebit_id: motebitId,
-            device_id: deviceId,
-            public_key: reloadedConfig.device_public_key,
+          // Signed by the key it introduces (#875 — the relay refuses it unsigned).
+          body: await signedBootstrapBody({
+            motebitId,
+            deviceId,
+            publicKeyHex: reloadedConfig.device_public_key,
+            privateKey: privateKeyBytes,
           }),
         });
         if (!resp.ok && resp.status !== 200 && resp.status !== 201) {
