@@ -1386,22 +1386,43 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
       holderKeyOf(moteDb.db, motebitId) ?? registryKeyOf(moteDb.db, motebitId);
 
     // --- Proof of possession (#875), before any write ---
-    // No key enters an identity's key set on this door without evidence that
-    // its presenter holds the private key. A body key needs none when it adds
-    // nothing: it IS the bearer's verified device key, or it is already one
-    // of the identity's keys (`keysHeldBy`, case-folded as the guard does —
-    // a paired device registering the identity key it does not hold). A key
-    // that differs from the key on file is carried by the succession record
-    // the block below demands, whose `new_key_signature` is verified before
-    // any write. Any other key — above all the FIRST key of an identity, the
-    // master-token door — carries `key_proof`: a device-registration request
-    // signed by that key (`verifyKeyPossession`, register-self's verifier and
-    // window). Unproven, this door took any key as an identity's first.
+    // No key reaches the registry on this door without evidence. A body key
+    // needs no `key_proof` only when this request already proves it: it IS
+    // the key that verified the bearer (the bearer's device row, or — when no
+    // row exists for its `did` — the auth fallback's holder-else-registry
+    // key, which the bearer's signature verified under), or it is the
+    // identity's PROVEN holder key (#703). Never merely "a key the identity
+    // holds": a device row is not evidence — `/pairing/claim` writes any
+    // canonical key unsigned, so X could pair itself claiming K_V, approve,
+    // and register K_V as its registry key (the #875 review's laundering,
+    // and `task-routing`'s registry-key lookup would then read V's
+    // credentials' issuer as X). A key that differs from the key on file is
+    // carried by the succession record the block below demands, whose
+    // `new_key_signature` is verified before any write. Any other key — above
+    // all an identity's FIRST key — carries `key_proof`: a device-registration
+    // request signed by that key (`verifyKeyPossession`, register-self's
+    // verifier and window).
     if (keyFromBody) {
       const lowered = publicKey.toLowerCase();
       const heldBefore = new Set([...keysHeldBy(moteDb.db, motebitId)].map((k) => k.toLowerCase()));
-      const isCallerKey =
-        callerDeviceKey !== undefined && callerDeviceKey.toLowerCase() === lowered;
+      // The key the bearer's token verified under: its device row, else the
+      // middleware's fallback for a `did` with no row (index.ts
+      // `agentRegistryKeyLookup`: holder, else registry).
+      let bearerVerifiedKey = callerDeviceKey;
+      if (
+        bearerVerifiedKey === undefined &&
+        bearerClaims?.mid === motebitId &&
+        typeof bearerClaims.did === "string" &&
+        (await identityManager.loadDeviceById(bearerClaims.did, motebitId)) == null
+      ) {
+        bearerVerifiedKey =
+          verificationKeyFor(moteDb.db, motebitId, registryKeyOf(moteDb.db, motebitId)) ??
+          undefined;
+      }
+      const holderKey = holderKeyOf(moteDb.db, motebitId);
+      const provenByRequest =
+        (bearerVerifiedKey !== undefined && bearerVerifiedKey.toLowerCase() === lowered) ||
+        (holderKey !== null && holderKey.toLowerCase() === lowered);
       const carriedBySuccession =
         keyOnFileForRegister !== null && keyOnFileForRegister !== publicKey;
       const refuse = (
@@ -1431,7 +1452,7 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
       // as at `/device/register` and E-op (§5g): the operator could write
       // the table directly. It still answers the sovereign-squat check below.
       const operatorPresented = c.get(OPERATOR_PRESENTED) === true;
-      if (!operatorPresented && !isCallerKey && !heldBefore.has(lowered) && !carriedBySuccession) {
+      if (!operatorPresented && !provenByRequest && !carriedBySuccession) {
         const possession = await verifyKeyPossession((body as Record<string, unknown>).key_proof, {
           motebitId,
           publicKey,

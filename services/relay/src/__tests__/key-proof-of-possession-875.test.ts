@@ -373,22 +373,123 @@ describe("/agents/register: a body key the request does not prove never enters",
     expect(status).toBe(200);
   });
 
-  it("needs no proof for the bearer's own key, a key the identity already holds, or a keyless registration", async () => {
+  it("needs no proof for the bearer's own key, the identity's PROVEN holder key, or a keyless registration", async () => {
     const x = await legacyDevice();
     expect((await registerAsDevice(x.mid, "own", x.kp, { public_key: hex(x.kp) })).status).toBe(
       200,
     );
     expect((await registerAsDevice(x.mid, "own", x.kp, {})).status).toBe(200);
-    // A device paired without key transfer registers the identity key it does not hold.
+    // A sovereign identity with a proven holder (E-sov): a second device of it
+    // may name the holder key it does not itself hold.
+    const s = await sovereign();
+    expect((await bootstrap(s.mid, "s-own", s.kp)).status).toBe(201);
+    expect((await registerAsDevice(s.mid, "s-own", s.kp, { public_key: hex(s.kp) })).status).toBe(
+      200,
+    );
+    expect(rowsFor(s.mid).holder).toBe(1);
     const paired = await generateKeypair();
     relay.moteDb.db
       .prepare(
         "INSERT INTO devices (device_id, motebit_id, device_token, public_key, registered_at) VALUES (?, ?, ?, ?, ?)",
       )
-      .run("paired", x.mid, "tok-paired", hex(paired), 1);
+      .run("s-paired", s.mid, "tok-s-paired", hex(paired), 1);
     expect(
-      (await registerAsDevice(x.mid, "paired", paired, { public_key: hex(x.kp) })).status,
+      (await registerAsDevice(s.mid, "s-paired", paired, { public_key: hex(s.kp) })).status,
     ).toBe(200);
+  });
+
+  it("a key that is merely a DEVICE ROW is not evidence — pairing cannot launder V's key into X's registry (#875 review)", async () => {
+    // The repro: X bootstraps its own key, pairs itself claiming V's key
+    // (claim is unsigned), approves, then registers V's key as its registry key.
+    const x = await legacyDevice();
+    const v = await generateKeypair();
+    const dt = (
+      await mintAudienceToken({ mid: x.mid, did: "own", aud: "device:auth" }, x.kp.privateKey)
+    ).token;
+    const post = async (path: string, body: unknown, auth?: string) => {
+      const res = await relay.app.request(path, {
+        method: "POST",
+        headers: { ...JSON_HEADERS, ...(auth != null ? { Authorization: `Bearer ${auth}` } : {}) },
+        body: JSON.stringify(body),
+      });
+      return {
+        status: res.status,
+        json: (await res.json().catch(() => null)) as Record<string, unknown>,
+      };
+    };
+    const init = await post("/pairing/initiate", {}, dt);
+    expect(init.status).toBeLessThan(300);
+    expect(
+      (
+        await post("/pairing/claim", {
+          pairing_code: init.json.pairing_code,
+          device_name: "fake",
+          public_key: hex(v),
+        })
+      ).status,
+    ).toBe(200);
+    expect((await post(`/pairing/${String(init.json.pairing_id)}/approve`, {}, dt)).status).toBe(
+      200,
+    );
+    expect(
+      keysHeldBy(relay.moteDb.db, x.mid).has(hex(v)),
+      "arrange: V's key is a device row of X",
+    ).toBe(true);
+    const reg = await registerAsDevice(x.mid, "own", x.kp, { public_key: hex(v) });
+    expect(reg.status).toBe(400);
+    expect(reg.json.reason).toBe("key_proof_missing");
+    expect(rowsFor(x.mid).registry).toBe(0);
+  });
+
+  it("pairing approve drops a key transfer whose identity_pubkey_check is not the approver's own key", async () => {
+    const x = await legacyDevice();
+    const v = await generateKeypair();
+    const dt = (
+      await mintAudienceToken({ mid: x.mid, did: "own", aud: "device:auth" }, x.kp.privateKey)
+    ).token;
+    const req = async (path: string, body: unknown, auth?: string) => {
+      const res = await relay.app.request(path, {
+        method: "POST",
+        headers: { ...JSON_HEADERS, ...(auth != null ? { Authorization: `Bearer ${auth}` } : {}) },
+        body: JSON.stringify(body),
+      });
+      return {
+        status: res.status,
+        json: (await res.json().catch(() => null)) as Record<string, unknown>,
+      };
+    };
+    const transfer = (check: string) => ({
+      x25519_pubkey: "11".repeat(32),
+      encrypted_seed: "22".repeat(48),
+      nonce: "33".repeat(12),
+      tag: "44".repeat(16),
+      identity_pubkey_check: check,
+    });
+    const storedTransfer = (pairingId: string) =>
+      (
+        relay.moteDb.db
+          .prepare("SELECT key_transfer_payload FROM pairing_sessions WHERE pairing_id = ?")
+          .get(pairingId) as { key_transfer_payload: string | null }
+      ).key_transfer_payload;
+    for (const [check, kept] of [
+      [hex(v), false],
+      [hex(x.kp), true],
+    ] as const) {
+      const claimer = await generateKeypair();
+      const init = await req("/pairing/initiate", {}, dt);
+      await req("/pairing/claim", {
+        pairing_code: init.json.pairing_code,
+        device_name: "b",
+        public_key: hex(claimer),
+      });
+      const pid = String(init.json.pairing_id);
+      expect(
+        (await req(`/pairing/${pid}/approve`, { key_transfer: transfer(check) }, dt)).status,
+      ).toBe(200);
+      expect(storedTransfer(pid) != null, `identity_pubkey_check=${kept ? "own" : "V's"}`).toBe(
+        kept,
+      );
+    }
   });
 
   it("legacy + sovereign lifecycle: signed bootstrap, then register with the device's own key", async () => {
