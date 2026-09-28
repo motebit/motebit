@@ -239,6 +239,21 @@ describe("failWithdrawal", () => {
     expect(store.getWithdrawalById("w1")!.failure_reason).toBe("reconciled: nothing landed");
   });
 
+  it("completing a noted-pending withdrawal clears the note (#920)", () => {
+    const store = seededStore(1_000_000);
+    const r = requestWithdrawal(store, {
+      motebitId: ALICE,
+      amountMicro: 400_000,
+      newId: () => "w1",
+    });
+    if (!r || "existing" in r) throw new Error("expected fresh");
+    expect(noteWithdrawalPayoutUnresolved(store, "w1", "unresolved payout")).toBe(true);
+    expect(completeWithdrawal(store, { withdrawalId: "w1", payoutReference: "sig" })).toBe(true);
+    const w = store.getWithdrawalById("w1")!;
+    expect(w.status).toBe("completed");
+    expect(w.failure_reason).toBeNull();
+  });
+
   it("returns false for a completed withdrawal", () => {
     const store = seededStore(1_000_000);
     const r = requestWithdrawal(store, {

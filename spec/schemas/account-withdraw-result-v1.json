@@ -78,7 +78,7 @@
               "type": "null"
             }
           ],
-          "description": "Populated when status is failed; else null."
+          "description": "Populated when status is failed; MAY carry an unresolved-payout note while status is pending; otherwise null."
         },
         "relay_id": {
           "type": "string",

@@ -414,7 +414,7 @@ export class SqliteAccountStore implements AccountStore {
   setWithdrawalCompletion(id: string, payoutReference: string, completedAt: number): boolean {
     const info = this.db
       .prepare(
-        "UPDATE relay_withdrawals SET status = 'completed', payout_reference = ?, completed_at = ? WHERE withdrawal_id = ? AND status IN ('pending', 'processing')",
+        "UPDATE relay_withdrawals SET status = 'completed', payout_reference = ?, completed_at = ?, failure_reason = NULL WHERE withdrawal_id = ? AND status IN ('pending', 'processing')",
       )
       .run(payoutReference, completedAt, id);
     return info.changes > 0;

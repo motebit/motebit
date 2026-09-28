@@ -442,7 +442,7 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
               earlierBroadcastsDead: sendResult.earlierBroadcastsDead ?? null,
               destination: result.destination,
             });
-          } else if (sendResult.earlierBroadcastsDead === true) {
+          } else if (sendResult.confirmed === false && sendResult.earlierBroadcastsDead === true) {
             // Outcome 2 — landed and failed, and no earlier broadcast can
             // land: provably nothing moved.
             const refunded = failWithdrawal(

@@ -22,7 +22,11 @@
 import { describe, it, expect, afterEach, vi } from "vitest";
 import { generateKeypair, bytesToHex } from "@motebit/encryption";
 import { createMotebitDatabase, type MotebitDatabase } from "@motebit/persistence";
-import { requestWithdrawal, failWithdrawal } from "@motebit/virtual-accounts";
+import {
+  requestWithdrawal,
+  failWithdrawal,
+  noteWithdrawalPayoutUnresolved,
+} from "@motebit/virtual-accounts";
 import {
   OperatorSolanaTransfer,
   Web3JsRpcAdapter,
@@ -147,6 +151,37 @@ describe("SqliteAccountStore.failWithdrawalAndRefund (#920)", () => {
     expect(failWithdrawal(store, id, "late fail")).toBe(false);
     expect(store.getOrCreateAccount("mote-a").balance).toBe(FUNDED - WITHDRAW_MICRO);
     expect(store.getWithdrawalById(id)!.status).toBe("completed");
+  });
+
+  it("completing a noted-pending withdrawal clears the unresolved-payout note", () => {
+    const fresh = freshStore();
+    moteDb = fresh.moteDb;
+    const { store } = fresh;
+    const id = pendingWithdrawal(store);
+    expect(noteWithdrawalPayoutUnresolved(store, id, "unresolved payout: sig2 failed")).toBe(true);
+    expect(store.getWithdrawalById(id)!.failure_reason).toBe("unresolved payout: sig2 failed");
+    expect(store.setWithdrawalCompletion(id, TX_SIG, Date.now())).toBe(true);
+    const w = store.getWithdrawalById(id)!;
+    expect(w.status).toBe("completed");
+    expect(w.failure_reason).toBeNull();
+  });
+
+  it("refuses a note on a completed or failed withdrawal; the recorded reason is unchanged", () => {
+    const fresh = freshStore();
+    moteDb = fresh.moteDb;
+    const { store } = fresh;
+
+    const done = pendingWithdrawal(store);
+    expect(store.setWithdrawalCompletion(done, TX_SIG, Date.now())).toBe(true);
+    expect(noteWithdrawalPayoutUnresolved(store, done, "late note")).toBe(false);
+    expect(store.getWithdrawalById(done)!.failure_reason).toBeNull();
+    expect(store.getWithdrawalById(done)!.status).toBe("completed");
+
+    const failed = pendingWithdrawal(store);
+    expect(failWithdrawal(store, failed, "reconciled: nothing landed")).toBe(true);
+    expect(noteWithdrawalPayoutUnresolved(store, failed, "late note")).toBe(false);
+    expect(store.getWithdrawalById(failed)!.failure_reason).toBe("reconciled: nothing landed");
+    expect(store.getWithdrawalById(failed)!.status).toBe("failed");
   });
 });
 
@@ -415,6 +450,19 @@ describe("Path 0 settlement outcome (#920)", () => {
     expect(res.status).toBe(200);
     const body = (await res.json()) as { withdrawal: { withdrawal_id: string; status: string } };
     expect(sends).toBe(2);
+    expect(body.withdrawal.status).toBe("pending");
+    expect(balance(relay, mid)).toBe(FUNDED - WITHDRAW_MICRO);
+    expect(refundCount(relay, mid, body.withdrawal.withdrawal_id)).toBe(0);
+  });
+
+  it("malformed result (no `confirmed`) with earlierBroadcastsDead:true ⇒ pending, NOT refunded", async () => {
+    const { operator } = makeOperator(
+      vi.fn().mockResolvedValue({ signature: TX_SIG, slot: 12345, earlierBroadcastsDead: true }),
+    );
+    relay = await createTestRelay({ enableDeviceAuth: false, operatorSolanaTransfer: operator });
+    const mid = "zz920-malformed";
+    await registerAndFund(relay, mid);
+    const body = await withdraw(relay, mid);
     expect(body.withdrawal.status).toBe("pending");
     expect(balance(relay, mid)).toBe(FUNDED - WITHDRAW_MICRO);
     expect(refundCount(relay, mid, body.withdrawal.withdrawal_id)).toBe(0);

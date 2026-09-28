@@ -475,6 +475,8 @@ export class InMemoryAccountStore implements AccountStore {
     w.status = "completed";
     w.payout_reference = payoutReference;
     w.completed_at = completedAt;
+    // A completed payout is not a failure: drop any unresolved-payout note (#920).
+    w.failure_reason = null;
     return true;
   }
 
