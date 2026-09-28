@@ -80,6 +80,8 @@ function pendingWithdrawal(store: SqliteAccountStore): string {
     destination: "GJmrQzyZumWWkdBuVH3Z1hnGvjrcDMbx7ptF5t5UAAAA",
   });
   if (!r || "existing" in r) throw new Error("expected a fresh withdrawal");
+  // The payout's claim (#921): every automated outcome settles from `processing`.
+  if (!store.claimWithdrawalForPayout(r.withdrawal_id, Date.now())) throw new Error("claim");
   return r.withdrawal_id;
 }
 
@@ -103,10 +105,10 @@ describe("SqliteAccountStore.failWithdrawalAndRefund (#920)", () => {
     const id = pendingWithdrawal(store);
     expect(store.getOrCreateAccount("mote-a").balance).toBe(FUNDED - WITHDRAW_MICRO);
 
-    expect(failWithdrawal(store, id, "tx landed and failed")).toBe(true);
+    expect(failWithdrawal(store, id, "tx landed and failed", "processing")).toBe(true);
     // Retry — a re-run handler, a sweeper, an admin replay.
-    expect(failWithdrawal(store, id, "retry")).toBe(false);
-    expect(store.failWithdrawalAndRefund(id, "direct retry")).toBeNull();
+    expect(failWithdrawal(store, id, "retry", "processing")).toBe(false);
+    expect(store.failWithdrawalAndRefund(id, "direct retry", "processing")).toBeNull();
 
     expect(store.getOrCreateAccount("mote-a").balance).toBe(FUNDED);
     expect(refundRows(store, id)).toHaveLength(1);
@@ -129,15 +131,15 @@ describe("SqliteAccountStore.failWithdrawalAndRefund (#920)", () => {
       WHEN NEW.description LIKE 'Withdrawal failed:%'
       BEGIN SELECT RAISE(ABORT, 'zz920 injected refund failure'); END;
     `);
-    expect(() => failWithdrawal(store, id, "tx landed and failed")).toThrow(/zz920/);
+    expect(() => failWithdrawal(store, id, "tx landed and failed", "processing")).toThrow(/zz920/);
 
-    expect(store.getWithdrawalById(id)!.status).toBe("pending");
+    expect(store.getWithdrawalById(id)!.status).toBe("processing");
     expect(store.getOrCreateAccount("mote-a").balance).toBe(before);
     expect(refundRows(store, id)).toHaveLength(0);
 
     // Once the fault clears, the same call refunds exactly once.
     moteDb.db.exec("DROP TRIGGER zz920_refund_boom");
-    expect(failWithdrawal(store, id, "tx landed and failed")).toBe(true);
+    expect(failWithdrawal(store, id, "tx landed and failed", "processing")).toBe(true);
     expect(store.getOrCreateAccount("mote-a").balance).toBe(FUNDED);
     expect(refundRows(store, id)).toHaveLength(1);
   });
@@ -147,8 +149,8 @@ describe("SqliteAccountStore.failWithdrawalAndRefund (#920)", () => {
     moteDb = fresh.moteDb;
     const { store } = fresh;
     const id = pendingWithdrawal(store);
-    expect(store.setWithdrawalCompletion(id, TX_SIG, Date.now())).toBe(true);
-    expect(failWithdrawal(store, id, "late fail")).toBe(false);
+    expect(store.setWithdrawalCompletion(id, TX_SIG, Date.now(), "processing")).toBe(true);
+    expect(failWithdrawal(store, id, "late fail", "processing")).toBe(false);
     expect(store.getOrCreateAccount("mote-a").balance).toBe(FUNDED - WITHDRAW_MICRO);
     expect(store.getWithdrawalById(id)!.status).toBe("completed");
   });
@@ -160,7 +162,7 @@ describe("SqliteAccountStore.failWithdrawalAndRefund (#920)", () => {
     const id = pendingWithdrawal(store);
     expect(noteWithdrawalPayoutUnresolved(store, id, "unresolved payout: sig2 failed")).toBe(true);
     expect(store.getWithdrawalById(id)!.failure_reason).toBe("unresolved payout: sig2 failed");
-    expect(store.setWithdrawalCompletion(id, TX_SIG, Date.now())).toBe(true);
+    expect(store.setWithdrawalCompletion(id, TX_SIG, Date.now(), "processing")).toBe(true);
     const w = store.getWithdrawalById(id)!;
     expect(w.status).toBe("completed");
     expect(w.failure_reason).toBeNull();
@@ -172,13 +174,13 @@ describe("SqliteAccountStore.failWithdrawalAndRefund (#920)", () => {
     const { store } = fresh;
 
     const done = pendingWithdrawal(store);
-    expect(store.setWithdrawalCompletion(done, TX_SIG, Date.now())).toBe(true);
+    expect(store.setWithdrawalCompletion(done, TX_SIG, Date.now(), "processing")).toBe(true);
     expect(noteWithdrawalPayoutUnresolved(store, done, "late note")).toBe(false);
     expect(store.getWithdrawalById(done)!.failure_reason).toBeNull();
     expect(store.getWithdrawalById(done)!.status).toBe("completed");
 
     const failed = pendingWithdrawal(store);
-    expect(failWithdrawal(store, failed, "reconciled: nothing landed")).toBe(true);
+    expect(failWithdrawal(store, failed, "reconciled: nothing landed", "processing")).toBe(true);
     expect(noteWithdrawalPayoutUnresolved(store, failed, "late note")).toBe(false);
     expect(store.getWithdrawalById(failed)!.failure_reason).toBe("reconciled: nothing landed");
     expect(store.getWithdrawalById(failed)!.status).toBe("failed");
@@ -333,11 +335,11 @@ describe("Path 0 settlement outcome (#920)", () => {
 
     const body = await withdraw(relay, "zz920-unknown");
     expect(adapter.sendUsdc).toHaveBeenCalledOnce();
-    expect(body.withdrawal.status).toBe("pending");
+    expect(body.withdrawal.status).toBe("processing");
     const row = relay.moteDb.db
       .prepare("SELECT status, completed_at FROM relay_withdrawals WHERE withdrawal_id = ?")
       .get(body.withdrawal.withdrawal_id) as { status: string; completed_at: number | null };
-    expect(row.status).toBe("pending");
+    expect(row.status).toBe("processing");
     expect(row.completed_at).toBeNull();
     expect(balance(relay, "zz920-unknown")).toBe(FUNDED - WITHDRAW_MICRO);
     expect(refundCount(relay, "zz920-unknown", body.withdrawal.withdrawal_id)).toBe(0);
@@ -363,7 +365,7 @@ describe("Path 0 settlement outcome (#920)", () => {
       const headers = jsonAuthWithIdempotency();
       const body = await withdraw(relay, mid, headers);
       const id = body.withdrawal.withdrawal_id;
-      expect(body.withdrawal.status).toBe("pending");
+      expect(body.withdrawal.status).toBe("processing");
 
       const row = relay.moteDb.db
         .prepare(
@@ -376,7 +378,7 @@ describe("Path 0 settlement outcome (#920)", () => {
         payout_reference: string | null;
         failure_reason: string | null;
       };
-      expect(row.status).toBe("pending");
+      expect(row.status).toBe("processing");
       expect(row.relay_signature).toBeNull();
       expect(row.completed_at).toBeNull();
       // sig2 is not a payout: it is not recorded as the payout reference.
@@ -482,7 +484,7 @@ describe("Path 0 settlement outcome (#920)", () => {
     const mid = "zz920-real-undecidable";
     const out = await realAdapterWithdraw(mid, "undecidable");
     expect(out.sends, "no second broadcast while the first may land").toBe(1);
-    expect(out.status).toBe("pending");
+    expect(out.status).toBe("processing");
     expect(balance(out.r, mid)).toBe(FUNDED - WITHDRAW_MICRO);
     expect(refundCount(out.r, mid, out.withdrawalId)).toBe(0);
   });
@@ -506,7 +508,7 @@ describe("Path 0 settlement outcome (#920)", () => {
     const mid = "zz920-malformed";
     await registerAndFund(relay, mid);
     const body = await withdraw(relay, mid);
-    expect(body.withdrawal.status).toBe("pending");
+    expect(body.withdrawal.status).toBe("processing");
     expect(balance(relay, mid)).toBe(FUNDED - WITHDRAW_MICRO);
     expect(refundCount(relay, mid, body.withdrawal.withdrawal_id)).toBe(0);
   });

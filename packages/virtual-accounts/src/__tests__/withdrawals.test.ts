@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { InMemoryAccountStore } from "../store.js";
 import {
+  claimWithdrawalForPayout,
   completeWithdrawal,
   failWithdrawal,
   noteWithdrawalPayoutUnresolved,
@@ -147,6 +148,7 @@ describe("completeWithdrawal", () => {
     const ok = completeWithdrawal(store, {
       withdrawalId: "w1",
       payoutReference: "tx_0x123",
+      from: "pending",
       relaySignature: "sig_b64",
       relayPublicKey: "pk_hex",
       completedAt: 42_000,
@@ -162,9 +164,13 @@ describe("completeWithdrawal", () => {
 
   it("returns false when the withdrawal doesn't exist", () => {
     const store = new InMemoryAccountStore();
-    expect(completeWithdrawal(store, { withdrawalId: "missing", payoutReference: "ref" })).toBe(
-      false,
-    );
+    expect(
+      completeWithdrawal(store, {
+        withdrawalId: "missing",
+        payoutReference: "ref",
+        from: "pending",
+      }),
+    ).toBe(false);
   });
 });
 
@@ -180,7 +186,7 @@ describe("failWithdrawal", () => {
 
     expect(store.getOrCreateAccount(ALICE).balance).toBe(600_000);
 
-    const ok = failWithdrawal(store, "w1", "rail rejected");
+    const ok = failWithdrawal(store, "w1", "rail rejected", "pending");
     expect(ok).toBe(true);
     // Full refund — balance back to pre-withdrawal state.
     expect(store.getOrCreateAccount(ALICE).balance).toBe(1_000_000);
@@ -205,8 +211,8 @@ describe("failWithdrawal", () => {
     });
     if (!r || "existing" in r) throw new Error("expected fresh");
 
-    expect(failWithdrawal(store, "w1", "tx failed")).toBe(true);
-    expect(failWithdrawal(store, "w1", "tx failed (retry)")).toBe(false);
+    expect(failWithdrawal(store, "w1", "tx failed", "pending")).toBe(true);
+    expect(failWithdrawal(store, "w1", "tx failed (retry)", "pending")).toBe(false);
     expect(store.getOrCreateAccount(ALICE).balance).toBe(1_000_000);
     const refunds = store
       .getTransactions(ALICE)
@@ -216,7 +222,7 @@ describe("failWithdrawal", () => {
     expect(store.getWithdrawalById("w1")!.failure_reason).toBe("tx failed");
   });
 
-  it("an unresolved-payout note leaves the withdrawal pending and the balance debited (#920)", () => {
+  it("an unresolved-payout note leaves the claimed withdrawal processing and the balance debited (#920/#921)", () => {
     const store = seededStore(1_000_000);
     const r = requestWithdrawal(store, {
       motebitId: ALICE,
@@ -225,21 +231,24 @@ describe("failWithdrawal", () => {
     });
     if (!r || "existing" in r) throw new Error("expected fresh");
 
+    // Only a claimed payout can be unresolved.
+    expect(noteWithdrawalPayoutUnresolved(store, "w1", "unclaimed")).toBe(false);
+    expect(claimWithdrawalForPayout(store, "w1", 7)).toBe(true);
     expect(noteWithdrawalPayoutUnresolved(store, "w1", "unresolved payout: sig2 failed")).toBe(
       true,
     );
     const w = store.getWithdrawalById("w1")!;
-    expect(w.status).toBe("pending");
+    expect(w.status).toBe("processing");
     expect(w.failure_reason).toBe("unresolved payout: sig2 failed");
     expect(store.getOrCreateAccount(ALICE).balance).toBe(600_000);
 
     // Terminal withdrawals are not annotated.
-    expect(failWithdrawal(store, "w1", "reconciled: nothing landed")).toBe(true);
+    expect(failWithdrawal(store, "w1", "reconciled: nothing landed", "processing")).toBe(true);
     expect(noteWithdrawalPayoutUnresolved(store, "w1", "late note")).toBe(false);
     expect(store.getWithdrawalById("w1")!.failure_reason).toBe("reconciled: nothing landed");
   });
 
-  it("completing a noted-pending withdrawal clears the note (#920)", () => {
+  it("completing a noted processing withdrawal clears the note (#920)", () => {
     const store = seededStore(1_000_000);
     const r = requestWithdrawal(store, {
       motebitId: ALICE,
@@ -247,8 +256,11 @@ describe("failWithdrawal", () => {
       newId: () => "w1",
     });
     if (!r || "existing" in r) throw new Error("expected fresh");
+    expect(claimWithdrawalForPayout(store, "w1")).toBe(true);
     expect(noteWithdrawalPayoutUnresolved(store, "w1", "unresolved payout")).toBe(true);
-    expect(completeWithdrawal(store, { withdrawalId: "w1", payoutReference: "sig" })).toBe(true);
+    expect(
+      completeWithdrawal(store, { withdrawalId: "w1", payoutReference: "sig", from: "processing" }),
+    ).toBe(true);
     const w = store.getWithdrawalById("w1")!;
     expect(w.status).toBe("completed");
     expect(w.failure_reason).toBeNull();
@@ -262,13 +274,87 @@ describe("failWithdrawal", () => {
       newId: () => "w1",
     });
     if (!r || "existing" in r) throw new Error("expected fresh");
-    completeWithdrawal(store, { withdrawalId: "w1", payoutReference: "done" });
-    expect(failWithdrawal(store, "w1", "late fail")).toBe(false);
+    completeWithdrawal(store, { withdrawalId: "w1", payoutReference: "done", from: "pending" });
+    expect(failWithdrawal(store, "w1", "late fail", "pending")).toBe(false);
+    expect(failWithdrawal(store, "w1", "late fail", "processing")).toBe(false);
   });
 
   it("returns false for unknown withdrawal ids", () => {
     const store = new InMemoryAccountStore();
-    expect(failWithdrawal(store, "missing", "reason")).toBe(false);
+    expect(failWithdrawal(store, "missing", "reason", "pending")).toBe(false);
+  });
+});
+
+// Issue #921 — claim before send. A payout is sent only after the
+// compare-and-set `pending → processing`; its outcome then settles FROM
+// `processing` only, and a manual (from `pending`) complete/fail can never
+// touch a claimed withdrawal whose payout may still land.
+describe("claimWithdrawalForPayout (#921)", () => {
+  function fresh(): InMemoryAccountStore {
+    const store = seededStore(1_000_000);
+    const r = requestWithdrawal(store, {
+      motebitId: ALICE,
+      amountMicro: 400_000,
+      newId: () => "w1",
+    });
+    if (!r || "existing" in r) throw new Error("expected fresh");
+    return store;
+  }
+
+  it("claims exactly once and stamps claimed_at", () => {
+    const store = fresh();
+    expect(claimWithdrawalForPayout(store, "w1", 1234)).toBe(true);
+    expect(claimWithdrawalForPayout(store, "w1", 5678)).toBe(false);
+    const w = store.getWithdrawalById("w1")!;
+    expect(w.status).toBe("processing");
+    expect(w.claimed_at).toBe(1234);
+    expect(claimWithdrawalForPayout(store, "missing")).toBe(false);
+  });
+
+  it("a manual (from pending) fail or complete cannot touch a claimed withdrawal", () => {
+    const store = fresh();
+    expect(claimWithdrawalForPayout(store, "w1")).toBe(true);
+    expect(failWithdrawal(store, "w1", "operator fail during send", "pending")).toBe(false);
+    expect(
+      completeWithdrawal(store, { withdrawalId: "w1", payoutReference: "manual", from: "pending" }),
+    ).toBe(false);
+    expect(store.getWithdrawalById("w1")!.status).toBe("processing");
+    expect(store.getOrCreateAccount(ALICE).balance).toBe(600_000);
+  });
+
+  it("the payout's own outcome settles from processing — once — and a lost claim is terminal for the payout", () => {
+    const store = fresh();
+    // The operator failed it first: the claim is lost, nothing may be sent.
+    expect(failWithdrawal(store, "w1", "operator fail", "pending")).toBe(true);
+    expect(claimWithdrawalForPayout(store, "w1")).toBe(false);
+    expect(
+      completeWithdrawal(store, { withdrawalId: "w1", payoutReference: "sig", from: "processing" }),
+    ).toBe(false);
+    expect(store.getOrCreateAccount(ALICE).balance).toBe(1_000_000);
+    expect(store.getWithdrawalById("w1")!.status).toBe("failed");
+  });
+
+  it("a claimed payout that completed cannot then be refunded from processing", () => {
+    const store = fresh();
+    expect(claimWithdrawalForPayout(store, "w1")).toBe(true);
+    expect(
+      completeWithdrawal(store, { withdrawalId: "w1", payoutReference: "sig", from: "processing" }),
+    ).toBe(true);
+    expect(failWithdrawal(store, "w1", "late", "processing")).toBe(false);
+    expect(store.getOrCreateAccount(ALICE).balance).toBe(600_000);
+  });
+
+  it("refuses a terminal from-state passed by a cast", () => {
+    const store = fresh();
+    expect(claimWithdrawalForPayout(store, "w1")).toBe(true);
+    expect(
+      completeWithdrawal(store, { withdrawalId: "w1", payoutReference: "sig", from: "processing" }),
+    ).toBe(true);
+    const bogus = "completed" as unknown as "pending";
+    expect(
+      completeWithdrawal(store, { withdrawalId: "w1", payoutReference: "sig2", from: bogus }),
+    ).toBe(false);
+    expect(store.getWithdrawalById("w1")!.payout_reference).toBe("sig");
   });
 });
 

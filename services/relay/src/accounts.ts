@@ -21,6 +21,7 @@
 
 import type { DatabaseDriver } from "@motebit/persistence";
 import {
+  claimWithdrawalForPayout as pkgClaimWithdrawalForPayout,
   completeWithdrawal as pkgCompleteWithdrawal,
   computeSpendableAvailable as pkgComputeSpendableAvailable,
   failWithdrawal as pkgFailWithdrawal,
@@ -32,6 +33,7 @@ import {
   type AccountTransaction,
   type TransactionType,
   type VirtualAccount,
+  type WithdrawalOpenStatus,
   type WithdrawalRequest,
   type WithdrawalReceiptPayload,
 } from "@motebit/virtual-accounts";
@@ -229,10 +231,36 @@ export function linkWithdrawalTransfer(
   return sqliteAccountStoreFor(db).linkWithdrawalTransfer(withdrawalId, payoutReference);
 }
 
+/**
+ * Claim a pending withdrawal for an automated payout (`pending → processing`,
+ * #921). The payout MUST NOT be sent unless this returns true.
+ */
+export function claimWithdrawalForPayout(
+  db: DatabaseDriver,
+  withdrawalId: string,
+  claimedAt: number = Date.now(),
+  payoutValidUntil: number | null = null,
+): boolean {
+  return pkgClaimWithdrawalForPayout(
+    sqliteAccountStoreFor(db),
+    withdrawalId,
+    claimedAt,
+    logger,
+    payoutValidUntil,
+  );
+}
+
+/**
+ * Complete a withdrawal FROM `from` (#921) — `processing` for a claimed
+ * payout's confirmed outcome or the operator's reconcile, `pending` for the
+ * operator's manual completion. Returns false when the row is not in `from`;
+ * the caller MUST check it.
+ */
 export function completeWithdrawal(
   db: DatabaseDriver,
   withdrawalId: string,
   payoutReference: string,
+  from: WithdrawalOpenStatus,
   relaySignature?: string,
   relayPublicKey?: string,
   completedAt?: number,
@@ -240,6 +268,7 @@ export function completeWithdrawal(
   return pkgCompleteWithdrawal(sqliteAccountStoreFor(db), {
     withdrawalId,
     payoutReference,
+    from,
     relaySignature,
     relayPublicKey,
     completedAt,
@@ -254,8 +283,14 @@ export function signWithdrawalReceipt(
   return pkgSignWithdrawalReceipt(withdrawal, privateKey);
 }
 
-export function failWithdrawal(db: DatabaseDriver, withdrawalId: string, reason: string): boolean {
-  return pkgFailWithdrawal(sqliteAccountStoreFor(db), withdrawalId, reason, logger);
+/** Fail-and-refund FROM `from` (#921); false when the row is not in `from`. */
+export function failWithdrawal(
+  db: DatabaseDriver,
+  withdrawalId: string,
+  reason: string,
+  from: WithdrawalOpenStatus,
+): boolean {
+  return pkgFailWithdrawal(sqliteAccountStoreFor(db), withdrawalId, reason, from, logger);
 }
 
 export function noteWithdrawalPayoutUnresolved(

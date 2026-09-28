@@ -886,7 +886,7 @@ describe("Virtual Accounts", () => {
     expect(withdrawal.status).toBe("pending");
   });
 
-  it("withdrawal to wallet address with x402 unavailable stays pending", async () => {
+  it("withdrawal to wallet address whose x402 payout does not settle is never completed nor refunded", async () => {
     const keypair = await generateKeypair();
     const { motebitId } = await createIdentityAndDevice(relay, bytesToHex(keypair.publicKey));
 
@@ -911,8 +911,10 @@ describe("Virtual Accounts", () => {
       withdrawal: { status: string };
     };
     // x402 facilitator is not reachable in tests — isAvailable() returns false
-    // or settle() fails. Either way, auto-settlement falls back to manual pending.
-    expect(withdrawal.status).toBe("pending");
+    // (never claimed: `pending`) or the withdraw fails after the claim
+    // (`processing`, #921: the transfer may have been submitted, so only the
+    // operator's reconcile settles it). Never completed, never refunded.
+    expect(["pending", "processing"]).toContain(withdrawal.status);
   });
 
   it("admin can fail a withdrawal and refund the agent", async () => {

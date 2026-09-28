@@ -518,9 +518,9 @@ const WRITERS: readonly Writer[] = [
     table: "relay_withdrawals",
     count: 7,
     principal:
-      "withdrawal lifecycle: the operator's admin complete/fail routes (master token), the relay's rail loops (" +
+      "withdrawal lifecycle: the one-time migration mark `pre_claim_review = 1` on every row that was `pending` when `claimed_at` was added (createWithdrawalTables, no request, runs once; #921 round 3); (no blind status setter: `updateWithdrawalStatus` was deleted, #921) the operator's admin routes (master token) — /complete and /fail act FROM `pending` only and refuse a `processing` withdrawal 409; /reconcile acts FROM `processing` only, never while this process is handling the payout (claim until its outcome is written), never before the payout's own horizon (`reconcileOpensAt` in payout-horizon.ts: x402 the signed authorization's validity; Solana the last possible broadcast + a blockhash lifetime; undeclared batch rails 24h; floored at RECONCILE_MIN_AGE_MS; closed while undeterminable), and only on an explicit operator attestation (#921) — the relay's rail loops (" +
       LOOP +
-      "), and /withdraw's Path 0 auto-settle under `requireFirstPerson` on the withdrawal that same request created — completed only on a confirmed send; failed-and-refunded (`failWithdrawalAndRefund`, one transaction, status CAS so at most once) only on a send that landed and failed on-chain AND whose earlier broadcasts the adapter proved dead; otherwise left pending with an unresolved-payout note (`noteWithdrawalPayoutUnresolved`, failure_reason only, no status or balance change) (#920); the outcome comes from the chain adapter, never from the request body",
+      "), and /withdraw's Path 0 / Path 1 auto-settle under `requireFirstPerson` on the withdrawal that same request created: the payout is sent only after `claimWithdrawalForPayout` (the CAS `pending → processing`, stamping claimed_at and the payout's declared horizon `payout_valid_until`; a lost claim sends nothing, #921); then completed FROM `processing` only on a confirmed send; failed-and-refunded (`failWithdrawalAndRefund`, one transaction, status CAS on the named from-state so at most once) only on a send that landed and failed on-chain AND whose earlier broadcasts the adapter proved dead; otherwise left `processing` with an unresolved-payout note (`noteWithdrawalPayoutUnresolved`, failure_reason only, no status or balance change) (#920); the outcome comes from the chain adapter, never from the request body",
   },
   {
     file: R + "account-store-sqlite.ts",
@@ -542,7 +542,9 @@ const WRITERS: readonly Writer[] = [
     verb: "INSERT",
     table: "relay_withdrawals",
     count: 1,
-    principal: LOOP + ": the batch-withdrawal fire path",
+    principal:
+      LOOP +
+      ": the batch-withdrawal fire path, for a queue row it claimed (`pending → firing` CAS) before calling the rail; a fired payout the rail has not confirmed is recorded `processing` (claimed_at = fire time, payout_valid_until = the rail's declared validity or a 24h floor), never `pending`, so only the operator's reconcile settles it — except a rail that declares itself manual (`payoutMode: manual`, Stripe), whose fire sends nothing and is recorded `pending` for the ordinary admin complete/fail (#921)",
   },
   {
     file: R + "deposit-detector.ts",

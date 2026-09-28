@@ -7,7 +7,7 @@
  */
 
 import type { AccountStore } from "./store.js";
-import type { WithdrawalRequest } from "./types.js";
+import type { WithdrawalOpenStatus, WithdrawalRequest } from "./types.js";
 import { fromMicro } from "./money.js";
 
 /** Structured logger contract. Consumer injects a platform logger. */
@@ -168,9 +168,38 @@ export function linkWithdrawalTransfer(
   return store.linkWithdrawalTransfer(withdrawalId, payoutReference);
 }
 
+/**
+ * Claim a pending withdrawal for an automated payout (issue #921): the
+ * compare-and-set `pending → processing`. Returns true only when THIS call
+ * claimed it. Call it BEFORE sending anything; on false, do not send — the
+ * withdrawal's outcome already belongs to someone else (an operator's manual
+ * complete/fail, a concurrent handler). After a true claim, the payout's
+ * outcome settles the withdrawal FROM `processing` only
+ * (`completeWithdrawal`/`failWithdrawal` with `from: "processing"`).
+ */
+export function claimWithdrawalForPayout(
+  store: AccountStore,
+  withdrawalId: string,
+  claimedAt: number = Date.now(),
+  logger: WithdrawalsLogger = NOOP_LOGGER,
+  payoutValidUntil: number | null = null,
+): boolean {
+  const ok = store.claimWithdrawalForPayout(withdrawalId, claimedAt, payoutValidUntil);
+  if (ok)
+    logger.info("withdrawal.claimed_for_payout", { withdrawalId, claimedAt, payoutValidUntil });
+  return ok;
+}
+
 export interface CompleteWithdrawalArgs {
   withdrawalId: string;
   payoutReference: string;
+  /**
+   * The state the completion moves the withdrawal FROM (#921): `processing`
+   * for a claimed payout's own confirmed outcome or the operator's
+   * reconcile, `pending` for the operator's manual completion of an
+   * unclaimed withdrawal. A withdrawal not in `from` is not completed.
+   */
+  from: WithdrawalOpenStatus;
   relaySignature?: string;
   relayPublicKey?: string;
   completedAt?: number;
@@ -185,7 +214,7 @@ export interface CompleteWithdrawalArgs {
 export function completeWithdrawal(store: AccountStore, args: CompleteWithdrawalArgs): boolean {
   const logger = args.logger ?? NOOP_LOGGER;
   const now = args.completedAt ?? Date.now();
-  const ok = store.setWithdrawalCompletion(args.withdrawalId, args.payoutReference, now);
+  const ok = store.setWithdrawalCompletion(args.withdrawalId, args.payoutReference, now, args.from);
   if (!ok) return false;
   if (args.relaySignature && args.relayPublicKey) {
     store.setWithdrawalSignature(args.withdrawalId, args.relaySignature, args.relayPublicKey);
@@ -211,17 +240,22 @@ export function completeWithdrawal(store: AccountStore, args: CompleteWithdrawal
  * Only call this when the payout DEFINITIVELY did not move funds (a rail
  * that reported a landed-and-failed transfer, or an operator who has
  * checked). An unknown outcome — a send that threw, a timeout — must leave
- * the withdrawal pending: refunding a payout that in fact landed pays the
- * user twice.
+ * the withdrawal `processing`: refunding a payout that in fact landed pays
+ * the user twice.
+ *
+ * `from` (#921) is the state the caller owns: `processing` for a claimed
+ * payout's proven failure or the operator's reconcile, `pending` for the
+ * operator's manual fail of a withdrawal no payout ever claimed.
  */
 export function failWithdrawal(
   store: AccountStore,
   withdrawalId: string,
   reason: string,
+  from: WithdrawalOpenStatus,
   logger: WithdrawalsLogger = NOOP_LOGGER,
   failedAt?: number,
 ): boolean {
-  const refunded = store.failWithdrawalAndRefund(withdrawalId, reason, failedAt);
+  const refunded = store.failWithdrawalAndRefund(withdrawalId, reason, from, failedAt);
   if (refunded === null) return false;
 
   logger.info("withdrawal.failed", {
@@ -235,10 +269,10 @@ export function failWithdrawal(
 }
 
 /**
- * Record, on a withdrawal that stays `pending`, why its automated payout is
- * unresolved (issue #920). No status or balance change — the operator
- * reconciles on chain and then completes or fails it. Returns false when the
- * withdrawal is missing or already terminal.
+ * Record, on a claimed withdrawal that stays `processing`, why its automated
+ * payout is unresolved (issue #920/#921). No status or balance change — the
+ * operator reconciles on chain and then settles it through the reconcile
+ * door. Returns false when the withdrawal is not `processing`.
  */
 export function noteWithdrawalPayoutUnresolved(
   store: AccountStore,

@@ -20,6 +20,7 @@ import {
   getAccountBalanceDetailed,
   getTransactions,
   requestWithdrawal,
+  claimWithdrawalForPayout,
   completeWithdrawal,
   signWithdrawalReceipt,
   failWithdrawal,
@@ -35,10 +36,47 @@ import {
 } from "./accounts.js";
 import { checkIdempotency, completeIdempotency } from "./idempotency.js";
 import Stripe from "stripe";
-import type { SettlementRailRegistry, StripeSettlementRail } from "@motebit/settlement-rails";
+import {
+  payoutValidityMsOf,
+  type SettlementRailRegistry,
+  type StripeSettlementRail,
+} from "@motebit/settlement-rails";
 import type { WithdrawalRequest } from "@motebit/virtual-accounts";
 
 const logger = createLogger({ service: "budget" });
+
+export {
+  RECONCILE_MIN_AGE_MS,
+  SOLANA_BLOCKHASH_VALIDITY_MS,
+  PAYOUT_HORIZON_MARGIN_MS,
+  UNDECLARED_PAYOUT_HORIZON_MS,
+  reconcileOpensAt,
+} from "./payout-horizon.js";
+import {
+  RECONCILE_MIN_AGE_MS,
+  UNDECLARED_PAYOUT_HORIZON_MS,
+  reconcileOpensAt,
+} from "./payout-horizon.js";
+
+/** Destination shapes an automated payout path serves: Path 0 (Solana base58), Path 1 (EVM 0x). */
+const SOLANA_DEST_RE = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
+const EVM_DEST_RE = /^0x[0-9a-fA-F]{40}$/;
+
+/**
+ * A `pending` withdrawal whose payout may have been attempted with no claim
+ * recorded (#921): marked durably when the ledger first gained
+ * claim-before-send (`pre_claim_review`), or one already carrying a payout
+ * reference. A manual `/fail` on it could refund a payout that paid — check
+ * the chain first.
+ */
+export function payoutMayHaveBeenAttempted(
+  w: Pick<WithdrawalRequest, "status" | "payout_reference" | "pre_claim_review">,
+): boolean {
+  return (
+    w.status === "pending" &&
+    ((w.pre_claim_review ?? 0) === 1 || (w.payout_reference != null && w.payout_reference !== ""))
+  );
+}
 
 /**
  * Map a ledger withdrawal row to the market-v1 §2.9 wire record: convert
@@ -50,8 +88,16 @@ const logger = createLogger({ service: "budget" });
  * surfaced field is added in one place, not two.
  */
 function toWithdrawalRecord(w: WithdrawalRequest, relayId: string): AccountWithdrawalRecord {
+  // `claimed_at`, `payout_valid_until`, `pre_claim_review` (#921) are ledger
+  // bookkeeping for the operator's reconcile door, not §2.9 wire fields.
+  const {
+    claimed_at: _claimedAt,
+    payout_valid_until: _validUntil,
+    pre_claim_review: _review,
+    ...wire
+  } = w;
   return {
-    ...w,
+    ...wire,
     amount: fromMicro(w.amount),
     relay_id: relayId,
   };
@@ -173,6 +219,34 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
     operatorSolanaTransfer,
   } = deps;
   const stripeRail = railRegistry?.get("stripe") as StripeSettlementRail | undefined;
+
+  /**
+   * Withdrawals whose automated payout this process is handling right now
+   * (#921) — from the claim until the payout's outcome is WRITTEN (the
+   * completion, the refund or the unresolved note), not merely until the
+   * send returns: between the two the handler still awaits the receipt
+   * signature, and a reconcile landing there would refund a payout that the
+   * next line records as paid. The reconcile door refuses them outright.
+   */
+  const payoutsInFlight = new Set<string>();
+
+  /**
+   * When this process's send call for a still-`processing` withdrawal
+   * returned or threw — the last moment the relay could have broadcast it
+   * (`reconcileOpensAt`). In-memory: a claim from an earlier process life is
+   * bounded by the process start instead.
+   */
+  const payoutSendEndedAt = new Map<string, number>();
+
+  /** Release a payout from this process: its outcome is written (or could not be). */
+  const releasePayout = (withdrawalId: string): void => {
+    payoutsInFlight.delete(withdrawalId);
+    if (getWithdrawalById(moteDb.db, withdrawalId)?.status === "processing") {
+      payoutSendEndedAt.set(withdrawalId, Date.now());
+    } else {
+      payoutSendEndedAt.delete(withdrawalId);
+    }
+  };
 
   // NOTE: the self-declared `POST /api/v1/agents/:id/deposit` route was
   // removed (2026-07-01). It credited spendable balance from a client-
@@ -338,17 +412,86 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
     // sovereign-rail return-of-custody path (relay treasury → user wallet,
     // no third-party orchestrator, no transmission category).
     //
+    // Claim before send (issue #921; spec/market-v1.md §10.3). No path sends
+    // a payout until it has CLAIMED the withdrawal — the compare-and-set
+    // `pending → processing` (`claimPayout`). A lost claim means someone
+    // else (the operator's manual complete/fail during this handler's
+    // pre-send awaits) already owns the outcome: nothing is sent and the
+    // current record is returned as it stands. After the claim, the send's
+    // outcome settles the withdrawal FROM `processing` only, and the
+    // operator's manual complete/fail refuse a `processing` withdrawal
+    // (409) — before #921 an admin /fail during the in-flight send refunded,
+    // the send then confirmed, and the user was paid AND refunded while the
+    // row read `failed`. A `processing` withdrawal whose payout outcome is
+    // unknown (the send threw, the process died mid-send) is settled only
+    // through `/admin/withdrawals/:id/reconcile`, after the payout can no
+    // longer be in flight and on an explicit operator attestation.
+    //
     // Fail-safe: if settlement's outcome is unknown (the send threw), the
-    // withdrawal stays pending for admin resolution. Funds are already held
-    // by requestWithdrawal — no double-spend risk. Only a PROVEN
-    // failure (Path 0: the tx landed and failed on-chain AND no earlier
-    // broadcast can land) fails the withdrawal and refunds, atomically —
-    // see the outcome rule below.
+    // withdrawal stays `processing` for the operator's reconcile. Funds are
+    // already held by requestWithdrawal — no double-spend risk. Only a
+    // PROVEN failure (Path 0: the tx landed and failed on-chain AND no
+    // earlier broadcast can land) fails the withdrawal and refunds,
+    // atomically — see the outcome rule below.
     let autoSettled = false;
     const isSolanaDest =
-      result.destination !== "pending" && /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(result.destination);
-    const isWalletDest =
-      result.destination !== "pending" && /^0x[0-9a-fA-F]{40}$/.test(result.destination);
+      result.destination !== "pending" && SOLANA_DEST_RE.test(result.destination);
+    const isWalletDest = result.destination !== "pending" && EVM_DEST_RE.test(result.destination);
+
+    // The claim (#921). Returns true only when THIS request moved the row
+    // `pending → processing`; the caller sends nothing on false.
+    //
+    // `payoutValidUntil` is the payout's own horizon: the latest moment what
+    // the rail is handed can still land (x402: the authorization's
+    // `validBefore`); null for a payout the relay broadcasts itself (Solana),
+    // whose horizon is bound to this process (`reconcileOpensAt`). On a won
+    // claim the payout is in flight here until `releasePayout`.
+    const claimPayout = (path: "solana" | "x402", payoutValidUntil: number | null): boolean => {
+      const claimedAt = Date.now();
+      const claimed = claimWithdrawalForPayout(
+        moteDb.db,
+        result.withdrawal_id,
+        claimedAt,
+        payoutValidUntil,
+      );
+      if (claimed) {
+        payoutsInFlight.add(result.withdrawal_id);
+      } else {
+        const current = getWithdrawalById(moteDb.db, result.withdrawal_id);
+        logger.error("withdrawal.payout_claim_lost", {
+          correlationId,
+          motebitId,
+          withdrawalId: result.withdrawal_id,
+          path,
+          status: current?.status ?? null,
+          destination: result.destination,
+          note: "no payout sent: the withdrawal left `pending` before this request claimed it",
+        });
+      }
+      return claimed;
+    };
+
+    // A settling write that lost to another actor after the payout was sent.
+    // Never silent (#921): the payout's real outcome and the row disagree,
+    // and only an operator can reconcile them.
+    const settleLost = (
+      path: "solana" | "x402",
+      outcome: string,
+      data: Record<string, unknown>,
+    ) => {
+      const current = getWithdrawalById(moteDb.db, result.withdrawal_id);
+      logger.error("withdrawal.payout_settle_lost", {
+        correlationId,
+        motebitId,
+        withdrawalId: result.withdrawal_id,
+        path,
+        outcome,
+        status: current?.status ?? null,
+        destination: result.destination,
+        ...data,
+        note: "the payout's outcome could not be recorded: the withdrawal is no longer `processing`; reconcile the ledger against the chain",
+      });
+    };
 
     // Path 0: native Solana sovereign return of custody.
     //
@@ -366,7 +509,8 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
     // Operator primitive: packages/wallet-solana/src/operator-transfer.ts.
     //
     // Settlement-outcome rule (issue #920; spec/market-v1.md §10.4). Each
-    // send outcome maps to exactly one ledger action:
+    // send outcome maps to exactly one ledger action, each FROM `processing`
+    // (the claim, #921):
     //
     //   1. confirmed:true — the reported signature landed without error:
     //      USDC moved. Complete with that signature as payout_reference and a
@@ -377,7 +521,7 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
     //      this payout can land. Nothing was paid, so fail the withdrawal and
     //      refund in ONE transaction (`failWithdrawal` →
     //      `AccountStore.failWithdrawalAndRefund`, at most once).
-    //   3. everything else — UNKNOWN; the withdrawal stays pending, the
+    //   3. everything else — UNKNOWN; the withdrawal stays `processing`, the
     //      balance stays debited, never refunded:
     //        - the send threw (timeout, expiry on the last attempt, network);
     //        - confirmed:false with earlierBroadcastsDead false/absent. The
@@ -386,14 +530,16 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
     //          paid; the re-broadcast then lands-and-fails (its create-ATA
     //          instruction is not idempotent). `confirmed:false` describes the
     //          LAST signature only, so refunding here would pay twice. The
-    //          reason is recorded on the pending row for the operator.
+    //          reason is recorded on the row for the operator's reconcile.
     //
     // Before #920 outcome 2 was recorded as outcome 1: a completed, signed
     // withdrawal whose funds never moved, with the balance still debited.
     if (!autoSettled && isSolanaDest && operatorSolanaTransfer) {
+      let claimed = false;
       try {
         const available = await operatorSolanaTransfer.isAvailable();
-        if (available) {
+        if (available && claimPayout("solana", null)) {
+          claimed = true;
           const sendResult = await operatorSolanaTransfer.sendUsdc(
             result.destination,
             // result.amount is stored in micro-units; the operator-side
@@ -419,29 +565,36 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
               },
               relayIdentity.privateKey,
             );
-            completeWithdrawal(
+            const completed = completeWithdrawal(
               moteDb.db,
               result.withdrawal_id,
               sendResult.signature,
+              "processing",
               signature,
               relayPublicKeyHex,
               completedAt,
             );
-
-            autoSettled = true;
-            logger.info("withdrawal.solana.auto_settled", {
-              correlationId,
-              motebitId,
-              withdrawalId: result.withdrawal_id,
-              txSignature: sendResult.signature,
-              slot: sendResult.slot,
-              confirmed: sendResult.confirmed,
-              // A confirmed signature paid. If earlier broadcasts are not
-              // proven dead, one of them may ALSO have paid — the log keeps
-              // that visible for reconciliation.
-              earlierBroadcastsDead: sendResult.earlierBroadcastsDead ?? null,
-              destination: result.destination,
-            });
+            if (completed) {
+              autoSettled = true;
+              logger.info("withdrawal.solana.auto_settled", {
+                correlationId,
+                motebitId,
+                withdrawalId: result.withdrawal_id,
+                txSignature: sendResult.signature,
+                slot: sendResult.slot,
+                confirmed: sendResult.confirmed,
+                // A confirmed signature paid. If earlier broadcasts are not
+                // proven dead, one of them may ALSO have paid — the log keeps
+                // that visible for reconciliation.
+                earlierBroadcastsDead: sendResult.earlierBroadcastsDead ?? null,
+                destination: result.destination,
+              });
+            } else {
+              settleLost("solana", "confirmed", {
+                txSignature: sendResult.signature,
+                slot: sendResult.slot,
+              });
+            }
           } else if (sendResult.confirmed === false && sendResult.earlierBroadcastsDead === true) {
             // Outcome 2 — landed and failed, and no earlier broadcast can
             // land: provably nothing moved.
@@ -449,46 +602,77 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
               moteDb.db,
               result.withdrawal_id,
               `solana transfer ${sendResult.signature} landed at slot ${sendResult.slot} but failed on-chain (confirmed:false), and no earlier broadcast of this payout can land; no USDC moved, amount returned to balance`,
+              "processing",
             );
-            logger.warn("withdrawal.solana.landed_failed", {
-              correlationId,
-              motebitId,
-              withdrawalId: result.withdrawal_id,
-              txSignature: sendResult.signature,
-              slot: sendResult.slot,
-              destination: result.destination,
-              refunded,
-            });
+            if (refunded) {
+              logger.warn("withdrawal.solana.landed_failed", {
+                correlationId,
+                motebitId,
+                withdrawalId: result.withdrawal_id,
+                txSignature: sendResult.signature,
+                slot: sendResult.slot,
+                destination: result.destination,
+                refunded,
+              });
+            } else {
+              settleLost("solana", "landed_failed", {
+                txSignature: sendResult.signature,
+                slot: sendResult.slot,
+              });
+            }
           } else {
             // Outcome 3 (reported) — the last broadcast failed, but an earlier
             // broadcast of this payout is not proven dead and may have paid.
-            // Stay pending, no refund; record why for the operator.
+            // Stay `processing`, no refund; record why for the operator.
             const noted = noteWithdrawalPayoutUnresolved(
               moteDb.db,
               result.withdrawal_id,
               `unresolved payout: solana transfer ${sendResult.signature} landed at slot ${sendResult.slot} and failed on-chain (confirmed:false), but earlier broadcasts of this payout are not proven dead (earlierBroadcastsDead=${String(sendResult.earlierBroadcastsDead)}) and may have paid; reconcile on chain before completing or failing`,
             );
-            logger.warn("withdrawal.solana.outcome_unresolved", {
-              correlationId,
-              motebitId,
-              withdrawalId: result.withdrawal_id,
-              txSignature: sendResult.signature,
-              slot: sendResult.slot,
-              earlierBroadcastsDead: sendResult.earlierBroadcastsDead ?? null,
-              destination: result.destination,
-              noted,
-            });
+            if (noted) {
+              logger.warn("withdrawal.solana.outcome_unresolved", {
+                correlationId,
+                motebitId,
+                withdrawalId: result.withdrawal_id,
+                txSignature: sendResult.signature,
+                slot: sendResult.slot,
+                earlierBroadcastsDead: sendResult.earlierBroadcastsDead ?? null,
+                destination: result.destination,
+                noted,
+              });
+            } else {
+              settleLost("solana", "unresolved", {
+                txSignature: sendResult.signature,
+                slot: sendResult.slot,
+              });
+            }
           }
         }
       } catch (err) {
-        // Outcome 3 (thrown) — unknown. Stay pending; never refund here.
+        // Outcome 3 (thrown) — unknown. A claimed withdrawal stays
+        // `processing`; never refund here. An unclaimed one (isAvailable
+        // threw) was never sent and stays `pending`.
+        const error = err instanceof Error ? err.message : String(err);
+        if (claimed) {
+          const noted = noteWithdrawalPayoutUnresolved(
+            moteDb.db,
+            result.withdrawal_id,
+            `unresolved payout: solana send threw (${error}); the transfer may have landed — reconcile on chain before completing or failing`,
+          );
+          if (!noted) settleLost("solana", "threw", { error });
+        }
         logger.warn("withdrawal.solana.auto_settle_failed", {
           correlationId,
           motebitId,
           withdrawalId: result.withdrawal_id,
           destination: result.destination,
-          error: err instanceof Error ? err.message : String(err),
+          claimed,
+          error,
         });
+      } finally {
+        // Only now — after the outcome's write (or the note) — may the
+        // reconcile door see this payout as no longer in flight (#921).
+        if (claimed) releasePayout(result.withdrawal_id);
       }
     }
 
@@ -501,12 +685,23 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
     // that can drive user-facing transmission are those that opt-in
     // via the `WithdrawableGuestRail` marker. `BridgeSettlementRail`
     // does NOT opt-in — Bridge is treasury-only.
+    //
+    // Same claim-before-send as Path 0 (#921): the rail is called only after
+    // `claimPayout`, the completion is FROM `processing`, and a thrown
+    // withdraw leaves the withdrawal `processing` for the operator's
+    // reconcile (the transfer may have been submitted).
     if (!autoSettled && railRegistry && isWalletDest) {
       const x402Rail = railRegistry.get("x402");
       if (x402Rail && isWithdrawableRail(x402Rail)) {
+        let claimed = false;
         try {
           const available = await x402Rail.isAvailable();
-          if (available) {
+          // The authorization the rail signs stays submittable until its
+          // declared validity; a rail declaring none gets the conservative
+          // floor — never a shorter horizon.
+          const validityMs = payoutValidityMsOf(x402Rail) ?? UNDECLARED_PAYOUT_HORIZON_MS;
+          if (available && claimPayout("x402", Date.now() + validityMs)) {
+            claimed = true;
             const withdrawResult = await x402Rail.withdraw(
               motebitId,
               body.amount,
@@ -530,32 +725,62 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
               },
               relayIdentity.privateKey,
             );
-            completeWithdrawal(
+            const completed = completeWithdrawal(
               moteDb.db,
               result.withdrawal_id,
               withdrawResult.proof.reference,
+              "processing",
               signature,
               relayPublicKeyHex,
               completedAt,
             );
-            await x402Rail.attachProof(result.withdrawal_id, withdrawResult.proof);
-
-            autoSettled = true;
-            logger.info("withdrawal.x402.auto_settled", {
-              correlationId,
-              motebitId,
-              withdrawalId: result.withdrawal_id,
-              txHash: withdrawResult.proof.reference,
-              network: withdrawResult.proof.network,
-            });
+            if (completed) {
+              autoSettled = true;
+              // The payout is recorded; a proof-attach failure must not be
+              // read as an unknown payout outcome.
+              try {
+                await x402Rail.attachProof(result.withdrawal_id, withdrawResult.proof);
+              } catch (proofErr) {
+                logger.error("withdrawal.x402.proof_attach_failed", {
+                  correlationId,
+                  withdrawalId: result.withdrawal_id,
+                  txHash: withdrawResult.proof.reference,
+                  error: proofErr instanceof Error ? proofErr.message : String(proofErr),
+                });
+              }
+              logger.info("withdrawal.x402.auto_settled", {
+                correlationId,
+                motebitId,
+                withdrawalId: result.withdrawal_id,
+                txHash: withdrawResult.proof.reference,
+                network: withdrawResult.proof.network,
+              });
+            } else {
+              settleLost("x402", "confirmed", {
+                txHash: withdrawResult.proof.reference,
+                network: withdrawResult.proof.network,
+              });
+            }
           }
         } catch (err) {
+          const error = err instanceof Error ? err.message : String(err);
+          if (claimed) {
+            const noted = noteWithdrawalPayoutUnresolved(
+              moteDb.db,
+              result.withdrawal_id,
+              `unresolved payout: x402 withdraw threw (${error}); the transfer may have been submitted — reconcile on chain before completing or failing`,
+            );
+            if (!noted) settleLost("x402", "threw", { error });
+          }
           logger.warn("withdrawal.x402.auto_settle_failed", {
             correlationId,
             motebitId,
             withdrawalId: result.withdrawal_id,
-            error: err instanceof Error ? err.message : String(err),
+            claimed,
+            error,
           });
+        } finally {
+          if (claimed) releasePayout(result.withdrawal_id);
         }
       }
     }
@@ -618,13 +843,201 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
 
   // --- Admin: pending withdrawals ---
   /** @internal */
+  // Lists `pending` AND `processing` rows. Each carries `status` and
+  // `claimed_at`; a `processing` row carries `reconcile_opens_at` — the same
+  // moment the reconcile route enforces (`reconcileOpensAt`), or null while
+  // its payout is in flight in this process — and
+  // `payout_may_have_been_attempted` flags a pre-#921 row (see
+  // `payoutMayHaveBeenAttempted`). `reconcile_min_age_ms` is the floor only.
   app.get("/api/v1/admin/withdrawals/pending", (c) => {
     const withdrawals = getPendingWithdrawals(moteDb.db).map((w) => ({
       ...w,
       amount: fromMicro(w.amount),
+      payout_may_have_been_attempted: payoutMayHaveBeenAttempted(w),
+      ...reconcileStateOf(w),
+      payout_in_flight_here: payoutsInFlight.has(w.withdrawal_id),
     }));
-    return c.json({ withdrawals, count: withdrawals.length });
+    return c.json({
+      withdrawals,
+      count: withdrawals.length,
+      reconcile_min_age_ms: RECONCILE_MIN_AGE_MS,
+    });
   });
+
+  // --- Admin: pre-#921 withdrawals to check on chain (read-only) ---
+  //
+  // Every `pending` withdrawal that was already `pending` when this ledger
+  // gained claim-before-send (marked durably, once, by the migration that
+  // added `claimed_at`), or that carries a payout reference. Before #921 an
+  // automated send left no claim, so any of these may have been paid; check
+  // the chain for each before the first manual /fail after deploy. Read-only.
+  /** @internal */
+  app.get("/api/v1/admin/withdrawals/pre-claim", (c) => {
+    const withdrawals = getPendingWithdrawals(moteDb.db)
+      .filter((w) => payoutMayHaveBeenAttempted(w))
+      .map((w) => ({ ...w, amount: fromMicro(w.amount) }));
+    return c.json({
+      withdrawals,
+      count: withdrawals.length,
+      note: "a payout may have been attempted for each of these before claims were recorded — check the chain before failing",
+    });
+  });
+
+  // --- Admin: settling a withdrawal (#921) ---
+  //
+  // Three doors, split by the state they own (spec/market-v1.md §10.3):
+  //
+  //   - /complete and /fail act on a `pending` withdrawal only — one no
+  //     payout ever claimed (a manual/off-rail payout, a destination no
+  //     automated path serves). On a `processing` withdrawal they refuse
+  //     409: its payout was handed to a rail and may still land, so a
+  //     manual fail could refund a payout that then pays (the #921 double
+  //     pay), and a manual complete could record a second payout.
+  //   - /reconcile acts on a `processing` withdrawal only, and only once its
+  //     payout can no longer land: never while this process is still
+  //     handling it (claim → outcome written), never before
+  //     `reconcileOpensAt` — the payout's own horizon (x402: the signed
+  //     authorization's validity; Solana: the last moment this relay could
+  //     have broadcast, plus a blockhash lifetime), floored at
+  //     RECONCILE_MIN_AGE_MS after the claim — and only on an explicit
+  //     operator attestation of what the chain shows. This is the door for a payout whose outcome is unknown — the
+  //     send threw, or the process died mid-send — so a crash never strands
+  //     a withdrawal with no way out, and it is never a blind refund.
+
+  /**
+   * Why a `processing` withdrawal cannot be reconciled yet (#921):
+   *   - `in_flight_here`: this relay is still handling its payout;
+   *   - `undetermined`: the relay cannot place the payout's horizon yet
+   *     (fail closed; see `reconcileOpensAt`);
+   *   - `horizon`: the payout may still land until `reconcile_opens_at`.
+   * `open` means the reconcile door is open now.
+   */
+  type ReconcileState = "in_flight_here" | "undetermined" | "horizon" | "open";
+
+  function reconcileStateOf(w: WithdrawalRequest): {
+    reconcile_state: ReconcileState | null;
+    reconcile_opens_at: number | null;
+  } {
+    if (w.status !== "processing") return { reconcile_state: null, reconcile_opens_at: null };
+    if (payoutsInFlight.has(w.withdrawal_id)) {
+      return { reconcile_state: "in_flight_here", reconcile_opens_at: null };
+    }
+    const now = Date.now();
+    const opensAt = reconcileOpensAt(w, payoutSendEndedAt.get(w.withdrawal_id), { now });
+    if (opensAt === null) return { reconcile_state: "undetermined", reconcile_opens_at: null };
+    return { reconcile_state: now >= opensAt ? "open" : "horizon", reconcile_opens_at: opensAt };
+  }
+
+  const PAYOUT_IN_FLIGHT_MESSAGES: Record<Exclude<ReconcileState, "open"> | "processing", string> =
+    {
+      processing:
+        "payout in flight — reconcile after the send resolves (POST /api/v1/admin/withdrawals/:withdrawalId/reconcile)",
+      in_flight_here:
+        "payout in flight — the relay is still handling this payout; reconcile after its outcome is recorded",
+      undetermined:
+        "payout horizon cannot be determined yet — the relay cannot place when this payout stops being able to land; reconcile stays closed",
+      horizon: "payout may still land — reconcile opens at",
+    };
+
+  const payoutInFlightResponse = (
+    c: Context,
+    withdrawalId: string,
+    reason: Exclude<ReconcileState, "open"> | "processing" = "processing",
+    opensAt: number | null = null,
+  ): Response => {
+    const at =
+      reason === "horizon" && opensAt !== null && Number.isFinite(opensAt) ? opensAt : null;
+    return c.json(
+      {
+        error: "WITHDRAWAL_PAYOUT_IN_FLIGHT",
+        reason,
+        message:
+          at !== null
+            ? `${PAYOUT_IN_FLIGHT_MESSAGES.horizon} ${new Date(at).toISOString()}`
+            : PAYOUT_IN_FLIGHT_MESSAGES[reason === "horizon" ? "undetermined" : reason],
+        withdrawal_id: withdrawalId,
+        reconcile_opens_at: at,
+        status: 409,
+      },
+      409,
+    );
+  };
+
+  /**
+   * Store the proof record of an operator-recorded payout (manual complete or
+   * a `paid` reconcile). Every completed withdrawal must have a proof record
+   * for reconciliation check #6.
+   */
+  const attachOperatorProof = async (
+    withdrawalId: string,
+    payoutReference: string,
+    completedAt: number,
+    railName: string | undefined,
+    network: string | undefined,
+  ): Promise<void> => {
+    // Attach proof through the rail boundary — sibling parity with deposit proof flows.
+    if (railName && railRegistry) {
+      const rail = railRegistry.get(railName);
+      if (rail) {
+        await rail.attachProof(withdrawalId, {
+          reference: payoutReference,
+          railType: rail.railType,
+          network,
+          confirmedAt: completedAt,
+        });
+      } else {
+        // Unknown rail name — store manual proof so reconciliation still passes
+        storeSettlementProof(
+          moteDb.db,
+          withdrawalId,
+          {
+            reference: payoutReference,
+            railType: "manual",
+            network,
+            confirmedAt: completedAt,
+          },
+          `manual:${railName}`,
+        );
+      }
+    } else {
+      // No rail specified — manual/off-rail payout. Store a manual proof record so that
+      // every completed withdrawal has an entry in relay_settlement_proofs.
+      storeSettlementProof(
+        moteDb.db,
+        withdrawalId,
+        {
+          reference: payoutReference,
+          railType: "manual",
+          confirmedAt: completedAt,
+        },
+        "manual",
+      );
+    }
+  };
+
+  /** Sign the completion receipt for `withdrawalId` at `completedAt`. */
+  const signCompletion = async (
+    withdrawalId: string,
+    w: { motebit_id: string; amount: number; currency: string; destination: string },
+    payoutReference: string,
+    completedAt: number,
+  ): Promise<{ signature: string; relayPublicKeyHex: string }> => {
+    const relayPublicKeyHex = bytesToHex(relayIdentity.publicKey);
+    const signature = await signWithdrawalReceipt(
+      {
+        withdrawal_id: withdrawalId,
+        motebit_id: w.motebit_id,
+        amount: fromMicro(w.amount),
+        currency: w.currency,
+        destination: w.destination,
+        payout_reference: payoutReference,
+        completed_at: completedAt,
+        relay_id: relayIdentity.relayMotebitId,
+      },
+      relayIdentity.privateKey,
+    );
+    return { signature, relayPublicKeyHex };
+  };
 
   // --- Admin: complete withdrawal ---
   /** @internal */
@@ -641,81 +1054,49 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
     if (!body.payout_reference || typeof body.payout_reference !== "string")
       throw new HTTPException(400, { message: "payout_reference is required" });
 
-    const withdrawal = moteDb.db
-      .prepare(
-        "SELECT * FROM relay_withdrawals WHERE withdrawal_id = ? AND status IN ('pending', 'processing')",
-      )
-      .get(withdrawalId) as
-      { motebit_id: string; amount: number; currency: string; destination: string } | undefined;
-    if (!withdrawal)
+    const withdrawal = getWithdrawalById(moteDb.db, withdrawalId);
+    if (withdrawal?.status === "processing") return payoutInFlightResponse(c, withdrawalId);
+    if (withdrawal?.status !== "pending")
       throw new HTTPException(404, { message: "Withdrawal not found or already completed/failed" });
 
     const completedAt = Date.now();
-    const relayPublicKeyHex = bytesToHex(relayIdentity.publicKey);
-    const signature = await signWithdrawalReceipt(
-      {
-        withdrawal_id: withdrawalId,
-        motebit_id: withdrawal.motebit_id,
-        amount: fromMicro(withdrawal.amount),
-        currency: withdrawal.currency,
-        destination: withdrawal.destination,
-        payout_reference: body.payout_reference,
-        completed_at: completedAt,
-        relay_id: relayIdentity.relayMotebitId,
-      },
-      relayIdentity.privateKey,
+    const { signature, relayPublicKeyHex } = await signCompletion(
+      withdrawalId,
+      withdrawal,
+      body.payout_reference,
+      completedAt,
     );
 
+    // FROM `pending` only (#921): a payout that claimed the row during the
+    // signing await owns it now.
     const success = completeWithdrawal(
       moteDb.db,
       withdrawalId,
       body.payout_reference,
+      "pending",
       signature,
       relayPublicKeyHex,
       completedAt,
     );
-    if (!success)
-      throw new HTTPException(404, { message: "Withdrawal not found or already completed/failed" });
-
-    // Attach proof through the rail boundary — sibling parity with deposit proof flows.
-    // Every completed withdrawal must have a proof record for reconciliation check #6.
-    if (body.rail && railRegistry) {
-      const rail = railRegistry.get(body.rail);
-      if (rail) {
-        await rail.attachProof(withdrawalId, {
-          reference: body.payout_reference,
-          railType: rail.railType,
-          network: body.network,
-          confirmedAt: completedAt,
-        });
-      } else {
-        // Unknown rail name — store manual proof so reconciliation still passes
-        storeSettlementProof(
-          moteDb.db,
-          withdrawalId,
-          {
-            reference: body.payout_reference,
-            railType: "manual",
-            network: body.network,
-            confirmedAt: completedAt,
-          },
-          `manual:${body.rail}`,
-        );
-      }
-    } else {
-      // No rail specified — manual/off-rail payout. Store a manual proof record so that
-      // every completed withdrawal has an entry in relay_settlement_proofs.
-      storeSettlementProof(
-        moteDb.db,
+    if (!success) {
+      const now = getWithdrawalById(moteDb.db, withdrawalId);
+      logger.error("withdrawal.admin.complete_lost", {
+        correlationId,
         withdrawalId,
-        {
-          reference: body.payout_reference,
-          railType: "manual",
-          confirmedAt: completedAt,
-        },
-        "manual",
-      );
+        status: now?.status ?? null,
+        payoutReference: body.payout_reference,
+      });
+      if (now?.status === "processing") return payoutInFlightResponse(c, withdrawalId);
+      throw new HTTPException(404, { message: "Withdrawal not found or already completed/failed" });
     }
+
+    await attachOperatorProof(
+      withdrawalId,
+      body.payout_reference,
+      completedAt,
+      body.rail,
+      body.network,
+    );
 
     logger.info("withdrawal.admin.completed", {
       correlationId,
@@ -741,11 +1122,170 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
     if (!body.reason || typeof body.reason !== "string")
       throw new HTTPException(400, { message: "reason is required" });
 
-    const success = failWithdrawal(moteDb.db, withdrawalId, body.reason);
-    if (!success)
+    // FROM `pending` only (#921): never refund a `processing` withdrawal,
+    // whose payout may still land.
+    const success = failWithdrawal(moteDb.db, withdrawalId, body.reason, "pending");
+    if (!success) {
+      const now = getWithdrawalById(moteDb.db, withdrawalId);
+      if (now?.status === "processing") {
+        logger.warn("withdrawal.admin.fail_refused_in_flight", { correlationId, withdrawalId });
+        return payoutInFlightResponse(c, withdrawalId);
+      }
       throw new HTTPException(404, { message: "Withdrawal not found or already completed/failed" });
+    }
 
     logger.info("withdrawal.admin.failed", { correlationId, withdrawalId, reason: body.reason });
+    return c.json({ withdrawal_id: withdrawalId, status: "failed", refunded: true });
+  });
+
+  // --- Admin: reconcile a claimed payout (#921) ---
+  /** @internal */
+  app.post("/api/v1/admin/withdrawals/:withdrawalId/reconcile", async (c) => {
+    const withdrawalId = c.req.param("withdrawalId");
+    const correlationId = c.get("correlationId" as never) as string;
+    const body: {
+      /** What the chain shows for this payout. */
+      outcome?: unknown;
+      /** The operator's statement of what they checked (explorer lookup, signature, balance). Required. */
+      attestation?: unknown;
+      /** Required for `paid`: the transfer that paid it. */
+      payout_reference?: unknown;
+      rail?: unknown;
+      network?: unknown;
+    } = await c.req.json<Record<string, unknown>>().catch(() => ({}));
+    const outcome = body.outcome;
+    if (outcome !== "paid" && outcome !== "not_paid")
+      throw new HTTPException(400, { message: 'outcome must be "paid" or "not_paid"' });
+    if (typeof body.attestation !== "string" || body.attestation.trim() === "")
+      throw new HTTPException(400, {
+        message:
+          "attestation is required: state what the chain shows for this payout — a reconcile is never a blind refund",
+      });
+    const attestation = body.attestation.trim().slice(0, 2000);
+    const payoutReference =
+      typeof body.payout_reference === "string" && body.payout_reference !== ""
+        ? body.payout_reference
+        : null;
+    if (outcome === "paid" && payoutReference === null)
+      throw new HTTPException(400, { message: "payout_reference is required for outcome paid" });
+    const railName = typeof body.rail === "string" ? body.rail : undefined;
+    const network = typeof body.network === "string" ? body.network : undefined;
+
+    const withdrawal = getWithdrawalById(moteDb.db, withdrawalId);
+    if (!withdrawal) throw new HTTPException(404, { message: "Withdrawal not found" });
+    if (withdrawal.status !== "processing") {
+      return c.json(
+        {
+          error: "WITHDRAWAL_NOT_PROCESSING",
+          message:
+            withdrawal.status === "pending"
+              ? "no payout claimed this withdrawal; settle a pending withdrawal with /complete or /fail"
+              : `withdrawal is already ${withdrawal.status}`,
+          withdrawal_id: withdrawalId,
+          withdrawal_status: withdrawal.status,
+          status: 409,
+        },
+        409,
+      );
+    }
+    const now = Date.now();
+    if (payoutsInFlight.has(withdrawalId)) {
+      logger.warn("withdrawal.admin.reconcile_refused_in_flight", {
+        correlationId,
+        withdrawalId,
+        inProcess: true,
+      });
+      return payoutInFlightResponse(c, withdrawalId, "in_flight_here");
+    }
+    const opensAt = reconcileOpensAt(withdrawal, payoutSendEndedAt.get(withdrawalId), { now });
+    if (opensAt === null) {
+      logger.warn("withdrawal.admin.reconcile_refused_undetermined", {
+        correlationId,
+        withdrawalId,
+        claimedAt: withdrawal.claimed_at ?? null,
+      });
+      return payoutInFlightResponse(c, withdrawalId, "undetermined");
+    }
+    if (now < opensAt) {
+      logger.warn("withdrawal.admin.reconcile_refused_in_flight", {
+        correlationId,
+        withdrawalId,
+        inProcess: false,
+        claimedAt: withdrawal.claimed_at ?? null,
+        payoutValidUntil: withdrawal.payout_valid_until ?? null,
+        opensAt,
+      });
+      return payoutInFlightResponse(c, withdrawalId, "horizon", opensAt);
+    }
+
+    if (outcome === "paid") {
+      const { signature, relayPublicKeyHex } = await signCompletion(
+        withdrawalId,
+        withdrawal,
+        payoutReference!,
+        now,
+      );
+      const success = completeWithdrawal(
+        moteDb.db,
+        withdrawalId,
+        payoutReference!,
+        "processing",
+        signature,
+        relayPublicKeyHex,
+        now,
+      );
+      if (!success) {
+        const current = getWithdrawalById(moteDb.db, withdrawalId);
+        logger.error("withdrawal.admin.reconcile_lost", {
+          correlationId,
+          withdrawalId,
+          outcome,
+          status: current?.status ?? null,
+        });
+        throw new HTTPException(409, {
+          message: `withdrawal is no longer processing (${current?.status ?? "missing"})`,
+        });
+      }
+      await attachOperatorProof(withdrawalId, payoutReference!, now, railName, network);
+      logger.info("withdrawal.admin.reconciled", {
+        correlationId,
+        withdrawalId,
+        outcome,
+        payoutReference,
+        attestation,
+      });
+      return c.json({
+        withdrawal_id: withdrawalId,
+        status: "completed",
+        relay_signature: signature,
+        relay_public_key: relayPublicKeyHex,
+      });
+    }
+
+    const refunded = failWithdrawal(
+      moteDb.db,
+      withdrawalId,
+      `reconciled not paid (operator attestation): ${attestation}`,
+      "processing",
+    );
+    if (!refunded) {
+      const current = getWithdrawalById(moteDb.db, withdrawalId);
+      logger.error("withdrawal.admin.reconcile_lost", {
+        correlationId,
+        withdrawalId,
+        outcome,
+        status: current?.status ?? null,
+      });
+      throw new HTTPException(409, {
+        message: `withdrawal is no longer processing (${current?.status ?? "missing"})`,
+      });
+    }
+    logger.info("withdrawal.admin.reconciled", {
+      correlationId,
+      withdrawalId,
+      outcome,
+      attestation,
+    });
     return c.json({ withdrawal_id: withdrawalId, status: "failed", refunded: true });
   });
 

@@ -422,7 +422,7 @@ describe("withdrawal lifecycle: request → fail restores balance to pre-request
           });
           if (!result || "existing" in result) return false;
 
-          const okFail = failWithdrawal(store, result.withdrawal_id, "vendor-error");
+          const okFail = failWithdrawal(store, result.withdrawal_id, "vendor-error", "pending");
           if (!okFail) return false;
 
           const balAfter = store.getAccount("mote-a")?.balance ?? 0;

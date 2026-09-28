@@ -138,8 +138,8 @@ describe("InMemoryAccountStore — withdrawals", () => {
       idempotency_key: null,
       requested_at: 1,
     });
-    store.updateWithdrawalStatus("w1", "failed", "test");
-    expect(store.setWithdrawalCompletion("w1", "ref", 5)).toBe(false);
+    expect(store.failWithdrawalAndRefund("w1", "test", "pending")).not.toBeNull();
+    expect(store.setWithdrawalCompletion("w1", "ref", 5, "pending")).toBe(false);
   });
 
   it("setWithdrawalSignature persists signature + public key", () => {
@@ -188,7 +188,7 @@ describe("InMemoryAccountStore — withdrawals", () => {
       idempotency_key: null,
       requested_at: 2,
     });
-    store.updateWithdrawalStatus("w2", "failed", "test");
+    expect(store.failWithdrawalAndRefund("w2", "test", "pending")).not.toBeNull();
     const pending = store.getPendingWithdrawalsAdmin();
     expect(pending.map((w) => w.withdrawal_id)).toEqual(["w1", "w3"]);
   });
@@ -222,7 +222,7 @@ describe("InMemoryAccountStore — withdrawals", () => {
       idempotency_key: null,
       requested_at: 3,
     });
-    store.updateWithdrawalStatus("w1", "completed");
+    expect(store.setWithdrawalCompletion("w1", "ref", 5, "pending")).toBe(true);
     expect(store.getPendingWithdrawalsTotal(ALICE)).toBe(200);
     expect(store.getPendingWithdrawalsTotal(BOB)).toBe(500);
   });

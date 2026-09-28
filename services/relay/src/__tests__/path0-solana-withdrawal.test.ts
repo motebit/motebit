@@ -229,7 +229,7 @@ describe("Path 0 — Solana sovereign-return withdrawal", () => {
     expect(row!.status).toBe("pending");
   });
 
-  it("does NOT fire when adapter.sendUsdc throws — withdrawal stays pending for admin resolution", async () => {
+  it("does NOT settle when adapter.sendUsdc throws — withdrawal stays processing for the operator's reconcile (#921)", async () => {
     const { operator, adapter } = makeOperator({
       sendUsdc: vi.fn().mockRejectedValue(new Error("Solana RPC timeout")),
     });
@@ -249,14 +249,15 @@ describe("Path 0 — Solana sovereign-return withdrawal", () => {
 
     // sendUsdc was attempted but threw
     expect(adapter.sendUsdc).toHaveBeenCalledOnce();
-    // Withdrawal stays pending — funds already held by requestWithdrawal,
-    // no double-spend, admin can resolve
+    // The payout was claimed before the send (#921), so the withdrawal stays
+    // `processing` — funds already held by requestWithdrawal, no refund; only
+    // the operator's /reconcile (after the window, on an attestation) settles it.
     const row = relay.moteDb.db
       .prepare(
         "SELECT status, completed_at FROM relay_withdrawals WHERE motebit_id = ? ORDER BY requested_at DESC LIMIT 1",
       )
       .get("user-rpc-throw") as { status: string; completed_at: number | null } | undefined;
-    expect(row!.status).toBe("pending");
+    expect(row!.status).toBe("processing");
     expect(row!.completed_at).toBeNull();
   });
 });
