@@ -64,7 +64,7 @@ const json = (status: number, body: unknown): Response =>
 // receipt answers "answer to: <prompt>".
 // ---------------------------------------------------------------------------
 
-type SubmitAnswer = "201" | "503" | "throw" | "400" | "409" | "409replayed";
+type SubmitAnswer = "201" | "503" | "throw" | "400" | "409" | "409replayed" | "409admitted";
 
 interface RelayStub {
   submits: Array<{ txHash: string; prompt: string }>;
@@ -113,6 +113,12 @@ function relay(script: SubmitAnswer[] = ["201"]): RelayStub {
         return json(409, {
           code: "TASK_P2P_PROOF_REPLAYED",
           error: "This payment proof (tx_hash) has already settled a task",
+        });
+      }
+      if (answer === "409admitted") {
+        return json(409, {
+          code: "TASK_P2P_PROOF_ALREADY_ADMITTED",
+          error: "This payment proof is already bound to an admitted task",
         });
       }
       if (answer === "400") {
@@ -802,6 +808,17 @@ describe("#885 round 3", () => {
       expect(res.error.code).toBe("payment_admission_unconfirmed");
       expect(res.error.message).toMatch(/already settled a task/);
     }
+    expect(ledger.outstandingCount).toBe(1);
+  });
+
+  it("a 409 TASK_P2P_PROOF_ALREADY_ADMITTED (#918) is final: submitted once, never retried, admission unconfirmed, lock kept", async () => {
+    const stub = relay(["409admitted"]);
+    const pay = railFor(new Chain(["ok"]));
+    const ledger = new PaidIntentLedger(new InMemoryPaidIntentStore(), ME);
+    const res = await hire(ledger, pay, "x");
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.error.code).toBe("payment_admission_unconfirmed");
+    expect(stub.submits).toHaveLength(1);
     expect(ledger.outstandingCount).toBe(1);
   });
 });

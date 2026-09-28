@@ -1,5 +1,6 @@
 ---
 "@motebit/relay": patch
+"@motebit/runtime": patch
 ---
 
 One P2P `payment_proof` admits at most one task (#918; `spec/delegation-v1.md` §3.3, 1.4). The only reuse guard read `relay_settlements.p2p_tx_hash`, which exists only once a task settled, so the same unsettled proof under a new `Idempotency-Key` admitted and dispatched a second task on one payment.
@@ -14,3 +15,5 @@ Client-visible changes:
 - **Schema change.** Migration v47 adds `relay_p2p_proof_claims` (tx hash, task id, submitter, time), backfilled from queued tasks and settled proofs. Rows are never deleted.
 
 Client follow-up (not in this change): `packages/runtime` `isRetryableSubmitStatus` treats every 409 other than `TASK_P2P_PROOF_REPLAYED` as retryable, so it retries `TASK_P2P_PROOF_ALREADY_ADMITTED` a bounded number of times before ending in `payment_admission_unconfirmed`. That end state is correct. The #885 client keys on the tx hash, so it gets the same-key replay and never this code.
+
+The runtime's P2P submit loop treats `409 TASK_P2P_PROOF_ALREADY_ADMITTED` as final (never retried; ends `payment_admission_unconfirmed` with the payment's lock kept), like `TASK_P2P_PROOF_REPLAYED`. The relay's transparency declaration (and PRIVACY.md) lists the new `relay_p2p_proof_claims` table.

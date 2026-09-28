@@ -932,12 +932,18 @@ const defaultSleep = (ms: number): Promise<void> =>
  * failed claim) — so the only question is whether another attempt could
  * succeed. Transient: network, 5xx, 408, 429, 401 (a fresh token is minted
  * per attempt), and a 409 that is the relay still processing the same key.
- * A 409 `TASK_P2P_PROOF_REPLAYED` (the proof already settled a task) and
- * every other 4xx will answer the same way again.
+ * A 409 `TASK_P2P_PROOF_REPLAYED` (the proof already settled a task),
+ * `TASK_P2P_PROOF_ALREADY_ADMITTED` (the proof is bound to a task already
+ * admitted — #918: one proof funds at most one task), and every other 4xx
+ * will answer the same way again.
  */
+const FINAL_PROOF_CONFLICTS = new Set([
+  "TASK_P2P_PROOF_REPLAYED",
+  "TASK_P2P_PROOF_ALREADY_ADMITTED",
+]);
 function isRetryableSubmitStatus(status: number, relayCode: string | undefined): boolean {
   if (status >= 500 || status === 408 || status === 429 || status === 401) return true;
-  if (status === 409) return relayCode !== "TASK_P2P_PROOF_REPLAYED";
+  if (status === 409) return relayCode == null || !FINAL_PROOF_CONFLICTS.has(relayCode);
   return false;
 }
 
@@ -1044,8 +1050,9 @@ async function submitP2pOnce(params: SubmitP2pDelegationParams): Promise<SubmitA
         error,
         retryable: isRetryableSubmitStatus(resp.status, relayCode),
         // A 409 is never a refusal of THIS payment: either the relay is still
-        // handling the same key, or (TASK_P2P_PROOF_REPLAYED) this very proof
-        // already funded a task — admitted, just not visibly to us.
+        // handling the same key, or (TASK_P2P_PROOF_REPLAYED /
+        // TASK_P2P_PROOF_ALREADY_ADMITTED) this very proof already funded a
+        // task — admitted, just not visibly to us.
         ambiguous: resp.status >= 500 || resp.status === 408 || resp.status === 409,
         ...(error.retryAfterSeconds != null && Number.isFinite(error.retryAfterSeconds)
           ? { retryAfterMs: error.retryAfterSeconds * 1000 }
