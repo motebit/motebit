@@ -202,6 +202,8 @@ import type {
   ReflectionResult,
   TaskType,
 } from "@motebit/ai-core";
+import { TurnDelegationReceipts } from "./turn-delegation-receipts.js";
+import type { TurnReceiptScope } from "./turn-delegation-receipts.js";
 import { connectMcpServers } from "@motebit/mcp-client";
 // `McpClientAdapter` is the structural shape we depend on. It's inlined here
 // rather than imported from `@motebit/mcp-client` so the runtime's public
@@ -566,7 +568,37 @@ export class MotebitRuntime {
   private loopDeps: MotebitLoopDependencies | null = null;
   private conversation: ConversationManager;
   private conversationStore: ConversationStoreAdapter | null;
-  private _isProcessing = false;
+  /**
+   * #943: delegation receipts are collected PER TURN. The single-writer
+   * hold (`_isProcessing`) is what makes a turn a turn, so raising it opens
+   * that turn's collector and lowering it closes it — every turn-holder
+   * (both chat doors, the approval resume and vote, activation, the granted
+   * hire) is scoped without having to remember to be. A task's receipt
+   * embeds only the hires its OWN turn made (through the turn's sink); the
+   * owner's hires never cross into another principal's signed receipt.
+   */
+  private readonly turnReceipts = new TurnDelegationReceipts(() =>
+    this.mcpAdapters.flatMap((a) => a.getAndResetDelegationReceipts?.() ?? []),
+  );
+  private _turnReceiptKey: symbol | null = null;
+  private _turnReceiptScope: TurnReceiptScope | null = null;
+  private _processing = false;
+  private get _isProcessing(): boolean {
+    return this._processing;
+  }
+  private set _isProcessing(value: boolean) {
+    if (value && !this._processing) {
+      const { key, scope } = this.turnReceipts.open();
+      this._turnReceiptKey = key;
+      this._turnReceiptScope = scope;
+    } else if (!value && this._processing && this._turnReceiptKey != null) {
+      const key = this._turnReceiptKey;
+      this._turnReceiptKey = null;
+      this._turnReceiptScope = null;
+      this.turnReceipts.close(key);
+    }
+    this._processing = value;
+  }
   private _isFirstConversation = false;
   private latestCues: BehaviorCues = {
     hover_distance: 0.4,
@@ -1174,6 +1206,7 @@ export class MotebitRuntime {
       },
       bumpTrustFromReceipt: (receipt) => this.bumpTrustFromReceipt(receipt, true),
       wireLoopDeps: () => this.wireLoopDeps(),
+      turnReceipts: this.turnReceipts,
     });
 
     // Streaming & Approval — stream processing, tool approval lifecycle, timeouts
@@ -2849,6 +2882,12 @@ export class MotebitRuntime {
        */
       goalContext?: { goal_id: string; goal_prompt: string };
       /**
+       * Receives THIS turn's delegation receipts when the turn ends (#943) —
+       * the hires this turn made, and nothing else. `handleAgentTask` sets it
+       * to build its signed receipt's `delegation_receipts`.
+       */
+      onDelegationReceipts?: (receipts: ExecutionReceipt[]) => void;
+      /**
        * Cryptographically verified standing-delegation grant covering
        * this turn. Produced ONLY by `verifyGrantForTurn` (signed
        * artifacts: grant + token + revocation feed) — never from model
@@ -2887,6 +2926,10 @@ export class MotebitRuntime {
 
     this._isProcessing = true;
     this._foreignTurn = options?.foreignPrincipal === true;
+    // #943: this turn's hires go to this turn's sink, and only there.
+    if (this._turnReceiptScope != null && options?.onDelegationReceipts != null) {
+      this._turnReceiptScope.sink = options.onDelegationReceipts;
+    }
     // Preempt any in-flight consolidation cycle; transition presence to
     // responsive so surfaces stop showing the tending indicator. The cycle
     // sees the abort on its next phase checkpoint and yields.
@@ -4695,9 +4738,6 @@ export class MotebitRuntime {
       saveConversationContext: () => this.conversation.saveContext(),
       clearConversationForTask: () => this.conversation.clearForTask(),
       restoreConversationContext: (ctx) => this.conversation.restoreContext(ctx),
-      getMcpAdapters: () => this.mcpAdapters,
-      getAndResetInteractiveDelegationReceipts: () =>
-        this.getAndResetInteractiveDelegationReceipts(),
       bumpTrustFromReceipt: (receipt, verified) => this.bumpTrustFromReceipt(receipt, verified),
     };
   }
@@ -6127,8 +6167,9 @@ export class MotebitRuntime {
   }
 
   /**
-   * Drain interactive delegation receipts (used by handleAgentTask to include
-   * in the parent receipt's delegation_receipts array).
+   * Drain the OWNER's record of delegation receipts — hires made outside any
+   * task's turn (owner turns, user taps, owner MCP calls). Never read by
+   * `handleAgentTask` (#943): a task's receipt gets only its own turn's hires.
    */
   getAndResetInteractiveDelegationReceipts(): ExecutionReceipt[] {
     return this.interactiveDelegation.getAndResetReceipts();
@@ -6155,9 +6196,9 @@ export class MotebitRuntime {
         motebitId: this.motebitId,
         logger: this._logger,
         bumpTrustFromReceipt: (receipt) => this.bumpTrustFromReceipt(receipt, true),
-        // Shares the interactive-delegation stash so a concurrent AI loop
-        // drains user-tap receipts into its parent receipt's delegation_receipts
-        // chain — composition preserved.
+        // A tap is the owner acting, never part of any turn: its receipt goes
+        // to the owner's record only — never into a concurrent turn's
+        // collector, which may be another principal's task (#943).
         stashReceipt: (receipt) => this.interactiveDelegation.pushReceipt(receipt),
         ...(buildP2pPayment ? { buildP2pPayment } : {}),
         // #885: the rail's read-only "did it land anyway?" lookup.

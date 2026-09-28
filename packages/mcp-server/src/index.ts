@@ -535,37 +535,29 @@ const NO_REQUEST_CONTEXT = {
 
 /**
  * Whose request this is, for the owner's interior (#943). The owner's
- * memories are served ONLY to the owner principal — this motebit's own
- * identity. Classification, per transport:
+ * memories are served ONLY to the owner principal, and the owner principal
+ * is the LOCAL STDIO SESSION. HTTP callers are never the owner.
  *
  *  - stdio: `"owner"`. A stdio server speaks only to the process that
  *    spawned it on the owner's machine (the owner's own MCP host); no
  *    remote party can reach the pipe.
- *  - HTTP with a verified motebit signed token: `"owner"` iff the verified
- *    `mid` is THIS motebit's id — a token signed under this motebit's own
- *    key, i.e. one of the owner's devices. Every other verified caller,
- *    including the relay's dispatch identity (`relay:<did>`), is `"other"`.
- *    The id is the verified one (`verifyCallerToken`), never a claim.
- *  - HTTP with a static or pluggable bearer: `"other"`. A shared secret is
- *    handed to callers; it is not owner-only by construction.
- *  - HTTP with no auth context (never produced by the adapter): `"other"`.
+ *  - HTTP, whatever the credential: `"other"`. A motebit signed token whose
+ *    `mid` is this motebit is NOT proof of the owner: the owner signs such
+ *    tokens for other parties all the time (`task:submit` to every hired
+ *    worker, MCP auth to every server it connects to, the relay), the
+ *    token check binds no audience and keeps no replay cache, so any of
+ *    those parties could replay one. A static or pluggable bearer is a
+ *    shared secret handed to callers. No auth context: fail closed.
  *
- * Fail closed: anything not positively the owner is `"other"`.
+ * A future owner-over-HTTP door would need an owner-only audience with
+ * replay protection; it is not built, and nothing reaches it today.
  */
 export type ServedPrincipal = "owner" | "other";
 
-export function servedPrincipal(
-  extra: unknown,
-  transport: "stdio" | "http",
-  ownMotebitId: string,
-): ServedPrincipal {
-  const ctx = callerFromExtra(extra, transport);
-  if (ctx.kind === "caller") return ctx.caller.motebitId === ownMotebitId ? "owner" : "other";
-  if (ctx.kind === "none" && transport === "stdio") {
-    const authInfo = (extra as { authInfo?: unknown } | undefined)?.authInfo;
-    return authInfo == null ? "owner" : "other";
-  }
-  return "other";
+export function servedPrincipal(extra: unknown, transport: "stdio" | "http"): ServedPrincipal {
+  if (transport !== "stdio") return "other";
+  const authInfo = (extra as { authInfo?: unknown } | undefined)?.authInfo;
+  return authInfo == null ? "owner" : "other";
 }
 
 /** The refusal a non-owner gets for any read of the owner's memories. Carries no content. */
@@ -723,9 +715,7 @@ export class McpServerAdapter {
    * then refuse with `OWNER_ONLY_REFUSAL` and touch no memory dep.
    */
   private ownerPrincipal(extra: unknown): "owner" | null {
-    return servedPrincipal(extra, this.transportKind, this.deps.motebitId) === "owner"
-      ? "owner"
-      : null;
+    return servedPrincipal(extra, this.transportKind) === "owner" ? "owner" : null;
   }
 
   /** The transport this adapter serves — decides what an absent auth context means. */

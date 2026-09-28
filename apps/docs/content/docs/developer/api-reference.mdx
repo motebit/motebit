@@ -203,7 +203,7 @@ Store a memory in the agent's semantic memory graph.
 
 ### `motebit_recall`
 
-Search the agent's semantic memory using cosine similarity. Served to the motebit's **owner only**: a stdio session, or an HTTP caller whose verified motebit signed token is this motebit's own identity. Every other caller is refused with no memory content.
+Search the agent's semantic memory using cosine similarity. Served to the motebit's **owner only**, and the owner is the local stdio session. HTTP callers are never the owner, even with a token signed under this motebit's own key. The motebit signs those for workers and servers, so they could be replayed. Every HTTP caller is refused with no memory content.
 
 | Property          | Value        |
 | ----------------- | ------------ |

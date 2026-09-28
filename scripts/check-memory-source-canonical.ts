@@ -616,8 +616,35 @@ function main(): void {
   const interiorViolations: string[] = [];
   const LOOP = "packages/ai-core/src/loop.ts";
   const FOREIGN_TURN = "packages/ai-core/src/foreign-turn.ts";
-  const OWNER_STORE_READ =
-    /\.(hasAnyMemory|getPinnedMemories|recallRelevant|getMemoryIndex)\??\.?\(|\beventStore\.query\(/;
+  // Every READ of the owner's stores: any `memoryGraph.` / `eventStore.`
+  // member call that is not one of the known writes, plus any receiver's
+  // `.exportAll(` / `.recallRelevant(` / `.getPinnedMemories(` /
+  // `.getMemoryIndex(` / `.hasAnyMemory(` (a read renamed through another
+  // binding is still caught). Writes (formation, appends) are allowed.
+  const OWNER_STORE_WRITES = new Set([
+    "append",
+    "appendWithClock",
+    "tombstone",
+    "formMemory",
+    "consolidateAndForm",
+    "pinMemory",
+    "deleteMemory",
+    "saveNode",
+  ]);
+  const OWNER_STORE_READ = {
+    test(line: string): boolean {
+      if (
+        /\.(hasAnyMemory|getPinnedMemories|recallRelevant|getMemoryIndex|exportAll)\??\.?\(/.test(
+          line,
+        )
+      )
+        return true;
+      for (const m of line.matchAll(/\b(memoryGraph|eventStore)\s*\??\.\s*(\w+)\s*\??\.?\(/g)) {
+        if (!OWNER_STORE_WRITES.has(m[2] as string)) return true;
+      }
+      return false;
+    },
+  };
   const bodyOf = (src: string, header: string, close: string): string => {
     const start = src.indexOf(header);
     if (start === -1) return "";
@@ -885,16 +912,36 @@ function main(): void {
       const lines = (readFile(rel) ?? "").split("\n");
       for (let i = 0; i < lines.length; i++) {
         const line = lines[i] as string;
+        // Any function form: `getMemories: async (…) =>`, a non-async arrow,
+        // method shorthand `getMemories(…) {`, or `deps.queryMemories = …`.
+        // A type signature (header reaches `;` before `{`/`=>`) is not a
+        // definition.
         if (
-          !/^\s*(getMemories|queryMemories)\s*:\s*async\b|\bdeps\.queryMemories\s*=\s*async\b/.test(
+          !/^\s*(async\s+)?(getMemories|queryMemories)\s*(:|\()|\bdeps\.(queryMemories|getMemories)\s*=/.test(
             line,
           )
         )
           continue;
+        // Inside an `interface`/`type` declaration block ⇒ a signature, skip.
+        let inTypeDecl = false;
+        for (let k = i - 1; k >= 0; k--) {
+          const up = lines[k] as string;
+          if (/^(export\s+)?(interface|type)\b/.test(up)) {
+            inTypeDecl = true;
+            break;
+          }
+          if (/^\S/.test(up) && !/^\s*(\*|\/\/|\/\*)/.test(up)) break;
+        }
+        if (inTypeDecl) continue;
         memoryDepDefs++;
-        const first = lines
-          .slice(i + 1)
-          .find((l) => l.trim() !== "" && !/^\s*(\*|\/\/|\/\*)/.test(l));
+        // The body's first statement: the line after the one that opens it.
+        const openLine = lines.slice(i).findIndex((l) => /\{\s*$/.test(l));
+        const first =
+          openLine === -1
+            ? undefined
+            : lines
+                .slice(i + openLine + 1)
+                .find((l) => l.trim() !== "" && !/^\s*(\*|\/\/|\/\*)/.test(l));
         if (first === undefined || !/^\s*assertOwnerPrincipal\(principal\);/.test(first)) {
           ownerOnlyViolations.push(
             `${rel}:${i + 1}: a memory-read dep must open with \`assertOwnerPrincipal(principal);\` — found: ${(first ?? "(nothing)").trim()}`,
@@ -906,6 +953,25 @@ function main(): void {
   if (memoryDepDefs < 6) {
     ownerOnlyViolations.push(
       `expected the six memory-read dep definitions (packages/mcp-server/src/service.ts ×2, apps/cli/src/daemon.ts ×4) — found ${memoryDepDefs}; the scan pattern may have drifted from the code`,
+    );
+  }
+  // (iv) the owner principal is the local stdio session ONLY (#943 round 3):
+  // `servedPrincipal` opens by returning "other" for every non-stdio
+  // transport — an HTTP token, however verified, is never the owner (the
+  // owner signs `mid`=self tokens for other parties; they replay).
+  const mcpIndexSrc = readFile("packages/mcp-server/src/index.ts") ?? "";
+  const spBody = bodyOf(mcpIndexSrc, "export function servedPrincipal(", "\n}\n");
+  const spFirst = spBody
+    .split("\n")
+    .slice(1)
+    .find((l) => l.trim() !== "" && !/^\s*(\*|\/\/|\/\*)/.test(l));
+  if (
+    spFirst === undefined ||
+    !/^\s*if \(transport !== "stdio"\) return "other";/.test(spFirst) ||
+    /motebitId|caller/.test(spBody)
+  ) {
+    ownerOnlyViolations.push(
+      `packages/mcp-server/src/index.ts: \`servedPrincipal\` must open with \`if (transport !== "stdio") return "other";\` and read no caller identity — HTTP callers are never the owner (found: ${(spFirst ?? "(missing)").trim()})`,
     );
   }
   const attachedSrc = readFile("packages/runtime/src/attached-surface.ts") ?? "";
@@ -935,8 +1001,101 @@ function main(): void {
     process.exit(1);
   }
 
+  // === Serving scan (g): a task's receipt embeds only its own turn's hires
+  //
+  // #943 round 3: every hire stashed into one shared bucket that only
+  // `handleAgentTask` drained, so the owner's hires (owner-turn delegates,
+  // user taps, owner MCP calls) were signed into the NEXT customer's task
+  // receipt as `delegation_receipts` — the owner's private results sent to
+  // another principal. Receipts are now collected per turn
+  // (`TurnDelegationReceipts`). Locked textually:
+  //   (i)   `agent-task-handler.ts` reaches no receipt bucket (no
+  //         `getAndReset…` call) and gets its receipts only from its turn's
+  //         sink (`onDelegationReceipts`);
+  //   (ii)  `interactive-delegation.ts` holds no receipt array of its own
+  //         (`.receipts.push(`) — it records through the collector; the tap
+  //         path (`pushReceipt`) records as an owner act, never into a turn;
+  //   (iii) the runtime's single-writer hold opens and closes the turn's
+  //         collector (`set _isProcessing` → `turnReceipts.open()` /
+  //         `turnReceipts.close(`), so no turn-holder can skip it;
+  //   (iv)  no non-test runtime file drains the MCP adapters' receipt
+  //         buckets (`getAndResetDelegationReceipts(`) except the one
+  //         collector wiring in motebit-runtime.ts.
+  // Behavior: `task-receipt-scoping.test.ts`.
+  const receiptViolations: string[] = [];
+  const handlerSrc = readFile("packages/runtime/src/agent-task-handler.ts") ?? "";
+  const handlerCode = handlerSrc
+    .split("\n")
+    .filter((l) => !/^\s*(\*|\/\/|\/\*)/.test(l))
+    .join("\n");
+  if (/getAndReset\w*\(/.test(handlerCode) || !/onDelegationReceipts:/.test(handlerCode)) {
+    receiptViolations.push(
+      "packages/runtime/src/agent-task-handler.ts: a task's receipt must take its delegation receipts ONLY from its turn's sink (`onDelegationReceipts`) and drain no bucket (`getAndReset…`)",
+    );
+  }
+  const idSrc = readFile("packages/runtime/src/interactive-delegation.ts") ?? "";
+  if (/\.receipts\.push\(|receipts: ExecutionReceipt\[\] = \[\]/.test(idSrc)) {
+    receiptViolations.push(
+      "packages/runtime/src/interactive-delegation.ts: holds its own receipt array — record through `TurnDelegationReceipts` so a hire lands in the turn that made it",
+    );
+  }
+  const pushReceiptBody = bodyOf(
+    idSrc,
+    "  pushReceipt(receipt: ExecutionReceipt): void {",
+    "\n  }\n",
+  );
+  if (!/this\.receipts\.recordOwnerAct\(receipt\);/.test(pushReceiptBody)) {
+    receiptViolations.push(
+      "packages/runtime/src/interactive-delegation.ts: `pushReceipt` (the user-tap path) must record as an owner act (`this.receipts.recordOwnerAct(receipt)`), never into an in-flight turn",
+    );
+  }
+  const setterBody = bodyOf(runtimeSrc, "private set _isProcessing(", "\n  }\n");
+  if (
+    !/this\.turnReceipts\.open\(\)/.test(setterBody) ||
+    !/this\.turnReceipts\.close\(/.test(setterBody)
+  ) {
+    receiptViolations.push(
+      "packages/runtime/src/motebit-runtime.ts: the single-writer hold (`set _isProcessing`) must open and close the turn's receipt collector (`this.turnReceipts.open()` / `.close(`)",
+    );
+  }
+  let receiptDrainSites = 0;
+  let receiptFilesScanned = 0;
+  for (const rel of walkTsFiles("packages/runtime/src")) {
+    if (rel.includes("__tests__")) continue;
+    receiptFilesScanned++;
+    const lines = (readFile(rel) ?? "").split("\n");
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i] as string;
+      if (/^\s*(\*|\/\/|\/\*)/.test(line)) continue;
+      if (!/\.getAndResetDelegationReceipts\??\.?\(/.test(line)) continue;
+      receiptDrainSites++;
+      if (
+        rel !== "packages/runtime/src/motebit-runtime.ts" ||
+        !/this\.mcpAdapters\.flatMap\(\(a\) => a\.getAndResetDelegationReceipts\?\.\(\) \?\? \[\]\)/.test(
+          line,
+        )
+      ) {
+        receiptViolations.push(
+          `${rel}:${i + 1}: drains an MCP adapter's receipt bucket outside the turn collector's wiring — route it through \`TurnDelegationReceipts\`: ${line.trim()}`,
+        );
+      }
+    }
+  }
+  if (receiptViolations.length > 0) {
+    console.error(
+      "check-memory-source-canonical: the owner's delegation receipts could be signed into another principal's task receipt (#943):",
+    );
+    for (const v of receiptViolations) console.error(`  - ${v}`);
+    console.error("");
+    console.error(
+      "Repair: a task's receipt embeds only the hires its OWN turn made. Record every hire through `TurnDelegationReceipts` (`record` for a turn's hire, `recordOwnerAct` for an owner act outside a turn), let the runtime's single-writer hold open/close the collector, and have `handleAgentTask` take its receipts from the turn's `onDelegationReceipts` sink — never from a shared bucket.",
+    );
+    console.error("Doctrine: docs/doctrine/memory-provenance.md § authorship (#943).");
+    process.exit(1);
+  }
+
   console.log(
-    `✓ check-memory-source-canonical: ${MEMORY_SOURCES_REFERENCE.length} memory source(s) locked across union + ALL_MEMORY_SOURCES + gate reference; wire-format-compliant; model/peer authorship scans clean; foreign-turn provenance locked (resolver + ${aiCoreFilesScanned} other ai-core file(s) scanned, 7 wiring links checked); foreign-turn history floor locked (${runtimeFilesScanned} other runtime file(s) scanned for conversation-store writes, ${guardedMethods} ConversationManager writer(s) + ${guardedReaders} reader(s) guarded, ${consentSites} consent site(s) guarded, 4 wiring links checked); foreign-turn serving floor locked (${interiorAiCoreFiles} ai-core file(s) scanned, ${ownerStoreReads} owner-store read(s) all inside recallOwnerInterior; ${runtimeInteriorFiles} runtime file(s) scanned, ${builderCalls} owner-block builder call(s) all inside ownerInteriorForTurn; ${ownerKeysClassified}/${DECIDED_OWNER_INTERIOR.length} decided owner-interior option(s) classified, recall backend floored); owner-only memory serving locked (${mcpFilesScanned} mcp-server file(s), ${registrationsScanned} tool/resource registration(s) scanned, ${memoryReadRegistrations} memory-read registration(s) all owner-checked; ${depFilesScanned} package/app/service src file(s) scanned, ${memoryDepDefs} memory-read dep(s) all asserting the owner; memory_recall frame owner-gated).`,
+    `✓ check-memory-source-canonical: ${MEMORY_SOURCES_REFERENCE.length} memory source(s) locked across union + ALL_MEMORY_SOURCES + gate reference; wire-format-compliant; model/peer authorship scans clean; foreign-turn provenance locked (resolver + ${aiCoreFilesScanned} other ai-core file(s) scanned, 7 wiring links checked); foreign-turn history floor locked (${runtimeFilesScanned} other runtime file(s) scanned for conversation-store writes, ${guardedMethods} ConversationManager writer(s) + ${guardedReaders} reader(s) guarded, ${consentSites} consent site(s) guarded, 4 wiring links checked); foreign-turn serving floor locked (${interiorAiCoreFiles} ai-core file(s) scanned, ${ownerStoreReads} owner-store read(s) all inside recallOwnerInterior; ${runtimeInteriorFiles} runtime file(s) scanned, ${builderCalls} owner-block builder call(s) all inside ownerInteriorForTurn; ${ownerKeysClassified}/${DECIDED_OWNER_INTERIOR.length} decided owner-interior option(s) classified, recall backend floored); owner-only memory serving locked (${mcpFilesScanned} mcp-server file(s), ${registrationsScanned} tool/resource registration(s) scanned, ${memoryReadRegistrations} memory-read registration(s) all owner-checked; ${depFilesScanned} package/app/service src file(s) scanned, ${memoryDepDefs} memory-read dep(s) all asserting the owner; memory_recall frame owner-gated, HTTP never the owner); task receipts turn-scoped (${receiptFilesScanned} runtime file(s) scanned, ${receiptDrainSites} MCP receipt-drain site(s) all in the turn collector's wiring; handler sink-only, tap = owner act, hold opens/closes the collector).`,
   );
 }
 

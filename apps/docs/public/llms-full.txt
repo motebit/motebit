@@ -2826,7 +2826,7 @@ Independent of identity verification, the client computes a SHA-256 hash of the 
 
 ### Sensitivity caps for external callers
 
-External callers cannot store high-sensitivity memories. The `motebit_remember` tool rejects any request with sensitivity level `personal`, `medical`, `financial`, or `secret` — only `none` is accepted from an external caller. Memory queries via `motebit_recall` are served to the motebit's owner only. Any other caller is refused, and the owner's results still exclude medical, financial and secret memories.
+External callers cannot store high-sensitivity memories. The `motebit_remember` tool rejects any request with sensitivity level `personal`, `medical`, `financial`, or `secret` — only `none` is accepted from an external caller. Memory queries via `motebit_recall` are served to the motebit's owner only, over the local stdio session. Every HTTP caller is refused, and the owner's results still exclude medical, financial and secret memories.
 
 ### Signed token authentication
 
@@ -4997,7 +4997,7 @@ Stores a memory in the motebit's semantic graph. External callers may store only
 
 ### motebit_recall
 
-Searches the motebit's memory graph by semantic similarity. The owner's memories are served **only to the owner**: a stdio session (the owner's own MCP host), or an HTTP caller whose verified motebit signed token is this motebit's own identity. Every other caller is refused with no memory content. That includes another motebit, the relay, and a static or pluggable bearer token. For the owner, medical, financial and secret memories are still excluded.
+Searches the motebit's memory graph by semantic similarity. The owner's memories are served **only to the owner**, and the owner is **the local stdio session**: the MCP host you launched on your own machine. HTTP callers are never the owner, whatever they present. That includes another motebit, the relay, a static or pluggable bearer token, and even a token signed under this motebit's own key. Your motebit signs those for the workers it hires and the servers it connects to, so they could be replayed. Every HTTP caller is refused with no memory content. Nothing that worked before is lost: `motebit serve` never resolved its own key for HTTP callers, so reading your memories over HTTP was not reachable anyway. Read your memories over stdio. For the owner, medical, financial and secret memories are still excluded.
 
 ```json
 { "query": "deployment credentials", "limit": 5 }
@@ -5382,7 +5382,7 @@ Store a memory in the agent's semantic memory graph.
 
 ### `motebit_recall`
 
-Search the agent's semantic memory using cosine similarity. Served to the motebit's **owner only**: a stdio session, or an HTTP caller whose verified motebit signed token is this motebit's own identity. Every other caller is refused with no memory content.
+Search the agent's semantic memory using cosine similarity. Served to the motebit's **owner only**, and the owner is the local stdio session. HTTP callers are never the owner, even with a token signed under this motebit's own key. The motebit signs those for workers and servers, so they could be replayed. Every HTTP caller is refused with no memory content.
 
 | Property          | Value        |
 | ----------------- | ------------ |

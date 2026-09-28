@@ -116,8 +116,6 @@ function createMockDeps(overrides?: Partial<AgentTaskHandlerDeps>): AgentTaskHan
     saveConversationContext: vi.fn().mockReturnValue(savedCtx),
     clearConversationForTask: vi.fn(),
     restoreConversationContext: vi.fn(),
-    getMcpAdapters: vi.fn().mockReturnValue([]),
-    getAndResetInteractiveDelegationReceipts: vi.fn().mockReturnValue([]),
     bumpTrustFromReceipt: vi.fn().mockResolvedValue(undefined),
     ...overrides,
   };

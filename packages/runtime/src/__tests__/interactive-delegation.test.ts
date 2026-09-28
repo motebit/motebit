@@ -767,7 +767,7 @@ describe("Interactive Delegation (delegate_to_agent tool)", () => {
     expect(submittedBody!.required_capabilities).toBeUndefined();
   });
 
-  it("includes delegation receipt in handleAgentTask parent receipt", async () => {
+  it("#943: an owner hire made outside the task is NOT signed into the task's receipt", async () => {
     const provider = createMockProvider();
     const runtime = new MotebitRuntime(
       { motebitId: "alice-001", tickRateHz: 0 },
@@ -799,7 +799,8 @@ describe("Interactive Delegation (delegate_to_agent tool)", () => {
       required_capabilities: ["web_search"],
     });
 
-    // Now handleAgentTask should drain these receipts into the parent receipt
+    // #943: that hire was the owner's (made outside the task's turn). The
+    // task's signed receipt must not carry it — it goes to the owner's record.
     const keypair = await generateKeypair();
     const task: AgentTask = {
       task_id: "parent-task-001",
@@ -817,9 +818,10 @@ describe("Interactive Delegation (delegate_to_agent tool)", () => {
     }
 
     expect(parentReceipt).not.toBeNull();
-    expect(parentReceipt!.delegation_receipts).toHaveLength(1);
-    expect(parentReceipt!.delegation_receipts![0]!.task_id).toBe("relay-task-001");
-    expect(parentReceipt!.delegation_receipts![0]!.motebit_id).toBe("remote-agent-001");
+    expect(parentReceipt!.delegation_receipts).toBeUndefined();
+    expect(JSON.stringify(parentReceipt)).not.toContain("relay-task-001");
+    const ownerRecord = runtime.getAndResetInteractiveDelegationReceipts();
+    expect(ownerRecord.map((r) => r.task_id)).toEqual(["relay-task-001"]);
   });
 
   it("handles network failure during polling gracefully", async () => {

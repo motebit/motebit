@@ -25,10 +25,6 @@ export type SavedConversationContext = { history: ConversationMessage[]; id: str
 
 // === Types ===
 
-type McpClientAdapterForTask = {
-  getAndResetDelegationReceipts?(): ExecutionReceipt[];
-};
-
 /** Dependencies injected by the runtime. */
 export interface AgentTaskHandlerDeps {
   motebitId: string;
@@ -49,7 +45,17 @@ export interface AgentTaskHandlerDeps {
   sendMessageStreaming(
     text: string,
     runId?: string,
-    options?: { delegationScope?: string; foreignPrincipal?: boolean },
+    options?: {
+      delegationScope?: string;
+      foreignPrincipal?: boolean;
+      /**
+       * Receives the task turn's OWN delegation receipts when it ends
+       * (#943). The handler has no other way to reach delegation receipts:
+       * there is no shared bucket to drain, so the owner's hires cannot be
+       * signed into a customer's receipt.
+       */
+      onDelegationReceipts?: (receipts: ExecutionReceipt[]) => void;
+    },
   ): AsyncGenerator<StreamChunk>;
 
   /** Save current conversation context for later restoration. */
@@ -58,11 +64,6 @@ export interface AgentTaskHandlerDeps {
   clearConversationForTask(): void;
   /** Restore conversation context after the task completes. */
   restoreConversationContext(ctx: SavedConversationContext): void;
-
-  /** Drain delegation receipts from motebit MCP adapters. */
-  getMcpAdapters(): McpClientAdapterForTask[];
-  /** Drain interactive delegation receipts. */
-  getAndResetInteractiveDelegationReceipts(): ExecutionReceipt[];
 
   /** Bump trust from a verified receipt. */
   bumpTrustFromReceipt(receipt: ExecutionReceipt, verified: boolean): Promise<void>;
@@ -104,6 +105,10 @@ export async function* handleAgentTask(
   let toolCallsSucceeded = 0;
   let toolCallsDenied = 0;
 
+  // #943: the receipts of the hires THIS task's turn made — delivered by the
+  // turn itself when it ends, never drained from a shared bucket.
+  const delegationReceipts: ExecutionReceipt[] = [];
+
   try {
     // The prompt is another principal's (a customer's, a caller's), so the
     // turn is foreign: it is offered no `localOnly` tool — the owner's
@@ -112,6 +117,9 @@ export async function* handleAgentTask(
     const stream = deps.sendMessageStreaming(task.prompt, undefined, {
       delegationScope: options?.delegatedScope,
       foreignPrincipal: true,
+      onDelegationReceipts: (receipts) => {
+        delegationReceipts.push(...receipts);
+      },
     });
 
     for await (const chunk of stream) {
@@ -176,15 +184,6 @@ export async function* handleAgentTask(
       `(deny_above / denylist / delegated scope) and no permitted action completed.` +
       (responseText ? ` Model note: ${responseText}` : "");
   }
-
-  // Drain delegation receipts from motebit MCP adapters + interactive delegation tool
-  const delegationReceipts: ExecutionReceipt[] = [];
-  for (const adapter of deps.getMcpAdapters()) {
-    if (adapter.getAndResetDelegationReceipts) {
-      delegationReceipts.push(...adapter.getAndResetDelegationReceipts());
-    }
-  }
-  delegationReceipts.push(...deps.getAndResetInteractiveDelegationReceipts());
 
   // Bump trust from verified delegation receipts (best-effort)
   if (delegationReceipts.length > 0 && deps.agentTrustStore != null) {

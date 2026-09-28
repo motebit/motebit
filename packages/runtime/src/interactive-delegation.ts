@@ -6,6 +6,7 @@
  * result as normal tool output.
  */
 
+import { TurnDelegationReceipts } from "./turn-delegation-receipts.js";
 import type { ExecutionReceipt, ToolRegistry } from "@motebit/sdk";
 import type { TokenAudience } from "@motebit/protocol";
 
@@ -71,6 +72,13 @@ export interface InteractiveDelegationDeps {
   bumpTrustFromReceipt: (receipt: ExecutionReceipt) => Promise<void>;
   /** Re-wire loop deps so newly registered tools are visible to the agentic loop. */
   wireLoopDeps: () => void;
+  /**
+   * The per-turn delegation-receipt collector (#943). A hire's receipt lands
+   * in the turn that made it, never in a shared bucket another principal's
+   * task could drain. Optional for bare fixtures (a private collector is
+   * made); the runtime always passes its own.
+   */
+  turnReceipts?: TurnDelegationReceipts;
 }
 
 export interface InteractiveDelegationConfig {
@@ -212,7 +220,8 @@ export function renderTaskRetrieval(
 // === Manager ===
 
 export class InteractiveDelegationManager {
-  private receipts: ExecutionReceipt[] = [];
+  /** #943: receipts are collected per turn — see `turn-delegation-receipts.ts`. */
+  private readonly receipts: TurnDelegationReceipts;
   /** #885: money warnings from delegate_to_agent calls, drained by the stream. */
   private paymentNotices: Array<NonNullable<ReturnType<typeof paymentNoticeChunk>>> = [];
 
@@ -223,7 +232,9 @@ export class InteractiveDelegationManager {
     return out;
   }
 
-  constructor(private readonly deps: InteractiveDelegationDeps) {}
+  constructor(private readonly deps: InteractiveDelegationDeps) {
+    this.receipts = deps.turnReceipts ?? new TurnDelegationReceipts();
+  }
 
   /**
    * Register the `delegate_to_agent` tool for interactive delegation.
@@ -295,7 +306,7 @@ export class InteractiveDelegationManager {
     const timeoutMs = config.timeoutMs ?? 120_000;
     const motebitId = this.deps.motebitId;
     const bumpTrust = (receipt: ExecutionReceipt) => this.deps.bumpTrustFromReceipt(receipt);
-    const stashReceipt = (receipt: ExecutionReceipt) => this.receipts.push(receipt);
+    const stashReceipt = (receipt: ExecutionReceipt) => this.receipts.record(receipt);
 
     // Mark as delegation tool for processStream to emit delegation_start/complete
     this.deps.motebitToolServers.set(TOOL_NAME, "relay");
@@ -522,7 +533,8 @@ export class InteractiveDelegationManager {
           // Best-effort
         }
 
-        // Stash receipt for handleAgentTask to drain into delegation_receipts
+        // Record into THIS turn's collector (#943): a task's receipt embeds it
+        // only when the hire was made by that task's own turn.
         stashReceipt(result.receipt);
 
         // Surface the settlement fact so the model reports payment truthfully
@@ -765,23 +777,28 @@ export class InteractiveDelegationManager {
   }
 
   /**
-   * Drain interactive delegation receipts (used by handleAgentTask to include
-   * in the parent receipt's delegation_receipts array).
+   * Drain the OWNER's record: receipts produced outside any task's turn
+   * (#943). Never read by `handleAgentTask` — a task's receipt gets only its
+   * own turn's hires, through the turn's sink.
    */
   getAndResetReceipts(): ExecutionReceipt[] {
-    const result = this.receipts.slice();
-    this.receipts.length = 0;
-    return result;
+    return this.receipts.drainOwner();
   }
 
   /**
-   * Append a receipt produced by a sibling delegation path (today:
-   * `invokeCapability`). The two paths share one drain bucket so a concurrent
-   * AI loop composes all downstream receipts — AI-decided and user-tapped —
-   * into one parent receipt's `delegation_receipts` chain.
+   * A receipt from an owner act outside any turn (today: `invokeCapability`,
+   * a user tap). It goes to the owner's record ONLY — never into an
+   * in-flight turn's collector, which may be another principal's task
+   * (#943: a tap during a customer's `motebit_task` must not be signed into
+   * the customer's receipt).
    */
   pushReceipt(receipt: ExecutionReceipt): void {
-    this.receipts.push(receipt);
+    this.receipts.recordOwnerAct(receipt);
+  }
+
+  /** A hire made by the in-flight turn — the path `delegate_to_agent` records through. */
+  recordTurnReceipt(receipt: ExecutionReceipt): void {
+    this.receipts.record(receipt);
   }
 
   /**
@@ -793,11 +810,11 @@ export class InteractiveDelegationManager {
    * would silently sever that chain (composition-preserves-enforcement).
    */
   get stashedReceiptCount(): number {
-    return this.receipts.length;
+    return this.receipts.count();
   }
 
   /** See {@link stashedReceiptCount} — the peek half of the pair. */
   peekReceiptsSince(count: number): ExecutionReceipt[] {
-    return this.receipts.slice(count);
+    return this.receipts.peekSince(count);
   }
 }

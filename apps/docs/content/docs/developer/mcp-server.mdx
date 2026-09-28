@@ -91,7 +91,7 @@ Stores a memory in the motebit's semantic graph. External callers may store only
 
 ### motebit_recall
 
-Searches the motebit's memory graph by semantic similarity. The owner's memories are served **only to the owner**: a stdio session (the owner's own MCP host), or an HTTP caller whose verified motebit signed token is this motebit's own identity. Every other caller is refused with no memory content. That includes another motebit, the relay, and a static or pluggable bearer token. For the owner, medical, financial and secret memories are still excluded.
+Searches the motebit's memory graph by semantic similarity. The owner's memories are served **only to the owner**, and the owner is **the local stdio session**: the MCP host you launched on your own machine. HTTP callers are never the owner, whatever they present. That includes another motebit, the relay, a static or pluggable bearer token, and even a token signed under this motebit's own key. Your motebit signs those for the workers it hires and the servers it connects to, so they could be replayed. Every HTTP caller is refused with no memory content. Nothing that worked before is lost: `motebit serve` never resolved its own key for HTTP callers, so reading your memories over HTTP was not reachable anyway. Read your memories over stdio. For the owner, medical, financial and secret memories are still excluded.
 
 ```json
 { "query": "deployment credentials", "limit": 5 }
