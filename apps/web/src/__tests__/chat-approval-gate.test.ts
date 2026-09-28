@@ -39,10 +39,15 @@ function mountChatDom(): void {
 
 let initChat: typeof import("../ui/chat").initChat;
 
+// Cold import of the whole chat module under coverage instrumentation can
+// exceed the 10s hook default on a loaded CI runner (the desktop sibling
+// timed out on main, 2026-09-28) — an explicit budget, not a hang.
+const COLD_CHAT_IMPORT_BUDGET_MS = 60_000;
+
 beforeAll(async () => {
   mountChatDom();
   initChat = (await import("../ui/chat")).initChat;
-});
+}, COLD_CHAT_IMPORT_BUDGET_MS);
 
 /** A ctx.app that streams: text → approval_request → (resume) text. */
 function gateStreamingApp() {
