@@ -407,42 +407,60 @@ As of 2026-04-11, the reference implementation supports a **p2p settlement mode*
 
 **Settlement mode:** `"relay"` (default) or `"p2p"`. Stored on `relay_settlements.settlement_mode`.
 
-**P2P payment proof:** When a delegator pays a worker directly onchain (e.g., USDC SPL transfer on Solana), the delegator submits a `P2pPaymentProof` with the task:
+**P2P payment proof:** The delegator pays onchain before submitting, in ONE atomic multi-output transaction (e.g., USDC SPL transfers on Solana) carrying the worker leg and the platform-fee leg (and, on a cross-operator task, the executor relay's fee leg), and submits a `P2pPaymentProof` with the task, pinning the worker as `target_agent`:
 
 ```
 P2pPaymentProof {
-  tx_hash:      string      // Onchain transaction signature
-  chain:        string      // "solana"
-  network:      string      // CAIP-2 identifier
-  to_address:   string      // Worker's declared settlement_address
-  amount_micro: number      // Exact payment amount in micro-units
+  tx_hash:             string   // Onchain transaction signature
+  chain:               string   // "solana"
+  network:             string   // CAIP-2 identifier
+  to_address:          string   // Worker leg destination: the worker's settlement address
+  amount_micro:        number   // Worker leg, exact, in micro-units
+  fee_to_address:      string   // Fee leg destination: the (origin) relay's treasury
+  fee_amount_micro:    number   // Fee leg, exact, in micro-units
+  b_fee_to_address?:   string   // Cross-operator only: the executor relay's treasury
+  b_fee_amount_micro?: number   // Cross-operator only: the executor relay's fee leg
 }
 ```
 
-**Settlement record payee:** The relay-signed `SettlementRecord` for a P2P task names as its payee (`motebit_id`) the worker the delegator's onchain payment paid — the worker the task was admitted and pinned to (`target_agent`, whose settlement address the proof's worker leg was validated against), never the agent in the submission path: a delegator submits a P2P task to its own endpoint, so the path agent is the payer. A P2P record is written only from a receipt signed by that worker; a receipt signed by any other identity does not discharge the payment and settles nothing. Each P2P payment (`p2p_tx_hash`) has exactly one record per relay. On a cross-operator task both relays record the same payee (the remote worker). A relay-mode record likewise names as payee the worker it credits (the receipt signer).
+**Settlement record payee:** The relay-signed `SettlementRecord` for a P2P task names as its payee (`motebit_id`) the worker the delegator's onchain payment paid — the worker the task was admitted and pinned to (`target_agent`, whose settlement address the proof's worker leg was validated against at admission), never the agent in the submission path: a delegator submits a P2P task to its own endpoint, so the path agent is the payer (recorded as the delegator). A P2P record MUST be written only from a receipt signed by that worker; a receipt signed by any other identity does not discharge the payment and settles nothing. Each P2P payment (`p2p_tx_hash`) has exactly one record per relay. On a cross-operator task both relays record the same payee (the worker). `amount_settled` is the worker leg and `platform_fee` is the fee leg landing in the recording relay's own treasury. A relay-mode record likewise names as payee the worker it credits (the receipt signer).
 
-**Payment verification status:** `"pending"` | `"verified"` | `"failed"` | `"unverifiable"`. Pending proofs are verified asynchronously by the relay's p2p verifier loop (Solana `getTransaction` RPC). Transient RPC errors (JSON-RPC error responses, HTTP failures, timeouts) are retried — they MUST NOT be classified as "transaction not found." Only a confirmed null result (transaction does not exist onchain) or a confirmed transaction whose legs do not match transitions to `"failed"`. Each relay verifies the legs that are its to verify: its own fee leg always; the worker leg when it hosts the worker (the executor relay of a cross-operator task; the only relay on a single-operator one), which relay that is being recorded with the settlement, not inferred. The worker leg matches only a transfer of exactly the recorded amount to an address bound to the payee — its identity key's derived address, or the settlement address the worker itself registered on that relay — never a peer-asserted or otherwise unverified string. A worker leg the relay is responsible for but cannot check (the payee has no bound address there, or the record names its own payer as payee) is `"unverifiable"`: never `"verified"`, and no party is penalized.
+**Payment verification:** Pending records are verified asynchronously by the relay's p2p verifier loop (Solana `getTransaction` RPC). Each relay verifies the legs that are its to verify, declared on the record when it is written, never inferred from the worker's absence in a registry:
+
+- **Fee leg** — always (when `platform_fee > 0`): a transfer of exactly `platform_fee` to the recording relay's treasury.
+- **Worker leg** — when the recording relay hosts the worker (the only relay of a single-operator task; the executor relay of a cross-operator one; the origin relay leaves it to the executor). It matches only a transfer of exactly `amount_settled` to an address bound to the payee:
+  - the payee's **derived-bound** address — the address its identity key derives (tautological, offline); or
+  - the settlement address the **worker itself registered on that relay**, under its own authenticated write. At the local leg the write-auth IS the authorization; an agent choosing a distinct payout wallet is legitimate custody separation, not a redirect (`docs/doctrine/settlement-authority-binding.md` § "Where binding is enforced").
+  - A **peer-asserted** or otherwise unverified string never counts.
+
+Outcomes: `"pending"` | `"verified"` | `"failed"` | `"unverifiable"`.
+
+- `"verified"` — every leg the relay verifies matches.
+- `"failed"` — a confirmed transaction with a missing or mismatched leg, or a confirmed null result (the transaction does not exist onchain).
+- `"unverifiable"` — the worker leg is the relay's to verify but cannot be checked (the payee has no bound address there, or the record names its own payer as payee). Never `"verified"`; no party is penalized; terminal.
+- Transient RPC errors (JSON-RPC error responses, HTTP failures, timeouts) leave the record `"pending"` and are retried — they MUST NOT be classified as "transaction not found."
 
 **Failure attribution:** Every leg of a P2P payment is the payer's obligation. A failed verification is recorded against the payer in the harmed party's first-person trust ledger — the worker's record of the delegator when the worker leg or the whole transaction failed; nothing beyond the failed record when only the relay's fee leg failed. A verification failure MUST NOT be recorded against the worker, and MUST NOT change any party's advertised `settlement_modes`.
 
-**Policy-based eligibility:** P2p settlement is not automatic. Both parties must opt in via `settlement_modes` on their agent registration. The relay evaluates eligibility based on:
+**Policy-based eligibility:** P2P settlement is not automatic. The relay evaluates the delegator→worker pair (`evaluateSettlementEligibility`); `settlement_modes` is no longer an eligibility input. Both branches require:
 
-1. Mutual opt-in (both parties advertise `"p2p"` in `settlement_modes`)
-2. Worker has a declared `settlement_address` (explicit, not inferred from identity key)
-3. Trust score ≥ configurable threshold (default: 0.6 / "verified")
-4. Interaction count ≥ configurable minimum (default: 5)
-5. No active disputes between the pair
+1. Worker has a declared `settlement_address`
+2. No active disputes between the pair
 
-**Explicit settlement address:** The worker's `settlement_address` is declared at registration, not derived from the identity public key. This preserves future compatibility with separate signing domains, key rotation, multi-chain support, and multisig wallets.
+and then either an **established pair** (trust score ≥ configurable threshold, default 0.6 / "verified", AND interaction count ≥ configurable minimum, default 5 — reduced bars apply to a sovereign-bound or bonded worker) or a **new pair** whose delegator explicitly acknowledges the cold-start risk.
 
-**Fee model:** P2p settlement has zero platform fee in the reference implementation. The relay monetizes routing and credential issuance for p2p tasks, not custody. This is an explicit product policy, not a protocol constraint.
+**Explicit settlement address:** The worker's `settlement_address` is declared at registration, not derived from the identity public key. This preserves future compatibility with separate signing domains, key rotation, multi-chain support, and multisig wallets. (Verification additionally accepts the derived-bound address as a destination bound to the worker — see above; declaration stays explicit.)
+
+**Fee model:** P2P settlement carries the platform fee as its own leg of the delegator's atomic transaction (`fee_amount_micro` = gross − net, `gross = round(net / (1 − fee_rate))`), paid directly to the relay's identity-derived treasury. The relay never holds the worker's principal.
 
 **Foundation Law:**
 
 - Settlement mode selection MUST be policy-based, not hardcoded to a single trust label.
-- Payment verification status MUST distinguish between "transaction not found" (permanent) and "RPC error" (transient/retryable). A transient error MUST NOT trigger trust downgrade.
+- Payment verification status MUST distinguish between "transaction not found" (permanent) and "RPC error" (transient/retryable). A transient error MUST NOT be recorded as a failure.
 - Amount matching MUST be exact (not `>=`). Overpayment or underpayment semantics are not defined and MUST be rejected.
 - The `settlement_address` MUST be explicitly declared by the agent, not inferred from the identity key.
+- A P2P record's payee MUST be the worker the payment paid, never the submission-path agent.
+- A worker leg MUST NOT be `"verified"` against an address not bound to the payee.
 
 ### 11.3 Relay Solvency Proof (Implemented)
 
@@ -554,4 +572,4 @@ Conformance does not require using the default reference implementation (§6). A
 
 - **1.0** (2026-04-08) — Initial specification. Foundation law, settlement map, rail taxonomy, default reference implementation (Ed25519/Solana), sovereign payment receipt format, compatible implementations, multi-hop coordination patterns, security model.
 - **1.0** (2026-04-15) — Additive: §11.2 Aggregated Withdrawal Execution. Reference-implementation extension; foundation law unchanged. `shouldBatchSettle` predicate in `@motebit/market`; optional `BatchableGuestRail` in `@motebit/protocol`.
-- **1.0** (2026-09-28) — Correction (#959), §11.1: states the P2P settlement record's payee (the admitted worker the payment paid, never the submission-path agent), adds the `"unverifiable"` verification status, the worker-leg address rule, and failure attribution (the payer's obligation, recorded first-person; never against the worker, never a `settlement_modes` change). The reference relay had recorded the delegator as payee of every P2P record. Records signed before the correction are not rewritten: the reference relay records the recovered payee beside them, derived from the worker-signed receipt archived for the task.
+- **1.0** (2026-09-28) — Correction (#959), §11.1: states the P2P settlement record's payee (the admitted worker the payment paid, never the submission-path agent), adds the `"unverifiable"` verification status, the worker-leg address rule, and failure attribution (the payer's obligation, recorded first-person; never against the worker, never a `settlement_modes` change); the worker leg's bound destinations are the derived-bound address and the worker's own locally registered address, per settlement-authority-binding. Also removes stale §11.1 text: the mutual `settlement_modes` opt-in (vestigial since Arc 3), the zero-fee P2P model (the fee is a leg of the atomic transaction since Arc 2), and the pre-Arc-2 proof shape. The reference relay had recorded the delegator as payee of every P2P record. Records signed before the correction are not rewritten: the reference relay records the recovered payee beside them, derived from the worker-signed receipt archived for the task.

@@ -217,6 +217,15 @@ type FailedObligation = "worker_leg" | "fee_leg" | "transaction";
  *     would forbid it). It is also the address the proof's worker leg was
  *     checked against at admission.
  *
+ * A peer-asserted string (a federated candidate's address) never counts:
+ * this relay only verifies the worker leg of a worker it HOSTS, whose
+ * address the worker wrote itself. That the self-registered address is a
+ * valid destination alongside the derived one is a confirmed decision
+ * (#959), grounded in settlement-authority-binding: the doctrine enforces
+ * identity-binding at the federated boundary, where a party OTHER than the
+ * worker asserts its destination, and explicitly not at the local leg.
+ * Mirrored in `spec/settlement-v1.md` §11.1.
+ *
  * The signed-bound rung (a `SettlementBinding` artifact) is not built
  * (settlement-authority Inc 2); when it lands it joins this predicate.
  */
