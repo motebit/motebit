@@ -265,10 +265,21 @@ export class SyncController {
     }
 
     // Build adapter stack: HTTP (fallback) → Encrypted HTTP → WS → Encrypted WS
+    //
+    // The catch-up adapter resolves a FRESH `sync` token per request — the
+    // same mint the socket refresh below uses (#927). It used to hold the
+    // first token for the session: the socket was refreshed every 4.5 min,
+    // the catch-up was not, so after five minutes every catch-up was refused
+    // and the refusal swallowed — desktop's only pull door went deaf. Every
+    // transport is E2E-only (#928): a plaintext payload is refused before it
+    // leaves the device.
     const httpAdapter = new HttpEventStoreAdapter({
       baseUrl: syncUrl,
       motebitId,
-      authToken: token,
+      credentialSource: {
+        getCredential: () => this.deps.createSyncToken(keypair.privateKey),
+      },
+      payloads: "e2e",
     });
     const encryptedHttp = new EncryptedEventStoreAdapter({ inner: httpAdapter, key: encKey });
 
@@ -293,6 +304,13 @@ export class SyncController {
         });
       }
     };
+    // A failed catch-up is shown, never swallowed (#927).
+    const onCatchUpError = (err: unknown): void => {
+      this.emitSyncStatus({
+        status: "error",
+        error: `Catch-up failed: ${err instanceof Error ? err.message : String(err)}`,
+      });
+    };
     const wsAdapter = new WebSocketEventStoreAdapter({
       url: wsUrl,
       motebitId,
@@ -301,6 +319,8 @@ export class SyncController {
       httpFallback: encryptedHttp,
       localStore: localEventStore ?? undefined,
       onCatchUp,
+      onCatchUpError,
+      payloads: "e2e",
     });
     this._wsAdapter = wsAdapter;
 
@@ -541,6 +561,8 @@ export class SyncController {
             httpFallback: encryptedHttp,
             localStore: localEventStore ?? undefined,
             onCatchUp,
+            onCatchUpError,
+            payloads: "e2e",
           });
           // Events the sync engine handed the replaced adapter while it was
           // offline are counted as pushed; they go out on the replacement.

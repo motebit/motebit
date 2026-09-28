@@ -2,6 +2,7 @@ import type { EventLogEntry } from "@motebit/sdk";
 import type { EventStoreAdapter, EventFilter } from "@motebit/event-log";
 import { encrypt, decrypt, type EncryptedPayload } from "@motebit/encryption";
 import { isSeqPullSource, type SeqPullResult } from "./seq-cursor.js";
+import { classifyEventPayload } from "./event-payload.js";
 
 /**
  * Provides versioned encryption keys for key rotation.
@@ -64,6 +65,21 @@ function singleKeyProvider(key: Uint8Array): KeyProvider {
 }
 
 const noopLogger: EncryptedAdapterLogger = { warn: () => {} };
+
+/**
+ * The decrypt paths' reading of a payload, through the ONE predicate
+ * (`classifyEventPayload`, #928). A payload that carries the E2E marker but is
+ * not the envelope is refused — never decrypted, never passed through as
+ * plaintext (it used to be decrypted by one reader and applied as plaintext
+ * by the other).
+ */
+function envelopeForm(payload: unknown): "e2e" | "plaintext" {
+  const form = classifyEventPayload(payload);
+  if (form === "malformed") {
+    throw new Error("encrypted-adapter: payload carries the E2E marker but is not an E2E envelope");
+  }
+  return form;
+}
 
 /**
  * Wraps an EventStoreAdapter with event-level encryption.
@@ -171,7 +187,7 @@ export class EncryptedEventStoreAdapter implements EventStoreAdapter {
 
   private async decryptEntry(entry: EventLogEntry): Promise<EventLogEntry> {
     const payload = entry.payload;
-    if (payload._encrypted == null || payload._encrypted === false) return entry;
+    if (envelopeForm(payload) === "plaintext") return entry;
 
     const data = JSON.parse(payload._data as string) as {
       c: string;
@@ -210,7 +226,7 @@ export async function decryptEventPayload(
   logger: EncryptedAdapterLogger = noopLogger,
 ): Promise<EventLogEntry> {
   const payload = event.payload;
-  if (payload._encrypted == null || payload._encrypted === false) return event;
+  if (envelopeForm(payload) === "plaintext") return event;
 
   const provider: KeyProvider =
     keyOrProvider instanceof Uint8Array ? singleKeyProvider(keyOrProvider) : keyOrProvider;

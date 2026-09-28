@@ -9,6 +9,7 @@ import {
   type SkippedSyncEvent,
   type SyncSeqCursorStore,
 } from "./seq-cursor.js";
+import { assertPushable, type RelayPayloadMode } from "./event-payload.js";
 
 // Resolve WebSocket: use the global (Node 22+, browsers) or fall back to the `ws` package (Node 20).
 // globalThis.WebSocket is checked every time (tests may mock it). The `ws` import result is cached.
@@ -61,6 +62,28 @@ export interface WebSocketAdapterConfig {
    * one this device cannot decrypt. Default: a `console.warn` line.
    */
   onSkippedEvent?: (skipped: SkippedSyncEvent) => void;
+  /**
+   * Told when a catch-up pull FAILS (#927) — a relay refusal the fallback's
+   * one credential refresh did not cure, a network error, a refused page.
+   * The catch-up is desktop's only pull door, so a failure is surfaced, never
+   * swallowed: the caller puts it in its sync status. Default: a
+   * `console.warn` line. The cursor never passes an unapplied event, and the
+   * next reconnect retries.
+   */
+  onCatchUpError?: (err: unknown) => void;
+  /**
+   * What this transport may push (#928). `e2e`: only E2E envelopes — a
+   * plaintext payload is refused (the append rejects) before it is sent or
+   * queued. A surface that holds a sync encryption key MUST build its socket
+   * in `e2e` mode. Default `raw`.
+   */
+  payloads?: RelayPayloadMode;
+}
+
+/** The default report of a failed catch-up: one warning line. */
+function warnCatchUpError(err: unknown): void {
+  // eslint-disable-next-line no-console -- the runtime's pluggable-logger default (CLAUDE.md conventions); callers pass onCatchUpError to route it
+  console.warn(`sync: catch-up pull failed: ${err instanceof Error ? err.message : String(err)}`);
 }
 
 export type EventReceivedCallback = (event: EventLogEntry) => void;
@@ -92,6 +115,8 @@ export class WebSocketEventStoreAdapter implements EventStoreAdapter {
       | "onCatchUp"
       | "seqCursorStore"
       | "onSkippedEvent"
+      | "onCatchUpError"
+      | "payloads"
     >
   > &
     Pick<
@@ -105,6 +130,8 @@ export class WebSocketEventStoreAdapter implements EventStoreAdapter {
       | "onCatchUp"
       | "seqCursorStore"
       | "onSkippedEvent"
+      | "onCatchUpError"
+      | "payloads"
     >;
   private onEventCallbacks: Set<EventReceivedCallback> = new Set();
   private onCustomMessageCallbacks: Set<CustomMessageCallback> = new Set();
@@ -367,6 +394,13 @@ export class WebSocketEventStoreAdapter implements EventStoreAdapter {
   // === EventStoreAdapter ===
 
   append(entry: EventLogEntry): Promise<void> {
+    // Fail closed before the entry is sent OR queued: an e2e socket never
+    // carries plaintext (#928).
+    try {
+      assertPushable([entry], this.config.payloads ?? "raw");
+    } catch (err: unknown) {
+      return Promise.reject(err instanceof Error ? err : new Error(String(err)));
+    }
     if (this.connected && this.ws) {
       this.sendPush([entry]);
     } else {
@@ -434,9 +468,11 @@ export class WebSocketEventStoreAdapter implements EventStoreAdapter {
           for (const cb of this.onEventCallbacks) cb(event);
         }
         this.config.onCatchUp?.(fresh.length);
-      } catch {
+      } catch (err: unknown) {
         // Catch-up failed; the cursor was not advanced past anything
-        // unapplied. Retried on the next reconnect.
+        // unapplied, and the next reconnect retries. Surfaced, never
+        // swallowed (#927): this is the surface's only pull door.
+        (this.config.onCatchUpError ?? warnCatchUpError)(err);
       }
       return;
     }
@@ -453,8 +489,9 @@ export class WebSocketEventStoreAdapter implements EventStoreAdapter {
         }
       }
       this.config.onCatchUp?.(missed.length);
-    } catch {
-      // Catch-up failed, will retry on next reconnect
+    } catch (err: unknown) {
+      // Catch-up failed; retried on the next reconnect. Surfaced (#927).
+      (this.config.onCatchUpError ?? warnCatchUpError)(err);
     }
   }
 

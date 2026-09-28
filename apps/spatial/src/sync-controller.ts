@@ -34,6 +34,7 @@ import {
 import { DeviceCapability } from "@motebit/sdk";
 import type { TokenAudience } from "@motebit/sdk";
 import type {
+  CredentialSource,
   CustomMessageCallback,
   EventReceivedCallback,
   SyncStatus as SyncEngineStatus,
@@ -227,12 +228,32 @@ export class SpatialSyncController {
         const storage = this.deps.getStorage();
         const localEventStore = storage?.eventStore ?? null;
 
-        // HTTP fallback adapter (for initial sync / offline recovery)
+        // A fresh token per request (#927): the catch-up, plan and
+        // conversation adapters each outlive a five-minute token — the plan
+        // and conversation engines poll on their own timers — and each held
+        // the first one, so after five minutes every request was refused.
+        const syncCredentials: CredentialSource = {
+          getCredential: async () => {
+            const tf = this.deps.getTokenFactory();
+            return tf ? tf() : null;
+          },
+        };
+        // HTTP fallback adapter (for initial sync / offline recovery).
+        // E2E-only (#928): a plaintext payload is refused before it leaves.
         const httpAdapter = new HttpEventStoreAdapter({
           baseUrl: relayUrl,
           motebitId,
-          authToken,
+          credentialSource: syncCredentials,
+          payloads: "e2e",
         });
+        // A failed catch-up is shown, never swallowed (#927).
+        const onCatchUpError = (err: unknown): void => {
+          // eslint-disable-next-line no-console -- the status carries no message; the log says why
+          console.warn(
+            `[sync] catch-up failed: ${err instanceof Error ? err.message : String(err)}`,
+          );
+          this.setSyncStatus("error");
+        };
         const encryptedHttp = new EncryptedEventStoreAdapter({ inner: httpAdapter, key: encKey });
 
         // WebSocket adapter (real-time)
@@ -248,6 +269,8 @@ export class SpatialSyncController {
           capabilities: [DeviceCapability.HttpMcp],
           httpFallback: encryptedHttp,
           localStore: localEventStore ?? undefined,
+          onCatchUpError,
+          payloads: "e2e",
         });
         this._wsAdapter = wsAdapter;
         // The socket adapter in use now. A token refresh replaces it (#816);
@@ -383,7 +406,7 @@ export class SpatialSyncController {
           const httpPlanAdapter = new HttpPlanSyncAdapter({
             baseUrl: relayUrl,
             motebitId,
-            authToken: authToken ?? undefined,
+            credentialSource: syncCredentials,
           });
           this._planSyncEngine.connectRemote(
             new EncryptedPlanSyncAdapter({ inner: httpPlanAdapter, key: encKey }),
@@ -402,7 +425,7 @@ export class SpatialSyncController {
           const httpConvAdapter = new HttpConversationSyncAdapter({
             baseUrl: relayUrl,
             motebitId,
-            authToken: authToken ?? undefined,
+            credentialSource: syncCredentials,
           });
           this._convSyncEngine.connectRemote(
             new EncryptedConversationSyncAdapter({ inner: httpConvAdapter, key: encKey }),
@@ -458,6 +481,8 @@ export class SpatialSyncController {
                 capabilities: [DeviceCapability.HttpMcp],
                 httpFallback: encryptedHttp,
                 localStore: localEventStore ?? undefined,
+                onCatchUpError,
+                payloads: "e2e",
               });
               // Events the sync engine handed the replaced adapter while it
               // was offline are counted as pushed; they go out on the

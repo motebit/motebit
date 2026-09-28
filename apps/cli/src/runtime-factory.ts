@@ -859,10 +859,15 @@ export async function createRuntime(
   const syncToken =
     config.syncToken ?? process.env["MOTEBIT_API_TOKEN"] ?? process.env["MOTEBIT_SYNC_TOKEN"];
 
+  // With the sync key held the transport is E2E-only (#928): a payload that
+  // skipped the encrypting wrapper is refused, never pushed in plaintext.
+  // Without it (no decryptable identity key) the REPL has nothing to
+  // encrypt with, and syncs raw — the one raw-by-design push path.
   const httpAdapter = new HttpEventStoreAdapter({
     baseUrl: syncUrl,
     motebitId,
     authToken: syncToken,
+    payloads: encKey ? "e2e" : "raw",
   });
   // Wrap with encryption if key available (zero-knowledge relay)
   const remoteStore = encKey

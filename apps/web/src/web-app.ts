@@ -3697,11 +3697,19 @@ export class UnbootedWebApp {
     };
 
     // Build adapter stack: HTTP → Encrypted HTTP → WS → Encrypted WS
+    // E2E-only (#928): a plaintext payload is refused before it leaves.
     const httpAdapter = new HttpEventStoreAdapter({
       baseUrl: relayUrl,
       motebitId: this._motebitId,
       credentialSource: syncCredentialSource,
+      payloads: "e2e",
     });
+    // A failed catch-up is shown, never swallowed (#927).
+    const onCatchUpError = (err: unknown): void => {
+      // eslint-disable-next-line no-console -- the status carries no message; the log says why
+      console.warn(`[sync] catch-up failed: ${err instanceof Error ? err.message : String(err)}`);
+      this.setSyncStatus("error");
+    };
     const encryptedHttp = new EncryptedEventStoreAdapter({ inner: httpAdapter, key: encKey });
 
     // WebSocket URL
@@ -3738,6 +3746,8 @@ export class UnbootedWebApp {
       capabilities: [DeviceCapability.HttpMcp],
       httpFallback: encryptedHttp,
       localStore: localEventStore ?? undefined,
+      onCatchUpError,
+      payloads: "e2e",
     });
     this._wsAdapter = wsAdapter;
     // The socket adapter in use now. A token refresh replaces it (#816); every
@@ -4053,6 +4063,8 @@ export class UnbootedWebApp {
             capabilities: [DeviceCapability.HttpMcp],
             httpFallback: encryptedHttp,
             localStore: localEventStore ?? undefined,
+            onCatchUpError,
+            payloads: "e2e",
           });
           // Events the sync engine handed the replaced adapter while it was
           // offline are counted as pushed; they go out on the replacement.

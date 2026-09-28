@@ -46,7 +46,11 @@ import {
   HttpPlanSyncAdapter,
   EncryptedPlanSyncAdapter,
 } from "@motebit/sync-engine";
-import type { PlanSyncStoreAdapter, SyncStatus as SyncEngineStatus } from "@motebit/sync-engine";
+import type {
+  CredentialSource,
+  PlanSyncStoreAdapter,
+  SyncStatus as SyncEngineStatus,
+} from "@motebit/sync-engine";
 import type { EventStoreAdapter } from "@motebit/event-log";
 import { deriveSyncEncryptionKey, secureErase } from "@motebit/encryption";
 import type { ExpoStorageResult } from "./adapters/expo-sqlite";
@@ -91,6 +95,57 @@ export class MobileSyncController {
   private _activeTaskCount = 0;
 
   constructor(private deps: SyncControllerDeps) {}
+
+  /**
+   * This device's sync encryption key: the session's, else derived now from
+   * the identity key (a `syncNow` before `startSync`). Mobile always holds a
+   * device key, so every event push is E2E — there is no raw path (#928).
+   */
+  private async syncEncKey(): Promise<Uint8Array> {
+    if (this._syncEncKey) return this._syncEncKey;
+    const privKeyBytes = await this.deps.getPrivKeyBytes();
+    try {
+      return await deriveSyncEncryptionKey(privKeyBytes);
+    } finally {
+      secureErase(privKeyBytes);
+    }
+  }
+
+  /**
+   * A fresh `sync` token per request (#927): never a value captured once and
+   * carried past its five-minute life.
+   */
+  private syncCredentials(): CredentialSource {
+    return { getCredential: () => this.deps.createSyncToken() };
+  }
+
+  /**
+   * The ONE event transport to the relay (#928): an HTTP adapter that
+   * refuses any payload that is not an E2E envelope, under the encrypting
+   * wrapper. `syncNow` pushed through a bare `HttpEventStoreAdapter`, so its
+   * events reached the relay in plaintext; both push doors now come from here.
+   */
+  private e2eHttpEventStore(
+    syncUrl: string,
+    motebitId: string,
+    encKey: Uint8Array,
+  ): EncryptedEventStoreAdapter {
+    const http = new HttpEventStoreAdapter({
+      baseUrl: syncUrl,
+      motebitId,
+      credentialSource: this.syncCredentials(),
+      payloads: "e2e",
+    });
+    return new EncryptedEventStoreAdapter({ inner: http, key: encKey });
+  }
+
+  /** A failed catch-up is shown in the sync status, never swallowed (#927). */
+  private reportCatchUpError = (err: unknown): void => {
+    // eslint-disable-next-line no-console -- the status carries no message; the log says why
+    console.warn(`[sync] catch-up failed: ${err instanceof Error ? err.message : String(err)}`);
+    this._syncStatus = "error";
+    this._syncStatusCallback?.("error", this._lastSyncTime);
+  };
 
   async getSyncUrl(): Promise<string | null> {
     return AsyncStorage.getItem(SYNC_URL_KEY);
@@ -357,15 +412,11 @@ export class MobileSyncController {
     const motebitId = this.deps.getMotebitId();
 
     const token = await this.deps.createSyncToken();
+    const encKey = await this.syncEncKey();
 
-    // Event sync
-    const eventAdapter = new HttpEventStoreAdapter({
-      baseUrl: url,
-      motebitId,
-      authToken: token,
-    });
+    // Event sync — E2E, the same transport the sync cycle uses (#928).
     const tempEventSync = new SyncEngine(storage.eventStore, motebitId);
-    tempEventSync.connectRemote(eventAdapter);
+    tempEventSync.connectRemote(this.e2eHttpEventStore(url, motebitId, encKey));
     const eventResult = await tempEventSync.sync();
 
     // Conversation sync (encrypted — relay stores opaque ciphertext)
@@ -376,9 +427,7 @@ export class MobileSyncController {
     });
     const tempConvSync = new ConversationSyncEngine(storage.conversationSyncStore, motebitId);
     tempConvSync.connectRemote(
-      this._syncEncKey
-        ? new EncryptedConversationSyncAdapter({ inner: convHttpAdapter, key: this._syncEncKey })
-        : convHttpAdapter,
+      new EncryptedConversationSyncAdapter({ inner: convHttpAdapter, key: encKey }),
     );
     const convResult = await tempConvSync.sync();
 
@@ -416,221 +465,215 @@ export class MobileSyncController {
         this._wsAdapter = null;
       }
 
+      // Fail closed (#928): without the sync key there is no event sync at
+      // all — never a raw fallback that pushes plaintext. startSync sets the
+      // key together with the engines, so this is a broken session.
+      if (!encKey)
+        throw new Error("sync: no sync encryption key — refusing a plaintext event push");
       // Build adapter stack with encryption
-      const httpAdapter = new HttpEventStoreAdapter({
-        baseUrl: syncUrl,
+      const encryptedHttp = this.e2eHttpEventStore(syncUrl, motebitId, encKey);
+      const wsUrl =
+        syncUrl.replace(/^https?/, (m) => (m === "https" ? "wss" : "ws")) + "/ws/sync/" + motebitId;
+
+      const localEventStore = this.deps.getLocalEventStore();
+      const mobileCapabilities = [
+        DeviceCapability.HttpMcp,
+        DeviceCapability.Keyring,
+        DeviceCapability.PushWake,
+      ];
+      const wsAdapter = new WebSocketEventStoreAdapter({
+        url: wsUrl,
         motebitId,
-        authToken: token,
+        credentialSource: this.syncCredentials(),
+        capabilities: mobileCapabilities,
+        httpFallback: encryptedHttp,
+        localStore: localEventStore ?? undefined,
+        payloads: "e2e",
+        onCatchUpError: this.reportCatchUpError,
+      });
+      this._wsAdapter = wsAdapter;
+
+      const encryptedWs = new EncryptedEventStoreAdapter({ inner: wsAdapter, key: encKey });
+
+      // Inbound real-time events
+      this._wsUnsubOnEvent = wsAdapter.onEvent((raw) => {
+        void (async () => {
+          if (!localEventStore) return;
+          const dec = await decryptEventPayload(raw, encKey);
+          await localEventStore.append(dec);
+        })();
       });
 
-      if (encKey) {
-        const encryptedHttp = new EncryptedEventStoreAdapter({ inner: httpAdapter, key: encKey });
-        const wsUrl =
-          syncUrl.replace(/^https?/, (m) => (m === "https" ? "wss" : "ws")) +
-          "/ws/sync/" +
-          motebitId;
-
-        const localEventStore = this.deps.getLocalEventStore();
-        const mobileCapabilities = [
-          DeviceCapability.HttpMcp,
-          DeviceCapability.Keyring,
-          DeviceCapability.PushWake,
-        ];
-        const wsAdapter = new WebSocketEventStoreAdapter({
-          url: wsUrl,
+      // Wire delegation adapter so PlanEngine can delegate steps to capable devices
+      const runtime = this.deps.getRuntime();
+      if (runtime) {
+        // A per-audience provider: the adapter submits (`task:submit`) and
+        // polls (`task:query`). The static `sync` token failed both (#827).
+        const delegationAdapter = new RelayDelegationAdapter({
+          syncUrl,
           motebitId,
-          authToken: token,
-          capabilities: mobileCapabilities,
-          httpFallback: encryptedHttp,
-          localStore: localEventStore ?? undefined,
+          authToken: (audience: TokenAudience) => this.deps.createSyncToken(audience),
+          sendRaw: (data: string) => wsAdapter.sendRaw(data),
+          onCustomMessage: (cb) => wsAdapter.onCustomMessage(cb),
+          getExplorationDrive: () => this.deps.getRuntime()?.getPrecision().explorationDrive,
         });
-        this._wsAdapter = wsAdapter;
+        runtime.setDelegationAdapter(delegationAdapter);
 
-        const encryptedWs = new EncryptedEventStoreAdapter({ inner: wsAdapter, key: encKey });
-
-        // Inbound real-time events
-        this._wsUnsubOnEvent = wsAdapter.onEvent((raw) => {
-          void (async () => {
-            if (!localEventStore) return;
-            const dec = await decryptEventPayload(raw, encKey);
-            await localEventStore.append(dec);
-          })();
+        // Enable interactive delegation — lets the AI transparently delegate
+        // tasks to remote agents during conversation. Resolve the PINNED
+        // relay key (TOFU) via AsyncStorage so a paid P2P delegation derives
+        // the fee-leg treasury from a key trusted at first connect, never a
+        // fetched value (the irreversible-payment MITM surface). undefined →
+        // P2P disabled, relay-mode still serves the task.
+        const pinnedRelayKey = await getOrPinRelayKey(syncUrl, {
+          storage: {
+            getItem: (k) => AsyncStorage.getItem(k),
+            setItem: (k, v) => AsyncStorage.setItem(k, v),
+          },
+        });
+        runtime.enableInteractiveDelegation({
+          syncUrl,
+          // Honor the audience the runtime asks for — `task:submit` to
+          // submit, `task:query` to poll, `market:listing` for the P2P
+          // pre-flight. A closure that ignored it sent `task:submit` to all
+          // three, and the poll and pre-flight were refused (#827).
+          authToken: (audience?: TokenAudience) =>
+            this.deps.createSyncToken(audience ?? "task:submit"),
+          ...(pinnedRelayKey != null ? { relayPublicKey: pinnedRelayKey } : {}),
+          // Forward the cold-start opt-in as a LIVE getter (reads the in-memory
+          // mirror of MobileSettings.coldStartOptIn) so the Governance toggle
+          // governs chat-driven (delegate_to_agent) P2P delegation, not just a
+          // re-enable — parity with the web fix (d6cab601).
+          acknowledgeNoHistoryRisk: () => loadColdStartOptIn(),
         });
 
-        // Wire delegation adapter so PlanEngine can delegate steps to capable devices
-        const runtime = this.deps.getRuntime();
-        if (runtime) {
-          // A per-audience provider: the adapter submits (`task:submit`) and
-          // polls (`task:query`). The static `sync` token failed both (#827).
-          const delegationAdapter = new RelayDelegationAdapter({
-            syncUrl,
-            motebitId,
-            authToken: (audience: TokenAudience) => this.deps.createSyncToken(audience),
-            sendRaw: (data: string) => wsAdapter.sendRaw(data),
-            onCustomMessage: (cb) => wsAdapter.onCustomMessage(cb),
-            getExplorationDrive: () => this.deps.getRuntime()?.getPrecision().explorationDrive,
-          });
-          runtime.setDelegationAdapter(delegationAdapter);
+        // Store serving state
+        this._servingSyncUrl = syncUrl;
+        this._servingAuthToken = token ?? null;
 
-          // Enable interactive delegation — lets the AI transparently delegate
-          // tasks to remote agents during conversation. Resolve the PINNED
-          // relay key (TOFU) via AsyncStorage so a paid P2P delegation derives
-          // the fee-leg treasury from a key trusted at first connect, never a
-          // fetched value (the irreversible-payment MITM surface). undefined →
-          // P2P disabled, relay-mode still serves the task.
-          const pinnedRelayKey = await getOrPinRelayKey(syncUrl, {
-            storage: {
-              getItem: (k) => AsyncStorage.getItem(k),
-              setItem: (k, v) => AsyncStorage.setItem(k, v),
-            },
-          });
-          runtime.enableInteractiveDelegation({
-            syncUrl,
-            // Honor the audience the runtime asks for — `task:submit` to
-            // submit, `task:query` to poll, `market:listing` for the P2P
-            // pre-flight. A closure that ignored it sent `task:submit` to all
-            // three, and the poll and pre-flight were refused (#827).
-            authToken: (audience?: TokenAudience) =>
-              this.deps.createSyncToken(audience ?? "task:submit"),
-            ...(pinnedRelayKey != null ? { relayPublicKey: pinnedRelayKey } : {}),
-            // Forward the cold-start opt-in as a LIVE getter (reads the in-memory
-            // mirror of MobileSettings.coldStartOptIn) so the Governance toggle
-            // governs chat-driven (delegate_to_agent) P2P delegation, not just a
-            // re-enable — parity with the web fix (d6cab601).
-            acknowledgeNoHistoryRisk: () => loadColdStartOptIn(),
-          });
-
-          // Store serving state
-          this._servingSyncUrl = syncUrl;
-          this._servingAuthToken = token ?? null;
-
-          // Wire task handler — accept delegations while the app is open.
-          wsAdapter.onCustomMessage((msg) => {
-            const rt = this.deps.getRuntime();
-            // Handle remote command requests (forwarded by relay)
-            if (msg.type === "command_request" && rt) {
-              // Fail-closed remote ingress: only a signed-request-envelope@1.0
-              // from this agent's own identity executes (daemon-desktop
-              // unification, increment 4).
-              const cmdMsg = msg as unknown as {
-                id: string;
-                command: string;
-                args?: string;
-                envelope?: unknown;
-              };
-              void (async () => {
-                try {
-                  const verdict = await verifyAgentCommandEnvelope({
-                    envelope: cmdMsg.envelope,
-                    command: cmdMsg.command,
-                    args: cmdMsg.args,
-                    motebitId: this.deps.getMotebitId(),
-                    identityPublicKey: this.deps.getPublicKey(),
-                  });
-                  if (!verdict.ok) {
-                    this._wsAdapter?.sendRaw(
-                      JSON.stringify({
-                        type: "command_response",
-                        id: cmdMsg.id,
-                        result: { summary: verdict.reason },
-                      }),
-                    );
-                    return;
-                  }
-                  // The one door for a relay frame.
-                  const result = await executeRemoteCommand(rt, cmdMsg.command, cmdMsg.args);
-                  this._wsAdapter?.sendRaw(
-                    JSON.stringify({ type: "command_response", id: cmdMsg.id, result }),
-                  );
-                } catch (err: unknown) {
+        // Wire task handler — accept delegations while the app is open.
+        wsAdapter.onCustomMessage((msg) => {
+          const rt = this.deps.getRuntime();
+          // Handle remote command requests (forwarded by relay)
+          if (msg.type === "command_request" && rt) {
+            // Fail-closed remote ingress: only a signed-request-envelope@1.0
+            // from this agent's own identity executes (daemon-desktop
+            // unification, increment 4).
+            const cmdMsg = msg as unknown as {
+              id: string;
+              command: string;
+              args?: string;
+              envelope?: unknown;
+            };
+            void (async () => {
+              try {
+                const verdict = await verifyAgentCommandEnvelope({
+                  envelope: cmdMsg.envelope,
+                  command: cmdMsg.command,
+                  args: cmdMsg.args,
+                  motebitId: this.deps.getMotebitId(),
+                  identityPublicKey: this.deps.getPublicKey(),
+                });
+                if (!verdict.ok) {
                   this._wsAdapter?.sendRaw(
                     JSON.stringify({
                       type: "command_response",
                       id: cmdMsg.id,
-                      result: {
-                        summary: `Error: ${err instanceof Error ? err.message : String(err)}`,
-                      },
+                      result: { summary: verdict.reason },
                     }),
                   );
+                  return;
                 }
-              })();
-              return;
-            }
-
-            if (msg.type !== "task_request" || msg.task == null || !this._serving) return;
-            if (!rt) return;
-
-            const task = msg.task as AgentTask;
-            const runtimeRef = rt;
-
-            this._wsAdapter?.sendRaw(JSON.stringify({ type: "task_claim", task_id: task.task_id }));
-            this._activeTaskCount++;
-
-            void (async () => {
-              try {
-                const keyring = this.deps.getKeyring();
-                const privKeyHex = await keyring.get("device_private_key");
-                if (!privKeyHex) return;
-                const privKeyBytes = new Uint8Array(privKeyHex.length / 2);
-                for (let i = 0; i < privKeyHex.length; i += 2) {
-                  privKeyBytes[i / 2] = parseInt(privKeyHex.slice(i, i + 2), 16);
-                }
-
-                let receipt: ExecutionReceipt | undefined;
-                for await (const chunk of runtimeRef.handleAgentTask(
-                  task,
-                  privKeyBytes,
-                  this.deps.getDeviceId(),
-                  undefined,
-                  { delegatedScope: task.delegated_scope },
-                )) {
-                  if (chunk.type === "task_result") {
-                    receipt = chunk.receipt;
-                  }
-                }
-
-                if (receipt && this._servingSyncUrl) {
-                  // The result route verifies `task:result` (#827).
-                  const freshToken = await this.deps.createSyncToken("task:result");
-                  await fetch(
-                    `${this._servingSyncUrl}/agent/${motebitId}/task/${task.task_id}/result`,
-                    {
-                      method: "POST",
-                      headers: {
-                        "Content-Type": "application/json",
-                        Authorization: `Bearer ${freshToken}`,
-                      },
-                      body: JSON.stringify(receipt),
+                // The one door for a relay frame.
+                const result = await executeRemoteCommand(rt, cmdMsg.command, cmdMsg.args);
+                this._wsAdapter?.sendRaw(
+                  JSON.stringify({ type: "command_response", id: cmdMsg.id, result }),
+                );
+              } catch (err: unknown) {
+                this._wsAdapter?.sendRaw(
+                  JSON.stringify({
+                    type: "command_response",
+                    id: cmdMsg.id,
+                    result: {
+                      summary: `Error: ${err instanceof Error ? err.message : String(err)}`,
                     },
-                  );
-                }
-              } catch {
-                // Task execution failed
-              } finally {
-                this._activeTaskCount = Math.max(0, this._activeTaskCount - 1);
+                  }),
+                );
               }
             })();
-          });
-        }
+            return;
+          }
 
-        this.syncEngine.connectRemote(encryptedWs);
-        wsAdapter.connect();
+          if (msg.type !== "task_request" || msg.task == null || !this._serving) return;
+          if (!rt) return;
 
-        // Recover any delegated steps orphaned by a previous app close
-        if (runtime) {
+          const task = msg.task as AgentTask;
+          const runtimeRef = rt;
+
+          this._wsAdapter?.sendRaw(JSON.stringify({ type: "task_claim", task_id: task.task_id }));
+          this._activeTaskCount++;
+
           void (async () => {
             try {
-              for await (const _chunk of runtime.recoverDelegatedSteps()) {
-                // Chunks consumed — state changes propagate through plan store
+              const keyring = this.deps.getKeyring();
+              const privKeyHex = await keyring.get("device_private_key");
+              if (!privKeyHex) return;
+              const privKeyBytes = new Uint8Array(privKeyHex.length / 2);
+              for (let i = 0; i < privKeyHex.length; i += 2) {
+                privKeyBytes[i / 2] = parseInt(privKeyHex.slice(i, i + 2), 16);
+              }
+
+              let receipt: ExecutionReceipt | undefined;
+              for await (const chunk of runtimeRef.handleAgentTask(
+                task,
+                privKeyBytes,
+                this.deps.getDeviceId(),
+                undefined,
+                { delegatedScope: task.delegated_scope },
+              )) {
+                if (chunk.type === "task_result") {
+                  receipt = chunk.receipt;
+                }
+              }
+
+              if (receipt && this._servingSyncUrl) {
+                // The result route verifies `task:result` (#827).
+                const freshToken = await this.deps.createSyncToken("task:result");
+                await fetch(
+                  `${this._servingSyncUrl}/agent/${motebitId}/task/${task.task_id}/result`,
+                  {
+                    method: "POST",
+                    headers: {
+                      "Content-Type": "application/json",
+                      Authorization: `Bearer ${freshToken}`,
+                    },
+                    body: JSON.stringify(receipt),
+                  },
+                );
               }
             } catch {
-              // Recovery is best-effort
+              // Task execution failed
+            } finally {
+              this._activeTaskCount = Math.max(0, this._activeTaskCount - 1);
             }
           })();
-        }
-      } else {
-        // Fallback: no encryption key available
-        this.syncEngine.connectRemote(httpAdapter);
+        });
+      }
+
+      this.syncEngine.connectRemote(encryptedWs);
+      wsAdapter.connect();
+
+      // Recover any delegated steps orphaned by a previous app close
+      if (runtime) {
+        void (async () => {
+          try {
+            for await (const _chunk of runtime.recoverDelegatedSteps()) {
+              // Chunks consumed — state changes propagate through plan store
+            }
+          } catch {
+            // Recovery is best-effort
+          }
+        })();
       }
 
       // Conversation sync (encrypted at relay boundary)
@@ -640,9 +683,7 @@ export class MobileSyncController {
         authToken: token,
       });
       this.conversationSyncEngine.connectRemote(
-        encKey
-          ? new EncryptedConversationSyncAdapter({ inner: convHttpAdapter, key: encKey })
-          : convHttpAdapter,
+        new EncryptedConversationSyncAdapter({ inner: convHttpAdapter, key: encKey }),
       );
 
       await this.syncEngine.sync();
@@ -659,9 +700,7 @@ export class MobileSyncController {
             authToken: token ?? undefined,
           });
           planSync.connectRemote(
-            encKey
-              ? new EncryptedPlanSyncAdapter({ inner: httpPlanAdapter, key: encKey })
-              : httpPlanAdapter,
+            new EncryptedPlanSyncAdapter({ inner: httpPlanAdapter, key: encKey }),
           );
           await planSync.sync();
         } catch {

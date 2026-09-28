@@ -36,6 +36,7 @@
  */
 import type { EventLogEntry } from "@motebit/sdk";
 import type { EventStoreAdapter } from "@motebit/event-log";
+import { classifyEventPayload } from "./event-payload.js";
 
 /** One event of a seq page: the entry in its TRANSPORT form, and its relay seq. */
 export interface SeqPullEntry {
@@ -154,15 +155,6 @@ export function warnSkippedSyncEvent(s: SkippedSyncEvent): void {
     `sync: moved past event ${s.event_id} (seq ${s.seq ?? "n/a"}) without applying it: ${s.reason}${
       s.detail ? ` — ${s.detail}` : ""
     }`,
-  );
-}
-
-/** Whether a payload is the E2E envelope `EncryptedEventStoreAdapter` writes. */
-export function isEncryptedPayload(payload: unknown): boolean {
-  return (
-    typeof payload === "object" &&
-    payload !== null &&
-    (payload as { _encrypted?: unknown })._encrypted === true
   );
 }
 
@@ -332,10 +324,12 @@ export async function pullBySeq(opts: {
           });
           continue;
         }
-      } else if (isEncryptedPayload(transport.payload)) {
+      } else if (classifyEventPayload(transport.payload) !== "plaintext") {
         // Expected on a raw path, not an error: counted, never recorded per
         // event (a raw daemon beside an E2E device would otherwise write a
-        // row for every event that device ever wrote).
+        // row for every event that device ever wrote). A payload carrying
+        // the E2E marker in any form — the envelope or a malformed one — is
+        // never applied as plaintext (#928: one predicate for every reader).
         encryptedOnRawPath++;
         continue;
       } else {

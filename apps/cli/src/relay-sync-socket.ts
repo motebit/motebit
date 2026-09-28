@@ -31,8 +31,12 @@
  * (a connect-generation guard in `ws-adapter.ts`) closes it.
  */
 import { mintAudienceToken } from "@motebit/encryption";
-import { WebSocketEventStoreAdapter } from "@motebit/sync-engine";
-import type { CredentialSource } from "@motebit/sync-engine";
+import {
+  EncryptedEventStoreAdapter,
+  HttpEventStoreAdapter,
+  WebSocketEventStoreAdapter,
+} from "@motebit/sync-engine";
+import type { CredentialSource, RelayPayloadMode } from "@motebit/sync-engine";
 import type { EventStoreAdapter } from "@motebit/event-log";
 
 export interface DeviceSyncCredentialOptions {
@@ -101,6 +105,8 @@ export interface RelaySyncSocketOptions extends DeviceSyncCredentialOptions {
   localStore?: EventStoreAdapter;
   /** Reconnect backoff base. Default: the adapter's own. A test seam. */
   reconnectBaseMs?: number;
+  /** `e2e` when this process holds the sync key: the socket then refuses a plaintext push (#928). */
+  payloads?: RelayPayloadMode;
 }
 
 /**
@@ -119,5 +125,77 @@ export function createRelaySyncSocket(opts: RelaySyncSocketOptions): WebSocketEv
     ...(opts.httpFallback ? { httpFallback: opts.httpFallback } : {}),
     ...(opts.localStore ? { localStore: opts.localStore } : {}),
     ...(opts.reconnectBaseMs !== undefined ? { reconnectBaseMs: opts.reconnectBaseMs } : {}),
+    ...(opts.payloads ? { payloads: opts.payloads } : {}),
   });
+}
+
+export interface RelayEventTransportOptions {
+  /** The relay's HTTP(S) base URL. */
+  syncUrl: string;
+  motebitId: string;
+  /** The device id minted tokens name as `did`. */
+  deviceId: string | undefined;
+  /** The device's signing key, read at each mint. */
+  privateKey: () => Uint8Array | undefined;
+  /**
+   * A configured long-lived token (operator master / sync token). Presented
+   * when set — exactly what these paths sent before — else a fresh device
+   * token is minted per request.
+   */
+  configuredToken?: string;
+  /** The sync encryption key, when this process holds the identity key. */
+  encKey?: Uint8Array;
+  /** Told when a device-token mint fails. */
+  onMintError?: (err: unknown) => void;
+}
+
+export interface RelayEventTransport {
+  /** The event remote: E2E (encrypting wrapper over an E2E-only transport) when `encKey` is held. */
+  remote: EventStoreAdapter;
+  /** The credential every relay sync adapter of this process resolves per request. */
+  credentials: CredentialSource;
+  /** Whether `remote` encrypts. */
+  e2e: boolean;
+}
+
+/**
+ * The daemon's relay EVENT transport — `motebit run`'s sync remote and both
+ * daemons' socket catch-up (#927, #928).
+ *
+ * Credentials are resolved per request. Both paths used to capture one
+ * value at startup: with no configured token that value was nothing, and
+ * every sync request went unauthenticated for good.
+ *
+ * With the sync key held the remote is E2E and its transport is E2E-only, so
+ * nothing reaches the relay in plaintext. `motebit run` pushed through a bare
+ * HTTP adapter while holding the identity key — every event it wrote reached
+ * the relay unencrypted. Without the key (the identity key did not decrypt)
+ * there is nothing to encrypt with, and the transport stays raw: the
+ * raw-by-design case.
+ */
+export function createRelayEventTransport(opts: RelayEventTransportOptions): RelayEventTransport {
+  const minted = deviceSyncCredentialSource({
+    motebitId: opts.motebitId,
+    deviceId: opts.deviceId,
+    privateKey: opts.privateKey,
+    ...(opts.onMintError ? { onMintError: opts.onMintError } : {}),
+  });
+  const credentials: CredentialSource = {
+    getCredential: (request) =>
+      opts.configuredToken != null && opts.configuredToken !== ""
+        ? Promise.resolve(opts.configuredToken)
+        : minted.getCredential(request),
+  };
+  const http = new HttpEventStoreAdapter({
+    baseUrl: opts.syncUrl,
+    motebitId: opts.motebitId,
+    credentialSource: credentials,
+    payloads: opts.encKey ? "e2e" : "raw",
+  });
+  if (!opts.encKey) return { remote: http, credentials, e2e: false };
+  return {
+    remote: new EncryptedEventStoreAdapter({ inner: http, key: opts.encKey }),
+    credentials,
+    e2e: true,
+  };
 }

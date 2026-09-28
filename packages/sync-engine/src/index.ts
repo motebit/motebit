@@ -17,7 +17,6 @@ export {
   resolveSeqCursorStore,
   filterUnseen,
   MAX_SEQ_PAGES_PER_PULL,
-  isEncryptedPayload,
   warnSkippedSyncEvent,
   SKIPPED_SYNC_EVENTS_KEPT,
 } from "./seq-cursor.js";
@@ -31,6 +30,14 @@ export type {
   SkippedSyncEventReason,
   HeldEventIdLookup,
 } from "./seq-cursor.js";
+
+export {
+  classifyEventPayload,
+  isEncryptedPayload,
+  assertPushable,
+  PlaintextPushRefusedError,
+} from "./event-payload.js";
+export type { EventPayloadForm, RelayPayloadMode } from "./event-payload.js";
 
 export { StaticCredentialSource } from "./credential-source.js";
 export type { CredentialRequest, CredentialSource } from "./credential-source.js";
