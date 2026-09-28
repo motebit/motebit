@@ -126,6 +126,44 @@ describe("#928 one encrypted-payload predicate", () => {
     }
   });
 
+  it("round 3: plaintext as the ciphertext field, and a wrong-length nonce, are not envelopes", async () => {
+    const env = await realEnvelope();
+    const data = JSON.parse(env["_data"] as string) as Record<string, unknown>;
+    // Lenient base64 (Buffer) would DECODE this plaintext into bytes; only the
+    // strict alphabet check stops it passing as ciphertext.
+    const plaintextAsCiphertext = {
+      _encrypted: true,
+      _data: JSON.stringify({ ...data, c: "my medical secret here" }),
+    };
+    // A nonce that is valid base64 but 16 bytes, not 12.
+    const wrongNonce = {
+      _encrypted: true,
+      _data: JSON.stringify({ ...data, n: Buffer.alloc(16, 1).toString("base64") }),
+    };
+    for (const p of [plaintextAsCiphertext, wrongNonce]) {
+      expect(classifyEventPayload(p), JSON.stringify(p)).toBe("malformed");
+    }
+
+    const relay = new FakeRelay();
+    vi.stubGlobal("fetch", vi.fn(relay.fetch));
+    try {
+      const http = new HttpEventStoreAdapter({
+        baseUrl: relay.baseUrl,
+        motebitId: MID,
+        payloads: "e2e",
+        maxRetries: 0,
+      });
+      for (const p of [plaintextAsCiphertext, wrongNonce]) {
+        await expect(http.append(entry("probe", 1, p))).rejects.toBeInstanceOf(
+          PlaintextPushRefusedError,
+        );
+      }
+      expect(globalThis.fetch).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("every decrypt path refuses a marker that is not the envelope — never decrypts it, never passes it as plaintext", async () => {
     const odd = entry("odd", 1, { _encrypted: 1, _data: "{}", secret: "s" });
     await expect(decryptEventPayload(odd, KEY)).rejects.toThrow(/not an E2E envelope/);

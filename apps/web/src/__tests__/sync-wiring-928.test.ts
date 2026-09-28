@@ -253,3 +253,87 @@ describe("web sync wiring (#928 round 2)", () => {
     app.stop();
   });
 });
+
+describe("web catch-up failures reach the sync status (#928 round 3)", () => {
+  /** The relay's /sync door; `revoked` refuses every request from then on. */
+  let revoked: boolean;
+  let pulls: Array<{ refused: boolean }>;
+
+  function stubRelay(): void {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string | URL | Request) => {
+        const url = new URL(
+          typeof input === "string" ? input : input instanceof URL ? input.href : input.url,
+        );
+        const path = url.pathname;
+        if (!path.startsWith("/sync/")) {
+          return new Response("{}", {
+            status: 503,
+            headers: { "content-type": "application/json" },
+          });
+        }
+        if (path.endsWith("/pull")) pulls.push({ refused: revoked });
+        if (revoked) return new Response("Device not authorized", { status: 403 });
+        if (path.endsWith("/pull")) {
+          return Response.json({ events: [], next_seq: 0, has_more: false, latest_seq: 0 });
+        }
+        if (path.endsWith("/clock")) return Response.json({ latest_clock: 0 });
+        if (path.endsWith("/plans")) return Response.json({ plans: [], accepted: 0 });
+        if (path.endsWith("/plan-steps")) return Response.json({ steps: [], accepted: 0 });
+        if (path.endsWith("/conversations"))
+          return Response.json({ conversations: [], accepted: 0 });
+        if (path.endsWith("/messages")) return Response.json({ messages: [], accepted: 0 });
+        return Response.json({});
+      }),
+    );
+  }
+
+  async function startedWatching(statuses: string[]) {
+    const app = new WebApp();
+    await app.init(null as unknown as HTMLCanvasElement);
+    await app.bootstrap();
+    app.onSyncStatusChange((st) => statuses.push(st));
+    vi.useFakeTimers({
+      toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "Date"],
+    });
+    const starting = app.startSync("https://relay.test");
+    await settle();
+    await starting;
+    await settle();
+    return app;
+  }
+
+  beforeEach(() => {
+    revoked = false;
+    pulls = [];
+    stubRelay();
+  });
+
+  it("the FIRST socket's failed catch-up sets the status to error", async () => {
+    revoked = true;
+    const statuses: string[] = [];
+    const app = await startedWatching(statuses);
+    await settle(100);
+    expect(pulls.some((p) => p.refused)).toBe(true);
+    expect(statuses).toContain("error");
+    app.stopSync();
+    app.stop();
+  });
+
+  it("the REFRESH socket's failed catch-up sets the status to error", async () => {
+    const statuses: string[] = [];
+    const app = await startedWatching(statuses);
+    await settle(100);
+    expect(pulls.length).toBeGreaterThan(0);
+    expect(statuses).not.toContain("error");
+
+    revoked = true; // only the refresh's replacement socket catches up after this
+    await vi.advanceTimersByTimeAsync(REFRESH_MS);
+    await settle(100);
+    expect(pulls.some((p) => p.refused)).toBe(true);
+    expect(statuses).toContain("error");
+    app.stopSync();
+    app.stop();
+  });
+});

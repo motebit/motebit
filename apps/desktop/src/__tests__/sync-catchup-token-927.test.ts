@@ -69,6 +69,8 @@ class FakeSocket {
 class Relay {
   events: Array<{ seq: number; event: EventLogEntry }> = [];
   refused = 0;
+  /** The relay stops authorizing this device (every token refused from now on). */
+  revoked = false;
   add(e: EventLogEntry): void {
     this.events.push({ seq: this.events.length + 1, event: e });
   }
@@ -77,7 +79,7 @@ class Relay {
     if (!url.pathname.startsWith("/sync/")) return new Response("n/a", { status: 503 });
     const auth = (init?.headers as Record<string, string> | undefined)?.["Authorization"] ?? "";
     const m = /^Bearer tok:(\d+)$/.exec(auth);
-    if (!m || Number(m[1]) <= Date.now()) {
+    if (this.revoked || !m || Number(m[1]) <= Date.now()) {
       this.refused++;
       return new Response("Device not authorized", { status: 403, statusText: "Forbidden" });
     }
@@ -218,6 +220,26 @@ describe("desktop catch-up token (#927)", () => {
     expect(errored[errored.length - 1]!.error).toMatch(/Catch-up failed: .*403/);
     // One request, one refresh, then surfaced.
     expect(relay.refused).toBe(2);
+    ctrl.stopSync();
+  });
+
+  it("round 3: a catch-up failure on the socket a REFRESH built reaches the sync status", async () => {
+    const local = new InMemoryEventStore();
+    const ctrl = new SyncController(makeDeps(local));
+    ctrl.onSyncStatus((e) => statuses.push({ ...e }));
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await ctrl.startSync(vi.fn() as any, "https://relay.test");
+    await vi.advanceTimersByTimeAsync(10);
+    // The first socket's catch-up succeeded: no error so far.
+    await vi.waitFor(() => expect(relay.refused).toBe(0));
+    expect(statuses.some((s) => s.status === "error")).toBe(false);
+
+    // Only the refresh's replacement socket catches up after this.
+    relay.revoked = true;
+    await vi.advanceTimersByTimeAsync(REFRESH_MS + 10);
+    await vi.waitFor(() => expect(statuses.some((s) => s.status === "error")).toBe(true));
+    const errored = statuses.filter((s) => s.status === "error");
+    expect(errored[errored.length - 1]!.error).toMatch(/Catch-up failed: .*403/);
     ctrl.stopSync();
   });
 });

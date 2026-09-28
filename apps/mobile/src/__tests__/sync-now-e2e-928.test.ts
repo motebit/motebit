@@ -7,7 +7,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { InMemoryEventStore } from "@motebit/event-log";
 import { EventType } from "@motebit/sdk";
-import type { EventLogEntry } from "@motebit/sdk";
+import type { EventLogEntry, SyncConversation } from "@motebit/sdk";
 import { InMemoryConversationSyncStore, isEncryptedPayload } from "@motebit/sync-engine";
 
 vi.mock("@motebit/runtime", () => ({
@@ -45,10 +45,13 @@ const SECRET = "zz928-medical-plaintext";
 class RelayStandIn {
   stored: EventLogEntry[] = [];
   tokens: string[] = [];
+  /** Every request body, exactly as sent. */
+  bodies: string[] = [];
   fetch = async (input: string | URL, init?: RequestInit): Promise<Response> => {
     const url = new URL(String(input));
     const auth = (init?.headers as Record<string, string> | undefined)?.["Authorization"];
     if (auth) this.tokens.push(auth);
+    if (typeof init?.body === "string") this.bodies.push(init.body);
     const op = url.pathname.split("/")[3];
     if (op === "push" && init?.method === "POST") {
       const body = JSON.parse(init.body as string) as { events: EventLogEntry[] };
@@ -59,19 +62,22 @@ class RelayStandIn {
     if (op === "clock") return Response.json({ latest_clock: 0 });
     if (op === "conversations") {
       return init?.method === "POST"
-        ? Response.json({ accepted: 0 })
+        ? Response.json({ accepted: 1 })
         : Response.json({ conversations: [] });
     }
     if (op === "messages") {
       return init?.method === "POST"
-        ? Response.json({ accepted: 0 })
+        ? Response.json({ accepted: 1 })
         : Response.json({ messages: [] });
     }
     return new Response("not found", { status: 404 });
   };
 }
 
-function makeDeps(eventStore: InMemoryEventStore): SyncControllerDeps {
+function makeDeps(
+  eventStore: InMemoryEventStore,
+  conversationSyncStore = new InMemoryConversationSyncStore(),
+): SyncControllerDeps {
   let n = 0;
   return {
     getRuntime: () => null,
@@ -79,8 +85,7 @@ function makeDeps(eventStore: InMemoryEventStore): SyncControllerDeps {
     getDeviceId: () => "dev-zz928",
     getPublicKey: () => "aa".repeat(32),
     // eslint-disable-next-line @typescript-eslint/no-explicit-any -- a partial storage bundle: syncNow reads only these two
-    getStorage: () =>
-      ({ eventStore, conversationSyncStore: new InMemoryConversationSyncStore() }) as any,
+    getStorage: () => ({ eventStore, conversationSyncStore }) as any,
     getLocalEventStore: () => eventStore,
     // eslint-disable-next-line @typescript-eslint/no-explicit-any -- never read by syncNow
     getKeyring: () => ({}) as any,
@@ -132,5 +137,39 @@ describe("#928 mobile syncNow pushes no plaintext", () => {
     ]);
     // A token is resolved per request, never one value for the session (#927).
     expect(new Set(relay.tokens).size).toBeGreaterThan(1);
+  });
+
+  it("round 3: conversations syncNow pushes BEFORE startSync carry no plaintext title, summary or message", async () => {
+    const conversations = new InMemoryConversationSyncStore();
+    const now = Date.now();
+    conversations.upsertConversation({
+      conversation_id: "conv-zz928" as SyncConversation["conversation_id"],
+      motebit_id: MID as SyncConversation["motebit_id"],
+      started_at: now - 10,
+      last_active_at: now,
+      title: `${SECRET} title`,
+      summary: `${SECRET} summary`,
+      message_count: 1,
+    });
+    conversations.upsertMessage({
+      message_id: "msg-zz928",
+      conversation_id: "conv-zz928" as SyncConversation["conversation_id"],
+      motebit_id: MID as SyncConversation["motebit_id"],
+      role: "user",
+      content: `${SECRET} message body`,
+      tool_calls: null,
+      tool_call_id: null,
+      created_at: now,
+      token_estimate: 4,
+    });
+    // No startSync: the controller holds no session key when syncNow runs.
+    const ctrl = new MobileSyncController(makeDeps(new InMemoryEventStore(), conversations));
+    const result = await ctrl.syncNow();
+
+    expect(result.conversations_pushed).toBe(1);
+    const all = relay.bodies.join("\n");
+    expect(all).toContain("conv-zz928");
+    expect(all).toContain("msg-zz928");
+    expect(all).not.toContain(SECRET);
   });
 });

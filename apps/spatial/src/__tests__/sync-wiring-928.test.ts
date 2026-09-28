@@ -123,6 +123,8 @@ class FakeSocket {
 
 /** Every request's path and whether its token was valid when it was sent. */
 let requests: Array<{ path: string; valid: boolean }>;
+/** The relay stops authorizing this device: every /sync request is refused. */
+let revoked: boolean;
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any -- the runtime surface connectRelay touches
 function makeRuntime(): any {
@@ -172,6 +174,7 @@ beforeEach(() => {
   built.plan.length = 0;
   built.conv.length = 0;
   requests = [];
+  revoked = false;
   vi.stubGlobal("WebSocket", FakeSocket);
   vi.stubGlobal(
     "fetch",
@@ -179,7 +182,7 @@ beforeEach(() => {
       const url = new URL(String(input));
       const auth = (init?.headers as Record<string, string> | undefined)?.["Authorization"] ?? "";
       const m = /^Bearer tok:(\d+)$/.exec(auth);
-      const valid = m != null && Number(m[1]) > Date.now();
+      const valid = !revoked && m != null && Number(m[1]) > Date.now();
       requests.push({ path: url.pathname, valid });
       if (!url.pathname.startsWith("/sync/")) return new Response("{}", { status: 200 });
       if (!valid) return new Response("Device not authorized", { status: 403 });
@@ -237,6 +240,34 @@ describe("spatial sync wiring (#928, #927)", () => {
       `/sync/${MID}/conversations`,
     ]);
     expect(sync.every((r) => r.valid)).toBe(true);
+    await ctrl.disconnectRelay();
+  });
+
+  it("round 3: a failed catch-up on the FIRST socket reaches the sync status", async () => {
+    revoked = true;
+    const ctrl = new SpatialSyncController(makeDeps(makeRuntime(), new InMemoryEventStore()));
+    const statuses: string[] = [];
+    ctrl.onSyncStatusChange((st) => statuses.push(st));
+    await ctrl.connectRelay();
+    await vi.advanceTimersByTimeAsync(10);
+    await vi.waitFor(() => expect(statuses).toContain("error"));
+    // It is the catch-up that failed: the relay refused its pulls.
+    expect(requests.some((r) => r.path === `/sync/${MID}/pull` && !r.valid)).toBe(true);
+    await ctrl.disconnectRelay();
+  });
+
+  it("round 3: a failed catch-up on the socket a REFRESH built reaches the sync status", async () => {
+    const ctrl = new SpatialSyncController(makeDeps(makeRuntime(), new InMemoryEventStore()));
+    const statuses: string[] = [];
+    ctrl.onSyncStatusChange((st) => statuses.push(st));
+    await ctrl.connectRelay();
+    await vi.advanceTimersByTimeAsync(10);
+    expect(requests.some((r) => r.path === `/sync/${MID}/pull` && r.valid)).toBe(true);
+    expect(statuses).not.toContain("error");
+
+    revoked = true; // only the refresh's replacement socket catches up after this
+    await vi.advanceTimersByTimeAsync(REFRESH_MS + 10);
+    await vi.waitFor(() => expect(statuses).toContain("error"));
     await ctrl.disconnectRelay();
   });
 });
