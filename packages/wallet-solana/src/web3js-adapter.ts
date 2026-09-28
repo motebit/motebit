@@ -87,6 +87,8 @@ import type {
   SendUsdcResult,
   SendUsdcBatchItemResult,
   TxVerificationResult,
+  OutgoingTransferQuery,
+  OutgoingTransferLookup,
 } from "./adapter.js";
 import {
   USDC_MINT_MAINNET,
@@ -111,6 +113,12 @@ const ASSET_NAME_USDC = "USDC";
  * block height exceeded"). Bounded so a genuinely-down RPC still fails fast.
  */
 const BROADCAST_MAX_ATTEMPTS = 3;
+
+/** One page of recent signatures for `findOutgoingTransfer` (#887). */
+const OUTGOING_LOOKUP_PAGE = 50;
+
+/** Backwards slack on the lookup window: whole-second block times + clock drift. */
+const OUTGOING_LOOKUP_SKEW_MS = 30_000;
 
 /**
  * True only for the AUTHORITATIVE permanent-expiry signal: the transaction's
@@ -537,6 +545,64 @@ export class Web3JsRpcAdapter implements SolanaRpcAdapter {
       slot: resp.slot,
       asset: ASSET_NAME_USDC,
     };
+  }
+
+  /**
+   * Read-only recovery lookup (#887): did a transfer of exactly
+   * `microAmount` from this wallet to `toAddress` land at or after
+   * `sinceMs`? Walks one page of signatures touching this wallet's USDC
+   * token account (newest first), classifies each through `getTransaction`
+   * (the one authorized tx-reading boundary), and keeps those whose sole
+   * payer is this wallet and that carry an exact leg to `toAddress`.
+   *
+   * Fail-closed: a page that may not reach back to `sinceMs`, or any RPC
+   * error on the way, is `rpc_error` — never read as absence.
+   */
+  async findOutgoingTransfer(query: OutgoingTransferQuery): Promise<OutgoingTransferLookup> {
+    const finality: "confirmed" | "finalized" =
+      this.commitment === "finalized" ? "finalized" : "confirmed";
+    const exclude = new Set(query.excludeSignatures ?? []);
+    const own = this.keypair.publicKey.toBase58();
+    // Block times are whole seconds and clocks drift; widen the window
+    // backwards so a real match is never cut off by rounding.
+    const sinceSec = Math.floor((query.sinceMs - OUTGOING_LOOKUP_SKEW_MS) / 1000);
+    try {
+      const sourceAta = await getAssociatedTokenAddress(this.mint, this.keypair.publicKey);
+      const sigs = await this.connection.getSignaturesForAddress(
+        sourceAta,
+        { limit: OUTGOING_LOOKUP_PAGE },
+        finality,
+      );
+      const oldest = sigs[sigs.length - 1];
+      if (
+        sigs.length >= OUTGOING_LOOKUP_PAGE &&
+        (oldest?.blockTime == null || oldest.blockTime >= sinceSec)
+      ) {
+        return {
+          status: "rpc_error",
+          reason: `${OUTGOING_LOOKUP_PAGE}+ transactions since the send — lookup window not covered`,
+        };
+      }
+      const matches: string[] = [];
+      for (const info of sigs) {
+        if (info.err != null) continue; // an errored tx moved nothing
+        if (info.blockTime != null && info.blockTime < sinceSec) continue;
+        if (exclude.has(info.signature)) continue;
+        const tx = await this.getTransaction(info.signature);
+        if (tx.status === "rpc_error") return { status: "rpc_error", reason: tx.reason };
+        if (tx.status !== "confirmed" || tx.from !== own) continue;
+        if (
+          tx.transfers.some((l) => l.to === query.toAddress && l.amountMicro === query.microAmount)
+        ) {
+          matches.push(info.signature);
+        }
+      }
+      if (matches.length === 1) return { status: "found", signature: matches[0]! };
+      if (matches.length > 1) return { status: "ambiguous", signatures: matches };
+      return { status: "not_found" };
+    } catch (err) {
+      return { status: "rpc_error", reason: err instanceof Error ? err.message : String(err) };
+    }
   }
 
   async isReachable(): Promise<boolean> {

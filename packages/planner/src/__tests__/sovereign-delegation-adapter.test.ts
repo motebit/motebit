@@ -150,10 +150,11 @@ describe("SovereignDelegationAdapter", () => {
     vi.unstubAllGlobals();
   });
 
-  it("throws with failedAgentId when payment fails", async () => {
+  it("throws with failedAgentId when payment fails (wallet confirms nothing moved)", async () => {
     const config = makeConfig({
       walletRail: {
         send: vi.fn().mockRejectedValue(new Error("Insufficient USDC balance")),
+        confirmSend: vi.fn().mockResolvedValue({ status: "absent" }),
         chain: "solana",
         asset: "USDC",
       },
@@ -294,7 +295,9 @@ describe("SovereignDelegationAdapter", () => {
     vi.stubGlobal("fetch", fetchMock);
 
     const adapter = new SovereignDelegationAdapter(config);
-    await expect(adapter.delegateStep(makeStep(), 30000)).rejects.toThrow("no receipt");
+    await expect(adapter.delegateStep(makeStep(), 30000)).rejects.toThrow(
+      "Paid, result not retrieved",
+    );
 
     vi.unstubAllGlobals();
   });

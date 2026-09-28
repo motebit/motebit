@@ -108,6 +108,42 @@ export type TxVerificationResult =
     }
   | { status: "rpc_error"; reason: string };
 
+/**
+ * Query for {@link SolanaRpcAdapter.findOutgoingTransfer} — "did a transfer
+ * of exactly `microAmount` USDC from this wallet to `toAddress` land at or
+ * after `sinceMs`?" (#887).
+ */
+export interface OutgoingTransferQuery {
+  /** Recipient base58 OWNER address (not the ATA). */
+  toAddress: string;
+  /** Exact amount in micro-units — never a `>=` match. */
+  microAmount: bigint;
+  /** Epoch ms; transactions whose block time is earlier are ignored. */
+  sinceMs: number;
+  /** Signatures the caller already accounts for (its own earlier payments). */
+  excludeSignatures?: readonly string[];
+}
+
+/**
+ * Closed result of an outgoing-transfer lookup. READ-ONLY: the lookup never
+ * signs or broadcasts.
+ *
+ *   - `found`: exactly one landed transfer from this wallet matches.
+ *   - `not_found`: no match in a window the lookup fully covered. NOT, by
+ *     itself, proof that no transfer will land — a transaction still in
+ *     flight is invisible until it lands. The rail decides when absence is
+ *     authoritative (`SolanaWalletRail.confirmSend`).
+ *   - `ambiguous`: more than one match — the caller cannot tell which is its
+ *     own.
+ *   - `rpc_error`: the lookup could not be completed (transient, or the
+ *     window was larger than one page). Never read as absence.
+ */
+export type OutgoingTransferLookup =
+  | { status: "found"; signature: string }
+  | { status: "not_found" }
+  | { status: "ambiguous"; signatures: string[] }
+  | { status: "rpc_error"; reason: string };
+
 export interface SolanaRpcAdapter {
   /** The wallet's own base58 address (derived from the keypair seed). */
   readonly ownAddress: string;
@@ -137,7 +173,10 @@ export interface SolanaRpcAdapter {
    * Associated Token Account if it doesn't exist (payer = self).
    * Throws InsufficientUsdcBalanceError when the source balance is
    * lower than `microAmount`. Throws InvalidSolanaAddressError when
-   * `toAddress` is not a valid base58 public key.
+   * `toAddress` is not a valid base58 public key. Both are thrown only
+   * BEFORE any transaction is signed — `SolanaWalletRail.confirmSend`
+   * reads them as proof that nothing was broadcast (#887), so an
+   * implementation must never throw either after a broadcast.
    */
   sendUsdc(args: SendUsdcArgs): Promise<SendUsdcResult>;
 
@@ -163,6 +202,16 @@ export interface SolanaRpcAdapter {
    * consumes it; do not add a second RPC path.
    */
   getTransaction(signature: string): Promise<TxVerificationResult>;
+
+  /**
+   * Look up whether a transfer of exactly `microAmount` USDC from this
+   * wallet to `toAddress` landed at or after `sinceMs` (#887). Read-only —
+   * the recovery read a payer runs when `sendUsdc` threw and it cannot know
+   * from the error alone whether its transaction landed. Optional: an
+   * adapter without it makes every ambiguous send failure `unknown`
+   * (fail-closed — the caller must never pay again).
+   */
+  findOutgoingTransfer?(query: OutgoingTransferQuery): Promise<OutgoingTransferLookup>;
 
   /** Whether the RPC endpoint is reachable. Best-effort, no retries. */
   isReachable(): Promise<boolean>;

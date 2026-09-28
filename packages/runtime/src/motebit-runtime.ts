@@ -1930,7 +1930,17 @@ export class MotebitRuntime {
       motebitId: this.motebitId,
       deviceId,
       signingKeys,
+      // The rail object itself: `SolanaWalletRail.confirmSend` is the
+      // read-only "did my failed send land?" lookup the adapter consults
+      // before a send error may count as "not paid" (#887). A rail without
+      // it makes every send error "payment status unknown" (fail-closed).
       walletRail: solanaWallet,
+      // The same durable per-identity ledger the relay-mediated paths write
+      // (#884): each pay-forward payment is recorded before the task is
+      // presented, and a worker holding a paid, unretrieved result is
+      // refused before any money moves.
+      paidLedger: this._paidIntentLedger,
+      logger: this._logger,
       authToken: opts?.authToken,
       routingStrategy: opts?.routingStrategy,
       maxRetries: opts?.maxRetries,

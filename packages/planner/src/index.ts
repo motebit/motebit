@@ -15,6 +15,11 @@ export type {
   StepResult,
 } from "./delegation-adapter.js";
 export { SovereignDelegationAdapter } from "./sovereign-delegation-adapter.js";
-export type { SovereignDelegationConfig } from "./sovereign-delegation-adapter.js";
+export type {
+  SovereignDelegationConfig,
+  SovereignSendConfirmation,
+  SovereignPaidEntry,
+  SovereignPaidLedger,
+} from "./sovereign-delegation-adapter.js";
 export { reflectOnPlan, parseReflectionResponse } from "./reflect.js";
 export type { ReflectionResult } from "./reflect.js";
