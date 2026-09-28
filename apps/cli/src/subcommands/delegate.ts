@@ -348,14 +348,21 @@ export async function handleDelegate(config: CliConfig): Promise<void> {
       console.error(`Sovereign delegation failed (${result.error.code}): ${result.error.message}`);
       const settled = result.error.settledPayment;
       const unconfirmed = result.error.unconfirmedPayment;
-      if (result.error.code === "payment_not_admitted" && settled != null) {
-        // #885: paid, and the relay never admitted the task — there is no
-        // result to fetch, and a second run would pay again.
+      if (
+        (result.error.code === "payment_not_admitted" ||
+          result.error.code === "payment_admission_unconfirmed") &&
+        settled != null
+      ) {
+        // #885: paid, and no relay task is confirmed — nothing to fetch by
+        // id, and a second run would pay again.
         console.error(
-          `The payment went out (tx ${settled.txHash}), but the relay did not admit the task, ` +
-            `even after resubmitting that same payment. Do not run this again — it would pay ` +
-            `a second time. The payment is recorded as ${settled.taskId}; after reconciling it, ` +
-            `run \`motebit\`, then /result dismiss ${settled.taskId}`,
+          `The payment went out (tx ${settled.txHash}), but ` +
+            (result.error.code === "payment_not_admitted"
+              ? `the relay refused the task. `
+              : `the relay has not confirmed admitting the task (it may have). `) +
+            `Do not run this again — it would pay a second time. The payment is recorded as ` +
+            `${settled.taskId}; after reconciling it, run \`motebit\`, then ` +
+            `/result dismiss ${settled.taskId}`,
         );
       } else if (result.error.code === "payment_status_unknown") {
         console.error(

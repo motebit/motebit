@@ -593,7 +593,7 @@ describe("result command + paidResultsNotice", () => {
   });
 });
 
-describe("result command — a payment the relay never admitted (#885)", () => {
+describe("result command — a payment with no confirmed relay task (#885)", () => {
   it("lists it under a unique short id, answers it without a relay read, and dismisses it", async () => {
     const store = new InMemoryPaidIntentStore();
     const ledger = new PaidIntentLedger(store, ME);
@@ -609,7 +609,7 @@ describe("result command — a payment the relay never admitted (#885)", () => {
       ledger.recordSettledUnretrieved({
         workerMotebitId: WORKER,
         capability: "web_search",
-        taskId: `p2p-unadmitted:${tx}`,
+        taskId: `p2p-payment:${tx}`,
         txHash: tx,
         paidMicro: 250_000,
         feeMicro: 13_158,
@@ -623,16 +623,16 @@ describe("result command — a payment the relay never admitted (#885)", () => {
 
     const list = await executeCommand(runtime, "result", "");
     // Two entries, two DISTINCT short ids — eight characters would name both.
-    expect(list?.detail).toContain("p2p-unadmitted:TxAAAAAA");
-    expect(list?.detail).toContain("p2p-unadmitted:TxBBBBBB");
+    expect(list?.detail).toContain("p2p-payment:TxAAAAAA");
+    expect(list?.detail).toContain("p2p-payment:TxBBBBBB");
 
-    const one = await executeCommand(runtime, "result", "p2p-unadmitted:TxAAAAAA");
-    expect(one?.summary).toContain("never admitted this task");
+    const one = await executeCommand(runtime, "result", "p2p-payment:TxAAAAAA");
+    expect(one?.summary).toContain("No relay task is confirmed for this payment");
     expect(one?.detail).toContain("Hiring again would pay a second time");
     expect(one?.detail).toContain("tx TxAAAAAAAA111");
     expect(reads).not.toHaveBeenCalled();
 
-    const gone = await executeCommand(runtime, "result", "dismiss p2p-unadmitted:TxAAAAAA");
+    const gone = await executeCommand(runtime, "result", "dismiss p2p-payment:TxAAAAAA");
     expect(gone?.summary).toContain("Dismissed");
     expect(runtime.outstandingPaidResults().map((e) => e.txHash)).toEqual(["TxBBBBBBBB222"]);
   });

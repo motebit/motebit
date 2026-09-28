@@ -13,11 +13,11 @@ import {
   retrieveDelegationResult,
   selectAndRunDelegation,
   type ConfirmP2pPayment,
+  type BuildP2pPayment,
   type DelegationSettlement,
   type TaskRetrieval,
 } from "./relay-delegation.js";
 import { fromMicro, RiskLevel, SideEffect } from "@motebit/protocol";
-import type { P2pPaymentProof, SovereignP2pPaymentRequest } from "@motebit/protocol";
 
 /**
  * Render the settlement fact as a sentence the model can relay verbatim. The
@@ -86,7 +86,7 @@ export interface InteractiveDelegationConfig {
    * from its `SovereignWalletRail` at enable time. Present only when a sovereign
    * wallet is configured.
    */
-  buildP2pPayment?: (request: SovereignP2pPaymentRequest) => Promise<P2pPaymentProof>;
+  buildP2pPayment?: BuildP2pPayment;
   /**
    * The same rail's read-only "did the payment land anyway?" lookup (#885),
    * bound by the runtime beside `buildP2pPayment`. Absent ⇒ a builder error
@@ -170,9 +170,10 @@ export function renderTaskRetrieval(
       "That is not a task id. Ask the user for the id (or use /result to list them).",
     not_connected: "No relay is connected on this device, so nothing could be read.",
     not_admitted:
-      "This is a payment with NO relay task: the relay never admitted it, or the payment's " +
-      "landing could not be confirmed. There is no result to fetch. Do NOT re-delegate — that " +
-      "would pay again. Tell the user the payment is outstanding and let them reconcile it.",
+      "This is a payment with NO confirmed relay task: the relay refused it, or its admission " +
+      "(or the payment's landing) was never confirmed. There is nothing to fetch by this id. Do " +
+      "NOT re-delegate — that would pay again. Tell the user the payment is outstanding and let " +
+      "them reconcile it.",
   };
   const out: Record<string, unknown> = {
     task_id: r.taskId,
@@ -197,8 +198,6 @@ export function renderTaskRetrieval(
     out.result = r.receipt.result ?? "";
   } else if (r.status === "pending") {
     out.task_status = r.taskStatus;
-  } else if (r.status === "not_admitted") {
-    out.payment_landed = r.paymentLanded ? true : "unknown";
   } else if ("message" in r) {
     out.detail = r.message;
   }
@@ -441,17 +440,25 @@ export class InteractiveDelegationManager {
           }
           // #885: the money left the wallet but the relay never admitted the
           // task — there is no task id to fetch. Not "the hire succeeded".
-          if (result.error.code === "payment_not_admitted" && settled) {
+          if (
+            (result.error.code === "payment_not_admitted" ||
+              result.error.code === "payment_admission_unconfirmed") &&
+            settled
+          ) {
+            const refused = result.error.code === "payment_not_admitted";
             return {
               ok: false,
               error:
-                `PAYMENT_NOT_ADMITTED — you have ALREADY PAID ` +
-                `${(settled.paidMicro / 1_000_000).toFixed(4)} USDC (+ ` +
+                `${refused ? "PAYMENT_NOT_ADMITTED" : "PAYMENT_ADMISSION_UNCONFIRMED"} — you have ` +
+                `ALREADY PAID ${(settled.paidMicro / 1_000_000).toFixed(4)} USDC (+ ` +
                 `${(settled.feeMicro / 1_000_000).toFixed(4)} fee) onchain, tx ${settled.txHash}, ` +
-                `but the relay did not admit the task, even after resubmitting that same payment. ` +
-                `There is no result to fetch. Do NOT delegate this task again — a second ` +
-                `delegation broadcasts a SECOND payment. Tell the user the payment went out and ` +
-                `the task was not admitted (${result.error.message}), and let them decide.`,
+                (refused
+                  ? `and the relay refused the task. `
+                  : `and the relay has not confirmed admitting the task (it may have, without ` +
+                    `the answer arriving). `) +
+                `No task id is known, so there is nothing to fetch. Do NOT delegate this task ` +
+                `again — a second delegation pays a SECOND time. Tell the user the payment went ` +
+                `out (${result.error.message}), and let them decide.`,
             };
           }
           if (result.error.code === "payment_status_unknown") {

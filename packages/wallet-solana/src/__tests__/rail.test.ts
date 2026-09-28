@@ -528,7 +528,29 @@ describe("SolanaWalletRail.confirmSend", () => {
   });
 });
 
-// ── #885: confirmP2pPayment — the multi-leg sibling of confirmSend ──
+// ── #885: buildP2pPayment reports each signed tx BEFORE it is sent ──
+
+describe("SolanaWalletRail.buildP2pPayment — beforeBroadcast", () => {
+  const request = {
+    workerAddress: "Worker111",
+    amountMicro: 250_000,
+    treasuryAddress: "Treasury111",
+    feeAmountMicro: 12_500,
+  };
+
+  it("hands the hooks to the adapter's atomic batch", async () => {
+    const sendUsdcBatch = vi.fn().mockResolvedValue([
+      { ok: true, signature: "s", slot: 1, reason: null },
+      { ok: true, signature: "s", slot: 1, reason: null },
+    ]);
+    const rail = new SolanaWalletRail(makeAdapter({ sendUsdcBatch }));
+    const hooks = { beforeBroadcast: vi.fn() };
+    await rail.buildP2pPayment(request, hooks);
+    expect(sendUsdcBatch.mock.calls[0]?.[1]).toBe(hooks);
+  });
+});
+
+// ── #885: confirmP2pPayment — bound to THIS payer's own signature ──
 
 describe("SolanaWalletRail.confirmP2pPayment", () => {
   const request = {
@@ -537,22 +559,30 @@ describe("SolanaWalletRail.confirmP2pPayment", () => {
     treasuryAddress: "Treasury111",
     feeAmountMicro: 12_500,
   };
-  const base = {
-    request,
-    sentAtMs: 1_000,
-    failedAtMs: 2_000,
-    error: new Error("P2P payment broadcast failed (legs: confirmation timed out)"),
+  const OWN = "11111111111111111111111111111111";
+  const transaction = { signature: "mySig", lastValidBlockHeight: 1_000 };
+  const exact = {
+    status: "confirmed",
+    from: OWN,
+    transfers: [
+      { to: "Worker111", amountMicro: 250_000n },
+      { to: "Treasury111", amountMicro: 12_500n },
+    ],
+    slot: 9,
+    asset: "USDC",
   };
 
-  it("a landed atomic payment ⇒ landed with the proof for THAT tx; every leg is queried", async () => {
-    const find = vi.fn().mockResolvedValue({ status: "found", signature: "sigP2P" });
-    const rail = new SolanaWalletRail(makeAdapter({ findOutgoingTransfer: find }), {
-      now: () => 2_500,
-    });
-    await expect(rail.confirmP2pPayment({ ...base, excludeSignatures: ["old"] })).resolves.toEqual({
+  it("asks about ITS OWN signature only, and a landed exact tx is its proof", async () => {
+    const getSignatureOutcome = vi.fn().mockResolvedValue({ status: "landed", slot: 9 });
+    const getTransaction = vi.fn().mockResolvedValue(exact);
+    const findOutgoingTransfer = vi.fn();
+    const rail = new SolanaWalletRail(
+      makeAdapter({ getSignatureOutcome, getTransaction, findOutgoingTransfer }),
+    );
+    await expect(rail.confirmP2pPayment({ request, transaction })).resolves.toEqual({
       status: "landed",
       proof: {
-        tx_hash: "sigP2P",
+        tx_hash: "mySig",
         chain: "solana",
         network: "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
         to_address: "Worker111",
@@ -561,84 +591,82 @@ describe("SolanaWalletRail.confirmP2pPayment", () => {
         fee_amount_micro: 12_500,
       },
     });
-    expect(find).toHaveBeenCalledWith({
-      toAddress: "Worker111",
-      microAmount: 250_000n,
-      alsoLegs: [{ toAddress: "Treasury111", microAmount: 12_500n }],
-      sinceMs: 1_000,
-      excludeSignatures: ["old"],
-    });
-  });
-
-  it("a federated request queries the executor leg too, and the proof carries it", async () => {
-    const find = vi.fn().mockResolvedValue({ status: "found", signature: "fedSig" });
-    const rail = new SolanaWalletRail(makeAdapter({ findOutgoingTransfer: find }));
-    const v = await rail.confirmP2pPayment({
-      ...base,
-      request: { ...request, executorTreasuryAddress: "ExecB111", executorFeeAmountMicro: 7_500 },
-    });
-    expect(find.mock.calls[0]?.[0]).toMatchObject({
-      alsoLegs: [
-        { toAddress: "Treasury111", microAmount: 12_500n },
-        { toAddress: "ExecB111", microAmount: 7_500n },
-      ],
-    });
-    expect(v).toMatchObject({
-      status: "landed",
-      proof: { b_fee_to_address: "ExecB111", b_fee_amount_micro: 7_500 },
-    });
-  });
-
-  it("no match inside the landing horizon ⇒ pending; after it ⇒ absent", async () => {
-    const find = vi.fn().mockResolvedValue({ status: "not_found" });
-    const early = new SolanaWalletRail(makeAdapter({ findOutgoingTransfer: find }), {
-      now: () => 2_000 + SOLANA_TX_LANDING_HORIZON_MS - 1,
-    });
-    await expect(early.confirmP2pPayment(base)).resolves.toEqual({
-      status: "pending",
-      recheckAtMs: 2_000 + SOLANA_TX_LANDING_HORIZON_MS,
-    });
-    const late = new SolanaWalletRail(makeAdapter({ findOutgoingTransfer: find }), {
-      now: () => 2_000 + SOLANA_TX_LANDING_HORIZON_MS,
-    });
-    await expect(late.confirmP2pPayment(base)).resolves.toEqual({ status: "absent" });
+    expect(getSignatureOutcome).toHaveBeenCalledWith(transaction);
+    expect(getTransaction).toHaveBeenCalledWith("mySig");
+    // Never attribution by matching transfers.
+    expect(findOutgoingTransfer).not.toHaveBeenCalled();
   });
 
   it.each([
-    [{ status: "ambiguous", signatures: ["a", "b"] }, /2 matching payments/],
-    [{ status: "rpc_error", reason: "ECONNRESET" }, /ECONNRESET/],
-  ])("an undecidable lookup (%o) ⇒ unknown, never absent", async (lookup, reason) => {
+    ["a different worker amount", [{ to: "Worker111", amountMicro: 1n }, exact.transfers[1]]],
+    ["a missing fee leg", [exact.transfers[0]]],
+    ["an extra leg", [...exact.transfers, { to: "Elsewhere", amountMicro: 1n }]],
+  ])("landed but %s ⇒ unknown, never a proof", async (_n, transfers) => {
     const rail = new SolanaWalletRail(
-      makeAdapter({ findOutgoingTransfer: vi.fn().mockResolvedValue(lookup) }),
-      { now: () => Number.MAX_SAFE_INTEGER },
+      makeAdapter({
+        getSignatureOutcome: vi.fn().mockResolvedValue({ status: "landed", slot: 9 }),
+        getTransaction: vi.fn().mockResolvedValue({ ...exact, transfers }),
+      }),
     );
-    const v = await rail.confirmP2pPayment(base);
-    expect(v.status).toBe("unknown");
-    expect(v.status === "unknown" ? v.reason : "").toMatch(reason);
-  });
-
-  it("an adapter without the lookup ⇒ unknown (fail-closed)", async () => {
-    const rail = new SolanaWalletRail(makeAdapter(), { now: () => Number.MAX_SAFE_INTEGER });
-    await expect(rail.confirmP2pPayment(base)).resolves.toMatchObject({ status: "unknown" });
-  });
-
-  it("InsufficientUsdcBalanceError is thrown only before signing ⇒ absent without a lookup", async () => {
-    const find = vi.fn();
-    const rail = new SolanaWalletRail(makeAdapter({ findOutgoingTransfer: find }));
-    await expect(
-      rail.confirmP2pPayment({ ...base, error: new InsufficientUsdcBalanceError(0n, 262_500n) }),
-    ).resolves.toEqual({ status: "absent" });
-    expect(find).not.toHaveBeenCalled();
-  });
-
-  it("a half-specified executor leg ⇒ unknown, never a lookup read as absence", async () => {
-    const find = vi.fn().mockResolvedValue({ status: "not_found" });
-    const rail = new SolanaWalletRail(makeAdapter({ findOutgoingTransfer: find }), {
-      now: () => Number.MAX_SAFE_INTEGER,
+    await expect(rail.confirmP2pPayment({ request, transaction })).resolves.toMatchObject({
+      status: "unknown",
     });
-    await expect(
-      rail.confirmP2pPayment({ ...base, request: { ...request, executorFeeAmountMicro: 1 } }),
-    ).resolves.toMatchObject({ status: "unknown" });
-    expect(find).not.toHaveBeenCalled();
+  });
+
+  it("landed but from another payer, or unreadable ⇒ unknown", async () => {
+    const other = new SolanaWalletRail(
+      makeAdapter({
+        getSignatureOutcome: vi.fn().mockResolvedValue({ status: "landed", slot: 9 }),
+        getTransaction: vi.fn().mockResolvedValue({ ...exact, from: "Someone" }),
+      }),
+    );
+    await expect(other.confirmP2pPayment({ request, transaction })).resolves.toMatchObject({
+      status: "unknown",
+    });
+    const unread = new SolanaWalletRail(
+      makeAdapter({
+        getSignatureOutcome: vi.fn().mockResolvedValue({ status: "landed", slot: 9 }),
+        getTransaction: vi.fn().mockResolvedValue({ status: "rpc_error", reason: "boom" }),
+      }),
+    );
+    await expect(unread.confirmP2pPayment({ request, transaction })).resolves.toMatchObject({
+      status: "unknown",
+    });
+  });
+
+  it.each([["expired"], ["failed"]])("%s ⇒ absent (it can never move money)", async (s) => {
+    const rail = new SolanaWalletRail(
+      makeAdapter({ getSignatureOutcome: vi.fn().mockResolvedValue({ status: s }) }),
+    );
+    await expect(rail.confirmP2pPayment({ request, transaction })).resolves.toEqual({
+      status: "absent",
+    });
+  });
+
+  it("pending ⇒ pending with a recheck time; rpc_error ⇒ unknown", async () => {
+    const pending = new SolanaWalletRail(
+      makeAdapter({ getSignatureOutcome: vi.fn().mockResolvedValue({ status: "pending" }) }),
+      { now: () => 1_000 },
+    );
+    await expect(pending.confirmP2pPayment({ request, transaction })).resolves.toEqual({
+      status: "pending",
+      recheckAtMs: 6_000,
+    });
+    const rpc = new SolanaWalletRail(
+      makeAdapter({
+        getSignatureOutcome: vi.fn().mockResolvedValue({ status: "rpc_error", reason: "429" }),
+      }),
+    );
+    await expect(rpc.confirmP2pPayment({ request, transaction })).resolves.toEqual({
+      status: "unknown",
+      reason: "429",
+    });
+  });
+
+  it("an adapter without the status read ⇒ unknown (fail-closed)", async () => {
+    const rail = new SolanaWalletRail(makeAdapter());
+    await expect(rail.confirmP2pPayment({ request, transaction })).resolves.toMatchObject({
+      status: "unknown",
+    });
   });
 });

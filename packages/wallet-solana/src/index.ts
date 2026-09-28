@@ -38,6 +38,9 @@ export {
   type ConfirmedTransferLeg,
   type OutgoingTransferQuery,
   type OutgoingTransferLookup,
+  type BroadcastHooks,
+  type SignedTransactionRef,
+  type SignatureOutcome,
 } from "./adapter.js";
 
 export {

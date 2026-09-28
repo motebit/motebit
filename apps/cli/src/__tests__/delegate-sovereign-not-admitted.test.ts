@@ -136,14 +136,14 @@ describe("motebit delegate --sovereign: paid, not admitted (#885)", () => {
     // Every submission carried the SAME payment.
     expect(state.submits.length).toBeGreaterThan(1);
     expect(new Set(state.submits)).toEqual(new Set([proof.tx_hash]));
-    expect(errors.join("\n")).toMatch(/did not admit the task/);
+    expect(errors.join("\n")).toMatch(/has not confirmed admitting the task/);
     expect(errors.join("\n")).toMatch(/Do not run this again/);
 
     const db = createMotebitDatabase(state.dbPath);
     const owed = db.paidIntentStore.listOutstanding(ME);
     db.close();
     expect(owed.map((e) => [e.task_id, e.tx_hash, e.worker_motebit_id, e.state])).toEqual([
-      [`p2p-unadmitted:${proof.tx_hash}`, proof.tx_hash, WORKER, "unretrieved"],
+      [`p2p-payment:${proof.tx_hash}`, proof.tx_hash, WORKER, "unretrieved"],
     ]);
 
     // A new process: a new ledger session on the same database.

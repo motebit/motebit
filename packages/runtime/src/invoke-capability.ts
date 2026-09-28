@@ -13,12 +13,12 @@
 
 import type { ExecutionReceipt, IntentOrigin } from "@motebit/sdk";
 import type { TokenAudience } from "@motebit/protocol";
-import type { P2pPaymentProof, SovereignP2pPaymentRequest } from "@motebit/protocol";
 
 import type { StreamChunk } from "./runtime-config.js";
 import {
   selectAndRunDelegation,
   type ConfirmP2pPayment,
+  type BuildP2pPayment,
   type DelegationError,
   type DelegationErrorCode,
   type DelegationResult,
@@ -40,7 +40,7 @@ export interface InvokeCapabilityDeps {
    * a paid cross-agent capability settles peer-to-peer instead of relay-custody;
    * absent → every delegation uses the relay-mediated path.
    */
-  buildP2pPayment?: (request: SovereignP2pPaymentRequest) => Promise<P2pPaymentProof>;
+  buildP2pPayment?: BuildP2pPayment;
   /**
    * The same rail's read-only "did the payment land anyway?" lookup (#885).
    * Absent ⇒ a builder error is `payment_status_unknown` (recorded, never retried).

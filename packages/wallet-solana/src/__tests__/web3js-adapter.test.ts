@@ -14,7 +14,8 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { Keypair, PublicKey } from "@solana/web3.js";
+import { Keypair, PublicKey, Transaction } from "@solana/web3.js";
+import { base58Encode } from "@motebit/protocol";
 
 // Mock just `getAccount` from @solana/spl-token. Everything else
 // (TokenAccountNotFoundError, getAssociatedTokenAddress, instruction
@@ -513,108 +514,6 @@ describe("Web3JsRpcAdapter.findOutgoingTransfer", () => {
   });
 });
 
-// ── #885: the multi-leg form — the atomic P2P payment (worker + fee legs) ──
-
-describe("Web3JsRpcAdapter.findOutgoingTransfer — multi-leg (alsoLegs)", () => {
-  const SINCE_MS = 1_700_000_000_000;
-  const T = Math.floor(SINCE_MS / 1000) + 5;
-  const worker = "9xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgBBB";
-  const treasury = "Treasury11111111111111111111111111111111111";
-  const executor = "Executor11111111111111111111111111111111111";
-
-  function setup(txs: Record<string, Array<{ to: string; amount: bigint }>>) {
-    const adapter = makeAdapterForTx();
-    const own = adapter.ownAddress;
-    const conn = adapter.getConnection();
-    vi.spyOn(conn, "getSignaturesForAddress").mockResolvedValue(
-      Object.keys(txs).map((signature) => ({ signature, blockTime: T, err: null })) as never,
-    );
-    vi.spyOn(adapter, "getTransaction").mockImplementation((sig: string) =>
-      Promise.resolve({
-        status: "confirmed",
-        from: own,
-        transfers: (txs[sig] ?? []).map((l) => ({ to: l.to, amountMicro: l.amount })),
-        slot: 1,
-        asset: "USDC",
-      }),
-    );
-    return adapter;
-  }
-
-  const q = {
-    toAddress: worker,
-    microAmount: 250_000n,
-    alsoLegs: [{ toAddress: treasury, microAmount: 12_500n }],
-    sinceMs: SINCE_MS,
-  };
-
-  it("the exact worker + fee leg set in one tx ⇒ found", async () => {
-    const adapter = setup({
-      p2p: [
-        { to: worker, amount: 250_000n },
-        { to: treasury, amount: 12_500n },
-      ],
-    });
-    await expect(adapter.findOutgoingTransfer(q)).resolves.toEqual({
-      status: "found",
-      signature: "p2p",
-    });
-  });
-
-  it("a worker-only transfer of the same amount is NOT the P2P payment", async () => {
-    const adapter = setup({ single: [{ to: worker, amount: 250_000n }] });
-    await expect(adapter.findOutgoingTransfer(q)).resolves.toEqual({ status: "not_found" });
-    // ...while the single-leg query (no alsoLegs) still matches it, as before.
-    await expect(
-      adapter.findOutgoingTransfer({ toAddress: worker, microAmount: 250_000n, sinceMs: SINCE_MS }),
-    ).resolves.toEqual({ status: "found", signature: "single" });
-  });
-
-  it("a wrong fee amount, a wrong treasury, or an extra leg ⇒ not_found", async () => {
-    const adapter = setup({
-      "fee-amount": [
-        { to: worker, amount: 250_000n },
-        { to: treasury, amount: 12_501n },
-      ],
-      "fee-to": [
-        { to: worker, amount: 250_000n },
-        { to: "Elsewhere", amount: 12_500n },
-      ],
-      extra: [
-        { to: worker, amount: 250_000n },
-        { to: treasury, amount: 12_500n },
-        { to: "Elsewhere", amount: 1n },
-      ],
-    });
-    await expect(adapter.findOutgoingTransfer(q)).resolves.toEqual({ status: "not_found" });
-  });
-
-  it("a federated three-leg payment matches only with the executor leg", async () => {
-    const adapter = setup({
-      fed: [
-        { to: worker, amount: 250_000n },
-        { to: treasury, amount: 5_000n },
-        { to: executor, amount: 7_500n },
-      ],
-    });
-    await expect(
-      adapter.findOutgoingTransfer({
-        ...q,
-        alsoLegs: [
-          { toAddress: treasury, microAmount: 5_000n },
-          { toAddress: executor, microAmount: 7_500n },
-        ],
-      }),
-    ).resolves.toEqual({ status: "found", signature: "fed" });
-    await expect(
-      adapter.findOutgoingTransfer({
-        ...q,
-        alsoLegs: [{ toAddress: treasury, microAmount: 5_000n }],
-      }),
-    ).resolves.toEqual({ status: "not_found" });
-  });
-});
-
 // ── Balances ──────────────────────────────────────────────────────────────
 //
 // `getSolBalance` is a one-line BigInt wrap; `getUsdcBalance` exercises
@@ -872,6 +771,125 @@ describe("Web3JsRpcAdapter.sendUsdc", () => {
 // Multi-recipient USDC transfer. Lock the chunk boundary and the
 // fail-fast contract: once a chunk fails, subsequent chunks are NOT
 // submitted; their items return ok=false with reason "prior chunk failed".
+
+// ── #885: sign, report the signature, THEN send ──────────────────────────
+
+describe("Web3JsRpcAdapter — beforeBroadcast sees the signed tx before it is sent", () => {
+  function primed() {
+    const adapter = makeAdapterForTx();
+    const conn = adapter.getConnection();
+    getAccountMock
+      .mockResolvedValueOnce({ amount: 10_000_000n })
+      .mockResolvedValueOnce({ amount: 0n });
+    vi.spyOn(conn, "getLatestBlockhash").mockResolvedValue({
+      blockhash: validBlockhash(),
+      lastValidBlockHeight: 321,
+    });
+    const send = vi.spyOn(conn, "sendRawTransaction");
+    vi.spyOn(conn, "confirmTransaction").mockResolvedValue({
+      context: { slot: 1 },
+      value: { err: null },
+    });
+    return { adapter, send };
+  }
+
+  it("reports the exact signature that is then sent, before sending", async () => {
+    const { adapter, send } = primed();
+    const seen: Array<{ signature: string; lastValidBlockHeight: number }> = [];
+    const hook = vi.fn((tx: { signature: string; lastValidBlockHeight: number }) => {
+      seen.push(tx);
+    });
+    send.mockImplementation(async (raw) => {
+      const tx = Transaction.from(raw as Buffer);
+      return base58Encode(new Uint8Array(tx.signature!));
+    });
+    const r = await adapter.sendUsdc(
+      { toAddress: validBase58Address(), microAmount: 1n },
+      { beforeBroadcast: hook },
+    );
+    expect(seen).toEqual([{ signature: r.signature, lastValidBlockHeight: 321 }]);
+    expect(hook.mock.invocationCallOrder[0]!).toBeLessThan(send.mock.invocationCallOrder[0]!);
+  });
+
+  it("a hook that throws ⇒ nothing is sent", async () => {
+    const { adapter, send } = primed();
+    await expect(
+      adapter.sendUsdc(
+        { toAddress: validBase58Address(), microAmount: 1n },
+        {
+          beforeBroadcast: () => {
+            throw new Error("SQLITE_BUSY");
+          },
+        },
+      ),
+    ).rejects.toThrow("SQLITE_BUSY");
+    expect(send).not.toHaveBeenCalled();
+  });
+});
+
+describe("Web3JsRpcAdapter.getSignatureOutcome — about ONE transaction", () => {
+  function withChain(opts: {
+    height: number;
+    status: null | { confirmationStatus: string; err: unknown; slot: number };
+  }) {
+    const adapter = makeAdapterForTx();
+    const conn = adapter.getConnection();
+    const order: string[] = [];
+    vi.spyOn(conn, "getBlockHeight").mockImplementation(async () => {
+      order.push("height");
+      return opts.height;
+    });
+    vi.spyOn(conn, "getSignatureStatuses").mockImplementation(async () => {
+      order.push("status");
+      return { context: { slot: 1 }, value: [opts.status] } as never;
+    });
+    return { adapter, order };
+  }
+  const ref = { signature: "sigX", lastValidBlockHeight: 100 };
+
+  it("confirmed and succeeded ⇒ landed; confirmed with an error ⇒ failed", async () => {
+    const ok = withChain({
+      height: 50,
+      status: { confirmationStatus: "confirmed", err: null, slot: 7 },
+    });
+    await expect(ok.adapter.getSignatureOutcome(ref)).resolves.toEqual({
+      status: "landed",
+      slot: 7,
+    });
+    const bad = withChain({
+      height: 50,
+      status: { confirmationStatus: "finalized", err: { InstructionError: [0, "x"] }, slot: 7 },
+    });
+    await expect(bad.adapter.getSignatureOutcome(ref)).resolves.toEqual({ status: "failed" });
+  });
+
+  it("not on chain and past its last valid height ⇒ expired; before it ⇒ pending", async () => {
+    const gone = withChain({ height: 101, status: null });
+    await expect(gone.adapter.getSignatureOutcome(ref)).resolves.toEqual({ status: "expired" });
+    const live = withChain({ height: 100, status: null });
+    await expect(live.adapter.getSignatureOutcome(ref)).resolves.toEqual({ status: "pending" });
+  });
+
+  it("reads the height BEFORE the status (no land-between-reads window)", async () => {
+    const { adapter, order } = withChain({ height: 101, status: null });
+    await adapter.getSignatureOutcome(ref);
+    expect(order).toEqual(["height", "status"]);
+  });
+
+  it("processed but not yet confirmed ⇒ pending; an RPC failure ⇒ rpc_error", async () => {
+    const proc = withChain({
+      height: 500,
+      status: { confirmationStatus: "processed", err: null, slot: 3 },
+    });
+    await expect(proc.adapter.getSignatureOutcome(ref)).resolves.toEqual({ status: "pending" });
+    const adapter = makeAdapterForTx();
+    vi.spyOn(adapter.getConnection(), "getBlockHeight").mockRejectedValue(new Error("429"));
+    await expect(adapter.getSignatureOutcome(ref)).resolves.toEqual({
+      status: "rpc_error",
+      reason: "429",
+    });
+  });
+});
 
 describe("Web3JsRpcAdapter.sendUsdcBatch", () => {
   it("returns [] for an empty batch", async () => {

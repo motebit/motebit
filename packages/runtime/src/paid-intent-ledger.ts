@@ -67,33 +67,34 @@ export type PaidIntentVerdict =
     };
 
 /**
- * Ledger ids for payments that have no relay task (#885). The ledger is
- * keyed by task, but a P2P payment exists BEFORE the relay admits its
- * task — from the moment it is broadcast — and a payment whose broadcast
- * threw may have landed with no signature known at all. Both must lock a
- * re-hire exactly like an unretrieved result does, so both get an entry
- * under a synthetic id that can never collide with a relay task id:
+ * Ledger ids for payments that have no confirmed relay task (#885). The
+ * ledger is keyed by task, but a P2P payment exists BEFORE the relay admits
+ * its task — from the moment its transaction is signed — so it gets an
+ * entry under a synthetic id that can never collide with a relay task id:
  *
- *   - `p2p-unadmitted:<tx>` — the payment landed (tx known); the relay has
- *     not admitted its task. Recorded the moment the proof is in hand,
- *     BEFORE the submit; handed over to the real task id on admission.
- *   - `p2p-unconfirmed:<…>` — the builder threw and the chain could not say
- *     whether the payment landed. Money may have left the wallet.
+ *   - `p2p-payment:<signature>` — a transaction this device signed for a
+ *     hire. Recorded after signing and BEFORE it is sent (in flight, this
+ *     session). Handed over to the real task id when the relay admits it;
+ *     voided when the chain confirms it can never land; otherwise it stays
+ *     and locks the pair — it may have moved money, and no relay task is
+ *     confirmed for it (the relay rejected it, or admission is unconfirmed).
+ *   - `p2p-unconfirmed:<...>` — a rail that does not report its transactions
+ *     threw, and nothing could be confirmed. Money may have left the wallet.
  *
- * Neither is fetchable from the relay; `retrieveDelegationResult` answers
- * them locally (`not_admitted`) without a relay read.
+ * Neither is fetchable from the relay by that id; `retrieveDelegationResult`
+ * answers them locally (`not_admitted`) without a relay read.
  */
-export const UNADMITTED_TASK_PREFIX = "p2p-unadmitted:";
+export const PAYMENT_ENTRY_PREFIX = "p2p-payment:";
 export const UNCONFIRMED_TASK_PREFIX = "p2p-unconfirmed:";
 
-/** The ledger id of a landed P2P payment the relay has not admitted. */
-export function unadmittedTaskId(txHash: string): string {
-  return `${UNADMITTED_TASK_PREFIX}${txHash}`;
+/** The ledger id of a signed P2P payment transaction with no confirmed relay task. */
+export function paymentEntryId(signature: string): string {
+  return `${PAYMENT_ENTRY_PREFIX}${signature}`;
 }
 
-/** True for a ledger id that names a payment with no relay task (either kind). */
+/** True for a ledger id that names a payment with no confirmed relay task (either kind). */
 export function isPaymentWithoutTaskId(taskId: string): boolean {
-  return taskId.startsWith(UNADMITTED_TASK_PREFIX) || taskId.startsWith(UNCONFIRMED_TASK_PREFIX);
+  return taskId.startsWith(PAYMENT_ENTRY_PREFIX) || taskId.startsWith(UNCONFIRMED_TASK_PREFIX);
 }
 
 /** The `tx_hash` recorded for a payment whose transaction is not known. */
@@ -197,15 +198,7 @@ export class PaidIntentLedger {
     this.sessionId = sessionId ?? newSessionId();
   }
 
-  /**
-   * Every transaction this ledger instance has recorded, resolved or not —
-   * the signatures a "did my failed payment land?" lookup must never
-   * mistake for a new payment (#885).
-   */
-  private readonly recordedSignatures = new Set<string>();
-
   private write(entry: UnretrievedPayment, state: PaidIntentRecord["state"]): void {
-    if (entry.txHash !== UNKNOWN_TX_HASH) this.recordedSignatures.add(entry.txHash);
     this.store.record({
       motebit_id: this.motebitId,
       task_id: entry.taskId,
@@ -238,17 +231,20 @@ export class PaidIntentLedger {
   }
 
   /**
-   * Record a P2P payment the moment its proof is in hand — BEFORE the task
-   * is submitted (#885). Money has left the wallet and no relay task exists
-   * yet, so the entry lives under `unadmittedTaskId(txHash)`. It is in
-   * flight: this session is submitting it and nothing locks here, but a
+   * Record a P2P payment transaction the moment it is SIGNED — before it is
+   * sent, so before any money can move (#885). `txHash` is its signature,
+   * and the entry lives under `paymentEntryId(txHash)`. It is in flight:
+   * this session is paying and submitting it and nothing locks here, but a
    * process that dies before the relay admits the task leaves it on record
    * and every later session refuses the re-hire. On admission it is handed
-   * over to the task (`admitted`); if the submission is given up it becomes
-   * unretrieved (`recordSettledUnretrieved` with the same id).
+   * over to the task (`admitted`); if the chain says the transaction can
+   * never land it is voided (`voidUnsent`); if the submission is given up
+   * or the payment's fate is unknown it becomes unretrieved
+   * (`recordSettledUnretrieved` with the same id). A caller that cannot
+   * write this record must not send the transaction.
    */
   recordBroadcast(entry: Omit<UnretrievedPayment, "taskId">): void {
-    this.write({ ...entry, taskId: unadmittedTaskId(entry.txHash) }, "in_flight");
+    this.write({ ...entry, taskId: paymentEntryId(entry.txHash) }, "in_flight");
   }
 
   /**
@@ -264,7 +260,7 @@ export class PaidIntentLedger {
    */
   admitted(txHash: string, task: UnretrievedPayment): void {
     this.recordInFlight(task);
-    this.store.resolve(this.motebitId, unadmittedTaskId(txHash), "retrieved", Date.now());
+    this.store.resolve(this.motebitId, paymentEntryId(txHash), "retrieved", Date.now());
   }
 
   /**
@@ -285,17 +281,13 @@ export class PaidIntentLedger {
   }
 
   /**
-   * Signatures this device already accounts for: every outstanding entry's
-   * transaction, plus every one this ledger instance recorded (including
-   * resolved ones). Handed to the onchain lookup after a failed build so an
-   * earlier payment is never read as the new one.
+   * A transaction recorded at signing turned out never to move money: the
+   * chain says it expired unsent or failed onchain (#885). Its entry stops
+   * locking. Resolved `dismissed` — the record's resolution vocabulary
+   * (`@motebit/sdk`) has no "never sent"; the row stays as history.
    */
-  knownSignatures(): string[] {
-    const out = new Set(this.recordedSignatures);
-    for (const r of this.store.listOutstanding(this.motebitId)) {
-      if (r.tx_hash !== UNKNOWN_TX_HASH) out.add(r.tx_hash);
-    }
-    return [...out];
+  voidUnsent(signature: string): boolean {
+    return this.store.resolve(this.motebitId, paymentEntryId(signature), "dismissed", Date.now());
   }
 
   /**

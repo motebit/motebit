@@ -20,7 +20,7 @@
  */
 
 import type { P2pPaymentProof } from "@motebit/protocol";
-import type { SolanaRpcAdapter } from "./adapter.js";
+import type { BroadcastHooks, SolanaRpcAdapter } from "./adapter.js";
 import { SOLANA_MAINNET_CAIP2 } from "./memo-submitter.js";
 
 export interface BuildP2pPaymentProofArgs {
@@ -72,9 +72,12 @@ export interface BuildP2pPaymentProofArgs {
 export async function buildP2pPaymentProof(
   adapter: SolanaRpcAdapter,
   args: BuildP2pPaymentProofArgs,
+  hooks?: BroadcastHooks,
 ): Promise<P2pPaymentProof> {
   const legs = p2pPaymentLegs(args);
-  const results = await adapter.sendUsdcBatch(legs);
+  // `hooks.beforeBroadcast` sees each signed transaction before it is sent
+  // (#885) — the payer records the exact payment before money can move.
+  const results = await adapter.sendUsdcBatch(legs, hooks);
 
   const workerLeg = results[0];
   // Every leg must confirm under ONE shared signature — the relay verifiers walk
@@ -99,8 +102,8 @@ export async function buildP2pPaymentProof(
  * The legs of the atomic P2P payment, in broadcast order: worker, origin-relay
  * fee, and (federated only) executor-relay fee. The ONE definition shared by
  * the broadcaster (`buildP2pPaymentProof`) and the read-only recovery lookup
- * (`SolanaWalletRail.confirmP2pPayment`, #885), so the lookup matches exactly
- * the transfer set the broadcaster sends.
+ * (`SolanaWalletRail.confirmP2pPayment`, #885), so a landed transaction is
+ * checked against exactly the transfer set the broadcaster sends.
  *
  * @throws when the executor leg is half-specified.
  */

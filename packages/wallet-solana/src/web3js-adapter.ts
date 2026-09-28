@@ -89,6 +89,9 @@ import type {
   TxVerificationResult,
   OutgoingTransferQuery,
   OutgoingTransferLookup,
+  BroadcastHooks,
+  SignedTransactionRef,
+  SignatureOutcome,
 } from "./adapter.js";
 import {
   USDC_MINT_MAINNET,
@@ -119,34 +122,6 @@ const OUTGOING_LOOKUP_PAGE = 50;
 
 /** Backwards slack on the lookup window: whole-second block times + clock drift. */
 const OUTGOING_LOOKUP_SKEW_MS = 30_000;
-
-/**
- * Does a confirmed transaction's leg set match an outgoing-transfer query?
- * Single-leg query: some leg pays `toAddress` exactly `microAmount`. Multi-leg
- * query (`alsoLegs`, #885): the transaction's legs are EXACTLY the primary leg
- * plus every `alsoLegs` entry — same recipients, same amounts, nothing else —
- * so only the atomic P2P payment itself can match.
- */
-function matchesOutgoingLegs(
-  transfers: ReadonlyArray<{ to: string; amountMicro: bigint }>,
-  query: OutgoingTransferQuery,
-): boolean {
-  if (query.alsoLegs == null) {
-    return transfers.some((l) => l.to === query.toAddress && l.amountMicro === query.microAmount);
-  }
-  const wanted = [
-    { toAddress: query.toAddress, microAmount: query.microAmount },
-    ...query.alsoLegs,
-  ];
-  const remaining = [...transfers];
-  for (const w of wanted) {
-    const i = remaining.findIndex((l) => l.to === w.toAddress && l.amountMicro === w.microAmount);
-    if (i < 0) return false;
-    remaining.splice(i, 1);
-  }
-  // Nothing else may leave the wallet in the same transaction.
-  return remaining.length === 0;
-}
 
 /**
  * True only for the AUTHORITATIVE permanent-expiry signal: the transaction's
@@ -256,7 +231,7 @@ export class Web3JsRpcAdapter implements SolanaRpcAdapter {
     }
   }
 
-  async sendUsdc(args: SendUsdcArgs): Promise<SendUsdcResult> {
+  async sendUsdc(args: SendUsdcArgs, hooks?: BroadcastHooks): Promise<SendUsdcResult> {
     // 1. Validate recipient.
     let recipient: PublicKey;
     try {
@@ -303,7 +278,7 @@ export class Web3JsRpcAdapter implements SolanaRpcAdapter {
 
     // 5-6. Fetch a fresh blockhash, sign, submit, confirm — retrying with a new
     // blockhash on the (safe) permanent-expiry flake. See signSendConfirm.
-    return this.signSendConfirm(instructions);
+    return this.signSendConfirm(instructions, hooks);
   }
 
   /**
@@ -318,6 +293,7 @@ export class Web3JsRpcAdapter implements SolanaRpcAdapter {
    */
   private async signSendConfirm(
     instructions: readonly TransactionInstruction[],
+    hooks?: BroadcastHooks,
   ): Promise<SendUsdcResult> {
     let lastErr: unknown;
     for (let attempt = 1; attempt <= BROADCAST_MAX_ATTEMPTS; attempt++) {
@@ -328,6 +304,17 @@ export class Web3JsRpcAdapter implements SolanaRpcAdapter {
         tx.recentBlockhash = latest.blockhash;
         tx.feePayer = this.keypair.publicKey;
         tx.sign(this.keypair);
+
+        // #885: the signature is fixed now, before anything is sent. The
+        // payer records THIS transaction first; if it cannot, nothing is sent.
+        if (hooks?.beforeBroadcast != null) {
+          const sig = tx.signature;
+          if (sig == null) throw new Error("signed transaction has no signature");
+          await hooks.beforeBroadcast({
+            signature: base58Encode(new Uint8Array(sig)),
+            lastValidBlockHeight: latest.lastValidBlockHeight,
+          });
+        }
 
         const signature = await this.connection.sendRawTransaction(tx.serialize());
         const confirmation = await this.connection.confirmTransaction(
@@ -367,10 +354,13 @@ export class Web3JsRpcAdapter implements SolanaRpcAdapter {
    */
   private static readonly MAX_TRANSFERS_PER_TX = 8;
 
-  async sendUsdcBatch(items: readonly SendUsdcArgs[]): Promise<SendUsdcBatchItemResult[]> {
+  async sendUsdcBatch(
+    items: readonly SendUsdcArgs[],
+    hooks?: BroadcastHooks,
+  ): Promise<SendUsdcBatchItemResult[]> {
     if (items.length === 0) return [];
     if (items.length === 1) {
-      const r = await this.sendUsdc(items[0]!);
+      const r = await this.sendUsdc(items[0]!, hooks);
       return [{ ok: r.confirmed, signature: r.signature, slot: r.slot, reason: null }];
     }
 
@@ -434,7 +424,7 @@ export class Web3JsRpcAdapter implements SolanaRpcAdapter {
 
         // Same fresh-blockhash retry as the single-leg path — the atomic P2P
         // multi-output tx is exactly what the devnet expiry flake was killing.
-        const { signature, slot, confirmed } = await this.signSendConfirm(instructions);
+        const { signature, slot, confirmed } = await this.signSendConfirm(instructions, hooks);
         for (let i = start; i < end; i++) {
           results[i] = {
             ok: confirmed,
@@ -619,13 +609,46 @@ export class Web3JsRpcAdapter implements SolanaRpcAdapter {
         const tx = await this.getTransaction(info.signature);
         if (tx.status === "rpc_error") return { status: "rpc_error", reason: tx.reason };
         if (tx.status !== "confirmed" || tx.from !== own) continue;
-        if (matchesOutgoingLegs(tx.transfers, query)) {
+        if (
+          tx.transfers.some((l) => l.to === query.toAddress && l.amountMicro === query.microAmount)
+        ) {
           matches.push(info.signature);
         }
       }
       if (matches.length === 1) return { status: "found", signature: matches[0]! };
       if (matches.length > 1) return { status: "ambiguous", signatures: matches };
       return { status: "not_found" };
+    } catch (err) {
+      return { status: "rpc_error", reason: err instanceof Error ? err.message : String(err) };
+    }
+  }
+
+  /**
+   * What the chain says about ONE signed transaction (#885). Read-only.
+   * Status is looked up with full history search, so a transaction that
+   * landed long ago is still found. Absence becomes authoritative only
+   * once the chain's block height is past the transaction's
+   * `lastValidBlockHeight`: from then on it can never be included.
+   */
+  async getSignatureOutcome(tx: SignedTransactionRef): Promise<SignatureOutcome> {
+    try {
+      // Height FIRST: a transaction absent from a status read taken AFTER the
+      // chain passed its last valid height can never appear. Reading them the
+      // other way round leaves a window where it lands between the two reads.
+      const height = await this.connection.getBlockHeight(this.commitment);
+      const { value } = await this.connection.getSignatureStatuses([tx.signature], {
+        searchTransactionHistory: true,
+      });
+      const status = value[0];
+      const settled =
+        status != null &&
+        (status.confirmationStatus === "finalized" ||
+          (this.commitment !== "finalized" && status.confirmationStatus === "confirmed"));
+      if (status != null && settled) {
+        return status.err == null ? { status: "landed", slot: status.slot } : { status: "failed" };
+      }
+      if (status != null) return { status: "pending" }; // in a block, not yet at commitment
+      return height > tx.lastValidBlockHeight ? { status: "expired" } : { status: "pending" };
     } catch (err) {
       return { status: "rpc_error", reason: err instanceof Error ? err.message : String(err) };
     }

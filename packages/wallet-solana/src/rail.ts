@@ -20,7 +20,7 @@ import type {
   SovereignP2pPaymentRequest,
   P2pPaymentProof,
 } from "@motebit/protocol";
-import type { SolanaRpcAdapter } from "./adapter.js";
+import type { BroadcastHooks, SignedTransactionRef, SolanaRpcAdapter } from "./adapter.js";
 import type { SendUsdcResult, SendUsdcBatchItemResult } from "./adapter.js";
 import { Web3JsRpcAdapter } from "./web3js-adapter.js";
 import {
@@ -64,17 +64,19 @@ export type SendConfirmation =
 
 /** Input to {@link SolanaWalletRail.confirmP2pPayment}. */
 export interface ConfirmP2pPaymentQuery {
-  /** The payment request `buildP2pPayment` was called with — every leg is matched. */
+  /** The payment request `buildP2pPayment` was called with — a landed tx must pay exactly it. */
   request: SovereignP2pPaymentRequest;
-  /** Epoch ms when `buildP2pPayment` was called — the lookup window starts here. */
-  sentAtMs: number;
-  /** Epoch ms when `buildP2pPayment` threw — the landing horizon runs from here. */
-  failedAtMs: number;
-  /** What `buildP2pPayment` threw. */
-  error: unknown;
-  /** Signatures the caller already accounts for (its own earlier payments). */
-  excludeSignatures?: readonly string[];
+  /**
+   * THE transaction this payer signed, as reported to it by
+   * `buildP2pPayment`'s `beforeBroadcast` hook before sending. The verdict
+   * is about this transaction only — never about some other transaction
+   * whose transfers happen to look the same.
+   */
+  transaction: SignedTransactionRef;
 }
+
+/** How long to wait before asking again about a still-pending transaction. */
+const P2P_PENDING_RECHECK_MS = 5_000;
 
 /**
  * Closed verdict of {@link SolanaWalletRail.confirmP2pPayment}. `landed`
@@ -252,12 +254,20 @@ export class SolanaWalletRail implements SovereignWalletRail {
    * rail only layers gas management on top. Two legs for single-operator P2P
    * (worker + relay treasury); three for cross-operator federated P2P when
    * the executor-relay fields are present.
+   *
+   * `hooks.beforeBroadcast` (#885) is told each transaction's signature
+   * after signing and before sending. A payer records it there, so a throw
+   * afterwards is resolved by asking about that exact transaction
+   * (`confirmP2pPayment`); if the hook throws, nothing is sent.
    */
-  async buildP2pPayment(request: SovereignP2pPaymentRequest): Promise<P2pPaymentProof> {
+  async buildP2pPayment(
+    request: SovereignP2pPaymentRequest,
+    hooks?: BroadcastHooks,
+  ): Promise<P2pPaymentProof> {
     if (this.autoGas) {
       await this.ensureGas();
     }
-    return buildP2pPaymentProof(this.adapter, proofArgs(request));
+    return buildP2pPaymentProof(this.adapter, proofArgs(request), hooks);
   }
 
   /**
@@ -315,69 +325,91 @@ export class SolanaWalletRail implements SovereignWalletRail {
   }
 
   /**
-   * After `buildP2pPayment` threw: did the atomic P2P payment land anyway?
-   * (#885 — the multi-leg sibling of {@link confirmSend}.)
+   * After `buildP2pPayment` threw: did THIS payer's transaction land? (#885)
    *
-   * Read-only: it never signs or broadcasts. It looks for exactly one
-   * transaction from this wallet, since the build began, whose transfers are
-   * EXACTLY the request's legs (worker + relay fee, + executor-relay fee when
-   * federated) at their exact amounts. Same verdicts as `confirmSend`:
+   * Bound to one signature — the one `buildP2pPayment` reported through its
+   * `beforeBroadcast` hook before sending. It never looks for "a transaction
+   * that pays these legs": two concurrent hires of the same worker at the
+   * same price produce identical leg sets, and a leg match would hand one
+   * hire the other's payment. Read-only: it never signs or broadcasts.
    *
-   *   - `landed` — the payment happened; `proof` is the proof for it.
-   *   - `absent` — authoritatively not paid (a pre-signing error, or no match
-   *     after `SOLANA_TX_LANDING_HORIZON_MS`).
-   *   - `pending` — no match yet, but a broadcast could still land.
-   *   - `unknown` — the lookup could not decide. A payer MUST NOT pay again.
+   *   - `landed` — the transaction is confirmed, succeeded, and pays exactly
+   *     the requested legs; `proof` is its proof.
+   *   - `absent` — it can never move money: it is past its last valid block
+   *     height and not on chain, or it landed and failed.
+   *   - `pending` — not yet confirmed and still able to land.
+   *   - `unknown` — undecidable (RPC error, an adapter without the status
+   *     read, a landed transaction that does not pay the requested legs or
+   *     cannot be read). A payer MUST NOT pay again.
    */
   async confirmP2pPayment(query: ConfirmP2pPaymentQuery): Promise<P2pPaymentConfirmation> {
-    if (
-      query.error instanceof InsufficientUsdcBalanceError ||
-      query.error instanceof InvalidSolanaAddressError
-    ) {
-      return { status: "absent" };
+    if (typeof this.adapter.getSignatureOutcome !== "function") {
+      return {
+        status: "unknown",
+        reason: "this wallet adapter cannot read a transaction's status",
+      };
     }
+    const signature = query.transaction.signature;
+    const outcome = await this.adapter.getSignatureOutcome(query.transaction);
+    switch (outcome.status) {
+      case "rpc_error":
+        return { status: "unknown", reason: outcome.reason };
+      case "pending":
+        return { status: "pending", recheckAtMs: this.now() + P2P_PENDING_RECHECK_MS };
+      case "failed":
+      case "expired":
+        return { status: "absent" };
+      case "landed":
+        break;
+    }
+    // Landed: money moved. It becomes this hire's payment proof only if the
+    // transaction pays exactly what was requested.
     const args = proofArgs(query.request);
     let legs: Array<{ toAddress: string; microAmount: bigint }>;
     try {
       legs = p2pPaymentLegs(args);
     } catch (err: unknown) {
-      // The builder refuses the same malformed request before sending — but
-      // "unknown" costs nothing here and never reads a malformed query as absence.
       return { status: "unknown", reason: err instanceof Error ? err.message : String(err) };
     }
-    if (typeof this.adapter.findOutgoingTransfer !== "function") {
-      return { status: "unknown", reason: "this wallet adapter cannot look up past transfers" };
+    const tx = await this.adapter.getTransaction(signature);
+    if (tx.status !== "confirmed") {
+      return {
+        status: "unknown",
+        reason: `transaction ${signature} landed but could not be read (${tx.status === "rpc_error" ? tx.reason : "not found"})`,
+      };
     }
-    const [primary, ...rest] = legs;
-    const lookup = await this.adapter.findOutgoingTransfer({
-      toAddress: primary!.toAddress,
-      microAmount: primary!.microAmount,
-      alsoLegs: rest,
-      sinceMs: query.sentAtMs,
-      ...(query.excludeSignatures != null ? { excludeSignatures: query.excludeSignatures } : {}),
-    });
-    switch (lookup.status) {
-      case "found":
-        return { status: "landed", proof: assembleP2pPaymentProof(args, lookup.signature) };
-      case "ambiguous":
-        return {
-          status: "unknown",
-          reason: `${lookup.signatures.length} matching payments since the build (${lookup.signatures.join(", ")})`,
-        };
-      case "rpc_error":
-        return { status: "unknown", reason: lookup.reason };
-      case "not_found": {
-        const settledAt = query.failedAtMs + SOLANA_TX_LANDING_HORIZON_MS;
-        if (this.now() >= settledAt) return { status: "absent" };
-        return { status: "pending", recheckAtMs: settledAt };
-      }
+    if (tx.from !== this.adapter.ownAddress || !paysExactly(tx.transfers, legs)) {
+      return {
+        status: "unknown",
+        reason: `transaction ${signature} landed but does not pay exactly the requested legs`,
+      };
     }
+    return { status: "landed", proof: assembleP2pPaymentProof(args, signature) };
   }
 
   /** Whether the RPC endpoint is reachable right now. */
   isAvailable(): Promise<boolean> {
     return this.adapter.isReachable();
   }
+}
+
+/**
+ * Does a confirmed transaction's transfer set equal `legs` exactly — same
+ * recipients, same amounts, nothing else leaving the wallet?
+ */
+function paysExactly(
+  transfers: ReadonlyArray<{ to: string; amountMicro: bigint }>,
+  legs: ReadonlyArray<{ toAddress: string; microAmount: bigint }>,
+): boolean {
+  const remaining = [...transfers];
+  for (const leg of legs) {
+    const i = remaining.findIndex(
+      (t) => t.to === leg.toAddress && t.amountMicro === leg.microAmount,
+    );
+    if (i < 0) return false;
+    remaining.splice(i, 1);
+  }
+  return remaining.length === 0;
 }
 
 /** The builder's arguments for a rail-level request — one mapping for broadcast and lookup. */

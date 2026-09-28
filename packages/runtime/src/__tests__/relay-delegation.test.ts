@@ -146,7 +146,7 @@ describe("submitP2pDelegation", () => {
         txHash: "tx-abc",
         paidMicro: 500_000,
         feeMicro: 26_316,
-        taskId: "p2p-unadmitted:tx-abc",
+        taskId: "p2p-payment:tx-abc",
       });
     }
     expect(fetchMock).toHaveBeenCalledTimes(1);
@@ -168,12 +168,12 @@ describe("submitP2pDelegation", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("the submit fetch rejecting on every attempt → payment_not_admitted (submitError network_unreachable)", async () => {
+  it("the submit fetch rejecting on every attempt → payment_admission_unconfirmed (it may have been admitted unseen)", async () => {
     fetchMock.mockRejectedValue(new Error("ECONNREFUSED"));
     const result = await submitP2pDelegation({ ...baseParams(), ...noWait });
     expect(result.ok).toBe(false);
     if (!result.ok) {
-      expect(result.error.code).toBe("payment_not_admitted");
+      expect(result.error.code).toBe("payment_admission_unconfirmed");
       expect(result.error.submitError?.code).toBe("network_unreachable");
     }
     // One attempt plus the three default retries — every one the SAME proof.

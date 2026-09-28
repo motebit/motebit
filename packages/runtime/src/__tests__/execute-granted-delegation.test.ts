@@ -1146,5 +1146,73 @@ describe("explorationStrengthForStakes — explore where mistakes are cheap", ()
   });
 });
 
+// #885 composition: the granted door hands the wallet's own-transaction
+// confirmer to the payment path. A lost send whose own signed tx landed is
+// submitted with THAT tx — one broadcast. Unwired, the same run ends
+// `payment_status_unknown` (fail-closed, but the landed payment is stranded).
+describe("executeGrantedDelegation — lost send, own tx landed (#885)", () => {
+  afterEach(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  it("confirms the hire's OWN signed transaction and proceeds with it", async () => {
+    const operator = await generateKeypair();
+    const clerk = await generateKeypair();
+    const grant = await makeGrant(operator, clerk);
+    const token = await mintTick(grant, operator);
+    const submitted: string[] = [];
+    globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      if (url.endsWith("/task") && init?.method === "POST") {
+        submitted.push(
+          (JSON.parse(init.body as string) as { payment_proof: P2pPaymentProof }).payment_proof
+            .tx_hash,
+        );
+      }
+      return relayFetch()(url);
+    }) as typeof fetch;
+
+    const buildP2pPayment = vi.fn(
+      async (
+        _r: SovereignP2pPaymentRequest,
+        hooks?: {
+          beforeBroadcast?: (t: { signature: string; lastValidBlockHeight: number }) => unknown;
+        },
+      ): Promise<P2pPaymentProof> => {
+        await hooks?.beforeBroadcast?.({ signature: "ownSig", lastValidBlockHeight: 9 });
+        throw new Error("was not confirmed in 30.00 seconds");
+      },
+    );
+    const confirmP2pPayment = vi.fn(
+      async (q: { request: SovereignP2pPaymentRequest; transaction: { signature: string } }) => ({
+        status: "landed" as const,
+        proof: {
+          tx_hash: q.transaction.signature,
+          chain: "solana",
+          network: "solana:x",
+          to_address: q.request.workerAddress,
+          amount_micro: q.request.amountMicro,
+          fee_to_address: q.request.treasuryAddress,
+          fee_amount_micro: q.request.feeAmountMicro,
+        },
+      }),
+    );
+    const wallet = { buildP2pPayment, confirmP2pPayment } as unknown as SovereignWalletRail;
+    const runtime = clerkRuntime(wallet);
+
+    const result = await runtime.executeGrantedDelegation({
+      capability: "research",
+      prompt: "survey the topic",
+      delegation: { token, grant },
+      dryRun: false,
+    });
+
+    expect(result.ok).toBe(true);
+    expect(buildP2pPayment).toHaveBeenCalledTimes(1);
+    expect(confirmP2pPayment.mock.calls[0]?.[0].transaction.signature).toBe("ownSig");
+    expect(submitted).toEqual(["ownSig"]);
+  });
+});
+
 // Keep the StreamChunk import meaningful for the type-only harness surface.
 export type _Chunk = StreamChunk;

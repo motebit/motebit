@@ -253,7 +253,7 @@ describe("a ledger write never aborts a paid flow (#874 round 2)", () => {
     expect(failed).toContainEqual(
       expect.objectContaining({
         op: "record_broadcast",
-        taskId: expect.stringMatching(/^p2p-unadmitted:tx-\d+$/),
+        taskId: expect.stringMatching(/^p2p-payment:tx-\d+$/),
       }),
     );
     expect(failed).toContainEqual(

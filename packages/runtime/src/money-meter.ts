@@ -28,7 +28,8 @@
 
 import type { GrantSpendStore } from "@motebit/policy";
 import { spendCeilingFromGrant, extractMoneyAction } from "@motebit/policy";
-import type { TurnContext, SovereignP2pPaymentRequest, P2pPaymentProof } from "@motebit/protocol";
+import type { TurnContext } from "@motebit/protocol";
+import type { BuildP2pPayment } from "./relay-delegation.js";
 
 export interface MeterVerdict {
   allowed: boolean;
@@ -128,13 +129,15 @@ export class MoneyMeterDeniedError extends Error {
  * runtime must never hand the raw wallet method through.
  */
 export function wrapP2pPaymentWithMeter(
-  build: (request: SovereignP2pPaymentRequest) => Promise<P2pPaymentProof>,
+  build: BuildP2pPayment,
   getActiveGrant: () => NonNullable<TurnContext["verifiedGrant"]> | null,
   meter: MoneyMeter,
-): (request: SovereignP2pPaymentRequest) => Promise<P2pPaymentProof> {
-  return async (request) => {
+): BuildP2pPayment {
+  // `hooks` (#885) pass straight through: the caller records each signed
+  // transaction before it is sent, metered or not.
+  return async (request, hooks) => {
     const grant = getActiveGrant();
-    if (grant == null) return build(request);
+    if (grant == null) return build(request, hooks);
 
     const totalOutflowMicro =
       request.amountMicro + request.feeAmountMicro + (request.executorFeeAmountMicro ?? 0);
@@ -145,6 +148,6 @@ export function wrapP2pPaymentWithMeter(
     if (!verdict.allowed) {
       throw new MoneyMeterDeniedError(verdict.denial ?? "denied");
     }
-    return build(request);
+    return build(request, hooks);
   };
 }

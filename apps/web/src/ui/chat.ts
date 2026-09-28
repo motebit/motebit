@@ -684,6 +684,14 @@ function failureCopy(code: string, retryAfterSeconds?: number): string {
       return "That agent isn't set up to be paid right now (no price or settlement address).";
     case "payment_broadcast_failed":
       return "The onchain payment didn't go through — no funds moved. Check your balance and try again.";
+    // #885: money may have moved in the next three. Never invite a retry —
+    // a second attempt would pay twice.
+    case "payment_status_unknown":
+      return "The payment may have left your wallet — check its history before hiring this agent again.";
+    case "payment_not_admitted":
+      return "Paid, but the relay refused the task. Don't hire again — it would pay twice.";
+    case "payment_admission_unconfirmed":
+      return "Paid, but the relay hasn't confirmed taking the task. Don't hire again — it would pay twice.";
     case "trust_threshold_unmet":
       return "Trust below threshold for that capability. Reviews accumulate trust over time.";
     case "no_routing":
