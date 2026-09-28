@@ -277,6 +277,294 @@ export function createDualAuth(deps: MiddlewareDeps) {
 export const CORS_EXPOSED_RESPONSE_HEADERS = ["Retry-After", "X-Motebit-Content-Manifest"] as const;
 
 // ---------------------------------------------------------------------------
+// Master-token carve-outs — the routes the /api/v1/* catch-all lets through
+// ---------------------------------------------------------------------------
+
+/** A method a carve-out names. `HEAD` is served by the `GET` handler, so a `GET` entry covers it. */
+export type CarveOutMethod = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
+
+export interface MasterTokenCarveOut {
+  method: CarveOutMethod;
+  /**
+   * The route pattern EXACTLY as the route is registered (`app.get(path, …)`):
+   * literal segments and `:param` segments only. It is matched anchored, as a
+   * whole, against `c.req.path` — the path Hono's router dispatches on.
+   */
+  path: string;
+  /** What authenticates the route instead of the master token. */
+  auth: string;
+}
+
+const AGENT_ROUTE_AUTH =
+  "registerAgentAuthMiddleware (agents.ts): a device token for the RELAY_ROUTE_AUDIENCES audience, or a PUBLIC_AGENT_ROUTES self-authenticating route";
+const PUBLIC_ARTIFACT =
+  "public protocol artifact (services/relay CLAUDE.md rule 6): an external verifier holds no relay token";
+const SIGNATURE_IS_AUTH = "self-attesting: the handler verifies the request's own signature";
+const USER_INITIATED_RAMP =
+  "user-initiated ramp session: the user is the ramp provider's customer, not a relay-token holder (off-ramp-as-user-action.md)";
+const DISPUTE_PARTY =
+  "dispute party's signed filing / evidence / appeal, or a public read (spec/dispute-v1.md)";
+const SKILLS_REGISTRY =
+  "skills registry (spec/skills-registry-v1.md §5): signed envelope on submit, public read";
+const SUBSCRIPTION_OWNER =
+  "registerAuthMiddleware: account:checkout device token or the master token (#846)";
+
+/**
+ * The /api/v1/* master-token catch-all (registerMiddleware) exempts EXACTLY
+ * these routes, each one method and one registered route pattern, matched
+ * anchored against the routed path (#855). A prefix or unanchored carve-out
+ * reached routes it was never meant to: `startsWith("/api/v1/credentials/verify")`
+ * let `POST /api/v1/credentials/verify/reputation` skip the master token and
+ * reach `POST /api/v1/credentials/:motebitId/reputation` with the id `verify`.
+ *
+ * A new /api/v1 route is master-only until it is added here. Adding one is a
+ * reviewed decision: name what authenticates it instead. The gate
+ * `check-master-token-carve-outs` proves every entry names a registered route
+ * and reaches no other; `master-token-carve-outs-855.test.ts` proves it against
+ * the running relay.
+ */
+export const MASTER_TOKEN_CARVE_OUTS: ReadonlyArray<MasterTokenCarveOut> = [
+  // --- Agent registry: its own fail-closed middleware (agents.ts) ---
+  { method: "POST", path: "/api/v1/agents/register", auth: AGENT_ROUTE_AUTH },
+  { method: "POST", path: "/api/v1/agents/bootstrap", auth: AGENT_ROUTE_AUTH },
+  { method: "POST", path: "/api/v1/agents/heartbeat", auth: AGENT_ROUTE_AUTH },
+  { method: "DELETE", path: "/api/v1/agents/deregister", auth: AGENT_ROUTE_AUTH },
+  { method: "GET", path: "/api/v1/agents/discover", auth: AGENT_ROUTE_AUTH },
+  { method: "GET", path: "/api/v1/agents/revocations", auth: AGENT_ROUTE_AUTH },
+  { method: "POST", path: "/api/v1/agents/push-token", auth: AGENT_ROUTE_AUTH },
+  { method: "DELETE", path: "/api/v1/agents/push-token", auth: AGENT_ROUTE_AUTH },
+  { method: "POST", path: "/api/v1/agents/accept-migration", auth: AGENT_ROUTE_AUTH },
+  { method: "GET", path: "/api/v1/agents/:motebitId", auth: AGENT_ROUTE_AUTH },
+  { method: "POST", path: "/api/v1/agents/:motebitId/approvals", auth: AGENT_ROUTE_AUTH },
+  {
+    method: "GET",
+    path: "/api/v1/agents/:motebitId/approvals/:approvalId",
+    auth: AGENT_ROUTE_AUTH,
+  },
+  {
+    method: "POST",
+    path: "/api/v1/agents/:motebitId/approvals/:approvalId/vote",
+    auth: AGENT_ROUTE_AUTH,
+  },
+  { method: "GET", path: "/api/v1/agents/:motebitId/balance", auth: AGENT_ROUTE_AUTH },
+  { method: "GET", path: "/api/v1/agents/:motebitId/bond", auth: AGENT_ROUTE_AUTH },
+  { method: "POST", path: "/api/v1/agents/:motebitId/bond", auth: AGENT_ROUTE_AUTH },
+  { method: "POST", path: "/api/v1/agents/:motebitId/checkout", auth: AGENT_ROUTE_AUTH },
+  { method: "POST", path: "/api/v1/agents/:motebitId/command", auth: AGENT_ROUTE_AUTH },
+  { method: "GET", path: "/api/v1/agents/:motebitId/credentials", auth: AGENT_ROUTE_AUTH },
+  {
+    method: "POST",
+    path: "/api/v1/agents/:motebitId/credentials/submit",
+    auth: AGENT_ROUTE_AUTH,
+  },
+  { method: "POST", path: "/api/v1/agents/:motebitId/debit", auth: AGENT_ROUTE_AUTH },
+  {
+    method: "POST",
+    path: "/api/v1/agents/:motebitId/devices/:deviceId/hardware-attestation",
+    auth: AGENT_ROUTE_AUTH,
+  },
+  { method: "GET", path: "/api/v1/agents/:motebitId/graph", auth: AGENT_ROUTE_AUTH },
+  { method: "GET", path: "/api/v1/agents/:motebitId/listing", auth: AGENT_ROUTE_AUTH },
+  { method: "POST", path: "/api/v1/agents/:motebitId/listing", auth: AGENT_ROUTE_AUTH },
+  { method: "POST", path: "/api/v1/agents/:motebitId/migrate", auth: AGENT_ROUTE_AUTH },
+  { method: "POST", path: "/api/v1/agents/:motebitId/migrate/cancel", auth: AGENT_ROUTE_AUTH },
+  { method: "POST", path: "/api/v1/agents/:motebitId/migrate/depart", auth: AGENT_ROUTE_AUTH },
+  {
+    method: "GET",
+    path: "/api/v1/agents/:motebitId/migration/attestation",
+    auth: AGENT_ROUTE_AUTH,
+  },
+  {
+    method: "GET",
+    path: "/api/v1/agents/:motebitId/migration/export",
+    auth: AGENT_ROUTE_AUTH,
+  },
+  { method: "GET", path: "/api/v1/agents/:motebitId/p2p-eligibility", auth: AGENT_ROUTE_AUTH },
+  { method: "GET", path: "/api/v1/agents/:motebitId/path-to/:targetId", auth: AGENT_ROUTE_AUTH },
+  { method: "POST", path: "/api/v1/agents/:motebitId/presentation", auth: AGENT_ROUTE_AUTH },
+  { method: "POST", path: "/api/v1/agents/:motebitId/proxy-token", auth: AGENT_ROUTE_AUTH },
+  { method: "GET", path: "/api/v1/agents/:motebitId/receipts", auth: AGENT_ROUTE_AUTH },
+  { method: "GET", path: "/api/v1/agents/:motebitId/receipts/:taskId", auth: AGENT_ROUTE_AUTH },
+  { method: "POST", path: "/api/v1/agents/:motebitId/restore-listing", auth: AGENT_ROUTE_AUTH },
+  { method: "POST", path: "/api/v1/agents/:motebitId/revoke", auth: AGENT_ROUTE_AUTH },
+  {
+    method: "POST",
+    path: "/api/v1/agents/:motebitId/revoke-credential",
+    auth: AGENT_ROUTE_AUTH,
+  },
+  { method: "POST", path: "/api/v1/agents/:motebitId/revoke-listing", auth: AGENT_ROUTE_AUTH },
+  { method: "POST", path: "/api/v1/agents/:motebitId/revoke-tokens", auth: AGENT_ROUTE_AUTH },
+  { method: "GET", path: "/api/v1/agents/:motebitId/roster", auth: AGENT_ROUTE_AUTH },
+  { method: "POST", path: "/api/v1/agents/:motebitId/roster", auth: AGENT_ROUTE_AUTH },
+  { method: "POST", path: "/api/v1/agents/:motebitId/rotate-key", auth: AGENT_ROUTE_AUTH },
+  {
+    method: "GET",
+    path: "/api/v1/agents/:motebitId/routing-explanation",
+    auth: AGENT_ROUTE_AUTH,
+  },
+  { method: "GET", path: "/api/v1/agents/:motebitId/settlements", auth: AGENT_ROUTE_AUTH },
+  { method: "GET", path: "/api/v1/agents/:motebitId/solvency-proof", auth: AGENT_ROUTE_AUTH },
+  { method: "GET", path: "/api/v1/agents/:motebitId/succession", auth: AGENT_ROUTE_AUTH },
+  { method: "PATCH", path: "/api/v1/agents/:motebitId/sweep-config", auth: AGENT_ROUTE_AUTH },
+  { method: "GET", path: "/api/v1/agents/:motebitId/trust-closure", auth: AGENT_ROUTE_AUTH },
+  { method: "POST", path: "/api/v1/agents/:motebitId/withdraw", auth: AGENT_ROUTE_AUTH },
+  { method: "GET", path: "/api/v1/agents/:motebitId/withdrawals", auth: AGENT_ROUTE_AUTH },
+
+  // --- Self-attesting intake: the request's signature IS the auth ---
+  // spec/device-self-registration-v1.md; a first-launch motebit holds no
+  // relay-issued bearer token (intake-routes.ts).
+  { method: "POST", path: "/api/v1/devices/register-self", auth: SIGNATURE_IS_AUTH },
+  { method: "POST", path: "/api/v1/motebits/announce", auth: SIGNATURE_IS_AUTH },
+
+  // --- Credential verification + status: public verifier surface ---
+  { method: "POST", path: "/api/v1/credentials/verify", auth: PUBLIC_ARTIFACT },
+  { method: "POST", path: "/api/v1/credentials/batch-status", auth: PUBLIC_ARTIFACT },
+  { method: "GET", path: "/api/v1/credentials/:credentialId/status", auth: PUBLIC_ARTIFACT },
+
+  // --- Anchor proofs: independently verifiable onchain without relay contact ---
+  {
+    method: "GET",
+    path: "/api/v1/credentials/:credentialId/anchor-proof",
+    auth: PUBLIC_ARTIFACT,
+  },
+  { method: "GET", path: "/api/v1/credential-anchors/:batchId", auth: PUBLIC_ARTIFACT },
+  {
+    method: "GET",
+    path: "/api/v1/settlements/:settlementId/anchor-proof",
+    auth: PUBLIC_ARTIFACT,
+  },
+  { method: "GET", path: "/api/v1/settlement-anchors/:batchId", auth: PUBLIC_ARTIFACT },
+
+  // --- Identity-transparency binding material (identity-binding-verification.md):
+  // current key, self-signed succession chain, Merkle inclusion proof ---
+  { method: "GET", path: "/api/v1/identity/:motebitId", auth: PUBLIC_ARTIFACT },
+
+  // --- Payment-provider callbacks and user-initiated money sessions ---
+  { method: "POST", path: "/api/v1/stripe/webhook", auth: "Stripe webhook signature" },
+  {
+    method: "POST",
+    path: "/api/v1/subscriptions/webhook",
+    auth: "Stripe webhook signature",
+  },
+  {
+    method: "POST",
+    path: "/api/v1/subscriptions/checkout",
+    auth: "user-initiated Stripe checkout session",
+  },
+  {
+    method: "GET",
+    path: "/api/v1/subscriptions/session-status",
+    auth: "Stripe checkout session id",
+  },
+  {
+    method: "GET",
+    path: "/api/v1/subscriptions/:motebitId/status",
+    auth: "public read; creates no row (subscriptions.ts)",
+  },
+  { method: "POST", path: "/api/v1/subscriptions/:motebitId/cancel", auth: SUBSCRIPTION_OWNER },
+  {
+    method: "POST",
+    path: "/api/v1/subscriptions/:motebitId/resubscribe",
+    auth: SUBSCRIPTION_OWNER,
+  },
+  { method: "POST", path: "/api/v1/onramp/session", auth: USER_INITIATED_RAMP },
+  { method: "POST", path: "/api/v1/offramp/session", auth: USER_INITIATED_RAMP },
+
+  // --- Discovery ---
+  { method: "GET", path: "/api/v1/discover/:motebitId", auth: "public discovery read" },
+  // `market:query` device token or master (dualAuth, registerAuthMiddleware).
+  // /api/v1/market/revenue is NOT here — operator-only.
+  {
+    method: "GET",
+    path: "/api/v1/market/candidates",
+    auth: "registerAuthMiddleware: market:query device token or master",
+  },
+
+  // --- Routes whose own device-token auth the catch-all used to shadow (#827) ---
+  { method: "GET", path: "/api/v1/proposals", auth: "proposalAuth (agents.ts): proposal audience" },
+  {
+    method: "POST",
+    path: "/api/v1/proposals",
+    auth: "proposalAuth (agents.ts): proposal audience",
+  },
+  {
+    method: "GET",
+    path: "/api/v1/proposals/:proposalId",
+    auth: "proposalAuth (agents.ts): proposal audience",
+  },
+  {
+    method: "POST",
+    path: "/api/v1/proposals/:proposalId/respond",
+    auth: "proposalAuth (agents.ts): proposal audience",
+  },
+  {
+    method: "POST",
+    path: "/api/v1/proposals/:proposalId/step-result",
+    auth: "proposalAuth (agents.ts): proposal audience",
+  },
+  {
+    method: "POST",
+    path: "/api/v1/proposals/:proposalId/withdraw",
+    auth: "proposalAuth (agents.ts): proposal audience",
+  },
+  {
+    method: "POST",
+    path: "/api/v1/browser-sandbox/token",
+    auth: "registerAuthMiddleware: browser-sandbox-grant device token or master",
+  },
+
+  // --- Disputes: the parties' signed acts; /resolve has its own operator-only door ---
+  { method: "POST", path: "/api/v1/allocations/:allocationId/dispute", auth: DISPUTE_PARTY },
+  { method: "GET", path: "/api/v1/disputes/:disputeId", auth: DISPUTE_PARTY },
+  { method: "POST", path: "/api/v1/disputes/:disputeId/evidence", auth: DISPUTE_PARTY },
+  { method: "POST", path: "/api/v1/disputes/:disputeId/appeal", auth: DISPUTE_PARTY },
+  { method: "GET", path: "/api/v1/disputes/:disputeId/resolutions", auth: DISPUTE_PARTY },
+  {
+    method: "POST",
+    path: "/api/v1/disputes/:disputeId/resolve",
+    auth: "registerAuthMiddleware: operator master token only, refused with none configured",
+  },
+
+  // --- Skills registry ---
+  { method: "POST", path: "/api/v1/skills/submit", auth: SKILLS_REGISTRY },
+  { method: "GET", path: "/api/v1/skills/discover", auth: SKILLS_REGISTRY },
+  { method: "GET", path: "/api/v1/skills/:submitter/:name/:version", auth: SKILLS_REGISTRY },
+
+  // --- Delegation-revocation cache (standing-delegation §5/§6 D2): a
+  // delegator-signed revocation on submit, public read of the cache ---
+  { method: "POST", path: "/api/v1/delegations/revocations", auth: SIGNATURE_IS_AUTH },
+  { method: "GET", path: "/api/v1/delegations/revocations", auth: PUBLIC_ARTIFACT },
+];
+
+/**
+ * A carve-out's route pattern as the anchored expression the catch-all tests:
+ * each literal segment escaped, each `:param` the one-segment `[^/]+` Hono's
+ * router gives an unconstrained param, and the whole path pinned by `^…$`.
+ */
+export function carveOutPattern(path: string): RegExp {
+  const body = path
+    .split("/")
+    .map((seg) => (seg.startsWith(":") ? "[^/]+" : seg.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")))
+    .join("/");
+  return new RegExp(`^${body}$`);
+}
+
+const COMPILED_CARVE_OUTS = MASTER_TOKEN_CARVE_OUTS.map((e) => ({
+  method: e.method,
+  pattern: carveOutPattern(e.path),
+}));
+
+/**
+ * Whether the /api/v1/* catch-all lets `method path` through without the
+ * master token. `path` is `c.req.path`: the same decoded path the router
+ * dispatches on, so the route this admits is the route the handler serves.
+ */
+export function isMasterTokenCarveOut(method: string, path: string): boolean {
+  const m = method === "HEAD" ? "GET" : method;
+  return COMPILED_CARVE_OUTS.some((e) => e.method === m && e.pattern.test(path));
+}
+
+// ---------------------------------------------------------------------------
 // registerMiddleware — wire up all middleware on the app
 // ---------------------------------------------------------------------------
 
@@ -611,84 +899,15 @@ export function registerMiddleware(deps: MiddlewareDeps): MiddlewareResult {
   }
 
   // --- Catch-all /api/v1/* middleware ---
+  // Every /api/v1 route is master-only except the routes MASTER_TOKEN_CARVE_OUTS
+  // names, each by one method and its exact route pattern, matched anchored
+  // against the routed path (#855). The exemption is decided by that table and
+  // nothing else: `check-master-token-carve-outs` refuses any other read of the
+  // path in this handler, and any carve-out that reaches a route it does not
+  // name.
   if (apiToken != null && apiToken !== "") {
-    // Agent registry routes use their own auth middleware (supports device tokens)
     app.use("/api/v1/*", async (c, next) => {
-      if (
-        c.req.path.startsWith("/api/v1/agents") ||
-        // Self-attesting device registration is auth-less by design — the
-        // request's signature IS the auth (spec/device-self-registration-v1.md).
-        // The handler verifies the signature against the public key carried
-        // in the request body itself.
-        c.req.path === "/api/v1/devices/register-self" ||
-        // Self-attesting motebit announcement (sovereign-funnel intake) is
-        // auth-less by design, same as register-self — the request's signature
-        // IS the auth, and the handler verifies it against the public key in
-        // the body and that `audience` is this relay's id. A first-launch
-        // motebit holds no relay-issued bearer token. See intake-routes.ts.
-        c.req.path === "/api/v1/motebits/announce" ||
-        c.req.path.startsWith("/api/v1/credentials/verify") ||
-        c.req.path.startsWith("/api/v1/credentials/batch-status") ||
-        c.req.path.match(/\/api\/v1\/credentials\/[^/]+\/status/) ||
-        // Anchor proof endpoints are public protocol artifacts (services/relay
-        // CLAUDE.md rule 6 — every truth the relay asserts is independently
-        // verifiable onchain without relay contact). An external auditor
-        // will not hold a relay-issued bearer token.
-        c.req.path.match(/\/api\/v1\/credentials\/[^/]+\/anchor-proof/) ||
-        c.req.path.startsWith("/api/v1/credential-anchors/") ||
-        c.req.path.match(/\/api\/v1\/settlements\/[^/]+\/anchor-proof/) ||
-        c.req.path.startsWith("/api/v1/settlement-anchors/") ||
-        // Identity-transparency binding material is a public protocol artifact
-        // (same rationale as anchor-proof above): a third-party verifier
-        // resolving a receipt's producer holds no relay token, and the bundle
-        // carries no secrets — current key, self-signed succession chain, and a
-        // Merkle inclusion proof, all independently verifiable. Gating it breaks
-        // receipt.computer's pinned/anchored/sovereign path. See
-        // docs/doctrine/identity-binding-verification.md + identity-transparency.ts.
-        c.req.path.startsWith("/api/v1/identity/") ||
-        c.req.path.startsWith("/api/v1/stripe/") ||
-        c.req.path.startsWith("/api/v1/bridge/") ||
-        c.req.path.startsWith("/api/v1/subscriptions/") ||
-        c.req.path.startsWith("/api/v1/onramp/") ||
-        // Off-ramp session creation is user-initiated per Path 3 of the
-        // off-ramp arc — the user's surface POSTs with the user's KYC'd
-        // `bridge_customer_id` + `external_account_id`. The user is
-        // Bridge's customer, not motebit's, so a relay-issued master
-        // bearer token doesn't model the trust relationship. Mirrors
-        // `/api/v1/onramp/` above. See `docs/doctrine/off-ramp-as-user-action.md`.
-        c.req.path.startsWith("/api/v1/offramp/") ||
-        c.req.path.startsWith("/api/v1/discover/") ||
-        // Market candidate discovery has its own dualAuth (market:query device
-        // token or master) above — agents discovering workers don't hold the
-        // master token. /api/v1/market/revenue is NOT carved out (operator-only).
-        c.req.path === "/api/v1/market/candidates" ||
-        // Two more routes whose own device-token auth this catch-all used to
-        // shadow, so a device token was refused before it ever reached them
-        // (#827) — the same shape as the market/candidates carve-out above:
-        //   - collaborative proposals: `proposal` audience, installed by
-        //     registerAgentAuthMiddleware (agents.ts) before the routes;
-        //   - the browser-sandbox grant exchange: `browser-sandbox-grant`
-        //     dualAuth in registerAuthMiddleware below.
-        // Both still refuse a missing or wrong-audience token; the relay's
-        // route-audience conformance test proves it for every route.
-        c.req.path === "/api/v1/proposals" ||
-        c.req.path.startsWith("/api/v1/proposals/") ||
-        c.req.path === "/api/v1/browser-sandbox/token" ||
-        c.req.path.startsWith("/api/v1/allocations/") ||
-        c.req.path.startsWith("/api/v1/disputes/") ||
-        // Skills registry (spec/skills-registry-v1.md §5): permissive-by-
-        // signature on submit, public-read on discover/resolve. The submit
-        // handler verifies the envelope signature itself — that IS the auth
-        // (mirrors /api/v1/devices/register-self above).
-        c.req.path.startsWith("/api/v1/skills/") ||
-        // Delegation-revocation cache (standing-delegation §5/§6 D2):
-        // permissive-by-signature on submit — the DelegationRevocation is a
-        // delegator-signed sovereign artifact and the handler verifies it
-        // (that IS the auth; anyone MAY propagate a revocation) — and
-        // public-read on the cache, same anchor-proof-class rationale: a
-        // consumer building its `isRevoked` seam holds no relay token.
-        c.req.path === "/api/v1/delegations/revocations"
-      ) {
+      if (isMasterTokenCarveOut(c.req.method, c.req.path)) {
         await next();
         return;
       }

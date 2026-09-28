@@ -1016,6 +1016,12 @@ const GATES: ReadonlyArray<Gate> = [
     script: "check-mobile-expo-alignment",
   },
   {
+    name: "check-master-token-carve-outs",
+    defends:
+      "the relay's /api/v1/* master-token catch-all exempts exactly the routes `MASTER_TOKEN_CARVE_OUTS` (services/relay/src/middleware.ts) names — one method and one registered route pattern per entry, matched anchored against the routed path by `isMasterTokenCarveOut` — and no carve-out reaches a route it does not name: every entry is literal, plain-segment and under /api/v1/, names a route the relay registers (no stale carve-out), and shares no concrete path with any registered /api/v1 route of its method that is not itself declared; the catch-all reads the request's path, URL, method or params only through `isMasterTokenCarveOut(c.req.method, c.req.path)` or into a record; every relay route registration has a literal path. #855: `startsWith(\"/api/v1/credentials/verify\")` let `POST /api/v1/credentials/verify/reputation` skip the master token and reach `POST /api/v1/credentials/:motebitId/reputation` with the id `verify`, and the unanchored regex carve-outs had the same shape. Invariant #165, added 2026-09-27",
+    script: "check-master-token-carve-outs",
+  },
+  {
     name: "check-docs-script-claims",
     defends:
       "every package script a docs page tells the reader to run exists in the manifest it would run against: `pnpm --filter <pkg> <script>` resolves to a workspace package by name and one of its `scripts`; `pnpm run <script>` resolves against the most recent `cd <workspace-dir>` in the same fenced block (else the repo root); `npm run <script>` resolves against the scripts the create-motebit scaffold generates. The 2026-09-14 docs-vs-code cross-audit (#667) found three of the five app pages OPENING with a command that did not exist or did something other than the sentence claimed — the first command a new contributor types was the least-checked sentence on the site; `check-docs-tree` enforced the directory listing and `check-docs-cli-claims` the CLI subcommands, but nothing tied a documented script to a package.json. Invariant #157, added 2026-09-14",

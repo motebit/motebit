@@ -77,9 +77,12 @@ describe("Bridge user-withdrawal path — structural deletion", () => {
 
   it("the Bridge webhook endpoint /api/v1/bridge/webhook returns 404 (deleted)", async () => {
     relay = await createTestRelay({ enableDeviceAuth: false });
+    // With the master token, so the answer is the router's: the route is gone.
+    // (Without it the /api/v1/* catch-all refuses first — the stale
+    // `/api/v1/bridge/` carve-out went with the route, #855.)
     const res = await relay.app.request("/api/v1/bridge/webhook", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
       body: JSON.stringify({ event_type: "transfer.payment_processed" }),
     });
     expect(res.status).toBe(404);

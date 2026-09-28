@@ -2725,6 +2725,24 @@ export async function probeFetch(): Promise<unknown> {
       }),
   },
   {
+    script: "check-master-token-carve-outs",
+    proves:
+      'flags a prefix carve-out in the relay\'s /api/v1/* master-token catch-all — the #855 class. Reinstates `c.req.path.startsWith("/api/v1/credentials/verify")` beside the table lookup (the carve-out that let `POST /api/v1/credentials/verify/reputation` reach the reputation route without the master token); the gate names the path read outside `isMasterTokenCarveOut`.',
+    perturb: () =>
+      mutateFile("services/relay/src/middleware.ts", (src) => {
+        const anchor = "if (isMasterTokenCarveOut(c.req.method, c.req.path)) {";
+        if (!src.includes(anchor)) {
+          throw new Error(
+            "probe vacuous: services/relay/src/middleware.ts no longer decides the catch-all by isMasterTokenCarveOut — retarget the probe",
+          );
+        }
+        return src.replace(
+          anchor,
+          'if (isMasterTokenCarveOut(c.req.method, c.req.path) || c.req.path.startsWith("/api/v1/credentials/verify")) {',
+        );
+      }),
+  },
+  {
     script: "check-worker-no-master-token",
     proves:
       "flags a worker reading the relay master token again — the 2026-09-13 blast-radius class (every first-party worker held MOTEBIT_API_TOKEN, so a compromised worker container was a compromised relay). Probe reinstates the env read in research's config loader; byte-identical restoration on cleanup.",
