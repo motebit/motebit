@@ -140,6 +140,20 @@ describe("TauriEventStore", () => {
     await store.setSyncSeqCursor(key, 8);
     expect(await store.getSyncSeqCursor(key)).toBe(8);
     expect(await new TauriEventStore(createMockInvoke(db)).getSyncSeqCursor(key)).toBe(8);
+    await store.append({
+      event_id: "held",
+      motebit_id: "m1",
+      event_type: "memory_formed" as never,
+      payload: {},
+      version_clock: 1,
+      timestamp: 1,
+      tombstoned: false,
+    });
+    expect([...(await store.getHeldEventIds(["held", "absent"]))]).toEqual(["held"]);
+    await store.recordSkippedSyncEvent(key, { event_id: "x", seq: 3, reason: "undecryptable" });
+    expect(db.prepare("SELECT event_id, seq, reason FROM sync_skipped_events").all()).toEqual([
+      { event_id: "x", seq: 3, reason: "undecryptable" },
+    ]);
   });
 
   it("append + query round-trip", async () => {

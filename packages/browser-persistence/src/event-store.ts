@@ -114,6 +114,42 @@ export class IdbEventStore implements EventStoreAdapter {
     return typeof row?.seq === "number" ? row.seq : null;
   }
 
+  /** Record a pulled event the sync stream moved past without applying (#868, IDB v9). */
+  async recordSkippedSyncEvent(
+    key: string,
+    skipped: { event_id: string; seq: number | null; reason: string; detail?: string },
+  ): Promise<void> {
+    const tx = this.db.transaction("sync_skipped_events", "readwrite");
+    await idbRequest(
+      tx.objectStore("sync_skipped_events").put({
+        cursor_key: key,
+        event_id: skipped.event_id,
+        seq: skipped.seq,
+        reason: skipped.reason,
+        detail: skipped.detail ?? null,
+        recorded_at: Date.now(),
+      }),
+    );
+  }
+
+  /**
+   * Which of `eventIds` this store holds — one key lookup per id in a single
+   * read transaction, never a `getAll` of the log (#868).
+   */
+  async getHeldEventIds(eventIds: readonly string[]): Promise<Set<string>> {
+    const held = new Set<string>();
+    if (eventIds.length === 0) return held;
+    const tx = this.db.transaction("events", "readonly");
+    const store = tx.objectStore("events");
+    await Promise.all(
+      eventIds.map(async (id) => {
+        const key = await idbRequest(store.getKey(id));
+        if (key !== undefined) held.add(id);
+      }),
+    );
+    return held;
+  }
+
   async setSyncSeqCursor(key: string, seq: number): Promise<void> {
     const tx = this.db.transaction("sync_seq_cursors", "readwrite");
     await idbRequest(

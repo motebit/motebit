@@ -18,6 +18,7 @@ import {
   pullBySeq,
   resolveSeqCursorStore,
 } from "../index.js";
+import type { SeqPullSource } from "../index.js";
 import { FakeRelay } from "./fake-relay.js";
 
 const MID = "motebit-seq";
@@ -65,7 +66,9 @@ describe("#868 seq cursor", () => {
     expect(relay.pulls[0]!.searchParams.get("after_seq")).toBe("0");
     expect(relay.pulls[0]!.searchParams.get("after_clock")).toBe("7");
     expect(res.kind).toBe("seq");
-    expect("seq" in res.events[0]!).toBe(false);
+    if (res.kind !== "seq") throw new Error("expected a seq page");
+    expect(res.entries[0]!.seq).toBe(1);
+    expect("seq" in res.entries[0]!.event).toBe(false);
     const local = new CursorStore();
     await pullBySeq({
       source: http,
@@ -193,7 +196,10 @@ describe("#868 seq cursor", () => {
       seqCursorKey: "k",
       pullAfterSeq: async () => ({
         kind: "seq" as const,
-        events: [entry("mine", 1), foreign],
+        entries: [
+          { seq: 1, event: entry("mine", 1) },
+          { seq: 2, event: foreign },
+        ],
         nextSeq: 2,
         hasMore: false,
         latestSeq: 2,
@@ -240,20 +246,100 @@ describe("#868 seq cursor", () => {
 
     it("the key names the relay and the identity, so one relay's cursor never applies to another", () => {
       const other = new HttpEventStoreAdapter({ baseUrl: "http://other.relay/", motebitId: MID });
-      expect(http.seqCursorKey).toBe(`${relay.baseUrl}#${MID}`);
-      expect(other.seqCursorKey).toBe(`http://other.relay#${MID}`);
+      expect(http.seqCursorKey).toBe(`raw:${relay.baseUrl}#${MID}`);
+      expect(other.seqCursorKey).toBe(`raw:http://other.relay#${MID}`);
     });
   });
 
-  it("the encrypting wrapper is a seq source exactly when its inner adapter is, and decrypts what it pulls", async () => {
-    const key = new Uint8Array(32).fill(7);
-    const enc = new EncryptedEventStoreAdapter({ inner: http, key });
-    expect(isSeqPullSource(enc)).toBe(true);
-    expect(
-      isSeqPullSource(new EncryptedEventStoreAdapter({ inner: new InMemoryEventStore(), key })),
-    ).toBe(false);
-    await enc.append(entry("secret", 1));
-    const res = await enc.pullAfterSeq(0, 0);
-    expect(res.events[0]!.payload).toEqual({ id: "secret" });
+  describe("the E2E path", () => {
+    const k1 = new Uint8Array(32).fill(7);
+    const k2 = new Uint8Array(32).fill(9);
+
+    it("the encrypting wrapper is a seq source exactly when its inner adapter is, keyed apart from the raw path", () => {
+      const enc = new EncryptedEventStoreAdapter({ inner: http, key: k1 });
+      expect(isSeqPullSource(enc)).toBe(true);
+      expect(enc.seqCursorKey).toBe(`e2e:${http.seqCursorKey}`);
+      expect(
+        isSeqPullSource(
+          new EncryptedEventStoreAdapter({ inner: new InMemoryEventStore(), key: k1 }),
+        ),
+      ).toBe(false);
+    });
+
+    it("one undecryptable event is recorded and passed; the stream continues past it", async () => {
+      await new EncryptedEventStoreAdapter({ inner: http, key: k1 }).append(entry("before", 1));
+      await new EncryptedEventStoreAdapter({ inner: http, key: k2 }).append(entry("poison", 2));
+      await new EncryptedEventStoreAdapter({ inner: http, key: k1 }).append(entry("after", 3));
+      const enc = new EncryptedEventStoreAdapter({ inner: http, key: k1 });
+      const local = new CursorStore();
+      const cursors = new InMemorySyncSeqCursorStore();
+      const reported: string[] = [];
+      const out = await pullBySeq({
+        source: enc as SeqPullSource,
+        localStore: local,
+        cursorStore: cursors,
+        motebitId: MID,
+        fallbackAfterClock: 0,
+        onSkipped: (s) => reported.push(s.event_id),
+      });
+      expect(out.fresh.map((e) => e.event_id)).toEqual(["before", "after"]);
+      expect((await local.query({})).find((e) => e.event_id === "after")!.payload).toEqual({
+        id: "after",
+      });
+      expect(cursors.skipped.map((s) => [s.event_id, s.seq, s.reason])).toEqual([
+        ["poison", 2, "undecryptable"],
+      ]);
+      expect(reported).toEqual(["poison"]);
+      expect(await cursors.getSyncSeqCursor(enc.seqCursorKey!)).toBe(3);
+    });
+
+    it("an event already held is never decrypted again — dedup runs on the transport form first", async () => {
+      await new EncryptedEventStoreAdapter({ inner: http, key: k1 }).append(entry("old", 1));
+      const local = new CursorStore();
+      await local.append(entry("old", 1)); // held, decrypted, before the key rotated
+      // Rotated: this device now holds only k2, which cannot open "old".
+      const enc = new EncryptedEventStoreAdapter({ inner: http, key: k2 });
+      const decode = vi.spyOn(enc, "decodeEvent");
+      const cursors = new InMemorySyncSeqCursorStore();
+      const out = await pullBySeq({
+        source: enc as SeqPullSource,
+        localStore: local,
+        cursorStore: cursors,
+        motebitId: MID,
+        fallbackAfterClock: 0,
+      });
+      expect(decode).not.toHaveBeenCalled();
+      expect(out.skipped).toEqual([]);
+    });
+
+    it("the raw path never applies an E2E payload, and never advances the E2E cursor: the E2E path then applies it decrypted (rawThenEnc)", async () => {
+      await new EncryptedEventStoreAdapter({ inner: http, key: k1 }).append(entry("sib", 1));
+      const local = new CursorStore();
+      // The raw path first (mobile syncNow / the CLI daemon's HTTP fallback)…
+      const raw = await pullBySeq({
+        source: http,
+        localStore: local,
+        cursorStore: local,
+        motebitId: MID,
+        fallbackAfterClock: 0,
+      });
+      expect(raw.fresh).toEqual([]);
+      expect(raw.skipped.map((s) => s.reason)).toEqual(["encrypted_on_raw_path"]);
+      expect(await local.query({})).toEqual([]);
+      // …then the E2E engine over the SAME store.
+      const enc = new EncryptedEventStoreAdapter({ inner: http, key: k1 });
+      const e2e = await pullBySeq({
+        source: enc as SeqPullSource,
+        localStore: local,
+        cursorStore: local,
+        motebitId: MID,
+        fallbackAfterClock: 0,
+      });
+      expect(e2e.fresh.map((e) => e.event_id)).toEqual(["sib"]);
+      const [held] = await local.query({});
+      expect(held!.payload).toEqual({ id: "sib" });
+      expect(local.cursors.get(http.seqCursorKey)).toBe(1);
+      expect(local.cursors.get(enc.seqCursorKey!)).toBe(1);
+    });
   });
 });

@@ -204,6 +204,34 @@ export class TauriEventStore implements EventStoreAdapter {
     return rows[0]?.seq ?? null;
   }
 
+  /** Record a pulled event the sync stream moved past without applying (#868, desktop v8). */
+  async recordSkippedSyncEvent(
+    key: string,
+    skipped: { event_id: string; seq: number | null; reason: string; detail?: string },
+  ): Promise<void> {
+    await dbExecute(
+      this.invoke,
+      `INSERT OR REPLACE INTO sync_skipped_events (cursor_key, event_id, seq, reason, detail, recorded_at)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+      [key, skipped.event_id, skipped.seq, skipped.reason, skipped.detail ?? null, Date.now()],
+    );
+  }
+
+  /** Which of `eventIds` this store holds — primary-key lookups, never a log scan (#868). */
+  async getHeldEventIds(eventIds: readonly string[]): Promise<Set<string>> {
+    const held = new Set<string>();
+    for (let i = 0; i < eventIds.length; i += 500) {
+      const chunk = eventIds.slice(i, i + 500);
+      const rows = await dbQuery<{ event_id: string }>(
+        this.invoke,
+        `SELECT event_id FROM events WHERE event_id IN (${chunk.map(() => "?").join(", ")})`,
+        [...chunk],
+      );
+      for (const r of rows) held.add(r.event_id);
+    }
+    return held;
+  }
+
   async setSyncSeqCursor(key: string, seq: number): Promise<void> {
     await dbExecute(
       this.invoke,

@@ -275,6 +275,34 @@ describe("#868 relay ingest sequence", () => {
     expect([...pulled].sort()).toEqual([...all].sort()); // every one
   });
 
+  it("the seq is PER IDENTITY: another identity's writes leave no gap and no trace in this identity's stream", async () => {
+    const A = crypto.randomUUID();
+    const B = crypto.randomUUID();
+    await push(A, [ev(A, `a1-${A}`, 1)]);
+    for (let i = 0; i < 7; i++) await push(B, [ev(B, `b${i}-${B}`, i)]);
+    await push(A, [ev(A, `a2-${A}`, 2)]);
+    const a = await pullSeq(A, 0);
+    expect(a.events.map((e) => e.seq)).toEqual([1, 2]);
+    expect(a.latest_seq).toBe(2);
+    const b = await pullSeq(B, 0);
+    expect(b.events.map((e) => e.seq)).toEqual([1, 2, 3, 4, 5, 6, 7]);
+  });
+
+  it("a deleted top seq is never reissued: the next event takes a number above it, and latest_seq never falls", async () => {
+    const mid = crypto.randomUUID();
+    await push(mid, [ev(mid, `k1-${mid}`, 1), ev(mid, `k2-${mid}`, 2), ev(mid, `k3-${mid}`, 3)]);
+    const before = await pullSeq(mid, 0);
+    expect(before.next_seq).toBe(3);
+    // Retention removes the TOP rows (clock ≤ 3 = all three).
+    await relay.moteDb.eventStore.compact(mid as never, 3);
+    const emptied = await pullSeq(mid, before.next_seq);
+    expect(emptied.latest_seq).toBe(3); // the counter, not MAX over the surviving rows
+    // A device whose cursor sits at 3 must still receive the next event.
+    await push(mid, [ev(mid, `k4-${mid}`, 4)]);
+    const after = await pullSeq(mid, before.next_seq);
+    expect(after.events.map((e) => [e.event_id, e.seq])).toEqual([[`k4-${mid}`, 4]]);
+  });
+
   describe("identity binding (#846/#865): the seq read serves only the identity the token was verified for", () => {
     async function boot(id: string, device: string) {
       const kp = await generateKeypair();
@@ -352,19 +380,30 @@ describe("#868 migration v46 — backfill and restart", () => {
       );
 
       const rows = db
-        .prepare("SELECT seq, event_id, motebit_id FROM relay_event_seq ORDER BY seq")
+        .prepare("SELECT seq, event_id, motebit_id FROM relay_event_seq ORDER BY motebit_id, seq")
         .all() as Array<{
         seq: number;
         event_id: string;
         motebit_id: string;
       }>;
-      expect(rows.map((r) => r.event_id)).toEqual(["z-first", "a-second", "m-third"]);
-      expect(rows.map((r) => r.motebit_id)).toEqual(["m1", "m2", "m1"]);
+      // Numbered PER IDENTITY, each in ingest order.
+      expect(rows.map((r) => [r.motebit_id, r.seq, r.event_id])).toEqual([
+        ["m1", 1, "z-first"],
+        ["m1", 2, "m-third"],
+        ["m2", 1, "a-second"],
+      ]);
+      const counters = db
+        .prepare("SELECT motebit_id, last_seq FROM relay_event_seq_counter ORDER BY motebit_id")
+        .all();
+      expect(counters).toEqual([
+        { motebit_id: "m1", last_seq: 2 },
+        { motebit_id: "m2", last_seq: 1 },
+      ]);
       ins.run("new-after", "m1", 2);
       const last = db
         .prepare("SELECT seq FROM relay_event_seq WHERE event_id = 'new-after'")
         .get() as { seq: number };
-      expect(last.seq).toBeGreaterThan(rows[rows.length - 1]!.seq);
+      expect(last.seq).toBe(3);
     } finally {
       moteDb.close();
     }
@@ -382,6 +421,7 @@ describe("#868 migration v46 — backfill and restart", () => {
         DROP TRIGGER relay_event_seq_stamp;
         DROP TRIGGER relay_event_seq_unstamp;
         DROP TABLE relay_event_seq;
+        DROP TABLE relay_event_seq_counter;
         DELETE FROM relay_schema_migrations WHERE version = 46;
       `);
       await push(mid, [ev(mid, "old-b", 4, "dev-b"), ev(mid, "old-a", 4, "dev-a")]);

@@ -39,6 +39,17 @@ describe("IdbEventStore", () => {
     expect(await s2.getSyncSeqCursor("http://relay.two#mote-1")).toBe(2);
   });
 
+  it("answers which event_ids it holds by key, and records skipped sync events (#868, v9)", async () => {
+    await store.append(makeEvent({ event_id: "held-1" }));
+    await store.append(makeEvent({ event_id: "held-2" }));
+    const held = await store.getHeldEventIds(["held-1", "absent", "held-2"]);
+    expect([...held].sort()).toEqual(["held-1", "held-2"]);
+    expect(await store.getHeldEventIds([])).toEqual(new Set());
+    await expect(
+      store.recordSkippedSyncEvent("k", { event_id: "x", seq: 2, reason: "undecryptable" }),
+    ).resolves.toBeUndefined();
+  });
+
   it("appends and queries events", async () => {
     const e1 = makeEvent({ version_clock: 1 });
     const e2 = makeEvent({ version_clock: 2 });

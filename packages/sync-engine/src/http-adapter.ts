@@ -81,17 +81,21 @@ export class HttpEventStoreAdapter implements EventStoreAdapter, SeqPullSource {
     return body.events;
   }
 
-  /** The relay stream this adapter reads: relay origin + identity (#868). */
+  /**
+   * The relay stream this adapter reads, in RAW mode: relay origin +
+   * identity (#868). An E2E wrapper keys its own cursor separately.
+   */
   get seqCursorKey(): string {
-    return `${this.baseUrl}#${this.motebitId}`;
+    return `raw:${this.baseUrl}#${this.motebitId}`;
   }
 
   /**
    * Pull by the relay ingest sequence (#868). One request carries both
    * cursors: a relay that serves `after_seq` answers with seq-stamped
    * events; an older relay ignores it and answers `after_clock` exactly as
-   * `query` would. The `seq` field is stripped before the events are handed
-   * on — it is transport metadata, never part of a stored entry.
+   * `query` would. Each event's `seq` is carried beside it and stripped from
+   * the entry — it is transport metadata, never part of a stored entry. A
+   * seq page with an entry lacking an integer seq is refused whole.
    */
   async pullAfterSeq(afterSeq: number, fallbackAfterClock: number): Promise<SeqPullResult> {
     const url =
@@ -115,9 +119,15 @@ export class HttpEventStoreAdapter implements EventStoreAdapter, SeqPullSource {
       // An older relay: no seq in the answer. It served the clock query.
       return { kind: "clock", events: events.map(stripSeq) };
     }
+    const entries = events.map((e) => {
+      if (typeof e.seq !== "number" || !Number.isSafeInteger(e.seq)) {
+        throw new Error("Pull failed: a seq page entry carries no integer seq");
+      }
+      return { seq: e.seq, event: stripSeq(e) };
+    });
     return {
       kind: "seq",
-      events: events.map(stripSeq),
+      entries,
       nextSeq: body.next_seq,
       hasMore: body.has_more === true,
       latestSeq: body.latest_seq,

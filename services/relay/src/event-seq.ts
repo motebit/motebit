@@ -13,42 +13,57 @@
  * ## The cursor
  *
  * Every row that lands in `events` is stamped with `seq`, an integer the relay
- * assigns: `relay_event_seq.seq INTEGER PRIMARY KEY AUTOINCREMENT`. A client
- * pulls `after_seq = <the largest seq it has durably applied>`.
+ * assigns PER IDENTITY: identity X's events are numbered 1, 2, 3, … in the
+ * order the relay stored them, whatever any other identity writes in between.
+ * A client pulls `after_seq = <the largest seq it has durably applied>`.
  *
- * The stamp is written by an `AFTER INSERT ON events` TRIGGER (migration v46),
- * so it is part of the INSERT statement itself: the event row and its seq row
- * commit or roll back together, and EVERY writer is stamped — the sync push
- * doors, the relay-authored trust-transition event in `tasks.ts`, and any
- * writer added later — without any of them knowing the sequence exists. A
- * writer that inserts an event cannot forget the stamp.
+ * Per identity, so a cursor carries no side channel: a global counter would
+ * put other identities' writes in the gaps between one identity's seqs, and
+ * reveal their volume and timing to anyone who can read their own stream.
+ *
+ * The number comes from a counter ROW, `relay_event_seq_counter.last_seq`,
+ * that is only ever incremented — never `MAX(seq) + 1` over the stamped rows.
+ * Retention deletes seq rows (the unstamp trigger), so MAX + 1 would REISSUE a
+ * deleted top seq, and a client whose cursor already sits at that number
+ * would skip the new event forever.
+ *
+ * The stamp is written by an `AFTER INSERT ON events` TRIGGER (migration v46):
+ * the counter increment and the seq row are part of the INSERT statement
+ * itself, so the event, the counter and the seq commit or roll back together,
+ * and EVERY writer is stamped — the sync push doors, the relay-authored
+ * trust-transition event in `tasks.ts`, and any writer added later — without
+ * any of them knowing the sequence exists.
  *
  * ## Why an `after_seq` reader never skips a row (the cursor-visibility argument)
  *
- * A sequence is a safe cursor only if, whenever a reader can see seq S, every
- * row with a smaller seq that will EVER commit is already visible. The classic
- * failure: writer A allocates 5, writer B allocates 6 and commits, a reader
- * sees 6 and advances past it, then A commits 5 — below the cursor, skipped.
+ * A sequence is a safe cursor only if, whenever a reader can see seq S of an
+ * identity, every row of that identity with a smaller seq that will EVER
+ * commit is already visible. The classic failure: writer A allocates 5,
+ * writer B allocates 6 and commits, a reader sees 6 and advances past it, then
+ * A commits 5 — below the cursor, skipped.
  *
  * That cannot happen here, for three reasons that all have to hold:
  *
- *   1. Allocation happens INSIDE the writing transaction (the trigger runs in
- *      the INSERT statement), never before it — no seq is chosen in JS and then
- *      carried across an `await` to a later INSERT.
+ *   1. Allocation happens INSIDE the writing transaction: the trigger
+ *      increments the identity's counter row and reads it back in the INSERT
+ *      statement, never before it — no seq is chosen in JS and carried across
+ *      an `await` to a later INSERT.
  *   2. SQLite admits ONE write transaction per database at a time (rollback
  *      journal or WAL alike: the WAL write lock is exclusive). A transaction
- *      that allocated S therefore commits or rolls back before any other
- *      transaction can begin writing and allocate S' > S. Commit order equals
- *      seq order. `AUTOINCREMENT` (not a bare rowid) additionally guarantees a
- *      seq is never reused, even after the largest row is deleted, so a
- *      rolled-back or deleted seq is a permanent gap, never a later arrival.
+ *      that incremented X's counter to S therefore commits or rolls back
+ *      before any other transaction can begin writing and increment it to
+ *      S' > S. Commit order equals seq order, per identity. A rollback undoes
+ *      the increment with the row; a delete removes the seq row but never
+ *      decrements the counter — so a deleted seq is a permanent gap, never a
+ *      later arrival.
  *   3. A reader sees a transaction-consistent snapshot, which is therefore a
- *      PREFIX of the commit order, which is a prefix of the seq order. The
- *      relay runs on better-sqlite3 (synchronous; `index.ts` refuses the sql.js
- *      fallback), so a pull's statements also never interleave with a write.
+ *      PREFIX of the commit order, which is a prefix of each identity's seq
+ *      order. The relay runs on better-sqlite3 (synchronous; `index.ts`
+ *      refuses the sql.js fallback), so a pull's statements also never
+ *      interleave with a write.
  *
  * If the relay's storage ever moves to an engine with concurrent writers
- * (Postgres sequences are allocated outside commit order), (2) fails and this
+ * (Postgres sequences and row locks do not order commits), (2) fails and this
  * cursor MUST be re-argued — e.g. a commit-ordered log, or a visibility
  * horizon that holds the cursor below the oldest in-flight transaction.
  *
@@ -88,7 +103,8 @@ export interface SeqPullBody {
   /** True when more events follow `next_seq` than this page carried. */
   has_more: boolean;
   /**
-   * The largest seq the relay holds for this identity (0 when none). A client
+   * The largest seq the relay has ever assigned this identity (its counter; 0
+   * when none) — not the largest still stored, so retention never lowers it. A client
    * whose cursor is ABOVE it is reading a relay whose sequence went backwards
    * (a restored database) and must restart from 0 — dedup by `event_id` makes
    * that safe.
@@ -145,7 +161,9 @@ export function readEventsAfterSeq(
       )
       .all(motebitId, motebitId, afterSeq, pageSize + 1) as SeqRow[];
     const top = db
-      .prepare("SELECT MAX(seq) AS latest FROM relay_event_seq WHERE motebit_id = ?")
+      // The COUNTER, not MAX over the rows: a retention delete of the top
+      // rows must not look like a sequence that went backwards.
+      .prepare("SELECT last_seq AS latest FROM relay_event_seq_counter WHERE motebit_id = ?")
       .get(motebitId) as { latest: number | null } | undefined;
     return { rows: page, latest: top?.latest ?? 0 };
   });

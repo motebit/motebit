@@ -172,6 +172,11 @@ export function openMotebitDB(dbName = "motebit"): Promise<IDBDatabase> {
       if (!db.objectStoreNames.contains("sync_seq_cursors")) {
         db.createObjectStore("sync_seq_cursors", { keyPath: "cursor_key" });
       }
+      // Pulled events the stream moved past without applying (undecryptable,
+      // or E2E on a raw path) — recorded, never silent (#868, v9).
+      if (!db.objectStoreNames.contains("sync_skipped_events")) {
+        db.createObjectStore("sync_skipped_events", { keyPath: ["cursor_key", "event_id"] });
+      }
     };
 
     request.onsuccess = () => resolve(request.result);

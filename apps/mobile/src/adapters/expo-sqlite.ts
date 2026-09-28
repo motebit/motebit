@@ -456,6 +456,32 @@ export class ExpoSqliteEventStore implements EventStoreAdapter {
     return row?.seq ?? null;
   }
 
+  /** Record a pulled event the sync stream moved past without applying (#868, mobile v28). */
+  async recordSkippedSyncEvent(
+    key: string,
+    skipped: { event_id: string; seq: number | null; reason: string; detail?: string },
+  ): Promise<void> {
+    this.db.runSync(
+      `INSERT OR REPLACE INTO sync_skipped_events (cursor_key, event_id, seq, reason, detail, recorded_at)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+      [key, skipped.event_id, skipped.seq, skipped.reason, skipped.detail ?? null, Date.now()],
+    );
+  }
+
+  /** Which of `eventIds` this store holds — primary-key lookups, never a log scan (#868). */
+  async getHeldEventIds(eventIds: readonly string[]): Promise<Set<string>> {
+    const held = new Set<string>();
+    for (let i = 0; i < eventIds.length; i += 500) {
+      const chunk = eventIds.slice(i, i + 500);
+      const rows = this.db.getAllSync<{ event_id: string }>(
+        `SELECT event_id FROM events WHERE event_id IN (${chunk.map(() => "?").join(", ")})`,
+        [...chunk],
+      );
+      for (const r of rows) held.add(r.event_id);
+    }
+    return held;
+  }
+
   async setSyncSeqCursor(key: string, seq: number): Promise<void> {
     this.db.runSync(
       `INSERT INTO sync_seq_cursors (cursor_key, seq, updated_at) VALUES (?, ?, ?)

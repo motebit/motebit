@@ -5,6 +5,8 @@ import {
   isSeqPullSource,
   pullBySeq,
   resolveSeqCursorStore,
+  warnSkippedSyncEvent,
+  type SkippedSyncEvent,
   type SyncSeqCursorStore,
 } from "./seq-cursor.js";
 
@@ -54,6 +56,11 @@ export interface WebSocketAdapterConfig {
    * the same store, so a token refresh does not restart from seq 0.
    */
   seqCursorStore?: SyncSeqCursorStore;
+  /**
+   * Told of every caught-up event moved past without being applied (#868) —
+   * one this device cannot decrypt. Default: a `console.warn` line.
+   */
+  onSkippedEvent?: (skipped: SkippedSyncEvent) => void;
 }
 
 export type EventReceivedCallback = (event: EventLogEntry) => void;
@@ -84,6 +91,7 @@ export class WebSocketEventStoreAdapter implements EventStoreAdapter {
       | "localStore"
       | "onCatchUp"
       | "seqCursorStore"
+      | "onSkippedEvent"
     >
   > &
     Pick<
@@ -96,6 +104,7 @@ export class WebSocketEventStoreAdapter implements EventStoreAdapter {
       | "localStore"
       | "onCatchUp"
       | "seqCursorStore"
+      | "onSkippedEvent"
     >;
   private onEventCallbacks: Set<EventReceivedCallback> = new Set();
   private onCustomMessageCallbacks: Set<CustomMessageCallback> = new Set();
@@ -418,6 +427,7 @@ export class WebSocketEventStoreAdapter implements EventStoreAdapter {
           cursorStore: resolveSeqCursorStore(localStore, this.config.seqCursorStore),
           motebitId: this.config.motebitId,
           fallbackAfterClock: localClock,
+          onSkipped: this.config.onSkippedEvent ?? warnSkippedSyncEvent,
         });
         // Only events this store did not already hold reach the listeners.
         for (const event of fresh) {

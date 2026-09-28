@@ -483,6 +483,55 @@ export class SqliteEventStore implements EventStoreAdapter {
       .run(key, seq, Date.now());
   }
 
+  /** Record a pulled event the sync stream moved past without applying (#868, v50). */
+  async recordSkippedSyncEvent(
+    key: string,
+    skipped: { event_id: string; seq: number | null; reason: string; detail?: string },
+  ): Promise<void> {
+    this.db
+      .prepare(
+        `INSERT OR REPLACE INTO sync_skipped_events (cursor_key, event_id, seq, reason, detail, recorded_at)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+      )
+      .run(key, skipped.event_id, skipped.seq, skipped.reason, skipped.detail ?? null, Date.now());
+  }
+
+  /** The skipped-event record for one relay stream (#868). */
+  async listSkippedSyncEvents(
+    key: string,
+  ): Promise<
+    Array<{ event_id: string; seq: number | null; reason: string; detail: string | null }>
+  > {
+    return this.db
+      .prepare(
+        "SELECT event_id, seq, reason, detail FROM sync_skipped_events WHERE cursor_key = ? ORDER BY recorded_at, event_id",
+      )
+      .all(key) as Array<{
+      event_id: string;
+      seq: number | null;
+      reason: string;
+      detail: string | null;
+    }>;
+  }
+
+  /**
+   * Which of `eventIds` this store holds — by primary-key lookup, never a
+   * scan of the log (#868: the sync pull dedups each page with this).
+   */
+  async getHeldEventIds(eventIds: readonly string[]): Promise<Set<string>> {
+    const held = new Set<string>();
+    for (let i = 0; i < eventIds.length; i += 500) {
+      const chunk = eventIds.slice(i, i + 500);
+      const rows = this.db
+        .prepare(
+          `SELECT event_id FROM events WHERE event_id IN (${chunk.map(() => "?").join(", ")})`,
+        )
+        .all(...chunk) as Array<{ event_id: string }>;
+      for (const r of rows) held.add(r.event_id);
+    }
+    return held;
+  }
+
   async tombstone(eventId: string, motebitId: string): Promise<void> {
     this.stmtTombstone.run(eventId, motebitId);
   }

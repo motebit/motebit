@@ -9,6 +9,18 @@
 
 The event-sync transport cursor is the relay ingest sequence, not a device clock (#868; `spec/memory-delta-v1.md` §3.6). This is the ignored-package half; the published `motebit` half is in the sibling changeset.
 
-- `@motebit/relay`: migration v46 adds `relay_event_seq` (`seq INTEGER PRIMARY KEY AUTOINCREMENT`). It is stamped by an `AFTER INSERT ON events` trigger, so the seq is written in the same statement as the event and every writer is stamped. The migration backfills held events in rowid order. `GET /sync/:id/pull?after_seq=<n>` serves seq-ordered pages (`events[].seq`, `after_seq`, `next_seq`, `has_more`, `latest_seq`; at most 1000 per page, `limit` to lower it) through `readEventsAfterSeq`, which takes a `BoundIdentity` bound by the same presenter check as a push. A pull without `after_seq` is served byte for byte as before.
-- `@motebit/sync-engine`: new `seq-cursor.ts` (`SeqPullSource`, `SyncSeqCursorStore`, `pullBySeq`, `filterUnseen`, `resolveSeqCursorStore`). `HttpEventStoreAdapter.pullAfterSeq` sends both cursors in one request. `EncryptedEventStoreAdapter` passes it through and decrypts. `SyncEngine` pulls by seq whenever its remote supports it, and so does the `WebSocketEventStoreAdapter` catch-up. The cursor advances only after a page is appended, and only events the store did not already hold reach `onEvent`. A relay whose `latest_seq` falls below the cursor is re-read from 0.
-- `@motebit/persistence` (v50), `@motebit/desktop` (v8), `@motebit/mobile` (v28), `@motebit/browser-persistence` (IndexedDB v9): a `sync_seq_cursors` table or store beside `events`, and `getSyncSeqCursor` / `setSyncSeqCursor` on each surface's event store, so the cursor survives a restart.
+- `@motebit/relay`: migration v46 adds `relay_event_seq` (`PRIMARY KEY (motebit_id, seq)`, `event_id UNIQUE`) and `relay_event_seq_counter` (one row per identity, never decremented).
+  - An `AFTER INSERT ON events` trigger increments the identity's counter and writes the seq in the same statement as the event, so every writer is stamped.
+  - The seq is counted **per identity**, so a cursor reveals nothing about another identity's writes.
+  - It is never computed as `MAX + 1`, which would reissue a deleted top seq.
+  - The migration backfills held events per identity, in rowid order.
+  - `GET /sync/:id/pull?after_seq=<n>[&limit=<m>]` serves seq-ordered pages: `events[].seq`, `after_seq`, `next_seq`, `has_more`, and `latest_seq`, which comes from the counter. Pages hold at most 1000 events. The pages are read by `readEventsAfterSeq`, which takes a `BoundIdentity` bound by the same presenter check as a push.
+  - A pull without `after_seq` is served byte for byte as before.
+- `@motebit/sync-engine`: new `seq-cursor.ts` (`pullBySeq`, `SeqPullSource`, `SyncSeqCursorStore`, `SkippedSyncEvent`, `HeldEventIdLookup`, `filterUnseen`, `isEncryptedPayload`).
+  - A page is processed in a fixed order: dedup by `event_id` on the transport form, before any decryption; then decode each event on its own; then append; only then advance the cursor.
+  - An undecryptable event is recorded (`event_id`, `seq`, reason), reported through `onSkippedEvent` (default `console.warn`), and passed.
+  - A raw path never applies an E2E envelope, and raw and E2E keep separate cursors (`raw:…` / `e2e:raw:…`).
+  - `HttpEventStoreAdapter.pullAfterSeq` sends both cursors in one request.
+  - `EncryptedEventStoreAdapter` returns the transport form and exposes `decodeEvent`.
+  - `SyncEngine` and the `WebSocketEventStoreAdapter` catch-up both pull by seq. `SyncResult.skipped` is new.
+- `@motebit/persistence` (v50), `@motebit/desktop` (v8), `@motebit/mobile` (v28), `@motebit/browser-persistence` (IndexedDB v9): new `sync_seq_cursors` and `sync_skipped_events` tables or stores beside `events`. Each surface's event store gains `getSyncSeqCursor` / `setSyncSeqCursor`, `recordSkippedSyncEvent`, and `getHeldEventIds` (key lookups rather than a scan of the log).

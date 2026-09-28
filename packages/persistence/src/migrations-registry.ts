@@ -682,6 +682,19 @@ export const PERSISTENCE_MIGRATIONS: readonly Migration[] = [
         seq INTEGER NOT NULL,
         updated_at INTEGER NOT NULL
       )`,
+      // A pulled event the stream moved past WITHOUT applying — one this
+      // device cannot decrypt (a key rotated away), or an E2E payload seen on
+      // a raw path. Recorded, never silent: the cursor passes it so one bad
+      // event cannot stop sync, and this row says what was passed and why.
+      `CREATE TABLE IF NOT EXISTS sync_skipped_events (
+        cursor_key TEXT NOT NULL,
+        event_id TEXT NOT NULL,
+        seq INTEGER,
+        reason TEXT NOT NULL,
+        detail TEXT,
+        recorded_at INTEGER NOT NULL,
+        PRIMARY KEY (cursor_key, event_id)
+      )`,
     ],
   },
 ];

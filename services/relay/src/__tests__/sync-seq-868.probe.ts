@@ -168,3 +168,132 @@ it("old-client pulls are byte-identical; the same-clock sibling event reaches th
     JSON.parse((await raw(old, "?after_seq=0")).slice(4)) as object,
   );
 });
+
+// ── round 2: the E2E socket catch-up path (every WS surface) ─────────────
+interface E2eModule {
+  EncryptedEventStoreAdapter: new (cfg: {
+    inner: EventStoreAdapter;
+    key: Uint8Array;
+  }) => EventStoreAdapter;
+  WebSocketEventStoreAdapter: new (cfg: {
+    url: string;
+    motebitId: string;
+    httpFallback: EventStoreAdapter;
+    localStore: EventStoreAdapter;
+    onCatchUp?: (n: number) => void;
+  }) => { connect(): void; disconnect(): void };
+}
+
+class ProbeSocket {
+  static last: ProbeSocket | null = null;
+  readyState = 1;
+  onopen: (() => void) | null = null;
+  onmessage: ((e: { data: string }) => void) | null = null;
+  onclose: (() => void) | null = null;
+  onerror: (() => void) | null = null;
+  constructor(readonly url: string) {
+    ProbeSocket.last = this;
+  }
+  send(): void {}
+  close(): void {}
+}
+
+const K1 = new Uint8Array(32).fill(1);
+const K2 = new Uint8Array(32).fill(2);
+const KX = new Uint8Array(32).fill(99);
+
+it("E2E socket catch-up: rotation, poison, raw-then-E2E; and the per-identity seq", async () => {
+  const m = se as unknown as E2eModule;
+  const g = globalThis as { WebSocket?: unknown };
+  const realWs = g.WebSocket;
+  g.WebSocket = ProbeSocket;
+  const http = (mid: string) =>
+    new se.HttpEventStoreAdapter({
+      baseUrl: base,
+      motebitId: mid,
+      authToken: API_TOKEN,
+      maxRetries: 0,
+    });
+  const encPush = (mid: string, key: Uint8Array, e: EventLogEntry) =>
+    new m.EncryptedEventStoreAdapter({ inner: http(mid), key }).append(e);
+  const catchUp = async (mid: string, store: EventStoreAdapter, key: Uint8Array) => {
+    let done = -1;
+    const ws = new m.WebSocketEventStoreAdapter({
+      url: `ws://127.0.0.1/ws/sync/${mid}`,
+      motebitId: mid,
+      httpFallback: new m.EncryptedEventStoreAdapter({ inner: http(mid), key }),
+      localStore: store,
+      onCatchUp: (n) => (done = n),
+    });
+    ws.connect();
+    ProbeSocket.last!.onopen?.();
+    for (let i = 0; i < 200 && done < 0; i++) await new Promise((r) => setTimeout(r, 10));
+    ws.disconnect();
+  };
+  const plainHeld = async (s: InMemoryEventStore, mid: string) =>
+    (await s.query({}))
+      .map((e) => {
+        const enc = (e.payload as { _encrypted?: boolean })._encrypted === true;
+        return roles(e.event_id, mid).replace("-<MID>", "") + (enc ? " (ciphertext)" : "");
+      })
+      .sort();
+  try {
+    // rotatedWs: old-1 held under k1; the identity key rotates; new-2 under k2.
+    {
+      const mid = crypto.randomUUID();
+      const store = new InMemoryEventStore();
+      await encPush(mid, K1, ev(mid, "old-1", 1, "a"));
+      await catchUp(mid, store, K1);
+      await encPush(mid, K2, ev(mid, "new-2", 2, "a"));
+      await catchUp(mid, store, K2);
+      obs["rotatedWs: held after the post-rotation catch-up"] = await plainHeld(store, mid);
+    }
+    // poisonWs: this device holds its own events to clock 5; an event no key
+    // opens sits at clock 3; a sibling writes sib-9 at clock 9.
+    {
+      const mid = crypto.randomUUID();
+      const store = new InMemoryEventStore();
+      for (let c = 1; c <= 5; c++) {
+        const e = ev(mid, `own-${c}`, c, "a");
+        await store.append(e);
+        await encPush(mid, K1, e);
+      }
+      await encPush(mid, KX, ev(mid, "poison-3", 3, "x"));
+      await encPush(mid, K1, ev(mid, "sib-9", 9, "b"));
+      await catchUp(mid, store, K1);
+      obs["poisonWs: sib-9 held"] = (await plainHeld(store, mid)).includes("sib-9");
+    }
+    // rawThenEnc: own event at clock 5; an E2E sibling at clock 3. The raw
+    // path (mobile syncNow / the CLI daemon's HTTP fallback) pulls first over
+    // the SAME store, then the E2E socket catch-up.
+    {
+      const mid = crypto.randomUUID();
+      const store = new InMemoryEventStore();
+      const own = ev(mid, "own-5", 5, "a");
+      await store.append(own);
+      await encPush(mid, K1, own);
+      await encPush(mid, K1, ev(mid, "sib", 3, "b"));
+      const rawEngine = new se.SyncEngine(store, mid);
+      rawEngine.connectRemote(http(mid));
+      await rawEngine.sync();
+      await catchUp(mid, store, K1);
+      const heldList = await plainHeld(store, mid);
+      obs["rawThenEnc"] = {
+        sibHeld: heldList.some((h) => h.startsWith("sib")),
+        sibPayloadEncrypted: heldList.includes("sib (ciphertext)"),
+      };
+    }
+  } finally {
+    g.WebSocket = realWs;
+  }
+
+  // The seq side channel: A writes, B writes seven, A writes again.
+  const A = crypto.randomUUID();
+  const B = crypto.randomUUID();
+  await push(A, [ev(A, "a1", 1, "a")]);
+  for (let i = 0; i < 7; i++) await push(B, [ev(B, `b${i}`, i, "b")]);
+  await push(A, [ev(A, "a2", 2, "a")]);
+  const r = await fetch(`${base}/sync/${A}/pull?after_seq=0`, { headers: AUTH_HEADER });
+  const body = (await r.json()) as { events: Array<{ seq?: number }> };
+  obs["seq gap: A's seqs around B's seven writes"] = body.events.map((e) => e.seq ?? null);
+});

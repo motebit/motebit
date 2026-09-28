@@ -67,6 +67,29 @@ describe("SqliteEventStore", () => {
     expect(await new SqliteEventStore(mdb.db).getSyncSeqCursor(a)).toBe(9);
   });
 
+  it("answers which event_ids it holds by key, and records skipped sync events (#868, v50)", async () => {
+    await mdb.eventStore.append(makeEvent({ event_id: "held-1" }));
+    await mdb.eventStore.append(makeEvent({ event_id: "held-2" }));
+    const many = Array.from({ length: 1200 }, (_, i) => `absent-${i}`);
+    const held = await mdb.eventStore.getHeldEventIds(["held-1", ...many, "held-2"]);
+    expect([...held].sort()).toEqual(["held-1", "held-2"]);
+    const key = "e2e:raw:http://relay.one#motebit-1";
+    await mdb.eventStore.recordSkippedSyncEvent(key, {
+      event_id: "x",
+      seq: 4,
+      reason: "undecryptable",
+      detail: "Encryption key not found for version 1",
+    });
+    await mdb.eventStore.recordSkippedSyncEvent(key, {
+      event_id: "x",
+      seq: 4,
+      reason: "undecryptable",
+    });
+    expect(await mdb.eventStore.listSkippedSyncEvents(key)).toEqual([
+      { event_id: "x", seq: 4, reason: "undecryptable", detail: null },
+    ]);
+  });
+
   it("appends and queries events", async () => {
     const event = makeEvent();
     await mdb.eventStore.append(event);

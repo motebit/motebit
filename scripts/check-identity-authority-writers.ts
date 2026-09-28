@@ -432,6 +432,23 @@ const WRITERS: readonly Writer[] = [
   },
   {
     file: R + "migrations.ts",
+    verb: "REPLACE",
+    table: "relay_event_seq_counter",
+    count: 1,
+    principal:
+      MIGRATION +
+      " (v46 sets each identity's per-identity seq counter to the last number the backfill gave that identity's OWN events)",
+  },
+  {
+    file: R + "migrations.ts",
+    verb: "INSERT",
+    table: "relay_event_seq_counter",
+    count: 1,
+    principal:
+      "the `relay_event_seq_stamp` TRIGGER (v46, #868) — increments the counter of NEW.motebit_id only, inside the INSERT into `events` it stamps; keyed on the identity column, so its principal is exactly the event write's (EVENT_APPENDS). Never decremented",
+  },
+  {
+    file: R + "migrations.ts",
     verb: "DELETE",
     table: "relay_event_seq",
     count: 1,

@@ -107,22 +107,30 @@ export class EncryptedEventStoreAdapter implements EventStoreAdapter {
   }
 
   /**
-   * The inner source's seq-cursor key, when the inner adapter pulls by the
-   * relay ingest sequence (#868); otherwise undefined, and this adapter is
-   * not a seq source (`isSeqPullSource` is false).
+   * The E2E-mode seq-cursor key over the inner source's stream, when the
+   * inner adapter pulls by the relay ingest sequence (#868); otherwise
+   * undefined, and this adapter is not a seq source. Distinct from the raw
+   * key, so a raw pull over the same store never advances this cursor.
    */
   get seqCursorKey(): string | undefined {
-    return isSeqPullSource(this.inner) ? this.inner.seqCursorKey : undefined;
+    return isSeqPullSource(this.inner) ? `e2e:${this.inner.seqCursorKey}` : undefined;
   }
 
-  /** Pull by seq through the inner source, decrypting each entry. */
+  /**
+   * Pull by seq through the inner source. Returns the TRANSPORT form —
+   * payloads still encrypted — so the caller can drop events it already
+   * holds BEFORE decrypting any; `decodeEvent` decrypts one at a time.
+   */
   async pullAfterSeq(afterSeq: number, fallbackAfterClock: number): Promise<SeqPullResult> {
     if (!isSeqPullSource(this.inner)) {
       throw new Error("encrypted-adapter: the inner adapter does not pull by seq");
     }
-    const res = await this.inner.pullAfterSeq(afterSeq, fallbackAfterClock);
-    const events = await Promise.all(res.events.map((e) => this.decryptEntry(e)));
-    return { ...res, events };
+    return this.inner.pullAfterSeq(afterSeq, fallbackAfterClock);
+  }
+
+  /** Decrypt one pulled entry; throws when it cannot (the caller records and moves past it). */
+  decodeEvent(event: EventLogEntry): Promise<EventLogEntry> {
+    return this.decryptEntry(event);
   }
 
   async appendWithClock(entry: Omit<EventLogEntry, "version_clock">): Promise<number> {
