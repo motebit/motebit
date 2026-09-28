@@ -3,6 +3,10 @@ import {
   fetchPendingWithdrawals,
   completeWithdrawal,
   failWithdrawal,
+  reconcileWithdrawal,
+  fetchPreClaimWithdrawals,
+  isPayoutInFlight,
+  reconcilableAt,
   fetchFederationPeers,
   fetchRelayIdentity,
   fetchTransparencyDeclared,
@@ -82,6 +86,78 @@ describe("failWithdrawal", () => {
     const init = call[1] as RequestInit;
     expect(init.method).toBe("POST");
     expect(init.body).toBe(JSON.stringify({ reason: "rail bounced" }));
+  });
+});
+
+describe("reconcileWithdrawal (#921)", () => {
+  it("POSTs outcome + attestation to .../reconcile, omitting an empty payout reference", async () => {
+    mockFetch({ withdrawal_id: "w1", status: "failed", refunded: true });
+    await reconcileWithdrawal("w1", {
+      outcome: "not_paid",
+      attestation: "nothing landed",
+      payoutReference: "",
+    });
+    const call = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0]!;
+    expect(call[0]).toBe(`${config.apiUrl}/api/v1/admin/withdrawals/w1/reconcile`);
+    const init = call[1] as RequestInit;
+    expect(init.method).toBe("POST");
+    expect(JSON.parse(init.body as string)).toEqual({
+      outcome: "not_paid",
+      attestation: "nothing landed",
+    });
+    expectAuthHeader(call);
+  });
+
+  it("carries the payout reference for paid", async () => {
+    mockFetch({ withdrawal_id: "w1", status: "completed" });
+    await reconcileWithdrawal("w1", {
+      outcome: "paid",
+      attestation: "seen",
+      payoutReference: "sig",
+    });
+    const call = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0]!;
+    expect(JSON.parse((call[1] as RequestInit).body as string)).toEqual({
+      outcome: "paid",
+      attestation: "seen",
+      payout_reference: "sig",
+    });
+  });
+});
+
+describe("fetchPreClaimWithdrawals (#921)", () => {
+  it("GETs the read-only pre-claim report", async () => {
+    mockFetch({ claim_epoch: 1, withdrawals: [], count: 0 });
+    await fetchPreClaimWithdrawals();
+    const call = (globalThis.fetch as ReturnType<typeof vi.fn>).mock.calls[0]!;
+    expect(call[0]).toBe(`${config.apiUrl}/api/v1/admin/withdrawals/pre-claim`);
+    expect((call[1] as RequestInit | undefined)?.method ?? "GET").toBe("GET");
+  });
+});
+
+describe("isPayoutInFlight / reconcilableAt (#921)", () => {
+  it("recognizes only the relay's 409 payout-in-flight answer", () => {
+    expect(
+      isPayoutInFlight(new ApiError(409, "Conflict", '{"error":"WITHDRAWAL_PAYOUT_IN_FLIGHT"}')),
+    ).toBe(true);
+    expect(
+      isPayoutInFlight(new ApiError(409, "Conflict", '{"error":"WITHDRAWAL_NOT_PROCESSING"}')),
+    ).toBe(false);
+    expect(isPayoutInFlight(new ApiError(500, "Error", "WITHDRAWAL_PAYOUT_IN_FLIGHT"))).toBe(false);
+    expect(isPayoutInFlight(new Error("WITHDRAWAL_PAYOUT_IN_FLIGHT"))).toBe(false);
+  });
+
+  it("opens reconcile at claim + window, only for processing rows", () => {
+    const base = {
+      withdrawal_id: "w",
+      motebit_id: "m",
+      amount: 1,
+      destination: "d",
+      requested_at: 0,
+    };
+    expect(reconcilableAt({ ...base, status: "processing", claimed_at: 1_000 }, 500)).toBe(1_500);
+    expect(reconcilableAt({ ...base, status: "processing", claimed_at: null }, 500)).toBe(0);
+    expect(reconcilableAt({ ...base, status: "pending" }, 500)).toBeNull();
+    expect(reconcilableAt(base, 500)).toBeNull();
   });
 });
 

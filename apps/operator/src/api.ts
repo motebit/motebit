@@ -48,18 +48,97 @@ async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
 export interface WithdrawalRequest {
   withdrawal_id: string;
   motebit_id: string;
+  /** Decimal USD — the relay converts micro-units at the admin boundary. */
   amount: number;
   destination: string;
   requested_at: number;
+  /**
+   * `pending` (no payout attempted) or `processing` (a payout claimed it and
+   * was handed to a rail — "payout in flight", #921). Absent on an older
+   * relay: read as `pending`.
+   */
+  status?: string;
+  /** When a payout claimed the withdrawal; null/absent when none did. */
+  claimed_at?: number | null;
+  /** On a `processing` row, why its payout outcome is unresolved. */
+  failure_reason?: string | null;
+  /**
+   * A `pending` row written before the relay claimed payouts, to a Solana or
+   * 0x destination: its payout may have been attempted — check the chain
+   * before failing it.
+   */
+  payout_may_have_been_attempted?: boolean;
 }
 
 export interface PendingWithdrawalsResponse {
   withdrawals: WithdrawalRequest[];
   count: number;
+  /** How long after its claim a `processing` row becomes reconcilable. */
+  reconcile_min_age_ms?: number;
+  claim_epoch?: number | null;
 }
 
 export function fetchPendingWithdrawals(signal?: AbortSignal): Promise<PendingWithdrawalsResponse> {
   return apiFetch<PendingWithdrawalsResponse>(`/api/v1/admin/withdrawals/pending`, { signal });
+}
+
+/**
+ * Read-only: every `pending` withdrawal that predates the relay's claim-
+ * before-send (#921), to a Solana or 0x destination. Check each on chain
+ * before failing it.
+ */
+export function fetchPreClaimWithdrawals(
+  signal?: AbortSignal,
+): Promise<{ claim_epoch: number | null; withdrawals: WithdrawalRequest[]; count: number }> {
+  return apiFetch(`/api/v1/admin/withdrawals/pre-claim`, { signal });
+}
+
+export type ReconcileOutcome = "paid" | "not_paid";
+
+export interface ReconcileArgs {
+  outcome: ReconcileOutcome;
+  /** What the operator verified on chain. Required by the relay. */
+  attestation: string;
+  /** Required for `paid`: the transfer that paid it. */
+  payoutReference?: string;
+}
+
+/**
+ * Settle a `processing` withdrawal whose payout outcome is unknown (#921).
+ * The relay refuses (409) while the payout may still be in flight.
+ */
+export function reconcileWithdrawal(
+  withdrawalId: string,
+  args: ReconcileArgs,
+): Promise<{ withdrawal_id: string; status: string; refunded?: boolean }> {
+  const body: Record<string, string> = { outcome: args.outcome, attestation: args.attestation };
+  if (args.payoutReference != null && args.payoutReference !== "") {
+    body["payout_reference"] = args.payoutReference;
+  }
+  return apiFetch(`/api/v1/admin/withdrawals/${withdrawalId}/reconcile`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
+
+/** The relay's answer to acting on a withdrawal whose payout is in flight (#921). */
+export function isPayoutInFlight(err: unknown): boolean {
+  return (
+    err instanceof ApiError &&
+    err.status === 409 &&
+    err.body.includes("WITHDRAWAL_PAYOUT_IN_FLIGHT")
+  );
+}
+
+/**
+ * When a `processing` withdrawal becomes reconcilable — its claim plus the
+ * relay's window — or null when it is not `processing`. A row with no
+ * recorded claim time is reconcilable now (the relay treats it the same).
+ */
+export function reconcilableAt(w: WithdrawalRequest, minAgeMs: number): number | null {
+  if (w.status !== "processing") return null;
+  return w.claimed_at != null ? w.claimed_at + minAgeMs : 0;
 }
 
 export function completeWithdrawal(

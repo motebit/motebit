@@ -30,6 +30,7 @@ import { X402SettlementRail } from "@motebit/settlement-rails";
 import type { SyncRelay } from "../index.js";
 import { creditAccount, getAccountBalance, getTransactions } from "../accounts.js";
 import { RECONCILE_MIN_AGE_MS } from "../budget.js";
+import { createWithdrawalTables } from "../account-store-sqlite.js";
 import { evaluateAndFireRail, enqueuePendingWithdrawal } from "../batch-withdrawals.js";
 import { AUTH_HEADER, createTestRelay, jsonAuthWithIdempotency } from "./test-helpers.js";
 
@@ -568,5 +569,65 @@ describe("#921 batch withdrawals: a fired, unconfirmed payout is processing", ()
     expect((await admin(relay, id, "fail", { reason: "operator" })).status).toBe(409);
     expect(balance(relay, mid)).toBe(before);
     expect(refundCount(relay, mid, id)).toBe(0);
+  });
+});
+
+describe("#921 pre-claim rows: pending withdrawals written before claims were recorded", () => {
+  it("flags exactly the pre-epoch pending rows with an auto-settle destination, in /pending and /pre-claim", async () => {
+    // No payout adapter: every Solana withdrawal stays `pending` (nothing claimed).
+    relay = await createTestRelay({ enableDeviceAuth: false });
+    const mid = "zz921-preclaim";
+    await registerAndFund(relay, mid);
+    const w = async (destination: string): Promise<string> =>
+      ((await (await startWithdraw(relay!, mid, { destination })).json()) as WithdrawBody)
+        .withdrawal.withdrawal_id;
+    const oldSolana = await w(DEST);
+    const oldManual = await w("pending");
+    // The claiming code first ran AFTER those (the deploy).
+    relay.moteDb.db
+      .prepare("UPDATE relay_withdrawal_claim_epoch SET since = ? WHERE id = 1")
+      .run(Date.now() + 5);
+    await new Promise((r) => setTimeout(r, 10));
+    const newSolana = await w(DEST);
+
+    const pendingRes = await relay.app.request("/api/v1/admin/withdrawals/pending", {
+      headers: AUTH_HEADER,
+    });
+    const pending = (await pendingRes.json()) as {
+      withdrawals: Array<{ withdrawal_id: string; payout_may_have_been_attempted: boolean }>;
+      reconcile_min_age_ms: number;
+    };
+    expect(pending.reconcile_min_age_ms).toBe(RECONCILE_MIN_AGE_MS);
+    const flagged = new Map(
+      pending.withdrawals.map((x) => [x.withdrawal_id, x.payout_may_have_been_attempted]),
+    );
+    expect(flagged.get(oldSolana)).toBe(true);
+    expect(flagged.get(oldManual)).toBe(false);
+    expect(flagged.get(newSolana)).toBe(false);
+
+    const reportRes = await relay.app.request("/api/v1/admin/withdrawals/pre-claim", {
+      headers: AUTH_HEADER,
+    });
+    expect(reportRes.status).toBe(200);
+    const report = (await reportRes.json()) as { withdrawals: Array<{ withdrawal_id: string }> };
+    expect(report.withdrawals.map((x) => x.withdrawal_id)).toEqual([oldSolana]);
+    // Master-token only.
+    const anon = await relay.app.request("/api/v1/admin/withdrawals/pre-claim");
+    expect(anon.status).toBe(401);
+  });
+
+  it("the claim epoch is written once and never moves on a later boot", async () => {
+    relay = await createTestRelay({ enableDeviceAuth: false });
+    const read = (): number[] =>
+      (
+        relay!.moteDb.db.prepare("SELECT since FROM relay_withdrawal_claim_epoch").all() as Array<{
+          since: number;
+        }>
+      ).map((r) => r.since);
+    const first = read();
+    expect(first).toHaveLength(1);
+    await new Promise((r) => setTimeout(r, 5));
+    createWithdrawalTables(relay.moteDb.db); // a later boot
+    expect(read()).toEqual(first);
   });
 });

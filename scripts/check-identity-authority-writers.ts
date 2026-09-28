@@ -516,9 +516,9 @@ const WRITERS: readonly Writer[] = [
     file: R + "account-store-sqlite.ts",
     verb: "UPDATE",
     table: "relay_withdrawals",
-    count: 8,
+    count: 6,
     principal:
-      "withdrawal lifecycle: the operator's admin routes (master token) — /complete and /fail act FROM `pending` only and refuse a `processing` withdrawal 409; /reconcile acts FROM `processing` only, never while the payout is awaited in-process or within RECONCILE_MIN_AGE_MS of its claim, and only on an explicit operator attestation (#921) — the relay's rail loops (" +
+      "withdrawal lifecycle: (no blind status setter: `updateWithdrawalStatus` was deleted, #921) the operator's admin routes (master token) — /complete and /fail act FROM `pending` only and refuse a `processing` withdrawal 409; /reconcile acts FROM `processing` only, never while the payout is awaited in-process or within RECONCILE_MIN_AGE_MS of its claim, and only on an explicit operator attestation (#921) — the relay's rail loops (" +
       LOOP +
       "), and /withdraw's Path 0 / Path 1 auto-settle under `requireFirstPerson` on the withdrawal that same request created: the payout is sent only after `claimWithdrawalForPayout` (the CAS `pending → processing`, stamping claimed_at; a lost claim sends nothing, #921); then completed FROM `processing` only on a confirmed send; failed-and-refunded (`failWithdrawalAndRefund`, one transaction, status CAS on the named from-state so at most once) only on a send that landed and failed on-chain AND whose earlier broadcasts the adapter proved dead; otherwise left `processing` with an unresolved-payout note (`noteWithdrawalPayoutUnresolved`, failure_reason only, no status or balance change) (#920); the outcome comes from the chain adapter, never from the request body",
   },

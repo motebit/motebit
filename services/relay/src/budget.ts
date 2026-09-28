@@ -35,6 +35,7 @@ import {
   fromMicro,
 } from "./accounts.js";
 import { checkIdempotency, completeIdempotency } from "./idempotency.js";
+import { getWithdrawalClaimEpoch } from "./account-store-sqlite.js";
 import Stripe from "stripe";
 import type { SettlementRailRegistry, StripeSettlementRail } from "@motebit/settlement-rails";
 import type { WithdrawalRequest } from "@motebit/virtual-accounts";
@@ -51,6 +52,29 @@ const logger = createLogger({ service: "budget" });
  * round trip.
  */
 export const RECONCILE_MIN_AGE_MS = 15 * 60 * 1000;
+
+/** Destination shapes an automated payout path serves: Path 0 (Solana base58), Path 1 (EVM 0x). */
+const SOLANA_DEST_RE = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
+const EVM_DEST_RE = /^0x[0-9a-fA-F]{40}$/;
+
+/**
+ * A `pending` withdrawal written before this ledger claimed payouts (#921),
+ * to a destination an automated path pays: its payout may have been
+ * attempted (and may have landed) with no claim recorded, so a manual
+ * `/fail` could refund a payout that paid. Over-inclusive by design — a row
+ * whose automated path was not configured is listed too.
+ */
+export function payoutMayHaveBeenAttempted(
+  w: Pick<WithdrawalRequest, "status" | "requested_at" | "destination">,
+  claimEpoch: number | null,
+): boolean {
+  return (
+    w.status === "pending" &&
+    claimEpoch !== null &&
+    w.requested_at < claimEpoch &&
+    (SOLANA_DEST_RE.test(w.destination) || EVM_DEST_RE.test(w.destination))
+  );
+}
 
 /**
  * Map a ledger withdrawal row to the market-v1 §2.9 wire record: convert
@@ -383,9 +407,8 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
     // atomically — see the outcome rule below.
     let autoSettled = false;
     const isSolanaDest =
-      result.destination !== "pending" && /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(result.destination);
-    const isWalletDest =
-      result.destination !== "pending" && /^0x[0-9a-fA-F]{40}$/.test(result.destination);
+      result.destination !== "pending" && SOLANA_DEST_RE.test(result.destination);
+    const isWalletDest = result.destination !== "pending" && EVM_DEST_RE.test(result.destination);
 
     // The claim (#921). Returns true only when THIS request moved the row
     // `pending → processing`; the caller sends nothing on false.
@@ -780,12 +803,44 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
 
   // --- Admin: pending withdrawals ---
   /** @internal */
+  // Lists `pending` AND `processing` rows. Each carries `status` and
+  // `claimed_at`; `reconcile_min_age_ms` lets the console gate its reconcile
+  // action on the same window the route enforces, and
+  // `payout_may_have_been_attempted` flags a pre-#921 row (see
+  // `payoutMayHaveBeenAttempted`).
   app.get("/api/v1/admin/withdrawals/pending", (c) => {
+    const claimEpoch = getWithdrawalClaimEpoch(moteDb.db);
     const withdrawals = getPendingWithdrawals(moteDb.db).map((w) => ({
       ...w,
       amount: fromMicro(w.amount),
+      payout_may_have_been_attempted: payoutMayHaveBeenAttempted(w, claimEpoch),
     }));
-    return c.json({ withdrawals, count: withdrawals.length });
+    return c.json({
+      withdrawals,
+      count: withdrawals.length,
+      reconcile_min_age_ms: RECONCILE_MIN_AGE_MS,
+      claim_epoch: claimEpoch,
+    });
+  });
+
+  // --- Admin: pre-#921 withdrawals to check on chain (read-only) ---
+  //
+  // Every `pending` withdrawal requested before this ledger claimed payouts,
+  // to a Solana or 0x destination. Before #921 an automated send left no
+  // claim, so any of these may have been paid; check the chain for each
+  // before the first manual /fail after deploy. Read-only.
+  /** @internal */
+  app.get("/api/v1/admin/withdrawals/pre-claim", (c) => {
+    const claimEpoch = getWithdrawalClaimEpoch(moteDb.db);
+    const withdrawals = getPendingWithdrawals(moteDb.db)
+      .filter((w) => payoutMayHaveBeenAttempted(w, claimEpoch))
+      .map((w) => ({ ...w, amount: fromMicro(w.amount) }));
+    return c.json({
+      claim_epoch: claimEpoch,
+      withdrawals,
+      count: withdrawals.length,
+      note: "a payout may have been attempted for each of these before claims were recorded — check the chain before failing",
+    });
   });
 
   // --- Admin: settling a withdrawal (#921) ---

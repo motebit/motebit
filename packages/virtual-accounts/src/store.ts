@@ -19,7 +19,6 @@ import type {
   VirtualAccount,
   WithdrawalRequest,
   WithdrawalOpenStatus,
-  WithdrawalStatus,
 } from "./types.js";
 
 export interface AccountStore {
@@ -108,7 +107,6 @@ export interface AccountStore {
 
   // ── Withdrawal lifecycle ────────────────────────────────────────
   insertWithdrawal(w: NewWithdrawal): WithdrawalRequest;
-  updateWithdrawalStatus(id: string, status: WithdrawalStatus, failureReason?: string): void;
   linkWithdrawalTransfer(id: string, payoutReference: string): boolean;
   /**
    * Claim a withdrawal for an automated payout (issue #921): the
@@ -466,16 +464,6 @@ export class InMemoryAccountStore implements AccountStore {
   }
 
   private readonly idempotencyIndex = new Map<string, string>();
-
-  updateWithdrawalStatus(id: string, status: WithdrawalStatus, failureReason?: string): void {
-    const w = this.withdrawals.get(id);
-    if (!w) return;
-    w.status = status;
-    if (failureReason !== undefined) w.failure_reason = failureReason;
-    if (status === "completed" || status === "failed") {
-      w.completed_at = this._now();
-    }
-  }
 
   linkWithdrawalTransfer(id: string, payoutReference: string): boolean {
     const w = this.withdrawals.get(id);

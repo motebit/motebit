@@ -24,7 +24,6 @@ import type {
   VirtualAccount,
   WithdrawalOpenStatus,
   WithdrawalRequest,
-  WithdrawalStatus,
 } from "@motebit/virtual-accounts";
 import { DISPUTE_WINDOW_MS } from "@motebit/virtual-accounts";
 
@@ -161,6 +160,31 @@ export function createWithdrawalTables(db: DatabaseDriver): void {
   if (!colNames.has("claimed_at")) {
     db.exec("ALTER TABLE relay_withdrawals ADD COLUMN claimed_at INTEGER");
   }
+
+  // #921: the moment this ledger first ran with claim-before-send. A
+  // `pending` withdrawal requested BEFORE it, to a destination an automated
+  // path pays (Solana / 0x), may have had its payout attempted with no claim
+  // recorded — the operator must check the chain before failing it. Written
+  // once (first boot of the claiming code), never updated.
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS relay_withdrawal_claim_epoch (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      since INTEGER NOT NULL
+    );
+  `);
+  db.prepare("INSERT OR IGNORE INTO relay_withdrawal_claim_epoch (id, since) VALUES (1, ?)").run(
+    Date.now(),
+  );
+}
+
+/**
+ * When this ledger began claiming payouts before sending them (#921). See
+ * `createWithdrawalTables`. Null only if the table was never created.
+ */
+export function getWithdrawalClaimEpoch(db: DatabaseDriver): number | null {
+  const row = db.prepare("SELECT since FROM relay_withdrawal_claim_epoch WHERE id = 1").get() as
+    { since: number } | undefined;
+  return row?.since ?? null;
 }
 
 /** Create agent wallet table. Idempotent. Reserved for sovereign-rail wiring. */
@@ -397,20 +421,6 @@ export class SqliteAccountStore implements AccountStore {
       relay_signature: null,
       relay_public_key: null,
     };
-  }
-
-  updateWithdrawalStatus(id: string, status: WithdrawalStatus, failureReason?: string): void {
-    if (status === "failed") {
-      this.db
-        .prepare(
-          "UPDATE relay_withdrawals SET status = 'failed', failure_reason = ?, completed_at = ? WHERE withdrawal_id = ?",
-        )
-        .run(failureReason ?? null, Date.now(), id);
-    } else {
-      this.db
-        .prepare("UPDATE relay_withdrawals SET status = ? WHERE withdrawal_id = ?")
-        .run(status, id);
-    }
   }
 
   linkWithdrawalTransfer(id: string, payoutReference: string): boolean {
