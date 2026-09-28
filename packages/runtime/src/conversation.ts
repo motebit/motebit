@@ -129,6 +129,37 @@ export interface ConversationDeps {
    * `runtime.getEffectiveSessionSensitivity` through.
    */
   getEffectiveSensitivity?: () => SensitivityLevel;
+  /**
+   * True while the in-flight turn runs ANOTHER principal's words (the
+   * runtime's per-turn foreign mark — `motebit_query`, a relay- or
+   * MCP-dispatched `motebit_task`, or the resume of such a turn's paused
+   * approval). While it is true this manager refuses every write of the
+   * owner's conversation: `pushExchange`, `pushActivation` and
+   * `injectIntermediateMessages` are no-ops — nothing enters the live
+   * history, nothing is appended to the store (so nothing syncs to the
+   * owner's other devices), and no title or summary is derived (#904).
+   *
+   * Why the floor lives HERE, on the state holder, rather than on each
+   * door: a stranger's text written as `role:"user"` is read by the next
+   * OWNER turn as something the owner said, and a memory that turn forms
+   * from it is stamped `user_stated` — `[from:user]` laundering one hop
+   * after #893 closed it at formation. Every writer of the owner's
+   * conversation reaches it through this class, so one predicate here
+   * covers every door, including one added later.
+   *
+   * The READ side is the same floor: while it is true, `trimmed()` and
+   * `liveHistory` return `[]` and `getSessionInfo()` returns null, so a
+   * foreign turn's context carries none of the owner's conversation,
+   * summary or session facts, and `clearSessionInfo()` leaves the owner's
+   * marker alone.
+   *
+   * The foreign exchange is NOT kept anywhere as conversation. What a
+   * foreign turn did is recorded where it belongs — the signed
+   * `ExecutionReceipt` (`motebit_task`), the tool audit, and `peer_agent`
+   * memories (#893) — never as owner history. Optional so bare fixtures
+   * without a runtime still construct; the runtime always wires it.
+   */
+  isForeignPrincipalTurn?: () => boolean;
 }
 
 /** Default context window budget — conservative to fit most models. */
@@ -144,6 +175,11 @@ export class ConversationManager {
   private autoTitlePending = false;
 
   constructor(private readonly deps: ConversationDeps) {}
+
+  /** The #904 floor: is the in-flight turn another principal's? See `ConversationDeps.isForeignPrincipalTurn`. */
+  private isForeignTurn(): boolean {
+    return this.deps.isForeignPrincipalTurn?.() === true;
+  }
 
   /**
    * Compute the sensitivity tier to stamp on a newly-persisted
@@ -192,10 +228,15 @@ export class ConversationManager {
   }
 
   getSessionInfo(): { continued: boolean; lastActiveAt: number } | null {
+    // #904 read side: the owner's session facts are the owner's interior.
+    if (this.isForeignTurn()) return null;
     return this.sessionInfo;
   }
 
   clearSessionInfo(): void {
+    // #904: a foreign turn never consumes the owner's "first message after
+    // resume" marker — it was never shown that turn.
+    if (this.isForeignTurn()) return;
     this.sessionInfo = null;
   }
 
@@ -271,6 +312,11 @@ export class ConversationManager {
    * into BYOK without this filter.
    */
   trimmed(): ConversationMessage[] {
+    // #904 read side: a foreign principal's turn is built WITHOUT the owner's
+    // conversation — no history, no stored summary (the same isolation
+    // `handleAgentTask` gets from `clearForTask`). The owner's interior is
+    // never served to another principal (#880).
+    if (this.isForeignTurn()) return [];
     const summary = this.getStoredSummary();
     const effective = this.deps.getEffectiveSensitivity?.() ?? SensitivityLevel.None;
     const filtered = this.history.filter(
@@ -284,6 +330,8 @@ export class ConversationManager {
   /** Record only an assistant message (no user message). Used for system-triggered
    *  generation like first-contact activation where there is no user input. */
   pushActivation(assistantResponse: string): void {
+    // #904: a foreign principal's turn never writes the owner's conversation.
+    if (this.isForeignTurn()) return;
     const cleaned = stripInternalTags(assistantResponse).trim();
     const sensitivity = this.resolveMessageSensitivity();
     this.history.push({ role: "assistant", content: cleaned, sensitivity });
@@ -304,6 +352,9 @@ export class ConversationManager {
   }
 
   pushExchange(userMessage: string, assistantResponse: string): void {
+    // #904: a foreign principal's words never enter the owner's history as
+    // `role:"user"` — not live, not persisted, not synced, not summarized.
+    if (this.isForeignTurn()) return;
     const cleaned = stripInternalTags(assistantResponse).trim();
     const sensitivity = this.resolveMessageSensitivity();
     this.history.push(
@@ -586,11 +637,16 @@ export class ConversationManager {
    * pushExchange().
    */
   injectIntermediateMessages(...messages: ConversationMessage[]): void {
+    // #904: a foreign turn's tool call/result pair is that turn's scratch,
+    // never the owner's history (the resume builds its own copy).
+    if (this.isForeignTurn()) return;
     this.history.push(...messages);
   }
 
   /** Return the raw live history reference for continuation turns. */
   get liveHistory(): ConversationMessage[] {
+    // #904 read side: a foreign resume continues over its own pair only.
+    if (this.isForeignTurn()) return [];
     return this.history;
   }
 

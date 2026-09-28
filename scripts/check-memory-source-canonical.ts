@@ -393,8 +393,193 @@ function main(): void {
     process.exit(1);
   }
 
+  // === Authorship scan (d): a foreign turn never writes the owner's history
+  //
+  // #904: a foreign turn's exchange pushed into the owner's conversation
+  // reached the NEXT owner turn as `role:"user"`, so a memory that turn
+  // formed from it was `user_stated` — scan (c)'s laundering, one hop
+  // later — and the store row synced to the owner's other devices as the
+  // owner's own conversation. The floor is the state holder's, read from
+  // the per-turn mark, so no door can forget it:
+  //   (i)   no non-test runtime file outside `conversation.ts` writes a
+  //         conversation store (`.appendMessage(` / `.createConversation(`)
+  //         — every writer of the owner's conversation goes through
+  //         `ConversationManager`;
+  //   (ii)  in `conversation.ts`, every method that appends to the store,
+  //         plus `injectIntermediateMessages`, opens with
+  //         `if (this.isForeignTurn()) return;`, and `isForeignTurn` reads
+  //         `this.deps.isForeignPrincipalTurn?.() === true`;
+  //   (iii) the runtime wires that dep from the one per-turn predicate
+  //         (`isForeignPrincipalTurn: () => this.isForeignPrincipalTurn()`);
+  //   (iv)  the approval TIMEOUT (which fires outside any turn, mark down)
+  //         skips a foreign expiry, and the resume continues a foreign turn
+  //         over a private copy (`pending.foreignPrincipal === true` branch).
+  //   (v)   READ side (#904 round 2 — the owner's interior is never served
+  //         to another principal, #880's law): `trimmed()`, `liveHistory`,
+  //         `getSessionInfo()` and `clearSessionInfo()` each open with the
+  //         same `if (this.isForeignTurn()) return …` floor, so a foreign
+  //         turn's context carries no owner history, summary or session
+  //         facts, and cannot consume the owner's session marker;
+  //   (vi)  CONSENT: a foreign turn is not the human — every non-test
+  //         runtime line that releases the denial brake
+  //         (`.beginExchange()`), records user activity
+  //         (`_lastUserMessageAt =`) or sets aside a pending approval
+  //         (`.voidPendingApproval()`) is guarded by `_foreignTurn` on the
+  //         same line.
+  // Behavior: `foreign-turn-history.test.ts` (both doors, the store, a real
+  // sync push, the task, the resume, the timeout, the read side, the brake,
+  // the pending approval).
+  const historyViolations: string[] = [];
+  const CONV = "packages/runtime/src/conversation.ts";
+  let runtimeFilesScanned = 0;
+  let consentSites = 0;
+  for (const rel of walkTsFiles("packages/runtime/src")) {
+    if (rel.includes("__tests__") || rel === CONV) continue;
+    runtimeFilesScanned++;
+    const content = readFile(rel) ?? "";
+    const lines = content.split("\n");
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i] as string;
+      if (/^\s*(\*|\/\/|\/\*)/.test(line)) continue;
+      if (/\.(appendMessage|createConversation)\(/.test(line)) {
+        historyViolations.push(
+          `${rel}:${i + 1}: writes a conversation store outside ${CONV} — route the write through ConversationManager, whose floor refuses a foreign turn`,
+        );
+      }
+      if (
+        /\.beginExchange\(\)|\b_lastUserMessageAt\s*=[^=]|\.voidPendingApproval\(\)/.test(line) &&
+        !/^\s*(?:private |public )?_lastUserMessageAt\b/.test(line)
+      ) {
+        consentSites++;
+        if (!/_foreignTurn/.test(line)) {
+          historyViolations.push(
+            `${rel}:${i + 1}: releases the owner's denial brake, records user activity, or voids the owner's pending approval without a \`_foreignTurn\` guard on the same line — a foreign turn is not the human: ${line.trim()}`,
+          );
+        }
+      }
+    }
+  }
+  const convSrc = readFile(CONV) ?? "";
+  const convLines = convSrc.split("\n");
+  // Method starts at class-member indentation (two spaces), e.g. `  pushExchange(`.
+  const methodStarts: Array<{ name: string; line: number }> = [];
+  for (let i = 0; i < convLines.length; i++) {
+    const m = /^ {2}(?:private |async |public |get )*([A-Za-z_]\w*)\s*\([^)]*\).*\{\s*$/.exec(
+      convLines[i] as string,
+    );
+    if (m) methodStarts.push({ name: m[1] as string, line: i });
+  }
+  let guardedMethods = 0;
+  for (let k = 0; k < methodStarts.length; k++) {
+    const { name, line } = methodStarts[k] as { name: string; line: number };
+    const end =
+      k + 1 < methodStarts.length
+        ? (methodStarts[k + 1] as { line: number }).line
+        : convLines.length;
+    const body = convLines.slice(line + 1, end);
+    const writesStore = body.some((l) => /\.(appendMessage|createConversation)\(/.test(l));
+    if (!writesStore && name !== "injectIntermediateMessages") continue;
+    const firstStatement = body.find((l) => l.trim() !== "" && !/^\s*(\*|\/\/|\/\*)/.test(l));
+    if (
+      firstStatement === undefined ||
+      !/^\s*if \(this\.isForeignTurn\(\)\) return;/.test(firstStatement)
+    ) {
+      historyViolations.push(
+        `${CONV}: \`${name}\` writes the owner's conversation but does not open with \`if (this.isForeignTurn()) return;\` — found: ${(firstStatement ?? "(empty)").trim()}`,
+      );
+    } else {
+      guardedMethods++;
+    }
+  }
+  const READERS = ["trimmed", "liveHistory", "getSessionInfo", "clearSessionInfo"];
+  let guardedReaders = 0;
+  for (const reader of READERS) {
+    const k = methodStarts.findIndex((m) => m.name === reader);
+    if (k === -1) {
+      historyViolations.push(
+        `${CONV}: \`${reader}\` not found — the read-side floor has nowhere to live`,
+      );
+      continue;
+    }
+    const { line } = methodStarts[k] as { line: number };
+    const end =
+      k + 1 < methodStarts.length
+        ? (methodStarts[k + 1] as { line: number }).line
+        : convLines.length;
+    const firstStatement = convLines
+      .slice(line + 1, end)
+      .find((l) => l.trim() !== "" && !/^\s*(\*|\/\/|\/\*)/.test(l));
+    if (
+      firstStatement === undefined ||
+      !/^\s*if \(this\.isForeignTurn\(\)\) return\b/.test(firstStatement)
+    ) {
+      historyViolations.push(
+        `${CONV}: \`${reader}\` serves the owner's conversation to the turn's context but does not open with \`if (this.isForeignTurn()) return …\` — found: ${(firstStatement ?? "(empty)").trim()}`,
+      );
+    } else {
+      guardedReaders++;
+    }
+  }
+  if (consentSites < 3) {
+    historyViolations.push(
+      `packages/runtime/src: expected the three consent sites (beginExchange, _lastUserMessageAt, voidPendingApproval) — found ${consentSites}; if one moved, keep its \`_foreignTurn\` guard on the same line`,
+    );
+  }
+  if (guardedMethods < 3) {
+    historyViolations.push(
+      `${CONV}: expected the floor on pushExchange, pushActivation and injectIntermediateMessages — found ${guardedMethods} guarded writer(s)`,
+    );
+  }
+  if (
+    !/private isForeignTurn\(\): boolean \{\s*return this\.deps\.isForeignPrincipalTurn\?\.\(\) === true;/.test(
+      convSrc,
+    )
+  ) {
+    historyViolations.push(
+      `${CONV}: \`isForeignTurn()\` must return \`this.deps.isForeignPrincipalTurn?.() === true\``,
+    );
+  }
+  const bcdStart = runtimeSrc.indexOf("private buildConversationDeps(");
+  const bcdEnd = bcdStart === -1 ? -1 : runtimeSrc.indexOf("\n  }\n", bcdStart);
+  const bcdBody = bcdStart === -1 || bcdEnd === -1 ? "" : runtimeSrc.slice(bcdStart, bcdEnd);
+  if (!/isForeignPrincipalTurn: \(\) => this\.isForeignPrincipalTurn\(\)/.test(bcdBody)) {
+    historyViolations.push(
+      "packages/runtime/src/motebit-runtime.ts: `buildConversationDeps` must wire `isForeignPrincipalTurn: () => this.isForeignPrincipalTurn()` — the conversation floor reads the per-turn mark",
+    );
+  }
+  if (
+    !/if \(expired\.foreignPrincipal !== true\) \{\s*this\.deps\.injectIntermediateMessages\(/.test(
+      streamingSrc,
+    )
+  ) {
+    historyViolations.push(
+      "packages/runtime/src/streaming.ts: the approval timeout fires outside any turn — it must skip a foreign expiry (`if (expired.foreignPrincipal !== true) { this.deps.injectIntermediateMessages(… }`)",
+    );
+  }
+  if (
+    !/if \(pending\.foreignPrincipal === true\) \{\s*continuationHistory = \[\.\.\.this\.deps\.getLiveHistory\(\), \.\.\.continuationPair\];/.test(
+      streamingSrc,
+    )
+  ) {
+    historyViolations.push(
+      "packages/runtime/src/streaming.ts: a foreign resume must continue over a private copy (`continuationHistory = [...this.deps.getLiveHistory(), ...continuationPair]`), never inject into the owner's history",
+    );
+  }
+  if (historyViolations.length > 0) {
+    console.error(
+      "check-memory-source-canonical: a foreign principal's turn could write, read, or act as the owner's conversation (#904):",
+    );
+    for (const v of historyViolations) console.error(`  - ${v}`);
+    console.error("");
+    console.error(
+      "Repair: a foreign turn's words never enter the owner's history as `user`. Every conversation write goes through ConversationManager, whose writers open with `if (this.isForeignTurn()) return;`, wired in the runtime from `isForeignPrincipalTurn()`; the approval timeout skips a foreign expiry and a foreign resume continues over a private copy. Read side: `trimmed`, `liveHistory`, `getSessionInfo`, `clearSessionInfo` open with the same floor. Consent: `beginExchange`, `_lastUserMessageAt =` and `voidPendingApproval` stay behind `!this._foreignTurn`.",
+    );
+    console.error("Doctrine: docs/doctrine/memory-provenance.md § authorship.");
+    process.exit(1);
+  }
+
   console.log(
-    `✓ check-memory-source-canonical: ${MEMORY_SOURCES_REFERENCE.length} memory source(s) locked across union + ALL_MEMORY_SOURCES + gate reference; wire-format-compliant; model/peer authorship scans clean; foreign-turn provenance locked (resolver + ${aiCoreFilesScanned} other ai-core file(s) scanned, 7 wiring links checked).`,
+    `✓ check-memory-source-canonical: ${MEMORY_SOURCES_REFERENCE.length} memory source(s) locked across union + ALL_MEMORY_SOURCES + gate reference; wire-format-compliant; model/peer authorship scans clean; foreign-turn provenance locked (resolver + ${aiCoreFilesScanned} other ai-core file(s) scanned, 7 wiring links checked); foreign-turn history floor locked (${runtimeFilesScanned} other runtime file(s) scanned for conversation-store writes, ${guardedMethods} ConversationManager writer(s) + ${guardedReaders} reader(s) guarded, ${consentSites} consent site(s) guarded, 4 wiring links checked).`,
   );
 }
 
