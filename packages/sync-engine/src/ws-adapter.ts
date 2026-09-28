@@ -87,6 +87,13 @@ export class WebSocketEventStoreAdapter implements EventStoreAdapter {
   private reconnectAttempt = 0;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private stabilityTimer: ReturnType<typeof setTimeout> | null = null;
+  private authTimer: ReturnType<typeof setTimeout> | null = null;
+  /**
+   * Bumped by `disconnect()`. A connect still resolving its token or its
+   * WebSocket implementation when the adapter is disconnected must not open
+   * a socket afterwards (#816: a retired adapter came back to life).
+   */
+  private generation = 0;
   private connected = false;
   private pendingEvents: EventLogEntry[] = [];
 
@@ -107,7 +114,9 @@ export class WebSocketEventStoreAdapter implements EventStoreAdapter {
     // before establishing the connection. Falls back to static authToken.
     if (this.config.credentialSource) {
       const request: CredentialRequest = { serverUrl: this.config.url };
+      const generation = this.generation;
       void this.config.credentialSource.getCredential(request).then((token) => {
+        if (generation !== this.generation) return;
         this.connectWithToken(token ?? undefined);
       });
       return;
@@ -142,7 +151,11 @@ export class WebSocketEventStoreAdapter implements EventStoreAdapter {
     } else if (_wsPackage) {
       this.ws = new _wsPackage(url);
     } else {
-      void resolveWebSocket().then(() => this.connectWithToken(token));
+      const generation = this.generation;
+      void resolveWebSocket().then(() => {
+        if (generation !== this.generation) return;
+        this.connectWithToken(token);
+      });
       return;
     }
 
@@ -151,18 +164,23 @@ export class WebSocketEventStoreAdapter implements EventStoreAdapter {
       // wait for auth_result before considering the connection ready. Fail-closed:
       // rejection or 5s timeout closes the connection.
       if (token != null && token !== "") {
-        this.ws!.send(JSON.stringify({ type: "auth", token }));
+        const socket = this.ws!;
+        socket.send(JSON.stringify({ type: "auth", token }));
 
         const authTimeout = setTimeout(() => {
+          // This timer belongs to `socket`. If that socket is gone (dropped,
+          // replaced by a reconnect, or the adapter disconnected), it must
+          // not close or reconnect anything (#816).
+          if (this.ws !== socket) return;
+          this.authTimer = null;
           // Auth timed out — fail-closed
-          if (this.ws) {
-            this.ws.onclose = null;
-            this.ws.close();
-            this.ws = null;
-          }
+          socket.onclose = null;
+          socket.close();
+          this.ws = null;
           this.connected = false;
           this.scheduleReconnect();
         }, 5_000);
+        this.authTimer = authTimeout;
 
         // Temporarily override onmessage to intercept auth_result
         const originalOnMessage = this.ws!.onmessage;
@@ -175,6 +193,7 @@ export class WebSocketEventStoreAdapter implements EventStoreAdapter {
             };
             if (msg.type === "auth_result") {
               clearTimeout(authTimeout);
+              this.authTimer = null;
               if (!msg.ok) {
                 // Auth rejected — close and schedule reconnect
                 if (this.ws) {
@@ -226,6 +245,11 @@ export class WebSocketEventStoreAdapter implements EventStoreAdapter {
     this.ws.onclose = () => {
       this.connected = false;
       this.ws = null;
+      // The auth timer belongs to the socket that just closed.
+      if (this.authTimer) {
+        clearTimeout(this.authTimer);
+        this.authTimer = null;
+      }
       // Cancel stability timer — connection dropped before 30s, keep backoff elevated
       if (this.stabilityTimer) {
         clearTimeout(this.stabilityTimer);
@@ -240,6 +264,11 @@ export class WebSocketEventStoreAdapter implements EventStoreAdapter {
   }
 
   disconnect(): void {
+    this.generation++;
+    if (this.authTimer) {
+      clearTimeout(this.authTimer);
+      this.authTimer = null;
+    }
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
@@ -254,6 +283,17 @@ export class WebSocketEventStoreAdapter implements EventStoreAdapter {
       this.ws = null;
     }
     this.connected = false;
+  }
+
+  /**
+   * Remove and return the events queued while this adapter was not
+   * connected. A caller that replaces this adapter with another (a token
+   * refresh) hands them to the replacement; otherwise they are lost with
+   * the retired adapter, since the sync engine has already counted them
+   * as pushed.
+   */
+  takePendingEvents(): EventLogEntry[] {
+    return this.pendingEvents.splice(0);
   }
 
   get isConnected(): boolean {
