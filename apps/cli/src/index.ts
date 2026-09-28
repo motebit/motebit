@@ -5,6 +5,7 @@ import { connectMcpServers } from "@motebit/mcp-client";
 import { admitModelForProvider, MONEY_TOOLS_WITHHELD_NOTICE } from "./model-admission.js";
 import { createSolanaWalletRail } from "@motebit/wallet-solana";
 import { preflightGrant, renderPreflight } from "./grant-preflight.js";
+import { installTaskPollFault } from "./fault-injection.js";
 import {
   parseCliArgs,
   printHelp,
@@ -173,6 +174,7 @@ export type { CliConfig, ReplContext };
 async function main(): Promise<void> {
   let config: CliConfig;
   try {
+    installTaskPollFault();
     config = parseCliArgs();
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
