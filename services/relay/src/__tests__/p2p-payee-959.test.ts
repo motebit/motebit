@@ -630,6 +630,73 @@ describe("#959 round 3 — a worker hosted here is never 'remote'; remote needs 
     expect(claimed).toBeUndefined();
   });
 
+  /** A priced local worker whose registry row is set to the given shelf state. */
+  async function workerInState(state: { revoked: 0 | 1; delisted: boolean }) {
+    const W = await newAgent();
+    const addr = "7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgHkv";
+    await register(W, addr, ["web_search"]);
+    await list(W, "web_search", B_PRICE, addr);
+    setTrust(A, W);
+    relay.moteDb.db
+      .prepare("UPDATE agent_registry SET revoked = ?, delisted_at = ? WHERE motebit_id = ?")
+      .run(state.revoked, state.delisted ? Date.now() : null, W.motebitId);
+    const twoLeg = () =>
+      buildP2pPaymentProof(relay, { unitCostMicro: toMicro(B_PRICE), workerAddress: addr });
+    const threeLeg = () => ({
+      ...buildP2pPaymentProof(relay, { unitCostMicro: 902_500, workerAddress: addr }),
+      b_fee_to_address: "SomeExecutorRe1ayTreasury111111111111111111",
+      b_fee_amount_micro: 47_500,
+    });
+    return { W, addr, twoLeg, threeLeg };
+  }
+
+  it("DELISTED-only (a daemon that shut down and deregistered), 2-leg proof ⇒ admitted LOCAL and settled at its registered address — main parity", async () => {
+    const { W, addr, twoLeg } = await workerInState({ revoked: 0, delisted: true });
+    const res = await submitRaw(W.motebitId, twoLeg());
+    expect(res.status, await res.clone().text()).toBe(201);
+    const { task_id: taskId } = (await res.json()) as { task_id: string };
+    expect((await postResult(A, taskId, await receiptFrom(W, taskId, "back online"))).status).toBe(
+      200,
+    );
+    const row = relay.moteDb.db
+      .prepare(
+        "SELECT motebit_id, p2p_worker_leg, p2p_worker_address FROM relay_settlements WHERE task_id = ?",
+      )
+      .get(taskId);
+    expect(row).toEqual({
+      motebit_id: W.motebitId,
+      p2p_worker_leg: "local",
+      p2p_worker_address: addr,
+    });
+  });
+
+  it("DELISTED-only with a 3-leg proof ⇒ the federated plan (never local; here no peer hosts it ⇒ 404)", async () => {
+    const { W, threeLeg } = await workerInState({ revoked: 0, delisted: true });
+    const res = await submitRaw(W.motebitId, threeLeg());
+    expect(res.status).toBe(404);
+    expect(await res.text()).toMatch(/not discoverable/);
+  });
+
+  it("REVOKED-only (still on shelf), 2-leg proof ⇒ never local: refused with a clear reason", async () => {
+    const { W, twoLeg } = await workerInState({ revoked: 1, delisted: false });
+    const res = await submitRaw(W.motebitId, twoLeg());
+    expect(res.status).toBe(400);
+    expect(await res.text()).toMatch(/registration on this relay is revoked/);
+  });
+
+  it("REVOKED-only with a 3-leg proof ⇒ the federated plan (no peer hosts it ⇒ 404)", async () => {
+    const { W, threeLeg } = await workerInState({ revoked: 1, delisted: false });
+    const res = await submitRaw(W.motebitId, threeLeg());
+    expect(res.status).toBe(404);
+  });
+
+  it("ON-shelf worker with a 3-leg proof stays LOCAL (b_fee refused) — the proof cannot steer a hosted worker remote", async () => {
+    const { W, threeLeg } = await workerInState({ revoked: 0, delisted: false });
+    const res = await submitRaw(W.motebitId, threeLeg());
+    expect(res.status).toBe(400);
+    expect(await res.text()).toMatch(/this worker is hosted by this relay/);
+  });
+
   it("a DEPARTED worker's kept registry row is not 'hosted here': a 2-leg proof for it is refused, never admitted local", async () => {
     const departed = await newAgent();
     await register(departed, "7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgHkv", ["web_search"]);

@@ -1885,6 +1885,73 @@ describe("Federation E2E", () => {
       expect(planned.p).toBeNull();
     });
 
+    it('#959 round 5: a 409 {status:"duplicate"} (the executor ALREADY holds the task) keeps the planned peer — its result still settles remote', async () => {
+      const s = await federatedP2pSetup("dup409");
+      const originalFetch = globalThis.fetch;
+      vi.stubGlobal("fetch", async (input: string | URL | Request, init?: RequestInit) => {
+        const url =
+          typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+        if (url.startsWith(RELAY_B_URL) && url.includes("/federation/v1/task/forward")) {
+          // A retried delivery: the first reached B; B answers the second
+          // "duplicate" — the executor holds the task.
+          await relayB.app.request(url.slice(RELAY_B_URL.length), {
+            method: init?.method ?? "GET",
+            headers: init?.headers as Record<string, string>,
+            body: init?.body as string,
+          });
+          return relayB.app.request(url.slice(RELAY_B_URL.length), {
+            method: init?.method ?? "GET",
+            headers: init?.headers as Record<string, string>,
+            body: init?.body as string,
+          }) as unknown as Response;
+        }
+        for (const [base, relay] of [
+          [RELAY_A_URL, relayA],
+          [RELAY_B_URL, relayB],
+        ] as const) {
+          if (url.startsWith(base)) {
+            return relay.app.request(url.slice(base.length), {
+              method: init?.method ?? "GET",
+              headers: init?.headers as Record<string, string>,
+              body: init?.body as string,
+            }) as unknown as Response;
+          }
+        }
+        return originalFetch(input, init);
+      });
+      let res: Response;
+      try {
+        res = await s.submit();
+      } finally {
+        vi.stubGlobal("fetch", originalFetch);
+        installFetchInterceptor(relayA, relayB);
+      }
+      expect(res.status).toBe(502); // the origin saw B's 409
+      const taskId = s.forwardedTaskId()!;
+      const planned = relayA.moteDb.db
+        .prepare(
+          "SELECT json_extract(task_json, '$.p2p_admission.planned_peer') AS p FROM relay_task_queue WHERE task_id = ?",
+        )
+        .get(taskId) as { p: string | null };
+      expect(planned.p).toBeTruthy();
+
+      const resultRes = await relayB.app.request(
+        `/agent/${s.bob.motebitId}/task/${taskId}/result`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+          body: JSON.stringify(await s.bobReceiptFor(taskId)),
+        },
+      );
+      expect(resultRes.status).toBeLessThan(300);
+      const aRow = relayA.moteDb.db
+        .prepare(
+          "SELECT p2p_worker_leg FROM relay_settlements WHERE task_id = ? AND settlement_mode = 'p2p'",
+        )
+        .get(taskId) as { p2p_worker_leg: string } | undefined;
+      expect(aRow?.p2p_worker_leg).toBe("remote");
+    });
+
     it("#959 round 4: a result for a planned task from a peer it was NOT planned for is refused", async () => {
       const s = await federatedP2pSetup("wrongpeer");
       const res = await s.submit();

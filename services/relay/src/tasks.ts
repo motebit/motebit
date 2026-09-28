@@ -2881,20 +2881,44 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
       // + the peer relay's treasury resolve via discovery). See
       // docs/doctrine/off-ramp-as-user-action.md § federated P2P.
       //
-      // "Hosted here" is the discovery shelf (#959 round 4): on the shelf
-      // (`ON_SHELF` — not delisted by departure, lapse or revocation,
-      // registry-delist.ts) and not revoked — exactly the predicate
-      // discovery lists hireable agents by (task-routing.ts). A departed,
-      // lapsed or revoked row is kept for its key state, not for hire: a
-      // worker that migrated to a peer is federated, and a 2-leg proof for it
-      // is refused on the federated branch.
-      const workerReg = moteDb.db
+      // Branch selection (#959 rounds 4–5), over the row's shelf state and
+      // the proof's shape:
+      //   - ON SHELF and not revoked (the predicate discovery lists hireable
+      //     agents by — `ON_SHELF` from registry-delist.ts + the revoked
+      //     clause task-routing.ts composes) ⇒ LOCAL, whatever the proof
+      //     says (a b_fee field on it is refused below). A hosted worker can
+      //     never be steered into a 'remote' row.
+      //   - not revoked but OFF shelf (delisted: a daemon that shut down and
+      //     deregistered — "offline for a moment" — or a worker that moved to
+      //     a peer), with a 2-LEG proof ⇒ LOCAL, verified against its
+      //     registered address exactly as main queued it.
+      //   - not revoked, off shelf, with a 3-LEG proof ⇒ the federated plan.
+      //     'remote' still requires that plan to be BUILT from discovery (a
+      //     peer hosting the worker, its identity-bound address, all three
+      //     legs), so the proof's shape cannot choose 'remote' by itself.
+      //   - REVOKED ⇒ never local (the row is kept for key state only).
+      const workerRow = moteDb.db
         .prepare(
-          `SELECT settlement_address, public_key FROM agent_registry
-            WHERE motebit_id = ? AND (revoked IS NULL OR revoked = 0)${ON_SHELF}`,
+          `SELECT settlement_address, public_key,
+                  (revoked IS NOT NULL AND revoked != 0) AS is_revoked,
+                  (${ON_SHELF_PREDICATE}) AS on_shelf
+             FROM agent_registry WHERE motebit_id = ?`,
         )
         .get(body.target_agent) as
-        { settlement_address: string | null; public_key: string | null } | undefined;
+        | {
+            settlement_address: string | null;
+            public_key: string | null;
+            is_revoked: number;
+            on_shelf: number;
+          }
+        | undefined;
+      const proofHasExecutorLeg =
+        proof.b_fee_to_address != null || proof.b_fee_amount_micro != null;
+      const hostedHere =
+        workerRow != null &&
+        workerRow.is_revoked === 0 &&
+        (workerRow.on_shelf === 1 || !proofHasExecutorLeg);
+      const workerReg = hostedHere ? workerRow : undefined;
 
       if (workerReg != null) {
         // ── Single-operator P2P (local worker): the existing 2-leg path. ──
@@ -3055,9 +3079,16 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
           );
         }
         if (!proof.b_fee_to_address || proof.b_fee_amount_micro == null) {
+          // Say WHY this worker is not local here (#959 round 5): a revoked
+          // registration is never hireable on this relay; an unknown one is
+          // hosted elsewhere, if anywhere.
+          const why =
+            workerRow != null && workerRow.is_revoked !== 0
+              ? "This worker's registration on this relay is revoked, so it is not hired here"
+              : "This worker is not hosted by this relay";
           throw new TaskError(
             "TASK_INVALID_INPUT",
-            "Federated P2P payment_proof requires the executor-relay fee leg (b_fee_to_address, b_fee_amount_micro)",
+            `${why}; a paid delegation to it is cross-operator, and a federated P2P payment_proof requires the executor-relay fee leg (b_fee_to_address, b_fee_amount_micro)`,
             400,
           );
         }
@@ -3779,7 +3810,21 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
           // replays this answer (#888), and the body names this task.
           // Wording only (the binding is the same either way): a 4xx is the
           // executor refusing; anything else may mean it holds the task.
-          const refusedDefinitively = resp.status >= 400 && resp.status < 500;
+          // A 409 whose body says `status: "duplicate"` is NOT a refusal: the
+          // executor answers it exactly when it ALREADY HOLDS this task_id
+          // (federation.ts forward route) — a retrying proxy or an alternate-
+          // route retry reaches it. Its result will still come, so the planned
+          // peer stays (#959 round 5).
+          let executorHoldsTask = false;
+          if (resp.status === 409) {
+            try {
+              const dupBody = (await resp.clone().json()) as { status?: unknown };
+              executorHoldsTask = dupBody.status === "duplicate";
+            } catch {
+              executorHoldsTask = false;
+            }
+          }
+          const refusedDefinitively = resp.status >= 400 && resp.status < 500 && !executorHoldsTask;
           if (refusedDefinitively) {
             // A definitive refusal: the executor relay does not hold the task,
             // so no result can legitimately arrive from it and the worker leg
