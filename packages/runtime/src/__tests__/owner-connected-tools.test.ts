@@ -233,3 +233,22 @@ describe("#943 round 5 — the CLI REPL's MCP wiring", () => {
     await expectForeignCannotReach(runtime, contexts, "mail__read_inbox");
   });
 });
+
+describe("#943 round 6 — registerExternalTools: the floor does not depend on order", () => {
+  it("merge-first (a surface merged the MCP registry before registerExternalTools): still localOnly, never a foreign turn's", async () => {
+    const contexts: ContextPack[] = [];
+    const runtime = new MotebitRuntime(
+      { motebitId: "owner-mote", tickRateHz: 0 },
+      {
+        storage: createInMemoryStorage(),
+        renderer: new NullRenderer(),
+        ai: recordingProvider(contexts),
+      },
+    );
+    const reg = fsRegistry();
+    runtime.getToolRegistry().merge(reg);
+    expect(runtime.getToolRegistry().get("fs__read")?.localOnly).not.toBe(true);
+    runtime.registerExternalTools("mcp:fs", reg);
+    await expectForeignCannotReach(runtime, contexts, "fs__read");
+  });
+});

@@ -103,6 +103,17 @@ export class SimpleToolRegistry implements ToolRegistry {
     this.tools.set(tool.name, { definition: tool, handler });
   }
 
+  /**
+   * Mark a registered tool `localOnly` (#943), keeping its handler — the
+   * owner-connected floor applied to an entry that got here first.
+   */
+  markLocalOnly(name: string): void {
+    const entry = this.tools.get(name);
+    if (entry != null && entry.definition.localOnly !== true) {
+      this.tools.set(name, { ...entry, definition: { ...entry.definition, localOnly: true } });
+    }
+  }
+
   unregister(name: string): boolean {
     return this.tools.delete(name);
   }

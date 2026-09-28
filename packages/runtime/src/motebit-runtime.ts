@@ -2287,6 +2287,12 @@ export class MotebitRuntime {
       if (!this.toolRegistry.has(def.name)) {
         this.registerOwnerConnectedTool(def, (args) => registry.execute(def.name, args));
         names.push(def.name);
+      } else {
+        // #943: a same-named tool is already registered (a builtin, or one a
+        // surface merged in earlier). The existing entry keeps its handler
+        // but is MARKED `localOnly` — the owner-connected floor must not
+        // depend on registration order.
+        this.toolRegistry.markLocalOnly(def.name);
       }
     }
     this.externalToolSources.set(sourceId, names);

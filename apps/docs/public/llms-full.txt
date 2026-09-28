@@ -4999,6 +4999,8 @@ Stores a memory in the motebit's semantic graph. External callers may store only
 
 Searches the motebit's memory graph by semantic similarity. The owner's memories are served **only to the owner**, and the owner is **the local stdio session**: the MCP host you launched on your own machine. HTTP callers are never the owner, whatever they present. That includes another motebit, the relay, a static or pluggable bearer token, and even a token signed under this motebit's own key. Your motebit signs those for the workers it hires and the servers it connects to, so they could be replayed. Every HTTP caller is refused with no memory content. Nothing that worked before is lost: `motebit serve` never resolved its own key for HTTP callers, so reading your memories over HTTP was not reachable anyway. Read your memories over stdio. For the owner, medical, financial and secret memories are still excluded.
 
+> **Never bridge stdio to a network.** stdio counts as the owner by construction, because only a process you launched can reach the pipe. Wrapping a stdio `motebit serve` in an `mcp-remote`- or `supergateway`-style bridge that exposes it over HTTP or SSE makes every remote caller of the bridge the owner, and serves them your memories and live state. Use HTTP transport for other agents; it never treats a caller as the owner.
+
 ```json
 { "query": "deployment credentials", "limit": 5 }
 ```

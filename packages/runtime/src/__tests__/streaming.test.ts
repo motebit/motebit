@@ -1603,6 +1603,8 @@ describe("External tool registration", () => {
 
     runtime.registerExternalTools("mcp:test", external);
     expect(runtime.getToolRegistry().get("overlap")!.description).toBe("Local");
+    // #943: the collision still gets the owner-connected floor.
+    expect(runtime.getToolRegistry().get("overlap")!.localOnly).toBe(true);
   });
 
   it("unregisterExternalTools removes tools by source", () => {

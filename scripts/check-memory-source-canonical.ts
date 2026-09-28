@@ -1222,10 +1222,28 @@ function main(): void {
     !/this\.toolRegistry\.replace\(\{ \.\.\.def, localOnly: true \}, handler\)/.test(rocBody) ||
     !/has: \(name: string\) => discovered\.has\(name\),/.test(runtimeSrc) ||
     !/this\.registerOwnerConnectedTool\(def,/.test(retBody) ||
+    // round 6: a same-named tool already in the registry is MARKED
+    // `localOnly` — the floor must not depend on registration order.
+    !/this\.toolRegistry\.markLocalOnly\(def\.name\);/.test(retBody) ||
     /connectMcpServers\(this\.mcpConfigs, this\.toolRegistry/.test(runtimeSrc)
   ) {
     receiptViolations.push(
       "packages/runtime/src/motebit-runtime.ts: owner-connected tools (`registerExternalTools`, the `mcpServers` path) must register through `registerOwnerConnectedTool`, which forces `localOnly: true` — never straight into the registry",
+    );
+  }
+  // (vi-b) the CLI REPL owns ONE connection per config-listed server (#943
+  // round 6): it hands the runtime none (`runtimeMcpServersForRepl` returns
+  // `[]`, and index.ts passes it to `createRuntime`), so `/mcp remove` —
+  // which disconnects the REPL's adapter — takes the server out of service.
+  const wiringSrc = readFile("apps/cli/src/mcp-config-wiring.ts") ?? "";
+  const replIndexSrc = readFile("apps/cli/src/index.ts") ?? "";
+  const rmsBody = bodyOf(wiringSrc, "export function runtimeMcpServersForRepl(", "\n}\n");
+  if (
+    !/^\s*return \[\];/m.test(rmsBody) ||
+    !/runtimeMcpServersForRepl\(mcpServers\)/.test(replIndexSrc)
+  ) {
+    receiptViolations.push(
+      "apps/cli/src: the REPL must hand the runtime NO config MCP servers (`runtimeMcpServersForRepl` returns `[]`, passed to `createRuntime`) — a second, runtime-owned connection outlives `/mcp remove`",
     );
   }
   // (vii) surfaces: an owner-connected MCP tool reaches a runtime ONLY

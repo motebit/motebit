@@ -2513,12 +2513,12 @@ export async function probeFetch(): Promise<unknown> {
   {
     script: "check-memory-source-canonical",
     proves:
-      "flags a surface merging owner-connected MCP tools straight into the runtime's tool registry (#943 round 5) — scan (g)(vii): the CLI REPL connected `mcp_servers` into its own registry and merged it into the runtime registry, so the tools were never `localOnly` and a foreign turn / attached `motebit serve` reached them. Probe reintroduces that pre-merge in apps/cli/src/index.ts; the gate must surface the runtime-registry-merge violation. byte-identical restoration on cleanup via mutateFile.",
+      "flags a surface merging owner-connected MCP tools straight into the runtime's tool registry (#943 round 5) — scan (g)(vii): the CLI REPL connected `mcp_servers` into its own registry and merged it into the runtime registry, so the tools were never `localOnly` and a foreign turn / attached `motebit serve` reached them. Probe reintroduces a pre-merge into the runtime registry in apps/cli/src/index.ts; the gate must surface the runtime-registry-merge violation. byte-identical restoration on cleanup via mutateFile.",
     perturb: () =>
       mutateFile(`apps/cli/src/index.ts`, (src) =>
         src.replace(
-          'runtime.registerExternalTools("mcp:config", mcpRegistry);',
-          "runtime.getToolRegistry().merge(mcpRegistry);",
+          "mcpAdapters = wired.adapters;",
+          "mcpAdapters = wired.adapters;\n      runtime.getToolRegistry().merge(toolRegistry);",
         ),
       ),
   },

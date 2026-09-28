@@ -1,7 +1,7 @@
 import { DEFAULT_CONFIG } from "@motebit/ai-core";
 import type { MotebitPersonalityConfig } from "@motebit/ai-core";
 import { deriveSyncEncryptionKey, mintAudienceToken } from "@motebit/encryption";
-import { connectMcpServers } from "@motebit/mcp-client";
+import type { connectMcpServers } from "@motebit/mcp-client";
 import { paidResultsNotice } from "@motebit/runtime";
 import { admitModelForProvider, MONEY_TOOLS_WITHHELD_NOTICE } from "./model-admission.js";
 import { createSolanaWalletRail } from "@motebit/wallet-solana";
@@ -44,8 +44,8 @@ import {
   buildToolRegistry,
   createRuntime,
   openMotebitDatabase,
-  InMemoryToolRegistry,
 } from "./runtime-factory.js";
+import { connectConfigMcpServers, runtimeMcpServersForRepl } from "./mcp-config-wiring.js";
 import { createRunLedgerReader } from "./run-ledger-reader.js";
 import { consumeStream } from "./stream.js";
 import {
@@ -859,7 +859,9 @@ async function main(): Promise<void> {
     config,
     motebitId,
     toolRegistry,
-    mcpServers,
+    // #943: the REPL owns each MCP connection (below); the runtime is not
+    // handed the servers, or a second connection would outlive `/mcp remove`.
+    runtimeMcpServersForRepl(mcpServers),
     personalityConfig,
     syncEncKey,
     solanaWallet,
@@ -898,15 +900,14 @@ async function main(): Promise<void> {
   let mcpToolCount = 0;
   if (mcpServers.length > 0) {
     try {
-      // #943: connect into a registry of their OWN and hand it to the runtime
-      // as owner-connected tools — `registerExternalTools` forces `localOnly`,
-      // so a foreign turn is never offered them and `motebit serve` (attached
-      // to this coordinator) never serves them. Never merge them straight
-      // into the runtime registry.
-      const mcpRegistry = new InMemoryToolRegistry();
-      mcpAdapters = await connectMcpServers(mcpServers, mcpRegistry);
-      runtime.registerExternalTools("mcp:config", mcpRegistry);
-      mcpToolCount = mcpRegistry.size;
+      // #943: one connection per server, owned here; each server's tools go
+      // to the runtime as owner-connected source `mcp:<name>` —
+      // `registerExternalTools` forces `localOnly`, so a foreign turn is
+      // never offered them and an attached `motebit serve` never serves
+      // them, and `/mcp remove <name>` takes exactly that server out.
+      const wired = await connectConfigMcpServers(runtime, mcpServers);
+      mcpAdapters = wired.adapters;
+      mcpToolCount = wired.toolCount;
       console.log(`MCP: connected to ${mcpAdapters.length} server(s)`);
 
       // Persist newly pinned motebit public keys
