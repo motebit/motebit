@@ -61,7 +61,8 @@ class StubAtomAdapter implements AtomAdapter {
     if (this.queue.length > 0) {
       const receipt = this.queue.shift()!;
       this.pending.push(receipt);
-      return { ok: true, data: JSON.stringify(receipt) };
+      // #943: the receipt rides on THIS call's result.
+      return { ok: true, data: JSON.stringify(receipt), delegation_receipt: receipt };
     }
     return { ok: false, error: "no receipt queued" };
   }

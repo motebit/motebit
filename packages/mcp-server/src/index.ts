@@ -564,6 +564,10 @@ export function servedPrincipal(extra: unknown, transport: "stdio" | "http"): Se
 export const OWNER_ONLY_REFUSAL =
   "Refused: this motebit's memories are served only to its owner (#943).";
 
+/** The refusal a non-owner gets for the owner's live state vector. Carries no content. */
+export const OWNER_ONLY_STATE_REFUSAL =
+  "Refused: this motebit's live state is served only to its owner (#943).";
+
 /**
  * Opening line of every memory-read dep (`queryMemories`, `getMemories`):
  * the dep honours the adapter's verdict and refuses anything but the
@@ -1358,17 +1362,24 @@ export class McpServerAdapter {
     }));
 
     // State resource
+    // State resource — the owner's LIVE state vector (attention, processing,
+    // affect, …). Numbers only, but it is the owner's interior in real time
+    // (it shows what the motebit — and so its owner — is doing right now).
+    // Same rule as the memories resource (#943): served to the owner only.
     if (this.config.exposeState !== false) {
-      // eslint-disable-next-line @typescript-eslint/require-await -- MCP SDK expects async handler
-      server.resource("state", "motebit://state", async () => ({
-        contents: [
-          {
-            uri: "motebit://state",
-            mimeType: "application/json",
-            text: JSON.stringify(await this.deps.getState()),
-          },
-        ],
-      }));
+      server.resource("state", "motebit://state", async (_uri: URL, extra: unknown) => {
+        const principal = this.ownerPrincipal(extra);
+        if (principal === null) throw new Error(OWNER_ONLY_STATE_REFUSAL);
+        return {
+          contents: [
+            {
+              uri: "motebit://state",
+              mimeType: "application/json",
+              text: JSON.stringify(await this.deps.getState()),
+            },
+          ],
+        };
+      });
     }
 
     // Memories resource (privacy-filtered)

@@ -1,25 +1,26 @@
 /**
  * #943 — a task's signed receipt embeds only the delegation receipts its OWN
- * turn produced.
+ * turn produced, attributed at CAPTURE.
  *
- * Before this fix every hire stashed into one shared bucket that only
- * `handleAgentTask` drained. The owner's hires — a `delegate_to_agent` call
- * in an owner turn, an `invokeCapability` tap, an owner MCP tool call to
- * another motebit — were signed into the NEXT customer's `motebit_task`
- * receipt as `delegation_receipts`, each carrying the verbatim `result` of
- * the owner's private request, and sent to the submitter and the relay.
+ * A worker's signed `ExecutionReceipt` carries the verbatim `result` of what
+ * was asked; a `motebit_task` receipt embeds its turn's hires as
+ * `delegation_receipts` and goes to the submitter and the relay. Shared
+ * buckets (drained by the next task, and later drained at turn close) let
+ * the owner's hires ride into a customer's receipt — including an owner call
+ * made CONCURRENTLY, out of turn, while a task held the turn.
  *
- * Now receipts are collected per turn (`TurnDelegationReceipts`, opened and
- * closed by the runtime's single-writer hold); a task's turn hands its own
- * receipts to the handler through its sink, and nothing else reaches it.
+ * Now a hire's receipt rides ON the tool result and the tool registry
+ * records it for the destination the caller threaded into that call: the
+ * task's turn key (its loop deps) or the owner (every other door). Owner
+ * receipts get their trust credit at owner-record intake.
  *
- * Real runtime and loop; a fake motebit MCP adapter stands in for a
- * worker-backed MCP tool (its receipt bucket is what `mcp-client` fills).
+ * Real runtime and loop. `worker__motebit_task` stands in for a motebit MCP
+ * tool (what `@motebit/mcp-client` returns: the result with
+ * `delegation_receipt`).
  *
- * Tampers (each goes red): make `TurnDelegationReceipts.close` also return
- * the owner's record (the shared bucket); make `open` stop flushing the MCP
- * adapters' pre-turn receipts; make `recordOwnerAct` record into the
- * in-flight turn.
+ * Tamper (each goes red): restore a shared drain (record every carried
+ * receipt into the open turn regardless of the caller's destination); stop
+ * threading the turn key in `loopDepsForTurn`; drop the owner intake.
  */
 import { describe, it, expect, vi } from "vitest";
 import { MotebitRuntime, NullRenderer, createInMemoryStorage } from "../index";
@@ -32,16 +33,16 @@ import type {
   ExecutionReceipt,
   ToolDefinition,
 } from "@motebit/sdk";
-import { AgentTaskStatus, RiskLevel } from "@motebit/sdk";
+import { AgentTaskStatus, RiskLevel, asMotebitId } from "@motebit/sdk";
 import { generateKeypair } from "@motebit/encryption";
 
 const OWNER = "owner-mote";
 const OWNER_SECRET = "OWNERSECRET943-hire-result";
 
-function workerReceipt(taskId: string, result: string): ExecutionReceipt {
+function workerReceipt(taskId: string, result: string, worker = "worker-1"): ExecutionReceipt {
   return {
     task_id: taskId,
-    motebit_id: "worker-1",
+    motebit_id: worker,
     device_id: "worker-dev",
     submitted_at: Date.now() - 1000,
     completed_at: Date.now(),
@@ -56,17 +57,23 @@ function workerReceipt(taskId: string, result: string): ExecutionReceipt {
   } as ExecutionReceipt;
 }
 
-/** Calls `tool` once per turn (when its history has no result yet), then answers. */
-function toolCallingProvider(tool: string): StreamingProvider {
+/**
+ * A turn whose user message names a tool (`CALL:<tool>`) calls it once, then
+ * answers; any other turn just answers.
+ */
+function scriptedProvider(): StreamingProvider {
   const gen = (ctx: ContextPack): AIResponse => {
     const history = JSON.stringify(ctx.conversation_history ?? []);
-    if (!history.includes(tool)) {
+    const firstUser =
+      (ctx.conversation_history ?? []).find((m) => m.role === "user")?.content ?? ctx.user_message;
+    const want = /CALL:(\w+)/.exec(String(firstUser))?.[1];
+    if (want != null && !history.includes(want)) {
       return {
         text: "",
         confidence: 0.8,
         memory_candidates: [],
         state_updates: {},
-        tool_calls: [{ id: `c-${tool}`, name: tool, args: {} }],
+        tool_calls: [{ id: `c-${want}`, name: want, args: {} }],
       };
     }
     return { text: "done", confidence: 0.8, memory_candidates: [], state_updates: {} };
@@ -93,63 +100,55 @@ const tool = (name: string): ToolDefinition => ({
   riskHint: { risk: RiskLevel.R0_READ },
 });
 
-type Internals = {
-  mcpAdapters: Array<{ getAndResetDelegationReceipts(): ExecutionReceipt[] }>;
-  interactiveDelegation: {
-    recordTurnReceipt(r: ExecutionReceipt): void;
-    pushReceipt(r: ExecutionReceipt): void;
-  };
-};
-
-/** A fake motebit MCP adapter: its bucket is filled by the served tool's call. */
-function fakeMcpAdapter() {
-  let bucket: ExecutionReceipt[] = [];
-  return {
-    push: (r: ExecutionReceipt) => bucket.push(r),
-    adapter: {
-      disconnect: async () => {},
-      isMotebit: true,
-      getAndResetDelegationReceipts: () => {
-        const out = bucket;
-        bucket = [];
-        return out;
-      },
-    },
-  };
-}
-
-function setup(providerTool: string) {
+function setup() {
+  const storage = createInMemoryStorage();
   const runtime = new MotebitRuntime(
     { motebitId: OWNER, tickRateHz: 0 },
-    {
-      storage: createInMemoryStorage(),
-      renderer: new NullRenderer(),
-      ai: toolCallingProvider(providerTool),
-    },
+    { storage, renderer: new NullRenderer(), ai: scriptedProvider() },
   );
-  const mcp = fakeMcpAdapter();
-  (runtime as unknown as Internals).mcpAdapters = [mcp.adapter as never];
-  return { runtime, mcp, internals: runtime as unknown as Internals };
+  // The motebit MCP tool: each call returns the NEXT queued receipt on its result.
+  const queued: ExecutionReceipt[] = [];
+  runtime.getToolRegistry().register(tool("worker__motebit_task"), async () => {
+    const receipt = queued.shift();
+    return { ok: true, data: "worker done", ...(receipt ? { delegation_receipt: receipt } : {}) };
+  });
+  // A tool the task's turn blocks in, until released.
+  let release: () => void = () => {};
+  const blocked = new Promise<void>((r) => {
+    release = r;
+  });
+  let entered: () => void = () => {};
+  const inTool = new Promise<void>((r) => {
+    entered = r;
+  });
+  runtime.getToolRegistry().register(tool("slow_tool"), async () => {
+    entered();
+    await blocked;
+    return { ok: true, data: "slow done" };
+  });
+  return { runtime, storage, queued, release, inTool };
 }
 
-async function runTask(runtime: MotebitRuntime, prompt: string): Promise<ExecutionReceipt> {
-  const kp = await generateKeypair();
-  const task: AgentTask = {
-    task_id: "customer-task",
-    motebit_id: OWNER,
-    prompt,
-    submitted_at: Date.now(),
-    status: AgentTaskStatus.Claimed,
-    wall_clock_ms: 30_000,
-  };
-  let receipt: ExecutionReceipt | null = null;
-  for await (const c of runtime.handleAgentTask(task, kp.privateKey, "dev-1") as AsyncGenerator<
-    StreamChunk & { receipt?: ExecutionReceipt }
-  >) {
-    if (c.type === "task_result") receipt = c.receipt ?? null;
-  }
-  if (receipt == null) throw new Error("no task receipt");
-  return receipt;
+function startTask(runtime: MotebitRuntime, prompt: string): Promise<ExecutionReceipt> {
+  return (async () => {
+    const kp = await generateKeypair();
+    const task: AgentTask = {
+      task_id: "customer-task",
+      motebit_id: OWNER,
+      prompt,
+      submitted_at: Date.now(),
+      status: AgentTaskStatus.Claimed,
+      wall_clock_ms: 30_000,
+    };
+    let receipt: ExecutionReceipt | null = null;
+    for await (const c of runtime.handleAgentTask(task, kp.privateKey, "dev-1") as AsyncGenerator<
+      StreamChunk & { receipt?: ExecutionReceipt }
+    >) {
+      if (c.type === "task_result") receipt = c.receipt ?? null;
+    }
+    if (receipt == null) throw new Error("no task receipt");
+    return receipt;
+  })();
 }
 
 async function drain(gen: AsyncGenerator<StreamChunk>): Promise<void> {
@@ -158,69 +157,80 @@ async function drain(gen: AsyncGenerator<StreamChunk>): Promise<void> {
   }
 }
 
+const settle = () => new Promise((r) => setTimeout(r, 20));
+
 describe("#943 — a task's receipt embeds only its own turn's hires", () => {
-  it("an owner turn's hire (AI-loop delegate) is never signed into the next customer's task receipt", async () => {
-    const { runtime, internals } = setup("owner_hire");
-    // The owner's turn hires; the loop's delegate path records into THAT turn.
-    // (Only the first call hires — the task's turn calls the tool too.)
-    let hires = 0;
-    runtime.getToolRegistry().register(tool("owner_hire"), async () => {
-      if (hires++ === 0) {
-        internals.interactiveDelegation.recordTurnReceipt(
-          workerReceipt("owner-hire-1", OWNER_SECRET),
-        );
-      }
-      return { ok: true, data: "hired" };
-    });
-    await drain(runtime.sendMessageStreaming("hire someone for me"));
-
-    const receipt = await runTask(runtime, "customer prompt");
+  it("an owner's CONCURRENT out-of-turn invokeLocalTool hire, made while a task holds the turn, is never signed into the task's receipt", async () => {
+    const { runtime, queued, release, inTool } = setup();
+    const task = startTask(runtime, "CALL:slow_tool");
+    await inTool; // the task's turn is blocked inside slow_tool
+    queued.push(workerReceipt("owner-tap-1", OWNER_SECRET));
+    const r = await runtime.invokeLocalTool("worker__motebit_task", {});
+    expect(r.ok).toBe(true);
+    release();
+    const receipt = await task;
     expect(receipt.delegation_receipts ?? []).toEqual([]);
     expect(JSON.stringify(receipt)).not.toContain(OWNER_SECRET);
-    // The owner turn's hire went to the owner's record.
-    expect(runtime.getAndResetInteractiveDelegationReceipts().map((r) => r.task_id)).toEqual([
-      "owner-hire-1",
+    expect(runtime.getAndResetInteractiveDelegationReceipts().map((x) => x.task_id)).toEqual([
+      "owner-tap-1",
     ]);
   });
 
-  it("an owner MCP call's receipt left in the adapter is never signed into the task receipt", async () => {
-    const { runtime, mcp } = setup("noop");
-    runtime.getToolRegistry().register(tool("noop"), async () => ({ ok: true, data: "ok" }));
-    // The owner's MCP call to another motebit completed before the task.
-    mcp.push(workerReceipt("owner-mcp-1", OWNER_SECRET));
-
-    const receipt = await runTask(runtime, "customer prompt");
+  it("an owner PlanEngine step's hire (the owner loop deps), made while a task holds the turn, is never signed into it", async () => {
+    const { runtime, queued, release, inTool } = setup();
+    const task = startTask(runtime, "CALL:slow_tool");
+    await inTool;
+    queued.push(workerReceipt("owner-plan-1", OWNER_SECRET));
+    // A plan step executes through `getLoopDeps()` — the owner's loop deps.
+    const planDeps = runtime.getLoopDeps();
+    await planDeps!.tools!.execute("worker__motebit_task", {});
+    release();
+    const receipt = await task;
     expect(receipt.delegation_receipts ?? []).toEqual([]);
     expect(JSON.stringify(receipt)).not.toContain(OWNER_SECRET);
-    // It went to the owner's record.
-    expect(runtime.getAndResetInteractiveDelegationReceipts().map((r) => r.task_id)).toEqual([
-      "owner-mcp-1",
+  });
+
+  it("an owner turn's hire is never signed into the next customer's task receipt", async () => {
+    const { runtime, queued } = setup();
+    queued.push(workerReceipt("owner-turn-1", OWNER_SECRET));
+    await drain(runtime.sendMessageStreaming("CALL:worker__motebit_task"));
+    const receipt = await startTask(runtime, "customer prompt");
+    expect(receipt.delegation_receipts ?? []).toEqual([]);
+    expect(JSON.stringify(receipt)).not.toContain(OWNER_SECRET);
+    expect(runtime.getAndResetInteractiveDelegationReceipts().map((x) => x.task_id)).toEqual([
+      "owner-turn-1",
     ]);
   });
 
-  it("an owner tap made WHILE a customer's task is running is never signed into it", async () => {
-    const { runtime, internals } = setup("slow_tool");
-    runtime.getToolRegistry().register(tool("slow_tool"), async () => {
-      // The owner taps a capability mid-task (invokeCapability's stash).
-      internals.interactiveDelegation.pushReceipt(workerReceipt("owner-tap-1", OWNER_SECRET));
-      return { ok: true, data: "ok" };
-    });
-    const receipt = await runTask(runtime, "customer prompt");
-    expect(receipt.delegation_receipts ?? []).toEqual([]);
+  it("an owner tap (invokeCapability's stash) made mid-task is never signed into it", async () => {
+    const { runtime, release, inTool } = setup();
+    const task = startTask(runtime, "CALL:slow_tool");
+    await inTool;
+    (
+      runtime as unknown as { interactiveDelegation: { pushReceipt(r: ExecutionReceipt): void } }
+    ).interactiveDelegation.pushReceipt(workerReceipt("owner-cap-1", OWNER_SECRET));
+    release();
+    const receipt = await task;
     expect(JSON.stringify(receipt)).not.toContain(OWNER_SECRET);
   });
 
-  it("the task's OWN sub-hire (a served motebit MCP tool called in its turn) still appears — correct provenance", async () => {
-    const { runtime, mcp } = setup("sub_hire");
-    runtime.getToolRegistry().register(tool("sub_hire"), async () => {
-      mcp.push(workerReceipt("task-sub-hire-1", "the customer's sub-result"));
-      return { ok: true, data: "sub-hired" };
-    });
-    // An owner receipt already in the adapter must not ride along.
-    mcp.push(workerReceipt("owner-mcp-2", OWNER_SECRET));
+  it("the task's OWN sub-hire (a motebit MCP tool its turn called) still appears — correct provenance", async () => {
+    const { runtime, queued } = setup();
+    queued.push(workerReceipt("task-sub-hire-1", "the customer's sub-result"));
+    const receipt = await startTask(runtime, "CALL:worker__motebit_task");
+    expect((receipt.delegation_receipts ?? []).map((d) => d.task_id)).toEqual(["task-sub-hire-1"]);
+  });
 
-    const receipt = await runTask(runtime, "customer prompt");
-    expect((receipt.delegation_receipts ?? []).map((r) => r.task_id)).toEqual(["task-sub-hire-1"]);
-    expect(JSON.stringify(receipt)).not.toContain(OWNER_SECRET);
+  it("an owner hire still earns its trust credit — attributed to the owner, at owner-record intake", async () => {
+    const { runtime, storage, queued } = setup();
+    queued.push(workerReceipt("owner-tap-2", "fine", "worker-credit"));
+    await runtime.invokeLocalTool("worker__motebit_task", {});
+    await settle();
+    const rec = await storage.agentTrustStore!.getAgentTrust(
+      asMotebitId(OWNER),
+      asMotebitId("worker-credit"),
+    );
+    expect(rec).not.toBeNull();
+    expect(rec?.interaction_count ?? 0).toBeGreaterThan(0);
   });
 });

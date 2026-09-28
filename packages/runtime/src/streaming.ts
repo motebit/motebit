@@ -105,6 +105,12 @@ export interface StreamingDeps {
   /** Tool registry for executing approved tools. */
   getToolRegistry(): ToolRegistry;
   /**
+   * #943: the receipt destination for a direct execute made AS the in-flight
+   * turn (the approved-call execution in the resume) — that turn's key.
+   * Undefined ⇒ the registry's default (the owner).
+   */
+  turnReceiptDestination?(): symbol | undefined;
+  /**
    * True while the in-flight turn runs ANOTHER principal's words (#880) —
    * captured into a pending approval so the resumed continuation stays
    * foreign after the task that raised it has returned.
@@ -941,7 +947,11 @@ export class StreamingManager {
         const dispatchedAt = Date.now();
         let result: ToolResult;
         try {
-          result = await toolRegistry.execute(pending.toolName, pending.args);
+          result = await (
+            toolRegistry as ToolRegistry & {
+              execute(n: string, a: Record<string, unknown>, d?: symbol): Promise<ToolResult>;
+            }
+          ).execute(pending.toolName, pending.args, this.deps.turnReceiptDestination?.());
         } catch (err) {
           // Close the ledger row before re-throwing: the handler threw, so
           // the tool reports failure — an open row would read as unknown.

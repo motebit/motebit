@@ -15,6 +15,8 @@ import type {
   ConversationMessage,
   ConversationStoreAdapter,
   ToolRegistry,
+  ToolDefinition,
+  ToolHandler,
   ToolResult,
   AgentTask,
   ExecutionReceipt,
@@ -211,7 +213,6 @@ import { connectMcpServers } from "@motebit/mcp-client";
 // pass any object that satisfies this interface, including test doubles.
 type McpClientAdapter = {
   disconnect(): Promise<void>;
-  getAndResetDelegationReceipts?(): import("@motebit/sdk").ExecutionReceipt[];
   isMotebit?: boolean;
   motebitType?: "personal" | "service" | "collaborative";
   serverName?: string;
@@ -329,7 +330,10 @@ import { GOAL_RESULT_ARTIFACT } from "@motebit/sdk";
 import { buildMerkleTree, canonicalLeaf } from "@motebit/encryption";
 import type { ConsolidationAnchor, ConsolidationReceipt, ChainAnchorSubmitter } from "@motebit/sdk";
 import type { AgentTrustDeps } from "./agent-trust.js";
-import { handleAgentTask as handleAgentTaskFn } from "./agent-task-handler.js";
+import {
+  handleAgentTask as handleAgentTaskFn,
+  absorbDelegationReceipts,
+} from "./agent-task-handler.js";
 import type { AgentTaskHandlerDeps } from "./agent-task-handler.js";
 import type {
   GradientSnapshot,
@@ -569,17 +573,26 @@ export class MotebitRuntime {
   private conversation: ConversationManager;
   private conversationStore: ConversationStoreAdapter | null;
   /**
-   * #943: delegation receipts are collected PER TURN. The single-writer
+   * #943: delegation receipts are attributed AT CAPTURE to the context that
+   * made the call (see `turn-delegation-receipts.ts`). The single-writer
    * hold (`_isProcessing`) is what makes a turn a turn, so raising it opens
-   * that turn's collector and lowering it closes it — every turn-holder
-   * (both chat doors, the approval resume and vote, activation, the granted
-   * hire) is scoped without having to remember to be. A task's receipt
-   * embeds only the hires its OWN turn made (through the turn's sink); the
-   * owner's hires never cross into another principal's signed receipt.
+   * that turn's collector and lowering it closes it. A turn's loop deps
+   * pass the turn's key into every tool execute (`loopDepsForTurn`); every
+   * other caller is an owner door and defaults to the owner's record. A
+   * task's receipt embeds only the hires its OWN turn made; the owner's
+   * hires — including a concurrent out-of-turn call made while a task holds
+   * the turn — never cross into another principal's signed receipt.
    */
-  private readonly turnReceipts = new TurnDelegationReceipts(() =>
-    this.mcpAdapters.flatMap((a) => a.getAndResetDelegationReceipts?.() ?? []),
-  );
+  private readonly turnReceipts = new TurnDelegationReceipts((entries) => {
+    // The owner record's consumer: credit the owner's hires (trust, chain
+    // trust, graph edges, latency), attributed to the owner — never
+    // through a customer's task.
+    void absorbDelegationReceipts(this.agentTaskDeps, entries).catch((err: unknown) => {
+      this._logger.warn("owner delegation receipt intake failed", {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
+  });
   private _turnReceiptKey: symbol | null = null;
   private _turnReceiptScope: TurnReceiptScope | null = null;
   private _processing = false;
@@ -938,6 +951,11 @@ export class MotebitRuntime {
 
     // Tool registry: merge platform-provided tools if any
     this.toolRegistry = new SimpleToolRegistry();
+    // #943: the one place a hire's carried receipt is recorded — for the
+    // destination the caller named (a turn's key), default the owner.
+    this.toolRegistry.setDelegationReceiptRouter((destination, receipt, trustCredited) =>
+      this.turnReceipts.recordFor(destination, receipt, trustCredited),
+    );
     if (adapters.tools) {
       this.toolRegistry.merge(adapters.tools);
     }
@@ -1411,6 +1429,9 @@ export class MotebitRuntime {
       logToolUsed: (n, r) => void this.logToolUsed(n, r),
       getLiveHistory: () => this.conversation.liveHistory,
       getToolRegistry: () => this.toolRegistry,
+      // #943: the approval resume runs AS its turn — its direct execute
+      // names that turn as the receipt destination.
+      turnReceiptDestination: () => this._turnReceiptKey ?? undefined,
       isForeignPrincipalTurn: () => this.isForeignPrincipalTurn(),
       enterForeignPrincipalTurn: () => {
         this._foreignResume = true;
@@ -1547,7 +1568,21 @@ export class MotebitRuntime {
 
     // Connect to MCP servers and discover their tools.
     if (this.mcpConfigs.length > 0) {
-      this.mcpAdapters = await connectMcpServers(this.mcpConfigs, this.toolRegistry as never);
+      // Discover into a plain collector, then register each tool as an
+      // owner-connected (`localOnly`) tool (#943). The collector does no
+      // receipt handling: a hire's receipt rides on the result up to the
+      // runtime registry, which attributes it to the caller's destination.
+      const discovered = new Map<string, { def: ToolDefinition; handler: ToolHandler }>();
+      const collector = {
+        has: (name: string) => discovered.has(name) || this.toolRegistry.has(name),
+        register: (def: ToolDefinition, handler: ToolHandler) => {
+          discovered.set(def.name, { def, handler });
+        },
+      };
+      this.mcpAdapters = await connectMcpServers(this.mcpConfigs, collector as never);
+      for (const { def, handler } of discovered.values()) {
+        this.registerOwnerConnectedTool(def, handler);
+      }
 
       // Build motebit tool-to-server mapping for delegation visibility
       for (const adapter of this.mcpAdapters) {
@@ -1677,10 +1712,40 @@ export class MotebitRuntime {
    *   refused instead, so no approval can outlive the task and later resume
    *   that principal's prompt inside the owner's conversation.
    */
-  private loopDepsForTurn<D extends { policyGate?: unknown }>(deps: D): D {
+  private loopDepsForTurn<D extends { policyGate?: unknown; tools?: unknown }>(deps: D): D {
     const foreignPrincipal = this.isForeignPrincipalTurn();
-    if (!foreignPrincipal) return { ...deps, foreignPrincipal };
-    return { ...deps, foreignPrincipal, policyGate: this.policy.withoutApprovalChannel() };
+    // #943: this turn's tool calls carry this turn's key, so a hire's
+    // receipt is attributed to THIS turn at capture — never by draining.
+    const tools = this.toolsForTurn(deps.tools);
+    const turnTools = tools !== undefined ? { tools } : {};
+    if (!foreignPrincipal) return { ...deps, foreignPrincipal, ...turnTools };
+    const policyGate = this.policy.withoutApprovalChannel();
+    return { ...deps, foreignPrincipal, policyGate, ...turnTools };
+  }
+
+  /**
+   * Wrap a turn's tool registry so every `execute` names the in-flight
+   * turn's key as the receipt destination (#943). Outside a turn (no key)
+   * the registry is returned unchanged: its callers are owner doors.
+   */
+  private toolsForTurn(tools: unknown): import("@motebit/sdk").ToolRegistry | undefined {
+    if (tools == null) return undefined;
+    const inner = tools as import("@motebit/sdk").ToolRegistry & {
+      execute(
+        name: string,
+        args: Record<string, unknown>,
+        destination?: symbol,
+      ): Promise<ToolResult>;
+    };
+    const key = this._turnReceiptKey;
+    if (key == null) return inner;
+    return {
+      list: () => inner.list(),
+      register: (tool, handler) => inner.register(tool, handler),
+      replace: inner.replace?.bind(inner),
+      unregister: inner.unregister?.bind(inner),
+      execute: (name, args) => inner.execute(name, args, key),
+    };
   }
 
   /** True when `toolName` is registered with `localOnly: true`. */
@@ -2215,12 +2280,27 @@ export class MotebitRuntime {
     const names: string[] = [];
     for (const def of registry.list()) {
       if (!this.toolRegistry.has(def.name)) {
-        this.toolRegistry.register(def, (args) => registry.execute(def.name, args));
+        this.registerOwnerConnectedTool(def, (args) => registry.execute(def.name, args));
         names.push(def.name);
       }
     }
     this.externalToolSources.set(sourceId, names);
     this.wireLoopDeps();
+  }
+
+  /**
+   * Register a tool from a server the OWNER connected (an MCP server added
+   * in settings / `/mcp add`, or one in the runtime's `mcpServers` config).
+   * It acts for the owner against the owner's own accounts and data — the
+   * owner's filesystem, mail, Notion — so it is `localOnly` (#943, fail
+   * closed): a foreign principal's turn (`motebit_query`, `motebit_task`)
+   * is never offered it and a call naming it is refused (#880), and the MCP
+   * server never re-serves it (#874). There is no per-server "serve to
+   * others" opt-in today; if one is added it must be explicit, never a
+   * default.
+   */
+  private registerOwnerConnectedTool(def: ToolDefinition, handler: ToolHandler): void {
+    this.toolRegistry.register({ ...def, localOnly: true }, handler);
   }
 
   /**
@@ -4670,12 +4750,17 @@ export class MotebitRuntime {
       register: (tool, handler) => inner.register(tool, handler),
       replace: inner.replace?.bind(inner),
       unregister: inner.unregister?.bind(inner),
-      async execute(name, args) {
+      async execute(name: string, args: Record<string, unknown>, destination?: symbol) {
         const tool = inner.list().find((t) => t.name === name);
         if (tool?.outbound === true) {
           assertGate(name);
         }
-        return inner.execute(name, args);
+        // #943: the receipt destination is forwarded untouched.
+        return (
+          inner as {
+            execute(n: string, a: Record<string, unknown>, d?: symbol): Promise<ToolResult>;
+          }
+        ).execute(name, args, destination);
       },
     };
   }

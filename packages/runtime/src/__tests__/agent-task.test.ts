@@ -154,14 +154,32 @@ describe("MotebitRuntime.handleAgentTask", () => {
     expect(valid).toBe(true);
   });
 
-  it("includes delegation receipts from MCP adapters", async () => {
-    const provider = createMockProvider("delegated work");
+  it("includes the delegation receipt of a sub-hire the task's own turn made (#943: carried on the call's result)", async () => {
+    // The task's turn calls a motebit MCP tool once, then answers.
+    let calls = 0;
+    const provider: StreamingProvider = {
+      ...createMockProvider("delegated work"),
+      async *generateStream(_ctx: ContextPack) {
+        const response: AIResponse =
+          calls++ === 0
+            ? {
+                text: "",
+                confidence: 0.9,
+                memory_candidates: [],
+                state_updates: {},
+                tool_calls: [{ id: "c1", name: "sub__motebit_task", args: {} }],
+              }
+            : { text: "delegated work", confidence: 0.9, memory_candidates: [], state_updates: {} };
+        if (response.text) yield { type: "text" as const, text: response.text };
+        yield { type: "done" as const, response };
+      },
+    };
     const runtime = new MotebitRuntime(
       { motebitId: "test-mote", tickRateHz: 0 },
       createAdapters(provider),
     );
 
-    // Inject a mock MCP adapter with delegation receipts
+    // The worker's signed receipt, returned ON the MCP call's result
     const mockDelegationReceipt = {
       task_id: "sub-task-1",
       motebit_id: "remote-mote",
@@ -178,13 +196,15 @@ describe("MotebitRuntime.handleAgentTask", () => {
       signature: "delegate-sig",
     };
 
-    const mockAdapter = {
-      disconnect: vi.fn<() => Promise<void>>().mockResolvedValue(undefined),
-      getAndResetDelegationReceipts: vi.fn().mockReturnValue([mockDelegationReceipt]),
-    };
-
-    // Access private mcpAdapters array
-    (runtime as unknown as { mcpAdapters: unknown[] }).mcpAdapters = [mockAdapter];
+    runtime.getToolRegistry().register(
+      {
+        name: "sub__motebit_task",
+        mode: "api",
+        description: "sub-agent task",
+        inputSchema: { type: "object", properties: {} },
+      },
+      async () => ({ ok: true, data: "done", delegation_receipt: mockDelegationReceipt }),
+    );
 
     const keypair = await generateKeypair();
     const task: AgentTask = {

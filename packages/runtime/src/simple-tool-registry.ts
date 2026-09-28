@@ -9,9 +9,30 @@
 
 import type { ToolRegistry, ToolDefinition, ToolResult, ToolHandler } from "@motebit/sdk";
 import { toolModePriority } from "@motebit/sdk";
+import type { ExecutionReceipt } from "@motebit/sdk";
+import { OWNER_ACT, takeCarriedReceipt } from "./turn-delegation-receipts.js";
+import type { ReceiptDestination } from "./turn-delegation-receipts.js";
 
 export class SimpleToolRegistry implements ToolRegistry {
   private tools = new Map<string, { definition: ToolDefinition; handler: ToolHandler }>();
+  /**
+   * #943: where a hire's receipt goes. The ONE place a tool result's carried
+   * `delegation_receipt` is taken off and recorded — for the destination the
+   * caller passed into THIS execute (a turn's key), defaulting to the owner.
+   */
+  private receiptRouter:
+    | ((destination: ReceiptDestination, receipt: ExecutionReceipt, trustCredited: boolean) => void)
+    | null = null;
+
+  setDelegationReceiptRouter(
+    router: (
+      destination: ReceiptDestination,
+      receipt: ExecutionReceipt,
+      trustCredited: boolean,
+    ) => void,
+  ): void {
+    this.receiptRouter = router;
+  }
 
   register(tool: ToolDefinition, handler: ToolHandler): void {
     if (this.tools.has(tool.name)) throw new Error(`Tool "${tool.name}" already registered`);
@@ -41,14 +62,29 @@ export class SimpleToolRegistry implements ToolRegistry {
     return this.tools.get(name)?.definition;
   }
 
-  async execute(name: string, args: Record<string, unknown>): Promise<ToolResult> {
+  /**
+   * Execute a tool. `destination` names who a hire's receipt belongs to —
+   * a turn's key (passed by that turn's loop deps) or, by default, the
+   * owner (`OWNER_ACT`): every caller that names no turn is an owner door.
+   */
+  async execute(
+    name: string,
+    args: Record<string, unknown>,
+    destination: ReceiptDestination = OWNER_ACT,
+  ): Promise<ToolResult> {
     const entry = this.tools.get(name);
     if (!entry) return { ok: false, error: `Unknown tool: ${name}` };
+    let result: ToolResult;
     try {
-      return await entry.handler(args);
+      result = await entry.handler(args);
     } catch (err: unknown) {
       return { ok: false, error: err instanceof Error ? err.message : String(err) };
     }
+    const carried = takeCarriedReceipt(result);
+    if (carried != null) {
+      this.receiptRouter?.(destination, carried.receipt, carried.trustCredited);
+    }
+    return result;
   }
 
   merge(other: ToolRegistry): void {

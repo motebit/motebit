@@ -133,7 +133,7 @@ Lists all tools available to the motebit (built-in + MCP), including their risk 
 
 ## Proxied tools
 
-In addition to the six synthetic tools, the server exposes all tools from the motebit's [tool registry](/docs/developer/tools) — built-in tools and connected MCP server tools. Every proxied tool call passes through the [policy gate](/docs/concepts/governance):
+In addition to the six synthetic tools, the server exposes the motebit's served tools from its [tool registry](/docs/developer/tools). Tools marked `localOnly` are never served. Those are the tools that act for the owner: the filesystem, shell, memory, and every tool from an MCP server the owner connected (settings, `/mcp add`, or `mcp_servers` in config). Tools loaded with `motebit serve --tools` are served unless their definition says `localOnly`. Every proxied tool call passes through the [policy gate](/docs/concepts/governance):
 
 - **Allowed** — executes and returns the result with an identity tag
 - **Denied** — returns a policy denial message
@@ -146,7 +146,7 @@ The server also exposes MCP resources and prompts:
 | Resource   | URI                  | Description                                        |
 | ---------- | -------------------- | -------------------------------------------------- |
 | `identity` | `motebit://identity` | Motebit ID and public key                          |
-| `state`    | `motebit://state`    | Current state vector (attention, processing, etc.) |
+| `state`    | `motebit://state`    | Live state vector, owner only (stdio)              |
 | `memories` | `motebit://memories` | Memory snapshot, owner only (as `motebit_recall`)  |
 
 | Prompt    | Description                                     |

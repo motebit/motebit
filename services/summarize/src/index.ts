@@ -149,11 +149,12 @@ async function main(): Promise<void> {
         }
         const completedAt = Date.now();
 
-        // Drain delegation receipts from web-search adapter
+        // The web-search receipt of THIS task's call rides on its result
+        // (#943) — never drained from an adapter a concurrent task shares.
         const delegationReceipts: ExecutionReceipt[] = [];
-        if (webSearchAdapter.getAndResetDelegationReceipts != null) {
-          delegationReceipts.push(...webSearchAdapter.getAndResetDelegationReceipts());
-        }
+        const carried = (result as ToolResult & { delegation_receipt?: ExecutionReceipt })
+          .delegation_receipt;
+        if (carried != null) delegationReceipts.push(carried);
 
         const resultStr = result.ok
           ? typeof result.data === "string"

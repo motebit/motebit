@@ -232,11 +232,12 @@ beforeAll(async () => {
       }
       const completedAt = Date.now();
 
-      // Drain delegation receipts
-      const delegationReceipts: ExecutionReceipt[] = [];
-      if (webSearchAdapter.getAndResetDelegationReceipts != null) {
-        delegationReceipts.push(...webSearchAdapter.getAndResetDelegationReceipts());
-      }
+      // #943: the web-search receipt rode on the call's result; this direct
+      // execute is an owner door of the runtime registry, which attributes
+      // it to the owner's record — read it from there.
+      const delegationReceipts: ExecutionReceipt[] = [
+        ...sumRuntime.getAndResetInteractiveDelegationReceipts(),
+      ];
 
       const resultStr = result.ok
         ? typeof result.data === "string"

@@ -38,6 +38,11 @@ export interface ScopedToolRegistryOptions {
   refusal?: (toolName: string) => string | undefined;
 }
 
+/** A registry whose `execute` accepts the #943 receipt destination. */
+type RoutableToolRegistry = ToolRegistry & {
+  execute(name: string, args: Record<string, unknown>, destination?: symbol): Promise<ToolResult>;
+};
+
 export class ScopedToolRegistry implements ToolRegistry {
   constructor(
     private readonly inner: ToolRegistry,
@@ -48,14 +53,19 @@ export class ScopedToolRegistry implements ToolRegistry {
     return this.inner.list().filter((t) => this.opts.allows(t.name));
   }
 
-  async execute(name: string, args: Record<string, unknown>): Promise<ToolResult> {
+  /** `destination` (#943) is forwarded untouched to the inner registry. */
+  async execute(
+    name: string,
+    args: Record<string, unknown>,
+    destination?: symbol,
+  ): Promise<ToolResult> {
     if (!this.opts.allows(name)) {
       return {
         ok: false,
         error: this.opts.refusal?.(name) ?? `Tool "${name}" not available in current presence mode`,
       };
     }
-    return this.inner.execute(name, args);
+    return (this.inner as RoutableToolRegistry).execute(name, args, destination);
   }
 
   register(tool: ToolDefinition, handler: ToolHandler): void {

@@ -7,6 +7,7 @@
  */
 
 import { TurnDelegationReceipts } from "./turn-delegation-receipts.js";
+import type { ReceiptCarryingResult } from "./turn-delegation-receipts.js";
 import type { ExecutionReceipt, ToolRegistry } from "@motebit/sdk";
 import type { TokenAudience } from "@motebit/protocol";
 
@@ -306,7 +307,6 @@ export class InteractiveDelegationManager {
     const timeoutMs = config.timeoutMs ?? 120_000;
     const motebitId = this.deps.motebitId;
     const bumpTrust = (receipt: ExecutionReceipt) => this.deps.bumpTrustFromReceipt(receipt);
-    const stashReceipt = (receipt: ExecutionReceipt) => this.receipts.record(receipt);
 
     // Mark as delegation tool for processStream to emit delegation_start/complete
     this.deps.motebitToolServers.set(TOOL_NAME, "relay");
@@ -533,10 +533,6 @@ export class InteractiveDelegationManager {
           // Best-effort
         }
 
-        // Record into THIS turn's collector (#943): a task's receipt embeds it
-        // only when the hire was made by that task's own turn.
-        stashReceipt(result.receipt);
-
         // Surface the settlement fact so the model reports payment truthfully
         // (it previously narrated "settlement isn't active" on a paid run). The
         // worker's answer stays primary; the payment is a labeled footnote.
@@ -558,10 +554,16 @@ export class InteractiveDelegationManager {
           ...(settlementNote ? [settlementNote] : []),
           ...(degradeNote ? [degradeNote] : []),
         ].join("\n");
-        return {
+        // #943: the receipt rides ON the result; the tool registry records
+        // it for the destination the caller named (the turn that made this
+        // call, or the owner). Trust was credited above.
+        const carrying: ReceiptCarryingResult = {
           ok: true,
           data: `${workerResult}\n\n${footnotes}`,
+          delegation_receipt: result.receipt,
+          delegation_receipt_trust_credited: true,
         };
+        return carrying;
       },
     );
 
@@ -794,11 +796,6 @@ export class InteractiveDelegationManager {
    */
   pushReceipt(receipt: ExecutionReceipt): void {
     this.receipts.recordOwnerAct(receipt);
-  }
-
-  /** A hire made by the in-flight turn — the path `delegate_to_agent` records through. */
-  recordTurnReceipt(receipt: ExecutionReceipt): void {
-    this.receipts.record(receipt);
   }
 
   /**

@@ -2499,6 +2499,18 @@ export async function probeFetch(): Promise<unknown> {
       ),
   },
   {
+    script: "check-memory-source-canonical",
+    proves:
+      "flags a turn sink reaching the owner's delegation-receipt record (#943) — scan (g)(iv): the owner's record (`drainOwner`) is read only by its one owner-only accessor, so a customer's task receipt can never embed the owner's hires. Probe is the cold reviewer's own injection: the sendMessageStreaming sink also drains the owner record into the task's receipts; the gate must surface the owner-record-read violation (the tests caught it before; the gate stayed green). byte-identical restoration on cleanup via mutateFile.",
+    perturb: () =>
+      mutateFile(`packages/runtime/src/motebit-runtime.ts`, (src) =>
+        src.replace(
+          "      this._turnReceiptScope.sink = options.onDelegationReceipts;",
+          "      const sink = options.onDelegationReceipts;\n      this._turnReceiptScope.sink = (r) => sink([...r, ...this.turnReceipts.drainOwner()]);",
+        ),
+      ),
+  },
+  {
     script: "check-agent-revocation-reason-canonical",
     proves:
       'flags the AgentRevocationReason three-way lock breaking — a value rotated in `ALL_AGENT_REVOCATION_REASONS` without updating the union (or gate reference). Drift class: same shape as the SettlementMode probe — union AND array share one file (`packages/protocol/src/agent-revocation.ts`), so the probe targets the comma-bearing array entry (`"spam",`) which matches only the array (the union form uses ` | `). Gate must surface the sibling-alignment violation (union has `spam` but ALL_AGENT_REVOCATION_REASONS contains `spamm` instead). byte-identical restoration on cleanup via mutateFile.',

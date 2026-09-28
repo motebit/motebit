@@ -852,7 +852,9 @@ function main(): void {
   // (real HTTP: another motebit and a static bearer refused with no content,
   // the owner served), `service.test.ts`, `attached-surface.test.ts`.
   const ownerOnlyViolations: string[] = [];
-  const MEMORY_READ_CALL = /\b(queryMemories|getMemories|recallRelevant|exportAll)\(/;
+  // Owner-interior reads served by a handler: memories, and (#943 round 4)
+  // the owner's live state vector (`getState`).
+  const MEMORY_READ_CALL = /\b(queryMemories|getMemories|recallRelevant|exportAll|getState)\(/;
   let mcpFilesScanned = 0;
   let memoryReadRegistrations = 0;
   let registrationsScanned = 0;
@@ -883,14 +885,14 @@ function main(): void {
         const line = src.slice(0, start).split("\n").length;
         const name = /server\.(?:tool|resource)\(\s*"([^"]+)"/.exec(block)?.[1] ?? "(unnamed)";
         ownerOnlyViolations.push(
-          `${rel}:${line}: \`${name}\` reads the owner's memories without the owner check — open its handler with \`const principal = this.ownerPrincipal(extra); if (principal === null) …refuse\``,
+          `${rel}:${line}: \`${name}\` reads the owner's interior (memories or live state) without the owner check — open its handler with \`const principal = this.ownerPrincipal(extra); if (principal === null) …refuse\``,
         );
       }
     }
   }
-  if (memoryReadRegistrations < 2) {
+  if (memoryReadRegistrations < 3) {
     ownerOnlyViolations.push(
-      `packages/mcp-server/src: expected at least the two memory-read registrations (motebit_recall, motebit://memories) — found ${memoryReadRegistrations}; the scan pattern may have drifted from the code`,
+      `packages/mcp-server/src: expected at least the three owner-interior registrations (motebit_recall, motebit://memories, motebit://state) — found ${memoryReadRegistrations}; the scan pattern may have drifted from the code`,
     );
   }
   let memoryDepDefs = 0;
@@ -1003,42 +1005,53 @@ function main(): void {
 
   // === Serving scan (g): a task's receipt embeds only its own turn's hires
   //
-  // #943 round 3: every hire stashed into one shared bucket that only
-  // `handleAgentTask` drained, so the owner's hires (owner-turn delegates,
-  // user taps, owner MCP calls) were signed into the NEXT customer's task
-  // receipt as `delegation_receipts` — the owner's private results sent to
-  // another principal. Receipts are now collected per turn
-  // (`TurnDelegationReceipts`). Locked textually:
-  //   (i)   `agent-task-handler.ts` reaches no receipt bucket (no
-  //         `getAndReset…` call) and gets its receipts only from its turn's
-  //         sink (`onDelegationReceipts`);
-  //   (ii)  `interactive-delegation.ts` holds no receipt array of its own
-  //         (`.receipts.push(`) — it records through the collector; the tap
-  //         path (`pushReceipt`) records as an owner act, never into a turn;
-  //   (iii) the runtime's single-writer hold opens and closes the turn's
-  //         collector (`set _isProcessing` → `turnReceipts.open()` /
-  //         `turnReceipts.close(`), so no turn-holder can skip it;
-  //   (iv)  no non-test runtime file drains the MCP adapters' receipt
-  //         buckets (`getAndResetDelegationReceipts(`) except the one
-  //         collector wiring in motebit-runtime.ts.
-  // Behavior: `task-receipt-scoping.test.ts`.
+  // #943 rounds 3–4: hire receipts sat in shared buckets (the
+  // interactive-delegation stash, each MCP adapter's array) drained by the
+  // next task — or at turn close, which still swept in an owner's CONCURRENT
+  // out-of-turn call (an `invokeLocalTool` tap, a PlanEngine step). The
+  // owner's private results were signed into a customer's task receipt.
+  // Now a receipt is attributed AT CAPTURE: it rides on the tool result
+  // (`delegation_receipt`) and the runtime registry records it for the
+  // destination the caller threaded into that call. Locked:
+  //   (i)   no shared bucket anywhere: no non-test file in packages/*/src,
+  //         apps/*/src or services/*/src defines or calls
+  //         `getAndResetDelegationReceipts`, and neither
+  //         `packages/mcp-client/src` nor the runtime's delegation paths
+  //         keep an `ExecutionReceipt[] = []` array;
+  //   (ii)  a carried receipt is taken off a result in exactly one place,
+  //         `simple-tool-registry.ts`, whose `execute` takes the caller's
+  //         `destination` (default `OWNER_ACT`), and the collector records a
+  //         turn receipt only when the destination IS the open turn's key;
+  //   (iii) the turn's loop deps thread the turn key (`loopDepsForTurn` →
+  //         `toolsForTurn`), and the single-writer hold opens and closes the
+  //         turn collector (`set _isProcessing`);
+  //   (iv)  no turn sink or task path can reach the owner's record: the
+  //         only `.drainOwner(` call is `getAndResetReceipts` in
+  //         interactive-delegation.ts, and the only
+  //         `getAndResetInteractiveDelegationReceipts` / `getAndResetReceipts`
+  //         call is the runtime's public owner-only method; the task handler
+  //         takes receipts only from its turn's sink (`onDelegationReceipts`);
+  //   (v)   the tap path (`pushReceipt`) records as an owner act.
+  // Behavior: `task-receipt-scoping.test.ts` (concurrent invokeLocalTool and
+  // PlanEngine calls during a task, owner turn, tap, the task's own sub-hire,
+  // owner trust credit).
   const receiptViolations: string[] = [];
+  const codeOf = (src: string): string =>
+    src
+      .split("\n")
+      .filter((l) => !/^\s*(\*|\/\/|\/\*)/.test(l))
+      .join("\n");
   const handlerSrc = readFile("packages/runtime/src/agent-task-handler.ts") ?? "";
-  const handlerCode = handlerSrc
-    .split("\n")
-    .filter((l) => !/^\s*(\*|\/\/|\/\*)/.test(l))
-    .join("\n");
-  if (/getAndReset\w*\(/.test(handlerCode) || !/onDelegationReceipts:/.test(handlerCode)) {
+  const handlerCode = codeOf(handlerSrc);
+  if (
+    /getAndReset\w*\(|\.drainOwner\(/.test(handlerCode) ||
+    !/onDelegationReceipts:/.test(handlerCode)
+  ) {
     receiptViolations.push(
-      "packages/runtime/src/agent-task-handler.ts: a task's receipt must take its delegation receipts ONLY from its turn's sink (`onDelegationReceipts`) and drain no bucket (`getAndReset…`)",
+      "packages/runtime/src/agent-task-handler.ts: a task's receipt must take its delegation receipts ONLY from its turn's sink (`onDelegationReceipts`) and drain no bucket or owner record",
     );
   }
   const idSrc = readFile("packages/runtime/src/interactive-delegation.ts") ?? "";
-  if (/\.receipts\.push\(|receipts: ExecutionReceipt\[\] = \[\]/.test(idSrc)) {
-    receiptViolations.push(
-      "packages/runtime/src/interactive-delegation.ts: holds its own receipt array — record through `TurnDelegationReceipts` so a hire lands in the turn that made it",
-    );
-  }
   const pushReceiptBody = bodyOf(
     idSrc,
     "  pushReceipt(receipt: ExecutionReceipt): void {",
@@ -1058,28 +1071,132 @@ function main(): void {
       "packages/runtime/src/motebit-runtime.ts: the single-writer hold (`set _isProcessing`) must open and close the turn's receipt collector (`this.turnReceipts.open()` / `.close(`)",
     );
   }
-  let receiptDrainSites = 0;
+  const ldftTurnBody = bodyOf(runtimeSrc, "private loopDepsForTurn<", "\n  }\n");
+  const toolsForTurnBody = bodyOf(runtimeSrc, "private toolsForTurn(", "\n  }\n");
+  if (
+    !/this\.toolsForTurn\(deps\.tools\)/.test(ldftTurnBody) ||
+    !/const key = this\._turnReceiptKey;/.test(toolsForTurnBody) ||
+    !/execute: \(name, args\) => inner\.execute\(name, args, key\)/.test(toolsForTurnBody)
+  ) {
+    receiptViolations.push(
+      "packages/runtime/src/motebit-runtime.ts: `loopDepsForTurn` must thread the turn's key into every tool execute (`this.toolsForTurn(deps.tools)` → `inner.execute(name, args, key)` with `key = this._turnReceiptKey`)",
+    );
+  }
+  const strSrc = readFile("packages/runtime/src/simple-tool-registry.ts") ?? "";
+  if (
+    !/destination: ReceiptDestination = OWNER_ACT/.test(strSrc) ||
+    !/this\.receiptRouter\?\.\(destination, carried\.receipt/.test(strSrc)
+  ) {
+    receiptViolations.push(
+      "packages/runtime/src/simple-tool-registry.ts: `execute` must take the caller's receipt `destination` (default `OWNER_ACT`) and route the carried receipt to it",
+    );
+  }
+  const tdrSrc = readFile("packages/runtime/src/turn-delegation-receipts.ts") ?? "";
+  const recordForBody = bodyOf(tdrSrc, "  recordFor(", "\n  }\n");
+  if (
+    !/destination !== OWNER_ACT && this\.active != null && this\.active\.key === destination/.test(
+      recordForBody,
+    )
+  ) {
+    receiptViolations.push(
+      "packages/runtime/src/turn-delegation-receipts.ts: `recordFor` must record into the open turn ONLY when the caller's destination IS that turn's key — never into whatever turn is open",
+    );
+  }
   let receiptFilesScanned = 0;
-  for (const rel of walkTsFiles("packages/runtime/src")) {
-    if (rel.includes("__tests__")) continue;
-    receiptFilesScanned++;
-    const lines = (readFile(rel) ?? "").split("\n");
-    for (let i = 0; i < lines.length; i++) {
-      const line = lines[i] as string;
-      if (/^\s*(\*|\/\/|\/\*)/.test(line)) continue;
-      if (!/\.getAndResetDelegationReceipts\??\.?\(/.test(line)) continue;
-      receiptDrainSites++;
-      if (
-        rel !== "packages/runtime/src/motebit-runtime.ts" ||
-        !/this\.mcpAdapters\.flatMap\(\(a\) => a\.getAndResetDelegationReceipts\?\.\(\) \?\? \[\]\)/.test(
-          line,
-        )
-      ) {
-        receiptViolations.push(
-          `${rel}:${i + 1}: drains an MCP adapter's receipt bucket outside the turn collector's wiring — route it through \`TurnDelegationReceipts\`: ${line.trim()}`,
-        );
+  let takeSites = 0;
+  let drainOwnerSites = 0;
+  let ownerDrainApiSites = 0;
+  const receiptSrcRoots: string[] = [];
+  for (const root of ["packages", "apps", "services"]) {
+    let dirs: string[] = [];
+    try {
+      dirs = readdirSync(resolve(ROOT, root));
+    } catch {
+      dirs = [];
+    }
+    for (const d of dirs) receiptSrcRoots.push(join(root, d, "src"));
+  }
+  for (const srcRoot of receiptSrcRoots) {
+    for (const rel of walkTsFiles(srcRoot)) {
+      if (rel.includes("__tests__")) continue;
+      receiptFilesScanned++;
+      const lines = (readFile(rel) ?? "").split("\n");
+      const isRuntime = rel.startsWith("packages/runtime/src/");
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i] as string;
+        if (/^\s*(\*|\/\/|\/\*)/.test(line)) continue;
+        const where = `${rel}:${i + 1}`;
+        if (/\bgetAndResetDelegationReceipts\b/.test(line)) {
+          receiptViolations.push(
+            `${where}: a shared MCP receipt bucket (\`getAndResetDelegationReceipts\`) — return the receipt on the call's result instead: ${line.trim()}`,
+          );
+        }
+        if (
+          (rel.startsWith("packages/mcp-client/src/") ||
+            rel === "packages/runtime/src/interactive-delegation.ts" ||
+            rel === "packages/runtime/src/invoke-capability.ts") &&
+          /ExecutionReceipt\[\]\s*=\s*\[\]/.test(line)
+        ) {
+          receiptViolations.push(
+            `${where}: keeps a shared receipt array — a receipt must ride on its call's result and be attributed at capture: ${line.trim()}`,
+          );
+        }
+        if (
+          isRuntime &&
+          /\btakeCarriedReceipt\(/.test(line) &&
+          !/export function takeCarriedReceipt/.test(line)
+        ) {
+          takeSites++;
+          if (rel !== "packages/runtime/src/simple-tool-registry.ts") {
+            receiptViolations.push(
+              `${where}: takes a carried receipt outside the runtime tool registry — the one place that knows the caller's destination: ${line.trim()}`,
+            );
+          }
+        }
+        if (/\.drainOwner\(/.test(line)) {
+          drainOwnerSites++;
+          if (
+            rel !== "packages/runtime/src/interactive-delegation.ts" ||
+            !/return this\.receipts\.drainOwner\(\);/.test(line)
+          ) {
+            receiptViolations.push(
+              `${where}: reads the owner's receipt record outside its one owner-only accessor — a turn sink or task path must never reach it: ${line.trim()}`,
+            );
+          }
+        }
+        if (/\bgetAndResetInteractiveDelegationReceipts\(|\.getAndResetReceipts\(/.test(line)) {
+          if (/^\s*(async\s+)?getAndReset(InteractiveDelegation)?Receipts\(\)/.test(line)) continue;
+          ownerDrainApiSites++;
+          if (
+            rel !== "packages/runtime/src/motebit-runtime.ts" ||
+            !/return this\.interactiveDelegation\.getAndResetReceipts\(\);/.test(line)
+          ) {
+            receiptViolations.push(
+              `${where}: drains the owner's receipt record — only the runtime's public owner-only accessor may; a turn sink or task path never does: ${line.trim()}`,
+            );
+          }
+        }
       }
     }
+  }
+  // (vi) tools from servers the OWNER connected are `localOnly` (#943 round
+  // 4): `registerExternalTools` and the runtime's `mcpServers` path register
+  // only through `registerOwnerConnectedTool`, which forces `localOnly: true`.
+  const rocBody = bodyOf(runtimeSrc, "private registerOwnerConnectedTool(", "\n  }\n");
+  const retBody = bodyOf(runtimeSrc, "registerExternalTools(sourceId: string", "\n  }\n");
+  if (
+    !/this\.toolRegistry\.register\(\{ \.\.\.def, localOnly: true \}, handler\)/.test(rocBody) ||
+    !/this\.registerOwnerConnectedTool\(def,/.test(retBody) ||
+    /connectMcpServers\(this\.mcpConfigs, this\.toolRegistry/.test(runtimeSrc)
+  ) {
+    receiptViolations.push(
+      "packages/runtime/src/motebit-runtime.ts: owner-connected tools (`registerExternalTools`, the `mcpServers` path) must register through `registerOwnerConnectedTool`, which forces `localOnly: true` — never straight into the registry",
+    );
+  }
+  if (takeSites !== 1) {
+    receiptViolations.push(
+      `packages/runtime/src: expected exactly one \`takeCarriedReceipt(\` call (the tool registry) — found ${takeSites}`,
+    );
   }
   if (receiptViolations.length > 0) {
     console.error(
@@ -1088,14 +1205,14 @@ function main(): void {
     for (const v of receiptViolations) console.error(`  - ${v}`);
     console.error("");
     console.error(
-      "Repair: a task's receipt embeds only the hires its OWN turn made. Record every hire through `TurnDelegationReceipts` (`record` for a turn's hire, `recordOwnerAct` for an owner act outside a turn), let the runtime's single-writer hold open/close the collector, and have `handleAgentTask` take its receipts from the turn's `onDelegationReceipts` sink — never from a shared bucket.",
+      "Repair: a hire's receipt is attributed AT CAPTURE. Return it on the tool call's result (`delegation_receipt`), let the runtime tool registry route it to the destination the caller threaded into that execute (a turn's key via `loopDepsForTurn`, else the owner), keep no shared receipt array or drain, and have `handleAgentTask` take receipts only from its turn's `onDelegationReceipts` sink.",
     );
     console.error("Doctrine: docs/doctrine/memory-provenance.md § authorship (#943).");
     process.exit(1);
   }
 
   console.log(
-    `✓ check-memory-source-canonical: ${MEMORY_SOURCES_REFERENCE.length} memory source(s) locked across union + ALL_MEMORY_SOURCES + gate reference; wire-format-compliant; model/peer authorship scans clean; foreign-turn provenance locked (resolver + ${aiCoreFilesScanned} other ai-core file(s) scanned, 7 wiring links checked); foreign-turn history floor locked (${runtimeFilesScanned} other runtime file(s) scanned for conversation-store writes, ${guardedMethods} ConversationManager writer(s) + ${guardedReaders} reader(s) guarded, ${consentSites} consent site(s) guarded, 4 wiring links checked); foreign-turn serving floor locked (${interiorAiCoreFiles} ai-core file(s) scanned, ${ownerStoreReads} owner-store read(s) all inside recallOwnerInterior; ${runtimeInteriorFiles} runtime file(s) scanned, ${builderCalls} owner-block builder call(s) all inside ownerInteriorForTurn; ${ownerKeysClassified}/${DECIDED_OWNER_INTERIOR.length} decided owner-interior option(s) classified, recall backend floored); owner-only memory serving locked (${mcpFilesScanned} mcp-server file(s), ${registrationsScanned} tool/resource registration(s) scanned, ${memoryReadRegistrations} memory-read registration(s) all owner-checked; ${depFilesScanned} package/app/service src file(s) scanned, ${memoryDepDefs} memory-read dep(s) all asserting the owner; memory_recall frame owner-gated, HTTP never the owner); task receipts turn-scoped (${receiptFilesScanned} runtime file(s) scanned, ${receiptDrainSites} MCP receipt-drain site(s) all in the turn collector's wiring; handler sink-only, tap = owner act, hold opens/closes the collector).`,
+    `✓ check-memory-source-canonical: ${MEMORY_SOURCES_REFERENCE.length} memory source(s) locked across union + ALL_MEMORY_SOURCES + gate reference; wire-format-compliant; model/peer authorship scans clean; foreign-turn provenance locked (resolver + ${aiCoreFilesScanned} other ai-core file(s) scanned, 7 wiring links checked); foreign-turn history floor locked (${runtimeFilesScanned} other runtime file(s) scanned for conversation-store writes, ${guardedMethods} ConversationManager writer(s) + ${guardedReaders} reader(s) guarded, ${consentSites} consent site(s) guarded, 4 wiring links checked); foreign-turn serving floor locked (${interiorAiCoreFiles} ai-core file(s) scanned, ${ownerStoreReads} owner-store read(s) all inside recallOwnerInterior; ${runtimeInteriorFiles} runtime file(s) scanned, ${builderCalls} owner-block builder call(s) all inside ownerInteriorForTurn; ${ownerKeysClassified}/${DECIDED_OWNER_INTERIOR.length} decided owner-interior option(s) classified, recall backend floored); owner-only memory serving locked (${mcpFilesScanned} mcp-server file(s), ${registrationsScanned} tool/resource registration(s) scanned, ${memoryReadRegistrations} memory-read registration(s) all owner-checked; ${depFilesScanned} package/app/service src file(s) scanned, ${memoryDepDefs} memory-read dep(s) all asserting the owner; memory_recall frame owner-gated, HTTP never the owner); task receipts attributed at capture (${receiptFilesScanned} package/app/service src file(s) scanned: no shared receipt bucket; ${takeSites} carried-receipt take site (the tool registry, caller's destination); ${drainOwnerSites} owner-record read(s) + ${ownerDrainApiSites} owner-drain call(s), all the owner-only accessor; turn key threaded; handler sink-only; tap = owner act; owner-connected tools localOnly).`,
   );
 }
 

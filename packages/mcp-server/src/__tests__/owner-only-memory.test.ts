@@ -102,7 +102,7 @@ function memoryDeps() {
     filterTools: (t) => t,
     validateTool: () => ({ allowed: true, requiresApproval: false }),
     executeTool: async () => ({ ok: true, data: "ok" }),
-    getState: () => ({}),
+    getState: vi.fn(() => ({ attention: 0.42, marker: `${MARK}-state` })),
     getMemories,
     queryMemories,
     logToolCall: () => {},
@@ -141,6 +141,8 @@ async function tokenFor(mid: string, privateKey: Uint8Array, aud: string): Promi
 
 const recall = (port: number, bearer: string) =>
   rpc(port, bearer, "tools/call", { name: "motebit_recall", arguments: { query: "q" } });
+const readState = (port: number, bearer: string) =>
+  rpc(port, bearer, "resources/read", { uri: "motebit://state" });
 const readMemories = (port: number, bearer: string) =>
   rpc(port, bearer, "resources/read", { uri: "motebit://memories" });
 
@@ -160,6 +162,10 @@ describe("#943 — HTTP callers are never the owner", () => {
       const r2 = await readMemories(port, bearer);
       expect(r2).toContain("served only to its owner");
       expect(r2).not.toContain(MARK);
+      // The owner's live state vector: same rule (#943 round 4).
+      const r3 = await readState(port, bearer);
+      expect(r3).toContain("live state is served only to its owner");
+      expect(r3).not.toContain(MARK);
     }
     expect(queryMemories).not.toHaveBeenCalled();
     expect(getMemories).not.toHaveBeenCalled();
@@ -225,6 +231,8 @@ describe("#943 — the local stdio session is the owner", () => {
       expect(m.queryMemories).toHaveBeenCalledWith("q", undefined, "owner");
       const res = await client.readResource({ uri: "motebit://memories" });
       expect(JSON.stringify(res)).toContain(`${MARK}-resource`);
+      const state = await client.readResource({ uri: "motebit://state" });
+      expect(JSON.stringify(state)).toContain(`${MARK}-state`);
       expect(m.getMemories).toHaveBeenCalledWith(50, "owner");
     } finally {
       await client.close();

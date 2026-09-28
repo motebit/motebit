@@ -185,106 +185,13 @@ export async function* handleAgentTask(
       (responseText ? ` Model note: ${responseText}` : "");
   }
 
-  // Bump trust from verified delegation receipts (best-effort)
-  if (delegationReceipts.length > 0 && deps.agentTrustStore != null) {
-    try {
-      // Pre-fetch trust scores for all agents in receipt trees into a sync map
-      const collectIds = (r: ExecutionReceipt): string[] => {
-        const ids = [r.motebit_id];
-        for (const sub of r.delegation_receipts ?? []) ids.push(...collectIds(sub));
-        return ids;
-      };
-      const allIds = [...new Set(delegationReceipts.flatMap(collectIds))];
-      const trustMap = new Map<string, number>();
-      for (const id of allIds) {
-        const rec = await deps.agentTrustStore.getAgentTrust(deps.motebitId, id);
-        trustMap.set(
-          id,
-          rec ? trustLevelToScore(rec.trust_level) : trustLevelToScore(AgentTrustLevel.Unknown),
-        );
-      }
-
-      for (const dr of delegationReceipts) {
-        // Look up stored public key for the delegatee
-        const trustRecord = await deps.agentTrustStore.getAgentTrust(deps.motebitId, dr.motebit_id);
-        if (trustRecord?.public_key) {
-          const fromHex = (hex: string): Uint8Array => {
-            const bytes = new Uint8Array(hex.length / 2);
-            for (let i = 0; i < hex.length; i += 2) {
-              bytes[i / 2] = parseInt(hex.slice(i, i + 2), 16);
-            }
-            return bytes;
-          };
-          const pubKey = fromHex(trustRecord.public_key);
-          const verified = await verifyExecutionReceipt(dr, pubKey);
-          await deps.bumpTrustFromReceipt(dr, verified);
-        } else {
-          // No stored key — record as unverified first contact
-          await deps.bumpTrustFromReceipt(dr, true);
-        }
-
-        // Compose chain trust through delegation tree (best-effort)
-        const directTrust =
-          trustMap.get(dr.motebit_id) ?? trustLevelToScore(AgentTrustLevel.Unknown);
-        const chainTrust = composeDelegationTrust(
-          directTrust,
-          dr,
-          (id: string) => trustMap.get(id) ?? trustLevelToScore(AgentTrustLevel.Unknown),
-        );
-
-        // Emit chain trust event for gradient/audit consumption
-        try {
-          await deps.events.appendWithClock({
-            event_id: crypto.randomUUID(),
-            motebit_id: deps.motebitId,
-            timestamp: Date.now(),
-            event_type: EventType.ChainTrustComputed,
-            payload: {
-              delegatee: dr.motebit_id,
-              direct_trust: directTrust,
-              chain_trust: chainTrust,
-              delegation_depth: (dr.delegation_receipts ?? []).length,
-            },
-            tombstoned: false,
-          });
-        } catch {
-          // Event emission is best-effort
-        }
-      }
-    } catch (err: unknown) {
-      // Trust bumping is best-effort — don't break the task
-      deps.logger.warn("trust bump failed", {
-        error: err instanceof Error ? err.message : String(err),
-      });
-    }
-  }
-
-  // Update agent graph with delegation receipt edges
-  for (const dr of delegationReceipts) {
-    try {
-      await deps.agentGraph.addReceiptEdges(dr);
-    } catch (err: unknown) {
-      deps.logger.warn("graph edge update failed", {
-        error: err instanceof Error ? err.message : String(err),
-      });
-    }
-  }
-
-  // Record latency for delegation receipts (best-effort)
-  if (delegationReceipts.length > 0 && deps.latencyStatsStore != null) {
-    for (const dr of delegationReceipts) {
-      try {
-        const latency = dr.completed_at - dr.submitted_at;
-        if (latency > 0) {
-          await deps.latencyStatsStore.record(deps.motebitId, dr.motebit_id, latency);
-        }
-      } catch (err: unknown) {
-        deps.logger.warn("latency recording failed", {
-          error: err instanceof Error ? err.message : String(err),
-        });
-      }
-    }
-  }
+  // Credit the hires this task's turn made: trust, chain trust, graph
+  // edges, latency (best-effort). The owner's own hires get the same credit
+  // at owner-record intake (#943) — never through a task.
+  await absorbDelegationReceipts(
+    deps,
+    delegationReceipts.map((receipt) => ({ receipt, trustCredited: false })),
+  );
 
   // Hash prompt and result
   const promptHash = await hash(new TextEncoder().encode(task.prompt));
@@ -393,4 +300,130 @@ export async function* handleAgentTask(
   }
 
   yield { type: "task_result", receipt };
+}
+
+/**
+ * Credit delegation receipts to THIS motebit (the one that made the hires):
+ * verify + bump trust (unless already credited at production), compose and
+ * emit `ChainTrustComputed`, add agent-graph edges, record latency. All
+ * best-effort. Used by `handleAgentTask` for its own turn's hires, and by
+ * the runtime's owner-record intake for the owner's hires (#943) — the two
+ * consumers are disjoint, so no receipt is credited twice.
+ */
+export async function absorbDelegationReceipts(
+  deps: Pick<
+    AgentTaskHandlerDeps,
+    | "motebitId"
+    | "events"
+    | "agentTrustStore"
+    | "agentGraph"
+    | "latencyStatsStore"
+    | "logger"
+    | "bumpTrustFromReceipt"
+  >,
+  entries: Array<{ receipt: ExecutionReceipt; trustCredited: boolean }>,
+): Promise<void> {
+  // Bump trust from verified delegation receipts (best-effort)
+  const delegationReceipts = entries.map((e) => e.receipt);
+  if (delegationReceipts.length > 0 && deps.agentTrustStore != null) {
+    try {
+      // Pre-fetch trust scores for all agents in receipt trees into a sync map
+      const collectIds = (r: ExecutionReceipt): string[] => {
+        const ids = [r.motebit_id];
+        for (const sub of r.delegation_receipts ?? []) ids.push(...collectIds(sub));
+        return ids;
+      };
+      const allIds = [...new Set(delegationReceipts.flatMap(collectIds))];
+      const trustMap = new Map<string, number>();
+      for (const id of allIds) {
+        const rec = await deps.agentTrustStore.getAgentTrust(deps.motebitId, id);
+        trustMap.set(
+          id,
+          rec ? trustLevelToScore(rec.trust_level) : trustLevelToScore(AgentTrustLevel.Unknown),
+        );
+      }
+
+      for (const { receipt: dr, trustCredited } of entries) {
+        // Look up stored public key for the delegatee
+        const trustRecord = await deps.agentTrustStore.getAgentTrust(deps.motebitId, dr.motebit_id);
+        if (trustCredited) {
+          // Trust was already credited where the hire was made.
+        } else if (trustRecord?.public_key) {
+          const fromHex = (hex: string): Uint8Array => {
+            const bytes = new Uint8Array(hex.length / 2);
+            for (let i = 0; i < hex.length; i += 2) {
+              bytes[i / 2] = parseInt(hex.slice(i, i + 2), 16);
+            }
+            return bytes;
+          };
+          const pubKey = fromHex(trustRecord.public_key);
+          const verified = await verifyExecutionReceipt(dr, pubKey);
+          await deps.bumpTrustFromReceipt(dr, verified);
+        } else {
+          // No stored key — record as unverified first contact
+          await deps.bumpTrustFromReceipt(dr, true);
+        }
+
+        // Compose chain trust through delegation tree (best-effort)
+        const directTrust =
+          trustMap.get(dr.motebit_id) ?? trustLevelToScore(AgentTrustLevel.Unknown);
+        const chainTrust = composeDelegationTrust(
+          directTrust,
+          dr,
+          (id: string) => trustMap.get(id) ?? trustLevelToScore(AgentTrustLevel.Unknown),
+        );
+
+        // Emit chain trust event for gradient/audit consumption
+        try {
+          await deps.events.appendWithClock({
+            event_id: crypto.randomUUID(),
+            motebit_id: deps.motebitId,
+            timestamp: Date.now(),
+            event_type: EventType.ChainTrustComputed,
+            payload: {
+              delegatee: dr.motebit_id,
+              direct_trust: directTrust,
+              chain_trust: chainTrust,
+              delegation_depth: (dr.delegation_receipts ?? []).length,
+            },
+            tombstoned: false,
+          });
+        } catch {
+          // Event emission is best-effort
+        }
+      }
+    } catch (err: unknown) {
+      // Trust bumping is best-effort — don't break the task
+      deps.logger.warn("trust bump failed", {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  // Update agent graph with delegation receipt edges
+  for (const dr of delegationReceipts) {
+    try {
+      await deps.agentGraph.addReceiptEdges(dr);
+    } catch (err: unknown) {
+      deps.logger.warn("graph edge update failed", {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  // Record latency for delegation receipts (best-effort)
+  if (delegationReceipts.length > 0 && deps.latencyStatsStore != null) {
+    for (const dr of delegationReceipts) {
+      try {
+        const latency = dr.completed_at - dr.submitted_at;
+        if (latency > 0) {
+          await deps.latencyStatsStore.record(deps.motebitId, dr.motebit_id, latency);
+        }
+      } catch (err: unknown) {
+        deps.logger.warn("latency recording failed", {
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+  }
 }
