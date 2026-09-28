@@ -2725,6 +2725,67 @@ export async function probeFetch(): Promise<unknown> {
       }),
   },
   {
+    script: "check-master-token-carve-outs",
+    proves:
+      'flags a prefix carve-out in the relay\'s /api/v1/* master-token catch-all — the #855 class. Reinstates `c.req.path.startsWith("/api/v1/credentials/verify")` beside the table lookup (the carve-out that let `POST /api/v1/credentials/verify/reputation` reach the reputation route without the master token); the gate names the path read outside `isMasterTokenCarveOut`.',
+    perturb: () =>
+      mutateFile("services/relay/src/middleware.ts", (src) => {
+        const anchor = "if (isMasterTokenCarveOut(c.req.method, c.req.path)) {";
+        if (!src.includes(anchor)) {
+          throw new Error(
+            "probe vacuous: services/relay/src/middleware.ts no longer decides the catch-all by isMasterTokenCarveOut — retarget the probe",
+          );
+        }
+        return src.replace(
+          anchor,
+          'if (isMasterTokenCarveOut(c.req.method, c.req.path) || c.req.path.startsWith("/api/v1/credentials/verify")) {',
+        );
+      }),
+  },
+  {
+    script: "check-master-token-carve-outs",
+    proves:
+      'flags an aliased `endsWith` exemption in the agent-route middleware — the #855 sibling, in the shape the cold review used to slip the first gate: `const p = c.req.path; … || p.endsWith("/solvency-proof")` beside `isPublicAgentRoute` (the closure that let `GET /api/v1/agents/solvency-proof` be served tokenless by `GET /api/v1/agents/:motebitId`). R6 is an allowlist, so the alias, the call and the extra `next()` are each refused.',
+    perturb: () =>
+      mutateFile("services/relay/src/agents.ts", (src) => {
+        const anchor = "if (isPublicAgentRoute(c.req.method, c.req.path)) {";
+        if (!src.includes(anchor)) {
+          throw new Error(
+            "probe vacuous: services/relay/src/agents.ts no longer decides the agent door by isPublicAgentRoute — retarget the probe",
+          );
+        }
+        return src.replace(
+          anchor,
+          'const p = c.req.path;\n    if (isPublicAgentRoute(c.req.method, c.req.path) || p.endsWith("/solvency-proof")) {',
+        );
+      }),
+  },
+  {
+    script: "check-master-token-carve-outs",
+    proves:
+      "flags an exemption moved into a same-file helper in the /api/v1/* catch-all — the cold review's strongest bypass of the first gate (a new `/api/v1/receipts/` prefix passed the gate AND the full relay suite): `|| isLegacyPublic(c)` beside `isMasterTokenCarveOut`, the helper doing `c.req.path.startsWith(…)`. R6 refuses the unlisted callee and the guard that is no longer exactly the matcher call.",
+    perturb: () =>
+      mutateFile("services/relay/src/middleware.ts", (src) => {
+        const anchor = "if (isMasterTokenCarveOut(c.req.method, c.req.path)) {";
+        const helperAnchor =
+          "const matchMasterTokenCarveOut = routeTableMatcher(MASTER_TOKEN_CARVE_OUTS);";
+        if (!src.includes(anchor) || !src.includes(helperAnchor)) {
+          throw new Error(
+            "probe vacuous: services/relay/src/middleware.ts no longer has the catch-all guard or its matcher — retarget the probe",
+          );
+        }
+        return src
+          .replace(
+            helperAnchor,
+            `${helperAnchor}\nfunction isLegacyPublic(c: { req: { path: string } }): boolean {\n  return c.req.path.startsWith("/api/v1/receipts/");\n}`,
+          )
+          .replace(
+            anchor,
+            "if (isMasterTokenCarveOut(c.req.method, c.req.path) || isLegacyPublic(c)) {",
+          );
+      }),
+  },
+  {
     script: "check-worker-no-master-token",
     proves:
       "flags a worker reading the relay master token again — the 2026-09-13 blast-radius class (every first-party worker held MOTEBIT_API_TOKEN, so a compromised worker container was a compromised relay). Probe reinstates the env read in research's config loader; byte-identical restoration on cleanup.",

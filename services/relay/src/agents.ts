@@ -6,6 +6,7 @@ import type { Hono, Context } from "hono";
 import { relayRouteAudience, type TokenAudience } from "@motebit/protocol";
 import { HTTPException } from "hono/http-exception";
 import { refusePublicDeviceRegistration } from "./device-registration-guard.js";
+import { routeTableMatcher, type MasterTokenCarveOut } from "./middleware.js";
 import type { MotebitDatabase, DatabaseDriver } from "@motebit/persistence";
 import type { IdentityManager } from "@motebit/core-identity";
 import type { EventStore } from "@motebit/event-log";
@@ -472,50 +473,67 @@ export interface AgentAuthMiddlewareDeps {
  * here — no silent third state. A route landing here is a deliberate,
  * reviewed decision, never an accident of registration order (the
  * 2026-07-07 listing-write vuln).
+ *
+ * Each entry is one method and one route pattern exactly as registered,
+ * matched anchored against `c.req.path` (the path the router dispatches on),
+ * the same shape as the master-token catch-all's MASTER_TOKEN_CARVE_OUTS
+ * (#855). These were closures — `endsWith("/solvency-proof")`,
+ * `endsWith("/succession")`, a method-blind `endsWith("/credentials/submit")`,
+ * an unanchored regex — so `GET /api/v1/agents/solvency-proof` was served,
+ * tokenless, by `GET /api/v1/agents/:motebitId`, and
+ * `GET /api/v1/agents/:id/receipts/solvency-proof` by the receipts route. A
+ * `GET` entry also covers `HEAD` (Hono serves HEAD with the GET handler).
+ * `check-master-token-carve-outs` proves every entry names a registered route
+ * and reaches no other, and refuses a path test beside `isPublicAgentRoute`.
  */
-export const PUBLIC_AGENT_ROUTES: ReadonlyArray<{
-  match: (path: string, method: string) => boolean;
-  reason: string;
-}> = [
+export const PUBLIC_AGENT_ROUTES: ReadonlyArray<MasterTokenCarveOut> = [
   {
-    match: (p) => p === "/api/v1/agents/bootstrap",
-    reason: "bootstrap: fresh-identity registration, own rate limiter",
+    method: "POST",
+    path: "/api/v1/agents/bootstrap",
+    auth: "bootstrap: fresh-identity registration, own rate limiter",
   },
   {
-    match: (p, m) => p.endsWith("/succession") && m === "GET",
-    reason: "succession: public key-lineage verification (CLAUDE.md rule 6)",
+    method: "GET",
+    path: "/api/v1/agents/:motebitId/succession",
+    auth: "succession: public key-lineage verification (CLAUDE.md rule 6)",
   },
   {
-    match: (p, m) => p === "/api/v1/agents/discover" && m === "GET",
-    reason: "discover: agents must find each other without pre-existing auth",
+    method: "GET",
+    path: "/api/v1/agents/discover",
+    auth: "discover: agents must find each other without pre-existing auth",
   },
   {
-    match: (p, m) => p === "/api/v1/agents/revocations" && m === "GET",
-    reason: "revocations: operator's signed, verifiable moderation history",
+    method: "GET",
+    path: "/api/v1/agents/revocations",
+    auth: "revocations: operator's signed, verifiable moderation history",
   },
   {
-    match: (p) => p.endsWith("/credentials/submit"),
-    reason:
+    method: "POST",
+    path: "/api/v1/agents/:motebitId/credentials/submit",
+    auth:
       "credentials/submit: permissive-by-signature — the self-verifying " +
       "envelope IS the auth (spec/credential-v1.md); no bearer token by design",
   },
   {
-    match: (p, m) => /\/devices\/[^/]+\/hardware-attestation$/.test(p) && m === "POST",
-    reason:
+    method: "POST",
+    path: "/api/v1/agents/:motebitId/devices/:deviceId/hardware-attestation",
+    auth:
       "hardware-attestation: self-authenticating — the request is signed " +
       "under the device's identity key and verified in-handler (sibling of " +
       "credentials/submit + register-self); no bearer token by design",
   },
   {
-    match: (p, m) => p.endsWith("/debit") && m === "POST",
-    reason:
+    method: "POST",
+    path: "/api/v1/agents/:motebitId/debit",
+    auth:
       "debit: internal service-to-service auth via the x-relay-secret " +
       "header (subscriptions.ts), verified in-handler — not a user bearer " +
       "token. Correct permanent carve-out.",
   },
   {
-    match: (p, m) => p.endsWith("/solvency-proof") && m === "GET",
-    reason:
+    method: "GET",
+    path: "/api/v1/agents/:motebitId/solvency-proof",
+    auth:
       "solvency-proof: public verification primitive by design — a " +
       "counterparty checks an agent can cover an amount BEFORE transacting, " +
       "which requires no pre-existing auth (sibling of succession).",
@@ -532,6 +550,17 @@ export const PUBLIC_AGENT_ROUTES: ReadonlyArray<{
   // a route-family branch below: both layers agree on the audience, and auth
   // holds even when the dedicated dualAuth layer is absent.
 ];
+
+const matchPublicAgentRoute = routeTableMatcher(PUBLIC_AGENT_ROUTES);
+
+/**
+ * Whether the agent-route middleware lets `method path` through with no
+ * token: exactly the PUBLIC_AGENT_ROUTES entries, anchored, HEAD as its GET.
+ * `path` is `c.req.path` — the path the router dispatches on (#855).
+ */
+export function isPublicAgentRoute(method: string, path: string): boolean {
+  return matchPublicAgentRoute(method, path);
+}
 
 /**
  * Install the `/api/v1/agents/*` auth middleware. Registered EARLY (index.ts,
@@ -553,21 +582,18 @@ export function registerAgentAuthMiddleware(deps: AgentAuthMiddlewareDeps): void
     recordAuthEvent,
   } = deps;
 
-  app.use("/api/v1/agents/*", async (c, next) => {
-    const path = c.req.path;
-    const method = c.req.method;
-
-    // Explicit public / self-authenticating carve-outs.
-    if (PUBLIC_AGENT_ROUTES.some((r) => r.match(path, method))) {
-      await next();
-      return;
-    }
-
+  // Everything after the public check: a request reaches `next()` here only
+  // with the master token or a verified device token. Kept out of the door's
+  // handler so the door's exemption is ONE matcher call and nothing else
+  // (#855; `check-master-token-carve-outs` R6 holds this body to a fixed set
+  // of calls and request reads, and its `next()` to the two authenticated
+  // exits).
+  const authenticateAgentRoute = async (c: Context, next: () => Promise<void>): Promise<void> => {
     const authHeader = c.req.header("authorization");
     if (authHeader == null || !authHeader.startsWith("Bearer ")) {
       recordRefusalBeforeVerify(c, recordAuthEvent, {
         kind: "agent_token_rejected",
-        audience: relayRouteAudience(method, path) ?? "admin:query",
+        audience: relayRouteAudience(c.req.method, c.req.path) ?? "admin:query",
         reason: "missing_token",
       });
       throw new HTTPException(401, { message: "Missing auth token" });
@@ -579,8 +605,8 @@ export function registerAgentAuthMiddleware(deps: AgentAuthMiddlewareDeps): void
     // must be visible if it ever comes back.
     if (apiToken != null && apiToken !== "" && token === apiToken) {
       recordMasterTokenOnce(c, recordAuthEvent, {
-        method,
-        path,
+        method: c.req.method,
+        path: c.req.path,
         correlationId: c.req.header("x-correlation-id") ?? null,
       });
       await next();
@@ -591,7 +617,7 @@ export function registerAgentAuthMiddleware(deps: AgentAuthMiddlewareDeps): void
     if (!claims?.mid) {
       recordRefusalBeforeVerify(c, recordAuthEvent, {
         kind: "agent_token_rejected",
-        audience: relayRouteAudience(method, path) ?? "admin:query",
+        audience: relayRouteAudience(c.req.method, c.req.path) ?? "admin:query",
         reason: "unparseable_token",
       });
       throw new HTTPException(401, { message: "Invalid token" });
@@ -621,7 +647,8 @@ export function registerAgentAuthMiddleware(deps: AgentAuthMiddlewareDeps): void
     // ever registered), and every other method on that path is `GET
     // /api/v1/agents/:motebitId` with the id "push-token" (admin:query) or
     // no route at all (the default).
-    const agentAudience: TokenAudience = relayRouteAudience(method, path) ?? "admin:query";
+    const agentAudience: TokenAudience =
+      relayRouteAudience(c.req.method, c.req.path) ?? "admin:query";
 
     // The key the token verified under, from the row that verified it —
     // captured here, never re-read by a route (auth.ts `onVerified`).
@@ -642,12 +669,12 @@ export function registerAgentAuthMiddleware(deps: AgentAuthMiddlewareDeps): void
           reason,
           expectedAudience: agentAudience,
           mid: claims.mid,
-          path,
+          path: c.req.path,
         });
         recordAuthEvent?.({
           kind: "agent_token_rejected",
-          method,
-          path,
+          method: c.req.method,
+          path: c.req.path,
           motebitId: claims.mid,
           audience: agentAudience,
           reason,
@@ -669,6 +696,18 @@ export function registerAgentAuthMiddleware(deps: AgentAuthMiddlewareDeps): void
       c.set("callerVerifiedKeySource" as never, verified.via);
     }
     await next();
+  };
+
+  // The door. Its exemption is exactly PUBLIC_AGENT_ROUTES, decided by one
+  // anchored matcher call on the routed path; every other request is
+  // authenticated (#855).
+  app.use("/api/v1/agents/*", async (c, next) => {
+    if (isPublicAgentRoute(c.req.method, c.req.path)) {
+      await next();
+      return;
+    }
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-argument -- Hono context type variance
+    return authenticateAgentRoute(c, next);
   });
 
   // Collaborative proposals (`/api/v1/proposals`, `/api/v1/proposals/*`) take

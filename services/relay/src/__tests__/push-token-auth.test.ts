@@ -149,16 +149,21 @@ describe("push-token route auth (#825)", () => {
     },
   );
 
-  it.each([
-    ["GET", 404],
-    ["PUT", 404],
-    ["PATCH", 404],
-  ] as const)(
-    "%s on the push-token path still passes auth with an admin:query token (→ %i, as main)",
-    async (method, status) => {
+  it("GET on the push-token path still passes auth with an admin:query token (→ 404, as main)", async () => {
+    const phone = await seedAgent(relay);
+    const res = await onPath("GET", await mintAsMobile(phone, "admin:query"));
+    expect(res.status).toBe(404);
+  });
+
+  // PUT and PATCH match no route on this path, so the /api/v1/* catch-all
+  // carves out neither (#855: a carve-out is one method on one registered
+  // route) and they are master-only — refused before the agent middleware.
+  it.each(["PUT", "PATCH"])(
+    "%s on the push-token path is master-only: an admin:query token is refused (#855)",
+    async (method) => {
       const phone = await seedAgent(relay);
       const res = await onPath(method, await mintAsMobile(phone, "admin:query"));
-      expect(res.status).toBe(status);
+      expect(res.status).toBe(401);
     },
   );
 });
