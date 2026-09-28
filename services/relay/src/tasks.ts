@@ -2880,8 +2880,19 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
       // leg and is validated at the forward site (where the worker's address
       // + the peer relay's treasury resolve via discovery). See
       // docs/doctrine/off-ramp-as-user-action.md § federated P2P.
+      //
+      // "Hosted here" is the discovery shelf (#959 round 4): on the shelf
+      // (`ON_SHELF` — not delisted by departure, lapse or revocation,
+      // registry-delist.ts) and not revoked — exactly the predicate
+      // discovery lists hireable agents by (task-routing.ts). A departed,
+      // lapsed or revoked row is kept for its key state, not for hire: a
+      // worker that migrated to a peer is federated, and a 2-leg proof for it
+      // is refused on the federated branch.
       const workerReg = moteDb.db
-        .prepare("SELECT settlement_address, public_key FROM agent_registry WHERE motebit_id = ?")
+        .prepare(
+          `SELECT settlement_address, public_key FROM agent_registry
+            WHERE motebit_id = ? AND (revoked IS NULL OR revoked = 0)${ON_SHELF}`,
+        )
         .get(body.target_agent) as
         { settlement_address: string | null; public_key: string | null } | undefined;
 
@@ -2934,10 +2945,12 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
         // asserts a DIFFERENT agent's address and binding must be enforced.
         // docs/doctrine/settlement-authority-binding.md.
         //
-        // A local worker with NO registered address is paid at its derived-
-        // bound address — the Solana address its identity key derives — and at
-        // nothing else (#959 round 3): with no address of its own choosing, the
-        // only destination bound to it is the one its key proves.
+        // DEFENSIVE FLOOR (#959 round 4): a local worker with no registered
+        // address is not P2P-eligible (`evaluateSettlementEligibility` refuses
+        // above — a worker that never registered an address never opted into
+        // being paid P2P), so this branch should be unreachable for admission.
+        // Should it be reached, the only destination accepted is the one the
+        // worker's own key derives; anything else is refused.
         const derivedOk = (): boolean => {
           // Holder, else main's registry read (§5f verification reader).
           const workerKey = verificationKeyFor(
@@ -3227,8 +3240,10 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
       // hosting peer's relay-identity-derived address (relay_peers.public_key).
       const aTreasury = deriveSolanaAddress(relayIdentity.publicKey);
       const peerRow = moteDb.db
-        .prepare("SELECT public_key FROM relay_peers WHERE endpoint_url = ? AND state = 'active'")
-        .get(peerEndpoint) as { public_key: string } | undefined;
+        .prepare(
+          "SELECT public_key, peer_relay_id FROM relay_peers WHERE endpoint_url = ? AND state = 'active'",
+        )
+        .get(peerEndpoint) as { public_key: string; peer_relay_id: string } | undefined;
       if (!peerRow?.public_key) {
         throw new HTTPException(400, {
           message: "Cannot resolve executor relay treasury (peer public key missing)",
@@ -3282,10 +3297,14 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
         bFeeMicro,
       };
       // This relay originates the task; the executor relay hosts the worker
-      // and verifies its leg. Declared from the BUILT plan; the scope becomes
-      // effective only once the forward is accepted (`forwarded_to`, set at
-      // the forward site — `p2pWorkerLegScope`).
-      p2pAdmission = { worker_leg: "remote" };
+      // and verifies its leg. Declared from the BUILT plan, with the PLANNED
+      // executor relay recorded at admission — before the forward, so a lost
+      // response (the executor accepted, our fetch timed out or saw a 5xx)
+      // still leaves the scope 'remote' when the result arrives (#959 round
+      // 4). Cleared only by a definitive refusal (4xx) at the forward site.
+      // Only that peer's result is accepted for this task
+      // (`onTaskResultReceived`).
+      p2pAdmission = { worker_leg: "remote", planned_peer: peerRow.peer_relay_id };
     }
 
     // Every P2P admission names how its worker leg is verified: a local
@@ -3738,16 +3757,6 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
         if (resp.ok) {
           routed = true;
           taskRouter.recordPeerForwardResult(peerEndpoint, true);
-          // The worker leg becomes the executor relay's only now that the
-          // plan was forwarded and accepted (#959 round 3).
-          const forwardedEntry = taskQueue.get(taskId);
-          if (forwardedEntry?.p2p_admission?.worker_leg === "remote") {
-            forwardedEntry.p2p_admission = {
-              ...forwardedEntry.p2p_admission,
-              forwarded_to: peerEndpoint,
-            };
-            taskQueue.set(taskId, forwardedEntry);
-          }
           logger.info("task.federated_p2p_forwarded", {
             correlationId: taskId,
             peerRelay: peerEndpoint,
@@ -3770,10 +3779,23 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
           // replays this answer (#888), and the body names this task.
           // Wording only (the binding is the same either way): a 4xx is the
           // executor refusing; anything else may mean it holds the task.
-          const executorOutcome =
-            resp.status >= 400 && resp.status < 500
-              ? `The executor relay refused this task (HTTP ${resp.status}).`
-              : `The executor relay failed this task (HTTP ${resp.status}); it may hold the task — poll that task's result.`;
+          const refusedDefinitively = resp.status >= 400 && resp.status < 500;
+          if (refusedDefinitively) {
+            // A definitive refusal: the executor relay does not hold the task,
+            // so no result can legitimately arrive from it and the worker leg
+            // is nobody's to hand off (#959 round 4). Clearing the planned
+            // peer makes the scope 'local' and closes the result door. Any
+            // other outcome (5xx, a lost response) keeps it: the executor may
+            // hold the task and its result may still arrive.
+            const refusedEntry = taskQueue.get(taskId);
+            if (refusedEntry?.p2p_admission?.planned_peer != null) {
+              refusedEntry.p2p_admission = { worker_leg: "remote" };
+              taskQueue.set(taskId, refusedEntry);
+            }
+          }
+          const executorOutcome = refusedDefinitively
+            ? `The executor relay refused this task (HTTP ${resp.status}).`
+            : `The executor relay failed this task (HTTP ${resp.status}); it may hold the task — poll that task's result.`;
           throw new HTTPException(502, {
             message: `${executorOutcome} This payment is bound to it (task_id in this response) and cannot fund another task; a resubmission of this payment_proof under any Idempotency-Key is refused, and this key replays this answer. Payments on the sovereign rail are not reversed: the recourse for a paid task that never runs is the trust record, not a refund.`,
           });

@@ -94,20 +94,19 @@ export function createFederationCallbacks(deps: FederationCallbackDeps) {
   const platformFeeRate = deps.platformFeeRate ?? SDK_DEFAULT_PLATFORM_FEE_RATE;
 
   /** The executor relay's admission record for a federated P2P task's hosted worker (#959). */
-  // The executor relay HOSTS the worker, so its scope is always `local` —
-  // with or without a registered address (#959 round 3). The recorded address
-  // is the worker's registered one; with none, the proof's worker-leg address
-  // when the worker's key derives it; with neither, no address is recorded
-  // and the verifier checks the derived address alone.
-  const executorWorkerAdmission = (workerId: string, proofToAddress: string): P2pAdmission => {
+  // The executor relay HOSTS the worker, so its scope is always `local`
+  // (#959 round 3). The recorded address is the worker's own registered one
+  // — the only address a worker opts into being paid at P2P (#959 round 4:
+  // no registered address ⇒ not P2P-payable, as eligibility rules). With
+  // none, no address is admitted and the verifier checks the worker leg
+  // against the derived-bound rung alone.
+  const executorWorkerAdmission = (workerId: string): P2pAdmission => {
     const reg = moteDb.db
       .prepare("SELECT settlement_address FROM agent_registry WHERE motebit_id = ?")
       .get(workerId) as { settlement_address: string | null } | undefined;
-    if (reg?.settlement_address) {
-      return localWorkerAdmission(moteDb.db, workerId, reg.settlement_address);
-    }
-    const derived = localWorkerAdmission(moteDb.db, workerId, proofToAddress);
-    return derived.worker_address_rung === "derived" ? derived : { worker_leg: "local" };
+    return reg?.settlement_address
+      ? localWorkerAdmission(moteDb.db, workerId, reg.settlement_address)
+      : { worker_leg: "local" };
   };
 
   return {
@@ -191,10 +190,7 @@ export function createFederationCallbacks(deps: FederationCallbackDeps) {
                 // (#959). The address is the one this relay holds for its
                 // worker at admission; with none, the verifier falls back to
                 // the derived address and the current registry address.
-                p2p_admission: executorWorkerAdmission(
-                  verified.targetAgent,
-                  verified.paymentProof.to_address,
-                ),
+                p2p_admission: executorWorkerAdmission(verified.targetAgent),
               }
             : {}),
         });
@@ -283,6 +279,30 @@ export function createFederationCallbacks(deps: FederationCallbackDeps) {
         });
         throw new HTTPException(403, {
           message: "Federated P2P result is not signed by the worker the task was paid to",
+        });
+      }
+
+      // A P2P task this relay admitted is settled from a federation result
+      // only when that result comes from the executor relay its plan chose
+      // (#959 round 4): the origin row records the worker leg as that
+      // executor's to verify, so a result from any other peer — or for a
+      // task this relay planned for no peer at all — must not settle as
+      // 'remote'. Entries admitted before the admission record existed carry
+      // none and are not held to it (their row reads 'local', fail-closed).
+      const admission = entry.p2p_admission;
+      if (
+        entry.settlement_mode === "p2p" &&
+        admission != null &&
+        (admission.planned_peer == null || admission.planned_peer !== verified.originRelay)
+      ) {
+        logger.error("settlement.federated_p2p_result_from_unplanned_peer", {
+          correlationId: verified.taskId,
+          plannedPeer: admission.planned_peer ?? null,
+          sender: verified.originRelay,
+        });
+        throw new HTTPException(403, {
+          message:
+            "Federated P2P result did not come from the executor relay this task was planned for",
         });
       }
 

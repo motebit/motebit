@@ -73,12 +73,15 @@ export function receiptDischargesP2p(
 export interface P2pAdmission {
   worker_leg: "local" | "remote";
   /**
-   * `"remote"` only: the executor relay the BUILT federated plan was
-   * forwarded to and that accepted it. A `"remote"` admission without it
-   * reads as `"local"` (#959 round 3) — the scope is remote only when a plan
-   * was built AND forwarded.
+   * `"remote"` only: the `peer_relay_id` of the executor relay the BUILT
+   * federated plan chose, recorded at ADMISSION — before the forward, so a
+   * lost response (the executor accepted, the fetch timed out or saw a 5xx)
+   * cannot strand an honest task as `"local"` (#959 round 4). Cleared only by
+   * a definitive refusal (4xx) at the forward site. A `"remote"` admission
+   * without it reads as `"local"`. A federated result for this task is
+   * accepted only from this peer (`onTaskResultReceived`).
    */
-  forwarded_to?: string;
+  planned_peer?: string;
   worker_address?: string;
   worker_address_rung?: "derived" | "registered";
 }
@@ -88,14 +91,14 @@ export interface P2pAdmission {
  * admitted before #959 round 2 carries no admission record and reads as
  * `"local"` — the fail-closed side: the worker leg is checked, and a worker
  * this relay does not host reads `unverifiable`, never verified. `"remote"`
- * requires BOTH a built federated plan (the admission record) and an
- * accepted forward (`forwarded_to`).
+ * requires BOTH a built federated plan (the admission record) and a recorded
+ * planned executor peer (`planned_peer`) that no definitive refusal cleared.
  */
 export function p2pWorkerLegScope(
   entry: Pick<TaskQueueEntry, "p2p_admission">,
 ): "local" | "remote" {
   const a = entry.p2p_admission;
-  return a?.worker_leg === "remote" && a.forwarded_to != null && a.forwarded_to !== ""
+  return a?.worker_leg === "remote" && a.planned_peer != null && a.planned_peer !== ""
     ? "remote"
     : "local";
 }

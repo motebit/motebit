@@ -1533,14 +1533,7 @@ export async function evaluateSettlementEligibility(
     .prepare("SELECT settlement_address, public_key FROM agent_registry WHERE motebit_id = ?")
     .get(workerId) as { settlement_address: string | null; public_key: string | null } | undefined;
 
-  // A worker with no registered address is still payable at its identity-
-  // derived address (the derived-bound rung) when it has a key (#959 round
-  // 3 — the local admission branch accepts exactly that address). With
-  // neither, there is no destination bound to it.
-  if (
-    !worker?.settlement_address &&
-    verificationKeyFor(db, workerId, worker?.public_key ?? undefined) == null
-  ) {
+  if (!worker?.settlement_address) {
     return { allowed: false, reason: "Worker has no declared settlement address" };
   }
 
@@ -1597,7 +1590,7 @@ export async function evaluateSettlementEligibility(
   // `docs/doctrine/hardware-attestation.md` (binding strength is additive
   // scoring) and `docs/doctrine/identity-binding-verification.md`.
   // Holder, else main's registry read (§5f verification reader).
-  const workerKey = verificationKeyFor(db, workerId, worker?.public_key);
+  const workerKey = verificationKeyFor(db, workerId, worker.public_key);
   if (trustRow && workerKey !== null && (await verifySovereignBinding(workerId, workerKey))) {
     const score = trustLevelToScore(trustRow.trust_level);
     if (

@@ -29,7 +29,9 @@ describe("p2pWorkerLegScope — declared by admission, never inferred from the p
   it("reads the admission record", () => {
     expect(p2pWorkerLegScope({ p2p_admission: { worker_leg: "local" } })).toBe("local");
     expect(
-      p2pWorkerLegScope({ p2p_admission: { worker_leg: "remote", forwarded_to: "https://b" } }),
+      p2pWorkerLegScope({
+        p2p_admission: { worker_leg: "remote", planned_peer: "executor-relay" },
+      }),
     ).toBe("remote");
   });
 
