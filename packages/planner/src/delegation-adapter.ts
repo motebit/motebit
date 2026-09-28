@@ -72,7 +72,7 @@ export class RelayDelegationAdapter implements StepDelegationAdapter {
   ): Promise<DelegatedStepResult> {
     const maxRetries = this.config.maxDelegationRetries ?? 2;
     const excludeAgents: string[] = [...(crossStepExclude ?? [])];
-    let lastError: Error | undefined;
+    let lastError: DelegationError | undefined;
     // One key per logical submission. A retry after a DELIVERY failure (the
     // result never reached us and the relay could not say how the task
     // ended) resubmits under the SAME key, so the relay replays the task it
@@ -80,19 +80,25 @@ export class RelayDelegationAdapter implements StepDelegationAdapter {
     // one. Only a task that conclusively FAILED gets a new key: that retry is
     // meant to be a new task, routed away from the agent that failed (#816).
     let idempotencyKey = crypto.randomUUID();
+    let attempts = 0;
 
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
+      attempts++;
       try {
         const result = await this.attemptDelegation(
           step,
           timeoutMs,
           excludeAgents,
           idempotencyKey,
-          // Only call onTaskSubmitted for the first attempt (task_id tracking)
-          attempt === 0 ? onTaskSubmitted : undefined,
+          // Every attempt: a same-key retry can be the first to learn the
+          // task id (attempt 0's POST threw), and recovery needs it.
+          onTaskSubmitted,
         );
         return result;
       } catch (err: unknown) {
+        // Undetermined: the task may have been admitted and may still
+        // complete. Not a failure — no demotion, no retry, no new task.
+        if (err instanceof DelegationUndeterminedError) throw err;
         lastError = err instanceof Error ? err : new Error(String(err));
         const failedAgentId = this.extractFailedAgentId(lastError);
 
@@ -103,7 +109,7 @@ export class RelayDelegationAdapter implements StepDelegationAdapter {
         if (failedAgentId) {
           excludeAgents.push(failedAgentId);
         }
-        if ((lastError as DelegationError).deliveryUncertain !== true) {
+        if (lastError.deliveryUncertain !== true) {
           idempotencyKey = crypto.randomUUID();
         }
 
@@ -114,8 +120,13 @@ export class RelayDelegationAdapter implements StepDelegationAdapter {
       }
     }
 
+    // Out of attempts while the relay never said the task ended: it may have
+    // been admitted and may still complete, so this is not a failure either.
+    if (lastError?.deliveryUncertain === true) {
+      throw new DelegationUndeterminedError(step.description, lastError);
+    }
     throw new Error(
-      `Delegation failed after ${Math.min(excludeAgents.length, maxRetries) + 1} attempt(s) for step "${step.description}": ${lastError?.message ?? "unknown error"}`,
+      `Delegation failed after ${attempts} attempt(s) for step "${step.description}": ${lastError?.message ?? "unknown error"}`,
       { cause: lastError },
     );
   }
@@ -145,7 +156,13 @@ export class RelayDelegationAdapter implements StepDelegationAdapter {
 
     const headers = await this.buildHeaders("task:submit");
     headers["Idempotency-Key"] = idempotencyKey;
-    const resp = await submitUnderKey(`${syncUrl}/agent/${motebitId}/task`, headers, body);
+    const resp = await submitUnderKey(
+      `${syncUrl}/agent/${motebitId}/task`,
+      headers,
+      body,
+      timeoutMs,
+      step.description,
+    );
 
     if (!resp.ok) {
       const text = await resp.text();
@@ -204,6 +221,17 @@ export class RelayDelegationAdapter implements StepDelegationAdapter {
     for (;;) {
       const state = await this.queryTask(task_id);
       if (state.kind === "receipt") return settle(state.receipt);
+      if (state.kind === "not_found") {
+        // The task left the relay's queue without a receipt (a receipt
+        // extends its lifetime), so no result is coming. Terminal for THIS
+        // task: retry as a new task, never replay the dead task id.
+        const err: DelegationError = new Error(
+          `Delegated task ${task_id} expired at the relay without a result`,
+        );
+        const agent = routingChoice?.selected_agent;
+        if (agent != null && agent !== "") err.failedAgentId = agent;
+        throw err;
+      }
       if (state.kind !== "pending" || remaining <= 0) {
         const err = new Error(
           `Delegation timed out after ${timeoutMs}ms for step "${step.description}" (relay: ${state.kind})`,
@@ -321,10 +349,26 @@ interface DelegationError extends Error {
 /** While the relay reports a timed-out task as still running, how often to ask again. */
 const RESULT_POLL_INTERVAL_MS = 15_000;
 
-/** A 409 on a submission: how many times to back off and resubmit under the same key. */
-const SUBMIT_CONFLICT_RETRIES = 4;
-/** First backoff after a 409; doubles each time (1s, 2s, 4s, 8s). */
+/** First backoff after a 409; doubles each time, capped (1s, 2s, 4s, … 30s). */
 const SUBMIT_CONFLICT_BACKOFF_MS = 1_000;
+const SUBMIT_CONFLICT_BACKOFF_MAX_MS = 30_000;
+
+/**
+ * The step's outcome is UNDETERMINED: the relay may have admitted the task,
+ * and it may still complete, but nothing confirmed it within the step's time
+ * budget. Not a failure: it demotes no agent and triggers no retry, because
+ * running the step again could run — and pay for — the task twice (#816).
+ */
+export class DelegationUndeterminedError extends Error {
+  readonly undetermined = true;
+  constructor(stepDescription: string, cause?: unknown) {
+    super(
+      `Submission unconfirmed — the task may still complete; check /result (step "${stepDescription}")`,
+      cause !== undefined ? { cause } : undefined,
+    );
+    this.name = "DelegationUndeterminedError";
+  }
+}
 
 function deliveryUncertain(message: string, cause?: unknown): DelegationError {
   const err: DelegationError = new Error(message, cause !== undefined ? { cause } : undefined);
@@ -339,17 +383,21 @@ function deliveryUncertain(message: string, cause?: unknown): DelegationError {
  *   response been lost;
  * - 409 — the relay is still processing an earlier request under the same
  *   key.
- * A 409 is retried here after a short backoff, under the same key: once the
- * earlier request finishes, the relay replays its 201 with the same task_id.
- * A thrown fetch, or a 409 that outlasts the backoff, is thrown as
- * delivery-uncertain, so the caller's retry keeps the key too. Every other
- * response is returned for the caller to judge.
+ * A 409 is retried here with backoff, under the same key and within the
+ * step's time budget: once the earlier request finishes, the relay replays
+ * its 201 with the same task_id. A 409 that outlasts the budget ends the
+ * step as undetermined. A thrown fetch is delivery-uncertain, so the
+ * caller's retry keeps the key. Every other response is returned for the
+ * caller to judge.
  */
 async function submitUnderKey(
   url: string,
   headers: Record<string, string>,
   body: Record<string, unknown>,
+  budgetMs: number,
+  stepDescription: string,
 ): Promise<Response> {
+  let waited = 0;
   for (let conflict = 0; ; conflict++) {
     let resp: Response;
     try {
@@ -358,9 +406,20 @@ async function submitUnderKey(
       throw deliveryUncertain("Relay task submission unconfirmed: no response", err);
     }
     if (resp.status !== 409) return resp;
-    if (conflict >= SUBMIT_CONFLICT_RETRIES) {
-      throw deliveryUncertain("Relay task submission unconfirmed: still being processed (409)");
+    // Still processing under this key: keep backing off, within the step's
+    // own time budget, then end the step as undetermined.
+    if (waited >= budgetMs) {
+      throw new DelegationUndeterminedError(
+        stepDescription,
+        new Error("Relay task submission still being processed (409)"),
+      );
     }
-    await new Promise<void>((r) => setTimeout(r, SUBMIT_CONFLICT_BACKOFF_MS * 2 ** conflict));
+    const wait = Math.min(
+      SUBMIT_CONFLICT_BACKOFF_MS * 2 ** conflict,
+      SUBMIT_CONFLICT_BACKOFF_MAX_MS,
+      budgetMs - waited,
+    );
+    waited += wait;
+    await new Promise<void>((r) => setTimeout(r, wait));
   }
 }
