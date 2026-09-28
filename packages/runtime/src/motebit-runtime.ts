@@ -237,6 +237,10 @@ import {
 } from "./paid-intent-ledger.js";
 import { verifyGrantForTurn } from "./grant-verifier.js";
 import {
+  SOVEREIGN_PAY_FORWARD_ENABLED,
+  SovereignPayForwardDisabledError,
+} from "./sovereign-pay-forward-gate.js";
+import {
   resolveAndSubmitP2pDelegation,
   resolveP2pPaymentRequest,
   retrieveDelegationResult,
@@ -1903,6 +1907,10 @@ export class MotebitRuntime {
   /**
    * Create a sovereign delegation adapter for relay-free multi-hop delegation (settlement spec §9.1).
    * Returns null if signing keys or wallet rail are not configured.
+   *
+   * DISABLED (#887): throws `SovereignPayForwardDisabledError` before any
+   * discovery or payment while `SOVEREIGN_PAY_FORWARD_ENABLED` is false —
+   * see `sovereign-pay-forward-gate.ts`.
    */
   createSovereignDelegationAdapter(
     discoveryUrl: string,
@@ -1919,6 +1927,7 @@ export class MotebitRuntime {
       ) => void;
     },
   ): StepDelegationAdapter | null {
+    if (!SOVEREIGN_PAY_FORWARD_ENABLED) throw new SovereignPayForwardDisabledError();
     if (!this._signingKeys || !this._solanaWallet) return null;
 
     const signingKeys = this._signingKeys;

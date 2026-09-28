@@ -18,6 +18,14 @@ import type {
   OutgoingTransferLookup,
 } from "@motebit/wallet-solana";
 import { MotebitRuntime, NullRenderer, createInMemoryStorage } from "../index.js";
+
+// Pay-forward is disabled in production (#887 — see sovereign-pay-forward-gate.ts);
+// this file proves the wiring that re-enabling would switch on, so it flips the
+// gate for this module graph only. The disabled gate has its own test.
+vi.mock("../sovereign-pay-forward-gate.js", async (orig) => ({
+  ...(await orig<typeof import("../sovereign-pay-forward-gate.js")>()),
+  SOVEREIGN_PAY_FORWARD_ENABLED: true,
+}));
 import type { PlanStep } from "@motebit/sdk";
 import { StepStatus, asPlanId } from "@motebit/sdk";
 

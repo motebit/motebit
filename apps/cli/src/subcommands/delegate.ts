@@ -35,6 +35,18 @@ async function handleDelegatePlan(
   motebitId: string,
   prompt: string,
 ): Promise<void> {
+  // Sovereign pay-forward (§9.1) is disabled until a worker's admission mode
+  // is discoverable (#887): refuse before election, key unlock, discovery or
+  // payment. The runtime's gate is the one switch.
+  if (config.sovereign) {
+    const { SOVEREIGN_PAY_FORWARD_ENABLED, SOVEREIGN_PAY_FORWARD_DISABLED_MESSAGE } =
+      await import("@motebit/runtime");
+    if (!SOVEREIGN_PAY_FORWARD_ENABLED) {
+      console.error(SOVEREIGN_PAY_FORWARD_DISABLED_MESSAGE);
+      process.exit(1);
+    }
+  }
+
   const relayUrl = getRelayUrl(config);
 
   // Runtime-host election — one sovereign runtime per machine

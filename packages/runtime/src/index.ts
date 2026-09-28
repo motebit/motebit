@@ -344,6 +344,13 @@ export type {
 // What a serving surface may offer another principal (#874): derived from
 // `ToolDefinition.localOnly`, never from a per-surface name list.
 export { isServedTool, servedToolNames, LOCAL_TOOL_NAMES } from "./serve-exposure.js";
+// Sovereign pay-forward (§9.1) is off until a worker's admission mode is
+// discoverable (#887) — one gate, read by the runtime and the CLI.
+export {
+  SOVEREIGN_PAY_FORWARD_ENABLED,
+  SOVEREIGN_PAY_FORWARD_DISABLED_MESSAGE,
+  SovereignPayForwardDisabledError,
+} from "./sovereign-pay-forward-gate.js";
 export {
   PaidIntentLedger,
   InMemoryPaidIntentStore,

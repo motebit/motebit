@@ -318,12 +318,12 @@ A allocates budget at a relay, the relay holds the budget in an internal virtual
 
 | Pattern            | Specified                  | Referenced implementation                                                  | Status                |
 | ------------------ | -------------------------- | -------------------------------------------------------------------------- | --------------------- |
-| 9.1 pay-forward    | Yes                        | `SovereignDelegationAdapter` in `packages/planner`, CLI `--sovereign` flag | Available via flag    |
+| 9.1 pay-forward    | Yes                        | `SovereignDelegationAdapter` in `packages/planner`, CLI `--sovereign` flag | Disabled (#887)       |
 | 9.2 onchain escrow | Yes (as permitted pattern) | No reference implementation                                                | Deferred until demand |
 | 9.3 hybrid         | Yes (as permitted pattern) | No reference implementation                                                | Deferred              |
 | 9.4 relay-mediated | Yes                        | `services/relay` task routing + virtual ledger                             | Current default       |
 
-The runtime default is 9.4 (relay-mediated). Pattern 9.1 (pay-forward) is available via `SovereignDelegationAdapter` and the CLI's `--sovereign` flag. The foundation law treats all four patterns as equally valid.
+The runtime default is 9.4 (relay-mediated). The reference 9.1 (pay-forward) client is disabled until a worker's task-admission mode is discoverable before payment: a relay-admitted worker refuses a pay-forward task after the money has moved (#887). `SovereignDelegationAdapter` remains in `packages/planner` behind one runtime gate. The foundation law treats all four patterns as equally valid.
 
 ---
 

@@ -510,7 +510,7 @@ Commands:
     --target <id>             Skip discovery, delegate to specific agent
     --budget <amount>         Max spend in USD (default: from listing price)
     --plan                    Decompose into multi-step plan, delegate each to specialists
-    --sovereign               Pay agents directly via Solana wallet (no relay settlement)
+    --sovereign               Pay agents directly via Solana wallet (no relay settlement; not with --plan: pay-forward is disabled, #887)
     --pay-new-agents          Allow paid P2P delegation to agents with no trust history (cold-start opt-in; default off)
   grant create --scope <caps> --subject <s> --lifetime-usd <n>  Mint a standing-delegation grant
     --days <n>                Grant lifetime in days (default 7, max 30 — money grants live short)

@@ -1,6 +1,6 @@
 ---
 "@motebit/planner": patch
-"@motebit/runtime": patch
+"@motebit/runtime": minor
 "@motebit/wallet-solana": minor
 ---
 
@@ -19,3 +19,10 @@ Sovereign pay-forward: a delivery-uncertain outcome never becomes a new payment 
   - New optional `SolanaRpcAdapter.findOutgoingTransfer`, implemented on `Web3JsRpcAdapter` as one fail-closed page of signature history.
   - New export `SOLANA_TX_LANDING_HORIZON_MS`.
   - `InsufficientUsdcBalanceError` and `InvalidSolanaAddressError` are documented as pre-signing only.
+
+**Pay-forward is disabled (#887).** A relay-admitted worker (the default for every priced `molecule-runner` listing) refuses a pay-forward task after the money has moved, and no listing, discovery record or MCP schema exposes a worker's admission mode.
+
+- `@motebit/runtime` gains `SOVEREIGN_PAY_FORWARD_ENABLED` (`false`), `SOVEREIGN_PAY_FORWARD_DISABLED_MESSAGE` and `SovereignPayForwardDisabledError`.
+- `createSovereignDelegationAdapter` throws before any discovery or payment.
+- There is no config or env override.
+- The adapter and its exactly-once logic stay tested behind the gate, so re-enabling is that one constant.

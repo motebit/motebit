@@ -32,7 +32,8 @@ motebit delegate "review owner/repo#42"  # Discover worker → submit → get re
   --target <motebit-id>              #   Skip discovery, delegate to specific agent
   --budget 10                        #   Max spend in USD
   --plan                             #   Decompose into steps, multi-agent orchestration
-  --sovereign                        #   Pay agents directly via Solana wallet (no relay settlement)
+  --sovereign                        #   Pay agents directly via Solana wallet (no relay settlement;
+                                     #     not with --plan: pay-forward is disabled, #887)
   --pay-new-agents                   #   Allow paid P2P delegation to agents with no trust history
                                      #     (cold-start opt-in; default off)
 
