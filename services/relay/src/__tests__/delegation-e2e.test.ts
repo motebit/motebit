@@ -355,7 +355,10 @@ describe("Delegation E2E", () => {
     expect(updatedStep.result_summary).toBe("Recovery result");
   });
 
-  it("delegation timeout: no worker responds, step fails", async () => {
+  // No worker ever answers and the relay keeps the task pending, so nothing
+  // confirms how it ended: the step ends UNDETERMINED (the task may still
+  // complete), not as a failure that invites a second run (#816).
+  it("delegation timeout: no worker responds, step ends undetermined", async () => {
     const store = new InMemoryPlanStore();
     const dispatcher = createDispatcherBridge();
 
@@ -401,7 +404,9 @@ describe("Delegation E2E", () => {
 
     const steps = store.getStepsForPlan(plan.plan_id);
     expect(steps[0]!.status).toBe(StepStatus.Failed);
-    expect(steps[0]!.error_message).toContain("timed out");
+    expect(steps[0]!.error_message).toContain(
+      "Submission unconfirmed — the task may still complete",
+    );
   });
 
   it("mixed plan: completed local step + delegated step resumes correctly", async () => {
