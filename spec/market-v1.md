@@ -140,7 +140,7 @@ Every conforming implementation MUST enforce all of the following. These are sec
 3. **Dispute-window hold.** The debit MUST respect the dispute-window hold (settlement-v1): funds from recent settlement credits are not withdrawable until the window elapses. Available balance below the requested amount ⇒ 402 with no state change.
 4. **Authorization.** The request MUST carry an `account:withdraw`-audience credential — the account owner's signed device token or the operator master token. A token minted for another audience MUST be rejected (cross-endpoint replay defense, auth-token-v1 §5).
 
-**Non-goal (explicit):** this request does NOT guarantee settlement completion. A `pending` or `processing` status is the fail-safe — the debit already holds the funds, so a settlement-rail failure strands the payout for admin resolution without double-spend risk. Settlement finality is observed via the response record's `status` and `payout_reference`, never assumed from a 200. An automated payout maps its outcome to the record per §10.4: `completed` only on a confirmed transfer, `failed` (refunded atomically) only on a proven failure — landed-and-failed with no earlier broadcast that may have landed — and `pending` on any unknown outcome.
+**Non-goal (explicit):** this request does NOT guarantee settlement completion. A `pending` or `processing` status is the fail-safe — the debit already holds the funds, so a settlement-rail failure strands the payout for admin resolution without double-spend risk. Settlement finality is observed via the response record's `status` and `payout_reference`, never assumed from a 200. An automated payout maps its outcome to the record per §10.4: `completed` only on a confirmed transfer, `failed` (refunded atomically) only on a proven failure — landed-and-failed with no earlier broadcast that may have landed — and `processing` on any unknown outcome.
 
 #### Wire format (foundation law)
 
@@ -195,21 +195,21 @@ The response wraps the withdrawal lifecycle record. Amounts are decimal USD (§2
 
 `AccountWithdrawalRecord`:
 
-| Field              | Type           | Required | Description                                                                                                                          |
-| ------------------ | -------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------ |
-| `withdrawal_id`    | string         | yes      | Unique withdrawal identifier                                                                                                         |
-| `motebit_id`       | string         | yes      | Account owner's `MotebitId`                                                                                                          |
-| `amount`           | number         | yes      | Decimal USD                                                                                                                          |
-| `currency`         | string         | yes      | ISO 4217 or token symbol                                                                                                             |
-| `destination`      | string         | yes      | Payout address, external ref, or `"pending"`                                                                                         |
-| `status`           | string         | yes      | Lifecycle state: `pending` \| `processing` \| `completed` \| `failed` \| `cancelled`                                                 |
-| `payout_reference` | string \| null | yes      | External payout id (tx hash, transfer id); `null` until settled                                                                      |
-| `requested_at`     | number         | yes      | Epoch milliseconds of the request                                                                                                    |
-| `completed_at`     | number \| null | yes      | Epoch milliseconds of settlement; `null` while unsettled                                                                             |
-| `failure_reason`   | string \| null | yes      | Populated when `status` is `failed`; on a `pending` withdrawal MAY carry why its automated payout is unresolved (§10.4); else `null` |
-| `relay_id`         | string         | yes      | Signing relay's `MotebitId` — a signed-receipt field, present so the record self-verifies from the response alone                    |
-| `relay_signature`  | string \| null | yes      | Ed25519 signature over the completed withdrawal for offline verify; `null` until settled                                             |
-| `relay_public_key` | string \| null | yes      | Hex relay public key for independent verification; `null` until settled                                                              |
+| Field              | Type           | Required | Description                                                                                                                             |
+| ------------------ | -------------- | -------- | --------------------------------------------------------------------------------------------------------------------------------------- |
+| `withdrawal_id`    | string         | yes      | Unique withdrawal identifier                                                                                                            |
+| `motebit_id`       | string         | yes      | Account owner's `MotebitId`                                                                                                             |
+| `amount`           | number         | yes      | Decimal USD                                                                                                                             |
+| `currency`         | string         | yes      | ISO 4217 or token symbol                                                                                                                |
+| `destination`      | string         | yes      | Payout address, external ref, or `"pending"`                                                                                            |
+| `status`           | string         | yes      | Lifecycle state: `pending` \| `processing` \| `completed` \| `failed` \| `cancelled`                                                    |
+| `payout_reference` | string \| null | yes      | External payout id (tx hash, transfer id); `null` until settled                                                                         |
+| `requested_at`     | number         | yes      | Epoch milliseconds of the request                                                                                                       |
+| `completed_at`     | number \| null | yes      | Epoch milliseconds of settlement; `null` while unsettled                                                                                |
+| `failure_reason`   | string \| null | yes      | Populated when `status` is `failed`; on a `processing` withdrawal MAY carry why its automated payout is unresolved (§10.4); else `null` |
+| `relay_id`         | string         | yes      | Signing relay's `MotebitId` — a signed-receipt field, present so the record self-verifies from the response alone                       |
+| `relay_signature`  | string \| null | yes      | Ed25519 signature over the completed withdrawal for offline verify; `null` until settled                                                |
+| `relay_public_key` | string \| null | yes      | Hex relay public key for independent verification; `null` until settled                                                                 |
 
 The TypeScript types in `@motebit/protocol` (`AccountWithdrawResult`, `AccountWithdrawalRecord`) are the binding machine-readable form of these tables.
 
@@ -644,30 +644,47 @@ POST /api/v1/admin/withdrawals/:withdrawalId/complete
 
 The relay signs the withdrawal receipt with its Ed25519 keypair, providing the worker with cryptographic proof of payout.
 
+The operator's manual completion (and its sibling, `POST /api/v1/admin/withdrawals/:withdrawalId/fail`, which fails and refunds) acts on a `pending` withdrawal only. On a `processing` withdrawal both MUST refuse (the reference relay answers 409, "payout in flight"): its payout was handed to a rail and may still land (§10.3).
+
+A `processing` withdrawal whose payout outcome is unknown is settled through a distinct reconcile action:
+
+```
+POST /api/v1/admin/withdrawals/:withdrawalId/reconcile
+{
+  outcome: "paid" | "not_paid",
+  attestation: string,        // what the operator verified on chain — required
+  payout_reference?: string   // required for "paid"
+}
+```
+
+`paid` completes the withdrawal with a signed receipt; `not_paid` fails it and refunds (§10.3, once). The action MUST refuse while the payout can still be in flight — while the relay is still awaiting the send, and for a bounded window after the claim (the reference relay: 15 minutes) — and MUST refuse without an attestation. It is never a blind refund, and it is the door that keeps a crash mid-send from stranding a withdrawal.
+
 ### 10.3 — Withdrawal States
 
-| State        | Description                                  |
-| ------------ | -------------------------------------------- |
-| `pending`    | Funds debited, awaiting payout.              |
-| `processing` | Payout initiated with external provider.     |
-| `completed`  | Payout confirmed. Relay signature available. |
-| `failed`     | Payout failed. Funds returned to account.    |
+| State        | Description                                                                                |
+| ------------ | ------------------------------------------------------------------------------------------ |
+| `pending`    | Funds debited, no payout attempted.                                                        |
+| `processing` | A payout claimed the withdrawal and was handed to a rail; its outcome is not yet recorded. |
+| `completed`  | Payout confirmed. Relay signature available.                                               |
+| `failed`     | Payout failed. Funds returned to account.                                                  |
+
+**The processing claim.** An automated payout MUST claim the withdrawal before it sends anything: the transition `pending → processing` is a compare-and-set, and a payout whose claim does not succeed (the withdrawal already left `pending` — an operator completed or failed it, or another handler claimed it) MUST NOT be sent. After the claim, the payout's outcome moves the withdrawal FROM `processing` only (§10.4), and only the payout's own outcome or the reconcile action (§10.2) may do so — never the manual complete or fail, which could otherwise refund a payout that then lands and pay the user twice. A settling write that finds the withdrawal no longer `processing` MUST NOT be silently dropped: the implementation reports it for reconciliation. A payout handed to a provider that settles asynchronously (a batched or deferred rail) is recorded `processing` for the same reason.
 
 `failed` is terminal and carries the refund: the transition to `failed` and the credit of the withdrawn amount back to the account MUST commit atomically (one transaction), and a withdrawal MUST be refunded at most once — a repeated fail of the same withdrawal (a retried handler, a sweeper, an operator replay) is a no-op.
 
 ### 10.4 — Automated Payout Outcome
 
-When the relay pays a withdrawal out itself (e.g. the Path 0 Solana return of custody), the payout's reported outcome determines the state. There are exactly three outcomes:
+When the relay pays a withdrawal out itself (e.g. the Path 0 Solana return of custody), it first claims the withdrawal (`processing`, §10.3), and the payout's reported outcome then determines the state. There are exactly three outcomes:
 
 | Payout outcome                                                                                                                                                           | Resulting state | Balance                                |
 | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------- | -------------------------------------- |
 | Confirmed success — the reported transfer landed without error                                                                                                           | `completed`     | stays debited; receipt signed          |
 | Proven failure — the reported transfer landed and failed (an atomic on-chain tx that errored moves no funds) AND no earlier broadcast of the same payout may have landed | `failed`        | refunded atomically, once (§10.3)      |
-| Unknown — the send threw or timed out, or a landed failure whose earlier broadcasts are not proven dead                                                                  | `pending`       | stays debited; operator reconciliation |
+| Unknown — the send threw or timed out, or a landed failure whose earlier broadcasts are not proven dead                                                                  | `processing`    | stays debited; operator reconciliation |
 
 **A landed failure refunds only when no earlier broadcast of the same payout may have landed.** A payer that re-signs and re-broadcasts (e.g. after a blockhash expiry) can have its first broadcast land and pay while the re-broadcast lands and fails; the failure then describes only the last broadcast. An earlier broadcast counts as dead only when the payer broadcast exactly one transaction, or proved every earlier one expired on chain.
 
-An implementation MUST NOT mark a withdrawal `completed` on anything but a confirmed success, and MUST NOT refund on an unknown outcome: a transfer that lands (or already landed) would then pay the user twice. `failure_reason` on a proven failure SHOULD name the payout reference (the transaction signature) and the failure. On an unknown outcome the implementation SHOULD record why on the still-`pending` record's `failure_reason` so an operator can reconcile; `status` stays authoritative.
+An implementation MUST NOT mark a withdrawal `completed` on anything but a confirmed success, and MUST NOT refund on an unknown outcome: a transfer that lands (or already landed) would then pay the user twice. `failure_reason` on a proven failure SHOULD name the payout reference (the transaction signature) and the failure. On an unknown outcome the implementation SHOULD record why on the still-`processing` record's `failure_reason` so an operator can reconcile (§10.2); `status` stays authoritative.
 
 ---
 

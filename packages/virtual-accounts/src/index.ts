@@ -14,6 +14,7 @@ export type {
   ReconciliationResult,
   TransactionType,
   VirtualAccount,
+  WithdrawalOpenStatus,
   WithdrawalRequest,
   WithdrawalStatus,
 } from "./types.js";
@@ -32,6 +33,7 @@ export type {
   WithdrawalsLogger,
 } from "./withdrawals.js";
 export {
+  claimWithdrawalForPayout,
   completeWithdrawal,
   computeWithdrawableAvailable,
   failWithdrawal,

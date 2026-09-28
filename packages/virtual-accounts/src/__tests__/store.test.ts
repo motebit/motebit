@@ -139,7 +139,7 @@ describe("InMemoryAccountStore — withdrawals", () => {
       requested_at: 1,
     });
     store.updateWithdrawalStatus("w1", "failed", "test");
-    expect(store.setWithdrawalCompletion("w1", "ref", 5)).toBe(false);
+    expect(store.setWithdrawalCompletion("w1", "ref", 5, "pending")).toBe(false);
   });
 
   it("setWithdrawalSignature persists signature + public key", () => {

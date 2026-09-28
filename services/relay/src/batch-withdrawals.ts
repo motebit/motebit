@@ -14,6 +14,15 @@
  * fire path does NOT re-debit — it only calls the rail and records the
  * relay_withdrawals row that tracks the rail's async completion.
  *
+ * Claim before send (issue #921): `claimForFiring` is the compare-and-set
+ * `pending → firing` on each queue row, and a row is handed to the rail only
+ * when THIS tick claimed it. A fired payout the rail has not confirmed is
+ * recorded as a `processing` relay_withdrawals row (a payout handed to a
+ * provider, spec/market-v1.md §10.3) — never `pending`, which the
+ * operator's manual fail would refund while the rail's payout could still
+ * land (the double pay #921 closed on /withdraw). It settles only through
+ * the operator's reconcile door (budget.ts).
+ *
  * Failure posture:
  *   - Rail call throws → pending row becomes `failed`, balance stays
  *     debited, operator resolves via admin endpoint. The debit is the
@@ -236,23 +245,25 @@ function markFailed(db: DatabaseDriver, pendingId: string, reason: string, now: 
 }
 
 /**
- * Insert a relay_withdrawals row for an already-debited pending item.
- * The rail's async completion (webhook, poll) updates this row's status
- * later via the existing `completeWithdrawal` / `failWithdrawal` flow.
+ * Insert a relay_withdrawals row for an already-debited, already-FIRED
+ * pending item. A payout the rail has not yet confirmed is `processing`
+ * (claimed at `now`, #921): its outcome is still out with the rail, so only
+ * the operator's reconcile door — never the manual complete/fail — settles
+ * it.
  */
 function recordFiredWithdrawal(
   db: DatabaseDriver,
   row: PendingRow,
   payoutReference: string | null,
-  railStatus: "pending" | "completed",
+  railStatus: "processing" | "completed",
   now: number,
 ): string {
   const withdrawalId = crypto.randomUUID();
   db.prepare(
     `INSERT INTO relay_withdrawals
        (withdrawal_id, motebit_id, amount, currency, destination, status,
-        idempotency_key, payout_reference, requested_at, completed_at)
-     VALUES (?, ?, ?, 'USD', ?, ?, ?, ?, ?, ?)`,
+        idempotency_key, payout_reference, requested_at, completed_at, claimed_at)
+     VALUES (?, ?, ?, 'USD', ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     withdrawalId,
     row.motebit_id,
@@ -263,14 +274,16 @@ function recordFiredWithdrawal(
     payoutReference,
     row.enqueued_at,
     railStatus === "completed" ? now : null,
+    now,
   );
   return withdrawalId;
 }
 
-function railStatusFromResult(result: WithdrawalResult): "pending" | "completed" {
-  // confirmedAt === 0 means the rail returned a pending result
-  // (Stripe manual, Bridge async). Non-zero means it settled.
-  return (result.proof?.confirmedAt ?? 0) > 0 ? "completed" : "pending";
+function railStatusFromResult(result: WithdrawalResult): "processing" | "completed" {
+  // confirmedAt === 0 means the rail returned a not-yet-settled result
+  // (Stripe manual, Bridge async): the payout is with the provider, so the
+  // row is `processing` (#921). Non-zero means it settled.
+  return (result.proof?.confirmedAt ?? 0) > 0 ? "completed" : "processing";
 }
 
 function toBatchItem(row: PendingRow): BatchWithdrawalItem {

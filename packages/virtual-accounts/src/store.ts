@@ -18,6 +18,7 @@ import type {
   TransactionType,
   VirtualAccount,
   WithdrawalRequest,
+  WithdrawalOpenStatus,
   WithdrawalStatus,
 } from "./types.js";
 
@@ -109,8 +110,25 @@ export interface AccountStore {
   insertWithdrawal(w: NewWithdrawal): WithdrawalRequest;
   updateWithdrawalStatus(id: string, status: WithdrawalStatus, failureReason?: string): void;
   linkWithdrawalTransfer(id: string, payoutReference: string): boolean;
+  /**
+   * Claim a withdrawal for an automated payout (issue #921): the
+   * compare-and-set `pending → processing`, stamping `claimed_at`. Returns
+   * true only when THIS call moved the row. A payout MUST NOT be sent unless
+   * the claim returned true — a lost claim means someone else (the operator,
+   * a concurrent handler) already owns the withdrawal's outcome.
+   */
+  claimWithdrawalForPayout(id: string, claimedAt: number): boolean;
   setWithdrawalSignature(id: string, signature: string, publicKey: string): void;
-  setWithdrawalCompletion(id: string, payoutReference: string, completedAt: number): boolean;
+  /**
+   * `from → completed`, a compare-and-set on exactly `from` (#921). Returns
+   * false when the withdrawal is missing or not in `from`.
+   */
+  setWithdrawalCompletion(
+    id: string,
+    payoutReference: string,
+    completedAt: number,
+    from: WithdrawalOpenStatus,
+  ): boolean;
   /**
    * Fail a withdrawal AND return its amount to the account, **atomically**
    * (issue #920). One compound operation: the status transition
@@ -119,8 +137,13 @@ export interface AccountStore {
    * `Withdrawal failed: <reason>`) commits in the same transaction as that
    * transition — or neither does.
    *
+   * The compare-and-set is on exactly `from` (#921): a `processing`
+   * withdrawal's payout may be in flight, so only its own outcome (or the
+   * operator's reconcile) names `processing`; the manual fail names
+   * `pending` and so can never refund a claimed payout.
+   *
    * Returns the refunded `{ motebitId, amount }` when THIS call performed the
-   * transition, `null` when the withdrawal is missing or already terminal.
+   * transition, `null` when the withdrawal is missing or not in `from`.
    * A second call (a retried handler, a sweeper, an admin replay) therefore
    * refunds nothing: the refund happens at most once per withdrawal.
    *
@@ -131,14 +154,16 @@ export interface AccountStore {
   failWithdrawalAndRefund(
     id: string,
     reason: string,
+    from: WithdrawalOpenStatus,
     failedAt?: number,
   ): { motebitId: string; amount: number } | null;
   /**
    * Record why a withdrawal's automated payout is UNRESOLVED, leaving it
-   * `pending` and its balance debited (issue #920): e.g. the last broadcast
-   * landed-and-failed but an earlier broadcast of the same payout is not
-   * proven dead and may have paid. Writes `failure_reason` only while the
-   * withdrawal is `pending | processing`; never changes status or balance.
+   * `processing` and its balance debited (issue #920/#921): e.g. the last
+   * broadcast landed-and-failed but an earlier broadcast of the same payout
+   * is not proven dead and may have paid. Writes `failure_reason` only while
+   * the withdrawal is `processing` (only a claimed payout can be unresolved);
+   * never changes status or balance.
    * Returns false when the withdrawal is missing or already terminal.
    */
   noteWithdrawalPayoutUnresolved(id: string, note: string): boolean;
@@ -468,10 +493,23 @@ export class InMemoryAccountStore implements AccountStore {
     w.relay_public_key = publicKey;
   }
 
-  setWithdrawalCompletion(id: string, payoutReference: string, completedAt: number): boolean {
+  claimWithdrawalForPayout(id: string, claimedAt: number): boolean {
+    const w = this.withdrawals.get(id);
+    if (!w || w.status !== "pending") return false;
+    w.status = "processing";
+    w.claimed_at = claimedAt;
+    return true;
+  }
+
+  setWithdrawalCompletion(
+    id: string,
+    payoutReference: string,
+    completedAt: number,
+    from: WithdrawalOpenStatus,
+  ): boolean {
     const w = this.withdrawals.get(id);
     if (!w) return false;
-    if (w.status !== "pending" && w.status !== "processing") return false;
+    if (!isOpenFrom(from) || w.status !== from) return false;
     w.status = "completed";
     w.payout_reference = payoutReference;
     w.completed_at = completedAt;
@@ -483,13 +521,14 @@ export class InMemoryAccountStore implements AccountStore {
   failWithdrawalAndRefund(
     id: string,
     reason: string,
+    from: WithdrawalOpenStatus,
     failedAt: number = this._now(),
   ): { motebitId: string; amount: number } | null {
     // Synchronous JS: the event loop serializes this whole body, so the
     // status CAS and the refund credit cannot interleave with another caller.
     const w = this.withdrawals.get(id);
     if (!w) return null;
-    if (w.status !== "pending" && w.status !== "processing") return null;
+    if (!isOpenFrom(from) || w.status !== from) return null;
     w.status = "failed";
     w.failure_reason = reason;
     w.completed_at = failedAt;
@@ -500,7 +539,7 @@ export class InMemoryAccountStore implements AccountStore {
   noteWithdrawalPayoutUnresolved(id: string, note: string): boolean {
     const w = this.withdrawals.get(id);
     if (!w) return false;
-    if (w.status !== "pending" && w.status !== "processing") return false;
+    if (w.status !== "processing") return false;
     w.failure_reason = note;
     return true;
   }
@@ -653,4 +692,9 @@ export class InMemoryAccountStore implements AccountStore {
     this.txnCounter += 1;
     return `txn-mem-${this.txnCounter.toString(16).padStart(8, "0")}`;
   }
+}
+
+/** Runtime check of a transition FROM state (#921): a cast must not name a terminal state. */
+function isOpenFrom(from: WithdrawalOpenStatus): boolean {
+  return from === "pending" || from === "processing";
 }

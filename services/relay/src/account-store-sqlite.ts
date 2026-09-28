@@ -22,10 +22,23 @@ import type {
   NewWithdrawal,
   TransactionType,
   VirtualAccount,
+  WithdrawalOpenStatus,
   WithdrawalRequest,
   WithdrawalStatus,
 } from "@motebit/virtual-accounts";
 import { DISPUTE_WINDOW_MS } from "@motebit/virtual-accounts";
+
+/**
+ * The FROM state of a settling transition (#921), checked at runtime: it is
+ * bound into a status compare-and-set, and a type alone would let a cast
+ * caller name a terminal state.
+ */
+function openStatus(from: WithdrawalOpenStatus): WithdrawalOpenStatus {
+  if (from !== "pending" && from !== "processing") {
+    throw new Error(`withdrawal transition: invalid from-status ${String(from)}`);
+  }
+  return from;
+}
 
 /**
  * Ledger `reference_id` prefix for promotional "free first taste" grants
@@ -122,7 +135,8 @@ export function createWithdrawalTables(db: DatabaseDriver): void {
       completed_at INTEGER,
       failure_reason TEXT,
       relay_signature TEXT,
-      relay_public_key TEXT
+      relay_public_key TEXT,
+      claimed_at INTEGER
     );
     CREATE INDEX IF NOT EXISTS idx_relay_withdrawals_motebit
       ON relay_withdrawals (motebit_id, requested_at DESC);
@@ -141,6 +155,11 @@ export function createWithdrawalTables(db: DatabaseDriver): void {
   }
   if (!colNames.has("relay_public_key")) {
     db.exec("ALTER TABLE relay_withdrawals ADD COLUMN relay_public_key TEXT");
+  }
+  // #921: when a payout claimed the withdrawal (`pending → processing`).
+  // NULL on every row written before the claim existed.
+  if (!colNames.has("claimed_at")) {
+    db.exec("ALTER TABLE relay_withdrawals ADD COLUMN claimed_at INTEGER");
   }
 }
 
@@ -403,6 +422,19 @@ export class SqliteAccountStore implements AccountStore {
     return info.changes > 0;
   }
 
+  claimWithdrawalForPayout(id: string, claimedAt: number): boolean {
+    // Issue #921: the claim that must precede any payout send. A
+    // compare-and-set on `pending` only, so of two claimants (a concurrent
+    // handler, or the operator's manual complete/fail racing the handler's
+    // pre-send awaits) exactly one moves the row; the loser must not send.
+    const info = this.db
+      .prepare(
+        "UPDATE relay_withdrawals SET status = 'processing', claimed_at = ? WHERE withdrawal_id = ? AND status = 'pending'",
+      )
+      .run(claimedAt, id);
+    return info.changes > 0;
+  }
+
   setWithdrawalSignature(id: string, signature: string, publicKey: string): void {
     this.db
       .prepare(
@@ -411,18 +443,25 @@ export class SqliteAccountStore implements AccountStore {
       .run(signature, publicKey, id);
   }
 
-  setWithdrawalCompletion(id: string, payoutReference: string, completedAt: number): boolean {
+  setWithdrawalCompletion(
+    id: string,
+    payoutReference: string,
+    completedAt: number,
+    from: WithdrawalOpenStatus,
+  ): boolean {
+    // #921: a compare-and-set on exactly `from` — the caller's own state.
     const info = this.db
       .prepare(
-        "UPDATE relay_withdrawals SET status = 'completed', payout_reference = ?, completed_at = ?, failure_reason = NULL WHERE withdrawal_id = ? AND status IN ('pending', 'processing')",
+        "UPDATE relay_withdrawals SET status = 'completed', payout_reference = ?, completed_at = ?, failure_reason = NULL WHERE withdrawal_id = ? AND status = ?",
       )
-      .run(payoutReference, completedAt, id);
+      .run(payoutReference, completedAt, id, openStatus(from));
     return info.changes > 0;
   }
 
   failWithdrawalAndRefund(
     id: string,
     reason: string,
+    from: WithdrawalOpenStatus,
     failedAt: number = Date.now(),
   ): { motebitId: string; amount: number } | null {
     // Issue #920: the status transition and the refund commit together or
@@ -433,12 +472,17 @@ export class SqliteAccountStore implements AccountStore {
     // `transaction()` would be a savepoint; `credit` issues plain statements
     // on the same connection), so a throw anywhere — the balance UPDATE or
     // the ledger INSERT — rolls the status back to where it was.
+    //
+    // #921: the CAS is on exactly `from`. The operator's manual fail names
+    // `pending`, so it can never refund a `processing` withdrawal whose
+    // payout may still land.
+    const fromStatus = openStatus(from);
     return this.db.transaction(() => {
       const info = this.db
         .prepare(
-          "UPDATE relay_withdrawals SET status = 'failed', failure_reason = ?, completed_at = ? WHERE withdrawal_id = ? AND status IN ('pending', 'processing')",
+          "UPDATE relay_withdrawals SET status = 'failed', failure_reason = ?, completed_at = ? WHERE withdrawal_id = ? AND status = ?",
         )
-        .run(reason, failedAt, id);
+        .run(reason, failedAt, id, fromStatus);
       if (info.changes === 0) return null;
       const w = this.db
         .prepare("SELECT motebit_id, amount FROM relay_withdrawals WHERE withdrawal_id = ?")
@@ -452,9 +496,10 @@ export class SqliteAccountStore implements AccountStore {
   noteWithdrawalPayoutUnresolved(id: string, note: string): boolean {
     // Issue #920: an unresolved automated payout. Status and balance are
     // untouched — only the operator's reconciliation may complete or fail it.
+    // Only a claimed payout (`processing`, #921) can be unresolved.
     const info = this.db
       .prepare(
-        "UPDATE relay_withdrawals SET failure_reason = ? WHERE withdrawal_id = ? AND status IN ('pending', 'processing')",
+        "UPDATE relay_withdrawals SET failure_reason = ? WHERE withdrawal_id = ? AND status = 'processing'",
       )
       .run(note, id);
     return info.changes > 0;

@@ -516,11 +516,11 @@ const WRITERS: readonly Writer[] = [
     file: R + "account-store-sqlite.ts",
     verb: "UPDATE",
     table: "relay_withdrawals",
-    count: 7,
+    count: 8,
     principal:
-      "withdrawal lifecycle: the operator's admin complete/fail routes (master token), the relay's rail loops (" +
+      "withdrawal lifecycle: the operator's admin routes (master token) — /complete and /fail act FROM `pending` only and refuse a `processing` withdrawal 409; /reconcile acts FROM `processing` only, never while the payout is awaited in-process or within RECONCILE_MIN_AGE_MS of its claim, and only on an explicit operator attestation (#921) — the relay's rail loops (" +
       LOOP +
-      "), and /withdraw's Path 0 auto-settle under `requireFirstPerson` on the withdrawal that same request created — completed only on a confirmed send; failed-and-refunded (`failWithdrawalAndRefund`, one transaction, status CAS so at most once) only on a send that landed and failed on-chain AND whose earlier broadcasts the adapter proved dead; otherwise left pending with an unresolved-payout note (`noteWithdrawalPayoutUnresolved`, failure_reason only, no status or balance change) (#920); the outcome comes from the chain adapter, never from the request body",
+      "), and /withdraw's Path 0 / Path 1 auto-settle under `requireFirstPerson` on the withdrawal that same request created: the payout is sent only after `claimWithdrawalForPayout` (the CAS `pending → processing`, stamping claimed_at; a lost claim sends nothing, #921); then completed FROM `processing` only on a confirmed send; failed-and-refunded (`failWithdrawalAndRefund`, one transaction, status CAS on the named from-state so at most once) only on a send that landed and failed on-chain AND whose earlier broadcasts the adapter proved dead; otherwise left `processing` with an unresolved-payout note (`noteWithdrawalPayoutUnresolved`, failure_reason only, no status or balance change) (#920); the outcome comes from the chain adapter, never from the request body",
   },
   {
     file: R + "account-store-sqlite.ts",
@@ -542,7 +542,9 @@ const WRITERS: readonly Writer[] = [
     verb: "INSERT",
     table: "relay_withdrawals",
     count: 1,
-    principal: LOOP + ": the batch-withdrawal fire path",
+    principal:
+      LOOP +
+      ": the batch-withdrawal fire path, for a queue row it claimed (`pending → firing` CAS) before calling the rail; a fired payout the rail has not confirmed is recorded `processing` (claimed_at = fire time), never `pending`, so only the operator's reconcile settles it (#921)",
   },
   {
     file: R + "deposit-detector.ts",

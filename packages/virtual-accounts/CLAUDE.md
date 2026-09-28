@@ -11,7 +11,7 @@ Layer 1. BSL-1.1. Depends only on `@motebit/crypto` (Layer 0 Apache-2.0 permissi
 3. **Dispute-window hold is policy input, not dispute-domain knowledge.** `AccountStore.getUnwithdrawableHold(motebitId)` returns an amount. The store implementation computes it from whatever tables it owns (dispute window timer, active disputes, unfinalized settlements). The ledger functions in this package do not know about `relay_settlements` or `relay_disputes`.
 4. **Receipt signing is canonical-JSON-over-the-record.** `signWithdrawalReceipt` takes a fixed field set; adding fields requires coordinated verification code elsewhere. Keep the signed payload small and stable — every field in the signed record is a wire commitment.
 5. **No SQL, no DB types.** The package must not import from `@motebit/persistence` and must not contain SQL strings. The `AccountStore` interface is the only coupling point to storage.
-6. **Withdrawals atomically return funds on failure.** `failWithdrawal` credits the amount back within the same logical operation as the status update. Partial state — "failed but not refunded" — is forbidden.
+6. **Withdrawals atomically return funds on failure.** `failWithdrawal` credits the amount back within the same logical operation as the status update. Partial state — "failed but not refunded" — is forbidden. **A payout claims before it sends** (#921): `claimWithdrawalForPayout` is the CAS `pending → processing`, and nothing is sent on a lost claim. Every completion and fail-and-refund names the state it moves FROM (`WithdrawalOpenStatus`). A `processing` withdrawal's payout may still land, so only that payout's own outcome, or the relay's attested reconcile, settles it. The manual complete/fail act FROM `pending` only.
 
 ## What NOT to add
 
