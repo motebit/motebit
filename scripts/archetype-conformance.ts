@@ -31,10 +31,19 @@
  *
  * Env:
  *   RELAY_URL              target relay (default staging)
- *   AUTH_TOKEN             bearer for discover/task reads
+ *   AUTH_TOKEN             optional bearer for the (public) discover read only —
+ *                          NEVER used on the paid path
  *   DELEGATE               "1" to run the paid delegation legs (default: presence only)
  * Paid-leg env (DELEGATE=1; devnet on staging):
- *   DELEGATOR_MOTEBIT_ID, DELEGATOR_SEED_HEX, SOLANA_RPC_URL, SOLANA_USDC_MINT
+ *   DELEGATOR_SEED_HEX, SOLANA_RPC_URL, SOLANA_USDC_MINT
+ *
+ * The delegator is a SOVEREIGN motebit derived from DELEGATOR_SEED_HEX alone
+ * (scripts/lib/probe-delegator.ts): the seed is its identity key, its Solana
+ * wallet, and — via deriveSovereignMotebitId — its motebit_id. It bootstraps
+ * itself through the public door and authenticates every relay call with a
+ * token signed by that key, so the wallet that pays IS the submitter's
+ * identity-derived wallet (#955). `DELEGATOR_MOTEBIT_ID` is no longer read;
+ * a value that disagrees with the seed is reported as a WARN.
  */
 
 import {
@@ -48,6 +57,13 @@ import { recomputeRoutingDecision } from "@motebit/semiring";
 import type { EvalAttestation } from "@motebit/protocol";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  bootstrapProbeDelegator,
+  declaredIdMismatch,
+  deriveProbeDelegator,
+  probeTokenMinter,
+  type ProbeDelegator,
+} from "./lib/probe-delegator.js";
 
 interface Expectation {
   service: string;
@@ -145,7 +161,7 @@ function checkPresence(agents: DiscoveredWireAgent[]): Map<string, DiscoveredWir
         agent.settlement_address != null && (agent.settlement_modes ?? "").includes("p2p")
           ? "PASS"
           : "FAIL",
-        `modes=${agent.settlement_modes ?? "none"}`,
+        p2pPayableDetail(agent),
       );
     }
   }
@@ -153,11 +169,61 @@ function checkPresence(agents: DiscoveredWireAgent[]): Map<string, DiscoveredWir
 }
 
 /**
- * Paid P2P delegation via the REAL delegator client (the same call
- * p2p-cold-start-staging-proof.ts proved) — the probe is a stranger with no
- * history: it pays like one and acknowledges like one (no allowlist;
- * protocol-primacy). Returns the signed receipt.
+ * The p2p-payable detail, with a repair pointer when an agent that HAS a
+ * settlement address has lost `p2p` from its modes. Every slate molecule
+ * registers `relay,p2p` (deploy-archetype-slate.ts) and re-registers hourly,
+ * so a molecule reading `relay` with an address was stripped by the relay: the
+ * p2p-verifier's `downgradeP2pTrust` removes `p2p` from the DELEGATOR of a P2P
+ * payment that failed onchain verification — for the Researcher, one of its
+ * own paid atom hops. Staging's verifier only runs when SOLANA_RPC_URL is set.
+ * (Witnessed 2026-09-28: the relay's parent-P2P audit row records the
+ * SUBMITTER as payee, so the Researcher's atom hops "fail" the worker-leg
+ * check against the Researcher's own address — a relay defect, reported
+ * separately; this detail only points the operator at the evidence.)
  */
+export function p2pPayableDetail(agent: {
+  settlement_address?: string | null;
+  settlement_modes?: string | null;
+}): string {
+  const modes = `modes=${agent.settlement_modes ?? "none"}`;
+  if (agent.settlement_address == null) return `${modes}; no settlement_address registered`;
+  if ((agent.settlement_modes ?? "").includes("p2p")) return modes;
+  return (
+    `${modes} (address set, p2p missing) — the relay's p2p-verifier strips p2p from a ` +
+    `delegator whose P2P payment failed verification (services/relay/src/p2p-verifier.ts ` +
+    `downgradeP2pTrust); read the relay log for p2p_verifier.failed / legs_mismatch naming ` +
+    `this agent's settlements. The worker restores p2p on its next hourly re-registration.`
+  );
+}
+
+/**
+ * The probe's sovereign delegator for one relay, derived from the seed and
+ * introduced to that relay once per run (memoized per relay + seed, so the
+ * three paid legs share one bootstrap and a test's fresh relay gets its own).
+ */
+const delegators = new Map<string, Promise<ProbeDelegator>>();
+export function bootstrappedDelegator(relayUrl: string, seedHex: string): Promise<ProbeDelegator> {
+  const key = `${relayUrl}\u0000${seedHex}`;
+  let pending = delegators.get(key);
+  if (pending == null) {
+    pending = (async () => {
+      const d = await deriveProbeDelegator(seedHex);
+      await bootstrapProbeDelegator(relayUrl, d);
+      return d;
+    })();
+    // A failed bootstrap is not cached — the next leg retries it.
+    pending.catch(() => delegators.delete(key));
+    delegators.set(key, pending);
+  }
+  return pending;
+}
+
+function seedFromEnv(): string {
+  const seedHex = process.env["DELEGATOR_SEED_HEX"];
+  if (!seedHex) throw new Error("DELEGATE=1 requires DELEGATOR_SEED_HEX");
+  return seedHex;
+}
+
 /**
  * The probe's own Solana rail (devnet). Built from the seed in
  * DELEGATOR_SEED_HEX; its `address` is the wallet an operator funds.
@@ -165,7 +231,7 @@ function checkPresence(agents: DiscoveredWireAgent[]): Map<string, DiscoveredWir
 async function delegatorRail(): Promise<SolanaWalletRail> {
   const { Buffer } = await import("node:buffer");
   const { createSolanaWalletRail } = await import("@motebit/wallet-solana");
-  const required = ["DELEGATOR_MOTEBIT_ID", "DELEGATOR_SEED_HEX", "SOLANA_RPC_URL"] as const;
+  const required = ["DELEGATOR_SEED_HEX", "SOLANA_RPC_URL"] as const;
   for (const k of required) {
     if (!process.env[k]) throw new Error(`DELEGATE=1 requires ${k}`);
   }
@@ -183,12 +249,87 @@ const FUNDING_HINT = (address: string): string =>
   `delegator wallet ${address} — devnet USDC (mint ${process.env["SOLANA_USDC_MINT"] ?? "default"}); ` +
   `top up at https://faucet.circle.com (Solana Devnet)`;
 
+/** The rail surface a paid leg needs — structurally `SolanaWalletRail`. */
+export type PaidLegRail = Pick<SolanaWalletRail, "address" | "buildP2pPayment"> &
+  Partial<Pick<SolanaWalletRail, "confirmP2pPayment">>;
+
+export interface PaidLegInput {
+  relayUrl: string;
+  /** DELEGATOR_SEED_HEX — the one secret: identity key, wallet, and id. */
+  seedHex: string;
+  rail: PaidLegRail;
+  /** The relay key pinned from /.well-known — the fee leg's trust root. */
+  relayPublicKeyHex: string;
+  workerId: string;
+  capability: string;
+  prompt: string;
+  timeoutMs: number;
+  logger: { warn(message: string, context?: Record<string, unknown>): void };
+}
+
+type DelegationOutcome = Awaited<
+  ReturnType<(typeof import("@motebit/runtime"))["resolveAndSubmitP2pDelegation"]>
+>;
+
+/**
+ * One paid P2P hire through the REAL delegator client
+ * (`resolveAndSubmitP2pDelegation`, the call the CLI's sovereign path makes),
+ * made the way a conforming sovereign client makes it:
+ *
+ *   - the submitter is the seed's own sovereign identity, bootstrapped
+ *     through the public door;
+ *   - every bearer is minted per audience and SIGNED by that identity key —
+ *     never the operator's master token, which names an identity without
+ *     proving it (the relay can then only look the payer up among that
+ *     identity's keys, and a wallet key it never held is refused:
+ *     TASK_P2P_PROOF_NOT_PAYER, #955);
+ *   - the paying wallet is asserted to be that identity's derived wallet
+ *     BEFORE anything is broadcast.
+ *
+ * The probe is still a stranger with no history — no allowlist and no
+ * operator credential (protocol-primacy): it pays and acknowledges like one.
+ */
+export async function submitPaidDelegation(input: PaidLegInput): Promise<DelegationOutcome> {
+  const { resolveAndSubmitP2pDelegation, p2pPaymentConfirmerOf } = await import("@motebit/runtime");
+  const { deriveSolanaAddress } = await import("@motebit/wallet-solana");
+  const delegator = await bootstrappedDelegator(input.relayUrl, input.seedHex);
+
+  // The same seed, so the same key: the wallet that pays IS the identity that
+  // submits. Asserted, not assumed — a rail on a different key would spend
+  // money on a proof the relay must refuse.
+  const identityWallet = deriveSolanaAddress(delegator.publicKey);
+  if (identityWallet !== input.rail.address) {
+    throw new Error(
+      `delegator wallet ${input.rail.address} is not ${delegator.motebitId}'s identity-derived ` +
+        `wallet ${identityWallet} — refusing to pay: the relay would refuse the proof ` +
+        `(TASK_P2P_PROOF_NOT_PAYER)`,
+    );
+  }
+
+  const confirm = p2pPaymentConfirmerOf(input.rail);
+  return resolveAndSubmitP2pDelegation({
+    motebitId: delegator.motebitId,
+    syncUrl: input.relayUrl,
+    authToken: probeTokenMinter(delegator),
+    prompt: input.prompt,
+    capability: input.capability,
+    targetWorkerId: input.workerId,
+    relayPublicKeyHex: input.relayPublicKeyHex,
+    buildP2pPayment: (req, hooks) => input.rail.buildP2pPayment(req, hooks),
+    // #885: a builder that throws is not proof nothing moved — the rail's
+    // read-only lookup decides, and "unknown" never pays again (as the CLI).
+    ...(confirm != null ? { confirmP2pPayment: confirm } : {}),
+    acknowledgeNoHistoryRisk: true,
+    timeoutMs: input.timeoutMs,
+    logger: input.logger,
+  });
+}
+
 async function delegatePaid(
   workerId: string,
   capability: string,
   prompt: string,
 ): Promise<Record<string, unknown>> {
-  const { resolveAndSubmitP2pDelegation } = await import("@motebit/runtime");
   const rail = await delegatorRail();
 
   // Fee-leg trust root: pin the relay key from /.well-known (TOFU) — the
@@ -198,16 +339,14 @@ async function delegatePaid(
   };
   if (!wk.public_key) throw new Error("relay /.well-known/motebit.json has no public_key");
 
-  const result = await resolveAndSubmitP2pDelegation({
-    motebitId: process.env["DELEGATOR_MOTEBIT_ID"]!,
-    syncUrl: RELAY_URL,
-    authToken: async () => AUTH_TOKEN,
-    prompt,
-    capability,
-    targetWorkerId: workerId,
+  const result = await submitPaidDelegation({
+    relayUrl: RELAY_URL,
+    seedHex: seedFromEnv(),
+    rail,
     relayPublicKeyHex: wk.public_key,
-    buildP2pPayment: (req) => rail.buildP2pPayment(req),
-    acknowledgeNoHistoryRisk: true,
+    workerId,
+    capability,
+    prompt,
     timeoutMs: Number(process.env["TIMEOUT_MS"] ?? "180000"),
     logger: { warn: (m, ctx) => console.warn(`[conformance] warn: ${m}`, ctx ?? "") },
   });
@@ -626,10 +765,14 @@ async function main(): Promise<void> {
     // Say which wallet pays BEFORE anything is attempted, so a funding gap is
     // diagnosable from the run header alone.
     try {
+      const d = await bootstrappedDelegator(RELAY_URL, seedFromEnv());
+      console.log(`[conformance] delegator ${d.motebitId} (sovereign, derived from the seed)`);
+      const mismatch = declaredIdMismatch(process.env["DELEGATOR_MOTEBIT_ID"], d);
+      if (mismatch != null) record("delegator: declared id", "WARN", mismatch);
       console.log(`[conformance] ${FUNDING_HINT((await delegatorRail()).address)}\n`);
     } catch (err) {
       console.log(
-        `[conformance] delegator rail unavailable: ${err instanceof Error ? err.message : String(err)}`,
+        `[conformance] delegator unavailable: ${err instanceof Error ? err.message : String(err)}`,
       );
     }
     const researcher = bySlate.get("research");
