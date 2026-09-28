@@ -88,7 +88,12 @@ import {
 import type { ConnectedDevice } from "./index.js";
 import { sendToEach } from "./ws-send.js";
 import { routeToSockets } from "./task-presentation.js";
-import { checkIdempotency, completeIdempotency } from "./idempotency.js";
+import {
+  bindIdempotencyClaimToTask,
+  checkIdempotency,
+  completeIdempotency,
+  recordAdmittedOutcome,
+} from "./idempotency.js";
 import { createLogger } from "./logger.js";
 import { pathIdentity } from "./id-bounds.js";
 import type { TaskQueue } from "./task-queue.js";
@@ -374,6 +379,74 @@ export async function refreshDispatchTokenOnReplay(
     reason: claims.exp <= now ? "expired" : "expiring",
   });
   return { ...replayed, dispatch_token: fresh };
+}
+
+/** Context key the submit handler stamps once its admission transaction commits (#888). */
+export const ADMITTED_TASK_KEY = "idempotencyAdmittedTask";
+
+/** The task a submission admitted, and the idempotency claim that names it. */
+export interface AdmittedTask {
+  key: string;
+  motebitId: string;
+  taskId: string;
+}
+
+/**
+ * One Idempotency-Key admits at most one task (#888). Runs after the submit
+ * handler on EVERY exit — the 201, a thrown error rendered by the error
+ * boundary, or any other response — and, when the request admitted a task,
+ * records the response the client is about to receive as the claim's terminal
+ * outcome, with the admitted `task_id` added to it. A same-key replay then
+ * returns that response and that task id; it never finds the key free and
+ * admits a second task.
+ *
+ * It used to be that a submission throwing after enqueue (the budget hold, a
+ * federation forward answering 502/503 or timing out, a 402 from the ranking
+ * loop, a token mint) released its claim at the error boundary while its task
+ * stayed queued, so a client whose response was lost and who retried with the
+ * same key was admitted a second task. Recording at this one seam, rather than
+ * at each throw point, is what makes the rule hold for throw points added
+ * later.
+ *
+ * A 201 has already completed its claim in the handler; the write here then
+ * matches nothing and the response is left exactly as it was.
+ */
+export async function recordAdmissionOutcome(
+  db: Parameters<typeof recordAdmittedOutcome>[0],
+  admitted: AdmittedTask,
+  res: Response,
+): Promise<Response> {
+  let body: Record<string, unknown>;
+  try {
+    const parsed: unknown = await res.clone().json();
+    body =
+      parsed != null && typeof parsed === "object" && !Array.isArray(parsed)
+        ? (parsed as Record<string, unknown>)
+        : { error: "Task admission did not complete", status: res.status };
+  } catch {
+    body = { error: "Task admission did not complete", status: res.status };
+  }
+  const outcome = { ...body, task_id: admitted.taskId };
+  const serialized = JSON.stringify(outcome);
+  const recorded = recordAdmittedOutcome(
+    db,
+    admitted.key,
+    admitted.motebitId,
+    admitted.taskId,
+    res.status,
+    serialized,
+  );
+  if (!recorded) return res; // the handler completed its claim (201) — nothing to add
+  logger.warn("task.admitted_then_failed", {
+    correlationId: admitted.taskId,
+    taskId: admitted.taskId,
+    motebitId: admitted.motebitId,
+    status: res.status,
+  });
+  const headers = new Headers(res.headers);
+  headers.delete("content-length");
+  headers.set("content-type", "application/json");
+  return new Response(serialized, { status: res.status, headers });
 }
 
 /**
@@ -2076,6 +2149,30 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
     });
   }
 
+  // --- Admission outcome (#888): one Idempotency-Key, at most one task ---
+  // Registered before the submit route so it wraps the handler: after the
+  // handler returns or throws (Hono renders the throw through onError first),
+  // a request that ADMITTED a task records its response as the key's terminal
+  // outcome. See `recordAdmissionOutcome`.
+  app.use("/agent/:motebitId/task", async (c, next) => {
+    await next();
+    if (c.req.method !== "POST") return;
+    const admitted = c.get(ADMITTED_TASK_KEY as never) as AdmittedTask | undefined;
+    if (admitted == null) return;
+    try {
+      const outcome = await recordAdmissionOutcome(moteDb.db, admitted, c.res);
+      if (outcome !== c.res) c.res = outcome;
+    } catch (err) {
+      // The claim stays bound to its task (never released), so a replay gets
+      // 409 until the 24h sweep — never a second task. Say so loudly.
+      logger.error("task.admission_outcome_unrecorded", {
+        correlationId: admitted.taskId,
+        taskId: admitted.taskId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  });
+
   // --- POST /agent/:motebitId/task — submit a task (master token or signed device token) ---
   /** @spec motebit/delegation@1.0 */
   app.post("/agent/:motebitId/task", async (c) => {
@@ -2112,7 +2209,10 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
     // error boundary can release it if the handler throws before
     // completeIdempotency — else the key is stranded and an honest
     // same-key retry gets 409 until the 24h sweep (#459). Set only on the
-    // claiming request; a conflict above never reaches this line.
+    // claiming request; a conflict above never reaches this line. The release
+    // reopens the key only while no task is admitted: once the admission
+    // transaction below binds the claim to a task, the claim is kept and the
+    // request's outcome is recorded instead (#888).
     c.set("idempotencyClaim" as never, { key: idempotencyKey, motebitId } as never);
 
     const body = await c.req.json<{
@@ -2606,29 +2706,12 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
       );
     }
 
-    taskQueue.set(taskId, {
-      task,
-      expiresAt: now + TASK_TTL_MS,
-      submitted_by: submittedBy,
-      price_snapshot: priceSnapshot,
-      x402_tx_hash: x402TxHash,
-      x402_network: x402Net,
-      settlement_mode: settlementMode,
-      p2p_payment_proof: p2pPaymentProof,
-      target_agent: body.target_agent,
-      grant_id: body.grant_id,
-    });
-
-    logger.info("task.submitted", {
-      correlationId: taskId,
-      taskId,
-      motebitId,
-      capabilities: task.required_capabilities ?? [],
-      invocationOrigin: task.invocation_origin,
-    });
-
-    // Persist budget allocation so settlement can verify the lock exists.
+    // Budget allocation, decided BEFORE admission (#888). Everything here can
+    // refuse the task (insufficient funds, a failed deposit), and a refusal
+    // must leave no task behind: the task is enqueued only by the admission
+    // transaction below, which commits the hold's writes in the same step.
     // P2P tasks skip allocation — money already moved onchain.
+    let fundingWrites: (() => void) | undefined;
     if (settlementMode !== "p2p" && priceSnapshot != null && priceSnapshot > 0) {
       // Payment is required BY DEFINITION here: this branch is guarded by
       // `priceSnapshot > 0`, and `priceSnapshot` derives from the listing's
@@ -2732,14 +2815,14 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
 
         if (allocation) {
           // Round to integer micro-units (allocateBudget may produce fractional from risk multiplier)
-          allocation.amount_locked = Math.round(allocation.amount_locked);
-          // Lock the risk-buffered amount
-          moteDb.db.exec("BEGIN");
-          try {
+          const amountLocked = Math.round(allocation.amount_locked);
+          // Lock the risk-buffered amount — committed by the admission
+          // transaction below, atomically with the task it funds.
+          fundingWrites = () => {
             debitSpendableAccount(
               moteDb.db,
               delegatorId,
-              allocation.amount_locked, // Uses risk-buffered amount (rounded to micro-unit)
+              amountLocked, // Uses risk-buffered amount (rounded to micro-unit)
               "allocation_hold",
               `x402-${taskId}`,
               `Hold for task ${taskId} to ${motebitId}`,
@@ -2748,14 +2831,8 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
               .prepare(
                 "INSERT OR IGNORE INTO relay_allocations (allocation_id, task_id, motebit_id, amount_locked, status, created_at) VALUES (?, ?, ?, ?, 'locked', ?)",
               )
-              .run(`x402-${taskId}`, taskId, motebitId, allocation.amount_locked, now);
-            moteDb.db.exec("COMMIT");
-          } catch (holdErr) {
-            moteDb.db.exec("ROLLBACK");
-            throw new AllocationError("ALLOCATION_HOLD_FAILED", "Allocation hold failed", {
-              cause: holdErr,
-            });
-          }
+              .run(`x402-${taskId}`, taskId, motebitId, amountLocked, now);
+          };
         } else if (requiresPayment && !x402TxHash) {
           // Paid agent, no virtual balance, no x402 payment — 402
           throw new InsufficientFundsError(
@@ -2763,12 +2840,15 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
           );
         } else {
           // Either free agent (best-effort allocation) or x402 deposited (balance should be sufficient).
-          // Persist allocation record for settlement audit.
-          moteDb.db
-            .prepare(
-              "INSERT OR IGNORE INTO relay_allocations (allocation_id, task_id, motebit_id, amount_locked, status, created_at) VALUES (?, ?, ?, ?, 'locked', ?)",
-            )
-            .run(`x402-${taskId}`, taskId, motebitId, priceSnapshot, now);
+          // Persist allocation record for settlement audit — committed by the
+          // admission transaction below.
+          fundingWrites = () => {
+            moteDb.db
+              .prepare(
+                "INSERT OR IGNORE INTO relay_allocations (allocation_id, task_id, motebit_id, amount_locked, status, created_at) VALUES (?, ?, ?, ?, 'locked', ?)",
+              )
+              .run(`x402-${taskId}`, taskId, motebitId, priceSnapshot, now);
+          };
         }
       } catch (err) {
         // Re-throw intentional errors (RelayError, HTTPException)
@@ -2790,6 +2870,53 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
         // Free agent — best-effort allocation, don't block task submission
       }
     }
+
+    // === Admission (#888): the ONE step that makes a task exist ===
+    // One transaction: the budget hold (if any), the idempotency claim bound
+    // to this task, and the queued task. All commit or none does, so a key
+    // never names a task that is not queued, and a queued task is never
+    // unnamed by its key. Once committed, the claim is never released
+    // (`releaseIdempotency` leaves a bound claim alone), and whatever response
+    // this request ends with — the 201, or any error thrown below, including
+    // throw points added later — is recorded by the admission-outcome
+    // middleware (`recordAdmissionOutcome`), so a same-key replay returns
+    // this task's id and never admits a second task.
+    moteDb.db.exec("BEGIN");
+    try {
+      fundingWrites?.();
+      bindIdempotencyClaimToTask(moteDb.db, idempotencyKey, motebitId, taskId);
+      taskQueue.set(taskId, {
+        task,
+        expiresAt: now + TASK_TTL_MS,
+        submitted_by: submittedBy,
+        price_snapshot: priceSnapshot,
+        x402_tx_hash: x402TxHash,
+        x402_network: x402Net,
+        settlement_mode: settlementMode,
+        p2p_payment_proof: p2pPaymentProof,
+        target_agent: body.target_agent,
+        grant_id: body.grant_id,
+      });
+      moteDb.db.exec("COMMIT");
+    } catch (admitErr) {
+      moteDb.db.exec("ROLLBACK");
+      if (fundingWrites != null) {
+        throw new AllocationError("ALLOCATION_HOLD_FAILED", "Allocation hold failed", {
+          cause: admitErr,
+        });
+      }
+      throw admitErr;
+    }
+    const admitted: AdmittedTask = { key: idempotencyKey, motebitId, taskId };
+    c.set(ADMITTED_TASK_KEY as never, admitted as never);
+
+    logger.info("task.submitted", {
+      correlationId: taskId,
+      taskId,
+      motebitId,
+      capabilities: task.required_capabilities ?? [],
+      invocationOrigin: task.invocation_origin,
+    });
 
     const requiredCaps = task.required_capabilities ?? [];
     const payload = JSON.stringify({ type: "task_request", task });
@@ -3132,7 +3259,8 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
 
           if (!taskRouter.canForward(peerEndpoint)) {
             throw new HTTPException(503, {
-              message: "Executor relay temporarily unavailable (circuit open) — retry shortly",
+              message:
+                "Executor relay temporarily unavailable (circuit open) — retry shortly under a new Idempotency-Key (this key replays this answer)",
             });
           }
 
@@ -3189,7 +3317,7 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
               // payment_proof to retry without re-paying (the replay guard keys
               // on settled proofs, not attempted ones).
               throw new HTTPException(502, {
-                message: `Executor relay rejected the forwarded task (HTTP ${resp.status}) — retryable: resubmit the same payment_proof`,
+                message: `Executor relay rejected the forwarded task (HTTP ${resp.status}) — retryable: resubmit the same payment_proof under a new Idempotency-Key (this key replays this answer)`,
               });
             }
           } catch (fwdErr) {
@@ -3203,7 +3331,7 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
             });
             throw new HTTPException(502, {
               message:
-                "Failed to forward federated P2P task to the executor relay — retryable: resubmit the same payment_proof",
+                "Failed to forward federated P2P task to the executor relay — retryable: resubmit the same payment_proof under a new Idempotency-Key (this key replays this answer)",
             });
           }
         } else if (allProfiles.length > 0) {

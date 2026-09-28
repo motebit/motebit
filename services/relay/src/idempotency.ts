@@ -7,6 +7,15 @@
  *
  * Records are scoped to (idempotency_key, motebit_id) — different agents can reuse the same key.
  * Records older than 24 hours are cleaned up by the existing cleanup interval.
+ *
+ * One key admits at most one task (#888). A task submission binds its claim
+ * to the task it admits (`bindIdempotencyClaimToTask`) in the SAME transaction
+ * that enqueues the task. From then on the claim is never released: a
+ * submission that throws after admission records the response its client got
+ * (`recordAdmittedOutcome`), and a replay returns that response, carrying the
+ * admitted `task_id`. `releaseIdempotency` deletes only a claim that admitted
+ * nothing, so the release on a thrown request cannot reopen a key whose task
+ * is already queued.
  */
 
 import type { DatabaseDriver } from "@motebit/persistence";
@@ -25,6 +34,8 @@ export interface IdempotencyRecord {
   response_body: string | null;
   created_at: number;
   completed_at: number | null;
+  /** The task this claim admitted (#888); null until admission, and for non-task routes. */
+  task_id: string | null;
 }
 
 export type IdempotencyCheckResult =
@@ -46,6 +57,14 @@ export function createIdempotencyTable(db: DatabaseDriver): void {
       PRIMARY KEY (idempotency_key, motebit_id)
     );
   `);
+  // #888: the task a claim admitted. PRAGMA-guarded so an existing relay DB
+  // gains the column in place (same pattern as the relay's other ALTERs).
+  const cols = (
+    db.prepare("PRAGMA table_info(relay_idempotency_keys)").all() as { name: string }[]
+  ).map((c) => c.name);
+  if (!cols.includes("task_id")) {
+    db.exec("ALTER TABLE relay_idempotency_keys ADD COLUMN task_id TEXT;");
+  }
 }
 
 /**
@@ -129,19 +148,70 @@ export function completeIdempotency(
 }
 
 /**
+ * Bind a 'processing' claim to the task it admits (#888). Call INSIDE the
+ * transaction that enqueues the task, so the task exists exactly when its
+ * claim names it: a rollback undoes both. Throws when the claim is not an
+ * unbound 'processing' row for this key — the request no longer owns a claim
+ * that may admit, so it must not enqueue (the transaction rolls back).
+ */
+export function bindIdempotencyClaimToTask(
+  db: DatabaseDriver,
+  key: string,
+  motebitId: string,
+  taskId: string,
+): void {
+  const info = db
+    .prepare(
+      "UPDATE relay_idempotency_keys SET task_id = ? WHERE idempotency_key = ? AND motebit_id = ? AND status = 'processing' AND task_id IS NULL",
+    )
+    .run(taskId, key, motebitId);
+  if (info.changes !== 1) {
+    throw new Error(
+      `idempotency claim for key ${key} is not an unbound processing claim — refusing to admit task ${taskId}`,
+    );
+  }
+}
+
+/**
+ * Record the response a request that ADMITTED a task ended with (#888) — the
+ * terminal outcome a replay of its key reports. Written only over the claim
+ * bound to that exact task and still 'processing', so a request that already
+ * completed its claim (the 201 path) or never admitted is untouched.
+ * Returns whether a row was written.
+ */
+export function recordAdmittedOutcome(
+  db: DatabaseDriver,
+  key: string,
+  motebitId: string,
+  taskId: string,
+  responseStatus: number,
+  responseBody: string,
+): boolean {
+  const info = db
+    .prepare(
+      "UPDATE relay_idempotency_keys SET status = 'completed', response_status = ?, response_body = ?, completed_at = ? WHERE idempotency_key = ? AND motebit_id = ? AND task_id = ? AND status = 'processing'",
+    )
+    .run(responseStatus, responseBody, Date.now(), key, motebitId, taskId);
+  return info.changes > 0;
+}
+
+/**
  * Release a claimed-but-never-completed idempotency key (#459 secondary
  * defect): a submit handler that throws AFTER `checkIdempotency` claimed
  * the row used to strand it in 'processing' forever — an honest retry
  * with the SAME key then got 409 until the 24h sweep, which trains
  * clients to mint a fresh key per attempt (defeating idempotency
  * entirely; both storm-implicated submitters did exactly this). Deletes
- * ONLY a still-'processing' row — a completed row (cached response) is
- * never touched. Call from the error boundary of the request that made
- * the claim, never for a conflict observed on someone else's claim.
+ * ONLY a still-'processing' row that admitted nothing — a completed row
+ * (cached response) is never touched, and neither is a claim bound to an
+ * admitted task (#888): releasing that one let a same-key retry admit a
+ * SECOND task while the first stayed queued. Call from the error boundary
+ * of the request that made the claim, never for a conflict observed on
+ * someone else's claim.
  */
 export function releaseIdempotency(db: DatabaseDriver, key: string, motebitId: string): void {
   db.prepare(
-    "DELETE FROM relay_idempotency_keys WHERE idempotency_key = ? AND motebit_id = ? AND status = 'processing'",
+    "DELETE FROM relay_idempotency_keys WHERE idempotency_key = ? AND motebit_id = ? AND status = 'processing' AND task_id IS NULL",
   ).run(key, motebitId);
 }
 
