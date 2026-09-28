@@ -73,6 +73,13 @@ export class RelayDelegationAdapter implements StepDelegationAdapter {
     const maxRetries = this.config.maxDelegationRetries ?? 2;
     const excludeAgents: string[] = [...(crossStepExclude ?? [])];
     let lastError: Error | undefined;
+    // One key per logical submission. A retry after a DELIVERY failure (the
+    // result never reached us and the relay could not say how the task
+    // ended) resubmits under the SAME key, so the relay replays the task it
+    // already admitted instead of admitting — and charging for — a second
+    // one. Only a task that conclusively FAILED gets a new key: that retry is
+    // meant to be a new task, routed away from the agent that failed (#816).
+    let idempotencyKey = crypto.randomUUID();
 
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
       try {
@@ -80,6 +87,7 @@ export class RelayDelegationAdapter implements StepDelegationAdapter {
           step,
           timeoutMs,
           excludeAgents,
+          idempotencyKey,
           // Only call onTaskSubmitted for the first attempt (task_id tracking)
           attempt === 0 ? onTaskSubmitted : undefined,
         );
@@ -94,6 +102,9 @@ export class RelayDelegationAdapter implements StepDelegationAdapter {
         // Exclude the failed agent from next attempt
         if (failedAgentId) {
           excludeAgents.push(failedAgentId);
+        }
+        if ((lastError as DelegationError).deliveryUncertain !== true) {
+          idempotencyKey = crypto.randomUUID();
         }
 
         // Don't retry non-retryable errors (submission failures, not timeouts)
@@ -113,9 +124,10 @@ export class RelayDelegationAdapter implements StepDelegationAdapter {
     step: PlanStep,
     timeoutMs: number,
     excludeAgents: string[],
+    idempotencyKey: string,
     onTaskSubmitted?: (taskId: string) => void,
   ): Promise<DelegatedStepResult> {
-    const { syncUrl, motebitId, onCustomMessage } = this.config;
+    const { syncUrl, motebitId } = this.config;
 
     const body: Record<string, unknown> = {
       prompt: step.prompt,
@@ -132,7 +144,7 @@ export class RelayDelegationAdapter implements StepDelegationAdapter {
     }
 
     const headers = await this.buildHeaders("task:submit");
-    headers["Idempotency-Key"] = crypto.randomUUID();
+    headers["Idempotency-Key"] = idempotencyKey;
     const resp = await fetch(`${syncUrl}/agent/${motebitId}/task`, {
       method: "POST",
       headers,
@@ -165,18 +177,62 @@ export class RelayDelegationAdapter implements StepDelegationAdapter {
     // Persist task_id immediately so recovery can find it if we crash/close
     onTaskSubmitted?.(task_id);
 
+    const settle = (receipt: ExecutionReceipt): DelegatedStepResult => {
+      if (receipt.status === "completed") {
+        return {
+          step_id: step.step_id,
+          task_id,
+          receipt,
+          result_text: receipt.result,
+          routing_choice: routingChoice ?? undefined,
+        };
+      }
+      // Attach the failed agent's ID to the error for exclusion
+      const err = new Error(`Delegated step ${receipt.status}: ${receipt.result}`);
+      (err as DelegationError).failedAgentId = receipt.motebit_id;
+      throw err;
+    };
+
     // Wait for task_result via WebSocket
-    return new Promise<DelegatedStepResult>((resolve, reject) => {
+    const pushed = await this.waitForResultFrame(task_id, timeoutMs);
+    if (pushed !== null) return settle(pushed);
+
+    // No result frame in time. That is a DELIVERY failure, not a task
+    // failure (#433): the socket that would have carried it may have been
+    // replaced or dropped. Ask the relay how the SAME task ended before
+    // anything resubmits it (#816).
+    let remaining = timeoutMs;
+    for (;;) {
+      const state = await this.queryTask(task_id);
+      if (state.kind === "receipt") return settle(state.receipt);
+      if (state.kind !== "pending" || remaining <= 0) {
+        const err = new Error(
+          `Delegation timed out after ${timeoutMs}ms for step "${step.description}" (relay: ${state.kind})`,
+        );
+        (err as DelegationError).deliveryUncertain = true;
+        throw err;
+      }
+      // Still running: keep listening, and ask again — bounded by one more
+      // timeout's worth of waiting.
+      const wait = Math.min(RESULT_POLL_INTERVAL_MS, remaining);
+      remaining -= wait;
+      const late = await this.waitForResultFrame(task_id, wait);
+      if (late !== null) return settle(late);
+    }
+  }
+
+  /** Resolves with the task's receipt from a task_result frame, or null after `ms`. */
+  private waitForResultFrame(taskId: string, ms: number): Promise<ExecutionReceipt | null> {
+    const { onCustomMessage } = this.config;
+    return new Promise<ExecutionReceipt | null>((resolve, reject) => {
       const timer = setTimeout(() => {
         unsubscribe();
-        reject(
-          new Error(`Delegation timed out after ${timeoutMs}ms for step "${step.description}"`),
-        );
-      }, timeoutMs);
+        resolve(null);
+      }, ms);
 
       const unsubscribe = onCustomMessage((msg) => {
         if (msg.type !== "task_result") return;
-        if (msg.task_id !== task_id) return;
+        if (msg.task_id !== taskId) return;
 
         clearTimeout(timer);
         unsubscribe();
@@ -186,23 +242,37 @@ export class RelayDelegationAdapter implements StepDelegationAdapter {
           reject(new Error("Delegation completed but no receipt received"));
           return;
         }
-
-        if (receipt.status === "completed") {
-          resolve({
-            step_id: step.step_id,
-            task_id,
-            receipt,
-            result_text: receipt.result,
-            routing_choice: routingChoice ?? undefined,
-          });
-        } else {
-          // Attach the failed agent's ID to the error for exclusion
-          const err = new Error(`Delegated step ${receipt.status}: ${receipt.result}`);
-          (err as DelegationError).failedAgentId = receipt.motebit_id;
-          reject(err);
-        }
+        resolve(receipt);
       });
     });
+  }
+
+  /**
+   * Ask the relay how a task stands (authenticated `task:query`, the same
+   * route `pollTaskResult` uses): a receipt, still pending, gone, or no
+   * answer at all.
+   */
+  private async queryTask(
+    taskId: string,
+  ): Promise<
+    | { kind: "receipt"; receipt: ExecutionReceipt }
+    | { kind: "pending" }
+    | { kind: "not_found" }
+    | { kind: "unreachable" }
+  > {
+    const { syncUrl, motebitId } = this.config;
+    try {
+      const resp = await fetch(`${syncUrl}/agent/${motebitId}/task/${taskId}`, {
+        headers: await this.buildHeaders("task:query"),
+      });
+      if (resp.status === 404) return { kind: "not_found" };
+      if (!resp.ok) return { kind: "unreachable" };
+      const data = (await resp.json()) as { receipt?: ExecutionReceipt | null };
+      if (data.receipt != null) return { kind: "receipt", receipt: data.receipt };
+      return { kind: "pending" };
+    } catch {
+      return { kind: "unreachable" };
+    }
   }
 
   /** Extract the failed agent ID from an error if available. */
@@ -242,4 +312,12 @@ export class RelayDelegationAdapter implements StepDelegationAdapter {
 /** Internal error type carrying the failed agent's ID for exclusion. */
 interface DelegationError extends Error {
   failedAgentId?: string;
+  /**
+   * The result was not delivered and the relay could not say how the task
+   * ended: the retry resubmits under the same Idempotency-Key.
+   */
+  deliveryUncertain?: boolean;
 }
+
+/** While the relay reports a timed-out task as still running, how often to ask again. */
+const RESULT_POLL_INTERVAL_MS = 15_000;
