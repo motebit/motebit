@@ -903,6 +903,7 @@ export class StreamingManager {
       // failure must never block the actual resume.
       await this.signAndEmitApprovalDecision(pending, approved);
 
+      let continuationPair: [ConversationMessage, ConversationMessage];
       if (approved) {
         // Execute the tool directly
         yield { type: "tool_status" as const, name: pending.toolName, status: "calling" as const };
@@ -1020,14 +1021,14 @@ export class StreamingManager {
         };
         this.deps.logToolUsed(pending.toolName, sanitized.data ?? sanitized.error);
 
-        // Push tool call + result into conversation history for continuation
-        this.deps.injectIntermediateMessages(
+        // Tool call + result for the continuation
+        continuationPair = [
           {
             role: "assistant" as const,
             content: `[tool_use: ${pending.toolName}(${JSON.stringify(pending.args)})]`,
           },
           { role: "user" as const, content: `[tool_result: ${JSON.stringify(sanitized)}]` },
-        );
+        ];
       } else {
         // Record the refusal BEFORE the continuation turn runs, so a
         // re-proposal of this exact intent is short-circuited rather than
@@ -1043,7 +1044,7 @@ export class StreamingManager {
         // same shape as a network error — so it re-plans and re-proposes the
         // identical action. A refusal is a DECISION, not a fault; say so, and
         // name the only legitimate next move (ask the human).
-        this.deps.injectIntermediateMessages(
+        continuationPair = [
           {
             role: "assistant" as const,
             content: `[tool_use: ${pending.toolName}(${JSON.stringify(pending.args)})]`,
@@ -1062,7 +1063,20 @@ export class StreamingManager {
                 `and that they declined, then ask what they would like instead.`,
             })}]`,
           },
-        );
+        ];
+      }
+
+      // #904: the continuation's history. An OWNER resume records the pair
+      // in the owner's conversation and continues over it. A FOREIGN resume
+      // continues over a private copy — the pair is that principal's turn,
+      // never the owner's history (the conversation manager refuses the
+      // write anyway; this keeps the continuation's own context whole).
+      let continuationHistory: ConversationMessage[];
+      if (pending.foreignPrincipal === true) {
+        continuationHistory = [...this.deps.getLiveHistory(), ...continuationPair];
+      } else {
+        this.deps.injectIntermediateMessages(continuationPair[0], continuationPair[1]);
+        continuationHistory = this.deps.getLiveHistory();
       }
 
       // Run continuation turn with updated history. `priorTurnActions`
@@ -1074,7 +1088,7 @@ export class StreamingManager {
         this.deps.loopDepsForTurn?.(loopDeps) ?? loopDeps,
         pending.userMessage,
         {
-          conversationHistory: this.deps.getLiveHistory(),
+          conversationHistory: continuationHistory,
           previousCues: this.deps.getLatestCues(),
           runId: pending.runId,
           priorTurnActions: approved
@@ -1220,17 +1234,22 @@ export class StreamingManager {
       // Remembered so a late resume can NAME the tool in its
       // approval_expired chunk (#457) — the pending record is gone by then.
       this._lastExpiredToolName = expired.toolName;
-      // Push denial into conversation history so LLM sees it on next turn
-      this.deps.injectIntermediateMessages(
-        {
-          role: "assistant" as const,
-          content: `[tool_use: ${expired.toolName}(${JSON.stringify(expired.args)})]`,
-        },
-        {
-          role: "user" as const,
-          content: `[tool_result: {"ok":false,"error":"Approval timed out after ${this.deps.approvalTimeoutMs}ms"}]`,
-        },
-      );
+      // Push denial into conversation history so LLM sees it on next turn —
+      // an OWNER's approval only. The timer fires outside any turn, so the
+      // per-turn foreign mark is down: a foreign principal's expired call
+      // is that principal's, never the owner's history (#904).
+      if (expired.foreignPrincipal !== true) {
+        this.deps.injectIntermediateMessages(
+          {
+            role: "assistant" as const,
+            content: `[tool_use: ${expired.toolName}(${JSON.stringify(expired.args)})]`,
+          },
+          {
+            role: "user" as const,
+            content: `[tool_result: {"ok":false,"error":"Approval timed out after ${this.deps.approvalTimeoutMs}ms"}]`,
+          },
+        );
+      }
       this.deps.pushStateUpdate({ processing: 0.1, attention: 0.3 });
       this._isProcessing = false;
       this.approvalExpiredCallback?.();

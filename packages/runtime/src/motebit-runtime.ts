@@ -1353,6 +1353,11 @@ export class MotebitRuntime {
       // shipped earlier this arc; ConversationManager floors persisted
       // tier at max(default, effective) at write time.
       getEffectiveSensitivity: () => this.getEffectiveSessionSensitivity(),
+      // #904: a foreign principal's turn never writes the owner's
+      // conversation. Enforced at the state holder from the per-turn mark,
+      // so no door (sendMessage, sendMessageStreaming, the approval resume,
+      // a caller that forgets `suppressHistory`) can write it.
+      isForeignPrincipalTurn: () => this.isForeignPrincipalTurn(),
     };
   }
 
