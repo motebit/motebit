@@ -166,7 +166,7 @@ Submit an autonomous task for execution. Returns a signed `ExecutionReceipt`.
 
 ### `motebit_query`
 
-Ask the agent a question. The agent responds using its AI provider with full memory context.
+Ask the agent a question. The agent responds using its AI provider. The caller is another principal, so the turn draws on none of the owner's memories or private context.
 
 | Property          | Value        |
 | ----------------- | ------------ |
@@ -203,7 +203,7 @@ Store a memory in the agent's semantic memory graph.
 
 ### `motebit_recall`
 
-Search the agent's semantic memory using cosine similarity.
+Search the agent's semantic memory using cosine similarity. Served to the motebit's **owner only**: a stdio session, or an HTTP caller whose verified motebit signed token is this motebit's own identity. Every other caller is refused with no memory content.
 
 | Property          | Value        |
 | ----------------- | ------------ |
@@ -217,7 +217,7 @@ Search the agent's semantic memory using cosine similarity.
 | `query`   | `string` | Yes      | Semantic search query.               |
 | `limit`   | `number` | No       | Maximum number of results to return. |
 
-**Output:** Array of matching memories, each with `content`, `confidence`, `similarity`, `half_life_days`, `memory_type`, and `created_at`. Results are privacy-filtered — memories with sensitivity above `"none"` are excluded from external callers.
+**Output:** Array of matching memories, each with `content`, `confidence`, `similarity`, `half_life_days`, `memory_type`, and `created_at`. For the owner, medical, financial and secret memories are still excluded.
 
 ### `motebit_identity`
 

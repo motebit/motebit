@@ -119,7 +119,16 @@ interface MotebitServerDeps {
 
   // Resources
   getState(): Record<string, unknown> | Promise<Record<string, unknown>>;
-  getMemories(limit?: number): Promise<
+  /**
+   * The owner's memories, for the `motebit://memories` resource. The
+   * adapter calls it only for the OWNER principal (#943, `servedPrincipal`);
+   * `principal` is that verdict, so a backend that crosses another trust
+   * boundary (the runtime-host socket) can carry and re-check it.
+   */
+  getMemories(
+    limit?: number,
+    principal?: ServedPrincipal,
+  ): Promise<
     Array<{
       content: string;
       confidence: number;
@@ -133,9 +142,14 @@ interface MotebitServerDeps {
 
   // Synthetic tool backends (all optional — tool only registered when dep is provided)
   sendMessage?(text: string): Promise<{ response: string; memoriesFormed: number }>;
+  /**
+   * `motebit_recall`'s backend: a search over the OWNER's memories. Called
+   * only for the owner principal (#943) — see `getMemories`.
+   */
   queryMemories?(
     query: string,
     limit?: number,
+    principal?: ServedPrincipal,
   ): Promise<
     Array<{
       content: string;
@@ -519,6 +533,55 @@ const NO_REQUEST_CONTEXT = {
   isError: true as const,
 };
 
+/**
+ * Whose request this is, for the owner's interior (#943). The owner's
+ * memories are served ONLY to the owner principal — this motebit's own
+ * identity. Classification, per transport:
+ *
+ *  - stdio: `"owner"`. A stdio server speaks only to the process that
+ *    spawned it on the owner's machine (the owner's own MCP host); no
+ *    remote party can reach the pipe.
+ *  - HTTP with a verified motebit signed token: `"owner"` iff the verified
+ *    `mid` is THIS motebit's id — a token signed under this motebit's own
+ *    key, i.e. one of the owner's devices. Every other verified caller,
+ *    including the relay's dispatch identity (`relay:<did>`), is `"other"`.
+ *    The id is the verified one (`verifyCallerToken`), never a claim.
+ *  - HTTP with a static or pluggable bearer: `"other"`. A shared secret is
+ *    handed to callers; it is not owner-only by construction.
+ *  - HTTP with no auth context (never produced by the adapter): `"other"`.
+ *
+ * Fail closed: anything not positively the owner is `"other"`.
+ */
+export type ServedPrincipal = "owner" | "other";
+
+export function servedPrincipal(
+  extra: unknown,
+  transport: "stdio" | "http",
+  ownMotebitId: string,
+): ServedPrincipal {
+  const ctx = callerFromExtra(extra, transport);
+  if (ctx.kind === "caller") return ctx.caller.motebitId === ownMotebitId ? "owner" : "other";
+  if (ctx.kind === "none" && transport === "stdio") {
+    const authInfo = (extra as { authInfo?: unknown } | undefined)?.authInfo;
+    return authInfo == null ? "owner" : "other";
+  }
+  return "other";
+}
+
+/** The refusal a non-owner gets for any read of the owner's memories. Carries no content. */
+export const OWNER_ONLY_REFUSAL =
+  "Refused: this motebit's memories are served only to its owner (#943).";
+
+/**
+ * Opening line of every memory-read dep (`queryMemories`, `getMemories`):
+ * the dep honours the adapter's verdict and refuses anything but the
+ * owner, so a dep reached by some path other than the adapter's handler
+ * still fails closed (#943).
+ */
+export function assertOwnerPrincipal(principal: ServedPrincipal | undefined): void {
+  if (principal !== "owner") throw new Error(OWNER_ONLY_REFUSAL);
+}
+
 // === McpServerAdapter ===
 
 export class McpServerAdapter {
@@ -651,6 +714,18 @@ export class McpServerAdapter {
         });
       }
     }
+  }
+
+  /**
+   * #943: the ONE check every server-side read of the owner's memories
+   * passes through (`motebit_recall`, the `motebit://memories` resource).
+   * Returns the principal when it is the owner, or null — the handler must
+   * then refuse with `OWNER_ONLY_REFUSAL` and touch no memory dep.
+   */
+  private ownerPrincipal(extra: unknown): "owner" | null {
+    return servedPrincipal(extra, this.transportKind, this.deps.motebitId) === "owner"
+      ? "owner"
+      : null;
   }
 
   /** The transport this adapter serves — decides what an absent auth context means. */
@@ -800,13 +875,13 @@ export class McpServerAdapter {
       const sendMessage = this.deps.sendMessage;
       const toolDef = McpServerAdapter.syntheticToolDef(
         "motebit_query",
-        "Ask this motebit a question — AI response with memory context",
+        "Ask this motebit a question — AI response, never drawn from the owner's memories or private context",
         RiskLevel.R2_WRITE,
       );
       /** @spec motebit/agent-mcp-surface@1.0 */
       server.tool(
         "motebit_query",
-        "Ask this motebit a question — AI response with memory context",
+        "Ask this motebit a question — AI response, never drawn from the owner's memories or private context",
         { message: z.string().describe("The question or message to send") },
         async (args: { message: string }, extra: unknown) => {
           const denied = await this.validateSyntheticTool(toolDef, args, extra);
@@ -863,22 +938,30 @@ export class McpServerAdapter {
       const queryMemories = this.deps.queryMemories;
       const toolDef = McpServerAdapter.syntheticToolDef(
         "motebit_recall",
-        "Search this motebit's semantic memory",
+        "Search this motebit's semantic memory (served to its owner only)",
         RiskLevel.R1_DRAFT,
       );
       /** @spec motebit/agent-mcp-surface@1.0 */
       server.tool(
         "motebit_recall",
-        "Search this motebit's semantic memory",
+        "Search this motebit's semantic memory (served to its owner only)",
         {
           query: z.string().describe("Semantic search query"),
           limit: z.number().optional().describe("Max results to return"),
         },
         async (args: { query: string; limit?: number }, extra: unknown) => {
+          // #943: the owner's memories are served only to the owner.
+          const principal = this.ownerPrincipal(extra);
+          if (principal === null) {
+            return {
+              content: [{ type: "text" as const, text: OWNER_ONLY_REFUSAL }],
+              isError: true,
+            };
+          }
           const denied = await this.validateSyntheticTool(toolDef, args, extra);
           if (denied) return denied;
 
-          const results = await queryMemories(args.query, args.limit);
+          const results = await queryMemories(args.query, args.limit, principal);
           this.deps.logToolCall("motebit_recall", args, { ok: true, data: results });
           return fmt(results);
         },
@@ -1300,8 +1383,11 @@ export class McpServerAdapter {
 
     // Memories resource (privacy-filtered)
     if (this.config.exposeMemories !== false) {
-      server.resource("memories", "motebit://memories", async () => {
-        const raw = await this.deps.getMemories(50);
+      server.resource("memories", "motebit://memories", async (_uri: URL, extra: unknown) => {
+        // #943: the owner's memories are served only to the owner.
+        const principal = this.ownerPrincipal(extra);
+        if (principal === null) throw new Error(OWNER_ONLY_REFUSAL);
+        const raw = await this.deps.getMemories(50, principal);
         const filtered = filterMemories(raw, 50);
         return {
           contents: [

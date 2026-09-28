@@ -2463,6 +2463,42 @@ export async function probeFetch(): Promise<unknown> {
       ),
   },
   {
+    script: "check-memory-source-canonical",
+    proves:
+      "flags a foreign principal's turn reading the owner's conversation (#904) — scan (d)(v), the read-side floor: `trimmed()` must open with `if (this.isForeignTurn()) return …` so a caller's `motebit_query` is built without the owner's history. Probe deletes that guard line from `trimmed()`; the gate must surface the reader-floor violation. byte-identical restoration on cleanup via mutateFile.",
+    perturb: () =>
+      mutateFile(`packages/runtime/src/conversation.ts`, (src) =>
+        src.replace(
+          /(trimmed\(\): ConversationMessage\[\] \{[\s\S]*?)\n\s*if \(this\.isForeignTurn\(\)\) return \[\];/,
+          "$1",
+        ),
+      ),
+  },
+  {
+    script: "check-memory-source-canonical",
+    proves:
+      "flags a foreign principal's turn recalling the owner's memories (#943) — scan (e)(i), the loop's one recall chokepoint: `runTurnStreaming` must call `recallOwnerInterior` only as `foreign ? foreignTurnRecall() : await recallOwnerInterior(…)`. Probe replaces the guard with `false`, so every turn recalls; the gate must surface the recall-chokepoint violation. byte-identical restoration on cleanup via mutateFile.",
+    perturb: () =>
+      mutateFile(`packages/ai-core/src/loop.ts`, (src) =>
+        src.replace(
+          "const interior: OwnerInteriorRecall = foreign",
+          "const interior: OwnerInteriorRecall = false",
+        ),
+      ),
+  },
+  {
+    script: "check-memory-source-canonical",
+    proves:
+      "flags a server-side read of the owner's memories served to a non-owner (#943) — scan (f)(i): every MCP tool/resource handler that calls a memory read must open with `const principal = this.ownerPrincipal(extra); if (principal === null) …refuse`. Probe replaces `motebit_recall`'s owner check with a constant owner verdict; the gate must surface the missing-owner-check violation. byte-identical restoration on cleanup via mutateFile.",
+    perturb: () =>
+      mutateFile(`packages/mcp-server/src/index.ts`, (src) =>
+        src.replace(
+          "const principal = this.ownerPrincipal(extra);\n          if (principal === null) {",
+          'const principal = "owner" as const;\n          if (principal === null) {',
+        ),
+      ),
+  },
+  {
     script: "check-agent-revocation-reason-canonical",
     proves:
       'flags the AgentRevocationReason three-way lock breaking — a value rotated in `ALL_AGENT_REVOCATION_REASONS` without updating the union (or gate reference). Drift class: same shape as the SettlementMode probe — union AND array share one file (`packages/protocol/src/agent-revocation.ts`), so the probe targets the comma-bearing array entry (`"spam",`) which matches only the array (the union form uses ` | `). Gate must surface the sibling-alignment violation (union has `spam` but ALL_AGENT_REVOCATION_REASONS contains `spamm` instead). byte-identical restoration on cleanup via mutateFile.',

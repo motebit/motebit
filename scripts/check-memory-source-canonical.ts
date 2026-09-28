@@ -799,8 +799,144 @@ function main(): void {
     process.exit(1);
   }
 
+  // === Serving scan (f): the owner's memories are served only to the owner
+  //
+  // #943 round 2: `motebit_recall` and the `motebit://memories` resource
+  // returned the owner's memories to any authenticated caller. The rule
+  // (decided): the owner's memories are served only to the OWNER principal,
+  // judged from the request's VERIFIED caller context (`servedPrincipal`:
+  // stdio = owner by construction; HTTP = owner iff the verified motebit
+  // token's `mid` is this motebit; static / pluggable bearer and every other
+  // caller = other). Locked textually:
+  //   (i)   in every non-test file of `packages/mcp-server/src`, each
+  //         `server.tool(` / `server.resource(` registration whose handler
+  //         CALLS a memory read (`queryMemories(`, `getMemories(`,
+  //         `recallRelevant(`, `exportAll(`) opens its check with
+  //         `const principal = this.ownerPrincipal(extra);` followed by a
+  //         refusal on `principal === null` — a new memory-read tool or
+  //         resource without the check fails here;
+  //   (ii)  every non-test definition of a memory-read dep
+  //         (`getMemories:` / `queryMemories:` / `deps.queryMemories =`) in
+  //         packages/ and apps/ opens with `assertOwnerPrincipal(principal);`;
+  //   (iii) the coordinator's `memory_recall` frame (attached-surface.ts)
+  //         opens with `if (params["principal"] !== "owner")` — an attached
+  //         frontend must name the verified owner or get nothing.
+  // Behavior: `packages/mcp-server/src/__tests__/owner-only-memory.test.ts`
+  // (real HTTP: another motebit and a static bearer refused with no content,
+  // the owner served), `service.test.ts`, `attached-surface.test.ts`.
+  const ownerOnlyViolations: string[] = [];
+  const MEMORY_READ_CALL = /\b(queryMemories|getMemories|recallRelevant|exportAll)\(/;
+  let mcpFilesScanned = 0;
+  let memoryReadRegistrations = 0;
+  let registrationsScanned = 0;
+  for (const rel of walkTsFiles("packages/mcp-server/src")) {
+    if (rel.includes("__tests__")) continue;
+    mcpFilesScanned++;
+    const src = readFile(rel) ?? "";
+    const starts: number[] = [];
+    const re = /\bserver\.(tool|resource)\(/g;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(src)) !== null) starts.push(m.index);
+    for (let k = 0; k < starts.length; k++) {
+      registrationsScanned++;
+      const start = starts[k] as number;
+      const end = k + 1 < starts.length ? (starts[k + 1] as number) : src.length;
+      const block = src.slice(start, end);
+      const code = block
+        .split("\n")
+        .filter((l) => !/^\s*(\*|\/\/|\/\*)/.test(l))
+        .join("\n");
+      if (!MEMORY_READ_CALL.test(code)) continue;
+      memoryReadRegistrations++;
+      if (
+        !/const principal = this\.ownerPrincipal\(extra\);\s*\n\s*if \(principal === null\)/.test(
+          code,
+        )
+      ) {
+        const line = src.slice(0, start).split("\n").length;
+        const name = /server\.(?:tool|resource)\(\s*"([^"]+)"/.exec(block)?.[1] ?? "(unnamed)";
+        ownerOnlyViolations.push(
+          `${rel}:${line}: \`${name}\` reads the owner's memories without the owner check — open its handler with \`const principal = this.ownerPrincipal(extra); if (principal === null) …refuse\``,
+        );
+      }
+    }
+  }
+  if (memoryReadRegistrations < 2) {
+    ownerOnlyViolations.push(
+      `packages/mcp-server/src: expected at least the two memory-read registrations (motebit_recall, motebit://memories) — found ${memoryReadRegistrations}; the scan pattern may have drifted from the code`,
+    );
+  }
+  let memoryDepDefs = 0;
+  let depFilesScanned = 0;
+  const srcRoots: string[] = [];
+  for (const root of ["packages", "apps", "services"]) {
+    let dirs: string[] = [];
+    try {
+      dirs = readdirSync(resolve(ROOT, root));
+    } catch {
+      dirs = [];
+    }
+    for (const d of dirs) srcRoots.push(join(root, d, "src"));
+  }
+  for (const srcRoot of srcRoots) {
+    for (const rel of walkTsFiles(srcRoot)) {
+      if (rel.includes("__tests__")) continue;
+      depFilesScanned++;
+      const lines = (readFile(rel) ?? "").split("\n");
+      for (let i = 0; i < lines.length; i++) {
+        const line = lines[i] as string;
+        if (
+          !/^\s*(getMemories|queryMemories)\s*:\s*async\b|\bdeps\.queryMemories\s*=\s*async\b/.test(
+            line,
+          )
+        )
+          continue;
+        memoryDepDefs++;
+        const first = lines
+          .slice(i + 1)
+          .find((l) => l.trim() !== "" && !/^\s*(\*|\/\/|\/\*)/.test(l));
+        if (first === undefined || !/^\s*assertOwnerPrincipal\(principal\);/.test(first)) {
+          ownerOnlyViolations.push(
+            `${rel}:${i + 1}: a memory-read dep must open with \`assertOwnerPrincipal(principal);\` — found: ${(first ?? "(nothing)").trim()}`,
+          );
+        }
+      }
+    }
+  }
+  if (memoryDepDefs < 6) {
+    ownerOnlyViolations.push(
+      `expected the six memory-read dep definitions (packages/mcp-server/src/service.ts ×2, apps/cli/src/daemon.ts ×4) — found ${memoryDepDefs}; the scan pattern may have drifted from the code`,
+    );
+  }
+  const attachedSrc = readFile("packages/runtime/src/attached-surface.ts") ?? "";
+  const recallArm = bodyOf(attachedSrc, 'case "memory_recall": {', "\n    }\n");
+  const recallArmFirst = recallArm
+    .split("\n")
+    .slice(1)
+    .find((l) => l.trim() !== "" && !/^\s*(\*|\/\/|\/\*)/.test(l));
+  if (
+    recallArmFirst === undefined ||
+    !/^\s*if \(params\["principal"\] !== "owner"\) \{/.test(recallArmFirst)
+  ) {
+    ownerOnlyViolations.push(
+      `packages/runtime/src/attached-surface.ts: the \`memory_recall\` frame must open with \`if (params["principal"] !== "owner") {\` (refuse) — found: ${(recallArmFirst ?? "(missing)").trim()}`,
+    );
+  }
+  if (ownerOnlyViolations.length > 0) {
+    console.error(
+      "check-memory-source-canonical: the owner's memories could be served to another principal (#943):",
+    );
+    for (const v of ownerOnlyViolations) console.error(`  - ${v}`);
+    console.error("");
+    console.error(
+      'Repair: a server-side read of the owner\'s memories is served only to the owner principal. In an MCP tool/resource handler, open with `const principal = this.ownerPrincipal(extra); if (principal === null) return/throw OWNER_ONLY_REFUSAL;` and pass `principal` to the dep; open every memory-read dep with `assertOwnerPrincipal(principal);`; keep the runtime-host `memory_recall` frame refusing any `principal` but `"owner"`.',
+    );
+    console.error("Doctrine: docs/doctrine/memory-provenance.md § authorship (#943).");
+    process.exit(1);
+  }
+
   console.log(
-    `✓ check-memory-source-canonical: ${MEMORY_SOURCES_REFERENCE.length} memory source(s) locked across union + ALL_MEMORY_SOURCES + gate reference; wire-format-compliant; model/peer authorship scans clean; foreign-turn provenance locked (resolver + ${aiCoreFilesScanned} other ai-core file(s) scanned, 7 wiring links checked); foreign-turn history floor locked (${runtimeFilesScanned} other runtime file(s) scanned for conversation-store writes, ${guardedMethods} ConversationManager writer(s) + ${guardedReaders} reader(s) guarded, ${consentSites} consent site(s) guarded, 4 wiring links checked); foreign-turn serving floor locked (${interiorAiCoreFiles} ai-core file(s) scanned, ${ownerStoreReads} owner-store read(s) all inside recallOwnerInterior; ${runtimeInteriorFiles} runtime file(s) scanned, ${builderCalls} owner-block builder call(s) all inside ownerInteriorForTurn; ${ownerKeysClassified}/${DECIDED_OWNER_INTERIOR.length} decided owner-interior option(s) classified, recall backend floored).`,
+    `✓ check-memory-source-canonical: ${MEMORY_SOURCES_REFERENCE.length} memory source(s) locked across union + ALL_MEMORY_SOURCES + gate reference; wire-format-compliant; model/peer authorship scans clean; foreign-turn provenance locked (resolver + ${aiCoreFilesScanned} other ai-core file(s) scanned, 7 wiring links checked); foreign-turn history floor locked (${runtimeFilesScanned} other runtime file(s) scanned for conversation-store writes, ${guardedMethods} ConversationManager writer(s) + ${guardedReaders} reader(s) guarded, ${consentSites} consent site(s) guarded, 4 wiring links checked); foreign-turn serving floor locked (${interiorAiCoreFiles} ai-core file(s) scanned, ${ownerStoreReads} owner-store read(s) all inside recallOwnerInterior; ${runtimeInteriorFiles} runtime file(s) scanned, ${builderCalls} owner-block builder call(s) all inside ownerInteriorForTurn; ${ownerKeysClassified}/${DECIDED_OWNER_INTERIOR.length} decided owner-interior option(s) classified, recall backend floored); owner-only memory serving locked (${mcpFilesScanned} mcp-server file(s), ${registrationsScanned} tool/resource registration(s) scanned, ${memoryReadRegistrations} memory-read registration(s) all owner-checked; ${depFilesScanned} package/app/service src file(s) scanned, ${memoryDepDefs} memory-read dep(s) all asserting the owner; memory_recall frame owner-gated).`,
   );
 }
 

@@ -66,16 +66,16 @@ Six tools are registered automatically when the server starts. Four are conditio
 
 | Tool               | Input                       | Description                                                        |
 | ------------------ | --------------------------- | ------------------------------------------------------------------ |
-| `motebit_query`    | `{ message }`               | Ask the agent a question — full AI response with memory context    |
+| `motebit_query`    | `{ message }`               | Ask the agent a question — never answered from the owner's memory  |
 | `motebit_remember` | `{ content, sensitivity? }` | Store a memory (sensitivity capped for external callers)           |
-| `motebit_recall`   | `{ query, limit? }`         | Semantic memory search, privacy-filtered                           |
+| `motebit_recall`   | `{ query, limit? }`         | Semantic memory search — served to the motebit's owner only        |
 | `motebit_task`     | `{ prompt }`                | Submit an autonomous task — returns a signed `ExecutionReceipt`    |
 | `motebit_identity` | none                        | Return the motebit's identity (motebit.md content or JSON summary) |
 | `motebit_tools`    | none                        | List all available tools with risk levels                          |
 
 ### motebit_query
 
-Sends a message through the full AI turn loop — memory retrieval, context packing, tool use, memory formation. The response includes how many memories were formed during the turn.
+Sends a message through the AI turn loop: context packing, tool use and memory formation. The caller is another principal, so the turn recalls none of the owner's memories. It also receives none of the owner's private context: no trust graph, self-model, installed skills, recent events or live session facts. It sees the motebit's identity and persona, the tools a caller may use, and the model it runs on. Memories the turn forms are marked as coming from a peer agent. The response includes how many memories were formed during the turn.
 
 ```json
 { "message": "What do you know about the deployment pipeline?" }
@@ -91,7 +91,7 @@ Stores a memory in the motebit's semantic graph. External callers may store only
 
 ### motebit_recall
 
-Searches the motebit's memory graph by semantic similarity. Results are privacy-filtered — high-sensitivity memories are excluded from external responses.
+Searches the motebit's memory graph by semantic similarity. The owner's memories are served **only to the owner**: a stdio session (the owner's own MCP host), or an HTTP caller whose verified motebit signed token is this motebit's own identity. Every other caller is refused with no memory content. That includes another motebit, the relay, and a static or pluggable bearer token. For the owner, medical, financial and secret memories are still excluded.
 
 ```json
 { "query": "deployment credentials", "limit": 5 }
@@ -147,7 +147,7 @@ The server also exposes MCP resources and prompts:
 | ---------- | -------------------- | -------------------------------------------------- |
 | `identity` | `motebit://identity` | Motebit ID and public key                          |
 | `state`    | `motebit://state`    | Current state vector (attention, processing, etc.) |
-| `memories` | `motebit://memories` | Privacy-filtered memory snapshot                   |
+| `memories` | `motebit://memories` | Memory snapshot, owner only (as `motebit_recall`)  |
 
 | Prompt    | Description                                     |
 | --------- | ----------------------------------------------- |

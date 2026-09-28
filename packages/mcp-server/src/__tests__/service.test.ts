@@ -91,9 +91,23 @@ describe("wireServerDeps", () => {
   it("filters tombstoned memories", async () => {
     const runtime = makeRuntime();
     const deps = wireServerDeps(runtime, { motebitId: "test-id" });
-    const memories = await deps.getMemories(10);
+    const memories = await deps.getMemories(10, "owner");
     expect(memories).toHaveLength(1);
     expect(memories[0]!.content).toBe("test");
+  });
+
+  it("#943: the memory-read deps refuse anything but the owner principal", async () => {
+    const runtime = makeRuntime();
+    const deps = wireServerDeps(runtime, {
+      motebitId: "test-id",
+      embedText: vi.fn().mockResolvedValue([0.1, 0.2, 0.3]),
+    });
+    await expect(deps.getMemories(10)).rejects.toThrow(/served only to its owner/);
+    await expect(deps.getMemories(10, "other")).rejects.toThrow(/served only to its owner/);
+    await expect(deps.queryMemories!("q", 5)).rejects.toThrow(/served only to its owner/);
+    await expect(deps.queryMemories!("q", 5, "other")).rejects.toThrow(/served only to its owner/);
+    expect(runtime.memory.recallRelevant).not.toHaveBeenCalled();
+    expect(runtime.memory.exportAll).not.toHaveBeenCalled();
   });
 
   it("logs tool calls to event store", () => {
@@ -121,7 +135,7 @@ describe("wireServerDeps", () => {
     expect(deps.queryMemories).toBeDefined();
     expect(deps.storeMemory).toBeDefined();
 
-    const results = await deps.queryMemories!("test query", 5);
+    const results = await deps.queryMemories!("test query", 5, "owner");
     expect(mockEmbed).toHaveBeenCalledWith("test query");
     expect(results).toHaveLength(1);
     expect(results[0]!.content).toBe("retrieved");
