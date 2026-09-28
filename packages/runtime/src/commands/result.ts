@@ -166,7 +166,7 @@ export async function cmdResult(
   }
 
   const taskId = resolveId(words[0]!);
-  const paid = outstanding.find((e) => e.taskId === taskId) ?? null;
+  const paid = runtime.paidTask(taskId);
   const owner = words[1];
   const r = await runtime.retrieveDelegationResult(taskId, {
     ...(owner != null ? { taskOwnerId: owner } : {}),

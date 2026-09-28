@@ -693,7 +693,10 @@ describe("paid, then killed mid-poll (#874 review: record at settle time)", () =
     });
     // Wait until the submission landed, then "kill" the process mid-poll.
     await vi.waitFor(() => expect(relay.submits()).toBe(1));
-    expect(ledger.outstanding().map((e) => e.taskId)).toEqual([TASK]);
+    // Recorded before the first poll — as IN FLIGHT: owed nothing yet in
+    // this session, so it locks nothing here.
+    expect(ledger.inFlight().map((e) => e.taskId)).toEqual([TASK]);
+    expect(ledger.outstanding()).toEqual([]);
     controller.abort();
     await inFlight;
 

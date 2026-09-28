@@ -84,7 +84,16 @@ export class InMemoryPaidIntentStore implements PaidIntentStoreAdapter {
 
   record(entry: Omit<PaidIntentRecord, "resolution" | "resolved_at">): void {
     const k = this.key(entry.motebit_id, entry.task_id);
-    if (this.rows.has(k)) return;
+    const existing = this.rows.get(k);
+    if (existing != null) {
+      // The one transition a re-record may make: the poll that owned an
+      // in-flight entry failed, so it is now unretrieved. Same rule as the
+      // SQLite store's upsert.
+      if (existing.resolution == null && entry.state === "unretrieved") {
+        existing.state = "unretrieved";
+      }
+      return;
+    }
     this.rows.set(k, { ...entry, resolution: null, resolved_at: null });
   }
 
@@ -121,19 +130,38 @@ function fromRecord(r: PaidIntentRecord): UnretrievedPayment {
   };
 }
 
+/**
+ * A random id per ledger instance — "this runtime, in this process". An
+ * in-flight entry is the live session's own business only while the
+ * session that recorded it is the one reading it; any other session sees
+ * a process that died mid-poll, and so an unretrieved payment.
+ */
+function newSessionId(): string {
+  return typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+    ? crypto.randomUUID()
+    : `s-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+}
+
 export class PaidIntentLedger {
+  /** This ledger's session — see `newSessionId`. */
+  readonly sessionId: string;
+
   /**
    * @param store where entries live — durable on a surface that has a
    *   database, in-memory otherwise.
    * @param motebitId the delegator the ledger belongs to (per identity).
+   * @param sessionId the recording session (tests pin it; production takes
+   *   a fresh random id per runtime instance).
    */
   constructor(
     private readonly store: PaidIntentStoreAdapter = new InMemoryPaidIntentStore(),
     private readonly motebitId: string = "local",
-  ) {}
+    sessionId?: string,
+  ) {
+    this.sessionId = sessionId ?? newSessionId();
+  }
 
-  /** Record a settled-but-unretrieved payment (from a `settledPayment` fact). */
-  recordSettledUnretrieved(entry: UnretrievedPayment): void {
+  private write(entry: UnretrievedPayment, state: PaidIntentRecord["state"]): void {
     this.store.record({
       motebit_id: this.motebitId,
       task_id: entry.taskId,
@@ -143,12 +171,33 @@ export class PaidIntentLedger {
       paid_micro: entry.paidMicro,
       fee_micro: entry.feeMicro,
       recorded_at: entry.recordedAt,
+      state,
+      session_id: this.sessionId,
     });
   }
 
   /**
+   * Record a payment that settled and whose task the relay accepted, while
+   * this session polls for the result (#874 review). It does NOT lock
+   * anything for this session — concurrent hires proceed exactly as they
+   * did before the ledger existed — but if this process dies mid-poll,
+   * every later session reads it as unretrieved: the re-hire is refused
+   * and `/result` lists it.
+   */
+  recordInFlight(entry: UnretrievedPayment): void {
+    this.write(entry, "in_flight");
+  }
+
+  /** Record a settled-but-unretrieved payment (from a `settledPayment` fact). */
+  recordSettledUnretrieved(entry: UnretrievedPayment): void {
+    this.write(entry, "unretrieved");
+  }
+
+  /**
    * May a NEW paid delegation to this worker+capability broadcast?
-   * Fail-closed: any lock verdict must refuse before money moves.
+   * Fail-closed: any lock verdict must refuse before money moves. Only
+   * genuinely unretrieved payments count — this session's own in-flight
+   * hires never lock or suspend anything.
    */
   check(workerMotebitId: string, capability: string): PaidIntentVerdict {
     const all = this.outstanding();
@@ -175,17 +224,33 @@ export class PaidIntentLedger {
     return this.store.resolve(this.motebitId, taskId, "dismissed", Date.now());
   }
 
-  /** The outstanding entry for `taskId`, if any. */
+  /** The unresolved entry for `taskId` — unretrieved or in flight — if any. */
   find(taskId: string): UnretrievedPayment | null {
-    return this.outstanding().find((e) => e.taskId === taskId) ?? null;
+    const r = this.store.listOutstanding(this.motebitId).find((e) => e.task_id === taskId);
+    return r != null ? fromRecord(r) : null;
   }
 
   get outstandingCount(): number {
     return this.outstanding().length;
   }
 
-  /** The outstanding entries, oldest first — for owner-facing rendering. */
+  /**
+   * Payments whose results are owed and nobody is fetching, oldest first:
+   * every `unretrieved` entry, plus `in_flight` entries recorded by
+   * another session (a process that died mid-poll).
+   */
   outstanding(): UnretrievedPayment[] {
-    return this.store.listOutstanding(this.motebitId).map(fromRecord);
+    return this.store
+      .listOutstanding(this.motebitId)
+      .filter((r) => r.state === "unretrieved" || r.session_id !== this.sessionId)
+      .map(fromRecord);
+  }
+
+  /** This session's own hires still being polled — owed nothing yet, locking nothing. */
+  inFlight(): UnretrievedPayment[] {
+    return this.store
+      .listOutstanding(this.motebitId)
+      .filter((r) => r.state === "in_flight" && r.session_id === this.sessionId)
+      .map(fromRecord);
   }
 }

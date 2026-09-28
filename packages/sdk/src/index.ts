@@ -535,6 +535,16 @@ export interface PaidIntentRecord {
   fee_micro: number;
   recorded_at: number;
   /**
+   * `in_flight` = the payment settled and the relay accepted the task; the
+   * session that paid is still polling for the result. `unretrieved` = the
+   * poll ended without a result. An `in_flight` entry whose `session_id`
+   * is not the reading session's is treated as unretrieved: the process
+   * that was polling is gone (#874 review).
+   */
+  state: "in_flight" | "unretrieved";
+  /** The runtime session that recorded the entry — a random id per runtime instance. */
+  session_id: string;
+  /**
    * How the entry stopped being outstanding: `retrieved` = the signed
    * result was fetched; `dismissed` = the owner cleared it knowingly
    * (e.g. the relay reaped the task). Null while outstanding.
@@ -549,7 +559,11 @@ export interface PaidIntentRecord {
  * runtime keeps the ledger in memory, which holds only for one process.
  */
 export interface PaidIntentStoreAdapter {
-  /** Record a settled-but-unretrieved payment. Idempotent on (motebit_id, task_id). */
+  /**
+   * Record a settled payment. Idempotent on (motebit_id, task_id), except
+   * that recording `unretrieved` over an unresolved `in_flight` entry
+   * moves it to `unretrieved` (the poll that owned it failed).
+   */
   record(entry: Omit<PaidIntentRecord, "resolution" | "resolved_at">): void;
   /** Outstanding (unresolved) entries for this identity, oldest first. */
   listOutstanding(motebitId: string): PaidIntentRecord[];

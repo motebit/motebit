@@ -1817,10 +1817,15 @@ export class SqlitePaidIntentStore implements PaidIntentStoreAdapter {
   private stmtResolve: PreparedStatement;
 
   constructor(db: DatabaseDriver) {
+    // Idempotent on (motebit_id, task_id). The one change a re-record may
+    // make is in_flight → unretrieved on an unresolved row: the poll that
+    // owned it ended without the result. Nothing else is ever overwritten.
     this.stmtRecord = db.prepare(
-      `INSERT OR IGNORE INTO paid_intent_ledger
-       (motebit_id, task_id, worker_motebit_id, capability, tx_hash, paid_micro, fee_micro, recorded_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO paid_intent_ledger
+       (motebit_id, task_id, worker_motebit_id, capability, tx_hash, paid_micro, fee_micro, recorded_at, state, session_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT (motebit_id, task_id) DO UPDATE SET state = 'unretrieved'
+       WHERE excluded.state = 'unretrieved' AND paid_intent_ledger.resolution IS NULL`,
     );
     this.stmtOutstanding = db.prepare(
       `SELECT * FROM paid_intent_ledger WHERE motebit_id = ? AND resolution IS NULL
@@ -1842,6 +1847,8 @@ export class SqlitePaidIntentStore implements PaidIntentStoreAdapter {
       entry.paid_micro,
       entry.fee_micro,
       entry.recorded_at,
+      entry.state,
+      entry.session_id,
     );
   }
 
@@ -1855,6 +1862,8 @@ export class SqlitePaidIntentStore implements PaidIntentStoreAdapter {
       paid_micro: number;
       fee_micro: number;
       recorded_at: number;
+      state: string;
+      session_id: string;
       resolution: string | null;
       resolved_at: number | null;
     }>;
@@ -1867,6 +1876,10 @@ export class SqlitePaidIntentStore implements PaidIntentStoreAdapter {
       paid_micro: r.paid_micro,
       fee_micro: r.fee_micro,
       recorded_at: r.recorded_at,
+      // Anything but a recognised in-flight marker reads as unretrieved —
+      // the state that locks, so an unreadable row fails closed.
+      state: r.state === "in_flight" ? "in_flight" : "unretrieved",
+      session_id: r.session_id,
       resolution:
         r.resolution === "retrieved" || r.resolution === "dismissed" ? r.resolution : null,
       resolved_at: r.resolved_at,

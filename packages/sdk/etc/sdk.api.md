@@ -739,6 +739,8 @@ export interface PaidIntentRecord {
     resolution: "retrieved" | "dismissed" | null;
     // (undocumented)
     resolved_at: number | null;
+    session_id: string;
+    state: "in_flight" | "unretrieved";
     task_id: string;
     // (undocumented)
     tx_hash: string;

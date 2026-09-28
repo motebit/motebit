@@ -6005,7 +6005,17 @@ export class MotebitRuntime {
       ...(options?.signal ? { signal: options.signal } : {}),
     });
     if (result.status === "delivered" && options?.acknowledge !== false) {
-      this._paidIntentLedger.resolve(result.taskId);
+      // The result is in hand; a failed ledger write costs the note, never
+      // the result (#874 review).
+      try {
+        this._paidIntentLedger.resolve(result.taskId);
+      } catch (err: unknown) {
+        this._logger.warn("paid_intent_ledger.write_failed", {
+          op: "resolve",
+          taskId: result.taskId,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
     }
     return result;
   }
@@ -6016,6 +6026,15 @@ export class MotebitRuntime {
    */
   outstandingPaidResults(): UnretrievedPayment[] {
     return this._paidIntentLedger.outstanding();
+  }
+
+  /**
+   * The ledger's unresolved entry for `taskId` — owed or still in flight
+   * in this session — or null when this device holds no record of paying
+   * for it.
+   */
+  paidTask(taskId: string): UnretrievedPayment | null {
+    return this._paidIntentLedger.find(taskId);
   }
 
   /**

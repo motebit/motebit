@@ -395,6 +395,21 @@ export class InteractiveDelegationManager {
           // settledPayment here is the PRIOR task's. Distinct wording from
           // PAYMENT_ALREADY_SETTLED so the model cannot read this refusal as
           // "this call paid" (it didn't) or as a retryable failure (it isn't).
+          // Inside ANOTHER principal's task (a molecule serving a customer),
+          // the prior payment is the owner's business: refuse without the
+          // owner's task id, tx or /result pointer (#874 review).
+          if (
+            result.error.code === "intent_already_paid" &&
+            config.isForeignPrincipalTurn?.() === true
+          ) {
+            return {
+              ok: false,
+              error:
+                "INTENT_ALREADY_PAID — refused BEFORE broadcasting; no new money moved. This " +
+                "motebit already has a paid delegation outstanding that this hire would " +
+                "duplicate. Do NOT re-delegate; report that the hire could not be made now.",
+            };
+          }
           if (result.error.code === "intent_already_paid" && settled) {
             return {
               ok: false,
@@ -673,7 +688,7 @@ export class InteractiveDelegationManager {
           // owner is shown short ids ("/result ed665235").
           const matches = outstanding.filter((e) => e.taskId.startsWith(raw));
           const taskId = matches.length === 1 ? matches[0]!.taskId : raw;
-          const paid = outstanding.find((e) => e.taskId === taskId) ?? null;
+          const paid = ledger?.find(taskId) ?? null;
           const result = await retrieve(taskId);
           return { ok: true, data: renderTaskRetrieval(result, paid) };
         },

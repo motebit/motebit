@@ -652,6 +652,12 @@ export const PERSISTENCE_MIGRATIONS: readonly Migration[] = [
         paid_micro INTEGER NOT NULL,
         fee_micro INTEGER NOT NULL,
         recorded_at INTEGER NOT NULL,
+        -- 'in_flight' while the session that paid is still polling;
+        -- 'unretrieved' once that poll ended without the result. An
+        -- in_flight row whose session_id is not the reading session's is
+        -- read as unretrieved: that process died mid-poll.
+        state TEXT NOT NULL DEFAULT 'unretrieved',
+        session_id TEXT NOT NULL DEFAULT '',
         resolution TEXT,
         resolved_at INTEGER,
         PRIMARY KEY (motebit_id, task_id)

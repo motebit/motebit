@@ -908,8 +908,18 @@ export async function submitP2pDelegation(
     };
   }
 
-  // Money moved and the relay holds the task: record before polling.
-  params.onTaskAccepted?.(taskId);
+  // Money moved and the relay holds the task: record before polling. A
+  // hook failure must never abort a paid flow — the poll, and the
+  // settlement carried on a poll failure below, matter more than the note.
+  try {
+    params.onTaskAccepted?.(taskId);
+  } catch (err: unknown) {
+    params.logger.warn("delegation.task_accepted_hook_failed", {
+      taskId,
+      txHash: params.paymentProof.tx_hash,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
 
   const result = await pollForReceipt({
     syncUrl: params.syncUrl,
@@ -1569,6 +1579,7 @@ export async function resolveAndSubmitP2pDelegation(
   }
 
   // 5. Submit the pre-built proof (retry-safe; never re-broadcasts).
+  const ledger = params.paidIntentLedger;
   const submitted = await submitP2pDelegation({
     motebitId: params.motebitId,
     syncUrl: params.syncUrl,
@@ -1590,41 +1601,78 @@ export async function resolveAndSubmitP2pDelegation(
     //     "paid, result pending" from this moment. A process that dies
     //     mid-poll leaves it on record; the next session refuses a re-hire
     //     and `/result` can recover the work. Resolved below on delivery.
-    ...(params.paidIntentLedger != null
+    //     The entry is IN FLIGHT: it locks nothing for this session
+    //     (concurrent hires proceed as before the ledger existed), and any
+    //     later session reads it as unretrieved.
+    ...(ledger != null
       ? {
           onTaskAccepted: (taskId: string) =>
-            params.paidIntentLedger!.recordSettledUnretrieved({
-              workerMotebitId: resolved.workerMotebitId,
-              capability: params.capability,
-              taskId,
-              txHash: proof.tx_hash,
-              paidMicro: proof.amount_micro,
-              feeMicro: proof.fee_amount_micro + (proof.b_fee_amount_micro ?? 0),
-              recordedAt: Date.now(),
-            }),
+            ledgerWrite(params.logger, "record_in_flight", taskId, proof.tx_hash, () =>
+              ledger.recordInFlight({
+                workerMotebitId: resolved.workerMotebitId,
+                capability: params.capability,
+                taskId,
+                txHash: proof.tx_hash,
+                paidMicro: proof.amount_micro,
+                feeMicro: proof.fee_amount_micro + (proof.b_fee_amount_micro ?? 0),
+                recordedAt: Date.now(),
+              }),
+            ),
         }
       : {}),
   });
 
-  // 6. Delivered ⇒ the work is no longer outstanding. Any other outcome
-  //    leaves the settle-time entry in place (the backstop below re-records
-  //    idempotently, for a caller that bypassed `onTaskAccepted`).
-  if (params.paidIntentLedger != null && submitted.ok) {
-    params.paidIntentLedger.resolve(submitted.taskId);
-  }
-  if (params.paidIntentLedger != null && !submitted.ok && submitted.error.settledPayment != null) {
-    const sp = submitted.error.settledPayment;
-    params.paidIntentLedger.recordSettledUnretrieved({
-      workerMotebitId: resolved.workerMotebitId,
-      capability: params.capability,
-      taskId: sp.taskId,
-      txHash: sp.txHash,
-      paidMicro: sp.paidMicro,
-      feeMicro: sp.feeMicro,
-      recordedAt: Date.now(),
+  // 6. Delivered ⇒ the work is no longer outstanding. A poll that ended
+  //    without the result moves the entry to UNRETRIEVED (the pair lock and
+  //    the suspend count now apply). Ledger writes never abort a paid
+  //    flow: a failed write is logged loudly and the result — or the
+  //    settlement carried on the error — is returned regardless.
+  if (ledger != null && submitted.ok) {
+    ledgerWrite(params.logger, "resolve", submitted.taskId, proof.tx_hash, () => {
+      ledger.resolve(submitted.taskId);
     });
   }
+  if (ledger != null && !submitted.ok && submitted.error.settledPayment != null) {
+    const sp = submitted.error.settledPayment;
+    ledgerWrite(params.logger, "record_unretrieved", sp.taskId, sp.txHash, () =>
+      ledger.recordSettledUnretrieved({
+        workerMotebitId: resolved.workerMotebitId,
+        capability: params.capability,
+        taskId: sp.taskId,
+        txHash: sp.txHash,
+        paidMicro: sp.paidMicro,
+        feeMicro: sp.feeMicro,
+        recordedAt: Date.now(),
+      }),
+    );
+  }
   return submitted;
+}
+
+/**
+ * Run one paid-intent ledger write without letting it abort the paid flow
+ * around it (#874 review). The money has already moved when every caller
+ * runs; a SQLITE_BUSY or a full disk must cost the note, never the poll or
+ * the settlement facts the caller returns. Logged loudly with the task and
+ * transaction so the payment can be reconciled by hand.
+ */
+function ledgerWrite(
+  logger: { warn(message: string, context?: Record<string, unknown>): void },
+  op: string,
+  taskId: string,
+  txHash: string,
+  write: () => void,
+): void {
+  try {
+    write();
+  } catch (err: unknown) {
+    logger.warn("paid_intent_ledger.write_failed", {
+      op,
+      taskId,
+      txHash,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
 }
 
 /**
