@@ -229,3 +229,64 @@ describe("RelayDelegationAdapter: a lost result frame is recovered, not resubmit
     expect(r.task_id).toBe("task-2");
   });
 });
+
+/**
+ * The relay answers a same-key resubmission with 409 ("a request with this
+ * idempotency key is already being processed") while the original is still
+ * in its handler. Documented, not changed (#816 review): a 409 is treated as
+ * a non-retryable submission failure today.
+ */
+describe("RelayDelegationAdapter: a 409 on a same-key retry", () => {
+  let relay: ReturnType<typeof fakeRelay>;
+  let posts = 0;
+  beforeEach(() => {
+    vi.useFakeTimers();
+    relay = fakeRelay();
+    posts = 0;
+    // Attempt 1 is admitted as task-1; its result frame is lost and the relay
+    // cannot answer the query. The same-key retry meets a 409.
+    relay.setTaskState(() => json({}, 503));
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        if (init?.method === "POST" && ++posts > 1) {
+          relay.keys.push((init.headers as Record<string, string>)["Idempotency-Key"]!);
+          return new Response("already being processed", { status: 409 });
+        }
+        return relay.fetchMock(url, init);
+      }),
+    );
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  it("does not admit a second task", async () => {
+    const { adapter } = makeAdapter();
+    const p = adapter.delegateStep(step, TIMEOUT);
+    p.catch(() => {});
+    await vi.advanceTimersByTimeAsync(TIMEOUT + 1);
+
+    await expect(p).rejects.toThrow(/Relay task submission failed \(409\)/);
+    expect(relay.keys).toHaveLength(2);
+    expect(relay.keys[1]).toBe(relay.keys[0]);
+    expect(relay.admittedCount()).toBe(1);
+  });
+
+  // KNOWN GAP (reported, not changed): the 409 ends the step as a hard
+  // failure even though task-1 is still running and later completes. Marked
+  // `fails`: it turns red — as an unexpected pass — once the 409 path learns
+  // to wait on the task it already admitted.
+  it.fails("resolves when the relay later reports the admitted task completed", async () => {
+    const { adapter } = makeAdapter();
+    const p = adapter.delegateStep(step, TIMEOUT);
+    p.catch(() => {});
+    await vi.advanceTimersByTimeAsync(TIMEOUT + 1);
+    relay.setTaskState((id) => json({ task: { status: "completed" }, receipt: receipt(id) }));
+    await vi.advanceTimersByTimeAsync(TIMEOUT);
+
+    const r = await p;
+    expect(r.task_id).toBe("task-1");
+  });
+});
