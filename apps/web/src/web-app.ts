@@ -3720,17 +3720,34 @@ export class UnbootedWebApp {
       localStore: localEventStore ?? undefined,
     });
     this._wsAdapter = wsAdapter;
+    // The socket adapter in use now. A token refresh replaces it (#816); every
+    // consumer below reaches the socket through this, never a captured one.
+    let currentWs = wsAdapter;
 
     // Wire delegation adapter so PlanEngine can delegate steps to capable
     // devices. Same staleness fix: a fresh-token provider that re-mints per
     // call, honoring the requested audience (defaults to the prior "sync").
+    //
+    // ONE adapter for the session, following the current socket: a step in
+    // flight waits (up to 300s) for its task_result on the listeners it
+    // registered, and a refresh (every 270s) replaces the socket under it.
+    // Its listeners live here and `onRelayFrame` feeds them from whichever
+    // socket is current; were they bound to the socket that submitted, the
+    // result would arrive on a retired socket, the step would time out, and
+    // the retry would submit — and pay for — the task a second time (#816).
+    const delegationListeners = new Set<CustomMessageCallback>();
     const delegationAdapter = new RelayDelegationAdapter({
       syncUrl: relayUrl,
       motebitId: this._motebitId,
       authToken: (audience?: TokenAudience) =>
         this.createSyncToken(audience ?? "sync").then((t) => t ?? ""),
-      sendRaw: (data: string) => wsAdapter.sendRaw(data),
-      onCustomMessage: (cb) => wsAdapter.onCustomMessage(cb),
+      sendRaw: (data: string) => currentWs.sendRaw(data),
+      onCustomMessage: (cb) => {
+        delegationListeners.add(cb);
+        return () => {
+          delegationListeners.delete(cb);
+        };
+      },
       getExplorationDrive: () => this.runtime?.getPrecision().explorationDrive,
     });
     this.runtime.setDelegationAdapter(delegationAdapter);
@@ -3778,6 +3795,7 @@ export class UnbootedWebApp {
     // One named handler, so a token refresh attaches the same one to the
     // replacement adapter (#816).
     const onRelayFrame: CustomMessageCallback = (msg) => {
+      for (const listener of [...delegationListeners]) listener(msg);
       // Handle remote command requests (forwarded by relay)
       if (msg.type === "command_request" && this.runtime) {
         // Fail-closed remote ingress: only a signed-request-envelope@1.0
@@ -3887,7 +3905,6 @@ export class UnbootedWebApp {
     // Encrypted wrapper for outbound events, over whichever socket adapter is
     // current: an append still encrypting when a token refresh swaps the
     // adapter lands on the replacement, not on the retired one (#816).
-    let currentWs = wsAdapter;
     const liveWs: EventStoreAdapter = {
       append: (e) => currentWs.append(e),
       query: (f) => currentWs.query(f),
@@ -4021,23 +4038,9 @@ export class UnbootedWebApp {
           // Events the sync engine handed the replaced adapter while it was
           // offline are counted as pushed; they go out on the replacement.
           for (const queued of replaced.takePendingEvents()) void freshWs.append(queued);
+          // The session's one delegation adapter follows `currentWs`; its
+          // listeners hear the replacement through `onRelayFrame`.
           currentWs = freshWs;
-
-          // Re-wire delegation adapter with fresh wsAdapter
-          // A per-audience provider, as at first wiring: the adapter asks for
-          // `task:submit` and `task:query`, and a static `sync` string here
-          // (the refreshed socket's token) failed both after the first
-          // refresh (#827).
-          const freshDelegation = new RelayDelegationAdapter({
-            syncUrl: relayUrl,
-            motebitId: this._motebitId,
-            authToken: (audience?: TokenAudience) =>
-              this.createSyncToken(audience ?? "task:submit").then((t) => t ?? ""),
-            sendRaw: (data: string) => freshWs.sendRaw(data),
-            onCustomMessage: (cb) => freshWs.onCustomMessage(cb),
-            getExplorationDrive: () => this.runtime?.getPrecision().explorationDrive,
-          });
-          this.runtime?.setDelegationAdapter(freshDelegation);
 
           this._wsUnsubOnEvent = freshWs.onEvent(onInboundEvent);
           this._wsUnsubOnCustom = freshWs.onCustomMessage(onRelayFrame);

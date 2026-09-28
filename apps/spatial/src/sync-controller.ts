@@ -250,14 +250,30 @@ export class SpatialSyncController {
           localStore: localEventStore ?? undefined,
         });
         this._wsAdapter = wsAdapter;
+        // The socket adapter in use now. A token refresh replaces it (#816);
+        // every consumer below reaches the socket through this.
+        let currentWs = wsAdapter;
 
-        // Wire delegation through the WebSocket (not no-op)
+        // Wire delegation through the WebSocket (not no-op). ONE adapter for
+        // the session, following the current socket: a step in flight waits
+        // (up to 300s) for its task_result on the listeners it registered,
+        // and a refresh (every 270s) replaces the socket under it. Its
+        // listeners live here and `onRelayFrame` feeds them from whichever
+        // socket is current; bound to the submitting socket, the result was
+        // lost with it, the step timed out, and the retry submitted — and
+        // paid for — the task again (#816).
+        const delegationListeners = new Set<CustomMessageCallback>();
         const delegationAdapter = new RelayDelegationAdapter({
           syncUrl: relayUrl,
           motebitId,
           ...(tokenFactory != null ? { authToken: (aud: TokenAudience) => tokenFactory(aud) } : {}),
-          sendRaw: (data: string) => wsAdapter.sendRaw(data),
-          onCustomMessage: (cb) => wsAdapter.onCustomMessage(cb),
+          sendRaw: (data: string) => currentWs.sendRaw(data),
+          onCustomMessage: (cb) => {
+            delegationListeners.add(cb);
+            return () => {
+              delegationListeners.delete(cb);
+            };
+          },
           getExplorationDrive: () => this.deps.getRuntime()?.getPrecision().explorationDrive,
         });
         runtime.setDelegationAdapter(delegationAdapter);
@@ -265,7 +281,6 @@ export class SpatialSyncController {
         // Encrypted wrapper for outbound events, over whichever socket adapter
         // is current: an append still encrypting when a token refresh swaps
         // the adapter lands on the replacement, not on the retired one (#816).
-        let currentWs = wsAdapter;
         const liveWs: EventStoreAdapter = {
           append: (e) => currentWs.append(e),
           query: (f) => currentWs.query(f),
@@ -288,6 +303,7 @@ export class SpatialSyncController {
         // handler, attached to whichever adapter is current and answering on
         // it — a token refresh moves it to the replacement (#816).
         const onRelayFrame: CustomMessageCallback = (msg) => {
+          for (const listener of [...delegationListeners]) listener(msg);
           const rt = this.deps.getRuntime();
           if (msg.type !== "command_request" || !rt) return;
           // Fail-closed remote ingress: only a signed-request-envelope@1.0
@@ -449,16 +465,8 @@ export class SpatialSyncController {
               for (const queued of replaced.takePendingEvents()) void freshWs.append(queued);
               currentWs = freshWs;
 
-              // Re-wire delegation with fresh WS
-              const freshDelegation = new RelayDelegationAdapter({
-                syncUrl: relayUrl,
-                motebitId,
-                authToken: (aud: TokenAudience) => tf(aud),
-                sendRaw: (data: string) => freshWs.sendRaw(data),
-                onCustomMessage: (cb) => freshWs.onCustomMessage(cb),
-                getExplorationDrive: () => this.deps.getRuntime()?.getPrecision().explorationDrive,
-              });
-              this.deps.getRuntime()?.setDelegationAdapter(freshDelegation);
+              // The session's one delegation adapter follows `currentWs`;
+              // its listeners hear the replacement through `onRelayFrame`.
 
               this._wsUnsubOnEvent = freshWs.onEvent(onInboundEvent);
               unsubRelayFrame = freshWs.onCustomMessage(onRelayFrame);

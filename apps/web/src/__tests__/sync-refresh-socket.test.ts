@@ -201,6 +201,7 @@ async function started() {
   await app.init(null as unknown as HTMLCanvasElement);
   await app.bootstrap();
   const connectSync = vi.spyOn(app.getRuntime()!, "connectSync");
+  const setDelegationAdapter = vi.spyOn(app.getRuntime()!, "setDelegationAdapter");
   vi.useFakeTimers({
     toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval", "Date"],
   });
@@ -209,7 +210,7 @@ async function started() {
   await settle();
   await starting;
   await settle();
-  return { app, connectSync, t0 };
+  return { app, connectSync, setDelegationAdapter, t0 };
 }
 
 beforeEach(() => {
@@ -370,6 +371,77 @@ describe("web sync token refresh (#816)", () => {
 
     expect(relay.pushed.filter((e) => e === "e-straddle")).toHaveLength(1);
     expect(openSockets()).toHaveLength(1);
+    app.stopSync();
+    app.stop();
+  });
+
+  it("a plan-step delegation started after refresh 1 resolves after refresh 2, submitted once", async () => {
+    let submissions = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: { method?: string; body?: unknown }) => {
+        if (
+          /\/agent\/[^/]+\/task$/.test(String(url)) &&
+          init?.method === "POST" &&
+          String(init.body).includes("plan_engine")
+        ) {
+          submissions++;
+          return {
+            ok: true,
+            status: 201,
+            headers: new Headers(),
+            json: async () => ({ task_id: `plan-${submissions}` }),
+            text: async () => "",
+          };
+        }
+        return {
+          ok: false,
+          status: 503,
+          headers: new Headers(),
+          json: async () => ({}),
+          text: async () => "",
+        };
+      }),
+    );
+    const { app, setDelegationAdapter } = await started();
+    const wait = () => settle();
+    const setDel = setDelegationAdapter.mock.calls;
+    await vi.advanceTimersByTimeAsync(REFRESH_MS); // refresh 1
+    await wait();
+
+    // The adapter the runtime's plan engine delegates through now.
+    const adapter = setDel[setDel.length - 1]![0] as unknown as {
+      delegateStep: (step: unknown, timeoutMs: number) => Promise<unknown>;
+    };
+    let outcome = "pending";
+    void adapter
+      .delegateStep(
+        { step_id: "s1", description: "d", prompt: "p", required_capabilities: [] },
+        300_000,
+      )
+      .then(
+        () => (outcome = "resolved"),
+        (e: Error) => (outcome = `rejected: ${e.message}`),
+      );
+    await wait();
+    expect(submissions).toBe(1);
+
+    await vi.advanceTimersByTimeAsync(REFRESH_MS); // refresh 2 retires the submitting socket
+    await wait();
+    const open = openSockets();
+    expect(open).toHaveLength(1);
+    // The relay delivers the result on the socket that is open now.
+    open[0]!.deliver({
+      type: "task_result",
+      task_id: "plan-1",
+      receipt: { status: "completed", result: "ok", motebit_id: "w" },
+    });
+    await wait();
+    expect(outcome).toBe("resolved");
+
+    await vi.advanceTimersByTimeAsync(310_000); // past the delegation timeout
+    await wait();
+    expect(submissions).toBe(1);
     app.stopSync();
     app.stop();
   });
