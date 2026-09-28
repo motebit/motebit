@@ -12,6 +12,7 @@ import type { AgentTask } from "@motebit/sdk";
 import { AgentTaskStatus, asMotebitId, asAllocationId, asGoalId } from "@motebit/sdk";
 import { allocateBudget, computeGrossAmount } from "@motebit/market";
 import { TaskQueue } from "../task-queue.js";
+import type { P2pPaymentChain } from "../p2p-payer.js";
 import {
   creditAccount,
   debitSpendableAccount,
@@ -19,6 +20,64 @@ import {
   toMicro,
   fromMicro,
 } from "../accounts.js";
+
+// === Fake payment chain (#918) ===
+
+/**
+ * A fake of the chain a P2P proof's payer is read from. A tx hash registered
+ * with `pay(txHash, payerAddress)` was paid by exactly that address; `hide`
+ * makes one invisible (not landed); `down = true` makes every read fail.
+ * An UNREGISTERED hash is answered by `unregistered`: `"honest"` (the default)
+ * models the honest delegator — it was paid by the submitter — so the many
+ * tests of OTHER behaviour need no chain setup; `"absent"` answers not_found.
+ * The payer comparison for a registered hash is the production one
+ * (`candidates.has(payer)`).
+ */
+export interface FakePaymentChain extends P2pPaymentChain {
+  pay(txHash: string, payerAddress: string): void;
+  hide(txHash: string): void;
+  down: boolean;
+  unregistered: "honest" | "absent";
+  reads: number;
+}
+
+export function createFakePaymentChain(
+  unregistered: "honest" | "absent" = "absent",
+): FakePaymentChain {
+  const payers = new Map<string, string>();
+  const hidden = new Set<string>();
+  const chain: FakePaymentChain = {
+    down: false,
+    unregistered,
+    reads: 0,
+    pay(txHash, payerAddress) {
+      payers.set(txHash, payerAddress);
+    },
+    hide(txHash) {
+      hidden.add(txHash);
+    },
+    async payerOf(txHash, candidates) {
+      chain.reads++;
+      await Promise.resolve();
+      if (chain.down) return { status: "unavailable", reason: "fake chain down" };
+      if (hidden.has(txHash)) return { status: "not_found" };
+      const payer = payers.get(txHash);
+      if (payer === undefined) {
+        return chain.unregistered === "honest" ? { status: "payer" } : { status: "not_found" };
+      }
+      return candidates.has(payer) ? { status: "payer" } : { status: "not_payer" };
+    },
+  };
+  return chain;
+}
+
+/** The harness default: unregistered fake tx hashes were paid by their submitter. */
+export const HONEST_PAYMENT_CHAIN: P2pPaymentChain = createFakePaymentChain("honest");
+
+/** The Solana address an Ed25519 public key (hex) derives — identity key = address. */
+export function walletOf(publicKeyHex: string): string {
+  return deriveSolanaAddress(Uint8Array.from(Buffer.from(publicKeyHex, "hex")));
+}
 
 // === Auth constants ===
 
@@ -50,6 +109,12 @@ export async function createTestRelay(overrides?: Partial<SyncRelayConfig>): Pro
   return createSyncRelay({
     apiToken: API_TOKEN,
     x402: X402_TEST_CONFIG,
+    // The chain a P2P proof's payer is read from (#918). The harness default
+    // models the honest delegator: a fake tx hash no test registered was
+    // paid by the submitter. Tests of the payer rule inject their own chain
+    // (`createFakePaymentChain` with `pay()`, or `paymentChainFromAdapter`
+    // over a stub adapter).
+    p2pPaymentChain: HONEST_PAYMENT_CHAIN,
     // Tests use mock WebSocket connections that never disconnect, so the
     // production 5s drain grace would be paid in full on every `close()`
     // (afterEach) — ~5s/test, making the suite slow and timer-bound (the

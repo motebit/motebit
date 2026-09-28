@@ -61,7 +61,12 @@ import {
   bootRealEntry,
   killBootedEntry,
   type BootedEntry,
+  startFakeSolanaRpc,
+  type FakeSolanaRpc,
 } from "./booted-entry-harness.js";
+
+// The chain a booted relay reads a P2P proof's payer from (#918).
+let rpc: FakeSolanaRpc | null = null;
 
 const MASTER_TOKEN = "booted-settlement-master-token";
 const WORKER_ADDR = "7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgHkv";
@@ -255,7 +260,9 @@ describe("booted entry — receipt→settlement link (P2P settlement recorded wi
   let treasuryAddress: string;
 
   beforeAll(async () => {
+    rpc = await startFakeSolanaRpc();
     booted = await bootRealEntry(DIST_TIER, {
+      SOLANA_RPC_URL: rpc.url,
       MOTEBIT_API_TOKEN: MASTER_TOKEN,
       // Tests register workers on localhost — the local-development allowance.
       MOTEBIT_ALLOW_PRIVATE_ENDPOINTS: "1",
@@ -268,11 +275,13 @@ describe("booted entry — receipt→settlement link (P2P settlement recorded wi
     treasuryAddress = deriveSolanaAddress(Uint8Array.from(Buffer.from(public_key, "hex")));
     worker = await provisionDevice(booted.baseUrl);
     delegator = await provisionDevice(booted.baseUrl);
+    rpc!.setPayer(deriveSolanaAddress(delegator.publicKey));
     await registerWorker(booted.baseUrl, worker);
   }, BOOT_TIMEOUT_MS);
 
   afterAll(() => {
     killBootedEntry(booted);
+    void rpc?.close();
   });
 
   it("records a P2P settlement row with the worker net and a non-zero fee equal to the proof (accept-half)", async () => {
@@ -311,5 +320,23 @@ describe("booted entry — receipt→settlement link (P2P settlement recorded wi
     expect(submit.code).toBe("TASK_P2P_FEE_ADDRESS_MISMATCH");
     const after = (await readSettlements(booted!.baseUrl, worker.motebitId)).length;
     expect(after).toBe(before);
+  });
+
+  it("refuses a P2P proof whose transaction another wallet paid — the deployed artifact reads the payer from the chain (#918)", async () => {
+    const reads = rpc!.getTransactionCalls();
+    rpc!.setPayer(deriveSolanaAddress(worker.publicKey)); // not the delegator's wallet
+    try {
+      const submit = await submitP2pTask(
+        booted!.baseUrl,
+        worker,
+        delegator.motebitId,
+        buildProof(treasuryAddress),
+      );
+      expect(submit.status).toBe(403);
+      expect(submit.code).toBe("TASK_P2P_PROOF_NOT_PAYER");
+      expect(rpc!.getTransactionCalls(), "the entry asked the chain").toBeGreaterThan(reads);
+    } finally {
+      rpc!.setPayer(deriveSolanaAddress(delegator.publicKey));
+    }
   });
 });

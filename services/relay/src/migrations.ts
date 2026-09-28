@@ -2153,6 +2153,10 @@ export const relayMigrations: Migration[] = [
           tx_hash TEXT PRIMARY KEY,
           task_id TEXT NOT NULL,
           submitted_by TEXT NOT NULL,
+          -- 1 when submitted_by was proven by the admitting request's signed
+          -- token; 0 when asserted (operator body field, peer forward,
+          -- backfill). Only a verified submitter is shown the task on a refusal.
+          submitter_verified INTEGER NOT NULL DEFAULT 0,
           claimed_at INTEGER NOT NULL
         );
       `);

@@ -927,7 +927,7 @@ const WRITERS: readonly Writer[] = [
     table: "relay_p2p_proof_claims",
     count: 1,
     principal:
-      "`bindP2pProofToTask` (#918), called only inside an admission transaction that enqueues the task it names: the task-submit door, whose `submitted_by` is `submissionTerms`' submitter (the dualAuth-verified caller, else the operator's master-token-asserted body field), and the federation forward door after the origin peer's signature verified (its `submitted_by` is the payload's, else `relay:<origin>`). The row is keyed by the proof's tx hash, `INSERT OR IGNORE`, never overwritten or deleted: it grants nothing to the identity it names, which is read only to decide whether a refusal may disclose the task id to a caller whose VERIFIED token is that identity (or the operator)",
+      "`bindP2pProofToTask` (#918), called only inside an admission transaction that enqueues the task it names: the task-submit door, after the proof's payer was read from the chain and matched to the submitter's key (p2p-payer.ts), whose `submitted_by` is `submissionTerms`' submitter (the dualAuth-verified caller, else the operator's master-token-asserted body field), and the federation forward door after the origin peer's signature verified (its `submitted_by` is the payload's, else `relay:<origin>`). The row is keyed by the proof's tx hash, `INSERT OR IGNORE`, never overwritten or deleted: it grants nothing to the identity it names, which is read only to decide whether a refusal may disclose the task id to a caller whose VERIFIED token is that identity (or the operator)",
   },
   {
     file: R + "migrations.ts",

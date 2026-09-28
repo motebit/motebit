@@ -52,6 +52,7 @@
  * probed by booted-settlement / booted-trust / booted-pipeline. This suite is
  * the cross-artifact bonus proof, not the sole net for any guarantee.
  */
+import { deriveSolanaAddress as walletAddressOf } from "@motebit/wallet-solana";
 import { createServer, type Server } from "node:http";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
@@ -78,7 +79,12 @@ import {
   bootRealEntry,
   killBootedEntry,
   type BootedEntry,
+  startFakeSolanaRpc,
+  type FakeSolanaRpc,
 } from "./booted-entry-harness.js";
+
+// The chain a booted relay reads a P2P proof's payer from (#918).
+let rpc: FakeSolanaRpc | null = null;
 
 const MASTER_TOKEN = "booted-bridge-master-token";
 const WORKER_ADDR = "7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgHkv";
@@ -349,7 +355,9 @@ describe("booted two-artifact bridge — runtime R4 authority gates money reachi
   let relayPublicKeyHex: string;
 
   beforeAll(async () => {
+    rpc = await startFakeSolanaRpc();
     booted = await bootRealEntry(DIST_TIER, {
+      SOLANA_RPC_URL: rpc.url,
       MOTEBIT_API_TOKEN: MASTER_TOKEN,
       // Tests register workers on localhost — the local-development allowance.
       MOTEBIT_ALLOW_PRIVATE_ENDPOINTS: "1",
@@ -358,6 +366,7 @@ describe("booted two-artifact bridge — runtime R4 authority gates money reachi
     ({ public_key: relayPublicKeyHex } = (await idRes.json()) as { public_key: string });
     worker = await provisionDevice(booted.baseUrl);
     delegator = await provisionDevice(booted.baseUrl);
+    rpc!.setPayer(walletAddressOf(delegator.publicKey));
     await registerWorker(booted.baseUrl, worker);
     workerServer = fakeWorkerServer(worker);
   }, BOOT_TIMEOUT_MS);
@@ -365,6 +374,7 @@ describe("booted two-artifact bridge — runtime R4 authority gates money reachi
   afterAll(async () => {
     if (workerServer) await new Promise<void>((r) => workerServer!.close(() => r()));
     killBootedEntry(booted);
+    void rpc?.close();
   });
 
   it("accept-half: an AUTHORIZED hire moves money across the bridge — the booted relay records the settlement + trust", async () => {

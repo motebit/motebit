@@ -98,7 +98,8 @@ import {
   recordAdmittedOutcome,
   type P2pProofClaim,
 } from "./idempotency.js";
-import { OPERATOR_PRESENTED } from "./auth-events.js";
+import { CALLER_VERIFIED_KEY, OPERATOR_PRESENTED } from "./auth-events.js";
+import { payerCandidates } from "./p2p-payer.js";
 import { createLogger } from "./logger.js";
 import { pathIdentity } from "./id-bounds.js";
 import type { TaskQueue } from "./task-queue.js";
@@ -235,6 +236,12 @@ export interface TasksDeps {
   isAgentRevoked: (motebitId: string) => boolean;
   /** Platform fee rate (0–1). Defaults to SDK constant (0.05) if not provided. */
   platformFeeRate?: number;
+  /**
+   * The chain the payer of a P2P `payment_proof` is read from (#918,
+   * p2p-payer.ts). `null` — no Solana RPC configured — refuses every P2P
+   * submission (fail closed): an unverified payer is never admitted.
+   */
+  p2pPaymentChain: import("./p2p-payer.js").P2pPaymentChain | null;
   /** Settlement rail registry — for attaching payment proofs through the rail boundary. */
   railRegistry?: import("@motebit/settlement-rails").SettlementRailRegistry;
   /** Push adapter for waking offline mobile devices. */
@@ -551,6 +558,33 @@ export async function refreshDispatchTokenOnReplay(
     reason: claims.exp <= now ? "expired" : "expiring",
   });
   return { ...replayed, dispatch_token: fresh };
+}
+
+/**
+ * May a refusal of an already-admitted P2P proof name the task it funds
+ * (#918)? Only to:
+ *
+ *   - the operator, marked POSITIVELY by the master-token door, never
+ *     inferred from an unset caller id (a relay with no API token configured
+ *     leaves every caller unset); or
+ *   - a caller whose signed token verified as the claim's submitter, when that
+ *     submitter was itself token-verified at admission (`submitter_verified`).
+ *     A submitter the operator asserted in a body, or a peer relay forwarded,
+ *     is not proven, so no caller is ever shown that task as its own.
+ *
+ * Everyone else gets the refusal without the id (cf. #903).
+ */
+export function mayDiscloseAdmittedTask(
+  claim: P2pProofClaim,
+  caller: { operator: boolean; verifiedCaller: string | undefined },
+): boolean {
+  if (caller.operator) return true;
+  return (
+    claim.submitter_verified === 1 &&
+    typeof caller.verifiedCaller === "string" &&
+    caller.verifiedCaller !== "" &&
+    caller.verifiedCaller === claim.submitted_by
+  );
 }
 
 /** Context key the submit handler stamps once its admission transaction commits (#888). */
@@ -2058,6 +2092,7 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
     isTokenBlacklisted,
     isAgentRevoked,
     pushAdapter,
+    p2pPaymentChain,
   } = deps;
 
   // Platform fee rate lives in this function's closure — every handler
@@ -2578,19 +2613,23 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
     const submittedBy = terms.submitter;
 
     // A P2P proof already bound to an admitted task (#918). The refusal names
-    // that task only to a caller entitled to see it: the identity whose
-    // verified token submitted it, or the operator (marked positively by the
-    // master-token door, never inferred from an unset caller id). Another
-    // principal's task id is never disclosed (cf. #903); a body-asserted
-    // `submitted_by` proves nothing here.
-    const proofAlreadyAdmitted = (existing: P2pProofClaim): P2pProofAlreadyAdmittedError => {
-      const entitled =
-        c.get(OPERATOR_PRESENTED) === true ||
-        (typeof callerMotebitId === "string" &&
-          callerMotebitId !== "" &&
-          callerMotebitId === existing.submitted_by);
-      return new P2pProofAlreadyAdmittedError(entitled ? existing.task_id : undefined);
-    };
+    // that task only to a caller entitled to see it (`mayDiscloseAdmittedTask`).
+    const proofAlreadyAdmitted = (existing: P2pProofClaim): P2pProofAlreadyAdmittedError =>
+      new P2pProofAlreadyAdmittedError(
+        mayDiscloseAdmittedTask(existing, {
+          operator: c.get(OPERATOR_PRESENTED) === true,
+          verifiedCaller: callerMotebitId,
+        })
+          ? existing.task_id
+          : undefined,
+      );
+    // Whether THIS request's submitter was proven by a signed token (not the
+    // operator's body assertion). Recorded in the claim, so a later refusal
+    // discloses the task only to a submitter the relay actually verified.
+    const submitterVerified =
+      typeof callerMotebitId === "string" &&
+      callerMotebitId !== "" &&
+      callerMotebitId === submittedBy;
 
     // Snapshot the listing price at submission time so the settlement audit
     // matches what the delegator actually paid. Price against the WORKER, not
@@ -2689,6 +2728,42 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
       // Tx hash format (Solana signatures are 87-88 char base58)
       if (!/^[1-9A-HJ-NP-Za-km-z]{64,88}$/.test(proof.tx_hash)) {
         throw new TaskError("TASK_INVALID_INPUT", "Invalid transaction signature format", 400);
+      }
+
+      // The proof is bound to its PAYER (#918 round 2). A tx hash is public
+      // the moment it lands, so a submitter must prove the payment is theirs:
+      // the transaction's payer must be the Solana address their key derives
+      // (identity key = address). Checked here, before any other read of the
+      // proof and before any admission write, so a non-payer learns nothing
+      // about the proof's state, claims nothing, and frees its key. Fail
+      // closed: no chain, an RPC error, or a transaction not visible yet is a
+      // retryable 503 that admits nothing. p2p-payer.ts has the rule.
+      const payerAddresses = payerCandidates(moteDb.db, {
+        verifiedKey: c.get(CALLER_VERIFIED_KEY) as string | undefined,
+        operator: c.get(OPERATOR_PRESENTED) === true,
+        submitter: submittedBy,
+      });
+      const payer =
+        p2pPaymentChain == null
+          ? ({ status: "unavailable", reason: "no Solana RPC configured" } as const)
+          : payerAddresses.size === 0
+            ? ({ status: "not_payer" } as const)
+            : await p2pPaymentChain.payerOf(p2pProofKey(proof.tx_hash), payerAddresses);
+      if (payer.status === "not_payer") {
+        throw new TaskError(
+          "TASK_P2P_PROOF_NOT_PAYER",
+          "This payment proof's transaction was not paid from the submitter's identity-derived wallet — only the payer may submit it",
+          403,
+        );
+      }
+      if (payer.status !== "payer") {
+        throw new TaskError(
+          "TASK_P2P_PROOF_UNVERIFIED",
+          payer.status === "not_found"
+            ? "This payment proof's transaction is not visible onchain at confirmed commitment yet — retry shortly; nothing was admitted"
+            : `The relay cannot read the chain to verify this payment's payer (${payer.reason}) — retry shortly; nothing was admitted`,
+          503,
+        );
       }
 
       // Proof-replay guard: one onchain payment funds exactly one task. Reject a
@@ -3295,6 +3370,7 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
           taskId,
           // The P2P branch runs only with a submitter (`terms.p2p`).
           submittedBy!,
+          submitterVerified,
         );
         if (!proofBinding.bound) throw proofAlreadyAdmitted(proofBinding.existing);
       }

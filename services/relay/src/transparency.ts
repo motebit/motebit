@@ -129,7 +129,7 @@ export const DECLARATION_CONTENT = {
       ],
       observable: [
         "every delegation request and its routing decision",
-        "every P2P payment proof bound to the one task it admitted (tx_hash, task_id, submitting motebit_id, claimed_at — no content): one proof funds at most one task; a claim is written in the admission transaction and never deleted (migration v47, #918)",
+        "every P2P payment proof bound to the one task it admitted (tx_hash, task_id, submitting motebit_id, whether that submitter was proven by a signed token, claimed_at — no content): one proof funds at most one task; a claim is written in the admission transaction and never deleted (migration v47, #918)",
         "every signed execution receipt the relay verified",
         "full signed execution receipt JSON, byte-identical to the signer's canonical form, archived per (motebit_id, task_id) for independent audit re-verification",
         "every settlement (relay-mediated and p2p audit)",

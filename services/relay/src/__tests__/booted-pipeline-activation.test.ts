@@ -71,7 +71,12 @@ import {
   bootRealEntry,
   killBootedEntry,
   type BootedEntry,
+  startFakeSolanaRpc,
+  type FakeSolanaRpc,
 } from "./booted-entry-harness.js";
+
+// The chain a booted relay reads a P2P proof's payer from (#918).
+let rpc: FakeSolanaRpc | null = null;
 
 const MASTER_TOKEN = "booted-pipeline-master-token";
 const WORKER_ADDR = "7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgHkv";
@@ -252,7 +257,9 @@ describe("booted entry — whole-pipeline single flow (authz→receipt→settlem
   let treasury: string;
 
   beforeAll(async () => {
+    rpc = await startFakeSolanaRpc();
     booted = await bootRealEntry(DIST_TIER, {
+      SOLANA_RPC_URL: rpc.url,
       MOTEBIT_API_TOKEN: MASTER_TOKEN,
       // Tests register workers on localhost — the local-development allowance.
       MOTEBIT_ALLOW_PRIVATE_ENDPOINTS: "1",
@@ -262,12 +269,16 @@ describe("booted entry — whole-pipeline single flow (authz→receipt→settlem
     treasury = deriveSolanaAddress(Uint8Array.from(Buffer.from(public_key, "hex")));
   }, BOOT_TIMEOUT_MS);
 
-  afterAll(() => killBootedEntry(booted));
+  afterAll(async () => {
+    killBootedEntry(booted);
+    await rpc?.close();
+  });
 
   it("one worker-authenticated receipt drives the full cascade: token→receipt→settlement→trust (accept-half)", async () => {
     const u = booted!.baseUrl;
     const worker = await provisionDevice(u);
     const delegator = await provisionDevice(u);
+    rpc!.setPayer(deriveSolanaAddress(delegator.publicKey));
     await registerWorker(u, worker);
 
     const taskId = await queueP2pTask(u, worker, delegator.motebitId, treasury);
@@ -293,6 +304,7 @@ describe("booted entry — whole-pipeline single flow (authz→receipt→settlem
     const u = booted!.baseUrl;
     const worker = await provisionDevice(u);
     const delegator = await provisionDevice(u);
+    rpc!.setPayer(deriveSolanaAddress(delegator.publicKey));
     await registerWorker(u, worker);
 
     const taskId = await queueP2pTask(u, worker, delegator.motebitId, treasury);

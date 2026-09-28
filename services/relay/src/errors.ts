@@ -160,6 +160,8 @@ export class TaskError extends RelayError {
       | "TASK_P2P_PROOF_REQUIRED"
       | "TASK_P2P_PROOF_REPLAYED"
       | "TASK_P2P_PROOF_ALREADY_ADMITTED"
+      | "TASK_P2P_PROOF_NOT_PAYER"
+      | "TASK_P2P_PROOF_UNVERIFIED"
       | "TASK_GRANT_REVOKED",
     message: string,
     statusCode: number = 400,
@@ -174,8 +176,8 @@ export class TaskError extends RelayError {
  * A P2P payment proof that is already bound to an admitted task (#918): one
  * onchain payment funds exactly one task. A refusal before admission (the key
  * is freed). `existingTaskId` is set only when the caller is entitled to see
- * that task (its own submission, or the operator); another principal's task
- * id is never disclosed (cf. #903).
+ * that task (`mayDiscloseAdmittedTask`: the operator, or the token-verified
+ * submitter of a token-verified admission); otherwise no id (cf. #903).
  */
 export class P2pProofAlreadyAdmittedError extends TaskError {
   readonly existingTaskId?: string;

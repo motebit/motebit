@@ -1,17 +1,19 @@
 /**
- * #918 — one P2P payment proof admits at most one task.
+ * #918 — one P2P payment proof admits at most one task, and only its PAYER
+ * may submit it.
  *
- * The only proof-reuse guard used to read `relay_settlements.p2p_tx_hash`, so
- * it saw SETTLED proofs only. The same unsettled `payment_proof` under a NEW
- * Idempotency-Key admitted and dispatched a second task: two tasks, two
- * dispatches, one payment (the unique settlement index stopped only the
- * second settlement).
+ * Round 1: the only proof-reuse guard read `relay_settlements.p2p_tx_hash`,
+ * so it saw SETTLED proofs only. The same unsettled `payment_proof` under a
+ * NEW Idempotency-Key admitted and dispatched a second task. The fix binds the
+ * proof to the task it admits, inside the #888 admission transaction
+ * (`bindP2pProofToTask`, idempotency.ts).
  *
- * The fix binds the proof to the task it admits, inside the #888 admission
- * transaction, under a unique claim on the tx hash (`bindP2pProofToTask`,
- * idempotency.ts). A claim exists exactly when its task was admitted: a
- * refusal before admission, or inside the admission transaction, leaves no
- * claim, so a corrected retry admits once.
+ * Round 2: a tx hash is public the moment it lands. With the binding alone, a
+ * stranger who submitted the payer's proof first got the task AND locked the
+ * payer out forever. So a proof is admissible only from its payer: the tx's
+ * payer must be the Solana address the submitter's key derives (p2p-payer.ts),
+ * checked before any admission write, failing closed when the chain cannot be
+ * read.
  *
  * Federated forwards (the 502 guidance, the executor relay's own binding) are
  * covered in federation-e2e.test.ts under "#918".
@@ -23,14 +25,29 @@ import { join } from "node:path";
 import type { SyncRelay } from "../index.js";
 // eslint-disable-next-line no-restricted-imports -- tests need direct keypair generation
 import { generateKeypair, bytesToHex, createSignedToken } from "@motebit/encryption";
-import { createTestRelay, createAgent, buildP2pPaymentProof, JSON_AUTH } from "./test-helpers.js";
+import type { SolanaRpcAdapter } from "@motebit/wallet-solana";
+import {
+  createTestRelay,
+  createAgent,
+  buildP2pPaymentProof,
+  createFakePaymentChain,
+  walletOf,
+  JSON_AUTH,
+  type FakePaymentChain,
+} from "./test-helpers.js";
 import { toMicro } from "../accounts.js";
+import { mayDiscloseAdmittedTask } from "../tasks.js";
+import { paymentChainFromAdapter } from "../p2p-payer.js";
 
 const WORKER_SOLANA_ADDR = "7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgHkv";
 
 let relay: SyncRelay;
+let chain: FakePaymentChain;
 beforeEach(async () => {
-  relay = await createTestRelay();
+  // Strict chain: an unregistered tx hash is not found. Every proof in this
+  // file is registered with its real payer.
+  chain = createFakePaymentChain("absent");
+  relay = await createTestRelay({ p2pPaymentChain: chain });
 });
 afterEach(async () => {
   await relay.close();
@@ -40,12 +57,14 @@ interface Agent {
   motebitId: string;
   deviceId: string;
   privateKey: Uint8Array;
+  publicKeyHex: string;
 }
 
 async function newAgent(): Promise<Agent> {
   const kp = await generateKeypair();
-  const a = await createAgent(relay, bytesToHex(kp.publicKey));
-  return { ...a, privateKey: kp.privateKey };
+  const publicKeyHex = bytesToHex(kp.publicKey);
+  const a = await createAgent(relay, publicKeyHex);
+  return { ...a, privateKey: kp.privateKey, publicKeyHex };
 }
 
 /** A `task:submit` bearer the agent signs with its own device key. */
@@ -73,14 +92,26 @@ function tasksWithPrompt(prompt: string): string[] {
   ).map((r) => r.task_id);
 }
 
-function claimOf(txHash: string): { task_id: string; submitted_by: string } | undefined {
+interface ClaimRow {
+  task_id: string;
+  submitted_by: string;
+  submitter_verified: number;
+}
+
+function claimOf(txHash: string): ClaimRow | undefined {
   return relay.moteDb.db
-    .prepare("SELECT task_id, submitted_by FROM relay_p2p_proof_claims WHERE tx_hash = ?")
-    .get(txHash) as { task_id: string; submitted_by: string } | undefined;
+    .prepare(
+      "SELECT task_id, submitted_by, submitter_verified FROM relay_p2p_proof_claims WHERE tx_hash = ?",
+    )
+    .get(txHash) as ClaimRow | undefined;
 }
 
 /** A priced local worker with a P2P settlement address and an open socket. */
-async function pricedWorker(): Promise<{ worker: Agent; dispatched: () => number }> {
+async function pricedWorker(): Promise<{
+  worker: Agent;
+  dispatched: () => number;
+  prompts: () => string[];
+}> {
   const worker = await newAgent();
   await relay.app.request("/api/v1/agents/register", {
     method: "POST",
@@ -108,9 +139,15 @@ async function pricedWorker(): Promise<{ worker: Agent; dispatched: () => number
   relay.connections.set(worker.motebitId, [
     { ws: ws as never, deviceId: worker.deviceId, capabilities: ["web_search"] },
   ]);
-  const dispatched = () =>
-    ws.send.mock.calls.filter((call) => String(call[0]).includes('"task_request"')).length;
-  return { worker, dispatched };
+  const requests = () =>
+    ws.send.mock.calls
+      .map((call) => JSON.parse(String(call[0])) as { type: string; task?: { prompt: string } })
+      .filter((m) => m.type === "task_request");
+  return {
+    worker,
+    dispatched: () => requests().length,
+    prompts: () => requests().map((m) => m.task!.prompt),
+  };
 }
 
 /** An established pair, so P2P eligibility is not under test. */
@@ -124,11 +161,14 @@ function establishPair(delegator: string, worker: string): void {
     .run(delegator, worker, Date.now(), Date.now());
 }
 
-function newProof() {
-  return buildP2pPaymentProof(relay, {
+/** A proof whose transaction `payer` paid (registered on the fake chain). */
+function paidBy(payer: Agent) {
+  const proof = buildP2pPaymentProof(relay, {
     workerAddress: WORKER_SOLANA_ADDR,
     unitCostMicro: toMicro(0.5),
   });
+  chain.pay(proof.tx_hash, walletOf(payer.publicKeyHex));
+  return proof;
 }
 
 function submit(
@@ -148,7 +188,7 @@ function p2pBody(
   prompt: string,
   submitter: string,
   worker: string,
-  proof: ReturnType<typeof newProof>,
+  proof: ReturnType<typeof paidBy>,
 ): Record<string, unknown> {
   return {
     prompt,
@@ -160,11 +200,11 @@ function p2pBody(
 }
 
 describe("#918 one P2P payment proof admits at most one task", () => {
-  it("the same proof under a NEW key is refused (409, naming the task to its operator): one task, one dispatch", async () => {
+  it("the same proof under a NEW key is refused (409, naming the task to the operator): one task, one dispatch", async () => {
     const delegator = await newAgent();
     const { worker, dispatched } = await pricedWorker();
     establishPair(delegator.motebitId, worker.motebitId);
-    const proof = newProof();
+    const proof = paidBy(delegator);
     const prompt = `918 new-key ${crypto.randomUUID()}`;
     const path = `/agent/${delegator.motebitId}/task`;
     const body = p2pBody(prompt, delegator.motebitId, worker.motebitId, proof);
@@ -172,9 +212,11 @@ describe("#918 one P2P payment proof admits at most one task", () => {
     const first = await submit(path, crypto.randomUUID(), JSON_AUTH, body);
     expect(first.status, await first.clone().text()).toBe(201);
     const { task_id } = (await first.json()) as { task_id: string };
-    expect(claimOf(proof.tx_hash)?.task_id, "the proof is bound to the task it admitted").toBe(
+    expect(claimOf(proof.tx_hash), "bound to the task; the submitter was asserted").toEqual({
       task_id,
-    );
+      submitted_by: delegator.motebitId,
+      submitter_verified: 0,
+    });
 
     const second = await submit(path, crypto.randomUUID(), JSON_AUTH, body);
     expect(second.status, await second.clone().text()).toBe(409);
@@ -193,22 +235,22 @@ describe("#918 one P2P payment proof admits at most one task", () => {
     expect(stuck.n).toBe(0);
   });
 
-  it("the same proof under the SAME key is the #888 replay, unchanged: the first answer, one task, one dispatch", async () => {
+  it("the payer's own same-key retry is the #888 replay, unchanged: the first answer, one task, one dispatch", async () => {
     const delegator = await newAgent();
     const { worker, dispatched } = await pricedWorker();
     establishPair(delegator.motebitId, worker.motebitId);
-    const proof = newProof();
+    const proof = paidBy(delegator);
     const prompt = `918 same-key ${crypto.randomUUID()}`;
     const path = `/agent/${delegator.motebitId}/task`;
     const body = p2pBody(prompt, delegator.motebitId, worker.motebitId, proof);
-    // The #885 client's key IS the proof's tx_hash.
+    // The #885 client's key IS the proof's tx_hash, and it signs its own token.
     const key = proof.tx_hash;
 
-    const first = await submit(path, key, JSON_AUTH, body);
+    const first = await submit(path, key, await submitBearer(delegator), body);
     expect(first.status, await first.clone().text()).toBe(201);
     const b1 = (await first.json()) as { task_id: string };
 
-    const replay = await submit(path, key, JSON_AUTH, body);
+    const replay = await submit(path, key, await submitBearer(delegator), body);
     expect(replay.status).toBe(201);
     expect(((await replay.json()) as { task_id: string }).task_id).toBe(b1.task_id);
     expect(tasksWithPrompt(prompt)).toEqual([b1.task_id]);
@@ -219,7 +261,7 @@ describe("#918 one P2P payment proof admits at most one task", () => {
     const delegator = await newAgent();
     const { worker, dispatched } = await pricedWorker();
     // No trust edge yet: the P2P eligibility gate refuses before admission.
-    const proof = newProof();
+    const proof = paidBy(delegator);
     const prompt = `918 pre-admission ${crypto.randomUUID()}`;
     const path = `/agent/${delegator.motebitId}/task`;
     const body = p2pBody(prompt, delegator.motebitId, worker.motebitId, proof);
@@ -250,7 +292,7 @@ describe("#918 one P2P payment proof admits at most one task", () => {
     const delegator = await newAgent();
     const { worker, dispatched } = await pricedWorker();
     establishPair(delegator.motebitId, worker.motebitId);
-    const proof = newProof();
+    const proof = paidBy(delegator);
     const prompt = `918 rollback ${crypto.randomUUID()}`;
     const path = `/agent/${delegator.motebitId}/task`;
     const body = p2pBody(prompt, delegator.motebitId, worker.motebitId, proof);
@@ -273,58 +315,11 @@ describe("#918 one P2P payment proof admits at most one task", () => {
     expect(dispatched()).toBe(1);
   });
 
-  it("another submitter presenting the same proof is refused, and is never told the other principal's task id", async () => {
-    const alice = await newAgent();
-    const mallory = await newAgent();
-    const { worker, dispatched } = await pricedWorker();
-    establishPair(alice.motebitId, worker.motebitId);
-    establishPair(mallory.motebitId, worker.motebitId);
-    const proof = newProof();
-    const prompt = `918 cross ${crypto.randomUUID()}`;
-
-    const first = await submit(
-      `/agent/${alice.motebitId}/task`,
-      crypto.randomUUID(),
-      await submitBearer(alice),
-      p2pBody(prompt, alice.motebitId, worker.motebitId, proof),
-    );
-    expect(first.status, await first.clone().text()).toBe(201);
-    const { task_id } = (await first.json()) as { task_id: string };
-    expect(claimOf(proof.tx_hash)).toEqual({ task_id, submitted_by: alice.motebitId });
-
-    const stolen = await submit(
-      `/agent/${mallory.motebitId}/task`,
-      crypto.randomUUID(),
-      await submitBearer(mallory),
-      // The body even names alice as submitter; the verified token wins.
-      p2pBody(prompt, alice.motebitId, worker.motebitId, proof),
-    );
-    expect(stolen.status, await stolen.clone().text()).toBe(409);
-    const raw = await stolen.text();
-    const bm = JSON.parse(raw) as { code: string; task_id?: string };
-    expect(bm.code).toBe("TASK_P2P_PROOF_ALREADY_ADMITTED");
-    expect(bm.task_id).toBeUndefined();
-    expect(raw, "the foreign task id appears nowhere in the refusal").not.toContain(task_id);
-
-    // Alice herself, under a new key, is told which task her payment funds.
-    const own = await submit(
-      `/agent/${alice.motebitId}/task`,
-      crypto.randomUUID(),
-      await submitBearer(alice),
-      p2pBody(prompt, alice.motebitId, worker.motebitId, proof),
-    );
-    expect(own.status).toBe(409);
-    expect(((await own.json()) as { task_id?: string }).task_id).toBe(task_id);
-
-    expect(tasksWithPrompt(prompt)).toEqual([task_id]);
-    expect(dispatched()).toBe(1);
-  });
-
   it("two concurrent submissions of one proof under different keys admit exactly one task", async () => {
     const delegator = await newAgent();
     const { worker, dispatched } = await pricedWorker();
     establishPair(delegator.motebitId, worker.motebitId);
-    const proof = newProof();
+    const proof = paidBy(delegator);
     const prompt = `918 race ${crypto.randomUUID()}`;
     const path = `/agent/${delegator.motebitId}/task`;
     const body = p2pBody(prompt, delegator.motebitId, worker.motebitId, proof);
@@ -343,12 +338,12 @@ describe("#918 one P2P payment proof admits at most one task", () => {
     const dbPath = join(dir, "relay.db");
     try {
       await relay.close();
-      relay = await createTestRelay({ dbPath });
+      relay = await createTestRelay({ dbPath, p2pPaymentChain: chain });
       const delegator = await newAgent();
       const { worker } = await pricedWorker();
       establishPair(delegator.motebitId, worker.motebitId);
-      const queued = newProof();
-      const settled = newProof();
+      const queued = paidBy(delegator);
+      const settled = paidBy(delegator);
       const prompt = `918 upgrade ${crypto.randomUUID()}`;
       const path = `/agent/${delegator.motebitId}/task`;
       const body = p2pBody(prompt, delegator.motebitId, worker.motebitId, queued);
@@ -377,11 +372,16 @@ describe("#918 one P2P payment proof admits at most one task", () => {
       `);
       await relay.close();
 
-      relay = await createTestRelay({ dbPath }); // boot runs v47
-      expect(claimOf(queued.tx_hash)).toEqual({ task_id, submitted_by: delegator.motebitId });
+      relay = await createTestRelay({ dbPath, p2pPaymentChain: chain }); // boot runs v47
+      expect(claimOf(queued.tx_hash)).toEqual({
+        task_id,
+        submitted_by: delegator.motebitId,
+        submitter_verified: 0,
+      });
       expect(claimOf(settled.tx_hash)).toEqual({
         task_id: "gone-task",
         submitted_by: delegator.motebitId,
+        submitter_verified: 0,
       });
       establishPair(delegator.motebitId, worker.motebitId);
       const again = await submit(path, crypto.randomUUID(), JSON_AUTH, body);
@@ -397,7 +397,7 @@ describe("#918 one P2P payment proof admits at most one task", () => {
     const delegator = await newAgent();
     const { worker } = await pricedWorker();
     establishPair(delegator.motebitId, worker.motebitId);
-    const proof = newProof();
+    const proof = paidBy(delegator);
     relay.moteDb.db
       .prepare(
         `INSERT INTO relay_settlements
@@ -421,5 +421,285 @@ describe("#918 one P2P payment proof admits at most one task", () => {
     );
     expect(res.status).toBe(409);
     expect(((await res.json()) as { code: string }).code).toBe("TASK_P2P_PROOF_REPLAYED");
+  });
+});
+
+describe("#918 round 2: a proof is admissible only from its payer", () => {
+  it("a stranger front-running the payer's public proof is refused (403, no claim); the payer then admits once and the worker runs only the payer's task", async () => {
+    const victim = await newAgent();
+    const mallory = await newAgent();
+    const { worker, dispatched, prompts } = await pricedWorker();
+    establishPair(victim.motebitId, worker.motebitId);
+    const proof = paidBy(victim);
+    const victimPrompt = `918 victim ${crypto.randomUUID()}`;
+    const malloryPrompt = `918 mallory ${crypto.randomUUID()}`;
+
+    // Mallory saw the victim's tx land and submits it first, under her own
+    // route and prompt, with her own verified token and the cold-start ack.
+    const stolen = await submit(
+      `/agent/${mallory.motebitId}/task`,
+      crypto.randomUUID(),
+      await submitBearer(mallory),
+      {
+        ...p2pBody(malloryPrompt, mallory.motebitId, worker.motebitId, proof),
+        delegator_acknowledges_no_history_risk: true,
+      },
+    );
+    expect(stolen.status, await stolen.clone().text()).toBe(403);
+    expect(((await stolen.json()) as { code: string }).code).toBe("TASK_P2P_PROOF_NOT_PAYER");
+    expect(claimOf(proof.tx_hash), "a non-payer claims nothing").toBeUndefined();
+    expect(tasksWithPrompt(malloryPrompt)).toEqual([]);
+
+    // Even naming the victim as submitter in the body: the verified token's
+    // key is what must have paid.
+    const posing = await submit(
+      `/agent/${mallory.motebitId}/task`,
+      crypto.randomUUID(),
+      await submitBearer(mallory),
+      p2pBody(malloryPrompt, victim.motebitId, worker.motebitId, proof),
+    );
+    expect(posing.status).toBe(403);
+
+    const own = await submit(
+      `/agent/${victim.motebitId}/task`,
+      crypto.randomUUID(),
+      await submitBearer(victim),
+      p2pBody(victimPrompt, victim.motebitId, worker.motebitId, proof),
+    );
+    expect(own.status, await own.clone().text()).toBe(201);
+    const { task_id } = (await own.json()) as { task_id: string };
+    expect(claimOf(proof.tx_hash)).toEqual({
+      task_id,
+      submitted_by: victim.motebitId,
+      submitter_verified: 1,
+    });
+    expect(tasksWithPrompt(victimPrompt)).toEqual([task_id]);
+    expect(dispatched()).toBe(1);
+    expect(prompts()).toEqual([victimPrompt]);
+  });
+
+  it("the operator's submission for a body submitter is checked against the keys held for that identity", async () => {
+    const alice = await newAgent();
+    const mallory = await newAgent();
+    const { worker, dispatched } = await pricedWorker();
+    establishPair(alice.motebitId, worker.motebitId);
+    const malloryPaid = paidBy(mallory);
+    const refused = await submit(
+      `/agent/${alice.motebitId}/task`,
+      crypto.randomUUID(),
+      JSON_AUTH,
+      p2pBody(`918 op ${crypto.randomUUID()}`, alice.motebitId, worker.motebitId, malloryPaid),
+    );
+    expect(refused.status, await refused.clone().text()).toBe(403);
+    expect(((await refused.json()) as { code: string }).code).toBe("TASK_P2P_PROOF_NOT_PAYER");
+    expect(dispatched()).toBe(0);
+  });
+
+  it("the chain cannot be read (RPC down, tx not visible yet, or no RPC configured) ⇒ 503, nothing admitted, the key freed; the retry admits once", async () => {
+    const delegator = await newAgent();
+    const { worker, dispatched } = await pricedWorker();
+    establishPair(delegator.motebitId, worker.motebitId);
+    const proof = paidBy(delegator);
+    const prompt = `918 unverified ${crypto.randomUUID()}`;
+    const path = `/agent/${delegator.motebitId}/task`;
+    const body = p2pBody(prompt, delegator.motebitId, worker.motebitId, proof);
+    const key = crypto.randomUUID();
+
+    chain.down = true;
+    const down = await submit(path, key, JSON_AUTH, body);
+    expect(down.status, await down.clone().text()).toBe(503);
+    expect(((await down.json()) as { code: string }).code).toBe("TASK_P2P_PROOF_UNVERIFIED");
+    chain.down = false;
+
+    const unseen = buildP2pPaymentProof(relay, {
+      workerAddress: WORKER_SOLANA_ADDR,
+      unitCostMicro: toMicro(0.5),
+    });
+    const notYet = await submit(
+      path,
+      crypto.randomUUID(),
+      JSON_AUTH,
+      p2pBody(`918 unseen ${crypto.randomUUID()}`, delegator.motebitId, worker.motebitId, unseen),
+    );
+    expect(notYet.status).toBe(503);
+    expect(claimOf(unseen.tx_hash)).toBeUndefined();
+    expect(claimOf(proof.tx_hash)).toBeUndefined();
+    expect(tasksWithPrompt(prompt)).toEqual([]);
+
+    // The same key, once the chain answers: admitted exactly once.
+    const retry = await submit(path, key, JSON_AUTH, body);
+    expect(retry.status, await retry.clone().text()).toBe(201);
+    expect(tasksWithPrompt(prompt)).toHaveLength(1);
+    expect(dispatched()).toBe(1);
+
+    // No chain configured at all: every P2P submission is refused.
+    await relay.close();
+    relay = await createTestRelay({ p2pPaymentChain: null });
+    const d2 = await newAgent();
+    const w2 = await pricedWorker();
+    establishPair(d2.motebitId, w2.worker.motebitId);
+    const res = await submit(
+      `/agent/${d2.motebitId}/task`,
+      crypto.randomUUID(),
+      JSON_AUTH,
+      p2pBody(`918 no-rpc ${crypto.randomUUID()}`, d2.motebitId, w2.worker.motebitId, paidBy(d2)),
+    );
+    expect(res.status).toBe(503);
+    expect(w2.dispatched()).toBe(0);
+  });
+
+  it("disclosure: the task id goes to a verified submitter of a verified admission, never to an asserted one", async () => {
+    const alice = await newAgent();
+    const { worker } = await pricedWorker();
+    establishPair(alice.motebitId, worker.motebitId);
+
+    // Admitted by alice's own token: her later new-key refusal names the task.
+    const p1 = paidBy(alice);
+    const prompt1 = `918 disclose ${crypto.randomUUID()}`;
+    const a1 = await submit(
+      `/agent/${alice.motebitId}/task`,
+      crypto.randomUUID(),
+      await submitBearer(alice),
+      p2pBody(prompt1, alice.motebitId, worker.motebitId, p1),
+    );
+    expect(a1.status).toBe(201);
+    const t1 = ((await a1.json()) as { task_id: string }).task_id;
+    const again1 = await submit(
+      `/agent/${alice.motebitId}/task`,
+      crypto.randomUUID(),
+      await submitBearer(alice),
+      p2pBody(prompt1, alice.motebitId, worker.motebitId, p1),
+    );
+    expect(again1.status).toBe(409);
+    expect(((await again1.json()) as { task_id?: string }).task_id).toBe(t1);
+
+    // Admitted by the operator asserting alice: alice's own token is refused
+    // WITHOUT the id — the admission never proved who submitted it.
+    const p2 = paidBy(alice);
+    const prompt2 = `918 asserted ${crypto.randomUUID()}`;
+    const a2 = await submit(
+      `/agent/${alice.motebitId}/task`,
+      crypto.randomUUID(),
+      JSON_AUTH,
+      p2pBody(prompt2, alice.motebitId, worker.motebitId, p2),
+    );
+    expect(a2.status).toBe(201);
+    const t2 = ((await a2.json()) as { task_id: string }).task_id;
+    const again2 = await submit(
+      `/agent/${alice.motebitId}/task`,
+      crypto.randomUUID(),
+      await submitBearer(alice),
+      p2pBody(prompt2, alice.motebitId, worker.motebitId, p2),
+    );
+    expect(again2.status).toBe(409);
+    const raw = await again2.text();
+    expect((JSON.parse(raw) as { task_id?: string }).task_id).toBeUndefined();
+    expect(raw).not.toContain(t2);
+  });
+
+  it("mayDiscloseAdmittedTask: the operator is never inferred from an unset caller id", () => {
+    const verifiedClaim = { task_id: "t", submitted_by: "alice", submitter_verified: 1 as const };
+    const assertedClaim = { task_id: "t", submitted_by: "alice", submitter_verified: 0 as const };
+    // No caller id and no positive operator mark — e.g. a relay with no API
+    // token configured, where the submit route authenticates nobody.
+    expect(
+      mayDiscloseAdmittedTask(verifiedClaim, { operator: false, verifiedCaller: undefined }),
+    ).toBe(false);
+    expect(
+      mayDiscloseAdmittedTask(assertedClaim, { operator: false, verifiedCaller: undefined }),
+    ).toBe(false);
+    expect(mayDiscloseAdmittedTask(verifiedClaim, { operator: false, verifiedCaller: "" })).toBe(
+      false,
+    );
+    expect(
+      mayDiscloseAdmittedTask(verifiedClaim, { operator: true, verifiedCaller: undefined }),
+    ).toBe(true);
+    expect(
+      mayDiscloseAdmittedTask(verifiedClaim, { operator: false, verifiedCaller: "alice" }),
+    ).toBe(true);
+    expect(
+      mayDiscloseAdmittedTask(verifiedClaim, { operator: false, verifiedCaller: "mallory" }),
+    ).toBe(false);
+    expect(
+      mayDiscloseAdmittedTask(assertedClaim, { operator: false, verifiedCaller: "alice" }),
+    ).toBe(false);
+  });
+
+  it("paymentChainFromAdapter: the payer is the tx's `from`, compared exactly; RPC errors and throws are unavailable", async () => {
+    const tx = (
+      r: Awaited<ReturnType<SolanaRpcAdapter["getTransaction"]>>,
+    ): Pick<SolanaRpcAdapter, "getTransaction"> => ({ getTransaction: async () => r });
+    const confirmed = (from: string): Awaited<ReturnType<SolanaRpcAdapter["getTransaction"]>> => ({
+      status: "confirmed",
+      from,
+      transfers: [],
+      slot: 1,
+      asset: "USDC",
+    });
+    const payer = walletOf("11".repeat(32));
+    const other = walletOf("22".repeat(32));
+    const cands = new Set([payer]);
+    expect(await paymentChainFromAdapter(tx(confirmed(payer))).payerOf("h", cands)).toEqual({
+      status: "payer",
+    });
+    expect(await paymentChainFromAdapter(tx(confirmed(other))).payerOf("h", cands)).toEqual({
+      status: "not_payer",
+    });
+    expect(
+      await paymentChainFromAdapter(tx(confirmed(payer.toLowerCase()))).payerOf("h", cands),
+    ).toEqual({ status: "not_payer" });
+    expect(await paymentChainFromAdapter(tx({ status: "not_found" })).payerOf("h", cands)).toEqual({
+      status: "not_found",
+    });
+    expect(
+      await paymentChainFromAdapter(tx({ status: "rpc_error", reason: "x" })).payerOf("h", cands),
+    ).toEqual({ status: "unavailable", reason: "x" });
+    const throwing: Pick<SolanaRpcAdapter, "getTransaction"> = {
+      getTransaction: () => Promise.reject(new Error("boom")),
+    };
+    expect(await paymentChainFromAdapter(throwing).payerOf("h", cands)).toEqual({
+      status: "unavailable",
+      reason: "boom",
+    });
+  });
+
+  it("end to end through the production comparison: a stub RPC whose tx was paid by the victim admits the victim and refuses the stranger", async () => {
+    const payers = new Map<string, string>();
+    const rpc: Pick<SolanaRpcAdapter, "getTransaction"> = {
+      getTransaction: async (sig) => {
+        const from = payers.get(sig);
+        return from == null
+          ? { status: "not_found" }
+          : { status: "confirmed", from, transfers: [], slot: 1, asset: "USDC" };
+      },
+    };
+    await relay.close();
+    relay = await createTestRelay({ p2pPaymentChain: paymentChainFromAdapter(rpc) });
+    const victim = await newAgent();
+    const mallory = await newAgent();
+    const { worker, dispatched } = await pricedWorker();
+    establishPair(victim.motebitId, worker.motebitId);
+    establishPair(mallory.motebitId, worker.motebitId);
+    const proof = buildP2pPaymentProof(relay, {
+      workerAddress: WORKER_SOLANA_ADDR,
+      unitCostMicro: toMicro(0.5),
+    });
+    payers.set(proof.tx_hash, walletOf(victim.publicKeyHex));
+
+    const stolen = await submit(
+      `/agent/${mallory.motebitId}/task`,
+      crypto.randomUUID(),
+      await submitBearer(mallory),
+      p2pBody(`918 rpc-m ${crypto.randomUUID()}`, mallory.motebitId, worker.motebitId, proof),
+    );
+    expect(stolen.status).toBe(403);
+    const own = await submit(
+      `/agent/${victim.motebitId}/task`,
+      crypto.randomUUID(),
+      await submitBearer(victim),
+      p2pBody(`918 rpc-v ${crypto.randomUUID()}`, victim.motebitId, worker.motebitId, proof),
+    );
+    expect(own.status, await own.clone().text()).toBe(201);
+    expect(dispatched()).toBe(1);
   });
 });

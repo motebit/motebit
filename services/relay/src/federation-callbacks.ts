@@ -188,6 +188,8 @@ export function createFederationCallbacks(deps: FederationCallbackDeps) {
             proof.tx_hash,
             verified.taskId,
             federatedSubmitter,
+            // Asserted by the peer, never token-verified on this relay.
+            false,
           );
           if (binding.bound) {
             enqueue();

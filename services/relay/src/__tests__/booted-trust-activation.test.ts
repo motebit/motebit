@@ -73,7 +73,12 @@ import {
   bootRealEntry,
   killBootedEntry,
   type BootedEntry,
+  startFakeSolanaRpc,
+  type FakeSolanaRpc,
 } from "./booted-entry-harness.js";
+
+// The chain a booted relay reads a P2P proof's payer from (#918).
+let rpc: FakeSolanaRpc | null = null;
 
 const MASTER_TOKEN = "booted-trust-master-token";
 const WORKER_ADDR = "7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgHkv";
@@ -269,7 +274,9 @@ describe("booted entry — settlement→trust link (a settlement drives a persis
   let treasuryAddress: string;
 
   beforeAll(async () => {
+    rpc = await startFakeSolanaRpc();
     booted = await bootRealEntry(DIST_TIER, {
+      SOLANA_RPC_URL: rpc.url,
       MOTEBIT_API_TOKEN: MASTER_TOKEN,
       // Tests register workers on localhost — the local-development allowance.
       MOTEBIT_ALLOW_PRIVATE_ENDPOINTS: "1",
@@ -281,12 +288,14 @@ describe("booted entry — settlement→trust link (a settlement drives a persis
 
   afterAll(() => {
     killBootedEntry(booted);
+    void rpc?.close();
   });
 
   it("drives a persisted trust update for a real cross-party settlement (accrual-half)", async () => {
     // Fresh worker so the counters are unambiguous (one settlement → one).
     const worker = await provisionDevice(booted!.baseUrl);
     const delegator = await provisionDevice(booted!.baseUrl);
+    rpc!.setPayer(deriveSolanaAddress(delegator.publicKey));
     await registerWorker(booted!.baseUrl, worker);
     await settleCrossParty(booted!.baseUrl, worker, delegator.motebitId, treasuryAddress);
 
@@ -306,6 +315,7 @@ describe("booted entry — settlement→trust link (a settlement drives a persis
   it("moves no trust for a self-delegated settlement (self-dealing-half — anti-sybil)", async () => {
     // submitter === executor: the isSelfDelegation guard must skip trust.
     const agent = await provisionDevice(booted!.baseUrl);
+    rpc!.setPayer(deriveSolanaAddress(agent.publicKey));
     await settleSelfDelegated(booted!.baseUrl, agent);
 
     const records = await readTrust(booted!.baseUrl, agent.motebitId);

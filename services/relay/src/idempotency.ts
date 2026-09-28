@@ -276,12 +276,19 @@ export function p2pProofKey(txHash: string): string {
 export interface P2pProofClaim {
   task_id: string;
   submitted_by: string;
+  /**
+   * 1 when `submitted_by` was proven by the admitting request's signed token;
+   * 0 when it was asserted (the operator's body field, a peer's forward).
+   */
+  submitter_verified: 0 | 1;
 }
 
 /** The admitted claim on this proof, if any (#918). */
 export function findP2pProofClaim(db: DatabaseDriver, txHash: string): P2pProofClaim | undefined {
   return db
-    .prepare("SELECT task_id, submitted_by FROM relay_p2p_proof_claims WHERE tx_hash = ?")
+    .prepare(
+      "SELECT task_id, submitted_by, submitter_verified FROM relay_p2p_proof_claims WHERE tx_hash = ?",
+    )
     .get(p2pProofKey(txHash)) as P2pProofClaim | undefined;
 }
 
@@ -297,13 +304,15 @@ export function bindP2pProofToTask(
   txHash: string,
   taskId: string,
   submittedBy: string,
+  /** `submittedBy` was proven by the admitting request's signed token. */
+  submitterVerified: boolean,
 ): { bound: true } | { bound: false; existing: P2pProofClaim } {
   const key = p2pProofKey(txHash);
   const info = db
     .prepare(
-      "INSERT OR IGNORE INTO relay_p2p_proof_claims (tx_hash, task_id, submitted_by, claimed_at) VALUES (?, ?, ?, ?)",
+      "INSERT OR IGNORE INTO relay_p2p_proof_claims (tx_hash, task_id, submitted_by, submitter_verified, claimed_at) VALUES (?, ?, ?, ?, ?)",
     )
-    .run(key, taskId, submittedBy, Date.now());
+    .run(key, taskId, submittedBy, submitterVerified ? 1 : 0, Date.now());
   if (info.changes > 0) return { bound: true };
   const existing = findP2pProofClaim(db, key);
   if (existing == null) {

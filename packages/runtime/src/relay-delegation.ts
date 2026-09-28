@@ -139,9 +139,15 @@ export type DelegationErrorCode =
   /**
    * Post-payment (#885). The payment LANDED, and the relay's admission of
    * the task is UNCONFIRMED: every submission of that same proof ended in
-   * a network failure, a 5xx, a 409 (the relay still processing the same
-   * payment, or `TASK_P2P_PROOF_REPLAYED` — this proof already funded a
-   * task), or another answer that does not say the task was refused.
+   * a network failure, a 5xx (including 503 `TASK_P2P_PROOF_UNVERIFIED`,
+   * the relay unable to read the payer from the chain yet), a 409 (the
+   * relay still processing the same payment; `TASK_P2P_PROOF_REPLAYED` —
+   * this proof already settled a task; or `TASK_P2P_PROOF_ALREADY_ADMITTED`
+   * WITHOUT a `task_id` — the proof funds a task the relay will not name to
+   * this caller), or another answer that does not say the task was refused.
+   * A `TASK_P2P_PROOF_ALREADY_ADMITTED` that DOES carry a `task_id` never
+   * ends here: the relay names the task only to its verified submitter, so
+   * the client hands over to that task (records it, polls its result).
    * The relay may have admitted it — the answer never reached this device.
    * Same money facts and same ledger lock as `payment_not_admitted`; the
    * difference is only what can honestly be said about the task.
@@ -1040,10 +1046,27 @@ async function submitP2pOnce(params: SubmitP2pDelegationParams): Promise<SubmitA
       const retryAfter = resp.headers.get("Retry-After");
       const error = classifyRelayError(resp.status, text, retryAfter);
       let relayCode: string | undefined;
+      let boundTaskId: unknown;
       try {
-        relayCode = (JSON.parse(text) as { code?: string }).code;
+        const parsed = JSON.parse(text) as { code?: string; task_id?: unknown };
+        relayCode = parsed.code;
+        boundTaskId = parsed.task_id;
       } catch {
         relayCode = undefined;
+      }
+      // #918: this proof is already bound to an admitted task, and the relay
+      // names it — it does so only to the submitter whose verified token
+      // admitted it, or the operator. That task IS the one this payment
+      // funds (e.g. it was admitted under a key this device no longer
+      // replays), so hand over to it: record it and poll its result, never
+      // end "unconfirmed" on a task the relay has just told us about.
+      if (
+        resp.status === 409 &&
+        relayCode === "TASK_P2P_PROOF_ALREADY_ADMITTED" &&
+        typeof boundTaskId === "string" &&
+        boundTaskId.length > 0
+      ) {
+        return { kind: "accepted", taskId: boundTaskId };
       }
       return {
         kind: "failed",

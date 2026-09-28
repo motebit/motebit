@@ -114,6 +114,118 @@ export function bootRealEntry(
   });
 }
 
+/**
+ * A fake Solana JSON-RPC endpoint for a booted entry (#918). A booted relay
+ * reads the payer of every P2P proof from `SOLANA_RPC_URL` and refuses P2P
+ * when it cannot, so a booted P2P test points the entry here and names the
+ * payer once its delegator exists (`setPayer`). `getTransaction` answers every
+ * signature as a landed USDC transfer whose single payer is that address;
+ * every other method is a JSON-RPC error (the entry's anchoring loops log it).
+ */
+export interface FakeSolanaRpc {
+  url: string;
+  setPayer(address: string): void;
+  getTransactionCalls(): number;
+  close(): Promise<void>;
+}
+
+export async function startFakeSolanaRpc(): Promise<FakeSolanaRpc> {
+  const { createServer } = await import("node:http");
+  const { USDC_MINT_MAINNET } = await import("@motebit/wallet-solana");
+  let payer = "11111111111111111111111111111111";
+  let calls = 0;
+  const amount = (a: string) => ({
+    amount: a,
+    decimals: 6,
+    uiAmount: Number(a) / 1e6,
+    uiAmountString: String(Number(a) / 1e6),
+  });
+  const server = createServer((req, res) => {
+    let raw = "";
+    req.on("data", (c: Buffer) => (raw += c.toString()));
+    req.on("end", () => {
+      const msg = JSON.parse(raw) as { id: unknown; method: string; params?: unknown[] };
+      let body: unknown;
+      if (msg.method === "getTransaction") {
+        calls++;
+        const first = msg.params?.[0];
+        const sig = typeof first === "string" ? first : "";
+        const recipient = "So11111111111111111111111111111111111111112";
+        body = {
+          jsonrpc: "2.0",
+          id: msg.id,
+          result: {
+            slot: 1,
+            blockTime: null,
+            version: 0,
+            meta: {
+              err: null,
+              fee: 5000,
+              preBalances: [],
+              postBalances: [],
+              preTokenBalances: [
+                {
+                  accountIndex: 1,
+                  mint: USDC_MINT_MAINNET,
+                  owner: payer,
+                  uiTokenAmount: amount("10000000"),
+                },
+                {
+                  accountIndex: 2,
+                  mint: USDC_MINT_MAINNET,
+                  owner: recipient,
+                  uiTokenAmount: amount("0"),
+                },
+              ],
+              postTokenBalances: [
+                {
+                  accountIndex: 1,
+                  mint: USDC_MINT_MAINNET,
+                  owner: payer,
+                  uiTokenAmount: amount("9000000"),
+                },
+                {
+                  accountIndex: 2,
+                  mint: USDC_MINT_MAINNET,
+                  owner: recipient,
+                  uiTokenAmount: amount("1000000"),
+                },
+              ],
+            },
+            transaction: {
+              signatures: [sig],
+              message: {
+                accountKeys: [],
+                header: {
+                  numRequiredSignatures: 1,
+                  numReadonlySignedAccounts: 0,
+                  numReadonlyUnsignedAccounts: 0,
+                },
+                instructions: [],
+                recentBlockhash: "11111111111111111111111111111111",
+              },
+            },
+          },
+        };
+      } else {
+        body = { jsonrpc: "2.0", id: msg.id, error: { code: -32601, message: "fake rpc" } };
+      }
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.end(JSON.stringify(body));
+    });
+  });
+  await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+  const addr = server.address() as { port: number };
+  return {
+    url: `http://127.0.0.1:${addr.port}`,
+    setPayer: (a) => {
+      payer = a;
+    },
+    getTransactionCalls: () => calls,
+    close: () => new Promise<void>((r) => server.close(() => r())),
+  };
+}
+
 /** SIGTERM with a SIGKILL backstop — standard afterAll teardown. */
 export function killBootedEntry(booted: BootedEntry | null): void {
   if (booted != null) {

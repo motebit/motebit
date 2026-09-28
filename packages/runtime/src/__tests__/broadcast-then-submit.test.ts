@@ -64,7 +64,8 @@ const json = (status: number, body: unknown): Response =>
 // receipt answers "answer to: <prompt>".
 // ---------------------------------------------------------------------------
 
-type SubmitAnswer = "201" | "503" | "throw" | "400" | "409" | "409replayed" | "409admitted";
+type SubmitAnswer =
+  "201" | "503" | "throw" | "400" | "409" | "409replayed" | "409admitted" | "409admittedMine";
 
 interface RelayStub {
   submits: Array<{ txHash: string; prompt: string }>;
@@ -119,6 +120,15 @@ function relay(script: SubmitAnswer[] = ["201"]): RelayStub {
         return json(409, {
           code: "TASK_P2P_PROOF_ALREADY_ADMITTED",
           error: "This payment proof is already bound to an admitted task",
+        });
+      }
+      if (answer === "409admittedMine") {
+        // #918: the relay names the bound task only to its verified submitter.
+        prompts.set("task-918", body.prompt);
+        return json(409, {
+          code: "TASK_P2P_PROOF_ALREADY_ADMITTED",
+          error: "This payment proof (tx_hash) already funds task task-918",
+          task_id: "task-918",
         });
       }
       if (answer === "400") {
@@ -820,6 +830,20 @@ describe("#885 round 3", () => {
     if (!res.ok) expect(res.error.code).toBe("payment_admission_unconfirmed");
     expect(stub.submits).toHaveLength(1);
     expect(ledger.outstandingCount).toBe(1);
+  });
+});
+
+describe("#918 — a proof already admitted, named to its own submitter", () => {
+  it("a 409 TASK_P2P_PROOF_ALREADY_ADMITTED carrying task_id hands over to that task: delivered, submitted once, ledger clean", async () => {
+    const stub = relay(["409admittedMine"]);
+    const pay = railFor(new Chain(["ok"]));
+    const ledger = new PaidIntentLedger(new InMemoryPaidIntentStore(), ME);
+    const res = await hire(ledger, pay, "handover");
+    expect(res.ok, JSON.stringify(res)).toBe(true);
+    expect(JSON.stringify(res)).toContain("task-918");
+    expect(stub.submits).toHaveLength(1);
+    expect(pay.build).toHaveBeenCalledTimes(1);
+    expect(ledger.outstanding()).toEqual([]);
   });
 });
 

@@ -24,7 +24,7 @@ import {
 } from "@motebit/encryption";
 import type { KeyPair, VerifiableCredential } from "@motebit/encryption";
 import type { MotebitId, DeviceId, ReputationCredentialSubject } from "@motebit/sdk";
-import { buildP2pPaymentProof } from "./test-helpers.js";
+import { buildP2pPaymentProof, HONEST_PAYMENT_CHAIN } from "./test-helpers.js";
 
 // Paid direct delegation settles P2P (Arc 3.5). Workers declare this
 // settlement address; delegators submit a matching payment_proof.
@@ -103,6 +103,7 @@ describe("Peer Credential E2E — Delegation Loop", () => {
   beforeAll(async () => {
     // Relay with credential issuance DISABLED — proves peer credentials work independently
     relay = await createSyncRelay({
+      p2pPaymentChain: HONEST_PAYMENT_CHAIN,
       allowPrivateEndpoints: true,
       dbPath: ":memory:",
       apiToken: MASTER_TOKEN,
@@ -370,6 +371,7 @@ describe("Peer Credential E2E — Cross-Relay Portability", () => {
   beforeAll(async () => {
     // Two independent relays — no federation, no shared state
     relayA = await createSyncRelay({
+      p2pPaymentChain: HONEST_PAYMENT_CHAIN,
       allowPrivateEndpoints: true,
       dbPath: ":memory:",
       apiToken: "relay-a-token",
@@ -381,6 +383,7 @@ describe("Peer Credential E2E — Cross-Relay Portability", () => {
       },
     });
     relayB = await createSyncRelay({
+      p2pPaymentChain: HONEST_PAYMENT_CHAIN,
       allowPrivateEndpoints: true,
       dbPath: ":memory:",
       apiToken: "relay-b-token",
@@ -527,6 +530,7 @@ describe("Peer Credential E2E — Cross-Relay Portability", () => {
   it("peer-issued credentials influence relay routing scores", async () => {
     // Create a relay with credential issuance ENABLED so credentials land in relay_credentials
     const routingRelay = await createSyncRelay({
+      p2pPaymentChain: HONEST_PAYMENT_CHAIN,
       allowPrivateEndpoints: true,
       dbPath: ":memory:",
       apiToken: "routing-test-token",
