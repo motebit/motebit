@@ -424,6 +424,18 @@ export type StreamChunk =
       prior_settled_this_turn?: number;
     }
   | { type: "injection_warning"; tool_name: string; patterns: string[] }
+  | {
+      /**
+       * #885: a paid hire's wallet sent a payment no relay task accounts
+       * for, or a payment owed could not be written to the local record.
+       * A money warning the OWNER must see — surfaces render it as a system
+       * message, never only as model-visible tool text.
+       */
+      type: "payment_notice";
+      notice: string;
+      extra_payments?: Array<{ tx_hash: string; status: "landed" | "unconfirmed" }>;
+      ledger_write_failed?: true;
+    }
   | { type: "approval_expired"; tool_name: string }
   | {
       /**

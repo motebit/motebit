@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import type { MotebitRuntime, StreamChunk } from "@motebit/runtime";
+import { paymentNoticeCopy } from "@motebit/runtime";
 import type {
   SqliteGoalStore,
   SqliteApprovalStore,
@@ -1097,6 +1098,12 @@ export class GoalScheduler {
 
           return { suspended: true, toolCallsMade, memoriesFormed, responseText };
         }
+
+        case "payment_notice":
+          // #885: a goal run's hire sent another payment, or a payment could
+          // not be recorded — the owner reads it in the goal log.
+          warnLine(`\n  [warning] ${paymentNoticeCopy(chunk)}`);
+          break;
 
         case "injection_warning":
           warnLine(`\n  [warning] suspicious content in ${chunk.tool_name}`);

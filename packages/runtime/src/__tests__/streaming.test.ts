@@ -3840,3 +3840,51 @@ describe("resumeAfterApproval — closes the gate's audit row for the approved c
     expect(row!.result?.ok).toBe(true);
   });
 });
+
+// === #885: a money warning reaches the OWNER as a typed chunk ===
+//
+// A delegate_to_agent call whose wallet also sent another payment (or whose
+// payment record could not be written) stashes a notice; the stream emits it
+// as `payment_notice` right after that call — never only as tool text the
+// model may or may not relay.
+
+describe("delegate_to_agent payment notice (#885)", () => {
+  it("emits the stashed notice as a payment_notice chunk after the call", async () => {
+    const runtime = new MotebitRuntime(
+      { motebitId: "notice-test", tickRateHz: 0 },
+      createAdapters(createMockProvider()),
+    );
+    const manager = (
+      runtime as unknown as {
+        interactiveDelegation: { paymentNotices: Array<Record<string, unknown>> };
+      }
+    ).interactiveDelegation;
+    mockRunTurnStreaming.mockReturnValueOnce(
+      (async function* () {
+        yield {
+          type: "tool_status" as const,
+          name: "delegate_to_agent",
+          status: "calling" as const,
+        };
+        manager.paymentNotices.push({
+          type: "payment_notice",
+          notice: "This hire's wallet ALSO sent another payment (tx sigA, landed)",
+          extra_payments: [{ tx_hash: "sigA", status: "landed" }],
+        });
+        yield {
+          type: "tool_status" as const,
+          name: "delegate_to_agent",
+          status: "done" as const,
+          result: "ok",
+        };
+        yield { type: "result" as const, result: makeTurnResult() };
+      })(),
+    );
+    const chunks = await collectChunks(runtime.sendMessageStreaming("hire"));
+    const notice = chunks.find((c) => c.type === "payment_notice") as
+      { notice: string; extra_payments?: Array<{ tx_hash: string }> } | undefined;
+    expect(notice?.notice).toContain("sigA");
+    expect(notice?.extra_payments?.[0]?.tx_hash).toBe("sigA");
+    expect(manager.paymentNotices).toHaveLength(0); // drained, never repeated
+  });
+});

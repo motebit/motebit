@@ -261,6 +261,8 @@ export interface DelegationError {
   extraPayments?: Array<{ txHash: string; status: "landed" | "unconfirmed" }>;
   /** #885: a payment owed could not be written durably — held in memory only. */
   ledgerWriteFailed?: true;
+  /** #885: the human-readable statement of the two fields above. */
+  notice?: string;
 }
 
 /**
@@ -2222,6 +2224,54 @@ export async function resolveAndSubmitP2pDelegation(
 }
 
 /**
+ * The `payment_notice` stream chunk for a result that carries a money
+ * warning (#885), or null. One builder for every door that streams.
+ */
+export function paymentNoticeChunk(result: DelegationResult): {
+  type: "payment_notice";
+  notice: string;
+  extra_payments?: Array<{ tx_hash: string; status: "landed" | "unconfirmed" }>;
+  ledger_write_failed?: true;
+} | null {
+  const src = result.ok ? result.settlement : result.error;
+  if (src?.notice == null || src.notice === "") return null;
+  return {
+    type: "payment_notice",
+    notice: src.notice,
+    ...(src.extraPayments != null
+      ? { extra_payments: src.extraPayments.map((x) => ({ tx_hash: x.txHash, status: x.status })) }
+      : {}),
+    ...(src.ledgerWriteFailed === true ? { ledger_write_failed: true as const } : {}),
+  };
+}
+
+/**
+ * The owner-facing line for a `payment_notice` chunk (#885) — one short
+ * system message, shared by every surface so the copy cannot drift.
+ */
+export function paymentNoticeCopy(chunk: {
+  notice: string;
+  extra_payments?: ReadonlyArray<{ tx_hash: string; status: "landed" | "unconfirmed" }>;
+  ledger_write_failed?: true;
+}): string {
+  const parts: string[] = [];
+  const extras = chunk.extra_payments ?? [];
+  if (extras.length > 0) {
+    const txs = extras.map((x) => `${x.tx_hash.slice(0, 8)}…`).join(", ");
+    parts.push(
+      `Your wallet also sent ${extras.length === 1 ? "another payment" : `${extras.length} other payments`} ` +
+        `(tx ${txs}) that no task accounts for. Check your wallet before hiring again.`,
+    );
+  }
+  if (chunk.ledger_write_failed === true) {
+    parts.push(
+      "A payment couldn't be saved to this device's record — reconcile it before restarting.",
+    );
+  }
+  return parts.length > 0 ? parts.join(" ") : chunk.notice;
+}
+
+/**
  * Appended to a result's message when a payment owed could not be written
  * to the durable ledger (#885 round 3): the lock is held in memory for this
  * process only, so the owner must reconcile before restarting.
@@ -2295,6 +2345,7 @@ function withExtraPayments(
     error: {
       ...result.error,
       message: `${result.error.message}${extraNote}${durable ? "" : NOT_DURABLE_NOTE}`,
+      notice: `${extraNote}${durable ? "" : NOT_DURABLE_NOTE}`.trim(),
       ...(extras.length > 0 ? { extraPayments: [...extras] } : {}),
       ...(durable ? {} : { ledgerWriteFailed: true as const }),
     },

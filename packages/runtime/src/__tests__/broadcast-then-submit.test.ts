@@ -806,8 +806,8 @@ describe("#885 — a payment with no confirmed relay task is answered locally", 
 // ---------------------------------------------------------------------------
 
 describe("#885 composition — the runtime wires the rail's own-transaction confirmer", () => {
-  function lostSendRuntime() {
-    const chain = new Chain(["lost"]);
+  function lostSendRuntime(script: Behaviour[] = ["lost"]) {
+    const chain = new Chain(script);
     const rail = new SolanaWalletRail(chain.adapter());
     const runtime = new MotebitRuntime(
       { motebitId: ME, tickRateHz: 0, solanaWallet: rail },
@@ -859,5 +859,53 @@ describe("#885 composition — the runtime wires the rail's own-transaction conf
     expect(result.ok).toBe(true);
     expect(chain.sigs).toHaveLength(1);
     expect(r.submits.map((s) => s.txHash)).toEqual([chain.sigs[0]]);
+  });
+
+  it("invokeCapability: an extra landed payment reaches the owner as a payment_notice chunk", async () => {
+    relay();
+    const { runtime, chain } = lostSendRuntime(["resignBothLand"]);
+    runtime.enableInvokeCapability({
+      syncUrl: RELAY,
+      authToken: async () => "t",
+      relayPublicKey: PINNED_HEX,
+    });
+    vi.useFakeTimers();
+    const chunks: Array<{ type: string; notice?: string }> = [];
+    const run = (async () => {
+      for await (const c of runtime.invokeCapability("web_search", "research X", {
+        acknowledgeNoHistoryRisk: true,
+      })) {
+        chunks.push(c as { type: string; notice?: string });
+      }
+    })();
+    await vi.advanceTimersByTimeAsync(10_000);
+    await run;
+    const notice = chunks.find((c) => c.type === "payment_notice");
+    expect(notice?.notice).toContain(`tx ${chain.sigs[0]}`);
+  });
+
+  it("delegate_to_agent: an extra landed payment is stashed for the stream (payment_notice)", async () => {
+    relay();
+    const { runtime, chain } = lostSendRuntime(["resignBothLand"]);
+    runtime.enableInteractiveDelegation({
+      syncUrl: RELAY,
+      authToken: async () => "t",
+      relayPublicKey: PINNED_HEX,
+      acknowledgeNoHistoryRisk: true,
+    });
+    vi.useFakeTimers();
+    const pending = runtime.getToolRegistry().execute("delegate_to_agent", {
+      prompt: "research X",
+      required_capabilities: ["web_search"],
+    });
+    await vi.advanceTimersByTimeAsync(10_000);
+    await pending;
+    const notices = (
+      runtime as unknown as {
+        interactiveDelegation: { drainPaymentNotices(): Array<{ notice: string }> };
+      }
+    ).interactiveDelegation.drainPaymentNotices();
+    expect(notices).toHaveLength(1);
+    expect(notices[0]!.notice).toContain(`tx ${chain.sigs[0]}`);
   });
 });

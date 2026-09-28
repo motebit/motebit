@@ -17,6 +17,7 @@ import type { TokenAudience } from "@motebit/protocol";
 import type { StreamChunk } from "./runtime-config.js";
 import {
   selectAndRunDelegation,
+  paymentNoticeChunk,
   type ConfirmP2pPayment,
   type BuildP2pPayment,
   type DelegationError,
@@ -163,7 +164,10 @@ export class InvokeCapabilityManager {
       options.targetWorkerId,
     );
 
+    // #885: a money warning is the owner's, whatever the outcome.
+    const notice = paymentNoticeChunk(result);
     if (!result.ok) {
+      if (notice != null) yield notice;
       yield { type: "invoke_error", ...result.error };
       return;
     }
@@ -191,9 +195,7 @@ export class InvokeCapabilityManager {
     }
     // #885: another transaction from this hire may have moved money, or the
     // payment record could not be written — shown, never only logged.
-    if (result.settlement?.notice != null) {
-      yield { type: "text", text: `\n\n${result.settlement.notice}` };
-    }
+    if (notice != null) yield notice;
 
     yield {
       type: "delegation_complete",

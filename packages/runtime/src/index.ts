@@ -325,6 +325,7 @@ export {
   submitP2pDelegation,
   retrieveDelegationResult,
   p2pPaymentConfirmerOf,
+  paymentNoticeCopy,
 } from "./relay-delegation.js";
 export type {
   ConfirmP2pPayment,

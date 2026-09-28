@@ -10,6 +10,7 @@ import type { ExecutionReceipt, ToolRegistry } from "@motebit/sdk";
 import type { TokenAudience } from "@motebit/protocol";
 
 import {
+  paymentNoticeChunk,
   retrieveDelegationResult,
   selectAndRunDelegation,
   type ConfirmP2pPayment,
@@ -212,6 +213,15 @@ export function renderTaskRetrieval(
 
 export class InteractiveDelegationManager {
   private receipts: ExecutionReceipt[] = [];
+  /** #885: money warnings from delegate_to_agent calls, drained by the stream. */
+  private paymentNotices: Array<NonNullable<ReturnType<typeof paymentNoticeChunk>>> = [];
+
+  /** Take the pending payment notices (the streaming layer emits them). */
+  drainPaymentNotices(): Array<NonNullable<ReturnType<typeof paymentNoticeChunk>>> {
+    const out = this.paymentNotices;
+    this.paymentNotices = [];
+    return out;
+  }
 
   constructor(private readonly deps: InteractiveDelegationDeps) {}
 
@@ -400,6 +410,11 @@ export class InteractiveDelegationManager {
             routeDegrade.current = degrade;
           },
         });
+        // #885: a money warning reaches the OWNER as a typed stream chunk
+        // (drained by the streaming layer after this call), not only the
+        // model through the tool text below.
+        const notice = paymentNoticeChunk(result);
+        if (notice != null) this.paymentNotices.push(notice);
 
         if (!result.ok) {
           // A failure AFTER the onchain payment settled is categorically

@@ -1449,6 +1449,7 @@ export class MotebitRuntime {
         count: () => this.interactiveDelegation.stashedReceiptCount,
         peekSince: (n) => this.interactiveDelegation.peekReceiptsSince(n),
       },
+      drainPaymentNotices: () => this.interactiveDelegation.drainPaymentNotices(),
       redactText: (text) => {
         if (typeof this.policy.redact === "function") {
           return this.policy.redact(text);

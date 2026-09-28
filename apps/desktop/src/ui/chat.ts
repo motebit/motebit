@@ -1,5 +1,6 @@
 import { stripPartialActionTag } from "@motebit/ai-core";
 import type { RelayConfig } from "@motebit/runtime";
+import { paymentNoticeCopy } from "@motebit/runtime";
 import { buildReceiptArtifact } from "@motebit/render-engine";
 import { resolveAccrualAttribution } from "@motebit/panels";
 import type { ExecutionReceipt, AccrualBasis } from "@motebit/sdk";
@@ -444,6 +445,9 @@ async function consumeApproval(ctx: DesktopContext, approved: boolean): Promise<
         if (chunk.full_receipt) capturedReceipt = chunk.full_receipt;
       } else if (chunk.type === "approval_request") {
         showApprovalCard(ctx, chunk.name, chunk.args, chunk.risk_level, chunk.quorum);
+      } else if (chunk.type === "payment_notice") {
+        // #885: a money warning — the owner's, as a system message.
+        addMessage("system", paymentNoticeCopy(chunk));
       } else if (chunk.type === "injection_warning") {
         addMessage("system", `Warning: suspicious content detected in ${chunk.tool_name} results`);
       }
@@ -543,6 +547,9 @@ async function consumeGoalApproval(ctx: DesktopContext, approved: boolean): Prom
         }
       } else if (chunk.type === "approval_request") {
         showApprovalCard(ctx, chunk.name, chunk.args, chunk.risk_level, chunk.quorum);
+      } else if (chunk.type === "payment_notice") {
+        // #885: a money warning — the owner's, as a system message.
+        addMessage("system", paymentNoticeCopy(chunk));
       } else if (chunk.type === "injection_warning") {
         addMessage("system", `Warning: suspicious content detected in ${chunk.tool_name} results`);
       }
@@ -1232,6 +1239,10 @@ export function initChat(ctx: DesktopContext, callbacks: ChatCallbacks): ChatAPI
         } else if (chunk.type === "approval_request") {
           removeThinkingIndicator(thinkingEl);
           showApprovalCard(ctx, chunk.name, chunk.args, chunk.risk_level, chunk.quorum);
+        } else if (chunk.type === "payment_notice") {
+          // #885: a hire's wallet sent another payment, or a payment could
+          // not be recorded — the owner must see it, not only the model.
+          addMessage("system", paymentNoticeCopy(chunk));
         } else if (chunk.type === "injection_warning") {
           addMessage(
             "system",

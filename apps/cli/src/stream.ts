@@ -1,6 +1,7 @@
 // --- Streaming consumer and approval flow ---
 
 import type { MotebitRuntime, StreamChunk } from "@motebit/runtime";
+import { paymentNoticeCopy } from "@motebit/runtime";
 import { action, meta, warn, dim, prompt as promptColor } from "./colors.js";
 import { writeOutput, writeLine, writeGap, askQuestion } from "./terminal.js";
 import { startStatus, type StatusHandle } from "./statusline.js";
@@ -167,6 +168,13 @@ export async function consumeStream(
               lastCompletedReceiptResult = chunk.full_receipt.result;
             }
           }
+          break;
+
+        case "payment_notice":
+          // #885: a hire's wallet sent another payment, or a payment could
+          // not be recorded — the owner must see it, not only the model.
+          stopStatus();
+          writeLine(`  ${warn("⚠")} ${warn(paymentNoticeCopy(chunk))}`);
           break;
 
         case "injection_warning":

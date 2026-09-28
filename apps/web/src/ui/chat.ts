@@ -3,6 +3,7 @@ import { hasCeilingBeenShown, markCeilingShown } from "../storage";
 import { StreamingTTSQueue, WebSpeechTTSProvider } from "@motebit/voice";
 import type { TTSProvider } from "@motebit/voice";
 import { stripInternalTags } from "@motebit/ai-core";
+import { paymentNoticeCopy } from "@motebit/runtime";
 import type { ExecutionReceipt, AccrualBasis } from "@motebit/sdk";
 import { buildReceiptArtifact } from "@motebit/render-engine";
 import { resolveAccrualAttribution } from "@motebit/panels";
@@ -973,10 +974,20 @@ export function initChat(ctx: WebContext, callbacks: ChatCallbacks): ChatAPI {
                 if (resumeChunk.status === "calling")
                   showToolStatus(resumeChunk.name, resumeChunk.context);
                 else if (resumeChunk.status === "done") completeToolStatus(resumeChunk.name);
+              } else if (resumeChunk.type === "payment_notice") {
+                // #885: a money warning — the owner's, as a system message.
+                addMessage("system", paymentNoticeCopy(resumeChunk));
               } else if (resumeChunk.type === "result") {
                 streamingTTS.flush();
               }
             }
+            break;
+          }
+
+          case "payment_notice": {
+            // #885: a hire's wallet sent another payment, or a payment could
+            // not be recorded — the owner must see it, not only the model.
+            addMessage("system", paymentNoticeCopy(chunk));
             break;
           }
 
@@ -1308,6 +1319,11 @@ export function initChat(ctx: WebContext, callbacks: ChatCallbacks): ChatAPI {
           case "delegation_complete": {
             if (chunk.full_receipt) capturedReceipt = chunk.full_receipt;
             completeToolStatus("invoke_capability");
+            break;
+          }
+          case "payment_notice": {
+            // #885: a money warning on the user-tap path — a system message.
+            addMessage("system", paymentNoticeCopy(chunk));
             break;
           }
           case "invoke_error": {

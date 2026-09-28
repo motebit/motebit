@@ -241,3 +241,26 @@ describe("consumeStream — thinking-status row during model latency (#480)", ()
     expect(starts).toBe(stops);
   });
 });
+
+describe("consumeStream — payment_notice reaches the owner (#885)", () => {
+  beforeEach(() => {
+    events.length = 0;
+  });
+
+  it("writes the owner-facing warning line for a payment_notice chunk", async () => {
+    await consumeStream(
+      chunks(
+        {
+          type: "payment_notice",
+          notice: "This hire's wallet ALSO sent another payment (tx sigAAAAAAAAAAAA, landed)",
+          extra_payments: [{ tx_hash: "sigAAAAAAAAAAAA", status: "landed" }],
+        } as unknown as StreamChunk,
+        resultChunk,
+      ),
+      runtime,
+    );
+    expect(
+      events.some(([k, v]) => k === "line" && v.includes("Your wallet also sent another payment")),
+    ).toBe(true);
+  });
+});

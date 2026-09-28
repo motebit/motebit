@@ -2,6 +2,8 @@
 "@motebit/runtime": minor
 "@motebit/wallet-solana": minor
 "@motebit/web": patch
+"@motebit/desktop": patch
+"@motebit/mobile": patch
 ---
 
 A payment that may have left the wallet is never followed by a fresh broadcast for the same intent, and a hire's payment is always its own transaction (#885).
@@ -19,4 +21,6 @@ A payment that may have left the wallet is never followed by a fresh broadcast f
   - A 409 `TASK_P2P_PROOF_REPLAYED` ends as `payment_admission_unconfirmed` (the proof already funded a task), never "refused".
   - `retrieveDelegationResult` answers `p2p-payment:` / `p2p-unconfirmed:` ids locally (`not_admitted`) — the relay has no read by payment.
   - The confirmer is wired on the loop, invokeCapability, granted and CLI paths; `BuildP2pPayment`, `P2pBroadcastHooks`, `SignedP2pTransaction`, `ConfirmP2pPayment`, `p2pPaymentConfirmerOf` exported.
+- `@motebit/runtime`: new `payment_notice` stream chunk. `invokeCapability` yields it (success and failure); a `delegate_to_agent` call stashes it and the stream emits it right after the call (chat and post-approval paths). `paymentNoticeCopy` is the one owner-facing sentence every surface renders.
+- `@motebit/web`, `@motebit/desktop`, `@motebit/mobile`: render `payment_notice` as a system message on every chat stream (turn, post-approval resume, and the web chip invocation).
 - `@motebit/web`: copy for `payment_status_unknown`, `payment_not_admitted` and `payment_admission_unconfirmed` — each says not to hire again.
