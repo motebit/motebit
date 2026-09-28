@@ -122,6 +122,16 @@ export interface OutgoingTransferQuery {
   sinceMs: number;
   /** Signatures the caller already accounts for (its own earlier payments). */
   excludeSignatures?: readonly string[];
+  /**
+   * The other legs of an atomic MULTI-LEG payment (#885 — the P2P worker leg
+   * plus its relay-fee leg[s], one transaction). When set, a transaction
+   * matches only if it carries the primary leg (`toAddress`/`microAmount`),
+   * every one of these legs at its exact amount, and NO other outgoing leg:
+   * the exact transfer set `buildP2pPaymentProof` broadcasts. A worker-only
+   * transfer of the same amount (an unrelated single-leg payment) is never
+   * mistaken for the P2P payment.
+   */
+  alsoLegs?: ReadonlyArray<{ toAddress: string; microAmount: bigint }>;
 }
 
 /**

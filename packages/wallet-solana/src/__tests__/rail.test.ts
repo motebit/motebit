@@ -527,3 +527,118 @@ describe("SolanaWalletRail.confirmSend", () => {
     ).resolves.toMatchObject({ status: "pending" });
   });
 });
+
+// ── #885: confirmP2pPayment — the multi-leg sibling of confirmSend ──
+
+describe("SolanaWalletRail.confirmP2pPayment", () => {
+  const request = {
+    workerAddress: "Worker111",
+    amountMicro: 250_000,
+    treasuryAddress: "Treasury111",
+    feeAmountMicro: 12_500,
+  };
+  const base = {
+    request,
+    sentAtMs: 1_000,
+    failedAtMs: 2_000,
+    error: new Error("P2P payment broadcast failed (legs: confirmation timed out)"),
+  };
+
+  it("a landed atomic payment ⇒ landed with the proof for THAT tx; every leg is queried", async () => {
+    const find = vi.fn().mockResolvedValue({ status: "found", signature: "sigP2P" });
+    const rail = new SolanaWalletRail(makeAdapter({ findOutgoingTransfer: find }), {
+      now: () => 2_500,
+    });
+    await expect(rail.confirmP2pPayment({ ...base, excludeSignatures: ["old"] })).resolves.toEqual({
+      status: "landed",
+      proof: {
+        tx_hash: "sigP2P",
+        chain: "solana",
+        network: "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
+        to_address: "Worker111",
+        amount_micro: 250_000,
+        fee_to_address: "Treasury111",
+        fee_amount_micro: 12_500,
+      },
+    });
+    expect(find).toHaveBeenCalledWith({
+      toAddress: "Worker111",
+      microAmount: 250_000n,
+      alsoLegs: [{ toAddress: "Treasury111", microAmount: 12_500n }],
+      sinceMs: 1_000,
+      excludeSignatures: ["old"],
+    });
+  });
+
+  it("a federated request queries the executor leg too, and the proof carries it", async () => {
+    const find = vi.fn().mockResolvedValue({ status: "found", signature: "fedSig" });
+    const rail = new SolanaWalletRail(makeAdapter({ findOutgoingTransfer: find }));
+    const v = await rail.confirmP2pPayment({
+      ...base,
+      request: { ...request, executorTreasuryAddress: "ExecB111", executorFeeAmountMicro: 7_500 },
+    });
+    expect(find.mock.calls[0]?.[0]).toMatchObject({
+      alsoLegs: [
+        { toAddress: "Treasury111", microAmount: 12_500n },
+        { toAddress: "ExecB111", microAmount: 7_500n },
+      ],
+    });
+    expect(v).toMatchObject({
+      status: "landed",
+      proof: { b_fee_to_address: "ExecB111", b_fee_amount_micro: 7_500 },
+    });
+  });
+
+  it("no match inside the landing horizon ⇒ pending; after it ⇒ absent", async () => {
+    const find = vi.fn().mockResolvedValue({ status: "not_found" });
+    const early = new SolanaWalletRail(makeAdapter({ findOutgoingTransfer: find }), {
+      now: () => 2_000 + SOLANA_TX_LANDING_HORIZON_MS - 1,
+    });
+    await expect(early.confirmP2pPayment(base)).resolves.toEqual({
+      status: "pending",
+      recheckAtMs: 2_000 + SOLANA_TX_LANDING_HORIZON_MS,
+    });
+    const late = new SolanaWalletRail(makeAdapter({ findOutgoingTransfer: find }), {
+      now: () => 2_000 + SOLANA_TX_LANDING_HORIZON_MS,
+    });
+    await expect(late.confirmP2pPayment(base)).resolves.toEqual({ status: "absent" });
+  });
+
+  it.each([
+    [{ status: "ambiguous", signatures: ["a", "b"] }, /2 matching payments/],
+    [{ status: "rpc_error", reason: "ECONNRESET" }, /ECONNRESET/],
+  ])("an undecidable lookup (%o) ⇒ unknown, never absent", async (lookup, reason) => {
+    const rail = new SolanaWalletRail(
+      makeAdapter({ findOutgoingTransfer: vi.fn().mockResolvedValue(lookup) }),
+      { now: () => Number.MAX_SAFE_INTEGER },
+    );
+    const v = await rail.confirmP2pPayment(base);
+    expect(v.status).toBe("unknown");
+    expect(v.status === "unknown" ? v.reason : "").toMatch(reason);
+  });
+
+  it("an adapter without the lookup ⇒ unknown (fail-closed)", async () => {
+    const rail = new SolanaWalletRail(makeAdapter(), { now: () => Number.MAX_SAFE_INTEGER });
+    await expect(rail.confirmP2pPayment(base)).resolves.toMatchObject({ status: "unknown" });
+  });
+
+  it("InsufficientUsdcBalanceError is thrown only before signing ⇒ absent without a lookup", async () => {
+    const find = vi.fn();
+    const rail = new SolanaWalletRail(makeAdapter({ findOutgoingTransfer: find }));
+    await expect(
+      rail.confirmP2pPayment({ ...base, error: new InsufficientUsdcBalanceError(0n, 262_500n) }),
+    ).resolves.toEqual({ status: "absent" });
+    expect(find).not.toHaveBeenCalled();
+  });
+
+  it("a half-specified executor leg ⇒ unknown, never a lookup read as absence", async () => {
+    const find = vi.fn().mockResolvedValue({ status: "not_found" });
+    const rail = new SolanaWalletRail(makeAdapter({ findOutgoingTransfer: find }), {
+      now: () => Number.MAX_SAFE_INTEGER,
+    });
+    await expect(
+      rail.confirmP2pPayment({ ...base, request: { ...request, executorFeeAmountMicro: 1 } }),
+    ).resolves.toMatchObject({ status: "unknown" });
+    expect(find).not.toHaveBeenCalled();
+  });
+});

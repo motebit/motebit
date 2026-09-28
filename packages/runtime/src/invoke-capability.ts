@@ -18,6 +18,7 @@ import type { P2pPaymentProof, SovereignP2pPaymentRequest } from "@motebit/proto
 import type { StreamChunk } from "./runtime-config.js";
 import {
   selectAndRunDelegation,
+  type ConfirmP2pPayment,
   type DelegationError,
   type DelegationErrorCode,
   type DelegationResult,
@@ -40,6 +41,11 @@ export interface InvokeCapabilityDeps {
    * absent → every delegation uses the relay-mediated path.
    */
   buildP2pPayment?: (request: SovereignP2pPaymentRequest) => Promise<P2pPaymentProof>;
+  /**
+   * The same rail's read-only "did the payment land anyway?" lookup (#885).
+   * Absent ⇒ a builder error is `payment_status_unknown` (recorded, never retried).
+   */
+  confirmP2pPayment?: ConfirmP2pPayment;
   /**
    * The runtime's paid-intent ledger (#435/#874). A user tap is a paid path
    * like the AI loop's: threading the ledger here means a tap cannot re-buy
@@ -232,6 +238,7 @@ export class InvokeCapabilityManager {
       requiredCapabilities: [capability],
       ...(targetWorkerId != null ? { targetWorkerId } : {}),
       ...(this.deps.buildP2pPayment ? { buildP2pPayment: this.deps.buildP2pPayment } : {}),
+      ...(this.deps.confirmP2pPayment ? { confirmP2pPayment: this.deps.confirmP2pPayment } : {}),
       ...(this.config.relayPublicKey != null ? { relayPublicKey: this.config.relayPublicKey } : {}),
       ...(ack === true ? { acknowledgeNoHistoryRisk: true } : {}),
       ...(this.config.routingStrategy ? { routingStrategy: this.config.routingStrategy } : {}),

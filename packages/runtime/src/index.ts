@@ -324,8 +324,12 @@ export {
   resolveP2pPaymentRequest,
   submitP2pDelegation,
   retrieveDelegationResult,
+  p2pPaymentConfirmerOf,
 } from "./relay-delegation.js";
 export type {
+  ConfirmP2pPayment,
+  P2pPaymentConfirmation,
+  SubmitRetryPolicy,
   TaskRetrieval,
   RetrieveDelegationResultParams,
   SelectDelegationParams,
@@ -355,6 +359,7 @@ export {
   PaidIntentLedger,
   InMemoryPaidIntentStore,
   SESSION_SUSPEND_THRESHOLD,
+  isPaymentWithoutTaskId,
   type UnretrievedPayment,
   type PaidIntentVerdict,
 } from "./paid-intent-ledger.js";

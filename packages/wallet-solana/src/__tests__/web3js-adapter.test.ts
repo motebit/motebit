@@ -513,6 +513,108 @@ describe("Web3JsRpcAdapter.findOutgoingTransfer", () => {
   });
 });
 
+// ── #885: the multi-leg form — the atomic P2P payment (worker + fee legs) ──
+
+describe("Web3JsRpcAdapter.findOutgoingTransfer — multi-leg (alsoLegs)", () => {
+  const SINCE_MS = 1_700_000_000_000;
+  const T = Math.floor(SINCE_MS / 1000) + 5;
+  const worker = "9xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgBBB";
+  const treasury = "Treasury11111111111111111111111111111111111";
+  const executor = "Executor11111111111111111111111111111111111";
+
+  function setup(txs: Record<string, Array<{ to: string; amount: bigint }>>) {
+    const adapter = makeAdapterForTx();
+    const own = adapter.ownAddress;
+    const conn = adapter.getConnection();
+    vi.spyOn(conn, "getSignaturesForAddress").mockResolvedValue(
+      Object.keys(txs).map((signature) => ({ signature, blockTime: T, err: null })) as never,
+    );
+    vi.spyOn(adapter, "getTransaction").mockImplementation((sig: string) =>
+      Promise.resolve({
+        status: "confirmed",
+        from: own,
+        transfers: (txs[sig] ?? []).map((l) => ({ to: l.to, amountMicro: l.amount })),
+        slot: 1,
+        asset: "USDC",
+      }),
+    );
+    return adapter;
+  }
+
+  const q = {
+    toAddress: worker,
+    microAmount: 250_000n,
+    alsoLegs: [{ toAddress: treasury, microAmount: 12_500n }],
+    sinceMs: SINCE_MS,
+  };
+
+  it("the exact worker + fee leg set in one tx ⇒ found", async () => {
+    const adapter = setup({
+      p2p: [
+        { to: worker, amount: 250_000n },
+        { to: treasury, amount: 12_500n },
+      ],
+    });
+    await expect(adapter.findOutgoingTransfer(q)).resolves.toEqual({
+      status: "found",
+      signature: "p2p",
+    });
+  });
+
+  it("a worker-only transfer of the same amount is NOT the P2P payment", async () => {
+    const adapter = setup({ single: [{ to: worker, amount: 250_000n }] });
+    await expect(adapter.findOutgoingTransfer(q)).resolves.toEqual({ status: "not_found" });
+    // ...while the single-leg query (no alsoLegs) still matches it, as before.
+    await expect(
+      adapter.findOutgoingTransfer({ toAddress: worker, microAmount: 250_000n, sinceMs: SINCE_MS }),
+    ).resolves.toEqual({ status: "found", signature: "single" });
+  });
+
+  it("a wrong fee amount, a wrong treasury, or an extra leg ⇒ not_found", async () => {
+    const adapter = setup({
+      "fee-amount": [
+        { to: worker, amount: 250_000n },
+        { to: treasury, amount: 12_501n },
+      ],
+      "fee-to": [
+        { to: worker, amount: 250_000n },
+        { to: "Elsewhere", amount: 12_500n },
+      ],
+      extra: [
+        { to: worker, amount: 250_000n },
+        { to: treasury, amount: 12_500n },
+        { to: "Elsewhere", amount: 1n },
+      ],
+    });
+    await expect(adapter.findOutgoingTransfer(q)).resolves.toEqual({ status: "not_found" });
+  });
+
+  it("a federated three-leg payment matches only with the executor leg", async () => {
+    const adapter = setup({
+      fed: [
+        { to: worker, amount: 250_000n },
+        { to: treasury, amount: 5_000n },
+        { to: executor, amount: 7_500n },
+      ],
+    });
+    await expect(
+      adapter.findOutgoingTransfer({
+        ...q,
+        alsoLegs: [
+          { toAddress: treasury, microAmount: 5_000n },
+          { toAddress: executor, microAmount: 7_500n },
+        ],
+      }),
+    ).resolves.toEqual({ status: "found", signature: "fed" });
+    await expect(
+      adapter.findOutgoingTransfer({
+        ...q,
+        alsoLegs: [{ toAddress: treasury, microAmount: 5_000n }],
+      }),
+    ).resolves.toEqual({ status: "not_found" });
+  });
+});
+
 // ── Balances ──────────────────────────────────────────────────────────────
 //
 // `getSolBalance` is a one-line BigInt wrap; `getUsdcBalance` exercises

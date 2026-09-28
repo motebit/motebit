@@ -127,36 +127,57 @@ describe("submitP2pDelegation", () => {
     if (!result.ok) expect(result.error.code).toBe("timeout");
   });
 
-  it("maps a relay proof rejection (400) → malformed_request and never polls", async () => {
+  // #885: the proof is an ALREADY-PAID payment, so a submission failure is
+  // never a plain failure — it is `payment_not_admitted`, carrying the money
+  // and the relay's own answer (`submitError`).
+  const noWait = { submitRetry: { sleep: vi.fn(async () => {}) } };
+
+  it("a relay proof rejection (400) → payment_not_admitted (submitError malformed_request), not retried, never polls", async () => {
     fetchMock.mockResolvedValueOnce(
       jsonResponse(400, { code: "TASK_P2P_FEE_AMOUNT_MISMATCH", error: "fee mismatch" }),
     );
-    const result = await submitP2pDelegation(baseParams());
+    const result = await submitP2pDelegation({ ...baseParams(), ...noWait });
     expect(result.ok).toBe(false);
     if (!result.ok) {
-      expect(result.error.code).toBe("malformed_request");
+      expect(result.error.code).toBe("payment_not_admitted");
       expect(result.error.status).toBe(400);
+      expect(result.error.submitError).toMatchObject({ code: "malformed_request", status: 400 });
+      expect(result.error.settledPayment).toEqual({
+        txHash: "tx-abc",
+        paidMicro: 500_000,
+        feeMicro: 26_316,
+        taskId: "p2p-unadmitted:tx-abc",
+      });
     }
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
-  it("returns auth_expired when token minting fails (no submit attempted)", async () => {
+  it("token minting failing on every attempt → payment_not_admitted (submitError auth_expired), no submit sent", async () => {
     const result = await submitP2pDelegation({
       ...baseParams(),
+      ...noWait,
       authToken: vi.fn(async () => {
         throw new Error("no keys");
       }),
     });
     expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.error.code).toBe("auth_expired");
+    if (!result.ok) {
+      expect(result.error.code).toBe("payment_not_admitted");
+      expect(result.error.submitError?.code).toBe("auth_expired");
+    }
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
-  it("returns network_unreachable when the submit fetch rejects", async () => {
-    fetchMock.mockRejectedValueOnce(new Error("ECONNREFUSED"));
-    const result = await submitP2pDelegation(baseParams());
+  it("the submit fetch rejecting on every attempt → payment_not_admitted (submitError network_unreachable)", async () => {
+    fetchMock.mockRejectedValue(new Error("ECONNREFUSED"));
+    const result = await submitP2pDelegation({ ...baseParams(), ...noWait });
     expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.error.code).toBe("network_unreachable");
+    if (!result.ok) {
+      expect(result.error.code).toBe("payment_not_admitted");
+      expect(result.error.submitError?.code).toBe("network_unreachable");
+    }
+    // One attempt plus the three default retries — every one the SAME proof.
+    expect(fetchMock).toHaveBeenCalledTimes(4);
   });
 
   it("returns the verified receipt on a successful submit + poll", async () => {
@@ -379,7 +400,11 @@ describe("resolveAndSubmitP2pDelegation", () => {
     expect(req.amountMicro).toBe(toMicro(0.5));
     expect(req.feeAmountMicro).toBe(computeP2pFeeMicro(toMicro(0.5), PLATFORM_FEE_RATE));
     expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.error.code).toBe("malformed_request");
+    if (!result.ok) {
+      // #885: the relay's 400 arrives AFTER the payment — paid, not admitted.
+      expect(result.error.code).toBe("payment_not_admitted");
+      expect(result.error.submitError?.code).toBe("malformed_request");
+    }
   });
 
   it("carries the settled payment on a post-broadcast poll failure so a caller cannot re-pay (#433)", async () => {
@@ -593,7 +618,11 @@ describe("resolveAndSubmitP2pDelegation", () => {
     // And it never reads the listing — the pre-flight is authoritative.
     expect(listingSpy).not.toHaveBeenCalled();
     expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.error.code).toBe("malformed_request");
+    if (!result.ok) {
+      // #885: the relay's 400 arrives AFTER the payment — paid, not admitted.
+      expect(result.error.code).toBe("payment_not_admitted");
+      expect(result.error.submitError?.code).toBe("malformed_request");
+    }
   });
 
   it("falls back to the listing read when the pre-flight returns no amounts (older relay)", async () => {
@@ -634,7 +663,7 @@ describe("resolveAndSubmitP2pDelegation", () => {
     if (!result.ok) expect(result.error.code).toBe("insufficient_balance");
   });
 
-  it("maps a broadcast failure to payment_broadcast_failed (nothing settled)", async () => {
+  it("a builder throw with no confirmer is payment_status_unknown — never read as 'nothing moved' (#885)", async () => {
     const buildP2pPayment = vi.fn(async () => {
       throw new Error("rpc down");
     });
@@ -648,6 +677,33 @@ describe("resolveAndSubmitP2pDelegation", () => {
       }),
     );
     const result = await resolveAndSubmitP2pDelegation(resolveParams({ buildP2pPayment }));
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.code).toBe("payment_status_unknown");
+      expect(result.error.settledPayment).toBeUndefined();
+      expect(result.error.unconfirmedPayment?.reason).toMatch(/cannot confirm/);
+    }
+  });
+
+  it("a builder throw the wallet confirms ABSENT is payment_broadcast_failed (nothing moved)", async () => {
+    const buildP2pPayment = vi.fn(async () => {
+      throw new Error("rpc down");
+    });
+    vi.stubGlobal(
+      "fetch",
+      routedFetch({
+        discover: discoverOk([
+          { motebit_id: "bob", settlement_address: "BobAddr", settlement_modes: "p2p" },
+        ]),
+        listing: listingOk([{ capability: "web_search", unit_cost: 0.5 }]),
+      }),
+    );
+    const result = await resolveAndSubmitP2pDelegation(
+      resolveParams({
+        buildP2pPayment,
+        confirmP2pPayment: vi.fn(async () => ({ status: "absent" as const })),
+      }),
+    );
     expect(result.ok).toBe(false);
     if (!result.ok) expect(result.error.code).toBe("payment_broadcast_failed");
   });
@@ -991,7 +1047,11 @@ describe("resolveAndSubmitP2pDelegation", () => {
     // Conservation: the three legs sum to the budget exactly.
     expect(req.amountMicro + req.feeAmountMicro + req.executorFeeAmountMicro!).toBe(toMicro(1));
     expect(result.ok).toBe(false);
-    if (!result.ok) expect(result.error.code).toBe("malformed_request");
+    if (!result.ok) {
+      // #885: the relay's 400 arrives AFTER the payment — paid, not admitted.
+      expect(result.error.code).toBe("payment_not_admitted");
+      expect(result.error.submitError?.code).toBe("malformed_request");
+    }
   });
 
   it("federated: no separate /listing fetch (origin can't serve a remote worker's listing)", async () => {

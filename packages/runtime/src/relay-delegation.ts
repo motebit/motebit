@@ -25,7 +25,12 @@ import {
   PLATFORM_FEE_RATE,
 } from "@motebit/protocol";
 import { verifySovereignBinding } from "@motebit/crypto";
-import type { PaidIntentLedger } from "./paid-intent-ledger.js";
+import {
+  type PaidIntentLedger,
+  UNADMITTED_TASK_PREFIX,
+  isPaymentWithoutTaskId,
+  unadmittedTaskId,
+} from "./paid-intent-ledger.js";
 
 /**
  * The DERIVED settlement-authority binding, inlined here to keep the
@@ -104,12 +109,34 @@ export type DelegationErrorCode =
    */
   | "p2p_ineligible"
   /**
-   * Pre-flight. The delegator's atomic onchain payment failed to broadcast or
-   * confirm, so NO task was submitted (the proof is never sent to the relay
-   * without a confirmed payment). The funds did not move — distinct from a
-   * confirmed-but-rejected proof.
+   * Pre-flight. The delegator's atomic onchain payment failed to broadcast,
+   * and the funds did NOT move — established, not assumed (#885): either the
+   * builder failed before signing, or the wallet's read-only lookup found no
+   * matching transaction after every blockhash the build could have used
+   * expired. NO task was submitted. A later hire may pay.
    */
   | "payment_broadcast_failed"
+  /**
+   * Post-broadcast (#885). The payment builder threw, and the chain could
+   * neither confirm nor rule out that the payment landed (RPC error, an
+   * ambiguous match, a wallet without the lookup, or still in flight past
+   * the wait). Money MAY have left the wallet. Nothing was submitted,
+   * nothing is broadcast again automatically, and the payment is recorded
+   * in the paid-intent ledger (`unconfirmedPayment.ledgerId`) so a re-hire
+   * of this worker + capability is refused until the owner reconciles the
+   * wallet and dismisses the entry.
+   */
+  | "payment_status_unknown"
+  /**
+   * Post-broadcast (#885). The payment LANDED (tx in `settledPayment`), but
+   * the relay did not admit the task: every submission of that SAME payment
+   * proof failed (relay 5xx, network, or a rejection). No second payment
+   * was made. `settledPayment.taskId` is the ledger's `p2p-unadmitted:` id,
+   * not a relay task. The payment stays outstanding in the ledger, so a
+   * re-hire of this worker + capability is refused — in this session and
+   * every later one — until the owner resolves it.
+   */
+  | "payment_not_admitted"
   /**
    * Pre-flight, BEFORE broadcast. The grant blast-radius meter refused the
    * spend against the verified standing grant's signed ceiling (over-ceiling,
@@ -187,6 +214,10 @@ export interface DelegationError {
    * "it failed" and RE-DELEGATES — broadcasting a SECOND payment for work
    * already bought. A caller seeing this field MUST resolve by re-fetching
    * this `taskId`, never by re-hiring.
+   *
+   * Also set on `payment_not_admitted` (#885): the payment landed but the
+   * relay never admitted its task. `taskId` is then the paid-intent
+   * ledger's `p2p-unadmitted:<tx>` id — not a relay task.
    */
   settledPayment?: {
     txHash: string;
@@ -195,6 +226,26 @@ export interface DelegationError {
     /** The relay task the payment bought — the handle to re-fetch, never re-pay. */
     taskId: string;
   };
+  /**
+   * Set ONLY on `payment_status_unknown` (#885): the builder threw and the
+   * chain could not say whether the payment landed. The amounts are what
+   * the payment would have moved; `ledgerId` is the paid-intent ledger
+   * entry that now refuses a re-hire until the owner reconciles it.
+   */
+  unconfirmedPayment?: {
+    paidMicro: number;
+    feeMicro: number;
+    /** Absent when no paid-intent ledger was wired (nothing could be recorded). */
+    ledgerId?: string;
+    reason: string;
+  };
+  /**
+   * Set ONLY on `payment_not_admitted` (#885): the relay's LAST answer to
+   * the submission, classified as it would be for an unpaid submit — e.g.
+   * `malformed_request` for a proof the relay rejects (a construction bug),
+   * `unknown` for a 503, `network_unreachable` for a network failure.
+   */
+  submitError?: { code: DelegationErrorCode; message: string; status?: number };
 }
 
 /**
@@ -621,8 +672,14 @@ async function pollForReceipt(args: PollForReceiptArgs): Promise<DelegationResul
  * - `malformed` — a receipt came back bound to a DIFFERENT relay task.
  * - `invalid_task_id` — the id is not a task id; nothing was sent.
  * - `not_connected` — this runtime has no relay coordinates; nothing was sent.
+ * - `not_admitted` — the id is a paid-intent ledger entry for a payment the
+ *   relay never admitted as a task (`p2p-unadmitted:`, `paymentLanded`
+ *   true) or whose landing could not be confirmed (`p2p-unconfirmed:`,
+ *   `paymentLanded` false) — #885. There is no relay task to read, so
+ *   nothing was sent.
  */
 export type TaskRetrieval =
+  | { status: "not_admitted"; taskId: string; paymentLanded: boolean }
   | { status: "delivered"; taskId: string; receipt: ExecutionReceipt }
   | { status: "pending"; taskId: string; taskStatus: string }
   | { status: "failed"; taskId: string }
@@ -670,6 +727,15 @@ export async function retrieveDelegationResult(
 ): Promise<TaskRetrieval> {
   const taskId = params.taskId.trim();
   const taskOwnerId = params.taskOwnerId ?? params.motebitId;
+  // A payment with no relay task (#885) is answered here: a relay read
+  // would 404 and read as "reaped", which it is not.
+  if (isPaymentWithoutTaskId(taskId)) {
+    return {
+      status: "not_admitted",
+      taskId,
+      paymentLanded: taskId.startsWith(UNADMITTED_TASK_PREFIX),
+    };
+  }
   if (!TASK_ID_PATTERN.test(taskId) || !TASK_ID_PATTERN.test(taskOwnerId)) {
     return { status: "invalid_task_id", taskId };
   }
@@ -772,12 +838,14 @@ export interface SubmitP2pDelegationParams {
    * settlement (worker leg + relay-fee leg[s]). Built ONCE by the caller via
    * `SovereignWalletRail.buildP2pPayment` BEFORE this call. This function never
    * broadcasts — it only submits the already-paid proof and polls. On a
-   * transient submission failure the caller MUST retry with the SAME proof,
-   * never rebuild: rebuilding broadcasts a second payment, whereas resubmitting
-   * the same `tx_hash` is safe (the relay's settlement is keyed on the tx and
-   * its replay guard rejects a *settled* proof but allows resubmitting an
-   * unsettled one). Separating the irreversible broadcast from the retryable
-   * submit is what makes "no double-pay" structural rather than a convention.
+   * transient submission failure it retries with the SAME proof itself
+   * (`submitRetry`, #885), never rebuilding: rebuilding broadcasts a second
+   * payment, whereas resubmitting the same `tx_hash` is safe (the relay
+   * dedupes on it as the `Idempotency-Key` — a completed 201 replays, a
+   * failed attempt releases its claim — and its replay guard rejects only a
+   * *settled* proof). Separating the irreversible broadcast from the
+   * retryable submit is what makes "no double-pay" structural rather than a
+   * convention.
    */
   paymentProof: P2pPaymentProof;
   /** Invocation provenance — signature-bound on the resulting receipt. */
@@ -796,35 +864,68 @@ export interface SubmitP2pDelegationParams {
    * (#874 review: recording only on poll failure lost the entry to a quit).
    */
   onTaskAccepted?: (taskId: string) => void;
+  /**
+   * How a failed submission of the already-paid proof is retried (#885).
+   * Every retry resubmits the SAME proof under the same `Idempotency-Key`
+   * (the tx hash) — never a new payment. Tests inject `sleep`.
+   */
+  submitRetry?: SubmitRetryPolicy;
+}
+
+/** Retry policy for resubmitting an already-paid P2P proof (#885). */
+export interface SubmitRetryPolicy {
+  /** Waits before each retry; its length is the retry count. Default 1s, 3s, 9s. */
+  delaysMs?: readonly number[];
+  sleep?: (ms: number) => Promise<void>;
 }
 
 /**
- * Submit a PAID direct delegation that settles peer-to-peer and poll until a
- * receipt lands. The delegator has already paid the worker + relay fee in one
- * atomic onchain transaction (`params.paymentProof`); this function pins the
- * worker (`target_agent`), declares `settlement_mode: "p2p"`, and attaches the
- * proof so the relay's Arc-3.5 gate (`requiresP2pProof`) is satisfied — the
- * relay records an audit row and the async p2p-verifier confirms the legs
- * landed. Shares `pollForReceipt` with the relay-mode path; the only difference
- * is the submit body. Pure transport — does not bump trust, broadcast, or
- * render.
- *
- * On a relay-side proof rejection (address/amount/fee mismatch → HTTP 400)
- * the result is `malformed_request`: the proof the caller built does not match
- * what the relay expects, which is a construction bug, not a user condition.
+ * Default waits between resubmissions of an already-paid proof: three
+ * retries over ~13s. Bounded so a relay that is down for good surfaces
+ * "paid, not admitted" promptly rather than holding the caller.
  */
-export async function submitP2pDelegation(
-  params: SubmitP2pDelegationParams,
-): Promise<DelegationResult> {
-  const timeoutMs = params.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-  const startedAt = Date.now();
+const DEFAULT_SUBMIT_RETRY_DELAYS_MS: readonly number[] = [1_000, 3_000, 9_000];
+/** Upper bound on a relay `Retry-After` honoured between resubmissions. */
+const MAX_SUBMIT_RETRY_AFTER_MS = 30_000;
 
+const defaultSleep = (ms: number): Promise<void> =>
+  new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * May a failed submission of an ALREADY-PAID proof be tried again with the
+ * same proof? (#885.) Retrying is always money-safe — the proof is the
+ * same payment and the relay dedupes on the tx hash (`Idempotency-Key`;
+ * services/relay/src/tasks.ts replays a completed 201 and releases a
+ * failed claim) — so the only question is whether another attempt could
+ * succeed. Transient: network, 5xx, 408, 429, 401 (a fresh token is minted
+ * per attempt), and a 409 that is the relay still processing the same key.
+ * A 409 `TASK_P2P_PROOF_REPLAYED` (the proof already settled a task) and
+ * every other 4xx will answer the same way again.
+ */
+function isRetryableSubmitStatus(status: number, relayCode: string | undefined): boolean {
+  if (status >= 500 || status === 408 || status === 429 || status === 401) return true;
+  if (status === 409) return relayCode !== "TASK_P2P_PROOF_REPLAYED";
+  return false;
+}
+
+type SubmitAttempt =
+  | { kind: "accepted"; taskId: string }
+  | { kind: "failed"; error: DelegationError; retryable: boolean; retryAfterMs?: number }
+  | { kind: "aborted"; error: DelegationError };
+
+/**
+ * ONE submission of an already-paid P2P proof: mint a `task:submit` token,
+ * POST the pinned task with the proof, classify the answer. Never
+ * broadcasts; a caller retries by calling it again with the same proof.
+ */
+async function submitP2pOnce(params: SubmitP2pDelegationParams): Promise<SubmitAttempt> {
   let submitHeader: string;
   try {
     submitHeader = `Bearer ${await params.authToken("task:submit")}`;
   } catch (err: unknown) {
     return {
-      ok: false,
+      kind: "failed",
+      retryable: true,
       error: {
         code: "auth_expired",
         message: `Auth token mint failed: ${err instanceof Error ? err.message : String(err)}`,
@@ -832,7 +933,6 @@ export async function submitP2pDelegation(
     };
   }
 
-  let taskId: string;
   try {
     const body: Record<string, unknown> = {
       prompt: params.prompt,
@@ -884,26 +984,146 @@ export async function submitP2pDelegation(
 
     if (!resp.ok) {
       const text = await resp.text().catch(() => "");
+      const retryAfter = resp.headers.get("Retry-After");
+      const error = classifyRelayError(resp.status, text, retryAfter);
+      let relayCode: string | undefined;
+      try {
+        relayCode = (JSON.parse(text) as { code?: string }).code;
+      } catch {
+        relayCode = undefined;
+      }
       return {
-        ok: false,
-        error: classifyRelayError(resp.status, text, resp.headers.get("Retry-After")),
+        kind: "failed",
+        error,
+        retryable: isRetryableSubmitStatus(resp.status, relayCode),
+        ...(error.retryAfterSeconds != null && Number.isFinite(error.retryAfterSeconds)
+          ? { retryAfterMs: error.retryAfterSeconds * 1000 }
+          : {}),
       };
     }
 
-    const data = (await resp.json()) as { task_id: string };
-    taskId = data.task_id;
+    const data = (await resp.json()) as { task_id?: unknown };
+    if (typeof data.task_id !== "string" || data.task_id.length === 0) {
+      // A 2xx without a task id: the same key replays the relay's cached
+      // answer, so asking again is the only way to learn the task.
+      return {
+        kind: "failed",
+        retryable: true,
+        error: { code: "unknown", message: "relay accepted the submission without a task_id" },
+      };
+    }
+    return { kind: "accepted", taskId: data.task_id };
   } catch (err: unknown) {
     if (err instanceof Error && err.name === "AbortError") {
       return {
-        ok: false,
+        kind: "aborted",
         error: { code: "timeout", message: "Aborted before submission completed" },
       };
     }
     return {
-      ok: false,
+      kind: "failed",
+      retryable: true,
       error: {
         code: "network_unreachable",
         message: err instanceof Error ? err.message : String(err),
+      },
+    };
+  }
+}
+
+/**
+ * Submit a PAID direct delegation that settles peer-to-peer and poll until a
+ * receipt lands. The delegator has already paid the worker + relay fee in one
+ * atomic onchain transaction (`params.paymentProof`); this function pins the
+ * worker (`target_agent`), declares `settlement_mode: "p2p"`, and attaches the
+ * proof so the relay's Arc-3.5 gate (`requiresP2pProof`) is satisfied — the
+ * relay records an audit row and the async p2p-verifier confirms the legs
+ * landed. Shares `pollForReceipt` with the relay-mode path; the only difference
+ * is the submit body. Pure transport — does not bump trust, broadcast, or
+ * render.
+ *
+ * The money has ALREADY moved when this runs, so a submission that fails is
+ * never a plain failure (#885). A transient failure (network, relay 5xx, 429,
+ * a stale token) is retried with the SAME proof — never a new payment — up to
+ * `submitRetry.delaysMs.length` times. If the relay still has not admitted
+ * the task, or it rejects the proof outright (a 4xx such as a
+ * `malformed_request` leg mismatch), the result is `payment_not_admitted`,
+ * carrying the payment in `settledPayment` under the ledger's
+ * `p2p-unadmitted:<tx>` id: the caller must record it and must never pay
+ * again for this intent.
+ */
+export async function submitP2pDelegation(
+  params: SubmitP2pDelegationParams,
+): Promise<DelegationResult> {
+  const timeoutMs = params.timeoutMs ?? DEFAULT_TIMEOUT_MS;
+  const startedAt = Date.now();
+  const delays = params.submitRetry?.delaysMs ?? DEFAULT_SUBMIT_RETRY_DELAYS_MS;
+  const sleep = params.submitRetry?.sleep ?? defaultSleep;
+  const proof = params.paymentProof;
+
+  let taskId: string | null = null;
+  let attempts = 0;
+  let last: DelegationError | null = null;
+  for (;;) {
+    attempts++;
+    const attempt = await submitP2pOnce(params);
+    if (attempt.kind === "accepted") {
+      taskId = attempt.taskId;
+      break;
+    }
+    last = attempt.error;
+    const canRetry =
+      attempt.kind === "failed" &&
+      attempt.retryable &&
+      attempts <= delays.length &&
+      params.signal?.aborted !== true;
+    if (!canRetry) break;
+    const waitMs = Math.max(
+      delays[attempts - 1] ?? 0,
+      Math.min(attempt.retryAfterMs ?? 0, MAX_SUBMIT_RETRY_AFTER_MS),
+    );
+    params.logger.warn("delegation.p2p_submit_retry", {
+      txHash: proof.tx_hash,
+      attempt: attempts,
+      code: attempt.error.code,
+      status: attempt.error.status,
+      waitMs,
+    });
+    await sleep(waitMs);
+  }
+
+  if (taskId == null) {
+    // Paid, not admitted. The payment is a fact; the task is not. Carry the
+    // money so no caller can read this as "never hired" (#885 — the #433
+    // double-pay shape one step earlier).
+    const lastError = last ?? { code: "unknown" as const, message: "submission failed" };
+    params.logger.warn("delegation.p2p_payment_not_admitted", {
+      txHash: proof.tx_hash,
+      attempts,
+      code: lastError.code,
+      status: lastError.status,
+      message: lastError.message,
+    });
+    return {
+      ok: false,
+      error: {
+        code: "payment_not_admitted",
+        message:
+          `Paid onchain (tx ${proof.tx_hash}), but the relay did not admit the task after ` +
+          `${attempts} submission${attempts === 1 ? "" : "s"} of that same payment — no second ` +
+          `payment was made. Last relay answer: ${lastError.code}: ${lastError.message}`,
+        ...(lastError.status != null ? { status: lastError.status } : {}),
+        submitError: {
+          code: lastError.code,
+          message: lastError.message,
+          ...(lastError.status != null ? { status: lastError.status } : {}),
+        },
+        settledPayment: {
+          txHash: proof.tx_hash,
+          paidMicro: proof.amount_micro,
+          feeMicro: proof.fee_amount_micro + (proof.b_fee_amount_micro ?? 0),
+          taskId: unadmittedTaskId(proof.tx_hash),
+        },
       },
     };
   }
@@ -1008,6 +1228,37 @@ export type WorkerSelector = (
   candidates: ReadonlyArray<{ motebit_id: string; unitCost?: number; bonded?: boolean }>,
 ) => Promise<string | null> | string | null;
 
+/**
+ * The rail's read-only recovery lookup after `buildP2pPayment` threw (#885) —
+ * structurally `SolanaWalletRail.confirmP2pPayment` (`@motebit/wallet-solana`),
+ * declared here so this rail-agnostic module never imports a wallet package.
+ * It never signs or broadcasts.
+ */
+export type ConfirmP2pPayment = (query: {
+  request: SovereignP2pPaymentRequest;
+  sentAtMs: number;
+  failedAtMs: number;
+  error: unknown;
+  excludeSignatures?: readonly string[];
+}) => Promise<P2pPaymentConfirmation>;
+
+/** Verdict of a {@link ConfirmP2pPayment} lookup. */
+export type P2pPaymentConfirmation =
+  | { status: "landed"; proof: P2pPaymentProof }
+  | { status: "absent" }
+  | { status: "pending"; recheckAtMs: number }
+  | { status: "unknown"; reason: string };
+
+/** The rail's confirmer, when the rail has one — read structurally, never assumed. */
+export function p2pPaymentConfirmerOf(rail: unknown): ConfirmP2pPayment | undefined {
+  if (rail == null || typeof rail !== "object") return undefined;
+  const fn = (rail as { confirmP2pPayment?: unknown }).confirmP2pPayment;
+  return typeof fn === "function" ? (fn as ConfirmP2pPayment).bind(rail) : undefined;
+}
+
+/** Default wait for a pending confirmation: past the 150s Solana landing horizon. */
+const DEFAULT_PAYMENT_CONFIRM_MAX_WAIT_MS = 180_000;
+
 export interface ResolveAndSubmitP2pDelegationParams {
   /** Standing-grant id (advisory; engages the relay revocation fence). */
   grantId?: string;
@@ -1063,6 +1314,25 @@ export interface ResolveAndSubmitP2pDelegationParams {
    * Absent → paid direct delegation is unavailable on this runtime.
    */
   buildP2pPayment?: (request: SovereignP2pPaymentRequest) => Promise<P2pPaymentProof>;
+  /**
+   * The rail's read-only "did the payment land anyway?" lookup, consulted
+   * when `buildP2pPayment` throws (#885). Absent ⇒ every builder error that
+   * is not provably pre-broadcast is `payment_status_unknown` — recorded,
+   * never retried (fail-closed).
+   */
+  confirmP2pPayment?: ConfirmP2pPayment;
+  /**
+   * How long to keep asking `confirmP2pPayment` while a broadcast could
+   * still land, from the moment the builder threw. Default 180s — past the
+   * Solana landing horizon (150s), after which absence is authoritative.
+   */
+  paymentConfirmMaxWaitMs?: number;
+  /** Retry policy for resubmitting the paid proof (see `submitP2pDelegation`). */
+  submitRetry?: SubmitRetryPolicy;
+  /** Clock (tests pin it). */
+  now?: () => number;
+  /** Sleep used while waiting on a pending confirmation (tests inject it). */
+  sleep?: (ms: number) => Promise<void>;
   /** Invocation provenance — signature-bound on the resulting receipt. */
   invocationOrigin?: IntentOrigin;
   /**
@@ -1501,7 +1771,9 @@ export async function resolveAndSubmitP2pDelegation(
   //         retrieved, a new delegation would buy the same work twice; refuse
   //         mechanically instead of trusting the caller to have read the
   //         PAYMENT_ALREADY_SETTLED message (#435/#436 — on the granted path
-  //         there is no human between a retry loop and real money).
+  //         there is no human between a retry loop and real money). The same
+  //         lock covers a payment the relay never admitted and one whose
+  //         landing could not be confirmed (#885).
   if (params.paidIntentLedger != null) {
     const verdict = params.paidIntentLedger.check(resolved.workerMotebitId, params.capability);
     if (verdict.locked) {
@@ -1512,15 +1784,17 @@ export async function resolveAndSubmitP2pDelegation(
           code: "intent_already_paid",
           message:
             verdict.scope === "pair"
-              ? `A payment to this worker for "${prior.capability}" already settled onchain ` +
-                `(tx ${prior.txHash}) and its result was never retrieved (task ${prior.taskId}). ` +
-                `Refused before broadcast — no new money moved. Re-fetch that task for free ` +
-                `(retrieve_task_result, or /result ${prior.taskId}); do not re-hire.`
-              : `${params.paidIntentLedger.outstandingCount} paid delegations have settled onchain ` +
-                `without delivering results — all new paid delegation is suspended until they are ` +
-                `retrieved or dismissed. Refused before broadcast — no new money moved. Oldest ` +
-                `unretrieved: task ${prior.taskId} (tx ${prior.txHash}) — re-fetch it for free ` +
-                `(retrieve_task_result, or /result ${prior.taskId}).`,
+              ? `${describePriorPayment(prior)} Refused before broadcast — no new money moved. ` +
+                `${priorRemedy(prior)}; do not re-hire.`
+              : `${params.paidIntentLedger.outstandingCount} paid delegations ` +
+                (params.paidIntentLedger
+                  .outstanding()
+                  .every((e) => !isPaymentWithoutTaskId(e.taskId))
+                  ? `have settled onchain without delivering results`
+                  : `are outstanding (paid, and not delivered or not admitted)`) +
+                ` — all new paid delegation is suspended until they are retrieved or dismissed. ` +
+                `Refused before broadcast — no new money moved. Oldest: ` +
+                `${describePriorPayment(prior)} ${priorRemedy(prior)}.`,
           settledPayment: {
             txHash: prior.txHash,
             paidMicro: prior.paidMicro,
@@ -1548,11 +1822,19 @@ export async function resolveAndSubmitP2pDelegation(
     }
   }
 
-  // 4. Broadcast the atomic payment ONCE. A throw here means nothing settled on
-  //    the relay — the proof is never submitted without a confirmed payment.
+  // 4. Broadcast the atomic payment ONCE. A throw is NOT proof that nothing
+  //    moved (#885): the transaction may have landed and only its
+  //    confirmation been lost. Only a provably pre-broadcast error, or the
+  //    chain's authoritative absence, may be read as "not paid".
+  const ledger = params.paidIntentLedger;
+  const request = resolved.paymentRequest;
+  const paidMicro = request.amountMicro;
+  const feeMicro = request.feeAmountMicro + (request.executorFeeAmountMicro ?? 0);
+  const now = params.now ?? Date.now;
+  const sentAtMs = now();
   let proof: P2pPaymentProof;
   try {
-    proof = await params.buildP2pPayment(resolved.paymentRequest);
+    proof = await params.buildP2pPayment(request);
   } catch (err: unknown) {
     // The grant blast-radius meter (wrapP2pPaymentWithMeter) throws BEFORE
     // broadcast on an over-ceiling / replay / unmeterable spend. Surface the
@@ -1568,18 +1850,105 @@ export async function resolveAndSubmitP2pDelegation(
         },
       };
     }
-    // wallet-solana surfaces a funds shortfall as InsufficientUsdcBalanceError.
+    // wallet-solana surfaces a funds shortfall as InsufficientUsdcBalanceError,
+    // thrown only before any transaction is signed (adapter.ts contract).
     if (err instanceof Error && err.name === "InsufficientUsdcBalanceError") {
       return fail("insufficient_balance", err.message);
     }
-    return fail(
-      "payment_broadcast_failed",
-      `P2P payment failed to broadcast: ${err instanceof Error ? err.message : String(err)}`,
+    const errMessage = err instanceof Error ? err.message : String(err);
+    const verdict = await confirmThrownPayment({
+      ...(params.confirmP2pPayment != null ? { confirm: params.confirmP2pPayment } : {}),
+      request,
+      sentAtMs,
+      failedAtMs: now(),
+      error: err,
+      excludeSignatures: ledger?.knownSignatures() ?? [],
+      maxWaitMs: params.paymentConfirmMaxWaitMs ?? DEFAULT_PAYMENT_CONFIRM_MAX_WAIT_MS,
+      now,
+      sleep: params.sleep ?? defaultSleep,
+    });
+    if (verdict.status === "absent") {
+      return fail(
+        "payment_broadcast_failed",
+        `P2P payment failed to broadcast, and the wallet confirmed it did not land — no funds ` +
+          `moved: ${errMessage}`,
+      );
+    }
+    if (verdict.status === "unknown") {
+      // Money MAY have left the wallet. Record it so nothing — this session,
+      // a restarted one, the granted path — broadcasts for this intent again
+      // until the owner reconciles the wallet (#885). Never retried here.
+      let ledgerId: string | undefined;
+      if (ledger != null) {
+        ledgerWrite(params.logger, "record_unconfirmed", "(unconfirmed)", "unknown", () => {
+          ledgerId = ledger.recordUnconfirmed({
+            workerMotebitId: resolved.workerMotebitId,
+            capability: params.capability,
+            paidMicro,
+            feeMicro,
+            recordedAt: now(),
+          });
+        });
+      }
+      params.logger.warn("delegation.p2p_payment_status_unknown", {
+        workerMotebitId: resolved.workerMotebitId,
+        capability: params.capability,
+        paidMicro,
+        feeMicro,
+        reason: verdict.reason,
+        error: errMessage,
+        ...(ledgerId != null ? { ledgerId } : {}),
+      });
+      return {
+        ok: false,
+        error: {
+          code: "payment_status_unknown",
+          message:
+            `The P2P payment builder failed (${errMessage}) and the wallet could not confirm ` +
+            `whether the payment landed (${verdict.reason}). Money may have left the wallet. ` +
+            `Nothing was submitted and nothing will be broadcast again for this hire — check the ` +
+            `wallet's history before paying this worker again` +
+            (ledgerId != null ? ` (then /result dismiss ${ledgerId}).` : "."),
+          unconfirmedPayment: {
+            paidMicro,
+            feeMicro,
+            ...(ledgerId != null ? { ledgerId } : {}),
+            reason: verdict.reason,
+          },
+        },
+      };
+    }
+    // Landed: the payment happened despite the error — proceed with it,
+    // exactly as if the builder had returned it. Never a second broadcast.
+    proof = verdict.proof;
+    params.logger.warn("delegation.p2p_payment_landed_despite_error", {
+      txHash: proof.tx_hash,
+      error: errMessage,
+    });
+  }
+
+  // 4a. Ledger write AT BROADCAST (#885): the money has left the wallet and
+  //     the relay has not admitted anything yet. From this moment a process
+  //     that dies, or a submission that never succeeds, leaves a payment on
+  //     record that refuses a second hire of the same intent. In flight: it
+  //     locks nothing for this session while it is being submitted.
+  if (ledger != null) {
+    const txHash = proof.tx_hash;
+    ledgerWrite(params.logger, "record_broadcast", unadmittedTaskId(txHash), txHash, () =>
+      ledger.recordBroadcast({
+        workerMotebitId: resolved.workerMotebitId,
+        capability: params.capability,
+        txHash,
+        paidMicro: proof.amount_micro,
+        feeMicro: proof.fee_amount_micro + (proof.b_fee_amount_micro ?? 0),
+        recordedAt: now(),
+      }),
     );
   }
 
-  // 5. Submit the pre-built proof (retry-safe; never re-broadcasts).
-  const ledger = params.paidIntentLedger;
+  // 5. Submit the pre-built proof (retries resubmit the SAME proof; never
+  //    re-broadcasts).
+  const paidProof = proof;
   const submitted = await submitP2pDelegation({
     motebitId: params.motebitId,
     syncUrl: params.syncUrl,
@@ -1590,32 +1959,33 @@ export async function resolveAndSubmitP2pDelegation(
     // operator; pinned via the same capability used for discovery.
     requiredCapabilities: [params.capability],
     ...(params.acknowledgeNoHistoryRisk === true ? { acknowledgeNoHistoryRisk: true } : {}),
-    paymentProof: proof,
+    paymentProof: paidProof,
     ...(params.invocationOrigin ? { invocationOrigin: params.invocationOrigin } : {}),
     ...(params.grantId != null ? { grantId: params.grantId } : {}),
     ...(params.timeoutMs != null ? { timeoutMs: params.timeoutMs } : {}),
+    ...(params.submitRetry != null ? { submitRetry: params.submitRetry } : {}),
     logger: params.logger,
     ...(params.signal ? { signal: params.signal } : {}),
-    // 5a. Ledger write AT SETTLE TIME (#874 review): the payment is
-    //     confirmed and the relay accepted the task, so the entry reads
-    //     "paid, result pending" from this moment. A process that dies
-    //     mid-poll leaves it on record; the next session refuses a re-hire
-    //     and `/result` can recover the work. Resolved below on delivery.
-    //     The entry is IN FLIGHT: it locks nothing for this session
-    //     (concurrent hires proceed as before the ledger existed), and any
-    //     later session reads it as unretrieved.
+    // 5a. The relay admitted the task (#874 review, #885): the task entry
+    //     takes over from the broadcast entry and reads "paid, result
+    //     pending" from this moment. A process that dies mid-poll leaves it
+    //     on record; the next session refuses a re-hire and `/result` can
+    //     recover the work. Resolved below on delivery. The entry is IN
+    //     FLIGHT: it locks nothing for this session (concurrent hires
+    //     proceed as before the ledger existed), and any later session
+    //     reads it as unretrieved.
     ...(ledger != null
       ? {
           onTaskAccepted: (taskId: string) =>
-            ledgerWrite(params.logger, "record_in_flight", taskId, proof.tx_hash, () =>
-              ledger.recordInFlight({
+            ledgerWrite(params.logger, "record_in_flight", taskId, paidProof.tx_hash, () =>
+              ledger.admitted(paidProof.tx_hash, {
                 workerMotebitId: resolved.workerMotebitId,
                 capability: params.capability,
                 taskId,
-                txHash: proof.tx_hash,
-                paidMicro: proof.amount_micro,
-                feeMicro: proof.fee_amount_micro + (proof.b_fee_amount_micro ?? 0),
-                recordedAt: Date.now(),
+                txHash: paidProof.tx_hash,
+                paidMicro: paidProof.amount_micro,
+                feeMicro: paidProof.fee_amount_micro + (paidProof.b_fee_amount_micro ?? 0),
+                recordedAt: now(),
               }),
             ),
         }
@@ -1623,12 +1993,15 @@ export async function resolveAndSubmitP2pDelegation(
   });
 
   // 6. Delivered ⇒ the work is no longer outstanding. A poll that ended
-  //    without the result moves the entry to UNRETRIEVED (the pair lock and
-  //    the suspend count now apply). Ledger writes never abort a paid
-  //    flow: a failed write is logged loudly and the result — or the
-  //    settlement carried on the error — is returned regardless.
+  //    without the result moves the task entry to UNRETRIEVED, and a
+  //    submission the relay never admitted moves the broadcast entry
+  //    (`p2p-unadmitted:<tx>`, carried as `settledPayment.taskId`) to
+  //    UNRETRIEVED — either way the pair lock and the suspend count now
+  //    apply, in this session and every later one. Ledger writes never
+  //    abort a paid flow: a failed write is logged loudly and the result —
+  //    or the settlement carried on the error — is returned regardless.
   if (ledger != null && submitted.ok) {
-    ledgerWrite(params.logger, "resolve", submitted.taskId, proof.tx_hash, () => {
+    ledgerWrite(params.logger, "resolve", submitted.taskId, paidProof.tx_hash, () => {
       ledger.resolve(submitted.taskId);
     });
   }
@@ -1642,11 +2015,112 @@ export async function resolveAndSubmitP2pDelegation(
         txHash: sp.txHash,
         paidMicro: sp.paidMicro,
         feeMicro: sp.feeMicro,
-        recordedAt: Date.now(),
+        recordedAt: now(),
       }),
     );
   }
   return submitted;
+}
+
+/** "What was paid, and where it stands" for a prior ledger entry. */
+function describePriorPayment(prior: {
+  capability: string;
+  taskId: string;
+  txHash: string;
+}): string {
+  if (prior.taskId.startsWith(UNADMITTED_TASK_PREFIX)) {
+    return (
+      `A payment to this worker for "${prior.capability}" already landed onchain ` +
+      `(tx ${prior.txHash}) but the relay never admitted its task (${prior.taskId}).`
+    );
+  }
+  if (isPaymentWithoutTaskId(prior.taskId)) {
+    return (
+      `A payment to this worker for "${prior.capability}" may already have left the wallet — ` +
+      `its builder failed and its landing could not be confirmed (${prior.taskId}).`
+    );
+  }
+  return (
+    `A payment to this worker for "${prior.capability}" already settled onchain ` +
+    `(tx ${prior.txHash}) and its result was never retrieved (task ${prior.taskId}).`
+  );
+}
+
+/** The free next step for a prior ledger entry — never a re-hire. */
+function priorRemedy(prior: { taskId: string }): string {
+  if (isPaymentWithoutTaskId(prior.taskId)) {
+    return (
+      `There is no relay task to fetch; reconcile the payment against the wallet, then ` +
+      `clear it with /result dismiss ${prior.taskId}`
+    );
+  }
+  return `Re-fetch that task for free (retrieve_task_result, or /result ${prior.taskId})`;
+}
+
+/**
+ * After `buildP2pPayment` threw (#885): ask the rail whether the payment
+ * landed anyway. `pending` is waited out up to `maxWaitMs` from the failure
+ * (the rail names the moment absence becomes authoritative, so two looks
+ * normally suffice; a third is slack for a clock that ran short). Anything
+ * the rail cannot decide — including a rail with no confirmer, a throw from
+ * the lookup, and a landed proof that is not the requested payment — is
+ * `unknown`: the caller must not pay again.
+ */
+async function confirmThrownPayment(args: {
+  confirm?: ConfirmP2pPayment;
+  request: SovereignP2pPaymentRequest;
+  sentAtMs: number;
+  failedAtMs: number;
+  error: unknown;
+  excludeSignatures: readonly string[];
+  maxWaitMs: number;
+  now: () => number;
+  sleep: (ms: number) => Promise<void>;
+}): Promise<Exclude<P2pPaymentConfirmation, { status: "pending" }>> {
+  if (args.confirm == null) {
+    return { status: "unknown", reason: "this wallet cannot confirm a failed payment" };
+  }
+  const deadline = args.failedAtMs + args.maxWaitMs;
+  for (let look = 0; look < 3; look++) {
+    let verdict: P2pPaymentConfirmation;
+    try {
+      verdict = await args.confirm({
+        request: args.request,
+        sentAtMs: args.sentAtMs,
+        failedAtMs: args.failedAtMs,
+        error: args.error,
+        excludeSignatures: args.excludeSignatures,
+      });
+    } catch (err: unknown) {
+      return { status: "unknown", reason: err instanceof Error ? err.message : String(err) };
+    }
+    if (verdict.status === "landed") {
+      return proofMatchesRequest(verdict.proof, args.request)
+        ? verdict
+        : {
+            status: "unknown",
+            reason: `the landed transaction ${verdict.proof.tx_hash} does not match the requested legs`,
+          };
+    }
+    if (verdict.status !== "pending") return verdict;
+    if (verdict.recheckAtMs > deadline) break;
+    await args.sleep(Math.max(0, verdict.recheckAtMs - args.now()));
+  }
+  return { status: "unknown", reason: "the payment was still unconfirmed when the wait ended" };
+}
+
+/** Does a recovered proof pay exactly the requested legs? */
+function proofMatchesRequest(proof: P2pPaymentProof, request: SovereignP2pPaymentRequest): boolean {
+  return (
+    typeof proof.tx_hash === "string" &&
+    proof.tx_hash.length > 0 &&
+    proof.to_address === request.workerAddress &&
+    proof.amount_micro === request.amountMicro &&
+    proof.fee_to_address === request.treasuryAddress &&
+    proof.fee_amount_micro === request.feeAmountMicro &&
+    (proof.b_fee_to_address ?? null) === (request.executorTreasuryAddress ?? null) &&
+    (proof.b_fee_amount_micro ?? null) === (request.executorFeeAmountMicro ?? null)
+  );
 }
 
 /**
@@ -1747,6 +2221,8 @@ export interface SelectDelegationParams {
   relayPublicKey?: string;
   /** The sovereign rail's atomic payment builder. Absent → relay-mode. */
   buildP2pPayment?: (request: SovereignP2pPaymentRequest) => Promise<P2pPaymentProof>;
+  /** The rail's read-only lookup after a builder throw (#885) — see `resolveAndSubmitP2pDelegation`. */
+  confirmP2pPayment?: ConfirmP2pPayment;
   /**
    * Cold-start acknowledgment for a new delegator↔worker pair — forwarded to the
    * P2P path. Only meaningful when the P2P path is taken. See
@@ -1822,6 +2298,7 @@ export async function selectAndRunDelegation(
       ...(params.targetWorkerId != null ? { targetWorkerId: params.targetWorkerId } : {}),
       relayPublicKeyHex: params.relayPublicKey,
       buildP2pPayment: params.buildP2pPayment,
+      ...(params.confirmP2pPayment != null ? { confirmP2pPayment: params.confirmP2pPayment } : {}),
       ...(params.acknowledgeNoHistoryRisk === true ? { acknowledgeNoHistoryRisk: true } : {}),
       ...(params.invocationOrigin ? { invocationOrigin: params.invocationOrigin } : {}),
       ...(params.grantId != null ? { grantId: params.grantId } : {}),
@@ -1840,11 +2317,14 @@ export async function selectAndRunDelegation(
     // Unpinned (capability-routed): fall back to relay-mode ONLY on PRE-BROADCAST
     // codes (no funds moved): no payable p2p worker, or the relay's pre-flight
     // said the pair is ineligible. Any other code may follow a broadcast →
-    // surface verbatim so a relay-custody re-submit can't double-charge.
+    // surface verbatim so a relay-custody re-submit can't double-charge. A
+    // result carrying a money fact never falls back, whatever its code (#885).
     if (
-      p2p.error.code !== "no_routing" &&
-      p2p.error.code !== "worker_not_payable" &&
-      p2p.error.code !== "p2p_ineligible"
+      p2p.error.settledPayment != null ||
+      p2p.error.unconfirmedPayment != null ||
+      (p2p.error.code !== "no_routing" &&
+        p2p.error.code !== "worker_not_payable" &&
+        p2p.error.code !== "p2p_ineligible")
     ) {
       return p2p;
     }

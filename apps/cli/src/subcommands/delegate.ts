@@ -304,7 +304,8 @@ export async function handleDelegate(config: CliConfig): Promise<void> {
       console.error("The sovereign rail cannot build atomic P2P payments on this platform.");
       process.exit(1);
     }
-    const { resolveAndSubmitP2pDelegation, PaidIntentLedger } = await import("@motebit/runtime");
+    const { resolveAndSubmitP2pDelegation, PaidIntentLedger, p2pPaymentConfirmerOf } =
+      await import("@motebit/runtime");
     const { toMicro, fromMicro } = await import("@motebit/protocol");
     // The durable paid-intent ledger (#874) — the same store the REPL's
     // runtime reads. Without it this path was the one paid door with no
@@ -330,6 +331,11 @@ export async function handleDelegate(config: CliConfig): Promise<void> {
       ...(targetMotebitId != null ? { targetWorkerId: targetMotebitId } : {}),
       relayPublicKeyHex: fullConfig.relay_public_key,
       buildP2pPayment,
+      // #885: a builder that throws is not proof nothing moved — the rail's
+      // read-only lookup decides, and "unknown" never pays again.
+      ...(p2pPaymentConfirmerOf(rail) != null
+        ? { confirmP2pPayment: p2pPaymentConfirmerOf(rail) }
+        : {}),
       ...(config.payNewAgents ? { acknowledgeNoHistoryRisk: true } : {}),
       // `--budget` is a hard pre-broadcast ceiling over worker + fee legs.
       ...(config.budget != null ? { maxTotalMicro: toMicro(parseFloat(config.budget)) } : {}),
@@ -341,7 +347,26 @@ export async function handleDelegate(config: CliConfig): Promise<void> {
     if (!result.ok) {
       console.error(`Sovereign delegation failed (${result.error.code}): ${result.error.message}`);
       const settled = result.error.settledPayment;
-      if (settled != null && result.error.code !== "intent_already_paid") {
+      const unconfirmed = result.error.unconfirmedPayment;
+      if (result.error.code === "payment_not_admitted" && settled != null) {
+        // #885: paid, and the relay never admitted the task — there is no
+        // result to fetch, and a second run would pay again.
+        console.error(
+          `The payment went out (tx ${settled.txHash}), but the relay did not admit the task, ` +
+            `even after resubmitting that same payment. Do not run this again — it would pay ` +
+            `a second time. The payment is recorded as ${settled.taskId}; after reconciling it, ` +
+            `run \`motebit\`, then /result dismiss ${settled.taskId}`,
+        );
+      } else if (result.error.code === "payment_status_unknown") {
+        console.error(
+          `The payment may have left your wallet — check its history before paying this worker ` +
+            `again.` +
+            (unconfirmed?.ledgerId != null
+              ? ` It is recorded as ${unconfirmed.ledgerId}; once reconciled, run \`motebit\`, ` +
+                `then /result dismiss ${unconfirmed.ledgerId}`
+              : ""),
+        );
+      } else if (settled != null && result.error.code !== "intent_already_paid") {
         // Paid, not delivered: the recovery is a free read, never a re-hire.
         console.error(
           `The payment settled (tx ${settled.txHash}); only the result did not arrive. ` +

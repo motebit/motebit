@@ -12,6 +12,7 @@ import type { TokenAudience } from "@motebit/protocol";
 import {
   retrieveDelegationResult,
   selectAndRunDelegation,
+  type ConfirmP2pPayment,
   type DelegationSettlement,
   type TaskRetrieval,
 } from "./relay-delegation.js";
@@ -86,6 +87,12 @@ export interface InteractiveDelegationConfig {
    * wallet is configured.
    */
   buildP2pPayment?: (request: SovereignP2pPaymentRequest) => Promise<P2pPaymentProof>;
+  /**
+   * The same rail's read-only "did the payment land anyway?" lookup (#885),
+   * bound by the runtime beside `buildP2pPayment`. Absent ⇒ a builder error
+   * is `payment_status_unknown` (recorded, never retried).
+   */
+  confirmP2pPayment?: ConfirmP2pPayment;
   /**
    * Cold-start opt-in: whether the user has consented to pay a worker they have
    * NO trust history with directly, peer-to-peer (the Arc-3 acknowledgment).
@@ -162,6 +169,10 @@ export function renderTaskRetrieval(
     invalid_task_id:
       "That is not a task id. Ask the user for the id (or use /result to list them).",
     not_connected: "No relay is connected on this device, so nothing could be read.",
+    not_admitted:
+      "This is a payment with NO relay task: the relay never admitted it, or the payment's " +
+      "landing could not be confirmed. There is no result to fetch. Do NOT re-delegate — that " +
+      "would pay again. Tell the user the payment is outstanding and let them reconcile it.",
   };
   const out: Record<string, unknown> = {
     task_id: r.taskId,
@@ -186,6 +197,8 @@ export function renderTaskRetrieval(
     out.result = r.receipt.result ?? "";
   } else if (r.status === "pending") {
     out.task_status = r.taskStatus;
+  } else if (r.status === "not_admitted") {
+    out.payment_landed = r.paymentLanded ? true : "unknown";
   } else if ("message" in r) {
     out.detail = r.message;
   }
@@ -371,6 +384,7 @@ export class InteractiveDelegationManager {
           prompt,
           ...(requiredCapabilities ? { requiredCapabilities } : {}),
           ...(config.buildP2pPayment ? { buildP2pPayment: config.buildP2pPayment } : {}),
+          ...(config.confirmP2pPayment ? { confirmP2pPayment: config.confirmP2pPayment } : {}),
           ...(config.relayPublicKey != null ? { relayPublicKey: config.relayPublicKey } : {}),
           ...(ack === true ? { acknowledgeNoHistoryRisk: true } : {}),
           ...(config.routingStrategy ? { routingStrategy: config.routingStrategy } : {}),
@@ -423,6 +437,31 @@ export class InteractiveDelegationManager {
                 `Do NOT re-delegate. Call retrieve_task_result with task_id ${settled.taskId} ` +
                 `(free, read-only) to fetch it; if that does not deliver, tell the user the work ` +
                 `was already paid for and its result is outstanding, and let them decide.`,
+            };
+          }
+          // #885: the money left the wallet but the relay never admitted the
+          // task — there is no task id to fetch. Not "the hire succeeded".
+          if (result.error.code === "payment_not_admitted" && settled) {
+            return {
+              ok: false,
+              error:
+                `PAYMENT_NOT_ADMITTED — you have ALREADY PAID ` +
+                `${(settled.paidMicro / 1_000_000).toFixed(4)} USDC (+ ` +
+                `${(settled.feeMicro / 1_000_000).toFixed(4)} fee) onchain, tx ${settled.txHash}, ` +
+                `but the relay did not admit the task, even after resubmitting that same payment. ` +
+                `There is no result to fetch. Do NOT delegate this task again — a second ` +
+                `delegation broadcasts a SECOND payment. Tell the user the payment went out and ` +
+                `the task was not admitted (${result.error.message}), and let them decide.`,
+            };
+          }
+          if (result.error.code === "payment_status_unknown") {
+            return {
+              ok: false,
+              error:
+                `PAYMENT_STATUS_UNKNOWN — the payment step failed and the wallet could not ` +
+                `confirm whether money left it. Nothing was submitted. Do NOT delegate this task ` +
+                `again — if the payment landed, a second delegation pays twice. Tell the user to ` +
+                `check the wallet's history (${result.error.message}).`,
             };
           }
           if (settled) {

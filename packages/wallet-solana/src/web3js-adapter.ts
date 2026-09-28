@@ -121,6 +121,34 @@ const OUTGOING_LOOKUP_PAGE = 50;
 const OUTGOING_LOOKUP_SKEW_MS = 30_000;
 
 /**
+ * Does a confirmed transaction's leg set match an outgoing-transfer query?
+ * Single-leg query: some leg pays `toAddress` exactly `microAmount`. Multi-leg
+ * query (`alsoLegs`, #885): the transaction's legs are EXACTLY the primary leg
+ * plus every `alsoLegs` entry — same recipients, same amounts, nothing else —
+ * so only the atomic P2P payment itself can match.
+ */
+function matchesOutgoingLegs(
+  transfers: ReadonlyArray<{ to: string; amountMicro: bigint }>,
+  query: OutgoingTransferQuery,
+): boolean {
+  if (query.alsoLegs == null) {
+    return transfers.some((l) => l.to === query.toAddress && l.amountMicro === query.microAmount);
+  }
+  const wanted = [
+    { toAddress: query.toAddress, microAmount: query.microAmount },
+    ...query.alsoLegs,
+  ];
+  const remaining = [...transfers];
+  for (const w of wanted) {
+    const i = remaining.findIndex((l) => l.to === w.toAddress && l.amountMicro === w.microAmount);
+    if (i < 0) return false;
+    remaining.splice(i, 1);
+  }
+  // Nothing else may leave the wallet in the same transaction.
+  return remaining.length === 0;
+}
+
+/**
  * True only for the AUTHORITATIVE permanent-expiry signal: the transaction's
  * blockhash passed its `lastValidBlockHeight` without confirming, so it was NOT
  * and can NEVER be included. That is the one broadcast failure known safe to
@@ -591,9 +619,7 @@ export class Web3JsRpcAdapter implements SolanaRpcAdapter {
         const tx = await this.getTransaction(info.signature);
         if (tx.status === "rpc_error") return { status: "rpc_error", reason: tx.reason };
         if (tx.status !== "confirmed" || tx.from !== own) continue;
-        if (
-          tx.transfers.some((l) => l.to === query.toAddress && l.amountMicro === query.microAmount)
-        ) {
+        if (matchesOutgoingLegs(tx.transfers, query)) {
           matches.push(info.signature);
         }
       }

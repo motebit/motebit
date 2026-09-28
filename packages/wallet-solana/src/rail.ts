@@ -23,7 +23,12 @@ import type {
 import type { SolanaRpcAdapter } from "./adapter.js";
 import type { SendUsdcResult, SendUsdcBatchItemResult } from "./adapter.js";
 import { Web3JsRpcAdapter } from "./web3js-adapter.js";
-import { buildP2pPaymentProof } from "./p2p-payment-proof.js";
+import {
+  buildP2pPaymentProof,
+  p2pPaymentLegs,
+  assembleP2pPaymentProof,
+  type BuildP2pPaymentProofArgs,
+} from "./p2p-payment-proof.js";
 import { InsufficientUsdcBalanceError, InvalidSolanaAddressError } from "./constants.js";
 
 export type SendResult = SendUsdcResult;
@@ -53,6 +58,31 @@ export interface ConfirmSendQuery {
 /** Closed verdict of {@link SolanaWalletRail.confirmSend}. */
 export type SendConfirmation =
   | { status: "landed"; signature: string }
+  | { status: "absent" }
+  | { status: "pending"; recheckAtMs: number }
+  | { status: "unknown"; reason: string };
+
+/** Input to {@link SolanaWalletRail.confirmP2pPayment}. */
+export interface ConfirmP2pPaymentQuery {
+  /** The payment request `buildP2pPayment` was called with — every leg is matched. */
+  request: SovereignP2pPaymentRequest;
+  /** Epoch ms when `buildP2pPayment` was called — the lookup window starts here. */
+  sentAtMs: number;
+  /** Epoch ms when `buildP2pPayment` threw — the landing horizon runs from here. */
+  failedAtMs: number;
+  /** What `buildP2pPayment` threw. */
+  error: unknown;
+  /** Signatures the caller already accounts for (its own earlier payments). */
+  excludeSignatures?: readonly string[];
+}
+
+/**
+ * Closed verdict of {@link SolanaWalletRail.confirmP2pPayment}. `landed`
+ * carries the full proof, assembled exactly as `buildP2pPayment` would have
+ * returned it for that transaction.
+ */
+export type P2pPaymentConfirmation =
+  | { status: "landed"; proof: P2pPaymentProof }
   | { status: "absent" }
   | { status: "pending"; recheckAtMs: number }
   | { status: "unknown"; reason: string };
@@ -227,19 +257,7 @@ export class SolanaWalletRail implements SovereignWalletRail {
     if (this.autoGas) {
       await this.ensureGas();
     }
-    return buildP2pPaymentProof(this.adapter, {
-      workerAddress: request.workerAddress,
-      amountMicro: request.amountMicro,
-      treasuryAddress: request.treasuryAddress,
-      feeAmountMicro: request.feeAmountMicro,
-      ...(request.executorTreasuryAddress != null
-        ? { executorTreasuryAddress: request.executorTreasuryAddress }
-        : {}),
-      ...(request.executorFeeAmountMicro != null
-        ? { executorFeeAmountMicro: request.executorFeeAmountMicro }
-        : {}),
-      ...(request.network != null ? { network: request.network } : {}),
-    });
+    return buildP2pPaymentProof(this.adapter, proofArgs(request));
   }
 
   /**
@@ -296,10 +314,87 @@ export class SolanaWalletRail implements SovereignWalletRail {
     }
   }
 
+  /**
+   * After `buildP2pPayment` threw: did the atomic P2P payment land anyway?
+   * (#885 — the multi-leg sibling of {@link confirmSend}.)
+   *
+   * Read-only: it never signs or broadcasts. It looks for exactly one
+   * transaction from this wallet, since the build began, whose transfers are
+   * EXACTLY the request's legs (worker + relay fee, + executor-relay fee when
+   * federated) at their exact amounts. Same verdicts as `confirmSend`:
+   *
+   *   - `landed` — the payment happened; `proof` is the proof for it.
+   *   - `absent` — authoritatively not paid (a pre-signing error, or no match
+   *     after `SOLANA_TX_LANDING_HORIZON_MS`).
+   *   - `pending` — no match yet, but a broadcast could still land.
+   *   - `unknown` — the lookup could not decide. A payer MUST NOT pay again.
+   */
+  async confirmP2pPayment(query: ConfirmP2pPaymentQuery): Promise<P2pPaymentConfirmation> {
+    if (
+      query.error instanceof InsufficientUsdcBalanceError ||
+      query.error instanceof InvalidSolanaAddressError
+    ) {
+      return { status: "absent" };
+    }
+    const args = proofArgs(query.request);
+    let legs: Array<{ toAddress: string; microAmount: bigint }>;
+    try {
+      legs = p2pPaymentLegs(args);
+    } catch (err: unknown) {
+      // The builder refuses the same malformed request before sending — but
+      // "unknown" costs nothing here and never reads a malformed query as absence.
+      return { status: "unknown", reason: err instanceof Error ? err.message : String(err) };
+    }
+    if (typeof this.adapter.findOutgoingTransfer !== "function") {
+      return { status: "unknown", reason: "this wallet adapter cannot look up past transfers" };
+    }
+    const [primary, ...rest] = legs;
+    const lookup = await this.adapter.findOutgoingTransfer({
+      toAddress: primary!.toAddress,
+      microAmount: primary!.microAmount,
+      alsoLegs: rest,
+      sinceMs: query.sentAtMs,
+      ...(query.excludeSignatures != null ? { excludeSignatures: query.excludeSignatures } : {}),
+    });
+    switch (lookup.status) {
+      case "found":
+        return { status: "landed", proof: assembleP2pPaymentProof(args, lookup.signature) };
+      case "ambiguous":
+        return {
+          status: "unknown",
+          reason: `${lookup.signatures.length} matching payments since the build (${lookup.signatures.join(", ")})`,
+        };
+      case "rpc_error":
+        return { status: "unknown", reason: lookup.reason };
+      case "not_found": {
+        const settledAt = query.failedAtMs + SOLANA_TX_LANDING_HORIZON_MS;
+        if (this.now() >= settledAt) return { status: "absent" };
+        return { status: "pending", recheckAtMs: settledAt };
+      }
+    }
+  }
+
   /** Whether the RPC endpoint is reachable right now. */
   isAvailable(): Promise<boolean> {
     return this.adapter.isReachable();
   }
+}
+
+/** The builder's arguments for a rail-level request — one mapping for broadcast and lookup. */
+function proofArgs(request: SovereignP2pPaymentRequest): BuildP2pPaymentProofArgs {
+  return {
+    workerAddress: request.workerAddress,
+    amountMicro: request.amountMicro,
+    treasuryAddress: request.treasuryAddress,
+    feeAmountMicro: request.feeAmountMicro,
+    ...(request.executorTreasuryAddress != null
+      ? { executorTreasuryAddress: request.executorTreasuryAddress }
+      : {}),
+    ...(request.executorFeeAmountMicro != null
+      ? { executorFeeAmountMicro: request.executorFeeAmountMicro }
+      : {}),
+    ...(request.network != null ? { network: request.network } : {}),
+  };
 }
 
 /**
