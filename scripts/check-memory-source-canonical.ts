@@ -779,6 +779,27 @@ function main(): void {
       );
     }
   }
+  // (ii-c) FORMATION (#943 round 7): a foreign turn's memory formation is
+  // `isolated_add` — ADD-only, never reading the owner's graph or touching
+  // an owner node. The mode is a REQUIRED field of the formation deps
+  // (compile-time); the loop derives it from the turn's mark, passes it to
+  // the inline pass and carries it on the deferred chunk, and the
+  // memory-graph pass branches on it exhaustively.
+  const mfSrc = readFile("packages/memory-graph/src/memory-formation.ts") ?? "";
+  if (
+    !/const formation: import\("@motebit\/memory-graph"\)\.FormationMode = foreign\s*\?\s*"isolated_add"\s*:\s*"consolidate";/.test(
+      rtsBody,
+    ) ||
+    !/mode: formation,/.test(rtsBody) ||
+    !/\n\s*formation,\n/.test(rtsBody) ||
+    !/readonly mode: FormationMode;/.test(mfSrc) ||
+    !/case "isolated_add":\s*\n\s*return true;/.test(mfSrc) ||
+    !/const linkTargets = isolated \? \[\] : relevantMemories;/.test(mfSrc)
+  ) {
+    interiorViolations.push(
+      "packages/ai-core/src/loop.ts + packages/memory-graph/src/memory-formation.ts: a foreign turn's formation must be `isolated_add` (derived from `foreign`, passed as `mode` inline and carried as `formation` on the deferred chunk), and `isolated_add` must ADD only — no consolidation lookup, no link to an owner node",
+    );
+  }
   if (providerCalls < 2) {
     interiorViolations.push(
       `${LOOP}: expected the two provider calls (the turn, the empty-text nudge) — found ${providerCalls}; the scan pattern may have drifted`,

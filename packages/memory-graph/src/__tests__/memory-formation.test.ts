@@ -64,7 +64,11 @@ describe("formMemoriesFromCandidates", () => {
     const { embedText } = await import("../embeddings.js");
     const before = (embedText as ReturnType<typeof vi.fn>).mock.calls.length;
 
-    const result = await formMemoriesFromCandidates({ memoryGraph: graph }, [], []);
+    const result = await formMemoriesFromCandidates(
+      { memoryGraph: graph, mode: "consolidate" },
+      [],
+      [],
+    );
     expect(result.memoriesFormed).toEqual([]);
 
     const after = (embedText as ReturnType<typeof vi.fn>).mock.calls.length;
@@ -111,7 +115,7 @@ describe("formMemoriesFromCandidates", () => {
       },
     ];
 
-    await formMemoriesFromCandidates({ memoryGraph: graph }, candidates, []);
+    await formMemoriesFromCandidates({ memoryGraph: graph, mode: "consolidate" }, candidates, []);
 
     expect(starts).toHaveLength(3);
     expect(completes).toHaveLength(3);
@@ -138,7 +142,7 @@ describe("formMemoriesFromCandidates", () => {
     ];
 
     const { memoriesFormed } = await formMemoriesFromCandidates(
-      { memoryGraph: graph },
+      { memoryGraph: graph, mode: "consolidate" },
       candidates,
       [],
     );
@@ -168,7 +172,7 @@ describe("formMemoriesFromCandidates", () => {
     ];
 
     const { memoriesFormed } = await formMemoriesFromCandidates(
-      { memoryGraph: graph, consolidationProvider },
+      { memoryGraph: graph, mode: "consolidate", consolidationProvider },
       candidates,
       [],
     );
@@ -181,7 +185,7 @@ describe("formMemoriesFromCandidates", () => {
     expect(memoriesFormed).toHaveLength(1);
 
     const { memoriesFormed: second } = await formMemoriesFromCandidates(
-      { memoryGraph: graph, consolidationProvider },
+      { memoryGraph: graph, mode: "consolidate", consolidationProvider },
       [
         {
           content: "Delta memory also requiring consolidation",
@@ -242,7 +246,12 @@ describe("formMemoriesFromCandidates", () => {
     );
 
     await formMemoriesFromCandidates(
-      { memoryGraph: graph, consolidationProvider, sensitivityCeiling: SensitivityLevel.Personal },
+      {
+        memoryGraph: graph,
+        mode: "consolidate",
+        consolidationProvider,
+        sensitivityCeiling: SensitivityLevel.Personal,
+      },
       [
         {
           content: "user mentioned a routine",
@@ -289,7 +298,7 @@ describe("formMemoriesFromCandidates", () => {
     ];
 
     const { memoriesFormed } = await formMemoriesFromCandidates(
-      { memoryGraph: graph },
+      { memoryGraph: graph, mode: "consolidate" },
       candidates,
       [retrieved],
     );

@@ -2318,6 +2318,24 @@ export class MotebitRuntime {
   }
 
   /**
+   * Record that `toolNames` belong to the motebit MCP server `serverName`,
+   * so a call to one renders as a delegation (`delegation_start` /
+   * `delegation_complete`, the delegating body state, the settled-hire
+   * ledger). For a motebit adapter connected OUTSIDE the runtime's own
+   * `mcpServers` path — the CLI REPL owns its config connections (#943).
+   */
+  registerMotebitToolServer(serverName: string, toolNames: string[]): void {
+    for (const name of toolNames) this.motebitToolServers.set(name, serverName);
+  }
+
+  /** Forget every tool→server mapping for `serverName` (its `/mcp remove`). */
+  unregisterMotebitToolServer(serverName: string): void {
+    for (const [tool, server] of [...this.motebitToolServers]) {
+      if (server === serverName) this.motebitToolServers.delete(tool);
+    }
+  }
+
+  /**
    * Remove all tools registered under a source ID.
    */
   unregisterExternalTools(sourceId: string): void {
@@ -3885,6 +3903,8 @@ export class MotebitRuntime {
       if (chunk.type === "memory_formation_deferred") {
         const candidates = chunk.candidates;
         const relevantMemories = chunk.relevantMemories;
+        // #943: the turn decided how formation may touch the owner's graph.
+        const mode = chunk.formation;
         const memoryGraph = this.memory;
         const consolidationProvider = this.loopDeps?.consolidationProvider;
         // Same classify-neighbor egress floor as the inline path: cap
@@ -3894,7 +3914,7 @@ export class MotebitRuntime {
           : SensitivityLevel.Personal;
         this.memoryFormation.enqueue(async () => {
           await formMemoriesFromCandidates(
-            { memoryGraph, consolidationProvider, sensitivityCeiling },
+            { memoryGraph, mode, consolidationProvider, sensitivityCeiling },
             candidates,
             relevantMemories,
           );
@@ -4581,6 +4601,11 @@ export class MotebitRuntime {
    * side effects (precision refresh, cold-start bootstrap, periodic reflection).
    */
   private accumulateTurnStats(result: TurnResult): void {
+    // #943: another principal's turn is not the owner's behaviour — it
+    // neither shapes the owner's self-model (behavioural stats, precision)
+    // nor triggers a gradient bootstrap or a reflection over the owner's
+    // interior.
+    if (this.isForeignPrincipalTurn()) return;
     const stats = this.gradientManager.behavioralStats;
     stats.turnCount++;
     stats.totalIterations += result.iterations;

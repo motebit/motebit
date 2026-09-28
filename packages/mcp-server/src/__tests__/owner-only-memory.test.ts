@@ -252,3 +252,31 @@ describe("#943 — the local stdio session is the owner", () => {
     expect(servedPrincipal(verifiedOwner, "http")).toBe("other");
   });
 });
+
+describe("#943 round 7 — motebit_query never reports a formation count", () => {
+  it("memories_formed is 0 on the wire whatever the turn formed", async () => {
+    const m = memoryDeps();
+    adapter = new McpServerAdapter(
+      { transport: "stdio" },
+      { ...m.deps, sendMessage: async () => ({ response: "hi", memoriesFormed: 3 }) },
+    );
+    const server = await (
+      adapter as unknown as {
+        createServer(): Promise<{ connect(t: unknown): Promise<void>; close(): Promise<void> }>;
+      }
+    ).createServer();
+    const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
+    await server.connect(serverSide);
+    const client = new Client({ name: "caller", version: "1" });
+    await client.connect(clientSide);
+    try {
+      const r = await client.callTool({ name: "motebit_query", arguments: { message: "q" } });
+      const text = JSON.stringify(r);
+      expect(text).toContain('\\"memories_formed\\":0');
+      expect(text).not.toContain('\\"memories_formed\\":3');
+    } finally {
+      await client.close();
+      await server.close();
+    }
+  });
+});

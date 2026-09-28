@@ -68,7 +68,11 @@ export {
   formMemoriesFromCandidates,
   MEMORY_EDGE_SIMILARITY_THRESHOLD,
 } from "./memory-formation.js";
-export type { MemoryFormationDeps, MemoryFormationResult } from "./memory-formation.js";
+export type {
+  FormationMode,
+  MemoryFormationDeps,
+  MemoryFormationResult,
+} from "./memory-formation.js";
 
 // === Scoring Configuration ===
 

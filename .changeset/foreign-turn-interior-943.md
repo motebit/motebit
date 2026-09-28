@@ -16,4 +16,6 @@ MCP servers you connect are now yours alone. That covers servers added in settin
 
 `motebit://state`, your motebit's live state (attention, mood and so on), is now served to you only, over stdio, like your memories.
 
+A caller's words can no longer touch your memories. Before this fix, when a served query or task told your motebit something close to what you had told it, your matching memory was reinforced or even replaced, and the caller could tell from the reply. Now what a caller says is only ever added as a new memory marked as coming from a peer agent. `memories_formed` in a `motebit_query` answer and in a task receipt is now always 0.
+
 `motebit_remember` is unchanged: a caller can still store a memory in your motebit, and it is always marked as coming from a peer agent, never from you.

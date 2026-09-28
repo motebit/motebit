@@ -101,7 +101,8 @@ export function servePrincipalDeps(
     // the turn is foreign: no `localOnly` tool is offered to it.
     sendMessage: async (text: string) => {
       const result = await runtime.sendMessage(text, undefined, { foreignPrincipal: true });
-      return { response: result.response, memoriesFormed: result.memoriesFormed.length };
+      // #943: never a count derived from the owner's memory to a caller.
+      return { response: result.response, memoriesFormed: 0 };
     },
   };
 }

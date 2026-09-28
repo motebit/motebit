@@ -151,6 +151,9 @@ export async function* handleAgentTask(
         });
       } else if (chunk.type === "result") {
         responseText = chunk.result.response;
+        // The owner's own log keeps the count; the signed receipt reports
+        // 0 (#943) — a task's turn is another principal's, and a formation
+        // count is a fact about the owner's memory.
         memoriesFormed = chunk.result.memoriesFormed.length;
         toolCallsSucceeded = chunk.result.toolCallsSucceeded;
         // Optional + additive on TurnResult — absent on legacy producers ⇒ 0 ⇒
@@ -209,7 +212,7 @@ export async function* handleAgentTask(
     status,
     result: responseText,
     tools_used: toolsUsed,
-    memories_formed: memoriesFormed,
+    memories_formed: 0,
     prompt_hash: promptHash,
     result_hash: resultHash,
     // Relay task ID binding — task.task_id IS the relay-assigned ID for WebSocket tasks.

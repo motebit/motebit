@@ -564,6 +564,9 @@ export interface MotebitLoopDependencies {
    * (trust graph, self-model, curiosity hints, skills, the owner's `[Now]`
    * facets) is dropped by `floorForeignTurnOptions` before anything is
    * packed. The owner's interior is never served to another principal.
+   * And the turn's memory FORMATION is `isolated_add`: ADD-only, as
+   * `peer_agent`, never reading the owner's graph for similar nodes nor
+   * reinforcing / updating / superseding an owner node.
    *
    * A per-TURN value, not a getter: the runtime builds the turn's deps
    * with it (`MotebitRuntime.loopDepsForTurn`), so formation reads the
@@ -885,6 +888,12 @@ export type AgenticChunk =
        * turn context of its own. */
       candidates: AttributedMemoryCandidate[];
       relevantMemories: MemoryNode[];
+      /**
+       * How the deferred pass may touch the owner's graph — decided by
+       * THIS turn (#943): a foreign turn's formation is `isolated_add`,
+       * however late the queue runs it.
+       */
+      formation: import("@motebit/memory-graph").FormationMode;
     }
   | { type: "result"; result: TurnResult };
 
@@ -2098,11 +2107,19 @@ export async function* runTurnStreaming(
   // snapshot. The runtime catches it, queues formation in the
   // background, and the user sees their response without waiting on
   // embedding + consolidation. See `MotebitRuntime._memoryFormationQueue`.
+  // #943: a foreign turn's formation is ADD-only (`isolated_add`): no
+  // similarity lookup against the owner's graph, no REINFORCE / UPDATE /
+  // supersede of an owner node, no edge to one. The mode is a required
+  // field of the formation deps, decided here from the turn's own mark.
+  const formation: import("@motebit/memory-graph").FormationMode = foreign
+    ? "isolated_add"
+    : "consolidate";
   if (options?.deferMemoryFormation === true) {
     yield {
       type: "memory_formation_deferred",
       candidates: [...candidates],
       relevantMemories: [...relevantMemories],
+      formation,
     };
   } else {
     // Classify-neighbor egress floor: on a non-sovereign provider, cap
@@ -2115,6 +2132,7 @@ export async function* runTurnStreaming(
     const { memoriesFormed: newlyFormed } = await formMemoriesFromCandidates(
       {
         memoryGraph,
+        mode: formation,
         consolidationProvider: deps.consolidationProvider,
         sensitivityCeiling: classifyCeiling,
       },

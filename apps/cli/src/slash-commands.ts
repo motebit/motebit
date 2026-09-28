@@ -1477,6 +1477,12 @@ export async function handleSlashCommand(
           const tmpRegistry = new InMemoryToolRegistry();
           adapter.registerInto(tmpRegistry);
           runtime.registerExternalTools(`mcp:${addName}`, tmpRegistry);
+          if (adapter.isMotebit) {
+            runtime.registerMotebitToolServer(
+              adapter.serverName,
+              adapter.getTools().map((t) => t.name),
+            );
+          }
         } catch (err: unknown) {
           const message = err instanceof Error ? err.message : String(err);
           try {

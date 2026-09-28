@@ -7,10 +7,14 @@
  * anything is packed. Covers every door that reaches the loop, including
  * the approval resume (which passes no owner options but still recalled).
  *
- * Tampers (each goes red): call `recallOwnerInterior` regardless of the
- * mark; use `rawOptions` instead of the floored `options`; make
- * `foreignSessionState` pass the snapshot through; reclassify an owner
- * field as `turn_own` in `TURN_OPTION_FOREIGN_CLASS`.
+ * Tampers that go red HERE: call `recallOwnerInterior` regardless of the
+ * mark; make `foreignSessionState` pass the snapshot through; drop an owner
+ * field from the decided set in `TURN_OPTION_FOREIGN_CLASS` (the set-equality
+ * test). NOT here: using `rawOptions` in the loop, or reclassifying a field
+ * in one table, stays green in this file because the other floor (the pack
+ * floor, or the options floor) still holds. Each layer's own test disables
+ * the other: `foreign-turn-options-layer.test.ts` and
+ * `foreign-turn-pack-layer.test.ts`.
  */
 
 import { describe, it, expect, vi } from "vitest";

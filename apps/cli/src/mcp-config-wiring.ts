@@ -22,6 +22,9 @@ type McpAdapters = Awaited<ReturnType<typeof connectMcpServers>>;
 export interface OwnerToolHost {
   registerExternalTools(sourceId: string, registry: ToolRegistry): void;
   unregisterExternalTools(sourceId: string): void;
+  /** Delegation visibility for a motebit server's tools (see the runtime). */
+  registerMotebitToolServer(serverName: string, toolNames: string[]): void;
+  unregisterMotebitToolServer(serverName: string): void;
 }
 
 /**
@@ -49,6 +52,14 @@ export async function connectConfigMcpServers(
     const perServer = new InMemoryToolRegistry();
     adapter.registerInto(perServer);
     host.registerExternalTools(`mcp:${adapter.serverName}`, perServer);
+    // A motebit server's tool calls are delegations — the runtime renders
+    // them as such only when it knows the mapping.
+    if (adapter.isMotebit) {
+      host.registerMotebitToolServer(
+        adapter.serverName,
+        adapter.getTools().map((t) => t.name),
+      );
+    }
     toolCount += perServer.size;
   }
   return { adapters, toolCount };
@@ -74,5 +85,6 @@ export async function disconnectMcpServer(
     adapters.splice(idx, 1);
   }
   host.unregisterExternalTools(`mcp:${name}`);
+  host.unregisterMotebitToolServer(name);
   return idx >= 0;
 }

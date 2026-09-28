@@ -883,7 +883,10 @@ export class McpServerAdapter {
 
           const result = await sendMessage(args.message);
           this.deps.logToolCall("motebit_query", args, { ok: true, data: result.response });
-          return fmt({ response: result.response, memories_formed: result.memoriesFormed });
+          // #943: `memories_formed` is always 0 on the wire. A count of what
+          // the turn formed is a fact about the OWNER's memory (an oracle on
+          // what it already held); the field stays for schema compatibility.
+          return fmt({ response: result.response, memories_formed: 0 });
         },
       );
     }
