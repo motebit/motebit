@@ -61,11 +61,10 @@ import {
   roundSettlementSplitMicro,
 } from "@motebit/protocol";
 import {
-  getAccountBalance,
   creditAccount,
   debitSpendableAccount,
   getAllocationHoldRemaining,
-  computeDisputeWindowHold,
+  getSpendableBalance,
   toMicro,
 } from "./accounts.js";
 import { attemptPushWake } from "./push-adapter.js";
@@ -2101,8 +2100,11 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
 
         if (delegatorId) {
           const grossMicro = toMicro(computeGrossAmount(currentPricing.unitCost, platformFeeRate));
-          const account = getAccountBalance(moteDb.db, delegatorId);
-          if (account && account.balance >= grossMicro) {
+          // SPENDABLE, the number the handler's hold is debited against —
+          // never the raw balance (#901). A raw read skipped x402 for an
+          // account whose balance is under the escrow hold; the handler then
+          // refused it 402 "pay via x402", and every retry skipped x402 again.
+          if (getSpendableBalance(moteDb.db, delegatorId) >= grossMicro) {
             return next();
           }
         }
@@ -2962,29 +2964,25 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
           }
         }
 
-        // Try to hold funds from virtual account. SPENDABLE balance only —
-        // the delegator's own recent/disputed settlement earnings are under
-        // the escrow hold and cannot fund a new delegation (true escrow;
-        // closes the collusion drain where a disputed worker delegates held
-        // earnings to a confederate before claw-back). Deposited/cleared
-        // funds are unaffected (hold = 0 → spendable = balance).
-        const account = getAccountBalance(moteDb.db, delegatorId);
-        const rawBalance = account?.balance ?? 0;
-        const escrowHold = computeDisputeWindowHold(moteDb.db, delegatorId);
-        // The escrow hold exists to stop a delegator spending its own recent
-        // EARNINGS while those are still disputable. An x402 payment is not
-        // that: it arrived seconds ago, from outside, earmarked for THIS task,
-        // and was deposit-credited just above. Netting the escrow hold against
-        // it would refuse a task the delegator has already paid for onchain.
+        // Hold funds from the virtual account. SPENDABLE balance only — the
+        // delegator's own recent/disputed settlement earnings are under the
+        // escrow hold and cannot fund a new delegation (true escrow; closes
+        // the collusion drain where a disputed worker delegates held earnings
+        // to a confederate before claw-back). Deposited/cleared funds are
+        // unaffected (hold = 0 → spendable = balance).
         //
-        // That refusal used to fail quietly in the worst way: `allocateBudget`
-        // returned null, control fell to the best-effort branch, and the task
-        // booked an allocation with NO hold behind it — so the relay took the
-        // money, the worker did the work, and the settlement path had nothing
-        // to pay from. Once settlement became ledger-derived that turns into a
-        // worker who is simply never paid. Excluding earmarked x402 funds from
-        // the escrow net keeps the hold real and the invariant honest.
-        const virtualBalance = x402TxHash ? rawBalance : Math.max(0, rawBalance - escrowHold);
+        // ONE definition for the check and the debit, on every funding path
+        // (#901): `getSpendableBalance` is exactly what `debitSpendableAccount`
+        // enforces. The x402 path used to size the hold from the RAW balance
+        // (to avoid netting the escrow hold against the x402 deposit credited
+        // just above), while the debit netted it — so `raw ≥ lock > spendable`
+        // made the debit return null, that null was ignored, and a `locked`
+        // allocation was booked and the task admitted with nothing held. An
+        // x402 deposit is itself spendable (a deposit is never under the
+        // escrow hold), so reading spendable here nets it only when the
+        // account's other funds sit BELOW its hold; then the lock is sized
+        // down to what can really be debited, or the task is refused.
+        const spendable = getSpendableBalance(moteDb.db, delegatorId);
 
         // Use allocateBudget to compute lock amount with risk buffer
         const allocation = allocateBudget(
@@ -2995,47 +2993,50 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
             currency: "USDC",
             risk_factor: 1.0, // 1.2× buffer
           },
-          virtualBalance,
+          spendable,
           asAllocationId(`x402-${taskId}`),
         );
 
-        if (allocation) {
-          // Round to integer micro-units (allocateBudget may produce fractional from risk multiplier)
-          const amountLocked = Math.round(allocation.amount_locked);
-          // Lock the risk-buffered amount — committed by the admission
-          // transaction below, atomically with the task it funds.
-          fundingWrites = () => {
-            debitSpendableAccount(
-              moteDb.db,
-              delegatorId,
-              amountLocked, // Uses risk-buffered amount (rounded to micro-unit)
-              "allocation_hold",
-              `x402-${taskId}`,
-              `Hold for task ${taskId} to ${motebitId}`,
-            );
-            moteDb.db
-              .prepare(
-                "INSERT OR IGNORE INTO relay_allocations (allocation_id, task_id, motebit_id, amount_locked, status, created_at) VALUES (?, ?, ?, ?, 'locked', ?)",
-              )
-              .run(`x402-${taskId}`, taskId, motebitId, amountLocked, now);
-          };
-        } else if (requiresPayment && !x402TxHash) {
-          // Paid agent, no virtual balance, no x402 payment — 402
+        if (!allocation) {
+          // Paid agent, spendable balance below the price — 402, on the x402
+          // path too. (That path used to book a `locked` allocation with no
+          // debit here, as a "best-effort" hold: an unfunded row every payout
+          // site trusts.) An x402 payment already credited above stays in
+          // the delegator's virtual account.
           throw new InsufficientFundsError(
             "Insufficient funds — deposit to virtual account or pay via x402",
           );
-        } else {
-          // Either free agent (best-effort allocation) or x402 deposited (balance should be sufficient).
-          // Persist allocation record for settlement audit — committed by the
-          // admission transaction below.
-          fundingWrites = () => {
-            moteDb.db
-              .prepare(
-                "INSERT OR IGNORE INTO relay_allocations (allocation_id, task_id, motebit_id, amount_locked, status, created_at) VALUES (?, ?, ?, ?, 'locked', ?)",
-              )
-              .run(`x402-${taskId}`, taskId, motebitId, priceSnapshot, now);
-          };
         }
+        // Round to integer micro-units (allocateBudget may produce fractional from risk multiplier)
+        const amountLocked = Math.round(allocation.amount_locked);
+        // Lock the risk-buffered amount — committed by the admission
+        // transaction below, atomically with the task it funds.
+        fundingWrites = () => {
+          const afterHold = debitSpendableAccount(
+            moteDb.db,
+            delegatorId,
+            amountLocked, // Uses risk-buffered amount (rounded to micro-unit)
+            "allocation_hold",
+            `x402-${taskId}`,
+            `Hold for task ${taskId} to ${motebitId}`,
+          );
+          // A null debit is a funding REFUSAL (#901), raised inside the
+          // admission transaction: the allocation row, the queued task and
+          // the claim binding below never happen, the transaction rolls
+          // back, and the key is freed for a funded retry (a pre-admission
+          // refusal, spec/delegation-v1.md §3.3). Never book a hold the
+          // ledger did not take.
+          if (afterHold === null) {
+            throw new InsufficientFundsError(
+              "Insufficient spendable funds for the budget hold — deposit to virtual account or pay via x402",
+            );
+          }
+          moteDb.db
+            .prepare(
+              "INSERT OR IGNORE INTO relay_allocations (allocation_id, task_id, motebit_id, amount_locked, status, created_at) VALUES (?, ?, ?, ?, 'locked', ?)",
+            )
+            .run(`x402-${taskId}`, taskId, motebitId, amountLocked, now);
+        };
       } catch (err) {
         // Re-throw intentional errors (RelayError, HTTPException)
         if (err instanceof RelayError || err instanceof HTTPException) throw err;
@@ -3088,6 +3089,10 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
       moteDb.db.exec("COMMIT");
     } catch (admitErr) {
       moteDb.db.exec("ROLLBACK");
+      // A funding refusal (the hold's debit found the spendable balance
+      // short) is a 402, not an allocation fault: the client funds and
+      // retries under the same key, which this rollback left free (#901).
+      if (admitErr instanceof InsufficientFundsError) throw admitErr;
       if (fundingWrites != null) {
         throw new AllocationError("ALLOCATION_HOLD_FAILED", "Allocation hold failed", {
           cause: admitErr,

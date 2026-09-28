@@ -23,6 +23,8 @@ export { DISPUTE_WINDOW_MS, MICRO, fromMicro, toMicro } from "./money.js";
 export type { AccountStore, InMemoryAccountStoreOptions } from "./store.js";
 export { InMemoryAccountStore } from "./store.js";
 
+export { computeSpendableAvailable } from "./spendable.js";
+
 export type {
   CompleteWithdrawalArgs,
   RequestWithdrawalArgs,

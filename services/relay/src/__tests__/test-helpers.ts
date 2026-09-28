@@ -15,8 +15,7 @@ import { TaskQueue } from "../task-queue.js";
 import {
   creditAccount,
   debitSpendableAccount,
-  getAccountBalance,
-  computeDisputeWindowHold,
+  getSpendableBalance,
   toMicro,
   fromMicro,
 } from "../accounts.js";
@@ -267,11 +266,9 @@ export function seedX402PaidTask(relay: SyncRelay, args: SeedX402PaidTaskArgs): 
     `x402 payment for task ${taskId}`,
   );
 
-  // Mirror: risk-buffered allocation hold (spendable balance only).
-  const account = getAccountBalance(db, args.delegatorId);
-  const rawBalance = account?.balance ?? 0;
-  const escrowHold = computeDisputeWindowHold(db, args.delegatorId);
-  const virtualBalance = Math.max(0, rawBalance - escrowHold);
+  // Mirror: risk-buffered allocation hold, sized from the SPENDABLE balance —
+  // the number the debit enforces (#901).
+  const virtualBalance = getSpendableBalance(db, args.delegatorId);
 
   const allocation = allocateBudget(
     {
@@ -289,7 +286,7 @@ export function seedX402PaidTask(relay: SyncRelay, args: SeedX402PaidTaskArgs): 
   }
   allocation.amount_locked = Math.round(allocation.amount_locked);
 
-  debitSpendableAccount(
+  const afterHold = debitSpendableAccount(
     db,
     args.delegatorId,
     allocation.amount_locked,
@@ -297,6 +294,10 @@ export function seedX402PaidTask(relay: SyncRelay, args: SeedX402PaidTaskArgs): 
     `x402-${taskId}`,
     `Hold for task ${taskId} to ${args.workerId}`,
   );
+  // Mirror: a null debit is a refusal — never seed a hold the ledger did not take (#901).
+  if (afterHold === null) {
+    throw new Error("seedX402PaidTask: allocation hold debit refused — spendable balance short");
+  }
   db.prepare(
     "INSERT OR IGNORE INTO relay_allocations (allocation_id, task_id, motebit_id, amount_locked, status, created_at) VALUES (?, ?, ?, ?, 'locked', ?)",
   ).run(`x402-${taskId}`, taskId, args.workerId, allocation.amount_locked, now);

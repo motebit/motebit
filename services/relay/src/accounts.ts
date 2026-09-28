@@ -22,6 +22,7 @@
 import type { DatabaseDriver } from "@motebit/persistence";
 import {
   completeWithdrawal as pkgCompleteWithdrawal,
+  computeSpendableAvailable as pkgComputeSpendableAvailable,
   failWithdrawal as pkgFailWithdrawal,
   getAccountBalanceDetailed as pkgGetAccountBalanceDetailed,
   requestWithdrawal as pkgRequestWithdrawal,
@@ -83,6 +84,16 @@ export function getAccountBalanceDetailed(
 
 export function computeDisputeWindowHold(db: DatabaseDriver, motebitId: string): number {
   return sqliteAccountStoreFor(db).getUnwithdrawableHold(motebitId);
+}
+
+/**
+ * What `debitSpendableAccount` would accept right now: `balance − escrow hold`,
+ * floored at zero (`computeSpendableAvailable` in `@motebit/virtual-accounts`).
+ * Any check that decides whether, or how much, to `debitSpendableAccount` reads
+ * this — never the raw balance — so the check and the debit agree (#901).
+ */
+export function getSpendableBalance(db: DatabaseDriver, motebitId: string): number {
+  return pkgComputeSpendableAvailable(sqliteAccountStoreFor(db), motebitId);
 }
 
 export function creditAccount(
