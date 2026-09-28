@@ -33,7 +33,12 @@ import {
 } from "@motebit/runtime";
 import { DeviceCapability } from "@motebit/sdk";
 import type { TokenAudience } from "@motebit/sdk";
-import type { SyncStatus as SyncEngineStatus } from "@motebit/sync-engine";
+import type {
+  CustomMessageCallback,
+  EventReceivedCallback,
+  SyncStatus as SyncEngineStatus,
+} from "@motebit/sync-engine";
+import type { EventStoreAdapter } from "@motebit/event-log";
 import { deriveSyncEncryptionKey, secureErase } from "@motebit/encryption";
 import {
   HttpEventStoreAdapter,
@@ -257,19 +262,32 @@ export class SpatialSyncController {
         });
         runtime.setDelegationAdapter(delegationAdapter);
 
-        const encryptedWs = new EncryptedEventStoreAdapter({ inner: wsAdapter, key: encKey });
+        // Encrypted wrapper for outbound events, over whichever socket adapter
+        // is current: an append still encrypting when a token refresh swaps
+        // the adapter lands on the replacement, not on the retired one (#816).
+        let currentWs = wsAdapter;
+        const liveWs: EventStoreAdapter = {
+          append: (e) => currentWs.append(e),
+          query: (f) => currentWs.query(f),
+          getLatestClock: (id) => currentWs.getLatestClock(id),
+          tombstone: (id, m) => currentWs.tombstone(id, m),
+        };
+        const encryptedWs = new EncryptedEventStoreAdapter({ inner: liveWs, key: encKey });
 
         // Inbound real-time events: decrypt and write to local store
-        this._wsUnsubOnEvent = wsAdapter.onEvent((raw) => {
+        const onInboundEvent: EventReceivedCallback = (raw) => {
           void (async () => {
             if (!localEventStore) return;
             const dec = await decryptEventPayload(raw, encKey);
             await localEventStore.append(dec);
           })();
-        });
+        };
+        this._wsUnsubOnEvent = wsAdapter.onEvent(onInboundEvent);
 
-        // Handle remote command requests (forwarded by relay)
-        wsAdapter.onCustomMessage((msg) => {
+        // Handle remote command requests (forwarded by relay). One named
+        // handler, attached to whichever adapter is current and answering on
+        // it — a token refresh moves it to the replacement (#816).
+        const onRelayFrame: CustomMessageCallback = (msg) => {
           const rt = this.deps.getRuntime();
           if (msg.type !== "command_request" || !rt) return;
           // Fail-closed remote ingress: only a signed-request-envelope@1.0
@@ -291,7 +309,7 @@ export class SpatialSyncController {
                 identityPublicKey: this.deps.getPublicKey(),
               });
               if (!verdict.ok) {
-                wsAdapter.sendRaw(
+                currentWs.sendRaw(
                   JSON.stringify({
                     type: "command_response",
                     id: cmdMsg.id,
@@ -308,11 +326,11 @@ export class SpatialSyncController {
               // lets a view that masks for the wire decide it is not on
               // one.
               const result = await executeRemoteCommand(rt, cmdMsg.command, cmdMsg.args);
-              wsAdapter.sendRaw(
+              currentWs.sendRaw(
                 JSON.stringify({ type: "command_response", id: cmdMsg.id, result }),
               );
             } catch (err: unknown) {
-              wsAdapter.sendRaw(
+              currentWs.sendRaw(
                 JSON.stringify({
                   type: "command_response",
                   id: cmdMsg.id,
@@ -323,7 +341,8 @@ export class SpatialSyncController {
               );
             }
           })();
-        });
+        };
+        let unsubRelayFrame = wsAdapter.onCustomMessage(onRelayFrame);
 
         runtime.connectSync(encryptedWs);
         wsAdapter.connect();
@@ -392,17 +411,29 @@ export class SpatialSyncController {
         // Adversarial onboarding: run self-test once after first relay connection
         void this.runOnboardingSelfTest(relayUrl, authToken ?? "");
 
-        // 7. Token refresh every 4.5 min — rebuild WS with fresh auth
-        this._wsTokenRefreshTimer = setInterval(() => {
+        // 7. Token refresh every 4.5 min — rebuild WS with fresh auth. Each
+        // refresh retires the adapter it REPLACES (`currentWs`) and attaches
+        // every handler to the replacement, so exactly one socket is open and
+        // it is the one that answers (#816).
+        const refreshTimer = setInterval(() => {
           void (async () => {
             try {
               const tf = this.deps.getTokenFactory();
-              const pk = this.deps.getPrivKey();
-              if (!this._wsAdapter || !tf || !pk) return;
-              this._wsAdapter.disconnect();
-
+              if (!tf || !this.deps.getPrivKey()) return;
               const freshToken = await tf();
-              const freshEncKey = await deriveSyncEncryptionKey(pk);
+              // disconnectRelay ended this session while the token was
+              // minting: touch nothing of whatever replaced it.
+              if (this._wsTokenRefreshTimer !== refreshTimer) {
+                clearInterval(refreshTimer);
+                currentWs.disconnect();
+                return;
+              }
+
+              if (this._wsUnsubOnEvent) this._wsUnsubOnEvent();
+              this._wsUnsubOnEvent = null;
+              unsubRelayFrame();
+              const replaced = currentWs;
+              replaced.disconnect();
 
               const freshWs = new WebSocketEventStoreAdapter({
                 url: wsUrl,
@@ -412,6 +443,11 @@ export class SpatialSyncController {
                 httpFallback: encryptedHttp,
                 localStore: localEventStore ?? undefined,
               });
+              // Events the sync engine handed the replaced adapter while it
+              // was offline are counted as pushed; they go out on the
+              // replacement.
+              for (const queued of replaced.takePendingEvents()) void freshWs.append(queued);
+              currentWs = freshWs;
 
               // Re-wire delegation with fresh WS
               const freshDelegation = new RelayDelegationAdapter({
@@ -424,20 +460,9 @@ export class SpatialSyncController {
               });
               this.deps.getRuntime()?.setDelegationAdapter(freshDelegation);
 
-              if (this._wsUnsubOnEvent) this._wsUnsubOnEvent();
-              this._wsUnsubOnEvent = freshWs.onEvent((raw) => {
-                void (async () => {
-                  if (!localEventStore) return;
-                  const dec = await decryptEventPayload(raw, freshEncKey);
-                  await localEventStore.append(dec);
-                })();
-              });
+              this._wsUnsubOnEvent = freshWs.onEvent(onInboundEvent);
+              unsubRelayFrame = freshWs.onCustomMessage(onRelayFrame);
 
-              const freshEncrypted = new EncryptedEventStoreAdapter({
-                inner: freshWs,
-                key: freshEncKey,
-              });
-              this.deps.getRuntime()?.connectSync(freshEncrypted);
               freshWs.connect();
               this._wsAdapter = freshWs;
             } catch {
@@ -445,6 +470,7 @@ export class SpatialSyncController {
             }
           })();
         }, 4.5 * 60_000);
+        this._wsTokenRefreshTimer = refreshTimer;
       } catch {
         // Sync setup failed — fall back to delegation-only
         this.setSyncStatus("error");
