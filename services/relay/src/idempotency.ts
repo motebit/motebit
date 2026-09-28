@@ -251,11 +251,14 @@ export function cleanupIdempotencyKeys(db: DatabaseDriver): number {
 //
 // The claim exists exactly when its task was admitted. It is written inside
 // the admission transaction, so a refusal inside that transaction rolls it
-// back with the task, and a refusal before admission never writes it. Nothing
-// deletes a claim: after admission the proof is spent on that task, whatever
-// becomes of it (a failed forward, an expired task, a paid failure). The retry
-// of a failed admitted submission is the same-key replay (#888) or the task's
-// result, never the same proof under a new key.
+// back with the task, and a refusal before admission never writes it. After
+// admission the proof is spent on that task, whatever becomes of it (an
+// expired task, a paid failure, a forward that may have been delivered), with
+// ONE exception: a federated forward the executor relay DEFINITELY refused
+// (it did not enqueue), where `releaseP2pProofClaim` frees the proof in the
+// same transaction that voids the task, so the payer may submit it again.
+// Otherwise the retry of a failed admitted submission is the same-key replay
+// (#888) or the task's result, never the same proof under a new key.
 //
 // Before this, the only reuse guard read `relay_settlements.p2p_tx_hash`, so
 // it saw SETTLED proofs only: one unsettled payment admitted and dispatched a
@@ -290,6 +293,22 @@ export function findP2pProofClaim(db: DatabaseDriver, txHash: string): P2pProofC
       "SELECT task_id, submitted_by, submitter_verified FROM relay_p2p_proof_claims WHERE tx_hash = ?",
     )
     .get(p2pProofKey(txHash)) as P2pProofClaim | undefined;
+}
+
+/**
+ * Release the claim a proof holds on `taskId` (#918 round 3) — the ONE
+ * release after admission, and only for a task that can never execute: a
+ * federated forward the executor relay DEFINITELY refused (it did not
+ * enqueue; `isDefiniteForwardRefusal` in tasks.ts). Call inside the
+ * transaction that voids that task, so the proof is freed exactly when its
+ * task is dead. Scoped to (tx_hash, task_id): it never frees a proof bound to
+ * any other task. Returns whether a claim was released.
+ */
+export function releaseP2pProofClaim(db: DatabaseDriver, txHash: string, taskId: string): boolean {
+  const info = db
+    .prepare("DELETE FROM relay_p2p_proof_claims WHERE tx_hash = ? AND task_id = ?")
+    .run(p2pProofKey(txHash), taskId);
+  return info.changes > 0;
 }
 
 /**

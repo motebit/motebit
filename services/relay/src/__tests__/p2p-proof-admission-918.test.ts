@@ -663,6 +663,66 @@ describe("#918 round 2: a proof is admissible only from its payer", () => {
     });
   });
 
+  it("a hung payer read is bounded: the submitter gets a retryable 503, nothing admitted, the key freed", async () => {
+    const hanging: Pick<SolanaRpcAdapter, "getTransaction"> = {
+      getTransaction: () => new Promise(() => {}),
+    };
+    const verdict = await paymentChainFromAdapter(hanging, { timeoutMs: 20 }).payerOf(
+      "h",
+      new Set(["x"]),
+    );
+    expect(verdict.status).toBe("unavailable");
+
+    await relay.close();
+    relay = await createTestRelay({
+      p2pPaymentChain: paymentChainFromAdapter(hanging, { timeoutMs: 50 }),
+    });
+    const delegator = await newAgent();
+    const { worker, dispatched } = await pricedWorker();
+    establishPair(delegator.motebitId, worker.motebitId);
+    const proof = buildP2pPaymentProof(relay, {
+      workerAddress: WORKER_SOLANA_ADDR,
+      unitCostMicro: toMicro(0.5),
+    });
+    const prompt = `918 hung ${crypto.randomUUID()}`;
+    const res = await submit(
+      `/agent/${delegator.motebitId}/task`,
+      crypto.randomUUID(),
+      JSON_AUTH,
+      p2pBody(prompt, delegator.motebitId, worker.motebitId, proof),
+    );
+    expect(res.status, await res.clone().text()).toBe(503);
+    expect(((await res.json()) as { code: string }).code).toBe("TASK_P2P_PROOF_UNVERIFIED");
+    expect(tasksWithPrompt(prompt)).toEqual([]);
+    expect(claimOf(proof.tx_hash)).toBeUndefined();
+    expect(dispatched()).toBe(0);
+    const stuck = relay.moteDb.db
+      .prepare("SELECT COUNT(*) AS n FROM relay_idempotency_keys WHERE status = 'processing'")
+      .get() as { n: number };
+    expect(stuck.n).toBe(0);
+  });
+
+  it("a relay with NO API token (the submit route authenticates nobody): an anonymous caller naming the payer in submitted_by is refused NOT_PAYER — never treated as the operator", async () => {
+    await relay.close();
+    relay = await createTestRelay({ apiToken: undefined, p2pPaymentChain: chain });
+    const victim = await newAgent();
+    const { worker, dispatched } = await pricedWorker();
+    establishPair(victim.motebitId, worker.motebitId);
+    const proof = paidBy(victim);
+    const prompt = `918 anon ${crypto.randomUUID()}`;
+    const res = await submit(
+      `/agent/${victim.motebitId}/task`,
+      crypto.randomUUID(),
+      { "Content-Type": "application/json" },
+      p2pBody(prompt, victim.motebitId, worker.motebitId, proof),
+    );
+    expect(res.status, await res.clone().text()).toBe(403);
+    expect(((await res.json()) as { code: string }).code).toBe("TASK_P2P_PROOF_NOT_PAYER");
+    expect(claimOf(proof.tx_hash)).toBeUndefined();
+    expect(tasksWithPrompt(prompt)).toEqual([]);
+    expect(dispatched()).toBe(0);
+  });
+
   it("end to end through the production comparison: a stub RPC whose tx was paid by the victim admits the victim and refuses the stranger", async () => {
     const payers = new Map<string, string>();
     const rpc: Pick<SolanaRpcAdapter, "getTransaction"> = {

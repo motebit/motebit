@@ -67,14 +67,33 @@ export interface P2pPaymentChain {
  */
 export function paymentChainFromAdapter(
   adapter: Pick<SolanaRpcAdapter, "getTransaction">,
+  opts: {
+    /**
+     * Bound on one payer read. A hung RPC must answer the submitter a
+     * retryable 503, not hold the request (and its idempotency claim) open.
+     */
+    timeoutMs?: number;
+  } = {},
 ): P2pPaymentChain {
+  const timeoutMs = opts.timeoutMs ?? PAYER_READ_TIMEOUT_MS;
   return {
     async payerOf(txHash, candidates) {
       let tx: Awaited<ReturnType<SolanaRpcAdapter["getTransaction"]>>;
+      let timer: ReturnType<typeof setTimeout> | undefined;
       try {
-        tx = await adapter.getTransaction(txHash);
+        tx = await Promise.race([
+          adapter.getTransaction(txHash),
+          new Promise<never>((_, reject) => {
+            timer = setTimeout(
+              () => reject(new Error(`payer read timed out after ${timeoutMs}ms`)),
+              timeoutMs,
+            );
+          }),
+        ]);
       } catch (err) {
         return { status: "unavailable", reason: err instanceof Error ? err.message : String(err) };
+      } finally {
+        if (timer !== undefined) clearTimeout(timer);
       }
       if (tx.status === "rpc_error") return { status: "unavailable", reason: tx.reason };
       if (tx.status === "not_found") return { status: "not_found" };
@@ -84,6 +103,9 @@ export function paymentChainFromAdapter(
 }
 
 const READ_ONLY_SEED = new Uint8Array(32);
+
+/** Default bound on one payer read (#918 round 3). */
+export const PAYER_READ_TIMEOUT_MS = 8_000;
 
 /**
  * The chain configured by the environment (`SOLANA_RPC_URL`, and

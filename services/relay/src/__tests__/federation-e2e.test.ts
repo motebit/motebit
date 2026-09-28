@@ -2585,6 +2585,84 @@ describe("Federation E2E", () => {
       });
     }
 
+    // #918 round 3: a DEFINITE executor refusal (it did not enqueue) voids the
+    // admitted task and releases its proof, so the payer resubmits the SAME
+    // proof under a new key and the worker runs once in total.
+    for (const status of [400, 403, 404, 429]) {
+      it(`#918: the executor relay definitely refuses the forward (HTTP ${status}) — the task is voided, the proof released, and the same proof under a new key admits once; the worker runs once`, async () => {
+        const { alice, body } = await paidFederated(`cap-918-refused-${status}`);
+        let n = 0;
+        const forwards = stubForward((passThrough) =>
+          n++ === 0 ? Promise.resolve(new Response("refused", { status })) : passThrough(),
+        );
+        const prompt = `918 refused ${status} ${crypto.randomUUID()}`;
+        const url = `/agent/${alice}/task`;
+        const txHash = (body(prompt)["payment_proof"] as { tx_hash: string }).tx_hash;
+        const claimOnA = () =>
+          relayA.moteDb.db
+            .prepare("SELECT task_id FROM relay_p2p_proof_claims WHERE tx_hash = ?")
+            .get(txHash) as { task_id: string } | undefined;
+
+        const first = await submitA(url, crypto.randomUUID(), body(prompt));
+        expect(first.status, await first.clone().text()).toBe(502);
+        const b1 = (await first.json()) as { error: string; task_id: string };
+        expect(b1.error).toMatch(
+          /released: resubmit the same payment_proof under a NEW Idempotency-Key/,
+        );
+        expect(claimOnA(), "the proof is released").toBeUndefined();
+        const voided = relayA.moteDb.db
+          .prepare(
+            "SELECT json_extract(task_json, '$.task.status') AS s FROM relay_task_queue WHERE task_id = ?",
+          )
+          .get(b1.task_id) as { s: string };
+        expect(voided.s, "the refused task is void").toBe("failed");
+
+        const again = await submitA(url, crypto.randomUUID(), body(prompt));
+        expect(again.status, await again.clone().text()).toBe(201);
+        const { task_id } = (await again.json()) as { task_id: string };
+        expect(claimOnA()?.task_id, "the proof is bound to the new task").toBe(task_id);
+        expect(forwards()).toBe(2);
+        const onB = relayB.moteDb.db
+          .prepare("SELECT task_id FROM relay_task_queue WHERE prompt = ?")
+          .all(prompt) as { task_id: string }[];
+        expect(
+          onB.map((r) => r.task_id),
+          "the executor holds exactly one task",
+        ).toEqual([task_id]);
+
+        // Once admitted again, the proof is spent again.
+        const third = await submitA(url, crypto.randomUUID(), body(prompt));
+        expect(third.status).toBe(409);
+      });
+    }
+
+    it("#918: the forward is DELIVERED but the answer is lost (timeout) — the proof stays bound, the resubmission is 409, and the executor holds one task", async () => {
+      const { alice, body } = await paidFederated("cap-918-lost");
+      stubForward(async (passThrough) => {
+        await passThrough(); // the executor enqueued it
+        throw new DOMException("The operation timed out", "TimeoutError");
+      });
+      const prompt = `918 lost ${crypto.randomUUID()}`;
+      const first = await submitA(`/agent/${alice}/task`, crypto.randomUUID(), body(prompt));
+      expect(first.status).toBe(502);
+      const again = await submitA(`/agent/${alice}/task`, crypto.randomUUID(), body(prompt));
+      expect(again.status, await again.clone().text()).toBe(409);
+      const onB = relayB.moteDb.db
+        .prepare("SELECT task_id FROM relay_task_queue WHERE prompt = ?")
+        .all(prompt) as { task_id: string }[];
+      expect(onB).toHaveLength(1);
+    });
+
+    it("#918: an executor 409 (it may hold the task) is not a definite refusal — the proof stays bound", async () => {
+      const { alice, body } = await paidFederated("cap-918-409");
+      stubForward(() => Promise.resolve(Response.json({ status: "duplicate" }, { status: 409 })));
+      const prompt = `918 dup ${crypto.randomUUID()}`;
+      const first = await submitA(`/agent/${alice}/task`, crypto.randomUUID(), body(prompt));
+      expect(first.status).toBe(502);
+      const again = await submitA(`/agent/${alice}/task`, crypto.randomUUID(), body(prompt));
+      expect(again.status).toBe(409);
+    });
+
     it("#918: the executor relay refuses a second task_id carrying a proof it already admitted (409); the worker gets one task", async () => {
       const { alice, body } = await paidFederated("cap-918-executor");
       stubForward((passThrough) => passThrough());

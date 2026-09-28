@@ -94,6 +94,7 @@ import {
   checkIdempotency,
   completeIdempotency,
   findP2pProofClaim,
+  releaseP2pProofClaim,
   p2pProofKey,
   recordAdmittedOutcome,
   type P2pProofClaim,
@@ -558,6 +559,33 @@ export async function refreshDispatchTokenOnReplay(
     reason: claims.exp <= now ? "expired" : "expiring",
   });
   return { ...replayed, dispatch_token: fresh };
+}
+
+/**
+ * The executor-relay answers to `POST /federation/v1/task/forward` that are a
+ * DEFINITE refusal: the executor did not enqueue the forwarded task, so it can
+ * never run there (#918 round 3). A CLOSED set of HTTP statuses, each produced
+ * only before the executor's enqueue (services/relay/src/federation.ts
+ * forward route + `onTaskForwarded`):
+ *
+ *   400  malformed forward (missing fields), refused before any write;
+ *   403  federation disabled, peer blocked, unknown/inactive peer or invalid
+ *        signature (`checkFederationEnabled`, `checkPeerLimit`,
+ *        `verifyPeerSignature`) — refused before the handler reads the task;
+ *   404  the target agent is not on that relay (delisted or unknown);
+ *   429  the per-peer rate limit, or `onTaskForwarded`'s `rejected`
+ *        (queue_full / per_submitter_limit), both before `taskQueue.set`.
+ *
+ * Everything else is NOT a definite refusal and keeps the proof bound: any
+ * 5xx, a timeout or no answer, 409 (a `duplicate` means the executor already
+ * HOLDS this task_id; `p2p_proof_already_admitted` means the proof funds a task
+ * there), and any status not listed. Adding a status here is a claim about the
+ * executor's code path; it must hold for every status in the set.
+ */
+export const DEFINITE_FORWARD_REFUSALS: ReadonlySet<number> = new Set([400, 403, 404, 429]);
+
+export function isDefiniteForwardRefusal(status: number): boolean {
+  return DEFINITE_FORWARD_REFUSALS.has(status);
 }
 
 /**
@@ -2623,6 +2651,26 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
           ? existing.task_id
           : undefined,
       );
+    // Void an admitted federated P2P task the executor relay DEFINITELY
+    // refused, and release its proof, in one transaction (#918 round 3). A
+    // failure here propagates (the request ends 500, recorded under its key)
+    // and leaves the proof bound — never released without its task voided.
+    const voidRefusedP2pTask = (id: string, txHash: string): void => {
+      moteDb.db.exec("BEGIN");
+      try {
+        const entry = taskQueue.get(id);
+        if (entry) {
+          entry.task.status = AgentTaskStatus.Failed;
+          taskQueue.set(id, entry);
+        }
+        releaseP2pProofClaim(moteDb.db, txHash, id);
+        moteDb.db.exec("COMMIT");
+      } catch (err) {
+        moteDb.db.exec("ROLLBACK");
+        throw err;
+      }
+      logger.warn("task.federated_p2p_refused_voided", { correlationId: id, taskId: id });
+    };
     // Whether THIS request's submitter was proven by a signed token (not the
     // operator's body assertion). Recorded in the claim, so a later refusal
     // discloses the task only to a submitter the relay actually verified.
@@ -3604,13 +3652,24 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
           });
         } else {
           taskRouter.recordPeerForwardResult(peerEndpoint, false);
-          // Post-admission: the proof is bound to THIS task (#918) and funds
-          // no other. This used to invite "the same payment_proof under a new
-          // Idempotency-Key", which admitted and dispatched a second task on
-          // one payment. The key replays this answer (#888), and the body
-          // names this task (`recordAdmissionOutcome`).
+          // A DEFINITE refusal (the executor relay did not enqueue — the
+          // closed set in `isDefiniteForwardRefusal`) means this task can
+          // never run anywhere: void it and free its proof in one
+          // transaction, so the payer can submit the SAME proof again under
+          // a new Idempotency-Key (this key replays this answer, #888). One
+          // execution still holds: the executor binds its own claim, so a
+          // proof it HAD accepted would be refused there under another
+          // task_id. Anything else (5xx, a 409 duplicate, any unlisted
+          // status) may mean the executor holds the task, so the proof stays
+          // bound to it (#918).
+          if (isDefiniteForwardRefusal(resp.status)) {
+            voidRefusedP2pTask(taskId, proof.tx_hash);
+            throw new HTTPException(502, {
+              message: `Executor relay refused the forwarded task (HTTP ${resp.status}) before accepting it; this task is void and never ran. Its payment_proof is released: resubmit the same payment_proof under a NEW Idempotency-Key (this key replays this answer). No new payment is needed.`,
+            });
+          }
           throw new HTTPException(502, {
-            message: `Executor relay rejected the forwarded task (HTTP ${resp.status}). This payment_proof is bound to this task (task_id in this response) and funds no other task: resubmitting it under any Idempotency-Key is refused, and this key replays this answer. A new task needs a new payment.`,
+            message: `Executor relay failed the forwarded task (HTTP ${resp.status}); it may hold the task. This payment_proof stays bound to this task (task_id in this response): poll that task's result. Resubmitting the proof under any Idempotency-Key is refused, and this key replays this answer.`,
           });
         }
       } catch (fwdErr) {
