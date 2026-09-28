@@ -21,9 +21,11 @@
  * named delegator does not hold is refused 403.
  *
  * Before #850 the signature was checked against the key EMBEDDED in the
- * revocation alone, and the acceptance fence (`listRevokedGrantIds`) matches
- * on `grant_id` alone — so a stranger with a fresh keypair who knew a
- * `grant_id` could make the relay refuse that grant's tasks.
+ * revocation alone, and the acceptance fence matched on `grant_id` alone —
+ * so anyone who knew a `grant_id` (a stranger with a fresh keypair, or any
+ * registered identity signing under its own key) could make the relay refuse
+ * that grant's tasks. The fence now honours only the task submitter's own
+ * revocations (`isGrantRevokedBy`).
  *
  * Why this exists NOW (Inc 3a of the money-execution arc): before autonomous
  * money moves under a standing grant, the coordinator at the settlement
@@ -46,6 +48,7 @@ import { canonicalJson } from "@motebit/encryption";
 import type { DelegationRevocation } from "@motebit/crypto";
 import { DelegationRevocationSchema } from "@motebit/wire-schemas";
 import { bindByDelegationRevocation, unwrapBound, type BoundIdentity } from "./identity-binding.js";
+import type { AuthEvent } from "./auth-events.js";
 import { createLogger } from "./logger.js";
 
 const logger = createLogger({ service: "delegation-revocations" });
@@ -118,16 +121,51 @@ export function listDelegationRevocations(
   return { records, nextSince };
 }
 
-/** The set of revoked grant_ids — the relay-side `isRevoked` seam input. */
-export function listRevokedGrantIds(db: DatabaseDriver): Set<string> {
-  const rows = db
-    .prepare(`SELECT DISTINCT grant_id FROM relay_delegation_revocations`)
-    .all() as Array<{ grant_id: string }>;
-  return new Set(rows.map((r) => r.grant_id));
+/**
+ * The acceptance fence's question (tasks.ts, checkpoint D4): has `delegatorId`
+ * revoked `grantId`? A cached revocation counts only when its `delegator_id`
+ * is the identity asking — the task's authenticated submitter (#850).
+ *
+ * The relay holds no grants, so it cannot know a grant's delegator; `grant_id`
+ * on the task wire is advisory, never authority. Matching on `grant_id` alone
+ * let ANY registered identity sign `{grant_id: G, delegator_id: itself}` with
+ * its own key — a valid, bound revocation — and fence another delegator's
+ * grant G. Honouring only the submitter's own revocations is exact for the
+ * shape minted today (self-delegation: delegator = delegate = submitter);
+ * for a cross-party grant the relay fence stays silent and the runtime's
+ * `verifyGrantForTurn` (`findGrantRevocation` over the full grant) remains the
+ * authority — narrowing this fence can never grant anything.
+ *
+ * `delegatorId` null/empty (no authenticated submitter) ⇒ false: there is no
+ * identity to bind a revocation to. There is deliberately no "every revoked
+ * grant_id" reader.
+ */
+export function isGrantRevokedBy(
+  db: DatabaseDriver,
+  grantId: string,
+  delegatorId: string | null | undefined,
+): boolean {
+  if (typeof delegatorId !== "string" || delegatorId === "") return false;
+  return (
+    db
+      .prepare(
+        "SELECT 1 FROM relay_delegation_revocations WHERE grant_id = ? AND delegator_id = ? LIMIT 1",
+      )
+      .get(grantId, delegatorId) != null
+  );
 }
 
-export function registerDelegationRevocationRoutes(deps: { app: Hono; db: DatabaseDriver }): void {
-  const { app, db } = deps;
+export function registerDelegationRevocationRoutes(deps: {
+  app: Hono;
+  db: DatabaseDriver;
+  /**
+   * Durable auth-event record (auth-events.ts) for refused revocations
+   * (relay rule 6). Required: a refusal stops being recorded the day a
+   * refactor drops an optional one.
+   */
+  recordAuthEvent: (event: AuthEvent) => void;
+}): void {
+  const { app, db, recordAuthEvent } = deps;
 
   // POST /api/v1/delegations/revocations — submit a signed DelegationRevocation.
   // Fully permissive by the bond-route reasoning (see module header): the
@@ -156,6 +194,18 @@ export function registerDelegationRevocationRoutes(deps: { app: Hono; db: Databa
       logger.warn("delegation.revocation.refused", {
         grant_id: revocation.grant_id,
         delegator_id: revocation.delegator_id,
+        reason: binding.refused,
+        correlationId: c.req.header("x-correlation-id") ?? null,
+      });
+      // Rule 6: recorded durably. No token is presented on this route; the
+      // subject is the CLAIMED delegator (the artifact's `delegator_id`), the
+      // way a token rejection records the claimed `mid`.
+      recordAuthEvent({
+        kind: "agent_token_rejected",
+        method: c.req.method,
+        path: c.req.path,
+        motebitId: typeof revocation.delegator_id === "string" ? revocation.delegator_id : null,
+        audience: null,
         reason: binding.refused,
         correlationId: c.req.header("x-correlation-id") ?? null,
       });

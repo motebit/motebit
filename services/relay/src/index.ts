@@ -1291,6 +1291,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     relayIdentity,
     identityManager,
     issueCredentials,
+    recordAuthEvent: authEvents.record,
   });
 
   // --- Credential anchoring config (populated during startup, used by admin endpoint) ---
@@ -1721,7 +1722,11 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
 
   // --- Delegation-revocation cache (standing-delegation §5; signed artifacts,
   // relay is cache-not-authority) ---
-  registerDelegationRevocationRoutes({ app, db: moteDb.db });
+  registerDelegationRevocationRoutes({
+    app,
+    db: moteDb.db,
+    recordAuthEvent: authEvents.record,
+  });
 
   // --- Federation background loops ---
 

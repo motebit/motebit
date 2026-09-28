@@ -825,7 +825,7 @@ const WRITERS: readonly Writer[] = [
     table: "relay_delegation_revocations",
     count: 1,
     principal:
-      "the delegator it names, through `insertDelegationRevocation(db, owner: BoundIdentity, …)`: `bindByDelegationRevocation` (#850) verifies the signature AND that its key is one this relay holds for `delegator_id` (`keysHeldBy` — a rotated-out key no longer speaks), looked up by the binder, never taken from the artifact alone. Anyone may carry the delegator's signed revocation. NOT bound here: that the revoking delegator is the delegator of the GRANT — the relay holds no grants, and the acceptance fence (`listRevokedGrantIds`, tasks.ts) matches on `grant_id` alone",
+      "the delegator it names, through `insertDelegationRevocation(db, owner: BoundIdentity, …)`: `bindByDelegationRevocation` (#850) verifies the signature AND that its key is one this relay holds for `delegator_id` (`keysHeldBy` — a rotated-out key no longer speaks), looked up by the binder, never taken from the artifact alone. Anyone may carry the delegator's signed revocation. The relay holds no grants, so a row never proves the revoker is the GRANT's delegator; the acceptance fence (tasks.ts) therefore reads only through `isGrantRevokedBy(db, grant_id, submitter)` — a revocation fences a task only when its delegator is the task's authenticated submitter (#850)",
   },
   {
     file: R + "skill-registry.ts",

@@ -19,7 +19,7 @@ import {
   signDelegationRevocation,
   type DelegationRevocation,
 } from "@motebit/crypto";
-import { listRevokedGrantIds } from "../delegation-revocations.js";
+import { isGrantRevokedBy } from "../delegation-revocations.js";
 import {
   createTestRelay,
   createAgent,
@@ -157,13 +157,21 @@ describe("delegation-revocation cache", () => {
     expect(delta.records[0]!.grant_id).toBe("grant-2");
   });
 
-  it("listRevokedGrantIds exposes the settlement-time isRevoked seam input", async () => {
+  it("isGrantRevokedBy answers only for the revoking delegator (the fence's seam, #850)", async () => {
     const alice = await registeredDelegator(relay);
+    const bob = await registeredDelegator(relay);
     await post(relay, await makeRevocation(alice, "grant-1"));
     await post(relay, await makeRevocation(alice, "grant-2"));
 
-    const revoked = listRevokedGrantIds(relay.moteDb.db);
-    expect(revoked).toEqual(new Set(["grant-1", "grant-2"]));
+    const db = relay.moteDb.db;
+    expect(isGrantRevokedBy(db, "grant-1", alice.motebitId)).toBe(true);
+    expect(isGrantRevokedBy(db, "grant-2", alice.motebitId)).toBe(true);
+    expect(isGrantRevokedBy(db, "grant-3", alice.motebitId)).toBe(false);
+    // Another identity's grant_id collision is not a revocation of its grant.
+    expect(isGrantRevokedBy(db, "grant-1", bob.motebitId)).toBe(false);
+    // No submitter, no binding.
+    expect(isGrantRevokedBy(db, "grant-1", undefined)).toBe(false);
+    expect(isGrantRevokedBy(db, "grant-1", "")).toBe(false);
   });
 });
 
@@ -190,12 +198,16 @@ describe("acceptance-time revocation fence (checkpoint D4)", () => {
     });
   }
 
+  // The operator's master token, naming the submitter in the body (the relay's
+  // `submittedBy` for a master-token submission): the fence honours only the
+  // submitter's own revocations (#850), so the submitter must be named.
   async function submitTask(motebitId: string, grantId?: string) {
     return relay.app.request(`/agent/${motebitId}/task`, {
       method: "POST",
       headers: jsonAuthWithIdempotency(),
       body: JSON.stringify({
         prompt: "do the daily research",
+        submitted_by: motebitId,
         ...(grantId !== undefined ? { grant_id: grantId } : {}),
       }),
     });

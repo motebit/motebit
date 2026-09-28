@@ -34,9 +34,9 @@ import {
 } from "@motebit/crypto";
 import type { TokenAudience } from "@motebit/protocol";
 import type { SyncRelay } from "../index.js";
-import { insertDelegationRevocation, listRevokedGrantIds } from "../delegation-revocations.js";
+import { insertDelegationRevocation } from "../delegation-revocations.js";
 import { bindByDelegationRevocation } from "../identity-binding.js";
-import { createTestRelay, JSON_AUTH, jsonAuthWithIdempotency } from "./test-helpers.js";
+import { createTestRelay, JSON_AUTH } from "./test-helpers.js";
 
 const JSON_HEADERS = { "Content-Type": "application/json" };
 
@@ -49,6 +49,25 @@ interface Identity {
 }
 
 let relay: SyncRelay;
+
+/** Is a revocation of `grantId` held in the relay's cache (by anyone)? */
+function cached(grantId: string): boolean {
+  return (
+    relay.moteDb.db
+      .prepare("SELECT 1 FROM relay_delegation_revocations WHERE grant_id = ?")
+      .get(grantId) != null
+  );
+}
+
+/** The auth-event rows recorded for `path` with `reason` (relay rule 6). */
+function authEvents(
+  path: string,
+  reason: string,
+): Array<{ kind: string; motebit_id: string | null }> {
+  return relay.moteDb.db
+    .prepare("SELECT kind, motebit_id FROM relay_auth_events WHERE path = ? AND reason = ?")
+    .all(path, reason) as Array<{ kind: string; motebit_id: string | null }>;
+}
 
 beforeEach(async () => {
   relay = await createTestRelay();
@@ -210,6 +229,18 @@ describe("credentials/submit files a credential only under the identity it is ab
     expect(await isRevoked(credId)).toBe(true);
   });
 
+  it("rule 6: a credential refused for naming another identity writes a relay_auth_events row", async () => {
+    const issuer = await identity();
+    const victim = await identity();
+    const attacker = await identity();
+    await submit(attacker.mid, [await credential(issuer, victim.did)]);
+    const rows = authEvents(
+      `/api/v1/agents/${attacker.mid}/credentials/submit`,
+      "credential_subject:key_not_held_by_path_identity",
+    );
+    expect(rows).toEqual([{ kind: "agent_token_rejected", motebit_id: null }]);
+  });
+
   it("a did:motebit:V subject is filed under V", async () => {
     const issuer = await identity();
     const subject = await identity();
@@ -306,19 +337,27 @@ const postRevocation = (body: unknown) =>
     body: JSON.stringify(body),
   });
 
-async function submitTaskUnderGrant(motebitId: string, grantId: string) {
+/**
+ * `who` submits a task under `grantId`, authenticated by its OWN signed
+ * `task:submit` token — so the relay's submitter is `who`, proven.
+ */
+async function submitTaskUnderGrant(who: Identity, grantId: string) {
   await relay.app.request("/api/v1/agents/register", {
     method: "POST",
     headers: JSON_AUTH,
     body: JSON.stringify({
-      motebit_id: motebitId,
+      motebit_id: who.mid,
       endpoint_url: "http://localhost:9999/mcp",
       capabilities: ["web_search"],
     }),
   });
-  return relay.app.request(`/agent/${motebitId}/task`, {
+  return relay.app.request(`/agent/${who.mid}/task`, {
     method: "POST",
-    headers: jsonAuthWithIdempotency(),
+    headers: {
+      ...JSON_HEADERS,
+      Authorization: `Bearer ${await bearer(who, "task:submit")}`,
+      "Idempotency-Key": crypto.randomUUID(),
+    },
     body: JSON.stringify({ prompt: "daily research", grant_id: grantId }),
   });
 }
@@ -331,10 +370,47 @@ describe("a delegation revocation binds to a key the relay holds for its delegat
 
     const res = await postRevocation(await revocation(victim.mid, stranger, grantId));
     expect(res.status).toBe(403);
-    expect(listRevokedGrantIds(relay.moteDb.db).has(grantId)).toBe(false);
+    expect(cached(grantId)).toBe(false);
 
-    const task = await submitTaskUnderGrant(victim.mid, grantId);
+    const task = await submitTaskUnderGrant(victim, grantId);
     expect(task.status).toBe(201);
+  });
+
+  it("ATTACK: registered X revokes V's grant_id under X's OWN key — recorded (X's statement), but it does NOT fence V's grant; V's own revocation does", async () => {
+    const victim = await identity();
+    const attacker = await identity();
+    const grantId = `grant-${crypto.randomUUID()}`;
+
+    // A valid, bound revocation — X signing about itself, naming V's grant_id.
+    const res = await postRevocation(await revocation(attacker.mid, attacker.kp, grantId));
+    expect(res.status).toBe(200);
+    expect(cached(grantId)).toBe(true);
+
+    // V's task under G is admitted: X's revocation has no relationship to V's grant.
+    const admitted = await submitTaskUnderGrant(victim, grantId);
+    expect(admitted.status).toBe(201);
+
+    // V's own revocation of G does fence V's tasks.
+    expect((await postRevocation(await revocation(victim.mid, victim.kp, grantId))).status).toBe(
+      200,
+    );
+    const fenced = await submitTaskUnderGrant(victim, grantId);
+    expect(fenced.status).toBe(403);
+    expect(JSON.stringify(await fenced.json())).toContain("REVOKED");
+  });
+
+  it("rule 6: a refused revocation writes a relay_auth_events row naming the claimed delegator", async () => {
+    const victim = await identity();
+    const stranger = await generateKeypair();
+    const res = await postRevocation(
+      await revocation(victim.mid, stranger, `grant-${crypto.randomUUID()}`),
+    );
+    expect(res.status).toBe(403);
+    const rows = authEvents(
+      "/api/v1/delegations/revocations",
+      "delegation_revocation:key_not_held_by_delegator",
+    );
+    expect(rows).toEqual([{ kind: "agent_token_rejected", motebit_id: victim.mid }]);
   });
 
   it("a revocation naming a delegator this relay does not know is refused", async () => {
@@ -343,7 +419,7 @@ describe("a delegation revocation binds to a key the relay holds for its delegat
     const unknown = await deriveSovereignMotebitId(bytesToHex(kp.publicKey));
     const res = await postRevocation(await revocation(unknown, kp, grantId));
     expect(res.status).toBe(403);
-    expect(listRevokedGrantIds(relay.moteDb.db).has(grantId)).toBe(false);
+    expect(cached(grantId)).toBe(false);
   });
 
   it("the delegator's own revocation is recorded — carried by anyone — and the fence refuses its grant", async () => {
@@ -351,9 +427,9 @@ describe("a delegation revocation binds to a key the relay holds for its delegat
     const grantId = `grant-${crypto.randomUUID()}`;
     const res = await postRevocation(await revocation(delegator.mid, delegator.kp, grantId));
     expect(res.status).toBe(200);
-    expect(listRevokedGrantIds(relay.moteDb.db).has(grantId)).toBe(true);
+    expect(cached(grantId)).toBe(true);
 
-    const task = await submitTaskUnderGrant(delegator.mid, grantId);
+    const task = await submitTaskUnderGrant(delegator, grantId);
     expect(task.status).toBe(403);
   });
 
@@ -365,11 +441,11 @@ describe("a delegation revocation binds to a key the relay holds for its delegat
 
     const g1 = `grant-${crypto.randomUUID()}`;
     expect((await postRevocation(await revocation(delegator.mid, oldKp, g1))).status).toBe(403);
-    expect(listRevokedGrantIds(relay.moteDb.db).has(g1)).toBe(false);
+    expect(cached(g1)).toBe(false);
 
     const g2 = `grant-${crypto.randomUUID()}`;
     expect((await postRevocation(await revocation(delegator.mid, newKp, g2))).status).toBe(200);
-    expect(listRevokedGrantIds(relay.moteDb.db).has(g2)).toBe(true);
+    expect(cached(g2)).toBe(true);
   });
 
   it("the writer refuses a revocation that does not name its bound delegator", async () => {
@@ -384,7 +460,7 @@ describe("a delegation revocation binds to a key the relay holds for its delegat
     expect(() => insertDelegationRevocation(relay.moteDb.db, bound.bound, bs)).toThrow(
       /not the bound delegator/,
     );
-    expect(listRevokedGrantIds(relay.moteDb.db).has("grant-b")).toBe(false);
+    expect(cached("grant-b")).toBe(false);
   });
 
   it("a tampered revocation is still 422 (not a signed statement)", async () => {

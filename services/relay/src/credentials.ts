@@ -28,6 +28,7 @@ import {
   unwrapBound,
   type BoundIdentity,
 } from "./identity-binding.js";
+import type { AuthEvent } from "./auth-events.js";
 import { createLogger } from "./logger.js";
 
 const logger = createLogger({ service: "credentials" });
@@ -39,6 +40,12 @@ export interface CredentialDeps {
   identityManager: IdentityManager;
   /** When true, relay issues reputation credentials on demand. Default: false (peer-issued). */
   issueCredentials?: boolean;
+  /**
+   * Durable auth-event record (auth-events.ts) for a submission whose
+   * credential names another identity (relay rule 6, #850). Required: a
+   * refusal stops being recorded the day a refactor drops an optional one.
+   */
+  recordAuthEvent: (event: AuthEvent) => void;
 }
 
 /** Returns the relay's persistent keypair for credential signing. */
@@ -95,7 +102,14 @@ export function insertSubmittedCredential(
 
 /** Register all credential endpoints on the Hono app. */
 export function registerCredentialRoutes(deps: CredentialDeps): void {
-  const { db, app, relayIdentity, identityManager, issueCredentials = false } = deps;
+  const {
+    db,
+    app,
+    relayIdentity,
+    identityManager,
+    issueCredentials = false,
+    recordAuthEvent,
+  } = deps;
 
   // POST /api/v1/credentials/:motebitId/reputation — compute reputation, issue VC
   // Only available when relay credential issuance is enabled.
@@ -559,6 +573,17 @@ export function registerCredentialRoutes(deps: CredentialDeps): void {
       const binding = bindCredentialSubject(db, subjectId, motebitId);
       if ("refused" in binding) {
         refuse("credential subject is not this identity", binding.refused);
+        // Rule 6: recorded durably. The route takes no token, so there is no
+        // presenter (null); the target is in `path`.
+        recordAuthEvent({
+          kind: "agent_token_rejected",
+          method: c.req.method,
+          path: c.req.path,
+          motebitId: null,
+          audience: null,
+          reason: binding.refused,
+          correlationId: c.req.header("x-correlation-id") ?? null,
+        });
         continue;
       }
 

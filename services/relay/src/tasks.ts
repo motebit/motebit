@@ -102,7 +102,7 @@ import {
   AllocationError,
   TaskError,
 } from "./errors.js";
-import { listRevokedGrantIds } from "./delegation-revocations.js";
+import { isGrantRevokedBy } from "./delegation-revocations.js";
 import { ON_SHELF, ON_SHELF_PREDICATE } from "./registry-delist.js";
 import { identityGuardianFor, verificationKeyFor } from "./identity-keys.js";
 import type { ReconcileKeyConnections } from "./connection-ports.js";
@@ -2255,7 +2255,15 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
       if (typeof body.grant_id !== "string" || body.grant_id.trim() === "") {
         throw new TaskError("TASK_INVALID_INPUT", "grant_id must be a non-empty string", 400);
       }
-      if (listRevokedGrantIds(moteDb.db).has(body.grant_id)) {
+      // Only the SUBMITTER's own revocation fences its task (#850): the relay
+      // holds no grants, so a cached revocation by any other identity names a
+      // grant_id it has no proven relationship to. The submitter is the one
+      // settlement uses below (the verified token's identity, else the
+      // operator's body field); a body-named submitter can only ever fence
+      // the request that names it.
+      const fenceSubmitter =
+        (c.get("callerMotebitId" as never) as string | undefined) ?? body.submitted_by;
+      if (isGrantRevokedBy(moteDb.db, body.grant_id, fenceSubmitter)) {
         throw new TaskError(
           "TASK_GRANT_REVOKED",
           "Standing grant is revoked — task refused at acceptance (delegation-revocation cache)",
