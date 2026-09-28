@@ -137,6 +137,30 @@ function makeAdapterForTx(): Web3JsRpcAdapter {
   });
 }
 
+/**
+ * What the chain answers to `getSignatureOutcome` (#885): the height+slot
+ * read (`getEpochInfo`) and the status read (`getSignatureStatuses`, whose
+ * `context.slot` is the answering node's view).
+ */
+function chainSays(
+  conn: ReturnType<Web3JsRpcAdapter["getConnection"]>,
+  c: {
+    height: number;
+    slot: number;
+    statusSlot: number;
+    status: null | { confirmationStatus: string; err: unknown; slot: number };
+  },
+): void {
+  vi.spyOn(conn, "getEpochInfo").mockResolvedValue({
+    blockHeight: c.height,
+    absoluteSlot: c.slot,
+  } as never);
+  vi.spyOn(conn, "getSignatureStatuses").mockResolvedValue({
+    context: { slot: c.statusSlot },
+    value: [c.status],
+  } as never);
+}
+
 /** Build a `VersionedTransactionResponse`-shaped stub with pre/post token balances. */
 function txResponse(opts: {
   slot: number;
@@ -688,8 +712,13 @@ describe("Web3JsRpcAdapter.sendUsdc", () => {
     expect(result.slot).toBe(99);
   });
 
-  // ── Blockhash-expiry retry (the devnet flake that resets the promotion clock) ──
-  it("retries with a FRESH blockhash on 'block height exceeded' and succeeds", async () => {
+  // ── Blockhash-expiry retry (#885 round 3): ASK the chain before re-signing ──
+  //
+  // web3.js reports "block height exceeded" when it stopped HEARING about the
+  // tx, not when the tx failed to land. The adapter re-signs only on a
+  // definitive `expired`; a landed first tx IS the payment.
+
+  it("expiry + the chain confirms the first tx is dead ⇒ re-signs with a FRESH blockhash", async () => {
     const adapter = makeAdapterForTx();
     const conn = adapter.getConnection();
     getAccountMock
@@ -699,28 +728,25 @@ describe("Web3JsRpcAdapter.sendUsdc", () => {
       blockhash: validBlockhash(),
       lastValidBlockHeight: 100,
     });
+    chainSays(conn, { height: 500, slot: 1_000, statusSlot: 1_000, status: null });
     const sendSpy = vi
       .spyOn(conn, "sendRawTransaction")
       .mockResolvedValueOnce("sigExpired")
       .mockResolvedValue("sigFresh");
     vi.spyOn(conn, "confirmTransaction")
-      // First attempt: the blockhash expired before confirmation (the flake).
       .mockRejectedValueOnce(new Error("Signature sigExpired has expired: block height exceeded."))
-      // Retry with a fresh blockhash lands.
       .mockResolvedValue({ context: { slot: 51 }, value: { err: null } });
 
     const result = await adapter.sendUsdc({
       toAddress: validBase58Address(),
       microAmount: 1_000_000n,
     });
-    // The retry settled — and on the fresh signature, never the expired one.
     expect(result).toEqual({ signature: "sigFresh", slot: 51, confirmed: true });
-    // A FRESH blockhash was fetched for the retry (not a re-send of the dead tx).
     expect(blockhashSpy).toHaveBeenCalledTimes(2);
     expect(sendSpy).toHaveBeenCalledTimes(2);
   });
 
-  it("gives up after BROADCAST_MAX_ATTEMPTS when the expiry never clears", async () => {
+  it("REVIEWER PROBE: expiry, but the first tx LANDED ⇒ returns it; one broadcast, no second payment", async () => {
     const adapter = makeAdapterForTx();
     const conn = adapter.getConnection();
     getAccountMock
@@ -730,6 +756,95 @@ describe("Web3JsRpcAdapter.sendUsdc", () => {
       blockhash: validBlockhash(),
       lastValidBlockHeight: 100,
     });
+    chainSays(conn, {
+      height: 500,
+      slot: 1_000,
+      statusSlot: 1_000,
+      status: { confirmationStatus: "confirmed", err: null, slot: 77 },
+    });
+    const sendSpy = vi.spyOn(conn, "sendRawTransaction");
+    sendSpy.mockImplementation(async (raw) =>
+      base58Encode(new Uint8Array(Transaction.from(raw as Buffer).signature!)),
+    );
+    vi.spyOn(conn, "confirmTransaction").mockRejectedValue(
+      new Error("Signature x has expired: block height exceeded."),
+    );
+
+    const result = await adapter.sendUsdc({ toAddress: validBase58Address(), microAmount: 1n });
+    expect(result.confirmed).toBe(true);
+    expect(result.slot).toBe(77);
+    expect(sendSpy).toHaveBeenCalledTimes(1);
+    expect(blockhashSpy).toHaveBeenCalledTimes(1);
+    expect(result.signature).toBe(await sendSpy.mock.results[0]!.value);
+  });
+
+  it.each([
+    [
+      "pending (the status node lags the height read)",
+      { height: 500, slot: 1_000, statusSlot: 900, status: null },
+    ],
+    ["an RPC error", "rpc_error" as const],
+  ])("expiry and the chain answer is %s ⇒ throws, never re-signs", async (_n, chain) => {
+    const adapter = makeAdapterForTx();
+    const conn = adapter.getConnection();
+    getAccountMock
+      .mockResolvedValueOnce({ amount: 10_000_000n })
+      .mockResolvedValueOnce({ amount: 0n });
+    vi.spyOn(conn, "getLatestBlockhash").mockResolvedValue({
+      blockhash: validBlockhash(),
+      lastValidBlockHeight: 100,
+    });
+    if (chain === "rpc_error") {
+      vi.spyOn(conn, "getEpochInfo").mockRejectedValue(new Error("429"));
+    } else {
+      chainSays(conn, chain);
+    }
+    const sendSpy = vi.spyOn(conn, "sendRawTransaction").mockResolvedValue("sig");
+    vi.spyOn(conn, "confirmTransaction").mockRejectedValue(
+      new Error("Signature sig has expired: block height exceeded."),
+    );
+    await expect(
+      adapter.sendUsdc({ toAddress: validBase58Address(), microAmount: 1n }),
+    ).rejects.toThrow("block height exceeded");
+    expect(sendSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("expiry and the first tx FAILED onchain ⇒ confirmed:false, never re-signed (a failed tx moved nothing; its failure is definitive)", async () => {
+    const adapter = makeAdapterForTx();
+    const conn = adapter.getConnection();
+    getAccountMock
+      .mockResolvedValueOnce({ amount: 10_000_000n })
+      .mockResolvedValueOnce({ amount: 0n });
+    vi.spyOn(conn, "getLatestBlockhash").mockResolvedValue({
+      blockhash: validBlockhash(),
+      lastValidBlockHeight: 100,
+    });
+    chainSays(conn, {
+      height: 500,
+      slot: 1_000,
+      statusSlot: 1_000,
+      status: { confirmationStatus: "finalized", err: { InstructionError: [0, "x"] }, slot: 7 },
+    });
+    const sendSpy = vi.spyOn(conn, "sendRawTransaction").mockResolvedValue("sig");
+    vi.spyOn(conn, "confirmTransaction").mockRejectedValue(
+      new Error("Signature sig has expired: block height exceeded."),
+    );
+    const r = await adapter.sendUsdc({ toAddress: validBase58Address(), microAmount: 1n });
+    expect(r.confirmed).toBe(false);
+    expect(sendSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it("gives up after BROADCAST_MAX_ATTEMPTS when every attempt is confirmed dead", async () => {
+    const adapter = makeAdapterForTx();
+    const conn = adapter.getConnection();
+    getAccountMock
+      .mockResolvedValueOnce({ amount: 10_000_000n })
+      .mockResolvedValueOnce({ amount: 0n });
+    const blockhashSpy = vi.spyOn(conn, "getLatestBlockhash").mockResolvedValue({
+      blockhash: validBlockhash(),
+      lastValidBlockHeight: 100,
+    });
+    chainSays(conn, { height: 500, slot: 1_000, statusSlot: 1_000, status: null });
     vi.spyOn(conn, "sendRawTransaction").mockResolvedValue("sig");
     const confirmSpy = vi
       .spyOn(conn, "confirmTransaction")
@@ -738,7 +853,6 @@ describe("Web3JsRpcAdapter.sendUsdc", () => {
     await expect(
       adapter.sendUsdc({ toAddress: validBase58Address(), microAmount: 1n }),
     ).rejects.toThrow("block height exceeded");
-    // Bounded: exactly 3 attempts, no infinite loop against a wedged cluster.
     expect(blockhashSpy).toHaveBeenCalledTimes(3);
     expect(confirmSpy).toHaveBeenCalledTimes(3);
   });
@@ -761,7 +875,6 @@ describe("Web3JsRpcAdapter.sendUsdc", () => {
     await expect(
       adapter.sendUsdc({ toAddress: validBase58Address(), microAmount: 1n }),
     ).rejects.toThrow("not confirmed");
-    // Single-shot: a timeout is NOT the known-safe retry (the tx might land).
     expect(blockhashSpy).toHaveBeenCalledTimes(1);
   });
 });
@@ -811,6 +924,10 @@ describe("Web3JsRpcAdapter — beforeBroadcast sees the signed tx before it is s
     expect(hook.mock.invocationCallOrder[0]!).toBeLessThan(send.mock.invocationCallOrder[0]!);
   });
 
+  it("declares honorsBroadcastHooks — the flag the rail's confirmer depends on", () => {
+    expect(makeAdapterForTx().honorsBroadcastHooks).toBe(true);
+  });
+
   it("a hook that throws ⇒ nothing is sent", async () => {
     const { adapter, send } = primed();
     await expect(
@@ -830,18 +947,23 @@ describe("Web3JsRpcAdapter — beforeBroadcast sees the signed tx before it is s
 describe("Web3JsRpcAdapter.getSignatureOutcome — about ONE transaction", () => {
   function withChain(opts: {
     height: number;
+    slot?: number;
+    statusSlot?: number;
     status: null | { confirmationStatus: string; err: unknown; slot: number };
   }) {
     const adapter = makeAdapterForTx();
     const conn = adapter.getConnection();
     const order: string[] = [];
-    vi.spyOn(conn, "getBlockHeight").mockImplementation(async () => {
-      order.push("height");
-      return opts.height;
+    vi.spyOn(conn, "getEpochInfo").mockImplementation(async () => {
+      order.push("epoch");
+      return { blockHeight: opts.height, absoluteSlot: opts.slot ?? 1_000 } as never;
     });
     vi.spyOn(conn, "getSignatureStatuses").mockImplementation(async () => {
       order.push("status");
-      return { context: { slot: 1 }, value: [opts.status] } as never;
+      return {
+        context: { slot: opts.statusSlot ?? opts.slot ?? 1_000 },
+        value: [opts.status],
+      } as never;
     });
     return { adapter, order };
   }
@@ -863,17 +985,30 @@ describe("Web3JsRpcAdapter.getSignatureOutcome — about ONE transaction", () =>
     await expect(bad.adapter.getSignatureOutcome(ref)).resolves.toEqual({ status: "failed" });
   });
 
-  it("not on chain and past its last valid height ⇒ expired; before it ⇒ pending", async () => {
-    const gone = withChain({ height: 101, status: null });
+  it("absent, well past its last valid height, from a node caught up to that slot ⇒ expired", async () => {
+    const gone = withChain({ height: 200, slot: 5_000, statusSlot: 5_000, status: null });
     await expect(gone.adapter.getSignatureOutcome(ref)).resolves.toEqual({ status: "expired" });
+  });
+
+  it("REVIEWER PROBE: absent from a LAGGING node (context.slot behind the height read) ⇒ pending, never expired", async () => {
+    // height=101 > lastValid=100, but the status came from a node at slot 4990
+    // while the height was read at slot 5000: that node had not seen every
+    // slot the tx could be in, so its "not found" proves nothing.
+    const lag = withChain({ height: 200, slot: 5_000, statusSlot: 4_990, status: null });
+    await expect(lag.adapter.getSignatureOutcome(ref)).resolves.toEqual({ status: "pending" });
+  });
+
+  it("absent, and past lastValid by less than the margin, or not past it ⇒ pending", async () => {
+    const edge = withChain({ height: 101, status: null });
+    await expect(edge.adapter.getSignatureOutcome(ref)).resolves.toEqual({ status: "pending" });
     const live = withChain({ height: 100, status: null });
     await expect(live.adapter.getSignatureOutcome(ref)).resolves.toEqual({ status: "pending" });
   });
 
-  it("reads the height BEFORE the status (no land-between-reads window)", async () => {
-    const { adapter, order } = withChain({ height: 101, status: null });
+  it("reads height+slot (one read) BEFORE the status", async () => {
+    const { adapter, order } = withChain({ height: 200, status: null });
     await adapter.getSignatureOutcome(ref);
-    expect(order).toEqual(["height", "status"]);
+    expect(order).toEqual(["epoch", "status"]);
   });
 
   it("processed but not yet confirmed ⇒ pending; an RPC failure ⇒ rpc_error", async () => {
@@ -883,7 +1018,7 @@ describe("Web3JsRpcAdapter.getSignatureOutcome — about ONE transaction", () =>
     });
     await expect(proc.adapter.getSignatureOutcome(ref)).resolves.toEqual({ status: "pending" });
     const adapter = makeAdapterForTx();
-    vi.spyOn(adapter.getConnection(), "getBlockHeight").mockRejectedValue(new Error("429"));
+    vi.spyOn(adapter.getConnection(), "getEpochInfo").mockRejectedValue(new Error("429"));
     await expect(adapter.getSignatureOutcome(ref)).resolves.toEqual({
       status: "rpc_error",
       reason: "429",
@@ -999,6 +1134,8 @@ describe("Web3JsRpcAdapter.sendUsdcBatch", () => {
       blockhash: validBlockhash(),
       lastValidBlockHeight: 200,
     });
+    // The chain confirms the first tx is dead before the adapter re-signs.
+    chainSays(conn, { height: 900, slot: 2_000, statusSlot: 2_000, status: null });
     vi.spyOn(conn, "sendRawTransaction")
       .mockResolvedValueOnce("sigExpired")
       .mockResolvedValue("sigFresh");

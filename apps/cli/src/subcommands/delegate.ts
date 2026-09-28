@@ -405,6 +405,9 @@ export async function handleDelegate(config: CliConfig): Promise<void> {
         `Paid: $${fromMicro(s.paidMicro).toFixed(4)} to worker + $${fromMicro(s.feeMicro).toFixed(4)} fee (tx ${s.txHash.slice(0, 12)}…)`,
       );
     }
+    // #885: a second payment from this hire, or a payment record that could
+    // not be written — never only a log line.
+    if (s?.notice != null) console.error(`Warning: ${s.notice}`);
     return;
   }
 

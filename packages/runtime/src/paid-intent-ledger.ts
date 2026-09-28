@@ -270,14 +270,42 @@ export class PaidIntentLedger {
    * the pair in this session too — until the owner reconciles the wallet
    * and dismisses it. Returns the entry's ledger id.
    */
-  recordUnconfirmed(entry: Omit<UnretrievedPayment, "taskId" | "txHash">): string {
+  recordUnconfirmed(entry: Omit<UnretrievedPayment, "taskId" | "txHash">): {
+    taskId: string;
+    durable: boolean;
+  } {
     const taskId =
       `${UNCONFIRMED_TASK_PREFIX}${entry.recordedAt.toString(36)}-` +
       newSessionId()
         .replace(/[^A-Za-z0-9]/g, "")
         .slice(0, 12);
-    this.write({ ...entry, taskId, txHash: UNKNOWN_TX_HASH }, "unretrieved");
-    return taskId;
+    const durable = this.recordOwed({ ...entry, taskId, txHash: UNKNOWN_TX_HASH });
+    return { taskId, durable };
+  }
+
+  /**
+   * Payments owed whose durable write FAILED (#885 round 3), held in memory
+   * for the life of this process. Without this, a failed write leaves at
+   * most this session's own in-flight row — which locks nothing for this
+   * session — so a human-absent loop could buy the same work again.
+   */
+  private readonly held = new Map<string, UnretrievedPayment>();
+
+  /**
+   * Record a payment as owed (unretrieved) — fail-CLOSED. If the durable
+   * write throws, the entry is held in memory instead: it locks the pair
+   * (and counts toward the session suspend) for as long as this process
+   * runs, and `outstanding()` lists it. Returns whether the write was
+   * durable; a caller must tell the owner when it was not.
+   */
+  recordOwed(entry: UnretrievedPayment): boolean {
+    try {
+      this.recordSettledUnretrieved(entry);
+      return true;
+    } catch {
+      this.held.set(entry.taskId, entry);
+      return false;
+    }
   }
 
   /**
@@ -310,7 +338,8 @@ export class PaidIntentLedger {
 
   /** The result of `taskId` was retrieved — the entry stops locking. */
   resolve(taskId: string): boolean {
-    return this.store.resolve(this.motebitId, taskId, "retrieved", Date.now());
+    const wasHeld = this.held.delete(taskId);
+    return this.store.resolve(this.motebitId, taskId, "retrieved", Date.now()) || wasHeld;
   }
 
   /**
@@ -318,13 +347,14 @@ export class PaidIntentLedger {
    * the result is unrecoverable). An explicit human act, never automatic.
    */
   dismiss(taskId: string): boolean {
-    return this.store.resolve(this.motebitId, taskId, "dismissed", Date.now());
+    const wasHeld = this.held.delete(taskId);
+    return this.store.resolve(this.motebitId, taskId, "dismissed", Date.now()) || wasHeld;
   }
 
   /** The unresolved entry for `taskId` — unretrieved or in flight — if any. */
   find(taskId: string): UnretrievedPayment | null {
     const r = this.store.listOutstanding(this.motebitId).find((e) => e.task_id === taskId);
-    return r != null ? fromRecord(r) : null;
+    return r != null ? fromRecord(r) : (this.held.get(taskId) ?? null);
   }
 
   get outstandingCount(): number {
@@ -337,10 +367,12 @@ export class PaidIntentLedger {
    * another session (a process that died mid-poll).
    */
   outstanding(): UnretrievedPayment[] {
-    return this.store
+    const stored = this.store
       .listOutstanding(this.motebitId)
       .filter((r) => r.state === "unretrieved" || r.session_id !== this.sessionId)
       .map(fromRecord);
+    const seen = new Set(stored.map((e) => e.taskId));
+    return [...stored, ...[...this.held.values()].filter((e) => !seen.has(e.taskId))];
   }
 
   /** This session's own hires still being polled — owed nothing yet, locking nothing. */

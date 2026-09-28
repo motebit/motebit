@@ -187,6 +187,15 @@ export type SignatureOutcome =
   | { status: "rpc_error"; reason: string };
 
 export interface SolanaRpcAdapter {
+  /**
+   * `true` ONLY for an adapter whose send paths call `hooks.beforeBroadcast`
+   * for every transaction they sign, before sending it (#885). A payer
+   * infers "nothing was sent" from "no signature was reported" — sound only
+   * for an adapter that declares this. `SolanaWalletRail` exposes
+   * `confirmP2pPayment` only over such an adapter.
+   */
+  readonly honorsBroadcastHooks?: boolean;
+
   /** The wallet's own base58 address (derived from the keypair seed). */
   readonly ownAddress: string;
 

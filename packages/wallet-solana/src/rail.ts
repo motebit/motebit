@@ -134,6 +134,17 @@ export class SolanaWalletRail implements SovereignWalletRail {
   private readonly web3Adapter: Web3JsRpcAdapter | null;
   private readonly now: () => number;
 
+  /**
+   * After `buildP2pPayment` threw: did THIS payer's transaction land? (#885)
+   * See {@link confirmOwnP2pPayment}. PRESENT ONLY when the adapter declares
+   * `honorsBroadcastHooks` — i.e. every transaction it signs is reported
+   * through `beforeBroadcast` before it is sent. A payer reads "no signature
+   * reported" as "nothing was sent" only when this is present; over an
+   * adapter that does not report, the confirmer is absent and every failed
+   * build is undecidable (the caller must not pay again).
+   */
+  readonly confirmP2pPayment?: (query: ConfirmP2pPaymentQuery) => Promise<P2pPaymentConfirmation>;
+
   constructor(
     private readonly adapter: SolanaRpcAdapter,
     opts?: { autoGas?: boolean; now?: () => number },
@@ -141,6 +152,9 @@ export class SolanaWalletRail implements SovereignWalletRail {
     this.autoGas = opts?.autoGas ?? false;
     this.now = opts?.now ?? Date.now;
     this.web3Adapter = adapter instanceof Web3JsRpcAdapter ? adapter : null;
+    if (adapter.honorsBroadcastHooks === true) {
+      this.confirmP2pPayment = (query) => this.confirmOwnP2pPayment(query);
+    }
   }
 
   /** The wallet's own base58 address. Equivalent to the motebit identity public key. */
@@ -342,7 +356,9 @@ export class SolanaWalletRail implements SovereignWalletRail {
    *     read, a landed transaction that does not pay the requested legs or
    *     cannot be read). A payer MUST NOT pay again.
    */
-  async confirmP2pPayment(query: ConfirmP2pPaymentQuery): Promise<P2pPaymentConfirmation> {
+  private async confirmOwnP2pPayment(
+    query: ConfirmP2pPaymentQuery,
+  ): Promise<P2pPaymentConfirmation> {
     if (typeof this.adapter.getSignatureOutcome !== "function") {
       return {
         status: "unknown",

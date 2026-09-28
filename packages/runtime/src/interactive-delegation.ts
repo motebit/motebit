@@ -39,7 +39,11 @@ function formatSettlementNote(settlement: DelegationSettlement | undefined): str
     settlement.paidMicro != null ? `$${fromMicro(settlement.paidMicro).toFixed(6)}` : "—";
   const fee = settlement.feeMicro != null ? `$${fromMicro(settlement.feeMicro).toFixed(6)}` : "—";
   const tx = settlement.txHash ? ` Transaction: ${settlement.txHash}.` : "";
-  return `[settlement] Paid ${paid} to the worker + ${fee} platform fee, peer-to-peer onchain.${tx}`;
+  // #885: another transaction from this hire may have moved money, or the
+  // payment record could not be written — the user must be told.
+  const warning =
+    settlement.notice != null ? `\n[WARNING — tell the user] ${settlement.notice}` : "";
+  return `[settlement] Paid ${paid} to the worker + ${fee} platform fee, peer-to-peer onchain.${tx}${warning}`;
 }
 
 /** ToolRegistry extended with `has()` — matches SimpleToolRegistry in MotebitRuntime. */

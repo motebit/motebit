@@ -140,7 +140,8 @@ export type DelegationErrorCode =
    * Post-payment (#885). The payment LANDED, and the relay's admission of
    * the task is UNCONFIRMED: every submission of that same proof ended in
    * a network failure, a 5xx, a 409 (the relay still processing the same
-   * payment), or another answer that does not say the task was refused.
+   * payment, or `TASK_P2P_PROOF_REPLAYED` — this proof already funded a
+   * task), or another answer that does not say the task was refused.
    * The relay may have admitted it — the answer never reached this device.
    * Same money facts and same ledger lock as `payment_not_admitted`; the
    * difference is only what can honestly be said about the task.
@@ -256,6 +257,10 @@ export interface DelegationError {
    * `unknown` for a 503, `network_unreachable` for a network failure.
    */
   submitError?: { code: DelegationErrorCode; message: string; status?: number };
+  /** #885: other transactions this hire sent that may have moved money (see `DelegationSettlement`). */
+  extraPayments?: Array<{ txHash: string; status: "landed" | "unconfirmed" }>;
+  /** #885: a payment owed could not be written durably — held in memory only. */
+  ledgerWriteFailed?: true;
 }
 
 /**
@@ -280,6 +285,16 @@ export interface DelegationSettlement {
    * b_fee_amount_micro`).
    */
   feeMicro?: number;
+  /**
+   * #885: OTHER transactions this hire's wallet sent that may have moved
+   * money (a re-sign whose first attempt landed too, or could not be ruled
+   * out). Recorded in the paid-intent ledger; the owner must reconcile them.
+   */
+  extraPayments?: Array<{ txHash: string; status: "landed" | "unconfirmed" }>;
+  /** #885: a payment owed could not be written durably — held in memory only. */
+  ledgerWriteFailed?: true;
+  /** #885: the human-readable statement of the two fields above. */
+  notice?: string;
 }
 
 export type DelegationResult =
@@ -1018,10 +1033,10 @@ async function submitP2pOnce(params: SubmitP2pDelegationParams): Promise<SubmitA
         kind: "failed",
         error,
         retryable: isRetryableSubmitStatus(resp.status, relayCode),
-        ambiguous:
-          resp.status >= 500 ||
-          resp.status === 408 ||
-          (resp.status === 409 && relayCode !== "TASK_P2P_PROOF_REPLAYED"),
+        // A 409 is never a refusal of THIS payment: either the relay is still
+        // handling the same key, or (TASK_P2P_PROOF_REPLAYED) this very proof
+        // already funded a task — admitted, just not visibly to us.
+        ambiguous: resp.status >= 500 || resp.status === 408 || resp.status === 409,
         ...(error.retryAfterSeconds != null && Number.isFinite(error.retryAfterSeconds)
           ? { retryAfterMs: error.retryAfterSeconds * 1000 }
           : {}),
@@ -2001,6 +2016,7 @@ export async function resolveAndSubmitP2pDelegation(
       // restarted one, the granted path all refuse to pay for this intent
       // again until the owner reconciles the wallet. Never retried here.
       let ledgerId: string | undefined;
+      let durable = true;
       if (ledger != null) {
         const open = signed.filter((tx) => !verdict.absent.includes(tx.signature));
         for (const tx of signed) {
@@ -2008,30 +2024,31 @@ export async function resolveAndSubmitP2pDelegation(
         }
         if (open.length > 0) {
           for (const tx of open) {
-            ledgerWrite(
-              params.logger,
-              "record_unretrieved",
-              paymentEntryId(tx.signature),
-              tx.signature,
-              () =>
-                ledger.recordSettledUnretrieved({
-                  ...entry(tx.signature),
-                  taskId: paymentEntryId(tx.signature),
-                }),
-            );
+            durable =
+              recordOwed(ledger, params.logger, {
+                ...entry(tx.signature),
+                taskId: paymentEntryId(tx.signature),
+              }) && durable;
           }
           ledgerId = paymentEntryId(open[0]!.signature);
         } else {
           // No transaction known (a rail without a confirmer).
-          ledgerWrite(params.logger, "record_unconfirmed", "(unconfirmed)", "unknown", () => {
-            ledgerId = ledger.recordUnconfirmed({
-              workerMotebitId: resolved.workerMotebitId,
-              capability: params.capability,
-              paidMicro,
-              feeMicro,
-              recordedAt: now(),
-            });
+          const rec = ledger.recordUnconfirmed({
+            workerMotebitId: resolved.workerMotebitId,
+            capability: params.capability,
+            paidMicro,
+            feeMicro,
+            recordedAt: now(),
           });
+          ledgerId = rec.taskId;
+          if (!rec.durable) {
+            durable = false;
+            params.logger.warn("paid_intent_ledger.write_failed", {
+              op: "record_unconfirmed",
+              taskId: rec.taskId,
+              txHash: "unknown",
+            });
+          }
         }
       }
       params.logger.warn("delegation.p2p_payment_status_unknown", {
@@ -2053,7 +2070,9 @@ export async function resolveAndSubmitP2pDelegation(
             `transaction landed (${verdict.reason}). Money may have left the wallet. Nothing ` +
             `was submitted and nothing will be sent again for this hire — check the wallet's ` +
             `history before paying this worker again` +
-            (ledgerId != null ? ` (then /result dismiss ${ledgerId}).` : "."),
+            (ledgerId != null ? ` (then /result dismiss ${ledgerId}).` : ".") +
+            (durable ? "" : NOT_DURABLE_NOTE),
+          ...(durable ? {} : { ledgerWriteFailed: true as const }),
           unconfirmedPayment: {
             paidMicro,
             feeMicro,
@@ -2076,11 +2095,16 @@ export async function resolveAndSubmitP2pDelegation(
   }
 
   // 4a. The builder returned. Its proof must be one of the transactions it
-  //     reported (and recorded) before sending; any other transaction it
-  //     signed was a blockhash-expiry retry that can never land. A rail that
+  //     reported (and recorded) before sending. Any OTHER transaction it
+  //     signed (a re-sign after a blockhash expiry) is asked about by its own
+  //     signature: voided only if the chain says it is dead; otherwise it is
+  //     recorded as owed and reported on the result (`extraPayments`) — the
+  //     wallet may have paid twice, and the owner must hear it. A rail that
   //     does not report its transactions is recorded now — late, but the
   //     money fact is kept.
   const paidTx = proof.tx_hash;
+  const extraPayments: Array<{ txHash: string; status: "landed" | "unconfirmed" }> = [];
+  let extrasDurable = true;
   if (signed.some((tx) => tx.signature === paidTx)) {
     for (const tx of signed) {
       if (tx.signature === paidTx) continue;
@@ -2096,23 +2120,23 @@ export async function resolveAndSubmitP2pDelegation(
       if (v.status === "absent") {
         voidEntry(ledger, params.logger, tx.signature);
       } else {
+        // A second transaction from this hire may have moved money — never
+        // voided, always recorded, and told to the caller (#885 round 3).
         params.logger.warn("delegation.p2p_extra_transaction_unresolved", {
           paidTx,
           txHash: tx.signature,
           status: v.status,
         });
+        extraPayments.push({
+          txHash: tx.signature,
+          status: v.status === "landed" ? "landed" : "unconfirmed",
+        });
         if (ledger != null) {
-          ledgerWrite(
-            params.logger,
-            "record_unretrieved",
-            paymentEntryId(tx.signature),
-            tx.signature,
-            () =>
-              ledger.recordSettledUnretrieved({
-                ...entry(tx.signature),
-                taskId: paymentEntryId(tx.signature),
-              }),
-          );
+          extrasDurable =
+            recordOwed(ledger, params.logger, {
+              ...entry(tx.signature),
+              taskId: paymentEntryId(tx.signature),
+            }) && extrasDurable;
         }
       }
     }
@@ -2181,21 +2205,100 @@ export async function resolveAndSubmitP2pDelegation(
       ledger.resolve(submitted.taskId);
     });
   }
+  let owedDurable = true;
   if (ledger != null && !submitted.ok && submitted.error.settledPayment != null) {
     const sp = submitted.error.settledPayment;
-    ledgerWrite(params.logger, "record_unretrieved", sp.taskId, sp.txHash, () =>
-      ledger.recordSettledUnretrieved({
-        workerMotebitId: resolved.workerMotebitId,
-        capability: params.capability,
-        taskId: sp.taskId,
-        txHash: sp.txHash,
-        paidMicro: sp.paidMicro,
-        feeMicro: sp.feeMicro,
-        recordedAt: now(),
-      }),
-    );
+    owedDurable = recordOwed(ledger, params.logger, {
+      workerMotebitId: resolved.workerMotebitId,
+      capability: params.capability,
+      taskId: sp.taskId,
+      txHash: sp.txHash,
+      paidMicro: sp.paidMicro,
+      feeMicro: sp.feeMicro,
+      recordedAt: now(),
+    });
   }
-  return submitted;
+  return withExtraPayments(submitted, extraPayments, extrasDurable && owedDurable);
+}
+
+/**
+ * Appended to a result's message when a payment owed could not be written
+ * to the durable ledger (#885 round 3): the lock is held in memory for this
+ * process only, so the owner must reconcile before restarting.
+ */
+const NOT_DURABLE_NOTE =
+  " This payment could NOT be written to the local payment record: paid hiring of this " +
+  "worker is held only while this process runs — reconcile it before restarting.";
+
+/**
+ * Record a payment as owed, fail-CLOSED: a durable write that throws leaves
+ * an in-memory lock for the process lifetime (`PaidIntentLedger.recordOwed`)
+ * and is logged loudly. Returns whether the write was durable.
+ */
+function recordOwed(
+  ledger: PaidIntentLedger,
+  logger: { warn(message: string, context?: Record<string, unknown>): void },
+  e: {
+    workerMotebitId: string;
+    capability: string;
+    taskId: string;
+    txHash: string;
+    paidMicro: number;
+    feeMicro: number;
+    recordedAt: number;
+  },
+): boolean {
+  const durable = ledger.recordOwed(e);
+  if (!durable) {
+    logger.warn("paid_intent_ledger.write_failed", {
+      op: "record_unretrieved",
+      taskId: e.taskId,
+      txHash: e.txHash,
+      heldInMemory: true,
+    });
+  }
+  return durable;
+}
+
+/**
+ * Carry, on whatever the submit returned, (a) any OTHER transaction this
+ * hire sent that may have moved money, and (b) a failed durable write — so
+ * the caller, the model and the owner are told, never just a log line.
+ */
+function withExtraPayments(
+  result: DelegationResult,
+  extras: ReadonlyArray<{ txHash: string; status: "landed" | "unconfirmed" }>,
+  durable: boolean,
+): DelegationResult {
+  if (extras.length === 0 && durable) return result;
+  const extraNote =
+    extras.length === 0
+      ? ""
+      : ` This hire's wallet ALSO sent ${extras.length === 1 ? "another payment" : `${extras.length} other payments`} ` +
+        `(${extras.map((x) => `tx ${x.txHash}, ${x.status}`).join("; ")}) that no relay task ` +
+        `accounts for — reconcile it against the wallet; do not hire again to fix it.`;
+  if (result.ok) {
+    return {
+      ...result,
+      settlement: {
+        ...(result.settlement ?? { mode: "p2p" as const }),
+        ...(extras.length > 0 ? { extraPayments: [...extras] } : {}),
+        ...(durable ? {} : { ledgerWriteFailed: true as const }),
+        ...(extraNote !== "" || !durable
+          ? { notice: `${extraNote}${durable ? "" : NOT_DURABLE_NOTE}`.trim() }
+          : {}),
+      },
+    };
+  }
+  return {
+    ok: false,
+    error: {
+      ...result.error,
+      message: `${result.error.message}${extraNote}${durable ? "" : NOT_DURABLE_NOTE}`,
+      ...(extras.length > 0 ? { extraPayments: [...extras] } : {}),
+      ...(durable ? {} : { ledgerWriteFailed: true as const }),
+    },
+  };
 }
 
 /** "What was paid, and where it stands" for a prior ledger entry. */

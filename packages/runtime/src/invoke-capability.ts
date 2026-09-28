@@ -189,6 +189,11 @@ export class InvokeCapabilityManager {
     if (receipt.result != null && receipt.result.length > 0) {
       yield { type: "text", text: receipt.result };
     }
+    // #885: another transaction from this hire may have moved money, or the
+    // payment record could not be written — shown, never only logged.
+    if (result.settlement?.notice != null) {
+      yield { type: "text", text: `\n\n${result.settlement.notice}` };
+    }
 
     yield {
       type: "delegation_complete",

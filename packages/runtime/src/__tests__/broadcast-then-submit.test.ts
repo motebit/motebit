@@ -64,7 +64,7 @@ const json = (status: number, body: unknown): Response =>
 // receipt answers "answer to: <prompt>".
 // ---------------------------------------------------------------------------
 
-type SubmitAnswer = "201" | "503" | "throw" | "400" | "409";
+type SubmitAnswer = "201" | "503" | "throw" | "400" | "409" | "409replayed";
 
 interface RelayStub {
   submits: Array<{ txHash: string; prompt: string }>;
@@ -108,6 +108,12 @@ function relay(script: SubmitAnswer[] = ["201"]): RelayStub {
       if (answer === "503") return json(503, { error: "Service Unavailable" });
       if (answer === "409") {
         return json(409, { code: "TASK_CONFLICT", error: "already being processed" });
+      }
+      if (answer === "409replayed") {
+        return json(409, {
+          code: "TASK_P2P_PROOF_REPLAYED",
+          error: "This payment proof (tx_hash) has already settled a task",
+        });
       }
       if (answer === "400") {
         return json(400, { code: "TASK_P2P_FEE_AMOUNT_MISMATCH", error: "fee mismatch" });
@@ -153,54 +159,73 @@ function relay(script: SubmitAnswer[] = ["201"]): RelayStub {
 // ---------------------------------------------------------------------------
 
 /**
- * How one `sendUsdcBatch` call behaves after signing:
- *   ok     — lands, returns
- *   lost   — lands, then throws (the lost confirmation)
- *   dead   — never lands (its blockhash expires), throws
- *   late   — throws; lands only after the throw (first status read: pending)
- *   hold   — lands, then waits for `release()` before returning
+ * How one `sendUsdcBatch` call behaves. Every SIGNING attempt reports its
+ * own signature through the hook (like the real adapter), so a call that
+ * re-signs reports two.
+ *   ok      — lands, returns
+ *   lost    — lands, then throws (the lost confirmation)
+ *   dead    — never lands (its blockhash expires), throws
+ *   late    — throws; lands only after the throw (first status read: pending)
+ *   hold    — lands, then waits for `release()` before returning
  *   presign — throws before signing (nothing reported, nothing sent)
+ *   resignBothLand  — signs A, A lands but the confirm is "lost", re-signs B,
+ *                     B lands, returns B: the pre-fix adapter's double-pay
+ *   resignFirstDead — signs A, A never lands, re-signs B, B lands, returns B
  */
-type Behaviour = "ok" | "lost" | "dead" | "late" | "hold" | "presign";
+type Behaviour =
+  "ok" | "lost" | "dead" | "late" | "hold" | "presign" | "resignBothLand" | "resignFirstDead";
 
 class Chain {
   readonly txs = new Map<string, { legs: SendUsdcArgs[]; state: "landed" | "pending" | "dead" }>();
   private n = 0;
+  private calls = 0;
   private releaseHold: (() => void) | null = null;
-  /** The signature of each call, in call order. */
+  /** Every signed transaction, in signing order. */
   readonly sigs: string[] = [];
   /** Called between signing and sending — tests probe the ledger here. */
   onSigned: ((sig: string) => void) | null = null;
 
-  constructor(private readonly script: Behaviour[]) {}
+  constructor(
+    private readonly script: Behaviour[],
+    /** Does the adapter report each signed tx before sending (and say so)? */
+    private readonly honorsHooks = true,
+  ) {}
 
   release(): void {
     this.releaseHold?.();
+  }
+
+  private async sign(hooks: BroadcastHooks | undefined): Promise<string> {
+    const sig = `sig${++this.n}`;
+    this.sigs.push(sig);
+    if (this.honorsHooks) {
+      await hooks?.beforeBroadcast?.({ signature: sig, lastValidBlockHeight: 100 });
+    }
+    this.onSigned?.(sig);
+    return sig;
   }
 
   adapter(): SolanaRpcAdapter {
     const legsMatch = (legs: SendUsdcArgs[], q: OutgoingTransferQuery) =>
       legs.some((l) => l.toAddress === q.toAddress && l.microAmount === q.microAmount);
     return {
+      ...(this.honorsHooks ? { honorsBroadcastHooks: true } : {}),
       ownAddress: OWN,
       getUsdcBalance: vi.fn().mockResolvedValue(10_000_000_000n),
       getUsdcBalanceOf: vi.fn().mockResolvedValue(0n),
       getSolBalance: vi.fn().mockResolvedValue(10_000_000n),
       sendUsdc: vi.fn(),
       sendUsdcBatch: async (items: readonly SendUsdcArgs[], hooks?: BroadcastHooks) => {
-        const behaviour = this.script[Math.min(this.sigs.length, this.script.length - 1)]!;
+        const behaviour = this.script[Math.min(this.calls++, this.script.length - 1)]!;
         if (behaviour === "presign") throw new Error("RPC down before signing");
-        const sig = `sig${++this.n}`;
-        this.sigs.push(sig);
-        await hooks?.beforeBroadcast?.({ signature: sig, lastValidBlockHeight: 100 });
-        this.onSigned?.(sig);
         const legs = [...items];
-        const ok = (): Array<{ ok: true; signature: string; slot: number; reason: null }> =>
-          legs.map(() => ({ ok: true, signature: sig, slot: 1, reason: null }));
+        const ok = (sig: string) =>
+          legs.map(() => ({ ok: true as const, signature: sig, slot: 1, reason: null }));
+        const sig = await this.sign(hooks);
         switch (behaviour) {
           case "ok":
             this.txs.set(sig, { legs, state: "landed" });
-            return ok();
+            return ok(sig);
           case "lost":
             this.txs.set(sig, { legs, state: "landed" });
             throw new Error("was not confirmed in 30.00 seconds");
@@ -213,7 +238,14 @@ class Chain {
           case "hold":
             this.txs.set(sig, { legs, state: "landed" });
             await new Promise<void>((res) => (this.releaseHold = res));
-            return ok();
+            return ok(sig);
+          case "resignBothLand":
+          case "resignFirstDead": {
+            this.txs.set(sig, { legs, state: behaviour === "resignBothLand" ? "landed" : "dead" });
+            const second = await this.sign(hooks);
+            this.txs.set(second, { legs, state: "landed" });
+            return ok(second);
+          }
         }
       },
       getTransaction: async (sig: string) => {
@@ -260,7 +292,7 @@ function railFor(chain: Chain) {
     (req: SovereignP2pPaymentRequest, hooks?: BroadcastHooks): Promise<P2pPaymentProof> =>
       rail.buildP2pPayment(req, hooks),
   );
-  return { rail, build, confirm: p2pPaymentConfirmerOf(rail)! };
+  return { rail, build, confirm: p2pPaymentConfirmerOf(rail) };
 }
 
 const noWait = vi.fn(async () => {});
@@ -279,7 +311,7 @@ function hire(
     capability: "web_search",
     relayPublicKeyHex: PINNED_HEX,
     buildP2pPayment: pay.build,
-    confirmP2pPayment: pay.confirm,
+    ...(pay.confirm != null ? { confirmP2pPayment: pay.confirm } : {}),
     acknowledgeNoHistoryRisk: true,
     ...(ledger != null ? { paidIntentLedger: ledger } : {}),
     submitRetry: { sleep: noWait },
@@ -615,7 +647,7 @@ describe("#885 — broadcast, then the submit fails", () => {
       requiredCapabilities: ["web_search"],
       relayPublicKey: PINNED_HEX,
       buildP2pPayment: pay.build,
-      confirmP2pPayment: pay.confirm,
+      ...(pay.confirm != null ? { confirmP2pPayment: pay.confirm } : {}),
       acknowledgeNoHistoryRisk: true,
       paidIntentLedger: new PaidIntentLedger(new InMemoryPaidIntentStore(), ME),
       logger: { warn: () => {} },
@@ -626,6 +658,131 @@ describe("#885 — broadcast, then the submit fails", () => {
     if (!res.ok) expect(res.error.code).toBe("payment_admission_unconfirmed");
     expect(r.submits).toHaveLength(4);
     expect(r.submits.every((s) => s.txHash.startsWith("sig"))).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Round 3: re-signs, a non-honouring adapter, fail-closed owed records
+// ---------------------------------------------------------------------------
+
+describe("#885 round 3", () => {
+  it("REVIEWER PROBE: a re-sign whose FIRST tx also landed ⇒ both on record, the extra never voided, and the caller is told", async () => {
+    const r = relay();
+    const chain = new Chain(["resignBothLand"]);
+    const pay = railFor(chain);
+    const store = new InMemoryPaidIntentStore();
+    const ledger = new PaidIntentLedger(store, ME, "s1");
+    const res = await hire(ledger, pay, "research X");
+
+    const [sigA, sigB] = chain.sigs;
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.settlement?.txHash).toBe(sigB);
+      expect(res.settlement?.extraPayments).toEqual([{ txHash: sigA, status: "landed" }]);
+      expect(res.settlement?.notice).toContain(`tx ${sigA}`);
+      expect(res.settlement?.notice).toMatch(/reconcile/);
+    }
+    expect(r.submits.map((x) => x.txHash)).toEqual([sigB]);
+    // sigA moved money with no task behind it: owed, in every session.
+    expect(new PaidIntentLedger(store, ME, "later").outstanding().map((e) => e.txHash)).toEqual([
+      sigA,
+    ]);
+  });
+
+  it("a re-sign whose first tx is dead ⇒ the first entry is voided, nothing extra reported", async () => {
+    relay();
+    const chain = new Chain(["resignFirstDead"]);
+    const pay = railFor(chain);
+    const store = new InMemoryPaidIntentStore();
+    const res = await hire(new PaidIntentLedger(store, ME, "s1"), pay, "x");
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.settlement?.extraPayments).toBeUndefined();
+      expect(res.settlement?.notice).toBeUndefined();
+    }
+    expect(new PaidIntentLedger(store, ME, "later").outstanding()).toEqual([]);
+  });
+
+  it("an adapter that sends but ignores the hooks ⇒ no confirmer, and a throw is NEVER 'nothing was sent'", async () => {
+    const r = relay();
+    const chain = new Chain(["lost"], /* honorsHooks */ false);
+    const pay = railFor(chain);
+    expect(pay.confirm).toBeUndefined();
+    const res = await hire(new PaidIntentLedger(new InMemoryPaidIntentStore(), ME), pay, "x");
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.error.code).toBe("payment_status_unknown");
+      expect(res.error.message).not.toMatch(/nothing was sent|no funds moved/i);
+    }
+    expect(r.submits).toHaveLength(0);
+    expect(chain.txs.size).toBe(1); // it DID send
+  });
+
+  it("a confirmer's 'landed' proof for THIS tx but other amounts ⇒ unknown (proofMatchesRequest)", async () => {
+    const r = relay();
+    const chain = new Chain(["dead"]);
+    const pay = railFor(chain);
+    const wrongAmount = vi.fn(
+      async (q: { request: SovereignP2pPaymentRequest; transaction: { signature: string } }) => ({
+        status: "landed" as const,
+        proof: {
+          tx_hash: q.transaction.signature, // its OWN signature — only the legs are wrong
+          chain: "solana",
+          network: "solana:x",
+          to_address: q.request.workerAddress,
+          amount_micro: q.request.amountMicro + 1,
+          fee_to_address: q.request.treasuryAddress,
+          fee_amount_micro: q.request.feeAmountMicro,
+        },
+      }),
+    );
+    const res = await hire(new PaidIntentLedger(new InMemoryPaidIntentStore(), ME), pay, "x", {
+      confirmP2pPayment: wrongAmount,
+    });
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.error.code).toBe("payment_status_unknown");
+    expect(r.submits).toHaveLength(0);
+  });
+
+  it("status unknown AND the owed record cannot be written ⇒ held in memory (same session refused) and said so", async () => {
+    relay();
+    const chain = new Chain(["lost"]);
+    const pay = railFor(chain);
+    /** Accepts the in-flight write at signing; fails the durable "owed" write. */
+    class OwedWriteFails extends InMemoryPaidIntentStore {
+      override record(entry: Parameters<InMemoryPaidIntentStore["record"]>[0]): void {
+        if (entry.state === "unretrieved") throw new Error("SQLITE_FULL");
+        super.record(entry);
+      }
+    }
+    const ledger = new PaidIntentLedger(new OwedWriteFails(), ME, "s1");
+    const unknown = vi.fn(async () => ({ status: "unknown" as const, reason: "429" }));
+    const res = await hire(ledger, pay, "x", { confirmP2pPayment: unknown });
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.error.code).toBe("payment_status_unknown");
+      expect(res.error.ledgerWriteFailed).toBe(true);
+      expect(res.error.message).toMatch(/could NOT be written/);
+    }
+    // The only durable row is this session's own in-flight one, which locks
+    // nothing here — the in-memory hold is what refuses the re-hire.
+    const again = await hire(ledger, pay, "x", { confirmP2pPayment: unknown });
+    expect(again.ok).toBe(false);
+    if (!again.ok) expect(again.error.code).toBe("intent_already_paid");
+    expect(pay.build).toHaveBeenCalledTimes(1);
+  });
+
+  it("a 409 TASK_P2P_PROOF_REPLAYED is never 'refused': admission unconfirmed, lock kept", async () => {
+    relay(["409replayed"]);
+    const pay = railFor(new Chain(["ok"]));
+    const ledger = new PaidIntentLedger(new InMemoryPaidIntentStore(), ME);
+    const res = await hire(ledger, pay, "x");
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.error.code).toBe("payment_admission_unconfirmed");
+      expect(res.error.message).toMatch(/already settled a task/);
+    }
+    expect(ledger.outstandingCount).toBe(1);
   });
 });
 
