@@ -156,10 +156,15 @@ export class RelayDelegationAdapter implements StepDelegationAdapter {
 
     const headers = await this.buildHeaders("task:submit");
     headers["Idempotency-Key"] = idempotencyKey;
+    // The POST stays here, beside the audience it carries (`task:submit`);
+    // submitUnderKey only decides when to send it again.
     const resp = await submitUnderKey(
-      `${syncUrl}/agent/${motebitId}/task`,
-      headers,
-      body,
+      () =>
+        fetch(`${syncUrl}/agent/${motebitId}/task`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify(body),
+        }),
       timeoutMs,
       step.description,
     );
@@ -377,7 +382,7 @@ function deliveryUncertain(message: string, cause?: unknown): DelegationError {
 }
 
 /**
- * POST a task submission under its Idempotency-Key. Two answers are not a
+ * Send a task submission (`post`, which POSTs under its Idempotency-Key). Two answers are not a
  * relay rejection, and neither means "not admitted" (#816):
  * - the fetch throws — the request may have reached the relay and the
  *   response been lost;
@@ -391,9 +396,7 @@ function deliveryUncertain(message: string, cause?: unknown): DelegationError {
  * caller to judge.
  */
 async function submitUnderKey(
-  url: string,
-  headers: Record<string, string>,
-  body: Record<string, unknown>,
+  post: () => Promise<Response>,
   budgetMs: number,
   stepDescription: string,
 ): Promise<Response> {
@@ -401,7 +404,7 @@ async function submitUnderKey(
   for (let conflict = 0; ; conflict++) {
     let resp: Response;
     try {
-      resp = await fetch(url, { method: "POST", headers, body: JSON.stringify(body) });
+      resp = await post();
     } catch (err: unknown) {
       throw deliveryUncertain("Relay task submission unconfirmed: no response", err);
     }

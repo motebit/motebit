@@ -578,7 +578,7 @@ export function createHttpPollingDelegationAdapter(
   };
 
   /**
-   * POST a submission under its Idempotency-Key. A thrown fetch (the request
+   * Send a submission (`post`, which POSTs under its Idempotency-Key). A thrown fetch (the request
    * may have reached the relay, the response was lost) and a 409 (an earlier
    * request under the same key is still processing) are not "not admitted":
    * a 409 is retried with backoff under the same key, within the step's time
@@ -588,9 +588,7 @@ export function createHttpPollingDelegationAdapter(
    * response is returned for the caller to judge.
    */
   const submitUnderKey = async (
-    url: string,
-    headers: Record<string, string>,
-    body: Record<string, unknown>,
+    post: () => Promise<Response>,
     budgetMs: number,
     stepDescription: string,
   ): Promise<Response> => {
@@ -598,7 +596,7 @@ export function createHttpPollingDelegationAdapter(
     for (let conflict = 0; ; conflict++) {
       let resp: Response;
       try {
-        resp = await fetch(url, { method: "POST", headers, body: JSON.stringify(body) });
+        resp = await post();
       } catch (err: unknown) {
         throw unconfirmed("Relay task submission unconfirmed: no response", err);
       }
@@ -653,10 +651,15 @@ export function createHttpPollingDelegationAdapter(
     };
     if (excludeAgents.length > 0) body.exclude_agents = excludeAgents;
 
+    // The POST stays here, beside its path; submitUnderKey only decides when
+    // to send it again.
     const resp = await submitUnderKey(
-      `${relayUrl}/agent/${motebitId}/task`,
-      { ...opts.submitHeaders, "Idempotency-Key": idempotencyKey },
-      body,
+      () =>
+        fetch(`${relayUrl}/agent/${motebitId}/task`, {
+          method: "POST",
+          headers: { ...opts.submitHeaders, "Idempotency-Key": idempotencyKey },
+          body: JSON.stringify(body),
+        }),
       timeoutMs,
       step.description,
     );
