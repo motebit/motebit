@@ -46,6 +46,7 @@ import {
   ConversationSyncEngine,
   HttpConversationSyncAdapter,
   EncryptedConversationSyncAdapter,
+  EncryptedPlanSyncAdapter,
   PlanSyncEngine,
   HttpPlanSyncAdapter,
 } from "@motebit/sync-engine";
@@ -809,12 +810,17 @@ export async function handleSlashCommand(
               repl.motebitId,
             );
             const planSyncEngine = new PlanSyncEngine(planSyncAdapter, repl.motebitId);
+            // Encrypted like the conversations above: the plan push was the
+            // one door of `/sync` that sent plaintext while the key was held (#928).
+            const httpPlanAdapter = new HttpPlanSyncAdapter({
+              baseUrl: syncUrl,
+              motebitId: repl.motebitId,
+              authToken: syncToken,
+            });
             planSyncEngine.connectRemote(
-              new HttpPlanSyncAdapter({
-                baseUrl: syncUrl,
-                motebitId: repl.motebitId,
-                authToken: syncToken,
-              }),
+              encKey
+                ? new EncryptedPlanSyncAdapter({ inner: httpPlanAdapter, key: encKey })
+                : httpPlanAdapter,
             );
             const planResult = await planSyncEngine.sync();
             console.log(

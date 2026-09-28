@@ -940,9 +940,10 @@ export function initChat(ctx: DesktopContext, callbacks: ChatCallbacks): ChatAPI
         return;
       case "sync": {
         const config = ctx.getConfig();
-        if (config?.syncUrl != null && config.syncUrl !== "") {
+        if (config?.syncUrl != null && config.syncUrl !== "" && config.invoke != null) {
+          // Encrypted: the app derives the sync key from the device keypair (#928).
           void ctx.app
-            .syncConversations(config.syncUrl, config.syncMasterToken)
+            .syncConversations(config.invoke, config.syncUrl, config.syncMasterToken)
             .then((result) => {
               const total =
                 result.conversations_pushed +
@@ -957,6 +958,9 @@ export function initChat(ctx: DesktopContext, callbacks: ChatCallbacks): ChatAPI
                 `Sync failed: ${err instanceof Error ? err.message : String(err)}`,
               );
             });
+        } else if (config?.syncUrl != null && config.syncUrl !== "") {
+          // No keystore access, so no sync key: never sync unencrypted.
+          addMessage("system", "Sync unavailable: this window cannot reach the device key");
         } else {
           addMessage("system", "No sync relay configured");
         }

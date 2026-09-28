@@ -134,13 +134,66 @@ export class SyncController {
   }
 
   /**
-   * Sync conversations with the remote relay server.
-   * Creates a ConversationSyncEngine that bridges TauriConversationStore to the relay.
+   * Sync conversations and plans with the relay — the `/sync` command's door.
+   *
+   * The sync key is derived HERE, from this device's keypair, exactly as
+   * `startSync` derives it (#928 round 2). The key used to be an optional
+   * argument the `/sync` caller never passed, so a manual sync put message
+   * text, titles and plans on the wire in plaintext. No keypair ⇒ refused:
+   * there is no unencrypted conversation or plan sync on desktop.
+   *
+   * @param authToken a configured master token; absent ⇒ a device `sync`
+   *   token is minted for this call.
    */
   async syncConversations(
+    invoke: InvokeFn,
     syncUrl: string,
     authToken?: string,
-    encryptionKey?: Uint8Array,
+  ): Promise<{
+    conversations_pushed: number;
+    conversations_pulled: number;
+    messages_pushed: number;
+    messages_pulled: number;
+  }> {
+    if (!this.deps.getConversationStore()) {
+      return {
+        conversations_pushed: 0,
+        conversations_pulled: 0,
+        messages_pushed: 0,
+        messages_pulled: 0,
+      };
+    }
+    const keypair = await this.deps.getDeviceKeypair(invoke);
+    if (!keypair) {
+      const msg = "No device keypair — refusing to sync conversations unencrypted";
+      this.emitSyncStatus({ status: "error", error: msg });
+      throw new Error(msg);
+    }
+    const privKeyBytes = new Uint8Array(keypair.privateKey.length / 2);
+    for (let i = 0; i < keypair.privateKey.length; i += 2) {
+      privKeyBytes[i / 2] = parseInt(keypair.privateKey.slice(i, i + 2), 16);
+    }
+    let encKey: Uint8Array;
+    try {
+      encKey = await deriveSyncEncryptionKey(privKeyBytes);
+    } finally {
+      secureErase(privKeyBytes);
+    }
+    const token =
+      authToken != null && authToken !== ""
+        ? authToken
+        : await this.deps.createSyncToken(keypair.privateKey);
+    return this.syncConversationsE2E(syncUrl, token, encKey);
+  }
+
+  /**
+   * The one conversation + plan sync body. The key is REQUIRED: both remotes
+   * are always the encrypting adapters — no raw branch exists to reach.
+   */
+  private async syncConversationsE2E(
+    syncUrl: string,
+    authToken: string | undefined,
+    encryptionKey: Uint8Array,
   ): Promise<{
     conversations_pushed: number;
     conversations_pulled: number;
@@ -172,9 +225,7 @@ export class SyncController {
     });
     // Encrypt conversations at the sync boundary — relay stores opaque ciphertext
     syncEngine.connectRemote(
-      encryptionKey
-        ? new EncryptedConversationSyncAdapter({ inner: httpConvAdapter, key: encryptionKey })
-        : httpConvAdapter,
+      new EncryptedConversationSyncAdapter({ inner: httpConvAdapter, key: encryptionKey }),
     );
 
     try {
@@ -192,9 +243,7 @@ export class SyncController {
           authToken,
         });
         planSync.connectRemote(
-          encryptionKey
-            ? new EncryptedPlanSyncAdapter({ inner: httpPlanAdapter, key: encryptionKey })
-            : httpPlanAdapter,
+          new EncryptedPlanSyncAdapter({ inner: httpPlanAdapter, key: encryptionKey }),
         );
         await planSync.sync();
       }
@@ -265,10 +314,21 @@ export class SyncController {
     }
 
     // Build adapter stack: HTTP (fallback) → Encrypted HTTP → WS → Encrypted WS
+    //
+    // The catch-up adapter resolves a FRESH `sync` token per request — the
+    // same mint the socket refresh below uses (#927). It used to hold the
+    // first token for the session: the socket was refreshed every 4.5 min,
+    // the catch-up was not, so after five minutes every catch-up was refused
+    // and the refusal swallowed — desktop's only pull door went deaf. Every
+    // transport is E2E-only (#928): a plaintext payload is refused before it
+    // leaves the device.
     const httpAdapter = new HttpEventStoreAdapter({
       baseUrl: syncUrl,
       motebitId,
-      authToken: token,
+      credentialSource: {
+        getCredential: () => this.deps.createSyncToken(keypair.privateKey),
+      },
+      payloads: "e2e",
     });
     const encryptedHttp = new EncryptedEventStoreAdapter({ inner: httpAdapter, key: encKey });
 
@@ -293,6 +353,13 @@ export class SyncController {
         });
       }
     };
+    // A failed catch-up is shown, never swallowed (#927).
+    const onCatchUpError = (err: unknown): void => {
+      this.emitSyncStatus({
+        status: "error",
+        error: `Catch-up failed: ${err instanceof Error ? err.message : String(err)}`,
+      });
+    };
     const wsAdapter = new WebSocketEventStoreAdapter({
       url: wsUrl,
       motebitId,
@@ -301,6 +368,8 @@ export class SyncController {
       httpFallback: encryptedHttp,
       localStore: localEventStore ?? undefined,
       onCatchUp,
+      onCatchUpError,
+      payloads: "e2e",
     });
     this._wsAdapter = wsAdapter;
 
@@ -541,6 +610,8 @@ export class SyncController {
             httpFallback: encryptedHttp,
             localStore: localEventStore ?? undefined,
             onCatchUp,
+            onCatchUpError,
+            payloads: "e2e",
           });
           // Events the sync engine handed the replaced adapter while it was
           // offline are counted as pushed; they go out on the replacement.
@@ -563,7 +634,7 @@ export class SyncController {
     this._wsTokenRefreshTimer = refreshTimer;
 
     // One-shot conversation sync (encrypted, stays HTTP — no WS needed for conversations)
-    void this.syncConversations(syncUrl, token, encKey)
+    void this.syncConversationsE2E(syncUrl, token, encKey)
       .then((result) => {
         this.emitSyncStatus({
           lastSyncAt: Date.now(),

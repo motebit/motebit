@@ -2,6 +2,7 @@ import type { EventLogEntry } from "@motebit/sdk";
 import type { EventStoreAdapter, EventFilter } from "@motebit/event-log";
 import type { CredentialSource, CredentialRequest } from "./credential-source.js";
 import type { SeqPullResult, SeqPullSource } from "./seq-cursor.js";
+import { assertPushable, type RelayPayloadMode } from "./event-payload.js";
 
 /** Drop the relay's transport `seq` from an entry before it is stored anywhere. */
 function stripSeq(e: EventLogEntry & { seq?: unknown }): EventLogEntry {
@@ -14,8 +15,19 @@ export interface HttpAdapterConfig {
   baseUrl: string;
   motebitId: string;
   authToken?: string;
-  /** Dynamic credential provider — takes precedence over authToken. */
+  /**
+   * Dynamic credential provider — takes precedence over authToken. Resolved
+   * per request, so a rotating short-lived token never goes stale; on a
+   * 401/403 the adapter asks it ONCE more and retries (#927).
+   */
   credentialSource?: CredentialSource;
+  /**
+   * What this transport may push (#928). `e2e`: only E2E envelopes — a
+   * plaintext payload is refused before it leaves the device. A surface that
+   * holds a sync encryption key MUST build its transports in `e2e` mode.
+   * Default `raw` (a surface with no key).
+   */
+  payloads?: RelayPayloadMode;
   /** Max retry attempts on transient failure (default 3) */
   maxRetries?: number;
   /** Base backoff in ms — actual delay is base * 2^attempt + jitter (default 1000) */
@@ -45,6 +57,8 @@ export class HttpEventStoreAdapter implements EventStoreAdapter, SeqPullSource {
   private credentialSource: CredentialSource | undefined;
   private maxRetries: number;
   private retryBackoffMs: number;
+  /** What this transport may push — see `HttpAdapterConfig.payloads`. */
+  readonly payloads: RelayPayloadMode;
 
   constructor(config: HttpAdapterConfig) {
     this.baseUrl = config.baseUrl.replace(/\/+$/, "");
@@ -53,13 +67,15 @@ export class HttpEventStoreAdapter implements EventStoreAdapter, SeqPullSource {
     this.credentialSource = config.credentialSource;
     this.maxRetries = config.maxRetries ?? 3;
     this.retryBackoffMs = config.retryBackoffMs ?? 1_000;
+    this.payloads = config.payloads ?? "raw";
   }
 
   async append(entry: EventLogEntry): Promise<void> {
+    // Fail closed BEFORE any byte leaves: an e2e transport never carries plaintext (#928).
+    assertPushable([entry], this.payloads);
     const url = `${this.baseUrl}/sync/${this.motebitId}/push`;
-    const res = await this.fetchWithRetry(url, {
+    const res = await this.authedFetch(url, {
       method: "POST",
-      headers: await this.headers(),
       body: JSON.stringify({ events: [entry] }),
     });
     if (!res.ok) {
@@ -70,9 +86,8 @@ export class HttpEventStoreAdapter implements EventStoreAdapter, SeqPullSource {
   async query(filter: EventFilter): Promise<EventLogEntry[]> {
     const afterClock = filter.after_version_clock ?? 0;
     const url = `${this.baseUrl}/sync/${this.motebitId}/pull?after_clock=${afterClock}`;
-    const res = await this.fetchWithRetry(url, {
+    const res = await this.authedFetch(url, {
       method: "GET",
-      headers: await this.headers(),
     });
     if (!res.ok) {
       throw new Error(`Pull failed: ${res.status} ${res.statusText}`);
@@ -101,9 +116,8 @@ export class HttpEventStoreAdapter implements EventStoreAdapter, SeqPullSource {
     const url =
       `${this.baseUrl}/sync/${this.motebitId}/pull` +
       `?after_seq=${afterSeq}&after_clock=${fallbackAfterClock}`;
-    const res = await this.fetchWithRetry(url, {
+    const res = await this.authedFetch(url, {
       method: "GET",
-      headers: await this.headers(),
     });
     if (!res.ok) {
       throw new Error(`Pull failed: ${res.status} ${res.statusText}`);
@@ -136,9 +150,8 @@ export class HttpEventStoreAdapter implements EventStoreAdapter, SeqPullSource {
 
   async getLatestClock(_motebitId: string): Promise<number> {
     const url = `${this.baseUrl}/sync/${this.motebitId}/clock`;
-    const res = await this.fetchWithRetry(url, {
+    const res = await this.authedFetch(url, {
       method: "GET",
-      headers: await this.headers(),
     });
     if (!res.ok) {
       throw new Error(`Clock failed: ${res.status} ${res.statusText}`);
@@ -149,6 +162,22 @@ export class HttpEventStoreAdapter implements EventStoreAdapter, SeqPullSource {
 
   async tombstone(_eventId: string, _motebitId: string): Promise<void> {
     // No-op for MVP — tombstoning is a local operation
+  }
+
+  /**
+   * One authenticated request (#927). Headers are resolved per attempt from
+   * the credential source. A 401/403 — what a relay answers an expired
+   * short-lived token — is met by asking the source ONCE more and retrying;
+   * a second refusal is returned to the caller, which throws it. Never
+   * swallowed here. A static `authToken` cannot be refreshed, so its refusal
+   * is returned as is.
+   */
+  private async authedFetch(url: string, init: Omit<RequestInit, "headers">): Promise<Response> {
+    const res = await this.fetchWithRetry(url, { ...init, headers: await this.headers() });
+    if ((res.status === 401 || res.status === 403) && this.credentialSource) {
+      return this.fetchWithRetry(url, { ...init, headers: await this.headers() });
+    }
+    return res;
   }
 
   /**

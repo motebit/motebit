@@ -1218,7 +1218,7 @@ describe("DesktopApp.syncConversations", () => {
   it("returns zeros when no conversation store", async () => {
     app = new DesktopApp();
     await app.initAI({ provider: "local-server", isTauri: false });
-    const result = await app.syncConversations("http://localhost:3000");
+    const result = await app.syncConversations(vi.fn() as any, "http://localhost:3000");
     expect(result).toEqual({
       conversations_pushed: 0,
       conversations_pulled: 0,

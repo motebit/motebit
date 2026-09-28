@@ -21,12 +21,7 @@ import { embedText } from "@motebit/memory-graph";
 import type { MotebitPersonalityConfig } from "@motebit/ai-core";
 import { DEFAULT_CONFIG } from "@motebit/ai-core";
 import { openMotebitDatabase } from "@motebit/persistence";
-import {
-  HttpEventStoreAdapter,
-  WebSocketEventStoreAdapter,
-  PlanSyncEngine,
-  HttpPlanSyncAdapter,
-} from "@motebit/sync-engine";
+import { WebSocketEventStoreAdapter } from "@motebit/sync-engine";
 import type { AgentTask, ToolDefinition, ToolHandler } from "@motebit/sdk";
 import {
   EventType,
@@ -61,6 +56,7 @@ import { handleRelayCommandFrame } from "./relay-command-frame.js";
 import { fromHex, loadActiveSigningKey, IdentityKeyError } from "./identity.js";
 import { registerWithRelay, type RelayRegistrationHandle } from "./relay-registration.js";
 import { createRelaySyncSocket } from "./relay-sync-socket.js";
+import { createDaemonRelaySync } from "./daemon-relay-sync.js";
 import { enrollOnAnnounce } from "./machine-roster.js";
 import { taskResultBearer } from "./task-result-bearer.js";
 import {
@@ -426,11 +422,23 @@ export async function handleRun(config: CliConfig): Promise<void> {
     // EVERY (re)connect (#820) — a token minted once here expired after
     // five minutes, and every later reconnect was refused for good.
 
-    const httpAdapter = new HttpEventStoreAdapter({
-      baseUrl: syncUrl,
+    // The relay sync wiring (#927, #928): credentials per request, and E2E
+    // whenever the identity key opened — this path pushed plaintext events
+    // and plans through bare HTTP adapters while holding the key. One
+    // function, shared with `serve` and under test (daemon-relay-sync.ts).
+    const relaySync = await createDaemonRelaySync({
+      syncUrl,
       motebitId,
-      authToken: syncToken,
+      deviceId: fullConfig.device_id ?? undefined,
+      privateKey: () => privKeyBytes,
+      ...(syncToken != null ? { configuredToken: syncToken } : {}),
     });
+    const eventTransport = relaySync.transport;
+    if (!relaySync.e2e) {
+      console.log(
+        "Sync: the identity key is not available — events sync UNENCRYPTED from this process",
+      );
+    }
 
     const cliCapabilities = [
       DeviceCapability.StdioMcp,
@@ -468,8 +476,9 @@ export async function handleRun(config: CliConfig): Promise<void> {
         );
       },
       capabilities: cliCapabilities,
-      httpFallback: httpAdapter,
+      httpFallback: eventTransport.remote,
       localStore: moteDb.eventStore,
+      ...(eventTransport.e2e ? { payloads: "e2e" as const } : {}),
     });
 
     // Handle agent task requests and proposal events
@@ -745,7 +754,7 @@ export async function handleRun(config: CliConfig): Promise<void> {
     }
 
     // Also wire sync via the HTTP adapter
-    runtime.connectSync(httpAdapter);
+    runtime.connectSync(eventTransport.remote);
 
     // Hardware-attestation peer flow — production wiring. Without these
     // two setters the runtime hook in `bumpTrustFromReceipt` is dormant.
@@ -760,11 +769,10 @@ export async function handleRun(config: CliConfig): Promise<void> {
     runtime.setHardwareAttestationVerifiers(buildHardwareVerifiers());
 
     // Plan sync: push/pull plans every 30s for cross-device visibility
+    // Plans are encrypted exactly when events are (#928).
     const { SqlitePlanSyncStoreAdapter } = await import("./runtime-factory.js");
-    const planSyncAdapter = new SqlitePlanSyncStoreAdapter(moteDb.planStore, motebitId);
-    const planSyncEngine = new PlanSyncEngine(planSyncAdapter, motebitId);
-    planSyncEngine.connectRemote(
-      new HttpPlanSyncAdapter({ baseUrl: syncUrl, motebitId, authToken: syncToken }),
+    const planSyncEngine = relaySync.planSync(
+      new SqlitePlanSyncStoreAdapter(moteDb.planStore, motebitId),
     );
     planSyncEngine.start();
   } else {
@@ -1498,11 +1506,17 @@ export async function handleServe(config: CliConfig): Promise<void> {
       // on every (re)connect, the master token only when none can be
       // minted (#820 — the same once-minted token as `motebit run`'s).
 
-      const httpAdapter = new HttpEventStoreAdapter({
-        baseUrl: syncUrl,
-        motebitId,
-        authToken: masterToken,
-      });
+      // The socket's catch-up (#927, #928): credentials per request, E2E
+      // with the key this process already holds.
+      const serveEventTransport = (
+        await createDaemonRelaySync({
+          syncUrl,
+          motebitId,
+          deviceId: fullConfigForServe.device_id ?? undefined,
+          privateKey: () => servePrivateKey,
+          ...(masterToken != null ? { configuredToken: masterToken } : {}),
+        })
+      ).transport;
 
       serveWsAdapter = createRelaySyncSocket({
         syncUrl,
@@ -1525,8 +1539,9 @@ export async function handleServe(config: CliConfig): Promise<void> {
         // Same machine as `motebit run` when both are local — see the
         // daemon's own socket above.
         deviceId: fullConfigForServe.device_id ?? undefined,
-        httpFallback: httpAdapter,
+        httpFallback: serveEventTransport.remote,
         localStore: moteDb.eventStore,
+        ...(serveEventTransport.e2e ? { payloads: "e2e" as const } : {}),
       });
 
       // Handle task dispatch — same pattern as daemon mode
