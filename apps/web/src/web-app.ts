@@ -9,6 +9,7 @@ import {
   createRelayBackedSandboxTokenSource,
   getOrPinRelayKey,
   verifyAgentCommandEnvelope,
+  INTERACTIVE_DELEGATION_TOOLS,
 } from "@motebit/runtime";
 import type { TokenAudience } from "@motebit/sdk";
 import { createSolanaWalletRail, createSolanaMemoSubmitter } from "@motebit/wallet-solana";
@@ -4128,14 +4129,15 @@ export class UnbootedWebApp {
     }
     if (this._serving) return { ok: true };
 
-    const LOCAL_ONLY = new Set([
+    const LOCAL_ONLY = new Set<string>([
       "read_file",
       "recall_memories",
       "list_events",
       "self_reflect",
-      "delegate_to_agent",
-      // Local meta-tool (the live roster read) — never a sellable capability.
-      "discover_agents",
+      // The interior delegation tools (hire, live roster read, fetch a
+      // result already paid for) — never a sellable capability. Spread from
+      // the runtime's canonical list so a new one cannot leak (#874).
+      ...INTERACTIVE_DELEGATION_TOOLS,
     ]);
     const tools = this.runtime.getToolRegistry().list();
     const capabilities = tools

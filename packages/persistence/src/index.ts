@@ -37,6 +37,8 @@ import type {
   PolicyDecision,
   HaltRequest,
   HaltStoreAdapter,
+  PaidIntentRecord,
+  PaidIntentStoreAdapter,
   RunEvidenceEntry,
   RunEvidenceSink,
   RunEvidenceWithheldReason,
@@ -1792,6 +1794,92 @@ export class SqliteCommandReplayStore {
   isReplay(signature: string, now: number, windowMs: number): boolean {
     this.stmtPrune.run(now - windowMs);
     return this.stmtInsert.run(signature, now).changes === 0;
+  }
+}
+
+// === Paid-unretrieved ledger (#874) ===
+
+/**
+ * Durable paid-unretrieved ledger (migration #49). Implements
+ * `PaidIntentStoreAdapter` — the store behind the runtime's paid-intent
+ * interlock, so "never pay twice for the same job" and the "a paid result
+ * is waiting" notice survive a restart.
+ *
+ * Rows are only ever recorded from a settled-payment fact and only ever
+ * RESOLVED (retrieved, or dismissed by the owner) — never deleted: a
+ * payment that left the wallet stays on record here as it does onchain.
+ * The resolve UPDATE assigns `resolution`/`resolved_at` only and is scoped
+ * to the owning identity's own row.
+ */
+export class SqlitePaidIntentStore implements PaidIntentStoreAdapter {
+  private stmtRecord: PreparedStatement;
+  private stmtOutstanding: PreparedStatement;
+  private stmtResolve: PreparedStatement;
+
+  constructor(db: DatabaseDriver) {
+    this.stmtRecord = db.prepare(
+      `INSERT OR IGNORE INTO paid_intent_ledger
+       (motebit_id, task_id, worker_motebit_id, capability, tx_hash, paid_micro, fee_micro, recorded_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    this.stmtOutstanding = db.prepare(
+      `SELECT * FROM paid_intent_ledger WHERE motebit_id = ? AND resolution IS NULL
+       ORDER BY recorded_at ASC`,
+    );
+    this.stmtResolve = db.prepare(
+      `UPDATE paid_intent_ledger SET resolution = ?, resolved_at = ?
+       WHERE motebit_id = ? AND task_id = ? AND resolution IS NULL`,
+    );
+  }
+
+  record(entry: Omit<PaidIntentRecord, "resolution" | "resolved_at">): void {
+    this.stmtRecord.run(
+      entry.motebit_id,
+      entry.task_id,
+      entry.worker_motebit_id,
+      entry.capability,
+      entry.tx_hash,
+      entry.paid_micro,
+      entry.fee_micro,
+      entry.recorded_at,
+    );
+  }
+
+  listOutstanding(motebitId: string): PaidIntentRecord[] {
+    const rows = this.stmtOutstanding.all(motebitId) as Array<{
+      motebit_id: string;
+      task_id: string;
+      worker_motebit_id: string;
+      capability: string;
+      tx_hash: string;
+      paid_micro: number;
+      fee_micro: number;
+      recorded_at: number;
+      resolution: string | null;
+      resolved_at: number | null;
+    }>;
+    return rows.map((r) => ({
+      motebit_id: r.motebit_id,
+      task_id: r.task_id,
+      worker_motebit_id: r.worker_motebit_id,
+      capability: r.capability,
+      tx_hash: r.tx_hash,
+      paid_micro: r.paid_micro,
+      fee_micro: r.fee_micro,
+      recorded_at: r.recorded_at,
+      resolution:
+        r.resolution === "retrieved" || r.resolution === "dismissed" ? r.resolution : null,
+      resolved_at: r.resolved_at,
+    }));
+  }
+
+  resolve(
+    motebitId: string,
+    taskId: string,
+    resolution: "retrieved" | "dismissed",
+    resolvedAt: number,
+  ): boolean {
+    return this.stmtResolve.run(resolution, resolvedAt, motebitId, taskId).changes > 0;
   }
 }
 
@@ -3740,6 +3828,7 @@ export interface MotebitDatabase {
   goalRunStore: SqliteGoalRunStore;
   runtimeLivenessStore: SqliteRuntimeLivenessStore;
   haltStore: SqliteHaltStore;
+  paidIntentStore: SqlitePaidIntentStore;
   runEvidenceStore: SqliteRunEvidenceStore;
   commandReplayStore: SqliteCommandReplayStore;
   conversationStore: SqliteConversationStore;
@@ -3781,6 +3870,7 @@ export function createMotebitDatabaseFromDriver(driver: DatabaseDriver): Motebit
   const goalRunStore = new SqliteGoalRunStore(driver);
   const runtimeLivenessStore = new SqliteRuntimeLivenessStore(driver);
   const haltStore = new SqliteHaltStore(driver);
+  const paidIntentStore = new SqlitePaidIntentStore(driver);
   const runEvidenceStore = new SqliteRunEvidenceStore(driver);
   const commandReplayStore = new SqliteCommandReplayStore(driver);
   const conversationStore = new SqliteConversationStore(driver);
@@ -3809,6 +3899,7 @@ export function createMotebitDatabaseFromDriver(driver: DatabaseDriver): Motebit
     goalRunStore,
     runtimeLivenessStore,
     haltStore,
+    paidIntentStore,
     runEvidenceStore,
     commandReplayStore,
     conversationStore,

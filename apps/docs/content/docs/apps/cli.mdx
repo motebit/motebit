@@ -71,6 +71,7 @@ pnpm --filter motebit start -- \
 | `/agents info <id>` | Full trust record detail for an agent |
 | `/agents trust <id> <level>` | Set trust level (first_contact, verified, trusted, blocked) |
 | `/agents block <id>` | Block an agent |
+| `/result [task_id] [owner_id]` | Fetch a delegated task's result by id. Free and read-only: one `task:query` read, never a new hire, never a payment. With no id, lists the paid tasks whose results never arrived; startup shows one line when any are waiting. `/result dismiss <task_id>` clears an entry after the relay has reaped the task. |
 | `/operator` | Show operator mode status |
 | `quit` / `exit` | Exit the CLI |
 

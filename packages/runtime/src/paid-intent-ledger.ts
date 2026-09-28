@@ -12,24 +12,34 @@
  * retrieved, any NEW paid delegation to the same worker + capability is
  * refused BEFORE broadcast (`intent_already_paid`, fail-closed). Two or
  * more outstanding unretrieved payments suspend ALL new paid delegation
- * for the session — money is leaking; stop the bleeding.
+ * until they are retrieved or dismissed — money is leaking; stop the
+ * bleeding.
  *
  * Scope and honesty:
- * - Session-scoped (one runtime instance = one ledger). A restart clears
- *   it — the retry loop it guards against is a session phenomenon, and a
- *   human restarting has seen the refusal message with the prior taskId.
+ * - Per identity, and as durable as the store behind it (#874). The
+ *   runtime passes its surface's `paidIntentStore` when one exists (the
+ *   CLI's SQLite database); otherwise an in-memory store, which holds for
+ *   one process only. The durable form is what closes the #874 shape: a
+ *   restart used to forget every settled-unretrieved payment, so the
+ *   agent's only route to "get my paid result" was a second hire.
  * - Keyed on (worker motebit_id, capability) — the observed #433 shape is
  *   "same job, same worker, re-hired". A different worker for one
- *   outstanding payment is legitimate fan-out and passes; the session
+ *   outstanding payment is legitimate fan-out and passes; the suspend
  *   threshold bounds the pathological case.
  * - Recorded ONLY from a `settledPayment` fact (the money independently
  *   verified as moved), never from an intent or a prompt. No unverified
  *   state can lock anything.
+ * - An entry leaves the ledger only by RETRIEVAL (the signed result was
+ *   fetched — `retrieveDelegationResult`) or an owner's explicit
+ *   DISMISSAL. Never by elapsed time, never by a 404: a 404 has followed
+ *   a transient 503 before (#433), so it is not proof the result is gone.
  * - Enforced INSIDE the shared submit chokepoint
- *   (`resolveAndSubmitP2pDelegation`), so the interactive loop path and
- *   the granted deterministic path cannot diverge
- *   (docs/doctrine/composition-preserves-enforcement.md).
+ *   (`resolveAndSubmitP2pDelegation`), so the interactive loop path, the
+ *   deterministic `invokeCapability` path and the granted path cannot
+ *   diverge (docs/doctrine/composition-preserves-enforcement.md).
  */
+
+import type { PaidIntentRecord, PaidIntentStoreAdapter } from "@motebit/sdk";
 
 /** A payment that settled onchain whose result was never delivered. */
 export interface UnretrievedPayment {
@@ -54,22 +64,86 @@ export type PaidIntentVerdict =
     };
 
 /**
- * Outstanding-payment count at which ALL new paid delegation is refused
- * for the session, regardless of worker. One unretrieved payment can be a
+ * Outstanding-payment count at which ALL new paid delegation is refused,
+ * regardless of worker, until the outstanding results are retrieved or
+ * dismissed. One unretrieved payment can be a
  * transient delivery blip; two concurrent ones is a failure loop.
  */
 export const SESSION_SUSPEND_THRESHOLD = 2;
 
-export class PaidIntentLedger {
-  private readonly entries = new Map<string, UnretrievedPayment>();
+/**
+ * In-memory `PaidIntentStoreAdapter` — the default when a surface has no
+ * durable store, and the test double. Holds for one process only.
+ */
+export class InMemoryPaidIntentStore implements PaidIntentStoreAdapter {
+  private readonly rows = new Map<string, PaidIntentRecord>();
 
-  private key(workerMotebitId: string, capability: string): string {
-    return `${workerMotebitId}::${capability}`;
+  private key(motebitId: string, taskId: string): string {
+    return `${motebitId}::${taskId}`;
   }
+
+  record(entry: Omit<PaidIntentRecord, "resolution" | "resolved_at">): void {
+    const k = this.key(entry.motebit_id, entry.task_id);
+    if (this.rows.has(k)) return;
+    this.rows.set(k, { ...entry, resolution: null, resolved_at: null });
+  }
+
+  listOutstanding(motebitId: string): PaidIntentRecord[] {
+    return [...this.rows.values()]
+      .filter((r) => r.motebit_id === motebitId && r.resolution == null)
+      .sort((a, b) => a.recorded_at - b.recorded_at)
+      .map((r) => ({ ...r }));
+  }
+
+  resolve(
+    motebitId: string,
+    taskId: string,
+    resolution: "retrieved" | "dismissed",
+    resolvedAt: number,
+  ): boolean {
+    const row = this.rows.get(this.key(motebitId, taskId));
+    if (row == null || row.resolution != null) return false;
+    row.resolution = resolution;
+    row.resolved_at = resolvedAt;
+    return true;
+  }
+}
+
+function fromRecord(r: PaidIntentRecord): UnretrievedPayment {
+  return {
+    workerMotebitId: r.worker_motebit_id,
+    capability: r.capability,
+    taskId: r.task_id,
+    txHash: r.tx_hash,
+    paidMicro: r.paid_micro,
+    feeMicro: r.fee_micro,
+    recordedAt: r.recorded_at,
+  };
+}
+
+export class PaidIntentLedger {
+  /**
+   * @param store where entries live — durable on a surface that has a
+   *   database, in-memory otherwise.
+   * @param motebitId the delegator the ledger belongs to (per identity).
+   */
+  constructor(
+    private readonly store: PaidIntentStoreAdapter = new InMemoryPaidIntentStore(),
+    private readonly motebitId: string = "local",
+  ) {}
 
   /** Record a settled-but-unretrieved payment (from a `settledPayment` fact). */
   recordSettledUnretrieved(entry: UnretrievedPayment): void {
-    this.entries.set(this.key(entry.workerMotebitId, entry.capability), entry);
+    this.store.record({
+      motebit_id: this.motebitId,
+      task_id: entry.taskId,
+      worker_motebit_id: entry.workerMotebitId,
+      capability: entry.capability,
+      tx_hash: entry.txHash,
+      paid_micro: entry.paidMicro,
+      fee_micro: entry.feeMicro,
+      recorded_at: entry.recordedAt,
+    });
   }
 
   /**
@@ -77,32 +151,41 @@ export class PaidIntentLedger {
    * Fail-closed: any lock verdict must refuse before money moves.
    */
   check(workerMotebitId: string, capability: string): PaidIntentVerdict {
-    const pair = this.entries.get(this.key(workerMotebitId, capability));
+    const all = this.outstanding();
+    const pair = all.find(
+      (e) => e.workerMotebitId === workerMotebitId && e.capability === capability,
+    );
     if (pair != null) return { locked: true, scope: "pair", prior: pair };
-    if (this.entries.size >= SESSION_SUSPEND_THRESHOLD) {
-      const oldest = [...this.entries.values()].sort((a, b) => a.recordedAt - b.recordedAt)[0]!;
-      return { locked: true, scope: "session", prior: oldest };
+    if (all.length >= SESSION_SUSPEND_THRESHOLD) {
+      return { locked: true, scope: "session", prior: all[0]! };
     }
     return { locked: false };
   }
 
-  /** Resolve one entry — its result was finally retrieved (or a human cleared it). */
+  /** The result of `taskId` was retrieved — the entry stops locking. */
   resolve(taskId: string): boolean {
-    for (const [key, entry] of this.entries) {
-      if (entry.taskId === taskId) {
-        this.entries.delete(key);
-        return true;
-      }
-    }
-    return false;
+    return this.store.resolve(this.motebitId, taskId, "retrieved", Date.now());
+  }
+
+  /**
+   * The owner cleared an entry knowingly (the relay reaped the task and
+   * the result is unrecoverable). An explicit human act, never automatic.
+   */
+  dismiss(taskId: string): boolean {
+    return this.store.resolve(this.motebitId, taskId, "dismissed", Date.now());
+  }
+
+  /** The outstanding entry for `taskId`, if any. */
+  find(taskId: string): UnretrievedPayment | null {
+    return this.outstanding().find((e) => e.taskId === taskId) ?? null;
   }
 
   get outstandingCount(): number {
-    return this.entries.size;
+    return this.outstanding().length;
   }
 
   /** The outstanding entries, oldest first — for owner-facing rendering. */
   outstanding(): UnretrievedPayment[] {
-    return [...this.entries.values()].sort((a, b) => a.recordedAt - b.recordedAt);
+    return this.store.listOutstanding(this.motebitId).map(fromRecord);
   }
 }

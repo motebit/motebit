@@ -20,6 +20,7 @@ import type { MotebitRuntime } from "@motebit/runtime";
 import {
   executeRemoteCommand,
   cmdSelfTest,
+  INTERACTIVE_DELEGATION_TOOLS,
   RelayDelegationAdapter,
   getOrPinRelayKey,
   verifyAgentCommandEnvelope,
@@ -126,13 +127,14 @@ export class MobileSyncController {
     }
     if (this._serving) return { ok: true };
 
-    const LOCAL_ONLY = new Set([
+    const LOCAL_ONLY = new Set<string>([
       "read_file",
       "recall_memories",
       "list_events",
-      "delegate_to_agent",
-      // Local meta-tool (the live roster read) — never a sellable capability.
-      "discover_agents",
+      // The interior delegation tools (hire, live roster read, fetch a
+      // result already paid for) — never a sellable capability. Spread from
+      // the runtime's canonical list so a new one cannot leak (#874).
+      ...INTERACTIVE_DELEGATION_TOOLS,
     ]);
     const tools = runtime.getToolRegistry().list();
     const capabilities = tools

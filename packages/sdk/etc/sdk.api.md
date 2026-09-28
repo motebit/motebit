@@ -726,6 +726,34 @@ export type OutboundUrlVerdict = {
 };
 
 // @public
+export interface PaidIntentRecord {
+    // (undocumented)
+    capability: string;
+    // (undocumented)
+    fee_micro: number;
+    motebit_id: string;
+    // (undocumented)
+    paid_micro: number;
+    // (undocumented)
+    recorded_at: number;
+    resolution: "retrieved" | "dismissed" | null;
+    // (undocumented)
+    resolved_at: number | null;
+    task_id: string;
+    // (undocumented)
+    tx_hash: string;
+    // (undocumented)
+    worker_motebit_id: string;
+}
+
+// @public
+export interface PaidIntentStoreAdapter {
+    listOutstanding(motebitId: string): PaidIntentRecord[];
+    record(entry: Omit<PaidIntentRecord, "resolution" | "resolved_at">): void;
+    resolve(motebitId: string, taskId: string, resolution: "retrieved" | "dismissed", resolvedAt: number): boolean;
+}
+
+// @public
 export type PixelConsentState = "denied" | "session";
 
 // @public
@@ -904,6 +932,7 @@ export interface StorageAdapters {
     latencyStatsStore?: LatencyStatsStoreAdapter;
     // (undocumented)
     memoryStorage: MemoryStorageAdapter;
+    paidIntentStore?: PaidIntentStoreAdapter;
     // (undocumented)
     planStore?: PlanStoreAdapter;
     runEvidenceSink?: RunEvidenceSink;

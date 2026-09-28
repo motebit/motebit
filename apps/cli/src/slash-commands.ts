@@ -14,7 +14,7 @@ import { renderIdentityCard } from "./subcommands/id.js";
 import { DEFAULT_SOLANA_RPC_URL, WALLET_GUIDANCE_LINES } from "./subcommands/wallet.js";
 import { renderLedgerSummary } from "./subcommands/ledger.js";
 import { RelayClient, RelayClientError } from "@motebit/relay-client";
-import { executeCommand } from "@motebit/runtime";
+import { executeCommand, INTERACTIVE_DELEGATION_TOOLS } from "@motebit/runtime";
 import { narrateEconomicConsequences } from "@motebit/gradient";
 import { computeDecayedConfidence } from "@motebit/memory-graph";
 import type { MotebitDatabase } from "@motebit/persistence";
@@ -170,9 +170,14 @@ function formatState(state: Record<string, unknown>): string {
 //   recall_memories   → motebit_recall (privacy-filtered, sensitivity-capped)
 //   list_events       → no remote equivalent needed (event history is internal)
 //   read_file         → no remote equivalent (filesystem access)
-const LOCAL_ONLY_TOOLS = new Set([
+//   discover_agents / retrieve_task_result → interior reads for THIS motebit
+//     (the live roster; a result it paid for) — never a sellable capability.
+//     Spread from the runtime's canonical list so a delegation tool added
+//     there cannot leak onto the network through a list that forgot it
+//     (discover_agents had been missing here while web/desktop/mobile had it).
+const LOCAL_ONLY_TOOLS = new Set<string>([
   "read_file",
-  "delegate_to_agent",
+  ...INTERACTIVE_DELEGATION_TOOLS,
   "recall_memories",
   "list_events",
   "self_reflect",
@@ -2678,6 +2683,15 @@ export async function handleSlashCommand(
       // view the phone gets over a signed envelope, rendered here from
       // this machine's own ledger. One command, one shape, whichever
       // surface a person happens to be holding.
+      await trySharedCommand(runtime, cmd, args, config, fullConfig, repl);
+      break;
+    }
+
+    case "result": {
+      // Delegates to the shared `cmdResult` — the free, read-only fetch of a
+      // delegated task's result by id, and the list of paid results never
+      // retrieved (#874). Deterministic: no model in the path, never
+      // submits, never pays.
       await trySharedCommand(runtime, cmd, args, config, fullConfig, repl);
       break;
     }

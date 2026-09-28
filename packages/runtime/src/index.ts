@@ -23,6 +23,8 @@ export {
   executeRemoteCommand,
   cmdSelfTest,
   cmdWelcome,
+  cmdResult,
+  paidResultsNotice,
   COMMAND_DEFINITIONS,
   PlanExecutionVM,
   type CommandResult,
@@ -321,8 +323,11 @@ export {
   resolveAndSubmitP2pDelegation,
   resolveP2pPaymentRequest,
   submitP2pDelegation,
+  retrieveDelegationResult,
 } from "./relay-delegation.js";
 export type {
+  TaskRetrieval,
+  RetrieveDelegationResultParams,
   SelectDelegationParams,
   ResolveAndSubmitP2pDelegationParams,
   ResolveP2pPaymentRequestParams,
@@ -336,8 +341,12 @@ export type {
 } from "./relay-delegation.js";
 // The session paid-intent interlock (#435/#436) — enforced inside the shared
 // submit chokepoint; exported for surfaces/tests that render or probe it.
+// The interior delegation tools every surface's serve path must keep off
+// the network (spread it; never re-list names).
+export { INTERACTIVE_DELEGATION_TOOLS } from "./interactive-delegation.js";
 export {
   PaidIntentLedger,
+  InMemoryPaidIntentStore,
   SESSION_SUSPEND_THRESHOLD,
   type UnretrievedPayment,
   type PaidIntentVerdict,

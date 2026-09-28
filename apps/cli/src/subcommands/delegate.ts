@@ -393,8 +393,15 @@ export async function handleDelegate(config: CliConfig): Promise<void> {
       console.error("The sovereign rail cannot build atomic P2P payments on this platform.");
       process.exit(1);
     }
-    const { resolveAndSubmitP2pDelegation } = await import("@motebit/runtime");
+    const { resolveAndSubmitP2pDelegation, PaidIntentLedger } = await import("@motebit/runtime");
     const { toMicro, fromMicro } = await import("@motebit/protocol");
+    // The durable paid-intent ledger (#874) — the same store the REPL's
+    // runtime reads. Without it this path was the one paid door with no
+    // interlock at all: it could re-buy work whose result another session
+    // was still owed, and a payment it made whose result never arrived
+    // was forgotten the moment the process exited.
+    const ledgerDb = await openMotebitDatabase(getDbPath(config.dbPath));
+    const paidIntentLedger = new PaidIntentLedger(ledgerDb.paidIntentStore, motebitId);
     const mintToken = async (aud?: TokenAudience): Promise<string> => {
       const h = await getRelayAuthHeaders(config, { aud: aud ?? "task:submit", json: true });
       return (h["Authorization"] ?? "").replace("Bearer ", "");
@@ -416,10 +423,20 @@ export async function handleDelegate(config: CliConfig): Promise<void> {
       // `--budget` is a hard pre-broadcast ceiling over worker + fee legs.
       ...(config.budget != null ? { maxTotalMicro: toMicro(parseFloat(config.budget)) } : {}),
       logger: { warn: (m, ctx) => console.error(`  warn: ${m}`, ctx ?? "") },
+      paidIntentLedger,
     });
+    ledgerDb.close();
 
     if (!result.ok) {
       console.error(`Sovereign delegation failed (${result.error.code}): ${result.error.message}`);
+      const settled = result.error.settledPayment;
+      if (settled != null && result.error.code !== "intent_already_paid") {
+        // Paid, not delivered: the recovery is a free read, never a re-hire.
+        console.error(
+          `The payment settled (tx ${settled.txHash}); only the result did not arrive. ` +
+            `Fetch it later for free: run \`motebit\`, then /result ${settled.taskId}`,
+        );
+      }
       if (result.error.code === "p2p_ineligible" && !config.payNewAgents) {
         console.error(
           "Hint: a pair with no trust history needs `--pay-new-agents` (cold-start acknowledgment).",
@@ -578,5 +595,10 @@ export async function handleDelegate(config: CliConfig): Promise<void> {
     }
   }
   console.log("\nTask timed out after 60s. The worker may still be running.");
-  console.log(`Check status: curl ${relayUrl}/agent/${targetMotebitId}/task/${taskId}`);
+  // The poll route needs a signed `task:query` token — the bare curl this
+  // used to print could only ever 401 (#874). `/result` mints the token;
+  // this path files the task under the worker, so the owner id rides along.
+  console.log(
+    `Fetch the result later (free, read-only): run \`motebit\`, then /result ${taskId} ${targetMotebitId}`,
+  );
 }

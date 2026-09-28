@@ -9,7 +9,12 @@
 import type { ExecutionReceipt, ToolRegistry } from "@motebit/sdk";
 import type { TokenAudience } from "@motebit/protocol";
 
-import { selectAndRunDelegation, type DelegationSettlement } from "./relay-delegation.js";
+import {
+  retrieveDelegationResult,
+  selectAndRunDelegation,
+  type DelegationSettlement,
+  type TaskRetrieval,
+} from "./relay-delegation.js";
 import { fromMicro, RiskLevel, SideEffect } from "@motebit/protocol";
 import type { P2pPaymentProof, SovereignP2pPaymentRequest } from "@motebit/protocol";
 
@@ -35,6 +40,20 @@ function formatSettlementNote(settlement: DelegationSettlement | undefined): str
   const tx = settlement.txHash ? ` Transaction: ${settlement.txHash}.` : "";
   return `[settlement] Paid ${paid} to the worker + ${fee} platform fee, peer-to-peer onchain.${tx}`;
 }
+
+/**
+ * The tools `InteractiveDelegationManager.enable` registers. All three are
+ * interior: they act for THIS motebit against its relay (hire, read the
+ * roster, fetch a result it paid for) and are never a sellable capability.
+ * Every surface's "serve" path excludes them from what it advertises —
+ * spread this constant rather than re-listing names, so a tool added here
+ * cannot leak onto the network through a list that forgot it.
+ */
+export const INTERACTIVE_DELEGATION_TOOLS = [
+  "delegate_to_agent",
+  "discover_agents",
+  "retrieve_task_result",
+] as const;
 
 /** ToolRegistry extended with `has()` — matches SimpleToolRegistry in MotebitRuntime. */
 interface ToolRegistryWithHas extends ToolRegistry {
@@ -111,6 +130,73 @@ export interface InteractiveDelegationConfig {
    * diverge.
    */
   paidIntentLedger?: import("./paid-intent-ledger.js").PaidIntentLedger;
+  /**
+   * The runtime's `retrieveDelegationResult` — the ONE implementation of
+   * the free `task:query` read, which also resolves the paid-unretrieved
+   * entry on delivery. Bound by the runtime at enable time; absent (a
+   * manager constructed directly), the tool performs the same read and
+   * resolution itself.
+   */
+  retrieveTaskResult?: (taskId: string) => Promise<TaskRetrieval>;
+}
+
+/**
+ * Render a retrieval as the typed-truth JSON the model reads
+ * (docs/doctrine/typed-truth-perception.md). `already_paid` and
+ * `retrieval_cost` are the load-bearing fields: the #874 run showed a
+ * model, asked for a paid result after a restart, reach for
+ * `delegate_to_agent` — a second payment — because nothing told it the
+ * work was bought and the result was a free read away.
+ */
+export function renderTaskRetrieval(
+  r: TaskRetrieval,
+  paid: import("./paid-intent-ledger.js").UnretrievedPayment | null,
+): string {
+  const guidance: Record<TaskRetrieval["status"], string> = {
+    delivered:
+      "The worker's signed result is below. Report it to the user; nothing was paid to fetch it.",
+    pending:
+      "The task is still running. Retrieve again later — never re-delegate it; that pays a second time.",
+    failed:
+      "The relay marked the task failed without a signed result. Tell the user; do not re-delegate on your own.",
+    not_found:
+      "The relay no longer holds this task (reaped after its retention window) or the id is wrong. " +
+      "Do NOT re-delegate to recover it — that pays again. Tell the user and let them decide.",
+    auth_error: "The relay refused this read. Tell the user; do not re-delegate.",
+    unreachable: "The relay could not be reached. Retrieve again later; do not re-delegate.",
+    malformed:
+      "The relay returned a receipt for a different task. Tell the user; do not re-delegate.",
+    invalid_task_id:
+      "That is not a task id. Ask the user for the id (or use /result to list them).",
+    not_connected: "No relay is connected on this device, so nothing could be read.",
+  };
+  const out: Record<string, unknown> = {
+    task_id: r.taskId,
+    status: r.status,
+    // Known from this device's own ledger, or not known — never guessed.
+    already_paid: paid != null ? true : "unknown",
+    retrieval_cost: "free — a read-only task:query; nothing was submitted or paid",
+    guidance: guidance[r.status],
+  };
+  if (paid != null) {
+    out.payment = {
+      paid_micro: paid.paidMicro,
+      fee_micro: paid.feeMicro,
+      tx_hash: paid.txHash,
+      worker_motebit_id: paid.workerMotebitId,
+      capability: paid.capability,
+    };
+  }
+  if (r.status === "delivered") {
+    out.receipt_status = r.receipt.status;
+    out.delegated_to = r.receipt.motebit_id;
+    out.result = r.receipt.result ?? "";
+  } else if (r.status === "pending") {
+    out.task_status = r.taskStatus;
+  } else if ("message" in r) {
+    out.detail = r.message;
+  }
+  return JSON.stringify(out);
 }
 
 // === Manager ===
@@ -202,7 +288,9 @@ export class InteractiveDelegationManager {
           "Delegate a task to a remote agent on the motebit network. " +
           "The relay routes to the best capable agent based on trust and capabilities. " +
           "Use when the user asks you to delegate, or when a task would benefit from " +
-          "a specialized agent. Returns the agent's response text.",
+          "a specialized agent. Returns the agent's response text. " +
+          "NEVER use this to get the result of a task already hired — that hires (and may " +
+          "pay) again; use retrieve_task_result with the task id instead.",
         inputSchema: {
           type: "object",
           properties: {
@@ -321,8 +409,9 @@ export class InteractiveDelegationManager {
                 `${(settled.feeMicro / 1_000_000).toFixed(4)} fee), tx ${settled.txHash}, ` +
                 `task ${settled.taskId} — and its result was never retrieved. ` +
                 `${result.error.message} ` +
-                `Do NOT re-delegate. Tell the user work was already paid for and its result ` +
-                `is outstanding, and let them decide.`,
+                `Do NOT re-delegate. Call retrieve_task_result with task_id ${settled.taskId} ` +
+                `(free, read-only) to fetch it; if that does not deliver, tell the user the work ` +
+                `was already paid for and its result is outstanding, and let them decide.`,
             };
           }
           if (settled) {
@@ -335,8 +424,9 @@ export class InteractiveDelegationManager {
                 `Only RESULT DELIVERY failed (${result.error.code}: ${result.error.message}). ` +
                 `Do NOT delegate this task again — a second delegation broadcasts a SECOND ` +
                 `payment for work already bought. The task id is ${settled.taskId}; the worker's ` +
-                `result may still arrive or be recoverable. Tell the user the work was paid for ` +
-                `and the result did not come back, and let them decide.`,
+                `result may still arrive — fetch it with retrieve_task_result (free, read-only; ` +
+                `the user can also type /result ${settled.taskId}). Tell the user the work was ` +
+                `paid for and the result did not come back yet, and let them decide.`,
             };
           }
           return {
@@ -487,6 +577,91 @@ export class InteractiveDelegationManager {
             const msg = err instanceof Error ? err.message : String(err);
             return { ok: false, error: `discover read failed: ${msg}` };
           }
+        },
+      );
+    }
+
+    // retrieve_task_result — the free, read-only recovery read (#874).
+    // Registered beside delegate_to_agent so every surface that can hire
+    // can also fetch a result it already paid for. Witnessed 2026-09-27:
+    // after a restart, asked for a paid result, the model's only tool was
+    // delegate_to_agent — a second MONEY · IRREVERSIBLE prompt that only a
+    // human "n" stopped. Read-class by construction: one task:query GET,
+    // never a submit, never a payment.
+    const RETRIEVE_TOOL = "retrieve_task_result";
+    if (!this.deps.toolRegistry.has(RETRIEVE_TOOL)) {
+      const ledger = config.paidIntentLedger;
+      const retrieve =
+        config.retrieveTaskResult ??
+        (async (taskId: string): Promise<TaskRetrieval> => {
+          const r = await retrieveDelegationResult({
+            motebitId,
+            syncUrl: config.syncUrl,
+            authToken: config.authToken,
+            taskId,
+          });
+          if (r.status === "delivered") ledger?.resolve(r.taskId);
+          return r;
+        });
+      this.deps.toolRegistry.register(
+        {
+          name: RETRIEVE_TOOL,
+          description:
+            "Fetch the result of a task ALREADY delegated, by its task id — free and read-only " +
+            "(one relay read; never hires, never pays). Use this whenever the user asks for the " +
+            "result of a task, asks what happened to a task, or says they already paid for " +
+            "something. ALWAYS prefer this over delegate_to_agent for an existing task: " +
+            "delegating again hires and pays a second time. Omit task_id to list this device's " +
+            "paid tasks whose results have not been retrieved.",
+          inputSchema: {
+            type: "object",
+            properties: {
+              task_id: {
+                type: "string",
+                description:
+                  "The relay task id (as given in an earlier delegation result or by the user). " +
+                  "A unique prefix of an outstanding paid task's id also works.",
+              },
+            },
+            required: [],
+          },
+          // A read of this motebit's own task on its relay — same outbound
+          // boundary as discover_agents, and never a sellable capability.
+          outbound: true,
+          mode: "api",
+          riskHint: { risk: RiskLevel.R0_READ, sideEffect: SideEffect.NONE },
+        },
+        async (args: Record<string, unknown>) => {
+          const raw = typeof args.task_id === "string" ? args.task_id.trim() : "";
+          const outstanding = ledger?.outstanding() ?? [];
+          if (raw === "") {
+            return {
+              ok: true,
+              data: JSON.stringify({
+                outstanding_paid_results: outstanding.map((e) => ({
+                  task_id: e.taskId,
+                  worker_motebit_id: e.workerMotebitId,
+                  capability: e.capability,
+                  paid_micro: e.paidMicro,
+                  fee_micro: e.feeMicro,
+                  tx_hash: e.txHash,
+                  recorded_at: e.recordedAt,
+                })),
+                guidance:
+                  outstanding.length > 0
+                    ? "Each of these was paid for and its result never arrived. Call " +
+                      "retrieve_task_result with its task_id — never re-delegate."
+                    : "No paid task on this device is waiting on a result.",
+              }),
+            };
+          }
+          // A unique prefix of an outstanding paid task resolves to it — the
+          // owner is shown short ids ("/result ed665235").
+          const matches = outstanding.filter((e) => e.taskId.startsWith(raw));
+          const taskId = matches.length === 1 ? matches[0]!.taskId : raw;
+          const paid = outstanding.find((e) => e.taskId === taskId) ?? null;
+          const result = await retrieve(taskId);
+          return { ok: true, data: renderTaskRetrieval(result, paid) };
         },
       );
     }

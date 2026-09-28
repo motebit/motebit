@@ -22,6 +22,7 @@ import { cmdMemories, cmdGraph, cmdCurious, cmdForget, cmdAudit } from "./memory
 import { cmdGradient, cmdReflect } from "./intelligence.js";
 import { cmdBalance, cmdDeposits, cmdDiscover, cmdProposals } from "./market.js";
 import { cmdHalt, cmdResume, cmdHaltStatus } from "./halt.js";
+import { cmdResult } from "./result.js";
 
 // Re-export types and plan aggregator
 export type { CommandResult, RelayConfig } from "./types.js";
@@ -31,6 +32,7 @@ export { cmdWelcome, cmdApprovals } from "./system.js";
 export { cmdRuns } from "./runs.js";
 import { cmdRuns } from "./runs.js";
 export { cmdHalt, cmdResume, cmdHaltStatus } from "./halt.js";
+export { cmdResult, paidResultsNotice } from "./result.js";
 export { PlanExecutionVM, type PlanSnapshot, type PlanEvent } from "./plans.js";
 
 /**
@@ -77,6 +79,11 @@ export const COMMAND_DEFINITIONS: ReadonlyArray<{ name: string; description: str
   {
     name: "runs",
     description: "What happened while you were away; `runs <id>` opens one in full",
+  },
+  {
+    name: "result",
+    description:
+      "Fetch a delegated task's result by id (free, read-only); no id lists paid results not yet retrieved",
   },
 ];
 
@@ -157,6 +164,8 @@ export async function executeCommand(
       return cmdRuns(runtime, args, options?.origin ?? "local");
     case "halt-status":
       return cmdHaltStatus(runtime);
+    case "result":
+      return cmdResult(runtime, args, options?.origin ?? "local");
     case "conversations":
       return cmdConversations(runtime);
     case "summarize":
