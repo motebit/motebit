@@ -139,10 +139,9 @@ const TRUST_LEVELS: ReadonlySet<string> = new Set(Object.values(AgentTrustLevel)
  * floor for remote callers) could fire on this door.
  *
  * A forwarded claim may NARROW the coordinator's evaluation, never widen
- * it: `trusted` is clamped to `verified`, because the Trusted inbound
- * bypass would otherwise auto-approve calls the owner's own preset
- * sends to approval. (Whether Trusted should widen anywhere is #880's
- * open inbound-vs-outbound trust question; this door does not answer it.)
+ * it: `trusted` is clamped to `verified`. The policy gate already caps a
+ * Trusted caller at the owner's band (#880 E); the clamp keeps a frontend's
+ * forwarded claim from mattering even if that cap ever regressed.
  */
 function attachedCallContext(
   runtime: MotebitRuntime,

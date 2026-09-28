@@ -182,7 +182,7 @@ function validate(tool, args, ctx): PolicyDecision {
   // 4. Budget        (calls / time / cost remaining)
   // 5. Path / domain allowlists for file and URL tools
   // 6. Approval      required if  risk > requireApprovalAbove
-  // 7. Caller trust  (Blocked → deny; Trusted → bypass approval)
+  // 7. Caller trust  (Blocked → deny; Trusted → the owner's band, never beyond it)
   // 8. Sensitivity routing: refuse outbound AI when session is
   //    medical | financial | secret and provider is not sovereign
 }

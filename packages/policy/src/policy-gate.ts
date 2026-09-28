@@ -835,8 +835,16 @@ export class PolicyGate {
           return decision;
         }
         case AgentTrustLevel.Trusted:
-          // Trusted callers get same privileges as local user
-          needsApproval = false;
+          // Trusted callers get the same privileges as the local user — and
+          // no more (#880 E). `needsApproval` here IS the owner's own
+          // answer for this tool (band or legacy), so a Trusted caller
+          // clears exactly what the owner's preset auto-allows and never
+          // skips an approval the owner's own turn would face. Trusted is
+          // auto-earned from this motebit's OUTBOUND hires
+          // (evaluateTrustTransition), so it must not widen INBOUND
+          // authority past the owner's band: it previously set
+          // needsApproval = false, which gave a Trusted caller more than
+          // the owner under the balanced/cautious presets.
           break;
         case AgentTrustLevel.FirstContact:
         case AgentTrustLevel.Unknown:
@@ -869,8 +877,9 @@ export class PolicyGate {
     // `requiresApproval: true` (write_file, shell_exec, undo_write, an MCP
     // tool marked destructive) auto-executed for a remote caller whenever
     // the owner's preset put its risk under `requireApprovalAbove` — and
-    // the Trusted / service adjustments above could clear it in legacy
-    // mode too. The owner's own turns keep band semantics: a preset is the
+    // the service adjustment above could clear it too. (The Trusted
+    // caller is capped at the owner's band since #880 E, so it no longer
+    // lowers anything on its own.) The owner's own turns keep band semantics: a preset is the
     // owner's choice about the owner's turns, and it is not narrowed here.
     // A call made by another principal is not the owner's turn, so the
     // tool's declared floor holds. It runs AFTER every approval-lowering

@@ -4591,7 +4591,7 @@ export class MotebitRuntime {
    * Trust progression: Unknown → FirstContact (on first interaction) → Verified (after 5+ verified)
    * → Trusted (20 successes at ≥0.9, `evaluateTrustTransition` in agent-trust.ts). Trusted IS
    * auto-earned from this motebit's outbound hires — which is why it must not be read as inbound
-   * authority (the policy gate's Trusted-caller bypass is #880's open question).
+   * authority: the policy gate caps a Trusted caller at the owner's band (#880 E).
    */
   private get agentTaskDeps(): AgentTaskHandlerDeps {
     return {
