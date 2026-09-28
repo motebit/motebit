@@ -2454,6 +2454,15 @@ export async function probeFetch(): Promise<unknown> {
       ),
   },
   {
+    script: "check-memory-source-canonical",
+    proves:
+      "flags a foreign principal's turn forming owner provenance (#893) — scan (c), the load-bearing assertion beyond the registry lock: `turnMemorySource` must return `peer_agent` for a foreign turn as its FIRST return, so a customer's `motebit_task` can never surface in the owner's recall as `[from:user]`. Probe deletes the resolver's foreign line (`if (facts.foreignPrincipal === true) return \"peer_agent\";`); the first return becomes the `tool_derived` branch and the gate must surface the resolver-order violation. byte-identical restoration on cleanup via mutateFile.",
+    perturb: () =>
+      mutateFile(`packages/ai-core/src/memory-provenance.ts`, (src) =>
+        src.replace(/^\s*if \(facts\.foreignPrincipal === true\) return "peer_agent";\n/m, ""),
+      ),
+  },
+  {
     script: "check-agent-revocation-reason-canonical",
     proves:
       'flags the AgentRevocationReason three-way lock breaking — a value rotated in `ALL_AGENT_REVOCATION_REASONS` without updating the union (or gate reference). Drift class: same shape as the SettlementMode probe — union AND array share one file (`packages/protocol/src/agent-revocation.ts`), so the probe targets the comma-bearing array entry (`"spam",`) which matches only the array (the union form uses ` | `). Gate must surface the sibling-alignment violation (union has `spam` but ALL_AGENT_REVOCATION_REASONS contains `spamm` instead). byte-identical restoration on cleanup via mutateFile.',

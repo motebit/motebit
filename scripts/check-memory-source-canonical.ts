@@ -257,8 +257,144 @@ function main(): void {
     process.exit(1);
   }
 
+  // === Authorship scan (c): a foreign turn cannot form owner provenance
+  //
+  // #893: a customer's `motebit_task` (or a caller's `motebit_query`) runs
+  // ANOTHER principal's words through the owner's loop. Every memory such a
+  // turn forms must be `peer_agent`; stamped `user_stated` it would surface
+  // in the owner's recall as `[from:user]`.
+  //
+  // The structure this locks, link by link:
+  //   (i)   the turn-provenance resolver `turnMemorySource` in
+  //         `packages/ai-core/src/memory-provenance.ts` returns
+  //         `"peer_agent"` for a foreign turn as its FIRST return, so no
+  //         later branch can promote one;
+  //   (ii)  no other non-test ai-core file names an owner tier
+  //         (`"user_stated"` / `"tool_derived"`) — a second formation
+  //         path cannot mint owner provenance beside the resolver;
+  //   (iii) the loop feeds the resolver the TURN's foreign fact
+  //         (`foreignPrincipal: deps.foreignPrincipal`), not a global read;
+  //   (iv)  the runtime sets that fact per turn through ONE mechanism
+  //         (#880's per-turn mark): `loopDepsForTurn` stamps
+  //         `foreignPrincipal: this.isForeignPrincipalTurn()` on every
+  //         deps object it returns; both `sendMessage` entry points and the
+  //         approval resume (after restoring the paused turn's mark) build
+  //         their deps through it; and `handleAgentTask` starts every task
+  //         turn with `foreignPrincipal: true`.
+  // What this cannot express textually — that each foreign DOOR outside
+  // the runtime (e.g. serve's `motebit_query` in apps/cli) passes the
+  // option — is behavior, locked by the runtime and ai-core tests
+  // (`foreign-turn-memory-provenance.test.ts`,
+  // `foreign-turn-memory-deps.test.ts`, `foreign-turn-provenance.test.ts`).
+  const foreignViolations: string[] = [];
+  const RESOLVER = "packages/ai-core/src/memory-provenance.ts";
+  const resolverSrc = readFile(RESOLVER);
+  if (resolverSrc === null) {
+    foreignViolations.push(`${RESOLVER}: missing — the one turn-provenance resolver is gone`);
+  } else {
+    const fnStart = resolverSrc.indexOf("export function turnMemorySource(");
+    const firstReturn =
+      fnStart === -1
+        ? null
+        : (resolverSrc
+            .slice(fnStart)
+            .split("\n")
+            .find((l) => /\breturn\b/.test(l)) ?? null);
+    if (firstReturn === null) {
+      foreignViolations.push(`${RESOLVER}: \`export function turnMemorySource(\` not found`);
+    } else if (!/foreignPrincipal\s*===\s*true\)\s*return\s+"peer_agent"/.test(firstReturn)) {
+      foreignViolations.push(
+        `${RESOLVER}: turnMemorySource's first return must be \`if (facts.foreignPrincipal === true) return "peer_agent";\` — found: ${firstReturn.trim()}`,
+      );
+    }
+  }
+  let aiCoreFilesScanned = 0;
+  for (const rel of walkTsFiles("packages/ai-core/src")) {
+    if (rel.includes("__tests__") || rel === RESOLVER) continue;
+    aiCoreFilesScanned++;
+    const content = readFile(rel);
+    if (content === null) continue;
+    const lines = content.split("\n");
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i] as string;
+      // Prose may NAME the tiers (doc comments, in backticks); code
+      // minting one is a quoted string literal.
+      if (/^\s*(\*|\/\/|\/\*)/.test(line)) continue;
+      if (/["'](user_stated|tool_derived)["']/.test(line)) {
+        foreignViolations.push(
+          `${rel}:${i + 1}: owner-tier provenance literal outside ${RESOLVER} — route through turnMemorySource`,
+        );
+      }
+    }
+  }
+  const loopSrc = readFile("packages/ai-core/src/loop.ts") ?? "";
+  if (!/turnMemorySource\(\{\s*foreignPrincipal:\s*deps\.foreignPrincipal\b/.test(loopSrc)) {
+    foreignViolations.push(
+      "packages/ai-core/src/loop.ts: formation must call `turnMemorySource({ foreignPrincipal: deps.foreignPrincipal, ... })` — the turn's own deps carry whose words it runs",
+    );
+  }
+  const runtimeSrc = readFile("packages/runtime/src/motebit-runtime.ts") ?? "";
+  // (iv-a) ONE loopDepsForTurn stamps the per-turn mark on the deps.
+  const ldftStart = runtimeSrc.indexOf("private loopDepsForTurn<");
+  const ldftEnd = ldftStart === -1 ? -1 : runtimeSrc.indexOf("\n  }\n", ldftStart);
+  const ldftBody = ldftStart === -1 || ldftEnd === -1 ? "" : runtimeSrc.slice(ldftStart, ldftEnd);
+  const ldftReturns = ldftBody.split("\n").filter((l) => /\breturn\b/.test(l));
+  if (
+    !/const foreignPrincipal = this\.isForeignPrincipalTurn\(\);/.test(ldftBody) ||
+    ldftReturns.length === 0 ||
+    ldftReturns.some((l) => !/\{\s*\.\.\.deps,\s*foreignPrincipal\b/.test(l))
+  ) {
+    foreignViolations.push(
+      "packages/runtime/src/motebit-runtime.ts: `loopDepsForTurn` must set `foreignPrincipal` from `this.isForeignPrincipalTurn()` on EVERY deps object it returns (`{ ...deps, foreignPrincipal, ... }`) — the turn's deps are where formation reads whose words it runs",
+    );
+  }
+  // (iv-b) both turn entries build their deps through it.
+  const perTurnDeps = (runtimeSrc.match(/this\.loopDepsForTurn\(\s*clearedLoopDeps\s*\)/g) ?? [])
+    .length;
+  if (perTurnDeps < 2) {
+    foreignViolations.push(
+      `packages/runtime/src/motebit-runtime.ts: sendMessage AND sendMessageStreaming must build their loop deps via \`this.loopDepsForTurn(clearedLoopDeps)\` — found ${perTurnDeps} of 2`,
+    );
+  }
+  // (iv-c) the approval resume builds its continuation's deps through it too,
+  // with the paused turn's mark restored (enterForeignPrincipalTurn) first.
+  if (!/loopDepsForTurn: \(deps\) => this\.loopDepsForTurn\(deps\)/.test(runtimeSrc)) {
+    foreignViolations.push(
+      "packages/runtime/src/motebit-runtime.ts: StreamingManager must be wired with `loopDepsForTurn: (deps) => this.loopDepsForTurn(deps)`",
+    );
+  }
+  const streamingSrc = readFile("packages/runtime/src/streaming.ts") ?? "";
+  if (
+    !/pending\.foreignPrincipal === true \? this\.deps\.enterForeignPrincipalTurn\?\.\(\)/.test(
+      streamingSrc,
+    ) ||
+    !/runTurnStreaming\(\s*this\.deps\.loopDepsForTurn\?\.\(loopDeps\)/.test(streamingSrc)
+  ) {
+    foreignViolations.push(
+      "packages/runtime/src/streaming.ts: the approval resume must restore the paused turn's foreign mark (`enterForeignPrincipalTurn`) and run its continuation with `this.deps.loopDepsForTurn?.(loopDeps)`",
+    );
+  }
+  const taskHandlerSrc = readFile("packages/runtime/src/agent-task-handler.ts") ?? "";
+  if (!/sendMessageStreaming\(task\.prompt,[^)]*foreignPrincipal:\s*true/s.test(taskHandlerSrc)) {
+    foreignViolations.push(
+      "packages/runtime/src/agent-task-handler.ts: a task's turn must be started with `foreignPrincipal: true` — the prompt is another principal's",
+    );
+  }
+  if (foreignViolations.length > 0) {
+    console.error(
+      "check-memory-source-canonical: a foreign principal's turn could form owner provenance (#893):",
+    );
+    for (const v of foreignViolations) console.error(`  - ${v}`);
+    console.error("");
+    console.error(
+      "Repair: every memory a foreign turn forms is `peer_agent`. Keep the one resolver (`turnMemorySource`, foreign branch first), feed it `deps.foreignPrincipal`, and set that per turn in the runtime (`loopDepsForTurn` from `isForeignPrincipalTurn()`, the resume's restored mark, `handleAgentTask`).",
+    );
+    console.error("Doctrine: docs/doctrine/memory-provenance.md § authorship.");
+    process.exit(1);
+  }
+
   console.log(
-    `✓ check-memory-source-canonical: ${MEMORY_SOURCES_REFERENCE.length} memory source(s) locked across union + ALL_MEMORY_SOURCES + gate reference; wire-format-compliant; model/peer authorship scans clean.`,
+    `✓ check-memory-source-canonical: ${MEMORY_SOURCES_REFERENCE.length} memory source(s) locked across union + ALL_MEMORY_SOURCES + gate reference; wire-format-compliant; model/peer authorship scans clean; foreign-turn provenance locked (resolver + ${aiCoreFilesScanned} other ai-core file(s) scanned, 7 wiring links checked).`,
   );
 }
 
