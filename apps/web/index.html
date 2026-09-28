@@ -10,19 +10,25 @@
     </script>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Motebit</title>
+    <title>Motebit — sovereign identity for AI agents</title>
     <meta
       name="description"
-      content="A sovereign agent runtime. Own your identity. The intelligence is pluggable. The body is yours."
+      content="Give your AI agent a cryptographic identity it owns: trust it earns, delegation it can prove, signed receipts, and settlement. Open protocol, pluggable models."
     />
-    <meta property="og:title" content="Motebit" />
-    <meta property="og:description" content="A sovereign agent runtime" />
+    <meta property="og:title" content="Motebit — sovereign identity for AI agents" />
+    <meta
+      property="og:description"
+      content="Give your AI agent a cryptographic identity it owns: trust it earns, delegation it can prove, signed receipts, and settlement. Open protocol, pluggable models."
+    />
     <meta property="og:image" content="https://motebit.com/og.png" />
     <meta property="og:url" content="https://motebit.com" />
     <meta property="og:type" content="website" />
     <meta name="twitter:card" content="summary_large_image" />
-    <meta name="twitter:title" content="Motebit" />
-    <meta name="twitter:description" content="A sovereign agent runtime" />
+    <meta name="twitter:title" content="Motebit — sovereign identity for AI agents" />
+    <meta
+      name="twitter:description"
+      content="Give your AI agent a cryptographic identity it owns: trust it earns, delegation it can prove, signed receipts, and settlement. Open protocol, pluggable models."
+    />
     <meta name="twitter:image" content="https://motebit.com/og.png" />
     <link rel="canonical" href="https://motebit.com/" />
     <script type="application/ld+json">
@@ -39,6 +45,18 @@
           "https://www.npmjs.com/package/motebit",
           "https://receipt.computer"
         ]
+      }
+    </script>
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "SoftwareApplication",
+        "name": "Motebit",
+        "url": "https://motebit.com",
+        "applicationCategory": "DeveloperApplication",
+        "operatingSystem": "Web",
+        "description": "Give your AI agent a cryptographic identity it owns: trust it earns, delegation it can prove, signed receipts, and settlement. Open protocol, pluggable models.",
+        "publisher": { "@type": "Organization", "name": "Motebit", "url": "https://motebit.com" }
       }
     </script>
     <link rel="icon" href="/favicon.ico" sizes="any" />
@@ -7973,8 +7991,8 @@
     <canvas id="motebit-canvas"></canvas>
     <!-- Calm placeholder shown until the creature's first WebGL frame paints;
          faded out by main.ts via renderer.onFirstFrame. -->
-    <div id="creature-loading" aria-hidden="true"></div>
-    <div id="toast-container"></div>
+    <div data-nosnippet id="creature-loading" aria-hidden="true"></div>
+    <div data-nosnippet id="toast-container"></div>
 
     <!-- Identity-divergence banner — shown when bootstrap detects that
          the prior config claimed an identity but the keystore had no
@@ -7984,7 +8002,7 @@
          apps/web/src/ui/divergence-banner.ts for the wiring + the
          doctrine memo at docs/doctrine/identity-restore.md for the
          "probe + restore are co-load-bearing" framing. -->
-    <div id="divergence-banner" class="divergence-banner" style="display: none">
+    <div data-nosnippet id="divergence-banner" class="divergence-banner" style="display: none">
       <div class="divergence-banner-icon">⚠</div>
       <div class="divergence-banner-body">
         <div class="divergence-banner-title">Previous identity could not be loaded</div>
@@ -8011,7 +8029,7 @@
          violates "minimum display" per THE_METABOLIC_PRINCIPLE +
          intent-gated-slab.md (the body's existence is sufficient
          unto itself, not contingent on extra signal). -->
-    <div id="connect-prompt" class="connect-prompt hidden">
+    <div data-nosnippet id="connect-prompt" class="connect-prompt hidden">
       <div class="connect-prompt-heading" id="connect-prompt-heading">Connect a model</div>
       <div class="connect-prompt-text" id="connect-prompt-text">
         Open Settings to choose a provider — on-device, your own key, or motebit cloud.
@@ -8035,8 +8053,8 @@
         <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
       </svg>
     </button>
-    <div id="conversations-backdrop"></div>
-    <div id="conversations-panel" aria-label="Conversations panel">
+    <div data-nosnippet id="conversations-backdrop"></div>
+    <div data-nosnippet id="conversations-panel" aria-label="Conversations panel">
       <div class="conv-panel-header">
         <span class="conv-panel-title">Conversations</span>
         <div style="display: flex; gap: 6px; align-items: center">
@@ -8079,8 +8097,8 @@
         <path d="M10 22h4" />
       </svg>
     </button>
-    <div id="memory-backdrop"></div>
-    <div id="memory-panel" aria-label="Memory panel">
+    <div data-nosnippet id="memory-backdrop"></div>
+    <div data-nosnippet id="memory-panel" aria-label="Memory panel">
       <div class="mem-panel-header">
         <span class="mem-panel-title">Memories</span>
         <button class="mem-panel-close" id="memory-close-btn">&times;</button>
@@ -8114,8 +8132,8 @@
       </svg>
       <span class="goal-exec-ring"></span>
     </button>
-    <div id="goals-backdrop"></div>
-    <div id="goals-panel" aria-label="Goals panel">
+    <div data-nosnippet id="goals-backdrop"></div>
+    <div data-nosnippet id="goals-panel" aria-label="Goals panel">
       <!-- Goals panel: records + affordance shape (Reminders / Notes /
            Mail / Wallet pattern). Cards-area at the top is the
            semantic home where commitments live and grow; the form is
@@ -8238,8 +8256,8 @@
         <path d="M16 3.13a4 4 0 0 1 0 7.75" />
       </svg>
     </button>
-    <div id="agents-backdrop"></div>
-    <div id="agents-panel" aria-label="Agents panel">
+    <div data-nosnippet id="agents-backdrop"></div>
+    <div data-nosnippet id="agents-panel" aria-label="Agents panel">
       <div class="agents-panel-header">
         <span class="agents-panel-title">Agents</span>
         <button class="agents-panel-close" id="agents-close-btn">&times;</button>
@@ -8280,8 +8298,8 @@
         <path d="M7 11V7a5 5 0 0 1 10 0v4" />
       </svg>
     </button>
-    <div id="sovereign-backdrop"></div>
-    <div id="sovereign-panel" aria-label="Sovereign panel">
+    <div data-nosnippet id="sovereign-backdrop"></div>
+    <div data-nosnippet id="sovereign-panel" aria-label="Sovereign panel">
       <div class="sov-panel-header">
         <span class="sov-panel-title">Sovereign</span>
         <button class="sov-panel-close" id="sovereign-close-btn">&times;</button>
@@ -8352,8 +8370,8 @@
       both accumulate, both belong on the capability-primitive panel,
       which renamed from "Skills" the day MCP shipped sibling-displayed.
     -->
-    <div id="capabilities-backdrop"></div>
-    <div id="capabilities-panel" aria-label="Capabilities panel">
+    <div data-nosnippet id="capabilities-backdrop"></div>
+    <div data-nosnippet id="capabilities-panel" aria-label="Capabilities panel">
       <div class="capabilities-panel-header">
         <span class="capabilities-panel-title"
           >Capabilities <span class="skills-count-badge" id="skills-count">0</span></span
@@ -8459,8 +8477,9 @@
       before the registry's install path runs; the default action on backdrop
       click / ESC / cancel is decline.
     -->
-    <div id="skills-consent-backdrop"></div>
+    <div data-nosnippet id="skills-consent-backdrop"></div>
     <div
+      data-nosnippet
       id="skills-consent-modal"
       role="dialog"
       aria-modal="true"
@@ -8481,8 +8500,8 @@
       choke point so users can see every signed deletion, consent,
       export, and intent event their motebit recorded on their behalf.
     -->
-    <div id="activity-backdrop"></div>
-    <div id="activity-panel" aria-label="Activity panel">
+    <div data-nosnippet id="activity-backdrop"></div>
+    <div data-nosnippet id="activity-panel" aria-label="Activity panel">
       <div class="activity-panel-header">
         <span class="activity-panel-title"
           >Activity <span class="activity-count-badge" id="activity-count">0</span></span
@@ -8512,6 +8531,7 @@
 
     <!-- Sync status indicator + locked popup -->
     <div
+      data-nosnippet
       id="sync-status"
       class="disconnected"
       title="Sync: Not connected"
@@ -8530,7 +8550,7 @@
         <line class="sync-slash" x1="4" y1="4" x2="20" y2="20" stroke-width="2" />
       </svg>
     </div>
-    <div id="sync-popup">
+    <div data-nosnippet id="sync-popup">
       <div class="sync-popup-header">Relay</div>
       <div
         class="sync-popup-subtitle"
@@ -8570,6 +8590,7 @@
 
     <!-- Pairing dialog -->
     <div
+      data-nosnippet
       id="pairing-backdrop"
       style="
         display: none;
@@ -8713,8 +8734,8 @@
         />
       </svg>
     </button>
-    <div id="settings-backdrop"></div>
-    <div id="settings-modal" role="dialog" aria-modal="true" aria-label="Settings">
+    <div data-nosnippet id="settings-backdrop"></div>
+    <div data-nosnippet id="settings-modal" role="dialog" aria-modal="true" aria-label="Settings">
       <div class="settings-tab-bar" role="tablist" aria-label="Settings tabs">
         <button
           class="settings-tab active"
@@ -8978,7 +8999,7 @@
                   <button
                     class="byok-provider-btn"
                     data-byok="groq"
-                    title="Groq — fast hosting for open models (Llama, gpt-oss). Not xAI&apos;s Grok."
+                    title="Groq — fast hosting for open models (Llama, gpt-oss). Not xAI's Grok."
                     style="
                       flex: 1;
                       padding: 6px;
@@ -9008,12 +9029,12 @@
                   >
                     DeepSeek
                   </button>
-                
-                <p
-                  id="byok-vendor-note"
-                  style="margin: 8px 0 0; font-size: 12px; color: var(--text-muted)"
-                ></p>
-              </div>
+
+                  <p
+                    id="byok-vendor-note"
+                    style="margin: 8px 0 0; font-size: 12px; color: var(--text-muted)"
+                  ></p>
+                </div>
               </div>
               <div id="byok-anthropic">
                 <div class="settings-field">
@@ -9335,84 +9356,84 @@
               >
                 Voice keys — optional. Keys stay on this device.
               </summary>
-            <div class="settings-field">
-              <label for="tts-elevenlabs-key">ElevenLabs API Key</label>
-              <div class="settings-key-row">
-                <input
-                  id="tts-elevenlabs-key"
-                  type="password"
-                  autocomplete="off"
-                  data-1p-ignore
-                  data-lpignore="true"
-                  placeholder="sk_..."
-                  autocomplete="new-password"
-                />
-                <button
-                  type="button"
-                  class="tts-key-reveal"
-                  data-target="tts-elevenlabs-key"
-                  aria-label="Show key"
-                  aria-pressed="false"
-                >
-                  Show
-                </button>
+              <div class="settings-field">
+                <label for="tts-elevenlabs-key">ElevenLabs API Key</label>
+                <div class="settings-key-row">
+                  <input
+                    id="tts-elevenlabs-key"
+                    type="password"
+                    autocomplete="off"
+                    data-1p-ignore
+                    data-lpignore="true"
+                    placeholder="sk_..."
+                    autocomplete="new-password"
+                  />
+                  <button
+                    type="button"
+                    class="tts-key-reveal"
+                    data-target="tts-elevenlabs-key"
+                    aria-label="Show key"
+                    aria-pressed="false"
+                  >
+                    Show
+                  </button>
+                </div>
+                <div style="font-size: 11px; color: var(--text-muted); margin-top: 4px">
+                  Premium voice and transcription.
+                </div>
               </div>
-              <div style="font-size: 11px; color: var(--text-muted); margin-top: 4px">
-                Premium voice and transcription.
+              <div class="settings-field" style="margin-top: 10px">
+                <label for="tts-inworld-key">Inworld API Key</label>
+                <div class="settings-key-row">
+                  <input
+                    id="tts-inworld-key"
+                    type="password"
+                    autocomplete="off"
+                    data-1p-ignore
+                    data-lpignore="true"
+                    placeholder="..."
+                    autocomplete="new-password"
+                  />
+                  <button
+                    type="button"
+                    class="tts-key-reveal"
+                    data-target="tts-inworld-key"
+                    aria-label="Show key"
+                    aria-pressed="false"
+                  >
+                    Show
+                  </button>
+                </div>
+                <div style="font-size: 11px; color: var(--text-muted); margin-top: 4px">
+                  Real-time voice and transcription.
+                </div>
               </div>
-            </div>
-            <div class="settings-field" style="margin-top: 10px">
-              <label for="tts-inworld-key">Inworld API Key</label>
-              <div class="settings-key-row">
-                <input
-                  id="tts-inworld-key"
-                  type="password"
-                  autocomplete="off"
-                  data-1p-ignore
-                  data-lpignore="true"
-                  placeholder="..."
-                  autocomplete="new-password"
-                />
-                <button
-                  type="button"
-                  class="tts-key-reveal"
-                  data-target="tts-inworld-key"
-                  aria-label="Show key"
-                  aria-pressed="false"
-                >
-                  Show
-                </button>
+              <div class="settings-field" style="margin-top: 10px">
+                <label for="tts-deepgram-key">Deepgram API Key</label>
+                <div class="settings-key-row">
+                  <input
+                    id="tts-deepgram-key"
+                    type="password"
+                    autocomplete="off"
+                    data-1p-ignore
+                    data-lpignore="true"
+                    placeholder="..."
+                    autocomplete="new-password"
+                  />
+                  <button
+                    type="button"
+                    class="tts-key-reveal"
+                    data-target="tts-deepgram-key"
+                    aria-label="Show key"
+                    aria-pressed="false"
+                  >
+                    Show
+                  </button>
+                </div>
+                <div style="font-size: 11px; color: var(--text-muted); margin-top: 4px">
+                  Low-latency voice and transcription.
+                </div>
               </div>
-              <div style="font-size: 11px; color: var(--text-muted); margin-top: 4px">
-                Real-time voice and transcription.
-              </div>
-            </div>
-            <div class="settings-field" style="margin-top: 10px">
-              <label for="tts-deepgram-key">Deepgram API Key</label>
-              <div class="settings-key-row">
-                <input
-                  id="tts-deepgram-key"
-                  type="password"
-                  autocomplete="off"
-                  data-1p-ignore
-                  data-lpignore="true"
-                  placeholder="..."
-                  autocomplete="new-password"
-                />
-                <button
-                  type="button"
-                  class="tts-key-reveal"
-                  data-target="tts-deepgram-key"
-                  aria-label="Show key"
-                  aria-pressed="false"
-                >
-                  Show
-                </button>
-              </div>
-              <div style="font-size: 11px; color: var(--text-muted); margin-top: 4px">
-                Low-latency voice and transcription.
-              </div>
-            </div>
             </details>
             <div class="settings-field" style="margin-top: 10px">
               <label for="settings-tts-voice">TTS Voice</label>
@@ -9760,7 +9781,7 @@
          #pin-backdrop / #pin-dialog block above; markup mirrors desktop's
          pattern so showPinDialog() / handlePinSubmit() in settings.ts can
          use the same DOM ids. -->
-    <div id="pin-backdrop">
+    <div data-nosnippet id="pin-backdrop">
       <div id="pin-dialog" role="dialog" aria-modal="true" aria-label="Operator PIN">
         <div id="pin-title">Enter PIN</div>
         <input
@@ -9804,7 +9825,7 @@
          steps inside one dialog body: file-pick (default) and preview-
          and-confirm (revealed after a valid .md is parsed).
          See apps/web/src/ui/restore-identity.ts for the wiring. -->
-    <div id="restore-backdrop" class="dialog-backdrop">
+    <div data-nosnippet id="restore-backdrop" class="dialog-backdrop">
       <div id="restore-dialog" role="dialog" aria-modal="true" aria-label="Restore identity">
         <!-- Step 1a: pick file (motebit.md flow) -->
         <div id="restore-step-file" class="restore-step">
@@ -9905,7 +9926,7 @@
       </div>
     </div>
 
-    <div id="chat-container">
+    <div data-nosnippet id="chat-container">
       <div id="chat-log" role="log" aria-live="polite" aria-label="Chat messages"></div>
       <div id="model-indicator"></div>
       <div id="chat-input-row">
@@ -9953,7 +9974,7 @@
     </div>
 
     <!-- Keyboard shortcut help overlay -->
-    <div id="shortcut-backdrop">
+    <div data-nosnippet id="shortcut-backdrop">
       <div id="shortcut-dialog">
         <div class="shortcut-title">Keyboard Shortcuts</div>
         <div class="shortcut-row">
