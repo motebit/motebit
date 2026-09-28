@@ -32,6 +32,32 @@ export interface HttpAdapterConfig {
   maxRetries?: number;
   /** Base backoff in ms — actual delay is base * 2^attempt + jitter (default 1000) */
   retryBackoffMs?: number;
+  /**
+   * The most one request attempt may take — the credential, the fetch and
+   * its body — before it is abandoned (#914 round 2). A request that times
+   * out is not retried: the sync engine retries on a later sync. Without a
+   * bound, one black-holed push held the push slot, and every later sync
+   * joined the stuck cycle. Default 20 000 ms.
+   */
+  requestTimeoutMs?: number;
+}
+
+/** The default `requestTimeoutMs`. */
+const DEFAULT_REQUEST_TIMEOUT_MS = 20_000;
+
+/** A request attempt abandoned at `requestTimeoutMs`. */
+class RequestTimeoutError extends Error {}
+
+/** `work`, or a RequestTimeoutError after `ms` — whichever settles first. */
+function withTimeout<T>(work: Promise<T>, ms: number, what: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(
+      () => reject(new RequestTimeoutError(`${what} timed out after ${ms} ms`)),
+      ms,
+    );
+  });
+  return Promise.race([work, timeout]).finally(() => clearTimeout(timer));
 }
 
 /**
@@ -65,6 +91,7 @@ export class HttpEventStoreAdapter implements EventStoreAdapter, SeqPullSource {
   private credentialSource: CredentialSource | undefined;
   private maxRetries: number;
   private retryBackoffMs: number;
+  private requestTimeoutMs: number;
   /** What this transport may push — see `HttpAdapterConfig.payloads`. */
   readonly payloads: RelayPayloadMode;
 
@@ -75,6 +102,7 @@ export class HttpEventStoreAdapter implements EventStoreAdapter, SeqPullSource {
     this.credentialSource = config.credentialSource;
     this.maxRetries = config.maxRetries ?? 3;
     this.retryBackoffMs = config.retryBackoffMs ?? 1_000;
+    this.requestTimeoutMs = config.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS;
     this.payloads = config.payloads ?? "raw";
   }
 
@@ -90,6 +118,7 @@ export class HttpEventStoreAdapter implements EventStoreAdapter, SeqPullSource {
     assertPushable([entry], this.payloads);
     const url = `${this.baseUrl}/sync/${this.motebitId}/push`;
     await this.acquirePushSlot();
+    let failed: Error | null = null;
     try {
       const res = await this.authedFetch(url, {
         method: "POST",
@@ -98,25 +127,44 @@ export class HttpEventStoreAdapter implements EventStoreAdapter, SeqPullSource {
       if (!res.ok) {
         throw new Error(`Push failed: ${res.status} ${res.statusText}`);
       }
+    } catch (err: unknown) {
+      failed = err instanceof Error ? err : new Error(String(err));
+      throw failed;
     } finally {
-      this.releasePushSlot();
+      this.releasePushSlot(failed);
     }
   }
 
   private pushesInFlight = 0;
-  private pushWaiters: Array<() => void> = [];
+  private pushWaiters: Array<{ go: () => void; fail: (err: Error) => void }> = [];
 
   private acquirePushSlot(): Promise<void> {
     if (this.pushesInFlight < MAX_CONCURRENT_PUSHES) {
       this.pushesInFlight++;
       return Promise.resolve();
     }
-    return new Promise((resolve) => this.pushWaiters.push(resolve));
+    return new Promise((go, fail) => this.pushWaiters.push({ go, fail }));
   }
 
-  private releasePushSlot(): void {
+  /**
+   * Hand the slot on. After a failed push, the pushes already waiting behind
+   * it fail at once: they were appended together (one sync batch), the relay
+   * just failed, and the sync engine re-pushes them — one timeout per batch,
+   * never one per event.
+   */
+  private releasePushSlot(failed: Error | null): void {
+    if (failed) {
+      const waiting = this.pushWaiters.splice(0);
+      for (const w of waiting) {
+        w.fail(
+          new Error(`Push not sent: an earlier push failed (${failed.message})`, { cause: failed }),
+        );
+      }
+      this.pushesInFlight--;
+      return;
+    }
     const next = this.pushWaiters.shift();
-    if (next) next();
+    if (next) next.go();
     else this.pushesInFlight--;
   }
 
@@ -210,11 +258,16 @@ export class HttpEventStoreAdapter implements EventStoreAdapter, SeqPullSource {
    * is returned as is.
    */
   private async authedFetch(url: string, init: Omit<RequestInit, "headers">): Promise<Response> {
-    const res = await this.fetchWithRetry(url, { ...init, headers: await this.headers() });
+    const res = await this.fetchWithRetry(url, { ...init, headers: await this.boundedHeaders() });
     if ((res.status === 401 || res.status === 403) && this.credentialSource) {
-      return this.fetchWithRetry(url, { ...init, headers: await this.headers() });
+      return this.fetchWithRetry(url, { ...init, headers: await this.boundedHeaders() });
     }
     return res;
+  }
+
+  /** The headers, with the credential lookup bounded (a hanging source never wedges a sync). */
+  private boundedHeaders(): Promise<Record<string, string>> {
+    return withTimeout(this.headers(), this.requestTimeoutMs, "sync credential");
   }
 
   /**
@@ -226,14 +279,40 @@ export class HttpEventStoreAdapter implements EventStoreAdapter, SeqPullSource {
     let lastError: Error | undefined;
     for (let attempt = 0; attempt <= this.maxRetries; attempt++) {
       try {
-        const res = await fetch(url, init);
+        // Bounded twice: the signal aborts a real fetch, and the race also
+        // ends one that ignores it. The body is read inside the bound too.
+        const res = await withTimeout(
+          fetch(url, { ...init, signal: AbortSignal.timeout(this.requestTimeoutMs) }).then(
+            async (r) => {
+              const nullBody = [101, 204, 205, 304].includes(r.status);
+              const body = nullBody ? null : await r.arrayBuffer();
+              return new Response(body, {
+                status: r.status,
+                statusText: r.statusText,
+                headers: r.headers,
+              });
+            },
+          ),
+          this.requestTimeoutMs,
+          `sync request ${new URL(url).pathname}`,
+        );
         if (res.ok || !isRetryable(res.status) || attempt === this.maxRetries) {
           return res;
         }
         // Retryable HTTP error — backoff and retry
         await backoffDelay(attempt, this.retryBackoffMs);
       } catch (err: unknown) {
-        // Network error (DNS, connection refused, timeout)
+        // A request that timed out is not retried: its cost was the bound.
+        if (err instanceof RequestTimeoutError) throw err;
+        if (err instanceof Error && (err.name === "TimeoutError" || err.name === "AbortError")) {
+          throw new RequestTimeoutError(
+            `sync request timed out after ${this.requestTimeoutMs} ms`,
+            {
+              cause: err,
+            },
+          );
+        }
+        // Network error (DNS, connection refused)
         lastError =
           err instanceof Error ? err : new Error("Network request failed", { cause: err });
         if (attempt === this.maxRetries) break;

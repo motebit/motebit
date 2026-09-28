@@ -127,7 +127,18 @@ export interface SyncConfig {
    * Default: a `console.warn` line naming the event and the reason.
    */
   onSkippedEvent?: (skipped: SkippedSyncEvent) => void;
+  /**
+   * The most a sync cycle may go without progress — an acknowledged or failed
+   * push, a finished pull — before it is abandoned (#914 round 2): the status
+   * turns `error`, the cycle's caller and every `sync()` that joined it get
+   * an empty result, and the next `sync()` starts afresh. An abandoned cycle
+   * still running can only write an acknowledged push cursor, so abandoning
+   * never loses an event. Default 60 000 ms.
+   */
+  stall_timeout_ms?: number;
 }
+
+const DEFAULT_STALL_TIMEOUT_MS = 60_000;
 
 /**
  * The most push batches (`batch_size` events each) one `sync()` sends (#914).
@@ -248,6 +259,10 @@ export class SyncEngine {
   private knownRemote = new Map<string, number>();
   /** The sync in progress: a second call joins it rather than racing it. */
   private running: Promise<SyncResult> | null = null;
+  /** The current cycle; bumped when one is abandoned, so its late status writes are ignored. */
+  private cycle = 0;
+  /** When the current cycle last made progress (the stall watchdog reads it). */
+  private lastProgressAt = 0;
   /** The relay-ingest-sequence pull cursor, per relay stream (#868). */
   private seqCursorStore: SyncSeqCursorStore;
   private status: SyncStatus = "idle";
@@ -301,21 +316,62 @@ export class SyncEngine {
    */
   sync(): Promise<SyncResult> {
     if (this.running) return this.running;
-    const run = this.runSync().finally(() => {
+    const cycle = ++this.cycle;
+    const run = this.watchStall(this.runSync(cycle), cycle).finally(() => {
       if (this.running === run) this.running = null;
     });
     this.running = run;
     return run;
   }
 
-  private async runSync(): Promise<SyncResult> {
+  /**
+   * `run`'s result, or — once the cycle has made no progress for
+   * `stall_timeout_ms` — an empty result with the cycle abandoned. Bounds the
+   * cycle's caller and every caller that joined it, whatever the remote does.
+   */
+  private watchStall(run: Promise<SyncResult>, cycle: number): Promise<SyncResult> {
+    const stallMs = this.config.stall_timeout_ms ?? DEFAULT_STALL_TIMEOUT_MS;
+    this.lastProgressAt = Date.now();
+    return new Promise<SyncResult>((resolve) => {
+      let timer: ReturnType<typeof setTimeout> | null = null;
+      const check = (): void => {
+        const idle = Date.now() - this.lastProgressAt;
+        if (idle < stallMs) {
+          timer = setTimeout(check, stallMs - idle);
+          return;
+        }
+        if (this.cycle === cycle) {
+          this.setStatus("error");
+          this.cycle++; // the abandoned cycle's late status writes are ignored
+        }
+        resolve({ pushed: 0, pulled: 0, conflicts: [] });
+      };
+      timer = setTimeout(check, stallMs);
+      void run.then((result) => {
+        if (timer) clearTimeout(timer);
+        resolve(result);
+      });
+    });
+  }
+
+  /** The cycle made progress: the stall watchdog restarts its count. */
+  private progress(): void {
+    this.lastProgressAt = Date.now();
+  }
+
+  /** Set the status, unless `cycle` was abandoned. */
+  private setCycleStatus(cycle: number, status: SyncStatus): void {
+    if (cycle === this.cycle) this.setStatus(status);
+  }
+
+  private async runSync(cycle: number): Promise<SyncResult> {
     const remote = this.remoteStore;
     if (remote === null) {
-      this.setStatus("offline");
+      this.setCycleStatus(cycle, "offline");
       return { pushed: 0, pulled: 0, conflicts: [] };
     }
 
-    this.setStatus("syncing");
+    this.setCycleStatus(cycle, "syncing");
 
     try {
       // Push: every local event the relay has not acknowledged (#914)
@@ -323,6 +379,7 @@ export class SyncEngine {
 
       // Pull: get remote events we haven't seen
       const pulled = await this.pullEvents();
+      this.progress();
       // The relay served these, so it holds them: never pushed back.
       // Bounded: forgetting one only costs a harmless re-push.
       if (this.knownRemote.size > MAX_KNOWN_REMOTE) this.knownRemote.clear();
@@ -336,7 +393,7 @@ export class SyncEngine {
       // here: it moved, in pushEvents, only as far as the relay acknowledged.
       this.pullAfterClock = await this.localStore.getLatestClock(this.cursor.motebit_id);
 
-      this.setStatus("idle");
+      this.setCycleStatus(cycle, "idle");
 
       return {
         pushed: pushed.count,
@@ -346,7 +403,7 @@ export class SyncEngine {
         ...(pulled.encryptedOnRawPath ? { encryptedOnRawPath: pulled.encryptedOnRawPath } : {}),
       };
     } catch {
-      this.setStatus("error");
+      this.setCycleStatus(cycle, "error");
       return { pushed: 0, pulled: 0, conflicts: [] };
     }
   }
@@ -430,7 +487,9 @@ export class SyncEngine {
       // One append per event, all started together: the adapter decides how
       // many go on the wire at once (the socket coalesces them into a frame;
       // HTTP bounds its concurrent requests).
-      const settled = await Promise.allSettled(send.map((e) => remote.append(e)));
+      const settled = await Promise.allSettled(
+        send.map((e) => remote.append(e).finally(() => this.progress())),
+      );
       for (let i = 0; i < settled.length; i++) {
         const r = settled[i]!;
         const e = send[i]!;

@@ -84,13 +84,29 @@ export class EncryptedEventStoreAdapter implements EventStoreAdapter {
     }
   }
 
+  /** Settles when the previous append has been handed to the inner adapter. */
+  private handedOn: Promise<void> = Promise.resolve();
+
+  /**
+   * Encrypt and push. Appends reach the inner adapter in CALL order (#914
+   * round 2): encryptions run concurrently and may finish in any order, but
+   * each is handed on only after the one called before it — so the sync
+   * engine's clock order is the order the relay receives, which a client
+   * still pulling by clock relies on.
+   */
   async append(entry: EventLogEntry): Promise<void> {
-    const encrypted = await this.encryptPayload(entry.payload);
-    const encEntry: EventLogEntry = {
-      ...entry,
-      payload: { _encrypted: true, _data: encrypted },
-    };
-    await this.inner.append(encEntry);
+    const before = this.handedOn;
+    let handOn!: () => void;
+    this.handedOn = new Promise<void>((resolve) => (handOn = resolve));
+    let pushed: Promise<void>;
+    try {
+      const encrypted = await this.encryptPayload(entry.payload);
+      await before;
+      pushed = this.inner.append({ ...entry, payload: { _encrypted: true, _data: encrypted } });
+    } finally {
+      handOn();
+    }
+    await pushed;
   }
 
   async query(filter: EventFilter): Promise<EventLogEntry[]> {

@@ -117,7 +117,19 @@ const fired = { pull: 0, drop: 0, crash: 0, handoff: 0 };
  * The real `ws` client, except that a push frame for an identity in
  * `dropNextPush` is never delivered: the connection drops with it on the wire.
  */
+/** Relay refusals for rate, per identity — a push over the limit is dropped by the relay. */
+const rateLimited = new Map<string, number>();
+
 class DroppingWebSocket extends WebSocket {
+  constructor(...args: ConstructorParameters<typeof WebSocket>) {
+    super(...args);
+    const mid = /\/ws\/sync\/([^/?]+)/.exec(String(args[0]))?.[1] ?? "";
+    this.on("message", (d: Buffer) => {
+      if (d.toString("utf8").includes("Rate limit exceeded")) {
+        rateLimited.set(mid, (rateLimited.get(mid) ?? 0) + 1);
+      }
+    });
+  }
   send(data: unknown, ...rest: unknown[]): void {
     const mid = /\/ws\/sync\/([^/?]+)/.exec(this.url)?.[1] ?? "";
     if (dropNextPush.has(mid) && typeof data === "string" && data.startsWith('{"type":"push"')) {
@@ -195,6 +207,8 @@ class Device {
     readonly door: Door,
     readonly mid: string = crypto.randomUUID(),
     private readonly token: string = API_TOKEN,
+    private readonly pushAckTimeoutMs = 1_000,
+    private readonly batchSize = BATCH,
   ) {
     const store = this.db.eventStore as unknown as CursorStore;
     this.cursors = {
@@ -232,7 +246,7 @@ class Device {
       motebitId: this.mid,
       authToken: this.token,
       payloads: "e2e",
-      pushAckTimeoutMs: 1_000,
+      pushAckTimeoutMs: this.pushAckTimeoutMs,
       reconnectBaseMs: 5,
       reconnectMaxMs: 20,
     });
@@ -240,7 +254,7 @@ class Device {
 
   async boot(): Promise<void> {
     this.engine = new se.SyncEngine(this.db.eventStore, this.mid, {
-      batch_size: BATCH,
+      batch_size: this.batchSize,
       seqCursorStore: this.cursors,
     });
     if (this.door === "ws-e2e") {
@@ -466,4 +480,23 @@ describe("#914 a re-push is harmless — under E2E envelopes and #846 identity b
       }
     });
   }
+});
+
+describe("#914 round 2: a first-sync backlog over the socket stays under the relay's rate limit", () => {
+  it("5000 events: one sync, no 'Rate limit exceeded', idle, all held once", async () => {
+    // Production settings: the default batch_size (100) and ack deadline (15 s).
+    const dev = new Device("ws-e2e", crypto.randomUUID(), API_TOKEN, 15_000, 100);
+    try {
+      await dev.boot();
+      for (let i = 0; i < 5000; i++) await dev.append();
+      const status = await dev.sync();
+      expect(rateLimited.get(dev.mid) ?? 0).toBe(0);
+      expect(status).toBe("idle");
+      const held = dev.relayRows().map((r) => r.event_id);
+      expect(held).toHaveLength(5000);
+      expect(held).toEqual([...dev.own].sort());
+    } finally {
+      dev.close();
+    }
+  }, 120_000);
 });

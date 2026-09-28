@@ -95,8 +95,28 @@ export interface WebSocketAdapterConfig {
 
 /** The default `pushAckTimeoutMs`. */
 const DEFAULT_PUSH_ACK_TIMEOUT_MS = 15_000;
-/** The most events one push frame carries. */
-const MAX_EVENTS_PER_PUSH_FRAME = 100;
+/**
+ * The most events one push frame carries. The relay sets no per-frame event
+ * cap (services/relay/src/websocket.ts takes `msg.events` whole); its socket
+ * server keeps the `ws` default 100 MiB payload limit. 500 events of a few KB
+ * stays far below it.
+ */
+const MAX_EVENTS_PER_PUSH_FRAME = 500;
+/**
+ * Push-frame pacing (#914 round 2). The relay admits 100 messages per 10 s
+ * per connection (services/relay/src/middleware.ts `wsLimiter`) and answers
+ * the excess with "Rate limit exceeded", dropping the frame. Pushes use at
+ * most half of that budget, leaving the rest for every other frame.
+ */
+const PUSH_FRAMES_PER_WINDOW = 50;
+const PUSH_WINDOW_MS = 10_000;
+/**
+ * While a backlog streams (a push was acked within PUSH_STREAMING_MS), the
+ * first event of the next batch waits PUSH_LINGER_MS for the rest of it, so
+ * a batch goes out as one frame rather than one event and then the others.
+ */
+const PUSH_LINGER_MS = 25;
+const PUSH_STREAMING_MS = 1_000;
 
 /** One caller waiting on the relay's acknowledgment of an appended event. */
 interface PushWaiter {
@@ -213,6 +233,12 @@ export class WebSocketEventStoreAdapter implements EventStoreAdapter {
   /** Appended events not yet in a frame (queued while offline, or behind the frame in flight). */
   private outbox: PendingPush[] = [];
   /** The one push frame awaiting its `ack`, and the socket it went out on. */
+  /** When recent push frames were sent (the pacing window). */
+  private pushSentAt: number[] = [];
+  /** When the relay last acked a push frame. */
+  private lastPushAckAt = -Infinity;
+  /** A deferred flush (linger or pacing). */
+  private flushTimer: ReturnType<typeof setTimeout> | null = null;
   private inFlight: {
     socket: WebSocket;
     items: PendingPush[];
@@ -434,6 +460,10 @@ export class WebSocketEventStoreAdapter implements EventStoreAdapter {
       this.ws = null;
     }
     this.connected = false;
+    if (this.flushTimer) {
+      clearTimeout(this.flushTimer);
+      this.flushTimer = null;
+    }
     // Nothing this adapter still holds will be acknowledged through it. The
     // queued events stay queued for `takePendingEvents`; their appends
     // reject now, so the sync engine's cursor stays below them (#914).
@@ -538,7 +568,12 @@ export class WebSocketEventStoreAdapter implements EventStoreAdapter {
     } else {
       this.outbox.push({ entry, waiters: [waiter] });
     }
-    this.flushPush();
+    const streaming = Date.now() - this.lastPushAckAt < PUSH_STREAMING_MS;
+    if (streaming && this.outbox.length === 1 && !this.inFlight) {
+      this.deferFlush(PUSH_LINGER_MS); // the rest of this batch is on its way
+    } else {
+      this.flushPush();
+    }
     return acked;
   }
 
@@ -638,6 +673,18 @@ export class WebSocketEventStoreAdapter implements EventStoreAdapter {
     const socket = this.ws;
     if (!this.connected || !socket || socket.readyState !== 1 /* WebSocket.OPEN */) return;
     if (this.inFlight || this.outbox.length === 0) return;
+    // Pace: never more than PUSH_FRAMES_PER_WINDOW push frames per window.
+    const now = Date.now();
+    this.pushSentAt = this.pushSentAt.filter((t) => now - t < PUSH_WINDOW_MS);
+    if (this.pushSentAt.length >= PUSH_FRAMES_PER_WINDOW) {
+      this.deferFlush(this.pushSentAt[0]! + PUSH_WINDOW_MS - now);
+      return;
+    }
+    if (this.flushTimer) {
+      clearTimeout(this.flushTimer);
+      this.flushTimer = null;
+    }
+    this.pushSentAt.push(now);
     const items = this.outbox.splice(0, MAX_EVENTS_PER_PUSH_FRAME);
     // In flight BEFORE the send: an ack delivered during `send` is this frame's.
     this.inFlight = {
@@ -656,12 +703,25 @@ export class WebSocketEventStoreAdapter implements EventStoreAdapter {
     }
   }
 
+  /** Flush after `ms`, unless a deferred flush is already pending. */
+  private deferFlush(ms: number): void {
+    if (this.flushTimer) return;
+    this.flushTimer = setTimeout(
+      () => {
+        this.flushTimer = null;
+        this.flushPush();
+      },
+      Math.max(0, ms),
+    );
+  }
+
   /** The relay answered the frame in flight on `socket`: an ack, or a refusal. */
   private onPushAnswered(socket: WebSocket, refused?: Error): void {
     const frame = this.inFlight;
     if (!frame || frame.socket !== socket) return;
     clearTimeout(frame.timer);
     this.inFlight = null;
+    if (!refused) this.lastPushAckAt = Date.now();
     for (const item of frame.items) settle(item, refused);
     this.flushPush();
   }
