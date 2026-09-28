@@ -394,8 +394,11 @@ describe("credentials/submit files a credential only under the identity it is ab
     // The shape that breaks on purpose: a legacy random id registered through
     // register-self (possession proven, but no sovereign commitment, so no
     // #703 holder is written). Main accepted its did:key credentials on the
-    // strength of a device row; only evidence binds now. Remedy for such an
-    // identity: a key rotation (E-link writes a holder).
+    // strength of a device row; only evidence binds now. No remedy path
+    // exists today: a rotation moves the holder only when one already exists
+    // (`applySuccession`, E-link), and E-sov needs a sovereign id — so such an
+    // identity's did:key credentials stay refused. PE ruling on #875 (option
+    // b): legacy ids stay unfilled (#703 §5e/§5j); any remedy is a follow-up.
     const issuer = await identity();
     const legacy = await identity(`legacy-${crypto.randomUUID()}`);
     expect(
