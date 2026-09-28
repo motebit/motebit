@@ -1062,6 +1062,8 @@ const WRITERS: readonly Writer[] = [
       ["REPLACE", "memory_nodes", 1],
       ["UPDATE", "memory_nodes", 3],
       ["DELETE", "memory_nodes", 1],
+      ["INSERT", "paid_intent_ledger", 1],
+      ["UPDATE", "paid_intent_ledger", 1],
       ["REPLACE", "plans", 1],
       ["INSERT", "runtime_liveness", 1],
       ["UPDATE", "runtime_liveness", 1],
