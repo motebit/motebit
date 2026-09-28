@@ -156,6 +156,8 @@ export interface RelayEventTransport {
   credentials: CredentialSource;
   /** Whether `remote` encrypts. */
   e2e: boolean;
+  /** The HTTP transport under `remote` — E2E-only (refuses plaintext) when `e2e`. */
+  http: HttpEventStoreAdapter;
 }
 
 /**
@@ -192,10 +194,11 @@ export function createRelayEventTransport(opts: RelayEventTransportOptions): Rel
     credentialSource: credentials,
     payloads: opts.encKey ? "e2e" : "raw",
   });
-  if (!opts.encKey) return { remote: http, credentials, e2e: false };
+  if (!opts.encKey) return { remote: http, credentials, e2e: false, http };
   return {
     remote: new EncryptedEventStoreAdapter({ inner: http, key: opts.encKey }),
     credentials,
     e2e: true,
+    http,
   };
 }

@@ -2,7 +2,7 @@ import type { EventLogEntry } from "@motebit/sdk";
 import type { EventStoreAdapter, EventFilter } from "@motebit/event-log";
 import { encrypt, decrypt, type EncryptedPayload } from "@motebit/encryption";
 import { isSeqPullSource, type SeqPullResult } from "./seq-cursor.js";
-import { classifyEventPayload } from "./event-payload.js";
+import { classifyEventPayload, encodeEnvelopeData, parseEnvelopeData } from "./event-payload.js";
 
 /**
  * Provides versioned encryption keys for key rotation.
@@ -28,30 +28,6 @@ export interface EncryptedAdapterConfig {
   keyProvider?: KeyProvider;
   /** Optional logger for diagnostics (defaults to silent — no console output) */
   logger?: EncryptedAdapterLogger;
-}
-
-// Portable base64 helpers that work in both Node.js and React Native
-function toBase64(arr: Uint8Array): string {
-  if (typeof globalThis.Buffer !== "undefined") {
-    return globalThis.Buffer.from(arr).toString("base64");
-  }
-  let binary = "";
-  for (let i = 0; i < arr.length; i++) {
-    binary += String.fromCharCode(arr[i]!);
-  }
-  return btoa(binary);
-}
-
-function fromBase64(str: string): Uint8Array {
-  if (typeof globalThis.Buffer !== "undefined") {
-    return new Uint8Array(globalThis.Buffer.from(str, "base64"));
-  }
-  const binary = atob(str);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) {
-    bytes[i] = binary.charCodeAt(i);
-  }
-  return bytes;
 }
 
 /**
@@ -176,42 +152,11 @@ export class EncryptedEventStoreAdapter implements EventStoreAdapter {
   private async encryptPayload(payload: Record<string, unknown>): Promise<string> {
     const { key, version } = this.keyProvider.getCurrentKey();
     const plaintext = new TextEncoder().encode(JSON.stringify(payload));
-    const encrypted = await encrypt(plaintext, key);
-    return JSON.stringify({
-      c: toBase64(encrypted.ciphertext),
-      n: toBase64(encrypted.nonce),
-      t: toBase64(encrypted.tag),
-      v: version,
-    });
+    return encodeEnvelopeData(await encrypt(plaintext, key), version);
   }
 
   private async decryptEntry(entry: EventLogEntry): Promise<EventLogEntry> {
-    const payload = entry.payload;
-    if (envelopeForm(payload) === "plaintext") return entry;
-
-    const data = JSON.parse(payload._data as string) as {
-      c: string;
-      n: string;
-      t: string;
-      v?: number;
-    };
-    // Legacy data has no version field — treat as version 1
-    const version = data.v ?? 1;
-    if (data.v == null) {
-      this.logger.warn("encrypted-adapter: decrypting unversioned payload, assuming key version 1");
-    }
-    const key = this.keyProvider.getKey(version);
-    if (key == null) {
-      throw new Error(`Encryption key not found for version ${version}`);
-    }
-    const encrypted: EncryptedPayload = {
-      ciphertext: fromBase64(data.c),
-      nonce: fromBase64(data.n),
-      tag: fromBase64(data.t),
-    };
-    const plaintext = await decrypt(encrypted, key);
-    const decrypted = JSON.parse(new TextDecoder().decode(plaintext)) as Record<string, unknown>;
-    return { ...entry, payload: decrypted };
+    return openEnvelope(entry, this.keyProvider, this.logger);
   }
 }
 
@@ -225,34 +170,41 @@ export async function decryptEventPayload(
   keyOrProvider: Uint8Array | KeyProvider,
   logger: EncryptedAdapterLogger = noopLogger,
 ): Promise<EventLogEntry> {
-  const payload = event.payload;
-  if (envelopeForm(payload) === "plaintext") return event;
-
   const provider: KeyProvider =
     keyOrProvider instanceof Uint8Array ? singleKeyProvider(keyOrProvider) : keyOrProvider;
+  return openEnvelope(event, provider, logger);
+}
 
-  const data = JSON.parse(payload._data as string) as {
-    c: string;
-    n: string;
-    t: string;
-    v?: number;
-  };
-  const version = data.v ?? 1;
-  if (data.v == null) {
-    logger.warn("encrypted-adapter: decrypting unversioned event payload, assuming key version 1");
+/**
+ * The one decrypt path: plaintext passes, the exact envelope is opened, and
+ * anything else carrying the marker is refused (through `envelopeForm`).
+ */
+async function openEnvelope(
+  entry: EventLogEntry,
+  provider: KeyProvider,
+  logger: EncryptedAdapterLogger,
+): Promise<EventLogEntry> {
+  const payload = entry.payload;
+  if (envelopeForm(payload) === "plaintext") return entry;
+  // envelopeForm returned "e2e", so `_data` parses.
+  const data = parseEnvelopeData(payload._data)!;
+  // Legacy data has no version field — treat as version 1
+  const version = data.version ?? 1;
+  if (data.version == null) {
+    logger.warn("encrypted-adapter: decrypting unversioned payload, assuming key version 1");
   }
   const key = provider.getKey(version);
   if (key == null) {
     throw new Error(`Encryption key not found for version ${version}`);
   }
   const encrypted: EncryptedPayload = {
-    ciphertext: fromBase64(data.c),
-    nonce: fromBase64(data.n),
-    tag: fromBase64(data.t),
+    ciphertext: data.ciphertext,
+    nonce: data.nonce,
+    tag: data.tag,
   };
   const plaintext = await decrypt(encrypted, key);
   return {
-    ...event,
+    ...entry,
     payload: JSON.parse(new TextDecoder().decode(plaintext)) as Record<string, unknown>,
   };
 }

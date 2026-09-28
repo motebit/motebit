@@ -2406,18 +2406,21 @@ export class DesktopApp {
 
   // === Sync / Serving (delegates to SyncController) ===
 
-  /** Sync conversations + plans with the remote relay server. */
+  /**
+   * Sync conversations + plans with the remote relay server — always
+   * encrypted: the key is derived from the device keypair (#928).
+   */
   syncConversations(
+    invoke: InvokeFn,
     syncUrl: string,
     authToken?: string,
-    encryptionKey?: Uint8Array,
   ): Promise<{
     conversations_pushed: number;
     conversations_pulled: number;
     messages_pushed: number;
     messages_pulled: number;
   }> {
-    return this.sync.syncConversations(syncUrl, authToken, encryptionKey);
+    return this.sync.syncConversations(invoke, syncUrl, authToken);
   }
 
   /** Start full sync: event-level WS + one-shot conversation sync. */

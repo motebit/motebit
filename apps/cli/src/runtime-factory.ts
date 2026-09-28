@@ -859,20 +859,8 @@ export async function createRuntime(
   const syncToken =
     config.syncToken ?? process.env["MOTEBIT_API_TOKEN"] ?? process.env["MOTEBIT_SYNC_TOKEN"];
 
-  // With the sync key held the transport is E2E-only (#928): a payload that
-  // skipped the encrypting wrapper is refused, never pushed in plaintext.
-  // Without it (no decryptable identity key) the REPL has nothing to
-  // encrypt with, and syncs raw — the one raw-by-design push path.
-  const httpAdapter = new HttpEventStoreAdapter({
-    baseUrl: syncUrl,
-    motebitId,
-    authToken: syncToken,
-    payloads: encKey ? "e2e" : "raw",
-  });
-  // Wrap with encryption if key available (zero-knowledge relay)
-  const remoteStore = encKey
-    ? new EncryptedEventStoreAdapter({ inner: httpAdapter, key: encKey })
-    : httpAdapter;
+  // E2E with the sync key (#928); raw only when there is no key to encrypt with.
+  const { remote: remoteStore } = createReplEventRemote({ syncUrl, motebitId, syncToken, encKey });
   runtime.connectSync(remoteStore);
   console.log(dim(`Sync: ${syncUrl}${encKey ? " (encrypted)" : ""}`));
 
@@ -935,3 +923,28 @@ export {
   openMotebitDatabase,
 };
 export type { StorageAdapters, MotebitDatabase, StreamingProvider, McpServerConfig };
+
+/**
+ * The REPL's event sync remote (#928). With the sync key held the transport
+ * is E2E-only — a payload that skipped the encrypting wrapper is refused,
+ * never pushed in plaintext — under the encrypting wrapper. Without it (the
+ * identity key did not decrypt) the REPL has nothing to encrypt with and
+ * syncs raw: the one raw-by-design push path. Exported for its test.
+ */
+export function createReplEventRemote(opts: {
+  syncUrl: string;
+  motebitId: string;
+  syncToken: string | undefined;
+  encKey: Uint8Array | undefined;
+}): { remote: EventStoreAdapter; transport: HttpEventStoreAdapter } {
+  const transport = new HttpEventStoreAdapter({
+    baseUrl: opts.syncUrl,
+    motebitId: opts.motebitId,
+    authToken: opts.syncToken,
+    payloads: opts.encKey ? "e2e" : "raw",
+  });
+  const remote = opts.encKey
+    ? new EncryptedEventStoreAdapter({ inner: transport, key: opts.encKey })
+    : transport;
+  return { remote, transport };
+}

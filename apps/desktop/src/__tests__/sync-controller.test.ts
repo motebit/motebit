@@ -250,7 +250,7 @@ describe("SyncController.syncStatus getter", () => {
 describe("SyncController.syncConversations", () => {
   it("returns zeros when no conversation store", async () => {
     const ctrl = new SyncController(makeDeps());
-    const result = await ctrl.syncConversations("https://r");
+    const result = await ctrl.syncConversations(vi.fn() as any, "https://r");
     expect(result).toEqual({
       conversations_pushed: 0,
       conversations_pulled: 0,
@@ -264,7 +264,7 @@ describe("SyncController.syncConversations", () => {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       makeDeps({ getConversationStore: () => makeStore() as any }),
     );
-    const result = await ctrl.syncConversations("https://r", "token", new Uint8Array(32));
+    const result = await ctrl.syncConversations(vi.fn() as any, "https://r", "token");
     expect(result.conversations_pushed).toBe(1);
     expect(result.messages_pulled).toBe(4);
   });
@@ -282,7 +282,7 @@ describe("SyncController.syncConversations", () => {
         getPlanStore: () => planStore as any,
       }),
     );
-    await ctrl.syncConversations("https://r", "token");
+    await ctrl.syncConversations(vi.fn() as any, "https://r", "token");
   });
 
   it("emits syncing status during sync", async () => {
@@ -292,7 +292,7 @@ describe("SyncController.syncConversations", () => {
     );
     const statuses: string[] = [];
     ctrl.onSyncStatus((e) => statuses.push(e.status));
-    await ctrl.syncConversations("https://r", "token");
+    await ctrl.syncConversations(vi.fn() as any, "https://r", "token");
     expect(statuses).toContain("syncing");
     expect(statuses).toContain("connected");
   });

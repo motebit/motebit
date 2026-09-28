@@ -41,6 +41,16 @@ function entry(
   };
 }
 
+/** A real envelope, produced by the encrypting adapter itself. */
+async function realEnvelope(
+  payload: Record<string, unknown> = { a: 1 },
+): Promise<Record<string, unknown>> {
+  const inner = new InMemoryEventStore();
+  await new EncryptedEventStoreAdapter({ inner, key: KEY }).append(entry("env", 1, payload));
+  const [held] = await inner.query({ motebit_id: MID as EventLogEntry["motebit_id"] });
+  return held!.payload;
+}
+
 /** Every payload the relay stored, as JSON — what anyone with its database reads. */
 function storedPayloads(relay: FakeRelay): string[] {
   return (relay as unknown as { rows: Array<{ event: EventLogEntry }> }).rows.map((r) =>
@@ -49,8 +59,9 @@ function storedPayloads(relay: FakeRelay): string[] {
 }
 
 describe("#928 one encrypted-payload predicate", () => {
-  it("classifies the envelope, plaintext, and the ambiguous middle", () => {
-    expect(classifyEventPayload({ _encrypted: true, _data: "x" })).toBe("e2e");
+  it("classifies the envelope, plaintext, and the ambiguous middle", async () => {
+    const env = await realEnvelope();
+    expect(classifyEventPayload(env)).toBe("e2e");
     expect(classifyEventPayload({ a: 1 })).toBe("plaintext");
     expect(classifyEventPayload({ _encrypted: undefined, a: 1 })).toBe("plaintext");
     for (const bad of [
@@ -66,6 +77,53 @@ describe("#928 one encrypted-payload predicate", () => {
     }
     expect(classifyEventPayload(null)).toBe("malformed");
     expect(classifyEventPayload("x")).toBe("malformed");
+  });
+
+  it("round 2: only EXACTLY the envelope is e2e — plaintext beside it, or plaintext as its _data, is refused", async () => {
+    const env = await realEnvelope();
+    const data = JSON.parse(env["_data"] as string) as Record<string, unknown>;
+    const probes: Array<Record<string, unknown>> = [
+      // The cold review's two probes.
+      { _encrypted: true, _data: "{}", content: "ZZPLAIN" },
+      { _encrypted: true, _data: "ZZPLAIN medical note" },
+      // A valid envelope with plaintext riding beside it.
+      { ...env, content: "ZZPLAIN" },
+      // _data that parses but is not the ciphertext shape.
+      { _encrypted: true, _data: JSON.stringify({ ...data, content: "ZZPLAIN" }) },
+      { _encrypted: true, _data: JSON.stringify({ c: data["c"], n: data["n"] }) },
+      { _encrypted: true, _data: JSON.stringify({ ...data, n: "ZZPLAIN" }) },
+      { _encrypted: true, _data: JSON.stringify({ ...data, t: "AAAA" }) },
+      { _encrypted: true, _data: JSON.stringify({ ...data, c: "" }) },
+      { _encrypted: true, _data: JSON.stringify({ ...data, v: 0 }) },
+      { _encrypted: true, _data: JSON.stringify({ ...data, v: "1" }) },
+      { _encrypted: true, _data: JSON.stringify([data]) },
+    ];
+    for (const p of probes) {
+      expect(classifyEventPayload(p), JSON.stringify(p)).toBe("malformed");
+    }
+    // Legacy unversioned data (no `v`) is still an envelope.
+    const { v: _v, ...legacy } = data;
+    expect(classifyEventPayload({ _encrypted: true, _data: JSON.stringify(legacy) })).toBe("e2e");
+
+    // And an e2e transport refuses both cold-review probes before sending.
+    const relay = new FakeRelay();
+    vi.stubGlobal("fetch", vi.fn(relay.fetch));
+    try {
+      const http = new HttpEventStoreAdapter({
+        baseUrl: relay.baseUrl,
+        motebitId: MID,
+        payloads: "e2e",
+        maxRetries: 0,
+      });
+      for (const p of probes.slice(0, 3)) {
+        await expect(http.append(entry("probe", 1, p))).rejects.toBeInstanceOf(
+          PlaintextPushRefusedError,
+        );
+      }
+      expect(globalThis.fetch).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 
   it("every decrypt path refuses a marker that is not the envelope — never decrypts it, never passes it as plaintext", async () => {
@@ -154,7 +212,7 @@ describe("#928 an e2e transport refuses plaintext before it leaves", () => {
       PlaintextPushRefusedError,
     );
     expect(ws.takePendingEvents()).toEqual([]);
-    await ws.append(entry("c", 2, { _encrypted: true, _data: "{}" }));
+    await ws.append(entry("c", 2, await realEnvelope()));
     expect(ws.takePendingEvents().map((e) => e.event_id)).toEqual(["c"]);
   });
 });
@@ -373,11 +431,82 @@ describe("#927 the catch-up resolves its credential per request", () => {
       ws.connect();
       MockWebSocket.instances[MockWebSocket.instances.length - 1]!.openAndAccept();
       await vi.waitFor(() =>
-        expect(warn).toHaveBeenCalledWith(expect.stringMatching(/catch-up pull failed.*403/)),
+        expect(warn).toHaveBeenCalledWith(expect.stringMatching(/socket sync failed.*403/)),
       );
       ws.disconnect();
     } finally {
       warn.mockRestore();
     }
+  });
+});
+
+describe("#928 round 2 — a credential source that rejects at connect", () => {
+  let originalWs: typeof globalThis.WebSocket;
+  beforeEach(() => {
+    vi.useFakeTimers();
+    MockWebSocket.instances = [];
+    originalWs = globalThis.WebSocket;
+    globalThis.WebSocket = MockWebSocket as unknown as typeof WebSocket;
+  });
+  afterEach(() => {
+    globalThis.WebSocket = originalWs;
+    vi.useRealTimers();
+  });
+
+  it("is surfaced (never an unhandled rejection) and the socket reconnects once a token can be minted", async () => {
+    let calls = 0;
+    const source: CredentialSource = {
+      getCredential: vi.fn(async () => {
+        if (++calls === 1) throw new Error("keystore locked");
+        return "tok-2";
+      }),
+    };
+    const errors: unknown[] = [];
+    const unhandled = vi.fn();
+    process.on("unhandledRejection", unhandled);
+    try {
+      const ws = new WebSocketEventStoreAdapter({
+        url: "ws://relay/ws/sync/m",
+        motebitId: MID,
+        credentialSource: source,
+        reconnectBaseMs: 10,
+        onCatchUpError: (err) => errors.push(err),
+      });
+      ws.connect();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(MockWebSocket.instances).toHaveLength(0);
+      expect(errors).toHaveLength(1);
+      expect(String(errors[0])).toMatch(/sync token unavailable: keystore locked/);
+
+      await vi.advanceTimersByTimeAsync(20);
+      expect(source.getCredential).toHaveBeenCalledTimes(2);
+      expect(MockWebSocket.instances).toHaveLength(1);
+      ws.disconnect();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(unhandled).not.toHaveBeenCalled();
+    } finally {
+      process.off("unhandledRejection", unhandled);
+    }
+  });
+
+  it("a disconnect while the mint is failing neither reports nor reconnects", async () => {
+    let reject!: (e: Error) => void;
+    const source: CredentialSource = {
+      getCredential: vi.fn(() => new Promise<string | null>((_, r) => (reject = r))),
+    };
+    const errors: unknown[] = [];
+    const ws = new WebSocketEventStoreAdapter({
+      url: "ws://relay/ws/sync/m",
+      motebitId: MID,
+      credentialSource: source,
+      reconnectBaseMs: 10,
+      onCatchUpError: (err) => errors.push(err),
+    });
+    ws.connect();
+    ws.disconnect();
+    reject(new Error("late"));
+    await vi.advanceTimersByTimeAsync(100);
+    expect(errors).toEqual([]);
+    expect(source.getCredential).toHaveBeenCalledTimes(1);
   });
 });

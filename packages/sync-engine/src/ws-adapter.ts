@@ -69,6 +69,10 @@ export interface WebSocketAdapterConfig {
    * swallowed: the caller puts it in its sync status. Default: a
    * `console.warn` line. The cursor never passes an unapplied event, and the
    * next reconnect retries.
+   *
+   * Also told when the `credentialSource` REJECTS at connect (#928 round 2):
+   * the socket cannot connect without a token, so the failure is reported
+   * here and a reconnect is scheduled on the usual backoff.
    */
   onCatchUpError?: (err: unknown) => void;
   /**
@@ -83,7 +87,7 @@ export interface WebSocketAdapterConfig {
 /** The default report of a failed catch-up: one warning line. */
 function warnCatchUpError(err: unknown): void {
   // eslint-disable-next-line no-console -- the runtime's pluggable-logger default (CLAUDE.md conventions); callers pass onCatchUpError to route it
-  console.warn(`sync: catch-up pull failed: ${err instanceof Error ? err.message : String(err)}`);
+  console.warn(`sync: socket sync failed: ${err instanceof Error ? err.message : String(err)}`);
 }
 
 export type EventReceivedCallback = (event: EventLogEntry) => void;
@@ -166,10 +170,26 @@ export class WebSocketEventStoreAdapter implements EventStoreAdapter {
     if (this.config.credentialSource) {
       const request: CredentialRequest = { serverUrl: this.config.url };
       const generation = this.generation;
-      void this.config.credentialSource.getCredential(request).then((token) => {
-        if (generation !== this.generation) return;
-        this.connectWithToken(token ?? undefined);
-      });
+      void this.config.credentialSource.getCredential(request).then(
+        (token) => {
+          if (generation !== this.generation) return;
+          this.connectWithToken(token ?? undefined);
+        },
+        (err: unknown) => {
+          // A failed mint used to be an unhandled rejection that left the
+          // socket unconnected with no reconnect scheduled — silently
+          // offline for good. Report it, then retry on the backoff (#928
+          // round 2). A retired adapter does neither.
+          if (generation !== this.generation) return;
+          (this.config.onCatchUpError ?? warnCatchUpError)(
+            new Error(
+              `sync token unavailable: ${err instanceof Error ? err.message : String(err)}`,
+              { cause: err },
+            ),
+          );
+          this.scheduleReconnect();
+        },
+      );
       return;
     }
 
