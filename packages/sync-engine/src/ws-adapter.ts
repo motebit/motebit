@@ -164,16 +164,19 @@ export class WebSocketEventStoreAdapter implements EventStoreAdapter {
       // wait for auth_result before considering the connection ready. Fail-closed:
       // rejection or 5s timeout closes the connection.
       if (token != null && token !== "") {
-        this.ws!.send(JSON.stringify({ type: "auth", token }));
+        const socket = this.ws!;
+        socket.send(JSON.stringify({ type: "auth", token }));
 
         const authTimeout = setTimeout(() => {
+          // This timer belongs to `socket`. If that socket is gone (dropped,
+          // replaced by a reconnect, or the adapter disconnected), it must
+          // not close or reconnect anything (#816).
+          if (this.ws !== socket) return;
           this.authTimer = null;
           // Auth timed out — fail-closed
-          if (this.ws) {
-            this.ws.onclose = null;
-            this.ws.close();
-            this.ws = null;
-          }
+          socket.onclose = null;
+          socket.close();
+          this.ws = null;
           this.connected = false;
           this.scheduleReconnect();
         }, 5_000);
@@ -242,6 +245,11 @@ export class WebSocketEventStoreAdapter implements EventStoreAdapter {
     this.ws.onclose = () => {
       this.connected = false;
       this.ws = null;
+      // The auth timer belongs to the socket that just closed.
+      if (this.authTimer) {
+        clearTimeout(this.authTimer);
+        this.authTimer = null;
+      }
       // Cancel stability timer — connection dropped before 30s, keep backoff elevated
       if (this.stabilityTimer) {
         clearTimeout(this.stabilityTimer);

@@ -98,6 +98,56 @@ describe("retiring an adapter", () => {
     expect(adapter.isConnected).toBe(false);
   });
 
+  /**
+   * The relay drops a socket before answering its `auth`, the adapter
+   * reconnects and authenticates, and the FIRST socket's auth timer is still
+   * pending. It belongs to a socket that is gone; it must never act.
+   */
+  async function dropBeforeAuthThenReconnect(adapter: WebSocketEventStoreAdapter) {
+    adapter.connect();
+    const first = MockWebSocket.instances[0]!;
+    first.onopen?.(); // auth sent, 5s auth timer armed, no auth_result
+    first.readyState = 3;
+    first.onclose?.(); // relay drops it → reconnect scheduled
+    await vi.advanceTimersByTimeAsync(1_000);
+    const second = MockWebSocket.instances[1]!;
+    second.onopen?.();
+    second.onmessage?.({ data: JSON.stringify({ type: "auth_result", ok: true }) });
+    expect(adapter.isConnected).toBe(true);
+    return second;
+  }
+
+  it("drop before auth, reconnect authenticates, then disconnect: no socket reopens", async () => {
+    const adapter = new WebSocketEventStoreAdapter({
+      url: "ws://relay/ws/sync/m",
+      motebitId: "m",
+      authToken: "tok",
+      reconnectBaseMs: 1_000,
+    });
+    await dropBeforeAuthThenReconnect(adapter);
+    adapter.disconnect(); // within 5s of the first socket's auth timer
+    await vi.advanceTimersByTimeAsync(60_000);
+
+    expect(MockWebSocket.instances).toHaveLength(2);
+    expect(adapter.isConnected).toBe(false);
+  });
+
+  it("drop before auth, reconnect authenticates: the first socket's auth timer leaves the live one alone", async () => {
+    const adapter = new WebSocketEventStoreAdapter({
+      url: "ws://relay/ws/sync/m",
+      motebitId: "m",
+      authToken: "tok",
+      reconnectBaseMs: 1_000,
+    });
+    const live = await dropBeforeAuthThenReconnect(adapter);
+    await vi.advanceTimersByTimeAsync(10_000); // past the first socket's 5s timer
+
+    expect(adapter.isConnected).toBe(true);
+    expect(live.readyState).toBe(1);
+    expect(MockWebSocket.instances).toHaveLength(2);
+    adapter.disconnect();
+  });
+
   it("a connect after disconnect still works (the generation only cancels what was in flight)", async () => {
     const source: CredentialSource = { getCredential: async () => "tok" };
     const adapter = new WebSocketEventStoreAdapter({
