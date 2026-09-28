@@ -26,6 +26,7 @@ import type { MotebitLoopDependencies, TurnOptions } from "../loop";
 import type { StreamingProvider } from "../index";
 import { buildSystemPrompt } from "../core";
 import {
+  CONTEXT_PACK_FOREIGN_CLASS,
   OWNER_INTERIOR_TURN_OPTIONS,
   floorForeignTurnOptions,
   foreignSessionState,
@@ -59,6 +60,13 @@ function recordingProvider(contexts: ContextPack[]): StreamingProvider {
       yield { type: "done" as const, response };
     },
   } as unknown as StreamingProvider;
+}
+
+function markedStateEngine(): StateVectorEngine {
+  const engine = new StateVectorEngine();
+  const real = engine.getState.bind(engine);
+  engine.getState = () => ({ ...real(), affect_valence: 0.7311, attention: 0.7311 });
+  return engine;
 }
 
 async function seededDeps(contexts: ContextPack[]): Promise<MotebitLoopDependencies> {
@@ -95,7 +103,8 @@ async function seededDeps(contexts: ContextPack[]): Promise<MotebitLoopDependenc
     motebitId: "owner-mote",
     eventStore,
     memoryGraph,
-    stateEngine: new StateVectorEngine(),
+    // The owner's live state vector, carrying a marker value (0.7311).
+    stateEngine: markedStateEngine(),
     behaviorEngine: new BehaviorEngine(),
     provider: recordingProvider(contexts),
   } as unknown as MotebitLoopDependencies;
@@ -251,6 +260,7 @@ describe("#943 — floorForeignTurnOptions / foreignSessionState", () => {
         "precisionContext",
         "selectedSkills",
         "sessionInfo",
+        "previousCues",
       ].sort(),
     );
   });
@@ -264,5 +274,41 @@ describe("#943 — floorForeignTurnOptions / foreignSessionState", () => {
       substrate: { model: "mock-model" },
     });
     expect(floorForeignTurnOptions(undefined)).toBeUndefined();
+  });
+});
+
+describe("#943 round 5 — the owner's state vector and body cues never reach a foreign turn", () => {
+  const OWNER_CUES = {
+    hover_distance: 0.4321,
+    drift_amplitude: 0.4321,
+    glow_intensity: 0.4321,
+    eye_dilation: 0.4321,
+    smile_curvature: 0.4321,
+    speaking_activity: 0.4321,
+  };
+  const markers = (ctx: ContextPack | undefined) => {
+    const all = seen(ctx);
+    return { state: /0\.73/.test(all), cues: all.includes("0.4321") };
+  };
+
+  it("a foreign turn: neutral [State], no owner cues", async () => {
+    const contexts: ContextPack[] = [];
+    const d = await seededDeps(contexts);
+    await runTurn(cleared(d, true), QUERY, { previousCues: OWNER_CUES });
+    expect(markers(contexts[0])).toEqual({ state: false, cues: false });
+    expect(contexts[0]?.behavior_cues).toBeUndefined();
+    expect(contexts[0]?.current_state.affect_valence).toBe(0);
+  });
+
+  it("the owner's turn keeps both", async () => {
+    const contexts: ContextPack[] = [];
+    const d = await seededDeps(contexts);
+    await runTurn(cleared(d, false), QUERY, { previousCues: OWNER_CUES });
+    expect(markers(contexts[0])).toEqual({ state: true, cues: true });
+  });
+
+  it("the pack floor classifies every ContextPack field; state is projected, cues are owner-interior", () => {
+    expect(CONTEXT_PACK_FOREIGN_CLASS.current_state).toBe("projected");
+    expect(CONTEXT_PACK_FOREIGN_CLASS.behavior_cues).toBe("owner_interior");
   });
 });

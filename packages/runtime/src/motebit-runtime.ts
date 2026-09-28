@@ -587,7 +587,9 @@ export class MotebitRuntime {
     // The owner record's consumer: credit the owner's hires (trust, chain
     // trust, graph edges, latency), attributed to the owner — never
     // through a customer's task.
-    void absorbDelegationReceipts(this.agentTaskDeps, entries).catch((err: unknown) => {
+    void absorbDelegationReceipts(this.agentTaskDeps, entries, {
+      requireVerifiable: true,
+    }).catch((err: unknown) => {
       this._logger.warn("owner delegation receipt intake failed", {
         error: err instanceof Error ? err.message : String(err),
       });
@@ -1573,8 +1575,11 @@ export class MotebitRuntime {
       // receipt handling: a hire's receipt rides on the result up to the
       // runtime registry, which attributes it to the caller's destination.
       const discovered = new Map<string, { def: ToolDefinition; handler: ToolHandler }>();
+      // `has` answers for THIS discovery only: a same-named tool a surface
+      // already put into the runtime registry (merged without `localOnly`)
+      // is re-registered below as owner-connected, never left as it was.
       const collector = {
-        has: (name: string) => discovered.has(name) || this.toolRegistry.has(name),
+        has: (name: string) => discovered.has(name),
         register: (def: ToolDefinition, handler: ToolHandler) => {
           discovered.set(def.name, { def, handler });
         },
@@ -2300,7 +2305,10 @@ export class MotebitRuntime {
    * default.
    */
   private registerOwnerConnectedTool(def: ToolDefinition, handler: ToolHandler): void {
-    this.toolRegistry.register({ ...def, localOnly: true }, handler);
+    // `replace`: a same-named tool that reached the registry by another
+    // path (a surface merge) is overwritten as owner-connected — the
+    // `localOnly` floor wins whatever order things were wired in.
+    this.toolRegistry.replace({ ...def, localOnly: true }, handler);
   }
 
   /**
@@ -2966,7 +2974,9 @@ export class MotebitRuntime {
        * the hires this turn made, and nothing else. `handleAgentTask` sets it
        * to build its signed receipt's `delegation_receipts`.
        */
-      onDelegationReceipts?: (receipts: ExecutionReceipt[]) => void;
+      onDelegationReceipts?: (
+        receipts: Array<{ receipt: ExecutionReceipt; trustCredited: boolean }>,
+      ) => void;
       /**
        * Cryptographically verified standing-delegation grant covering
        * this turn. Produced ONLY by `verifyGrantForTurn` (signed

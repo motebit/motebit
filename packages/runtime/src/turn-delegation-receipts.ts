@@ -22,7 +22,7 @@
  *  - `OWNER_ACT` — the default for every other caller: out-of-turn owner
  *    doors (`invokeLocalTool`, PlanEngine steps, the approval queue, taps,
  *    attached frontends, the MCP serve path).
- * A turn's receipts go, at close, to the turn's sink (`handleAgentTask` sets
+ * A turn's receipts (with their `trustCredited` flag) go, at close, to the turn's sink (`handleAgentTask` sets
  * one to build its receipt) or, for an owner turn, to the owner's record.
  * The owner's record has a consumer: `onOwnerIntake` — the runtime credits
  * trust for each receipt, computes chain trust (`ChainTrustComputed`),
@@ -70,7 +70,7 @@ const OWNER_RECORD_CAP = 256;
 
 export interface TurnReceiptScope {
   /** Who receives this turn's receipts on close. Absent ⇒ the owner's record. */
-  sink?: (receipts: ExecutionReceipt[]) => void;
+  sink?: (receipts: OwnerReceipt[]) => void;
 }
 
 export class TurnDelegationReceipts {
@@ -102,10 +102,11 @@ export class TurnDelegationReceipts {
     if (this.active == null || this.active.key !== key) return [];
     const { scope, entries } = this.active;
     this.active = null;
-    const receipts = entries.map((e) => e.receipt);
-    if (scope.sink != null) scope.sink(receipts);
+    // The sink gets `{ receipt, trustCredited }` (#943 round 5): a hire
+    // already credited where it was made must not be credited again.
+    if (scope.sink != null) scope.sink(entries);
     else this.toOwner(entries);
-    return receipts;
+    return entries.map((e) => e.receipt);
   }
 
   /**

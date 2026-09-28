@@ -13,6 +13,7 @@ import type {
   ConversationMessage,
   AccrualBasis,
   EventLogEntry,
+  ContextPack,
 } from "@motebit/sdk";
 import { EventType, SensitivityLevel, RiskLevel, rankSensitivity } from "@motebit/sdk";
 import { CONTEXT_SAFE_SENSITIVITY as CANONICAL_CONTEXT_SAFE_SENSITIVITY } from "@motebit/sdk";
@@ -29,7 +30,7 @@ import { detectDishonestClosing } from "./dishonest-closing.js";
 import type { ToolResultLogEntry } from "./dishonest-closing.js";
 import { validateTaskStepNarration } from "./narration-validation.js";
 import { turnMemorySource } from "./memory-provenance.js";
-import { floorForeignTurnOptions } from "./foreign-turn.js";
+import { floorForeignContextPack, floorForeignTurnOptions } from "./foreign-turn.js";
 
 // === Constants ===
 
@@ -1126,6 +1127,11 @@ export async function* runTurnStreaming(
   // turn's options goes through `options`, never `rawOptions`.
   const foreign = deps.foreignPrincipal === true;
   const options = foreign ? floorForeignTurnOptions(rawOptions) : rawOptions;
+  // Every pack the provider receives passes here: a foreign turn's is
+  // floored field by field (`CONTEXT_PACK_FOREIGN_CLASS`), including what
+  // the loop derives from its own deps (the owner's live state vector).
+  const packFor = <P extends ContextPack>(pack: P): ContextPack =>
+    foreign ? floorForeignContextPack(pack) : pack;
 
   // TTFT instrumentation — content-free wall-clock stamps. `turnStart` anchors
   // every delta; per-stage durations come from `withStageTimeout`'s sink (one
@@ -1280,7 +1286,7 @@ export async function* runTurnStreaming(
       providerCallStart = Date.now();
       contextPipelineMs = providerCallStart - turnStart;
     }
-    for await (const chunk of provider.generateStream(contextPack)) {
+    for await (const chunk of provider.generateStream(packFor(contextPack))) {
       if (chunk.type === "text") {
         if (firstTokenAt === undefined) firstTokenAt = Date.now();
         yield { type: "text", text: chunk.text };
@@ -1914,7 +1920,7 @@ export async function* runTurnStreaming(
       sessionInfo: options?.sessionInfo,
     };
 
-    for await (const chunk of provider.generateStream(nudgeContextPack)) {
+    for await (const chunk of provider.generateStream(packFor(nudgeContextPack))) {
       if (chunk.type === "text") {
         yield { type: "text", text: chunk.text };
       } else {

@@ -24,8 +24,8 @@
  * Gate: `scripts/check-memory-source-canonical.ts` scan (e).
  */
 
-import { SensitivityLevel } from "@motebit/sdk";
-import type { SessionStateSnapshot } from "@motebit/sdk";
+import { BatteryMode, SensitivityLevel, TrustMode } from "@motebit/sdk";
+import type { ContextPack, MotebitState, SessionStateSnapshot } from "@motebit/sdk";
 import type { TurnOptions } from "./loop.js";
 
 /**
@@ -34,9 +34,9 @@ import type { TurnOptions } from "./loop.js";
  *  - `owner_interior` — the owner's private interior; DROPPED on a foreign turn.
  *  - `projected`      — carries owner facets alongside turn facts; replaced by
  *                       its foreign-safe projection (`foreignSessionState`).
- *  - `turn_own`       — the foreign turn's own input (its private history,
- *                       its body cues) or pure control (run id, scope, grant,
- *                       deferral); kept.
+ *  - `turn_own`       — the foreign turn's own input (its private history)
+ *                       or pure control (run id, scope, grant, deferral);
+ *                       kept.
  *
  * A `Record` over `keyof TurnOptions`, so adding a field to `TurnOptions`
  * without classifying it here is a COMPILE error — a new context block
@@ -56,7 +56,7 @@ export const TURN_OPTION_FOREIGN_CLASS = {
   sessionState: "projected",
   // The turn's own inputs and control.
   conversationHistory: "turn_own", // foreign: [] (#904) or the resume's private pair
-  previousCues: "turn_own", // body posture numbers, no content
+  previousCues: "owner_interior", // the owner's last turn's body cues (#943 round 5)
   runId: "turn_own",
   delegationScope: "turn_own",
   verifiedGrant: "turn_own",
@@ -104,6 +104,83 @@ export function floorForeignTurnOptions(options: TurnOptions | undefined): TurnO
   if (options === undefined) return undefined;
   const floored: TurnOptions = { ...options };
   for (const key of OWNER_INTERIOR_TURN_OPTIONS) delete floored[key];
+  if (floored.sessionState !== undefined) {
+    floored.sessionState = foreignSessionState(floored.sessionState);
+  }
+  return floored;
+}
+
+// === The context pack itself (#943 round 5) ===
+
+/**
+ * How a foreign turn treats every field of the `ContextPack` the provider
+ * receives — the SECOND classified table. `TURN_OPTION_FOREIGN_CLASS` covers
+ * what the runtime passes in; this one covers what the pack finally holds,
+ * including what the loop derives from its OWN deps (the state vector from
+ * `stateEngine`, events and memories from the stores). A `Record` over
+ * `keyof ContextPack`, so a new context source added to the pack without
+ * classifying it here is a COMPILE error.
+ *
+ *  - `owner_interior` — emptied/dropped on a foreign turn;
+ *  - `projected` — replaced by its foreign-safe projection;
+ *  - `turn_own` — the foreign turn's own input, kept.
+ */
+export const CONTEXT_PACK_FOREIGN_CLASS = {
+  recent_events: "owner_interior",
+  relevant_memories: "owner_interior",
+  // The owner's LIVE state vector (attention, affect, …) — the same rule as
+  // the `motebit://state` resource: never another principal's. Projected to
+  // a neutral vector (the field is required), so `[State]` shows nothing
+  // of the owner.
+  current_state: "projected",
+  user_message: "turn_own",
+  conversation_history: "turn_own", // foreign: [] (#904) or the resume's private pair
+  behavior_cues: "owner_interior", // the owner's last turn's body cues
+  tools: "turn_own", // already localOnly-filtered for a foreign turn (#880)
+  sessionInfo: "owner_interior",
+  curiosityHints: "owner_interior",
+  knownAgents: "owner_interior",
+  agentCapabilities: "owner_interior",
+  precisionContext: "owner_interior",
+  firstConversation: "owner_interior",
+  activationPrompt: "owner_interior",
+  memoryIndex: "owner_interior",
+  selectedSkills: "owner_interior",
+  sessionState: "projected",
+} as const satisfies Record<keyof ContextPack, "owner_interior" | "projected" | "turn_own">;
+
+/** The context-pack fields a foreign turn never receives. */
+export const OWNER_INTERIOR_PACK_FIELDS = (
+  Object.keys(CONTEXT_PACK_FOREIGN_CLASS) as Array<keyof ContextPack>
+).filter((k) => CONTEXT_PACK_FOREIGN_CLASS[k] === "owner_interior");
+
+/** A neutral state vector — nothing of the owner's live state. */
+export function neutralState(): MotebitState {
+  return {
+    attention: 0,
+    processing: 0,
+    confidence: 0.5,
+    affect_valence: 0,
+    affect_arousal: 0,
+    social_distance: 0.5,
+    curiosity: 0,
+    trust_mode: TrustMode.Guarded,
+    battery_mode: BatteryMode.Normal,
+  };
+}
+
+/**
+ * Floor the pack a foreign turn's provider receives: every `owner_interior`
+ * field emptied (arrays) or dropped, `current_state` neutral, `sessionState`
+ * projected. The loop applies it to EVERY pack it sends (`packFor`).
+ */
+export function floorForeignContextPack(pack: ContextPack): ContextPack {
+  const floored: ContextPack = { ...pack };
+  for (const key of OWNER_INTERIOR_PACK_FIELDS) {
+    if (key === "recent_events" || key === "relevant_memories") floored[key] = [];
+    else delete floored[key];
+  }
+  floored.current_state = neutralState();
   if (floored.sessionState !== undefined) {
     floored.sessionState = foreignSessionState(floored.sessionState);
   }

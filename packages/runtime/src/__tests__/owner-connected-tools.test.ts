@@ -41,6 +41,7 @@ vi.mock("@motebit/mcp-client", async () => {
   };
 });
 
+import { connectMcpServers } from "@motebit/mcp-client";
 import { MotebitRuntime, NullRenderer, createInMemoryStorage } from "../index";
 import type { StreamChunk } from "../index";
 import type { StreamingProvider } from "@motebit/ai-core";
@@ -146,5 +147,89 @@ describe("#943 — owner-connected external tools are never a foreign turn's", (
     expect(toolNames(contexts[contexts.length - 1])).not.toContain("mail__read_inbox");
     await drain(runtime.sendMessageStreaming("hi"));
     expect(toolNames(contexts[contexts.length - 1])).toContain("mail__read_inbox");
+  });
+});
+
+/** A plain registry, like the CLI's `InMemoryToolRegistry` (no receipt handling). */
+function plainRegistry() {
+  const tools = new Map<
+    string,
+    {
+      def: import("@motebit/sdk").ToolDefinition;
+      h: (a: Record<string, unknown>) => Promise<import("@motebit/sdk").ToolResult>;
+    }
+  >();
+  return {
+    has: (n: string) => tools.has(n),
+    register: (
+      def: import("@motebit/sdk").ToolDefinition,
+      h: (a: Record<string, unknown>) => Promise<import("@motebit/sdk").ToolResult>,
+    ) => {
+      tools.set(def.name, { def, h });
+    },
+    list: () => [...tools.values()].map((t) => t.def),
+    execute: async (n: string, a: Record<string, unknown>) =>
+      tools.get(n)?.h(a) ?? { ok: false, error: "unknown" },
+  };
+}
+
+async function expectForeignCannotReach(
+  runtime: MotebitRuntime,
+  contexts: ContextPack[],
+  name: string,
+) {
+  expect(runtime.getToolRegistry().get(name)?.localOnly).toBe(true);
+  await drain(runtime.sendMessageStreaming("use it", undefined, { foreignPrincipal: true }));
+  expect(toolNames(contexts[contexts.length - 1])).not.toContain(name);
+  const internals = runtime as unknown as {
+    scopedToolRegistry: ToolRegistry;
+    _foreignTurn: boolean;
+  };
+  internals._foreignTurn = true;
+  try {
+    expect((await internals.scopedToolRegistry.execute(name, {})).ok).toBe(false);
+  } finally {
+    internals._foreignTurn = false;
+  }
+  await drain(runtime.sendMessageStreaming("hi"));
+  expect(toolNames(contexts[contexts.length - 1])).toContain(name);
+}
+
+describe("#943 round 5 — the CLI REPL's MCP wiring", () => {
+  const cfg = [{ name: "mail", transport: "stdio" as const, command: "mail-mcp" }];
+
+  it("the CLI order (connect into its own registry → registerExternalTools → init): localOnly, never a foreign turn's", async () => {
+    const contexts: ContextPack[] = [];
+    const runtime = new MotebitRuntime(
+      { motebitId: "owner-mote", tickRateHz: 0, mcpServers: cfg },
+      {
+        storage: createInMemoryStorage(),
+        renderer: new NullRenderer(),
+        ai: recordingProvider(contexts),
+      },
+    );
+    const mcpRegistry = plainRegistry();
+    await connectMcpServers(cfg as never, mcpRegistry as never);
+    runtime.registerExternalTools("mcp:config", mcpRegistry as unknown as ToolRegistry);
+    await runtime.init();
+    await expectForeignCannotReach(runtime, contexts, "mail__read_inbox");
+  });
+
+  it("the old CLI pre-merge order (merge into the runtime registry → init) still ends localOnly — the runtime path overwrites it", async () => {
+    const contexts: ContextPack[] = [];
+    const runtime = new MotebitRuntime(
+      { motebitId: "owner-mote", tickRateHz: 0, mcpServers: cfg },
+      {
+        storage: createInMemoryStorage(),
+        renderer: new NullRenderer(),
+        ai: recordingProvider(contexts),
+      },
+    );
+    const mcpRegistry = plainRegistry();
+    await connectMcpServers(cfg as never, mcpRegistry as never);
+    runtime.getToolRegistry().merge(mcpRegistry as unknown as ToolRegistry);
+    expect(runtime.getToolRegistry().get("mail__read_inbox")?.localOnly).not.toBe(true);
+    await runtime.init();
+    await expectForeignCannotReach(runtime, contexts, "mail__read_inbox");
   });
 });

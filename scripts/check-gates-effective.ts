@@ -2511,6 +2511,18 @@ export async function probeFetch(): Promise<unknown> {
       ),
   },
   {
+    script: "check-memory-source-canonical",
+    proves:
+      "flags a surface merging owner-connected MCP tools straight into the runtime's tool registry (#943 round 5) — scan (g)(vii): the CLI REPL connected `mcp_servers` into its own registry and merged it into the runtime registry, so the tools were never `localOnly` and a foreign turn / attached `motebit serve` reached them. Probe reintroduces that pre-merge in apps/cli/src/index.ts; the gate must surface the runtime-registry-merge violation. byte-identical restoration on cleanup via mutateFile.",
+    perturb: () =>
+      mutateFile(`apps/cli/src/index.ts`, (src) =>
+        src.replace(
+          'runtime.registerExternalTools("mcp:config", mcpRegistry);',
+          "runtime.getToolRegistry().merge(mcpRegistry);",
+        ),
+      ),
+  },
+  {
     script: "check-agent-revocation-reason-canonical",
     proves:
       'flags the AgentRevocationReason three-way lock breaking — a value rotated in `ALL_AGENT_REVOCATION_REASONS` without updating the union (or gate reference). Drift class: same shape as the SettlementMode probe — union AND array share one file (`packages/protocol/src/agent-revocation.ts`), so the probe targets the comma-bearing array entry (`"spam",`) which matches only the array (the union form uses ` | `). Gate must surface the sibling-alignment violation (union has `spam` but ALL_AGENT_REVOCATION_REASONS contains `spamm` instead). byte-identical restoration on cleanup via mutateFile.',

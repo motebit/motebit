@@ -44,6 +44,7 @@ import {
   buildToolRegistry,
   createRuntime,
   openMotebitDatabase,
+  InMemoryToolRegistry,
 } from "./runtime-factory.js";
 import { createRunLedgerReader } from "./run-ledger-reader.js";
 import { consumeStream } from "./stream.js";
@@ -894,11 +895,18 @@ async function main(): Promise<void> {
 
   // Connect MCP servers
   let mcpAdapters: Awaited<ReturnType<typeof connectMcpServers>> = [];
+  let mcpToolCount = 0;
   if (mcpServers.length > 0) {
     try {
-      mcpAdapters = await connectMcpServers(mcpServers, toolRegistry);
-      // Re-wire loop deps since registry grew
-      runtime.getToolRegistry().merge(toolRegistry);
+      // #943: connect into a registry of their OWN and hand it to the runtime
+      // as owner-connected tools — `registerExternalTools` forces `localOnly`,
+      // so a foreign turn is never offered them and `motebit serve` (attached
+      // to this coordinator) never serves them. Never merge them straight
+      // into the runtime registry.
+      const mcpRegistry = new InMemoryToolRegistry();
+      mcpAdapters = await connectMcpServers(mcpServers, mcpRegistry);
+      runtime.registerExternalTools("mcp:config", mcpRegistry);
+      mcpToolCount = mcpRegistry.size;
       console.log(`MCP: connected to ${mcpAdapters.length} server(s)`);
 
       // Persist newly pinned motebit public keys
@@ -1070,7 +1078,7 @@ async function main(): Promise<void> {
     void shutdown().then(() => process.exit(0));
   });
 
-  const toolCount = toolRegistry.size;
+  const toolCount = toolRegistry.size + mcpToolCount;
   const goalCount = moteDb.goalStore.list(motebitId).filter((g) => g.status === "active").length;
   console.log();
   printBanner({

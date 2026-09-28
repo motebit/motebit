@@ -3581,7 +3581,7 @@ describe("delegate_to_agent receipt beat (#493)", () => {
     const composed: Array<{ task_id: string }> = [];
     await collectChunks(
       runtime.sendMessageStreaming("hire", undefined, {
-        onDelegationReceipts: (receipts) => composed.push(...receipts),
+        onDelegationReceipts: (entries) => composed.push(...entries.map((e) => e.receipt)),
       }),
     );
     expect(composed).toHaveLength(1);

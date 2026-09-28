@@ -54,7 +54,9 @@ export interface AgentTaskHandlerDeps {
        * there is no shared bucket to drain, so the owner's hires cannot be
        * signed into a customer's receipt.
        */
-      onDelegationReceipts?: (receipts: ExecutionReceipt[]) => void;
+      onDelegationReceipts?: (
+        receipts: Array<{ receipt: ExecutionReceipt; trustCredited: boolean }>,
+      ) => void;
     },
   ): AsyncGenerator<StreamChunk>;
 
@@ -107,7 +109,7 @@ export async function* handleAgentTask(
 
   // #943: the receipts of the hires THIS task's turn made — delivered by the
   // turn itself when it ends, never drained from a shared bucket.
-  const delegationReceipts: ExecutionReceipt[] = [];
+  const delegationEntries: Array<{ receipt: ExecutionReceipt; trustCredited: boolean }> = [];
 
   try {
     // The prompt is another principal's (a customer's, a caller's), so the
@@ -117,8 +119,8 @@ export async function* handleAgentTask(
     const stream = deps.sendMessageStreaming(task.prompt, undefined, {
       delegationScope: options?.delegatedScope,
       foreignPrincipal: true,
-      onDelegationReceipts: (receipts) => {
-        delegationReceipts.push(...receipts);
+      onDelegationReceipts: (entries) => {
+        delegationEntries.push(...entries);
       },
     });
 
@@ -185,13 +187,13 @@ export async function* handleAgentTask(
       (responseText ? ` Model note: ${responseText}` : "");
   }
 
+  const delegationReceipts = delegationEntries.map((e) => e.receipt);
+
   // Credit the hires this task's turn made: trust, chain trust, graph
   // edges, latency (best-effort). The owner's own hires get the same credit
   // at owner-record intake (#943) — never through a task.
-  await absorbDelegationReceipts(
-    deps,
-    delegationReceipts.map((receipt) => ({ receipt, trustCredited: false })),
-  );
+  // The flag survives from where each hire was made: one credit per hire.
+  await absorbDelegationReceipts(deps, delegationEntries);
 
   // Hash prompt and result
   const promptHash = await hash(new TextEncoder().encode(task.prompt));
@@ -322,6 +324,15 @@ export async function absorbDelegationReceipts(
     | "bumpTrustFromReceipt"
   >,
   entries: Array<{ receipt: ExecutionReceipt; trustCredited: boolean }>,
+  opts: {
+    /**
+     * Credit trust only for a receipt whose signature VERIFIES — under the
+     * delegatee's stored key, or else its embedded `public_key` (#943 round
+     * 5, the owner record's intake). Without it, a receipt with no stored
+     * key keeps the old first-contact credit (the task path, unchanged).
+     */
+    requireVerifiable?: boolean;
+  } = {},
 ): Promise<void> {
   // Bump trust from verified delegation receipts (best-effort)
   const delegationReceipts = entries.map((e) => e.receipt);
@@ -359,6 +370,17 @@ export async function absorbDelegationReceipts(
           const pubKey = fromHex(trustRecord.public_key);
           const verified = await verifyExecutionReceipt(dr, pubKey);
           await deps.bumpTrustFromReceipt(dr, verified);
+        } else if (opts.requireVerifiable === true) {
+          // No stored key: credit only a receipt that verifies under its
+          // own embedded key; a shape-checked receipt earns nothing.
+          const embedded = typeof dr.public_key === "string" ? dr.public_key : "";
+          const verified =
+            /^[0-9a-f]{64}$/i.test(embedded) &&
+            (await verifyExecutionReceipt(
+              dr,
+              Uint8Array.from(embedded.match(/../g)!.map((h) => parseInt(h, 16))),
+            ));
+          if (verified) await deps.bumpTrustFromReceipt(dr, true);
         } else {
           // No stored key — record as unverified first contact
           await deps.bumpTrustFromReceipt(dr, true);

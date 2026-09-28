@@ -727,6 +727,7 @@ function main(): void {
     "firstConversation",
     "activationPrompt",
     "selectedSkills",
+    "previousCues",
   ];
   if (
     !/satisfies Record<keyof TurnOptions, "owner_interior" \| "projected" \| "turn_own">/.test(
@@ -748,6 +749,39 @@ function main(): void {
   if (!/^\s*sessionState: "projected",/m.test(ftSrc)) {
     interiorViolations.push(
       `${FOREIGN_TURN}: \`sessionState\` must be classified \`"projected"\` — the owner's [Now] facets are projected away on a foreign turn`,
+    );
+  }
+  // (ii-b) the PACK floor (#943 round 5): `CONTEXT_PACK_FOREIGN_CLASS`
+  // classifies every `ContextPack` field (a new context source is a compile
+  // error until classified), the owner's live state vector is projected and
+  // the body cues are owner-interior, and every pack the loop hands the
+  // provider passes `packFor(…)`.
+  if (
+    !/satisfies Record<keyof ContextPack, "owner_interior" \| "projected" \| "turn_own">/.test(
+      ftSrc,
+    ) ||
+    !/^\s*current_state: "projected",/m.test(ftSrc) ||
+    !/^\s*behavior_cues: "owner_interior",/m.test(ftSrc) ||
+    !/floored\.current_state = neutralState\(\);/.test(ftSrc)
+  ) {
+    interiorViolations.push(
+      `${FOREIGN_TURN}: \`CONTEXT_PACK_FOREIGN_CLASS\` must \`satisfies Record<keyof ContextPack, …>\`, project \`current_state\` (neutral) and class \`behavior_cues\` owner-interior — the owner's live state and body cues are never another principal's`,
+    );
+  }
+  let providerCalls = 0;
+  for (const line of loopSrc.split("\n")) {
+    if (/^\s*(\*|\/\/|\/\*)/.test(line)) continue;
+    if (!/\bprovider\.(generateStream|generate)\(/.test(line)) continue;
+    providerCalls++;
+    if (!/provider\.(generateStream|generate)\(packFor\(/.test(line)) {
+      interiorViolations.push(
+        `${LOOP}: a provider call that does not pass its pack through \`packFor(…)\` — a foreign turn's pack must be floored: ${line.trim()}`,
+      );
+    }
+  }
+  if (providerCalls < 2) {
+    interiorViolations.push(
+      `${LOOP}: expected the two provider calls (the turn, the empty-text nudge) — found ${providerCalls}; the scan pattern may have drifted`,
     );
   }
   const fssBody = bodyOf(ftSrc, "export function foreignSessionState(", "\n}\n");
@@ -1185,13 +1219,51 @@ function main(): void {
   const rocBody = bodyOf(runtimeSrc, "private registerOwnerConnectedTool(", "\n  }\n");
   const retBody = bodyOf(runtimeSrc, "registerExternalTools(sourceId: string", "\n  }\n");
   if (
-    !/this\.toolRegistry\.register\(\{ \.\.\.def, localOnly: true \}, handler\)/.test(rocBody) ||
+    !/this\.toolRegistry\.replace\(\{ \.\.\.def, localOnly: true \}, handler\)/.test(rocBody) ||
+    !/has: \(name: string\) => discovered\.has\(name\),/.test(runtimeSrc) ||
     !/this\.registerOwnerConnectedTool\(def,/.test(retBody) ||
     /connectMcpServers\(this\.mcpConfigs, this\.toolRegistry/.test(runtimeSrc)
   ) {
     receiptViolations.push(
       "packages/runtime/src/motebit-runtime.ts: owner-connected tools (`registerExternalTools`, the `mcpServers` path) must register through `registerOwnerConnectedTool`, which forces `localOnly: true` — never straight into the registry",
     );
+  }
+  // (vii) surfaces: an owner-connected MCP tool reaches a runtime ONLY
+  // through `registerExternalTools` (#943 round 5 — the CLI REPL connected
+  // `mcp_servers` into its own registry and MERGED it straight into the
+  // runtime registry, so the tools were never `localOnly`). In
+  // apps/*/src and packages/*/src (outside mcp-client and runtime): no
+  // `.getToolRegistry().merge(`, and a file that connects MCP servers
+  // (`connectMcpServers(` / `.registerInto(` / `new McpClientAdapter(`) hands the result to
+  // `registerExternalTools(`.
+  let mcpWiringFiles = 0;
+  for (const srcRoot of receiptSrcRoots) {
+    if (!/^(apps|packages)\//.test(srcRoot)) continue;
+    if (srcRoot === "packages/mcp-client/src" || srcRoot === "packages/runtime/src") continue;
+    for (const rel of walkTsFiles(srcRoot)) {
+      if (rel.includes("__tests__")) continue;
+      const code = codeOf(readFile(rel) ?? "");
+      if (/\.getToolRegistry\(\)\.merge\(/.test(code)) {
+        receiptViolations.push(
+          `${rel}: merges a registry straight into the runtime's tool registry — owner-connected tools must go through \`runtime.registerExternalTools(…)\` (which forces \`localOnly\`)`,
+        );
+      }
+      if (
+        /(?<!typeof )\bconnectMcpServers\(|\.registerInto\(|\bnew McpClientAdapter\(/.test(code)
+      ) {
+        mcpWiringFiles++;
+        if (/\.getToolRegistry\(\)\.(register|replace)\(/.test(code)) {
+          receiptViolations.push(
+            `${rel}: connects MCP servers AND registers straight into the runtime's tool registry — owner-connected tools reach a runtime only through \`registerExternalTools(…)\``,
+          );
+        }
+        if (!/registerExternalTools\(/.test(code)) {
+          receiptViolations.push(
+            `${rel}: connects MCP servers but never hands the tools to \`registerExternalTools(…)\` — an owner-connected tool must be registered \`localOnly\``,
+          );
+        }
+      }
+    }
   }
   if (takeSites !== 1) {
     receiptViolations.push(
@@ -1212,7 +1284,7 @@ function main(): void {
   }
 
   console.log(
-    `✓ check-memory-source-canonical: ${MEMORY_SOURCES_REFERENCE.length} memory source(s) locked across union + ALL_MEMORY_SOURCES + gate reference; wire-format-compliant; model/peer authorship scans clean; foreign-turn provenance locked (resolver + ${aiCoreFilesScanned} other ai-core file(s) scanned, 7 wiring links checked); foreign-turn history floor locked (${runtimeFilesScanned} other runtime file(s) scanned for conversation-store writes, ${guardedMethods} ConversationManager writer(s) + ${guardedReaders} reader(s) guarded, ${consentSites} consent site(s) guarded, 4 wiring links checked); foreign-turn serving floor locked (${interiorAiCoreFiles} ai-core file(s) scanned, ${ownerStoreReads} owner-store read(s) all inside recallOwnerInterior; ${runtimeInteriorFiles} runtime file(s) scanned, ${builderCalls} owner-block builder call(s) all inside ownerInteriorForTurn; ${ownerKeysClassified}/${DECIDED_OWNER_INTERIOR.length} decided owner-interior option(s) classified, recall backend floored); owner-only memory serving locked (${mcpFilesScanned} mcp-server file(s), ${registrationsScanned} tool/resource registration(s) scanned, ${memoryReadRegistrations} memory-read registration(s) all owner-checked; ${depFilesScanned} package/app/service src file(s) scanned, ${memoryDepDefs} memory-read dep(s) all asserting the owner; memory_recall frame owner-gated, HTTP never the owner); task receipts attributed at capture (${receiptFilesScanned} package/app/service src file(s) scanned: no shared receipt bucket; ${takeSites} carried-receipt take site (the tool registry, caller's destination); ${drainOwnerSites} owner-record read(s) + ${ownerDrainApiSites} owner-drain call(s), all the owner-only accessor; turn key threaded; handler sink-only; tap = owner act; owner-connected tools localOnly).`,
+    `✓ check-memory-source-canonical: ${MEMORY_SOURCES_REFERENCE.length} memory source(s) locked across union + ALL_MEMORY_SOURCES + gate reference; wire-format-compliant; model/peer authorship scans clean; foreign-turn provenance locked (resolver + ${aiCoreFilesScanned} other ai-core file(s) scanned, 7 wiring links checked); foreign-turn history floor locked (${runtimeFilesScanned} other runtime file(s) scanned for conversation-store writes, ${guardedMethods} ConversationManager writer(s) + ${guardedReaders} reader(s) guarded, ${consentSites} consent site(s) guarded, 4 wiring links checked); foreign-turn serving floor locked (${interiorAiCoreFiles} ai-core file(s) scanned, ${ownerStoreReads} owner-store read(s) all inside recallOwnerInterior; ${runtimeInteriorFiles} runtime file(s) scanned, ${builderCalls} owner-block builder call(s) all inside ownerInteriorForTurn; ${ownerKeysClassified}/${DECIDED_OWNER_INTERIOR.length} decided owner-interior option(s) classified, recall backend floored); owner-only memory serving locked (${mcpFilesScanned} mcp-server file(s), ${registrationsScanned} tool/resource registration(s) scanned, ${memoryReadRegistrations} memory-read registration(s) all owner-checked; ${depFilesScanned} package/app/service src file(s) scanned, ${memoryDepDefs} memory-read dep(s) all asserting the owner; memory_recall frame owner-gated, HTTP never the owner); task receipts attributed at capture (${receiptFilesScanned} package/app/service src file(s) scanned: no shared receipt bucket; ${takeSites} carried-receipt take site (the tool registry, caller's destination); ${drainOwnerSites} owner-record read(s) + ${ownerDrainApiSites} owner-drain call(s), all the owner-only accessor; turn key threaded; handler sink-only; tap = owner act; owner-connected tools localOnly; ${mcpWiringFiles} surface MCP-wiring file(s) all through registerExternalTools, no runtime-registry merge).`,
   );
 }
 

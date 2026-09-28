@@ -34,7 +34,7 @@ import type {
   ToolDefinition,
 } from "@motebit/sdk";
 import { AgentTaskStatus, RiskLevel, asMotebitId } from "@motebit/sdk";
-import { generateKeypair } from "@motebit/encryption";
+import { generateKeypair, signExecutionReceipt } from "@motebit/encryption";
 
 const OWNER = "owner-mote";
 const OWNER_SECRET = "OWNERSECRET943-hire-result";
@@ -223,7 +223,15 @@ describe("#943 — a task's receipt embeds only its own turn's hires", () => {
 
   it("an owner hire still earns its trust credit — attributed to the owner, at owner-record intake", async () => {
     const { runtime, storage, queued } = setup();
-    queued.push(workerReceipt("owner-tap-2", "fine", "worker-credit"));
+    // A receipt that VERIFIES under its embedded key (round 5: owner intake
+    // credits only a verifiable signature).
+    const kp = await generateKeypair();
+    const {
+      signature: _unsigned,
+      public_key: _pk,
+      ...body
+    } = workerReceipt("owner-tap-2", "fine", "worker-credit");
+    queued.push(await signExecutionReceipt(body, kp.privateKey, kp.publicKey));
     await runtime.invokeLocalTool("worker__motebit_task", {});
     await settle();
     const rec = await storage.agentTrustStore!.getAgentTrust(
@@ -232,5 +240,47 @@ describe("#943 — a task's receipt embeds only its own turn's hires", () => {
     );
     expect(rec).not.toBeNull();
     expect(rec?.interaction_count ?? 0).toBeGreaterThan(0);
+  });
+
+  it("owner intake credits nothing for a shape-checked receipt that does not verify", async () => {
+    const { runtime, storage, queued } = setup();
+    queued.push(workerReceipt("owner-tap-3", "fine", "worker-unsigned"));
+    await runtime.invokeLocalTool("worker__motebit_task", {});
+    await settle();
+    const rec = await storage.agentTrustStore!.getAgentTrust(
+      asMotebitId(OWNER),
+      asMotebitId("worker-unsigned"),
+    );
+    expect(rec).toBeNull();
+  });
+
+  it("a hire already credited where it was made is credited ONCE in a task turn (the flag survives the sink)", async () => {
+    const { runtime } = setup();
+    const bump = vi.spyOn(
+      runtime as unknown as {
+        bumpTrustFromReceipt: (r: ExecutionReceipt, v: boolean) => Promise<void>;
+      },
+      "bumpTrustFromReceipt",
+    );
+    // Like `delegate_to_agent`: credit at creation, then return the receipt
+    // carried with `delegation_receipt_trust_credited: true`.
+    runtime.getToolRegistry().register(tool("credited_hire"), async () => {
+      const r = workerReceipt("task-credited-1", "sub-result", "worker-once");
+      await (
+        runtime as unknown as {
+          bumpTrustFromReceipt: (r: ExecutionReceipt, v: boolean) => Promise<void>;
+        }
+      ).bumpTrustFromReceipt(r, true);
+      return {
+        ok: true,
+        data: "hired",
+        delegation_receipt: r,
+        delegation_receipt_trust_credited: true,
+      };
+    });
+    const receipt = await startTask(runtime, "CALL:credited_hire");
+    expect((receipt.delegation_receipts ?? []).map((d) => d.task_id)).toEqual(["task-credited-1"]);
+    const forWorker = bump.mock.calls.filter(([r]) => r.motebit_id === "worker-once");
+    expect(forWorker).toHaveLength(1);
   });
 });
