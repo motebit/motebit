@@ -551,8 +551,9 @@ export interface MotebitLoopDependencies {
    * This turn runs ANOTHER principal's words — a customer's `motebit_task`
    * or a caller's `motebit_query` — not the owner's (#893). Every memory
    * the turn forms is stamped `peer_agent` (`turnMemorySource`), never
-   * `user_stated` or `tool_derived`, so a stranger's words can never
-   * surface in the owner's recall as `[from:user]`.
+   * `user_stated` or `tool_derived`, so a memory formed in this turn
+   * never surfaces in the owner's recall as `[from:user]`. (Scope: this
+   * turn's formation only — history and consolidation paths are #904/#905.)
    *
    * A per-TURN value, not a getter: the runtime builds the turn's deps
    * with it (`MotebitRuntime.loopDepsForTurn`), so formation reads the
@@ -1999,8 +2000,8 @@ export async function* runTurnStreaming(
   // model (docs/doctrine/memory-provenance.md; the <memory> tag carries
   // no source attribute by design). `turnMemorySource` is the one
   // resolver: a turn running another principal's words forms peer_agent
-  // (#893 — a customer's motebit_task must never surface in the owner's
-  // recall as [from:user]); an owner turn whose tools succeeded forms
+  // (#893 — a memory formed from a customer's motebit_task must never
+  // surface in the owner's recall as [from:user]); an owner turn whose tools succeeded forms
   // tool_derived (the same signal caps tool-turn confidence above); a pure
   // owner conversational turn forms user_stated. The foreign fact arrives
   // on THIS turn's deps, set by the runtime per turn.

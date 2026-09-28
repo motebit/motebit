@@ -29,7 +29,9 @@
  *   observation patterns (carries `DerivedFrom` edges to antecedents).
  * - `tool_derived` — formed in a turn whose content came through tool
  *   results (web pages, files, MCP tools) — an unverified external claim.
- * - `peer_agent` — written by a remote agent through the MCP server.
+ * - `peer_agent` — formed from another principal's words: written by a
+ *   remote agent through the MCP server, or formed in a turn that runs a
+ *   customer's `motebit_task` / a caller's `motebit_query` (#893).
  * - `consolidation_derived` — synthesized by the idle consolidation
  *   cycle from an episodic cluster (carries `PartOf` edges to members).
  */
