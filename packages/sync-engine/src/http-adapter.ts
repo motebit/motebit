@@ -54,8 +54,16 @@ export interface HttpAdapterConfig {
 const DEFAULT_REQUEST_TIMEOUT_MS = 20_000;
 /** The relay's largest seq page (services/relay/src/event-seq.ts `EVENT_SEQ_PAGE_MAX`). */
 const PULL_PAGE_MAX = 1000;
-/** The smallest page a timed-out pull is re-asked for. */
-const PULL_PAGE_FLOOR = 25;
+/** The smallest page a timed-out pull is re-asked for: one event, on every platform. */
+const PULL_PAGE_FLOOR = 1;
+/**
+ * How far a deadline may be stretched (#914 round 5). A bound that cannot
+ * observe progress — React Native's fetch resolves only when the whole
+ * response has arrived — must never make impossible what an unbounded
+ * request would finish: a one-event page (or a one-event push) that times
+ * out doubles its deadline, up to this factor, and resets on a success.
+ */
+const MAX_DEADLINE_FACTOR = 64;
 
 /** A request attempt abandoned at `requestTimeoutMs`. */
 class RequestTimeoutError extends Error {}
@@ -107,6 +115,10 @@ export class HttpEventStoreAdapter implements EventStoreAdapter, SeqPullSource {
   private bodyIdleTimeoutMs: number;
   /** The page size pulls ask for; halved after a timed-out pull, doubled back after a good one. */
   private pullLimit = PULL_PAGE_MAX;
+  /** The pull deadline's stretch (1 = `requestTimeoutMs`); doubles on each timeout at the floor. */
+  private pullDeadlineFactor = 1;
+  /** The push deadline's stretch; doubles on each timed-out push, resets on an acknowledged one. */
+  private pushDeadlineFactor = 1;
   /** Told of every sign of life on the wire (attempt, headers, body chunk) — the sync engine's watchdog. */
   private activityListeners = new Set<() => void>();
   /** What this transport may push — see `HttpAdapterConfig.payloads`. */
@@ -138,14 +150,21 @@ export class HttpEventStoreAdapter implements EventStoreAdapter, SeqPullSource {
     await this.acquirePushSlot();
     let failed: Error | null = null;
     try {
-      const res = await this.authedFetch(url, {
-        method: "POST",
-        body: JSON.stringify({ events: [entry] }),
-      });
+      const res = await this.authedFetch(
+        url,
+        { method: "POST", body: JSON.stringify({ events: [entry] }) },
+        this.pushDeadlineFactor,
+      );
       if (!res.ok) {
         throw new Error(`Push failed: ${res.status} ${res.statusText}`);
       }
+      this.pushDeadlineFactor = 1;
     } catch (err: unknown) {
+      // One event is the smallest push there is: a timeout stretches the
+      // next push's deadline, so a slow link still gets it through.
+      if (err instanceof RequestTimeoutError) {
+        this.pushDeadlineFactor = Math.min(MAX_DEADLINE_FACTOR, this.pushDeadlineFactor * 2);
+      }
       failed = err instanceof Error ? err : new Error(String(err));
       throw failed;
     } finally {
@@ -243,6 +262,7 @@ export class HttpEventStoreAdapter implements EventStoreAdapter, SeqPullSource {
     // (#914 round 3): on a slow link a whole 1000-event page may not start in
     // time, and asking for it again would fail the same way forever.
     let res: Response;
+    let stretched = false;
     for (;;) {
       const limit = this.pullLimit;
       const url =
@@ -250,15 +270,30 @@ export class HttpEventStoreAdapter implements EventStoreAdapter, SeqPullSource {
         `?after_seq=${afterSeq}&after_clock=${fallbackAfterClock}` +
         (limit < PULL_PAGE_MAX ? `&limit=${limit}` : "");
       try {
-        res = await this.authedFetch(url, { method: "GET" });
+        res = await this.authedFetch(url, { method: "GET" }, this.pullDeadlineFactor);
       } catch (err: unknown) {
         if (err instanceof RequestTimeoutError && limit > PULL_PAGE_FLOOR) {
           this.pullLimit = Math.max(PULL_PAGE_FLOOR, Math.floor(limit / 2));
           continue;
         }
+        // At one event there is nothing left to shrink: stretch the deadline
+        // instead (#914 round 5), so a one-event page always completes on a
+        // link that delivers it at all.
+        // One stretch per call, remembered across calls: a dead relay costs
+        // each pull one extra attempt, never an unbounded series.
+        if (err instanceof RequestTimeoutError && this.pullDeadlineFactor < MAX_DEADLINE_FACTOR) {
+          this.pullDeadlineFactor *= 2;
+          if (!stretched) {
+            stretched = true;
+            continue;
+          }
+        }
         throw err;
       }
-      if (res.ok) this.pullLimit = Math.min(PULL_PAGE_MAX, limit * 2);
+      if (res.ok) {
+        this.pullLimit = Math.min(PULL_PAGE_MAX, limit * 2);
+        this.pullDeadlineFactor = 1;
+      }
       break;
     }
     if (!res.ok) {
@@ -314,11 +349,23 @@ export class HttpEventStoreAdapter implements EventStoreAdapter, SeqPullSource {
    * swallowed here. A static `authToken` cannot be refreshed, so its refusal
    * is returned as is.
    */
-  private async authedFetch(url: string, init: Omit<RequestInit, "headers">): Promise<Response> {
-    const res = await this.fetchWithRetry(url, { ...init, headers: await this.boundedHeaders() });
+  private async authedFetch(
+    url: string,
+    init: Omit<RequestInit, "headers">,
+    deadlineFactor = 1,
+  ): Promise<Response> {
+    const res = await this.fetchWithRetry(
+      url,
+      { ...init, headers: await this.boundedHeaders() },
+      deadlineFactor,
+    );
     if ((res.status === 401 || res.status === 403) && this.credentialSource) {
       this.active();
-      return this.fetchWithRetry(url, { ...init, headers: await this.boundedHeaders() });
+      return this.fetchWithRetry(
+        url,
+        { ...init, headers: await this.boundedHeaders() },
+        deadlineFactor,
+      );
     }
     return res;
   }
@@ -330,7 +377,14 @@ export class HttpEventStoreAdapter implements EventStoreAdapter, SeqPullSource {
    * no byte comes for `bodyIdleTimeoutMs`. The abort signal ends a real
    * fetch; the race also ends one that ignores its signal.
    */
-  private async boundedFetch(url: string, init: RequestInit): Promise<Response> {
+  private async boundedFetch(
+    url: string,
+    init: RequestInit,
+    deadlineFactor = 1,
+  ): Promise<Response> {
+    // The bounds that cannot observe progress are stretched by the factor;
+    // the body idle bound observes every chunk and needs no stretch.
+    const deadline = this.requestTimeoutMs * deadlineFactor;
     const ctrl = new AbortController();
     let fire!: (err: Error) => void;
     const timedOut = new Promise<never>((_, reject) => (fire = reject));
@@ -347,7 +401,7 @@ export class HttpEventStoreAdapter implements EventStoreAdapter, SeqPullSource {
     let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
     try {
       this.active();
-      arm(this.requestTimeoutMs, `${new URL(url).pathname}: no response`);
+      arm(deadline, `${new URL(url).pathname}: no response`);
       const r = await Promise.race([fetch(url, { ...init, signal: ctrl.signal }), timedOut]);
       this.active();
       const nullBody = [101, 204, 205, 304].includes(r.status);
@@ -370,7 +424,7 @@ export class HttpEventStoreAdapter implements EventStoreAdapter, SeqPullSource {
         // Read as TEXT: whatwg-fetch's arrayBuffer() needs FileReader's
         // readAsArrayBuffer, which not every React Native build has; text()
         // is what its json() uses. Sync bodies are JSON.
-        arm(this.requestTimeoutMs, `${new URL(url).pathname}: body not read`);
+        arm(deadline, `${new URL(url).pathname}: body not read`);
         const text = await Promise.race([r.text(), timedOut]);
         this.active();
         return new Response(text, {
@@ -414,11 +468,15 @@ export class HttpEventStoreAdapter implements EventStoreAdapter, SeqPullSource {
    * Retries on network failures and 5xx/429/408 responses.
    * Non-retryable HTTP errors (4xx) return immediately.
    */
-  private async fetchWithRetry(url: string, init: RequestInit): Promise<Response> {
+  private async fetchWithRetry(
+    url: string,
+    init: RequestInit,
+    deadlineFactor = 1,
+  ): Promise<Response> {
     let lastError: Error | undefined;
     for (let attempt = 0; attempt <= this.maxRetries; attempt++) {
       try {
-        const res = await this.boundedFetch(url, init);
+        const res = await this.boundedFetch(url, init, deadlineFactor);
         if (res.ok || !isRetryable(res.status) || attempt === this.maxRetries) {
           return res;
         }

@@ -45,6 +45,8 @@ export type { CredentialRequest, CredentialSource } from "./credential-source.js
 export { HttpEventStoreAdapter } from "./http-adapter.js";
 export type { HttpAdapterConfig } from "./http-adapter.js";
 export { WebSocketEventStoreAdapter } from "./ws-adapter.js";
+export { liveAdapter } from "./live-adapter.js";
+export type { ActivityReporting } from "./live-adapter.js";
 export type {
   WebSocketAdapterConfig,
   EventReceivedCallback,

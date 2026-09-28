@@ -74,6 +74,14 @@ vi.mock("@motebit/sync-engine", () => {
     HttpEventStoreAdapter,
     WebSocketEventStoreAdapter,
     EncryptedEventStoreAdapter,
+    // The real forwarder's shape (#914): forwards to whichever adapter is current.
+    liveAdapter: (current: () => Record<string, (...a: unknown[]) => unknown>) => ({
+      append: (e: unknown) => current().append?.(e),
+      query: (f: unknown) => current().query?.(f),
+      getLatestClock: (id: unknown) => current().getLatestClock?.(id),
+      tombstone: (id: unknown, m: unknown) => current().tombstone?.(id, m),
+      onActivity: () => () => {},
+    }),
     EncryptedConversationSyncAdapter,
     EncryptedPlanSyncAdapter,
     decryptEventPayload,
