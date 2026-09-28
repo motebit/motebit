@@ -122,9 +122,9 @@ export function listDelegationRevocations(
 }
 
 /**
- * The acceptance fence's question (tasks.ts, checkpoint D4): has `delegatorId`
- * revoked `grantId`? A cached revocation counts only when its `delegator_id`
- * is the identity asking — the task's authenticated submitter (#850).
+ * The acceptance fence's question (tasks.ts, checkpoint D4): is `grantId`
+ * revoked for this task? When the task has a submitter, a cached revocation
+ * counts only when its `delegator_id` IS that submitter (#850).
  *
  * The relay holds no grants, so it cannot know a grant's delegator; `grant_id`
  * on the task wire is advisory, never authority. Matching on `grant_id` alone
@@ -136,16 +136,23 @@ export function listDelegationRevocations(
  * `verifyGrantForTurn` (`findGrantRevocation` over the full grant) remains the
  * authority — narrowing this fence can never grant anything.
  *
- * `delegatorId` null/empty (no authenticated submitter) ⇒ false: there is no
- * identity to bind a revocation to. There is deliberately no "every revoked
- * grant_id" reader.
+ * `delegatorId` null/empty — no submitter, which only the operator's master
+ * token without a `submitted_by` produces — fails CLOSED: any cached
+ * revocation of `grantId` fences the task (main's behaviour). Only the
+ * operator holds the master token, so this case gives an attacker no leverage.
  */
 export function isGrantRevokedBy(
   db: DatabaseDriver,
   grantId: string,
   delegatorId: string | null | undefined,
 ): boolean {
-  if (typeof delegatorId !== "string" || delegatorId === "") return false;
+  if (typeof delegatorId !== "string" || delegatorId === "") {
+    return (
+      db
+        .prepare("SELECT 1 FROM relay_delegation_revocations WHERE grant_id = ? LIMIT 1")
+        .get(grantId) != null
+    );
+  }
   return (
     db
       .prepare(

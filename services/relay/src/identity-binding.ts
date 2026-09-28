@@ -313,10 +313,18 @@ export async function bindByDelegationRevocation(
     ok = false;
   }
   if (!ok) return { refused: "delegation_revocation:signature_invalid" };
+  // Case-insensitive: a legacy device row may store UPPER(K) (#758 —
+  // device-registration-guard.ts admits it), and both spellings name the same
+  // 32 bytes the signature just verified under. Same rule as didKeyProvenFor.
+  const signer =
+    typeof revocation.delegator_public_key === "string"
+      ? revocation.delegator_public_key.toLowerCase()
+      : "";
   if (
     typeof revocation.delegator_id !== "string" ||
     revocation.delegator_id === "" ||
-    !keysHeldBy(db, revocation.delegator_id).has(revocation.delegator_public_key)
+    signer === "" ||
+    ![...keysHeldBy(db, revocation.delegator_id)].some((k) => k.toLowerCase() === signer)
   ) {
     return { refused: "delegation_revocation:key_not_held_by_delegator" };
   }

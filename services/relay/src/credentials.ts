@@ -11,6 +11,7 @@ import {
   issueReputationCredential,
   verifyVerifiableCredential,
   createPresentation,
+  canonicalJson,
 } from "@motebit/encryption";
 import type { VerifiableCredential } from "@motebit/encryption";
 import { asMotebitId, AgentTrustLevel } from "@motebit/sdk";
@@ -93,11 +94,18 @@ export function insertSubmittedCredential(
       "SELECT subject_motebit_id, credential_json FROM relay_credentials WHERE credential_id = ?",
     )
     .get(row.credentialId) as { subject_motebit_id: string; credential_json: string } | undefined;
-  return (
-    held !== undefined &&
-    held.subject_motebit_id === subject &&
-    held.credential_json === row.credentialJson
-  );
+  // The SAME credential re-submitted is idempotent even when its keys arrive
+  // in another order (spec §7.1 step 6): compare the JCS canonical forms, not
+  // the stored bytes.
+  if (held === undefined || held.subject_motebit_id !== subject) return false;
+  try {
+    return (
+      canonicalJson(JSON.parse(held.credential_json)) ===
+      canonicalJson(JSON.parse(row.credentialJson))
+    );
+  } catch {
+    return false;
+  }
 }
 
 /** Register all credential endpoints on the Hono app. */

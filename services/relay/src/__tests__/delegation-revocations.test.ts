@@ -169,9 +169,11 @@ describe("delegation-revocation cache", () => {
     expect(isGrantRevokedBy(db, "grant-3", alice.motebitId)).toBe(false);
     // Another identity's grant_id collision is not a revocation of its grant.
     expect(isGrantRevokedBy(db, "grant-1", bob.motebitId)).toBe(false);
-    // No submitter, no binding.
-    expect(isGrantRevokedBy(db, "grant-1", undefined)).toBe(false);
-    expect(isGrantRevokedBy(db, "grant-1", "")).toBe(false);
+    // No submitter (operator master token, no submitted_by): fail CLOSED —
+    // any cached revocation of the grant_id fences (main's behaviour).
+    expect(isGrantRevokedBy(db, "grant-1", undefined)).toBe(true);
+    expect(isGrantRevokedBy(db, "grant-1", "")).toBe(true);
+    expect(isGrantRevokedBy(db, "grant-3", undefined)).toBe(false);
   });
 });
 
@@ -212,6 +214,22 @@ describe("acceptance-time revocation fence (checkpoint D4)", () => {
       }),
     });
   }
+
+  it("no submitter (master token, no submitted_by) fails CLOSED: any cached revocation of the grant fences (403)", async () => {
+    const kp = await generateKeypair();
+    const worker = await createAgent(relay, bytesToHex(kp.publicKey));
+    const alice = { ...kp, motebitId: worker.motebitId };
+    await registerWorker(worker.motebitId);
+    expect((await post(relay, await makeRevocation(alice, "grant-nosub"))).status).toBe(200);
+
+    const res = await relay.app.request(`/agent/${worker.motebitId}/task`, {
+      method: "POST",
+      headers: jsonAuthWithIdempotency(),
+      body: JSON.stringify({ prompt: "do the daily research", grant_id: "grant-nosub" }),
+    });
+    expect(res.status).toBe(403);
+    expect(JSON.stringify(await res.json())).toContain("REVOKED");
+  });
 
   it("refuses a task declared under a REVOKED grant before any hold commits (403)", async () => {
     const kp = await generateKeypair();

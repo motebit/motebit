@@ -448,6 +448,18 @@ describe("credentials/submit files a credential only under the identity it is ab
     expect(out.errors).toContain("self-issued credential rejected");
   });
 
+  it("the SAME credential re-submitted with its keys reordered is idempotent (accepted), not a conflict", async () => {
+    const issuer = await identity();
+    const subject = await identity();
+    const vc = await credential(issuer, subject.did);
+    expect(await submit(subject.mid, [vc])).toEqual({ accepted: 1, rejected: 0 });
+    const reordered = Object.fromEntries(
+      Object.entries(vc as unknown as Record<string, unknown>).reverse(),
+    ) as unknown as VerifiableCredential;
+    expect(JSON.stringify(reordered)).not.toBe(JSON.stringify(vc));
+    expect(await submit(subject.mid, [reordered])).toEqual({ accepted: 1, rejected: 0 });
+  });
+
   it("a different credential under an id already held is refused, not reported accepted", async () => {
     const issuer = await identity();
     const subject = await identity();
@@ -611,6 +623,19 @@ describe("a delegation revocation binds to a key the relay holds for its delegat
       /not the bound delegator/,
     );
     expect(cached("grant-b")).toBe(false);
+  });
+
+  it("a legacy delegator whose device row stores its key UPPER-case revokes its grant, and the fence refuses its task", async () => {
+    const legacy = await identity(`legacy-${crypto.randomUUID()}`);
+    // #758: device-registration-guard admits a legacy UPPER(K) spelling.
+    relay.moteDb.db
+      .prepare("UPDATE devices SET public_key = UPPER(public_key) WHERE motebit_id = ?")
+      .run(legacy.mid);
+    const grantId = `grant-${crypto.randomUUID()}`;
+    expect((await postRevocation(await revocation(legacy.mid, legacy.kp, grantId))).status).toBe(
+      200,
+    );
+    expect((await submitTaskUnderGrant(legacy, grantId)).status).toBe(403);
   });
 
   it("a tampered revocation is still 422 (not a signed statement)", async () => {
