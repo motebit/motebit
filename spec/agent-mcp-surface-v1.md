@@ -1,7 +1,7 @@
 # motebit/agent-mcp-surface@1.0
 
 **Status:** Draft
-**Version:** 1.1
+**Version:** 1.3
 **Date:** 2026-09-12
 
 ---
@@ -97,7 +97,7 @@ The eight tool names every conforming motebit MCP server uses for the named role
 - `motebit_credentials` — return a signed `VerifiablePresentation` (`credential-v1.md` §2.2) carrying gradient/reputation credentials.
 - `motebit_query` — A2A free-form chat. Input: `{ message: string }`. Output: `{ response: string, memories_formed: number }`.
 - `motebit_remember` — A2A memory write at a permitted sensitivity. Input: §5.2. Output: `{ node_id: string }`.
-- `motebit_recall` — A2A semantic memory search. Input: `{ query: string, limit?: number }`. Output: array of memory hits with `{ content, confidence, similarity, half_life_days?, memory_type?, created_at? }`.
+- `motebit_recall` — semantic search over the motebit's own memories, served to its **owner principal only** (§6). Input: `{ query: string, limit?: number }`. Output: array of memory hits with `{ content, confidence, similarity, half_life_days?, memory_type?, created_at? }`.
 
 ### 5.1 — `motebit_task` input
 
@@ -148,7 +148,7 @@ MotebitRememberInput {
 
 ## 6. Sensitivity
 
-The agent-MCP surface enforces the same emitter/forwarder/storage sensitivity model as the rest of the protocol. The only surface-specific rule is §3.5: external write rejection at sensitivity ≥ `personal`. Reads (`motebit_recall`) follow the runtime's policy gate, which by default returns memories at `none` and `personal` and excludes `medical | financial | secret`.
+The agent-MCP surface enforces the same emitter/forwarder/storage sensitivity model as the rest of the protocol. The only surface-specific rule is §3.5: external write rejection at sensitivity ≥ `personal`. Reads (`motebit_recall`, and any resource that exposes memories) MUST be served only to the motebit's **owner principal** — a caller the server has verified as the motebit's own identity (e.g. a local stdio session the owner launched, or a request authenticated by a token signed under the motebit's own key). Any other caller — another motebit, the relay, a static or shared bearer, an unauthenticated request — MUST be refused with no memory content. For the owner, reads follow the runtime's policy gate (by default `none` and `personal`; `medical | financial | secret` excluded). A foreign-principal turn (`motebit_query`, `motebit_task`) likewise receives none of the owner's memories or private context.
 
 ---
 
@@ -186,6 +186,7 @@ A motebit is conformant with `motebit/agent-mcp-surface@1.0` if all of:
 
 ## Change Log
 
+- **1.3 (2026-09-28)** — Normative tightening (#943): `motebit_recall` and memory resources are served to the motebit's owner principal only; every other caller is refused with no memory content. A foreign-principal turn receives none of the owner's memories or private context. Wire format unchanged; a caller that is not the owner now receives a refusal instead of memories.
 - **1.2 (2026-09-13)** — Clarifying: the §5.1 single-use rule is "one COMPLETED execution per admitted `sub`, at most one in flight" — a receiptless run may be re-presented under the same admission so an honest retry is not stranded for the token's TTL. Wire format unchanged.
 - **1.1 (2026-09-12)** — Additive: optional `dispatch_token` on `motebit_task` (§5.1) — the relay-signed `task:dispatch` admission artifact, REQUIRED by workers configured for task admission (priced relay-registered services), ignored by others. Backward-compatible: an older worker's zod shape strips the unknown field; an older relay simply omits it. Doctrine: `docs/doctrine/task-admission.md`.
 - **1.0 (2026-04-24)** — Initial draft. Pins the eight canonical agent-MCP surface tool names and their input schemas. Introduces profile-based conformance via `motebitType`.
