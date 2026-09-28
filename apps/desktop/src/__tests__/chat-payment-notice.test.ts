@@ -20,10 +20,17 @@ function mountChatDom(): void {
 
 let chat: typeof import("../ui/chat");
 
+// A cold import of the whole desktop chat module (and its runtime graph)
+// under v8 coverage instrumentation took >10s on a loaded CI runner
+// (main, 2026-09-28: "Hook timed out in 10000ms" while the suite's total
+// import time was 64s). The import is the known-heavy setup, not a hang —
+// give the hook an explicit budget rather than the global 10s default.
+const COLD_CHAT_IMPORT_BUDGET_MS = 60_000;
+
 beforeAll(async () => {
   mountChatDom();
   chat = await import("../ui/chat");
-});
+}, COLD_CHAT_IMPORT_BUDGET_MS);
 
 const NOTICE = {
   type: "payment_notice",

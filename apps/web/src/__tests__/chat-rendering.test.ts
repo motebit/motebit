@@ -71,13 +71,18 @@ let formatErrorMessage: (msg: string) => string;
 let buildAccrualAttributionEl: (basis: AccrualBasis) => { className: string; textContent: string };
 let StreamingRenderer: typeof import("../ui/chat").StreamingRenderer;
 
+// Cold import of the whole chat module under coverage instrumentation can
+// exceed the 10s hook default on a loaded CI runner (the desktop sibling
+// timed out on main, 2026-09-28) — an explicit budget, not a hang.
+const COLD_CHAT_IMPORT_BUDGET_MS = 60_000;
+
 beforeAll(async () => {
   const mod = await import("../ui/chat");
   renderMarkdown = mod.renderMarkdown;
   formatErrorMessage = mod.formatErrorMessage;
   buildAccrualAttributionEl = mod.buildAccrualAttributionEl as typeof buildAccrualAttributionEl;
   StreamingRenderer = mod.StreamingRenderer;
-});
+}, COLD_CHAT_IMPORT_BUDGET_MS);
 
 // ─── buildAccrualAttributionEl — the calm leverage-moment render (Inc 3) ───
 
