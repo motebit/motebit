@@ -86,6 +86,15 @@ export class SimRelay {
   private ids = new Set<string>();
   private rate = new Map<string, number[]>();
   rateRefusals = 0;
+  /**
+   * The relay fault model (#914 round 8). `echoes`: whether acks echo
+   * `push_id` (false = a relay older than round 7). `dropFrame(n)`: the n-th
+   * socket push frame this relay receives (1-based) is silently discarded —
+   * not stored, never answered.
+   */
+  echoes = true;
+  dropFrame: ((n: number) => boolean) | null = null;
+  pushFramesSeen = 0;
 
   constructor(
     readonly mid: string,
@@ -225,6 +234,38 @@ export class SimNet {
     readonly cfg: NetConfig,
   ) {}
 
+  /** Further relays on this network, by URL host (a relay switch, #914 round 8). */
+  readonly hosts = new Map<string, SimRelay>();
+
+  /** The relay a URL reaches: by host, else the network's own. */
+  relayFor(url: string): SimRelay {
+    return this.hosts.get(new URL(url).host) ?? this.relay;
+  }
+
+  /** A relay restart: every open socket closed by the server (the client sees a close). */
+  restart(): void {
+    for (const sock of this.sockets) sock.serverClose();
+  }
+
+  /** Every `ms`, a sibling's event is fanned out to every open socket (inbound traffic). */
+  inboundEvery(ms: number): () => void {
+    let k = 0;
+    const t = setInterval(() => {
+      const e = {
+        event_id: `inbound-${++k}`,
+        motebit_id: this.relay.mid,
+        device_id: "sibling",
+        timestamp: Date.now(),
+        event_type: "state_updated",
+        payload: {},
+        version_clock: 0,
+        tombstoned: false,
+      };
+      for (const sock of this.sockets) sock.inbound({ type: "event", event: e });
+    }, ms);
+    return () => clearInterval(t);
+  }
+
   /** A WebSocket class bound to this network (install as globalThis.WebSocket). */
   socketClass(): typeof WebSocket {
     // eslint-disable-next-line @typescript-eslint/no-this-alias -- the class closes over its network
@@ -243,6 +284,7 @@ export class SimNet {
     const signal = init?.signal ?? undefined;
     const path = url.pathname;
     const tag = `${path.split("/").pop()}${url.search}`;
+    const relay = this.relayFor(String(input));
     trace(`fetch ${tag} start`);
     return new Promise<Response>((resolve, reject) => {
       const abortError = (): Error => new DOMException("aborted", "AbortError");
@@ -284,10 +326,10 @@ export class SimNet {
         const events = (JSON.parse(init.body as string) as { events: EventLogEntry[] }).events;
         pending.push(
           this.up.send(this.cfg.upMs * events.length, () => {
-            this.relay.store(events);
-            later(this.relay.latencyMs, () => {
+            relay.store(events);
+            later(relay.latencyMs, () => {
               pushDone();
-              resolve(NativeResponse.json({ motebit_id: this.relay.mid, accepted: events.length }));
+              resolve(NativeResponse.json({ motebit_id: relay.mid, accepted: events.length }));
             });
           }),
         );
@@ -296,11 +338,11 @@ export class SimNet {
       if (path.endsWith("/clock")) {
         pending.push(
           this.up.send(0, () =>
-            later(this.relay.latencyMs, () =>
+            later(relay.latencyMs, () =>
               resolve(
                 NativeResponse.json({
-                  motebit_id: this.relay.mid,
-                  latest_clock: this.relay.latestClock(),
+                  motebit_id: relay.mid,
+                  latest_clock: relay.latestClock(),
                 }),
               ),
             ),
@@ -313,8 +355,8 @@ export class SimNet {
         const limit = Number(url.searchParams.get("limit") ?? "1000");
         pending.push(
           this.up.send(0, () =>
-            later(this.relay.latencyMs, () => {
-              const { events, body } = this.relay.page(afterSeq, limit);
+            later(relay.latencyMs, () => {
+              const { events, body } = relay.page(afterSeq, limit);
               const text = new TextEncoder().encode(JSON.stringify(body));
               // One chunk per event, each as the downlink delivers it.
               const n = Math.max(1, events.length);
@@ -429,12 +471,14 @@ export class SimSocket {
   /** Push frames sent on this socket and not yet answered: their event ids. */
   private unanswered = new Set<string[]>();
   private deviceKey: string;
+  private relay: SimRelay;
 
   constructor(
     private net: SimNet,
     public url: string,
   ) {
     net.sockets.push(this);
+    this.relay = net.relayFor(url);
     this.deviceKey = new URL(url).searchParams.get("device_id") ?? `anon-${net.sockets.length}`;
     setTimeout(() => {
       if (this.readyState !== 0) return;
@@ -459,7 +503,7 @@ export class SimSocket {
     const tx = this.net.up.send(this.net.cfg.upMs * events.length, () => {
       this.inflight.splice(this.inflight.indexOf(tx), 1);
       if (this.readyState !== 1) return;
-      if (!this.net.relay.admit(this.deviceKey)) {
+      if (!this.relay.admit(this.deviceKey)) {
         answered();
         this.reply({ type: "error", message: "Rate limit exceeded" }, REPLY_MS);
         return;
@@ -469,15 +513,21 @@ export class SimSocket {
         return;
       }
       if (msg.type !== "push") return;
-      this.net.relay.store(events);
+      if (this.relay.dropFrame?.(++this.relay.pushFramesSeen)) {
+        // Silently discarded: never stored, never answered — no longer in flight.
+        trace(`ws push ${msg.push_id ?? "-"} n=${events.length} DROPPED by the relay`);
+        answered();
+        return;
+      }
+      this.relay.store(events);
       trace(`ws push ${msg.push_id ?? "-"} n=${events.length} stored`);
       this.reply(
         {
           type: "ack",
           accepted: events.length,
-          ...(msg.push_id !== undefined ? { push_id: msg.push_id } : {}),
+          ...(msg.push_id !== undefined && this.relay.echoes ? { push_id: msg.push_id } : {}),
         },
-        this.net.relay.latencyMs,
+        this.relay.latencyMs,
         answered,
       );
     });
@@ -489,6 +539,18 @@ export class SimSocket {
       onDelivered?.();
       if (this.readyState === 1) this.onmessage?.({ data: JSON.stringify(msg) });
     }, ms);
+  }
+
+  /** A message from the relay not answering anything (fan-out). */
+  inbound(msg: unknown): void {
+    if (this.readyState === 1) this.onmessage?.({ data: JSON.stringify(msg) });
+  }
+
+  /** The relay closes the connection (a restart): the client sees `onclose`. */
+  serverClose(): void {
+    if (this.readyState === 3) return;
+    this.close();
+    this.onclose?.();
   }
 
   close(): void {

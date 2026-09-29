@@ -98,7 +98,39 @@ export interface Cell {
    * and so sends afresh every cycle) does?
    */
   outage?: true;
+  /** A relay that misbehaves (#914 round 8) — see `Fault`. */
+  fault?: Fault;
 }
+
+/**
+ * The relay fault model (#914 round 8). A well-behaved relay always stores,
+ * answers and echoes; these are the ways a real one does not:
+ *
+ *   drop-first     the relay silently discards the FIRST push frame (window
+ *                  1, before any echo): no ack, no error
+ *   drop-mid       it discards the THIRD frame — mid-stream, after the echo
+ *                  was seen, with the window at 16
+ *   old-drop       a relay older than round 7 (never echoes `push_id`)
+ *                  discards the third frame
+ *   rollback-drop  echoes are seen, then at 10 min the relay restarts as
+ *                  the no-echo version (every socket closed) and discards
+ *                  the first frame it receives after that
+ *   switch-fresh   the device pulls from relay A, then at 5 min a FRESH
+ *                  engine every 30 s (mobile `syncNow`) syncs with relay B
+ *   switch-repoint the same, but one engine re-pointed at B
+ *
+ * The drop faults run with sibling traffic on every socket (an event every
+ * 60 s), so an unanswered frame's socket never looks dead. In every fault
+ * cell the relay answers everything else, so a correct client delivers
+ * EVERY event (to B, in the switch cells) — a stronger oracle than
+ * main-relative, which a fire-and-forget main that loses the dropped frame
+ * by construction could never make red.
+ */
+type Fault =
+  "drop-first" | "drop-mid" | "old-drop" | "rollback-drop" | "switch-fresh" | "switch-repoint";
+
+const FAULT_HORIZON_MS = 45 * 60 * 1000;
+const SWITCH_AT_MS = 5 * 60 * 1000;
 
 const OUTAGE_MS = 10 * 60 * 1000;
 const RECOVERY_MS = 3 * 60 * 1000;
@@ -144,6 +176,7 @@ function event(id: string, clock: number, device: string): EventLogEntry {
 
 export function horizonMs(c: Cell): number {
   if (c.outage) return OUTAGE_MS + RECOVERY_MS;
+  if (c.fault) return FAULT_HORIZON_MS;
   return Math.max(10 * c.u * S * BATCH, 30 * MIN);
 }
 
@@ -176,13 +209,30 @@ function world(c: Cell): World {
     downMs: c.dir === "pull" ? c.u * S : 10,
   });
   if (c.outage) net.blackholeUntil = Date.now() + OUTAGE_MS;
+  const stop: Array<() => void> = [];
+  if (c.fault === "drop-first") relay.dropFrame = (k) => k === 1;
+  if (c.fault === "drop-mid") relay.dropFrame = (k) => k === 3;
+  if (c.fault === "old-drop") {
+    relay.echoes = false;
+    relay.dropFrame = (k) => k === 3;
+  }
+  if (c.fault === "rollback-drop") {
+    const t = setTimeout(() => {
+      relay.echoes = false;
+      const after = relay.pushFramesSeen;
+      relay.dropFrame = (k) => k === after + 1;
+      net.restart();
+    }, 10 * MIN);
+    stop.push(() => clearTimeout(t));
+  }
+  if (c.fault && !c.fault.startsWith("switch")) stop.push(net.inboundEvery(60 * S));
   const local = new InMemoryEventStore();
   const base = `http://relay${n}.harness`;
   const wsUrl = `ws://relay${n}.harness/ws/sync/${MID}`;
   vi.stubGlobal("WebSocket", net.socketClass());
   if (c.flavour === "rn") net.installReactNative();
   else vi.stubGlobal("fetch", net.fetch);
-  return { net, relay, local, base, wsUrl, targets: [], stop: [] };
+  return { net, relay, local, base, wsUrl, targets: [], stop };
 }
 
 /**
@@ -275,9 +325,15 @@ class MainSocket {
     private url: string,
     private onConnected: () => void,
   ) {}
+  private retired = false;
   connect(): void {
     const ws = new WebSocket(this.url + "?device_id=phone");
     this.ws = ws;
+    // Main's adapter reconnects after a close it did not ask for.
+    ws.onclose = () => {
+      this.connected = false;
+      if (!this.retired) setTimeout(() => !this.retired && this.connect(), 1_000);
+    };
     ws.onopen = () => {
       this.connected = true;
       if (this.pending.length > 0)
@@ -286,6 +342,7 @@ class MainSocket {
     };
   }
   disconnect(): void {
+    this.retired = true;
     this.ws?.close();
     this.ws = null;
     this.connected = false;
@@ -301,9 +358,9 @@ class MainSocket {
 }
 
 /** Main's seq pull: unbounded, whole pages. */
-async function mainPull(w: World, cursor: { seq: number }): Promise<void> {
+async function mainPull(w: World, cursor: { seq: number }, base = w.base): Promise<void> {
   for (;;) {
-    const res = await fetch(`${w.base}/sync/${MID}/pull?after_seq=${cursor.seq}&after_clock=0`);
+    const res = await fetch(`${base}/sync/${MID}/pull?after_seq=${cursor.seq}&after_clock=0`);
     const body = (await res.json()) as {
       events: Array<EventLogEntry & { seq: number }>;
       next_seq: number;
@@ -509,6 +566,40 @@ export function sweep(): Cell[] {
       add({ dir: "pull", life: "http", flavour: "rn", u, L, backlog: 150 });
     }
   }
+  // The relay fault model (#914 round 8): a dropped frame, an old relay, a
+  // rollback — on both socket lifecycles — and a relay switch.
+  for (const fault of ["drop-first", "drop-mid", "old-drop", "rollback-drop"] as const) {
+    for (const life of ["persistent-ws", "rebuild-ws"] as const) {
+      add({ dir: "push", life, flavour: "node", u: 0.01, L: 0, backlog: 6000, fault });
+    }
+  }
+  add({
+    dir: "push",
+    life: "http",
+    flavour: "node",
+    u: 0.2,
+    L: 0,
+    backlog: 50,
+    fault: "switch-fresh",
+  });
+  add({
+    dir: "push",
+    life: "http",
+    flavour: "node",
+    u: 0.2,
+    L: 0,
+    backlog: 50,
+    fault: "switch-repoint",
+  });
+  add({
+    dir: "push",
+    life: "persistent-ws",
+    flavour: "node",
+    u: 0.2,
+    L: 0,
+    backlog: 50,
+    fault: "switch-repoint",
+  });
   // An outage (a black-holed relay) on the HTTP doors, push and pull, both flavours.
   for (const flavour of ["node", "rn"] as const) {
     for (const dir of ["push", "pull"] as const) {
@@ -518,16 +609,182 @@ export function sweep(): Cell[] {
   return cells;
 }
 
+// ---------------------------------------------------------------------------
+// The relay switch (#914 round 8, R4): pull from A, then sync with B
+// ---------------------------------------------------------------------------
+
+/**
+ * The device's own backlog is already on relay A, with 20 siblings' events.
+ * It syncs with A (so it pulls everything back), then at SWITCH_AT_MS turns
+ * to relay B: a fresh engine every 30 s (`switch-fresh`, mobile `syncNow`),
+ * or its engine re-pointed (`switch-repoint`). Delivered = what B holds.
+ */
+async function runSwitch(c: Cell, side: "main" | "branch"): Promise<Outcome> {
+  const w = world(c);
+  const relayB = new SimRelay(MID, c.L * S);
+  const hostB = `relayb${cellNo}.harness`; // URL hosts are lower-case
+  w.net.hosts.set(hostB, relayB);
+  const baseB = `http://${hostB}`;
+  const wsB = `ws://${hostB}/ws/sync/${MID}`;
+  let clock = 0;
+  for (let i = 0; i < c.backlog; i++) {
+    const e = event(`own-${i}`, ++clock, "phone");
+    w.targets.push(e.event_id);
+    await w.local.append(e);
+    w.relay.store([e]);
+  }
+  for (let i = 0; i < 20; i++) {
+    const e = event(`sib-${i}`, ++clock, "laptop");
+    w.targets.push(e.event_id);
+    w.relay.store([e]);
+  }
+  let k = 0;
+  const live = setInterval(() => {
+    const id = `own-live-${k++}`;
+    w.targets.push(id);
+    void w.local.appendWithClock({
+      event_id: id,
+      motebit_id: MID as EventLogEntry["motebit_id"],
+      device_id: "phone",
+      timestamp: Date.now(),
+      event_type: EventType.StateUpdated,
+      payload: { id },
+      tombstoned: false,
+    });
+  }, 5 * MIN);
+  w.stop.push(() => clearInterval(live));
+  let cursorOf: () => number = () => 0;
+
+  if (side === "main") {
+    // Main: push after an in-memory cursor (BATCH at a time), pull, cursor = local max.
+    const mainEngine = (): { base: string; cursor: number; pull: { seq: number } } => ({
+      base: w.base,
+      cursor: 0,
+      pull: { seq: 0 },
+    });
+    const syncMain = (m: { base: string; cursor: number; pull: { seq: number } }): void => {
+      void (async () => {
+        try {
+          const evs = await w.local.query({
+            motebit_id: MID,
+            after_version_clock: m.cursor,
+            limit: BATCH,
+          });
+          for (const e of evs) {
+            const res = await fetch(`${m.base}/sync/${MID}/push`, {
+              method: "POST",
+              body: JSON.stringify({ events: [e] }),
+            });
+            await res.text();
+          }
+          await mainPull(w, m.pull, m.base);
+          m.cursor = await w.local.getLatestClock(MID);
+        } catch {
+          // main: cursor unchanged
+        }
+      })();
+    };
+    const m = mainEngine();
+    let tick = setInterval(() => syncMain(m), 30 * S);
+    const sw = setTimeout(() => {
+      if (c.fault === "switch-repoint") {
+        m.base = baseB;
+        m.pull = { seq: 0 };
+      } else {
+        clearInterval(tick);
+        tick = setInterval(() => {
+          const fresh = mainEngine();
+          fresh.base = baseB;
+          syncMain(fresh);
+        }, 30 * S);
+      }
+    }, SWITCH_AT_MS);
+    w.stop.push(() => (clearInterval(tick), clearTimeout(sw)));
+  } else {
+    const http = (base: string): HttpEventStoreAdapter =>
+      new HttpEventStoreAdapter({ baseUrl: base, motebitId: MID });
+    const opts = { onSkippedEvent: (): void => {} };
+    const engine = new SyncEngine(w.local, MID, opts);
+    cursorOf = () => engine.getCursor().last_version_clock;
+    let current: WebSocketEventStoreAdapter | null = null;
+    const ws = (url: string, base: string): WebSocketEventStoreAdapter =>
+      new WebSocketEventStoreAdapter({
+        url,
+        motebitId: MID,
+        deviceId: "phone",
+        httpFallback: http(base),
+        localStore: w.local,
+        onCatchUpError: () => {},
+        onSkippedEvent: () => {},
+      });
+    if (c.life === "persistent-ws") {
+      current = ws(w.wsUrl, w.base);
+      engine.connectRemote(liveAdapter(() => current as EventStoreAdapter));
+      current.connect();
+    } else {
+      engine.connectRemote(http(w.base));
+    }
+    engine.start();
+    let freshTick: ReturnType<typeof setInterval> | null = null;
+    const sw = setTimeout(() => {
+      if (c.fault === "switch-repoint") {
+        if (current) {
+          current.disconnect();
+          current = ws(wsB, baseB);
+          engine.connectRemote(liveAdapter(() => current as EventStoreAdapter));
+          current.connect();
+        } else {
+          engine.connectRemote(http(baseB));
+        }
+      } else {
+        engine.stop();
+        freshTick = setInterval(() => {
+          const fresh = new SyncEngine(w.local, MID, opts);
+          fresh.connectRemote(http(baseB));
+          cursorOf = () => fresh.getCursor().last_version_clock;
+          void fresh.sync();
+        }, 30 * S);
+      }
+    }, SWITCH_AT_MS);
+    w.stop.push(() => {
+      clearTimeout(sw);
+      if (freshTick) clearInterval(freshTick);
+      engine.stop();
+      current?.disconnect();
+    });
+  }
+  await runFor(horizonMs(c));
+  let delivered = 0;
+  for (const id of w.targets) if (relayB.holds(id)) delivered++;
+  let cursorSafe = true;
+  if (side === "branch") {
+    const cursor = cursorOf();
+    for (const e of await w.local.query({ motebit_id: MID })) {
+      if (e.device_id === "phone" && e.version_clock <= cursor && !relayB.holds(e.event_id)) {
+        cursorSafe = false;
+      }
+    }
+  }
+  const out: Outcome = { delivered, total: w.targets.length, cursorSafe };
+  if (side === "branch") {
+    out.resentInFlight = w.net.resentInFlight + w.net.httpResentLive;
+    out.resentHung = w.net.httpResentHung;
+  }
+  for (const st of w.stop) st();
+  return out;
+}
+
 export async function runCell(c: Cell): Promise<{ main: Outcome; branch: Outcome }> {
   vi.useFakeTimers();
   try {
     const t0 = realNow();
-    const main = await runMain(c);
+    const isSwitch = c.fault?.startsWith("switch") === true;
+    const main = isSwitch ? await runSwitch(c, "main") : await runMain(c);
     vi.unstubAllGlobals();
     vi.clearAllTimers();
     const t1 = realNow();
     trace("=== branch");
-    const branch = await runBranch(c);
+    const branch = isSwitch ? await runSwitch(c, "branch") : await runBranch(c);
     if (process.env.MOTEBIT_LIVENESS_TIMING) {
       const t2 = realNow();
       process.stdout.write(
@@ -543,7 +800,7 @@ export async function runCell(c: Cell): Promise<{ main: Outcome; branch: Outcome
 }
 
 export function cellName(c: Cell): string {
-  return `${c.dir} ${c.life} ${c.flavour} u=${c.u}s L=${c.L}s backlog=${c.backlog}${c.outage ? " outage" : ""}`;
+  return `${c.dir} ${c.life} ${c.flavour} u=${c.u}s L=${c.L}s backlog=${c.backlog}${c.outage ? " outage" : ""}${c.fault ? ` ${c.fault}` : ""}`;
 }
 
 export function verdict(c: Cell, r: { main: Outcome; branch: Outcome }): string | null {
@@ -560,6 +817,9 @@ export function verdict(c: Cell, r: { main: Outcome; branch: Outcome }): string 
   }
   if (r.branch.delivered < r.main.delivered) {
     return `${name}: branch ${r.branch.delivered}/${r.branch.total} < main ${r.main.delivered}/${r.main.total}`;
+  }
+  if (c.fault && r.branch.delivered < r.branch.total) {
+    return `${name}: the relay answers all but the fault, yet the branch delivered ${r.branch.delivered}/${r.branch.total}`;
   }
   if (r.main.delivered === r.main.total && r.branch.delivered < r.branch.total) {
     return `${name}: main delivered all ${r.main.total}, branch ${r.branch.delivered}/${r.branch.total}`;
@@ -628,7 +888,8 @@ export function gridCells(): Cell[] {
     (c, i) =>
       ((c.u === 0.01 || (c.u === 16 && c.backlog !== 6000)) && (c.L === 0 || c.L === 300)) ||
       (c.u <= 16 && i % 25 === 0) ||
-      regressions.has(cellName(c)),
+      regressions.has(cellName(c)) ||
+      c.fault !== undefined,
   );
 }
 
@@ -681,7 +942,7 @@ export function defineShard(k: number): void {
     ); // the full sweep's slow cells take hours
     if (k === 1) {
       it("the sweep covers every dimension named", () => {
-        const all = sweep();
+        const all = sweep().filter((c) => !c.fault); // the fault cells add a backlog of 50
         expect(new Set(all.map((c) => c.u)).size).toBe(U.length);
         expect(new Set(all.map((c) => c.L)).size).toBe(LAT.length);
         expect(new Set(all.map((c) => c.life)).size).toBe(3);
@@ -690,7 +951,7 @@ export function defineShard(k: number): void {
         expect(new Set(all.map((c) => c.dir)).size).toBe(2);
       });
       it("the committed grid keeps every dimension: each door, flavour, backlog and direction, both boundaries of u and L", () => {
-        const grid = gridCells();
+        const grid = gridCells().filter((c) => !c.fault);
         expect(new Set(grid.map((c) => c.life)).size).toBe(3);
         expect(new Set(grid.map((c) => c.flavour)).size).toBe(2);
         expect(new Set(grid.map((c) => c.backlog)).size).toBe(3);
@@ -702,6 +963,13 @@ export function defineShard(k: number): void {
         expect(us.size).toBeGreaterThanOrEqual(6); // the sample reaches the middle of the range
         expect(ls.size).toBe(LAT.length);
         for (const name of REGRESSIONS) expect(grid.map(cellName)).toContain(name);
+        // …and every relay fault (#914 round 8).
+        const faults = new Set(
+          gridCells()
+            .map((c) => c.fault)
+            .filter((f) => f !== undefined),
+        );
+        expect(faults.size).toBe(6);
       });
     }
   });
