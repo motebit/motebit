@@ -19,7 +19,13 @@ export class FakeRelay {
   /** Every event a push carried, duplicates included (#914: what a client re-sent). */
   pushedIds: string[] = [];
 
-  constructor(readonly baseUrl = "http://relay.fake") {}
+  /**
+   * Each relay its own origin: an adapter keeps what it learned about a link
+   * per relay stream for the life of the process (#914 round 6), so two
+   * tests must not share one.
+   */
+  constructor(readonly baseUrl = `http://relay${FakeRelay.next++}.fake`) {}
+  private static next = 0;
 
   /** Store an event exactly as the relay's push door does (dedup by event_id). */
   ingest(event: EventLogEntry): void {

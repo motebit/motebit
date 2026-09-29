@@ -65,6 +65,25 @@ const PULL_PAGE_FLOOR = 1;
  */
 const MAX_DEADLINE_FACTOR = 64;
 
+/**
+ * What a link has taught the adapter (#914 round 6): the pull page size and
+ * the deadline stretches. Kept per relay stream for the life of the process,
+ * NOT per adapter instance — a surface that rebuilds its adapter every cycle
+ * (mobile's catch-up) must not start over each time, or a slow link that
+ * needs more than one cycle to learn is never learned.
+ */
+interface HttpLinkState {
+  pullLimit: number;
+  /** The pull deadline's stretch (1 = `requestTimeoutMs`). */
+  pullDeadlineFactor: number;
+  /** The push deadline's stretch. */
+  pushDeadlineFactor: number;
+}
+const httpLinkStates = new Map<string, HttpLinkState>();
+
+/** A request ended by its owner (its sync cycle was abandoned) — not a timeout: nothing stretches. */
+class RequestAbortedError extends Error {}
+
 /** A request attempt abandoned at `requestTimeoutMs`. */
 class RequestTimeoutError extends Error {}
 
@@ -114,15 +133,23 @@ export class HttpEventStoreAdapter implements EventStoreAdapter, SeqPullSource {
   private requestTimeoutMs: number;
   private bodyIdleTimeoutMs: number;
   /** The page size pulls ask for; halved after a timed-out pull, doubled back after a good one. */
-  private pullLimit = PULL_PAGE_MAX;
-  /** The pull deadline's stretch (1 = `requestTimeoutMs`); doubles on each timeout at the floor. */
-  private pullDeadlineFactor = 1;
-  /** The push deadline's stretch; doubles on each timed-out push, resets on an acknowledged one. */
-  private pushDeadlineFactor = 1;
+  /** Requests on the wire, so an abandoned cycle's can be ended (`abortInFlight`). */
+  private inFlightRequests = new Set<AbortController>();
   /** Told of every sign of life on the wire (attempt, headers, body chunk) — the sync engine's watchdog. */
   private activityListeners = new Set<() => void>();
   /** What this transport may push — see `HttpAdapterConfig.payloads`. */
   readonly payloads: RelayPayloadMode;
+
+  /** This relay stream's learned state, shared by every adapter for it in the process. */
+  private get link(): HttpLinkState {
+    const key = `${this.baseUrl}#${this.motebitId}`;
+    let st = httpLinkStates.get(key);
+    if (!st) {
+      st = { pullLimit: PULL_PAGE_MAX, pullDeadlineFactor: 1, pushDeadlineFactor: 1 };
+      httpLinkStates.set(key, st);
+    }
+    return st;
+  }
 
   constructor(config: HttpAdapterConfig) {
     this.baseUrl = config.baseUrl.replace(/\/+$/, "");
@@ -149,27 +176,64 @@ export class HttpEventStoreAdapter implements EventStoreAdapter, SeqPullSource {
     const url = `${this.baseUrl}/sync/${this.motebitId}/push`;
     await this.acquirePushSlot();
     let failed: Error | null = null;
+    const init = { method: "POST", body: JSON.stringify({ events: [entry] }) };
     try {
-      const res = await this.authedFetch(
-        url,
-        { method: "POST", body: JSON.stringify({ events: [entry] }) },
-        this.pushDeadlineFactor,
-      );
+      let res: Response;
+      try {
+        res = await this.authedFetch(url, init, this.link.pushDeadlineFactor);
+      } catch (err: unknown) {
+        // One event is the smallest push there is. A timeout stretches the
+        // deadline — but only when the relay is shown to be answering (a
+        // slow link, not a dead relay): a stretch earned against a dead
+        // endpoint would hold the push slot long after it recovers.
+        if (!(err instanceof RequestTimeoutError) || !(await this.relayAnswers())) throw err;
+        this.link.pushDeadlineFactor = Math.min(
+          MAX_DEADLINE_FACTOR,
+          this.link.pushDeadlineFactor * 2,
+        );
+        res = await this.authedFetch(url, init, this.link.pushDeadlineFactor);
+      }
       if (!res.ok) {
         throw new Error(`Push failed: ${res.status} ${res.statusText}`);
       }
-      this.pushDeadlineFactor = 1;
+      this.link.pushDeadlineFactor = 1;
     } catch (err: unknown) {
-      // One event is the smallest push there is: a timeout stretches the
-      // next push's deadline, so a slow link still gets it through.
-      if (err instanceof RequestTimeoutError) {
-        this.pushDeadlineFactor = Math.min(MAX_DEADLINE_FACTOR, this.pushDeadlineFactor * 2);
-      }
       failed = err instanceof Error ? err : new Error(String(err));
       throw failed;
     } finally {
       this.releasePushSlot(failed);
     }
+  }
+
+  /**
+   * Is the relay answering at all? One small request (the clock), at the base
+   * deadline, never stretched. A link too slow for a big page or push still
+   * answers it; a dead or black-holed relay does not. Only then may a
+   * deadline stretch (#914 round 6).
+   */
+  private async relayAnswers(): Promise<boolean> {
+    try {
+      await this.boundedFetch(`${this.baseUrl}/sync/${this.motebitId}/clock`, {
+        method: "GET",
+        headers: await this.boundedHeaders(),
+      });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * End every request on the wire, and every push waiting for the slot
+   * (#914 round 6): the sync engine calls this when its stall watchdog
+   * abandons a cycle, so an abandoned cycle's request never holds the push
+   * slot against the next one. Nothing is stretched or shrunk by it.
+   */
+  abortInFlight(): void {
+    const err = new RequestAbortedError("sync request abandoned with its sync cycle");
+    for (const c of this.inFlightRequests) c.abort(err);
+    this.inFlightRequests.clear();
+    for (const w of this.pushWaiters.splice(0)) w.fail(err);
   }
 
   private pushesInFlight = 0;
@@ -263,17 +327,24 @@ export class HttpEventStoreAdapter implements EventStoreAdapter, SeqPullSource {
     // time, and asking for it again would fail the same way forever.
     let res: Response;
     let stretched = false;
+    let answering: boolean | null = null; // asked at most once per call
     for (;;) {
-      const limit = this.pullLimit;
+      const link = this.link;
+      const limit = link.pullLimit;
       const url =
         `${this.baseUrl}/sync/${this.motebitId}/pull` +
         `?after_seq=${afterSeq}&after_clock=${fallbackAfterClock}` +
         (limit < PULL_PAGE_MAX ? `&limit=${limit}` : "");
       try {
-        res = await this.authedFetch(url, { method: "GET" }, this.pullDeadlineFactor);
+        res = await this.authedFetch(url, { method: "GET" }, link.pullDeadlineFactor);
       } catch (err: unknown) {
-        if (err instanceof RequestTimeoutError && limit > PULL_PAGE_FLOOR) {
-          this.pullLimit = Math.max(PULL_PAGE_FLOOR, Math.floor(limit / 2));
+        if (!(err instanceof RequestTimeoutError)) throw err;
+        // Shrink or stretch only for a relay that is answering: a dead one
+        // costs one failed page and one failed probe, never a series.
+        answering ??= await this.relayAnswers();
+        if (!answering) throw err;
+        if (limit > PULL_PAGE_FLOOR) {
+          link.pullLimit = Math.max(PULL_PAGE_FLOOR, Math.floor(limit / 2));
           continue;
         }
         // At one event there is nothing left to shrink: stretch the deadline
@@ -281,8 +352,8 @@ export class HttpEventStoreAdapter implements EventStoreAdapter, SeqPullSource {
         // link that delivers it at all.
         // One stretch per call, remembered across calls: a dead relay costs
         // each pull one extra attempt, never an unbounded series.
-        if (err instanceof RequestTimeoutError && this.pullDeadlineFactor < MAX_DEADLINE_FACTOR) {
-          this.pullDeadlineFactor *= 2;
+        if (link.pullDeadlineFactor < MAX_DEADLINE_FACTOR) {
+          link.pullDeadlineFactor *= 2;
           if (!stretched) {
             stretched = true;
             continue;
@@ -291,8 +362,8 @@ export class HttpEventStoreAdapter implements EventStoreAdapter, SeqPullSource {
         throw err;
       }
       if (res.ok) {
-        this.pullLimit = Math.min(PULL_PAGE_MAX, limit * 2);
-        this.pullDeadlineFactor = 1;
+        link.pullLimit = Math.min(PULL_PAGE_MAX, limit * 2);
+        link.pullDeadlineFactor = 1;
       }
       break;
     }
@@ -386,9 +457,16 @@ export class HttpEventStoreAdapter implements EventStoreAdapter, SeqPullSource {
     // the body idle bound observes every chunk and needs no stretch.
     const deadline = this.requestTimeoutMs * deadlineFactor;
     const ctrl = new AbortController();
+    this.inFlightRequests.add(ctrl);
     let fire!: (err: Error) => void;
     const timedOut = new Promise<never>((_, reject) => (fire = reject));
     timedOut.catch(() => {});
+    // Ended by its owner (`abortInFlight`): the race ends too, even for a
+    // fetch that ignores its signal.
+    ctrl.signal.addEventListener("abort", () => {
+      const reason: unknown = ctrl.signal.reason;
+      if (reason instanceof RequestAbortedError) fire(reason);
+    });
     let timer: ReturnType<typeof setTimeout> | undefined;
     const arm = (ms: number, what: string): void => {
       if (timer) clearTimeout(timer);
@@ -449,12 +527,14 @@ export class HttpEventStoreAdapter implements EventStoreAdapter, SeqPullSource {
     } catch (err: unknown) {
       if (reader) void reader.cancel().catch(() => {});
       if (err instanceof RequestTimeoutError) throw err;
+      if (ctrl.signal.reason instanceof RequestAbortedError) throw ctrl.signal.reason;
       if (err instanceof Error && (err.name === "TimeoutError" || err.name === "AbortError")) {
         throw new RequestTimeoutError(`sync request aborted: ${err.message}`, { cause: err });
       }
       throw err;
     } finally {
       if (timer) clearTimeout(timer);
+      this.inFlightRequests.delete(ctrl);
     }
   }
 

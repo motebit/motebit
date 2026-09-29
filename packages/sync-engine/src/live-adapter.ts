@@ -26,7 +26,7 @@ function reportsActivity(x: unknown): x is ActivityReporting {
  */
 export function liveAdapter(
   current: () => EventStoreAdapter,
-): EventStoreAdapter & ActivityReporting {
+): EventStoreAdapter & ActivityReporting & { abortInFlight(): void } {
   const listeners = new Set<() => void>();
   let bound: EventStoreAdapter | null = null;
   let unbind: (() => void) | null = null;
@@ -53,6 +53,9 @@ export function liveAdapter(
     query: (f) => follow().query(f),
     getLatestClock: (id) => follow().getLatestClock(id),
     tombstone: (id, m) => follow().tombstone(id, m),
+    abortInFlight(): void {
+      (follow() as { abortInFlight?: () => void }).abortInFlight?.();
+    },
     onActivity(listener: () => void): () => void {
       listeners.add(listener);
       follow();

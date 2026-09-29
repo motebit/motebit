@@ -130,6 +130,15 @@ const PUSH_LINGER_MS = 15;
 const PUSH_CEILING_PROBE_AFTER = 8;
 const PUSH_LINGER_MAX_MS = 100;
 
+/** What a link taught the socket about frame size (see `frame`). */
+interface FrameState {
+  limit: number;
+  ceiling: number;
+  fullAtCeiling: number;
+}
+/** Frame state per (socket URL, device id), shared by every adapter in the process. */
+const sharedFrameStates = new Map<string, FrameState>();
+
 /** Push-frame send times per (socket URL, device id), shared by every adapter in the process. */
 const sharedPushBudgets = new Map<string, number[]>();
 
@@ -263,10 +272,24 @@ export class WebSocketEventStoreAdapter implements EventStoreAdapter {
    * frames are acked, up to `frameCeiling`: the size known to fit. The
    * ceiling itself doubles after PUSH_CEILING_PROBE_AFTER full frames at it,
    * so a link that gets faster is found again.
+   *
+   * Kept per (socket URL, device id) for the life of the process — beside
+   * the pacing budget — never per adapter (#914 round 6): mobile rebuilds its
+   * socket adapter every sync cycle, and a halved frame that never survives
+   * the rebuild is re-sent at full size forever.
    */
-  private frameLimit = MAX_EVENTS_PER_PUSH_FRAME;
-  private frameCeiling = MAX_EVENTS_PER_PUSH_FRAME;
-  private fullFramesAtCeiling = 0;
+  private get frame(): FrameState {
+    let st = sharedFrameStates.get(this.pushBudgetKey);
+    if (!st) {
+      st = {
+        limit: MAX_EVENTS_PER_PUSH_FRAME,
+        ceiling: MAX_EVENTS_PER_PUSH_FRAME,
+        fullAtCeiling: 0,
+      };
+      sharedFrameStates.set(this.pushBudgetKey, st);
+    }
+    return st;
+  }
   /** Told of every push frame sent or acked — the sync engine's watchdog. */
   private activityListeners = new Set<() => void>();
   /** A deferred flush (pacing). */
@@ -727,7 +750,7 @@ export class WebSocketEventStoreAdapter implements EventStoreAdapter {
       this.flushTimer = null;
     }
     sent.push(now);
-    const items = this.outbox.splice(0, this.frameLimit);
+    const items = this.outbox.splice(0, this.frame.limit);
     // From here the frame's own deadline governs each event.
     for (const item of items) for (const w of item.waiters) clearWaiterTimer(w);
     // In flight BEFORE the send: an ack delivered during `send` is this frame's.
@@ -818,7 +841,7 @@ export class WebSocketEventStoreAdapter implements EventStoreAdapter {
     this.inFlight = null;
     if (!refused) {
       this.active();
-      if (frame.items.length >= this.frameLimit) this.fullFrameAcked();
+      if (frame.items.length >= this.frame.limit) this.fullFrameAcked();
     }
     for (const item of frame.items) settle(item, refused);
     this.flushPush();
@@ -866,15 +889,15 @@ export class WebSocketEventStoreAdapter implements EventStoreAdapter {
       // socket (a late ack on this one must never be credited elsewhere).
       clearTimeout(frame.timer);
       this.inFlight = null;
-      this.frameLimit = Math.max(1, Math.floor(n / 2));
-      this.frameCeiling = this.frameLimit;
-      this.fullFramesAtCeiling = 0;
+      this.frame.limit = Math.max(1, Math.floor(n / 2));
+      this.frame.ceiling = this.frame.limit;
+      this.frame.fullAtCeiling = 0;
       this.requeueFront(frame.items);
     } else {
       // Not even one event crossed in the deadline: a definite failure.
-      this.frameLimit = 1;
-      this.frameCeiling = 1;
-      this.fullFramesAtCeiling = 0;
+      this.frame.limit = 1;
+      this.frame.ceiling = 1;
+      this.frame.fullAtCeiling = 0;
       this.failInFlight(new Error("sync push: not acknowledged in time"));
     }
     this.dropSocket(socket);
@@ -882,15 +905,15 @@ export class WebSocketEventStoreAdapter implements EventStoreAdapter {
 
   /** A full frame was acked: grow toward the ceiling, and probe past it now and then. */
   private fullFrameAcked(): void {
-    if (this.frameLimit < this.frameCeiling) {
-      this.frameLimit = Math.min(this.frameCeiling, this.frameLimit * 2);
+    if (this.frame.limit < this.frame.ceiling) {
+      this.frame.limit = Math.min(this.frame.ceiling, this.frame.limit * 2);
       return;
     }
-    if (this.frameCeiling >= MAX_EVENTS_PER_PUSH_FRAME) return;
-    if (++this.fullFramesAtCeiling >= PUSH_CEILING_PROBE_AFTER) {
-      this.fullFramesAtCeiling = 0;
-      this.frameCeiling = Math.min(MAX_EVENTS_PER_PUSH_FRAME, this.frameCeiling * 2);
-      this.frameLimit = this.frameCeiling;
+    if (this.frame.ceiling >= MAX_EVENTS_PER_PUSH_FRAME) return;
+    if (++this.frame.fullAtCeiling >= PUSH_CEILING_PROBE_AFTER) {
+      this.frame.fullAtCeiling = 0;
+      this.frame.ceiling = Math.min(MAX_EVENTS_PER_PUSH_FRAME, this.frame.ceiling * 2);
+      this.frame.limit = this.frame.ceiling;
     }
   }
 

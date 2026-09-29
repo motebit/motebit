@@ -59,12 +59,10 @@ describe("#914 round 2: a push that never answers cannot wedge sync", () => {
     const local = new InMemoryEventStore();
     await write(local, "e1");
     await write(local, "e2");
-    let holes = 1;
+    // The relay is black-holed: every request hangs, ignoring its abort signal.
+    let down = true;
     vi.stubGlobal("fetch", (input: string | URL, init?: RequestInit) => {
-      if (holes > 0 && String(input).includes("/push")) {
-        holes--;
-        return new Promise<Response>(() => {}); // never answers, never aborts
-      }
+      if (down) return new Promise<Response>(() => {});
       return relay.fetch(input, init);
     });
     const engine = new SyncEngine(local, MID);
@@ -87,6 +85,7 @@ describe("#914 round 2: a push that never answers cannot wedge sync", () => {
     expect(relay.heldIds(MID)).toEqual([]);
     expect(engine.getCursor().last_version_clock).toBe(0); // a timed-out push moves nothing
 
+    down = false; // the relay recovers
     await engine.sync();
     expect(engine.getStatus()).toBe("idle");
     expect(sorted(relay.heldIds(MID))).toEqual(["e1", "e2"]);
@@ -115,9 +114,10 @@ describe("#914 round 2: a push that never answers cannot wedge sync", () => {
         },
       }),
     );
+    // The hung lookup ends at the bound (the sync settles); once the source
+    // answers, the event goes through — in this sync or the next.
     await engine.sync();
-    expect(engine.getStatus()).toBe("error");
-    await engine.sync();
+    if (engine.getStatus() !== "idle") await engine.sync();
     expect(engine.getStatus()).toBe("idle");
     expect(relay.heldIds(MID)).toEqual(["c1"]);
   });
@@ -152,12 +152,9 @@ describe("#914 round 2: a push that never answers cannot wedge sync", () => {
     const local = new InMemoryEventStore();
     for (let i = 0; i < 20; i++) await write(local, `q${i}`);
     let pushes = 0;
-    vi.stubGlobal("fetch", (input: string | URL, init?: RequestInit) => {
-      if (String(input).includes("/push")) {
-        pushes++;
-        return new Promise<Response>(() => {});
-      }
-      return relay.fetch(input, init);
+    vi.stubGlobal("fetch", (input: string | URL) => {
+      if (String(input).includes("/push")) pushes++;
+      return new Promise<Response>(() => {}); // the relay is black-holed
     });
     const engine = new SyncEngine(local, MID);
     engine.connectRemote(

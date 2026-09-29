@@ -344,7 +344,8 @@ export class SyncEngine {
   sync(): Promise<SyncResult> {
     if (this.running) return this.running;
     const cycle = ++this.cycle;
-    const run = this.watchStall(this.runSync(cycle), cycle).finally(() => {
+    const remote = this.remoteStore;
+    const run = this.watchStall(this.runSync(cycle), cycle, remote).finally(() => {
       if (this.running === run) this.running = null;
     });
     this.running = run;
@@ -356,7 +357,11 @@ export class SyncEngine {
    * `stall_timeout_ms` — an empty result with the cycle abandoned. Bounds the
    * cycle's caller and every caller that joined it, whatever the remote does.
    */
-  private watchStall(run: Promise<SyncResult>, cycle: number): Promise<SyncResult> {
+  private watchStall(
+    run: Promise<SyncResult>,
+    cycle: number,
+    remote: EventStoreAdapter | null,
+  ): Promise<SyncResult> {
     const stallMs = this.config.stall_timeout_ms ?? DEFAULT_STALL_TIMEOUT_MS;
     this.lastProgressAt = Date.now();
     return new Promise<SyncResult>((resolve) => {
@@ -370,6 +375,9 @@ export class SyncEngine {
         resolve({ pushed: 0, pulled: 0, conflicts: [] });
         if (this.cycle === cycle) {
           this.cycle++; // the abandoned cycle's late status writes are ignored
+          // …and its requests end with it: a request left on the wire would
+          // hold the push slot against the next cycle (#914 round 6).
+          (remote as { abortInFlight?: () => void } | null)?.abortInFlight?.();
           this.setStatus("error");
         }
       };
