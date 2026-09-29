@@ -100,6 +100,25 @@ class FakeCluster {
    * retention check can tell the two apart.
    */
   firstAvailableSlot = 0;
+  /**
+   * How the node's READINGS relate to that truth (round 4). Real RPC nodes
+   * are not honest witnesses of absence (agave rpc.rs):
+   *   - `honest`: every reading is true;
+   *   - `bigtable_flaky`: a BigTable-backed node. `getFirstAvailableBlock` is
+   *     min(blockstore, BigTable) — near genesis — and a historical status
+   *     lookup that misses the local ledger asks BigTable and swallows ANY
+   *     error as absent: a landed transaction below the local edge reads
+   *     absent while the reported edge says "covered";
+   *   - `edge_zero`: no BigTable, but the blockstore edge read errors or the
+   *     ledger has < 2 roots — `getFirstAvailableBlock` answers 0;
+   *   - `cleanup_lag`: `minimumLedgerSlot` (the first slot meta) is honest,
+   *     but the local status search starts higher — at the second root, and
+   *     ledger cleanup purges statuses ahead of their metas — so statuses
+   *     within 2 000 slots above the reported local edge are already gone.
+   * `minimumLedgerSlot` (blockstore-only; errors are errors) always reads
+   * the local edge.
+   */
+  witness: Witness = "honest";
   readonly txs = new Map<string, ChainTx>();
   private n = 0;
 
@@ -157,10 +176,28 @@ class FakeCluster {
     }
   }
 
+  /** Where the node's local status search really starts. */
+  private searchFrom(): number {
+    return this.firstAvailableSlot + (this.witness === "cleanup_lag" ? 2_000 : 0);
+  }
+
+  /** `getFirstAvailableBlock` as the node reports it. */
+  reportedFirstAvailableBlock(): number {
+    return this.witness === "bigtable_flaky" || this.witness === "edge_zero"
+      ? 0
+      : this.firstAvailableSlot;
+  }
+
+  /** `minimumLedgerSlot`: blockstore-only — the first slot meta. */
+  minimumLedgerSlot(): number {
+    return this.firstAvailableSlot;
+  }
+
   outcome(ref: SignedTransactionRef): SignatureOutcome {
     const found = this.txs.get(ref.signature);
-    // Pruned history: a landed or failed transaction below the edge is absent.
-    const tx = found !== undefined && found.slot >= this.firstAvailableSlot ? found : undefined;
+    // Below where the local search starts, a landed or failed transaction
+    // reads absent (pruned, or a swallowed BigTable error).
+    const tx = found !== undefined && found.slot >= this.searchFrom() ? found : undefined;
     if (tx?.state === "landed") return { status: "landed", slot: tx.slot };
     if (tx?.state === "failed") return { status: "failed" };
     return this.height > ref.lastValidBlockHeight + 10
@@ -207,6 +244,9 @@ const SEND_SCRIPTS: SendScript[] = [
 
 type SendResult = Awaited<ReturnType<SolanaRpcAdapter["sendUsdc"]>>;
 
+type Witness = "honest" | "bigtable_flaky" | "edge_zero" | "cleanup_lag";
+const WITNESSES: Witness[] = ["honest", "bigtable_flaky", "edge_zero", "cleanup_lag"];
+
 /**
  * How much history the RPC node keeps (#949 round 2):
  *   - `full`: everything;
@@ -215,10 +255,12 @@ type SendResult = Awaited<ReturnType<SolanaRpcAdapter["sendUsdc"]>>;
  *   - `pruned_after_landing`: once the payout is decided, the node prunes it
  *     (days later, in production) — a landed payout then reads as absent.
  */
-type Retention = "full" | "pruned_before_send" | "pruned_near_send" | "pruned_after_landing";
+type Retention =
+  "full" | "pruned_before_send" | "pruned_1000" | "pruned_near_send" | "pruned_after_landing";
 const RETENTIONS: Retention[] = [
   "full",
   "pruned_before_send",
+  "pruned_1000",
   "pruned_near_send",
   "pruned_after_landing",
 ];
@@ -328,7 +370,10 @@ function makeAdapter(
     getBlockHeight: () => Promise.resolve(cluster.height),
     ...(opts.retentionRead === false
       ? {}
-      : { getFirstAvailableSlot: () => Promise.resolve(cluster.firstAvailableSlot) }),
+      : {
+          getFirstAvailableSlot: () => Promise.resolve(cluster.reportedFirstAvailableBlock()),
+          getLocalLedgerFirstSlot: () => Promise.resolve(cluster.minimumLedgerSlot()),
+        }),
     isReachable: () => Promise.resolve(script !== "unavailable"),
   } as SolanaRpcAdapter;
   return { adapter, sends: () => sends };
@@ -564,7 +609,9 @@ const OPERATOR_TIMINGS: OperatorTiming[] = ["prompt", "late"];
 const PATH0_CELLS = SEND_SCRIPTS.flatMap((script) =>
   RETENTIONS.flatMap((retention) =>
     SIGN_SLOTS.flatMap((signSlot) =>
-      OPERATOR_TIMINGS.map((timing) => ({ script, retention, signSlot, timing })),
+      WITNESSES.flatMap((witness) =>
+        OPERATOR_TIMINGS.map((timing) => ({ script, retention, signSlot, witness, timing })),
+      ),
     ),
   ),
 );
@@ -583,23 +630,28 @@ const PATH0_CELLS = SEND_SCRIPTS.flatMap((script) =>
 function stuckOnset(retention: Retention, signSlot: SignSlot): "send" | "prune" | null {
   if (retention === "pruned_after_landing") return "prune";
   if (retention === "pruned_near_send") return "send";
+  // History starts 1 000 slots before the send: inside the local-ledger edge
+  // margin, so absence is unprovable (round 4).
+  if (retention === "pruned_1000") return "send";
   if (retention === "pruned_before_send" && signSlot === "unavailable") return "send";
   return null;
 }
 
 describe("harness: Path 0 (Solana) — send script × node retention × schedule × truthful operator × replay", () => {
   it.each(PATH0_CELLS)(
-    "$script × $retention × slot:$signSlot × $timing",
-    async ({ script, retention, signSlot, timing }) => {
+    "$script × $retention × slot:$signSlot × $witness × $timing",
+    async ({ script, retention, signSlot, witness, timing }) => {
       const cluster = new FakeCluster();
-      if (retention === "pruned_before_send") cluster.firstAvailableSlot = cluster.slot() - 600;
+      cluster.witness = witness;
+      if (retention === "pruned_before_send") cluster.firstAvailableSlot = cluster.slot() - 6_000;
+      if (retention === "pruned_1000") cluster.firstAvailableSlot = cluster.slot() - 1_000;
       if (retention === "pruned_near_send") cluster.firstAvailableSlot = cluster.slot() - 100;
       const { adapter, sends } = makeAdapter(cluster, script, { signSlot });
       relay = await createTestRelay({
         enableDeviceAuth: false,
         operatorSolanaTransfer: new OperatorSolanaTransfer(adapter),
       });
-      const mid = `zzh-p0-${script}-${retention}-${signSlot}-${timing}`;
+      const mid = `zzh-p0-${script}-${retention}-${signSlot}-${witness}-${timing}`;
       await registerAndFund(relay, mid);
 
       const headers = jsonAuthWithIdempotency();
