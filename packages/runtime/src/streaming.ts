@@ -21,6 +21,10 @@ import type { SignableToolInvocationReceipt } from "@motebit/crypto";
 import { signToolInvocationReceipt, hashToolPayload, signApprovalDecision } from "@motebit/crypto";
 import type { ApprovalDecision } from "@motebit/crypto";
 import type { StreamChunk } from "./runtime-config.js";
+import { TurnPrincipal } from "./turn-principal.js";
+import { OWNER_ACT } from "./turn-delegation-receipts.js";
+import type { ToolCall } from "./turn-principal.js";
+import type { TurnConversation } from "./conversation.js";
 
 // Re-import the helper — it's file-local in index.ts, so we duplicate it here.
 // Exact copy of the function from index.ts.
@@ -90,18 +94,20 @@ export interface StreamingDeps {
   setDelegating(active: boolean): void;
   /** Map of tool names to motebit server names (delegation detection). */
   getMotebitToolServers(): Map<string, string>;
-  /** Accumulate behavioral stats from a turn result. */
-  accumulateTurnStats(result: TurnResult): void;
-  /** Push a user+assistant exchange into conversation history. */
-  pushExchange(userMessage: string, assistantResponse: string): void;
-  /** Push assistant-only activation into conversation history. */
-  pushActivation(assistantResponse: string): void;
-  /** Inject intermediate messages (tool call + result) into conversation history. */
-  injectIntermediateMessages(assistantMsg: ConversationMessage, userMsg: ConversationMessage): void;
+  /**
+   * Accumulate behavioral stats from a turn result — for the turn's own
+   * principal (a foreign turn is not the owner's behaviour, #943).
+   */
+  accumulateTurnStats(result: TurnResult, principal: TurnPrincipal): void;
+  /**
+   * The conversation as the named principal's turn sees and writes it
+   * (#904, #943 round 9): every history read and write here names whose
+   * turn it is — the processed stream's, the paused record's, or the
+   * owner's for an owner-only door.
+   */
+  conversationFor(principal: TurnPrincipal): TurnConversation;
   /** Log a tool usage event. */
   logToolUsed(toolName: string, result: unknown): void;
-  /** Get live conversation history (for continuation turns). */
-  getLiveHistory(): ConversationMessage[];
   /** Tool registry for executing approved tools. */
   getToolRegistry(): ToolRegistry;
   /**
@@ -111,23 +117,13 @@ export interface StreamingDeps {
    */
   turnReceiptDestination?(): symbol | undefined;
   /**
-   * True while the in-flight turn runs ANOTHER principal's words (#880) —
-   * captured into a pending approval so the resumed continuation stays
-   * foreign after the task that raised it has returned.
+   * The loop dependencies for the turn about to run, for the named
+   * principal (#880, #943 round 9): the runtime swaps in the policy gate's
+   * no-approval-channel view and the turn-scoped tool registry for a
+   * foreign turn. The resumed continuation passes through it too, so a
+   * foreign continuation can never chain another pending approval.
    */
-  isForeignPrincipalTurn?(): boolean;
-  /**
-   * Mark the runtime as running a foreign principal's turn until the
-   * returned release is called (#880) — the resume of a foreign approval.
-   */
-  enterForeignPrincipalTurn?(): () => void;
-  /**
-   * The loop dependencies for the turn about to run (#880): the runtime
-   * swaps in the policy gate's no-approval-channel view for a foreign
-   * turn. The resumed continuation passes through it too, so a foreign
-   * continuation can never chain another pending approval.
-   */
-  loopDepsForTurn?<D extends { policyGate?: unknown }>(deps: D): D;
+  loopDepsForTurn?<D extends { policyGate?: unknown }>(deps: D, principal: TurnPrincipal): D;
   /** Policy gate — sanitize tool results. */
   sanitizeToolResult(
     result: ToolResult,
@@ -454,7 +450,8 @@ export class StreamingManager {
     if (!voided) return null;
     this._pendingApproval = null;
     this.clearApprovalTimeout();
-    this.deps.injectIntermediateMessages(
+    // Only an owner turn voids (the caller is the owner's own message).
+    this.deps.conversationFor(TurnPrincipal.OWNER).injectIntermediateMessages(
       {
         role: "assistant" as const,
         content: `[tool_use: ${voided.toolName}(${JSON.stringify(voided.args)})]`,
@@ -485,13 +482,19 @@ export class StreamingManager {
     this.settledDelegationsThisExchange = [];
   }
 
-  /** Shared stream processing — extracts state tags, handles tool/approval/injection chunks. */
+  /**
+   * Shared stream processing — extracts state tags, handles tool/approval/injection chunks.
+   * `principal` is the processed turn's own (#943 round 9): its history
+   * writes, stats, pending-approval mark and state tags all follow it.
+   */
   async *processStream(
     stream: AsyncGenerator<AgenticChunk>,
     userMessage: string,
-    runId?: string,
-    options?: { activationOnly?: boolean; suppressHistory?: boolean },
+    runId: string | undefined,
+    options: { principal: TurnPrincipal; activationOnly?: boolean; suppressHistory?: boolean },
   ): AsyncGenerator<StreamChunk> {
+    const principal = options.principal;
+    const convo = this.deps.conversationFor(principal);
     let result: TurnResult | null = null;
     let accumulated = "";
     let yieldedCleanLength = 0;
@@ -715,7 +718,7 @@ export class StreamingManager {
         this.deniedIntents.has(deniedIntentKey(chunk.name, chunk.args))
       ) {
         const times = this.deniedIntents.get(deniedIntentKey(chunk.name, chunk.args)) ?? 1;
-        this.deps.injectIntermediateMessages(
+        convo.injectIntermediateMessages(
           {
             role: "assistant" as const,
             content: `[tool_use: ${chunk.name}(${JSON.stringify(chunk.args)})]`,
@@ -746,7 +749,7 @@ export class StreamingManager {
       // the brake. See deniedToolsThisExchange for why exact-args alone
       // proved insufficient.
       if (chunk.type === "approval_request" && this.deniedToolsThisExchange.has(chunk.name)) {
-        this.deps.injectIntermediateMessages(
+        convo.injectIntermediateMessages(
           {
             role: "assistant" as const,
             content: `[tool_use: ${chunk.name}(${JSON.stringify(chunk.args)})]`,
@@ -786,7 +789,7 @@ export class StreamingManager {
           requestedAt: Date.now(),
           auditCallId: chunk.audit_call_id,
           turnId: chunk.turn_id,
-          ...(this.deps.isForeignPrincipalTurn?.() === true ? { foreignPrincipal: true } : {}),
+          ...(principal.foreign ? { foreignPrincipal: true } : {}),
         };
 
         // Persist quorum metadata to the approval store (source of truth)
@@ -837,7 +840,7 @@ export class StreamingManager {
       if (chunk.type === "result") {
         result = chunk.result;
         // Accumulate behavioral stats for the intelligence gradient
-        this.deps.accumulateTurnStats(result);
+        this.deps.accumulateTurnStats(result, principal);
       }
     }
 
@@ -847,17 +850,19 @@ export class StreamingManager {
       // the projection wrapper and list in the Goals panel. Skipping
       // the chat push keeps recurring background tasks from polluting
       // the dialogue the user is having with the motebit.
-      if (options?.suppressHistory) {
+      if (options.suppressHistory === true) {
         // no history push — scheduled/background run
-      } else if (options?.activationOnly) {
-        this.deps.pushActivation(result.response);
+      } else if (options.activationOnly === true) {
+        convo.pushActivation(result.response);
       } else {
-        this.deps.pushExchange(userMessage, result.response);
+        convo.pushExchange(userMessage, result.response);
       }
     }
 
-    // Apply collected state updates as the creature settles into new equilibrium
-    if (Object.keys(pendingStateUpdates).length > 0) {
+    // Apply collected state updates as the creature settles into new equilibrium.
+    // A FOREIGN turn's state tags are discarded (#943): the owner's live
+    // state vector is the owner's interior, never another principal's to set.
+    if (!principal.foreign && Object.keys(pendingStateUpdates).length > 0) {
       this.deps.pushStateUpdate(pendingStateUpdates);
     }
   }
@@ -896,11 +901,11 @@ export class StreamingManager {
     this.deps.pushStateUpdate({ processing: 0.9, attention: 0.8 });
     this.deps.setSpeaking(true);
     // A foreign principal's paused turn resumes foreign (#880): the task
-    // that raised it has returned and cleared its mark, but the
-    // continuation re-runs that principal's prompt. Held until the
-    // continuation ends.
-    const releaseForeign =
-      pending.foreignPrincipal === true ? this.deps.enterForeignPrincipalTurn?.() : undefined;
+    // that raised it has returned, but the continuation re-runs that
+    // principal's prompt. The paused RECORD is the call path here — the
+    // resume is a turn entry and decides its principal from it (#943 round 9).
+    const principal = TurnPrincipal.of(pending.foreignPrincipal === true);
+    const convo = this.deps.conversationFor(principal);
 
     try {
       // Record the human's consent as a signed, offline-verifiable decision
@@ -925,7 +930,7 @@ export class StreamingManager {
         // can never be an owner-interior tool (defense in depth — a foreign
         // turn is never offered one, so it cannot have proposed one).
         if (
-          pending.foreignPrincipal === true &&
+          principal.foreign &&
           toolRegistry.list().some((t) => t.name === pending.toolName && t.localOnly === true)
         ) {
           yield {
@@ -947,11 +952,15 @@ export class StreamingManager {
         const dispatchedAt = Date.now();
         let result: ToolResult;
         try {
+          const call: ToolCall = {
+            destination: this.deps.turnReceiptDestination?.() ?? OWNER_ACT,
+            principal,
+          };
           result = await (
             toolRegistry as ToolRegistry & {
-              execute(n: string, a: Record<string, unknown>, d?: symbol): Promise<ToolResult>;
+              execute(n: string, a: Record<string, unknown>, c?: ToolCall): Promise<ToolResult>;
             }
-          ).execute(pending.toolName, pending.args, this.deps.turnReceiptDestination?.());
+          ).execute(pending.toolName, pending.args, call);
         } catch (err) {
           // Close the ledger row before re-throwing: the handler threw, so
           // the tool reports failure — an open row would read as unknown.
@@ -1082,11 +1091,11 @@ export class StreamingManager {
       // never the owner's history (the conversation manager refuses the
       // write anyway; this keeps the continuation's own context whole).
       let continuationHistory: ConversationMessage[];
-      if (pending.foreignPrincipal === true) {
-        continuationHistory = [...this.deps.getLiveHistory(), ...continuationPair];
+      if (principal.foreign) {
+        continuationHistory = [...convo.liveHistory(), ...continuationPair];
       } else {
-        this.deps.injectIntermediateMessages(continuationPair[0], continuationPair[1]);
-        continuationHistory = this.deps.getLiveHistory();
+        convo.injectIntermediateMessages(continuationPair[0], continuationPair[1]);
+        continuationHistory = convo.liveHistory();
       }
 
       // Run continuation turn with updated history. `priorTurnActions`
@@ -1095,7 +1104,7 @@ export class StreamingManager {
       // can never deny the action (#521 — witnessed live 2026-08-01:
       // "I didn't take any action" after a completed $0.25 hire).
       const stream = runTurnStreaming(
-        this.deps.loopDepsForTurn?.(loopDeps) ?? loopDeps,
+        this.deps.loopDepsForTurn?.(loopDeps, principal) ?? loopDeps,
         pending.userMessage,
         {
           conversationHistory: continuationHistory,
@@ -1106,9 +1115,8 @@ export class StreamingManager {
             : { humanRefusedToolName: pending.toolName },
         },
       );
-      yield* this.processStream(stream, pending.userMessage, pending.runId);
+      yield* this.processStream(stream, pending.userMessage, pending.runId, { principal });
     } finally {
-      releaseForeign?.();
       this.deps.setSpeaking(false);
       this.deps.pushStateUpdate({ processing: 0.1, attention: 0.3 });
       this._isProcessing = false;
@@ -1249,7 +1257,7 @@ export class StreamingManager {
       // per-turn foreign mark is down: a foreign principal's expired call
       // is that principal's, never the owner's history (#904).
       if (expired.foreignPrincipal !== true) {
-        this.deps.injectIntermediateMessages(
+        this.deps.conversationFor(TurnPrincipal.OWNER).injectIntermediateMessages(
           {
             role: "assistant" as const,
             content: `[tool_use: ${expired.toolName}(${JSON.stringify(expired.args)})]`,

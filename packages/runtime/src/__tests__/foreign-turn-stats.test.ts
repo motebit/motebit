@@ -7,7 +7,7 @@
  * foreign turn (`motebit_query` on either door, a `motebit_task`) must
  * touch none of it; the owner's own turn still does.
  *
- * Tamper: delete `if (this.isForeignPrincipalTurn()) return;` at the top of
+ * Tamper: delete `if (principal.foreign) return;` at the top of
  * `accumulateTurnStats` — red.
  */
 import { describe, it, expect, vi } from "vitest";

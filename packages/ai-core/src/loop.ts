@@ -2165,18 +2165,25 @@ export async function* runTurnStreaming(
     });
   }
 
-  // 5. Push state updates (explicit tags win; fall back to text inference)
-  if (Object.keys(finalResponse.state_updates).length > 0) {
-    stateEngine.pushUpdate(finalResponse.state_updates);
-  } else {
-    const inferred = inferStateFromText(finalResponse.text, stateEngine.getState());
-    if (Object.keys(inferred).length > 0) {
-      stateEngine.pushUpdate(inferred);
+  // 5. Push state updates (explicit tags win; fall back to text inference).
+  // A FOREIGN turn's state updates are discarded (#943): the live state
+  // vector is the owner's interior (`current_state` is projected away from a
+  // foreign pack), so another principal's model never sets it — no push, no
+  // tick. A stranger's `trust_mode: "minimal"` never reaches the owner's
+  // next `[State]`.
+  if (!foreign) {
+    if (Object.keys(finalResponse.state_updates).length > 0) {
+      stateEngine.pushUpdate(finalResponse.state_updates);
+    } else {
+      const inferred = inferStateFromText(finalResponse.text, stateEngine.getState());
+      if (Object.keys(inferred).length > 0) {
+        stateEngine.pushUpdate(inferred);
+      }
     }
+    // Force immediate tick so stateAfter reflects the update (next scheduled
+    // tick may be up to 500ms away, but we need current state for display).
+    stateEngine.tickNow();
   }
-  // Force immediate tick so stateAfter reflects the update (next scheduled
-  // tick may be up to 500ms away, but we need current state for display).
-  stateEngine.tickNow();
 
   // 6. Log interaction event
   await eventStore.appendWithClock({

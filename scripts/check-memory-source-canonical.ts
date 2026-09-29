@@ -274,13 +274,14 @@ function main(): void {
   //         path cannot mint owner provenance beside the resolver;
   //   (iii) the loop feeds the resolver the TURN's foreign fact
   //         (`foreignPrincipal: deps.foreignPrincipal`), not a global read;
-  //   (iv)  the runtime sets that fact per turn through ONE mechanism
-  //         (#880's per-turn mark): `loopDepsForTurn` stamps
-  //         `foreignPrincipal: this.isForeignPrincipalTurn()` on every
-  //         deps object it returns; both `sendMessage` entry points and the
-  //         approval resume (after restoring the paused turn's mark) build
-  //         their deps through it; and `handleAgentTask` starts every task
-  //         turn with `foreignPrincipal: true`.
+  //   (iv)  the runtime sets that fact per turn through ONE mechanism,
+  //         carried on the CALL PATH (#943 round 9 — never a runtime-wide
+  //         mark): `loopDepsForTurn(deps, principal)` stamps
+  //         `foreignPrincipal: principal.foreign` on every deps object it
+  //         returns; both `sendMessage` entry points and the approval resume
+  //         (whose principal is the paused record's) pass their own
+  //         `TurnPrincipal`; and `handleAgentTask` starts every task turn
+  //         with `foreignPrincipal: true`.
   // What this cannot express textually — that each foreign DOOR outside
   // the runtime (e.g. serve's `motebit_query` in apps/cli) passes the
   // option — is behavior, locked by the runtime and ai-core tests
@@ -340,38 +341,50 @@ function main(): void {
   const ldftBody = ldftStart === -1 || ldftEnd === -1 ? "" : runtimeSrc.slice(ldftStart, ldftEnd);
   const ldftReturns = ldftBody.split("\n").filter((l) => /\breturn\b/.test(l));
   if (
-    !/const foreignPrincipal = this\.isForeignPrincipalTurn\(\);/.test(ldftBody) ||
+    !/principal: TurnPrincipal,\s*\n\s*\): D \{\s*\n\s*const foreignPrincipal = principal\.foreign;/.test(
+      ldftBody,
+    ) ||
     ldftReturns.length === 0 ||
     ldftReturns.some((l) => !/\{\s*\.\.\.deps,\s*foreignPrincipal\b/.test(l))
   ) {
     foreignViolations.push(
-      "packages/runtime/src/motebit-runtime.ts: `loopDepsForTurn` must set `foreignPrincipal` from `this.isForeignPrincipalTurn()` on EVERY deps object it returns (`{ ...deps, foreignPrincipal, ... }`) — the turn's deps are where formation reads whose words it runs",
+      "packages/runtime/src/motebit-runtime.ts: `loopDepsForTurn(deps, principal: TurnPrincipal)` must set `foreignPrincipal` from `principal.foreign` on EVERY deps object it returns (`{ ...deps, foreignPrincipal, ... }`) — the turn's deps are where formation reads whose words it runs",
     );
   }
   // (iv-b) both turn entries build their deps through it.
-  const perTurnDeps = (runtimeSrc.match(/this\.loopDepsForTurn\(\s*clearedLoopDeps\s*\)/g) ?? [])
-    .length;
+  const perTurnDeps = (
+    runtimeSrc.match(/this\.loopDepsForTurn\(\s*clearedLoopDeps,\s*principal\s*\)/g) ?? []
+  ).length;
   if (perTurnDeps < 2) {
     foreignViolations.push(
-      `packages/runtime/src/motebit-runtime.ts: sendMessage AND sendMessageStreaming must build their loop deps via \`this.loopDepsForTurn(clearedLoopDeps)\` — found ${perTurnDeps} of 2`,
+      `packages/runtime/src/motebit-runtime.ts: sendMessage AND sendMessageStreaming must build their loop deps via \`this.loopDepsForTurn(clearedLoopDeps, principal)\` — found ${perTurnDeps} of 2`,
     );
   }
   // (iv-c) the approval resume builds its continuation's deps through it too,
-  // with the paused turn's mark restored (enterForeignPrincipalTurn) first.
-  if (!/loopDepsForTurn: \(deps\) => this\.loopDepsForTurn\(deps\)/.test(runtimeSrc)) {
+  // with the principal decided from the paused RECORD (a turn entry).
+  if (
+    !/loopDepsForTurn: \(deps, principal\) => this\.loopDepsForTurn\(deps, principal\)/.test(
+      runtimeSrc,
+    )
+  ) {
     foreignViolations.push(
-      "packages/runtime/src/motebit-runtime.ts: StreamingManager must be wired with `loopDepsForTurn: (deps) => this.loopDepsForTurn(deps)`",
+      "packages/runtime/src/motebit-runtime.ts: StreamingManager must be wired with `loopDepsForTurn: (deps, principal) => this.loopDepsForTurn(deps, principal)`",
     );
   }
   const streamingSrc = readFile("packages/runtime/src/streaming.ts") ?? "";
   if (
-    !/pending\.foreignPrincipal === true \? this\.deps\.enterForeignPrincipalTurn\?\.\(\)/.test(
+    !/const principal = TurnPrincipal\.of\(pending\.foreignPrincipal === true\);/.test(
       streamingSrc,
     ) ||
-    !/runTurnStreaming\(\s*this\.deps\.loopDepsForTurn\?\.\(loopDeps\)/.test(streamingSrc)
+    !/runTurnStreaming\(\s*this\.deps\.loopDepsForTurn\?\.\(loopDeps, principal\)/.test(
+      streamingSrc,
+    ) ||
+    !/yield\* this\.processStream\(stream, pending\.userMessage, pending\.runId, \{ principal \}\);/.test(
+      streamingSrc,
+    )
   ) {
     foreignViolations.push(
-      "packages/runtime/src/streaming.ts: the approval resume must restore the paused turn's foreign mark (`enterForeignPrincipalTurn`) and run its continuation with `this.deps.loopDepsForTurn?.(loopDeps)`",
+      "packages/runtime/src/streaming.ts: the approval resume is a turn entry — decide `const principal = TurnPrincipal.of(pending.foreignPrincipal === true);` from the paused record, run its continuation with `this.deps.loopDepsForTurn?.(loopDeps, principal)` and process it with `{ principal }`",
     );
   }
   const taskHandlerSrc = readFile("packages/runtime/src/agent-task-handler.ts") ?? "";
@@ -387,7 +400,7 @@ function main(): void {
     for (const v of foreignViolations) console.error(`  - ${v}`);
     console.error("");
     console.error(
-      "Repair: every memory a foreign turn forms is `peer_agent`. Keep the one resolver (`turnMemorySource`, foreign branch first), feed it `deps.foreignPrincipal`, and set that per turn in the runtime (`loopDepsForTurn` from `isForeignPrincipalTurn()`, the resume's restored mark, `handleAgentTask`).",
+      "Repair: every memory a foreign turn forms is `peer_agent`. Keep the one resolver (`turnMemorySource`, foreign branch first), feed it `deps.foreignPrincipal`, and set that per turn in the runtime (`loopDepsForTurn(deps, principal)` from the turn entry's `TurnPrincipal`, the resume's paused record, `handleAgentTask`).",
     );
     console.error("Doctrine: docs/doctrine/memory-provenance.md § authorship.");
     process.exit(1);
@@ -399,33 +412,31 @@ function main(): void {
   // reached the NEXT owner turn as `role:"user"`, so a memory that turn
   // formed from it was `user_stated` — scan (c)'s laundering, one hop
   // later — and the store row synced to the owner's other devices as the
-  // owner's own conversation. The floor is the state holder's, read from
-  // the per-turn mark, so no door can forget it:
+  // owner's own conversation. The floor is whose turn it is, carried on
+  // the turn's CALL PATH (#943 round 9) — never a runtime-wide mark, so the
+  // owner's own concurrent reads and writes are never blanked either:
   //   (i)   no non-test runtime file outside `conversation.ts` writes a
   //         conversation store (`.appendMessage(` / `.createConversation(`)
   //         — every writer of the owner's conversation goes through
   //         `ConversationManager`;
-  //   (ii)  in `conversation.ts`, every method that appends to the store,
-  //         plus `injectIntermediateMessages`, opens with
-  //         `if (this.isForeignTurn()) return;`, and `isForeignTurn` reads
-  //         `this.deps.isForeignPrincipalTurn?.() === true`;
-  //   (iii) the runtime wires that dep from the one per-turn predicate
-  //         (`isForeignPrincipalTurn: () => this.isForeignPrincipalTurn()`);
-  //   (iv)  the approval TIMEOUT (which fires outside any turn, mark down)
-  //         skips a foreign expiry, and the resume continues a foreign turn
-  //         over a private copy (`pending.foreignPrincipal === true` branch).
-  //   (v)   READ side (#904 round 2 — the owner's interior is never served
-  //         to another principal, #880's law): `trimmed()`, `liveHistory`,
-  //         `getSessionInfo()` and `clearSessionInfo()` each open with the
-  //         same `if (this.isForeignTurn()) return …` floor, so a foreign
-  //         turn's context carries no owner history, summary or session
-  //         facts, and cannot consume the owner's session marker;
+  //   (ii)  `ConversationManager.forTurn(principal)` is the per-turn VIEW:
+  //         a foreign principal gets `FOREIGN_TURN_CONVERSATION`, whose every
+  //         member is inert (no history, no summary, no session facts, every
+  //         write a no-op); `conversation.ts` reads no foreign state itself;
+  //   (iii) no non-test runtime file reaches the turn-facing members
+  //         (`trimmed`, `liveHistory`, `getSessionInfo`, `clearSessionInfo`,
+  //         `pushExchange`, `pushActivation`, `injectIntermediateMessages`)
+  //         except through `.forTurn(…)`, and StreamingManager is wired only
+  //         with `conversationFor: (principal) => this.conversation.forTurn(principal)`;
+  //   (iv)  the approval TIMEOUT (which fires outside any turn) writes the
+  //         owner's history only for an owner expiry, and the resume
+  //         continues a foreign turn over a private copy;
   //   (vi)  CONSENT: a foreign turn is not the human — every non-test
   //         runtime line that releases the denial brake
   //         (`.beginExchange()`), records user activity
   //         (`_lastUserMessageAt =`) or sets aside a pending approval
-  //         (`.voidPendingApproval()`) is guarded by `_foreignTurn` on the
-  //         same line.
+  //         (`.voidPendingApproval()`) is guarded by the turn's own
+  //         `principal.foreign` on the same line.
   // Behavior: `foreign-turn-history.test.ts` (both doors, the store, a real
   // sync push, the task, the resume, the timeout, the read side, the brake,
   // the pending approval).
@@ -433,6 +444,7 @@ function main(): void {
   const CONV = "packages/runtime/src/conversation.ts";
   let runtimeFilesScanned = 0;
   let consentSites = 0;
+  let viewAccesses = 0;
   for (const rel of walkTsFiles("packages/runtime/src")) {
     if (rel.includes("__tests__") || rel === CONV) continue;
     runtimeFilesScanned++;
@@ -441,6 +453,19 @@ function main(): void {
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i] as string;
       if (/^\s*(\*|\/\/|\/\*)/.test(line)) continue;
+      if (
+        /\.conversation\.(trimmed|liveHistory|getSessionInfo|clearSessionInfo|pushExchange|pushActivation|injectIntermediateMessages)\b/.test(
+          line,
+        ) ||
+        /this\.deps\.(pushExchange|pushActivation|injectIntermediateMessages|getLiveHistory)\b/.test(
+          line,
+        )
+      ) {
+        historyViolations.push(
+          `${rel}:${i + 1}: reaches the conversation's turn-facing members without \`forTurn(principal)\` — whose turn it is must travel with the call: ${line.trim()}`,
+        );
+      }
+      if (/\.forTurn\(/.test(line)) viewAccesses++;
       if (/\.(appendMessage|createConversation)\(/.test(line)) {
         historyViolations.push(
           `${rel}:${i + 1}: writes a conversation store outside ${CONV} — route the write through ConversationManager, whose floor refuses a foreign turn`,
@@ -451,118 +476,77 @@ function main(): void {
         !/^\s*(?:private |public )?_lastUserMessageAt\b/.test(line)
       ) {
         consentSites++;
-        if (!/_foreignTurn/.test(line)) {
+        if (!/\bprincipal\.foreign\b/.test(line)) {
           historyViolations.push(
-            `${rel}:${i + 1}: releases the owner's denial brake, records user activity, or voids the owner's pending approval without a \`_foreignTurn\` guard on the same line — a foreign turn is not the human: ${line.trim()}`,
+            `${rel}:${i + 1}: releases the owner's denial brake, records user activity, or voids the owner's pending approval without the turn's own \`principal.foreign\` guard on the same line — a foreign turn is not the human: ${line.trim()}`,
           );
         }
       }
     }
   }
   const convSrc = readFile(CONV) ?? "";
-  const convLines = convSrc.split("\n");
-  // Method starts at class-member indentation (two spaces), e.g. `  pushExchange(`.
-  const methodStarts: Array<{ name: string; line: number }> = [];
-  for (let i = 0; i < convLines.length; i++) {
-    const m = /^ {2}(?:private |async |public |get )*([A-Za-z_]\w*)\s*\([^)]*\).*\{\s*$/.exec(
-      convLines[i] as string,
-    );
-    if (m) methodStarts.push({ name: m[1] as string, line: i });
-  }
-  let guardedMethods = 0;
-  for (let k = 0; k < methodStarts.length; k++) {
-    const { name, line } = methodStarts[k] as { name: string; line: number };
-    const end =
-      k + 1 < methodStarts.length
-        ? (methodStarts[k + 1] as { line: number }).line
-        : convLines.length;
-    const body = convLines.slice(line + 1, end);
-    const writesStore = body.some((l) => /\.(appendMessage|createConversation)\(/.test(l));
-    if (!writesStore && name !== "injectIntermediateMessages") continue;
-    const firstStatement = body.find((l) => l.trim() !== "" && !/^\s*(\*|\/\/|\/\*)/.test(l));
-    if (
-      firstStatement === undefined ||
-      !/^\s*if \(this\.isForeignTurn\(\)\) return;/.test(firstStatement)
-    ) {
-      historyViolations.push(
-        `${CONV}: \`${name}\` writes the owner's conversation but does not open with \`if (this.isForeignTurn()) return;\` — found: ${(firstStatement ?? "(empty)").trim()}`,
-      );
-    } else {
-      guardedMethods++;
-    }
-  }
-  const READERS = ["trimmed", "liveHistory", "getSessionInfo", "clearSessionInfo"];
-  let guardedReaders = 0;
-  for (const reader of READERS) {
-    const k = methodStarts.findIndex((m) => m.name === reader);
-    if (k === -1) {
-      historyViolations.push(
-        `${CONV}: \`${reader}\` not found — the read-side floor has nowhere to live`,
-      );
-      continue;
-    }
-    const { line } = methodStarts[k] as { line: number };
-    const end =
-      k + 1 < methodStarts.length
-        ? (methodStarts[k + 1] as { line: number }).line
-        : convLines.length;
-    const firstStatement = convLines
-      .slice(line + 1, end)
-      .find((l) => l.trim() !== "" && !/^\s*(\*|\/\/|\/\*)/.test(l));
-    if (
-      firstStatement === undefined ||
-      !/^\s*if \(this\.isForeignTurn\(\)\) return\b/.test(firstStatement)
-    ) {
-      historyViolations.push(
-        `${CONV}: \`${reader}\` serves the owner's conversation to the turn's context but does not open with \`if (this.isForeignTurn()) return …\` — found: ${(firstStatement ?? "(empty)").trim()}`,
-      );
-    } else {
-      guardedReaders++;
-    }
-  }
-  if (consentSites < 3) {
-    historyViolations.push(
-      `packages/runtime/src: expected the three consent sites (beginExchange, _lastUserMessageAt, voidPendingApproval) — found ${consentSites}; if one moved, keep its \`_foreignTurn\` guard on the same line`,
-    );
-  }
-  if (guardedMethods < 3) {
-    historyViolations.push(
-      `${CONV}: expected the floor on pushExchange, pushActivation and injectIntermediateMessages — found ${guardedMethods} guarded writer(s)`,
-    );
-  }
+  const between = (src: string, header: string, close: string): string => {
+    const start = src.indexOf(header);
+    if (start === -1) return "";
+    const end = src.indexOf(close, start);
+    return end === -1 ? "" : src.slice(start, end);
+  };
+  const forTurnBody = between(
+    convSrc,
+    "  forTurn(principal: TurnPrincipal): TurnConversation {",
+    "\n  }\n",
+  );
+  const foreignView = between(
+    convSrc,
+    "const FOREIGN_TURN_CONVERSATION: TurnConversation = Object.freeze({",
+    "\n});",
+  );
+  const INERT = [
+    "trimmed: () => [],",
+    "liveHistory: () => [],",
+    "getSessionInfo: () => null,",
+    "clearSessionInfo: () => {},",
+    "pushExchange: () => {},",
+    "pushActivation: () => {},",
+    "injectIntermediateMessages: () => {},",
+  ];
+  const inertMembers = INERT.filter((m) => foreignView.includes(m)).length;
   if (
-    !/private isForeignTurn\(\): boolean \{\s*return this\.deps\.isForeignPrincipalTurn\?\.\(\) === true;/.test(
-      convSrc,
-    )
+    !/^\s*if \(principal\.foreign\) return FOREIGN_TURN_CONVERSATION;/m.test(forTurnBody) ||
+    inertMembers !== INERT.length
   ) {
     historyViolations.push(
-      `${CONV}: \`isForeignTurn()\` must return \`this.deps.isForeignPrincipalTurn?.() === true\``,
+      `${CONV}: \`forTurn(principal)\` must open with \`if (principal.foreign) return FOREIGN_TURN_CONVERSATION;\` and every member of \`FOREIGN_TURN_CONVERSATION\` must be inert (found ${inertMembers}/${INERT.length}) — a foreign turn reads none of the owner's conversation and writes nothing to it`,
     );
   }
-  const bcdStart = runtimeSrc.indexOf("private buildConversationDeps(");
-  const bcdEnd = bcdStart === -1 ? -1 : runtimeSrc.indexOf("\n  }\n", bcdStart);
-  const bcdBody = bcdStart === -1 || bcdEnd === -1 ? "" : runtimeSrc.slice(bcdStart, bcdEnd);
-  if (!/isForeignPrincipalTurn: \(\) => this\.isForeignPrincipalTurn\(\)/.test(bcdBody)) {
+  if (/isForeign|ForeignPrincipalTurn/.test(convSrc.replace(/^\s*(\*|\/\/).*$/gm, ""))) {
     historyViolations.push(
-      "packages/runtime/src/motebit-runtime.ts: `buildConversationDeps` must wire `isForeignPrincipalTurn: () => this.isForeignPrincipalTurn()` — the conversation floor reads the per-turn mark",
+      `${CONV}: reads a "foreign turn in flight" state — the manager must not; whose turn it is arrives with the call (\`forTurn(principal)\`)`,
     );
   }
   if (
-    !/if \(expired\.foreignPrincipal !== true\) \{\s*this\.deps\.injectIntermediateMessages\(/.test(
+    !/conversationFor: \(principal\) => this\.conversation\.forTurn\(principal\)/.test(runtimeSrc)
+  ) {
+    historyViolations.push(
+      "packages/runtime/src/motebit-runtime.ts: StreamingManager must be wired with `conversationFor: (principal) => this.conversation.forTurn(principal)`",
+    );
+  }
+  if (
+    !/if \(expired\.foreignPrincipal !== true\) \{\s*this\.deps\.conversationFor\(TurnPrincipal\.OWNER\)\.injectIntermediateMessages\(/.test(
       streamingSrc,
     )
   ) {
     historyViolations.push(
-      "packages/runtime/src/streaming.ts: the approval timeout fires outside any turn — it must skip a foreign expiry (`if (expired.foreignPrincipal !== true) { this.deps.injectIntermediateMessages(… }`)",
+      "packages/runtime/src/streaming.ts: the approval timeout fires outside any turn — it writes the owner's history only for an OWNER expiry (`if (expired.foreignPrincipal !== true) { this.deps.conversationFor(TurnPrincipal.OWNER).injectIntermediateMessages(… }`)",
     );
   }
   if (
-    !/if \(pending\.foreignPrincipal === true\) \{\s*continuationHistory = \[\.\.\.this\.deps\.getLiveHistory\(\), \.\.\.continuationPair\];/.test(
+    !/if \(principal\.foreign\) \{\s*continuationHistory = \[\.\.\.convo\.liveHistory\(\), \.\.\.continuationPair\];/.test(
       streamingSrc,
     )
   ) {
     historyViolations.push(
-      "packages/runtime/src/streaming.ts: a foreign resume must continue over a private copy (`continuationHistory = [...this.deps.getLiveHistory(), ...continuationPair]`), never inject into the owner's history",
+      "packages/runtime/src/streaming.ts: a foreign resume must continue over a private copy (`continuationHistory = [...convo.liveHistory(), ...continuationPair]`), never inject into the owner's history",
     );
   }
   if (historyViolations.length > 0) {
@@ -572,7 +556,7 @@ function main(): void {
     for (const v of historyViolations) console.error(`  - ${v}`);
     console.error("");
     console.error(
-      "Repair: a foreign turn's words never enter the owner's history as `user`. Every conversation write goes through ConversationManager, whose writers open with `if (this.isForeignTurn()) return;`, wired in the runtime from `isForeignPrincipalTurn()`; the approval timeout skips a foreign expiry and a foreign resume continues over a private copy. Read side: `trimmed`, `liveHistory`, `getSessionInfo`, `clearSessionInfo` open with the same floor. Consent: `beginExchange`, `_lastUserMessageAt =` and `voidPendingApproval` stay behind `!this._foreignTurn`.",
+      "Repair: a foreign turn's words never enter the owner's history as `user`, and whose turn it is travels on the call path. Every turn path reaches the conversation through `conversation.forTurn(principal)` (a foreign principal gets the inert `FOREIGN_TURN_CONVERSATION`); the manager reads no foreign state; the approval timeout writes only an owner expiry and a foreign resume continues over a private copy. Consent: `beginExchange`, `_lastUserMessageAt =` and `voidPendingApproval` stay behind the turn's own `!principal.foreign`.",
     );
     console.error("Doctrine: docs/doctrine/memory-provenance.md § authorship.");
     process.exit(1);
@@ -831,39 +815,81 @@ function main(): void {
   }
   // (ii-e) the owner's SELF-MODEL (#943 round 8): behavioural stats,
   // precision, the gradient bootstrap and reflection are the owner's; a
-  // foreign turn feeds none of them.
-  const statsFirst = bodyOf(runtimeSrc, "private accumulateTurnStats(", "\n  }\n")
+  // foreign turn feeds none of them. Whose turn it is is the stats call's
+  // REQUIRED argument (round 9), never runtime state.
+  const statsBody = bodyOf(runtimeSrc, "private accumulateTurnStats(", "\n  }\n");
+  const statsFirst = statsBody
     .split("\n")
     .slice(1)
     .find((l) => l.trim() !== "" && !/^\s*(\*|\/\/|\/\*)/.test(l));
-  if (statsFirst?.trim() !== "if (this.isForeignPrincipalTurn()) return;") {
+  if (
+    !statsBody.startsWith(
+      "private accumulateTurnStats(result: TurnResult, principal: TurnPrincipal): void {",
+    ) ||
+    statsFirst?.trim() !== "if (principal.foreign) return;"
+  ) {
     interiorViolations.push(
-      "packages/runtime/src/motebit-runtime.ts: `accumulateTurnStats` must open with `if (this.isForeignPrincipalTurn()) return;` — another principal's turn is not the owner's behaviour",
+      "packages/runtime/src/motebit-runtime.ts: `accumulateTurnStats(result, principal: TurnPrincipal)` must open with `if (principal.foreign) return;` — another principal's turn is not the owner's behaviour",
     );
   }
   // (ii-f) CONTENT-FREE REFUSAL (#943 round 8): a foreign principal's
-  // refusal never names the owner's sensitivity tier or slab. Both turn
-  // doors wrap the gate in `contentFreeIfForeign`, and the gate's throw
-  // site (mid-turn outbound-tool / summarization gates) refuses content-free
-  // while the foreign mark is up.
+  // refusal never names the owner's sensitivity tier, slab or activity.
+  // Decided by the CALL's principal (round 9): both turn doors wrap the gate
+  // (and their busy refusal) by the turn's own `principal`; a turn's
+  // outbound-tool gate is wrapped by that call's `call.principal`. The shared
+  // gate itself reads no foreign state, so an owner's concurrent refusal
+  // stays descriptive.
   const gateBody = bodyOf(runtimeSrc, "  assertSensitivityPermitsAiCall(\n", "\n  }\n");
   const cfBody = bodyOf(runtimeSrc, "private contentFreeIfForeign<T>(", "\n  }\n");
+  const busyBody = bodyOf(runtimeSrc, "private busyRefusal(", "\n  }\n");
   const doorWraps = (
     runtimeSrc.match(
-      /this\.contentFreeIfForeign\(options\?\.foreignPrincipal === true, \(\) =>\s*\n?\s*this\.assertSensitivityPermitsAiCall\("(sendMessage|sendMessageStreaming)"\)/g,
+      /this\.contentFreeIfForeign\(principal\.foreign, \(\) =>\s*\n?\s*this\.assertSensitivityPermitsAiCall\("(sendMessage|sendMessageStreaming)"\)/g,
     ) ?? []
+  ).length;
+  const busyDoors = (
+    runtimeSrc.match(/if \(this\._isProcessing\) throw this\.busyRefusal\(principal\);/g) ?? []
   ).length;
   if (
     doorWraps !== 2 ||
+    busyDoors !== 2 ||
+    !/return principal\.foreign\s*\n?\s*\? new ForeignTurnRefusedError\(\)/.test(busyBody) ||
     !/if \(!foreign\) return gate\(\);\s*\n\s*try \{\s*\n\s*return gate\(\);\s*\n\s*\} catch \{\s*\n\s*throw new ForeignTurnRefusedError\(\);/.test(
       cfBody,
     ) ||
-    !/if \(this\.isForeignPrincipalTurn\(\)\) throw new ForeignTurnRefusedError\(\);\s*\n\s*throw new SovereignTierRequiredError\(/.test(
-      gateBody,
+    !/contentFree\(call\?\.principal\.foreign === true, \(\) => assertGate\(name\)\);/.test(
+      runtimeSrc,
+    ) ||
+    /ForeignTurnRefusedError|isForeign|_foreign/.test(gateBody)
+  ) {
+    interiorViolations.push(
+      `packages/runtime/src/motebit-runtime.ts: a foreign principal's refusal must be content-free, decided by the CALL's principal — both turn doors wrap the gate in \`this.contentFreeIfForeign(principal.foreign, () => …)\` (found ${doorWraps}) and refuse busy with \`throw this.busyRefusal(principal)\` (found ${busyDoors}), \`contentFreeIfForeign\` rethrows any refusal as \`ForeignTurnRefusedError\` with no cause, the outbound-tool wrapper uses \`contentFree(call?.principal.foreign === true, …)\`, and the shared \`assertSensitivityPermitsAiCall\` reads no foreign state`,
+    );
+  }
+  // (ii-g) STATE (#943 round 9): a foreign turn's model state updates never
+  // reach the owner's live state vector — every `stateEngine.pushUpdate(` /
+  // `stateEngine.tickNow(` in the loop sits inside the `if (!foreign) {`
+  // block, and the runtime's stream processing drops a foreign turn's state
+  // tags.
+  const stateBlockStart = loopSrc.indexOf(
+    "  if (!foreign) {\n    if (Object.keys(finalResponse.state_updates).length > 0) {",
+  );
+  const stateBlockEnd =
+    stateBlockStart === -1 ? -1 : loopSrc.indexOf("stateEngine.tickNow();\n  }", stateBlockStart);
+  const stateWrites = [...loopSrc.matchAll(/stateEngine\.(pushUpdate|tickNow)\(/g)].map(
+    (m) => m.index ?? -1,
+  );
+  if (
+    stateBlockStart === -1 ||
+    stateBlockEnd === -1 ||
+    stateWrites.length === 0 ||
+    stateWrites.some((i) => i < stateBlockStart || i > stateBlockEnd) ||
+    !/if \(!principal\.foreign && Object\.keys\(pendingStateUpdates\)\.length > 0\) \{/.test(
+      streamingSrc,
     )
   ) {
     interiorViolations.push(
-      `packages/runtime/src/motebit-runtime.ts: a foreign principal's refusal must be content-free — both turn doors (\`sendMessage\`, \`sendMessageStreaming\`) wrap the gate in \`this.contentFreeIfForeign(options?.foreignPrincipal === true, () => …)\` (found ${doorWraps}), \`contentFreeIfForeign\` rethrows any refusal as \`ForeignTurnRefusedError\` with no cause, and \`assertSensitivityPermitsAiCall\` throws \`ForeignTurnRefusedError\` before \`SovereignTierRequiredError\` while \`isForeignPrincipalTurn()\``,
+      `${LOOP} + packages/runtime/src/streaming.ts: a foreign turn's state updates must be discarded — every loop \`stateEngine.pushUpdate(\` / \`tickNow(\` inside \`if (!foreign) {\` (found ${stateWrites.length} write(s)), and \`processStream\` applies state tags only \`if (!principal.foreign && …)\``,
     );
   }
   if (providerCalls < 2) {
@@ -881,12 +907,13 @@ function main(): void {
   const ownerInteriorBody = bodyOf(runtimeSrc, "private async ownerInteriorForTurn(", "\n  }\n");
   if (
     ownerInteriorBody === "" ||
-    !/>\s*\{\s*\n\s*if \(this\.isForeignPrincipalTurn\(\)\)\s*\n?\s*return \{ sessionState: await this\.getSessionStateSnapshot\(\) \};/.test(
+    !/principal: TurnPrincipal,\s*\n\s*\): Promise</.test(ownerInteriorBody) ||
+    !/>\s*\{\s*\n\s*if \(principal\.foreign\) return \{ sessionState: await this\.getSessionStateSnapshot\(\) \};/.test(
       ownerInteriorBody,
     )
   ) {
     interiorViolations.push(
-      `packages/runtime/src/motebit-runtime.ts: \`ownerInteriorForTurn\` must open with \`if (this.isForeignPrincipalTurn()) return { sessionState: await this.getSessionStateSnapshot() };\``,
+      `packages/runtime/src/motebit-runtime.ts: \`ownerInteriorForTurn(text, runId, principal: TurnPrincipal)\` must open with \`if (principal.foreign) return { sessionState: await this.getSessionStateSnapshot() };\``,
     );
   }
   const OWNER_BUILDER_CALL =
@@ -922,16 +949,108 @@ function main(): void {
     );
   }
   const recallToolBody = bodyOf(runtimeSrc, "async recallMemoriesForTool(", "\n  }\n");
+  const recallSigEnd = recallToolBody.indexOf("): Promise<ToolRecallResult[]> {");
   const recallToolFirst = recallToolBody
+    .slice(recallSigEnd === -1 ? recallToolBody.length : recallSigEnd)
     .split("\n")
     .slice(1)
     .find((l) => l.trim() !== "" && !/^\s*(\*|\/\/|\/\*)/.test(l));
   if (
+    !/principal: TurnPrincipal,\s*\n\s*\): Promise<ToolRecallResult\[\]> \{/.test(recallToolBody) ||
     recallToolFirst === undefined ||
-    !/^\s*if \(this\.isForeignPrincipalTurn\(\)\) return \[\];/.test(recallToolFirst)
+    !/^\s*if \(principal\.foreign\) return \[\];/.test(recallToolFirst)
   ) {
     interiorViolations.push(
-      `packages/runtime/src/motebit-runtime.ts: \`recallMemoriesForTool\` (the recall_memories backend) must open with \`if (this.isForeignPrincipalTurn()) return [];\` — found: ${(recallToolFirst ?? "(missing)").trim()}`,
+      `packages/runtime/src/motebit-runtime.ts: \`recallMemoriesForTool(query, opts, principal: TurnPrincipal)\` (the recall_memories backend) must take whose call it is as a REQUIRED argument and open with \`if (principal.foreign) return [];\` — found: ${(recallToolFirst ?? "(missing)").trim()}`,
+    );
+  }
+  // Each surface's recall_memories wiring names the owner explicitly —
+  // true because that tool is `localOnly`, which a foreign turn's registry
+  // never offers or runs.
+  const RECALL_DEF = "packages/tools/src/builtins/recall-memories.ts";
+  if (!/^\s*localOnly: true,/m.test(readFile(RECALL_DEF) ?? "")) {
+    interiorViolations.push(
+      `${RECALL_DEF}: the recall_memories definition must be \`localOnly: true\` — the surfaces' owner-principal recall wiring depends on no foreign turn ever running it`,
+    );
+  }
+  let recallCallSites = 0;
+  for (const rel of walkTsFiles("apps")) {
+    if (rel.includes("__tests__") || rel.includes("node_modules")) continue;
+    for (const line of (readFile(rel) ?? "").split("\n")) {
+      if (/^\s*(\*|\/\/|\/\*)/.test(line) || !/\.recallMemoriesForTool\(/.test(line)) continue;
+      recallCallSites++;
+      if (!/recallMemoriesForTool\(query, opts, TurnPrincipal\.OWNER\)/.test(line)) {
+        interiorViolations.push(
+          `${rel}: a surface's recall backend call must name its principal explicitly (\`recallMemoriesForTool(query, opts, TurnPrincipal.OWNER)\`): ${line.trim()}`,
+        );
+      }
+    }
+  }
+  // (ii-h) THE LAW (#943 round 9): foreign-ness is a property of a CALL PATH,
+  // never ambient runtime state. No non-test runtime file keeps or reads a
+  // "foreign turn in flight" flag; a `TurnPrincipal` is DECIDED only at the
+  // turn entries (`sendMessage`, `sendMessageStreaming` from their option, the
+  // approval resume from its paused record) and threaded from there; the
+  // runtime registry hands each handler its call's context; and the foreign
+  // tool scope lives on the turn-scoped registry, never the shared one.
+  let ambientReads = 0;
+  let principalDecisions = 0;
+  let runtimeLawFiles = 0;
+  for (const rel of walkTsFiles("packages/runtime/src")) {
+    if (rel.includes("__tests__")) continue;
+    runtimeLawFiles++;
+    const lines = (readFile(rel) ?? "").split("\n");
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i] as string;
+      if (/^\s*(\*|\/\/|\/\*)/.test(line)) continue;
+      if (
+        /\b(isForeignPrincipalTurn|enterForeignPrincipalTurn|_foreignTurn|_foreignResume)\b/.test(
+          line,
+        )
+      ) {
+        ambientReads++;
+        interiorViolations.push(
+          `${rel}:${i + 1}: a runtime-wide "foreign turn in flight" mark — whose call it is must travel on the call path (a \`TurnPrincipal\` / \`ToolCall\`), never be read from runtime state: ${line.trim()}`,
+        );
+      }
+      if (/TurnPrincipal\.of\(/.test(line) && rel !== "packages/runtime/src/turn-principal.ts") {
+        principalDecisions++;
+        const isEntry =
+          (rel === "packages/runtime/src/motebit-runtime.ts" &&
+            /const principal = TurnPrincipal\.of\(options\?\.foreignPrincipal === true\);/.test(
+              line,
+            )) ||
+          (rel === "packages/runtime/src/streaming.ts" &&
+            /const principal = TurnPrincipal\.of\(pending\.foreignPrincipal === true\);/.test(
+              line,
+            ));
+        if (!isEntry) {
+          interiorViolations.push(
+            `${rel}:${i + 1}: decides a \`TurnPrincipal\` outside a turn entry — only \`sendMessage*\` (from its option) and the approval resume (from its paused record) decide; everything else receives it: ${line.trim()}`,
+          );
+        }
+      }
+    }
+  }
+  if (principalDecisions !== 3) {
+    interiorViolations.push(
+      `packages/runtime/src: expected exactly three turn entries deciding a \`TurnPrincipal\` (sendMessage, sendMessageStreaming, the approval resume) — found ${principalDecisions}`,
+    );
+  }
+  const strSrcLaw = readFile("packages/runtime/src/simple-tool-registry.ts") ?? "";
+  const toolsForTurnBody = bodyOf(runtimeSrc, "private toolsForTurn(", "\n  }\n");
+  if (
+    !/\(entry\.handler as CallAwareToolHandler\)\(args, call\)/.test(strSrcLaw) ||
+    !/const call: ToolCall = \{ destination: this\._turnReceiptKey \?\? OWNER_ACT, principal \};/.test(
+      toolsForTurnBody,
+    ) ||
+    !/execute: \(name, args\) => inner\.execute\(name, args, call\),/.test(toolsForTurnBody) ||
+    !/if \(!principal\.foreign\) return turnRegistry;\s*\n\s*return new ScopedToolRegistry\(turnRegistry, \{\s*\n\s*allows: \(toolName\) => !this\.isLocalOnlyTool\(toolName\),/.test(
+      toolsForTurnBody,
+    )
+  ) {
+    interiorViolations.push(
+      "packages/runtime/src/motebit-runtime.ts + simple-tool-registry.ts: the turn-scoped registry (`toolsForTurn(tools, principal)`) must hand every execute the turn's `ToolCall` (`{ destination: this._turnReceiptKey ?? OWNER_ACT, principal }`), scope a FOREIGN turn to no `localOnly` tool (`new ScopedToolRegistry(turnRegistry, { allows: (toolName) => !this.isLocalOnlyTool(toolName), … })`), and the runtime registry must pass that call to the handler (`(entry.handler as CallAwareToolHandler)(args, call)`)",
     );
   }
   if (interiorViolations.length > 0) {
@@ -1193,23 +1312,25 @@ function main(): void {
     );
   }
   const ldftTurnBody = bodyOf(runtimeSrc, "private loopDepsForTurn<", "\n  }\n");
-  const toolsForTurnBody = bodyOf(runtimeSrc, "private toolsForTurn(", "\n  }\n");
+  const turnToolsBody = bodyOf(runtimeSrc, "private toolsForTurn(", "\n  }\n");
   if (
-    !/this\.toolsForTurn\(deps\.tools\)/.test(ldftTurnBody) ||
-    !/const key = this\._turnReceiptKey;/.test(toolsForTurnBody) ||
-    !/execute: \(name, args\) => inner\.execute\(name, args, key\)/.test(toolsForTurnBody)
+    !/this\.toolsForTurn\(deps\.tools, principal\)/.test(ldftTurnBody) ||
+    !/const call: ToolCall = \{ destination: this\._turnReceiptKey \?\? OWNER_ACT, principal \};/.test(
+      turnToolsBody,
+    ) ||
+    !/execute: \(name, args\) => inner\.execute\(name, args, call\)/.test(turnToolsBody)
   ) {
     receiptViolations.push(
-      "packages/runtime/src/motebit-runtime.ts: `loopDepsForTurn` must thread the turn's key into every tool execute (`this.toolsForTurn(deps.tools)` → `inner.execute(name, args, key)` with `key = this._turnReceiptKey`)",
+      "packages/runtime/src/motebit-runtime.ts: `loopDepsForTurn` must thread the turn's key into every tool execute (`this.toolsForTurn(deps.tools, principal)` → `inner.execute(name, args, call)` with `call = { destination: this._turnReceiptKey ?? OWNER_ACT, principal }`)",
     );
   }
   const strSrc = readFile("packages/runtime/src/simple-tool-registry.ts") ?? "";
   if (
-    !/destination: ReceiptDestination = OWNER_ACT/.test(strSrc) ||
-    !/this\.receiptRouter\?\.\(destination, carried\.receipt/.test(strSrc)
+    !/call: ToolCall = OWNER_CALL/.test(strSrc) ||
+    !/this\.receiptRouter\?\.\(call\.destination, carried\.receipt/.test(strSrc)
   ) {
     receiptViolations.push(
-      "packages/runtime/src/simple-tool-registry.ts: `execute` must take the caller's receipt `destination` (default `OWNER_ACT`) and route the carried receipt to it",
+      "packages/runtime/src/simple-tool-registry.ts: `execute` must take the caller's `call` (default `OWNER_CALL`) and route the carried receipt to `call.destination`",
     );
   }
   const tdrSrc = readFile("packages/runtime/src/turn-delegation-receipts.ts") ?? "";
@@ -1389,7 +1510,7 @@ function main(): void {
   }
 
   console.log(
-    `✓ check-memory-source-canonical: ${MEMORY_SOURCES_REFERENCE.length} memory source(s) locked across union + ALL_MEMORY_SOURCES + gate reference; wire-format-compliant; model/peer authorship scans clean; foreign-turn provenance locked (resolver + ${aiCoreFilesScanned} other ai-core file(s) scanned, 7 wiring links checked); foreign-turn history floor locked (${runtimeFilesScanned} other runtime file(s) scanned for conversation-store writes, ${guardedMethods} ConversationManager writer(s) + ${guardedReaders} reader(s) guarded, ${consentSites} consent site(s) guarded, 4 wiring links checked); foreign-turn serving floor locked (${interiorAiCoreFiles} ai-core file(s) scanned, ${ownerStoreReads} owner-store read(s) all inside recallOwnerInterior; ${runtimeInteriorFiles} runtime file(s) scanned, ${builderCalls} owner-block builder call(s) all inside ownerInteriorForTurn; ${ownerKeysClassified}/${DECIDED_OWNER_INTERIOR.length} decided owner-interior option(s) classified, recall backend floored); owner-only memory serving locked (${mcpFilesScanned} mcp-server file(s), ${registrationsScanned} tool/resource registration(s) scanned, ${memoryReadRegistrations} memory-read registration(s) all owner-checked; ${depFilesScanned} package/app/service src file(s) scanned, ${memoryDepDefs} memory-read dep(s) all asserting the owner; memory_recall frame owner-gated, HTTP never the owner); task receipts attributed at capture (${receiptFilesScanned} package/app/service src file(s) scanned: no shared receipt bucket; ${takeSites} carried-receipt take site (the tool registry, caller's destination); ${drainOwnerSites} owner-record read(s) + ${ownerDrainApiSites} owner-drain call(s), all the owner-only accessor; turn key threaded; handler sink-only; tap = owner act; owner-connected tools localOnly; ${mcpWiringFiles} surface MCP-wiring file(s) all through registerExternalTools, no runtime-registry merge).`,
+    `✓ check-memory-source-canonical: ${MEMORY_SOURCES_REFERENCE.length} memory source(s) locked across union + ALL_MEMORY_SOURCES + gate reference; wire-format-compliant; model/peer authorship scans clean; foreign-turn provenance locked (resolver + ${aiCoreFilesScanned} other ai-core file(s) scanned, 7 wiring links checked); foreign-turn history floor locked (${runtimeFilesScanned} other runtime file(s) scanned for conversation-store writes, ${viewAccesses} per-turn conversation view(s), foreign view ${inertMembers}/${INERT.length} members inert, ${consentSites} consent site(s) guarded, 4 wiring links checked); foreign-turn serving floor locked (${interiorAiCoreFiles} ai-core file(s) scanned, ${ownerStoreReads} owner-store read(s) all inside recallOwnerInterior; ${runtimeInteriorFiles} runtime file(s) scanned, ${builderCalls} owner-block builder call(s) all inside ownerInteriorForTurn; ${ownerKeysClassified}/${DECIDED_OWNER_INTERIOR.length} decided owner-interior option(s) classified, recall backend floored; call-path law: ${runtimeLawFiles} runtime file(s) scanned, ${ambientReads} ambient foreign mark(s), ${principalDecisions} turn-entry principal decision(s), ${recallCallSites} surface recall call(s) naming the owner); owner-only memory serving locked (${mcpFilesScanned} mcp-server file(s), ${registrationsScanned} tool/resource registration(s) scanned, ${memoryReadRegistrations} memory-read registration(s) all owner-checked; ${depFilesScanned} package/app/service src file(s) scanned, ${memoryDepDefs} memory-read dep(s) all asserting the owner; memory_recall frame owner-gated, HTTP never the owner); task receipts attributed at capture (${receiptFilesScanned} package/app/service src file(s) scanned: no shared receipt bucket; ${takeSites} carried-receipt take site (the tool registry, caller's destination); ${drainOwnerSites} owner-record read(s) + ${ownerDrainApiSites} owner-drain call(s), all the owner-only accessor; turn key threaded; handler sink-only; tap = owner act; owner-connected tools localOnly; ${mcpWiringFiles} surface MCP-wiring file(s) all through registerExternalTools, no runtime-registry merge).`,
   );
 }
 

@@ -315,6 +315,40 @@ describe("formMemoriesFromCandidates", () => {
     expect(related).toBeDefined();
   });
 
+  it("isolated_add (#943): given non-empty relevantMemories above the threshold, links NO edge to an existing node", async () => {
+    // Same fixture as the consolidate case above, which DOES link — so the
+    // only difference is the mode. `linkTargets = isolated ? [] : relevantMemories`.
+    const retrieved = await graph.formMemory(
+      {
+        content: "Owner anchor",
+        confidence: 0.9,
+        sensitivity: SensitivityLevel.None,
+        source: "user_stated",
+      },
+      [1, 1, 1],
+    );
+    const { embedText } = await import("../embeddings.js");
+    const mock = embedText as ReturnType<typeof vi.fn>;
+    mock.mockResolvedValueOnce([0.99, 0.99, 0.99]);
+
+    const { memoriesFormed } = await formMemoriesFromCandidates(
+      { memoryGraph: graph, mode: "isolated_add" },
+      [
+        {
+          content: "A stranger's candidate",
+          confidence: 0.8,
+          sensitivity: SensitivityLevel.None,
+          source: "peer_agent",
+        },
+      ],
+      [retrieved],
+    );
+
+    expect(memoriesFormed).toHaveLength(1);
+    expect(await storage.getEdges(memoriesFormed[0]!.node_id)).toEqual([]);
+    expect(await storage.getEdges(retrieved.node_id)).toEqual([]);
+  });
+
   it("exports the edge-similarity threshold as a named constant for observable drift", () => {
     expect(MEMORY_EDGE_SIMILARITY_THRESHOLD).toBe(0.7);
   });

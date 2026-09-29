@@ -7,6 +7,7 @@ import {
   NullRenderer,
   PLANNING_TASK_ROUTER,
   createRelayCapabilitiesFetcher,
+  TurnPrincipal,
 } from "@motebit/runtime";
 import { buildHardwareVerifiers } from "@motebit/verify";
 import type { StorageAdapters } from "@motebit/runtime";
@@ -379,7 +380,9 @@ export function buildToolRegistry(
     opts: { limit: number; asOf?: number; includeExpired?: boolean },
   ) => {
     if (!runtimeRef.current) return [];
-    return runtimeRef.current.recallMemoriesForTool(query, opts);
+    // The owner's door: `recall_memories` is `localOnly`, so no foreign
+    // turn's registry ever runs it (#943).
+    return runtimeRef.current.recallMemoriesForTool(query, opts, TurnPrincipal.OWNER);
   };
   const eventQueryFn = async (limit: number, eventType?: string) => {
     if (!runtimeRef.current) return [];

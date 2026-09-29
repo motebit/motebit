@@ -10,8 +10,20 @@
 import type { ToolRegistry, ToolDefinition, ToolResult, ToolHandler } from "@motebit/sdk";
 import { toolModePriority } from "@motebit/sdk";
 import type { ExecutionReceipt } from "@motebit/sdk";
-import { OWNER_ACT, takeCarriedReceipt } from "./turn-delegation-receipts.js";
+import { takeCarriedReceipt } from "./turn-delegation-receipts.js";
 import type { ReceiptDestination } from "./turn-delegation-receipts.js";
+import { OWNER_CALL } from "./turn-principal.js";
+import type { ToolCall } from "./turn-principal.js";
+
+/**
+ * A handler registered in the runtime's registry receives the call's
+ * context (#943 round 9): whose call it is travels with the call, so an
+ * owner-only handler decides from THIS call, never from runtime state.
+ */
+export type CallAwareToolHandler = (
+  args: Record<string, unknown>,
+  call: ToolCall,
+) => Promise<ToolResult>;
 
 export class SimpleToolRegistry implements ToolRegistry {
   private tools = new Map<string, { definition: ToolDefinition; handler: ToolHandler }>();
@@ -63,26 +75,27 @@ export class SimpleToolRegistry implements ToolRegistry {
   }
 
   /**
-   * Execute a tool. `destination` names who a hire's receipt belongs to —
-   * a turn's key (passed by that turn's loop deps) or, by default, the
-   * owner (`OWNER_ACT`): every caller that names no turn is an owner door.
+   * Execute a tool. `call` names who a hire's receipt belongs to (a turn's
+   * key, passed by that turn's loop deps, or the owner) and whose call it
+   * is; it defaults to `OWNER_CALL` — every caller that names no turn is an
+   * owner door. The handler receives the same `call`.
    */
   async execute(
     name: string,
     args: Record<string, unknown>,
-    destination: ReceiptDestination = OWNER_ACT,
+    call: ToolCall = OWNER_CALL,
   ): Promise<ToolResult> {
     const entry = this.tools.get(name);
     if (!entry) return { ok: false, error: `Unknown tool: ${name}` };
     let result: ToolResult;
     try {
-      result = await entry.handler(args);
+      result = await (entry.handler as CallAwareToolHandler)(args, call);
     } catch (err: unknown) {
       return { ok: false, error: err instanceof Error ? err.message : String(err) };
     }
     const carried = takeCarriedReceipt(result);
     if (carried != null) {
-      this.receiptRouter?.(destination, carried.receipt, carried.trustCredited);
+      this.receiptRouter?.(call.destination, carried.receipt, carried.trustCredited);
     }
     return result;
   }
@@ -92,7 +105,12 @@ export class SimpleToolRegistry implements ToolRegistry {
       if (!this.tools.has(def.name)) {
         this.tools.set(def.name, {
           definition: def,
-          handler: (args) => other.execute(def.name, args),
+          handler: (args, call?: ToolCall) =>
+            (
+              other as ToolRegistry & {
+                execute(n: string, a: Record<string, unknown>, c?: ToolCall): Promise<ToolResult>;
+              }
+            ).execute(def.name, args, call),
         });
       }
     }

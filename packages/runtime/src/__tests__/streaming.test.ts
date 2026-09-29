@@ -1,5 +1,11 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { MotebitRuntime, NullRenderer, SimpleToolRegistry, createInMemoryStorage } from "../index";
+import {
+  MotebitRuntime,
+  NullRenderer,
+  OWNER_CALL,
+  SimpleToolRegistry,
+  createInMemoryStorage,
+} from "../index";
 import type { PlatformAdapters, StreamChunk, ConversationStoreAdapter } from "../index";
 import type { StreamingProvider, AgenticChunk, TurnResult } from "@motebit/ai-core";
 import type { AIResponse, ContextPack, ToolHandler } from "@motebit/sdk";
@@ -261,7 +267,8 @@ describe("SimpleToolRegistry", () => {
     const result = await registry.execute("greet", { name: "world" });
     expect(result.ok).toBe(true);
     expect(result.data).toBe("hello");
-    expect(handler).toHaveBeenCalledWith({ name: "world" });
+    // #943 round 9: the handler receives the call context — an owner door by default.
+    expect(handler).toHaveBeenCalledWith({ name: "world" }, OWNER_CALL);
   });
 
   it("execute() returns error for unknown tool", async () => {

@@ -2465,12 +2465,21 @@ export async function probeFetch(): Promise<unknown> {
   {
     script: "check-memory-source-canonical",
     proves:
-      "flags a foreign principal's turn reading the owner's conversation (#904) — scan (d)(v), the read-side floor: `trimmed()` must open with `if (this.isForeignTurn()) return …` so a caller's `motebit_query` is built without the owner's history. Probe deletes that guard line from `trimmed()`; the gate must surface the reader-floor violation. byte-identical restoration on cleanup via mutateFile.",
+      "flags a foreign principal's turn reading the owner's conversation (#904, #943 round 9) — scan (d)(ii), the per-turn view: `ConversationManager.forTurn(principal)` must hand a FOREIGN principal the inert `FOREIGN_TURN_CONVERSATION`, so a caller's `motebit_query` is built without the owner's history and writes none of it. Probe deletes that line, so a foreign turn gets the owner's live view; the gate must surface the per-turn-view violation. byte-identical restoration on cleanup via mutateFile.",
     perturb: () =>
       mutateFile(`packages/runtime/src/conversation.ts`, (src) =>
+        src.replace("    if (principal.foreign) return FOREIGN_TURN_CONVERSATION;\n", ""),
+      ),
+  },
+  {
+    script: "check-memory-source-canonical",
+    proves:
+      "flags a runtime-wide \"foreign turn in flight\" mark (#943 round 9) — scan (e)(ii-h), the call-path law: foreign-ness travels on the call path (`TurnPrincipal` / `ToolCall`), never as runtime state a shared backend reads — the flaw that gave the OWNER's own concurrent calls (a completion, a recall tap) the stranger's refusal while a customer's task ran. Probe re-introduces the removed `_foreignTurn` field on the runtime; the gate must surface the ambient-mark violation. byte-identical restoration on cleanup via mutateFile.",
+    perturb: () =>
+      mutateFile(`packages/runtime/src/motebit-runtime.ts`, (src) =>
         src.replace(
-          /(trimmed\(\): ConversationMessage\[\] \{[\s\S]*?)\n\s*if \(this\.isForeignTurn\(\)\) return \[\];/,
-          "$1",
+          "  private _turnReceiptKey: symbol | null = null;\n",
+          "  private _foreignTurn = false;\n  private _turnReceiptKey: symbol | null = null;\n",
         ),
       ),
   },

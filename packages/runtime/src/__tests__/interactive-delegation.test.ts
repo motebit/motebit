@@ -9,7 +9,7 @@ import type { PlatformAdapters, StreamChunk } from "../index";
 import type { StreamingProvider, AgenticChunk, TurnResult } from "@motebit/ai-core";
 import type { AIResponse, ContextPack, ExecutionReceipt, AgentTask } from "@motebit/sdk";
 import { TrustMode, BatteryMode, AgentTaskStatus, AgentTrustLevel } from "@motebit/sdk";
-import type { AgentServiceListing, P2pPaymentProof } from "@motebit/sdk";
+import type { AgentServiceListing, P2pPaymentProof, ToolRegistry } from "@motebit/sdk";
 import { generateKeypair } from "@motebit/encryption";
 import type { ServiceListingStoreAdapter } from "../index";
 
@@ -1070,9 +1070,14 @@ describe("Agent capabilities in context", () => {
       authToken: async () => "test-token",
     });
     let during: { ok: boolean; error?: string } | null = null;
-    mockRunTurnStreaming.mockImplementation(() =>
+    let ownerDuring: { ok: boolean; error?: string } | null = null;
+    // #943 round 9: the TURN's own registry (its loop deps) is the foreign
+    // call path; the runtime's shared registry is an owner door, and the
+    // owner's concurrent call is not refused because a task is running.
+    mockRunTurnStreaming.mockImplementation((deps: { tools: ToolRegistry }) =>
       (async function* () {
-        during = await runtime.getToolRegistry().execute("retrieve_task_result", {});
+        during = await deps.tools.execute("retrieve_task_result", {});
+        ownerDuring = await runtime.getToolRegistry().execute("retrieve_task_result", {});
         yield { type: "text" as const, text: "done" };
         yield { type: "result" as const, result: makeTurnResult("done") };
       })(),
@@ -1090,7 +1095,8 @@ describe("Agent capabilities in context", () => {
     }
     expect(during).not.toBeNull();
     expect(during!.ok).toBe(false);
-    expect(during!.error).toContain("owner-only");
+    expect(during!.error).toContain("not available to another principal's task");
+    expect(ownerDuring!.ok).toBe(true);
 
     // The owner's own turn afterwards is not affected.
     const after = await runtime.getToolRegistry().execute("retrieve_task_result", {});

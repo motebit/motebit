@@ -20,6 +20,7 @@ import {
   createInMemoryStorage,
   selectAndRunDelegation,
 } from "../index";
+import { FOREIGN_CALL, executeWithCall } from "./helpers/foreign-call";
 
 const RELAY = "https://mock-relay.test";
 const ME = "alice-001";
@@ -334,8 +335,8 @@ describe("inside another principal's task, the owner's prior payment is not disc
     });
     const args = { prompt: "research X", required_capabilities: ["web_search"] };
 
-    (runtime as unknown as { _foreignTurn: boolean })._foreignTurn = true;
-    const foreign = await runtime.getToolRegistry().execute("delegate_to_agent", args);
+    // A foreign CALL (#943 round 9: whose call it is travels with it).
+    const foreign = await executeWithCall(runtime, "delegate_to_agent", args, FOREIGN_CALL);
     expect(foreign.ok).toBe(false);
     expect(foreign.error).toContain("INTENT_ALREADY_PAID");
     for (const secret of ["owner-task-7", "OWNER_TX_HASH", "/result"]) {
@@ -343,7 +344,6 @@ describe("inside another principal's task, the owner's prior payment is not disc
     }
 
     // The owner's own turn still gets the full, actionable refusal.
-    (runtime as unknown as { _foreignTurn: boolean })._foreignTurn = false;
     const own = await runtime.getToolRegistry().execute("delegate_to_agent", args);
     expect(own.error).toContain("owner-task-7");
     expect(pay).not.toHaveBeenCalled();

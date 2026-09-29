@@ -21,6 +21,7 @@ import {
   resolveProactiveAnchor,
   createRelayCapabilitiesFetcher,
   cmdSelfTest,
+  TurnPrincipal,
 } from "@motebit/runtime";
 import { buildHardwareVerifiers } from "@motebit/verify";
 import { createSolanaWalletRail, createSolanaMemoSubmitter } from "@motebit/wallet-solana";
@@ -1170,7 +1171,10 @@ export class MobileApp {
       searchProvider: new DuckDuckGoSearchProvider(),
       // Recall routes through recallMemoriesForTool — the one place the
       // sensitivity egress boundary is enforced (check-memory-tool-egress).
-      memorySearchFn: (query, opts) => runtime.recallMemoriesForTool(query, opts),
+      // The owner's door: `recall_memories` is `localOnly`, so no foreign
+      // turn's registry ever runs it (#943).
+      memorySearchFn: (query, opts) =>
+        runtime.recallMemoriesForTool(query, opts, TurnPrincipal.OWNER),
       eventQueryFn: async (limit, eventType) => {
         const filter: EventFilter = { motebit_id: runtime.motebitId, limit };
         if (eventType != null && eventType !== "") {

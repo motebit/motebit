@@ -22,6 +22,8 @@ import {
   SovereignTierRequiredError,
 } from "../index";
 import type { StreamChunk } from "../index";
+import type { ToolRegistry } from "@motebit/sdk";
+import { foreignTurnTools } from "./helpers/foreign-call";
 import type { StreamingProvider } from "@motebit/ai-core";
 import type { AIResponse, AgentTask, ExecutionReceipt } from "@motebit/sdk";
 import { AgentTaskStatus, SensitivityLevel } from "@motebit/sdk";
@@ -131,17 +133,28 @@ describe("#943 — a foreign principal's refusal is content-free", () => {
     });
   }
 
-  it("mid-turn gate (outbound tool / summarization) during a foreign turn is content-free too", () => {
+  it("a foreign turn's mid-turn outbound-tool gate is content-free; the owner's call on the same registry is not", async () => {
     const r = runtimeFor(CELLS[2]!);
-    (r as unknown as { _foreignTurn: boolean })._foreignTurn = true;
-    let err: unknown;
-    try {
-      r.assertSensitivityPermitsAiCall("outbound_tool", "web_search");
-    } catch (e) {
-      err = e;
-    }
-    expect(err).toBeInstanceOf(ForeignTurnRefusedError);
-    expect((err as Error).message).toBe(FOREIGN_REFUSAL_MESSAGE);
+    r.getToolRegistry().register(
+      {
+        name: "zz943_outbound",
+        mode: "api",
+        description: "outbound",
+        inputSchema: { type: "object", properties: {} },
+        outbound: true,
+      },
+      async () => ({ ok: true, data: "sent" }),
+    );
+    // The registry the runtime hands a FOREIGN turn's loop (#943 round 9).
+    const foreignErr = await foreignTurnTools(r)
+      .execute("zz943_outbound", {})
+      .catch((e: unknown) => e);
+    expect(foreignErr).toBeInstanceOf(ForeignTurnRefusedError);
+    expect((foreignErr as Error).message).toBe(FOREIGN_REFUSAL_MESSAGE);
+    // The owner's own call through the same shared registry stays descriptive.
+    const loopTools = (r as unknown as { loopDeps: { tools: ToolRegistry } }).loopDeps.tools;
+    const ownerErr = await loopTools.execute("zz943_outbound", {}).catch((e: unknown) => e);
+    expect(ownerErr).toBeInstanceOf(SovereignTierRequiredError);
   });
 
   it("the owner's own turn keeps the descriptive error (no regression)", async () => {

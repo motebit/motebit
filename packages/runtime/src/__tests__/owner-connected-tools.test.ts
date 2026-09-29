@@ -43,6 +43,7 @@ vi.mock("@motebit/mcp-client", async () => {
 
 import { connectMcpServers } from "@motebit/mcp-client";
 import { MotebitRuntime, NullRenderer, createInMemoryStorage } from "../index";
+import { foreignTurnTools } from "./helpers/foreign-call";
 import type { StreamChunk } from "../index";
 import type { StreamingProvider } from "@motebit/ai-core";
 import type { AIResponse, ContextPack, ToolRegistry } from "@motebit/sdk";
@@ -112,19 +113,10 @@ describe("#943 — owner-connected external tools are never a foreign turn's", (
     );
     expect(toolNames(contexts[contexts.length - 1])).not.toContain("fs__read");
 
-    // A foreign turn naming it anyway is refused by the scoped registry (#880).
-    const scoped = runtime as unknown as {
-      scopedToolRegistry: ToolRegistry;
-      _foreignTurn: boolean;
-    };
-    scoped._foreignTurn = true;
-    try {
-      const refused = await scoped.scopedToolRegistry.execute("fs__read", {});
-      expect(refused.ok).toBe(false);
-      expect(JSON.stringify(refused)).not.toContain("OWNER-FILE");
-    } finally {
-      scoped._foreignTurn = false;
-    }
+    // A foreign turn naming it anyway is refused by its turn-scoped registry (#880).
+    const refused = await foreignTurnTools(runtime).execute("fs__read", {});
+    expect(refused.ok).toBe(false);
+    expect(JSON.stringify(refused)).not.toContain("OWNER-FILE");
   });
 
   it("the runtime's mcpServers config path: every discovered tool is localOnly", async () => {
@@ -181,16 +173,7 @@ async function expectForeignCannotReach(
   expect(runtime.getToolRegistry().get(name)?.localOnly).toBe(true);
   await drain(runtime.sendMessageStreaming("use it", undefined, { foreignPrincipal: true }));
   expect(toolNames(contexts[contexts.length - 1])).not.toContain(name);
-  const internals = runtime as unknown as {
-    scopedToolRegistry: ToolRegistry;
-    _foreignTurn: boolean;
-  };
-  internals._foreignTurn = true;
-  try {
-    expect((await internals.scopedToolRegistry.execute(name, {})).ok).toBe(false);
-  } finally {
-    internals._foreignTurn = false;
-  }
+  expect((await foreignTurnTools(runtime).execute(name, {})).ok).toBe(false);
   await drain(runtime.sendMessageStreaming("hi"));
   expect(toolNames(contexts[contexts.length - 1])).toContain(name);
 }

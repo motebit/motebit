@@ -222,7 +222,9 @@ import type {
   ReflectionResult,
   TaskType,
 } from "@motebit/ai-core";
-import { TurnDelegationReceipts } from "./turn-delegation-receipts.js";
+import { OWNER_ACT, TurnDelegationReceipts } from "./turn-delegation-receipts.js";
+import { TurnPrincipal, foreignLocalOnlyRefusal } from "./turn-principal.js";
+import type { ToolCall } from "./turn-principal.js";
 import type { TurnReceiptScope } from "./turn-delegation-receipts.js";
 import { connectMcpServers } from "@motebit/mcp-client";
 // `McpClientAdapter` is the structural shape we depend on. It's inlined here
@@ -558,18 +560,6 @@ export class MotebitRuntime {
    * `enableInvokeCapability` — any surface that can delegate can also
    * fetch a result it already paid for. Null until then.
    */
-  /**
-   * True while the in-flight TURN runs ANOTHER principal's words — a
-   * `sendMessage*` call made with `foreignPrincipal: true` (every
-   * `handleAgentTask` turn passes it). Set only after the `_isProcessing`
-   * guard admits the turn and cleared in its `finally`, so it belongs to
-   * exactly one turn: a foreign task's post-turn tail (receipt, trust
-   * bump, events) or a foreign call refused by the guard never marks an
-   * owner turn (#880 round 2).
-   */
-  private _foreignTurn = false;
-  /** True while resuming a foreign principal's paused approval (#880). Same single-writer rule. */
-  private _foreignResume = false;
   private _taskQueryCoords: {
     syncUrl: string;
     authToken: (audience?: import("@motebit/protocol").TokenAudience) => Promise<string>;
@@ -998,14 +988,11 @@ export class MotebitRuntime {
     this._offerMoneyToolsToMinimalModels = config.offerMoneyToolsToMinimalModels ?? false;
     this.scopedToolRegistry = new ScopedToolRegistry(this.toolRegistry, {
       allows: (toolName) => {
-        // Foreign-principal turn (#880): a customer's `motebit_task`
-        // prompt (or a caller's `motebit_query`) runs this motebit's
-        // loop, and must not be able to steer it into the owner's
-        // interior — read_file into the receipt, rewrite_memory, the
-        // transcripts. Every `localOnly` tool is omitted from list() and
-        // refused on execute() while such a turn is in flight. Composes
-        // by AND with the tier and presence scopes below.
-        if (this.isForeignPrincipalTurn() && this.isLocalOnlyTool(toolName)) return false;
+        // The foreign-principal scope (#880) is NOT here: this registry is
+        // shared by every caller, so it cannot know whose call it is. A
+        // foreign turn's own registry is the turn-scoped wrapper
+        // (`toolsForTurn`), which omits and refuses every `localOnly` tool
+        // for that turn only (#943 round 9).
         // Capability tier (#501): a minimal-tier model is never OFFERED an
         // R4_MONEY tool — omitted from list(), fail-closed on execute().
         // Composes by AND with the presence scope below; reads the CURRENT
@@ -1023,10 +1010,6 @@ export class MotebitRuntime {
         }
         return false;
       },
-      refusal: (toolName) =>
-        this.isForeignPrincipalTurn() && this.isLocalOnlyTool(toolName)
-          ? `Tool "${toolName}" acts for this motebit's owner and is not available to another principal's task`
-          : undefined,
     });
 
     // Core engines
@@ -1425,11 +1408,9 @@ export class MotebitRuntime {
       // shipped earlier this arc; ConversationManager floors persisted
       // tier at max(default, effective) at write time.
       getEffectiveSensitivity: () => this.getEffectiveSessionSensitivity(),
-      // #904: a foreign principal's turn never writes the owner's
-      // conversation. Enforced at the state holder from the per-turn mark,
-      // so no door (sendMessage, sendMessageStreaming, the approval resume,
-      // a caller that forgets `suppressHistory`) can write it.
-      isForeignPrincipalTurn: () => this.isForeignPrincipalTurn(),
+      // #904: a foreign principal's turn never reads or writes the owner's
+      // conversation — every turn path reaches it through
+      // `conversation.forTurn(principal)` (#943 round 9), never ambiently.
     };
   }
 
@@ -1442,24 +1423,14 @@ export class MotebitRuntime {
       setSpeaking: (a) => this.behavior.setSpeaking(a),
       setDelegating: (a) => this.behavior.setDelegating(a),
       getMotebitToolServers: () => this.motebitToolServers,
-      accumulateTurnStats: (r) => this.accumulateTurnStats(r),
-      pushExchange: (u, a) => this.conversation.pushExchange(u, a),
-      pushActivation: (a) => this.conversation.pushActivation(a),
-      injectIntermediateMessages: (am, um) => this.conversation.injectIntermediateMessages(am, um),
+      accumulateTurnStats: (r, principal) => this.accumulateTurnStats(r, principal),
+      conversationFor: (principal) => this.conversation.forTurn(principal),
       logToolUsed: (n, r) => void this.logToolUsed(n, r),
-      getLiveHistory: () => this.conversation.liveHistory,
       getToolRegistry: () => this.toolRegistry,
       // #943: the approval resume runs AS its turn — its direct execute
       // names that turn as the receipt destination.
       turnReceiptDestination: () => this._turnReceiptKey ?? undefined,
-      isForeignPrincipalTurn: () => this.isForeignPrincipalTurn(),
-      enterForeignPrincipalTurn: () => {
-        this._foreignResume = true;
-        return () => {
-          this._foreignResume = false;
-        };
-      },
-      loopDepsForTurn: (deps) => this.loopDepsForTurn(deps),
+      loopDepsForTurn: (deps, principal) => this.loopDepsForTurn(deps, principal),
       sanitizeToolResult: (result, toolName) => {
         if (typeof this.policy.sanitizeAndCheck === "function") {
           const check = this.policy.sanitizeAndCheck(result, toolName);
@@ -1705,27 +1676,12 @@ export class MotebitRuntime {
    * the tool crosses the withholding line exactly when it can move money.
    */
   /**
-   * True while the in-flight turn runs another principal's words: a turn
-   * started with `foreignPrincipal: true` (every relay- or MCP-dispatched
-   * `handleAgentTask` turn, and `motebit_query`), or the resume of such a
-   * turn's paused approval. TURN-scoped, never runtime-wide: it reads only
-   * flags that the turn itself set under the `_isProcessing` guard (#880
-   * round 2 — a runtime-wide task counter stayed up through a task's tail
-   * and leaked the foreign scope onto an owner turn started in it). The
-   * one predicate every foreign-turn decision reads: the loop's tool
-   * scope, the no-approval-channel gate view, the pending-approval mark,
-   * and the owner-only delegation reads (#874), which run as tool handlers
-   * inside a turn.
-   */
-  private isForeignPrincipalTurn(): boolean {
-    return this._foreignTurn || this._foreignResume;
-  }
-
-  /**
    * The loop dependencies for the turn about to start — the ONE place a
    * turn's deps learn whose words it runs. Every turn entry
    * (`sendMessage`, `sendMessageStreaming`, and the approval resume in
-   * `StreamingManager`) builds its deps here, after its foreign mark is set.
+   * `StreamingManager`) builds its deps here, passing the `TurnPrincipal`
+   * it decided (#943 round 9 — whose words a turn runs travels on its call
+   * path; there is no runtime-wide "foreign turn in flight" state to read).
    *
    * - `foreignPrincipal` carries the per-turn mark onto the deps, where
    *   memory formation reads it: a foreign principal's turn forms
@@ -1741,6 +1697,12 @@ export class MotebitRuntime {
    * tier, no slab, no cause attached — so the owner's session state never
    * reaches the caller's MCP error or the signed task receipt (#943).
    */
+  private busyRefusal(principal: TurnPrincipal): Error {
+    return principal.foreign
+      ? new ForeignTurnRefusedError()
+      : new Error("Already processing a message");
+  }
+
   private contentFreeIfForeign<T>(foreign: boolean, gate: () => T): T {
     if (!foreign) return gate();
     try {
@@ -1750,11 +1712,15 @@ export class MotebitRuntime {
     }
   }
 
-  private loopDepsForTurn<D extends { policyGate?: unknown; tools?: unknown }>(deps: D): D {
-    const foreignPrincipal = this.isForeignPrincipalTurn();
-    // #943: this turn's tool calls carry this turn's key, so a hire's
-    // receipt is attributed to THIS turn at capture — never by draining.
-    const tools = this.toolsForTurn(deps.tools);
+  private loopDepsForTurn<D extends { policyGate?: unknown; tools?: unknown }>(
+    deps: D,
+    principal: TurnPrincipal,
+  ): D {
+    const foreignPrincipal = principal.foreign;
+    // #943: this turn's tool calls carry this turn's key and principal, so a
+    // hire's receipt is attributed to THIS turn at capture and every handler
+    // knows whose call it is — never by draining, never ambiently.
+    const tools = this.toolsForTurn(deps.tools, principal);
     const turnTools = tools !== undefined ? { tools } : {};
     if (!foreignPrincipal) return { ...deps, foreignPrincipal, ...turnTools };
     const policyGate = this.policy.withoutApprovalChannel();
@@ -1762,28 +1728,39 @@ export class MotebitRuntime {
   }
 
   /**
-   * Wrap a turn's tool registry so every `execute` names the in-flight
-   * turn's key as the receipt destination (#943). Outside a turn (no key)
-   * the registry is returned unchanged: its callers are owner doors.
+   * The turn-scoped tool registry (#943): every `execute` carries this
+   * turn's `ToolCall` — the in-flight turn's key as the receipt destination
+   * and the turn's principal — through every registry layer to the handler.
+   *
+   * A FOREIGN principal's registry also omits every `localOnly` tool from
+   * `list()` and refuses it on `execute()` (#880): a customer's
+   * `motebit_task` prompt or a caller's `motebit_query` must not steer the
+   * loop into the owner's interior (read_file into the receipt,
+   * recall_memories, rewrite_memory, the transcripts, owner-connected MCP
+   * servers). The scope belongs to THIS registry, handed only to this turn,
+   * so the owner's own concurrent calls never see it (#943 round 9).
    */
-  private toolsForTurn(tools: unknown): import("@motebit/sdk").ToolRegistry | undefined {
+  private toolsForTurn(
+    tools: unknown,
+    principal: TurnPrincipal,
+  ): import("@motebit/sdk").ToolRegistry | undefined {
     if (tools == null) return undefined;
     const inner = tools as import("@motebit/sdk").ToolRegistry & {
-      execute(
-        name: string,
-        args: Record<string, unknown>,
-        destination?: symbol,
-      ): Promise<ToolResult>;
+      execute(name: string, args: Record<string, unknown>, call?: ToolCall): Promise<ToolResult>;
     };
-    const key = this._turnReceiptKey;
-    if (key == null) return inner;
-    return {
+    const call: ToolCall = { destination: this._turnReceiptKey ?? OWNER_ACT, principal };
+    const turnRegistry: import("@motebit/sdk").ToolRegistry = {
       list: () => inner.list(),
       register: (tool, handler) => inner.register(tool, handler),
       replace: inner.replace?.bind(inner),
       unregister: inner.unregister?.bind(inner),
-      execute: (name, args) => inner.execute(name, args, key),
+      execute: (name, args) => inner.execute(name, args, call),
     };
+    if (!principal.foreign) return turnRegistry;
+    return new ScopedToolRegistry(turnRegistry, {
+      allows: (toolName) => !this.isLocalOnlyTool(toolName),
+      refusal: (toolName) => foreignLocalOnlyRefusal(toolName),
+    });
   }
 
   /** True when `toolName` is registered with `localOnly: true`. */
@@ -1828,7 +1805,7 @@ export class MotebitRuntime {
     // session in background. The creature digests what happened while it slept.
     // The result is available to buildSelfAwareness() on subsequent turns.
     if (
-      this.conversation.getSessionInfo()?.continued &&
+      this.conversation.forTurn(TurnPrincipal.OWNER).getSessionInfo()?.continued &&
       this.conversation.getHistory().length > 0
     ) {
       void this.reflectAndStore();
@@ -2421,6 +2398,7 @@ export class MotebitRuntime {
   private async ownerInteriorForTurn(
     text: string,
     runId: string | undefined,
+    principal: TurnPrincipal,
   ): Promise<
     Pick<
       TurnOptions,
@@ -2433,8 +2411,7 @@ export class MotebitRuntime {
       | "sessionState"
     >
   > {
-    if (this.isForeignPrincipalTurn())
-      return { sessionState: await this.getSessionStateSnapshot() };
+    if (principal.foreign) return { sessionState: await this.getSessionStateSnapshot() };
     const { knownAgents, agentCapabilities } = await withStageTimeout(
       "build_agent_context",
       STAGE_TIMEOUTS_MS.build_agent_context,
@@ -2575,14 +2552,19 @@ export class MotebitRuntime {
     // fail-closes regardless of init state. Default session_sensitivity
     // is `none` — this is a no-op for the common path.
     // See `check-sensitivity-routing` drift gate.
-    const clearedLoopDeps = this.contentFreeIfForeign(options?.foreignPrincipal === true, () =>
+    // TURN ENTRY (#943 round 9): whose words this turn runs is decided
+    // here, once, and threaded — never stored where a shared backend reads it.
+    const principal = TurnPrincipal.of(options?.foreignPrincipal === true);
+    const clearedLoopDeps = this.contentFreeIfForeign(principal.foreign, () =>
       this.assertSensitivityPermitsAiCall("sendMessage"),
     );
 
-    if (this._isProcessing) throw new Error("Already processing a message");
+    // A foreign caller's busy refusal is content-free: "already processing"
+    // would reveal the owner's activity, signed into a task receipt.
+    if (this._isProcessing) throw this.busyRefusal(principal);
 
     this._isProcessing = true;
-    this._foreignTurn = options?.foreignPrincipal === true;
+    const convo = this.conversation.forTurn(principal);
     // Preempt any in-flight consolidation cycle; transition presence to
     // responsive so surfaces stop showing the tending indicator. The cycle
     // sees the abort on its next phase checkpoint and yields.
@@ -2590,25 +2572,29 @@ export class MotebitRuntime {
     this.state.pushUpdate({ processing: 0.9, attention: 0.8 });
 
     try {
-      const trimmed = this.conversation.trimmed();
+      const trimmed = convo.trimmed();
       // #943: none of the owner's interior for a foreign turn.
-      const interior = await this.ownerInteriorForTurn(text, runId);
-      const result = await runTurn(this.loopDepsForTurn(clearedLoopDeps), text, {
+      const interior = await this.ownerInteriorForTurn(text, runId, principal);
+      const result = await runTurn(this.loopDepsForTurn(clearedLoopDeps, principal), text, {
         conversationHistory: trimmed,
         previousCues: this.latestCues,
         runId,
-        sessionInfo: this.conversation.getSessionInfo() ?? undefined,
+        sessionInfo: convo.getSessionInfo() ?? undefined,
         ...interior,
       });
-      this.conversation.pushExchange(text, result.response);
-      // First-conversation guidance fades after a few exchanges
-      if (this._isFirstConversation && this.conversation.getHistory().length >= 5) {
+      convo.pushExchange(text, result.response);
+      // First-conversation guidance fades after a few OWNER exchanges
+      if (
+        !principal.foreign &&
+        this._isFirstConversation &&
+        this.conversation.getHistory().length >= 5
+      ) {
         this._isFirstConversation = false;
       }
       // Accumulate behavioral stats for the intelligence gradient
-      this.accumulateTurnStats(result);
+      this.accumulateTurnStats(result, principal);
       // Session info applies only to the first message after resume
-      this.conversation.clearSessionInfo();
+      convo.clearSessionInfo();
       return result;
     } finally {
       // #885: the non-streaming turn has no chunk stream to carry a money
@@ -2624,7 +2610,6 @@ export class MotebitRuntime {
       }
       this.state.pushUpdate({ processing: 0.1, attention: 0.3 });
       this._isProcessing = false;
-      this._foreignTurn = false;
       // Return presence to idle so the next idle-tick can fire. enterIdle
       // is unconditional here — if a cycle is still unwinding, its
       // finally's exitTending will see mode!=tending and no-op.
@@ -3069,14 +3054,16 @@ export class MotebitRuntime {
     // Privacy doctrine gate. See `assertSensitivityPermitsAiCall` /
     // `SovereignTierRequiredError` for the contract. Fires before the
     // loopDeps check so the gate is independent of init state.
-    const clearedLoopDeps = this.contentFreeIfForeign(options?.foreignPrincipal === true, () =>
+    // TURN ENTRY (#943 round 9) — see `sendMessage`.
+    const principal = TurnPrincipal.of(options?.foreignPrincipal === true);
+    const clearedLoopDeps = this.contentFreeIfForeign(principal.foreign, () =>
       this.assertSensitivityPermitsAiCall("sendMessageStreaming"),
     );
 
-    if (this._isProcessing) throw new Error("Already processing a message");
+    if (this._isProcessing) throw this.busyRefusal(principal);
 
     this._isProcessing = true;
-    this._foreignTurn = options?.foreignPrincipal === true;
+    const convo = this.conversation.forTurn(principal);
     // #943: this turn's hires go to this turn's sink, and only there.
     if (this._turnReceiptScope != null && options?.onDelegationReceipts != null) {
       this._turnReceiptScope.sink = options.onDelegationReceipts;
@@ -3092,7 +3079,7 @@ export class MotebitRuntime {
     // A foreign principal's turn is not user activity (#904): it does not
     // reset the idle-tick quiet window nor count as new activity for
     // reflection.
-    if (!this._foreignTurn) this._lastUserMessageAt = Date.now();
+    if (!principal.foreign) this._lastUserMessageAt = Date.now();
     this._currentTypedIntent = options?.userActionAttestation ?? null;
     // A genuine user message releases the exchange-scoped denial brake
     // (#470): the human can re-open a line they closed — and only the human.
@@ -3105,13 +3092,13 @@ export class MotebitRuntime {
     // never voided either). Inside the foreign turn the brake is moot: its
     // gate view has no approval channel (#880), so a call that would need
     // approval is refused outright rather than re-prompting anyone.
-    if (!this._foreignTurn) this.streaming.beginExchange();
+    if (!principal.foreign) this.streaming.beginExchange();
     // A new user turn sets aside any pending approval — but never silently
     // (#462): the void renders on THIS stream via the typed chunk below, and
     // the owning surface hears it through the onApprovalVoided callback. A
     // void is not a refusal — nothing executes, nothing is recorded as
     // denied, and re-proposal re-prompts the human.
-    const voidedApproval = this._foreignTurn ? null : this.streaming.voidPendingApproval();
+    const voidedApproval = principal.foreign ? null : this.streaming.voidPendingApproval();
     this.state.pushUpdate({ processing: 0.9, attention: 0.8 });
     this.behavior.setSpeaking(true);
 
@@ -3130,9 +3117,9 @@ export class MotebitRuntime {
         yield { type: "approval_voided" as const, tool_name: voidedApproval.toolName };
       }
 
-      const trimmed = this.conversation.trimmed();
+      const trimmed = convo.trimmed();
       // #943: none of the owner's interior for a foreign turn.
-      const interior = await this.ownerInteriorForTurn(text, runId);
+      const interior = await this.ownerInteriorForTurn(text, runId, principal);
 
       // Standing-delegation presentation → verification. Artifacts in,
       // authority derived — only the sole producer mints verifiedGrant.
@@ -3153,11 +3140,11 @@ export class MotebitRuntime {
       // turn that verified it.
       this._activeTurnGrant = presentedGrant ?? options?.verifiedGrant ?? null;
 
-      const stream = runTurnStreaming(this.loopDepsForTurn(clearedLoopDeps), text, {
+      const stream = runTurnStreaming(this.loopDepsForTurn(clearedLoopDeps, principal), text, {
         conversationHistory: trimmed,
         previousCues: this.latestCues,
         runId,
-        sessionInfo: this.conversation.getSessionInfo() ?? undefined,
+        sessionInfo: convo.getSessionInfo() ?? undefined,
         ...interior,
         // A grant-presented turn is scope-bounded by the SIGNED capability
         // ceiling: tools outside `grant.scope` are denied by the policy
@@ -3170,21 +3157,25 @@ export class MotebitRuntime {
         deferMemoryFormation: this._deferMemoryFormation,
       });
       // Session info applies only to the first message after resume
-      this.conversation.clearSessionInfo();
+      convo.clearSessionInfo();
       const slabTurnId = slabTurnIdForRun(runId ?? crypto.randomUUID());
       const processed = this.streaming.processStream(
         this._catchDeferredFormationChunks(stream),
         text,
         runId,
-        { suppressHistory: options?.suppressHistory === true },
+        { principal, suppressHistory: options?.suppressHistory === true },
       );
       yield* this.projectSlabForTurn(processed, {
         turnId: slabTurnId,
         runId,
         ...(options?.goalContext ? { goalContext: options.goalContext } : {}),
       });
-      // First-conversation guidance fades after a few exchanges
-      if (this._isFirstConversation && this.conversation.getHistory().length >= 5) {
+      // First-conversation guidance fades after a few OWNER exchanges
+      if (
+        !principal.foreign &&
+        this._isFirstConversation &&
+        this.conversation.getHistory().length >= 5
+      ) {
         this._isFirstConversation = false;
       }
     } catch (err: unknown) {
@@ -3206,7 +3197,6 @@ export class MotebitRuntime {
       this.behavior.setSpeaking(false);
       this.state.pushUpdate({ processing: 0.1, attention: 0.3 });
       this._isProcessing = false;
-      this._foreignTurn = false;
       // Typed-intent consent dies with the turn. Carrying it past the
       // turn boundary would let proactive idle work (which fires
       // through `generateActivation`, never `sendMessageStreaming`)
@@ -3285,7 +3275,10 @@ export class MotebitRuntime {
         sessionState: await this.getSessionStateSnapshot(),
       });
       const slabTurnId = `slab-activation-${runId ?? crypto.randomUUID()}`;
-      const processed = this.streaming.processStream(stream, "", runId, { activationOnly: true });
+      const processed = this.streaming.processStream(stream, "", runId, {
+        principal: TurnPrincipal.OWNER,
+        activationOnly: true,
+      });
       yield* this.projectSlabForTurn(processed, {
         turnId: slabTurnId,
         runId,
@@ -4655,12 +4648,12 @@ export class MotebitRuntime {
    * Accumulate behavioral stats from a turn result and trigger gradient-related
    * side effects (precision refresh, cold-start bootstrap, periodic reflection).
    */
-  private accumulateTurnStats(result: TurnResult): void {
+  private accumulateTurnStats(result: TurnResult, principal: TurnPrincipal): void {
     // #943: another principal's turn is not the owner's behaviour — it
     // neither shapes the owner's self-model (behavioural stats, precision)
     // nor triggers a gradient bootstrap or a reflection over the owner's
-    // interior.
-    if (this.isForeignPrincipalTurn()) return;
+    // interior. The turn's own principal decides (round 9), never ambient state.
+    if (principal.foreign) return;
     const stats = this.gradientManager.behavioralStats;
     stats.turnCount++;
     stats.totalIterations += result.iterations;
@@ -4841,22 +4834,27 @@ export class MotebitRuntime {
     inner: import("@motebit/sdk").ToolRegistry,
   ): import("@motebit/sdk").ToolRegistry {
     const assertGate = (name: string): void => this.assertSensitivityPermitsOutboundTool(name);
+    const contentFree = (foreign: boolean, gate: () => void): void =>
+      this.contentFreeIfForeign(foreign, gate);
     return {
       list: () => inner.list(),
       register: (tool, handler) => inner.register(tool, handler),
       replace: inner.replace?.bind(inner),
       unregister: inner.unregister?.bind(inner),
-      async execute(name: string, args: Record<string, unknown>, destination?: symbol) {
+      async execute(name: string, args: Record<string, unknown>, call?: ToolCall) {
         const tool = inner.list().find((t) => t.name === name);
         if (tool?.outbound === true) {
-          assertGate(name);
+          // A FOREIGN call's refusal is content-free (#943): the tier and
+          // the slab are the owner's interior. Decided by THIS call's
+          // principal — an owner's concurrent call keeps the descriptive error.
+          contentFree(call?.principal.foreign === true, () => assertGate(name));
         }
-        // #943: the receipt destination is forwarded untouched.
+        // #943: the call context is forwarded untouched.
         return (
           inner as {
-            execute(n: string, a: Record<string, unknown>, d?: symbol): Promise<ToolResult>;
+            execute(n: string, a: Record<string, unknown>, c?: ToolCall): Promise<ToolResult>;
           }
-        ).execute(name, args, destination);
+        ).execute(name, args, call);
       },
     };
   }
@@ -5357,13 +5355,19 @@ export class MotebitRuntime {
    * Embeds, recalls (threading the bi-temporal `asOf` / `includeExpired` modes),
    * and maps to the tool's result shape (`supersededAt` from `valid_until`).
    */
-  async recallMemoriesForTool(query: string, opts: ToolRecallOptions): Promise<ToolRecallResult[]> {
-    // #943: a foreign principal's turn recalls none of the owner's memories.
-    // `recall_memories` is `localOnly`, so the scoped registry already
-    // refuses it on such a turn; this is the backend's own floor, so a
-    // surface that wires the backend into a tool without `localOnly` still
-    // cannot serve the owner's memory to another principal.
-    if (this.isForeignPrincipalTurn()) return [];
+  async recallMemoriesForTool(
+    query: string,
+    opts: ToolRecallOptions,
+    principal: TurnPrincipal,
+  ): Promise<ToolRecallResult[]> {
+    // #943: a foreign principal's call recalls none of the owner's
+    // memories. Whose call it is is a REQUIRED argument (round 9), never
+    // runtime-wide state: a call-aware handler passes its call's
+    // `call.principal`; a surface's `recall_memories` wiring passes
+    // `TurnPrincipal.OWNER`, which is true because that tool is `localOnly`
+    // and a foreign turn's registry (`toolsForTurn`) never offers or runs it.
+    // So the owner's own recall during a stranger's task is never blanked.
+    if (principal.foreign) return [];
     const queryEmbedding = await embedText(query);
     const nodes = await this.memory.recallRelevant(queryEmbedding, {
       limit: opts.limit,
@@ -5542,11 +5546,10 @@ export class MotebitRuntime {
         payload: payload as unknown as Record<string, unknown>,
         tombstoned: false,
       });
-      // #943: inside another principal's turn (a mid-turn outbound-tool or
-      // summarization gate) the refusal is content-free — the tier and
-      // the slab are the owner's interior. The turn DOORS run before the
-      // mark is up and use `contentFreeIfForeign` for the same rule.
-      if (this.isForeignPrincipalTurn()) throw new ForeignTurnRefusedError();
+      // #943: the gate is shared by every caller and reads no "foreign
+      // turn in flight" state (round 9). A foreign CALL's refusal is made
+      // content-free on its own path: the turn doors and the turn's
+      // outbound-tool calls wrap it in `contentFreeIfForeign`.
       throw new SovereignTierRequiredError(this._sessionSensitivity, providerMode, effective);
     }
     // Single authorized production site for `SensitivityCleared`. The
@@ -5968,7 +5971,6 @@ export class MotebitRuntime {
       getActiveGrantId: () => this._activeTurnGrant?.grant_id ?? null,
       paidIntentLedger: this._paidIntentLedger,
       retrieveTaskResult: (taskId) => this.retrieveDelegationResult(taskId),
-      isForeignPrincipalTurn: () => this.isForeignPrincipalTurn(),
     });
     this._taskQueryCoords ??= { syncUrl: config.syncUrl, authToken: config.authToken };
     // Stash the relay coordinates the deterministic granted-spend path needs

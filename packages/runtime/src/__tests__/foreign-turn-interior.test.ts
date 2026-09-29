@@ -38,7 +38,8 @@ vi.mock("@motebit/memory-graph", async () => {
   return { ...actual, embedText: (text: string) => Promise.resolve(actual.embedTextHash(text)) };
 });
 
-import { MotebitRuntime, NullRenderer, createInMemoryStorage } from "../index";
+import { MotebitRuntime, NullRenderer, TurnPrincipal, createInMemoryStorage } from "../index";
+import type { ToolCall } from "../index";
 import type { StreamChunk } from "../index";
 import type { StreamingProvider } from "@motebit/ai-core";
 import { buildSystemPrompt } from "@motebit/ai-core";
@@ -308,9 +309,11 @@ describe("#943 — a foreign turn is served none of the owner's interior", () =>
     expectNoOwnerInterior(resumed);
   });
 
-  it("the recall_memories backend returns nothing on a foreign turn, even through a non-localOnly tool", async () => {
+  it("the recall_memories backend returns nothing for a foreign call, even through a non-localOnly tool", async () => {
     // A surface that wired the recall backend into a tool WITHOUT
-    // `localOnly` (the scoped registry's #880 floor would not apply).
+    // `localOnly` (the foreign turn's registry floor would not apply). The
+    // backend's principal is a REQUIRED argument (#943 round 9): a
+    // call-aware handler passes its own call's principal.
     const EXT_RECALL: ToolDefinition = {
       name: "ext_recall",
       mode: "api",
@@ -334,8 +337,12 @@ describe("#943 — a foreign turn is served none of the owner's interior", () =>
     };
     const { runtime, contexts } = await seededRuntime(respond);
     const results: string[] = [];
-    runtime.getToolRegistry().register(EXT_RECALL, async () => {
-      const found = await runtime.recallMemoriesForTool(QUERY, { limit: 5 });
+    runtime.getToolRegistry().register(EXT_RECALL, async (_args, call?: ToolCall) => {
+      const found = await runtime.recallMemoriesForTool(
+        QUERY,
+        { limit: 5 },
+        call?.principal ?? TurnPrincipal.FOREIGN,
+      );
       results.push(JSON.stringify(found));
       return { ok: true, data: found };
     });

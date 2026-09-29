@@ -10,6 +10,7 @@ import {
   getOrPinRelayKey,
   verifyAgentCommandEnvelope,
   servedToolNames,
+  TurnPrincipal,
 } from "@motebit/runtime";
 import type { TokenAudience } from "@motebit/sdk";
 import { createSolanaWalletRail, createSolanaMemoSubmitter } from "@motebit/wallet-solana";
@@ -1005,7 +1006,10 @@ export class UnbootedWebApp {
       readUrlProxy: `${PROXY_BASE_URL}/v1/fetch`,
       // Recall routes through recallMemoriesForTool — the one place the
       // sensitivity egress boundary is enforced (check-sensitivity-routing).
-      memorySearchFn: (query, opts) => runtime.recallMemoriesForTool(query, opts),
+      // The owner's door: `recall_memories` is `localOnly`, so no foreign
+      // turn's registry ever runs it (#943).
+      memorySearchFn: (query, opts) =>
+        runtime.recallMemoriesForTool(query, opts, TurnPrincipal.OWNER),
       eventQueryFn: async (limit, eventType) => {
         const events = await runtime.events.query({
           motebit_id: runtime.motebitId,

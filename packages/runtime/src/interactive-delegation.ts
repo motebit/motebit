@@ -21,6 +21,7 @@ import {
   type TaskRetrieval,
 } from "./relay-delegation.js";
 import { fromMicro, RiskLevel, SideEffect } from "@motebit/protocol";
+import type { ToolCall } from "./turn-principal.js";
 
 /**
  * Render the settlement fact as a sentence the model can relay verbatim. The
@@ -145,13 +146,6 @@ export interface InteractiveDelegationConfig {
    * resolution itself.
    */
   retrieveTaskResult?: (taskId: string) => Promise<TaskRetrieval>;
-  /**
-   * True while the loop is running ANOTHER principal's task (the runtime's
-   * `handleAgentTask`). `retrieve_task_result` is owner-only: it refuses
-   * then, so a customer's prompt cannot list this motebit's paid tasks or
-   * read work it bought for someone else. Absent ⇒ never foreign.
-   */
-  isForeignPrincipalTurn?: () => boolean;
 }
 
 /**
@@ -374,7 +368,9 @@ export class InteractiveDelegationManager {
         // harmless without one (the tool is R2 and never meters).
         ...(config.buildP2pPayment ? { moneyBinding: "late" as const } : {}),
       },
-      async (args: Record<string, unknown>) => {
+      // #943 round 9: whose call this is arrives WITH the call (`call`,
+      // from the runtime registry) — never from runtime-wide state.
+      async (args: Record<string, unknown>, call?: ToolCall) => {
         const prompt = args.prompt as string;
         const requiredCapabilities = args.required_capabilities as string[] | undefined;
 
@@ -441,10 +437,7 @@ export class InteractiveDelegationManager {
           // Inside ANOTHER principal's task (a molecule serving a customer),
           // the prior payment is the owner's business: refuse without the
           // owner's task id, tx or /result pointer (#874 review).
-          if (
-            result.error.code === "intent_already_paid" &&
-            config.isForeignPrincipalTurn?.() === true
-          ) {
+          if (result.error.code === "intent_already_paid" && call?.principal.foreign === true) {
             return {
               ok: false,
               error:
@@ -730,8 +723,12 @@ export class InteractiveDelegationManager {
           localOnly: true,
           riskHint: { risk: RiskLevel.R0_READ, sideEffect: SideEffect.NONE },
         },
-        async (args: Record<string, unknown>) => {
-          if (config.isForeignPrincipalTurn?.() === true) {
+        // `retrieve_task_result` is owner-only: a foreign CALL (a customer's
+        // prompt) cannot list this motebit's paid tasks or read work it
+        // bought for someone else. Defense in depth — the tool is
+        // `localOnly`, so a foreign turn's registry never offers it.
+        async (args: Record<string, unknown>, call?: ToolCall) => {
+          if (call?.principal.foreign === true) {
             return {
               ok: false,
               error:
