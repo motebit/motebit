@@ -38,8 +38,12 @@
  * rest (u ≤ 70 s), and every cell that went red while the round-7 design was
  * built (`REGRESSIONS`). MOTEBIT_LIVENESS_FULL=1 runs the whole sweep (730
  * cells; the u = 200 and 900 s cells simulate up to 250 hours each, so it
- * takes an hour on a busy machine — run it on demand, not in CI).
- * MOTEBIT_LIVENESS_CELL='a|b' runs the cells whose names contain a or b;
+ * takes one to two hours — run it on demand, not in CI; give it a larger
+ * heap, NODE_OPTIONS=--max-old-space-size=16384: the model of main never
+ * joins a sync, so on a 900 s/event link it holds thousands of overlapping
+ * syncs, and the default heap runs out).
+ * MOTEBIT_LIVENESS_CELL='a|b' runs the cells whose names contain a or b
+ * (with MOTEBIT_LIVENESS_EXACT=1, whose names ARE a or b);
  * MOTEBIT_LIVENESS_VERBOSE prints every cell's counts, _TIMING its wall
  * time, _TRACE a wire timeline (sim-net.ts).
  *
@@ -640,30 +644,41 @@ export function defineShard(k: number): void {
     });
     const all = process.env.MOTEBIT_LIVENESS_FULL ? sweep() : gridCells();
     const cells = all.filter((_, i) => i % SHARDS === k - 1);
-    it(`${cells.length} cells`, async () => {
-      // MOTEBIT_LIVENESS_CELL: only cells whose name contains one of these ('|'-separated).
-      const only = process.env.MOTEBIT_LIVENESS_CELL?.split("|").filter((x) => x !== "");
-      const failures: string[] = [];
-      for (const c of cells) {
-        const name = cellName(c);
-        if (only && only.length > 0 && !only.some((o) => name.includes(o))) continue;
-        let r: { main: Outcome; branch: Outcome };
-        try {
-          r = await runCell(c);
-        } catch (err: unknown) {
-          failures.push(`${name}: threw ${err instanceof Error ? err.message : String(err)}`);
-          continue;
+    it(
+      `${cells.length} cells`,
+      async () => {
+        // MOTEBIT_LIVENESS_CELL: only cells whose name contains one of these ('|'-separated).
+        const only = process.env.MOTEBIT_LIVENESS_CELL?.split("|").filter((x) => x !== "");
+        const failures: string[] = [];
+        for (const c of cells) {
+          const name = cellName(c);
+          const exact = Boolean(process.env.MOTEBIT_LIVENESS_EXACT);
+          if (
+            only &&
+            only.length > 0 &&
+            !only.some((o) => (exact ? name === o : name.includes(o)))
+          ) {
+            continue;
+          }
+          let r: { main: Outcome; branch: Outcome };
+          try {
+            r = await runCell(c);
+          } catch (err: unknown) {
+            failures.push(`${name}: threw ${err instanceof Error ? err.message : String(err)}`);
+            continue;
+          }
+          if (process.env.MOTEBIT_LIVENESS_VERBOSE) {
+            process.stdout.write(
+              `CELL ${name}: main ${r.main.delivered}/${r.main.total} branch ${r.branch.delivered}/${r.branch.total} safe=${r.branch.cursorSafe} resent=${r.branch.resentInFlight ?? 0} hedged=${r.branch.resentHung ?? 0} live=${r.branch.cursorLive ?? "-"}\n`,
+            );
+          }
+          const v = verdict(c, r);
+          if (v) failures.push(v);
         }
-        if (process.env.MOTEBIT_LIVENESS_VERBOSE) {
-          process.stdout.write(
-            `CELL ${name}: main ${r.main.delivered}/${r.main.total} branch ${r.branch.delivered}/${r.branch.total} safe=${r.branch.cursorSafe} resent=${r.branch.resentInFlight ?? 0} hedged=${r.branch.resentHung ?? 0} live=${r.branch.cursorLive ?? "-"}\n`,
-          );
-        }
-        const v = verdict(c, r);
-        if (v) failures.push(v);
-      }
-      expect(failures, `${failures.length} red cell(s)`).toEqual([]);
-    }, 3_600_000);
+        expect(failures, `${failures.length} red cell(s)`).toEqual([]);
+      },
+      (process.env.MOTEBIT_LIVENESS_FULL ? 8 : 1) * 3_600_000,
+    ); // the full sweep's slow cells take hours
     if (k === 1) {
       it("the sweep covers every dimension named", () => {
         const all = sweep();
