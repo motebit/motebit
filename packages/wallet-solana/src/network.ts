@@ -82,6 +82,28 @@ export interface ResolveSolanaNetworkOptions {
   retryDelaysMs?: readonly number[];
   /** Sleep seam for tests. Default: `setTimeout`. */
   sleep?: (ms: number) => Promise<void>;
+  /**
+   * Bound on each read (ms). A hung RPC is a failed read, never a wait
+   * without end. Default {@link SOLANA_GENESIS_READ_TIMEOUT_MS}.
+   */
+  timeoutMs?: number;
+}
+
+/** Default bound on one genesis-hash read. */
+export const SOLANA_GENESIS_READ_TIMEOUT_MS = 5_000;
+
+/** `read()` bounded by `timeoutMs`: a read that has not answered by then rejects. */
+function readWithTimeout(read: SolanaGenesisHashReader, timeoutMs: number): Promise<string> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  return Promise.race([
+    read(),
+    new Promise<never>((_, reject) => {
+      timer = setTimeout(
+        () => reject(new Error(`getGenesisHash timed out after ${timeoutMs}ms`)),
+        timeoutMs,
+      );
+    }),
+  ]).finally(() => clearTimeout(timer));
 }
 
 /**
@@ -95,6 +117,7 @@ export async function resolveSolanaNetwork(
   options: ResolveSolanaNetworkOptions = {},
 ): Promise<SolanaNetworkResolution> {
   const delays = options.retryDelaysMs ?? [];
+  const timeoutMs = options.timeoutMs ?? SOLANA_GENESIS_READ_TIMEOUT_MS;
   const sleep =
     options.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
   let lastError = "";
@@ -105,7 +128,7 @@ export async function resolveSolanaNetwork(
     let genesisHash: string;
     let network: string;
     try {
-      genesisHash = await readGenesisHash();
+      genesisHash = await readWithTimeout(readGenesisHash, timeoutMs);
       network = solanaCaip2FromGenesisHash(genesisHash);
     } catch (err) {
       lastError = err instanceof Error ? err.message : String(err);
@@ -117,4 +140,116 @@ export async function resolveSolanaNetwork(
     return { status: "resolved", network, genesisHash };
   }
   return { status: "unavailable", reason: lastError, attempts };
+}
+
+/** What a {@link SolanaNetworkResolver} knows right now. */
+export type SolanaNetworkState =
+  /** Not read yet. */
+  | { status: "pending" }
+  /** Terminal: the cluster the RPC serves. */
+  | { status: "resolved"; network: string; genesisHash: string }
+  /** Terminal for the life of the resolver: a declared network the RPC contradicted. */
+  | { status: "mismatch"; expected: string; network: string; genesisHash: string }
+  /** The last read failed; the next `resolve()` reads again. */
+  | { status: "unavailable"; reason: string; failures: number };
+
+export interface SolanaNetworkResolverOptions {
+  /** A declared CAIP-2 id the RPC must agree with (e.g. `SOLANA_NETWORK`). */
+  expected?: string;
+  /** Bound on each read. Default {@link SOLANA_GENESIS_READ_TIMEOUT_MS}. */
+  timeoutMs?: number;
+  /** Called on every state change (log it; surface it). */
+  onChange?: (state: SolanaNetworkState) => void;
+}
+
+/**
+ * The network of one RPC endpoint, resolved LAZILY and shared by everything
+ * that labels a chain (#954). Nothing awaits it at construction: each
+ * consumer calls `resolve()` when it is about to rely on the label.
+ *
+ *   - `resolved` is cached — one successful read per endpoint.
+ *   - `mismatch` is cached and PERMANENT: an RPC that once served a cluster
+ *     other than the declared one is never trusted again, so an endpoint that
+ *     alternates clusters (a load balancer over two) can never slip a write
+ *     through on a lucky read.
+ *   - `unavailable` is not cached: the next `resolve()` reads again, so a
+ *     transient outage heals without a restart.
+ *
+ * Concurrent callers share one in-flight read. Every read is time-bounded.
+ */
+export class SolanaNetworkResolver {
+  private current: SolanaNetworkState = { status: "pending" };
+  private inflight: Promise<SolanaNetworkResolution> | undefined;
+  private failures = 0;
+
+  constructor(
+    private readonly read: SolanaGenesisHashReader,
+    private readonly options: SolanaNetworkResolverOptions = {},
+  ) {}
+
+  /** The declared network this resolver checks the RPC against, if any. */
+  get expected(): string | undefined {
+    return this.options.expected;
+  }
+
+  /** What is known now, without reading. */
+  get state(): SolanaNetworkState {
+    return this.current;
+  }
+
+  /** The resolved network, or undefined while pending / unavailable / mismatched. */
+  get network(): string | undefined {
+    return this.current.status === "resolved" ? this.current.network : undefined;
+  }
+
+  /** Resolve (or return the cached terminal answer). Never throws. */
+  resolve(): Promise<SolanaNetworkResolution> {
+    const s = this.current;
+    if (s.status === "resolved") {
+      return Promise.resolve({
+        status: "resolved",
+        network: s.network,
+        genesisHash: s.genesisHash,
+      });
+    }
+    if (s.status === "mismatch") {
+      return Promise.resolve({
+        status: "mismatch",
+        expected: s.expected,
+        network: s.network,
+        genesisHash: s.genesisHash,
+      });
+    }
+    if (this.inflight) return this.inflight;
+    const inflight = resolveSolanaNetwork(this.read, {
+      ...(this.options.expected !== undefined ? { expected: this.options.expected } : {}),
+      ...(this.options.timeoutMs !== undefined ? { timeoutMs: this.options.timeoutMs } : {}),
+    })
+      .then((r) => {
+        this.transition(r);
+        return r;
+      })
+      .finally(() => {
+        this.inflight = undefined;
+      });
+    this.inflight = inflight;
+    return inflight;
+  }
+
+  private transition(r: SolanaNetworkResolution): void {
+    if (r.status === "resolved") {
+      this.current = { status: "resolved", network: r.network, genesisHash: r.genesisHash };
+    } else if (r.status === "mismatch") {
+      this.current = {
+        status: "mismatch",
+        expected: r.expected,
+        network: r.network,
+        genesisHash: r.genesisHash,
+      };
+    } else {
+      this.failures += r.attempts;
+      this.current = { status: "unavailable", reason: r.reason, failures: this.failures };
+    }
+    this.options.onChange?.(this.current);
+  }
 }

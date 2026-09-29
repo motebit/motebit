@@ -15,6 +15,7 @@ import {
   isSolanaCaip2,
   resolveSolanaNetwork,
   solanaCaip2FromGenesisHash,
+  SolanaNetworkResolver,
 } from "../network.js";
 
 const noSleep = () => Promise.resolve();
@@ -113,5 +114,76 @@ describe("resolveSolanaNetwork", () => {
   it("a garbage answer is treated as a failed read, not a label", async () => {
     const out = await resolveSolanaNetwork(async () => "garbage", { sleep: noSleep });
     expect(out.status).toBe("unavailable");
+  });
+});
+
+describe("resolveSolanaNetwork — every read is time-bounded", () => {
+  it("a read that never answers is unavailable after the timeout, not a wait without end", async () => {
+    const out = await resolveSolanaNetwork(() => new Promise<string>(() => {}), { timeoutMs: 20 });
+    expect(out).toEqual({
+      status: "unavailable",
+      reason: "getGenesisHash timed out after 20ms",
+      attempts: 1,
+    });
+  });
+});
+
+describe("SolanaNetworkResolver — lazy, cached, never a boot gate (#954 round 2)", () => {
+  it("constructing it reads nothing", () => {
+    const read = vi.fn(async () => SOLANA_DEVNET_GENESIS_HASH);
+    const r = new SolanaNetworkResolver(read);
+    expect(read).not.toHaveBeenCalled();
+    expect(r.state).toEqual({ status: "pending" });
+    expect(r.network).toBeUndefined();
+  });
+
+  it("a transient outage heals on a later resolve: 4 failures, then the cluster — no restart", async () => {
+    let calls = 0;
+    const r = new SolanaNetworkResolver(async () => {
+      calls++;
+      if (calls <= 4) throw new Error("503 Service Unavailable");
+      return SOLANA_DEVNET_GENESIS_HASH;
+    });
+    for (let i = 1; i <= 4; i++) {
+      expect((await r.resolve()).status).toBe("unavailable");
+      expect(r.state).toMatchObject({ status: "unavailable", failures: i });
+    }
+    expect(await r.resolve()).toMatchObject({ status: "resolved", network: SOLANA_DEVNET_CAIP2 });
+    expect(r.network).toBe(SOLANA_DEVNET_CAIP2);
+    await r.resolve();
+    expect(calls, "resolved is cached").toBe(5);
+  });
+
+  it("an RPC that ALTERNATES clusters: after one mismatch it is never trusted again", async () => {
+    let calls = 0;
+    const r = new SolanaNetworkResolver(
+      async () => (calls++ % 2 === 0 ? SOLANA_DEVNET_GENESIS_HASH : SOLANA_MAINNET_GENESIS_HASH),
+      { expected: SOLANA_MAINNET_CAIP2 },
+    );
+    expect((await r.resolve()).status).toBe("mismatch");
+    for (let i = 0; i < 5; i++) expect((await r.resolve()).status).toBe("mismatch");
+    expect(calls, "a mismatch is terminal: no re-read can turn it into a pass").toBe(1);
+    expect(r.network).toBeUndefined();
+  });
+
+  it("concurrent callers share one read", async () => {
+    let release: (v: string) => void = () => {};
+    const read = vi.fn(() => new Promise<string>((res) => (release = res)));
+    const r = new SolanaNetworkResolver(read);
+    const a = r.resolve();
+    const b = r.resolve();
+    release(SOLANA_TESTNET_GENESIS_HASH);
+    expect((await a).status).toBe("resolved");
+    expect((await b).status).toBe("resolved");
+    expect(read).toHaveBeenCalledTimes(1);
+  });
+
+  it("reports every state change", async () => {
+    const seen: string[] = [];
+    const r = new SolanaNetworkResolver(async () => SOLANA_DEVNET_GENESIS_HASH, {
+      onChange: (st) => seen.push(st.status),
+    });
+    await r.resolve();
+    expect(seen).toEqual(["resolved"]);
   });
 });

@@ -310,7 +310,7 @@ describe("startSolanaTreasuryReconciliationLoop", () => {
         intervalMs: 10,
         reconciler,
       }),
-    ).toThrow(/injected reconciler writes chain/);
+    ).toThrow(/reconciler writes chain .* the resolved chain is/);
   });
 
   it("respects isFrozen() — skips cycle when frozen", async () => {

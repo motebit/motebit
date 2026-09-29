@@ -32,7 +32,7 @@ import {
   SOLANA_MAINNET_CAIP2,
   SOLANA_DEVNET_CAIP2,
   SOLANA_TESTNET_CAIP2,
-  solanaCaip2FromGenesisHash,
+  SolanaNetworkResolver,
 } from "./network.js";
 
 // Solana Memo Program v2
@@ -58,6 +58,19 @@ export interface SolanaMemoSubmitterConfig {
    * An unreadable genesis hash refuses the write; the next write retries.
    */
   network?: string;
+  /**
+   * A shared resolver for this RPC (the relay passes the one its health
+   * surface and reconciliation also read). When given, it is the only source
+   * of the network, and `network`, if also given, must equal its `expected`.
+   * Default: a resolver over this submitter's own connection.
+   */
+  networkResolver?: SolanaNetworkResolver;
+}
+
+function mismatchError(expected: string, served: string): Error {
+  return new Error(
+    `SolanaMemoSubmitter refuses to write: declared network ${expected} but the RPC serves ${served}`,
+  );
 }
 
 export class SolanaMemoSubmitter implements ChainAnchorSubmitter {
@@ -66,12 +79,8 @@ export class SolanaMemoSubmitter implements ChainAnchorSubmitter {
   private readonly connection: Connection;
   private readonly keypair: Keypair;
   private readonly commitment: Commitment;
-  /** The caller's declared network, unverified until `resolveNetwork` runs. */
-  private readonly declaredNetwork: string | undefined;
-  /** The network read from the RPC's genesis hash (and equal to the declared one). */
-  private verifiedNetwork: string | undefined;
-  /** A declared network the RPC contradicted — permanent; every write refuses. */
-  private mismatch: Error | undefined;
+  /** Where the network comes from: the RPC's genesis hash, lazily, with a timeout. */
+  private readonly resolver: SolanaNetworkResolver;
 
   constructor(config: SolanaMemoSubmitterConfig) {
     if (config.identitySeed.length !== 32) {
@@ -82,7 +91,19 @@ export class SolanaMemoSubmitter implements ChainAnchorSubmitter {
     this.commitment = config.commitment ?? "confirmed";
     this.connection = new Connection(config.rpcUrl, this.commitment);
     this.keypair = Keypair.fromSeed(config.identitySeed);
-    this.declaredNetwork = config.network;
+    if (config.networkResolver) {
+      if (config.network !== undefined && config.network !== config.networkResolver.expected) {
+        throw new Error(
+          `SolanaMemoSubmitter: network ${config.network} disagrees with the resolver's declared ${String(config.networkResolver.expected)}`,
+        );
+      }
+      this.resolver = config.networkResolver;
+    } else {
+      const connection = this.connection;
+      this.resolver = new SolanaNetworkResolver(() => connection.getGenesisHash(), {
+        ...(config.network !== undefined ? { expected: config.network } : {}),
+      });
+    }
   }
 
   /**
@@ -93,8 +114,10 @@ export class SolanaMemoSubmitter implements ChainAnchorSubmitter {
    * after a successful submit, by which point it is verified.
    */
   get network(): string {
-    if (this.verifiedNetwork !== undefined) return this.verifiedNetwork;
-    if (this.declaredNetwork !== undefined) return this.declaredNetwork;
+    const state = this.resolver.state;
+    if (state.status === "resolved") return state.network;
+    if (state.status === "mismatch") throw mismatchError(state.expected, state.network);
+    if (this.resolver.expected !== undefined) return this.resolver.expected;
     throw new Error(
       "SolanaMemoSubmitter network is not yet known: it is read from the RPC's genesis hash before the first write (resolveNetwork)",
     );
@@ -107,17 +130,12 @@ export class SolanaMemoSubmitter implements ChainAnchorSubmitter {
    * no anchor is ever written under a label the RPC contradicts.
    */
   async resolveNetwork(): Promise<string> {
-    if (this.mismatch) throw this.mismatch;
-    if (this.verifiedNetwork !== undefined) return this.verifiedNetwork;
-    const network = solanaCaip2FromGenesisHash(await this.connection.getGenesisHash());
-    if (this.declaredNetwork !== undefined && this.declaredNetwork !== network) {
-      this.mismatch = new Error(
-        `SolanaMemoSubmitter refuses to write: declared network ${this.declaredNetwork} but the RPC serves ${network}`,
-      );
-      throw this.mismatch;
-    }
-    this.verifiedNetwork = network;
-    return network;
+    const r = await this.resolver.resolve();
+    if (r.status === "resolved") return r.network;
+    if (r.status === "mismatch") throw mismatchError(r.expected, r.network);
+    throw new Error(
+      `SolanaMemoSubmitter refuses to write: the RPC's network is unknown (${r.reason})`,
+    );
   }
 
   /** The relay's Solana address (base58 public key). */

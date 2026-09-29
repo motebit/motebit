@@ -126,20 +126,34 @@ export function bootRealEntry(
  * when it cannot, so a booted P2P test points the entry here and names the
  * payer once its delegator exists (`setPayer`). `getTransaction` answers every
  * signature as a landed USDC transfer whose single payer is that address;
- * `getGenesisHash` answers the cluster the fake serves (mainnet-beta unless
- * `genesisHash` names another, or `null` for a JSON-RPC error — #954: the
- * relay reads its Solana network from this at boot); every other method is a
- * JSON-RPC error (the entry's anchoring loops log it).
+ * `getGenesisHash` answers the cluster the fake serves (#954: the relay reads
+ * its Solana network from it, lazily). Options: `genesisHash` names the
+ * cluster (default mainnet-beta; `null` = JSON-RPC error),
+ * `genesisFailures` answers the first N reads with HTTP 503, `genesisHang`
+ * never answers them. The fake also answers what an anchor write and a
+ * reconciliation cycle need (`getLatestBlockhash`, `getBalance`,
+ * `sendTransaction`, `getAccountInfo` = no token account, `getBlockHeight`
+ * past every blockhash so a confirm fails fast); every other method is a
+ * JSON-RPC error. `callsOf(method)` counts requests per method.
  */
 export interface FakeSolanaRpc {
   url: string;
   setPayer(address: string): void;
   getTransactionCalls(): number;
+  callsOf(method: string): number;
+  /** `sendTransaction` requests that arrived before any genesis read was answered. */
+  writesBeforeGenesis(): number;
   close(): Promise<void>;
 }
 
+export interface FakeSolanaRpcOptions {
+  genesisHash?: string | null;
+  genesisFailures?: number;
+  genesisHang?: boolean;
+}
+
 export async function startFakeSolanaRpc(
-  options: { genesisHash?: string | null } = {},
+  options: FakeSolanaRpcOptions = {},
 ): Promise<FakeSolanaRpc> {
   const { createServer } = await import("node:http");
   const { USDC_MINT_MAINNET, SOLANA_MAINNET_GENESIS_HASH } = await import("@motebit/wallet-solana");
@@ -147,6 +161,11 @@ export async function startFakeSolanaRpc(
     options.genesisHash === undefined ? SOLANA_MAINNET_GENESIS_HASH : options.genesisHash;
   let payer = "11111111111111111111111111111111";
   let calls = 0;
+  const perMethod = new Map<string, number>();
+  let genesisFailuresLeft = options.genesisFailures ?? 0;
+  const ok = (id: unknown, result: unknown) => ({ jsonrpc: "2.0", id, result });
+  let genesisAnswered = false;
+  let earlyWrites = 0;
   const amount = (a: string) => ({
     amount: a,
     decimals: 6,
@@ -158,9 +177,42 @@ export async function startFakeSolanaRpc(
     req.on("data", (c: Buffer) => (raw += c.toString()));
     req.on("end", () => {
       const msg = JSON.parse(raw) as { id: unknown; method: string; params?: unknown[] };
+      perMethod.set(msg.method, (perMethod.get(msg.method) ?? 0) + 1);
       let body: unknown;
+      if (msg.method === "getGenesisHash" && options.genesisHang === true) {
+        return; // never answered (the request is destroyed on close)
+      }
+      if (msg.method === "getGenesisHash" && genesisFailuresLeft > 0) {
+        genesisFailuresLeft--;
+        res.writeHead(503, { "Content-Type": "text/plain" });
+        res.end("Service Unavailable");
+        return;
+      }
+      if (msg.method === "sendTransaction" && !genesisAnswered) earlyWrites++;
       if (msg.method === "getGenesisHash" && genesisHash !== null) {
-        body = { jsonrpc: "2.0", id: msg.id, result: genesisHash };
+        genesisAnswered = true;
+        body = ok(msg.id, genesisHash);
+      } else if (msg.method === "getLatestBlockhash") {
+        body = ok(msg.id, {
+          context: { slot: 1 },
+          value: {
+            blockhash: "GHtXQBsoZHVnNFa9YevAzFr17DJjgHXk3ycTKD5xD3Zi",
+            lastValidBlockHeight: 1,
+          },
+        });
+      } else if (msg.method === "getBalance") {
+        body = ok(msg.id, { context: { slot: 1 }, value: 1_000_000_000 });
+      } else if (msg.method === "sendTransaction") {
+        body = ok(
+          msg.id,
+          "5VERv8NMvzbJMEkV8xnrLkEaWRtSz9CosKDYjCJjBRnbJLgp8uirBgmQpjKhoR4tjF3ZpRzrFmBV6UjKdiSZkQUW",
+        );
+      } else if (msg.method === "getAccountInfo") {
+        body = ok(msg.id, { context: { slot: 1 }, value: null });
+      } else if (msg.method === "getBlockHeight") {
+        body = ok(msg.id, 1_000_000);
+      } else if (msg.method === "getSignatureStatuses") {
+        body = ok(msg.id, { context: { slot: 1 }, value: [null] });
       } else if (msg.method === "getTransaction") {
         calls++;
         const first = msg.params?.[0];
@@ -237,7 +289,13 @@ export async function startFakeSolanaRpc(
       payer = a;
     },
     getTransactionCalls: () => calls,
-    close: () => new Promise<void>((r) => server.close(() => r())),
+    callsOf: (method) => perMethod.get(method) ?? 0,
+    writesBeforeGenesis: () => earlyWrites,
+    close: () =>
+      new Promise<void>((r) => {
+        server.closeAllConnections();
+        server.close(() => r());
+      }),
   };
 }
 

@@ -689,6 +689,40 @@ describe("SolanaMemoSubmitter — network is the RPC's cluster, never a default 
     expect(submitter.network).toBe(SOLANA_DEVNET_CAIP2);
   });
 
+  it("an RPC that ALTERNATES clusters: after one mismatch, no write ever happens", async () => {
+    let calls = 0;
+    getGenesisHashMock.mockImplementation(async () =>
+      calls++ % 2 === 0 ? SOLANA_DEVNET_GENESIS_HASH : SOLANA_MAINNET_GENESIS_HASH,
+    );
+    const submitter = new SolanaMemoSubmitter({
+      rpcUrl: "http://rpc",
+      identitySeed: seed,
+      network: SOLANA_MAINNET_CAIP2,
+    });
+    for (let i = 0; i < 6; i++) {
+      await expect(submitter.submitMerkleRoot(ROOT, "r", 1)).rejects.toThrow(/refuses to write/);
+    }
+    await expect(submitter.submitRevocation("ab".repeat(32), 1)).rejects.toThrow(/refuses/);
+    expect(await submitter.isAvailable()).toBe(false);
+    expect(sendRawTransactionMock).not.toHaveBeenCalled();
+    expect(() => submitter.network).toThrow(/refuses to write/);
+  });
+
+  it("a genesis read that hangs refuses the write after the timeout — it never waits without end", async () => {
+    getGenesisHashMock.mockImplementation(() => new Promise<string>(() => {}));
+    const { SolanaNetworkResolver } = await import("../network.js");
+    const connectionless = new SolanaNetworkResolver(() => new Promise<string>(() => {}), {
+      timeoutMs: 20,
+    });
+    const submitter = new SolanaMemoSubmitter({
+      rpcUrl: "http://rpc",
+      identitySeed: seed,
+      networkResolver: connectionless,
+    });
+    await expect(submitter.submitMerkleRoot(ROOT, "r", 1)).rejects.toThrow(/timed out/);
+    expect(sendRawTransactionMock).not.toHaveBeenCalled();
+  });
+
   it("a garbage genesis answer is not a label", async () => {
     getGenesisHashMock.mockResolvedValue("not-a-hash");
     const submitter = new SolanaMemoSubmitter({ rpcUrl: "http://rpc", identitySeed: seed });
