@@ -192,54 +192,78 @@ export interface SignedTransactionRef {
 }
 
 /**
- * The fresh-verdict window (#949 round 5), in FINALIZED block heights past a
- * transaction's `lastValidBlockHeight`. Derived from agave:
- *
- *   - a transaction's blockhash was registered at block height
- *     `lastValidBlockHeight − MAX_PROCESSING_AGE` (bank.rs
- *     `get_blockhash_last_valid_block_height`: `block_height +
- *     max_processing_age − age`; MAX_PROCESSING_AGE = 150), so it can land
- *     only at heights `[lastValid − 149, lastValid]`;
- *   - every block on the rooted path becomes a status-cache root
- *     (bank.rs `Bank::squash` → `status_cache.add_roots`), and the cache
- *     keeps the newest MAX_ROOT_ENTRIES = MAX_RECENT_BLOCKHASHES = 300 roots,
- *     purging every entry at or below the cutoff (status_cache.rs
- *     `purge_roots`);
- *   - so the FINALIZED bank at height H_f answers from roots
- *     `[H_f − 299, H_f]`: it covers the whole landing range iff
- *     `H_f ≤ lastValid + 150`, and the transaction can never land iff
- *     `H_f > lastValid` (finality is irreversible).
- *
- * The adapter takes the verdict only for `lastValid + FRESH_WINDOW_START ≤
- * H_f ≤ lastValid + FRESH_WINDOW_END` — 10 blocks of slack after expiry, 20
- * before the cache edge. Outside it an absent status proves nothing.
+ * A durable-nonce lane (#990): the treasury's nonce account and the nonce
+ * value a transaction will be signed over. A durable-nonce transaction never
+ * expires; it can land only while the nonce account still holds `nonceValue`,
+ * and landing — success OR failure — advances the nonce (agave
+ * `svm/src/rollback_accounts.rs`: a failed transaction's nonce account is
+ * stored already advanced). So of all the transactions signed over one
+ * `nonceValue`, at most ONE ever lands: a consensus rule, not an RPC report.
  */
-export const FRESH_WINDOW_START = 11;
-export const FRESH_WINDOW_END = 130;
+export interface DurableNonceLane {
+  /** Base58 address of the nonce account (authority = the signer). */
+  account: string;
+  /** The nonce value (base58) the transaction is signed over as its blockhash. */
+  nonceValue: string;
+}
+
+/** Whether the treasury's nonce lane can be used right now. */
+export type NonceLaneState =
+  ({ status: "ready" } & DurableNonceLane) | { status: "unavailable"; reason: string };
 
 /**
- * The FRESH verdict about one transaction (#949 round 5) — positive evidence
- * or nothing. Read from the finalized bank's STATUS CACHE only
- * (`getSignatureStatuses` without `searchTransactionHistory`, so neither the
- * blockstore nor BigTable is consulted), bound by `minContextSlot` to a node
- * that has finalized at least that far, while the cache still covers the
- * whole landing range:
- *
- *   - `landed` / `failed` — the cache holds the transaction's status;
- *   - `dead_fresh` — inside the window and absent: it never landed, and never
- *     can (`contextSlot` is the answering bank's slot);
- *   - `too_early` — the finalized chain has not passed its validity yet;
- *   - `window_passed` — the cache no longer covers the landing range: an
- *     absent status proves nothing, now or ever;
- *   - `rpc_error` — the read failed (including a node behind minContextSlot).
+ * A durable-nonce transaction, signed and about to be broadcast (#990). A
+ * `payout` carries the transfer; a `kill` is `nonceAdvance` alone over the
+ * same nonce value — once it lands, the payout never can.
  */
-export type FreshSignatureVerdict =
-  | { status: "landed"; slot: number; contextSlot: number }
-  | { status: "failed"; contextSlot: number }
-  | { status: "dead_fresh"; contextSlot: number }
-  | { status: "too_early" }
-  | { status: "window_passed" }
-  | { status: "rpc_error"; reason: string };
+export interface DurableTransactionRef {
+  signature: string;
+  kind: "payout" | "kill";
+  nonceAccount: string;
+  nonceValue: string;
+}
+
+/** `beforeBroadcast` for durable transactions: record before send; a throw stops the send. */
+export interface DurableBroadcastHooks {
+  beforeBroadcast?: (tx: DurableTransactionRef) => void | Promise<void>;
+}
+
+/**
+ * What the chain says about ONE signature, from its FINALIZED status only
+ * (#990). Released agave's `getSignatureStatuses` ignores `commitment` and
+ * `minContextSlot` and answers from the processed bank, but computes each
+ * found status's `confirmationStatus` — `finalized` only for a slot at or
+ * below the highest super-majority root on the rooted path (`rpc.rs`
+ * `get_transaction_status` / `is_finalized`; the history branch marks only
+ * rooted statuses `Finalized`). A finalized status is final.
+ *
+ *   - `finalized` — the transaction is rooted: `ok` true (succeeded) or
+ *     false (landed and failed: it moved nothing, and it consumed its nonce).
+ *   - `unknown` — absent, found but not finalized (a processed or confirmed
+ *     status can be a minority fork), or unreadable. NEVER evidence of
+ *     anything: no decision is made on it.
+ */
+export type FinalizedSignatureStatus =
+  | { status: "finalized"; ok: boolean; slot: number }
+  | { status: "unknown"; reason: "absent" | "not_finalized" | "rpc_error"; detail?: string };
+
+/**
+ * The outcome of a durable payout send (#990). It never throws after the
+ * transaction is recorded: `final` is the last finalized-status read within
+ * the adapter's bounded wait (`unknown` when the wait ended first — the
+ * transaction never expires, so the caller decides later, by the chain).
+ */
+export interface DurableSendResult {
+  tx: DurableTransactionRef;
+  final: FinalizedSignatureStatus;
+}
+
+/** A kill broadcast: whether the RPC accepted it (a rejection proves nothing either). */
+export interface NonceKillResult {
+  tx: DurableTransactionRef;
+  sent: boolean;
+  detail?: string;
+}
 
 /**
  * Hooks around a broadcast. `beforeBroadcast` runs once per signed
@@ -257,10 +281,9 @@ export interface BroadcastHooks {
  *
  *   - `landed` — confirmed at the adapter's commitment and succeeded.
  *   - `failed` — confirmed, but the transaction errored: it moved nothing.
- *   - `expired` — the FRESH verdict proved it dead (#949 round 5): the
- *     finalized status cache, still covering its whole landing range, has
- *     no status for it past its `lastValidBlockHeight`. Never an absence in
- *     history, which is not evidence of anything.
+ *   - `expired` — reserved: no adapter reports it (#990). An absent status
+ *     is never evidence that a transaction did not land, so a blockhash
+ *     transaction absent past its validity is `pending`, never `expired`.
  *   - `pending` — not (yet) confirmed and still able to land; `seen`
  *     when a node reported it in a block.
  *   - `rpc_error` — the lookup could not be completed. Never absence.
@@ -369,11 +392,38 @@ export interface SolanaRpcAdapter {
   getSignatureOutcome?(tx: SignedTransactionRef): Promise<SignatureOutcome>;
 
   /**
-   * The FRESH verdict (#949 round 5; see `FreshSignatureVerdict`) — the only
-   * read from which absence may be concluded, and only inside its window.
-   * Optional: a payer that must later prove a payout unpaid needs it.
+   * The treasury's durable-nonce lane (#990): create the nonce account from
+   * the signer if absent (idempotent; the signer is its authority and pays
+   * its rent), then read its nonce value at FINALIZED commitment.
+   * `unavailable` when it cannot — a payer then sends nothing.
    */
-  getFreshSignatureVerdict?(tx: SignedTransactionRef): Promise<FreshSignatureVerdict>;
+  prepareNonceLane?(): Promise<NonceLaneState>;
+
+  /**
+   * Send USDC as a durable-nonce transaction (#990): `nonceAdvance` first,
+   * signed over `lane.nonceValue`, recorded through `hooks.beforeBroadcast`
+   * before it is sent. Throws only BEFORE recording (invalid address,
+   * insufficient balance); afterwards it resolves, with the finalized status
+   * its bounded wait last read. Never re-signs.
+   */
+  sendUsdcDurable?(
+    args: SendUsdcArgs,
+    lane: DurableNonceLane,
+    hooks?: DurableBroadcastHooks,
+  ): Promise<DurableSendResult>;
+
+  /**
+   * Broadcast the KILL for `lane.nonceValue` (#990): `nonceAdvance` alone,
+   * signed over the same nonce value, recorded before it is sent. Once it
+   * is finalized, no other transaction over that nonce value can ever land.
+   */
+  broadcastNonceKill?(
+    lane: DurableNonceLane,
+    hooks?: DurableBroadcastHooks,
+  ): Promise<NonceKillResult>;
+
+  /** One signature's FINALIZED status (#990; see `FinalizedSignatureStatus`). */
+  getFinalizedStatus?(signature: string): Promise<FinalizedSignatureStatus>;
 
   /** Whether the RPC endpoint is reachable. Best-effort, no retries. */
   isReachable(): Promise<boolean>;

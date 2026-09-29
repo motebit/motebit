@@ -39,11 +39,20 @@ import Stripe from "stripe";
 import type { SettlementRailRegistry, StripeSettlementRail } from "@motebit/settlement-rails";
 import type { WithdrawalRequest } from "@motebit/virtual-accounts";
 import {
-  isChainRecordedClaim,
-  markChainRecordedClaim,
+  CHAIN_READ_TIMEOUT_MS,
+  dequeuePayout,
+  enqueuePayout,
   getPayoutAttempts,
+  isChainRecordedClaim,
+  isNonceValueUsed,
+  mapBounded,
+  markChainRecordedClaim,
+  queuedPayouts,
   readChainVerdict,
-  recordPayoutAttempt,
+  recordDurableAttempt,
+  requestKill,
+  withTimeout,
+  type KillRequest,
 } from "./withdrawal-chain-payouts.js";
 
 const logger = createLogger({ service: "budget" });
@@ -216,9 +225,28 @@ export interface BudgetDeps {
    * pending for the operator (Path 1 is retired, #948).
    */
   operatorSolanaTransfer?: import("@motebit/wallet-solana").OperatorSolanaTransfer;
+  /**
+   * How long a claimed Path 0 payout may stay undecided before the relay
+   * broadcasts its KILL (#990). Default `PAYOUT_KILL_AFTER_MS`.
+   */
+  payoutKillAfterMs?: number;
 }
 
-export function registerBudgetRoutes(deps: BudgetDeps): void {
+/** Default wait before an undecided durable payout is killed (#990): 5 minutes. */
+export const PAYOUT_KILL_AFTER_MS = 5 * 60 * 1000;
+
+/** What `registerBudgetRoutes` hands back to the relay's wiring. */
+export interface BudgetRoutes {
+  /**
+   * One tick of Path 0 payout resolution (#990): fire queued payouts when
+   * the nonce lane is free, then decide every processing chain-recorded
+   * payout it can — complete on a finalized payout, refund on a finalized
+   * kill or failed payout, kill one undecided past `payoutKillAfterMs`.
+   */
+  resolvePayoutsOnce(): Promise<void>;
+}
+
+export function registerBudgetRoutes(deps: BudgetDeps): BudgetRoutes {
   const {
     app,
     moteDb,
@@ -244,6 +272,309 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
   /** Release a payout from this process: its outcome is written (or could not be). */
   const releasePayout = (withdrawalId: string): void => {
     payoutsInFlight.delete(withdrawalId);
+  };
+
+  // ── Path 0: durable-nonce payouts, decided by consensus rules (#990) ───
+  //
+  // The treasury owns one durable nonce account (one lane). A payout is
+  // signed with `nonceAdvance` first and the lane's current nonce value N
+  // (read at FINALIZED commitment) as its blockhash, and recorded with N
+  // BEFORE it is broadcast. It never expires and is never re-signed. Of all
+  // transactions over N at most one lands, so the outcome is decided only by
+  // FINALIZED statuses (withdrawal-chain-payouts.ts):
+  //   - the payout finalized ok        ⇒ completed;
+  //   - the payout finalized with err  ⇒ refunded (N consumed, nothing moved);
+  //   - the KILL (nonceAdvance alone over N) finalized ⇒ refunded;
+  //   - anything else ⇒ undecided, read again; past `killAfterMs` the kill is
+  //     broadcast (a kill is safe at any time: only one of the two can land).
+  // One lane ⇒ payouts serialize: a new payout is signed only when the
+  // lane's finalized N is carried by no recorded transaction (the previous
+  // payout is decided) — otherwise it waits in the queue, `pending`.
+  const killAfterMs = deps.payoutKillAfterMs ?? PAYOUT_KILL_AFTER_MS;
+  /**
+   * Nonce values this process has claimed and not yet recorded. The busy
+   * check, the claim and this reservation run with no await between them
+   * (after the lane read), so two requests in this process never sign over
+   * one nonce value; once the payout is recorded, the attempts table carries
+   * it (`isNonceValueUsed`).
+   */
+  const reservedNonces = new Set<string>();
+
+  /** Complete a processing withdrawal whose payout the chain shows finalized ok. */
+  const completeFromChain = async (
+    w: WithdrawalRequest,
+    signature: string,
+    correlationId: string | null,
+  ): Promise<void> => {
+    const completedAt = Date.now();
+    const signed = await signCompletion(w.withdrawal_id, w, signature, completedAt);
+    const ok = completeWithdrawal(
+      moteDb.db,
+      w.withdrawal_id,
+      signature,
+      "processing",
+      signed.signature,
+      signed.relayPublicKeyHex,
+      completedAt,
+    );
+    if (ok) {
+      logger.info("withdrawal.solana.auto_settled", {
+        correlationId,
+        motebitId: w.motebit_id,
+        withdrawalId: w.withdrawal_id,
+        txSignature: signature,
+        finality: "finalized",
+      });
+    } else {
+      logger.error("withdrawal.payout_settle_lost", {
+        correlationId,
+        withdrawalId: w.withdrawal_id,
+        outcome: "finalized_ok",
+        txSignature: signature,
+        status: getWithdrawalById(moteDb.db, w.withdrawal_id)?.status ?? null,
+        note: "the payout finalized but the withdrawal is no longer `processing`; reconcile the ledger against the chain",
+      });
+    }
+  };
+
+  /** Refund a processing withdrawal the chain proves unpaid. */
+  const refundFromChain = (
+    w: WithdrawalRequest,
+    by: "no_broadcast" | "payout_failed" | "killed",
+    correlationId: string | null,
+  ): void => {
+    const why = {
+      no_broadcast: "no transaction of this payout was ever broadcast",
+      payout_failed: "the payout landed and failed on chain (finalized): no USDC moved",
+      killed:
+        "the kill transaction consumed the payout's durable nonce (finalized): the payout can never land",
+    }[by];
+    const ok = failWithdrawal(
+      moteDb.db,
+      w.withdrawal_id,
+      `solana payout not paid — ${why}; amount returned to balance`,
+      "processing",
+    );
+    if (ok) {
+      logger.warn("withdrawal.solana.refunded_from_chain", {
+        correlationId,
+        motebitId: w.motebit_id,
+        withdrawalId: w.withdrawal_id,
+        by,
+      });
+    } else {
+      logger.error("withdrawal.payout_settle_lost", {
+        correlationId,
+        withdrawalId: w.withdrawal_id,
+        outcome: `not_paid:${by}`,
+        status: getWithdrawalById(moteDb.db, w.withdrawal_id)?.status ?? null,
+      });
+    }
+  };
+
+  /**
+   * Decide one processing chain-recorded withdrawal from the chain (#990):
+   * complete, refund, or leave it (and, past `killAfterMs`, broadcast its
+   * kill). `inline`: called by the send path that holds the payout in flight.
+   */
+  const resolveWithdrawal = async (
+    withdrawalId: string,
+    opts: { inline: boolean; correlationId: string | null },
+  ): Promise<void> => {
+    const transfer = operatorSolanaTransfer;
+    if (!transfer) return;
+    const w = getWithdrawalById(moteDb.db, withdrawalId);
+    if (!w || w.status !== "processing") {
+      if (opts.inline) {
+        // The send path's own payout, and the row moved while it was out:
+        // never silent (#921) — the payout's outcome and the row disagree.
+        logger.error("withdrawal.payout_settle_lost", {
+          correlationId: opts.correlationId,
+          withdrawalId,
+          path: "solana",
+          status: w?.status ?? null,
+          txSignature:
+            getPayoutAttempts(moteDb.db, withdrawalId).find((a) => a.kind === "payout")
+              ?.signature ?? null,
+          note: "the withdrawal left `processing` while its payout was out; reconcile the ledger against the chain",
+        });
+      }
+      return;
+    }
+    if (!isChainRecordedClaim(moteDb.db, withdrawalId)) return;
+    if (!opts.inline && payoutsInFlight.has(withdrawalId)) return;
+    const verdict = await readChainVerdict(moteDb.db, withdrawalId, transfer);
+    if (verdict.kind === "paid") {
+      if (verdict.landed.length > 1) {
+        logger.error("withdrawal.payout_landed_twice", {
+          correlationId: opts.correlationId,
+          withdrawalId,
+          landed: verdict.landed,
+        });
+      }
+      await completeFromChain(w, verdict.signature, opts.correlationId);
+      return;
+    }
+    if (verdict.kind === "not_paid") {
+      refundFromChain(w, verdict.by, opts.correlationId);
+      return;
+    }
+    if (opts.inline) {
+      noteWithdrawalPayoutUnresolved(
+        moteDb.db,
+        withdrawalId,
+        `payout ${verdict.signature} not finalized yet (${verdict.reason}); the relay decides it from finalized chain state — a finalized payout completes it, a finalized kill of its durable nonce refunds it (#990)`,
+      );
+      return;
+    }
+    const claimedAt = w.claimed_at ?? w.requested_at;
+    if (verdict.killable && Date.now() - claimedAt >= killAfterMs) {
+      const kill = await requestKill(moteDb.db, withdrawalId, transfer);
+      logger.warn("withdrawal.solana.kill_requested", {
+        correlationId: opts.correlationId,
+        withdrawalId,
+        signature: verdict.signature,
+        kill: kill.status,
+      });
+    }
+  };
+
+  /**
+   * Fire Path 0 for a `pending` withdrawal (#990). Never throws. Under the
+   * lane: read N (finalized), refuse a busy or unavailable lane (queued,
+   * stays `pending`), claim (`pending → processing` + the chain marker, one
+   * transaction), reserve N. Then sign, record, broadcast, wait bounded for
+   * finality, and decide what the chain already shows.
+   */
+  const firePathZero = async (
+    withdrawalId: string,
+    correlationId: string | null,
+  ): Promise<void> => {
+    const transfer = operatorSolanaTransfer;
+    if (!transfer || transfer.recordsBroadcasts !== true) return;
+    const claimed = await (async () => {
+      const w = getWithdrawalById(moteDb.db, withdrawalId);
+      if (!w || w.status !== "pending") {
+        dequeuePayout(moteDb.db, withdrawalId);
+        return null;
+      }
+      let lane: Awaited<ReturnType<typeof transfer.prepareNonceLane>>;
+      try {
+        lane = await withTimeout(
+          transfer.prepareNonceLane(),
+          CHAIN_READ_TIMEOUT_MS * 3,
+          "nonce lane",
+        );
+      } catch (err) {
+        lane = { status: "unavailable", reason: err instanceof Error ? err.message : String(err) };
+      }
+      if (lane.status !== "ready") {
+        enqueuePayout(moteDb.db, withdrawalId, Date.now());
+        logger.warn("withdrawal.solana.nonce_lane_unavailable", {
+          correlationId,
+          withdrawalId,
+          reason: lane.reason,
+          note: "no payout sent: the treasury's durable nonce account is unavailable; the withdrawal stays pending (queued; /fail still works)",
+        });
+        return null;
+      }
+      if (reservedNonces.has(lane.nonceValue) || isNonceValueUsed(moteDb.db, lane)) {
+        enqueuePayout(moteDb.db, withdrawalId, Date.now());
+        logger.info("withdrawal.solana.nonce_lane_busy", { correlationId, withdrawalId });
+        return null;
+      }
+      const claimedAt = Date.now();
+      const won = moteDb.db.transaction(() => {
+        const ok = claimWithdrawalForPayout(moteDb.db, withdrawalId, claimedAt, null);
+        if (ok) markChainRecordedClaim(moteDb.db, withdrawalId, "solana", claimedAt);
+        dequeuePayout(moteDb.db, withdrawalId);
+        return ok;
+      });
+      if (!won) {
+        logger.error("withdrawal.payout_claim_lost", {
+          correlationId,
+          withdrawalId,
+          path: "solana",
+          status: getWithdrawalById(moteDb.db, withdrawalId)?.status ?? null,
+          note: "no payout sent: the withdrawal left `pending` before this request claimed it",
+        });
+        return null;
+      }
+      reservedNonces.add(lane.nonceValue);
+      payoutsInFlight.add(withdrawalId);
+      return { w, lane: { account: lane.account, nonceValue: lane.nonceValue } };
+    })();
+    if (!claimed) return;
+    try {
+      try {
+        const sent = await transfer.sendPayout(
+          claimed.w.destination,
+          BigInt(claimed.w.amount),
+          claimed.lane,
+          {
+            beforeBroadcast: (tx) => recordDurableAttempt(moteDb.db, withdrawalId, tx, Date.now()),
+          },
+        );
+        logger.info("withdrawal.solana.payout_broadcast", {
+          correlationId,
+          withdrawalId,
+          txSignature: sent.tx.signature,
+          nonceAccount: sent.tx.nonceAccount,
+          final:
+            sent.final.status === "finalized" ? (sent.final.ok ? "ok" : "err") : sent.final.reason,
+        });
+      } catch (err) {
+        // Thrown before anything was recorded (invalid address, balance,
+        // a hook that could not record): nothing was sent.
+        logger.warn("withdrawal.solana.send_threw", {
+          correlationId,
+          withdrawalId,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      } finally {
+        reservedNonces.delete(claimed.lane.nonceValue);
+      }
+      await resolveWithdrawal(withdrawalId, { inline: true, correlationId });
+    } catch (err) {
+      logger.error("withdrawal.solana.resolve_failed", {
+        correlationId,
+        withdrawalId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    } finally {
+      releasePayout(withdrawalId);
+    }
+  };
+
+  const resolvePayoutsOnce = async (): Promise<void> => {
+    const transfer = operatorSolanaTransfer;
+    if (!transfer || transfer.recordsBroadcasts !== true) return;
+    // Queued payouts, oldest first, while the lane takes them.
+    for (const id of queuedPayouts(moteDb.db)) {
+      await firePathZero(id, null);
+      const now = getWithdrawalById(moteDb.db, id);
+      if (now?.status === "pending") break; // the lane is still busy or unavailable
+    }
+    const processing = (
+      moteDb.db
+        .prepare(
+          `SELECT w.withdrawal_id AS withdrawal_id FROM relay_withdrawals w
+             JOIN relay_withdrawal_chain_claims c ON c.withdrawal_id = w.withdrawal_id
+            WHERE w.status = 'processing'
+            ORDER BY w.claimed_at ASC LIMIT 200`,
+        )
+        .all() as Array<{ withdrawal_id: string }>
+    ).map((r) => r.withdrawal_id);
+    await mapBounded(processing, 4, async (id) => {
+      try {
+        await resolveWithdrawal(id, { inline: false, correlationId: null });
+      } catch (err) {
+        logger.error("withdrawal.solana.resolve_failed", {
+          withdrawalId: id,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    });
   };
 
   // NOTE: the self-declared `POST /api/v1/agents/:id/deposit` route was
@@ -413,290 +744,34 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
       idempotencyKey: idempotencyKey ?? null,
     });
 
-    // Automated settlement: Path 0, the Solana sovereign return of custody
-    // (relay treasury → user wallet, no third-party orchestrator, no
-    // transmission category), for a Solana-shaped destination. EVM (0x)
-    // destinations were refused above (#948: Path 1 cannot sign a payout);
-    // any other destination stays `pending` for the operator.
-    //
-    // Claim before send (issue #921; spec/market-v1.md §10.3). No path sends
-    // a payout until it has CLAIMED the withdrawal — the compare-and-set
-    // `pending → processing` (`claimPayout`). A lost claim means someone
-    // else (the operator's manual complete/fail during this handler's
-    // pre-send awaits) already owns the outcome: nothing is sent and the
-    // current record is returned as it stands. After the claim, the send's
-    // outcome settles the withdrawal FROM `processing` only, and the
-    // operator's manual complete/fail refuse a `processing` withdrawal
-    // (409) — before #921 an admin /fail during the in-flight send refunded,
-    // the send then confirmed, and the user was paid AND refunded while the
-    // row read `failed`. A `processing` withdrawal whose payout outcome is
-    // unknown (the send threw, the process died mid-send) is settled only
-    // through `/admin/withdrawals/:id/reconcile`, and only once THE CHAIN
-    // shows the payout landed or can never land (#949) — see the reconcile
-    // route.
-    //
-    // Fail-safe: if settlement's outcome is unknown (the send threw), the
-    // withdrawal stays `processing` for the operator's reconcile. Funds are
-    // already held by requestWithdrawal — no double-spend risk. Only a
-    // PROVEN failure (Path 0: the tx landed and failed on-chain AND no
-    // earlier broadcast can land) fails the withdrawal and refunds,
-    // atomically — see the outcome rule below.
-    let autoSettled = false;
+    // Automated settlement: Path 0 only, for a Solana-shaped destination.
+    // EVM (0x) destinations were refused above (#948); any other
+    // destination stays `pending` for the operator.
     const isSolanaDest =
       result.destination !== "pending" && SOLANA_DEST_RE.test(result.destination);
 
-    // The claim (#921), chain-recorded (#949). Returns true only when THIS
-    // request moved the row `pending → processing`; the caller sends nothing
-    // on false. In the SAME transaction it records that this payout is
-    // chain-recorded: from here every transaction the send signs is recorded
-    // (by signature and last valid block height) before it is broadcast, so
-    // whether the payout landed is later read from the chain, never assumed
-    // from the clock. On a won claim the payout is in flight here until
-    // `releasePayout`.
-    const claimPayout = (path: "solana"): boolean => {
-      const claimedAt = Date.now();
-      const claimed = moteDb.db.transaction(() => {
-        const won = claimWithdrawalForPayout(moteDb.db, result.withdrawal_id, claimedAt, null);
-        if (won) markChainRecordedClaim(moteDb.db, result.withdrawal_id, path, claimedAt);
-        return won;
-      });
-      if (claimed) {
-        payoutsInFlight.add(result.withdrawal_id);
-      } else {
-        const current = getWithdrawalById(moteDb.db, result.withdrawal_id);
-        logger.error("withdrawal.payout_claim_lost", {
-          correlationId,
-          motebitId,
-          withdrawalId: result.withdrawal_id,
-          path,
-          status: current?.status ?? null,
-          destination: result.destination,
-          note: "no payout sent: the withdrawal left `pending` before this request claimed it",
-        });
-      }
-      return claimed;
-    };
-
-    // A settling write that lost to another actor after the payout was sent.
-    // Never silent (#921): the payout's real outcome and the row disagree,
-    // and only an operator can reconcile them.
-    const settleLost = (path: "solana", outcome: string, data: Record<string, unknown>) => {
-      const current = getWithdrawalById(moteDb.db, result.withdrawal_id);
-      logger.error("withdrawal.payout_settle_lost", {
-        correlationId,
-        motebitId,
-        withdrawalId: result.withdrawal_id,
-        path,
-        outcome,
-        status: current?.status ?? null,
-        destination: result.destination,
-        ...data,
-        note: "the payout's outcome could not be recorded: the withdrawal is no longer `processing`; reconcile the ledger against the chain",
-      });
-    };
-
-    // Path 0: native Solana sovereign return of custody.
+    // Path 0: native Solana sovereign return of custody, as a durable-nonce
+    // payout decided by consensus rules (#990; see `firePathZero`). The
+    // relay signs from its own treasury (identity-derived, by curve
+    // coincidence) to the user's own wallet — same-party return of custody.
     //
-    // The user's withdrawal destination is their own sovereign Solana
-    // wallet (typically the identity-key-derived address — same Ed25519,
-    // by curve coincidence). The relay signs from its own treasury wallet
-    // (also identity-key-derived for the relay) and sends USDC directly
-    // via the operator-side Solana adapter. No Bridge, no third-party
-    // orchestrator, no `on_behalf_of` header — the relay is the native
-    // principal of its own onchain transfer; the destination is the
-    // user's own wallet; the round-trip is structurally same-party return
-    // of custody from a self-deposit cache (user→Motebit→same-user).
-    //
-    // Doctrine: docs/doctrine/off-ramp-as-user-action.md (landing this arc).
-    // Operator primitive: packages/wallet-solana/src/operator-transfer.ts.
-    //
-    // Settlement-outcome rule (issue #920; spec/market-v1.md §10.4). Each
-    // send outcome maps to exactly one ledger action, each FROM `processing`
-    // (the claim, #921):
-    //
-    //   1. confirmed:true — the reported signature landed without error:
-    //      USDC moved. Complete with that signature as payout_reference and a
-    //      signed receipt.
-    //   2. confirmed:false AND earlierBroadcastsDead === true — the reported
-    //      signature landed and FAILED on chain (Solana txs are atomic: only
-    //      the fee was charged) AND the adapter proved no earlier broadcast of
-    //      this payout can land. Nothing was paid, so fail the withdrawal and
-    //      refund in ONE transaction (`failWithdrawal` →
-    //      `AccountStore.failWithdrawalAndRefund`, at most once).
-    //   3. everything else — UNKNOWN; the withdrawal stays `processing`, the
-    //      balance stays debited, never refunded:
-    //        - the send threw (timeout, expiry on the last attempt, network);
-    //        - confirmed:false with earlierBroadcastsDead false/absent. The
-    //          adapter re-signs after a blockhash expiry, and expiry can win
-    //          the race against a first broadcast that in fact LANDED and
-    //          paid; the re-broadcast then lands-and-fails (its create-ATA
-    //          instruction is not idempotent). `confirmed:false` describes the
-    //          LAST signature only, so refunding here would pay twice. The
-    //          reason is recorded on the row for the operator's reconcile.
-    //
-    // Before #920 outcome 2 was recorded as outcome 1: a completed, signed
-    // withdrawal whose funds never moved, with the balance still debited.
-    //
-    // Chain record (#949). The send runs only over a transfer that reports
-    // every transaction it signs to `beforeBroadcast` before sending it and
-    // can read each one's outcome (`recordsBroadcasts`); the hook records the
-    // signature and its last valid block height, and a hook that cannot
-    // record stops that broadcast. A transfer that cannot do both is never
-    // used: its payout could only be judged by the clock, which a halted
-    // chain outlives. The withdrawal then stays `pending`, nothing sent.
+    // Claim before send (#921; spec/market-v1.md §10.3): no payout is sent
+    // until this withdrawal is claimed `pending → processing`, and after the
+    // claim only the chain's FINALIZED state settles it — a finalized payout
+    // completes it, a finalized failure or kill refunds it — or the
+    // operator's reconcile. A transfer that cannot make such a payout
+    // (`recordsBroadcasts`) is never used: the withdrawal stays pending.
     const pathZeroReady = operatorSolanaTransfer?.recordsBroadcasts === true;
-    if (!autoSettled && isSolanaDest && operatorSolanaTransfer && !pathZeroReady) {
+    if (isSolanaDest && operatorSolanaTransfer && !pathZeroReady) {
       logger.error("withdrawal.solana.unrecordable_transfer", {
         correlationId,
         motebitId,
         withdrawalId: result.withdrawal_id,
-        note: "no payout sent: the Solana transfer cannot record its broadcasts or read their outcome, so a payout could not be proven from the chain; the withdrawal stays pending",
+        note: "no payout sent: the Solana transfer cannot make a durable-nonce payout decidable from finalized chain state; the withdrawal stays pending",
       });
     }
-    if (!autoSettled && isSolanaDest && operatorSolanaTransfer && pathZeroReady) {
-      let claimed = false;
-      try {
-        const available = await operatorSolanaTransfer.isAvailable();
-        if (available && claimPayout("solana")) {
-          claimed = true;
-          const withdrawalId = result.withdrawal_id;
-          const sendResult = await operatorSolanaTransfer.sendUsdc(
-            result.destination,
-            // result.amount is stored in micro-units; the operator-side
-            // adapter takes micro-units as bigint (same unit convention
-            // as everywhere in the ledger).
-            BigInt(result.amount),
-            {
-              beforeBroadcast: (tx) => recordPayoutAttempt(moteDb.db, withdrawalId, tx, Date.now()),
-            },
-          );
-
-          if (sendResult.confirmed === true) {
-            // Outcome 1 — funds moved.
-            const completedAt = Date.now();
-            const relayPublicKeyHex = bytesToHex(relayIdentity.publicKey);
-            const signature = await signWithdrawalReceipt(
-              {
-                withdrawal_id: result.withdrawal_id,
-                motebit_id: motebitId,
-                amount: body.amount,
-                currency: result.currency,
-                destination: result.destination,
-                payout_reference: sendResult.signature,
-                completed_at: completedAt,
-                relay_id: relayIdentity.relayMotebitId,
-              },
-              relayIdentity.privateKey,
-            );
-            const completed = completeWithdrawal(
-              moteDb.db,
-              result.withdrawal_id,
-              sendResult.signature,
-              "processing",
-              signature,
-              relayPublicKeyHex,
-              completedAt,
-            );
-            if (completed) {
-              autoSettled = true;
-              logger.info("withdrawal.solana.auto_settled", {
-                correlationId,
-                motebitId,
-                withdrawalId: result.withdrawal_id,
-                txSignature: sendResult.signature,
-                slot: sendResult.slot,
-                confirmed: sendResult.confirmed,
-                // A confirmed signature paid. If earlier broadcasts are not
-                // proven dead, one of them may ALSO have paid — the log keeps
-                // that visible for reconciliation.
-                earlierBroadcastsDead: sendResult.earlierBroadcastsDead ?? null,
-                destination: result.destination,
-              });
-            } else {
-              settleLost("solana", "confirmed", {
-                txSignature: sendResult.signature,
-                slot: sendResult.slot,
-              });
-            }
-          } else if (sendResult.confirmed === false && sendResult.earlierBroadcastsDead === true) {
-            // Outcome 2 — landed and failed, and no earlier broadcast can
-            // land: provably nothing moved.
-            const refunded = failWithdrawal(
-              moteDb.db,
-              result.withdrawal_id,
-              `solana transfer ${sendResult.signature} landed at slot ${sendResult.slot} but failed on-chain (confirmed:false), and no earlier broadcast of this payout can land; no USDC moved, amount returned to balance`,
-              "processing",
-            );
-            if (refunded) {
-              logger.warn("withdrawal.solana.landed_failed", {
-                correlationId,
-                motebitId,
-                withdrawalId: result.withdrawal_id,
-                txSignature: sendResult.signature,
-                slot: sendResult.slot,
-                destination: result.destination,
-                refunded,
-              });
-            } else {
-              settleLost("solana", "landed_failed", {
-                txSignature: sendResult.signature,
-                slot: sendResult.slot,
-              });
-            }
-          } else {
-            // Outcome 3 (reported) — the last broadcast failed, but an earlier
-            // broadcast of this payout is not proven dead and may have paid.
-            // Stay `processing`, no refund; record why for the operator.
-            const noted = noteWithdrawalPayoutUnresolved(
-              moteDb.db,
-              result.withdrawal_id,
-              `unresolved payout: solana transfer ${sendResult.signature} landed at slot ${sendResult.slot} and failed on-chain (confirmed:false), but earlier broadcasts of this payout are not proven dead (earlierBroadcastsDead=${String(sendResult.earlierBroadcastsDead)}) and may have paid; reconcile on chain before completing or failing`,
-            );
-            if (noted) {
-              logger.warn("withdrawal.solana.outcome_unresolved", {
-                correlationId,
-                motebitId,
-                withdrawalId: result.withdrawal_id,
-                txSignature: sendResult.signature,
-                slot: sendResult.slot,
-                earlierBroadcastsDead: sendResult.earlierBroadcastsDead ?? null,
-                destination: result.destination,
-                noted,
-              });
-            } else {
-              settleLost("solana", "unresolved", {
-                txSignature: sendResult.signature,
-                slot: sendResult.slot,
-              });
-            }
-          }
-        }
-      } catch (err) {
-        // Outcome 3 (thrown) — unknown. A claimed withdrawal stays
-        // `processing`; never refund here. An unclaimed one (isAvailable
-        // threw) was never sent and stays `pending`.
-        const error = err instanceof Error ? err.message : String(err);
-        if (claimed) {
-          const noted = noteWithdrawalPayoutUnresolved(
-            moteDb.db,
-            result.withdrawal_id,
-            `unresolved payout: solana send threw (${error}); the transfer may have landed — reconcile on chain before completing or failing`,
-          );
-          if (!noted) settleLost("solana", "threw", { error });
-        }
-        logger.warn("withdrawal.solana.auto_settle_failed", {
-          correlationId,
-          motebitId,
-          withdrawalId: result.withdrawal_id,
-          destination: result.destination,
-          claimed,
-          error,
-        });
-      } finally {
-        // Only now — after the outcome's write (or the note) — may the
-        // reconcile door see this payout as no longer in flight (#921).
-        if (claimed) releasePayout(result.withdrawal_id);
-      }
+    if (isSolanaDest && operatorSolanaTransfer && pathZeroReady) {
+      await firePathZero(result.withdrawal_id, correlationId);
     }
 
     // Path 2 deleted in Arc 1 Commit 2 of the off-ramp arc.
@@ -818,16 +893,16 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
   //     is still handling it (claim → outcome written), and then by who
   //     decides (payout-horizon.ts table):
   //       * a chain-recorded Path 0 payout — THE CHAIN, read for every
-  //         signature the payout signed (withdrawal-chain-payouts.ts): landed
-  //         ⇒ only `paid` with that signature; POSITIVE evidence that every
-  //         one did not land (found failed, or dead by the fresh verdict,
-  //         recorded) ⇒ only `not_paid`; otherwise (still able to land,
-  //         unreadable, or no positive evidence ever) ⇒ `not_paid` refused,
-  //         `paid` naming a recorded signature accepted (#949 round 5). No
-  //         wall-clock term (#949): a halted chain keeps the door shut.
+  //         signature the payout signed (withdrawal-chain-payouts.ts), from
+  //         FINALIZED statuses only (#990): a finalized payout ⇒ only `paid`
+  //         with that signature; a finalized failure or KILL of its durable
+  //         nonce ⇒ only `not_paid`; otherwise `not_paid` broadcasts the
+  //         kill and is refused until it is finalized, and `paid` naming a
+  //         recorded payout is accepted unless a recorded status is found
+  //         unfinalized. No wall-clock term.
   //       * a legacy Path 0 claim (an earlier process, no signatures) —
-  //         the relay can never hold positive evidence it did not land, so
-  //         `not_paid` is always refused (#990 is the way out) and the
+  //         the relay can never hold positive evidence it did not land (no
+  //         durable nonce to kill), so `not_paid` is always refused and the
   //         operator's `paid` is accepted.
   //       * a declared horizon (legacy x402, batch rails) —
   //         `reconcileOpensAt`: the rail's declared validity + margin,
@@ -838,21 +913,22 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
   //     out, and it is never a blind refund.
 
   /**
-   * Why a `processing` withdrawal cannot be reconciled yet (#921, #949):
+   * Why a `processing` withdrawal cannot be reconciled yet (#921, #949, #990):
    *   - `in_flight_here`: this relay is still handling its payout;
    *   - `undetermined`: the relay cannot place the payout's horizon (fail
    *     closed);
    *   - `horizon`: a declared-horizon payout may still land until
    *     `reconcile_opens_at`;
-   *   - `chain_pending`: a transaction this payout signed can still land, or
-   *     its fresh window has not opened yet;
+   *   - `chain_pending`: nothing this payout recorded is FINALIZED yet (a
+   *     status found below finality may be a minority fork);
    *   - `chain_unreadable`: the chain could not be read, so nothing is
    *     decided;
-   *   - `chain_no_positive_evidence`: nothing the chain can show proves the
-   *     payout did NOT land — a broadcast's fresh window closed with no
-   *     verdict recorded, or (legacy claim) no signature was ever recorded.
-   *     Never refunded on that (#949 round 5); `paid` naming a recorded
-   *     signature is accepted; a refund waits for #990.
+   *   - `kill_pending`: the operator's `not_paid` broadcast the KILL for the
+   *     payout's durable nonce (#990); the refund follows its FINALIZED
+   *     status (the relay settles it, or a later reconcile does);
+   *   - `chain_no_positive_evidence`: no positive evidence of non-landing can
+   *     exist — a payout that is not durable-nonce (claimed before #990, or
+   *     with no recorded signature): never refunded; `paid` accepted.
    * `open` means the reconcile door is open now — for a chain-decided payout
    * (`reconcile_decided_by: "chain"`), that the relay asks the chain when the
    * operator reconciles, and may still refuse; for a legacy claim
@@ -864,6 +940,7 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
     | "horizon"
     | "chain_pending"
     | "chain_unreadable"
+    | "kill_pending"
     | "chain_no_positive_evidence"
     | "open";
 
@@ -935,11 +1012,13 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
         "payout horizon cannot be determined yet — the relay cannot place when this payout stops being able to land; reconcile stays closed",
       horizon: "payout may still land — reconcile opens at",
       chain_pending:
-        "payout may still land — a transaction this payout signed is not yet past its last valid block height on chain; reconcile once the chain has decided it (a halted chain keeps it open to land)",
+        "payout undecided — nothing this payout recorded is finalized on chain yet (a status below finality may be a minority fork); the relay settles it once the payout or its kill is finalized",
       chain_unreadable:
         "the chain could not be read — whether this payout landed is undecided; reconcile stays closed until the chain answers",
+      kill_pending:
+        "not_paid needs positive evidence: the relay broadcast the kill transaction for this payout's durable nonce (#990) — once it or the payout is finalized the withdrawal is settled (refunded, or completed if the payout landed first); retry the reconcile then",
       chain_no_positive_evidence:
-        "no positive evidence that this payout did NOT land — a history read that shows nothing proves nothing, and the only proof of non-landing (a status found with an error, or the fresh verdict taken while the transaction's window was open) was never recorded; no refund. Reconcile as paid with a recorded signature if it landed; otherwise the refund waits for a kill transaction that makes the payout provably unlandable (#990)",
+        "no positive evidence that this payout did NOT land can exist — it was not signed over a durable nonce (claimed before #990, or no signature recorded), so no kill can make it unlandable and absence proves nothing; no refund. Reconcile as paid with the landed signature if it landed",
     };
 
   const payoutInFlightResponse = (
@@ -1212,37 +1291,52 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
         return payoutInFlightResponse(c, withdrawalId, "chain_unreadable");
       }
       const verdict = await readChainVerdict(moteDb.db, withdrawalId, operatorSolanaTransfer);
-      // #949 round 5 — a refund needs POSITIVE evidence; `paid` needs only
-      // not to be contradicted. Undecided (pending, unreadable, or no
-      // positive evidence ever): the operator's `paid`, naming a transaction
-      // this payout actually signed, is recorded — nothing the chain shows
-      // contradicts it, and refusing it would strand a payout that landed.
+      // #990 — a refund needs a FINALIZED kill or failure; `paid` needs a
+      // finalized payout, or the operator's attestation of a payout this
+      // withdrawal recorded while nothing the chain shows contradicts it.
+      const recordedPayout =
+        payoutReference !== null &&
+        getPayoutAttempts(moteDb.db, withdrawalId).some(
+          (a) => a.kind === "payout" && a.signature === payoutReference,
+        );
       const attestedPaid =
         verdict.kind === "undecided" &&
         outcome === "paid" &&
-        payoutReference !== null &&
-        getPayoutAttempts(moteDb.db, withdrawalId).some((a) => a.signature === payoutReference);
+        recordedPayout &&
+        verdict.unfinalized.length === 0;
       if (verdict.kind === "undecided" && !attestedPaid) {
+        let kill: KillRequest | null = null;
+        if (outcome === "not_paid" && verdict.killable) {
+          // The operator asks for a refund: make the payout provably
+          // unlandable. The refund follows the kill's FINALIZED status —
+          // the resolution loop settles it, or a later reconcile does.
+          kill = await requestKill(moteDb.db, withdrawalId, operatorSolanaTransfer);
+        }
         logger.warn("withdrawal.admin.reconcile_refused_chain", {
           correlationId,
           withdrawalId,
           outcome,
           reason: verdict.reason,
           signature: verdict.signature,
-          lastValidBlockHeight: verdict.lastValidBlockHeight,
+          unfinalized: verdict.unfinalized,
+          kill: kill?.status ?? null,
           detail: verdict.detail ?? null,
         });
-        return payoutInFlightResponse(
-          c,
-          withdrawalId,
-          verdict.reason === "pending"
-            ? "chain_pending"
-            : verdict.reason === "no_positive_evidence"
-              ? "chain_no_positive_evidence"
-              : "chain_unreadable",
-          null,
-          { signature: verdict.signature, last_valid_block_height: verdict.lastValidBlockHeight },
-        );
+        const reason: Exclude<ReconcileState, "open"> =
+          kill !== null
+            ? "kill_pending"
+            : verdict.unfinalized.length > 0
+              ? "chain_pending"
+              : !verdict.killable
+                ? "chain_no_positive_evidence"
+                : verdict.reason === "rpc_error"
+                  ? "chain_unreadable"
+                  : "chain_pending";
+        return payoutInFlightResponse(c, withdrawalId, reason, null, {
+          signature: verdict.signature,
+          unfinalized: verdict.unfinalized,
+          ...(kill !== null ? { kill: kill.status } : {}),
+        });
       }
       if (verdict.kind === "paid" && verdict.landed.length > 1) {
         // Two of one payout's transactions landed: the treasury paid twice.
@@ -1259,7 +1353,7 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
           withdrawalId,
           payoutReference,
           chain: verdict,
-          note: "the chain holds no positive verdict for this payout; recorded paid on the operator's attestation of a transaction this payout signed",
+          note: "no finalized status for this payout is readable (absent or unreadable — never evidence); recorded paid on the operator's attestation of a transaction this payout signed",
         });
       }
       const chainSays = verdict.kind === "paid" ? "paid" : "not_paid";
@@ -1282,8 +1376,8 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
             error: "WITHDRAWAL_RECONCILE_CONTRADICTS_CHAIN",
             message:
               verdict.kind === "paid"
-                ? `the chain shows this payout landed (${verdict.signature}); reconcile it as paid with that payout_reference`
-                : `the chain holds positive evidence that no transaction of this payout landed or can land (${verdict.kind === "not_paid" ? verdict.attempts : 0} recorded, each found failed or proven dead inside its fresh window); reconcile it as not_paid`,
+                ? `the chain shows this payout finalized (${verdict.signature}); reconcile it as paid with that payout_reference`
+                : `the chain proves this payout can never land (${verdict.kind === "not_paid" ? verdict.by : "undecided"}: finalized); reconcile it as not_paid`,
             withdrawal_id: withdrawalId,
             chain_outcome: chainSays,
             ...(verdict.kind === "paid" ? { payout_reference: verdict.signature } : {}),
@@ -1650,4 +1744,6 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
   // The future treasury arc may add a separate webhook for treasury-
   // conversion completions (different shape, different handler, distinct
   // from the deleted user-facing path). Today's deletion is total.
+
+  return { resolvePayoutsOnce };
 }

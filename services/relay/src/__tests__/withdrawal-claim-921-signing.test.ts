@@ -14,7 +14,6 @@
 
 import { describe, it, expect, afterEach, vi } from "vitest";
 import { generateKeypair, bytesToHex } from "@motebit/encryption";
-import { OperatorSolanaTransfer, type SolanaRpcAdapter } from "@motebit/wallet-solana";
 
 const gate: { hold: Promise<void> | null } = { hold: null };
 
@@ -32,9 +31,8 @@ vi.mock("../accounts.js", async (importOriginal) => {
 import type { SyncRelay } from "../index.js";
 import { creditAccount, getAccountBalance, getTransactions } from "../accounts.js";
 import { AUTH_HEADER, createTestRelay, jsonAuthWithIdempotency } from "./test-helpers.js";
+import { freshChain, makeDurableOperator } from "./durable-payout-fake.js";
 
-const TX_SIG =
-  "5VfYdxYhWnD8X7K2YgHmBpDXJqJ1JmZj7rL2KkXg8sM3QfvN9P1bZw6cM5J8nT4rA7uW9eR6yU2dE1pV3hG4oS9k";
 const FUNDED = 5_000_000;
 const DEST = "GJmrQzyZumWWkdBuVH3Z1hnGvjrcDMbx7ptF5t5UAAAA";
 
@@ -53,29 +51,15 @@ describe("#921 round 3: in flight until the outcome is written", () => {
     let release!: () => void;
     gate.hold = new Promise<void>((r) => (release = r));
     let signingStarted = false;
-    const sendUsdc = vi.fn().mockImplementation(() => {
-      signingStarted = true; // the handler goes straight to signing after this resolves
-      return Promise.resolve({ signature: TX_SIG, slot: 1, confirmed: true });
+    const chain = freshChain();
+    const { operator, adapter } = makeDurableOperator(chain);
+    const real = adapter.sendUsdcDurable.getMockImplementation()!;
+    adapter.sendUsdcDurable.mockImplementation(async (...args) => {
+      const out = await real(...args);
+      signingStarted = true; // the handler goes on to decide and sign the receipt
+      return out;
     });
-    const adapter: SolanaRpcAdapter = {
-      // #949: Path 0 sends only over a transfer that records its broadcasts.
-      honorsBroadcastHooks: true,
-      // The fresh verdict (#949 round 5): nothing decided yet.
-      getFreshSignatureVerdict: () => Promise.resolve({ status: "too_early" as const }),
-      getSignatureOutcome: vi.fn().mockResolvedValue({ status: "pending" }),
-      ownAddress: "RelayTreasuryAddressBase58",
-      getUsdcBalance: vi.fn().mockResolvedValue(10_000_000_000n),
-      getUsdcBalanceOf: vi.fn().mockResolvedValue(10_000_000_000n),
-      getSolBalance: vi.fn().mockResolvedValue(10_000_000n),
-      sendUsdc,
-      sendUsdcBatch: vi.fn().mockResolvedValue([]),
-      getTransaction: vi.fn().mockResolvedValue({ status: "not_found" }),
-      isReachable: vi.fn().mockResolvedValue(true),
-    };
-    relay = await createTestRelay({
-      enableDeviceAuth: false,
-      operatorSolanaTransfer: new OperatorSolanaTransfer(adapter),
-    });
+    relay = await createTestRelay({ enableDeviceAuth: false, operatorSolanaTransfer: operator });
     const mid = "zz921-signing-gap";
     const kp = await generateKeypair();
     await relay.app.request(`/api/v1/agents/register`, {

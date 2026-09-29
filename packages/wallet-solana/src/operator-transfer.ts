@@ -43,12 +43,13 @@
 
 import { Web3JsRpcAdapter } from "./web3js-adapter.js";
 import type {
-  BroadcastHooks,
-  SendUsdcResult,
-  SignatureOutcome,
-  SignedTransactionRef,
+  DurableBroadcastHooks,
+  DurableNonceLane,
+  DurableSendResult,
+  FinalizedSignatureStatus,
+  NonceKillResult,
+  NonceLaneState,
   SolanaRpcAdapter,
-  FreshSignatureVerdict,
 } from "./adapter.js";
 
 export interface OperatorSolanaTransferConfig {
@@ -69,7 +70,7 @@ export interface OperatorSolanaTransferConfig {
 
 /**
  * Operator-side USDC sending primitive. Construct once at relay boot
- * via the factory; call `sendUsdc` from the withdrawal-path dispatch
+ * via the factory; call `sendPayout` from the withdrawal-path dispatch
  * when the destination is a Solana sovereign wallet.
  *
  * The constructor accepts a pre-built `SolanaRpcAdapter` for test
@@ -96,69 +97,79 @@ export class OperatorSolanaTransfer {
   }
 
   /**
-   * Send USDC from the relay treasury to a recipient sovereign wallet.
-   * Amount in micro-units. Returns the transaction signature once the
-   * network reaches the configured commitment.
-   *
-   * Throws `InsufficientUsdcBalanceError` when the treasury balance is
-   * below `microAmount`. Throws `InvalidSolanaAddressError` when
-   * `toAddress` is not a valid base58 public key.
-   */
-  sendUsdc(
-    toAddress: string,
-    microAmount: bigint,
-    hooks?: BroadcastHooks,
-  ): Promise<SendUsdcResult> {
-    return hooks === undefined
-      ? this.adapter.sendUsdc({ toAddress, microAmount })
-      : this.adapter.sendUsdc({ toAddress, microAmount }, hooks);
-  }
-
-  /**
-   * True only when every transaction `sendUsdc` signs is reported to
-   * `hooks.beforeBroadcast` BEFORE it is sent, the chain can be asked about
-   * each one, and the adapter can take the FRESH verdict (#885, #949 round 5).
-   * Only then can a payer that recorded every reported signature prove its
-   * payout landed, or prove it can never land (positive evidence), and read
-   * "no signature recorded" as "nothing was sent". A payer must not send a
-   * payout it cannot later prove this way.
+   * True only when the adapter can make a payout the payer can later DECIDE
+   * from consensus rules (#990): it reports every transaction it signs to
+   * `hooks.beforeBroadcast` before sending it, signs payouts over the
+   * treasury's durable nonce (so they never expire and exactly one
+   * transaction per nonce value can land), can broadcast the kill for a
+   * nonce value, and can read a signature's FINALIZED status. A payer must
+   * not send a payout it cannot decide this way.
    */
   get recordsBroadcasts(): boolean {
+    const a = this.adapter;
     return (
-      this.adapter.honorsBroadcastHooks === true &&
-      typeof this.adapter.getSignatureOutcome === "function" &&
-      typeof this.adapter.getFreshSignatureVerdict === "function"
+      a.honorsBroadcastHooks === true &&
+      typeof a.prepareNonceLane === "function" &&
+      typeof a.sendUsdcDurable === "function" &&
+      typeof a.broadcastNonceKill === "function" &&
+      typeof a.getFinalizedStatus === "function"
     );
   }
 
   /**
-   * What the chain says about one transaction this treasury signed (#885).
-   * Read-only. An adapter that cannot answer reports `rpc_error` — never
-   * absence.
+   * The treasury's durable-nonce lane (#990), created if absent, read at
+   * finalized commitment. `unavailable` ⇒ send nothing.
    */
-  getSignatureOutcome(tx: SignedTransactionRef): Promise<SignatureOutcome> {
-    if (typeof this.adapter.getSignatureOutcome !== "function") {
-      return Promise.resolve({
-        status: "rpc_error",
-        reason: "adapter cannot read signature outcomes",
-      });
+  prepareNonceLane(): Promise<NonceLaneState> {
+    if (typeof this.adapter.prepareNonceLane !== "function") {
+      return Promise.resolve({ status: "unavailable", reason: "adapter has no nonce lane" });
     }
-    return this.adapter.getSignatureOutcome(tx);
+    return this.adapter.prepareNonceLane();
   }
 
   /**
-   * The FRESH verdict about one transaction (#949 round 5): positive
-   * evidence (landed, failed, or dead inside its window) or nothing. An
-   * adapter that cannot take it reports `rpc_error` — never absence.
+   * Send USDC from the relay treasury to a recipient sovereign wallet as a
+   * durable-nonce payout over `lane` (#990). Amount in micro-units.
+   * Throws `InsufficientUsdcBalanceError` / `InvalidSolanaAddressError` only
+   * before anything is recorded or sent; afterwards it resolves with the
+   * transaction and the finalized status its bounded wait last read.
    */
-  getFreshSignatureVerdict(tx: SignedTransactionRef): Promise<FreshSignatureVerdict> {
-    if (typeof this.adapter.getFreshSignatureVerdict !== "function") {
+  sendPayout(
+    toAddress: string,
+    microAmount: bigint,
+    lane: DurableNonceLane,
+    hooks?: DurableBroadcastHooks,
+  ): Promise<DurableSendResult> {
+    if (typeof this.adapter.sendUsdcDurable !== "function") {
+      return Promise.reject(new Error("adapter cannot send a durable-nonce payout"));
+    }
+    return this.adapter.sendUsdcDurable({ toAddress, microAmount }, lane, hooks);
+  }
+
+  /** Broadcast the kill for `lane.nonceValue` (#990): once finalized, no payout over it can land. */
+  broadcastNonceKill(
+    lane: DurableNonceLane,
+    hooks?: DurableBroadcastHooks,
+  ): Promise<NonceKillResult> {
+    if (typeof this.adapter.broadcastNonceKill !== "function") {
+      return Promise.reject(new Error("adapter cannot broadcast a nonce kill"));
+    }
+    return this.adapter.broadcastNonceKill(lane, hooks);
+  }
+
+  /**
+   * One signature's FINALIZED status (#990). An adapter that cannot read it
+   * reports `unknown` — never absence as evidence.
+   */
+  getFinalizedStatus(signature: string): Promise<FinalizedSignatureStatus> {
+    if (typeof this.adapter.getFinalizedStatus !== "function") {
       return Promise.resolve({
-        status: "rpc_error",
-        reason: "adapter cannot take a fresh verdict",
+        status: "unknown",
+        reason: "rpc_error",
+        detail: "adapter cannot read finalized statuses",
       });
     }
-    return this.adapter.getFreshSignatureVerdict(tx);
+    return this.adapter.getFinalizedStatus(signature);
   }
 
   /** Whether the RPC endpoint is reachable right now. */

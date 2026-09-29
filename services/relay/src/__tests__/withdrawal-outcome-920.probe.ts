@@ -21,6 +21,7 @@ import {
 import type { SyncRelay } from "../index.js";
 import { creditAccount, getAccountBalance, getTransactions } from "../accounts.js";
 import { AUTH_HEADER, createTestRelay, jsonAuthWithIdempotency } from "./test-helpers.js";
+import { durableFromSendUsdc } from "./durable-payout-fake.js";
 
 const obs: Record<string, unknown> = {};
 afterAll(() => {
@@ -50,8 +51,8 @@ function fakeAdapter(sendUsdc: SolanaRpcAdapter["sendUsdc"]): SolanaRpcAdapter {
     // #949: a tree whose Path 0 requires a transfer that records its
     // broadcasts sees one; a tree that does not is unaffected.
     honorsBroadcastHooks: true,
-    // The fresh verdict (#949 round 5): nothing decided yet.
-    getFreshSignatureVerdict: () => Promise.resolve({ status: "too_early" as const }),
+    // #990: the durable-nonce payout, over the same mocked send.
+    ...durableFromSendUsdc(sendUsdc, SIG),
     getSignatureOutcome: vi.fn().mockResolvedValue({ status: "pending" }),
     ownAddress: "RelayTreasuryAddressBase58",
     getUsdcBalance: vi.fn().mockResolvedValue(10_000_000_000n),

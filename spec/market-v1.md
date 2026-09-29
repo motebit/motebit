@@ -665,43 +665,26 @@ POST /api/v1/admin/withdrawals/:withdrawalId/reconcile
 - until the payout's own horizon has passed, judged from **chain facts** wherever the relay can read the chain (below);
 - for a declared-validity payout, within a fixed floor after the claim (the reference relay: 15 minutes). The floor is only a floor: it is never the argument that a payout can no longer land.
 
-**A transfer the relay broadcasts itself** (e.g. the Path 0 Solana return of custody). The implementation MUST record every transaction the payout signs — its signature and its validity bound, e.g. a Solana `lastValidBlockHeight` — BEFORE that transaction is broadcast; a transaction it cannot record MUST NOT be broadcast. Validity is by block HEIGHT, never by elapsed time: a halted or slowed cluster keeps a signed transaction valid indefinitely.
+**A transfer the relay broadcasts itself** (e.g. the Path 0 Solana return of custody) is decided by **consensus rules, never by what an RPC reports as absent**. Absence of a transaction in an RPC's answer — a pruned range, a snapshot gap, a swallowed history-store error, a node on a minority fork — is never evidence that it did not land, and a status below finality is never evidence that it did.
 
-**The law: absence of a transaction in history is never evidence of non-payment.** A refund (`not_paid`, whether automatic or by the operator) requires POSITIVE evidence, for EVERY recorded transaction, that it did not land and never can:
+For Solana this is a **durable-nonce payout** (#990):
 
-1. a status FOUND for it, with an error (it landed and failed; a Solana transaction is atomic); or
-2. the **fresh verdict**, recorded durably at the moment it is read (the reference relay stores the verdict, the answering context slot and the time on the transaction's record).
+1. The treasury owns a durable nonce account (one lane; payouts over one lane serialize). The reference relay derives its address from the treasury key alone — `createWithSeed(treasury, "motebit-payout-nonce-v1", SystemProgram)`, authority = the treasury — and creates it idempotently when absent (80 bytes, rent-exempt minimum 1 447 680 lamports ≈ 0.00145 SOL, paid once by the treasury). When the nonce account cannot be read or created, nothing is sent: the withdrawal stays `pending` (the manual fail still works) and is fired once the lane is available.
+2. The payout is signed with `nonceAdvance` as its FIRST instruction and the lane's current nonce value N — read at `finalized` commitment — as its blockhash, and the implementation MUST record it (signature, nonce account, N) BEFORE it is broadcast; a transaction it cannot record MUST NOT be broadcast. A durable-nonce transaction never expires, so it is never re-signed. A new payout is signed only when N is carried by no recorded transaction — i.e. the previous payout over the lane is decided.
+3. The outcome is decided from **finalized** statuses only. Consensus gives two facts:
+   - a durable-nonce transaction lands only while the nonce account holds its N, and landing — success or failure — advances the nonce (agave `svm/src/rollback_accounts.rs`: a failed transaction's nonce account is stored already advanced), so of all transactions over one N at most ONE ever lands;
+   - a status whose per-status `confirmationStatus` is `finalized` is final. Released agave (v2.3.13 … v4.0.0) ignores a `getSignatureStatuses` request's `commitment` and `minContextSlot` and answers from the processed bank, but computes `confirmationStatus` per status: `finalized` only for a slot at or below the highest super-majority root on the rooted path (`rpc/src/rpc.rs` `get_transaction_status` and `is_finalized`; the history branch returns rooted statuses only, marked `Finalized`).
 
-   To take the fresh verdict, the status is read from the node's recent-status cache only — for Solana, `getSignatureStatuses` WITHOUT `searchTransactionHistory`, at `finalized` commitment, with `minContextSlot` no lower than the slot the finalized height was read at. The read must also fall inside the window where that cache still covers every block the transaction could have landed in.
+   So:
+   - **paid** — the payout's signature is found `finalized` without error;
+   - **not paid** — the payout is found `finalized` WITH an error (it consumed N; nothing moved), or a **kill** — `nonceAdvance` alone over the same N, signed by the treasury and recorded before broadcast — is found `finalized` (it consumed N, so the payout never can land), or nothing was ever broadcast;
+   - everything else — absent, found below finality, unreadable — is **undecided**: no decision, read again later.
 
-   Derivation (agave):
-   - a transaction's blockhash was registered at height `lastValid − 150` (`MAX_PROCESSING_AGE`; `bank.rs` `get_blockhash_last_valid_block_height`), so it can land only at heights `lastValid − 149 … lastValid`;
-   - every rooted bank becomes a status-cache root (`Bank::squash` → `add_roots`), and the cache keeps the newest `MAX_ROOT_ENTRIES` = `MAX_RECENT_BLOCKHASHES` = 300 roots (`status_cache.rs`, `purge_roots`);
-   - so a finalized bank at height `H_f` answers for heights `H_f − 299 … H_f`. It covers the whole landing range iff `H_f ≤ lastValid + 150`, and the transaction can never land once `H_f > lastValid`.
+4. **The kill.** A kill is safe at any time (the payout and the kill race for N; exactly one lands). The reference relay broadcasts it automatically when a payout is still undecided a bounded wait after the claim (5 minutes), and when the operator asks for `not_paid`; the refund follows the kill's `finalized` status. A kill that the RPC rejects because N has already moved proves nothing either way: the recorded transactions' finalized statuses decide.
 
-   The reference adapter takes the verdict only for `lastValid + 11 ≤ H_f ≤ lastValid + 130` (10 blocks of slack after expiry, 20 before the cache edge). It reads the finalized height, then the status with `minContextSlot`, and refuses an answer whose context slot is below it (a load-balanced node behind the others). It then reads the finalized height again with `minContextSlot` = the status answer's slot, and the verdict holds only if that height is still at or below `lastValid + 130`.
+The action's outcomes on such a payout: a finalized payout accepts only `paid`, with that transaction as the payout reference; a finalized failure or kill accepts only `not_paid`; while undecided, `not_paid` broadcasts the kill and is refused (the reference relay answers 409 `kill_pending`) until the kill is finalized, and `paid` naming the recorded payout is accepted — on the operator's attestation, never contradicted by the chain — unless a recorded transaction is found below finality (409 `chain_pending`). An outcome that contradicts a finalized status is refused. The reference relay also settles each payout itself, from the same finalized statuses, in a supervised loop (every 10 s; every RPC call bounded by a per-call timeout, attempts read with bounded concurrency): it completes a finalized payout, refunds a finalized failure or kill, and kills an undecided payout past the wait.
 
-Everything else is UNKNOWN:
-
-- a history lookup that finds nothing — whether the node pruned the range, booted from a newer snapshot and left a hole, or falls through to an external store (e.g. BigTable) that reports any error as absent;
-- a read that fails;
-- a transaction whose fresh window has not yet opened;
-- a transaction whose fresh window closed with no verdict recorded.
-
-On UNKNOWN, `not_paid` MUST be refused (the reference relay answers 409 `chain_pending`, `chain_unreadable` or `chain_no_positive_evidence`), and the withdrawal stays `processing` with the balance debited.
-
-The door's outcomes:
-
-- If any recorded transaction landed, only `paid` is accepted, with that transaction as the payout reference.
-- If every one has positive evidence of non-landing, or none was ever recorded (nothing was broadcast), only `not_paid` is accepted.
-- In every other case, `paid` naming a transaction the payout recorded MUST be accepted — nothing the chain can show contradicts it.
-- An outcome that contradicts positive evidence is refused.
-
-The reference relay runs a supervised sweep (every 10 s) that takes and records the fresh verdict for every recorded transaction of a `processing` payout, so the evidence exists when the operator reconciles later. The sweep only records evidence; it never settles a withdrawal. An implementation MUST NOT send such a payout through a chain reader that cannot take the fresh verdict.
-
-**The honest-path cost (the declared stuck set).** A payout that was broadcast, never landed, and was not settled by the send itself — and whose every fresh window closed before any fresh verdict was recorded (the relay was down or the RPC failed for that whole minute, and no operator reconciled inside it) — has no positive evidence, now or ever. It stays `processing`, never refunded. The only honest way out is to make the payout provably unlandable, e.g. a durable-nonce transaction that consumes the payout's nonce (#990), or the operator's `paid` if it did land.
-
-A payout claimed before its transactions were recorded (a legacy claim) can never hold positive evidence: `not_paid` is always refused, and `paid` is accepted on the operator's attestation. It is in the same stuck set until #990.
+**The declared stuck set.** A payout whose nonce was consumed while neither the payout's nor the kill's finalized status can be read any more (both outside every reachable history) is undecided for good: never refunded, and `paid` naming the recorded payout is accepted. A payout claimed before its transactions were recorded, or signed over a recent blockhash by an earlier build, has no nonce to kill: `not_paid` is always refused (409 `chain_no_positive_evidence`) and `paid` is accepted on the operator's attestation.
 
 **A payload a third party can still submit, whose chain the implementation does not read** (e.g. a signed transfer authorization handed to a provider). The horizon is the payload's declared validity, such as its `validBefore`; a payout whose horizon is not declared gets a conservative bound no shorter than the rail's documented maximum. The reference relay registers no such withdrawal rail today.
 
@@ -726,13 +709,13 @@ When the implementation cannot yet determine a payout's horizon, the action stay
 
 When the relay pays a withdrawal out itself (e.g. the Path 0 Solana return of custody), it first claims the withdrawal (`processing`, §10.3), and the payout's reported outcome then determines the state. There are exactly three outcomes:
 
-| Payout outcome                                                                                                                                                           | Resulting state | Balance                                |
-| ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------- | -------------------------------------- |
-| Confirmed success — the reported transfer landed without error                                                                                                           | `completed`     | stays debited; receipt signed          |
-| Proven failure — the reported transfer landed and failed (an atomic on-chain tx that errored moves no funds) AND no earlier broadcast of the same payout may have landed | `failed`        | refunded atomically, once (§10.3)      |
-| Unknown — the send threw or timed out, or a landed failure whose earlier broadcasts are not proven dead                                                                  | `processing`    | stays debited; operator reconciliation |
+| Payout outcome                                                                                                                             | Resulting state | Balance                              |
+| ------------------------------------------------------------------------------------------------------------------------------------------ | --------------- | ------------------------------------ |
+| Confirmed success — the payout is FINALIZED without error                                                                                  | `completed`     | stays debited; receipt signed        |
+| Proven failure — the payout is FINALIZED with an error, or a kill of its durable nonce is finalized, or nothing was ever broadcast (§10.2) | `failed`        | refunded atomically, once (§10.3)    |
+| Unknown — anything else (absent, below finality, unreadable, the send threw after recording)                                               | `processing`    | stays debited; decided later (§10.2) |
 
-**A landed failure refunds only when no earlier broadcast of the same payout may have landed.** A payer that re-signs and re-broadcasts (e.g. after a blockhash expiry) can have its first broadcast land and pay while the re-broadcast lands and fails; the failure then describes only the last broadcast. An earlier broadcast counts as dead only when the payer broadcast exactly one transaction, or holds positive evidence that every earlier one never landed and never can (§10.2: found failed, or the fresh verdict) — an earlier broadcast absent from history is not dead.
+**A payout is decided only by finalized consensus facts.** A durable-nonce payout is one transaction, never re-signed, and at most one transaction over its nonce value can ever land; so its own finalized failure, or a finalized kill over the same nonce value, proves nothing moved and nothing can. A status found below finality proves nothing: a processed or confirmed status can belong to a minority fork.
 
 An implementation MUST NOT mark a withdrawal `completed` on anything but a confirmed success, and MUST NOT refund on an unknown outcome: a transfer that lands (or already landed) would then pay the user twice. `failure_reason` on a proven failure SHOULD name the payout reference (the transaction signature) and the failure. On an unknown outcome the implementation SHOULD record why on the still-`processing` record's `failure_reason` so an operator can reconcile (§10.2); `status` stays authoritative.
 

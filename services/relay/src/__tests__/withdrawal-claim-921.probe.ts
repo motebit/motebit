@@ -47,6 +47,7 @@ import type { SyncRelay } from "../index.js";
 import { creditAccount, getAccountBalance, getTransactions } from "../accounts.js";
 import { enqueuePendingWithdrawal, evaluateAndFireRail } from "../batch-withdrawals.js";
 import { AUTH_HEADER, createTestRelay, jsonAuthWithIdempotency } from "./test-helpers.js";
+import { durableFromSendUsdc } from "./durable-payout-fake.js";
 
 type SendUsdcResult = Awaited<ReturnType<SolanaRpcAdapter["sendUsdc"]>>;
 
@@ -83,8 +84,8 @@ function operatorWith(
   // that passes no hooks is unaffected. The chain never decides here.
   return new OperatorSolanaTransfer({
     honorsBroadcastHooks: true,
-    // The fresh verdict (#949 round 5): nothing decided yet.
-    getFreshSignatureVerdict: () => Promise.resolve({ status: "too_early" as const }),
+    // #990: the durable-nonce payout, over the same mocked send.
+    ...durableFromSendUsdc(sendUsdc, SIG),
     ownAddress: "RelayTreasuryAddressBase58",
     getUsdcBalance: vi.fn().mockResolvedValue(10_000_000_000n),
     getUsdcBalanceOf: vi.fn().mockResolvedValue(10_000_000_000n),

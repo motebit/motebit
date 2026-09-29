@@ -180,7 +180,7 @@ import { registerBrowserSandboxRoutes } from "./browser-sandbox.js";
 import { registerBudgetRoutes } from "./budget.js";
 import { startSweepLoop } from "./sweep.js";
 import { startBatchWithdrawalLoop, getPendingWithdrawalsSummary } from "./batch-withdrawals.js";
-import { startFreshVerdictLoop } from "./withdrawal-chain-payouts.js";
+import { startPayoutResolutionLoop } from "./withdrawal-chain-payouts.js";
 import { LoopSupervisor, superviseInterval } from "./loop-supervisor.js";
 import { registerAgentRoutes, registerAgentAuthMiddleware } from "./agents.js";
 import { registerHostRosterRoutes } from "./host-roster-routes.js";
@@ -549,6 +549,11 @@ export interface SyncRelay {
   getConnectionCount(): number;
   /** Whether the relay is currently draining WebSocket connections. */
   isDraining: boolean;
+  /**
+   * Path 0 payout resolution (#990) — the supervised loop's tick, exposed so
+   * a test can run one deterministically.
+   */
+  withdrawalPayouts: { resolveOnce(): Promise<void> };
 }
 
 // === Factory ===
@@ -1748,7 +1753,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
   }
 
   // --- Budget, accounts & admin routes (after auth middleware) ---
-  registerBudgetRoutes({
+  const budgetRoutes = registerBudgetRoutes({
     app,
     moteDb,
     relayIdentity,
@@ -1759,14 +1764,18 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     ...(operatorSolanaTransfer ? { operatorSolanaTransfer } : {}),
   });
 
-  // --- Withdrawal fresh-verdict sweep (#949 round 5) ---
-  // Takes and RECORDS the fresh verdict for every broadcast of a processing
-  // Path 0 payout while its window is open — the only moment the chain can
-  // prove a transaction never landed. Evidence only, it settles nothing, so
-  // it runs through an emergency freeze: a frozen relay must not lose the
-  // evidence a later unfreeze needs.
-  const freshVerdictInterval = operatorSolanaTransfer
-    ? startFreshVerdictLoop(moteDb.db, operatorSolanaTransfer, () => false, loopSupervisor)
+  // --- Path 0 payout resolution (#990) ---
+  // Fires queued durable-nonce payouts when the treasury's nonce lane is
+  // free, and settles every processing payout from FINALIZED chain state
+  // (a finalized payout completes it; a finalized kill or failure refunds
+  // it), broadcasting the kill for one undecided past the kill-after wait.
+  // It moves money, so an emergency freeze stops it.
+  const payoutResolutionInterval = operatorSolanaTransfer
+    ? startPayoutResolutionLoop(
+        () => budgetRoutes.resolvePayoutsOnce(),
+        () => getEmergencyFreeze(),
+        loopSupervisor,
+      )
     : null;
 
   // --- Agent routes (registration, discovery, capabilities, settlements, ledger) ---
@@ -2477,7 +2486,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     if (feePayerGuardInterval) clearInterval(feePayerGuardInterval);
     clearInterval(sweepInterval);
     clearInterval(batchWithdrawalInterval);
-    if (freshVerdictInterval) clearInterval(freshVerdictInterval);
+    if (payoutResolutionInterval) clearInterval(payoutResolutionInterval);
     clearInterval(orchestrationWorkerInterval);
     receiptExchangeHub.close();
     moteDb.close();
@@ -2504,6 +2513,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     get isDraining() {
       return draining;
     },
+    withdrawalPayouts: { resolveOnce: () => budgetRoutes.resolvePayoutsOnce() },
   };
 }
 

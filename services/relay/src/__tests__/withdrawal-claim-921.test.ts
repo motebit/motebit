@@ -26,8 +26,9 @@ import { describe, it, expect, afterEach, vi } from "vitest";
 import { generateKeypair, bytesToHex } from "@motebit/encryption";
 import {
   OperatorSolanaTransfer,
-  type SignatureOutcome,
-  type FreshSignatureVerdict,
+  type DurableTransactionRef,
+  type FinalizedSignatureStatus,
+  type NonceLaneState,
   type SolanaRpcAdapter,
 } from "@motebit/wallet-solana";
 import {
@@ -91,27 +92,38 @@ async function until(cond: () => boolean): Promise<void> {
 }
 
 /**
- * What the chain says about the payout's recorded transaction (#949): the
- * reconcile door for a Path 0 payout asks the chain, never the clock.
- * `chain.outcome` is the HISTORY read (trusted for found statuses only);
- * `chain.fresh` is the fresh verdict — the only read that can prove the
- * payout never landed (#949 round 5).
+ * The chain (#990): each signature's FINALIZED status, the treasury's
+ * durable-nonce lane, and whether a broadcast kill finalizes at once (it can
+ * only if the payout over the same nonce has not finalized — one landing per
+ * nonce value).
  */
-const chain: { outcome: SignatureOutcome; fresh: FreshSignatureVerdict; height: number } = {
-  outcome: { status: "pending" },
-  fresh: { status: "too_early" },
-  height: 50_000,
+const chain: {
+  final: Map<string, FinalizedSignatureStatus>;
+  lane: NonceLaneState;
+  killLands: boolean;
+} = {
+  final: new Map(),
+  lane: {
+    status: "ready",
+    account: "NonceAccount1111111111111111111111111111111",
+    nonceValue: "nonce-1",
+  },
+  killLands: true,
 };
-const DEAD_FRESH: FreshSignatureVerdict = { status: "dead_fresh", contextSlot: 123_456 };
+const KILL_SIG = "KiLLsig".padEnd(88, "k");
+const FINAL_OK: FinalizedSignatureStatus = { status: "finalized", ok: true, slot: 42 };
 
 /**
- * An operator transfer over an adapter that honours the #885 contract: the
- * relay's `beforeBroadcast` records the transaction before the (mocked)
- * send runs, as the real adapter does for every transaction it signs.
+ * An operator transfer over an adapter that makes durable-nonce payouts
+ * (#990). The payout is TX_SIG, recorded through the relay's
+ * `beforeBroadcast` before the (mocked) send runs; the mock's result becomes
+ * the payout's finalized status: `confirmed: true` ⇒ finalized ok;
+ * `confirmed: false` + `earlierBroadcastsDead: true` ⇒ finalized with an
+ * error; anything else, or a rejection ⇒ not finalized (unknown).
  */
 function makeOperator(
   sendUsdc: SolanaRpcAdapter["sendUsdc"],
-  isReachable: SolanaRpcAdapter["isReachable"] = vi.fn().mockResolvedValue(true),
+  prepareNonceLane: () => Promise<NonceLaneState> = () => Promise.resolve({ ...chain.lane }),
 ): { operator: OperatorSolanaTransfer; adapter: SolanaRpcAdapter } {
   const adapter: SolanaRpcAdapter = {
     honorsBroadcastHooks: true,
@@ -119,18 +131,50 @@ function makeOperator(
     getUsdcBalance: vi.fn().mockResolvedValue(10_000_000_000n),
     getUsdcBalanceOf: vi.fn().mockResolvedValue(10_000_000_000n),
     getSolBalance: vi.fn().mockResolvedValue(10_000_000n),
-    sendUsdc: async (args, hooks) => {
-      await hooks?.beforeBroadcast?.({
+    sendUsdc: vi.fn().mockRejectedValue(new Error("Path 0 never sends a blockhash payout")),
+    sendUsdcDurable: async (args, lane, hooks) => {
+      const tx: DurableTransactionRef = {
         signature: TX_SIG,
-        lastValidBlockHeight: chain.height + 150,
-      });
-      return sendUsdc(args, hooks);
+        kind: "payout",
+        nonceAccount: lane.account,
+        nonceValue: lane.nonceValue,
+      };
+      await hooks?.beforeBroadcast?.(tx);
+      let r: Awaited<ReturnType<SolanaRpcAdapter["sendUsdc"]>>;
+      try {
+        r = await sendUsdc(args);
+      } catch (err) {
+        return {
+          tx,
+          final: { status: "unknown", reason: "rpc_error", detail: String(err) },
+        };
+      }
+      if ((r as { confirmed?: unknown }).confirmed === true) {
+        chain.final.set(TX_SIG, { status: "finalized", ok: true, slot: r.slot });
+      } else if (r.confirmed === false && r.earlierBroadcastsDead === true) {
+        chain.final.set(TX_SIG, { status: "finalized", ok: false, slot: r.slot });
+      }
+      return { tx, final: chain.final.get(TX_SIG) ?? { status: "unknown", reason: "absent" } };
     },
+    broadcastNonceKill: async (lane, hooks) => {
+      const tx: DurableTransactionRef = {
+        signature: KILL_SIG,
+        kind: "kill",
+        nonceAccount: lane.account,
+        nonceValue: lane.nonceValue,
+      };
+      await hooks?.beforeBroadcast?.(tx);
+      if (chain.killLands && chain.final.get(TX_SIG)?.status !== "finalized") {
+        chain.final.set(KILL_SIG, { status: "finalized", ok: true, slot: 43 });
+      }
+      return { tx, sent: true };
+    },
+    getFinalizedStatus: (signature) =>
+      Promise.resolve(chain.final.get(signature) ?? { status: "unknown", reason: "absent" }),
+    prepareNonceLane,
     sendUsdcBatch: vi.fn().mockResolvedValue([]),
     getTransaction: vi.fn().mockResolvedValue({ status: "not_found" }),
-    getSignatureOutcome: () => Promise.resolve(chain.outcome),
-    getFreshSignatureVerdict: () => Promise.resolve(chain.fresh),
-    isReachable,
+    isReachable: vi.fn().mockResolvedValue(true),
   };
   return { operator: new OperatorSolanaTransfer(adapter), adapter };
 }
@@ -237,17 +281,23 @@ function jumpClock(ms: number): void {
   vi.spyOn(Date, "now").mockImplementation(() => realNow() + clockOffset);
 }
 /**
- * The chain has decided the payout's recorded transaction (#949) — by
- * default it never landed, PROVEN by the fresh verdict (#949 round 5). Also
- * jumps the clock, which alone never opens a Solana reconcile.
+ * The chain has decided the payout (#990) — by default it never landed,
+ * PROVEN by a finalized kill of its durable nonce: the operator's first
+ * `not_paid` broadcasts the kill (409 kill_pending) and the kill finalizes
+ * at once here. `landed`: the payout finalized ok. Also jumps the clock,
+ * which alone never opens a Solana reconcile.
  */
-function pastSolanaHorizon(
-  outcome: SignatureOutcome = { status: "expired" },
-  fresh: FreshSignatureVerdict = DEAD_FRESH,
-): void {
+async function pastSolanaHorizon(
+  r: SyncRelay,
+  id: string,
+  outcome: "killed" | "landed" = "killed",
+): Promise<void> {
   jumpClock(2 * 60 * 60 * 1000);
-  chain.outcome = outcome;
-  chain.fresh = fresh;
+  if (outcome === "landed") {
+    chain.final.set(TX_SIG, FINAL_OK);
+    return;
+  }
+  await admin(r, id, "reconcile", { outcome: "not_paid", attestation: "request the kill" });
 }
 
 /** Error-level log lines (the relay logger writes `error` to stderr). */
@@ -276,9 +326,13 @@ let relay: SyncRelay | undefined;
 afterEach(async () => {
   vi.restoreAllMocks();
   clockOffset = 0;
-  chain.outcome = { status: "pending" };
-  chain.fresh = { status: "too_early" };
-  chain.height = 50_000;
+  chain.final = new Map();
+  chain.lane = {
+    status: "ready",
+    account: "NonceAccount1111111111111111111111111111111",
+    nonceValue: "nonce-1",
+  };
+  chain.killLands = true;
   await relay?.close();
   relay = undefined;
 });
@@ -305,7 +359,7 @@ describe("#921 admin during the in-flight send", () => {
     const complete = await admin(relay, id, "complete", { payout_reference: "manual-wire" });
     expect(complete.status).toBe(409);
     // Even past the age window, a send still awaited in this process is refused.
-    pastSolanaHorizon();
+    await pastSolanaHorizon(relay, id);
     const reconcile = await admin(relay, id, "reconcile", {
       outcome: "not_paid",
       attestation: "explorer shows nothing",
@@ -381,17 +435,17 @@ describe("#921 admin during the in-flight send", () => {
 });
 
 describe("#921 claim before send", () => {
-  it("admin /fail wins while the handler awaits availability ⇒ the claim is lost and NOTHING is sent", async () => {
-    const reachable = deferred<boolean>();
-    const isReachable = vi.fn().mockReturnValue(reachable.promise);
+  it("admin /fail wins while the handler reads the nonce lane ⇒ the claim is lost and NOTHING is sent", async () => {
+    const laneRead = deferred<NonceLaneState>();
+    const prepareNonceLane = vi.fn().mockReturnValue(laneRead.promise);
     const sendUsdc = vi.fn().mockResolvedValue({ signature: TX_SIG, slot: 1, confirmed: true });
-    const { operator } = makeOperator(sendUsdc, isReachable);
+    const { operator } = makeOperator(sendUsdc, prepareNonceLane);
     relay = await createTestRelay({ enableDeviceAuth: false, operatorSolanaTransfer: operator });
     const mid = "zz921-claim-lost";
     await registerAndFund(relay, mid);
 
     const pending = startWithdraw(relay, mid);
-    await until(() => isReachable.mock.calls.length === 1);
+    await until(() => prepareNonceLane.mock.calls.length === 1);
     const id = onlyWithdrawalId(relay, mid);
     expect(row(relay, id).status).toBe("pending");
     // Unclaimed: the manual fail is allowed, and refunds.
@@ -400,7 +454,7 @@ describe("#921 claim before send", () => {
 
     const errors = captureErrors();
     try {
-      reachable.resolve(true);
+      laneRead.resolve({ ...chain.lane });
       const body = (await (await pending).json()) as WithdrawBody;
       expect(body.withdrawal.status).toBe("failed");
     } finally {
@@ -463,11 +517,12 @@ describe("#921 crash mid-send: processing, resolvable only through /reconcile", 
     await registerAndFund(relay, mid);
     const body = (await (await startWithdraw(relay, mid)).json()) as WithdrawBody;
     expect(body.withdrawal.status).toBe("processing");
-    expect(body.withdrawal.failure_reason).toMatch(/unresolved payout: solana send threw/);
+    expect(body.withdrawal.failure_reason).toMatch(/not finalized yet/);
     return body.withdrawal.withdrawal_id;
   }
 
   it("manual /fail and /complete refuse it; /reconcile refuses inside the window and without an attestation", async () => {
+    chain.killLands = false; // nothing decides the payout in this test
     const mid = "zz921-crash-doors";
     const id = await thrownSend(mid);
 
@@ -478,7 +533,7 @@ describe("#921 crash mid-send: processing, resolvable only through /reconcile", 
       (await admin(relay!, id, "reconcile", { outcome: "not_paid", attestation: "nothing" }))
         .status,
     ).toBe(409);
-    pastSolanaHorizon();
+    await pastSolanaHorizon(relay!, id);
     // Never a blind refund.
     expect((await admin(relay!, id, "reconcile", { outcome: "not_paid" })).status).toBe(400);
     expect(
@@ -494,7 +549,7 @@ describe("#921 crash mid-send: processing, resolvable only through /reconcile", 
   it("reconcile not_paid (attested, after the window) ⇒ failed and refunded exactly once", async () => {
     const mid = "zz921-crash-notpaid";
     const id = await thrownSend(mid);
-    pastSolanaHorizon();
+    await pastSolanaHorizon(relay!, id);
     const res = await admin(relay!, id, "reconcile", {
       outcome: "not_paid",
       attestation: "treasury history has no transfer to the destination since the claim",
@@ -512,7 +567,7 @@ describe("#921 crash mid-send: processing, resolvable only through /reconcile", 
   it("reconcile paid (attested, after the window) ⇒ completed and signed, never refunded", async () => {
     const mid = "zz921-crash-paid";
     const id = await thrownSend(mid);
-    pastSolanaHorizon({ status: "landed", slot: 42 });
+    await pastSolanaHorizon(relay!, id, "landed");
     const res = await admin(relay!, id, "reconcile", {
       outcome: "paid",
       payout_reference: TX_SIG,
@@ -907,7 +962,7 @@ describe("#921 round 3: pre-claim rows are marked durably, once, at migration", 
   });
 });
 
-describe("#949: a Solana payout's reconcile is decided by the chain, never the clock", () => {
+describe("#949/#990: a Solana payout is decided by finalized chain state, never the clock", () => {
   async function reconcileBody(
     r: SyncRelay,
     id: string,
@@ -917,61 +972,63 @@ describe("#949: a Solana payout's reconcile is decided by the chain, never the c
     return { status: res.status, json: (await res.json()) as Record<string, unknown> };
   }
 
-  it("a send that threw stays closed while its transaction can still land — hours of clock change nothing; a history absence never opens not_paid", async () => {
+  async function undecidedPayout(mid: string): Promise<string> {
     const { operator } = makeOperator(vi.fn().mockRejectedValue(new Error("RPC unavailable")));
     relay = await createTestRelay({ enableDeviceAuth: false, operatorSolanaTransfer: operator });
-    const mid = "zz949-halt";
     await registerAndFund(relay, mid);
     const body = (await (await startWithdraw(relay, mid)).json()) as WithdrawBody;
-    const id = body.withdrawal.withdrawal_id;
     expect(body.withdrawal.status).toBe("processing");
+    return body.withdrawal.withdrawal_id;
+  }
 
-    // A halted chain: the transaction is not past its last valid height.
-    chain.outcome = { status: "pending" };
+  it("an undecided payout stays processing whatever the clock; not_paid broadcasts the kill and is refunded only once the kill is finalized", async () => {
+    chain.killLands = false; // the kill is broadcast but not finalized yet
+    const mid = "zz990-kill";
+    const id = await undecidedPayout(mid);
     for (const hours of [1, 6, 48]) {
       jumpClock(hours * 60 * 60 * 1000);
-      const r = await reconcileBody(relay, id, { outcome: "not_paid", attestation: "nothing" });
+      const r = await reconcileBody(relay!, id, { outcome: "not_paid", attestation: "nothing" });
       expect(r.status).toBe(409);
-      expect(r.json.reason).toBe("chain_pending");
-      expect((r.json.chain as { signature: string }).signature).toBe(TX_SIG);
+      expect(r.json.reason).toBe("kill_pending");
+      expect(String(r.json.message)).toContain("#990");
+      expect(balance(relay!, mid)).toBe(FUNDED - WITHDRAW_MICRO);
     }
-    // An unreadable chain decides nothing either.
-    chain.outcome = { status: "rpc_error", reason: "503" };
-    chain.fresh = { status: "rpc_error", reason: "503" };
-    expect(
-      (await reconcileBody(relay, id, { outcome: "not_paid", attestation: "x" })).json.reason,
-    ).toBe("chain_unreadable");
-    // Seen in a block, the fresh window not yet open ⇒ undecided.
-    chain.outcome = { status: "pending", seen: true };
-    chain.fresh = { status: "too_early" };
-    expect((await reconcileBody(relay, id, { outcome: "not_paid", attestation: "x" })).status).toBe(
-      409,
-    );
-    // History "absent, past its validity" is not evidence (#949 round 5):
-    // before the fresh window it is pending; after it closed with nothing
-    // recorded, there is no positive evidence ever.
-    chain.outcome = { status: "expired" };
-    expect(
-      (await reconcileBody(relay, id, { outcome: "not_paid", attestation: "x" })).json.reason,
-    ).toBe("chain_pending");
-    chain.fresh = { status: "window_passed" };
-    const none = await reconcileBody(relay, id, { outcome: "not_paid", attestation: "x" });
-    expect(none.status).toBe(409);
-    expect(none.json.reason).toBe("chain_no_positive_evidence");
-    expect(String(none.json.message)).toContain("#990");
-    expect(balance(relay, mid)).toBe(FUNDED - WITHDRAW_MICRO);
+    // The kill finalizes: the payout can never land now.
+    chain.final.set(KILL_SIG, { status: "finalized", ok: true, slot: 43 });
+    const done = await reconcileBody(relay!, id, { outcome: "not_paid", attestation: "killed" });
+    expect(done.status).toBe(200);
+    expectExactlyOneOutcome(relay!, mid, id);
   });
 
-  it("positive evidence of non-landing (the fresh verdict) allows only not_paid; a landed transaction allows only paid, under its own signature", async () => {
-    const { operator } = makeOperator(vi.fn().mockRejectedValue(new Error("socket hang up")));
-    relay = await createTestRelay({ enableDeviceAuth: false, operatorSolanaTransfer: operator });
-    const midA = "zz949-expired";
-    await registerAndFund(relay, midA);
-    const a = ((await (await startWithdraw(relay, midA)).json()) as WithdrawBody).withdrawal
-      .withdrawal_id;
-    chain.outcome = { status: "expired" };
-    chain.fresh = DEAD_FRESH;
-    const wrongWay = await reconcileBody(relay, a, {
+  it("a finalized payout allows only paid, under its own signature", async () => {
+    const mid = "zz990-landed";
+    const id = await undecidedPayout(mid);
+    chain.final.set(TX_SIG, FINAL_OK);
+    const refund = await reconcileBody(relay!, id, { outcome: "not_paid", attestation: "no" });
+    expect(refund.status).toBe(409);
+    expect(refund.json.error).toBe("WITHDRAWAL_RECONCILE_CONTRADICTS_CHAIN");
+    expect(refund.json.payout_reference).toBe(TX_SIG);
+    const other = await reconcileBody(relay!, id, {
+      outcome: "paid",
+      payout_reference: "someOtherSignature",
+      attestation: "x",
+    });
+    expect(other.status).toBe(409);
+    const paid = await reconcileBody(relay!, id, {
+      outcome: "paid",
+      payout_reference: TX_SIG,
+      attestation: "landed",
+    });
+    expect(paid.status).toBe(200);
+    expect(row(relay!, id).payout_reference).toBe(TX_SIG);
+    expectExactlyOneOutcome(relay!, mid, id);
+  });
+
+  it("a finalized kill allows only not_paid", async () => {
+    const mid = "zz990-killed";
+    const id = await undecidedPayout(mid);
+    await pastSolanaHorizon(relay!, id); // broadcasts the kill; it finalizes
+    const wrongWay = await reconcileBody(relay!, id, {
       outcome: "paid",
       payout_reference: TX_SIG,
       attestation: "I think it paid",
@@ -979,100 +1036,82 @@ describe("#949: a Solana payout's reconcile is decided by the chain, never the c
     expect(wrongWay.status).toBe(409);
     expect(wrongWay.json.error).toBe("WITHDRAWAL_RECONCILE_CONTRADICTS_CHAIN");
     expect(wrongWay.json.chain_outcome).toBe("not_paid");
-    expect(
-      (await reconcileBody(relay, a, { outcome: "not_paid", attestation: "expired unused" }))
-        .status,
-    ).toBe(200);
-    expectExactlyOneOutcome(relay, midA, a);
-
-    const midB = "zz949-landed";
-    await registerAndFund(relay, midB);
-    const b = ((await (await startWithdraw(relay, midB)).json()) as WithdrawBody).withdrawal
-      .withdrawal_id;
-    chain.outcome = { status: "landed", slot: 77 };
-    const refund = await reconcileBody(relay, b, { outcome: "not_paid", attestation: "no" });
-    expect(refund.status).toBe(409);
-    expect(refund.json.payout_reference).toBe(TX_SIG);
-    const otherRef = await reconcileBody(relay, b, {
-      outcome: "paid",
-      payout_reference: "someOtherSignature",
-      attestation: "x",
-    });
-    expect(otherRef.status).toBe(409);
-    expect(
-      (
-        await reconcileBody(relay, b, {
-          outcome: "paid",
-          payout_reference: TX_SIG,
-          attestation: "landed",
-        })
-      ).status,
-    ).toBe(200);
-    expect(row(relay, b).payout_reference).toBe(TX_SIG);
-    expectExactlyOneOutcome(relay, midB, b);
+    const ok = await reconcileBody(relay!, id, { outcome: "not_paid", attestation: "killed" });
+    expect(ok.status).toBe(200);
+    expectExactlyOneOutcome(relay!, mid, id);
   });
 
-  it("round 5 regression: a history-absence verdict never refuses the operator's paid naming a recorded signature, and never refunds", async () => {
-    const { operator } = makeOperator(vi.fn().mockRejectedValue(new Error("socket hang up")));
-    relay = await createTestRelay({ enableDeviceAuth: false, operatorSolanaTransfer: operator });
-    const mid = "zz949-r5-absence";
-    await registerAndFund(relay, mid);
-    const id = ((await (await startWithdraw(relay, mid)).json()) as WithdrawBody).withdrawal
-      .withdrawal_id;
-    // Days later: the history read says "absent, past its validity" (a
-    // snapshot jump) and the fresh window has passed — the payout in fact
-    // landed.
-    chain.outcome = { status: "expired" };
-    chain.fresh = { status: "window_passed" };
-    const refund = await reconcileBody(relay, id, {
-      outcome: "not_paid",
-      attestation: "explorer shows nothing",
-    });
-    expect(refund.status).toBe(409);
-    expect(refund.json.reason).toBe("chain_no_positive_evidence");
-    expect(balance(relay, mid)).toBe(FUNDED - WITHDRAW_MICRO);
-    const paid = await reconcileBody(relay, id, {
+  it("a finalized payout that failed allows only not_paid (it consumed its nonce; nothing moved)", async () => {
+    const mid = "zz990-failed";
+    const id = await undecidedPayout(mid);
+    chain.final.set(TX_SIG, { status: "finalized", ok: false, slot: 42 });
+    const r = await reconcileBody(relay!, id, { outcome: "not_paid", attestation: "failed tx" });
+    expect(r.status).toBe(200);
+    expectExactlyOneOutcome(relay!, mid, id);
+  });
+
+  it("a status found but not finalized (a processed minority fork) decides nothing: paid ⇒ 409 chain_pending", async () => {
+    chain.killLands = false;
+    const mid = "zz990-fork";
+    const id = await undecidedPayout(mid);
+    chain.final.set(TX_SIG, { status: "unknown", reason: "not_finalized" });
+    const paid = await reconcileBody(relay!, id, {
       outcome: "paid",
       payout_reference: TX_SIG,
-      attestation: "an archive explorer shows it landed",
+      attestation: "explorer shows it",
     });
-    expect(paid.status).toBe(200);
-    expectExactlyOneOutcome(relay, mid, id);
+    expect(paid.status).toBe(409);
+    expect(paid.json.reason).toBe("chain_pending");
+    const notPaid = await reconcileBody(relay!, id, { outcome: "not_paid", attestation: "x" });
+    expect(notPaid.status).toBe(409);
+    expect(balance(relay!, mid)).toBe(FUNDED - WITHDRAW_MICRO);
   });
 
-  it("PR1: the send threw, the payout landed, the node pruned it — no refund; the operator's paid under the recorded signature is accepted (#949 round 2)", async () => {
-    const { operator } = makeOperator(vi.fn().mockRejectedValue(new Error("socket hang up")));
-    relay = await createTestRelay({ enableDeviceAuth: false, operatorSolanaTransfer: operator });
-    const mid = "zz949-pr1";
-    await registerAndFund(relay, mid);
-    const id = ((await (await startWithdraw(relay, mid)).json()) as WithdrawBody).withdrawal
-      .withdrawal_id;
-    // Days later: the node no longer holds the landing window and answers
-    // "absent, past its last valid height" for the landed transaction.
-    chain.outcome = { status: "expired" };
-    chain.fresh = { status: "window_passed" };
-    const refund = await reconcileBody(relay, id, {
+  it("absent everywhere (history pruned or unreadable): never a refund; the operator's paid naming the recorded payout is accepted", async () => {
+    chain.killLands = false;
+    const mid = "zz990-absent";
+    const id = await undecidedPayout(mid);
+    const refund = await reconcileBody(relay!, id, {
       outcome: "not_paid",
       attestation: "explorer shows nothing",
     });
     expect(refund.status).toBe(409);
-    expect(refund.json.reason).toBe("chain_no_positive_evidence");
-    expect(balance(relay, mid)).toBe(FUNDED - WITHDRAW_MICRO);
-    // A paid naming a signature this payout never signed is still refused.
-    const stranger = await reconcileBody(relay, id, {
+    expect(balance(relay!, mid)).toBe(FUNDED - WITHDRAW_MICRO);
+    const stranger = await reconcileBody(relay!, id, {
       outcome: "paid",
       payout_reference: "notOurSignature",
       attestation: "x",
     });
     expect(stranger.status).toBe(409);
-    const paid = await reconcileBody(relay, id, {
+    const paid = await reconcileBody(relay!, id, {
       outcome: "paid",
       payout_reference: TX_SIG,
-      attestation: "an archive node shows it landed",
+      attestation: "an archive explorer shows it landed",
     });
     expect(paid.status).toBe(200);
-    expect(row(relay, id).payout_reference).toBe(TX_SIG);
-    expectExactlyOneOutcome(relay, mid, id);
+    expectExactlyOneOutcome(relay!, mid, id);
+  });
+
+  it("the resolution loop kills an undecided payout past the kill-after wait and refunds once the kill is finalized", async () => {
+    const mid = "zz990-loop";
+    const id = await undecidedPayout(mid);
+    const kills = () =>
+      (
+        relay!.moteDb.db
+          .prepare(
+            "SELECT COUNT(*) AS n FROM relay_withdrawal_payout_attempts WHERE withdrawal_id = ? AND kind = 'kill'",
+          )
+          .get(id) as { n: number }
+      ).n;
+    await relay!.withdrawalPayouts.resolveOnce();
+    await relay!.withdrawalPayouts.resolveOnce();
+    expect(row(relay!, id).status).toBe("processing"); // not yet past the wait
+    expect(kills()).toBe(0); // and no kill was broadcast inside it
+    jumpClock(6 * 60 * 1000);
+    await relay!.withdrawalPayouts.resolveOnce(); // broadcasts the kill (finalizes here)
+    await relay!.withdrawalPayouts.resolveOnce(); // reads it finalized ⇒ refund
+    expect(row(relay!, id).status).toBe("failed");
+    expectExactlyOneOutcome(relay!, mid, id);
   });
 
   it("the in-flight mark still wins over a decided chain", async () => {
@@ -1085,8 +1124,6 @@ describe("#949: a Solana payout's reconcile is decided by the chain, never the c
     const pending = startWithdraw(relay, mid);
     await until(() => sendUsdc.mock.calls.length === 1);
     const id = onlyWithdrawalId(relay, mid);
-    chain.outcome = { status: "expired" };
-    chain.fresh = DEAD_FRESH;
     const r = await reconcileBody(relay, id, { outcome: "not_paid", attestation: "x" });
     expect(r.json.reason).toBe("in_flight_here");
     send.resolve({ signature: TX_SIG, slot: 1, confirmed: true });
@@ -1095,7 +1132,7 @@ describe("#949: a Solana payout's reconcile is decided by the chain, never the c
     expect(refundCount(relay, mid, id)).toBe(0);
   });
 
-  it("a signature the relay cannot record is never broadcast; no recorded attempt ⇒ provably not paid", async () => {
+  it("a payout the relay cannot record is never broadcast; nothing recorded ⇒ provably not paid ⇒ refunded", async () => {
     const sendUsdc = vi.fn();
     const { operator } = makeOperator(sendUsdc);
     relay = await createTestRelay({ enableDeviceAuth: false, operatorSolanaTransfer: operator });
@@ -1107,18 +1144,14 @@ describe("#949: a Solana payout's reconcile is decided by the chain, never the c
     const body = (await (await startWithdraw(relay, mid)).json()) as WithdrawBody;
     const id = body.withdrawal.withdrawal_id;
     expect(sendUsdc).not.toHaveBeenCalled();
-    expect(body.withdrawal.status).toBe("processing");
-    // The chain need not be asked: nothing of this payout was ever broadcast.
-    chain.outcome = { status: "pending" };
-    expect(
-      (await reconcileBody(relay, id, { outcome: "not_paid", attestation: "never sent" })).status,
-    ).toBe(200);
+    expect(body.withdrawal.status).toBe("failed");
     expectExactlyOneOutcome(relay, mid, id);
   });
 
-  it("a transfer that cannot record its broadcasts or read their outcome is never used: the withdrawal stays pending, nothing sent", async () => {
+  it("a transfer that cannot make a durable-nonce payout is never used: the withdrawal stays pending, nothing sent", async () => {
     const sendUsdc = vi.fn();
     const adapter: SolanaRpcAdapter = {
+      honorsBroadcastHooks: true,
       ownAddress: "RelayTreasuryAddressBase58",
       getUsdcBalance: vi.fn().mockResolvedValue(10_000_000_000n),
       getUsdcBalanceOf: vi.fn().mockResolvedValue(10_000_000_000n),
@@ -1126,6 +1159,7 @@ describe("#949: a Solana payout's reconcile is decided by the chain, never the c
       sendUsdc,
       sendUsdcBatch: vi.fn().mockResolvedValue([]),
       getTransaction: vi.fn().mockResolvedValue({ status: "not_found" }),
+      getSignatureOutcome: vi.fn().mockResolvedValue({ status: "pending" }),
       isReachable: vi.fn().mockResolvedValue(true),
     };
     relay = await createTestRelay({
@@ -1142,7 +1176,30 @@ describe("#949: a Solana payout's reconcile is decided by the chain, never the c
     ).toBe(200);
   });
 
-  it("a LEGACY claim (an earlier process, no signatures recorded) is never refunded — no positive evidence can exist; the operator's paid is accepted (#949 round 5)", async () => {
+  it("an unavailable nonce lane sends nothing: pending and queued (/fail works); the loop fires it once the lane is back", async () => {
+    chain.lane = { status: "unavailable", reason: "nonce account not finalized yet" };
+    const sendUsdc = vi.fn().mockResolvedValue({ signature: TX_SIG, slot: 1, confirmed: true });
+    const { operator } = makeOperator(sendUsdc);
+    relay = await createTestRelay({ enableDeviceAuth: false, operatorSolanaTransfer: operator });
+    const mid = "zz990-lane";
+    await registerAndFund(relay, mid);
+    const body = (await (await startWithdraw(relay, mid)).json()) as WithdrawBody;
+    const id = body.withdrawal.withdrawal_id;
+    expect(body.withdrawal.status).toBe("pending");
+    expect(sendUsdc).not.toHaveBeenCalled();
+    await relay.withdrawalPayouts.resolveOnce();
+    expect(row(relay, id).status).toBe("pending");
+    chain.lane = {
+      status: "ready",
+      account: "NonceAccount1111111111111111111111111111111",
+      nonceValue: "nonce-1",
+    };
+    await relay.withdrawalPayouts.resolveOnce();
+    expect(row(relay, id).status).toBe("completed");
+    expect(sendUsdc).toHaveBeenCalledTimes(1);
+  });
+
+  it("a LEGACY claim (an earlier process, no signatures recorded) is never refunded — no durable nonce to kill; the operator's paid is accepted", async () => {
     const { operator } = makeOperator(vi.fn());
     relay = await createTestRelay({ enableDeviceAuth: false, operatorSolanaTransfer: operator });
     const mid = "zz949-legacy";
@@ -1161,16 +1218,15 @@ describe("#949: a Solana payout's reconcile is decided by the chain, never the c
     expect(listing.withdrawals.find((w) => w.withdrawal_id === id)!.reconcile_decided_by).toBe(
       "operator_attested",
     );
-
-    // Whatever the clock or the chain shows, a refund is refused.
-    chain.outcome = { status: "expired" };
-    chain.fresh = DEAD_FRESH;
     for (const hours of [0, 72]) {
       jumpClock(hours * 60 * 60 * 1000);
       const r = await reconcileBody(relay, id, { outcome: "not_paid", attestation: "x" });
       expect(r.status).toBe(409);
       expect(r.json.reason).toBe("chain_no_positive_evidence");
     }
+    // The resolution loop never touches a claim that is not chain-recorded.
+    await relay.withdrawalPayouts.resolveOnce();
+    expect(row(relay, id).status).toBe("processing");
     expect(balance(relay, mid)).toBe(FUNDED - WITHDRAW_MICRO);
     const paid = await reconcileBody(relay, id, {
       outcome: "paid",

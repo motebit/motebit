@@ -61,19 +61,49 @@ describe("OperatorSolanaTransfer", () => {
     expect(await op.getSolBalance()).toBe(1_234_567n);
   });
 
-  it("sendUsdc forwards (toAddress, microAmount) to the adapter and returns the result", async () => {
-    const adapter = makeAdapter();
-    const op = new OperatorSolanaTransfer(adapter);
-
-    const result = await op.sendUsdc("UserSovereignWalletBase58", 950_000n);
-
-    expect(adapter.sendUsdc).toHaveBeenCalledWith({
-      toAddress: "UserSovereignWalletBase58",
-      microAmount: 950_000n,
+  it("sendPayout forwards the durable-nonce payout to the adapter, with the lane and the hooks (#990)", async () => {
+    const tx = { signature: "p", kind: "payout" as const, nonceAccount: "N", nonceValue: "v" };
+    const durable = vi.fn().mockResolvedValue({
+      tx,
+      final: { status: "finalized", ok: true, slot: 42 },
     });
-    expect(result.signature).toBe("tx-sig-123");
-    expect(result.slot).toBe(42);
-    expect(result.confirmed).toBe(true);
+    const adapter = makeAdapter({ sendUsdcDurable: durable });
+    const op = new OperatorSolanaTransfer(adapter);
+    const lane = { account: "N", nonceValue: "v" };
+    const hooks = { beforeBroadcast: vi.fn() };
+    const result = await op.sendPayout("UserSovereignWalletBase58", 950_000n, lane, hooks);
+    expect(durable).toHaveBeenCalledWith(
+      { toAddress: "UserSovereignWalletBase58", microAmount: 950_000n },
+      lane,
+      hooks,
+    );
+    expect(result.final).toEqual({ status: "finalized", ok: true, slot: 42 });
+    expect(adapter.sendUsdc).not.toHaveBeenCalled(); // never a blockhash payout
+  });
+
+  it("sendPayout propagates the adapter's pre-send errors, and refuses an adapter with no durable path", async () => {
+    const insufficient = new OperatorSolanaTransfer(
+      makeAdapter({
+        sendUsdcDurable: vi
+          .fn()
+          .mockRejectedValue(new InsufficientUsdcBalanceError(100_000n, 950_000n)),
+      }),
+    );
+    const lane = { account: "N", nonceValue: "v" };
+    await expect(insufficient.sendPayout("UserWallet", 950_000n, lane)).rejects.toBeInstanceOf(
+      InsufficientUsdcBalanceError,
+    );
+    const invalid = new OperatorSolanaTransfer(
+      makeAdapter({
+        sendUsdcDurable: vi.fn().mockRejectedValue(new InvalidSolanaAddressError("x", null)),
+      }),
+    );
+    await expect(invalid.sendPayout("x", 1n, lane)).rejects.toBeInstanceOf(
+      InvalidSolanaAddressError,
+    );
+    await expect(
+      new OperatorSolanaTransfer(makeAdapter()).sendPayout("UserWallet", 1n, lane),
+    ).rejects.toThrow(/durable-nonce/);
   });
 
   it("isAvailable delegates to the adapter", async () => {
@@ -82,72 +112,45 @@ describe("OperatorSolanaTransfer", () => {
     expect(await op.isAvailable()).toBe(false);
   });
 
-  it("propagates InsufficientUsdcBalanceError from the adapter", async () => {
-    const adapter = makeAdapter({
-      sendUsdc: vi.fn().mockRejectedValue(new InsufficientUsdcBalanceError(100_000n, 950_000n)),
-    });
-    const op = new OperatorSolanaTransfer(adapter);
-    await expect(op.sendUsdc("UserWallet", 950_000n)).rejects.toBeInstanceOf(
-      InsufficientUsdcBalanceError,
-    );
-  });
-
-  it("propagates InvalidSolanaAddressError from the adapter for bad destinations", async () => {
-    const adapter = makeAdapter({
-      sendUsdc: vi.fn().mockRejectedValue(new InvalidSolanaAddressError("not-base58", null)),
-    });
-    const op = new OperatorSolanaTransfer(adapter);
-    await expect(op.sendUsdc("not-base58", 1n)).rejects.toBeInstanceOf(InvalidSolanaAddressError);
-  });
-
-  it("sendUsdc passes the broadcast hooks through when given (#949)", async () => {
-    const adapter = makeAdapter();
-    const op = new OperatorSolanaTransfer(adapter);
-    const hooks = { beforeBroadcast: vi.fn() };
-    await op.sendUsdc("UserWallet", 5n, hooks);
-    expect(adapter.sendUsdc).toHaveBeenCalledWith(
-      { toAddress: "UserWallet", microAmount: 5n },
-      hooks,
-    );
-  });
-
-  it("recordsBroadcasts only over an adapter that honours the hooks, reads outcomes AND takes the fresh verdict (#949 round 5)", () => {
-    const outcome = () => vi.fn().mockResolvedValue({ status: "pending" });
-    const freshRead = () => vi.fn().mockResolvedValue({ status: "too_early" });
+  it("recordsBroadcasts only over an adapter that honours the hooks, has the nonce lane, the durable send, the kill AND the finalized read (#990)", () => {
     const full = {
       honorsBroadcastHooks: true as const,
-      getSignatureOutcome: outcome(),
-      getFreshSignatureVerdict: freshRead(),
+      prepareNonceLane: vi.fn(),
+      sendUsdcDurable: vi.fn(),
+      broadcastNonceKill: vi.fn(),
+      getFinalizedStatus: vi.fn(),
     };
     expect(new OperatorSolanaTransfer(makeAdapter(full)).recordsBroadcasts).toBe(true);
     expect(new OperatorSolanaTransfer(makeAdapter()).recordsBroadcasts).toBe(false);
-    const { honorsBroadcastHooks: _h, ...noHooks } = full;
-    expect(new OperatorSolanaTransfer(makeAdapter(noHooks)).recordsBroadcasts).toBe(false);
-    const { getSignatureOutcome: _o, ...noOutcome } = full;
-    expect(new OperatorSolanaTransfer(makeAdapter(noOutcome)).recordsBroadcasts).toBe(false);
-    // Without the fresh verdict, non-payment could never be proven.
-    const { getFreshSignatureVerdict: _f, ...noFresh } = full;
-    expect(new OperatorSolanaTransfer(makeAdapter(noFresh)).recordsBroadcasts).toBe(false);
+    for (const key of Object.keys(full) as Array<keyof typeof full>) {
+      const partial: Partial<SolanaRpcAdapter> = { ...full };
+      delete partial[key];
+      expect(new OperatorSolanaTransfer(makeAdapter(partial)).recordsBroadcasts, key).toBe(false);
+    }
   });
 
-  it("getSignatureOutcome delegates, and reports rpc_error (never absence) when the adapter cannot read", async () => {
-    const tx = { signature: "sig", lastValidBlockHeight: 10 };
-    const outcome = vi.fn().mockResolvedValue({ status: "expired" });
-    const op = new OperatorSolanaTransfer(makeAdapter({ getSignatureOutcome: outcome }));
-    expect(await op.getSignatureOutcome(tx)).toEqual({ status: "expired" });
-    expect(outcome).toHaveBeenCalledWith(tx);
-    const none = await new OperatorSolanaTransfer(makeAdapter()).getSignatureOutcome(tx);
-    expect(none.status).toBe("rpc_error");
-  });
-
-  it("getFreshSignatureVerdict delegates, and reports rpc_error (never dead) when the adapter cannot take it", async () => {
-    const tx = { signature: "sig", lastValidBlockHeight: 10 };
-    const read = vi.fn().mockResolvedValue({ status: "dead_fresh", contextSlot: 5 });
-    const op = new OperatorSolanaTransfer(makeAdapter({ getFreshSignatureVerdict: read }));
-    expect(await op.getFreshSignatureVerdict(tx)).toEqual({ status: "dead_fresh", contextSlot: 5 });
-    expect(read).toHaveBeenCalledWith(tx);
-    const none = await new OperatorSolanaTransfer(makeAdapter()).getFreshSignatureVerdict(tx);
-    expect(none.status).toBe("rpc_error");
+  it("prepareNonceLane, broadcastNonceKill and getFinalizedStatus delegate; missing ⇒ unavailable / refused / unknown — never evidence", async () => {
+    const lane = { account: "N", nonceValue: "v" };
+    const op = new OperatorSolanaTransfer(
+      makeAdapter({
+        prepareNonceLane: vi.fn().mockResolvedValue({ status: "ready", ...lane }),
+        broadcastNonceKill: vi.fn().mockResolvedValue({
+          tx: { signature: "k", kind: "kill", nonceAccount: "N", nonceValue: "v" },
+          sent: true,
+        }),
+        getFinalizedStatus: vi.fn().mockResolvedValue({ status: "finalized", ok: true, slot: 1 }),
+      }),
+    );
+    expect(await op.prepareNonceLane()).toEqual({ status: "ready", ...lane });
+    expect((await op.broadcastNonceKill(lane)).sent).toBe(true);
+    expect(await op.getFinalizedStatus("k")).toEqual({ status: "finalized", ok: true, slot: 1 });
+    const bare = new OperatorSolanaTransfer(makeAdapter());
+    expect((await bare.prepareNonceLane()).status).toBe("unavailable");
+    await expect(bare.broadcastNonceKill(lane)).rejects.toThrow(/kill/);
+    expect(await bare.getFinalizedStatus("k")).toMatchObject({
+      status: "unknown",
+      reason: "rpc_error",
+    });
   });
 
   // -------------------------------------------------------------------------

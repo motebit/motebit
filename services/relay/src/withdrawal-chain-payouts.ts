@@ -1,16 +1,25 @@
 /**
- * Chain-recorded withdrawal payouts (#949, #945) — the relay records every
- * Solana transaction a Path 0 payout signs BEFORE it is broadcast, so whether
- * the payout landed is later decided by asking the chain about exactly those
- * transactions, never by the relay's wall clock.
+ * Chain-decided withdrawal payouts (#949, #945, #990) — a Path 0 payout is
+ * decided by CONSENSUS RULES, never by what an RPC fails to report.
  *
- * Why not the clock. A Solana transaction is valid until the chain passes
- * its blockhash's `lastValidBlockHeight`. Block HEIGHT, not time: a halted or
- * badly slowed cluster produces no heights, so a transaction signed before
- * the halt is still valid when the cluster resumes — hours later on the
- * relay's clock. The #921 reconcile door opened at "last broadcast + 150s +
- * 5 min" of wall clock; during a halt an operator saw nothing on chain,
- * refunded, and the payout then landed: paid AND refunded (#949).
+ * Five review rounds (#949) each found another way an RPC's ABSENCE (or
+ * unfinalized) reading misleads: pruned history, a missing slot, BigTable's
+ * swallowed errors, cleanup lag, a snapshot jump — and finally that released
+ * agave's `getSignatureStatuses` ignores `commitment` and `minContextSlot`
+ * altogether and answers from the processed bank, minority forks included.
+ * Nothing built on reported absence closes. #990 decides by two facts that
+ * are consensus rules, not RPC behaviour:
+ *
+ *   1. A durable-nonce transaction can land only while the nonce account
+ *      holds the nonce value it was signed over, and landing — success OR
+ *      failure — advances the nonce (agave `svm/src/rollback_accounts.rs`:
+ *      a failed transaction's nonce account is stored already advanced). So
+ *      of all the transactions signed over one nonce value, at most ONE ever
+ *      lands, and none ever expires.
+ *   2. A status whose per-status `confirmationStatus` is `finalized` is final
+ *      (`rpc.rs` `get_transaction_status` / `is_finalized`: at or below the
+ *      highest super-majority root, on the rooted path; the history branch
+ *      returns rooted statuses only, marked `Finalized`).
  *
  * The record:
  *
@@ -22,33 +31,27 @@
  *     cannot record stops the send (#885). So "no attempts recorded" means
  *     "nothing was ever broadcast".
  *   - `relay_withdrawal_payout_attempts` — one row per signed transaction:
- *     its signature and `lastValidBlockHeight`, `seen_in_block` once any
- *     read has reported it in a block, and its durable VERDICT once one is
- *     read (`fresh_verdict`, `fresh_context_slot`, `fresh_landed_slot`,
- *     `fresh_checked_at`).
+ *     its signature, `kind` (`payout` | `kill`), the durable nonce it was
+ *     signed over (`nonce_account`, `nonce_value`; NULL on a blockhash
+ *     payout an earlier build signed, whose `last_valid_block_height` is
+ *     set instead), and its FINALIZED status once read (`final_status`
+ *     `ok` | `err`, `final_slot`, `final_checked_at` — a finalized status
+ *     never changes, so it is recorded once and never read again).
+ *   - `relay_withdrawal_payout_queue` — Path 0 withdrawals waiting for the
+ *     nonce lane (busy with an undecided payout, or unavailable). They stay
+ *     `pending` — the operator's /fail still works — and the resolution loop
+ *     fires them once the lane is free.
  *
- * The verdict (`readChainVerdict`) — from POSITIVE chain evidence only
- * (#949 round 5). Absence of a transaction in HISTORY is never evidence of
- * non-payment: a node's historical lookup reads a pruned range, a snapshot
- * jump or a swallowed BigTable error as absent. Per recorded attempt:
+ * The verdict (`readChainVerdict`) — positive evidence only:
  *
- *   - `landed` — a status found without error ⇒ PAID by that signature;
- *   - dead — a status found WITH an error, or the FRESH verdict
- *     (`getFreshSignatureVerdict`: the finalized status cache, read without
- *     a history search, bound by minContextSlot, inside the window where it
- *     still covers the whole landing range) says it never landed and never
- *     can. Recorded DURABLY on the attempt the moment it is read, because
- *     the window closes about a minute after the transaction expires and no
- *     later read can prove it again;
- *   - otherwise UNKNOWN — still able to land, or its window not yet open
- *     (`pending`), unreadable (`rpc_error`), or past its fresh window with
- *     no positive evidence recorded (`no_positive_evidence`: nothing the
- *     chain can show will ever prove it did not land).
- *
- * The payout is NOT PAID only when every attempt is dead (or none was ever
- * signed). A supervised sweep (`startFreshVerdictLoop`) takes the fresh
- * verdict for every attempt of a processing payout while its window is open,
- * so the evidence exists when the operator later reconciles.
+ *   - PAID: a payout found `finalized` without error.
+ *   - NOT PAID: nothing was ever broadcast; or the durable payout found
+ *     `finalized` WITH an error (it consumed its nonce and moved nothing);
+ *     or a KILL — `nonceAdvance` alone over the payout's nonce value, signed
+ *     by the treasury — found `finalized` (it consumed the nonce, so the
+ *     payout never can land).
+ *   - Everything else — absent, found but not finalized, unreadable — is
+ *     UNDECIDED: no decision, read again later. Never absence as evidence.
  *
  * Neither table carries an identity column: both are keyed by the
  * withdrawal, whose own row carries the owner.
@@ -56,9 +59,12 @@
 
 import type { DatabaseDriver } from "@motebit/persistence";
 import type {
-  FreshSignatureVerdict,
-  SignatureOutcome,
-  SignedTransactionRef,
+  DurableBroadcastHooks,
+  DurableNonceLane,
+  DurableTransactionRef,
+  FinalizedSignatureStatus,
+  NonceKillResult,
+  NonceLaneState,
 } from "@motebit/wallet-solana";
 import { superviseInterval, type LoopSupervisor } from "./loop-supervisor.js";
 
@@ -73,19 +79,27 @@ export function createWithdrawalChainPayoutTables(db: DatabaseDriver): void {
     CREATE TABLE IF NOT EXISTS relay_withdrawal_payout_attempts (
       withdrawal_id TEXT NOT NULL,
       signature TEXT NOT NULL,
-      last_valid_block_height INTEGER NOT NULL,
+      last_valid_block_height INTEGER,
       recorded_at INTEGER NOT NULL,
       seen_in_block INTEGER NOT NULL DEFAULT 0,
-      fresh_verdict TEXT,
-      fresh_context_slot INTEGER,
-      fresh_landed_slot INTEGER,
-      fresh_checked_at INTEGER,
+      kind TEXT NOT NULL DEFAULT 'payout',
+      nonce_account TEXT,
+      nonce_value TEXT,
+      final_status TEXT,
+      final_slot INTEGER,
+      final_checked_at INTEGER,
       PRIMARY KEY (withdrawal_id, signature)
     );
+    CREATE INDEX IF NOT EXISTS idx_payout_attempts_nonce
+      ON relay_withdrawal_payout_attempts (nonce_account, nonce_value);
+    CREATE TABLE IF NOT EXISTS relay_withdrawal_payout_queue (
+      withdrawal_id TEXT PRIMARY KEY,
+      queued_at INTEGER NOT NULL
+    );
   `);
-  // #949 round 5: the durable per-attempt verdict — added to tables created
-  // by an earlier build of this record. (An earlier build's `recent_slot`
-  // column, if present, is left in place and never read.)
+  // #990: the durable-nonce and finalized-status columns, added to tables
+  // an earlier build of this record created. (Columns an earlier build
+  // added and no longer read are left in place.)
   const cols = new Set(
     (
       db.prepare("PRAGMA table_info(relay_withdrawal_payout_attempts)").all() as Array<{
@@ -94,10 +108,12 @@ export function createWithdrawalChainPayoutTables(db: DatabaseDriver): void {
     ).map((c) => c.name),
   );
   const added: Array<[string, string]> = [
-    ["fresh_verdict", "TEXT"],
-    ["fresh_context_slot", "INTEGER"],
-    ["fresh_landed_slot", "INTEGER"],
-    ["fresh_checked_at", "INTEGER"],
+    ["kind", "TEXT NOT NULL DEFAULT 'payout'"],
+    ["nonce_account", "TEXT"],
+    ["nonce_value", "TEXT"],
+    ["final_status", "TEXT"],
+    ["final_slot", "INTEGER"],
+    ["final_checked_at", "INTEGER"],
   ];
   for (const [name, type] of added) {
     if (!cols.has(name)) {
@@ -128,47 +144,40 @@ export function isChainRecordedClaim(db: DatabaseDriver, withdrawalId: string): 
 }
 
 /**
- * Record one signed transaction BEFORE it is broadcast (the adapter's
- * `beforeBroadcast`). Throws on failure — and a throwing hook stops the send.
- * Re-recording the same signature is a no-op: a re-sign over the same
- * blockhash produces the identical transaction, which can land only once.
+ * Record one durable transaction (a payout or its kill) BEFORE it is
+ * broadcast — the adapter's `beforeBroadcast`. Throws on failure, and a
+ * throwing hook stops the send. Re-recording the same signature is a no-op
+ * (a re-broadcast kill is the identical, deterministically signed tx).
  */
-export function recordPayoutAttempt(
+export function recordDurableAttempt(
   db: DatabaseDriver,
   withdrawalId: string,
-  tx: SignedTransactionRef,
+  tx: DurableTransactionRef,
   recordedAt: number,
 ): void {
   db.prepare(
     `INSERT INTO relay_withdrawal_payout_attempts
-       (withdrawal_id, signature, last_valid_block_height, recorded_at)
-     VALUES (?, ?, ?, ?)
+       (withdrawal_id, signature, recorded_at, kind, nonce_account, nonce_value)
+     VALUES (?, ?, ?, ?, ?, ?)
      ON CONFLICT (withdrawal_id, signature) DO NOTHING`,
-  ).run(withdrawalId, tx.signature, tx.lastValidBlockHeight, recordedAt);
+  ).run(withdrawalId, tx.signature, recordedAt, tx.kind, tx.nonceAccount, tx.nonceValue);
 }
-
-/**
- * A recorded attempt's durable verdict (#949 round 5): `landed`, `failed`
- * and `dead_fresh` are POSITIVE evidence and final; `window_passed` records
- * that the fresh window closed with no positive evidence — only a later
- * found status can replace it.
- */
-export type RecordedVerdict = "landed" | "failed" | "dead_fresh" | "window_passed";
 
 export interface PayoutAttempt {
   signature: string;
-  last_valid_block_height: number;
-  seen_in_block: number;
-  fresh_verdict: RecordedVerdict | null;
-  fresh_context_slot: number | null;
-  fresh_landed_slot: number | null;
+  kind: "payout" | "kill";
+  nonce_account: string | null;
+  nonce_value: string | null;
+  last_valid_block_height: number | null;
+  final_status: "ok" | "err" | null;
+  final_slot: number | null;
 }
 
 export function getPayoutAttempts(db: DatabaseDriver, withdrawalId: string): PayoutAttempt[] {
   return db
     .prepare(
-      `SELECT signature, last_valid_block_height, seen_in_block, fresh_verdict,
-              fresh_context_slot, fresh_landed_slot
+      `SELECT signature, kind, nonce_account, nonce_value, last_valid_block_height,
+              final_status, final_slot
          FROM relay_withdrawal_payout_attempts
         WHERE withdrawal_id = ?
         ORDER BY recorded_at ASC, signature ASC`,
@@ -176,251 +185,284 @@ export function getPayoutAttempts(db: DatabaseDriver, withdrawalId: string): Pay
     .all(withdrawalId) as PayoutAttempt[];
 }
 
-function markAttemptSeen(db: DatabaseDriver, withdrawalId: string, signature: string): void {
-  db.prepare(
-    "UPDATE relay_withdrawal_payout_attempts SET seen_in_block = 1 WHERE withdrawal_id = ? AND signature = ?",
-  ).run(withdrawalId, signature);
-}
-
-/**
- * Persist a verdict on an attempt — at the moment it is read. A positive
- * verdict is final (never overwritten); `window_passed` yields only to a
- * positive one.
- */
-function persistVerdict(
+/** Record a FINALIZED status — once; a finalized status never changes. */
+function recordFinal(
   db: DatabaseDriver,
   withdrawalId: string,
   signature: string,
-  verdict: RecordedVerdict,
-  contextSlot: number | null,
-  landedSlot: number | null,
+  ok: boolean,
+  slot: number,
 ): void {
   db.prepare(
     `UPDATE relay_withdrawal_payout_attempts
-        SET fresh_verdict = ?, fresh_context_slot = ?, fresh_landed_slot = ?, fresh_checked_at = ?
-      WHERE withdrawal_id = ? AND signature = ?
-        AND (fresh_verdict IS NULL OR fresh_verdict = 'window_passed')`,
-  ).run(verdict, contextSlot, landedSlot, Date.now(), withdrawalId, signature);
+        SET final_status = ?, final_slot = ?, final_checked_at = ?
+      WHERE withdrawal_id = ? AND signature = ? AND final_status IS NULL`,
+  ).run(ok ? "ok" : "err", slot, Date.now(), withdrawalId, signature);
 }
 
-/** The reads the verdict needs — `OperatorSolanaTransfer` satisfies it. */
-export interface SignatureOutcomeReader {
-  /** History read — trusted for FOUND statuses only (landed / failed). */
-  getSignatureOutcome(tx: SignedTransactionRef): Promise<SignatureOutcome>;
-  /** The fresh verdict — the only read from which "never landed" is concluded. */
-  getFreshSignatureVerdict(tx: SignedTransactionRef): Promise<FreshSignatureVerdict>;
+/** Is this nonce value already carried by a recorded transaction (the lane is busy)? */
+export function isNonceValueUsed(db: DatabaseDriver, lane: DurableNonceLane): boolean {
+  return (
+    db
+      .prepare(
+        "SELECT 1 AS one FROM relay_withdrawal_payout_attempts WHERE nonce_account = ? AND nonce_value = ? LIMIT 1",
+      )
+      .get(lane.account, lane.nonceValue) !== undefined
+  );
+}
+
+// ── the queue ────────────────────────────────────────────────────────────
+
+export function enqueuePayout(db: DatabaseDriver, withdrawalId: string, at: number): void {
+  db.prepare(
+    "INSERT INTO relay_withdrawal_payout_queue (withdrawal_id, queued_at) VALUES (?, ?) ON CONFLICT (withdrawal_id) DO NOTHING",
+  ).run(withdrawalId, at);
+}
+
+export function dequeuePayout(db: DatabaseDriver, withdrawalId: string): void {
+  db.prepare("DELETE FROM relay_withdrawal_payout_queue WHERE withdrawal_id = ?").run(withdrawalId);
+}
+
+export function queuedPayouts(db: DatabaseDriver, limit = 50): string[] {
+  return (
+    db
+      .prepare(
+        "SELECT withdrawal_id FROM relay_withdrawal_payout_queue ORDER BY queued_at ASC, withdrawal_id ASC LIMIT ?",
+      )
+      .all(limit) as Array<{ withdrawal_id: string }>
+  ).map((r) => r.withdrawal_id);
+}
+
+// ── reads, bounded ───────────────────────────────────────────────────────
+
+/** Per-call timeout on every chain read the relay makes here (#990). */
+export const CHAIN_READ_TIMEOUT_MS = 10_000;
+
+/** `p`, or a rejection after `ms` — a hung RPC call never holds a loop. */
+export function withTimeout<T>(p: Promise<T>, ms: number, what: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`${what} timed out after ${ms}ms`)), ms);
+  });
+  return Promise.race([p, timeout]).finally(() => clearTimeout(timer));
+}
+
+/** Run `fn` over `items`, at most `limit` at a time. */
+export async function mapBounded<T, R>(
+  items: readonly T[],
+  limit: number,
+  fn: (item: T) => Promise<R>,
+): Promise<R[]> {
+  const out: R[] = new Array<R>(items.length);
+  let next = 0;
+  const worker = async (): Promise<void> => {
+    while (next < items.length) {
+      const i = next++;
+      out[i] = await fn(items[i]!);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.max(1, Math.min(limit, items.length)) }, worker));
+  return out;
+}
+
+/** The read the verdict needs — `OperatorSolanaTransfer` satisfies it. */
+export interface FinalityReader {
+  getFinalizedStatus(signature: string): Promise<FinalizedSignatureStatus>;
+}
+
+/** The reads and the broadcast a kill needs — `OperatorSolanaTransfer` satisfies it. */
+export interface NonceKiller {
+  prepareNonceLane(): Promise<NonceLaneState>;
+  broadcastNonceKill(
+    lane: DurableNonceLane,
+    hooks?: DurableBroadcastHooks,
+  ): Promise<NonceKillResult>;
 }
 
 export type ChainVerdict =
   | { kind: "paid"; signature: string; slot: number; landed: string[] }
-  | { kind: "not_paid"; attempts: number }
+  | {
+      kind: "not_paid";
+      attempts: number;
+      /** What proves it: nothing broadcast, the payout failed, or a kill consumed its nonce. */
+      by: "no_broadcast" | "payout_failed" | "killed";
+    }
   | {
       kind: "undecided";
-      /**
-       * `pending`: an attempt can still land, or its fresh window has not
-       * opened; `rpc_error`: an attempt could not be read;
-       * `no_positive_evidence`: an attempt's fresh window closed with no
-       * positive evidence recorded — nothing the chain can show will ever
-       * prove it did not land (#949 round 5; the honest-path cost, #990).
-       * Precedence: pending > rpc_error > no_positive_evidence.
-       */
-      reason: "pending" | "rpc_error" | "no_positive_evidence";
+      /** `pending`: nothing finalized yet; `rpc_error`: a read failed (precedence over pending). */
+      reason: "pending" | "rpc_error";
+      /** The payout's signature. */
       signature: string;
-      lastValidBlockHeight: number;
+      /** A durable payout: a kill can make it decidable. False for a blockhash payout. */
+      killable: boolean;
+      /** Recorded transactions found but not yet finalized. */
+      unfinalized: string[];
       detail?: string;
     };
 
-type AttemptVerdict =
-  | { kind: "landed"; slot: number }
-  | { kind: "dead" }
-  | { kind: "pending" }
-  | { kind: "rpc_error"; detail: string }
-  | { kind: "no_positive_evidence" };
-
-function refOf(a: PayoutAttempt): SignedTransactionRef {
-  return { signature: a.signature, lastValidBlockHeight: a.last_valid_block_height };
-}
-
 /**
- * Take the fresh verdict for one attempt with no positive verdict on file,
- * and record it at once.
- */
-async function takeFreshVerdict(
-  db: DatabaseDriver,
-  withdrawalId: string,
-  a: PayoutAttempt,
-  reader: SignatureOutcomeReader,
-): Promise<AttemptVerdict> {
-  let fresh: FreshSignatureVerdict;
-  try {
-    fresh = await reader.getFreshSignatureVerdict(refOf(a));
-  } catch (err) {
-    fresh = { status: "rpc_error", reason: err instanceof Error ? err.message : String(err) };
-  }
-  switch (fresh.status) {
-    case "landed":
-      persistVerdict(db, withdrawalId, a.signature, "landed", fresh.contextSlot, fresh.slot);
-      return { kind: "landed", slot: fresh.slot };
-    case "failed":
-      persistVerdict(db, withdrawalId, a.signature, "failed", fresh.contextSlot, null);
-      return { kind: "dead" };
-    case "dead_fresh":
-      persistVerdict(db, withdrawalId, a.signature, "dead_fresh", fresh.contextSlot, null);
-      return { kind: "dead" };
-    case "too_early":
-      return { kind: "pending" };
-    case "window_passed":
-      persistVerdict(db, withdrawalId, a.signature, "window_passed", null, null);
-      return { kind: "no_positive_evidence" };
-    case "rpc_error":
-      return { kind: "rpc_error", detail: fresh.reason };
-  }
-}
-
-async function attemptVerdict(
-  db: DatabaseDriver,
-  withdrawalId: string,
-  a: PayoutAttempt,
-  reader: SignatureOutcomeReader,
-): Promise<AttemptVerdict> {
-  // A positive verdict on file is final.
-  if (a.fresh_verdict === "landed" && a.fresh_landed_slot !== null) {
-    return { kind: "landed", slot: a.fresh_landed_slot };
-  }
-  if (a.fresh_verdict === "failed" || a.fresh_verdict === "dead_fresh") return { kind: "dead" };
-
-  // History — FOUND statuses only. Its absence (`expired`, `pending`) is
-  // never read as dead; only the fresh verdict below may conclude that.
-  let history: SignatureOutcome;
-  try {
-    history = await reader.getSignatureOutcome(refOf(a));
-  } catch (err) {
-    history = { status: "rpc_error", reason: err instanceof Error ? err.message : String(err) };
-  }
-  if (history.status === "landed") {
-    persistVerdict(db, withdrawalId, a.signature, "landed", null, history.slot);
-    return { kind: "landed", slot: history.slot };
-  }
-  if (history.status === "failed") {
-    persistVerdict(db, withdrawalId, a.signature, "failed", null, null);
-    return { kind: "dead" };
-  }
-  if (history.status === "pending" && history.seen === true) {
-    markAttemptSeen(db, withdrawalId, a.signature);
-  }
-  if (a.fresh_verdict === "window_passed") return { kind: "no_positive_evidence" };
-  return takeFreshVerdict(db, withdrawalId, a, reader);
-}
-
-/**
- * What the chain says about a chain-recorded payout. Reads every recorded
- * attempt (so a landed one is found wherever it is) and records every
- * verdict it reads.
+ * What the chain says about a chain-recorded payout — from FINALIZED statuses
+ * only. Reads every recorded transaction not yet finalized (bounded
+ * concurrency, a timeout per read) and records each finalized status.
  */
 export async function readChainVerdict(
   db: DatabaseDriver,
   withdrawalId: string,
-  reader: SignatureOutcomeReader,
+  reader: FinalityReader,
+  opts: { timeoutMs?: number; concurrency?: number } = {},
 ): Promise<ChainVerdict> {
   const attempts = getPayoutAttempts(db, withdrawalId);
-  const landed: Array<{ signature: string; slot: number }> = [];
-  const undecided: Array<Extract<ChainVerdict, { kind: "undecided" }>> = [];
-  for (const a of attempts) {
-    const v = await attemptVerdict(db, withdrawalId, a, reader);
-    const base = {
-      kind: "undecided" as const,
-      signature: a.signature,
-      lastValidBlockHeight: a.last_valid_block_height,
-    };
-    switch (v.kind) {
-      case "landed":
-        landed.push({ signature: a.signature, slot: v.slot });
-        break;
-      case "dead":
-        break;
-      case "pending":
-        undecided.push({ ...base, reason: "pending" });
-        break;
-      case "rpc_error":
-        undecided.push({ ...base, reason: "rpc_error", detail: v.detail });
-        break;
-      case "no_positive_evidence":
-        undecided.push({ ...base, reason: "no_positive_evidence" });
-        break;
-    }
-  }
+  if (attempts.length === 0) return { kind: "not_paid", attempts: 0, by: "no_broadcast" };
+  const timeoutMs = opts.timeoutMs ?? CHAIN_READ_TIMEOUT_MS;
+  const unfinalized: string[] = [];
+  let rpcError: string | undefined;
+  await mapBounded(
+    attempts.filter((a) => a.final_status === null),
+    opts.concurrency ?? 4,
+    async (a) => {
+      let st: FinalizedSignatureStatus;
+      try {
+        st = await withTimeout(
+          reader.getFinalizedStatus(a.signature),
+          timeoutMs,
+          "finalized status",
+        );
+      } catch (err) {
+        st = {
+          status: "unknown",
+          reason: "rpc_error",
+          detail: err instanceof Error ? err.message : String(err),
+        };
+      }
+      if (st.status === "finalized") {
+        recordFinal(db, withdrawalId, a.signature, st.ok, st.slot);
+        a.final_status = st.ok ? "ok" : "err";
+        a.final_slot = st.slot;
+      } else if (st.reason === "not_finalized") {
+        unfinalized.push(a.signature);
+      } else if (st.reason === "rpc_error") {
+        rpcError ??= st.detail ?? "unreadable";
+      }
+    },
+  );
+
+  const payouts = attempts.filter((a) => a.kind === "payout");
+  const kills = attempts.filter((a) => a.kind === "kill");
+  const landed = payouts.filter((a) => a.final_status === "ok");
   if (landed.length > 0) {
     return {
       kind: "paid",
       signature: landed[0]!.signature,
-      slot: landed[0]!.slot,
+      slot: landed[0]!.final_slot ?? 0,
       landed: landed.map((l) => l.signature),
     };
   }
-  const rank = { pending: 0, rpc_error: 1, no_positive_evidence: 2 } as const;
-  const worst = undecided.sort((x, y) => rank[x.reason] - rank[y.reason])[0];
-  if (worst) return worst;
-  return { kind: "not_paid", attempts: attempts.length };
-}
-
-/**
- * One pass of the fresh-verdict sweep (#949 round 5): for every attempt of a
- * `processing`, chain-recorded withdrawal with no verdict on file, take the
- * fresh verdict and record it. Evidence only — it never settles a
- * withdrawal; the operator's reconcile reads what it recorded. Returns the
- * number of attempts read.
- */
-export async function runFreshVerdictSweep(
-  db: DatabaseDriver,
-  reader: SignatureOutcomeReader,
-  limit = 200,
-): Promise<number> {
-  const rows = db
-    .prepare(
-      `SELECT a.withdrawal_id AS withdrawal_id, a.signature AS signature,
-              a.last_valid_block_height AS last_valid_block_height,
-              a.seen_in_block AS seen_in_block, a.fresh_verdict AS fresh_verdict,
-              a.fresh_context_slot AS fresh_context_slot,
-              a.fresh_landed_slot AS fresh_landed_slot
-         FROM relay_withdrawal_payout_attempts a
-         JOIN relay_withdrawal_chain_claims c ON c.withdrawal_id = a.withdrawal_id
-         JOIN relay_withdrawals w ON w.withdrawal_id = a.withdrawal_id
-        WHERE w.status = 'processing' AND a.fresh_verdict IS NULL
-        ORDER BY a.recorded_at ASC, a.signature ASC
-        LIMIT ?`,
-    )
-    .all(limit) as Array<PayoutAttempt & { withdrawal_id: string }>;
-  for (const row of rows) {
-    await takeFreshVerdict(db, row.withdrawal_id, row, reader);
+  const durable = payouts.find((a) => a.nonce_value !== null && a.nonce_account !== null);
+  if (durable) {
+    // One nonce value, at most one landing: the payout failing, or a kill
+    // over the SAME nonce value landing, proves the payout never can.
+    if (durable.final_status === "err") {
+      return { kind: "not_paid", attempts: attempts.length, by: "payout_failed" };
+    }
+    const killedBy = kills.find(
+      (k) =>
+        k.final_status !== null &&
+        k.nonce_account === durable.nonce_account &&
+        k.nonce_value === durable.nonce_value,
+    );
+    if (killedBy) return { kind: "not_paid", attempts: attempts.length, by: "killed" };
+  } else if (payouts.length > 0 && payouts.every((a) => a.final_status === "err")) {
+    // A blockhash payout (an earlier build): each found finalized and failed.
+    return { kind: "not_paid", attempts: attempts.length, by: "payout_failed" };
   }
-  return rows.length;
+  const first = durable ?? payouts[0] ?? attempts[0]!;
+  return {
+    kind: "undecided",
+    reason: rpcError !== undefined ? "rpc_error" : "pending",
+    signature: first.signature,
+    killable: durable !== undefined,
+    unfinalized,
+    ...(rpcError !== undefined ? { detail: rpcError } : {}),
+  };
+}
+
+export type KillRequest =
+  /** The kill was broadcast (or re-broadcast); a finalized kill will decide it. */
+  | { status: "sent" }
+  /** The RPC refused it (e.g. the nonce already advanced at processed) — proves nothing. */
+  | { status: "not_sent"; detail: string }
+  /** The nonce has already moved past the payout's value at finalized: a recorded transaction consumed it; its status will decide. */
+  | { status: "consumed" }
+  | { status: "lane_unavailable"; detail: string }
+  /** A blockhash payout, or a lane that does not match: no kill exists. */
+  | { status: "not_killable" };
+
+/**
+ * Broadcast the kill for a durable payout (#990): `nonceAdvance` alone, over
+ * the payout's own nonce value, recorded before it is sent. Safe at ANY time
+ * — only one transaction over that nonce value can land, so the kill and the
+ * payout race and exactly one wins; the refund waits for the kill's
+ * FINALIZED status.
+ */
+export async function requestKill(
+  db: DatabaseDriver,
+  withdrawalId: string,
+  killer: NonceKiller,
+  opts: { timeoutMs?: number } = {},
+): Promise<KillRequest> {
+  const payout = getPayoutAttempts(db, withdrawalId).find(
+    (a) => a.kind === "payout" && a.nonce_account !== null && a.nonce_value !== null,
+  );
+  if (!payout) return { status: "not_killable" };
+  const timeoutMs = opts.timeoutMs ?? CHAIN_READ_TIMEOUT_MS;
+  let lane: NonceLaneState;
+  try {
+    lane = await withTimeout(killer.prepareNonceLane(), timeoutMs, "nonce lane");
+  } catch (err) {
+    lane = { status: "unavailable", reason: err instanceof Error ? err.message : String(err) };
+  }
+  if (lane.status !== "ready") return { status: "lane_unavailable", detail: lane.reason };
+  if (lane.account !== payout.nonce_account) return { status: "not_killable" };
+  if (lane.nonceValue !== payout.nonce_value) return { status: "consumed" };
+  let result: NonceKillResult;
+  try {
+    result = await withTimeout(
+      killer.broadcastNonceKill(
+        { account: payout.nonce_account, nonceValue: payout.nonce_value },
+        { beforeBroadcast: (tx) => recordDurableAttempt(db, withdrawalId, tx, Date.now()) },
+      ),
+      timeoutMs,
+      "kill broadcast",
+    );
+  } catch (err) {
+    return { status: "not_sent", detail: err instanceof Error ? err.message : String(err) };
+  }
+  return result.sent ? { status: "sent" } : { status: "not_sent", detail: result.detail ?? "" };
 }
 
 /**
- * The sweep's cadence. The fresh window is FRESH_WINDOW_END −
- * FRESH_WINDOW_START + 1 = 120 finalized blocks (about 48 s at 400 ms per
- * block), so a 10 s cadence reads each attempt inside it several times over.
+ * The resolution loop's cadence. Each tick fires queued payouts when the
+ * lane is free and decides every processing payout it can (budget.ts).
  */
-export const FRESH_VERDICT_INTERVAL_MS = 10_000;
+export const PAYOUT_RESOLUTION_INTERVAL_MS = 10_000;
 
-/** Supervised fresh-verdict loop; single-flight. */
-export function startFreshVerdictLoop(
-  db: DatabaseDriver,
-  reader: SignatureOutcomeReader,
+/** Supervised, single-flight payout-resolution loop. */
+export function startPayoutResolutionLoop(
+  resolveOnce: () => Promise<void>,
   isFrozen: () => boolean,
   supervisor?: LoopSupervisor,
-  intervalMs = FRESH_VERDICT_INTERVAL_MS,
+  intervalMs = PAYOUT_RESOLUTION_INTERVAL_MS,
 ): ReturnType<typeof setInterval> {
   let running = false;
   return superviseInterval(
     supervisor,
-    "withdrawal-fresh-verdict",
+    "withdrawal-payout-resolution",
     intervalMs,
     async () => {
       if (running) return;
       running = true;
       try {
-        await runFreshVerdictSweep(db, reader);
+        await resolveOnce();
       } finally {
         running = false;
       }

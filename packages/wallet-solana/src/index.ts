@@ -41,9 +41,13 @@ export {
   type BroadcastHooks,
   type SignedTransactionRef,
   type SignatureOutcome,
-  type FreshSignatureVerdict,
-  FRESH_WINDOW_START,
-  FRESH_WINDOW_END,
+  type DurableNonceLane,
+  type NonceLaneState,
+  type DurableTransactionRef,
+  type DurableBroadcastHooks,
+  type FinalizedSignatureStatus,
+  type DurableSendResult,
+  type NonceKillResult,
 } from "./adapter.js";
 
 export {

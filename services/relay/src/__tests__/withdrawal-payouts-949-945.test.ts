@@ -1,14 +1,16 @@
 /**
- * #949 / #945 unit edges the payout harness does not isolate:
+ * #949 / #945 / #990 unit edges the harnesses do not isolate:
  *
- *   - `readChainVerdict` over several recorded attempts (#949 round 5): one
- *     landed anywhere ⇒ paid; every one POSITIVELY dead (found failed, or
- *     dead by the fresh verdict) ⇒ not paid; a history read's absence
- *     (`expired`) is never dead; the fresh verdict is recorded durably at
- *     the moment it is read and a positive one is final; a window that
- *     closed with nothing recorded is `no_positive_evidence`; a read that
- *     throws is an rpc_error, never absence; the sweep records verdicts for
- *     processing, chain-recorded payouts only.
+ *   - `readChainVerdict` over recorded durable transactions (#990): a payout
+ *     found FINALIZED ok ⇒ paid; finalized with an error, or a kill over the
+ *     SAME nonce value finalized ⇒ not paid; nothing broadcast ⇒ not paid;
+ *     anything else (absent, found but not finalized, unreadable, a kill
+ *     over another nonce value) ⇒ undecided; a finalized status is recorded
+ *     once and never read again; a hung read times out as unreadable.
+ *   - `requestKill`: only for a durable payout, only while the lane still
+ *     holds its nonce value, recorded before broadcast.
+ *   - the lane: a nonce value already carried by a recorded transaction is
+ *     busy; the queue is FIFO and idempotent.
  *   - batch: a terminal write that loses its `firing` CAS writes no door;
  *     a row this process is still firing is never "recovered" as stale;
  *     a stale row whose rail is no longer registered is parked on the
@@ -18,11 +20,11 @@
 
 import { describe, it, expect, afterEach, vi } from "vitest";
 import type { GuestRail, WithdrawalResult } from "@motebit/sdk";
-import {
-  OperatorSolanaTransfer,
-  type FreshSignatureVerdict,
-  type SignatureOutcome,
-  type SignedTransactionRef,
+import type {
+  DurableNonceLane,
+  DurableTransactionRef,
+  FinalizedSignatureStatus,
+  NonceLaneState,
 } from "@motebit/wallet-solana";
 import type { DatabaseDriver } from "@motebit/persistence";
 
@@ -37,15 +39,21 @@ import {
   type BatchWithdrawalConfig,
 } from "../batch-withdrawals.js";
 import {
+  dequeuePayout,
+  enqueuePayout,
   getPayoutAttempts,
-  markChainRecordedClaim,
+  isNonceValueUsed,
+  mapBounded,
+  queuedPayouts,
   readChainVerdict,
-  recordPayoutAttempt,
-  runFreshVerdictSweep,
+  recordDurableAttempt,
+  requestKill,
+  withTimeout,
 } from "../withdrawal-chain-payouts.js";
 import { UNDECLARED_PAYOUT_HORIZON_MS } from "../payout-horizon.js";
 import { LoopSupervisor } from "../loop-supervisor.js";
 import { AUTH_HEADER, createTestRelay } from "./test-helpers.js";
+import { freshChain, makeDurableOperator } from "./durable-payout-fake.js";
 
 let relay: SyncRelay | undefined;
 afterEach(async () => {
@@ -59,268 +67,256 @@ async function db(): Promise<DatabaseDriver> {
   return relay.moteDb.db;
 }
 
-/**
- * A reader over per-signature HISTORY outcomes and FRESH verdicts. Unlisted
- * signatures: history `pending`, fresh `too_early`.
- */
-function reader(
-  outcomes: Record<string, SignatureOutcome | Error>,
-  fresh: Record<string, FreshSignatureVerdict | Error> = {},
-) {
+const LANE: DurableNonceLane = { account: "NonceAcct", nonceValue: "N1" };
+
+function payout(d: DatabaseDriver, w: string, sig: string, lane = LANE, at = 1): void {
+  recordDurableAttempt(
+    d,
+    w,
+    { signature: sig, kind: "payout", nonceAccount: lane.account, nonceValue: lane.nonceValue },
+    at,
+  );
+}
+
+function kill(d: DatabaseDriver, w: string, sig: string, lane = LANE, at = 2): void {
+  recordDurableAttempt(
+    d,
+    w,
+    { signature: sig, kind: "kill", nonceAccount: lane.account, nonceValue: lane.nonceValue },
+    at,
+  );
+}
+
+const OK: FinalizedSignatureStatus = { status: "finalized", ok: true, slot: 7 };
+const ERR: FinalizedSignatureStatus = { status: "finalized", ok: false, slot: 8 };
+const ABSENT: FinalizedSignatureStatus = { status: "unknown", reason: "absent" };
+const UNFINAL: FinalizedSignatureStatus = { status: "unknown", reason: "not_finalized" };
+
+function reader(statuses: Record<string, FinalizedSignatureStatus | Error | "hang">) {
   const calls: string[] = [];
-  const freshCalls: string[] = [];
   return {
     calls,
-    freshCalls,
-    getSignatureOutcome(tx: SignedTransactionRef): Promise<SignatureOutcome> {
-      calls.push(tx.signature);
-      const o = outcomes[tx.signature];
-      if (o instanceof Error) return Promise.reject(o);
-      return Promise.resolve(o ?? { status: "pending" });
-    },
-    getFreshSignatureVerdict(tx: SignedTransactionRef): Promise<FreshSignatureVerdict> {
-      freshCalls.push(tx.signature);
-      const f = fresh[tx.signature];
-      if (f instanceof Error) return Promise.reject(f);
-      return Promise.resolve(f ?? { status: "too_early" });
+    getFinalizedStatus(sig: string): Promise<FinalizedSignatureStatus> {
+      calls.push(sig);
+      const st = statuses[sig];
+      if (st === "hang") return new Promise(() => {});
+      if (st instanceof Error) return Promise.reject(st);
+      return Promise.resolve(st ?? ABSENT);
     },
   };
 }
 
-const DEAD: FreshSignatureVerdict = { status: "dead_fresh", contextSlot: 9_000 };
-const PASSED: FreshSignatureVerdict = { status: "window_passed" };
-
-function attempt(d: DatabaseDriver, w: string, signature: string, lastValid: number, at: number) {
-  recordPayoutAttempt(d, w, { signature, lastValidBlockHeight: lastValid }, at);
-}
-
-describe("readChainVerdict (#949 round 5: positive evidence only)", () => {
-  it("no recorded attempt ⇒ not paid (nothing was ever broadcast), without a chain read", async () => {
+describe("readChainVerdict (#990: finalized statuses only)", () => {
+  it("no recorded transaction ⇒ not paid (nothing was ever broadcast), without a chain read", async () => {
     const d = await db();
     const r = reader({});
-    expect(await readChainVerdict(d, "w-none", r)).toEqual({ kind: "not_paid", attempts: 0 });
+    expect(await readChainVerdict(d, "w-none", r)).toEqual({
+      kind: "not_paid",
+      attempts: 0,
+      by: "no_broadcast",
+    });
     expect(r.calls).toEqual([]);
-    expect(r.freshCalls).toEqual([]);
   });
 
-  it("a landed attempt anywhere ⇒ paid by that signature, even beside a dead one", async () => {
+  it("the payout finalized ok ⇒ paid by it; recorded, and never read again", async () => {
     const d = await db();
-    attempt(d, "w1", "a", 10, 1);
-    attempt(d, "w1", "b", 20, 2);
-    const v = await readChainVerdict(
-      d,
-      "w1",
-      reader({ a: { status: "expired" }, b: { status: "landed", slot: 7 } }, { a: DEAD }),
-    );
-    expect(v).toMatchObject({ kind: "paid", signature: "b", slot: 7, landed: ["b"] });
-  });
-
-  it("two landed attempts are both reported (the relay paid twice — logged by the door)", async () => {
-    const d = await db();
-    attempt(d, "w2", "a", 10, 1);
-    attempt(d, "w2", "b", 20, 2);
-    const v = await readChainVerdict(
-      d,
-      "w2",
-      reader({ a: { status: "landed", slot: 1 }, b: { status: "landed", slot: 2 } }),
-    );
-    expect(v).toMatchObject({ kind: "paid", signature: "a", landed: ["a", "b"] });
-  });
-
-  it("a history absence (`expired`) is NEVER dead: without a fresh verdict it stays undecided", async () => {
-    const d = await db();
-    attempt(d, "wx", "a", 10, 1);
-    expect(await readChainVerdict(d, "wx", reader({ a: { status: "expired" } }))).toMatchObject({
-      kind: "undecided",
-      reason: "pending",
-      signature: "a",
+    payout(d, "w1", "p1");
+    expect(await readChainVerdict(d, "w1", reader({ p1: OK }))).toMatchObject({
+      kind: "paid",
+      signature: "p1",
+      slot: 7,
     });
-    expect(
-      await readChainVerdict(d, "wx", reader({ a: { status: "expired" } }, { a: PASSED })),
-    ).toMatchObject({ kind: "undecided", reason: "no_positive_evidence", signature: "a" });
-    expect(getPayoutAttempts(d, "wx")[0]!.fresh_verdict).toBe("window_passed");
+    expect(getPayoutAttempts(d, "w1")[0]).toMatchObject({ final_status: "ok", final_slot: 7 });
+    const again = reader({ p1: ABSENT });
+    expect(await readChainVerdict(d, "w1", again)).toMatchObject({ kind: "paid" });
+    expect(again.calls).toEqual([]);
   });
 
-  it("found failed, or dead by the fresh verdict ⇒ not paid; one pending ⇒ undecided; a throwing read ⇒ rpc_error", async () => {
+  it("the payout finalized with an error ⇒ not paid (it consumed its nonce; nothing moved)", async () => {
     const d = await db();
-    attempt(d, "w3", "a", 10, 1);
-    attempt(d, "w3", "b", 20, 2);
-    expect(
-      await readChainVerdict(
-        d,
-        "w3",
-        reader({ a: { status: "failed" }, b: { status: "pending" } }),
-      ),
-    ).toMatchObject({
-      kind: "undecided",
-      reason: "pending",
-      signature: "b",
-      lastValidBlockHeight: 20,
-    });
-    expect(
-      await readChainVerdict(d, "w3", reader({ b: new Error("socket") }, { b: new Error("503") })),
-    ).toMatchObject({ kind: "undecided", reason: "rpc_error", signature: "b", detail: "503" });
-    expect(
-      await readChainVerdict(d, "w3", reader({ b: { status: "expired" } }, { b: DEAD })),
-    ).toEqual({ kind: "not_paid", attempts: 2 });
-  });
-
-  it("the fresh verdict is recorded at the moment it is read, and a positive one is final", async () => {
-    const d = await db();
-    attempt(d, "wf", "a", 10, 1);
-    expect(await readChainVerdict(d, "wf", reader({}, { a: DEAD }))).toEqual({
+    payout(d, "w2", "p2");
+    expect(await readChainVerdict(d, "w2", reader({ p2: ERR }))).toEqual({
       kind: "not_paid",
       attempts: 1,
+      by: "payout_failed",
     });
-    const rec = getPayoutAttempts(d, "wf")[0]!;
-    expect(rec.fresh_verdict).toBe("dead_fresh");
-    expect(rec.fresh_context_slot).toBe(9_000);
-    // Later the window has passed and history shows nothing: the recorded
-    // evidence still decides it, with no chain read at all.
-    const later = reader({ a: { status: "expired" } }, { a: PASSED });
-    expect(await readChainVerdict(d, "wf", later)).toEqual({ kind: "not_paid", attempts: 1 });
-    expect(later.calls).toEqual([]);
-    expect(later.freshCalls).toEqual([]);
   });
 
-  it("a found landed status is recorded too, so a pruned history later still reads paid", async () => {
+  it("a kill over the SAME nonce value finalized ⇒ not paid; over another value ⇒ undecided", async () => {
     const d = await db();
-    attempt(d, "wl", "a", 10, 1);
-    await readChainVerdict(d, "wl", reader({ a: { status: "landed", slot: 5 } }));
-    expect(getPayoutAttempts(d, "wl")[0]).toMatchObject({
-      fresh_verdict: "landed",
-      fresh_landed_slot: 5,
+    payout(d, "w3", "p3");
+    kill(d, "w3", "k-other", { account: "NonceAcct", nonceValue: "N-other" });
+    expect(await readChainVerdict(d, "w3", reader({ "k-other": OK }))).toMatchObject({
+      kind: "undecided",
+      killable: true,
     });
-    expect(
-      await readChainVerdict(d, "wl", reader({ a: { status: "expired" } }, { a: PASSED })),
-    ).toMatchObject({ kind: "paid", signature: "a", slot: 5 });
-  });
-
-  it("seen-in-a-block is persisted; the fresh verdict (finalized, whole landing range) still decides it", async () => {
-    const d = await db();
-    attempt(d, "w4", "a", 10, 1);
-    expect(
-      await readChainVerdict(d, "w4", reader({ a: { status: "pending", seen: true } })),
-    ).toMatchObject({ kind: "undecided", reason: "pending" });
-    expect(getPayoutAttempts(d, "w4")[0]!.seen_in_block).toBe(1);
-    expect(
-      await readChainVerdict(d, "w4", reader({ a: { status: "landed", slot: 3 } })),
-    ).toMatchObject({ kind: "paid", signature: "a" });
-  });
-
-  it("window_passed yields to a later found status, never the other way", async () => {
-    const d = await db();
-    attempt(d, "wp", "a", 10, 1);
-    await readChainVerdict(d, "wp", reader({}, { a: PASSED }));
-    expect(getPayoutAttempts(d, "wp")[0]!.fresh_verdict).toBe("window_passed");
-    expect(await readChainVerdict(d, "wp", reader({ a: { status: "failed" } }))).toEqual({
+    kill(d, "w3", "k3", LANE, 3);
+    expect(await readChainVerdict(d, "w3", reader({ k3: OK }))).toEqual({
       kind: "not_paid",
-      attempts: 1,
+      attempts: 3,
+      by: "killed",
     });
-    expect(getPayoutAttempts(d, "wp")[0]!.fresh_verdict).toBe("failed");
   });
 
-  it("precedence: pending beats rpc_error beats no_positive_evidence", async () => {
+  it("a kill that is recorded but not FINALIZED decides nothing — the payout may still win the nonce", async () => {
     const d = await db();
-    attempt(d, "wq", "a", 10, 1);
-    attempt(d, "wq", "b", 20, 2);
-    attempt(d, "wq", "c", 30, 3);
-    expect(
-      await readChainVerdict(
-        d,
-        "wq",
-        reader({}, { a: PASSED, b: new Error("x"), c: { status: "too_early" } }),
-      ),
-    ).toMatchObject({ reason: "pending", signature: "c" });
-    expect(
-      await readChainVerdict(d, "wq", reader({ c: { status: "failed" } }, { b: new Error("x") })),
-    ).toMatchObject({ reason: "rpc_error", signature: "b" });
+    payout(d, "w8", "p8");
+    kill(d, "w8", "k8");
+    for (const st of [ABSENT, UNFINAL]) {
+      expect(await readChainVerdict(d, "w8", reader({ p8: ABSENT, k8: st }))).toMatchObject({
+        kind: "undecided",
+        killable: true,
+      });
+    }
+    // …and a finalized kill that failed still consumed the nonce.
+    expect(await readChainVerdict(d, "w8", reader({ k8: ERR }))).toMatchObject({
+      kind: "not_paid",
+      by: "killed",
+    });
   });
 
-  it("re-recording the same signature is a no-op (a re-sign over the same blockhash is the same transaction)", async () => {
+  it("absent, found below finality, or unreadable ⇒ undecided — never evidence", async () => {
     const d = await db();
-    attempt(d, "w5", "a", 10, 1);
-    attempt(d, "w5", "a", 10, 2);
-    expect(getPayoutAttempts(d, "w5")).toHaveLength(1);
+    payout(d, "w4", "p4");
+    expect(await readChainVerdict(d, "w4", reader({ p4: ABSENT }))).toMatchObject({
+      kind: "undecided",
+      reason: "pending",
+      signature: "p4",
+      unfinalized: [],
+    });
+    expect(await readChainVerdict(d, "w4", reader({ p4: UNFINAL }))).toMatchObject({
+      kind: "undecided",
+      unfinalized: ["p4"],
+    });
+    expect(await readChainVerdict(d, "w4", reader({ p4: new Error("503") }))).toMatchObject({
+      kind: "undecided",
+      reason: "rpc_error",
+      detail: "503",
+    });
+    expect(getPayoutAttempts(d, "w4")[0]!.final_status).toBeNull();
+  });
+
+  it("a hung read times out as unreadable — it never holds the verdict", async () => {
+    const d = await db();
+    payout(d, "w5", "p5");
+    const v = await readChainVerdict(d, "w5", reader({ p5: "hang" }), { timeoutMs: 20 });
+    expect(v).toMatchObject({ kind: "undecided", reason: "rpc_error" });
+  });
+
+  it("a blockhash payout (an earlier build) is never killable; only its own finalized statuses decide it", async () => {
+    const d = await db();
+    d.prepare(
+      "INSERT INTO relay_withdrawal_payout_attempts (withdrawal_id, signature, last_valid_block_height, recorded_at) VALUES ('w6', 'b6', 100, 1)",
+    ).run();
+    expect(await readChainVerdict(d, "w6", reader({}))).toMatchObject({
+      kind: "undecided",
+      killable: false,
+    });
+    expect(await readChainVerdict(d, "w6", reader({ b6: ERR }))).toMatchObject({
+      kind: "not_paid",
+      by: "payout_failed",
+    });
+  });
+
+  it("re-recording the same signature is a no-op (a re-broadcast kill is the identical transaction)", async () => {
+    const d = await db();
+    kill(d, "w7", "k7");
+    kill(d, "w7", "k7", LANE, 9);
+    expect(getPayoutAttempts(d, "w7")).toHaveLength(1);
   });
 });
 
-describe("runFreshVerdictSweep (#949 round 5)", () => {
-  function processingWithdrawal(d: DatabaseDriver, mid: string, chainRecorded: boolean): string {
-    creditAccount(d, mid, 5_000_000, "deposit", `${mid}-dep`, "seed");
-    const id = `wd-${mid}`;
-    d.prepare(
-      `INSERT INTO relay_withdrawals (withdrawal_id, motebit_id, amount, currency, destination, status, requested_at, claimed_at)
-       VALUES (?, ?, 1000000, 'USDC', 'GJmrQzyZumWWkdBuVH3Z1hnGvjrcDMbx7ptF5t5UAAAA', 'processing', ?, ?)`,
-    ).run(id, mid, Date.now(), Date.now());
-    if (chainRecorded) markChainRecordedClaim(d, id, "solana", Date.now());
-    return id;
+describe("requestKill (#990)", () => {
+  function killer(lane: NonceLaneState) {
+    const sent: DurableTransactionRef[] = [];
+    return {
+      sent,
+      prepareNonceLane: () => Promise.resolve(lane),
+      broadcastNonceKill: async (
+        l: DurableNonceLane,
+        hooks?: { beforeBroadcast?: (tx: DurableTransactionRef) => void | Promise<void> },
+      ) => {
+        const tx: DurableTransactionRef = {
+          signature: `kill-${l.nonceValue}`,
+          kind: "kill",
+          nonceAccount: l.account,
+          nonceValue: l.nonceValue,
+        };
+        await hooks?.beforeBroadcast?.(tx);
+        sent.push(tx);
+        return { tx, sent: true };
+      },
+    };
   }
 
-  it("records the fresh verdict for each undecided attempt of a processing, chain-recorded payout — and settles nothing", async () => {
+  it("broadcasts nonceAdvance over the payout's own nonce value, recorded before it is sent", async () => {
     const d = await db();
-    const id = processingWithdrawal(d, "zzs-a", true);
-    attempt(d, id, "a", 10, 1);
-    attempt(d, id, "b", 20, 2);
-    const r = reader({}, { a: DEAD, b: { status: "too_early" } });
-    expect(await runFreshVerdictSweep(d, r)).toBe(2);
-    const [a, b] = getPayoutAttempts(d, id);
-    expect(a!.fresh_verdict).toBe("dead_fresh");
-    expect(b!.fresh_verdict).toBeNull();
-    const row = d
-      .prepare("SELECT status FROM relay_withdrawals WHERE withdrawal_id = ?")
-      .get(id) as {
-      status: string;
-    };
-    expect(row.status).toBe("processing");
-    // A recorded attempt is not read again.
-    const r2 = reader({}, { b: DEAD });
-    expect(await runFreshVerdictSweep(d, r2)).toBe(1);
-    expect(r2.freshCalls).toEqual(["b"]);
+    payout(d, "k1", "p");
+    const k = killer({ status: "ready", ...LANE });
+    expect(await requestKill(d, "k1", k)).toEqual({ status: "sent" });
+    expect(k.sent[0]).toMatchObject({ kind: "kill", nonceValue: "N1", nonceAccount: "NonceAcct" });
+    expect(getPayoutAttempts(d, "k1").map((a) => a.kind)).toEqual(["payout", "kill"]);
   });
 
-  it("never reads attempts of an unrecorded claim or a settled withdrawal", async () => {
+  it("the lane already moved past the payout's value ⇒ consumed, nothing broadcast", async () => {
     const d = await db();
-    const legacy = processingWithdrawal(d, "zzs-l", false);
-    attempt(d, legacy, "a", 10, 1);
-    const done = processingWithdrawal(d, "zzs-d", true);
-    attempt(d, done, "b", 10, 1);
-    d.prepare("UPDATE relay_withdrawals SET status = 'completed' WHERE withdrawal_id = ?").run(
-      done,
-    );
-    const r = reader({}, { a: DEAD, b: DEAD });
-    expect(await runFreshVerdictSweep(d, r)).toBe(0);
-    expect(r.freshCalls).toEqual([]);
+    payout(d, "k2", "p");
+    const k = killer({ status: "ready", account: "NonceAcct", nonceValue: "N2" });
+    expect(await requestKill(d, "k2", k)).toEqual({ status: "consumed" });
+    expect(k.sent).toEqual([]);
   });
 
-  it("the relay starts the sweep, supervised, whenever it has a Solana transfer (activation, not just definition)", async () => {
-    const transfer = new OperatorSolanaTransfer({
-      honorsBroadcastHooks: true,
-      ownAddress: "RelayTreasuryAddressBase58",
-      getUsdcBalance: () => Promise.resolve(0n),
-      getUsdcBalanceOf: () => Promise.resolve(0n),
-      getSolBalance: () => Promise.resolve(0n),
-      sendUsdc: () => Promise.reject(new Error("unused")),
-      sendUsdcBatch: () => Promise.resolve([]),
-      getTransaction: () => Promise.resolve({ status: "not_found" as const }),
-      getSignatureOutcome: () => Promise.resolve({ status: "pending" as const }),
-      getFreshSignatureVerdict: () => Promise.resolve({ status: "too_early" as const }),
-      isReachable: () => Promise.resolve(true),
+  it("no durable payout, or an unavailable lane ⇒ nothing broadcast", async () => {
+    const d = await db();
+    const k = killer({ status: "ready", ...LANE });
+    expect(await requestKill(d, "k3", k)).toEqual({ status: "not_killable" });
+    payout(d, "k4", "p");
+    expect(await requestKill(d, "k4", killer({ status: "unavailable", reason: "down" }))).toEqual({
+      status: "lane_unavailable",
+      detail: "down",
     });
-    relay = await createTestRelay({ enableDeviceAuth: false, operatorSolanaTransfer: transfer });
+    expect(k.sent).toEqual([]);
+  });
+});
+
+describe("the nonce lane and the queue (#990)", () => {
+  it("a nonce value carried by any recorded transaction is busy", async () => {
+    const d = await db();
+    expect(isNonceValueUsed(d, LANE)).toBe(false);
+    payout(d, "q1", "p");
+    expect(isNonceValueUsed(d, LANE)).toBe(true);
+    expect(isNonceValueUsed(d, { account: "NonceAcct", nonceValue: "N2" })).toBe(false);
+  });
+
+  it("the queue is FIFO, idempotent, and forgets a dequeued withdrawal", async () => {
+    const d = await db();
+    enqueuePayout(d, "b", 2);
+    enqueuePayout(d, "a", 1);
+    enqueuePayout(d, "a", 5);
+    expect(queuedPayouts(d)).toEqual(["a", "b"]);
+    dequeuePayout(d, "a");
+    expect(queuedPayouts(d)).toEqual(["b"]);
+  });
+
+  it("mapBounded runs at most `limit` at a time; withTimeout rejects a hung call", async () => {
+    let live = 0;
+    let peak = 0;
+    await mapBounded([1, 2, 3, 4, 5, 6], 2, async () => {
+      live++;
+      peak = Math.max(peak, live);
+      await new Promise((r) => setTimeout(r, 2));
+      live--;
+    });
+    expect(peak).toBe(2);
+    await expect(withTimeout(new Promise(() => {}), 10, "hung")).rejects.toThrow(/timed out/);
+  });
+
+  it("the relay starts the resolution loop, supervised, whenever it has a Solana transfer (activation)", async () => {
+    const { operator } = makeDurableOperator(freshChain());
+    relay = await createTestRelay({ enableDeviceAuth: false, operatorSolanaTransfer: operator });
     const res = await relay.app.request("/api/v1/admin/health", { headers: AUTH_HEADER });
     const health = (await res.json()) as { loops: Array<{ name: string }> };
-    expect(health.loops.map((l) => l.name)).toContain("withdrawal-fresh-verdict");
-  });
-
-  it("a read that throws records nothing and the attempt is retried next pass", async () => {
-    const d = await db();
-    const id = processingWithdrawal(d, "zzs-e", true);
-    attempt(d, id, "a", 10, 1);
-    await runFreshVerdictSweep(d, reader({}, { a: new Error("down") }));
-    expect(getPayoutAttempts(d, id)[0]!.fresh_verdict).toBeNull();
-    await runFreshVerdictSweep(d, reader({}, { a: DEAD }));
-    expect(getPayoutAttempts(d, id)[0]!.fresh_verdict).toBe("dead_fresh");
+    expect(health.loops.map((l) => l.name)).toContain("withdrawal-payout-resolution");
   });
 });
 

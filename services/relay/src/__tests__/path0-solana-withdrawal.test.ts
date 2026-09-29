@@ -19,48 +19,26 @@
  *      or when the operator transfer reports unavailable
  */
 
-import { describe, it, expect, afterEach, vi } from "vitest";
+import { describe, it, expect, afterEach } from "vitest";
 import { generateKeypair, bytesToHex } from "@motebit/encryption";
-import { OperatorSolanaTransfer, type SolanaRpcAdapter } from "@motebit/wallet-solana";
+import type { SolanaRpcAdapter } from "@motebit/wallet-solana";
 
 import type { SyncRelay } from "../index.js";
 import { creditAccount } from "../accounts.js";
 import { AUTH_HEADER, createTestRelay, jsonAuthWithIdempotency } from "./test-helpers.js";
+import { freshChain, makeDurableOperator, type FakeDurableChain } from "./durable-payout-fake.js";
 
 // === Helpers ===
 
 /**
- * Construct a fake-adapter-backed OperatorSolanaTransfer for injection.
- * The fake adapter returns deterministic results; tests assert on what
- * was sent and how the relay records it.
+ * A fake-adapter-backed OperatorSolanaTransfer for injection: durable-nonce
+ * payouts (#990) whose finalized outcome the test chooses.
  */
-function makeOperator(overrides: Partial<SolanaRpcAdapter> = {}): {
-  operator: OperatorSolanaTransfer;
-  adapter: SolanaRpcAdapter;
-} {
-  const adapter: SolanaRpcAdapter = {
-    // #949: Path 0 sends only over a transfer that records every broadcast
-    // and can read its outcome.
-    honorsBroadcastHooks: true,
-    // The fresh verdict (#949 round 5): nothing decided yet.
-    getFreshSignatureVerdict: () => Promise.resolve({ status: "too_early" as const }),
-    getSignatureOutcome: vi.fn().mockResolvedValue({ status: "pending" }),
-    ownAddress: "RelayTreasuryAddressBase58",
-    getUsdcBalance: vi.fn().mockResolvedValue(10_000_000_000n),
-    getUsdcBalanceOf: vi.fn().mockResolvedValue(10_000_000_000n),
-    getSolBalance: vi.fn().mockResolvedValue(10_000_000n),
-    sendUsdc: vi.fn().mockResolvedValue({
-      signature:
-        "5VfYdxYhWnD8X7K2YgHmBpDXJqJ1JmZj7rL2KkXg8sM3QfvN9P1bZw6cM5J8nT4rA7uW9eR6yU2dE1pV3hG4oS9k",
-      slot: 12345,
-      confirmed: true,
-    }),
-    sendUsdcBatch: vi.fn().mockResolvedValue([]),
-    getTransaction: vi.fn().mockResolvedValue({ status: "not_found" }),
-    isReachable: vi.fn().mockResolvedValue(true),
-    ...overrides,
-  };
-  return { operator: new OperatorSolanaTransfer(adapter), adapter };
+function makeOperator(
+  overrides: Partial<SolanaRpcAdapter> = {},
+  chain: FakeDurableChain = freshChain(),
+) {
+  return makeDurableOperator(chain, overrides);
 }
 
 async function registerAndFund(relay: SyncRelay, motebitId: string, publicKeyHex: string) {
@@ -111,10 +89,11 @@ describe("Path 0 — Solana sovereign-return withdrawal", () => {
     });
 
     expect(res.status).toBe(200);
-    // sendUsdc was called with the user's wallet + micro-units, and the
-    // hook that records each signature before it is broadcast (#949)
-    expect(adapter.sendUsdc).toHaveBeenCalledWith(
+    // A durable-nonce payout to the user's wallet in micro-units, over the
+    // lane's nonce, with the hook that records it before broadcast (#990).
+    expect(adapter.sendUsdcDurable).toHaveBeenCalledWith(
       { toAddress: userSolanaWallet, microAmount: 1_500_000n },
+      { account: "NonceAccount111111111111111111111111111111", nonceValue: "nonce-1" },
       expect.objectContaining({ beforeBroadcast: expect.any(Function) }),
     );
   });
@@ -173,8 +152,8 @@ describe("Path 0 — Solana sovereign-return withdrawal", () => {
       body: JSON.stringify({ amount: 1.0, destination: evmAddress }),
     });
 
-    // Path 0 did NOT fire — sendUsdc was never called
-    expect(adapter.sendUsdc).not.toHaveBeenCalled();
+    // Path 0 did NOT fire
+    expect(adapter.sendUsdcDurable).not.toHaveBeenCalled();
     expect(res.status).toBe(400);
   });
 
@@ -209,10 +188,11 @@ describe("Path 0 — Solana sovereign-return withdrawal", () => {
     expect(row!.completed_at).toBeNull();
   });
 
-  it("does NOT fire when operator reports unavailable — falls through", async () => {
-    const { operator, adapter } = makeOperator({
-      isReachable: vi.fn().mockResolvedValue(false),
-    });
+  it("does NOT fire when the treasury's nonce lane is unavailable — stays pending (#990)", async () => {
+    const { operator, adapter } = makeOperator(
+      {},
+      freshChain({ lane: { status: "unavailable", reason: "rpc down" } }),
+    );
     relay = await createTestRelay({ enableDeviceAuth: false, operatorSolanaTransfer: operator });
 
     const kp = await generateKeypair();
@@ -226,8 +206,8 @@ describe("Path 0 — Solana sovereign-return withdrawal", () => {
       body: JSON.stringify({ amount: 1.0, destination: userSolanaWallet }),
     });
 
-    // Path 0 checked availability and bailed; sendUsdc never invoked
-    expect(adapter.sendUsdc).not.toHaveBeenCalled();
+    // No lane, no payout: nothing was sent
+    expect(adapter.sendUsdcDurable).not.toHaveBeenCalled();
     // Withdrawal stays pending
     const row = relay.moteDb.db
       .prepare(
@@ -237,10 +217,8 @@ describe("Path 0 — Solana sovereign-return withdrawal", () => {
     expect(row!.status).toBe("pending");
   });
 
-  it("does NOT settle when adapter.sendUsdc throws — withdrawal stays processing for the operator's reconcile (#921)", async () => {
-    const { operator, adapter } = makeOperator({
-      sendUsdc: vi.fn().mockRejectedValue(new Error("Solana RPC timeout")),
-    });
+  it("a payout the bounded wait does not see finalized stays processing — never refunded on absence (#990)", async () => {
+    const { operator, adapter } = makeOperator({}, freshChain({ sendOutcome: "unknown" }));
     relay = await createTestRelay({ enableDeviceAuth: false, operatorSolanaTransfer: operator });
 
     const kp = await generateKeypair();
@@ -254,12 +232,7 @@ describe("Path 0 — Solana sovereign-return withdrawal", () => {
       body: JSON.stringify({ amount: 1.0, destination: userSolanaWallet }),
     });
     expect(res.status).toBe(200);
-
-    // sendUsdc was attempted but threw
-    expect(adapter.sendUsdc).toHaveBeenCalledOnce();
-    // The payout was claimed before the send (#921), so the withdrawal stays
-    // `processing` — funds already held by requestWithdrawal, no refund; only
-    // the operator's /reconcile (after the window, on an attestation) settles it.
+    expect(adapter.sendUsdcDurable).toHaveBeenCalledOnce();
     const row = relay.moteDb.db
       .prepare(
         "SELECT status, completed_at FROM relay_withdrawals WHERE motebit_id = ? ORDER BY requested_at DESC LIMIT 1",
@@ -267,5 +240,23 @@ describe("Path 0 — Solana sovereign-return withdrawal", () => {
       .get("user-rpc-throw") as { status: string; completed_at: number | null } | undefined;
     expect(row!.status).toBe("processing");
     expect(row!.completed_at).toBeNull();
+  });
+
+  it("a send that throws before recording anything sent nothing — refunded at once", async () => {
+    const { operator } = makeOperator({}, freshChain({ sendOutcome: "throw_before" }));
+    relay = await createTestRelay({ enableDeviceAuth: false, operatorSolanaTransfer: operator });
+    const kp = await generateKeypair();
+    await registerAndFund(relay, "user-nothing-sent", bytesToHex(kp.publicKey));
+    const res = await relay.app.request("/api/v1/agents/user-nothing-sent/withdraw", {
+      method: "POST",
+      headers: jsonAuthWithIdempotency(),
+      body: JSON.stringify({
+        amount: 1.0,
+        destination: "GJmrQzyZumWWkdBuVH3Z1hnGvjrcDMbx7ptF5t5UNsn",
+      }),
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { withdrawal: { status: string } };
+    expect(body.withdrawal.status).toBe("failed");
   });
 });

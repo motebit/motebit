@@ -758,6 +758,10 @@ afterEach(async () => {
   relay = undefined;
 });
 
+/** What the last cell's cluster saw, for the mechanism checks below. */
+let lastCluster: AgaveCluster | undefined;
+let lastRows: Row[] = [];
+
 async function runCell(script: Script, witness: Witness, timing: Timing): Promise<string[]> {
   const treasury = web3.Keypair.fromSeed(TREASURY_SEED).publicKey;
   const sourceAta: string = spl
@@ -795,6 +799,8 @@ async function runCell(script: Script, witness: Witness, timing: Timing): Promis
     if (timing === "prompt" || i >= 3) await truthfulOperator(relay, mid, cluster, true);
     violations.push(...(await oracle(relay, mid, cluster, phase.name, i === PHASES.length - 1)));
   }
+  lastCluster = cluster;
+  lastRows = rowsOf(relay, mid);
   return violations;
 }
 
@@ -814,4 +820,130 @@ describe("the reviewer's 655267bf4 findings, named", () => {
   it("1c: a processed minority-fork ERROR is never taken as failed (no refund, then landing)", async () => {
     expect(await runCell("fork_err_then_lands", "honest", "prompt")).toEqual([]);
   });
+});
+
+describe("the mechanism: durable nonce, finalized status, kill (#990)", () => {
+  const kinds = (c: AgaveCluster) => [...c.txs.values()].map((t) => `${t.kind}:${t.state}`);
+
+  it("a landed payout is a durable-nonce transaction, completed only once finalized", async () => {
+    expect(await runCell("lands", "honest", "prompt")).toEqual([]);
+    const payouts = lastCluster!.payouts();
+    expect(payouts).toHaveLength(1);
+    expect(payouts[0]!.kind).toBe("payout");
+    expect(payouts[0]!.nonceValue).toBeTruthy();
+    expect(kinds(lastCluster!)).not.toContain("kill:canonical");
+    expect(lastRows.map((r) => r.status)).toEqual(["completed"]);
+  });
+
+  it("a payout that never lands is refunded only after its kill is on the canonical chain", async () => {
+    expect(await runCell("dropped", "honest", "late")).toEqual([]);
+    expect(kinds(lastCluster!)).toContain("kill:canonical");
+    expect(lastRows.map((r) => r.status)).toEqual(["failed"]);
+  });
+
+  it("an unavailable nonce lane sends nothing; the withdrawal stays pending with a working /fail", async () => {
+    expect(await runCell("nonce_lane_unavailable", "honest", "prompt")).toEqual([]);
+    expect(lastCluster!.payouts()).toHaveLength(0);
+    expect(lastRows.map((r) => r.status)).toEqual(["failed"]);
+  });
+
+  it("1c: the fork error is never read as failed — the payout completes, or its kill wins and refunds", async () => {
+    expect(await runCell("fork_err_then_lands", "honest", "prompt")).toEqual([]);
+    const k = kinds(lastCluster!);
+    const status = lastRows[0]!.status;
+    expect(
+      (status === "completed" && k.includes("payout:canonical")) ||
+        (status === "failed" && k.includes("kill:canonical")),
+    ).toBe(true);
+  });
+
+  it("two concurrent withdrawals serialize over one lane: the second waits pending, then pays over the next nonce", async () => {
+    const treasury = web3.Keypair.fromSeed(TREASURY_SEED).publicKey;
+    const sourceAta: string = spl
+      .getAssociatedTokenAddressSync(new web3.PublicKey(USDC_MAINNET), treasury)
+      .toBase58();
+    // The first payout lands late (it outlives the send's finality wait);
+    // the second lands at once.
+    const cluster = new AgaveCluster(
+      (kind, index) =>
+        kind === "payout"
+          ? { kind: "land", delay: index === 0 ? 300 : 2 }
+          : { kind: "land", delay: 1 },
+      new Set([sourceAta]),
+    );
+    const operator = makeRealTransfer(cluster);
+    relay = await createTestRelay({ enableDeviceAuth: false, operatorSolanaTransfer: operator });
+    const mid = "zzag-two-on-one-lane";
+    await registerAndFund(relay, mid);
+    const post = () =>
+      relay!.app.request(`/api/v1/agents/${mid}/withdraw`, {
+        method: "POST",
+        headers: jsonAuthWithIdempotency(),
+        body: JSON.stringify({ amount: W_USD, destination: DEST }),
+      });
+    await Promise.all([post(), post()]);
+    const statuses = rowsOf(relay, mid)
+      .map((r) => r.status)
+      .sort();
+    expect(statuses).toEqual(["pending", "processing"]);
+    expect(await adminQueueIds(relay)).toHaveProperty("size", 2);
+    for (let i = 0; i < 12; i++) {
+      cluster.advance(60);
+      await relay.withdrawalPayouts.resolveOnce();
+    }
+    const payouts = cluster.payouts();
+    expect(payouts).toHaveLength(2);
+    expect(new Set(payouts.map((p) => p.nonceValue)).size).toBe(2);
+    expect(rowsOf(relay, mid).map((r) => r.status)).toEqual(["completed", "completed"]);
+    expect(refunds(relay, mid)).toBe(0);
+  });
+
+  it.each([
+    { name: "legacy_lands", lands: true },
+    { name: "legacy_never", lands: false },
+  ])(
+    "$name: a claim an earlier process made without recording a signature — never refunded; paid accepted; never-landed is the documented stuck set",
+    async ({ name, lands }) => {
+      const treasury = web3.Keypair.fromSeed(TREASURY_SEED).publicKey;
+      const sourceAta: string = spl
+        .getAssociatedTokenAddressSync(new web3.PublicKey(USDC_MAINNET), treasury)
+        .toBase58();
+      const cluster = new AgaveCluster(() => ({ kind: "land", delay: 1 }), new Set([sourceAta]));
+      const operator = makeRealTransfer(cluster);
+      relay = await createTestRelay({ enableDeviceAuth: false, operatorSolanaTransfer: operator });
+      const mid = `zzag-${name}`;
+      await registerAndFund(relay, mid);
+      const res = await relay.app.request(`/api/v1/agents/${mid}/withdraw`, {
+        method: "POST",
+        headers: jsonAuthWithIdempotency(),
+        body: JSON.stringify({ amount: W_USD, destination: "not-a-payout-address" }),
+      });
+      const id = ((await res.json()) as { withdrawal: { withdrawal_id: string } }).withdrawal
+        .withdrawal_id;
+      relay.moteDb.db
+        .prepare(
+          "UPDATE relay_withdrawals SET status = 'processing', destination = ?, claimed_at = ?, payout_valid_until = NULL WHERE withdrawal_id = ?",
+        )
+        .run(DEST, Date.now() - 20 * MIN, id);
+      const legacySig = "LegacyPayoutSignature".padEnd(88, "L");
+      for (const phase of PHASES) {
+        phase.move(cluster);
+        await relay.withdrawalPayouts.resolveOnce();
+        const not = await admin(relay, id, "reconcile", {
+          outcome: "not_paid",
+          attestation: "explorer shows nothing",
+        });
+        if (rowsOf(relay, mid)[0]!.status === "processing") expect(not.status).toBe(409);
+        if (lands) {
+          await admin(relay, id, "reconcile", {
+            outcome: "paid",
+            payout_reference: legacySig,
+            attestation: "explorer shows the legacy payout landed",
+          });
+        }
+      }
+      expect(refunds(relay, mid)).toBe(0);
+      expect(rowsOf(relay, mid)[0]!.status).toBe(lands ? "completed" : "processing");
+    },
+  );
 });

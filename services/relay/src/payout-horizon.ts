@@ -7,16 +7,15 @@
  *
  *   | payout                          | decided by                                     |
  *   | ------------------------------- | ---------------------------------------------- |
- *   | Path 0 Solana, chain-recorded   | THE CHAIN, on POSITIVE evidence only: every   |
- *   |  (claimed by this code)         |  signature the payout signed was recorded      |
- *   |                                 |  before broadcast; each is found landed, found |
- *   |                                 |  failed, or proven dead by the fresh verdict   |
- *   |                                 |  (recorded while its window is open) —         |
- *   |                                 |  withdrawal-chain-payouts.ts. History absence  |
- *   |                                 |  proves nothing (#949 round 5). No wall clock. |
- *   | Path 0 Solana, legacy claim     | THE OPERATOR's `paid` only: no signature was   |
- *   |  (an earlier process, no        |  recorded, so no positive evidence of non-     |
- *   |  signatures recorded)           |  landing can exist; `not_paid` waits for #990  |
+ *   | Path 0 Solana, chain-recorded   | CONSENSUS RULES (#990): a durable-nonce payout |
+ *   |  (claimed by this code)         |  — at most one transaction over its nonce value |
+ *   |                                 |  lands — decided by FINALIZED statuses only:    |
+ *   |                                 |  payout ok ⇒ paid; payout failed or its kill    |
+ *   |                                 |  finalized ⇒ not paid; anything else undecided  |
+ *   |                                 |  (withdrawal-chain-payouts.ts). No wall clock.  |
+ *   | Path 0 Solana, legacy claim     | THE OPERATOR's `paid` only: nothing recorded,   |
+ *   |  (an earlier process, or a      |  no nonce to kill, so no proof of non-landing   |
+ *   |  blockhash payout)              |  can exist; `not_paid` is refused               |
  *   | Path 1 x402, legacy claim       | `reconcileOpensAt`: the recorded authorization |
  *   |                                 |  validity (payout_valid_until) + margin. No    |
  *   |                                 |  new x402 payout exists (#948 removed it).     |

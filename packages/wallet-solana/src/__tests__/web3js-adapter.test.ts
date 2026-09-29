@@ -14,7 +14,14 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { Keypair, PublicKey, Transaction } from "@solana/web3.js";
+import {
+  Keypair,
+  NONCE_ACCOUNT_LENGTH,
+  PublicKey,
+  SystemInstruction,
+  SystemProgram,
+  Transaction,
+} from "@solana/web3.js";
 import { base58Encode } from "@motebit/protocol";
 
 // Mock just `getAccount` from @solana/spl-token. Everything else
@@ -34,11 +41,11 @@ vi.mock("@solana/spl-token", async (importOriginal) => {
 import { ASSOCIATED_TOKEN_PROGRAM_ID, TokenAccountNotFoundError } from "@solana/spl-token";
 
 import {
+  NONCE_ACCOUNT_SEED,
   Web3JsRpcAdapter,
   deriveSolanaAddress,
   isDerivedSettlementBinding,
 } from "../web3js-adapter.js";
-import { FRESH_WINDOW_END, FRESH_WINDOW_START } from "../adapter.js";
 import {
   USDC_MINT_MAINNET,
   InsufficientUsdcBalanceError,
@@ -167,17 +174,17 @@ function advancingChain(
     slot += c.step;
     return r as never;
   });
-  vi.spyOn(conn, "getSignatureStatuses").mockImplementation(
-    async (sigs) =>
-      ({
-        context: { slot },
-        value: [
-          c.landed?.has(sigs[0]!) === true
-            ? { confirmationStatus: "confirmed", err: null, slot: 42, confirmations: 1 }
-            : null,
-        ],
-      }) as never,
-  );
+  vi.spyOn(conn, "getSignatureStatuses").mockImplementation(async (sigs) => {
+    reads++;
+    return {
+      context: { slot },
+      value: [
+        c.landed?.has(sigs[0]!) === true
+          ? { confirmationStatus: "confirmed", err: null, slot: 42, confirmations: 1 }
+          : null,
+      ],
+    } as never;
+  });
   return { reads: () => reads };
 }
 
@@ -742,7 +749,7 @@ describe("Web3JsRpcAdapter.sendUsdc", () => {
   // ── #885/#920: the ATA creation is IDEMPOTENT ──
   // A non-idempotent create fails if the account exists, so a re-signed
   // attempt after an earlier one created it would land-and-fail every time.
-  it("creates a missing destination ATA with the IDEMPOTENT instruction (data [1]), on every attempt", async () => {
+  it("creates a missing destination ATA with the IDEMPOTENT instruction (data [1])", async () => {
     const adapter = makeAdapterForTx();
     const conn = adapter.getConnection();
     getAccountMock
@@ -752,17 +759,14 @@ describe("Web3JsRpcAdapter.sendUsdc", () => {
       blockhash: validBlockhash(),
       lastValidBlockHeight: 100,
     });
-    chainSays(conn, { height: 150, slot: 1_000, statusSlot: 1_000, status: null });
-    const sendSpy = vi
-      .spyOn(conn, "sendRawTransaction")
-      .mockResolvedValueOnce("sigA")
-      .mockResolvedValue("sigB");
-    vi.spyOn(conn, "confirmTransaction")
-      .mockRejectedValueOnce(new Error("Signature sigA has expired: block height exceeded."))
-      .mockResolvedValue({ context: { slot: 5 }, value: { err: null } });
+    const sendSpy = vi.spyOn(conn, "sendRawTransaction").mockResolvedValue("sigA");
+    vi.spyOn(conn, "confirmTransaction").mockResolvedValue({
+      context: { slot: 5 },
+      value: { err: null },
+    });
 
     await adapter.sendUsdc({ toAddress: validBase58Address(), microAmount: 1n });
-    expect(sendSpy).toHaveBeenCalledTimes(2);
+    expect(sendSpy).toHaveBeenCalledTimes(1);
     for (const call of sendSpy.mock.calls) {
       expect(ataInstructionData(call[0])).toEqual([[1]]);
     }
@@ -808,7 +812,7 @@ describe("Web3JsRpcAdapter.sendUsdc", () => {
   // tx, not when the tx failed to land. The adapter re-signs only on a
   // definitive `expired`; a landed first tx IS the payment.
 
-  it("expiry + the chain confirms the first tx is dead ⇒ re-signs with a FRESH blockhash", async () => {
+  it("expiry and the chain shows nothing (absent) ⇒ throws; ONE send, never re-signed (#990: absence is not evidence)", async () => {
     const adapter = makeAdapterForTx();
     const conn = adapter.getConnection();
     getAccountMock
@@ -819,26 +823,15 @@ describe("Web3JsRpcAdapter.sendUsdc", () => {
       lastValidBlockHeight: 100,
     });
     chainSays(conn, { height: 150, slot: 1_000, statusSlot: 1_000, status: null });
-    const sendSpy = vi
-      .spyOn(conn, "sendRawTransaction")
-      .mockResolvedValueOnce("sigExpired")
-      .mockResolvedValue("sigFresh");
-    vi.spyOn(conn, "confirmTransaction")
-      .mockRejectedValueOnce(new Error("Signature sigExpired has expired: block height exceeded."))
-      .mockResolvedValue({ context: { slot: 51 }, value: { err: null } });
-
-    const result = await adapter.sendUsdc({
-      toAddress: validBase58Address(),
-      microAmount: 1_000_000n,
-    });
-    expect(result).toEqual({
-      signature: "sigFresh",
-      slot: 51,
-      confirmed: true,
-      earlierBroadcastsDead: true,
-    });
-    expect(blockhashSpy).toHaveBeenCalledTimes(2);
-    expect(sendSpy).toHaveBeenCalledTimes(2);
+    const sendSpy = vi.spyOn(conn, "sendRawTransaction").mockResolvedValue("sigExpired");
+    vi.spyOn(conn, "confirmTransaction").mockRejectedValue(
+      new Error("Signature sigExpired has expired: block height exceeded."),
+    );
+    await expect(
+      adapter.sendUsdc({ toAddress: validBase58Address(), microAmount: 1_000_000n }),
+    ).rejects.toThrow("block height exceeded");
+    expect(blockhashSpy).toHaveBeenCalledTimes(1);
+    expect(sendSpy).toHaveBeenCalledTimes(1);
   });
 
   it("REVIEWER PROBE: expiry, but the first tx LANDED ⇒ returns it; one broadcast, no second payment", async () => {
@@ -934,36 +927,6 @@ describe("Web3JsRpcAdapter.sendUsdc", () => {
   // ── Realistic heights (#885 round 4): web3.js raises the expiry at
   //    lastValid+1 — inside the absence margin — so the adapter must keep
   //    asking until the chain is decisive.
-
-  it("REALISTIC: expiry at lastValid+1, first tx dead, chain advancing ⇒ re-signs once past the margin; 2 sends", async () => {
-    const adapter = makeAdapterForTx();
-    const conn = adapter.getConnection();
-    getAccountMock
-      .mockResolvedValueOnce({ amount: 10_000_000n })
-      .mockResolvedValueOnce({ amount: 0n });
-    vi.spyOn(conn, "getLatestBlockhash").mockResolvedValue({
-      blockhash: validBlockhash(),
-      lastValidBlockHeight: 100,
-    });
-    const chain = advancingChain(conn, { lastValid: 100, step: 3 });
-    const sendSpy = vi
-      .spyOn(conn, "sendRawTransaction")
-      .mockResolvedValueOnce("sigA")
-      .mockResolvedValue("sigB");
-    vi.spyOn(conn, "confirmTransaction")
-      .mockRejectedValueOnce(new Error("Signature sigA has expired: block height exceeded."))
-      .mockResolvedValue({ context: { slot: 99 }, value: { err: null } });
-
-    const r = await adapter.sendUsdc({ toAddress: validBase58Address(), microAmount: 1n });
-    expect(r).toEqual({
-      signature: "sigB",
-      slot: 99,
-      confirmed: true,
-      earlierBroadcastsDead: true,
-    });
-    expect(sendSpy).toHaveBeenCalledTimes(2);
-    expect(chain.reads()).toBeGreaterThan(1); // it waited out the margin
-  });
 
   it("REALISTIC: expiry at lastValid+1 and the first tx LANDED ⇒ returns it; 1 send", async () => {
     const adapter = makeAdapterForTx();
@@ -1064,8 +1027,8 @@ describe("Web3JsRpcAdapter.sendUsdc", () => {
     } as never);
     await adapter.sendUsdc({ toAddress: validBase58Address(), microAmount: 1n });
     expect(confirm.mock.calls[0]?.[1]).toBe("confirmed");
-    // Any height read is the fresh verdict's, at finalized (#949 round 5).
-    for (const call of epoch.mock.calls) expect(call[0]).toMatchObject({ commitment: "finalized" });
+    // No height read decides anything any more (#990).
+    expect(epoch).not.toHaveBeenCalled();
   });
 
   it("REALISTIC: still inside the margin when the poll cap ends ⇒ throws; 1 send, never a re-sign on a maybe", async () => {
@@ -1118,7 +1081,7 @@ describe("Web3JsRpcAdapter.sendUsdc", () => {
     expect(chain.reads()).toBeGreaterThan(1);
   });
 
-  it("gives up after BROADCAST_MAX_ATTEMPTS when every attempt is confirmed dead", async () => {
+  it("one broadcast, ever: every expiry with nothing found ⇒ one blockhash, one confirmation, then the error", async () => {
     const adapter = makeAdapterForTx();
     const conn = adapter.getConnection();
     getAccountMock
@@ -1137,8 +1100,8 @@ describe("Web3JsRpcAdapter.sendUsdc", () => {
     await expect(
       adapter.sendUsdc({ toAddress: validBase58Address(), microAmount: 1n }),
     ).rejects.toThrow("block height exceeded");
-    expect(blockhashSpy).toHaveBeenCalledTimes(3);
-    expect(confirmSpy).toHaveBeenCalledTimes(3);
+    expect(blockhashSpy).toHaveBeenCalledTimes(1);
+    expect(confirmSpy).toHaveBeenCalledTimes(1);
   });
 
   it("does NOT retry a non-expiry error — a confirmation timeout may still land (no double-spend)", async () => {
@@ -1228,7 +1191,7 @@ describe("Web3JsRpcAdapter — beforeBroadcast sees the signed tx before it is s
   });
 });
 
-describe("Web3JsRpcAdapter.getSignatureOutcome — about ONE transaction (#949 round 5)", () => {
+describe("Web3JsRpcAdapter.getSignatureOutcome — about ONE transaction (#885, #990)", () => {
   function withChain(opts: {
     height: number;
     slot?: number;
@@ -1274,12 +1237,12 @@ describe("Web3JsRpcAdapter.getSignatureOutcome — about ONE transaction (#949 r
     await expect(bad.adapter.getSignatureOutcome(ref)).resolves.toEqual({ status: "failed" });
   });
 
-  it("absent, inside the fresh window (finalized status cache, caught-up node) ⇒ expired", async () => {
+  it("absent ⇒ pending — never expired, whatever the height (#990: absence is not evidence)", async () => {
     const gone = withChain({ height: 150, slot: 5_000, statusSlot: 5_000, status: null });
-    await expect(gone.adapter.getSignatureOutcome(ref)).resolves.toEqual({ status: "expired" });
+    await expect(gone.adapter.getSignatureOutcome(ref)).resolves.toEqual({ status: "pending" });
   });
 
-  it("round 5: absent in HISTORY past the fresh window (snapshot gap, pruned, BigTable error) ⇒ pending, never expired", async () => {
+  it("absent in HISTORY far past its validity (snapshot gap, pruned, BigTable error) ⇒ pending, never expired", async () => {
     const late = withChain({ height: 100_000, slot: 5_000, statusSlot: 5_000, status: null });
     await expect(late.adapter.getSignatureOutcome(ref)).resolves.toEqual({ status: "pending" });
   });
@@ -1302,17 +1265,10 @@ describe("Web3JsRpcAdapter.getSignatureOutcome — about ONE transaction (#949 r
     expect(out.status).not.toBe("expired");
   });
 
-  it("absent, and not yet FRESH_WINDOW_START past lastValid (finalized) ⇒ pending", async () => {
-    const edge = withChain({ height: 110, status: null });
-    await expect(edge.adapter.getSignatureOutcome(ref)).resolves.toEqual({ status: "pending" });
-    const live = withChain({ height: 100, status: null });
-    await expect(live.adapter.getSignatureOutcome(ref)).resolves.toEqual({ status: "pending" });
-  });
-
-  it("reads history first; only on absence, the fresh verdict: height, cache-only status, height", async () => {
+  it("reads the status once, with history — no height read at all", async () => {
     const { adapter, order } = withChain({ height: 150, status: null });
     await adapter.getSignatureOutcome(ref);
-    expect(order).toEqual(["history", "epoch", "fresh", "epoch"]);
+    expect(order).toEqual(["history"]);
   });
 
   it("a history read that throws ⇒ rpc_error, never absence (no fresh read on a failed read)", async () => {
@@ -1327,24 +1283,6 @@ describe("Web3JsRpcAdapter.getSignatureOutcome — about ONE transaction (#949 r
     expect(epoch).not.toHaveBeenCalled();
   });
 
-  it("absent from history but found by the fresh (status-cache) read ⇒ its found status decides", async () => {
-    const landed = withChain({
-      height: 150,
-      status: { confirmationStatus: "finalized", err: null, slot: 11 },
-      historyStatus: null,
-    });
-    await expect(landed.adapter.getSignatureOutcome(ref)).resolves.toEqual({
-      status: "landed",
-      slot: 11,
-    });
-    const failed = withChain({
-      height: 150,
-      status: { confirmationStatus: "finalized", err: { x: 1 }, slot: 11 },
-      historyStatus: null,
-    });
-    await expect(failed.adapter.getSignatureOutcome(ref)).resolves.toEqual({ status: "failed" });
-  });
-
   it("processed but not yet confirmed ⇒ pending (seen); an RPC failure ⇒ rpc_error", async () => {
     const proc = withChain({
       height: 500,
@@ -1355,11 +1293,7 @@ describe("Web3JsRpcAdapter.getSignatureOutcome — about ONE transaction (#949 r
       seen: true, // in a block: a later "absent" for it is never believed
     });
     const adapter = makeAdapterForTx();
-    vi.spyOn(adapter.getConnection(), "getSignatureStatuses").mockResolvedValue({
-      context: { slot: 1 },
-      value: [null],
-    } as never);
-    vi.spyOn(adapter.getConnection(), "getEpochInfo").mockRejectedValue(new Error("429"));
+    vi.spyOn(adapter.getConnection(), "getSignatureStatuses").mockRejectedValue(new Error("429"));
     await expect(adapter.getSignatureOutcome(ref)).resolves.toEqual({
       status: "rpc_error",
       reason: "429",
@@ -1367,97 +1301,425 @@ describe("Web3JsRpcAdapter.getSignatureOutcome — about ONE transaction (#949 r
   });
 });
 
-describe("Web3JsRpcAdapter.getFreshSignatureVerdict (#949 round 5)", () => {
-  // lastValid = 100: the window is finalized heights 111..230.
-  const ref = { signature: "sigF", lastValidBlockHeight: 100 };
-  function fresh(opts: {
-    heights: number[];
-    status?: null | { err: unknown; slot: number };
-    contextSlot?: number;
-    slot?: number;
-  }) {
-    const adapter = makeAdapterForTx();
-    const conn = adapter.getConnection();
-    let i = 0;
-    const epoch = vi.spyOn(conn, "getEpochInfo").mockImplementation(async () => {
-      const h = opts.heights[Math.min(i, opts.heights.length - 1)]!;
-      i++;
-      return { blockHeight: h, absoluteSlot: opts.slot ?? 5_000 } as never;
+// ── durable-nonce payouts (#990) ─────────────────────────────────────────
+
+describe("Web3JsRpcAdapter durable-nonce payouts (#990)", () => {
+  const TREASURY = Keypair.fromSeed(ZERO_SEED).publicKey;
+
+  function makeDurable(opts: { rpcTimeoutMs?: number } = {}): Web3JsRpcAdapter {
+    let t = 0;
+    const clock = {
+      pollMs: 2_000,
+      maxWaitMs: 20_000,
+      now: () => t,
+      sleep: (ms: number) => {
+        t += ms;
+        return Promise.resolve();
+      },
+    };
+    return new Web3JsRpcAdapter({
+      rpcUrl: "https://api.devnet.solana.com",
+      identitySeed: ZERO_SEED,
+      expiryConfirm: clock,
+      finality: clock,
+      ...(opts.rpcTimeoutMs !== undefined ? { rpcTimeoutMs: opts.rpcTimeoutMs } : {}),
     });
-    const statuses = vi.spyOn(conn, "getSignatureStatuses").mockResolvedValue({
-      context: { slot: opts.contextSlot ?? opts.slot ?? 5_000 },
-      value: [
-        opts.status == null
-          ? null
-          : { ...opts.status, confirmationStatus: "finalized", confirmations: null },
-      ],
-    } as never);
-    return { adapter, epoch, statuses };
   }
 
-  it("the window bounds, exactly: +10 too early, +11 and +130 dead, +131 passed", async () => {
-    expect(FRESH_WINDOW_START).toBe(11);
-    expect(FRESH_WINDOW_END).toBe(130);
-    await expect(fresh({ heights: [110] }).adapter.getFreshSignatureVerdict(ref)).resolves.toEqual({
-      status: "too_early",
+  async function nonceAddress(): Promise<PublicKey> {
+    return PublicKey.createWithSeed(TREASURY, NONCE_ACCOUNT_SEED, SystemProgram.programId);
+  }
+
+  function nonceData(authority: PublicKey, value: string): Buffer {
+    const data = Buffer.alloc(NONCE_ACCOUNT_LENGTH);
+    data.writeUInt32LE(1, 0);
+    data.writeUInt32LE(1, 4);
+    Buffer.from(authority.toBytes()).copy(data, 8);
+    Buffer.from(new PublicKey(value).toBytes()).copy(data, 40);
+    data.writeBigUInt64LE(5000n, 72);
+    return data;
+  }
+
+  const NONCE = validBlockhash();
+
+  function status(confirmationStatus: string, err: unknown = null, slot = 9) {
+    return {
+      context: { slot: 100 },
+      value: [{ confirmationStatus, err, slot, confirmations: null }],
+    };
+  }
+
+  describe("prepareNonceLane", () => {
+    it("reads the treasury's seed-derived nonce account at FINALIZED commitment", async () => {
+      const adapter = makeDurable();
+      const conn = adapter.getConnection();
+      const info = vi.spyOn(conn, "getAccountInfo").mockResolvedValue({
+        data: nonceData(TREASURY, NONCE),
+        owner: SystemProgram.programId,
+        lamports: 1_447_680,
+        executable: false,
+        rentEpoch: 0,
+      } as never);
+      const lane = await adapter.prepareNonceLane();
+      expect(lane).toEqual({
+        status: "ready",
+        account: (await nonceAddress()).toBase58(),
+        nonceValue: NONCE,
+      });
+      expect(info.mock.calls[0]?.[1]).toEqual({ commitment: "finalized" });
     });
-    await expect(
-      fresh({ heights: [111, 111] }).adapter.getFreshSignatureVerdict(ref),
-    ).resolves.toEqual({ status: "dead_fresh", contextSlot: 5_000 });
-    await expect(
-      fresh({ heights: [230, 230] }).adapter.getFreshSignatureVerdict(ref),
-    ).resolves.toEqual({ status: "dead_fresh", contextSlot: 5_000 });
-    await expect(fresh({ heights: [231] }).adapter.getFreshSignatureVerdict(ref)).resolves.toEqual({
-      status: "window_passed",
+
+    it("absent ⇒ creates it (createAccountWithSeed + nonceInitialize, treasury authority, rent-exempt 80 bytes), waits for finality, reads again", async () => {
+      const adapter = makeDurable();
+      const conn = adapter.getConnection();
+      let created = false;
+      vi.spyOn(conn, "getAccountInfo").mockImplementation(async () =>
+        created
+          ? ({
+              data: nonceData(TREASURY, NONCE),
+              owner: SystemProgram.programId,
+              lamports: 1_447_680,
+              executable: false,
+              rentEpoch: 0,
+            } as never)
+          : null,
+      );
+      vi.spyOn(conn, "getMinimumBalanceForRentExemption").mockResolvedValue(1_447_680);
+      vi.spyOn(conn, "getLatestBlockhash").mockResolvedValue({
+        blockhash: validBlockhash(),
+        lastValidBlockHeight: 10,
+      });
+      let sent: Transaction | null = null;
+      vi.spyOn(conn, "sendRawTransaction").mockImplementation(async (raw) => {
+        sent = Transaction.from(raw as Buffer);
+        created = true;
+        return "createSig";
+      });
+      vi.spyOn(conn, "getSignatureStatuses").mockResolvedValue(status("finalized") as never);
+      const lane = await adapter.prepareNonceLane();
+      expect(lane.status).toBe("ready");
+      const tx = sent as unknown as Transaction;
+      const types = tx.instructions.map((ix) => SystemInstruction.decodeInstructionType(ix));
+      expect(types).toEqual(["CreateWithSeed", "InitializeNonceAccount"]);
+      const create = SystemInstruction.decodeCreateWithSeed(tx.instructions[0]!);
+      expect(create.space).toBe(NONCE_ACCOUNT_LENGTH);
+      expect(create.lamports).toBe(1_447_680);
+      expect(create.seed).toBe(NONCE_ACCOUNT_SEED);
+      const init = SystemInstruction.decodeNonceInitialize(tx.instructions[1]!);
+      expect(init.authorizedPubkey.toBase58()).toBe(TREASURY.toBase58());
+    });
+
+    it("absent and the creation not finalized in the wait ⇒ unavailable (send nothing)", async () => {
+      const adapter = makeDurable();
+      const conn = adapter.getConnection();
+      vi.spyOn(conn, "getAccountInfo").mockResolvedValue(null);
+      vi.spyOn(conn, "getMinimumBalanceForRentExemption").mockResolvedValue(1_447_680);
+      vi.spyOn(conn, "getLatestBlockhash").mockResolvedValue({
+        blockhash: validBlockhash(),
+        lastValidBlockHeight: 10,
+      });
+      vi.spyOn(conn, "sendRawTransaction").mockResolvedValue("createSig");
+      vi.spyOn(conn, "getSignatureStatuses").mockResolvedValue(status("confirmed") as never);
+      expect((await adapter.prepareNonceLane()).status).toBe("unavailable");
+    });
+
+    it("an account not owned by the System program, not a nonce account, another authority, or a failed read ⇒ unavailable", async () => {
+      const cases: Array<() => Promise<unknown>> = [
+        async () => ({
+          data: nonceData(TREASURY, NONCE),
+          owner: new PublicKey(USDC_MINT_MAINNET),
+          lamports: 1,
+          executable: false,
+          rentEpoch: 0,
+        }),
+        async () => ({
+          data: Buffer.alloc(10),
+          owner: SystemProgram.programId,
+          lamports: 1,
+          executable: false,
+          rentEpoch: 0,
+        }),
+        async () => ({
+          data: nonceData(Keypair.generate().publicKey, NONCE),
+          owner: SystemProgram.programId,
+          lamports: 1,
+          executable: false,
+          rentEpoch: 0,
+        }),
+        () => Promise.reject(new Error("503")),
+      ];
+      for (const answer of cases) {
+        const adapter = makeDurable();
+        vi.spyOn(adapter.getConnection(), "getAccountInfo").mockImplementation(answer as never);
+        expect((await adapter.prepareNonceLane()).status).toBe("unavailable");
+      }
     });
   });
 
-  it("the answering bank must still be in the window: a second height read past it ⇒ window_passed", async () => {
-    await expect(
-      fresh({ heights: [200, 231] }).adapter.getFreshSignatureVerdict(ref),
-    ).resolves.toEqual({ status: "window_passed" });
-  });
+  describe("sendUsdcDurable", () => {
+    function primed(adapter: Web3JsRpcAdapter) {
+      const conn = adapter.getConnection();
+      getAccountMock.mockResolvedValue({ amount: 10_000_000n });
+      const sends: Transaction[] = [];
+      const send = vi.spyOn(conn, "sendRawTransaction").mockImplementation(async (raw) => {
+        const tx = Transaction.from(raw as Buffer);
+        sends.push(tx);
+        return base58Encode(new Uint8Array(tx.signature!));
+      });
+      return { conn, sends, send };
+    }
+    const lane = async () => ({ account: (await nonceAddress()).toBase58(), nonceValue: NONCE });
 
-  it("reads the status cache only — no history search — at finalized, bound by minContextSlot; then the height with minContextSlot = the answer's slot", async () => {
-    const { adapter, epoch, statuses } = fresh({
-      heights: [150, 150],
-      slot: 7_000,
-      contextSlot: 7_100,
+    it("signs nonceAdvance FIRST over the lane's nonce value, records the exact signature before sending, and resolves finalized", async () => {
+      const adapter = makeDurable();
+      const { conn, sends } = primed(adapter);
+      vi.spyOn(conn, "getSignatureStatuses").mockResolvedValue(status("finalized") as never);
+      const seen: string[] = [];
+      const r = await adapter.sendUsdcDurable(
+        { toAddress: validBase58Address(), microAmount: 5n },
+        await lane(),
+        {
+          beforeBroadcast: (tx) => {
+            expect(sends).toHaveLength(0); // before anything is sent
+            seen.push(tx.signature);
+          },
+        },
+      );
+      const tx = sends[0]!;
+      expect(tx.recentBlockhash).toBe(NONCE);
+      expect(SystemInstruction.decodeInstructionType(tx.instructions[0]!)).toBe(
+        "AdvanceNonceAccount",
+      );
+      const adv = SystemInstruction.decodeNonceAdvance(tx.instructions[0]!);
+      expect(adv.noncePubkey.toBase58()).toBe((await nonceAddress()).toBase58());
+      expect(adv.authorizedPubkey.toBase58()).toBe(TREASURY.toBase58());
+      expect(seen).toEqual([base58Encode(new Uint8Array(tx.signature!))]);
+      expect(r.tx).toMatchObject({ kind: "payout", nonceValue: NONCE, signature: seen[0] });
+      expect(r.final).toEqual({ status: "finalized", ok: true, slot: 9 });
     });
-    await adapter.getFreshSignatureVerdict(ref);
-    expect(statuses.mock.calls[0]?.[1]).toEqual({
-      searchTransactionHistory: false,
-      commitment: "finalized",
-      minContextSlot: 7_000,
+
+    it("a status below finality (processed or confirmed — a fork can hold it) is polled, never taken; unfinalized at the cap ⇒ unknown", async () => {
+      const adapter = makeDurable();
+      const { conn, send } = primed(adapter);
+      const statuses = vi
+        .spyOn(conn, "getSignatureStatuses")
+        .mockResolvedValue(status("confirmed") as never);
+      const r = await adapter.sendUsdcDurable(
+        { toAddress: validBase58Address(), microAmount: 5n },
+        await lane(),
+      );
+      expect(r.final).toEqual({ status: "unknown", reason: "not_finalized" });
+      expect(statuses.mock.calls.length).toBeGreaterThan(5);
+      expect(send).toHaveBeenCalledTimes(1); // never re-sent, never re-signed
     });
-    expect(epoch.mock.calls[0]?.[0]).toEqual({ commitment: "finalized" });
-    expect(epoch.mock.calls[1]?.[0]).toEqual({ commitment: "finalized", minContextSlot: 7_100 });
+
+    it("a finalized status WITH an error ⇒ finalized, ok false (it consumed the nonce; nothing moved)", async () => {
+      const adapter = makeDurable();
+      const { conn } = primed(adapter);
+      vi.spyOn(conn, "getSignatureStatuses").mockResolvedValue(
+        status("finalized", { InstructionError: [1, "x"] }) as never,
+      );
+      const r = await adapter.sendUsdcDurable(
+        { toAddress: validBase58Address(), microAmount: 5n },
+        await lane(),
+      );
+      expect(r.final).toEqual({ status: "finalized", ok: false, slot: 9 });
+    });
+
+    it("a send that errors after recording ⇒ resolves unknown (never throws, never re-sends)", async () => {
+      const adapter = makeDurable();
+      const { conn } = primed(adapter);
+      vi.spyOn(conn, "sendRawTransaction").mockRejectedValue(new Error("socket hang up"));
+      const r = await adapter.sendUsdcDurable(
+        { toAddress: validBase58Address(), microAmount: 5n },
+        await lane(),
+      );
+      expect(r.final).toMatchObject({ status: "unknown", reason: "rpc_error" });
+    });
+
+    it("a hook that throws ⇒ nothing is sent; an insufficient balance throws before the hook", async () => {
+      const adapter = makeDurable();
+      const { send } = primed(adapter);
+      await expect(
+        adapter.sendUsdcDurable(
+          { toAddress: validBase58Address(), microAmount: 5n },
+          await lane(),
+          {
+            beforeBroadcast: () => {
+              throw new Error("disk full");
+            },
+          },
+        ),
+      ).rejects.toThrow("disk full");
+      expect(send).not.toHaveBeenCalled();
+      getAccountMock.mockResolvedValue({ amount: 1n });
+      const hook = vi.fn();
+      await expect(
+        adapter.sendUsdcDurable(
+          { toAddress: validBase58Address(), microAmount: 5n },
+          await lane(),
+          { beforeBroadcast: hook },
+        ),
+      ).rejects.toBeInstanceOf(InsufficientUsdcBalanceError);
+      expect(hook).not.toHaveBeenCalled();
+    });
   });
 
-  it("a found status is positive evidence whatever the window: landed, or failed", async () => {
-    await expect(
-      fresh({ heights: [900], status: { err: null, slot: 42 } }).adapter.getFreshSignatureVerdict(
-        ref,
-      ),
-    ).resolves.toEqual({ status: "landed", slot: 42, contextSlot: 5_000 });
-    await expect(
-      fresh({
-        heights: [900],
-        status: { err: { x: 1 }, slot: 42 },
-      }).adapter.getFreshSignatureVerdict(ref),
-    ).resolves.toEqual({ status: "failed", contextSlot: 5_000 });
+  describe("sendUsdcDurable — edges", () => {
+    it("an invalid recipient throws InvalidSolanaAddressError before anything is recorded or sent", async () => {
+      const adapter = makeDurable();
+      const hook = vi.fn();
+      await expect(
+        adapter.sendUsdcDurable(
+          { toAddress: "not-base58-0OIl", microAmount: 1n },
+          { account: (await nonceAddress()).toBase58(), nonceValue: NONCE },
+          { beforeBroadcast: hook },
+        ),
+      ).rejects.toBeInstanceOf(InvalidSolanaAddressError);
+      expect(hook).not.toHaveBeenCalled();
+    });
+
+    it("the default finality wait runs on the real clock and ends at its cap (unknown), one send", async () => {
+      const adapter = new Web3JsRpcAdapter({
+        rpcUrl: "https://api.devnet.solana.com",
+        identitySeed: ZERO_SEED,
+        finality: { pollMs: 5, maxWaitMs: 30 },
+      });
+      const conn = adapter.getConnection();
+      getAccountMock.mockResolvedValue({ amount: 10_000_000n });
+      const send = vi.spyOn(conn, "sendRawTransaction").mockResolvedValue("s");
+      vi.spyOn(conn, "getSignatureStatuses").mockResolvedValue(status("processed") as never);
+      const started = Date.now();
+      const r = await adapter.sendUsdcDurable(
+        { toAddress: validBase58Address(), microAmount: 1n },
+        { account: (await nonceAddress()).toBase58(), nonceValue: NONCE },
+      );
+      expect(r.final).toEqual({ status: "unknown", reason: "not_finalized" });
+      expect(Date.now() - started).toBeGreaterThanOrEqual(20);
+      expect(send).toHaveBeenCalledTimes(1);
+    });
+
+    it("concurrent lane preparations share ONE creation", async () => {
+      const adapter = makeDurable();
+      const conn = adapter.getConnection();
+      let created = false;
+      vi.spyOn(conn, "getAccountInfo").mockImplementation(async () =>
+        created
+          ? ({
+              data: nonceData(TREASURY, NONCE),
+              owner: SystemProgram.programId,
+              lamports: 1_447_680,
+              executable: false,
+              rentEpoch: 0,
+            } as never)
+          : null,
+      );
+      vi.spyOn(conn, "getMinimumBalanceForRentExemption").mockResolvedValue(1_447_680);
+      vi.spyOn(conn, "getLatestBlockhash").mockResolvedValue({
+        blockhash: validBlockhash(),
+        lastValidBlockHeight: 10,
+      });
+      const send = vi.spyOn(conn, "sendRawTransaction").mockImplementation(async () => {
+        created = true;
+        return "createSig";
+      });
+      vi.spyOn(conn, "getSignatureStatuses").mockResolvedValue(status("finalized") as never);
+      const [a, b] = await Promise.all([adapter.prepareNonceLane(), adapter.prepareNonceLane()]);
+      expect(a.status).toBe("ready");
+      expect(b.status).toBe("ready");
+      expect(send).toHaveBeenCalledTimes(1);
+    });
   });
 
-  it("a node that answers from behind minContextSlot, or any read failure ⇒ rpc_error, never dead", async () => {
-    const lag = await fresh({
-      heights: [150, 150],
-      slot: 5_000,
-      contextSlot: 4_999,
-    }).adapter.getFreshSignatureVerdict(ref);
-    expect(lag.status).toBe("rpc_error");
-    const adapter = makeAdapterForTx();
-    vi.spyOn(adapter.getConnection(), "getEpochInfo").mockRejectedValue(new Error("down"));
-    expect((await adapter.getFreshSignatureVerdict(ref)).status).toBe("rpc_error");
+  describe("broadcastNonceKill", () => {
+    it("is nonceAdvance ALONE over the same nonce value, recorded before it is sent, and deterministic", async () => {
+      const adapter = makeDurable();
+      const conn = adapter.getConnection();
+      const sends: Transaction[] = [];
+      vi.spyOn(conn, "sendRawTransaction").mockImplementation(async (raw) => {
+        sends.push(Transaction.from(raw as Buffer));
+        return "k";
+      });
+      const lane = { account: (await nonceAddress()).toBase58(), nonceValue: NONCE };
+      const recorded: string[] = [];
+      const a = await adapter.broadcastNonceKill(lane, {
+        beforeBroadcast: (tx) => {
+          expect(sends).toHaveLength(recorded.length);
+          recorded.push(tx.signature);
+        },
+      });
+      const b = await adapter.broadcastNonceKill(lane);
+      expect(a).toMatchObject({ sent: true, tx: { kind: "kill", nonceValue: NONCE } });
+      expect(sends[0]!.instructions).toHaveLength(1);
+      expect(SystemInstruction.decodeInstructionType(sends[0]!.instructions[0]!)).toBe(
+        "AdvanceNonceAccount",
+      );
+      expect(sends[0]!.recentBlockhash).toBe(NONCE);
+      expect(b.tx.signature).toBe(a.tx.signature); // the identical transaction
+    });
+
+    it("a rejected broadcast (e.g. the nonce already advanced) ⇒ sent false, never a throw", async () => {
+      const adapter = makeDurable();
+      vi.spyOn(adapter.getConnection(), "sendRawTransaction").mockRejectedValue(
+        new Error("Transaction simulation failed: Blockhash not found"),
+      );
+      const r = await adapter.broadcastNonceKill({
+        account: (await nonceAddress()).toBase58(),
+        nonceValue: NONCE,
+      });
+      expect(r.sent).toBe(false);
+      expect(r.detail).toMatch(/Blockhash not found/);
+    });
+  });
+
+  describe("getFinalizedStatus — the per-status confirmationStatus is the only finality signal", () => {
+    it("finalized ⇒ finalized (ok or not); confirmed or processed ⇒ unknown not_finalized", async () => {
+      for (const [cs, err, want] of [
+        ["finalized", null, { status: "finalized", ok: true, slot: 9 }],
+        ["finalized", { x: 1 }, { status: "finalized", ok: false, slot: 9 }],
+        ["confirmed", null, { status: "unknown", reason: "not_finalized" }],
+        ["processed", { x: 1 }, { status: "unknown", reason: "not_finalized" }],
+      ] as const) {
+        const adapter = makeDurable();
+        vi.spyOn(adapter.getConnection(), "getSignatureStatuses").mockResolvedValue(
+          status(cs, err) as never,
+        );
+        expect(await adapter.getFinalizedStatus("s")).toEqual(want);
+      }
+    });
+
+    it("the status cache first, history only for an absent one; absent in both ⇒ unknown absent", async () => {
+      const adapter = makeDurable();
+      const calls: unknown[] = [];
+      vi.spyOn(adapter.getConnection(), "getSignatureStatuses").mockImplementation(
+        async (_s, cfg) => {
+          calls.push(cfg);
+          return { context: { slot: 1 }, value: [null] } as never;
+        },
+      );
+      expect(await adapter.getFinalizedStatus("s")).toEqual({
+        status: "unknown",
+        reason: "absent",
+      });
+      expect(calls).toEqual([undefined, { searchTransactionHistory: true }]);
+    });
+
+    it("a failed or hung read ⇒ unknown rpc_error, never absence", async () => {
+      const adapter = makeDurable({ rpcTimeoutMs: 20 });
+      vi.spyOn(adapter.getConnection(), "getSignatureStatuses").mockReturnValue(
+        new Promise(() => {}) as never,
+      );
+      expect(await adapter.getFinalizedStatus("s")).toMatchObject({
+        status: "unknown",
+        reason: "rpc_error",
+      });
+      const b = makeDurable();
+      vi.spyOn(b.getConnection(), "getSignatureStatuses").mockRejectedValue(new Error("503"));
+      expect(await b.getFinalizedStatus("s")).toMatchObject({
+        status: "unknown",
+        reason: "rpc_error",
+      });
+    });
   });
 });
 
@@ -1560,10 +1822,7 @@ describe("Web3JsRpcAdapter.sendUsdcBatch", () => {
     expect(results[8]!.signature).toBeNull();
   });
 
-  it("the atomic multi-output P2P tx retries with a fresh blockhash on expiry (the conformance flake)", async () => {
-    // This is exactly the failure that reset the promotion clock: the 2-leg
-    // (worker + treasury) atomic P2P payment expired before confirmation. It must
-    // rebuild with a fresh blockhash and settle both legs in ONE new tx.
+  it("the atomic multi-output P2P tx is never re-signed: an expiry with nothing found fails the chunk (unknown), one blockhash", async () => {
     const adapter = makeAdapterForTx();
     const conn = adapter.getConnection();
     getAccountMock.mockImplementation(async () => ({ amount: 10_000_000n }));
@@ -1571,25 +1830,20 @@ describe("Web3JsRpcAdapter.sendUsdcBatch", () => {
       blockhash: validBlockhash(),
       lastValidBlockHeight: 200,
     });
-    // The chain confirms the first tx is dead before the adapter re-signs.
     chainSays(conn, { height: 250, slot: 2_000, statusSlot: 2_000, status: null });
-    vi.spyOn(conn, "sendRawTransaction")
-      .mockResolvedValueOnce("sigExpired")
-      .mockResolvedValue("sigFresh");
-    vi.spyOn(conn, "confirmTransaction")
-      .mockRejectedValueOnce(new Error("Signature sigExpired has expired: block height exceeded."))
-      .mockResolvedValue({ context: { slot: 210 }, value: { err: null } });
-
+    vi.spyOn(conn, "sendRawTransaction").mockResolvedValue("sigExpired");
+    vi.spyOn(conn, "confirmTransaction").mockRejectedValue(
+      new Error("Signature sigExpired has expired: block height exceeded."),
+    );
     const results = await adapter.sendUsdcBatch([
-      { toAddress: validBase58Address(), microAmount: 3000n }, // worker leg
-      { toAddress: validBase58Address(), microAmount: 158n }, // treasury fee leg
+      { toAddress: validBase58Address(), microAmount: 3000n },
+      { toAddress: validBase58Address(), microAmount: 158n },
     ]);
-    // Both legs settled atomically on the fresh signature.
-    expect(results).toEqual([
-      { ok: true, signature: "sigFresh", slot: 210, reason: null, earlierBroadcastsDead: true },
-      { ok: true, signature: "sigFresh", slot: 210, reason: null, earlierBroadcastsDead: true },
-    ]);
-    expect(blockhashSpy).toHaveBeenCalledTimes(2);
+    for (const r of results) {
+      expect(r.ok).toBe(false);
+      expect(r).not.toHaveProperty("earlierBroadcastsDead");
+    }
+    expect(blockhashSpy).toHaveBeenCalledTimes(1);
   });
 
   it("batch: a missing recipient ATA is created with the IDEMPOTENT instruction", async () => {
