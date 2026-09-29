@@ -48,10 +48,10 @@ import { InMemoryPlanStore } from "../types.js";
 import { RelayDelegationAdapter } from "../delegation-adapter.js";
 import { PlanDriverLocks } from "../plan-lease.js";
 
-type Fault = "ok" | "lost_request" | "lost_response" | "processing";
+type Fault = "ok" | "lost_request" | "lost_response" | "processing" | "admitted_402";
 type Outcome = "completes" | "fails";
 
-const FAULTS: Fault[] = ["ok", "lost_request", "lost_response", "processing"];
+const FAULTS: Fault[] = ["ok", "lost_request", "lost_response", "processing", "admitted_402"];
 const OUTCOMES: Outcome[] = ["completes", "fails"];
 const HOUR = 60 * 60 * 1000;
 const RESUME_AT = [1 * HOUR, 21 * HOUR, 25 * HOUR];
@@ -92,7 +92,13 @@ class RelayModel {
   readonly violations: string[] = [];
   private readonly keys = new Map<
     string,
-    { taskId: string; createdAt: number; processing: boolean }
+    {
+      taskId: string;
+      createdAt: number;
+      processing: boolean;
+      /** The terminal response a replay of this key returns. */
+      response: { status: number; body: Record<string, unknown> };
+    }
   >();
   private posts = 0;
 
@@ -138,13 +144,25 @@ class RelayModel {
       }
       if (rec == null) {
         const task = this.admit(key);
-        rec = { taskId: task.id, createdAt: now, processing: fault === "processing" };
+        // A post-admission refusal (the ranking loop's 402): the relay's #888
+        // seam records it as the key's outcome WITH the admitted task id.
+        const response =
+          fault === "admitted_402"
+            ? {
+                status: 402,
+                body: { error: "Payment required after admission", status: 402, task_id: task.id },
+              }
+            : {
+                status: 201,
+                body: { task_id: task.id, routing_choice: { selected_agent: "worker" } },
+              };
+        rec = { taskId: task.id, createdAt: now, processing: fault === "processing", response };
         this.keys.set(key, rec);
       }
       if (fault === "lost_response" || fault === "processing") {
         throw new TypeError("fetch failed: socket hang up");
       }
-      return new Response(JSON.stringify({ task_id: rec.taskId }), { status: 201 });
+      return new Response(JSON.stringify(rec.response.body), { status: rec.response.status });
     }
     const id = String(url).split("/").pop()!;
     const task = this.tasks.find((t) => t.id === id);
@@ -222,7 +240,7 @@ interface CellResult {
 async function runCell(
   faults: Fault[],
   outcome: Outcome,
-  resumeAt: number,
+  resumes: number[],
   archive: boolean,
   drivers: 1 | 2,
 ): Promise<CellResult> {
@@ -247,8 +265,8 @@ async function runCell(
 
   await drain(engine().executePlan(PLAN, deps));
 
-  // Later: one or two processes resume the goal's plan, twice, a minute apart.
-  for (const at of [resumeAt, resumeAt + 60_000]) {
+  // Later: one or two processes resume the goal's plan on the schedule.
+  for (const at of resumes) {
     vi.setSystemTime(T0 + at);
     const plan = store.getPlan(PLAN)!;
     if (plan.status !== PlanStatus.Active) break;
@@ -291,7 +309,13 @@ describe("#890 r4 submission-lifecycle harness", () => {
                 for (const drivers of [1, 2] as const) {
                   cells++;
                   const label = `${f1},${f2},${f3}/${outcome}/+${resumeAt / HOUR}h/x${drivers}`;
-                  const r = await runCell([f1, f2, f3], outcome, resumeAt, archive, drivers);
+                  const r = await runCell(
+                    [f1, f2, f3],
+                    outcome,
+                    [resumeAt, resumeAt + 60_000],
+                    archive,
+                    drivers,
+                  );
                   for (const v of r.violations) failures.push(`${label}: ${v}`);
                   // LIVENESS inside every window, with the archive.
                   if (
@@ -316,4 +340,40 @@ describe("#890 r4 submission-lifecycle harness", () => {
       ).toEqual([]);
     }, 600_000);
   }
+
+  // #890 r5: a rotation LATE in the first key's window. Task-1's answer is
+  // lost at T0; at +19 h a resume learns task-1 failed and rotates to key :1,
+  // whose answer is lost too. Key :1 was first used at +19 h, so at +21 h it
+  // is deep inside its own relay window: the resume must re-post it, not hold
+  // it on key :0's clock.
+  const TAILS: Array<[Fault, Fault]> = [];
+  for (const a of ["lost_request", "lost_response", "processing"] as Fault[]) {
+    for (const b of ["lost_request", "lost_response", "processing"] as Fault[]) TAILS.push([a, b]);
+  }
+  it("a rotation late in the window × lost answers on the new key × archive × drivers", async () => {
+    const failures: string[] = [];
+    for (const [a, b] of TAILS) {
+      for (const archive of [false, true]) {
+        for (const drivers of [1, 2] as const) {
+          const label = `late ${a},${b}/archive ${archive}/x${drivers}`;
+          const r = await runCell(
+            ["lost_response", "lost_request", "lost_request", "ok", a, b],
+            "fails",
+            [19 * HOUR, 21 * HOUR, 41 * HOUR],
+            archive,
+            drivers,
+          );
+          for (const v of r.violations) failures.push(`${label}: ${v}`);
+          if (archive && r.status !== StepStatus.Completed) {
+            failures.push(`${label}: LIVENESS step ${r.status}, tasks ${r.tasks.length}`);
+          }
+        }
+      }
+    }
+    const tally = (tag: string) => failures.filter((f) => f.includes(tag)).length;
+    expect(
+      failures.slice(0, 30),
+      `${failures.length} failing: ${tally("DOUBLE PAY")} double-pay, ${tally("WRONG RECEIPT")} wrong-receipt, ${tally("LIVENESS")} liveness`,
+    ).toEqual([]);
+  }, 600_000);
 });

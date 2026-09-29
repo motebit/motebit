@@ -468,3 +468,66 @@ describe("#890 r4 T4: the http adapter re-posts a held step through the plan eng
     expect(relay.keys).toEqual(["plan-step:plan-1:step-1:0"]);
   });
 });
+
+describe("#890 r5: the http adapter adopts a named task and rotates only on the routed worker's failure", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  it("a post-admission 402 naming task-1 is adoption: no rotation, task-1 settles", async () => {
+    const keys: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        if (init?.method === "POST") {
+          keys.push((init.headers as Record<string, string>)["Idempotency-Key"]!);
+          return new Response(JSON.stringify({ error: "402", task_id: "task-1" }), { status: 402 });
+        }
+        return new Response(
+          JSON.stringify({ receipt: receipt(String(url).split("/").pop()!, "completed") }),
+          { status: 200 },
+        );
+      }),
+    );
+    const p = makeAdapter().delegateStep(step, TIMEOUT);
+    await vi.advanceTimersByTimeAsync(TIMEOUT);
+    const r = await p;
+    expect(r.task_id).toBe("task-1");
+    expect(new Set(keys)).toEqual(new Set(["plan-step:plan-1:step-1:0"]));
+  });
+
+  it("a failed receipt signed by someone other than the routed worker is not evidence: held, one key", async () => {
+    const relay = fakeRelay();
+    relay.answerWith((id) => ({
+      status: 200,
+      body: { task: { status: "failed" }, receipt: receipt(id, "failed", "evil-worker") },
+    }));
+    vi.stubGlobal("fetch", relay.fetchMock);
+    const p = makeAdapter().delegateStep(step, TIMEOUT);
+    p.catch(() => {});
+    await vi.advanceTimersByTimeAsync(3 * TIMEOUT);
+    await expect(p).rejects.toBeInstanceOf(DelegationUndeterminedError);
+    expect(new Set(relay.keys).size).toBe(1);
+  });
+
+  it("a receipt bound to another task settles nothing: held, one key", async () => {
+    const relay = fakeRelay();
+    relay.answerWith(() => ({
+      status: 200,
+      body: {
+        task: { status: "failed" },
+        receipt: receipt("task-elsewhere", "failed", "worker-task-1"),
+      },
+    }));
+    vi.stubGlobal("fetch", relay.fetchMock);
+    const p = makeAdapter().delegateStep(step, TIMEOUT);
+    p.catch(() => {});
+    await vi.advanceTimersByTimeAsync(3 * TIMEOUT);
+    await expect(p).rejects.toBeInstanceOf(DelegationUndeterminedError);
+    expect(new Set(relay.keys).size).toBe(1);
+  });
+});
