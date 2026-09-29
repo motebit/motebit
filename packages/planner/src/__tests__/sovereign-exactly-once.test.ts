@@ -67,7 +67,9 @@ function receipt(workerId: string, overrides?: Partial<ExecutionReceipt>): Execu
 /** What a worker does when `motebit_task` reaches it. */
 type WorkerBehavior =
   | { kind: "receipt"; receipt: ExecutionReceipt }
-  | { kind: "hang" } // never answers until aborted — a timeout
+  // never answers until aborted — a timeout. `sessionDelayMs` holds the
+  // session handshake back so the abort lands BEFORE `motebit_task` is sent.
+  | { kind: "hang"; sessionDelayMs?: number }
   | { kind: "text"; text: string } // an answer that is not a receipt
   | { kind: "no_result" } // a JSON-RPC answer with no result
   | { kind: "throw" }; // transport error on tools/call
@@ -75,6 +77,21 @@ type WorkerBehavior =
 interface World {
   fetchLog: string[];
   toolCalls: string[];
+}
+
+/**
+ * A request that never answers, settled only by its abort signal — the way a
+ * real `fetch` behaves. An ALREADY-aborted signal rejects at once: its
+ * `abort` event has fired and will not fire again, so a listener alone would
+ * wait forever. The adapter arms its task timeout before it mints the token
+ * and opens the session, so under load the abort can land first.
+ */
+function pendingUntilAborted(signal: AbortSignal | null | undefined): Promise<Response> {
+  return new Promise((_resolve, reject) => {
+    const abort = (): void => reject(new Error("aborted"));
+    if (signal?.aborted === true) return abort();
+    signal?.addEventListener("abort", abort, { once: true });
+  });
 }
 
 function stubNetwork(workers: Record<string, WorkerBehavior>, world: World): void {
@@ -113,7 +130,12 @@ function stubNetwork(workers: Record<string, WorkerBehavior>, world: World): voi
         id?: number;
       };
       if (body.method === "initialize") {
-        return Promise.resolve(json({ id: body.id, result: {} }, { "mcp-session-id": "s" }));
+        const answer = json({ id: body.id, result: {} }, { "mcp-session-id": "s" });
+        const behavior = workers[worker.id]!;
+        const delay = behavior.kind === "hang" ? (behavior.sessionDelayMs ?? 0) : 0;
+        return delay > 0
+          ? new Promise((r) => setTimeout(() => r(answer), delay))
+          : Promise.resolve(answer);
       }
       if (body.method === "notifications/initialized") return Promise.resolve(json({}));
       // tools/call
@@ -136,9 +158,7 @@ function stubNetwork(workers: Record<string, WorkerBehavior>, world: World): voi
         case "throw":
           return Promise.reject(new Error("socket hang up"));
         case "hang":
-          return new Promise((_resolve, reject) => {
-            init?.signal?.addEventListener("abort", () => reject(new Error("aborted")));
-          });
+          return pendingUntilAborted(init?.signal);
       }
     }),
   );
@@ -340,6 +360,9 @@ describe("#887 payment — a thrown send is confirmed onchain before it counts a
 describe("#887 execution — paid, then no verifiable result ⇒ stop, never pay another worker", () => {
   it.each<[string, WorkerBehavior]>([
     ["the MCP call times out", { kind: "hang" }],
+    // The 30 ms task timeout fires during a 60 ms session handshake, so the
+    // abort lands before `motebit_task` is sent (a loaded machine's order).
+    ["the task times out before motebit_task is sent", { kind: "hang", sessionDelayMs: 60 }],
     ["the worker answers with no result", { kind: "no_result" }],
     [
       "the worker answers text that is not a receipt",
