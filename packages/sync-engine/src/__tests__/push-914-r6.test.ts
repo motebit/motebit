@@ -15,7 +15,12 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { InMemoryEventStore } from "@motebit/event-log";
 import { EventType } from "@motebit/sdk";
 import type { EventLogEntry } from "@motebit/sdk";
-import { SyncEngine, HttpEventStoreAdapter, WebSocketEventStoreAdapter } from "../index.js";
+import {
+  SyncEngine,
+  HttpEventStoreAdapter,
+  WebSocketEventStoreAdapter,
+  liveAdapter,
+} from "../index.js";
 import { FakeRelay } from "./fake-relay.js";
 import { onReactNative, type RnLink } from "./rn-fetch.js";
 
@@ -191,81 +196,115 @@ describe("#914 r6: after an outage, delivery resumes within about one cycle", ()
     expect(lag).toBeLessThan(700);
   }, 30_000);
 
-  it("a cycle the watchdog abandons takes its request with it: the next cycle's push is not queued behind it", async () => {
+  it("a cycle the watchdog abandons takes its requests with it — forwarded through liveAdapter", async () => {
+    // A transport that reports no live work (it cannot say), so the watchdog
+    // abandons the stalled cycle: its requests must be ended with it.
+    const local = new InMemoryEventStore();
+    await write(local, "a1");
+    let aborted = 0;
+    const stuck = {
+      append: () => new Promise<void>(() => {}),
+      query: () => Promise.resolve([]),
+      getLatestClock: () => Promise.resolve(0),
+      tombstone: () => Promise.resolve(),
+      abortInFlight: () => {
+        aborted++;
+      },
+    };
+    const engine = new SyncEngine(local, MID, { stall_timeout_ms: 100 });
+    engine.connectRemote(liveAdapter(() => stuck));
+    await engine.sync(); // abandoned
+    expect(engine.getStatus()).toBe("error");
+    expect(aborted).toBe(1);
+  });
+
+  it("a request slower than its deadline is live work: the watchdog never abandons it, and it completes", async () => {
     const relay = new FakeRelay();
-    let hang = true;
-    vi.stubGlobal("fetch", (input: string | URL, init?: RequestInit) => {
-      if (hang && String(input).includes("/push")) {
-        hang = false;
-        return new Promise<Response>(() => {}); // ignores its signal too
-      }
+    let release!: () => void;
+    const held = new Promise<void>((r) => (release = r));
+    vi.stubGlobal("fetch", async (input: string | URL, init?: RequestInit) => {
+      if (String(input).includes("/push")) await held; // the relay is slow to answer
       return relay.fetch(input, init);
     });
     const local = new InMemoryEventStore();
-    await write(local, "a1");
+    await write(local, "slow-1");
     const engine = new SyncEngine(local, MID, { stall_timeout_ms: 100 });
-    engine.connectRemote(http(relay, 10_000)); // a long bound: only the watchdog ends it
-    await engine.sync(); // abandoned
-    expect(engine.getStatus()).toBe("error");
-    const started = Date.now();
-    await engine.sync();
+    engine.connectRemote(http(relay, 20));
+    const done = engine.sync();
+    await new Promise((r) => setTimeout(r, 500)); // 25 deadlines, 5 stall windows
+    release();
+    await done;
     expect(engine.getStatus()).toBe("idle");
-    expect(relay.heldIds(MID)).toEqual(["a1"]);
-    expect(Date.now() - started).toBeLessThan(1_000);
+    expect(relay.heldIds(MID)).toEqual(["slow-1"]);
+    expect(engine.getCursor().last_version_clock).toBe(1);
   });
 });
 
-// ---------------------------------------------------------------------------
-// 3. The stretches reset on success; a pull stretches at most once per call
-// ---------------------------------------------------------------------------
-
-describe("#914 r6: deadline stretches reset on success; one pull stretch per call", () => {
+describe("#914 r7: a deadline changes adaptation only — it never kills a request that could complete", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
   });
 
-  it("the pull stretch resets after a successful page: the next page is first tried at the base deadline", async () => {
+  it("a push whose answer takes 5 deadlines completes as ONE attempt (the relay answers the probe just as slowly)", async () => {
     const relay = new FakeRelay();
-    for (let i = 1; i <= 2; i++) relay.ingest(entry(`r${i}`, i));
-    const link: RnLink = { msPerEvent: 60, pushMs: 0, log: [] }; // one event: 1.5× the 40 ms bound
-    onReactNative(relay, link);
-    const engine = new SyncEngine(new InMemoryEventStore(), MID);
-    engine.connectRemote(http(relay, 40));
-    for (let s = 0; s < 4; s++) await engine.sync();
-    const pulls = link.log.filter((e) => e.path.endsWith("/pull"));
-    const firstLoad = pulls.findIndex((e) => e.outcome === "load");
-    expect(firstLoad).toBeGreaterThanOrEqual(0);
-    // After it, a request is again abandoned at the BASE deadline (~40 ms), not a stretched one.
-    const later = pulls.slice(firstLoad + 1).filter((e) => e.outcome === "abort");
-    expect(later.some((e) => e.end! - e.start < 60)).toBe(true);
-  });
-
-  it("the push stretch resets after an acknowledged push: the next push is first tried at the base deadline", async () => {
-    const relay = new FakeRelay();
-    const link: RnLink = { msPerEvent: 0, pushMs: 60, log: [] }; // each push: 1.5× the 40 ms bound
+    // Every answer (the push and the clock probe alike): 200 ms vs a 40 ms deadline.
+    const link: RnLink = { msPerEvent: 0, pushMs: 200, otherMs: 200, log: [] };
     onReactNative(relay, link);
     const local = new InMemoryEventStore();
     await write(local, "x1");
     const engine = new SyncEngine(local, MID);
     engine.connectRemote(http(relay, 40));
-    await engine.sync(); // x1: base times out, the relay answers, the stretched retry lands
-    await write(local, "x2");
-    await engine.sync(); // x2: tried at the base deadline again → one more abort
+    await engine.sync();
+    expect(relay.heldIds(MID)).toEqual(["x1"]);
     const pushes = link.log.filter((e) => e.path.endsWith("/push"));
-    expect(pushes.filter((e) => e.outcome === "abort")).toHaveLength(2);
-    expect(relay.heldIds(MID).sort()).toEqual(["x1", "x2"]);
+    expect(pushes).toHaveLength(1);
+    expect(pushes[0]!.outcome).toBe("load");
   });
 
-  it("a pull stretches at most once per call: a page needing 4× fails this sync and lands the next", async () => {
+  it("a slow push while the relay answers its probe at once is hedged, bounded, and still completes", async () => {
+    const relay = new FakeRelay();
+    const link: RnLink = { msPerEvent: 0, pushMs: 200, otherMs: 0, log: [] };
+    onReactNative(relay, link);
+    const local = new InMemoryEventStore();
+    await write(local, "h1");
+    const engine = new SyncEngine(local, MID);
+    engine.connectRemote(http(relay, 40));
+    await engine.sync();
+    expect(engine.getStatus()).toBe("idle");
+    expect(relay.heldIds(MID)).toEqual(["h1"]);
+    const pushes = link.log.filter((e) => e.path.endsWith("/push"));
+    expect(pushes.length).toBeGreaterThan(1); // the probe was evidence: hedged
+    expect(pushes.length).toBeLessThanOrEqual(8); // MAX_ATTEMPTS
+    expect(pushes.some((p) => p.outcome === "load")).toBe(true);
+  });
+
+  it("a pull page that takes 4 deadlines completes in this sync — never cut off", async () => {
     const relay = new FakeRelay();
     relay.ingest(entry("s1", 1));
-    onReactNative(relay, { msPerEvent: 130, pushMs: 0, log: [] }); // needs 4× the 40 ms bound
+    const link: RnLink = { msPerEvent: 160, pushMs: 0, log: [] }; // 160 ms vs a 40 ms deadline
+    onReactNative(relay, link);
     const engine = new SyncEngine(new InMemoryEventStore(), MID);
     engine.connectRemote(http(relay, 40));
-    const first = await engine.sync();
-    expect(first.pulled).toBe(0);
-    expect(engine.getStatus()).toBe("error");
-    const second = await engine.sync();
-    expect(second.pulled).toBe(1);
+    const r = await engine.sync();
+    expect(r.pulled).toBe(1);
+    expect(engine.getStatus()).toBe("idle");
+  });
+
+  it("React Native's AbortController carries no reason: an owner abort is classified by the adapter's own flag, never as a timeout", async () => {
+    // abort-controller@3.0.0 (react-native): `signal.reason` is undefined.
+    const relay = new FakeRelay();
+    const link: RnLink = { msPerEvent: 0, pushMs: 10_000, log: [] };
+    onReactNative(relay, link);
+    const local = new InMemoryEventStore();
+    await write(local, "ab1");
+    const adapter = http(relay, 40);
+    const failure = adapter.append((await local.query({}))[0]!).then(
+      () => "resolved",
+      (err: unknown) => (err instanceof Error ? err.message : String(err)),
+    );
+    await new Promise((r) => setTimeout(r, 20));
+    adapter.abortInFlight();
+    const msg = await failure;
+    expect(msg).toMatch(/abandoned with its sync cycle/);
   });
 });

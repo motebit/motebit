@@ -296,9 +296,10 @@ describe("#914 r4: the pull page size grows back after a good page", () => {
         requestTimeoutMs: 50,
       }),
     );
+    await engine.sync(); // the full page misses its deadline: the next asks half
+    await engine.sync(); // the half page arrives in time: the size doubles back
     await engine.sync();
-    await engine.sync();
-    expect(limits).toEqual([null, "500", null]); // back to the full page
+    expect(limits).toEqual([null, "500", "500", null]); // back to the full page
   });
 });
 

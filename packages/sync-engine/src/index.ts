@@ -4,6 +4,7 @@ import {
   isSeqPullSource,
   pullBySeq,
   resolveSeqCursorStore,
+  relayHolds,
   warnSkippedSyncEvent,
   type SkippedSyncEvent,
   type SyncSeqCursorStore,
@@ -138,6 +139,15 @@ export interface SyncConfig {
    * never loses an event. Default 60 000 ms.
    */
   stall_timeout_ms?: number;
+  /**
+   * How long a sync waits for the answers to its pushes before it ends
+   * (#914 round 7). A push still unanswered then is NOT failed: it stays in
+   * flight, its acknowledgment moves the push cursor whenever it arrives —
+   * in a later sync or between syncs — and no later sync sends it again
+   * while it is in flight. The wait only frees the sync to push what is
+   * appended meanwhile. Default: `sync_interval_ms`.
+   */
+  push_patience_ms?: number;
 }
 
 const DEFAULT_STALL_TIMEOUT_MS = 60_000;
@@ -211,6 +221,14 @@ const DEFAULT_SYNC_CONFIG: SyncConfig = {
   retry_backoff_ms: 1_000,
 };
 
+/** What one pull brought. */
+interface PullOutcome {
+  count: number;
+  events: EventLogEntry[];
+  skipped?: SkippedSyncEvent[];
+  encryptedOnRawPath?: number;
+}
+
 // === Sync Status ===
 
 export type SyncStatus = "idle" | "syncing" | "error" | "offline";
@@ -265,6 +283,23 @@ export class SyncEngine {
    * clock; pruned as the push cursor passes them; cleared with the remote.
    */
   private knownRemote = new Map<string, number>();
+  /**
+   * Pushes whose answer has not arrived, per push-cursor key, across syncs
+   * (#914 round 7): a later sync joins one rather than sending it again.
+   */
+  private outstanding = new Map<string, Map<string, Promise<void>>>();
+  /** Acknowledged events above the push cursor, per push-cursor key, not yet folded into it. */
+  private ackedAbove = new Map<string, Set<string>>();
+  /**
+   * EVERY local event above the push cursor when last read, in push order,
+   * per key — what an acknowledgment arriving between syncs folds against.
+   * An event appended after the read carries a higher clock (the atomic
+   * clock precondition), so the cursor can never pass it from this list.
+   */
+  private aboveCursor = new Map<string, EventLogEntry[]>();
+  /** Push-cursor writes, one at a time, in order. */
+  private cursorChain: Promise<void> = Promise.resolve();
+  private advanceQueued = new Set<string>();
   /** The sync in progress: a second call joins it rather than racing it. */
   private running: Promise<SyncResult> | null = null;
   /** The current cycle; bumped when one is abandoned, so its late status writes are ignored. */
@@ -372,6 +407,14 @@ export class SyncEngine {
           timer = setTimeout(check, stallMs - idle);
           return;
         }
+        // Work still on the wire, within its own deadline, is alive — not a
+        // stall — however long it takes (#914 round 7). Only the transport
+        // can say: ask it.
+        if ((remote as { hasLiveWork?: () => boolean } | null)?.hasLiveWork?.() === true) {
+          this.lastProgressAt = Date.now();
+          timer = setTimeout(check, stallMs);
+          return;
+        }
         resolve({ pushed: 0, pulled: 0, conflicts: [] });
         if (this.cycle === cycle) {
           this.cycle++; // the abandoned cycle's late status writes are ignored
@@ -425,8 +468,15 @@ export class SyncEngine {
       // Each page's events are noted as held by the relay as the page is
       // applied (never pushed back, even by a concurrent cycle), and each
       // page is progress to the watchdog.
-      const pulled = await this.pullEvents();
+      const pulledNow = await this.awaitPull(remote);
       this.progress();
+      if (pulledNow === null) {
+        // The pull is still arriving (a slow relay): it continues, its pages
+        // land as they come, and a later sync reports it (#914 round 7).
+        this.setCycleStatus(cycle, "idle");
+        return { pushed: pushed.count, pulled: 0, conflicts: [] };
+      }
+      const pulled = pulledNow;
 
       // Detect conflicts
       const conflicts = this.detectConflicts(pushed.events, pulled.events);
@@ -486,12 +536,15 @@ export class SyncEngine {
   // === Internal ===
 
   /**
-   * Push every local event above the push cursor, `batch_size` at a time, at
-   * most MAX_PUSH_BATCHES_PER_SYNC batches (#914). After each batch the
-   * cursor moves to `ackedPushCursor` — only as far as the relay
-   * ACKNOWLEDGED (an `append` that resolved) — and is persisted. A failed
-   * append ends the push once the cursor is saved, and is thrown. The relay
-   * dedups by event_id, so a re-push is harmless.
+   * Push every local event above the push cursor, at most
+   * MAX_PUSH_BATCHES_PER_SYNC × `batch_size` of them, handed to the adapter
+   * together (#914 round 7). Each acknowledgment (an `append` that resolved)
+   * moves the cursor through `advance` — only past whole clock groups the
+   * relay ACKNOWLEDGED, persisted — whenever it arrives, in this sync or
+   * after it. A push still in flight from an earlier sync is joined, never
+   * sent again. The sync waits for the answers only as long as `patient`
+   * allows; a failure that arrived by then is thrown. The relay dedups by
+   * event_id, so a re-push is harmless.
    *
    * The local read has no `limit`: a store's `limit` is not clock-ordered in
    * every store (IndexedDB returns by timestamp, the in-memory store by
@@ -508,7 +561,8 @@ export class SyncEngine {
   ): Promise<{ count: number; events: EventLogEntry[] }> {
     const motebitId = this.cursor.motebit_id;
     const key = pushCursorKey(remote, motebitId);
-    let cursor = (await this.seqCursorStore.getSyncSeqCursor(key)) ?? 0;
+    await this.cursorChain; // an acknowledgment being folded in lands first
+    const cursor = (await this.seqCursorStore.getSyncSeqCursor(key)) ?? 0;
     this.cursor.last_version_clock = cursor;
 
     const pending = (
@@ -516,58 +570,202 @@ export class SyncEngine {
     )
       .filter((e) => e.motebit_id === motebitId && e.version_clock > cursor)
       .sort(byClockThenId);
+    this.aboveCursor.set(key, pending);
 
-    const done = new Set<string>();
+    let inFlight = this.outstanding.get(key);
+    if (!inFlight) this.outstanding.set(key, (inFlight = new Map<string, Promise<void>>()));
+    let acked = this.ackedAbove.get(key);
+    if (!acked) this.ackedAbove.set(key, (acked = new Set<string>()));
+    // A push left in flight by an earlier sync is joined, never sent again —
+    // when the transport reports its live work (`hasLiveWork`): such a
+    // transport settles every push it holds (an answer, a close, a dead
+    // socket, a silent request's cap). A transport that cannot say may hold
+    // one forever; its pushes are sent again — harmless, the relay dedups.
+    if (
+      inFlight.size > 0 &&
+      typeof (remote as { hasLiveWork?: () => boolean }).hasLiveWork !== "function"
+    ) {
+      inFlight.clear();
+    }
+
+    // Every batch of this sync is handed to the adapter AT ONCE (#914 round
+    // 7): the adapter decides how much goes on the wire together (the socket
+    // pipelines frames, HTTP overlaps a slow relay's answers), so a batch
+    // never waits on the previous batch's answer.
+    const mine: Array<{ e: EventLogEntry; acked: Promise<void> }> = [];
+    const window = pending.slice(0, MAX_PUSH_BATCHES_PER_SYNC * this.config.batch_size);
+    for (const e of window) {
+      if (
+        acked.has(e.event_id) ||
+        this.knownRemote.has(e.event_id) ||
+        relayHolds(this.localStore, e.event_id)
+      ) {
+        acked.add(e.event_id);
+        continue;
+      }
+      let p = inFlight.get(e.event_id);
+      if (!p) {
+        const sent = remote.append(e);
+        p = sent;
+        inFlight.set(e.event_id, sent);
+        const ackedSet = acked;
+        const flying = inFlight;
+        sent.then(
+          () => {
+            ackedSet.add(e.event_id);
+            this.progress();
+            this.queueAdvance(key);
+          },
+          () => {
+            this.progress();
+          },
+        );
+        void sent
+          .finally(() => {
+            if (flying.get(e.event_id) === sent) flying.delete(e.event_id);
+          })
+          .catch(() => {});
+      }
+      mine.push({ e, acked: p });
+    }
+
+    // Wait for the answers — but not past the patience: an answer still
+    // coming then is not a failure, and it moves the cursor when it arrives.
+    // Past the patience, only a transport that reports live work lets the
+    // sync end early; one that cannot say is waited on (the stall watchdog
+    // governs it).
+    const waited = await this.patient(Promise.allSettled(mine.map((m) => m.acked)), remote);
+    const results = waited === null ? null : waited.value;
+
+    await this.advance(key); // a cursor write that fails fails this sync
+
     const pushed: EventLogEntry[] = [];
     let failure: Error | null = null;
-    for (
-      let batch = 0, at = 0;
-      batch < MAX_PUSH_BATCHES_PER_SYNC && at < pending.length && failure === null;
-      batch++, at += this.config.batch_size
-    ) {
-      const send: EventLogEntry[] = [];
-      for (const e of pending.slice(at, at + this.config.batch_size)) {
-        if (this.knownRemote.has(e.event_id)) done.add(e.event_id);
-        else send.push(e);
-      }
-      // One append per event, all started together: the adapter decides how
-      // many go on the wire at once (the socket coalesces them into a frame;
-      // HTTP bounds its concurrent requests).
-      const settled = await Promise.allSettled(
-        send.map((e) => remote.append(e).finally(() => this.progress())),
-      );
-      for (let i = 0; i < settled.length; i++) {
-        const r = settled[i]!;
-        const e = send[i]!;
-        if (r.status === "fulfilled") {
-          done.add(e.event_id);
-          pushed.push(e);
-        } else if (failure === null) {
+    if (results) {
+      for (let i = 0; i < results.length; i++) {
+        const r = results[i]!;
+        if (r.status === "fulfilled") pushed.push(mine[i]!.e);
+        else if (failure === null) {
           const reason: unknown = r.reason;
           failure =
             reason instanceof Error ? reason : new Error("sync push failed", { cause: reason });
         }
       }
-      const next = ackedPushCursor(cursor, pending, done);
-      if (next > cursor) {
-        await this.seqCursorStore.setSyncSeqCursor(key, next);
-        cursor = next;
-        this.cursor.last_version_clock = cursor;
-      }
-    }
-    for (const [id, clock] of this.knownRemote) {
-      if (clock <= cursor) this.knownRemote.delete(id);
+    } else {
+      for (const m of mine) if (acked.has(m.e.event_id)) pushed.push(m.e);
     }
     if (failure !== null) throw failure;
     return { count: pushed.length, events: pushed };
   }
 
-  private async pullEvents(): Promise<{
-    count: number;
-    events: EventLogEntry[];
-    skipped?: SkippedSyncEvent[];
-    encryptedOnRawPath?: number;
-  }> {
+  /**
+   * `p`'s outcome — or null once the patience has passed while the
+   * transport reports live work (#914 round 7). A transport that cannot say
+   * is waited on; the stall watchdog governs it.
+   */
+  private patient<T>(p: Promise<T>, remote: EventStoreAdapter): Promise<{ value: T } | null> {
+    const patience = this.config.push_patience_ms ?? this.config.sync_interval_ms;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    return Promise.race([
+      p.then((value) => ({ value })),
+      new Promise<null>((resolve) => {
+        const look = (): void => {
+          if ((remote as { hasLiveWork?: () => boolean }).hasLiveWork?.() === true) resolve(null);
+          else timer = setTimeout(look, patience);
+        };
+        timer = setTimeout(look, patience);
+      }),
+    ]).finally(() => {
+      if (timer) clearTimeout(timer);
+    });
+  }
+
+  /**
+   * The pull still running from an earlier sync: joined, never doubled. A
+   * sync waits for it only as long as `patient` allows.
+   */
+  private pendingPull: { remote: EventStoreAdapter; promise: Promise<PullOutcome> } | null = null;
+
+  private async awaitPull(remote: EventStoreAdapter): Promise<PullOutcome | null> {
+    let p = this.pendingPull;
+    if (!p || p.remote !== remote) {
+      const promise = this.pullEvents();
+      promise.catch(() => {}); // consumed below, or by a later sync
+      p = this.pendingPull = { remote, promise };
+    }
+    const mine = p;
+    const settled = mine.promise.catch((err: unknown) => {
+      if (this.pendingPull === mine) this.pendingPull = null;
+      throw err;
+    });
+    const r = await this.patient(settled, remote);
+    if (r === null) return null;
+    if (this.pendingPull === mine) this.pendingPull = null;
+    return r.value;
+  }
+
+  /** Fold acknowledgments into the push cursor soon — one pending fold per key. */
+  private queueAdvance(key: string): void {
+    if (this.advanceQueued.has(key)) return;
+    this.advanceQueued.add(key);
+    void Promise.resolve()
+      .then(() => {
+        this.advanceQueued.delete(key);
+        return this.advance(key);
+      })
+      .catch(() => {
+        // A failed cursor write loses nothing: the next sync re-pushes.
+      });
+  }
+
+  /**
+   * Move the push cursor for `key` past every whole clock group, in push
+   * order, whose every event is acknowledged or held by the relay
+   * (`ackedPushCursor`), and persist it. Serialized: writes never interleave.
+   */
+  private advance(key: string): Promise<void> {
+    const run = this.cursorChain.then(async () => {
+      const list = this.aboveCursor.get(key);
+      const acked = this.ackedAbove.get(key);
+      if (!list || !acked) return;
+      const cursor = (await this.seqCursorStore.getSyncSeqCursor(key)) ?? 0;
+      let from = 0;
+      while (from < list.length && list[from]!.version_clock <= cursor) from++;
+      const above = from > 0 ? list.slice(from) : list;
+      const done = new Set<string>();
+      for (const e of above) {
+        if (
+          acked.has(e.event_id) ||
+          this.knownRemote.has(e.event_id) ||
+          relayHolds(this.localStore, e.event_id)
+        ) {
+          done.add(e.event_id);
+        } else break; // the cursor stops at the first gap
+      }
+      const next = ackedPushCursor(cursor, above, done);
+      if (next > cursor) {
+        // Persisted FIRST: a write that fails forgets nothing, so the next
+        // fold (or this sync's own) tries again.
+        await this.seqCursorStore.setSyncSeqCursor(key, next);
+        let passed = 0;
+        while (passed < above.length && above[passed]!.version_clock <= next) {
+          acked.delete(above[passed]!.event_id);
+          passed++;
+        }
+        this.aboveCursor.set(key, above.slice(passed));
+        if (this.remoteStore && pushCursorKey(this.remoteStore, this.cursor.motebit_id) === key) {
+          this.cursor.last_version_clock = next;
+        }
+        for (const [id, clock] of this.knownRemote) {
+          if (clock <= next) this.knownRemote.delete(id);
+        }
+      }
+    });
+    this.cursorChain = run.catch(() => {});
+    return run;
+  }
+
+  private async pullEvents(): Promise<PullOutcome> {
     if (this.remoteStore === null) return { count: 0, events: [] };
 
     // #868: a remote that pulls by the relay ingest sequence is read by seq —

@@ -1,3 +1,4 @@
+import { noteSample, perEventMs, type LinkSample } from "./link-estimate.js";
 import type { EventLogEntry } from "@motebit/sdk";
 import type { EventStoreAdapter, EventFilter } from "@motebit/event-log";
 import type { CredentialSource, CredentialRequest } from "./credential-source.js";
@@ -126,6 +127,8 @@ const PUSH_WINDOW_MS = 10_000;
  * appended together (the sync engine's `batch_size`) goes out as one frame.
  */
 const PUSH_LINGER_MS = 15;
+/** How far a frame's ack deadline stretches before its socket may be judged dead (× the base). */
+const MAX_ACK_STRETCH = 64;
 /** Full frames acked at the known-good frame size before a larger one is tried again. */
 const PUSH_CEILING_PROBE_AFTER = 8;
 const PUSH_LINGER_MAX_MS = 100;
@@ -135,7 +138,38 @@ interface FrameState {
   limit: number;
   ceiling: number;
   fullAtCeiling: number;
+  /** The relay echoes `push_id` in its acks, so frames may overlap. */
+  echoes: boolean;
+  /** Recent acks: frame size and send→ack time (#914 round 7). */
+  samples: LinkSample[];
 }
+
+/**
+ * A frame's transmission is kept within this many ack deadlines by the
+ * per-event estimate — far inside the 64 of silence that judge a socket dead.
+ */
+const FRAME_BUDGET_DEADLINES = 4;
+
+/** A push frame on the wire. */
+interface InFlightFrame {
+  id: string;
+  socket: WebSocket;
+  items: PendingPush[];
+  timer: ReturnType<typeof setTimeout>;
+  /** When the frame was sent. */
+  sentAt: number;
+  /** The frame's current ack deadline (ms from its send); stretched, never enforced by a kill. */
+  deadlineMs: number;
+}
+
+/**
+ * The catch-up running (or queued last) per local store and relay stream —
+ * see `catchUp`. Keyed by the store object, so it goes with the store.
+ */
+const sharedCatchUps = new WeakMap<object, Map<string, Promise<void>>>();
+
+/** The most push frames in flight at once, once the relay is seen echoing `push_id`. */
+const PUSH_FRAME_WINDOW = 16;
 /** Frame state per (socket URL, device id), shared by every adapter in the process. */
 const sharedFrameStates = new Map<string, FrameState>();
 
@@ -263,15 +297,15 @@ export class WebSocketEventStoreAdapter implements EventStoreAdapter {
   private connected = false;
   /** Appended events not yet in a frame (queued while offline, or behind the frame in flight). */
   private outbox: PendingPush[] = [];
-  /** The one push frame awaiting its `ack`, and the socket it went out on. */
   /**
-   * The most events the next frame carries (#914 round 4). A frame not acked
-   * in time is re-sent at half its size (down to 1), so a slow link — where
-   * a full frame cannot cross within the deadline — converges instead of
-   * re-sending the same frame forever. It grows back by doubling after full
-   * frames are acked, up to `frameCeiling`: the size known to fit. The
-   * ceiling itself doubles after PUSH_CEILING_PROBE_AFTER full frames at it,
-   * so a link that gets faster is found again.
+   * What the link taught about frame size (#914 rounds 4–7). Once acks of
+   * two frame sizes give a per-event estimate (`perEventMs`), a frame is as
+   * large as crosses within FRAME_BUDGET_DEADLINES ack deadlines. Before
+   * that, a frame not acked in time halves the NEXT frames (down to 1; the
+   * late frame itself stays in flight, never re-sent), and the size grows
+   * back by doubling after full frames are acked, up to `ceiling`: the size
+   * known to fit — which itself doubles after PUSH_CEILING_PROBE_AFTER full
+   * frames at it.
    *
    * Kept per (socket URL, device id) for the life of the process — beside
    * the pacing budget — never per adapter (#914 round 6): mobile rebuilds its
@@ -285,6 +319,8 @@ export class WebSocketEventStoreAdapter implements EventStoreAdapter {
         limit: MAX_EVENTS_PER_PUSH_FRAME,
         ceiling: MAX_EVENTS_PER_PUSH_FRAME,
         fullAtCeiling: 0,
+        echoes: false,
+        samples: [],
       };
       sharedFrameStates.set(this.pushBudgetKey, st);
     }
@@ -297,11 +333,17 @@ export class WebSocketEventStoreAdapter implements EventStoreAdapter {
   /** The linger: the idle timer (reset per append) and the cap (from the first). */
   private lingerIdle: ReturnType<typeof setTimeout> | null = null;
   private lingerCap: ReturnType<typeof setTimeout> | null = null;
-  private inFlight: {
-    socket: WebSocket;
-    items: PendingPush[];
-    timer: ReturnType<typeof setTimeout>;
-  } | null = null;
+  /**
+   * Push frames awaiting their ack, oldest first. One at a time until the
+   * relay is seen echoing `push_id` in its acks (then up to PUSH_FRAME_WINDOW
+   * overlap, each ack matched to its frame by id): an ack that names no
+   * frame can only be credited to the oldest, so without the echo only one
+   * may be in flight (#914 round 7).
+   */
+  private inFlight: InFlightFrame[] = [];
+  private frameSeq = 0;
+  /** When anything last arrived on the current socket (an ack, an event, any frame). */
+  private lastInboundAt = 0;
 
   constructor(config: WebSocketAdapterConfig) {
     this.config = {
@@ -447,15 +489,23 @@ export class WebSocketEventStoreAdapter implements EventStoreAdapter {
 
     const thisSocket = this.ws;
     this.ws.onmessage = (event: MessageEvent) => {
+      this.lastInboundAt = Date.now();
       try {
         const msg = JSON.parse(String(event.data)) as { type: string; [key: string]: unknown };
+        // A socket retired by `disconnect` while frames were in flight
+        // drains: it still hears the answers to its frames, nothing else.
+        if (this.ws !== thisSocket && msg.type !== "ack" && msg.type !== "error") return;
 
         if (msg.type === "event") {
           for (const cb of this.onEventCallbacks) {
             cb(msg.event as EventLogEntry);
           }
         } else if (msg.type === "ack") {
-          this.onPushAnswered(thisSocket);
+          this.onPushAnswered(
+            thisSocket,
+            undefined,
+            typeof msg.push_id === "string" ? msg.push_id : undefined,
+          );
         } else {
           if (
             msg.type === "error" &&
@@ -468,7 +518,7 @@ export class WebSocketEventStoreAdapter implements EventStoreAdapter {
           } else if (
             msg.type === "error" &&
             msg.message === "Rate limit exceeded" &&
-            this.inFlight?.socket === thisSocket
+            this.inFlight.some((f) => f.socket === thisSocket)
           ) {
             this.onPushRateLimited(thisSocket);
           }
@@ -520,9 +570,23 @@ export class WebSocketEventStoreAdapter implements EventStoreAdapter {
       this.stabilityTimer = null;
     }
     if (this.ws) {
-      this.ws.onclose = null;
-      this.ws.close();
+      const socket = this.ws;
       this.ws = null;
+      if (socket.readyState === 1 && this.inFlight.some((f) => f.socket === socket)) {
+        // Frames on the wire may still arrive and be acknowledged: the
+        // socket drains — it closes when its last frame is answered, when it
+        // closes itself, or when it is dead (#914 round 7). A frame never
+        // loses its answer to a token refresh.
+        socket.onclose = () => {
+          this.failFramesOn(
+            socket,
+            new Error("sync push: the socket closed before the relay acknowledged"),
+          );
+        };
+      } else {
+        socket.onclose = null;
+        socket.close();
+      }
     }
     this.connected = false;
     if (this.flushTimer) {
@@ -536,7 +600,9 @@ export class WebSocketEventStoreAdapter implements EventStoreAdapter {
     const retired = new Error(
       "sync push: the adapter was disconnected before the relay acknowledged",
     );
-    this.failInFlight(retired);
+    for (const f of this.inFlight.filter((x) => x.socket.readyState !== 1)) {
+      this.failFramesOn(f.socket, retired);
+    }
     for (const item of this.outbox) settle(item, retired);
   }
 
@@ -625,6 +691,15 @@ export class WebSocketEventStoreAdapter implements EventStoreAdapter {
     // timer). While there is no connection to send it on, the wait is bounded
     // from now instead.
     if (!this.connected) this.armQueueDeadline(waiter);
+    // An event whose frame is still in flight on a live socket is never sent
+    // again: the new append waits on that frame's ack (#914 round 7).
+    const flying = this.inFlight
+      .flatMap((f) => f.items)
+      .find((i) => i.entry.event_id === entry.event_id);
+    if (flying) {
+      flying.waiters.push(waiter);
+      return acked;
+    }
     const queued = this.outbox.find((i) => i.entry.event_id === entry.event_id);
     if (queued) {
       queued.entry = entry;
@@ -673,7 +748,51 @@ export class WebSocketEventStoreAdapter implements EventStoreAdapter {
     void this.catchUp();
   }
 
+  /**
+   * Catch up after a connect — one catch-up at a time per relay stream and
+   * local store (#914 round 7). A surface that reconnects before the last
+   * catch-up finished (mobile rebuilds every cycle; a token refresh) waits
+   * for it, then pulls from where it ended: never the same pages twice at
+   * once on one link. A catch-up whose adapter was disconnected while it
+   * waited is skipped; one already running continues.
+   */
   private async catchUp(): Promise<void> {
+    if (!this.config.httpFallback || !this.config.localStore) return;
+    const fallback = this.config.httpFallback;
+    const key = isSeqPullSource(fallback)
+      ? fallback.seqCursorKey
+      : `${this.config.url}#${this.config.motebitId}`;
+    let perStore = sharedCatchUps.get(this.config.localStore);
+    if (!perStore)
+      sharedCatchUps.set(this.config.localStore, (perStore = new Map<string, Promise<void>>()));
+    const generation = this.generation;
+    const prior = perStore.get(key);
+    // Waiting is worth it only while the running catch-up is bringing bytes
+    // (a second would fetch the same pages over the same link at once). One
+    // that is only waiting on a slow relay is not: this one starts now, and
+    // may see what arrived since that request left.
+    const busy = (fallback as { linkBusy?: () => boolean }).linkBusy?.() ?? true;
+    const mine =
+      prior && busy
+        ? prior.then(() => {
+            if (generation !== this.generation) return;
+            return this.catchUpNow();
+          })
+        : this.catchUpNow();
+    const tail = (prior ? Promise.all([prior, mine]) : mine).then(
+      () => {},
+      () => {},
+    );
+    perStore.set(key, tail);
+    const table = perStore;
+    try {
+      await mine;
+    } finally {
+      if (table.get(key) === tail) table.delete(key);
+    }
+  }
+
+  private async catchUpNow(): Promise<void> {
     if (!this.config.httpFallback || !this.config.localStore) return;
     const fallback = this.config.httpFallback;
     const localStore = this.config.localStore;
@@ -734,40 +853,50 @@ export class WebSocketEventStoreAdapter implements EventStoreAdapter {
   private flushPush(): void {
     const socket = this.ws;
     if (!this.connected || !socket || socket.readyState !== 1 /* WebSocket.OPEN */) return;
-    if (this.inFlight || this.outbox.length === 0) return;
     if (this.lingerIdle || this.lingerCap) return; // the batch is still arriving
-    // Pace: never more than PUSH_FRAMES_PER_WINDOW push frames per window,
-    // counted per device across every adapter in this process.
-    const now = Date.now();
-    const sent = this.pushBudget().filter((t) => now - t < PUSH_WINDOW_MS);
-    sharedPushBudgets.set(this.pushBudgetKey, sent);
-    if (sent.length >= PUSH_FRAMES_PER_WINDOW) {
-      this.deferFlush(sent[0]! + PUSH_WINDOW_MS - now);
-      return;
-    }
-    if (this.flushTimer) {
-      clearTimeout(this.flushTimer);
-      this.flushTimer = null;
-    }
-    sent.push(now);
-    const items = this.outbox.splice(0, this.frame.limit);
-    // From here the frame's own deadline governs each event.
-    for (const item of items) for (const w of item.waiters) clearWaiterTimer(w);
-    // In flight BEFORE the send: an ack delivered during `send` is this frame's.
-    this.inFlight = {
-      socket,
-      items,
-      timer: setTimeout(() => this.onPushTimeout(socket), this.ackTimeoutMs),
-    };
-    try {
-      socket.send(JSON.stringify({ type: "push", events: items.map((i) => i.entry) }));
-      this.active();
-    } catch (err: unknown) {
-      this.failInFlight(
-        new Error(`sync push: send failed: ${err instanceof Error ? err.message : String(err)}`, {
-          cause: err,
-        }),
-      );
+    const window = this.frame.echoes ? PUSH_FRAME_WINDOW : 1;
+    while (this.outbox.length > 0 && this.inFlight.length < window) {
+      // Pace: never more than PUSH_FRAMES_PER_WINDOW push frames per window,
+      // counted per device across every adapter in this process.
+      const now = Date.now();
+      const sent = this.pushBudget().filter((t) => now - t < PUSH_WINDOW_MS);
+      sharedPushBudgets.set(this.pushBudgetKey, sent);
+      if (sent.length >= PUSH_FRAMES_PER_WINDOW) {
+        this.deferFlush(sent[0]! + PUSH_WINDOW_MS - now);
+        return;
+      }
+      if (this.flushTimer) {
+        clearTimeout(this.flushTimer);
+        this.flushTimer = null;
+      }
+      sent.push(now);
+      const items = this.outbox.splice(0, this.frame.limit);
+      // From here the frame's own deadline governs each event.
+      for (const item of items) for (const w of item.waiters) clearWaiterTimer(w);
+      const id = String(++this.frameSeq);
+      // In flight BEFORE the send: an ack delivered during `send` is this frame's.
+      const frame: InFlightFrame = {
+        id,
+        socket,
+        items,
+        timer: setTimeout(() => this.onPushTimeout(socket, frame), this.ackTimeoutMs),
+        sentAt: now,
+        deadlineMs: this.ackTimeoutMs,
+      };
+      this.inFlight.push(frame);
+      try {
+        socket.send(
+          JSON.stringify({ type: "push", push_id: id, events: items.map((i) => i.entry) }),
+        );
+        this.active();
+      } catch (err: unknown) {
+        this.failInFlight(
+          new Error(`sync push: send failed: ${err instanceof Error ? err.message : String(err)}`, {
+            cause: err,
+          }),
+        );
+        return;
+      }
     }
   }
 
@@ -833,27 +962,62 @@ export class WebSocketEventStoreAdapter implements EventStoreAdapter {
     );
   }
 
-  /** The relay answered the frame in flight on `socket`: an ack, or a refusal. */
-  private onPushAnswered(socket: WebSocket, refused?: Error): void {
-    const frame = this.inFlight;
-    if (!frame || frame.socket !== socket) return;
-    clearTimeout(frame.timer);
-    this.inFlight = null;
-    if (!refused) {
-      this.active();
-      if (frame.items.length >= this.frame.limit) this.fullFrameAcked();
+  /**
+   * The relay answered a frame on `socket`. An ack naming its `push_id`
+   * settles that frame; one naming none settles the oldest (only one is ever
+   * in flight then). A refusal names no frame: every frame on the socket
+   * fails (the sync engine re-pushes; the relay dedups).
+   */
+  private onPushAnswered(socket: WebSocket, refused?: Error, pushId?: string): void {
+    const mine = this.inFlight.filter((f) => f.socket === socket);
+    if (mine.length === 0) return;
+    let answered: InFlightFrame[];
+    if (refused) answered = mine;
+    else if (pushId !== undefined) {
+      this.frame.echoes = true;
+      const f = mine.find((x) => x.id === pushId);
+      if (!f) return;
+      answered = [f];
+    } else answered = [mine[0]!];
+    for (const frame of answered) {
+      clearTimeout(frame.timer);
+      this.inFlight.splice(this.inFlight.indexOf(frame), 1);
+      if (!refused) {
+        this.active();
+        this.sizeFromAck(frame);
+      }
+      for (const item of frame.items) settle(item, refused);
     }
-    for (const item of frame.items) settle(item, refused);
+    this.closeIfDrained(socket);
     this.flushPush();
   }
 
-  /** Reject the frame in flight, if any: the relay's answer to it can no longer be read. */
+  /** A retired socket whose last frame was answered is closed. */
+  private closeIfDrained(socket: WebSocket): void {
+    if (this.ws === socket || this.inFlight.some((f) => f.socket === socket)) return;
+    socket.onclose = null;
+    try {
+      socket.close();
+    } catch {
+      // already closed
+    }
+  }
+
+  /** Reject the frames in flight on `socket`: their answers can no longer be read. */
+  private failFramesOn(socket: WebSocket, err: Error): void {
+    for (const frame of this.inFlight.filter((f) => f.socket === socket)) {
+      clearTimeout(frame.timer);
+      this.inFlight.splice(this.inFlight.indexOf(frame), 1);
+      for (const item of frame.items) settle(item, err);
+    }
+  }
+
+  /** Reject every frame in flight: the relay's answers to them can no longer be read. */
   private failInFlight(err: Error): void {
-    const frame = this.inFlight;
-    if (!frame) return;
-    clearTimeout(frame.timer);
-    this.inFlight = null;
-    for (const item of frame.items) settle(item, err);
+    for (const frame of this.inFlight.splice(0)) {
+      clearTimeout(frame.timer);
+      for (const item of frame.items) settle(item, err);
+    }
   }
 
   /**
@@ -876,31 +1040,80 @@ export class WebSocketEventStoreAdapter implements EventStoreAdapter {
   }
 
   /**
-   * No ack in time. The frame's events are rejected, and the socket is taken
-   * down: an ack arriving late on it must never be read as the next frame's.
+   * A frame's ack deadline passed (#914 round 7). A deadline changes
+   * ADAPTATION only — it never destroys work that could still complete:
+   *
+   *   - the NEXT frames are halved (down to one event), and the halving is
+   *     kept for the relay stream (`frame`), so a slow link converges;
+   *   - THIS frame stays in flight on its socket, and its appends stay
+   *     pending: a slow link still delivers it, and a relay that stores
+   *     first and acks late still acks it — the cursor moves then;
+   *   - its deadline doubles, and is re-armed.
+   *
+   * The socket is dropped only when it is DEAD: the frame has waited the
+   * full stretch (64 × the base deadline) and nothing at all has arrived on
+   * the socket since it was sent. Close, error and a rate-limit refusal drop
+   * it too, elsewhere.
    */
-  private onPushTimeout(socket: WebSocket): void {
-    const frame = this.inFlight;
-    if (!frame || frame.socket !== socket) return;
+  private onPushTimeout(socket: WebSocket, frame: InFlightFrame): void {
+    if (!this.inFlight.includes(frame) || frame.socket !== socket) return;
     const n = frame.items.length;
-    if (n > 1) {
-      // Too big for this link in the deadline: re-send it in halves. Its
-      // appends stay pending — the frame is re-queued at the front, on a new
-      // socket (a late ack on this one must never be credited elsewhere).
-      clearTimeout(frame.timer);
-      this.inFlight = null;
-      this.frame.limit = Math.max(1, Math.floor(n / 2));
+    // Until acks of two sizes tell latency from link time, a miss halves the
+    // next frames (again on each miss). After that the estimate sizes them:
+    // a relay that is slow to ack, not a link too slow for the frame, must
+    // not shrink frames to one event.
+    if (perEventMs(this.frame.samples) === null) {
+      this.frame.limit = Math.max(1, Math.floor(Math.min(this.frame.limit, n) / 2));
       this.frame.ceiling = this.frame.limit;
       this.frame.fullAtCeiling = 0;
-      this.requeueFront(frame.items);
-    } else {
-      // Not even one event crossed in the deadline: a definite failure.
-      this.frame.limit = 1;
-      this.frame.ceiling = 1;
-      this.frame.fullAtCeiling = 0;
-      this.failInFlight(new Error("sync push: not acknowledged in time"));
     }
-    this.dropSocket(socket);
+    const now = Date.now();
+    const cap = this.ackTimeoutMs * MAX_ACK_STRETCH;
+    // Quiet since the frame went out, or since the socket last showed life.
+    const quietSince = Math.max(frame.sentAt, this.lastInboundAt);
+    if (now - quietSince >= cap) {
+      this.frame.samples = []; // what the link taught is in doubt: learn it again
+      this.failFramesOn(socket, new Error("sync push: the socket is dead (nothing arrived on it)"));
+      if (this.ws === socket) this.dropSocket(socket);
+      else this.closeIfDrained(socket);
+      return;
+    }
+    frame.deadlineMs = Math.min(cap, frame.deadlineMs * 2);
+    const byDeadline = frame.sentAt + frame.deadlineMs;
+    const next = byDeadline > now ? Math.min(byDeadline, quietSince + cap) : quietSince + cap;
+    frame.timer = setTimeout(() => this.onPushTimeout(socket, frame), Math.max(1, next - now));
+  }
+
+  /**
+   * Is there push work on the wire that may still complete — a frame in
+   * flight on a live socket, or events queued behind it? The sync engine's
+   * stall watchdog asks this, so a slow but live push is never abandoned.
+   */
+  hasLiveWork(): boolean {
+    if (this.inFlight.some((f) => f.socket === this.ws)) return true;
+    return this.connected && this.outbox.length > 0;
+  }
+
+  /**
+   * A frame was acked: learn from its time, and size the next frames. With
+   * a per-event estimate, a frame is as large as fits FRAME_BUDGET_DEADLINES
+   * (growing by doubling after full frames); without one, the ceiling rule.
+   */
+  private sizeFromAck(frame: InFlightFrame): void {
+    const n = frame.items.length;
+    const st = this.frame;
+    noteSample(st.samples, n, Date.now() - frame.sentAt);
+    const per = perEventMs(st.samples);
+    if (per === null) {
+      if (n >= st.limit) this.fullFrameAcked();
+      return;
+    }
+    const budget = this.ackTimeoutMs * FRAME_BUDGET_DEADLINES;
+    const fits = per > 0 ? Math.max(1, Math.floor(budget / per)) : MAX_EVENTS_PER_PUSH_FRAME;
+    const target = Math.min(MAX_EVENTS_PER_PUSH_FRAME, fits);
+    st.ceiling = MAX_EVENTS_PER_PUSH_FRAME;
+    st.fullAtCeiling = 0;
+    st.limit = Math.min(target, n >= st.limit ? st.limit * 2 : st.limit);
   }
 
   /** A full frame was acked: grow toward the ceiling, and probe past it now and then. */
@@ -915,20 +1128,6 @@ export class WebSocketEventStoreAdapter implements EventStoreAdapter {
       this.frame.ceiling = Math.min(MAX_EVENTS_PER_PUSH_FRAME, this.frame.ceiling * 2);
       this.frame.limit = this.frame.ceiling;
     }
-  }
-
-  /** Put a timed-out frame's events back at the front, joining any re-append of the same event. */
-  private requeueFront(items: PendingPush[]): void {
-    const back: PendingPush[] = [];
-    for (const item of items) {
-      const dup = this.outbox.findIndex((o) => o.entry.event_id === item.entry.event_id);
-      if (dup >= 0) {
-        item.waiters.push(...this.outbox[dup]!.waiters);
-        this.outbox.splice(dup, 1);
-      }
-      back.push(item);
-    }
-    this.outbox.unshift(...back);
   }
 
   /**

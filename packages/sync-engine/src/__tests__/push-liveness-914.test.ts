@@ -71,7 +71,7 @@ describe("#914 round 2: a push that never answers cannot wedge sync", () => {
         baseUrl: relay.baseUrl,
         motebitId: MID,
         maxRetries: 0,
-        requestTimeoutMs: 100,
+        requestTimeoutMs: 20, // a request is given up at 64 × this
       }),
     );
 
@@ -148,7 +148,7 @@ describe("#914 round 2: a push that never answers cannot wedge sync", () => {
     expect(relay.heldIds(MID)).toEqual(["s1"]);
   });
 
-  it("a push that fails fails the pushes queued behind it at once — one timeout per batch, not per event", async () => {
+  it("a push that fails fails the pushes queued behind it at once — bounded overlap, never one timeout per event", async () => {
     const local = new InMemoryEventStore();
     for (let i = 0; i < 20; i++) await write(local, `q${i}`);
     let pushes = 0;
@@ -162,14 +162,18 @@ describe("#914 round 2: a push that never answers cannot wedge sync", () => {
         baseUrl: relay.baseUrl,
         motebitId: MID,
         maxRetries: 0,
-        requestTimeoutMs: 50,
+        requestTimeoutMs: 10, // given up at 64 × this
       }),
     );
     const started = Date.now();
     await engine.sync();
     expect(engine.getStatus()).toBe("error");
-    expect(pushes).toBe(1);
-    expect(Date.now() - started).toBeLessThan(1_000);
+    // A push that misses its deadline hands its slot on (round 7): at most
+    // one in the slot plus MAX_OVERLAPPING_PUSHES (8) ever go out; the
+    // other 11 are failed with the first failure, never tried one by one.
+    expect(pushes).toBeGreaterThanOrEqual(1);
+    expect(pushes).toBeLessThanOrEqual(9);
+    expect(Date.now() - started).toBeLessThan(2_000);
   });
 });
 

@@ -500,3 +500,49 @@ describe("#914 round 2: a first-sync backlog over the socket stays under the rel
     }
   }, 120_000);
 });
+
+describe("#914 round 7: the relay echoes a push frame's `push_id` in its ack (additive)", () => {
+  async function rawSocket(mid: string): Promise<{ ws: WebSocket; recv: string[] }> {
+    const ws = new WebSocket(`ws://127.0.0.1:${port}/ws/sync/${mid}?token=${API_TOKEN}`);
+    const recv: string[] = [];
+    ws.on("message", (d: Buffer) => recv.push(d.toString("utf8")));
+    await new Promise<void>((resolve, reject) => {
+      ws.once("open", () => resolve());
+      ws.once("error", reject);
+    });
+    return { ws, recv };
+  }
+  function event(mid: string, n: number): EventLogEntry {
+    return {
+      event_id: `echo${n}-${mid}`,
+      motebit_id: mid as EventLogEntry["motebit_id"],
+      timestamp: 1_700_000_000_000 + n,
+      event_type: "state_snapshot" as EventLogEntry["event_type"],
+      payload: { n },
+      version_clock: n,
+      tombstoned: false,
+    };
+  }
+
+  it("a frame naming itself gets its id back; a frame without one gets the unchanged ack", async () => {
+    const mid = crypto.randomUUID();
+    const { ws, recv } = await rawSocket(mid);
+    try {
+      const acks = (): Array<Record<string, unknown>> =>
+        recv.map((m) => JSON.parse(m) as Record<string, unknown>).filter((m) => m.type === "ack");
+      ws.send(JSON.stringify({ type: "push", push_id: "f1", events: [event(mid, 1)] }));
+      await until(() => acks().length === 1, "ack for f1");
+      ws.send(JSON.stringify({ type: "push", events: [event(mid, 2)] }));
+      await until(() => acks().length === 2, "ack for the unnamed frame");
+      ws.send(JSON.stringify({ type: "push", push_id: 7, events: [event(mid, 3)] }));
+      await until(() => acks().length === 3, "ack for a non-string id");
+      expect(acks()).toEqual([
+        { type: "ack", accepted: 1, push_id: "f1" },
+        { type: "ack", accepted: 1 },
+        { type: "ack", accepted: 1 },
+      ]);
+    } finally {
+      ws.terminate();
+    }
+  });
+});

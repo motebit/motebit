@@ -24,7 +24,11 @@
  *     XHR + react-native's abort-controller@3.0.0)
  *   - backlog: 1, 150, 6000 events (plus one new event every max(5 min, 2u))
  *
- * Split across liveness-914-s<k>.test.ts so the shards run in parallel.
+ * Split across liveness-914-s<k>.test.ts so the shards run in parallel. By
+ * default the CORE cells run (every cell that went red while the round-7
+ * design was built, each a regression it fixed); ZZ914_FULL=1 runs the whole
+ * sweep. ZZ914_CELL='a|b' runs the cells whose names contain a or b;
+ * ZZ914_VERBOSE prints every cell's counts; ZZ914_TRACE a wire timeline.
  *
  * Horizon H = max(10 × u × batch, 30 min) of simulated time. Excluded, as
  * stated: a cell where one event cannot cross within 64 × the base deadline.
@@ -40,7 +44,7 @@ import {
   WebSocketEventStoreAdapter,
   liveAdapter,
 } from "../index.js";
-import { SimNet, SimRelay } from "./sim-net.js";
+import { SimNet, SimRelay, trace } from "./sim-net.js";
 
 const MID = "motebit-harness-914";
 /** Wall-clock time, captured before any cell fakes the timers. */
@@ -199,7 +203,10 @@ async function measure(w: World, c: Cell, pushCursor?: number): Promise<Outcome>
 
 async function runFor(ms: number): Promise<void> {
   const step = 10 * MIN;
-  for (let t = 0; t < ms; t += step) await vi.advanceTimersByTimeAsync(Math.min(step, ms - t));
+  for (let t = 0; t < ms; t += step) {
+    trace(`--- t=${t / 1000}s of ${ms / 1000}s`);
+    await vi.advanceTimersByTimeAsync(Math.min(step, ms - t));
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -437,6 +444,7 @@ export async function runCell(c: Cell): Promise<{ main: Outcome; branch: Outcome
     vi.unstubAllGlobals();
     vi.clearAllTimers();
     const t1 = realNow();
+    trace("=== branch");
     const branch = await runBranch(c);
     if (process.env.ZZ914_TIMING) {
       const t2 = realNow();
@@ -468,6 +476,55 @@ export function verdict(c: Cell, r: { main: Outcome; branch: Outcome }): string 
   return null;
 }
 
+/**
+ * The cells run by default: each went red on some iteration of the round-7
+ * design (substring match on the cell name).
+ */
+export const CORE: readonly string[] = [
+  "push persistent-ws node u=0.01s L=300s backlog=1",
+  "pull rebuild-ws node u=0.01s L=300s backlog=150",
+  "pull persistent-ws node u=0.01s L=300s backlog=150",
+  "pull rebuild-ws node u=0.01s L=70s backlog=150",
+  "pull rebuild-ws rn u=0.01s L=300s backlog=150",
+  "pull rebuild-ws rn u=0.2s L=70s backlog=150",
+  "push rebuild-ws node u=0.2s L=300s backlog=150",
+  "pull rebuild-ws node u=1s L=0s backlog=150",
+  "pull rebuild-ws node u=0.2s L=70s backlog=150",
+  "pull rebuild-ws node u=0.2s L=300s backlog=150",
+  "push persistent-ws node u=0.2s L=300s backlog=1",
+  "pull persistent-ws node u=0.2s L=300s backlog=150",
+  "push persistent-ws node u=1s L=300s backlog=6000",
+  "pull rebuild-ws rn u=0.2s L=300s backlog=150",
+  "pull rebuild-ws rn u=1s L=70s backlog=150",
+  "push persistent-ws node u=1s L=300s backlog=1",
+  "pull rebuild-ws rn u=1s L=20s backlog=150",
+  "pull rebuild-ws node u=1s L=10s backlog=150",
+  "pull persistent-ws node u=1s L=300s backlog=150",
+  "pull rebuild-ws node u=1s L=20s backlog=150",
+  "push persistent-ws node u=5s L=300s backlog=150",
+  "pull persistent-ws node u=5s L=300s backlog=150",
+  "pull persistent-ws node u=5s L=20s backlog=150",
+  "push persistent-ws node u=5s L=300s backlog=6000",
+  "pull persistent-ws node u=14s L=0s backlog=150",
+  "pull persistent-ws node u=14s L=10s backlog=150",
+  "push http node u=0.01s L=300s backlog=1",
+  "push http node u=0.2s L=300s backlog=1",
+  "pull rebuild-ws rn u=14s L=20s backlog=150",
+  "pull rebuild-ws rn u=20s",
+  "pull rebuild-ws rn u=30s",
+  "pull rebuild-ws rn u=14s",
+  "pull http rn u=30s",
+  "pull rebuild-ws rn u=45s",
+  "pull rebuild-ws rn u=70s",
+  "push persistent-ws node u=1s L=0s backlog=6000",
+  "push rebuild-ws node u=5s L=0s backlog=150",
+  "push rebuild-ws rn u=5s L=70s backlog=150",
+  "push http rn u=5s L=70s backlog=150",
+  "pull http node u=20s L=0s backlog=150",
+  "push persistent-ws node u=16s L=0s backlog=150",
+  "pull rebuild-ws node u=70s L=0s backlog=150",
+];
+
 /** The number of shard files (liveness-914-s<k>.test.ts) the sweep is split across. */
 export const SHARDS = 8;
 
@@ -478,13 +535,17 @@ export function defineShard(k: number): void {
       vi.useRealTimers();
       vi.unstubAllGlobals();
     });
-    const cells = sweep().filter((_, i) => i % SHARDS === k - 1);
+    const all = process.env.ZZ914_FULL
+      ? sweep()
+      : sweep().filter((c) => CORE.some((o) => cellName(c).includes(o)));
+    const cells = all.filter((_, i) => i % SHARDS === k - 1);
     it(`${cells.length} cells`, async () => {
-      const only = process.env.ZZ914_CELL;
+      // ZZ914_CELL: run only cells whose name contains one of these ('|'-separated).
+      const only = process.env.ZZ914_CELL?.split("|").filter((x) => x !== "");
       const failures: string[] = [];
       for (const c of cells) {
         const name = cellName(c);
-        if (only && !name.includes(only)) continue;
+        if (only && only.length > 0 && !only.some((o) => name.includes(o))) continue;
         let r: { main: Outcome; branch: Outcome };
         try {
           r = await runCell(c);

@@ -95,6 +95,11 @@ export class EncryptedEventStoreAdapter implements EventStoreAdapter {
     return typeof inner.onActivity === "function" ? inner.onActivity(listener) : () => {};
   }
 
+  /** Whether the inner adapter has work on the wire that may still complete (the sync engine's watchdog asks). */
+  hasLiveWork(): boolean {
+    return (this.inner as { hasLiveWork?: () => boolean }).hasLiveWork?.() === true;
+  }
+
   /** End the inner adapter's requests on the wire, when it can (the sync engine's abandoned cycle). */
   abortInFlight(): void {
     (this.inner as { abortInFlight?: () => void }).abortInFlight?.();

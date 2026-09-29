@@ -390,27 +390,47 @@ describe("#914 WebSocketEventStoreAdapter — an append resolves on the relay's 
     expect(p2.state).toBe("ok");
   });
 
-  it("no ack in time: the frame is rejected and its socket taken down, so a late ack is never credited to the next frame", async () => {
+  it("no ack in time: the frame STAYS in flight and its socket stays open — a late ack still resolves it (#914 round 7)", async () => {
     const a = adapter();
     const s = lastSocket();
     const p1 = track(a.append(entry("e1", 1)));
     await vi.advanceTimersByTimeAsync(20); // sent
-    await vi.advanceTimersByTimeAsync(1_000); // the frame's deadline, from its send
-    expect(p1.state).toBe("err");
-    expect(s.closed).toBe(true);
+    await vi.advanceTimersByTimeAsync(5_000); // five times the 1 s deadline
+    expect(p1.state).toBe("pending");
+    expect(s.closed).toBe(false);
+    const p2 = track(a.append(entry("e1", 1))); // a later sync re-appends it…
+    await vi.advanceTimersByTimeAsync(20);
+    expect(s.frames()).toEqual([["e1"]]); // …it is never sent twice
+    s.answer({ type: "ack", accepted: 1 }); // the late ack
+    await vi.advanceTimersByTimeAsync(0);
+    expect([p1.state, p2.state]).toEqual(["ok", "ok"]);
+  });
 
+  it("a DEAD socket — nothing at all arrives for the full stretch — is dropped, and the frame goes out again on the next", async () => {
+    const a = adapter();
+    const s = lastSocket();
+    const p1 = track(a.append(entry("e1", 1)));
     await vi.advanceTimersByTimeAsync(20);
-    const s2 = lastSocket();
-    s2.open();
-    const p2 = track(a.append(entry("e2", 2)));
+    await vi.advanceTimersByTimeAsync(63_000);
+    expect(s.closed).toBe(false); // still within 64 × the deadline
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(s.closed).toBe(true);
+    expect(p1.state).toBe("err");
+  });
+
+  it("a slow socket that still shows life is never judged dead", async () => {
+    const a = adapter();
+    const s = lastSocket();
+    const p1 = track(a.append(entry("e1", 1)));
     await vi.advanceTimersByTimeAsync(20);
-    expect(s2.frames()).toEqual([["e2"]]);
-    s.answer({ type: "ack", accepted: 1 }); // the late ack, on the dead socket
+    for (let i = 0; i < 10; i++) {
+      await vi.advanceTimersByTimeAsync(10_000);
+      s.answer({ type: "event", event: entry(`sib-${i}`, 100 + i) }); // inbound traffic
+    }
+    expect(s.closed).toBe(false);
+    s.answer({ type: "ack", accepted: 1 });
     await vi.advanceTimersByTimeAsync(0);
-    expect(p2.state).toBe("pending");
-    s2.answer({ type: "ack", accepted: 1 });
-    await vi.advanceTimersByTimeAsync(0);
-    expect(p2.state).toBe("ok");
+    expect(p1.state).toBe("ok");
   });
 
   it("a push refusal rejects the frame", async () => {

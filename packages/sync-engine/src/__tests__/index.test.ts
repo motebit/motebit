@@ -226,20 +226,11 @@ describe("SyncEngine", () => {
     }
 
     // Before #914 the first batch was pushed and the cursor jumped to the
-    // local max: events 3..5 never left. Now every batch goes out.
-    const inFlight: number[] = [];
-    let open = 0;
-    const append = remoteStore.append.bind(remoteStore);
-    remoteStore.append = async (e) => {
-      open++;
-      inFlight.push(open);
-      await Promise.resolve();
-      open--;
-      return append(e);
-    };
+    // local max: events 3..5 never left. Now every batch goes out (#914
+    // round 7: all handed to the adapter together — the adapter, not the
+    // engine, decides how many are on the wire at once).
     const result = await smallBatchEngine.sync();
     expect(result.pushed).toBe(5);
-    expect(Math.max(...inFlight)).toBeLessThanOrEqual(2);
 
     const remoteEvents = await remoteStore.query({ motebit_id: MOTEBIT_ID });
     expect(remoteEvents).toHaveLength(5);

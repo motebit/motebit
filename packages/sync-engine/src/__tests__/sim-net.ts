@@ -187,6 +187,8 @@ export class SimNet {
     const url = new URL(String(input));
     const signal = init?.signal ?? undefined;
     const path = url.pathname;
+    const tag = `${path.split("/").pop()}${url.search}`;
+    trace(`fetch ${tag} start`);
     return new Promise<Response>((resolve, reject) => {
       const abortError = (): Error => new DOMException("aborted", "AbortError");
       if (signal?.aborted) return reject(abortError());
@@ -195,6 +197,7 @@ export class SimNet {
       let bodyCtl: ReadableStreamDefaultController<Uint8Array> | null = null;
       let replyTimer: ReturnType<typeof setTimeout> | null = null;
       signal?.addEventListener("abort", () => {
+        trace(`fetch ${tag} ABORT`);
         dead = true;
         for (const tx of pending) tx.link.cancel(tx);
         if (replyTimer) clearTimeout(replyTimer);
@@ -257,7 +260,10 @@ export class SimNet {
                       this.down.send(events.length > 0 ? this.cfg.downMs : 0, () => {
                         if (dead) return;
                         ctl.enqueue(chunk);
-                        if (i === n - 1) ctl.close();
+                        if (i === n - 1) {
+                          trace(`fetch ${tag} body done (${events.length})`);
+                          ctl.close();
+                        }
                       }),
                     );
                   }
@@ -371,6 +377,7 @@ export class SimSocket {
     if (this.readyState !== 1) throw new Error("send on a socket that is not open");
     const msg = JSON.parse(data) as { type: string; events?: EventLogEntry[]; push_id?: string };
     const events = msg.type === "push" ? (msg.events ?? []) : [];
+    if (msg.type === "push") trace(`ws push ${msg.push_id ?? "-"} n=${events.length} sent`);
     const tx = this.net.up.send(this.net.cfg.upMs * events.length, () => {
       this.inflight.splice(this.inflight.indexOf(tx), 1);
       if (this.readyState !== 1) return;
@@ -384,6 +391,7 @@ export class SimSocket {
       }
       if (msg.type !== "push") return;
       this.net.relay.store(events);
+      trace(`ws push ${msg.push_id ?? "-"} n=${events.length} stored`);
       this.reply(
         {
           type: "ack",
@@ -405,6 +413,7 @@ export class SimSocket {
   close(): void {
     if (this.readyState === 3) return;
     this.readyState = 3;
+    trace(`ws close (${this.inflight.length} unsent)`);
     // Bytes not yet sent are lost with the connection.
     for (const tx of this.inflight.splice(0)) this.net.up.cancel(tx);
   }
@@ -418,6 +427,12 @@ interface ReactNativeFetch {
 }
 
 let rnCache: ReactNativeFetch | null = null;
+/** ZZ914_TRACE=1: a timeline of the simulated wire, for debugging one cell. */
+export function trace(msg: string): void {
+  if (process.env.ZZ914_TRACE)
+    process.stdout.write(`[${(Date.now() / 1000).toFixed(1)}s] ${msg}\n`);
+}
+
 /** whatwg-fetch and abort-controller, resolved through react-native as the mobile app gets them. */
 export function reactNative(): ReactNativeFetch {
   if (rnCache) return rnCache;

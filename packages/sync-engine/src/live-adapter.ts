@@ -26,7 +26,7 @@ function reportsActivity(x: unknown): x is ActivityReporting {
  */
 export function liveAdapter(
   current: () => EventStoreAdapter,
-): EventStoreAdapter & ActivityReporting & { abortInFlight(): void } {
+): EventStoreAdapter & ActivityReporting & { abortInFlight(): void; hasLiveWork(): boolean } {
   const listeners = new Set<() => void>();
   let bound: EventStoreAdapter | null = null;
   let unbind: (() => void) | null = null;
@@ -55,6 +55,9 @@ export function liveAdapter(
     tombstone: (id, m) => follow().tombstone(id, m),
     abortInFlight(): void {
       (follow() as { abortInFlight?: () => void }).abortInFlight?.();
+    },
+    hasLiveWork(): boolean {
+      return (follow() as { hasLiveWork?: () => boolean }).hasLiveWork?.() === true;
     },
     onActivity(listener: () => void): () => void {
       listeners.add(listener);

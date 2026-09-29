@@ -251,6 +251,37 @@ export async function filterUnseen(
   return fresh;
 }
 
+/**
+ * The relay's own record as an acknowledgment (#914 round 7). Every event a
+ * pull shows the relay HOLDS — the device's own events included — is noted
+ * against the local store the pull writes into, and a push counts it
+ * acknowledged. A push whose ack is lost (a socket rebuilt before a slow ack
+ * arrives, a response that never comes back) is still known delivered once
+ * the relay's stream shows it, so the push cursor passes it instead of
+ * re-sending it forever. Keyed by the local store object (one device's
+ * record), bounded; forgetting one only costs a re-push.
+ */
+const relayHeld = new WeakMap<object, Map<string, number>>();
+const RELAY_HELD_KEPT = 50_000;
+
+export function noteRelayHolds(localStore: object, events: readonly EventLogEntry[]): void {
+  let held = relayHeld.get(localStore);
+  if (!held) {
+    held = new Map();
+    relayHeld.set(localStore, held);
+  }
+  for (const e of events) {
+    held.delete(e.event_id);
+    held.set(e.event_id, e.version_clock);
+  }
+  while (held.size > RELAY_HELD_KEPT) held.delete(held.keys().next().value!);
+}
+
+/** Has a pull into `localStore` shown the relay holding `eventId`? */
+export function relayHolds(localStore: object, eventId: string): boolean {
+  return relayHeld.get(localStore)?.has(eventId) ?? false;
+}
+
 /** Bounded so a single pull call cannot spin; the next sync continues from the saved cursor. */
 export const MAX_SEQ_PAGES_PER_PULL = 100;
 
@@ -348,6 +379,12 @@ export async function pullBySeq(opts: {
 
   for (let page = 0; page < maxPages; page++) {
     const res = await source.pullAfterSeq(cursor, fallbackAfterClock);
+    noteRelayHolds(
+      localStore,
+      (res.kind === "clock" ? res.events : res.entries.map((x) => x.event)).filter(
+        (e) => e.motebit_id === motebitId,
+      ),
+    );
     if (res.kind === "clock") {
       const unseen = await filterUnseen(localStore, motebitId, res.events);
       await apply(unseen, () => null);

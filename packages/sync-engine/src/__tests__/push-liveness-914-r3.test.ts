@@ -105,12 +105,13 @@ describe("#914 r3: the HTTP bound is time-to-first-byte and body idle, never tot
     expect(r.pulled).toBe(3);
   });
 
-  it("a body that stops arriving times out (and the sync fails, never hangs)", async () => {
+  it("a body that stops arriving for good is given up at the cap (the sync fails, never hangs)", async () => {
     vi.stubGlobal("fetch", async (input: string | URL, init?: RequestInit) => {
       const res = await relay.fetch(input, init);
       return String(input).includes("/pull") ? trickle(res, 10, 5, 2) : res;
     });
-    const { engine } = engineOver({ requestTimeoutMs: 100, bodyIdleTimeoutMs: 50 });
+    // A stalled body is never cut at its deadline — only at 64 × it (#914 round 7).
+    const { engine } = engineOver({ requestTimeoutMs: 20, bodyIdleTimeoutMs: 10 });
     const started = Date.now();
     await engine.sync();
     expect(engine.getStatus()).toBe("error");
@@ -351,7 +352,7 @@ describe("#914 r3: socket frames", () => {
     return ws;
   }
 
-  it("a 300-event backlog in batches of 100 goes out as exactly one frame per batch", async () => {
+  it("a 300-event backlog handed over together is coalesced into frames, never split per event", async () => {
     const local = new InMemoryEventStore();
     for (let i = 0; i < 300; i++) await write(local, `f${i}`);
     const ws = socketAdapter();
@@ -361,7 +362,9 @@ describe("#914 r3: socket frames", () => {
     void engine.sync().then(() => (done = true));
     for (let i = 0; i < 1000 && !done; i++) await vi.advanceTimersByTimeAsync(5);
     expect(engine.getStatus()).toBe("idle");
-    expect(LaggySocket.all[0]!.frames.map((f) => f.length)).toEqual([100, 100, 100]);
+    // Round 7: the engine hands every batch over at once; the socket's
+    // linger coalesces them into as few frames as its frame size allows.
+    expect(LaggySocket.all[0]!.frames.map((f) => f.length)).toEqual([300]);
     ws.disconnect();
   });
 

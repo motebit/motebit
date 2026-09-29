@@ -2,7 +2,7 @@
  * React Native's fetch, for tests: whatwg-fetch (resolved through
  * react-native, as the mobile app gets it) over an XHR that delivers the
  * whole response at `onload` — after `msPerEvent` per event it carries, plus
- * `pushMs` for a push. Every request is logged with when it started and how
+ * `pushMs` for a push, with react-native's AbortController. Every request is logged with when it started and how
  * it ended.
  */
 import { createRequire } from "node:module";
@@ -33,6 +33,8 @@ export interface XhrLogEntry {
 export interface RnLink {
   msPerEvent: number;
   pushMs: number;
+  /** Extra time for any other request (the clock probe, a pull), default 0. */
+  otherMs?: number;
   log: XhrLogEntry[];
 }
 
@@ -95,7 +97,9 @@ export function onReactNative(relay: FakeRelay, link: RnLink): void {
             this.onreadystatechange?.();
             this.onload?.();
           },
-          1 + link.msPerEvent * events + (path.endsWith("/push") ? link.pushMs : 0),
+          1 +
+            link.msPerEvent * events +
+            (path.endsWith("/push") ? link.pushMs : (link.otherMs ?? 0)),
         );
       });
     }
@@ -114,4 +118,15 @@ export function onReactNative(relay: FakeRelay, link: RnLink): void {
   vi.stubGlobal("Headers", W.Headers);
   vi.stubGlobal("XMLHttpRequest", SlowXhr);
   vi.stubGlobal("fetch", W.fetch);
+  vi.stubGlobal("AbortController", rnAbortController());
+}
+
+/** react-native's AbortController (abort-controller@3.0.0): its signal carries no `reason`. */
+export function rnAbortController(): typeof AbortController {
+  const fromMobile = createRequire(
+    new URL("../../../../apps/mobile/package.json", import.meta.url),
+  );
+  const fromRn = createRequire(fromMobile.resolve("react-native/package.json"));
+  return (fromRn("abort-controller") as { AbortController: typeof AbortController })
+    .AbortController;
 }
