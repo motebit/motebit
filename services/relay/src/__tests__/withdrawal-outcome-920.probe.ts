@@ -50,6 +50,8 @@ function fakeAdapter(sendUsdc: SolanaRpcAdapter["sendUsdc"]): SolanaRpcAdapter {
     // #949: a tree whose Path 0 requires a transfer that records its
     // broadcasts sees one; a tree that does not is unaffected.
     honorsBroadcastHooks: true,
+    // The node's retained-history edge (#949 rounds 2–3): full history.
+    getFirstAvailableSlot: () => Promise.resolve(0),
     getSignatureOutcome: vi.fn().mockResolvedValue({ status: "pending" }),
     ownAddress: "RelayTreasuryAddressBase58",
     getUsdcBalance: vi.fn().mockResolvedValue(10_000_000_000n),
@@ -198,6 +200,9 @@ it("real adapter: blockhash-expiry retry, second broadcast lands and fails", asy
   let sends = 0;
   let confirms = 0;
   const conn = {
+    // The pre-blockhash slot read and the retention edge (#949 rounds 2–3).
+    getSlot: vi.fn().mockResolvedValue(8_000),
+    getFirstAvailableBlock: vi.fn().mockResolvedValue(0),
     getLatestBlockhash: vi.fn().mockResolvedValue({
       blockhash: "GHtXQBsoZHVnNFa9YevAzFr17DJjgHXk3ycTKD5xD3Zi",
       lastValidBlockHeight: 100,

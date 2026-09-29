@@ -382,13 +382,21 @@ export class Web3JsRpcAdapter implements SolanaRpcAdapter {
       for (const ix of instructions) tx.add(ix);
       // #949 round 2: a slot read BEFORE the blockhash — the transaction can
       // only land after it, so a late reader can check that a node's retained
-      // history reaches back that far before trusting "absent". A failed read
-      // leaves it unknown (a late absence is then never read as expiry).
-      let recentSlot: number | undefined;
-      try {
-        recentSlot = await this.connection.getSlot(this.decisionCommitment);
-      } catch {
-        recentSlot = undefined;
+      // history reaches back that far before trusting "absent". Read FIRST:
+      // read after the blockhash, the slot could be past where the
+      // transaction lands.
+      //
+      // Round 3 (C1): a payer that records what it broadcasts gets no
+      // transaction without this slot. The read is retried once; if it still
+      // fails, nothing is signed or sent and the send throws — "nothing was
+      // broadcast" stays a clean, provable verdict. Without hooks nobody
+      // records the ref, and a missing slot only means a late reader can
+      // never prove the transaction absent.
+      const recentSlot = await this.readRecentSlot();
+      if (recentSlot === undefined && hooks?.beforeBroadcast != null) {
+        throw new Error(
+          "cannot read the current slot before signing: nothing was signed or sent (the payout's landing window could not be recorded)",
+        );
       }
       const latest = await this.connection.getLatestBlockhash(this.commitment);
       tx.recentBlockhash = latest.blockhash;
@@ -450,6 +458,19 @@ export class Web3JsRpcAdapter implements SolanaRpcAdapter {
         }
       }
     }
+  }
+
+  /** The slot at the decision commitment, read up to twice; undefined when both reads fail. */
+  private async readRecentSlot(): Promise<number | undefined> {
+    for (let i = 0; i < 2; i++) {
+      try {
+        const slot = await this.connection.getSlot(this.decisionCommitment);
+        if (Number.isSafeInteger(slot) && slot >= 0) return slot;
+      } catch {
+        // retried once, then unknown
+      }
+    }
+    return undefined;
   }
 
   /**

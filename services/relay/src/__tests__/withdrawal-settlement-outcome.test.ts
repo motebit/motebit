@@ -197,6 +197,8 @@ function makeOperator(sendUsdc: SolanaRpcAdapter["sendUsdc"]): {
     // #949: Path 0 sends only over a transfer that records every broadcast
     // and can read its outcome.
     honorsBroadcastHooks: true,
+    // The node's retained-history edge (#949 rounds 2–3): full history.
+    getFirstAvailableSlot: () => Promise.resolve(0),
     getSignatureOutcome: vi.fn().mockResolvedValue({ status: "pending" }),
     ownAddress: "RelayTreasuryAddressBase58",
     getUsdcBalance: vi.fn().mockResolvedValue(10_000_000_000n),
@@ -426,6 +428,9 @@ describe("Path 0 settlement outcome (#920)", () => {
     let sends = 0;
     let confirms = 0;
     const conn = {
+      // The pre-blockhash slot read and the retention edge (#949 rounds 2–3).
+      getSlot: vi.fn().mockResolvedValue(8_000),
+      getFirstAvailableBlock: vi.fn().mockResolvedValue(0),
       getLatestBlockhash: vi.fn().mockResolvedValue({
         blockhash: "GHtXQBsoZHVnNFa9YevAzFr17DJjgHXk3ycTKD5xD3Zi",
         lastValidBlockHeight: 100,

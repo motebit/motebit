@@ -122,9 +122,14 @@ export class OperatorSolanaTransfer {
    * must not send a payout it cannot later prove this way.
    */
   get recordsBroadcasts(): boolean {
+    // Round 3: reading an outcome is not enough — "absent" proves nothing
+    // without the node's retained-history edge, so an adapter that cannot
+    // read it could never prove a payout unpaid, and the payout would have
+    // no door.
     return (
       this.adapter.honorsBroadcastHooks === true &&
-      typeof this.adapter.getSignatureOutcome === "function"
+      typeof this.adapter.getSignatureOutcome === "function" &&
+      typeof this.adapter.getFirstAvailableSlot === "function"
     );
   }
 

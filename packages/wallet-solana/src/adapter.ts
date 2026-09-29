@@ -207,24 +207,45 @@ export interface SignedTransactionRef {
 export const LANDING_SLOT_MARGIN = 512;
 
 /**
+ * Blocks below `lastValidBlockHeight` the transaction's blockhash can sit
+ * (150), plus the same again for cross-node lag and 10 for the absence
+ * margin — the height floor used when no `recentSlot` was recorded.
+ */
+export const LANDING_HEIGHT_WINDOW = 150 + 150 + 10;
+
+/**
+ * The lowest slot `tx` could have landed in (#949 rounds 2–3): its recorded
+ * `recentSlot` less `LANDING_SLOT_MARGIN`; without one, a floor from its own
+ * validity — every block's slot is at least its block height, and the
+ * transaction lands above `lastValidBlockHeight − LANDING_HEIGHT_WINDOW`. The
+ * floor is far below the real landing slot (slots run ahead of heights), so it
+ * is decisive only on a node holding deep history — but it is never wrong, so
+ * a transaction recorded without its slot still has a door.
+ */
+export function earliestLandingSlot(tx: SignedTransactionRef): number | null {
+  if (typeof tx.recentSlot === "number" && Number.isSafeInteger(tx.recentSlot)) {
+    return tx.recentSlot - LANDING_SLOT_MARGIN;
+  }
+  return Number.isSafeInteger(tx.lastValidBlockHeight)
+    ? tx.lastValidBlockHeight - LANDING_HEIGHT_WINDOW
+    : null;
+}
+
+/**
  * Whether a node whose retained history starts at `firstAvailableSlot` has
  * kept every slot `tx` could have landed in (#949 round 2). Absence of a
  * signature is evidence of absence only inside that window: many RPC nodes
  * prune history after days, and a landed transaction then reads as absent.
- * False when `tx.recentSlot` is unknown — never assumed.
  */
 export function historyCoversLanding(
   tx: SignedTransactionRef,
   firstAvailableSlot: number,
 ): boolean {
+  const earliest = earliestLandingSlot(tx);
   return (
-    typeof tx.recentSlot === "number" &&
-    Number.isSafeInteger(tx.recentSlot) &&
-    Number.isSafeInteger(firstAvailableSlot) &&
-    firstAvailableSlot <= tx.recentSlot - LANDING_SLOT_MARGIN
+    earliest !== null && Number.isSafeInteger(firstAvailableSlot) && firstAvailableSlot <= earliest
   );
 }
-
 /**
  * Hooks around a broadcast. `beforeBroadcast` runs once per signed
  * transaction, after signing and BEFORE it is sent; a retry that re-signs

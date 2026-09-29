@@ -38,7 +38,12 @@ import {
   deriveSolanaAddress,
   isDerivedSettlementBinding,
 } from "../web3js-adapter.js";
-import { LANDING_SLOT_MARGIN, historyCoversLanding } from "../adapter.js";
+import {
+  LANDING_HEIGHT_WINDOW,
+  LANDING_SLOT_MARGIN,
+  earliestLandingSlot,
+  historyCoversLanding,
+} from "../adapter.js";
 import {
   USDC_MINT_MAINNET,
   InsufficientUsdcBalanceError,
@@ -61,9 +66,11 @@ function validBlockhash(): string {
 
 beforeEach(() => {
   getAccountMock.mockReset();
-  // No network in tests: the pre-blockhash slot read (#949 round 2) fails
-  // unless a test stubs it on its own connection.
-  vi.spyOn(Connection.prototype, "getSlot").mockRejectedValue(new Error("no network in tests"));
+  // No network in tests: the pre-blockhash slot read (#949 round 2) answers
+  // a fixed slot unless a test stubs it on its own connection.
+  vi.spyOn(Connection.prototype, "getSlot").mockResolvedValue(5_000_000);
+  // …and a node holding full history, so an expiry read can be decisive.
+  vi.spyOn(Connection.prototype, "getFirstAvailableBlock").mockResolvedValue(0);
 });
 
 describe("Web3JsRpcAdapter", () => {
@@ -1195,6 +1202,64 @@ describe("Web3JsRpcAdapter — beforeBroadcast sees the signed tx before it is s
     return { adapter, send };
   }
 
+  it("reads the slot BEFORE the blockhash, so the recorded slot is at or below where the tx can land (T1)", async () => {
+    const { adapter } = primed();
+    const conn = adapter.getConnection();
+    const slotRead = vi.spyOn(conn, "getSlot").mockResolvedValue(77_777);
+    const hashRead = vi.spyOn(conn, "getLatestBlockhash");
+    vi.spyOn(conn, "sendRawTransaction").mockResolvedValue("sig");
+    await adapter.sendUsdc(
+      { toAddress: validBase58Address(), microAmount: 1n },
+      { beforeBroadcast: () => undefined },
+    );
+    expect(slotRead.mock.invocationCallOrder[0]!).toBeLessThan(
+      hashRead.mock.invocationCallOrder[0]!,
+    );
+  });
+
+  it("C1: with a recording payer, a slot read that fails twice ⇒ nothing is signed or sent, the hook never runs", async () => {
+    const { adapter, send } = primed();
+    const conn = adapter.getConnection();
+    let slotReads = 0;
+    vi.spyOn(conn, "getSlot").mockImplementation(() => {
+      slotReads++;
+      return Promise.reject(new Error("rpc down"));
+    });
+    const hook = vi.fn();
+    await expect(
+      adapter.sendUsdc(
+        { toAddress: validBase58Address(), microAmount: 1n },
+        { beforeBroadcast: hook },
+      ),
+    ).rejects.toThrow(/nothing was signed or sent/);
+    expect(slotReads).toBe(2);
+    expect(hook).not.toHaveBeenCalled();
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it("C1: one failed slot read is retried; the second answer is recorded", async () => {
+    const { adapter, send } = primed();
+    const conn = adapter.getConnection();
+    vi.spyOn(conn, "getSlot")
+      .mockRejectedValueOnce(new Error("blip"))
+      .mockResolvedValueOnce(88_888);
+    send.mockResolvedValue("sig");
+    const seen: Array<{ recentSlot?: number }> = [];
+    await adapter.sendUsdc(
+      { toAddress: validBase58Address(), microAmount: 1n },
+      { beforeBroadcast: (r) => void seen.push(r) },
+    );
+    expect(seen[0]!.recentSlot).toBe(88_888);
+  });
+
+  it("without a recording payer, a failed slot read does not block the send (nobody records the ref)", async () => {
+    const { adapter, send } = primed();
+    vi.spyOn(adapter.getConnection(), "getSlot").mockRejectedValue(new Error("rpc down"));
+    send.mockResolvedValue("sig");
+    const r = await adapter.sendUsdc({ toAddress: validBase58Address(), microAmount: 1n });
+    expect(r.signature).toBe("sig");
+  });
+
   it("reports the exact signature that is then sent, before sending", async () => {
     const { adapter, send } = primed();
     const seen: Array<{ signature: string; lastValidBlockHeight: number }> = [];
@@ -1778,9 +1843,21 @@ describe("getSignatureOutcome: absence is evidence only inside retained history 
     expect((await adapter.getSignatureOutcome(tx)).status).toBe("rpc_error");
   });
 
-  it("historyCoversLanding is false without a recentSlot, and honours the margin", () => {
+  it("without a recentSlot, the floor is the transaction's own validity (slot ≥ block height) — deep history decides, recent history does not", () => {
+    const ref = { signature: "s", lastValidBlockHeight: 10_000 };
+    expect(earliestLandingSlot(ref)).toBe(10_000 - LANDING_HEIGHT_WINDOW);
+    expect(LANDING_HEIGHT_WINDOW).toBe(310);
+    expect(historyCoversLanding(ref, 0)).toBe(true);
+    expect(historyCoversLanding(ref, 10_000 - 310)).toBe(true);
+    expect(historyCoversLanding(ref, 10_000 - 309)).toBe(false);
+    expect(historyCoversLanding({ signature: "s", lastValidBlockHeight: Number.NaN }, 0)).toBe(
+      false,
+    );
+  });
+
+  it("historyCoversLanding honours the margin under a recentSlot", () => {
     const ref = { signature: "s", lastValidBlockHeight: 1 };
-    expect(historyCoversLanding(ref, 0)).toBe(false);
+    expect(LANDING_SLOT_MARGIN).toBe(512);
     expect(historyCoversLanding({ ...ref, recentSlot: 1_000 }, 1_000 - LANDING_SLOT_MARGIN)).toBe(
       true,
     );

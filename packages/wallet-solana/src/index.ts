@@ -42,6 +42,8 @@ export {
   type SignedTransactionRef,
   type SignatureOutcome,
   LANDING_SLOT_MARGIN,
+  LANDING_HEIGHT_WINDOW,
+  earliestLandingSlot,
   historyCoversLanding,
 } from "./adapter.js";
 

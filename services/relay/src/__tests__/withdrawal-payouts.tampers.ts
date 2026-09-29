@@ -27,6 +27,12 @@ interface Tamper {
   find: string;
   replace: string;
   test: string;
+  /**
+   * Where the test runs, when not in `pkg` (a wallet-solana tamper seen
+   * through the relay). The relay imports the BUILT package, so `pkg` is
+   * rebuilt after the tamper is applied and again after it is restored.
+   */
+  testPkg?: "services/relay";
 }
 
 const RELAY = "services/relay";
@@ -281,6 +287,84 @@ export const TAMPERS: Tamper[] = [
     replace: "",
     test: "src/__tests__/web3js-adapter.test.ts",
   },
+  // ── round 3 (cold review of 1046ca8db) ─────────────────────────────────
+  {
+    name: "C1 a recording payer's transaction is signed and broadcast with no recentSlot",
+    pkg: "packages/wallet-solana",
+    file: "src/web3js-adapter.ts",
+    find: "if (recentSlot === undefined && hooks?.beforeBroadcast != null) {",
+    replace: "if (false) {",
+    test: "src/__tests__/web3js-adapter.test.ts",
+  },
+  {
+    name: "C1 the sign-time slot read is not retried",
+    pkg: "packages/wallet-solana",
+    file: "src/web3js-adapter.ts",
+    find: "for (let i = 0; i < 2; i++) {",
+    replace: "for (let i = 0; i < 1; i++) {",
+    test: "src/__tests__/web3js-adapter.test.ts",
+  },
+  {
+    name: "C1 an attempt recorded without its slot has no floor (wallet-solana)",
+    pkg: "packages/wallet-solana",
+    file: "src/adapter.ts",
+    find: "? tx.lastValidBlockHeight - LANDING_HEIGHT_WINDOW",
+    replace: "? null",
+    test: "src/__tests__/web3js-adapter.test.ts",
+  },
+  {
+    name: "C1 an attempt recorded without its slot has no floor (seen through the relay harness)",
+    pkg: "packages/wallet-solana",
+    file: "src/adapter.ts",
+    find: "? tx.lastValidBlockHeight - LANDING_HEIGHT_WINDOW",
+    replace: "? null",
+    test: HARNESS,
+    testPkg: RELAY,
+  },
+  {
+    name: "C1b Path 0 sends over an adapter that cannot read the node's retained history (wallet-solana)",
+    pkg: "packages/wallet-solana",
+    file: "src/operator-transfer.ts",
+    find: 'typeof this.adapter.getSignatureOutcome === "function" &&\n      typeof this.adapter.getFirstAvailableSlot === "function"',
+    replace: 'typeof this.adapter.getSignatureOutcome === "function"',
+    test: "src/__tests__/operator-transfer.test.ts",
+  },
+  {
+    name: "C1b same, seen through the relay harness (the payout would have no door)",
+    pkg: "packages/wallet-solana",
+    file: "src/operator-transfer.ts",
+    find: 'typeof this.adapter.getSignatureOutcome === "function" &&\n      typeof this.adapter.getFirstAvailableSlot === "function"',
+    replace: 'typeof this.adapter.getSignatureOutcome === "function"',
+    test: HARNESS,
+    testPkg: RELAY,
+  },
+  {
+    name: "T1 the slot is read AFTER the blockhash",
+    pkg: "packages/wallet-solana",
+    file: "src/web3js-adapter.ts",
+    find: "const recentSlot = await this.readRecentSlot();",
+    replace:
+      "await this.connection.getLatestBlockhash(this.commitment);\n      const recentSlot = await this.readRecentSlot();",
+    test: "src/__tests__/web3js-adapter.test.ts",
+  },
+  {
+    name: "T2r LANDING_SLOT_MARGIN = 0, seen through the relay unit tests",
+    pkg: "packages/wallet-solana",
+    file: "src/adapter.ts",
+    find: "export const LANDING_SLOT_MARGIN = 512;",
+    replace: "export const LANDING_SLOT_MARGIN = 0;",
+    test: UNIT,
+    testPkg: RELAY,
+  },
+  {
+    name: "T2r LANDING_SLOT_MARGIN = 0, seen through the relay harness (near-send retention)",
+    pkg: "packages/wallet-solana",
+    file: "src/adapter.ts",
+    find: "export const LANDING_SLOT_MARGIN = 512;",
+    replace: "export const LANDING_SLOT_MARGIN = 0;",
+    test: HARNESS,
+    testPkg: RELAY,
+  },
 ];
 
 function run(): number {
@@ -297,14 +381,20 @@ function run(): number {
     writeFileSync(path, original.replace(t.find, t.replace));
     let red = false;
     try {
+      if (t.testPkg !== undefined) {
+        execFileSync("pnpm", ["exec", "tsc", "-b"], { cwd: resolve(root, t.pkg), stdio: "ignore" });
+      }
       execFileSync("npx", ["vitest", "run", t.test], {
-        cwd: resolve(root, t.pkg),
+        cwd: resolve(root, t.testPkg ?? t.pkg),
         stdio: "ignore",
       });
     } catch {
       red = true;
     } finally {
       writeFileSync(path, original);
+      if (t.testPkg !== undefined) {
+        execFileSync("pnpm", ["exec", "tsc", "-b"], { cwd: resolve(root, t.pkg), stdio: "ignore" });
+      }
     }
     process.stdout.write(`${red ? "RED (ok)       " : "STILL GREEN    "} ${t.name}\n`);
     if (!red) failures++;

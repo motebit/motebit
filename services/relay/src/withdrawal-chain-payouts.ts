@@ -218,9 +218,12 @@ export async function readChainVerdict(
     // Absence of evidence is evidence of absence only inside the window the
     // node provably retains (#949 round 2). An `expired` is accepted only when
     // the node's first available slot is at or before where this transaction
-    // could first land; otherwise (history pruned, the edge unreadable, or the
-    // landing window never recorded) a landed payout would read exactly like
-    // this, so the verdict is UNKNOWN — never "not landed".
+    // could first land (`earliestLandingSlot`: its recorded slot less the
+    // margin; for an attempt recorded without one, the floor its own validity
+    // gives — round 3, so such an attempt still has a door on a node holding
+    // deep history). Otherwise (history pruned, or the edge unreadable) a
+    // landed payout would read exactly like this, so the verdict is UNKNOWN —
+    // never "not landed".
     if (outcome.status === "expired") {
       const first = await retainedFrom();
       if (first === null || !historyCoversLanding(tx, first)) {

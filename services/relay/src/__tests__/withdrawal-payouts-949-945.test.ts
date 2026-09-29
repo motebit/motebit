@@ -230,13 +230,40 @@ describe("readChainVerdict (#949)", () => {
     ).toMatchObject({ kind: "undecided", reason: "history_pruned" });
   });
 
-  it("an attempt recorded without its landing window can never be read as expired", async () => {
+  it("C1: an attempt recorded without its landing window still has a door — decided on a node holding deep history, undecided on a recent one", async () => {
     const d = await db();
-    recordPayoutAttempt(d, "wn", { signature: "a", lastValidBlockHeight: 10 }, 1);
-    expect(await readChainVerdict(d, "wn", reader({ a: { status: "expired" } }, 0))).toMatchObject({
-      kind: "undecided",
-      reason: "history_pruned",
+    const L = 50_000;
+    recordPayoutAttempt(d, "wn", { signature: "a", lastValidBlockHeight: L }, 1);
+    // Every block's slot is at least its height, so the floor is L - 310.
+    expect(await readChainVerdict(d, "wn", reader({ a: { status: "expired" } }, 0))).toEqual({
+      kind: "not_paid",
+      attempts: 1,
     });
+    expect(await readChainVerdict(d, "wn", reader({ a: { status: "expired" } }, L - 310))).toEqual({
+      kind: "not_paid",
+      attempts: 1,
+    });
+    expect(
+      await readChainVerdict(d, "wn", reader({ a: { status: "expired" } }, L - 309)),
+    ).toMatchObject({ kind: "undecided", reason: "history_pruned" });
+  });
+
+  it("T2r: a node whose history starts inside the 512-slot landing margin is never read as not_paid", async () => {
+    const d = await db();
+    recordPayoutAttempt(
+      d,
+      "wm",
+      { signature: "a", lastValidBlockHeight: 10, recentSlot: RECENT },
+      1,
+    );
+    for (const edge of [RECENT - 1, RECENT - 100, RECENT - 511]) {
+      expect(
+        await readChainVerdict(d, "wm", reader({ a: { status: "expired" } }, edge)),
+      ).toMatchObject({ kind: "undecided", reason: "history_pruned" });
+    }
+    expect(
+      await readChainVerdict(d, "wm", reader({ a: { status: "expired" } }, RECENT - 512)),
+    ).toEqual({ kind: "not_paid", attempts: 1 });
   });
 
   it("precedence: pending beats rpc_error beats history_pruned", async () => {

@@ -32,6 +32,8 @@ function makeOperator(overrides: Partial<SolanaRpcAdapter> = {}): {
   const adapter: SolanaRpcAdapter = {
     // #949: Path 0 sends only over a transfer that records its broadcasts.
     honorsBroadcastHooks: true,
+    // The node's retained-history edge (#949 rounds 2–3): full history.
+    getFirstAvailableSlot: () => Promise.resolve(0),
     getSignatureOutcome: vi.fn().mockResolvedValue({ status: "pending" }),
     ownAddress: "RelayTreasuryAddressBase58",
     getUsdcBalance: vi.fn().mockResolvedValue(10_000_000_000n),
