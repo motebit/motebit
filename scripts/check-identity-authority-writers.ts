@@ -937,6 +937,22 @@ const WRITERS: readonly Writer[] = [
       "`bindP2pProofToTask` (#918), called only inside an admission transaction that enqueues the task it names: the task-submit door, after the proof's payer was read from the chain and matched to the submitter's key (p2p-payer.ts), whose `submitted_by` is `submissionTerms`' submitter (the dualAuth-verified caller, else the operator's master-token-asserted body field), and the federation forward door after the origin peer's signature verified (its `submitted_by` is the payload's, else `relay:<origin>`). The row is keyed by the proof's tx hash, `INSERT OR IGNORE`, never overwritten or deleted: it grants nothing to the identity it names, which is read only to decide whether a refusal may disclose the task id to a caller whose VERIFIED token is that identity (or the operator)",
   },
   {
+    file: R + "x402-settlements.ts",
+    verb: "INSERT",
+    table: "relay_x402_settlements",
+    count: 1,
+    principal:
+      "`recordX402Intent` (#907 round 2), called only by the task-submit door's x402 `settle()`, after the facilitator VERIFIED the request's EIP-3009 authorization and the gate tied it to this request's quote and the relay treasury. The row is keyed by the authorization's own (payer, nonce), `INSERT OR IGNORE`, never overwritten: its `delegator_id` is `submissionTerms`' submitter (the dualAuth-verified caller, else the operator's master-token-asserted body field, else the path agent) — the same principal the handler debits — and it grants that identity nothing but the credit of the payment it carries",
+  },
+  {
+    file: R + "x402-settlements.ts",
+    verb: "UPDATE",
+    table: "relay_x402_settlements",
+    count: 12,
+    principal:
+      "the record's own resolution (#907 rounds 2–3), status and reconciler bookkeeping only, never its identity columns: `markX402Failed` on a definite facilitator refusal, or a chain read proving the authorization CANCELLED (an AuthorizationCanceled log), expired unexecuted (two agreeing complete scans, by the confirmed head's own timestamp), or executed with a non-matching paired Transfer (also written on a re-check, reason only); `creditX402Settlement` → credited in the transaction that credits the recorded `delegator_id` — by the settling request (from pending only), or by the reconciler / the operator's resolve door only on PROOF OF EXECUTION (an AuthorizationUsed log and the Transfer the token emitted right after it, to the treasury for the exact amount), consuming that Transfer log (`tx_hash`, `credit_log_index`, unique); and the reconciler's bookkeeping (`scan_from_block`, `scan_end_block`, `scanned_to_block`, `pass_cursor`, `last_checked_at`, `expiry_observed_at`, `recheck_count`, `mismatch_rechecks`, `next_recheck_at`; round 8 split the spend into the operator's cursor reset, the mismatch budget and the expiry/refusal budget, each a compare-and-set on the observed generation)",
+  },
+  {
     file: R + "migrations.ts",
     verb: "INSERT",
     table: "relay_p2p_proof_claims",

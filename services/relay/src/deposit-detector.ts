@@ -76,7 +76,7 @@ export const DEFAULT_RPC_URLS: Record<string, string> = {
  * Adding a new chain to `USDC_CONTRACTS` must add a matching entry here.
  * Drift gate `check-deposit-detector-confirmations` enforces the pin.
  */
-const CONFIRMATIONS_BY_CHAIN: Record<string, number> = {
+export const CONFIRMATIONS_BY_CHAIN: Record<string, number> = {
   "eip155:1": 12,
   "eip155:8453": 12,
   "eip155:84532": 1,

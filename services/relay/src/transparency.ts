@@ -127,10 +127,12 @@ export const DECLARATION_CONTENT = {
         "relay_treasury_reconciliations",
         "relay_p2p_proof_claims",
         "relay_settlement_payee_corrections",
+        "relay_x402_settlements",
       ],
       observable: [
         "every delegation request and its routing decision",
         "every P2P payment proof bound to the one task it admitted (tx_hash, task_id, submitting motebit_id, whether that submitter was proven by a signed token, claimed_at — no content): one proof funds at most one task; a claim is written in the admission transaction and never deleted (migration v47, #918)",
+        "every x402 payment the relay settles for a task submission (the EIP-3009 authorization's payer address and nonce, network, token, treasury address, amount, validAfter and validBefore, the Idempotency-Key and path motebit_id it was presented under, the delegator credited, the task id reserved for it, status pending/credited/failed, tx hash, failure reason, the reconciler's block-scan range and cursors (start, fixed end, pass cursor, last visit), expiry-observation and re-check bookkeeping, the consumed Transfer log index, timestamps — no content): written before the facilitator is called, so a settle whose outcome is unknown is reconciled from the chain's EIP-3009 events (proof of execution; a cancelled authorization is never credited) and credited once; one authorization is settled at most once; never deleted (migration v49, #907)",
         "every signed execution receipt the relay verified",
         "full signed execution receipt JSON, byte-identical to the signer's canonical form, archived per (motebit_id, task_id) for independent audit re-verification",
         "every settlement (relay-mediated and p2p audit)",

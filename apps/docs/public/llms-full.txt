@@ -7370,18 +7370,26 @@ This guide covers the most common issues you will encounter when operating a mot
 The relay emits structured JSON to stdout (info/warn/debug) and stderr (error). Every line is a single JSON object:
 
 ```json
-{"ts":"2026-03-20T14:32:01.123Z","level":"info","msg":"receipt.verified","service":"relay","correlationId":"a1b2c3d4","status":"completed","motebitId":"01234..."}
+{
+  "ts": "2026-03-20T14:32:01.123Z",
+  "level": "info",
+  "msg": "receipt.verified",
+  "service": "relay",
+  "correlationId": "a1b2c3d4",
+  "status": "completed",
+  "motebitId": "01234..."
+}
 ```
 
 ### Key fields
 
-| Field | Purpose |
-|---|---|
-| `ts` | ISO 8601 timestamp |
-| `level` | `debug`, `info`, `warn`, or `error` |
-| `msg` | Structured event key (e.g. `receipt.verified`, `settlement.created`) |
-| `correlationId` | Traces a single request across log lines — usually the task ID |
-| `service` | Always `relay` for the API server; `federation` for the federation module |
+| Field           | Purpose                                                                   |
+| --------------- | ------------------------------------------------------------------------- |
+| `ts`            | ISO 8601 timestamp                                                        |
+| `level`         | `debug`, `info`, `warn`, or `error`                                       |
+| `msg`           | Structured event key (e.g. `receipt.verified`, `settlement.created`)      |
+| `correlationId` | Traces a single request across log lines — usually the task ID            |
+| `service`       | Always `relay` for the API server; `federation` for the federation module |
 
 ### Filtering logs
 
@@ -7428,12 +7436,12 @@ The relay returns 400 for malformed or missing fields. Common causes:
 
 Authentication failed before the request reached business logic.
 
-| Cause | Response message |
-|---|---|
-| No `Authorization` header | `Missing auth token` or `Missing authorization` |
-| Malformed or expired signed token | `Invalid token` |
-| Ed25519 signature verification failed | `Token verification failed` |
-| Device not registered for this motebit | `Device not authorized for this motebit` |
+| Cause                                  | Response message                                |
+| -------------------------------------- | ----------------------------------------------- |
+| No `Authorization` header              | `Missing auth token` or `Missing authorization` |
+| Malformed or expired signed token      | `Invalid token`                                 |
+| Ed25519 signature verification failed  | `Token verification failed`                     |
+| Device not registered for this motebit | `Device not authorized for this motebit`        |
 
 **Fix:** Regenerate the signed token. Tokens expire after 5 minutes. Ensure the device's Ed25519 private key matches the public key registered with the relay. Check that the system clock is accurate — clock skew beyond 5 minutes will cause token expiry.
 
@@ -7442,20 +7450,23 @@ Authentication failed before the request reached business logic.
 The target agent requires payment and the delegator has insufficient funds.
 
 ```json
-{"error":"Insufficient funds — deposit to virtual account or pay via x402"}
+{ "error": "Insufficient funds — deposit to virtual account or pay via x402" }
 ```
 
 **Causes:**
-- The target agent has a `pay_to_address` in its service listing
+
+- The target agent has a `pay_to_address` in its service listing (its opt-in to x402; the payment itself goes to the relay treasury, `X402_PAY_TO_ADDRESS`)
 - The delegator's virtual account balance is too low to cover the estimated cost
 - No x402 payment header was provided
 
 **Fix:**
+
 1. Check the delegator's balance: `GET /api/v1/agents/:motebitId/listing` to see the price, then check the account balance
 2. Fund the account via the deposit endpoint or Stripe checkout
 3. Alternatively, delegate to an agent that doesn't require payment
 
 **Related logs:**
+
 - `account.debit` — shows the debit attempt and balance
 - `settlement.created` — confirms successful settlement after task completion
 
@@ -7463,21 +7474,22 @@ The target agent requires payment and the delegator has insufficient funds.
 
 Authorization succeeded but the caller lacks permission for the specific action.
 
-| Context | Response message | Fix |
-|---|---|---|
-| Device auth | `Device not authorized for this motebit` | Register the device for this motebit ID |
-| Token revocation | `Cannot revoke tokens for another agent` | Use the agent's own signed token |
-| Agent revocation | `Cannot revoke another agent` | Only the agent itself can self-revoke |
-| Credential revocation | `Only the credential subject or issuer can revoke` | Use the correct agent identity |
-| Listing update | `Cannot modify another agent's listing` | Sign with the listing owner's key |
-| Pairing | `Not authorized for this pairing session` | Use the correct device token |
-| Federation disabled | `Federation is disabled on this relay` | Set `MOTEBIT_FEDERATION_ENDPOINT_URL` |
-| Peer blocked | `Peer is blocked` | Remove the peer from `MOTEBIT_FEDERATION_BLOCKED_PEERS` |
-| Peer not in allowlist | `Peer is not in allowlist` | Add the peer to `MOTEBIT_FEDERATION_ALLOWED_PEERS` |
-| Federation signature | `Invalid federation signature` | Peer's Ed25519 key doesn't match — possible key rotation without succession |
-| Quorum approval | `Approver is not authorized for this quorum` | The approver is not in the quorum's authorized agent list |
+| Context               | Response message                                   | Fix                                                                         |
+| --------------------- | -------------------------------------------------- | --------------------------------------------------------------------------- |
+| Device auth           | `Device not authorized for this motebit`           | Register the device for this motebit ID                                     |
+| Token revocation      | `Cannot revoke tokens for another agent`           | Use the agent's own signed token                                            |
+| Agent revocation      | `Cannot revoke another agent`                      | Only the agent itself can self-revoke                                       |
+| Credential revocation | `Only the credential subject or issuer can revoke` | Use the correct agent identity                                              |
+| Listing update        | `Cannot modify another agent's listing`            | Sign with the listing owner's key                                           |
+| Pairing               | `Not authorized for this pairing session`          | Use the correct device token                                                |
+| Federation disabled   | `Federation is disabled on this relay`             | Set `MOTEBIT_FEDERATION_ENDPOINT_URL`                                       |
+| Peer blocked          | `Peer is blocked`                                  | Remove the peer from `MOTEBIT_FEDERATION_BLOCKED_PEERS`                     |
+| Peer not in allowlist | `Peer is not in allowlist`                         | Add the peer to `MOTEBIT_FEDERATION_ALLOWED_PEERS`                          |
+| Federation signature  | `Invalid federation signature`                     | Peer's Ed25519 key doesn't match — possible key rotation without succession |
+| Quorum approval       | `Approver is not authorized for this quorum`       | The approver is not in the quorum's authorized agent list                   |
 
 **Related logs:**
+
 - `federation.receipt_signature_invalid` — Ed25519 signature on a federated receipt doesn't verify
 - `federation.receipt_key_missing` — no public key found for the executing agent on a federated receipt
 
@@ -7485,20 +7497,20 @@ Authorization succeeded but the caller lacks permission for the specific action.
 
 The requested resource doesn't exist.
 
-| Resource | Response message |
-|---|---|
-| Identity | `Identity not found` |
-| Plan | `Plan not found` or `No plan found for goal` |
-| Task | `Task not found or expired` (tasks have a TTL) |
-| Agent | `Agent not registered` or `Agent not found` |
-| Listing | `No service listing found` |
-| Credentials | `No credentials found for this agent` |
-| Trusted path | `No trusted path found` |
-| Execution ledger | `No execution ledger found for this goal` |
-| Pairing | `Invalid pairing code` or `Pairing session not found` |
-| Federation peer | `No pending peer found for this relay_id` |
-| Withdrawal | `Withdrawal not found` |
-| Approval | `Approval not found` |
+| Resource         | Response message                                      |
+| ---------------- | ----------------------------------------------------- |
+| Identity         | `Identity not found`                                  |
+| Plan             | `Plan not found` or `No plan found for goal`          |
+| Task             | `Task not found or expired` (tasks have a TTL)        |
+| Agent            | `Agent not registered` or `Agent not found`           |
+| Listing          | `No service listing found`                            |
+| Credentials      | `No credentials found for this agent`                 |
+| Trusted path     | `No trusted path found`                               |
+| Execution ledger | `No execution ledger found for this goal`             |
+| Pairing          | `Invalid pairing code` or `Pairing session not found` |
+| Federation peer  | `No pending peer found for this relay_id`             |
+| Withdrawal       | `Withdrawal not found`                                |
+| Approval         | `Approval not found`                                  |
 
 **For expired tasks:** The relay keeps tasks in memory with a TTL. If the executing agent takes too long, the task entry expires and the result endpoint returns 404. Increase the task timeout or investigate why the agent is slow.
 
@@ -7506,12 +7518,12 @@ The requested resource doesn't exist.
 
 A resource already exists or is in an unexpected state.
 
-| Context | Response message |
-|---|---|
-| Federation peering | `Peer already exists in {state} state` |
-| Pairing code | `Pairing code already used` |
-| Key re-registration | `Public key changed — succession record required` |
-| Approval voting | `Approval already resolved` or `Approval already has a vote from this agent` |
+| Context             | Response message                                                             |
+| ------------------- | ---------------------------------------------------------------------------- |
+| Federation peering  | `Peer already exists in {state} state`                                       |
+| Pairing code        | `Pairing code already used`                                                  |
+| Key re-registration | `Public key changed — succession record required`                            |
+| Approval voting     | `Approval already resolved` or `Approval already has a vote from this agent` |
 
 **Federation duplicate task:** When a peer relay receives a forwarded task with a `task_id` it has already seen, it returns 409. This is intentional idempotency — the origin relay should not retry.
 
@@ -7527,19 +7539,20 @@ Pairing codes have a short TTL. Generate a new one.
 
 The relay enforces 5-tier fixed-window rate limits per IP address:
 
-| Tier | Limit | Endpoints |
-|---|---|---|
-| `auth` | 30/min | Token verification, registration, bootstrap |
-| `read` | 60/min | State, memory, goals, conversations, devices, audit queries |
-| `write` | 30/min | Event push, conversation sync, task submission |
-| `public` | 20/min | Health, discover, credential status |
-| `expensive` | 10/min | Candidate scoring, trust closure, graph queries |
+| Tier        | Limit  | Endpoints                                                   |
+| ----------- | ------ | ----------------------------------------------------------- |
+| `auth`      | 30/min | Token verification, registration, bootstrap                 |
+| `read`      | 60/min | State, memory, goals, conversations, devices, audit queries |
+| `write`     | 30/min | Event push, conversation sync, task submission              |
+| `public`    | 20/min | Health, discover, credential status                         |
+| `expensive` | 10/min | Candidate scoring, trust closure, graph queries             |
 
 Federation endpoints have a separate per-peer limit of 30 requests/min per relay ID.
 
 WebSocket connections have a per-connection limit of 100 messages per 10 seconds.
 
 **Fix:** Back off exponentially. If you're hitting rate limits in normal operation, check for:
+
 - Polling loops that are too aggressive (use WebSocket instead of HTTP polling)
 - Multiple processes sharing the same IP
 - A misconfigured sync interval (default is 30 seconds — shorter intervals may trigger limits)
@@ -7569,10 +7582,16 @@ Receipt verification happens at multiple points: task result ingestion, federati
 The Ed25519 signature on the receipt doesn't match any known public key for the executing agent.
 
 ```json
-{"level":"error","msg":"receipt.verification_failed","reason":"invalid Ed25519 signature","correlationId":"task-123"}
+{
+  "level": "error",
+  "msg": "receipt.verification_failed",
+  "reason": "invalid Ed25519 signature",
+  "correlationId": "task-123"
+}
 ```
 
 **Causes:**
+
 - The agent rotated its key but didn't submit a succession record
 - The agent is signing with a different keypair than the one registered
 - The receipt was tampered with in transit
@@ -7584,7 +7603,11 @@ The Ed25519 signature on the receipt doesn't match any known public key for the 
 The receipt includes a `prompt_hash` that doesn't match the task's prompt, and no `relay_task_id` binding is present.
 
 ```json
-{"level":"warn","msg":"receipt.prompt_hash_mismatch","reason":"receipt prompt_hash does not match task prompt — relay_task_id binding not present"}
+{
+  "level": "warn",
+  "msg": "receipt.prompt_hash_mismatch",
+  "reason": "receipt prompt_hash does not match task prompt — relay_task_id binding not present"
+}
 ```
 
 This is a **hard rejection** (HTTP 400). The `relay_task_id` field is required for cryptographic task binding — there is no legacy fallback. The fix is to upgrade the agent to include `relay_task_id` in signed receipts (motebit runtime 0.4.0+).
@@ -7594,7 +7617,12 @@ This is a **hard rejection** (HTTP 400). The `relay_task_id` field is required f
 A nested delegation receipt (in a multi-hop chain) failed Ed25519 verification.
 
 ```json
-{"level":"warn","msg":"delegation_receipt.signature_invalid","parentAgent":"alice","delegatedAgent":"bob"}
+{
+  "level": "warn",
+  "msg": "delegation_receipt.signature_invalid",
+  "parentAgent": "alice",
+  "delegatedAgent": "bob"
+}
 ```
 
 The invalid sub-receipt is skipped — it won't be settled or produce trust edges. Check the sub-agent's key registration.
@@ -7606,7 +7634,13 @@ The invalid sub-receipt is skipped — it won't be settled or produce trust edge
 Normal operation — a settlement was successfully recorded.
 
 ```json
-{"level":"info","msg":"settlement.created","correlationId":"task-123","net":0.0045,"fee":0.0005}
+{
+  "level": "info",
+  "msg": "settlement.created",
+  "correlationId": "task-123",
+  "net": 0.0045,
+  "fee": 0.0005
+}
 ```
 
 ### `settlement.retry.refunded`
@@ -7614,7 +7648,13 @@ Normal operation — a settlement was successfully recorded.
 Settlement forwarding to a federation peer failed after `max_attempts` retries (default 5; exponential backoff from 5 s with ±20% jitter, capped at 1 hour — `DEFAULT_RETRY_POLICY` in `retry-policy.ts`). The locked funds were automatically refunded to the delegator.
 
 ```json
-{"level":"info","msg":"settlement.retry.refunded","taskId":"task-123","amount":0.005,"delegator":"alice-id"}
+{
+  "level": "info",
+  "msg": "settlement.retry.refunded",
+  "taskId": "task-123",
+  "amount": 0.005,
+  "delegator": "alice-id"
+}
 ```
 
 **Fix:** Check whether the peer relay is reachable. The circuit breaker may have already suspended the peer.
@@ -7624,7 +7664,12 @@ Settlement forwarding to a federation peer failed after `max_attempts` retries (
 A sub-task referenced in a delegation receipt wasn't found in the relay's task queue. The sub-task may have expired or the `relay_task_id` doesn't match.
 
 ```json
-{"level":"warn","msg":"multihop.settlement.task_not_found","subTaskId":"sub-task-456","subAgent":"bob-id"}
+{
+  "level": "warn",
+  "msg": "multihop.settlement.task_not_found",
+  "subTaskId": "sub-task-456",
+  "subAgent": "bob-id"
+}
 ```
 
 ### `multihop.settlement.sig_invalid`
@@ -7636,7 +7681,7 @@ A sub-receipt in the multi-hop chain failed signature verification. Settlement f
 The delegation chain exceeds 10 hops. This may indicate circular delegation. Settlement stops at the depth limit.
 
 ```json
-{"level":"warn","msg":"multihop.settlement.depth_limit","depth":11,"subAgent":"agent-id"}
+{ "level": "warn", "msg": "multihop.settlement.depth_limit", "depth": 11, "subAgent": "agent-id" }
 ```
 
 ## Federation issues
@@ -7646,10 +7691,22 @@ The delegation chain exceeds 10 hops. This may indicate circular delegation. Set
 The x402 payment facilitator is unreachable at startup. Virtual account deposits and withdrawals still work. Agents with `pay_to_address` listings will return 402 to callers who don't have sufficient virtual balance.
 
 ```json
-{"level":"warn","msg":"x402.facilitator.init_failed","facilitator":"https://x402.org/facilitator"}
+{
+  "level": "warn",
+  "msg": "x402.facilitator.init_failed",
+  "facilitator": "https://x402.org/facilitator"
+}
 ```
 
 **Fix:** Check network connectivity to the facilitator URL. This is expected in test environments.
+
+### x402 reconciliation and RPC load
+
+An x402 settlement whose outcome the relay could not learn (`402 TASK_X402_OUTCOME_UNKNOWN`) stays `pending` in `relay_x402_settlements` until the supervised `x402-reconciliation` loop finds proof on chain: the authorization's `AuthorizationUsed` log and its own Transfer to the treasury, or its cancellation, or its expiry. The loop visits records oldest-first by `COALESCE(last_checked_at, created_at)`, so a burst of new records never starves an older one.
+
+Records are never pruned. Every new record costs about 25 to 50 RPC reads: a binary search over block timestamps to find where its scan starts and where it ends, plus the `eth_getLogs` pages. A public RPC's rate limit throttles that work, so on a busy relay, records wait longer before they are resolved. **Set a keyed RPC per network** for production: `X402_RPC_URL_<CAIP-2 network, upper-cased, non-alphanumerics as _>`, for example `X402_RPC_URL_EIP155_8453` for Base mainnet.
+
+To inspect or re-check one record, use `GET /api/v1/admin/x402-settlements?status=pending|failed` and `POST /api/v1/admin/x402-settlements/:payer/:nonce/resolve` (master token). A resolve credits only on proof of execution.
 
 ### `federation.heartbeat.missed`
 
@@ -7660,7 +7717,7 @@ A peer relay didn't respond to the heartbeat ping. The relay tracks consecutive 
 - **5 missed:** Peer removed
 
 ```json
-{"level":"warn","msg":"federation.heartbeat.missed","peerId":"peer-relay-id","missed":2}
+{ "level": "warn", "msg": "federation.heartbeat.missed", "peerId": "peer-relay-id", "missed": 2 }
 ```
 
 ### `federation.peer.suspended`
@@ -7700,6 +7757,7 @@ motebit rotate --reason "scheduled rotation"
 ```
 
 This generates a new Ed25519 keypair and creates a succession record where:
+
 1. The **old key** signs a tombstone declaring the new key as successor
 2. The **new key** signs an acknowledgment
 3. Both signatures are required — non-repudiation from the old key, acknowledgment from the new key
@@ -7732,16 +7790,16 @@ Fatal errors during bootstrap (missing identity, unreachable relay, invalid conf
 
 ## Environment variables reference
 
-| Variable | Purpose | Default |
-|---|---|---|
-| `LOG_LEVEL` | Minimum log level (`debug`, `info`, `warn`, `error`) | `info` |
-| `MOTEBIT_FEDERATION_ENDPOINT_URL` | This relay's public URL for federation | (disabled) |
-| `MOTEBIT_FEDERATION_MAX_PEERS` | Maximum active federation peers | `50` |
-| `MOTEBIT_FEDERATION_ALLOWED_PEERS` | Comma-separated relay IDs allowed to peer | (allow any) |
-| `MOTEBIT_FEDERATION_BLOCKED_PEERS` | Comma-separated relay IDs blocked from peering | (none) |
-| `MOTEBIT_RELAY_KEY_PASSPHRASE` | Encrypt relay private key at rest with AES-256-GCM | (plaintext) |
-| `MOTEBIT_RELAY_ISSUE_CREDENTIALS` | Enable relay co-signing of AgentReputationCredentials | `false` |
-| `STRIPE_SECRET_KEY` | Enable Stripe deposits | (disabled) |
+| Variable                           | Purpose                                               | Default     |
+| ---------------------------------- | ----------------------------------------------------- | ----------- |
+| `LOG_LEVEL`                        | Minimum log level (`debug`, `info`, `warn`, `error`)  | `info`      |
+| `MOTEBIT_FEDERATION_ENDPOINT_URL`  | This relay's public URL for federation                | (disabled)  |
+| `MOTEBIT_FEDERATION_MAX_PEERS`     | Maximum active federation peers                       | `50`        |
+| `MOTEBIT_FEDERATION_ALLOWED_PEERS` | Comma-separated relay IDs allowed to peer             | (allow any) |
+| `MOTEBIT_FEDERATION_BLOCKED_PEERS` | Comma-separated relay IDs blocked from peering        | (none)      |
+| `MOTEBIT_RELAY_KEY_PASSPHRASE`     | Encrypt relay private key at rest with AES-256-GCM    | (plaintext) |
+| `MOTEBIT_RELAY_ISSUE_CREDENTIALS`  | Enable relay co-signing of AgentReputationCredentials | `false`     |
+| `STRIPE_SECRET_KEY`                | Enable Stripe deposits                                | (disabled)  |
 
 ---
 

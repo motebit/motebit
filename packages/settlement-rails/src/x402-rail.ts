@@ -162,7 +162,8 @@ export class X402SettlementRail implements WithdrawableGuestRail {
 
   /**
    * Attach an x402 payment proof (tx hash + CAIP-2 network) to a settlement record.
-   * Called after x402 middleware captures the onAfterSettle hook data.
+   * Called by the relay's task-submission handler after it settles that
+   * request's own verified x402 payment (#907).
    */
   attachProof(settlementId: string, proof: PaymentProof): Promise<void> {
     this.logger.info("x402.proof.attached", {

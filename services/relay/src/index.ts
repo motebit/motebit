@@ -490,6 +490,15 @@ export interface SyncRelayConfig {
    */
   p2pPaymentChain?: import("./p2p-payer.js").P2pPaymentChain | null;
   /**
+   * The chain reads x402 reconciliation proves execution with (#907 rounds
+   * 2–3, x402-settlements.ts). Omitted: JSON-RPC over
+   * `X402_RPC_URL_<NETWORK>` else `DEFAULT_RPC_URLS[x402.network]`, at the
+   * deposit detector's confirmation depth for the chain; `null` disables the
+   * loop and the operator resolve door (pending records then wait). Tests
+   * inject a fake.
+   */
+  x402ChainReader?: import("./x402-settlements.js").X402ChainReader | null;
+  /**
    * STAGING/development-only: deterministic vote policy for the §6.2
    * federation orchestrator's peer-side vote-request endpoint. When set,
    * every incoming /federation/v1/disputes/:disputeId/vote-request
@@ -2034,6 +2043,87 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     }
   }
 
+  // --- x402 settlement reconciliation (#907 rounds 2–3) ---
+  // Resolves x402 settlement records whose outcome the settling request could
+  // not know (timeout, 5xx, crash) from PROOF OF EXECUTION on the token
+  // contract — an `AuthorizationUsed(payer, nonce)` log whose transaction
+  // carries the exact Transfer to the treasury ⇒ credit once; an
+  // `AuthorizationCanceled` log ⇒ failed; neither, past `validBefore` by the
+  // confirmed head's clock ⇒ failed. Never the `authorizationState` bit (set by
+  // a cancel too). Supervised.
+  let x402ReconciliationInterval: ReturnType<typeof setInterval> | undefined;
+  let x402ChainReader: import("./x402-settlements.js").X402ChainReader | null = null;
+  {
+    const { DEFAULT_RPC_URLS, CONFIRMATIONS_BY_CHAIN } = await import("./deposit-detector.js");
+    const { HttpX402ChainReader, startX402ReconciliationLoop, x402RpcUrlFor } =
+      await import("./x402-settlements.js");
+    const rpcUrl = x402RpcUrlFor(x402Config.network, DEFAULT_RPC_URLS);
+    const confirmations = CONFIRMATIONS_BY_CHAIN[x402Config.network];
+    x402ChainReader =
+      config.x402ChainReader !== undefined
+        ? config.x402ChainReader
+        : rpcUrl != null && confirmations !== undefined
+          ? new HttpX402ChainReader(rpcUrl, confirmations)
+          : null;
+    if (x402ChainReader != null) {
+      x402ReconciliationInterval = startX402ReconciliationLoop({
+        db: moteDb.db,
+        reader: x402ChainReader,
+        intervalMs: parseIntEnv("MOTEBIT_X402_RECONCILIATION_INTERVAL_MS", 60_000),
+        isFrozen: () => getEmergencyFreeze(),
+        supervisor: loopSupervisor,
+      });
+    } else {
+      logger.warn("x402-reconciliation.disabled", {
+        reason: "no x402 chain reader (no RPC URL or confirmation depth for chain)",
+        chain: x402Config.network,
+      });
+    }
+  }
+
+  // --- x402 settlement operator door (#907 round 3) ---
+  // Master-token only (the /api/v1/admin/* middleware). The read lists
+  // pending and failed records; the resolve action re-runs the proof-of-
+  // execution check for ONE record — it never credits without that proof.
+  {
+    const { listX402SettlementsForOperator, findX402Settlement, reconcileX402Settlement } =
+      await import("./x402-settlements.js");
+    /** @internal */
+    app.get("/api/v1/admin/x402-settlements", (c) => {
+      const status = c.req.query("status");
+      if (status != null && status !== "pending" && status !== "failed") {
+        return c.json({ error: "status must be pending or failed" }, 400);
+      }
+      const limit = Number(c.req.query("limit") ?? 100);
+      return c.json({
+        settlements: listX402SettlementsForOperator(moteDb.db, {
+          ...(status != null ? { status } : {}),
+          limit: Number.isFinite(limit) ? limit : 100,
+        }),
+        reconciliation_enabled: x402ChainReader != null,
+      });
+    });
+    /** @internal */
+    app.post("/api/v1/admin/x402-settlements/:payer/:nonce/resolve", async (c) => {
+      if (x402ChainReader == null) {
+        return c.json({ error: "x402 reconciliation is disabled (no chain reader)" }, 503);
+      }
+      const rec = findX402Settlement(moteDb.db, c.req.param("payer"), c.req.param("nonce"));
+      if (rec == null) return c.json({ error: "no such x402 settlement" }, 404);
+      if (rec.status === "credited") {
+        return c.json({ decision: "already_credited", settlement: rec });
+      }
+      const decision = await reconcileX402Settlement(moteDb.db, x402ChainReader, rec, undefined, {
+        operator: true,
+      });
+      logger.info("x402.operator_resolve", { payer: rec.payer, nonce: rec.nonce, decision });
+      return c.json({
+        decision,
+        settlement: findX402Settlement(moteDb.db, rec.payer, rec.nonce),
+      });
+    });
+  }
+
   // --- P2P payment verifier (async onchain verification of direct settlements) ---
   let p2pVerifierInterval: ReturnType<typeof setInterval> | undefined;
   let bondVerifierInterval: ReturnType<typeof setInterval> | undefined;
@@ -2268,6 +2358,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     clearInterval(identityLogAnchorInterval);
     clearInterval(depositDetectorInterval);
     if (treasuryReconciliationInterval) clearInterval(treasuryReconciliationInterval);
+    if (x402ReconciliationInterval) clearInterval(x402ReconciliationInterval);
     if (p2pVerifierInterval) clearInterval(p2pVerifierInterval);
     if (bondVerifierInterval) clearInterval(bondVerifierInterval);
     if (solanaTreasuryReconciliationInterval) clearInterval(solanaTreasuryReconciliationInterval);

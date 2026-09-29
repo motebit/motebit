@@ -233,7 +233,7 @@ The listing shape every worker publishes and every delegator consumes. Listings 
 | `pricing`         | CapabilityPrice[] | yes      | Per-capability pricing (§3.2).                                   |
 | `sla`             | SLA               | yes      | Service-level agreement (§3.3).                                  |
 | `description`     | string            | yes      | Human-readable service description.                              |
-| `pay_to_address`  | string            | no       | Wallet address for on-chain settlement (x402).                   |
+| `pay_to_address`  | string            | no       | The agent's own onchain address, for direct payment (§11.3).     |
 | `regulatory_risk` | number            | no       | Self-declared regulatory risk score ∈ [0, ∞). Default 0.         |
 | `updated_at`      | number            | yes      | Epoch milliseconds of last listing update.                       |
 
@@ -709,11 +709,20 @@ For on-chain payments, the relay integrates with the x402 protocol.
 
 ### 11.2 — Payment Flow
 
-1. Task submission includes x402 payment proof (on-chain USDC transfer).
-2. Relay verifies payment via facilitator.
-3. Payment amount is credited to the delegator's virtual account (`deposit` transaction).
-4. Standard budget allocation proceeds from the virtual account.
-5. Settlement record includes `x402_tx_hash` and `x402_network` for on-chain audit trail.
+x402 is a relay-custody rail: the payment's destination is the relay's `payToAddress`, never the worker's `pay_to_address`. The worker is paid from its virtual account at settlement (§5), exactly as for a deposit-funded task.
+
+1. A task submission whose delegator cannot fund the price from its spendable balance is challenged (402, `PAYMENT-REQUIRED`) for exactly the task's gross price, payable to `payToAddress`. A submission whose `Idempotency-Key` already holds a claim is never challenged (`delegation-v1.md` §3.3).
+2. The relay verifies the request's payment via the facilitator and binds it to that request. Funding is decided here, once: a verified payment funds the task; without one the virtual account does.
+3. After every pre-admission check has passed, and immediately before admission, the relay settles that request's payment. A request refused before this point is not charged: its authorization is never submitted and expires at its `validBefore`. Before calling the facilitator the relay durably records its intent, keyed by the EIP-3009 authorization (payer, nonce); one authorization is settled at most once, under any key. The outcome is one of:
+   - **settled** — credited as in step 4, on the facilitator's report; the relay does not re-read the chain for a settlement its facilitator reports as successful (the chain is read only to resolve an unknown outcome, below);
+   - **refused** — the facilitator refused before submitting anything onchain (a closed set of pre-submission reasons, no transaction): nothing has been charged at that point, the submission is refused (402 `TASK_X402_SETTLEMENT_FAILED`) and nothing is admitted. The signed authorization itself stays executable until its `validBefore`; if it is executed anyway, the relay credits it once to the delegator's account when it proves the execution (a re-check of the refused record);
+   - **unknown** — anything else (a timeout, an unreadable or server-error answer, any other refusal reason): the transfer may have landed. The submission is refused 402 `TASK_X402_OUTCOME_UNKNOWN` telling the client not to pay again, and the record stays pending until the relay proves its fate from the token contract's events — never from its authorization-state flag, which a cancellation also sets: an `AuthorizationUsed` event together with the transfer the token emitted for that authorization — the next log in the same transaction receipt (not any transfer in the transaction), of exactly the authorized value from the payer to `payToAddress` ⇒ credited once as in step 4 (one transfer never credits two payments); an `AuthorizationCanceled` event ⇒ failed; neither, once the chain's own confirmed time is past `validBefore`, confirmed by a second read ⇒ failed. A failure decided without an event is re-checked against the chain a bounded number of times; an execution found then is credited. The relay looks for the execution only within the authorization's signed window, from `validAfter` to `validBefore` (EIP-3009 cannot execute outside it), never a window derived from its own clock; it refuses an authorization whose window `validBefore − validAfter` is not positive or exceeds two hours, and one whose `validBefore` is more than one hour ahead. A same-key request while it is pending is refused 409 `TASK_X402_OUTCOME_PENDING` and no new payment is settled.
+4. The authorization's value (which equals the quoted gross price) is credited to the delegator's virtual account (`deposit` transaction), once, and the task's budget hold is funded from that payment alone. A facilitator-reported amount is never credited; one that differs from the authorization's value makes the outcome unknown.
+5. Settlement record includes `x402_tx_hash` and `x402_network` of the submission's own settlement for on-chain audit trail.
+
+### 11.3 — `pay_to_address`
+
+A listing's `pay_to_address` is the agent's own onchain address, used by a delegator paying the agent directly (a sovereign-rail payment). It is **not** the x402 destination: an x402 payment goes to the relay's `payToAddress` (§11.2). In the reference relay it is also the listing's opt-in to x402 — a priced listing is challenged via x402 only when it publishes one; a priced listing without one is still priced and funded from the virtual account (never free).
 
 ---
 

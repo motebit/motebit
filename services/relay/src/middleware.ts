@@ -33,6 +33,8 @@ import {
   AuthorizationError,
   InsufficientFundsError,
   P2pProofAlreadyAdmittedError,
+  X402OutcomeUnknownError,
+  X402PaymentReplayedError,
 } from "./errors.js";
 import {
   CALLER_VERIFIED_KEY,
@@ -719,6 +721,8 @@ export function registerMiddleware(deps: MiddlewareDeps): MiddlewareResult {
   app.use("/api/v1/admin/freeze", rl(writeLimiter));
   app.use("/api/v1/admin/unfreeze", rl(writeLimiter));
   app.use("/api/v1/admin/freeze-status", rl(readLimiter));
+  app.use("/api/v1/admin/x402-settlements", rl(readLimiter));
+  app.use("/api/v1/admin/x402-settlements/*", rl(writeLimiter));
 
   // Write endpoints: task submission, result, ledger (30 req/min)
   app.use("/agent/:motebitId/task", rl(writeLimiter));
@@ -999,6 +1003,22 @@ export function registerMiddleware(deps: MiddlewareDeps): MiddlewareResult {
       }
       // A proof already bound to an admitted task names that task only when
       // the caller is entitled to see it (#918); the error decides that.
+      // An x402 outcome the client must not pay again for names the record
+      // being reconciled (#907 round 2). Additive field.
+      if (
+        (err instanceof X402OutcomeUnknownError || err instanceof X402PaymentReplayedError) &&
+        err.settlement != null
+      ) {
+        return c.json(
+          {
+            error: err.message,
+            code: err.code,
+            status: err.statusCode,
+            x402_settlement: err.settlement,
+          },
+          status,
+        );
+      }
       if (err instanceof P2pProofAlreadyAdmittedError && err.existingTaskId != null) {
         return c.json(
           {
@@ -1316,6 +1336,9 @@ export function registerAuthMiddleware(
   app.use("/api/v1/admin/auth-events", bearerAuth({ token: apiToken }));
   app.use("/api/v1/admin/credential-anchoring", bearerAuth({ token: apiToken }));
   app.use("/api/v1/admin/treasury-reconciliation", bearerAuth({ token: apiToken }));
+  // Admin x402 settlement records (#907 round 3): list + proof-of-execution resolve.
+  app.use("/api/v1/admin/x402-settlements", bearerAuth({ token: apiToken }));
+  app.use("/api/v1/admin/x402-settlements/*", bearerAuth({ token: apiToken }));
   // Admin receipt audit — master token only; serves byte-identical
   // canonical JSON so an auditor can re-verify the signature offline.
   app.use("/api/v1/admin/receipts/*", bearerAuth({ token: apiToken }));

@@ -142,18 +142,16 @@ describe("Arc 3.5 — TASK_P2P_PROOF_REQUIRED submission gate", () => {
 
 /**
  * The gate predicate as a pure truth table. The integration suite above drives
- * four of the five carve-outs through the live route, but the **x402-paid**
- * branch cannot be reached from the harness — `x402TxHash` is set only by the
- * x402 `resourceServer.onAfterSettle` hook on a real onchain payment (a module
- * closure in tasks.ts, not a spyable method). Extracting `requiresP2pProof` to a
- * pure function makes that branch — the most compliance-relevant one, since x402
- * is the surviving non-P2P paid path — testable here as plain boolean logic. A
- * refactor that reorders or drops a condition fails this truth table.
+ * four of the five carve-outs through the live route; the **x402-paid** branch
+ * is driven end to end over the real `@x402/hono` stack in
+ * `x402-settlement-907.test.ts` (a verified payment bound to the request,
+ * settled before admission). Here it is plain boolean logic, so a refactor that
+ * reorders or drops a condition fails this truth table.
  */
 describe("requiresP2pProof — gate predicate truth table", () => {
   const base = {
     settlementMode: "relay" as const,
-    x402TxHash: null,
+    x402Paid: false,
     unitCostAtSubmission: 1,
     submittedBy: "delegator-id",
     workerId: "worker-id",
@@ -167,8 +165,8 @@ describe("requiresP2pProof — gate predicate truth table", () => {
     expect(requiresP2pProof({ ...base, settlementMode: "p2p" })).toBe(false);
   });
 
-  it("carve: x402-paid (x402TxHash present) → no gate", () => {
-    expect(requiresP2pProof({ ...base, x402TxHash: "5xFakeBase58SolanaTxSignature" })).toBe(false);
+  it("carve: x402-paid (a verified payment bound to this request) → no gate", () => {
+    expect(requiresP2pProof({ ...base, x402Paid: true })).toBe(false);
   });
 
   it("carve: zero-cost (unitCostAtSubmission === 0) → no gate", () => {

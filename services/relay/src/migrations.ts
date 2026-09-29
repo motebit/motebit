@@ -2340,4 +2340,70 @@ export const relayMigrations: Migration[] = [
       `);
     },
   },
+  {
+    version: 49,
+    name: "x402_settlement_records",
+    up: (db) => {
+      // The durable intent behind every x402 settle (#907 rounds 2–4): written
+      // pending BEFORE the facilitator is called, keyed by the EIP-3009
+      // authorization (payer, nonce) — one signed authorization is settled
+      // and credited at most once. Resolved credited / failed by the request
+      // or by the reconciler from PROOF OF EXECUTION: the token's
+      // AuthorizationUsed log and the Transfer it emitted next (never the
+      // authorizationState flag, which a cancellation also sets). A consumed
+      // Transfer log (tx_hash, credit_log_index) credits at most one record.
+      // Never pruned. See x402-settlements.ts.
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS relay_x402_settlements (
+          payer TEXT NOT NULL,
+          nonce TEXT NOT NULL,
+          network TEXT NOT NULL,
+          token TEXT NOT NULL,
+          pay_to TEXT NOT NULL,
+          amount_micro INTEGER NOT NULL,
+          -- The signed EIP-3009 window: the scan covers exactly it (round 9).
+          valid_after INTEGER NOT NULL,
+          valid_before INTEGER NOT NULL,
+          idempotency_key TEXT NOT NULL,
+          motebit_id TEXT NOT NULL,
+          delegator_id TEXT NOT NULL,
+          task_id TEXT NOT NULL,
+          status TEXT NOT NULL DEFAULT 'pending',
+          tx_hash TEXT,
+          failure_reason TEXT,
+          created_at INTEGER NOT NULL,
+          resolved_at INTEGER,
+          -- Reconciler cursor (round 3): the event scan's first block and how
+          -- far it has read, never past the confirmed head.
+          scan_from_block INTEGER,
+          scanned_to_block INTEGER,
+          -- Expiry needs two agreeing observations; the first is recorded here.
+          expiry_observed_at INTEGER,
+          -- Re-checks spent on a failed record, and when the next may run.
+          recheck_count INTEGER NOT NULL DEFAULT 0,
+          next_recheck_at INTEGER,
+          -- The Transfer log a reconciled credit consumed (with tx_hash).
+          credit_log_index INTEGER,
+          -- The scan's fixed end: first block past valid_before + margin.
+          scan_end_block INTEGER,
+          -- Cursor of an in-progress full pass (confirmation or re-check).
+          pass_cursor INTEGER,
+          -- Last reconciler visit: records are visited least-recent first.
+          last_checked_at INTEGER,
+          -- Re-checks spent on an execution_mismatch (its own budget).
+          mismatch_rechecks INTEGER NOT NULL DEFAULT 0,
+          PRIMARY KEY (payer, nonce)
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_x402_settlements_consumed_transfer
+          ON relay_x402_settlements(tx_hash, credit_log_index)
+          WHERE credit_log_index IS NOT NULL;
+        -- Matches the selection order exactly (x402-settlements.ts
+        -- SELECTION_ORDER), so a run never sorts the whole table.
+        CREATE INDEX IF NOT EXISTS idx_x402_settlements_selection
+          ON relay_x402_settlements(status, COALESCE(last_checked_at, created_at), created_at);
+        CREATE INDEX IF NOT EXISTS idx_x402_settlements_key
+          ON relay_x402_settlements(idempotency_key, motebit_id);
+      `);
+    },
+  },
 ];

@@ -94,6 +94,7 @@ import {
   checkIdempotency,
   completeIdempotency,
   findP2pProofClaim,
+  idempotencyClaimExists,
   p2pProofKey,
   recordAdmittedOutcome,
   type P2pProofClaim,
@@ -117,11 +118,44 @@ import {
   AuthenticationError,
   AuthorizationError,
   InsufficientFundsError,
-  SettlementError,
   AllocationError,
   TaskError,
   P2pProofAlreadyAdmittedError,
+  X402OutcomeUnknownError,
+  X402PaymentReplayedError,
+  type X402SettlementRef,
 } from "./errors.js";
+import {
+  classifySettleVerdict,
+  creditX402Settlement,
+  findPendingX402ForKey,
+  findX402Settlement,
+  markX402Failed,
+  readEip3009Authorization,
+  recordX402Intent,
+  X402_MAX_VALIDITY_SECONDS,
+  X402_MAX_WINDOW_SECONDS,
+  type SettleOutcome,
+  type X402SettlementRecord,
+} from "./x402-settlements.js";
+
+/** What a client is told about an x402 settlement record (never the task's contents). */
+function x402SettlementRef(
+  rec: Pick<
+    X402SettlementRecord,
+    "payer" | "nonce" | "amount_micro" | "delegator_id" | "network" | "status" | "valid_before"
+  >,
+): X402SettlementRef {
+  return {
+    payer: rec.payer,
+    nonce: rec.nonce,
+    amount_micro: rec.amount_micro,
+    delegator: rec.delegator_id,
+    network: rec.network,
+    status: rec.status,
+    valid_before: rec.valid_before,
+  };
+}
 import { isGrantRevokedBy } from "./delegation-revocations.js";
 import { ON_SHELF, ON_SHELF_PREDICATE } from "./registry-delist.js";
 import { identityGuardianFor, verificationKeyFor } from "./identity-keys.js";
@@ -326,12 +360,14 @@ export interface SubmissionPrice {
   grossMicro: number;
   /**
    * The pricing agent's onchain `pay_to_address`, or null when it publishes
-   * none. This answers "can this task be charged ONCHAIN via x402?" — there
-   * is no arming an onchain gate with no destination — and NOTHING else. It
-   * is not "does this agent charge": the relay-custody lane credits the
-   * worker's VIRTUAL ACCOUNT and never reads it, so a priced agent with no
-   * payout address still charges (`grossMicro > 0`). Reading it as "free"
-   * made "priced and unpayable" representable (`priced-unpayable-listing.test.ts`).
+   * none. The x402 gate arms only for a listing that publishes one, and that
+   * is ALL it decides. It is not the x402 destination: x402 pays the relay
+   * treasury (`x402Config.payToAddress`) and the worker is paid from its
+   * virtual account at settlement (#907). Nor is it "does this agent charge":
+   * the relay-custody lane credits the worker's VIRTUAL ACCOUNT and never
+   * reads it, so a priced agent with no payout address still charges
+   * (`grossMicro > 0`). Reading it as "free" made "priced and unpayable"
+   * representable (`priced-unpayable-listing.test.ts`).
    */
   payTo: string | null;
 }
@@ -486,24 +522,23 @@ export function submissionTerms(
  * DIFFERENT worker, settling relay-custody, with no P2P proof and no x402 proof.
  *
  * Pure and exported so the carve-out matrix is unit-testable as a truth table.
- * The x402-paid carve-out in particular is not integration-drivable — `x402TxHash`
- * is set only by the x402 `resourceServer.onAfterSettle` hook on a real onchain
- * payment (a module closure, not a spyable relay method), so a pure-function test
- * is the only way to exercise that branch. The three carve-outs (false return):
- * zero-cost (`unitCostAtSubmission === 0`), self-delegation (`submittedBy === workerId`),
- * and x402-paid (`x402TxHash != null`). See docs/doctrine/off-ramp-as-user-action.md
- * § "Arc 3.5".
+ * The three carve-outs (false return): zero-cost (`unitCostAtSubmission === 0`),
+ * self-delegation (`submittedBy === workerId`), and x402-paid (`x402Paid`: this
+ * request carries an x402 payment the gate VERIFIED and bound to it, which the
+ * handler settles to the relay treasury before admission — #907; a settlement
+ * that then fails refuses the submission, so an unpaid task never passes here).
+ * See docs/doctrine/off-ramp-as-user-action.md § "Arc 3.5".
  */
 export function requiresP2pProof(args: {
   settlementMode: "relay" | "p2p";
-  x402TxHash: string | null | undefined;
+  x402Paid: boolean;
   unitCostAtSubmission: number;
   submittedBy: string | null | undefined;
   workerId: string;
 }): boolean {
   return (
     args.settlementMode === "relay" &&
-    args.x402TxHash == null &&
+    !args.x402Paid &&
     args.unitCostAtSubmission > 0 &&
     args.submittedBy != null &&
     args.submittedBy !== args.workerId
@@ -2185,16 +2220,87 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
     reconcileKeyConnections: deps.reconcileKeyConnections,
   };
 
-  // Capture x402 settlement proof so the task handler can link it to the task queue entry.
-  // Set by the settle hook, read-and-cleared by the next submit handler. The x402
-  // library settles AFTER the handler (see the x402 branch), so a handler reads
-  // the PREVIOUS settlement's hash, if any — #907.
-  let lastSettleTxHash: string | undefined;
-  let lastSettleNetwork: string | undefined;
+  // === x402: a request's handler relies only on ITS OWN verified payment (#907) ===
+  //
+  // `@x402/hono`'s middleware, with `ExactEvmScheme` (eip3009, the
+  // "authorization" flow), verifies before the handler and SETTLES AFTER it,
+  // only on a response below 400. The relay used to capture the settle tx hash
+  // in an `onAfterSettle` hook into a variable shared by every request, and the
+  // handler read it — before its own settlement existed. So the paying request
+  // never saw its own payment (it was refused, and so never settled),
+  // while a hash left by an earlier settlement (a paid same-key replay, #925)
+  // was read by the NEXT submission, possibly another principal's, and
+  // credited to it as a `deposit`.
+  //
+  // Now the gate uses the library's manual API (`processHTTPRequest` to
+  // verify, the resource server's `settlePayment` to settle) instead of its
+  // middleware, and never settles after the handler. A verified payment is
+  // bound to the request that carries it — on the Hono context, which no
+  // client can write — as an `X402Payment` whose `settle()` the handler calls
+  // exactly once, AFTER every pre-admission refusal and immediately before
+  // the admission transaction. A request whose handler never reaches that
+  // point (a refusal, a replay, a conflict, a throw) is charged nothing: its
+  // EIP-3009 authorization is never submitted, and it expires at its
+  // `validBefore` (the authorization flow has nothing to cancel). The
+  // settlement the handler credits is therefore always this request's own,
+  // credited once, to the delegator this request names.
+  //
+  // Round 2: `settle()` writes a durable `pending` record keyed by the
+  // authorization (payer, nonce) BEFORE calling the facilitator, and
+  // classifies the answer (x402-settlements.ts): settled ⇒ credited once;
+  // a definite pre-submission refusal (a closed set) ⇒ failed, "not charged";
+  // anything else (timeout, 5xx, network, unrecognised refusal,
+  // unattributable success, crash) ⇒ left pending, "outcome unknown — do not
+  // pay again", resolved by the supervised reconciliation loop from PROOF OF
+  // EXECUTION on the chain (an `AuthorizationUsed` log whose transaction
+  // carries the exact Transfer to the treasury — never the
+  // `authorizationState` bit, which a cancellation also sets; round 3). The
+  // amount credited is only ever the authorization's value. A same-key retry
+  // while pending is refused
+  // 409 before anything is priced; the same authorization is never settled
+  // twice under any key.
+  //
+  // Destination: the relay treasury (`x402Config.payToAddress`), never the
+  // worker's `pay_to_address`. x402 is a relay-custody guest rail
+  // (docs/doctrine/settlement-rails.md, treasury-custody.md "Clients pay TO
+  // X402_PAY_TO_ADDRESS"): the relay receives the payment, credits it to the
+  // delegator's virtual account, holds the task's budget from that account and
+  // pays the worker's virtual account at settlement. Sending x402 to the worker
+  // while also crediting the delegator paid the worker twice and cost the
+  // relay the price.
+  type X402Payment = {
+    /** The path agent, the key and the delegator this payment was verified for. */
+    motebitId: string;
+    idempotencyKey: string;
+    delegatorId: string;
+    /** The quoted gross price, integer micro-units (USDC atomic units). */
+    grossMicro: number;
+    /** "verified" until `settle()` is called; then never settled again. */
+    state: "verified" | "settling" | "settled" | "failed";
+    /**
+     * Settle THIS request's payment, for the task id it will admit. Single
+     * use. Writes the durable intent first; throws a refusal ("not charged")
+     * only on a definite facilitator refusal, and `X402OutcomeUnknownError`
+     * ("do not pay again") on anything else that is not a settlement.
+     */
+    settle(taskId: string): Promise<X402Settlement>;
+    /** PAYMENT-RESPONSE headers for a settled payment. */
+    responseHeaders?: Record<string, string>;
+  };
+  type X402Settlement = {
+    txHash: string;
+    network: string;
+    amountMicro: number;
+    payer: string;
+    nonce: string;
+  };
+  const X402_PAYMENT_KEY = "x402Payment";
 
   {
-    const { paymentMiddlewareFromHTTPServer, x402HTTPResourceServer, x402ResourceServer } =
-      await import("@x402/hono");
+    const { x402HTTPResourceServer, x402ResourceServer, HonoAdapter } = await import("@x402/hono");
+    const { FacilitatorResponseError } = await import("@x402/core/server");
+    const { SettleError } = await import("@x402/core/types");
+    const { encodePaymentResponseHeader } = await import("@x402/core/http");
     const { ExactEvmScheme } = await import("@x402/evm/exact/server");
     // CDP-aware facilitator construction; throws X402ConfigError on mainnet
     // misconfiguration so the route registration fails fast rather than
@@ -2205,26 +2311,21 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
     )) as ConstructorParameters<typeof x402ResourceServer>[0];
 
     const network = x402Config.network as `${string}:${string}`;
+    const treasury = x402Config.payToAddress;
     const resourceServer = new x402ResourceServer(facilitatorClient).register(
       network,
       new ExactEvmScheme(),
     );
 
-    resourceServer.onAfterSettle((ctx): Promise<void> => {
-      lastSettleTxHash = ctx.result.transaction;
-      lastSettleNetwork = ctx.result.network;
-      return Promise.resolve();
-    });
-
     // The x402 price of each request is its `priceSubmission` quote (#901
     // round 2), held PER REQUEST: the wrapper stores the quote under a fresh
     // nonce and stamps the nonce on the request it hands the gate (overwriting
-    // any client-sent value), and the price/payTo callbacks read the quote back
+    // any client-sent value), and the price callback reads the quote back
     // through the request adapter. A single shared "current pricing" variable
     // was set before awaits (the body read, the facilitator init), so a
     // concurrent submission could replace it and one request was charged
     // another's price.
-    type X402Quote = { unitCost: number; grossMicro: number; payTo: string };
+    type X402Quote = { unitCost: number; grossMicro: number };
     const x402Quotes = new Map<string, X402Quote>();
     const X402_QUOTE_HEADER = "x-motebit-x402-quote";
     type QuoteContext = { adapter?: { getHeader(name: string): string | undefined } };
@@ -2246,7 +2347,13 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
           network,
           // Exactly the handler's `price_snapshot` (integer micro-units).
           price: (ctx: QuoteContext) => `$${fromMicro(requireQuote(ctx).grossMicro).toFixed(6)}`,
-          payTo: (ctx: QuoteContext) => requireQuote(ctx).payTo,
+          // The relay treasury — x402 is relay-custody (see above). Every
+          // priced request resolves its quote first, so an unquoted request
+          // still fails closed in `price`.
+          payTo: (ctx: QuoteContext) => {
+            requireQuote(ctx);
+            return treasury;
+          },
         },
         description: "Submit a task to a motebit agent",
         mimeType: "application/json",
@@ -2268,9 +2375,7 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
     };
 
     // Construct HTTP server ourselves so we control initialization lifecycle.
-    // syncFacilitatorOnStart=false prevents an unhandled rejection when the
-    // facilitator is unreachable (test env, cold start, network partition).
-    // We fire initialization manually with .catch() so the promise rejection
+    // Initialization is fired manually with .catch() so the promise rejection
     // is always handled. The x402 gate is fail-closed: if the facilitator
     // is unreachable, paid requests get 402 (correct behavior). Virtual
     // account bypass still works regardless.
@@ -2287,17 +2392,16 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
           facilitator: x402Config.facilitatorUrl ?? "https://x402.org/facilitator",
         }),
       );
-    const x402Gate = paymentMiddlewareFromHTTPServer(
-      httpServer,
-      { testnet: x402Config.testnet ?? true },
-      undefined, // paywall
-      false, // syncFacilitatorOnStart — already initialized above with error handling
-    );
+    const paywallConfig = { testnet: x402Config.testnet ?? true };
 
-    // Wrap x402: one priceSubmission() quote per request.
-    // Free tasks (no listing / zero price) bypass payment gate entirely.
-    // Virtual account bypass: if the delegator has sufficient virtual balance,
-    // skip x402 — the task handler will debit the virtual account directly.
+    // One priceSubmission() quote per request. Free tasks (no listing / zero
+    // price) bypass payment entirely. Funding is decided HERE, once: a
+    // delegator whose spendable balance covers the price is funded from its
+    // virtual account (the gate steps aside and binds no payment); otherwise
+    // the request must carry an x402 payment, which is verified and bound to
+    // it. The handler never re-decides: with a bound payment it settles that
+    // payment; without one it debits the account (and refuses 402 if a
+    // concurrent spend emptied it — nothing is charged onchain then).
     app.use("*", async (c, next) => {
       const isTaskPost = c.req.method === "POST" && /\/agent\/[^/]+\/task/.test(c.req.path);
       if (!isTaskPost) return next();
@@ -2317,6 +2421,21 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
       // Only a task SUBMISSION is priced (the x402 route pattern, `POST
       // /agent/*/task`, matches no deeper path — receipts pass through).
       if (!/^\/agent\/[^/]+\/task$/.test(c.req.path)) return next();
+
+      // Idempotency before price (#925). A key that already holds a claim is a
+      // replay or a conflict: the handler answers it from the claim and admits
+      // nothing, so it is never quoted, verified or charged here. With no key
+      // the handler refuses 400 — nothing to charge either.
+      const idempotencyKey = c.req.header("Idempotency-Key");
+      if (!idempotencyKey) return next();
+      if (idempotencyClaimExists(moteDb.db, idempotencyKey, agentId)) return next();
+      // An earlier request under this key paid via x402 and its outcome is
+      // not known yet (#907 round 2): never quote or settle another payment
+      // for it. The record names what is being reconciled.
+      const pendingX402 = findPendingX402ForKey(moteDb.db, idempotencyKey, agentId);
+      if (pendingX402 != null) {
+        throw new X402OutcomeUnknownError(x402SettlementRef(pendingX402), "pending");
+      }
 
       // Read the body ONCE and hand the handler an identical request: the
       // price depends on it (`target_agent`, `required_capabilities`), and so
@@ -2359,7 +2478,7 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
       );
       if (!terms.ok) return next();
       const { price } = terms;
-      // Free, or a priced agent with no onchain destination, is not
+      // Free, or a priced agent that publishes no `pay_to_address`, is not
       // x402-chargeable: the handler decides (a priced task it cannot fund is
       // refused 402).
       if (price.grossMicro <= 0 || price.payTo == null) return next();
@@ -2379,11 +2498,7 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
       if ((parsed as { payment_proof?: unknown }).payment_proof != null) return next();
 
       const nonce = crypto.randomUUID();
-      x402Quotes.set(nonce, {
-        unitCost: price.unitCost,
-        grossMicro: price.grossMicro,
-        payTo: price.payTo,
-      });
+      x402Quotes.set(nonce, { unitCost: price.unitCost, grossMicro: price.grossMicro });
       headers.set(X402_QUOTE_HEADER, nonce);
       rebuild();
       try {
@@ -2403,8 +2518,243 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
             402,
           );
         }
+
         // eslint-disable-next-line @typescript-eslint/no-unsafe-argument -- Hono context type variance
-        return await x402Gate(c, next);
+        const adapter = new HonoAdapter(c);
+        const context = {
+          adapter,
+          path: c.req.path,
+          method: c.req.method,
+          paymentHeader: adapter.getHeader("payment-signature") ?? adapter.getHeader("x-payment"),
+        };
+        // The route pattern covers every path this wrapper prices. A miss
+        // would admit a priced task with no payment asked: fail closed.
+        if (!httpServer.requiresPayment(context)) {
+          throw new Error("x402: a priced task submission did not match the payment route");
+        }
+        let result: Awaited<ReturnType<typeof httpServer.processHTTPRequest>>;
+        try {
+          result = await httpServer.processHTTPRequest(context, paywallConfig);
+        } catch (err) {
+          if (err instanceof FacilitatorResponseError) return c.json({ error: err.message }, 502);
+          throw err;
+        }
+        if (result.type === "payment-error") {
+          // No payment, or one that did not verify: the 402 challenge (with
+          // its PAYMENT-REQUIRED header) or the facilitator's refusal.
+          const { response } = result;
+          for (const [k, v] of Object.entries(response.headers)) c.header(k, v);
+          if (response.isHtml) {
+            return c.html(
+              typeof response.body === "string" ? response.body : "",
+              response.status as 402,
+            );
+          }
+          return c.json(response.body ?? {}, response.status as 402);
+        }
+        if (result.type !== "payment-verified") {
+          throw new Error(`x402: priced task submission answered ${result.type}`);
+        }
+        const { paymentPayload, paymentRequirements, declaredExtensions, beforeHandlerSettlement } =
+          result;
+        // ExactEvmScheme's EIP-3009 flow is "authorization": verify only,
+        // nothing settled before the handler. A flow that settled already
+        // would be money this path never records — refuse loudly.
+        if (beforeHandlerSettlement != null) {
+          logger.error("x402.unexpected_settle_before_handler", {
+            agent: agentId,
+            transaction: beforeHandlerSettlement.result.transaction,
+          });
+          throw new Error("x402: payment flow settled before the handler — unsupported");
+        }
+
+        // Tie the verified payment to THIS request's quote before anything is
+        // settled: the relay's treasury, this network, and exactly the quoted
+        // gross in USDC atomic units (= micro-units). A mismatch (an asset
+        // whose decimals are not 6, a route misconfiguration) is refused, and
+        // nothing is charged.
+        if (
+          paymentRequirements.payTo.toLowerCase() !== treasury.toLowerCase() ||
+          paymentRequirements.network !== network ||
+          paymentRequirements.amount !== String(price.grossMicro)
+        ) {
+          logger.error("x402.payment_unbound", {
+            agent: agentId,
+            payTo: paymentRequirements.payTo,
+            network: paymentRequirements.network,
+            amount: paymentRequirements.amount,
+            quotedMicro: price.grossMicro,
+          });
+          throw new TaskError(
+            "TASK_X402_PAYMENT_UNBOUND",
+            "x402 payment requirements do not match this submission's quote — nothing was charged",
+            500,
+          );
+        }
+        // The EIP-3009 authorization is what a record is keyed by and what
+        // reconciliation reads from the chain (x402-settlements.ts). A payment
+        // that is not one, or whose authorization does not pay exactly this
+        // quote to the treasury, is refused before anything is submitted.
+        const authorization = readEip3009Authorization(paymentPayload.payload);
+        if (
+          authorization == null ||
+          authorization.to !== treasury.toLowerCase() ||
+          authorization.value !== String(price.grossMicro)
+        ) {
+          throw new TaskError(
+            "TASK_X402_PAYMENT_UNBOUND",
+            "The x402 payment is not an EIP-3009 authorization of exactly this submission's price to the relay treasury — it was not settled",
+            400,
+          );
+        }
+        // validBefore is client-chosen. Bounded, it bounds how long a record
+        // can stay pending and how far reconciliation ever scans (#907 round 4).
+        if (authorization.validBefore > Math.floor(Date.now() / 1000) + X402_MAX_VALIDITY_SECONDS) {
+          throw new TaskError(
+            "TASK_X402_PAYMENT_UNBOUND",
+            `The x402 authorization's validBefore is more than ${X402_MAX_VALIDITY_SECONDS} s ahead — sign one that expires sooner; it was not settled`,
+            400,
+          );
+        }
+        // The signed execution window bounds where reconciliation looks for an
+        // execution — chain-time facts only, never this relay's clock (#907
+        // round 9); the relay-clock bound above is a sanity check.
+        if (
+          authorization.validBefore <= authorization.validAfter ||
+          authorization.validBefore - authorization.validAfter > X402_MAX_WINDOW_SECONDS
+        ) {
+          throw new TaskError(
+            "TASK_X402_PAYMENT_UNBOUND",
+            `The x402 authorization's validAfter..validBefore window must be positive and at most ${X402_MAX_WINDOW_SECONDS} s — it was not settled`,
+            400,
+          );
+        }
+        // One signed authorization is settled and credited at most once (#907
+        // round 2), under any key: a replay is refused here, and a concurrent
+        // one loses the (payer, nonce) primary key when its intent is written.
+        const existing = findX402Settlement(moteDb.db, authorization.payer, authorization.nonce);
+        if (existing != null) {
+          throw new X402PaymentReplayedError(x402SettlementRef(existing));
+        }
+
+        const payment: X402Payment = {
+          motebitId: agentId,
+          idempotencyKey,
+          delegatorId,
+          grossMicro: price.grossMicro,
+          state: "verified",
+          settle: async (taskId: string): Promise<X402Settlement> => {
+            if (payment.state !== "verified") {
+              throw new Error("x402: this request's payment was already settled");
+            }
+            payment.state = "settling";
+            // Durable intent FIRST: a crash, a timeout or an unreadable answer
+            // from here on leaves a pending record the reconciler resolves
+            // from the chain — never a charge nobody knows about.
+            const intent = {
+              payer: authorization.payer,
+              nonce: authorization.nonce,
+              network,
+              token: paymentRequirements.asset.toLowerCase(),
+              pay_to: treasury.toLowerCase(),
+              amount_micro: price.grossMicro,
+              valid_after: authorization.validAfter,
+              valid_before: authorization.validBefore,
+              idempotency_key: idempotencyKey,
+              motebit_id: agentId,
+              delegator_id: delegatorId,
+              task_id: taskId,
+            };
+            if (!recordX402Intent(moteDb.db, intent)) {
+              payment.state = "failed";
+              const rec = findX402Settlement(moteDb.db, intent.payer, intent.nonce);
+              throw new X402PaymentReplayedError(rec != null ? x402SettlementRef(rec) : undefined);
+            }
+            const ref = x402SettlementRef({ ...intent, status: "pending" });
+            let outcome: SettleOutcome;
+            try {
+              const verdict = await resourceServer.settlePayment(
+                paymentPayload,
+                paymentRequirements,
+                declaredExtensions,
+                { request: context },
+              );
+              outcome = classifySettleVerdict(verdict, {
+                network,
+                amountMicro: price.grossMicro,
+              });
+            } catch (err) {
+              // The facilitator's own answer, delivered as a non-2xx JSON
+              // settle response, is a verdict; anything else thrown (a
+              // timeout, a non-JSON 5xx, a network error, a malformed body)
+              // says nothing about whether the transfer landed.
+              outcome =
+                err instanceof SettleError
+                  ? classifySettleVerdict(
+                      {
+                        success: false,
+                        errorReason: err.errorReason,
+                        ...(err.transaction != null ? { transaction: err.transaction } : {}),
+                      },
+                      { network, amountMicro: price.grossMicro },
+                    )
+                  : {
+                      kind: "unknown",
+                      reason: err instanceof Error ? `${err.name}: ${err.message}` : String(err),
+                    };
+            }
+            if (outcome.kind === "refused") {
+              payment.state = "failed";
+              markX402Failed(moteDb.db, intent.payer, intent.nonce, outcome.reason);
+              throw new TaskError(
+                "TASK_X402_SETTLEMENT_FAILED",
+                `The facilitator refused the x402 payment before submitting it (${outcome.reason}): nothing has been charged, and this task was not admitted. The signed authorization stays valid until its validBefore; if it is executed anyway, the payment is credited to account ${delegatorId}. Retry with a fresh payment.`,
+                402,
+              );
+            }
+            if (outcome.kind === "unknown") {
+              payment.state = "failed";
+              logger.error("x402.settlement_outcome_unknown", {
+                payer: intent.payer,
+                nonce: intent.nonce,
+                amountMicro: intent.amount_micro,
+                idempotencyKey,
+                agent: agentId,
+                delegator: delegatorId,
+                taskId,
+                reason: outcome.reason,
+              });
+              throw new X402OutcomeUnknownError(ref);
+            }
+            payment.state = "settled";
+            payment.responseHeaders = {
+              "PAYMENT-RESPONSE": encodePaymentResponseHeader({
+                success: true,
+                transaction: outcome.txHash,
+                network: outcome.network as `${string}:${string}`,
+                payer: intent.payer,
+              }),
+            };
+            return {
+              txHash: outcome.txHash,
+              network: outcome.network,
+              // The authorization's value — the only amount ever credited.
+              amountMicro: intent.amount_micro,
+              payer: intent.payer,
+              nonce: intent.nonce,
+            };
+          },
+        };
+        c.set(X402_PAYMENT_KEY as never, payment as never);
+        // A verified payment the handler never settles (a refusal, a replay or
+        // conflict decided by the handler's own claim, a throw) is simply
+        // never submitted: the signed authorization is not executed and
+        // expires at its `validBefore`. Nothing is charged.
+        await next();
+        if (payment.responseHeaders != null) {
+          for (const [k, v] of Object.entries(payment.responseHeaders)) c.res.headers.set(k, v);
+        }
+        return;
       } finally {
         x402Quotes.delete(nonce);
       }
@@ -2724,12 +3074,29 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
     const { pricingCapability, unitCost: unitCostAtSubmission, grossMicro } = terms.price;
     const priceSnapshot = grossMicro > 0 ? grossMicro : undefined;
 
-    // Capture x402 payment proof from the settlement hook (set during middleware).
-    // Read-and-clear so the next request starts fresh.
-    const x402TxHash = lastSettleTxHash;
-    const x402Net = lastSettleNetwork;
-    lastSettleTxHash = undefined;
-    lastSettleNetwork = undefined;
+    // THIS request's x402 payment, verified by the gate and bound to this
+    // request's context (#907) — never a value another request left behind.
+    // Not settled yet: the funding block below settles it, once, after every
+    // pre-admission refusal. It must be the payment the gate verified for THIS
+    // submission (path agent, key, delegator, price); anything else is refused
+    // before anything is settled.
+    const x402Payment = c.get(X402_PAYMENT_KEY as never) as X402Payment | undefined;
+    if (
+      x402Payment != null &&
+      (x402Payment.motebitId !== motebitId ||
+        x402Payment.idempotencyKey !== idempotencyKey ||
+        x402Payment.delegatorId !== (submittedBy ?? motebitId) ||
+        x402Payment.grossMicro !== grossMicro)
+    ) {
+      throw new TaskError(
+        "TASK_X402_PAYMENT_UNBOUND",
+        "The x402 payment on this request was verified for a different submission — nothing was charged",
+        409,
+      );
+    }
+    // Set only from THIS request's own settlement, in the funding block.
+    let x402TxHash: string | undefined;
+    let x402Net: string | undefined;
 
     // Reject if task queue is at capacity (prevents memory exhaustion from flooding)
     if (taskQueue.size >= MAX_TASK_QUEUE_SIZE) {
@@ -3144,7 +3511,7 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
     if (
       requiresP2pProof({
         settlementMode,
-        x402TxHash,
+        x402Paid: x402Payment != null,
         unitCostAtSubmission,
         submittedBy,
         workerId: motebitId,
@@ -3387,23 +3754,74 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
       try {
         const delegatorId = submittedBy ?? motebitId;
 
-        // If x402 payment was made, auto-deposit to delegator's virtual account
-        if (x402TxHash) {
-          moteDb.db.exec("BEGIN");
+        // x402-funded (#907): settle THIS request's verified payment now —
+        // after every pre-admission refusal, so a refused request is never
+        // charged — and credit exactly what the relay treasury received to
+        // the delegator this request names, once. The credit commits on its
+        // own, before the hold: a refusal after it (below) leaves the payment
+        // in the delegator's account and says so, never invites a second one.
+        let x402CreditedMicro = 0;
+        if (x402Payment != null) {
+          // Refusals and unknown outcomes are thrown by `settle()` itself, as
+          // the errors the client must see (a definite refusal: "not
+          // charged"; anything else: "outcome unknown — do not pay again").
+          const settlement: X402Settlement = await x402Payment.settle(taskId);
+          x402TxHash = settlement.txHash;
+          x402Net = settlement.network;
+          x402CreditedMicro = settlement.amountMicro;
+          let credited: boolean;
           try {
-            creditAccount(
-              moteDb.db,
-              delegatorId,
-              priceSnapshot,
-              "deposit",
-              `x402-${taskId}`,
-              `x402 payment for task ${taskId}`,
-            );
-            moteDb.db.exec("COMMIT");
+            // Flips the (payer, nonce) record pending → credited and credits
+            // the delegator in ONE transaction: exactly once, whether this
+            // request or the reconciler gets there first.
+            credited = creditX402Settlement(moteDb.db, settlement.payer, settlement.nonce, {
+              txHash: settlement.txHash,
+              description: `x402 payment ${settlement.txHash} for task ${taskId}`,
+              from: "pending",
+            });
           } catch (depositErr) {
-            moteDb.db.exec("ROLLBACK");
-            throw new SettlementError("SETTLEMENT_FAILED", "x402 auto-deposit failed", {
-              cause: depositErr,
+            // Settled onchain, not credited here. The record stays pending,
+            // so the reconciler credits it from the chain; the client is told
+            // not to pay again.
+            logger.error("x402.settled_not_credited", {
+              correlationId: taskId,
+              delegator: delegatorId,
+              payer: settlement.payer,
+              nonce: settlement.nonce,
+              txHash: settlement.txHash,
+              amountMicro: settlement.amountMicro,
+              idempotencyKey,
+              error: depositErr instanceof Error ? depositErr.message : String(depositErr),
+            });
+            const rec = findX402Settlement(moteDb.db, settlement.payer, settlement.nonce);
+            throw new X402OutcomeUnknownError(rec != null ? x402SettlementRef(rec) : undefined);
+          }
+          if (!credited) {
+            // The record left `pending` while the settle call was in flight.
+            // Only a record the reconciler CREDITED (from proof of execution)
+            // funds this task. Anything else — a record a lagging read marked
+            // failed while this late answer was on its way — is not money in
+            // the account: refuse as unknown, admit nothing, never fund this
+            // task from the delegator's other funds. The reconciler's one
+            // re-check of that failed record credits it if the chain shows
+            // the execution.
+            const rec = findX402Settlement(moteDb.db, settlement.payer, settlement.nonce);
+            if (rec?.status !== "credited") {
+              logger.error("x402.settled_after_record_resolved", {
+                correlationId: taskId,
+                payer: settlement.payer,
+                nonce: settlement.nonce,
+                txHash: settlement.txHash,
+                status: rec?.status,
+                failureReason: rec?.failure_reason,
+                idempotencyKey,
+              });
+              throw new X402OutcomeUnknownError(rec != null ? x402SettlementRef(rec) : undefined);
+            }
+            logger.info("x402.credited_by_reconciler", {
+              correlationId: taskId,
+              payer: settlement.payer,
+              nonce: settlement.nonce,
             });
           }
 
@@ -3443,24 +3861,24 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
         // above, the refusal says so — the amount, that it sits in the
         // delegator's account, that it becomes withdrawable once the account's
         // dispute-escrow hold clears — and never invites a second payment.
-        // Under the x402 library's real ordering (settle AFTER the handler, only
-        // on a status < 400) a request reaches this branch with a tx hash only
-        // through the stale hash a previous settlement left behind (#907); the
-        // wording holds either way, because the credit above is committed.
+        // (Reached with a payment only when the account's other funds sit
+        // below its escrow hold, so the credited deposit cannot cover the
+        // price on its own.)
+        const creditedMicro = x402TxHash != null ? x402CreditedMicro : 0;
         const fundingRefusal = (): InsufficientFundsError => {
-          if (!x402TxHash) {
+          if (x402TxHash == null) {
             return new InsufficientFundsError(
               "Insufficient spendable funds — deposit to virtual account or pay via x402",
             );
           }
           return new InsufficientFundsError(
             `Insufficient spendable funds for this task. This request's x402 payment of ` +
-              `${priceSnapshot} micro-units was credited to account ${delegatorId} and remains ` +
+              `${creditedMicro} micro-units was credited to account ${delegatorId} and remains ` +
               `there; it is withdrawable once the account's dispute-escrow hold clears. Do not ` +
               `pay again: resubmit when the account's spendable balance covers the price.`,
             {
               creditedPayment: {
-                amount_micro: priceSnapshot,
+                amount_micro: creditedMicro,
                 reference: `x402-${taskId}`,
                 motebit_id: delegatorId,
               },
@@ -3468,7 +3886,12 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
           );
         };
 
-        // Use allocateBudget to compute lock amount with risk buffer
+        // Use allocateBudget to compute lock amount with risk buffer.
+        // An x402-funded task is funded by THIS request's payment and nothing
+        // else (#907: funding decided once): its hold is capped at what the
+        // request paid, so the 1.2× buffer never draws on the delegator's other
+        // funds — in particular never on another request's concurrent x402
+        // deposit, which would leave that paying request refused.
         const allocation = allocateBudget(
           {
             goal_id: asGoalId(taskId),
@@ -3477,7 +3900,7 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
             currency: "USDC",
             risk_factor: 1.0, // 1.2× buffer
           },
-          spendable,
+          x402Payment != null ? Math.min(spendable, x402CreditedMicro) : spendable,
           asAllocationId(`x402-${taskId}`),
         );
 

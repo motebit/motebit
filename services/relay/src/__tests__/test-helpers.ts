@@ -115,6 +115,10 @@ export async function createTestRelay(overrides?: Partial<SyncRelayConfig>): Pro
     // (`createFakePaymentChain` with `pay()`, or `paymentChainFromAdapter`
     // over a stub adapter).
     p2pPaymentChain: HONEST_PAYMENT_CHAIN,
+    // The x402 reconciliation loop never reaches a real chain from a test
+    // (#907 round 2): tests that exercise it inject a fake reader and call
+    // `reconcilePendingX402Settlements` directly.
+    x402ChainReader: null,
     // Tests use mock WebSocket connections that never disconnect, so the
     // production 5s drain grace would be paid in full on every `close()`
     // (afterEach) — ~5s/test, making the suite slow and timer-bound (the
@@ -252,13 +256,15 @@ export function seedBalance(relay: SyncRelay, motebitId: string, amount: number)
 // === x402-paid submission harness ===
 //
 // After the Arc 3.5 gate, the only cross-agent relay-custody settlement the
-// submission route still creates is the x402-paid one — and `x402TxHash` is
-// set exclusively by the real `onAfterSettle` payment hook behind an external
-// facilitator, so that branch cannot be driven end-to-end from the harness.
-// This helper seeds the exact state a successful x402-paid submission leaves
-// behind (a byte-faithful mirror of the x402 branch in `tasks.ts` — queue
-// entry with `x402_tx_hash`, auto-deposit credit, risk-buffered allocation
-// hold + `relay_allocations` 'locked' row) so tests can drive the REAL
+// submission route still creates is the x402-paid one. That submission is
+// drivable end to end over the real `@x402/hono` stack with an in-process
+// facilitator (`x402-fake-facilitator.ts`, #907); this helper is the shortcut
+// for tests about what happens AFTER it. It seeds the exact state a successful
+// x402-paid submission leaves behind (a byte-faithful mirror of the x402
+// branch in `tasks.ts` — queue entry with `x402_tx_hash`, auto-deposit credit,
+// allocation hold capped at the payment + `relay_allocations` 'locked' row;
+// `x402-settlement-907.test.ts` asserts the same state over the live route)
+// so tests can drive the REAL
 // receipt → settlement → dispute → withdrawal path over live routes. Only
 // the facilitator round-trip is faked; every ledger mutation goes through
 // the same primitives production uses. Sibling of `seedBalance` (ledger
@@ -331,9 +337,10 @@ export function seedX402PaidTask(relay: SyncRelay, args: SeedX402PaidTaskArgs): 
     `x402 payment for task ${taskId}`,
   );
 
-  // Mirror: risk-buffered allocation hold, sized from the SPENDABLE balance —
-  // the number the debit enforces (#901).
-  const virtualBalance = getSpendableBalance(db, args.delegatorId);
+  // Mirror: allocation hold sized from the SPENDABLE balance — the number the
+  // debit enforces (#901) — and capped at this task's own x402 payment, so the
+  // risk buffer never draws on the delegator's other funds (#907).
+  const virtualBalance = Math.min(getSpendableBalance(db, args.delegatorId), priceSnapshot);
 
   const allocation = allocateBudget(
     {

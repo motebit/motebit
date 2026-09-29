@@ -31,9 +31,9 @@ import {
 // requires P2P for deposit-funded paid delegation, so the tests drive the
 // x402 shape: `seedX402PaidTask` seeds the exact state a successful x402-paid
 // submission leaves behind (queue entry with x402_tx_hash + auto-deposit +
-// locked allocation — the facilitator round-trip is the only faked step,
-// since `x402TxHash` is set exclusively by the real `onAfterSettle` payment
-// hook), then everything downstream is REAL and route-driven: receipt
+// locked allocation; the submission itself is driven over the real x402
+// stack in `x402-settlement-907.test.ts`), then everything downstream is
+// REAL and route-driven: receipt
 // ingestion → signed relay settlement → dispute window hold → dispute filing
 // → resolution fund movement → withdrawal → ledger reconciliation. The P2P
 // trust-layer complaint form (no fund movement) is covered by
