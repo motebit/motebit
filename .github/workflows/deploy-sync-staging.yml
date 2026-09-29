@@ -28,6 +28,11 @@ name: Deploy Sync Relay (staging)
 # not matter in practice — the atoms re-register on their own hourly
 # full-registration cycle (#564), which heals any ordering skew within an
 # hour and well inside the relay's 7-day listing prune.
+#
+# Prod orders itself AFTER this workflow (#978): deploy-sync.yml's gate polls
+# for this file's run on the same sha before building, because the two build
+# a byte-identical image and a simultaneous push stalled prod three times.
+# Renaming this file must update that poll.
 
 on:
   push:
