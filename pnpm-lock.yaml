@@ -1926,12 +1926,21 @@ importers:
         specifier: workspace:*
         version: link:../sync-engine
     devDependencies:
+      '@motebit/browser-persistence':
+        specifier: workspace:*
+        version: link:../browser-persistence
+      '@motebit/persistence':
+        specifier: workspace:*
+        version: link:../persistence
       '@motebit/wallet-solana':
         specifier: workspace:*
         version: link:../wallet-solana
       '@types/node':
         specifier: ^22.20.1
         version: 22.20.1
+      fake-indexeddb:
+        specifier: ^6.0.0
+        version: 6.2.5
       typescript:
         specifier: ^5.6.0
         version: 5.9.3
