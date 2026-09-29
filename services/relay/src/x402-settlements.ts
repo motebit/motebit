@@ -272,28 +272,30 @@ export interface X402SettlementRecord {
   /** Chain time (confirmed head's timestamp) of that mismatch observation: its re-check waits from here. */
   mismatch_observed_head_ts: number | null;
   /**
-   * EVIDENCE OF EXECUTION IS STICKY (#907 round 12). Once an
-   * `AuthorizationUsed(payer, nonce)` log has been seen for the record, the
-   * relay knows the payment executed; a later read that shows nothing is a
-   * lagging node, not evidence of absence.
-   *   - `unpaired`: Used seen, but its paired Transfer could not be read (a
-   *     missing log). The record can never become terminal from here: it is
-   *     re-read (its receipt, directly) with a chain-time backoff capped at
-   *     the last re-check backoff (6 h), spending no budget, until it pairs.
+   * EXECUTION EVIDENCE IS A STICKY FLAG (#907 rounds 12–13). Once a
+   * head-capped scan of the signed window has returned an
+   * `AuthorizationUsed(payer, nonce)` log for the record, a later read that
+   * shows nothing is a lagging (or reorged) view, never evidence of absence:
+   *   - `unpaired`: Used seen, its paired Transfer not (yet) read. Never
+   *     terminal, spends nothing; every visit is a full head-capped scan of
+   *     the window (so the execution is found wherever it lands), on the
+   *     chain-time cadence 10 min / 1 h / then every 6 h, forever.
    *   - `mismatched`: Used seen AND paired to a Transfer that fails the checks
-   *     (wrong recipient, amount or token) — a real non-payment. The one
-   *     mismatch re-check applies, then the record is terminal; it never
-   *     returns to `unpaired`, so a real underpayment cannot stay open forever.
+   *     (wrong recipient, amount or token). The first observation spends
+   *     nothing; each later one spends the mismatch re-check, then the
+   *     expiry-class re-checks; terminal once both are spent. Never back to
+   *     `unpaired`.
+   * The flag never pins a transaction: no read is ever made by a stored hash.
    */
   used_state: "unpaired" | "mismatched" | null;
-  /** The transaction whose AuthorizationUsed log was seen. */
+  /** The transaction whose AuthorizationUsed log was last seen — for the operator's eyes only, never read by. */
   used_observed_tx: string | null;
   /** Chain time the Used log was first seen. */
   used_observed_head_ts: number | null;
-  /** Re-reads of an `unpaired` record so far (drives its capped backoff). */
-  used_rereads: number;
-  /** Chain time the next re-read of an `unpaired` record is due. */
-  next_used_reread_head_ts: number | null;
+  /** Visits spent on the cadence (execution evidence or read errors): drives the next wait. */
+  visit_backoffs: number;
+  /** Chain time the record may next be visited (null: no cadence applies). */
+  next_visit_head_ts: number | null;
 }
 
 /** A record for this (payer, nonce), if any. */
@@ -561,10 +563,12 @@ export interface X402ScanParams {
   expiryMarginSeconds: number;
   /** Wall-clock gap between the two agreeing observations an expiry needs (ms). */
   expiryConfirmGapMs: number;
-  /** Re-checks of a `failed` record, and the wait before each (ms of CHAIN time). */
+  /**
+   * Re-checks of a `failed` record, and the wait before each (ms of CHAIN
+   * time); also the visit cadence of a record with execution evidence or a
+   * read error (the last value repeats forever).
+   */
   recheckBackoffMs: readonly number[];
-  /** The wait (ms of CHAIN time) from a mismatch observation to its own re-check. */
-  mismatchRecheckBackoffMs: number;
 }
 
 export const X402_SCAN: X402ScanParams = {
@@ -573,7 +577,6 @@ export const X402_SCAN: X402ScanParams = {
   expiryMarginSeconds: 120,
   expiryConfirmGapMs: 5 * 60_000,
   recheckBackoffMs: [10 * 60_000, 60 * 60_000, 6 * 60 * 60_000],
-  mismatchRecheckBackoffMs: 10 * 60_000,
 };
 
 const topicAddress = (a: string): string => "0x" + a.slice(2).toLowerCase().padStart(64, "0");
@@ -759,6 +762,7 @@ export type ReconcileDecision =
   | "execution_mismatch"
   | "still_pending"
   | "used_unpaired"
+  | "used_not_visible"
   | "scan_incomplete"
   | "no_execution_found"
   | "unchanged"
@@ -919,17 +923,9 @@ async function scanEvents(
         cursor === "pass_cursor"
           ? db
               .prepare(
-                "UPDATE relay_x402_settlements SET pass_cursor = ? WHERE payer = ? AND nonce = ? AND status = ? AND recheck_count = ? AND mismatch_rechecks = ? AND pass_cursor IS ?",
+                "UPDATE relay_x402_settlements SET pass_cursor = ? WHERE payer = ? AND nonce = ? AND status = ? AND recheck_count = ? AND pass_cursor IS ?",
               )
-              .run(
-                to,
-                rec.payer,
-                rec.nonce,
-                rec.status,
-                rec.recheck_count,
-                rec.mismatch_rechecks,
-                expected,
-              )
+              .run(to, rec.payer, rec.nonce, rec.status, rec.recheck_count, expected)
           : db
               .prepare(
                 "UPDATE relay_x402_settlements SET scanned_to_block = ? WHERE payer = ? AND nonce = ? AND status = 'pending' AND scanned_to_block IS ?",
@@ -988,63 +984,140 @@ export async function reconcileX402Settlement(
     /**
      * The confirmed head the RUN read once (#907 round 12): selection and every
      * decision in the run use the same head, so a second, regressed read can
-     * never make this pass spend a different budget than selection admitted.
+     * never make this pass decide differently than selection admitted.
      * Omitted (the operator's resolve, a direct call): read here, once.
      */
     head?: { number: number; timestamp: number };
   } = {},
 ): Promise<ReconcileDecision> {
   const recheck = rec.status === "failed";
-  /** The confirmed head's timestamp this run read (set before any spend). */
-  let chainNow = 0;
   const operator = opts.operator === true;
+  /** Execution evidence seen before this visit (a FLAG — round 13). */
+  const usedSeen = rec.used_state != null;
+  /** The confirmed head's timestamp this visit uses (null until read). */
+  let chainNow: number | null = opts.head?.timestamp ?? null;
+  /** The visit-cadence counter as this visit knows it. */
+  let visitBackoffs = rec.visit_backoffs;
+
   /**
-   * Conclude this re-check pass: spend ONE budget and, when the pass saw a
-   * mismatch, record that observation (it earns its own re-check later).
-   * Guarded by the generation this run observed (both budgets): a pass another
-   * run already concluded is never concluded (or spent) twice (#907 rounds
-   * 5–8). The budget spent is the mismatch one when a mismatch re-check is
-   * due, else the expiry/refusal one — never both, and a mismatch never
-   * rewrites `failure_reason`, so neither budget can erase the other (round
-   * 11). Every spend leaves a non-null chain-time wait. The operator's resolve
-   * never spends and never writes (see below).
+   * The chain-time cadence of a record that must not be visited every tick:
+   * one with execution evidence (10 min, 1 h, then every 6 h, forever) and
+   * one whose reads failed (same progression; reset by the next good read).
    */
-  const spendRecheck = (observedMismatch = false): void => {
+  const scheduleNextVisit = (headTs: number): void => {
+    const backoff = p.recheckBackoffMs;
+    const wait = backoff[Math.min(visitBackoffs, backoff.length - 1)] ?? 0;
+    visitBackoffs += 1;
+    db.prepare(
+      "UPDATE relay_x402_settlements SET visit_backoffs = ?, next_visit_head_ts = ? WHERE payer = ? AND nonce = ?",
+    ).run(visitBackoffs, headTs + chainSeconds(wait), rec.payer, rec.nonce);
+  };
+
+  /**
+   * Conclude a re-check pass of a record WITHOUT execution evidence: spend
+   * one expiry-class re-check. Guarded by the generation this run observed,
+   * so a pass another run already concluded is never spent twice (#907
+   * rounds 5–8), and by `used_state IS NULL`, so a stale evidence-less pass
+   * never spends a record that has since gained evidence (round 13). Every spend leaves a non-null chain-time wait. The
+   * operator's resolve never spends and never writes.
+   */
+  const spendExpiryRecheck = (headTs: number): void => {
     if (!recheck || operator) return;
-    const gen = [rec.payer, rec.nonce, rec.recheck_count, rec.mismatch_rechecks] as const;
-    const observe = observedMismatch
-      ? ", last_observation = 'execution_mismatch', mismatch_observed_head_ts = ?"
-      : "";
-    const observeArgs = observedMismatch ? [chainNow] : [];
-    const mismatchDue =
-      rec.last_observation === "execution_mismatch" &&
-      rec.mismatch_rechecks < MISMATCH_RECHECKS &&
-      rec.mismatch_observed_head_ts != null &&
-      rec.mismatch_observed_head_ts + chainSeconds(p.mismatchRecheckBackoffMs) <= chainNow;
-    if (mismatchDue) {
-      db.prepare(
-        `UPDATE relay_x402_settlements SET mismatch_rechecks = mismatch_rechecks + 1, pass_cursor = NULL${observe} WHERE payer = ? AND nonce = ? AND status = 'failed' AND recheck_count = ? AND mismatch_rechecks = ?`,
-      ).run(...observeArgs, ...gen);
-      return;
-    }
     const done = rec.recheck_count + 1;
     const wait = p.recheckBackoffMs[done] ?? p.recheckBackoffMs[p.recheckBackoffMs.length - 1] ?? 0;
     // The next re-check waits in CHAIN time (round 10); the wall-clock
     // `next_recheck_at` is informational.
     db.prepare(
-      `UPDATE relay_x402_settlements SET recheck_count = ?, next_recheck_at = ?, next_recheck_head_ts = ?, pass_cursor = NULL${observe} WHERE payer = ? AND nonce = ? AND status = 'failed' AND recheck_count = ? AND mismatch_rechecks = ?`,
-    ).run(done, Date.now() + wait, chainNow + chainSeconds(wait), ...observeArgs, ...gen);
+      "UPDATE relay_x402_settlements SET recheck_count = ?, next_recheck_at = ?, next_recheck_head_ts = ?, pass_cursor = NULL WHERE payer = ? AND nonce = ? AND status = 'failed' AND recheck_count = ? AND used_state IS NULL",
+    ).run(
+      done,
+      Date.now() + wait,
+      headTs + chainSeconds(wait),
+      rec.payer,
+      rec.nonce,
+      rec.recheck_count,
+    );
   };
+
   /**
-   * Judge an observed `AuthorizationUsed` by its transaction's receipt:
-   * paired and matching ⇒ credit; no Transfer paired (a missing log) ⇒ the
-   * record becomes / stays STICKY `unpaired` and is re-read later, spending
-   * nothing; paired but failing the checks ⇒ a real mismatch (one re-check,
-   * then terminal — never back to sticky).
+   * Record execution evidence for the first time, or move `unpaired` to
+   * `mismatched` (never back). A FLAG, never a pinned transaction: the next
+   * visit finds the execution wherever it is by a head-capped scan of the
+   * signed window. `used_observed_tx` is for the operator's eyes only.
+   */
+  const markUsedSeen = (state: "unpaired" | "mismatched", txHash: string, headTs: number): void => {
+    const backoff = p.recheckBackoffMs;
+    const wait = backoff[0] ?? 0;
+    db.prepare(
+      `UPDATE relay_x402_settlements SET used_state = ?, used_observed_tx = ?,
+         used_observed_head_ts = COALESCE(used_observed_head_ts, ?),
+         last_observation = CASE WHEN ? = 'mismatched' THEN 'execution_mismatch' ELSE last_observation END,
+         mismatch_observed_head_ts = CASE WHEN ? = 'mismatched' THEN ? ELSE mismatch_observed_head_ts END,
+         visit_backoffs = 1, next_visit_head_ts = ?, pass_cursor = NULL
+       WHERE payer = ? AND nonce = ?
+         AND (status = 'failed' OR (status = 'pending' AND ? = 'unpaired'))
+         AND (used_state IS NULL OR (used_state = 'unpaired' AND ? = 'mismatched'))`,
+    ).run(
+      state,
+      txHash,
+      headTs,
+      state,
+      state,
+      headTs,
+      headTs + chainSeconds(wait),
+      rec.payer,
+      rec.nonce,
+      state,
+      state,
+    );
+    visitBackoffs = 1;
+  };
+
+  /**
+   * A mismatch observation on a record already `mismatched`: spend ONE
+   * re-check — the mismatch budget first, then the expiry-class budget — and
+   * set the next visit. Guarded by the observed generation. The record is
+   * terminal (never selected again) once BOTH budgets are spent, so a real
+   * underpayment an honest node keeps reporting closes after
+   * 1 + `recheckBackoffMs.length` further observations.
+   */
+  const spendMismatchObservation = (headTs: number): void => {
+    const mr =
+      rec.mismatch_rechecks < MISMATCH_RECHECKS ? rec.mismatch_rechecks + 1 : rec.mismatch_rechecks;
+    const rc =
+      rec.mismatch_rechecks < MISMATCH_RECHECKS ? rec.recheck_count : rec.recheck_count + 1;
+    const backoff = p.recheckBackoffMs;
+    const wait = backoff[Math.min(visitBackoffs, backoff.length - 1)] ?? 0;
+    visitBackoffs += 1;
+    db.prepare(
+      "UPDATE relay_x402_settlements SET mismatch_rechecks = ?, recheck_count = ?, mismatch_observed_head_ts = ?, visit_backoffs = ?, next_visit_head_ts = ? WHERE payer = ? AND nonce = ? AND status = 'failed' AND recheck_count = ? AND mismatch_rechecks = ?",
+    ).run(
+      mr,
+      rc,
+      headTs,
+      visitBackoffs,
+      headTs + chainSeconds(wait),
+      rec.payer,
+      rec.nonce,
+      rec.recheck_count,
+      rec.mismatch_rechecks,
+    );
+  };
+
+  /**
+   * Judge an `AuthorizationUsed` log THIS visit's head-capped scan returned,
+   * by its transaction's receipt — the only receipt read there is, and never
+   * for a transaction the scan did not just return (round 13).
+   *   - paired and matching ⇒ credit;
+   *   - no Transfer paired (a missing log) ⇒ `unpaired` evidence: never
+   *     terminal, spends nothing, re-read on the cadence;
+   *   - paired but failing the checks ⇒ `mismatched`: spends the mismatch,
+   *     then the expiry-class budget, on each LATER mismatch observation;
+   *     terminal when both are spent; never back to `unpaired`.
    */
   const judgeUsed = async (
     txHash: string,
-    usedLogIndex: number | null,
+    usedLogIndex: number,
     headTs: number,
   ): Promise<ReconcileDecision> => {
     const logs = await reader.getReceiptLogs(txHash);
@@ -1053,49 +1126,37 @@ export async function reconcileX402Settlement(
       authorizer: rec.payer,
       nonce: rec.nonce,
     });
-    if (paired == null && rec.used_state !== "mismatched") {
+    if (paired == null) {
       if (operator) return "used_unpaired"; // observed, nothing written
-      const n = rec.used_state === "unpaired" ? rec.used_rereads + 1 : 0;
-      const backoff = p.recheckBackoffMs;
-      const wait = backoff[Math.min(n, backoff.length - 1)] ?? 0;
-      db.prepare(
-        `UPDATE relay_x402_settlements SET used_state = 'unpaired', used_observed_tx = ?,
-           used_observed_head_ts = COALESCE(used_observed_head_ts, ?), used_rereads = ?,
-           next_used_reread_head_ts = ?, pass_cursor = NULL
-         WHERE payer = ? AND nonce = ? AND status = ? AND used_state IS ? AND used_rereads = ?`,
-      ).run(
-        txHash,
-        headTs,
-        n,
-        headTs + chainSeconds(wait),
-        rec.payer,
-        rec.nonce,
-        rec.status,
-        rec.used_state,
-        rec.used_rereads,
-      );
-      logger.warn("x402.reconcile.used_unpaired", {
-        payer: rec.payer,
-        nonce: rec.nonce,
-        txHash,
-        rereads: n,
-        idempotencyKey: rec.idempotency_key,
-      });
+      if (rec.used_state == null) {
+        markUsedSeen("unpaired", txHash, headTs);
+        logger.warn("x402.reconcile.used_unpaired", {
+          payer: rec.payer,
+          nonce: rec.nonce,
+          txHash,
+          idempotencyKey: rec.idempotency_key,
+        });
+      } else {
+        scheduleNextVisit(headTs); // unpaired stays unpaired; mismatched is not reopened
+      }
       return "used_unpaired";
     }
     const matches =
-      paired != null &&
       paired.from === rec.payer &&
       paired.to === rec.pay_to.toLowerCase() &&
       paired.value === BigInt(rec.amount_micro);
     const mismatch = (): ReconcileDecision => {
       if (operator) return "execution_mismatch"; // observed, nothing written
-      // A real non-payment: sticky no more, one mismatch re-check, then terminal.
-      db.prepare(
-        "UPDATE relay_x402_settlements SET used_state = 'mismatched', used_observed_tx = ? WHERE payer = ? AND nonce = ? AND status = ?",
-      ).run(txHash, rec.payer, rec.nonce, rec.status);
-      if (recheck) spendRecheck(true);
-      else markX402Failed(db, rec.payer, rec.nonce, "execution_mismatch", headTs);
+      if (rec.used_state === "mismatched") {
+        spendMismatchObservation(headTs);
+      } else {
+        // The first mismatch observation spends nothing, whatever the
+        // record's origin (round 13): both budgets stay whole.
+        if (!recheck) {
+          markX402Failed(db, rec.payer, rec.nonce, "execution_mismatch", headTs);
+        }
+        markUsedSeen("mismatched", txHash, headTs);
+      }
       return "execution_mismatch";
     };
     if (!matches) {
@@ -1104,10 +1165,10 @@ export async function reconcileX402Settlement(
         nonce: rec.nonce,
         txHash,
         usedLogIndex,
-        pairedPosition: paired?.position,
-        pairedFrom: paired?.from,
-        pairedTo: paired?.to,
-        pairedValue: paired?.value.toString(),
+        pairedPosition: paired.position,
+        pairedFrom: paired.from,
+        pairedTo: paired.to,
+        pairedValue: paired.value.toString(),
         expectedTo: rec.pay_to,
         expectedAmountMicro: rec.amount_micro,
         idempotencyKey: rec.idempotency_key,
@@ -1151,6 +1212,7 @@ export async function reconcileX402Settlement(
     }
     return credited ? "credited" : "unchanged";
   };
+
   // The operator's resolve is READ-ONLY except for a credit (#907 round 11):
   // it writes no column the loop's selection or scan reads — not the queue
   // stamp, cursors, scan bounds, observations, budgets or status.
@@ -1162,12 +1224,6 @@ export async function reconcileX402Settlement(
   try {
     const head = opts.head ?? (await reader.getConfirmedHead());
     chainNow = head.timestamp;
-    // Sticky evidence: a record whose Used log was seen but not yet paired is
-    // settled by re-reading THAT transaction's receipt — never by a scan that
-    // could show nothing — and a re-read spends no budget (round 12).
-    if (rec.used_state === "unpaired" && rec.used_observed_tx != null) {
-      return await judgeUsed(rec.used_observed_tx, null, head.timestamp);
-    }
     const expiryTs = rec.valid_before + p.expiryMarginSeconds;
     const stillValid = head.timestamp <= expiryTs;
     let from = rec.scan_from_block;
@@ -1196,8 +1252,14 @@ export async function reconcileX402Settlement(
     // otherwise "scan" blocks it does not have (Geth clamps silently) and
     // conclude over them (#907 round 9).
     const ceiling = end != null ? Math.min(end, head.number) : head.number;
+    // The whole-window scan (round 13): the operator's resolve, and every
+    // visit of a record with execution evidence — the SIGNED window from its
+    // start, capped at the confirmed head, however many pages a provider's
+    // range cap forces (the window is at most X402_MAX_WINDOW_SECONDS long),
+    // persisting no cursor. The execution is found wherever it landed.
+    const wholeWindow = operator || usedSeen;
     // The two expiry observations are separated in CHAIN time (round 10).
-    const confirming = !operator && !recheck && rec.expiry_observed_head_ts != null;
+    const confirming = !wholeWindow && !recheck && rec.expiry_observed_head_ts != null;
     if (
       confirming &&
       head.timestamp - rec.expiry_observed_head_ts! < chainSeconds(p.expiryConfirmGapMs)
@@ -1205,33 +1267,48 @@ export async function reconcileX402Settlement(
       return "still_pending"; // the second observation waits out the gap
     }
     const fullPass = recheck || confirming;
-    // The operator's scan always covers the whole window from its start and
-    // persists nothing.
     const { events, reached, stale } = await scanEvents(
       db,
       reader,
       rec,
-      operator
+      wholeWindow
         ? from
         : fullPass
           ? (rec.pass_cursor ?? from - 1) + 1
           : (rec.scanned_to_block ?? from - 1) + 1,
       ceiling,
-      operator ? null : fullPass ? "pass_cursor" : "scanned_to_block",
+      wholeWindow ? null : fullPass ? "pass_cursor" : "scanned_to_block",
       p,
-      // The operator is the last resort: it reads the ENTIRE window in one call
-      // however small the provider's range cap makes the pages (round 12).
-      operator ? Number.POSITIVE_INFINITY : p.maxPagesPerRun,
+      wholeWindow ? Number.POSITIVE_INFINITY : p.maxPagesPerRun,
     );
-
     if (stale) return "unchanged"; // another run moved this record on
+    // The reads succeeded: a record without evidence leaves any read-error
+    // cadence behind it.
+    if (!operator && !usedSeen && visitBackoffs > 0) {
+      db.prepare(
+        "UPDATE relay_x402_settlements SET visit_backoffs = 0, next_visit_head_ts = NULL WHERE payer = ? AND nonce = ?",
+      ).run(rec.payer, rec.nonce);
+      visitBackoffs = 0;
+    }
     const used = events.find((e) => e.kind === "used");
     if (used != null) return await judgeUsed(used.txHash, used.logIndex, head.timestamp);
+    // Execution evidence is sticky: a scan that shows no Used (or a Canceled,
+    // which a Used seen at confirmed depth rules out short of a reorg past
+    // that depth — outside the stated threat model) is a lagging or reorged
+    // view. It clears nothing and spends nothing.
+    if (usedSeen) {
+      if (operator) {
+        if (stillValid) return "authorization_still_valid";
+        return reached && end != null && ceiling === end ? "no_execution_found" : "scan_incomplete";
+      }
+      scheduleNextVisit(head.timestamp);
+      return "used_not_visible";
+    }
     const canceled = events.find((e) => e.kind === "canceled");
     if (canceled != null) {
       if (operator) return "cancelled"; // observed, nothing written
       if (recheck) {
-        spendRecheck();
+        spendExpiryRecheck(head.timestamp);
         return "unchanged";
       }
       markX402Failed(db, rec.payer, rec.nonce, "authorization_cancelled", head.timestamp);
@@ -1253,7 +1330,7 @@ export async function reconcileX402Settlement(
     }
     if (recheck) {
       if (stillValid) return "authorization_still_valid";
-      if (concluded) spendRecheck();
+      if (concluded) spendExpiryRecheck(head.timestamp);
       return "unchanged";
     }
     if (!concluded) return stillValid ? "authorization_still_valid" : "still_pending";
@@ -1278,6 +1355,9 @@ export async function reconcileX402Settlement(
       idempotencyKey: rec.idempotency_key,
       error: err instanceof Error ? err.message : String(err),
     });
+    // A read error still sets the record's next visit (round 13): a failing
+    // record is never re-read every tick. Only with a known chain time.
+    if (!operator && chainNow != null) scheduleNextVisit(chainNow);
     return "read_error";
   }
 }
@@ -1346,44 +1426,41 @@ export function selectX402Candidates(
   p: X402ScanParams,
   limit: number,
 ): { pending: X402SettlementRecord[]; failed: X402SettlementRecord[] } {
-  // A record with sticky evidence of execution (`used_state = 'unpaired'`) is
-  // re-read on its own chain-time cadence, in either queue (round 12).
+  if (headTs == null) return { pending: [], failed: [] };
+  // Every record honours its visit cadence (execution evidence, read errors).
   const pending = db
     .prepare(
       `SELECT * FROM relay_x402_settlements WHERE status = 'pending'
-         AND (used_state IS NOT 'unpaired' OR (? IS NOT NULL AND next_used_reread_head_ts <= ?))
+         AND (next_visit_head_ts IS NULL OR next_visit_head_ts <= ?)
        ${SELECTION_ORDER} LIMIT ?`,
     )
-    .all(headTs, headTs, limit) as X402SettlementRecord[];
-  if (headTs == null) return { pending, failed: [] };
+    .all(headTs, limit) as X402SettlementRecord[];
   const placeholders = RECHECKABLE_FAILURES.map(() => "?").join(",");
   const failed = db
     .prepare(
-      // The first re-check waits backoff[0] from the moment the record failed
-      // (`resolved_head_ts`); each later one waits the next backoff — all in
-      // CHAIN time, against the confirmed head's timestamp (round 10). A mismatch has
-      // its own one-re-check budget.
-      // Two ORTHOGONAL budgets (round 11), each with its own chain-time wait:
-      // the original failure class's re-checks, and one re-check of the
-      // latest mismatch observation.
+      // Execution evidence (round 13): `unpaired` is always eligible on its
+      // cadence; `mismatched` while either budget is left. Without evidence:
+      // the expiry-class re-checks, the first waiting backoff[0] from the
+      // moment the record failed (`resolved_head_ts`), each later one the next
+      // backoff — all in CHAIN time, against the confirmed head (round 10) —
+      // and only once chain time is past validBefore.
       `SELECT * FROM relay_x402_settlements WHERE status = 'failed'
-         AND ((used_state = 'unpaired' AND next_used_reread_head_ts <= ?)
-              OR (used_state IS NOT 'unpaired'
-                  AND ((failure_reason IN (${placeholders}) AND recheck_count < ?
-                        AND COALESCE(next_recheck_head_ts, resolved_head_ts + ?) <= ?)
-                       OR (last_observation = 'execution_mismatch' AND mismatch_rechecks < ?
-                        AND mismatch_observed_head_ts + ? <= ?))
+         AND (next_visit_head_ts IS NULL OR next_visit_head_ts <= ?)
+         AND (used_state = 'unpaired'
+              OR (used_state = 'mismatched' AND (recheck_count < ? OR mismatch_rechecks < ?))
+              OR (used_state IS NULL
+                  AND failure_reason IN (${placeholders}) AND recheck_count < ?
+                  AND COALESCE(next_recheck_head_ts, resolved_head_ts + ?) <= ?
                   AND valid_before + ? < ?))
        ${SELECTION_ORDER} LIMIT ?`,
     )
     .all(
       headTs,
+      p.recheckBackoffMs.length,
+      MISMATCH_RECHECKS,
       ...RECHECKABLE_FAILURES,
       p.recheckBackoffMs.length,
       chainSeconds(p.recheckBackoffMs[0] ?? 0),
-      headTs,
-      MISMATCH_RECHECKS,
-      chainSeconds(p.mismatchRecheckBackoffMs),
       headTs,
       p.expiryMarginSeconds,
       headTs,
@@ -1405,7 +1482,11 @@ export async function reconcilePendingX402Settlements(
   let head: { number: number; timestamp: number };
   try {
     head = await reader.getConfirmedHead();
-  } catch {
+  } catch (err) {
+    // Nothing is eligible without a head; the outage is logged and counted.
+    logger.error("x402.reconcile.head_read_failed", {
+      error: err instanceof Error ? err.message : String(err),
+    });
     result.errors += 1;
     return result;
   }
@@ -1419,7 +1500,8 @@ export async function reconcilePendingX402Settlements(
       d === "still_pending" ||
       d === "expiry_observed" ||
       d === "authorization_still_valid" ||
-      d === "used_unpaired"
+      d === "used_unpaired" ||
+      d === "used_not_visible"
     ) {
       result.stillPending += 1;
     } else if (d === "read_error") result.errors += 1;

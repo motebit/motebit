@@ -132,6 +132,25 @@ export const facilitator = {
       (e) => e.from === from.toLowerCase() && e.nonce === nonce.toLowerCase(),
     );
   },
+  /**
+   * A reorg: transaction `txHash` disappears and its calls re-appear as a NEW
+   * transaction T' in block `block` (which may be above the confirmed head).
+   * Returns T'.
+   */
+  chainReorg(txHash: string, block: number): string {
+    const moved = fakeTx();
+    for (const e of this.events) {
+      if (e.txHash !== txHash) continue;
+      e.txHash = moved;
+      e.blockNumber = block;
+    }
+    const t = this.transfers.get(txHash);
+    if (t != null) {
+      this.transfers.delete(txHash);
+      this.transfers.set(moved, t);
+    }
+    return moved;
+  },
   /** `transferWithAuthorization` on the chain: AuthorizationUsed at i, its Transfer at i + 1. */
   chainExecute(args: {
     token: string;

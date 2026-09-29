@@ -159,7 +159,7 @@ function holdOf(taskId: string): number {
 }
 /** Reconciliation with no wall-clock waits (the two-observation gap and re-check backoff). */
 const NOW = {
-  scan: { expiryConfirmGapMs: 0, recheckBackoffMs: [0, 0, 0], mismatchRecheckBackoffMs: 0 },
+  scan: { expiryConfirmGapMs: 0, recheckBackoffMs: [0, 0, 0] },
 };
 
 function x402Records(): {
@@ -2626,9 +2626,9 @@ describe("#907 round 9: the relay's wall clock never defines the scanned chain w
     return { reader: base, release, atRead };
   }
 
-  it("CAS: a stale run from an earlier MISMATCH generation writes no pass cursor — its lagging reads never make the next re-check skip the execution", async () => {
+  it("CAS: a stale evidence-less pass that concludes after the record gained execution evidence spends nothing (round 13)", async () => {
     const db = relay.moteDb.db;
-    const { w, pay, auth } = await failedRecord("CasMismatch");
+    const { w, pay, auth } = await failedRecord("CasEvidence");
     facilitator.chainExecute({
       token: tokenOf(pay),
       from: auth.from,
@@ -2637,37 +2637,30 @@ describe("#907 round 9: the relay's wall clock never defines the scanned chain w
       value: BigInt(auth.value),
     });
     facilitator.chainTime = recOf(w).valid_before + 10_000;
-    // The first re-check reads a corrupt receipt: a (paired) mismatch observed.
-    await reconcilePendingX402Settlements(db, fakeChainReader({ receiptCorruptOnce: true }), NOW);
-    expect(recOf(w) as unknown as Record<string, unknown>).toMatchObject({
-      last_observation: "execution_mismatch",
-      mismatch_rechecks: 0,
-      pass_cursor: null,
-    });
     const stale = full(w);
-    // Run A (a lagging node) reads its first page, then stalls.
+    // Run A (a lagging node, no evidence yet) reads its page, then stalls.
     const a = stalledOnFirstRead(fakeChainReader({ lagging: true }));
-    const runA = reconcileX402Settlement(db, a.reader, stale, {
-      ...X402_SCAN,
-      ...NOW.scan,
-      pageBlocks: 50,
-    });
+    const runA = reconcileX402Settlement(db, a.reader, stale, { ...X402_SCAN, ...NOW.scan });
     await a.atRead;
-    // Run B concludes the mismatch re-check (the quirk again): budget spent.
-    await reconcileX402Settlement(db, fakeChainReader({ receiptCorruptOnce: true }), stale, {
+    // Run B sees the Used log, with the Transfer missing: evidence.
+    await reconcileX402Settlement(db, fakeChainReader({ receiptQuirkOnce: true }), stale, {
       ...X402_SCAN,
       ...NOW.scan,
     });
-    expect(recOf(w)).toMatchObject({ mismatch_rechecks: 1, pass_cursor: null });
+    expect(recOf(w) as unknown as Record<string, unknown>).toMatchObject({
+      used_state: "unpaired",
+      recheck_count: 0,
+    });
     a.release();
-    expect(await runA).toBe("unchanged");
-    expect(recOf(w).pass_cursor, "the stale run wrote no cursor").toBeNull();
-    // The next re-check (an expiry re-check is left) rescans from the start.
+    await runA;
+    expect(
+      recOf(w) as unknown as Record<string, unknown>,
+      "the stale lagging pass concluded, and spent nothing",
+    ).toMatchObject({ used_state: "unpaired", recheck_count: 0 });
     await reconcilePendingX402Settlements(db, fakeChainReader(), NOW);
     expect(recOf(w).status).toBe("credited");
     expect(x402Deposits(w).map((d) => d.amount)).toEqual([GROSS]);
   });
-
   it("CAS: a stale run concluding an EARLIER re-check generation never rolls back the re-check count (no budget handed back)", async () => {
     const db = relay.moteDb.db;
     const { w, auth } = await failedRecord("CasSpend");
@@ -2849,22 +2842,21 @@ describe("#907 round 11: the expiry and mismatch re-check budgets are orthogonal
   const lagging = () => fakeChainReader({ lagging: true });
   const honest = () => fakeChainReader();
 
-  it("sequence 1 — refused, lands late; re-check 1 reads a corrupt receipt (a paired mismatch); a lagging read follows: the expiry re-checks left still credit on the honest read", async () => {
+  it("sequence 1 — refused, lands late; re-check 1 reads a corrupt receipt (a paired mismatch, spending nothing); a lagging read follows (spending nothing): the honest read credits", async () => {
     const w = await refusedLandsLate("R11s1");
     await loop(corrupt());
     expect(row(w)).toMatchObject({
       failure_reason: "invalid_exact_evm_insufficient_balance",
-      last_observation: "execution_mismatch",
-      recheck_count: 1,
+      used_state: "mismatched",
+      recheck_count: 0,
       mismatch_rechecks: 0,
     });
-    await loop(lagging()); // the mismatch re-check, on a lagging node
-    expect(row(w)).toMatchObject({ status: "failed", recheck_count: 1, mismatch_rechecks: 1 });
+    await loop(lagging());
+    expect(row(w)).toMatchObject({ status: "failed", recheck_count: 0, mismatch_rechecks: 0 });
     await loop(honest());
     expect(row(w).status).toBe("credited");
     expect(x402Deposits(w).map((d) => d.amount)).toEqual([GROSS]);
   });
-
   it("sequence 2 — pending, lagging reads expire it; re-check 1 reads a corrupt receipt; lagging again: still credits on the honest read", async () => {
     const w = await pricedAgent();
     const body = { prompt: `907 r11 s2 ${crypto.randomUUID()}`, submitted_by: w };
@@ -2884,35 +2876,37 @@ describe("#907 round 11: the expiry and mismatch re-check budgets are orthogonal
     expect(row(w)).toMatchObject({
       status: "failed",
       failure_reason: "authorization_expired_unused",
-      last_observation: "execution_mismatch",
-      recheck_count: 1,
-      mismatch_rechecks: 1,
+      used_state: "mismatched",
+      recheck_count: 0,
+      mismatch_rechecks: 0,
     });
     await loop(honest());
     expect(row(w).status).toBe("credited");
   });
-
-  it("sequence 3 — refused, lands late; re-check 1 lagging, re-check 2 reads a corrupt receipt, then lagging: the third expiry re-check credits", async () => {
+  it("sequence 3 — refused, lands late; re-check 1 lagging, re-check 2 reads a corrupt receipt, then lagging: the honest read credits", async () => {
     const w = await refusedLandsLate("R11s3");
     await loop(lagging());
     await loop(corrupt());
     await loop(lagging());
-    expect(row(w)).toMatchObject({ status: "failed", recheck_count: 2, mismatch_rechecks: 1 });
+    expect(row(w)).toMatchObject({
+      status: "failed",
+      used_state: "mismatched",
+      recheck_count: 1,
+      mismatch_rechecks: 0,
+    });
     await loop(honest());
     expect(row(w).status).toBe("credited");
   });
-
-  it("sequence 4 — refused, lands late; re-check 1 reads a corrupt receipt: the mismatch's OWN re-check credits on the honest read", async () => {
+  it("sequence 4 — refused, lands late; re-check 1 reads a corrupt receipt: the mismatched record is re-read on its own cadence whatever the expiry wait, and credits on the honest read", async () => {
     const w = await refusedLandsLate("R11s4");
     await loop(corrupt());
-    // Freeze the expiry budget's wait so only the mismatch clause can admit it.
+    // Freeze the expiry wait: only the evidence clause can admit it.
     db()
       .prepare("UPDATE relay_x402_settlements SET next_recheck_head_ts = ? WHERE delegator_id = ?")
       .run(facilitator.chainTime + 1_000_000, w);
     await loop(honest());
     expect(row(w)).toMatchObject({ status: "credited" });
   });
-
   it("operator first — its resolve past validBefore reads a corrupt receipt (and a quirk) and writes NOTHING; all three expiry re-checks remain and the loop credits", async () => {
     const w = await refusedLandsLate("R11op");
     await loop(lagging()); // stamps the failure's chain time, spends re-check 1
@@ -2959,7 +2953,7 @@ describe("#907 round 11: the expiry and mismatch re-check budgets are orthogonal
     expect(await operatorResolve(w, honest())).toBe("credited");
   });
 
-  it("q3 corner — a corrupt receipt on the THIRD expiry re-check: the mismatch re-check waits its own chain-time backoff (10 min), then credits", async () => {
+  it("q3 corner — a corrupt receipt on the THIRD expiry re-check: the mismatched record waits its own chain-time cadence (10 min), then credits", async () => {
     const w = await refusedLandsLate("R11q3");
     const PROD = { scan: { ...X402_SCAN } };
     const failedAt = () => row(w).resolved_head_ts as number;
@@ -2969,14 +2963,17 @@ describe("#907 round 11: the expiry and mismatch re-check budgets are orthogonal
     facilitator.chainTime = row(w).next_recheck_head_ts!;
     await loop(lagging(), PROD); // re-check 2
     facilitator.chainTime = row(w).next_recheck_head_ts!;
-    await loop(corrupt(), PROD); // re-check 3 reads a corrupt receipt
-    const seen = row(w);
-    expect(seen).toMatchObject({ recheck_count: 3, last_observation: "execution_mismatch" });
-    expect(seen.next_recheck_head_ts, "every spend leaves a chain-time wait").not.toBeNull();
-    facilitator.chainTime = seen.mismatch_observed_head_ts! + 9 * 60;
+    await loop(corrupt(), PROD); // re-check 3 reads a corrupt receipt: evidence, no spend
+    const seen = row(w) as unknown as Record<string, unknown> & {
+      mismatch_observed_head_ts: number;
+      next_visit_head_ts: number | null;
+    };
+    expect(seen).toMatchObject({ recheck_count: 2, used_state: "mismatched" });
+    expect(seen.next_visit_head_ts, "a chain-time wait").toBe(seen.mismatch_observed_head_ts + 600);
+    facilitator.chainTime = seen.mismatch_observed_head_ts + 9 * 60;
     await loop(honest(), PROD);
-    expect(row(w).status, "not before the mismatch's 10-minute backoff").toBe("failed");
-    facilitator.chainTime = seen.mismatch_observed_head_ts! + 10 * 60;
+    expect(row(w).status, "not before its 10-minute cadence").toBe("failed");
+    facilitator.chainTime = seen.mismatch_observed_head_ts + 10 * 60;
     await loop(honest(), PROD);
     expect(row(w).status).toBe("credited");
   });
@@ -3010,7 +3007,13 @@ describe("#907 round 12: evidence of execution is sticky; one head per run; the 
   const PROD = { scan: { ...X402_SCAN } };
   /** The USDC contract the test relay prices in (Base Sepolia). */
   const USDC_TOKEN = "0x036cbd53842c5426634e7929541ec2318f3dcf7e";
-  type Mode = "L" | "Q" | "F" | "H";
+  /**
+   * L lagging (no logs), Q a receipt missing its Transfer, F every read fails,
+   * C a receipt whose Transfer carries a WRONG value (a paired mismatch),
+   * G a reorg (the execution moves to a new transaction T' in another block)
+   * read by a lagging node, H honest.
+   */
+  type Mode = "L" | "Q" | "F" | "C" | "G" | "H";
   type Start = "P0" | "P1" | "R";
   interface Cell {
     id: string;
@@ -3025,93 +3028,159 @@ describe("#907 round 12: evidence of execution is sticky; one head per run; the 
       .prepare("SELECT * FROM relay_x402_settlements WHERE payer = ? AND nonce = ?")
       .get(c.payer, c.nonce) as Record<string, unknown> & { status: string };
 
-  /** Every sequence over {L, Q, F} of length 0..n (1 + 3 + 9 + … ). */
+  const MODES = ["L", "Q", "F", "C", "G"] as const;
+  /** Every sequence over {L, Q, F, C, G} of length 0..n (1 + 5 + 25 + … ). */
   function sequencesUpTo(n: number): Mode[][] {
     const out: Mode[][] = [[]];
     let frontier: Mode[][] = [[]];
     for (let len = 1; len <= n; len++) {
       const next: Mode[][] = [];
-      for (const q of frontier) for (const m of ["L", "Q", "F"] as const) next.push([...q, m]);
+      for (const q of frontier) for (const m of MODES) next.push([...q, m]);
       out.push(...next);
       frontier = next;
     }
     return out;
   }
-  /** A deterministic sample of `k` sequences of length `len`. */
-  function sampleSequences(len: number, k: number): Mode[][] {
-    let x = 907;
-    const out: Mode[][] = [];
-    for (let i = 0; i < k; i++) {
-      const q: Mode[] = [];
-      for (let j = 0; j < len; j++) {
-        x = (x * 1103515245 + 12345) % 2147483648;
-        q.push((["L", "Q", "F"] as const)[x % 3]!);
-      }
-      out.push(q);
-    }
-    return out;
-  }
-
   /**
-   * The stated exception, as a model: an EXECUTED record the loop can never
-   * credit is one whose three expiry re-checks were all spent by lagging reads
-   * before any read saw its Used log. A refused start is eligible from step 1
+   * The model (round 13). A record with no execution evidence spends one
+   * expiry-class re-check per concluded no-event pass (L, G); the first read
+   * that returns the Used log (Q: unpaired, C: mismatched) sets the evidence
+   * flag and spends nothing. With evidence: L, G, F, Q spend nothing, and a
+   * mismatched record spends on each further C (the mismatch re-check, then
+   * the three expiry-class ones). A refused start is eligible from step 1
    * (step 0 stamps its chain time); a pending one fails `expired` after two
-   * lagging passes and is eligible the step after. A Used log seen (Q, or any
-   * honest read) makes it sticky, and sticky never gives up.
+   * lagging passes and is eligible the step after. Returns whether the loop
+   * can never credit the (executed) record.
    */
   function modelStuck(start: Start, seq: Mode[]): boolean {
-    let phase: "p0" | "p1" | "f" | "sticky" = start === "P0" ? "p0" : start === "P1" ? "p1" : "f";
+    let phase: "p0" | "p1" | "f" | "u" | "m" = start === "P0" ? "p0" : start === "P1" ? "p1" : "f";
+    let rc = 0;
+    let mr = 0;
+    let eligibleFrom = start === "R" ? 1 : 0;
+    for (let i = 0; i < seq.length; i++) {
+      const m = seq[i]!;
+      const lag = m === "L" || m === "G";
+      if (phase === "p0") {
+        if (lag) phase = "p1";
+        else if (m === "Q") phase = "u";
+        else if (m === "C") phase = "m";
+        continue;
+      }
+      if (phase === "p1") {
+        if (lag) {
+          phase = "f";
+          eligibleFrom = i + 1;
+        } else if (m === "Q") phase = "u";
+        else if (m === "C") phase = "m";
+        continue;
+      }
+      if (phase === "f") {
+        if (i < eligibleFrom || rc >= 3) continue;
+        if (lag) rc += 1;
+        else if (m === "Q") phase = "u";
+        else if (m === "C") phase = "m";
+        continue;
+      }
+      if (phase === "u") {
+        if (m === "C") phase = "m";
+        continue;
+      }
+      // m
+      if (rc >= 3 && mr >= 1) continue;
+      if (m === "C") {
+        if (mr < 1) mr += 1;
+        else rc += 1;
+      }
+    }
+    return (phase === "f" && rc >= 3) || (phase === "m" && rc >= 3 && mr >= 1);
+  }
+  /** Whether the sequence ever lets a read see the Used log (Q or C) while the record is visited. */
+  const everSeen = (start: Start, seq: Mode[]): boolean => {
+    // Mirrors modelStuck's phases, answering only "was evidence ever set".
+    let phase: "p0" | "p1" | "f" = start === "P0" ? "p0" : start === "P1" ? "p1" : "f";
     let rc = 0;
     let eligibleFrom = start === "R" ? 1 : 0;
     for (let i = 0; i < seq.length; i++) {
       const m = seq[i]!;
-      if (phase === "sticky") continue;
+      const lag = m === "L" || m === "G";
       if (phase === "p0") {
-        if (m === "L") phase = "p1";
-        else if (m === "Q") phase = "sticky";
+        if (lag) phase = "p1";
+        else if (m === "Q" || m === "C") return true;
         continue;
       }
       if (phase === "p1") {
-        if (m === "L") {
+        if (lag) {
           phase = "f";
           eligibleFrom = i + 1;
-        } else if (m === "Q") phase = "sticky";
+        } else if (m === "Q" || m === "C") return true;
         continue;
       }
       if (i < eligibleFrom || rc >= 3) continue;
-      if (m === "L") rc += 1;
-      else if (m === "Q") phase = "sticky";
+      if (lag) rc += 1;
+      else if (m === "Q" || m === "C") return true;
     }
-    return phase === "f" && rc >= 3;
-  }
+    return false;
+  };
 
   /** A reader that routes every record-specific read by that record's current mode. */
   function routedReader(modeOf: (payer: string, nonce: string) => Mode) {
     const honest = fakeChainReader();
     const quirked = new Set<string>();
+    // One index of the chain's events per step (the driver reads thousands).
+    const byKey = new Map<string, typeof facilitator.events>();
+    for (const e of facilitator.events) {
+      const k = `${e.from}|${e.nonce}`;
+      const list = byKey.get(k);
+      if (list == null) byKey.set(k, [e]);
+      else list.push(e);
+    }
     const reader: X402ChainReaderT = {
       getConfirmedHead: () => honest.getConfirmedHead(),
       getBlockTimestamp: (n) => honest.getBlockTimestamp(n),
       getAuthorizationEvents: async (a) => {
         const m = modeOf(a.authorizer, a.nonce);
         if (m === "F") throw new Error("rpc down");
-        if (m === "L") return [];
-        return honest.getAuthorizationEvents(a);
+        if (m === "L" || m === "G") return [];
+        return (byKey.get(`${a.authorizer.toLowerCase()}|${a.nonce.toLowerCase()}`) ?? [])
+          .filter(
+            (e) =>
+              e.token === a.token.toLowerCase() &&
+              e.blockNumber >= a.fromBlock &&
+              e.blockNumber <= a.toBlock,
+          )
+          .map(({ kind, txHash, blockNumber, logIndex }) => ({
+            kind,
+            txHash,
+            blockNumber,
+            logIndex,
+          }));
       },
       getReceiptLogs: async (tx) => {
         const ev = facilitator.events.find((e) => e.txHash === tx);
         const m = ev != null ? modeOf(ev.from, ev.nonce) : "H";
         if (m === "F") throw new Error("rpc down");
         const logs = await honest.getReceiptLogs(tx);
-        if (m === "Q" && !quirked.has(tx)) {
-          quirked.add(tx); // one dropped Transfer log per step
-          return logs.filter((l) => l.topics[0] !== TRANSFER_TOPIC);
+        if ((m === "Q" || m === "C") && !quirked.has(tx)) {
+          quirked.add(tx); // one quirk per transaction per step
+          if (m === "Q") return logs.filter((l) => l.topics[0] !== TRANSFER_TOPIC);
+          return logs.map((l) =>
+            l.topics[0] === TRANSFER_TOPIC
+              ? { ...l, data: "0x" + (BigInt(l.data) - 1n).toString(16).padStart(64, "0") }
+              : l,
+          );
         }
         return logs;
       },
     };
     return reader;
+  }
+  /** Apply this step's reorgs: every executed cell in mode G moves its execution one block down. */
+  function applyReorgs(cells: Cell[], modeAt: (c: Cell) => Mode) {
+    for (const c of cells) {
+      if (!c.executed || modeAt(c) !== "G") continue;
+      const e = facilitator.events.find((x) => x.from === c.payer && x.nonce === c.nonce);
+      if (e != null) facilitator.chainReorg(e.txHash, e.blockNumber - 1);
+    }
   }
 
   /** Build every cell's record (and its execution) in one relay. */
@@ -3134,7 +3203,7 @@ describe("#907 round 12: evidence of execution is sticky; one head per run; the 
             pay_to: TREASURY.toLowerCase(),
             amount_micro: GROSS,
             valid_after: t0 - 600,
-            valid_before: t0 + 1_800,
+            valid_before: t0 + 6_600, // a 7 200 s window: X402_MAX_WINDOW_SECONDS
             idempotency_key: id,
             motebit_id: "m",
             delegator_id: id,
@@ -3161,7 +3230,7 @@ describe("#907 round 12: evidence of execution is sticky; one head per run; the 
    * observed); R records are refused (failed, chain time stamped at step 0).
    */
   async function prepareStarts(cells: Cell[]) {
-    facilitator.chainTime = t0Of(cells) + 1_800 + 10_000;
+    facilitator.chainTime = t0Of(cells) + 6_600 + 10_000;
     const byKey = new Map(cells.map((c) => [`${c.payer}|${c.nonce}`, c]));
     await reconcilePendingX402Settlements(
       db(),
@@ -3176,23 +3245,23 @@ describe("#907 round 12: evidence of execution is sticky; one head per run; the 
     }
     return byKey;
   }
-  const t0Of = (cells: Cell[]) => (rowOf(cells[0]!).valid_before as number) - 1_800;
+  const t0Of = (cells: Cell[]) => (rowOf(cells[0]!).valid_before as number) - 6_600;
   const STEP = 6 * 3_600 + 60; // past every chain-time wait (the longest is 6 h)
 
-  it("loop: every {L,Q,F} sequence up to length 4 (+ a length-6 sample) from three start states, then honest reads — exactly-once credit whenever the transfer executed, except the modelled budget exhaustion; never a credit when it did not", async () => {
-    const seqs = [...sequencesUpTo(4), ...sampleSequences(6, 40)];
+  it("loop: every {L,Q,F,C,G} sequence up to length 4 from three start states, then honest reads — exactly-once credit whenever the transfer executed, except budget exhaustion with no Used EVER seen; never a credit when it did not", async () => {
+    const seqs = sequencesUpTo(4);
     const cells = buildCells(seqs);
     const byKey = await prepareStarts(cells);
     const maxLen = Math.max(...seqs.map((q) => q.length));
     let step = 0;
-    const modeAt = (payer: string, nonce: string): Mode => {
-      const c = byKey.get(`${payer}|${nonce}`)!;
-      return step < c.seq.length ? c.seq[step]! : "H";
-    };
+    const modeOfCell = (c: Cell): Mode => (step < c.seq.length ? c.seq[step]! : "H");
+    const modeAt = (payer: string, nonce: string): Mode =>
+      modeOfCell(byKey.get(`${payer}|${nonce}`)!);
     for (step = 0; step < maxLen + 3; step++) {
       facilitator.chainTime += STEP;
+      applyReorgs(cells, modeOfCell);
       await reconcilePendingX402Settlements(db(), routedReader(modeAt), {
-        limit: 10_000,
+        limit: 100_000,
         ...PROD,
       });
     }
@@ -3210,6 +3279,7 @@ describe("#907 round 12: evidence of execution is sticky; one head per run; the 
       if (modelStuck(c.start, c.seq)) {
         stuck += 1;
         if (deposits !== 0) failures.push(`${label}: modelled stuck, but credited`);
+        if (everSeen(c.start, c.seq)) failures.push(`${label}: stuck although Used was seen`);
         continue;
       }
       if (deposits !== 1 || status !== "credited") {
@@ -3217,36 +3287,38 @@ describe("#907 round 12: evidence of execution is sticky; one head per run; the 
       } else credited += 1;
     }
     expect(failures).toEqual([]);
-    expect(cells).toHaveLength(3 * 2 * (121 + 40));
-    // The stated exception is small and exactly the modelled cells.
-    expect({ credited, stuck }).toEqual({
-      credited: cells.filter((c) => c.executed && !modelStuck(c.start, c.seq)).length,
-      stuck: cells.filter((c) => c.executed && modelStuck(c.start, c.seq)).length,
-    });
-    expect(
-      cells
-        .filter((c) => c.executed && c.seq.length <= 4 && modelStuck(c.start, c.seq))
-        .map((c) => `${c.start}:${c.seq.join("")}`),
-      // A refused start: 4 non-honest reads (step 0 only stamps its chain
-      // time), the three re-checks all lagging. P1 is a pending start that
-      // already had one lagging read, so LLLL is its fifth.
-      "within length 4, only starts whose three re-checks were all spent by lagging reads",
-    ).toEqual(["P1:LLLL", "R:LLLL", "R:QLLL", "R:FLLL"]);
-  }, 120_000);
+    expect(cells).toHaveLength(3 * 2 * 781);
+    // The stuck set is EXACTLY budget exhaustion with no Used ever seen: a
+    // refused start whose three re-checks are all no-event reads (L or G) —
+    // step 0 only stamps it — and a P1 start (already one lagging read) whose
+    // four reads are all no-event.
+    const expectedStuck = cells
+      .filter((c) => c.executed)
+      .filter(
+        (c) =>
+          (c.start === "R" &&
+            c.seq.length === 4 &&
+            c.seq.slice(1).every((m) => m === "L" || m === "G")) ||
+          (c.start === "P1" && c.seq.length === 4 && c.seq.every((m) => m === "L" || m === "G")),
+      );
+    expect(stuck).toBe(expectedStuck.length);
+    expect(stuck).toBe(5 * 8 + 16);
+    expect(credited).toBe(3 * 781 - stuck);
+  }, 300_000);
 
-  it("operator: after every sequence up to length 4, one honest operator resolve credits EVERY executed record exactly once (budgets never bind the last resort) and never an unexecuted one — writing nothing then", async () => {
+  it("operator: after every {L,Q,F,C,G} sequence up to length 4, one honest operator resolve credits EVERY executed record exactly once (budgets and evidence never bind the last resort) and never an unexecuted one — writing nothing then", async () => {
     const seqs = sequencesUpTo(4);
     const cells = buildCells(seqs);
     const byKey = await prepareStarts(cells);
     let step = 0;
-    const modeAt = (payer: string, nonce: string): Mode => {
-      const c = byKey.get(`${payer}|${nonce}`)!;
-      return step < c.seq.length ? c.seq[step]! : "F"; // no honest loop read
-    };
+    const modeOfCell = (c: Cell): Mode => (step < c.seq.length ? c.seq[step]! : "F"); // no honest loop read
+    const modeAt = (payer: string, nonce: string): Mode =>
+      modeOfCell(byKey.get(`${payer}|${nonce}`)!);
     for (step = 0; step < 4; step++) {
       facilitator.chainTime += STEP;
+      applyReorgs(cells, modeOfCell);
       await reconcilePendingX402Settlements(db(), routedReader(modeAt), {
-        limit: 10_000,
+        limit: 100_000,
         ...PROD,
       });
     }
@@ -3270,8 +3342,8 @@ describe("#907 round 12: evidence of execution is sticky; one head per run; the 
       }
     }
     expect(failures).toEqual([]);
-    expect(cells).toHaveLength(3 * 2 * 121);
-  }, 120_000);
+    expect(cells).toHaveLength(3 * 2 * 781);
+  }, 300_000);
 
   it("the operator scans the WHOLE window from its start, never from the loop's cursor: pending → L, L (cursor at the end) → an honest operator resolve credits", async () => {
     const w = await pricedAgent();
@@ -3346,7 +3418,7 @@ describe("#907 round 12: evidence of execution is sticky; one head per run; the 
     expect(x402Deposits(w).map((d) => d.amount)).toEqual([GROSS]);
   });
 
-  it("a REAL underpayment (Used paired to a wrong-amount Transfer) is terminal after its one mismatch re-check; a later missing-log read never reopens it", async () => {
+  it("a REAL underpayment (Used paired to a wrong-amount Transfer) is terminal once BOTH budgets are spent by later mismatch observations; missing-log or lagging reads spend nothing and never reopen it", async () => {
     const w = await pricedAgent();
     const body = { prompt: `907 r12 under ${crypto.randomUUID()}`, submitted_by: w };
     const pay = await paymentFor(w, body, "0xUnder");
@@ -3367,80 +3439,261 @@ describe("#907 round 12: evidence of execution is sticky; one head per run; the 
         status: string;
         valid_before: number;
         used_state: string | null;
+        recheck_count: number;
         mismatch_rechecks: number;
       };
+    const selected = () => {
+      const sel = selectX402Candidates(
+        db(),
+        facilitator.chainTime,
+        { ...X402_SCAN, ...NOW.scan },
+        100,
+      );
+      return [...sel.pending, ...sel.failed].some((x) => x.delegator_id === w);
+    };
     facilitator.chainTime = row().valid_before + 10_000;
     await reconcilePendingX402Settlements(db(), fakeChainReader(), NOW);
-    expect(row()).toMatchObject({ status: "failed", used_state: "mismatched" });
-    // Its one mismatch re-check reads a node that drops the Transfer log.
-    await reconcilePendingX402Settlements(db(), fakeChainReader({ receiptQuirkOnce: true }), NOW);
-    expect(row()).toMatchObject({ used_state: "mismatched", mismatch_rechecks: 1 });
-    for (let i = 0; i < 3; i++) {
+    // A pending-origin mismatch keeps BOTH budgets (round 13).
+    expect(row()).toMatchObject({
+      status: "failed",
+      used_state: "mismatched",
+      recheck_count: 0,
+      mismatch_rechecks: 0,
+    });
+    for (const r of [
+      fakeChainReader({ receiptQuirkOnce: true }),
+      fakeChainReader({ lagging: true }),
+      fakeChainReader({ failing: true }),
+    ]) {
       facilitator.chainTime += 7 * 3_600;
-      await reconcilePendingX402Settlements(db(), fakeChainReader({ receiptQuirkOnce: true }), NOW);
+      await reconcilePendingX402Settlements(db(), r, NOW);
     }
-    const sel = selectX402Candidates(
-      db(),
-      facilitator.chainTime,
-      { ...X402_SCAN, ...NOW.scan },
-      100,
-    );
-    expect(
-      [...sel.pending, ...sel.failed].filter((x) => x.delegator_id === w),
-      "terminal: never selected again",
-    ).toEqual([]);
+    expect(row(), "spends nothing, never reopened").toMatchObject({
+      used_state: "mismatched",
+      recheck_count: 0,
+      mismatch_rechecks: 0,
+    });
+    // Four honest observations of the same underpayment: mismatch, then 3 expiry-class.
+    for (let i = 0; i < 4; i++) {
+      expect(selected(), `observation ${i + 1} is still due`).toBe(true);
+      facilitator.chainTime += 7 * 3_600;
+      await reconcilePendingX402Settlements(db(), fakeChainReader(), NOW);
+    }
+    expect(row()).toMatchObject({ recheck_count: 3, mismatch_rechecks: 1 });
+    facilitator.chainTime += 7 * 3_600;
+    expect(selected(), "terminal: never selected again").toBe(false);
     expect(x402Deposits(w)).toEqual([]);
   });
-
-  it("one head per run: a second, regressed head read never changes which budget a pass spends", async () => {
+  it("one head per run: a second, regressed head read never changes a pass's decision (the confirmation gap is measured on the run's head)", async () => {
     const w = await pricedAgent();
     const body = { prompt: `907 r12 onehead ${crypto.randomUUID()}`, submitted_by: w };
     const pay = await paymentFor(w, body, "0xOneHead");
-    facilitator.settleMode = { refuse: "invalid_exact_evm_insufficient_balance" };
+    facilitator.settleMode = { refuse: "upstream 502" }; // unknown: pending, never executed
     await submit(w, crypto.randomUUID(), body, pay);
     facilitator.settleMode = "ok";
-    const auth = authorizationOf(pay);
-    // A genuine underpayment: paired to a Transfer of the wrong amount.
-    facilitator.chainExecute({
-      token: tokenOf(pay),
-      from: auth.from,
-      nonce: auth.nonce,
-      to: auth.to,
-      value: BigInt(auth.value) - 1n,
-    });
     const row = () =>
       x402Records().find((x) => x.delegator_id === w)! as unknown as {
+        status: string;
+        failure_reason: string | null;
         valid_before: number;
-        resolved_head_ts: number;
-        recheck_count: number;
-        mismatch_rechecks: number;
-        mismatch_observed_head_ts: number;
-        next_recheck_head_ts: number;
+        expiry_observed_head_ts: number;
       };
     facilitator.chainTime = row().valid_before + 10_000;
-    await reconcilePendingX402Settlements(db(), fakeChainReader(), PROD); // stamps
-    facilitator.chainTime = row().resolved_head_ts + 10 * 60;
-    await reconcilePendingX402Settlements(db(), fakeChainReader(), PROD); // re-check 1: mismatch
-    expect(row()).toMatchObject({ recheck_count: 1, mismatch_rechecks: 0 });
-    // Ten minutes later the mismatch re-check is due; the expiry one (1 h) is not.
-    facilitator.chainTime = row().mismatch_observed_head_ts + 10 * 60;
-    expect(row().next_recheck_head_ts).toBeGreaterThan(facilitator.chainTime);
+    await reconcilePendingX402Settlements(db(), fakeChainReader(), PROD); // first observation
+    const observed = row().expiry_observed_head_ts;
+    expect(observed).not.toBeNull();
+    facilitator.chainTime = observed + 5 * 60 + 2; // the gap has passed
     const regressed = fakeChainReader();
     const honestHead = regressed.getConfirmedHead.bind(regressed);
     let reads = 0;
-    const back = row().mismatch_observed_head_ts;
     regressed.getConfirmedHead = async () => {
       reads += 1;
       const h = await honestHead();
       if (reads === 1) return h;
-      const n = h.number - Math.ceil((h.timestamp - back) / 2);
+      const n = h.number - 160; // back before the gap closed
       return { number: n, timestamp: facilitator.genesis + 2 * n };
     };
     await reconcilePendingX402Settlements(db(), regressed, PROD);
-    expect(row(), "the mismatch budget, as selection admitted").toMatchObject({
-      recheck_count: 1,
-      mismatch_rechecks: 1,
+    expect(row(), "the run's head decided the gap").toMatchObject({
+      status: "failed",
+      failure_reason: "authorization_expired_unused",
     });
-    expect(x402Deposits(w)).toEqual([]);
+  });
+});
+
+describe("#907 round 13: every read is a head-capped scan; evidence is a flag; the cadence holds", () => {
+  const db = () => relay.moteDb.db;
+  const PROD = { scan: { ...X402_SCAN } };
+  const USDC_TOKEN = "0x036cbd53842c5426634e7929541ec2318f3dcf7e";
+  let n = 0;
+  /** A pending record whose signed window is still open at the current head. */
+  function liveRecord(tag: string) {
+    n += 1;
+    const payer = "0x" + (0x913000 + n).toString(16).padStart(40, "0");
+    const nonce = "0x" + (0x913000 + n).toString(16).padStart(64, "0");
+    const t0 = facilitator.chainTime;
+    recordX402Intent(db(), {
+      payer,
+      nonce,
+      network: "eip155:84532",
+      token: USDC_TOKEN,
+      pay_to: TREASURY.toLowerCase(),
+      amount_micro: GROSS,
+      valid_after: t0 - 600,
+      valid_before: t0 + 1_800,
+      idempotency_key: tag,
+      motebit_id: "m",
+      delegator_id: tag,
+      task_id: tag,
+    });
+    const row = () =>
+      db()
+        .prepare("SELECT * FROM relay_x402_settlements WHERE payer = ? AND nonce = ?")
+        .get(payer, nonce) as Record<string, unknown> & {
+        status: string;
+        used_state: string | null;
+        next_visit_head_ts: number | null;
+        visit_backoffs: number;
+      };
+    const execute = () =>
+      facilitator.chainExecute({
+        token: USDC_TOKEN,
+        from: payer,
+        nonce,
+        to: TREASURY,
+        value: BigInt(GROSS),
+      });
+    const resolve = (reader = fakeChainReader()) =>
+      reconcileX402Settlement(db(), reader, findX402Settlement(db(), payer, nonce)!, PROD.scan, {
+        operator: true,
+      });
+    return { payer, nonce, row, execute, resolve, id: tag };
+  }
+
+  it("an inclusion ABOVE the confirmed head is never credited — by the loop or the operator — until it is confirmed", async () => {
+    const r = liveRecord("r13-abovehead");
+    r.execute();
+    facilitator.head -= 5; // the execution's block is above the confirmed head
+    await reconcilePendingX402Settlements(db(), fakeChainReader(), NOW);
+    expect(await r.resolve()).not.toBe("credited");
+    expect(r.row().status).toBe("pending");
+    expect(x402Deposits(r.id)).toEqual([]);
+    facilitator.head += 10;
+    await reconcilePendingX402Settlements(db(), fakeChainReader(), NOW);
+    expect(r.row().status).toBe("credited");
+    expect(x402Deposits(r.id).map((d) => d.amount)).toEqual([GROSS]);
+  });
+
+  it("evidence is a FLAG, never a pinned transaction: after a missing-log read, the execution is reorged into T' above the confirmed head — nothing is credited until T' is confirmed, then it is, by the scan", async () => {
+    const r = liveRecord("r13-reorg");
+    const t = r.execute();
+    await reconcilePendingX402Settlements(db(), fakeChainReader({ receiptQuirkOnce: true }), NOW);
+    expect(r.row()).toMatchObject({ status: "pending", used_state: "unpaired" });
+    const tPrime = facilitator.chainReorg(t, facilitator.head + 3); // re-included above the head
+    expect(tPrime).not.toBe(t);
+    await reconcilePendingX402Settlements(db(), fakeChainReader(), NOW);
+    expect(await r.resolve()).not.toBe("credited");
+    expect(r.row(), "sticky: nothing visible, nothing cleared").toMatchObject({
+      status: "pending",
+      used_state: "unpaired",
+    });
+    expect(x402Deposits(r.id)).toEqual([]);
+    facilitator.head += 10;
+    await reconcilePendingX402Settlements(db(), fakeChainReader(), NOW);
+    expect(r.row()).toMatchObject({ status: "credited", tx_hash: tPrime });
+    expect(x402Deposits(r.id).map((d) => d.amount)).toEqual([GROSS]);
+  });
+
+  it("a reverted or vanished observed transaction (its receipt reads []) never strands the record: the scan finds the execution in T'", async () => {
+    const r = liveRecord("r13-revert");
+    const t = r.execute();
+    await reconcilePendingX402Settlements(db(), fakeChainReader({ receiptQuirkOnce: true }), NOW);
+    expect(r.row().used_state).toBe("unpaired");
+    // T is gone (reverted / removed); the execution lands in T' below the head.
+    facilitator.chainReorg(t, facilitator.head - 2);
+    await reconcilePendingX402Settlements(db(), fakeChainReader(), NOW);
+    expect(r.row().status).toBe("credited");
+  });
+
+  /** Advance the chain to `ts` (the fake chain moves in 2 s blocks). */
+  const at = (ts: number) => {
+    facilitator.chainTime = ts;
+    expect(facilitator.chainTime).toBe(ts);
+  };
+  const visitedAt = (payer: string, ts: number) => {
+    const sel = selectX402Candidates(db(), ts, PROD.scan, 1_000);
+    return [...sel.pending, ...sel.failed].some((x) => x.payer === payer);
+  };
+
+  it("cadence, PENDING queue: an unpaired record is not visited before its due time, and its waits are 10 min, 1 h, 6 h, 6 h …", async () => {
+    const r = liveRecord("r13-cad-pending");
+    r.execute();
+    // Past validBefore (even block parity keeps chain time exact).
+    at(facilitator.genesis + 2 * (facilitator.head + 5_000));
+    const waits: number[] = [];
+    let now = facilitator.chainTime;
+    await reconcilePendingX402Settlements(db(), fakeChainReader({ receiptQuirkOnce: true }), PROD);
+    expect(r.row().used_state).toBe("unpaired");
+    for (let i = 0; i < 4; i++) {
+      const due = r.row().next_visit_head_ts!;
+      waits.push(due - now);
+      expect(visitedAt(r.payer, due - 2), `visit ${i + 1}: not before it is due`).toBe(false);
+      expect(visitedAt(r.payer, due), `visit ${i + 1}: due`).toBe(true);
+      at(due);
+      now = due;
+      await reconcilePendingX402Settlements(
+        db(),
+        fakeChainReader({ receiptQuirkOnce: true }),
+        PROD,
+      );
+    }
+    expect(waits).toEqual([600, 3_600, 21_600, 21_600]);
+  });
+
+  it("cadence, FAILED queue: an unpaired (refused-origin) record is not visited before its due time", async () => {
+    const r = liveRecord("r13-cad-failed");
+    markX402Failed(db(), r.payer, r.nonce, "invalid_exact_evm_insufficient_balance");
+    r.execute();
+    at(facilitator.genesis + 2 * (facilitator.head + 5_000));
+    await reconcilePendingX402Settlements(db(), fakeChainReader(), PROD); // stamps its chain time
+    at((r.row().resolved_head_ts as number) + 600); // first re-check due
+    const now = facilitator.chainTime;
+    await reconcilePendingX402Settlements(db(), fakeChainReader({ receiptQuirkOnce: true }), PROD);
+    expect(r.row()).toMatchObject({ status: "failed", used_state: "unpaired" });
+    const due = r.row().next_visit_head_ts!;
+    expect(due - now).toBe(600);
+    expect(visitedAt(r.payer, due - 2)).toBe(false);
+    expect(visitedAt(r.payer, due)).toBe(true);
+  });
+
+  it("a read error (e.g. a receipt the node cannot find) still sets the next visit — never re-read every tick; the next good read resets the cadence", async () => {
+    const r = liveRecord("r13-readerr");
+    r.execute();
+    at(facilitator.genesis + 2 * (facilitator.head + 5_000));
+    const noReceipt = fakeChainReader();
+    noReceipt.getReceiptLogs = () => Promise.reject(new Error("receipt not found"));
+    const now = facilitator.chainTime;
+    const res = await reconcilePendingX402Settlements(db(), noReceipt, PROD);
+    expect(res.errors, "the failing record is counted").toBe(1);
+    expect(r.row()).toMatchObject({ status: "pending", visit_backoffs: 1 });
+    expect(r.row().next_visit_head_ts! - now).toBe(600);
+    expect(visitedAt(r.payer, now), "not re-read on the next tick").toBe(false);
+    at(r.row().next_visit_head_ts!);
+    await reconcilePendingX402Settlements(db(), fakeChainReader(), PROD);
+    expect(r.row().status).toBe("credited");
+    // A record without evidence whose read failed goes back to every-tick
+    // visits after one good read.
+    const q = liveRecord("r13-readerr-reset");
+    const failingEvents = fakeChainReader();
+    failingEvents.getAuthorizationEvents = () => Promise.reject(new Error("rpc down"));
+    await reconcilePendingX402Settlements(db(), failingEvents, PROD);
+    expect(q.row()).toMatchObject({ visit_backoffs: 1 });
+    at(q.row().next_visit_head_ts!);
+    await reconcilePendingX402Settlements(db(), fakeChainReader(), PROD);
+    expect(q.row()).toMatchObject({
+      status: "pending",
+      visit_backoffs: 0,
+      next_visit_head_ts: null,
+    });
   });
 });
