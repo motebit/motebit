@@ -81,13 +81,10 @@ describe("booted relay on a devnet RPC labels its Solana records devnet (#954)",
 describe("booted relay whose RPC hangs on getGenesisHash still listens (#954 round 2)", () => {
   let rpc: FakeSolanaRpc | null = null;
   let booted: BootedEntry | null = null;
-  let bootMs = 0;
 
   beforeAll(async () => {
     rpc = await startFakeSolanaRpc({ genesisHang: true });
-    const started = Date.now();
     booted = await bootRealEntry(DIST_TIER, { SOLANA_RPC_URL: rpc.url });
-    bootMs = Date.now() - started;
   }, BOOT_TIMEOUT_MS);
 
   afterAll(async () => {
@@ -95,10 +92,20 @@ describe("booted relay whose RPC hangs on getGenesisHash still listens (#954 rou
     await rpc?.close();
   });
 
-  it("is listening with the network unresolved, and has written no anchor", () => {
-    expect(booted).not.toBeNull();
-    // Main listens in 5–15s; the 5s genesis timeout must not add to it.
-    expect(bootMs).toBeLessThan(BOOT_TIMEOUT_MS - 2_000);
+  it("listens BEFORE the hung genesis read times out — the read is never on the boot path", async () => {
+    // Order, not wall-clock: the warm-up read times out (5s) and logs
+    // `solana.network_unresolved`. A boot that awaited the read would log that
+    // line first and `relay.listening` after it (round-3 review: a 58s
+    // wall-clock bound stayed green under a 5s boot gate).
+    await waitForLog(booted!, "solana.network_unresolved");
+    const lines = booted!.log().split("\n");
+    const listening = lines.findIndex((l) => l.includes('"msg":"relay.listening"'));
+    const unresolved = lines.findIndex((l) => l.includes('"msg":"solana.network_unresolved"'));
+    expect(listening).toBeGreaterThanOrEqual(0);
+    expect(unresolved).toBeGreaterThanOrEqual(0);
+    expect(listening, "relay.listening must precede the genesis timeout").toBeLessThan(unresolved);
+    expect(logLine(booted!.log(), "solana.network_unresolved")?.reason).toMatch(/timed out/);
+
     expect(rpc!.callsOf("getGenesisHash")).toBeGreaterThanOrEqual(1);
     expect(logLine(booted!.log(), "solana.network_resolved")).toBeUndefined();
     expect(rpc!.callsOf("sendTransaction")).toBe(0);
