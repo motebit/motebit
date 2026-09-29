@@ -33,3 +33,5 @@ export type {
 } from "./loop.js";
 
 // loadConfig is Node-only (node:fs) — import directly from @motebit/ai-core/dist/config-loader.js
+export { turnFormationMode } from "./foreign-turn.js";
+export type { TurnFormationMode } from "./foreign-turn.js";

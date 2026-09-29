@@ -18,4 +18,8 @@ MCP servers you connect are now yours alone. That covers servers added in settin
 
 A caller's words can no longer touch your memories. Before this fix, when a served query or task told your motebit something close to what you had told it, your matching memory was reinforced or even replaced, and the caller could tell from the reply. Now what a caller says is only ever added as a new memory marked as coming from a peer agent. `memories_formed` in a `motebit_query` answer and in a task receipt is now always 0.
 
+A caller's turn no longer counts toward your motebit's own behaviour. It does not feed the statistics, precision or self-reflection your motebit builds from your turns.
+
+A refusal no longer tells a caller your privacy setting. Before this fix, when a caller's query or a customer's task was refused because your session or an open item was marked medical, financial or secret, the error or the task receipt named that tier. Now every such refusal reads the same: "Refused: this motebit cannot serve this request right now." Your own refusals are unchanged.
+
 `motebit_remember` is unchanged: a caller can still store a memory in your motebit, and it is always marked as coming from a peer agent, never from you.

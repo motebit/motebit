@@ -30,7 +30,12 @@ import { detectDishonestClosing } from "./dishonest-closing.js";
 import type { ToolResultLogEntry } from "./dishonest-closing.js";
 import { validateTaskStepNarration } from "./narration-validation.js";
 import { turnMemorySource } from "./memory-provenance.js";
-import { floorForeignContextPack, floorForeignTurnOptions } from "./foreign-turn.js";
+import {
+  floorForeignContextPack,
+  floorForeignTurnOptions,
+  turnFormationMode,
+} from "./foreign-turn.js";
+import type { TurnFormationMode } from "./foreign-turn.js";
 
 // === Constants ===
 
@@ -893,7 +898,7 @@ export type AgenticChunk =
        * THIS turn (#943): a foreign turn's formation is `isolated_add`,
        * however late the queue runs it.
        */
-      formation: import("@motebit/memory-graph").FormationMode;
+      formation: TurnFormationMode;
     }
   | { type: "result"; result: TurnResult };
 
@@ -2111,9 +2116,7 @@ export async function* runTurnStreaming(
   // similarity lookup against the owner's graph, no REINFORCE / UPDATE /
   // supersede of an owner node, no edge to one. The mode is a required
   // field of the formation deps, decided here from the turn's own mark.
-  const formation: import("@motebit/memory-graph").FormationMode = foreign
-    ? "isolated_add"
-    : "consolidate";
+  const formation = turnFormationMode(foreign);
   if (options?.deferMemoryFormation === true) {
     yield {
       type: "memory_formation_deferred",

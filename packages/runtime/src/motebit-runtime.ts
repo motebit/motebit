@@ -108,6 +108,24 @@ export class SovereignTierRequiredError extends Error {
 }
 
 /**
+ * The one refusal another principal ever sees from the privacy gate (#943).
+ * `SovereignTierRequiredError` names the owner's session tier and whether a
+ * sensitive slab item is open — the owner's interior, which a stranger's
+ * `motebit_query` / `motebit_task` must not learn. A foreign turn refused by
+ * the gate gets THIS instead: one fixed, content-free message, identical for
+ * every tier and every reason. (The single bit "refused" is accepted.)
+ */
+export const FOREIGN_REFUSAL_MESSAGE = "Refused: this motebit cannot serve this request right now.";
+
+export class ForeignTurnRefusedError extends Error {
+  readonly code = "FOREIGN_TURN_REFUSED" as const;
+  constructor() {
+    super(FOREIGN_REFUSAL_MESSAGE);
+    this.name = "ForeignTurnRefusedError";
+  }
+}
+
+/**
  * Thrown by `MotebitRuntime.feedPerception` when a `DropPayload` sets
  * `target` to `creature` or `ambient` before the per-target
  * governance UX has shipped.
@@ -1717,6 +1735,21 @@ export class MotebitRuntime {
    *   refused instead, so no approval can outlive the task and later resume
    *   that principal's prompt inside the owner's conversation.
    */
+  /**
+   * Run the privacy gate for a turn door. For a FOREIGN principal's turn, a
+   * refusal is rethrown as `ForeignTurnRefusedError` — one fixed message, no
+   * tier, no slab, no cause attached — so the owner's session state never
+   * reaches the caller's MCP error or the signed task receipt (#943).
+   */
+  private contentFreeIfForeign<T>(foreign: boolean, gate: () => T): T {
+    if (!foreign) return gate();
+    try {
+      return gate();
+    } catch {
+      throw new ForeignTurnRefusedError();
+    }
+  }
+
   private loopDepsForTurn<D extends { policyGate?: unknown; tools?: unknown }>(deps: D): D {
     const foreignPrincipal = this.isForeignPrincipalTurn();
     // #943: this turn's tool calls carry this turn's key, so a hire's
@@ -2542,7 +2575,9 @@ export class MotebitRuntime {
     // fail-closes regardless of init state. Default session_sensitivity
     // is `none` — this is a no-op for the common path.
     // See `check-sensitivity-routing` drift gate.
-    const clearedLoopDeps = this.assertSensitivityPermitsAiCall("sendMessage");
+    const clearedLoopDeps = this.contentFreeIfForeign(options?.foreignPrincipal === true, () =>
+      this.assertSensitivityPermitsAiCall("sendMessage"),
+    );
 
     if (this._isProcessing) throw new Error("Already processing a message");
 
@@ -3034,7 +3069,9 @@ export class MotebitRuntime {
     // Privacy doctrine gate. See `assertSensitivityPermitsAiCall` /
     // `SovereignTierRequiredError` for the contract. Fires before the
     // loopDeps check so the gate is independent of init state.
-    const clearedLoopDeps = this.assertSensitivityPermitsAiCall("sendMessageStreaming");
+    const clearedLoopDeps = this.contentFreeIfForeign(options?.foreignPrincipal === true, () =>
+      this.assertSensitivityPermitsAiCall("sendMessageStreaming"),
+    );
 
     if (this._isProcessing) throw new Error("Already processing a message");
 
@@ -3887,6 +3924,33 @@ export class MotebitRuntime {
   }
 
   /**
+   * The deferred formation pass — the runtime's ONLY call into
+   * `formMemoriesFromCandidates`. Takes the mode the TURN decided
+   * (`TurnFormationMode`, produced only by ai-core's `turnFormationMode`),
+   * so a foreign turn's formation stays `isolated_add` however late the
+   * queue runs it (#943).
+   */
+  private async formDeferredMemories(
+    mode: import("@motebit/ai-core").TurnFormationMode,
+    candidates: import("@motebit/sdk").AttributedMemoryCandidate[],
+    relevantMemories: import("@motebit/sdk").MemoryNode[],
+  ): Promise<void> {
+    // Same classify-neighbor egress floor as the inline path: cap
+    // neighbors at the context-safe tier on a non-sovereign provider.
+    const sensitivityCeiling = this.providerIsSovereign() ? undefined : SensitivityLevel.Personal;
+    await formMemoriesFromCandidates(
+      {
+        memoryGraph: this.memory,
+        mode,
+        consolidationProvider: this.loopDeps?.consolidationProvider,
+        sensitivityCeiling,
+      },
+      candidates,
+      relevantMemories,
+    );
+  }
+
+  /**
    * Stream filter: catches `memory_formation_deferred` chunks
    * emitted by `runTurnStreaming` when `deferMemoryFormation` is
    * set, enqueues the formation job onto the single-lane queue, and
@@ -3901,24 +3965,15 @@ export class MotebitRuntime {
   > {
     for await (const chunk of source) {
       if (chunk.type === "memory_formation_deferred") {
+        // #943: the TURN decided how formation may touch the owner's
+        // graph; the queue only carries its decision (`chunk.formation`,
+        // a `TurnFormationMode` — a hard-coded mode is a type error).
         const candidates = chunk.candidates;
         const relevantMemories = chunk.relevantMemories;
-        // #943: the turn decided how formation may touch the owner's graph.
-        const mode = chunk.formation;
-        const memoryGraph = this.memory;
-        const consolidationProvider = this.loopDeps?.consolidationProvider;
-        // Same classify-neighbor egress floor as the inline path: cap
-        // neighbors at the context-safe tier on a non-sovereign provider.
-        const sensitivityCeiling = this.providerIsSovereign()
-          ? undefined
-          : SensitivityLevel.Personal;
-        this.memoryFormation.enqueue(async () => {
-          await formMemoriesFromCandidates(
-            { memoryGraph, mode, consolidationProvider, sensitivityCeiling },
-            candidates,
-            relevantMemories,
-          );
-        });
+        const turnMode = chunk.formation;
+        this.memoryFormation.enqueue(() =>
+          this.formDeferredMemories(turnMode, candidates, relevantMemories),
+        );
         // Deferred chunks are internal protocol — never forwarded
         // to the UI / streaming wrapper. Continue consuming.
         continue;
@@ -5487,6 +5542,11 @@ export class MotebitRuntime {
         payload: payload as unknown as Record<string, unknown>,
         tombstoned: false,
       });
+      // #943: inside another principal's turn (a mid-turn outbound-tool or
+      // summarization gate) the refusal is content-free — the tier and
+      // the slab are the owner's interior. The turn DOORS run before the
+      // mark is up and use `contentFreeIfForeign` for the same rule.
+      if (this.isForeignPrincipalTurn()) throw new ForeignTurnRefusedError();
       throw new SovereignTierRequiredError(this._sessionSensitivity, providerMode, effective);
     }
     // Single authorized production site for `SensitivityCleared`. The

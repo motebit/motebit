@@ -271,6 +271,8 @@ export { createInMemoryStorage } from "./in-memory-storage.js";
 export {
   MotebitRuntime,
   SovereignTierRequiredError,
+  ForeignTurnRefusedError,
+  FOREIGN_REFUSAL_MESSAGE,
   DropTargetGovernanceRequiredError,
   slabTurnIdForRun,
 } from "./motebit-runtime.js";

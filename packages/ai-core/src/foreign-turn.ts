@@ -26,6 +26,7 @@
 
 import { BatteryMode, SensitivityLevel, TrustMode } from "@motebit/sdk";
 import type { ContextPack, MotebitState, SessionStateSnapshot } from "@motebit/sdk";
+import type { FormationMode } from "@motebit/memory-graph";
 import type { TurnOptions } from "./loop.js";
 
 /**
@@ -185,4 +186,22 @@ export function floorForeignContextPack(pack: ContextPack): ContextPack {
     floored.sessionState = foreignSessionState(floored.sessionState);
   }
   return floored;
+}
+
+// === The formation mode a turn decides (#943 round 8) ===
+
+declare const turnFormationBrand: unique symbol;
+
+/**
+ * A memory-formation mode decided BY a turn from its own foreign mark — the
+ * only kind the runtime's deferred queue accepts (`formDeferredMemories`).
+ * Branded, so a hard-coded `"consolidate"` at a consumer is a type error:
+ * the mode must come from the turn (the deferred chunk's `formation`), never
+ * from whoever happens to run the queue later.
+ */
+export type TurnFormationMode = FormationMode & { readonly [turnFormationBrand]: true };
+
+/** The one producer of a {@link TurnFormationMode}. */
+export function turnFormationMode(foreign: boolean): TurnFormationMode {
+  return (foreign ? "isolated_add" : "consolidate") as TurnFormationMode;
 }

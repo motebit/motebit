@@ -782,22 +782,88 @@ function main(): void {
   // (ii-c) FORMATION (#943 round 7): a foreign turn's memory formation is
   // `isolated_add` — ADD-only, never reading the owner's graph or touching
   // an owner node. The mode is a REQUIRED field of the formation deps
-  // (compile-time); the loop derives it from the turn's mark, passes it to
-  // the inline pass and carries it on the deferred chunk, and the
-  // memory-graph pass branches on it exhaustively.
+  // (compile-time); the loop derives it from the turn's mark through the one
+  // producer of the branded `TurnFormationMode` (round 8), passes it to the
+  // inline pass and carries it on the deferred chunk, and the memory-graph
+  // pass branches on it exhaustively.
   const mfSrc = readFile("packages/memory-graph/src/memory-formation.ts") ?? "";
   if (
-    !/const formation: import\("@motebit\/memory-graph"\)\.FormationMode = foreign\s*\?\s*"isolated_add"\s*:\s*"consolidate";/.test(
-      rtsBody,
-    ) ||
+    !/const formation = turnFormationMode\(foreign\);/.test(rtsBody) ||
     !/mode: formation,/.test(rtsBody) ||
     !/\n\s*formation,\n/.test(rtsBody) ||
+    !/export function turnFormationMode\(foreign: boolean\): TurnFormationMode \{\s*\n\s*return \(foreign \? "isolated_add" : "consolidate"\) as TurnFormationMode;/.test(
+      ftSrc,
+    ) ||
     !/readonly mode: FormationMode;/.test(mfSrc) ||
     !/case "isolated_add":\s*\n\s*return true;/.test(mfSrc) ||
     !/const linkTargets = isolated \? \[\] : relevantMemories;/.test(mfSrc)
   ) {
     interiorViolations.push(
-      "packages/ai-core/src/loop.ts + packages/memory-graph/src/memory-formation.ts: a foreign turn's formation must be `isolated_add` (derived from `foreign`, passed as `mode` inline and carried as `formation` on the deferred chunk), and `isolated_add` must ADD only — no consolidation lookup, no link to an owner node",
+      "packages/ai-core/src/loop.ts + packages/ai-core/src/foreign-turn.ts + packages/memory-graph/src/memory-formation.ts: a foreign turn's formation must be `isolated_add` (`const formation = turnFormationMode(foreign);`, passed as `mode` inline and carried as `formation` on the deferred chunk), and `isolated_add` must ADD only — no consolidation lookup, no link to an owner node",
+    );
+  }
+  // (ii-d) the DEFERRED consumer (#943 round 8): desktop, web and mobile
+  // defer formation, so the queue is the live path for a delegated task.
+  // The runtime's ONLY `formMemoriesFromCandidates(` call is inside
+  // `formDeferredMemories`, whose `mode` is a `TurnFormationMode` (a
+  // hard-coded mode is a type error), and the consumer hands it the TURN's
+  // decision — `chunk.formation` — never a mode of its own.
+  let runtimeFormCalls = 0;
+  for (const rel of walkTsFiles("packages/runtime/src")) {
+    if (rel.includes("__tests__")) continue;
+    for (const line of (readFile(rel) ?? "").split("\n")) {
+      if (/^\s*(\*|\/\/|\/\*)/.test(line)) continue;
+      if (/\bformMemoriesFromCandidates\(/.test(line)) runtimeFormCalls++;
+    }
+  }
+  const deferredBody = bodyOf(runtimeSrc, "private async formDeferredMemories(", "\n  }\n");
+  if (
+    runtimeFormCalls !== 1 ||
+    !/formMemoriesFromCandidates\(/.test(deferredBody) ||
+    !/mode: import\("@motebit\/ai-core"\)\.TurnFormationMode,/.test(deferredBody) ||
+    !/^\s*mode,$/m.test(deferredBody) ||
+    !/const turnMode = chunk\.formation;/.test(runtimeSrc) ||
+    !/this\.formDeferredMemories\(turnMode, candidates, relevantMemories\)/.test(runtimeSrc)
+  ) {
+    interiorViolations.push(
+      `packages/runtime/src/motebit-runtime.ts: the deferred formation consumer must pass the turn's own decision — \`const turnMode = chunk.formation;\` then \`this.formDeferredMemories(turnMode, candidates, relevantMemories)\` — and \`formDeferredMemories(mode: TurnFormationMode, …)\` must hold the runtime's only \`formMemoriesFromCandidates(\` call (found ${runtimeFormCalls})`,
+    );
+  }
+  // (ii-e) the owner's SELF-MODEL (#943 round 8): behavioural stats,
+  // precision, the gradient bootstrap and reflection are the owner's; a
+  // foreign turn feeds none of them.
+  const statsFirst = bodyOf(runtimeSrc, "private accumulateTurnStats(", "\n  }\n")
+    .split("\n")
+    .slice(1)
+    .find((l) => l.trim() !== "" && !/^\s*(\*|\/\/|\/\*)/.test(l));
+  if (statsFirst?.trim() !== "if (this.isForeignPrincipalTurn()) return;") {
+    interiorViolations.push(
+      "packages/runtime/src/motebit-runtime.ts: `accumulateTurnStats` must open with `if (this.isForeignPrincipalTurn()) return;` — another principal's turn is not the owner's behaviour",
+    );
+  }
+  // (ii-f) CONTENT-FREE REFUSAL (#943 round 8): a foreign principal's
+  // refusal never names the owner's sensitivity tier or slab. Both turn
+  // doors wrap the gate in `contentFreeIfForeign`, and the gate's throw
+  // site (mid-turn outbound-tool / summarization gates) refuses content-free
+  // while the foreign mark is up.
+  const gateBody = bodyOf(runtimeSrc, "  assertSensitivityPermitsAiCall(\n", "\n  }\n");
+  const cfBody = bodyOf(runtimeSrc, "private contentFreeIfForeign<T>(", "\n  }\n");
+  const doorWraps = (
+    runtimeSrc.match(
+      /this\.contentFreeIfForeign\(options\?\.foreignPrincipal === true, \(\) =>\s*\n?\s*this\.assertSensitivityPermitsAiCall\("(sendMessage|sendMessageStreaming)"\)/g,
+    ) ?? []
+  ).length;
+  if (
+    doorWraps !== 2 ||
+    !/if \(!foreign\) return gate\(\);\s*\n\s*try \{\s*\n\s*return gate\(\);\s*\n\s*\} catch \{\s*\n\s*throw new ForeignTurnRefusedError\(\);/.test(
+      cfBody,
+    ) ||
+    !/if \(this\.isForeignPrincipalTurn\(\)\) throw new ForeignTurnRefusedError\(\);\s*\n\s*throw new SovereignTierRequiredError\(/.test(
+      gateBody,
+    )
+  ) {
+    interiorViolations.push(
+      `packages/runtime/src/motebit-runtime.ts: a foreign principal's refusal must be content-free — both turn doors (\`sendMessage\`, \`sendMessageStreaming\`) wrap the gate in \`this.contentFreeIfForeign(options?.foreignPrincipal === true, () => …)\` (found ${doorWraps}), \`contentFreeIfForeign\` rethrows any refusal as \`ForeignTurnRefusedError\` with no cause, and \`assertSensitivityPermitsAiCall\` throws \`ForeignTurnRefusedError\` before \`SovereignTierRequiredError\` while \`isForeignPrincipalTurn()\``,
     );
   }
   if (providerCalls < 2) {
