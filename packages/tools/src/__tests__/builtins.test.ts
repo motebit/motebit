@@ -1577,13 +1577,25 @@ describe("shell_exec additional", () => {
 describe("write_file error path", () => {
   it("returns write error on permission failure", async () => {
     const handler = createWriteFileHandler({ enableBackup: false });
-    // Writing to a deeply nested nonexistent directory should fail fast on all platforms
-    const result = await handler({
-      path: "/nonexistent_a1b2c3/nonexistent_d4e5f6/file.txt",
-      content: "test",
-    });
-    expect(result.ok).toBe(false);
-    expect(result.error).toContain("Write error");
+    // A path beneath a regular FILE fails (ENOTDIR) for every user, root
+    // included — a nonexistent root-level directory is creatable by root, so
+    // it passes in root CI containers and leaves the directory behind.
+    const fs = await import("node:fs/promises");
+    const os = await import("node:os");
+    const path = await import("node:path");
+    const dir = await fs.mkdtemp(path.join(os.tmpdir(), "motebit-write-err-"));
+    const blocker = path.join(dir, "not-a-dir");
+    await fs.writeFile(blocker, "");
+    try {
+      const result = await handler({
+        path: path.join(blocker, "nested", "file.txt"),
+        content: "test",
+      });
+      expect(result.ok).toBe(false);
+      expect(result.error).toContain("Write error");
+    } finally {
+      await fs.rm(dir, { recursive: true, force: true });
+    }
   });
 });
 
