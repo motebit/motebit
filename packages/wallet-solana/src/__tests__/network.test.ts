@@ -187,3 +187,57 @@ describe("SolanaNetworkResolver — lazy, cached, never a boot gate (#954 round 
     expect(seen).toEqual(["resolved"]);
   });
 });
+
+describe("resolveSolanaNetwork — default sleep and non-Error failures", () => {
+  it("retries through the real (default) sleep and resolves", async () => {
+    let calls = 0;
+    const out = await resolveSolanaNetwork(
+      async () => {
+        calls++;
+        if (calls === 1) throw new Error("first read fails");
+        return SOLANA_DEVNET_GENESIS_HASH;
+      },
+      { retryDelaysMs: [1] },
+    );
+    expect(out.status).toBe("resolved");
+    expect(calls).toBe(2);
+  });
+
+  it("a read that rejects with a non-Error is unavailable with its string form", async () => {
+    // A non-Error rejection is the case under test (an RPC client may reject with anything).
+    // eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors
+    const out = await resolveSolanaNetwork(() => Promise.reject("plain string failure"));
+    expect(out).toEqual({ status: "unavailable", reason: "plain string failure", attempts: 1 });
+  });
+});
+
+describe("createSolanaGenesisHashReader — the production reader", () => {
+  it("asks the RPC at rpcUrl for its genesis hash (JSON-RPC getGenesisHash)", async () => {
+    const { createServer } = await import("node:http");
+    const { createSolanaGenesisHashReader } = await import("../web3js-adapter.js");
+    const methods: string[] = [];
+    const server = createServer((req, res) => {
+      let raw = "";
+      req.on("data", (c: Buffer) => (raw += c.toString()));
+      req.on("end", () => {
+        const msg = JSON.parse(raw) as { id: unknown; method: string };
+        methods.push(msg.method);
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(
+          JSON.stringify({ jsonrpc: "2.0", id: msg.id, result: SOLANA_TESTNET_GENESIS_HASH }),
+        );
+      });
+    });
+    await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+    try {
+      const { port } = server.address() as { port: number };
+      const read = createSolanaGenesisHashReader(`http://127.0.0.1:${port}`);
+      expect(await read()).toBe(SOLANA_TESTNET_GENESIS_HASH);
+      expect(methods).toEqual(["getGenesisHash"]);
+      const out = await resolveSolanaNetwork(read);
+      expect(out).toMatchObject({ status: "resolved", network: SOLANA_TESTNET_CAIP2 });
+    } finally {
+      await new Promise<void>((r) => server.close(() => r()));
+    }
+  });
+});

@@ -332,10 +332,17 @@ describe("startSolanaTreasuryReconciliationLoop", () => {
       isFrozen,
       reconciler,
     });
-    await new Promise((r) => setTimeout(r, 30));
-    clearInterval(interval);
+    // Wait on OBSERVED frozen ticks, not a fixed window (a loaded runner can
+    // fit zero ticks in 30ms and pass vacuously).
+    try {
+      await vi.waitFor(() => expect(isFrozen.mock.calls.length).toBeGreaterThanOrEqual(3), {
+        timeout: 10_000,
+        interval: 5,
+      });
+    } finally {
+      clearInterval(interval);
+    }
 
-    expect(isFrozen).toHaveBeenCalled();
     expect(adapter.getUsdcBalance).not.toHaveBeenCalled();
     expect(listTreasuryReconciliations(relay.moteDb.db, 10)).toHaveLength(0);
   });
@@ -358,8 +365,15 @@ describe("startSolanaTreasuryReconciliationLoop", () => {
       intervalMs: 10,
       reconciler,
     });
-    await new Promise((r) => setTimeout(r, 50));
-    clearInterval(interval);
+    try {
+      await vi.waitFor(
+        () =>
+          expect(listTreasuryReconciliations(relay.moteDb.db, 10).length).toBeGreaterThanOrEqual(1),
+        { timeout: 10_000, interval: 5 },
+      );
+    } finally {
+      clearInterval(interval);
+    }
 
     expect(adapter.getUsdcBalance).toHaveBeenCalled();
     const records = listTreasuryReconciliations(relay.moteDb.db, 10);
