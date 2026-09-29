@@ -12,6 +12,12 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import type { EventLogEntry } from "@motebit/sdk";
+import {
+  EncryptedEventStoreAdapter,
+  SyncEngine,
+  WebSocketEventStoreAdapter,
+} from "@motebit/sync-engine";
+import { InMemoryEventStore } from "@motebit/event-log";
 
 vi.mock("@motebit/render-engine", async () => {
   const actual = await vi.importActual<object>("@motebit/render-engine");
@@ -294,10 +300,18 @@ describe("web sync token refresh (#816)", () => {
     relay.down = true;
     for (const s of openSockets()) s.drop();
     // Queued offline: it resolves only on an ack, and the refresh hands it
-    // to the replacement (#914) — so it is not awaited here.
+    // to the replacement (#914) — so it is not awaited here. Its encryption
+    // runs in REAL time while the refresh runs on fake time: wait for it to
+    // reach the (soon retired) socket adapter before the clock moves, so this
+    // test is the "queued before the refresh" cell, every run (#989 CI).
+    // The other orderings are enumerated below.
+    const gate = gateEncryption();
     void currentRemote(connectSync)
       .append(entry("e-offline", 2))
       .catch(() => {});
+    gate.release();
+    await untilReal(() => gate.reached("e-offline"), "e-offline to reach a socket adapter");
+    gate.restore();
 
     await vi.advanceTimersByTimeAsync(REFRESH_MS);
     relay.down = false;
@@ -688,5 +702,239 @@ describe("a plan-step delegation whose result frame cannot reach it (#816)", () 
     expect(tasks.admitted()).toBe(1);
     app.stopSync();
     app.stop();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// #914 (PR #989 CI): where an append queued offline meets the refresh
+// ---------------------------------------------------------------------------
+//
+// The sync engine's remote is the ENCRYPTED wrapper over the live socket:
+// an append encrypts (real time — WebCrypto) and only then reaches the
+// socket adapter that is current AT THAT MOMENT, while the refresh runs on
+// fake time. So whether an offline event lands in the retired adapter's
+// queue (and is handed over) or in the replacement's depends on when the
+// encryption finishes — and a test that asserts before it has finished sees
+// nothing (the #989 CI failure). These cells take that ordering out of the
+// scheduler's hands: the encryption is GATED and released at a chosen
+// refresh phase — before the token mint, during it, or after the swap
+// (disconnect, hand-off and swap run synchronously after the mint, so no
+// continuation can land between them) — crossed with whether the queue
+// deadline fired first. In every cell the event reaches the relay exactly
+// once.
+
+type Phase = "before-mint" | "during-mint" | "after-swap";
+
+/** Hold every encryption until `release()`; report when an event reached a socket adapter. */
+function gateEncryption(): {
+  release(): void;
+  reached(id: string): boolean;
+  /** How many refreshes have handed an adapter's queue on (`takePendingEvents`). */
+  swaps(): number;
+  restore(): void;
+} {
+  const proto = EncryptedEventStoreAdapter.prototype as unknown as {
+    encryptPayload(p: unknown): Promise<unknown>;
+  };
+  const real = proto.encryptPayload;
+  const held: Array<() => void> = [];
+  const encrypt = vi.spyOn(proto, "encryptPayload").mockImplementation(async function (
+    this: unknown,
+    p: unknown,
+  ) {
+    await new Promise<void>((r) => held.push(r));
+    return real.call(this, p);
+  });
+  const handed = vi.spyOn(WebSocketEventStoreAdapter.prototype, "append");
+  const handOffs = vi.spyOn(WebSocketEventStoreAdapter.prototype, "takePendingEvents");
+  return {
+    release: () => {
+      for (const r of held.splice(0)) r();
+    },
+    reached: (id) => handed.mock.calls.some((c) => c[0].event_id === id),
+    swaps: () => handOffs.mock.calls.length,
+    restore: () => {
+      encrypt.mockRestore();
+      handed.mockRestore();
+      handOffs.mockRestore();
+    },
+  };
+}
+
+/**
+ * Let real-time work (the encryption, a real token mint) finish, moving fake
+ * time only by `stepMs` per turn (0: not at all).
+ */
+async function untilReal(pred: () => boolean, what: string, stepMs = 0): Promise<void> {
+  for (let i = 0; i < 1_000; i++) {
+    if (pred()) return;
+    await vi.advanceTimersByTimeAsync(stepMs);
+    await new Promise((r) => realSetTimeout(r, 1));
+  }
+  throw new Error(`timed out waiting for ${what}`);
+}
+
+/** One surface's sync session, with the refresh's token mint under the test's control. */
+interface RefreshHarness {
+  /** When the refresh timer was armed. */
+  t0: number;
+  remote(): { append(e: EventLogEntry): Promise<void> };
+  /** While held, a refresh's token mint waits for `releaseMint()`. */
+  holdMint(): void;
+  releaseMint(): void;
+  stop(): Promise<void>;
+  motebitId: string;
+}
+
+async function makeHarness(): Promise<RefreshHarness> {
+  const { app, connectSync, t0 } = await started();
+  const mint = app.createSyncToken.bind(app);
+  let hold = false;
+  let release: (t: string) => void = () => {};
+  vi.spyOn(app, "createSyncToken").mockImplementation((aud) =>
+    aud === undefined && hold ? new Promise<string>((r) => (release = r)) : mint(aud),
+  );
+  return {
+    t0,
+    remote: () => currentRemote(connectSync),
+    holdMint: () => {
+      hold = true;
+    },
+    releaseMint: () => {
+      hold = false;
+      release("fresh-token");
+    },
+    stop: () => {
+      hold = false;
+      app.stopSync();
+      app.stop();
+      return Promise.resolve();
+    },
+    motebitId: app.getRuntime()!.motebitId,
+  };
+}
+
+describe("#914: an event queued offline meets a refresh at every phase", () => {
+  const QUEUE_DEADLINE_MS = 15_000; // the socket adapter's default pushAckTimeoutMs
+
+  async function cell(phase: Phase, deadlineFirst: boolean): Promise<void> {
+    const h = await makeHarness();
+    const gate = gateEncryption();
+    // One refresh first, so the adapter being replaced is not the first one.
+    await vi.advanceTimersByTimeAsync(REFRESH_MS);
+    await untilReal(() => gate.swaps() >= 1, "the first refresh's swap");
+    const swapsBefore = gate.swaps();
+    const refreshAt = h.t0 + 2 * REFRESH_MS;
+
+    relay.down = true;
+    for (const s of openSockets()) s.drop();
+    try {
+      void h
+        .remote()
+        .append(entry("e-offline", 2))
+        .catch(() => {});
+      const land = async (): Promise<void> => {
+        gate.release();
+        await untilReal(() => gate.reached("e-offline"), "e-offline to reach a socket adapter");
+      };
+      const swapped = async (): Promise<void> => {
+        await untilReal(() => gate.swaps() > swapsBefore, "the refresh's swap");
+      };
+
+      if (phase === "before-mint") {
+        if (!deadlineFirst) await vi.advanceTimersByTimeAsync(refreshAt - 5_000 - Date.now());
+        await land(); // queued on the adapter the refresh will retire
+        await vi.advanceTimersByTimeAsync(refreshAt + 10 - Date.now());
+        await swapped();
+      } else if (phase === "during-mint") {
+        h.holdMint();
+        await vi.advanceTimersByTimeAsync(refreshAt + 10 - Date.now()); // the mint is pending
+        expect(gate.swaps()).toBe(swapsBefore);
+        await land(); // still the to-be-retired adapter's queue
+        if (deadlineFirst) await vi.advanceTimersByTimeAsync(QUEUE_DEADLINE_MS + 5_000);
+        h.releaseMint();
+        await swapped();
+      } else {
+        await vi.advanceTimersByTimeAsync(refreshAt + 10 - Date.now());
+        await swapped();
+        await land(); // the replacement's queue
+        if (deadlineFirst) await vi.advanceTimersByTimeAsync(QUEUE_DEADLINE_MS + 5_000);
+      }
+
+      relay.down = false;
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(relay.pushed.filter((e) => e === "e-offline")).toHaveLength(1);
+      expect(openSockets()).toHaveLength(1);
+    } finally {
+      gate.restore();
+      await h.stop();
+    }
+  }
+
+  for (const phase of ["before-mint", "during-mint", "after-swap"] as const) {
+    for (const deadlineFirst of [true, false]) {
+      it(`encryption done ${phase}, queue deadline ${deadlineFirst ? "fired" : "not fired"} first: reaches the relay once`, async () => {
+        await cell(phase, deadlineFirst);
+      });
+    }
+  }
+
+  it("the CI failure (#989): encryption still running when the test's clock stops — the event is late, not lost", async () => {
+    const h = await makeHarness();
+    relay.down = true;
+    for (const s of openSockets()) s.drop();
+    const gate = gateEncryption();
+    try {
+      void h
+        .remote()
+        .append(entry("e-late", 2))
+        .catch(() => {});
+      await vi.advanceTimersByTimeAsync(REFRESH_MS);
+      await untilReal(() => gate.swaps() > 0, "the refresh's swap");
+      relay.down = false;
+      await vi.advanceTimersByTimeAsync(60_000);
+      // What CI saw: the fake clock ran out before the (real-time)
+      // encryption finished, so the event had reached no adapter yet.
+      expect(relay.pushed).not.toContain("e-late");
+      // It was never dropped: once encrypted, it goes out on the live socket.
+      gate.release();
+      await untilReal(() => gate.reached("e-late"), "e-late to reach a socket adapter");
+      await vi.advanceTimersByTimeAsync(1_000);
+      expect(relay.pushed.filter((e) => e === "e-late")).toHaveLength(1);
+    } finally {
+      gate.restore();
+      await h.stop();
+    }
+  });
+
+  it("product level: the sync engine delivers an event whose push straddled an outage and a refresh, and its cursor passes it", async () => {
+    const h = await makeHarness();
+    const local = new InMemoryEventStore();
+    await local.append({ ...entry("e-engine", 1), motebit_id: h.motebitId } as EventLogEntry);
+    const engine = new SyncEngine(local, h.motebitId, {
+      push_patience_ms: 1_000,
+      stall_timeout_ms: 10 * 60_000,
+    });
+    engine.connectRemote(h.remote() as never);
+    relay.down = true;
+    for (const s of openSockets()) s.drop();
+    // A sync during the outage: the push is queued; its queue deadline fails it.
+    let first = false;
+    void engine.sync().then(() => (first = true));
+    await untilReal(() => first, "the outage sync to end", 100);
+    // The refresh (hand-off), then the relay is back; the next syncs deliver.
+    await vi.advanceTimersByTimeAsync(REFRESH_MS);
+    relay.down = false;
+    await untilReal(() => openSockets().some((s) => s.authed), "the replacement to connect", 100);
+    engine.connectRemote(h.remote() as never);
+    for (let n = 0; n < 5 && engine.getCursor().last_version_clock < 1; n++) {
+      let done = false;
+      void engine.sync().then(() => (done = true));
+      await untilReal(() => done, "a sync to end", 100);
+      await vi.advanceTimersByTimeAsync(1_000);
+    }
+    expect(engine.getCursor().last_version_clock).toBe(1);
+    expect(relay.pushed).toContain("e-engine");
+    await h.stop();
   });
 });
