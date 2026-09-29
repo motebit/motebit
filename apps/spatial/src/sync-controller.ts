@@ -39,7 +39,6 @@ import type {
   EventReceivedCallback,
   SyncStatus as SyncEngineStatus,
 } from "@motebit/sync-engine";
-import type { EventStoreAdapter } from "@motebit/event-log";
 import { deriveSyncEncryptionKey, secureErase } from "@motebit/encryption";
 import {
   HttpEventStoreAdapter,
@@ -52,6 +51,7 @@ import {
   HttpPlanSyncAdapter,
   ConversationSyncEngine,
   HttpConversationSyncAdapter,
+  liveAdapter,
 } from "@motebit/sync-engine";
 import {
   IdbConversationStore,
@@ -304,12 +304,9 @@ export class SpatialSyncController {
         // Encrypted wrapper for outbound events, over whichever socket adapter
         // is current: an append still encrypting when a token refresh swaps
         // the adapter lands on the replacement, not on the retired one (#816).
-        const liveWs: EventStoreAdapter = {
-          append: (e) => currentWs.append(e),
-          query: (f) => currentWs.query(f),
-          getLatestClock: (id) => currentWs.getLatestClock(id),
-          tombstone: (id, m) => currentWs.tombstone(id, m),
-        };
+        // `liveAdapter` also forwards the socket's wire activity to the sync
+        // engine's stall watchdog (#914 round 5).
+        const liveWs = liveAdapter(() => currentWs);
         const encryptedWs = new EncryptedEventStoreAdapter({ inner: liveWs, key: encKey });
 
         // Inbound real-time events: decrypt and write to local store

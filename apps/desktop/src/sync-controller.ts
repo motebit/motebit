@@ -49,6 +49,7 @@ import {
   WebSocketEventStoreAdapter,
   EncryptedEventStoreAdapter,
   decryptEventPayload,
+  liveAdapter,
 } from "@motebit/sync-engine";
 import type {
   CustomMessageCallback,
@@ -377,12 +378,9 @@ export class SyncController {
     // current: an append still encrypting when a token refresh swaps the
     // adapter lands on the replacement, not on the retired one (#816).
     let currentWs = wsAdapter;
-    const liveWs: EventStoreAdapter = {
-      append: (e) => currentWs.append(e),
-      query: (f) => currentWs.query(f),
-      getLatestClock: (id) => currentWs.getLatestClock(id),
-      tombstone: (id, m) => currentWs.tombstone(id, m),
-    };
+    // `liveAdapter` also forwards the socket's wire activity to the sync
+    // engine's stall watchdog (#914 round 5).
+    const liveWs = liveAdapter(() => currentWs);
     const encryptedWs = new EncryptedEventStoreAdapter({ inner: liveWs, key: encKey });
 
     // Inbound real-time events: decrypt and write to local store

@@ -164,9 +164,14 @@ describe("retiring an adapter", () => {
 
   it("takePendingEvents hands the offline queue over exactly once", async () => {
     const old = new WebSocketEventStoreAdapter({ url: "ws://r/a", motebitId: "m", authToken: "t" });
-    await old.append(entry("e1"));
-    await old.append(entry("e2"));
+    // #914: an append waits for the relay's acknowledgment, so these stay pending.
+    const a1 = old.append(entry("e1"));
+    const a2 = old.append(entry("e2"));
     old.disconnect();
+    // Retired before any acknowledgment: the appends reject (the sync engine
+    // re-pushes them), and the events stay queued for the hand-off.
+    await expect(a1).rejects.toThrow(/disconnected/);
+    await expect(a2).rejects.toThrow(/disconnected/);
 
     const handed = old.takePendingEvents();
     expect(handed.map((e) => e.event_id)).toEqual(["e1", "e2"]);
@@ -177,7 +182,7 @@ describe("retiring an adapter", () => {
       motebitId: "m",
       authToken: "t",
     });
-    for (const e of handed) await fresh.append(e);
+    for (const e of handed) void fresh.append(e);
     fresh.connect();
     const ws = MockWebSocket.instances[0]!;
     ws.onopen?.();
