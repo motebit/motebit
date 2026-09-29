@@ -81,8 +81,16 @@ const STRANGER_FACT = "STRANGER-FACT-943 the sky is green";
 const OWNER_FACT = "My launch is on Tuesday OWNER-FACT-943";
 const OWNER_MEMORY = "OWNER-MEMORY-943 launch plan";
 
-type Phase = "pre-provider" | "mid-tool" | "deferred-formation" | "approval-resume";
-const PHASES: Phase[] = ["pre-provider", "mid-tool", "deferred-formation", "approval-resume"];
+type Phase = "pre-provider" | "mid-tool" | "deferred-formation" | "approval-resume" | "task";
+const PHASES: Phase[] = [
+  "pre-provider",
+  "mid-tool",
+  "deferred-formation",
+  "approval-resume",
+  // The production task door: `handleAgentTask` (a customer's motebit_task),
+  // parked at its provider call (#943 round 10).
+  "task",
+];
 type Tier = "normal" | "medical";
 const TIERS: Tier[] = ["normal", "medical"];
 
@@ -122,7 +130,11 @@ async function build(): Promise<Env> {
     const history = JSON.stringify(ctx.conversation_history ?? []);
     if (msg.includes(STRANGER)) {
       env.foreignContexts.push(ctx);
-      if (env.phase === "pre-provider") {
+      if (msg.includes("STATE-TAG")) {
+        // The state change rides in the streamed TEXT, not `state_updates`.
+        return text('ok <state field="trust_mode" value="minimal" /> done');
+      }
+      if (env.phase === "pre-provider" || env.phase === "task") {
         env.reached.resolve();
         await env.hold.promise;
       }
@@ -148,6 +160,8 @@ async function build(): Promise<Env> {
       }
       return { ...text("stranger-done"), state_updates: { trust_mode: "minimal" as never } };
     }
+    if (msg.includes("STATE-TAG"))
+      return text('ok <state field="trust_mode" value="minimal" /> done');
     if (msg.includes("OWNER-FORM")) {
       env.onOwnerForm?.();
       return {
@@ -260,6 +274,9 @@ async function build(): Promise<Env> {
     syncUrl: "https://relay.invalid",
     authToken: async () => "t",
   });
+  // The owner already has a conversation (history + id), so a door that
+  // reads or writes it during a stranger's task can see it blanked or lost.
+  await runtime.sendMessage("owner seed");
   // Last: setup calls above may rewire the loop deps.
   (
     runtime as unknown as { loopDeps: { consolidationProvider: ConsolidationProvider } }
@@ -286,7 +303,18 @@ async function settle(p: Promise<unknown>): Promise<unknown> {
   }
 }
 
-type Door = { name: string; busyWhileHeld?: boolean; run: (env: Env) => Promise<unknown> };
+type Door = {
+  name: string;
+  busyWhileHeld?: boolean;
+  run: (env: Env) => Promise<unknown>;
+  /** Observed after the foreign path has finished (a write can be lost at its end). */
+  after?: (env: Env) => unknown;
+};
+
+const conversationView = (runtime: MotebitRuntime) => ({
+  history: runtime.getConversationHistory().map((m) => `${m.role}:${m.content}`),
+  hasId: runtime.getConversationId() !== null,
+});
 
 const DOORS: Door[] = [
   {
@@ -370,6 +398,22 @@ const DOORS: Door[] = [
       await new Promise((r) => setTimeout(r, 60));
       return runtime.getConversationHistory().some((m) => m.content.includes("Approval timed out"));
     },
+    after: ({ runtime }) =>
+      runtime.getConversationHistory().some((m) => m.content.includes("Approval timed out")),
+  },
+  {
+    // What a surface renders and what `reflect()` reads (`getHistory()`).
+    name: "owner reads the conversation (history + id)",
+    run: async ({ runtime }) => conversationView(runtime),
+    after: ({ runtime }) => conversationView(runtime),
+  },
+  {
+    name: "owner resetConversation()",
+    run: async ({ runtime }) => {
+      runtime.resetConversation();
+      return conversationView(runtime);
+    },
+    after: ({ runtime }) => conversationView(runtime),
   },
 ];
 
@@ -380,6 +424,20 @@ async function startForeign(env: Env, phase: Phase): Promise<{ done: Promise<unk
     const p = settle(
       drain(runtime.sendMessageStreaming(`${STRANGER} ask`, undefined, { foreignPrincipal: true })),
     );
+    await env.reached.promise;
+    return { done: p };
+  }
+  if (phase === "task") {
+    const kp = await generateKeypair();
+    const task: AgentTask = {
+      task_id: "t-held",
+      motebit_id: "owner-mote",
+      prompt: `${STRANGER} task`,
+      submitted_at: Date.now(),
+      status: AgentTaskStatus.Claimed,
+      wall_clock_ms: 30_000,
+    };
+    const p = settle(drain(runtime.handleAgentTask(task, kp.privateKey, "dev-1")));
     await env.reached.promise;
     return { done: p };
   }
@@ -426,14 +484,14 @@ async function runDoor(env: Env, door: Door): Promise<{ result: unknown; waited:
   return { result: await p, waited: raced === "blocked" };
 }
 
-async function idleResult(door: Door, tier: Tier): Promise<unknown> {
+async function idleResult(door: Door, tier: Tier): Promise<{ result: unknown; after: unknown }> {
   const env = await build();
   if (tier === "medical") env.runtime.setSessionSensitivity(SensitivityLevel.Medical);
   const { result } = await runDoor(env, door);
-  return result;
+  return { result, after: door.after?.(env) };
 }
 
-describe("#943 round 9 — an owner door gets the idle-owner result while a foreign turn is held", () => {
+describe("#943 rounds 9-10 — an owner door gets the idle-owner result while a foreign turn is held", () => {
   for (const tier of TIERS) {
     for (const phase of PHASES) {
       for (const door of DOORS) {
@@ -446,6 +504,7 @@ describe("#943 round 9 — an owner door gets the idle-owner result while a fore
           env.hold.resolve();
           await foreign.done;
           resetFormHold();
+          const after = door.after?.(env);
 
           const holdsTurn = phase !== "deferred-formation";
           if (door.busyWhileHeld === true && holdsTurn && tier === "normal") {
@@ -453,8 +512,9 @@ describe("#943 round 9 — an owner door gets the idle-owner result while a fore
             // the descriptive one, never the foreign content-free refusal.
             expect(result).toEqual({ error: "Error", message: "Already processing a message" });
           } else {
-            expect(result).toEqual(expected);
+            expect(result).toEqual(expected.result);
           }
+          expect(after).toEqual(expected.after);
           expect(JSON.stringify(result)).not.toContain(FOREIGN_REFUSAL_MESSAGE);
         });
       }
@@ -561,6 +621,25 @@ describe("#943 round 9 — the converse: a foreign call during owner activity ke
     expect(env.classify).toHaveBeenCalled();
     env.hold.resolve();
     await foreign;
+  });
+
+  it("a foreign turn's streamed <state> tag never reaches the owner's live state", async () => {
+    const env = await build();
+    const tick = () => (env.runtime as unknown as { state: { tickNow(): void } }).state.tickNow();
+    tick();
+    const before = env.runtime.getState().trust_mode;
+    expect(before).not.toBe("minimal");
+    await drain(
+      env.runtime.sendMessageStreaming(`${STRANGER} STATE-TAG`, undefined, {
+        foreignPrincipal: true,
+      }),
+    );
+    tick();
+    expect(env.runtime.getState().trust_mode).toBe(before);
+    // Not vacuous: the same text on the OWNER's turn does set it.
+    await drain(env.runtime.sendMessageStreaming("owner STATE-TAG"));
+    tick();
+    expect(env.runtime.getState().trust_mode).toBe("minimal");
   });
 
   it("a foreign turn's state_updates never reach the owner's live state (no push, no tick)", async () => {

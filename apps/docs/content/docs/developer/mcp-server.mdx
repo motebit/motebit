@@ -64,18 +64,18 @@ Auth tokens are configured via the config file (`authToken` field), not via CLI 
 
 Six tools are registered automatically when the server starts. Four are conditional — they only appear when the runtime provides their backend (which the CLI always does).
 
-| Tool               | Input                       | Description                                                        |
-| ------------------ | --------------------------- | ------------------------------------------------------------------ |
-| `motebit_query`    | `{ message }`               | Ask the agent a question — never answered from the owner's memory  |
-| `motebit_remember` | `{ content, sensitivity? }` | Store a memory (sensitivity capped for external callers)           |
-| `motebit_recall`   | `{ query, limit? }`         | Semantic memory search — served to the motebit's owner only        |
-| `motebit_task`     | `{ prompt }`                | Submit an autonomous task — returns a signed `ExecutionReceipt`    |
-| `motebit_identity` | none                        | Return the motebit's identity (motebit.md content or JSON summary) |
-| `motebit_tools`    | none                        | List all available tools with risk levels                          |
+| Tool               | Input                       | Description                                                                          |
+| ------------------ | --------------------------- | ------------------------------------------------------------------------------------ |
+| `motebit_query`    | `{ message }`               | Ask the agent a question — a remote caller is never answered from the owner's memory |
+| `motebit_remember` | `{ content, sensitivity? }` | Store a memory (sensitivity capped for external callers)                             |
+| `motebit_recall`   | `{ query, limit? }`         | Semantic memory search — served to the motebit's owner only                          |
+| `motebit_task`     | `{ prompt }`                | Submit an autonomous task — returns a signed `ExecutionReceipt`                      |
+| `motebit_identity` | none                        | Return the motebit's identity (motebit.md content or JSON summary)                   |
+| `motebit_tools`    | none                        | List all available tools with risk levels                                            |
 
 ### motebit_query
 
-Sends a message through the AI turn loop: context packing, tool use and memory formation. The caller is another principal, so the turn recalls none of the owner's memories. It also receives none of the owner's private context: no trust graph, self-model, installed skills, recent events or live session facts. It sees the motebit's identity and persona, the tools a caller may use, and the model it runs on. Memories the turn forms are marked as coming from a peer agent. The response includes how many memories were formed during the turn.
+Sends a message through the AI turn loop: context packing, tool use and memory formation. Whose turn it is depends on who is asking, the same rule `motebit_recall` follows. Over stdio, from the MCP host you launch on your own machine, the query is yours: it runs as an owner turn with your memories and context, and `memories_formed` is the number of memories the turn formed. Over HTTP the caller is another principal, whatever credential it presents. Then the turn recalls none of the owner's memories and receives none of the owner's private context: no trust graph, self-model, installed skills, recent events or live session facts. It sees the motebit's identity and persona, the tools a caller may use, and the model it runs on. Memories the turn forms are marked as coming from a peer agent, and `memories_formed` is always 0.
 
 ```json
 { "message": "What do you know about the deployment pipeline?" }
@@ -145,11 +145,11 @@ In addition to the six synthetic tools, the server exposes the motebit's served 
 
 The server also exposes MCP resources and prompts:
 
-| Resource   | URI                  | Description                                        |
-| ---------- | -------------------- | -------------------------------------------------- |
-| `identity` | `motebit://identity` | Motebit ID and public key                          |
-| `state`    | `motebit://state`    | Live state vector, owner only (stdio)              |
-| `memories` | `motebit://memories` | Memory snapshot, owner only (as `motebit_recall`)  |
+| Resource   | URI                  | Description                                       |
+| ---------- | -------------------- | ------------------------------------------------- |
+| `identity` | `motebit://identity` | Motebit ID and public key                         |
+| `state`    | `motebit://state`    | Live state vector, owner only (stdio)             |
+| `memories` | `motebit://memories` | Memory snapshot, owner only (as `motebit_recall`) |
 
 | Prompt    | Description                                     |
 | --------- | ----------------------------------------------- |

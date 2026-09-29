@@ -12,16 +12,12 @@ import type {
   ExecutionReceipt,
   AgentTrustStoreAdapter,
   LatencyStatsStoreAdapter,
-  ConversationMessage,
 } from "@motebit/sdk";
 import { hash, signExecutionReceipt, verifyExecutionReceipt } from "@motebit/encryption";
 import { composeDelegationTrust, trustLevelToScore } from "@motebit/semiring";
 import type { EventStore } from "@motebit/event-log";
 import type { AgentGraphManager } from "./agent-graph.js";
 import type { StreamChunk } from "./runtime-config.js";
-
-/** Saved conversation context for restore after task execution. */
-export type SavedConversationContext = { history: ConversationMessage[]; id: string | null };
 
 // === Types ===
 
@@ -60,13 +56,6 @@ export interface AgentTaskHandlerDeps {
     },
   ): AsyncGenerator<StreamChunk>;
 
-  /** Save current conversation context for later restoration. */
-  saveConversationContext(): SavedConversationContext;
-  /** Clear conversation for the task. */
-  clearConversationForTask(): void;
-  /** Restore conversation context after the task completes. */
-  restoreConversationContext(ctx: SavedConversationContext): void;
-
   /** Bump trust from a verified receipt. */
   bumpTrustFromReceipt(receipt: ExecutionReceipt, verified: boolean): Promise<void>;
 }
@@ -87,9 +76,13 @@ export async function* handleAgentTask(
   publicKey?: Uint8Array,
   options?: { delegatedScope?: string },
 ): AsyncGenerator<StreamChunk> {
-  // Save current conversation context
-  const savedCtx = deps.saveConversationContext();
-  deps.clearConversationForTask();
+  // #943 round 10: no save / clear / restore of the owner's conversation.
+  // The task's turn is FOREIGN (`foreignPrincipal: true` below), so it sees
+  // and writes the conversation only through `forTurn(FOREIGN)` — an inert
+  // view. Swapping the owner's live history out for the task's duration
+  // blanked the OWNER's own concurrent reads (live history, conversation id,
+  // reflection), and the restore in `finally` discarded owner writes made
+  // meanwhile (an approval timeout, a `resetConversation()`).
 
   const wallClockMs = task.wall_clock_ms ?? 60_000;
   const abortController = new AbortController();
@@ -168,9 +161,6 @@ export async function* handleAgentTask(
     responseText = responseText || (err instanceof Error ? err.message : String(err));
   } finally {
     clearTimeout(timeout);
-
-    // Restore user conversation context
-    deps.restoreConversationContext(savedCtx);
   }
 
   // Delegation policy refusal path. A task that did NO successful work and was

@@ -613,25 +613,6 @@ export class ConversationManager {
     return fixed;
   }
 
-  // --- Task isolation ---
-
-  /** Save conversation state for isolated task execution. */
-  saveContext(): { history: ConversationMessage[]; id: string | null } {
-    return { history: [...this.history], id: this.currentId };
-  }
-
-  /** Restore conversation state after isolated task execution. */
-  restoreContext(ctx: { history: ConversationMessage[]; id: string | null }): void {
-    this.history = ctx.history;
-    this.currentId = ctx.id;
-  }
-
-  /** Clear conversation for isolated execution (task context). */
-  clearForTask(): void {
-    this.history = [];
-    this.currentId = null;
-  }
-
   // --- Agentic loop support ---
 
   /**

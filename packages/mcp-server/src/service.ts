@@ -156,8 +156,15 @@ export interface WireServerDepsOptions {
     | { type: string; [key: string]: unknown }
   >;
 
-  /** If provided, wires sendMessage for motebit_query synthetic tool. */
-  sendMessage?: (text: string) => Promise<{ response: string; memoriesFormed: number }>;
+  /**
+   * If provided, wires sendMessage for motebit_query synthetic tool. It must
+   * run the turn as `principal` (#943 round 10: stdio owner ⇒ an owner turn,
+   * anything else ⇒ a foreign turn).
+   */
+  sendMessage?: (
+    text: string,
+    principal: ServedPrincipal,
+  ) => Promise<{ response: string; memoriesFormed: number }>;
 
   /** Relay URL for remote key resolution (fallback when local trust store has no record). */
   syncUrl?: string;

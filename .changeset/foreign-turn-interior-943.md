@@ -16,13 +16,15 @@ MCP servers you connect are now yours alone. That covers servers added in settin
 
 `motebit://state`, your motebit's live state (attention, mood and so on), is now served to you only, over stdio, like your memories.
 
-A caller's words can no longer touch your memories. Before this fix, when a served query or task told your motebit something close to what you had told it, your matching memory was reinforced or even replaced, and the caller could tell from the reply. Now what a caller says is only ever added as a new memory marked as coming from a peer agent. `memories_formed` in a `motebit_query` answer and in a task receipt is now always 0.
+A caller's words can no longer touch your memories. Before this fix, when a served query or task told your motebit something close to what you had told it, your matching memory was reinforced or even replaced, and the caller could tell from the reply. Now what a caller says is only ever added as a new memory marked as coming from a peer agent. `memories_formed` in a caller's `motebit_query` answer and in a task receipt is now always 0.
+
+Your own `motebit_query` over stdio is yours. The MCP host you launch on your own machine is already the one `motebit_recall` answers, so a query from it now runs as your turn, with your memories and context, and its `memories_formed` is the real count. Every HTTP caller, whatever it presents, still gets the caller's treatment described above.
 
 A caller's turn no longer counts toward your motebit's own behaviour. It does not feed the statistics, precision or self-reflection your motebit builds from your turns.
 
 A refusal no longer tells a caller your privacy setting. Before this fix, when a caller's query or a customer's task was refused because your session or an open item was marked medical, financial or secret, the error or the task receipt named that tier. Now every such refusal reads the same: "Refused: this motebit cannot serve this request right now." Your own refusals are unchanged. A caller who reaches your motebit while it is busy with your own turn gets that same refusal, not "Already processing a message", so a signed task receipt no longer reveals what you were doing.
 
-While a caller's query or a customer's task is running, your own actions are still yours. A completion, a reflection, a memory recall, a plan step or an approval that times out now behaves exactly as it would with nothing else running. Before this fix, they could be refused as if they were the caller's, or see no memories and no conversation.
+While a caller's query or a customer's task is running, your own actions are still yours. A completion, a reflection, a memory recall, a plan step or an approval that times out now behaves exactly as it would with nothing else running. Before this fix, they could be refused as if they were the caller's, or see no memories and no conversation. A customer's task also no longer takes your conversation out of view while it runs. Before this fix, during a task your chat showed as empty. An approval that timed out in that window was lost, and a conversation you cleared came back when the task ended.
 
 A caller's turn no longer changes your motebit's live state. Before this fix, a caller whose model set a state such as `trust_mode: "minimal"` left it in place for your next turn.
 

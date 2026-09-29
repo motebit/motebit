@@ -3321,11 +3321,12 @@ export class MotebitRuntime {
     }
     if (!this.loopDeps) throw new Error("AI not initialized — call setProvider() first");
     // The task's turn is foreign: `handleAgentTaskFn` starts it with
-    // `foreignPrincipal: true`, so while it runs, owner-only reads (the
-    // paid-task ledger, #874) refuse and no `localOnly` tool is offered
-    // (#880). The mark is the TURN's — it ends with the turn, before this
-    // task's receipt tail, so an owner turn admitted during the tail is
-    // the owner's (#880 round 2).
+    // `foreignPrincipal: true`, so that turn's own call path is foreign —
+    // its tool registry offers no `localOnly` tool (#880), its tool calls
+    // carry a foreign `ToolCall` (owner-only reads refuse, #874), and it sees
+    // the conversation only through `forTurn(FOREIGN)`. Nothing is marked
+    // on the runtime, and the owner's conversation is never swapped out, so
+    // the owner's own concurrent calls are untouched (#943 rounds 9-10).
     yield* handleAgentTaskFn(this.agentTaskDeps, task, privateKey, deviceId, publicKey, options);
   }
 
@@ -4914,9 +4915,6 @@ export class MotebitRuntime {
       clock: this._clock,
       sendMessageStreaming: (text, runId, options) =>
         this.sendMessageStreaming(text, runId, options),
-      saveConversationContext: () => this.conversation.saveContext(),
-      clearConversationForTask: () => this.conversation.clearForTask(),
-      restoreConversationContext: (ctx) => this.conversation.restoreContext(ctx),
       bumpTrustFromReceipt: (receipt, verified) => this.bumpTrustFromReceipt(receipt, verified),
     };
   }

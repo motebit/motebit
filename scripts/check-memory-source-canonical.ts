@@ -519,6 +519,24 @@ function main(): void {
       `${CONV}: \`forTurn(principal)\` must open with \`if (principal.foreign) return FOREIGN_TURN_CONVERSATION;\` and every member of \`FOREIGN_TURN_CONVERSATION\` must be inert (found ${inertMembers}/${INERT.length}) — a foreign turn reads none of the owner's conversation and writes nothing to it`,
     );
   }
+  // #943 round 10: a task's isolation is `forTurn(FOREIGN)` alone — no
+  // save / clear / restore of the owner's conversation around a task (it
+  // blanked the owner's concurrent reads and discarded owner writes made
+  // meanwhile).
+  const taskSwap =
+    /\b(saveContext|restoreContext|clearForTask|saveConversationContext|clearConversationForTask|restoreConversationContext)\b/;
+  for (const rel of [
+    CONV,
+    "packages/runtime/src/agent-task-handler.ts",
+    "packages/runtime/src/motebit-runtime.ts",
+  ]) {
+    const code = (readFile(rel) ?? "").replace(/^\s*(\*|\/\/).*$/gm, "");
+    if (taskSwap.test(code)) {
+      historyViolations.push(
+        `${rel}: swaps the owner's conversation out around a task (save / clear / restore) — a task's turn is foreign and is isolated by \`forTurn(FOREIGN)\`; the owner's live history must stay the owner's while it runs`,
+      );
+    }
+  }
   if (/isForeign|ForeignPrincipalTurn/.test(convSrc.replace(/^\s*(\*|\/\/).*$/gm, ""))) {
     historyViolations.push(
       `${CONV}: reads a "foreign turn in flight" state — the manager must not; whose turn it is arrives with the call (\`forTurn(principal)\`)`,
@@ -1214,6 +1232,28 @@ function main(): void {
   ) {
     ownerOnlyViolations.push(
       `packages/mcp-server/src/index.ts: \`servedPrincipal\` must open with \`if (transport !== "stdio") return "other";\` and read no caller identity — HTTP callers are never the owner (found: ${(spFirst ?? "(missing)").trim()})`,
+    );
+  }
+  // (f)(v) #943 round 10: `motebit_query` runs as the request's SERVED
+  // principal — stdio (the owner, the principal `motebit_recall` is served to)
+  // an owner turn, every HTTP caller a foreign turn — and reports a formation
+  // count to the owner only. The CLI's two serve deps take that principal and
+  // never force one.
+  const serveDepsSrc = readFile("apps/cli/src/serve-deps.ts") ?? "";
+  if (
+    !/const principal = servedPrincipal\(extra, this\.transportKind\);\s*\n\s*const result = await sendMessage\(args\.message, principal\);/.test(
+      mcpIndexSrc,
+    ) ||
+    !/memories_formed: principal === "owner" \? result\.memoriesFormed : 0,/.test(mcpIndexSrc) ||
+    !/\{ foreignPrincipal: !owner \}/.test(serveDepsSrc) ||
+    !/client\.chat\(text, owner \? \{\} : \{ foreignPrincipal: true \}\)/.test(serveDepsSrc) ||
+    (serveDepsSrc.match(/memoriesFormed: owner \? /g) ?? []).length !== 2 ||
+    /\{ foreignPrincipal: true \}\)/.test(
+      serveDepsSrc.replace("owner ? {} : { foreignPrincipal: true })", ""),
+    )
+  ) {
+    ownerOnlyViolations.push(
+      'packages/mcp-server/src/index.ts + apps/cli/src/serve-deps.ts: `motebit_query` must run as the request\'s served principal — `const principal = servedPrincipal(extra, this.transportKind); const result = await sendMessage(args.message, principal);`, report `memories_formed: principal === "owner" ? result.memoriesFormed : 0`, and both CLI serve deps must take the principal (`{ foreignPrincipal: !owner }`, `client.chat(text, owner ? {} : { foreignPrincipal: true })`, a count only when `owner`), never force one',
     );
   }
   const attachedSrc = readFile("packages/runtime/src/attached-surface.ts") ?? "";

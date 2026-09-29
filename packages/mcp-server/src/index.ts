@@ -141,7 +141,18 @@ interface MotebitServerDeps {
   logToolCall(name: string, args: Record<string, unknown>, result: ToolResult): void;
 
   // Synthetic tool backends (all optional — tool only registered when dep is provided)
-  sendMessage?(text: string): Promise<{ response: string; memoriesFormed: number }>;
+  /**
+   * `motebit_query`'s backend. `principal` is this request's served principal
+   * (`servedPrincipal(extra, transport)`, #943 round 10): the OWNER (the stdio
+   * host on the owner's machine) gets an owner turn — the same principal
+   * `motebit_recall` is served to — and every HTTP caller a FOREIGN turn.
+   * The dep must run the turn as that principal; the adapter reports
+   * `memoriesFormed` only to the owner.
+   */
+  sendMessage?(
+    text: string,
+    principal: ServedPrincipal,
+  ): Promise<{ response: string; memoriesFormed: number }>;
   /**
    * `motebit_recall`'s backend: a search over the OWNER's memories. Called
    * only for the owner principal (#943) — see `getMemories`.
@@ -869,24 +880,31 @@ export class McpServerAdapter {
       const sendMessage = this.deps.sendMessage;
       const toolDef = McpServerAdapter.syntheticToolDef(
         "motebit_query",
-        "Ask this motebit a question — AI response, never drawn from the owner's memories or private context",
+        "Ask this motebit a question — AI response. A remote caller's query is never drawn from the owner's memories or private context; the owner's own stdio host is answered as the owner",
         RiskLevel.R2_WRITE,
       );
       /** @spec motebit/agent-mcp-surface@1.0 */
       server.tool(
         "motebit_query",
-        "Ask this motebit a question — AI response, never drawn from the owner's memories or private context",
+        "Ask this motebit a question — AI response. A remote caller's query is never drawn from the owner's memories or private context; the owner's own stdio host is answered as the owner",
         { message: z.string().describe("The question or message to send") },
         async (args: { message: string }, extra: unknown) => {
           const denied = await this.validateSyntheticTool(toolDef, args, extra);
           if (denied) return denied;
 
-          const result = await sendMessage(args.message);
+          // #943 round 10: whose query this is decides whose turn it runs.
+          // stdio is the owner (the same verdict `motebit_recall` is served
+          // on); every HTTP caller is another principal.
+          const principal = servedPrincipal(extra, this.transportKind);
+          const result = await sendMessage(args.message, principal);
           this.deps.logToolCall("motebit_query", args, { ok: true, data: result.response });
-          // #943: `memories_formed` is always 0 on the wire. A count of what
-          // the turn formed is a fact about the OWNER's memory (an oracle on
-          // what it already held); the field stays for schema compatibility.
-          return fmt({ response: result.response, memories_formed: 0 });
+          // `memories_formed` is a fact about the OWNER's memory (an oracle on
+          // what it already held): the owner gets the true count, another
+          // principal always 0 (the field stays for schema compatibility).
+          return fmt({
+            response: result.response,
+            memories_formed: principal === "owner" ? result.memoriesFormed : 0,
+          });
         },
       );
     }

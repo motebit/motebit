@@ -253,13 +253,11 @@ describe("#943 — the local stdio session is the owner", () => {
   });
 });
 
-describe("#943 round 7 — motebit_query never reports a formation count", () => {
-  it("memories_formed is 0 on the wire whatever the turn formed", async () => {
+describe("#943 round 10 — motebit_query runs as the request's served principal", () => {
+  it("stdio: the dep runs an OWNER turn and the owner gets the true formation count", async () => {
     const m = memoryDeps();
-    adapter = new McpServerAdapter(
-      { transport: "stdio" },
-      { ...m.deps, sendMessage: async () => ({ response: "hi", memoriesFormed: 3 }) },
-    );
+    const sendMessage = vi.fn(async () => ({ response: "hi", memoriesFormed: 3 }));
+    adapter = new McpServerAdapter({ transport: "stdio" }, { ...m.deps, sendMessage });
     const server = await (
       adapter as unknown as {
         createServer(): Promise<{ connect(t: unknown): Promise<void>; close(): Promise<void> }>;
@@ -267,16 +265,48 @@ describe("#943 round 7 — motebit_query never reports a formation count", () =>
     ).createServer();
     const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
     await server.connect(serverSide);
-    const client = new Client({ name: "caller", version: "1" });
+    const client = new Client({ name: "owner-host", version: "1" });
     await client.connect(clientSide);
     try {
       const r = await client.callTool({ name: "motebit_query", arguments: { message: "q" } });
-      const text = JSON.stringify(r);
-      expect(text).toContain('\\"memories_formed\\":0');
-      expect(text).not.toContain('\\"memories_formed\\":3');
+      expect(sendMessage).toHaveBeenCalledWith("q", "owner");
+      expect(JSON.stringify(r)).toContain('\\"memories_formed\\":3');
     } finally {
       await client.close();
       await server.close();
+    }
+  });
+
+  it("HTTP (any credential): the dep runs a FOREIGN turn and memories_formed is 0 on the wire", async () => {
+    const { owner } = await keys();
+    const sendMessage = vi.fn(async () => ({ response: "hi", memoriesFormed: 3 }));
+    const m = memoryDeps();
+    adapter = new McpServerAdapter(
+      {
+        transport: "http",
+        port: 0,
+        authToken: "shared-secret",
+        knownCallers: new Map([
+          [OWNER, { publicKey: bytesToHex(owner.publicKey), trustLevel: AgentTrustLevel.Trusted }],
+        ]),
+      },
+      { ...m.deps, sendMessage },
+    );
+    process.env["MOTEBIT_SELF_WATCHDOG"] = "off";
+    await adapter.start();
+    const port = (
+      (adapter as unknown as { httpServer: http.Server }).httpServer.address() as AddressInfo
+    ).port;
+    const ownerSigned = await tokenFor(OWNER, owner.privateKey, "task:submit");
+    for (const bearer of ["shared-secret", ownerSigned]) {
+      sendMessage.mockClear();
+      const r = await rpc(port, bearer, "tools/call", {
+        name: "motebit_query",
+        arguments: { message: "q" },
+      });
+      expect(sendMessage).toHaveBeenCalledWith("q", "other");
+      expect(r).toContain('\\"memories_formed\\":0');
+      expect(r).not.toContain('\\"memories_formed\\":3');
     }
   });
 });

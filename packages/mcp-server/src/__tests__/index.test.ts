@@ -997,7 +997,8 @@ describe("McpServerAdapter — synthetic tool execution", () => {
       content: Array<{ text: string }>;
     };
 
-    expect(sendMessage).toHaveBeenCalledWith("what is 42?");
+    // stdio with no auth context is the owner (#943 round 10).
+    expect(sendMessage).toHaveBeenCalledWith("what is 42?", "owner");
     expect(result.content[0]!.text).toContain("42 is the answer");
     expect(result.content[0]!.text).toContain("memories_formed");
     expect(result.content[0]!.text).toContain("[motebit:");
