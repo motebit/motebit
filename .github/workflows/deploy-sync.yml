@@ -38,8 +38,9 @@ permissions:
 jobs:
   gate:
     runs-on: ubuntu-latest
-    # 20 min for CI + 12 min for the staging relay deploy + slack.
-    timeout-minutes: 40
+    # CI can take 35+ min on shared runners (a 30-min check job, then e2e):
+    # 45 min for CI + 12 min for the staging relay deploy + slack.
+    timeout-minutes: 65
 
     steps:
       # The relay is the durability-sensitive trust root; never deploy a commit
@@ -55,7 +56,7 @@ jobs:
         run: |
           sha='${{ github.sha }}'
           echo "Waiting for CI to conclude on ${sha} before deploying prod…"
-          for i in $(seq 1 80); do
+          for i in $(seq 1 180); do  # 45 min: CI can take 35+ min (#978)
             run=$(gh run list --repo '${{ github.repository }}' --workflow ci.yml \
               --branch main --json headSha,status,conclusion \
               --jq "[.[] | select(.headSha==\"${sha}\")][0]")
