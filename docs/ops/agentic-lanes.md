@@ -39,3 +39,41 @@ A probe runs in the workspace package it sits in, or in `--pkg`. A probe kept ou
 ## Stopping rules
 
 Write the rule **before** the first review round. The pattern is: define a wrong answer; allow one round of fixes; a second round that finds another of the same kind means withdraw; and a design review loop that has not converged after three rounds escalates to the founder. That is what kept #703's review loops bounded. See the proposal's §8, §5d and §5e.
+
+**Withdraw means: build the harness, then fix.** When a second round finds another bug of the same kind, the next round is not another fix. It is an exhaustive test that enumerates the space the bugs live in, shown failing on the current branch. Only after that does the builder change the design until the harness passes. This matters most for three kinds of code:
+
+- a state machine;
+- retry, backoff, or budget logic;
+- timeouts and liveness.
+
+In those, per-case fixes chase an unbounded space one cell at a time.
+
+The harness compares against an oracle, usually a model of main's behaviour, and asserts over the whole space:
+
+- delivers at least as much as main;
+- credits exactly once;
+- never passes an unacknowledged event;
+- the modelled set of stuck cells is exactly what happens.
+
+Evidence from 2026-09-28:
+
+- **#907 (x402 reconciler)** ran thirteen rounds. Rounds 5 to 11 each found one more instance of the same class, "an executed payment is never credited". The exhaustive driver asked for in round 12 found 62 failing sequences at once, and later rounds converged in one pass each.
+- **#914 (sync liveness)** found three rounds in a row of "a deadline kills work main would have finished". It was switched to harness first.
+- **#816** set the precedent: an interleaving harness instead of whack-a-mole.
+
+A loop that runs past three rounds without a harness is a process failure, whatever each round finds.
+
+## Where a lane's time goes
+
+A round is mostly verification compute, not thinking:
+
+- building both trees for a differential;
+- the full suite of the package touched (the relay's is about 3,000 tests after a build);
+- the gates;
+- a tamper run for every fix.
+
+That is the right place to spend it, because each review round on 2026-09-28 found a real defect. But the cost multiplies by the number of rounds, so the stopping rule above is the main lever. Three smaller ones:
+
+- **Iterate on the smallest test set; run the full suite once.** While fixing, a builder runs only the test files the change touches, plus the harness. It runs the full named suite and gates once, before committing. Re-running a 3,000-test suite after every edit is most of a builder's wall time.
+- **Keep tamper checks in a file, not in the transcript.** Each check is a `(file, text to revert, test expected red)` triple. Record them in a committed script or test-adjacent file that the builder re-runs, not as ad hoc edits described in a report. Hand-written tamper edits go stale as the code moves, and several then report "could not apply" and pass silently. That happened in four consecutive #907 rounds.
+- **Load is a variable.** Four agents plus a pre-push run make a CPU-starved machine, and a starved machine produces timeouts that read as failures. The 2026-09-28 example was `ai-core` coverage, which passed on its own. Before treating a timeout as a regression, re-run the failing package alone.
