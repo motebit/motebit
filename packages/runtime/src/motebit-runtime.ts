@@ -201,7 +201,7 @@ import { IdentityManager } from "@motebit/core-identity";
 import { PrivacyLayer } from "@motebit/privacy-layer";
 import type { AuditLogAdapter } from "@motebit/privacy-layer";
 import { assertSpeciesIntegrity } from "@motebit/policy-invariants";
-import { SyncEngine } from "@motebit/sync-engine";
+import { SyncEngine, pushCompactionFloor } from "@motebit/sync-engine";
 import type { RenderAdapter } from "@motebit/render-engine/spec";
 import { normalizeEmbodimentMode } from "@motebit/render-engine/spec";
 import {
@@ -633,6 +633,8 @@ export class MotebitRuntime {
   };
   private stateSnapshot?: StateSnapshotAdapter;
   private compactionThreshold: number;
+  /** The local event store adapter the sync engines push from — keys the #962 compaction floor. */
+  private readonly localEventStore: EventStoreAdapter;
   private running = false;
   private toolRegistry: SimpleToolRegistry;
   /** Presence-scoped view onto `toolRegistry`. Filters tool visibility +
@@ -1067,6 +1069,7 @@ export class MotebitRuntime {
       deletionSigner,
       this.conversationStore,
     );
+    this.localEventStore = adapters.storage.eventStore;
     this.sync = new SyncEngine(adapters.storage.eventStore, this.motebitId);
 
     // State -> cue computation
@@ -4081,10 +4084,23 @@ export class MotebitRuntime {
 
     // Delete events up to (but not including) the latest clock
     // Keep the most recent event so replay can continue from it
-    return this.events.compact(this.motebitId, clock - 1);
+    return this.compactUpTo(clock - 1);
   }
 
   // === Internal ===
+
+  /**
+   * The ONE place compaction decides what to delete (#962): up to
+   * `requested`, but never past what every relay stream has acknowledged
+   * (`pushCompactionFloor`) — an event not yet pushed is never compacted
+   * away before it reaches the owner's other devices. Unreadable cursor ⇒
+   * nothing is deleted. No relay configured ⇒ `requested`, as before.
+   */
+  private async compactUpTo(requested: number): Promise<number> {
+    const floor = await pushCompactionFloor(this.localEventStore, requested);
+    if (floor <= 0) return 0;
+    return this.events.compact(this.motebitId, floor);
+  }
 
   private async autoCompact(): Promise<void> {
     if (this.compactionThreshold <= 0) return;
@@ -4093,7 +4109,7 @@ export class MotebitRuntime {
       if (count >= this.compactionThreshold) {
         const clock = await this.events.getLatestClock(this.motebitId);
         if (clock > 0) {
-          await this.events.compact(this.motebitId, clock - 1);
+          await this.compactUpTo(clock - 1);
         }
       }
     } catch (err: unknown) {

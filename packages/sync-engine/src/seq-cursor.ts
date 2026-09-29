@@ -118,6 +118,12 @@ export interface SyncSeqCursorStore {
   recordSkippedSyncEvent?(key: string, skipped: SkippedSyncEvent): Promise<void>;
   /** Every undecryptable skip ever recorded for `key`, including rows since pruned. */
   countSkippedSyncEvents?(key: string): Promise<number>;
+  /**
+   * Every cursor key this store holds that starts with `prefix` (#962): how
+   * compaction finds each relay stream's push cursor, including the streams
+   * of an earlier process that has not connected sync yet.
+   */
+  listSyncSeqCursorKeys?(prefix: string): Promise<string[]>;
 }
 
 /**
@@ -168,6 +174,9 @@ export class InMemorySyncSeqCursorStore implements SyncSeqCursorStore {
   setSyncSeqCursor(key: string, seq: number): Promise<void> {
     this.cursors.set(key, seq);
     return Promise.resolve();
+  }
+  listSyncSeqCursorKeys(prefix: string): Promise<string[]> {
+    return Promise.resolve([...this.cursors.keys()].filter((k) => k.startsWith(prefix)));
   }
   private totals = new Map<string, number>();
   recordSkippedSyncEvent(key: string, skipped: SkippedSyncEvent): Promise<void> {

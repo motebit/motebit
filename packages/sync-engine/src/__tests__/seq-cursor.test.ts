@@ -253,7 +253,12 @@ describe("#868 seq cursor", () => {
       const first = new SyncEngine(local, MID);
       first.connectRemote(http);
       await first.sync();
-      expect([...local.cursors.entries()]).toEqual([[http.seqCursorKey, 1]]);
+      // The pull cursor, beside the push stream's enrollment (#962: a push
+      // cursor at 0 until the relay acknowledges — compaction's floor).
+      expect([...local.cursors.entries()]).toEqual([
+        [`push:${http.seqCursorKey}`, 0],
+        [http.seqCursorKey, 1],
+      ]);
       relay.ingest(entry("e2", 1)); // same clock
       const second = new SyncEngine(local, MID);
       second.connectRemote(http);

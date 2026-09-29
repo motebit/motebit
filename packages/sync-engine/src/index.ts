@@ -176,6 +176,52 @@ export function pushCursorKey(remote: EventStoreAdapter, motebitId: string): str
   return typeof named === "string" ? `push:relay:${named}` : `push:#${motebitId}`;
 }
 
+/** Every push-cursor key starts with this (`pushCursorKey`). */
+const PUSH_CURSOR_PREFIX = "push:";
+
+/**
+ * The relay streams a `SyncEngine` in this process connected, per LOCAL
+ * store object, with the cursor store each stream's push cursor is kept in
+ * (#962). Read by `pushCompactionFloor`; a store's own persisted push
+ * cursors cover the streams of an earlier process.
+ */
+const connectedPushStreams = new WeakMap<object, Map<string, SyncSeqCursorStore>>();
+
+/**
+ * The highest clock compaction may delete up to in `localStore` (#962): the
+ * smaller of `requested` and every relay stream's ACKED push cursor — so an
+ * event no relay has acknowledged is never compacted away before it is
+ * pushed. The streams are those a `SyncEngine` connected over this store in
+ * this process, plus every push cursor the store persists (a relay an
+ * earlier process pushed to, before this one connects). The minimum across
+ * streams: a relay that has acknowledged nothing holds everything.
+ *
+ * No stream at all (no relay ever configured over this store): `requested`,
+ * compaction as before. A cursor that cannot be read: 0 — compact nothing
+ * (fail closed).
+ */
+export async function pushCompactionFloor(
+  localStore: EventStoreAdapter,
+  requested: number,
+): Promise<number> {
+  try {
+    const streams = new Map<string, SyncSeqCursorStore>(connectedPushStreams.get(localStore) ?? []);
+    const own = resolveSeqCursorStore(localStore);
+    if (own.listSyncSeqCursorKeys) {
+      for (const key of await own.listSyncSeqCursorKeys(PUSH_CURSOR_PREFIX)) {
+        if (!streams.has(key)) streams.set(key, own);
+      }
+    }
+    let floor = requested;
+    for (const [key, store] of streams) {
+      floor = Math.min(floor, (await store.getSyncSeqCursor(key)) ?? 0);
+    }
+    return floor;
+  } catch {
+    return 0;
+  }
+}
+
 /**
  * The adapter instance a push goes out through (#914 round 9): what a
  * remote names as its `pushTransport` (a socket adapter, followed through
@@ -361,6 +407,25 @@ export class SyncEngine {
    */
   connectRemote(remoteStore: EventStoreAdapter): void {
     this.remoteStore = remoteStore;
+    // #962: from now on compaction over this store stops at this stream's
+    // acked push cursor — in this process at once, and in a later one
+    // through the cursor persisted here (0 until the relay acknowledges).
+    const key = pushCursorKey(remoteStore, this.cursor.motebit_id);
+    let streams = connectedPushStreams.get(this.localStore);
+    if (!streams) {
+      streams = new Map<string, SyncSeqCursorStore>();
+      connectedPushStreams.set(this.localStore, streams);
+    }
+    streams.set(key, this.seqCursorStore);
+    const cursors = this.seqCursorStore;
+    this.cursorChain = this.cursorChain
+      .then(async () => {
+        if ((await cursors.getSyncSeqCursor(key)) === null) await cursors.setSyncSeqCursor(key, 0);
+      })
+      .catch(() => {
+        // Unpersisted enrollment: this process still holds the floor; the
+        // cursor's first acknowledged write persists it.
+      });
     // What one relay served says nothing about what another holds.
     this.knownRemote.clear();
     // Wire activity (a request attempt, its headers, each body chunk) is
