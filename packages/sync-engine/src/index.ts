@@ -5,6 +5,7 @@ import {
   pullBySeq,
   resolveSeqCursorStore,
   relayHolds,
+  relayStreamOfKey,
   warnSkippedSyncEvent,
   type SkippedSyncEvent,
   type SyncSeqCursorStore,
@@ -163,13 +164,28 @@ const MAX_KNOWN_REMOTE = 10_000;
 
 /**
  * The key the push cursor is kept under, in the same cursor store as the
- * pull cursor (#914). A remote that names its relay stream (a seq source)
- * gets a cursor of its own, so a relay it has never pushed to is pushed the
- * whole log; any other remote shares the identity's default push cursor.
- * Prefixed `push:` — never equal to a pull cursor key.
+ * pull cursor (#914). A remote that names its relay stream — a seq source,
+ * or a socket adapter through its catch-up source (`relayStreamKey`, #914
+ * round 8) — gets a cursor of its own, so a relay it has never pushed to is
+ * pushed the whole log; a remote that names none shares the identity's
+ * default push cursor. Prefixed `push:` — never equal to a pull cursor key.
  */
 export function pushCursorKey(remote: EventStoreAdapter, motebitId: string): string {
-  return isSeqPullSource(remote) ? `push:${remote.seqCursorKey}` : `push:#${motebitId}`;
+  if (isSeqPullSource(remote)) return `push:${remote.seqCursorKey}`;
+  const named = (remote as { relayStreamKey?: unknown }).relayStreamKey;
+  return typeof named === "string" ? `push:relay:${named}` : `push:#${motebitId}`;
+}
+
+/**
+ * The relay stream a remote pushes to, for asking what that relay has been
+ * seen to hold (#914 round 8): a seq source's stream, or the one a socket
+ * adapter names; null when the remote names none (then nothing counts as
+ * held, and everything is pushed — harmless, the relay dedups).
+ */
+function relayStreamOf(remote: EventStoreAdapter): string | null {
+  if (isSeqPullSource(remote)) return relayStreamOfKey(remote.seqCursorKey);
+  const named = (remote as { relayStreamKey?: unknown }).relayStreamKey;
+  return typeof named === "string" ? named : null;
 }
 
 /** Local events in push order: by clock, then event_id (a stable order for equal clocks). */
@@ -297,6 +313,8 @@ export class SyncEngine {
    * clock precondition), so the cursor can never pass it from this list.
    */
   private aboveCursor = new Map<string, EventLogEntry[]>();
+  /** The relay stream each push-cursor key pushes to (`relayStreamOf`). */
+  private streamOfKey = new Map<string, string | null>();
   /** Push-cursor writes, one at a time, in order. */
   private cursorChain: Promise<void> = Promise.resolve();
   private advanceQueued = new Set<string>();
@@ -561,6 +579,8 @@ export class SyncEngine {
   ): Promise<{ count: number; events: EventLogEntry[] }> {
     const motebitId = this.cursor.motebit_id;
     const key = pushCursorKey(remote, motebitId);
+    const stream = relayStreamOf(remote);
+    this.streamOfKey.set(key, stream);
     await this.cursorChain; // an acknowledgment being folded in lands first
     const cursor = (await this.seqCursorStore.getSyncSeqCursor(key)) ?? 0;
     this.cursor.last_version_clock = cursor;
@@ -598,7 +618,7 @@ export class SyncEngine {
       if (
         acked.has(e.event_id) ||
         this.knownRemote.has(e.event_id) ||
-        relayHolds(this.localStore, e.event_id)
+        (stream !== null && relayHolds(this.localStore, stream, e.event_id))
       ) {
         acked.add(e.event_id);
         continue;
@@ -725,6 +745,7 @@ export class SyncEngine {
    */
   private advance(key: string): Promise<void> {
     const run = this.cursorChain.then(async () => {
+      const stream = this.streamOfKey.get(key) ?? null;
       const list = this.aboveCursor.get(key);
       const acked = this.ackedAbove.get(key);
       if (!list || !acked) return;
@@ -737,7 +758,7 @@ export class SyncEngine {
         if (
           acked.has(e.event_id) ||
           this.knownRemote.has(e.event_id) ||
-          relayHolds(this.localStore, e.event_id)
+          (stream !== null && relayHolds(this.localStore, stream, e.event_id))
         ) {
           done.add(e.event_id);
         } else break; // the cursor stops at the first gap

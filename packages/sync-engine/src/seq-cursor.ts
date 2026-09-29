@@ -261,14 +261,38 @@ export async function filterUnseen(
  * re-sending it forever. Keyed by the local store object (one device's
  * record), bounded; forgetting one only costs a re-push.
  */
-const relayHeld = new WeakMap<object, Map<string, number>>();
+const relayHeld = new WeakMap<object, Map<string, Map<string, number>>>();
 const RELAY_HELD_KEPT = 50_000;
 
-export function noteRelayHolds(localStore: object, events: readonly EventLogEntry[]): void {
-  let held = relayHeld.get(localStore);
+/**
+ * The relay a cursor key reads, whatever the payload mode: `raw:` and
+ * `e2e:` keys over the same relay origin + identity are one relay's record
+ * (#914 round 8).
+ */
+export function relayStreamOfKey(seqCursorKey: string): string {
+  return seqCursorKey.replace(/^(?:e2e:|raw:)+/, "");
+}
+
+/**
+ * Note that the relay stream `relayStream` (see `relayStreamOfKey`) holds
+ * these events. Keyed by the local store AND the relay: what relay A served
+ * says nothing about what relay B holds (#914 round 8 — a device pointed at
+ * a new relay must push it the whole log, its own events included).
+ */
+export function noteRelayHolds(
+  localStore: object,
+  relayStream: string,
+  events: readonly EventLogEntry[],
+): void {
+  let perRelay = relayHeld.get(localStore);
+  if (!perRelay) {
+    perRelay = new Map();
+    relayHeld.set(localStore, perRelay);
+  }
+  let held = perRelay.get(relayStream);
   if (!held) {
     held = new Map();
-    relayHeld.set(localStore, held);
+    perRelay.set(relayStream, held);
   }
   for (const e of events) {
     held.delete(e.event_id);
@@ -277,9 +301,9 @@ export function noteRelayHolds(localStore: object, events: readonly EventLogEntr
   while (held.size > RELAY_HELD_KEPT) held.delete(held.keys().next().value!);
 }
 
-/** Has a pull into `localStore` shown the relay holding `eventId`? */
-export function relayHolds(localStore: object, eventId: string): boolean {
-  return relayHeld.get(localStore)?.has(eventId) ?? false;
+/** Has a pull from `relayStream` into `localStore` shown that relay holding `eventId`? */
+export function relayHolds(localStore: object, relayStream: string, eventId: string): boolean {
+  return relayHeld.get(localStore)?.get(relayStream)?.has(eventId) ?? false;
 }
 
 /** Bounded so a single pull call cannot spin; the next sync continues from the saved cursor. */
@@ -381,6 +405,7 @@ export async function pullBySeq(opts: {
     const res = await source.pullAfterSeq(cursor, fallbackAfterClock);
     noteRelayHolds(
       localStore,
+      relayStreamOfKey(source.seqCursorKey),
       (res.kind === "clock" ? res.events : res.entries.map((x) => x.event)).filter(
         (e) => e.motebit_id === motebitId,
       ),

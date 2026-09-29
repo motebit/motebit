@@ -24,9 +24,12 @@ function reportsActivity(x: unknown): x is ActivityReporting {
  * stall. Subscriptions follow a swap: the next call through the wrapper
  * moves them from the retired adapter to the current one.
  */
-export function liveAdapter(
-  current: () => EventStoreAdapter,
-): EventStoreAdapter & ActivityReporting & { abortInFlight(): void; hasLiveWork(): boolean } {
+export function liveAdapter(current: () => EventStoreAdapter): EventStoreAdapter &
+  ActivityReporting & {
+    abortInFlight(): void;
+    hasLiveWork(): boolean;
+    readonly relayStreamKey: string | undefined;
+  } {
   const listeners = new Set<() => void>();
   let bound: EventStoreAdapter | null = null;
   let unbind: (() => void) | null = null;
@@ -58,6 +61,9 @@ export function liveAdapter(
     },
     hasLiveWork(): boolean {
       return (follow() as { hasLiveWork?: () => boolean }).hasLiveWork?.() === true;
+    },
+    get relayStreamKey(): string | undefined {
+      return (follow() as { relayStreamKey?: string }).relayStreamKey;
     },
     onActivity(listener: () => void): () => void {
       listeners.add(listener);

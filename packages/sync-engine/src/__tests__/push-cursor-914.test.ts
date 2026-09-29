@@ -421,19 +421,95 @@ describe("#914 WebSocketEventStoreAdapter — an append resolves on the relay's 
     expect(p1.state).toBe("err");
   });
 
-  it("a slow socket that still shows life is never judged dead", async () => {
+  it("inbound traffic does not keep an unanswered frame alive: 64 deadlines with no answer on its socket drop it (#914 round 8)", async () => {
     const a = adapter();
     const s = lastSocket();
     const p1 = track(a.append(entry("e1", 1)));
     await vi.advanceTimersByTimeAsync(20);
-    for (let i = 0; i < 10; i++) {
+    for (let i = 0; i < 6; i++) {
       await vi.advanceTimersByTimeAsync(10_000);
-      s.answer({ type: "event", event: entry(`sib-${i}`, 100 + i) }); // inbound traffic
+      s.answer({ type: "event", event: entry(`sib-${i}`, 100 + i) }); // a sibling's events
     }
-    expect(s.closed).toBe(false);
-    s.answer({ type: "ack", accepted: 1 });
+    expect(s.closed).toBe(false); // 60 s: within 64 × the 1 s deadline
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(s.closed).toBe(true); // answered nothing in 64 deadlines, however much it received
+    expect(p1.state).toBe("err");
+  });
+
+  it("an OVERTAKEN frame (a later frame on its socket answered by push_id) is lost, and sent again once (#914 round 8)", async () => {
+    const a = adapter();
+    const s = lastSocket();
+    const pid = (i: number): string =>
+      (JSON.parse(s.sent.filter((m) => m.includes('"type":"push"'))[i]!) as { push_id: string })
+        .push_id;
+    const p0 = track(a.append(entry("e0", 1)));
+    await vi.advanceTimersByTimeAsync(20);
+    s.answer({ type: "ack", accepted: 1, push_id: pid(0) }); // the echo is seen: window 16
     await vi.advanceTimersByTimeAsync(0);
-    expect(p1.state).toBe("ok");
+    const p1 = track(a.append(entry("e1", 2)));
+    await vi.advanceTimersByTimeAsync(200);
+    const p2 = track(a.append(entry("e2", 3)));
+    await vi.advanceTimersByTimeAsync(200);
+    expect(s.frames()).toEqual([["e0"], ["e1"], ["e2"]]); // overlapping
+    s.answer({ type: "ack", accepted: 1, push_id: pid(2) }); // e2 answered; e1 (dropped) never
+    await vi.advanceTimersByTimeAsync(500);
+    expect(s.frames()).toHaveLength(3); // not yet: one deadline of grace
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(s.frames()).toEqual([["e0"], ["e1"], ["e2"], ["e1"]]); // lost: sent again, once
+    s.answer({ type: "ack", accepted: 1, push_id: pid(3) });
+    await vi.advanceTimersByTimeAsync(0);
+    expect([p0.state, p1.state, p2.state]).toEqual(["ok", "ok", "ok"]);
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(s.frames()).toHaveLength(4);
+  });
+
+  it("a rate-limit refusal on a DRAINING retired socket fails its frames and closes it (#914 round 8)", async () => {
+    const a = adapter();
+    const s = lastSocket();
+    const p1 = track(a.append(entry("e1", 1)));
+    await vi.advanceTimersByTimeAsync(20);
+    a.disconnect(); // a token refresh: the socket drains its frame
+    expect(s.closed).toBe(false);
+    s.answer({ type: "error", message: "Rate limit exceeded" });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(p1.state).toBe("err");
+    expect(s.closed).toBe(true);
+  });
+
+  it("a relay rolled back to one that does not echo: an ack naming no frame of several credits NONE, and the window closes to one (#914 round 8)", async () => {
+    const a = adapter();
+    const s = lastSocket();
+    const pid = (i: number): string =>
+      (JSON.parse(s.sent.filter((m) => m.includes('"type":"push"'))[i]!) as { push_id: string })
+        .push_id;
+    void a.append(entry("e0", 1)).catch(() => {});
+    await vi.advanceTimersByTimeAsync(20);
+    s.answer({ type: "ack", accepted: 1, push_id: pid(0) }); // echoes: window 16
+    await vi.advanceTimersByTimeAsync(0);
+    s.drop(); // the relay restarts, as an older version
+    await vi.advanceTimersByTimeAsync(100);
+    const t = lastSocket();
+    expect(t).not.toBe(s);
+    t.open();
+    const p1 = track(a.append(entry("e1", 2)));
+    await vi.advanceTimersByTimeAsync(200);
+    const p2 = track(a.append(entry("e2", 3)));
+    await vi.advanceTimersByTimeAsync(200);
+    expect(t.frames()).toEqual([["e1"], ["e2"]]); // the window is still the hint's
+    // The old relay dropped e1 and acks e2 — naming no frame.
+    t.answer({ type: "ack", accepted: 1 });
+    await vi.advanceTimersByTimeAsync(0);
+    // Neither is credited (crediting the oldest would pass e1, never stored).
+    expect([p1.state, p2.state]).toEqual(["err", "err"]);
+    expect(t.closed).toBe(true);
+    await vi.advanceTimersByTimeAsync(100);
+    const u = lastSocket();
+    u.open();
+    void a.append(entry("e1", 2)).catch(() => {});
+    await vi.advanceTimersByTimeAsync(200);
+    void a.append(entry("e2", 3)).catch(() => {});
+    await vi.advanceTimersByTimeAsync(200);
+    expect(u.frames()).toEqual([["e1"]]); // one frame at a time now
   });
 
   it("a push refusal rejects the frame", async () => {

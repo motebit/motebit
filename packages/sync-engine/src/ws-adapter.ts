@@ -4,6 +4,7 @@ import type { CredentialSource, CredentialRequest } from "./credential-source.js
 import {
   isSeqPullSource,
   pullBySeq,
+  relayStreamOfKey,
   resolveSeqCursorStore,
   warnSkippedSyncEvent,
   type SkippedSyncEvent,
@@ -137,15 +138,21 @@ interface FrameState {
   limit: number;
   ceiling: number;
   fullAtCeiling: number;
-  /** The relay echoes `push_id` in its acks, so frames may overlap. */
+  /**
+   * The relay was last seen echoing `push_id`: a HINT that frames may
+   * overlap, kept per relay stream (a token refresh or reconnect to the
+   * same relay keeps its window). Never trusted for attribution (#914 round
+   * 8): an ack that names no frame while more than one frame is in flight
+   * on its socket credits NOTHING — see `onPushAnswered` — and turns the
+   * hint off, so a relay restarted as an older version is found out on its
+   * first ack.
+   */
   echoes: boolean;
   /**
    * Push frames still on the wire on RETIRED sockets of this stream: they
    * drain beside the current socket's frames over the same uplink.
    */
   draining: Set<InFlightFrame>;
-  /** When any frame of this stream was last answered. */
-  lastAnswerAt: number;
   /** Adapters waiting for a place in the stream's window (see `flushPush`). */
   waiting: Set<() => void>;
 }
@@ -158,6 +165,12 @@ interface InFlightFrame {
   timer: ReturnType<typeof setTimeout>;
   /** When the frame was sent. */
   sentAt: number;
+  /**
+   * When a frame sent AFTER this one on the same socket was answered by its
+   * `push_id` while this one was not — evidence this one was lost (#914
+   * round 8). Null until then.
+   */
+  overtakenAt: number | null;
   /** The frame's current ack deadline (ms from its send); stretched, never enforced by a kill. */
   deadlineMs: number;
 }
@@ -318,7 +331,6 @@ export class WebSocketEventStoreAdapter implements EventStoreAdapter {
         fullAtCeiling: 0,
         echoes: false,
         draining: new Set(),
-        lastAnswerAt: 0,
         waiting: new Set(),
       };
       sharedFrameStates.set(this.pushBudgetKey, st);
@@ -341,8 +353,8 @@ export class WebSocketEventStoreAdapter implements EventStoreAdapter {
    */
   private inFlight: InFlightFrame[] = [];
   private frameSeq = 0;
-  /** When anything last arrived on the current socket (an ack, an event, any frame). */
-  private lastInboundAt = 0;
+  /** When each socket last had a push frame answered: the dead rule is per socket. */
+  private answeredAt = new WeakMap<WebSocket, number>();
 
   constructor(config: WebSocketAdapterConfig) {
     this.config = {
@@ -488,7 +500,6 @@ export class WebSocketEventStoreAdapter implements EventStoreAdapter {
 
     const thisSocket = this.ws;
     this.ws.onmessage = (event: MessageEvent) => {
-      this.lastInboundAt = Date.now();
       try {
         const msg = JSON.parse(String(event.data)) as { type: string; [key: string]: unknown };
         // A socket retired by `disconnect` while frames were in flight
@@ -890,6 +901,7 @@ export class WebSocketEventStoreAdapter implements EventStoreAdapter {
         timer: setTimeout(() => this.onPushTimeout(socket, frame), this.ackTimeoutMs),
         sentAt: now,
         deadlineMs: this.ackTimeoutMs,
+        overtakenAt: null,
       };
       this.inFlight.push(frame);
       try {
@@ -986,8 +998,34 @@ export class WebSocketEventStoreAdapter implements EventStoreAdapter {
       const f = mine.find((x) => x.id === pushId);
       if (!f) return;
       answered = [f];
-    } else answered = [mine[0]!];
-    this.frame.lastAnswerAt = Date.now();
+      // Every frame sent BEFORE it on this socket and still unanswered was
+      // overtaken: its bytes reached the relay first, and the relay answered
+      // the later one. One ack deadline from now it is judged lost.
+      const now = Date.now();
+      for (const earlier of mine) {
+        if (earlier.sentAt >= f.sentAt || earlier.overtakenAt !== null) continue;
+        earlier.overtakenAt = now;
+        clearTimeout(earlier.timer);
+        earlier.timer = setTimeout(() => this.onPushTimeout(socket, earlier), this.ackTimeoutMs);
+      }
+    } else {
+      // An ack naming no frame: this relay does not echo (any more).
+      this.frame.echoes = false;
+      if (mine.length > 1) {
+        // Frames overlapped on a relay that cannot say which one it
+        // answered: crediting any would be a guess, and a guess can move
+        // the cursor past an event the relay never stored. None is
+        // credited; the socket is dropped and its frames fail — the sync
+        // engine pushes them again, one frame at a time now (the relay
+        // stores each event_id once).
+        this.failFramesOn(socket, new Error("sync push: an ack named no frame of several"));
+        if (this.ws === socket) this.dropSocket(socket);
+        else this.closeIfDrained(socket);
+        return;
+      }
+      answered = [mine[0]!];
+    }
+    this.answeredAt.set(socket, Date.now());
     for (const frame of answered) {
       clearTimeout(frame.timer);
       this.inFlight.splice(this.inFlight.indexOf(frame), 1);
@@ -1062,8 +1100,9 @@ export class WebSocketEventStoreAdapter implements EventStoreAdapter {
       this.pushBudgetKey,
       Array.from({ length: PUSH_FRAMES_PER_WINDOW }, () => now),
     );
-    this.failInFlight(new Error("sync push: the relay's rate limit refused the frame"));
-    this.dropSocket(socket);
+    this.failFramesOn(socket, new Error("sync push: the relay's rate limit refused the frame"));
+    if (this.ws === socket) this.dropSocket(socket);
+    else this.closeIfDrained(socket); // a draining retired socket is closed too
   }
 
   /**
@@ -1077,13 +1116,33 @@ export class WebSocketEventStoreAdapter implements EventStoreAdapter {
    *     first and acks late still acks it — the cursor moves then;
    *   - its deadline doubles, and is re-armed.
    *
-   * The socket is dropped only when it is DEAD: the frame has waited the
-   * full stretch (64 × the base deadline) and nothing at all has arrived on
-   * the socket since it was sent. Close, error and a rate-limit refusal drop
-   * it too, elsewhere.
+   * Two rules turn a late frame into a LOST one (#914 round 8) — evidence,
+   * never elapsed time alone:
+   *
+   *   - OVERTAKEN: a frame sent after it on the same socket was answered by
+   *     its `push_id`, and a further ack deadline has passed with this one
+   *     still unanswered. Its bytes reached the relay first and the relay
+   *     answered what came after: the relay dropped it. It is sent AGAIN,
+   *     on the current socket (the relay stores each event_id once). This is
+   *     the only re-send on the socket, and it never touches a frame whose
+   *     answer could still come in order.
+   *   - UNANSWERED: it is its stream's oldest frame on the wire, and its
+   *     socket has answered nothing for 64 ack deadlines since it was sent.
+   *     Inbound traffic (a sibling's events) does not count: a socket that
+   *     delivers events but answers no push is not carrying pushes. The
+   *     socket is dropped (a retired one closed) and its frames fail; the
+   *     sync engine pushes them again. A frame queued behind an older frame
+   *     of the stream — a retired socket draining over the same uplink — is
+   *     never judged: only the oldest is.
+   *
+   * Close, error and a rate-limit refusal end a socket too, elsewhere.
    */
   private onPushTimeout(socket: WebSocket, frame: InFlightFrame): void {
     if (!this.inFlight.includes(frame) || frame.socket !== socket) return;
+    if (frame.overtakenAt !== null && Date.now() - frame.overtakenAt >= this.ackTimeoutMs) {
+      this.resendLost(frame);
+      return;
+    }
     const n = frame.items.length;
     // Each miss halves the next frames again (never the late frame itself).
     this.frame.limit = Math.max(1, Math.floor(Math.min(this.frame.limit, n) / 2));
@@ -1091,17 +1150,15 @@ export class WebSocketEventStoreAdapter implements EventStoreAdapter {
     this.frame.fullAtCeiling = 0;
     const now = Date.now();
     const cap = this.ackTimeoutMs * MAX_ACK_STRETCH;
-    // Quiet since the frame went out, since the socket last showed life, or
-    // since any frame of this stream was answered. A frame sent after
-    // another still on the wire for this stream is queued behind it on the
-    // same uplink — not on a dead socket — so only the oldest can be judged.
-    const quietSince = Math.max(frame.sentAt, this.lastInboundAt, this.frame.lastAnswerAt);
+    // Unanswered since the frame went out, or since its socket last answered
+    // a push frame. Only the stream's oldest frame on the wire is judged.
+    const quietSince = Math.max(frame.sentAt, this.answeredAt.get(socket) ?? 0);
     let oldest = true;
     for (const f of [...this.inFlight, ...this.frame.draining]) {
       if (f.sentAt < frame.sentAt) oldest = false;
     }
     if (oldest && now - quietSince >= cap) {
-      this.failFramesOn(socket, new Error("sync push: the socket is dead (nothing arrived on it)"));
+      this.failFramesOn(socket, new Error("sync push: the socket answered nothing"));
       if (this.ws === socket) this.dropSocket(socket);
       else this.closeIfDrained(socket);
       return;
@@ -1113,6 +1170,33 @@ export class WebSocketEventStoreAdapter implements EventStoreAdapter {
     // look again a deadline on, never in a tight loop.
     if (next <= now) next = now + this.ackTimeoutMs;
     frame.timer = setTimeout(() => this.onPushTimeout(socket, frame), next - now);
+  }
+
+  /**
+   * An OVERTAKEN frame (see `onPushTimeout`): lost at the relay. Its events
+   * go back to the front of the queue — waiters and all — and out again on
+   * the current socket.
+   */
+  private resendLost(frame: InFlightFrame): void {
+    clearTimeout(frame.timer);
+    this.inFlight.splice(this.inFlight.indexOf(frame), 1);
+    this.frame.draining.delete(frame);
+    this.outbox.unshift(...frame.items);
+    this.closeIfDrained(frame.socket);
+    this.flushPush();
+    this.wakeWaiting();
+  }
+
+  /**
+   * The relay stream this socket's catch-ups read (the HTTP fallback's), so
+   * the sync engine can ask what that relay has been seen to hold (#914
+   * round 8). Undefined without a seq-pulling fallback.
+   */
+  get relayStreamKey(): string | undefined {
+    const fallback = this.config.httpFallback;
+    return fallback && isSeqPullSource(fallback)
+      ? relayStreamOfKey(fallback.seqCursorKey)
+      : undefined;
   }
 
   /**

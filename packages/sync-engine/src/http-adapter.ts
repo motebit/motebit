@@ -115,6 +115,9 @@ class RequestAbortedError extends Error {}
 /** An attempt that reached the cap — the stated exclusion. */
 class RequestTimeoutError extends Error {}
 
+/** A second attempt ended because another attempt of the same request won. */
+class RequestSupersededError extends Error {}
+
 /**
  * One attempt on the wire. Why it was aborted is recorded HERE, by whoever
  * aborts it, before `abort()` — never read back from `signal.reason`, which
@@ -590,9 +593,10 @@ export class HttpEventStoreAdapter implements EventStoreAdapter, SeqPullSource {
           (err: unknown) => {
             mine.delete(a);
             if (settled) return;
-            if (a.abortedBy === "owner") {
+            if (err instanceof RequestAbortedError) {
+              // Its owner ended it (`abortError` classified it): so ends the request.
               finish();
-              reject(new RequestAbortedError("sync request abandoned with its sync cycle"));
+              reject(err);
               return;
             }
             if (mine.size === 0) {
@@ -750,6 +754,28 @@ export class HttpEventStoreAdapter implements EventStoreAdapter, SeqPullSource {
   }
 
   /**
+   * THE one place an abort is classified (#914 round 8): by the flag its
+   * aborter set BEFORE calling `abort()` — never by `signal.reason`, which
+   * React Native's AbortController (abort-controller@3.0.0) does not carry.
+   * Null when the attempt was not aborted. Every path that ends an attempt
+   * on an abort — the race in `fetchOnce`, its catch — throws what this
+   * returns, and `request` reads only the error's class.
+   */
+  private abortError(a: Attempt, cause?: unknown): Error | null {
+    const opts = cause === undefined ? undefined : { cause };
+    switch (a.abortedBy) {
+      case "owner":
+        return new RequestAbortedError("sync request abandoned with its sync cycle", opts);
+      case "cap":
+        return new RequestTimeoutError(`sync request silent for ${this.capMs} ms`, opts);
+      case "superseded":
+        return new RequestSupersededError("sync request superseded", opts);
+      case null:
+        return null;
+    }
+  }
+
+  /**
    * One fetch and its whole body. Progress (headers, each chunk) is recorded
    * on the attempt. An abort ends the race even for a fetch that ignores its
    * signal; why it was aborted is read from `a.abortedBy`.
@@ -763,13 +789,7 @@ export class HttpEventStoreAdapter implements EventStoreAdapter, SeqPullSource {
     const ended = new Promise<never>((_, reject) => (fire = reject));
     ended.catch(() => {});
     const onAbort = (): void => {
-      fire(
-        a.abortedBy === "owner"
-          ? new RequestAbortedError("sync request abandoned with its sync cycle")
-          : a.abortedBy === "cap"
-            ? new RequestTimeoutError(`sync request silent for ${this.capMs} ms`)
-            : new RequestAbortedError("sync request superseded"),
-      );
+      fire(this.abortError(a) ?? new Error("sync request aborted"));
     };
     if (a.ctrl.signal.aborted) onAbort();
     a.ctrl.signal.addEventListener("abort", onAbort);
@@ -834,15 +854,7 @@ export class HttpEventStoreAdapter implements EventStoreAdapter, SeqPullSource {
       });
     } catch (err: unknown) {
       if (reader) void reader.cancel().catch(() => {});
-      if (a.abortedBy === "owner") {
-        throw new RequestAbortedError("sync request abandoned with its sync cycle", { cause: err });
-      }
-      if (a.abortedBy === "cap") {
-        throw new RequestTimeoutError(`sync request silent for ${this.capMs} ms`, {
-          cause: err,
-        });
-      }
-      throw err;
+      throw this.abortError(a, err) ?? err;
     } finally {
       a.ctrl.signal.removeEventListener("abort", onAbort);
     }
