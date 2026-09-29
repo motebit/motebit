@@ -16,7 +16,7 @@ export type {
   VerificationResult,
   ServerVerifier,
 } from "@motebit/sdk";
-import { MCP_CALL_AUDIENCE, MCP_CALL_TOKEN_TTL_MS } from "@motebit/sdk";
+import { MCP_CALL_AUDIENCE, REFERENCE_MCP_CALL_TOKEN_TTL_MS } from "@motebit/sdk";
 import { mintAudienceToken, verifyKeySuccession } from "@motebit/encryption";
 import type { KeySuccessionRecord } from "@motebit/encryption";
 import { InMemoryToolRegistry } from "@motebit/tools";
@@ -761,7 +761,7 @@ export class McpClientAdapter {
           sub: targetMotebitId,
           // One request's worth of lifetime: the server refuses more than
           // TTL + clock-skew allowance (#957).
-          ttlMs: MCP_CALL_TOKEN_TTL_MS,
+          ttlMs: REFERENCE_MCP_CALL_TOKEN_TTL_MS,
         },
         this.config.callerPrivateKey,
       )

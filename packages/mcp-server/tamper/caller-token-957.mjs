@@ -148,7 +148,7 @@ const TAMPERS = [
     edits: [
       {
         file: LAW,
-        from: "MAX_MCP_CALLER_TOKEN_LIFETIME_MS = MCP_CALL_TOKEN_TTL_MS + MCP_CALL_CLOCK_SKEW_MS;",
+        from: "MAX_MCP_CALLER_TOKEN_LIFETIME_MS = MCP_CALL_MAX_TOKEN_WINDOW_MS;",
         to: "MAX_MCP_CALLER_TOKEN_LIFETIME_MS = 15 * 60 * 1000;",
       },
     ],
@@ -173,6 +173,14 @@ const TAMPERS = [
         from: 'if (typeof claims.iat === "number" && claims.iat - nowMs > MCP_CALL_CLOCK_SKEW_MS) {',
         to: "if (false as boolean) {",
       },
+    ],
+  },
+  {
+    name: "(c) heap pop never sifts down (expired entries hide below a live root)",
+    ...MATRIX,
+    edits: [
+      { file: LAW, from: "if (l < h.length && h[l]!.exp < h[m]!.exp) m = l;", to: "" },
+      { file: LAW, from: "if (r < h.length && h[r]!.exp < h[m]!.exp) m = r;", to: "" },
     ],
   },
   // --- clients
@@ -207,7 +215,7 @@ const TAMPERS = [
     edits: [
       {
         file: "packages/mcp-client/src/index.ts",
-        from: "          ttlMs: MCP_CALL_TOKEN_TTL_MS,\n",
+        from: "          ttlMs: REFERENCE_MCP_CALL_TOKEN_TTL_MS,\n",
         to: "",
       },
     ],
@@ -243,7 +251,7 @@ const TAMPERS = [
     edits: [
       {
         file: "packages/planner/src/sovereign-delegation-adapter.ts",
-        from: "            ttlMs: MCP_CALL_TOKEN_TTL_MS,\n",
+        from: "            ttlMs: REFERENCE_MCP_CALL_TOKEN_TTL_MS,\n",
         to: "",
       },
     ],

@@ -2730,7 +2730,7 @@ export const MCP_CALL_CLOCK_SKEW_MS = 60000;
 export const MCP_CALL_MAX_JTI_LENGTH = 128;
 
 // @public
-export const MCP_CALL_TOKEN_TTL_MS = 60000;
+export const MCP_CALL_MAX_TOKEN_WINDOW_MS = 120000;
 
 // @public
 export const MEMORY_EXPORT_ARTIFACT: ContentArtifactType;
@@ -3421,6 +3421,9 @@ export const REASONING_TASK_SHAPE: TaskShape;
 export function recordSemiring<R extends Record<string, unknown>>(fields: {
     [K in keyof R]: Semiring<R[K]>;
 }): Semiring<R>;
+
+// @public
+export const REFERENCE_MCP_CALL_TOKEN_TTL_MS = 60000;
 
 // @public
 export const REFERENCE_RETENTION_DAYS_BY_SENSITIVITY: Readonly<{

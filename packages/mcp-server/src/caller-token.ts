@@ -25,7 +25,7 @@
  *       expired (`verifySignedToken`); `exp` is at most
  *       `MAX_MCP_CALLER_TOKEN_LIFETIME_MS` (2 min) past the server's now and
  *       `iat` at most `MCP_CALL_CLOCK_SKEW_MS` (1 min) in its future. Clients
- *       mint with `MCP_CALL_TOKEN_TTL_MS` (1 min), so the allowance is a
+ *       mint with `REFERENCE_MCP_CALL_TOKEN_TTL_MS` (1 min), so the allowance is a
  *       minute of clock skew either way. The short window bounds how much the
  *       store must remember.
  *
@@ -43,15 +43,17 @@ import {
   MCP_CALL_AUDIENCE,
   MCP_CALL_CLOCK_SKEW_MS,
   MCP_CALL_MAX_JTI_LENGTH,
-  MCP_CALL_TOKEN_TTL_MS,
+  MCP_CALL_MAX_TOKEN_WINDOW_MS,
+  REFERENCE_MCP_CALL_TOKEN_TTL_MS,
 } from "@motebit/sdk";
 import { bytesToHex, sha256 } from "@motebit/encryption";
 
 /**
  * Longest remaining lifetime (`exp - now`) accepted on a caller token: the
- * client mint lifetime plus the clock-skew allowance (2 minutes).
+ * interop-law window `MCP_CALL_MAX_TOKEN_WINDOW_MS` (2 minutes). The
+ * reference clients mint 60 s, leaving a minute of clock skew.
  */
-export const MAX_MCP_CALLER_TOKEN_LIFETIME_MS = MCP_CALL_TOKEN_TTL_MS + MCP_CALL_CLOCK_SKEW_MS;
+export const MAX_MCP_CALLER_TOKEN_LIFETIME_MS = MCP_CALL_MAX_TOKEN_WINDOW_MS;
 
 /** The claims this law reads. Everything else in the payload is ignored. */
 export interface McpCallerClaims {
@@ -108,7 +110,7 @@ export function checkMcpCallerClaims(
       ok: false,
       reason:
         `token lifetime exceeds ${MAX_MCP_CALLER_TOKEN_LIFETIME_MS / 1000}s ` +
-        `(mint with ${MCP_CALL_TOKEN_TTL_MS / 1000}s; clock skew allowance ${MCP_CALL_CLOCK_SKEW_MS / 1000}s)`,
+        `(mint with ${REFERENCE_MCP_CALL_TOKEN_TTL_MS / 1000}s; clock skew allowance ${MCP_CALL_CLOCK_SKEW_MS / 1000}s)`,
     };
   }
   if (typeof claims.iat === "number" && claims.iat - nowMs > MCP_CALL_CLOCK_SKEW_MS) {

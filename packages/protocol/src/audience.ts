@@ -249,18 +249,25 @@ export const RUNTIME_ATTACH_AUDIENCE: TokenAudience = "runtime:attach";
 export const MCP_CALL_AUDIENCE: TokenAudience = "mcp:call";
 
 /**
- * Lifetime a client mints an `mcp:call` token with (`exp - iat`). One token
+ * Reference default (a client choice, not interop law): the lifetime the
+ * reference clients mint an `mcp:call` token with (`exp - iat`). One token
  * serves one HTTP request, so it only has to outlive the request's transit.
+ * Any lifetime within `MCP_CALL_MAX_TOKEN_WINDOW_MS` is valid.
  */
-export const MCP_CALL_TOKEN_TTL_MS = 60_000;
+export const REFERENCE_MCP_CALL_TOKEN_TTL_MS = 60_000;
 
 /**
- * Clock-skew allowance an MCP server grants an `mcp:call` token: `iat` may be
- * at most this far in the server's future, and `exp` at most
- * `MCP_CALL_TOKEN_TTL_MS + MCP_CALL_CLOCK_SKEW_MS` (2 minutes) past the
- * server's now. A client clock more than a minute fast is refused; a slow one
- * is refused once its token has expired by the server's clock. The short
- * window bounds the server's replay memory (#957).
+ * Interop law: an MCP server refuses an `mcp:call` token whose `exp` is more
+ * than this far past its own clock (2 minutes). The short window bounds the
+ * server's replay memory (#957). A client minting the reference 60 s lifetime
+ * therefore has a minute of clock skew in hand.
+ */
+export const MCP_CALL_MAX_TOKEN_WINDOW_MS = 120_000;
+
+/**
+ * Interop law: an MCP server refuses an `mcp:call` token whose `iat` is more
+ * than this far in its future (1 minute). A slow client clock is bounded by
+ * `exp` instead: its token is refused once expired by the server's clock.
  */
 export const MCP_CALL_CLOCK_SKEW_MS = 60_000;
 

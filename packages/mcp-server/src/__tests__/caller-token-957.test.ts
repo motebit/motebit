@@ -330,6 +330,105 @@ describe("MemoryCallerTokenReplayStore", () => {
   });
 });
 
+// === Model check: the heap-backed store against a naive reference ==========
+
+/** Deterministic PRNG (mulberry32) so every failure is reproducible by seed. */
+function rng(seed: number): () => number {
+  let a = seed >>> 0;
+  return () => {
+    a = (a + 0x6d2b79f5) >>> 0;
+    let t = a;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+/**
+ * The oracle: a plain map, expired entries dropped by a full scan before
+ * every claim. Same verdict order as the law: replay, caller quota, capacity.
+ */
+class NaiveReplayModel {
+  private readonly live = new Map<string, { exp: number; caller: string }>();
+  constructor(
+    private readonly capacity: number,
+    private readonly quota: number,
+  ) {}
+  claim(key: string, caller: string, exp: number, now: number): string {
+    for (const [k, v] of this.live) if (v.exp <= now) this.live.delete(k);
+    if (this.live.has(key)) return "replay";
+    if (this.liveFor(caller) >= this.quota) return "caller_quota";
+    if (this.live.size >= this.capacity) return "full";
+    this.live.set(key, { exp, caller });
+    return "accepted";
+  }
+  liveFor(caller: string): number {
+    let n = 0;
+    for (const v of this.live.values()) if (v.caller === caller) n++;
+    return n;
+  }
+  get size(): number {
+    return this.live.size;
+  }
+}
+
+describe("MemoryCallerTokenReplayStore — model check against a naive reference (#957 round 3)", () => {
+  it("out-of-order expiries: every expired entry is evicted, not only the ones above the first live one", () => {
+    let t = 0;
+    const store = new MemoryCallerTokenReplayStore(4, 10, () => t);
+    // Pushed in this order, the heap's root after the first pop is a live
+    // entry (50) sitting above an expired one (20) unless the pop sifts down.
+    for (const [k, exp] of [
+      ["a", 10],
+      ["b", 50],
+      ["c", 20],
+      ["d", 30],
+    ] as const) {
+      expect(store.claim({ key: k, caller: k, expiresAt: exp })).toBe("accepted");
+    }
+    t = 25; // a (10) and c (20) have expired
+    expect(store.claim({ key: "e", caller: "e", expiresAt: 60 })).toBe("accepted");
+    expect(store.size).toBe(3);
+    expect(store.claim({ key: "f", caller: "f", expiresAt: 60 })).toBe("accepted");
+    expect(store.size).toBe(4);
+  });
+
+  it("random claims with out-of-order expiries match the reference model over 2,000 seeded runs", () => {
+    const CAPACITIES = [1, 2, 3, 5, 8, 13];
+    const QUOTAS = [1, 2, 3, 100];
+    const mismatches: string[] = [];
+    for (let seed = 1; seed <= 2_000 && mismatches.length === 0; seed++) {
+      const r = rng(seed);
+      const capacity = CAPACITIES[Math.floor(r() * CAPACITIES.length)]!;
+      const quota = QUOTAS[Math.floor(r() * QUOTAS.length)]!;
+      let now = 0;
+      const store = new MemoryCallerTokenReplayStore(capacity, quota, () => now);
+      const model = new NaiveReplayModel(capacity, quota);
+      const ops = 20 + Math.floor(r() * 60);
+      for (let i = 0; i < ops; i++) {
+        now += Math.floor(r() * 4); // time moves forward, sometimes not at all
+        const key = `k${Math.floor(r() * 12)}`; // a small pool, so replays happen
+        const caller = `c${Math.floor(r() * 3)}`;
+        const exp = now + 1 + Math.floor(r() * 25); // expiries arrive out of order
+        const got = store.claim({ key, caller, expiresAt: exp });
+        const want = model.claim(key, caller, exp, now);
+        if (
+          got !== want ||
+          store.size !== model.size ||
+          store.liveFor(caller) !== model.liveFor(caller)
+        ) {
+          mismatches.push(
+            `seed ${seed} op ${i} (cap ${capacity}, quota ${quota}, t ${now}, ${key}/${caller} exp ${exp}): ` +
+              `store ${got} size ${store.size}, model ${want} size ${model.size}`,
+          );
+          break;
+        }
+      }
+    }
+    expect(mismatches).toEqual([]);
+  });
+});
+
 describe("#957 round 2 — the replay store over the wire", () => {
   it("stores a constant-size key for a max-length jti", async () => {
     const caller = await generateKeypair();

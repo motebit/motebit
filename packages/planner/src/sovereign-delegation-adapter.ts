@@ -40,7 +40,7 @@
 
 import type { PlanStep, DelegatedStepResult, ExecutionReceipt } from "@motebit/sdk";
 import type { TokenAudience } from "@motebit/sdk";
-import { MCP_CALL_AUDIENCE, MCP_CALL_TOKEN_TTL_MS } from "@motebit/sdk";
+import { MCP_CALL_AUDIENCE, REFERENCE_MCP_CALL_TOKEN_TTL_MS } from "@motebit/sdk";
 import type { StepDelegationAdapter } from "./plan-engine.js";
 
 // ── Config ──────────────────────────────────────────────────────────
@@ -610,7 +610,7 @@ export class SovereignDelegationAdapter implements StepDelegationAdapter {
             did: deviceId,
             aud: MCP_CALL_AUDIENCE,
             sub: workerMotebitId,
-            ttlMs: MCP_CALL_TOKEN_TTL_MS,
+            ttlMs: REFERENCE_MCP_CALL_TOKEN_TTL_MS,
           },
           signingKeys.privateKey,
         );
