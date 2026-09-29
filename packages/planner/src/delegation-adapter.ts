@@ -79,7 +79,13 @@ export class RelayDelegationAdapter implements StepDelegationAdapter {
     // already admitted instead of admitting — and charging for — a second
     // one. Only a task that conclusively FAILED gets a new key: that retry is
     // meant to be a new task, routed away from the agent that failed (#816).
-    let idempotencyKey = crypto.randomUUID();
+    //
+    // The key is DERIVED from the step, never random (#890): two drivers
+    // that ever submit the same step — a reconnect's recovery racing a
+    // scheduler's resume — present the same key, and the relay admits one
+    // task for both.
+    let rotation = 0;
+    let idempotencyKey = planStepIdempotencyKey(step, rotation);
     let attempts = 0;
 
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
@@ -110,7 +116,8 @@ export class RelayDelegationAdapter implements StepDelegationAdapter {
           excludeAgents.push(failedAgentId);
         }
         if (lastError.deliveryUncertain !== true) {
-          idempotencyKey = crypto.randomUUID();
+          rotation++;
+          idempotencyKey = planStepIdempotencyKey(step, rotation);
         }
 
         // Don't retry non-retryable errors (submission failures, not timeouts)
@@ -373,6 +380,20 @@ export class DelegationUndeterminedError extends Error {
     );
     this.name = "DelegationUndeterminedError";
   }
+}
+
+/**
+ * The Idempotency-Key a plan step's submission carries: derived from the
+ * plan, the step, and how many times the step was conclusively failed and
+ * re-routed (`rotation`), never random (#890). Every submission of the same
+ * attempt of the same step — from any driver, in any process — carries the
+ * same key, so the relay admits (and charges for) at most one task for it.
+ */
+export function planStepIdempotencyKey(
+  step: Pick<PlanStep, "plan_id" | "step_id">,
+  rotation: number,
+): string {
+  return `plan-step:${step.plan_id}:${step.step_id}:${rotation}`;
 }
 
 /**

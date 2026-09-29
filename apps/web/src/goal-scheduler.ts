@@ -24,7 +24,8 @@
 
 import {
   paymentNoticeCopy,
-  paidResultsOwedByRun,
+  paidResultsOwedByRuns,
+  goalRunWindows,
   goalAwaitingResultMessage,
 } from "@motebit/runtime";
 import type { ScheduledGoal } from "@motebit/panels";
@@ -91,14 +92,18 @@ export function createWebGoalsScheduler(app: UnbootedWebApp): GoalsEngine {
     const rt = app.getRuntime();
     if (rt == null) return null;
     try {
-      const last = readJson<GoalRunRecord[]>(RUNS_KEY, [])
-        .filter((r) => r.goal_id === goalId && r.status !== "running" && r.status !== "skipped")
-        .sort((a, b) => b.started_at - a.started_at)[0];
-      if (last == null) return null;
-      const owed = paidResultsOwedByRun(rt.outstandingPaidResults(), {
-        startedAt: last.started_at,
-        endedAt: last.finished_at,
-      });
+      // Every recent fire, INCLUDING one still `running` in storage: the
+      // engine writes that record before it fires, so a tab that paid and
+      // was closed mid-fire still owns a window. A finished fire's window
+      // ends when it finished; an unfinished one where the next began.
+      const runs = readJson<GoalRunRecord[]>(RUNS_KEY, []).filter(
+        (r) => r.goal_id === goalId && r.status !== "skipped",
+      );
+      if (runs.length === 0) return null;
+      const owed = paidResultsOwedByRuns(
+        rt.outstandingPaidResults(),
+        goalRunWindows(runs.map((r) => ({ startedAt: r.started_at, endedAt: r.finished_at }))),
+      );
       return owed.length > 0 ? goalAwaitingResultMessage(owed) : null;
     } catch (err: unknown) {
       return `the paid-intent ledger could not be read (${err instanceof Error ? err.message : String(err)})`;
@@ -181,6 +186,11 @@ export function createWebGoalsScheduler(app: UnbootedWebApp): GoalsEngine {
                 // goal again resumes the held plan; it never delegates twice.
                 awaiting = chunk.reason;
                 break;
+              case "plan_busy":
+                // #890: another driver (a reconnect's recovery) holds this
+                // plan right now; it settles it. Not a failure.
+                awaiting = "the plan is being settled by another run";
+                break;
               case "step_completed":
                 summary = `${summary} · ${chunk.step.description}`;
                 break;
@@ -196,7 +206,7 @@ export function createWebGoalsScheduler(app: UnbootedWebApp): GoalsEngine {
         if (awaiting != null) {
           const reason = `awaiting result — ${awaiting}`;
           emitExecuted({ summary: reason.slice(0, 200) });
-          return { outcome: "error", error: reason };
+          return { outcome: "awaiting_result", reason };
         }
         if (failed) {
           const reason = failureReason ?? "plan failed";

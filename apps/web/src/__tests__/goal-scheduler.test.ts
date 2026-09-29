@@ -472,10 +472,73 @@ describe("#890: a goal whose last run left a paid outcome unknown", () => {
     });
     const engine = createWebGoalsScheduler(app as unknown as WebApp);
     engine.addGoal({ prompt: "hire", interval_ms: 0, mode: "once" });
-    const result = await engine.runNow(engine.getState().goals[0]!.goal_id);
-    expect(result.outcome).toBe("error");
-    if (result.outcome === "error") expect(result.error).toMatch(/^awaiting result — /);
+    const goalId = engine.getState().goals[0]!.goal_id;
+    const result = await engine.runNow(goalId);
+    // Held, never an error: the once goal stays active and carries no error.
+    expect(result.outcome).toBe("awaiting_result");
+    const goal = engine.getState().goals.find((g) => g.goal_id === goalId)!;
+    expect(goal.status).toBe("active");
+    expect(goal.last_error ?? null).toBeNull();
+    expect(engine.getState().runs.at(-1)?.status).toBe("awaiting_result");
     expect(emitted[0]?.error).toBeUndefined();
     expect(String(emitted[0]?.summary)).toMatch(/^awaiting result — /);
+  });
+
+  const owedAt = (recordedAt: number) => ({
+    workerMotebitId: "worker-a",
+    capability: "research",
+    taskId: "task-owed",
+    txHash: "tx",
+    paidMicro: 1000,
+    feeMicro: 50,
+    recordedAt,
+  });
+
+  function appOwing(owed: unknown[], turns: { n: number }) {
+    return makeApp({
+      getRuntime: () => ({
+        goals: { executed: () => Promise.resolve() },
+        signGoalArtifact: () => Promise.resolve(null),
+        outstandingPaidResults: () => owed,
+      }),
+      async *sendMessageStreaming() {
+        turns.n++;
+        yield { type: "text", text: "ran" };
+      },
+    });
+  }
+
+  function seedRuns(runs: GoalRunRecord[]): void {
+    globalThis.localStorage.setItem("motebit.goals_runs", JSON.stringify(runs));
+  }
+
+  it("PROBE: a fire that paid and died mid-run (its record still `running`) holds the goal", async () => {
+    const turns = { n: 0 };
+    const owed = [owedAt(1_500)];
+    const engine = createWebGoalsScheduler(appOwing(owed, turns) as unknown as WebApp);
+    engine.addGoal({ prompt: "buy", interval_ms: 3_600_000, mode: "recurring" });
+    const goalId = engine.getState().goals[0]!.goal_id;
+    // The tab closed mid-fire: no finish ever recorded — and it is the ONLY run.
+    seedRuns([
+      { run_id: "r1", goal_id: goalId, started_at: 1_000, finished_at: null, status: "running" },
+    ]);
+    // The next page load: a fresh engine over what storage holds.
+    const reloaded = createWebGoalsScheduler(appOwing(owed, turns) as unknown as WebApp);
+    expect((await reloaded.runNow(goalId)).outcome).toBe("skipped");
+    expect(turns.n).toBe(0);
+  });
+
+  it("an owed payment recorded after the last fire FINISHED (no later fire) does not hold it", async () => {
+    const turns = { n: 0 };
+    const owed = [owedAt(3_000)];
+    const engine = createWebGoalsScheduler(appOwing(owed, turns) as unknown as WebApp);
+    engine.addGoal({ prompt: "buy", interval_ms: 3_600_000, mode: "recurring" });
+    const goalId = engine.getState().goals[0]!.goal_id;
+    seedRuns([
+      { run_id: "r1", goal_id: goalId, started_at: 1_000, finished_at: 2_000, status: "fired" },
+    ]);
+    const reloaded = createWebGoalsScheduler(appOwing(owed, turns) as unknown as WebApp);
+    expect((await reloaded.runNow(goalId)).outcome).toBe("fired");
+    expect(turns.n).toBe(1);
   });
 });

@@ -438,7 +438,8 @@ describe("GoalScheduler.runNow", () => {
     const insert = invoke.mock.calls.find(
       ([cmd, a]) =>
         cmd === "db_execute" &&
-        String((a as { sql: string }).sql).includes("INSERT INTO goal_outcomes"),
+        String((a as { sql: string }).sql).includes("INTO goal_outcomes") &&
+        String((a as { sql: string }).sql).includes("'completed'"),
     );
     const params = (insert?.[1] as { params: unknown[] }).params;
     expect(String(params[4])).toMatch(/^Your wallet also sent another payment/); // summary
@@ -666,6 +667,46 @@ describe("#890: a goal whose last run left a paid outcome unknown", () => {
     paidMicro: 1000,
     feeMicro: 50,
     recordedAt,
+  });
+
+  it("PROBE: a run that paid and then died (no final outcome) holds the goal in the next process", async () => {
+    // A stateful goal_outcomes table shared by both "processes".
+    const rows = new Map<string, { ran_at: number; status: string }>();
+    const invoke = vi.fn(async (cmd: string, args?: Record<string, unknown>) => {
+      const { sql, params } = (args ?? {}) as { sql: string; params: unknown[] };
+      if (cmd === "db_query") {
+        if (sql.includes("FROM goals")) return [due];
+        if (sql.includes("FROM goal_outcomes")) {
+          return [...rows.values()].sort((a, b) => b.ran_at - a.ran_at);
+        }
+        return [];
+      }
+      if (cmd === "db_execute" && sql.includes("INTO goal_outcomes")) {
+        rows.set(String(params[0]), { ran_at: Number(params[3]), status: "row" });
+      }
+      return 1;
+    });
+    const owed: unknown[] = [];
+    let turns = 0;
+    const dying = makeRuntime({
+      outstandingPaidResults: () => owed,
+      // eslint-disable-next-line require-yield
+      sendMessageStreaming: vi.fn(async function* () {
+        turns++;
+        owed.push(owedEntry(Date.now())); // the hire paid…
+        await new Promise<void>(() => {}); // …and the process died
+      }),
+    });
+    const first = new GoalScheduler(makeDeps({ getRuntime: () => dying }));
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    void (first as any).goalTick(invoke);
+    await vi.waitFor(() => expect(turns).toBe(1));
+
+    const next = makeRuntime({ outstandingPaidResults: () => owed });
+    const second = new GoalScheduler(makeDeps({ getRuntime: () => next }));
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await (second as any).goalTick(invoke);
+    expect(next.sendMessageStreaming).not.toHaveBeenCalled();
   });
 
   it("is held while a payment made during that run is still owed its result", async () => {

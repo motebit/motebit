@@ -46,7 +46,7 @@ import type {
 } from "@motebit/sdk";
 import { PaidIntentLedger, InMemoryPaidIntentStore } from "@motebit/runtime";
 import type { MotebitRuntime, StreamChunk } from "@motebit/runtime";
-import { PlanEngine, DelegationUndeterminedError } from "@motebit/planner";
+import { PlanEngine, DelegationUndeterminedError, PlanDriverLocks } from "@motebit/planner";
 import type { StepDelegationAdapter } from "@motebit/planner";
 
 const MOTE = "mote-890";
@@ -404,6 +404,8 @@ async function runPlanCase(
         localCapabilities: [],
         enableReflection: false,
         maxPlanRetries: 0,
+        // Each boot is a process: its own in-process plan locks.
+        driverLocks: new PlanDriverLocks(),
       }),
       w.db.planStore,
     );

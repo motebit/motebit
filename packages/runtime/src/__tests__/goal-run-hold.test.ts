@@ -3,7 +3,12 @@
  * the four goal runners (CLI, desktop, mobile, web) share.
  */
 import { describe, it, expect } from "vitest";
-import { paidResultsOwedByRun, goalAwaitingResultMessage } from "../goal-run-hold.js";
+import {
+  paidResultsOwedByRun,
+  paidResultsOwedByRuns,
+  goalRunWindows,
+  goalAwaitingResultMessage,
+} from "../goal-run-hold.js";
 import type { UnretrievedPayment } from "../paid-intent-ledger.js";
 import { PlanExecutionVM } from "../commands/plans.js";
 import type { PlanChunk } from "@motebit/planner";
@@ -46,6 +51,35 @@ describe("paidResultsOwedByRun", () => {
     const line = goalAwaitingResultMessage([owed("t1", 1), owed("t2", 2)]);
     expect(line).toContain("task t1, +1");
     expect(line).toContain("/result");
+  });
+});
+
+describe("goalRunWindows + paidResultsOwedByRuns (#890 round 2)", () => {
+  it("an unfinished run's window ends where the next run started", () => {
+    const w = goalRunWindows([
+      { startedAt: 3_000, endedAt: null },
+      { startedAt: 1_000, endedAt: null },
+    ]);
+    expect(w).toEqual([
+      { startedAt: 1_000, endedAt: 3_000 },
+      { startedAt: 3_000, endedAt: null },
+    ]);
+  });
+
+  it("the wall clock bounds an unfinished run when it comes first", () => {
+    const w = goalRunWindows([{ startedAt: 1_000, endedAt: null }], { maxRunMs: 500 });
+    expect(w).toEqual([{ startedAt: 1_000, endedAt: 1_500 }]);
+  });
+
+  it("a run that never finished still owns the payment it made", () => {
+    const runs = goalRunWindows([
+      { startedAt: 100, endedAt: 200 },
+      { startedAt: 1_000, endedAt: null }, // paid, then died
+    ]);
+    expect(paidResultsOwedByRuns([owed("died", 1_200)], runs).map((e) => e.taskId)).toEqual([
+      "died",
+    ]);
+    expect(paidResultsOwedByRuns([owed("between", 500)], runs)).toEqual([]);
   });
 });
 

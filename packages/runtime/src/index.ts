@@ -376,6 +376,8 @@ export {
 // #890: a goal whose last run left a paid outcome unknown does not re-fire.
 export {
   paidResultsOwedByRun,
+  paidResultsOwedByRuns,
+  goalRunWindows,
   goalAwaitingResultMessage,
   type GoalRunWindow,
 } from "./goal-run-hold.js";

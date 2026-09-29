@@ -47,6 +47,7 @@ import { PlanEngine } from "../plan-engine.js";
 import type { PlanChunk, StepDelegationAdapter } from "../plan-engine.js";
 import { InMemoryPlanStore } from "../types.js";
 import { DelegationUndeterminedError } from "../delegation-adapter.js";
+import { PlanDriverLocks } from "../plan-lease.js";
 
 type FirstOutcome =
   | "success"
@@ -256,12 +257,18 @@ async function runCase(
 ): Promise<CaseResult> {
   const store = new InMemoryPlanStore();
   const relay = new FakeRelay(first, truth, resolveAt);
+  // Fires are an hour apart: a crashed process's persisted plan lease has
+  // long expired by the next one.
+  let clock = 0;
+  // Each engine is a process: its own in-process plan locks.
   const newEngine = (): PlanEngine =>
     new PlanEngine(store, {
       delegationAdapter: relay,
       localCapabilities: [],
       enableReflection: false,
       maxPlanRetries: 0,
+      driverLocks: new PlanDriverLocks(),
+      now: () => clock,
     });
   let engine = newEngine();
   const planIds: string[] = [];
@@ -272,6 +279,7 @@ async function runCase(
 
   for (let fire = 1; fire <= FIRES; fire++) {
     relay.fire = fire;
+    clock = fire * 3_600_000;
     // A restart before this fire: a fresh engine over the same durable store.
     if (fire > 1 && (restartMask & (1 << (fire - 2))) !== 0) engine = newEngine();
 

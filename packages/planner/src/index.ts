@@ -12,6 +12,7 @@ export {
   RelayDelegationAdapter,
   DelegationUndeterminedError,
   isDelegationUndetermined,
+  planStepIdempotencyKey,
 } from "./delegation-adapter.js";
 export type {
   RelayDelegationConfig,
@@ -26,4 +27,11 @@ export type {
   SovereignPaidLedger,
 } from "./sovereign-delegation-adapter.js";
 export { reflectOnPlan, parseReflectionResponse } from "./reflect.js";
+export {
+  PlanDriverLocks,
+  PROCESS_PLAN_LOCKS,
+  isPlanLeaseStore,
+  DEFAULT_PLAN_LEASE_TTL_MS,
+} from "./plan-lease.js";
+export type { PlanLeaseStore } from "./plan-lease.js";
 export type { ReflectionResult } from "./reflect.js";

@@ -8,7 +8,11 @@
  * failed agent excluded), as before.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { RelayDelegationAdapter, DelegationUndeterminedError } from "../delegation-adapter.js";
+import {
+  RelayDelegationAdapter,
+  DelegationUndeterminedError,
+  isDelegationUndetermined,
+} from "../delegation-adapter.js";
 import { DeviceCapability, StepStatus } from "@motebit/sdk";
 import type { ExecutionReceipt, MotebitId, DeviceId, PlanStep, PlanId } from "@motebit/sdk";
 
@@ -406,5 +410,56 @@ describe("RelayDelegationAdapter: an unconfirmed submission keeps its key", () =
     expect(persisted).toEqual(["task-1"]);
     push({ type: "task_result", task_id: "task-1", receipt: receipt("task-1") });
     await p;
+  });
+});
+
+describe("#890: the step's Idempotency-Key is derived, so two drivers admit one task", () => {
+  let relay: ReturnType<typeof fakeRelay>;
+  beforeEach(() => {
+    relay = fakeRelay();
+    vi.stubGlobal("fetch", relay.fetchMock);
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("two adapters (two drivers, even two processes) submitting the same step present one key", async () => {
+    const a = makeAdapter();
+    const b = makeAdapter();
+    const pa = a.adapter.delegateStep(step, TIMEOUT);
+    const pb = b.adapter.delegateStep(step, TIMEOUT);
+    await vi.waitFor(() => expect(relay.keys).toHaveLength(2));
+    expect(relay.keys[0]).toBe(relay.keys[1]);
+    expect(relay.keys[0]).toBe("plan-step:plan-1:step-1:0");
+    expect(relay.admittedCount()).toBe(1);
+    a.push({ type: "task_result", task_id: "task-1", receipt: receipt("task-1") });
+    b.push({ type: "task_result", task_id: "task-1", receipt: receipt("task-1") });
+    await Promise.all([pa, pb]);
+  });
+
+  it("a conclusive failure rotates to the next derived key (a new task is meant)", async () => {
+    const { adapter, push } = makeAdapter();
+    const p = adapter.delegateStep(step, TIMEOUT);
+    await vi.waitFor(() => expect(relay.keys).toHaveLength(1));
+    push({ type: "task_result", task_id: "task-1", receipt: receipt("task-1", "failed", "bad") });
+    await vi.waitFor(() => expect(relay.keys).toHaveLength(2));
+    expect(relay.keys[1]).toBe("plan-step:plan-1:step-1:1");
+    push({ type: "task_result", task_id: "task-2", receipt: receipt("task-2") });
+    await p;
+  });
+});
+
+describe("#890: isDelegationUndetermined walks the cause chain", () => {
+  it("finds the flag on a wrapped cause, not only on the top-level error", () => {
+    const wrapped = new Error("Plan step failed", {
+      cause: new Error("attempt", { cause: new DelegationUndeterminedError("remote work") }),
+    });
+    expect((wrapped as { undetermined?: boolean }).undetermined).toBeUndefined();
+    expect(isDelegationUndetermined(wrapped)).toBe(true);
+  });
+
+  it("a chain with no flag is not undetermined", () => {
+    expect(isDelegationUndetermined(new Error("a", { cause: new Error("b") }))).toBe(false);
+    expect(isDelegationUndetermined("not an error")).toBe(false);
   });
 });

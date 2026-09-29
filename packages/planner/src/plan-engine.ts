@@ -15,6 +15,12 @@ import { DelegationUndeterminedError, isDelegationUndetermined } from "./delegat
 import { decomposePlan } from "./decompose.js";
 import type { DecompositionContext } from "./decompose.js";
 import { reflectOnPlan } from "./reflect.js";
+import {
+  PROCESS_PLAN_LOCKS,
+  DEFAULT_PLAN_LEASE_TTL_MS,
+  isPlanLeaseStore,
+  type PlanDriverLocks,
+} from "./plan-lease.js";
 import type { ReflectionResult } from "./reflect.js";
 
 export type PlanChunk =
@@ -26,6 +32,12 @@ export type PlanChunk =
   | { type: "step_failed"; step: PlanStep; error: string }
   | { type: "plan_completed"; plan: Plan }
   | { type: "plan_failed"; plan: Plan; reason: string }
+  /**
+   * Another driver holds this plan's lease (#890): a scheduler's resume and
+   * a reconnect's recovery never drive one plan at once. Nothing was run or
+   * delegated; not a failure — try again later.
+   */
+  | { type: "plan_busy"; plan: Plan }
   /**
    * The plan stopped on a delegated step whose paid outcome is UNKNOWN
    * (#890): the relay never confirmed the submission, or an earlier run died
@@ -78,11 +90,79 @@ export interface PlanEngineConfig {
   delegationTimeoutMs?: number;
   collaborativeAdapter?: CollaborativeDelegationAdapter;
   localMotebitId?: string;
+  /** In-process plan locks (default: the process-wide set). Tests model a process with their own. */
+  driverLocks?: PlanDriverLocks;
+  /** Clock for the persisted plan lease (default `Date.now`). */
+  now?: () => number;
+  /** Persisted plan-lease lifetime, renewed each step (default 15 min). */
+  planLeaseTtlMs?: number;
 }
 
 export class PlanEngine {
   private _isExecuting = false;
   private _timeline: ExecutionTimelineEntry[] = [];
+  /** This engine's identity as a persisted-lease holder. */
+  private readonly _leaseHolder = crypto.randomUUID();
+  /** Plans this engine is driving right now. */
+  private readonly _driving = new Set<string>();
+
+  /**
+   * Take the one-driver lease for a plan (#890): the in-process lock, then
+   * the store's persisted lease when it has one. Returns the release, or
+   * null when another driver holds the plan.
+   */
+  private acquireDriver(planId: string): (() => void) | null {
+    const locks = this.config.driverLocks ?? PROCESS_PLAN_LOCKS;
+    if (!locks.tryAcquire(planId)) return null;
+    const store = this.store;
+    if (isPlanLeaseStore(store)) {
+      let taken = false;
+      try {
+        taken = store.acquirePlanLease(planId, this._leaseHolder, this.leaseNow(), this.leaseTtl());
+      } catch {
+        taken = false; // a lease that cannot be read is not ours
+      }
+      if (!taken) {
+        locks.release(planId);
+        return null;
+      }
+    }
+    this._driving.add(planId);
+    return () => {
+      this._driving.delete(planId);
+      if (isPlanLeaseStore(store)) {
+        try {
+          store.releasePlanLease(planId, this._leaseHolder);
+        } catch {
+          // expires on its own
+        }
+      }
+      locks.release(planId);
+    };
+  }
+
+  /** Renew the persisted lease before a step; false = lost it, stop driving. */
+  private renewDriver(planId: string): boolean {
+    if (!this._driving.has(planId)) return true; // a plan this call never leased (re-plan child)
+    const store = this.store;
+    if (!isPlanLeaseStore(store)) return true;
+    try {
+      return store.acquirePlanLease(planId, this._leaseHolder, this.leaseNow(), this.leaseTtl());
+    } catch {
+      return false;
+    }
+  }
+
+  private leaseNow(): number {
+    return (this.config.now ?? Date.now)();
+  }
+
+  private leaseTtl(): number {
+    return Math.max(
+      this.config.planLeaseTtlMs ?? DEFAULT_PLAN_LEASE_TTL_MS,
+      3 * (this.config.delegationTimeoutMs ?? 300_000),
+    );
+  }
 
   constructor(
     private store: PlanStoreAdapter,
@@ -203,9 +283,17 @@ export class PlanEngine {
       total_steps: steps.length,
     });
 
-    yield { type: "plan_created", plan, steps };
-
-    yield* this.runSteps(plan, steps, deps, ctx, 0, runId, reflectionConfig);
+    const release = this.acquireDriver(planId);
+    if (release == null) {
+      yield { type: "plan_busy", plan };
+      return;
+    }
+    try {
+      yield { type: "plan_created", plan, steps };
+      yield* this.runSteps(plan, steps, deps, ctx, 0, runId, reflectionConfig);
+    } finally {
+      release();
+    }
   }
 
   async *resumePlan(
@@ -221,6 +309,29 @@ export class PlanEngine {
       throw new Error(`Plan ${planId} is not active (status: ${plan.status})`);
     }
 
+    const release = this.acquireDriver(planId);
+    if (release == null) {
+      yield { type: "plan_busy", plan };
+      return;
+    }
+    try {
+      yield* this.resumeLeased(planId, deps, ctx, runId, reflectionConfig);
+    } finally {
+      release();
+    }
+  }
+
+  /** Resume a plan whose lease the caller already holds. */
+  private async *resumeLeased(
+    planId: string,
+    deps: SensitivityCleared<MotebitLoopDependencies>,
+    ctx?: DecompositionContext,
+    runId?: string,
+    reflectionConfig?: ResolvedTaskConfig,
+  ): AsyncGenerator<PlanChunk> {
+    // Re-read under the lease: another driver may have moved it on.
+    const plan = this.store.getPlan(planId);
+    if (!plan || plan.status !== PlanStatus.Active) return;
     const steps = this.store.getStepsForPlan(planId);
     yield* this.runSteps(plan, steps, deps, ctx, 0, runId, reflectionConfig);
   }
@@ -245,7 +356,15 @@ export class PlanEngine {
 
     try {
       for (let i = plan.current_step_index; i < steps.length; i++) {
-        const step = steps[i]!;
+        // Re-read the step: `steps` is a snapshot taken before the lease.
+        const step = this.store.getStep(steps[i]!.step_id) ?? steps[i]!;
+
+        // Keep the one-driver lease alive; a lease lost to another driver
+        // (it expired under us) means stop — never drive alongside it.
+        if (!this.renewDriver(plan.plan_id)) {
+          yield { type: "plan_busy", plan: this.store.getPlan(plan.plan_id) ?? plan };
+          return;
+        }
 
         // Skip already completed/skipped steps (for resume)
         if (step.status === StepStatus.Completed || step.status === StepStatus.Skipped) {
@@ -589,7 +708,18 @@ export class PlanEngine {
 
                 const newSteps = this.store.getStepsForPlan(newPlan.plan_id);
                 yield { type: "plan_created", plan: newPlan, steps: newSteps };
-                yield* this.runSteps(newPlan, newSteps, deps, ctx, planRetryCount + 1, runId);
+                // The replacement plan is driven under its own lease too, so a
+                // reconnect's recovery cannot drive it alongside us (#890).
+                const releaseChild = this.acquireDriver(newPlan.plan_id);
+                if (releaseChild == null) {
+                  yield { type: "plan_busy", plan: newPlan };
+                  return;
+                }
+                try {
+                  yield* this.runSteps(newPlan, newSteps, deps, ctx, planRetryCount + 1, runId);
+                } finally {
+                  releaseChild();
+                }
                 return;
               } catch {
                 // Re-planning itself failed — fall through to plan_failed
@@ -914,6 +1044,31 @@ export class PlanEngine {
     const activePlans = this.store.listActivePlans(motebitId);
 
     for (const plan of activePlans) {
+      // One driver per plan (#890): a plan a scheduler is resuming right now
+      // is that driver's to settle.
+      const release = this.acquireDriver(plan.plan_id);
+      if (release == null) {
+        yield { type: "plan_busy", plan };
+        continue;
+      }
+      try {
+        yield* this.recoverLeasedPlan(plan, deps);
+      } finally {
+        release();
+      }
+    }
+  }
+
+  private async *recoverLeasedPlan(
+    leasedPlan: Plan,
+    deps: SensitivityCleared<MotebitLoopDependencies>,
+  ): AsyncGenerator<PlanChunk> {
+    const adapter = this.config.delegationAdapter;
+    if (!adapter?.pollTaskResult) return;
+    {
+      // Re-read under the lease.
+      const plan = this.store.getPlan(leasedPlan.plan_id);
+      if (plan == null || plan.status !== PlanStatus.Active) return;
       const steps = this.store.getStepsForPlan(plan.plan_id);
       let recoveredAny = false;
 
@@ -971,7 +1126,7 @@ export class PlanEngine {
           };
         } else if (!hasRunning) {
           // No more running steps — resume plan execution for remaining pending steps
-          yield* this.resumePlan(plan.plan_id, deps);
+          yield* this.resumeLeased(plan.plan_id, deps);
         }
       }
     }

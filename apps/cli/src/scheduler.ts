@@ -2,7 +2,8 @@ import { createHash } from "node:crypto";
 import type { MotebitRuntime, StreamChunk } from "@motebit/runtime";
 import {
   paymentNoticeCopy,
-  paidResultsOwedByRun,
+  paidResultsOwedByRuns,
+  goalRunWindows,
   goalAwaitingResultMessage,
 } from "@motebit/runtime";
 import type {
@@ -1024,13 +1025,20 @@ export class GoalScheduler {
   private paidResultsOwed(goalId: string): string | null {
     const read = (this.runtime as Partial<MotebitRuntime>).outstandingPaidResults;
     if (typeof read !== "function") return null;
-    const last = this.runStore.listForGoal(goalId, 1)[0];
-    if (last == null) return null;
+    // Every recent run, finished or not: the ledger row is written before
+    // the first model call, so a run that paid and then died is here too.
+    const runs = this.runStore.listForGoal(goalId, 20);
+    if (runs.length === 0) return null;
     try {
-      const owed = paidResultsOwedByRun(read.call(this.runtime), {
-        startedAt: last.started_at,
-        endedAt: last.status === "running" ? null : last.updated_at,
-      });
+      const owed = paidResultsOwedByRuns(
+        read.call(this.runtime),
+        goalRunWindows(
+          runs.map((r) => ({
+            startedAt: r.started_at,
+            endedAt: r.status === "running" ? null : r.updated_at,
+          })),
+        ),
+      );
       return owed.length > 0 ? goalAwaitingResultMessage(owed) : null;
     } catch (err: unknown) {
       return `the paid-intent ledger could not be read (${err instanceof Error ? err.message : String(err)}) — held until it can`;
@@ -1388,6 +1396,16 @@ export class GoalScheduler {
         case "plan_failed":
           errorLine(`[plan] failed: ${chunk.reason}`);
           break;
+
+        case "plan_busy":
+          // Another driver holds this plan right now (#890) — it settles it.
+          return {
+            suspended: false,
+            toolCallsMade,
+            memoriesFormed,
+            responseText,
+            undetermined: { reason: "the plan is being settled by another run" },
+          };
 
         case "plan_undetermined":
           warnLine(`[plan] awaiting result: ${chunk.reason}`);

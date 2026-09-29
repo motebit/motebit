@@ -164,7 +164,7 @@ describe("MobileGoalScheduler.goalTick (via start)", () => {
     await vi.advanceTimersByTimeAsync(6000);
     sched.stop();
     await vi.runAllTimersAsync().catch(() => {});
-    const row = deps._goalStore.outcomes[0] as { summary: string; response_full?: string };
+    const row = deps._goalStore.outcomes.at(-1) as { summary: string; response_full?: string };
     expect(row.summary).toMatch(/^Your wallet also sent another payment/);
     // The signed artifact is the model's text alone.
     expect(row.response_full ?? "").not.toMatch(/wallet also sent/);
@@ -396,7 +396,7 @@ describe("MobileGoalScheduler budget envelope", () => {
     expect(deps._goalStore.insertOutcome).toHaveBeenCalled();
     expect(deps._goalStore.setStatus).toHaveBeenCalledWith("g-cross", "budget_exhausted");
     // Outcome row carries the per-fire token count from the runtime result chunk
-    const inserted = deps._goalStore.outcomes[0] as { tokens_used: number | null };
+    const inserted = deps._goalStore.outcomes.at(-1) as { tokens_used: number | null };
     expect(inserted.tokens_used).toBe(700);
   });
 });
@@ -465,7 +465,7 @@ describe("MobileGoalScheduler signed artifact manifest", () => {
     await vi.advanceTimersByTimeAsync(6000);
     sched.stop();
     await vi.runAllTimersAsync().catch(() => {});
-    const inserted = deps._goalStore.outcomes[0] as { signed_manifest: string | null };
+    const inserted = deps._goalStore.outcomes.at(-1) as { signed_manifest: string | null };
     expect(inserted.signed_manifest).toBe(JSON.stringify(manifest));
   });
 
@@ -487,7 +487,7 @@ describe("MobileGoalScheduler signed artifact manifest", () => {
     await vi.advanceTimersByTimeAsync(6000);
     sched.stop();
     await vi.runAllTimersAsync().catch(() => {});
-    const inserted = deps._goalStore.outcomes[0] as { signed_manifest: string | null };
+    const inserted = deps._goalStore.outcomes.at(-1) as { signed_manifest: string | null };
     expect(inserted.signed_manifest).toBeNull();
   });
 });
@@ -495,7 +495,9 @@ describe("MobileGoalScheduler signed artifact manifest", () => {
 describe("MobileGoalScheduler finishGoalFailure error swallowing", () => {
   it("swallows insertOutcome + incrementFailures throws (non-fatal) and still fires completion event", async () => {
     const deps = makeDeps();
-    deps._goalStore.insertOutcome = vi.fn(() => {
+    // The run's start row lands (#890); the outcome writes after it fail.
+    deps._goalStore.insertOutcome = vi.fn((o: unknown) => {
+      if ((o as { status: string }).status === "running") return 0;
       throw new Error("db locked");
     });
     deps._goalStore.incrementFailures = vi.fn(() => {
@@ -526,6 +528,27 @@ describe("MobileGoalScheduler finishGoalFailure error swallowing", () => {
     expect(completeEvents.length).toBe(1);
     expect(completeEvents[0]?.status).toBe("failed");
   });
+
+  it("#890: a run whose start cannot be recorded does not start (fail-closed)", async () => {
+    const deps = makeDeps();
+    deps._goalStore.insertOutcome = vi.fn(() => {
+      throw new Error("db locked");
+    });
+    deps._goalStore.setActive([
+      {
+        goal_id: "g-nostart",
+        prompt: "x",
+        mode: "recurring",
+        interval_ms: 1000,
+        last_run_at: null,
+      },
+    ]);
+    const sched = new MobileGoalScheduler(deps);
+    sched.start();
+    await vi.advanceTimersByTimeAsync(6000);
+    sched.stop();
+    expect(deps._runtime.sendMessageStreaming).not.toHaveBeenCalled();
+  });
 });
 
 describe("#890: a goal whose last run left a paid outcome unknown", () => {
@@ -536,6 +559,51 @@ describe("#890: a goal whose last run left a paid outcome unknown", () => {
     interval_ms: 1000,
     last_run_at: null,
   };
+
+  it("PROBE: the goal's FIRST run paid and then died — the next process holds the goal", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const deps = makeDeps();
+    // A stateful outcome table: insert-or-replace by id, newest first.
+    const rows = new Map<string, { outcome_id: string; ran_at: number; status: string }>();
+    deps._goalStore.insertOutcome = vi.fn((o: unknown) => {
+      const r = o as { outcome_id: string; ran_at: number; status: string };
+      rows.set(r.outcome_id, r);
+      return rows.size;
+    });
+    deps._goalStore.getRecentOutcomes = vi.fn((_id: string, limit: number) =>
+      [...rows.values()].sort((a, b) => b.ran_at - a.ran_at).slice(0, limit),
+    );
+    deps._goalStore.setActive([goal]);
+    const owed: unknown[] = [];
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (deps._runtime as any).outstandingPaidResults = () => owed;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (deps._runtime as any).sendMessageStreaming = vi.fn(async function* () {
+      owed.push({
+        workerMotebitId: "worker-a",
+        capability: "research",
+        taskId: "task-owed",
+        txHash: "tx",
+        paidMicro: 1000,
+        feeMicro: 50,
+        recordedAt: Date.now(),
+      });
+      await new Promise<void>(() => {}); // the process dies mid-run
+      yield { type: "text", text: "never" };
+    });
+    const dying = new MobileGoalScheduler(deps);
+    dying.start();
+    await vi.advanceTimersByTimeAsync(6000);
+    dying.stop();
+    expect(deps._runtime.sendMessageStreaming).toHaveBeenCalledTimes(1);
+
+    // The next process: same storage, a fresh scheduler.
+    const next = new MobileGoalScheduler(deps);
+    next.start();
+    await vi.advanceTimersByTimeAsync(6000);
+    next.stop();
+    expect(deps._runtime.sendMessageStreaming).toHaveBeenCalledTimes(1);
+  });
 
   async function tick(sched: MobileGoalScheduler): Promise<void> {
     sched.start();
@@ -595,7 +663,7 @@ describe("#890: a goal whose last run left a paid outcome unknown", () => {
 
     expect(deps._goalStore.incrementFailures).not.toHaveBeenCalled();
     expect(deps._goalStore.resetFailures).not.toHaveBeenCalled();
-    expect((deps._goalStore.outcomes[0] as { status: string }).status).toBe("partial");
+    expect((deps._goalStore.outcomes.at(-1) as { status: string }).status).toBe("partial");
     expect(events[0]?.status).toBe("awaiting_result");
   });
 });

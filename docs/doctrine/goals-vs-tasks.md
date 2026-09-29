@@ -50,6 +50,8 @@ A goal run can end without the motebit knowing how the work it paid for ended: t
 - The plan engine holds the step (`plan_undetermined`): the step stays `running` with its task handle and the plan stays `active`. Resuming the plan settles the step from the relay's signed receipt, or holds it again. It is never delegated twice, and `createPlan` refuses a new plan for the goal while it holds.
 - A payment the paid-intent ledger still owes, recorded during the goal's last run, holds the goal until `/result` retrieves or dismisses it (`paidResultsOwedByRun` in `@motebit/runtime`).
 - Every goal runner (CLI, desktop, mobile, web) records the run as awaiting its result (`partial`), never counts it toward auto-pause, and never re-plans past it. Nothing is resolved by a timeout.
+- Every run records its start durably before it can pay, so a run that pays and then dies still owns the window the hold attributes to.
+- One driver per plan: a scheduler's resume and a reconnect's recovery never drive the same plan at once (in-process lock, plus a persisted lease where the plan store has one; the second driver gets `plan_busy`). A step's Idempotency-Key is derived from `(plan_id, step_id, attempt)`, so even overlapping drivers admit one task.
 
 ## Cross-references
 

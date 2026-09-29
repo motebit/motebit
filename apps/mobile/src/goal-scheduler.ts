@@ -33,7 +33,8 @@
 import type { MotebitRuntime, StreamChunk } from "@motebit/runtime";
 import {
   paymentNoticeCopy,
-  paidResultsOwedByRun,
+  paidResultsOwedByRuns,
+  goalRunWindows,
   goalAwaitingResultMessage,
 } from "@motebit/runtime";
 import type { PlanChunk, PlanEngine } from "@motebit/planner";
@@ -92,7 +93,22 @@ export class MobileGoalScheduler {
     planId?: string;
   } | null = null;
 
+  /**
+   * The run in flight: its outcome id and start (#890). The start row is
+   * written before anything can be paid; the final outcome replaces it, so a
+   * run that pays and dies still owns a window the paid-intent hold sees.
+   * Kept across an approval pause — the resume finishes the same run.
+   */
+  private _run: { id: string; startedAt: number } | null = null;
+
   constructor(private deps: GoalSchedulerDeps) {}
+
+  /** The current run's outcome row identity; a fresh one when none is open. */
+  private takeRun(now: number): { id: string; startedAt: number } {
+    const run = this._run ?? { id: crypto.randomUUID(), startedAt: now };
+    this._run = null;
+    return run;
+  }
 
   getGoalStore(): ExpoGoalStore | null {
     return this.deps.getStorage()?.goalStore ?? null;
@@ -282,12 +298,39 @@ export class MobileGoalScheduler {
         // retrieved or dismissed (`/result`).
         if (this.paidResultsOwed(goal.goal_id, runtime)) continue;
 
+        // The run's start, durably, before it can pay (#890). No start
+        // record, no run — failing closed costs one tick.
+        const runId = crypto.randomUUID();
+        try {
+          goalStore.insertOutcome({
+            outcome_id: runId,
+            goal_id: goal.goal_id,
+            motebit_id: this.deps.getMotebitId(),
+            ran_at: now,
+            status: "running",
+            summary: null,
+            tool_calls_made: 0,
+            memories_formed: 0,
+            error_message: null,
+            tokens_used: null,
+            response_full: null,
+            signed_manifest: null,
+          });
+        } catch {
+          continue;
+        }
+        this._run = { id: runId, startedAt: now };
+
         this._goalExecuting = true;
         this._currentGoalId = goal.goal_id;
         this._goalStatusCallback?.(true);
 
         try {
-          const outcomes = goalStore.getRecentOutcomes(goal.goal_id, 3);
+          // Past runs only — this run's own start row is not history.
+          const outcomes = goalStore
+            .getRecentOutcomes(goal.goal_id, 4)
+            .filter((o) => o.status !== "running" && o.outcome_id !== runId)
+            .slice(0, 3);
           const loopDeps = runtime.getLoopDeps();
           const planEngine = this.deps.getPlanEngine();
 
@@ -440,6 +483,11 @@ export class MobileGoalScheduler {
         case "plan_undetermined":
           // Not a failure (#890) — the catch records it as awaiting its result.
           throw Object.assign(new Error(chunk.reason), { undetermined: true });
+        case "plan_busy":
+          // Another driver holds the plan right now (#890) — not a failure.
+          throw Object.assign(new Error("the plan is being settled by another run"), {
+            undetermined: true,
+          });
       }
     }
 
@@ -554,7 +602,8 @@ export class MobileGoalScheduler {
     // (null on every degradation path) means the card's
     // receipt-summary row simply omits the "signed" indicator when
     // signing isn't possible; no placeholder signatures.
-    const outcomeId = crypto.randomUUID();
+    const run = this.takeRun(now);
+    const outcomeId = run.id;
     const signedManifestJson =
       responseFull != null
         ? await this.signArtifactManifestJson(responseFull, goal.goal_id, outcomeId)
@@ -564,7 +613,7 @@ export class MobileGoalScheduler {
       outcome_id: outcomeId,
       goal_id: goal.goal_id,
       motebit_id: motebitId,
-      ran_at: now,
+      ran_at: run.startedAt,
       status: "completed",
       summary,
       tool_calls_made: 0,
@@ -614,12 +663,15 @@ export class MobileGoalScheduler {
   private paidResultsOwed(goalId: string, runtime: MotebitRuntime): boolean {
     const goalStore = this.deps.getStorage()?.goalStore;
     try {
-      const last = goalStore?.getRecentOutcomes(goalId, 1)[0];
-      if (last == null) return false;
-      const owed = paidResultsOwedByRun(runtime.outstandingPaidResults(), {
-        startedAt: last.ran_at,
-        endedAt: null,
-      });
+      // Every recent run, finished or not — each wrote its start row
+      // before it could pay. Mobile runs carry no wall clock, so a run's
+      // window ends where the goal's next run began; the latest stays open.
+      const runs = goalStore?.getRecentOutcomes(goalId, 20) ?? [];
+      if (runs.length === 0) return false;
+      const owed = paidResultsOwedByRuns(
+        runtime.outstandingPaidResults(),
+        goalRunWindows(runs.map((r) => ({ startedAt: r.ran_at, endedAt: null }))),
+      );
       if (owed.length === 0) return false;
       const line = goalAwaitingResultMessage(owed);
       if (this._heldLogged !== `${goalId}:${line}`) {
@@ -649,12 +701,13 @@ export class MobileGoalScheduler {
     const goalStore = this.deps.getStorage()?.goalStore;
     if (!goalStore) return;
     const note = `awaiting result — ${reason}`;
+    const run = this.takeRun(now);
     try {
       goalStore.insertOutcome({
-        outcome_id: crypto.randomUUID(),
+        outcome_id: run.id,
         goal_id: goal.goal_id,
         motebit_id: this.deps.getMotebitId(),
-        ran_at: now,
+        ran_at: run.startedAt,
         status: "partial",
         summary: note.slice(0, 500),
         tool_calls_made: 0,
@@ -685,13 +738,14 @@ export class MobileGoalScheduler {
     const goalStore = this.deps.getStorage()?.goalStore;
     if (!goalStore) return;
     const motebitId = this.deps.getMotebitId();
+    const run = this.takeRun(now);
 
     try {
       goalStore.insertOutcome({
-        outcome_id: crypto.randomUUID(),
+        outcome_id: run.id,
         goal_id: goal.goal_id,
         motebit_id: motebitId,
-        ran_at: now,
+        ran_at: run.startedAt,
         status: "failed",
         summary: null,
         tool_calls_made: 0,

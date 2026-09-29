@@ -49,6 +49,42 @@ export function paidResultsOwedByRun(
   );
 }
 
+/**
+ * The goal's runs as attribution windows, INCLUDING runs that never
+ * finished (#890 round 2): a run that paid and then died has no end
+ * record, and attributing only to finished runs let exactly that run's
+ * payment slip past the hold. Each run must have been recorded durably
+ * when it STARTED — before anything could be paid.
+ *
+ * An unfinished run's window ends where the next run of the goal started
+ * (its process was gone by then), else after `maxRunMs` when the surface
+ * bounds a run's wall clock, else stays open.
+ */
+export function goalRunWindows(
+  runs: ReadonlyArray<{ startedAt: number; endedAt: number | null }>,
+  opts: { maxRunMs?: number } = {},
+): GoalRunWindow[] {
+  const sorted = [...runs].sort((a, b) => a.startedAt - b.startedAt);
+  return sorted.map((r, i) => {
+    if (r.endedAt != null) return { startedAt: r.startedAt, endedAt: r.endedAt };
+    const next = sorted[i + 1]?.startedAt;
+    const bound = opts.maxRunMs != null ? r.startedAt + opts.maxRunMs : undefined;
+    const ends = [next, bound].filter((x): x is number => x != null);
+    return { startedAt: r.startedAt, endedAt: ends.length > 0 ? Math.min(...ends) : null };
+  });
+}
+
+/**
+ * The owed payments recorded during ANY of these runs (see
+ * `goalRunWindows`). Non-empty ⇒ the goal is held.
+ */
+export function paidResultsOwedByRuns(
+  outstanding: readonly UnretrievedPayment[],
+  runs: readonly GoalRunWindow[],
+): UnretrievedPayment[] {
+  return outstanding.filter((e) => runs.some((w) => paidResultsOwedByRun([e], w).length > 0));
+}
+
 /** The owner-facing line for a goal held on an unknown paid outcome. */
 export function goalAwaitingResultMessage(owed: readonly UnretrievedPayment[]): string {
   const first = owed[0];

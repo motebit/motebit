@@ -51,7 +51,8 @@
 import type { MotebitRuntime, StreamChunk } from "@motebit/runtime";
 import {
   paymentNoticeCopy,
-  paidResultsOwedByRun,
+  paidResultsOwedByRuns,
+  goalRunWindows,
   goalAwaitingResultMessage,
 } from "@motebit/runtime";
 import { PlanStatus } from "@motebit/sdk";
@@ -401,7 +402,7 @@ export class GoalScheduler {
       );
 
       await invoke<number>("db_execute", {
-        sql: `INSERT INTO goal_outcomes (outcome_id, goal_id, motebit_id, ran_at, status, summary, tool_calls_made, memories_formed, error_message, response_full, signed_manifest)
+        sql: `INSERT OR REPLACE INTO goal_outcomes (outcome_id, goal_id, motebit_id, ran_at, status, summary, tool_calls_made, memories_formed, error_message, response_full, signed_manifest)
               VALUES (?, ?, ?, ?, 'completed', ?, ?, 0, NULL, ?, ?)`,
         params: [
           outcomeId,
@@ -504,10 +505,12 @@ export class GoalScheduler {
   }
 
   /**
-   * True when a payment made during this goal's last run is still owed its
-   * result (#890). The run window is the last outcome's `ran_at` (the run's
-   * start) plus the run's wall-clock limit: every run ends by then. A
-   * ledger or database that cannot answer holds — an unknown answer is not
+   * True when a payment made during any of this goal's recent runs is still
+   * owed its result (#890). Every run leaves a `running` outcome row BEFORE
+   * it starts (`executeGoalOnce`), so a run that paid and then died is
+   * counted too. A run's window is its `ran_at` (start) to the next run's
+   * start, bounded by the wall-clock limit — no run outlasts it. A ledger
+   * or database that cannot answer holds: an unknown answer is not
    * "nothing owed".
    */
   private async paidResultsOwed(
@@ -517,15 +520,17 @@ export class GoalScheduler {
   ): Promise<boolean> {
     try {
       const rows = await invoke<Array<{ ran_at: number }>>("db_query", {
-        sql: "SELECT ran_at FROM goal_outcomes WHERE goal_id = ? ORDER BY ran_at DESC LIMIT 1",
+        sql: "SELECT ran_at FROM goal_outcomes WHERE goal_id = ? ORDER BY ran_at DESC LIMIT 20",
         params: [goalId],
       });
-      const last = rows[0];
-      if (last == null) return false;
-      const owed = paidResultsOwedByRun(runtime.outstandingPaidResults(), {
-        startedAt: last.ran_at,
-        endedAt: last.ran_at + GOAL_WALL_CLOCK_MS,
-      });
+      if (rows.length === 0) return false;
+      const owed = paidResultsOwedByRuns(
+        runtime.outstandingPaidResults(),
+        goalRunWindows(
+          rows.map((r) => ({ startedAt: r.ran_at, endedAt: null })),
+          { maxRunMs: GOAL_WALL_CLOCK_MS },
+        ),
+      );
       if (owed.length === 0) return false;
       const line = goalAwaitingResultMessage(owed);
       if (this._heldLogged !== `${goalId}:${line}`) {
@@ -640,9 +645,26 @@ export class GoalScheduler {
 
     const runId = crypto.randomUUID();
 
+    // The run's start, recorded durably BEFORE anything can be paid (#890):
+    // a run that pays and then dies still owns a window the paid-intent
+    // hold can attribute to. The final outcome replaces this row. No start
+    // record, no run — failing closed costs one tick.
+    try {
+      await invoke<number>("db_execute", {
+        sql: `INSERT OR REPLACE INTO goal_outcomes (outcome_id, goal_id, motebit_id, ran_at, status, summary, tool_calls_made, memories_formed, error_message)
+              VALUES (?, ?, ?, ?, 'running', NULL, 0, 0, NULL)`,
+        params: [runId, goal.goal_id, motebitId, now],
+      });
+    } catch {
+      this._goalExecuting = false;
+      this._currentGoalId = null;
+      this._goalStatusCallback?.(false);
+      return false;
+    }
+
     try {
       const outcomes = await invoke<OutcomeRow[]>("db_query", {
-        sql: "SELECT ran_at, status, summary, error_message FROM goal_outcomes WHERE goal_id = ? ORDER BY ran_at DESC LIMIT 3",
+        sql: "SELECT ran_at, status, summary, error_message FROM goal_outcomes WHERE goal_id = ? AND status != 'running' ORDER BY ran_at DESC LIMIT 3",
         params: [goal.goal_id],
       });
 
@@ -691,7 +713,7 @@ export class GoalScheduler {
       );
 
       await invoke<number>("db_execute", {
-        sql: `INSERT INTO goal_outcomes (outcome_id, goal_id, motebit_id, ran_at, status, summary, tool_calls_made, memories_formed, error_message, tokens_used, response_full, signed_manifest)
+        sql: `INSERT OR REPLACE INTO goal_outcomes (outcome_id, goal_id, motebit_id, ran_at, status, summary, tool_calls_made, memories_formed, error_message, tokens_used, response_full, signed_manifest)
               VALUES (?, ?, ?, ?, 'completed', ?, ?, 0, NULL, ?, ?, ?)`,
         params: [
           runId,
@@ -740,7 +762,7 @@ export class GoalScheduler {
       if (isDelegationUndetermined(err)) {
         const note = `awaiting result — ${msg}`;
         await invoke<number>("db_execute", {
-          sql: `INSERT INTO goal_outcomes (outcome_id, goal_id, motebit_id, ran_at, status, summary, tool_calls_made, memories_formed, error_message)
+          sql: `INSERT OR REPLACE INTO goal_outcomes (outcome_id, goal_id, motebit_id, ran_at, status, summary, tool_calls_made, memories_formed, error_message)
                 VALUES (?, ?, ?, ?, 'partial', ?, 0, 0, NULL)`,
           params: [runId, goal.goal_id, motebitId, now, note.slice(0, 500)],
         }).catch(() => {});
@@ -759,7 +781,7 @@ export class GoalScheduler {
       }
 
       await invoke<number>("db_execute", {
-        sql: `INSERT INTO goal_outcomes (outcome_id, goal_id, motebit_id, ran_at, status, summary, tool_calls_made, memories_formed, error_message)
+        sql: `INSERT OR REPLACE INTO goal_outcomes (outcome_id, goal_id, motebit_id, ran_at, status, summary, tool_calls_made, memories_formed, error_message)
               VALUES (?, ?, ?, ?, 'failed', NULL, 0, 0, ?)`,
         params: [runId, goal.goal_id, motebitId, now, msg],
       }).catch(() => {});
@@ -1137,6 +1159,12 @@ export class GoalScheduler {
           // Not a failure (#890) — `executeGoalOnce` records it as awaiting
           // its result and never counts it toward auto-pause.
           throw Object.assign(new Error(chunk.reason), { undetermined: true });
+
+        case "plan_busy":
+          // Another driver holds the plan right now (#890) — not a failure.
+          throw Object.assign(new Error("the plan is being settled by another run"), {
+            undetermined: true,
+          });
       }
     }
 

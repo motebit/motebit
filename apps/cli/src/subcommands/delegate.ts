@@ -20,6 +20,7 @@ import type { TokenAudience } from "@motebit/sdk";
 import type { MotebitRuntime as MotebitRuntimeInstance } from "@motebit/runtime";
 import type { PlanStep, DelegatedStepResult, ExecutionReceipt } from "@motebit/sdk";
 import type { StepDelegationAdapter } from "@motebit/planner";
+import { planStepIdempotencyKey } from "@motebit/planner";
 import type { CliConfig } from "../args.js";
 import { loadFullConfig } from "../config.js";
 import { getDbPath } from "../runtime-factory.js";
@@ -238,6 +239,10 @@ async function handleDelegatePlan(
         // same goal again resumes this plan; it never delegates it twice.
         case "plan_undetermined":
           console.error(`\nAwaiting result: ${chunk.reason}`);
+          break;
+
+        case "plan_busy":
+          console.error("\nThis plan is being run elsewhere right now — try again shortly.");
           break;
       }
     }
@@ -785,7 +790,9 @@ export function createHttpPollingDelegationAdapter(
     ): Promise<DelegatedStepResult> {
       const excludeAgents: string[] = [];
       let lastError: StepAttemptError | undefined;
-      let idempotencyKey = crypto.randomUUID();
+      // Derived from the step, never random (#890) — see planStepIdempotencyKey.
+      let rotation = 0;
+      let idempotencyKey = planStepIdempotencyKey(step, rotation);
       let attempts = 0;
 
       for (let attempt = 0; attempt <= maxRetries; attempt++) {
@@ -815,7 +822,10 @@ export function createHttpPollingDelegationAdapter(
             break;
           }
           // Only a delivery-uncertain retry keeps the key; anything else is a new task.
-          if (lastError.deliveryUncertain !== true) idempotencyKey = crypto.randomUUID();
+          if (lastError.deliveryUncertain !== true) {
+            rotation++;
+            idempotencyKey = planStepIdempotencyKey(step, rotation);
+          }
           if (attempt < maxRetries) opts.onRetry?.(step, attempt + 2, maxRetries + 1);
         }
       }
