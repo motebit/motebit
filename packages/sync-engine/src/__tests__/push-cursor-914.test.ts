@@ -324,9 +324,12 @@ describe("#914 WebSocketEventStoreAdapter — an append resolves on the relay's 
     vi.useRealTimers();
   });
 
+  // A stream of its own per test: what a link teaches is kept per stream for
+  // the life of the process (#914 rounds 6–7), and fake clocks restart.
+  let stream = 0;
   function adapter(): WebSocketEventStoreAdapter {
     const a = new WebSocketEventStoreAdapter({
-      url: "ws://r/ws/sync/m",
+      url: `ws://r/ws/sync/m${++stream}`,
       motebitId: MID,
       pushAckTimeoutMs: 1_000,
       reconnectBaseMs: 10,

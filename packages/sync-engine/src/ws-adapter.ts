@@ -142,6 +142,15 @@ interface FrameState {
   echoes: boolean;
   /** Recent acks: frame size and send→ack time (#914 round 7). */
   samples: LinkSample[];
+  /**
+   * Push frames still on the wire on RETIRED sockets of this stream: they
+   * drain beside the current socket's frames over the same uplink.
+   */
+  draining: Set<InFlightFrame>;
+  /** When any frame of this stream was last answered. */
+  lastAnswerAt: number;
+  /** Adapters waiting for a place in the stream's window (see `flushPush`). */
+  waiting: Set<() => void>;
 }
 
 /**
@@ -321,6 +330,9 @@ export class WebSocketEventStoreAdapter implements EventStoreAdapter {
         fullAtCeiling: 0,
         echoes: false,
         samples: [],
+        draining: new Set(),
+        lastAnswerAt: 0,
+        waiting: new Set(),
       };
       sharedFrameStates.set(this.pushBudgetKey, st);
     }
@@ -556,6 +568,7 @@ export class WebSocketEventStoreAdapter implements EventStoreAdapter {
   }
 
   disconnect(): void {
+    this.frame.waiting.delete(this.wakeFlush);
     this.generation++;
     if (this.authTimer) {
       clearTimeout(this.authTimer);
@@ -577,6 +590,7 @@ export class WebSocketEventStoreAdapter implements EventStoreAdapter {
         // socket drains — it closes when its last frame is answered, when it
         // closes itself, or when it is dead (#914 round 7). A frame never
         // loses its answer to a token refresh.
+        for (const f of this.inFlight) if (f.socket === socket) this.frame.draining.add(f);
         socket.onclose = () => {
           this.failFramesOn(
             socket,
@@ -854,8 +868,15 @@ export class WebSocketEventStoreAdapter implements EventStoreAdapter {
     const socket = this.ws;
     if (!this.connected || !socket || socket.readyState !== 1 /* WebSocket.OPEN */) return;
     if (this.lingerIdle || this.lingerCap) return; // the batch is still arriving
+    // The window is the STREAM's: frames still draining on a retired socket
+    // share the uplink with this one's, so they count against it too.
     const window = this.frame.echoes ? PUSH_FRAME_WINDOW : 1;
-    while (this.outbox.length > 0 && this.inFlight.length < window) {
+    const draining = this.frame.draining.size;
+    if (this.outbox.length > 0 && this.inFlight.length + draining >= window) {
+      this.frame.waiting.add(this.wakeFlush);
+      return;
+    }
+    while (this.outbox.length > 0 && this.inFlight.length + draining < window) {
       // Pace: never more than PUSH_FRAMES_PER_WINDOW push frames per window,
       // counted per device across every adapter in this process.
       const now = Date.now();
@@ -979,9 +1000,11 @@ export class WebSocketEventStoreAdapter implements EventStoreAdapter {
       if (!f) return;
       answered = [f];
     } else answered = [mine[0]!];
+    this.frame.lastAnswerAt = Date.now();
     for (const frame of answered) {
       clearTimeout(frame.timer);
       this.inFlight.splice(this.inFlight.indexOf(frame), 1);
+      this.frame.draining.delete(frame);
       if (!refused) {
         this.active();
         this.sizeFromAck(frame);
@@ -990,7 +1013,20 @@ export class WebSocketEventStoreAdapter implements EventStoreAdapter {
     }
     this.closeIfDrained(socket);
     this.flushPush();
+    this.wakeWaiting();
   }
+
+  /** A place in the stream's window opened: adapters waiting on it try again. */
+  private wakeWaiting(): void {
+    const waiting = [...this.frame.waiting];
+    this.frame.waiting.clear();
+    for (const wake of waiting) wake();
+  }
+
+  /** Try to send again (a place in the stream's window opened). */
+  private readonly wakeFlush = (): void => {
+    this.flushPush();
+  };
 
   /** A retired socket whose last frame was answered is closed. */
   private closeIfDrained(socket: WebSocket): void {
@@ -1008,16 +1044,20 @@ export class WebSocketEventStoreAdapter implements EventStoreAdapter {
     for (const frame of this.inFlight.filter((f) => f.socket === socket)) {
       clearTimeout(frame.timer);
       this.inFlight.splice(this.inFlight.indexOf(frame), 1);
+      this.frame.draining.delete(frame);
       for (const item of frame.items) settle(item, err);
     }
+    this.wakeWaiting();
   }
 
   /** Reject every frame in flight: the relay's answers to them can no longer be read. */
   private failInFlight(err: Error): void {
     for (const frame of this.inFlight.splice(0)) {
       clearTimeout(frame.timer);
+      this.frame.draining.delete(frame);
       for (const item of frame.items) settle(item, err);
     }
+    this.wakeWaiting();
   }
 
   /**
@@ -1069,9 +1109,16 @@ export class WebSocketEventStoreAdapter implements EventStoreAdapter {
     }
     const now = Date.now();
     const cap = this.ackTimeoutMs * MAX_ACK_STRETCH;
-    // Quiet since the frame went out, or since the socket last showed life.
-    const quietSince = Math.max(frame.sentAt, this.lastInboundAt);
-    if (now - quietSince >= cap) {
+    // Quiet since the frame went out, since the socket last showed life, or
+    // since any frame of this stream was answered. A frame sent after
+    // another still on the wire for this stream is queued behind it on the
+    // same uplink — not on a dead socket — so only the oldest can be judged.
+    const quietSince = Math.max(frame.sentAt, this.lastInboundAt, this.frame.lastAnswerAt);
+    let oldest = true;
+    for (const f of [...this.inFlight, ...this.frame.draining]) {
+      if (f.sentAt < frame.sentAt) oldest = false;
+    }
+    if (oldest && now - quietSince >= cap) {
       this.frame.samples = []; // what the link taught is in doubt: learn it again
       this.failFramesOn(socket, new Error("sync push: the socket is dead (nothing arrived on it)"));
       if (this.ws === socket) this.dropSocket(socket);
@@ -1080,8 +1127,11 @@ export class WebSocketEventStoreAdapter implements EventStoreAdapter {
     }
     frame.deadlineMs = Math.min(cap, frame.deadlineMs * 2);
     const byDeadline = frame.sentAt + frame.deadlineMs;
-    const next = byDeadline > now ? Math.min(byDeadline, quietSince + cap) : quietSince + cap;
-    frame.timer = setTimeout(() => this.onPushTimeout(socket, frame), Math.max(1, next - now));
+    let next = byDeadline > now ? Math.min(byDeadline, quietSince + cap) : quietSince + cap;
+    // Queued behind an older frame (or silent past the cap with no verdict):
+    // look again a deadline on, never in a tight loop.
+    if (next <= now) next = now + this.ackTimeoutMs;
+    frame.timer = setTimeout(() => this.onPushTimeout(socket, frame), next - now);
   }
 
   /**

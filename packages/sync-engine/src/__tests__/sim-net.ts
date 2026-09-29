@@ -466,9 +466,9 @@ interface ReactNativeFetch {
 }
 
 let rnCache: ReactNativeFetch | null = null;
-/** ZZ914_TRACE=1: a timeline of the simulated wire, for debugging one cell. */
+/** MOTEBIT_LIVENESS_TRACE=1: a timeline of the simulated wire, for debugging one cell. */
 export function trace(msg: string): void {
-  if (process.env.ZZ914_TRACE)
+  if (process.env.MOTEBIT_LIVENESS_TRACE)
     process.stdout.write(`[${(Date.now() / 1000).toFixed(1)}s] ${msg}\n`);
 }
 

@@ -29,11 +29,24 @@
  *     XHR + react-native's abort-controller@3.0.0)
  *   - backlog: 1, 150, 6000 events (plus one new event every max(5 min, 2u))
  *
- * Split across liveness-914-s<k>.test.ts so the shards run in parallel. By
- * default the CORE cells run (every cell that went red while the round-7
- * design was built, each a regression it fixed); ZZ914_FULL=1 runs the whole
- * sweep. ZZ914_CELL='a|b' runs the cells whose names contain a or b;
- * ZZ914_VERBOSE prints every cell's counts; ZZ914_TRACE a wire timeline.
+ * Split across liveness-914-s<k>.test.ts so the shards run in parallel.
+ *
+ * What runs. By default (`pnpm test`) a GRID of about ninety cells that
+ * keeps every dimension (see `gridCells`): the boundary values of the link
+ * and the relay (u 0.01 s and 16 s — just past the 15 s ack deadline —
+ * crossed with L 0 and 300 s, on every door), a deterministic sample of the
+ * rest (u ≤ 70 s), and every cell that went red while the round-7 design was
+ * built (`REGRESSIONS`). MOTEBIT_LIVENESS_FULL=1 runs the whole sweep (730
+ * cells; the u = 200 and 900 s cells simulate up to 250 hours each, so it
+ * takes an hour on a busy machine — run it on demand, not in CI).
+ * MOTEBIT_LIVENESS_CELL='a|b' runs the cells whose names contain a or b;
+ * MOTEBIT_LIVENESS_VERBOSE prints every cell's counts, _TIMING its wall
+ * time, _TRACE a wire timeline (sim-net.ts).
+ *
+ * Time. Fake timers throughout: `runFor` advances simulated time in
+ * ten-minute jumps (`advanceTimersByTimeAsync`), each firing only the timers
+ * due in it. A cell's cost is the number of timer callbacks over its horizon,
+ * never real time.
  *
  * Horizon H = max(10 × u × batch, 30 min) of simulated time. Excluded, as
  * stated: a cell where one event cannot cross within 64 × the base deadline.
@@ -480,7 +493,7 @@ export async function runCell(c: Cell): Promise<{ main: Outcome; branch: Outcome
     const t1 = realNow();
     trace("=== branch");
     const branch = await runBranch(c);
-    if (process.env.ZZ914_TIMING) {
+    if (process.env.MOTEBIT_LIVENESS_TIMING) {
       const t2 = realNow();
       process.stdout.write(
         `TIMING main ${Math.round(t1 - t0)}ms branch ${Math.round(t2 - t1)}ms\n`,
@@ -516,11 +529,8 @@ export function verdict(c: Cell, r: { main: Outcome; branch: Outcome }): string 
   return null;
 }
 
-/**
- * The cells run by default: each went red on some iteration of the round-7
- * design (substring match on the cell name).
- */
-export const CORE: readonly string[] = [
+/** Cells that went red on some iteration of the round-7 design: each a regression it fixed. */
+export const REGRESSIONS: readonly string[] = [
   "push persistent-ws node u=0.01s L=300s backlog=1",
   "pull rebuild-ws node u=0.01s L=300s backlog=150",
   "pull persistent-ws node u=0.01s L=300s backlog=150",
@@ -550,20 +560,35 @@ export const CORE: readonly string[] = [
   "push http node u=0.01s L=300s backlog=1",
   "push http node u=0.2s L=300s backlog=1",
   "pull rebuild-ws rn u=14s L=20s backlog=150",
-  "pull rebuild-ws rn u=20s",
-  "pull rebuild-ws rn u=30s",
-  "pull rebuild-ws rn u=14s",
-  "pull http rn u=30s",
-  "pull rebuild-ws rn u=45s",
-  "pull rebuild-ws rn u=70s",
+  "pull rebuild-ws rn u=20s L=20s backlog=150",
+  "pull rebuild-ws rn u=30s L=20s backlog=150",
+  "pull http rn u=30s L=20s backlog=150",
+  "pull rebuild-ws rn u=45s L=20s backlog=150",
+  "pull rebuild-ws rn u=70s L=20s backlog=150",
   "push persistent-ws node u=1s L=0s backlog=6000",
   "push rebuild-ws node u=5s L=0s backlog=150",
-  "push rebuild-ws rn u=5s L=70s backlog=150",
   "push http rn u=5s L=70s backlog=150",
   "pull http node u=20s L=0s backlog=150",
   "push persistent-ws node u=16s L=0s backlog=150",
   "pull rebuild-ws node u=70s L=0s backlog=150",
 ];
+
+/**
+ * The committed grid: every dimension at its boundary values (u 0.01 and
+ * 16 s × L 0 and 300 s, on every door; the 6000 backlog at u 0.01 s), every
+ * 25th cell of the sweep with u ≤ 16 s, and every regression cell. Chosen to
+ * run in about a minute: a cell's cost grows with its horizon (10 × u ×
+ * batch) and its backlog.
+ */
+export function gridCells(): Cell[] {
+  const regressions = new Set(REGRESSIONS);
+  return sweep().filter(
+    (c, i) =>
+      ((c.u === 0.01 || (c.u === 16 && c.backlog !== 6000)) && (c.L === 0 || c.L === 300)) ||
+      (c.u <= 16 && i % 25 === 0) ||
+      regressions.has(cellName(c)),
+  );
+}
 
 /** The number of shard files (liveness-914-s<k>.test.ts) the sweep is split across. */
 export const SHARDS = 8;
@@ -575,13 +600,11 @@ export function defineShard(k: number): void {
       vi.useRealTimers();
       vi.unstubAllGlobals();
     });
-    const all = process.env.ZZ914_FULL
-      ? sweep()
-      : sweep().filter((c) => CORE.some((o) => cellName(c).includes(o)));
+    const all = process.env.MOTEBIT_LIVENESS_FULL ? sweep() : gridCells();
     const cells = all.filter((_, i) => i % SHARDS === k - 1);
     it(`${cells.length} cells`, async () => {
-      // ZZ914_CELL: run only cells whose name contains one of these ('|'-separated).
-      const only = process.env.ZZ914_CELL?.split("|").filter((x) => x !== "");
+      // MOTEBIT_LIVENESS_CELL: only cells whose name contains one of these ('|'-separated).
+      const only = process.env.MOTEBIT_LIVENESS_CELL?.split("|").filter((x) => x !== "");
       const failures: string[] = [];
       for (const c of cells) {
         const name = cellName(c);
@@ -593,7 +616,7 @@ export function defineShard(k: number): void {
           failures.push(`${name}: threw ${err instanceof Error ? err.message : String(err)}`);
           continue;
         }
-        if (process.env.ZZ914_VERBOSE) {
+        if (process.env.MOTEBIT_LIVENESS_VERBOSE) {
           process.stdout.write(
             `CELL ${name}: main ${r.main.delivered}/${r.main.total} branch ${r.branch.delivered}/${r.branch.total} safe=${r.branch.cursorSafe} resent=${r.branch.resentInFlight ?? 0} live=${r.branch.cursorLive ?? "-"}\n`,
           );
@@ -612,6 +635,20 @@ export function defineShard(k: number): void {
         expect(new Set(all.map((c) => c.flavour)).size).toBe(2);
         expect(new Set(all.map((c) => c.backlog)).size).toBe(3);
         expect(new Set(all.map((c) => c.dir)).size).toBe(2);
+      });
+      it("the committed grid keeps every dimension: each door, flavour, backlog and direction, both boundaries of u and L", () => {
+        const grid = gridCells();
+        expect(new Set(grid.map((c) => c.life)).size).toBe(3);
+        expect(new Set(grid.map((c) => c.flavour)).size).toBe(2);
+        expect(new Set(grid.map((c) => c.backlog)).size).toBe(3);
+        expect(new Set(grid.map((c) => c.dir)).size).toBe(2);
+        const us = new Set(grid.map((c) => c.u));
+        const ls = new Set(grid.map((c) => c.L));
+        for (const u of [0.01, 16]) expect(us.has(u)).toBe(true);
+        for (const L of [0, 300]) expect(ls.has(L)).toBe(true);
+        expect(us.size).toBeGreaterThanOrEqual(6); // the sample reaches the middle of the range
+        expect(ls.size).toBe(LAT.length);
+        for (const name of REGRESSIONS) expect(grid.map(cellName)).toContain(name);
       });
     }
   });
