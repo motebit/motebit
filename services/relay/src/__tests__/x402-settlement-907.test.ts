@@ -3775,12 +3775,14 @@ describe("#907 round 14: a lost write race never discards an honest read; a stal
     const { w, row, snapshot, execute } = await record("R14cas", {
       refuse: "invalid_exact_evm_insufficient_balance",
     });
-    execute(); // lands ~300 blocks into the window: page 2+ at 50-block pages
+    execute(); // lands ~300 blocks into the window: page 7 at 50-block pages
     facilitator.chainTime = row().valid_before + 10_000;
     const gen0 = snapshot();
-    // B (honest) reads its first page, then stalls before writing its cursor.
+    // B (honest) has a 2-page budget — the execution lies past it, so B finds
+    // it only by finishing the scan beyond its budget. It reads its first
+    // page, then stalls before writing its cursor.
     const b = stallAfterFirstRead(fakeChainReader());
-    const runB = reconcileX402Settlement(db(), b.reader, gen0, scan);
+    const runB = reconcileX402Settlement(db(), b.reader, gen0, { ...scan, maxPagesPerRun: 2 });
     await b.atRead;
     // A (lagging) wins every write, reaches the end, and concludes: one re-check spent.
     await reconcileX402Settlement(db(), fakeChainReader({ lagging: true }), gen0, scan);
@@ -3812,6 +3814,25 @@ describe("#907 round 14: a lost write race never discards an honest read; a stal
     expect(row(), "the losing run wrote nothing").toEqual(afterA);
   });
 
+  it("a run that lost the race and then hits a read error sets no visit cadence (it writes nothing)", async () => {
+    const { row, snapshot, execute } = await record("R14err", {
+      refuse: "invalid_exact_evm_insufficient_balance",
+    });
+    execute();
+    facilitator.chainTime = row().valid_before + 10_000;
+    const gen0 = snapshot();
+    const noReceipt = fakeChainReader();
+    noReceipt.getReceiptLogs = () => Promise.reject(new Error("receipt not found"));
+    const b = stallAfterFirstRead(noReceipt);
+    const runB = reconcileX402Settlement(db(), b.reader, gen0, scan);
+    await b.atRead;
+    await reconcileX402Settlement(db(), fakeChainReader({ lagging: true }), gen0, scan);
+    const afterA = { ...row() };
+    b.release();
+    expect(await runB).toBe("read_error");
+    expect(row(), "no visit_backoffs / next_visit_head_ts from the losing run").toEqual(afterA);
+  });
+
   it("a stale CONFIRMING pass never expires a record another run has seen executed", async () => {
     const { w, row, snapshot, execute } = await record("R14exp", "timeout-after-transfer");
     void execute; // executed by the lost settle answer
@@ -3829,7 +3850,7 @@ describe("#907 round 14: a lost write race never discards an honest read; a stal
     });
     expect(row()).toMatchObject({ status: "pending", used_state: "unpaired" });
     a.release();
-    await runA;
+    expect(await runA, "a blocked expiry is not reported (or counted) as one").toBe("unchanged");
     expect(row(), "not failed by the stale pass").toMatchObject({
       status: "pending",
       used_state: "unpaired",
@@ -3856,7 +3877,7 @@ describe("#907 round 14: a lost write race never discards an honest read; a stal
     });
     expect(row()).toMatchObject({ status: "pending", used_state: "unpaired" });
     a.release();
-    await runA;
+    expect(await runA, "a blocked cancellation is not reported as one").toBe("unchanged");
     expect(row(), "not failed by the stale cancellation read").toMatchObject({
       status: "pending",
       used_state: "unpaired",

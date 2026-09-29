@@ -1320,10 +1320,11 @@ export async function reconcileX402Settlement(
     if (stale) {
       // Another run moved this record on while this one read. It may still
       // CREDIT from a Used log it found (the status-guarded credit path);
-      // it never spends a budget, marks a record failed or writes evidence.
+      // it never spends a budget, marks a record failed, writes evidence or
+      // sets a visit cadence — not even on a read error (round 15).
+      observeOnly = true;
       const used = events.find((e) => e.kind === "used");
       if (used == null) return "unchanged";
-      observeOnly = true;
       return await judgeUsed(used.txHash, used.logIndex, head.timestamp);
     }
     // The reads succeeded: a record without evidence leaves any read-error
@@ -1355,9 +1356,15 @@ export async function reconcileX402Settlement(
         spendExpiryRecheck(head.timestamp);
         return "unchanged";
       }
-      markX402Failed(db, rec.payer, rec.nonce, "authorization_cancelled", head.timestamp, {
-        requireNoEvidence: true,
-      });
+      // Blocked when another run has since seen the execution (round 14): then
+      // nothing was decided here (round 15).
+      if (
+        !markX402Failed(db, rec.payer, rec.nonce, "authorization_cancelled", head.timestamp, {
+          requireNoEvidence: true,
+        })
+      ) {
+        return "unchanged";
+      }
       logger.info("x402.reconcile.cancelled", {
         payer: rec.payer,
         nonce: rec.nonce,
@@ -1386,9 +1393,13 @@ export async function reconcileX402Settlement(
       ).run(Date.now(), head.timestamp, rec.payer, rec.nonce);
       return "expiry_observed";
     }
-    markX402Failed(db, rec.payer, rec.nonce, "authorization_expired_unused", head.timestamp, {
-      requireNoEvidence: true,
-    });
+    if (
+      !markX402Failed(db, rec.payer, rec.nonce, "authorization_expired_unused", head.timestamp, {
+        requireNoEvidence: true,
+      })
+    ) {
+      return "unchanged"; // blocked: another run has seen the execution
+    }
     logger.info("x402.reconcile.expired_unused", {
       payer: rec.payer,
       nonce: rec.nonce,
@@ -1404,8 +1415,9 @@ export async function reconcileX402Settlement(
       error: err instanceof Error ? err.message : String(err),
     });
     // A read error still sets the record's next visit (round 13): a failing
-    // record is never re-read every tick. Only with a known chain time.
-    if (!operator && chainNow != null) scheduleNextVisit(chainNow);
+    // record is never re-read every tick. Only with a known chain time, and
+    // never from a run that lost a write race (round 15).
+    if (!operator && !observeOnly && chainNow != null) scheduleNextVisit(chainNow);
     return "read_error";
   }
 }
