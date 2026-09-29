@@ -161,7 +161,7 @@ describe("delegate --plan HTTP-polling adapter: retries never double-admit a tas
     const adapter = makeAdapter();
     relay.answerWith((id) => ({
       status: 200,
-      body: { task: { status: "failed" }, receipt: receipt(id, "failed", "") },
+      body: { task: { status: "failed" }, receipt: receipt(id, "failed", `worker-${id}`) },
     }));
     const p = adapter.delegateStep(step, TIMEOUT);
     p.catch(() => {});
@@ -191,7 +191,10 @@ describe("delegate --plan HTTP-polling adapter: retries never double-admit a tas
     const adapter = makeAdapter();
     relay.answerWith((id) =>
       id === "task-1"
-        ? { status: 200, body: { task: { status: "failed" }, receipt: receipt(id, "failed") } }
+        ? {
+            status: 200,
+            body: { task: { status: "failed" }, receipt: receipt(id, "failed", `worker-${id}`) },
+          }
         : {
             status: 200,
             body: { task: { status: "completed" }, receipt: receipt(id, "completed") },
@@ -217,7 +220,7 @@ describe("delegate --plan HTTP-polling adapter: retries never double-admit a tas
       id === "task-1"
         ? {
             status: 200,
-            body: { task: { status: "failed" }, receipt: receipt(id, "failed", "bad") },
+            body: { task: { status: "failed" }, receipt: receipt(id, "failed", `worker-${id}`) },
           }
         : {
             status: 200,
@@ -231,7 +234,7 @@ describe("delegate --plan HTTP-polling adapter: retries never double-admit a tas
     expect(r.task_id).toBe("task-2");
     expect(relay.keys).toHaveLength(2);
     expect(relay.keys[1]).not.toBe(relay.keys[0]);
-    expect(relay.bodies[1]!.exclude_agents).toEqual(["bad"]);
+    expect(relay.bodies[1]!.exclude_agents).toEqual(["worker-task-1"]);
   });
 
   it("a receipt landing right at the deadline is taken, not resubmitted", async () => {

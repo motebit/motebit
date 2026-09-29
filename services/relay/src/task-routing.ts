@@ -1287,7 +1287,19 @@ export async function forwardTaskViaMcp(
       const textContent = mcpResult.result.content.find((c) => c.type === "text");
       if (textContent?.text) {
         const receiptData = extractReceipt(textContent.text);
-        if (receiptData) {
+        if (receiptData && receiptData.motebit_id !== agentId) {
+          // The relay presented this task to ONE worker (#890 r5): a receipt
+          // signed by any other identity is not that worker's result. It is
+          // neither stored (the delegator's poll would read it) nor ingested
+          // (ingestion verifies against the receipt's OWN signer, so a
+          // foreign signed failure would otherwise stand as the task's).
+          logger.warn("task.mcp_forward_receipt_not_from_worker", {
+            correlationId: taskId,
+            agent: agentId,
+            signer: receiptData.motebit_id,
+            endpoint: mcpEndpoint,
+          });
+        } else if (receiptData) {
           const qEntry = taskQueue.get(taskId);
           if (qEntry) {
             qEntry.task.status = "completed";

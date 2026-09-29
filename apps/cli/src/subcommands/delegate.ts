@@ -20,7 +20,13 @@ import type { TokenAudience } from "@motebit/sdk";
 import type { MotebitRuntime as MotebitRuntimeInstance } from "@motebit/runtime";
 import type { PlanStep, DelegatedStepResult, ExecutionReceipt } from "@motebit/sdk";
 import type { StepDelegationAdapter } from "@motebit/planner";
-import { planStepIdempotencyKey, stepRotation, taskNamedBy409, admittedAs } from "@motebit/planner";
+import {
+  planStepIdempotencyKey,
+  stepRotation,
+  receiptBoundTo,
+  taskNamedBy409,
+  admittedAs,
+} from "@motebit/planner";
 import type { CliConfig } from "../args.js";
 import { loadFullConfig } from "../config.js";
 import { getDbPath } from "../runtime-factory.js";
@@ -664,10 +670,12 @@ export function createHttpPollingDelegationAdapter(
       } catch (err: unknown) {
         throw unconfirmed("Relay task submission unconfirmed: no response", err);
       }
-      if (resp.status !== 409) return resp;
-      // A 409 that names the task (#888): take it over, poll it.
+      if (resp.ok) return resp;
+      // A response that names a task — any status (#888; #890 r5): the key
+      // admitted it. Adopt and poll it; never read it as a refusal.
       const named = await taskNamedBy409(resp);
       if (named != null) return admittedAs(named);
+      if (resp.status !== 409) return resp;
       if (waited >= budgetMs) {
         throw new DelegationUndeterminedError(
           stepDescription,
@@ -760,7 +768,18 @@ export function createHttpPollingDelegationAdapter(
     onTaskSubmitted?.(taskId);
 
     const settle = (receipt: ExecutionReceipt): DelegatedStepResult => {
+      // A receipt about another task answers nothing about this one (#890 r5).
+      if (!receiptBoundTo(receipt, taskId)) {
+        throw unconfirmed(`A receipt for another task arrived for ${taskId}`);
+      }
       if (receipt.status !== "completed") {
+        // Evidence only from the worker the relay routed this task to.
+        const routed = taskResp.routing_choice?.selected_agent;
+        if (routed != null && routed !== "" && receipt.motebit_id !== routed) {
+          throw unconfirmed(
+            `A failed receipt for ${taskId} is signed by ${receipt.motebit_id}, not the routed worker ${routed}`,
+          );
+        }
         const err: StepAttemptError = new Error(
           `Delegated step ${receipt.status}: ${receipt.result}`,
         );

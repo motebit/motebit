@@ -235,9 +235,17 @@ describe("RelayDelegationAdapter: a lost result frame is recovered, not resubmit
     const p = adapter.delegateStep(step, TIMEOUT);
     p.catch(() => {});
     await vi.advanceTimersByTimeAsync(10);
-    push({ type: "task_result", task_id: "task-1", receipt: receipt("task-1", "failed", "") });
+    push({
+      type: "task_result",
+      task_id: "task-1",
+      receipt: receipt("task-1", "failed", "worker-task-1"),
+    });
     await vi.advanceTimersByTimeAsync(10);
-    push({ type: "task_result", task_id: "task-2", receipt: receipt("task-2", "failed", "") });
+    push({
+      type: "task_result",
+      task_id: "task-2",
+      receipt: receipt("task-2", "failed", "worker-task-2"),
+    });
 
     await expect(p).rejects.toThrow(/Delegation failed after 2 attempt\(s\)/);
   });
@@ -254,7 +262,11 @@ describe("RelayDelegationAdapter: a lost result frame is recovered, not resubmit
     );
     await vi.advanceTimersByTimeAsync(10);
     expect(relay.keys).toEqual(["plan-step:plan-1:step-1:3"]);
-    push({ type: "task_result", task_id: "task-1", receipt: receipt("task-1", "failed", "bad") });
+    push({
+      type: "task_result",
+      task_id: "task-1",
+      receipt: receipt("task-1", "failed", "worker-task-1"),
+    });
     await vi.advanceTimersByTimeAsync(10);
     expect(rotations).toEqual([4]);
     expect(relay.keys[1]).toBe("plan-step:plan-1:step-1:4");
@@ -266,7 +278,11 @@ describe("RelayDelegationAdapter: a lost result frame is recovered, not resubmit
     const { adapter, push } = makeAdapter();
     const p = adapter.delegateStep(step, TIMEOUT);
     await vi.advanceTimersByTimeAsync(10);
-    push({ type: "task_result", task_id: "task-1", receipt: receipt("task-1", "failed", "bad") });
+    push({
+      type: "task_result",
+      task_id: "task-1",
+      receipt: receipt("task-1", "failed", "worker-task-1"),
+    });
     await vi.advanceTimersByTimeAsync(10);
     push({ type: "task_result", task_id: "task-2", receipt: receipt("task-2") });
 
@@ -274,7 +290,7 @@ describe("RelayDelegationAdapter: a lost result frame is recovered, not resubmit
     expect(r.task_id).toBe("task-2");
     expect(relay.keys).toHaveLength(2);
     expect(relay.keys[1]).not.toBe(relay.keys[0]);
-    expect(relay.bodies[1]!.exclude_agents).toEqual(["bad"]);
+    expect(relay.bodies[1]!.exclude_agents).toEqual(["worker-task-1"]);
     expect(relay.queries).toEqual([]);
   });
 
@@ -282,14 +298,14 @@ describe("RelayDelegationAdapter: a lost result frame is recovered, not resubmit
     const { adapter, push } = makeAdapter();
     relay.setTaskState((id) =>
       id === "task-1"
-        ? json({ task: { status: "failed" }, receipt: receipt(id, "failed", "bad") })
+        ? json({ task: { status: "failed" }, receipt: receipt(id, "failed", `worker-${id}`) })
         : json({ task: { status: "pending" }, receipt: null }),
     );
     const p = adapter.delegateStep(step, TIMEOUT);
     await vi.advanceTimersByTimeAsync(TIMEOUT + 1);
     expect(relay.keys).toHaveLength(2);
     expect(relay.keys[1]).not.toBe(relay.keys[0]);
-    expect(relay.bodies[1]!.exclude_agents).toEqual(["bad"]);
+    expect(relay.bodies[1]!.exclude_agents).toEqual(["worker-task-1"]);
     push({ type: "task_result", task_id: "task-2", receipt: receipt("task-2") });
 
     const r = await p;
@@ -470,7 +486,11 @@ describe("#890: the step's Idempotency-Key is derived, so two drivers admit one 
     const { adapter, push } = makeAdapter();
     const p = adapter.delegateStep(step, TIMEOUT);
     await vi.waitFor(() => expect(relay.keys).toHaveLength(1));
-    push({ type: "task_result", task_id: "task-1", receipt: receipt("task-1", "failed", "bad") });
+    push({
+      type: "task_result",
+      task_id: "task-1",
+      receipt: receipt("task-1", "failed", "worker-task-1"),
+    });
     await vi.waitFor(() => expect(relay.keys).toHaveLength(2));
     expect(relay.keys[1]).toBe("plan-step:plan-1:step-1:1");
     push({ type: "task_result", task_id: "task-2", receipt: receipt("task-2") });

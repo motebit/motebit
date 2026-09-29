@@ -150,18 +150,30 @@ export function getArchivedReceiptForKeyOwner(
   taskId: string,
   notBefore: number,
 ): string | null {
-  const row = db
+  const rows = db
     .prepare(
-      `SELECT r.receipt_json FROM relay_receipts r
+      `SELECT r.motebit_id, r.receipt_json FROM relay_receipts r
         WHERE r.task_id = ? AND r.depth = 0
           AND EXISTS (
             SELECT 1 FROM relay_idempotency_keys k
              WHERE k.task_id = r.task_id AND k.motebit_id = ? AND k.created_at >= ?
-          )
-        LIMIT 1`,
+          )`,
     )
-    .get(taskId, motebitId, notBefore) as { receipt_json: string } | undefined;
-  return row?.receipt_json ?? null;
+    .all(taskId, motebitId, notBefore) as Array<{ motebit_id: string; receipt_json: string }>;
+  if (rows.length === 0) return null;
+  // Only the task's OWN worker's receipt is an answer (#890 r5): a receipt
+  // the delegator reads as a signed failure makes it pay for a new task, so
+  // it must be the verdict of the worker the task went to. The settlement
+  // record names that worker once the task settled (one settlement per
+  // task). Without one, only an unambiguous archive answers — two signers
+  // under one task id is exactly the case where the wrong one could speak.
+  const settled = db
+    .prepare("SELECT motebit_id FROM relay_settlements WHERE task_id = ? LIMIT 1")
+    .get(taskId) as { motebit_id: string } | undefined;
+  if (settled != null && settled.motebit_id !== "") {
+    return rows.find((r) => r.motebit_id === settled.motebit_id)?.receipt_json ?? null;
+  }
+  return rows.length === 1 ? rows[0]!.receipt_json : null;
 }
 
 /** A row in a motebit's own receipt history. `receipt_json` is the

@@ -15,6 +15,7 @@ export {
   planStepIdempotencyKey,
   stepRotation,
   taskNamedBy409,
+  receiptBoundTo,
   admittedAs,
 } from "./delegation-adapter.js";
 export type {

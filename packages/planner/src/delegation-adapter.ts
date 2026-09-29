@@ -231,6 +231,10 @@ export class RelayDelegationAdapter implements StepDelegationAdapter {
     onTaskSubmitted?.(task_id);
 
     const settle = (receipt: ExecutionReceipt): DelegatedStepResult => {
+      // A receipt about another task answers nothing about this one (#890 r5).
+      if (!receiptBoundTo(receipt, task_id)) {
+        throw deliveryUncertain(`A receipt for another task arrived for ${task_id}`);
+      }
       if (receipt.status === "completed") {
         return {
           step_id: step.step_id,
@@ -240,8 +244,17 @@ export class RelayDelegationAdapter implements StepDelegationAdapter {
           routing_choice: routingChoice ?? undefined,
         };
       }
-      // A signed failed receipt: conclusive for this key. Attach the failed
-      // agent's ID for exclusion.
+      // A failed receipt is positive evidence only from the worker the relay
+      // routed this task to (#890 r5). One signed by anyone else is not the
+      // routed worker's verdict: hold, never rotate on it.
+      const routed = routingChoice?.selected_agent;
+      if (routed != null && routed !== "" && receipt.motebit_id !== routed) {
+        throw deliveryUncertain(
+          `A failed receipt for ${task_id} is signed by ${receipt.motebit_id}, not the routed worker ${routed}`,
+        );
+      }
+      // A signed failed receipt from the routed worker: conclusive for this
+      // key. Attach the failed agent's ID for exclusion.
       const err = conclusive(`Delegated step ${receipt.status}: ${receipt.result}`);
       err.failedAgentId = receipt.motebit_id;
       throw err;
@@ -359,6 +372,8 @@ export class RelayDelegationAdapter implements StepDelegationAdapter {
       };
 
       if (data.receipt == null) return null; // Task still pending/running
+      // A receipt about another task is no answer for this one (#890 r5).
+      if (!receiptBoundTo(data.receipt, taskId)) return null;
 
       return {
         step_id: stepId,
@@ -414,12 +429,28 @@ export class DelegationUndeterminedError extends Error {
 
 /** The task id a relay 409 names, when it names one (#888). */
 export async function taskNamedBy409(resp: Response): Promise<string | null> {
+  const header = resp.headers.get("x-motebit-task-id");
+  if (header != null && header !== "") return header;
   try {
     const body = (await resp.clone().json()) as { task_id?: unknown };
     return typeof body.task_id === "string" && body.task_id !== "" ? body.task_id : null;
   } catch {
     return null;
   }
+}
+
+/**
+ * Is this receipt about `taskId`? A receipt names the relay task it
+ * discharges (`relay_task_id`, else `task_id`); one about any other task is
+ * not an answer for this one (#890 r5).
+ */
+export function receiptBoundTo(receipt: ExecutionReceipt, taskId: string): boolean {
+  const bound =
+    (receipt as { relay_task_id?: string }).relay_task_id != null &&
+    (receipt as { relay_task_id?: string }).relay_task_id !== ""
+      ? (receipt as { relay_task_id?: string }).relay_task_id
+      : receipt.task_id;
+  return bound === taskId;
 }
 
 /** A 201 standing for "the key admitted this task" — what a replay would have answered. */
@@ -506,11 +537,15 @@ async function submitUnderKey(
     } catch (err: unknown) {
       throw deliveryUncertain("Relay task submission unconfirmed: no response", err);
     }
-    if (resp.status !== 409) return resp;
-    // A 409 that NAMES the task (#888): the key already admitted it. Take
-    // that task over — the caller polls it like any admitted task.
+    if (resp.ok) return resp;
+    // A response that NAMES a task — whatever its status (#888; #890 r5) — is
+    // the relay saying this key admitted that task: a 409 while the first
+    // request is in flight, or an error that came AFTER admission (the
+    // ranking loop's 402). Adopt it; the caller polls it like any admitted
+    // task and never rotates away from it.
     const named = await taskNamedBy409(resp);
     if (named != null) return admittedAs(named);
+    if (resp.status !== 409) return resp;
     // Still processing under this key: keep backing off, within the step's
     // own time budget, then end the step as undetermined.
     if (waited >= budgetMs) {

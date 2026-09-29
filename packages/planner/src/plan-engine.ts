@@ -534,10 +534,14 @@ export class PlanEngine {
                 // The old key's task conclusively owes nothing; the step now
                 // belongs to the next key only. "" (not undefined) so every
                 // store clears it.
+                // `started_at` becomes the NEW key's first submission: the
+                // re-post window is measured from the current key (#890 r5).
+                const rotatedAt = Date.now();
                 this.store.updateStep(step.step_id, {
                   retry_count: rotation,
                   delegation_task_id: "",
-                  updated_at: Date.now(),
+                  started_at: rotatedAt,
+                  updated_at: rotatedAt,
                 });
               },
             );
