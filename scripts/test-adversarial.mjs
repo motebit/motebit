@@ -177,7 +177,7 @@ async function main() {
   function validToken() {
     return signToken({
       mid: ALICE_ID, did: ALICE_DEVICE,
-      iat: Date.now(), exp: Date.now() + 5 * 60 * 1000,
+      iat: Date.now(), exp: Date.now() + 60_000,
       jti: crypto.randomUUID(), aud: "mcp:call", sub: BOB_ID,
     }, privBytes);
   }
@@ -292,7 +292,7 @@ async function main() {
 
     const badToken = signToken({
       mid: ALICE_ID, did: ALICE_DEVICE,
-      iat: Date.now(), exp: Date.now() + 300_000,
+      iat: Date.now(), exp: Date.now() + 60_000,
       jti: crypto.randomUUID(), aud: "mcp:call", sub: BOB_ID,
     }, fakePrivBytes);
 

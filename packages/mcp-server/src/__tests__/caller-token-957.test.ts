@@ -30,9 +30,10 @@ import {
   AgentTrustLevel,
   MemoryCallerTokenReplayStore,
   checkMcpCallerClaims,
+  callerReplayEntry,
   MAX_MCP_CALLER_TOKEN_LIFETIME_MS,
 } from "../index.js";
-import type { MotebitServerDeps } from "../index.js";
+import type { MotebitServerDeps, CallerTokenReplayStore } from "../index.js";
 
 const SERVER = "server-0000-0000-0000-000000000957";
 const OTHER_SERVER = "other-server-0000-0000-000000000957";
@@ -81,17 +82,30 @@ function deps(overrides: Partial<MotebitServerDeps> = {}): MotebitServerDeps {
   };
 }
 
-async function serve(callerPublicKeyHex: string, motebitId = SERVER): Promise<number> {
+async function serve(
+  callerPublicKeyHex: string,
+  motebitId = SERVER,
+  opts: {
+    store?: CallerTokenReplayStore;
+    extraCallers?: Array<[string, string]>;
+    deps?: Partial<MotebitServerDeps>;
+  } = {},
+): Promise<number> {
   process.env["MOTEBIT_SELF_WATCHDOG"] = "off";
+  const known = new Map([
+    [CALLER, { publicKey: callerPublicKeyHex, trustLevel: AgentTrustLevel.Verified }],
+  ]);
+  for (const [id, pk] of opts.extraCallers ?? []) {
+    known.set(id, { publicKey: pk, trustLevel: AgentTrustLevel.Verified });
+  }
   adapter = new McpServerAdapter(
     {
       transport: "http",
       port: 0,
-      knownCallers: new Map([
-        [CALLER, { publicKey: callerPublicKeyHex, trustLevel: AgentTrustLevel.Verified }],
-      ]),
+      knownCallers: known,
+      ...(opts.store ? { callerReplayStore: opts.store } : {}),
     },
-    deps({ motebitId }),
+    deps({ motebitId, ...opts.deps }),
   );
   await adapter.start();
   return ((adapter as unknown as { httpServer: http.Server }).httpServer.address() as AddressInfo)
@@ -215,54 +229,210 @@ describe("#957 — caller-token matrix: audience × binding × use × expiry", (
 
 // === The law, unit ==========================================================
 
+/** A valid bound `mcp:call` token for `mid`, with overrides. */
+async function good(
+  mid: string,
+  privateKey: Uint8Array,
+  over: Record<string, unknown> = {},
+): Promise<string> {
+  const now = Date.now();
+  const token = await createSignedToken(
+    {
+      mid,
+      did: `${mid}-device`,
+      iat: now,
+      exp: now + 60_000,
+      jti: crypto.randomUUID(),
+      aud: "mcp:call",
+      sub: SERVER,
+      ...over,
+    } as unknown as Parameters<typeof createSignedToken>[0],
+    privateKey,
+  );
+  return `motebit:${token}`;
+}
+
+const reasonOf = (body: string): string => (JSON.parse(body) as { reason: string }).reason;
+
 describe("checkMcpCallerClaims", () => {
   const now = 1_000_000;
-  const good = { mid: CALLER, aud: "mcp:call", sub: SERVER, jti: "j", exp: now + 60_000 };
+  const ok = { mid: CALLER, aud: "mcp:call", sub: SERVER, jti: "j", iat: now, exp: now + 60_000 };
   it("accepts the canonical claims", () => {
-    expect(checkMcpCallerClaims(good, SERVER, now)).toEqual({ ok: true });
+    expect(checkMcpCallerClaims(ok, SERVER, now)).toEqual({ ok: true });
   });
-  it("refuses a lifetime beyond the bound (the replay store must remember it)", () => {
-    const r = checkMcpCallerClaims(
-      { ...good, exp: now + MAX_MCP_CALLER_TOKEN_LIFETIME_MS + 1 },
-      SERVER,
-      now,
-    );
-    expect(r.ok).toBe(false);
+  it("the lifetime bound is 2 minutes: exp at now+2min passes, one ms more is refused", () => {
+    expect(MAX_MCP_CALLER_TOKEN_LIFETIME_MS).toBe(120_000);
+    expect(checkMcpCallerClaims({ ...ok, exp: now + 120_000 }, SERVER, now).ok).toBe(true);
+    const r = checkMcpCallerClaims({ ...ok, exp: now + 120_001 }, SERVER, now);
+    expect(r.ok ? "" : r.reason).toContain("lifetime exceeds 120s");
+  });
+  it("iat skew allowance is 1 minute", () => {
+    expect(checkMcpCallerClaims({ ...ok, iat: now + 60_000 }, SERVER, now).ok).toBe(true);
+    const r = checkMcpCallerClaims({ ...ok, iat: now + 60_001 }, SERVER, now);
+    expect(r.ok ? "" : r.reason).toContain("clock skew");
+  });
+  it("a 128-char jti passes; a 129-char jti is refused with its own reason", () => {
+    expect(checkMcpCallerClaims({ ...ok, jti: "x".repeat(128) }, SERVER, now).ok).toBe(true);
+    const r = checkMcpCallerClaims({ ...ok, jti: "x".repeat(129) }, SERVER, now);
+    expect(r.ok ? "" : r.reason).toBe("token jti exceeds 128 characters");
   });
   it("names an unbound token as unbound (the reason an older client acts on)", () => {
-    const r = checkMcpCallerClaims({ ...good, sub: undefined }, SERVER, now);
+    const r = checkMcpCallerClaims({ ...ok, sub: undefined }, SERVER, now);
     expect(r.ok).toBe(false);
     expect(r.ok ? "" : r.reason).toContain("not bound to a server");
   });
   it("refuses a missing jti", () => {
-    expect(checkMcpCallerClaims({ ...good, jti: undefined }, SERVER, now).ok).toBe(false);
+    expect(checkMcpCallerClaims({ ...ok, jti: undefined }, SERVER, now).ok).toBe(false);
   });
 });
 
 describe("MemoryCallerTokenReplayStore", () => {
+  const e = (key: string, exp: number, caller = "c") => ({ key, caller, expiresAt: exp });
   it("accepts a key once while it is live, again after it expires", () => {
     let t = 0;
-    const store = new MemoryCallerTokenReplayStore(10, () => t);
-    expect(store.claim("k", 100)).toBe(true);
-    expect(store.claim("k", 100)).toBe(false);
+    const store = new MemoryCallerTokenReplayStore(10, 10, () => t);
+    expect(store.claim(e("k", 100))).toBe("accepted");
+    expect(store.claim(e("k", 100))).toBe("replay");
     t = 100;
-    expect(store.claim("k", 200)).toBe(true);
+    expect(store.claim(e("k", 200))).toBe("accepted");
   });
-  it("is bounded: expired keys are evicted to make room", () => {
+  it("expired entries are swept by expiry order, freeing room and quota", () => {
     let t = 0;
-    const store = new MemoryCallerTokenReplayStore(2, () => t);
-    expect(store.claim("a", 10)).toBe(true);
-    expect(store.claim("b", 10)).toBe(true);
+    const store = new MemoryCallerTokenReplayStore(2, 10, () => t);
+    expect(store.claim(e("a", 30))).toBe("accepted");
+    expect(store.claim(e("b", 10))).toBe("accepted");
     t = 10;
-    expect(store.claim("c", 20)).toBe(true);
-    expect(store.size).toBe(1);
+    expect(store.claim(e("c", 40))).toBe("accepted");
+    expect(store.size).toBe(2);
+    expect(store.liveFor("c")).toBe(2);
   });
-  it("fails closed when full of live keys — never evicts a live key", () => {
-    const store = new MemoryCallerTokenReplayStore(2, () => 0);
-    expect(store.claim("a", 10)).toBe(true);
-    expect(store.claim("b", 10)).toBe(true);
-    expect(store.claim("c", 10)).toBe(false);
-    expect(store.claim("a", 10)).toBe(false);
+  it("full of live entries: refuses with `full`, never evicts a live entry", () => {
+    const store = new MemoryCallerTokenReplayStore(2, 10, () => 0);
+    expect(store.claim(e("a", 10, "x"))).toBe("accepted");
+    expect(store.claim(e("b", 10, "y"))).toBe("accepted");
+    expect(store.claim(e("c", 10, "z"))).toBe("full");
+    expect(store.claim(e("a", 10, "x"))).toBe("replay");
+  });
+  it("a caller at its quota is refused `caller_quota`; another caller is not", () => {
+    const store = new MemoryCallerTokenReplayStore(100, 2, () => 0);
+    expect(store.claim(e("a1", 10, "attacker"))).toBe("accepted");
+    expect(store.claim(e("a2", 10, "attacker"))).toBe("accepted");
+    expect(store.claim(e("a3", 10, "attacker"))).toBe("caller_quota");
+    expect(store.claim(e("h1", 10, "honest"))).toBe("accepted");
+  });
+  it("entries are fixed-size digests whatever the jti or mid length", async () => {
+    const short = await callerReplayEntry("m", "j", 1);
+    const long = await callerReplayEntry("m".repeat(5_000), "j".repeat(11_000), 1);
+    for (const x of [short, long]) {
+      expect(x.key).toMatch(/^[0-9a-f]{64}$/);
+      expect(x.caller).toMatch(/^[0-9a-f]{64}$/);
+    }
+  });
+});
+
+describe("#957 round 2 — the replay store over the wire", () => {
+  it("stores a constant-size key for a max-length jti", async () => {
+    const caller = await generateKeypair();
+    const store = new MemoryCallerTokenReplayStore();
+    const port = await serve(bytesToHex(caller.publicKey), SERVER, { store });
+    expect(
+      (await initialize(port, await good(CALLER, caller.privateKey, { jti: "q".repeat(128) })))
+        .status,
+    ).toBe(200);
+    expect(store.keys()).toHaveLength(1);
+    expect(store.keys()[0]).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it("a 129-char jti is refused on the wire and takes no slot", async () => {
+    const caller = await generateKeypair();
+    const store = new MemoryCallerTokenReplayStore();
+    const port = await serve(bytesToHex(caller.publicKey), SERVER, { store });
+    const r = await initialize(
+      port,
+      await good(CALLER, caller.privateKey, { jti: "q".repeat(129) }),
+    );
+    expect(r.status).toBe(401);
+    expect(reasonOf(r.body)).toBe("token jti exceeds 128 characters");
+    expect(store.size).toBe(0);
+  });
+
+  it("a lifetime above 2 minutes is refused on the wire", async () => {
+    const caller = await generateKeypair();
+    const port = await serve(bytesToHex(caller.publicKey));
+    const r = await initialize(
+      port,
+      await good(CALLER, caller.privateKey, { exp: Date.now() + 5 * 60_000 }),
+    );
+    expect(r.status).toBe(401);
+    expect(reasonOf(r.body)).toContain("lifetime exceeds");
+  });
+
+  it("the quota isolates one identity: the attacker at quota is refused, an honest caller is accepted", async () => {
+    const attacker = await generateKeypair();
+    const honest = await generateKeypair();
+    const store = new MemoryCallerTokenReplayStore(1_000, 3);
+    const port = await serve(bytesToHex(attacker.publicKey), SERVER, {
+      store,
+      extraCallers: [["honest-caller", bytesToHex(honest.publicKey)]],
+    });
+    for (let i = 0; i < 3; i++) {
+      expect((await initialize(port, await good(CALLER, attacker.privateKey))).status).toBe(200);
+    }
+    const over = await initialize(port, await good(CALLER, attacker.privateKey));
+    expect(over.status).toBe(401);
+    expect(reasonOf(over.body)).toBe("too many live tokens for this caller");
+    expect((await initialize(port, await good("honest-caller", honest.privateKey))).status).toBe(
+      200,
+    );
+  });
+
+  it("a full store refuses with its own reason, not `already used`", async () => {
+    const a = await generateKeypair();
+    const b = await generateKeypair();
+    const store = new MemoryCallerTokenReplayStore(1, 10);
+    const port = await serve(bytesToHex(a.publicKey), SERVER, {
+      store,
+      extraCallers: [["caller-b", bytesToHex(b.publicKey)]],
+    });
+    expect((await initialize(port, await good(CALLER, a.privateKey))).status).toBe(200);
+    const r = await initialize(port, await good("caller-b", b.privateKey));
+    expect(r.status).toBe(401);
+    expect(reasonOf(r.body)).toBe("replay store at capacity — retry shortly");
+  });
+
+  it("a token with a bad signature, or whose key is unknown, takes no store or quota slot", async () => {
+    const caller = await generateKeypair();
+    const forger = await generateKeypair();
+    const store = new MemoryCallerTokenReplayStore();
+    const port = await serve(bytesToHex(caller.publicKey), SERVER, { store });
+    // Signed by the wrong key, claiming to be CALLER.
+    expect((await initialize(port, await good(CALLER, forger.privateKey))).status).toBe(401);
+    // A caller this server cannot resolve a key for.
+    expect((await initialize(port, await good("nobody-known", forger.privateKey))).status).toBe(
+      401,
+    );
+    expect(store.size).toBe(0);
+    const [callerBucket, nobodyBucket] = await Promise.all([
+      callerReplayEntry(CALLER, "x", 0),
+      callerReplayEntry("nobody-known", "x", 0),
+    ]);
+    expect(store.liveFor(callerBucket.caller)).toBe(0);
+    expect(store.liveFor(nobodyBucket.caller)).toBe(0);
+  });
+
+  it("the verifier's payload is re-checked: an injected verifier vouching for another server is refused", async () => {
+    const caller = await generateKeypair();
+    const port = await serve(bytesToHex(caller.publicKey), SERVER, {
+      deps: {
+        verifySignedToken: async (token: string, key: Uint8Array) => {
+          const p = await verifySignedToken(token, key);
+          return p == null ? null : { ...p, sub: OTHER_SERVER };
+        },
+      },
+    });
+    const r = await initialize(port, await good(CALLER, caller.privateKey));
+    expect(r.status).toBe(401);
+    expect(reasonOf(r.body)).toBe("token was minted for a different MCP server");
   });
 });
 

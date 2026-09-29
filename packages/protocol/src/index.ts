@@ -4383,6 +4383,9 @@ export {
   BROWSER_SANDBOX_AUDIENCE,
   RUNTIME_ATTACH_AUDIENCE,
   MCP_CALL_AUDIENCE,
+  MCP_CALL_TOKEN_TTL_MS,
+  MCP_CALL_CLOCK_SKEW_MS,
+  MCP_CALL_MAX_JTI_LENGTH,
 } from "./audience.js";
 
 // Relay route → token audience — which `aud` each relay route requires of a

@@ -26,7 +26,8 @@ import { startSelfWatchdog } from "./self-watchdog.js";
 import { isServableTool } from "./serve-exposure.js";
 import {
   checkMcpCallerClaims,
-  callerReplayKey,
+  callerReplayEntry,
+  replayRefusalReason,
   MemoryCallerTokenReplayStore,
   type CallerTokenReplayStore,
   type McpCallerClaims,
@@ -44,13 +45,17 @@ export { buildServiceReceipt } from "./build-receipt.js";
 export { isServableTool } from "./serve-exposure.js";
 export {
   checkMcpCallerClaims,
-  callerReplayKey,
+  callerReplayEntry,
+  replayRefusalReason,
   MemoryCallerTokenReplayStore,
   MAX_MCP_CALLER_TOKEN_LIFETIME_MS,
   DEFAULT_CALLER_REPLAY_CAPACITY,
+  DEFAULT_CALLER_REPLAY_QUOTA,
 } from "./caller-token.js";
 export type {
   CallerTokenReplayStore,
+  CallerReplayEntry,
+  CallerReplayClaim,
   McpCallerClaims,
   McpCallerClaimsVerdict,
 } from "./caller-token.js";
@@ -1668,10 +1673,10 @@ export class McpServerAdapter {
     }
     const mid = claims.mid;
 
-    // Audience + binding first, on the unverified claims: a token that could
-    // never be accepted here is refused before any key lookup (which may call
-    // the relay) and with a reason the caller can act on. The verified
-    // payload is checked again below — that check is the one that decides.
+    // Audience, binding, jti shape and time window first, on the unverified
+    // claims: a token that could never be accepted here is refused before any
+    // key lookup (which may call the relay), with a reason the caller can act
+    // on. The payload the verifier returns is checked again below.
     const early = checkMcpCallerClaims(claims, this.deps.motebitId, Date.now());
     if (!early.ok) return early;
 
@@ -1707,17 +1712,20 @@ export class McpServerAdapter {
     if (!payload) return refuse("signature invalid or token expired");
     if (payload.mid !== mid) return refuse("malformed token");
 
-    // The decision is made on the SIGNED payload.
+    // Re-check what the verifier vouched for. With the canonical
+    // `verifySignedToken` the payload is the same bytes as the claims read
+    // above, so this re-check changes nothing; it matters when an injected
+    // verifier returns a payload of its own (tests, alternative verifiers).
     const verdict = checkMcpCallerClaims(payload, this.deps.motebitId, Date.now());
     if (!verdict.ok) return verdict;
 
-    // (c) single use. Last, so only a token that is otherwise acceptable is
-    // recorded — an invalid one cannot burn a jti or fill the store.
-    const fresh = await this.callerReplay.claim(
-      callerReplayKey(mid, payload.jti as string),
-      payload.exp,
+    // (c) single use. Last, so only a token that is otherwise acceptable —
+    // known key, valid signature, in window — can take a store or quota
+    // slot; an invalid one cannot burn a jti or fill the store.
+    const claimed = await this.callerReplay.claim(
+      await callerReplayEntry(mid, payload.jti as string, payload.exp),
     );
-    if (!fresh) return refuse("token already used — mint a fresh token per request");
+    if (claimed !== "accepted") return refuse(replayRefusalReason(claimed));
 
     // Token signature verified — caller is cryptographically proven.
     // Upgrade FirstContact/Unknown to Verified (the signature IS verification).

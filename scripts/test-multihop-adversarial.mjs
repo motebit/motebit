@@ -134,7 +134,7 @@ async function getMultiHopReceipt(privBytes, prompt) {
   // MCP caller token factory (#957): aud "mcp:call", bound to Bob, fresh per request.
   const tok = () => signToken({
     mid: ALICE_ID, did: ALICE_DEVICE,
-    iat: Date.now(), exp: Date.now() + 5 * 60 * 1000,
+    iat: Date.now(), exp: Date.now() + 60_000,
     jti: crypto.randomUUID(), aud: "mcp:call", sub: BOB_ID,
   }, privBytes);
 

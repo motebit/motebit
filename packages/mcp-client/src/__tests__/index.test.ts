@@ -1265,6 +1265,7 @@ describe("McpClientAdapter — motebit caller identity", () => {
         did: "my-device-id",
         aud: "mcp:call",
         sub: "remote-2",
+        ttlMs: 60_000,
       });
       const headers = new Headers((sent.mock.calls[0]![1] as RequestInit).headers);
       expect(headers.get("Authorization")).toBe("Bearer motebit:mock-signed-token");

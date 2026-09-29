@@ -40,7 +40,7 @@
 
 import type { PlanStep, DelegatedStepResult, ExecutionReceipt } from "@motebit/sdk";
 import type { TokenAudience } from "@motebit/sdk";
-import { MCP_CALL_AUDIENCE } from "@motebit/sdk";
+import { MCP_CALL_AUDIENCE, MCP_CALL_TOKEN_TTL_MS } from "@motebit/sdk";
 import type { StepDelegationAdapter } from "./plan-engine.js";
 
 // ── Config ──────────────────────────────────────────────────────────
@@ -605,7 +605,13 @@ export class SovereignDelegationAdapter implements StepDelegationAdapter {
       // call cannot authenticate anywhere else or twice.
       const headers = async (sid?: string): Promise<Record<string, string>> => {
         const { token } = await this.config.mintAudienceToken(
-          { mid: motebitId, did: deviceId, aud: MCP_CALL_AUDIENCE, sub: workerMotebitId },
+          {
+            mid: motebitId,
+            did: deviceId,
+            aud: MCP_CALL_AUDIENCE,
+            sub: workerMotebitId,
+            ttlMs: MCP_CALL_TOKEN_TTL_MS,
+          },
           signingKeys.privateKey,
         );
         return {

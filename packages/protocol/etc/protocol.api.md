@@ -2724,6 +2724,15 @@ export function maxSensitivity(a: SensitivityLevel, b: SensitivityLevel): Sensit
 export const MCP_CALL_AUDIENCE: TokenAudience;
 
 // @public
+export const MCP_CALL_CLOCK_SKEW_MS = 60000;
+
+// @public
+export const MCP_CALL_MAX_JTI_LENGTH = 128;
+
+// @public
+export const MCP_CALL_TOKEN_TTL_MS = 60000;
+
+// @public
 export const MEMORY_EXPORT_ARTIFACT: ContentArtifactType;
 
 // @public

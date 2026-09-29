@@ -183,7 +183,7 @@ async function main() {
     mid: ALICE_ID,
     did: ALICE_DEVICE,
     iat: Date.now(),
-    exp: Date.now() + 5 * 60 * 1000,
+    exp: Date.now() + 60_000, // mcp:call lifetime (#957: server allows ≤ 2 min)
     jti: crypto.randomUUID(),
     aud: "mcp:call",
     sub: BOB_ID,

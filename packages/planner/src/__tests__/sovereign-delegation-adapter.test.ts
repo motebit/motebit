@@ -142,6 +142,7 @@ describe("SovereignDelegationAdapter", () => {
         did: "device-alice",
         aud: "mcp:call",
         sub: "agent-bob",
+        ttlMs: 60_000,
       });
     }
     for (const call of fetchMock.mock.calls.slice(1)) {
