@@ -64,18 +64,18 @@ Auth tokens are configured via the config file (`authToken` field), not via CLI 
 
 Six tools are registered automatically when the server starts. Four are conditional — they only appear when the runtime provides their backend (which the CLI always does).
 
-| Tool               | Input                       | Description                                                        |
-| ------------------ | --------------------------- | ------------------------------------------------------------------ |
-| `motebit_query`    | `{ message }`               | Ask the agent a question — full AI response with memory context    |
-| `motebit_remember` | `{ content, sensitivity? }` | Store a memory (sensitivity capped for external callers)           |
-| `motebit_recall`   | `{ query, limit? }`         | Semantic memory search, privacy-filtered                           |
-| `motebit_task`     | `{ prompt }`                | Submit an autonomous task — returns a signed `ExecutionReceipt`    |
-| `motebit_identity` | none                        | Return the motebit's identity (motebit.md content or JSON summary) |
-| `motebit_tools`    | none                        | List all available tools with risk levels                          |
+| Tool               | Input                       | Description                                                                          |
+| ------------------ | --------------------------- | ------------------------------------------------------------------------------------ |
+| `motebit_query`    | `{ message }`               | Ask the agent a question — a remote caller is never answered from the owner's memory |
+| `motebit_remember` | `{ content, sensitivity? }` | Store a memory (sensitivity capped for external callers)                             |
+| `motebit_recall`   | `{ query, limit? }`         | Semantic memory search — served to the motebit's owner only                          |
+| `motebit_task`     | `{ prompt }`                | Submit an autonomous task — returns a signed `ExecutionReceipt`                      |
+| `motebit_identity` | none                        | Return the motebit's identity (motebit.md content or JSON summary)                   |
+| `motebit_tools`    | none                        | List all available tools with risk levels                                            |
 
 ### motebit_query
 
-Sends a message through the full AI turn loop — memory retrieval, context packing, tool use, memory formation. The response includes how many memories were formed during the turn.
+Sends a message through the AI turn loop: context packing, tool use and memory formation. Whose turn it is depends on who is asking, the same rule `motebit_recall` follows. Over stdio, from the MCP host you launch on your own machine, the query is yours: it runs as an owner turn with your memories and context, and `memories_formed` is the number of memories the turn formed. Over HTTP the caller is another principal, whatever credential it presents. Then the turn recalls none of the owner's memories and receives none of the owner's private context: no trust graph, self-model, installed skills, recent events or live session facts. It sees the motebit's identity and persona, the tools a caller may use, and the model it runs on. Memories the turn forms are marked as coming from a peer agent, and `memories_formed` is always 0.
 
 ```json
 { "message": "What do you know about the deployment pipeline?" }
@@ -91,7 +91,9 @@ Stores a memory in the motebit's semantic graph. External callers may store only
 
 ### motebit_recall
 
-Searches the motebit's memory graph by semantic similarity. Results are privacy-filtered — high-sensitivity memories are excluded from external responses.
+Searches the motebit's memory graph by semantic similarity. The owner's memories are served **only to the owner**, and the owner is **the local stdio session**: the MCP host you launched on your own machine. HTTP callers are never the owner, whatever they present. That includes another motebit, the relay, a static or pluggable bearer token, and even a token signed under this motebit's own key. Your motebit signs those for the workers it hires and the servers it connects to, so they could be replayed. Every HTTP caller is refused with no memory content. Nothing that worked before is lost: `motebit serve` never resolved its own key for HTTP callers, so reading your memories over HTTP was not reachable anyway. Read your memories over stdio. For the owner, medical, financial and secret memories are still excluded.
+
+> **Never bridge stdio to a network.** stdio counts as the owner by construction, because only a process you launched can reach the pipe. Wrapping a stdio `motebit serve` in an `mcp-remote`- or `supergateway`-style bridge that exposes it over HTTP or SSE makes every remote caller of the bridge the owner, and serves them your memories and live state. Use HTTP transport for other agents; it never treats a caller as the owner.
 
 ```json
 { "query": "deployment credentials", "limit": 5 }
@@ -133,7 +135,7 @@ Lists all tools available to the motebit (built-in + MCP), including their risk 
 
 ## Proxied tools
 
-In addition to the six synthetic tools, the server exposes all tools from the motebit's [tool registry](/docs/developer/tools) — built-in tools and connected MCP server tools. Every proxied tool call passes through the [policy gate](/docs/concepts/governance):
+In addition to the six synthetic tools, the server exposes the motebit's served tools from its [tool registry](/docs/developer/tools). Tools marked `localOnly` are never served. Those are the tools that act for the owner: the filesystem, shell, memory, and every tool from an MCP server the owner connected (settings, `/mcp add`, or `mcp_servers` in config). Tools loaded with `motebit serve --tools` are served unless their definition says `localOnly`. Every proxied tool call passes through the [policy gate](/docs/concepts/governance):
 
 - **Allowed** — executes and returns the result with an identity tag
 - **Denied** — returns a policy denial message
@@ -143,11 +145,11 @@ In addition to the six synthetic tools, the server exposes all tools from the mo
 
 The server also exposes MCP resources and prompts:
 
-| Resource   | URI                  | Description                                        |
-| ---------- | -------------------- | -------------------------------------------------- |
-| `identity` | `motebit://identity` | Motebit ID and public key                          |
-| `state`    | `motebit://state`    | Current state vector (attention, processing, etc.) |
-| `memories` | `motebit://memories` | Privacy-filtered memory snapshot                   |
+| Resource   | URI                  | Description                                       |
+| ---------- | -------------------- | ------------------------------------------------- |
+| `identity` | `motebit://identity` | Motebit ID and public key                         |
+| `state`    | `motebit://state`    | Live state vector, owner only (stdio)             |
+| `memories` | `motebit://memories` | Memory snapshot, owner only (as `motebit_recall`) |
 
 | Prompt    | Description                                     |
 | --------- | ----------------------------------------------- |

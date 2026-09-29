@@ -11,9 +11,9 @@
  *   // handle.shutdown() to stop
  */
 
-import { McpServerAdapter } from "./index.js";
+import { McpServerAdapter, assertOwnerPrincipal } from "./index.js";
 import { isServableTool } from "./serve-exposure.js";
-import type { MotebitServerDeps, TaskAdmissionConfig } from "./index.js";
+import type { MotebitServerDeps, ServedPrincipal, TaskAdmissionConfig } from "./index.js";
 import type {
   ToolDefinition,
   ToolResult,
@@ -156,8 +156,15 @@ export interface WireServerDepsOptions {
     | { type: string; [key: string]: unknown }
   >;
 
-  /** If provided, wires sendMessage for motebit_query synthetic tool. */
-  sendMessage?: (text: string) => Promise<{ response: string; memoriesFormed: number }>;
+  /**
+   * If provided, wires sendMessage for motebit_query synthetic tool. It must
+   * run the turn as `principal` (#943 round 10: stdio owner ⇒ an owner turn,
+   * anything else ⇒ a foreign turn).
+   */
+  sendMessage?: (
+    text: string,
+    principal: ServedPrincipal,
+  ) => Promise<{ response: string; memoriesFormed: number }>;
 
   /** Relay URL for remote key resolution (fallback when local trust store has no record). */
   syncUrl?: string;
@@ -202,7 +209,8 @@ export function wireServerDeps(
 
     getState: () => runtime.getState() as Record<string, unknown>,
 
-    getMemories: async (limit = 50) => {
+    getMemories: async (limit = 50, principal) => {
+      assertOwnerPrincipal(principal);
       const data = await runtime.memory.exportAll();
       const now = Date.now();
       return data.nodes
@@ -255,7 +263,8 @@ export function wireServerDeps(
   // Optional: memory search + store (needs embedText)
   if (opts.embedText) {
     const embedText = opts.embedText;
-    deps.queryMemories = async (query: string, limit?: number) => {
+    deps.queryMemories = async (query: string, limit?: number, principal?: ServedPrincipal) => {
+      assertOwnerPrincipal(principal);
       const embedding = await embedText(query);
       const nodes = await runtime.memory.recallRelevant(embedding, {
         limit: limit ?? 10,

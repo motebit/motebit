@@ -38,11 +38,12 @@ import {
   hash as sha256,
 } from "@motebit/encryption";
 import { verify, governanceToPolicyConfig } from "@motebit/identity-file";
-import { McpServerAdapter } from "@motebit/mcp-server";
+import { McpServerAdapter, assertOwnerPrincipal } from "@motebit/mcp-server";
 import { MemoryClass } from "@motebit/policy";
 import type {
   MotebitServerDeps,
   McpServerConfig as McpServerAdapterConfig,
+  ServedPrincipal,
 } from "@motebit/mcp-server";
 import { PlanEngine, RelayDelegationAdapter } from "@motebit/planner";
 import { GoalScheduler } from "./scheduler.js";
@@ -869,7 +870,8 @@ async function runServeAttached(
 
     getState: async () => (await client.query("state")) as Record<string, unknown>,
 
-    getMemories: async (limit = 50) => {
+    getMemories: async (limit = 50, principal) => {
+      assertOwnerPrincipal(principal);
       const exported = (await client.query("memory_export")) as {
         nodes: Array<{
           content: string;
@@ -893,11 +895,14 @@ async function runServeAttached(
         .catch(() => {});
     },
 
-    queryMemories: async (query: string, limit?: number) => {
+    queryMemories: async (query: string, limit?: number, principal?: ServedPrincipal) => {
+      assertOwnerPrincipal(principal);
       // Embedding is computed here (local model, no network); recall and
-      // its sensitivity floor run on the coordinator.
+      // its sensitivity floor run on the coordinator, which re-checks the
+      // principal the frame carries (#943).
       const embedding = await embedText(query);
       const nodes = (await client.query("memory_recall", {
+        principal,
         embedding: [...embedding],
         ...(limit !== undefined ? { limit } : {}),
       })) as Array<{
@@ -1238,7 +1243,8 @@ export async function handleServe(config: CliConfig): Promise<void> {
 
     getState: () => runtime.getState() as unknown as Record<string, unknown>,
 
-    getMemories: async (limit = 50) => {
+    getMemories: async (limit = 50, principal) => {
+      assertOwnerPrincipal(principal);
       const data = await runtime.memory.exportAll();
       const now = Date.now();
       return data.nodes
@@ -1271,7 +1277,8 @@ export async function handleServe(config: CliConfig): Promise<void> {
     },
 
     // Synthetic tool backends (`sendMessage` is in servePrincipalDeps above).
-    queryMemories: async (query: string, limit?: number) => {
+    queryMemories: async (query: string, limit?: number, principal?: ServedPrincipal) => {
+      assertOwnerPrincipal(principal);
       const embedding = await embedText(query);
       const nodes = await runtime.memory.recallRelevant(embedding, {
         limit: limit ?? 10,

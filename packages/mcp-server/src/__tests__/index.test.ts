@@ -997,7 +997,8 @@ describe("McpServerAdapter — synthetic tool execution", () => {
       content: Array<{ text: string }>;
     };
 
-    expect(sendMessage).toHaveBeenCalledWith("what is 42?");
+    // stdio with no auth context is the owner (#943 round 10).
+    expect(sendMessage).toHaveBeenCalledWith("what is 42?", "owner");
     expect(result.content[0]!.text).toContain("42 is the answer");
     expect(result.content[0]!.text).toContain("memories_formed");
     expect(result.content[0]!.text).toContain("[motebit:");
@@ -1096,7 +1097,8 @@ describe("McpServerAdapter — synthetic tool execution", () => {
       content: Array<{ text: string }>;
     };
 
-    expect(queryMemories).toHaveBeenCalledWith("what happened?", undefined);
+    // stdio: the owner by construction (#943) — the verdict rides the dep call.
+    expect(queryMemories).toHaveBeenCalledWith("what happened?", undefined, "owner");
     expect(result.content[0]!.text).toContain("memory 1");
     expect(result.content[0]!.text).toContain("memory 2");
   });
@@ -1110,7 +1112,7 @@ describe("McpServerAdapter — synthetic tool execution", () => {
     const handler = registrations.tools.get("motebit_recall")!.handler;
     await handler({ query: "test", limit: 5 });
 
-    expect(queryMemories).toHaveBeenCalledWith("test", 5);
+    expect(queryMemories).toHaveBeenCalledWith("test", 5, "owner");
   });
 
   it("motebit_task iterates generator and returns receipt", async () => {

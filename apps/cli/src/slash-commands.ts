@@ -1,5 +1,6 @@
 // --- REPL slash command handler ---
 
+import { disconnectMcpServer } from "./mcp-config-wiring.js";
 import type { MotebitRuntime, ReflectionResult, RelayConfig } from "@motebit/runtime";
 import type { TokenAudience } from "@motebit/sdk";
 import { isTokenAudience, fromMicro, modelVendorHint } from "@motebit/sdk";
@@ -1476,6 +1477,12 @@ export async function handleSlashCommand(
           const tmpRegistry = new InMemoryToolRegistry();
           adapter.registerInto(tmpRegistry);
           runtime.registerExternalTools(`mcp:${addName}`, tmpRegistry);
+          if (adapter.isMotebit) {
+            runtime.registerMotebitToolServer(
+              adapter.serverName,
+              adapter.getTools().map((t) => t.name),
+            );
+          }
         } catch (err: unknown) {
           const message = err instanceof Error ? err.message : String(err);
           try {
@@ -1523,21 +1530,9 @@ export async function handleSlashCommand(
           console.log("Usage: /mcp remove <name>");
           break;
         }
-        // Disconnect adapter if connected
-        const adapterIdx = repl.mcpAdapters.findIndex((a) => a.serverName === removeName);
-        if (adapterIdx >= 0) {
-          const removedAdapter = repl.mcpAdapters[adapterIdx];
-          if (removedAdapter) {
-            try {
-              await removedAdapter.disconnect();
-            } catch {
-              /* best effort */
-            }
-          }
-          repl.mcpAdapters.splice(adapterIdx, 1);
-        }
-        // Unregister tools from runtime
-        runtime.unregisterExternalTools(`mcp:${removeName}`);
+        // Disconnect the server's one adapter and unregister its tools (#943:
+        // the REPL owns the only connection, so this takes it out of service).
+        await disconnectMcpServer(runtime, repl.mcpAdapters, removeName);
         // Remove from config
         fullConfig.mcp_servers = (fullConfig.mcp_servers ?? []).filter(
           (s) => s.name !== removeName,

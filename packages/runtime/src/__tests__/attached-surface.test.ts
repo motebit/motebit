@@ -4,7 +4,7 @@
  * (runtime-host) carries opaque strings; this module is the single
  * authority on what an attached rendering frontend may read and do.
  */
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { SensitivityLevel } from "@motebit/sdk";
 import {
   ATTACHED_ACT_KINDS,
@@ -33,7 +33,7 @@ describe("resolveAttachedRead", () => {
     // Minimal valid params for kinds that require them.
     const PARAMS: Partial<Record<string, Record<string, unknown>>> = {
       policy_validate: { name: "no_such_tool" },
-      memory_recall: { embedding: [0.1, 0.2, 0.3] },
+      memory_recall: { principal: "owner", embedding: [0.1, 0.2, 0.3] },
     };
     for (const kind of ATTACHED_READ_KINDS) {
       // Must not be refused as UNKNOWN — a registry entry without a
@@ -208,8 +208,27 @@ describe("serve-and-slash kinds", () => {
   it("memory_recall validates the embedding and applies the fixed sensitivity floor", async () => {
     const runtime = makeRuntime();
     await expect(
-      runtime.resolveAttachedRead("memory_recall", { embedding: "nope" }),
+      runtime.resolveAttachedRead("memory_recall", { principal: "owner", embedding: "nope" }),
     ).rejects.toThrow(/"embedding" must be a non-empty array of finite numbers/);
+  });
+
+  it("#943: memory_recall serves the owner's memories only to a frame that names the owner", async () => {
+    const runtime = makeRuntime();
+    const recall = vi.spyOn(runtime.memory, "recallRelevant");
+    for (const principal of [undefined, "other", "caller", true]) {
+      await expect(
+        runtime.resolveAttachedRead("memory_recall", {
+          ...(principal !== undefined ? { principal } : {}),
+          embedding: [0.1, 0.2, 0.3],
+        }),
+      ).rejects.toThrow(/served only to its owner/);
+    }
+    expect(recall).not.toHaveBeenCalled();
+    await runtime.resolveAttachedRead("memory_recall", {
+      principal: "owner",
+      embedding: [0.1, 0.2, 0.3],
+    });
+    expect(recall).toHaveBeenCalledTimes(1);
   });
 
   it("tool_used_log appends the coordinator-constructed event row", async () => {

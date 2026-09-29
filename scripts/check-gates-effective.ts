@@ -2463,6 +2463,75 @@ export async function probeFetch(): Promise<unknown> {
       ),
   },
   {
+    script: "check-memory-source-canonical",
+    proves:
+      "flags a foreign principal's turn reading the owner's conversation (#904, #943 round 9) — scan (d)(ii), the per-turn view: `ConversationManager.forTurn(principal)` must hand a FOREIGN principal the inert `FOREIGN_TURN_CONVERSATION`, so a caller's `motebit_query` is built without the owner's history and writes none of it. Probe deletes that line, so a foreign turn gets the owner's live view; the gate must surface the per-turn-view violation. byte-identical restoration on cleanup via mutateFile.",
+    perturb: () =>
+      mutateFile(`packages/runtime/src/conversation.ts`, (src) =>
+        src.replace("    if (principal.foreign) return FOREIGN_TURN_CONVERSATION;\n", ""),
+      ),
+  },
+  {
+    script: "check-memory-source-canonical",
+    proves:
+      "flags a runtime-wide \"foreign turn in flight\" mark (#943 round 9) — scan (e)(ii-h), the call-path law: foreign-ness travels on the call path (`TurnPrincipal` / `ToolCall`), never as runtime state a shared backend reads — the flaw that gave the OWNER's own concurrent calls (a completion, a recall tap) the stranger's refusal while a customer's task ran. Probe re-introduces the removed `_foreignTurn` field on the runtime; the gate must surface the ambient-mark violation. byte-identical restoration on cleanup via mutateFile.",
+    perturb: () =>
+      mutateFile(`packages/runtime/src/motebit-runtime.ts`, (src) =>
+        src.replace(
+          "  private _turnReceiptKey: symbol | null = null;\n",
+          "  private _foreignTurn = false;\n  private _turnReceiptKey: symbol | null = null;\n",
+        ),
+      ),
+  },
+  {
+    script: "check-memory-source-canonical",
+    proves:
+      "flags a foreign principal's turn recalling the owner's memories (#943) — scan (e)(i), the loop's one recall chokepoint: `runTurnStreaming` must call `recallOwnerInterior` only as `foreign ? foreignTurnRecall() : await recallOwnerInterior(…)`. Probe replaces the guard with `false`, so every turn recalls; the gate must surface the recall-chokepoint violation. byte-identical restoration on cleanup via mutateFile.",
+    perturb: () =>
+      mutateFile(`packages/ai-core/src/loop.ts`, (src) =>
+        src.replace(
+          "const interior: OwnerInteriorRecall = foreign",
+          "const interior: OwnerInteriorRecall = false",
+        ),
+      ),
+  },
+  {
+    script: "check-memory-source-canonical",
+    proves:
+      "flags a server-side read of the owner's memories served to a non-owner (#943) — scan (f)(i): every MCP tool/resource handler that calls a memory read must open with `const principal = this.ownerPrincipal(extra); if (principal === null) …refuse`. Probe replaces `motebit_recall`'s owner check with a constant owner verdict; the gate must surface the missing-owner-check violation. byte-identical restoration on cleanup via mutateFile.",
+    perturb: () =>
+      mutateFile(`packages/mcp-server/src/index.ts`, (src) =>
+        src.replace(
+          "const principal = this.ownerPrincipal(extra);\n          if (principal === null) {",
+          'const principal = "owner" as const;\n          if (principal === null) {',
+        ),
+      ),
+  },
+  {
+    script: "check-memory-source-canonical",
+    proves:
+      "flags a turn sink reaching the owner's delegation-receipt record (#943) — scan (g)(iv): the owner's record (`drainOwner`) is read only by its one owner-only accessor, so a customer's task receipt can never embed the owner's hires. Probe is the cold reviewer's own injection: the sendMessageStreaming sink also drains the owner record into the task's receipts; the gate must surface the owner-record-read violation (the tests caught it before; the gate stayed green). byte-identical restoration on cleanup via mutateFile.",
+    perturb: () =>
+      mutateFile(`packages/runtime/src/motebit-runtime.ts`, (src) =>
+        src.replace(
+          "      this._turnReceiptScope.sink = options.onDelegationReceipts;",
+          "      const sink = options.onDelegationReceipts;\n      this._turnReceiptScope.sink = (r) => sink([...r, ...this.turnReceipts.drainOwner()]);",
+        ),
+      ),
+  },
+  {
+    script: "check-memory-source-canonical",
+    proves:
+      "flags a surface merging owner-connected MCP tools straight into the runtime's tool registry (#943 round 5) — scan (g)(vii): the CLI REPL connected `mcp_servers` into its own registry and merged it into the runtime registry, so the tools were never `localOnly` and a foreign turn / attached `motebit serve` reached them. Probe reintroduces a pre-merge into the runtime registry in apps/cli/src/index.ts; the gate must surface the runtime-registry-merge violation. byte-identical restoration on cleanup via mutateFile.",
+    perturb: () =>
+      mutateFile(`apps/cli/src/index.ts`, (src) =>
+        src.replace(
+          "mcpAdapters = wired.adapters;",
+          "mcpAdapters = wired.adapters;\n      runtime.getToolRegistry().merge(toolRegistry);",
+        ),
+      ),
+  },
+  {
     script: "check-agent-revocation-reason-canonical",
     proves:
       'flags the AgentRevocationReason three-way lock breaking — a value rotated in `ALL_AGENT_REVOCATION_REASONS` without updating the union (or gate reference). Drift class: same shape as the SettlementMode probe — union AND array share one file (`packages/protocol/src/agent-revocation.ts`), so the probe targets the comma-bearing array entry (`"spam",`) which matches only the array (the union form uses ` | `). Gate must surface the sibling-alignment violation (union has `spam` but ALL_AGENT_REVOCATION_REASONS contains `spamm` instead). byte-identical restoration on cleanup via mutateFile.',

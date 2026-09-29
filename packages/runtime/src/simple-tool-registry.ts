@@ -9,9 +9,42 @@
 
 import type { ToolRegistry, ToolDefinition, ToolResult, ToolHandler } from "@motebit/sdk";
 import { toolModePriority } from "@motebit/sdk";
+import type { ExecutionReceipt } from "@motebit/sdk";
+import { takeCarriedReceipt } from "./turn-delegation-receipts.js";
+import type { ReceiptDestination } from "./turn-delegation-receipts.js";
+import { OWNER_CALL } from "./turn-principal.js";
+import type { ToolCall } from "./turn-principal.js";
+
+/**
+ * A handler registered in the runtime's registry receives the call's
+ * context (#943 round 9): whose call it is travels with the call, so an
+ * owner-only handler decides from THIS call, never from runtime state.
+ */
+export type CallAwareToolHandler = (
+  args: Record<string, unknown>,
+  call: ToolCall,
+) => Promise<ToolResult>;
 
 export class SimpleToolRegistry implements ToolRegistry {
   private tools = new Map<string, { definition: ToolDefinition; handler: ToolHandler }>();
+  /**
+   * #943: where a hire's receipt goes. The ONE place a tool result's carried
+   * `delegation_receipt` is taken off and recorded — for the destination the
+   * caller passed into THIS execute (a turn's key), defaulting to the owner.
+   */
+  private receiptRouter:
+    | ((destination: ReceiptDestination, receipt: ExecutionReceipt, trustCredited: boolean) => void)
+    | null = null;
+
+  setDelegationReceiptRouter(
+    router: (
+      destination: ReceiptDestination,
+      receipt: ExecutionReceipt,
+      trustCredited: boolean,
+    ) => void,
+  ): void {
+    this.receiptRouter = router;
+  }
 
   register(tool: ToolDefinition, handler: ToolHandler): void {
     if (this.tools.has(tool.name)) throw new Error(`Tool "${tool.name}" already registered`);
@@ -41,14 +74,30 @@ export class SimpleToolRegistry implements ToolRegistry {
     return this.tools.get(name)?.definition;
   }
 
-  async execute(name: string, args: Record<string, unknown>): Promise<ToolResult> {
+  /**
+   * Execute a tool. `call` names who a hire's receipt belongs to (a turn's
+   * key, passed by that turn's loop deps, or the owner) and whose call it
+   * is; it defaults to `OWNER_CALL` — every caller that names no turn is an
+   * owner door. The handler receives the same `call`.
+   */
+  async execute(
+    name: string,
+    args: Record<string, unknown>,
+    call: ToolCall = OWNER_CALL,
+  ): Promise<ToolResult> {
     const entry = this.tools.get(name);
     if (!entry) return { ok: false, error: `Unknown tool: ${name}` };
+    let result: ToolResult;
     try {
-      return await entry.handler(args);
+      result = await (entry.handler as CallAwareToolHandler)(args, call);
     } catch (err: unknown) {
       return { ok: false, error: err instanceof Error ? err.message : String(err) };
     }
+    const carried = takeCarriedReceipt(result);
+    if (carried != null) {
+      this.receiptRouter?.(call.destination, carried.receipt, carried.trustCredited);
+    }
+    return result;
   }
 
   merge(other: ToolRegistry): void {
@@ -56,7 +105,12 @@ export class SimpleToolRegistry implements ToolRegistry {
       if (!this.tools.has(def.name)) {
         this.tools.set(def.name, {
           definition: def,
-          handler: (args) => other.execute(def.name, args),
+          handler: (args, call?: ToolCall) =>
+            (
+              other as ToolRegistry & {
+                execute(n: string, a: Record<string, unknown>, c?: ToolCall): Promise<ToolResult>;
+              }
+            ).execute(def.name, args, call),
         });
       }
     }
@@ -65,6 +119,17 @@ export class SimpleToolRegistry implements ToolRegistry {
   /** Replace the handler for an existing tool, or register if new. */
   replace(tool: ToolDefinition, handler: ToolHandler): void {
     this.tools.set(tool.name, { definition: tool, handler });
+  }
+
+  /**
+   * Mark a registered tool `localOnly` (#943), keeping its handler — the
+   * owner-connected floor applied to an entry that got here first.
+   */
+  markLocalOnly(name: string): void {
+    const entry = this.tools.get(name);
+    if (entry != null && entry.definition.localOnly !== true) {
+      this.tools.set(name, { ...entry, definition: { ...entry.definition, localOnly: true } });
+    }
   }
 
   unregister(name: string): boolean {

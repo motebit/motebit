@@ -25,8 +25,28 @@ import { cosineSimilarity } from "./index.js";
 import type { MemoryGraph } from "./index.js";
 import type { ConsolidationProvider } from "./consolidation.js";
 
+/**
+ * How a formation pass may touch the EXISTING graph — a required,
+ * discriminated choice, so no caller (and no future formation path) can
+ * form without deciding (#943).
+ *
+ *  - `consolidate` — the owner's own turn: each candidate is matched
+ *    against similar existing nodes (`consolidateAndForm`: ADD / UPDATE /
+ *    REINFORCE / NOOP), and new nodes are linked to the turn's retrieved
+ *    memories.
+ *  - `isolated_add` — a FOREIGN principal's turn: every candidate is
+ *    ADDED as a new node and nothing else. No similarity lookup against
+ *    the owner's graph (no read), no REINFORCE / UPDATE / supersede of an
+ *    owner node (no write to one), no edge to an owner node. A stranger's
+ *    words can neither probe the owner's memory ("did it dedupe?") nor
+ *    change it.
+ */
+export type FormationMode = "consolidate" | "isolated_add";
+
 export interface MemoryFormationDeps {
   readonly memoryGraph: MemoryGraph;
+  /** See {@link FormationMode}. Required: the choice is never implicit. */
+  readonly mode: FormationMode;
   readonly consolidationProvider?: ConsolidationProvider;
   /**
    * Ceiling applied to the classify neighbors `consolidateAndForm`
@@ -79,10 +99,14 @@ export async function formMemoriesFromCandidates(
   //    next candidate needs to match against). Parallelizing here
   //    would create race conditions in similarity search.
   const memoriesFormed: MemoryNode[] = [];
+  const isolated = isolatedFormation(deps.mode);
   for (let i = 0; i < candidates.length; i++) {
     const candidate = candidates[i]!;
     const embedding = embeddings[i]!;
-    if (deps.consolidationProvider) {
+    if (isolated) {
+      // ADD only — never consult or touch an existing node (#943).
+      memoriesFormed.push(await deps.memoryGraph.formMemory(candidate, embedding));
+    } else if (deps.consolidationProvider) {
       const { node } = await deps.memoryGraph.consolidateAndForm(
         candidate,
         embedding,
@@ -103,9 +127,11 @@ export async function formMemoriesFromCandidates(
   //    Bounded by the batch size × retrieved size; typical turn has
   //    ≤3 candidates × ≤10 retrieved = ≤30 cosine ops, all in-memory.
   if (memoriesFormed.length > 0) {
+    // An isolated pass links nothing to existing (owner) nodes.
+    const linkTargets = isolated ? [] : relevantMemories;
     for (const newNode of memoriesFormed) {
       if (newNode.embedding.length === 0) continue;
-      for (const retrieved of relevantMemories) {
+      for (const retrieved of linkTargets) {
         if (retrieved.embedding.length === 0) continue;
         const sim = cosineSimilarity(newNode.embedding, retrieved.embedding);
         if (sim >= MEMORY_EDGE_SIMILARITY_THRESHOLD) {
@@ -132,4 +158,18 @@ export async function formMemoriesFromCandidates(
   }
 
   return { memoriesFormed };
+}
+
+/** Exhaustive over {@link FormationMode}: a new mode is a compile error here. */
+function isolatedFormation(mode: FormationMode): boolean {
+  switch (mode) {
+    case "consolidate":
+      return false;
+    case "isolated_add":
+      return true;
+    default: {
+      const unreachable: never = mode;
+      throw new Error(`unknown formation mode ${String(unreachable)}`);
+    }
+  }
 }

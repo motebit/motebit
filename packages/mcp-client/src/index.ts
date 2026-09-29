@@ -454,12 +454,37 @@ function extractToolNameFromBody(body: unknown): string | undefined {
 /** 24-hour grace period for accepting the previous key after rotation. */
 const KEY_GRACE_PERIOD_MS = 24 * 60 * 60 * 1000;
 
+/**
+ * A tool result that carries the delegation receipt of the hire its call
+ * made (#943). The caller — never the adapter — decides whose record the
+ * receipt belongs to.
+ */
+export type ToolResultWithDelegationReceipt = ToolResult & {
+  delegation_receipt?: ExecutionReceipt;
+};
+
+/** Parse an ExecutionReceipt from a motebit_task result, or null. */
+function parseDelegationReceipt(text: string): ExecutionReceipt | null {
+  try {
+    const parsed = JSON.parse(stripIdentityTag(text)) as Record<string, unknown>;
+    if (
+      typeof parsed.task_id === "string" &&
+      typeof parsed.signature === "string" &&
+      typeof parsed.motebit_id === "string"
+    ) {
+      return parsed as unknown as ExecutionReceipt;
+    }
+  } catch {
+    // Not every motebit_task result is a JSON receipt.
+  }
+  return null;
+}
+
 export class McpClientAdapter {
   private client: Client;
   private config: McpServerConfig;
   private connected = false;
   private discoveredTools: ToolDefinition[] = [];
-  private _delegationReceipts: ExecutionReceipt[] = [];
   private _verifiedIdentity: MotebitIdentityResult | null = null;
   private _previousPublicKey?: string;
   private _previousKeySupersededAt?: number;
@@ -735,7 +760,17 @@ export class McpClientAdapter {
     return [...this.discoveredTools];
   }
 
-  async executeTool(qualifiedName: string, args: Record<string, unknown>): Promise<ToolResult> {
+  /**
+   * Execute a tool on this server. A verified motebit server's `motebit_task`
+   * result carries the worker's signed `ExecutionReceipt`; it is returned ON
+   * the result (`delegation_receipt`) so the CALLER attributes it to the
+   * context that made this call (#943). The adapter keeps no receipt array:
+   * a shared bucket drained later cannot tell whose call a receipt was.
+   */
+  async executeTool(
+    qualifiedName: string,
+    args: Record<string, unknown>,
+  ): Promise<ToolResultWithDelegationReceipt> {
     const prefix = `${this.config.name}__`;
     if (!qualifiedName.startsWith(prefix)) {
       return {
@@ -755,10 +790,11 @@ export class McpClientAdapter {
         .map((c) => c.text ?? "")
         .join("\n");
 
-      // Capture delegation receipts from motebit_task calls
-      if (mcpToolName === "motebit_task" && this._verifiedIdentity?.verified && textContent) {
-        this.tryCaptureDelegationReceipt(textContent);
-      }
+      // A verified motebit_task call's receipt rides on this call's result.
+      const delegationReceipt =
+        mcpToolName === "motebit_task" && this._verifiedIdentity?.verified && textContent
+          ? parseDelegationReceipt(textContent)
+          : null;
 
       const wrapped = textContent
         ? wrapMcpResult(textContent, this.config.name, mcpToolName)
@@ -769,36 +805,12 @@ export class McpClientAdapter {
         data: wrapped != null ? wrapped : result.content,
         error: result.isError === true ? textContent : undefined,
         _sanitized: true,
+        ...(delegationReceipt != null ? { delegation_receipt: delegationReceipt } : {}),
       };
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
       return { ok: false, error: message };
     }
-  }
-
-  /** Try to parse an ExecutionReceipt from a motebit_task result and accumulate it. */
-  private tryCaptureDelegationReceipt(text: string): void {
-    try {
-      const cleaned = stripIdentityTag(text);
-      const parsed = JSON.parse(cleaned) as Record<string, unknown>;
-      // Verify it has the shape of an ExecutionReceipt
-      if (
-        typeof parsed.task_id === "string" &&
-        typeof parsed.signature === "string" &&
-        typeof parsed.motebit_id === "string"
-      ) {
-        this._delegationReceipts.push(parsed as unknown as ExecutionReceipt);
-      }
-    } catch {
-      // Silent on parse failure — not all motebit_task results are JSON receipts
-    }
-  }
-
-  /** Drain accumulated delegation receipts (same pattern as MemoryGraph.getAndResetRetrievalStats). */
-  getAndResetDelegationReceipts(): ExecutionReceipt[] {
-    const receipts = this._delegationReceipts;
-    this._delegationReceipts = [];
-    return receipts;
   }
 
   /** Register all discovered tools into a ToolRegistry. */

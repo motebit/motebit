@@ -54,9 +54,9 @@ function log(msg: string): void {
  * failure.
  *
  * The receipt capture happens automatically inside `McpClientAdapter` —
- * any motebit_task call whose response is a valid signed receipt is
- * pushed onto the adapter's `_delegationReceipts` queue, drained here
- * via `getAndResetDelegationReceipts()`. Nothing motebit-protocol-shaped
+ * a motebit_task call whose response is a valid signed receipt returns
+ * it ON that call's result (`delegation_receipt`, #943 — no shared
+ * per-adapter queue a concurrent call could drain). Nothing motebit-protocol-shaped
  * is reinvented — see CLAUDE.md "Protocol primitives belong in
  * packages, never inline in services" for the doctrine.
  */
@@ -158,10 +158,9 @@ async function subDelegate(
     const args: Record<string, unknown> = { prompt };
     if (subRelayTaskId != null) args.relay_task_id = subRelayTaskId;
     if (subDispatchToken != null) args.dispatch_token = subDispatchToken;
-    await adapter.executeTool("read-url__motebit_task", args);
-    const receipts = adapter.getAndResetDelegationReceipts();
+    const called = await adapter.executeTool("read-url__motebit_task", args);
     recordSubDelegateOutcome(true, Date.now());
-    return receipts[0] ?? null;
+    return called.delegation_receipt ?? null;
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
     log(`sub-delegation failed: ${msg}`);

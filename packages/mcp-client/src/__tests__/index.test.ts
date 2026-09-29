@@ -801,12 +801,12 @@ describe("McpClientAdapter — delegation receipts", () => {
     mockConnect.mockResolvedValue(undefined);
   });
 
-  it("getAndResetDelegationReceipts returns empty by default", () => {
+  it("#943: the adapter keeps no receipt bucket — nothing to drain", () => {
     const adapter = new McpClientAdapter(stdioConfig());
-    expect(adapter.getAndResetDelegationReceipts()).toEqual([]);
+    expect("getAndResetDelegationReceipts" in adapter).toBe(false);
   });
 
-  it("accumulates receipts from motebit_task calls on verified identity", async () => {
+  it("returns a verified motebit_task call's receipt ON that call's result", async () => {
     const receipt = {
       task_id: "sub-task-1",
       motebit_id: "remote-mote",
@@ -854,14 +854,10 @@ describe("McpClientAdapter — delegation receipts", () => {
       content: [{ type: "text", text: JSON.stringify(receipt) }],
       isError: false,
     });
-    await adapter.executeTool("mote-srv__motebit_task", { prompt: "do it" });
+    const result = await adapter.executeTool("mote-srv__motebit_task", { prompt: "do it" });
 
-    const receipts = adapter.getAndResetDelegationReceipts();
-    expect(receipts).toHaveLength(1);
-    expect(receipts[0]!.task_id).toBe("sub-task-1");
-
-    // Second call returns empty
-    expect(adapter.getAndResetDelegationReceipts()).toEqual([]);
+    // The receipt belongs to THIS call — the caller attributes it (#943).
+    expect(result.delegation_receipt?.task_id).toBe("sub-task-1");
   });
 
   it("strips identity tag before parsing receipt", async () => {
@@ -909,11 +905,9 @@ describe("McpClientAdapter — delegation receipts", () => {
       content: [{ type: "text", text: JSON.stringify(receipt) + "\n[motebit:remote-mote]" }],
       isError: false,
     });
-    await adapter.executeTool("mote-srv__motebit_task", { prompt: "test" });
+    const result = await adapter.executeTool("mote-srv__motebit_task", { prompt: "test" });
 
-    const receipts = adapter.getAndResetDelegationReceipts();
-    expect(receipts).toHaveLength(1);
-    expect(receipts[0]!.task_id).toBe("sub-task-2");
+    expect(result.delegation_receipt?.task_id).toBe("sub-task-2");
   });
 
   it("does not capture receipts for non-motebit_task tools", async () => {
@@ -945,9 +939,9 @@ describe("McpClientAdapter — delegation receipts", () => {
       content: [{ type: "text", text: '{"task_id":"x","signature":"y","motebit_id":"z"}' }],
       isError: false,
     });
-    await adapter.executeTool("mote-srv__motebit_query", {});
+    const result = await adapter.executeTool("mote-srv__motebit_query", {});
 
-    expect(adapter.getAndResetDelegationReceipts()).toEqual([]);
+    expect(result.delegation_receipt).toBeUndefined();
   });
 
   it("silently skips non-JSON motebit_task results", async () => {
@@ -979,9 +973,9 @@ describe("McpClientAdapter — delegation receipts", () => {
       content: [{ type: "text", text: "Not JSON at all" }],
       isError: false,
     });
-    await adapter.executeTool("mote-srv__motebit_task", { prompt: "test" });
+    const result = await adapter.executeTool("mote-srv__motebit_task", { prompt: "test" });
 
-    expect(adapter.getAndResetDelegationReceipts()).toEqual([]);
+    expect(result.delegation_receipt).toBeUndefined();
   });
 });
 

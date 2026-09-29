@@ -246,9 +246,17 @@ export async function resolveAttachedRead(
       );
     }
     case "memory_recall": {
+      // #943: the owner's memories are served only to the owner. The
+      // attached MCP frontend serves OTHER principals by default; it must
+      // state that it verified THIS request's caller as the owner
+      // (`principal: "owner"`). Absent or anything else refuses — fail
+      // closed, and no memory content leaves the coordinator.
+      if (params["principal"] !== "owner") {
+        throw bad(kind, "the owner's memories are served only to its owner (#943)");
+      }
       // Sensitivity floor is fixed coordinator-side — an attached MCP
       // surface recalls at the same none/personal ceiling the local
-      // serve path grants external callers, never a wire-chosen tier.
+      // serve path grants the owner, never a wire-chosen tier.
       return runtime.memory.recallRelevant(reqNumberArray(kind, params, "embedding"), {
         limit: optPositiveInt(kind, params, "limit") ?? 10,
         sensitivityFilter: [SensitivityLevel.None, SensitivityLevel.Personal],

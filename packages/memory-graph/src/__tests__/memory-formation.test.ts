@@ -64,7 +64,11 @@ describe("formMemoriesFromCandidates", () => {
     const { embedText } = await import("../embeddings.js");
     const before = (embedText as ReturnType<typeof vi.fn>).mock.calls.length;
 
-    const result = await formMemoriesFromCandidates({ memoryGraph: graph }, [], []);
+    const result = await formMemoriesFromCandidates(
+      { memoryGraph: graph, mode: "consolidate" },
+      [],
+      [],
+    );
     expect(result.memoriesFormed).toEqual([]);
 
     const after = (embedText as ReturnType<typeof vi.fn>).mock.calls.length;
@@ -111,7 +115,7 @@ describe("formMemoriesFromCandidates", () => {
       },
     ];
 
-    await formMemoriesFromCandidates({ memoryGraph: graph }, candidates, []);
+    await formMemoriesFromCandidates({ memoryGraph: graph, mode: "consolidate" }, candidates, []);
 
     expect(starts).toHaveLength(3);
     expect(completes).toHaveLength(3);
@@ -138,7 +142,7 @@ describe("formMemoriesFromCandidates", () => {
     ];
 
     const { memoriesFormed } = await formMemoriesFromCandidates(
-      { memoryGraph: graph },
+      { memoryGraph: graph, mode: "consolidate" },
       candidates,
       [],
     );
@@ -168,7 +172,7 @@ describe("formMemoriesFromCandidates", () => {
     ];
 
     const { memoriesFormed } = await formMemoriesFromCandidates(
-      { memoryGraph: graph, consolidationProvider },
+      { memoryGraph: graph, mode: "consolidate", consolidationProvider },
       candidates,
       [],
     );
@@ -181,7 +185,7 @@ describe("formMemoriesFromCandidates", () => {
     expect(memoriesFormed).toHaveLength(1);
 
     const { memoriesFormed: second } = await formMemoriesFromCandidates(
-      { memoryGraph: graph, consolidationProvider },
+      { memoryGraph: graph, mode: "consolidate", consolidationProvider },
       [
         {
           content: "Delta memory also requiring consolidation",
@@ -242,7 +246,12 @@ describe("formMemoriesFromCandidates", () => {
     );
 
     await formMemoriesFromCandidates(
-      { memoryGraph: graph, consolidationProvider, sensitivityCeiling: SensitivityLevel.Personal },
+      {
+        memoryGraph: graph,
+        mode: "consolidate",
+        consolidationProvider,
+        sensitivityCeiling: SensitivityLevel.Personal,
+      },
       [
         {
           content: "user mentioned a routine",
@@ -289,7 +298,7 @@ describe("formMemoriesFromCandidates", () => {
     ];
 
     const { memoriesFormed } = await formMemoriesFromCandidates(
-      { memoryGraph: graph },
+      { memoryGraph: graph, mode: "consolidate" },
       candidates,
       [retrieved],
     );
@@ -304,6 +313,40 @@ describe("formMemoriesFromCandidates", () => {
         (e.target_id === retrieved.node_id || e.source_id === retrieved.node_id),
     );
     expect(related).toBeDefined();
+  });
+
+  it("isolated_add (#943): given non-empty relevantMemories above the threshold, links NO edge to an existing node", async () => {
+    // Same fixture as the consolidate case above, which DOES link — so the
+    // only difference is the mode. `linkTargets = isolated ? [] : relevantMemories`.
+    const retrieved = await graph.formMemory(
+      {
+        content: "Owner anchor",
+        confidence: 0.9,
+        sensitivity: SensitivityLevel.None,
+        source: "user_stated",
+      },
+      [1, 1, 1],
+    );
+    const { embedText } = await import("../embeddings.js");
+    const mock = embedText as ReturnType<typeof vi.fn>;
+    mock.mockResolvedValueOnce([0.99, 0.99, 0.99]);
+
+    const { memoriesFormed } = await formMemoriesFromCandidates(
+      { memoryGraph: graph, mode: "isolated_add" },
+      [
+        {
+          content: "A stranger's candidate",
+          confidence: 0.8,
+          sensitivity: SensitivityLevel.None,
+          source: "peer_agent",
+        },
+      ],
+      [retrieved],
+    );
+
+    expect(memoriesFormed).toHaveLength(1);
+    expect(await storage.getEdges(memoriesFormed[0]!.node_id)).toEqual([]);
+    expect(await storage.getEdges(retrieved.node_id)).toEqual([]);
   });
 
   it("exports the edge-similarity threshold as a named constant for observable drift", () => {

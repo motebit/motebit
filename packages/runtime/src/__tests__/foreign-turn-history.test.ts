@@ -13,25 +13,26 @@
  * (`clearForTask` isolated the live history, but its push opened a fresh
  * stored conversation).
  *
- * The floor is the runtime's, not a door's: `ConversationManager` refuses
- * every write while the per-turn foreign mark is up. These run the real
+ * The floor is the runtime's, not a door's: every turn path reaches the
+ * conversation through `ConversationManager.forTurn(principal)`, and a
+ * foreign principal's view is inert (#943 round 9 — whose turn it is travels
+ * on the call path, never as a runtime-wide mark). These run the real
  * runtime (no loop mock) and read what the owner's next turn was given,
  * what the store holds, and what a real `ConversationSyncEngine` pushes.
  *
  * Tamper checks (each goes red):
- *  - drop `isForeignPrincipalTurn` from `buildConversationDeps` (door-level
- *    `suppressHistory` would be the only defense, and no foreign door sets it);
- *  - drop the `isForeignTurn()` guard from `pushExchange`;
- *  - drop `enterForeignPrincipalTurn` from the approval resume, or make the
- *    resume inject the pair into owner history for a foreign pending call;
+ *  - drop `if (principal.foreign) return FOREIGN_TURN_CONVERSATION;` from
+ *    `forTurn` (door-level `suppressHistory` would be the only defense);
+ *  - make the approval resume decide its principal as the owner's, or inject
+ *    the pair into owner history for a foreign pending call;
  *  - drop the `expired.foreignPrincipal` check from the approval timeout.
  *
  * Round 2 (same class, read and consent side): a foreign turn's context is
  * built without the owner's history, summary or session info, and a foreign
  * turn is not the human — it never releases the owner's denial brake, never
  * counts as user activity, never voids the owner's pending approval. Tamper:
- * drop the floor from `trimmed` / `getSessionInfo` / `clearSessionInfo` /
- * `liveHistory`, or the `_foreignTurn` guard from `beginExchange` /
+ * make any member of `FOREIGN_TURN_CONVERSATION` live, or drop the
+ * `principal.foreign` guard from `beginExchange` /
  * `_lastUserMessageAt` / `voidPendingApproval` — each goes red.
  */
 import { describe, it, expect, vi } from "vitest";

@@ -21,7 +21,7 @@
  *   shell_exec  (R3)  — Tauri IPC → Rust Command (requires approval)
  */
 
-import { SimpleToolRegistry } from "@motebit/runtime";
+import { SimpleToolRegistry, TurnPrincipal } from "@motebit/runtime";
 import type { MotebitRuntime } from "@motebit/runtime";
 import type { EventType } from "@motebit/sdk";
 import {
@@ -81,7 +81,10 @@ export function registerDesktopTools(
     readUrlFetcher,
     // Recall routes through recallMemoriesForTool — the one place the
     // sensitivity egress boundary is enforced (check-memory-tool-egress).
-    memorySearchFn: (query, opts) => runtime.recallMemoriesForTool(query, opts),
+    // The owner's door: `recall_memories` is `localOnly`, so no foreign
+    // turn's registry ever runs it (#943).
+    memorySearchFn: (query, opts) =>
+      runtime.recallMemoriesForTool(query, opts, TurnPrincipal.OWNER),
     eventQueryFn: async (limit, eventType) => {
       const events = await runtime.events.query({
         motebit_id: runtime.motebitId,

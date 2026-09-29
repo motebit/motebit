@@ -301,6 +301,15 @@ describe("the foreign scope is the turn's, never the runtime's (#880 round 2)", 
   });
 });
 
+/**
+ * #943 round 9: the runtime keeps NO foreign mark at all — whose words a
+ * turn runs travels on that turn's call path — so nothing can outlive it.
+ */
 function isForeign(runtime: MotebitRuntime): boolean {
-  return (runtime as unknown as { isForeignPrincipalTurn(): boolean }).isForeignPrincipalTurn();
+  const r = runtime as unknown as Record<string, unknown>;
+  return (
+    "_foreignTurn" in r ||
+    "_foreignResume" in r ||
+    typeof r["isForeignPrincipalTurn"] === "function"
+  );
 }

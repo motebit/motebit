@@ -244,8 +244,13 @@ export interface AtomAdapter {
   executeTool(
     qualifiedName: string,
     args: Record<string, unknown>,
-  ): Promise<{ ok: boolean; data?: unknown; error?: string }>;
-  getAndResetDelegationReceipts(): SignedReceipt[];
+  ): Promise<{
+    ok: boolean;
+    data?: unknown;
+    error?: string;
+    /** The worker's signed receipt for THIS call (#943) — never a shared bucket. */
+    delegation_receipt?: SignedReceipt;
+  }>;
 }
 
 export type AdapterFactory = (atom: {
@@ -793,9 +798,9 @@ export async function research(question: string, config: ResearchConfig): Promis
         }
 
         const result = await adapter.executeTool(qualified, args);
-        // McpClientAdapter captures any motebit-shaped receipt during executeTool.
-        // Drain immediately so receipt order matches the dispatch order.
-        const fresh = adapter.getAndResetDelegationReceipts();
+        // The receipt rides on THIS call's result (#943): a concurrent call
+        // on the same adapter can never take it, and order is dispatch order.
+        const fresh = result.delegation_receipt != null ? [result.delegation_receipt] : [];
         delegationReceipts.push(...fresh);
 
         if (!result.ok || fresh.length === 0) {

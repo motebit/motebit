@@ -25,6 +25,7 @@
  */
 
 import type { ToolDefinition, ToolHandler, ToolRegistry, ToolResult } from "@motebit/sdk";
+import type { ToolCall } from "./turn-principal.js";
 
 export interface ScopedToolRegistryOptions {
   /** Returns true iff `toolName` is allowed under the current scope.
@@ -38,6 +39,11 @@ export interface ScopedToolRegistryOptions {
   refusal?: (toolName: string) => string | undefined;
 }
 
+/** A registry whose `execute` accepts the #943 call context. */
+type RoutableToolRegistry = ToolRegistry & {
+  execute(name: string, args: Record<string, unknown>, call?: ToolCall): Promise<ToolResult>;
+};
+
 export class ScopedToolRegistry implements ToolRegistry {
   constructor(
     private readonly inner: ToolRegistry,
@@ -48,14 +54,15 @@ export class ScopedToolRegistry implements ToolRegistry {
     return this.inner.list().filter((t) => this.opts.allows(t.name));
   }
 
-  async execute(name: string, args: Record<string, unknown>): Promise<ToolResult> {
+  /** `call` (#943) is forwarded untouched to the inner registry. */
+  async execute(name: string, args: Record<string, unknown>, call?: ToolCall): Promise<ToolResult> {
     if (!this.opts.allows(name)) {
       return {
         ok: false,
         error: this.opts.refusal?.(name) ?? `Tool "${name}" not available in current presence mode`,
       };
     }
-    return this.inner.execute(name, args);
+    return (this.inner as RoutableToolRegistry).execute(name, args, call);
   }
 
   register(tool: ToolDefinition, handler: ToolHandler): void {

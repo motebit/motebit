@@ -14,7 +14,7 @@
  *    clamped by the coordinator (`attached-surface.ts`), and the
  *    runtime-host wire passes only `foreignPrincipal: true`.
  */
-import type { CallerIdentity, MotebitServerDeps } from "@motebit/mcp-server";
+import type { CallerIdentity, MotebitServerDeps, ServedPrincipal } from "@motebit/mcp-server";
 import type { MotebitRuntime } from "@motebit/runtime";
 import type { PolicyDecision, ToolResult } from "@motebit/sdk";
 
@@ -57,14 +57,26 @@ export function attachedServePrincipalDeps(
         args,
         ...attachedCaller(caller),
       })) as ToolResult,
-    // The AI loop is the coordinator's — one turn over the chat frame. The
-    // text is the caller's, so the turn is foreign (#880): without the mark
-    // the coordinator ran it as an OWNER turn with every localOnly tool.
-    sendMessage: async (text: string) => {
+    // The AI loop is the coordinator's — one turn over the chat frame. Whose
+    // turn it is comes from the request (#943 round 10): a remote caller's
+    // text runs FOREIGN (#880 — without the mark the coordinator ran it as
+    // an OWNER turn with every localOnly tool); the owner's own stdio host
+    // runs an owner turn.
+    sendMessage: async (text: string, principal: ServedPrincipal) => {
+      const owner = principal === "owner";
       let response = "";
-      for await (const chunk of client.chat(text, { foreignPrincipal: true })) {
-        const c = chunk as { type?: string; text?: string; notice?: string };
+      let memoriesFormed = 0;
+      for await (const chunk of client.chat(text, owner ? {} : { foreignPrincipal: true })) {
+        const c = chunk as {
+          type?: string;
+          text?: string;
+          notice?: string;
+          result?: { memoriesFormed?: unknown[] };
+        };
         if (c.type === "text" && typeof c.text === "string") response += c.text;
+        else if (c.type === "result" && Array.isArray(c.result?.memoriesFormed)) {
+          memoriesFormed = c.result.memoriesFormed.length;
+        }
         // #885: the coordinator's wallet sent another payment (or a payment
         // could not be recorded) inside a served turn — the operator reads
         // the serve log, never the MCP caller's response.
@@ -72,7 +84,8 @@ export function attachedServePrincipalDeps(
           log(`[warning] payment: ${c.notice}`);
         }
       }
-      return { response, memoriesFormed: 0 };
+      // Never a count of the owner's memory to another principal (#943).
+      return { response, memoriesFormed: owner ? memoriesFormed : 0 };
     },
   };
 }
@@ -97,11 +110,18 @@ export function servePrincipalDeps(
       }
       return runtime.policy.validate(tool, args, ctx);
     },
-    // `motebit_query` runs a CALLER's words through this motebit's loop, so
-    // the turn is foreign: no `localOnly` tool is offered to it.
-    sendMessage: async (text: string) => {
-      const result = await runtime.sendMessage(text, undefined, { foreignPrincipal: true });
-      return { response: result.response, memoriesFormed: result.memoriesFormed.length };
+    // `motebit_query` runs as the request's served principal (#943 round
+    // 10): a remote CALLER's words run a foreign turn (no `localOnly` tool,
+    // none of the owner's interior); the owner's own stdio host runs an
+    // owner turn — the principal `motebit_recall` is already served to.
+    sendMessage: async (text: string, principal: ServedPrincipal) => {
+      const owner = principal === "owner";
+      const result = await runtime.sendMessage(text, undefined, { foreignPrincipal: !owner });
+      // Never a count derived from the owner's memory to a caller.
+      return {
+        response: result.response,
+        memoriesFormed: owner ? result.memoriesFormed.length : 0,
+      };
     },
   };
 }

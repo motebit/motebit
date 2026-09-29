@@ -22,7 +22,7 @@ vi.mock("@motebit/memory-graph", async (importOriginal) => {
   return { ...actual, embedText: vi.fn(async () => QUERY_EMB) };
 });
 
-import { MotebitRuntime, NullRenderer, createInMemoryStorage } from "../index";
+import { MotebitRuntime, NullRenderer, TurnPrincipal, createInMemoryStorage } from "../index";
 import { SensitivityLevel } from "@motebit/sdk";
 import type { AttributedMemoryCandidate } from "@motebit/sdk";
 
@@ -57,7 +57,11 @@ describe("recallMemoriesForTool — sensitivity egress boundary", () => {
     await seedTiered(r);
     r.setProviderMode("byok");
 
-    const results = await r.recallMemoriesForTool("what do I know", { limit: 10 });
+    const results = await r.recallMemoriesForTool(
+      "what do I know",
+      { limit: 10 },
+      TurnPrincipal.OWNER,
+    );
     const contents = results.map((m) => m.content);
 
     expect(contents).toContain("user likes TypeScript"); // personal is context-safe
@@ -70,7 +74,9 @@ describe("recallMemoriesForTool — sensitivity egress boundary", () => {
     const r = makeRuntime();
     await seedTiered(r);
     r.setProviderMode("motebit-cloud");
-    const contents = (await r.recallMemoriesForTool("q", { limit: 10 })).map((m) => m.content);
+    const contents = (await r.recallMemoriesForTool("q", { limit: 10 }, TurnPrincipal.OWNER)).map(
+      (m) => m.content,
+    );
     expect(contents).toContain("user likes TypeScript");
     expect(contents).not.toContain("user takes lisinopril daily");
   });
@@ -79,7 +85,9 @@ describe("recallMemoriesForTool — sensitivity egress boundary", () => {
     // A surface that forgot to declare its mode must not silently egress secrets.
     const r = makeRuntime(); // no setProviderMode
     await seedTiered(r);
-    const contents = (await r.recallMemoriesForTool("q", { limit: 10 })).map((m) => m.content);
+    const contents = (await r.recallMemoriesForTool("q", { limit: 10 }, TurnPrincipal.OWNER)).map(
+      (m) => m.content,
+    );
     expect(contents).not.toContain("recovery phrase is alpha bravo");
     expect(contents).toContain("user likes TypeScript");
   });
@@ -88,7 +96,9 @@ describe("recallMemoriesForTool — sensitivity egress boundary", () => {
     const r = makeRuntime();
     await seedTiered(r);
     r.setProviderMode("on-device");
-    const contents = (await r.recallMemoriesForTool("q", { limit: 10 })).map((m) => m.content);
+    const contents = (await r.recallMemoriesForTool("q", { limit: 10 }, TurnPrincipal.OWNER)).map(
+      (m) => m.content,
+    );
     expect(contents).toContain("user likes TypeScript");
     expect(contents).toContain("user takes lisinopril daily");
     expect(contents).toContain("user card ends 4242");
@@ -104,7 +114,11 @@ describe("recallMemoriesForTool — sensitivity egress boundary", () => {
     );
     await r.memory.supersedeMemoryByNodeId(a.node_id, "user lives in SF", "moved");
 
-    const withHistory = await r.recallMemoriesForTool("where", { limit: 10, includeExpired: true });
+    const withHistory = await r.recallMemoriesForTool(
+      "where",
+      { limit: 10, includeExpired: true },
+      TurnPrincipal.OWNER,
+    );
     const superseded = withHistory.find((m) => m.content === "user lives in NYC");
     const current = withHistory.find((m) => m.content === "user lives in SF");
     expect(superseded?.supersededAt).toEqual(expect.any(Number));

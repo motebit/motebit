@@ -1,5 +1,11 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { MotebitRuntime, NullRenderer, SimpleToolRegistry, createInMemoryStorage } from "../index";
+import {
+  MotebitRuntime,
+  NullRenderer,
+  OWNER_CALL,
+  SimpleToolRegistry,
+  createInMemoryStorage,
+} from "../index";
 import type { PlatformAdapters, StreamChunk, ConversationStoreAdapter } from "../index";
 import type { StreamingProvider, AgenticChunk, TurnResult } from "@motebit/ai-core";
 import type { AIResponse, ContextPack, ToolHandler } from "@motebit/sdk";
@@ -261,7 +267,8 @@ describe("SimpleToolRegistry", () => {
     const result = await registry.execute("greet", { name: "world" });
     expect(result.ok).toBe(true);
     expect(result.data).toBe("hello");
-    expect(handler).toHaveBeenCalledWith({ name: "world" });
+    // #943 round 9: the handler receives the call context — an owner door by default.
+    expect(handler).toHaveBeenCalledWith({ name: "world" }, OWNER_CALL);
   });
 
   it("execute() returns error for unknown tool", async () => {
@@ -1603,6 +1610,8 @@ describe("External tool registration", () => {
 
     runtime.registerExternalTools("mcp:test", external);
     expect(runtime.getToolRegistry().get("overlap")!.description).toBe("Local");
+    // #943: the collision still gets the owner-connected floor.
+    expect(runtime.getToolRegistry().get("overlap")!.localOnly).toBe(true);
   });
 
   it("unregisterExternalTools removes tools by source", () => {
@@ -3475,15 +3484,24 @@ describe("approval lifecycle single-writer (#462)", () => {
 describe("delegate_to_agent receipt beat (#493)", () => {
   let runtime: MotebitRuntime;
 
-  function stashOf(rt: MotebitRuntime): {
-    pushReceipt(r: unknown): void;
-    stashedReceiptCount: number;
-  } {
-    return (
-      rt as unknown as {
-        interactiveDelegation: { pushReceipt(r: unknown): void; stashedReceiptCount: number };
-      }
-    ).interactiveDelegation;
+  /** Record a receipt the way the tool registry does for a call made BY the in-flight turn (#943). */
+  function stashOf(rt: MotebitRuntime): { recordTurnReceipt(r: unknown): void } {
+    const internals = rt as unknown as {
+      turnReceipts: {
+        recordFor(d: symbol, r: unknown, c?: boolean): void;
+        activeKey(): symbol | null;
+      };
+    };
+    return {
+      recordTurnReceipt: (r) => {
+        const key = internals.turnReceipts.activeKey();
+        if (key != null) internals.turnReceipts.recordFor(key, r, true);
+        else
+          (
+            rt as unknown as { interactiveDelegation: { pushReceipt(r: unknown): void } }
+          ).interactiveDelegation.pushReceipt(r);
+      },
+    };
   }
 
   function makeDelegationReceipt(taskId: string): Record<string, unknown> {
@@ -3519,7 +3537,7 @@ describe("delegate_to_agent receipt beat (#493)", () => {
           status: "calling" as const,
         };
         // The tool handler stashes the worker's signed receipt mid-call.
-        stashOf(runtime).pushReceipt(makeDelegationReceipt("task-beat-1"));
+        stashOf(runtime).recordTurnReceipt(makeDelegationReceipt("task-beat-1"));
         yield {
           type: "tool_status" as const,
           name: "delegate_to_agent",
@@ -3557,7 +3575,7 @@ describe("delegate_to_agent receipt beat (#493)", () => {
           name: "delegate_to_agent",
           status: "calling" as const,
         };
-        stashOf(runtime).pushReceipt(makeDelegationReceipt("task-beat-2"));
+        stashOf(runtime).recordTurnReceipt(makeDelegationReceipt("task-beat-2"));
         yield {
           type: "tool_status" as const,
           name: "delegate_to_agent",
@@ -3567,12 +3585,16 @@ describe("delegate_to_agent receipt beat (#493)", () => {
         yield { type: "result" as const, result: makeTurnResult() };
       })(),
     );
-    await collectChunks(runtime.sendMessageStreaming("hire"));
-
-    // The composition drain (handleAgentTask's path) must still see it.
-    const drained = runtime.getAndResetInteractiveDelegationReceipts();
-    expect(drained).toHaveLength(1);
-    expect(drained[0]!.task_id).toBe("task-beat-2");
+    // The turn's own collector still gets it at turn end (#943: through the
+    // turn's sink — the path `handleAgentTask` builds its receipt from).
+    const composed: Array<{ task_id: string }> = [];
+    await collectChunks(
+      runtime.sendMessageStreaming("hire", undefined, {
+        onDelegationReceipts: (entries) => composed.push(...entries.map((e) => e.receipt)),
+      }),
+    );
+    expect(composed).toHaveLength(1);
+    expect(composed[0]!.task_id).toBe("task-beat-2");
   });
 
   it("a delegate call that stashes nothing (failed/refused) emits no beat", async () => {
@@ -3597,7 +3619,7 @@ describe("delegate_to_agent receipt beat (#493)", () => {
   });
 
   it("pre-existing stash entries are not re-emitted — only receipts from THIS call", async () => {
-    stashOf(runtime).pushReceipt(makeDelegationReceipt("task-earlier"));
+    stashOf(runtime).recordTurnReceipt(makeDelegationReceipt("task-earlier"));
     mockRunTurnStreaming.mockReturnValueOnce(
       (async function* () {
         yield {
@@ -3605,7 +3627,7 @@ describe("delegate_to_agent receipt beat (#493)", () => {
           name: "delegate_to_agent",
           status: "calling" as const,
         };
-        stashOf(runtime).pushReceipt(makeDelegationReceipt("task-fresh"));
+        stashOf(runtime).recordTurnReceipt(makeDelegationReceipt("task-fresh"));
         yield {
           type: "tool_status" as const,
           name: "delegate_to_agent",
@@ -3638,7 +3660,7 @@ describe("delegate_to_agent receipt beat (#493)", () => {
     ).toolRegistry.register(
       { name: "delegate_to_agent", description: "hire", parameters: {} },
       async () => {
-        stashOf(runtime).pushReceipt(makeDelegationReceipt("task-approved"));
+        stashOf(runtime).recordTurnReceipt(makeDelegationReceipt("task-approved"));
         return { ok: true, data: "Task completed by worker-1" };
       },
     );
@@ -3685,9 +3707,24 @@ describe("delegate_to_agent receipt beat (#493)", () => {
 describe("approval band spend-history stamp (#522)", () => {
   let runtime: MotebitRuntime;
 
-  function stashOf(rt: MotebitRuntime): { pushReceipt(r: unknown): void } {
-    return (rt as unknown as { interactiveDelegation: { pushReceipt(r: unknown): void } })
-      .interactiveDelegation;
+  /** Record a receipt the way the tool registry does for a call made BY the in-flight turn (#943). */
+  function stashOf(rt: MotebitRuntime): { recordTurnReceipt(r: unknown): void } {
+    const internals = rt as unknown as {
+      turnReceipts: {
+        recordFor(d: symbol, r: unknown, c?: boolean): void;
+        activeKey(): symbol | null;
+      };
+    };
+    return {
+      recordTurnReceipt: (r) => {
+        const key = internals.turnReceipts.activeKey();
+        if (key != null) internals.turnReceipts.recordFor(key, r, true);
+        else
+          (
+            rt as unknown as { interactiveDelegation: { pushReceipt(r: unknown): void } }
+          ).interactiveDelegation.pushReceipt(r);
+      },
+    };
   }
 
   function delegationReceipt(taskId: string): Record<string, unknown> {
@@ -3722,7 +3759,7 @@ describe("approval band spend-history stamp (#522)", () => {
           name: "delegate_to_agent",
           status: "calling" as const,
         };
-        stashOf(runtime).pushReceipt(delegationReceipt("task-settle-1"));
+        stashOf(runtime).recordTurnReceipt(delegationReceipt("task-settle-1"));
         yield {
           type: "tool_status" as const,
           name: "delegate_to_agent",
@@ -3757,7 +3794,7 @@ describe("approval band spend-history stamp (#522)", () => {
           name: "delegate_to_agent",
           status: "calling" as const,
         };
-        stashOf(runtime).pushReceipt(delegationReceipt("task-settle-2"));
+        stashOf(runtime).recordTurnReceipt(delegationReceipt("task-settle-2"));
         yield {
           type: "tool_status" as const,
           name: "delegate_to_agent",

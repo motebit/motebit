@@ -6,6 +6,8 @@
  * result as normal tool output.
  */
 
+import { TurnDelegationReceipts } from "./turn-delegation-receipts.js";
+import type { ReceiptCarryingResult } from "./turn-delegation-receipts.js";
 import type { ExecutionReceipt, ToolRegistry } from "@motebit/sdk";
 import type { TokenAudience } from "@motebit/protocol";
 
@@ -19,6 +21,7 @@ import {
   type TaskRetrieval,
 } from "./relay-delegation.js";
 import { fromMicro, RiskLevel, SideEffect } from "@motebit/protocol";
+import type { ToolCall } from "./turn-principal.js";
 
 /**
  * Render the settlement fact as a sentence the model can relay verbatim. The
@@ -71,6 +74,13 @@ export interface InteractiveDelegationDeps {
   bumpTrustFromReceipt: (receipt: ExecutionReceipt) => Promise<void>;
   /** Re-wire loop deps so newly registered tools are visible to the agentic loop. */
   wireLoopDeps: () => void;
+  /**
+   * The per-turn delegation-receipt collector (#943). A hire's receipt lands
+   * in the turn that made it, never in a shared bucket another principal's
+   * task could drain. Optional for bare fixtures (a private collector is
+   * made); the runtime always passes its own.
+   */
+  turnReceipts?: TurnDelegationReceipts;
 }
 
 export interface InteractiveDelegationConfig {
@@ -136,13 +146,6 @@ export interface InteractiveDelegationConfig {
    * resolution itself.
    */
   retrieveTaskResult?: (taskId: string) => Promise<TaskRetrieval>;
-  /**
-   * True while the loop is running ANOTHER principal's task (the runtime's
-   * `handleAgentTask`). `retrieve_task_result` is owner-only: it refuses
-   * then, so a customer's prompt cannot list this motebit's paid tasks or
-   * read work it bought for someone else. Absent ⇒ never foreign.
-   */
-  isForeignPrincipalTurn?: () => boolean;
 }
 
 /**
@@ -212,7 +215,8 @@ export function renderTaskRetrieval(
 // === Manager ===
 
 export class InteractiveDelegationManager {
-  private receipts: ExecutionReceipt[] = [];
+  /** #943: receipts are collected per turn — see `turn-delegation-receipts.ts`. */
+  private readonly receipts: TurnDelegationReceipts;
   /** #885: money warnings from delegate_to_agent calls, drained by the stream. */
   private paymentNotices: Array<NonNullable<ReturnType<typeof paymentNoticeChunk>>> = [];
 
@@ -223,7 +227,9 @@ export class InteractiveDelegationManager {
     return out;
   }
 
-  constructor(private readonly deps: InteractiveDelegationDeps) {}
+  constructor(private readonly deps: InteractiveDelegationDeps) {
+    this.receipts = deps.turnReceipts ?? new TurnDelegationReceipts();
+  }
 
   /**
    * Register the `delegate_to_agent` tool for interactive delegation.
@@ -295,7 +301,6 @@ export class InteractiveDelegationManager {
     const timeoutMs = config.timeoutMs ?? 120_000;
     const motebitId = this.deps.motebitId;
     const bumpTrust = (receipt: ExecutionReceipt) => this.deps.bumpTrustFromReceipt(receipt);
-    const stashReceipt = (receipt: ExecutionReceipt) => this.receipts.push(receipt);
 
     // Mark as delegation tool for processStream to emit delegation_start/complete
     this.deps.motebitToolServers.set(TOOL_NAME, "relay");
@@ -363,7 +368,9 @@ export class InteractiveDelegationManager {
         // harmless without one (the tool is R2 and never meters).
         ...(config.buildP2pPayment ? { moneyBinding: "late" as const } : {}),
       },
-      async (args: Record<string, unknown>) => {
+      // #943 round 9: whose call this is arrives WITH the call (`call`,
+      // from the runtime registry) — never from runtime-wide state.
+      async (args: Record<string, unknown>, call?: ToolCall) => {
         const prompt = args.prompt as string;
         const requiredCapabilities = args.required_capabilities as string[] | undefined;
 
@@ -430,10 +437,7 @@ export class InteractiveDelegationManager {
           // Inside ANOTHER principal's task (a molecule serving a customer),
           // the prior payment is the owner's business: refuse without the
           // owner's task id, tx or /result pointer (#874 review).
-          if (
-            result.error.code === "intent_already_paid" &&
-            config.isForeignPrincipalTurn?.() === true
-          ) {
+          if (result.error.code === "intent_already_paid" && call?.principal.foreign === true) {
             return {
               ok: false,
               error:
@@ -522,9 +526,6 @@ export class InteractiveDelegationManager {
           // Best-effort
         }
 
-        // Stash receipt for handleAgentTask to drain into delegation_receipts
-        stashReceipt(result.receipt);
-
         // Surface the settlement fact so the model reports payment truthfully
         // (it previously narrated "settlement isn't active" on a paid run). The
         // worker's answer stays primary; the payment is a labeled footnote.
@@ -546,10 +547,16 @@ export class InteractiveDelegationManager {
           ...(settlementNote ? [settlementNote] : []),
           ...(degradeNote ? [degradeNote] : []),
         ].join("\n");
-        return {
+        // #943: the receipt rides ON the result; the tool registry records
+        // it for the destination the caller named (the turn that made this
+        // call, or the owner). Trust was credited above.
+        const carrying: ReceiptCarryingResult = {
           ok: true,
           data: `${workerResult}\n\n${footnotes}`,
+          delegation_receipt: result.receipt,
+          delegation_receipt_trust_credited: true,
         };
+        return carrying;
       },
     );
 
@@ -716,8 +723,12 @@ export class InteractiveDelegationManager {
           localOnly: true,
           riskHint: { risk: RiskLevel.R0_READ, sideEffect: SideEffect.NONE },
         },
-        async (args: Record<string, unknown>) => {
-          if (config.isForeignPrincipalTurn?.() === true) {
+        // `retrieve_task_result` is owner-only: a foreign CALL (a customer's
+        // prompt) cannot list this motebit's paid tasks or read work it
+        // bought for someone else. Defense in depth — the tool is
+        // `localOnly`, so a foreign turn's registry never offers it.
+        async (args: Record<string, unknown>, call?: ToolCall) => {
+          if (call?.principal.foreign === true) {
             return {
               ok: false,
               error:
@@ -765,23 +776,23 @@ export class InteractiveDelegationManager {
   }
 
   /**
-   * Drain interactive delegation receipts (used by handleAgentTask to include
-   * in the parent receipt's delegation_receipts array).
+   * Drain the OWNER's record: receipts produced outside any task's turn
+   * (#943). Never read by `handleAgentTask` — a task's receipt gets only its
+   * own turn's hires, through the turn's sink.
    */
   getAndResetReceipts(): ExecutionReceipt[] {
-    const result = this.receipts.slice();
-    this.receipts.length = 0;
-    return result;
+    return this.receipts.drainOwner();
   }
 
   /**
-   * Append a receipt produced by a sibling delegation path (today:
-   * `invokeCapability`). The two paths share one drain bucket so a concurrent
-   * AI loop composes all downstream receipts — AI-decided and user-tapped —
-   * into one parent receipt's `delegation_receipts` chain.
+   * A receipt from an owner act outside any turn (today: `invokeCapability`,
+   * a user tap). It goes to the owner's record ONLY — never into an
+   * in-flight turn's collector, which may be another principal's task
+   * (#943: a tap during a customer's `motebit_task` must not be signed into
+   * the customer's receipt).
    */
   pushReceipt(receipt: ExecutionReceipt): void {
-    this.receipts.push(receipt);
+    this.receipts.recordOwnerAct(receipt);
   }
 
   /**
@@ -793,11 +804,11 @@ export class InteractiveDelegationManager {
    * would silently sever that chain (composition-preserves-enforcement).
    */
   get stashedReceiptCount(): number {
-    return this.receipts.length;
+    return this.receipts.count();
   }
 
   /** See {@link stashedReceiptCount} — the peek half of the pair. */
   peekReceiptsSince(count: number): ExecutionReceipt[] {
-    return this.receipts.slice(count);
+    return this.receipts.peekSince(count);
   }
 }

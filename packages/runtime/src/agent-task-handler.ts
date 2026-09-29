@@ -12,7 +12,6 @@ import type {
   ExecutionReceipt,
   AgentTrustStoreAdapter,
   LatencyStatsStoreAdapter,
-  ConversationMessage,
 } from "@motebit/sdk";
 import { hash, signExecutionReceipt, verifyExecutionReceipt } from "@motebit/encryption";
 import { composeDelegationTrust, trustLevelToScore } from "@motebit/semiring";
@@ -20,14 +19,7 @@ import type { EventStore } from "@motebit/event-log";
 import type { AgentGraphManager } from "./agent-graph.js";
 import type { StreamChunk } from "./runtime-config.js";
 
-/** Saved conversation context for restore after task execution. */
-export type SavedConversationContext = { history: ConversationMessage[]; id: string | null };
-
 // === Types ===
-
-type McpClientAdapterForTask = {
-  getAndResetDelegationReceipts?(): ExecutionReceipt[];
-};
 
 /** Dependencies injected by the runtime. */
 export interface AgentTaskHandlerDeps {
@@ -49,20 +41,20 @@ export interface AgentTaskHandlerDeps {
   sendMessageStreaming(
     text: string,
     runId?: string,
-    options?: { delegationScope?: string; foreignPrincipal?: boolean },
+    options?: {
+      delegationScope?: string;
+      foreignPrincipal?: boolean;
+      /**
+       * Receives the task turn's OWN delegation receipts when it ends
+       * (#943). The handler has no other way to reach delegation receipts:
+       * there is no shared bucket to drain, so the owner's hires cannot be
+       * signed into a customer's receipt.
+       */
+      onDelegationReceipts?: (
+        receipts: Array<{ receipt: ExecutionReceipt; trustCredited: boolean }>,
+      ) => void;
+    },
   ): AsyncGenerator<StreamChunk>;
-
-  /** Save current conversation context for later restoration. */
-  saveConversationContext(): SavedConversationContext;
-  /** Clear conversation for the task. */
-  clearConversationForTask(): void;
-  /** Restore conversation context after the task completes. */
-  restoreConversationContext(ctx: SavedConversationContext): void;
-
-  /** Drain delegation receipts from motebit MCP adapters. */
-  getMcpAdapters(): McpClientAdapterForTask[];
-  /** Drain interactive delegation receipts. */
-  getAndResetInteractiveDelegationReceipts(): ExecutionReceipt[];
 
   /** Bump trust from a verified receipt. */
   bumpTrustFromReceipt(receipt: ExecutionReceipt, verified: boolean): Promise<void>;
@@ -84,9 +76,13 @@ export async function* handleAgentTask(
   publicKey?: Uint8Array,
   options?: { delegatedScope?: string },
 ): AsyncGenerator<StreamChunk> {
-  // Save current conversation context
-  const savedCtx = deps.saveConversationContext();
-  deps.clearConversationForTask();
+  // #943 round 10: no save / clear / restore of the owner's conversation.
+  // The task's turn is FOREIGN (`foreignPrincipal: true` below), so it sees
+  // and writes the conversation only through `forTurn(FOREIGN)` — an inert
+  // view. Swapping the owner's live history out for the task's duration
+  // blanked the OWNER's own concurrent reads (live history, conversation id,
+  // reflection), and the restore in `finally` discarded owner writes made
+  // meanwhile (an approval timeout, a `resetConversation()`).
 
   const wallClockMs = task.wall_clock_ms ?? 60_000;
   const abortController = new AbortController();
@@ -104,6 +100,10 @@ export async function* handleAgentTask(
   let toolCallsSucceeded = 0;
   let toolCallsDenied = 0;
 
+  // #943: the receipts of the hires THIS task's turn made — delivered by the
+  // turn itself when it ends, never drained from a shared bucket.
+  const delegationEntries: Array<{ receipt: ExecutionReceipt; trustCredited: boolean }> = [];
+
   try {
     // The prompt is another principal's (a customer's, a caller's), so the
     // turn is foreign: it is offered no `localOnly` tool — the owner's
@@ -112,6 +112,9 @@ export async function* handleAgentTask(
     const stream = deps.sendMessageStreaming(task.prompt, undefined, {
       delegationScope: options?.delegatedScope,
       foreignPrincipal: true,
+      onDelegationReceipts: (entries) => {
+        delegationEntries.push(...entries);
+      },
     });
 
     for await (const chunk of stream) {
@@ -141,6 +144,9 @@ export async function* handleAgentTask(
         });
       } else if (chunk.type === "result") {
         responseText = chunk.result.response;
+        // The owner's own log keeps the count; the signed receipt reports
+        // 0 (#943) — a task's turn is another principal's, and a formation
+        // count is a fact about the owner's memory.
         memoriesFormed = chunk.result.memoriesFormed.length;
         toolCallsSucceeded = chunk.result.toolCallsSucceeded;
         // Optional + additive on TurnResult — absent on legacy producers ⇒ 0 ⇒
@@ -155,9 +161,6 @@ export async function* handleAgentTask(
     responseText = responseText || (err instanceof Error ? err.message : String(err));
   } finally {
     clearTimeout(timeout);
-
-    // Restore user conversation context
-    deps.restoreConversationContext(savedCtx);
   }
 
   // Delegation policy refusal path. A task that did NO successful work and was
@@ -177,115 +180,13 @@ export async function* handleAgentTask(
       (responseText ? ` Model note: ${responseText}` : "");
   }
 
-  // Drain delegation receipts from motebit MCP adapters + interactive delegation tool
-  const delegationReceipts: ExecutionReceipt[] = [];
-  for (const adapter of deps.getMcpAdapters()) {
-    if (adapter.getAndResetDelegationReceipts) {
-      delegationReceipts.push(...adapter.getAndResetDelegationReceipts());
-    }
-  }
-  delegationReceipts.push(...deps.getAndResetInteractiveDelegationReceipts());
+  const delegationReceipts = delegationEntries.map((e) => e.receipt);
 
-  // Bump trust from verified delegation receipts (best-effort)
-  if (delegationReceipts.length > 0 && deps.agentTrustStore != null) {
-    try {
-      // Pre-fetch trust scores for all agents in receipt trees into a sync map
-      const collectIds = (r: ExecutionReceipt): string[] => {
-        const ids = [r.motebit_id];
-        for (const sub of r.delegation_receipts ?? []) ids.push(...collectIds(sub));
-        return ids;
-      };
-      const allIds = [...new Set(delegationReceipts.flatMap(collectIds))];
-      const trustMap = new Map<string, number>();
-      for (const id of allIds) {
-        const rec = await deps.agentTrustStore.getAgentTrust(deps.motebitId, id);
-        trustMap.set(
-          id,
-          rec ? trustLevelToScore(rec.trust_level) : trustLevelToScore(AgentTrustLevel.Unknown),
-        );
-      }
-
-      for (const dr of delegationReceipts) {
-        // Look up stored public key for the delegatee
-        const trustRecord = await deps.agentTrustStore.getAgentTrust(deps.motebitId, dr.motebit_id);
-        if (trustRecord?.public_key) {
-          const fromHex = (hex: string): Uint8Array => {
-            const bytes = new Uint8Array(hex.length / 2);
-            for (let i = 0; i < hex.length; i += 2) {
-              bytes[i / 2] = parseInt(hex.slice(i, i + 2), 16);
-            }
-            return bytes;
-          };
-          const pubKey = fromHex(trustRecord.public_key);
-          const verified = await verifyExecutionReceipt(dr, pubKey);
-          await deps.bumpTrustFromReceipt(dr, verified);
-        } else {
-          // No stored key — record as unverified first contact
-          await deps.bumpTrustFromReceipt(dr, true);
-        }
-
-        // Compose chain trust through delegation tree (best-effort)
-        const directTrust =
-          trustMap.get(dr.motebit_id) ?? trustLevelToScore(AgentTrustLevel.Unknown);
-        const chainTrust = composeDelegationTrust(
-          directTrust,
-          dr,
-          (id: string) => trustMap.get(id) ?? trustLevelToScore(AgentTrustLevel.Unknown),
-        );
-
-        // Emit chain trust event for gradient/audit consumption
-        try {
-          await deps.events.appendWithClock({
-            event_id: crypto.randomUUID(),
-            motebit_id: deps.motebitId,
-            timestamp: Date.now(),
-            event_type: EventType.ChainTrustComputed,
-            payload: {
-              delegatee: dr.motebit_id,
-              direct_trust: directTrust,
-              chain_trust: chainTrust,
-              delegation_depth: (dr.delegation_receipts ?? []).length,
-            },
-            tombstoned: false,
-          });
-        } catch {
-          // Event emission is best-effort
-        }
-      }
-    } catch (err: unknown) {
-      // Trust bumping is best-effort — don't break the task
-      deps.logger.warn("trust bump failed", {
-        error: err instanceof Error ? err.message : String(err),
-      });
-    }
-  }
-
-  // Update agent graph with delegation receipt edges
-  for (const dr of delegationReceipts) {
-    try {
-      await deps.agentGraph.addReceiptEdges(dr);
-    } catch (err: unknown) {
-      deps.logger.warn("graph edge update failed", {
-        error: err instanceof Error ? err.message : String(err),
-      });
-    }
-  }
-
-  // Record latency for delegation receipts (best-effort)
-  if (delegationReceipts.length > 0 && deps.latencyStatsStore != null) {
-    for (const dr of delegationReceipts) {
-      try {
-        const latency = dr.completed_at - dr.submitted_at;
-        if (latency > 0) {
-          await deps.latencyStatsStore.record(deps.motebitId, dr.motebit_id, latency);
-        }
-      } catch (err: unknown) {
-        deps.logger.warn("latency recording failed", {
-          error: err instanceof Error ? err.message : String(err),
-        });
-      }
-    }
-  }
+  // Credit the hires this task's turn made: trust, chain trust, graph
+  // edges, latency (best-effort). The owner's own hires get the same credit
+  // at owner-record intake (#943) — never through a task.
+  // The flag survives from where each hire was made: one credit per hire.
+  await absorbDelegationReceipts(deps, delegationEntries);
 
   // Hash prompt and result
   const promptHash = await hash(new TextEncoder().encode(task.prompt));
@@ -301,7 +202,7 @@ export async function* handleAgentTask(
     status,
     result: responseText,
     tools_used: toolsUsed,
-    memories_formed: memoriesFormed,
+    memories_formed: 0,
     prompt_hash: promptHash,
     result_hash: resultHash,
     // Relay task ID binding — task.task_id IS the relay-assigned ID for WebSocket tasks.
@@ -394,4 +295,150 @@ export async function* handleAgentTask(
   }
 
   yield { type: "task_result", receipt };
+}
+
+/**
+ * Credit delegation receipts to THIS motebit (the one that made the hires):
+ * verify + bump trust (unless already credited at production), compose and
+ * emit `ChainTrustComputed`, add agent-graph edges, record latency. All
+ * best-effort. Used by `handleAgentTask` for its own turn's hires, and by
+ * the runtime's owner-record intake for the owner's hires (#943) — the two
+ * consumers are disjoint, so no receipt is credited twice.
+ */
+export async function absorbDelegationReceipts(
+  deps: Pick<
+    AgentTaskHandlerDeps,
+    | "motebitId"
+    | "events"
+    | "agentTrustStore"
+    | "agentGraph"
+    | "latencyStatsStore"
+    | "logger"
+    | "bumpTrustFromReceipt"
+  >,
+  entries: Array<{ receipt: ExecutionReceipt; trustCredited: boolean }>,
+  opts: {
+    /**
+     * Credit trust only for a receipt whose signature VERIFIES — under the
+     * delegatee's stored key, or else its embedded `public_key` (#943 round
+     * 5, the owner record's intake). Without it, a receipt with no stored
+     * key keeps the old first-contact credit (the task path, unchanged).
+     */
+    requireVerifiable?: boolean;
+  } = {},
+): Promise<void> {
+  // Bump trust from verified delegation receipts (best-effort)
+  const delegationReceipts = entries.map((e) => e.receipt);
+  if (delegationReceipts.length > 0 && deps.agentTrustStore != null) {
+    try {
+      // Pre-fetch trust scores for all agents in receipt trees into a sync map
+      const collectIds = (r: ExecutionReceipt): string[] => {
+        const ids = [r.motebit_id];
+        for (const sub of r.delegation_receipts ?? []) ids.push(...collectIds(sub));
+        return ids;
+      };
+      const allIds = [...new Set(delegationReceipts.flatMap(collectIds))];
+      const trustMap = new Map<string, number>();
+      for (const id of allIds) {
+        const rec = await deps.agentTrustStore.getAgentTrust(deps.motebitId, id);
+        trustMap.set(
+          id,
+          rec ? trustLevelToScore(rec.trust_level) : trustLevelToScore(AgentTrustLevel.Unknown),
+        );
+      }
+
+      for (const { receipt: dr, trustCredited } of entries) {
+        // Look up stored public key for the delegatee
+        const trustRecord = await deps.agentTrustStore.getAgentTrust(deps.motebitId, dr.motebit_id);
+        if (trustCredited) {
+          // Trust was already credited where the hire was made.
+        } else if (trustRecord?.public_key) {
+          const fromHex = (hex: string): Uint8Array => {
+            const bytes = new Uint8Array(hex.length / 2);
+            for (let i = 0; i < hex.length; i += 2) {
+              bytes[i / 2] = parseInt(hex.slice(i, i + 2), 16);
+            }
+            return bytes;
+          };
+          const pubKey = fromHex(trustRecord.public_key);
+          const verified = await verifyExecutionReceipt(dr, pubKey);
+          await deps.bumpTrustFromReceipt(dr, verified);
+        } else if (opts.requireVerifiable === true) {
+          // No stored key: credit only a receipt that verifies under its
+          // own embedded key; a shape-checked receipt earns nothing.
+          const embedded = typeof dr.public_key === "string" ? dr.public_key : "";
+          const verified =
+            /^[0-9a-f]{64}$/i.test(embedded) &&
+            (await verifyExecutionReceipt(
+              dr,
+              Uint8Array.from(embedded.match(/../g)!.map((h) => parseInt(h, 16))),
+            ));
+          if (verified) await deps.bumpTrustFromReceipt(dr, true);
+        } else {
+          // No stored key — record as unverified first contact
+          await deps.bumpTrustFromReceipt(dr, true);
+        }
+
+        // Compose chain trust through delegation tree (best-effort)
+        const directTrust =
+          trustMap.get(dr.motebit_id) ?? trustLevelToScore(AgentTrustLevel.Unknown);
+        const chainTrust = composeDelegationTrust(
+          directTrust,
+          dr,
+          (id: string) => trustMap.get(id) ?? trustLevelToScore(AgentTrustLevel.Unknown),
+        );
+
+        // Emit chain trust event for gradient/audit consumption
+        try {
+          await deps.events.appendWithClock({
+            event_id: crypto.randomUUID(),
+            motebit_id: deps.motebitId,
+            timestamp: Date.now(),
+            event_type: EventType.ChainTrustComputed,
+            payload: {
+              delegatee: dr.motebit_id,
+              direct_trust: directTrust,
+              chain_trust: chainTrust,
+              delegation_depth: (dr.delegation_receipts ?? []).length,
+            },
+            tombstoned: false,
+          });
+        } catch {
+          // Event emission is best-effort
+        }
+      }
+    } catch (err: unknown) {
+      // Trust bumping is best-effort — don't break the task
+      deps.logger.warn("trust bump failed", {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  // Update agent graph with delegation receipt edges
+  for (const dr of delegationReceipts) {
+    try {
+      await deps.agentGraph.addReceiptEdges(dr);
+    } catch (err: unknown) {
+      deps.logger.warn("graph edge update failed", {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  // Record latency for delegation receipts (best-effort)
+  if (delegationReceipts.length > 0 && deps.latencyStatsStore != null) {
+    for (const dr of delegationReceipts) {
+      try {
+        const latency = dr.completed_at - dr.submitted_at;
+        if (latency > 0) {
+          await deps.latencyStatsStore.record(deps.motebitId, dr.motebit_id, latency);
+        }
+      } catch (err: unknown) {
+        deps.logger.warn("latency recording failed", {
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+  }
 }

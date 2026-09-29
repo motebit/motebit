@@ -9,7 +9,7 @@ import type { PlatformAdapters, StreamChunk } from "../index";
 import type { StreamingProvider, AgenticChunk, TurnResult } from "@motebit/ai-core";
 import type { AIResponse, ContextPack, ExecutionReceipt, AgentTask } from "@motebit/sdk";
 import { TrustMode, BatteryMode, AgentTaskStatus, AgentTrustLevel } from "@motebit/sdk";
-import type { AgentServiceListing, P2pPaymentProof } from "@motebit/sdk";
+import type { AgentServiceListing, P2pPaymentProof, ToolRegistry } from "@motebit/sdk";
 import { generateKeypair } from "@motebit/encryption";
 import type { ServiceListingStoreAdapter } from "../index";
 
@@ -767,7 +767,7 @@ describe("Interactive Delegation (delegate_to_agent tool)", () => {
     expect(submittedBody!.required_capabilities).toBeUndefined();
   });
 
-  it("includes delegation receipt in handleAgentTask parent receipt", async () => {
+  it("#943: an owner hire made outside the task is NOT signed into the task's receipt", async () => {
     const provider = createMockProvider();
     const runtime = new MotebitRuntime(
       { motebitId: "alice-001", tickRateHz: 0 },
@@ -799,7 +799,8 @@ describe("Interactive Delegation (delegate_to_agent tool)", () => {
       required_capabilities: ["web_search"],
     });
 
-    // Now handleAgentTask should drain these receipts into the parent receipt
+    // #943: that hire was the owner's (made outside the task's turn). The
+    // task's signed receipt must not carry it — it goes to the owner's record.
     const keypair = await generateKeypair();
     const task: AgentTask = {
       task_id: "parent-task-001",
@@ -817,9 +818,10 @@ describe("Interactive Delegation (delegate_to_agent tool)", () => {
     }
 
     expect(parentReceipt).not.toBeNull();
-    expect(parentReceipt!.delegation_receipts).toHaveLength(1);
-    expect(parentReceipt!.delegation_receipts![0]!.task_id).toBe("relay-task-001");
-    expect(parentReceipt!.delegation_receipts![0]!.motebit_id).toBe("remote-agent-001");
+    expect(parentReceipt!.delegation_receipts).toBeUndefined();
+    expect(JSON.stringify(parentReceipt)).not.toContain("relay-task-001");
+    const ownerRecord = runtime.getAndResetInteractiveDelegationReceipts();
+    expect(ownerRecord.map((r) => r.task_id)).toEqual(["relay-task-001"]);
   });
 
   it("handles network failure during polling gracefully", async () => {
@@ -1068,9 +1070,14 @@ describe("Agent capabilities in context", () => {
       authToken: async () => "test-token",
     });
     let during: { ok: boolean; error?: string } | null = null;
-    mockRunTurnStreaming.mockImplementation(() =>
+    let ownerDuring: { ok: boolean; error?: string } | null = null;
+    // #943 round 9: the TURN's own registry (its loop deps) is the foreign
+    // call path; the runtime's shared registry is an owner door, and the
+    // owner's concurrent call is not refused because a task is running.
+    mockRunTurnStreaming.mockImplementation((deps: { tools: ToolRegistry }) =>
       (async function* () {
-        during = await runtime.getToolRegistry().execute("retrieve_task_result", {});
+        during = await deps.tools.execute("retrieve_task_result", {});
+        ownerDuring = await runtime.getToolRegistry().execute("retrieve_task_result", {});
         yield { type: "text" as const, text: "done" };
         yield { type: "result" as const, result: makeTurnResult("done") };
       })(),
@@ -1088,7 +1095,8 @@ describe("Agent capabilities in context", () => {
     }
     expect(during).not.toBeNull();
     expect(during!.ok).toBe(false);
-    expect(during!.error).toContain("owner-only");
+    expect(during!.error).toContain("not available to another principal's task");
+    expect(ownerDuring!.ok).toBe(true);
 
     // The owner's own turn afterwards is not affected.
     const after = await runtime.getToolRegistry().execute("retrieve_task_result", {});

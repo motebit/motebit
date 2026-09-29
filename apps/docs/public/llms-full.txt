@@ -2826,7 +2826,7 @@ Independent of identity verification, the client computes a SHA-256 hash of the 
 
 ### Sensitivity caps for external callers
 
-External callers cannot store high-sensitivity memories. The `motebit_remember` tool rejects any request with sensitivity level `personal`, `medical`, `financial`, or `secret` — only `none` is accepted from an external caller. Memory queries via `motebit_recall` filter out these sensitivity levels before returning results.
+External callers cannot store high-sensitivity memories. The `motebit_remember` tool rejects any request with sensitivity level `personal`, `medical`, `financial`, or `secret` — only `none` is accepted from an external caller. Memory queries via `motebit_recall` are served to the motebit's owner only, over the local stdio session. Every HTTP caller is refused, and the owner's results still exclude medical, financial and secret memories.
 
 ### Signed token authentication
 
@@ -4970,18 +4970,18 @@ Auth tokens are configured via the config file (`authToken` field), not via CLI 
 
 Six tools are registered automatically when the server starts. Four are conditional — they only appear when the runtime provides their backend (which the CLI always does).
 
-| Tool               | Input                       | Description                                                        |
-| ------------------ | --------------------------- | ------------------------------------------------------------------ |
-| `motebit_query`    | `{ message }`               | Ask the agent a question — full AI response with memory context    |
-| `motebit_remember` | `{ content, sensitivity? }` | Store a memory (sensitivity capped for external callers)           |
-| `motebit_recall`   | `{ query, limit? }`         | Semantic memory search, privacy-filtered                           |
-| `motebit_task`     | `{ prompt }`                | Submit an autonomous task — returns a signed `ExecutionReceipt`    |
-| `motebit_identity` | none                        | Return the motebit's identity (motebit.md content or JSON summary) |
-| `motebit_tools`    | none                        | List all available tools with risk levels                          |
+| Tool               | Input                       | Description                                                                          |
+| ------------------ | --------------------------- | ------------------------------------------------------------------------------------ |
+| `motebit_query`    | `{ message }`               | Ask the agent a question — a remote caller is never answered from the owner's memory |
+| `motebit_remember` | `{ content, sensitivity? }` | Store a memory (sensitivity capped for external callers)                             |
+| `motebit_recall`   | `{ query, limit? }`         | Semantic memory search — served to the motebit's owner only                          |
+| `motebit_task`     | `{ prompt }`                | Submit an autonomous task — returns a signed `ExecutionReceipt`                      |
+| `motebit_identity` | none                        | Return the motebit's identity (motebit.md content or JSON summary)                   |
+| `motebit_tools`    | none                        | List all available tools with risk levels                                            |
 
 ### motebit_query
 
-Sends a message through the full AI turn loop — memory retrieval, context packing, tool use, memory formation. The response includes how many memories were formed during the turn.
+Sends a message through the AI turn loop: context packing, tool use and memory formation. Whose turn it is depends on who is asking, the same rule `motebit_recall` follows. Over stdio, from the MCP host you launch on your own machine, the query is yours: it runs as an owner turn with your memories and context, and `memories_formed` is the number of memories the turn formed. Over HTTP the caller is another principal, whatever credential it presents. Then the turn recalls none of the owner's memories and receives none of the owner's private context: no trust graph, self-model, installed skills, recent events or live session facts. It sees the motebit's identity and persona, the tools a caller may use, and the model it runs on. Memories the turn forms are marked as coming from a peer agent, and `memories_formed` is always 0.
 
 ```json
 { "message": "What do you know about the deployment pipeline?" }
@@ -4997,7 +4997,9 @@ Stores a memory in the motebit's semantic graph. External callers may store only
 
 ### motebit_recall
 
-Searches the motebit's memory graph by semantic similarity. Results are privacy-filtered — high-sensitivity memories are excluded from external responses.
+Searches the motebit's memory graph by semantic similarity. The owner's memories are served **only to the owner**, and the owner is **the local stdio session**: the MCP host you launched on your own machine. HTTP callers are never the owner, whatever they present. That includes another motebit, the relay, a static or pluggable bearer token, and even a token signed under this motebit's own key. Your motebit signs those for the workers it hires and the servers it connects to, so they could be replayed. Every HTTP caller is refused with no memory content. Nothing that worked before is lost: `motebit serve` never resolved its own key for HTTP callers, so reading your memories over HTTP was not reachable anyway. Read your memories over stdio. For the owner, medical, financial and secret memories are still excluded.
+
+> **Never bridge stdio to a network.** stdio counts as the owner by construction, because only a process you launched can reach the pipe. Wrapping a stdio `motebit serve` in an `mcp-remote`- or `supergateway`-style bridge that exposes it over HTTP or SSE makes every remote caller of the bridge the owner, and serves them your memories and live state. Use HTTP transport for other agents; it never treats a caller as the owner.
 
 ```json
 { "query": "deployment credentials", "limit": 5 }
@@ -5039,7 +5041,7 @@ Lists all tools available to the motebit (built-in + MCP), including their risk 
 
 ## Proxied tools
 
-In addition to the six synthetic tools, the server exposes all tools from the motebit's [tool registry](/docs/developer/tools) — built-in tools and connected MCP server tools. Every proxied tool call passes through the [policy gate](/docs/concepts/governance):
+In addition to the six synthetic tools, the server exposes the motebit's served tools from its [tool registry](/docs/developer/tools). Tools marked `localOnly` are never served. Those are the tools that act for the owner: the filesystem, shell, memory, and every tool from an MCP server the owner connected (settings, `/mcp add`, or `mcp_servers` in config). Tools loaded with `motebit serve --tools` are served unless their definition says `localOnly`. Every proxied tool call passes through the [policy gate](/docs/concepts/governance):
 
 - **Allowed** — executes and returns the result with an identity tag
 - **Denied** — returns a policy denial message
@@ -5049,11 +5051,11 @@ In addition to the six synthetic tools, the server exposes all tools from the mo
 
 The server also exposes MCP resources and prompts:
 
-| Resource   | URI                  | Description                                        |
-| ---------- | -------------------- | -------------------------------------------------- |
-| `identity` | `motebit://identity` | Motebit ID and public key                          |
-| `state`    | `motebit://state`    | Current state vector (attention, processing, etc.) |
-| `memories` | `motebit://memories` | Privacy-filtered memory snapshot                   |
+| Resource   | URI                  | Description                                       |
+| ---------- | -------------------- | ------------------------------------------------- |
+| `identity` | `motebit://identity` | Motebit ID and public key                         |
+| `state`    | `motebit://state`    | Live state vector, owner only (stdio)             |
+| `memories` | `motebit://memories` | Memory snapshot, owner only (as `motebit_recall`) |
 
 | Prompt    | Description                                     |
 | --------- | ----------------------------------------------- |
@@ -5248,7 +5250,7 @@ interface ExecutionReceipt {
 | `prompt_hash`         | `string`              | `hex(SHA-256(UTF-8(prompt)))` — plain SHA-256 of the prompt **string**, lowercase hex (64 chars). Not canonicalized.                                                                                                                                                                                                                                                                                                                                           |
 | `result_hash`         | `string`              | `hex(SHA-256(UTF-8(result)))` — plain SHA-256 of the `result` **string**, lowercase hex (64 chars). Not canonicalized. Recompute it over the exact `result` bytes to re-check. (Canonical-JSON hashing applies only to object-valued fields like a `ToolInvocationReceipt`'s `args_hash`.)                                                                                                                                                                     |
 | `delegation_receipts` | `ExecutionReceipt[]?` | Nested receipts from sub-delegations. In multi-hop scenarios (Alice delegates to Bob, Bob sub-delegates to Charlie), Bob's receipt includes Charlie's receipt here. The relay verifies each nested receipt recursively.                                                                                                                                                                                                                                        |
-| `relay_task_id`       | `string`              | **Required** on any receipt posted to the relay. Cryptographic binding to the relay's economic identity for this task. Included in the Ed25519 signature, so tampering breaks the signature. The relay rejects a receipt without it (400) and enforces `relay_task_id === taskIdFromRoute` at settlement. Prevents cross-task replay attacks, including identical-prompt collisions.                                                                                                                                                                   |
+| `relay_task_id`       | `string`              | **Required** on any receipt posted to the relay. Cryptographic binding to the relay's economic identity for this task. Included in the Ed25519 signature, so tampering breaks the signature. The relay rejects a receipt without it (400) and enforces `relay_task_id === taskIdFromRoute` at settlement. Prevents cross-task replay attacks, including identical-prompt collisions.                                                                           |
 | `delegated_scope`     | `string?`             | Scope from the delegation token that authorized this execution. Restricts which tools the task can use (e.g., `"web_search,read_url"`).                                                                                                                                                                                                                                                                                                                        |
 | `suite`               | `string`              | **Required.** Cryptosuite discriminator — always `"motebit-jcs-ed25519-b64-v1"` today. It is part of the signed body: `signExecutionReceipt` stamps it, and a verifier rejects a receipt missing or carrying an unknown value (fail-closed). If you hand-build a receipt, include it **before** signing or the signature won't match.                                                                                                                          |
 | `signature`           | `string`              | Ed25519 signature, base64url. The signed message is the **JCS (RFC 8785) canonical UTF-8 bytes** of all other fields (keys sorted lexicographically, no whitespace, `undefined` omitted) — signed **directly**, with no intermediate SHA-256 of the body. (This differs from the _execution ledger_, which signs a 32-byte content hash, and from _credentials_, which sign concatenated field hashes — do not generalize one artifact's recipe onto another.) |
@@ -5331,12 +5333,12 @@ Submit an autonomous task for execution. Returns a signed `ExecutionReceipt`.
 
 **Input schema:**
 
-| Parameter               | Type       | Required | Description                                                                                                                |
-| ----------------------- | ---------- | -------- | -------------------------------------------------------------------------------------------------------------------------- |
-| `prompt`                | `string`   | Yes      | The task prompt for the agent to execute.                                                                                  |
-| `delegation_token`      | `string`   | No       | Signed delegation token (JSON) authorizing this task within a specific scope. Verified via Ed25519 before execution.       |
-| `required_capabilities` | `string[]` | No       | Capability names required for this task (e.g., `["web_search"]`). Checked against the delegation token's scope if present. |
-| `relay_task_id`         | `string`   | No       | Relay-assigned task ID for economic binding. Included in the signed receipt for settlement.                                |
+| Parameter               | Type       | Required | Description                                                                                                                                                                             |
+| ----------------------- | ---------- | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `prompt`                | `string`   | Yes      | The task prompt for the agent to execute.                                                                                                                                               |
+| `delegation_token`      | `string`   | No       | Signed delegation token (JSON) authorizing this task within a specific scope. Verified via Ed25519 before execution.                                                                    |
+| `required_capabilities` | `string[]` | No       | Capability names required for this task (e.g., `["web_search"]`). Checked against the delegation token's scope if present.                                                              |
+| `relay_task_id`         | `string`   | No       | Relay-assigned task ID for economic binding. Included in the signed receipt for settlement.                                                                                             |
 | `dispatch_token`        | `string`   | No\*     | Relay-signed `task:dispatch` admission token. \*Required by workers configured for relay task admission (the default for priced listings) — see [Multi-hop](/docs/developer/multi-hop). |
 
 **Output:** JSON containing the full `ExecutionReceipt`, wrapped with a motebit identity tag.
@@ -5345,7 +5347,7 @@ Submit an autonomous task for execution. Returns a signed `ExecutionReceipt`.
 
 ### `motebit_query`
 
-Ask the agent a question. The agent responds using its AI provider with full memory context.
+Ask the agent a question. The agent responds using its AI provider. The caller is another principal, so the turn draws on none of the owner's memories or private context.
 
 | Property          | Value        |
 | ----------------- | ------------ |
@@ -5358,7 +5360,7 @@ Ask the agent a question. The agent responds using its AI provider with full mem
 | --------- | -------- | -------- | -------------------------------- |
 | `message` | `string` | Yes      | The question or message to send. |
 
-**Output:** JSON with `response` (the AI's answer) and `memories_formed` (count of new memories created during the interaction).
+**Output:** JSON with `response` (the AI's answer) and `memories_formed`: the count of new memories the turn formed when the caller is the owner (stdio), and always 0 for any other caller (HTTP).
 
 ### `motebit_remember`
 
@@ -5371,9 +5373,9 @@ Store a memory in the agent's semantic memory graph.
 
 **Input schema:**
 
-| Parameter     | Type     | Required | Description                                                                                                                                            |
-| ------------- | -------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `content`     | `string` | Yes      | The content to remember.                                                                                                                               |
+| Parameter     | Type     | Required | Description                                                                                                                              |
+| ------------- | -------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| `content`     | `string` | Yes      | The content to remember.                                                                                                                 |
 | `sensitivity` | `string` | No       | Sensitivity level. External callers may store only `"none"` — `"personal"`, `"medical"`, `"financial"`, and `"secret"` are all rejected. |
 
 **Output:** JSON with `node_id` of the created memory node.
@@ -5382,7 +5384,7 @@ Store a memory in the agent's semantic memory graph.
 
 ### `motebit_recall`
 
-Search the agent's semantic memory using cosine similarity.
+Search the agent's semantic memory using cosine similarity. Served to the motebit's **owner only**, and the owner is the local stdio session. HTTP callers are never the owner, even with a token signed under this motebit's own key. The motebit signs those for workers and servers, so they could be replayed. Every HTTP caller is refused with no memory content.
 
 | Property          | Value        |
 | ----------------- | ------------ |
@@ -5396,7 +5398,7 @@ Search the agent's semantic memory using cosine similarity.
 | `query`   | `string` | Yes      | Semantic search query.               |
 | `limit`   | `number` | No       | Maximum number of results to return. |
 
-**Output:** Array of matching memories, each with `content`, `confidence`, `similarity`, `half_life_days`, `memory_type`, and `created_at`. Results are privacy-filtered — memories with sensitivity above `"none"` are excluded from external callers.
+**Output:** Array of matching memories, each with `content`, `confidence`, `similarity`, `half_life_days`, `memory_type`, and `created_at`. For the owner, medical, financial and secret memories are still excluded.
 
 ### `motebit_identity`
 

@@ -33,6 +33,7 @@ import {
   selectAndRunDelegation,
 } from "../index";
 import type { PlatformAdapters, StreamChunk } from "../index";
+import { FOREIGN_CALL, executeWithCall } from "./helpers/foreign-call";
 import { RiskLevel, SideEffect } from "@motebit/protocol";
 
 const RELAY = "https://mock-relay.test";
@@ -466,8 +467,7 @@ describe("retrieve_task_result — the model's free route to a paid result", () 
     const runtime = makeRuntime(store);
     runtime.enableInteractiveDelegation({ syncUrl: RELAY, authToken: async () => "t" });
     const calls = stubTaskRead(delivered);
-    (runtime as unknown as { _foreignTurn: boolean })._foreignTurn = true;
-    const r = await runtime.getToolRegistry().execute("retrieve_task_result", {});
+    const r = await executeWithCall(runtime, "retrieve_task_result", {}, FOREIGN_CALL);
     expect(r.ok).toBe(false);
     expect(r.error).toContain("owner-only");
     expect(JSON.stringify(r)).not.toContain("XaMuKuMCtx");

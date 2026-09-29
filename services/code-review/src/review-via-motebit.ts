@@ -9,9 +9,11 @@
  * `caller → code-review → read-url` they can check with
  * `@motebit/crypto.verifyReceiptChain` — no trust in this service required.
  *
- * The receipt-capture primitive lives in `@motebit/mcp-client`
- * (`McpClientAdapter.getAndResetDelegationReceipts`); it applies to any
- * motebit-to-motebit delegation, not a code-review concern.
+ * The receipt-capture primitive lives in `@motebit/mcp-client`: a verified
+ * `motebit_task` call returns the worker's receipt ON its result
+ * (`delegation_receipt`, #943 — no shared per-adapter bucket that a
+ * concurrent call could drain); it applies to any motebit-to-motebit
+ * delegation, not a code-review concern.
  */
 
 import { McpClientAdapter } from "@motebit/mcp-client";
@@ -28,8 +30,13 @@ export interface AtomAdapter {
   executeTool(
     qualifiedName: string,
     args: Record<string, unknown>,
-  ): Promise<{ ok: boolean; data?: unknown; error?: string }>;
-  getAndResetDelegationReceipts(): ExecutionReceipt[];
+  ): Promise<{
+    ok: boolean;
+    data?: unknown;
+    error?: string;
+    /** The worker's signed receipt for THIS call (#943). */
+    delegation_receipt?: ExecutionReceipt;
+  }>;
 }
 
 export type AdapterFactory = (atom: {
@@ -185,7 +192,7 @@ export async function reviewPrViaMotebit(
       }
     }
     const readResult = await readUrl.executeTool("read-url__motebit_task", readArgs);
-    const fresh = readUrl.getAndResetDelegationReceipts();
+    const fresh = readResult.delegation_receipt != null ? [readResult.delegation_receipt] : [];
     delegationReceipts.push(...fresh);
 
     if (!readResult.ok || fresh.length === 0) {

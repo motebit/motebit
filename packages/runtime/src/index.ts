@@ -271,9 +271,14 @@ export { createInMemoryStorage } from "./in-memory-storage.js";
 export {
   MotebitRuntime,
   SovereignTierRequiredError,
+  ForeignTurnRefusedError,
+  FOREIGN_REFUSAL_MESSAGE,
   DropTargetGovernanceRequiredError,
   slabTurnIdForRun,
 } from "./motebit-runtime.js";
+// #943 round 9: whose words a call runs, carried on the call path.
+export { TurnPrincipal, OWNER_CALL } from "./turn-principal.js";
+export type { ToolCall } from "./turn-principal.js";
 
 // === Activity Tracking (Ring 1) ===
 // Surface-agnostic derivation of what the agent is currently doing, as

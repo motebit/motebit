@@ -10,6 +10,7 @@
  */
 import { describe, it, expect, vi } from "vitest";
 import { MotebitRuntime, NullRenderer, createInMemoryStorage } from "../index";
+import { foreignTurnTools } from "./helpers/foreign-call";
 import type { StreamChunk } from "../index";
 import type { StreamingProvider } from "@motebit/ai-core";
 import type { AIResponse, ContextPack, ToolDefinition } from "@motebit/sdk";
@@ -127,14 +128,8 @@ describe("a foreign principal's turn is offered no localOnly tool (#880 D)", () 
 
   it("a call naming a localOnly tool during a foreign task is refused at execution too", async () => {
     const { runtime, readFile } = makeRuntime([]);
-    const scoped = (
-      runtime as unknown as {
-        scopedToolRegistry: {
-          execute(n: string, a: object): Promise<{ ok: boolean; error?: string }>;
-        };
-      }
-    ).scopedToolRegistry;
-    (runtime as unknown as { _foreignTurn: boolean })._foreignTurn = true;
+    // The registry the runtime hands a FOREIGN turn's loop (#943 round 9).
+    const scoped = foreignTurnTools(runtime);
     const r = await scoped.execute("read_file", { path: "/etc/passwd" });
     expect(r.ok).toBe(false);
     expect(r.error).toContain("not available to another principal's task");

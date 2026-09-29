@@ -52,6 +52,10 @@ export function createSummarizeSearchHandler(
     if (!result.ok) {
       return { ok: false, error: `Delegation failed: ${result.error ?? "unknown"}` };
     }
+    // The web-search worker's signed receipt rides on THIS call's result
+    // (#943); carry it up so the task that made the call embeds it.
+    const carried =
+      result.delegation_receipt != null ? { delegation_receipt: result.delegation_receipt } : {};
 
     // Parse the result and extract top 3 results
     try {
@@ -73,11 +77,12 @@ export function createSummarizeSearchHandler(
 
       const top3 = Array.isArray(parsed) ? parsed.slice(0, 3) : [];
       const summary = `Search results for "${query}" (top ${top3.length} via web-search delegate):\n${JSON.stringify(top3)}`;
-      return { ok: true, data: summary };
+      return { ok: true, data: summary, ...carried };
     } catch {
       return {
         ok: true,
         data: `Delegated search for "${query}": ${typeof result.data === "string" ? result.data : JSON.stringify(result.data)}`,
+        ...carried,
       };
     }
   };
