@@ -57,6 +57,8 @@ export const DIST_TIER: EntryTier = {
 export interface BootedEntry {
   child: ChildProcess;
   baseUrl: string;
+  /** Everything the entry has logged so far (stdout + stderr, JSON lines). */
+  log(): string;
 }
 
 /** Spawn a real deployed entry and resolve when it reports listening. */
@@ -97,7 +99,11 @@ export function bootRealEntry(
           const parsed = JSON.parse(line) as { port?: number };
           if (typeof parsed.port === "number") {
             clearTimeout(timer);
-            resolveBooted({ child, baseUrl: `http://127.0.0.1:${parsed.port}` });
+            resolveBooted({
+              child,
+              baseUrl: `http://127.0.0.1:${parsed.port}`,
+              log: () => bootLog,
+            });
             return;
           }
         } catch {
@@ -120,7 +126,10 @@ export function bootRealEntry(
  * when it cannot, so a booted P2P test points the entry here and names the
  * payer once its delegator exists (`setPayer`). `getTransaction` answers every
  * signature as a landed USDC transfer whose single payer is that address;
- * every other method is a JSON-RPC error (the entry's anchoring loops log it).
+ * `getGenesisHash` answers the cluster the fake serves (mainnet-beta unless
+ * `genesisHash` names another, or `null` for a JSON-RPC error — #954: the
+ * relay reads its Solana network from this at boot); every other method is a
+ * JSON-RPC error (the entry's anchoring loops log it).
  */
 export interface FakeSolanaRpc {
   url: string;
@@ -129,9 +138,13 @@ export interface FakeSolanaRpc {
   close(): Promise<void>;
 }
 
-export async function startFakeSolanaRpc(): Promise<FakeSolanaRpc> {
+export async function startFakeSolanaRpc(
+  options: { genesisHash?: string | null } = {},
+): Promise<FakeSolanaRpc> {
   const { createServer } = await import("node:http");
-  const { USDC_MINT_MAINNET } = await import("@motebit/wallet-solana");
+  const { USDC_MINT_MAINNET, SOLANA_MAINNET_GENESIS_HASH } = await import("@motebit/wallet-solana");
+  const genesisHash =
+    options.genesisHash === undefined ? SOLANA_MAINNET_GENESIS_HASH : options.genesisHash;
   let payer = "11111111111111111111111111111111";
   let calls = 0;
   const amount = (a: string) => ({
@@ -146,7 +159,9 @@ export async function startFakeSolanaRpc(): Promise<FakeSolanaRpc> {
     req.on("end", () => {
       const msg = JSON.parse(raw) as { id: unknown; method: string; params?: unknown[] };
       let body: unknown;
-      if (msg.method === "getTransaction") {
+      if (msg.method === "getGenesisHash" && genesisHash !== null) {
+        body = { jsonrpc: "2.0", id: msg.id, result: genesisHash };
+      } else if (msg.method === "getTransaction") {
         calls++;
         const first = msg.params?.[0];
         const sig = typeof first === "string" ? first : "";

@@ -36,7 +36,6 @@ import type { DatabaseDriver } from "@motebit/persistence";
 import {
   OperatorSolanaTreasuryReconciler,
   SOLANA_DEFAULT_CONFIRMATION_LAG_BUFFER_MS,
-  SOLANA_TREASURY_DEFAULT_CHAIN,
   USDC_MINT_MAINNET,
   Web3JsRpcAdapter,
   type SolanaReconciliationResult,
@@ -123,9 +122,11 @@ export interface SolanaTreasuryReconciliationLoopConfig {
   identitySeed: Uint8Array;
   /** USDC SPL mint. Defaults to mainnet USDC. */
   usdcMint?: string;
-  /** CAIP-2 chain identifier persisted on each reconciliation row.
-   *  Defaults to `SOLANA_MAINNET_CAIP2` per CAIP-30. */
-  chain?: string;
+  /** CAIP-2 chain id persisted on each reconciliation row. REQUIRED, no
+   *  default (#954): the cluster `rpcUrl` serves, read from its genesis
+   *  hash at boot (`solana-network.ts`). An injected `reconciler` must
+   *  carry the same chain. */
+  chain: string;
   /** Cadence between cycles. Default 15 min. */
   intervalMs?: number;
   /** Confirmation-lag buffer. Default 5 min. */
@@ -142,8 +143,8 @@ export interface SolanaTreasuryReconciliationLoopConfig {
   /** RPC commitment level. Defaults to "confirmed". */
   commitment?: "processed" | "confirmed" | "finalized";
   /** Inject a prebuilt reconciler (tests). When set, `rpcUrl`,
-   *  `identitySeed`, `usdcMint`, `commitment`, and `chain` are
-   *  ignored — the reconciler carries all of those internally. */
+   *  `identitySeed`, `usdcMint` and `commitment` are ignored — the
+   *  reconciler carries those internally; its `chain` must equal `chain`. */
   reconciler?: OperatorSolanaTreasuryReconciler;
 }
 
@@ -163,7 +164,7 @@ export function startSolanaTreasuryReconciliationLoop(
   const confirmationLagBufferMs =
     config.confirmationLagBufferMs ?? SOLANA_DEFAULT_CONFIRMATION_LAG_BUFFER_MS;
   const generateReconciliationId = config.generateReconciliationId ?? randomUUID;
-  const chain = config.chain ?? SOLANA_TREASURY_DEFAULT_CHAIN;
+  const chain = config.chain;
   const usdcMint = config.usdcMint ?? USDC_MINT_MAINNET;
 
   const reconciler =
@@ -178,6 +179,11 @@ export function startSolanaTreasuryReconciliationLoop(
       chain,
       usdcMint,
     );
+  if (reconciler.chain !== chain) {
+    throw new Error(
+      `startSolanaTreasuryReconciliationLoop: injected reconciler writes chain ${reconciler.chain}, config says ${chain}`,
+    );
+  }
 
   const store = new SqliteSolanaTreasuryReconciliationStore(config.db);
   const loopLogger: SolanaTreasuryReconciliationLogger = {

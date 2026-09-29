@@ -34,7 +34,7 @@
 
 import type { SolanaRpcAdapter } from "./adapter.js";
 import { USDC_MINT_MAINNET } from "./constants.js";
-import { SOLANA_MAINNET_CAIP2 } from "./memo-submitter.js";
+import { SOLANA_MAINNET_CAIP2, isSolanaCaip2 } from "./network.js";
 import { Web3JsRpcAdapter } from "./web3js-adapter.js";
 
 /** Default confirmation-lag buffer: 5 minutes. Settlements whose
@@ -139,10 +139,11 @@ export interface OperatorSolanaTreasuryReconcilerConfig {
   usdcMint?: string;
   /** RPC commitment level. Defaults to "confirmed". */
   commitment?: "processed" | "confirmed" | "finalized";
-  /** CAIP-2 chain identifier persisted on each reconciliation row.
-   *  Defaults to `SOLANA_MAINNET_CAIP2`; tests / devnet wiring override
-   *  by passing `SOLANA_DEVNET_CAIP2` (both exported from this package). */
-  chain?: string;
+  /** CAIP-2 chain id persisted on each reconciliation row. REQUIRED, no
+   *  default (#954): it must be the cluster `rpcUrl` actually serves, read
+   *  from the RPC's genesis hash (`resolveSolanaNetwork`) — a defaulted
+   *  mainnet label on a devnet treasury records rows no verifier can find. */
+  chain: string;
 }
 
 export interface ReconcileSolanaTreasuryArgs {
@@ -172,9 +173,18 @@ export interface ReconcileSolanaTreasuryArgs {
 export class OperatorSolanaTreasuryReconciler {
   constructor(
     private readonly adapter: SolanaRpcAdapter,
-    private readonly chain: string,
+    /** The CAIP-2 id stamped on every result — the cluster `adapter` reads. */
+    readonly chain: string,
     private readonly usdcMint: string,
-  ) {}
+  ) {
+    // A label that is not a Solana CAIP-2 id can never be the cluster the
+    // adapter reads — refuse it rather than persist it on every row.
+    if (!isSolanaCaip2(chain)) {
+      throw new Error(
+        `OperatorSolanaTreasuryReconciler: chain must be a Solana CAIP-2 id (solana:<genesis-hash prefix>), got ${JSON.stringify(chain)}`,
+      );
+    }
+  }
 
   /** The relay treasury's own base58 Solana address. */
   get treasuryAddress(): string {
@@ -297,10 +307,18 @@ export class OperatorSolanaTreasuryReconciler {
   }
 }
 
-/** Default CAIP-2 chain when none supplied. Re-exports
- *  `SOLANA_MAINNET_CAIP2` under a name that signals the reconciler's
- *  default-chain semantics; the underlying canonical string is the
- *  same single source of truth in `memo-submitter.ts`. */
+/**
+ * The mainnet CAIP-2 id under its historical reconciler name.
+ *
+ * @deprecated since #954 (2026-09-28); removal when the
+ *   `check-gates-effective` probe that perturbs this line is re-pointed.
+ *   Use `SOLANA_MAINNET_CAIP2` when you mean mainnet, and the id
+ *   `resolveSolanaNetwork` reads from the RPC when you mean "the chain this
+ *   treasury is on".
+ *   Reason: it is no longer anyone's default — `chain` is required — and a
+ *   constant named DEFAULT invites the defaulting that labelled devnet rows
+ *   "mainnet" (#954).
+ */
 export const SOLANA_TREASURY_DEFAULT_CHAIN = SOLANA_MAINNET_CAIP2;
 
 /** Construct an `OperatorSolanaTreasuryReconciler` backed by the default
@@ -314,7 +332,7 @@ export function createOperatorSolanaTreasuryReconciler(
     usdcMint: config.usdcMint,
     commitment: config.commitment,
   });
-  const chain = config.chain ?? SOLANA_TREASURY_DEFAULT_CHAIN;
+  const chain = config.chain;
   // Mirror the adapter's mint default for the audit-log field so the
   // recorded `usdcContractAddress` always matches the mint the adapter
   // is actually querying.

@@ -20,7 +20,7 @@ import {
   createTreasuryReconciliationTable,
   SqliteTreasuryReconciliationStore,
 } from "../treasury-reconciliation.js";
-import { SOLANA_MAINNET_CAIP2 } from "@motebit/wallet-solana";
+import { SOLANA_DEVNET_CAIP2, SOLANA_MAINNET_CAIP2 } from "@motebit/wallet-solana";
 
 const API_TOKEN = "test-admin-token";
 const TREASURY = "0xee51c5a65c6Fa81c9CC85505884290e90C09D285";
@@ -94,9 +94,9 @@ describe("GET /api/v1/admin/treasury-reconciliation", () => {
     expect(evm!.stats.current_consistent).toBe(true);
     expect(body.records).toHaveLength(1);
     expect(body.records[0]!.reconciliation_id).toBe("rec-e2e-1");
-    // Solana chain entry is always present alongside EVM
-    const solana = body.chains.find((c) => c.chain === SOLANA_MAINNET_CAIP2);
-    expect(solana).toBeDefined();
+    // No SOLANA_RPC_URL, no Solana rows ⇒ no Solana chain is claimed (#954:
+    // the entry used to be a hard-coded mainnet label on every relay).
+    expect(body.chains.some((c) => c.chain.startsWith("solana:"))).toBe(false);
   });
 
   it("surfaces inconsistent (negative-drift) records correctly", async () => {
@@ -160,6 +160,33 @@ describe("GET /api/v1/admin/treasury-reconciliation", () => {
       expect(ch.stats.last_run_at).toBeNull();
     }
     expect(body.records).toEqual([]);
+  });
+
+  it("lists a Solana chain only as recorded — a historical devnet row is labelled devnet, never mainnet (#954)", async () => {
+    const store = new SqliteTreasuryReconciliationStore(relay.moteDb.db);
+    store.persistReconciliation({
+      reconciliationId: "rec-devnet",
+      runAtMs: Date.now() - 10_000,
+      chain: SOLANA_DEVNET_CAIP2,
+      treasuryAddress: "RelayTreasurySolanaBase58",
+      usdcContractAddress: "Gh9ZwEmdLJ8DscKNTkTqPbNwLNNBjuSzaG9Vp2KGtKJr",
+      recordedFeeSumMicro: 0n,
+      observedOnchainBalanceMicro: 0n,
+      driftMicro: 0n,
+      consistent: true,
+      confirmationLagBufferMs: 300_000,
+    });
+    const res = await relay.app.request("/api/v1/admin/treasury-reconciliation", {
+      headers: { Authorization: `Bearer ${API_TOKEN}` },
+    });
+    const body = (await res.json()) as {
+      chains: Array<{ chain: string; loop_enabled: boolean; stats: { total_runs: number } }>;
+    };
+    const solanaChains = body.chains.filter((c) => c.chain.startsWith("solana:"));
+    expect(solanaChains.map((c) => c.chain)).toEqual([SOLANA_DEVNET_CAIP2]);
+    expect(solanaChains[0]!.stats.total_runs).toBe(1);
+    expect(solanaChains[0]!.loop_enabled).toBe(false);
+    expect(body.chains.some((c) => c.chain === SOLANA_MAINNET_CAIP2)).toBe(false);
   });
 
   it("rejects unauthenticated requests with 401 (admin-route auth gate)", async () => {

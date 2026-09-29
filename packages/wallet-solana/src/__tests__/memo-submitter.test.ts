@@ -23,6 +23,10 @@ const sendRawTransactionMock = vi.fn();
 const confirmTransactionMock = vi.fn();
 const getBalanceMock = vi.fn();
 const getMinimumBalanceForRentExemptionMock = vi.fn();
+// The RPC's cluster. Defaults to mainnet-beta's genesis hash; the #954 tests
+// below point it at devnet / testnet / a failure.
+const MAINNET_GENESIS = "5eykt4UsFv8P8NJdTREpY1vzqKqZKvdpKuc147dw2N9d";
+const getGenesisHashMock = vi.fn(async () => MAINNET_GENESIS);
 
 vi.mock("@solana/web3.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@solana/web3.js")>();
@@ -35,6 +39,7 @@ vi.mock("@solana/web3.js", async (importOriginal) => {
     confirmTransaction = confirmTransactionMock;
     getBalance = getBalanceMock;
     getMinimumBalanceForRentExemption = getMinimumBalanceForRentExemptionMock;
+    getGenesisHash = getGenesisHashMock;
   }
   return {
     ...actual,
@@ -49,7 +54,13 @@ import {
   SolanaMemoSubmitter,
   SOLANA_MAINNET_CAIP2,
   SOLANA_DEVNET_CAIP2,
+  SOLANA_TESTNET_CAIP2,
 } from "../memo-submitter.js";
+import {
+  SOLANA_MAINNET_GENESIS_HASH,
+  SOLANA_DEVNET_GENESIS_HASH,
+  SOLANA_TESTNET_GENESIS_HASH,
+} from "../network.js";
 
 /** A valid base58-encoded 32-byte blockhash — the serializer decodes
  *  `recentBlockhash` and expects exactly 32 bytes. Generating a fresh
@@ -163,12 +174,12 @@ describe("SolanaMemoSubmitter", () => {
     expect(submitter.chain).toBe("solana");
   });
 
-  it("defaults to mainnet CAIP-2 network", () => {
+  it("has no default network: undeclared, the label is unknown until read from the RPC (#954)", () => {
     const submitter = new SolanaMemoSubmitter({
       rpcUrl: "https://api.mainnet-beta.solana.com",
       identitySeed: seed,
     });
-    expect(submitter.network).toBe(SOLANA_MAINNET_CAIP2);
+    expect(() => submitter.network).toThrow(/not yet known/);
   });
 
   it("accepts custom network", () => {
@@ -213,6 +224,7 @@ describe("SolanaMemoSubmitter", () => {
     const submitter = new SolanaMemoSubmitter({
       rpcUrl: "https://api.mainnet-beta.solana.com",
       identitySeed: seed,
+      network: SOLANA_MAINNET_CAIP2,
     });
     // Verify the interface shape
     expect(typeof submitter.chain).toBe("string");
@@ -595,5 +607,101 @@ describe("createSolanaMemoSubmitter", () => {
     });
     expect(submitter).toBeInstanceOf(SolanaMemoSubmitter);
     expect(submitter.chain).toBe("solana");
+  });
+});
+
+// === Network from the RPC's genesis hash (#954) ===
+
+describe("SolanaMemoSubmitter — network is the RPC's cluster, never a default (#954)", () => {
+  const seed = Keypair.generate().secretKey.slice(0, 32);
+  const ROOT = "a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2";
+
+  beforeEach(() => {
+    latestBlockhashMock.mockReset();
+    sendRawTransactionMock.mockReset();
+    confirmTransactionMock.mockReset();
+    getBalanceMock.mockReset();
+    getGenesisHashMock.mockReset();
+    getGenesisHashMock.mockResolvedValue(MAINNET_GENESIS);
+    latestBlockhashMock.mockResolvedValue({
+      blockhash: validBlockhash(),
+      lastValidBlockHeight: 1_000_000,
+    });
+    sendRawTransactionMock.mockResolvedValue("NetTx111111111111111111111111111111111111111");
+    confirmTransactionMock.mockResolvedValue({ value: { err: null } });
+  });
+
+  const clusters = [
+    ["mainnet", SOLANA_MAINNET_GENESIS_HASH, SOLANA_MAINNET_CAIP2],
+    ["devnet", SOLANA_DEVNET_GENESIS_HASH, SOLANA_DEVNET_CAIP2],
+    ["testnet", SOLANA_TESTNET_GENESIS_HASH, SOLANA_TESTNET_CAIP2],
+  ] as const;
+
+  for (const [name, genesis, caip2] of clusters) {
+    it(`an undeclared submitter on a ${name} RPC labels its anchor ${caip2}`, async () => {
+      getGenesisHashMock.mockResolvedValue(genesis);
+      const submitter = new SolanaMemoSubmitter({ rpcUrl: "http://rpc", identitySeed: seed });
+      await submitter.submitMerkleRoot(ROOT, "r", 1);
+      expect(submitter.network).toBe(caip2);
+    });
+
+    it(`a submitter declared ${name} on a ${name} RPC writes, under that label`, async () => {
+      getGenesisHashMock.mockResolvedValue(genesis);
+      const submitter = new SolanaMemoSubmitter({
+        rpcUrl: "http://rpc",
+        identitySeed: seed,
+        network: caip2,
+      });
+      await submitter.submitMerkleRoot(ROOT, "r", 1);
+      expect(sendRawTransactionMock).toHaveBeenCalledTimes(1);
+      expect(submitter.network).toBe(caip2);
+    });
+  }
+
+  it("a declared network the RPC contradicts refuses every write stream and sends nothing", async () => {
+    getGenesisHashMock.mockResolvedValue(SOLANA_DEVNET_GENESIS_HASH);
+    const submitter = new SolanaMemoSubmitter({
+      rpcUrl: "http://rpc",
+      identitySeed: seed,
+      network: SOLANA_MAINNET_CAIP2,
+    });
+    await expect(submitter.submitMerkleRoot(ROOT, "r", 1)).rejects.toThrow(/refuses to write/);
+    await expect(submitter.submitRevocation("ab".repeat(32), 1)).rejects.toThrow(
+      /refuses to write/,
+    );
+    await expect(submitter.submitTransparencyAnchor("ab".repeat(32))).rejects.toThrow(
+      /refuses to write/,
+    );
+    expect(await submitter.isAvailable()).toBe(false);
+    expect(sendRawTransactionMock).not.toHaveBeenCalled();
+    expect(latestBlockhashMock).not.toHaveBeenCalled();
+  });
+
+  it("a failed genesis read refuses the write and never yields a mainnet label; the next write retries", async () => {
+    getGenesisHashMock.mockRejectedValueOnce(new Error("rpc down"));
+    const submitter = new SolanaMemoSubmitter({ rpcUrl: "http://rpc", identitySeed: seed });
+    await expect(submitter.submitMerkleRoot(ROOT, "r", 1)).rejects.toThrow("rpc down");
+    expect(sendRawTransactionMock).not.toHaveBeenCalled();
+    expect(() => submitter.network).toThrow(/not yet known/);
+
+    getGenesisHashMock.mockResolvedValueOnce(SOLANA_DEVNET_GENESIS_HASH);
+    await submitter.submitMerkleRoot(ROOT, "r", 1);
+    expect(submitter.network).toBe(SOLANA_DEVNET_CAIP2);
+  });
+
+  it("a garbage genesis answer is not a label", async () => {
+    getGenesisHashMock.mockResolvedValue("not-a-hash");
+    const submitter = new SolanaMemoSubmitter({ rpcUrl: "http://rpc", identitySeed: seed });
+    await expect(submitter.submitMerkleRoot(ROOT, "r", 1)).rejects.toThrow(/genesis hash/);
+    expect(sendRawTransactionMock).not.toHaveBeenCalled();
+  });
+
+  it("reads the genesis hash once per submitter, not once per write", async () => {
+    getGenesisHashMock.mockResolvedValue(SOLANA_DEVNET_GENESIS_HASH);
+    const submitter = new SolanaMemoSubmitter({ rpcUrl: "http://rpc", identitySeed: seed });
+    await submitter.submitMerkleRoot(ROOT, "r", 1);
+    await submitter.submitRevocation("ab".repeat(32), 1);
+    await submitter.submitTransparencyAnchor("ab".repeat(32));
+    expect(getGenesisHashMock).toHaveBeenCalledTimes(1);
   });
 });

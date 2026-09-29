@@ -28,15 +28,18 @@ import {
 
 import type { ChainAnchorSubmitter } from "@motebit/protocol";
 
+import {
+  SOLANA_MAINNET_CAIP2,
+  SOLANA_DEVNET_CAIP2,
+  SOLANA_TESTNET_CAIP2,
+  solanaCaip2FromGenesisHash,
+} from "./network.js";
+
 // Solana Memo Program v2
 const MEMO_PROGRAM_ID = new PublicKey("MemoSq4gqABAXKb96qnH8TysNcWxMyWCqXgDLGmfcHr");
 
 // Minimum SOL balance to submit a memo (~5000 lamports for tx fee)
 const MIN_SOL_LAMPORTS = 10_000;
-
-// CAIP-2 network identifiers
-const SOLANA_MAINNET_CAIP2 = "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp";
-const SOLANA_DEVNET_CAIP2 = "solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1";
 
 export interface SolanaMemoSubmitterConfig {
   /** Solana RPC endpoint URL. */
@@ -45,17 +48,30 @@ export interface SolanaMemoSubmitterConfig {
   identitySeed: Uint8Array;
   /** Commitment level. Default: "confirmed". */
   commitment?: Commitment;
-  /** CAIP-2 network identifier. Default: mainnet. */
+  /**
+   * The CAIP-2 id the caller expects the RPC to serve. There is NO default
+   * (#954 — the old `?? mainnet` labelled devnet anchors "mainnet"). Either
+   * way the id is checked against the RPC's own genesis hash before the
+   * first write (`resolveNetwork`):
+   *   - given: a mismatch refuses every write — never a mislabelled anchor;
+   *   - omitted: the id is DERIVED from the genesis hash.
+   * An unreadable genesis hash refuses the write; the next write retries.
+   */
   network?: string;
 }
 
 export class SolanaMemoSubmitter implements ChainAnchorSubmitter {
   readonly chain = "solana" as const;
-  readonly network: string;
 
   private readonly connection: Connection;
   private readonly keypair: Keypair;
   private readonly commitment: Commitment;
+  /** The caller's declared network, unverified until `resolveNetwork` runs. */
+  private readonly declaredNetwork: string | undefined;
+  /** The network read from the RPC's genesis hash (and equal to the declared one). */
+  private verifiedNetwork: string | undefined;
+  /** A declared network the RPC contradicted — permanent; every write refuses. */
+  private mismatch: Error | undefined;
 
   constructor(config: SolanaMemoSubmitterConfig) {
     if (config.identitySeed.length !== 32) {
@@ -66,7 +82,42 @@ export class SolanaMemoSubmitter implements ChainAnchorSubmitter {
     this.commitment = config.commitment ?? "confirmed";
     this.connection = new Connection(config.rpcUrl, this.commitment);
     this.keypair = Keypair.fromSeed(config.identitySeed);
-    this.network = config.network ?? SOLANA_MAINNET_CAIP2;
+    this.declaredNetwork = config.network;
+  }
+
+  /**
+   * The CAIP-2 id this submitter writes under: the id verified against the
+   * RPC once a write (or `resolveNetwork`) has checked it, else the caller's
+   * declared id. With neither, there is no label to give and reading it
+   * throws — it never falls back to a default. Consumers record it only
+   * after a successful submit, by which point it is verified.
+   */
+  get network(): string {
+    if (this.verifiedNetwork !== undefined) return this.verifiedNetwork;
+    if (this.declaredNetwork !== undefined) return this.declaredNetwork;
+    throw new Error(
+      "SolanaMemoSubmitter network is not yet known: it is read from the RPC's genesis hash before the first write (resolveNetwork)",
+    );
+  }
+
+  /**
+   * Read the RPC's genesis hash and return the CAIP-2 id of the cluster it
+   * serves. Throws when the read fails (retryable) or when a declared
+   * network disagrees with it (permanent). Every submit calls this first, so
+   * no anchor is ever written under a label the RPC contradicts.
+   */
+  async resolveNetwork(): Promise<string> {
+    if (this.mismatch) throw this.mismatch;
+    if (this.verifiedNetwork !== undefined) return this.verifiedNetwork;
+    const network = solanaCaip2FromGenesisHash(await this.connection.getGenesisHash());
+    if (this.declaredNetwork !== undefined && this.declaredNetwork !== network) {
+      this.mismatch = new Error(
+        `SolanaMemoSubmitter refuses to write: declared network ${this.declaredNetwork} but the RPC serves ${network}`,
+      );
+      throw this.mismatch;
+    }
+    this.verifiedNetwork = network;
+    return network;
   }
 
   /** The relay's Solana address (base58 public key). */
@@ -108,6 +159,8 @@ export class SolanaMemoSubmitter implements ChainAnchorSubmitter {
     // relayId is implicit — the transaction signer IS the relay's identity key.
     // Verifiers derive the relay identity from the tx's signer pubkey.
 
+    await this.resolveNetwork();
+
     // Build memo data — human-readable, machine-parseable
     const memo = `motebit:anchor:v1:${root}:${leafCount}`;
 
@@ -148,6 +201,7 @@ export class SolanaMemoSubmitter implements ChainAnchorSubmitter {
    * Memo format: "motebit:revocation:v1:{old_public_key_hex}:{timestamp}"
    */
   async submitRevocation(oldPublicKeyHex: string, timestamp: number): Promise<{ txHash: string }> {
+    await this.resolveNetwork();
     const memo = `motebit:revocation:v1:${oldPublicKeyHex}:${timestamp}`;
 
     const instruction = new TransactionInstruction({
@@ -194,6 +248,7 @@ export class SolanaMemoSubmitter implements ChainAnchorSubmitter {
    * anchor), `docs/doctrine/nist-alignment.md` §8 (savant-gap closure).
    */
   async submitTransparencyAnchor(declarationHashHex: string): Promise<{ txHash: string }> {
+    await this.resolveNetwork();
     const memo = `motebit:transparency:v1:${declarationHashHex}`;
 
     const instruction = new TransactionInstruction({
@@ -223,6 +278,9 @@ export class SolanaMemoSubmitter implements ChainAnchorSubmitter {
 
   async isAvailable(): Promise<boolean> {
     try {
+      // The RPC must serve the cluster this submitter labels its anchors with.
+      await this.resolveNetwork();
+
       // Check RPC reachability
       await this.connection.getLatestBlockhash(this.commitment);
 
@@ -295,4 +353,4 @@ export function parseTransparencyAnchorMemo(memo: string): {
   return { version, declarationHashHex: declarationHashHex.toLowerCase() };
 }
 
-export { SOLANA_MAINNET_CAIP2, SOLANA_DEVNET_CAIP2 };
+export { SOLANA_MAINNET_CAIP2, SOLANA_DEVNET_CAIP2, SOLANA_TESTNET_CAIP2 };

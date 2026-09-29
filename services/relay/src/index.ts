@@ -137,11 +137,8 @@ import {
   listTreasuryReconciliations,
 } from "./treasury-reconciliation.js";
 import { startSolanaTreasuryReconciliationLoop } from "./solana-treasury-reconciliation.js";
-import {
-  SOLANA_TREASURY_DEFAULT_CHAIN,
-  USDC_MINT_MAINNET,
-  deriveSolanaAddress,
-} from "@motebit/wallet-solana";
+import { USDC_MINT_MAINNET, deriveSolanaAddress } from "@motebit/wallet-solana";
+import { resolveRelaySolanaNetwork, type RelaySolanaNetwork } from "./solana-network.js";
 import { registerCredentialRoutes } from "./credentials.js";
 import { registerProxyTokenRoutes, createSubscriptionTables } from "./subscriptions.js";
 import {
@@ -498,6 +495,12 @@ export interface SyncRelayConfig {
    * inject a fake.
    */
   x402ChainReader?: import("./x402-settlements.js").X402ChainReader | null;
+  /**
+   * Backoff (ms) between boot-time reads of the Solana RPC's genesis hash
+   * (#954, `solana-network.ts`). Default: `SOLANA_NETWORK_RETRY_DELAYS_MS`.
+   * Tests pass `[]` to read once.
+   */
+  solanaNetworkRetryDelaysMs?: readonly number[];
   /**
    * STAGING/development-only: deterministic vote policy for the §6.2
    * federation orchestrator's peer-side vote-request endpoint. When set,
@@ -1416,6 +1419,27 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
   // forward-declared bindings are initialized by then.
   let solanaTreasuryAddress: string | undefined;
   let solanaTreasuryReconciliationInterval: ReturnType<typeof setInterval> | undefined;
+
+  // --- Solana network: read from the RPC, never defaulted (#954) ---
+  // Every Solana CAIP-2 id this relay records or claims (anchor rows,
+  // Solana reconciliation rows, the overview below) is `solana.network` —
+  // the cluster SOLANA_RPC_URL actually serves, from its genesis hash, and
+  // checked against SOLANA_NETWORK when the operator declares one. A
+  // mismatch refuses every Solana subsystem; an unreadable genesis hash
+  // leaves everything that labels a chain off. See solana-network.ts.
+  const solana: RelaySolanaNetwork = process.env.SOLANA_RPC_URL
+    ? await resolveRelaySolanaNetwork({
+        rpcUrl: process.env.SOLANA_RPC_URL,
+        ...(process.env.SOLANA_NETWORK !== undefined
+          ? { declared: process.env.SOLANA_NETWORK }
+          : {}),
+        ...(config.solanaNetworkRetryDelaysMs !== undefined
+          ? { retryDelaysMs: config.solanaNetworkRetryDelaysMs }
+          : {}),
+      })
+    : { network: undefined, refused: false };
+  /** SOLANA_RPC_URL is set and the RPC's cluster did not contradict a declared one. */
+  const solanaUsable = process.env.SOLANA_RPC_URL !== undefined && !solana.refused;
   let transparencyAnchorInterval: ReturnType<typeof setInterval> | undefined;
   let feePayerGuardInterval: ReturnType<typeof setInterval> | undefined;
 
@@ -1442,16 +1466,30 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
       stats: getTreasuryReconciliationStats(moteDb.db, x402Config.network),
     };
 
-    const solanaChain = {
-      chain: SOLANA_TREASURY_DEFAULT_CHAIN,
-      treasury_address: solanaTreasuryAddress ?? null,
-      usdc_contract: USDC_MINT_MAINNET,
-      loop_enabled: solanaTreasuryReconciliationInterval !== undefined,
-      stats: getTreasuryReconciliationStats(moteDb.db, SOLANA_TREASURY_DEFAULT_CHAIN),
-    };
+    // Solana entries: the cluster the RPC serves (when known) plus every
+    // Solana chain that already has rows. Never a defaulted label (#954) —
+    // a relay with no resolved Solana network claims no Solana chain.
+    const solanaChainIds = new Set<string>();
+    if (solana.network !== undefined) solanaChainIds.add(solana.network);
+    const historical = moteDb.db
+      .prepare(
+        "SELECT DISTINCT chain FROM relay_treasury_reconciliations WHERE chain LIKE 'solana:%' ORDER BY chain",
+      )
+      .all() as Array<{ chain: string }>;
+    for (const row of historical) solanaChainIds.add(row.chain);
+    const solanaChains = [...solanaChainIds].map((chain) => {
+      const live = chain === solana.network;
+      return {
+        chain,
+        treasury_address: solanaTreasuryAddress ?? null,
+        usdc_contract: live ? (process.env.SOLANA_USDC_MINT ?? USDC_MINT_MAINNET) : null,
+        loop_enabled: live && solanaTreasuryReconciliationInterval !== undefined,
+        stats: getTreasuryReconciliationStats(moteDb.db, chain),
+      };
+    });
 
     return c.json({
-      chains: [evmChain, solanaChain],
+      chains: [evmChain, ...solanaChains],
       records,
     });
   });
@@ -1669,15 +1707,18 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
   // when SOLANA_RPC_URL is unset.
   let operatorSolanaTransfer: import("@motebit/wallet-solana").OperatorSolanaTransfer | undefined =
     operatorSolanaTransferOverride;
-  if (!operatorSolanaTransfer && process.env.SOLANA_RPC_URL) {
+  if (!operatorSolanaTransfer && process.env.SOLANA_RPC_URL && solanaUsable) {
     const { createOperatorSolanaTransfer } = await import("@motebit/wallet-solana");
     operatorSolanaTransfer = createOperatorSolanaTransfer({
       rpcUrl: process.env.SOLANA_RPC_URL,
       identitySeed: relayIdentity.privateKey,
       ...(process.env.SOLANA_USDC_MINT ? { usdcMint: process.env.SOLANA_USDC_MINT } : {}),
     });
+    // The transfer records no chain id; the network is logged so an
+    // operator can see which cluster Path-0 withdrawals are sent on.
     logger.info("operator_solana_transfer.configured", {
       address: operatorSolanaTransfer.address,
+      network: solana.network ?? null,
     });
   }
 
@@ -1903,11 +1944,24 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
   // --- Unified chain anchor submitter (Solana Memo by default) ---
   const solanaRpcUrl = process.env.SOLANA_RPC_URL;
   let anchorSubmitter: import("@motebit/sdk").ChainAnchorSubmitter | undefined;
-  if (solanaRpcUrl) {
+  if (solanaRpcUrl && solana.network === undefined) {
+    // Anchors carry a network label; with no RPC-derived network there is
+    // no honest label, so nothing is anchored (#954). Loud, not silent.
+    logger.error("anchoring.solana_disabled", {
+      reason: solana.refused
+        ? "SOLANA_NETWORK contradicts the RPC's cluster"
+        : "the RPC's genesis hash could not be read at boot",
+      streams: ["settlement", "credential", "revocation", "transparency"],
+    });
+  }
+  if (solanaRpcUrl && solana.network !== undefined) {
     const { createSolanaMemoSubmitter } = await import("@motebit/wallet-solana");
     const memoSubmitter = createSolanaMemoSubmitter({
       rpcUrl: solanaRpcUrl,
       identitySeed: relayIdentity.privateKey,
+      // Verified at boot; the submitter re-checks it against the RPC before
+      // its first write and refuses on a mismatch.
+      network: solana.network,
     });
     anchorSubmitter = memoSubmitter;
     credentialAnchorAddress = memoSubmitter.address;
@@ -2142,7 +2196,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
   // --- P2P payment verifier (async onchain verification of direct settlements) ---
   let p2pVerifierInterval: ReturnType<typeof setInterval> | undefined;
   let bondVerifierInterval: ReturnType<typeof setInterval> | undefined;
-  if (solanaRpcUrl) {
+  if (solanaRpcUrl && solanaUsable) {
     const { startP2pVerifierLoop } = await import("./p2p-verifier.js");
     // Relay treasury Solana address — same identity-derived wallet that
     // OperatorSolanaTransfer uses for Path 0 withdrawals and that
@@ -2208,22 +2262,33 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
       "MOTEBIT_SOLANA_TREASURY_RECONCILIATION_INTERVAL_MS",
       15 * 60_000,
     );
-    solanaTreasuryReconciliationInterval = startSolanaTreasuryReconciliationLoop({
-      db: moteDb.db,
-      rpcUrl: solanaRpcUrl,
-      identitySeed: relayIdentity.privateKey,
-      // Same mint the verifier uses — the reconciler reads the treasury
-      // wallet's balance for THIS mint; on a non-mainnet deploy the
-      // default mainnet mint would report a zero balance and false
-      // negative-drift on every cycle.
-      ...(solanaUsdcMint ? { usdcMint: solanaUsdcMint } : {}),
-      intervalMs: solanaReconciliationIntervalMs,
-      isFrozen: () => getEmergencyFreeze(),
-      supervisor: loopSupervisor,
-    });
+    if (solana.network !== undefined) {
+      solanaTreasuryReconciliationInterval = startSolanaTreasuryReconciliationLoop({
+        db: moteDb.db,
+        rpcUrl: solanaRpcUrl,
+        identitySeed: relayIdentity.privateKey,
+        // The cluster the RPC serves, read from its genesis hash (#954) —
+        // the `chain` stamped on every row this loop writes.
+        chain: solana.network,
+        // Same mint the verifier uses — the reconciler reads the treasury
+        // wallet's balance for THIS mint; on a non-mainnet deploy the
+        // default mainnet mint would report a zero balance and false
+        // negative-drift on every cycle.
+        ...(solanaUsdcMint ? { usdcMint: solanaUsdcMint } : {}),
+        intervalMs: solanaReconciliationIntervalMs,
+        isFrozen: () => getEmergencyFreeze(),
+        supervisor: loopSupervisor,
+      });
+    } else {
+      logger.error("solana-treasury-reconciliation.disabled", {
+        reason: "the RPC's genesis hash could not be read at boot — no chain to label rows with",
+      });
+    }
   } else {
     logger.info("solana-treasury-reconciliation.disabled", {
-      reason: "SOLANA_RPC_URL not set",
+      reason: solanaRpcUrl
+        ? "SOLANA_NETWORK contradicts the RPC's cluster"
+        : "SOLANA_RPC_URL not set",
     });
   }
 
@@ -2284,8 +2349,13 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     // The payer of a P2P proof is read from the chain (#918). A test
     // injects a fake chain; production reads SOLANA_RPC_URL, and without
     // it every P2P submission is refused (fail closed).
+    // A declared SOLANA_NETWORK the RPC contradicts refuses P2P too (#954).
     p2pPaymentChain:
-      config.p2pPaymentChain !== undefined ? config.p2pPaymentChain : paymentChainFromEnv(),
+      config.p2pPaymentChain !== undefined
+        ? config.p2pPaymentChain
+        : solana.refused
+          ? null
+          : paymentChainFromEnv(),
   });
 
   // --- Helper: count all connected WebSocket clients ---
