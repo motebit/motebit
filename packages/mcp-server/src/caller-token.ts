@@ -162,6 +162,37 @@ export const DEFAULT_CALLER_REPLAY_CAPACITY = 100_000;
 export const DEFAULT_CALLER_REPLAY_QUOTA = 1_000;
 
 /**
+ * Default capacity of the RELAY door's replay store (#981 round 2): live
+ * accepted relay bearers. Separate from the caller store, so caller traffic
+ * can never fill it, and with no per-caller quota — the relay is one
+ * principal whose rate is the worker's whole forwarded load. Only a token
+ * that verified under the pinned relay key takes a slot, so only the relay
+ * can fill it. Entries leave at their `exp` (the relay mints 60 s tokens, the
+ * window allows 120 s), so this admits a sustained ~1,600 relay requests/s
+ * (~550 forwarded tasks/s at three requests each) at a worst-case memory of
+ * about 200 bytes an entry (~40 MB).
+ */
+export const DEFAULT_RELAY_REPLAY_CAPACITY = 200_000;
+
+/**
+ * The claims of a `motebit:` bearer, parsed WITHOUT verifying it — for
+ * routing and early refusal only. Null when the token does not parse.
+ */
+export function parseUnverifiedClaims(token: string): (McpCallerClaims & { did?: unknown }) | null {
+  const dotIdx = token.indexOf(".");
+  if (dotIdx === -1) return null;
+  try {
+    const raw = token.slice(0, dotIdx);
+    const padded = raw.replace(/-/g, "+").replace(/_/g, "/");
+    const parsed = JSON.parse(atob(padded)) as unknown;
+    if (parsed == null || typeof parsed !== "object") return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * In-process `CallerTokenReplayStore`. Entries sit in a map (constant size
  * each: two 64-char digests and a number) and in a min-heap ordered by
  * expiry; every claim pops only the entries that have expired, so each entry

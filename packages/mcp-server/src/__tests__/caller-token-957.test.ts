@@ -127,7 +127,7 @@ const AUDIENCES = [
   "mcp:call", // the law
   "task:submit", // the legacy audience: what mcp-client and the planner minted before #957
   "sync",
-  "task:dispatch", // caller-signed, so not the relay's dispatch bearer either
+  "task:dispatch", // caller-signed; a dispatch token is never a bearer at all (#981)
   "admin:query",
   undefined, // missing
 ] as const;

@@ -25,6 +25,7 @@ const SERVER = "packages/mcp-server/src/index.ts";
 const ROUTING = "services/relay/src/task-routing.ts";
 const TASKS = "services/relay/src/tasks.ts";
 const UNIT = { pkg: "@motebit/mcp-server", test: "src/__tests__/relay-bearer.test.ts" };
+const R2 = { pkg: "@motebit/mcp-server", test: "src/__tests__/relay-bearer-981-r2.test.ts" };
 const HARNESS = {
   pkg: "@motebit/relay",
   test: "src/__tests__/dispatch-presenter-981.test.ts",
@@ -36,13 +37,13 @@ const FORWARD = { pkg: "@motebit/relay", test: "src/__tests__/task-dispatch-toke
 // this worker is served as the relay.
 const ACCEPT_DISPATCH_AS_RELAY = {
   file: SERVER,
-  from: '    if (payload.aud === TASK_DISPATCH_AUDIENCE) {\n      return {\n        kind: "refused",',
+  from: "    if (payload.aud === TASK_DISPATCH_AUDIENCE) {\n      return refuse(",
   to:
     "    if (payload.aud === TASK_DISPATCH_AUDIENCE && payload.mid === this.deps.motebitId) {\n" +
     '      return {\n        kind: "relay",\n' +
     "        caller: { motebitId: `relay:${payload.did}`, trustLevel: AgentTrustLevel.Verified },\n" +
     "      };\n    }\n" +
-    '    if (payload.aud === TASK_DISPATCH_AUDIENCE) {\n      return {\n        kind: "refused",',
+    "    if (payload.aud === TASK_DISPATCH_AUDIENCE) {\n      return refuse(",
 };
 
 const TAMPERS = [
@@ -63,7 +64,7 @@ const TAMPERS = [
     edits: [
       {
         file: SERVER,
-        from: '    if (!verdict.ok) return { kind: "refused", reason: `relay bearer: ${verdict.reason}` };\n',
+        from: "    if (!verdict.ok) return refuse(`relay bearer: ${verdict.reason}`);\n",
         to: "",
       },
     ],
@@ -74,7 +75,7 @@ const TAMPERS = [
     edits: [
       {
         file: SERVER,
-        from: '    if (claimed !== "accepted") {\n      return { kind: "refused", reason: `relay bearer: ${replayRefusalReason(claimed)}` };\n    }\n',
+        from: '    if (claimed !== "accepted") return refuse(`relay bearer: ${replayRefusalReason(claimed)}`);\n',
         to: "",
       },
     ],
@@ -119,6 +120,51 @@ const TAMPERS = [
     ...FORWARD,
     edits: [
       { file: ROUTING, from: "  if (mintBearer == null) {", to: "  if (false as boolean) {" },
+    ],
+  },
+  // --- round 2 (cold review of the first round)
+  {
+    name: "r2 F1: relay bearers are claimed in the CALLER replay store",
+    ...R2,
+    edits: [
+      {
+        file: SERVER,
+        from: "    const claimed = await this.relayReplay.claim(",
+        to: "    const claimed = await this.callerReplay.claim(",
+      },
+    ],
+  },
+  {
+    name: "r2 F1: the relay store carries the caller per-caller quota",
+    ...R2,
+    edits: [
+      {
+        file: SERVER,
+        from: "      new MemoryCallerTokenReplayStore(\n        DEFAULT_RELAY_REPLAY_CAPACITY,\n        DEFAULT_RELAY_REPLAY_CAPACITY,\n      );",
+        to: "      new MemoryCallerTokenReplayStore(DEFAULT_RELAY_REPLAY_CAPACITY);",
+      },
+    ],
+  },
+  {
+    name: "r2 F2: a relay-claimed token that fails verification falls through to the caller path",
+    ...R2,
+    edits: [
+      {
+        file: SERVER,
+        from: '      if (!claimsRelay) return { kind: "not_relay" };',
+        to: '      return { kind: "not_relay" };',
+      },
+    ],
+  },
+  {
+    name: "r2 F2: relay claim read from nothing (only a verifying token counts as relay-claimed)",
+    ...R2,
+    edits: [
+      {
+        file: SERVER,
+        from: "    const claimsRelay = claims != null && claims.did === publicKeyToDidKey(key);",
+        to: "    const claimsRelay = claims != null && claims.did === publicKeyToDidKey(key) && false;",
+      },
     ],
   },
 ];
