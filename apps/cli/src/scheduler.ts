@@ -1,6 +1,10 @@
 import { createHash } from "node:crypto";
 import type { MotebitRuntime, StreamChunk } from "@motebit/runtime";
-import { paymentNoticeCopy } from "@motebit/runtime";
+import {
+  paymentNoticeCopy,
+  paidResultsOwedByRun,
+  goalAwaitingResultMessage,
+} from "@motebit/runtime";
 import type {
   SqliteGoalStore,
   SqliteApprovalStore,
@@ -21,6 +25,7 @@ import {
   reportProgressDefinition,
 } from "@motebit/tools";
 import type { PlanEngine, PlanChunk } from "@motebit/planner";
+import { isDelegationUndetermined } from "@motebit/planner";
 import type { PlanStoreAdapter } from "@motebit/planner";
 import { embedText } from "@motebit/memory-graph";
 import { parseInterval } from "./intervals.js";
@@ -103,6 +108,12 @@ export interface GoalStreamResult {
   toolCallsMade: number;
   memoriesFormed: number;
   responseText: string;
+  /**
+   * The run stopped on a delegated step whose paid outcome is unknown
+   * (#890): not a failure. The plan is held and resumed on the next fire,
+   * which settles the step from the relay's receipt — never a new plan.
+   */
+  undetermined?: { reason: string };
 }
 
 /** Maximum tool calls across all turns in a single goal run (default 50). */
@@ -790,6 +801,20 @@ export class GoalScheduler {
           continue;
         }
 
+        // A payment the goal's last run made whose result never arrived holds
+        // the goal (#890): a re-fire could hire a different worker for the
+        // same work and pay twice. Lifts only when the result is retrieved
+        // or dismissed (`/result`) — never on a timer.
+        const owed = this.paidResultsOwed(goal.goal_id);
+        if (owed != null) {
+          const key = `${goal.goal_id}:${owed}`;
+          if (!this.heldLogged.has(key)) {
+            this.heldLogged.add(key);
+            warnLine(`[goal] ${goal.goal_id.slice(0, 8)} held — ${owed}`);
+          }
+          continue;
+        }
+
         logLine(`[goal] executing: "${goal.prompt.slice(0, 60)}"`);
 
         // Build enriched context
@@ -845,6 +870,11 @@ export class GoalScheduler {
             // don't run more goals. The next tick will drain the approval.
             this.currentGoalId = null;
             return;
+          }
+
+          if (result.undetermined != null) {
+            this.recordAwaitingResult(goal, runId, result.undetermined.reason, result);
+            continue;
           }
 
           // Run-status transition FIRST, then the outcome row: a death in
@@ -921,6 +951,12 @@ export class GoalScheduler {
             );
             continue;
           }
+          // The plan engine refused a new plan: the goal holds a delegated
+          // step whose paid outcome is unknown (#890). Not a failure.
+          if (isDelegationUndetermined(err)) {
+            this.recordAwaitingResult(goal, runId, msg, null);
+            continue;
+          }
           errorLine(`[goal] error for ${goal.goal_id.slice(0, 8)}: ${msg}`);
 
           this.runStore.setStatus(runId, "failed", { note: msg });
@@ -978,6 +1014,61 @@ export class GoalScheduler {
     } finally {
       this.ticking = false;
     }
+  }
+
+  /**
+   * The owner-facing hold line when a payment made during this goal's last
+   * run is still owed its result (#890), else null. A ledger that cannot be
+   * read holds too: an unknown answer is not "nothing owed".
+   */
+  private paidResultsOwed(goalId: string): string | null {
+    const read = (this.runtime as Partial<MotebitRuntime>).outstandingPaidResults;
+    if (typeof read !== "function") return null;
+    const last = this.runStore.listForGoal(goalId, 1)[0];
+    if (last == null) return null;
+    try {
+      const owed = paidResultsOwedByRun(read.call(this.runtime), {
+        startedAt: last.started_at,
+        endedAt: last.status === "running" ? null : last.updated_at,
+      });
+      return owed.length > 0 ? goalAwaitingResultMessage(owed) : null;
+    } catch (err: unknown) {
+      return `the paid-intent ledger could not be read (${err instanceof Error ? err.message : String(err)}) — held until it can`;
+    }
+  }
+
+  /**
+   * Close a run that stopped on an unknown paid outcome (#890). `partial`,
+   * never `failed`: it does not count toward `consecutive_failures`, so it
+   * cannot auto-pause the goal, and a `once` goal stays active. The next
+   * fire comes on the goal's own cadence and resumes the held plan — it
+   * settles from the relay's receipt or holds again, never re-plans.
+   */
+  private recordAwaitingResult(
+    goal: Goal,
+    runId: string,
+    reason: string,
+    result: GoalStreamResult | null,
+  ): void {
+    const note = `awaiting result — ${reason}`;
+    this.runStore.setStatus(runId, "partial", { note });
+    this.goalOutcomeStore.add({
+      outcome_id: crypto.randomUUID(),
+      run_id: runId,
+      goal_id: goal.goal_id,
+      motebit_id: this.motebitId,
+      ran_at: Date.now(),
+      status: "partial",
+      summary: note.slice(0, 500),
+      tool_calls_made: result?.toolCallsMade ?? 0,
+      memories_formed: result?.memoriesFormed ?? 0,
+      error_message: null,
+    });
+    this.goalStore.updateLastRun(goal.goal_id, Date.now());
+    void this.runtime.goals.executed({ goal_id: goal.goal_id, summary: note.slice(0, 200) });
+    warnLine(
+      `[goal] ${goal.goal_id.slice(0, 8)} ${note} (not a failure; the next fire resumes the same task, never a new one)`,
+    );
   }
 
   private async consumeDaemonStream(
@@ -1133,7 +1224,10 @@ export class GoalScheduler {
 
     const registry = this.runtime.getToolRegistry();
 
-    // Check for existing active plan (resume interrupted plan)
+    // Check for existing active plan (resume interrupted plan). A plan
+    // holding a delegated step with an unknown paid outcome is the goal's
+    // latest, so it is resumed here, which settles the step from the relay's
+    // receipt or holds it again; `createPlan` refuses a new one (#890).
     let plan = this.planStore!.getPlanForGoal(goal.goal_id);
     let planStream: AsyncGenerator<PlanChunk>;
 
@@ -1294,6 +1388,16 @@ export class GoalScheduler {
         case "plan_failed":
           errorLine(`[plan] failed: ${chunk.reason}`);
           break;
+
+        case "plan_undetermined":
+          warnLine(`[plan] awaiting result: ${chunk.reason}`);
+          return {
+            suspended: false,
+            toolCallsMade,
+            memoriesFormed,
+            responseText,
+            undetermined: { reason: chunk.reason },
+          };
 
         case "reflection": {
           logLine(`[plan] reflection: ${chunk.result.summary}`);

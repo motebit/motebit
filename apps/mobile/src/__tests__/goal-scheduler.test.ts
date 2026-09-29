@@ -50,6 +50,7 @@ function makeRuntime(overrides?: Record<string, unknown>) {
     resetConversation: vi.fn(),
     getLoopDeps: vi.fn(() => null),
     getToolRegistry: vi.fn(() => ({ list: () => [] })),
+    outstandingPaidResults: vi.fn((): unknown[] => []),
     sendMessageStreaming: vi.fn(async function* () {
       yield { type: "text", text: "hello" };
     }),
@@ -524,5 +525,77 @@ describe("MobileGoalScheduler finishGoalFailure error swallowing", () => {
     await vi.runAllTimersAsync().catch(() => {});
     expect(completeEvents.length).toBe(1);
     expect(completeEvents[0]?.status).toBe("failed");
+  });
+});
+
+describe("#890: a goal whose last run left a paid outcome unknown", () => {
+  const goal = {
+    goal_id: "g890",
+    prompt: "buy the report",
+    mode: "recurring",
+    interval_ms: 1000,
+    last_run_at: null,
+  };
+
+  async function tick(sched: MobileGoalScheduler): Promise<void> {
+    sched.start();
+    await vi.advanceTimersByTimeAsync(6000);
+    sched.stop();
+    await vi.runAllTimersAsync().catch(() => {});
+  }
+
+  it("is held while a payment made since that run started is still owed its result", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const deps = makeDeps();
+    const now = Date.now();
+    deps._goalStore.getRecentOutcomes = vi.fn(() => [
+      { ran_at: now - 60_000, status: "completed", summary: "hired", error_message: null },
+    ]);
+    deps._runtime.outstandingPaidResults = vi.fn(() => [
+      {
+        workerMotebitId: "worker-a",
+        capability: "research",
+        taskId: "task-owed",
+        txHash: "tx",
+        paidMicro: 1000,
+        feeMicro: 50,
+        recordedAt: now - 30_000,
+      },
+    ]);
+    deps._goalStore.setActive([goal]);
+    await tick(new MobileGoalScheduler(deps));
+    expect(deps._runtime.sendMessageStreaming).not.toHaveBeenCalled();
+    expect(deps._goalStore.updateLastRun).not.toHaveBeenCalled();
+  });
+
+  it("a plan_undetermined run is recorded `partial`, never counted as a failure", async () => {
+    const deps = makeDeps();
+    const stream = async function* (): AsyncGenerator<unknown> {
+      yield {
+        type: "plan_undetermined",
+        plan: { plan_id: "p1" },
+        step: { step_id: "s1", description: "remote work" },
+        reason: "Submission unconfirmed — the task may still complete; check /result",
+      };
+    };
+    const engine = {
+      createPlan: vi.fn(async () => ({ plan: { plan_id: "p1" } })),
+      executePlan: vi.fn(stream),
+      resumePlan: vi.fn(stream),
+    };
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (deps._runtime as any).getLoopDeps = vi.fn(() => ({}));
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const withEngine = { ...deps, getPlanEngine: () => engine as any };
+    deps._goalStore.setActive([goal]);
+    const events: Array<{ status: string }> = [];
+    const sched = new MobileGoalScheduler(withEngine);
+    sched.onGoalComplete((e) => events.push(e));
+    await tick(sched);
+
+    expect(deps._goalStore.incrementFailures).not.toHaveBeenCalled();
+    expect(deps._goalStore.resetFailures).not.toHaveBeenCalled();
+    expect((deps._goalStore.outcomes[0] as { status: string }).status).toBe("partial");
+    expect(events[0]?.status).toBe("awaiting_result");
   });
 });

@@ -447,6 +447,11 @@ export function initGatedPanels(ctx: WebContext, hooks: GatedPanelsHooks = {}): 
         el.className = "goal-step failed";
         el.textContent = `Plan failed: ${chunk.reason}`;
         break;
+      case "plan_undetermined":
+        // #890: not a failure — a paid delegation's result has not arrived.
+        el.className = "goal-step running";
+        el.textContent = `Awaiting result: ${chunk.reason}`;
+        break;
       default:
         return;
     }

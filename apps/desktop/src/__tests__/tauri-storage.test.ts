@@ -581,6 +581,12 @@ describe("TauriPlanStore", () => {
     expect(store.getPlanForGoal("nonexistent")).toBeNull();
   });
 
+  it("getPlanForGoal returns the goal's MOST RECENT plan, as the SQL preload does (#890)", () => {
+    store.savePlan({ ...makePlan({ plan_id: "plan-old" }), created_at: 1_000 });
+    store.savePlan({ ...makePlan({ plan_id: "plan-new" }), created_at: 2_000 });
+    expect(store.getPlanForGoal("goal-1")!.plan_id).toBe("plan-new");
+  });
+
   it("updatePlan merges updates", () => {
     store.savePlan(makePlan());
     store.updatePlan("plan-1", { current_step_index: 1 });

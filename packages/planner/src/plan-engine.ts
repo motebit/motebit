@@ -11,6 +11,7 @@ import type { SensitivityCleared } from "@motebit/sdk";
 import { runTurnStreaming, projectProviderClearance } from "@motebit/ai-core";
 import type { PlanStoreAdapter } from "./types.js";
 import type { CollaborativeDelegationAdapter } from "./delegation-adapter.js";
+import { DelegationUndeterminedError, isDelegationUndetermined } from "./delegation-adapter.js";
 import { decomposePlan } from "./decompose.js";
 import type { DecompositionContext } from "./decompose.js";
 import { reflectOnPlan } from "./reflect.js";
@@ -25,6 +26,24 @@ export type PlanChunk =
   | { type: "step_failed"; step: PlanStep; error: string }
   | { type: "plan_completed"; plan: Plan }
   | { type: "plan_failed"; plan: Plan; reason: string }
+  /**
+   * The plan stopped on a delegated step whose paid outcome is UNKNOWN
+   * (#890): the relay never confirmed the submission, or an earlier run died
+   * mid-submit. Not a failure. The step stays `Running` with its task
+   * handle and the plan stays `Active`; resuming the plan settles the step
+   * from the relay's signed receipt when one exists, and holds again
+   * otherwise. It is never delegated a second time, and `createPlan`
+   * refuses a new plan for the goal while it holds. A scheduler must not
+   * count this as a failure; the owner is pointed at `/result`.
+   */
+  | {
+      type: "plan_undetermined";
+      plan: Plan;
+      step: PlanStep;
+      reason: string;
+      /** The relay task the step's submission was admitted as, when known. */
+      task_id?: string;
+    }
   | { type: "approval_request"; step: PlanStep; chunk: AgenticChunk }
   | { type: "plan_retrying"; failedPlan: Plan; newPlan: Plan }
   | { type: "reflection"; result: ReflectionResult }
@@ -106,6 +125,13 @@ export class PlanEngine {
     deps: SensitivityCleared<MotebitLoopDependencies>,
     planningConfig?: ResolvedTaskConfig,
   ): Promise<{ plan: Plan; truncatedFrom?: number }> {
+    // A goal whose delegated step has an unknown paid outcome gets no new
+    // plan: a new plan would delegate — and pay for — the same work again
+    // (#890). The held plan is resumed instead, which settles or holds it.
+    const held = this.findUnresolvedDelegation(goalId, motebitId);
+    if (held != null) {
+      throw new DelegationUndeterminedError(held.step.description);
+    }
     const rawPlan = await decomposePlan(ctx, projectProviderClearance(deps), planningConfig);
     const maxSteps = this.config.maxStepsPerPlan ?? 10;
     let truncatedFrom: number | undefined;
@@ -241,6 +267,22 @@ export class PlanEngine {
           continue;
         }
 
+        // A delegated step found Running on entry was submitted by an earlier
+        // run whose paid outcome is unknown — it ended undetermined, or the
+        // process died mid-submit. It is never delegated again: settle it
+        // from the relay's signed receipt, or hold (#890).
+        if (step.status === StepStatus.Running && this.isDelegatedStep(step)) {
+          const settled = yield* this.settleHeldStep(plan, step);
+          if (settled.kind === "completed") {
+            completedResults.push(
+              `[Step ${step.ordinal + 1}: ${step.description}]\n${settled.summary}`,
+            );
+            continue;
+          }
+          if (settled.kind === "skipped") continue;
+          return; // held, or failed its plan
+        }
+
         // Check dependencies
         if (!this.areDependenciesMet(step)) {
           if (step.optional) {
@@ -370,6 +412,17 @@ export class PlanEngine {
             yield { type: "step_completed", step: completedStep };
           } catch (err: unknown) {
             const errMsg = err instanceof Error ? err.message : String(err);
+            // Paid outcome unknown: not a failure. The step keeps its task
+            // handle and stays Running, the plan stays Active, and nothing
+            // is demoted or retried — a new attempt could pay twice (#890).
+            if (isDelegationUndetermined(err)) {
+              this.store.updateStep(step.step_id, {
+                error_message: errMsg,
+                updated_at: Date.now(),
+              });
+              yield this.undeterminedChunk(plan, step.step_id, errMsg);
+              return;
+            }
             // Extract failed agent IDs from the error cause chain for cross-step demotion.
             // The delegation adapter attaches failedAgentId to errors from failed receipts.
             for (let e: unknown = err; e instanceof Error; e = e.cause) {
@@ -696,6 +749,141 @@ export class PlanEngine {
     }
 
     return { suspended: false, toolCallsMade, responseText };
+  }
+
+  /**
+   * Was this step handed to another agent? True when it carries a relay
+   * task handle, or when it needs a capability this device lacks (the
+   * engine delegates exactly those).
+   */
+  private isDelegatedStep(step: PlanStep): boolean {
+    if (step.delegation_task_id != null && step.delegation_task_id !== "") return true;
+    const local = this.config.localCapabilities ?? [];
+    return (step.required_capabilities ?? []).some((c) => !local.includes(c));
+  }
+
+  /**
+   * The goal's delegated step whose paid outcome is unknown, if any: a
+   * `Running` delegated step in one of the goal's `Active` plans (#890).
+   * While one exists the goal must not delegate again — `createPlan`
+   * refuses, and a runner resumes that plan instead, which settles the step
+   * from the relay's signed receipt or holds it.
+   */
+  findUnresolvedDelegation(
+    goalId: string,
+    motebitId: string,
+  ): { plan: Plan; step: PlanStep } | null {
+    const active =
+      this.store.listActivePlans != null
+        ? this.store.listActivePlans(motebitId).filter((p) => p.goal_id === goalId)
+        : [this.store.getPlanForGoal(goalId)].filter(
+            (p): p is Plan => p != null && p.status === PlanStatus.Active,
+          );
+    for (const plan of active) {
+      for (const step of this.store.getStepsForPlan(plan.plan_id)) {
+        if (step.status === StepStatus.Running && this.isDelegatedStep(step)) {
+          return { plan, step };
+        }
+      }
+    }
+    return null;
+  }
+
+  private undeterminedChunk(plan: Plan, stepId: string, reason: string): PlanChunk {
+    const step = this.store.getStep(stepId)!;
+    const taskId = step.delegation_task_id;
+    return {
+      type: "plan_undetermined",
+      plan: this.store.getPlan(plan.plan_id)!,
+      step,
+      reason,
+      ...(taskId != null && taskId !== "" ? { task_id: taskId } : {}),
+    };
+  }
+
+  /**
+   * Settle a held delegated step from durable facts only: the relay's
+   * signed receipt for its task. A completed receipt completes the step; a
+   * receipt with any other status is a conclusive failure; no receipt
+   * (still running, unreachable, gone, or no task handle at all) holds the
+   * step — never a timeout, never a guess, never a second submission (#890).
+   */
+  private async *settleHeldStep(
+    plan: Plan,
+    step: PlanStep,
+  ): AsyncGenerator<
+    PlanChunk,
+    { kind: "completed"; summary: string } | { kind: "skipped" } | { kind: "failed" | "held" }
+  > {
+    const adapter = this.config.delegationAdapter;
+    const taskId = step.delegation_task_id;
+    let result: DelegatedStepResult | null = null;
+    if (taskId != null && taskId !== "" && adapter?.pollTaskResult != null) {
+      try {
+        result = await adapter.pollTaskResult(taskId, step.step_id);
+      } catch {
+        result = null;
+      }
+    }
+
+    if (result == null) {
+      const reason =
+        taskId != null && taskId !== ""
+          ? `Awaiting the result of delegated task ${taskId} — it may still complete; check /result (step "${step.description}")`
+          : `Submission unconfirmed and no task id was recorded — the task may still complete; check /result (step "${step.description}")`;
+      yield this.undeterminedChunk(plan, step.step_id, reason);
+      return { kind: "held" };
+    }
+
+    const summary = result.result_text.slice(0, 2000);
+    if (result.receipt.status === "completed") {
+      this.store.updateStep(step.step_id, {
+        status: StepStatus.Completed,
+        completed_at: Date.now(),
+        result_summary: summary || null,
+        error_message: null,
+        updated_at: Date.now(),
+      });
+      const completedStep = this.store.getStep(step.step_id)!;
+      this._pushTimelineEvent("step_delegated", {
+        plan_id: plan.plan_id,
+        step_id: step.step_id,
+        ordinal: step.ordinal,
+        task_id: result.task_id,
+      });
+      this._pushTimelineEvent("step_completed", {
+        plan_id: plan.plan_id,
+        step_id: step.step_id,
+        ordinal: step.ordinal,
+        tool_calls_made: 0,
+      });
+      yield { type: "step_delegated", step: completedStep, task_id: result.task_id };
+      yield { type: "step_completed", step: completedStep };
+      return { kind: "completed", summary };
+    }
+
+    const errMsg = `Delegated step ${result.receipt.status}: ${summary}`;
+    this.store.updateStep(step.step_id, {
+      status: StepStatus.Failed,
+      completed_at: Date.now(),
+      error_message: errMsg,
+      updated_at: Date.now(),
+    });
+    this._pushTimelineEvent("step_failed", {
+      plan_id: plan.plan_id,
+      step_id: step.step_id,
+      ordinal: step.ordinal,
+      error: errMsg,
+    });
+    yield { type: "step_failed", step: this.store.getStep(step.step_id)!, error: errMsg };
+    if (step.optional) {
+      this.store.updateStep(step.step_id, { status: StepStatus.Skipped, updated_at: Date.now() });
+      return { kind: "skipped" };
+    }
+    this.failPlan(plan, `Delegated step ${step.ordinal + 1} failed: ${errMsg}`);
+    this._pushTimelineEvent("plan_failed", { plan_id: plan.plan_id, reason: errMsg });
+    yield { type: "plan_failed", plan: this.store.getPlan(plan.plan_id)!, reason: errMsg };
+    return { kind: "failed" };
   }
 
   private areDependenciesMet(step: PlanStep): boolean {

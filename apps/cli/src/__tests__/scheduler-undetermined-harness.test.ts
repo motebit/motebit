@@ -225,6 +225,13 @@ async function runTick(w: World, s: GoalScheduler): Promise<void> {
   await Promise.race([s.tickOnce(), w.crash]);
 }
 
+function runStatuses(w: World): string[] {
+  return w.db.goalRunStore
+    .listForGoal(GOAL, 50)
+    .sort((a, b) => a.started_at - b.started_at)
+    .map((r) => r.status);
+}
+
 interface CaseResult {
   violations: string[];
   failures: number;
@@ -232,6 +239,8 @@ interface CaseResult {
   hires: number;
   firedTicks: number[];
   settledAt: number | null;
+  /** The goal's run statuses, oldest first. */
+  runs: string[];
 }
 
 async function runTurnCase(
@@ -303,6 +312,7 @@ async function runTurnCase(
     hires: w.hires.length,
     firedTicks,
     settledAt: null,
+    runs: runStatuses(w),
   };
 }
 
@@ -417,6 +427,7 @@ async function runPlanCase(
     hires: w.hires.length,
     firedTicks: [],
     settledAt: relay.settledAt,
+    runs: runStatuses(w),
   };
 }
 
@@ -485,10 +496,40 @@ describe("#890 CLI scheduler harness — no second paid attempt while the first 
             if (unknown && !resolvable && r.hires !== 1) {
               failures.push(`${label}: ${r.hires} submissions for an unresolvable outcome`);
             }
+            // HONESTY: a run that stopped on an unknown outcome is `partial`
+            // (awaiting its result) — never `completed`, never `failed`. A
+            // run the process died inside is `interrupted` by recovery.
+            if (unknown && !resolvable) {
+              const bad = r.runs.filter((st) => st !== "partial" && st !== "interrupted");
+              if (bad.length > 0)
+                failures.push(`${label}: HONESTY run statuses ${r.runs.join(",")}`);
+            }
           }
         }
       }
     }
     expect(failures.slice(0, 40), `${failures.length} failing cell assertions`).toEqual([]);
   }, 120_000);
+
+  it("a plan the engine refuses (the goal holds an undetermined step) closes the run `partial`, not failed", async () => {
+    const w = newWorld();
+    const s = newScheduler(
+      w,
+      mockRuntime(new PaidIntentLedger(w.store, MOTE), async function* () {
+        yield { type: "text" as const, text: "unused" };
+      }),
+    );
+    const refusing = {
+      isExecuting: false,
+      createPlan: vi.fn().mockRejectedValue(new DelegationUndeterminedError("remote work")),
+    } as unknown as PlanEngine;
+    s.setPlanEngine(refusing, w.db.planStore);
+    await s.tickOnce();
+    await s.tickOnce();
+    await s.tickOnce();
+    const g = w.db.goalStore.get(GOAL)!;
+    expect(g.consecutive_failures).toBe(0);
+    expect(g.status).toBe("active");
+    expect(runStatuses(w)).toEqual(["partial", "partial", "partial"]);
+  });
 });

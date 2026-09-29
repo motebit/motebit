@@ -629,6 +629,9 @@ function onAIReady(config: DesktopAIConfig): void {
         const summary =
           event.summary != null && event.summary !== "" ? `: ${event.summary.slice(0, 120)}` : "";
         addMessage("system", `Goal completed "${promptSnippet}"${planInfo}${summary}`);
+      } else if (event.status === "awaiting_result") {
+        // #890: not a failure — a paid delegation's result has not arrived.
+        addMessage("system", `Goal awaiting result "${promptSnippet}" — check /result`);
       } else {
         const err =
           event.error != null && event.error !== "" ? `: ${event.error.slice(0, 80)}` : "";

@@ -49,9 +49,14 @@
  */
 
 import type { MotebitRuntime, StreamChunk } from "@motebit/runtime";
-import { paymentNoticeCopy } from "@motebit/runtime";
+import {
+  paymentNoticeCopy,
+  paidResultsOwedByRun,
+  goalAwaitingResultMessage,
+} from "@motebit/runtime";
 import { PlanStatus } from "@motebit/sdk";
 import type { PlanChunk, PlanEngine, PlanStoreAdapter } from "@motebit/planner";
+import { isDelegationUndetermined } from "@motebit/planner";
 import {
   createSubGoalDefinition,
   completeGoalDefinition,
@@ -62,10 +67,18 @@ import type { InvokeFn, TauriPlanStore } from "./tauri-storage.js";
 /** Maximum tool calls across all turns in a single goal run (default 50). */
 const MAX_TOOL_CALLS_PER_RUN = 50;
 
+/** Wall-clock limit per goal run: 10 minutes. Bounds a run's window (#890). */
+const GOAL_WALL_CLOCK_MS = 10 * 60 * 1000;
+
 export interface GoalCompleteEvent {
   goalId: string;
   prompt: string;
-  status: "completed" | "failed";
+  /**
+   * `awaiting_result` (#890): the run stopped on a paid delegation whose
+   * outcome is unknown. Not a failure; the goal does not re-fire into a
+   * second payment and the owner checks `/result`.
+   */
+  status: "completed" | "failed" | "awaiting_result";
   summary: string | null;
   error: string | null;
   /** Plan title if the goal used plan-based execution. */
@@ -144,6 +157,8 @@ function ownerSummary(r: { responseText: string; paymentNotice?: string }): stri
 export class GoalScheduler {
   private timer: ReturnType<typeof setInterval> | null = null;
   private _goalExecuting = false;
+  /** The last "held — awaiting result" line logged, so a hold logs once (#890). */
+  private _heldLogged: string | null = null;
   private _currentGoalId: string | null = null;
   private _goalStatusCallback: ((executing: boolean) => void) | null = null;
   private _goalCompleteCallback: ((event: GoalCompleteEvent) => void) | null = null;
@@ -470,6 +485,14 @@ export class GoalScheduler {
           continue;
         }
 
+        // A payment the goal's last run made whose result never arrived
+        // holds the goal (#890): a re-fire could hire a different worker
+        // for the same work and pay twice. Lifts only when the result is
+        // retrieved or dismissed (`/result`).
+        if (await this.paidResultsOwed(goal.goal_id, invoke, runtime)) {
+          continue;
+        }
+
         const suspended = await this.executeGoalOnce(goal, invoke, motebitId, now);
         if (suspended) return;
       }
@@ -477,6 +500,42 @@ export class GoalScheduler {
       this._goalExecuting = false;
       this._currentGoalId = null;
       this._goalStatusCallback?.(false);
+    }
+  }
+
+  /**
+   * True when a payment made during this goal's last run is still owed its
+   * result (#890). The run window is the last outcome's `ran_at` (the run's
+   * start) plus the run's wall-clock limit: every run ends by then. A
+   * ledger or database that cannot answer holds — an unknown answer is not
+   * "nothing owed".
+   */
+  private async paidResultsOwed(
+    goalId: string,
+    invoke: InvokeFn,
+    runtime: MotebitRuntime,
+  ): Promise<boolean> {
+    try {
+      const rows = await invoke<Array<{ ran_at: number }>>("db_query", {
+        sql: "SELECT ran_at FROM goal_outcomes WHERE goal_id = ? ORDER BY ran_at DESC LIMIT 1",
+        params: [goalId],
+      });
+      const last = rows[0];
+      if (last == null) return false;
+      const owed = paidResultsOwedByRun(runtime.outstandingPaidResults(), {
+        startedAt: last.ran_at,
+        endedAt: last.ran_at + GOAL_WALL_CLOCK_MS,
+      });
+      if (owed.length === 0) return false;
+      const line = goalAwaitingResultMessage(owed);
+      if (this._heldLogged !== `${goalId}:${line}`) {
+        this._heldLogged = `${goalId}:${line}`;
+        // eslint-disable-next-line no-console
+        console.warn(`[goal] ${goalId.slice(0, 8)} held — ${line}`);
+      }
+      return true;
+    } catch {
+      return true;
     }
   }
 
@@ -587,8 +646,7 @@ export class GoalScheduler {
         params: [goal.goal_id],
       });
 
-      // Wall-clock limit: 10 minutes per goal run
-      const GOAL_WALL_CLOCK_MS = 10 * 60 * 1000;
+      // Wall-clock limit per goal run.
       const abortController = new AbortController();
       const deadlineTimer = setTimeout(
         () => abortController.abort(new Error("Goal exceeded 10-minute wall-clock limit")),
@@ -676,6 +734,30 @@ export class GoalScheduler {
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
 
+      // A delegated step whose paid outcome is unknown (#890): not a
+      // failure. `partial`, no failure count, no auto-pause; the next fire
+      // comes on the goal's own cadence and resumes the held plan.
+      if (isDelegationUndetermined(err)) {
+        const note = `awaiting result — ${msg}`;
+        await invoke<number>("db_execute", {
+          sql: `INSERT INTO goal_outcomes (outcome_id, goal_id, motebit_id, ran_at, status, summary, tool_calls_made, memories_formed, error_message)
+                VALUES (?, ?, ?, ?, 'partial', ?, 0, 0, NULL)`,
+          params: [runId, goal.goal_id, motebitId, now, note.slice(0, 500)],
+        }).catch(() => {});
+        await invoke<number>("db_execute", {
+          sql: "UPDATE goals SET last_run_at = ? WHERE goal_id = ?",
+          params: [now, goal.goal_id],
+        }).catch(() => {});
+        this._goalCompleteCallback?.({
+          goalId: goal.goal_id,
+          prompt: goal.prompt,
+          status: "awaiting_result",
+          summary: note,
+          error: null,
+        });
+        return false;
+      }
+
       await invoke<number>("db_execute", {
         sql: `INSERT INTO goal_outcomes (outcome_id, goal_id, motebit_id, ran_at, status, summary, tool_calls_made, memories_formed, error_message)
               VALUES (?, ?, ?, ?, 'failed', NULL, 0, 0, ?)`,
@@ -756,7 +838,10 @@ export class GoalScheduler {
       await planStore.preloadForGoal(goal.goal_id);
     }
 
-    // Check for existing active plan (resume interrupted plan)
+    // Check for existing active plan (resume interrupted plan). A plan
+    // holding a delegated step with an unknown paid outcome is the goal's
+    // latest, so it is resumed here, which settles the step from the relay's
+    // receipt or holds it again; `createPlan` refuses a new one (#890).
     let plan = planStore.getPlanForGoal(goal.goal_id);
     let planStream: AsyncGenerator<PlanChunk>;
 
@@ -1047,6 +1132,11 @@ export class GoalScheduler {
 
         case "plan_failed":
           throw new Error(`Plan failed: ${chunk.reason}`);
+
+        case "plan_undetermined":
+          // Not a failure (#890) — `executeGoalOnce` records it as awaiting
+          // its result and never counts it toward auto-pause.
+          throw Object.assign(new Error(chunk.reason), { undetermined: true });
       }
     }
 

@@ -1098,7 +1098,8 @@ export interface GoalOutcome {
   goal_id: string;
   motebit_id: string;
   ran_at: number;
-  status: "completed" | "failed" | "suspended";
+  /** `partial` (#890): stopped on a paid delegation whose outcome is unknown — not a failure. */
+  status: "completed" | "failed" | "suspended" | "partial";
   summary: string | null;
   tool_calls_made: number;
   memories_formed: number;

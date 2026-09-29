@@ -233,6 +233,12 @@ async function handleDelegatePlan(
         case "plan_failed":
           console.error(`\nPlan failed: ${chunk.reason}`);
           break;
+
+        // #890: not a failure — the task may still complete. Running the
+        // same goal again resumes this plan; it never delegates it twice.
+        case "plan_undetermined":
+          console.error(`\nAwaiting result: ${chunk.reason}`);
+          break;
       }
     }
   } finally {

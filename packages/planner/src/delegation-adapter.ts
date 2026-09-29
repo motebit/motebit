@@ -375,6 +375,21 @@ export class DelegationUndeterminedError extends Error {
   }
 }
 
+/**
+ * Is this error the "paid outcome unknown" signal, anywhere in its cause
+ * chain? True for `DelegationUndeterminedError` and for any error that
+ * carries `undetermined === true` (the sovereign adapter's terminal errors,
+ * #887). A caller that sees it must not start the same work again until
+ * the outcome is resolved from the relay's task state or the receipt
+ * (#890) — it is not a failure.
+ */
+export function isDelegationUndetermined(err: unknown): boolean {
+  for (let e: unknown = err, depth = 0; e instanceof Error && depth < 16; e = e.cause, depth++) {
+    if ((e as { undetermined?: unknown }).undetermined === true) return true;
+  }
+  return false;
+}
+
 function deliveryUncertain(message: string, cause?: unknown): DelegationError {
   const err: DelegationError = new Error(message, cause !== undefined ? { cause } : undefined);
   err.deliveryUncertain = true;

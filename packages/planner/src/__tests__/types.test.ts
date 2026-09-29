@@ -70,6 +70,13 @@ describe("InMemoryPlanStore", () => {
     expect(store.getPlanForGoal("goal-nonexistent")).toBeNull();
   });
 
+  it("getPlanForGoal returns the goal's MOST RECENT plan, as the SQLite stores do (#890)", () => {
+    const store = new InMemoryPlanStore();
+    store.savePlan(makePlan({ plan_id: "old" as PlanId, created_at: 1_000 }));
+    store.savePlan(makePlan({ plan_id: "new" as PlanId, created_at: 2_000 }));
+    expect(store.getPlanForGoal("goal-1")!.plan_id).toBe("new");
+  });
+
   it("getNextPendingStep returns null when no pending steps", () => {
     const store = new InMemoryPlanStore();
     store.saveStep(makeStep({ status: StepStatus.Completed }));

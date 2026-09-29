@@ -22,7 +22,11 @@
  * "running" pulse) and the once-goal `runNow(onChunk)` live-progress path.
  */
 
-import { paymentNoticeCopy } from "@motebit/runtime";
+import {
+  paymentNoticeCopy,
+  paidResultsOwedByRun,
+  goalAwaitingResultMessage,
+} from "@motebit/runtime";
 import type { ScheduledGoal } from "@motebit/panels";
 import { slabTurnIdForRun } from "@motebit/runtime";
 
@@ -76,6 +80,31 @@ function writeJson(key: string, value: unknown): void {
  * read `app.isProcessing` lazily — so bootstrap ordering matters less.
  */
 export function createWebGoalsScheduler(app: UnbootedWebApp): GoalsEngine {
+  /**
+   * #890: a payment this goal's last run made whose result never arrived
+   * holds the goal — a re-fire could hire a different worker for the same
+   * work and pay twice. Lifts only when the result is retrieved or
+   * dismissed (`/result`). The last run is the latest finished fire; a
+   * ledger that cannot answer holds.
+   */
+  const paidResultsOwed = (goalId: string): string | null => {
+    const rt = app.getRuntime();
+    if (rt == null) return null;
+    try {
+      const last = readJson<GoalRunRecord[]>(RUNS_KEY, [])
+        .filter((r) => r.goal_id === goalId && r.status !== "running" && r.status !== "skipped")
+        .sort((a, b) => b.started_at - a.started_at)[0];
+      if (last == null) return null;
+      const owed = paidResultsOwedByRun(rt.outstandingPaidResults(), {
+        startedAt: last.started_at,
+        endedAt: last.finished_at,
+      });
+      return owed.length > 0 ? goalAwaitingResultMessage(owed) : null;
+    } catch (err: unknown) {
+      return `the paid-intent ledger could not be read (${err instanceof Error ? err.message : String(err)})`;
+    }
+  };
+
   const adapter: GoalsEngineAdapter = {
     loadGoals: () => readJson<ScheduledGoal[]>(GOALS_KEY, []),
     saveGoals: (goals) => writeJson(GOALS_KEY, goals),
@@ -86,6 +115,10 @@ export function createWebGoalsScheduler(app: UnbootedWebApp): GoalsEngine {
       // next_run_at stays put; next tick retries. Missed fire waits
       // ~30s, not a full cadence.
       if (app.isProcessing) return { outcome: "skipped" };
+      // Held on an unknown paid outcome (#890): not fired, next_run_at left
+      // alone, so the hold is re-checked every tick and lifts as soon as
+      // the result is retrieved or dismissed.
+      if (paidResultsOwed(goal.goal_id) != null) return { outcome: "skipped" };
 
       /**
        * Emit `goal_executed` (spec §5.2) for this fire.
@@ -128,6 +161,7 @@ export function createWebGoalsScheduler(app: UnbootedWebApp): GoalsEngine {
         let summary = "";
         let failed = false;
         let failureReason: string | null = null;
+        let awaiting: string | null = null;
         try {
           for await (const chunk of app.executeGoal(goal.goal_id, goal.prompt)) {
             onChunk?.(chunk);
@@ -142,6 +176,11 @@ export function createWebGoalsScheduler(app: UnbootedWebApp): GoalsEngine {
                 failed = true;
                 failureReason = chunk.reason ?? "plan failed";
                 break;
+              case "plan_undetermined":
+                // #890: a paid delegation's outcome is unknown. Running the
+                // goal again resumes the held plan; it never delegates twice.
+                awaiting = chunk.reason;
+                break;
               case "step_completed":
                 summary = `${summary} · ${chunk.step.description}`;
                 break;
@@ -153,6 +192,11 @@ export function createWebGoalsScheduler(app: UnbootedWebApp): GoalsEngine {
           const msg = err instanceof Error ? err.message : String(err);
           emitExecuted({ error: msg });
           return { outcome: "error", error: msg };
+        }
+        if (awaiting != null) {
+          const reason = `awaiting result — ${awaiting}`;
+          emitExecuted({ summary: reason.slice(0, 200) });
+          return { outcome: "error", error: reason };
         }
         if (failed) {
           const reason = failureReason ?? "plan failed";

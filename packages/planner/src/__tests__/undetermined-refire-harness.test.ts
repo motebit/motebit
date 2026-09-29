@@ -303,7 +303,9 @@ async function runCase(
       countedFailures.push(`fire ${fire}: plan_failed (${planFailed.reason})`);
     }
     if (result.threw !== undefined && !flaggedUndetermined(result.threw)) {
-      countedFailures.push(`fire ${fire}: threw ${String(result.threw)}`);
+      const msg =
+        result.threw instanceof Error ? result.threw.message : JSON.stringify(result.threw);
+      countedFailures.push(`fire ${fire}: threw ${msg}`);
     }
   }
 

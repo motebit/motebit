@@ -278,6 +278,7 @@ describe("createWebGoalsScheduler — goal_executed emission (#594 Inc 3b prereq
           },
         },
         signGoalArtifact: () => Promise.resolve(null),
+        outstandingPaidResults: () => [],
       },
     };
   }
@@ -395,6 +396,7 @@ describe("createWebGoalsScheduler — goal_executed emission (#594 Inc 3b prereq
       getRuntime: () => ({
         goals: { executed: () => Promise.reject(new Error("ledger unavailable")) },
         signGoalArtifact: () => Promise.resolve(null),
+        outstandingPaidResults: () => [],
       }),
       async *sendMessageStreaming() {
         yield { type: "text", text: "ok" };
@@ -404,5 +406,76 @@ describe("createWebGoalsScheduler — goal_executed emission (#594 Inc 3b prereq
     engine.addGoal({ prompt: "x", interval_ms: 3_600_000, mode: "recurring" });
     const result = await engine.runNow(engine.getState().goals[0]!.goal_id);
     expect(result.outcome).toBe("fired");
+  });
+});
+
+describe("#890: a goal whose last run left a paid outcome unknown", () => {
+  it("is not fired again while a payment made during that run is still owed its result", async () => {
+    const owed: unknown[] = [];
+    let turns = 0;
+    const app = makeApp({
+      getRuntime: () => ({
+        goals: { executed: () => Promise.resolve() },
+        signGoalArtifact: () => Promise.resolve(null),
+        outstandingPaidResults: () => owed,
+      }),
+      async *sendMessageStreaming() {
+        turns++;
+        // The model hires; the payment settles; the result never arrives.
+        owed.push({
+          workerMotebitId: "worker-a",
+          capability: "research",
+          taskId: "task-owed",
+          txHash: "tx",
+          paidMicro: 1000,
+          feeMicro: 50,
+          recordedAt: Date.now(),
+        });
+        yield { type: "text", text: "hired" };
+      },
+    });
+    const engine = createWebGoalsScheduler(app as unknown as WebApp);
+    engine.addGoal({ prompt: "buy the report", interval_ms: 3_600_000, mode: "recurring" });
+    const goalId = engine.getState().goals[0]!.goal_id;
+
+    expect((await engine.runNow(goalId)).outcome).toBe("fired");
+    expect((await engine.runNow(goalId)).outcome).toBe("skipped");
+    expect(turns).toBe(1);
+
+    // Retrieved (or dismissed) with /result: the hold lifts.
+    owed.length = 0;
+    expect((await engine.runNow(goalId)).outcome).toBe("fired");
+    expect(turns).toBe(2);
+  });
+
+  it("a once goal whose plan ends undetermined reports awaiting its result, not a plan failure", async () => {
+    const emitted: Array<Record<string, unknown>> = [];
+    const app = makeApp({
+      getRuntime: () => ({
+        goals: {
+          executed: (p: Record<string, unknown>) => {
+            emitted.push(p);
+            return Promise.resolve();
+          },
+        },
+        outstandingPaidResults: () => [],
+      }),
+      async *executeGoal() {
+        yield { type: "plan_created", plan: { title: "Hire", total_steps: 1 } };
+        yield {
+          type: "plan_undetermined",
+          plan: {},
+          step: { description: "remote work" },
+          reason: "Submission unconfirmed — the task may still complete; check /result",
+        };
+      },
+    });
+    const engine = createWebGoalsScheduler(app as unknown as WebApp);
+    engine.addGoal({ prompt: "hire", interval_ms: 0, mode: "once" });
+    const result = await engine.runNow(engine.getState().goals[0]!.goal_id);
+    expect(result.outcome).toBe("error");
+    if (result.outcome === "error") expect(result.error).toMatch(/^awaiting result — /);
+    expect(emitted[0]?.error).toBeUndefined();
+    expect(String(emitted[0]?.summary)).toMatch(/^awaiting result — /);
   });
 });
