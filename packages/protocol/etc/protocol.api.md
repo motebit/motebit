@@ -2721,6 +2721,9 @@ export const MaxProductLogSemiring: Semiring<number>;
 export function maxSensitivity(a: SensitivityLevel, b: SensitivityLevel): SensitivityLevel;
 
 // @public
+export const MCP_CALL_AUDIENCE: TokenAudience;
+
+// @public
 export const MEMORY_EXPORT_ARTIFACT: ContentArtifactType;
 
 // @public
@@ -4578,7 +4581,7 @@ export type TemporalBasis = "clockless" | "local_clock" | "ledger_anchored";
 export function toCents(dollars: number): number;
 
 // @public
-export type TokenAudience = "sync" | "device:auth" | "pair" | "rotate-key" | "push:register" | "task:submit" | "task:query" | "task:result" | "task:dispatch" | "admin:query" | "proposal" | "receipts:read" | "market:listing" | "market:query" | "credentials" | "credentials:present" | "account:balance" | "account:deposit" | "account:withdraw" | "account:withdrawals" | "account:checkout" | "proxy:token" | "browser-sandbox-grant" | "browser-sandbox" | "runtime:attach";
+export type TokenAudience = "sync" | "device:auth" | "pair" | "rotate-key" | "push:register" | "task:submit" | "task:query" | "task:result" | "task:dispatch" | "admin:query" | "proposal" | "receipts:read" | "market:listing" | "market:query" | "credentials" | "credentials:present" | "account:balance" | "account:deposit" | "account:withdraw" | "account:withdrawals" | "account:checkout" | "proxy:token" | "browser-sandbox-grant" | "browser-sandbox" | "runtime:attach" | "mcp:call";
 
 // @public
 export function toMicro(dollars: number): number;

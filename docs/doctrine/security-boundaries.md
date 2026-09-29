@@ -71,7 +71,13 @@ Key-level revocation events (`agent_revoked`, `key_rotated`) are anchored to Sol
 
 Third-party MCP server auth uses `CredentialSource` adapter (`getCredential(CredentialRequest) → string | null`), not static bearer tokens. Credentials resolve **per HTTP request** via custom `fetch` injection — not at connect time. The JSON-RPC body is parsed to extract `toolName` from `tools/call` requests, enabling per-tool scoped credentials. `CredentialRequest` carries `serverUrl`, `toolName?`, `scope?`, `agentId?`.
 
-Four built-in implementations: `StaticCredentialSource`, `KeyringCredentialSource`, `VaultCredentialSource`, `OAuthCredentialSource`. Fail-closed: thrown errors propagate per-request; null skips the auth header. Motebit-to-motebit auth (`createCallerToken`) uses static `requestInit` — highest precedence, unaffected.
+Four built-in implementations: `StaticCredentialSource`, `KeyringCredentialSource`, `VaultCredentialSource`, `OAuthCredentialSource`. Fail-closed: thrown errors propagate per-request; null skips the auth header. Motebit-to-motebit auth (`createCallerToken`) takes precedence over any credential source and also resolves per request: see the next section.
+
+## MCP caller tokens are bound to their target and single-use (#957)
+
+A motebit signs tokens for many parties: `task:submit` for the relay, a bearer for every MCP server it connects to. Before #957 an MCP server's `verifyCallerToken` checked only the signature and that _some_ `aud` existed, so any of those parties could replay one at any motebit MCP server and be taken for that motebit until it expired. That is the "authority over a target the request never proves a relationship to" class.
+
+The law (`packages/mcp-server/src/caller-token.ts`; `spec/auth-token-v1.md` §7.3): an inbound caller token is accepted only when `aud` is `mcp:call`, `sub` is the server's own `motebit_id`, the signature and expiry hold with a bounded remaining lifetime, and its `jti` has not been accepted before (a bounded replay store that refuses rather than forgets a live entry). Clients (`@motebit/mcp-client`, the planner's sovereign path) mint one token per HTTP request, bound to the target they already trust — the relay listing's `motebit_id`, a pinned `motebitId`, or on first contact the server's `/health` (trust on first use, then pinned once `motebit_identity` confirms it). There is no legacy acceptance path: a client minting `task:submit` gets a 401 whose `reason` names the fix. The relay's `task:dispatch` bearer is a separate door, verified against the pinned relay key (`task-admission.md`).
 
 The interface lives in `@motebit/sdk` (Apache-2.0, Layer 0) so consumers across layers bind to the contract without pulling in BSL code. Implementations live in `@motebit/mcp-client` (BSL, Layer 2) and are re-exported. Vault implementations belong in higher-layer adapters. The MCP client does not persist, rotate, or cache credentials.
 

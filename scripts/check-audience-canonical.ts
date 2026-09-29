@@ -87,6 +87,7 @@ const CANONICAL_AUDIENCES = new Set<string>([
   "browser-sandbox-grant",
   "browser-sandbox",
   "runtime:attach",
+  "mcp:call",
 ]);
 
 /**

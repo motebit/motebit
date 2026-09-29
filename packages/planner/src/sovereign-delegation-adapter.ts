@@ -40,7 +40,7 @@
 
 import type { PlanStep, DelegatedStepResult, ExecutionReceipt } from "@motebit/sdk";
 import type { TokenAudience } from "@motebit/sdk";
-import { TASK_SUBMIT_AUDIENCE } from "@motebit/sdk";
+import { MCP_CALL_AUDIENCE } from "@motebit/sdk";
 import type { StepDelegationAdapter } from "./plan-engine.js";
 
 // ── Config ──────────────────────────────────────────────────────────
@@ -153,10 +153,11 @@ export interface SovereignDelegationConfig {
   /**
    * Mint an audience-bound signed auth token. Injected to avoid importing
    * crypto directly. The minter owns iat/exp/jti assembly (the canonical
-   * `mintAudienceToken` seam); the adapter supplies only identity + audience.
+   * `mintAudienceToken` seam); the adapter supplies identity, audience and,
+   * for an MCP call, the target it is bound to (`sub`, #957).
    */
   mintAudienceToken: (
-    input: { mid: string; did: string; aud: string; ttlMs?: number },
+    input: { mid: string; did: string; aud: string; sub?: string; ttlMs?: number },
     privateKey: Uint8Array,
   ) => Promise<{ token: string }>;
   /** Verify an execution receipt. Injected to avoid importing crypto directly. */
@@ -315,6 +316,7 @@ export class SovereignDelegationAdapter implements StepDelegationAdapter {
     // ── Phase 3: EXECUTE ──────────────────────────────────────────
     const outcome = await this.executeMcpTask(
       candidate.endpoint_url,
+      candidate.motebit_id,
       step.prompt,
       txHash,
       timeoutMs,
@@ -586,6 +588,7 @@ export class SovereignDelegationAdapter implements StepDelegationAdapter {
    */
   private async executeMcpTask(
     mcpUrl: string,
+    workerMotebitId: string,
     prompt: string,
     txHash: string,
     timeoutMs: number,
@@ -596,18 +599,24 @@ export class SovereignDelegationAdapter implements StepDelegationAdapter {
     const undelivered = (reason: string): McpOutcome => ({ kind: "undelivered", reason });
 
     try {
-      // Mint signed auth token for the remote agent
-      const { token } = await this.config.mintAudienceToken(
-        { mid: motebitId, did: deviceId, aud: TASK_SUBMIT_AUDIENCE },
-        signingKeys.privateKey,
-      );
-
-      const headers = (sid?: string): Record<string, string> => ({
-        "Content-Type": "application/json",
-        Accept: "application/json, text/event-stream",
-        Authorization: `Bearer motebit:${token}`,
-        ...(sid ? { "Mcp-Session-Id": sid } : {}),
-      });
+      // A fresh signed token per HTTP request (#957): aud "mcp:call", bound
+      // to the worker the relay listed (`sub`). The worker accepts each token
+      // once and only if it names that worker, so a token leaked from this
+      // call cannot authenticate anywhere else or twice.
+      const headers = async (sid?: string): Promise<Record<string, string>> => {
+        const { token } = await this.config.mintAudienceToken(
+          { mid: motebitId, did: deviceId, aud: MCP_CALL_AUDIENCE, sub: workerMotebitId },
+          signingKeys.privateKey,
+        );
+        return {
+          "Content-Type": "application/json",
+          Accept: "application/json, text/event-stream",
+          Authorization: `Bearer motebit:${token}`,
+          ...(sid ? { "Mcp-Session-Id": sid } : {}),
+        };
+      };
+      // A refused bearer is named in the outcome, never read as a silent miss.
+      let authRefusal: string | undefined;
 
       let sessionId: string | undefined;
       let reqId = 0;
@@ -617,7 +626,7 @@ export class SovereignDelegationAdapter implements StepDelegationAdapter {
         const id = ++reqId;
         const resp = await fetch(mcpUrl, {
           method: "POST",
-          headers: headers(sessionId),
+          headers: await headers(sessionId),
           body: JSON.stringify({ jsonrpc: "2.0", method, params, id }),
           signal: controller.signal,
         });
@@ -638,6 +647,10 @@ export class SovereignDelegationAdapter implements StepDelegationAdapter {
           }
           return null;
         }
+        if (resp.status === 401) {
+          authRefusal = (await resp.text().catch(() => "")).slice(0, 400);
+          return null;
+        }
         if (!resp.ok) return null;
         return resp.json();
       };
@@ -649,13 +662,16 @@ export class SovereignDelegationAdapter implements StepDelegationAdapter {
         clientInfo: { name: "sovereign-delegation", version: "0.1.0" },
       })) as { result?: unknown } | null;
       if (init == null || !("result" in (init as Record<string, unknown>))) {
+        if (authRefusal != null) {
+          return undelivered(`the worker refused this client's MCP bearer (401): ${authRefusal}`);
+        }
         return undelivered("the worker's MCP endpoint did not initialize a session");
       }
 
       // Send initialized notification
       await fetch(mcpUrl, {
         method: "POST",
-        headers: headers(sessionId),
+        headers: await headers(sessionId),
         body: JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }),
         signal: controller.signal,
       });

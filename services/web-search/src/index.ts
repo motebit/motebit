@@ -148,6 +148,9 @@ async function subDelegate(
     url: mcpUrl,
     motebit: true,
     motebitType: "service",
+    // Bind caller tokens to the atom the relay named, not to whatever the
+    // endpoint's /health claims (#957).
+    ...(targetMotebitId != null ? { motebitId: targetMotebitId } : {}),
     callerMotebitId,
     callerDeviceId,
     callerPrivateKey,

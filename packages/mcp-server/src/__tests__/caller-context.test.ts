@@ -30,7 +30,15 @@ function b64url(json: unknown): string {
 /** `motebit:` bearer whose claims name `mid`; the injected verifier accepts it. */
 function bearerFor(mid: string): string {
   const now = Date.now();
-  return `motebit:${b64url({ mid, did: `${mid}-device`, iat: now, exp: now + 60_000 })}.sig`;
+  return `motebit:${b64url({
+    mid,
+    did: `${mid}-device`,
+    iat: now,
+    exp: now + 60_000,
+    jti: crypto.randomUUID(),
+    aud: "mcp:call",
+    sub: WORKER,
+  })}.sig`;
 }
 
 const PROBE: ToolDefinition = {

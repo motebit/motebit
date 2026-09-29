@@ -132,6 +132,60 @@ describe("SovereignDelegationAdapter", () => {
     expect(result.task_id).toContain("sovereign:");
     expect(config.walletRail.send).toHaveBeenCalledWith("BobSolanaAddr123", 500000n);
 
+    // #957: every MCP request carries a FRESH token, aud "mcp:call", bound
+    // to the worker the relay listed — never one task:submit token reused.
+    const mint = config.mintAudienceToken as ReturnType<typeof vi.fn>;
+    expect(mint).toHaveBeenCalledTimes(3); // initialize, initialized, tools/call
+    for (const call of mint.mock.calls) {
+      expect(call[0]).toEqual({
+        mid: "agent-alice",
+        did: "device-alice",
+        aud: "mcp:call",
+        sub: "agent-bob",
+      });
+    }
+    for (const call of fetchMock.mock.calls.slice(1)) {
+      const auth = (call[1] as RequestInit).headers as Record<string, string>;
+      expect(auth["Authorization"]).toBe("Bearer motebit:mock-token");
+    }
+
+    vi.unstubAllGlobals();
+  });
+
+  it("names the worker's 401 reason instead of a silent miss (#957)", async () => {
+    const config = makeConfig();
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () =>
+          Promise.resolve({
+            candidates: [
+              {
+                motebit_id: "agent-bob",
+                composite: 0.9,
+                endpoint_url: "https://bob.test/mcp",
+                pay_to_address: "BobSolanaAddr123",
+                pricing: [
+                  { capability: "web_search", unit_cost: 500000, currency: "USD", per: "task" },
+                ],
+                is_online: true,
+              },
+            ],
+          }),
+      } as unknown as Response)
+      .mockResolvedValueOnce({
+        ok: false,
+        status: 401,
+        headers: new Headers(),
+        text: () => Promise.resolve('{"error":"invalid motebit token","reason":"audience"}'),
+      } as unknown as Response);
+    vi.stubGlobal("fetch", fetchMock);
+
+    const adapter = new SovereignDelegationAdapter(config);
+    await expect(adapter.delegateStep(makeStep(), 30000)).rejects.toThrow(
+      /refused this client's MCP bearer \(401\)/,
+    );
     vi.unstubAllGlobals();
   });
 

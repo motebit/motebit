@@ -34,12 +34,13 @@ import {
   BROWSER_SANDBOX_GRANT_AUDIENCE,
   BROWSER_SANDBOX_AUDIENCE,
   RUNTIME_ATTACH_AUDIENCE,
+  MCP_CALL_AUDIENCE,
   type TokenAudience,
 } from "../audience.js";
 
 describe("ALL_TOKEN_AUDIENCES", () => {
-  it("has exactly the twenty-four registered entries", () => {
-    expect(ALL_TOKEN_AUDIENCES.length).toBe(25);
+  it("has exactly the twenty-six registered entries", () => {
+    expect(ALL_TOKEN_AUDIENCES.length).toBe(26);
   });
 
   it("enumerates every named constant exactly once", () => {
@@ -69,6 +70,7 @@ describe("ALL_TOKEN_AUDIENCES", () => {
       BROWSER_SANDBOX_GRANT_AUDIENCE,
       BROWSER_SANDBOX_AUDIENCE,
       RUNTIME_ATTACH_AUDIENCE,
+      MCP_CALL_AUDIENCE,
     ];
     expect([...named].sort()).toEqual([...ALL_TOKEN_AUDIENCES].sort());
     expect(new Set(named).size).toBe(named.length);

@@ -31,8 +31,14 @@ describe("RELAY_ROUTE_AUDIENCES", () => {
 
   it("never names an audience the relay does not accept inbound", () => {
     // task:dispatch is verified by a worker, runtime:attach by the local
-    // runtime-host, browser-sandbox by the sandbox — never by a relay route.
-    const inboundNever = new Set(["task:dispatch", "runtime:attach", "browser-sandbox"]);
+    // runtime-host, browser-sandbox by the sandbox, mcp:call by a motebit
+    // MCP server — never by a relay route.
+    const inboundNever = new Set([
+      "task:dispatch",
+      "runtime:attach",
+      "browser-sandbox",
+      "mcp:call",
+    ]);
     for (const e of RELAY_ROUTE_AUDIENCES) expect(inboundNever.has(e.audience)).toBe(false);
   });
 });

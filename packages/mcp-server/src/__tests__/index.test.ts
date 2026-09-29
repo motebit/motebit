@@ -1648,7 +1648,15 @@ describe("McpServerAdapter — mutual authentication", () => {
   it("rejects motebit: token when resolveCallerKey returns blocked", async () => {
     const { AgentTrustLevel: ATL } = await import("../index.js");
     const callerId = "resolve-blocked-id";
-    const claims = { mid: callerId, did: "d1", iat: Date.now(), exp: Date.now() + 60000 };
+    const claims = {
+      mid: callerId,
+      did: "d1",
+      iat: Date.now(),
+      exp: Date.now() + 60000,
+      jti: "j1",
+      aud: "mcp:call",
+      sub: makeDeps().motebitId,
+    };
     const token = `${fakeClaimsB64(claims)}.fakesig`;
 
     const resolveCallerKey = vi.fn(async () => ({

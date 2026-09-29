@@ -43,6 +43,9 @@ vi.mock("@motebit/encryption", () => ({
 }));
 
 // Import after mocks are set up
+// The statically-bound mock the adapter itself calls (a later vi.doMock in
+// this file replaces only DYNAMIC imports of the module).
+import { mintAudienceToken as boundMint } from "@motebit/encryption";
 import {
   McpClientAdapter,
   connectMcpServers,
@@ -1233,6 +1236,7 @@ describe("McpClientAdapter — motebit caller identity", () => {
       httpConfig({
         name: "mote-srv",
         motebit: true,
+        motebitId: "remote-2",
         callerMotebitId: "my-mote-id",
         callerDeviceId: "my-device-id",
         callerPrivateKey: new Uint8Array(64),
@@ -1240,15 +1244,112 @@ describe("McpClientAdapter — motebit caller identity", () => {
     );
     await adapter.connect();
 
-    // Transport should have been created with URL + transport opts containing auth header
+    // #957: no static header — a per-request fetch mints a fresh token,
+    // aud "mcp:call", bound to the target server (sub).
     expect(mockHttpTransport).toHaveBeenCalledTimes(1);
-    expect(mockHttpTransport.mock.calls[0]!.length).toBe(2);
     const transportOpts = mockHttpTransport.mock.calls[0]![1] as {
-      requestInit: { headers: Record<string, string> };
+      requestInit?: unknown;
+      fetch: (url: string | URL, init?: RequestInit) => Promise<Response>;
     };
-    expect(transportOpts.requestInit.headers["Authorization"]).toBe(
-      "Bearer motebit:mock-signed-token",
+    expect(transportOpts.requestInit).toBeUndefined();
+    const sent = vi.fn().mockResolvedValue(new Response("ok"));
+    vi.stubGlobal("fetch", sent);
+    try {
+      const mint = boundMint as unknown as ReturnType<typeof vi.fn>;
+      mint.mockClear();
+      await transportOpts.fetch("https://example.com/mcp", { method: "POST", body: "{}" });
+      await transportOpts.fetch("https://example.com/mcp", { method: "POST", body: "{}" });
+      expect(mint).toHaveBeenCalledTimes(2);
+      expect(mint.mock.calls[0]![0]).toEqual({
+        mid: "my-mote-id",
+        did: "my-device-id",
+        aud: "mcp:call",
+        sub: "remote-2",
+      });
+      const headers = new Headers((sent.mock.calls[0]![1] as RequestInit).headers);
+      expect(headers.get("Authorization")).toBe("Bearer motebit:mock-signed-token");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("learns the target id from /health when not configured, and pins it on verified identity", async () => {
+    mockListTools.mockResolvedValueOnce(
+      mcpToolsResponse([{ name: "motebit_identity", description: "Identity" }]),
     );
+    mockCallTool.mockResolvedValueOnce({
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({ motebit_id: "remote-3", public_key: "cc".repeat(32) }),
+        },
+      ],
+      isError: false,
+    });
+    const health = vi
+      .fn()
+      .mockResolvedValue(new Response(JSON.stringify({ status: "ok", motebit_id: "remote-3" })));
+    vi.stubGlobal("fetch", health);
+    try {
+      const cfg = httpConfig({
+        name: "mote-srv",
+        motebit: true,
+        callerMotebitId: "my-mote-id",
+        callerDeviceId: "my-device-id",
+        callerPrivateKey: new Uint8Array(64),
+      } as Partial<McpServerConfig>);
+      const adapter = new McpClientAdapter(cfg);
+      await adapter.connect();
+      expect(String(health.mock.calls[0]![0])).toBe("https://example.com/health");
+      expect(adapter.serverConfig.motebitId).toBe("remote-3");
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("refuses a server whose identity is not the id its tokens were bound to", async () => {
+    mockListTools.mockResolvedValueOnce(
+      mcpToolsResponse([{ name: "motebit_identity", description: "Identity" }]),
+    );
+    mockCallTool.mockResolvedValueOnce({
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify({ motebit_id: "impostor", public_key: "cc".repeat(32) }),
+        },
+      ],
+      isError: false,
+    });
+    const adapter = new McpClientAdapter(
+      httpConfig({
+        name: "mote-srv",
+        motebit: true,
+        motebitId: "remote-4",
+        callerMotebitId: "my-mote-id",
+        callerDeviceId: "my-device-id",
+        callerPrivateKey: new Uint8Array(64),
+      } as Partial<McpServerConfig>),
+    );
+    await expect(adapter.connect()).rejects.toThrow("motebit_id mismatch");
+  });
+
+  it("fails loudly when the target id is neither configured nor discoverable", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockRejectedValue(new Error("ECONNREFUSED")));
+    try {
+      const adapter = new McpClientAdapter(
+        httpConfig({
+          name: "mote-srv",
+          motebit: true,
+          callerMotebitId: "my-mote-id",
+          callerDeviceId: "my-device-id",
+          callerPrivateKey: new Uint8Array(64),
+        } as Partial<McpServerConfig>),
+      );
+      await expect(adapter.connect()).rejects.toThrow("cannot bind a caller token");
+      expect(mockHttpTransport).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });
 
@@ -1473,13 +1574,14 @@ describe("McpClientAdapter — createCallerToken paths", () => {
     mockConnect.mockResolvedValue(undefined);
   });
 
-  it("skips signed token when callerDeviceId is missing", async () => {
-    // Has callerMotebitId and callerPrivateKey but no callerDeviceId
-    // createCallerToken returns null → no Authorization header
+  it("never sends a request unsigned when callerDeviceId is missing", async () => {
+    // Has callerMotebitId and callerPrivateKey but no callerDeviceId:
+    // the request fails loudly instead of going out without a token.
     const adapter = new McpClientAdapter(
       httpConfig({
         name: "no-device",
         motebit: true,
+        motebitId: "remote-mote",
         callerMotebitId: "mote-123",
         callerPrivateKey: new Uint8Array(32),
         // callerDeviceId omitted
@@ -1501,21 +1603,18 @@ describe("McpClientAdapter — createCallerToken paths", () => {
     );
 
     await adapter.connect();
-    // Should connect successfully (no token, but no crash)
     expect(adapter.isConnected).toBe(true);
+    await expect(
+      getTransportFetch()!("https://example.com/mcp", { method: "POST" }),
+    ).rejects.toThrow("cannot sign a caller token");
   });
 
-  it("catches mintAudienceToken error and connects without token", async () => {
-    // Mock mintAudienceToken to throw
-    const { mintAudienceToken } = await import("@motebit/encryption");
-    (mintAudienceToken as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
-      new Error("Signing failed"),
-    );
-
+  it("a mintAudienceToken error fails the request, never sends it unsigned", async () => {
     const adapter = new McpClientAdapter(
       httpConfig({
         name: "sign-fail",
         motebit: true,
+        motebitId: "remote-mote",
         callerMotebitId: "mote-123",
         callerDeviceId: "dev-123",
         callerPrivateKey: new Uint8Array(32),
@@ -1537,6 +1636,19 @@ describe("McpClientAdapter — createCallerToken paths", () => {
 
     await adapter.connect();
     expect(adapter.isConnected).toBe(true);
+    (boundMint as unknown as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
+      new Error("Signing failed"),
+    );
+    const sent = vi.fn().mockResolvedValue(new Response("ok"));
+    vi.stubGlobal("fetch", sent);
+    try {
+      await expect(
+        getTransportFetch()!("https://example.com/mcp", { method: "POST" }),
+      ).rejects.toThrow("Signing failed");
+      expect(sent).not.toHaveBeenCalled();
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });
 
@@ -1702,7 +1814,7 @@ describe("McpClientAdapter — CredentialSource", () => {
     expect(headers.get("Authorization")).toBe("Bearer legacy-token");
   });
 
-  it("motebit auth uses static requestInit, not custom fetch", async () => {
+  it("motebit auth mints its own per-request token and ignores credentialSource", async () => {
     const source: CredentialSource = {
       async getCredential(_request: CredentialRequest) {
         return "should-not-be-used";
@@ -1723,6 +1835,7 @@ describe("McpClientAdapter — CredentialSource", () => {
       httpConfig({
         name: "mote-with-cred",
         motebit: true,
+        motebitId: "remote",
         callerMotebitId: "my-mote",
         callerDeviceId: "my-device",
         callerPrivateKey: new Uint8Array(64),
@@ -1731,15 +1844,15 @@ describe("McpClientAdapter — CredentialSource", () => {
     );
     await adapter.connect();
 
-    // Motebit auth uses requestInit (static), not custom fetch
+    // Motebit auth: a per-request signed token; the credential source is never asked
     const transportOpts = mockHttpTransport.mock.calls[0]![1] as {
-      requestInit?: { headers: Record<string, string> };
+      requestInit?: unknown;
       fetch?: CustomFetch;
     };
-    expect(transportOpts.requestInit?.headers["Authorization"]).toBe(
-      "Bearer motebit:mock-signed-token",
-    );
-    expect(transportOpts.fetch).toBeUndefined();
+    expect(transportOpts.requestInit).toBeUndefined();
+    await transportOpts.fetch!("https://example.com/mcp", { method: "POST", body: "{}" });
+    const headers = new Headers((mockGlobalFetch.mock.calls[0]![1] as RequestInit).headers);
+    expect(headers.get("Authorization")).toBe("Bearer motebit:mock-signed-token");
   });
 });
 
