@@ -816,6 +816,11 @@ export class Web3JsRpcAdapter implements SolanaRpcAdapter {
     }
   }
 
+  /** The chain's block height at the decision commitment (#949). Rejects on failure. */
+  async getBlockHeight(): Promise<number> {
+    return this.connection.getBlockHeight(this.decisionCommitment);
+  }
+
   async isReachable(): Promise<boolean> {
     try {
       await this.connection.getLatestBlockhash(this.commitment);

@@ -47,6 +47,10 @@ async function cell(
 
 function fakeAdapter(sendUsdc: SolanaRpcAdapter["sendUsdc"]): SolanaRpcAdapter {
   return {
+    // #949: a tree whose Path 0 requires a transfer that records its
+    // broadcasts sees one; a tree that does not is unaffected.
+    honorsBroadcastHooks: true,
+    getSignatureOutcome: vi.fn().mockResolvedValue({ status: "pending" }),
     ownAddress: "RelayTreasuryAddressBase58",
     getUsdcBalance: vi.fn().mockResolvedValue(10_000_000_000n),
     getUsdcBalanceOf: vi.fn().mockResolvedValue(10_000_000_000n),

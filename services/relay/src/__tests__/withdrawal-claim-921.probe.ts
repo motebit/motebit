@@ -78,14 +78,22 @@ function operatorWith(
   sendUsdc: SolanaRpcAdapter["sendUsdc"],
   isReachable: SolanaRpcAdapter["isReachable"] = () => Promise.resolve(true),
 ): OperatorSolanaTransfer {
+  // Honours the #885 broadcast hooks (the real adapter does): a tree whose
+  // Path 0 records each signature before broadcast (#949) sees one; a tree
+  // that passes no hooks is unaffected. The chain never decides here.
   return new OperatorSolanaTransfer({
+    honorsBroadcastHooks: true,
     ownAddress: "RelayTreasuryAddressBase58",
     getUsdcBalance: vi.fn().mockResolvedValue(10_000_000_000n),
     getUsdcBalanceOf: vi.fn().mockResolvedValue(10_000_000_000n),
     getSolBalance: vi.fn().mockResolvedValue(10_000_000n),
-    sendUsdc,
+    sendUsdc: async (args, hooks) => {
+      await hooks?.beforeBroadcast?.({ signature: SIG, lastValidBlockHeight: 1_000 });
+      return sendUsdc(args, hooks);
+    },
     sendUsdcBatch: vi.fn().mockResolvedValue([]),
     getTransaction: vi.fn().mockResolvedValue({ status: "not_found" }),
+    getSignatureOutcome: () => Promise.resolve({ status: "pending" }),
     isReachable,
   });
 }
@@ -344,34 +352,49 @@ it("zz921 probe", async () => {
   {
     const { X402SettlementRail } = await import("@motebit/settlement-rails");
     const avail = vi.spyOn(X402SettlementRail.prototype, "isAvailable").mockResolvedValue(true);
-    const wd = vi
-      .spyOn(X402SettlementRail.prototype, "withdraw")
-      .mockRejectedValue(new Error("facilitator timeout"));
+    // #948 removed the x402 withdraw: spy on it only on a tree that has it.
+    const proto = X402SettlementRail.prototype as unknown as {
+      withdraw?: (...a: unknown[]) => Promise<unknown>;
+    };
+    const wd =
+      typeof proto.withdraw === "function"
+        ? vi
+            .spyOn(proto as { withdraw: (...a: unknown[]) => Promise<unknown> }, "withdraw")
+            .mockRejectedValue(new Error("facilitator timeout"))
+        : null;
     const relay = await createTestRelay({ enableDeviceAuth: false });
     const mid = "zz921-probe-x402";
     await fund(relay, mid);
-    await withdraw(
+    const res = await withdraw(
       relay,
       mid,
       jsonAuthWithIdempotency(),
       "0x1234567890abcdef1234567890abcdef12345678",
     );
     const [id] = withdrawalIds(relay, mid);
-    const realNow = Date.now.bind(Date);
-    const spy = vi.spyOn(Date, "now").mockImplementation(() => realNow() + 20 * 60 * 1000);
-    const rec = await adminCall(relay, id!, "reconcile", {
-      outcome: "not_paid",
-      attestation: "nothing seen",
-    });
-    const fail = rec.status === 404 ? await adminCall(relay, id!, "fail", { reason: "x" }) : null;
-    spy.mockRestore();
+    if (id === undefined) {
+      // #948: refused before any debit.
+      obs["x402_throw_then_20m"] = {
+        withdraw_status: res.status,
+        balance: getAccountBalance(relay.moteDb.db, mid)?.balance ?? 0,
+      };
+    } else {
+      const realNow = Date.now.bind(Date);
+      const spy = vi.spyOn(Date, "now").mockImplementation(() => realNow() + 20 * 60 * 1000);
+      const rec = await adminCall(relay, id, "reconcile", {
+        outcome: "not_paid",
+        attestation: "nothing seen",
+      });
+      const fail = rec.status === 404 ? await adminCall(relay, id, "fail", { reason: "x" }) : null;
+      spy.mockRestore();
+      obs["x402_throw_then_20m"] = {
+        refund_attempt_status: fail ? fail.status : rec.status,
+        // The authorization may still be submitted for ~40 more minutes.
+        ...outcome(relay, mid, id, true),
+      };
+    }
     avail.mockRestore();
-    wd.mockRestore();
-    obs["x402_throw_then_20m"] = {
-      refund_attempt_status: fail ? fail.status : rec.status,
-      // The authorization may still be submitted for ~40 more minutes.
-      ...outcome(relay, mid, id!, true),
-    };
+    wd?.mockRestore();
     await relay.close();
   }
 

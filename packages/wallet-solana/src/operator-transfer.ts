@@ -42,7 +42,13 @@
  */
 
 import { Web3JsRpcAdapter } from "./web3js-adapter.js";
-import type { SendUsdcResult, SolanaRpcAdapter } from "./adapter.js";
+import type {
+  BroadcastHooks,
+  SendUsdcResult,
+  SignatureOutcome,
+  SignedTransactionRef,
+  SolanaRpcAdapter,
+} from "./adapter.js";
 
 export interface OperatorSolanaTransferConfig {
   /** Solana RPC endpoint URL. Same value as `SOLANA_RPC_URL` used by the memo submitter. */
@@ -97,8 +103,55 @@ export class OperatorSolanaTransfer {
    * below `microAmount`. Throws `InvalidSolanaAddressError` when
    * `toAddress` is not a valid base58 public key.
    */
-  sendUsdc(toAddress: string, microAmount: bigint): Promise<SendUsdcResult> {
-    return this.adapter.sendUsdc({ toAddress, microAmount });
+  sendUsdc(
+    toAddress: string,
+    microAmount: bigint,
+    hooks?: BroadcastHooks,
+  ): Promise<SendUsdcResult> {
+    return hooks === undefined
+      ? this.adapter.sendUsdc({ toAddress, microAmount })
+      : this.adapter.sendUsdc({ toAddress, microAmount }, hooks);
+  }
+
+  /**
+   * True only when every transaction `sendUsdc` signs is reported to
+   * `hooks.beforeBroadcast` BEFORE it is sent, and the chain can be asked
+   * about each one (#885, #949). Only then can a payer that recorded every
+   * reported signature prove from the chain alone whether its payout
+   * landed, and read "no signature recorded" as "nothing was sent". A payer
+   * must not send a payout it cannot later prove this way.
+   */
+  get recordsBroadcasts(): boolean {
+    return (
+      this.adapter.honorsBroadcastHooks === true &&
+      typeof this.adapter.getSignatureOutcome === "function"
+    );
+  }
+
+  /**
+   * What the chain says about one transaction this treasury signed (#885).
+   * Read-only. An adapter that cannot answer reports `rpc_error` — never
+   * absence.
+   */
+  getSignatureOutcome(tx: SignedTransactionRef): Promise<SignatureOutcome> {
+    if (typeof this.adapter.getSignatureOutcome !== "function") {
+      return Promise.resolve({
+        status: "rpc_error",
+        reason: "adapter cannot read signature outcomes",
+      });
+    }
+    return this.adapter.getSignatureOutcome(tx);
+  }
+
+  /**
+   * The chain's current block height (#949). Rejects when it cannot be read
+   * — a caller must never substitute a guess (or the wall clock) for it.
+   */
+  getBlockHeight(): Promise<number> {
+    if (typeof this.adapter.getBlockHeight !== "function") {
+      return Promise.reject(new Error("adapter cannot read the block height"));
+    }
+    return this.adapter.getBlockHeight();
   }
 
   /** Whether the RPC endpoint is reachable right now. */

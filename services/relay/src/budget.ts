@@ -5,7 +5,7 @@
 import type { Context, Hono } from "hono";
 import { HTTPException } from "hono/http-exception";
 import type { MotebitDatabase } from "@motebit/persistence";
-import { toCents, isWithdrawableRail } from "@motebit/protocol";
+import { toCents } from "@motebit/protocol";
 import type {
   AccountBalanceResult,
   AccountWithdrawResult,
@@ -36,31 +36,42 @@ import {
 } from "./accounts.js";
 import { checkIdempotency, completeIdempotency } from "./idempotency.js";
 import Stripe from "stripe";
-import {
-  payoutValidityMsOf,
-  type SettlementRailRegistry,
-  type StripeSettlementRail,
-} from "@motebit/settlement-rails";
+import type { SettlementRailRegistry, StripeSettlementRail } from "@motebit/settlement-rails";
 import type { WithdrawalRequest } from "@motebit/virtual-accounts";
+import {
+  LEGACY_BROADCAST_HEIGHT_BOUND,
+  isChainRecordedClaim,
+  markChainRecordedClaim,
+  readChainVerdict,
+  recordPayoutAttempt,
+} from "./withdrawal-chain-payouts.js";
 
 const logger = createLogger({ service: "budget" });
 
 export {
   RECONCILE_MIN_AGE_MS,
-  SOLANA_BLOCKHASH_VALIDITY_MS,
   PAYOUT_HORIZON_MARGIN_MS,
   UNDECLARED_PAYOUT_HORIZON_MS,
   reconcileOpensAt,
 } from "./payout-horizon.js";
-import {
-  RECONCILE_MIN_AGE_MS,
-  UNDECLARED_PAYOUT_HORIZON_MS,
-  reconcileOpensAt,
-} from "./payout-horizon.js";
+import { RECONCILE_MIN_AGE_MS, reconcileOpensAt } from "./payout-horizon.js";
 
-/** Destination shapes an automated payout path serves: Path 0 (Solana base58), Path 1 (EVM 0x). */
+/** The destination shape the automated payout path serves: Path 0 (Solana base58). */
 const SOLANA_DEST_RE = /^[1-9A-HJ-NP-Za-km-z]{32,44}$/;
+/**
+ * An EVM (0x) destination. No path can pay one (#948): Path 1 (x402) needs
+ * an EIP-3009 authorization signed by the treasury's EVM key, which the
+ * relay does not hold. Refused at /withdraw before any debit.
+ */
 const EVM_DEST_RE = /^0x[0-9a-fA-F]{40}$/;
+
+/** The refusal a 0x withdrawal gets (#948) — before any debit. */
+export const EVM_WITHDRAWAL_UNSUPPORTED = {
+  error: "WITHDRAWAL_DESTINATION_UNSUPPORTED",
+  message:
+    "EVM (0x) withdrawals are not available: this relay cannot sign the EIP-3009 authorization an x402 payout requires. Withdraw to a Solana address you control.",
+  status: 400,
+} as const;
 
 /**
  * A `pending` withdrawal whose payout may have been attempted with no claim
@@ -230,22 +241,42 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
    */
   const payoutsInFlight = new Set<string>();
 
-  /**
-   * When this process's send call for a still-`processing` withdrawal
-   * returned or threw — the last moment the relay could have broadcast it
-   * (`reconcileOpensAt`). In-memory: a claim from an earlier process life is
-   * bounded by the process start instead.
-   */
-  const payoutSendEndedAt = new Map<string, number>();
-
   /** Release a payout from this process: its outcome is written (or could not be). */
   const releasePayout = (withdrawalId: string): void => {
     payoutsInFlight.delete(withdrawalId);
-    if (getWithdrawalById(moteDb.db, withdrawalId)?.status === "processing") {
-      payoutSendEndedAt.set(withdrawalId, Date.now());
-    } else {
-      payoutSendEndedAt.delete(withdrawalId);
+  };
+
+  /**
+   * The first Solana block height this process read (#949) — the anchor for
+   * a LEGACY Path 0 claim, which an earlier process made without recording
+   * its signatures. Everything that process broadcast was signed over a
+   * blockhash fetched before this process started, so it can land only
+   * below this anchor + LEGACY_BROADCAST_HEIGHT_BOUND. Read lazily (never at
+   * boot); a failed read leaves it unset and the door shut.
+   */
+  let legacyHeightAnchor: number | null = null;
+
+  /**
+   * Whether the chain has provably passed every block a legacy claim's
+   * broadcast could land in. `null` when the height cannot be read — the
+   * door stays shut (fail closed); never the wall clock.
+   */
+  const legacyBroadcastsDead = async (): Promise<{
+    dead: boolean;
+    height: number;
+    bound: number;
+  } | null> => {
+    if (!operatorSolanaTransfer) return null;
+    let height: number;
+    try {
+      height = await operatorSolanaTransfer.getBlockHeight();
+    } catch {
+      return null;
     }
+    if (!Number.isSafeInteger(height) || height < 0) return null;
+    legacyHeightAnchor ??= height;
+    const bound = legacyHeightAnchor + LEGACY_BROADCAST_HEIGHT_BOUND;
+    return { dead: height > bound, height, bound };
   };
 
   // NOTE: the self-declared `POST /api/v1/agents/:id/deposit` route was
@@ -357,6 +388,17 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
       throw new HTTPException(400, { message: "amount must be a positive number" });
     }
 
+    // #948: no path can pay an EVM (0x) destination, so refuse it BEFORE any
+    // debit — a withdrawal method that cannot work is not offered. (Before
+    // #948 it was handed to an x402 "payout" signed with the idempotency
+    // key, which no facilitator can execute.)
+    if (typeof body.destination === "string" && EVM_DEST_RE.test(body.destination)) {
+      const errBody = JSON.stringify(EVM_WITHDRAWAL_UNSUPPORTED);
+      completeIdempotency(moteDb.db, idempotencyKeyHeader, motebitId, 400, errBody);
+      logger.info("withdrawal.endpoint.evm_refused", { correlationId, motebitId });
+      return c.json(EVM_WITHDRAWAL_UNSUPPORTED, 400);
+    }
+
     const amountMicro = toMicro(body.amount);
     // Pass the header key as the withdrawal-level idempotency key too (backward compat)
     const idempotencyKey = body.idempotency_key ?? idempotencyKeyHeader;
@@ -404,13 +446,11 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
       idempotencyKey: idempotencyKey ?? null,
     });
 
-    // Automated settlement: try Solana sovereign return (Path 0), x402 EVM
-    // (Path 1), or Bridge (Path 2). Each path is gated by the destination
-    // address shape — Solana base58, EVM 0x-hex, or other. Paths are
-    // mutually exclusive on address shape, so ordering doesn't affect
-    // correctness; Path 0 is listed first as the doctrinal-default
-    // sovereign-rail return-of-custody path (relay treasury → user wallet,
-    // no third-party orchestrator, no transmission category).
+    // Automated settlement: Path 0, the Solana sovereign return of custody
+    // (relay treasury → user wallet, no third-party orchestrator, no
+    // transmission category), for a Solana-shaped destination. EVM (0x)
+    // destinations were refused above (#948: Path 1 cannot sign a payout);
+    // any other destination stays `pending` for the operator.
     //
     // Claim before send (issue #921; spec/market-v1.md §10.3). No path sends
     // a payout until it has CLAIMED the withdrawal — the compare-and-set
@@ -424,8 +464,9 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
     // the send then confirmed, and the user was paid AND refunded while the
     // row read `failed`. A `processing` withdrawal whose payout outcome is
     // unknown (the send threw, the process died mid-send) is settled only
-    // through `/admin/withdrawals/:id/reconcile`, after the payout can no
-    // longer be in flight and on an explicit operator attestation.
+    // through `/admin/withdrawals/:id/reconcile`, and only once THE CHAIN
+    // shows the payout landed or can never land (#949) — see the reconcile
+    // route.
     //
     // Fail-safe: if settlement's outcome is unknown (the send threw), the
     // withdrawal stays `processing` for the operator's reconcile. Funds are
@@ -436,24 +477,22 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
     let autoSettled = false;
     const isSolanaDest =
       result.destination !== "pending" && SOLANA_DEST_RE.test(result.destination);
-    const isWalletDest = result.destination !== "pending" && EVM_DEST_RE.test(result.destination);
 
-    // The claim (#921). Returns true only when THIS request moved the row
-    // `pending → processing`; the caller sends nothing on false.
-    //
-    // `payoutValidUntil` is the payout's own horizon: the latest moment what
-    // the rail is handed can still land (x402: the authorization's
-    // `validBefore`); null for a payout the relay broadcasts itself (Solana),
-    // whose horizon is bound to this process (`reconcileOpensAt`). On a won
-    // claim the payout is in flight here until `releasePayout`.
-    const claimPayout = (path: "solana" | "x402", payoutValidUntil: number | null): boolean => {
+    // The claim (#921), chain-recorded (#949). Returns true only when THIS
+    // request moved the row `pending → processing`; the caller sends nothing
+    // on false. In the SAME transaction it records that this payout is
+    // chain-recorded: from here every transaction the send signs is recorded
+    // (by signature and last valid block height) before it is broadcast, so
+    // whether the payout landed is later read from the chain, never assumed
+    // from the clock. On a won claim the payout is in flight here until
+    // `releasePayout`.
+    const claimPayout = (path: "solana"): boolean => {
       const claimedAt = Date.now();
-      const claimed = claimWithdrawalForPayout(
-        moteDb.db,
-        result.withdrawal_id,
-        claimedAt,
-        payoutValidUntil,
-      );
+      const claimed = moteDb.db.transaction(() => {
+        const won = claimWithdrawalForPayout(moteDb.db, result.withdrawal_id, claimedAt, null);
+        if (won) markChainRecordedClaim(moteDb.db, result.withdrawal_id, path, claimedAt);
+        return won;
+      });
       if (claimed) {
         payoutsInFlight.add(result.withdrawal_id);
       } else {
@@ -474,11 +513,7 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
     // A settling write that lost to another actor after the payout was sent.
     // Never silent (#921): the payout's real outcome and the row disagree,
     // and only an operator can reconcile them.
-    const settleLost = (
-      path: "solana" | "x402",
-      outcome: string,
-      data: Record<string, unknown>,
-    ) => {
+    const settleLost = (path: "solana", outcome: string, data: Record<string, unknown>) => {
       const current = getWithdrawalById(moteDb.db, result.withdrawal_id);
       logger.error("withdrawal.payout_settle_lost", {
         correlationId,
@@ -534,18 +569,39 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
     //
     // Before #920 outcome 2 was recorded as outcome 1: a completed, signed
     // withdrawal whose funds never moved, with the balance still debited.
-    if (!autoSettled && isSolanaDest && operatorSolanaTransfer) {
+    //
+    // Chain record (#949). The send runs only over a transfer that reports
+    // every transaction it signs to `beforeBroadcast` before sending it and
+    // can read each one's outcome (`recordsBroadcasts`); the hook records the
+    // signature and its last valid block height, and a hook that cannot
+    // record stops that broadcast. A transfer that cannot do both is never
+    // used: its payout could only be judged by the clock, which a halted
+    // chain outlives. The withdrawal then stays `pending`, nothing sent.
+    const pathZeroReady = operatorSolanaTransfer?.recordsBroadcasts === true;
+    if (!autoSettled && isSolanaDest && operatorSolanaTransfer && !pathZeroReady) {
+      logger.error("withdrawal.solana.unrecordable_transfer", {
+        correlationId,
+        motebitId,
+        withdrawalId: result.withdrawal_id,
+        note: "no payout sent: the Solana transfer cannot record its broadcasts or read their outcome, so a payout could not be proven from the chain; the withdrawal stays pending",
+      });
+    }
+    if (!autoSettled && isSolanaDest && operatorSolanaTransfer && pathZeroReady) {
       let claimed = false;
       try {
         const available = await operatorSolanaTransfer.isAvailable();
-        if (available && claimPayout("solana", null)) {
+        if (available && claimPayout("solana")) {
           claimed = true;
+          const withdrawalId = result.withdrawal_id;
           const sendResult = await operatorSolanaTransfer.sendUsdc(
             result.destination,
             // result.amount is stored in micro-units; the operator-side
             // adapter takes micro-units as bigint (same unit convention
             // as everywhere in the ledger).
             BigInt(result.amount),
+            {
+              beforeBroadcast: (tx) => recordPayoutAttempt(moteDb.db, withdrawalId, tx, Date.now()),
+            },
           );
 
           if (sendResult.confirmed === true) {
@@ -676,115 +732,6 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
       }
     }
 
-    // Path 1: x402 instant settlement for EVM-shaped wallet destinations.
-    //
-    // The rail must be narrowed through `isWithdrawableRail()` before
-    // calling `.withdraw(...)` — `withdraw` does not exist on the base
-    // `GuestRail` type (it lives on `WithdrawableGuestRail`). This is
-    // the structural fence the off-ramp arc landed: the only rails
-    // that can drive user-facing transmission are those that opt-in
-    // via the `WithdrawableGuestRail` marker. `BridgeSettlementRail`
-    // does NOT opt-in — Bridge is treasury-only.
-    //
-    // Same claim-before-send as Path 0 (#921): the rail is called only after
-    // `claimPayout`, the completion is FROM `processing`, and a thrown
-    // withdraw leaves the withdrawal `processing` for the operator's
-    // reconcile (the transfer may have been submitted).
-    if (!autoSettled && railRegistry && isWalletDest) {
-      const x402Rail = railRegistry.get("x402");
-      if (x402Rail && isWithdrawableRail(x402Rail)) {
-        let claimed = false;
-        try {
-          const available = await x402Rail.isAvailable();
-          // The authorization the rail signs stays submittable until its
-          // declared validity; a rail declaring none gets the conservative
-          // floor — never a shorter horizon.
-          const validityMs = payoutValidityMsOf(x402Rail) ?? UNDECLARED_PAYOUT_HORIZON_MS;
-          if (available && claimPayout("x402", Date.now() + validityMs)) {
-            claimed = true;
-            const withdrawResult = await x402Rail.withdraw(
-              motebitId,
-              body.amount,
-              "USDC",
-              result.destination,
-              result.withdrawal_id,
-            );
-
-            const completedAt = Date.now();
-            const relayPublicKeyHex = bytesToHex(relayIdentity.publicKey);
-            const signature = await signWithdrawalReceipt(
-              {
-                withdrawal_id: result.withdrawal_id,
-                motebit_id: motebitId,
-                amount: body.amount,
-                currency: result.currency,
-                destination: result.destination,
-                payout_reference: withdrawResult.proof.reference,
-                completed_at: completedAt,
-                relay_id: relayIdentity.relayMotebitId,
-              },
-              relayIdentity.privateKey,
-            );
-            const completed = completeWithdrawal(
-              moteDb.db,
-              result.withdrawal_id,
-              withdrawResult.proof.reference,
-              "processing",
-              signature,
-              relayPublicKeyHex,
-              completedAt,
-            );
-            if (completed) {
-              autoSettled = true;
-              // The payout is recorded; a proof-attach failure must not be
-              // read as an unknown payout outcome.
-              try {
-                await x402Rail.attachProof(result.withdrawal_id, withdrawResult.proof);
-              } catch (proofErr) {
-                logger.error("withdrawal.x402.proof_attach_failed", {
-                  correlationId,
-                  withdrawalId: result.withdrawal_id,
-                  txHash: withdrawResult.proof.reference,
-                  error: proofErr instanceof Error ? proofErr.message : String(proofErr),
-                });
-              }
-              logger.info("withdrawal.x402.auto_settled", {
-                correlationId,
-                motebitId,
-                withdrawalId: result.withdrawal_id,
-                txHash: withdrawResult.proof.reference,
-                network: withdrawResult.proof.network,
-              });
-            } else {
-              settleLost("x402", "confirmed", {
-                txHash: withdrawResult.proof.reference,
-                network: withdrawResult.proof.network,
-              });
-            }
-          }
-        } catch (err) {
-          const error = err instanceof Error ? err.message : String(err);
-          if (claimed) {
-            const noted = noteWithdrawalPayoutUnresolved(
-              moteDb.db,
-              result.withdrawal_id,
-              `unresolved payout: x402 withdraw threw (${error}); the transfer may have been submitted — reconcile on chain before completing or failing`,
-            );
-            if (!noted) settleLost("x402", "threw", { error });
-          }
-          logger.warn("withdrawal.x402.auto_settle_failed", {
-            correlationId,
-            motebitId,
-            withdrawalId: result.withdrawal_id,
-            claimed,
-            error,
-          });
-        } finally {
-          if (claimed) releasePayout(result.withdrawal_id);
-        }
-      }
-    }
-
     // Path 2 deleted in Arc 1 Commit 2 of the off-ramp arc.
     //
     // Bridge no longer routes user-facing withdrawals — the doctrine is
@@ -794,8 +741,14 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
     // false; any attempt to call `bridgeRail.withdraw(...)` is a compile
     // error. Bridge stays registered for treasury operations only.
     //
-    // If neither Path 0 (Solana sovereign) nor Path 1 (x402 EVM) matched,
-    // the withdrawal stays pending for admin resolution. Funds remain
+    // Path 1 (x402 to an EVM wallet) deleted too (#948): the x402 rail's
+    // withdraw put the idempotency key where the EIP-3009 signature belongs,
+    // so no facilitator could execute it, and the relay holds no EVM
+    // treasury key to sign a real one. `X402SettlementRail` is structurally
+    // non-withdrawable now, and a 0x destination is refused before any debit.
+    //
+    // If Path 0 did not settle it, the withdrawal stays pending (or, once
+    // claimed, processing) for admin resolution. Funds remain
     // held by `requestWithdrawal` — no double-spend risk. This is the
     // intended behavior under the doctrine "Motebit is not a transmitter
     // of user funds": withdrawals route through user-held wallets or
@@ -894,38 +847,99 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
   //     manual fail could refund a payout that then pays (the #921 double
   //     pay), and a manual complete could record a second payout.
   //   - /reconcile acts on a `processing` withdrawal only, and only once its
-  //     payout can no longer land: never while this process is still
-  //     handling it (claim → outcome written), never before
-  //     `reconcileOpensAt` — the payout's own horizon (x402: the signed
-  //     authorization's validity; Solana: the last moment this relay could
-  //     have broadcast, plus a blockhash lifetime), floored at
-  //     RECONCILE_MIN_AGE_MS after the claim — and only on an explicit
-  //     operator attestation of what the chain shows. This is the door for a payout whose outcome is unknown — the
-  //     send threw, or the process died mid-send — so a crash never strands
-  //     a withdrawal with no way out, and it is never a blind refund.
+  //     payout provably landed or can never land: never while this process
+  //     is still handling it (claim → outcome written), and then by who
+  //     decides (payout-horizon.ts table):
+  //       * a chain-recorded Path 0 payout — THE CHAIN, read for every
+  //         signature the payout signed (withdrawal-chain-payouts.ts): landed
+  //         ⇒ only `paid` with that signature; every one failed or past its
+  //         last valid block height ⇒ only `not_paid`; anything still able
+  //         to land, or unreadable ⇒ refused. No wall-clock term (#949): a
+  //         halted chain keeps the door shut however long it is down.
+  //       * a legacy Path 0 claim (an earlier process, no signatures) — the
+  //         chain's HEIGHT past this process's first read + the legacy
+  //         bound; unreadable ⇒ refused.
+  //       * a declared horizon (legacy x402, batch rails) —
+  //         `reconcileOpensAt`: the rail's declared validity + margin,
+  //         floored at RECONCILE_MIN_AGE_MS after the claim.
+  //     Always on an explicit operator attestation. This is the door for a
+  //     payout whose outcome is unknown — the send threw, or the process
+  //     died mid-send — so a crash never strands a withdrawal with no way
+  //     out, and it is never a blind refund.
 
   /**
-   * Why a `processing` withdrawal cannot be reconciled yet (#921):
+   * Why a `processing` withdrawal cannot be reconciled yet (#921, #949):
    *   - `in_flight_here`: this relay is still handling its payout;
-   *   - `undetermined`: the relay cannot place the payout's horizon yet
-   *     (fail closed; see `reconcileOpensAt`);
-   *   - `horizon`: the payout may still land until `reconcile_opens_at`.
-   * `open` means the reconcile door is open now.
+   *   - `undetermined`: the relay cannot place the payout's horizon (fail
+   *     closed);
+   *   - `horizon`: a declared-horizon payout may still land until
+   *     `reconcile_opens_at`;
+   *   - `chain_pending`: a transaction this payout signed can still land —
+   *     the chain has not passed its last valid block height;
+   *   - `chain_unreadable`: the chain could not be read, so nothing is
+   *     decided;
+   *   - `chain_height`: a legacy claim's broadcasts are not yet provably
+   *     past their last valid block height.
+   * `open` means the reconcile door is open now — for a chain-decided payout
+   * (`reconcile_decided_by: "chain" | "chain_height"`), that the relay asks
+   * the chain when the operator reconciles, and may still refuse.
    */
-  type ReconcileState = "in_flight_here" | "undetermined" | "horizon" | "open";
+  type ReconcileState =
+    | "in_flight_here"
+    | "undetermined"
+    | "horizon"
+    | "chain_pending"
+    | "chain_unreadable"
+    | "chain_height"
+    | "open";
+
+  /** Who decides whether a `processing` withdrawal's payout landed. */
+  type ReconcileDecidedBy = "chain" | "chain_height" | "declared_horizon";
+
+  function decidedByOf(w: WithdrawalRequest): ReconcileDecidedBy {
+    if (isChainRecordedClaim(moteDb.db, w.withdrawal_id)) return "chain";
+    return w.payout_valid_until == null ? "chain_height" : "declared_horizon";
+  }
 
   function reconcileStateOf(w: WithdrawalRequest): {
     reconcile_state: ReconcileState | null;
     reconcile_opens_at: number | null;
+    reconcile_decided_by: ReconcileDecidedBy | null;
   } {
-    if (w.status !== "processing") return { reconcile_state: null, reconcile_opens_at: null };
+    if (w.status !== "processing") {
+      return { reconcile_state: null, reconcile_opens_at: null, reconcile_decided_by: null };
+    }
+    const decidedBy = decidedByOf(w);
     if (payoutsInFlight.has(w.withdrawal_id)) {
-      return { reconcile_state: "in_flight_here", reconcile_opens_at: null };
+      return {
+        reconcile_state: "in_flight_here",
+        reconcile_opens_at: null,
+        reconcile_decided_by: decidedBy,
+      };
+    }
+    if (decidedBy !== "declared_horizon") {
+      // The chain decides at reconcile time (no chain read on a list): the
+      // door is open to ASK; the refusal says what the chain showed.
+      return {
+        reconcile_state: operatorSolanaTransfer ? "open" : "undetermined",
+        reconcile_opens_at: operatorSolanaTransfer ? (w.claimed_at ?? w.requested_at) : null,
+        reconcile_decided_by: decidedBy,
+      };
     }
     const now = Date.now();
-    const opensAt = reconcileOpensAt(w, payoutSendEndedAt.get(w.withdrawal_id), { now });
-    if (opensAt === null) return { reconcile_state: "undetermined", reconcile_opens_at: null };
-    return { reconcile_state: now >= opensAt ? "open" : "horizon", reconcile_opens_at: opensAt };
+    const opensAt = reconcileOpensAt(w);
+    if (opensAt === null) {
+      return {
+        reconcile_state: "undetermined",
+        reconcile_opens_at: null,
+        reconcile_decided_by: decidedBy,
+      };
+    }
+    return {
+      reconcile_state: now >= opensAt ? "open" : "horizon",
+      reconcile_opens_at: opensAt,
+      reconcile_decided_by: decidedBy,
+    };
   }
 
   const PAYOUT_IN_FLIGHT_MESSAGES: Record<Exclude<ReconcileState, "open"> | "processing", string> =
@@ -937,6 +951,12 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
       undetermined:
         "payout horizon cannot be determined yet — the relay cannot place when this payout stops being able to land; reconcile stays closed",
       horizon: "payout may still land — reconcile opens at",
+      chain_pending:
+        "payout may still land — a transaction this payout signed is not yet past its last valid block height on chain; reconcile once the chain has decided it (a halted chain keeps it open to land)",
+      chain_unreadable:
+        "the chain could not be read — whether this payout landed is undecided; reconcile stays closed until the chain answers",
+      chain_height:
+        "payout may still land — the chain has not yet passed every block height this claim's broadcast could land in",
     };
 
   const payoutInFlightResponse = (
@@ -944,6 +964,7 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
     withdrawalId: string,
     reason: Exclude<ReconcileState, "open"> | "processing" = "processing",
     opensAt: number | null = null,
+    chain: Record<string, unknown> | null = null,
   ): Response => {
     const at =
       reason === "horizon" && opensAt !== null && Number.isFinite(opensAt) ? opensAt : null;
@@ -957,6 +978,7 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
             : PAYOUT_IN_FLIGHT_MESSAGES[reason === "horizon" ? "undetermined" : reason],
         withdrawal_id: withdrawalId,
         reconcile_opens_at: at,
+        ...(chain ? { chain } : {}),
         status: 409,
       },
       409,
@@ -1188,7 +1210,6 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
         409,
       );
     }
-    const now = Date.now();
     if (payoutsInFlight.has(withdrawalId)) {
       logger.warn("withdrawal.admin.reconcile_refused_in_flight", {
         correlationId,
@@ -1197,38 +1218,125 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
       });
       return payoutInFlightResponse(c, withdrawalId, "in_flight_here");
     }
-    const opensAt = reconcileOpensAt(withdrawal, payoutSendEndedAt.get(withdrawalId), { now });
-    if (opensAt === null) {
-      logger.warn("withdrawal.admin.reconcile_refused_undetermined", {
-        correlationId,
-        withdrawalId,
-        claimedAt: withdrawal.claimed_at ?? null,
-      });
-      return payoutInFlightResponse(c, withdrawalId, "undetermined");
+
+    // Who decides (payout-horizon.ts table). For a Solana payout only chain
+    // facts do — the operator's `outcome` must AGREE with them, and a paid
+    // payout is recorded under the signature the chain shows landed.
+    let paidReference = payoutReference;
+    const decidedBy = decidedByOf(withdrawal);
+    if (decidedBy === "chain") {
+      if (!operatorSolanaTransfer) {
+        return payoutInFlightResponse(c, withdrawalId, "chain_unreadable");
+      }
+      const verdict = await readChainVerdict(moteDb.db, withdrawalId, operatorSolanaTransfer);
+      if (verdict.kind === "undecided") {
+        logger.warn("withdrawal.admin.reconcile_refused_chain", {
+          correlationId,
+          withdrawalId,
+          reason: verdict.reason,
+          signature: verdict.signature,
+          lastValidBlockHeight: verdict.lastValidBlockHeight,
+          detail: verdict.detail ?? null,
+        });
+        return payoutInFlightResponse(
+          c,
+          withdrawalId,
+          verdict.reason === "pending" ? "chain_pending" : "chain_unreadable",
+          null,
+          { signature: verdict.signature, last_valid_block_height: verdict.lastValidBlockHeight },
+        );
+      }
+      if (verdict.kind === "paid" && verdict.landed.length > 1) {
+        // Two of one payout's transactions landed: the treasury paid twice.
+        // Never silent; the withdrawal records the first.
+        logger.error("withdrawal.payout_landed_twice", {
+          correlationId,
+          withdrawalId,
+          landed: verdict.landed,
+        });
+      }
+      const chainSays = verdict.kind === "paid" ? "paid" : "not_paid";
+      if (
+        outcome !== chainSays ||
+        (verdict.kind === "paid" &&
+          payoutReference !== null &&
+          payoutReference !== verdict.signature)
+      ) {
+        logger.warn("withdrawal.admin.reconcile_contradicts_chain", {
+          correlationId,
+          withdrawalId,
+          outcome,
+          payoutReference,
+          chain: verdict,
+        });
+        return c.json(
+          {
+            error: "WITHDRAWAL_RECONCILE_CONTRADICTS_CHAIN",
+            message:
+              verdict.kind === "paid"
+                ? `the chain shows this payout landed (${verdict.signature}); reconcile it as paid with that payout_reference`
+                : `the chain shows no transaction of this payout can land (${verdict.attempts} recorded, each failed or past its last valid block height); reconcile it as not_paid`,
+            withdrawal_id: withdrawalId,
+            chain_outcome: chainSays,
+            ...(verdict.kind === "paid" ? { payout_reference: verdict.signature } : {}),
+            status: 409,
+          },
+          409,
+        );
+      }
+      if (verdict.kind === "paid") paidReference = verdict.signature;
+    } else if (decidedBy === "chain_height") {
+      const legacy = await legacyBroadcastsDead();
+      if (legacy === null || !legacy.dead) {
+        logger.warn("withdrawal.admin.reconcile_refused_chain", {
+          correlationId,
+          withdrawalId,
+          reason: legacy === null ? "chain_unreadable" : "chain_height",
+          height: legacy?.height ?? null,
+          bound: legacy?.bound ?? null,
+        });
+        return legacy === null
+          ? payoutInFlightResponse(c, withdrawalId, "chain_unreadable")
+          : payoutInFlightResponse(c, withdrawalId, "chain_height", null, {
+              block_height: legacy.height,
+              opens_past_block_height: legacy.bound,
+            });
+      }
+    } else {
+      const opensAt = reconcileOpensAt(withdrawal);
+      if (opensAt === null) {
+        logger.warn("withdrawal.admin.reconcile_refused_undetermined", {
+          correlationId,
+          withdrawalId,
+          claimedAt: withdrawal.claimed_at ?? null,
+        });
+        return payoutInFlightResponse(c, withdrawalId, "undetermined");
+      }
+      if (Date.now() < opensAt) {
+        logger.warn("withdrawal.admin.reconcile_refused_in_flight", {
+          correlationId,
+          withdrawalId,
+          inProcess: false,
+          claimedAt: withdrawal.claimed_at ?? null,
+          payoutValidUntil: withdrawal.payout_valid_until ?? null,
+          opensAt,
+        });
+        return payoutInFlightResponse(c, withdrawalId, "horizon", opensAt);
+      }
     }
-    if (now < opensAt) {
-      logger.warn("withdrawal.admin.reconcile_refused_in_flight", {
-        correlationId,
-        withdrawalId,
-        inProcess: false,
-        claimedAt: withdrawal.claimed_at ?? null,
-        payoutValidUntil: withdrawal.payout_valid_until ?? null,
-        opensAt,
-      });
-      return payoutInFlightResponse(c, withdrawalId, "horizon", opensAt);
-    }
+    const now = Date.now();
 
     if (outcome === "paid") {
       const { signature, relayPublicKeyHex } = await signCompletion(
         withdrawalId,
         withdrawal,
-        payoutReference!,
+        paidReference!,
         now,
       );
       const success = completeWithdrawal(
         moteDb.db,
         withdrawalId,
-        payoutReference!,
+        paidReference!,
         "processing",
         signature,
         relayPublicKeyHex,
@@ -1246,12 +1354,12 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
           message: `withdrawal is no longer processing (${current?.status ?? "missing"})`,
         });
       }
-      await attachOperatorProof(withdrawalId, payoutReference!, now, railName, network);
+      await attachOperatorProof(withdrawalId, paidReference!, now, railName, network);
       logger.info("withdrawal.admin.reconciled", {
         correlationId,
         withdrawalId,
         outcome,
-        payoutReference,
+        payoutReference: paidReference,
         attestation,
       });
       return c.json({

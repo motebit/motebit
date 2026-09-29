@@ -13,12 +13,13 @@
  *     and an operator pays out by hand (Stripe today). Nothing is in flight,
  *     so the withdrawal stays an ordinary `pending` one.
  *   - `payoutValidityMs` — the longest time after `withdraw()` is called that
- *     the payload it signed can still be submitted and land (x402: the
- *     EIP-3009 authorization's `validBefore`).
+ *     the payload it signed can still be submitted and land.
+ *
+ * No rail in this package declares `payoutMode: "sent"` any more: x402 was
+ * the only one, and its withdraw was removed (#948 — it could not sign the
+ * authorization a facilitator executes). A future sent-mode rail declares
+ * its validity here; the relay never assumes a shorter one.
  */
-
-/** Seconds an x402 withdrawal authorization stays valid (`validBefore = now + this`). */
-export const X402_WITHDRAWAL_VALIDITY_SECONDS = 3600;
 
 export interface PayoutHorizonDeclaration {
   readonly payoutMode?: "manual" | "sent";

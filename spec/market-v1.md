@@ -631,6 +631,8 @@ POST /api/v1/agents/:motebitId/withdraw
 
 The relay debits the account immediately (funds move to "pending" status). Idempotent via `idempotency_key` — duplicate requests return the existing withdrawal.
 
+A relay MUST NOT accept a withdrawal to a destination kind it cannot pay: it refuses such a request before any debit rather than holding funds for a payout that cannot happen. The reference relay pays Solana destinations (Path 0) and refuses EVM `0x` destinations with 400 `WITHDRAWAL_DESTINATION_UNSUPPORTED`: an x402 payout (Path 1) is an EIP-3009 authorization the treasury must sign, and it holds no EVM treasury key. Other destinations stay `pending` for the operator.
+
 ### 10.2 — Completion
 
 An administrator (or automated payout system) confirms the withdrawal with a payout reference:
@@ -660,10 +662,10 @@ POST /api/v1/admin/withdrawals/:withdrawalId/reconcile
 `paid` completes the withdrawal with a signed receipt; `not_paid` fails it and refunds (§10.3, once). The action MUST refuse while the payout can still land:
 
 - while the relay is still handling the payout — from the claim until its outcome is recorded, not merely until the send returns;
-- until the payout's own horizon has passed. For a payload a third party can still submit (e.g. a signed transfer authorization), the horizon is the payload's validity, such as its `validBefore`. For a transfer the relay broadcasts itself, it is the last moment the relay could have broadcast plus the transaction's validity (e.g. a Solana blockhash lifetime). A payout whose horizon is not declared gets a conservative bound no shorter than the rail's documented maximum;
-- within a fixed floor after the claim (the reference relay: 15 minutes). The floor is only a floor: it is never the argument that a payout can no longer land.
+- until the payout's own horizon has passed, judged from **chain facts** wherever the relay can read the chain. For a transfer the relay broadcasts itself (e.g. the Path 0 Solana return of custody), the implementation MUST record every transaction the payout signs — its signature and its validity bound, e.g. a Solana `lastValidBlockHeight` — BEFORE that transaction is broadcast, and a transaction it cannot record MUST NOT be broadcast. The action then asks the chain about each recorded transaction: if one landed, only `paid` is accepted, with that transaction as the payout reference; only when every one failed or is past its validity bound on chain (a Solana transaction by block HEIGHT, never by elapsed time: a halted or slowed cluster keeps a signed transaction valid indefinitely), or none was ever recorded, is `not_paid` accepted; while any can still land, or the chain cannot be read, the action refuses. An outcome that contradicts the chain is refused. A payout claimed before its transactions were recorded is bounded by the chain's height the same way, against a height the implementation read after that payout's broadcasts could have been made. For a payload a third party can still submit whose chain the implementation does not read (e.g. a signed transfer authorization handed to a provider), the horizon is the payload's declared validity, such as its `validBefore`; a payout whose horizon is not declared gets a conservative bound no shorter than the rail's documented maximum;
+- for a declared-validity payout, within a fixed floor after the claim (the reference relay: 15 minutes). The floor is only a floor: it is never the argument that a payout can no longer land.
 
-When the implementation cannot yet determine a payout's horizon, the action stays closed (fail closed) and the refusal states no time. The action MUST also refuse without an attestation. A refusal SHOULD state when the action opens. It is never a blind refund, and it is the door that keeps a crash mid-send from stranding a withdrawal.
+When the implementation cannot yet determine a payout's horizon, the action stays closed (fail closed) and the refusal states no time. The action MUST also refuse without an attestation. A refusal SHOULD state when the action opens, or what the chain showed. It is never a blind refund, and it is the door that keeps a crash mid-send from stranding a withdrawal.
 
 ### 10.3 — Withdrawal States
 
@@ -675,6 +677,8 @@ When the implementation cannot yet determine a payout's horizon, the action stay
 | `failed`     | Payout failed. Funds returned to account.                                                  |
 
 **The processing claim.** An automated payout MUST claim the withdrawal before it sends anything: the transition `pending → processing` is a compare-and-set, and a payout whose claim does not succeed (the withdrawal already left `pending` — an operator completed or failed it, or another handler claimed it) MUST NOT be sent. After the claim, the payout's outcome moves the withdrawal FROM `processing` only (§10.4), and only the payout's own outcome or the reconcile action (§10.2) may do so — never the manual complete or fail, which could otherwise refund a payout that then lands and pay the user twice. A settling write that finds the withdrawal no longer `processing` MUST NOT be silently dropped: the implementation reports it for reconciliation. A payout handed to a provider that settles asynchronously (a batched or deferred rail) is recorded `processing` for the same reason. A rail whose withdrawal sends nothing (a manual payout the operator performs by hand) leaves the withdrawal `pending`.
+
+**No debited withdrawal without a door.** Every debited withdrawal whose payout was attempted MUST end with a withdrawal record an operator can settle. When a batched or deferred payout's call fails or its outcome is otherwise unknown — the provider call threw, a batch reported the item failed, or the process ended mid-call — the implementation records it `processing` (the provider may have accepted it) or, for a rail that sends nothing, `pending`, in the same transaction as the queue entry's terminal state, and never re-sends it.
 
 `failed` is terminal and carries the refund: the transition to `failed` and the credit of the withdrawn amount back to the account MUST commit atomically (one transaction), and a withdrawal MUST be refunded at most once — a repeated fail of the same withdrawal (a retried handler, a sweeper, an operator replay) is a no-op.
 

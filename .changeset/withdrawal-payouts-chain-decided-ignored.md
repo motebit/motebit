@@ -1,0 +1,15 @@
+---
+"@motebit/relay": patch
+"@motebit/settlement-rails": minor
+"@motebit/wallet-solana": minor
+---
+
+Withdrawal payouts: whether a payout landed is decided by the chain, a payout that cannot work is not offered, and a failed batch fire always has a settle door (#948, #949, #945).
+
+**#949 — chain facts, never the relay's clock.** A Path 0 (Solana) payout now records every transaction it signs (signature + `lastValidBlockHeight`) BEFORE broadcast, through the #885 `beforeBroadcast` hook; a transaction the relay cannot record is not sent, and the claim is marked chain-recorded in the same transaction as `pending → processing`. `/admin/withdrawals/:id/reconcile` asks the chain about exactly those transactions: one landed ⇒ only `paid`, under that signature; every one failed or past its last valid block HEIGHT (or none recorded) ⇒ only `not_paid`; anything still able to land, or an unreadable chain ⇒ 409 (`chain_pending` / `chain_unreadable`). An outcome that contradicts the chain is 409 `WITHDRAWAL_RECONCILE_CONTRADICTS_CHAIN`. The old wall-clock horizon (send end + 150s + 5 min) is gone: during a cluster halt it let an operator refund a payout that then landed. A claim made before this change (no signatures recorded) opens only once the chain's height passes the first height this process read + 310 blocks. Path 0 sends only over a transfer that `recordsBroadcasts`. New tables `relay_withdrawal_chain_claims`, `relay_withdrawal_payout_attempts` (declared in the transparency declaration).
+
+**#948 — Path 1 is disabled.** `X402SettlementRail.withdraw` put the idempotency key where the EIP-3009 signature belongs; no facilitator can execute that, and the relay holds no EVM treasury key to sign one. The rail is now structurally non-withdrawable (`supportsWithdraw: false`, no `withdraw`, no payout-horizon declaration; `X402_WITHDRAWAL_VALIDITY_SECONDS` removed), the Path 1 dispatch is deleted, and `POST /withdraw` to a 0x destination is refused 400 `WITHDRAWAL_DESTINATION_UNSUPPORTED` before any debit.
+
+**#945 — no stranded batch funds.** A batch fire whose rail throws, reports the item failed, or whose process died mid-fire is recorded on a relay_withdrawals row in the same transaction as the queue row's terminal CAS: `processing` for a sent-mode rail (reconcile door), `pending` for a manual one (complete/fail). Crashed `firing` rows are recovered by the loop (never re-fired), not just logged; the tick rethrows so the supervisor records a failed tick.
+
+`@motebit/wallet-solana`: `OperatorSolanaTransfer.sendUsdc` takes optional `BroadcastHooks`; new `recordsBroadcasts`, `getSignatureOutcome`, `getBlockHeight`; `SolanaRpcAdapter.getBlockHeight?` (implemented by `Web3JsRpcAdapter`).

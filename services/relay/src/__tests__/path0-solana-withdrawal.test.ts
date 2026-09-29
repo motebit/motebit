@@ -39,6 +39,10 @@ function makeOperator(overrides: Partial<SolanaRpcAdapter> = {}): {
   adapter: SolanaRpcAdapter;
 } {
   const adapter: SolanaRpcAdapter = {
+    // #949: Path 0 sends only over a transfer that records every broadcast
+    // and can read its outcome.
+    honorsBroadcastHooks: true,
+    getSignatureOutcome: vi.fn().mockResolvedValue({ status: "pending" }),
     ownAddress: "RelayTreasuryAddressBase58",
     getUsdcBalance: vi.fn().mockResolvedValue(10_000_000_000n),
     getUsdcBalanceOf: vi.fn().mockResolvedValue(10_000_000_000n),
@@ -105,11 +109,12 @@ describe("Path 0 — Solana sovereign-return withdrawal", () => {
     });
 
     expect(res.status).toBe(200);
-    // sendUsdc was called with the user's wallet + micro-units
-    expect(adapter.sendUsdc).toHaveBeenCalledWith({
-      toAddress: userSolanaWallet,
-      microAmount: 1_500_000n,
-    });
+    // sendUsdc was called with the user's wallet + micro-units, and the
+    // hook that records each signature before it is broadcast (#949)
+    expect(adapter.sendUsdc).toHaveBeenCalledWith(
+      { toAddress: userSolanaWallet, microAmount: 1_500_000n },
+      expect.objectContaining({ beforeBroadcast: expect.any(Function) }),
+    );
   });
 
   it("records the Solana tx signature as the withdrawal payout_reference + signed receipt", async () => {
@@ -151,7 +156,7 @@ describe("Path 0 — Solana sovereign-return withdrawal", () => {
     expect(row!.completed_at).toBeGreaterThan(0);
   });
 
-  it("does NOT fire when destination is EVM-shaped — falls through to Path 1/2", async () => {
+  it("does NOT fire when destination is EVM-shaped — the 0x withdrawal is refused before any debit (#948)", async () => {
     const { operator, adapter } = makeOperator();
     relay = await createTestRelay({ enableDeviceAuth: false, operatorSolanaTransfer: operator });
 
@@ -160,7 +165,7 @@ describe("Path 0 — Solana sovereign-return withdrawal", () => {
 
     const evmAddress = "0x1234567890123456789012345678901234567890";
 
-    await relay.app.request("/api/v1/agents/user-evm/withdraw", {
+    const res = await relay.app.request("/api/v1/agents/user-evm/withdraw", {
       method: "POST",
       headers: jsonAuthWithIdempotency(),
       body: JSON.stringify({ amount: 1.0, destination: evmAddress }),
@@ -168,6 +173,7 @@ describe("Path 0 — Solana sovereign-return withdrawal", () => {
 
     // Path 0 did NOT fire — sendUsdc was never called
     expect(adapter.sendUsdc).not.toHaveBeenCalled();
+    expect(res.status).toBe(400);
   });
 
   it("does NOT fire when operator is absent — falls through to other paths", async () => {

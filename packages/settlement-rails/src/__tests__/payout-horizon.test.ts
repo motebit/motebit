@@ -1,9 +1,5 @@
 import { describe, it, expect } from "vitest";
-import {
-  isManualPayoutRail,
-  payoutValidityMsOf,
-  X402_WITHDRAWAL_VALIDITY_SECONDS,
-} from "../payout-horizon.js";
+import { isManualPayoutRail, payoutValidityMsOf } from "../payout-horizon.js";
 
 // The relay reads these declarations to decide when an unresolved payout may
 // be reconciled as "not paid" (#921). A wrong answer here either strands a
@@ -16,7 +12,7 @@ describe("payout horizon declarations (#921)", () => {
   });
 
   it("a declared positive finite validity is returned as-is", () => {
-    const ms = X402_WITHDRAWAL_VALIDITY_SECONDS * 1000;
+    const ms = 3_600_000;
     expect(payoutValidityMsOf({ payoutValidityMs: ms })).toBe(ms);
   });
 

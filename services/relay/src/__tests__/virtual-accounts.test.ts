@@ -886,14 +886,16 @@ describe("Virtual Accounts", () => {
     expect(withdrawal.status).toBe("pending");
   });
 
-  it("withdrawal to wallet address whose x402 payout does not settle is never completed nor refunded", async () => {
+  it("withdrawal to an EVM (0x) address is refused before any debit — no path can pay it (#948)", async () => {
     const keypair = await generateKeypair();
     const { motebitId } = await createIdentityAndDevice(relay, bytesToHex(keypair.publicKey));
 
     await deposit(relay, motebitId, 100);
+    const before = await relay.app.request(`/api/v1/agents/${motebitId}/balance`, {
+      headers: AUTH_HEADER,
+    });
+    const balanceBefore = ((await before.json()) as { balance: number }).balance;
 
-    // Withdraw to a wallet-like address — x402 facilitator is not reachable in tests,
-    // so auto-settlement will fail and fall back to manual pending
     const withdrawRes = await relay.app.request(`/api/v1/agents/${motebitId}/withdraw`, {
       method: "POST",
       headers: {
@@ -906,15 +908,14 @@ describe("Virtual Accounts", () => {
         destination: "0x1234567890abcdef1234567890abcdef12345678",
       }),
     });
-    expect(withdrawRes.status).toBe(200);
-    const { withdrawal } = (await withdrawRes.json()) as {
-      withdrawal: { status: string };
-    };
-    // x402 facilitator is not reachable in tests — isAvailable() returns false
-    // (never claimed: `pending`) or the withdraw fails after the claim
-    // (`processing`, #921: the transfer may have been submitted, so only the
-    // operator's reconcile settles it). Never completed, never refunded.
-    expect(["pending", "processing"]).toContain(withdrawal.status);
+    expect(withdrawRes.status).toBe(400);
+    expect(((await withdrawRes.json()) as { error: string }).error).toBe(
+      "WITHDRAWAL_DESTINATION_UNSUPPORTED",
+    );
+    const after = await relay.app.request(`/api/v1/agents/${motebitId}/balance`, {
+      headers: AUTH_HEADER,
+    });
+    expect(((await after.json()) as { balance: number }).balance).toBe(balanceBefore);
   });
 
   it("admin can fail a withdrawal and refund the agent", async () => {

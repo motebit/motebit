@@ -1,48 +1,44 @@
 /**
- * The payout horizon of a claimed withdrawal (#921): when a payout whose
- * outcome the relay never learned can no longer land, so an operator may
- * record it "not paid" and refund. Shared by the /withdraw paths, the
- * operator's reconcile door (budget.ts) and the batch fire path.
+ * When a claimed withdrawal's payout can no longer land, so an operator may
+ * settle it through the reconcile door (#921, #949). Shared by the /withdraw
+ * path, the operator's reconcile door (budget.ts) and the batch fire path.
  *
- * Per-rail horizon table:
+ * Per-payout table — who decides:
  *
- *   | payout                 | horizon source                                  |
- *   | ---------------------- | ----------------------------------------------- |
- *   | Path 0 Solana (relay   | last moment THIS relay could broadcast (send     |
- *   |  broadcasts itself)    |  call ended, or process start for an earlier    |
- *   |                        |  life) + blockhash lifetime (150s) + margin      |
- *   | Path 1 x402            | claim + the rail's declared payoutValidityMs     |
- *   |                        |  (the signed authorization's validBefore, 3600s) |
- *   |                        |  + margin                                        |
- *   | batch, rail declares   | fire time + payoutValidityMs + margin            |
- *   | batch, rail silent     | fire time + UNDECLARED_PAYOUT_HORIZON_MS (24h)   |
- *   |                        |  + margin                                        |
- *   | manual rail (Stripe)   | none — nothing is sent; the row stays `pending`  |
+ *   | payout                          | decided by                                     |
+ *   | ------------------------------- | ---------------------------------------------- |
+ *   | Path 0 Solana, chain-recorded   | THE CHAIN: every signature the payout signed   |
+ *   |  (claimed by this code)         |  was recorded before broadcast; each is read   |
+ *   |                                 |  (landed / failed / past its last valid block  |
+ *   |                                 |  HEIGHT) — withdrawal-chain-payouts.ts. No     |
+ *   |                                 |  wall-clock term at all.                       |
+ *   | Path 0 Solana, legacy claim     | THE CHAIN'S HEIGHT: past the first height this |
+ *   |  (an earlier process, no        |  process read + LEGACY_BROADCAST_HEIGHT_BOUND  |
+ *   |  signatures recorded)           |  (a halted chain never gets there)             |
+ *   | Path 1 x402, legacy claim       | `reconcileOpensAt`: the recorded authorization |
+ *   |                                 |  validity (payout_valid_until) + margin. No    |
+ *   |                                 |  new x402 payout exists (#948 removed it).     |
+ *   | batch, rail declares validity   | `reconcileOpensAt`: fire + payoutValidityMs    |
+ *   | batch, rail silent              | `reconcileOpensAt`: fire + 24h                 |
+ *   | manual rail (Stripe)            | none — nothing is sent; the row stays pending  |
  *
- * Every horizon is floored at claim + RECONCILE_MIN_AGE_MS.
+ * The last three are a rail's own declaration read against the relay's
+ * clock: the relay has no chain reader for a generic guest rail. No such
+ * sent-mode rail is registered by this relay today (Stripe is manual; x402
+ * no longer withdraws), so every automated payout the relay makes now is
+ * decided by chain facts.
  */
 
 import type { WithdrawalRequest } from "@motebit/virtual-accounts";
 
 /**
- * The FLOOR of the operator's reconcile window (#921): no reconcile within
- * this long of a claim, whatever the rail. It is only a floor — never the
- * argument that a payout can no longer land. That argument is the payout's
- * own horizon (`reconcileOpensAt`): for a payload a third party can still
- * submit (x402's signed authorization), its declared validity; for a payout
- * the relay broadcasts itself (Solana), the moment this process last could
- * have broadcast plus one blockhash lifetime.
+ * The FLOOR of the operator's reconcile window for a declared-horizon payout
+ * (#921): no reconcile within this long of a claim. It is only a floor —
+ * never the argument that a payout can no longer land.
  */
 export const RECONCILE_MIN_AGE_MS = 15 * 60 * 1000;
 
-/**
- * Solana: a transaction is valid only until its blockhash's
- * `lastValidBlockHeight` — 150 blocks, about 60–90s at normal slot times.
- * Taken generously (slow slots) as 150s.
- */
-export const SOLANA_BLOCKHASH_VALIDITY_MS = 150 * 1000;
-
-/** Slack added to every declared horizon (clock skew, slow chain inclusion). */
+/** Slack added to every declared horizon (clock skew, slow inclusion). */
 export const PAYOUT_HORIZON_MARGIN_MS = 5 * 60 * 1000;
 
 /**
@@ -52,53 +48,16 @@ export const PAYOUT_HORIZON_MARGIN_MS = 5 * 60 * 1000;
  */
 export const UNDECLARED_PAYOUT_HORIZON_MS = 24 * 60 * 60 * 1000;
 
-/** When this process started: every broadcast it did not make itself happened before this. */
-const PROCESS_STARTED_AT = Date.now();
-
 /**
- * When the operator's reconcile may act on a `processing` withdrawal, or
- * null while that cannot be determined yet (fail closed) — the
- * latest of: the claim + the floor; the payout's declared horizon (+ margin)
- * when it has one; and, for a relay-broadcast payout (no declared horizon),
- * the last moment this relay could have broadcast it + a blockhash lifetime
- * (+ margin). The relay broadcasts only while its send call is running in a
- * live process: `sendEndedAt` is when this process's call returned or threw;
- * a claim from an earlier process life was broadcast, if at all, before this
- * process started. A send still running is refused before this is consulted.
+ * When the operator's reconcile may act on a `processing` withdrawal whose
+ * payout carries a DECLARED horizon (`payout_valid_until`), or null when it
+ * carries none — fail closed: such a payout is decided by the chain
+ * (budget.ts), never by this clock.
  */
 export function reconcileOpensAt(
   w: Pick<WithdrawalRequest, "claimed_at" | "payout_valid_until">,
-  sendEndedAt: number | undefined,
-  opts: { now?: number; processStartedAt?: number } = {},
 ): number | null {
-  const now = opts.now ?? Date.now();
-  const processStartedAt = opts.processStartedAt ?? PROCESS_STARTED_AT;
-  const claimedAt = w.claimed_at ?? 0;
-  const floor = claimedAt + RECONCILE_MIN_AGE_MS;
-  if (w.payout_valid_until != null) {
-    return Math.max(floor, w.payout_valid_until + PAYOUT_HORIZON_MARGIN_MS);
-  }
-  let lastBroadcastBound: number;
-  if (sendEndedAt !== undefined) {
-    lastBroadcastBound = sendEndedAt;
-  } else if (claimedAt < processStartedAt) {
-    // Claimed in an earlier process life: every broadcast preceded this start.
-    lastBroadcastBound = processStartedAt;
-  } else if (now >= floor) {
-    // Not in flight here and no send end recorded, yet the claim reads as
-    // from THIS process life — only possible when the host clock stepped
-    // backwards across a restart. A claim this process never made is from
-    // an earlier life; once the floor has passed, bound it as one (its
-    // broadcasts all preceded this process, whose start the clock cannot
-    // place before the claim, so the claim itself is the bound).
-    lastBroadcastBound = Math.max(claimedAt, processStartedAt);
-  } else {
-    // Undeterminable yet — fail closed. Never a timestamp (and never
-    // Infinity, which no caller can render).
-    return null;
-  }
-  return Math.max(
-    floor,
-    lastBroadcastBound + SOLANA_BLOCKHASH_VALIDITY_MS + PAYOUT_HORIZON_MARGIN_MS,
-  );
+  if (w.payout_valid_until == null) return null;
+  const floor = (w.claimed_at ?? 0) + RECONCILE_MIN_AGE_MS;
+  return Math.max(floor, w.payout_valid_until + PAYOUT_HORIZON_MARGIN_MS);
 }

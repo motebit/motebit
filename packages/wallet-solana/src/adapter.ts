@@ -316,6 +316,17 @@ export interface SolanaRpcAdapter {
    */
   getSignatureOutcome?(tx: SignedTransactionRef): Promise<SignatureOutcome>;
 
+  /**
+   * The chain's current block height at the adapter's decision commitment
+   * (#949). Read-only. Block height — never wall-clock — is what bounds a
+   * Solana transaction's life: it can land only at a height ≤ its
+   * `lastValidBlockHeight`, and a halted cluster produces no heights however
+   * long it is down. Optional: without it, a payer cannot bound a broadcast
+   * it did not record, and must not treat that broadcast as dead. Rejects
+   * on any read failure — never a guessed height.
+   */
+  getBlockHeight?(): Promise<number>;
+
   /** Whether the RPC endpoint is reachable. Best-effort, no retries. */
   isReachable(): Promise<boolean>;
 }

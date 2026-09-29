@@ -689,8 +689,9 @@ describe("harness: Path 1 (x402) — a payout the relay accepts is one a facilit
       network: "eip155:84532",
       payToAddress: "0x0000000000000000000000000000000000000000",
     });
-    if (!isWithdrawableRail(rail)) return;
-    await rail.withdraw("zzh-x402", W_USD, "USDC", EVM_DEST, "idem-key-1");
+    const asGuest: GuestRail = rail;
+    if (!isWithdrawableRail(asGuest)) return;
+    await asGuest.withdraw("zzh-x402", W_USD, "USDC", EVM_DEST, "idem-key-1");
     const p = payloads[0] as { payload: { signature: string; authorization: { nonce: string } } };
     expect(p.payload.signature).toMatch(EIP3009_SIGNATURE);
     expect(p.payload.signature).not.toBe("idem-key-1");
@@ -700,7 +701,7 @@ describe("harness: Path 1 (x402) — a payout the relay accepts is one a facilit
     const settleBodies: string[] = [];
     vi.stubGlobal(
       "fetch",
-      vi.fn((url: unknown, init?: { body?: unknown }) => {
+      vi.fn((url: unknown, init?: { body?: string }) => {
         if (String(url).includes("/settle")) settleBodies.push(String(init?.body ?? ""));
         return Promise.reject(new Error("no network in tests"));
       }),

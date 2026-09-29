@@ -100,6 +100,53 @@ describe("OperatorSolanaTransfer", () => {
     await expect(op.sendUsdc("not-base58", 1n)).rejects.toBeInstanceOf(InvalidSolanaAddressError);
   });
 
+  it("sendUsdc passes the broadcast hooks through when given (#949)", async () => {
+    const adapter = makeAdapter();
+    const op = new OperatorSolanaTransfer(adapter);
+    const hooks = { beforeBroadcast: vi.fn() };
+    await op.sendUsdc("UserWallet", 5n, hooks);
+    expect(adapter.sendUsdc).toHaveBeenCalledWith(
+      { toAddress: "UserWallet", microAmount: 5n },
+      hooks,
+    );
+  });
+
+  it("recordsBroadcasts only over an adapter that honours the hooks AND can read outcomes (#949)", () => {
+    const outcome = () => vi.fn().mockResolvedValue({ status: "pending" });
+    expect(new OperatorSolanaTransfer(makeAdapter()).recordsBroadcasts).toBe(false);
+    expect(
+      new OperatorSolanaTransfer(makeAdapter({ honorsBroadcastHooks: true })).recordsBroadcasts,
+    ).toBe(false);
+    expect(
+      new OperatorSolanaTransfer(makeAdapter({ getSignatureOutcome: outcome() })).recordsBroadcasts,
+    ).toBe(false);
+    expect(
+      new OperatorSolanaTransfer(
+        makeAdapter({ honorsBroadcastHooks: true, getSignatureOutcome: outcome() }),
+      ).recordsBroadcasts,
+    ).toBe(true);
+  });
+
+  it("getSignatureOutcome delegates, and reports rpc_error (never absence) when the adapter cannot read", async () => {
+    const tx = { signature: "sig", lastValidBlockHeight: 10 };
+    const outcome = vi.fn().mockResolvedValue({ status: "expired" });
+    const op = new OperatorSolanaTransfer(makeAdapter({ getSignatureOutcome: outcome }));
+    expect(await op.getSignatureOutcome(tx)).toEqual({ status: "expired" });
+    expect(outcome).toHaveBeenCalledWith(tx);
+    const none = await new OperatorSolanaTransfer(makeAdapter()).getSignatureOutcome(tx);
+    expect(none.status).toBe("rpc_error");
+  });
+
+  it("getBlockHeight delegates, and rejects when the adapter cannot read it", async () => {
+    const op = new OperatorSolanaTransfer(
+      makeAdapter({ getBlockHeight: vi.fn().mockResolvedValue(777) }),
+    );
+    expect(await op.getBlockHeight()).toBe(777);
+    await expect(new OperatorSolanaTransfer(makeAdapter()).getBlockHeight()).rejects.toThrow(
+      /block height/,
+    );
+  });
+
   // -------------------------------------------------------------------------
   // Doctrine pin — operator vs agent distinction lives at the class type.
   //

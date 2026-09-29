@@ -1727,3 +1727,18 @@ describe("isDerivedSettlementBinding — the derived settlement-authority rung",
     expect(isDerivedSettlementBinding(derivedAddress, keyHex.toUpperCase())).toBe(true); // hex case-insensitive
   });
 });
+
+describe("Web3JsRpcAdapter.getBlockHeight (#949)", () => {
+  it("reads the block height at the decision commitment and rejects on failure — never a guess", async () => {
+    const adapter = new Web3JsRpcAdapter({
+      rpcUrl: "https://api.devnet.solana.com",
+      identitySeed: ZERO_SEED,
+    });
+    const conn = adapter.getConnection();
+    const read = vi.spyOn(conn, "getBlockHeight").mockResolvedValue(123_456);
+    expect(await adapter.getBlockHeight()).toBe(123_456);
+    expect(read).toHaveBeenCalledWith("confirmed");
+    read.mockRejectedValue(new Error("rpc down"));
+    await expect(adapter.getBlockHeight()).rejects.toThrow("rpc down");
+  });
+});
