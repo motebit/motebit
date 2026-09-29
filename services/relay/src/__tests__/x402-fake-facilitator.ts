@@ -76,6 +76,9 @@ interface ChainEvent extends AuthorizationEvent {
   token: string;
 }
 
+/** Base Sepolia USDC — the token the test relay's x402 route prices in (eip155:84532). */
+const CANCEL_TOKEN = "0x036cbd53842c5426634e7929541ec2318f3dcf7e";
+
 export const facilitator = {
   /** Every settlement the fake executed onchain, in order. */
   settled: [] as FakeSettlement[],
@@ -139,9 +142,13 @@ export const facilitator = {
   }): string {
     return this.chainBatch(args.token, [{ kind: "execute", ...args }]);
   },
-  /** `cancelAuthorization` on the chain: AuthorizationCanceled, no transfer. */
-  chainCancel(from: string, nonce: string): void {
-    this.chainBatch("0x0", [{ kind: "cancel", from, nonce }]);
+  /**
+   * `cancelAuthorization` on the chain: AuthorizationCanceled, no transfer,
+   * emitted by `token` (default: the USDC contract the test relay's route
+   * prices in).
+   */
+  chainCancel(from: string, nonce: string, token: string = CANCEL_TOKEN): void {
+    this.chainBatch(token, [{ kind: "cancel", from, nonce }]);
   },
   /**
    * One transaction carrying several calls to the token, in order (a
@@ -289,8 +296,12 @@ export function fakeChainReader(
     lagging?: boolean;
     failing?: boolean;
     receiptQuirkOnce?: boolean;
+    /** A node quirk: the first receipt read returns the Transfer with a WRONG value (a paired mismatch). */
+    receiptCorruptOnce?: boolean;
     /** A node behind the chain: its confirmed head is this block, and it returns nothing past it (Geth clamps silently). */
     headAt?: number;
+    /** A provider that refuses an eth_getLogs range wider than this many blocks. */
+    rangeCap?: number;
   } = {},
 ): X402ChainReader & { reads: number } {
   let quirked = false;
@@ -308,6 +319,7 @@ export function fakeChainReader(
       return Promise.resolve(facilitator.genesis + 2 * n);
     },
     getAuthorizationEvents(args: {
+      token?: string;
       authorizer: string;
       nonce: string;
       fromBlock: number;
@@ -315,11 +327,16 @@ export function fakeChainReader(
     }): Promise<AuthorizationEvent[]> {
       reader.reads += 1;
       if (opts.failing) return Promise.reject(new Error("rpc down"));
+      if (opts.rangeCap != null && args.toBlock - args.fromBlock + 1 > opts.rangeCap) {
+        return Promise.reject(new Error(`query exceeds max block range ${opts.rangeCap}`));
+      }
       if (opts.lagging) return Promise.resolve([]);
       return Promise.resolve(
         facilitator.events
           .filter(
             (e) =>
+              // eth_getLogs is filtered by the token contract's address.
+              (args.token == null || e.token === args.token.toLowerCase()) &&
               e.from === args.authorizer.toLowerCase() &&
               e.nonce === args.nonce.toLowerCase() &&
               e.blockNumber >= args.fromBlock &&
@@ -340,6 +357,16 @@ export function fakeChainReader(
         // A node quirk: the first receipt read drops the Transfer log.
         quirked = true;
         return Promise.resolve(receiptLogsOf(txHash).filter((l) => l.topics[0] !== TRANSFER_TOPIC));
+      }
+      if (opts.receiptCorruptOnce && !quirked) {
+        quirked = true;
+        return Promise.resolve(
+          receiptLogsOf(txHash).map((l) =>
+            l.topics[0] === TRANSFER_TOPIC
+              ? { ...l, data: "0x" + (BigInt(l.data) - 1n).toString(16).padStart(64, "0") }
+              : l,
+          ),
+        );
       }
       return Promise.resolve(receiptLogsOf(txHash));
     },

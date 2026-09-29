@@ -271,6 +271,29 @@ export interface X402SettlementRecord {
   last_observation: string | null;
   /** Chain time (confirmed head's timestamp) of that mismatch observation: its re-check waits from here. */
   mismatch_observed_head_ts: number | null;
+  /**
+   * EVIDENCE OF EXECUTION IS STICKY (#907 round 12). Once an
+   * `AuthorizationUsed(payer, nonce)` log has been seen for the record, the
+   * relay knows the payment executed; a later read that shows nothing is a
+   * lagging node, not evidence of absence.
+   *   - `unpaired`: Used seen, but its paired Transfer could not be read (a
+   *     missing log). The record can never become terminal from here: it is
+   *     re-read (its receipt, directly) with a chain-time backoff capped at
+   *     the last re-check backoff (6 h), spending no budget, until it pairs.
+   *   - `mismatched`: Used seen AND paired to a Transfer that fails the checks
+   *     (wrong recipient, amount or token) — a real non-payment. The one
+   *     mismatch re-check applies, then the record is terminal; it never
+   *     returns to `unpaired`, so a real underpayment cannot stay open forever.
+   */
+  used_state: "unpaired" | "mismatched" | null;
+  /** The transaction whose AuthorizationUsed log was seen. */
+  used_observed_tx: string | null;
+  /** Chain time the Used log was first seen. */
+  used_observed_head_ts: number | null;
+  /** Re-reads of an `unpaired` record so far (drives its capped backoff). */
+  used_rereads: number;
+  /** Chain time the next re-read of an `unpaired` record is due. */
+  next_used_reread_head_ts: number | null;
 }
 
 /** A record for this (payer, nonce), if any. */
@@ -735,6 +758,8 @@ export type ReconcileDecision =
   | "authorization_still_valid"
   | "execution_mismatch"
   | "still_pending"
+  | "used_unpaired"
+  | "scan_incomplete"
   | "no_execution_found"
   | "unchanged"
   | "read_error";
@@ -856,6 +881,8 @@ async function scanEvents(
   /** null: a read-only scan (the operator's resolve) — no cursor is written. */
   cursor: ScanCursor | null,
   p: X402ScanParams,
+  /** Pages this call may read. The operator's resolve passes Infinity: it scans the whole window. */
+  maxPages: number = p.maxPagesPerRun,
 ): Promise<{ events: AuthorizationEvent[]; reached: boolean; stale: boolean }> {
   let at = fromBlock;
   let events: AuthorizationEvent[] = [];
@@ -866,7 +893,7 @@ async function scanEvents(
   // last saw. A concurrent run that concluded, failed or re-based the record
   // makes this run's writes no-ops, and this run stops (#907 round 7).
   let expected: number | null = cursor === "pass_cursor" ? rec.pass_cursor : rec.scanned_to_block;
-  while (at <= toBlock && pages < p.maxPagesPerRun && events.length === 0) {
+  while (at <= toBlock && pages < maxPages && events.length === 0) {
     const to = Math.min(toBlock, at + pageBlocks - 1);
     try {
       events = await reader.getAuthorizationEvents({
@@ -956,7 +983,16 @@ export async function reconcileX402Settlement(
   reader: X402ChainReader,
   rec: X402SettlementRecord,
   p: X402ScanParams = X402_SCAN,
-  opts: { operator?: boolean } = {},
+  opts: {
+    operator?: boolean;
+    /**
+     * The confirmed head the RUN read once (#907 round 12): selection and every
+     * decision in the run use the same head, so a second, regressed read can
+     * never make this pass spend a different budget than selection admitted.
+     * Omitted (the operator's resolve, a direct call): read here, once.
+     */
+    head?: { number: number; timestamp: number };
+  } = {},
 ): Promise<ReconcileDecision> {
   const recheck = rec.status === "failed";
   /** The confirmed head's timestamp this run read (set before any spend). */
@@ -999,6 +1035,122 @@ export async function reconcileX402Settlement(
       `UPDATE relay_x402_settlements SET recheck_count = ?, next_recheck_at = ?, next_recheck_head_ts = ?, pass_cursor = NULL${observe} WHERE payer = ? AND nonce = ? AND status = 'failed' AND recheck_count = ? AND mismatch_rechecks = ?`,
     ).run(done, Date.now() + wait, chainNow + chainSeconds(wait), ...observeArgs, ...gen);
   };
+  /**
+   * Judge an observed `AuthorizationUsed` by its transaction's receipt:
+   * paired and matching ⇒ credit; no Transfer paired (a missing log) ⇒ the
+   * record becomes / stays STICKY `unpaired` and is re-read later, spending
+   * nothing; paired but failing the checks ⇒ a real mismatch (one re-check,
+   * then terminal — never back to sticky).
+   */
+  const judgeUsed = async (
+    txHash: string,
+    usedLogIndex: number | null,
+    headTs: number,
+  ): Promise<ReconcileDecision> => {
+    const logs = await reader.getReceiptLogs(txHash);
+    const paired = pairedTransfer(logs, {
+      token: rec.token,
+      authorizer: rec.payer,
+      nonce: rec.nonce,
+    });
+    if (paired == null && rec.used_state !== "mismatched") {
+      if (operator) return "used_unpaired"; // observed, nothing written
+      const n = rec.used_state === "unpaired" ? rec.used_rereads + 1 : 0;
+      const backoff = p.recheckBackoffMs;
+      const wait = backoff[Math.min(n, backoff.length - 1)] ?? 0;
+      db.prepare(
+        `UPDATE relay_x402_settlements SET used_state = 'unpaired', used_observed_tx = ?,
+           used_observed_head_ts = COALESCE(used_observed_head_ts, ?), used_rereads = ?,
+           next_used_reread_head_ts = ?, pass_cursor = NULL
+         WHERE payer = ? AND nonce = ? AND status = ? AND used_state IS ? AND used_rereads = ?`,
+      ).run(
+        txHash,
+        headTs,
+        n,
+        headTs + chainSeconds(wait),
+        rec.payer,
+        rec.nonce,
+        rec.status,
+        rec.used_state,
+        rec.used_rereads,
+      );
+      logger.warn("x402.reconcile.used_unpaired", {
+        payer: rec.payer,
+        nonce: rec.nonce,
+        txHash,
+        rereads: n,
+        idempotencyKey: rec.idempotency_key,
+      });
+      return "used_unpaired";
+    }
+    const matches =
+      paired != null &&
+      paired.from === rec.payer &&
+      paired.to === rec.pay_to.toLowerCase() &&
+      paired.value === BigInt(rec.amount_micro);
+    const mismatch = (): ReconcileDecision => {
+      if (operator) return "execution_mismatch"; // observed, nothing written
+      // A real non-payment: sticky no more, one mismatch re-check, then terminal.
+      db.prepare(
+        "UPDATE relay_x402_settlements SET used_state = 'mismatched', used_observed_tx = ? WHERE payer = ? AND nonce = ? AND status = ?",
+      ).run(txHash, rec.payer, rec.nonce, rec.status);
+      if (recheck) spendRecheck(true);
+      else markX402Failed(db, rec.payer, rec.nonce, "execution_mismatch", headTs);
+      return "execution_mismatch";
+    };
+    if (!matches) {
+      logger.error("x402.reconcile.execution_mismatch", {
+        payer: rec.payer,
+        nonce: rec.nonce,
+        txHash,
+        usedLogIndex,
+        pairedPosition: paired?.position,
+        pairedFrom: paired?.from,
+        pairedTo: paired?.to,
+        pairedValue: paired?.value.toString(),
+        expectedTo: rec.pay_to,
+        expectedAmountMicro: rec.amount_micro,
+        idempotencyKey: rec.idempotency_key,
+        delegator: rec.delegator_id,
+      });
+      return mismatch();
+    }
+    let credited: boolean;
+    try {
+      credited = creditX402Settlement(db, rec.payer, rec.nonce, {
+        txHash,
+        creditLogIndex: paired.position,
+        description: `x402 payment ${txHash}#${paired.position} (authorization ${rec.nonce}) reconciled from chain for task ${rec.task_id}`,
+        from: "pending_or_failed",
+      });
+    } catch (err) {
+      // The consumed marker: this Transfer log already credited another
+      // record. Pairing should make this impossible; if it happens, nothing
+      // is credited twice and the operator is told.
+      if (!/UNIQUE/i.test(err instanceof Error ? err.message : String(err))) throw err;
+      logger.error("x402.reconcile.transfer_already_consumed", {
+        payer: rec.payer,
+        nonce: rec.nonce,
+        txHash,
+        transferLogIndex: paired.position,
+        idempotencyKey: rec.idempotency_key,
+      });
+      return mismatch();
+    }
+    if (credited) {
+      logger.info("x402.reconcile.credited", {
+        payer: rec.payer,
+        nonce: rec.nonce,
+        txHash,
+        transferLogIndex: paired.position,
+        delegator: rec.delegator_id,
+        amountMicro: rec.amount_micro,
+        idempotencyKey: rec.idempotency_key,
+        wasFailed: recheck,
+      });
+    }
+    return credited ? "credited" : "unchanged";
+  };
   // The operator's resolve is READ-ONLY except for a credit (#907 round 11):
   // it writes no column the loop's selection or scan reads — not the queue
   // stamp, cursors, scan bounds, observations, budgets or status.
@@ -1008,8 +1160,14 @@ export async function reconcileX402Settlement(
     ).run(Date.now(), rec.payer, rec.nonce);
   }
   try {
-    const head = await reader.getConfirmedHead();
+    const head = opts.head ?? (await reader.getConfirmedHead());
     chainNow = head.timestamp;
+    // Sticky evidence: a record whose Used log was seen but not yet paired is
+    // settled by re-reading THAT transaction's receipt — never by a scan that
+    // could show nothing — and a re-read spends no budget (round 12).
+    if (rec.used_state === "unpaired" && rec.used_observed_tx != null) {
+      return await judgeUsed(rec.used_observed_tx, null, head.timestamp);
+    }
     const expiryTs = rec.valid_before + p.expiryMarginSeconds;
     const stillValid = head.timestamp <= expiryTs;
     let from = rec.scan_from_block;
@@ -1061,83 +1219,14 @@ export async function reconcileX402Settlement(
       ceiling,
       operator ? null : fullPass ? "pass_cursor" : "scanned_to_block",
       p,
+      // The operator is the last resort: it reads the ENTIRE window in one call
+      // however small the provider's range cap makes the pages (round 12).
+      operator ? Number.POSITIVE_INFINITY : p.maxPagesPerRun,
     );
 
     if (stale) return "unchanged"; // another run moved this record on
     const used = events.find((e) => e.kind === "used");
-    if (used != null) {
-      const logs = await reader.getReceiptLogs(used.txHash);
-      const paired = pairedTransfer(logs, {
-        token: rec.token,
-        authorizer: rec.payer,
-        nonce: rec.nonce,
-      });
-      const matches =
-        paired != null &&
-        paired.from === rec.payer &&
-        paired.to === rec.pay_to.toLowerCase() &&
-        paired.value === BigInt(rec.amount_micro);
-      if (!matches) {
-        logger.error("x402.reconcile.execution_mismatch", {
-          payer: rec.payer,
-          nonce: rec.nonce,
-          txHash: used.txHash,
-          usedLogIndex: used.logIndex,
-          pairedPosition: paired?.position,
-          pairedFrom: paired?.from,
-          pairedTo: paired?.to,
-          pairedValue: paired?.value.toString(),
-          expectedTo: rec.pay_to,
-          expectedAmountMicro: rec.amount_micro,
-          idempotencyKey: rec.idempotency_key,
-          delegator: rec.delegator_id,
-        });
-        if (operator) return "execution_mismatch"; // observed, nothing written
-        // A re-check records the observation beside the ORIGINAL failure
-        // class (never rewriting it) and spends this pass's budget.
-        if (recheck) spendRecheck(true);
-        else markX402Failed(db, rec.payer, rec.nonce, "execution_mismatch", head.timestamp);
-        return "execution_mismatch";
-      }
-      let credited: boolean;
-      try {
-        credited = creditX402Settlement(db, rec.payer, rec.nonce, {
-          txHash: used.txHash,
-          creditLogIndex: paired.position,
-          description: `x402 payment ${used.txHash}#${paired.position} (authorization ${rec.nonce}) reconciled from chain for task ${rec.task_id}`,
-          from: "pending_or_failed",
-        });
-      } catch (err) {
-        // The consumed marker: this Transfer log already credited another
-        // record. Pairing should make this impossible; if it happens, nothing
-        // is credited twice and the operator is told.
-        if (!/UNIQUE/i.test(err instanceof Error ? err.message : String(err))) throw err;
-        logger.error("x402.reconcile.transfer_already_consumed", {
-          payer: rec.payer,
-          nonce: rec.nonce,
-          txHash: used.txHash,
-          transferLogIndex: paired.position,
-          idempotencyKey: rec.idempotency_key,
-        });
-        if (operator) return "execution_mismatch";
-        if (recheck) spendRecheck(true);
-        else markX402Failed(db, rec.payer, rec.nonce, "execution_mismatch", head.timestamp);
-        return "execution_mismatch";
-      }
-      if (credited) {
-        logger.info("x402.reconcile.credited", {
-          payer: rec.payer,
-          nonce: rec.nonce,
-          txHash: used.txHash,
-          transferLogIndex: paired.position,
-          delegator: rec.delegator_id,
-          amountMicro: rec.amount_micro,
-          idempotencyKey: rec.idempotency_key,
-          wasFailed: recheck,
-        });
-      }
-      return credited ? "credited" : "unchanged";
-    }
+    if (used != null) return await judgeUsed(used.txHash, used.logIndex, head.timestamp);
     const canceled = events.find((e) => e.kind === "canceled");
     if (canceled != null) {
       if (operator) return "cancelled"; // observed, nothing written
@@ -1159,7 +1248,8 @@ export async function reconcileX402Settlement(
     const concluded = reached && end != null && ceiling === end;
     if (operator) {
       if (stillValid) return "authorization_still_valid";
-      return concluded ? "no_execution_found" : "still_pending";
+      // Not concluded only when this reader's head is below the window's end.
+      return concluded ? "no_execution_found" : "scan_incomplete";
     }
     if (recheck) {
       if (stillValid) return "authorization_still_valid";
@@ -1256,11 +1346,15 @@ export function selectX402Candidates(
   p: X402ScanParams,
   limit: number,
 ): { pending: X402SettlementRecord[]; failed: X402SettlementRecord[] } {
+  // A record with sticky evidence of execution (`used_state = 'unpaired'`) is
+  // re-read on its own chain-time cadence, in either queue (round 12).
   const pending = db
     .prepare(
-      `SELECT * FROM relay_x402_settlements WHERE status = 'pending' ${SELECTION_ORDER} LIMIT ?`,
+      `SELECT * FROM relay_x402_settlements WHERE status = 'pending'
+         AND (used_state IS NOT 'unpaired' OR (? IS NOT NULL AND next_used_reread_head_ts <= ?))
+       ${SELECTION_ORDER} LIMIT ?`,
     )
-    .all(limit) as X402SettlementRecord[];
+    .all(headTs, headTs, limit) as X402SettlementRecord[];
   if (headTs == null) return { pending, failed: [] };
   const placeholders = RECHECKABLE_FAILURES.map(() => "?").join(",");
   const failed = db
@@ -1273,14 +1367,17 @@ export function selectX402Candidates(
       // the original failure class's re-checks, and one re-check of the
       // latest mismatch observation.
       `SELECT * FROM relay_x402_settlements WHERE status = 'failed'
-         AND ((failure_reason IN (${placeholders}) AND recheck_count < ?
-               AND COALESCE(next_recheck_head_ts, resolved_head_ts + ?) <= ?)
-              OR (last_observation = 'execution_mismatch' AND mismatch_rechecks < ?
-               AND mismatch_observed_head_ts + ? <= ?))
-         AND valid_before + ? < ?
+         AND ((used_state = 'unpaired' AND next_used_reread_head_ts <= ?)
+              OR (used_state IS NOT 'unpaired'
+                  AND ((failure_reason IN (${placeholders}) AND recheck_count < ?
+                        AND COALESCE(next_recheck_head_ts, resolved_head_ts + ?) <= ?)
+                       OR (last_observation = 'execution_mismatch' AND mismatch_rechecks < ?
+                        AND mismatch_observed_head_ts + ? <= ?))
+                  AND valid_before + ? < ?))
        ${SELECTION_ORDER} LIMIT ?`,
     )
     .all(
+      headTs,
       ...RECHECKABLE_FAILURES,
       p.recheckBackoffMs.length,
       chainSeconds(p.recheckBackoffMs[0] ?? 0),
@@ -1303,25 +1400,26 @@ export async function reconcilePendingX402Settlements(
   const p: X402ScanParams = { ...X402_SCAN, ...opts.scan };
   const limit = opts.limit ?? 100;
   const result: ReconcileResult = { credited: 0, failed: 0, stillPending: 0, errors: 0 };
-  // The chain-time eligibility of a re-check compares the persisted
-  // `valid_before` with the confirmed head's timestamp, read once per run.
-  let headTs: number | null;
+  // ONE confirmed head per run (#907 round 12): selection and every record's
+  // pass use it. A failed head read makes nothing eligible and visits nothing.
+  let head: { number: number; timestamp: number };
   try {
-    headTs = (await reader.getConfirmedHead()).timestamp;
+    head = await reader.getConfirmedHead();
   } catch {
-    headTs = null; // no re-checks this run; pending still visited
     result.errors += 1;
+    return result;
   }
-  if (headTs != null) stampUnobservedFailures(db, headTs);
-  const { pending, failed } = selectX402Candidates(db, headTs, p, limit);
+  stampUnobservedFailures(db, head.timestamp);
+  const { pending, failed } = selectX402Candidates(db, head.timestamp, p, limit);
   for (const rec of [...pending, ...failed]) {
-    const d = await reconcileX402Settlement(db, reader, rec, p);
+    const d = await reconcileX402Settlement(db, reader, rec, p, { head });
     if (d === "credited") result.credited += 1;
     else if (d === "cancelled" || d === "expired" || d === "execution_mismatch") result.failed += 1;
     else if (
       d === "still_pending" ||
       d === "expiry_observed" ||
-      d === "authorization_still_valid"
+      d === "authorization_still_valid" ||
+      d === "used_unpaired"
     ) {
       result.stillPending += 1;
     } else if (d === "read_error") result.errors += 1;

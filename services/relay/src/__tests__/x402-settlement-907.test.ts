@@ -60,6 +60,8 @@ import {
   parseAtomicAmount,
   creditX402Settlement,
   recordX402Intent,
+  markX402Failed,
+  type X402ChainReader as X402ChainReaderT,
   DEFINITE_REFUSALS,
   HttpX402ChainReader,
   reconcileX402Settlement,
@@ -746,7 +748,13 @@ describe("#907 round 3: reconciliation credits only on PROOF OF EXECUTION", () =
       await reconcilePendingX402Settlements(relay.moteDb.db, fakeChainReader());
       expect(x402Deposits(w), bad).toEqual([]);
       const rec = x402Records().find((x) => x.delegator_id === w)!;
-      expect(rec, bad).toMatchObject({ status: "failed", failure_reason: "execution_mismatch" });
+      // Another token's log is not this authorization's (eth_getLogs filters
+      // by the token address): nothing is seen, so nothing is decided.
+      expect(rec, bad).toMatchObject(
+        bad === "token"
+          ? { status: "pending" }
+          : { status: "failed", failure_reason: "execution_mismatch" },
+      );
     }
   });
 
@@ -1168,8 +1176,9 @@ describe("#907 round 4: one authorization, ITS OWN Transfer — never a shared o
       "credited once",
     ).toEqual([GROSS]);
     expect(x402Records().filter((r) => r.status === "credited")).toHaveLength(1);
-    expect(x402Records().filter((r) => r.status === "failed")).toEqual([
-      expect.objectContaining({ failure_reason: "execution_mismatch" }),
+    // The forged Used log has no Transfer of its own: sticky evidence, never a credit.
+    expect(x402Records().filter((r) => r.status !== "credited")).toEqual([
+      expect.objectContaining({ status: "pending", used_state: "unpaired" }),
     ]);
   });
 
@@ -1808,13 +1817,29 @@ describe("#907 round 5", () => {
     expect(x402Deposits(w)).toEqual([]);
   });
 
-  it("an execution_mismatch caused by a node quirk is re-checked once and credited", async () => {
+  it("a node quirk that drops the Transfer log leaves the record STICKY (Used seen, unpaired); the re-read credits", async () => {
     const { w, execute, rec } = await lostAnswer("quirk", { refuse: "upstream 502" });
     execute();
     facilitator.chainTime = rec().valid_before + 10_000;
     const reader = fakeChainReader({ receiptQuirkOnce: true });
     await reconcilePendingX402Settlements(relay.moteDb.db, reader, NOW);
-    expect(rec()).toMatchObject({ status: "failed", failure_reason: "execution_mismatch" });
+    expect(rec()).toMatchObject({ status: "pending", used_state: "unpaired" });
+    // A node that lags on logs AND drops the Transfer: evidence stays, nothing
+    // is spent, nothing expires — a no-event read after a Used is lagging.
+    for (let i = 0; i < 4; i++) {
+      facilitator.chainTime += 7 * 3_600;
+      await reconcilePendingX402Settlements(
+        relay.moteDb.db,
+        fakeChainReader({ lagging: true, receiptQuirkOnce: true }),
+        NOW,
+      );
+    }
+    expect(rec() as unknown as Record<string, unknown>).toMatchObject({
+      status: "pending",
+      used_state: "unpaired",
+      expiry_observed_head_ts: null,
+      recheck_count: 0,
+    });
     await reconcilePendingX402Settlements(relay.moteDb.db, reader, NOW);
     expect(rec().status).toBe("credited");
     expect(x402Deposits(w).map((d) => d.amount)).toEqual([GROSS]);
@@ -2356,7 +2381,7 @@ describe("#907 rounds 8–9: queue selection is FIFO/LRU with a provable bounded
 });
 
 describe("#907 round 8: an execution_mismatch has its own re-check budget", () => {
-  it("refused → lands late → the first re-check reads the quirk node (mismatch) → the next honest run credits it", async () => {
+  it("refused → lands late → the first re-check reads a node that drops the Transfer (Used seen: sticky, nothing spent) → the next honest run credits it", async () => {
     const w = await pricedAgent();
     const body = { prompt: `907 r8 quirk ${crypto.randomUUID()}`, submitted_by: w };
     const pay = await paymentFor(w, body, "0xQuirk8");
@@ -2378,11 +2403,13 @@ describe("#907 round 8: an execution_mismatch has its own re-check budget", () =
       fakeChainReader({ receiptQuirkOnce: true }),
       NOW,
     );
+    // Round 12: a dropped Transfer log is a MISSING log, not a mismatch — the
+    // record is sticky (Used seen), and the re-read spends no budget.
     expect(x402Records()[0]).toMatchObject({
       status: "failed",
       failure_reason: "invalid_exact_evm_insufficient_balance", // the original class, kept
-      last_observation: "execution_mismatch",
-      recheck_count: 1,
+      used_state: "unpaired",
+      recheck_count: 0,
     });
     await reconcilePendingX402Settlements(relay.moteDb.db, fakeChainReader(), NOW);
     expect(x402Records()[0]!.status).toBe("credited");
@@ -2610,8 +2637,8 @@ describe("#907 round 9: the relay's wall clock never defines the scanned chain w
       value: BigInt(auth.value),
     });
     facilitator.chainTime = recOf(w).valid_before + 10_000;
-    // The first re-check reads the quirk node: a mismatch observed.
-    await reconcilePendingX402Settlements(db, fakeChainReader({ receiptQuirkOnce: true }), NOW);
+    // The first re-check reads a corrupt receipt: a (paired) mismatch observed.
+    await reconcilePendingX402Settlements(db, fakeChainReader({ receiptCorruptOnce: true }), NOW);
     expect(recOf(w) as unknown as Record<string, unknown>).toMatchObject({
       last_observation: "execution_mismatch",
       mismatch_rechecks: 0,
@@ -2627,7 +2654,7 @@ describe("#907 round 9: the relay's wall clock never defines the scanned chain w
     });
     await a.atRead;
     // Run B concludes the mismatch re-check (the quirk again): budget spent.
-    await reconcileX402Settlement(db, fakeChainReader({ receiptQuirkOnce: true }), stale, {
+    await reconcileX402Settlement(db, fakeChainReader({ receiptCorruptOnce: true }), stale, {
       ...X402_SCAN,
       ...NOW.scan,
     });
@@ -2817,12 +2844,14 @@ describe("#907 round 11: the expiry and mismatch re-check budgets are orthogonal
   const loop = (reader: ReturnType<typeof fakeChainReader>, scan: object = NOW) =>
     reconcilePendingX402Settlements(db(), reader, scan as typeof NOW);
   const quirk = () => fakeChainReader({ receiptQuirkOnce: true });
+  /** A node that returns the paired Transfer with a WRONG value once — a paired mismatch. */
+  const corrupt = () => fakeChainReader({ receiptCorruptOnce: true });
   const lagging = () => fakeChainReader({ lagging: true });
   const honest = () => fakeChainReader();
 
-  it("sequence 1 — refused, lands late; re-check 1 hits the quirk; a lagging read follows: the expiry re-checks left still credit on the honest read", async () => {
+  it("sequence 1 — refused, lands late; re-check 1 reads a corrupt receipt (a paired mismatch); a lagging read follows: the expiry re-checks left still credit on the honest read", async () => {
     const w = await refusedLandsLate("R11s1");
-    await loop(quirk());
+    await loop(corrupt());
     expect(row(w)).toMatchObject({
       failure_reason: "invalid_exact_evm_insufficient_balance",
       last_observation: "execution_mismatch",
@@ -2836,7 +2865,7 @@ describe("#907 round 11: the expiry and mismatch re-check budgets are orthogonal
     expect(x402Deposits(w).map((d) => d.amount)).toEqual([GROSS]);
   });
 
-  it("sequence 2 — pending, lagging reads expire it; re-check 1 hits the quirk; lagging again: still credits on the honest read", async () => {
+  it("sequence 2 — pending, lagging reads expire it; re-check 1 reads a corrupt receipt; lagging again: still credits on the honest read", async () => {
     const w = await pricedAgent();
     const body = { prompt: `907 r11 s2 ${crypto.randomUUID()}`, submitted_by: w };
     const pay = await paymentFor(w, body, "0xR11s2");
@@ -2850,7 +2879,7 @@ describe("#907 round 11: the expiry and mismatch re-check budgets are orthogonal
       status: "failed",
       failure_reason: "authorization_expired_unused",
     });
-    await loop(quirk());
+    await loop(corrupt());
     await loop(lagging());
     expect(row(w)).toMatchObject({
       status: "failed",
@@ -2863,19 +2892,19 @@ describe("#907 round 11: the expiry and mismatch re-check budgets are orthogonal
     expect(row(w).status).toBe("credited");
   });
 
-  it("sequence 3 — refused, lands late; re-check 1 lagging, re-check 2 hits the quirk, then lagging: the third expiry re-check credits", async () => {
+  it("sequence 3 — refused, lands late; re-check 1 lagging, re-check 2 reads a corrupt receipt, then lagging: the third expiry re-check credits", async () => {
     const w = await refusedLandsLate("R11s3");
     await loop(lagging());
-    await loop(quirk());
+    await loop(corrupt());
     await loop(lagging());
     expect(row(w)).toMatchObject({ status: "failed", recheck_count: 2, mismatch_rechecks: 1 });
     await loop(honest());
     expect(row(w).status).toBe("credited");
   });
 
-  it("sequence 4 — refused, lands late; re-check 1 hits the quirk: the mismatch's OWN re-check credits on the honest read", async () => {
+  it("sequence 4 — refused, lands late; re-check 1 reads a corrupt receipt: the mismatch's OWN re-check credits on the honest read", async () => {
     const w = await refusedLandsLate("R11s4");
-    await loop(quirk());
+    await loop(corrupt());
     // Freeze the expiry budget's wait so only the mismatch clause can admit it.
     db()
       .prepare("UPDATE relay_x402_settlements SET next_recheck_head_ts = ? WHERE delegator_id = ?")
@@ -2884,11 +2913,12 @@ describe("#907 round 11: the expiry and mismatch re-check budgets are orthogonal
     expect(row(w)).toMatchObject({ status: "credited" });
   });
 
-  it("operator first — its resolve past validBefore hits the quirk and writes NOTHING; all three expiry re-checks remain and the loop credits", async () => {
+  it("operator first — its resolve past validBefore reads a corrupt receipt (and a quirk) and writes NOTHING; all three expiry re-checks remain and the loop credits", async () => {
     const w = await refusedLandsLate("R11op");
     await loop(lagging()); // stamps the failure's chain time, spends re-check 1
     expect(row(w)).toMatchObject({ recheck_count: 1 });
-    expect(await operatorResolve(w, quirk())).toBe("execution_mismatch");
+    expect(await operatorResolve(w, corrupt())).toBe("execution_mismatch");
+    expect(await operatorResolve(w, quirk())).toBe("used_unpaired");
     expect(await operatorResolve(w, lagging())).toBe("no_execution_found");
     expect(row(w)).toMatchObject({
       recheck_count: 1,
@@ -2901,14 +2931,14 @@ describe("#907 round 11: the expiry and mismatch re-check budgets are orthogonal
 
   it("property: across every state a record passes through, a non-crediting operator resolve changes no column", async () => {
     const w = await refusedLandsLate("R11prop");
-    const readers = [lagging, quirk, () => fakeChainReader({ failing: true })];
+    const readers = [lagging, quirk, corrupt, () => fakeChainReader({ failing: true })];
     const probe = async () => {
       for (const make of readers) await operatorResolve(w, make());
     };
     await probe(); // failed, never seen by the loop
     await loop(lagging());
     await probe(); // one expiry re-check spent
-    await loop(quirk());
+    await loop(corrupt());
     await probe(); // a mismatch observed
     await loop(lagging());
     await probe(); // the mismatch budget spent
@@ -2929,7 +2959,7 @@ describe("#907 round 11: the expiry and mismatch re-check budgets are orthogonal
     expect(await operatorResolve(w, honest())).toBe("credited");
   });
 
-  it("q3 corner — the quirk on the THIRD expiry re-check: the mismatch re-check waits its own chain-time backoff (10 min), then credits", async () => {
+  it("q3 corner — a corrupt receipt on the THIRD expiry re-check: the mismatch re-check waits its own chain-time backoff (10 min), then credits", async () => {
     const w = await refusedLandsLate("R11q3");
     const PROD = { scan: { ...X402_SCAN } };
     const failedAt = () => row(w).resolved_head_ts as number;
@@ -2939,7 +2969,7 @@ describe("#907 round 11: the expiry and mismatch re-check budgets are orthogonal
     facilitator.chainTime = row(w).next_recheck_head_ts!;
     await loop(lagging(), PROD); // re-check 2
     facilitator.chainTime = row(w).next_recheck_head_ts!;
-    await loop(quirk(), PROD); // re-check 3 reads the quirk
+    await loop(corrupt(), PROD); // re-check 3 reads a corrupt receipt
     const seen = row(w);
     expect(seen).toMatchObject({ recheck_count: 3, last_observation: "execution_mismatch" });
     expect(seen.next_recheck_head_ts, "every spend leaves a chain-time wait").not.toBeNull();
@@ -2972,5 +3002,445 @@ describe("#907 round 11: the x402 gate is never armed for a network the reconcil
         x402ChainReader: undefined, // the production path: no injected reader
       }),
     ).rejects.toThrow(/cannot read that chain.*Refusing to arm the x402 gate/);
+  });
+});
+
+describe("#907 round 12: evidence of execution is sticky; one head per run; the operator reads the whole window", () => {
+  const db = () => relay.moteDb.db;
+  const PROD = { scan: { ...X402_SCAN } };
+  /** The USDC contract the test relay prices in (Base Sepolia). */
+  const USDC_TOKEN = "0x036cbd53842c5426634e7929541ec2318f3dcf7e";
+  type Mode = "L" | "Q" | "F" | "H";
+  type Start = "P0" | "P1" | "R";
+  interface Cell {
+    id: string;
+    start: Start;
+    executed: boolean;
+    seq: Mode[];
+    payer: string;
+    nonce: string;
+  }
+  const rowOf = (c: Cell) =>
+    db()
+      .prepare("SELECT * FROM relay_x402_settlements WHERE payer = ? AND nonce = ?")
+      .get(c.payer, c.nonce) as Record<string, unknown> & { status: string };
+
+  /** Every sequence over {L, Q, F} of length 0..n (1 + 3 + 9 + … ). */
+  function sequencesUpTo(n: number): Mode[][] {
+    const out: Mode[][] = [[]];
+    let frontier: Mode[][] = [[]];
+    for (let len = 1; len <= n; len++) {
+      const next: Mode[][] = [];
+      for (const q of frontier) for (const m of ["L", "Q", "F"] as const) next.push([...q, m]);
+      out.push(...next);
+      frontier = next;
+    }
+    return out;
+  }
+  /** A deterministic sample of `k` sequences of length `len`. */
+  function sampleSequences(len: number, k: number): Mode[][] {
+    let x = 907;
+    const out: Mode[][] = [];
+    for (let i = 0; i < k; i++) {
+      const q: Mode[] = [];
+      for (let j = 0; j < len; j++) {
+        x = (x * 1103515245 + 12345) % 2147483648;
+        q.push((["L", "Q", "F"] as const)[x % 3]!);
+      }
+      out.push(q);
+    }
+    return out;
+  }
+
+  /**
+   * The stated exception, as a model: an EXECUTED record the loop can never
+   * credit is one whose three expiry re-checks were all spent by lagging reads
+   * before any read saw its Used log. A refused start is eligible from step 1
+   * (step 0 stamps its chain time); a pending one fails `expired` after two
+   * lagging passes and is eligible the step after. A Used log seen (Q, or any
+   * honest read) makes it sticky, and sticky never gives up.
+   */
+  function modelStuck(start: Start, seq: Mode[]): boolean {
+    let phase: "p0" | "p1" | "f" | "sticky" = start === "P0" ? "p0" : start === "P1" ? "p1" : "f";
+    let rc = 0;
+    let eligibleFrom = start === "R" ? 1 : 0;
+    for (let i = 0; i < seq.length; i++) {
+      const m = seq[i]!;
+      if (phase === "sticky") continue;
+      if (phase === "p0") {
+        if (m === "L") phase = "p1";
+        else if (m === "Q") phase = "sticky";
+        continue;
+      }
+      if (phase === "p1") {
+        if (m === "L") {
+          phase = "f";
+          eligibleFrom = i + 1;
+        } else if (m === "Q") phase = "sticky";
+        continue;
+      }
+      if (i < eligibleFrom || rc >= 3) continue;
+      if (m === "L") rc += 1;
+      else if (m === "Q") phase = "sticky";
+    }
+    return phase === "f" && rc >= 3;
+  }
+
+  /** A reader that routes every record-specific read by that record's current mode. */
+  function routedReader(modeOf: (payer: string, nonce: string) => Mode) {
+    const honest = fakeChainReader();
+    const quirked = new Set<string>();
+    const reader: X402ChainReaderT = {
+      getConfirmedHead: () => honest.getConfirmedHead(),
+      getBlockTimestamp: (n) => honest.getBlockTimestamp(n),
+      getAuthorizationEvents: async (a) => {
+        const m = modeOf(a.authorizer, a.nonce);
+        if (m === "F") throw new Error("rpc down");
+        if (m === "L") return [];
+        return honest.getAuthorizationEvents(a);
+      },
+      getReceiptLogs: async (tx) => {
+        const ev = facilitator.events.find((e) => e.txHash === tx);
+        const m = ev != null ? modeOf(ev.from, ev.nonce) : "H";
+        if (m === "F") throw new Error("rpc down");
+        const logs = await honest.getReceiptLogs(tx);
+        if (m === "Q" && !quirked.has(tx)) {
+          quirked.add(tx); // one dropped Transfer log per step
+          return logs.filter((l) => l.topics[0] !== TRANSFER_TOPIC);
+        }
+        return logs;
+      },
+    };
+    return reader;
+  }
+
+  /** Build every cell's record (and its execution) in one relay. */
+  function buildCells(seqs: Mode[][]): Cell[] {
+    const cells: Cell[] = [];
+    const t0 = facilitator.chainTime;
+    let i = 0;
+    for (const start of ["P0", "P1", "R"] as const) {
+      for (const executed of [true, false]) {
+        for (const seq of seqs) {
+          i += 1;
+          const payer = "0x" + (0x907000 + i).toString(16).padStart(40, "0");
+          const nonce = "0x" + (0x907000 + i).toString(16).padStart(64, "0");
+          const id = `cell-${i}`;
+          recordX402Intent(db(), {
+            payer,
+            nonce,
+            network: "eip155:84532",
+            token: USDC_TOKEN,
+            pay_to: TREASURY.toLowerCase(),
+            amount_micro: GROSS,
+            valid_after: t0 - 600,
+            valid_before: t0 + 1_800,
+            idempotency_key: id,
+            motebit_id: "m",
+            delegator_id: id,
+            task_id: id,
+          });
+          if (executed) {
+            facilitator.chainExecute({
+              token: USDC_TOKEN,
+              from: payer,
+              nonce,
+              to: TREASURY,
+              value: BigInt(GROSS),
+            });
+          }
+          cells.push({ id, start, executed, seq, payer, nonce });
+        }
+      }
+    }
+    return cells;
+  }
+
+  /**
+   * Prepare the start states: P1 records see one lagging pass (expiry
+   * observed); R records are refused (failed, chain time stamped at step 0).
+   */
+  async function prepareStarts(cells: Cell[]) {
+    facilitator.chainTime = t0Of(cells) + 1_800 + 10_000;
+    const byKey = new Map(cells.map((c) => [`${c.payer}|${c.nonce}`, c]));
+    await reconcilePendingX402Settlements(
+      db(),
+      routedReader((payer, nonce) => (byKey.get(`${payer}|${nonce}`)!.start === "P1" ? "L" : "F")),
+      { limit: 10_000, ...PROD },
+    );
+    for (const c of cells) {
+      if (c.start === "P1") expect(rowOf(c).expiry_observed_head_ts, c.id).not.toBeNull();
+      if (c.start === "R") {
+        markX402Failed(db(), c.payer, c.nonce, "invalid_exact_evm_insufficient_balance");
+      }
+    }
+    return byKey;
+  }
+  const t0Of = (cells: Cell[]) => (rowOf(cells[0]!).valid_before as number) - 1_800;
+  const STEP = 6 * 3_600 + 60; // past every chain-time wait (the longest is 6 h)
+
+  it("loop: every {L,Q,F} sequence up to length 4 (+ a length-6 sample) from three start states, then honest reads — exactly-once credit whenever the transfer executed, except the modelled budget exhaustion; never a credit when it did not", async () => {
+    const seqs = [...sequencesUpTo(4), ...sampleSequences(6, 40)];
+    const cells = buildCells(seqs);
+    const byKey = await prepareStarts(cells);
+    const maxLen = Math.max(...seqs.map((q) => q.length));
+    let step = 0;
+    const modeAt = (payer: string, nonce: string): Mode => {
+      const c = byKey.get(`${payer}|${nonce}`)!;
+      return step < c.seq.length ? c.seq[step]! : "H";
+    };
+    for (step = 0; step < maxLen + 3; step++) {
+      facilitator.chainTime += STEP;
+      await reconcilePendingX402Settlements(db(), routedReader(modeAt), {
+        limit: 10_000,
+        ...PROD,
+      });
+    }
+    const failures: string[] = [];
+    let credited = 0;
+    let stuck = 0;
+    for (const c of cells) {
+      const deposits = x402Deposits(c.id).length;
+      const status = rowOf(c).status;
+      const label = `${c.start} ${c.executed ? "executed" : "unexecuted"} [${c.seq.join("")}]`;
+      if (!c.executed) {
+        if (deposits !== 0 || status === "credited") failures.push(`${label}: credited`);
+        continue;
+      }
+      if (modelStuck(c.start, c.seq)) {
+        stuck += 1;
+        if (deposits !== 0) failures.push(`${label}: modelled stuck, but credited`);
+        continue;
+      }
+      if (deposits !== 1 || status !== "credited") {
+        failures.push(`${label}: ${deposits} credits, ${status}`);
+      } else credited += 1;
+    }
+    expect(failures).toEqual([]);
+    expect(cells).toHaveLength(3 * 2 * (121 + 40));
+    // The stated exception is small and exactly the modelled cells.
+    expect({ credited, stuck }).toEqual({
+      credited: cells.filter((c) => c.executed && !modelStuck(c.start, c.seq)).length,
+      stuck: cells.filter((c) => c.executed && modelStuck(c.start, c.seq)).length,
+    });
+    expect(
+      cells
+        .filter((c) => c.executed && c.seq.length <= 4 && modelStuck(c.start, c.seq))
+        .map((c) => `${c.start}:${c.seq.join("")}`),
+      // A refused start: 4 non-honest reads (step 0 only stamps its chain
+      // time), the three re-checks all lagging. P1 is a pending start that
+      // already had one lagging read, so LLLL is its fifth.
+      "within length 4, only starts whose three re-checks were all spent by lagging reads",
+    ).toEqual(["P1:LLLL", "R:LLLL", "R:QLLL", "R:FLLL"]);
+  }, 120_000);
+
+  it("operator: after every sequence up to length 4, one honest operator resolve credits EVERY executed record exactly once (budgets never bind the last resort) and never an unexecuted one — writing nothing then", async () => {
+    const seqs = sequencesUpTo(4);
+    const cells = buildCells(seqs);
+    const byKey = await prepareStarts(cells);
+    let step = 0;
+    const modeAt = (payer: string, nonce: string): Mode => {
+      const c = byKey.get(`${payer}|${nonce}`)!;
+      return step < c.seq.length ? c.seq[step]! : "F"; // no honest loop read
+    };
+    for (step = 0; step < 4; step++) {
+      facilitator.chainTime += STEP;
+      await reconcilePendingX402Settlements(db(), routedReader(modeAt), {
+        limit: 10_000,
+        ...PROD,
+      });
+    }
+    const failures: string[] = [];
+    for (const c of cells) {
+      const label = `${c.start} ${c.executed ? "executed" : "unexecuted"} [${c.seq.join("")}]`;
+      const before = rowOf(c);
+      const decision = await reconcileX402Settlement(
+        db(),
+        fakeChainReader(),
+        findX402Settlement(db(), c.payer, c.nonce)!,
+        PROD.scan,
+        { operator: true },
+      );
+      const deposits = x402Deposits(c.id).length;
+      if (c.executed) {
+        if (deposits !== 1) failures.push(`${label}: ${deposits} credits (${decision})`);
+      } else {
+        if (deposits !== 0) failures.push(`${label}: credited`);
+        if (JSON.stringify(rowOf(c)) !== JSON.stringify(before)) failures.push(`${label}: wrote`);
+      }
+    }
+    expect(failures).toEqual([]);
+    expect(cells).toHaveLength(3 * 2 * 121);
+  }, 120_000);
+
+  it("the operator scans the WHOLE window from its start, never from the loop's cursor: pending → L, L (cursor at the end) → an honest operator resolve credits", async () => {
+    const w = await pricedAgent();
+    const body = { prompt: `907 r12 opwhole ${crypto.randomUUID()}`, submitted_by: w };
+    const pay = await paymentFor(w, body, "0xOpWhole");
+    facilitator.settleMode = "timeout-after-transfer";
+    await submit(w, crypto.randomUUID(), body, pay);
+    facilitator.settleMode = "ok";
+    const rec = () =>
+      x402Records().find((x) => x.delegator_id === w)! as unknown as {
+        status: string;
+        valid_before: number;
+        scanned_to_block: number;
+        scan_end_block: number;
+        payer: string;
+        nonce: string;
+      };
+    facilitator.chainTime = rec().valid_before + 10_000;
+    await reconcilePendingX402Settlements(db(), fakeChainReader({ lagging: true }), PROD);
+    await reconcilePendingX402Settlements(db(), fakeChainReader({ lagging: true }), PROD);
+    expect(rec().status).toBe("pending");
+    expect(rec().scanned_to_block).toBe(rec().scan_end_block);
+    const decision = await reconcileX402Settlement(
+      db(),
+      fakeChainReader(),
+      findX402Settlement(db(), rec().payer, rec().nonce)!,
+      PROD.scan,
+      { operator: true },
+    );
+    expect(decision).toBe("credited");
+    expect(x402Deposits(w).map((d) => d.amount)).toEqual([GROSS]);
+  });
+
+  it("the operator reads the entire window in ONE call under a provider range cap of 10 blocks (no page budget), and reports an accurate decision on a failed record", async () => {
+    const w = await pricedAgent();
+    const body = { prompt: `907 r12 opcap ${crypto.randomUUID()}`, submitted_by: w };
+    const pay = await paymentFor(w, body, "0xOpCap");
+    facilitator.settleMode = { refuse: "invalid_exact_evm_insufficient_balance" };
+    await submit(w, crypto.randomUUID(), body, pay);
+    facilitator.settleMode = "ok";
+    const auth = authorizationOf(pay);
+    const full = () => {
+      const r0 = x402Records().find((x) => x.delegator_id === w)!;
+      return findX402Settlement(db(), r0.payer, r0.nonce)!;
+    };
+    // Executed late in the window: past what 25 pages of 7 blocks would reach.
+    facilitator.head += 100; // ~400 blocks into a ~510-block window
+    facilitator.chainExecute({
+      token: tokenOf(pay),
+      from: auth.from,
+      nonce: auth.nonce,
+      to: auth.to,
+      value: BigInt(auth.value),
+    });
+    const execBlock = facilitator.head;
+    facilitator.chainTime = full().valid_before + 10_000;
+    const capped = fakeChainReader({ rangeCap: 10 });
+    // A node whose head is below the window's end is, by construction, before
+    // validBefore + margin: the accurate answer, never "still_pending".
+    expect(
+      await reconcileX402Settlement(
+        db(),
+        fakeChainReader({ headAt: execBlock - 1 }),
+        full(),
+        PROD.scan,
+        { operator: true },
+      ),
+    ).toBe("authorization_still_valid");
+    expect(await reconcileX402Settlement(db(), capped, full(), PROD.scan, { operator: true })).toBe(
+      "credited",
+    );
+    expect(x402Deposits(w).map((d) => d.amount)).toEqual([GROSS]);
+  });
+
+  it("a REAL underpayment (Used paired to a wrong-amount Transfer) is terminal after its one mismatch re-check; a later missing-log read never reopens it", async () => {
+    const w = await pricedAgent();
+    const body = { prompt: `907 r12 under ${crypto.randomUUID()}`, submitted_by: w };
+    const pay = await paymentFor(w, body, "0xUnder");
+    // The settle answer is lost; the chain carries an underpayment.
+    facilitator.settleMode = { refuse: "upstream 502" };
+    await submit(w, crypto.randomUUID(), body, pay);
+    facilitator.settleMode = "ok";
+    const auth = authorizationOf(pay);
+    facilitator.chainExecute({
+      token: tokenOf(pay),
+      from: auth.from,
+      nonce: auth.nonce,
+      to: auth.to,
+      value: BigInt(auth.value) - 1n,
+    });
+    const row = () =>
+      x402Records().find((x) => x.delegator_id === w)! as unknown as {
+        status: string;
+        valid_before: number;
+        used_state: string | null;
+        mismatch_rechecks: number;
+      };
+    facilitator.chainTime = row().valid_before + 10_000;
+    await reconcilePendingX402Settlements(db(), fakeChainReader(), NOW);
+    expect(row()).toMatchObject({ status: "failed", used_state: "mismatched" });
+    // Its one mismatch re-check reads a node that drops the Transfer log.
+    await reconcilePendingX402Settlements(db(), fakeChainReader({ receiptQuirkOnce: true }), NOW);
+    expect(row()).toMatchObject({ used_state: "mismatched", mismatch_rechecks: 1 });
+    for (let i = 0; i < 3; i++) {
+      facilitator.chainTime += 7 * 3_600;
+      await reconcilePendingX402Settlements(db(), fakeChainReader({ receiptQuirkOnce: true }), NOW);
+    }
+    const sel = selectX402Candidates(
+      db(),
+      facilitator.chainTime,
+      { ...X402_SCAN, ...NOW.scan },
+      100,
+    );
+    expect(
+      [...sel.pending, ...sel.failed].filter((x) => x.delegator_id === w),
+      "terminal: never selected again",
+    ).toEqual([]);
+    expect(x402Deposits(w)).toEqual([]);
+  });
+
+  it("one head per run: a second, regressed head read never changes which budget a pass spends", async () => {
+    const w = await pricedAgent();
+    const body = { prompt: `907 r12 onehead ${crypto.randomUUID()}`, submitted_by: w };
+    const pay = await paymentFor(w, body, "0xOneHead");
+    facilitator.settleMode = { refuse: "invalid_exact_evm_insufficient_balance" };
+    await submit(w, crypto.randomUUID(), body, pay);
+    facilitator.settleMode = "ok";
+    const auth = authorizationOf(pay);
+    // A genuine underpayment: paired to a Transfer of the wrong amount.
+    facilitator.chainExecute({
+      token: tokenOf(pay),
+      from: auth.from,
+      nonce: auth.nonce,
+      to: auth.to,
+      value: BigInt(auth.value) - 1n,
+    });
+    const row = () =>
+      x402Records().find((x) => x.delegator_id === w)! as unknown as {
+        valid_before: number;
+        resolved_head_ts: number;
+        recheck_count: number;
+        mismatch_rechecks: number;
+        mismatch_observed_head_ts: number;
+        next_recheck_head_ts: number;
+      };
+    facilitator.chainTime = row().valid_before + 10_000;
+    await reconcilePendingX402Settlements(db(), fakeChainReader(), PROD); // stamps
+    facilitator.chainTime = row().resolved_head_ts + 10 * 60;
+    await reconcilePendingX402Settlements(db(), fakeChainReader(), PROD); // re-check 1: mismatch
+    expect(row()).toMatchObject({ recheck_count: 1, mismatch_rechecks: 0 });
+    // Ten minutes later the mismatch re-check is due; the expiry one (1 h) is not.
+    facilitator.chainTime = row().mismatch_observed_head_ts + 10 * 60;
+    expect(row().next_recheck_head_ts).toBeGreaterThan(facilitator.chainTime);
+    const regressed = fakeChainReader();
+    const honestHead = regressed.getConfirmedHead.bind(regressed);
+    let reads = 0;
+    const back = row().mismatch_observed_head_ts;
+    regressed.getConfirmedHead = async () => {
+      reads += 1;
+      const h = await honestHead();
+      if (reads === 1) return h;
+      const n = h.number - Math.ceil((h.timestamp - back) / 2);
+      return { number: n, timestamp: facilitator.genesis + 2 * n };
+    };
+    await reconcilePendingX402Settlements(db(), regressed, PROD);
+    expect(row(), "the mismatch budget, as selection admitted").toMatchObject({
+      recheck_count: 1,
+      mismatch_rechecks: 1,
+    });
+    expect(x402Deposits(w)).toEqual([]);
   });
 });

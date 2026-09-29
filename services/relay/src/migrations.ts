@@ -2401,6 +2401,14 @@ export const relayMigrations: Migration[] = [
           -- failure class in failure_reason, and its chain time (round 11).
           last_observation TEXT,
           mismatch_observed_head_ts INTEGER,
+          -- Sticky evidence of execution (round 12): an AuthorizationUsed log
+          -- seen for this record ('unpaired' until its Transfer is read;
+          -- 'mismatched' when it paired to a Transfer that fails the checks).
+          used_state TEXT,
+          used_observed_tx TEXT,
+          used_observed_head_ts INTEGER,
+          used_rereads INTEGER NOT NULL DEFAULT 0,
+          next_used_reread_head_ts INTEGER,
           PRIMARY KEY (payer, nonce)
         );
         CREATE UNIQUE INDEX IF NOT EXISTS idx_x402_settlements_consumed_transfer

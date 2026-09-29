@@ -2098,7 +2098,8 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
   // Master-token only (the /api/v1/admin/* middleware). The read lists
   // pending and failed records; the resolve action re-runs the proof-of-
   // execution check for ONE record — it never credits without that proof,
-  // and unless it credits it writes nothing (#907 round 11).
+  // and unless it credits it writes nothing (#907 round 11); it reads the
+  // whole window from its start in one call (round 12).
   {
     const { listX402SettlementsForOperator, findX402Settlement, reconcileX402Settlement } =
       await import("./x402-settlements.js");
