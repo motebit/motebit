@@ -94,6 +94,8 @@ export class SimRelay {
    */
   echoes = true;
   dropFrame: ((n: number) => boolean) | null = null;
+  /** Told each time the relay drops a frame (a harness schedules an adapter swap from it). */
+  onDrop: (() => void) | null = null;
   pushFramesSeen = 0;
 
   constructor(
@@ -518,6 +520,7 @@ export class SimSocket {
         // Silently discarded: never stored, never answered — no longer in flight.
         trace(`ws push ${msg.push_id ?? "-"} n=${events.length} DROPPED by the relay`);
         answered();
+        this.relay.onDrop?.();
         return;
       }
       this.relay.store(events);

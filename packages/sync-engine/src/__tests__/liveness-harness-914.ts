@@ -105,6 +105,14 @@ export interface Cell {
   outage?: true;
   /** A relay that misbehaves (#914 round 8) — see `Fault`. */
   fault?: Fault;
+  /**
+   * (#914 round 9) The device swaps its socket adapter — `disconnect()` plus
+   * a successor to the same relay, the surfaces' token refresh — this long
+   * after the relay drops a frame: before the frame is overtaken, after it
+   * is overtaken but before it is judged lost, or after. The frame is
+   * then judged on a RETIRED, draining adapter.
+   */
+  swapAfterDropMs?: number;
 }
 
 /**
@@ -215,6 +223,8 @@ interface World {
   /** Own ids (push) or sibling ids (pull) to deliver. */
   targets: string[];
   stop: Array<() => void>;
+  /** The lifecycle's own adapter swap, when it has one (see `Cell.swapAfterDropMs`). */
+  swapNow?: () => void;
 }
 
 function world(c: Cell): World {
@@ -251,7 +261,15 @@ function world(c: Cell): World {
   vi.stubGlobal("WebSocket", net.socketClass());
   if (c.flavour === "rn") net.installReactNative();
   else vi.stubGlobal("fetch", net.fetch);
-  return { net, relay, local, base, wsUrl, targets: [], stop };
+  const w: World = { net, relay, local, base, wsUrl, targets: [], stop };
+  if (c.swapAfterDropMs !== undefined) {
+    const after = c.swapAfterDropMs;
+    relay.onDrop = () => {
+      const t = setTimeout(() => w.swapNow?.(), after);
+      stop.push(() => clearTimeout(t));
+    };
+  }
+  return w;
 }
 
 /**
@@ -446,14 +464,18 @@ async function runMain(c: Cell): Promise<Outcome> {
     sock = new MainSocket(w.wsUrl, catchUp);
     sock.connect();
     const tick = setInterval(sync, 30 * S);
-    const swap = setInterval(() => {
-      if (c.life === "steady-ws") return;
+    const swapSocket = (): void => {
       const old = sock!;
       old.disconnect();
       const fresh = new MainSocket(w.wsUrl, catchUp);
       for (const e of old.pending.splice(0)) void fresh.append(e);
       sock = fresh;
       fresh.connect();
+    };
+    w.swapNow = swapSocket;
+    const swap = setInterval(() => {
+      if (c.life === "steady-ws") return;
+      swapSocket();
     }, 4.5 * MIN);
     w.stop.push(() => (clearInterval(tick), clearInterval(swap), sock?.disconnect()));
   } else if (c.life === "rebuild-ws") {
@@ -505,14 +527,18 @@ async function runBranch(c: Cell): Promise<Outcome> {
     engine.connectRemote(liveAdapter(() => current as EventStoreAdapter));
     current.connect();
     engine.start();
-    const swap = setInterval(() => {
-      if (c.life === "steady-ws") return;
+    const swapAdapter = (): void => {
       const replaced = current;
       replaced.disconnect();
       const fresh = socketAdapter(w);
       for (const e of replaced.takePendingEvents()) void fresh.append(e).catch(() => {});
       current = fresh;
       fresh.connect();
+    };
+    w.swapNow = swapAdapter;
+    const swap = setInterval(() => {
+      if (c.life === "steady-ws") return;
+      swapAdapter();
     }, 4.5 * MIN);
     w.stop.push(() => (clearInterval(swap), engine.stop(), current.disconnect()));
   } else if (c.life === "rebuild-ws") {
@@ -602,6 +628,28 @@ export function sweep(): Cell[] {
   ] as const) {
     for (const life of ["persistent-ws", "rebuild-ws"] as const) {
       add({ dir: "push", life, flavour: "node", u: 0.01, L: 0, backlog: 6000, fault });
+    }
+  }
+  // (#914 round 9) Each drop fault composed with an adapter swap at each
+  // point of the dropped frame's life, on a socket with a new event a
+  // minute (frames sent at distinct times; the relay answers in 3 s): 1 s
+  // and 30 s after the drop (before any later frame, so the dropped frame
+  // is never overtaken on its socket), 70 s (a later frame was answered on
+  // the old socket, so it is OVERTAKEN, but not yet judged lost: that
+  // judgement happens on the retired, draining adapter), and 120 s (after
+  // it was sent again).
+  for (const fault of ["drop-first", "drop-mid", "old-drop", "rollback-burst"] as const) {
+    for (const swapAfterDropMs of [1 * S, 30 * S, 70 * S, 120 * S]) {
+      add({
+        dir: "push",
+        life: "steady-ws",
+        flavour: "node",
+        u: 0.01,
+        L: 3,
+        backlog: 1,
+        fault,
+        swapAfterDropMs,
+      });
     }
   }
   // A mid-stream drop on a socket nothing ever retires, whose relay keeps
@@ -844,7 +892,7 @@ export async function runCell(c: Cell): Promise<{ main: Outcome; branch: Outcome
 }
 
 export function cellName(c: Cell): string {
-  return `${c.dir} ${c.life} ${c.flavour} u=${c.u}s L=${c.L}s backlog=${c.backlog}${c.outage ? " outage" : ""}${c.fault ? ` ${c.fault}` : ""}`;
+  return `${c.dir} ${c.life} ${c.flavour} u=${c.u}s L=${c.L}s backlog=${c.backlog}${c.outage ? " outage" : ""}${c.fault ? ` ${c.fault}` : ""}${c.swapAfterDropMs !== undefined ? ` swap+${c.swapAfterDropMs / 1000}s` : ""}`;
 }
 
 export function verdict(c: Cell, r: { main: Outcome; branch: Outcome }): string | null {
