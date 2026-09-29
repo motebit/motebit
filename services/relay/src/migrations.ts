@@ -2379,6 +2379,11 @@ export const relayMigrations: Migration[] = [
           scanned_to_block INTEGER,
           -- Expiry needs two agreeing observations; the first is recorded here.
           expiry_observed_at INTEGER,
+          -- Chain-time stamps (the confirmed head's timestamp, unix s) every
+          -- wait is measured on — never the relay's wall clock (round 10).
+          expiry_observed_head_ts INTEGER,
+          resolved_head_ts INTEGER,
+          next_recheck_head_ts INTEGER,
           -- Re-checks spent on a failed record, and when the next may run.
           recheck_count INTEGER NOT NULL DEFAULT 0,
           next_recheck_at INTEGER,

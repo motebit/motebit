@@ -1297,9 +1297,8 @@ describe("#907 round 4: expiry needs a complete scan and two agreeing observatio
     await reconcilePendingX402Settlements(relay.moteDb.db, fakeChainReader(), gap);
     await reconcilePendingX402Settlements(relay.moteDb.db, fakeChainReader(), gap);
     expect(x402Records()[0]!.status, "back-to-back runs do not agree yet").toBe("pending");
-    relay.moteDb.db
-      .prepare("UPDATE relay_x402_settlements SET expiry_observed_at = expiry_observed_at - ?")
-      .run(2 * 60 * 60_000);
+    // The gap is CHAIN time (round 10): the head moves on by more than an hour.
+    facilitator.chainTime += 2 * 60 * 60;
     await reconcilePendingX402Settlements(relay.moteDb.db, fakeChainReader(), gap);
     expect(x402Records()[0]).toMatchObject({
       status: "failed",
@@ -1339,8 +1338,8 @@ describe("#907 round 4: expiry needs a complete scan and two agreeing observatio
     // Backoff honoured: the third re-check waits an hour.
     await reconcilePendingX402Settlements(relay.moteDb.db, fakeChainReader(), backoff);
     expect(x402Records()[0]!.status).toBe("failed");
-    relay.moteDb.db.prepare("UPDATE relay_x402_settlements SET next_recheck_at = 0").run();
-    await reconcilePendingX402Settlements(relay.moteDb.db, fakeChainReader(), NOW);
+    facilitator.chainTime += 60 * 60 + 2; // an hour of CHAIN time (round 10)
+    await reconcilePendingX402Settlements(relay.moteDb.db, fakeChainReader(), backoff);
     expect(x402Records()[0]).toMatchObject({ status: "credited" });
     expect(x402Deposits(w).map((d) => d.amount)).toEqual([GROSS]);
   });
@@ -1744,35 +1743,42 @@ describe("#907 round 5", () => {
     expect(rec().status).toBe("pending");
   });
 
-  it("re-check schedule is 10 min / 1 h / 6 h, the first counted from the moment the record failed", async () => {
+  it("re-check schedule is 10 min / 1 h / 6 h of CHAIN time, the first counted from the head the failure was first seen under", async () => {
     const { rec } = await lostAnswer("sched", { refuse: "invalid_exact_evm_insufficient_balance" });
     facilitator.chainTime = rec().valid_before + 10_000;
     const run = () => reconcilePendingX402Settlements(relay.moteDb.db, fakeChainReader());
-    const set = (sql: string, ...a: unknown[]) =>
-      relay.moteDb.db.prepare(`UPDATE relay_x402_settlements SET ${sql}`).run(...a);
+    const chain = () =>
+      rec() as unknown as {
+        recheck_count: number;
+        resolved_head_ts: number | null;
+        next_recheck_head_ts: number | null;
+      };
     await run();
-    expect(rec().recheck_count, "not before 10 min").toBe(0);
-    set("resolved_at = ?", Date.now() - 9 * 60_000);
+    // The request path had no chain time; the reconciler stamped the head it saw.
+    const failedAt = chain().resolved_head_ts!;
+    expect(failedAt).toBe(facilitator.chainTime);
+    expect(chain().recheck_count, "not before 10 min").toBe(0);
+    facilitator.chainTime = failedAt + 9 * 60;
     await run();
-    expect(rec().recheck_count, "still not at 9 min").toBe(0);
-    set("resolved_at = ?", Date.now() - 10 * 60_000 - 1);
-    const t1 = Date.now();
+    expect(chain().recheck_count, "still not at 9 min").toBe(0);
+    facilitator.chainTime = failedAt + 10 * 60;
+    const t1 = facilitator.chainTime;
     await run();
-    expect(rec().recheck_count).toBe(1);
-    expect(rec().next_recheck_at! - t1).toBeGreaterThanOrEqual(60 * 60_000 - 1_000);
-    expect(rec().next_recheck_at! - t1).toBeLessThanOrEqual(60 * 60_000 + 1_000);
+    expect(chain().recheck_count).toBe(1);
+    expect(chain().next_recheck_head_ts).toBe(t1 + 60 * 60);
+    facilitator.chainTime = t1 + 60 * 60 - 2;
     await run();
-    expect(rec().recheck_count, "waits the hour").toBe(1);
-    set("next_recheck_at = ?", Date.now() - 1);
-    const t2 = Date.now();
+    expect(chain().recheck_count, "waits the hour").toBe(1);
+    facilitator.chainTime = t1 + 60 * 60;
+    const t2 = facilitator.chainTime;
     await run();
-    expect(rec().recheck_count).toBe(2);
-    expect(rec().next_recheck_at! - t2).toBeGreaterThanOrEqual(6 * 60 * 60_000 - 1_000);
-    set("next_recheck_at = ?", Date.now() - 1);
+    expect(chain().recheck_count).toBe(2);
+    expect(chain().next_recheck_head_ts).toBe(t2 + 6 * 60 * 60);
+    facilitator.chainTime = t2 + 6 * 60 * 60;
     await run();
-    expect(rec()).toMatchObject({ recheck_count: 3, next_recheck_at: null });
+    expect(chain()).toMatchObject({ recheck_count: 3, next_recheck_head_ts: null });
     await run();
-    expect(rec().recheck_count, "no fourth").toBe(3);
+    expect(chain().recheck_count, "no fourth").toBe(3);
   });
 
   it("the gate refuses an authorization that pays anyone but the treasury, even when the facilitator would settle it (the fake honours the signed recipient)", async () => {
@@ -2051,7 +2057,7 @@ describe("#907 round 7", () => {
       });
     }
     db.prepare(
-      "UPDATE relay_x402_settlements SET status = 'failed', failure_reason = 'invalid_exact_evm_insufficient_balance', resolved_at = 0, created_at = 0 WHERE delegator_id = 'attacker'",
+      "UPDATE relay_x402_settlements SET status = 'failed', failure_reason = 'invalid_exact_evm_insufficient_balance', resolved_at = 0, resolved_head_ts = 0, created_at = 0 WHERE delegator_id = 'attacker'",
     ).run();
     // ONLY the SQL chain-time clause can put the victim in the first run's
     // selection: the 100 refusals are older and never checked, so with the
@@ -2655,5 +2661,104 @@ describe("#907 round 9: the relay's wall clock never defines the scanned chain w
     a.release();
     await runA;
     expect(recOf(w).recheck_count, "generation 0's late conclusion is a no-op").toBe(2);
+  });
+});
+
+describe("#907 round 10: every wait is measured in CHAIN time — a relay clock that jumped never holds a credit back", () => {
+  const MONTH = 30 * 24 * 3_600_000;
+  const recOf = (w: string) =>
+    x402Records().find((x) => x.delegator_id === w)! as unknown as {
+      status: string;
+      valid_before: number;
+      recheck_count: number;
+      failure_reason: string | null;
+    };
+  /** The production gap and backoff (5 min; 10 min / 1 h / 6 h). */
+  const PROD = { scan: { ...X402_SCAN } };
+  function relayClockFast(ms: number) {
+    const wall = Date.now;
+    return vi.spyOn(Date, "now").mockImplementation(() => wall.call(Date) + ms);
+  }
+
+  it("pending, executed, the first concluding pass missed the log while the relay clock ran 30 days fast; clock corrected: credited after the normal 5-minute chain-time gap", async () => {
+    const db = relay.moteDb.db;
+    const w = await pricedAgent();
+    const body = { prompt: `907 r10 pending ${crypto.randomUUID()}`, submitted_by: w };
+    const pay = await paymentFor(w, body, "0xJumpPending");
+    facilitator.settleMode = "timeout-after-transfer"; // executed, answer lost
+    await submit(w, crypto.randomUUID(), body, pay);
+    facilitator.settleMode = "ok";
+    facilitator.chainTime = recOf(w).valid_before + 10_000;
+    const fast = relayClockFast(MONTH);
+    try {
+      // A lagging node: the ordinary pass concludes with no event — the first observation.
+      await reconcilePendingX402Settlements(db, fakeChainReader({ lagging: true }), PROD);
+    } finally {
+      fast.mockRestore();
+    }
+    expect(recOf(w).status).toBe("pending");
+    // Clock corrected. Before the gap: nothing yet.
+    await reconcilePendingX402Settlements(db, fakeChainReader(), PROD);
+    expect(recOf(w).status, "the confirming pass waits the gap").toBe("pending");
+    facilitator.chainTime += 5 * 60 + 2; // five minutes of chain time
+    await reconcilePendingX402Settlements(db, fakeChainReader(), PROD);
+    expect(recOf(w).status).toBe("credited");
+    expect(x402Deposits(w).map((d) => d.amount)).toEqual([GROSS]);
+  });
+
+  it("a definite refusal that executes late, refused while the relay clock ran 30 days fast; clock corrected: credited at the normal 10-minute chain-time re-check", async () => {
+    const db = relay.moteDb.db;
+    const w = await pricedAgent();
+    const body = { prompt: `907 r10 refused ${crypto.randomUUID()}`, submitted_by: w };
+    const pay = await paymentFor(w, body, "0xJumpRefused");
+    const fast = relayClockFast(MONTH);
+    try {
+      facilitator.settleMode = { refuse: "invalid_exact_evm_insufficient_balance" };
+      await submit(w, crypto.randomUUID(), body, pay);
+      facilitator.settleMode = "ok";
+      // The loop sees the failure (and stamps its chain time) while the clock is still fast.
+      await reconcilePendingX402Settlements(db, fakeChainReader(), PROD);
+    } finally {
+      fast.mockRestore();
+    }
+    const failedAt = (
+      x402Records().find((x) => x.delegator_id === w) as unknown as { resolved_head_ts: number }
+    ).resolved_head_ts;
+    expect(recOf(w)).toMatchObject({ status: "failed", recheck_count: 0 });
+    // It executes after all, inside its window.
+    const auth = authorizationOf(pay);
+    facilitator.chainExecute({
+      token: tokenOf(pay),
+      from: auth.from,
+      nonce: auth.nonce,
+      to: auth.to,
+      value: BigInt(auth.value),
+    });
+    // Nine minutes of chain time: past validBefore, but before the first re-check.
+    facilitator.chainTime = failedAt + 9 * 60;
+    expect(facilitator.chainTime).toBeGreaterThan(recOf(w).valid_before + 120);
+    await reconcilePendingX402Settlements(db, fakeChainReader(), PROD);
+    expect(recOf(w).status, "not before the 10-minute re-check").toBe("failed");
+    facilitator.chainTime = failedAt + 10 * 60;
+    await reconcilePendingX402Settlements(db, fakeChainReader(), PROD);
+    expect(recOf(w).status).toBe("credited");
+    expect(x402Deposits(w).map((d) => d.amount)).toEqual([GROSS]);
+  });
+
+  it("a failed head read makes nothing eligible that run (no re-check, no failure stamped)", async () => {
+    const db = relay.moteDb.db;
+    const w = await pricedAgent();
+    const body = { prompt: `907 r10 nohead ${crypto.randomUUID()}`, submitted_by: w };
+    facilitator.settleMode = { refuse: "invalid_exact_evm_insufficient_balance" };
+    await submit(w, crypto.randomUUID(), body, await paymentFor(w, body, "0xNoHead"));
+    facilitator.settleMode = "ok";
+    facilitator.chainTime = recOf(w).valid_before + 10_000;
+    await reconcilePendingX402Settlements(db, fakeChainReader({ failing: true }), NOW);
+    expect(
+      x402Records().find((x) => x.delegator_id === w) as unknown as {
+        resolved_head_ts: number | null;
+        recheck_count: number;
+      },
+    ).toMatchObject({ resolved_head_ts: null, recheck_count: 0 });
   });
 });

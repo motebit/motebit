@@ -236,6 +236,17 @@ export interface X402SettlementRecord {
   scanned_to_block: number | null;
   /** First wall-clock time a complete scan saw it unexecuted past `validBefore`; expiry needs a second. */
   expiry_observed_at: number | null;
+  /**
+   * CHAIN-time stamps (the confirmed head's own timestamp, unix s) that every
+   * wait is measured on (#907 round 10) — the confirmation gap from
+   * `expiry_observed_head_ts`, the first re-check from `resolved_head_ts`,
+   * each later one at `next_recheck_head_ts`. The wall-clock columns beside
+   * them are for the operator's eyes only: a relay clock that ran fast and was
+   * corrected would otherwise hold a record back by the size of the jump.
+   */
+  expiry_observed_head_ts: number | null;
+  resolved_head_ts: number | null;
+  next_recheck_head_ts: number | null;
   /** Re-checks spent on a `failed` record, and when the next one may run. */
   recheck_count: number;
   next_recheck_at: number | null;
@@ -373,12 +384,18 @@ export function markX402Failed(
   payer: string,
   nonce: string,
   reason: string,
+  /**
+   * The confirmed head's timestamp the failure was decided at. The request
+   * path has no chain reader and passes null: the reconciler stamps the head
+   * it first sees the record under (`stampUnobservedFailures`).
+   */
+  headTs: number | null = null,
 ): boolean {
   const info = db
     .prepare(
-      "UPDATE relay_x402_settlements SET status = 'failed', failure_reason = ?, resolved_at = ?, pass_cursor = NULL WHERE payer = ? AND nonce = ? AND status = 'pending'",
+      "UPDATE relay_x402_settlements SET status = 'failed', failure_reason = ?, resolved_at = ?, resolved_head_ts = ?, pass_cursor = NULL WHERE payer = ? AND nonce = ? AND status = 'pending'",
     )
-    .run(reason, Date.now(), payer, nonce);
+    .run(reason, Date.now(), headTs, payer, nonce);
   return info.changes === 1;
 }
 
@@ -891,8 +908,8 @@ const RANGE_LIMIT_ERROR =
  *      `execution_mismatch`.
  *   4. `AuthorizationCanceled(payer, nonce)` ⇒ failed `cancelled`.
  *   5. Expiry: the ordinary pass reaching the fixed end with no event records
- *      `expiry_observed_at`. A full confirming pass starts once
- *      `expiryConfirmGapMs` has passed and, on reaching the end with no event,
+ *      `expiry_observed_head_ts` (the head's timestamp). A full confirming pass
+ *      starts once the head is `expiryConfirmGapMs` of CHAIN time later and, on reaching the end with no event,
  *      declares `authorization_expired_unused`.
  *   6. A re-check of a `failed` record is a full pass; it is SPENT when it
  *      concludes (an event found, or the end reached), never while in
@@ -907,6 +924,8 @@ export async function reconcileX402Settlement(
   opts: { operator?: boolean } = {},
 ): Promise<ReconcileDecision> {
   const recheck = rec.status === "failed";
+  /** The confirmed head's timestamp this run read (set before any spend). */
+  let chainNow = 0;
   const spendRecheck = (): void => {
     if (!recheck) return;
     // Guarded by the generation this run observed (both budgets): a pass
@@ -930,15 +949,23 @@ export async function reconcileX402Settlement(
     }
     const done = rec.recheck_count + 1;
     const wait = p.recheckBackoffMs[done];
+    // The next re-check waits in CHAIN time (round 10); the wall-clock
+    // `next_recheck_at` is informational.
     db.prepare(
-      "UPDATE relay_x402_settlements SET recheck_count = ?, next_recheck_at = ?, pass_cursor = NULL WHERE payer = ? AND nonce = ? AND status = 'failed' AND recheck_count = ? AND mismatch_rechecks = ?",
-    ).run(done, wait != null ? Date.now() + wait : null, ...gen);
+      "UPDATE relay_x402_settlements SET recheck_count = ?, next_recheck_at = ?, next_recheck_head_ts = ?, pass_cursor = NULL WHERE payer = ? AND nonce = ? AND status = 'failed' AND recheck_count = ? AND mismatch_rechecks = ?",
+    ).run(
+      done,
+      wait != null ? Date.now() + wait : null,
+      wait != null ? chainNow + chainSeconds(wait) : null,
+      ...gen,
+    );
   };
   db.prepare(
     `UPDATE relay_x402_settlements SET last_checked_at = ${NEXT_QUEUE_STAMP_SQL} WHERE payer = ? AND nonce = ?`,
   ).run(Date.now(), rec.payer, rec.nonce);
   try {
     const head = await reader.getConfirmedHead();
+    chainNow = head.timestamp;
     const expiryTs = rec.valid_before + p.expiryMarginSeconds;
     const stillValid = head.timestamp <= expiryTs;
     let from = rec.scan_from_block;
@@ -963,8 +990,12 @@ export async function reconcileX402Settlement(
     // otherwise "scan" blocks it does not have (Geth clamps silently) and
     // conclude over them (#907 round 9).
     const ceiling = end != null ? Math.min(end, head.number) : head.number;
-    const confirming = !recheck && rec.expiry_observed_at != null;
-    if (confirming && Date.now() - rec.expiry_observed_at! < p.expiryConfirmGapMs) {
+    // The two expiry observations are separated in CHAIN time (round 10).
+    const confirming = !recheck && rec.expiry_observed_head_ts != null;
+    if (
+      confirming &&
+      head.timestamp - rec.expiry_observed_head_ts! < chainSeconds(p.expiryConfirmGapMs)
+    ) {
       return "still_pending"; // the second observation waits out the gap
     }
     const fullPass = recheck || confirming;
@@ -1013,7 +1044,7 @@ export async function reconcileX402Settlement(
           ).run(rec.payer, rec.nonce);
           spendRecheck();
         } else {
-          markX402Failed(db, rec.payer, rec.nonce, "execution_mismatch");
+          markX402Failed(db, rec.payer, rec.nonce, "execution_mismatch", head.timestamp);
         }
         return "execution_mismatch";
       }
@@ -1038,7 +1069,7 @@ export async function reconcileX402Settlement(
           idempotencyKey: rec.idempotency_key,
         });
         if (recheck) spendRecheck();
-        else markX402Failed(db, rec.payer, rec.nonce, "execution_mismatch");
+        else markX402Failed(db, rec.payer, rec.nonce, "execution_mismatch", head.timestamp);
         return "execution_mismatch";
       }
       if (credited) {
@@ -1061,7 +1092,7 @@ export async function reconcileX402Settlement(
         spendRecheck();
         return "unchanged";
       }
-      markX402Failed(db, rec.payer, rec.nonce, "authorization_cancelled");
+      markX402Failed(db, rec.payer, rec.nonce, "authorization_cancelled", head.timestamp);
       logger.info("x402.reconcile.cancelled", {
         payer: rec.payer,
         nonce: rec.nonce,
@@ -1081,11 +1112,11 @@ export async function reconcileX402Settlement(
     if (!concluded) return stillValid ? "authorization_still_valid" : "still_pending";
     if (!confirming) {
       db.prepare(
-        "UPDATE relay_x402_settlements SET expiry_observed_at = ? WHERE payer = ? AND nonce = ? AND status = 'pending' AND expiry_observed_at IS NULL",
-      ).run(Date.now(), rec.payer, rec.nonce);
+        "UPDATE relay_x402_settlements SET expiry_observed_at = ?, expiry_observed_head_ts = ? WHERE payer = ? AND nonce = ? AND status = 'pending' AND expiry_observed_head_ts IS NULL",
+      ).run(Date.now(), head.timestamp, rec.payer, rec.nonce);
       return "expiry_observed";
     }
-    markX402Failed(db, rec.payer, rec.nonce, "authorization_expired_unused");
+    markX402Failed(db, rec.payer, rec.nonce, "authorization_expired_unused", head.timestamp);
     logger.info("x402.reconcile.expired_unused", {
       payer: rec.payer,
       nonce: rec.nonce,
@@ -1145,6 +1176,23 @@ const SELECTION_ORDER = "ORDER BY COALESCE(last_checked_at, created_at) ASC, cre
  * chain-time one against `headTs` (the confirmed head's timestamp) passed in.
  * Exported so the selection can be tested directly.
  */
+/**
+ * A failure the request path decided (a definite facilitator refusal) has no
+ * chain time: the request holds no chain reader. The reconciler stamps it with
+ * the confirmed head it first sees the record under, and its first re-check
+ * waits from there — at most one loop tick later than the failure itself.
+ */
+function stampUnobservedFailures(db: DatabaseDriver, headTs: number): void {
+  db.prepare(
+    "UPDATE relay_x402_settlements SET resolved_head_ts = ? WHERE status = 'failed' AND resolved_head_ts IS NULL",
+  ).run(headTs);
+}
+
+/** A wall-clock duration (ms) as chain seconds, rounded up. */
+function chainSeconds(ms: number): number {
+  return Math.ceil(ms / 1000);
+}
+
 export function selectX402Candidates(
   db: DatabaseDriver,
   headTs: number | null,
@@ -1161,12 +1209,13 @@ export function selectX402Candidates(
   const failed = db
     .prepare(
       // The first re-check waits backoff[0] from the moment the record failed
-      // (`resolved_at`); each later one waits the next backoff. A mismatch has
+      // (`resolved_head_ts`); each later one waits the next backoff — all in
+      // CHAIN time, against the confirmed head's timestamp (round 10). A mismatch has
       // its own one-re-check budget.
       `SELECT * FROM relay_x402_settlements WHERE status = 'failed'
          AND ((failure_reason IN (${placeholders}) AND recheck_count < ?)
               OR (failure_reason = 'execution_mismatch' AND mismatch_rechecks < ?))
-         AND COALESCE(next_recheck_at, resolved_at + ?) <= ?
+         AND COALESCE(next_recheck_head_ts, resolved_head_ts + ?) <= ?
          AND valid_before + ? < ?
        ${SELECTION_ORDER} LIMIT ?`,
     )
@@ -1174,8 +1223,8 @@ export function selectX402Candidates(
       ...RECHECKABLE_FAILURES,
       p.recheckBackoffMs.length,
       MISMATCH_RECHECKS,
-      p.recheckBackoffMs[0] ?? 0,
-      Date.now(),
+      chainSeconds(p.recheckBackoffMs[0] ?? 0),
+      headTs,
       p.expiryMarginSeconds,
       headTs,
       limit,
@@ -1200,6 +1249,7 @@ export async function reconcilePendingX402Settlements(
     headTs = null; // no re-checks this run; pending still visited
     result.errors += 1;
   }
+  if (headTs != null) stampUnobservedFailures(db, headTs);
   const { pending, failed } = selectX402Candidates(db, headTs, p, limit);
   for (const rec of [...pending, ...failed]) {
     const d = await reconcileX402Settlement(db, reader, rec, p);
