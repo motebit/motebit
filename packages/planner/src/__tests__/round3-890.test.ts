@@ -211,6 +211,22 @@ describe("#890 r3 finding 1: offline at submit is resolved by re-posting under t
     expect(r.state.posts).toEqual([]);
   });
 
+  it("r4 T2: a held step with no recorded submission time cannot prove its window — hold, never re-post", async () => {
+    const r = relay();
+    r.state.online = true;
+    vi.stubGlobal("fetch", r.fetchMock);
+    const store = planStore([mkStep("s1", 0, { status: StepStatus.Running, started_at: null })]);
+    const engine = new PlanEngine(store, {
+      delegationAdapter: relayAdapter(),
+      localCapabilities: [],
+      enableReflection: false,
+      delegationTimeoutMs: 20,
+    });
+    const chunks = await collect(engine.resumePlan(PLAN, deps));
+    expect(chunks.map((c) => c.type)).toEqual(["plan_undetermined"]);
+    expect(r.state.posts).toEqual([]);
+  });
+
   it("an adapter that cannot re-post idempotently (sovereign pay-forward) holds, never re-delegates", async () => {
     const delegateStep = vi.fn();
     const store = planStore([

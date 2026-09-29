@@ -8,7 +8,10 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { DeviceCapability, StepStatus } from "@motebit/sdk";
-import type { PlanStep, PlanId } from "@motebit/sdk";
+import type { PlanStep, PlanId, MotebitId, SensitivityCleared } from "@motebit/sdk";
+import { PlanStatus } from "@motebit/sdk";
+import type { MotebitLoopDependencies } from "@motebit/ai-core";
+import { PlanEngine, InMemoryPlanStore } from "@motebit/planner";
 import {
   createHttpPollingDelegationAdapter,
   DelegationUndeterminedError,
@@ -375,5 +378,60 @@ describe("delegate --plan HTTP-polling adapter: an unconfirmed submission keeps 
     expect(r.task_id).toBe("task-named");
     expect(persisted).toEqual(["task-named"]);
     expect(posts).toBe(1);
+  });
+});
+
+describe("#890 r4 T4: the http adapter re-posts a held step through the plan engine", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("a step held with no task id (offline at submit) is re-posted under its derived key on resume", async () => {
+    const relay = fakeRelay();
+    relay.answerWith((id) => ({
+      status: 200,
+      body: { task: { status: "completed" }, receipt: receipt(id, "completed") },
+    }));
+    vi.stubGlobal("fetch", relay.fetchMock);
+    const store = new InMemoryPlanStore();
+    store.savePlan({
+      plan_id: "plan-1" as PlanId,
+      goal_id: "g",
+      motebit_id: "me" as MotebitId,
+      title: "t",
+      status: PlanStatus.Active,
+      created_at: 1,
+      updated_at: 1,
+      current_step_index: 0,
+      total_steps: 1,
+    });
+    store.saveStep({
+      ...step,
+      required_capabilities: ["stdio_mcp" as never],
+      status: StepStatus.Running,
+      started_at: Date.now(),
+    });
+    const engine = new PlanEngine(store, {
+      delegationAdapter: createHttpPollingDelegationAdapter({
+        relayUrl: "http://relay",
+        motebitId: "me",
+        submitHeaders: {},
+        queryHeaders: async () => ({}),
+        maxRetries: 1,
+        pollIntervalMs: 1,
+      }),
+      localCapabilities: [],
+      enableReflection: false,
+      delegationTimeoutMs: 50,
+    });
+    const types: string[] = [];
+    for await (const c of engine.resumePlan(
+      "plan-1",
+      {} as SensitivityCleared<MotebitLoopDependencies>,
+    )) {
+      types.push(c.type);
+    }
+    expect(types).toContain("plan_completed");
+    expect(relay.keys).toEqual(["plan-step:plan-1:step-1:0"]);
   });
 });
