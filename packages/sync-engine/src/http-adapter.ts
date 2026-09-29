@@ -36,12 +36,13 @@ export interface HttpAdapterConfig {
   /**
    * A request's deadline (#914): the time it may take to get its first byte
    * back, before the adapter ADAPTS — never before it kills the request
-   * (round 7). A push that misses it hands its slot on to the next push. A
-   * request queued behind the link's other bodies is left alone; otherwise
-   * a small probe asks whether the relay is answering right now, and only
-   * if it is — while this request is not — the next pull pages shrink
-   * (until answered pages give a per-event estimate) and a second attempt
-   * starts beside this one (which may yet complete: it is not cut off). The
+   * (round 7). A push that misses it hands its slot on to the next push.
+   * Otherwise a small probe asks whether the relay is answering right now,
+   * and only if it is — while this request is not — the next pull pages
+   * shrink (until answered pages give a per-event estimate) and a second
+   * attempt starts beside this one (which may yet complete: it is not cut
+   * off). That second attempt is the one stated exception to never sending
+   * work in flight again: its first may be on a dead connection. The
    * only kill is the stated exclusion: 64 × this of SILENCE — no byte for
    * the attempt, none on its link. Default 20 000 ms.
    */
@@ -538,8 +539,7 @@ export class HttpEventStoreAdapter implements EventStoreAdapter, SeqPullSource {
    * One request, run under the liveness law (#914 round 7). The first
    * attempt starts at once. Whenever the newest attempt misses its deadline
    * (no first byte in `requestTimeoutMs`, or a body silent for
-   * `bodyIdleTimeoutMs`) while the link carries none of our other bodies,
-   * `onSilent` is told, and a small probe (one per link at a time) asks
+   * `bodyIdleTimeoutMs`), `onSilent` is told, and a small probe (one per link at a time) asks
    * whether the relay is answering right now; only if it is — while this
    * request is not — `onMiss` adapts and a second attempt starts beside the
    * first (up to MAX_ATTEMPTS). No attempt is cut off for missing a
@@ -620,15 +620,6 @@ export class HttpEventStoreAdapter implements EventStoreAdapter, SeqPullSource {
         if (!a) return;
         const limit = a.answered ? this.bodyIdleTimeoutMs : this.requestTimeoutMs;
         if (Date.now() - Math.max(a.progressAt, a.windowFrom) < limit) {
-          arm();
-          return;
-        }
-        const link = this.link;
-        const otherBodies = link.bodies - (a.inBody ? 1 : 0);
-        if (otherBodies > 0 || (!a.inBody && Date.now() - link.lastByteAt < limit)) {
-          // The link is carrying other bytes of ours: this attempt is queued
-          // behind them, not lost. Nothing adapts; look again a deadline on.
-          a.windowFrom = Date.now();
           arm();
           return;
         }

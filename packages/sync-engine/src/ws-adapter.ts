@@ -1,4 +1,3 @@
-import { noteSample, perEventMs, type LinkSample } from "./link-estimate.js";
 import type { EventLogEntry } from "@motebit/sdk";
 import type { EventStoreAdapter, EventFilter } from "@motebit/event-log";
 import type { CredentialSource, CredentialRequest } from "./credential-source.js";
@@ -140,8 +139,6 @@ interface FrameState {
   fullAtCeiling: number;
   /** The relay echoes `push_id` in its acks, so frames may overlap. */
   echoes: boolean;
-  /** Recent acks: frame size and send→ack time (#914 round 7). */
-  samples: LinkSample[];
   /**
    * Push frames still on the wire on RETIRED sockets of this stream: they
    * drain beside the current socket's frames over the same uplink.
@@ -152,12 +149,6 @@ interface FrameState {
   /** Adapters waiting for a place in the stream's window (see `flushPush`). */
   waiting: Set<() => void>;
 }
-
-/**
- * A frame's transmission is kept within this many ack deadlines by the
- * per-event estimate — far inside the 64 of silence that judge a socket dead.
- */
-const FRAME_BUDGET_DEADLINES = 4;
 
 /** A push frame on the wire. */
 interface InFlightFrame {
@@ -307,14 +298,11 @@ export class WebSocketEventStoreAdapter implements EventStoreAdapter {
   /** Appended events not yet in a frame (queued while offline, or behind the frame in flight). */
   private outbox: PendingPush[] = [];
   /**
-   * What the link taught about frame size (#914 rounds 4–7). Once acks of
-   * two frame sizes give a per-event estimate (`perEventMs`), a frame is as
-   * large as crosses within FRAME_BUDGET_DEADLINES ack deadlines. Before
-   * that, a frame not acked in time halves the NEXT frames (down to 1; the
-   * late frame itself stays in flight, never re-sent), and the size grows
-   * back by doubling after full frames are acked, up to `ceiling`: the size
-   * known to fit — which itself doubles after PUSH_CEILING_PROBE_AFTER full
-   * frames at it.
+   * What the link taught about frame size (#914 rounds 4–7). A frame not
+   * acked in time halves the NEXT frames (down to 1; the late frame itself
+   * stays in flight, never re-sent), and the size grows back by doubling
+   * after full frames are acked, up to `ceiling`: the size known to fit —
+   * which itself doubles after PUSH_CEILING_PROBE_AFTER full frames at it.
    *
    * Kept per (socket URL, device id) for the life of the process — beside
    * the pacing budget — never per adapter (#914 round 6): mobile rebuilds its
@@ -329,7 +317,6 @@ export class WebSocketEventStoreAdapter implements EventStoreAdapter {
         ceiling: MAX_EVENTS_PER_PUSH_FRAME,
         fullAtCeiling: 0,
         echoes: false,
-        samples: [],
         draining: new Set(),
         lastAnswerAt: 0,
         waiting: new Set(),
@@ -1007,7 +994,7 @@ export class WebSocketEventStoreAdapter implements EventStoreAdapter {
       this.frame.draining.delete(frame);
       if (!refused) {
         this.active();
-        this.sizeFromAck(frame);
+        if (frame.items.length >= this.frame.limit) this.fullFrameAcked();
       }
       for (const item of frame.items) settle(item, refused);
     }
@@ -1098,15 +1085,10 @@ export class WebSocketEventStoreAdapter implements EventStoreAdapter {
   private onPushTimeout(socket: WebSocket, frame: InFlightFrame): void {
     if (!this.inFlight.includes(frame) || frame.socket !== socket) return;
     const n = frame.items.length;
-    // Until acks of two sizes tell latency from link time, a miss halves the
-    // next frames (again on each miss). After that the estimate sizes them:
-    // a relay that is slow to ack, not a link too slow for the frame, must
-    // not shrink frames to one event.
-    if (perEventMs(this.frame.samples) === null) {
-      this.frame.limit = Math.max(1, Math.floor(Math.min(this.frame.limit, n) / 2));
-      this.frame.ceiling = this.frame.limit;
-      this.frame.fullAtCeiling = 0;
-    }
+    // Each miss halves the next frames again (never the late frame itself).
+    this.frame.limit = Math.max(1, Math.floor(Math.min(this.frame.limit, n) / 2));
+    this.frame.ceiling = this.frame.limit;
+    this.frame.fullAtCeiling = 0;
     const now = Date.now();
     const cap = this.ackTimeoutMs * MAX_ACK_STRETCH;
     // Quiet since the frame went out, since the socket last showed life, or
@@ -1119,7 +1101,6 @@ export class WebSocketEventStoreAdapter implements EventStoreAdapter {
       if (f.sentAt < frame.sentAt) oldest = false;
     }
     if (oldest && now - quietSince >= cap) {
-      this.frame.samples = []; // what the link taught is in doubt: learn it again
       this.failFramesOn(socket, new Error("sync push: the socket is dead (nothing arrived on it)"));
       if (this.ws === socket) this.dropSocket(socket);
       else this.closeIfDrained(socket);
@@ -1142,28 +1123,6 @@ export class WebSocketEventStoreAdapter implements EventStoreAdapter {
   hasLiveWork(): boolean {
     if (this.inFlight.some((f) => f.socket === this.ws)) return true;
     return this.connected && this.outbox.length > 0;
-  }
-
-  /**
-   * A frame was acked: learn from its time, and size the next frames. With
-   * a per-event estimate, a frame is as large as fits FRAME_BUDGET_DEADLINES
-   * (growing by doubling after full frames); without one, the ceiling rule.
-   */
-  private sizeFromAck(frame: InFlightFrame): void {
-    const n = frame.items.length;
-    const st = this.frame;
-    noteSample(st.samples, n, Date.now() - frame.sentAt);
-    const per = perEventMs(st.samples);
-    if (per === null) {
-      if (n >= st.limit) this.fullFrameAcked();
-      return;
-    }
-    const budget = this.ackTimeoutMs * FRAME_BUDGET_DEADLINES;
-    const fits = per > 0 ? Math.max(1, Math.floor(budget / per)) : MAX_EVENTS_PER_PUSH_FRAME;
-    const target = Math.min(MAX_EVENTS_PER_PUSH_FRAME, fits);
-    st.ceiling = MAX_EVENTS_PER_PUSH_FRAME;
-    st.fullAtCeiling = 0;
-    st.limit = Math.min(target, n >= st.limit ? st.limit * 2 : st.limit);
   }
 
   /** A full frame was acked: grow toward the ceiling, and probe past it now and then. */

@@ -171,6 +171,38 @@ export class SimNet {
   readonly framesInFlight = new Map<string, number>();
   /** Socket push frames that carried an event already in flight in another frame (#914 r7). */
   resentInFlight = 0;
+  /**
+   * An outage: until this time, every HTTP request is BLACK-HOLED — accepted
+   * and never answered (a dead connection), ended only by its own abort.
+   */
+  blackholeUntil = 0;
+  /** Per event, the HTTP push requests carrying it that are on the wire; `hung` if black-holed. */
+  private readonly httpPushes = new Map<string, Array<{ hung: boolean }>>();
+  /** HTTP pushes that re-sent an event while a request carrying it was on the wire and NOT black-holed. */
+  httpResentLive = 0;
+  /** HTTP pushes that re-sent an event while its only requests on the wire were black-holed (the exception). */
+  httpResentHung = 0;
+
+  private httpPushOut(ids: readonly string[], hung: boolean): () => void {
+    const mine = { hung };
+    for (const id of ids) {
+      const on = this.httpPushes.get(id) ?? [];
+      if (on.some((r) => !r.hung)) this.httpResentLive++;
+      else if (on.length > 0) this.httpResentHung++;
+      on.push(mine);
+      this.httpPushes.set(id, on);
+    }
+    let done = false;
+    return () => {
+      if (done) return;
+      done = true;
+      for (const id of ids) {
+        const on = (this.httpPushes.get(id) ?? []).filter((r) => r !== mine);
+        if (on.length > 0) this.httpPushes.set(id, on);
+        else this.httpPushes.delete(id);
+      }
+    };
+  }
 
   frameOut(ids: readonly string[]): void {
     for (const id of ids) {
@@ -219,8 +251,19 @@ export class SimNet {
       const pending: Tx[] = [];
       let bodyCtl: ReadableStreamDefaultController<Uint8Array> | null = null;
       let replyTimer: ReturnType<typeof setTimeout> | null = null;
+      const isPush = path.endsWith("/push") && init?.method === "POST";
+      const hung = Date.now() < this.blackholeUntil;
+      const pushDone = isPush
+        ? this.httpPushOut(
+            (JSON.parse(init.body as string) as { events: EventLogEntry[] }).events.map(
+              (e) => e.event_id,
+            ),
+            hung,
+          )
+        : (): void => {};
       signal?.addEventListener("abort", () => {
         trace(`fetch ${tag} ABORT`);
+        pushDone();
         dead = true;
         for (const tx of pending) tx.link.cancel(tx);
         if (replyTimer) clearTimeout(replyTimer);
@@ -236,14 +279,16 @@ export class SimNet {
           if (!dead) fn();
         }, ms);
       };
-      if (path.endsWith("/push") && init?.method === "POST") {
+      if (hung) return; // black-holed: never answered; only its abort ends it
+      if (isPush) {
         const events = (JSON.parse(init.body as string) as { events: EventLogEntry[] }).events;
         pending.push(
           this.up.send(this.cfg.upMs * events.length, () => {
             this.relay.store(events);
-            later(this.relay.latencyMs, () =>
-              resolve(NativeResponse.json({ motebit_id: this.relay.mid, accepted: events.length })),
-            );
+            later(this.relay.latencyMs, () => {
+              pushDone();
+              resolve(NativeResponse.json({ motebit_id: this.relay.mid, accepted: events.length }));
+            });
           }),
         );
         return;

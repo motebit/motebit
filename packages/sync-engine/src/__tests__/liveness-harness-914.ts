@@ -86,14 +86,36 @@ export interface Cell {
   /** Relay latency, seconds. */
   L: number;
   backlog: number;
+  /**
+   * The relay is black-holed for the first OUTAGE_MS (every HTTP request
+   * accepted and never answered — a dead connection), then recovers; the
+   * horizon ends RECOVERY_MS after. The cell asks: does the branch deliver
+   * within a few cycles of recovery, as main (which never joins a request
+   * and so sends afresh every cycle) does?
+   */
+  outage?: true;
 }
+
+const OUTAGE_MS = 10 * 60 * 1000;
+const RECOVERY_MS = 3 * 60 * 1000;
 
 export interface Outcome {
   delivered: number;
   total: number;
   cursorSafe: boolean;
-  /** Socket frames that re-sent an event while a frame carrying it was still in flight (branch). */
+  /**
+   * Pushes that re-sent an event while a push carrying it was still on the
+   * wire and live (branch): socket frames, and HTTP requests except the one
+   * exception below. Must be 0.
+   */
   resentInFlight?: number;
+  /**
+   * The stated EXCEPTION (#914 r7b): HTTP pushes that re-sent an event while
+   * every request carrying it was black-holed — the hedged second attempt,
+   * started only after a deadline miss AND a probe the relay answers.
+   * Allowed only in outage cells; must be 0 everywhere else.
+   */
+  resentHung?: number;
   /**
    * The push cursor reached, within a quiet L + 15 min after the horizon,
    * every event the relay held at the horizon (branch; push cells).
@@ -117,6 +139,7 @@ function event(id: string, clock: number, device: string): EventLogEntry {
 }
 
 export function horizonMs(c: Cell): number {
+  if (c.outage) return OUTAGE_MS + RECOVERY_MS;
   return Math.max(10 * c.u * S * BATCH, 30 * MIN);
 }
 
@@ -148,6 +171,7 @@ function world(c: Cell): World {
     upMs: c.dir === "push" ? c.u * S : 10,
     downMs: c.dir === "pull" ? c.u * S : 10,
   });
+  if (c.outage) net.blackholeUntil = Date.now() + OUTAGE_MS;
   const local = new InMemoryEventStore();
   const base = `http://relay${n}.harness`;
   const wsUrl = `ws://relay${n}.harness/ws/sync/${MID}`;
@@ -424,7 +448,8 @@ async function runBranch(c: Cell): Promise<Outcome> {
   }
   await runFor(horizonMs(c));
   const out = await measure(w, c, engine.getCursor().last_version_clock);
-  out.resentInFlight = w.net.resentInFlight;
+  out.resentInFlight = w.net.resentInFlight + w.net.httpResentLive;
+  out.resentHung = w.net.httpResentHung;
   if (c.dir === "push") {
     // An acknowledgment moves the cursor whenever it arrives: every event
     // the relay held at the horizon is acknowledged within L, so a quiet
@@ -480,6 +505,12 @@ export function sweep(): Cell[] {
       add({ dir: "pull", life: "http", flavour: "rn", u, L, backlog: 150 });
     }
   }
+  // An outage (a black-holed relay) on the HTTP doors, push and pull, both flavours.
+  for (const flavour of ["node", "rn"] as const) {
+    for (const dir of ["push", "pull"] as const) {
+      add({ dir, life: "http", flavour, u: 0.2, L: 0, backlog: 1, outage: true });
+    }
+  }
   return cells;
 }
 
@@ -508,14 +539,17 @@ export async function runCell(c: Cell): Promise<{ main: Outcome; branch: Outcome
 }
 
 export function cellName(c: Cell): string {
-  return `${c.dir} ${c.life} ${c.flavour} u=${c.u}s L=${c.L}s backlog=${c.backlog}`;
+  return `${c.dir} ${c.life} ${c.flavour} u=${c.u}s L=${c.L}s backlog=${c.backlog}${c.outage ? " outage" : ""}`;
 }
 
 export function verdict(c: Cell, r: { main: Outcome; branch: Outcome }): string | null {
   const name = cellName(c);
   if (!r.branch.cursorSafe) return `${name}: the cursor passed an event the relay does not hold`;
   if ((r.branch.resentInFlight ?? 0) > 0) {
-    return `${name}: ${r.branch.resentInFlight} socket frame(s) re-sent an event still in flight`;
+    return `${name}: ${r.branch.resentInFlight} push(es) re-sent an event still in flight`;
+  }
+  if (!c.outage && (r.branch.resentHung ?? 0) > 0) {
+    return `${name}: ${r.branch.resentHung} hedged HTTP push(es) outside an outage`;
   }
   if (r.branch.cursorLive === false) {
     return `${name}: an acknowledgment never moved the cursor (quiet L + 15 min after the horizon)`;
@@ -531,6 +565,10 @@ export function verdict(c: Cell, r: { main: Outcome; branch: Outcome }): string 
 
 /** Cells that went red on some iteration of the round-7 design: each a regression it fixed. */
 export const REGRESSIONS: readonly string[] = [
+  "push http node u=0.2s L=0s backlog=1 outage",
+  "push http rn u=0.2s L=0s backlog=1 outage",
+  "pull http node u=0.2s L=0s backlog=1 outage",
+  "pull http rn u=0.2s L=0s backlog=1 outage",
   "push persistent-ws node u=0.01s L=300s backlog=1",
   "pull rebuild-ws node u=0.01s L=300s backlog=150",
   "pull persistent-ws node u=0.01s L=300s backlog=150",
@@ -618,7 +656,7 @@ export function defineShard(k: number): void {
         }
         if (process.env.MOTEBIT_LIVENESS_VERBOSE) {
           process.stdout.write(
-            `CELL ${name}: main ${r.main.delivered}/${r.main.total} branch ${r.branch.delivered}/${r.branch.total} safe=${r.branch.cursorSafe} resent=${r.branch.resentInFlight ?? 0} live=${r.branch.cursorLive ?? "-"}\n`,
+            `CELL ${name}: main ${r.main.delivered}/${r.main.total} branch ${r.branch.delivered}/${r.branch.total} safe=${r.branch.cursorSafe} resent=${r.branch.resentInFlight ?? 0} hedged=${r.branch.resentHung ?? 0} live=${r.branch.cursorLive ?? "-"}\n`,
           );
         }
         const v = verdict(c, r);
