@@ -20,9 +20,10 @@ import {
   bytesToHex,
   signExecutionReceipt,
   verifySignedToken,
+  mintAudienceToken,
   hash as sha256,
 } from "@motebit/encryption";
-import { McpServerAdapter } from "@motebit/mcp-server";
+import { McpServerAdapter, AgentTrustLevel } from "@motebit/mcp-server";
 import type { SyncRelay, ConnectedDevice } from "../index.js";
 import {
   API_TOKEN,
@@ -111,6 +112,9 @@ async function scenario(
   const mcpOwner = mode === "other" ? xId : worker;
   const mcpKp = mode === "other" ? xkp : kp;
   const mcpPort = nextPort++;
+  // A submitter that presents directly does so AS ITSELF (#981).
+  const subKp = await generateKeypair();
+  const SUBMITTER = "submitter-0000-0000-0000-000000000981";
   let mcpExec = 0;
   let mcpDenied = 0;
   const adapter = new McpServerAdapter(
@@ -118,6 +122,12 @@ async function scenario(
       transport: "http",
       port: mcpPort,
       taskAdmission: { relayPublicKey: relay.relayIdentity.publicKeyHex },
+      knownCallers: new Map([
+        [
+          SUBMITTER,
+          { publicKey: bytesToHex(subKp.publicKey), trustLevel: AgentTrustLevel.FirstContact },
+        ],
+      ]),
     },
     {
       motebitId: mcpOwner,
@@ -295,6 +305,20 @@ async function scenario(
       undefined,
       j.dispatch_token,
       { allowPrivateNetwork: true } as never,
+      // The submitter's OWN caller token per request, never the dispatch token (#981).
+      async () =>
+        (
+          await mintAudienceToken(
+            {
+              mid: SUBMITTER,
+              did: "submitter-device",
+              aud: "mcp:call",
+              sub: worker,
+              ttlMs: 60_000,
+            },
+            subKp.privateKey,
+          )
+        ).token,
     );
   }
   // The worker's device reconnects shortly after (backoff ~300ms).

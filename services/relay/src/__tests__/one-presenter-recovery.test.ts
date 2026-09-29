@@ -38,10 +38,11 @@ import {
   signExecutionReceipt,
   verifySignedToken,
   createSignedToken,
+  mintAudienceToken,
   hash as sha256,
   // eslint-disable-next-line no-restricted-imports -- tests need direct keypair generation
 } from "@motebit/encryption";
-import { McpServerAdapter } from "@motebit/mcp-server";
+import { McpServerAdapter, AgentTrustLevel } from "@motebit/mcp-server";
 import type { SyncRelay, ConnectedDevice } from "../index.js";
 import {
   API_TOKEN,
@@ -164,6 +165,10 @@ async function scenario(
   const mcpOwner = mode === "other" ? xId : worker;
   const mcpKp = mode === "other" ? xkp : kp;
   const mcpPort = nextPort++;
+  // A submitter that presents directly does so AS ITSELF (its own mcp:call
+  // bearer), never as the relay (#981): the worker knows it as a caller.
+  const subKp = await generateKeypair();
+  const SUBMITTER = "submitter-0000-0000-0000-000000000981";
   let mcpExec = 0;
   let endpoint = `http://127.0.0.1:${mcpPort}`;
   let endpointPosts = 0;
@@ -240,6 +245,12 @@ async function scenario(
         transport: "http",
         port: mcpPort,
         taskAdmission: { relayPublicKey: relay.relayIdentity.publicKeyHex },
+        knownCallers: new Map([
+          [
+            SUBMITTER,
+            { publicKey: bytesToHex(subKp.publicKey), trustLevel: AgentTrustLevel.FirstContact },
+          ],
+        ]),
       },
       {
         motebitId: mcpOwner,
@@ -439,7 +450,10 @@ async function scenario(
   const j = (await res.json()) as { task_id: string; dispatch_token?: string };
 
   if ((mode === "present" || mode === "chosen") && typeof j.dispatch_token === "string") {
-    // The submitter presents its token directly at the worker's endpoint.
+    // The submitter presents its token directly at the worker's endpoint —
+    // the token as the admission argument, its OWN caller token (fresh per
+    // request) as the bearer. Before #981 this site presented the dispatch
+    // token as the bearer, which the worker served as the relay.
     void forwardTaskViaMcp(
       endpoint,
       j.task_id,
@@ -451,6 +465,19 @@ async function scenario(
       undefined,
       j.dispatch_token,
       { allowPrivateNetwork: true } as never,
+      async () =>
+        (
+          await mintAudienceToken(
+            {
+              mid: SUBMITTER,
+              did: "submitter-device",
+              aud: "mcp:call",
+              sub: worker,
+              ttlMs: 60_000,
+            },
+            subKp.privateKey,
+          )
+        ).token,
     );
   }
   // The device reconnects shortly after (backoff), mid-forward.

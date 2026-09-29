@@ -855,6 +855,9 @@ async function mcpCell(env: CellEnv, c: Cell, ip: string): Promise<Record<string
       },
       j.dispatch_token,
       { allowPrivateNetwork: true } as never,
+      // The submitter's OWN bearer, never the dispatch token (#981). This
+      // probe's endpoint does not authenticate, so any per-request value does.
+      async () => `submitter-own-bearer.${crypto.randomUUID()}`,
     );
   }
 

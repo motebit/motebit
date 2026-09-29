@@ -76,6 +76,7 @@ import {
   evaluateSettlementEligibility,
   type ReceiptCandidate,
   mintTaskDispatchToken,
+  mintRelayMcpBearer,
 } from "./task-routing.js";
 import type { TaskRouter } from "./task-routing.js";
 import { getBondBackingAdapter } from "./bond-backing-adapter.js";
@@ -4072,6 +4073,8 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
         },
         token,
         outboundPolicy,
+        // The relay's own transport credential, fresh per request (#981).
+        () => mintRelayMcpBearer(relayIdentity, workerId),
       );
     };
     // `routed` means what it meant on main: a presenter exists — an OPEN

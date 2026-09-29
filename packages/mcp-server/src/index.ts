@@ -381,11 +381,14 @@ interface McpServerConfig {
   /**
    * The pinned relay public key (hex, or a lazy resolver) this worker
    * trusts. Enables the relay to authenticate to this worker AS ITSELF on a
-   * forward — `Authorization: Bearer motebit:<dispatch_token>` — instead of
-   * sharing its master token with every registered endpoint. The same key
-   * verifies `taskAdmission` when that is configured (one trust root, two
-   * checks). Absent ⇒ relay-signed bearers are not recognised and only
-   * static / caller-signed bearers pass transport auth.
+   * forward — `Authorization: Bearer motebit:<token>`, an `mcp:call` token
+   * signed by this key, `sub` = this worker, fresh per request, accepted once
+   * — instead of sharing its master token with every registered endpoint. A
+   * `task:dispatch` token is never accepted as the bearer: it is an admission
+   * record a submitter may hold too (#981). The same key verifies
+   * `taskAdmission` when that is configured (one trust root, two checks).
+   * Absent ⇒ relay-signed bearers are not recognised and only static /
+   * caller-signed bearers pass transport auth.
    */
   relayTrust?: { relayPublicKey: string | (() => Promise<string | null>) };
   /**
@@ -1618,24 +1621,61 @@ export class McpServerAdapter {
   }
 
   /**
-   * A relay-signed dispatch token presented as the transport bearer. Valid
-   * ⇒ the caller IS this worker's relay, dispatching a task it admitted for
-   * this worker. The token's `sub`/`digest` are checked again by
-   * `admitTask` when admission is on; here only identity + binding to this
-   * worker matter. Returns null (not a denial) when the bearer is not a
-   * relay token, so caller-signed bearers still take the normal path.
+   * The relay authenticating AS ITSELF (#981). Relay transport trust needs
+   * proof that the caller IS the relay: an `mcp:call` token signed by the
+   * pinned relay key, bound to THIS worker (`sub`), in window, and accepted
+   * once (`jti`) — the same law as any caller token (`caller-token.ts`), with
+   * the pinned relay key standing in for the caller-key lookup. The relay
+   * mints one per HTTP request of its forward.
+   *
+   * A `task:dispatch` token is never a transport credential, whoever presents
+   * it. It is an ADMISSION record the relay also hands to a submitter
+   * (`presenter: "submitter"`, or any task it did not route), so possession of
+   * it proves only that someone was given it — never that the caller is the
+   * relay. Before #981 it was accepted here, and a submitter holding one was
+   * served as `relay:<did>`.
+   *
+   * `not_relay`: the bearer does not verify under the relay key, so
+   * caller-signed bearers still take the normal path. `refused`: it DID
+   * verify under the relay key but is not an acceptable relay bearer — a
+   * 401 with the reason, never a fall-through.
    */
-  private async verifyRelayDispatchBearer(token: string): Promise<CallerIdentity | null> {
-    if (this.config.relayTrust == null && this.config.taskAdmission == null) return null;
+  private async verifyRelayBearer(
+    token: string,
+  ): Promise<
+    | { kind: "not_relay" }
+    | { kind: "relay"; caller: CallerIdentity }
+    | { kind: "refused"; reason: string }
+  > {
+    if (this.config.relayTrust == null && this.config.taskAdmission == null) {
+      return { kind: "not_relay" };
+    }
     const key = await this.resolveRelayKey();
-    if (key == null) return null;
+    if (key == null) return { kind: "not_relay" };
     const payload = this.deps.verifySignedToken
       ? await this.deps.verifySignedToken(token, key)
       : await defaultVerifySignedToken(token, key);
-    if (!payload) return null;
-    if (payload.aud !== TASK_DISPATCH_AUDIENCE) return null;
-    if (payload.mid !== this.deps.motebitId) return null;
-    return { motebitId: `relay:${payload.did}`, trustLevel: AgentTrustLevel.Verified };
+    if (!payload) return { kind: "not_relay" };
+    if (payload.aud === TASK_DISPATCH_AUDIENCE) {
+      return {
+        kind: "refused",
+        reason:
+          "a task:dispatch token admits a task (the motebit_task dispatch_token argument); it never authenticates the transport — " +
+          "the relay authenticates with a relay-signed mcp:call token bound to this worker, and a direct presenter with its own caller token (#981)",
+      };
+    }
+    const verdict = checkMcpCallerClaims(payload, this.deps.motebitId, Date.now());
+    if (!verdict.ok) return { kind: "refused", reason: `relay bearer: ${verdict.reason}` };
+    const claimed = await this.callerReplay.claim(
+      await callerReplayEntry(payload.mid, payload.jti as string, payload.exp),
+    );
+    if (claimed !== "accepted") {
+      return { kind: "refused", reason: `relay bearer: ${replayRefusalReason(claimed)}` };
+    }
+    return {
+      kind: "relay",
+      caller: { motebitId: `relay:${payload.did}`, trustLevel: AgentTrustLevel.Verified },
+    };
   }
 
   /**
@@ -1800,15 +1840,23 @@ export class McpServerAdapter {
       const bearerToken = authHeader?.startsWith("Bearer ") ? authHeader.slice(7) : undefined;
 
       if (bearerToken?.startsWith("motebit:")) {
-        // The relay authenticating as itself with the per-task dispatch
-        // token (aud task:dispatch, mid = this worker, signed by the pinned
-        // relay key) — tried first so the relay never needs to hold a
-        // worker-accepted static secret. Falls through to the caller-signed
-        // path when it is not a relay token.
-        const relayCaller = await this.verifyRelayDispatchBearer(bearerToken.slice(8));
+        // The relay authenticating as itself: a relay-signed mcp:call token
+        // bound to this worker, single-use (#981) — tried first so the relay
+        // never needs to hold a worker-accepted static secret. A dispatch
+        // token is refused here, never served as the relay. Falls through to
+        // the caller-signed path only when the bearer is not relay-signed.
+        const relay = await this.verifyRelayBearer(bearerToken.slice(8));
         let callerInfo: CallerIdentity;
-        if (relayCaller != null) {
-          callerInfo = relayCaller;
+        if (relay.kind === "refused") {
+          res.writeHead(401, {
+            "Content-Type": "application/json",
+            "WWW-Authenticate": 'Bearer error="invalid_token"',
+          });
+          res.end(JSON.stringify({ error: "invalid motebit token", reason: relay.reason }));
+          return;
+        }
+        if (relay.kind === "relay") {
+          callerInfo = relay.caller;
         } else {
           const verdict = await this.verifyCallerToken(bearerToken.slice(8));
           if (!verdict.ok) {

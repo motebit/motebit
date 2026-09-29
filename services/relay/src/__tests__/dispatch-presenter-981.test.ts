@@ -32,7 +32,7 @@
  *   - everything else is refused;
  *   - one admission ⇒ one execution.
  *
- * Tampers: scripts/tampers/981-dispatch-presenter.ts.
+ * Tampers: packages/mcp-server/tamper/dispatch-presenter-981.mjs.
  */
 import { describe, it, expect, afterEach, vi } from "vitest";
 import type { AddressInfo } from "node:net";

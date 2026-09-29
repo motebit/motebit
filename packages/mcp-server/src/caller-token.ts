@@ -34,9 +34,11 @@
  * acceptance path: an older client that mints `task:submit` is refused with
  * a reason that names the fix.
  *
- * The relay's own bearer (a relay-signed `task:dispatch` token, verified
- * against the pinned relay key by the adapter's dispatch-bearer path) is a
- * separate door and is not decided here.
+ * The relay's own bearer is an `mcp:call` token too, held to these same
+ * claims, but its signature is checked against the PINNED relay key instead
+ * of a looked-up caller key (the adapter's `verifyRelayBearer`, #981). A
+ * `task:dispatch` token is never a bearer at all: it admits a task and may be
+ * held by a submitter.
  */
 
 import {
