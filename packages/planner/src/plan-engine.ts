@@ -73,6 +73,12 @@ export interface StepDelegationAdapter {
     onTaskSubmitted?: (taskId: string) => void,
     /** Agents to exclude from routing (accumulated across plan steps). */
     excludeAgents?: string[],
+    /**
+     * Called when the step's delegation moves to a new key after positive
+     * evidence the old one owes nothing (#890 r4), BEFORE the new submission:
+     * the engine records the rotation and forgets the old task id.
+     */
+    onRotate?: (rotation: number) => void,
   ): Promise<DelegatedStepResult>;
   /** Poll relay for a previously-submitted task's result. Returns null if task not found or still pending. */
   pollTaskResult?(taskId: string, stepId: string): Promise<DelegatedStepResult | null>;
@@ -524,6 +530,16 @@ export class PlanEngine {
                 });
               },
               demotedAgents,
+              (rotation) => {
+                // The old key's task conclusively owes nothing; the step now
+                // belongs to the next key only. "" (not undefined) so every
+                // store clears it.
+                this.store.updateStep(step.step_id, {
+                  retry_count: rotation,
+                  delegation_task_id: "",
+                  updated_at: Date.now(),
+                });
+              },
             );
 
             const summary = delegationResult.result_text.slice(0, 2000);

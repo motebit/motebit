@@ -76,6 +76,7 @@ export class RelayDelegationAdapter implements StepDelegationAdapter {
     timeoutMs: number,
     onTaskSubmitted?: (taskId: string) => void,
     crossStepExclude?: string[],
+    onRotate?: (rotation: number) => void,
   ): Promise<DelegatedStepResult> {
     const maxRetries = this.config.maxDelegationRetries ?? 2;
     const excludeAgents: string[] = [...(crossStepExclude ?? [])];
@@ -91,7 +92,11 @@ export class RelayDelegationAdapter implements StepDelegationAdapter {
     // that ever submit the same step — a reconnect's recovery racing a
     // scheduler's resume — present the same key, and the relay admits one
     // task for both.
-    let rotation = 0;
+    //
+    // The rotation starts where the step left off (#890 r4): a resumed step
+    // re-posts under its CURRENT key, never an earlier one whose task already
+    // failed.
+    let rotation = stepRotation(step);
     let idempotencyKey = planStepIdempotencyKey(step, rotation);
     let attempts = 0;
 
@@ -122,9 +127,16 @@ export class RelayDelegationAdapter implements StepDelegationAdapter {
         if (failedAgentId) {
           excludeAgents.push(failedAgentId);
         }
-        if (lastError.deliveryUncertain !== true) {
+        // Rotate ONLY on positive evidence that nothing more is owed for
+        // the current key: a signed failed receipt, or a relay refusal
+        // before admission (#890 r4). Anything else — a lost answer, a
+        // timeout, a task the relay no longer knows — keeps the key.
+        if (lastError.conclusive === true) {
           rotation++;
           idempotencyKey = planStepIdempotencyKey(step, rotation);
+          // The step forgets the old task BEFORE the new submission, so it
+          // can never be settled from the old task's receipt.
+          onRotate?.(rotation);
         }
 
         // Don't retry non-retryable errors (submission failures, not timeouts)
@@ -134,9 +146,10 @@ export class RelayDelegationAdapter implements StepDelegationAdapter {
       }
     }
 
-    // Out of attempts while the relay never said the task ended: it may have
-    // been admitted and may still complete, so this is not a failure either.
-    if (lastError?.deliveryUncertain === true) {
+    // Out of attempts without a conclusive answer for the current key: its
+    // task may have been admitted and may still complete, so this is not a
+    // failure either.
+    if (lastError?.conclusive !== true) {
       throw new DelegationUndeterminedError(step.description, lastError);
     }
     throw new Error(
@@ -186,6 +199,10 @@ export class RelayDelegationAdapter implements StepDelegationAdapter {
     if (!resp.ok) {
       const text = await resp.text();
       // Surface x402 payment requirement so callers can handle budget exhaustion
+      // 5xx: the relay may have admitted before it failed — not a refusal.
+      if (resp.status >= 500) {
+        throw deliveryUncertain(`Relay task submission unconfirmed (${resp.status})`);
+      }
       if (resp.status === 402) {
         let detail = text;
         try {
@@ -194,9 +211,10 @@ export class RelayDelegationAdapter implements StepDelegationAdapter {
         } catch {
           // Use raw text
         }
-        throw new Error(`Payment required (HTTP 402): ${detail}`);
+        throw conclusive(`Payment required (HTTP 402): ${detail}`);
       }
-      throw new Error(`Relay task submission failed (${resp.status}): ${text}`);
+      // A refusal before admission: nothing was admitted under this key.
+      throw conclusive(`Relay task submission failed (${resp.status}): ${text}`);
     }
 
     let taskResp: { task_id: string; routing_choice?: DelegatedStepResult["routing_choice"] };
@@ -222,9 +240,10 @@ export class RelayDelegationAdapter implements StepDelegationAdapter {
           routing_choice: routingChoice ?? undefined,
         };
       }
-      // Attach the failed agent's ID to the error for exclusion
-      const err = new Error(`Delegated step ${receipt.status}: ${receipt.result}`);
-      (err as DelegationError).failedAgentId = receipt.motebit_id;
+      // A signed failed receipt: conclusive for this key. Attach the failed
+      // agent's ID for exclusion.
+      const err = conclusive(`Delegated step ${receipt.status}: ${receipt.result}`);
+      err.failedAgentId = receipt.motebit_id;
       throw err;
     };
 
@@ -241,15 +260,13 @@ export class RelayDelegationAdapter implements StepDelegationAdapter {
       const state = await this.queryTask(task_id);
       if (state.kind === "receipt") return settle(state.receipt);
       if (state.kind === "not_found") {
-        // The task left the relay's queue without a receipt (a receipt
-        // extends its lifetime), so no result is coming. Terminal for THIS
-        // task: retry as a new task, never replay the dead task id.
-        const err: DelegationError = new Error(
-          `Delegated task ${task_id} expired at the relay without a result`,
+        // The relay no longer knows this task (#890 r4). That is ABSENCE,
+        // never evidence: the task may have been admitted, paid and done.
+        // Hold the step on this task and key — never rotate to a new one.
+        throw new DelegationUndeterminedError(
+          step.description,
+          new Error(`Delegated task ${task_id} is no longer known to the relay (404)`),
         );
-        const agent = routingChoice?.selected_agent;
-        if (agent != null && agent !== "") err.failedAgentId = agent;
-        throw err;
       }
       if (state.kind !== "pending" || remaining <= 0) {
         const err = new Error(
@@ -359,6 +376,12 @@ export class RelayDelegationAdapter implements StepDelegationAdapter {
 interface DelegationError extends Error {
   failedAgentId?: string;
   /**
+   * Positive evidence that nothing more is owed under the current key: a
+   * signed failed receipt, or a refusal before admission. The only errors
+   * that rotate a step to a new key (#890 r4).
+   */
+  conclusive?: boolean;
+  /**
    * The result was not delivered and the relay could not say how the task
    * ended: the retry resubmits under the same Idempotency-Key.
    */
@@ -431,6 +454,23 @@ export function isDelegationUndetermined(err: unknown): boolean {
     if ((e as { undetermined?: unknown }).undetermined === true) return true;
   }
   return false;
+}
+
+function conclusive(message: string): DelegationError {
+  const err: DelegationError = new Error(message);
+  err.conclusive = true;
+  return err;
+}
+
+/**
+ * The step's current key rotation — how many times its delegation was
+ * conclusively failed and moved to a new key. Kept on the step's
+ * `retry_count` (delegated steps have no local retries), so a resume starts
+ * from the current key, never an earlier one (#890 r4).
+ */
+export function stepRotation(step: Pick<PlanStep, "retry_count">): number {
+  const n = step.retry_count;
+  return typeof n === "number" && Number.isInteger(n) && n > 0 ? n : 0;
 }
 
 function deliveryUncertain(message: string, cause?: unknown): DelegationError {

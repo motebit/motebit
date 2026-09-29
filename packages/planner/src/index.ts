@@ -13,6 +13,7 @@ export {
   DelegationUndeterminedError,
   isDelegationUndetermined,
   planStepIdempotencyKey,
+  stepRotation,
   taskNamedBy409,
   admittedAs,
 } from "./delegation-adapter.js";

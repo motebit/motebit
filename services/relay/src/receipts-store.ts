@@ -132,6 +132,38 @@ export function getStoredReceiptJson(
   return row?.receipt_json ?? null;
 }
 
+/**
+ * The archived top-level receipt of a task that one of `motebitId`'s OWN
+ * Idempotency-Keys admitted, while that key is still inside the
+ * idempotency window (`notBefore` = now − TTL) — or null (#890 r4).
+ *
+ * The task queue forgets a task minutes after its receipt; the key that
+ * admitted it lives 24 h. A delegator re-posting under that key is
+ * replayed the task's id and must be able to learn how it ended — a 404
+ * there is absence, and absence is never evidence. The key binding is the
+ * authorization: a receipt is answered only to the agent whose key
+ * admitted the task, and never once the key could admit a new one.
+ */
+export function getArchivedReceiptForKeyOwner(
+  db: DatabaseDriver,
+  motebitId: string,
+  taskId: string,
+  notBefore: number,
+): string | null {
+  const row = db
+    .prepare(
+      `SELECT r.receipt_json FROM relay_receipts r
+        WHERE r.task_id = ? AND r.depth = 0
+          AND EXISTS (
+            SELECT 1 FROM relay_idempotency_keys k
+             WHERE k.task_id = r.task_id AND k.motebit_id = ? AND k.created_at >= ?
+          )
+        LIMIT 1`,
+    )
+    .get(taskId, motebitId, notBefore) as { receipt_json: string } | undefined;
+  return row?.receipt_json ?? null;
+}
+
 /** A row in a motebit's own receipt history. `receipt_json` is the
  *  byte-identical canonical JSON (rule 11) — return it verbatim so the
  *  caller can re-verify the signature offline. */

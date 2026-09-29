@@ -80,7 +80,7 @@ import {
 } from "./task-routing.js";
 import type { TaskRouter } from "./task-routing.js";
 import { getBondBackingAdapter } from "./bond-backing-adapter.js";
-import { persistReceiptChain } from "./receipts-store.js";
+import { persistReceiptChain, getArchivedReceiptForKeyOwner } from "./receipts-store.js";
 import {
   MAX_SETTLEMENT_DEPTH,
   exceedsSettlementDepth,
@@ -96,6 +96,7 @@ import {
   completeIdempotency,
   findP2pProofClaim,
   idempotencyClaimExists,
+  IDEMPOTENCY_TTL_MS,
   p2pProofKey,
   recordAdmittedOutcome,
   type P2pProofClaim,
@@ -4765,6 +4766,26 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
     const entry = taskQueue.get(taskId);
 
     if (!entry) {
+      // Gone from the queue. If one of THIS agent's own Idempotency-Keys
+      // admitted the task and that key is still live, answer from the
+      // receipt archive (#890 r4): the delegator can be replayed this task
+      // id for 24 h and must be able to learn how it ended. A caller asking
+      // for another agent's path learns nothing.
+      if (callerMotebitId == null || callerMotebitId === motebitId) {
+        const archived = getArchivedReceiptForKeyOwner(
+          moteDb.db,
+          motebitId,
+          taskId,
+          Date.now() - IDEMPOTENCY_TTL_MS,
+        );
+        if (archived != null) {
+          const receipt = JSON.parse(archived) as ExecutionReceipt;
+          return c.json({
+            task: { task_id: taskId, motebit_id: motebitId, status: receipt.status },
+            receipt,
+          });
+        }
+      }
       throw new TaskError(
         "TASK_NOT_FOUND",
         `Task not found — it may have expired (TTL ${Math.round(TASK_TTL_MS / 60_000)}min; paid results retained ${Math.round(PAID_TASK_RESULT_RETENTION_MS / 60_000)}min) or the task_id is invalid`,

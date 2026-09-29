@@ -221,6 +221,8 @@ describe("#890 r3 finding 1: offline at submit is resolved by re-posting under t
       localCapabilities: [],
       enableReflection: false,
       delegationTimeoutMs: 20,
+      // A window no clock can leave: only the "no submission time" gate holds.
+      resubmitWindowMs: Number.MAX_SAFE_INTEGER,
     });
     const chunks = await collect(engine.resumePlan(PLAN, deps));
     expect(chunks.map((c) => c.type)).toEqual(["plan_undetermined"]);

@@ -204,33 +204,62 @@ describe("RelayDelegationAdapter: a lost result frame is recovered, not resubmit
     await expect(p).rejects.toThrow(/the task may still complete/);
   });
 
-  it("the relay says the step's own task is gone (404): terminal for it — new key, its worker excluded", async () => {
-    const { adapter, push } = makeAdapter();
+  it("#890 r4: the relay no longer knows the step's task (404): UNKNOWN — held on that key, never a new task", async () => {
+    const { adapter } = makeAdapter();
     relay.setTaskState((id) =>
       id === "task-1" ? json({}, 404) : json({ task: { status: "running" }, receipt: null }),
     );
     const p = adapter.delegateStep(step, TIMEOUT);
+    p.catch(() => {});
     await vi.advanceTimersByTimeAsync(TIMEOUT + 1); // frame lost; the relay no longer has task-1
-    expect(relay.keys).toHaveLength(2);
-    expect(relay.keys[1]).not.toBe(relay.keys[0]);
-    expect(relay.bodies[1]!.exclude_agents).toEqual(["worker-task-1"]);
-    push({ type: "task_result", task_id: "task-2", receipt: receipt("task-2") });
-
-    const r = await p;
-    expect(r.task_id).toBe("task-2");
+    await expect(p).rejects.toBeInstanceOf(DelegationUndeterminedError);
+    expect(relay.keys).toHaveLength(1);
+    expect(relay.admittedCount()).toBe(1);
   });
 
-  it("counts attempts, not excluded agents, when it gives up", async () => {
+  it("#890 r4: a frame without a receipt is not evidence — the key is kept", async () => {
     const { adapter, push } = makeAdapter();
     const p = adapter.delegateStep(step, TIMEOUT);
     p.catch(() => {});
-    // Two attempts, each ending in a frame without a receipt: no agent to exclude.
     await vi.advanceTimersByTimeAsync(10);
     push({ type: "task_result", task_id: "task-1" });
     await vi.advanceTimersByTimeAsync(10);
-    push({ type: "task_result", task_id: "task-2" });
+    push({ type: "task_result", task_id: "task-1" });
+
+    await expect(p).rejects.toBeInstanceOf(DelegationUndeterminedError);
+    expect(new Set(relay.keys).size).toBe(1);
+  });
+
+  it("counts attempts when every answer is a signed failure", async () => {
+    const { adapter, push } = makeAdapter();
+    const p = adapter.delegateStep(step, TIMEOUT);
+    p.catch(() => {});
+    await vi.advanceTimersByTimeAsync(10);
+    push({ type: "task_result", task_id: "task-1", receipt: receipt("task-1", "failed", "") });
+    await vi.advanceTimersByTimeAsync(10);
+    push({ type: "task_result", task_id: "task-2", receipt: receipt("task-2", "failed", "") });
 
     await expect(p).rejects.toThrow(/Delegation failed after 2 attempt\(s\)/);
+  });
+
+  it("#890 r4: the rotation starts from the step's current one, and each rotation is reported first", async () => {
+    const { adapter, push } = makeAdapter();
+    const rotations: number[] = [];
+    const p = adapter.delegateStep(
+      { ...step, retry_count: 3 },
+      TIMEOUT,
+      undefined,
+      undefined,
+      (r) => rotations.push(r),
+    );
+    await vi.advanceTimersByTimeAsync(10);
+    expect(relay.keys).toEqual(["plan-step:plan-1:step-1:3"]);
+    push({ type: "task_result", task_id: "task-1", receipt: receipt("task-1", "failed", "bad") });
+    await vi.advanceTimersByTimeAsync(10);
+    expect(rotations).toEqual([4]);
+    expect(relay.keys[1]).toBe("plan-step:plan-1:step-1:4");
+    push({ type: "task_result", task_id: "task-2", receipt: receipt("task-2") });
+    await p;
   });
 
   it("a task that genuinely FAILED retries once as a new task, the failed agent excluded", async () => {
