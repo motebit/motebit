@@ -144,6 +144,30 @@ export function checkIdempotency(
 }
 
 /**
+ * Whether a claim already exists for this key — read-only, never claims.
+ *
+ * The x402 gate asks this BEFORE it prices a task submission (#925): a key
+ * that already holds a claim is a replay (completed) or a conflict
+ * (processing), and the handler answers both from the claim without admitting
+ * anything, so the gate must not quote, verify or charge such a request. It is
+ * a peek, not a decision: the handler's `checkIdempotency` still decides, and a
+ * claim that lands between this read and the handler is caught there — an
+ * x402 payment is settled only by a request that owns its claim, so a request
+ * that loses that race is charged nothing.
+ */
+export function idempotencyClaimExists(
+  db: DatabaseDriver,
+  key: string,
+  motebitId: string,
+): boolean {
+  return (
+    db
+      .prepare("SELECT 1 FROM relay_idempotency_keys WHERE idempotency_key = ? AND motebit_id = ?")
+      .get(key, motebitId) !== undefined
+  );
+}
+
+/**
  * Mark an idempotency key as completed with the response to cache.
  */
 export function completeIdempotency(

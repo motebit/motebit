@@ -162,6 +162,11 @@ export class TaskError extends RelayError {
       | "TASK_P2P_PROOF_ALREADY_ADMITTED"
       | "TASK_P2P_PROOF_NOT_PAYER"
       | "TASK_P2P_PROOF_UNVERIFIED"
+      | "TASK_X402_SETTLEMENT_FAILED"
+      | "TASK_X402_PAYMENT_UNBOUND"
+      | "TASK_X402_OUTCOME_UNKNOWN"
+      | "TASK_X402_OUTCOME_PENDING"
+      | "TASK_X402_PAYMENT_REPLAYED"
       | "TASK_GRANT_REVOKED",
     message: string,
     statusCode: number = 400,
@@ -192,5 +197,58 @@ export class P2pProofAlreadyAdmittedError extends TaskError {
     );
     this.name = "P2pProofAlreadyAdmittedError";
     if (existingTaskId != null) this.existingTaskId = existingTaskId;
+  }
+}
+
+/** The x402 settlement record a refusal names (#907 round 2). No task content. */
+export interface X402SettlementRef {
+  /** The EIP-3009 authorizer (payer), lowercase. */
+  payer: string;
+  /** The authorization nonce, lowercase. */
+  nonce: string;
+  amount_micro: number;
+  /** The account a landed payment is credited to. */
+  delegator: string;
+  network: string;
+  status: string;
+  /** Unix seconds; an unexecuted authorization can never land after this. */
+  valid_before: number;
+}
+
+/**
+ * The x402 settle did not end in a known state (a timeout, a 5xx, a network
+ * error, an unrecognised refusal, a settlement that cannot be attributed), or
+ * an earlier request under this key is still in that state ("pending"). The
+ * transfer may have landed: the client must NOT pay again. The record is
+ * reconciled from the chain, and a landed payment is credited once to
+ * `delegator`'s account.
+ */
+export class X402OutcomeUnknownError extends TaskError {
+  readonly settlement?: X402SettlementRef;
+  constructor(settlement: X402SettlementRef | undefined, phase: "unknown" | "pending" = "unknown") {
+    super(
+      phase === "pending" ? "TASK_X402_OUTCOME_PENDING" : "TASK_X402_OUTCOME_UNKNOWN",
+      (phase === "pending"
+        ? "An earlier request under this Idempotency-Key paid via x402 and its outcome is still being reconciled. "
+        : "The x402 payment outcome is unknown: the transfer may have landed. ") +
+        "Do NOT pay again. It is reconciled against the chain; if it landed it is credited once to the delegator's account, and a same-key retry after that is funded from the account. No task was admitted.",
+      phase === "pending" ? 409 : 402,
+    );
+    this.name = "X402OutcomeUnknownError";
+    if (settlement != null) this.settlement = settlement;
+  }
+}
+
+/** This signed EIP-3009 authorization already has a settlement record: never settled twice. */
+export class X402PaymentReplayedError extends TaskError {
+  readonly settlement?: X402SettlementRef;
+  constructor(settlement: X402SettlementRef | undefined) {
+    super(
+      "TASK_X402_PAYMENT_REPLAYED",
+      "This x402 payment (EIP-3009 authorization) was already presented to this relay; one authorization is settled at most once. It was not settled again. A new task needs a new payment.",
+      409,
+    );
+    this.name = "X402PaymentReplayedError";
+    if (settlement != null) this.settlement = settlement;
   }
 }

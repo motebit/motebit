@@ -65,6 +65,14 @@ const ALLOWLIST: ReadonlyArray<{ file: string; reason: string }> = [
   },
   { file: "index.ts", reason: "allocation_release — net-zero refund of a prior funded hold" },
   {
+    file: "x402-settlements.ts",
+    reason:
+      "x402 settlement (#907) — credits the authorization's exact value, once, only on the " +
+      "facilitator's settle success (the trust model main's onAfterSettle credit used) or on " +
+      "chain proof of execution: AuthorizationUsed + its paired Transfer to the treasury at " +
+      "confirmed depth (the deposit-detector rule), consumed-marker UNIQUE",
+  },
+  {
     file: "free-credit.ts",
     reason:
       "promotional grant — held NON-WITHDRAWABLE by AccountStore.getUnspentGrantHold (inference-only)",

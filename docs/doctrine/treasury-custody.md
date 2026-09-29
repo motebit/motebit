@@ -81,7 +81,7 @@ The sibling primitive to the EVM reconciler is `OperatorSolanaTreasuryReconciler
 
 Both reconcilers share the algebra (drift = onchain − recorded). They diverge on what each side represents:
 
-- **EVM:** the x402 facilitator settles synchronously to `X402_PAY_TO_ADDRESS`. The `platform_fee` row and the onchain transfer happen in the same `onAfterSettle` callback. Drift detects facilitator-side leakage or recording bugs.
+- **EVM:** each x402-funded submission's own verified payment settles to `X402_PAY_TO_ADDRESS` inside that request, before the task is admitted (#907; there is no `onAfterSettle` hook). The treasury receives the task's full gross; the `platform_fee` row is recorded later, at task settlement, and the worker's net stays a virtual-account liability until withdrawn. So a healthy treasury sits ABOVE the recorded fee sum (positive drift) by the unwithdrawn worker nets; negative drift still means fees recorded that never arrived.
 - **Solana:** the delegator submits the atomic multi-output tx; the relay records the proof; the verifier confirms both legs land onchain; only then is the row `verified`. Drift detects three failure modes structurally absent on EVM: (a) verifier false-positives — a row marked verified whose treasury leg didn't actually land; (b) treasury-wallet drains via a path other than `OperatorSolanaTransfer.sendUsdc` (the only authorized debit path on the relay side); (c) an Arc 2 fee-leg-composition bug that records `platform_fee` against the wrong row.
 
 ### One table, two writers

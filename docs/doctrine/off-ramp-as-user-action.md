@@ -85,13 +85,13 @@ The registry membership IS the protocol-vs-product wall: if `"MOTE"` is ever add
 
 ## Arc 3.5 gate scope — submission carve-outs vs. the multi-hop correction
 
-The Arc 3.5 gate fires at task **submission** (`POST /agent/:motebitId/task`) on the predicate `settlementMode === "relay" && x402TxHash == null && unitCostAtSubmission > 0 && submittedBy != null && submittedBy !== motebitId`. There are **three** submission carve-outs (they never reach the gate); the third (x402) is production-only because it isn't test-drivable:
+The Arc 3.5 gate fires at task **submission** (`POST /agent/:motebitId/task`) on the predicate `settlementMode === "relay" && !x402Paid && unitCostAtSubmission > 0 && submittedBy != null && submittedBy !== motebitId`. There are **three** submission carve-outs (they never reach the gate):
 
 1. **Self-delegation** (`submittedBy === motebitId` — worker is the delegator). Same-party flow; no third party. `isSelfDelegation` at `services/relay/src/tasks.ts:377` already gates the trust/credential side effects.
 
 2. **Zero-cost direct delegation** (`unitCostAtSubmission === 0`). No funds move; the audit record exists for completeness.
 
-3. **x402-paid** (`x402TxHash != null`). Carries its own onchain payment proof; closing x402-worker-custody is a separate, larger re-architecture, not Arc 3.5. (Not test-drivable today — the `onAfterSettle` hook needs a real x402 payment — so tests cannot exercise this exemption; it exists for production.)
+3. **x402-paid** (`x402Paid`: a payment the gate verified and bound to THIS request, settled to the relay treasury before admission — #907). The relay receives it (relay custody, a guest rail), credits it to the delegator once, and pays the worker's virtual account at settlement; closing x402-worker-custody is a separate, larger re-architecture, not Arc 3.5. Driven end to end over the real `@x402/hono` stack in `x402-settlement-907.test.ts`.
 
 **Multi-hop is NOT a submission carve-out — this corrects the earlier framing.** A sub-delegation (B→C) is a real `POST /agent/C/task` submission (it must be in `taskQueue` for `settleSubReceipt` to settle it), so a **paid** sub-hop is gated exactly like a direct delegation and needs its own P2P proof. The sub-delegator funds it from its own wallet (it has not yet been paid for the parent task, so allocation-backed sub-payment is unavailable). What remains relay-mode is only the sub-receipt **settlement-write** in `settleSubReceipt` — and that path is now a residual of the pre-gate topology, reachable only for a paid sub-receipt that lacks its own settlement. Reconciling that write to honor the sub-task's submitted mode (so a p2p-submitted sub-hop settles p2p, not relay) is the deferred **multi-hop-as-P2P arc**.
 
@@ -123,7 +123,7 @@ Inc 1 made the settlement WRITE honor a p2p sub-hop. Inc 2 makes a molecule **pr
 
 ## Arc 3.5 test-migration consequences
 
-The gate retires deposit-funded relay-custody for paid cross-agent delegation, which is exactly what a large body of E2E tests exercised. There is **no x402-paid re-point** (x402 is not test-drivable), so those tests do not "migrate to another path" — their coverage moves:
+The gate retires deposit-funded relay-custody for paid cross-agent delegation, which is exactly what a large body of E2E tests exercised. There was **no x402-paid re-point** (x402 was not test-drivable when the gate shipped; it is since #907, but the migration below stands), so those tests do not "migrate to another path" — their coverage moves:
 
 - **Incidental tests** (paid delegation as plumbing for receipt/credential/trust/routing assertions): supply a P2P `payment_proof`. Done for trust-flywheel, receipt-persistence, signed-receipt-e2e, permissive-client-only-e2e, peer-credential-e2e.
 - **Relay-custody-machinery tests** (`money-loop-*`, `budget-risk-factor`, `settlement-safety`, `virtual-accounts` HTTP paths, `dispute-cycle-e2e`): these test allocation / lock / credit / dispute-refund / withdraw — a path being deprecated for cross-agent delegation. Their primitive coverage lives at unit level (`@motebit/virtual-accounts`); dispute coverage moves to the **P2P trust-layer dispute** (already in `p2p-cycle-e2e` — "p2p dispute creates trust-layer complaint with no fund movement"). The E2E relay-custody-specific assertions are re-scoped to self-delegation (where the machinery still runs) or retired with a `paid-cross-agent-fails-with-TASK_P2P_PROOF_REQUIRED` test locking the closure.

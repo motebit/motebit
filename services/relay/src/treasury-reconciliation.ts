@@ -110,8 +110,8 @@ export class SqliteTreasuryReconciliationStore implements TreasuryReconciliation
    * past the chain's confirmation depth.
    *
    * Note: `relay_settlements` doesn't carry an explicit `chain` column;
-   * the chain is implicit in the x402_network field (set by the
-   * `onAfterSettle` callback in `tasks.ts`). We filter on `x402_network`
+   * the chain is implicit in the x402_network field (the network of the
+   * submission's own verified x402 settlement, `tasks.ts` #907). We filter on `x402_network`
    * here and treat `settlement_mode='relay' AND x402_network=?` as
    * "fees that flow into the treasury on this chain."
    */

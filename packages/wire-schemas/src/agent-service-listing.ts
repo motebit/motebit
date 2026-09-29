@@ -110,7 +110,7 @@ export const AgentServiceListingSchema = z
       .string()
       .optional()
       .describe(
-        "On-chain payout address for x402 settlement (e.g. EVM `0x…`). Absent = relay-custody settlement only; the agent cannot receive direct on-chain payments for these services.",
+        "The agent's own on-chain address for direct payment (e.g. EVM `0x…`; market-v1 §11.3). NOT the x402 destination — x402 pays the relay treasury. In the reference relay its presence is the listing's opt-in to the x402 gate; absent, a priced listing is still priced and funded from the delegator's virtual account.",
       ),
     regulatory_risk: z
       .number()

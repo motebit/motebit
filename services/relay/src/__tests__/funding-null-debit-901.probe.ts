@@ -1,8 +1,9 @@
 /**
  * Differential probe for #901: is a task ever admitted as funded with no money
- * held? Four funding cells over the live submit route (the x402 facilitator is
- * a stand-in that settles, then runs the handler — see
- * funding-null-debit-901.test.ts):
+ * held? Four funding cells over the live submit route (the real `@x402/hono`
+ * stack; only the facilitator's network round-trip is replaced — see
+ * funding-null-debit-901.test.ts and, for the x402 hand-off itself,
+ * x402-settlement-907.probe.ts):
  *
  *   A  x402, raw ≥ price > spendable (hold not covered by the balance), then
  *      the same key paid again
@@ -26,75 +27,51 @@ import { generateKeypair, bytesToHex } from "@motebit/encryption";
 import { computeGrossAmount } from "@motebit/market";
 import { PLATFORM_FEE_RATE } from "@motebit/protocol";
 import type { SyncRelay } from "../index.js";
-import { createAgent, createTestRelay, JSON_AUTH, seedBalance } from "./test-helpers.js";
+import {
+  createAgent,
+  createTestRelay,
+  JSON_AUTH,
+  seedBalance,
+  X402_TEST_CONFIG,
+} from "./test-helpers.js";
 import { creditAccount, toMicro } from "../accounts.js";
 
-// `ordering` "before": settle then handler (what the handler's x402 branch is
-// written for). "after": the REAL @x402/hono eip3009 ordering — handler first,
-// settle only on a < 400 response. `quoted` records the price/payTo asked.
+// The REAL @x402/hono stack (#907); only the facilitator's network round-trip
+// is replaced, in-process (self-contained so the probe runs on both trees). A
+// paid request carries a payment signed from the relay's own PAYMENT-REQUIRED
+// challenge. `settled` counts onchain settlements; `quoted` records what each
+// PAID request was verified against (atomic amount, destination).
 const x402 = vi.hoisted(() => ({
   settled: 0,
-  ordering: "before" as "before" | "after",
-  quoted: [] as { price: string; payTo: string }[],
+  quoted: [] as { amount: string; payTo: string }[],
 }));
 
-vi.mock("@x402/hono", () => {
-  type SettleHook = (ctx: { result: { transaction: string; network: string } }) => Promise<void>;
-  type Ctx = { adapter: { getHeader(n: string): string | undefined }; path: string };
-  type Accepts = { price: (ctx: Ctx) => string; payTo: (ctx: Ctx) => string };
-  class x402ResourceServer {
-    hooks: SettleHook[] = [];
-    register(): this {
-      return this;
-    }
-    onAfterSettle(fn: SettleHook): this {
-      this.hooks.push(fn);
-      return this;
-    }
-  }
-  class x402HTTPResourceServer {
-    constructor(
-      readonly resourceServer: x402ResourceServer,
-      readonly routes: Record<string, { accepts: Accepts }>,
-    ) {}
-    initialize(): Promise<void> {
-      return Promise.resolve();
-    }
-  }
-  function paymentMiddlewareFromHTTPServer(httpServer: x402HTTPResourceServer) {
-    return async (
-      c: {
-        req: { header: (n: string) => string | undefined; path: string };
-        res: Response;
-        json: (b: unknown, s: number) => Response;
+vi.mock("../x402-facilitator.js", () => ({
+  createX402FacilitatorClient: () =>
+    Promise.resolve({
+      getSupported: () =>
+        Promise.resolve({
+          kinds: [{ x402Version: 2, scheme: "exact", network: "eip155:84532" }],
+          extensions: [],
+          signers: {},
+        }),
+      verify: (_p: unknown, req: { amount: string; payTo: string }) => {
+        x402.quoted.push({ amount: req.amount, payTo: req.payTo });
+        return Promise.resolve({ isValid: true, payer: "0xpayer" });
       },
-      next: () => Promise<void>,
-    ): Promise<Response | undefined> => {
-      const accepts = httpServer.routes["POST /agent/*/task"]!.accepts;
-      const ctx: Ctx = { adapter: { getHeader: (n) => c.req.header(n) }, path: c.req.path };
-      const quote = { price: accepts.price(ctx), payTo: accepts.payTo(ctx) };
-      if (!c.req.header("X-PAYMENT")) return c.json({ error: "payment_required" }, 402);
-      x402.quoted.push(quote);
-      const settle = async (): Promise<void> => {
+      settle: (_p: unknown, req: { network: string }) => {
         x402.settled += 1;
         let tx = "0x";
         for (let i = 0; i < 64; i++) tx += "0123456789abcdef"[Math.floor(Math.random() * 16)];
-        for (const h of httpServer.resourceServer.hooks) {
-          await h({ result: { transaction: tx, network: "eip155:84532" } });
-        }
-      };
-      if (x402.ordering === "before") {
-        await settle();
-        await next();
-      } else {
-        await next();
-        if (c.res.status < 400) await settle();
-      }
-      return undefined;
-    };
-  }
-  return { x402ResourceServer, x402HTTPResourceServer, paymentMiddlewareFromHTTPServer };
-});
+        return Promise.resolve({
+          success: true,
+          transaction: tx,
+          network: req.network,
+          payer: "0xpayer",
+        });
+      },
+    }),
+}));
 
 const GROSS = toMicro(computeGrossAmount(1.0, PLATFORM_FEE_RATE));
 let relay: SyncRelay;
@@ -140,12 +117,55 @@ function hold(id: string, micro: number, credit: boolean): void {
     .run(crypto.randomUUID(), crypto.randomUUID(), crypto.randomUUID(), id, micro, Date.now());
   if (credit) creditAccount(relay.moteDb.db, id, micro, "settlement_credit", null, "probe");
 }
-const submit = (w: string, key: string, body: Record<string, unknown>, pay = false) =>
-  relay.app.request(`/agent/${w}/task`, {
+/** The relay's own challenge for `body` (throwaway key), signed; or a header the gate never reads. */
+async function paymentFor(w: string, body: Record<string, unknown>): Promise<string> {
+  const res = await relay.app.request(`/agent/${w}/task`, {
     method: "POST",
-    headers: { ...JSON_AUTH, "Idempotency-Key": key, ...(pay ? { "X-PAYMENT": "x" } : {}) },
+    headers: { ...JSON_AUTH, "Idempotency-Key": crypto.randomUUID() },
     body: JSON.stringify(body),
   });
+  const header = res.headers.get("PAYMENT-REQUIRED");
+  if (header == null) return "not-challenged";
+  const required = JSON.parse(Buffer.from(header, "base64").toString("utf8")) as {
+    resource: unknown;
+    accepts: unknown[];
+  };
+  return Buffer.from(
+    JSON.stringify({
+      x402Version: 2,
+      resource: required.resource,
+      accepted: required.accepts[0],
+      payload: {
+        from: "0xpayer",
+        authorization: {
+          from: "0x" + Buffer.from(String("0xpayer")).toString("hex").padEnd(40, "0").slice(0, 40),
+          to: (required.accepts[0] as { payTo: string }).payTo,
+          value: (required.accepts[0] as { amount: string }).amount,
+          validAfter: String(Math.floor(Date.now() / 1000) - 600),
+          validBefore: String(Math.floor(Date.now() / 1000) + 300),
+          nonce:
+            "0x" +
+            [...crypto.getRandomValues(new Uint8Array(32))]
+              .map((b) => b.toString(16).padStart(2, "0"))
+              .join(""),
+        },
+        signature: "0x" + "11".repeat(65),
+      },
+    }),
+  ).toString("base64");
+}
+const submit = async (w: string, key: string, body: Record<string, unknown>, pay = false) => {
+  const payment = pay ? await paymentFor(w, body) : undefined;
+  return relay.app.request(`/agent/${w}/task`, {
+    method: "POST",
+    headers: {
+      ...JSON_AUTH,
+      "Idempotency-Key": key,
+      ...(payment != null ? { "PAYMENT-SIGNATURE": payment } : {}),
+    },
+    body: JSON.stringify(body),
+  });
+};
 
 /** Ledger truth for every allocation booked against this worker. */
 function ledger(w: string, prompt: string) {
@@ -259,15 +279,18 @@ async function listing(id: string, prices: Record<string, number>, payTo: string
 }
 const PAY_T = "0x00000000000000000000000000000000000000b2";
 const PAY_W = "0x00000000000000000000000000000000000000c3";
-const payee = (a: string) => (a === PAY_T ? "target" : a === PAY_W ? "path" : "other");
+const payee = (a: string) =>
+  a === PAY_T
+    ? "target"
+    : a === PAY_W
+      ? "path"
+      : a === X402_TEST_CONFIG.payToAddress
+        ? "treasury"
+        : "other";
 const quotedGross = () =>
-  x402.quoted.map((q) => ({
-    gross: inGross(Math.round(Number(q.price.slice(1)) * 1_000_000)),
-    payee: payee(q.payTo),
-  }));
+  x402.quoted.map((q) => ({ gross: inGross(Number(q.amount)), payee: payee(q.payTo) }));
 
 it("R: reviewer's cell, real ordering — pinned self-delegation the account can fund, W's listing sums above T's capability", async () => {
-  x402.ordering = "after";
   x402.settled = 0;
   x402.quoted = [];
   const t = await agent();
@@ -284,7 +307,7 @@ it("R: reviewer's cell, real ordering — pinned self-delegation the account can
   };
   const r1 = await submit(w, crypto.randomUUID(), body);
   obs["R1_unpaid_status"] = r1.status;
-  // A client told to pay does so (same body, X-PAYMENT).
+  // A client told to pay does so (same body, a signed payment).
   const r2 = r1.status === 402 ? await submit(w, crypto.randomUUID(), body, true) : null;
   obs["R2_paid_status"] = r2?.status ?? "not-needed";
   obs["R_onchain_settlements"] = x402.settled;
@@ -296,7 +319,6 @@ it("R: reviewer's cell, real ordering — pinned self-delegation the account can
   ).t;
   obs["R_account_debited_gross"] = inGross(debit);
   obs["R_charged_twice"] = x402.settled > 0 && debit > 0;
-  x402.ordering = "before";
 });
 
 it("U: x402 charge vs the handler's price — pinned capability ($1) above the path agent's listing ($0.50)", async () => {
