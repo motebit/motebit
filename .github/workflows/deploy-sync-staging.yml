@@ -28,6 +28,11 @@ name: Deploy Sync Relay (staging)
 # not matter in practice — the atoms re-register on their own hourly
 # full-registration cycle (#564), which heals any ordering skew within an
 # hour and well inside the relay's 7-day listing prune.
+#
+# Prod orders itself AFTER this workflow (#978): deploy-sync.yml's gate polls
+# for this file's run on the same sha before building, because the two build
+# a byte-identical image and a simultaneous push stalled prod three times.
+# Renaming this file must update that poll.
 
 on:
   push:
@@ -62,7 +67,8 @@ permissions:
 jobs:
   gate:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    # 45 min for CI (a 30-min check job, then e2e) + slack (#978).
+    timeout-minutes: 50
 
     steps:
       # Same gate deploy-sync.yml applies to prod, for the same reason one
@@ -76,7 +82,7 @@ jobs:
         run: |
           sha='${{ github.sha }}'
           echo "Waiting for CI to conclude on ${sha} before deploying staging…"
-          for i in $(seq 1 80); do
+          for i in $(seq 1 180); do  # 45 min: CI can take 35+ min (#978)
             run=$(gh run list --repo '${{ github.repository }}' --workflow ci.yml \
               --branch main --json headSha,status,conclusion \
               --jq "[.[] | select(.headSha==\"${sha}\")][0]")

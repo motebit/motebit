@@ -38,7 +38,9 @@ permissions:
 jobs:
   gate:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    # CI can take 35+ min on shared runners (a 30-min check job, then e2e):
+    # 45 min for CI + 12 min for the staging relay deploy + slack.
+    timeout-minutes: 65
 
     steps:
       # The relay is the durability-sensitive trust root; never deploy a commit
@@ -54,7 +56,7 @@ jobs:
         run: |
           sha='${{ github.sha }}'
           echo "Waiting for CI to conclude on ${sha} before deploying prod…"
-          for i in $(seq 1 80); do
+          for i in $(seq 1 180); do  # 45 min: CI can take 35+ min (#978)
             run=$(gh run list --repo '${{ github.repository }}' --workflow ci.yml \
               --branch main --json headSha,status,conclusion \
               --jq "[.[] | select(.headSha==\"${sha}\")][0]")
@@ -73,6 +75,44 @@ jobs:
           done
           echo "::error::Timed out waiting for CI to conclude on ${sha}."
           exit 1
+
+      # Prod builds AFTER staging, never beside it (#978).
+      #
+      # Both relay workflows fire on the same push, pass their CI gates in the
+      # same second, and build a byte-identical image (same manifest digest)
+      # on the same Depot builder. Three first attempts in a row (runs
+      # 36503795166 attempt 2, 36536672742, 36549886284) pushed the same layer
+      # to registry.fly.io within 100 ms of staging's push of it: staging's
+      # finished in under a second, prod's never finished, and flyctl sat
+      # silent until the step deadline. Every rerun, with nothing beside it,
+      # landed in under three minutes. So prod waits for this sha's staging
+      # run to conclude — whatever its conclusion; this is ordering, not a
+      # promotion gate — and then pushes into a registry that already holds
+      # the layers. Cross-workflow `needs:` does not exist and a shared
+      # concurrency group would let one app's pending deploy cancel the
+      # other's, so the gate polls, as it already does for CI. The wait is
+      # bounded: past it prod proceeds with a warning and the deploy's own
+      # stall-retry below is the second line.
+      - name: Wait for the staging relay deploy of this commit
+        if: github.event_name == 'push'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          sha='${{ github.sha }}'
+          for i in $(seq 1 48); do
+            run=$(gh run list --repo '${{ github.repository }}' --workflow deploy-sync-staging.yml \
+              --branch main --json headSha,status,conclusion \
+              --jq "[.[] | select(.headSha==\"${sha}\")][0]" || true)
+            status=$(echo "${run:-null}" | jq -r '.status // "absent"')
+            conclusion=$(echo "${run:-null}" | jq -r '.conclusion // ""')
+            echo "  attempt ${i}: staging relay deploy status=${status} conclusion=${conclusion}"
+            if [ "${status}" = "completed" ]; then
+              echo "Staging relay deploy concluded (${conclusion}) — prod may build now."
+              exit 0
+            fi
+            sleep 15
+          done
+          echo "::warning::The staging relay deploy of ${sha} did not conclude within 12 minutes — deploying prod anyway; the deploy's stall-retry covers a collision."
 
   deploy:
     needs: gate
@@ -95,21 +135,60 @@ jobs:
       # green-looking pipeline above it. Raising the ceiling would only
       # have bought a longer silence, so the deploy carries its own
       # deadline and exits non-zero when it passes one.
+      #
+      # The stall #978 hit sits in the image PUSH, before any machine is
+      # touched, so `--wait-timeout` (which bounds the machine rollout) never
+      # fires; `timeout` bounds the whole command and exits 124 on a stall.
+      # A stall gets exactly one retry (the step below); any other failure
+      # does not. `LOG_LEVEL=debug` so the next stall shows where it stops.
       - name: Deploy to Fly.io
-        timeout-minutes: 15
+        id: deploy
+        # The retry step below owns the job's verdict for this step.
+        continue-on-error: true
+        timeout-minutes: 12
         run: |
           set -o pipefail
-          flyctl deploy --config services/relay/fly.toml --remote-only \
-            --wait-timeout 10m
+          rc=0
+          timeout --kill-after=30s 11m \
+            flyctl deploy --config services/relay/fly.toml --remote-only \
+              --wait-timeout 10m || rc=$?
+          echo "rc=${rc}" >> "$GITHUB_OUTPUT"
+          exit "${rc}"
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          LOG_LEVEL: debug
+
+      # Exactly one retry, and only of a stall: `timeout` exit 124 (or 137 if
+      # the kill was needed), or no recorded code at all (the step deadline
+      # fired first). A non-stall failure is re-raised here unretried, so the
+      # job still fails and the backstop below still says so.
+      - name: Retry the deploy once after a stall
+        if: steps.deploy.outcome == 'failure'
+        timeout-minutes: 12
+        run: |
+          set -o pipefail
+          rc='${{ steps.deploy.outputs.rc }}'
+          case "${rc}" in
+            124|137|"") ;;
+            *)
+              echo "::error::The relay deploy failed with exit ${rc} — not a stall, not retried."
+              exit "${rc}"
+              ;;
+          esac
+          echo "::warning title=Relay deploy stalled::The first deploy attempt stalled (exit '${rc:-step deadline}'); retrying once (#978)."
+          timeout --kill-after=30s 11m \
+            flyctl deploy --config services/relay/fly.toml --remote-only \
+              --wait-timeout 10m
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          LOG_LEVEL: debug
 
       # `cancelled` is not `failure`, so an alert keyed on failure alone
       # is silent on exactly the outcome that hid this one.
       - name: Say so when the deploy did not land
         if: cancelled() || failure()
         run: |
-          echo "::error title=Relay deploy did not land::The relay deploy ended as ${{ job.status }} — production is still on its previous release. A deploy of this app normally takes under three minutes, so this is a hang, not slowness. Check the fleet with \`flyctl releases -a motebit-sync\`, never the workflow colour."
+          echo "::error title=Relay deploy did not land::The relay deploy ended as ${{ job.status }} (after one retry if the first attempt stalled) — production is still on its previous release. A deploy of this app normally takes under three minutes, so this is a hang, not slowness. Check the fleet with \`flyctl releases -a motebit-sync\`, never the workflow colour."
           exit 1
 
       # A deploy that did not land must not read as one that did. The job
