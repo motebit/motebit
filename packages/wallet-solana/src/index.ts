@@ -47,7 +47,25 @@ export {
   Web3JsRpcAdapter,
   deriveSolanaAddress,
   isDerivedSettlementBinding,
+  createSolanaGenesisHashReader,
 } from "./web3js-adapter.js";
+
+export {
+  SOLANA_MAINNET_GENESIS_HASH,
+  SOLANA_DEVNET_GENESIS_HASH,
+  SOLANA_TESTNET_GENESIS_HASH,
+  SOLANA_TESTNET_CAIP2,
+  solanaCaip2FromGenesisHash,
+  isSolanaCaip2,
+  resolveSolanaNetwork,
+  SolanaNetworkResolver,
+  SOLANA_GENESIS_READ_TIMEOUT_MS,
+  type SolanaNetworkState,
+  type SolanaNetworkResolverOptions,
+  type SolanaGenesisHashReader,
+  type SolanaNetworkResolution,
+  type ResolveSolanaNetworkOptions,
+} from "./network.js";
 
 export { buildP2pPaymentProof, type BuildP2pPaymentProofArgs } from "./p2p-payment-proof.js";
 

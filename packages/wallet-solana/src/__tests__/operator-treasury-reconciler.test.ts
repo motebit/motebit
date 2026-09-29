@@ -303,13 +303,15 @@ describe("OperatorSolanaTreasuryReconciler", () => {
 });
 
 describe("createOperatorSolanaTreasuryReconciler factory", () => {
-  it("constructs against the default Web3JsRpcAdapter with canonical mainnet defaults", () => {
+  it("constructs against the default Web3JsRpcAdapter", () => {
     const seed = new Uint8Array(32);
     seed[0] = 1;
     const reconciler = createOperatorSolanaTreasuryReconciler({
       rpcUrl: "https://api.mainnet-beta.solana.com",
       identitySeed: seed,
+      chain: SOLANA_MAINNET_CAIP2,
     });
+    expect(reconciler.chain).toBe(SOLANA_MAINNET_CAIP2);
     expect(reconciler).toBeInstanceOf(OperatorSolanaTreasuryReconciler);
     // Address derived from the seed via Web3JsRpcAdapter.ownAddress.
     expect(reconciler.treasuryAddress).toMatch(/^[1-9A-HJ-NP-Za-km-z]{32,44}$/);
@@ -348,23 +350,26 @@ describe("createOperatorSolanaTreasuryReconciler factory", () => {
     expect(result.usdcContractAddress).toBe(USDC_MINT_DEVNET);
   });
 
-  it("defaults chain + usdcMint to canonical mainnet when overrides omitted", () => {
+  it("stamps the chain it is given — there is no default chain (#954)", () => {
     const seed = new Uint8Array(32);
     seed[0] = 3;
     const reconciler = createOperatorSolanaTreasuryReconciler({
-      rpcUrl: "https://api.mainnet-beta.solana.com",
+      rpcUrl: "https://api.devnet.solana.com",
       identitySeed: seed,
+      chain: SOLANA_DEVNET_CAIP2,
     });
-    // The factory's audit-log fields (chain + usdcContractAddress) are
-    // surfaced indirectly via reconcile(); rather than reconstruct a
-    // second instance with a fake adapter, we trust the visible
-    // construction path is exercised here and the defaulting is
-    // observable on the SolanaReconciliationResult fields in the prior
-    // describe blocks (which already cover both canonical and
-    // override paths). This test pins the factory-level invariant:
-    // the adapter is real (Web3JsRpcAdapter) and treasuryAddress is a
-    // valid base58 string.
+    expect(reconciler.chain).toBe(SOLANA_DEVNET_CAIP2);
     expect(reconciler.treasuryAddress).toMatch(/^[1-9A-HJ-NP-Za-km-z]{32,44}$/);
+    // The deprecated alias still names mainnet; it is no one's default.
     expect(SOLANA_TREASURY_DEFAULT_CHAIN).toBe(SOLANA_MAINNET_CAIP2);
+  });
+
+  it("refuses a chain that is not a Solana CAIP-2 id (a shorthand is never a row label)", () => {
+    const adapter = makeAdapter({});
+    for (const bad of ["solana:mainnet", "solana:devnet", "", "eip155:8453"]) {
+      expect(() => new OperatorSolanaTreasuryReconciler(adapter, bad, USDC_MINT_DEVNET)).toThrow(
+        /Solana CAIP-2/,
+      );
+    }
   });
 });

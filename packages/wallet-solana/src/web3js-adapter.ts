@@ -825,3 +825,13 @@ export class Web3JsRpcAdapter implements SolanaRpcAdapter {
     }
   }
 }
+
+/**
+ * The production `SolanaGenesisHashReader` (`network.ts`): `getGenesisHash`
+ * on `rpcUrl`. It lives here because this is the file that owns
+ * `@solana/web3.js`; the derivation law itself is pure (`network.ts`).
+ */
+export function createSolanaGenesisHashReader(rpcUrl: string): () => Promise<string> {
+  const connection = new Connection(rpcUrl, "confirmed");
+  return () => connection.getGenesisHash();
+}

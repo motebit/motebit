@@ -36,9 +36,9 @@ import type { DatabaseDriver } from "@motebit/persistence";
 import {
   OperatorSolanaTreasuryReconciler,
   SOLANA_DEFAULT_CONFIRMATION_LAG_BUFFER_MS,
-  SOLANA_TREASURY_DEFAULT_CHAIN,
   USDC_MINT_MAINNET,
   Web3JsRpcAdapter,
+  type SolanaNetworkResolution,
   type SolanaReconciliationResult,
   type SolanaTreasuryReconciliationLogger,
   type SolanaTreasuryReconciliationStore,
@@ -123,9 +123,13 @@ export interface SolanaTreasuryReconciliationLoopConfig {
   identitySeed: Uint8Array;
   /** USDC SPL mint. Defaults to mainnet USDC. */
   usdcMint?: string;
-  /** CAIP-2 chain identifier persisted on each reconciliation row.
-   *  Defaults to `SOLANA_MAINNET_CAIP2` per CAIP-30. */
-  chain?: string;
+  /** CAIP-2 chain id persisted on each reconciliation row. REQUIRED, no
+   *  default (#954). Either a fixed id, or — as the relay wires it — the
+   *  shared lazy resolver for `rpcUrl` (`solana-network.ts`), read at the
+   *  start of every cycle: a cycle with no resolved chain records nothing
+   *  and logs a warning, and the next cycle tries again. An injected
+   *  `reconciler` must carry the same chain. */
+  chain: string | { resolve(): Promise<SolanaNetworkResolution> };
   /** Cadence between cycles. Default 15 min. */
   intervalMs?: number;
   /** Confirmation-lag buffer. Default 5 min. */
@@ -142,8 +146,8 @@ export interface SolanaTreasuryReconciliationLoopConfig {
   /** RPC commitment level. Defaults to "confirmed". */
   commitment?: "processed" | "confirmed" | "finalized";
   /** Inject a prebuilt reconciler (tests). When set, `rpcUrl`,
-   *  `identitySeed`, `usdcMint`, `commitment`, and `chain` are
-   *  ignored — the reconciler carries all of those internally. */
+   *  `identitySeed`, `usdcMint` and `commitment` are ignored — the
+   *  reconciler carries those internally; its `chain` must equal `chain`. */
   reconciler?: OperatorSolanaTreasuryReconciler;
 }
 
@@ -163,21 +167,47 @@ export function startSolanaTreasuryReconciliationLoop(
   const confirmationLagBufferMs =
     config.confirmationLagBufferMs ?? SOLANA_DEFAULT_CONFIRMATION_LAG_BUFFER_MS;
   const generateReconciliationId = config.generateReconciliationId ?? randomUUID;
-  const chain = config.chain ?? SOLANA_TREASURY_DEFAULT_CHAIN;
   const usdcMint = config.usdcMint ?? USDC_MINT_MAINNET;
-
-  const reconciler =
-    config.reconciler ??
-    new OperatorSolanaTreasuryReconciler(
-      new Web3JsRpcAdapter({
+  const chainSource = config.chain;
+  const adapter = config.reconciler
+    ? undefined
+    : new Web3JsRpcAdapter({
         rpcUrl: config.rpcUrl,
         identitySeed: config.identitySeed,
         usdcMint: config.usdcMint,
         ...(config.commitment !== undefined ? { commitment: config.commitment } : {}),
-      }),
-      chain,
-      usdcMint,
-    );
+      });
+
+  /** The reconciler for `chain` — built once the chain is known, never before. */
+  let reconciler: OperatorSolanaTreasuryReconciler | undefined;
+  const reconcilerFor = (chain: string): OperatorSolanaTreasuryReconciler => {
+    if (reconciler === undefined) {
+      reconciler =
+        config.reconciler ?? new OperatorSolanaTreasuryReconciler(adapter!, chain, usdcMint);
+    }
+    if (reconciler.chain !== chain) {
+      throw new Error(
+        `startSolanaTreasuryReconciliationLoop: reconciler writes chain ${reconciler.chain}, the resolved chain is ${chain}`,
+      );
+    }
+    return reconciler;
+  };
+  if (typeof chainSource === "string") reconcilerFor(chainSource);
+
+  /** The chain to stamp on this cycle's row, or null (the reason already logged). */
+  const chainForCycle = async (): Promise<string | null> => {
+    if (typeof chainSource === "string") return chainSource;
+    const r = await chainSource.resolve();
+    if (r.status === "resolved") return r.network;
+    logger.warn("solana-treasury-reconciliation.cycle_skipped", {
+      reason:
+        r.status === "mismatch"
+          ? `Solana network mismatch: SOLANA_NETWORK ${r.expected} but the RPC serves ${r.network}`
+          : `Solana network unresolved: ${r.reason}`,
+      recorded: false,
+    });
+    return null;
+  };
 
   const store = new SqliteSolanaTreasuryReconciliationStore(config.db);
   const loopLogger: SolanaTreasuryReconciliationLogger = {
@@ -187,16 +217,18 @@ export function startSolanaTreasuryReconciliationLoop(
   };
 
   logger.info("solana-treasury-reconciliation.started", {
-    chain,
-    treasuryAddress: reconciler.treasuryAddress,
+    chain: typeof chainSource === "string" ? chainSource : "resolved per cycle from the RPC",
+    treasuryAddress: config.reconciler?.treasuryAddress ?? adapter!.ownAddress,
     usdcMint,
     intervalMs,
     confirmationLagBufferMs,
   });
 
   const tick = async (): Promise<void> => {
+    const chain = await chainForCycle();
+    if (chain === null) return; // records nothing — never a defaulted label
     try {
-      await reconciler.reconcile({
+      await reconcilerFor(chain).reconcile({
         store,
         generateReconciliationId,
         confirmationLagBufferMs,

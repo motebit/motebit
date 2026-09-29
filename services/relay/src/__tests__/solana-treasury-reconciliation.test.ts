@@ -23,8 +23,8 @@ import {
 } from "../solana-treasury-reconciliation.js";
 import {
   OperatorSolanaTreasuryReconciler,
+  SOLANA_DEVNET_CAIP2,
   SOLANA_MAINNET_CAIP2,
-  SOLANA_TREASURY_DEFAULT_CHAIN,
   USDC_MINT_MAINNET,
   type SolanaRpcAdapter,
 } from "@motebit/wallet-solana";
@@ -295,11 +295,29 @@ describe("SqliteSolanaTreasuryReconciliationStore — persistReconciliation", ()
 });
 
 describe("startSolanaTreasuryReconciliationLoop", () => {
+  it("refuses an injected reconciler whose chain is not the configured chain (#954)", () => {
+    const reconciler = new OperatorSolanaTreasuryReconciler(
+      makeAdapter(),
+      SOLANA_MAINNET_CAIP2,
+      USDC_MINT_MAINNET,
+    );
+    expect(() =>
+      startSolanaTreasuryReconciliationLoop({
+        db: relay.moteDb.db,
+        rpcUrl: "https://example.invalid",
+        identitySeed: new Uint8Array(32),
+        chain: SOLANA_DEVNET_CAIP2,
+        intervalMs: 10,
+        reconciler,
+      }),
+    ).toThrow(/reconciler writes chain .* the resolved chain is/);
+  });
+
   it("respects isFrozen() — skips cycle when frozen", async () => {
     const adapter = makeAdapter();
     const reconciler = new OperatorSolanaTreasuryReconciler(
       adapter,
-      SOLANA_TREASURY_DEFAULT_CHAIN,
+      SOLANA_CHAIN,
       USDC_MINT_MAINNET,
     );
     const isFrozen = vi.fn().mockReturnValue(true);
@@ -309,14 +327,22 @@ describe("startSolanaTreasuryReconciliationLoop", () => {
       // rpcUrl + identitySeed are ignored when reconciler is injected
       rpcUrl: "https://example.invalid",
       identitySeed: new Uint8Array(32),
+      chain: SOLANA_CHAIN,
       intervalMs: 10,
       isFrozen,
       reconciler,
     });
-    await new Promise((r) => setTimeout(r, 30));
-    clearInterval(interval);
+    // Wait on OBSERVED frozen ticks, not a fixed window (a loaded runner can
+    // fit zero ticks in 30ms and pass vacuously).
+    try {
+      await vi.waitFor(() => expect(isFrozen.mock.calls.length).toBeGreaterThanOrEqual(3), {
+        timeout: 10_000,
+        interval: 5,
+      });
+    } finally {
+      clearInterval(interval);
+    }
 
-    expect(isFrozen).toHaveBeenCalled();
     expect(adapter.getUsdcBalance).not.toHaveBeenCalled();
     expect(listTreasuryReconciliations(relay.moteDb.db, 10)).toHaveLength(0);
   });
@@ -327,7 +353,7 @@ describe("startSolanaTreasuryReconciliationLoop", () => {
     });
     const reconciler = new OperatorSolanaTreasuryReconciler(
       adapter,
-      SOLANA_TREASURY_DEFAULT_CHAIN,
+      SOLANA_CHAIN,
       USDC_MINT_MAINNET,
     );
 
@@ -335,17 +361,25 @@ describe("startSolanaTreasuryReconciliationLoop", () => {
       db: relay.moteDb.db,
       rpcUrl: "https://example.invalid",
       identitySeed: new Uint8Array(32),
+      chain: SOLANA_CHAIN,
       intervalMs: 10,
       reconciler,
     });
-    await new Promise((r) => setTimeout(r, 50));
-    clearInterval(interval);
+    try {
+      await vi.waitFor(
+        () =>
+          expect(listTreasuryReconciliations(relay.moteDb.db, 10).length).toBeGreaterThanOrEqual(1),
+        { timeout: 10_000, interval: 5 },
+      );
+    } finally {
+      clearInterval(interval);
+    }
 
     expect(adapter.getUsdcBalance).toHaveBeenCalled();
     const records = listTreasuryReconciliations(relay.moteDb.db, 10);
     expect(records.length).toBeGreaterThanOrEqual(1);
     const r = records[0]!;
-    expect(r.chain).toBe(SOLANA_TREASURY_DEFAULT_CHAIN);
+    expect(r.chain).toBe(SOLANA_CHAIN);
     expect(r.treasury_address).toBe(TREASURY);
     expect(BigInt(r.observed_onchain_balance_micro)).toBe(4_026_726n);
     expect(r.consistent).toBe(1);

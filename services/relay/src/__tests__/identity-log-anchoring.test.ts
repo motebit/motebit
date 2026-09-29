@@ -4,7 +4,7 @@
  * root. The on-chain submission is mocked; the focus is the cut → sign → confirm
  * state machine that makes the log root non-equivocable.
  */
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import { generateKeypair, bytesToHex } from "@motebit/crypto";
 import { openMotebitDatabase, type DatabaseDriver } from "@motebit/persistence";
 import type { ChainAnchorSubmitter } from "@motebit/sdk";
@@ -228,22 +228,41 @@ describe("identity-log anchoring", () => {
       await register("mote-a");
       const { submitter } = countingSubmitter();
 
-      // Frozen: the loop ticks but the freeze gate short-circuits before any work.
+      // Frozen: the loop ticks but the freeze gate short-circuits before any
+      // work. Wait on OBSERVED ticks (the freeze gate is consulted once per
+      // tick), not a wall-clock window — under load a fixed 40ms could hold
+      // zero ticks and pass vacuously.
+      let frozenTicks = 0;
       const frozen = startIdentityLogAnchorLoop(
         db,
         relayIdentity,
         { submitter, intervalMs: 10 },
-        () => true,
+        () => {
+          frozenTicks++;
+          return true;
+        },
       );
-      await new Promise((r) => setTimeout(r, 40));
-      clearInterval(frozen);
-      expect(anchorCount()).toBe(0);
+      try {
+        await vi.waitFor(() => expect(frozenTicks).toBeGreaterThanOrEqual(3), {
+          timeout: 10_000,
+          interval: 5,
+        });
+      } finally {
+        clearInterval(frozen);
+      }
+      expect(anchorCount(), "no anchor across every frozen tick").toBe(0);
 
-      // Unfrozen: the loop cuts an anchor on its own cadence.
+      // Unfrozen: the loop cuts an anchor on its own cadence — waited for as a
+      // condition with a generous ceiling, never a fixed duration.
       const live = startIdentityLogAnchorLoop(db, relayIdentity, { submitter, intervalMs: 10 });
-      await new Promise((r) => setTimeout(r, 40));
-      clearInterval(live);
-      expect(anchorCount()).toBeGreaterThanOrEqual(1);
+      try {
+        await vi.waitFor(() => expect(anchorCount()).toBeGreaterThanOrEqual(1), {
+          timeout: 10_000,
+          interval: 5,
+        });
+      } finally {
+        clearInterval(live);
+      }
     });
   });
 });

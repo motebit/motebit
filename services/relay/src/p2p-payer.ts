@@ -35,6 +35,7 @@
 import {
   Web3JsRpcAdapter,
   deriveSolanaAddress,
+  type SolanaNetworkResolution,
   type SolanaRpcAdapter,
 } from "@motebit/wallet-solana";
 import type { DatabaseDriver } from "@motebit/persistence";
@@ -103,6 +104,38 @@ export function paymentChainFromAdapter(
       if (tx.status === "rpc_error") return { status: "unavailable", reason: tx.reason };
       if (tx.status === "not_found") return { status: "not_found" };
       return candidates.has(tx.from) ? { status: "payer" } : { status: "not_payer" };
+    },
+  };
+}
+
+/**
+ * `chain`, admitted only on the network the relay can name (#954).
+ *
+ * Before reading a payer, the relay's Solana network is resolved (lazily;
+ * cached once resolved). While it is unresolved, or when a declared
+ * `SOLANA_NETWORK` contradicts the RPC (permanent), every payer read is
+ * `unavailable` — a retryable 503 at admission, nothing admitted — because a
+ * proof is a claim about a chain, and a relay that cannot say which chain its
+ * RPC serves cannot admit money on it. Once resolved, the chain answers
+ * exactly as before.
+ */
+export function gatePaymentChainOnNetwork(
+  chain: P2pPaymentChain,
+  network: { resolve(): Promise<SolanaNetworkResolution> },
+): P2pPaymentChain {
+  return {
+    async payerOf(txHash, candidates) {
+      const r = await network.resolve();
+      if (r.status === "mismatch") {
+        return {
+          status: "unavailable",
+          reason: `Solana network mismatch: SOLANA_NETWORK ${r.expected} but the RPC serves ${r.network}`,
+        };
+      }
+      if (r.status === "unavailable") {
+        return { status: "unavailable", reason: `Solana network unresolved: ${r.reason}` };
+      }
+      return chain.payerOf(txHash, candidates);
     },
   };
 }
