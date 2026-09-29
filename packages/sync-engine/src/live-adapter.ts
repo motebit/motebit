@@ -29,6 +29,7 @@ export function liveAdapter(current: () => EventStoreAdapter): EventStoreAdapter
     abortInFlight(): void;
     hasLiveWork(): boolean;
     readonly relayStreamKey: string | undefined;
+    readonly pushTransport: object;
   } {
   const listeners = new Set<() => void>();
   let bound: EventStoreAdapter | null = null;
@@ -64,6 +65,10 @@ export function liveAdapter(current: () => EventStoreAdapter): EventStoreAdapter
     },
     get relayStreamKey(): string | undefined {
       return (follow() as { relayStreamKey?: string }).relayStreamKey;
+    },
+    get pushTransport(): object {
+      const now = follow();
+      return (now as { pushTransport?: object }).pushTransport ?? now;
     },
     onActivity(listener: () => void): () => void {
       listeners.add(listener);

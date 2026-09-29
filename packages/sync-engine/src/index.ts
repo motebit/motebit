@@ -177,6 +177,20 @@ export function pushCursorKey(remote: EventStoreAdapter, motebitId: string): str
 }
 
 /**
+ * The adapter instance a push goes out through (#914 round 9): what a
+ * remote names as its `pushTransport` (a socket adapter, followed through
+ * the encrypted and live wrappers), else the remote itself.
+ */
+interface PushTransport {
+  /** Is this event still on the wire through this instance — a promise it will settle? */
+  holdsPush?(eventId: string): boolean;
+}
+function transportOf(remote: EventStoreAdapter): object {
+  const named = (remote as { pushTransport?: unknown }).pushTransport;
+  return typeof named === "object" && named !== null ? named : remote;
+}
+
+/**
  * The relay stream a remote pushes to, for asking what that relay has been
  * seen to hold (#914 round 8): a seq source's stream, or the one a socket
  * adapter names; null when the remote names none (then nothing counts as
@@ -303,7 +317,7 @@ export class SyncEngine {
    * Pushes whose answer has not arrived, per push-cursor key, across syncs
    * (#914 round 7): a later sync joins one rather than sending it again.
    */
-  private outstanding = new Map<string, Map<string, Promise<void>>>();
+  private outstanding = new Map<string, Map<string, { promise: Promise<void>; via: object }>>();
   /** Acknowledged events above the push cursor, per push-cursor key, not yet folded into it. */
   private ackedAbove = new Map<string, Set<string>>();
   /**
@@ -592,8 +606,24 @@ export class SyncEngine {
       .sort(byClockThenId);
     this.aboveCursor.set(key, pending);
 
+    const transport = transportOf(remote);
     let inFlight = this.outstanding.get(key);
-    if (!inFlight) this.outstanding.set(key, (inFlight = new Map<string, Promise<void>>()));
+    if (!inFlight) {
+      inFlight = new Map<string, { promise: Promise<void>; via: object }>();
+      this.outstanding.set(key, inFlight);
+    }
+    // A push held by ANOTHER transport instance — an adapter a token refresh
+    // or rebuild replaced — is joined only while that adapter still holds it
+    // on the wire (`holdsPush`: a frame draining on its retired socket, which
+    // its own rules settle). One it no longer holds may never settle: it is
+    // sent again through this transport (#914 round 9; the relay stores each
+    // event_id once). Never a re-send of work still in flight; never a join
+    // of a promise nothing will settle.
+    for (const [id, held] of inFlight) {
+      if (held.via === transport) continue;
+      if ((held.via as PushTransport).holdsPush?.(id) === true) continue;
+      inFlight.delete(id);
+    }
     let acked = this.ackedAbove.get(key);
     if (!acked) this.ackedAbove.set(key, (acked = new Set<string>()));
     // A push left in flight by an earlier sync is joined, never sent again —
@@ -623,11 +653,11 @@ export class SyncEngine {
         acked.add(e.event_id);
         continue;
       }
-      let p = inFlight.get(e.event_id);
+      let p = inFlight.get(e.event_id)?.promise;
       if (!p) {
         const sent = remote.append(e);
         p = sent;
-        inFlight.set(e.event_id, sent);
+        inFlight.set(e.event_id, { promise: sent, via: transport });
         const ackedSet = acked;
         const flying = inFlight;
         sent.then(
@@ -642,7 +672,7 @@ export class SyncEngine {
         );
         void sent
           .finally(() => {
-            if (flying.get(e.event_id) === sent) flying.delete(e.event_id);
+            if (flying.get(e.event_id)?.promise === sent) flying.delete(e.event_id);
           })
           .catch(() => {});
       }

@@ -28,6 +28,7 @@ import {
   MAX_PUSH_BATCHES_PER_SYNC,
   ackedPushCursor,
   pushCursorKey,
+  liveAdapter,
 } from "../index.js";
 import type { SyncSeqCursorStore } from "../index.js";
 import { FakeRelay } from "./fake-relay.js";
@@ -463,6 +464,80 @@ describe("#914 WebSocketEventStoreAdapter — an append resolves on the relay's 
     expect(s.frames()).toHaveLength(4);
   });
 
+  it("an OVERTAKEN frame on a RETIRED adapter is never re-queued there: its append fails, retryably (#914 round 9)", async () => {
+    const a = adapter();
+    const s = lastSocket();
+    const pid = (i: number): string =>
+      (JSON.parse(s.sent.filter((m) => m.includes('"type":"push"'))[i]!) as { push_id: string })
+        .push_id;
+    void a.append(entry("e0", 1)).catch(() => {});
+    await vi.advanceTimersByTimeAsync(20);
+    s.answer({ type: "ack", accepted: 1, push_id: pid(0) }); // window 16
+    await vi.advanceTimersByTimeAsync(0);
+    const p1 = track(a.append(entry("e1", 2))); // the relay will drop this one
+    await vi.advanceTimersByTimeAsync(200);
+    const p2 = track(a.append(entry("e2", 3)));
+    await vi.advanceTimersByTimeAsync(200);
+    s.answer({ type: "ack", accepted: 1, push_id: pid(2) }); // e1 is overtaken
+    await vi.advanceTimersByTimeAsync(0);
+    a.disconnect(); // a token refresh: the socket drains, the adapter is retired
+    await vi.advanceTimersByTimeAsync(5_000); // past the overtaken frame's grace
+    expect(p2.state).toBe("ok");
+    expect(p1.state).toBe("err"); // settled — never parked in an outbox nothing flushes
+    expect(s.frames()).toHaveLength(3); // and not sent from the retired adapter
+  });
+
+  it("frames flushed in one tick are still ordered: a later one answered overtakes an earlier one (#914 round 9)", async () => {
+    const a = adapter();
+    const s = lastSocket();
+    const pid = (i: number): string =>
+      (JSON.parse(s.sent.filter((m) => m.includes('"type":"push"'))[i]!) as { push_id: string })
+        .push_id;
+    void a.append(entry("e0", 1)).catch(() => {});
+    await vi.advanceTimersByTimeAsync(20);
+    s.answer({ type: "ack", accepted: 1, push_id: pid(0) }); // window 16
+    await vi.advanceTimersByTimeAsync(0);
+    // A backlog larger than a frame: several frames leave in the same tick.
+    const many: Array<{ state: string }> = [];
+    for (let i = 1; i <= 1_000; i++) many.push(track(a.append(entry(`b${i}`, i + 1))));
+    await vi.advanceTimersByTimeAsync(200);
+    const frames = s.frames();
+    expect(frames.length).toBeGreaterThanOrEqual(3); // 1 + two frames of 500
+    s.answer({ type: "ack", accepted: 500, push_id: pid(2) }); // the second is answered first
+    await vi.advanceTimersByTimeAsync(1_500);
+    expect(s.frames()).toHaveLength(frames.length + 1); // the first was overtaken: sent again
+    expect(s.frames()[frames.length]![0]).toBe("b1");
+  });
+
+  it("a rate-limit refusal on a retired socket spares the frames on the adapter's CURRENT socket (#914 round 9)", async () => {
+    const a = adapter();
+    const s = lastSocket();
+    void a.append(entry("e0", 1)).catch(() => {});
+    await vi.advanceTimersByTimeAsync(20);
+    const first = JSON.parse(s.sent.filter((m) => m.includes('"type":"push"'))[0]!) as {
+      push_id: string;
+    };
+    s.answer({ type: "ack", accepted: 1, push_id: first.push_id }); // window 16
+    await vi.advanceTimersByTimeAsync(0);
+    const p1 = track(a.append(entry("e1", 1)));
+    await vi.advanceTimersByTimeAsync(20);
+    a.disconnect(); // s drains
+    a.connect(); // the same adapter, a new socket
+    const t = lastSocket();
+    expect(t).not.toBe(s);
+    t.open();
+    const p2 = track(a.append(entry("e2", 2)));
+    await vi.advanceTimersByTimeAsync(200);
+    expect(t.frames()).toEqual([["e2"]]);
+    s.answer({ type: "error", message: "Rate limit exceeded" }); // on the RETIRED socket
+    await vi.advanceTimersByTimeAsync(0);
+    expect(p1.state).toBe("err");
+    expect(p2.state).toBe("pending"); // the current socket's frame is untouched
+    t.answer({ type: "ack", accepted: 1 });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(p2.state).toBe("ok");
+  });
+
   it("a rate-limit refusal on a DRAINING retired socket fails its frames and closes it (#914 round 8)", async () => {
     const a = adapter();
     const s = lastSocket();
@@ -571,6 +646,78 @@ describe("#914 WebSocketEventStoreAdapter — an append resolves on the relay's 
 // ---------------------------------------------------------------------------
 // The engine over the encrypted socket door, exactly as the surfaces wire it
 // ---------------------------------------------------------------------------
+
+describe("#914 r9: a push held by a replaced adapter is never joined", () => {
+  it("the next sync pushes through the replacement, never waiting on the retired adapter's promise", async () => {
+    const local = new InMemoryEventStore();
+    await write(local, "r1");
+    const delivered: string[] = [];
+    // A: its promise is one nothing will settle — and A no longer holds the
+    // push on any wire (`holdsPush` false), though it says it is live.
+    const retired = {
+      holdsPush: () => false,
+      append: () => new Promise<void>(() => {}),
+      query: () => Promise.resolve([]),
+      getLatestClock: () => Promise.resolve(0),
+      tombstone: () => Promise.resolve(),
+      hasLiveWork: () => true,
+    };
+    const replacement = {
+      append: (e: EventLogEntry) => {
+        delivered.push(e.event_id);
+        return Promise.resolve();
+      },
+      query: () => Promise.resolve([]),
+      getLatestClock: () => Promise.resolve(0),
+      tombstone: () => Promise.resolve(),
+      hasLiveWork: () => false,
+    };
+    let current: EventStoreAdapter = retired;
+    const engine = new SyncEngine(local, MID, { push_patience_ms: 50 });
+    engine.connectRemote(liveAdapter(() => current));
+    await engine.sync(); // ends at its patience; A holds r1
+    current = replacement; // a token refresh
+    await engine.sync();
+    expect(delivered).toEqual(["r1"]);
+    expect(engine.getCursor().last_version_clock).toBe(1);
+  });
+
+  it("a push still on the retired adapter's wire (a draining frame) is joined, never sent twice", async () => {
+    const local = new InMemoryEventStore();
+    await write(local, "d1");
+    let settleOld!: () => void;
+    const draining = {
+      holdsPush: () => true, // its frame is still on the wire
+      append: () => new Promise<void>((r) => (settleOld = r)),
+      query: () => Promise.resolve([]),
+      getLatestClock: () => Promise.resolve(0),
+      tombstone: () => Promise.resolve(),
+      hasLiveWork: () => true,
+    };
+    const sentViaNew: string[] = [];
+    const replacement = {
+      append: (e: EventLogEntry) => {
+        sentViaNew.push(e.event_id);
+        return Promise.resolve();
+      },
+      query: () => Promise.resolve([]),
+      getLatestClock: () => Promise.resolve(0),
+      tombstone: () => Promise.resolve(),
+      hasLiveWork: () => true,
+    };
+    let current: EventStoreAdapter = draining;
+    const engine = new SyncEngine(local, MID, { push_patience_ms: 50 });
+    engine.connectRemote(liveAdapter(() => current));
+    await engine.sync();
+    current = replacement;
+    void engine.sync();
+    await new Promise((r) => setTimeout(r, 20));
+    expect(sentViaNew).toEqual([]); // joined: the draining frame's answer is awaited
+    settleOld(); // the late ack on the retired socket
+    await new Promise((r) => setTimeout(r, 100));
+    expect(engine.getCursor().last_version_clock).toBe(1);
+  });
+});
 
 describe("#914 SyncEngine over EncryptedEventStoreAdapter(socket)", () => {
   let original: typeof globalThis.WebSocket;

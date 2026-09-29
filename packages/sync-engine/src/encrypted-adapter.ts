@@ -141,6 +141,11 @@ export class EncryptedEventStoreAdapter implements EventStoreAdapter {
    * undefined, and this adapter is not a seq source. Distinct from the raw
    * key, so a raw pull over the same store never advances this cursor.
    */
+  /** The adapter instance a push goes out through (#914 round 9). */
+  get pushTransport(): object {
+    return (this.inner as { pushTransport?: object }).pushTransport ?? this.inner;
+  }
+
   /** The inner adapter's relay stream, when it names one (a socket; #914 round 8). */
   get relayStreamKey(): string | undefined {
     return (this.inner as { relayStreamKey?: string }).relayStreamKey;

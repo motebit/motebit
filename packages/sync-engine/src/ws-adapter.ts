@@ -160,6 +160,8 @@ interface FrameState {
 /** A push frame on the wire. */
 interface InFlightFrame {
   id: string;
+  /** Send order on this adapter: frames flushed in one tick share `sentAt`, never `seq`. */
+  seq: number;
   socket: WebSocket;
   items: PendingPush[];
   timer: ReturnType<typeof setTimeout>;
@@ -353,6 +355,27 @@ export class WebSocketEventStoreAdapter implements EventStoreAdapter {
    */
   private inFlight: InFlightFrame[] = [];
   private frameSeq = 0;
+  /**
+   * `disconnect()` retired this adapter (until a `connect()`): nothing it
+   * queues will ever be flushed, so it must queue nothing (#914 round 9).
+   */
+  private retired = false;
+  /** This adapter instance — the sync engine's `pushTransport` (#914 round 9). */
+  get pushTransport(): this {
+    return this;
+  }
+
+  /**
+   * Is `eventId` still on the wire through this adapter — in a frame in
+   * flight (on any socket, a draining retired one included) or queued on an
+   * adapter that is not retired? Its append will then be settled by this
+   * adapter's own rules; the sync engine may keep waiting on it (#914 round
+   * 9). Queued on a RETIRED adapter it is not: nothing will flush it.
+   */
+  holdsPush(eventId: string): boolean {
+    if (this.inFlight.some((f) => f.items.some((i) => i.entry.event_id === eventId))) return true;
+    return !this.retired && this.outbox.some((i) => i.entry.event_id === eventId);
+  }
   /** When each socket last had a push frame answered: the dead rule is per socket. */
   private answeredAt = new WeakMap<WebSocket, number>();
 
@@ -368,6 +391,7 @@ export class WebSocketEventStoreAdapter implements EventStoreAdapter {
 
   connect(): void {
     if (this.ws) return;
+    this.retired = false;
 
     // If a credentialSource is provided, resolve the token asynchronously
     // before establishing the connection. Falls back to static authToken.
@@ -566,6 +590,7 @@ export class WebSocketEventStoreAdapter implements EventStoreAdapter {
   }
 
   disconnect(): void {
+    this.retired = true;
     this.frame.waiting.delete(this.wakeFlush);
     this.generation++;
     if (this.authTimer) {
@@ -892,10 +917,12 @@ export class WebSocketEventStoreAdapter implements EventStoreAdapter {
       const items = this.outbox.splice(0, this.frame.limit);
       // From here the frame's own deadline governs each event.
       for (const item of items) for (const w of item.waiters) clearWaiterTimer(w);
-      const id = String(++this.frameSeq);
+      const seq = ++this.frameSeq;
+      const id = String(seq);
       // In flight BEFORE the send: an ack delivered during `send` is this frame's.
       const frame: InFlightFrame = {
         id,
+        seq,
         socket,
         items,
         timer: setTimeout(() => this.onPushTimeout(socket, frame), this.ackTimeoutMs),
@@ -1003,7 +1030,7 @@ export class WebSocketEventStoreAdapter implements EventStoreAdapter {
       // the later one. One ack deadline from now it is judged lost.
       const now = Date.now();
       for (const earlier of mine) {
-        if (earlier.sentAt >= f.sentAt || earlier.overtakenAt !== null) continue;
+        if (earlier.seq >= f.seq || earlier.overtakenAt !== null) continue;
         earlier.overtakenAt = now;
         clearTimeout(earlier.timer);
         earlier.timer = setTimeout(() => this.onPushTimeout(socket, earlier), this.ackTimeoutMs);
@@ -1023,7 +1050,7 @@ export class WebSocketEventStoreAdapter implements EventStoreAdapter {
         else this.closeIfDrained(socket);
         return;
       }
-      answered = [mine[0]!];
+      answered = mine; // exactly one frame: the one this ack can only be for
     }
     this.answeredAt.set(socket, Date.now());
     for (const frame of answered) {
@@ -1181,7 +1208,21 @@ export class WebSocketEventStoreAdapter implements EventStoreAdapter {
     clearTimeout(frame.timer);
     this.inFlight.splice(this.inFlight.indexOf(frame), 1);
     this.frame.draining.delete(frame);
-    this.outbox.unshift(...frame.items);
+    if (this.retired) {
+      // A retired adapter flushes nothing: re-queued here, the events would
+      // wait forever (#914 round 9). Their appends fail, retryably; the
+      // sync engine pushes them again through the live adapter.
+      const lost = new Error(
+        "sync push: the relay lost the frame, on a retired adapter — push again",
+      );
+      for (const item of frame.items) settle(item, lost);
+    } else {
+      this.outbox.unshift(...frame.items);
+      // Not connected: queued events are bounded from now, as any queued one.
+      if (!this.connected) {
+        for (const item of frame.items) for (const w of item.waiters) this.armQueueDeadline(w);
+      }
+    }
     this.closeIfDrained(frame.socket);
     this.flushPush();
     this.wakeWaiting();
