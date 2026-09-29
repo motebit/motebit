@@ -341,4 +341,39 @@ describe("delegate --plan HTTP-polling adapter: an unconfirmed submission keeps 
     await p;
     expect(persisted).toEqual(["task-1"]);
   });
+
+  it("#890 r3: the Idempotency-Key is derived from the step, so two drivers present one key", async () => {
+    vi.stubGlobal("fetch", relay.fetchMock);
+    relay.answerWith(done);
+    const a = makeAdapter().delegateStep(step, TIMEOUT);
+    const b = makeAdapter().delegateStep(step, TIMEOUT);
+    await vi.advanceTimersByTimeAsync(TIMEOUT);
+    await Promise.all([a, b]);
+    expect(relay.keys).toEqual(["plan-step:plan-1:step-1:0", "plan-step:plan-1:step-1:0"]);
+    expect(relay.admittedCount()).toBe(1);
+  });
+
+  it("#890 r3: a 409 that names the task (#888) hands over that task", async () => {
+    let posts = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        if (init?.method === "POST") {
+          posts++;
+          return new Response(JSON.stringify({ code: "TASK_CONFLICT", task_id: "task-named" }), {
+            status: 409,
+          });
+        }
+        return relay.fetchMock(url, init);
+      }),
+    );
+    relay.answerWith(done);
+    const persisted: string[] = [];
+    const p = makeAdapter().delegateStep(step, TIMEOUT, (id) => persisted.push(id));
+    await vi.advanceTimersByTimeAsync(TIMEOUT);
+    const r = await p;
+    expect(r.task_id).toBe("task-named");
+    expect(persisted).toEqual(["task-named"]);
+    expect(posts).toBe(1);
+  });
 });

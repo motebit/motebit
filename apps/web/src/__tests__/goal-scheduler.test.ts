@@ -484,6 +484,23 @@ describe("#890: a goal whose last run left a paid outcome unknown", () => {
     expect(String(emitted[0]?.summary)).toMatch(/^awaiting result — /);
   });
 
+  it("r3: a once goal whose plan is busy (another driver holds it) awaits, never errors", async () => {
+    const app = makeApp({
+      getRuntime: () => ({
+        goals: { executed: () => Promise.resolve() },
+        outstandingPaidResults: () => [],
+      }),
+      async *executeGoal() {
+        yield { type: "plan_busy", plan: {} };
+      },
+    });
+    const engine = createWebGoalsScheduler(app as unknown as WebApp);
+    engine.addGoal({ prompt: "hire", interval_ms: 0, mode: "once" });
+    const goalId = engine.getState().goals[0]!.goal_id;
+    expect((await engine.runNow(goalId)).outcome).toBe("awaiting_result");
+    expect(engine.getState().goals.find((g) => g.goal_id === goalId)!.status).toBe("active");
+  });
+
   const owedAt = (recordedAt: number) => ({
     workerMotebitId: "worker-a",
     capability: "research",

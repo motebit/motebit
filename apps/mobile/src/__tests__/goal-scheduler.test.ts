@@ -636,15 +636,24 @@ describe("#890: a goal whose last run left a paid outcome unknown", () => {
     expect(deps._goalStore.updateLastRun).not.toHaveBeenCalled();
   });
 
-  it("a plan_undetermined run is recorded `partial`, never counted as a failure", async () => {
-    const deps = makeDeps();
-    const stream = async function* (): AsyncGenerator<unknown> {
-      yield {
+  it.each([
+    [
+      "plan_undetermined",
+      {
         type: "plan_undetermined",
         plan: { plan_id: "p1" },
         step: { step_id: "s1", description: "remote work" },
         reason: "Submission unconfirmed — the task may still complete; check /result",
-      };
+      },
+    ],
+    [
+      "plan_busy (r3: another driver holds the plan)",
+      { type: "plan_busy", plan: { plan_id: "p1" } },
+    ],
+  ])("a %s run is recorded `partial`, never counted as a failure", async (_label, held) => {
+    const deps = makeDeps();
+    const stream = async function* (): AsyncGenerator<unknown> {
+      yield held;
     };
     const engine = {
       createPlan: vi.fn(async () => ({ plan: { plan_id: "p1" } })),

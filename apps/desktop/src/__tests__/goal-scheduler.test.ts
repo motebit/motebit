@@ -718,7 +718,18 @@ describe("#890: a goal whose last run left a paid outcome unknown", () => {
     expect(runtime.sendMessageStreaming).not.toHaveBeenCalled();
   });
 
-  it("fires when the owed payment was recorded outside that run's window", async () => {
+  it("fires when the owed payment was recorded before the goal's runs", async () => {
+    const runtime = makeRuntime({ outstandingPaidResults: () => [owedEntry(500)] });
+    const s = new GoalScheduler(makeDeps({ getRuntime: () => runtime }));
+    const invoke = makeInvoke({ goals: [due], outcomes: [{ ran_at: 1_000 }] });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await (s as any).goalTick(invoke);
+    expect(runtime.sendMessageStreaming).toHaveBeenCalled();
+  });
+
+  it("r3 finding 3: a run that paid AFTER overrunning its wall clock still holds the goal", async () => {
+    // The abort is cooperative: a hire in flight at the deadline completes,
+    // and the ledger stamps it after the 10-minute mark.
     const runtime = makeRuntime({
       outstandingPaidResults: () => [owedEntry(1_000 + 11 * 60 * 1000)],
     });
@@ -726,7 +737,34 @@ describe("#890: a goal whose last run left a paid outcome unknown", () => {
     const invoke = makeInvoke({ goals: [due], outcomes: [{ ran_at: 1_000 }] });
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     await (s as any).goalTick(invoke);
-    expect(runtime.sendMessageStreaming).toHaveBeenCalled();
+    expect(runtime.sendMessageStreaming).not.toHaveBeenCalled();
+  });
+
+  it('r3 finding 2: "Run now" honours the owed-payment hold too', async () => {
+    const runtime = makeRuntime({ outstandingPaidResults: () => [owedEntry(1_500)] });
+    const s = new GoalScheduler(makeDeps({ getRuntime: () => runtime }));
+    const invoke = makeInvoke({ goals: [due], outcomes: [{ ran_at: 1_000 }] });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await (s as any).goalTick(invoke);
+    expect(runtime.sendMessageStreaming).not.toHaveBeenCalled();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await s.runNow(invoke as any, "g890");
+    expect(runtime.sendMessageStreaming).not.toHaveBeenCalled();
+  });
+
+  it("r3: a run whose start cannot be recorded does not run (fail-closed)", async () => {
+    const runtime = makeRuntime({ outstandingPaidResults: () => [] });
+    const s = new GoalScheduler(makeDeps({ getRuntime: () => runtime }));
+    const base = makeInvoke({ goals: [due] });
+    const invoke = vi.fn(async (cmd: string, args?: Record<string, unknown>) => {
+      if (cmd === "db_execute" && String((args as { sql: string }).sql).includes("'running'")) {
+        throw new Error("database is locked");
+      }
+      return base(cmd, args);
+    });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await (s as any).goalTick(invoke);
+    expect(runtime.sendMessageStreaming).not.toHaveBeenCalled();
   });
 
   function planDeps(stream: () => AsyncGenerator<unknown>, createThrows?: Error) {
@@ -779,6 +817,20 @@ describe("#890: a goal whose last run left a paid outcome unknown", () => {
     expect(sql.some((q) => q.includes("'partial'"))).toBe(true);
     expect(sql.some((q) => q.includes("consecutive_failures + 1"))).toBe(false);
     expect(sql.some((q) => q.includes("status = 'paused'"))).toBe(false);
+    expect(completed.mock.calls[0]?.[0]?.status).toBe("awaiting_result");
+  });
+
+  it("r3: a plan_busy run (another driver holds the plan) is not a failure", async () => {
+    const { deps } = planDeps(async function* () {
+      yield { type: "plan_busy", plan: { plan_id: "p1" } };
+    });
+    const completed = vi.fn();
+    const s = new GoalScheduler(deps);
+    s.onGoalComplete(completed);
+    const invoke = makeInvoke({ goals: [due] });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await (s as any).goalTick(invoke);
+    expect(sqlOf(invoke).some((q) => q.includes("consecutive_failures + 1"))).toBe(false);
     expect(completed.mock.calls[0]?.[0]?.status).toBe("awaiting_result");
   });
 
