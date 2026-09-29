@@ -156,7 +156,9 @@ function holdOf(taskId: string): number {
   return -row.t;
 }
 /** Reconciliation with no wall-clock waits (the two-observation gap and re-check backoff). */
-const NOW = { scan: { expiryConfirmGapMs: 0, recheckBackoffMs: [0, 0, 0] } };
+const NOW = {
+  scan: { expiryConfirmGapMs: 0, recheckBackoffMs: [0, 0, 0], mismatchRecheckBackoffMs: 0 },
+};
 
 function x402Records(): {
   payer: string;
@@ -1114,7 +1116,12 @@ describe("#907 round 4: one authorization, ITS OWN Transfer — never a shared o
       }
       expect(x402Deposits(w), "never 2× or 3× — nothing").toEqual([]);
       for (const rec of x402Records()) {
-        expect(rec).toMatchObject({ status: "failed", failure_reason: "execution_mismatch" });
+        // The mismatch is recorded as the latest observation; a refusal keeps
+        // its original failure class (#907 round 11).
+        expect(rec).toMatchObject({ status: "failed", last_observation: "execution_mismatch" });
+        expect(rec.failure_reason).toBe(
+          path === "race" ? "execution_mismatch" : "invalid_exact_evm_insufficient_balance",
+        );
       }
     });
   }
@@ -1775,8 +1782,10 @@ describe("#907 round 5", () => {
     expect(chain().recheck_count).toBe(2);
     expect(chain().next_recheck_head_ts).toBe(t2 + 6 * 60 * 60);
     facilitator.chainTime = t2 + 6 * 60 * 60;
+    const t3 = facilitator.chainTime;
     await run();
-    expect(chain()).toMatchObject({ recheck_count: 3, next_recheck_head_ts: null });
+    // Every spend leaves a chain-time wait, the last one too (round 11).
+    expect(chain()).toMatchObject({ recheck_count: 3, next_recheck_head_ts: t3 + 6 * 60 * 60 });
     await run();
     expect(chain().recheck_count, "no fourth").toBe(3);
   });
@@ -2371,7 +2380,8 @@ describe("#907 round 8: an execution_mismatch has its own re-check budget", () =
     );
     expect(x402Records()[0]).toMatchObject({
       status: "failed",
-      failure_reason: "execution_mismatch",
+      failure_reason: "invalid_exact_evm_insufficient_balance", // the original class, kept
+      last_observation: "execution_mismatch",
       recheck_count: 1,
     });
     await reconcilePendingX402Settlements(relay.moteDb.db, fakeChainReader(), NOW);
@@ -2381,7 +2391,7 @@ describe("#907 round 8: an execution_mismatch has its own re-check budget", () =
 });
 
 describe("#907 round 8: the pass_cursor compare-and-set on its own", () => {
-  it("an operator resolve resets pass_cursor WITHOUT bumping recheck_count; a stale run's next cursor write is a no-op and it spends nothing", async () => {
+  it("a concurrent run advanced the cursor: a stale run's next cursor write is a no-op, and its lagging pass neither concludes nor spends", async () => {
     const dbh = relay.moteDb.db;
     const w = await pricedAgent();
     const body = { prompt: `907 r8 cas ${crypto.randomUUID()}`, submitted_by: w };
@@ -2409,26 +2419,22 @@ describe("#907 round 8: the pass_cursor compare-and-set on its own", () => {
     };
     const runA = reconcilePendingX402Settlements(dbh, slow, scan);
     await atSecond;
-    const mid = x402Records()[0]! as unknown as {
-      pass_cursor: number | null;
-      recheck_count: number;
-    };
+    const mid = x402Records()[0]! as unknown as { pass_cursor: number | null };
     expect(mid.pass_cursor, "run A wrote its first page").not.toBeNull();
-    // The operator's resolve concludes a pass and resets the cursor; it never
-    // spends, so the generation (recheck_count) does not move.
+    // Run B (same generation) advances the same pass by one page.
     const full = findX402Settlement(dbh, x402Records()[0]!.payer, x402Records()[0]!.nonce)!;
-    await reconcileX402Settlement(
-      dbh,
-      fakeChainReader({ lagging: true }),
-      full,
-      { ...X402_SCAN, ...NOW.scan, pageBlocks: 400 },
-      { operator: true },
-    );
-    expect(x402Records()[0]).toMatchObject({ pass_cursor: null, recheck_count: 0 });
+    await reconcileX402Settlement(dbh, fakeChainReader({ lagging: true }), full, {
+      ...X402_SCAN,
+      ...NOW.scan,
+      pageBlocks: 50,
+      maxPagesPerRun: 1,
+    });
+    const advanced = mid.pass_cursor! + 50;
+    expect(x402Records()[0]).toMatchObject({ pass_cursor: advanced, recheck_count: 0 });
     release();
     await runA;
-    expect(x402Records()[0], "run A's stale writes and its conclusion were no-ops").toMatchObject({
-      pass_cursor: null,
+    expect(x402Records()[0], "run A's stale write and its conclusion were no-ops").toMatchObject({
+      pass_cursor: advanced,
       recheck_count: 0,
     });
   });
@@ -2593,7 +2599,7 @@ describe("#907 round 9: the relay's wall clock never defines the scanned chain w
     return { reader: base, release, atRead };
   }
 
-  it("CAS: a stale run from an earlier MISMATCH generation writes no pass cursor — its lagging reads never make the operator's pass skip the execution", async () => {
+  it("CAS: a stale run from an earlier MISMATCH generation writes no pass cursor — its lagging reads never make the next re-check skip the execution", async () => {
     const db = relay.moteDb.db;
     const { w, pay, auth } = await failedRecord("CasMismatch");
     facilitator.chainExecute({
@@ -2604,10 +2610,10 @@ describe("#907 round 9: the relay's wall clock never defines the scanned chain w
       value: BigInt(auth.value),
     });
     facilitator.chainTime = recOf(w).valid_before + 10_000;
-    // The first re-check reads the quirk node: failed execution_mismatch.
+    // The first re-check reads the quirk node: a mismatch observed.
     await reconcilePendingX402Settlements(db, fakeChainReader({ receiptQuirkOnce: true }), NOW);
-    expect(recOf(w)).toMatchObject({
-      failure_reason: "execution_mismatch",
+    expect(recOf(w) as unknown as Record<string, unknown>).toMatchObject({
+      last_observation: "execution_mismatch",
       mismatch_rechecks: 0,
       pass_cursor: null,
     });
@@ -2629,16 +2635,8 @@ describe("#907 round 9: the relay's wall clock never defines the scanned chain w
     a.release();
     expect(await runA).toBe("unchanged");
     expect(recOf(w).pass_cursor, "the stale run wrote no cursor").toBeNull();
-    // The operator's pass rescans from the start and finds the execution.
-    await reconcileX402Settlement(
-      db,
-      fakeChainReader(),
-      full(w),
-      { ...X402_SCAN, ...NOW.scan },
-      {
-        operator: true,
-      },
-    );
+    // The next re-check (an expiry re-check is left) rescans from the start.
+    await reconcilePendingX402Settlements(db, fakeChainReader(), NOW);
     expect(recOf(w).status).toBe("credited");
     expect(x402Deposits(w).map((d) => d.amount)).toEqual([GROSS]);
   });
@@ -2760,5 +2758,219 @@ describe("#907 round 10: every wait is measured in CHAIN time — a relay clock 
         recheck_count: number;
       },
     ).toMatchObject({ resolved_head_ts: null, recheck_count: 0 });
+  });
+});
+
+describe("#907 round 11: the expiry and mismatch re-check budgets are orthogonal; the operator's resolve writes nothing", () => {
+  const db = () => relay.moteDb.db;
+  type Row = Record<string, unknown> & {
+    status: string;
+    failure_reason: string | null;
+    last_observation: string | null;
+    recheck_count: number;
+    mismatch_rechecks: number;
+    next_recheck_head_ts: number | null;
+    mismatch_observed_head_ts: number | null;
+    valid_before: number;
+    payer: string;
+    nonce: string;
+  };
+  const row = (w: string): Row =>
+    db().prepare("SELECT * FROM relay_x402_settlements WHERE delegator_id = ?").get(w) as Row;
+  /**
+   * The operator's resolve, asserting the property: unless it credits, it
+   * changes NO column (a fortiori none the loop's selection or scan reads).
+   */
+  async function operatorResolve(w: string, reader: ReturnType<typeof fakeChainReader>) {
+    const before = row(w);
+    const decision = await reconcileX402Settlement(
+      db(),
+      reader,
+      findX402Settlement(db(), before.payer, before.nonce)!,
+      { ...X402_SCAN, ...NOW.scan },
+      { operator: true },
+    );
+    if (decision !== "credited") {
+      expect(row(w), `operator resolve (${decision}) wrote nothing`).toEqual(before);
+    }
+    return decision;
+  }
+  /** A refused payment (failed at once) that executes late, inside its window. */
+  async function refusedLandsLate(label: string) {
+    const w = await pricedAgent();
+    const body = { prompt: `907 r11 ${label} ${crypto.randomUUID()}`, submitted_by: w };
+    const pay = await paymentFor(w, body, `0x${label}`);
+    facilitator.settleMode = { refuse: "invalid_exact_evm_insufficient_balance" };
+    await submit(w, crypto.randomUUID(), body, pay);
+    facilitator.settleMode = "ok";
+    const auth = authorizationOf(pay);
+    facilitator.chainExecute({
+      token: tokenOf(pay),
+      from: auth.from,
+      nonce: auth.nonce,
+      to: auth.to,
+      value: BigInt(auth.value),
+    });
+    facilitator.chainTime = row(w).valid_before + 10_000;
+    return w;
+  }
+  const loop = (reader: ReturnType<typeof fakeChainReader>, scan: object = NOW) =>
+    reconcilePendingX402Settlements(db(), reader, scan as typeof NOW);
+  const quirk = () => fakeChainReader({ receiptQuirkOnce: true });
+  const lagging = () => fakeChainReader({ lagging: true });
+  const honest = () => fakeChainReader();
+
+  it("sequence 1 — refused, lands late; re-check 1 hits the quirk; a lagging read follows: the expiry re-checks left still credit on the honest read", async () => {
+    const w = await refusedLandsLate("R11s1");
+    await loop(quirk());
+    expect(row(w)).toMatchObject({
+      failure_reason: "invalid_exact_evm_insufficient_balance",
+      last_observation: "execution_mismatch",
+      recheck_count: 1,
+      mismatch_rechecks: 0,
+    });
+    await loop(lagging()); // the mismatch re-check, on a lagging node
+    expect(row(w)).toMatchObject({ status: "failed", recheck_count: 1, mismatch_rechecks: 1 });
+    await loop(honest());
+    expect(row(w).status).toBe("credited");
+    expect(x402Deposits(w).map((d) => d.amount)).toEqual([GROSS]);
+  });
+
+  it("sequence 2 — pending, lagging reads expire it; re-check 1 hits the quirk; lagging again: still credits on the honest read", async () => {
+    const w = await pricedAgent();
+    const body = { prompt: `907 r11 s2 ${crypto.randomUUID()}`, submitted_by: w };
+    const pay = await paymentFor(w, body, "0xR11s2");
+    facilitator.settleMode = "timeout-after-transfer";
+    await submit(w, crypto.randomUUID(), body, pay);
+    facilitator.settleMode = "ok";
+    facilitator.chainTime = row(w).valid_before + 10_000;
+    await loop(lagging());
+    await loop(lagging());
+    expect(row(w)).toMatchObject({
+      status: "failed",
+      failure_reason: "authorization_expired_unused",
+    });
+    await loop(quirk());
+    await loop(lagging());
+    expect(row(w)).toMatchObject({
+      status: "failed",
+      failure_reason: "authorization_expired_unused",
+      last_observation: "execution_mismatch",
+      recheck_count: 1,
+      mismatch_rechecks: 1,
+    });
+    await loop(honest());
+    expect(row(w).status).toBe("credited");
+  });
+
+  it("sequence 3 — refused, lands late; re-check 1 lagging, re-check 2 hits the quirk, then lagging: the third expiry re-check credits", async () => {
+    const w = await refusedLandsLate("R11s3");
+    await loop(lagging());
+    await loop(quirk());
+    await loop(lagging());
+    expect(row(w)).toMatchObject({ status: "failed", recheck_count: 2, mismatch_rechecks: 1 });
+    await loop(honest());
+    expect(row(w).status).toBe("credited");
+  });
+
+  it("sequence 4 — refused, lands late; re-check 1 hits the quirk: the mismatch's OWN re-check credits on the honest read", async () => {
+    const w = await refusedLandsLate("R11s4");
+    await loop(quirk());
+    // Freeze the expiry budget's wait so only the mismatch clause can admit it.
+    db()
+      .prepare("UPDATE relay_x402_settlements SET next_recheck_head_ts = ? WHERE delegator_id = ?")
+      .run(facilitator.chainTime + 1_000_000, w);
+    await loop(honest());
+    expect(row(w)).toMatchObject({ status: "credited" });
+  });
+
+  it("operator first — its resolve past validBefore hits the quirk and writes NOTHING; all three expiry re-checks remain and the loop credits", async () => {
+    const w = await refusedLandsLate("R11op");
+    await loop(lagging()); // stamps the failure's chain time, spends re-check 1
+    expect(row(w)).toMatchObject({ recheck_count: 1 });
+    expect(await operatorResolve(w, quirk())).toBe("execution_mismatch");
+    expect(await operatorResolve(w, lagging())).toBe("no_execution_found");
+    expect(row(w)).toMatchObject({
+      recheck_count: 1,
+      mismatch_rechecks: 0,
+      last_observation: null,
+    });
+    await loop(honest());
+    expect(row(w).status).toBe("credited");
+  });
+
+  it("property: across every state a record passes through, a non-crediting operator resolve changes no column", async () => {
+    const w = await refusedLandsLate("R11prop");
+    const readers = [lagging, quirk, () => fakeChainReader({ failing: true })];
+    const probe = async () => {
+      for (const make of readers) await operatorResolve(w, make());
+    };
+    await probe(); // failed, never seen by the loop
+    await loop(lagging());
+    await probe(); // one expiry re-check spent
+    await loop(quirk());
+    await probe(); // a mismatch observed
+    await loop(lagging());
+    await probe(); // the mismatch budget spent
+    // A pending record, before and after its validBefore, and with an observed expiry.
+    const w2 = await pricedAgent();
+    const body = { prompt: `907 r11 prop2 ${crypto.randomUUID()}`, submitted_by: w2 };
+    const pay = await paymentFor(w2, body, "0xR11prop2");
+    facilitator.settleMode = { refuse: "upstream 502" };
+    await submit(w2, crypto.randomUUID(), body, pay);
+    facilitator.settleMode = "ok";
+    for (const make of readers) await operatorResolve(w2, make());
+    facilitator.chainTime = row(w2).valid_before + 10_000;
+    for (const make of readers) await operatorResolve(w2, make());
+    await loop(lagging(), { scan: { ...NOW.scan, expiryConfirmGapMs: 3_600_000 } });
+    expect(row(w2).expiry_observed_head_ts).not.toBeNull();
+    for (const make of readers) await operatorResolve(w2, make());
+    // The honest read: the operator may credit (the one write it may make).
+    expect(await operatorResolve(w, honest())).toBe("credited");
+  });
+
+  it("q3 corner — the quirk on the THIRD expiry re-check: the mismatch re-check waits its own chain-time backoff (10 min), then credits", async () => {
+    const w = await refusedLandsLate("R11q3");
+    const PROD = { scan: { ...X402_SCAN } };
+    const failedAt = () => row(w).resolved_head_ts as number;
+    await loop(lagging(), PROD); // stamps the failure's chain time
+    facilitator.chainTime = failedAt() + 10 * 60;
+    await loop(lagging(), PROD); // re-check 1
+    facilitator.chainTime = row(w).next_recheck_head_ts!;
+    await loop(lagging(), PROD); // re-check 2
+    facilitator.chainTime = row(w).next_recheck_head_ts!;
+    await loop(quirk(), PROD); // re-check 3 reads the quirk
+    const seen = row(w);
+    expect(seen).toMatchObject({ recheck_count: 3, last_observation: "execution_mismatch" });
+    expect(seen.next_recheck_head_ts, "every spend leaves a chain-time wait").not.toBeNull();
+    facilitator.chainTime = seen.mismatch_observed_head_ts! + 9 * 60;
+    await loop(honest(), PROD);
+    expect(row(w).status, "not before the mismatch's 10-minute backoff").toBe("failed");
+    facilitator.chainTime = seen.mismatch_observed_head_ts! + 10 * 60;
+    await loop(honest(), PROD);
+    expect(row(w).status).toBe("credited");
+  });
+});
+
+describe("#907 round 11: the x402 gate is never armed for a network the reconciler cannot read", () => {
+  it("x402ReconcilerCanRead needs an RPC URL (override or default) AND a confirmation depth", async () => {
+    const { x402ReconcilerCanRead } = await import("../x402-settlements.js");
+    const rpc = { "eip155:8453": "https://mainnet.base.org" };
+    const depth = { "eip155:8453": 12 };
+    expect(x402ReconcilerCanRead("eip155:8453", rpc, depth, {})).toBe(true);
+    expect(x402ReconcilerCanRead("eip155:424242", rpc, depth, {})).toBe(false);
+    // An RPC override alone is not enough: no confirmation depth for the chain.
+    const env = { X402_RPC_URL_EIP155_424242: "https://my.rpc" };
+    expect(x402ReconcilerCanRead("eip155:424242", rpc, depth, env)).toBe(false);
+    expect(x402ReconcilerCanRead("eip155:424242", rpc, { "eip155:424242": 3 }, env)).toBe(true);
+  });
+
+  it("a relay configured to take x402 payments on an unreadable network refuses to boot", async () => {
+    await expect(
+      createTestRelay({
+        x402: { ...X402_TEST_CONFIG, network: "eip155:424242" },
+        x402ChainReader: undefined, // the production path: no injected reader
+      }),
+    ).rejects.toThrow(/cannot read that chain.*Refusing to arm the x402 gate/);
   });
 });

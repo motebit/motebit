@@ -260,6 +260,17 @@ export interface X402SettlementRecord {
   last_checked_at: number | null;
   /** Re-checks spent on an `execution_mismatch` — a budget of its own (#907 round 8). */
   mismatch_rechecks: number;
+  /**
+   * The LATEST chain observation that did not settle the record (#907 round
+   * 11): `execution_mismatch` when a used authorization's paired Transfer did
+   * not match. `failure_reason` is the record's ORIGINAL failure class and is
+   * never rewritten by a re-check, so the two re-check budgets stay
+   * orthogonal — a mismatch seen on an expiry re-check ADDS its own re-check,
+   * it never replaces the expiry re-checks still left.
+   */
+  last_observation: string | null;
+  /** Chain time (confirmed head's timestamp) of that mismatch observation: its re-check waits from here. */
+  mismatch_observed_head_ts: number | null;
 }
 
 /** A record for this (payer, nonce), if any. */
@@ -393,9 +404,12 @@ export function markX402Failed(
 ): boolean {
   const info = db
     .prepare(
-      "UPDATE relay_x402_settlements SET status = 'failed', failure_reason = ?, resolved_at = ?, resolved_head_ts = ?, pass_cursor = NULL WHERE payer = ? AND nonce = ? AND status = 'pending'",
+      `UPDATE relay_x402_settlements SET status = 'failed', failure_reason = ?, resolved_at = ?, resolved_head_ts = ?, pass_cursor = NULL,
+         last_observation = CASE WHEN ? = 'execution_mismatch' THEN 'execution_mismatch' ELSE last_observation END,
+         mismatch_observed_head_ts = CASE WHEN ? = 'execution_mismatch' THEN ? ELSE mismatch_observed_head_ts END
+       WHERE payer = ? AND nonce = ? AND status = 'pending'`,
     )
-    .run(reason, Date.now(), headTs, payer, nonce);
+    .run(reason, Date.now(), headTs, reason, reason, headTs, payer, nonce);
   return info.changes === 1;
 }
 
@@ -524,8 +538,10 @@ export interface X402ScanParams {
   expiryMarginSeconds: number;
   /** Wall-clock gap between the two agreeing observations an expiry needs (ms). */
   expiryConfirmGapMs: number;
-  /** Re-checks of a `failed` record, and the wall-clock wait before each (ms). */
+  /** Re-checks of a `failed` record, and the wait before each (ms of CHAIN time). */
   recheckBackoffMs: readonly number[];
+  /** The wait (ms of CHAIN time) from a mismatch observation to its own re-check. */
+  mismatchRecheckBackoffMs: number;
 }
 
 export const X402_SCAN: X402ScanParams = {
@@ -534,6 +550,7 @@ export const X402_SCAN: X402ScanParams = {
   expiryMarginSeconds: 120,
   expiryConfirmGapMs: 5 * 60_000,
   recheckBackoffMs: [10 * 60_000, 60 * 60_000, 6 * 60 * 60_000],
+  mismatchRecheckBackoffMs: 10 * 60_000,
 };
 
 const topicAddress = (a: string): string => "0x" + a.slice(2).toLowerCase().padStart(64, "0");
@@ -694,6 +711,22 @@ export function x402RpcUrlFor(
   return override != null && override !== "" ? override : defaults[network];
 }
 
+/**
+ * Whether the reconciler can read `network`: an RPC URL (override or default)
+ * AND a confirmation depth. The x402 gate is armed only for a network this is
+ * true of (#907 round 11): a payment whose settle outcome is unknown must be
+ * resolvable from the chain, so the relay refuses to boot rather than accept
+ * payments it could never reconcile.
+ */
+export function x402ReconcilerCanRead(
+  network: string,
+  defaults: Record<string, string>,
+  confirmationsByChain: Record<string, number>,
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  return x402RpcUrlFor(network, defaults, env) != null && confirmationsByChain[network] != null;
+}
+
 export type ReconcileDecision =
   | "credited"
   | "cancelled"
@@ -702,6 +735,7 @@ export type ReconcileDecision =
   | "authorization_still_valid"
   | "execution_mismatch"
   | "still_pending"
+  | "no_execution_found"
   | "unchanged"
   | "read_error";
 
@@ -819,7 +853,8 @@ async function scanEvents(
   rec: X402SettlementRecord,
   fromBlock: number,
   toBlock: number,
-  cursor: ScanCursor,
+  /** null: a read-only scan (the operator's resolve) — no cursor is written. */
+  cursor: ScanCursor | null,
   p: X402ScanParams,
 ): Promise<{ events: AuthorizationEvent[]; reached: boolean; stale: boolean }> {
   let at = fromBlock;
@@ -852,7 +887,7 @@ async function scanEvents(
       }
       throw err;
     }
-    if (events.length === 0) {
+    if (events.length === 0 && cursor != null) {
       const info =
         cursor === "pass_cursor"
           ? db
@@ -926,43 +961,52 @@ export async function reconcileX402Settlement(
   const recheck = rec.status === "failed";
   /** The confirmed head's timestamp this run read (set before any spend). */
   let chainNow = 0;
-  const spendRecheck = (): void => {
-    if (!recheck) return;
-    // Guarded by the generation this run observed (both budgets): a pass
-    // another run already concluded is never concluded (or spent) twice.
-    // A concluded pass is over whoever ran it; only the automatic loop's
-    // passes spend a budget (#907 rounds 5–8). An `execution_mismatch` has
-    // a budget of its own, so one found BY an expiry re-check still gets its
-    // own re-check (round 8).
+  const operator = opts.operator === true;
+  /**
+   * Conclude this re-check pass: spend ONE budget and, when the pass saw a
+   * mismatch, record that observation (it earns its own re-check later).
+   * Guarded by the generation this run observed (both budgets): a pass another
+   * run already concluded is never concluded (or spent) twice (#907 rounds
+   * 5–8). The budget spent is the mismatch one when a mismatch re-check is
+   * due, else the expiry/refusal one — never both, and a mismatch never
+   * rewrites `failure_reason`, so neither budget can erase the other (round
+   * 11). Every spend leaves a non-null chain-time wait. The operator's resolve
+   * never spends and never writes (see below).
+   */
+  const spendRecheck = (observedMismatch = false): void => {
+    if (!recheck || operator) return;
     const gen = [rec.payer, rec.nonce, rec.recheck_count, rec.mismatch_rechecks] as const;
-    if (opts.operator === true) {
+    const observe = observedMismatch
+      ? ", last_observation = 'execution_mismatch', mismatch_observed_head_ts = ?"
+      : "";
+    const observeArgs = observedMismatch ? [chainNow] : [];
+    const mismatchDue =
+      rec.last_observation === "execution_mismatch" &&
+      rec.mismatch_rechecks < MISMATCH_RECHECKS &&
+      rec.mismatch_observed_head_ts != null &&
+      rec.mismatch_observed_head_ts + chainSeconds(p.mismatchRecheckBackoffMs) <= chainNow;
+    if (mismatchDue) {
       db.prepare(
-        "UPDATE relay_x402_settlements SET pass_cursor = NULL WHERE payer = ? AND nonce = ? AND status = 'failed' AND recheck_count = ? AND mismatch_rechecks = ?",
-      ).run(...gen);
-      return;
-    }
-    if (rec.failure_reason === "execution_mismatch") {
-      db.prepare(
-        "UPDATE relay_x402_settlements SET mismatch_rechecks = mismatch_rechecks + 1, pass_cursor = NULL WHERE payer = ? AND nonce = ? AND status = 'failed' AND recheck_count = ? AND mismatch_rechecks = ?",
-      ).run(...gen);
+        `UPDATE relay_x402_settlements SET mismatch_rechecks = mismatch_rechecks + 1, pass_cursor = NULL${observe} WHERE payer = ? AND nonce = ? AND status = 'failed' AND recheck_count = ? AND mismatch_rechecks = ?`,
+      ).run(...observeArgs, ...gen);
       return;
     }
     const done = rec.recheck_count + 1;
-    const wait = p.recheckBackoffMs[done];
+    const wait = p.recheckBackoffMs[done] ?? p.recheckBackoffMs[p.recheckBackoffMs.length - 1] ?? 0;
     // The next re-check waits in CHAIN time (round 10); the wall-clock
     // `next_recheck_at` is informational.
     db.prepare(
-      "UPDATE relay_x402_settlements SET recheck_count = ?, next_recheck_at = ?, next_recheck_head_ts = ?, pass_cursor = NULL WHERE payer = ? AND nonce = ? AND status = 'failed' AND recheck_count = ? AND mismatch_rechecks = ?",
-    ).run(
-      done,
-      wait != null ? Date.now() + wait : null,
-      wait != null ? chainNow + chainSeconds(wait) : null,
-      ...gen,
-    );
+      `UPDATE relay_x402_settlements SET recheck_count = ?, next_recheck_at = ?, next_recheck_head_ts = ?, pass_cursor = NULL${observe} WHERE payer = ? AND nonce = ? AND status = 'failed' AND recheck_count = ? AND mismatch_rechecks = ?`,
+    ).run(done, Date.now() + wait, chainNow + chainSeconds(wait), ...observeArgs, ...gen);
   };
-  db.prepare(
-    `UPDATE relay_x402_settlements SET last_checked_at = ${NEXT_QUEUE_STAMP_SQL} WHERE payer = ? AND nonce = ?`,
-  ).run(Date.now(), rec.payer, rec.nonce);
+  // The operator's resolve is READ-ONLY except for a credit (#907 round 11):
+  // it writes no column the loop's selection or scan reads — not the queue
+  // stamp, cursors, scan bounds, observations, budgets or status.
+  if (!operator) {
+    db.prepare(
+      `UPDATE relay_x402_settlements SET last_checked_at = ${NEXT_QUEUE_STAMP_SQL} WHERE payer = ? AND nonce = ?`,
+    ).run(Date.now(), rec.payer, rec.nonce);
+  }
   try {
     const head = await reader.getConfirmedHead();
     chainNow = head.timestamp;
@@ -974,16 +1018,20 @@ export async function reconcileX402Settlement(
       // start derived from `created_at` landed after the execution block when
       // the relay's clock ran fast, and the payment was declared unused).
       from = await locateScanStart(reader, head, rec.valid_after);
-      db.prepare(
-        "UPDATE relay_x402_settlements SET scan_from_block = ? WHERE payer = ? AND nonce = ? AND scan_from_block IS NULL",
-      ).run(from, rec.payer, rec.nonce);
+      if (!operator) {
+        db.prepare(
+          "UPDATE relay_x402_settlements SET scan_from_block = ? WHERE payer = ? AND nonce = ? AND scan_from_block IS NULL",
+        ).run(from, rec.payer, rec.nonce);
+      }
     }
     let end = rec.scan_end_block;
     if (end == null && !stillValid) {
       end = await locateScanEnd(reader, from, head, expiryTs);
-      db.prepare(
-        "UPDATE relay_x402_settlements SET scan_end_block = ? WHERE payer = ? AND nonce = ? AND scan_end_block IS NULL",
-      ).run(end, rec.payer, rec.nonce);
+      if (!operator) {
+        db.prepare(
+          "UPDATE relay_x402_settlements SET scan_end_block = ? WHERE payer = ? AND nonce = ? AND scan_end_block IS NULL",
+        ).run(end, rec.payer, rec.nonce);
+      }
     }
     // Every read stops at THIS reader's confirmed head, even when the fixed
     // end is persisted: a load-balanced node behind an earlier one would
@@ -991,7 +1039,7 @@ export async function reconcileX402Settlement(
     // conclude over them (#907 round 9).
     const ceiling = end != null ? Math.min(end, head.number) : head.number;
     // The two expiry observations are separated in CHAIN time (round 10).
-    const confirming = !recheck && rec.expiry_observed_head_ts != null;
+    const confirming = !operator && !recheck && rec.expiry_observed_head_ts != null;
     if (
       confirming &&
       head.timestamp - rec.expiry_observed_head_ts! < chainSeconds(p.expiryConfirmGapMs)
@@ -999,13 +1047,19 @@ export async function reconcileX402Settlement(
       return "still_pending"; // the second observation waits out the gap
     }
     const fullPass = recheck || confirming;
+    // The operator's scan always covers the whole window from its start and
+    // persists nothing.
     const { events, reached, stale } = await scanEvents(
       db,
       reader,
       rec,
-      fullPass ? (rec.pass_cursor ?? from - 1) + 1 : (rec.scanned_to_block ?? from - 1) + 1,
+      operator
+        ? from
+        : fullPass
+          ? (rec.pass_cursor ?? from - 1) + 1
+          : (rec.scanned_to_block ?? from - 1) + 1,
       ceiling,
-      fullPass ? "pass_cursor" : "scanned_to_block",
+      operator ? null : fullPass ? "pass_cursor" : "scanned_to_block",
       p,
     );
 
@@ -1038,14 +1092,11 @@ export async function reconcileX402Settlement(
           idempotencyKey: rec.idempotency_key,
           delegator: rec.delegator_id,
         });
-        if (recheck) {
-          db.prepare(
-            "UPDATE relay_x402_settlements SET failure_reason = 'execution_mismatch' WHERE payer = ? AND nonce = ? AND status = 'failed'",
-          ).run(rec.payer, rec.nonce);
-          spendRecheck();
-        } else {
-          markX402Failed(db, rec.payer, rec.nonce, "execution_mismatch", head.timestamp);
-        }
+        if (operator) return "execution_mismatch"; // observed, nothing written
+        // A re-check records the observation beside the ORIGINAL failure
+        // class (never rewriting it) and spends this pass's budget.
+        if (recheck) spendRecheck(true);
+        else markX402Failed(db, rec.payer, rec.nonce, "execution_mismatch", head.timestamp);
         return "execution_mismatch";
       }
       let credited: boolean;
@@ -1068,7 +1119,8 @@ export async function reconcileX402Settlement(
           transferLogIndex: paired.position,
           idempotencyKey: rec.idempotency_key,
         });
-        if (recheck) spendRecheck();
+        if (operator) return "execution_mismatch";
+        if (recheck) spendRecheck(true);
         else markX402Failed(db, rec.payer, rec.nonce, "execution_mismatch", head.timestamp);
         return "execution_mismatch";
       }
@@ -1088,6 +1140,7 @@ export async function reconcileX402Settlement(
     }
     const canceled = events.find((e) => e.kind === "canceled");
     if (canceled != null) {
+      if (operator) return "cancelled"; // observed, nothing written
       if (recheck) {
         spendRecheck();
         return "unchanged";
@@ -1104,6 +1157,10 @@ export async function reconcileX402Settlement(
     // No event in what this run scanned.
     // Scanned to the FIXED end, with this reader's head at or past it.
     const concluded = reached && end != null && ceiling === end;
+    if (operator) {
+      if (stillValid) return "authorization_still_valid";
+      return concluded ? "no_execution_found" : "still_pending";
+    }
     if (recheck) {
       if (stillValid) return "authorization_still_valid";
       if (concluded) spendRecheck();
@@ -1212,18 +1269,24 @@ export function selectX402Candidates(
       // (`resolved_head_ts`); each later one waits the next backoff — all in
       // CHAIN time, against the confirmed head's timestamp (round 10). A mismatch has
       // its own one-re-check budget.
+      // Two ORTHOGONAL budgets (round 11), each with its own chain-time wait:
+      // the original failure class's re-checks, and one re-check of the
+      // latest mismatch observation.
       `SELECT * FROM relay_x402_settlements WHERE status = 'failed'
-         AND ((failure_reason IN (${placeholders}) AND recheck_count < ?)
-              OR (failure_reason = 'execution_mismatch' AND mismatch_rechecks < ?))
-         AND COALESCE(next_recheck_head_ts, resolved_head_ts + ?) <= ?
+         AND ((failure_reason IN (${placeholders}) AND recheck_count < ?
+               AND COALESCE(next_recheck_head_ts, resolved_head_ts + ?) <= ?)
+              OR (last_observation = 'execution_mismatch' AND mismatch_rechecks < ?
+               AND mismatch_observed_head_ts + ? <= ?))
          AND valid_before + ? < ?
        ${SELECTION_ORDER} LIMIT ?`,
     )
     .all(
       ...RECHECKABLE_FAILURES,
       p.recheckBackoffMs.length,
-      MISMATCH_RECHECKS,
       chainSeconds(p.recheckBackoffMs[0] ?? 0),
+      headTs,
+      MISMATCH_RECHECKS,
+      chainSeconds(p.mismatchRecheckBackoffMs),
       headTs,
       p.expiryMarginSeconds,
       headTs,

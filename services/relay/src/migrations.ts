@@ -2397,6 +2397,10 @@ export const relayMigrations: Migration[] = [
           last_checked_at INTEGER,
           -- Re-checks spent on an execution_mismatch (its own budget).
           mismatch_rechecks INTEGER NOT NULL DEFAULT 0,
+          -- The latest observation (execution_mismatch) beside the ORIGINAL
+          -- failure class in failure_reason, and its chain time (round 11).
+          last_observation TEXT,
+          mismatch_observed_head_ts INTEGER,
           PRIMARY KEY (payer, nonce)
         );
         CREATE UNIQUE INDEX IF NOT EXISTS idx_x402_settlements_consumed_transfer

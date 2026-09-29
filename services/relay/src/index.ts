@@ -614,6 +614,19 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
       }),
     );
   }
+  // Fail closed (#907 round 11): the x402 gate is never armed for a network
+  // the reconciler cannot read — an unknown settle outcome there could never
+  // be proven from the chain. An embedder that injects `x402ChainReader`
+  // (including `null`, which disables the loop) has taken that decision itself.
+  if (x402Config?.payToAddress && config.x402ChainReader === undefined) {
+    const { DEFAULT_RPC_URLS, CONFIRMATIONS_BY_CHAIN } = await import("./deposit-detector.js");
+    const { x402ReconcilerCanRead } = await import("./x402-settlements.js");
+    if (!x402ReconcilerCanRead(x402Config.network, DEFAULT_RPC_URLS, CONFIRMATIONS_BY_CHAIN)) {
+      throw new Error(
+        `x402 payments are configured for ${x402Config.network}, but x402 reconciliation cannot read that chain (no RPC URL — set X402_RPC_URL_<NETWORK> — or no confirmation depth). Refusing to arm the x402 gate.`,
+      );
+    }
+  }
   if (x402Config?.payToAddress) {
     try {
       // Single canonical adapter — chooses CDP vs default facilitator based on
@@ -2084,7 +2097,8 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
   // --- x402 settlement operator door (#907 round 3) ---
   // Master-token only (the /api/v1/admin/* middleware). The read lists
   // pending and failed records; the resolve action re-runs the proof-of-
-  // execution check for ONE record — it never credits without that proof.
+  // execution check for ONE record — it never credits without that proof,
+  // and unless it credits it writes nothing (#907 round 11).
   {
     const { listX402SettlementsForOperator, findX402Settlement, reconcileX402Settlement } =
       await import("./x402-settlements.js");
