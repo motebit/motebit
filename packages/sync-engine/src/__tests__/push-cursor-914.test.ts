@@ -487,6 +487,53 @@ describe("#914 WebSocketEventStoreAdapter — an append resolves on the relay's 
     expect(s.frames()).toHaveLength(3); // and not sent from the retired adapter
   });
 
+  it("a lost frame on a retired adapter is failed AT ONCE and parked nowhere: nothing is left for takePendingEvents (#914 round 9)", async () => {
+    const a = adapter();
+    const s = lastSocket();
+    const pid = (i: number): string =>
+      (JSON.parse(s.sent.filter((m) => m.includes('"type":"push"'))[i]!) as { push_id: string })
+        .push_id;
+    void a.append(entry("e0", 1)).catch(() => {});
+    await vi.advanceTimersByTimeAsync(20);
+    s.answer({ type: "ack", accepted: 1, push_id: pid(0) });
+    await vi.advanceTimersByTimeAsync(0);
+    const p1 = track(a.append(entry("e1", 2)));
+    await vi.advanceTimersByTimeAsync(200);
+    void a.append(entry("e2", 3)).catch(() => {});
+    await vi.advanceTimersByTimeAsync(200);
+    s.answer({ type: "ack", accepted: 1, push_id: pid(2) }); // e1 overtaken
+    await vi.advanceTimersByTimeAsync(0);
+    a.disconnect();
+    await vi.advanceTimersByTimeAsync(1_100); // just past the one-deadline grace
+    expect(p1.state).toBe("err"); // failed at the judgement, not a queue deadline later
+    expect(a.takePendingEvents()).toEqual([]); // not parked in the retired outbox
+  });
+
+  it("a lost frame re-queued on a RECONNECTING adapter whose socket never opens is bounded: its append errors (#914 round 9)", async () => {
+    const a = adapter();
+    const s = lastSocket();
+    const pid = (i: number): string =>
+      (JSON.parse(s.sent.filter((m) => m.includes('"type":"push"'))[i]!) as { push_id: string })
+        .push_id;
+    void a.append(entry("e0", 1)).catch(() => {});
+    await vi.advanceTimersByTimeAsync(20);
+    s.answer({ type: "ack", accepted: 1, push_id: pid(0) });
+    await vi.advanceTimersByTimeAsync(0);
+    const p1 = track(a.append(entry("e1", 2)));
+    await vi.advanceTimersByTimeAsync(200);
+    void a.append(entry("e2", 3)).catch(() => {});
+    await vi.advanceTimersByTimeAsync(200);
+    s.answer({ type: "ack", accepted: 1, push_id: pid(2) }); // e1 overtaken
+    await vi.advanceTimersByTimeAsync(0);
+    a.disconnect();
+    a.connect(); // the same adapter reconnects — but its new socket never opens
+    expect(lastSocket()).not.toBe(s);
+    await vi.advanceTimersByTimeAsync(1_000); // the grace: e1 re-queued, not connected
+    expect(p1.state).toBe("pending");
+    await vi.advanceTimersByTimeAsync(1_500); // …bounded by the queue deadline
+    expect(p1.state).toBe("err");
+  });
+
   it("frames flushed in one tick are still ordered: a later one answered overtakes an earlier one (#914 round 9)", async () => {
     const a = adapter();
     const s = lastSocket();
@@ -737,6 +784,52 @@ describe("#914 SyncEngine over EncryptedEventStoreAdapter(socket)", () => {
       await new Promise((r) => setTimeout(r, 2));
     }
   }
+
+  it("mobile rebuild through the ENCRYPTED wrapper: a frame draining on the retired adapter is joined, never sent again through the new one (#914 round 9)", async () => {
+    const local = new InMemoryEventStore();
+    await write(local, "p0");
+    const socketAdapter = (): WebSocketEventStoreAdapter =>
+      new WebSocketEventStoreAdapter({
+        url: "ws://r/ws/sync/rebuild",
+        motebitId: MID,
+        payloads: "e2e",
+        pushAckTimeoutMs: 60_000,
+      });
+    const engine = new SyncEngine(local, MID, { push_patience_ms: 50 });
+    // Cycle 1: adapter A, wrapped as mobile wraps it.
+    const a = socketAdapter();
+    engine.connectRemote(new EncryptedEventStoreAdapter({ inner: a, key: KEY }));
+    a.connect();
+    const sa = lastSocket();
+    sa.open();
+    // p0 goes out and is acked by push_id: the relay echoes, the window opens.
+    const warm = engine.sync();
+    await until(() => sa.frames().length === 1, "p0's frame");
+    const pushIdOf = (i: number): string =>
+      (JSON.parse(sa.sent.filter((m) => m.includes('"type":"push"'))[i]!) as { push_id: string })
+        .push_id;
+    sa.answer({ type: "ack", accepted: 1, push_id: pushIdOf(0) });
+    await warm;
+    await write(local, "p1");
+    await engine.sync(); // ends at its patience: p1's frame is on sa, unanswered
+    expect(sa.frames()).toEqual([["p0"], ["p1"]]);
+    // Cycle 2: mobile rebuilds — A retired (its socket drains), B and a NEW wrapper.
+    a.disconnect();
+    const b = socketAdapter();
+    engine.connectRemote(new EncryptedEventStoreAdapter({ inner: b, key: KEY }));
+    b.connect();
+    const sb = lastSocket();
+    expect(sb).not.toBe(sa);
+    sb.open();
+    const second = engine.sync(); // waits on the joined push (B has no work of its own)
+    await new Promise((r) => setTimeout(r, 150));
+    expect(sb.frames().flat()).not.toContain("p1"); // joined through the wrapper, not re-sent
+    sa.answer({ type: "ack", accepted: 1, push_id: pushIdOf(1) }); // the late ack, on the retired socket
+    await second;
+    await until(() => engine.getCursor().last_version_clock === 2, "the cursor to reach 2");
+    a.disconnect();
+    b.disconnect();
+  });
 
   it("the cursor stays put until the relay acks, and a dropped frame is re-pushed by the next sync", async () => {
     const local = new InMemoryEventStore();
