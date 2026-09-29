@@ -76,7 +76,23 @@ export interface StepDelegationAdapter {
   ): Promise<DelegatedStepResult>;
   /** Poll relay for a previously-submitted task's result. Returns null if task not found or still pending. */
   pollTaskResult?(taskId: string, stepId: string): Promise<DelegatedStepResult | null>;
+  /**
+   * True when every submission carries the step's DERIVED Idempotency-Key
+   * (`planStepIdempotencyKey`), so re-posting a step whose first submission
+   * has no known task id replays or names the task it may have admitted —
+   * never a second one — within the relay's idempotency window (#890). An
+   * adapter that pays before submitting (sovereign pay-forward) must not
+   * set it: a re-post there is a second payment.
+   */
+  readonly resubmitsIdempotently?: boolean;
 }
+
+/**
+ * How long after a step's first submission a re-post under its derived key
+ * is still covered by the relay's idempotency window (24 h there; this
+ * keeps a margin). Past it, a key could admit a NEW task, so the step holds.
+ */
+export const DEFAULT_RESUBMIT_WINDOW_MS = 20 * 60 * 60 * 1000;
 
 export interface PlanEngineConfig {
   maxStepRetries?: number;
@@ -96,6 +112,8 @@ export interface PlanEngineConfig {
   now?: () => number;
   /** Persisted plan-lease lifetime, renewed each step (default 15 min). */
   planLeaseTtlMs?: number;
+  /** See `DEFAULT_RESUBMIT_WINDOW_MS`. */
+  resubmitWindowMs?: number;
 }
 
 export class PlanEngine {
@@ -399,7 +417,10 @@ export class PlanEngine {
             continue;
           }
           if (settled.kind === "skipped") continue;
-          return; // held, or failed its plan
+          // Nothing left the device, or nothing came back naming a task:
+          // re-post under the step's derived key (falls through to the
+          // delegated path below). The relay replays or names the task.
+          if (settled.kind !== "resubmit") return; // held, or failed its plan
         }
 
         // Check dependencies
@@ -467,11 +488,17 @@ export class PlanEngine {
             continue;
           }
 
-          // Delegate step to a capable device
+          // Delegate step to a capable device. A re-post of a held step keeps
+          // its FIRST submission time: that is when its key entered the
+          // relay's idempotency window (#890).
           const startedAt = Date.now();
+          const firstSubmittedAt =
+            step.status === StepStatus.Running && step.started_at != null
+              ? step.started_at
+              : startedAt;
           this.store.updateStep(step.step_id, {
             status: StepStatus.Running,
-            started_at: startedAt,
+            started_at: firstSubmittedAt,
             updated_at: startedAt,
           });
           this.store.updatePlan(plan.plan_id, { current_step_index: i, updated_at: startedAt });
@@ -943,10 +970,24 @@ export class PlanEngine {
     step: PlanStep,
   ): AsyncGenerator<
     PlanChunk,
-    { kind: "completed"; summary: string } | { kind: "skipped" } | { kind: "failed" | "held" }
+    | { kind: "completed"; summary: string }
+    | { kind: "skipped" }
+    | { kind: "failed" | "held" | "resubmit" }
   > {
     const adapter = this.config.delegationAdapter;
     const taskId = step.delegation_task_id;
+    // No task handle: the only way to learn what the first submission did is
+    // to ask under its key again — safe only through an adapter whose key is
+    // derived, and only while the relay still remembers that key (#890).
+    if (
+      (taskId == null || taskId === "") &&
+      adapter?.resubmitsIdempotently === true &&
+      step.started_at != null &&
+      this.leaseNow() - step.started_at <
+        (this.config.resubmitWindowMs ?? DEFAULT_RESUBMIT_WINDOW_MS)
+    ) {
+      return { kind: "resubmit" };
+    }
     let result: DelegatedStepResult | null = null;
     if (taskId != null && taskId !== "" && adapter?.pollTaskResult != null) {
       try {

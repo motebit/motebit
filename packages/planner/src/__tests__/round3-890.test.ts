@@ -176,6 +176,9 @@ describe("#890 r3 finding 1: offline at submit is resolved by re-posting under t
     expect(first.map((c) => c.type)).toContain("plan_undetermined");
     expect(store.getStep("s1")!.delegation_task_id ?? null).toBeNull();
     expect(r.state.posts).toEqual([]); // nothing ever left the device
+    const firstSubmittedAt = store.getStep("s1")!.started_at;
+    expect(firstSubmittedAt).not.toBeNull();
+    await new Promise((res) => setTimeout(res, 5));
 
     r.state.online = true;
     const second = await collect(engine.resumePlan(PLAN, deps));
@@ -183,6 +186,9 @@ describe("#890 r3 finding 1: offline at submit is resolved by re-posting under t
     expect(r.state.posts).toEqual([`plan-step:${PLAN}:s1:0`]);
     expect(r.admitted.size).toBe(1);
     expect(engine.findUnresolvedDelegation("goal-890", MOTE)).toBeNull();
+    // The re-post kept the FIRST submission time — when the key entered the
+    // relay's idempotency window — so the window cannot be stretched.
+    expect(store.getStep("s1")!.started_at).toBe(firstSubmittedAt);
   });
 
   it("past the relay's idempotency window a key could admit a NEW task: hold, never re-post", async () => {

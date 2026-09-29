@@ -20,7 +20,7 @@ import type { TokenAudience } from "@motebit/sdk";
 import type { MotebitRuntime as MotebitRuntimeInstance } from "@motebit/runtime";
 import type { PlanStep, DelegatedStepResult, ExecutionReceipt } from "@motebit/sdk";
 import type { StepDelegationAdapter } from "@motebit/planner";
-import { planStepIdempotencyKey } from "@motebit/planner";
+import { planStepIdempotencyKey, taskNamedBy409, admittedAs } from "@motebit/planner";
 import type { CliConfig } from "../args.js";
 import { loadFullConfig } from "../config.js";
 import { getDbPath } from "../runtime-factory.js";
@@ -659,6 +659,9 @@ export function createHttpPollingDelegationAdapter(
         throw unconfirmed("Relay task submission unconfirmed: no response", err);
       }
       if (resp.status !== 409) return resp;
+      // A 409 that names the task (#888): take it over, poll it.
+      const named = await taskNamedBy409(resp);
+      if (named != null) return admittedAs(named);
       if (waited >= budgetMs) {
         throw new DelegationUndeterminedError(
           stepDescription,
@@ -783,6 +786,8 @@ export function createHttpPollingDelegationAdapter(
   };
 
   return {
+    // Every submission carries the step's derived key (#890).
+    resubmitsIdempotently: true,
     async delegateStep(
       step: PlanStep,
       timeoutMs: number,

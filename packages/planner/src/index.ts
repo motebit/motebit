@@ -6,13 +6,15 @@ export {
   buildDecompositionPrompt,
 } from "./decompose.js";
 export type { DecompositionContext, RawPlan, RawPlanStep } from "./decompose.js";
-export { PlanEngine } from "./plan-engine.js";
+export { PlanEngine, DEFAULT_RESUBMIT_WINDOW_MS } from "./plan-engine.js";
 export type { PlanChunk, PlanEngineConfig, StepDelegationAdapter } from "./plan-engine.js";
 export {
   RelayDelegationAdapter,
   DelegationUndeterminedError,
   isDelegationUndetermined,
   planStepIdempotencyKey,
+  taskNamedBy409,
+  admittedAs,
 } from "./delegation-adapter.js";
 export type {
   RelayDelegationConfig,

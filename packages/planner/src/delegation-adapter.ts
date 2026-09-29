@@ -52,6 +52,13 @@ export interface RelayDelegationConfig {
 }
 
 export class RelayDelegationAdapter implements StepDelegationAdapter {
+  /**
+   * Every submission carries the step's derived key (#890), so re-posting a
+   * held step replays or names the task it already admitted — never a new
+   * one — while the key lives in the relay's idempotency window.
+   */
+  readonly resubmitsIdempotently = true;
+
   constructor(private config: RelayDelegationConfig) {}
 
   private async buildHeaders(audience: TokenAudience): Promise<Record<string, string>> {
@@ -382,6 +389,21 @@ export class DelegationUndeterminedError extends Error {
   }
 }
 
+/** The task id a relay 409 names, when it names one (#888). */
+export async function taskNamedBy409(resp: Response): Promise<string | null> {
+  try {
+    const body = (await resp.clone().json()) as { task_id?: unknown };
+    return typeof body.task_id === "string" && body.task_id !== "" ? body.task_id : null;
+  } catch {
+    return null;
+  }
+}
+
+/** A 201 standing for "the key admitted this task" — what a replay would have answered. */
+export function admittedAs(taskId: string): Response {
+  return new Response(JSON.stringify({ task_id: taskId }), { status: 201 });
+}
+
 /**
  * The Idempotency-Key a plan step's submission carries: derived from the
  * plan, the step, and how many times the step was conclusively failed and
@@ -445,6 +467,10 @@ async function submitUnderKey(
       throw deliveryUncertain("Relay task submission unconfirmed: no response", err);
     }
     if (resp.status !== 409) return resp;
+    // A 409 that NAMES the task (#888): the key already admitted it. Take
+    // that task over — the caller polls it like any admitted task.
+    const named = await taskNamedBy409(resp);
+    if (named != null) return admittedAs(named);
     // Still processing under this key: keep backing off, within the step's
     // own time budget, then end the step as undetermined.
     if (waited >= budgetMs) {

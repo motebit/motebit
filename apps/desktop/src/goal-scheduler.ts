@@ -486,14 +486,6 @@ export class GoalScheduler {
           continue;
         }
 
-        // A payment the goal's last run made whose result never arrived
-        // holds the goal (#890): a re-fire could hire a different worker
-        // for the same work and pay twice. Lifts only when the result is
-        // retrieved or dismissed (`/result`).
-        if (await this.paidResultsOwed(goal.goal_id, invoke, runtime)) {
-          continue;
-        }
-
         const suspended = await this.executeGoalOnce(goal, invoke, motebitId, now);
         if (suspended) return;
       }
@@ -509,9 +501,9 @@ export class GoalScheduler {
    * owed its result (#890). Every run leaves a `running` outcome row BEFORE
    * it starts (`executeGoalOnce`), so a run that paid and then died is
    * counted too. A run's window is its `ran_at` (start) to the next run's
-   * start, bounded by the wall-clock limit — no run outlasts it. A ledger
-   * or database that cannot answer holds: an unknown answer is not
-   * "nothing owed".
+   * start — never cut at the wall clock, which a hire in flight outlives.
+   * A ledger or database that cannot answer holds: an unknown answer is
+   * not "nothing owed".
    */
   private async paidResultsOwed(
     goalId: string,
@@ -526,10 +518,11 @@ export class GoalScheduler {
       if (rows.length === 0) return false;
       const owed = paidResultsOwedByRuns(
         runtime.outstandingPaidResults(),
-        goalRunWindows(
-          rows.map((r) => ({ startedAt: r.ran_at, endedAt: null })),
-          { maxRunMs: GOAL_WALL_CLOCK_MS },
-        ),
+        // No wall-clock bound on the window (#890 r3): the deadline abort is
+        // cooperative, so a hire in flight at the deadline still lands — and
+        // is stamped — after it. A run's window ends where the goal's next
+        // run began.
+        goalRunWindows(rows.map((r) => ({ startedAt: r.ran_at, endedAt: null }))),
       );
       if (owed.length === 0) return false;
       const line = goalAwaitingResultMessage(owed);
@@ -639,6 +632,16 @@ export class GoalScheduler {
     motebitId: string,
     now: number,
   ): Promise<boolean> {
+    // A payment one of the goal's runs made whose result never arrived
+    // holds the goal (#890): a re-fire could hire a different worker for the
+    // same work and pay twice. Checked HERE, at the one entry both the
+    // cadence tick and "Run now" go through. Lifts only when the result is
+    // retrieved or dismissed (`/result`).
+    const runtime = this.deps.getRuntime();
+    if (runtime == null || (await this.paidResultsOwed(goal.goal_id, invoke, runtime))) {
+      return false;
+    }
+
     this._goalExecuting = true;
     this._currentGoalId = goal.goal_id;
     this._goalStatusCallback?.(true);
