@@ -1505,9 +1505,12 @@ async function bondCoversTicket(
  *
  * **Trust as economic membrane** per [[trust_as_economic_membrane]]:
  * the established-pair branch is the trust-as-fast-path; the new-pair
- * branch unlocks cold-start with explicit delegator consent. Workers
- * who abuse the bootstrap path get trust-downgraded via the existing
- * verifier loop (failed onchain verification → trust demotion). The
+ * branch unlocks cold-start with explicit delegator consent. A worker
+ * that abuses it loses trust through its receipts (failed or low-quality
+ * work lands on the delegator's `[delegator, worker]` edge at ingestion);
+ * the p2p verifier's onchain check is about the PAYER's payment, and a
+ * proven failure there is recorded on the settlement row, moving no trust
+ * edge (#959). The
  * trust graph closes the residual economic gap the structural type
  * system can't reach.
  *
@@ -1633,8 +1636,8 @@ export async function evaluateSettlementEligibility(
   // New-pair branch — delegator explicitly acknowledges cold-start risk.
   // This is the Arc 3 bootstrap mechanism: workers with no trust history
   // can transact when the delegator consciously accepts the risk. Trust
-  // accumulates from real transactions; failures downgrade trust via
-  // the existing verifier loop. See `trust_as_economic_membrane` memory.
+  // accumulates from real transactions; failed work is recorded from the
+  // worker's receipts at ingestion. See `trust_as_economic_membrane` memory.
   if (delegatorAcknowledgesNoHistoryRisk) {
     return {
       allowed: true,

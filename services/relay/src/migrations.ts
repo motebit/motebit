@@ -2193,4 +2193,151 @@ export const relayMigrations: Migration[] = [
       }
     },
   },
+  {
+    version: 48,
+    name: "p2p_settlement_payee_correction",
+    up: (db) => {
+      // #959 — every P2P audit row written before this named the PATH agent
+      // as its payee. The runtime submits P2P tasks to the DELEGATOR's own
+      // endpoint (`/agent/<delegator>/task` + `target_agent`), so those rows
+      // name the payer: `motebit_id = delegator_id`.
+      //
+      // 1. `p2p_worker_leg` — which relay verifies the worker leg ('local' |
+      //    'remote'), frozen by the writer (`p2pWorkerLegScope`). NULL on
+      //    earlier rows; the verifier treats NULL as 'local'.
+      const settlementCols = (
+        db.prepare("PRAGMA table_info(relay_settlements)").all() as Array<{ name: string }>
+      ).map((c) => c.name);
+      if (settlementCols.length > 0 && !settlementCols.includes("p2p_worker_leg")) {
+        db.exec("ALTER TABLE relay_settlements ADD COLUMN p2p_worker_leg TEXT");
+      }
+      //    `p2p_worker_address` / `p2p_worker_address_rung` — the worker-leg
+      //    address ADMISSION validated the proof against, and the settlement-
+      //    authority rung it reached then ('derived' | 'registered'). The
+      //    verifier checks against it, so a worker that changes its address
+      //    mid-flight does not fail a correctly paid payer. NULL on earlier rows.
+      if (settlementCols.length > 0 && !settlementCols.includes("p2p_worker_address")) {
+        db.exec("ALTER TABLE relay_settlements ADD COLUMN p2p_worker_address TEXT");
+      }
+      if (settlementCols.length > 0 && !settlementCols.includes("p2p_worker_address_rung")) {
+        db.exec("ALTER TABLE relay_settlements ADD COLUMN p2p_worker_address_rung TEXT");
+      }
+
+      // 2. Corrections, never rewrites. A P2P row's `record_json` is the
+      //    relay-signed SettlementRecord and is anchored (its SHA-256 is a
+      //    Merkle leaf), so neither it nor the `motebit_id` column beside it
+      //    is changed: the original stays exactly what the relay signed and
+      //    anchored. The true payee is recorded BESIDE it.
+      //
+      //    Audit story: a correction is not the relay's say-so. It is derived
+      //    from two signed artifacts an auditor re-checks offline — the
+      //    relay-signed settlement record (whose `receipt_hash` it matches)
+      //    and the worker-signed ExecutionReceipt archived for the same task
+      //    (`relay_receipts`, byte-identical canonical JSON, rule 12), whose
+      //    `result_hash` equals that `receipt_hash` and whose signer is the
+      //    corrected payee. `basis` names the rule, and the prior
+      //    verification verdict is kept so the re-verification below is not
+      //    silent.
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS relay_settlement_payee_corrections (
+          settlement_id TEXT PRIMARY KEY,
+          task_id TEXT NOT NULL,
+          -- What the signed record (and its column) names: the payer, on a #959 row.
+          recorded_motebit_id TEXT NOT NULL,
+          -- The worker the payment paid: the signer of the archived receipt.
+          corrected_motebit_id TEXT NOT NULL,
+          basis TEXT NOT NULL,
+          prior_verification_status TEXT,
+          prior_verification_error TEXT,
+          corrected_at INTEGER NOT NULL
+        );
+      `);
+
+      const has = (name: string): boolean =>
+        db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(name) !=
+        null;
+      if (!has("relay_settlements") || !has("relay_receipts")) return;
+
+      // 1b. Backfill `p2p_worker_leg = 'remote'` for a pre-#959 ORIGIN row of
+      //     a cross-operator task — only where durable data determines it
+      //     (#959 round 3; main verified these on the fee leg alone, and a
+      //     NULL scope would now read 'local' ⇒ 'unverifiable', drifting the
+      //     treasury reconciler). Two independent facts must agree:
+      //       - the row was written WITHOUT archiving a receipt for its task:
+      //         every other P2P writer (root ingestion, `settleSubReceipt`
+      //         via the parent's archive) archives the receipt first; only
+      //         the federated-origin writer (`onTaskResultReceived`) does not;
+      //       - the queued task still shows the forward's shape: P2P, no
+      //         `origin_relay` (this relay originated it), a three-leg proof,
+      //         and the row's payee is its pinned `target_agent`.
+      //     Anything else stays NULL ⇒ read 'local' ⇒ fail-closed.
+      if (has("relay_task_queue")) {
+        db.exec(`
+          UPDATE relay_settlements
+             SET p2p_worker_leg = 'remote'
+           WHERE settlement_mode = 'p2p'
+             AND p2p_worker_leg IS NULL
+             AND NOT EXISTS (
+                   SELECT 1 FROM relay_receipts r WHERE r.task_id = relay_settlements.task_id
+                 )
+             AND EXISTS (
+                   SELECT 1 FROM relay_task_queue q
+                    WHERE q.task_id = relay_settlements.task_id
+                      AND json_valid(q.task_json)
+                      AND json_extract(q.task_json, '$.settlement_mode') = 'p2p'
+                      AND json_extract(q.task_json, '$.origin_relay') IS NULL
+                      AND json_extract(q.task_json, '$.p2p_payment_proof.b_fee_to_address') IS NOT NULL
+                      AND json_extract(q.task_json, '$.target_agent') = relay_settlements.motebit_id
+                 )
+        `);
+      }
+
+      // Recoverable ⇔ exactly ONE identity other than the recorded payee
+      // signed an archived receipt for this task whose result_hash is the
+      // record's receipt_hash. Ambiguity corrects nothing — the verifier then
+      // marks the row 'unverifiable' (it names its own payer), never verified.
+      db.prepare(
+        `INSERT OR IGNORE INTO relay_settlement_payee_corrections
+           (settlement_id, task_id, recorded_motebit_id, corrected_motebit_id, basis,
+            prior_verification_status, prior_verification_error, corrected_at)
+         SELECT s.settlement_id, s.task_id, s.motebit_id, MIN(r.motebit_id),
+                'archived_receipt_signer', s.payment_verification_status,
+                s.payment_verification_error, ?
+           FROM relay_settlements s
+           JOIN relay_receipts r
+             ON r.task_id = s.task_id
+            AND r.motebit_id != s.motebit_id
+            AND json_valid(r.receipt_json)
+            AND json_extract(r.receipt_json, '$.result_hash') = s.receipt_hash
+          WHERE s.settlement_mode = 'p2p'
+            AND s.delegator_id IS NOT NULL
+            AND s.motebit_id = s.delegator_id
+            AND COALESCE(s.receipt_hash, '') != ''
+          GROUP BY s.settlement_id
+         HAVING COUNT(DISTINCT r.motebit_id) = 1`,
+      ).run(Date.now());
+
+      // 3. Re-verify what the wrong payee FAILED. A row the verifier failed on
+      //    its worker leg was checked against the delegator's wallet; with the
+      //    payee corrected, it goes back to 'pending' and is verified against
+      //    the worker's. (The transaction was found then, so the re-read is
+      //    not a history-retention gamble.) Rows it VERIFIED on the fee leg
+      //    alone are left as they are — the correction row names them
+      //    (`prior_verification_status = 'verified'`) for an operator to
+      //    re-verify; re-reading old transactions automatically could turn an
+      //    RPC's pruned history into a false failure.
+      db.exec(`
+        UPDATE relay_settlements
+           SET payment_verification_status = 'pending',
+               payment_verified_at = NULL,
+               payment_verification_error = NULL
+         WHERE settlement_id IN (
+                 SELECT settlement_id FROM relay_settlement_payee_corrections
+                  WHERE prior_verification_status = 'failed'
+                    AND prior_verification_error LIKE 'Worker leg%'
+               )
+           AND payment_verification_status = 'failed'
+      `);
+    },
+  },
 ];

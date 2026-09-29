@@ -70,13 +70,14 @@ function insertP2pSettlement(
   txHash: string,
   workerAmountMicro: number,
   feeAmountMicro: number,
+  workerLeg: "local" | "remote" | null = "local",
 ) {
   db.prepare(
     `INSERT OR IGNORE INTO relay_settlements
      (settlement_id, allocation_id, task_id, motebit_id, receipt_hash,
       amount_settled, platform_fee, platform_fee_rate, status, settled_at,
-      settlement_mode, p2p_tx_hash, payment_verification_status, delegator_id)
-     VALUES (?, ?, ?, ?, '', ?, ?, ?, 'completed', ?, 'p2p', ?, 'pending', ?)`,
+      settlement_mode, p2p_tx_hash, payment_verification_status, delegator_id, p2p_worker_leg)
+     VALUES (?, ?, ?, ?, '', ?, ?, ?, 'completed', ?, 'p2p', ?, 'pending', ?, ?)`,
   ).run(
     settlementId,
     `alloc-${taskId}`,
@@ -88,6 +89,7 @@ function insertP2pSettlement(
     Date.now(),
     txHash,
     delegatorId,
+    workerLeg,
   );
 }
 
@@ -276,10 +278,11 @@ describe("p2p-verifier fee-leg validation (Arc 2)", () => {
 
   it("origin-relay audit (remote worker, no local settlement_address) verifies on the fee leg alone", async () => {
     // Cross-operator federated P2P: the ORIGIN relay records a p2p audit row
-    // for the origin-fee leg, but does NOT host the worker — so the JOIN finds
-    // no settlement_address and the worker leg is "not applicable" here (the
-    // executor relay verifies it). The fee leg → this relay's treasury still
-    // verifies. Worker id deliberately NOT registered.
+    // for the origin-fee leg, but does NOT host the worker — the writer
+    // declares `p2p_worker_leg = 'remote'` (#959: declared, never inferred
+    // from the worker's absence) and the executor relay verifies the worker
+    // leg. The fee leg → this relay's treasury still verifies. Worker id
+    // deliberately NOT registered.
     insertP2pSettlement(
       relay.moteDb.db,
       "stl-origin-1",
@@ -289,6 +292,7 @@ describe("p2p-verifier fee-leg validation (Arc 2)", () => {
       TX_HASH,
       902_500,
       50_000,
+      "remote",
     );
 
     const adapter = makeStubAdapter({
@@ -322,6 +326,7 @@ describe("p2p-verifier fee-leg validation (Arc 2)", () => {
       TX_HASH,
       902_500,
       50_000,
+      "remote",
     );
 
     // Fee leg absent — and there is no local worker leg to verify either.

@@ -50,7 +50,7 @@ function seed(relay: SyncRelay, rows: SeedRow[]): void {
     stmt.run(
       `s-${i}-${crypto.randomUUID()}`,
       `a-${i}-${crypto.randomUUID()}`,
-      `task-${i}`,
+      `task-${i}-${crypto.randomUUID()}`,
       r.motebit_id,
       r.amount_settled,
       r.platform_fee,
@@ -175,6 +175,34 @@ describe("settlement-summary — per-peer projection", () => {
   it("excludes self-settlements (not a relationship)", async () => {
     const summary = await fetchSummary(relay, ME);
     expect(summary.peers.some((p) => p.peer_id === ME)).toBe(false);
+  });
+
+  it("excludes UNVERIFIABLE p2p rows in both directions — nobody showed the worker was paid (#959)", async () => {
+    const before = await fetchSummary(relay, ME);
+    seed(relay, [
+      // earned from peer A, but the verifier could not check the worker leg
+      {
+        motebit_id: ME,
+        delegator_id: PEER_A,
+        amount_settled: 4_000_000,
+        platform_fee: 200_000,
+        settlement_mode: "p2p",
+        payment_verification_status: "unverifiable",
+        settled_at: 500,
+      },
+      // paid to peer B, unverifiable
+      {
+        motebit_id: PEER_B,
+        delegator_id: ME,
+        amount_settled: 6_000_000,
+        platform_fee: 300_000,
+        settlement_mode: "p2p",
+        payment_verification_status: "unverifiable",
+        settled_at: 600,
+      },
+    ]);
+    const after = await fetchSummary(relay, ME);
+    expect(after).toEqual(before);
   });
 
   it("returns an honest-empty summary for a motebit with no settlements", async () => {

@@ -36,6 +36,7 @@ import {
   createTestRelay,
 } from "./test-helpers.js";
 import { reconcileTreasury } from "@motebit/treasury-reconciliation";
+import { startP2pVerifierLoop } from "../p2p-verifier.js";
 import type { TreasuryReconciliationStore } from "@motebit/treasury-reconciliation";
 
 // === Helpers ===
@@ -1583,6 +1584,18 @@ describe("Federation E2E", () => {
       expect(aRow!.p2p_tx_hash).toBe(FAKE_TX_HASH);
       expect(aRow!.delegator_id).toBe(alice.motebitId);
       expect(aRow!.motebit_id).toBe(bob.motebitId);
+      // #959: which relay verifies the worker leg is DECLARED on each row —
+      // B hosts Bob ('local'), A originated the 3-leg task ('remote').
+      const legOf = (relay: SyncRelay): string | null =>
+        (
+          relay.moteDb.db
+            .prepare(
+              "SELECT p2p_worker_leg FROM relay_settlements WHERE task_id = ? AND settlement_mode = 'p2p'",
+            )
+            .get(fwdTaskId) as { p2p_worker_leg: string | null }
+        ).p2p_worker_leg;
+      expect(legOf(relayB)).toBe("local");
+      expect(legOf(relayA)).toBe("remote");
 
       // ── Relay transmitter surface is ZERO: no relay-custody fund movement. ──
       // The funded P2P path bypasses the §7 relay-custody chain entirely.
@@ -1650,6 +1663,350 @@ describe("Federation E2E", () => {
       const bRecon = await reconcileOperator(bFee, bFee);
       expect(bRecon.driftMicro).toBe(0n);
       expect(bRecon.consistent).toBe(true);
+    });
+
+    /**
+     * #959 round 4 — shared setup for a paid cross-operator task: bob on B,
+     * alice on A, peering, both treasuries, and a correct 3-leg proof.
+     */
+    async function federatedP2pSetup(tag: string) {
+      const bob = await registerSovereignWorker(
+        relayB,
+        `bob-${tag}`,
+        ["paid-quantum"],
+        [{ capability: "paid-quantum", unit_cost: 1.0, currency: "USD", per: "task" }],
+      );
+      relayB.moteDb.db
+        .prepare(
+          "UPDATE agent_registry SET settlement_address = ?, settlement_modes = 'p2p' WHERE motebit_id = ?",
+        )
+        .run(bob.settlementAddress, bob.motebitId);
+      const bobWs = { readyState: 1, send: vi.fn(), close: vi.fn() };
+      relayB.connections.set(bob.motebitId, [{ ws: bobWs as never, deviceId: "bob-device" }]);
+      await establishPeering(relayA, relayB);
+      const idA = (await (await relayA.app.request("/federation/v1/identity")).json()) as {
+        public_key: string;
+      };
+      const idB = (await (await relayB.app.request("/federation/v1/identity")).json()) as {
+        public_key: string;
+      };
+      const aTreasury = deriveSolanaAddress(hexToBytes(idA.public_key));
+      const bTreasury = deriveSolanaAddress(hexToBytes(idB.public_key));
+      const alice = await registerAgent(relayA, `alice-${tag}`, ["web-search"]);
+      const txHash = Array.from({ length: 88 }, (_, i) =>
+        "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz".charAt(
+          (i * 7 + tag.length * 13 + Math.floor(Math.random() * 57)) % 57,
+        ),
+      ).join("");
+      const proof = {
+        tx_hash: txHash,
+        chain: "solana",
+        network: "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
+        to_address: bob.settlementAddress,
+        amount_micro: 902_500,
+        fee_to_address: aTreasury,
+        fee_amount_micro: 50_000,
+        b_fee_to_address: bTreasury,
+        b_fee_amount_micro: 47_500,
+      };
+      const submit = () =>
+        relayA.app.request(`/agent/${alice.motebitId}/task`, {
+          method: "POST",
+          headers: jsonAuthWithIdempotency(),
+          body: JSON.stringify({
+            prompt: `Paid cross-operator task ${tag}`,
+            required_capabilities: ["paid-quantum"],
+            submitted_by: alice.motebitId,
+            target_agent: bob.motebitId,
+            payment_proof: proof,
+          }),
+        });
+      const bobReceiptFor = async (taskId: string) =>
+        signExecutionReceipt(
+          {
+            task_id: taskId,
+            relay_task_id: taskId,
+            motebit_id: bob.motebitId as unknown as MotebitId,
+            device_id: "bob-device" as unknown as DeviceId,
+            submitted_at: Date.now(),
+            completed_at: Date.now(),
+            status: "completed" as const,
+            result: `cross-operator result ${tag}`,
+            tools_used: ["quantum_factorize"],
+            memories_formed: 0,
+            prompt_hash: "ph",
+            result_hash: `rh-${tag}`,
+          },
+          bob.privateKey,
+        );
+      const forwardedTaskId = () =>
+        bobWs.send.mock.calls
+          .map(
+            (c: unknown[]) =>
+              JSON.parse(c[0] as string) as { type: string; task?: { task_id: string } },
+          )
+          .find((m) => m.type === "task_request")?.task?.task_id;
+      return { bob, alice, aTreasury, bTreasury, proof, submit, bobReceiptFor, forwardedTaskId };
+    }
+
+    it("#959 round 4: a forward the executor ACCEPTED but whose response was lost (502) still settles 'remote' and verifies", async () => {
+      const s = await federatedP2pSetup("lostresp");
+
+      // The executor relay receives and admits the forward; the response is
+      // then lost — the origin's fetch sees a 502 after delivery.
+      const originalFetch = globalThis.fetch;
+      vi.stubGlobal("fetch", async (input: string | URL | Request, init?: RequestInit) => {
+        const url =
+          typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+        if (url.startsWith(RELAY_B_URL) && url.includes("/federation/v1/task/forward")) {
+          await relayB.app.request(url.slice(RELAY_B_URL.length), {
+            method: init?.method ?? "GET",
+            headers: init?.headers as Record<string, string>,
+            body: init?.body as string,
+          });
+          return new Response("bad gateway", { status: 502 }) as unknown as Response;
+        }
+        for (const [base, relay] of [
+          [RELAY_A_URL, relayA],
+          [RELAY_B_URL, relayB],
+        ] as const) {
+          if (url.startsWith(base)) {
+            return relay.app.request(url.slice(base.length), {
+              method: init?.method ?? "GET",
+              headers: init?.headers as Record<string, string>,
+              body: init?.body as string,
+            }) as unknown as Response;
+          }
+        }
+        return originalFetch(input, init);
+      });
+      let res: Response;
+      try {
+        res = await s.submit();
+      } finally {
+        vi.stubGlobal("fetch", originalFetch);
+        installFetchInterceptor(relayA, relayB);
+      }
+      expect(res.status).toBe(502);
+      const taskId = s.forwardedTaskId();
+      expect(taskId, "the executor received the forward").toBeDefined();
+
+      // Bob executes on B; B returns the result to A.
+      const resultRes = await relayB.app.request(
+        `/agent/${s.bob.motebitId}/task/${taskId}/result`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+          body: JSON.stringify(await s.bobReceiptFor(taskId!)),
+        },
+      );
+      expect(resultRes.status, await resultRes.clone().text()).toBeLessThan(300);
+
+      const aRow = () =>
+        relayA.moteDb.db
+          .prepare(
+            "SELECT p2p_worker_leg, platform_fee, payment_verification_status FROM relay_settlements WHERE task_id = ? AND settlement_mode = 'p2p'",
+          )
+          .get(taskId) as
+          | { p2p_worker_leg: string; platform_fee: number; payment_verification_status: string }
+          | undefined;
+      expect(aRow()?.p2p_worker_leg).toBe("remote");
+      expect(aRow()?.platform_fee).toBe(50_000);
+
+      // A's verifier checks only its own fee leg — verified, no reconciler drift.
+      const handle = startP2pVerifierLoop(relayA.moteDb.db, {
+        rpcUrl: "http://stub",
+        relayTreasuryAddress: s.aTreasury,
+        intervalMs: 20,
+        maxPerCycle: 100,
+        adapter: {
+          ownAddress: "stub",
+          getUsdcBalance: vi.fn().mockResolvedValue(0n),
+          getUsdcBalanceOf: vi.fn().mockResolvedValue(0n),
+          getSolBalance: vi.fn().mockResolvedValue(0n),
+          sendUsdc: vi.fn(),
+          sendUsdcBatch: vi.fn(),
+          isReachable: vi.fn().mockResolvedValue(true),
+          getTransaction: vi.fn().mockResolvedValue({
+            status: "confirmed",
+            from: "payer",
+            transfers: [
+              { to: s.bob.settlementAddress, amountMicro: 902_500n },
+              { to: s.aTreasury, amountMicro: 50_000n },
+              { to: s.bTreasury, amountMicro: 47_500n },
+            ],
+            slot: 1,
+            asset: "USDC",
+          }),
+        } as unknown as SolanaRpcAdapter,
+      });
+      await new Promise((r) => setTimeout(r, 80));
+      clearInterval(handle);
+      expect(aRow()?.payment_verification_status).toBe("verified");
+    });
+
+    it("#959 round 4: a DEFINITIVE refusal (4xx) clears the planned peer — the task is nobody's 'remote' and no late result settles it", async () => {
+      const s = await federatedP2pSetup("refused4xx");
+      const originalFetch = globalThis.fetch;
+      vi.stubGlobal("fetch", async (input: string | URL | Request, init?: RequestInit) => {
+        const url =
+          typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+        if (url.includes("/federation/v1/task/forward")) {
+          return new Response("refused", { status: 409 }) as unknown as Response;
+        }
+        for (const [base, relay] of [
+          [RELAY_A_URL, relayA],
+          [RELAY_B_URL, relayB],
+        ] as const) {
+          if (url.startsWith(base)) {
+            return relay.app.request(url.slice(base.length), {
+              method: init?.method ?? "GET",
+              headers: init?.headers as Record<string, string>,
+              body: init?.body as string,
+            }) as unknown as Response;
+          }
+        }
+        return originalFetch(input, init);
+      });
+      let res: Response;
+      try {
+        res = await s.submit();
+      } finally {
+        vi.stubGlobal("fetch", originalFetch);
+        installFetchInterceptor(relayA, relayB);
+      }
+      expect(res.status).toBe(502);
+      const { task_id: taskId } = (await res.json()) as { task_id: string };
+      const planned = relayA.moteDb.db
+        .prepare(
+          "SELECT json_extract(task_json, '$.p2p_admission.planned_peer') AS p FROM relay_task_queue WHERE task_id = ?",
+        )
+        .get(taskId) as { p: string | null };
+      expect(planned.p).toBeNull();
+    });
+
+    it('#959 round 5: a 409 {status:"duplicate"} (the executor ALREADY holds the task) keeps the planned peer — its result still settles remote', async () => {
+      const s = await federatedP2pSetup("dup409");
+      const originalFetch = globalThis.fetch;
+      vi.stubGlobal("fetch", async (input: string | URL | Request, init?: RequestInit) => {
+        const url =
+          typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+        if (url.startsWith(RELAY_B_URL) && url.includes("/federation/v1/task/forward")) {
+          // A retried delivery: the first reached B; B answers the second
+          // "duplicate" — the executor holds the task.
+          await relayB.app.request(url.slice(RELAY_B_URL.length), {
+            method: init?.method ?? "GET",
+            headers: init?.headers as Record<string, string>,
+            body: init?.body as string,
+          });
+          return relayB.app.request(url.slice(RELAY_B_URL.length), {
+            method: init?.method ?? "GET",
+            headers: init?.headers as Record<string, string>,
+            body: init?.body as string,
+          }) as unknown as Response;
+        }
+        for (const [base, relay] of [
+          [RELAY_A_URL, relayA],
+          [RELAY_B_URL, relayB],
+        ] as const) {
+          if (url.startsWith(base)) {
+            return relay.app.request(url.slice(base.length), {
+              method: init?.method ?? "GET",
+              headers: init?.headers as Record<string, string>,
+              body: init?.body as string,
+            }) as unknown as Response;
+          }
+        }
+        return originalFetch(input, init);
+      });
+      let res: Response;
+      try {
+        res = await s.submit();
+      } finally {
+        vi.stubGlobal("fetch", originalFetch);
+        installFetchInterceptor(relayA, relayB);
+      }
+      expect(res.status).toBe(502); // the origin saw B's 409
+      const taskId = s.forwardedTaskId()!;
+      const planned = relayA.moteDb.db
+        .prepare(
+          "SELECT json_extract(task_json, '$.p2p_admission.planned_peer') AS p FROM relay_task_queue WHERE task_id = ?",
+        )
+        .get(taskId) as { p: string | null };
+      expect(planned.p).toBeTruthy();
+
+      const resultRes = await relayB.app.request(
+        `/agent/${s.bob.motebitId}/task/${taskId}/result`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+          body: JSON.stringify(await s.bobReceiptFor(taskId)),
+        },
+      );
+      expect(resultRes.status).toBeLessThan(300);
+      const aRow = relayA.moteDb.db
+        .prepare(
+          "SELECT p2p_worker_leg FROM relay_settlements WHERE task_id = ? AND settlement_mode = 'p2p'",
+        )
+        .get(taskId) as { p2p_worker_leg: string } | undefined;
+      expect(aRow?.p2p_worker_leg).toBe("remote");
+    });
+
+    it("#959 round 4: a result for a planned task from a peer it was NOT planned for is refused", async () => {
+      const s = await federatedP2pSetup("wrongpeer");
+      const res = await s.submit();
+      expect(res.status, await res.clone().text()).toBe(201);
+      const taskId = s.forwardedTaskId()!;
+      const planned = relayA.moteDb.db
+        .prepare(
+          "SELECT json_extract(task_json, '$.p2p_admission.planned_peer') AS p FROM relay_task_queue WHERE task_id = ?",
+        )
+        .get(taskId) as { p: string | null };
+      expect(planned.p).toBeTruthy();
+      // Simulate the plan naming a different executor than the one that answers.
+      relayA.moteDb.db
+        .prepare(
+          `UPDATE relay_task_queue SET task_json = json_set(task_json, '$.p2p_admission.planned_peer', 'some-other-relay') WHERE task_id = ?`,
+        )
+        .run(taskId);
+      const resultRes = await relayB.app.request(
+        `/agent/${s.bob.motebitId}/task/${taskId}/result`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+          body: JSON.stringify(await s.bobReceiptFor(taskId)),
+        },
+      );
+      expect(resultRes.status).toBeLessThan(300); // B settles its own row
+      const aRows = relayA.moteDb.db
+        .prepare("SELECT 1 FROM relay_settlements WHERE task_id = ?")
+        .all(taskId);
+      expect(aRows).toHaveLength(0);
+    });
+
+    it("#959 round 4: a worker that DEPARTED this relay (row kept, revoked + delisted) is hired federated — the 3-leg proof is admitted", async () => {
+      const s = await federatedP2pSetup("departed");
+      // Bob used to be hosted on A; his departure keeps the row, marked.
+      const now = Date.now();
+      relayA.moteDb.db
+        .prepare(
+          `INSERT OR REPLACE INTO agent_registry
+             (motebit_id, public_key, endpoint_url, capabilities, registered_at, last_heartbeat,
+              expires_at, settlement_address, settlement_modes, revoked, delisted_at)
+           VALUES (?, ?, 'http://localhost:1/mcp', 'paid-quantum', ?, ?, ?, ?, 'p2p', 1, ?)`,
+        )
+        .run(
+          s.bob.motebitId,
+          s.bob.publicKeyHex,
+          now,
+          now,
+          now + 3_600_000,
+          s.bob.settlementAddress,
+          now,
+        );
+      const res = await s.submit();
+      expect(res.status, await res.clone().text()).toBe(201);
+      expect(s.forwardedTaskId(), "forwarded to the executor relay").toBeDefined();
     });
 
     it("PHASE 3 P2P: the REAL @motebit/runtime client's federated proof is accepted by the relay (client↔relay seam)", async () => {

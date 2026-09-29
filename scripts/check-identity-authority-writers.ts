@@ -244,15 +244,6 @@ const WRITERS: readonly Writer[] = [
       "`delistRegistration` (called by /agents/deregister under `callerMotebitId` only) and `delistExpired` (the relay's lease sweep, no request)",
   },
   {
-    file: R + "p2p-verifier.ts",
-    verb: "UPDATE",
-    table: "agent_registry",
-    count: 1,
-    principal:
-      LOOP +
-      ": the p2p verifier loop narrows a delegator's `settlement_modes` after an onchain proof it READ failed verification",
-  },
-  {
     file: R + "migrations.ts",
     verb: "UPDATE",
     table: "agent_registry",
@@ -412,6 +403,24 @@ const WRITERS: readonly Writer[] = [
     table: "relay_settlements",
     count: 1,
     principal: MIGRATION + " (de-duplication of settlement rows)",
+  },
+  {
+    file: R + "migrations.ts",
+    verb: "INSERT",
+    table: "relay_settlement_payee_corrections",
+    count: 1,
+    principal:
+      MIGRATION +
+      " (v48, #959: records the true payee BESIDE a P2P row that named its payer — derived from the signer of the archived worker-signed receipt whose result_hash is the record's receipt_hash, exactly one such signer; the signed record is never rewritten)",
+  },
+  {
+    file: R + "migrations.ts",
+    verb: "UPDATE",
+    table: "relay_settlements",
+    count: 2,
+    principal:
+      MIGRATION +
+      " (v48, #959: backfills `p2p_worker_leg = 'remote'` on a pre-#959 federated-ORIGIN row where durable data determines it, and returns a corrected P2P row the verifier failed on its worker leg — checked against the payer's wallet — to 'pending'; scope / verification columns only, never the payee)",
   },
   {
     file: R + "migrations.ts",
@@ -590,7 +599,8 @@ const WRITERS: readonly Writer[] = [
     verb: "INSERT",
     table: "relay_settlements",
     count: 4,
-    principal: "settlement of a verified receipt, or a verified P2P payment proof",
+    principal:
+      "settlement of a verified receipt, or a verified P2P payment proof. A P2P row's payee is the admitted `target_agent` the proof paid (`p2pPayeeOf`, column = signed body), never the path agent, and a P2P receipt from any other signer records nothing (#959). Known residual: the relay-mode row's column is still the path agent while its signed body names the credited receipt signer",
   },
   {
     file: R + "tasks.ts",
@@ -647,14 +657,9 @@ const WRITERS: readonly Writer[] = [
     verb: "UPDATE",
     table: "relay_settlements",
     count: 3,
-    principal: LOOP + ": the p2p verifier's state transitions from an onchain READ",
-  },
-  {
-    file: R + "p2p-verifier.ts",
-    verb: "UPDATE",
-    table: "agent_trust",
-    count: 1,
-    principal: LOOP + ": trust downgrade after a failed onchain verification",
+    principal:
+      LOOP +
+      ": the p2p verifier's state transitions (verified / unverifiable / failed) from an onchain READ; the SET lists touch only verification columns, never the payee (#959)",
   },
   {
     file: R + "anchoring.ts",
@@ -1144,7 +1149,7 @@ const WRITERS: readonly Writer[] = [
         : table === "agent_trust"
           ? "the identity's own first-person trust ledger. " +
             ADAPTER +
-            " except the p2p verifier loop and tasks.ts's verified-receipt update"
+            " except tasks.ts's verified-receipt update (the p2p verifier writes no trust edge since #959)"
           : table === "memory_nodes"
             ? "the identity's own memory. " +
               ADAPTER +

@@ -100,6 +100,14 @@ import {
 } from "./idempotency.js";
 import { CALLER_VERIFIED_KEY, OPERATOR_PRESENTED } from "./auth-events.js";
 import { payerCandidates } from "./p2p-payer.js";
+import { isDerivedSettlementBinding } from "@motebit/wallet-solana";
+import {
+  localWorkerAdmission,
+  p2pPayeeOf,
+  p2pWorkerLegScope,
+  receiptDischargesP2p,
+  type P2pAdmission,
+} from "./p2p-payee.js";
 import { createLogger } from "./logger.js";
 import { pathIdentity } from "./id-bounds.js";
 import type { TaskQueue } from "./task-queue.js";
@@ -179,6 +187,12 @@ export type TaskQueueEntry = {
   };
   /** Target agent for p2p tasks (pinned routing). */
   target_agent?: string;
+  /**
+   * What P2P ADMISSION decided about the worker leg (#959) — stamped by the
+   * admission branch that accepted the proof, never inferred from the proof's
+   * (payer-supplied) shape. Every P2P settlement writer reads it.
+   */
+  p2p_admission?: P2pAdmission;
   /**
    * Standing-delegation grant the task was declared under (checkpoint D4).
    * Persisted for audit lineage; the acceptance-time revocation fence
@@ -721,6 +735,24 @@ export async function handleReceiptIngestion(
     return { verified: true, credential_id: null, already_settled: true };
   }
 
+  // --- P2P: only the paid worker's receipt discharges the payment (#959) ---
+  // A P2P task was bought from ONE worker: the proof's worker leg was
+  // validated against its address at admission and the dispatch token binds
+  // it. A receipt signed by any other identity is not that work, so it
+  // neither settles the task nor marks it settled — the paid worker's receipt
+  // still can. Checked before the receipt is archived or any trust is written.
+  if (entry.settlement_mode === "p2p" && !receiptDischargesP2p(entry, receipt.motebit_id)) {
+    logger.error("settlement.p2p_receipt_not_from_payee", {
+      correlationId: taskId,
+      payee: p2pPayeeOf(entry),
+      signer: receipt.motebit_id,
+    });
+    return {
+      verified: false,
+      reason: `receipt is signed by ${receipt.motebit_id}, not by the worker this P2P task was paid to (${p2pPayeeOf(entry)})`,
+    };
+  }
+
   // --- Ed25519 verification ---
   let pubKeyHex: string | undefined;
   const regRow = moteDb.db
@@ -845,9 +877,14 @@ export async function handleReceiptIngestion(
   const newlyArchived = persistReceiptChain(moteDb.db, receipt);
 
   // --- Idempotency: DB settlement check ---
+  // One task settles once, whoever the row names. Keyed on the task alone
+  // (#959): the old `(task_id, motebit_id = path agent)` key missed every row
+  // whose payee is not the path agent — a P2P row (payee = the pinned worker,
+  // path = the delegator), a ranked relay-mode row (payee = the ranked
+  // worker), and a sub-hop row `settleSubReceipt` wrote first.
   const existingSettlement = moteDb.db
-    .prepare("SELECT settlement_id FROM relay_settlements WHERE task_id = ? AND motebit_id = ?")
-    .get(taskId, motebitId) as { settlement_id: string } | undefined;
+    .prepare("SELECT settlement_id FROM relay_settlements WHERE task_id = ? LIMIT 1")
+    .get(taskId) as { settlement_id: string } | undefined;
   if (existingSettlement) {
     entry.settled = true;
     taskQueue.set(taskId, entry); // Persist settled flag to durable queue
@@ -1082,11 +1119,12 @@ export async function handleReceiptIngestion(
           return;
         }
 
+        // One sub-task settles once, whoever the row names (#959) — the same
+        // task-keyed rule as the root ingestion's duplicate check. The sub-task's
+        // own receipt may have settled it first, directly.
         const subExisting = moteDb.db
-          .prepare(
-            "SELECT settlement_id FROM relay_settlements WHERE task_id = ? AND motebit_id = ?",
-          )
-          .get(subRelayTaskId, sub.motebit_id) as { settlement_id: string } | undefined;
+          .prepare("SELECT settlement_id FROM relay_settlements WHERE task_id = ? LIMIT 1")
+          .get(subRelayTaskId) as { settlement_id: string } | undefined;
         if (subExisting) {
           // Already settled at this level — still recurse into nested receipts
           const nestedReceipts = sub.delegation_receipts ?? [];
@@ -1124,6 +1162,25 @@ export async function handleReceiptIngestion(
         // legacy in-flight nested settlements. Doctrine:
         // `docs/doctrine/off-ramp-as-user-action.md` § "Multi-hop-as-P2P — Increment 1".
         if (subEntry.settlement_mode === "p2p") {
+          // Payee = the worker the sub-hop's payment paid (#959): the sub-task's
+          // admitted `target_agent`. A nested receipt signed by anyone else is
+          // not the work B paid for — record nothing for it (the paid worker's
+          // own receipt can still settle the sub-task directly).
+          const subPayee = p2pPayeeOf(subEntry);
+          if (sub.motebit_id !== subPayee) {
+            logger.error("multihop.settlement.p2p_receipt_not_from_payee", {
+              correlationId: parentTaskId,
+              subTaskId: subRelayTaskId,
+              payee: subPayee,
+              signer: sub.motebit_id,
+              depth,
+            });
+            const nestedReceipts = sub.delegation_receipts ?? [];
+            for (const nested of nestedReceipts) {
+              await settleSubReceipt(nested, parentTaskId, depth + 1);
+            }
+            return;
+          }
           const subP2pProof = subEntry.p2p_payment_proof;
           const subWorkerAmount = subP2pProof?.amount_micro ?? 0;
           // Which fee leg funds THIS relay's treasury — mirror the parent-P2P
@@ -1143,8 +1200,9 @@ export async function handleReceiptIngestion(
             {
               settlement_id: subP2pSettlementId,
               allocation_id: `p2p-${subRelayTaskId}` as never,
-              // Payee = the sub-agent that executed and was paid onchain.
-              motebit_id: sub.motebit_id,
+              // Payee = the sub-hop's admitted worker, paid onchain (equal to
+              // the signer, checked above).
+              motebit_id: subPayee,
               receipt_hash: sub.result_hash ?? "",
               ledger_hash: null,
               amount_settled: subWorkerAmount,
@@ -1166,14 +1224,14 @@ export async function handleReceiptIngestion(
                (settlement_id, allocation_id, task_id, motebit_id, receipt_hash,
                 amount_settled, platform_fee, platform_fee_rate, status, settled_at,
                 settlement_mode, p2p_tx_hash, payment_verification_status, delegator_id,
-                issuer_relay_id, suite, signature, record_json)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                p2p_worker_leg, p2p_worker_address, p2p_worker_address_rung, issuer_relay_id, suite, signature, record_json)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             )
             .run(
               subP2pSettlementId,
               `p2p-${subRelayTaskId}`,
               subRelayTaskId,
-              sub.motebit_id,
+              signedSubP2p.motebit_id,
               sub.result_hash ?? "",
               subWorkerAmount,
               subFeeAmount,
@@ -1184,6 +1242,9 @@ export async function handleReceiptIngestion(
               subP2pProof != null ? p2pProofKey(subP2pProof.tx_hash) : null,
               "pending",
               subEntry.submitted_by ?? null,
+              p2pWorkerLegScope(subEntry),
+              subEntry.p2p_admission?.worker_address ?? null,
+              subEntry.p2p_admission?.worker_address_rung ?? null,
               signedSubP2p.issuer_relay_id,
               signedSubP2p.suite,
               signedSubP2p.signature,
@@ -1500,8 +1561,12 @@ export async function handleReceiptIngestion(
           {
             settlement_id: p2pSettlementId,
             allocation_id: `p2p-${taskId}` as never,
-            // Payee = the worker that executed and was paid onchain.
-            motebit_id: motebitId,
+            // Payee = the worker the onchain payment paid: the task's
+            // admitted `target_agent` (#959) — equal to the receipt signer,
+            // checked at the top of ingestion. NEVER `motebitId`: a P2P
+            // submission posts to the DELEGATOR's own endpoint, so the path
+            // agent is the payer here.
+            motebit_id: p2pPayeeOf(entry),
             receipt_hash: receipt.result_hash ?? "",
             ledger_hash: null,
             amount_settled: p2pWorkerAmount,
@@ -1525,14 +1590,14 @@ export async function handleReceiptIngestion(
              (settlement_id, allocation_id, task_id, motebit_id, receipt_hash,
               amount_settled, platform_fee, platform_fee_rate, status, settled_at,
               settlement_mode, p2p_tx_hash, payment_verification_status, delegator_id,
-              issuer_relay_id, suite, signature, record_json)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+              p2p_worker_leg, p2p_worker_address, p2p_worker_address_rung, issuer_relay_id, suite, signature, record_json)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           )
           .run(
             p2pSettlementId,
             `p2p-${taskId}`,
             taskId,
-            motebitId,
+            signedP2pAudit.motebit_id,
             receipt.result_hash ?? "",
             p2pWorkerAmount,
             p2pFeeAmount,
@@ -1543,6 +1608,9 @@ export async function handleReceiptIngestion(
             p2pProof != null ? p2pProofKey(p2pProof.tx_hash) : null,
             "pending",
             entry.submitted_by ?? null,
+            p2pWorkerLegScope(entry),
+            entry.p2p_admission?.worker_address ?? null,
+            entry.p2p_admission?.worker_address_rung ?? null,
             signedP2pAudit.issuer_relay_id,
             signedP2pAudit.suite,
             signedP2pAudit.signature,
@@ -1804,6 +1872,11 @@ export async function handleReceiptIngestion(
               signedSettlement.settlement_id,
               signedSettlement.allocation_id,
               taskId,
+              // KNOWN RESIDUAL (#959, left for its own change): this column is
+              // the PATH agent while the signed body and the credit below name
+              // the receipt signer; they differ whenever scored routing hands
+              // the task to another worker. Existing relay-mode tests read the
+              // row under the path agent, so the fix is not made here.
               motebitId,
               signedSettlement.receipt_hash,
               signedSettlement.ledger_hash,
@@ -2702,6 +2775,9 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
     // P2P): routing forwards directly to the worker's operator with the proof
     // rather than ranking. Set in the remote branch below.
     let federatedP2pIntent = false;
+    // What admission decided about the worker leg (#959) — set by the branch
+    // that accepts the proof, never inferred later from the proof's shape.
+    let p2pAdmission: P2pAdmission | undefined;
 
     if (terms.p2p && body.payment_proof && body.target_agent && submittedBy) {
       const proof = body.payment_proof;
@@ -2794,20 +2870,69 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
       const admittedClaim = findP2pProofClaim(moteDb.db, proof.tx_hash);
       if (admittedClaim != null) throw proofAlreadyAdmitted(admittedClaim);
 
-      // Is the target worker LOCAL to this relay? A local worker has a
-      // settlement_address in our agent_registry. A REMOTE worker (hosted
-      // on a peer operator, discovered via federation) does not — that is
-      // the cross-operator federated P2P path, which carries a third
-      // (executor-relay) fee leg and is validated at the forward site
-      // (where the worker's address + the peer relay's treasury resolve
-      // via discovery). See docs/doctrine/off-ramp-as-user-action.md
-      // § federated P2P.
-      const workerReg = moteDb.db
-        .prepare("SELECT settlement_address FROM agent_registry WHERE motebit_id = ?")
-        .get(body.target_agent) as { settlement_address: string | null } | undefined;
+      // Is the target worker LOCAL to this relay? A worker REGISTERED here
+      // (an `agent_registry` row, whatever its settlement_address) is local
+      // and ALWAYS takes the local branch (#959 round 3): choosing the
+      // federated path by the absence of a registered address let a payer
+      // steer a locally hosted worker into a "remote" row whose worker leg
+      // nobody checks. Only a worker this relay does not host is federated —
+      // the cross-operator path, which carries a third (executor-relay) fee
+      // leg and is validated at the forward site (where the worker's address
+      // + the peer relay's treasury resolve via discovery). See
+      // docs/doctrine/off-ramp-as-user-action.md § federated P2P.
+      //
+      // Branch selection (#959 rounds 4–5), over the row's shelf state and
+      // the proof's shape:
+      //   - ON SHELF and not revoked (the predicate discovery lists hireable
+      //     agents by — `ON_SHELF` from registry-delist.ts + the revoked
+      //     clause task-routing.ts composes) ⇒ LOCAL, whatever the proof
+      //     says (a b_fee field on it is refused below). A hosted worker can
+      //     never be steered into a 'remote' row.
+      //   - not revoked but OFF shelf (delisted: a daemon that shut down and
+      //     deregistered — "offline for a moment" — or a worker that moved to
+      //     a peer), with a 2-LEG proof ⇒ LOCAL, verified against its
+      //     registered address exactly as main queued it.
+      //   - not revoked, off shelf, with a 3-LEG proof ⇒ the federated plan.
+      //     'remote' still requires that plan to be BUILT from discovery (a
+      //     peer hosting the worker, its identity-bound address, all three
+      //     legs), so the proof's shape cannot choose 'remote' by itself.
+      //   - REVOKED ⇒ never local (the row is kept for key state only).
+      const workerRow = moteDb.db
+        .prepare(
+          `SELECT settlement_address, public_key,
+                  (revoked IS NOT NULL AND revoked != 0) AS is_revoked,
+                  (${ON_SHELF_PREDICATE}) AS on_shelf
+             FROM agent_registry WHERE motebit_id = ?`,
+        )
+        .get(body.target_agent) as
+        | {
+            settlement_address: string | null;
+            public_key: string | null;
+            is_revoked: number;
+            on_shelf: number;
+          }
+        | undefined;
+      const proofHasExecutorLeg =
+        proof.b_fee_to_address != null || proof.b_fee_amount_micro != null;
+      const hostedHere =
+        workerRow != null &&
+        workerRow.is_revoked === 0 &&
+        (workerRow.on_shelf === 1 || !proofHasExecutorLeg);
+      const workerReg = hostedHere ? workerRow : undefined;
 
-      if (workerReg?.settlement_address) {
+      if (workerReg != null) {
         // ── Single-operator P2P (local worker): the existing 2-leg path. ──
+        // A 2-leg proof carries no executor-relay fee leg. One that does is
+        // refused before anything is read or admitted (#959 round 2): the
+        // fields mean nothing here, and a proof shape the payer controls must
+        // never steer how the relay verifies the payment.
+        if (proof.b_fee_to_address != null || proof.b_fee_amount_micro != null) {
+          throw new TaskError(
+            "TASK_INVALID_INPUT",
+            "An executor-relay fee leg (b_fee_to_address, b_fee_amount_micro) applies only to a cross-operator P2P task; this worker is hosted by this relay — submit a 2-leg proof",
+            400,
+          );
+        }
         // Policy-based eligibility check
         // Arc 3: pass the delegator's cold-start acknowledgment through to
         // the eligibility gate. Established pairs ignore it; new pairs
@@ -2843,10 +2968,31 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
         // binding is required here; the federated leg (below) is where a PEER
         // asserts a DIFFERENT agent's address and binding must be enforced.
         // docs/doctrine/settlement-authority-binding.md.
-        if (proof.to_address !== workerReg.settlement_address) {
+        //
+        // DEFENSIVE FLOOR (#959 round 4): a local worker with no registered
+        // address is not P2P-eligible (`evaluateSettlementEligibility` refuses
+        // above — a worker that never registered an address never opted into
+        // being paid P2P), so this branch should be unreachable for admission.
+        // Should it be reached, the only destination accepted is the one the
+        // worker's own key derives; anything else is refused.
+        const derivedOk = (): boolean => {
+          // Holder, else main's registry read (§5f verification reader).
+          const workerKey = verificationKeyFor(
+            moteDb.db,
+            body.target_agent!,
+            workerReg.public_key ?? undefined,
+          );
+          return workerKey != null && isDerivedSettlementBinding(proof.to_address, workerKey);
+        };
+        const addressOk = workerReg.settlement_address
+          ? proof.to_address === workerReg.settlement_address
+          : derivedOk();
+        if (!addressOk) {
           throw new TaskError(
             "TASK_P2P_ADDRESS_MISMATCH",
-            "Payment proof to_address does not match worker's settlement address",
+            workerReg.settlement_address
+              ? "Payment proof to_address does not match worker's settlement address"
+              : "Payment proof to_address is not the worker's identity-derived address (the worker has no registered settlement address)",
             400,
           );
         }
@@ -2902,6 +3048,7 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
 
         settlementMode = "p2p";
         p2pPaymentProof = proof;
+        p2pAdmission = localWorkerAdmission(moteDb.db, body.target_agent, proof.to_address);
 
         logger.info("task.p2p_settlement", {
           correlationId: taskId,
@@ -2932,9 +3079,32 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
           );
         }
         if (!proof.b_fee_to_address || proof.b_fee_amount_micro == null) {
+          // Say WHY this worker is not local here (#959 round 5): a revoked
+          // registration is never hireable on this relay; an unknown one is
+          // hosted elsewhere, if anywhere.
+          const why =
+            workerRow != null && workerRow.is_revoked !== 0
+              ? "This worker's registration on this relay is revoked, so it is not hired here"
+              : "This worker is not hosted by this relay";
           throw new TaskError(
             "TASK_INVALID_INPUT",
-            "Federated P2P payment_proof requires the executor-relay fee leg (b_fee_to_address, b_fee_amount_micro)",
+            `${why}; a paid delegation to it is cross-operator, and a federated P2P payment_proof requires the executor-relay fee leg (b_fee_to_address, b_fee_amount_micro)`,
+            400,
+          );
+        }
+
+        // The federated plan (discovery, the settlement-authority binding and
+        // the three-leg check) runs only when the RELAY presents: it is the
+        // relay's forward that carries the proof to the executor relay. With
+        // the submitter presenting, nothing would validate the legs or
+        // forward the task — and no legitimate flow needs it: a dispatch
+        // token this relay mints is verified by the worker against its OWN
+        // relay's key, so the submitter could not present it to a remote
+        // worker anyway. Refused before admission (#959 round 3).
+        if (submitterPresenter) {
+          throw new TaskError(
+            "TASK_INVALID_INPUT",
+            'A cross-operator P2P task is presented by the relay (its forward carries the proof to the executor relay); presenter "submitter" is not available for a worker this relay does not host',
             400,
           );
         }
@@ -2942,6 +3112,8 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
         settlementMode = "p2p";
         p2pPaymentProof = proof;
         federatedP2pIntent = true;
+        // `p2pAdmission` is set only once the federated plan is BUILT (below);
+        // it is never chosen here, at branch selection.
 
         logger.info("task.federated_p2p_pending", {
           correlationId: taskId,
@@ -3064,8 +3236,7 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
       // wallet worker fails closed here until the signed-bound rung transports
       // the succession-verified binding (Inc 2/3); prod has no external peers,
       // so that deferral is latent.
-      const { isDerivedSettlementBinding, deriveSolanaAddress } =
-        await import("@motebit/wallet-solana");
+      const { deriveSolanaAddress } = await import("@motebit/wallet-solana");
       const { verifySovereignBinding } = await import("@motebit/crypto");
       const boundOk =
         fc._public_key != null &&
@@ -3100,8 +3271,10 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
       // hosting peer's relay-identity-derived address (relay_peers.public_key).
       const aTreasury = deriveSolanaAddress(relayIdentity.publicKey);
       const peerRow = moteDb.db
-        .prepare("SELECT public_key FROM relay_peers WHERE endpoint_url = ? AND state = 'active'")
-        .get(peerEndpoint) as { public_key: string } | undefined;
+        .prepare(
+          "SELECT public_key, peer_relay_id FROM relay_peers WHERE endpoint_url = ? AND state = 'active'",
+        )
+        .get(peerEndpoint) as { public_key: string; peer_relay_id: string } | undefined;
       if (!peerRow?.public_key) {
         throw new HTTPException(400, {
           message: "Cannot resolve executor relay treasury (peer public key missing)",
@@ -3154,6 +3327,26 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
         aFeeMicro,
         bFeeMicro,
       };
+      // This relay originates the task; the executor relay hosts the worker
+      // and verifies its leg. Declared from the BUILT plan, with the PLANNED
+      // executor relay recorded at admission — before the forward, so a lost
+      // response (the executor accepted, our fetch timed out or saw a 5xx)
+      // still leaves the scope 'remote' when the result arrives (#959 round
+      // 4). Cleared only by a definitive refusal (4xx) at the forward site.
+      // Only that peer's result is accepted for this task
+      // (`onTaskResultReceived`).
+      p2pAdmission = { worker_leg: "remote", planned_peer: peerRow.peer_relay_id };
+    }
+
+    // Every P2P admission names how its worker leg is verified: a local
+    // worker binding, or a built federated plan. One that ends with neither is
+    // refused — never admitted with a guessed scope (#959 round 3).
+    if (settlementMode === "p2p" && p2pAdmission == null) {
+      throw new TaskError(
+        "TASK_INVALID_INPUT",
+        "P2P admission produced neither a local worker binding nor a federated plan; refusing rather than guessing how the worker leg is verified",
+        400,
+      );
     }
 
     // Budget allocation, decided BEFORE admission (#888). Everything here can
@@ -3385,6 +3578,7 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
         x402_network: x402Net,
         settlement_mode: settlementMode,
         p2p_payment_proof: p2pPaymentProof,
+        p2p_admission: p2pAdmission,
         target_agent: body.target_agent,
         grant_id: body.grant_id,
       });
@@ -3616,10 +3810,37 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
           // replays this answer (#888), and the body names this task.
           // Wording only (the binding is the same either way): a 4xx is the
           // executor refusing; anything else may mean it holds the task.
-          const executorOutcome =
-            resp.status >= 400 && resp.status < 500
-              ? `The executor relay refused this task (HTTP ${resp.status}).`
-              : `The executor relay failed this task (HTTP ${resp.status}); it may hold the task — poll that task's result.`;
+          // A 409 whose body says `status: "duplicate"` is NOT a refusal: the
+          // executor answers it exactly when it ALREADY HOLDS this task_id
+          // (federation.ts forward route) — a retrying proxy or an alternate-
+          // route retry reaches it. Its result will still come, so the planned
+          // peer stays (#959 round 5).
+          let executorHoldsTask = false;
+          if (resp.status === 409) {
+            try {
+              const dupBody = (await resp.clone().json()) as { status?: unknown };
+              executorHoldsTask = dupBody.status === "duplicate";
+            } catch {
+              executorHoldsTask = false;
+            }
+          }
+          const refusedDefinitively = resp.status >= 400 && resp.status < 500 && !executorHoldsTask;
+          if (refusedDefinitively) {
+            // A definitive refusal: the executor relay does not hold the task,
+            // so no result can legitimately arrive from it and the worker leg
+            // is nobody's to hand off (#959 round 4). Clearing the planned
+            // peer makes the scope 'local' and closes the result door. Any
+            // other outcome (5xx, a lost response) keeps it: the executor may
+            // hold the task and its result may still arrive.
+            const refusedEntry = taskQueue.get(taskId);
+            if (refusedEntry?.p2p_admission?.planned_peer != null) {
+              refusedEntry.p2p_admission = { worker_leg: "remote" };
+              taskQueue.set(taskId, refusedEntry);
+            }
+          }
+          const executorOutcome = refusedDefinitively
+            ? `The executor relay refused this task (HTTP ${resp.status}).`
+            : `The executor relay failed this task (HTTP ${resp.status}); it may hold the task — poll that task's result.`;
           throw new HTTPException(502, {
             message: `${executorOutcome} This payment is bound to it (task_id in this response) and cannot fund another task; a resubmission of this payment_proof under any Idempotency-Key is refused, and this key replays this answer. Payments on the sovereign rail are not reversed: the recourse for a paid task that never runs is the trust record, not a refund.`,
           });
@@ -4244,6 +4465,21 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
         "TASK_INVALID_INPUT",
         "Receipt missing relay_task_id — cryptographic task binding is required. Ensure your motebit runtime is up to date.",
         400,
+      );
+    }
+
+    // A P2P task was paid to ONE worker (#959): a receipt signed by anyone
+    // else is refused BEFORE it touches the entry, so it can never overwrite
+    // the result the paid worker delivered. (Ingestion refuses it too.)
+    if (entry.settlement_mode === "p2p" && !receiptDischargesP2p(entry, receipt.motebit_id)) {
+      logger.error("settlement.p2p_receipt_not_from_payee", {
+        correlationId: taskId,
+        payee: p2pPayeeOf(entry),
+        signer: receipt.motebit_id,
+      });
+      throw new AuthorizationError(
+        "AUTHZ_INVALID_CREDENTIALS",
+        `Receipt verification failed: receipt is signed by ${receipt.motebit_id}, not by the worker this P2P task was paid to`,
       );
     }
 

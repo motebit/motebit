@@ -324,7 +324,12 @@ export function registerStateExportRoutes(deps: StateExportDeps): void {
     // Attributable settlements between the caller and each counterparty,
     // both directions. `completed` rows only; a p2p row whose onchain
     // leg-check FAILED is dropped (the claimed payment never landed — honest
-    // history, not recorded intent). Self-settlements excluded (not a
+    // history, not recorded intent), and so is one the verifier marked
+    // UNVERIFIABLE (#959: nobody could show the worker was paid, so it is not
+    // earned history either; the row itself stays listed, with its status, at
+    // `GET /agent/:motebitId/settlements`). Listing unverifiable rows as their
+    // own bucket here would change the signed `SettlementSummaryExport` wire
+    // body — not done in #959. Self-settlements excluded (not a
     // relationship). On an earned row a null/'' `delegator_id` means the
     // payer is unknown ⇒ the unattributed bucket, never a phantom peer.
     const rows = moteDb.db
@@ -332,13 +337,13 @@ export function registerStateExportRoutes(deps: StateExportDeps): void {
         `SELECT delegator_id AS peer_id, amount_settled, platform_fee, settlement_mode, settled_at, 'earned' AS direction
            FROM relay_settlements
           WHERE motebit_id = ? AND status = 'completed'
-            AND COALESCE(payment_verification_status, 'verified') != 'failed'
+            AND COALESCE(payment_verification_status, 'verified') NOT IN ('failed', 'unverifiable')
             AND COALESCE(delegator_id, '') != motebit_id
          UNION ALL
          SELECT motebit_id AS peer_id, amount_settled, platform_fee, settlement_mode, settled_at, 'paid' AS direction
            FROM relay_settlements
           WHERE delegator_id = ? AND status = 'completed'
-            AND COALESCE(payment_verification_status, 'verified') != 'failed'
+            AND COALESCE(payment_verification_status, 'verified') NOT IN ('failed', 'unverifiable')
             AND motebit_id != delegator_id`,
       )
       .all(motebitId, motebitId) as Array<{

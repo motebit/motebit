@@ -126,6 +126,7 @@ export const DECLARATION_CONTENT = {
         "relay_accepted_migrations",
         "relay_treasury_reconciliations",
         "relay_p2p_proof_claims",
+        "relay_settlement_payee_corrections",
       ],
       observable: [
         "every delegation request and its routing decision",

@@ -296,6 +296,7 @@ interface SettlementRow {
   settlement_mode: string;
   amount_settled: number;
   platform_fee: number;
+  delegator_id: string | null;
 }
 async function readSettlements(baseUrl: string, motebitId: string): Promise<SettlementRow[]> {
   const res = await fetch(`${baseUrl}/agent/${motebitId}/settlements`, {
@@ -398,16 +399,23 @@ describe("booted two-artifact bridge — runtime R4 authority gates money reachi
     expect(exec.ok).toBe(true);
     // The real payment leg fired (injected rail broadcast the atomic tx).
     expect(sent()).toBeGreaterThanOrEqual(1);
-    // The ledger-of-record artifact captured the P2P settlement on the
-    // delegator's ledger (the mover of the money): the runtime submits to
-    // /agent/{delegator}/task, so the relay keys the settlement + trust records
-    // to the delegator — the first-person [delegator, worker] direction.
-    const p2p = (await readSettlements(booted!.baseUrl, delegator.motebitId)).filter(
+    // The ledger-of-record artifact captured the P2P settlement naming the
+    // WORKER the payment paid as payee (#959). The runtime submits to
+    // /agent/{delegator}/task, and the relay used to record that path agent —
+    // the payer — as the payee of the signed record; the payer is
+    // `delegator_id`. The trust edge stays first-person [delegator, worker].
+    const p2p = (await readSettlements(booted!.baseUrl, worker.motebitId)).filter(
       (r) => r.settlement_mode === "p2p",
     );
     expect(p2p).toHaveLength(1);
     expect(p2p[0]!.amount_settled).toBe(500_000);
     expect(p2p[0]!.platform_fee).toBeGreaterThan(0);
+    expect(p2p[0]!.delegator_id).toBe(delegator.motebitId);
+    expect(
+      (await readSettlements(booted!.baseUrl, delegator.motebitId)).filter(
+        (r) => r.settlement_mode === "p2p",
+      ),
+    ).toHaveLength(0);
     // ...and accrued a first-person trust edge to the worker off that settlement.
     const trust = await readTrust(booted!.baseUrl, delegator.motebitId);
     const edge = trust.find((r) => r.remote_motebit_id === worker.motebitId);

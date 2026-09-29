@@ -43,6 +43,13 @@ import { verificationKeyFor } from "./identity-keys.js";
 import { sendToEach } from "./ws-send.js";
 import { routeToSockets } from "./task-presentation.js";
 import { bindP2pProofToTask, p2pProofKey } from "./idempotency.js";
+import {
+  localWorkerAdmission,
+  p2pPayeeOf,
+  p2pWorkerLegScope,
+  receiptDischargesP2p,
+  type P2pAdmission,
+} from "./p2p-payee.js";
 
 const logger = createLogger({ service: "federation-callbacks" });
 
@@ -85,6 +92,22 @@ export function createFederationCallbacks(deps: FederationCallbackDeps) {
   // relay instances (in tests or in a multi-tenant deployment) can have
   // different rates without clobbering each other's module state.
   const platformFeeRate = deps.platformFeeRate ?? SDK_DEFAULT_PLATFORM_FEE_RATE;
+
+  /** The executor relay's admission record for a federated P2P task's hosted worker (#959). */
+  // The executor relay HOSTS the worker, so its scope is always `local`
+  // (#959 round 3). The recorded address is the worker's own registered one
+  // — the only address a worker opts into being paid at P2P (#959 round 4:
+  // no registered address ⇒ not P2P-payable, as eligibility rules). With
+  // none, no address is admitted and the verifier checks the worker leg
+  // against the derived-bound rung alone.
+  const executorWorkerAdmission = (workerId: string): P2pAdmission => {
+    const reg = moteDb.db
+      .prepare("SELECT settlement_address FROM agent_registry WHERE motebit_id = ?")
+      .get(workerId) as { settlement_address: string | null } | undefined;
+    return reg?.settlement_address
+      ? localWorkerAdmission(moteDb.db, workerId, reg.settlement_address)
+      : { worker_leg: "local" };
+  };
 
   return {
     onTaskForwarded(verified: {
@@ -163,6 +186,11 @@ export function createFederationCallbacks(deps: FederationCallbackDeps) {
             ? {
                 settlement_mode: "p2p" as const,
                 p2p_payment_proof: verified.paymentProof,
+                // This relay hosts the worker, so it verifies the worker leg
+                // (#959). The address is the one this relay holds for its
+                // worker at admission; with none, the verifier falls back to
+                // the derived address and the current registry address.
+                p2p_admission: executorWorkerAdmission(verified.targetAgent),
               }
             : {}),
         });
@@ -234,6 +262,49 @@ export function createFederationCallbacks(deps: FederationCallbackDeps) {
     }) {
       const entry = taskQueue.get(verified.taskId);
       if (!entry) throw new HTTPException(404, { message: "Task not found or expired" });
+
+      // A P2P task was paid to ONE worker (#959): a result whose receipt is
+      // signed by anyone else is not the work paid for. Refused before the
+      // entry is touched — it neither overwrites the delivered result nor
+      // reaches the submitter, trust, or the settlement record.
+      if (
+        entry.settlement_mode === "p2p" &&
+        !receiptDischargesP2p(entry, verified.receipt.motebit_id)
+      ) {
+        logger.error("settlement.federated_p2p_receipt_not_from_payee", {
+          correlationId: verified.taskId,
+          payee: p2pPayeeOf(entry),
+          signer: verified.receipt.motebit_id,
+          originRelay: verified.originRelay,
+        });
+        throw new HTTPException(403, {
+          message: "Federated P2P result is not signed by the worker the task was paid to",
+        });
+      }
+
+      // A P2P task this relay admitted is settled from a federation result
+      // only when that result comes from the executor relay its plan chose
+      // (#959 round 4): the origin row records the worker leg as that
+      // executor's to verify, so a result from any other peer — or for a
+      // task this relay planned for no peer at all — must not settle as
+      // 'remote'. Entries admitted before the admission record existed carry
+      // none and are not held to it (their row reads 'local', fail-closed).
+      const admission = entry.p2p_admission;
+      if (
+        entry.settlement_mode === "p2p" &&
+        admission != null &&
+        (admission.planned_peer == null || admission.planned_peer !== verified.originRelay)
+      ) {
+        logger.error("settlement.federated_p2p_result_from_unplanned_peer", {
+          correlationId: verified.taskId,
+          plannedPeer: admission.planned_peer ?? null,
+          sender: verified.originRelay,
+        });
+        throw new HTTPException(403, {
+          message:
+            "Federated P2P result did not come from the executor relay this task was planned for",
+        });
+      }
 
       // Verify executing agent's Ed25519 receipt signature (sibling of direct receipt path).
       // Without this, a malicious peer relay could forge or tamper with receipts.
@@ -424,7 +495,10 @@ export function createFederationCallbacks(deps: FederationCallbackDeps) {
       if (entry.settlement_mode === "p2p" && entry.p2p_payment_proof) {
         try {
           const proof = entry.p2p_payment_proof;
-          const workerId = verified.receipt.motebit_id;
+          // Payee = the worker the delegator's proof paid: the pinned
+          // `target_agent` this relay admitted and forwarded (#959); the
+          // receipt's signer was checked against it at the top.
+          const workerId = p2pPayeeOf(entry);
           const settlementId = crypto.randomUUID();
           const settledAt = Date.now();
           // This relay's recorded fee = the origin-fee leg (→ A's treasury). The
@@ -454,8 +528,8 @@ export function createFederationCallbacks(deps: FederationCallbackDeps) {
                (settlement_id, allocation_id, task_id, motebit_id, receipt_hash,
                 amount_settled, platform_fee, platform_fee_rate, status, settled_at,
                 settlement_mode, p2p_tx_hash, payment_verification_status, delegator_id,
-                issuer_relay_id, suite, signature, record_json)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                p2p_worker_leg, p2p_worker_address, p2p_worker_address_rung, issuer_relay_id, suite, signature, record_json)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
             )
             .run(
               settlementId,
@@ -472,6 +546,11 @@ export function createFederationCallbacks(deps: FederationCallbackDeps) {
               p2pProofKey(proof.tx_hash),
               "pending",
               entry.submitted_by ?? null,
+              // The origin relay verifies only its own fee leg; the worker leg
+              // is the executor relay's (the worker is hosted there).
+              p2pWorkerLegScope(entry),
+              entry.p2p_admission?.worker_address ?? null,
+              entry.p2p_admission?.worker_address_rung ?? null,
               signed.issuer_relay_id,
               signed.suite,
               signed.signature,
