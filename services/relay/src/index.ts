@@ -180,6 +180,7 @@ import { registerBrowserSandboxRoutes } from "./browser-sandbox.js";
 import { registerBudgetRoutes } from "./budget.js";
 import { startSweepLoop } from "./sweep.js";
 import { startBatchWithdrawalLoop, getPendingWithdrawalsSummary } from "./batch-withdrawals.js";
+import { startFreshVerdictLoop } from "./withdrawal-chain-payouts.js";
 import { LoopSupervisor, superviseInterval } from "./loop-supervisor.js";
 import { registerAgentRoutes, registerAgentAuthMiddleware } from "./agents.js";
 import { registerHostRosterRoutes } from "./host-roster-routes.js";
@@ -1758,6 +1759,16 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     ...(operatorSolanaTransfer ? { operatorSolanaTransfer } : {}),
   });
 
+  // --- Withdrawal fresh-verdict sweep (#949 round 5) ---
+  // Takes and RECORDS the fresh verdict for every broadcast of a processing
+  // Path 0 payout while its window is open — the only moment the chain can
+  // prove a transaction never landed. Evidence only, it settles nothing, so
+  // it runs through an emergency freeze: a frozen relay must not lose the
+  // evidence a later unfreeze needs.
+  const freshVerdictInterval = operatorSolanaTransfer
+    ? startFreshVerdictLoop(moteDb.db, operatorSolanaTransfer, () => false, loopSupervisor)
+    : null;
+
   // --- Agent routes (registration, discovery, capabilities, settlements, ledger) ---
   registerAgentRoutes({
     app,
@@ -2466,6 +2477,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     if (feePayerGuardInterval) clearInterval(feePayerGuardInterval);
     clearInterval(sweepInterval);
     clearInterval(batchWithdrawalInterval);
+    if (freshVerdictInterval) clearInterval(freshVerdictInterval);
     clearInterval(orchestrationWorkerInterval);
     receiptExchangeHub.close();
     moteDb.close();

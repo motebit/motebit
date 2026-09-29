@@ -22,26 +22,45 @@
  *     cannot record stops the send (#885). So "no attempts recorded" means
  *     "nothing was ever broadcast".
  *   - `relay_withdrawal_payout_attempts` — one row per signed transaction:
- *     its signature and `lastValidBlockHeight`, and `seen_in_block` once any
- *     read has reported it in a block (sticky: a later "absent" read for it
- *     is never trusted as expiry — #885 round 5).
+ *     its signature and `lastValidBlockHeight`, `seen_in_block` once any
+ *     read has reported it in a block, and its durable VERDICT once one is
+ *     read (`fresh_verdict`, `fresh_context_slot`, `fresh_landed_slot`,
+ *     `fresh_checked_at`).
  *
- * The verdict (`readChainVerdict`) — from chain facts only:
+ * The verdict (`readChainVerdict`) — from POSITIVE chain evidence only
+ * (#949 round 5). Absence of a transaction in HISTORY is never evidence of
+ * non-payment: a node's historical lookup reads a pruned range, a snapshot
+ * jump or a swallowed BigTable error as absent. Per recorded attempt:
  *
- *   - any attempt `landed` ⇒ PAID by that signature;
- *   - every attempt `failed` or `expired` (past its last valid height, read
- *     slot-consistently by the adapter; never for a seen attempt), or no
- *     attempt at all ⇒ NOT PAID, and nothing of this payout can ever land;
- *   - otherwise (an attempt still `pending`, or a read failed) ⇒ UNDECIDED:
- *     the reconcile door stays shut, whatever the clock says.
+ *   - `landed` — a status found without error ⇒ PAID by that signature;
+ *   - dead — a status found WITH an error, or the FRESH verdict
+ *     (`getFreshSignatureVerdict`: the finalized status cache, read without
+ *     a history search, bound by minContextSlot, inside the window where it
+ *     still covers the whole landing range) says it never landed and never
+ *     can. Recorded DURABLY on the attempt the moment it is read, because
+ *     the window closes about a minute after the transaction expires and no
+ *     later read can prove it again;
+ *   - otherwise UNKNOWN — still able to land, or its window not yet open
+ *     (`pending`), unreadable (`rpc_error`), or past its fresh window with
+ *     no positive evidence recorded (`no_positive_evidence`: nothing the
+ *     chain can show will ever prove it did not land).
+ *
+ * The payout is NOT PAID only when every attempt is dead (or none was ever
+ * signed). A supervised sweep (`startFreshVerdictLoop`) takes the fresh
+ * verdict for every attempt of a processing payout while its window is open,
+ * so the evidence exists when the operator later reconciles.
  *
  * Neither table carries an identity column: both are keyed by the
  * withdrawal, whose own row carries the owner.
  */
 
 import type { DatabaseDriver } from "@motebit/persistence";
-import { historyCoversLanding } from "@motebit/wallet-solana";
-import type { SignatureOutcome, SignedTransactionRef } from "@motebit/wallet-solana";
+import type {
+  FreshSignatureVerdict,
+  SignatureOutcome,
+  SignedTransactionRef,
+} from "@motebit/wallet-solana";
+import { superviseInterval, type LoopSupervisor } from "./loop-supervisor.js";
 
 /** Idempotent. Called from `createWithdrawalTables`. */
 export function createWithdrawalChainPayoutTables(db: DatabaseDriver): void {
@@ -57,17 +76,33 @@ export function createWithdrawalChainPayoutTables(db: DatabaseDriver): void {
       last_valid_block_height INTEGER NOT NULL,
       recorded_at INTEGER NOT NULL,
       seen_in_block INTEGER NOT NULL DEFAULT 0,
-      recent_slot INTEGER,
+      fresh_verdict TEXT,
+      fresh_context_slot INTEGER,
+      fresh_landed_slot INTEGER,
+      fresh_checked_at INTEGER,
       PRIMARY KEY (withdrawal_id, signature)
     );
   `);
-  // #949 round 2: the slot read before the blockhash (the landing window's
-  // lower edge) — added to tables created by the first build of this record.
-  const cols = db.prepare("PRAGMA table_info(relay_withdrawal_payout_attempts)").all() as Array<{
-    name: string;
-  }>;
-  if (!cols.some((c) => c.name === "recent_slot")) {
-    db.exec("ALTER TABLE relay_withdrawal_payout_attempts ADD COLUMN recent_slot INTEGER");
+  // #949 round 5: the durable per-attempt verdict — added to tables created
+  // by an earlier build of this record. (An earlier build's `recent_slot`
+  // column, if present, is left in place and never read.)
+  const cols = new Set(
+    (
+      db.prepare("PRAGMA table_info(relay_withdrawal_payout_attempts)").all() as Array<{
+        name: string;
+      }>
+    ).map((c) => c.name),
+  );
+  const added: Array<[string, string]> = [
+    ["fresh_verdict", "TEXT"],
+    ["fresh_context_slot", "INTEGER"],
+    ["fresh_landed_slot", "INTEGER"],
+    ["fresh_checked_at", "INTEGER"],
+  ];
+  for (const [name, type] of added) {
+    if (!cols.has(name)) {
+      db.exec(`ALTER TABLE relay_withdrawal_payout_attempts ADD COLUMN ${name} ${type}`);
+    }
   }
 }
 
@@ -106,29 +141,34 @@ export function recordPayoutAttempt(
 ): void {
   db.prepare(
     `INSERT INTO relay_withdrawal_payout_attempts
-       (withdrawal_id, signature, last_valid_block_height, recorded_at, recent_slot)
-     VALUES (?, ?, ?, ?, ?)
+       (withdrawal_id, signature, last_valid_block_height, recorded_at)
+     VALUES (?, ?, ?, ?)
      ON CONFLICT (withdrawal_id, signature) DO NOTHING`,
-  ).run(
-    withdrawalId,
-    tx.signature,
-    tx.lastValidBlockHeight,
-    recordedAt,
-    typeof tx.recentSlot === "number" ? tx.recentSlot : null,
-  );
+  ).run(withdrawalId, tx.signature, tx.lastValidBlockHeight, recordedAt);
 }
+
+/**
+ * A recorded attempt's durable verdict (#949 round 5): `landed`, `failed`
+ * and `dead_fresh` are POSITIVE evidence and final; `window_passed` records
+ * that the fresh window closed with no positive evidence — only a later
+ * found status can replace it.
+ */
+export type RecordedVerdict = "landed" | "failed" | "dead_fresh" | "window_passed";
 
 export interface PayoutAttempt {
   signature: string;
   last_valid_block_height: number;
   seen_in_block: number;
-  recent_slot: number | null;
+  fresh_verdict: RecordedVerdict | null;
+  fresh_context_slot: number | null;
+  fresh_landed_slot: number | null;
 }
 
 export function getPayoutAttempts(db: DatabaseDriver, withdrawalId: string): PayoutAttempt[] {
   return db
     .prepare(
-      `SELECT signature, last_valid_block_height, seen_in_block, recent_slot
+      `SELECT signature, last_valid_block_height, seen_in_block, fresh_verdict,
+              fresh_context_slot, fresh_landed_slot
          FROM relay_withdrawal_payout_attempts
         WHERE withdrawal_id = ?
         ORDER BY recorded_at ASC, signature ASC`,
@@ -142,14 +182,33 @@ function markAttemptSeen(db: DatabaseDriver, withdrawalId: string, signature: st
   ).run(withdrawalId, signature);
 }
 
+/**
+ * Persist a verdict on an attempt — at the moment it is read. A positive
+ * verdict is final (never overwritten); `window_passed` yields only to a
+ * positive one.
+ */
+function persistVerdict(
+  db: DatabaseDriver,
+  withdrawalId: string,
+  signature: string,
+  verdict: RecordedVerdict,
+  contextSlot: number | null,
+  landedSlot: number | null,
+): void {
+  db.prepare(
+    `UPDATE relay_withdrawal_payout_attempts
+        SET fresh_verdict = ?, fresh_context_slot = ?, fresh_landed_slot = ?, fresh_checked_at = ?
+      WHERE withdrawal_id = ? AND signature = ?
+        AND (fresh_verdict IS NULL OR fresh_verdict = 'window_passed')`,
+  ).run(verdict, contextSlot, landedSlot, Date.now(), withdrawalId, signature);
+}
+
 /** The reads the verdict needs — `OperatorSolanaTransfer` satisfies it. */
 export interface SignatureOutcomeReader {
+  /** History read — trusted for FOUND statuses only (landed / failed). */
   getSignatureOutcome(tx: SignedTransactionRef): Promise<SignatureOutcome>;
-  /**
-   * The node's LOCAL ledger edge (`minimumLedgerSlot`) — the lower edge of
-   * what "absent" can speak for (#949 round 4; never `getFirstAvailableBlock`).
-   */
-  getLocalLedgerFirstSlot(): Promise<number>;
+  /** The fresh verdict — the only read from which "never landed" is concluded. */
+  getFreshSignatureVerdict(tx: SignedTransactionRef): Promise<FreshSignatureVerdict>;
 }
 
 export type ChainVerdict =
@@ -158,23 +217,105 @@ export type ChainVerdict =
   | {
       kind: "undecided";
       /**
-       * `pending`: an attempt can still land; `rpc_error`: an attempt could
-       * not be read; `history_pruned`: an attempt is past its last valid
-       * height and the node has no record of it, but the node does not
-       * provably hold the slots it could have landed in — it may have LANDED
-       * (#949 round 2). Precedence: pending > rpc_error > history_pruned, so
-       * `history_pruned` means no undecided attempt can still land or failed
-       * to read for any other reason.
+       * `pending`: an attempt can still land, or its fresh window has not
+       * opened; `rpc_error`: an attempt could not be read;
+       * `no_positive_evidence`: an attempt's fresh window closed with no
+       * positive evidence recorded — nothing the chain can show will ever
+       * prove it did not land (#949 round 5; the honest-path cost, #990).
+       * Precedence: pending > rpc_error > no_positive_evidence.
        */
-      reason: "pending" | "rpc_error" | "history_pruned";
+      reason: "pending" | "rpc_error" | "no_positive_evidence";
       signature: string;
       lastValidBlockHeight: number;
       detail?: string;
     };
 
+type AttemptVerdict =
+  | { kind: "landed"; slot: number }
+  | { kind: "dead" }
+  | { kind: "pending" }
+  | { kind: "rpc_error"; detail: string }
+  | { kind: "no_positive_evidence" };
+
+function refOf(a: PayoutAttempt): SignedTransactionRef {
+  return { signature: a.signature, lastValidBlockHeight: a.last_valid_block_height };
+}
+
+/**
+ * Take the fresh verdict for one attempt with no positive verdict on file,
+ * and record it at once.
+ */
+async function takeFreshVerdict(
+  db: DatabaseDriver,
+  withdrawalId: string,
+  a: PayoutAttempt,
+  reader: SignatureOutcomeReader,
+): Promise<AttemptVerdict> {
+  let fresh: FreshSignatureVerdict;
+  try {
+    fresh = await reader.getFreshSignatureVerdict(refOf(a));
+  } catch (err) {
+    fresh = { status: "rpc_error", reason: err instanceof Error ? err.message : String(err) };
+  }
+  switch (fresh.status) {
+    case "landed":
+      persistVerdict(db, withdrawalId, a.signature, "landed", fresh.contextSlot, fresh.slot);
+      return { kind: "landed", slot: fresh.slot };
+    case "failed":
+      persistVerdict(db, withdrawalId, a.signature, "failed", fresh.contextSlot, null);
+      return { kind: "dead" };
+    case "dead_fresh":
+      persistVerdict(db, withdrawalId, a.signature, "dead_fresh", fresh.contextSlot, null);
+      return { kind: "dead" };
+    case "too_early":
+      return { kind: "pending" };
+    case "window_passed":
+      persistVerdict(db, withdrawalId, a.signature, "window_passed", null, null);
+      return { kind: "no_positive_evidence" };
+    case "rpc_error":
+      return { kind: "rpc_error", detail: fresh.reason };
+  }
+}
+
+async function attemptVerdict(
+  db: DatabaseDriver,
+  withdrawalId: string,
+  a: PayoutAttempt,
+  reader: SignatureOutcomeReader,
+): Promise<AttemptVerdict> {
+  // A positive verdict on file is final.
+  if (a.fresh_verdict === "landed" && a.fresh_landed_slot !== null) {
+    return { kind: "landed", slot: a.fresh_landed_slot };
+  }
+  if (a.fresh_verdict === "failed" || a.fresh_verdict === "dead_fresh") return { kind: "dead" };
+
+  // History — FOUND statuses only. Its absence (`expired`, `pending`) is
+  // never read as dead; only the fresh verdict below may conclude that.
+  let history: SignatureOutcome;
+  try {
+    history = await reader.getSignatureOutcome(refOf(a));
+  } catch (err) {
+    history = { status: "rpc_error", reason: err instanceof Error ? err.message : String(err) };
+  }
+  if (history.status === "landed") {
+    persistVerdict(db, withdrawalId, a.signature, "landed", null, history.slot);
+    return { kind: "landed", slot: history.slot };
+  }
+  if (history.status === "failed") {
+    persistVerdict(db, withdrawalId, a.signature, "failed", null, null);
+    return { kind: "dead" };
+  }
+  if (history.status === "pending" && history.seen === true) {
+    markAttemptSeen(db, withdrawalId, a.signature);
+  }
+  if (a.fresh_verdict === "window_passed") return { kind: "no_positive_evidence" };
+  return takeFreshVerdict(db, withdrawalId, a, reader);
+}
+
 /**
  * What the chain says about a chain-recorded payout. Reads every recorded
- * attempt (so a landed one is found wherever it is); persists `seen` stickily.
+ * attempt (so a landed one is found wherever it is) and records every
+ * verdict it reads.
  */
 export async function readChainVerdict(
   db: DatabaseDriver,
@@ -184,84 +325,27 @@ export async function readChainVerdict(
   const attempts = getPayoutAttempts(db, withdrawalId);
   const landed: Array<{ signature: string; slot: number }> = [];
   const undecided: Array<Extract<ChainVerdict, { kind: "undecided" }>> = [];
-  // Read once, lazily: the node's retained-history edge. A failed read means
-  // no absence can be proven complete.
-  let firstAvailable: number | null | undefined;
-  const retainedFrom = async (): Promise<number | null> => {
-    if (firstAvailable === undefined) {
-      try {
-        firstAvailable = await reader.getLocalLedgerFirstSlot();
-      } catch {
-        firstAvailable = null;
-      }
-    }
-    return firstAvailable;
-  };
   for (const a of attempts) {
-    const tx: SignedTransactionRef = {
-      signature: a.signature,
-      lastValidBlockHeight: a.last_valid_block_height,
-      ...(a.recent_slot !== null ? { recentSlot: a.recent_slot } : {}),
-    };
-    let outcome: SignatureOutcome;
-    try {
-      outcome = await reader.getSignatureOutcome(tx);
-    } catch (err) {
-      outcome = { status: "rpc_error", reason: err instanceof Error ? err.message : String(err) };
-    }
-    if (outcome.status === "pending" && outcome.seen === true) {
-      markAttemptSeen(db, withdrawalId, a.signature);
-      a.seen_in_block = 1;
-    }
-    // Sticky: a transaction some node reported in a block may still land;
-    // an "absent past its height" read for it proves nothing (#885 round 5).
-    if (outcome.status === "expired" && a.seen_in_block === 1) {
-      outcome = { status: "pending", seen: true };
-    }
-    // Absence of evidence is evidence of absence only inside the node's LOCAL
-    // ledger (#949 rounds 2–4): below it agave asks BigTable and reads any
-    // error as absent. The edge is `minimumLedgerSlot` + LOCAL_LEDGER_EDGE_MARGIN. An `expired` is accepted only when
-    // the node's first available slot is at or before where this transaction
-    // could first land (`earliestLandingSlot`: its recorded slot less the
-    // margin; for an attempt recorded without one, the floor its own validity
-    // gives — round 3, so such an attempt still has a door on a node holding
-    // deep history). Otherwise (history pruned, or the edge unreadable) a
-    // landed payout would read exactly like this, so the verdict is UNKNOWN —
-    // never "not landed".
-    if (outcome.status === "expired") {
-      const first = await retainedFrom();
-      if (first === null || !historyCoversLanding(tx, first)) {
-        outcome = {
-          status: "rpc_error",
-          reason:
-            first === null
-              ? "the node's retained history could not be read"
-              : `the node's local ledger starts at slot ${first}, too late to cover where ${a.signature} could have landed`,
-          historyPruned: true,
-        };
-      }
-    }
+    const v = await attemptVerdict(db, withdrawalId, a, reader);
     const base = {
       kind: "undecided" as const,
       signature: a.signature,
       lastValidBlockHeight: a.last_valid_block_height,
     };
-    switch (outcome.status) {
+    switch (v.kind) {
       case "landed":
-        landed.push({ signature: a.signature, slot: outcome.slot });
+        landed.push({ signature: a.signature, slot: v.slot });
         break;
-      case "failed":
-      case "expired":
+      case "dead":
         break;
       case "pending":
         undecided.push({ ...base, reason: "pending" });
         break;
       case "rpc_error":
-        undecided.push({
-          ...base,
-          reason: outcome.historyPruned === true ? "history_pruned" : "rpc_error",
-          detail: outcome.reason,
-        });
+        undecided.push({ ...base, reason: "rpc_error", detail: v.detail });
+        break;
+      case "no_positive_evidence":
+        undecided.push({ ...base, reason: "no_positive_evidence" });
         break;
     }
   }
@@ -273,21 +357,74 @@ export async function readChainVerdict(
       landed: landed.map((l) => l.signature),
     };
   }
-  const rank = { pending: 0, rpc_error: 1, history_pruned: 2 } as const;
+  const rank = { pending: 0, rpc_error: 1, no_positive_evidence: 2 } as const;
   const worst = undecided.sort((x, y) => rank[x.reason] - rank[y.reason])[0];
   if (worst) return worst;
   return { kind: "not_paid", attempts: attempts.length };
 }
 
 /**
- * Blocks past a height this process read before a LEGACY claim's broadcast
- * can be proven dead (#949). A legacy claim was made by an earlier process
- * that recorded no signature; each transaction it broadcast was signed over
- * a blockhash fetched before this process started, whose last valid height
- * is at most that blockhash's height + 150. Any height this process reads is
- * at or above that blockhash's height (up to cross-node lag), so once the
- * chain is 150 + 150 (lag) + 10 (the adapter's absence margin) blocks past
- * the first height this process read, nothing the earlier process signed
- * can land. A halted chain never gets there.
+ * One pass of the fresh-verdict sweep (#949 round 5): for every attempt of a
+ * `processing`, chain-recorded withdrawal with no verdict on file, take the
+ * fresh verdict and record it. Evidence only — it never settles a
+ * withdrawal; the operator's reconcile reads what it recorded. Returns the
+ * number of attempts read.
  */
-export const LEGACY_BROADCAST_HEIGHT_BOUND = 150 + 150 + 10;
+export async function runFreshVerdictSweep(
+  db: DatabaseDriver,
+  reader: SignatureOutcomeReader,
+  limit = 200,
+): Promise<number> {
+  const rows = db
+    .prepare(
+      `SELECT a.withdrawal_id AS withdrawal_id, a.signature AS signature,
+              a.last_valid_block_height AS last_valid_block_height,
+              a.seen_in_block AS seen_in_block, a.fresh_verdict AS fresh_verdict,
+              a.fresh_context_slot AS fresh_context_slot,
+              a.fresh_landed_slot AS fresh_landed_slot
+         FROM relay_withdrawal_payout_attempts a
+         JOIN relay_withdrawal_chain_claims c ON c.withdrawal_id = a.withdrawal_id
+         JOIN relay_withdrawals w ON w.withdrawal_id = a.withdrawal_id
+        WHERE w.status = 'processing' AND a.fresh_verdict IS NULL
+        ORDER BY a.recorded_at ASC, a.signature ASC
+        LIMIT ?`,
+    )
+    .all(limit) as Array<PayoutAttempt & { withdrawal_id: string }>;
+  for (const row of rows) {
+    await takeFreshVerdict(db, row.withdrawal_id, row, reader);
+  }
+  return rows.length;
+}
+
+/**
+ * The sweep's cadence. The fresh window is FRESH_WINDOW_END −
+ * FRESH_WINDOW_START + 1 = 120 finalized blocks (about 48 s at 400 ms per
+ * block), so a 10 s cadence reads each attempt inside it several times over.
+ */
+export const FRESH_VERDICT_INTERVAL_MS = 10_000;
+
+/** Supervised fresh-verdict loop; single-flight. */
+export function startFreshVerdictLoop(
+  db: DatabaseDriver,
+  reader: SignatureOutcomeReader,
+  isFrozen: () => boolean,
+  supervisor?: LoopSupervisor,
+  intervalMs = FRESH_VERDICT_INTERVAL_MS,
+): ReturnType<typeof setInterval> {
+  let running = false;
+  return superviseInterval(
+    supervisor,
+    "withdrawal-fresh-verdict",
+    intervalMs,
+    async () => {
+      if (running) return;
+      running = true;
+      try {
+        await runFreshVerdictSweep(db, reader);
+      } finally {
+        running = false;
+      }
+    },
+    { isFrozen },
+  );
+}

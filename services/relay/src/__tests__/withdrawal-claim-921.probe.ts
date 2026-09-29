@@ -83,8 +83,8 @@ function operatorWith(
   // that passes no hooks is unaffected. The chain never decides here.
   return new OperatorSolanaTransfer({
     honorsBroadcastHooks: true,
-    // The node's retained-history edge (#949 rounds 2–3): full history.
-    getLocalLedgerFirstSlot: () => Promise.resolve(0),
+    // The fresh verdict (#949 round 5): nothing decided yet.
+    getFreshSignatureVerdict: () => Promise.resolve({ status: "too_early" as const }),
     ownAddress: "RelayTreasuryAddressBase58",
     getUsdcBalance: vi.fn().mockResolvedValue(10_000_000_000n),
     getUsdcBalanceOf: vi.fn().mockResolvedValue(10_000_000_000n),

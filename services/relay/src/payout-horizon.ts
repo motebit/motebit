@@ -7,14 +7,16 @@
  *
  *   | payout                          | decided by                                     |
  *   | ------------------------------- | ---------------------------------------------- |
- *   | Path 0 Solana, chain-recorded   | THE CHAIN: every signature the payout signed   |
- *   |  (claimed by this code)         |  was recorded before broadcast; each is read   |
- *   |                                 |  (landed / failed / past its last valid block  |
- *   |                                 |  HEIGHT) — withdrawal-chain-payouts.ts. No     |
- *   |                                 |  wall-clock term at all.                       |
- *   | Path 0 Solana, legacy claim     | THE CHAIN'S HEIGHT: past the first height this |
- *   |  (an earlier process, no        |  process read + LEGACY_BROADCAST_HEIGHT_BOUND  |
- *   |  signatures recorded)           |  (a halted chain never gets there)             |
+ *   | Path 0 Solana, chain-recorded   | THE CHAIN, on POSITIVE evidence only: every   |
+ *   |  (claimed by this code)         |  signature the payout signed was recorded      |
+ *   |                                 |  before broadcast; each is found landed, found |
+ *   |                                 |  failed, or proven dead by the fresh verdict   |
+ *   |                                 |  (recorded while its window is open) —         |
+ *   |                                 |  withdrawal-chain-payouts.ts. History absence  |
+ *   |                                 |  proves nothing (#949 round 5). No wall clock. |
+ *   | Path 0 Solana, legacy claim     | THE OPERATOR's `paid` only: no signature was   |
+ *   |  (an earlier process, no        |  recorded, so no positive evidence of non-     |
+ *   |  signatures recorded)           |  landing can exist; `not_paid` waits for #990  |
  *   | Path 1 x402, legacy claim       | `reconcileOpensAt`: the recorded authorization |
  *   |                                 |  validity (payout_valid_until) + margin. No    |
  *   |                                 |  new x402 payout exists (#948 removed it).     |

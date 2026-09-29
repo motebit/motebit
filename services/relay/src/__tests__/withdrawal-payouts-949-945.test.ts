@@ -1,12 +1,14 @@
 /**
  * #949 / #945 unit edges the payout harness does not isolate:
  *
- *   - `readChainVerdict` over several recorded attempts: one landed anywhere
- *     ⇒ paid; every one failed or expired ⇒ not paid; anything still able to
- *     land or unreadable ⇒ undecided; `seen` is sticky and persisted, so a
- *     later "expired" read for a transaction some node saw in a block is not
- *     trusted (#885 round 5); a read that throws is an rpc_error, never
- *     absence.
+ *   - `readChainVerdict` over several recorded attempts (#949 round 5): one
+ *     landed anywhere ⇒ paid; every one POSITIVELY dead (found failed, or
+ *     dead by the fresh verdict) ⇒ not paid; a history read's absence
+ *     (`expired`) is never dead; the fresh verdict is recorded durably at
+ *     the moment it is read and a positive one is final; a window that
+ *     closed with nothing recorded is `no_positive_evidence`; a read that
+ *     throws is an rpc_error, never absence; the sweep records verdicts for
+ *     processing, chain-recorded payouts only.
  *   - batch: a terminal write that loses its `firing` CAS writes no door;
  *     a row this process is still firing is never "recovered" as stale;
  *     a stale row whose rail is no longer registered is parked on the
@@ -16,7 +18,12 @@
 
 import { describe, it, expect, afterEach, vi } from "vitest";
 import type { GuestRail, WithdrawalResult } from "@motebit/sdk";
-import type { SignatureOutcome, SignedTransactionRef } from "@motebit/wallet-solana";
+import {
+  OperatorSolanaTransfer,
+  type FreshSignatureVerdict,
+  type SignatureOutcome,
+  type SignedTransactionRef,
+} from "@motebit/wallet-solana";
 import type { DatabaseDriver } from "@motebit/persistence";
 
 import type { SyncRelay } from "../index.js";
@@ -31,12 +38,14 @@ import {
 } from "../batch-withdrawals.js";
 import {
   getPayoutAttempts,
+  markChainRecordedClaim,
   readChainVerdict,
   recordPayoutAttempt,
+  runFreshVerdictSweep,
 } from "../withdrawal-chain-payouts.js";
 import { UNDECLARED_PAYOUT_HORIZON_MS } from "../payout-horizon.js";
 import { LoopSupervisor } from "../loop-supervisor.js";
-import { createTestRelay } from "./test-helpers.js";
+import { AUTH_HEADER, createTestRelay } from "./test-helpers.js";
 
 let relay: SyncRelay | undefined;
 afterEach(async () => {
@@ -50,74 +59,66 @@ async function db(): Promise<DatabaseDriver> {
   return relay.moteDb.db;
 }
 
-/** Recorded attempts carry the slot read before signing; the node holds history from `firstAvailable`. */
-const RECENT = 1_000_000;
-
+/**
+ * A reader over per-signature HISTORY outcomes and FRESH verdicts. Unlisted
+ * signatures: history `pending`, fresh `too_early`.
+ */
 function reader(
   outcomes: Record<string, SignatureOutcome | Error>,
-  firstAvailable: number | Error = 0,
+  fresh: Record<string, FreshSignatureVerdict | Error> = {},
 ) {
   const calls: string[] = [];
+  const freshCalls: string[] = [];
   return {
     calls,
+    freshCalls,
     getSignatureOutcome(tx: SignedTransactionRef): Promise<SignatureOutcome> {
       calls.push(tx.signature);
       const o = outcomes[tx.signature];
       if (o instanceof Error) return Promise.reject(o);
       return Promise.resolve(o ?? { status: "pending" });
     },
-    getLocalLedgerFirstSlot(): Promise<number> {
-      return firstAvailable instanceof Error
-        ? Promise.reject(firstAvailable)
-        : Promise.resolve(firstAvailable);
+    getFreshSignatureVerdict(tx: SignedTransactionRef): Promise<FreshSignatureVerdict> {
+      freshCalls.push(tx.signature);
+      const f = fresh[tx.signature];
+      if (f instanceof Error) return Promise.reject(f);
+      return Promise.resolve(f ?? { status: "too_early" });
     },
   };
 }
 
-describe("readChainVerdict (#949)", () => {
+const DEAD: FreshSignatureVerdict = { status: "dead_fresh", contextSlot: 9_000 };
+const PASSED: FreshSignatureVerdict = { status: "window_passed" };
+
+function attempt(d: DatabaseDriver, w: string, signature: string, lastValid: number, at: number) {
+  recordPayoutAttempt(d, w, { signature, lastValidBlockHeight: lastValid }, at);
+}
+
+describe("readChainVerdict (#949 round 5: positive evidence only)", () => {
   it("no recorded attempt ⇒ not paid (nothing was ever broadcast), without a chain read", async () => {
     const d = await db();
     const r = reader({});
     expect(await readChainVerdict(d, "w-none", r)).toEqual({ kind: "not_paid", attempts: 0 });
     expect(r.calls).toEqual([]);
+    expect(r.freshCalls).toEqual([]);
   });
 
-  it("a landed attempt anywhere ⇒ paid by that signature, even after an expired one", async () => {
+  it("a landed attempt anywhere ⇒ paid by that signature, even beside a dead one", async () => {
     const d = await db();
-    recordPayoutAttempt(
-      d,
-      "w1",
-      { signature: "a", lastValidBlockHeight: 10, recentSlot: RECENT },
-      1,
-    );
-    recordPayoutAttempt(
-      d,
-      "w1",
-      { signature: "b", lastValidBlockHeight: 20, recentSlot: RECENT },
-      2,
-    );
+    attempt(d, "w1", "a", 10, 1);
+    attempt(d, "w1", "b", 20, 2);
     const v = await readChainVerdict(
       d,
       "w1",
-      reader({ a: { status: "expired" }, b: { status: "landed", slot: 7 } }),
+      reader({ a: { status: "expired" }, b: { status: "landed", slot: 7 } }, { a: DEAD }),
     );
     expect(v).toMatchObject({ kind: "paid", signature: "b", slot: 7, landed: ["b"] });
   });
 
   it("two landed attempts are both reported (the relay paid twice — logged by the door)", async () => {
     const d = await db();
-    recordPayoutAttempt(
-      d,
-      "w2",
-      { signature: "a", lastValidBlockHeight: 10, recentSlot: RECENT },
-      1,
-    );
-    recordPayoutAttempt(
-      d,
-      "w2",
-      { signature: "b", lastValidBlockHeight: 20, recentSlot: RECENT },
-      2,
-    );
+    attempt(d, "w2", "a", 10, 1);
+    attempt(d, "w2", "b", 20, 2);
     const v = await readChainVerdict(
       d,
       "w2",
@@ -126,27 +127,24 @@ describe("readChainVerdict (#949)", () => {
     expect(v).toMatchObject({ kind: "paid", signature: "a", landed: ["a", "b"] });
   });
 
-  it("failed and expired only ⇒ not paid; one pending ⇒ undecided; a throwing read ⇒ rpc_error", async () => {
+  it("a history absence (`expired`) is NEVER dead: without a fresh verdict it stays undecided", async () => {
     const d = await db();
-    recordPayoutAttempt(
-      d,
-      "w3",
-      { signature: "a", lastValidBlockHeight: 10, recentSlot: RECENT },
-      1,
-    );
-    recordPayoutAttempt(
-      d,
-      "w3",
-      { signature: "b", lastValidBlockHeight: 20, recentSlot: RECENT },
-      2,
-    );
+    attempt(d, "wx", "a", 10, 1);
+    expect(await readChainVerdict(d, "wx", reader({ a: { status: "expired" } }))).toMatchObject({
+      kind: "undecided",
+      reason: "pending",
+      signature: "a",
+    });
     expect(
-      await readChainVerdict(
-        d,
-        "w3",
-        reader({ a: { status: "failed" }, b: { status: "expired" } }),
-      ),
-    ).toEqual({ kind: "not_paid", attempts: 2 });
+      await readChainVerdict(d, "wx", reader({ a: { status: "expired" } }, { a: PASSED })),
+    ).toMatchObject({ kind: "undecided", reason: "no_positive_evidence", signature: "a" });
+    expect(getPayoutAttempts(d, "wx")[0]!.fresh_verdict).toBe("window_passed");
+  });
+
+  it("found failed, or dead by the fresh verdict ⇒ not paid; one pending ⇒ undecided; a throwing read ⇒ rpc_error", async () => {
+    const d = await db();
+    attempt(d, "w3", "a", 10, 1);
+    attempt(d, "w3", "b", 20, 2);
     expect(
       await readChainVerdict(
         d,
@@ -160,158 +158,169 @@ describe("readChainVerdict (#949)", () => {
       lastValidBlockHeight: 20,
     });
     expect(
-      await readChainVerdict(d, "w3", reader({ a: new Error("socket"), b: { status: "expired" } })),
-    ).toMatchObject({ kind: "undecided", reason: "rpc_error", signature: "a", detail: "socket" });
+      await readChainVerdict(d, "w3", reader({ b: new Error("socket") }, { b: new Error("503") })),
+    ).toMatchObject({ kind: "undecided", reason: "rpc_error", signature: "b", detail: "503" });
+    expect(
+      await readChainVerdict(d, "w3", reader({ b: { status: "expired" } }, { b: DEAD })),
+    ).toEqual({ kind: "not_paid", attempts: 2 });
   });
 
-  it("seen-in-a-block is sticky and persisted: a later expired read for it stays undecided", async () => {
+  it("the fresh verdict is recorded at the moment it is read, and a positive one is final", async () => {
     const d = await db();
-    recordPayoutAttempt(
-      d,
-      "w4",
-      { signature: "a", lastValidBlockHeight: 10, recentSlot: RECENT },
-      1,
-    );
+    attempt(d, "wf", "a", 10, 1);
+    expect(await readChainVerdict(d, "wf", reader({}, { a: DEAD }))).toEqual({
+      kind: "not_paid",
+      attempts: 1,
+    });
+    const rec = getPayoutAttempts(d, "wf")[0]!;
+    expect(rec.fresh_verdict).toBe("dead_fresh");
+    expect(rec.fresh_context_slot).toBe(9_000);
+    // Later the window has passed and history shows nothing: the recorded
+    // evidence still decides it, with no chain read at all.
+    const later = reader({ a: { status: "expired" } }, { a: PASSED });
+    expect(await readChainVerdict(d, "wf", later)).toEqual({ kind: "not_paid", attempts: 1 });
+    expect(later.calls).toEqual([]);
+    expect(later.freshCalls).toEqual([]);
+  });
+
+  it("a found landed status is recorded too, so a pruned history later still reads paid", async () => {
+    const d = await db();
+    attempt(d, "wl", "a", 10, 1);
+    await readChainVerdict(d, "wl", reader({ a: { status: "landed", slot: 5 } }));
+    expect(getPayoutAttempts(d, "wl")[0]).toMatchObject({
+      fresh_verdict: "landed",
+      fresh_landed_slot: 5,
+    });
+    expect(
+      await readChainVerdict(d, "wl", reader({ a: { status: "expired" } }, { a: PASSED })),
+    ).toMatchObject({ kind: "paid", signature: "a", slot: 5 });
+  });
+
+  it("seen-in-a-block is persisted; the fresh verdict (finalized, whole landing range) still decides it", async () => {
+    const d = await db();
+    attempt(d, "w4", "a", 10, 1);
     expect(
       await readChainVerdict(d, "w4", reader({ a: { status: "pending", seen: true } })),
     ).toMatchObject({ kind: "undecided", reason: "pending" });
     expect(getPayoutAttempts(d, "w4")[0]!.seen_in_block).toBe(1);
-    expect(await readChainVerdict(d, "w4", reader({ a: { status: "expired" } }))).toMatchObject({
-      kind: "undecided",
-      reason: "pending",
-    });
-    // A landed read still decides it.
     expect(
       await readChainVerdict(d, "w4", reader({ a: { status: "landed", slot: 3 } })),
     ).toMatchObject({ kind: "paid", signature: "a" });
   });
 
-  // #949 round 2: absence of evidence is evidence of absence only inside the
-  // node's retained history.
-  it("PR1: an expired read on a node whose history no longer reaches the landing window is history_pruned, never not_paid", async () => {
+  it("window_passed yields to a later found status, never the other way", async () => {
     const d = await db();
-    recordPayoutAttempt(
-      d,
-      "wp",
-      { signature: "a", lastValidBlockHeight: 10, recentSlot: RECENT },
-      1,
-    );
-    // History starts after the transaction could have landed.
-    expect(
-      await readChainVerdict(d, "wp", reader({ a: { status: "expired" } }, RECENT + 5)),
-    ).toMatchObject({ kind: "undecided", reason: "history_pruned", signature: "a" });
-    // Just inside the margin is still pruned; far enough back decides it.
-    expect(
-      await readChainVerdict(d, "wp", reader({ a: { status: "expired" } }, RECENT - 4_607)),
-    ).toMatchObject({ kind: "undecided", reason: "history_pruned" });
-    expect(
-      await readChainVerdict(d, "wp", reader({ a: { status: "expired" } }, RECENT - 4_608)),
-    ).toEqual({ kind: "not_paid", attempts: 1 });
-    // The retention edge unreadable ⇒ never not_paid.
-    expect(
-      await readChainVerdict(d, "wp", reader({ a: { status: "expired" } }, new Error("down"))),
-    ).toMatchObject({ kind: "undecided", reason: "history_pruned" });
-    // An adapter that itself reports the pruned history is read the same way.
-    expect(
-      await readChainVerdict(
-        d,
-        "wp",
-        reader({ a: { status: "rpc_error", reason: "pruned", historyPruned: true } }),
-      ),
-    ).toMatchObject({ kind: "undecided", reason: "history_pruned" });
-  });
-
-  it("C1: an attempt recorded without its landing window still has a door — decided on a node holding deep history, undecided on a recent one", async () => {
-    const d = await db();
-    const L = 50_000;
-    recordPayoutAttempt(d, "wn", { signature: "a", lastValidBlockHeight: L }, 1);
-    // Every block's slot is at least its height, so the floor is L - 310; the
-    // local ledger must reach 4 096 slots (the local-edge margin) below that.
-    expect(await readChainVerdict(d, "wn", reader({ a: { status: "expired" } }, 0))).toEqual({
+    attempt(d, "wp", "a", 10, 1);
+    await readChainVerdict(d, "wp", reader({}, { a: PASSED }));
+    expect(getPayoutAttempts(d, "wp")[0]!.fresh_verdict).toBe("window_passed");
+    expect(await readChainVerdict(d, "wp", reader({ a: { status: "failed" } }))).toEqual({
       kind: "not_paid",
       attempts: 1,
     });
-    expect(
-      await readChainVerdict(d, "wn", reader({ a: { status: "expired" } }, L - 4_406)),
-    ).toEqual({
-      kind: "not_paid",
-      attempts: 1,
-    });
-    expect(
-      await readChainVerdict(d, "wn", reader({ a: { status: "expired" } }, L - 4_405)),
-    ).toMatchObject({ kind: "undecided", reason: "history_pruned" });
+    expect(getPayoutAttempts(d, "wp")[0]!.fresh_verdict).toBe("failed");
   });
 
-  it("T2r: a node whose local ledger starts inside the landing margin (512) or the local-edge margin (4 096) is never read as not_paid", async () => {
+  it("precedence: pending beats rpc_error beats no_positive_evidence", async () => {
     const d = await db();
-    recordPayoutAttempt(
-      d,
-      "wm",
-      { signature: "a", lastValidBlockHeight: 10, recentSlot: RECENT },
-      1,
-    );
-    for (const edge of [RECENT - 1, RECENT - 100, RECENT - 511, RECENT - 4_607]) {
-      expect(
-        await readChainVerdict(d, "wm", reader({ a: { status: "expired" } }, edge)),
-      ).toMatchObject({ kind: "undecided", reason: "history_pruned" });
-    }
-    expect(
-      await readChainVerdict(d, "wm", reader({ a: { status: "expired" } }, RECENT - 4_608)),
-    ).toEqual({ kind: "not_paid", attempts: 1 });
-  });
-
-  it("precedence: pending beats rpc_error beats history_pruned", async () => {
-    const d = await db();
-    recordPayoutAttempt(
-      d,
-      "wq",
-      { signature: "a", lastValidBlockHeight: 10, recentSlot: RECENT },
-      1,
-    );
-    recordPayoutAttempt(
-      d,
-      "wq",
-      { signature: "b", lastValidBlockHeight: 20, recentSlot: RECENT },
-      2,
-    );
-    recordPayoutAttempt(
-      d,
-      "wq",
-      { signature: "c", lastValidBlockHeight: 30, recentSlot: RECENT },
-      3,
-    );
-    const pruned = RECENT + 1;
+    attempt(d, "wq", "a", 10, 1);
+    attempt(d, "wq", "b", 20, 2);
+    attempt(d, "wq", "c", 30, 3);
     expect(
       await readChainVerdict(
         d,
         "wq",
-        reader({ a: { status: "expired" }, b: new Error("x"), c: { status: "pending" } }, pruned),
+        reader({}, { a: PASSED, b: new Error("x"), c: { status: "too_early" } }),
       ),
     ).toMatchObject({ reason: "pending", signature: "c" });
     expect(
-      await readChainVerdict(
-        d,
-        "wq",
-        reader({ a: { status: "expired" }, b: new Error("x"), c: { status: "failed" } }, pruned),
-      ),
+      await readChainVerdict(d, "wq", reader({ c: { status: "failed" } }, { b: new Error("x") })),
     ).toMatchObject({ reason: "rpc_error", signature: "b" });
   });
 
   it("re-recording the same signature is a no-op (a re-sign over the same blockhash is the same transaction)", async () => {
     const d = await db();
-    recordPayoutAttempt(
-      d,
-      "w5",
-      { signature: "a", lastValidBlockHeight: 10, recentSlot: RECENT },
-      1,
-    );
-    recordPayoutAttempt(
-      d,
-      "w5",
-      { signature: "a", lastValidBlockHeight: 10, recentSlot: RECENT },
-      2,
-    );
+    attempt(d, "w5", "a", 10, 1);
+    attempt(d, "w5", "a", 10, 2);
     expect(getPayoutAttempts(d, "w5")).toHaveLength(1);
+  });
+});
+
+describe("runFreshVerdictSweep (#949 round 5)", () => {
+  function processingWithdrawal(d: DatabaseDriver, mid: string, chainRecorded: boolean): string {
+    creditAccount(d, mid, 5_000_000, "deposit", `${mid}-dep`, "seed");
+    const id = `wd-${mid}`;
+    d.prepare(
+      `INSERT INTO relay_withdrawals (withdrawal_id, motebit_id, amount, currency, destination, status, requested_at, claimed_at)
+       VALUES (?, ?, 1000000, 'USDC', 'GJmrQzyZumWWkdBuVH3Z1hnGvjrcDMbx7ptF5t5UAAAA', 'processing', ?, ?)`,
+    ).run(id, mid, Date.now(), Date.now());
+    if (chainRecorded) markChainRecordedClaim(d, id, "solana", Date.now());
+    return id;
+  }
+
+  it("records the fresh verdict for each undecided attempt of a processing, chain-recorded payout — and settles nothing", async () => {
+    const d = await db();
+    const id = processingWithdrawal(d, "zzs-a", true);
+    attempt(d, id, "a", 10, 1);
+    attempt(d, id, "b", 20, 2);
+    const r = reader({}, { a: DEAD, b: { status: "too_early" } });
+    expect(await runFreshVerdictSweep(d, r)).toBe(2);
+    const [a, b] = getPayoutAttempts(d, id);
+    expect(a!.fresh_verdict).toBe("dead_fresh");
+    expect(b!.fresh_verdict).toBeNull();
+    const row = d
+      .prepare("SELECT status FROM relay_withdrawals WHERE withdrawal_id = ?")
+      .get(id) as {
+      status: string;
+    };
+    expect(row.status).toBe("processing");
+    // A recorded attempt is not read again.
+    const r2 = reader({}, { b: DEAD });
+    expect(await runFreshVerdictSweep(d, r2)).toBe(1);
+    expect(r2.freshCalls).toEqual(["b"]);
+  });
+
+  it("never reads attempts of an unrecorded claim or a settled withdrawal", async () => {
+    const d = await db();
+    const legacy = processingWithdrawal(d, "zzs-l", false);
+    attempt(d, legacy, "a", 10, 1);
+    const done = processingWithdrawal(d, "zzs-d", true);
+    attempt(d, done, "b", 10, 1);
+    d.prepare("UPDATE relay_withdrawals SET status = 'completed' WHERE withdrawal_id = ?").run(
+      done,
+    );
+    const r = reader({}, { a: DEAD, b: DEAD });
+    expect(await runFreshVerdictSweep(d, r)).toBe(0);
+    expect(r.freshCalls).toEqual([]);
+  });
+
+  it("the relay starts the sweep, supervised, whenever it has a Solana transfer (activation, not just definition)", async () => {
+    const transfer = new OperatorSolanaTransfer({
+      honorsBroadcastHooks: true,
+      ownAddress: "RelayTreasuryAddressBase58",
+      getUsdcBalance: () => Promise.resolve(0n),
+      getUsdcBalanceOf: () => Promise.resolve(0n),
+      getSolBalance: () => Promise.resolve(0n),
+      sendUsdc: () => Promise.reject(new Error("unused")),
+      sendUsdcBatch: () => Promise.resolve([]),
+      getTransaction: () => Promise.resolve({ status: "not_found" as const }),
+      getSignatureOutcome: () => Promise.resolve({ status: "pending" as const }),
+      getFreshSignatureVerdict: () => Promise.resolve({ status: "too_early" as const }),
+      isReachable: () => Promise.resolve(true),
+    });
+    relay = await createTestRelay({ enableDeviceAuth: false, operatorSolanaTransfer: transfer });
+    const res = await relay.app.request("/api/v1/admin/health", { headers: AUTH_HEADER });
+    const health = (await res.json()) as { loops: Array<{ name: string }> };
+    expect(health.loops.map((l) => l.name)).toContain("withdrawal-fresh-verdict");
+  });
+
+  it("a read that throws records nothing and the attempt is retried next pass", async () => {
+    const d = await db();
+    const id = processingWithdrawal(d, "zzs-e", true);
+    attempt(d, id, "a", 10, 1);
+    await runFreshVerdictSweep(d, reader({}, { a: new Error("down") }));
+    expect(getPayoutAttempts(d, id)[0]!.fresh_verdict).toBeNull();
+    await runFreshVerdictSweep(d, reader({}, { a: DEAD }));
+    expect(getPayoutAttempts(d, id)[0]!.fresh_verdict).toBe("dead_fresh");
   });
 });
 

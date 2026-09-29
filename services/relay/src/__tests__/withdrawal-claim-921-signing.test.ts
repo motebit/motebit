@@ -60,8 +60,8 @@ describe("#921 round 3: in flight until the outcome is written", () => {
     const adapter: SolanaRpcAdapter = {
       // #949: Path 0 sends only over a transfer that records its broadcasts.
       honorsBroadcastHooks: true,
-      // The node's retained-history edge (#949 rounds 2–3): full history.
-      getLocalLedgerFirstSlot: () => Promise.resolve(0),
+      // The fresh verdict (#949 round 5): nothing decided yet.
+      getFreshSignatureVerdict: () => Promise.resolve({ status: "too_early" as const }),
       getSignatureOutcome: vi.fn().mockResolvedValue({ status: "pending" }),
       ownAddress: "RelayTreasuryAddressBase58",
       getUsdcBalance: vi.fn().mockResolvedValue(10_000_000_000n),

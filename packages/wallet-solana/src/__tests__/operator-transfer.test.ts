@@ -111,13 +111,13 @@ describe("OperatorSolanaTransfer", () => {
     );
   });
 
-  it("recordsBroadcasts only over an adapter that honours the hooks, reads outcomes AND reads retention (#949)", () => {
+  it("recordsBroadcasts only over an adapter that honours the hooks, reads outcomes AND takes the fresh verdict (#949 round 5)", () => {
     const outcome = () => vi.fn().mockResolvedValue({ status: "pending" });
-    const first = () => vi.fn().mockResolvedValue(0);
+    const freshRead = () => vi.fn().mockResolvedValue({ status: "too_early" });
     const full = {
       honorsBroadcastHooks: true as const,
       getSignatureOutcome: outcome(),
-      getLocalLedgerFirstSlot: first(),
+      getFreshSignatureVerdict: freshRead(),
     };
     expect(new OperatorSolanaTransfer(makeAdapter(full)).recordsBroadcasts).toBe(true);
     expect(new OperatorSolanaTransfer(makeAdapter()).recordsBroadcasts).toBe(false);
@@ -125,9 +125,9 @@ describe("OperatorSolanaTransfer", () => {
     expect(new OperatorSolanaTransfer(makeAdapter(noHooks)).recordsBroadcasts).toBe(false);
     const { getSignatureOutcome: _o, ...noOutcome } = full;
     expect(new OperatorSolanaTransfer(makeAdapter(noOutcome)).recordsBroadcasts).toBe(false);
-    // Round 3: without the retention edge, absence can never be proven.
-    const { getLocalLedgerFirstSlot: _f, ...noRetention } = full;
-    expect(new OperatorSolanaTransfer(makeAdapter(noRetention)).recordsBroadcasts).toBe(false);
+    // Without the fresh verdict, non-payment could never be proven.
+    const { getFreshSignatureVerdict: _f, ...noFresh } = full;
+    expect(new OperatorSolanaTransfer(makeAdapter(noFresh)).recordsBroadcasts).toBe(false);
   });
 
   it("getSignatureOutcome delegates, and reports rpc_error (never absence) when the adapter cannot read", async () => {
@@ -140,24 +140,14 @@ describe("OperatorSolanaTransfer", () => {
     expect(none.status).toBe("rpc_error");
   });
 
-  it("getLocalLedgerFirstSlot delegates, and rejects when the adapter cannot read it", async () => {
-    const op = new OperatorSolanaTransfer(
-      makeAdapter({ getLocalLedgerFirstSlot: vi.fn().mockResolvedValue(9) }),
-    );
-    expect(await op.getLocalLedgerFirstSlot()).toBe(9);
-    await expect(
-      new OperatorSolanaTransfer(makeAdapter()).getLocalLedgerFirstSlot(),
-    ).rejects.toThrow(/local ledger edge/);
-  });
-
-  it("getBlockHeight delegates, and rejects when the adapter cannot read it", async () => {
-    const op = new OperatorSolanaTransfer(
-      makeAdapter({ getBlockHeight: vi.fn().mockResolvedValue(777) }),
-    );
-    expect(await op.getBlockHeight()).toBe(777);
-    await expect(new OperatorSolanaTransfer(makeAdapter()).getBlockHeight()).rejects.toThrow(
-      /block height/,
-    );
+  it("getFreshSignatureVerdict delegates, and reports rpc_error (never dead) when the adapter cannot take it", async () => {
+    const tx = { signature: "sig", lastValidBlockHeight: 10 };
+    const read = vi.fn().mockResolvedValue({ status: "dead_fresh", contextSlot: 5 });
+    const op = new OperatorSolanaTransfer(makeAdapter({ getFreshSignatureVerdict: read }));
+    expect(await op.getFreshSignatureVerdict(tx)).toEqual({ status: "dead_fresh", contextSlot: 5 });
+    expect(read).toHaveBeenCalledWith(tx);
+    const none = await new OperatorSolanaTransfer(makeAdapter()).getFreshSignatureVerdict(tx);
+    expect(none.status).toBe("rpc_error");
   });
 
   // -------------------------------------------------------------------------

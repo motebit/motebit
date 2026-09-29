@@ -197,8 +197,8 @@ function makeOperator(sendUsdc: SolanaRpcAdapter["sendUsdc"]): {
     // #949: Path 0 sends only over a transfer that records every broadcast
     // and can read its outcome.
     honorsBroadcastHooks: true,
-    // The node's retained-history edge (#949 rounds 2–3): full history.
-    getLocalLedgerFirstSlot: () => Promise.resolve(0),
+    // The fresh verdict (#949 round 5): nothing decided yet.
+    getFreshSignatureVerdict: () => Promise.resolve({ status: "too_early" as const }),
     getSignatureOutcome: vi.fn().mockResolvedValue({ status: "pending" }),
     ownAddress: "RelayTreasuryAddressBase58",
     getUsdcBalance: vi.fn().mockResolvedValue(10_000_000_000n),
@@ -428,9 +428,6 @@ describe("Path 0 settlement outcome (#920)", () => {
     let sends = 0;
     let confirms = 0;
     const conn = {
-      // The pre-blockhash slot read and the retention edge (#949 rounds 2–3).
-      getSlot: vi.fn().mockResolvedValue(8_000),
-      getMinimumLedgerSlot: vi.fn().mockResolvedValue(0),
       getLatestBlockhash: vi.fn().mockResolvedValue({
         blockhash: "GHtXQBsoZHVnNFa9YevAzFr17DJjgHXk3ycTKD5xD3Zi",
         lastValidBlockHeight: 100,
@@ -449,14 +446,15 @@ describe("Path 0 settlement outcome (#920)", () => {
           value: { err: { InstructionError: [0, { Custom: 0 }] } },
         });
       }),
-      // undecidable: the chain is still inside the expiry margin — the first
-      // send may yet land. first_expired: past the margin, the status node
-      // caught up, the signature is nowhere — proven dead.
+      // undecidable: the finalized chain has not reached the fresh window —
+      // the first send may yet land. first_expired: the finalized height is
+      // inside the fresh window (lastValid + 11 … + 130, #949 round 5) and
+      // the status cache, caught up, has no status for it — proven dead.
       getEpochInfo: vi
         .fn()
         .mockResolvedValue(
           chain === "first_expired"
-            ? { blockHeight: 500, absoluteSlot: 9_000 }
+            ? { blockHeight: 150, absoluteSlot: 9_000 }
             : { blockHeight: 101, absoluteSlot: 9_000 },
         ),
       getSignatureStatuses: vi.fn().mockResolvedValue({ context: { slot: 9_000 }, value: [null] }),

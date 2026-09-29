@@ -50,8 +50,8 @@ function fakeAdapter(sendUsdc: SolanaRpcAdapter["sendUsdc"]): SolanaRpcAdapter {
     // #949: a tree whose Path 0 requires a transfer that records its
     // broadcasts sees one; a tree that does not is unaffected.
     honorsBroadcastHooks: true,
-    // The node's retained-history edge (#949 rounds 2–3): full history.
-    getLocalLedgerFirstSlot: () => Promise.resolve(0),
+    // The fresh verdict (#949 round 5): nothing decided yet.
+    getFreshSignatureVerdict: () => Promise.resolve({ status: "too_early" as const }),
     getSignatureOutcome: vi.fn().mockResolvedValue({ status: "pending" }),
     ownAddress: "RelayTreasuryAddressBase58",
     getUsdcBalance: vi.fn().mockResolvedValue(10_000_000_000n),

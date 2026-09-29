@@ -39,7 +39,6 @@ import Stripe from "stripe";
 import type { SettlementRailRegistry, StripeSettlementRail } from "@motebit/settlement-rails";
 import type { WithdrawalRequest } from "@motebit/virtual-accounts";
 import {
-  LEGACY_BROADCAST_HEIGHT_BOUND,
   isChainRecordedClaim,
   markChainRecordedClaim,
   getPayoutAttempts,
@@ -245,39 +244,6 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
   /** Release a payout from this process: its outcome is written (or could not be). */
   const releasePayout = (withdrawalId: string): void => {
     payoutsInFlight.delete(withdrawalId);
-  };
-
-  /**
-   * The first Solana block height this process read (#949) — the anchor for
-   * a LEGACY Path 0 claim, which an earlier process made without recording
-   * its signatures. Everything that process broadcast was signed over a
-   * blockhash fetched before this process started, so it can land only
-   * below this anchor + LEGACY_BROADCAST_HEIGHT_BOUND. Read lazily (never at
-   * boot); a failed read leaves it unset and the door shut.
-   */
-  let legacyHeightAnchor: number | null = null;
-
-  /**
-   * Whether the chain has provably passed every block a legacy claim's
-   * broadcast could land in. `null` when the height cannot be read — the
-   * door stays shut (fail closed); never the wall clock.
-   */
-  const legacyBroadcastsDead = async (): Promise<{
-    dead: boolean;
-    height: number;
-    bound: number;
-  } | null> => {
-    if (!operatorSolanaTransfer) return null;
-    let height: number;
-    try {
-      height = await operatorSolanaTransfer.getBlockHeight();
-    } catch {
-      return null;
-    }
-    if (!Number.isSafeInteger(height) || height < 0) return null;
-    legacyHeightAnchor ??= height;
-    const bound = legacyHeightAnchor + LEGACY_BROADCAST_HEIGHT_BOUND;
-    return { dead: height > bound, height, bound };
   };
 
   // NOTE: the self-declared `POST /api/v1/agents/:id/deposit` route was
@@ -853,13 +819,16 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
   //     decides (payout-horizon.ts table):
   //       * a chain-recorded Path 0 payout — THE CHAIN, read for every
   //         signature the payout signed (withdrawal-chain-payouts.ts): landed
-  //         ⇒ only `paid` with that signature; every one failed or past its
-  //         last valid block height ⇒ only `not_paid`; anything still able
-  //         to land, or unreadable ⇒ refused. No wall-clock term (#949): a
-  //         halted chain keeps the door shut however long it is down.
-  //       * a legacy Path 0 claim (an earlier process, no signatures) — the
-  //         chain's HEIGHT past this process's first read + the legacy
-  //         bound; unreadable ⇒ refused.
+  //         ⇒ only `paid` with that signature; POSITIVE evidence that every
+  //         one did not land (found failed, or dead by the fresh verdict,
+  //         recorded) ⇒ only `not_paid`; otherwise (still able to land,
+  //         unreadable, or no positive evidence ever) ⇒ `not_paid` refused,
+  //         `paid` naming a recorded signature accepted (#949 round 5). No
+  //         wall-clock term (#949): a halted chain keeps the door shut.
+  //       * a legacy Path 0 claim (an earlier process, no signatures) —
+  //         the relay can never hold positive evidence it did not land, so
+  //         `not_paid` is always refused (#990 is the way out) and the
+  //         operator's `paid` is accepted.
   //       * a declared horizon (legacy x402, batch rails) —
   //         `reconcileOpensAt`: the rail's declared validity + margin,
   //         floored at RECONCILE_MIN_AGE_MS after the claim.
@@ -875,19 +844,19 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
    *     closed);
    *   - `horizon`: a declared-horizon payout may still land until
    *     `reconcile_opens_at`;
-   *   - `chain_pending`: a transaction this payout signed can still land —
-   *     the chain has not passed its last valid block height;
+   *   - `chain_pending`: a transaction this payout signed can still land, or
+   *     its fresh window has not opened yet;
    *   - `chain_unreadable`: the chain could not be read, so nothing is
    *     decided;
-   *   - `chain_height`: a legacy claim's broadcasts are not yet provably
-   *     past their last valid block height;
-   *   - `chain_history_pruned`: every broadcast is past its last valid
-   *     height, but the node no longer holds the slots one could have landed
-   *     in — never refunded on that; `paid` naming a recorded signature is
-   *     accepted (#949 round 2).
+   *   - `chain_no_positive_evidence`: nothing the chain can show proves the
+   *     payout did NOT land — a broadcast's fresh window closed with no
+   *     verdict recorded, or (legacy claim) no signature was ever recorded.
+   *     Never refunded on that (#949 round 5); `paid` naming a recorded
+   *     signature is accepted; a refund waits for #990.
    * `open` means the reconcile door is open now — for a chain-decided payout
-   * (`reconcile_decided_by: "chain" | "chain_height"`), that the relay asks
-   * the chain when the operator reconciles, and may still refuse.
+   * (`reconcile_decided_by: "chain"`), that the relay asks the chain when the
+   * operator reconciles, and may still refuse; for a legacy claim
+   * (`"operator_attested"`), that `paid` is accepted and `not_paid` refused.
    */
   type ReconcileState =
     | "in_flight_here"
@@ -895,16 +864,15 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
     | "horizon"
     | "chain_pending"
     | "chain_unreadable"
-    | "chain_height"
-    | "chain_history_pruned"
+    | "chain_no_positive_evidence"
     | "open";
 
   /** Who decides whether a `processing` withdrawal's payout landed. */
-  type ReconcileDecidedBy = "chain" | "chain_height" | "declared_horizon";
+  type ReconcileDecidedBy = "chain" | "operator_attested" | "declared_horizon";
 
   function decidedByOf(w: WithdrawalRequest): ReconcileDecidedBy {
     if (isChainRecordedClaim(moteDb.db, w.withdrawal_id)) return "chain";
-    return w.payout_valid_until == null ? "chain_height" : "declared_horizon";
+    return w.payout_valid_until == null ? "operator_attested" : "declared_horizon";
   }
 
   function reconcileStateOf(w: WithdrawalRequest): {
@@ -920,6 +888,15 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
       return {
         reconcile_state: "in_flight_here",
         reconcile_opens_at: null,
+        reconcile_decided_by: decidedBy,
+      };
+    }
+    if (decidedBy === "operator_attested") {
+      // A legacy claim: `paid` is accepted and `not_paid` refused whatever
+      // the chain shows (#949 round 5) — no chain read either way.
+      return {
+        reconcile_state: "open",
+        reconcile_opens_at: w.claimed_at ?? w.requested_at,
         reconcile_decided_by: decidedBy,
       };
     }
@@ -961,10 +938,8 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
         "payout may still land — a transaction this payout signed is not yet past its last valid block height on chain; reconcile once the chain has decided it (a halted chain keeps it open to land)",
       chain_unreadable:
         "the chain could not be read — whether this payout landed is undecided; reconcile stays closed until the chain answers",
-      chain_history_pruned:
-        "the node no longer holds the history where this payout could have landed — the chain cannot show it was NOT paid, so no refund; reconcile as paid with the landed signature, or use an RPC that retains that history",
-      chain_height:
-        "payout may still land — the chain has not yet passed every block height this claim's broadcast could land in",
+      chain_no_positive_evidence:
+        "no positive evidence that this payout did NOT land — a history read that shows nothing proves nothing, and the only proof of non-landing (a status found with an error, or the fresh verdict taken while the transaction's window was open) was never recorded; no refund. Reconcile as paid with a recorded signature if it landed; otherwise the refund waits for a kill transaction that makes the payout provably unlandable (#990)",
     };
 
   const payoutInFlightResponse = (
@@ -1237,23 +1212,21 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
         return payoutInFlightResponse(c, withdrawalId, "chain_unreadable");
       }
       const verdict = await readChainVerdict(moteDb.db, withdrawalId, operatorSolanaTransfer);
-      // History pruned (#949 round 2): every recorded transaction is past its
-      // last valid height, but the node no longer holds the slots where one
-      // could have landed, so the chain cannot say "not paid". A refund stays
-      // shut (never on missing evidence); the operator's `paid`, naming a
-      // transaction this payout actually signed, is not contradicted by
-      // anything the chain can show, so it is recorded — refusing it would
-      // strand a payout that landed.
-      const prunedPaid =
+      // #949 round 5 — a refund needs POSITIVE evidence; `paid` needs only
+      // not to be contradicted. Undecided (pending, unreadable, or no
+      // positive evidence ever): the operator's `paid`, naming a transaction
+      // this payout actually signed, is recorded — nothing the chain shows
+      // contradicts it, and refusing it would strand a payout that landed.
+      const attestedPaid =
         verdict.kind === "undecided" &&
-        verdict.reason === "history_pruned" &&
         outcome === "paid" &&
         payoutReference !== null &&
         getPayoutAttempts(moteDb.db, withdrawalId).some((a) => a.signature === payoutReference);
-      if (verdict.kind === "undecided" && !prunedPaid) {
+      if (verdict.kind === "undecided" && !attestedPaid) {
         logger.warn("withdrawal.admin.reconcile_refused_chain", {
           correlationId,
           withdrawalId,
+          outcome,
           reason: verdict.reason,
           signature: verdict.signature,
           lastValidBlockHeight: verdict.lastValidBlockHeight,
@@ -1264,8 +1237,8 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
           withdrawalId,
           verdict.reason === "pending"
             ? "chain_pending"
-            : verdict.reason === "history_pruned"
-              ? "chain_history_pruned"
+            : verdict.reason === "no_positive_evidence"
+              ? "chain_no_positive_evidence"
               : "chain_unreadable",
           null,
           { signature: verdict.signature, last_valid_block_height: verdict.lastValidBlockHeight },
@@ -1280,17 +1253,18 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
           landed: verdict.landed,
         });
       }
-      if (prunedPaid) {
-        logger.warn("withdrawal.admin.reconcile_paid_history_pruned", {
+      if (attestedPaid) {
+        logger.warn("withdrawal.admin.reconcile_paid_attested", {
           correlationId,
           withdrawalId,
           payoutReference,
-          note: "the node's history does not reach this payout's landing window; recorded paid on the operator's attestation of a transaction this payout signed",
+          chain: verdict,
+          note: "the chain holds no positive verdict for this payout; recorded paid on the operator's attestation of a transaction this payout signed",
         });
       }
       const chainSays = verdict.kind === "paid" ? "paid" : "not_paid";
       if (
-        !prunedPaid &&
+        !attestedPaid &&
         (outcome !== chainSays ||
           (verdict.kind === "paid" &&
             payoutReference !== null &&
@@ -1309,7 +1283,7 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
             message:
               verdict.kind === "paid"
                 ? `the chain shows this payout landed (${verdict.signature}); reconcile it as paid with that payout_reference`
-                : `the chain shows no transaction of this payout can land (${verdict.kind === "not_paid" ? verdict.attempts : 0} recorded, each failed or past its last valid block height); reconcile it as not_paid`,
+                : `the chain holds positive evidence that no transaction of this payout landed or can land (${verdict.kind === "not_paid" ? verdict.attempts : 0} recorded, each found failed or proven dead inside its fresh window); reconcile it as not_paid`,
             withdrawal_id: withdrawalId,
             chain_outcome: chainSays,
             ...(verdict.kind === "paid" ? { payout_reference: verdict.signature } : {}),
@@ -1319,22 +1293,20 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
         );
       }
       if (verdict.kind === "paid") paidReference = verdict.signature;
-    } else if (decidedBy === "chain_height") {
-      const legacy = await legacyBroadcastsDead();
-      if (legacy === null || !legacy.dead) {
+    } else if (decidedBy === "operator_attested") {
+      // A legacy claim recorded no signature, so the relay can never hold
+      // positive evidence that its payout did not land (#949 round 5): a
+      // refund is refused whatever the chain's height or history shows; the
+      // operator's `paid` is accepted.
+      if (outcome === "not_paid") {
         logger.warn("withdrawal.admin.reconcile_refused_chain", {
           correlationId,
           withdrawalId,
-          reason: legacy === null ? "chain_unreadable" : "chain_height",
-          height: legacy?.height ?? null,
-          bound: legacy?.bound ?? null,
+          outcome,
+          reason: "chain_no_positive_evidence",
+          legacy: true,
         });
-        return legacy === null
-          ? payoutInFlightResponse(c, withdrawalId, "chain_unreadable")
-          : payoutInFlightResponse(c, withdrawalId, "chain_height", null, {
-              block_height: legacy.height,
-              opens_past_block_height: legacy.bound,
-            });
+        return payoutInFlightResponse(c, withdrawalId, "chain_no_positive_evidence");
       }
     } else {
       const opensAt = reconcileOpensAt(withdrawal);

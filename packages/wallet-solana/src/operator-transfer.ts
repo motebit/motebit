@@ -48,6 +48,7 @@ import type {
   SignatureOutcome,
   SignedTransactionRef,
   SolanaRpcAdapter,
+  FreshSignatureVerdict,
 } from "./adapter.js";
 
 export interface OperatorSolanaTransferConfig {
@@ -115,21 +116,18 @@ export class OperatorSolanaTransfer {
 
   /**
    * True only when every transaction `sendUsdc` signs is reported to
-   * `hooks.beforeBroadcast` BEFORE it is sent, and the chain can be asked
-   * about each one (#885, #949). Only then can a payer that recorded every
-   * reported signature prove from the chain alone whether its payout
-   * landed, and read "no signature recorded" as "nothing was sent". A payer
-   * must not send a payout it cannot later prove this way.
+   * `hooks.beforeBroadcast` BEFORE it is sent, the chain can be asked about
+   * each one, and the adapter can take the FRESH verdict (#885, #949 round 5).
+   * Only then can a payer that recorded every reported signature prove its
+   * payout landed, or prove it can never land (positive evidence), and read
+   * "no signature recorded" as "nothing was sent". A payer must not send a
+   * payout it cannot later prove this way.
    */
   get recordsBroadcasts(): boolean {
-    // Round 3: reading an outcome is not enough — "absent" proves nothing
-    // without the node's retained-history edge, so an adapter that cannot
-    // read it could never prove a payout unpaid, and the payout would have
-    // no door.
     return (
       this.adapter.honorsBroadcastHooks === true &&
       typeof this.adapter.getSignatureOutcome === "function" &&
-      typeof this.adapter.getLocalLedgerFirstSlot === "function"
+      typeof this.adapter.getFreshSignatureVerdict === "function"
     );
   }
 
@@ -149,26 +147,18 @@ export class OperatorSolanaTransfer {
   }
 
   /**
-   * The node's LOCAL ledger edge (`minimumLedgerSlot`, #949 round 4): the
-   * lower edge of what an "absent" read can speak for. Rejects when it
-   * cannot be read.
+   * The FRESH verdict about one transaction (#949 round 5): positive
+   * evidence (landed, failed, or dead inside its window) or nothing. An
+   * adapter that cannot take it reports `rpc_error` — never absence.
    */
-  getLocalLedgerFirstSlot(): Promise<number> {
-    if (typeof this.adapter.getLocalLedgerFirstSlot !== "function") {
-      return Promise.reject(new Error("adapter cannot read the node's local ledger edge"));
+  getFreshSignatureVerdict(tx: SignedTransactionRef): Promise<FreshSignatureVerdict> {
+    if (typeof this.adapter.getFreshSignatureVerdict !== "function") {
+      return Promise.resolve({
+        status: "rpc_error",
+        reason: "adapter cannot take a fresh verdict",
+      });
     }
-    return this.adapter.getLocalLedgerFirstSlot();
-  }
-
-  /**
-   * The chain's current block height (#949). Rejects when it cannot be read
-   * — a caller must never substitute a guess (or the wall clock) for it.
-   */
-  getBlockHeight(): Promise<number> {
-    if (typeof this.adapter.getBlockHeight !== "function") {
-      return Promise.reject(new Error("adapter cannot read the block height"));
-    }
-    return this.adapter.getBlockHeight();
+    return this.adapter.getFreshSignatureVerdict(tx);
   }
 
   /** Whether the RPC endpoint is reachable right now. */

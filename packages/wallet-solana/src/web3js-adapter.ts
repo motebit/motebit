@@ -25,6 +25,7 @@ import {
   Transaction,
   type TransactionInstruction,
   type Commitment,
+  type SignatureStatusConfig,
 } from "@solana/web3.js";
 import { base58Encode, hexToBytes32 } from "@motebit/protocol";
 
@@ -92,8 +93,9 @@ import type {
   BroadcastHooks,
   SignedTransactionRef,
   SignatureOutcome,
+  FreshSignatureVerdict,
 } from "./adapter.js";
-import { historyCoversLanding } from "./adapter.js";
+import { FRESH_WINDOW_END, FRESH_WINDOW_START } from "./adapter.js";
 import {
   USDC_MINT_MAINNET,
   InsufficientUsdcBalanceError,
@@ -123,13 +125,6 @@ const OUTGOING_LOOKUP_PAGE = 50;
 
 /** Backwards slack on the lookup window: whole-second block times + clock drift. */
 const OUTGOING_LOOKUP_SKEW_MS = 30_000;
-
-/**
- * Blocks past `lastValidBlockHeight` before absence counts as expiry (#885).
- * Absorbs commitment skew between the height read and the status read; a few
- * seconds of extra wait against a wrongly-voided payment.
- */
-const EXPIRY_HEIGHT_MARGIN = 10;
 
 /**
  * True for web3.js's `TransactionExpiredBlockheightExceededError`: the
@@ -173,7 +168,7 @@ export interface Web3JsRpcAdapterConfig {
  * the transaction just sent (#885 round 4). web3.js raises the expiry as
  * soon as the block height passes `lastValidBlockHeight` (it polls height
  * about once a second), so the first ask lands at lastValid+1 or +2 —
- * inside the `EXPIRY_HEIGHT_MARGIN`, where absence is not yet proof. At
+ * before the fresh window opens (FRESH_WINDOW_START past it, finalized), where absence is not yet proof. At
  * ~400ms a block the margin clears in ~4-5s; 30s is a generous cap for a
  * slow cluster before the send is handed back as undecidable.
  */
@@ -380,24 +375,6 @@ export class Web3JsRpcAdapter implements SolanaRpcAdapter {
     for (let attempt = 1; ; attempt++) {
       const tx = new Transaction();
       for (const ix of instructions) tx.add(ix);
-      // #949 round 2: a slot read BEFORE the blockhash — the transaction can
-      // only land after it, so a late reader can check that a node's retained
-      // history reaches back that far before trusting "absent". Read FIRST:
-      // read after the blockhash, the slot could be past where the
-      // transaction lands.
-      //
-      // Round 3 (C1): a payer that records what it broadcasts gets no
-      // transaction without this slot. The read is retried once; if it still
-      // fails, nothing is signed or sent and the send throws — "nothing was
-      // broadcast" stays a clean, provable verdict. Without hooks nobody
-      // records the ref, and a missing slot only means a late reader can
-      // never prove the transaction absent.
-      const recentSlot = await this.readRecentSlot();
-      if (recentSlot === undefined && hooks?.beforeBroadcast != null) {
-        throw new Error(
-          "cannot read the current slot before signing: nothing was signed or sent (the payout's landing window could not be recorded)",
-        );
-      }
       const latest = await this.connection.getLatestBlockhash(this.commitment);
       tx.recentBlockhash = latest.blockhash;
       tx.feePayer = this.keypair.publicKey;
@@ -407,7 +384,6 @@ export class Web3JsRpcAdapter implements SolanaRpcAdapter {
       const signed: SignedTransactionRef = {
         signature: base58Encode(new Uint8Array(rawSig)),
         lastValidBlockHeight: latest.lastValidBlockHeight,
-        ...(typeof recentSlot === "number" ? { recentSlot } : {}),
       };
 
       // #885: the signature is fixed now, before anything is sent. The payer
@@ -458,19 +434,6 @@ export class Web3JsRpcAdapter implements SolanaRpcAdapter {
         }
       }
     }
-  }
-
-  /** The slot at the decision commitment, read up to twice; undefined when both reads fail. */
-  private async readRecentSlot(): Promise<number | undefined> {
-    for (let i = 0; i < 2; i++) {
-      try {
-        const slot = await this.connection.getSlot(this.decisionCommitment);
-        if (Number.isSafeInteger(slot) && slot >= 0) return slot;
-      } catch {
-        // retried once, then unknown
-      }
-    }
-    return undefined;
   }
 
   /**
@@ -799,32 +762,18 @@ export class Web3JsRpcAdapter implements SolanaRpcAdapter {
   }
 
   /**
-   * What the chain says about ONE signed transaction (#885). Read-only.
-   * Status is looked up with full history search, so a transaction that
-   * landed long ago is still found. Absence becomes authoritative only
-   * once the chain's block height is past the transaction's
-   * `lastValidBlockHeight`: from then on it can never be included.
+   * What the chain says about ONE signed transaction (#885, #949 round 5).
+   * Read-only.
+   *
+   * A HISTORY read (`searchTransactionHistory`) is used for POSITIVE facts
+   * only — a status found landed, failed, or seen in a block. Its absence is
+   * never evidence of anything: agave's historical lookup reads a pruned
+   * range, a snapshot jump, or a swallowed BigTable error all as absent
+   * (rpc.rs `get_signature_statuses`). `expired` comes only from the FRESH
+   * verdict (`getFreshSignatureVerdict`), taken inside its window.
    */
   async getSignatureOutcome(tx: SignedTransactionRef): Promise<SignatureOutcome> {
     try {
-      // Height and slot come from ONE read (#885 round 3). The absence of a
-      // signature proves "never landed" only if the node answering the status
-      // query had already seen every slot where it could have landed:
-      //
-      //   1. `epoch.blockHeight > lastValidBlockHeight + margin` ⇒ every block
-      //      the transaction could be in (block height ≤ lastValidBlockHeight)
-      //      is at a slot ≤ `epoch.absoluteSlot`.
-      //   2. The status response's `context.slot ≥ epoch.absoluteSlot` ⇒ the
-      //      answering node has processed all of those slots, and
-      //      `searchTransactionHistory` makes it look through them.
-      //   3. So `value[0] === null` from that response means the transaction
-      //      is in none of them, and never can be.
-      //
-      // A node lagging behind (context.slot < absoluteSlot) proves nothing:
-      // `pending`. The margin absorbs commitment-level skew between the two
-      // reads (a block counted at `processed` by one node, not yet at
-      // `confirmed` by another).
-      const epoch = await this.connection.getEpochInfo(this.decisionCommitment);
       const resp = await this.connection.getSignatureStatuses([tx.signature], {
         searchTransactionHistory: true,
       });
@@ -839,45 +788,96 @@ export class Web3JsRpcAdapter implements SolanaRpcAdapter {
       // In a block, not yet at commitment. `seen` makes every later
       // "absent" read for this signature untrustworthy (sticky pending).
       if (status != null) return { status: "pending", seen: true };
-      const pastLastValid =
-        epoch.blockHeight != null &&
-        epoch.blockHeight > tx.lastValidBlockHeight + EXPIRY_HEIGHT_MARGIN;
-      const nodeCaughtUp = resp.context.slot >= epoch.absoluteSlot;
-      if (!(pastLastValid && nodeCaughtUp)) return { status: "pending" };
-      // #949 round 2: absence is evidence of absence only inside the node's
-      // retained history. When the signer recorded where the transaction
-      // could first land, require the node to still hold that slot; a node
-      // that pruned it may be hiding a landing. (A ref with no `recentSlot`
-      // keeps the prior rule — the in-send re-sign asks within seconds, well
-      // inside any retention window; a LATE reader must hold the slot itself.)
-      if (typeof tx.recentSlot === "number") {
-        const first = await this.connection.getMinimumLedgerSlot();
-        if (!historyCoversLanding(tx, first)) {
-          return {
-            status: "rpc_error",
-            reason: `history pruned: the node's local ledger starts at slot ${first}, too late to cover where ${tx.signature} could have landed`,
-            historyPruned: true,
-          };
-        }
+    } catch (err) {
+      return { status: "rpc_error", reason: err instanceof Error ? err.message : String(err) };
+    }
+    const fresh = await this.getFreshSignatureVerdict(tx);
+    switch (fresh.status) {
+      case "landed":
+        return { status: "landed", slot: fresh.slot };
+      case "failed":
+        return { status: "failed" };
+      case "dead_fresh":
+        return { status: "expired" };
+      case "rpc_error":
+        return { status: "rpc_error", reason: fresh.reason };
+      case "too_early":
+      case "window_passed":
+        return { status: "pending" };
+    }
+  }
+
+  /**
+   * The FRESH verdict (#949 round 5; `FreshSignatureVerdict`,
+   * `FRESH_WINDOW_START`/`FRESH_WINDOW_END` in adapter.ts). Three reads, all
+   * at FINALIZED commitment:
+   *
+   *   1. `getEpochInfo` — the finalized height H_a and slot S_a. Too early or
+   *      already past the window ⇒ answer without a status read.
+   *   2. `getSignatureStatuses` WITHOUT `searchTransactionHistory` (only the
+   *      finalized bank's status cache answers — no blockstore, no BigTable),
+   *      with `minContextSlot: S_a`, so a node behind S_a errors instead of
+   *      answering stale (the load-balancer answer).
+   *   3. `getEpochInfo` with `minContextSlot` = the status read's context
+   *      slot — the answering bank's height is at most this H_b, so
+   *      `H_b ≤ lastValid + FRESH_WINDOW_END` proves the answering cache still
+   *      covered the landing range. (H_a bounds it from below.)
+   */
+  async getFreshSignatureVerdict(tx: SignedTransactionRef): Promise<FreshSignatureVerdict> {
+    try {
+      const before = await this.connection.getEpochInfo({ commitment: "finalized" });
+      const hA = before.blockHeight;
+      if (hA == null)
+        return { status: "rpc_error", reason: "the finalized block height is unknown" };
+      const status = await this.freshStatus(tx.signature, before.absoluteSlot);
+      if (status.found !== null && status.found.err == null) {
+        return { status: "landed", slot: status.found.slot, contextSlot: status.contextSlot };
       }
-      return { status: "expired" };
+      if (status.found !== null) return { status: "failed", contextSlot: status.contextSlot };
+      if (hA < tx.lastValidBlockHeight + FRESH_WINDOW_START) return { status: "too_early" };
+      if (hA > tx.lastValidBlockHeight + FRESH_WINDOW_END) return { status: "window_passed" };
+      const after = await this.connection.getEpochInfo({
+        commitment: "finalized",
+        minContextSlot: status.contextSlot,
+      });
+      if (
+        after.blockHeight == null ||
+        after.blockHeight > tx.lastValidBlockHeight + FRESH_WINDOW_END
+      ) {
+        return { status: "window_passed" };
+      }
+      return { status: "dead_fresh", contextSlot: status.contextSlot };
     } catch (err) {
       return { status: "rpc_error", reason: err instanceof Error ? err.message : String(err) };
     }
   }
 
-  /**
-   * The node's LOCAL ledger edge — `minimumLedgerSlot`, never
-   * `getFirstAvailableBlock` (which mixes in BigTable and reads errors as 0).
-   * #949 round 4. Rejects on failure.
-   */
-  async getLocalLedgerFirstSlot(): Promise<number> {
-    return this.connection.getMinimumLedgerSlot();
-  }
-
-  /** The chain's block height at the decision commitment (#949). Rejects on failure. */
-  async getBlockHeight(): Promise<number> {
-    return this.connection.getBlockHeight(this.decisionCommitment);
+  /** One status-cache-only read at finalized commitment, bound by minContextSlot. */
+  private async freshStatus(
+    signature: string,
+    minContextSlot: number,
+  ): Promise<{ found: { slot: number; err: unknown } | null; contextSlot: number }> {
+    // web3.js types the config as `{ searchTransactionHistory }` only, but
+    // passes it through as the RPC's RpcSignatureStatusConfig, which also
+    // takes `commitment` and `minContextSlot` (agave rpc.rs).
+    const config = {
+      searchTransactionHistory: false,
+      commitment: "finalized",
+      minContextSlot,
+    } as unknown as SignatureStatusConfig;
+    const resp = await this.connection.getSignatureStatuses([signature], config);
+    // A node must refuse (MinContextSlotNotReached) rather than answer from
+    // behind `minContextSlot`; one that answers anyway proves nothing.
+    if (resp.context.slot < minContextSlot) {
+      throw new Error(
+        `a node answered from slot ${resp.context.slot}, behind minContextSlot ${minContextSlot}`,
+      );
+    }
+    const status = resp.value[0];
+    return {
+      found: status == null ? null : { slot: status.slot, err: status.err },
+      contextSlot: resp.context.slot,
+    };
   }
 
   async isReachable(): Promise<boolean> {

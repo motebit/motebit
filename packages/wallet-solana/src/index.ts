@@ -41,11 +41,9 @@ export {
   type BroadcastHooks,
   type SignedTransactionRef,
   type SignatureOutcome,
-  LANDING_SLOT_MARGIN,
-  LANDING_HEIGHT_WINDOW,
-  LOCAL_LEDGER_EDGE_MARGIN,
-  earliestLandingSlot,
-  historyCoversLanding,
+  type FreshSignatureVerdict,
+  FRESH_WINDOW_START,
+  FRESH_WINDOW_END,
 } from "./adapter.js";
 
 export {

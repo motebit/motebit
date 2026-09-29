@@ -189,76 +189,58 @@ export interface SignedTransactionRef {
   signature: string;
   /** The block height after which this transaction can never land. */
   lastValidBlockHeight: number;
-  /**
-   * A slot the signer read BEFORE fetching the blockhash this transaction is
-   * signed over (#949 round 2). The transaction can only land after it (less
-   * `LANDING_SLOT_MARGIN`), so a node whose retained history starts at or
-   * before that slot has seen every slot the transaction could be in.
-   * Absent = unknown: absence on chain can then never be proven complete by
-   * a late reader (see `historyCoversLanding`).
-   */
-  recentSlot?: number;
 }
 
 /**
- * Slots subtracted from `recentSlot` for node skew: the slot was read from
- * one node, the transaction lands in a block another node produced.
+ * The fresh-verdict window (#949 round 5), in FINALIZED block heights past a
+ * transaction's `lastValidBlockHeight`. Derived from agave:
+ *
+ *   - a transaction's blockhash was registered at block height
+ *     `lastValidBlockHeight − MAX_PROCESSING_AGE` (bank.rs
+ *     `get_blockhash_last_valid_block_height`: `block_height +
+ *     max_processing_age − age`; MAX_PROCESSING_AGE = 150), so it can land
+ *     only at heights `[lastValid − 149, lastValid]`;
+ *   - every block on the rooted path becomes a status-cache root
+ *     (bank.rs `Bank::squash` → `status_cache.add_roots`), and the cache
+ *     keeps the newest MAX_ROOT_ENTRIES = MAX_RECENT_BLOCKHASHES = 300 roots,
+ *     purging every entry at or below the cutoff (status_cache.rs
+ *     `purge_roots`);
+ *   - so the FINALIZED bank at height H_f answers from roots
+ *     `[H_f − 299, H_f]`: it covers the whole landing range iff
+ *     `H_f ≤ lastValid + 150`, and the transaction can never land iff
+ *     `H_f > lastValid` (finality is irreversible).
+ *
+ * The adapter takes the verdict only for `lastValid + FRESH_WINDOW_START ≤
+ * H_f ≤ lastValid + FRESH_WINDOW_END` — 10 blocks of slack after expiry, 20
+ * before the cache edge. Outside it an absent status proves nothing.
  */
-export const LANDING_SLOT_MARGIN = 512;
+export const FRESH_WINDOW_START = 11;
+export const FRESH_WINDOW_END = 130;
 
 /**
- * Blocks below `lastValidBlockHeight` the transaction's blockhash can sit
- * (150), plus the same again for cross-node lag and 10 for the absence
- * margin — the height floor used when no `recentSlot` was recorded.
+ * The FRESH verdict about one transaction (#949 round 5) — positive evidence
+ * or nothing. Read from the finalized bank's STATUS CACHE only
+ * (`getSignatureStatuses` without `searchTransactionHistory`, so neither the
+ * blockstore nor BigTable is consulted), bound by `minContextSlot` to a node
+ * that has finalized at least that far, while the cache still covers the
+ * whole landing range:
+ *
+ *   - `landed` / `failed` — the cache holds the transaction's status;
+ *   - `dead_fresh` — inside the window and absent: it never landed, and never
+ *     can (`contextSlot` is the answering bank's slot);
+ *   - `too_early` — the finalized chain has not passed its validity yet;
+ *   - `window_passed` — the cache no longer covers the landing range: an
+ *     absent status proves nothing, now or ever;
+ *   - `rpc_error` — the read failed (including a node behind minContextSlot).
  */
-export const LANDING_HEIGHT_WINDOW = 150 + 150 + 10;
+export type FreshSignatureVerdict =
+  | { status: "landed"; slot: number; contextSlot: number }
+  | { status: "failed"; contextSlot: number }
+  | { status: "dead_fresh"; contextSlot: number }
+  | { status: "too_early" }
+  | { status: "window_passed" }
+  | { status: "rpc_error"; reason: string };
 
-/**
- * The lowest slot `tx` could have landed in (#949 rounds 2–3): its recorded
- * `recentSlot` less `LANDING_SLOT_MARGIN`; without one, a floor from its own
- * validity — every block's slot is at least its block height, and the
- * transaction lands above `lastValidBlockHeight − LANDING_HEIGHT_WINDOW`. The
- * floor is far below the real landing slot (slots run ahead of heights), so it
- * is decisive only on a node holding deep history — but it is never wrong, so
- * a transaction recorded without its slot still has a door.
- */
-export function earliestLandingSlot(tx: SignedTransactionRef): number | null {
-  if (typeof tx.recentSlot === "number" && Number.isSafeInteger(tx.recentSlot)) {
-    return tx.recentSlot - LANDING_SLOT_MARGIN;
-  }
-  return Number.isSafeInteger(tx.lastValidBlockHeight)
-    ? tx.lastValidBlockHeight - LANDING_HEIGHT_WINDOW
-    : null;
-}
-
-/**
- * Slots above the local ledger's first slot before a status search there is
- * authoritative (#949 round 4). agave's local search starts at the ledger's
- * SECOND root, not its first slot meta, and ledger cleanup purges statuses
- * ahead of their metas; both keep the true edge above `minimumLedgerSlot` by
- * far less than this (~27 minutes of slots).
- */
-export const LOCAL_LEDGER_EDGE_MARGIN = 4096;
-
-/**
- * Whether an absence read on a node whose LOCAL ledger starts at
- * `localLedgerFirstSlot` (`getLocalLedgerFirstSlot`) covers every slot `tx`
- * could have landed in (#949 rounds 2–4). Absence of a signature is evidence
- * of absence only there: below it a lookup falls through to BigTable, whose
- * errors read as absent, and pruning nodes forget old history.
- */
-export function historyCoversLanding(
-  tx: SignedTransactionRef,
-  localLedgerFirstSlot: number,
-): boolean {
-  const earliest = earliestLandingSlot(tx);
-  return (
-    earliest !== null &&
-    Number.isSafeInteger(localLedgerFirstSlot) &&
-    localLedgerFirstSlot >= 0 &&
-    localLedgerFirstSlot + LOCAL_LEDGER_EDGE_MARGIN <= earliest
-  );
-}
 /**
  * Hooks around a broadcast. `beforeBroadcast` runs once per signed
  * transaction, after signing and BEFORE it is sent; a retry that re-signs
@@ -275,8 +257,10 @@ export interface BroadcastHooks {
  *
  *   - `landed` — confirmed at the adapter's commitment and succeeded.
  *   - `failed` — confirmed, but the transaction errored: it moved nothing.
- *   - `expired` — not on chain and its blockhash is past
- *     `lastValidBlockHeight`: it can never land.
+ *   - `expired` — the FRESH verdict proved it dead (#949 round 5): the
+ *     finalized status cache, still covering its whole landing range, has
+ *     no status for it past its `lastValidBlockHeight`. Never an absence in
+ *     history, which is not evidence of anything.
  *   - `pending` — not (yet) confirmed and still able to land; `seen`
  *     when a node reported it in a block.
  *   - `rpc_error` — the lookup could not be completed. Never absence.
@@ -293,13 +277,7 @@ export type SignatureOutcome =
    * node has seen may well land (#885 round 5).
    */
   | { status: "pending"; seen?: true }
-  /**
-   * `historyPruned: true` — the transaction is past its last valid height and
-   * the node has no record of it, but its retained history does not reach
-   * back to where it could have landed: it may have landed and been pruned.
-   * Undecided, never `expired` (#949 round 2).
-   */
-  | { status: "rpc_error"; reason: string; historyPruned?: true };
+  | { status: "rpc_error"; reason: string };
 
 export interface SolanaRpcAdapter {
   /**
@@ -391,28 +369,11 @@ export interface SolanaRpcAdapter {
   getSignatureOutcome?(tx: SignedTransactionRef): Promise<SignatureOutcome>;
 
   /**
-   * The chain's current block height at the adapter's decision commitment
-   * (#949). Read-only. Block height — never wall-clock — is what bounds a
-   * Solana transaction's life: it can land only at a height ≤ its
-   * `lastValidBlockHeight`, and a halted cluster produces no heights however
-   * long it is down. Optional: without it, a payer cannot bound a broadcast
-   * it did not record, and must not treat that broadcast as dead. Rejects
-   * on any read failure — never a guessed height.
+   * The FRESH verdict (#949 round 5; see `FreshSignatureVerdict`) — the only
+   * read from which absence may be concluded, and only inside its window.
+   * Optional: a payer that must later prove a payout unpaid needs it.
    */
-  getBlockHeight?(): Promise<number>;
-
-  /**
-   * The first slot of the node's LOCAL ledger — `minimumLedgerSlot`, a
-   * blockstore-only read whose errors are errors (#949 round 4). It is the
-   * lower edge of what an "absent" status read can speak for: below it the
-   * node's historical lookup falls through to BigTable, which swallows every
-   * error as absent. NEVER `getFirstAvailableBlock`: agave answers that with
-   * min(blockstore, BigTable) — near genesis on a BigTable node — and turns
-   * a blockstore error, or a ledger with fewer than two roots, into 0.
-   * Rejects on failure. Optional: without it a late absence read can never
-   * be proven complete.
-   */
-  getLocalLedgerFirstSlot?(): Promise<number>;
+  getFreshSignatureVerdict?(tx: SignedTransactionRef): Promise<FreshSignatureVerdict>;
 
   /** Whether the RPC endpoint is reachable. Best-effort, no retries. */
   isReachable(): Promise<boolean>;

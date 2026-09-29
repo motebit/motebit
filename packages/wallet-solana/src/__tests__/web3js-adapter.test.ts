@@ -14,7 +14,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { Connection, Keypair, PublicKey, Transaction } from "@solana/web3.js";
+import { Keypair, PublicKey, Transaction } from "@solana/web3.js";
 import { base58Encode } from "@motebit/protocol";
 
 // Mock just `getAccount` from @solana/spl-token. Everything else
@@ -38,13 +38,7 @@ import {
   deriveSolanaAddress,
   isDerivedSettlementBinding,
 } from "../web3js-adapter.js";
-import {
-  LANDING_HEIGHT_WINDOW,
-  LANDING_SLOT_MARGIN,
-  LOCAL_LEDGER_EDGE_MARGIN,
-  earliestLandingSlot,
-  historyCoversLanding,
-} from "../adapter.js";
+import { FRESH_WINDOW_END, FRESH_WINDOW_START } from "../adapter.js";
 import {
   USDC_MINT_MAINNET,
   InsufficientUsdcBalanceError,
@@ -67,11 +61,6 @@ function validBlockhash(): string {
 
 beforeEach(() => {
   getAccountMock.mockReset();
-  // No network in tests: the pre-blockhash slot read (#949 round 2) answers
-  // a fixed slot unless a test stubs it on its own connection.
-  vi.spyOn(Connection.prototype, "getSlot").mockResolvedValue(5_000_000);
-  // …and a node holding full history, so an expiry read can be decisive.
-  vi.spyOn(Connection.prototype, "getMinimumLedgerSlot").mockResolvedValue(0);
 });
 
 describe("Web3JsRpcAdapter", () => {
@@ -763,7 +752,7 @@ describe("Web3JsRpcAdapter.sendUsdc", () => {
       blockhash: validBlockhash(),
       lastValidBlockHeight: 100,
     });
-    chainSays(conn, { height: 500, slot: 1_000, statusSlot: 1_000, status: null });
+    chainSays(conn, { height: 150, slot: 1_000, statusSlot: 1_000, status: null });
     const sendSpy = vi
       .spyOn(conn, "sendRawTransaction")
       .mockResolvedValueOnce("sigA")
@@ -829,7 +818,7 @@ describe("Web3JsRpcAdapter.sendUsdc", () => {
       blockhash: validBlockhash(),
       lastValidBlockHeight: 100,
     });
-    chainSays(conn, { height: 500, slot: 1_000, statusSlot: 1_000, status: null });
+    chainSays(conn, { height: 150, slot: 1_000, statusSlot: 1_000, status: null });
     const sendSpy = vi
       .spyOn(conn, "sendRawTransaction")
       .mockResolvedValueOnce("sigExpired")
@@ -863,7 +852,7 @@ describe("Web3JsRpcAdapter.sendUsdc", () => {
       lastValidBlockHeight: 100,
     });
     chainSays(conn, {
-      height: 500,
+      height: 150,
       slot: 1_000,
       statusSlot: 1_000,
       status: { confirmationStatus: "confirmed", err: null, slot: 77 },
@@ -887,7 +876,7 @@ describe("Web3JsRpcAdapter.sendUsdc", () => {
   it.each([
     [
       "pending (the status node lags the height read)",
-      { height: 500, slot: 1_000, statusSlot: 900, status: null },
+      { height: 150, slot: 1_000, statusSlot: 900, status: null },
     ],
     ["an RPC error", "rpc_error" as const],
   ])("expiry and the chain answer is %s ⇒ throws, never re-signs", async (_n, chain) => {
@@ -926,7 +915,7 @@ describe("Web3JsRpcAdapter.sendUsdc", () => {
       lastValidBlockHeight: 100,
     });
     chainSays(conn, {
-      height: 500,
+      height: 150,
       slot: 1_000,
       statusSlot: 1_000,
       status: { confirmationStatus: "finalized", err: { InstructionError: [0, "x"] }, slot: 7 },
@@ -1015,28 +1004,27 @@ describe("Web3JsRpcAdapter.sendUsdc", () => {
       blockhash: validBlockhash(),
       lastValidBlockHeight: 100,
     });
-    // Read 1: the tx is in a block (processed). Read 2 onward: a node on a
-    // minority fork, caught up by slot NUMBER, answers null — at lastValid+12.
-    let reads = 0;
-    vi.spyOn(conn, "getEpochInfo").mockImplementation(async () => {
-      reads++;
+    // Status read 1: the tx is in a block (processed). Every later read: a
+    // node on a minority fork, caught up by slot NUMBER, answers null — and
+    // the finalized height sits inside the fresh window (lastValid+12).
+    let statusReads = 0;
+    vi.spyOn(conn, "getEpochInfo").mockResolvedValue({
+      blockHeight: 112,
+      absoluteSlot: 5_011,
+    } as never);
+    vi.spyOn(conn, "getSignatureStatuses").mockImplementation(async () => {
+      statusReads++;
       return (
-        reads === 1
-          ? { blockHeight: 101, absoluteSlot: 5_000 }
-          : { blockHeight: 112, absoluteSlot: 5_011 }
-      ) as never;
-    });
-    vi.spyOn(conn, "getSignatureStatuses").mockImplementation(
-      async () =>
-        (reads === 1
+        statusReads === 1
           ? {
               context: { slot: 5_000 },
               value: [
                 { confirmationStatus: "processed", err: null, slot: 4_999, confirmations: 0 },
               ],
             }
-          : { context: { slot: 5_011 }, value: [null] }) as never,
-    );
+          : { context: { slot: 5_011 }, value: [null] }
+      ) as never;
+    });
     const sendSpy = vi.spyOn(conn, "sendRawTransaction").mockResolvedValue("sigA");
     vi.spyOn(conn, "confirmTransaction").mockRejectedValue(
       new Error("Signature sigA has expired: block height exceeded."),
@@ -1076,7 +1064,8 @@ describe("Web3JsRpcAdapter.sendUsdc", () => {
     } as never);
     await adapter.sendUsdc({ toAddress: validBase58Address(), microAmount: 1n });
     expect(confirm.mock.calls[0]?.[1]).toBe("confirmed");
-    expect(epoch.mock.calls[0]?.[0]).toBe("confirmed");
+    // Any height read is the fresh verdict's, at finalized (#949 round 5).
+    for (const call of epoch.mock.calls) expect(call[0]).toMatchObject({ commitment: "finalized" });
   });
 
   it("REALISTIC: still inside the margin when the poll cap ends ⇒ throws; 1 send, never a re-sign on a maybe", async () => {
@@ -1139,7 +1128,7 @@ describe("Web3JsRpcAdapter.sendUsdc", () => {
       blockhash: validBlockhash(),
       lastValidBlockHeight: 100,
     });
-    chainSays(conn, { height: 500, slot: 1_000, statusSlot: 1_000, status: null });
+    chainSays(conn, { height: 150, slot: 1_000, statusSlot: 1_000, status: null });
     vi.spyOn(conn, "sendRawTransaction").mockResolvedValue("sig");
     const confirmSpy = vi
       .spyOn(conn, "confirmTransaction")
@@ -1189,8 +1178,6 @@ describe("Web3JsRpcAdapter — beforeBroadcast sees the signed tx before it is s
     getAccountMock
       .mockResolvedValueOnce({ amount: 10_000_000n })
       .mockResolvedValueOnce({ amount: 0n });
-    // #949 round 2: the slot read before the blockhash rides on the ref.
-    vi.spyOn(conn, "getSlot").mockResolvedValue(77_777);
     vi.spyOn(conn, "getLatestBlockhash").mockResolvedValue({
       blockhash: validBlockhash(),
       lastValidBlockHeight: 321,
@@ -1202,64 +1189,6 @@ describe("Web3JsRpcAdapter — beforeBroadcast sees the signed tx before it is s
     });
     return { adapter, send };
   }
-
-  it("reads the slot BEFORE the blockhash, so the recorded slot is at or below where the tx can land (T1)", async () => {
-    const { adapter } = primed();
-    const conn = adapter.getConnection();
-    const slotRead = vi.spyOn(conn, "getSlot").mockResolvedValue(77_777);
-    const hashRead = vi.spyOn(conn, "getLatestBlockhash");
-    vi.spyOn(conn, "sendRawTransaction").mockResolvedValue("sig");
-    await adapter.sendUsdc(
-      { toAddress: validBase58Address(), microAmount: 1n },
-      { beforeBroadcast: () => undefined },
-    );
-    expect(slotRead.mock.invocationCallOrder[0]!).toBeLessThan(
-      hashRead.mock.invocationCallOrder[0]!,
-    );
-  });
-
-  it("C1: with a recording payer, a slot read that fails twice ⇒ nothing is signed or sent, the hook never runs", async () => {
-    const { adapter, send } = primed();
-    const conn = adapter.getConnection();
-    let slotReads = 0;
-    vi.spyOn(conn, "getSlot").mockImplementation(() => {
-      slotReads++;
-      return Promise.reject(new Error("rpc down"));
-    });
-    const hook = vi.fn();
-    await expect(
-      adapter.sendUsdc(
-        { toAddress: validBase58Address(), microAmount: 1n },
-        { beforeBroadcast: hook },
-      ),
-    ).rejects.toThrow(/nothing was signed or sent/);
-    expect(slotReads).toBe(2);
-    expect(hook).not.toHaveBeenCalled();
-    expect(send).not.toHaveBeenCalled();
-  });
-
-  it("C1: one failed slot read is retried; the second answer is recorded", async () => {
-    const { adapter, send } = primed();
-    const conn = adapter.getConnection();
-    vi.spyOn(conn, "getSlot")
-      .mockRejectedValueOnce(new Error("blip"))
-      .mockResolvedValueOnce(88_888);
-    send.mockResolvedValue("sig");
-    const seen: Array<{ recentSlot?: number }> = [];
-    await adapter.sendUsdc(
-      { toAddress: validBase58Address(), microAmount: 1n },
-      { beforeBroadcast: (r) => void seen.push(r) },
-    );
-    expect(seen[0]!.recentSlot).toBe(88_888);
-  });
-
-  it("without a recording payer, a failed slot read does not block the send (nobody records the ref)", async () => {
-    const { adapter, send } = primed();
-    vi.spyOn(adapter.getConnection(), "getSlot").mockRejectedValue(new Error("rpc down"));
-    send.mockResolvedValue("sig");
-    const r = await adapter.sendUsdc({ toAddress: validBase58Address(), microAmount: 1n });
-    expect(r.signature).toBe("sig");
-  });
 
   it("reports the exact signature that is then sent, before sending", async () => {
     const { adapter, send } = primed();
@@ -1275,9 +1204,7 @@ describe("Web3JsRpcAdapter — beforeBroadcast sees the signed tx before it is s
       { toAddress: validBase58Address(), microAmount: 1n },
       { beforeBroadcast: hook },
     );
-    expect(seen).toEqual([
-      { signature: r.signature, lastValidBlockHeight: 321, recentSlot: 77_777 },
-    ]);
+    expect(seen).toEqual([{ signature: r.signature, lastValidBlockHeight: 321 }]);
     expect(hook.mock.invocationCallOrder[0]!).toBeLessThan(send.mock.invocationCallOrder[0]!);
   });
 
@@ -1301,12 +1228,13 @@ describe("Web3JsRpcAdapter — beforeBroadcast sees the signed tx before it is s
   });
 });
 
-describe("Web3JsRpcAdapter.getSignatureOutcome — about ONE transaction", () => {
+describe("Web3JsRpcAdapter.getSignatureOutcome — about ONE transaction (#949 round 5)", () => {
   function withChain(opts: {
     height: number;
     slot?: number;
     statusSlot?: number;
     status: null | { confirmationStatus: string; err: unknown; slot: number };
+    historyStatus?: null | { confirmationStatus: string; err: unknown; slot: number };
   }) {
     const adapter = makeAdapterForTx();
     const conn = adapter.getConnection();
@@ -1315,14 +1243,18 @@ describe("Web3JsRpcAdapter.getSignatureOutcome — about ONE transaction", () =>
       order.push("epoch");
       return { blockHeight: opts.height, absoluteSlot: opts.slot ?? 1_000 } as never;
     });
-    vi.spyOn(conn, "getSignatureStatuses").mockImplementation(async () => {
-      order.push("status");
+    const statuses = vi.spyOn(conn, "getSignatureStatuses").mockImplementation(async (_s, cfg) => {
+      const history = (cfg as { searchTransactionHistory?: boolean } | undefined)
+        ?.searchTransactionHistory;
+      order.push(history === true ? "history" : "fresh");
       return {
         context: { slot: opts.statusSlot ?? opts.slot ?? 1_000 },
-        value: [opts.status],
+        value: [
+          history === true && opts.historyStatus !== undefined ? opts.historyStatus : opts.status,
+        ],
       } as never;
     });
-    return { adapter, order };
+    return { adapter, order, statuses };
   }
   const ref = { signature: "sigX", lastValidBlockHeight: 100 };
 
@@ -1342,58 +1274,78 @@ describe("Web3JsRpcAdapter.getSignatureOutcome — about ONE transaction", () =>
     await expect(bad.adapter.getSignatureOutcome(ref)).resolves.toEqual({ status: "failed" });
   });
 
-  it("absent, well past its last valid height, from a node caught up to that slot ⇒ expired", async () => {
-    const gone = withChain({ height: 200, slot: 5_000, statusSlot: 5_000, status: null });
+  it("absent, inside the fresh window (finalized status cache, caught-up node) ⇒ expired", async () => {
+    const gone = withChain({ height: 150, slot: 5_000, statusSlot: 5_000, status: null });
     await expect(gone.adapter.getSignatureOutcome(ref)).resolves.toEqual({ status: "expired" });
   });
 
-  it("a tx that landed LONG ago (aged out of the recent status cache) still reads landed — history search is required", async () => {
-    const adapter = makeAdapterForTx();
-    const conn = adapter.getConnection();
-    vi.spyOn(conn, "getEpochInfo").mockResolvedValue({
-      blockHeight: 900_000,
-      absoluteSlot: 1_000_000,
-    } as never);
-    // Only a history search finds it; the recent-status cache returns null.
-    vi.spyOn(conn, "getSignatureStatuses").mockImplementation(
-      async (_sigs, opts) =>
-        (opts?.searchTransactionHistory === true
-          ? {
-              context: { slot: 1_000_000 },
-              value: [
-                { confirmationStatus: "finalized", err: null, slot: 77, confirmations: null },
-              ],
-            }
-          : { context: { slot: 1_000_000 }, value: [null] }) as never,
-    );
-    await expect(adapter.getSignatureOutcome(ref)).resolves.toEqual({
+  it("round 5: absent in HISTORY past the fresh window (snapshot gap, pruned, BigTable error) ⇒ pending, never expired", async () => {
+    const late = withChain({ height: 100_000, slot: 5_000, statusSlot: 5_000, status: null });
+    await expect(late.adapter.getSignatureOutcome(ref)).resolves.toEqual({ status: "pending" });
+  });
+
+  it("a tx that landed LONG ago still reads landed — history is read for POSITIVE facts", async () => {
+    const old = withChain({
+      height: 900_000,
+      status: null,
+      historyStatus: { confirmationStatus: "finalized", err: null, slot: 77 },
+    });
+    await expect(old.adapter.getSignatureOutcome(ref)).resolves.toEqual({
       status: "landed",
       slot: 77,
     });
   });
 
-  it("REVIEWER PROBE: absent from a LAGGING node (context.slot behind the height read) ⇒ pending, never expired", async () => {
-    // height=101 > lastValid=100, but the status came from a node at slot 4990
-    // while the height was read at slot 5000: that node had not seen every
-    // slot the tx could be in, so its "not found" proves nothing.
-    const lag = withChain({ height: 200, slot: 5_000, statusSlot: 4_990, status: null });
-    await expect(lag.adapter.getSignatureOutcome(ref)).resolves.toEqual({ status: "pending" });
+  it("REVIEWER PROBE: absent from a node behind minContextSlot ⇒ never expired", async () => {
+    const lag = withChain({ height: 150, slot: 5_000, statusSlot: 4_990, status: null });
+    const out = await lag.adapter.getSignatureOutcome(ref);
+    expect(out.status).not.toBe("expired");
   });
 
-  it("absent, and past lastValid by less than the margin, or not past it ⇒ pending", async () => {
-    const edge = withChain({ height: 101, status: null });
+  it("absent, and not yet FRESH_WINDOW_START past lastValid (finalized) ⇒ pending", async () => {
+    const edge = withChain({ height: 110, status: null });
     await expect(edge.adapter.getSignatureOutcome(ref)).resolves.toEqual({ status: "pending" });
     const live = withChain({ height: 100, status: null });
     await expect(live.adapter.getSignatureOutcome(ref)).resolves.toEqual({ status: "pending" });
   });
 
-  it("reads height+slot (one read) BEFORE the status", async () => {
-    const { adapter, order } = withChain({ height: 200, status: null });
+  it("reads history first; only on absence, the fresh verdict: height, cache-only status, height", async () => {
+    const { adapter, order } = withChain({ height: 150, status: null });
     await adapter.getSignatureOutcome(ref);
-    expect(order).toEqual(["epoch", "status"]);
+    expect(order).toEqual(["history", "epoch", "fresh", "epoch"]);
   });
 
-  it("processed but not yet confirmed ⇒ pending; an RPC failure ⇒ rpc_error", async () => {
+  it("a history read that throws ⇒ rpc_error, never absence (no fresh read on a failed read)", async () => {
+    const adapter = makeAdapterForTx();
+    const conn = adapter.getConnection();
+    vi.spyOn(conn, "getSignatureStatuses").mockRejectedValue(new Error("history 503"));
+    const epoch = vi.spyOn(conn, "getEpochInfo");
+    await expect(adapter.getSignatureOutcome(ref)).resolves.toEqual({
+      status: "rpc_error",
+      reason: "history 503",
+    });
+    expect(epoch).not.toHaveBeenCalled();
+  });
+
+  it("absent from history but found by the fresh (status-cache) read ⇒ its found status decides", async () => {
+    const landed = withChain({
+      height: 150,
+      status: { confirmationStatus: "finalized", err: null, slot: 11 },
+      historyStatus: null,
+    });
+    await expect(landed.adapter.getSignatureOutcome(ref)).resolves.toEqual({
+      status: "landed",
+      slot: 11,
+    });
+    const failed = withChain({
+      height: 150,
+      status: { confirmationStatus: "finalized", err: { x: 1 }, slot: 11 },
+      historyStatus: null,
+    });
+    await expect(failed.adapter.getSignatureOutcome(ref)).resolves.toEqual({ status: "failed" });
+  });
+
+  it("processed but not yet confirmed ⇒ pending (seen); an RPC failure ⇒ rpc_error", async () => {
     const proc = withChain({
       height: 500,
       status: { confirmationStatus: "processed", err: null, slot: 3 },
@@ -1403,11 +1355,109 @@ describe("Web3JsRpcAdapter.getSignatureOutcome — about ONE transaction", () =>
       seen: true, // in a block: a later "absent" for it is never believed
     });
     const adapter = makeAdapterForTx();
+    vi.spyOn(adapter.getConnection(), "getSignatureStatuses").mockResolvedValue({
+      context: { slot: 1 },
+      value: [null],
+    } as never);
     vi.spyOn(adapter.getConnection(), "getEpochInfo").mockRejectedValue(new Error("429"));
     await expect(adapter.getSignatureOutcome(ref)).resolves.toEqual({
       status: "rpc_error",
       reason: "429",
     });
+  });
+});
+
+describe("Web3JsRpcAdapter.getFreshSignatureVerdict (#949 round 5)", () => {
+  // lastValid = 100: the window is finalized heights 111..230.
+  const ref = { signature: "sigF", lastValidBlockHeight: 100 };
+  function fresh(opts: {
+    heights: number[];
+    status?: null | { err: unknown; slot: number };
+    contextSlot?: number;
+    slot?: number;
+  }) {
+    const adapter = makeAdapterForTx();
+    const conn = adapter.getConnection();
+    let i = 0;
+    const epoch = vi.spyOn(conn, "getEpochInfo").mockImplementation(async () => {
+      const h = opts.heights[Math.min(i, opts.heights.length - 1)]!;
+      i++;
+      return { blockHeight: h, absoluteSlot: opts.slot ?? 5_000 } as never;
+    });
+    const statuses = vi.spyOn(conn, "getSignatureStatuses").mockResolvedValue({
+      context: { slot: opts.contextSlot ?? opts.slot ?? 5_000 },
+      value: [
+        opts.status == null
+          ? null
+          : { ...opts.status, confirmationStatus: "finalized", confirmations: null },
+      ],
+    } as never);
+    return { adapter, epoch, statuses };
+  }
+
+  it("the window bounds, exactly: +10 too early, +11 and +130 dead, +131 passed", async () => {
+    expect(FRESH_WINDOW_START).toBe(11);
+    expect(FRESH_WINDOW_END).toBe(130);
+    await expect(fresh({ heights: [110] }).adapter.getFreshSignatureVerdict(ref)).resolves.toEqual({
+      status: "too_early",
+    });
+    await expect(
+      fresh({ heights: [111, 111] }).adapter.getFreshSignatureVerdict(ref),
+    ).resolves.toEqual({ status: "dead_fresh", contextSlot: 5_000 });
+    await expect(
+      fresh({ heights: [230, 230] }).adapter.getFreshSignatureVerdict(ref),
+    ).resolves.toEqual({ status: "dead_fresh", contextSlot: 5_000 });
+    await expect(fresh({ heights: [231] }).adapter.getFreshSignatureVerdict(ref)).resolves.toEqual({
+      status: "window_passed",
+    });
+  });
+
+  it("the answering bank must still be in the window: a second height read past it ⇒ window_passed", async () => {
+    await expect(
+      fresh({ heights: [200, 231] }).adapter.getFreshSignatureVerdict(ref),
+    ).resolves.toEqual({ status: "window_passed" });
+  });
+
+  it("reads the status cache only — no history search — at finalized, bound by minContextSlot; then the height with minContextSlot = the answer's slot", async () => {
+    const { adapter, epoch, statuses } = fresh({
+      heights: [150, 150],
+      slot: 7_000,
+      contextSlot: 7_100,
+    });
+    await adapter.getFreshSignatureVerdict(ref);
+    expect(statuses.mock.calls[0]?.[1]).toEqual({
+      searchTransactionHistory: false,
+      commitment: "finalized",
+      minContextSlot: 7_000,
+    });
+    expect(epoch.mock.calls[0]?.[0]).toEqual({ commitment: "finalized" });
+    expect(epoch.mock.calls[1]?.[0]).toEqual({ commitment: "finalized", minContextSlot: 7_100 });
+  });
+
+  it("a found status is positive evidence whatever the window: landed, or failed", async () => {
+    await expect(
+      fresh({ heights: [900], status: { err: null, slot: 42 } }).adapter.getFreshSignatureVerdict(
+        ref,
+      ),
+    ).resolves.toEqual({ status: "landed", slot: 42, contextSlot: 5_000 });
+    await expect(
+      fresh({
+        heights: [900],
+        status: { err: { x: 1 }, slot: 42 },
+      }).adapter.getFreshSignatureVerdict(ref),
+    ).resolves.toEqual({ status: "failed", contextSlot: 5_000 });
+  });
+
+  it("a node that answers from behind minContextSlot, or any read failure ⇒ rpc_error, never dead", async () => {
+    const lag = await fresh({
+      heights: [150, 150],
+      slot: 5_000,
+      contextSlot: 4_999,
+    }).adapter.getFreshSignatureVerdict(ref);
+    expect(lag.status).toBe("rpc_error");
+    const adapter = makeAdapterForTx();
+    vi.spyOn(adapter.getConnection(), "getEpochInfo").mockRejectedValue(new Error("down"));
+    expect((await adapter.getFreshSignatureVerdict(ref)).status).toBe("rpc_error");
   });
 });
 
@@ -1522,7 +1572,7 @@ describe("Web3JsRpcAdapter.sendUsdcBatch", () => {
       lastValidBlockHeight: 200,
     });
     // The chain confirms the first tx is dead before the adapter re-signs.
-    chainSays(conn, { height: 900, slot: 2_000, statusSlot: 2_000, status: null });
+    chainSays(conn, { height: 250, slot: 2_000, statusSlot: 2_000, status: null });
     vi.spyOn(conn, "sendRawTransaction")
       .mockResolvedValueOnce("sigExpired")
       .mockResolvedValue("sigFresh");
@@ -1574,7 +1624,7 @@ describe("Web3JsRpcAdapter.sendUsdcBatch", () => {
       lastValidBlockHeight: 100,
     });
     // The chain cannot say (status node lags) ⇒ the chunk throws.
-    chainSays(conn, { height: 500, slot: 1_000, statusSlot: 900, status: null });
+    chainSays(conn, { height: 150, slot: 1_000, statusSlot: 900, status: null });
     const sendSpy = vi.spyOn(conn, "sendRawTransaction").mockResolvedValue("sigMaybe");
     vi.spyOn(conn, "confirmTransaction").mockRejectedValue(
       new Error("Signature sigMaybe has expired: block height exceeded."),
@@ -1799,97 +1849,5 @@ describe("isDerivedSettlementBinding — the derived settlement-authority rung",
     expect(isDerivedSettlementBinding(derivedAddress, "not-hex")).toBe(false);
     expect(isDerivedSettlementBinding(derivedAddress, "aa")).toBe(false); // too short
     expect(isDerivedSettlementBinding(derivedAddress, keyHex.toUpperCase())).toBe(true); // hex case-insensitive
-  });
-});
-
-describe("Web3JsRpcAdapter.getBlockHeight (#949)", () => {
-  it("reads the block height at the decision commitment and rejects on failure — never a guess", async () => {
-    const adapter = new Web3JsRpcAdapter({
-      rpcUrl: "https://api.devnet.solana.com",
-      identitySeed: ZERO_SEED,
-    });
-    const conn = adapter.getConnection();
-    const read = vi.spyOn(conn, "getBlockHeight").mockResolvedValue(123_456);
-    expect(await adapter.getBlockHeight()).toBe(123_456);
-    expect(read).toHaveBeenCalledWith("confirmed");
-    read.mockRejectedValue(new Error("rpc down"));
-    await expect(adapter.getBlockHeight()).rejects.toThrow("rpc down");
-  });
-});
-
-describe("getSignatureOutcome: absence is evidence only inside retained history (#949 round 2)", () => {
-  function adapterWith() {
-    const adapter = new Web3JsRpcAdapter({
-      rpcUrl: "https://api.devnet.solana.com",
-      identitySeed: ZERO_SEED,
-    });
-    return { adapter, conn: adapter.getConnection() };
-  }
-  const past = { height: 500, slot: 90_000, statusSlot: 90_000, status: null };
-
-  it("a ref with recentSlot is expired only while the node's LOCAL ledger holds that slot (+ margin)", async () => {
-    const { adapter, conn } = adapterWith();
-    chainSays(conn, past);
-    const tx = { signature: "s", lastValidBlockHeight: 100, recentSlot: 50_000 };
-    const earliest = 50_000 - LANDING_SLOT_MARGIN;
-    const local = vi
-      .spyOn(conn, "getMinimumLedgerSlot")
-      .mockResolvedValue(earliest - LOCAL_LEDGER_EDGE_MARGIN);
-    expect(await adapter.getSignatureOutcome(tx)).toEqual({ status: "expired" });
-    // Inside the margin, or pruned past it: undecided.
-    local.mockResolvedValue(earliest - LOCAL_LEDGER_EDGE_MARGIN + 1);
-    expect(await adapter.getSignatureOutcome(tx)).toMatchObject({
-      status: "rpc_error",
-      historyPruned: true,
-    });
-    // A failed local-edge read is an rpc_error, never expiry.
-    local.mockRejectedValue(new Error("down"));
-    expect((await adapter.getSignatureOutcome(tx)).status).toBe("rpc_error");
-  });
-
-  it("round 4: getFirstAvailableBlock is never the edge — a BigTable node's near-genesis answer does not make absence authoritative", async () => {
-    const { adapter, conn } = adapterWith();
-    chainSays(conn, past);
-    const tx = { signature: "s", lastValidBlockHeight: 100, recentSlot: 50_000 };
-    // min(blockstore, BigTable) near genesis — and 0 on an error or < 2 roots.
-    const firstAvailable = vi.spyOn(conn, "getFirstAvailableBlock").mockResolvedValue(0);
-    // The local ledger has pruned the landing range.
-    vi.spyOn(conn, "getMinimumLedgerSlot").mockResolvedValue(49_900);
-    expect(await adapter.getSignatureOutcome(tx)).toMatchObject({
-      status: "rpc_error",
-      historyPruned: true,
-    });
-    expect(firstAvailable).not.toHaveBeenCalled();
-  });
-
-  it("without a recentSlot, the floor is the transaction's own validity (slot ≥ block height) — deep local history decides, recent history does not", () => {
-    const ref = { signature: "s", lastValidBlockHeight: 10_000 };
-    expect(earliestLandingSlot(ref)).toBe(10_000 - LANDING_HEIGHT_WINDOW);
-    expect(LANDING_HEIGHT_WINDOW).toBe(310);
-    expect(historyCoversLanding(ref, 0)).toBe(true);
-    expect(historyCoversLanding(ref, 10_000 - 310 - LOCAL_LEDGER_EDGE_MARGIN)).toBe(true);
-    expect(historyCoversLanding(ref, 10_000 - 309 - LOCAL_LEDGER_EDGE_MARGIN)).toBe(false);
-    expect(historyCoversLanding({ signature: "s", lastValidBlockHeight: Number.NaN }, 0)).toBe(
-      false,
-    );
-  });
-
-  it("historyCoversLanding honours both margins under a recentSlot, and rejects a negative or non-integer edge", () => {
-    const ref = { signature: "s", lastValidBlockHeight: 1, recentSlot: 100_000 };
-    expect(LANDING_SLOT_MARGIN).toBe(512);
-    expect(LOCAL_LEDGER_EDGE_MARGIN).toBe(4096);
-    const edge = 100_000 - 512 - 4096;
-    expect(historyCoversLanding(ref, edge)).toBe(true);
-    expect(historyCoversLanding(ref, edge + 1)).toBe(false);
-    expect(historyCoversLanding(ref, -1)).toBe(false);
-    expect(historyCoversLanding(ref, 1.5)).toBe(false);
-  });
-
-  it("getLocalLedgerFirstSlot reads minimumLedgerSlot (blockstore-only), never getFirstAvailableBlock", async () => {
-    const { adapter, conn } = adapterWith();
-    vi.spyOn(conn, "getMinimumLedgerSlot").mockResolvedValue(123);
-    const firstAvailable = vi.spyOn(conn, "getFirstAvailableBlock").mockResolvedValue(0);
-    expect(await adapter.getLocalLedgerFirstSlot()).toBe(123);
-    expect(firstAvailable).not.toHaveBeenCalled();
   });
 });
