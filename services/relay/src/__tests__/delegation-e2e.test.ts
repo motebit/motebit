@@ -398,12 +398,16 @@ describe("Delegation E2E", () => {
 
     const types = chunks.map((c) => c.type);
     expect(types).toContain("step_started");
-    expect(types).toContain("step_failed");
-    expect(types).toContain("plan_failed");
+    // #890: undetermined is not a failure — the step is held (Running,
+    // plan Active) until the relay's receipt settles it; never re-delegated.
+    expect(types).toContain("plan_undetermined");
+    expect(types).not.toContain("step_failed");
+    expect(types).not.toContain("plan_failed");
     expect(types).not.toContain("step_delegated");
 
     const steps = store.getStepsForPlan(plan.plan_id);
-    expect(steps[0]!.status).toBe(StepStatus.Failed);
+    expect(steps[0]!.status).toBe(StepStatus.Running);
+    expect(store.getPlan(plan.plan_id)!.status).toBe("active");
     expect(steps[0]!.error_message).toContain(
       "Submission unconfirmed — the task may still complete",
     );
