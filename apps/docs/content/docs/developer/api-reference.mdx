@@ -259,7 +259,7 @@ These tools are conditionally registered when the agent provides the necessary b
 All MCP tools require authentication. Two mechanisms are supported:
 
 1. **Static bearer token** — Set via `authToken` in the server config. The caller passes `Authorization: Bearer <token>`.
-2. **Motebit signed token** — The caller passes `Authorization: Bearer motebit:<signed-token>`. The server verifies the Ed25519 signature, resolves the caller's identity, and applies trust-level-based policy decisions.
+2. **Motebit signed token** — The caller passes `Authorization: Bearer motebit:<signed-token>`, minted fresh for each HTTP request with audience `mcp:call` and `sub` = the server's `motebit_id`. The server accepts it only if the audience is `mcp:call`, `sub` names this server, the Ed25519 signature and expiry hold, and the `jti` has not been used before (single-use). It then resolves the caller's identity and applies trust-level-based policy decisions.
 
 If no auth mechanism is configured and no valid token is provided, the server returns 401. Open access is never permitted on HTTP transport.
 

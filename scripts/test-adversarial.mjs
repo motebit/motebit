@@ -82,7 +82,8 @@ async function mcpCall(method, params, authToken) {
   const headers = {
     "Content-Type": "application/json",
     Accept: "application/json, text/event-stream",
-    Authorization: `Bearer motebit:${authToken}`,
+    // #957: a worker accepts each caller token once — a factory mints per request.
+    Authorization: `Bearer motebit:${typeof authToken === "function" ? authToken() : authToken}`,
   };
   if (sessionId) headers["Mcp-Session-Id"] = sessionId;
 
@@ -171,18 +172,19 @@ async function main() {
   const privHex = decryptKey(config.cli_encrypted_key, PASSPHRASE);
   const privBytes = fromHex(privHex);
 
-  // Helper: create a valid token
+  // Helper: create a valid MCP caller token — aud "mcp:call", bound to Bob
+  // (sub), fresh jti. A worker accepts each one once (#957), so call it per request.
   function validToken() {
     return signToken({
       mid: ALICE_ID, did: ALICE_DEVICE,
       iat: Date.now(), exp: Date.now() + 5 * 60 * 1000,
-      jti: crypto.randomUUID(), aud: "task:submit",
+      jti: crypto.randomUUID(), aud: "mcp:call", sub: BOB_ID,
     }, privBytes);
   }
 
   // Helper: do a complete happy-path delegation and return receipt + relay task ID
   async function delegateOnce(prompt) {
-    const tok = validToken();
+    const tok = validToken; // a factory: one fresh token per request
     // Reset MCP session
     sessionId = null;
     mcpReqId = 0;
@@ -192,7 +194,7 @@ async function main() {
     }, tok);
     await fetch(BOB_MCP, {
       method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: `Bearer motebit:${tok}`, ...(sessionId ? { "Mcp-Session-Id": sessionId } : {}) },
+      headers: { "Content-Type": "application/json", Authorization: `Bearer motebit:${tok()}`, ...(sessionId ? { "Mcp-Session-Id": sessionId } : {}) },
       body: JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }),
     });
 
@@ -253,7 +255,7 @@ async function main() {
     const expiredToken = signToken({
       mid: ALICE_ID, did: ALICE_DEVICE,
       iat: Date.now() - 600_000, exp: Date.now() - 300_000,
-      jti: crypto.randomUUID(), aud: "task:submit",
+      jti: crypto.randomUUID(), aud: "mcp:call", sub: BOB_ID,
     }, privBytes);
 
     sessionId = null;
@@ -291,7 +293,7 @@ async function main() {
     const badToken = signToken({
       mid: ALICE_ID, did: ALICE_DEVICE,
       iat: Date.now(), exp: Date.now() + 300_000,
-      jti: crypto.randomUUID(), aud: "task:submit",
+      jti: crypto.randomUUID(), aud: "mcp:call", sub: BOB_ID,
     }, fakePrivBytes);
 
     sessionId = null;
@@ -352,7 +354,7 @@ async function main() {
       mid: ALICE_ID, did: ALICE_DEVICE,
       iat: Date.now() + 600_000, // 10 min in the future
       exp: Date.now() + 900_000,
-      jti: crypto.randomUUID(), aud: "task:submit",
+      jti: crypto.randomUUID(), aud: "mcp:call", sub: BOB_ID,
     }, privBytes);
 
     sessionId = null;
