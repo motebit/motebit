@@ -107,13 +107,17 @@ class FakeCluster {
     return this.height * 2;
   }
 
-  /** `extraValidity`: signed over a blockhash from a node that many blocks ahead. */
-  sign(extraValidity = 0): SignedTransactionRef {
+  /**
+   * `extraValidity`: signed over a blockhash from a node that many blocks
+   * ahead. `withSlot: false`: the signer's pre-blockhash slot read failed and
+   * it signed anyway — the ref carries no `recentSlot` (round 3, C1).
+   */
+  sign(extraValidity = 0, withSlot = true): SignedTransactionRef {
     this.n++;
     return {
       signature: `sig-${this.n}-${"x".repeat(40)}`,
       lastValidBlockHeight: this.height + 150 + extraValidity,
-      recentSlot: this.slot(),
+      ...(withSlot ? { recentSlot: this.slot() } : {}),
     };
   }
 
@@ -211,8 +215,21 @@ type SendResult = Awaited<ReturnType<SolanaRpcAdapter["sendUsdc"]>>;
  *   - `pruned_after_landing`: once the payout is decided, the node prunes it
  *     (days later, in production) — a landed payout then reads as absent.
  */
-type Retention = "full" | "pruned_before_send" | "pruned_after_landing";
-const RETENTIONS: Retention[] = ["full", "pruned_before_send", "pruned_after_landing"];
+type Retention = "full" | "pruned_before_send" | "pruned_near_send" | "pruned_after_landing";
+const RETENTIONS: Retention[] = [
+  "full",
+  "pruned_before_send",
+  "pruned_near_send",
+  "pruned_after_landing",
+];
+
+/**
+ * Whether the signer's sign-time slot read worked (round 3, C1). `unavailable`
+ * models an adapter that signed and broadcast WITHOUT a `recentSlot` — the
+ * relay must still give that payout a door on a node that can prove absence.
+ */
+type SignSlot = "ok" | "unavailable";
+const SIGN_SLOTS: SignSlot[] = ["ok", "unavailable"];
 
 /**
  * An adapter that honours the #885 contract: `beforeBroadcast` runs for every
@@ -222,6 +239,7 @@ const RETENTIONS: Retention[] = ["full", "pruned_before_send", "pruned_after_lan
 function makeAdapter(
   cluster: FakeCluster,
   script: SendScript,
+  opts: { signSlot?: SignSlot; retentionRead?: boolean } = {},
 ): { adapter: SolanaRpcAdapter; sends: () => number } {
   let sends = 0;
   const broadcastOne = async (
@@ -229,7 +247,7 @@ function makeAdapter(
     fate: Fate,
     delay: number,
   ): Promise<ChainTx> => {
-    const ref = cluster.sign();
+    const ref = cluster.sign(0, (opts.signSlot ?? "ok") === "ok");
     if (hooks?.beforeBroadcast) await hooks.beforeBroadcast(ref);
     return cluster.broadcast(ref, fate, delay);
   };
@@ -308,7 +326,9 @@ function makeAdapter(
     getTransaction: () => Promise.resolve({ status: "not_found" as const }),
     getSignatureOutcome: (ref: SignedTransactionRef) => Promise.resolve(cluster.outcome(ref)),
     getBlockHeight: () => Promise.resolve(cluster.height),
-    getFirstAvailableSlot: () => Promise.resolve(cluster.firstAvailableSlot),
+    ...(opts.retentionRead === false
+      ? {}
+      : { getFirstAvailableSlot: () => Promise.resolve(cluster.firstAvailableSlot) }),
     isReachable: () => Promise.resolve(script !== "unavailable"),
   } as SolanaRpcAdapter;
   return { adapter, sends: () => sends };
@@ -543,49 +563,108 @@ const OPERATOR_TIMINGS: OperatorTiming[] = ["prompt", "late"];
 
 const PATH0_CELLS = SEND_SCRIPTS.flatMap((script) =>
   RETENTIONS.flatMap((retention) =>
-    OPERATOR_TIMINGS.map((timing) => ({ script, retention, timing })),
+    SIGN_SLOTS.flatMap((signSlot) =>
+      OPERATOR_TIMINGS.map((timing) => ({ script, retention, signSlot, timing })),
+    ),
   ),
 );
 
+/**
+ * The DECLARED stuck set, and when it begins. A broadcast payout that never
+ * landed is undecidable exactly when the node cannot prove it absent:
+ *   - `pruned_after_landing`: from the prune (P3);
+ *   - `pruned_near_send`: from the send — history starts 100 slots before it,
+ *     inside the relay's LANDING_SLOT_MARGIN (512), so absence is unprovable;
+ *   - `pruned_before_send` with no sign-time slot: from the send — the
+ *     relay's fallback lower edge (slot ≥ height, lastValidBlockHeight − 310)
+ *     is far below any recent node's retention.
+ * Everything else must be decided once the chain has decided.
+ */
+function stuckOnset(retention: Retention, signSlot: SignSlot): "send" | "prune" | null {
+  if (retention === "pruned_after_landing") return "prune";
+  if (retention === "pruned_near_send") return "send";
+  if (retention === "pruned_before_send" && signSlot === "unavailable") return "send";
+  return null;
+}
+
 describe("harness: Path 0 (Solana) — send script × node retention × schedule × truthful operator × replay", () => {
-  it.each(PATH0_CELLS)("$script × $retention × $timing", async ({ script, retention, timing }) => {
+  it.each(PATH0_CELLS)(
+    "$script × $retention × slot:$signSlot × $timing",
+    async ({ script, retention, signSlot, timing }) => {
+      const cluster = new FakeCluster();
+      if (retention === "pruned_before_send") cluster.firstAvailableSlot = cluster.slot() - 600;
+      if (retention === "pruned_near_send") cluster.firstAvailableSlot = cluster.slot() - 100;
+      const { adapter, sends } = makeAdapter(cluster, script, { signSlot });
+      relay = await createTestRelay({
+        enableDeviceAuth: false,
+        operatorSolanaTransfer: new OperatorSolanaTransfer(adapter),
+      });
+      const mid = `zzh-p0-${script}-${retention}-${signSlot}-${timing}`;
+      await registerAndFund(relay, mid);
+
+      const headers = jsonAuthWithIdempotency();
+      const post = () =>
+        relay!.app.request(`/api/v1/agents/${mid}/withdraw`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify({ amount: W_USD, destination: DEST }),
+        });
+      await post();
+      // A replay of the same request never sends again.
+      await post();
+
+      const violations: string[] = [];
+      if (sends() > 1) violations.push(`sent ${sends()} times for one withdrawal`);
+      const onset = stuckOnset(retention, signSlot);
+      let onsetReached = onset === "send";
+      // Settled by the send itself (confirmed, or a proven landed failure).
+      let settledBeforePrune = rowsOf(relay, mid).every((w) => !OPEN.has(w.status));
+      const stuck: StuckModel = {
+        pruned: () => onsetReached,
+        settledBeforePrune: () => settledBeforePrune,
+      };
+      for (const [i, phase] of PHASES.entries()) {
+        if (onset === "prune" && i === 3) {
+          settledBeforePrune = rowsOf(relay, mid).every((w) => !OPEN.has(w.status));
+          onsetReached = true;
+        }
+        phase.move(cluster, retention);
+        if (timing === "prompt" || i >= 3) await truthfulOperator(relay, mid, cluster);
+        violations.push(
+          ...(await oracle(relay, mid, cluster, phase.name, i === PHASES.length - 1, stuck)),
+        );
+      }
+      expect(violations).toEqual([]);
+    },
+  );
+});
+
+describe("harness: a Solana transfer that cannot read the node's retained history is never used (round 3)", () => {
+  const SCRIPTS: SendScript[] = [
+    "confirmed",
+    "throw_after_broadcast_lands",
+    "throw_after_broadcast_never",
+    "halt_then_never",
+  ];
+  it.each(SCRIPTS)("%s", async (script) => {
     const cluster = new FakeCluster();
-    if (retention === "pruned_before_send") cluster.firstAvailableSlot = cluster.slot() - 600;
-    const { adapter, sends } = makeAdapter(cluster, script);
+    const { adapter } = makeAdapter(cluster, script, { retentionRead: false });
     relay = await createTestRelay({
       enableDeviceAuth: false,
       operatorSolanaTransfer: new OperatorSolanaTransfer(adapter),
     });
-    const mid = `zzh-p0-${script}-${retention}-${timing}`;
+    const mid = `zzh-noret-${script}`;
     await registerAndFund(relay, mid);
-
-    const headers = jsonAuthWithIdempotency();
-    const post = () =>
-      relay!.app.request(`/api/v1/agents/${mid}/withdraw`, {
-        method: "POST",
-        headers,
-        body: JSON.stringify({ amount: W_USD, destination: DEST }),
-      });
-    await post();
-    // A replay of the same request never sends again.
-    await post();
-
+    await relay.app.request(`/api/v1/agents/${mid}/withdraw`, {
+      method: "POST",
+      headers: jsonAuthWithIdempotency(),
+      body: JSON.stringify({ amount: W_USD, destination: DEST }),
+    });
     const violations: string[] = [];
-    if (sends() > 1) violations.push(`sent ${sends()} times for one withdrawal`);
-    let settledBeforePrune = false;
-    const stuck: StuckModel = {
-      pruned: () => cluster.firstAvailableSlot > 0 && retention === "pruned_after_landing",
-      settledBeforePrune: () => settledBeforePrune,
-    };
     for (const [i, phase] of PHASES.entries()) {
-      if (retention === "pruned_after_landing" && i === 3) {
-        settledBeforePrune = rowsOf(relay, mid).every((w) => !OPEN.has(w.status));
-      }
-      phase.move(cluster, retention);
-      if (timing === "prompt" || i >= 3) await truthfulOperator(relay, mid, cluster);
-      violations.push(
-        ...(await oracle(relay, mid, cluster, phase.name, i === PHASES.length - 1, stuck)),
-      );
+      phase.move(cluster, "full");
+      await truthfulOperator(relay, mid, cluster);
+      violations.push(...(await oracle(relay, mid, cluster, phase.name, i === PHASES.length - 1)));
     }
     expect(violations).toEqual([]);
   });
