@@ -189,6 +189,40 @@ export interface SignedTransactionRef {
   signature: string;
   /** The block height after which this transaction can never land. */
   lastValidBlockHeight: number;
+  /**
+   * A slot the signer read BEFORE fetching the blockhash this transaction is
+   * signed over (#949 round 2). The transaction can only land after it (less
+   * `LANDING_SLOT_MARGIN`), so a node whose retained history starts at or
+   * before that slot has seen every slot the transaction could be in.
+   * Absent = unknown: absence on chain can then never be proven complete by
+   * a late reader (see `historyCoversLanding`).
+   */
+  recentSlot?: number;
+}
+
+/**
+ * Slots subtracted from `recentSlot` for node skew: the slot was read from
+ * one node, the transaction lands in a block another node produced.
+ */
+export const LANDING_SLOT_MARGIN = 512;
+
+/**
+ * Whether a node whose retained history starts at `firstAvailableSlot` has
+ * kept every slot `tx` could have landed in (#949 round 2). Absence of a
+ * signature is evidence of absence only inside that window: many RPC nodes
+ * prune history after days, and a landed transaction then reads as absent.
+ * False when `tx.recentSlot` is unknown — never assumed.
+ */
+export function historyCoversLanding(
+  tx: SignedTransactionRef,
+  firstAvailableSlot: number,
+): boolean {
+  return (
+    typeof tx.recentSlot === "number" &&
+    Number.isSafeInteger(tx.recentSlot) &&
+    Number.isSafeInteger(firstAvailableSlot) &&
+    firstAvailableSlot <= tx.recentSlot - LANDING_SLOT_MARGIN
+  );
 }
 
 /**
@@ -225,7 +259,13 @@ export type SignatureOutcome =
    * node has seen may well land (#885 round 5).
    */
   | { status: "pending"; seen?: true }
-  | { status: "rpc_error"; reason: string };
+  /**
+   * `historyPruned: true` — the transaction is past its last valid height and
+   * the node has no record of it, but its retained history does not reach
+   * back to where it could have landed: it may have landed and been pruned.
+   * Undecided, never `expired` (#949 round 2).
+   */
+  | { status: "rpc_error"; reason: string; historyPruned?: true };
 
 export interface SolanaRpcAdapter {
   /**
@@ -326,6 +366,14 @@ export interface SolanaRpcAdapter {
    * on any read failure — never a guessed height.
    */
   getBlockHeight?(): Promise<number>;
+
+  /**
+   * The first slot the node still holds history for (`getFirstAvailableBlock`)
+   * — the lower edge of what an "absent" status read can speak for (#949
+   * round 2). Rejects on failure. Optional: without it a late absence read
+   * can never be proven complete.
+   */
+  getFirstAvailableSlot?(): Promise<number>;
 
   /** Whether the RPC endpoint is reachable. Best-effort, no retries. */
   isReachable(): Promise<boolean>;

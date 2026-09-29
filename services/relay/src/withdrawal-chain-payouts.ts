@@ -40,6 +40,7 @@
  */
 
 import type { DatabaseDriver } from "@motebit/persistence";
+import { historyCoversLanding } from "@motebit/wallet-solana";
 import type { SignatureOutcome, SignedTransactionRef } from "@motebit/wallet-solana";
 
 /** Idempotent. Called from `createWithdrawalTables`. */
@@ -56,9 +57,18 @@ export function createWithdrawalChainPayoutTables(db: DatabaseDriver): void {
       last_valid_block_height INTEGER NOT NULL,
       recorded_at INTEGER NOT NULL,
       seen_in_block INTEGER NOT NULL DEFAULT 0,
+      recent_slot INTEGER,
       PRIMARY KEY (withdrawal_id, signature)
     );
   `);
+  // #949 round 2: the slot read before the blockhash (the landing window's
+  // lower edge) — added to tables created by the first build of this record.
+  const cols = db.prepare("PRAGMA table_info(relay_withdrawal_payout_attempts)").all() as Array<{
+    name: string;
+  }>;
+  if (!cols.some((c) => c.name === "recent_slot")) {
+    db.exec("ALTER TABLE relay_withdrawal_payout_attempts ADD COLUMN recent_slot INTEGER");
+  }
 }
 
 /** Record that `withdrawalId`'s payout is chain-recorded. Run inside the claim's transaction. */
@@ -96,22 +106,29 @@ export function recordPayoutAttempt(
 ): void {
   db.prepare(
     `INSERT INTO relay_withdrawal_payout_attempts
-       (withdrawal_id, signature, last_valid_block_height, recorded_at)
-     VALUES (?, ?, ?, ?)
+       (withdrawal_id, signature, last_valid_block_height, recorded_at, recent_slot)
+     VALUES (?, ?, ?, ?, ?)
      ON CONFLICT (withdrawal_id, signature) DO NOTHING`,
-  ).run(withdrawalId, tx.signature, tx.lastValidBlockHeight, recordedAt);
+  ).run(
+    withdrawalId,
+    tx.signature,
+    tx.lastValidBlockHeight,
+    recordedAt,
+    typeof tx.recentSlot === "number" ? tx.recentSlot : null,
+  );
 }
 
 export interface PayoutAttempt {
   signature: string;
   last_valid_block_height: number;
   seen_in_block: number;
+  recent_slot: number | null;
 }
 
 export function getPayoutAttempts(db: DatabaseDriver, withdrawalId: string): PayoutAttempt[] {
   return db
     .prepare(
-      `SELECT signature, last_valid_block_height, seen_in_block
+      `SELECT signature, last_valid_block_height, seen_in_block, recent_slot
          FROM relay_withdrawal_payout_attempts
         WHERE withdrawal_id = ?
         ORDER BY recorded_at ASC, signature ASC`,
@@ -125,9 +142,11 @@ function markAttemptSeen(db: DatabaseDriver, withdrawalId: string, signature: st
   ).run(withdrawalId, signature);
 }
 
-/** The read the verdict needs — `OperatorSolanaTransfer` satisfies it. */
+/** The reads the verdict needs — `OperatorSolanaTransfer` satisfies it. */
 export interface SignatureOutcomeReader {
   getSignatureOutcome(tx: SignedTransactionRef): Promise<SignatureOutcome>;
+  /** The node's first available slot — the lower edge of what "absent" can speak for. */
+  getFirstAvailableSlot(): Promise<number>;
 }
 
 export type ChainVerdict =
@@ -135,8 +154,16 @@ export type ChainVerdict =
   | { kind: "not_paid"; attempts: number }
   | {
       kind: "undecided";
-      /** `pending`: an attempt can still land; `rpc_error`: an attempt could not be read. */
-      reason: "pending" | "rpc_error";
+      /**
+       * `pending`: an attempt can still land; `rpc_error`: an attempt could
+       * not be read; `history_pruned`: an attempt is past its last valid
+       * height and the node has no record of it, but the node does not
+       * provably hold the slots it could have landed in — it may have LANDED
+       * (#949 round 2). Precedence: pending > rpc_error > history_pruned, so
+       * `history_pruned` means no undecided attempt can still land or failed
+       * to read for any other reason.
+       */
+      reason: "pending" | "rpc_error" | "history_pruned";
       signature: string;
       lastValidBlockHeight: number;
       detail?: string;
@@ -153,9 +180,26 @@ export async function readChainVerdict(
 ): Promise<ChainVerdict> {
   const attempts = getPayoutAttempts(db, withdrawalId);
   const landed: Array<{ signature: string; slot: number }> = [];
-  let undecided: Extract<ChainVerdict, { kind: "undecided" }> | null = null;
+  const undecided: Array<Extract<ChainVerdict, { kind: "undecided" }>> = [];
+  // Read once, lazily: the node's retained-history edge. A failed read means
+  // no absence can be proven complete.
+  let firstAvailable: number | null | undefined;
+  const retainedFrom = async (): Promise<number | null> => {
+    if (firstAvailable === undefined) {
+      try {
+        firstAvailable = await reader.getFirstAvailableSlot();
+      } catch {
+        firstAvailable = null;
+      }
+    }
+    return firstAvailable;
+  };
   for (const a of attempts) {
-    const tx = { signature: a.signature, lastValidBlockHeight: a.last_valid_block_height };
+    const tx: SignedTransactionRef = {
+      signature: a.signature,
+      lastValidBlockHeight: a.last_valid_block_height,
+      ...(a.recent_slot !== null ? { recentSlot: a.recent_slot } : {}),
+    };
     let outcome: SignatureOutcome;
     try {
       outcome = await reader.getSignatureOutcome(tx);
@@ -171,6 +215,30 @@ export async function readChainVerdict(
     if (outcome.status === "expired" && a.seen_in_block === 1) {
       outcome = { status: "pending", seen: true };
     }
+    // Absence of evidence is evidence of absence only inside the window the
+    // node provably retains (#949 round 2). An `expired` is accepted only when
+    // the node's first available slot is at or before where this transaction
+    // could first land; otherwise (history pruned, the edge unreadable, or the
+    // landing window never recorded) a landed payout would read exactly like
+    // this, so the verdict is UNKNOWN — never "not landed".
+    if (outcome.status === "expired") {
+      const first = await retainedFrom();
+      if (first === null || !historyCoversLanding(tx, first)) {
+        outcome = {
+          status: "rpc_error",
+          reason:
+            first === null
+              ? "the node's retained history could not be read"
+              : `the node's history starts at slot ${first}, after where ${a.signature} could have landed`,
+          historyPruned: true,
+        };
+      }
+    }
+    const base = {
+      kind: "undecided" as const,
+      signature: a.signature,
+      lastValidBlockHeight: a.last_valid_block_height,
+    };
     switch (outcome.status) {
       case "landed":
         landed.push({ signature: a.signature, slot: outcome.slot });
@@ -179,21 +247,14 @@ export async function readChainVerdict(
       case "expired":
         break;
       case "pending":
-        undecided ??= {
-          kind: "undecided",
-          reason: "pending",
-          signature: a.signature,
-          lastValidBlockHeight: a.last_valid_block_height,
-        };
+        undecided.push({ ...base, reason: "pending" });
         break;
       case "rpc_error":
-        undecided ??= {
-          kind: "undecided",
-          reason: "rpc_error",
-          signature: a.signature,
-          lastValidBlockHeight: a.last_valid_block_height,
+        undecided.push({
+          ...base,
+          reason: outcome.historyPruned === true ? "history_pruned" : "rpc_error",
           detail: outcome.reason,
-        };
+        });
         break;
     }
   }
@@ -205,7 +266,9 @@ export async function readChainVerdict(
       landed: landed.map((l) => l.signature),
     };
   }
-  if (undecided) return undecided;
+  const rank = { pending: 0, rpc_error: 1, history_pruned: 2 } as const;
+  const worst = undecided.sort((x, y) => rank[x.reason] - rank[y.reason])[0];
+  if (worst) return worst;
   return { kind: "not_paid", attempts: attempts.length };
 }
 

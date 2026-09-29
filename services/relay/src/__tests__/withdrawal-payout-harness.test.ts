@@ -92,15 +92,34 @@ interface ChainTx {
 class FakeCluster {
   height = 10_000;
   halted = false;
+  /**
+   * The node's retained-history edge (#949 round 2). Slots are 2 × height.
+   * A transaction that landed before this slot reads as ABSENT — exactly what
+   * a pruning RPC node answers — and this naive node then calls it `expired`
+   * once the height is past its last valid height. Only the relay's own
+   * retention check can tell the two apart.
+   */
+  firstAvailableSlot = 0;
   readonly txs = new Map<string, ChainTx>();
   private n = 0;
 
-  sign(): SignedTransactionRef {
+  slot(): number {
+    return this.height * 2;
+  }
+
+  /** `extraValidity`: signed over a blockhash from a node that many blocks ahead. */
+  sign(extraValidity = 0): SignedTransactionRef {
     this.n++;
     return {
       signature: `sig-${this.n}-${"x".repeat(40)}`,
-      lastValidBlockHeight: this.height + 150,
+      lastValidBlockHeight: this.height + 150 + extraValidity,
+      recentSlot: this.slot(),
     };
+  }
+
+  /** Prune everything before now (a node that keeps only recent history). */
+  pruneAll(): void {
+    this.firstAvailableSlot = this.slot() + 1;
   }
 
   broadcast(ref: SignedTransactionRef, fate: Fate, delayBlocks: number): ChainTx {
@@ -135,7 +154,9 @@ class FakeCluster {
   }
 
   outcome(ref: SignedTransactionRef): SignatureOutcome {
-    const tx = this.txs.get(ref.signature);
+    const found = this.txs.get(ref.signature);
+    // Pruned history: a landed or failed transaction below the edge is absent.
+    const tx = found !== undefined && found.slot >= this.firstAvailableSlot ? found : undefined;
     if (tx?.state === "landed") return { status: "landed", slot: tx.slot };
     if (tx?.state === "failed") return { status: "failed" };
     return this.height > ref.lastValidBlockHeight + 10
@@ -181,6 +202,17 @@ const SEND_SCRIPTS: SendScript[] = [
 ];
 
 type SendResult = Awaited<ReturnType<SolanaRpcAdapter["sendUsdc"]>>;
+
+/**
+ * How much history the RPC node keeps (#949 round 2):
+ *   - `full`: everything;
+ *   - `pruned_before_send`: only history from shortly before the send — still
+ *     every slot the payout could land in;
+ *   - `pruned_after_landing`: once the payout is decided, the node prunes it
+ *     (days later, in production) — a landed payout then reads as absent.
+ */
+type Retention = "full" | "pruned_before_send" | "pruned_after_landing";
+const RETENTIONS: Retention[] = ["full", "pruned_before_send", "pruned_after_landing"];
 
 /**
  * An adapter that honours the #885 contract: `beforeBroadcast` runs for every
@@ -276,6 +308,7 @@ function makeAdapter(
     getTransaction: () => Promise.resolve({ status: "not_found" as const }),
     getSignatureOutcome: (ref: SignedTransactionRef) => Promise.resolve(cluster.outcome(ref)),
     getBlockHeight: () => Promise.resolve(cluster.height),
+    getFirstAvailableSlot: () => Promise.resolve(cluster.firstAvailableSlot),
     isReachable: () => Promise.resolve(script !== "unavailable"),
   } as SolanaRpcAdapter;
   return { adapter, sends: () => sends };
@@ -359,7 +392,7 @@ afterEach(async () => {
 // ── Path 0 ───────────────────────────────────────────────────────────────
 
 /** The schedule every Path 0 cell runs: the relay's clock and the chain move independently. */
-const PHASES: Array<{ name: string; move: (c: FakeCluster) => void }> = [
+const PHASES: Array<{ name: string; move: (c: FakeCluster, retention: Retention) => void }> = [
   { name: "P0 right after the send", move: () => {} },
   { name: "P1 wall-clock +3h, chain unchanged", move: () => jumpClock(3 * HOUR) },
   {
@@ -369,14 +402,39 @@ const PHASES: Array<{ name: string; move: (c: FakeCluster) => void }> = [
       c.advance(20);
     },
   },
-  { name: "P3 +400 blocks (every broadcast decided)", move: (c) => c.advance(400) },
+  {
+    name: "P3 +400 blocks (every broadcast decided; a pruning node drops it)",
+    move: (c, retention) => {
+      c.advance(400);
+      if (retention === "pruned_after_landing") c.pruneAll();
+    },
+  },
   { name: "P4 wall-clock +3h", move: () => jumpClock(3 * HOUR) },
 ];
 
 /** The operator looks at the chain and asks the relay to settle exactly what it sees. */
-async function truthfulOperator(r: SyncRelay, mid: string, cluster: FakeCluster): Promise<void> {
+/**
+ * `misled`: before acting, an operator whose explorer sits on a pruning node
+ * tries to refund a payout that landed. Only chain-recorded payouts can be
+ * defended against that — the relay reads the chain for their signatures; a
+ * legacy claim recorded none, so its reconcile rests on the attestation.
+ */
+async function truthfulOperator(
+  r: SyncRelay,
+  mid: string,
+  cluster: FakeCluster,
+  misled = true,
+): Promise<void> {
   const landed = cluster.landed();
   for (const w of rowsOf(r, mid)) {
+    if (misled && w.status === "processing" && landed.length > 0) {
+      // A misled operator (an explorer on a pruning node shows nothing) tries
+      // to refund first; the oracle's value-out-once check catches acceptance.
+      await admin(r, w.withdrawal_id, "reconcile", {
+        outcome: "not_paid",
+        attestation: "my explorer shows nothing for this payout",
+      });
+    }
     if (w.status === "processing") {
       await admin(
         r,
@@ -406,12 +464,26 @@ async function truthfulOperator(r: SyncRelay, mid: string, cluster: FakeCluster)
   }
 }
 
+/**
+ * The modelled stuck set (#949 round 2): a payout that was broadcast, never
+ * landed, and whose history the node has since pruned. The chain can no
+ * longer show it was NOT paid, so the relay must not refund it; it stays
+ * `processing` on the operator's queue until a node holding that history is
+ * used. Nothing else may be stuck once the chain has decided.
+ */
+interface StuckModel {
+  pruned: () => boolean;
+  /** Settled (completed or refunded) before the node pruned. */
+  settledBeforePrune: () => boolean;
+}
+
 async function oracle(
   r: SyncRelay,
   mid: string,
   cluster: FakeCluster,
   step: string,
   final: boolean,
+  stuck: StuckModel = { pruned: () => false, settledBeforePrune: () => false },
 ): Promise<string[]> {
   const out: string[] = [];
   const rows = rowsOf(r, mid);
@@ -440,7 +512,17 @@ async function oracle(
     }
   }
   if (final && cluster.decided()) {
+    const mustStick =
+      stuck.pruned() && landed.length === 0 && cluster.txs.size > 0 && !stuck.settledBeforePrune();
     for (const w of rows) {
+      if (mustStick) {
+        if (w.status !== "processing") {
+          out.push(
+            `${step}: history pruned and nothing provable, but the row is ${w.status} (refunded on missing evidence)`,
+          );
+        }
+        continue;
+      }
       if (OPEN.has(w.status)) out.push(`${step}: stuck ${w.status} after the chain decided`);
       else if (landed.length > 0 && w.status !== "completed")
         out.push(`${step}: a payout landed but the row is ${w.status}`);
@@ -451,15 +533,30 @@ async function oracle(
   return out;
 }
 
-describe("harness: Path 0 (Solana) — send script × schedule × truthful operator × replay", () => {
-  it.each(SEND_SCRIPTS)("%s", async (script) => {
+/**
+ * When the operator acts: `prompt` at every phase; `late` only once the
+ * chain has decided and (for a pruning node) the history is gone — the PR1
+ * sequence: the send threw, the payout landed, nobody reconciled for days.
+ */
+type OperatorTiming = "prompt" | "late";
+const OPERATOR_TIMINGS: OperatorTiming[] = ["prompt", "late"];
+
+const PATH0_CELLS = SEND_SCRIPTS.flatMap((script) =>
+  RETENTIONS.flatMap((retention) =>
+    OPERATOR_TIMINGS.map((timing) => ({ script, retention, timing })),
+  ),
+);
+
+describe("harness: Path 0 (Solana) — send script × node retention × schedule × truthful operator × replay", () => {
+  it.each(PATH0_CELLS)("$script × $retention × $timing", async ({ script, retention, timing }) => {
     const cluster = new FakeCluster();
+    if (retention === "pruned_before_send") cluster.firstAvailableSlot = cluster.slot() - 600;
     const { adapter, sends } = makeAdapter(cluster, script);
     relay = await createTestRelay({
       enableDeviceAuth: false,
       operatorSolanaTransfer: new OperatorSolanaTransfer(adapter),
     });
-    const mid = `zzh-p0-${script}`;
+    const mid = `zzh-p0-${script}-${retention}-${timing}`;
     await registerAndFund(relay, mid);
 
     const headers = jsonAuthWithIdempotency();
@@ -475,24 +572,59 @@ describe("harness: Path 0 (Solana) — send script × schedule × truthful opera
 
     const violations: string[] = [];
     if (sends() > 1) violations.push(`sent ${sends()} times for one withdrawal`);
+    let settledBeforePrune = false;
+    const stuck: StuckModel = {
+      pruned: () => cluster.firstAvailableSlot > 0 && retention === "pruned_after_landing",
+      settledBeforePrune: () => settledBeforePrune,
+    };
     for (const [i, phase] of PHASES.entries()) {
-      phase.move(cluster);
-      await truthfulOperator(relay, mid, cluster);
-      violations.push(...(await oracle(relay, mid, cluster, phase.name, i === PHASES.length - 1)));
+      if (retention === "pruned_after_landing" && i === 3) {
+        settledBeforePrune = rowsOf(relay, mid).every((w) => !OPEN.has(w.status));
+      }
+      phase.move(cluster, retention);
+      if (timing === "prompt" || i >= 3) await truthfulOperator(relay, mid, cluster);
+      violations.push(
+        ...(await oracle(relay, mid, cluster, phase.name, i === PHASES.length - 1, stuck)),
+      );
     }
     expect(violations).toEqual([]);
   });
 });
 
 describe("harness: legacy Path 0 claims (an earlier process recorded no signature)", () => {
-  const LEGACY: Array<{ name: string; fate: Fate; halt: boolean }> = [
-    { name: "legacy_lands", fate: "lands", halt: false },
-    { name: "legacy_never", fate: "never", halt: false },
-    { name: "legacy_halt_lands", fate: "lands", halt: true },
-    { name: "legacy_halt_never", fate: "never", halt: true },
+  /**
+   * `ahead`: the earlier process signed over a blockhash from a node 140
+   * blocks ahead of the one this process reads its first height from, so its
+   * last valid height is past anchor + 150 — the lag allowance in
+   * LEGACY_BROADCAST_HEIGHT_BOUND is what keeps the door shut until it can
+   * no longer land (X5/X6).
+   */
+  const LEGACY: Array<{ name: string; fate: Fate; halt: boolean; ahead: boolean }> = [
+    { name: "legacy_lands", fate: "lands", halt: false, ahead: false },
+    { name: "legacy_never", fate: "never", halt: false, ahead: false },
+    { name: "legacy_halt_lands", fate: "lands", halt: true, ahead: false },
+    { name: "legacy_halt_never", fate: "never", halt: true, ahead: false },
+    { name: "legacy_ahead_lands_late", fate: "lands", halt: false, ahead: true },
+    { name: "legacy_ahead_never", fate: "never", halt: false, ahead: true },
   ];
 
-  it.each(LEGACY)("$name", async ({ name, fate, halt }) => {
+  /** Legacy claims are bounded by height, so the schedule probes heights between the bounds. */
+  const LEGACY_PHASES: Array<{ name: string; move: (c: FakeCluster) => void }> = [
+    { name: "L0 right after the claim", move: () => {} },
+    { name: "L1 wall-clock +3h, chain unchanged", move: () => jumpClock(3 * HOUR) },
+    {
+      name: "L2 chain resumes, +200 blocks",
+      move: (c) => {
+        c.halted = false;
+        c.advance(200);
+      },
+    },
+    { name: "L3 +100 blocks", move: (c) => c.advance(100) },
+    { name: "L4 +400 blocks (every broadcast decided)", move: (c) => c.advance(400) },
+    { name: "L5 wall-clock +3h", move: () => jumpClock(3 * HOUR) },
+  ];
+
+  it.each(LEGACY)("$name", async ({ name, fate, halt, ahead }) => {
     const cluster = new FakeCluster();
     const { adapter } = makeAdapter(cluster, "confirmed");
     relay = await createTestRelay({
@@ -516,13 +648,16 @@ describe("harness: legacy Path 0 claims (an earlier process recorded no signatur
       )
       .run(DEST, Date.now() - 20 * 60 * 1000, id);
     if (halt) cluster.halted = true;
-    cluster.broadcast(cluster.sign(), fate, 5);
+    if (ahead) cluster.broadcast(cluster.sign(140), fate, 280);
+    else cluster.broadcast(cluster.sign(), fate, 5);
 
     const violations: string[] = [];
-    for (const [i, phase] of PHASES.entries()) {
+    for (const [i, phase] of LEGACY_PHASES.entries()) {
       phase.move(cluster);
-      await truthfulOperator(relay, mid, cluster);
-      violations.push(...(await oracle(relay, mid, cluster, phase.name, i === PHASES.length - 1)));
+      await truthfulOperator(relay, mid, cluster, false);
+      violations.push(
+        ...(await oracle(relay, mid, cluster, phase.name, i === LEGACY_PHASES.length - 1)),
+      );
     }
     expect(violations).toEqual([]);
   });
@@ -531,25 +666,55 @@ describe("harness: legacy Path 0 claims (an earlier process recorded no signatur
 // ── batch ────────────────────────────────────────────────────────────────
 
 type RailKind = "manual" | "sent_undeclared" | "sent_declared";
-type FireOutcome = "confirmed" | "unconfirmed" | "throws" | "crash_mid_fire";
+/** `serial`: one `withdraw()` per row; `batch`: one `withdrawBatch()` for the rail's rows. */
+type FireMode = "serial" | "batch";
+type FireOutcome = "confirmed" | "unconfirmed" | "throws" | "item_failed" | "crash_mid_fire";
 
 const RAIL_KINDS: RailKind[] = ["manual", "sent_undeclared", "sent_declared"];
-const FIRE_OUTCOMES: FireOutcome[] = ["confirmed", "unconfirmed", "throws", "crash_mid_fire"];
+const FIRE_MODES: FireMode[] = ["serial", "batch"];
+const FIRE_OUTCOMES: FireOutcome[] = [
+  "confirmed",
+  "unconfirmed",
+  "throws",
+  "item_failed",
+  "crash_mid_fire",
+];
+// `item_failed` exists only for a batch (a serial call throws or returns).
 const BATCH_CELLS = RAIL_KINDS.flatMap((rail) =>
-  FIRE_OUTCOMES.map((outcome) => ({ rail, outcome })),
+  FIRE_MODES.flatMap((mode) =>
+    FIRE_OUTCOMES.filter((o) => mode === "batch" || o !== "item_failed").map((outcome) => ({
+      rail,
+      mode,
+      outcome,
+    })),
+  ),
 );
 
-function batchRail(kind: RailKind, outcome: FireOutcome) {
+function batchRail(kind: RailKind, mode: FireMode, outcome: FireOutcome) {
+  const resultFor = () => ({
+    amount: W_USD,
+    currency: "USDC",
+    proof: {
+      reference: kind === "manual" ? "pending:placeholder" : "provider-ref-1",
+      railType: "protocol",
+      confirmedAt: outcome === "confirmed" ? Date.now() : 0,
+    },
+  });
   const withdraw = vi.fn(() => {
     if (outcome === "throws") return Promise.reject(new Error("provider 502 after accepting?"));
+    return Promise.resolve(resultFor());
+  });
+  const withdrawBatch = vi.fn((items: ReadonlyArray<{ idempotency_key: string }>) => {
+    if (outcome === "throws") return Promise.reject(new Error("provider 502 after accepting?"));
+    if (outcome === "item_failed") {
+      return Promise.resolve({
+        fired: [],
+        failed: items.map((item) => ({ item, reason: "provider rejected the item?" })),
+      });
+    }
     return Promise.resolve({
-      amount: W_USD,
-      currency: "USDC",
-      proof: {
-        reference: kind === "manual" ? "pending:placeholder" : "provider-ref-1",
-        railType: "protocol",
-        confirmedAt: outcome === "confirmed" ? Date.now() : 0,
-      },
+      fired: items.map((item) => ({ item, result: resultFor() })),
+      failed: [],
     });
   });
   return {
@@ -558,10 +723,12 @@ function batchRail(kind: RailKind, outcome: FireOutcome) {
     custody: "relay" as const,
     supportsDeposit: false as const,
     supportsWithdraw: true as const,
-    supportsBatch: false,
+    supportsBatch: mode === "batch",
     isAvailable: () => Promise.resolve(true),
     attachProof: () => Promise.resolve(),
     withdraw,
+    ...(mode === "batch" ? { withdrawBatch } : {}),
+    calls: () => withdraw.mock.calls.length + withdrawBatch.mock.calls.length,
     ...(kind === "manual" ? { payoutMode: "manual" } : {}),
     ...(kind === "sent_declared" ? { payoutMode: "sent", payoutValidityMs: HOUR } : {}),
   };
@@ -587,11 +754,11 @@ async function tick(db: DatabaseDriver, rail: GuestRail): Promise<void> {
   if (isWithdrawableRail(rail)) await batch.evaluateAndFireRail(db, rail, FIRE_NOW);
 }
 
-describe("harness: batch — rail kind × fire outcome × retried tick, then the settle door", () => {
-  it.each(BATCH_CELLS)("$rail × $outcome", async ({ rail: kind, outcome }) => {
+describe("harness: batch — rail kind × fire mode × fire outcome × retried tick, then the settle door", () => {
+  it.each(BATCH_CELLS)("$rail × $mode × $outcome", async ({ rail: kind, mode, outcome }) => {
     relay = await createTestRelay({ enableDeviceAuth: false });
     const db = relay.moteDb.db;
-    const mid = `zzh-b-${kind}-${outcome}`;
+    const mid = `zzh-b-${kind}-${mode}-${outcome}`;
     await registerAndFund(relay, mid);
     const pendingId = batch.enqueuePendingWithdrawal(db, {
       motebitId: mid,
@@ -601,7 +768,7 @@ describe("harness: batch — rail kind × fire outcome × retried tick, then the
       source: "user",
     });
     expect(pendingId).not.toBeNull();
-    const rail = batchRail(kind, outcome);
+    const rail = batchRail(kind, mode, outcome);
     if (outcome === "crash_mid_fire") {
       // An earlier process claimed the row and called the rail; it died before
       // recording anything.
@@ -613,7 +780,7 @@ describe("harness: batch — rail kind × fire outcome × retried tick, then the
     const violations: string[] = [];
     await tick(db, rail as unknown as GuestRail);
     await tick(db, rail as unknown as GuestRail);
-    if (rail.withdraw.mock.calls.length > 1) violations.push("the rail was called twice");
+    if (rail.calls() > 1) violations.push("the rail was called twice");
 
     const q = db
       .prepare("SELECT status, withdrawal_id FROM relay_pending_withdrawals WHERE pending_id = ?")

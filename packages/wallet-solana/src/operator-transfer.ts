@@ -144,6 +144,17 @@ export class OperatorSolanaTransfer {
   }
 
   /**
+   * The node's first available slot (#949 round 2): the lower edge of what an
+   * "absent" read can speak for. Rejects when it cannot be read.
+   */
+  getFirstAvailableSlot(): Promise<number> {
+    if (typeof this.adapter.getFirstAvailableSlot !== "function") {
+      return Promise.reject(new Error("adapter cannot read the node's first available slot"));
+    }
+    return this.adapter.getFirstAvailableSlot();
+  }
+
+  /**
    * The chain's current block height (#949). Rejects when it cannot be read
    * — a caller must never substitute a guess (or the wall clock) for it.
    */

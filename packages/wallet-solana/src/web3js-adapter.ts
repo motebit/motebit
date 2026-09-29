@@ -93,6 +93,7 @@ import type {
   SignedTransactionRef,
   SignatureOutcome,
 } from "./adapter.js";
+import { historyCoversLanding } from "./adapter.js";
 import {
   USDC_MINT_MAINNET,
   InsufficientUsdcBalanceError,
@@ -379,6 +380,16 @@ export class Web3JsRpcAdapter implements SolanaRpcAdapter {
     for (let attempt = 1; ; attempt++) {
       const tx = new Transaction();
       for (const ix of instructions) tx.add(ix);
+      // #949 round 2: a slot read BEFORE the blockhash — the transaction can
+      // only land after it, so a late reader can check that a node's retained
+      // history reaches back that far before trusting "absent". A failed read
+      // leaves it unknown (a late absence is then never read as expiry).
+      let recentSlot: number | undefined;
+      try {
+        recentSlot = await this.connection.getSlot(this.decisionCommitment);
+      } catch {
+        recentSlot = undefined;
+      }
       const latest = await this.connection.getLatestBlockhash(this.commitment);
       tx.recentBlockhash = latest.blockhash;
       tx.feePayer = this.keypair.publicKey;
@@ -388,6 +399,7 @@ export class Web3JsRpcAdapter implements SolanaRpcAdapter {
       const signed: SignedTransactionRef = {
         signature: base58Encode(new Uint8Array(rawSig)),
         lastValidBlockHeight: latest.lastValidBlockHeight,
+        ...(typeof recentSlot === "number" ? { recentSlot } : {}),
       };
 
       // #885: the signature is fixed now, before anything is sent. The payer
@@ -810,10 +822,32 @@ export class Web3JsRpcAdapter implements SolanaRpcAdapter {
         epoch.blockHeight != null &&
         epoch.blockHeight > tx.lastValidBlockHeight + EXPIRY_HEIGHT_MARGIN;
       const nodeCaughtUp = resp.context.slot >= epoch.absoluteSlot;
-      return pastLastValid && nodeCaughtUp ? { status: "expired" } : { status: "pending" };
+      if (!(pastLastValid && nodeCaughtUp)) return { status: "pending" };
+      // #949 round 2: absence is evidence of absence only inside the node's
+      // retained history. When the signer recorded where the transaction
+      // could first land, require the node to still hold that slot; a node
+      // that pruned it may be hiding a landing. (A ref with no `recentSlot`
+      // keeps the prior rule — the in-send re-sign asks within seconds, well
+      // inside any retention window; a LATE reader must hold the slot itself.)
+      if (typeof tx.recentSlot === "number") {
+        const first = await this.connection.getFirstAvailableBlock();
+        if (!historyCoversLanding(tx, first)) {
+          return {
+            status: "rpc_error",
+            reason: `history pruned: the node's first available slot ${first} is after where ${tx.signature} could have landed`,
+            historyPruned: true,
+          };
+        }
+      }
+      return { status: "expired" };
     } catch (err) {
       return { status: "rpc_error", reason: err instanceof Error ? err.message : String(err) };
     }
+  }
+
+  /** The node's first available slot (`getFirstAvailableBlock`, #949 round 2). Rejects on failure. */
+  async getFirstAvailableSlot(): Promise<number> {
+    return this.connection.getFirstAvailableBlock();
   }
 
   /** The chain's block height at the decision commitment (#949). Rejects on failure. */

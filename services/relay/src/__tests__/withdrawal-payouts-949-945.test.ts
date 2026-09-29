@@ -35,6 +35,7 @@ import {
   recordPayoutAttempt,
 } from "../withdrawal-chain-payouts.js";
 import { UNDECLARED_PAYOUT_HORIZON_MS } from "../payout-horizon.js";
+import { LANDING_SLOT_MARGIN } from "@motebit/wallet-solana";
 import { LoopSupervisor } from "../loop-supervisor.js";
 import { createTestRelay } from "./test-helpers.js";
 
@@ -50,7 +51,13 @@ async function db(): Promise<DatabaseDriver> {
   return relay.moteDb.db;
 }
 
-function reader(outcomes: Record<string, SignatureOutcome | Error>) {
+/** Recorded attempts carry the slot read before signing; the node holds history from `firstAvailable`. */
+const RECENT = 1_000_000;
+
+function reader(
+  outcomes: Record<string, SignatureOutcome | Error>,
+  firstAvailable: number | Error = 0,
+) {
   const calls: string[] = [];
   return {
     calls,
@@ -59,6 +66,11 @@ function reader(outcomes: Record<string, SignatureOutcome | Error>) {
       const o = outcomes[tx.signature];
       if (o instanceof Error) return Promise.reject(o);
       return Promise.resolve(o ?? { status: "pending" });
+    },
+    getFirstAvailableSlot(): Promise<number> {
+      return firstAvailable instanceof Error
+        ? Promise.reject(firstAvailable)
+        : Promise.resolve(firstAvailable);
     },
   };
 }
@@ -73,8 +85,18 @@ describe("readChainVerdict (#949)", () => {
 
   it("a landed attempt anywhere ⇒ paid by that signature, even after an expired one", async () => {
     const d = await db();
-    recordPayoutAttempt(d, "w1", { signature: "a", lastValidBlockHeight: 10 }, 1);
-    recordPayoutAttempt(d, "w1", { signature: "b", lastValidBlockHeight: 20 }, 2);
+    recordPayoutAttempt(
+      d,
+      "w1",
+      { signature: "a", lastValidBlockHeight: 10, recentSlot: RECENT },
+      1,
+    );
+    recordPayoutAttempt(
+      d,
+      "w1",
+      { signature: "b", lastValidBlockHeight: 20, recentSlot: RECENT },
+      2,
+    );
     const v = await readChainVerdict(
       d,
       "w1",
@@ -85,8 +107,18 @@ describe("readChainVerdict (#949)", () => {
 
   it("two landed attempts are both reported (the relay paid twice — logged by the door)", async () => {
     const d = await db();
-    recordPayoutAttempt(d, "w2", { signature: "a", lastValidBlockHeight: 10 }, 1);
-    recordPayoutAttempt(d, "w2", { signature: "b", lastValidBlockHeight: 20 }, 2);
+    recordPayoutAttempt(
+      d,
+      "w2",
+      { signature: "a", lastValidBlockHeight: 10, recentSlot: RECENT },
+      1,
+    );
+    recordPayoutAttempt(
+      d,
+      "w2",
+      { signature: "b", lastValidBlockHeight: 20, recentSlot: RECENT },
+      2,
+    );
     const v = await readChainVerdict(
       d,
       "w2",
@@ -97,8 +129,18 @@ describe("readChainVerdict (#949)", () => {
 
   it("failed and expired only ⇒ not paid; one pending ⇒ undecided; a throwing read ⇒ rpc_error", async () => {
     const d = await db();
-    recordPayoutAttempt(d, "w3", { signature: "a", lastValidBlockHeight: 10 }, 1);
-    recordPayoutAttempt(d, "w3", { signature: "b", lastValidBlockHeight: 20 }, 2);
+    recordPayoutAttempt(
+      d,
+      "w3",
+      { signature: "a", lastValidBlockHeight: 10, recentSlot: RECENT },
+      1,
+    );
+    recordPayoutAttempt(
+      d,
+      "w3",
+      { signature: "b", lastValidBlockHeight: 20, recentSlot: RECENT },
+      2,
+    );
     expect(
       await readChainVerdict(
         d,
@@ -125,7 +167,12 @@ describe("readChainVerdict (#949)", () => {
 
   it("seen-in-a-block is sticky and persisted: a later expired read for it stays undecided", async () => {
     const d = await db();
-    recordPayoutAttempt(d, "w4", { signature: "a", lastValidBlockHeight: 10 }, 1);
+    recordPayoutAttempt(
+      d,
+      "w4",
+      { signature: "a", lastValidBlockHeight: 10, recentSlot: RECENT },
+      1,
+    );
     expect(
       await readChainVerdict(d, "w4", reader({ a: { status: "pending", seen: true } })),
     ).toMatchObject({ kind: "undecided", reason: "pending" });
@@ -140,10 +187,109 @@ describe("readChainVerdict (#949)", () => {
     ).toMatchObject({ kind: "paid", signature: "a" });
   });
 
+  // #949 round 2: absence of evidence is evidence of absence only inside the
+  // node's retained history.
+  it("PR1: an expired read on a node whose history no longer reaches the landing window is history_pruned, never not_paid", async () => {
+    const d = await db();
+    recordPayoutAttempt(
+      d,
+      "wp",
+      { signature: "a", lastValidBlockHeight: 10, recentSlot: RECENT },
+      1,
+    );
+    // History starts after the transaction could have landed.
+    expect(
+      await readChainVerdict(d, "wp", reader({ a: { status: "expired" } }, RECENT + 5)),
+    ).toMatchObject({ kind: "undecided", reason: "history_pruned", signature: "a" });
+    // Just inside the margin is still pruned; far enough back decides it.
+    expect(
+      await readChainVerdict(
+        d,
+        "wp",
+        reader({ a: { status: "expired" } }, RECENT - LANDING_SLOT_MARGIN + 1),
+      ),
+    ).toMatchObject({ kind: "undecided", reason: "history_pruned" });
+    expect(
+      await readChainVerdict(
+        d,
+        "wp",
+        reader({ a: { status: "expired" } }, RECENT - LANDING_SLOT_MARGIN),
+      ),
+    ).toEqual({ kind: "not_paid", attempts: 1 });
+    // The retention edge unreadable ⇒ never not_paid.
+    expect(
+      await readChainVerdict(d, "wp", reader({ a: { status: "expired" } }, new Error("down"))),
+    ).toMatchObject({ kind: "undecided", reason: "history_pruned" });
+    // An adapter that itself reports the pruned history is read the same way.
+    expect(
+      await readChainVerdict(
+        d,
+        "wp",
+        reader({ a: { status: "rpc_error", reason: "pruned", historyPruned: true } }),
+      ),
+    ).toMatchObject({ kind: "undecided", reason: "history_pruned" });
+  });
+
+  it("an attempt recorded without its landing window can never be read as expired", async () => {
+    const d = await db();
+    recordPayoutAttempt(d, "wn", { signature: "a", lastValidBlockHeight: 10 }, 1);
+    expect(await readChainVerdict(d, "wn", reader({ a: { status: "expired" } }, 0))).toMatchObject({
+      kind: "undecided",
+      reason: "history_pruned",
+    });
+  });
+
+  it("precedence: pending beats rpc_error beats history_pruned", async () => {
+    const d = await db();
+    recordPayoutAttempt(
+      d,
+      "wq",
+      { signature: "a", lastValidBlockHeight: 10, recentSlot: RECENT },
+      1,
+    );
+    recordPayoutAttempt(
+      d,
+      "wq",
+      { signature: "b", lastValidBlockHeight: 20, recentSlot: RECENT },
+      2,
+    );
+    recordPayoutAttempt(
+      d,
+      "wq",
+      { signature: "c", lastValidBlockHeight: 30, recentSlot: RECENT },
+      3,
+    );
+    const pruned = RECENT + 1;
+    expect(
+      await readChainVerdict(
+        d,
+        "wq",
+        reader({ a: { status: "expired" }, b: new Error("x"), c: { status: "pending" } }, pruned),
+      ),
+    ).toMatchObject({ reason: "pending", signature: "c" });
+    expect(
+      await readChainVerdict(
+        d,
+        "wq",
+        reader({ a: { status: "expired" }, b: new Error("x"), c: { status: "failed" } }, pruned),
+      ),
+    ).toMatchObject({ reason: "rpc_error", signature: "b" });
+  });
+
   it("re-recording the same signature is a no-op (a re-sign over the same blockhash is the same transaction)", async () => {
     const d = await db();
-    recordPayoutAttempt(d, "w5", { signature: "a", lastValidBlockHeight: 10 }, 1);
-    recordPayoutAttempt(d, "w5", { signature: "a", lastValidBlockHeight: 10 }, 2);
+    recordPayoutAttempt(
+      d,
+      "w5",
+      { signature: "a", lastValidBlockHeight: 10, recentSlot: RECENT },
+      1,
+    );
+    recordPayoutAttempt(
+      d,
+      "w5",
+      { signature: "a", lastValidBlockHeight: 10, recentSlot: RECENT },
+      2,
+    );
     expect(getPayoutAttempts(d, "w5")).toHaveLength(1);
   });
 });
@@ -217,6 +363,26 @@ describe("batch settle doors (#945)", () => {
     );
     expect(queueRow(d, id).status).toBe("cancelled");
     expect(withdrawalCount(d, "zz945-lost")).toBe(0);
+  });
+
+  it("a failed fire that loses its firing CAS writes no withdrawal row either (the markFailed CAS)", async () => {
+    const d = await db();
+    const id = enqueue(d, "zz945-lost-fail", "zz945-rail-f");
+    // While the rail call is in flight, another actor moves the queue row;
+    // then the rail throws.
+    const rail = sentRail("zz945-rail-f", () => {
+      d.prepare(
+        "UPDATE relay_pending_withdrawals SET status = 'cancelled' WHERE pending_id = ?",
+      ).run(id);
+      return Promise.reject(new Error("provider 502"));
+    });
+    await evaluateAndFireRail(
+      d,
+      rail as unknown as Parameters<typeof evaluateAndFireRail>[1],
+      FIRE_NOW,
+    );
+    expect(queueRow(d, id).status).toBe("cancelled");
+    expect(withdrawalCount(d, "zz945-lost-fail")).toBe(0);
   });
 
   it("a row this process is still firing is never recovered as stale, however long the call takes", async () => {

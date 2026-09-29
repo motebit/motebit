@@ -14,7 +14,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { Keypair, PublicKey, Transaction } from "@solana/web3.js";
+import { Connection, Keypair, PublicKey, Transaction } from "@solana/web3.js";
 import { base58Encode } from "@motebit/protocol";
 
 // Mock just `getAccount` from @solana/spl-token. Everything else
@@ -38,6 +38,7 @@ import {
   deriveSolanaAddress,
   isDerivedSettlementBinding,
 } from "../web3js-adapter.js";
+import { LANDING_SLOT_MARGIN, historyCoversLanding } from "../adapter.js";
 import {
   USDC_MINT_MAINNET,
   InsufficientUsdcBalanceError,
@@ -60,6 +61,9 @@ function validBlockhash(): string {
 
 beforeEach(() => {
   getAccountMock.mockReset();
+  // No network in tests: the pre-blockhash slot read (#949 round 2) fails
+  // unless a test stubs it on its own connection.
+  vi.spyOn(Connection.prototype, "getSlot").mockRejectedValue(new Error("no network in tests"));
 });
 
 describe("Web3JsRpcAdapter", () => {
@@ -1177,6 +1181,8 @@ describe("Web3JsRpcAdapter — beforeBroadcast sees the signed tx before it is s
     getAccountMock
       .mockResolvedValueOnce({ amount: 10_000_000n })
       .mockResolvedValueOnce({ amount: 0n });
+    // #949 round 2: the slot read before the blockhash rides on the ref.
+    vi.spyOn(conn, "getSlot").mockResolvedValue(77_777);
     vi.spyOn(conn, "getLatestBlockhash").mockResolvedValue({
       blockhash: validBlockhash(),
       lastValidBlockHeight: 321,
@@ -1203,7 +1209,9 @@ describe("Web3JsRpcAdapter — beforeBroadcast sees the signed tx before it is s
       { toAddress: validBase58Address(), microAmount: 1n },
       { beforeBroadcast: hook },
     );
-    expect(seen).toEqual([{ signature: r.signature, lastValidBlockHeight: 321 }]);
+    expect(seen).toEqual([
+      { signature: r.signature, lastValidBlockHeight: 321, recentSlot: 77_777 },
+    ]);
     expect(hook.mock.invocationCallOrder[0]!).toBeLessThan(send.mock.invocationCallOrder[0]!);
   });
 
@@ -1740,5 +1748,50 @@ describe("Web3JsRpcAdapter.getBlockHeight (#949)", () => {
     expect(read).toHaveBeenCalledWith("confirmed");
     read.mockRejectedValue(new Error("rpc down"));
     await expect(adapter.getBlockHeight()).rejects.toThrow("rpc down");
+  });
+});
+
+describe("getSignatureOutcome: absence is evidence only inside retained history (#949 round 2)", () => {
+  function adapterWith() {
+    const adapter = new Web3JsRpcAdapter({
+      rpcUrl: "https://api.devnet.solana.com",
+      identitySeed: ZERO_SEED,
+    });
+    return { adapter, conn: adapter.getConnection() };
+  }
+  const past = { height: 500, slot: 90_000, statusSlot: 90_000, status: null };
+
+  it("a ref with recentSlot is expired only while the node still holds that slot", async () => {
+    const { adapter, conn } = adapterWith();
+    chainSays(conn, past);
+    const tx = { signature: "s", lastValidBlockHeight: 100, recentSlot: 50_000 };
+    const first = vi.spyOn(conn, "getFirstAvailableBlock").mockResolvedValue(1_000);
+    expect(await adapter.getSignatureOutcome(tx)).toEqual({ status: "expired" });
+    // Pruned past where the transaction could have landed: undecided.
+    first.mockResolvedValue(49_900);
+    expect(await adapter.getSignatureOutcome(tx)).toMatchObject({
+      status: "rpc_error",
+      historyPruned: true,
+    });
+    // A failed retention read is an rpc_error, never expiry.
+    first.mockRejectedValue(new Error("down"));
+    expect((await adapter.getSignatureOutcome(tx)).status).toBe("rpc_error");
+  });
+
+  it("historyCoversLanding is false without a recentSlot, and honours the margin", () => {
+    const ref = { signature: "s", lastValidBlockHeight: 1 };
+    expect(historyCoversLanding(ref, 0)).toBe(false);
+    expect(historyCoversLanding({ ...ref, recentSlot: 1_000 }, 1_000 - LANDING_SLOT_MARGIN)).toBe(
+      true,
+    );
+    expect(
+      historyCoversLanding({ ...ref, recentSlot: 1_000 }, 1_000 - LANDING_SLOT_MARGIN + 1),
+    ).toBe(false);
+  });
+
+  it("getFirstAvailableSlot reads getFirstAvailableBlock", async () => {
+    const { adapter, conn } = adapterWith();
+    vi.spyOn(conn, "getFirstAvailableBlock").mockResolvedValue(123);
+    expect(await adapter.getFirstAvailableSlot()).toBe(123);
   });
 });

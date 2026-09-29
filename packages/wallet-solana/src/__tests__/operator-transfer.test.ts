@@ -137,6 +137,16 @@ describe("OperatorSolanaTransfer", () => {
     expect(none.status).toBe("rpc_error");
   });
 
+  it("getFirstAvailableSlot delegates, and rejects when the adapter cannot read it", async () => {
+    const op = new OperatorSolanaTransfer(
+      makeAdapter({ getFirstAvailableSlot: vi.fn().mockResolvedValue(9) }),
+    );
+    expect(await op.getFirstAvailableSlot()).toBe(9);
+    await expect(new OperatorSolanaTransfer(makeAdapter()).getFirstAvailableSlot()).rejects.toThrow(
+      /first available slot/,
+    );
+  });
+
   it("getBlockHeight delegates, and rejects when the adapter cannot read it", async () => {
     const op = new OperatorSolanaTransfer(
       makeAdapter({ getBlockHeight: vi.fn().mockResolvedValue(777) }),

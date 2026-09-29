@@ -41,6 +41,8 @@ export {
   type BroadcastHooks,
   type SignedTransactionRef,
   type SignatureOutcome,
+  LANDING_SLOT_MARGIN,
+  historyCoversLanding,
 } from "./adapter.js";
 
 export {

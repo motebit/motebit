@@ -95,9 +95,10 @@ async function until(cond: () => boolean): Promise<void> {
  * reconcile door for a Path 0 payout asks the chain, never the clock. A
  * test sets `chain.outcome` to decide it.
  */
-const chain: { outcome: SignatureOutcome; height: number } = {
+const chain: { outcome: SignatureOutcome; height: number; firstAvailableSlot: number } = {
   outcome: { status: "pending" },
   height: 50_000,
+  firstAvailableSlot: 0,
 };
 
 /**
@@ -119,6 +120,7 @@ function makeOperator(
       await hooks?.beforeBroadcast?.({
         signature: TX_SIG,
         lastValidBlockHeight: chain.height + 150,
+        recentSlot: 1_000_000,
       });
       return sendUsdc(args, hooks);
     },
@@ -126,6 +128,8 @@ function makeOperator(
     getTransaction: vi.fn().mockResolvedValue({ status: "not_found" }),
     getSignatureOutcome: () => Promise.resolve(chain.outcome),
     getBlockHeight: () => Promise.resolve(chain.height),
+    // The node holds all history unless a test prunes it (#949 round 2).
+    getFirstAvailableSlot: () => Promise.resolve(chain.firstAvailableSlot),
     isReachable,
   };
   return { operator: new OperatorSolanaTransfer(adapter), adapter };
@@ -270,6 +274,7 @@ afterEach(async () => {
   clockOffset = 0;
   chain.outcome = { status: "pending" };
   chain.height = 50_000;
+  chain.firstAvailableSlot = 0;
   await relay?.close();
   relay = undefined;
 });
@@ -990,6 +995,41 @@ describe("#949: a Solana payout's reconcile is decided by the chain, never the c
     ).toBe(200);
     expect(row(relay, b).payout_reference).toBe(TX_SIG);
     expectExactlyOneOutcome(relay, midB, b);
+  });
+
+  it("PR1: the send threw, the payout landed, the node pruned it — no refund; the operator's paid under the recorded signature is accepted (#949 round 2)", async () => {
+    const { operator } = makeOperator(vi.fn().mockRejectedValue(new Error("socket hang up")));
+    relay = await createTestRelay({ enableDeviceAuth: false, operatorSolanaTransfer: operator });
+    const mid = "zz949-pr1";
+    await registerAndFund(relay, mid);
+    const id = ((await (await startWithdraw(relay, mid)).json()) as WithdrawBody).withdrawal
+      .withdrawal_id;
+    // Days later: the node no longer holds the landing window and answers
+    // "absent, past its last valid height" for the landed transaction.
+    chain.outcome = { status: "expired" };
+    chain.firstAvailableSlot = 2_000_000;
+    const refund = await reconcileBody(relay, id, {
+      outcome: "not_paid",
+      attestation: "explorer shows nothing",
+    });
+    expect(refund.status).toBe(409);
+    expect(refund.json.reason).toBe("chain_history_pruned");
+    expect(balance(relay, mid)).toBe(FUNDED - WITHDRAW_MICRO);
+    // A paid naming a signature this payout never signed is still refused.
+    const stranger = await reconcileBody(relay, id, {
+      outcome: "paid",
+      payout_reference: "notOurSignature",
+      attestation: "x",
+    });
+    expect(stranger.status).toBe(409);
+    const paid = await reconcileBody(relay, id, {
+      outcome: "paid",
+      payout_reference: TX_SIG,
+      attestation: "an archive node shows it landed",
+    });
+    expect(paid.status).toBe(200);
+    expect(row(relay, id).payout_reference).toBe(TX_SIG);
+    expectExactlyOneOutcome(relay, mid, id);
   });
 
   it("the in-flight mark still wins over a decided chain", async () => {
