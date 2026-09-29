@@ -20,6 +20,7 @@ import { parseTokenPayloadUnsafe } from "../auth.js";
 import type { RelayIdentity } from "../federation.js";
 import {
   forwardTaskViaMcp,
+  mintRelayMcpBearer,
   mintTaskDispatchToken,
   taskPromptDigest,
   TASK_DISPATCH_TOKEN_TTL_MS,
@@ -132,6 +133,7 @@ describe("forwardTaskViaMcp carries the dispatch token", () => {
     const w = capturingWorker(FORWARD_PORT);
     server = w.server;
     const logger = { info: () => {}, warn: () => {} };
+    let minted = 0;
     await forwardTaskViaMcp(
       `http://127.0.0.1:${FORWARD_PORT}`,
       "task-77",
@@ -143,6 +145,7 @@ describe("forwardTaskViaMcp carries the dispatch token", () => {
       undefined,
       "disp.token",
       { allowPrivateNetwork: true },
+      async () => `relay.bearer.${++minted}`,
     );
     const call = w.bodies.find((b) => b.method === "tools/call");
     expect(call?.params?.name).toBe("motebit_task");
@@ -151,13 +154,63 @@ describe("forwardTaskViaMcp carries the dispatch token", () => {
       relay_task_id: "task-77",
       dispatch_token: "disp.token",
     });
-    // The relay authenticates AS ITSELF: the dispatch token is the bearer,
-    // and the master token passed positionally is never sent.
+    // The relay authenticates AS ITSELF with a bearer minted fresh for EVERY
+    // request (#981) — never the dispatch token, never the master token
+    // passed positionally.
+    expect(w.headers.map((h) => h.authorization)).toEqual(
+      w.headers.map((_, i) => `Bearer motebit:relay.bearer.${i + 1}`),
+    );
     for (const h of w.headers) {
-      expect(h.authorization).toBe("Bearer motebit:disp.token");
+      expect(h.authorization).not.toContain("disp.token");
       expect(h.authorization).not.toContain("master");
     }
-    expect(w.headers.length).toBeGreaterThan(0);
+    expect(w.headers.length).toBe(3); // initialize, initialized, tools/call
+  });
+
+  it("#981: the relay's bearer is an mcp:call token bound to the worker, signed by the relay key, one per request", async () => {
+    const relayKp = await generateKeypair();
+    const identity: RelayIdentity = {
+      relayMotebitId: "relay-981",
+      publicKey: relayKp.publicKey,
+      privateKey: relayKp.privateKey,
+      publicKeyHex: bytesToHex(relayKp.publicKey),
+      did: "did:key:relay-981",
+    };
+    const a = await mintRelayMcpBearer(identity, "worker-981");
+    const b = await mintRelayMcpBearer(identity, "worker-981");
+    const pa = await verifySignedToken(a, relayKp.publicKey);
+    const pb = await verifySignedToken(b, relayKp.publicKey);
+    expect(pa?.aud).toBe("mcp:call");
+    expect(pa?.sub).toBe("worker-981");
+    expect(pa?.mid).toBe("relay-981");
+    expect(pa?.did).toBe("did:key:relay-981");
+    expect(pa!.exp - pa!.iat).toBeLessThanOrEqual(60_000);
+    expect(pa?.jti).not.toBe(pb?.jti);
+  });
+
+  it("refuses to forward at all without a bearer minter (there is nothing to authenticate with)", async () => {
+    const w = capturingWorker(FORWARD_PORT);
+    server = w.server;
+    const warns: Array<{ msg: string; reason?: unknown }> = [];
+    const logger = {
+      info: () => {},
+      warn: (m: string, ctx: Record<string, unknown>) => warns.push({ msg: m, reason: ctx.reason }),
+    };
+    await forwardTaskViaMcp(
+      `http://127.0.0.1:${FORWARD_PORT}`,
+      "task-79",
+      "do it",
+      "worker-79",
+      new Map(),
+      logger,
+      "master",
+      undefined,
+      "disp.token",
+      { allowPrivateNetwork: true },
+    );
+    expect(w.bodies).toHaveLength(0);
+    expect(w.headers).toHaveLength(0);
+    expect(warns).toContainEqual({ msg: "task.mcp_forward_refused", reason: "no_relay_bearer" });
   });
 
   it("refuses to forward at all without a dispatch token (there is nothing to authenticate with)", async () => {
@@ -176,6 +229,7 @@ describe("forwardTaskViaMcp carries the dispatch token", () => {
       undefined,
       undefined,
       { allowPrivateNetwork: true },
+      async () => "relay.bearer",
     );
     expect(w.bodies).toHaveLength(0);
     expect(warns).toContain("task.mcp_forward_refused");

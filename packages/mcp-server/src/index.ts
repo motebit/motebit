@@ -14,6 +14,7 @@ import { AgentTrustLevel, RiskLevel, TASK_DISPATCH_AUDIENCE } from "@motebit/sdk
 import type { ToolDefinition, ToolResult, PolicyDecision } from "@motebit/sdk";
 import {
   hexPublicKeyToDidKey,
+  publicKeyToDidKey,
   hexToBytes,
   bytesToHex,
   sha256,
@@ -29,6 +30,8 @@ import {
   callerReplayEntry,
   replayRefusalReason,
   MemoryCallerTokenReplayStore,
+  parseUnverifiedClaims,
+  DEFAULT_RELAY_REPLAY_CAPACITY,
   type CallerTokenReplayStore,
   type McpCallerClaims,
 } from "./caller-token.js";
@@ -51,6 +54,7 @@ export {
   MAX_MCP_CALLER_TOKEN_LIFETIME_MS,
   DEFAULT_CALLER_REPLAY_CAPACITY,
   DEFAULT_CALLER_REPLAY_QUOTA,
+  DEFAULT_RELAY_REPLAY_CAPACITY,
 } from "./caller-token.js";
 export type {
   CallerTokenReplayStore,
@@ -381,11 +385,14 @@ interface McpServerConfig {
   /**
    * The pinned relay public key (hex, or a lazy resolver) this worker
    * trusts. Enables the relay to authenticate to this worker AS ITSELF on a
-   * forward — `Authorization: Bearer motebit:<dispatch_token>` — instead of
-   * sharing its master token with every registered endpoint. The same key
-   * verifies `taskAdmission` when that is configured (one trust root, two
-   * checks). Absent ⇒ relay-signed bearers are not recognised and only
-   * static / caller-signed bearers pass transport auth.
+   * forward — `Authorization: Bearer motebit:<token>`, an `mcp:call` token
+   * signed by this key, `sub` = this worker, fresh per request, accepted once
+   * — instead of sharing its master token with every registered endpoint. A
+   * `task:dispatch` token is never accepted as the bearer: it is an admission
+   * record a submitter may hold too (#981). The same key verifies
+   * `taskAdmission` when that is configured (one trust root, two checks).
+   * Absent ⇒ relay-signed bearers are not recognised and only static /
+   * caller-signed bearers pass transport auth.
    */
   relayTrust?: { relayPublicKey: string | (() => Promise<string | null>) };
   /**
@@ -394,6 +401,16 @@ interface McpServerConfig {
    * several instances behind one endpoint SHOULD inject a shared store.
    */
   callerReplayStore?: CallerTokenReplayStore;
+  /**
+   * Where accepted RELAY-bearer `jti`s are remembered (#981 round 2) — a
+   * store of its own, so caller traffic can never fill it and the caller
+   * quota never caps the relay's forward rate. Default: in-process,
+   * `DEFAULT_RELAY_REPLAY_CAPACITY` live entries, no per-caller quota. A
+   * worker run as several instances SHOULD inject a shared store: with the
+   * in-process default a captured relay bearer can be accepted once per
+   * process within its 60 s lifetime.
+   */
+  relayReplayStore?: CallerTokenReplayStore;
   /** Custom REST routes handled before MCP auth (same level as /health).
    *  Return true if handled, false to continue to MCP. */
   customRoutes?: (
@@ -649,6 +666,8 @@ export class McpServerAdapter {
   private readonly runningNow = new Set<string>();
   /** Accepted caller-token jtis (#957): each is accepted once within its lifetime. */
   private readonly callerReplay: CallerTokenReplayStore;
+  /** Accepted RELAY-bearer jtis (#981 r2): the relay door's own store, never the caller store. */
+  private readonly relayReplay: CallerTokenReplayStore;
 
   /**
    * Hook for relay re-registration on health checks. Set by startServiceServer
@@ -661,6 +680,13 @@ export class McpServerAdapter {
     this.deps = deps;
     this.admittedTasks = config.taskAdmission?.admittedStore ?? new MemoryAdmittedTaskStore();
     this.callerReplay = config.callerReplayStore ?? new MemoryCallerTokenReplayStore();
+    // One principal, no per-caller quota: the quota IS the capacity.
+    this.relayReplay =
+      config.relayReplayStore ??
+      new MemoryCallerTokenReplayStore(
+        DEFAULT_RELAY_REPLAY_CAPACITY,
+        DEFAULT_RELAY_REPLAY_CAPACITY,
+      );
   }
 
   /**
@@ -1618,24 +1644,74 @@ export class McpServerAdapter {
   }
 
   /**
-   * A relay-signed dispatch token presented as the transport bearer. Valid
-   * ⇒ the caller IS this worker's relay, dispatching a task it admitted for
-   * this worker. The token's `sub`/`digest` are checked again by
-   * `admitTask` when admission is on; here only identity + binding to this
-   * worker matter. Returns null (not a denial) when the bearer is not a
-   * relay token, so caller-signed bearers still take the normal path.
+   * The relay authenticating AS ITSELF (#981). Relay transport trust needs
+   * proof that the caller IS the relay: an `mcp:call` token signed by the
+   * pinned relay key, bound to THIS worker (`sub`), in window, and accepted
+   * once (`jti`) — the same law as any caller token (`caller-token.ts`), with
+   * the pinned relay key standing in for the caller-key lookup. The relay
+   * mints one per HTTP request of its forward.
+   *
+   * A `task:dispatch` token is never a transport credential, whoever presents
+   * it. It is an ADMISSION record the relay also hands to a submitter
+   * (`presenter: "submitter"`, or any task it did not route), so possession of
+   * it proves only that someone was given it — never that the caller is the
+   * relay. Before #981 it was accepted here, and a submitter holding one was
+   * served as `relay:<did>`.
+   *
+   * Classification comes BEFORE verification (#981 round 2). A token is
+   * RELAY-CLAIMED when its (unverified) `did` is the pinned relay key's
+   * did:key — the relay mints every token with `did` = its own did:key — or
+   * when it verifies under the pinned relay key. A relay-claimed token that
+   * fails ANY check (bad signature, expired, wrong audience, wrong `sub`,
+   * out of window, replayed) is `refused`: a 401 with a `relay bearer:`
+   * reason, never a fall-through to the caller path. Only a token that makes
+   * no relay claim at all is `not_relay` and takes the caller path.
+   *
+   * Replay: relay bearers are claimed in their OWN store (`relayReplay`),
+   * never the caller store — caller traffic cannot fill it, and the caller
+   * store's per-caller quota never caps the relay's forward rate. Single use
+   * holds per store: a worker restart, or another instance without a shared
+   * `relayReplayStore`, may accept a captured relay bearer again inside its
+   * 60 s lifetime.
    */
-  private async verifyRelayDispatchBearer(token: string): Promise<CallerIdentity | null> {
-    if (this.config.relayTrust == null && this.config.taskAdmission == null) return null;
+  private async verifyRelayBearer(
+    token: string,
+  ): Promise<
+    | { kind: "not_relay" }
+    | { kind: "relay"; caller: CallerIdentity }
+    | { kind: "refused"; reason: string }
+  > {
+    if (this.config.relayTrust == null && this.config.taskAdmission == null) {
+      return { kind: "not_relay" };
+    }
     const key = await this.resolveRelayKey();
-    if (key == null) return null;
+    if (key == null) return { kind: "not_relay" };
+    const refuse = (reason: string) => ({ kind: "refused" as const, reason });
+    const claims = parseUnverifiedClaims(token);
+    const claimsRelay = claims != null && claims.did === publicKeyToDidKey(key);
     const payload = this.deps.verifySignedToken
       ? await this.deps.verifySignedToken(token, key)
       : await defaultVerifySignedToken(token, key);
-    if (!payload) return null;
-    if (payload.aud !== TASK_DISPATCH_AUDIENCE) return null;
-    if (payload.mid !== this.deps.motebitId) return null;
-    return { motebitId: `relay:${payload.did}`, trustLevel: AgentTrustLevel.Verified };
+    if (!payload) {
+      if (!claimsRelay) return { kind: "not_relay" };
+      return refuse("relay bearer: signature invalid under the pinned relay key, or token expired");
+    }
+    if (payload.aud === TASK_DISPATCH_AUDIENCE) {
+      return refuse(
+        "a task:dispatch token admits a task (the motebit_task dispatch_token argument); it never authenticates the transport — " +
+          "the relay authenticates with a relay-signed mcp:call token bound to this worker, and a direct presenter with its own caller token (#981)",
+      );
+    }
+    const verdict = checkMcpCallerClaims(payload, this.deps.motebitId, Date.now());
+    if (!verdict.ok) return refuse(`relay bearer: ${verdict.reason}`);
+    const claimed = await this.relayReplay.claim(
+      await callerReplayEntry(payload.mid, payload.jti as string, payload.exp),
+    );
+    if (claimed !== "accepted") return refuse(`relay bearer: ${replayRefusalReason(claimed)}`);
+    return {
+      kind: "relay",
+      caller: { motebitId: `relay:${payload.did}`, trustLevel: AgentTrustLevel.Verified },
+    };
   }
 
   /**
@@ -1800,15 +1876,23 @@ export class McpServerAdapter {
       const bearerToken = authHeader?.startsWith("Bearer ") ? authHeader.slice(7) : undefined;
 
       if (bearerToken?.startsWith("motebit:")) {
-        // The relay authenticating as itself with the per-task dispatch
-        // token (aud task:dispatch, mid = this worker, signed by the pinned
-        // relay key) — tried first so the relay never needs to hold a
-        // worker-accepted static secret. Falls through to the caller-signed
-        // path when it is not a relay token.
-        const relayCaller = await this.verifyRelayDispatchBearer(bearerToken.slice(8));
+        // The relay authenticating as itself: a relay-signed mcp:call token
+        // bound to this worker, single-use (#981) — tried first so the relay
+        // never needs to hold a worker-accepted static secret. A dispatch
+        // token is refused here, never served as the relay. Falls through to
+        // the caller-signed path only when the bearer is not relay-signed.
+        const relay = await this.verifyRelayBearer(bearerToken.slice(8));
         let callerInfo: CallerIdentity;
-        if (relayCaller != null) {
-          callerInfo = relayCaller;
+        if (relay.kind === "refused") {
+          res.writeHead(401, {
+            "Content-Type": "application/json",
+            "WWW-Authenticate": 'Bearer error="invalid_token"',
+          });
+          res.end(JSON.stringify({ error: "invalid motebit token", reason: relay.reason }));
+          return;
+        }
+        if (relay.kind === "relay") {
+          callerInfo = relay.caller;
         } else {
           const verdict = await this.verifyCallerToken(bearerToken.slice(8));
           if (!verdict.ok) {

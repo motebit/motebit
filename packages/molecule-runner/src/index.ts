@@ -188,7 +188,8 @@ export interface MoleculeConfig {
   publicUrl?: string;
   /**
    * The relay operator's PINNED Ed25519 public key (hex) used to verify
-   * relay-signed task dispatch tokens. Falls back to `moneyExecution.
+   * relay-signed task dispatch tokens (admission) and the relay's own
+   * `mcp:call` transport bearer (relay trust, #981). Falls back to `moneyExecution.
    * relayPublicKeyHex`, then to a one-time fetch of the relay's
    * `/.well-known/motebit.json` (trust-on-first-use, logged loudly). Pin it
    * in production.
@@ -1115,8 +1116,10 @@ export async function runMolecule(
   );
   if (admission != null) serverCfg.taskAdmission = admission;
   // Relay trust is independent of admission posture: any relay-registered
-  // molecule lets its relay authenticate as itself on forwards (dispatch
-  // token as bearer) so the relay's master token never has to travel.
+  // molecule lets its relay authenticate as itself on forwards (a
+  // relay-signed mcp:call token bound to this worker, verified under the
+  // pinned relay key — never the dispatch token, which only admits a task,
+  // #981) so the relay's master token never has to travel.
   const relayTrust = resolveRelayTrust(
     config,
     admissionStores.pinStorage,
