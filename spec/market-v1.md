@@ -155,7 +155,7 @@ Every conforming implementation MUST enforce all of the following. These are sec
 | Field             | Type   | Required | Description                                                                                          |
 | ----------------- | ------ | -------- | ---------------------------------------------------------------------------------------------------- |
 | `amount`          | number | yes      | Positive decimal USD to withdraw                                                                     |
-| `destination`     | string | no       | Solana base58 (Path 0) or EVM 0x-hex (Path 1) payout address; omitted ⇒ manual/`pending`             |
+| `destination`     | string | no       | Solana base58 payout address (Path 0); omitted ⇒ manual/`pending`; EVM 0x is refused (§10.1)         |
 | `idempotency_key` | string | no       | Optional body-level key; when absent the required `Idempotency-Key` header is used (backward compat) |
 
 The TypeScript type in `@motebit/protocol` (`AccountWithdrawRequest`) is the binding machine-readable form of this table.
@@ -631,7 +631,7 @@ POST /api/v1/agents/:motebitId/withdraw
 
 The relay debits the account immediately (funds move to "pending" status). Idempotent via `idempotency_key` — duplicate requests return the existing withdrawal.
 
-A relay MUST NOT accept a withdrawal to a destination kind it cannot pay: it refuses such a request before any debit rather than holding funds for a payout that cannot happen. The reference relay pays Solana destinations (Path 0) and refuses EVM `0x` destinations with 400 `WITHDRAWAL_DESTINATION_UNSUPPORTED`: an x402 payout (Path 1) is an EIP-3009 authorization the treasury must sign, and it holds no EVM treasury key. Other destinations stay `pending` for the operator.
+A relay MUST NOT accept a withdrawal to a destination kind it cannot pay: it refuses such a request before any debit rather than holding funds for a payout that cannot happen. The reference relay pays Solana destinations (Path 0) and refuses EVM `0x` destinations with 400 `WITHDRAWAL_DESTINATION_UNSUPPORTED`: an x402 payout (Path 1, retired) is an EIP-3009 authorization the treasury must sign, and it holds no EVM treasury key. Other destinations stay `pending` for the operator.
 
 ### 10.2 — Completion
 

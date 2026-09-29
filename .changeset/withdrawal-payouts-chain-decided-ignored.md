@@ -2,6 +2,7 @@
 "@motebit/relay": patch
 "@motebit/settlement-rails": minor
 "@motebit/wallet-solana": minor
+"@motebit/wire-schemas": patch
 ---
 
 Withdrawal payouts: whether a payout landed is decided by the chain, a payout that cannot work is not offered, and a failed batch fire always has a settle door (#948, #949, #945).
@@ -13,3 +14,5 @@ Withdrawal payouts: whether a payout landed is decided by the chain, a payout th
 **#945 — no stranded batch funds.** A batch fire whose rail throws, reports the item failed, or whose process died mid-fire is recorded on a relay_withdrawals row in the same transaction as the queue row's terminal CAS: `processing` for a sent-mode rail (reconcile door), `pending` for a manual one (complete/fail). Crashed `firing` rows are recovered by the loop (never re-fired), not just logged; the tick rethrows so the supervisor records a failed tick.
 
 `@motebit/wallet-solana`: `OperatorSolanaTransfer.sendUsdc` takes optional `BroadcastHooks`; new `recordsBroadcasts`, `getSignatureOutcome`, `getBlockHeight`; `SolanaRpcAdapter.getBlockHeight?` (implemented by `Web3JsRpcAdapter`).
+
+`@motebit/wire-schemas`: the `account-withdraw-request` `destination` description no longer offers EVM 0x (Path 1 retired, #948; deferred-with-trigger — real demand AND a treasury-custody design for EVM signing). `spec/schemas/account-withdraw-request-v1.json` regenerated.

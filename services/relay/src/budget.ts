@@ -212,8 +212,8 @@ export interface BudgetDeps {
    * custody). Constructed from the relay identity seed + SOLANA_RPC_URL
    * at boot; the treasury address is the relay's identity-derived Solana
    * wallet by curve coincidence (same key used by SolanaMemoSubmitter).
-   * Absent when SOLANA_RPC_URL is unset — Path 0 dispatch falls through
-   * to Path 1 (x402 EVM) or Path 2 (Bridge) in that case.
+   * Absent when SOLANA_RPC_URL is unset — a Solana withdrawal then stays
+   * pending for the operator (Path 1 is retired, #948).
    */
   operatorSolanaTransfer?: import("@motebit/wallet-solana").OperatorSolanaTransfer;
 }

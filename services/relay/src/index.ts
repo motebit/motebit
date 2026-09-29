@@ -1727,8 +1727,8 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
   // (`packages/wallet-solana/CLAUDE.md` Rule 2 + Rule 6). Constructed once
   // and passed into budget routes; used by Path 0 to return self-deposited
   // custody to a user's sovereign wallet without any third-party
-  // orchestrator. Falls through to Path 1 (x402 EVM) or Path 2 (Bridge)
-  // when SOLANA_RPC_URL is unset.
+  // orchestrator. When SOLANA_RPC_URL is unset a Solana withdrawal stays
+  // pending for the operator (Path 1 is retired, #948; Path 2 was deleted).
   let operatorSolanaTransfer: import("@motebit/wallet-solana").OperatorSolanaTransfer | undefined =
     operatorSolanaTransferOverride;
   if (!operatorSolanaTransfer && process.env.SOLANA_RPC_URL) {
