@@ -997,6 +997,32 @@ describe("#949: a Solana payout's reconcile is decided by the chain, never the c
     expectExactlyOneOutcome(relay, midB, b);
   });
 
+  it("round 5 regression: a history-absence verdict never refuses the operator's paid naming a recorded signature, and never refunds", async () => {
+    const { operator } = makeOperator(vi.fn().mockRejectedValue(new Error("socket hang up")));
+    relay = await createTestRelay({ enableDeviceAuth: false, operatorSolanaTransfer: operator });
+    const mid = "zz949-r5-absence";
+    await registerAndFund(relay, mid);
+    const id = ((await (await startWithdraw(relay, mid)).json()) as WithdrawBody).withdrawal
+      .withdrawal_id;
+    // Days later: the history read says "absent, past its validity" and the
+    // node reports a deep edge (a snapshot jump) — the payout in fact landed.
+    chain.outcome = { status: "expired" };
+    chain.firstAvailableSlot = 0;
+    const refund = await reconcileBody(relay, id, {
+      outcome: "not_paid",
+      attestation: "explorer shows nothing",
+    });
+    expect(refund.status).toBe(409);
+    expect(balance(relay, mid)).toBe(FUNDED - WITHDRAW_MICRO);
+    const paid = await reconcileBody(relay, id, {
+      outcome: "paid",
+      payout_reference: TX_SIG,
+      attestation: "an archive explorer shows it landed",
+    });
+    expect(paid.status).toBe(200);
+    expectExactlyOneOutcome(relay, mid, id);
+  });
+
   it("PR1: the send threw, the payout landed, the node pruned it — no refund; the operator's paid under the recorded signature is accepted (#949 round 2)", async () => {
     const { operator } = makeOperator(vi.fn().mockRejectedValue(new Error("socket hang up")));
     relay = await createTestRelay({ enableDeviceAuth: false, operatorSolanaTransfer: operator });

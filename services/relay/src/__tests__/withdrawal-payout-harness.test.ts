@@ -47,6 +47,7 @@ import {
   type SignedTransactionRef,
   type SignatureOutcome,
   type BroadcastHooks,
+  type FreshSignatureVerdict,
 } from "@motebit/wallet-solana";
 import { X402SettlementRail } from "@motebit/settlement-rails";
 import { isWithdrawableRail, type GuestRail } from "@motebit/protocol";
@@ -55,6 +56,7 @@ import type { DatabaseDriver } from "@motebit/persistence";
 import type { SyncRelay } from "../index.js";
 import { creditAccount, getAccountBalance, getTransactions } from "../accounts.js";
 import * as batch from "../batch-withdrawals.js";
+import * as chainPayouts from "../withdrawal-chain-payouts.js";
 import { AUTH_HEADER, createTestRelay, jsonAuthWithIdempotency } from "./test-helpers.js";
 
 const FUNDED = 5_000_000;
@@ -85,68 +87,48 @@ interface ChainTx {
 
 /**
  * Block height is the only clock a Solana transaction obeys: it lands (or
- * fails) only at a height ≤ its `lastValidBlockHeight`, and is provably dead
- * only once the height is past it (+ the adapter's margin). A halted
- * cluster produces no blocks however much wall-clock passes.
+ * fails) only at a height ≤ its `lastValidBlockHeight`. A halted cluster
+ * produces no blocks however much wall-clock passes.
+ *
+ * Round 5 — the LAW, not a witness model: absence of a transaction in
+ * HISTORY is never evidence of non-payment. The cluster's history reads are
+ * adversarial (`Witness`), and the relay may refund only on POSITIVE
+ * evidence: a status found with an error, or the FRESH verdict — the
+ * finalized bank's status cache, read while it still covers the whole
+ * landing range (`freshVerdict`, modelling agave's status cache: the newest
+ * MAX_RECENT_BLOCKHASHES = 300 roots).
  */
 class FakeCluster {
   height = 10_000;
   halted = false;
-  /**
-   * The node's retained-history edge (#949 round 2). Slots are 2 × height.
-   * A transaction that landed before this slot reads as ABSENT — exactly what
-   * a pruning RPC node answers — and this naive node then calls it `expired`
-   * once the height is past its last valid height. Only the relay's own
-   * retention check can tell the two apart.
-   */
-  firstAvailableSlot = 0;
-  /**
-   * How the node's READINGS relate to that truth (round 4). Real RPC nodes
-   * are not honest witnesses of absence (agave rpc.rs):
-   *   - `honest`: every reading is true;
-   *   - `bigtable_flaky`: a BigTable-backed node. `getFirstAvailableBlock` is
-   *     min(blockstore, BigTable) — near genesis — and a historical status
-   *     lookup that misses the local ledger asks BigTable and swallows ANY
-   *     error as absent: a landed transaction below the local edge reads
-   *     absent while the reported edge says "covered";
-   *   - `edge_zero`: no BigTable, but the blockstore edge read errors or the
-   *     ledger has < 2 roots — `getFirstAvailableBlock` answers 0;
-   *   - `cleanup_lag`: `minimumLedgerSlot` (the first slot meta) is honest,
-   *     but the local status search starts higher — at the second root, and
-   *     ledger cleanup purges statuses ahead of their metas — so statuses
-   *     within 2 000 slots above the reported local edge are already gone.
-   * `minimumLedgerSlot` (blockstore-only; errors are errors) always reads
-   * the local edge.
-   */
+  /** Finalized trails the tip by this many blocks. */
+  readonly finalizedLag = 32;
   witness: Witness = "honest";
-  readonly txs = new Map<string, ChainTx>();
+  /** Set when a pruning witness drops history (P3). */
+  pruned = false;
+  private lbToggle = false;
+  readonly txs = new Map<string, ChainTx & { landedHeight?: number }>();
   private n = 0;
 
   slot(): number {
     return this.height * 2;
   }
 
-  /**
-   * `extraValidity`: signed over a blockhash from a node that many blocks
-   * ahead. `withSlot: false`: the signer's pre-blockhash slot read failed and
-   * it signed anyway — the ref carries no `recentSlot` (round 3, C1).
-   */
-  sign(extraValidity = 0, withSlot = true): SignedTransactionRef {
+  finalizedHeight(): number {
+    return Math.max(0, this.height - this.finalizedLag);
+  }
+
+  /** `extraValidity`: signed over a blockhash from a node that many blocks ahead. */
+  sign(extraValidity = 0): SignedTransactionRef {
     this.n++;
     return {
       signature: `sig-${this.n}-${"x".repeat(40)}`,
       lastValidBlockHeight: this.height + 150 + extraValidity,
-      ...(withSlot ? { recentSlot: this.slot() } : {}),
     };
   }
 
-  /** Prune everything before now (a node that keeps only recent history). */
-  pruneAll(): void {
-    this.firstAvailableSlot = this.slot() + 1;
-  }
-
   broadcast(ref: SignedTransactionRef, fate: Fate, delayBlocks: number): ChainTx {
-    const tx: ChainTx = {
+    const tx: ChainTx & { landedHeight?: number } = {
       ...ref,
       fate,
       landsAtHeight: this.height + delayBlocks,
@@ -172,37 +154,82 @@ class FakeCluster {
       if (this.height >= tx.landsAtHeight && this.height <= tx.lastValidBlockHeight) {
         tx.state = tx.fate === "lands" ? "landed" : "failed";
         tx.slot = this.height * 2;
+        tx.landedHeight = this.height;
       }
     }
   }
 
-  /** Where the node's local status search really starts. */
-  private searchFrom(): number {
-    return this.firstAvailableSlot + (this.witness === "cleanup_lag" ? 2_000 : 0);
+  /** Whether THIS history read can see a transaction that is on chain. */
+  private historyHas(): boolean {
+    switch (this.witness) {
+      case "honest":
+        return true;
+      case "pruned_after_landing":
+      case "bigtable_flaky":
+        return !this.pruned;
+      case "snapshot_gap":
+        // The node jumped to a newer snapshot; the landing range is a hole.
+        return false;
+      case "load_balanced":
+        // Reads are served alternately by a node that has it and one that
+        // does not (once history is dropped anywhere).
+        this.lbToggle = !this.lbToggle;
+        return !this.pruned || this.lbToggle;
+    }
   }
 
-  /** `getFirstAvailableBlock` as the node reports it. */
-  reportedFirstAvailableBlock(): number {
-    return this.witness === "bigtable_flaky" || this.witness === "edge_zero"
-      ? 0
-      : this.firstAvailableSlot;
-  }
-
-  /** `minimumLedgerSlot`: blockstore-only — the first slot meta. */
-  minimumLedgerSlot(): number {
-    return this.firstAvailableSlot;
-  }
-
+  /**
+   * A HISTORY read (`getSignatureStatuses` with searchTransactionHistory), as
+   * naive as a real node: absent + past the last valid height ⇒ `expired`.
+   */
   outcome(ref: SignedTransactionRef): SignatureOutcome {
-    const found = this.txs.get(ref.signature);
-    // Below where the local search starts, a landed or failed transaction
-    // reads absent (pruned, or a swallowed BigTable error).
-    const tx = found !== undefined && found.slot >= this.searchFrom() ? found : undefined;
-    if (tx?.state === "landed") return { status: "landed", slot: tx.slot };
-    if (tx?.state === "failed") return { status: "failed" };
+    const tx = this.txs.get(ref.signature);
+    const visible = tx !== undefined && tx.state !== "in_flight" && this.historyHas();
+    if (visible && tx.state === "landed") return { status: "landed", slot: tx.slot };
+    if (visible && tx.state === "failed") return { status: "failed" };
     return this.height > ref.lastValidBlockHeight + 10
       ? { status: "expired" }
       : { status: "pending" };
+  }
+
+  /**
+   * The history edges a round-4 relay read (kept so the red run on
+   * 53dacb224 exercises them): a jumped, BigTable-backed or balanced node
+   * reports a deep edge while its status reads miss the payout.
+   */
+  reportedEdge(): number {
+    if (this.witness === "honest") return 0;
+    if (this.witness === "pruned_after_landing") return this.pruned ? this.slot() + 1 : 0;
+    return 0;
+  }
+
+  /**
+   * The FRESH verdict (round 5): the finalized bank's status cache, without
+   * history search, read with minContextSlot. It covers the newest 300 roots,
+   * so it speaks for the whole landing range [lastValid − 149, lastValid]
+   * only while the finalized height H_f ≤ lastValid + 150; the transaction is
+   * dead once H_f > lastValid. The adapter's window: lastValid + 11 ≤ H_f ≤
+   * lastValid + 130.
+   */
+  freshVerdict(ref: SignedTransactionRef): FreshSignatureVerdict {
+    const hf = this.finalizedHeight();
+    const tx = this.txs.get(ref.signature);
+    const finalizedOutcome =
+      tx !== undefined && tx.landedHeight !== undefined && tx.landedHeight <= hf ? tx : undefined;
+    const inCache = finalizedOutcome !== undefined && hf - finalizedOutcome.landedHeight! < 300;
+    if (inCache && finalizedOutcome.state === "landed")
+      return { status: "landed", slot: finalizedOutcome.slot, contextSlot: hf * 2 };
+    if (inCache && finalizedOutcome.state === "failed")
+      return { status: "failed", contextSlot: hf * 2 };
+    if (hf < ref.lastValidBlockHeight + 11) return { status: "too_early" };
+    if (hf > ref.lastValidBlockHeight + 130) return { status: "window_passed" };
+    return { status: "dead_fresh", contextSlot: hf * 2 };
+  }
+
+  /** Whether a fresh read now would be decisive for `ref`. */
+  inFreshWindow(ref: SignedTransactionRef): boolean {
+    const hf = this.finalizedHeight();
+    return hf >= ref.lastValidBlockHeight + 11 && hf <= ref.lastValidBlockHeight + 130;
   }
 
   landed(): ChainTx[] {
@@ -244,34 +271,37 @@ const SEND_SCRIPTS: SendScript[] = [
 
 type SendResult = Awaited<ReturnType<SolanaRpcAdapter["sendUsdc"]>>;
 
-type Witness = "honest" | "bigtable_flaky" | "edge_zero" | "cleanup_lag";
-const WITNESSES: Witness[] = ["honest", "bigtable_flaky", "edge_zero", "cleanup_lag"];
-
 /**
- * How much history the RPC node keeps (#949 round 2):
- *   - `full`: everything;
- *   - `pruned_before_send`: only history from shortly before the send — still
- *     every slot the payout could land in;
- *   - `pruned_after_landing`: once the payout is decided, the node prunes it
- *     (days later, in production) — a landed payout then reads as absent.
+ * How HISTORY reads lie (rounds 2–5, agave rpc.rs / blockstore.rs):
+ *   - `honest`;
+ *   - `pruned_after_landing`: the node prunes the payout's history later;
+ *   - `bigtable_flaky`: pruned locally, and the BigTable fallback swallows
+ *     its errors as absent; the reported edge is near genesis;
+ *   - `snapshot_gap`: the node booted from a newer snapshot and kept its old
+ *     ledger — the landing range is a hole, while `minimumLedgerSlot` is old;
+ *   - `load_balanced`: reads are served by nodes with different coverage.
+ * None of them can move money under the round-5 law: history absence is
+ * never evidence of non-payment.
  */
-type Retention =
-  "full" | "pruned_before_send" | "pruned_1000" | "pruned_near_send" | "pruned_after_landing";
-const RETENTIONS: Retention[] = [
-  "full",
-  "pruned_before_send",
-  "pruned_1000",
-  "pruned_near_send",
+type Witness =
+  "honest" | "pruned_after_landing" | "bigtable_flaky" | "snapshot_gap" | "load_balanced";
+const WITNESSES: Witness[] = [
+  "honest",
   "pruned_after_landing",
+  "bigtable_flaky",
+  "snapshot_gap",
+  "load_balanced",
 ];
 
 /**
- * Whether the signer's sign-time slot read worked (round 3, C1). `unavailable`
- * models an adapter that signed and broadcast WITHOUT a `recentSlot` — the
- * relay must still give that payout a door on a node that can prove absence.
+ * Whether the relay's fresh-verdict sweep ran while the payout was inside
+ * its fresh window (`in_window`), or missed it (`missed`: the relay was down
+ * for that minute). Missing it is the honest-path cost of the law: a payout
+ * that threw and never landed stays `processing` until the operator attests
+ * paid or #990 (a durable-nonce kill transaction) provides positive evidence.
  */
-type SignSlot = "ok" | "unavailable";
-const SIGN_SLOTS: SignSlot[] = ["ok", "unavailable"];
+type Sweep = "in_window" | "missed";
+const SWEEPS: Sweep[] = ["in_window", "missed"];
 
 /**
  * An adapter that honours the #885 contract: `beforeBroadcast` runs for every
@@ -281,7 +311,7 @@ const SIGN_SLOTS: SignSlot[] = ["ok", "unavailable"];
 function makeAdapter(
   cluster: FakeCluster,
   script: SendScript,
-  opts: { signSlot?: SignSlot; retentionRead?: boolean } = {},
+  opts: { freshRead?: boolean } = {},
 ): { adapter: SolanaRpcAdapter; sends: () => number } {
   let sends = 0;
   const broadcastOne = async (
@@ -289,7 +319,7 @@ function makeAdapter(
     fate: Fate,
     delay: number,
   ): Promise<ChainTx> => {
-    const ref = cluster.sign(0, (opts.signSlot ?? "ok") === "ok");
+    const ref = cluster.sign();
     if (hooks?.beforeBroadcast) await hooks.beforeBroadcast(ref);
     return cluster.broadcast(ref, fate, delay);
   };
@@ -368,14 +398,17 @@ function makeAdapter(
     getTransaction: () => Promise.resolve({ status: "not_found" as const }),
     getSignatureOutcome: (ref: SignedTransactionRef) => Promise.resolve(cluster.outcome(ref)),
     getBlockHeight: () => Promise.resolve(cluster.height),
-    ...(opts.retentionRead === false
+    ...(opts.freshRead === false
       ? {}
       : {
-          getFirstAvailableSlot: () => Promise.resolve(cluster.reportedFirstAvailableBlock()),
-          getLocalLedgerFirstSlot: () => Promise.resolve(cluster.minimumLedgerSlot()),
+          getFreshSignatureVerdict: (ref: SignedTransactionRef) =>
+            Promise.resolve(cluster.freshVerdict(ref)),
+          // The history edges a round-4 relay read (see reportedEdge).
+          getFirstAvailableSlot: () => Promise.resolve(cluster.reportedEdge()),
+          getLocalLedgerFirstSlot: () => Promise.resolve(cluster.reportedEdge()),
         }),
     isReachable: () => Promise.resolve(script !== "unavailable"),
-  } as SolanaRpcAdapter;
+  } as unknown as SolanaRpcAdapter;
   return { adapter, sends: () => sends };
 }
 
@@ -454,10 +487,15 @@ afterEach(async () => {
   relay = undefined;
 });
 
-// ── Path 0 ───────────────────────────────────────────────────────────────
+/** One tick of the relay's fresh-verdict sweep, when this build has one. */
+async function sweepOnce(r: SyncRelay, operator: OperatorSolanaTransfer): Promise<void> {
+  const run = (chainPayouts as unknown as Record<string, unknown>).runFreshVerdictSweep as
+    ((db: DatabaseDriver, reader: OperatorSolanaTransfer) => Promise<number>) | undefined;
+  if (run) await run(r.moteDb.db, operator);
+}
 
 /** The schedule every Path 0 cell runs: the relay's clock and the chain move independently. */
-const PHASES: Array<{ name: string; move: (c: FakeCluster, retention: Retention) => void }> = [
+const PHASES: Array<{ name: string; move: (c: FakeCluster) => void; freshWindow?: true }> = [
   { name: "P0 right after the send", move: () => {} },
   { name: "P1 wall-clock +3h, chain unchanged", move: () => jumpClock(3 * HOUR) },
   {
@@ -468,21 +506,24 @@ const PHASES: Array<{ name: string; move: (c: FakeCluster, retention: Retention)
     },
   },
   {
-    name: "P3 +400 blocks (every broadcast decided; a pruning node drops it)",
-    move: (c, retention) => {
+    name: "P2b +180 blocks: every broadcast past its validity, inside its fresh window",
+    move: (c) => c.advance(180),
+    freshWindow: true,
+  },
+  {
+    name: "P3 +400 blocks (the fresh window has passed; a pruning node drops history)",
+    move: (c) => {
       c.advance(400);
-      if (retention === "pruned_after_landing") c.pruneAll();
+      if (c.witness !== "honest") c.pruned = true;
     },
   },
   { name: "P4 wall-clock +3h", move: () => jumpClock(3 * HOUR) },
 ];
 
-/** The operator looks at the chain and asks the relay to settle exactly what it sees. */
 /**
- * `misled`: before acting, an operator whose explorer sits on a pruning node
- * tries to refund a payout that landed. Only chain-recorded payouts can be
- * defended against that — the relay reads the chain for their signatures; a
- * legacy claim recorded none, so its reconcile rests on the attestation.
+ * The operator looks at the chain (an honest explorer) and asks the relay to
+ * settle what it sees. `misled`: before acting, an operator whose explorer
+ * sits on a node with a hole tries to refund a payout that landed.
  */
 async function truthfulOperator(
   r: SyncRelay,
@@ -493,8 +534,6 @@ async function truthfulOperator(
   const landed = cluster.landed();
   for (const w of rowsOf(r, mid)) {
     if (misled && w.status === "processing" && landed.length > 0) {
-      // A misled operator (an explorer on a pruning node shows nothing) tries
-      // to refund first; the oracle's value-out-once check catches acceptance.
       await admin(r, w.withdrawal_id, "reconcile", {
         outcome: "not_paid",
         attestation: "my explorer shows nothing for this payout",
@@ -530,25 +569,27 @@ async function truthfulOperator(
 }
 
 /**
- * The modelled stuck set (#949 round 2): a payout that was broadcast, never
- * landed, and whose history the node has since pruned. The chain can no
- * longer show it was NOT paid, so the relay must not refund it; it stays
- * `processing` on the operator's queue until a node holding that history is
- * used. Nothing else may be stuck once the chain has decided.
+ * The oracle (round 5). After every step:
+ *   - value leaves at most once (refunds + landed payouts ≤ 1);
+ *   - a `completed` row names a landed payout;
+ *   - the balance is exact; an open withdrawal is on the operator's queue;
+ *   - NO REFUND WITHOUT POSITIVE EVIDENCE: a refund of a broadcast payout
+ *     requires that the relay could have seen every broadcast failed, or
+ *     read it inside its fresh window (`evidence()`).
+ * At the end, once the chain has decided:
+ *   - a landed payout is `completed` (the operator's truthful paid, naming a
+ *     recorded signature, is never refused);
+ *   - nothing landed ⇒ refunded exactly once, EXCEPT the declared stuck set:
+ *     broadcast, never landed, not settled by the send, and no positive
+ *     evidence ever available — it stays `processing`, never refunded.
  */
-interface StuckModel {
-  pruned: () => boolean;
-  /** Settled (completed or refunded) before the node pruned. */
-  settledBeforePrune: () => boolean;
-}
-
 async function oracle(
   r: SyncRelay,
   mid: string,
   cluster: FakeCluster,
   step: string,
   final: boolean,
-  stuck: StuckModel = { pruned: () => false, settledBeforePrune: () => false },
+  evidence: () => boolean,
 ): Promise<string[]> {
   const out: string[] = [];
   const rows = rowsOf(r, mid);
@@ -556,6 +597,9 @@ async function oracle(
   const refunded = refunds(r, mid);
   if (refunded + landed.length > 1) {
     out.push(`${step}: value out twice (refunds=${refunded}, landed=${landed.length})`);
+  }
+  if (refunded > 0 && cluster.txs.size > 0 && !evidence()) {
+    out.push(`${step}: refunded with no positive evidence of non-landing`);
   }
   for (const w of rows) {
     if (w.status === "completed" && !landed.some((t) => t.signature === w.payout_reference)) {
@@ -577,14 +621,11 @@ async function oracle(
     }
   }
   if (final && cluster.decided()) {
-    const mustStick =
-      stuck.pruned() && landed.length === 0 && cluster.txs.size > 0 && !stuck.settledBeforePrune();
+    const mustStick = landed.length === 0 && cluster.txs.size > 0 && !evidence();
     for (const w of rows) {
       if (mustStick) {
         if (w.status !== "processing") {
-          out.push(
-            `${step}: history pruned and nothing provable, but the row is ${w.status} (refunded on missing evidence)`,
-          );
+          out.push(`${step}: no positive evidence ever, but the row is ${w.status}`);
         }
         continue;
       }
@@ -600,58 +641,30 @@ async function oracle(
 
 /**
  * When the operator acts: `prompt` at every phase; `late` only once the
- * chain has decided and (for a pruning node) the history is gone — the PR1
- * sequence: the send threw, the payout landed, nobody reconciled for days.
+ * fresh window has passed and the history may be gone — the PR1 sequence:
+ * the send threw, the payout landed, nobody reconciled for days.
  */
 type OperatorTiming = "prompt" | "late";
 const OPERATOR_TIMINGS: OperatorTiming[] = ["prompt", "late"];
 
 const PATH0_CELLS = SEND_SCRIPTS.flatMap((script) =>
-  RETENTIONS.flatMap((retention) =>
-    SIGN_SLOTS.flatMap((signSlot) =>
-      WITNESSES.flatMap((witness) =>
-        OPERATOR_TIMINGS.map((timing) => ({ script, retention, signSlot, witness, timing })),
-      ),
+  WITNESSES.flatMap((witness) =>
+    SWEEPS.flatMap((sweep) =>
+      OPERATOR_TIMINGS.map((timing) => ({ script, witness, sweep, timing })),
     ),
   ),
 );
 
-/**
- * The DECLARED stuck set, and when it begins. A broadcast payout that never
- * landed is undecidable exactly when the node cannot prove it absent:
- *   - `pruned_after_landing`: from the prune (P3);
- *   - `pruned_near_send`: from the send — history starts 100 slots before it,
- *     inside the relay's LANDING_SLOT_MARGIN (512), so absence is unprovable;
- *   - `pruned_before_send` with no sign-time slot: from the send — the
- *     relay's fallback lower edge (slot ≥ height, lastValidBlockHeight − 310)
- *     is far below any recent node's retention.
- * Everything else must be decided once the chain has decided.
- */
-function stuckOnset(retention: Retention, signSlot: SignSlot): "send" | "prune" | null {
-  if (retention === "pruned_after_landing") return "prune";
-  if (retention === "pruned_near_send") return "send";
-  // History starts 1 000 slots before the send: inside the local-ledger edge
-  // margin, so absence is unprovable (round 4).
-  if (retention === "pruned_1000") return "send";
-  if (retention === "pruned_before_send" && signSlot === "unavailable") return "send";
-  return null;
-}
-
-describe("harness: Path 0 (Solana) — send script × node retention × schedule × truthful operator × replay", () => {
+describe("harness: Path 0 (Solana) — send script × history witness × fresh sweep × truthful operator × replay", () => {
   it.each(PATH0_CELLS)(
-    "$script × $retention × slot:$signSlot × $witness × $timing",
-    async ({ script, retention, signSlot, witness, timing }) => {
+    "$script × $witness × sweep:$sweep × $timing",
+    async ({ script, witness, sweep, timing }) => {
       const cluster = new FakeCluster();
       cluster.witness = witness;
-      if (retention === "pruned_before_send") cluster.firstAvailableSlot = cluster.slot() - 6_000;
-      if (retention === "pruned_1000") cluster.firstAvailableSlot = cluster.slot() - 1_000;
-      if (retention === "pruned_near_send") cluster.firstAvailableSlot = cluster.slot() - 100;
-      const { adapter, sends } = makeAdapter(cluster, script, { signSlot });
-      relay = await createTestRelay({
-        enableDeviceAuth: false,
-        operatorSolanaTransfer: new OperatorSolanaTransfer(adapter),
-      });
-      const mid = `zzh-p0-${script}-${retention}-${signSlot}-${witness}-${timing}`;
+      const { adapter, sends } = makeAdapter(cluster, script);
+      const operator = new OperatorSolanaTransfer(adapter);
+      relay = await createTestRelay({ enableDeviceAuth: false, operatorSolanaTransfer: operator });
+      const mid = `zzh-p0-${script}-${witness}-${sweep}-${timing}`;
       await registerAndFund(relay, mid);
 
       const headers = jsonAuthWithIdempotency();
@@ -667,23 +680,30 @@ describe("harness: Path 0 (Solana) — send script × node retention × schedule
 
       const violations: string[] = [];
       if (sends() > 1) violations.push(`sent ${sends()} times for one withdrawal`);
-      const onset = stuckOnset(retention, signSlot);
-      let onsetReached = onset === "send";
-      // Settled by the send itself (confirmed, or a proven landed failure).
-      let settledBeforePrune = rowsOf(relay, mid).every((w) => !OPEN.has(w.status));
-      const stuck: StuckModel = {
-        pruned: () => onsetReached,
-        settledBeforePrune: () => settledBeforePrune,
-      };
+      // Positive evidence available to the relay so far: the send itself
+      // settled it, every broadcast failed, or a fresh read happened while
+      // every broadcast was inside its window.
+      let evidenceSeen = rowsOf(relay, mid).every((w) => !OPEN.has(w.status));
+      const allFailed = () =>
+        cluster.txs.size > 0 && [...cluster.txs.values()].every((t) => t.state === "failed");
+      const evidence = () => evidenceSeen || allFailed();
       for (const [i, phase] of PHASES.entries()) {
-        if (onset === "prune" && i === 3) {
-          settledBeforePrune = rowsOf(relay, mid).every((w) => !OPEN.has(w.status));
-          onsetReached = true;
+        phase.move(cluster);
+        const allInWindow = [...cluster.txs.values()].every(
+          (t) => t.state !== "in_flight" || cluster.inFreshWindow(t),
+        );
+        const hasBroadcast = cluster.txs.size > 0;
+        if (phase.freshWindow === true && sweep === "in_window") {
+          await sweepOnce(relay, operator);
+          if (allInWindow && hasBroadcast) evidenceSeen = true;
         }
-        phase.move(cluster, retention);
-        if (timing === "prompt" || i >= 3) await truthfulOperator(relay, mid, cluster);
+        const operatorActs = timing === "prompt" || i >= 4;
+        if (operatorActs && phase.freshWindow === true && allInWindow && hasBroadcast) {
+          evidenceSeen = true;
+        }
+        if (operatorActs) await truthfulOperator(relay, mid, cluster);
         violations.push(
-          ...(await oracle(relay, mid, cluster, phase.name, i === PHASES.length - 1, stuck)),
+          ...(await oracle(relay, mid, cluster, phase.name, i === PHASES.length - 1, evidence)),
         );
       }
       expect(violations).toEqual([]);
@@ -691,7 +711,7 @@ describe("harness: Path 0 (Solana) — send script × node retention × schedule
   );
 });
 
-describe("harness: a Solana transfer that cannot read the node's retained history is never used (round 3)", () => {
+describe("harness: a Solana transfer that cannot take a fresh verdict is never used (round 5)", () => {
   const SCRIPTS: SendScript[] = [
     "confirmed",
     "throw_after_broadcast_lands",
@@ -700,12 +720,12 @@ describe("harness: a Solana transfer that cannot read the node's retained histor
   ];
   it.each(SCRIPTS)("%s", async (script) => {
     const cluster = new FakeCluster();
-    const { adapter } = makeAdapter(cluster, script, { retentionRead: false });
+    const { adapter } = makeAdapter(cluster, script, { freshRead: false });
     relay = await createTestRelay({
       enableDeviceAuth: false,
       operatorSolanaTransfer: new OperatorSolanaTransfer(adapter),
     });
-    const mid = `zzh-noret-${script}`;
+    const mid = `zzh-nofresh-${script}`;
     await registerAndFund(relay, mid);
     await relay.app.request(`/api/v1/agents/${mid}/withdraw`, {
       method: "POST",
@@ -714,9 +734,12 @@ describe("harness: a Solana transfer that cannot read the node's retained histor
     });
     const violations: string[] = [];
     for (const [i, phase] of PHASES.entries()) {
-      phase.move(cluster, "full");
+      phase.move(cluster);
       await truthfulOperator(relay, mid, cluster);
-      violations.push(...(await oracle(relay, mid, cluster, phase.name, i === PHASES.length - 1)));
+      // Nothing is ever broadcast over such a transfer: `evidence` is moot.
+      violations.push(
+        ...(await oracle(relay, mid, cluster, phase.name, i === PHASES.length - 1, () => false)),
+      );
     }
     expect(violations).toEqual([]);
   });
@@ -724,11 +747,10 @@ describe("harness: a Solana transfer that cannot read the node's retained histor
 
 describe("harness: legacy Path 0 claims (an earlier process recorded no signature)", () => {
   /**
-   * `ahead`: the earlier process signed over a blockhash from a node 140
-   * blocks ahead of the one this process reads its first height from, so its
-   * last valid height is past anchor + 150 — the lag allowance in
-   * LEGACY_BROADCAST_HEIGHT_BOUND is what keeps the door shut until it can
-   * no longer land (X5/X6).
+   * A legacy claim recorded no signature, so the relay can never hold
+   * positive evidence of its non-landing: `not_paid` is always refused and
+   * the operator's `paid` always accepted. A legacy payout that never landed
+   * is in the declared stuck set until #990.
    */
   const LEGACY: Array<{ name: string; fate: Fate; halt: boolean; ahead: boolean }> = [
     { name: "legacy_lands", fate: "lands", halt: false, ahead: false },
@@ -739,7 +761,6 @@ describe("harness: legacy Path 0 claims (an earlier process recorded no signatur
     { name: "legacy_ahead_never", fate: "never", halt: false, ahead: true },
   ];
 
-  /** Legacy claims are bounded by height, so the schedule probes heights between the bounds. */
   const LEGACY_PHASES: Array<{ name: string; move: (c: FakeCluster) => void }> = [
     { name: "L0 right after the claim", move: () => {} },
     { name: "L1 wall-clock +3h, chain unchanged", move: () => jumpClock(3 * HOUR) },
@@ -786,8 +807,16 @@ describe("harness: legacy Path 0 claims (an earlier process recorded no signatur
     for (const [i, phase] of LEGACY_PHASES.entries()) {
       phase.move(cluster);
       await truthfulOperator(relay, mid, cluster, false);
+      // No recorded signature: positive evidence of non-landing never exists.
       violations.push(
-        ...(await oracle(relay, mid, cluster, phase.name, i === LEGACY_PHASES.length - 1)),
+        ...(await oracle(
+          relay,
+          mid,
+          cluster,
+          phase.name,
+          i === LEGACY_PHASES.length - 1,
+          () => false,
+        )),
       );
     }
     expect(violations).toEqual([]);
