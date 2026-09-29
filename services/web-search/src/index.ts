@@ -36,6 +36,7 @@ import {
 } from "@motebit/molecule-runner";
 import type { ExecutionReceipt } from "@motebit/molecule-runner";
 import { McpClientAdapter } from "@motebit/mcp-client";
+import type { McpServerConfig } from "@motebit/mcp-client";
 import { loadConfig, canonicalizeResults } from "./helpers.js";
 
 // ---------------------------------------------------------------------------
@@ -98,6 +99,32 @@ export function recordSubDelegateOutcome(ok: boolean, nowMs: number): void {
   }
 }
 
+/**
+ * The read-url hop's MCP client config. Caller tokens are bound to the atom
+ * the RELAY named (`motebitId`), not to whatever the endpoint's /health
+ * claims (#957); without a relay-named target the client falls back to
+ * /health on first contact.
+ */
+export function subDelegateClientConfig(args: {
+  mcpUrl: string;
+  callerMotebitId: string;
+  callerDeviceId: string;
+  callerPrivateKey: Uint8Array;
+  targetMotebitId?: string;
+}): McpServerConfig {
+  return {
+    name: "read-url",
+    transport: "http",
+    url: args.mcpUrl,
+    motebit: true,
+    motebitType: "service",
+    ...(args.targetMotebitId != null ? { motebitId: args.targetMotebitId } : {}),
+    callerMotebitId: args.callerMotebitId,
+    callerDeviceId: args.callerDeviceId,
+    callerPrivateKey: args.callerPrivateKey,
+  };
+}
+
 async function subDelegate(
   mcpUrl: string,
   prompt: string,
@@ -142,16 +169,15 @@ async function subDelegate(
     log(`sub-delegation relay task: ${subRelayTaskId.slice(0, 12)}…`);
   }
 
-  const adapter = new McpClientAdapter({
-    name: "read-url",
-    transport: "http",
-    url: mcpUrl,
-    motebit: true,
-    motebitType: "service",
-    callerMotebitId,
-    callerDeviceId,
-    callerPrivateKey,
-  });
+  const adapter = new McpClientAdapter(
+    subDelegateClientConfig({
+      mcpUrl,
+      callerMotebitId,
+      callerDeviceId,
+      callerPrivateKey,
+      targetMotebitId,
+    }),
+  );
 
   try {
     await adapter.connect();

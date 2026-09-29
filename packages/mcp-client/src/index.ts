@@ -16,7 +16,7 @@ export type {
   VerificationResult,
   ServerVerifier,
 } from "@motebit/sdk";
-import { TASK_SUBMIT_AUDIENCE } from "@motebit/sdk";
+import { MCP_CALL_AUDIENCE, REFERENCE_MCP_CALL_TOKEN_TTL_MS } from "@motebit/sdk";
 import { mintAudienceToken, verifyKeySuccession } from "@motebit/encryption";
 import type { KeySuccessionRecord } from "@motebit/encryption";
 import { InMemoryToolRegistry } from "@motebit/tools";
@@ -379,6 +379,15 @@ export interface McpServerConfig {
   motebitType?: "personal" | "service" | "collaborative";
   /** Pinned public key hex (set on first verified connect). */
   motebitPublicKey?: string;
+  /**
+   * The target server's `motebit_id`. Every caller token this adapter mints
+   * is bound to it (`sub`), so a token minted for this server is refused by
+   * any other (#957). Pass it when you know it (a relay listing, a pinned
+   * config); when absent it is learned from the server's `/health` on first
+   * connect (trust on first use, like `motebitPublicKey`) and pinned once
+   * `motebit_identity` confirms it.
+   */
+  motebitId?: string;
   /** Caller's motebit ID — used to create signed auth tokens for motebit servers. */
   callerMotebitId?: string;
   /** Caller's device ID — used in signed auth tokens. */
@@ -488,6 +497,8 @@ export class McpClientAdapter {
   private _verifiedIdentity: MotebitIdentityResult | null = null;
   private _previousPublicKey?: string;
   private _previousKeySupersededAt?: number;
+  /** The server id this session's caller tokens are bound to (#957). */
+  private boundTargetId?: string;
 
   constructor(config: McpServerConfig) {
     this.config = config;
@@ -525,11 +536,20 @@ export class McpClientAdapter {
         this.config.callerMotebitId &&
         this.config.callerPrivateKey
       ) {
-        // Motebit signed token auth — static header (short-lived, already scoped)
-        const token = await this.createCallerToken();
-        if (token) {
-          transportOpts.requestInit = { headers: { Authorization: `Bearer motebit:${token}` } };
-        }
+        // Motebit signed token auth (#957): a FRESH token on every HTTP
+        // request — `aud: "mcp:call"`, bound to the target server's
+        // motebit_id (`sub`). The server accepts each token once and only
+        // at the server it names, so a static header would be refused from
+        // the second request on, and a token leaked from one server cannot
+        // be spent at another.
+        const target = await this.resolveTargetMotebitId();
+        this.boundTargetId = target;
+        transportOpts.fetch = async (url: string | URL, init?: RequestInit) => {
+          const token = await this.createCallerToken(target);
+          const headers = new Headers(init?.headers);
+          headers.set("Authorization", `Bearer motebit:${token}`);
+          return globalThis.fetch(url, { ...init, headers });
+        };
       } else {
         // Resolve credential source: explicit credentialSource > legacy authToken wrapper
         const source =
@@ -668,6 +688,16 @@ export class McpClientAdapter {
         );
       }
 
+      // The server must be the one this session's tokens were bound to (#957):
+      // a server answering to another id is refused, never silently re-bound.
+      if (this.boundTargetId != null && parsed.motebit_id !== this.boundTargetId) {
+        await this.disconnect();
+        throw new Error(
+          `MCP server "${this.config.name}": motebit_id mismatch (caller tokens bound to ${this.boundTargetId}, server identifies as ${parsed.motebit_id})`,
+        );
+      }
+      if (this.boundTargetId != null) this.config.motebitId = this.boundTargetId;
+
       // Key pinning: verify or pin (with grace period for rotated keys)
       if (this.config.motebitPublicKey) {
         if (this.config.motebitPublicKey !== parsed.public_key) {
@@ -707,28 +737,64 @@ export class McpClientAdapter {
   }
 
   /** Create a signed token identifying this motebit as the caller. */
-  private async createCallerToken(): Promise<string | null> {
+  /**
+   * Mint one caller token for one HTTP request to `targetMotebitId`:
+   * `aud: "mcp:call"`, `sub` = the target (#957). Throws — never sends an
+   * unauthenticated request in its place.
+   */
+  private async createCallerToken(targetMotebitId: string): Promise<string> {
     if (
       !this.config.callerMotebitId ||
       !this.config.callerDeviceId ||
       !this.config.callerPrivateKey
     ) {
-      return null;
+      throw new Error(
+        `MCP server "${this.config.name}": cannot sign a caller token — callerMotebitId, callerDeviceId and callerPrivateKey are all required`,
+      );
     }
+    return (
+      await mintAudienceToken(
+        {
+          mid: this.config.callerMotebitId,
+          did: this.config.callerDeviceId,
+          aud: MCP_CALL_AUDIENCE,
+          sub: targetMotebitId,
+          // One request's worth of lifetime: the server refuses more than
+          // TTL + clock-skew allowance (#957).
+          ttlMs: REFERENCE_MCP_CALL_TOKEN_TTL_MS,
+        },
+        this.config.callerPrivateKey,
+      )
+    ).token;
+  }
+
+  /**
+   * The target server's motebit_id, to bind caller tokens to. The pinned or
+   * configured `motebitId` wins; otherwise the server's unauthenticated
+   * `/health` names it (trust on first use — `verifyMotebitIdentity` then
+   * confirms it and pins it). Fails loudly when neither is available: a
+   * caller token must never go out unbound.
+   */
+  private async resolveTargetMotebitId(): Promise<string> {
+    if (this.config.motebitId) return this.config.motebitId;
+    const mcpUrl = new URL(this.config.url!);
+    const healthUrl = new URL(mcpUrl.toString());
+    healthUrl.pathname = `${mcpUrl.pathname.replace(/\/mcp\/?$/, "").replace(/\/+$/, "")}/health`;
+    healthUrl.search = "";
+    let id: unknown;
     try {
-      return (
-        await mintAudienceToken(
-          {
-            mid: this.config.callerMotebitId,
-            did: this.config.callerDeviceId,
-            aud: TASK_SUBMIT_AUDIENCE,
-          },
-          this.config.callerPrivateKey,
-        )
-      ).token;
+      const resp = await globalThis.fetch(healthUrl, { method: "GET" });
+      if (resp.ok) id = ((await resp.json()) as { motebit_id?: unknown }).motebit_id;
     } catch {
-      return null;
+      // fall through to the loud error below
     }
+    if (typeof id !== "string" || id.length === 0) {
+      throw new Error(
+        `MCP server "${this.config.name}": cannot bind a caller token — the target's motebit_id is unknown ` +
+          `(set motebitId in the server config, or the server must answer GET ${healthUrl.pathname} with motebit_id)`,
+      );
+    }
+    return id;
   }
 
   /** Parse motebit_identity response — handles JSON and identity file YAML formats. */

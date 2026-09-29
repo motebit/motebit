@@ -2721,6 +2721,18 @@ export const MaxProductLogSemiring: Semiring<number>;
 export function maxSensitivity(a: SensitivityLevel, b: SensitivityLevel): SensitivityLevel;
 
 // @public
+export const MCP_CALL_AUDIENCE: TokenAudience;
+
+// @public
+export const MCP_CALL_CLOCK_SKEW_MS = 60000;
+
+// @public
+export const MCP_CALL_MAX_JTI_LENGTH = 128;
+
+// @public
+export const MCP_CALL_MAX_TOKEN_WINDOW_MS = 120000;
+
+// @public
 export const MEMORY_EXPORT_ARTIFACT: ContentArtifactType;
 
 // @public
@@ -3409,6 +3421,9 @@ export const REASONING_TASK_SHAPE: TaskShape;
 export function recordSemiring<R extends Record<string, unknown>>(fields: {
     [K in keyof R]: Semiring<R[K]>;
 }): Semiring<R>;
+
+// @public
+export const REFERENCE_MCP_CALL_TOKEN_TTL_MS = 60000;
 
 // @public
 export const REFERENCE_RETENTION_DAYS_BY_SENSITIVITY: Readonly<{
@@ -4578,7 +4593,7 @@ export type TemporalBasis = "clockless" | "local_clock" | "ledger_anchored";
 export function toCents(dollars: number): number;
 
 // @public
-export type TokenAudience = "sync" | "device:auth" | "pair" | "rotate-key" | "push:register" | "task:submit" | "task:query" | "task:result" | "task:dispatch" | "admin:query" | "proposal" | "receipts:read" | "market:listing" | "market:query" | "credentials" | "credentials:present" | "account:balance" | "account:deposit" | "account:withdraw" | "account:withdrawals" | "account:checkout" | "proxy:token" | "browser-sandbox-grant" | "browser-sandbox" | "runtime:attach";
+export type TokenAudience = "sync" | "device:auth" | "pair" | "rotate-key" | "push:register" | "task:submit" | "task:query" | "task:result" | "task:dispatch" | "admin:query" | "proposal" | "receipts:read" | "market:listing" | "market:query" | "credentials" | "credentials:present" | "account:balance" | "account:deposit" | "account:withdraw" | "account:withdrawals" | "account:checkout" | "proxy:token" | "browser-sandbox-grant" | "browser-sandbox" | "runtime:attach" | "mcp:call";
 
 // @public
 export function toMicro(dollars: number): number;

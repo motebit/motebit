@@ -43,10 +43,23 @@ const OWNER_ONLY = [
   "self_reflect",
 ];
 
+/**
+ * A caller bearer in the #957 shape: `aud: "mcp:call"`, bound to the serving
+ * motebit (`sub` = OWNER), fresh `jti`. Called once per request — the server
+ * accepts each token once.
+ */
 function bearerFor(mid: string): string {
   const now = Date.now();
   const claims = Buffer.from(
-    JSON.stringify({ mid, did: `${mid}-dev`, iat: now, exp: now + 60_000 }),
+    JSON.stringify({
+      mid,
+      did: `${mid}-dev`,
+      iat: now,
+      exp: now + 60_000,
+      jti: crypto.randomUUID(),
+      aud: "mcp:call",
+      sub: OWNER,
+    }),
   ).toString("base64url");
   return `motebit:${claims}.sig`;
 }

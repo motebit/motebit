@@ -70,6 +70,12 @@
  *     - `browser-sandbox-grant` — motebit→relay grant request
  *     - `browser-sandbox` — relay→motebit→sandbox dispatcher token
  *
+ *   **Motebit MCP surface (verified by `@motebit/mcp-server`, never by a relay)**
+ *     - `mcp:call` — a caller's own signed bearer on an HTTP request to a
+ *       motebit MCP server. `sub` MUST be the target server's `motebit_id`
+ *       (a token minted for server A is refused at server B), and each
+ *       `jti` is accepted once (#957). Minted per request.
+ *
  *   **Local runtime-host coordination (never crosses the machine)**
  *     - `runtime:attach` — frontend→coordinator attach handshake on the
  *       local runtime-host socket
@@ -99,7 +105,8 @@ export type TokenAudience =
   | "proxy:token"
   | "browser-sandbox-grant"
   | "browser-sandbox"
-  | "runtime:attach";
+  | "runtime:attach"
+  | "mcp:call";
 
 // === Named constants — same value, narrower type ============================
 //
@@ -226,6 +233,47 @@ export const BROWSER_SANDBOX_AUDIENCE: TokenAudience = "browser-sandbox";
  */
 export const RUNTIME_ATTACH_AUDIENCE: TokenAudience = "runtime:attach";
 
+/**
+ * Audience for a caller-signed bearer on an HTTP request to a motebit MCP
+ * server (`Authorization: Bearer motebit:<token>`). The token is bound to its
+ * target: `sub` is the target server's `motebit_id`, and the server refuses a
+ * token whose `sub` is not its own. The server accepts each `jti` once within
+ * the token's lifetime, so a client mints a fresh token per HTTP request.
+ * Before #957 an MCP server accepted a token of ANY audience (in practice
+ * `task:submit`), unbound and replayable — so a token the caller signed for
+ * the relay or for another server authenticated it everywhere. Verified by
+ * `@motebit/mcp-server`; never accepted by the relay.
+ *
+ * See `spec/auth-token-v1.md` §5 and `spec/agent-mcp-surface-v1.md`.
+ */
+export const MCP_CALL_AUDIENCE: TokenAudience = "mcp:call";
+
+/**
+ * Reference default (a client choice, not interop law): the lifetime the
+ * reference clients mint an `mcp:call` token with (`exp - iat`). One token
+ * serves one HTTP request, so it only has to outlive the request's transit.
+ * Any lifetime within `MCP_CALL_MAX_TOKEN_WINDOW_MS` is valid.
+ */
+export const REFERENCE_MCP_CALL_TOKEN_TTL_MS = 60_000;
+
+/**
+ * Interop law: an MCP server refuses an `mcp:call` token whose `exp` is more
+ * than this far past its own clock (2 minutes). The short window bounds the
+ * server's replay memory (#957). A client minting the reference 60 s lifetime
+ * therefore has a minute of clock skew in hand.
+ */
+export const MCP_CALL_MAX_TOKEN_WINDOW_MS = 120_000;
+
+/**
+ * Interop law: an MCP server refuses an `mcp:call` token whose `iat` is more
+ * than this far in its future (1 minute). A slow client clock is bounded by
+ * `exp` instead: its token is refused once expired by the server's clock.
+ */
+export const MCP_CALL_CLOCK_SKEW_MS = 60_000;
+
+/** Maximum `jti` length (characters) an MCP server accepts on an `mcp:call` token. */
+export const MCP_CALL_MAX_JTI_LENGTH = 128;
+
 // === Iteration + type guard =================================================
 
 /**
@@ -259,6 +307,7 @@ export const ALL_TOKEN_AUDIENCES: readonly TokenAudience[] = Object.freeze([
   "browser-sandbox-grant",
   "browser-sandbox",
   "runtime:attach",
+  "mcp:call",
 ]);
 
 /**

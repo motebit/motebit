@@ -7,9 +7,12 @@
  * memory graph. Round 2 treated an HTTP caller whose verified token `mid`
  * was this motebit as the owner. That was forgeable: the owner signs such
  * tokens for other parties (`task:submit` to every hired worker, MCP auth
- * to servers it connects to, the relay), and `verifyCallerToken` binds no
- * audience and keeps no replay cache — so any holder could replay one.
- * These tests use REAL Ed25519 keys and the real `verifySignedToken`.
+ * to servers it connects to, the relay), and `verifyCallerToken` then bound
+ * no audience and kept no replay cache — so any holder could replay one.
+ * Since #957 such tokens are refused at the transport; these tests also
+ * prove the #943 rule for a token the transport DOES accept (an owner-signed
+ * `mcp:call` token bound to this server, fresh per request): still never
+ * the owner. REAL Ed25519 keys and the real `verifySignedToken`.
  *
  * Real HTTP, real MCP SDK server (the caller-context.test.ts harness); the
  * stdio case runs the adapter's own server over the SDK's in-memory
@@ -49,10 +52,14 @@ const HEADERS = {
 const jsonRpc = (id: number, method: string, params: unknown): string =>
   JSON.stringify({ jsonrpc: "2.0", id, method, params });
 
-async function openSession(port: number, bearer: string): Promise<string | null> {
+/** A static bearer, or a factory minting a fresh one per request (#957: caller tokens are single-use). */
+type Bearer = string | (() => Promise<string>);
+const bearerOf = async (b: Bearer): Promise<string> => (typeof b === "string" ? b : b());
+
+async function openSession(port: number, bearer: Bearer): Promise<string | null> {
   const res = await fetch(`http://127.0.0.1:${port}/mcp`, {
     method: "POST",
-    headers: { ...HEADERS, Authorization: `Bearer ${bearer}` },
+    headers: { ...HEADERS, Authorization: `Bearer ${await bearerOf(bearer)}` },
     body: jsonRpc(1, "initialize", {
       protocolVersion: "2025-03-26",
       capabilities: {},
@@ -64,7 +71,11 @@ async function openSession(port: number, bearer: string): Promise<string | null>
   if (sid == null) return null;
   const ack = await fetch(`http://127.0.0.1:${port}/mcp`, {
     method: "POST",
-    headers: { ...HEADERS, Authorization: `Bearer ${bearer}`, "mcp-session-id": sid },
+    headers: {
+      ...HEADERS,
+      Authorization: `Bearer ${await bearerOf(bearer)}`,
+      "mcp-session-id": sid,
+    },
     body: JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }),
   });
   await ack.text();
@@ -72,12 +83,16 @@ async function openSession(port: number, bearer: string): Promise<string | null>
 }
 
 /** One JSON-RPC call on a fresh session; the raw response text (or the auth refusal). */
-async function rpc(port: number, bearer: string, method: string, params: unknown): Promise<string> {
+async function rpc(port: number, bearer: Bearer, method: string, params: unknown): Promise<string> {
   const sid = await openSession(port, bearer);
   if (sid == null) return "(unauthenticated)";
   const res = await fetch(`http://127.0.0.1:${port}/mcp`, {
     method: "POST",
-    headers: { ...HEADERS, Authorization: `Bearer ${bearer}`, "mcp-session-id": sid },
+    headers: {
+      ...HEADERS,
+      Authorization: `Bearer ${await bearerOf(bearer)}`,
+      "mcp-session-id": sid,
+    },
     body: jsonRpc(2, method, params),
   });
   return res.text();
@@ -130,24 +145,43 @@ async function serveHttp(
   return { port: (server.address() as AddressInfo).port, ...m };
 }
 
-async function tokenFor(mid: string, privateKey: Uint8Array, aud: string): Promise<string> {
+async function tokenFor(
+  mid: string,
+  privateKey: Uint8Array,
+  aud: string,
+  sub?: string,
+): Promise<string> {
   const now = Date.now();
   const token = await createSignedToken(
-    { mid, did: `${mid}-device`, iat: now, exp: now + 60_000, jti: crypto.randomUUID(), aud },
+    {
+      mid,
+      did: `${mid}-device`,
+      iat: now,
+      exp: now + 60_000,
+      jti: crypto.randomUUID(),
+      aud,
+      ...(sub != null ? { sub } : {}),
+    },
     privateKey,
   );
   return `motebit:${token}`;
 }
 
-const recall = (port: number, bearer: string) =>
+/** A transport-ACCEPTED caller: a fresh `mcp:call` token bound to this server (OWNER) per request. */
+const mcpCallFor =
+  (mid: string, privateKey: Uint8Array): (() => Promise<string>) =>
+  () =>
+    tokenFor(mid, privateKey, "mcp:call", OWNER);
+
+const recall = (port: number, bearer: Bearer) =>
   rpc(port, bearer, "tools/call", { name: "motebit_recall", arguments: { query: "q" } });
-const readState = (port: number, bearer: string) =>
+const readState = (port: number, bearer: Bearer) =>
   rpc(port, bearer, "resources/read", { uri: "motebit://state" });
-const readMemories = (port: number, bearer: string) =>
+const readMemories = (port: number, bearer: Bearer) =>
   rpc(port, bearer, "resources/read", { uri: "motebit://memories" });
 
 describe("#943 — HTTP callers are never the owner", () => {
-  it("an owner-signed `task:submit` token (what every hired worker holds) is refused — on first use and on replay", async () => {
+  it("an owner-signed `task:submit` token (what every hired worker holds) is refused at the transport — on first use and on replay (#957)", async () => {
     const { owner } = await keys();
     const { port, queryMemories, getMemories } = await serveHttp(
       new Map([
@@ -155,6 +189,23 @@ describe("#943 — HTTP callers are never the owner", () => {
       ]),
     );
     const bearer = await tokenFor(OWNER, owner.privateKey, "task:submit");
+    for (let use = 0; use < 2; use++) {
+      expect(await recall(port, bearer)).toBe("(unauthenticated)");
+      expect(await readMemories(port, bearer)).toBe("(unauthenticated)");
+      expect(await readState(port, bearer)).toBe("(unauthenticated)");
+    }
+    expect(queryMemories).not.toHaveBeenCalled();
+    expect(getMemories).not.toHaveBeenCalled();
+  });
+
+  it("an owner-signed `mcp:call` token the transport ACCEPTS is still not the owner", async () => {
+    const { owner } = await keys();
+    const { port, queryMemories, getMemories } = await serveHttp(
+      new Map([
+        [OWNER, { publicKey: bytesToHex(owner.publicKey), trustLevel: AgentTrustLevel.Trusted }],
+      ]),
+    );
+    const bearer = mcpCallFor(OWNER, owner.privateKey);
     for (let use = 0; use < 2; use++) {
       const r1 = await recall(port, bearer);
       expect(r1).toContain(OWNER_ONLY_REFUSAL);
@@ -179,10 +230,11 @@ describe("#943 — HTTP callers are never the owner", () => {
       ]),
     );
     for (const aud of ["mcp:connect", "admin:query", "memory:recall", "runtime:attach"]) {
-      const bearer = await tokenFor(OWNER, owner.privateKey, aud);
+      // Bound to this server or not, a non-`mcp:call` audience never authenticates (#957).
+      const bearer = await tokenFor(OWNER, owner.privateKey, aud, OWNER);
       const r = await recall(port, bearer);
       expect(r, aud).not.toContain(MARK);
-      expect(r, aud).toContain(OWNER_ONLY_REFUSAL);
+      expect(r, aud).toBe("(unauthenticated)");
       expect(await readMemories(port, bearer), aud).not.toContain(MARK);
     }
     expect(queryMemories).not.toHaveBeenCalled();
@@ -200,8 +252,8 @@ describe("#943 — HTTP callers are never the owner", () => {
       ]),
       { authToken: "shared-secret" },
     );
-    const strangerBearer = await tokenFor(STRANGER, stranger.privateKey, "task:submit");
-    for (const bearer of [strangerBearer, "shared-secret"]) {
+    const strangerBearer = mcpCallFor(STRANGER, stranger.privateKey);
+    for (const bearer of [strangerBearer, "shared-secret"] as Bearer[]) {
       const r = await recall(s.port, bearer);
       expect(r).toContain(OWNER_ONLY_REFUSAL);
       expect(r).not.toContain(MARK);
@@ -297,8 +349,8 @@ describe("#943 round 10 — motebit_query runs as the request's served principal
     const port = (
       (adapter as unknown as { httpServer: http.Server }).httpServer.address() as AddressInfo
     ).port;
-    const ownerSigned = await tokenFor(OWNER, owner.privateKey, "task:submit");
-    for (const bearer of ["shared-secret", ownerSigned]) {
+    const ownerSigned = mcpCallFor(OWNER, owner.privateKey);
+    for (const bearer of ["shared-secret", ownerSigned] as Bearer[]) {
       sendMessage.mockClear();
       const r = await rpc(port, bearer, "tools/call", {
         name: "motebit_query",

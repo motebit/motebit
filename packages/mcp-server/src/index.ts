@@ -24,6 +24,14 @@ import {
 import type { DelegationToken } from "@motebit/encryption";
 import { startSelfWatchdog } from "./self-watchdog.js";
 import { isServableTool } from "./serve-exposure.js";
+import {
+  checkMcpCallerClaims,
+  callerReplayEntry,
+  replayRefusalReason,
+  MemoryCallerTokenReplayStore,
+  type CallerTokenReplayStore,
+  type McpCallerClaims,
+} from "./caller-token.js";
 
 // Re-export for consumers
 export type { MotebitServerDeps, McpServerConfig, InboundCredentialVerifier };
@@ -35,6 +43,22 @@ export { wireServerDeps, startServiceServer } from "./service.js";
 export { startSelfWatchdog, type SelfWatchdogHandle } from "./self-watchdog.js";
 export { buildServiceReceipt } from "./build-receipt.js";
 export { isServableTool } from "./serve-exposure.js";
+export {
+  checkMcpCallerClaims,
+  callerReplayEntry,
+  replayRefusalReason,
+  MemoryCallerTokenReplayStore,
+  MAX_MCP_CALLER_TOKEN_LIFETIME_MS,
+  DEFAULT_CALLER_REPLAY_CAPACITY,
+  DEFAULT_CALLER_REPLAY_QUOTA,
+} from "./caller-token.js";
+export type {
+  CallerTokenReplayStore,
+  CallerReplayEntry,
+  CallerReplayClaim,
+  McpCallerClaims,
+  McpCallerClaimsVerdict,
+} from "./caller-token.js";
 export type { BuildServiceReceiptInput } from "./build-receipt.js";
 export { bootstrapAndEmitIdentity } from "./bootstrap-service.js";
 export type {
@@ -364,6 +388,12 @@ interface McpServerConfig {
    * static / caller-signed bearers pass transport auth.
    */
   relayTrust?: { relayPublicKey: string | (() => Promise<string | null>) };
+  /**
+   * Where accepted caller-token `jti`s are remembered, so each caller token
+   * is accepted once (#957). Default: in-process, bounded. A server run as
+   * several instances behind one endpoint SHOULD inject a shared store.
+   */
+  callerReplayStore?: CallerTokenReplayStore;
   /** Custom REST routes handled before MCP auth (same level as /health).
    *  Return true if handled, false to continue to MCP. */
   customRoutes?: (
@@ -554,14 +584,15 @@ const NO_REQUEST_CONTEXT = {
  *    remote party can reach the pipe.
  *  - HTTP, whatever the credential: `"other"`. A motebit signed token whose
  *    `mid` is this motebit is NOT proof of the owner: the owner signs such
- *    tokens for other parties all the time (`task:submit` to every hired
- *    worker, MCP auth to every server it connects to, the relay), the
- *    token check binds no audience and keeps no replay cache, so any of
- *    those parties could replay one. A static or pluggable bearer is a
- *    shared secret handed to callers. No auth context: fail closed.
+ *    tokens for other parties all the time (MCP auth to every server it
+ *    connects to, `task:submit` to the relay). Since #957 a caller token is
+ *    bound to its target server and single-use, but an `mcp:call` token
+ *    proves "this caller meant this server", never "this caller is the
+ *    owner". A static or pluggable bearer is a shared secret handed to
+ *    callers. No auth context: fail closed.
  *
- * A future owner-over-HTTP door would need an owner-only audience with
- * replay protection; it is not built, and nothing reaches it today.
+ * A future owner-over-HTTP door would need an owner-only audience; it is
+ * not built, and nothing reaches it today.
  */
 export type ServedPrincipal = "owner" | "other";
 
@@ -616,6 +647,8 @@ export class McpServerAdapter {
    * the work.
    */
   private readonly runningNow = new Set<string>();
+  /** Accepted caller-token jtis (#957): each is accepted once within its lifetime. */
+  private readonly callerReplay: CallerTokenReplayStore;
 
   /**
    * Hook for relay re-registration on health checks. Set by startServiceServer
@@ -627,6 +660,7 @@ export class McpServerAdapter {
     this.config = config;
     this.deps = deps;
     this.admittedTasks = config.taskAdmission?.admittedStore ?? new MemoryAdmittedTaskStore();
+    this.callerReplay = config.callerReplayStore ?? new MemoryCallerTokenReplayStore();
   }
 
   /**
@@ -1604,42 +1638,65 @@ export class McpServerAdapter {
     return { motebitId: `relay:${payload.did}`, trustLevel: AgentTrustLevel.Verified };
   }
 
-  private async verifyCallerToken(token: string): Promise<CallerIdentity | null> {
-    if (!this.deps.verifySignedToken) return null;
+  /**
+   * A caller-signed bearer (`caller-token.ts` is the law, #957): accepted
+   * only when `aud` is `mcp:call`, `sub` is THIS server's motebit_id, the
+   * signature verifies under the caller's key, the token is unexpired with a
+   * bounded lifetime, and its `jti` has not been accepted before. Every
+   * refusal carries a reason, returned to the caller in the 401 body so an
+   * older client fails loudly, not silently.
+   */
+  private async verifyCallerToken(
+    token: string,
+  ): Promise<{ ok: true; caller: CallerIdentity } | { ok: false; reason: string }> {
+    const refuse = (reason: string) => ({ ok: false as const, reason });
+    if (!this.deps.verifySignedToken) {
+      return refuse("this server does not verify motebit signed tokens");
+    }
 
     // Parse token payload to extract caller's motebit ID (need mid to look up the key)
     const dotIdx = token.indexOf(".");
-    if (dotIdx === -1) return null;
+    if (dotIdx === -1) return refuse("malformed token");
 
-    let claims: { mid: string; did: string; iat: number; exp: number };
+    let claims: McpCallerClaims;
     try {
       const raw = token.slice(0, dotIdx);
       const padded = raw.replace(/-/g, "+").replace(/_/g, "/");
       const json = atob(padded);
-      claims = JSON.parse(json) as typeof claims;
+      claims = JSON.parse(json) as McpCallerClaims;
     } catch {
-      return null;
+      return refuse("malformed token");
     }
+    if (claims == null || typeof claims !== "object") return refuse("malformed token");
+    if (typeof claims.mid !== "string" || claims.mid.length === 0) {
+      return refuse("token names no caller");
+    }
+    const mid = claims.mid;
 
-    if (!claims.mid) return null;
+    // Audience, binding, jti shape and time window first, on the unverified
+    // claims: a token that could never be accepted here is refused before any
+    // key lookup (which may call the relay), with a reason the caller can act
+    // on. The payload the verifier returns is checked again below.
+    const early = checkMcpCallerClaims(claims, this.deps.motebitId, Date.now());
+    if (!early.ok) return early;
 
     // Look up public key for this caller
     let publicKeyHex: string | undefined;
     let trustLevel = AgentTrustLevel.Unknown;
 
     // Check knownCallers map first
-    const known = this.config.knownCallers?.get(claims.mid);
+    const known = this.config.knownCallers?.get(mid);
     if (known) {
-      if (known.trustLevel === AgentTrustLevel.Blocked) return null;
+      if (known.trustLevel === AgentTrustLevel.Blocked) return refuse("caller is blocked");
       publicKeyHex = known.publicKey;
       trustLevel = known.trustLevel;
     }
 
     // If not known, try resolveCallerKey
     if (!publicKeyHex && this.deps.resolveCallerKey) {
-      const resolved = await this.deps.resolveCallerKey(claims.mid);
+      const resolved = await this.deps.resolveCallerKey(mid);
       if (resolved) {
-        if (resolved.trustLevel === AgentTrustLevel.Blocked) return null;
+        if (resolved.trustLevel === AgentTrustLevel.Blocked) return refuse("caller is blocked");
         publicKeyHex = resolved.publicKey;
         trustLevel = resolved.trustLevel;
       }
@@ -1647,12 +1704,28 @@ export class McpServerAdapter {
 
     if (!publicKeyHex) {
       // Unknown caller — deny when motebit auth is in use
-      return null;
+      return refuse("caller key unknown");
     }
 
     const pubKeyBytes = hexToBytes(publicKeyHex);
     const payload = await this.deps.verifySignedToken(token, pubKeyBytes);
-    if (!payload) return null;
+    if (!payload) return refuse("signature invalid or token expired");
+    if (payload.mid !== mid) return refuse("malformed token");
+
+    // Re-check what the verifier vouched for. With the canonical
+    // `verifySignedToken` the payload is the same bytes as the claims read
+    // above, so this re-check changes nothing; it matters when an injected
+    // verifier returns a payload of its own (tests, alternative verifiers).
+    const verdict = checkMcpCallerClaims(payload, this.deps.motebitId, Date.now());
+    if (!verdict.ok) return verdict;
+
+    // (c) single use. Last, so only a token that is otherwise acceptable —
+    // known key, valid signature, in window — can take a store or quota
+    // slot; an invalid one cannot burn a jti or fill the store.
+    const claimed = await this.callerReplay.claim(
+      await callerReplayEntry(mid, payload.jti as string, payload.exp),
+    );
+    if (claimed !== "accepted") return refuse(replayRefusalReason(claimed));
 
     // Token signature verified — caller is cryptographically proven.
     // Upgrade FirstContact/Unknown to Verified (the signature IS verification).
@@ -1662,10 +1735,10 @@ export class McpServerAdapter {
 
     // Notify caller verified
     if (this.deps.onCallerVerified) {
-      this.deps.onCallerVerified(claims.mid, publicKeyHex, trustLevel);
+      this.deps.onCallerVerified(mid, publicKeyHex, trustLevel);
     }
 
-    return { motebitId: claims.mid, trustLevel };
+    return { ok: true, caller: { motebitId: mid, trustLevel } };
   }
 
   // --- HTTP Transport (Streamable HTTP) ---
@@ -1733,11 +1806,22 @@ export class McpServerAdapter {
         // worker-accepted static secret. Falls through to the caller-signed
         // path when it is not a relay token.
         const relayCaller = await this.verifyRelayDispatchBearer(bearerToken.slice(8));
-        const callerInfo = relayCaller ?? (await this.verifyCallerToken(bearerToken.slice(8)));
-        if (!callerInfo) {
-          res.writeHead(401, { "Content-Type": "application/json" });
-          res.end(JSON.stringify({ error: "invalid motebit token" }));
-          return;
+        let callerInfo: CallerIdentity;
+        if (relayCaller != null) {
+          callerInfo = relayCaller;
+        } else {
+          const verdict = await this.verifyCallerToken(bearerToken.slice(8));
+          if (!verdict.ok) {
+            // Loud, not silent: the reason names the fix (an older client
+            // minting task:submit learns it must mint mcp:call, #957).
+            res.writeHead(401, {
+              "Content-Type": "application/json",
+              "WWW-Authenticate": 'Bearer error="invalid_token"',
+            });
+            res.end(JSON.stringify({ error: "invalid motebit token", reason: verdict.reason }));
+            return;
+          }
+          callerInfo = verdict.caller;
         }
         // The verified caller rides THIS request (see RequestAuthContext).
         (req as { auth?: RequestAuthContext }).auth = requestAuthContext(
