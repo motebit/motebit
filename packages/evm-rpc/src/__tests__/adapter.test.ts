@@ -479,9 +479,11 @@ describe("HttpJsonRpcEvmAdapter request timeout", () => {
     const fetchFn = vi.fn(
       (_url: string, init?: { signal?: AbortSignal }) =>
         new Promise<Response>((_resolve, reject) => {
-          init?.signal?.addEventListener("abort", () =>
-            reject(new Error("The operation was aborted")),
-          );
+          // Settled only by the signal, as real fetch is — including one that
+          // is already aborted, whose `abort` event will never fire again.
+          const abort = (): void => reject(new Error("The operation was aborted"));
+          if (init?.signal?.aborted === true) return abort();
+          init?.signal?.addEventListener("abort", abort, { once: true });
         }),
     );
     const adapter = new HttpJsonRpcEvmAdapter({

@@ -975,12 +975,16 @@ describe("fetchWithConnectionTimeout", () => {
     vi.stubGlobal(
       "fetch",
       vi.fn((_input: unknown, init: RequestInit) => {
+        // Settled only by the signal, as real fetch is — including one that
+        // is already aborted, whose `abort` event will never fire again.
         return new Promise<Response>((_resolve, reject) => {
-          init.signal?.addEventListener("abort", () => {
+          const abort = (): void => {
             const err = new Error("aborted");
             err.name = "AbortError";
             reject(err);
-          });
+          };
+          if (init.signal?.aborted === true) return abort();
+          init.signal?.addEventListener("abort", abort, { once: true });
         });
       }),
     );
