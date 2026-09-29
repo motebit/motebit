@@ -426,15 +426,31 @@ export function markX402Failed(
    * it first sees the record under (`stampUnobservedFailures`).
    */
   headTs: number | null = null,
+  /**
+   * A failure decided from the ABSENCE of an execution (expired unused) or a
+   * cancellation: never applied to a record with execution evidence, so a
+   * stale pass cannot fail what another run has seen executed (round 14).
+   */
+  opts: { requireNoEvidence?: boolean } = {},
 ): boolean {
   const info = db
     .prepare(
       `UPDATE relay_x402_settlements SET status = 'failed', failure_reason = ?, resolved_at = ?, resolved_head_ts = ?, pass_cursor = NULL,
          last_observation = CASE WHEN ? = 'execution_mismatch' THEN 'execution_mismatch' ELSE last_observation END,
          mismatch_observed_head_ts = CASE WHEN ? = 'execution_mismatch' THEN ? ELSE mismatch_observed_head_ts END
-       WHERE payer = ? AND nonce = ? AND status = 'pending'`,
+       WHERE payer = ? AND nonce = ? AND status = 'pending' AND (? = 0 OR used_state IS NULL)`,
     )
-    .run(reason, Date.now(), headTs, reason, reason, headTs, payer, nonce);
+    .run(
+      reason,
+      Date.now(),
+      headTs,
+      reason,
+      reason,
+      headTs,
+      payer,
+      nonce,
+      opts.requireNoEvidence === true ? 1 : 0,
+    );
   return info.changes === 1;
 }
 
@@ -895,9 +911,13 @@ async function scanEvents(
   // Compare-and-set: every cursor write names the state this run observed —
   // the status, the pass generation (`recheck_count`) and the cursor value it
   // last saw. A concurrent run that concluded, failed or re-based the record
-  // makes this run's writes no-ops, and this run stops (#907 round 7).
+  // makes this run's writes no-ops (#907 round 7). The run does not stop
+  // there (round 14): it finishes the scan READ-ONLY up to `toBlock`, so an
+  // honest read is never discarded because a lagging run won a write race —
+  // the caller may still credit from what it finds, and nothing else.
   let expected: number | null = cursor === "pass_cursor" ? rec.pass_cursor : rec.scanned_to_block;
-  while (at <= toBlock && pages < maxPages && events.length === 0) {
+  let lost = false;
+  while (at <= toBlock && (lost || pages < maxPages) && events.length === 0) {
     const to = Math.min(toBlock, at + pageBlocks - 1);
     try {
       events = await reader.getAuthorizationEvents({
@@ -918,7 +938,7 @@ async function scanEvents(
       }
       throw err;
     }
-    if (events.length === 0 && cursor != null) {
+    if (events.length === 0 && cursor != null && !lost) {
       const info =
         cursor === "pass_cursor"
           ? db
@@ -931,13 +951,13 @@ async function scanEvents(
                 "UPDATE relay_x402_settlements SET scanned_to_block = ? WHERE payer = ? AND nonce = ? AND status = 'pending' AND scanned_to_block IS ?",
               )
               .run(to, rec.payer, rec.nonce, expected);
-      if (info.changes !== 1) return { events: [], reached: false, stale: true };
-      expected = to;
+      if (info.changes !== 1) lost = true;
+      else expected = to;
     }
     at = to + 1;
     pages += 1;
   }
-  return { events, reached: events.length === 0 && at > toBlock, stale: false };
+  return { events, reached: events.length === 0 && at > toBlock, stale: lost };
 }
 
 /** An eth_getLogs refusal because the block range is too wide (provider wording varies). */
@@ -998,6 +1018,8 @@ export async function reconcileX402Settlement(
   let chainNow: number | null = opts.head?.timestamp ?? null;
   /** The visit-cadence counter as this visit knows it. */
   let visitBackoffs = rec.visit_backoffs;
+  /** A run that lost a compare-and-set race: it may credit, and write nothing else. */
+  let observeOnly = false;
 
   /**
    * The chain-time cadence of a record that must not be visited every tick:
@@ -1077,9 +1099,13 @@ export async function reconcileX402Settlement(
    * A mismatch observation on a record already `mismatched`: spend ONE
    * re-check — the mismatch budget first, then the expiry-class budget — and
    * set the next visit. Guarded by the observed generation. The record is
-   * terminal (never selected again) once BOTH budgets are spent, so a real
-   * underpayment an honest node keeps reporting closes after
-   * 1 + `recheckBackoffMs.length` further observations.
+   * terminal (never selected again) once BOTH budgets are spent: after the
+   * first mismatch observation, (1 − mismatch_rechecks) + (3 − recheck_count)
+   * further ones — at most 4 (5 in all) when no expiry-class re-check was
+   * spent before the evidence, fewer when some were (L, L, C, C, C closes
+   * after 3 observations). The same rule closes a CORRECT execution a node
+   * keeps misreporting with a wrong-value Transfer that many times; the
+   * operator's resolve (a whole-window scan) still credits it.
    */
   const spendMismatchObservation = (headTs: number): void => {
     const mr =
@@ -1127,7 +1153,7 @@ export async function reconcileX402Settlement(
       nonce: rec.nonce,
     });
     if (paired == null) {
-      if (operator) return "used_unpaired"; // observed, nothing written
+      if (operator || observeOnly) return "used_unpaired"; // observed, nothing written
       if (rec.used_state == null) {
         markUsedSeen("unpaired", txHash, headTs);
         logger.warn("x402.reconcile.used_unpaired", {
@@ -1146,16 +1172,26 @@ export async function reconcileX402Settlement(
       paired.to === rec.pay_to.toLowerCase() &&
       paired.value === BigInt(rec.amount_micro);
     const mismatch = (): ReconcileDecision => {
-      if (operator) return "execution_mismatch"; // observed, nothing written
+      if (operator || observeOnly) return "execution_mismatch"; // observed, nothing written
       if (rec.used_state === "mismatched") {
         spendMismatchObservation(headTs);
       } else {
         // The first mismatch observation spends nothing, whatever the
-        // record's origin (round 13): both budgets stay whole.
-        if (!recheck) {
-          markX402Failed(db, rec.payer, rec.nonce, "execution_mismatch", headTs);
+        // record's origin (round 13): both budgets stay whole. Failing a
+        // pending record and flagging its evidence commit together (round
+        // 14): a crash between them would leave a failed record with no
+        // evidence and no re-check class — never selected again.
+        db.exec("BEGIN");
+        try {
+          if (!recheck) {
+            markX402Failed(db, rec.payer, rec.nonce, "execution_mismatch", headTs);
+          }
+          markUsedSeen("mismatched", txHash, headTs);
+          db.exec("COMMIT");
+        } catch (err) {
+          db.exec("ROLLBACK");
+          throw err;
         }
-        markUsedSeen("mismatched", txHash, headTs);
       }
       return "execution_mismatch";
     };
@@ -1281,7 +1317,15 @@ export async function reconcileX402Settlement(
       p,
       wholeWindow ? Number.POSITIVE_INFINITY : p.maxPagesPerRun,
     );
-    if (stale) return "unchanged"; // another run moved this record on
+    if (stale) {
+      // Another run moved this record on while this one read. It may still
+      // CREDIT from a Used log it found (the status-guarded credit path);
+      // it never spends a budget, marks a record failed or writes evidence.
+      const used = events.find((e) => e.kind === "used");
+      if (used == null) return "unchanged";
+      observeOnly = true;
+      return await judgeUsed(used.txHash, used.logIndex, head.timestamp);
+    }
     // The reads succeeded: a record without evidence leaves any read-error
     // cadence behind it.
     if (!operator && !usedSeen && visitBackoffs > 0) {
@@ -1311,7 +1355,9 @@ export async function reconcileX402Settlement(
         spendExpiryRecheck(head.timestamp);
         return "unchanged";
       }
-      markX402Failed(db, rec.payer, rec.nonce, "authorization_cancelled", head.timestamp);
+      markX402Failed(db, rec.payer, rec.nonce, "authorization_cancelled", head.timestamp, {
+        requireNoEvidence: true,
+      });
       logger.info("x402.reconcile.cancelled", {
         payer: rec.payer,
         nonce: rec.nonce,
@@ -1340,7 +1386,9 @@ export async function reconcileX402Settlement(
       ).run(Date.now(), head.timestamp, rec.payer, rec.nonce);
       return "expiry_observed";
     }
-    markX402Failed(db, rec.payer, rec.nonce, "authorization_expired_unused", head.timestamp);
+    markX402Failed(db, rec.payer, rec.nonce, "authorization_expired_unused", head.timestamp, {
+      requireNoEvidence: true,
+    });
     logger.info("x402.reconcile.expired_unused", {
       payer: rec.payer,
       nonce: rec.nonce,

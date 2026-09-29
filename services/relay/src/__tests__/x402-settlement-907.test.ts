@@ -3042,17 +3042,23 @@ describe("#907 round 12: evidence of execution is sticky; one head per run; the 
     return out;
   }
   /**
-   * The model (round 13). A record with no execution evidence spends one
+   * The model (rounds 13–14). A record with no execution evidence spends one
    * expiry-class re-check per concluded no-event pass (L, G); the first read
    * that returns the Used log (Q: unpaired, C: mismatched) sets the evidence
    * flag and spends nothing. With evidence: L, G, F, Q spend nothing, and a
    * mismatched record spends on each further C (the mismatch re-check, then
-   * the three expiry-class ones). A refused start is eligible from step 1
-   * (step 0 stamps its chain time); a pending one fails `expired` after two
-   * lagging passes and is eligible the step after. Returns whether the loop
-   * can never credit the (executed) record.
+   * the expiry-class ones). A refused start is eligible from step 1 (step 0
+   * stamps its chain time); a pending one fails `expired` after two lagging
+   * passes and is eligible the step after. Returns why the loop can never
+   * credit the (executed) record — its budgets are exhausted, of one of two
+   * kinds — or "none":
+   *   - "no_evidence": the expiry-class re-checks spent by no-event reads
+   *     before any read returned the Used log;
+   *   - "mismatch_exhausted": evidence seen, then both budgets spent by
+   *     wrong-value (C) reads (reachable only from length 5).
    */
-  function modelStuck(start: Start, seq: Mode[]): boolean {
+  type StuckKind = "none" | "no_evidence" | "mismatch_exhausted";
+  function modelStuck(start: Start, seq: Mode[]): StuckKind {
     let phase: "p0" | "p1" | "f" | "u" | "m" = start === "P0" ? "p0" : start === "P1" ? "p1" : "f";
     let rc = 0;
     let mr = 0;
@@ -3092,35 +3098,24 @@ describe("#907 round 12: evidence of execution is sticky; one head per run; the 
         else rc += 1;
       }
     }
-    return (phase === "f" && rc >= 3) || (phase === "m" && rc >= 3 && mr >= 1);
+    if (phase === "f" && rc >= 3) return "no_evidence";
+    if (phase === "m" && rc >= 3 && mr >= 1) return "mismatch_exhausted";
+    return "none";
   }
-  /** Whether the sequence ever lets a read see the Used log (Q or C) while the record is visited. */
-  const everSeen = (start: Start, seq: Mode[]): boolean => {
-    // Mirrors modelStuck's phases, answering only "was evidence ever set".
-    let phase: "p0" | "p1" | "f" = start === "P0" ? "p0" : start === "P1" ? "p1" : "f";
-    let rc = 0;
-    let eligibleFrom = start === "R" ? 1 : 0;
-    for (let i = 0; i < seq.length; i++) {
-      const m = seq[i]!;
-      const lag = m === "L" || m === "G";
-      if (phase === "p0") {
-        if (lag) phase = "p1";
-        else if (m === "Q" || m === "C") return true;
-        continue;
+  /** A deterministic sample of `k` sequences of length `len`. */
+  function sampleSequences(len: number, k: number): Mode[][] {
+    let x = 907 + len;
+    const out: Mode[][] = [];
+    for (let i = 0; i < k; i++) {
+      const q: Mode[] = [];
+      for (let j = 0; j < len; j++) {
+        x = (x * 1103515245 + 12345) % 2147483648;
+        q.push(MODES[x % MODES.length]!);
       }
-      if (phase === "p1") {
-        if (lag) {
-          phase = "f";
-          eligibleFrom = i + 1;
-        } else if (m === "Q" || m === "C") return true;
-        continue;
-      }
-      if (i < eligibleFrom || rc >= 3) continue;
-      if (lag) rc += 1;
-      else if (m === "Q" || m === "C") return true;
+      out.push(q);
     }
-    return false;
-  };
+    return out;
+  }
 
   /** A reader that routes every record-specific read by that record's current mode. */
   function routedReader(modeOf: (payer: string, nonce: string) => Mode) {
@@ -3186,7 +3181,6 @@ describe("#907 round 12: evidence of execution is sticky; one head per run; the 
   /** Build every cell's record (and its execution) in one relay. */
   function buildCells(seqs: Mode[][]): Cell[] {
     const cells: Cell[] = [];
-    const t0 = facilitator.chainTime;
     let i = 0;
     for (const start of ["P0", "P1", "R"] as const) {
       for (const executed of [true, false]) {
@@ -3195,6 +3189,9 @@ describe("#907 round 12: evidence of execution is sticky; one head per run; the 
           const payer = "0x" + (0x907000 + i).toString(16).padStart(40, "0");
           const nonce = "0x" + (0x907000 + i).toString(16).padStart(64, "0");
           const id = `cell-${i}`;
+          // Each cell its own signed window around the head it executes at,
+          // so the driver extends to any number of cells.
+          const t0 = facilitator.chainTime;
           recordX402Intent(db(), {
             payer,
             nonce,
@@ -3230,7 +3227,12 @@ describe("#907 round 12: evidence of execution is sticky; one head per run; the 
    * observed); R records are refused (failed, chain time stamped at step 0).
    */
   async function prepareStarts(cells: Cell[]) {
-    facilitator.chainTime = t0Of(cells) + 6_600 + 10_000;
+    const lastValidBefore = (
+      db().prepare("SELECT MAX(valid_before) AS v FROM relay_x402_settlements").get() as {
+        v: number;
+      }
+    ).v;
+    facilitator.chainTime = lastValidBefore + 10_000;
     const byKey = new Map(cells.map((c) => [`${c.payer}|${c.nonce}`, c]));
     await reconcilePendingX402Settlements(
       db(),
@@ -3245,11 +3247,17 @@ describe("#907 round 12: evidence of execution is sticky; one head per run; the 
     }
     return byKey;
   }
-  const t0Of = (cells: Cell[]) => (rowOf(cells[0]!).valid_before as number) - 6_600;
   const STEP = 6 * 3_600 + 60; // past every chain-time wait (the longest is 6 h)
 
-  it("loop: every {L,Q,F,C,G} sequence up to length 4 from three start states, then honest reads — exactly-once credit whenever the transfer executed, except budget exhaustion with no Used EVER seen; never a credit when it did not", async () => {
-    const seqs = sequencesUpTo(4);
+  it("loop: every {L,Q,F,C,G} sequence up to length 4 (+ length-5/6 cells) from three start states, then honest reads — exactly-once credit whenever the transfer executed, except the two modelled kinds of budget exhaustion; never a credit when it did not", async () => {
+    const LONG: Mode[][] = [
+      ["C", "C", "C", "C", "C"], // P0: evidence, then both budgets spent by wrong-value reads
+      ["F", "L", "L", "C", "C", "C"], // R: two expiry re-checks spent first — closes after 3 C's
+      ["C", "C", "C", "C", "C", "C"],
+      ...sampleSequences(5, 40),
+      ...sampleSequences(6, 40),
+    ];
+    const seqs = [...sequencesUpTo(4), ...LONG];
     const cells = buildCells(seqs);
     const byKey = await prepareStarts(cells);
     const maxLen = Math.max(...seqs.map((q) => q.length));
@@ -3266,44 +3274,60 @@ describe("#907 round 12: evidence of execution is sticky; one head per run; the 
       });
     }
     const failures: string[] = [];
-    let credited = 0;
-    let stuck = 0;
+    const kinds = { none: 0, no_evidence: 0, mismatch_exhausted: 0 };
     for (const c of cells) {
       const deposits = x402Deposits(c.id).length;
-      const status = rowOf(c).status;
+      const row = rowOf(c);
       const label = `${c.start} ${c.executed ? "executed" : "unexecuted"} [${c.seq.join("")}]`;
       if (!c.executed) {
-        if (deposits !== 0 || status === "credited") failures.push(`${label}: credited`);
+        if (deposits !== 0 || row.status === "credited") failures.push(`${label}: credited`);
         continue;
       }
-      if (modelStuck(c.start, c.seq)) {
-        stuck += 1;
-        if (deposits !== 0) failures.push(`${label}: modelled stuck, but credited`);
-        if (everSeen(c.start, c.seq)) failures.push(`${label}: stuck although Used was seen`);
+      const kind = modelStuck(c.start, c.seq);
+      kinds[kind] += 1;
+      if (kind === "none") {
+        if (deposits !== 1 || row.status !== "credited") {
+          failures.push(`${label}: ${deposits} credits, ${row.status}`);
+        }
         continue;
       }
-      if (deposits !== 1 || status !== "credited") {
-        failures.push(`${label}: ${deposits} credits, ${status}`);
-      } else credited += 1;
+      if (deposits !== 0) failures.push(`${label}: modelled ${kind}, but credited`);
+      // The two kinds, as the record shows them.
+      if (kind === "no_evidence" && row.used_state != null) {
+        failures.push(`${label}: no_evidence, but used_state ${JSON.stringify(row.used_state)}`);
+      }
+      if (kind === "mismatch_exhausted" && row.used_state !== "mismatched") {
+        failures.push(
+          `${label}: mismatch_exhausted, but used_state ${JSON.stringify(row.used_state)}`,
+        );
+      }
     }
     expect(failures).toEqual([]);
-    expect(cells).toHaveLength(3 * 2 * 781);
-    // The stuck set is EXACTLY budget exhaustion with no Used ever seen: a
-    // refused start whose three re-checks are all no-event reads (L or G) —
-    // step 0 only stamps it — and a P1 start (already one lagging read) whose
-    // four reads are all no-event.
-    const expectedStuck = cells
-      .filter((c) => c.executed)
-      .filter(
-        (c) =>
-          (c.start === "R" &&
-            c.seq.length === 4 &&
-            c.seq.slice(1).every((m) => m === "L" || m === "G")) ||
-          (c.start === "P1" && c.seq.length === 4 && c.seq.every((m) => m === "L" || m === "G")),
-      );
-    expect(stuck).toBe(expectedStuck.length);
-    expect(stuck).toBe(5 * 8 + 16);
-    expect(credited).toBe(3 * 781 - stuck);
+    expect(cells).toHaveLength(3 * 2 * (781 + LONG.length));
+    // Within length 4 the ONLY exhaustion is no-evidence: a refused start
+    // whose three re-checks are all no-event reads (L or G; step 0 only
+    // stamps it), and a P1 start (already one lagging read) whose four reads
+    // are all no-event. Mismatch exhaustion needs ≥ 4 C reads after the
+    // evidence, so it first appears at length 5.
+    const short = cells.filter((c) => c.executed && c.seq.length <= 4);
+    const shortStuck = short.filter((c) => modelStuck(c.start, c.seq) !== "none");
+    expect(shortStuck.every((c) => modelStuck(c.start, c.seq) === "no_evidence")).toBe(true);
+    expect(shortStuck.map((c) => `${c.start}:${c.seq.join("")}`).sort()).toEqual(
+      short
+        .filter(
+          (c) =>
+            (c.start === "R" &&
+              c.seq.length === 4 &&
+              c.seq.slice(1).every((m) => m === "L" || m === "G")) ||
+            (c.start === "P1" && c.seq.length === 4 && c.seq.every((m) => m === "L" || m === "G")),
+        )
+        .map((c) => `${c.start}:${c.seq.join("")}`)
+        .sort(),
+    );
+    expect(shortStuck).toHaveLength(5 * 8 + 16);
+    expect(modelStuck("P0", ["C", "C", "C", "C", "C"])).toBe("mismatch_exhausted");
+    expect(modelStuck("R", ["F", "L", "L", "C", "C", "C"])).toBe("mismatch_exhausted");
+    expect(kinds.mismatch_exhausted).toBeGreaterThan(0);
   }, 300_000);
 
   it("operator: after every {L,Q,F,C,G} sequence up to length 4, one honest operator resolve credits EVERY executed record exactly once (budgets and evidence never bind the last resort) and never an unexecuted one — writing nothing then", async () => {
@@ -3695,5 +3719,182 @@ describe("#907 round 13: every read is a head-capped scan; evidence is a flag; t
       visit_backoffs: 0,
       next_visit_head_ts: null,
     });
+  });
+});
+
+describe("#907 round 14: a lost write race never discards an honest read; a stale pass never fails an evidenced record", () => {
+  const db = () => relay.moteDb.db;
+  /** A reader that stalls after its FIRST event read returns (before the caller writes a cursor). */
+  function stallAfterFirstRead(base: ReturnType<typeof fakeChainReader>) {
+    let release!: () => void;
+    const gate = new Promise<void>((res) => (release = res));
+    let reached!: () => void;
+    const atRead = new Promise<void>((res) => (reached = res));
+    const orig = base.getAuthorizationEvents.bind(base);
+    let calls = 0;
+    base.getAuthorizationEvents = async (a) => {
+      calls += 1;
+      const out = await orig(a);
+      if (calls === 1) {
+        reached();
+        await gate;
+      }
+      return out;
+    };
+    return { reader: base, release, atRead };
+  }
+  async function record(label: string, settleMode: typeof facilitator.settleMode) {
+    const w = await pricedAgent();
+    const body = { prompt: `907 r14 ${label} ${crypto.randomUUID()}`, submitted_by: w };
+    const pay = await paymentFor(w, body, `0x${label}`);
+    facilitator.settleMode = settleMode;
+    await submit(w, crypto.randomUUID(), body, pay);
+    facilitator.settleMode = "ok";
+    const auth = authorizationOf(pay);
+    const row = () =>
+      x402Records().find((x) => x.delegator_id === w)! as unknown as Record<string, unknown> & {
+        status: string;
+        payer: string;
+        nonce: string;
+        valid_before: number;
+      };
+    const snapshot = () => findX402Settlement(db(), row().payer, row().nonce)!;
+    const execute = () =>
+      facilitator.chainExecute({
+        token: tokenOf(pay),
+        from: auth.from,
+        nonce: auth.nonce,
+        to: auth.to,
+        value: BigInt(auth.value),
+      });
+    return { w, auth, row, snapshot, execute };
+  }
+  const scan = { ...X402_SCAN, ...NOW.scan, pageBlocks: 50 };
+
+  it("two processes: a LAGGING run wins the cursor race and concludes; the HONEST run that lost it finishes its scan read-only and credits (never spends, never fails)", async () => {
+    const { w, row, snapshot, execute } = await record("R14cas", {
+      refuse: "invalid_exact_evm_insufficient_balance",
+    });
+    execute(); // lands ~300 blocks into the window: page 2+ at 50-block pages
+    facilitator.chainTime = row().valid_before + 10_000;
+    const gen0 = snapshot();
+    // B (honest) reads its first page, then stalls before writing its cursor.
+    const b = stallAfterFirstRead(fakeChainReader());
+    const runB = reconcileX402Settlement(db(), b.reader, gen0, scan);
+    await b.atRead;
+    // A (lagging) wins every write, reaches the end, and concludes: one re-check spent.
+    await reconcileX402Settlement(db(), fakeChainReader({ lagging: true }), gen0, scan);
+    expect(row()).toMatchObject({ status: "failed", recheck_count: 1 });
+    b.release();
+    expect(await runB, "the honest read is not discarded").toBe("credited");
+    expect(row()).toMatchObject({ status: "credited", recheck_count: 1 });
+    expect(x402Deposits(w).map((d) => d.amount)).toEqual([GROSS]);
+  });
+
+  it("a run that lost the race writes nothing but a credit: its read-only finish that finds a paired MISMATCH neither fails the record nor records evidence", async () => {
+    const { row, snapshot, auth } = await record("R14ro", { refuse: "upstream 502" });
+    facilitator.chainExecute({
+      token: (snapshot() as unknown as { token: string }).token,
+      from: auth.from,
+      nonce: auth.nonce,
+      to: auth.to,
+      value: BigInt(auth.value) - 1n,
+    });
+    facilitator.chainTime = row().valid_before + 10_000;
+    const gen0 = snapshot();
+    const b = stallAfterFirstRead(fakeChainReader());
+    const runB = reconcileX402Settlement(db(), b.reader, gen0, scan);
+    await b.atRead;
+    await reconcileX402Settlement(db(), fakeChainReader({ lagging: true }), gen0, scan);
+    const afterA = { ...row() };
+    b.release();
+    expect(await runB).toBe("execution_mismatch");
+    expect(row(), "the losing run wrote nothing").toEqual(afterA);
+  });
+
+  it("a stale CONFIRMING pass never expires a record another run has seen executed", async () => {
+    const { w, row, snapshot, execute } = await record("R14exp", "timeout-after-transfer");
+    void execute; // executed by the lost settle answer
+    facilitator.chainTime = row().valid_before + 10_000;
+    await reconcilePendingX402Settlements(db(), fakeChainReader({ lagging: true }), NOW);
+    expect(row().expiry_observed_head_ts).not.toBeNull();
+    // A: the confirming pass on a lagging node, stalled after its first read.
+    const a = stallAfterFirstRead(fakeChainReader({ lagging: true }));
+    const runA = reconcileX402Settlement(db(), a.reader, snapshot(), { ...X402_SCAN, ...NOW.scan });
+    await a.atRead;
+    // B sees the Used log (its Transfer missing): evidence.
+    await reconcileX402Settlement(db(), fakeChainReader({ receiptQuirkOnce: true }), snapshot(), {
+      ...X402_SCAN,
+      ...NOW.scan,
+    });
+    expect(row()).toMatchObject({ status: "pending", used_state: "unpaired" });
+    a.release();
+    await runA;
+    expect(row(), "not failed by the stale pass").toMatchObject({
+      status: "pending",
+      used_state: "unpaired",
+    });
+    await reconcilePendingX402Settlements(db(), fakeChainReader(), NOW);
+    expect(row().status).toBe("credited");
+    expect(x402Deposits(w).map((d) => d.amount)).toEqual([GROSS]);
+  });
+
+  it("a stale pass that read a CANCELLATION never fails a record another run has seen executed", async () => {
+    const { row, snapshot, auth } = await record("R14can", "timeout-after-transfer");
+    facilitator.chainCancel(auth.from, auth.nonce); // both on the (fake) chain: A sees only this one
+    facilitator.chainTime = row().valid_before + 10_000;
+    const onlyCancel = fakeChainReader();
+    const events = onlyCancel.getAuthorizationEvents.bind(onlyCancel);
+    onlyCancel.getAuthorizationEvents = async (a) =>
+      (await events(a)).filter((e) => e.kind === "canceled");
+    const a = stallAfterFirstRead(onlyCancel);
+    const runA = reconcileX402Settlement(db(), a.reader, snapshot(), { ...X402_SCAN, ...NOW.scan });
+    await a.atRead;
+    await reconcileX402Settlement(db(), fakeChainReader({ receiptQuirkOnce: true }), snapshot(), {
+      ...X402_SCAN,
+      ...NOW.scan,
+    });
+    expect(row()).toMatchObject({ status: "pending", used_state: "unpaired" });
+    a.release();
+    await runA;
+    expect(row(), "not failed by the stale cancellation read").toMatchObject({
+      status: "pending",
+      used_state: "unpaired",
+    });
+  });
+
+  it("the first mismatch of a PENDING record fails it and flags its evidence atomically: a crash between the two writes rolls both back", async () => {
+    const { w, row, auth, snapshot } = await record("R14atomic", { refuse: "upstream 502" });
+    facilitator.chainExecute({
+      token: (snapshot() as unknown as { token: string }).token,
+      from: auth.from,
+      nonce: auth.nonce,
+      to: auth.to,
+      value: BigInt(auth.value) - 1n,
+    });
+    facilitator.chainTime = row().valid_before + 10_000;
+    // The evidence write fails (a crash between the two writes).
+    const realPrepare = db().prepare.bind(db());
+    const spy = vi.spyOn(db(), "prepare").mockImplementation((sql: string) => {
+      if (sql.includes("SET used_state = ?")) throw new Error("crash");
+      return realPrepare(sql);
+    });
+    try {
+      expect(
+        await reconcileX402Settlement(db(), fakeChainReader(), snapshot(), {
+          ...X402_SCAN,
+          ...NOW.scan,
+        }),
+      ).toBe("read_error");
+    } finally {
+      spy.mockRestore();
+    }
+    expect(row(), "both writes rolled back: still pending, still selectable").toMatchObject({
+      status: "pending",
+      used_state: null,
+    });
+    await reconcilePendingX402Settlements(db(), fakeChainReader(), NOW);
+    expect(row()).toMatchObject({ status: "failed", used_state: "mismatched" });
+    expect(x402Deposits(w)).toEqual([]);
   });
 });
