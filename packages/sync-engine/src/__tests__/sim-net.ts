@@ -491,7 +491,8 @@ export class SimSocket {
     if (this.readyState !== 1) throw new Error("send on a socket that is not open");
     const msg = JSON.parse(data) as { type: string; events?: EventLogEntry[]; push_id?: string };
     const events = msg.type === "push" ? (msg.events ?? []) : [];
-    if (msg.type === "push") trace(`ws push ${msg.push_id ?? "-"} n=${events.length} sent`);
+    if (msg.type === "push")
+      trace(`ws push ${msg.push_id ?? "-"} n=${events.length} sent [${events[0]?.event_id ?? ""}]`);
     const ids = events.map((e) => e.event_id);
     if (msg.type === "push") {
       this.net.frameOut(ids);

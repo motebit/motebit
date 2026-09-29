@@ -78,7 +78,12 @@ const WS_BASE = 15 * S; // the socket's ack deadline
 const HTTP_BASE = 20 * S; // the HTTP request deadline
 
 type Direction = "push" | "pull";
-type Lifecycle = "persistent-ws" | "rebuild-ws" | "http";
+/**
+ * `steady-ws` (fault cells only): a persistent socket that is never swapped
+ * — no token refresh within the horizon (a long-lived credential, the
+ * daemon) — so no retirement ever ends a frame the relay dropped.
+ */
+type Lifecycle = "persistent-ws" | "rebuild-ws" | "http" | "steady-ws";
 type Flavour = "node" | "rn";
 
 export interface Cell {
@@ -115,6 +120,10 @@ export interface Cell {
  *   rollback-drop  echoes are seen, then at 10 min the relay restarts as
  *                  the no-echo version (every socket closed) and discards
  *                  the first frame it receives after that
+ *   rollback-burst the same restart, at 40 s — mid-backlog, while the
+ *                  echo hint still opens the window: frames overlap on the
+ *                  no-echo relay, so an ack that names no frame could be
+ *                  credited to the dropped one
  *   switch-fresh   the device pulls from relay A, then at 5 min a FRESH
  *                  engine every 30 s (mobile `syncNow`) syncs with relay B
  *   switch-repoint the same, but one engine re-pointed at B
@@ -127,9 +136,16 @@ export interface Cell {
  * by construction could never make red.
  */
 type Fault =
-  "drop-first" | "drop-mid" | "old-drop" | "rollback-drop" | "switch-fresh" | "switch-repoint";
+  | "drop-first"
+  | "drop-mid"
+  | "old-drop"
+  | "rollback-drop"
+  | "rollback-burst"
+  | "switch-fresh"
+  | "switch-repoint";
 
-const FAULT_HORIZON_MS = 45 * 60 * 1000;
+// 47.5 min: the last live event (45 min; 47 on the steady socket) has time to cross.
+const FAULT_HORIZON_MS = 47.5 * 60 * 1000;
 const SWITCH_AT_MS = 5 * 60 * 1000;
 
 const OUTAGE_MS = 10 * 60 * 1000;
@@ -216,13 +232,16 @@ function world(c: Cell): World {
     relay.echoes = false;
     relay.dropFrame = (k) => k === 3;
   }
-  if (c.fault === "rollback-drop") {
-    const t = setTimeout(() => {
-      relay.echoes = false;
-      const after = relay.pushFramesSeen;
-      relay.dropFrame = (k) => k === after + 1;
-      net.restart();
-    }, 10 * MIN);
+  if (c.fault === "rollback-drop" || c.fault === "rollback-burst") {
+    const t = setTimeout(
+      () => {
+        relay.echoes = false;
+        const after = relay.pushFramesSeen;
+        relay.dropFrame = (k) => k === after + 1;
+        net.restart();
+      },
+      c.fault === "rollback-burst" ? 40 * S : 10 * MIN,
+    );
     stop.push(() => clearTimeout(t));
   }
   if (c.fault && !c.fault.startsWith("switch")) stop.push(net.inboundEvery(60 * S));
@@ -241,6 +260,10 @@ function world(c: Cell): World {
  * (a link oversubscribed forever measures nothing but its queue).
  */
 export function liveEveryMs(c: Cell): number {
+  // The steady socket gets a new event every minute: its relay keeps
+  // answering pushes, so its socket never looks unanswered — only the
+  // OVERTAKEN rule can find the frame the relay dropped.
+  if (c.life === "steady-ws") return MIN;
   return Math.max(5 * MIN, 2 * c.u * S);
 }
 
@@ -419,11 +442,12 @@ async function runMain(c: Cell): Promise<Outcome> {
       }
     })();
   };
-  if (c.life === "persistent-ws") {
+  if (c.life === "persistent-ws" || c.life === "steady-ws") {
     sock = new MainSocket(w.wsUrl, catchUp);
     sock.connect();
     const tick = setInterval(sync, 30 * S);
     const swap = setInterval(() => {
+      if (c.life === "steady-ws") return;
       const old = sock!;
       old.disconnect();
       const fresh = new MainSocket(w.wsUrl, catchUp);
@@ -476,12 +500,13 @@ async function runBranch(c: Cell): Promise<Outcome> {
   const w = world(c);
   await seed(w, c);
   const engine = new SyncEngine(w.local, MID, { onSkippedEvent: () => {} });
-  if (c.life === "persistent-ws") {
+  if (c.life === "persistent-ws" || c.life === "steady-ws") {
     let current = socketAdapter(w);
     engine.connectRemote(liveAdapter(() => current as EventStoreAdapter));
     current.connect();
     engine.start();
     const swap = setInterval(() => {
+      if (c.life === "steady-ws") return;
       const replaced = current;
       replaced.disconnect();
       const fresh = socketAdapter(w);
@@ -568,11 +593,30 @@ export function sweep(): Cell[] {
   }
   // The relay fault model (#914 round 8): a dropped frame, an old relay, a
   // rollback — on both socket lifecycles — and a relay switch.
-  for (const fault of ["drop-first", "drop-mid", "old-drop", "rollback-drop"] as const) {
+  for (const fault of [
+    "drop-first",
+    "drop-mid",
+    "old-drop",
+    "rollback-drop",
+    "rollback-burst",
+  ] as const) {
     for (const life of ["persistent-ws", "rebuild-ws"] as const) {
       add({ dir: "push", life, flavour: "node", u: 0.01, L: 0, backlog: 6000, fault });
     }
   }
+  // A mid-stream drop on a socket nothing ever retires, whose relay keeps
+  // answering (a new event a minute): the socket never looks unanswered, so
+  // only the OVERTAKEN rule (a later frame answered by push_id) finds the
+  // lost frame.
+  add({
+    dir: "push",
+    life: "steady-ws",
+    flavour: "node",
+    u: 0.01,
+    L: 0,
+    backlog: 1,
+    fault: "drop-mid",
+  });
   add({
     dir: "push",
     life: "http",
@@ -969,7 +1013,7 @@ export function defineShard(k: number): void {
             .map((c) => c.fault)
             .filter((f) => f !== undefined),
         );
-        expect(faults.size).toBe(6);
+        expect(faults.size).toBe(7);
       });
     }
   });
