@@ -129,7 +129,7 @@ function makeOperator(
     getSignatureOutcome: () => Promise.resolve(chain.outcome),
     getBlockHeight: () => Promise.resolve(chain.height),
     // The node holds all history unless a test prunes it (#949 round 2).
-    getFirstAvailableSlot: () => Promise.resolve(chain.firstAvailableSlot),
+    getLocalLedgerFirstSlot: () => Promise.resolve(chain.firstAvailableSlot),
     isReachable,
   };
   return { operator: new OperatorSolanaTransfer(adapter), adapter };

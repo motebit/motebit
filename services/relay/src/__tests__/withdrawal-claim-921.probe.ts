@@ -84,7 +84,7 @@ function operatorWith(
   return new OperatorSolanaTransfer({
     honorsBroadcastHooks: true,
     // The node's retained-history edge (#949 rounds 2–3): full history.
-    getFirstAvailableSlot: () => Promise.resolve(0),
+    getLocalLedgerFirstSlot: () => Promise.resolve(0),
     ownAddress: "RelayTreasuryAddressBase58",
     getUsdcBalance: vi.fn().mockResolvedValue(10_000_000_000n),
     getUsdcBalanceOf: vi.fn().mockResolvedValue(10_000_000_000n),

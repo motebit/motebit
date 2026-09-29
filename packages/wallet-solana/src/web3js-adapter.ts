@@ -851,11 +851,11 @@ export class Web3JsRpcAdapter implements SolanaRpcAdapter {
       // keeps the prior rule — the in-send re-sign asks within seconds, well
       // inside any retention window; a LATE reader must hold the slot itself.)
       if (typeof tx.recentSlot === "number") {
-        const first = await this.connection.getFirstAvailableBlock();
+        const first = await this.connection.getMinimumLedgerSlot();
         if (!historyCoversLanding(tx, first)) {
           return {
             status: "rpc_error",
-            reason: `history pruned: the node's first available slot ${first} is after where ${tx.signature} could have landed`,
+            reason: `history pruned: the node's local ledger starts at slot ${first}, too late to cover where ${tx.signature} could have landed`,
             historyPruned: true,
           };
         }
@@ -866,9 +866,13 @@ export class Web3JsRpcAdapter implements SolanaRpcAdapter {
     }
   }
 
-  /** The node's first available slot (`getFirstAvailableBlock`, #949 round 2). Rejects on failure. */
-  async getFirstAvailableSlot(): Promise<number> {
-    return this.connection.getFirstAvailableBlock();
+  /**
+   * The node's LOCAL ledger edge — `minimumLedgerSlot`, never
+   * `getFirstAvailableBlock` (which mixes in BigTable and reads errors as 0).
+   * #949 round 4. Rejects on failure.
+   */
+  async getLocalLedgerFirstSlot(): Promise<number> {
+    return this.connection.getMinimumLedgerSlot();
   }
 
   /** The chain's block height at the decision commitment (#949). Rejects on failure. */

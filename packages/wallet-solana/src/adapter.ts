@@ -232,18 +232,31 @@ export function earliestLandingSlot(tx: SignedTransactionRef): number | null {
 }
 
 /**
- * Whether a node whose retained history starts at `firstAvailableSlot` has
- * kept every slot `tx` could have landed in (#949 round 2). Absence of a
- * signature is evidence of absence only inside that window: many RPC nodes
- * prune history after days, and a landed transaction then reads as absent.
+ * Slots above the local ledger's first slot before a status search there is
+ * authoritative (#949 round 4). agave's local search starts at the ledger's
+ * SECOND root, not its first slot meta, and ledger cleanup purges statuses
+ * ahead of their metas; both keep the true edge above `minimumLedgerSlot` by
+ * far less than this (~27 minutes of slots).
+ */
+export const LOCAL_LEDGER_EDGE_MARGIN = 4096;
+
+/**
+ * Whether an absence read on a node whose LOCAL ledger starts at
+ * `localLedgerFirstSlot` (`getLocalLedgerFirstSlot`) covers every slot `tx`
+ * could have landed in (#949 rounds 2–4). Absence of a signature is evidence
+ * of absence only there: below it a lookup falls through to BigTable, whose
+ * errors read as absent, and pruning nodes forget old history.
  */
 export function historyCoversLanding(
   tx: SignedTransactionRef,
-  firstAvailableSlot: number,
+  localLedgerFirstSlot: number,
 ): boolean {
   const earliest = earliestLandingSlot(tx);
   return (
-    earliest !== null && Number.isSafeInteger(firstAvailableSlot) && firstAvailableSlot <= earliest
+    earliest !== null &&
+    Number.isSafeInteger(localLedgerFirstSlot) &&
+    localLedgerFirstSlot >= 0 &&
+    localLedgerFirstSlot + LOCAL_LEDGER_EDGE_MARGIN <= earliest
   );
 }
 /**
@@ -389,12 +402,17 @@ export interface SolanaRpcAdapter {
   getBlockHeight?(): Promise<number>;
 
   /**
-   * The first slot the node still holds history for (`getFirstAvailableBlock`)
-   * — the lower edge of what an "absent" status read can speak for (#949
-   * round 2). Rejects on failure. Optional: without it a late absence read
-   * can never be proven complete.
+   * The first slot of the node's LOCAL ledger — `minimumLedgerSlot`, a
+   * blockstore-only read whose errors are errors (#949 round 4). It is the
+   * lower edge of what an "absent" status read can speak for: below it the
+   * node's historical lookup falls through to BigTable, which swallows every
+   * error as absent. NEVER `getFirstAvailableBlock`: agave answers that with
+   * min(blockstore, BigTable) — near genesis on a BigTable node — and turns
+   * a blockstore error, or a ledger with fewer than two roots, into 0.
+   * Rejects on failure. Optional: without it a late absence read can never
+   * be proven complete.
    */
-  getFirstAvailableSlot?(): Promise<number>;
+  getLocalLedgerFirstSlot?(): Promise<number>;
 
   /** Whether the RPC endpoint is reachable. Best-effort, no retries. */
   isReachable(): Promise<boolean>;

@@ -35,7 +35,6 @@ import {
   recordPayoutAttempt,
 } from "../withdrawal-chain-payouts.js";
 import { UNDECLARED_PAYOUT_HORIZON_MS } from "../payout-horizon.js";
-import { LANDING_SLOT_MARGIN } from "@motebit/wallet-solana";
 import { LoopSupervisor } from "../loop-supervisor.js";
 import { createTestRelay } from "./test-helpers.js";
 
@@ -67,7 +66,7 @@ function reader(
       if (o instanceof Error) return Promise.reject(o);
       return Promise.resolve(o ?? { status: "pending" });
     },
-    getFirstAvailableSlot(): Promise<number> {
+    getLocalLedgerFirstSlot(): Promise<number> {
       return firstAvailable instanceof Error
         ? Promise.reject(firstAvailable)
         : Promise.resolve(firstAvailable);
@@ -203,18 +202,10 @@ describe("readChainVerdict (#949)", () => {
     ).toMatchObject({ kind: "undecided", reason: "history_pruned", signature: "a" });
     // Just inside the margin is still pruned; far enough back decides it.
     expect(
-      await readChainVerdict(
-        d,
-        "wp",
-        reader({ a: { status: "expired" } }, RECENT - LANDING_SLOT_MARGIN + 1),
-      ),
+      await readChainVerdict(d, "wp", reader({ a: { status: "expired" } }, RECENT - 4_607)),
     ).toMatchObject({ kind: "undecided", reason: "history_pruned" });
     expect(
-      await readChainVerdict(
-        d,
-        "wp",
-        reader({ a: { status: "expired" } }, RECENT - LANDING_SLOT_MARGIN),
-      ),
+      await readChainVerdict(d, "wp", reader({ a: { status: "expired" } }, RECENT - 4_608)),
     ).toEqual({ kind: "not_paid", attempts: 1 });
     // The retention edge unreadable ⇒ never not_paid.
     expect(
@@ -234,21 +225,24 @@ describe("readChainVerdict (#949)", () => {
     const d = await db();
     const L = 50_000;
     recordPayoutAttempt(d, "wn", { signature: "a", lastValidBlockHeight: L }, 1);
-    // Every block's slot is at least its height, so the floor is L - 310.
+    // Every block's slot is at least its height, so the floor is L - 310; the
+    // local ledger must reach 4 096 slots (the local-edge margin) below that.
     expect(await readChainVerdict(d, "wn", reader({ a: { status: "expired" } }, 0))).toEqual({
       kind: "not_paid",
       attempts: 1,
     });
-    expect(await readChainVerdict(d, "wn", reader({ a: { status: "expired" } }, L - 310))).toEqual({
+    expect(
+      await readChainVerdict(d, "wn", reader({ a: { status: "expired" } }, L - 4_406)),
+    ).toEqual({
       kind: "not_paid",
       attempts: 1,
     });
     expect(
-      await readChainVerdict(d, "wn", reader({ a: { status: "expired" } }, L - 309)),
+      await readChainVerdict(d, "wn", reader({ a: { status: "expired" } }, L - 4_405)),
     ).toMatchObject({ kind: "undecided", reason: "history_pruned" });
   });
 
-  it("T2r: a node whose history starts inside the 512-slot landing margin is never read as not_paid", async () => {
+  it("T2r: a node whose local ledger starts inside the landing margin (512) or the local-edge margin (4 096) is never read as not_paid", async () => {
     const d = await db();
     recordPayoutAttempt(
       d,
@@ -256,13 +250,13 @@ describe("readChainVerdict (#949)", () => {
       { signature: "a", lastValidBlockHeight: 10, recentSlot: RECENT },
       1,
     );
-    for (const edge of [RECENT - 1, RECENT - 100, RECENT - 511]) {
+    for (const edge of [RECENT - 1, RECENT - 100, RECENT - 511, RECENT - 4_607]) {
       expect(
         await readChainVerdict(d, "wm", reader({ a: { status: "expired" } }, edge)),
       ).toMatchObject({ kind: "undecided", reason: "history_pruned" });
     }
     expect(
-      await readChainVerdict(d, "wm", reader({ a: { status: "expired" } }, RECENT - 512)),
+      await readChainVerdict(d, "wm", reader({ a: { status: "expired" } }, RECENT - 4_608)),
     ).toEqual({ kind: "not_paid", attempts: 1 });
   });
 

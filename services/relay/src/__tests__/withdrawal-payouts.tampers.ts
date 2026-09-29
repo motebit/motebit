@@ -325,7 +325,7 @@ export const TAMPERS: Tamper[] = [
     name: "C1b Path 0 sends over an adapter that cannot read the node's retained history (wallet-solana)",
     pkg: "packages/wallet-solana",
     file: "src/operator-transfer.ts",
-    find: 'typeof this.adapter.getSignatureOutcome === "function" &&\n      typeof this.adapter.getFirstAvailableSlot === "function"',
+    find: 'typeof this.adapter.getSignatureOutcome === "function" &&\n      typeof this.adapter.getLocalLedgerFirstSlot === "function"',
     replace: 'typeof this.adapter.getSignatureOutcome === "function"',
     test: "src/__tests__/operator-transfer.test.ts",
   },
@@ -333,7 +333,7 @@ export const TAMPERS: Tamper[] = [
     name: "C1b same, seen through the relay harness (the payout would have no door)",
     pkg: "packages/wallet-solana",
     file: "src/operator-transfer.ts",
-    find: 'typeof this.adapter.getSignatureOutcome === "function" &&\n      typeof this.adapter.getFirstAvailableSlot === "function"',
+    find: 'typeof this.adapter.getSignatureOutcome === "function" &&\n      typeof this.adapter.getLocalLedgerFirstSlot === "function"',
     replace: 'typeof this.adapter.getSignatureOutcome === "function"',
     test: HARNESS,
     testPkg: RELAY,
@@ -356,14 +356,71 @@ export const TAMPERS: Tamper[] = [
     test: UNIT,
     testPkg: RELAY,
   },
+  // (Round 4 retired "T2r seen through the relay harness": the 4 096-slot
+  // local-edge margin dominates the 512-slot landing margin in every cell the
+  // model can build, so the harness can no longer observe it. The landing
+  // margin's value stays pinned by the relay unit test entry above and the
+  // wallet-solana margin test.)
+  // ── round 4 (cold review of 7e106190c): absence is authoritative only
+  //    from the node's LOCAL ledger ─────────────────────────────────────────
   {
-    name: "T2r LANDING_SLOT_MARGIN = 0, seen through the relay harness (near-send retention)",
+    name: "L1 the relay reads the edge from getFirstAvailableBlock (BigTable-mixed) instead of the local ledger",
+    pkg: RELAY,
+    file: "src/withdrawal-chain-payouts.ts",
+    find: "firstAvailable = await reader.getLocalLedgerFirstSlot();",
+    replace:
+      "firstAvailable = await (reader as unknown as { getFirstAvailableSlot(): Promise<number> }).getFirstAvailableSlot();",
+    test: HARNESS,
+  },
+  {
+    name: "L2 the adapter's expiry check reads getFirstAvailableBlock",
+    pkg: "packages/wallet-solana",
+    file: "src/web3js-adapter.ts",
+    find: "const first = await this.connection.getMinimumLedgerSlot();",
+    replace: "const first = await this.connection.getFirstAvailableBlock();",
+    test: "src/__tests__/web3js-adapter.test.ts",
+  },
+  {
+    name: "L3 the adapter's local-edge read is getFirstAvailableBlock",
+    pkg: "packages/wallet-solana",
+    file: "src/web3js-adapter.ts",
+    find: "    return this.connection.getMinimumLedgerSlot();",
+    replace: "    return this.connection.getFirstAvailableBlock();",
+    test: "src/__tests__/web3js-adapter.test.ts",
+  },
+  {
+    name: "L4 LOCAL_LEDGER_EDGE_MARGIN = 0 (wallet-solana)",
     pkg: "packages/wallet-solana",
     file: "src/adapter.ts",
-    find: "export const LANDING_SLOT_MARGIN = 512;",
-    replace: "export const LANDING_SLOT_MARGIN = 0;",
+    find: "export const LOCAL_LEDGER_EDGE_MARGIN = 4096;",
+    replace: "export const LOCAL_LEDGER_EDGE_MARGIN = 0;",
+    test: "src/__tests__/web3js-adapter.test.ts",
+  },
+  {
+    name: "L4 LOCAL_LEDGER_EDGE_MARGIN = 0, seen through the relay unit tests",
+    pkg: "packages/wallet-solana",
+    file: "src/adapter.ts",
+    find: "export const LOCAL_LEDGER_EDGE_MARGIN = 4096;",
+    replace: "export const LOCAL_LEDGER_EDGE_MARGIN = 0;",
+    test: UNIT,
+    testPkg: RELAY,
+  },
+  {
+    name: "L4 LOCAL_LEDGER_EDGE_MARGIN = 0, seen through the relay harness (cleanup lag, pruned_1000)",
+    pkg: "packages/wallet-solana",
+    file: "src/adapter.ts",
+    find: "export const LOCAL_LEDGER_EDGE_MARGIN = 4096;",
+    replace: "export const LOCAL_LEDGER_EDGE_MARGIN = 0;",
     test: HARNESS,
     testPkg: RELAY,
+  },
+  {
+    name: "L5 a negative local edge is accepted as coverage",
+    pkg: "packages/wallet-solana",
+    file: "src/adapter.ts",
+    find: "    localLedgerFirstSlot >= 0 &&\n",
+    replace: "",
+    test: "src/__tests__/web3js-adapter.test.ts",
   },
 ];
 

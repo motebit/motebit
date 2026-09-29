@@ -43,7 +43,7 @@ function makeOperator(overrides: Partial<SolanaRpcAdapter> = {}): {
     // and can read its outcome.
     honorsBroadcastHooks: true,
     // The node's retained-history edge (#949 rounds 2–3): full history.
-    getFirstAvailableSlot: () => Promise.resolve(0),
+    getLocalLedgerFirstSlot: () => Promise.resolve(0),
     getSignatureOutcome: vi.fn().mockResolvedValue({ status: "pending" }),
     ownAddress: "RelayTreasuryAddressBase58",
     getUsdcBalance: vi.fn().mockResolvedValue(10_000_000_000n),

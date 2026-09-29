@@ -145,8 +145,11 @@ function markAttemptSeen(db: DatabaseDriver, withdrawalId: string, signature: st
 /** The reads the verdict needs — `OperatorSolanaTransfer` satisfies it. */
 export interface SignatureOutcomeReader {
   getSignatureOutcome(tx: SignedTransactionRef): Promise<SignatureOutcome>;
-  /** The node's first available slot — the lower edge of what "absent" can speak for. */
-  getFirstAvailableSlot(): Promise<number>;
+  /**
+   * The node's LOCAL ledger edge (`minimumLedgerSlot`) — the lower edge of
+   * what "absent" can speak for (#949 round 4; never `getFirstAvailableBlock`).
+   */
+  getLocalLedgerFirstSlot(): Promise<number>;
 }
 
 export type ChainVerdict =
@@ -187,7 +190,7 @@ export async function readChainVerdict(
   const retainedFrom = async (): Promise<number | null> => {
     if (firstAvailable === undefined) {
       try {
-        firstAvailable = await reader.getFirstAvailableSlot();
+        firstAvailable = await reader.getLocalLedgerFirstSlot();
       } catch {
         firstAvailable = null;
       }
@@ -215,8 +218,9 @@ export async function readChainVerdict(
     if (outcome.status === "expired" && a.seen_in_block === 1) {
       outcome = { status: "pending", seen: true };
     }
-    // Absence of evidence is evidence of absence only inside the window the
-    // node provably retains (#949 round 2). An `expired` is accepted only when
+    // Absence of evidence is evidence of absence only inside the node's LOCAL
+    // ledger (#949 rounds 2–4): below it agave asks BigTable and reads any
+    // error as absent. The edge is `minimumLedgerSlot` + LOCAL_LEDGER_EDGE_MARGIN. An `expired` is accepted only when
     // the node's first available slot is at or before where this transaction
     // could first land (`earliestLandingSlot`: its recorded slot less the
     // margin; for an attempt recorded without one, the floor its own validity
@@ -232,7 +236,7 @@ export async function readChainVerdict(
           reason:
             first === null
               ? "the node's retained history could not be read"
-              : `the node's history starts at slot ${first}, after where ${a.signature} could have landed`,
+              : `the node's local ledger starts at slot ${first}, too late to cover where ${a.signature} could have landed`,
           historyPruned: true,
         };
       }

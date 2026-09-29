@@ -43,6 +43,7 @@ export {
   type SignatureOutcome,
   LANDING_SLOT_MARGIN,
   LANDING_HEIGHT_WINDOW,
+  LOCAL_LEDGER_EDGE_MARGIN,
   earliestLandingSlot,
   historyCoversLanding,
 } from "./adapter.js";

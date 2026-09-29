@@ -117,7 +117,7 @@ describe("OperatorSolanaTransfer", () => {
     const full = {
       honorsBroadcastHooks: true as const,
       getSignatureOutcome: outcome(),
-      getFirstAvailableSlot: first(),
+      getLocalLedgerFirstSlot: first(),
     };
     expect(new OperatorSolanaTransfer(makeAdapter(full)).recordsBroadcasts).toBe(true);
     expect(new OperatorSolanaTransfer(makeAdapter()).recordsBroadcasts).toBe(false);
@@ -126,7 +126,7 @@ describe("OperatorSolanaTransfer", () => {
     const { getSignatureOutcome: _o, ...noOutcome } = full;
     expect(new OperatorSolanaTransfer(makeAdapter(noOutcome)).recordsBroadcasts).toBe(false);
     // Round 3: without the retention edge, absence can never be proven.
-    const { getFirstAvailableSlot: _f, ...noRetention } = full;
+    const { getLocalLedgerFirstSlot: _f, ...noRetention } = full;
     expect(new OperatorSolanaTransfer(makeAdapter(noRetention)).recordsBroadcasts).toBe(false);
   });
 
@@ -140,14 +140,14 @@ describe("OperatorSolanaTransfer", () => {
     expect(none.status).toBe("rpc_error");
   });
 
-  it("getFirstAvailableSlot delegates, and rejects when the adapter cannot read it", async () => {
+  it("getLocalLedgerFirstSlot delegates, and rejects when the adapter cannot read it", async () => {
     const op = new OperatorSolanaTransfer(
-      makeAdapter({ getFirstAvailableSlot: vi.fn().mockResolvedValue(9) }),
+      makeAdapter({ getLocalLedgerFirstSlot: vi.fn().mockResolvedValue(9) }),
     );
-    expect(await op.getFirstAvailableSlot()).toBe(9);
-    await expect(new OperatorSolanaTransfer(makeAdapter()).getFirstAvailableSlot()).rejects.toThrow(
-      /first available slot/,
-    );
+    expect(await op.getLocalLedgerFirstSlot()).toBe(9);
+    await expect(
+      new OperatorSolanaTransfer(makeAdapter()).getLocalLedgerFirstSlot(),
+    ).rejects.toThrow(/local ledger edge/);
   });
 
   it("getBlockHeight delegates, and rejects when the adapter cannot read it", async () => {

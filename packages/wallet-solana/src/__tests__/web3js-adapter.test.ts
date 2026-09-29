@@ -41,6 +41,7 @@ import {
 import {
   LANDING_HEIGHT_WINDOW,
   LANDING_SLOT_MARGIN,
+  LOCAL_LEDGER_EDGE_MARGIN,
   earliestLandingSlot,
   historyCoversLanding,
 } from "../adapter.js";
@@ -70,7 +71,7 @@ beforeEach(() => {
   // a fixed slot unless a test stubs it on its own connection.
   vi.spyOn(Connection.prototype, "getSlot").mockResolvedValue(5_000_000);
   // …and a node holding full history, so an expiry read can be decisive.
-  vi.spyOn(Connection.prototype, "getFirstAvailableBlock").mockResolvedValue(0);
+  vi.spyOn(Connection.prototype, "getMinimumLedgerSlot").mockResolvedValue(0);
 });
 
 describe("Web3JsRpcAdapter", () => {
@@ -1826,49 +1827,69 @@ describe("getSignatureOutcome: absence is evidence only inside retained history 
   }
   const past = { height: 500, slot: 90_000, statusSlot: 90_000, status: null };
 
-  it("a ref with recentSlot is expired only while the node still holds that slot", async () => {
+  it("a ref with recentSlot is expired only while the node's LOCAL ledger holds that slot (+ margin)", async () => {
     const { adapter, conn } = adapterWith();
     chainSays(conn, past);
     const tx = { signature: "s", lastValidBlockHeight: 100, recentSlot: 50_000 };
-    const first = vi.spyOn(conn, "getFirstAvailableBlock").mockResolvedValue(1_000);
+    const earliest = 50_000 - LANDING_SLOT_MARGIN;
+    const local = vi
+      .spyOn(conn, "getMinimumLedgerSlot")
+      .mockResolvedValue(earliest - LOCAL_LEDGER_EDGE_MARGIN);
     expect(await adapter.getSignatureOutcome(tx)).toEqual({ status: "expired" });
-    // Pruned past where the transaction could have landed: undecided.
-    first.mockResolvedValue(49_900);
+    // Inside the margin, or pruned past it: undecided.
+    local.mockResolvedValue(earliest - LOCAL_LEDGER_EDGE_MARGIN + 1);
     expect(await adapter.getSignatureOutcome(tx)).toMatchObject({
       status: "rpc_error",
       historyPruned: true,
     });
-    // A failed retention read is an rpc_error, never expiry.
-    first.mockRejectedValue(new Error("down"));
+    // A failed local-edge read is an rpc_error, never expiry.
+    local.mockRejectedValue(new Error("down"));
     expect((await adapter.getSignatureOutcome(tx)).status).toBe("rpc_error");
   });
 
-  it("without a recentSlot, the floor is the transaction's own validity (slot ≥ block height) — deep history decides, recent history does not", () => {
+  it("round 4: getFirstAvailableBlock is never the edge — a BigTable node's near-genesis answer does not make absence authoritative", async () => {
+    const { adapter, conn } = adapterWith();
+    chainSays(conn, past);
+    const tx = { signature: "s", lastValidBlockHeight: 100, recentSlot: 50_000 };
+    // min(blockstore, BigTable) near genesis — and 0 on an error or < 2 roots.
+    const firstAvailable = vi.spyOn(conn, "getFirstAvailableBlock").mockResolvedValue(0);
+    // The local ledger has pruned the landing range.
+    vi.spyOn(conn, "getMinimumLedgerSlot").mockResolvedValue(49_900);
+    expect(await adapter.getSignatureOutcome(tx)).toMatchObject({
+      status: "rpc_error",
+      historyPruned: true,
+    });
+    expect(firstAvailable).not.toHaveBeenCalled();
+  });
+
+  it("without a recentSlot, the floor is the transaction's own validity (slot ≥ block height) — deep local history decides, recent history does not", () => {
     const ref = { signature: "s", lastValidBlockHeight: 10_000 };
     expect(earliestLandingSlot(ref)).toBe(10_000 - LANDING_HEIGHT_WINDOW);
     expect(LANDING_HEIGHT_WINDOW).toBe(310);
     expect(historyCoversLanding(ref, 0)).toBe(true);
-    expect(historyCoversLanding(ref, 10_000 - 310)).toBe(true);
-    expect(historyCoversLanding(ref, 10_000 - 309)).toBe(false);
+    expect(historyCoversLanding(ref, 10_000 - 310 - LOCAL_LEDGER_EDGE_MARGIN)).toBe(true);
+    expect(historyCoversLanding(ref, 10_000 - 309 - LOCAL_LEDGER_EDGE_MARGIN)).toBe(false);
     expect(historyCoversLanding({ signature: "s", lastValidBlockHeight: Number.NaN }, 0)).toBe(
       false,
     );
   });
 
-  it("historyCoversLanding honours the margin under a recentSlot", () => {
-    const ref = { signature: "s", lastValidBlockHeight: 1 };
+  it("historyCoversLanding honours both margins under a recentSlot, and rejects a negative or non-integer edge", () => {
+    const ref = { signature: "s", lastValidBlockHeight: 1, recentSlot: 100_000 };
     expect(LANDING_SLOT_MARGIN).toBe(512);
-    expect(historyCoversLanding({ ...ref, recentSlot: 1_000 }, 1_000 - LANDING_SLOT_MARGIN)).toBe(
-      true,
-    );
-    expect(
-      historyCoversLanding({ ...ref, recentSlot: 1_000 }, 1_000 - LANDING_SLOT_MARGIN + 1),
-    ).toBe(false);
+    expect(LOCAL_LEDGER_EDGE_MARGIN).toBe(4096);
+    const edge = 100_000 - 512 - 4096;
+    expect(historyCoversLanding(ref, edge)).toBe(true);
+    expect(historyCoversLanding(ref, edge + 1)).toBe(false);
+    expect(historyCoversLanding(ref, -1)).toBe(false);
+    expect(historyCoversLanding(ref, 1.5)).toBe(false);
   });
 
-  it("getFirstAvailableSlot reads getFirstAvailableBlock", async () => {
+  it("getLocalLedgerFirstSlot reads minimumLedgerSlot (blockstore-only), never getFirstAvailableBlock", async () => {
     const { adapter, conn } = adapterWith();
-    vi.spyOn(conn, "getFirstAvailableBlock").mockResolvedValue(123);
-    expect(await adapter.getFirstAvailableSlot()).toBe(123);
+    vi.spyOn(conn, "getMinimumLedgerSlot").mockResolvedValue(123);
+    const firstAvailable = vi.spyOn(conn, "getFirstAvailableBlock").mockResolvedValue(0);
+    expect(await adapter.getLocalLedgerFirstSlot()).toBe(123);
+    expect(firstAvailable).not.toHaveBeenCalled();
   });
 });

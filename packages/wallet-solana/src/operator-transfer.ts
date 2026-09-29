@@ -129,7 +129,7 @@ export class OperatorSolanaTransfer {
     return (
       this.adapter.honorsBroadcastHooks === true &&
       typeof this.adapter.getSignatureOutcome === "function" &&
-      typeof this.adapter.getFirstAvailableSlot === "function"
+      typeof this.adapter.getLocalLedgerFirstSlot === "function"
     );
   }
 
@@ -149,14 +149,15 @@ export class OperatorSolanaTransfer {
   }
 
   /**
-   * The node's first available slot (#949 round 2): the lower edge of what an
-   * "absent" read can speak for. Rejects when it cannot be read.
+   * The node's LOCAL ledger edge (`minimumLedgerSlot`, #949 round 4): the
+   * lower edge of what an "absent" read can speak for. Rejects when it
+   * cannot be read.
    */
-  getFirstAvailableSlot(): Promise<number> {
-    if (typeof this.adapter.getFirstAvailableSlot !== "function") {
-      return Promise.reject(new Error("adapter cannot read the node's first available slot"));
+  getLocalLedgerFirstSlot(): Promise<number> {
+    if (typeof this.adapter.getLocalLedgerFirstSlot !== "function") {
+      return Promise.reject(new Error("adapter cannot read the node's local ledger edge"));
     }
-    return this.adapter.getFirstAvailableSlot();
+    return this.adapter.getLocalLedgerFirstSlot();
   }
 
   /**
