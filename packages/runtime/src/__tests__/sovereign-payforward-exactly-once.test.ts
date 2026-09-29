@@ -53,8 +53,28 @@ function step(): PlanStep {
   };
 }
 
-/** Every worker's `motebit_task` hangs until the adapter's timeout aborts it. */
-function stubNetwork(toolCalls: string[]): void {
+/**
+ * A request that never answers, settled only by its abort signal — the way a
+ * real `fetch` behaves. An ALREADY-aborted signal rejects at once: its
+ * `abort` event has fired and will not fire again, so a listener alone would
+ * wait forever. The adapter arms its timeout before it mints the task token
+ * and opens the session, so under load (or a cold dynamic import) the abort
+ * can land before `motebit_task` is even sent; the stub must not hang then.
+ */
+function pendingUntilAborted(signal: AbortSignal | null | undefined): Promise<Response> {
+  return new Promise((_resolve, reject) => {
+    const abort = (): void => reject(new Error("aborted"));
+    if (signal?.aborted === true) return abort();
+    signal?.addEventListener("abort", abort, { once: true });
+  });
+}
+
+/**
+ * Every worker's `motebit_task` hangs until the adapter's timeout aborts it.
+ * `sessionDelayMs` holds the session handshake back so a test can place the
+ * abort BEFORE `motebit_task` goes out.
+ */
+function stubNetwork(toolCalls: string[], sessionDelayMs = 0): void {
   const json = (body: unknown, headers?: Record<string, string>): Response =>
     ({
       ok: true,
@@ -87,13 +107,14 @@ function stubNetwork(toolCalls: string[]): void {
         id?: number;
       };
       if (body.method === "initialize") {
-        return Promise.resolve(json({ id: body.id, result: {} }, { "mcp-session-id": "s" }));
+        const answer = json({ id: body.id, result: {} }, { "mcp-session-id": "s" });
+        return sessionDelayMs > 0
+          ? new Promise((r) => setTimeout(() => r(answer), sessionDelayMs))
+          : Promise.resolve(answer);
       }
       if (body.method === "notifications/initialized") return Promise.resolve(json({}));
       toolCalls.push(url);
-      return new Promise((_resolve, reject) => {
-        init?.signal?.addEventListener("abort", () => reject(new Error("aborted")));
-      });
+      return pendingUntilAborted(init?.signal);
     }),
   );
 }
@@ -103,73 +124,87 @@ afterEach(() => {
 });
 
 describe("#887 runtime pay-forward — confirmation + durable ledger are wired", () => {
-  it("a lost send response is confirmed onchain, a timed-out task is recorded as owed, and the next hire of that worker is refused before paying", async () => {
-    const landed: Array<{ to: string; amount: bigint; sig: string }> = [];
-    const adapter: SolanaRpcAdapter = {
-      ownAddress: "PayerAddr",
-      getUsdcBalance: vi.fn().mockResolvedValue(10_000_000n),
-      getUsdcBalanceOf: vi.fn().mockResolvedValue(0n),
-      getSolBalance: vi.fn().mockResolvedValue(10_000_000n),
-      // The transfer LANDS, then the confirmation response is lost.
-      sendUsdc: vi.fn((args: SendUsdcArgs) => {
-        const sig = `sig-${landed.length + 1}`;
-        landed.push({ to: args.toAddress, amount: args.microAmount, sig });
-        return Promise.reject(new Error("confirmation timed out"));
-      }),
-      sendUsdcBatch: vi.fn().mockResolvedValue([]),
-      getTransaction: vi.fn().mockResolvedValue({ status: "not_found" }),
-      isReachable: vi.fn().mockResolvedValue(true),
-      findOutgoingTransfer: vi.fn((q: OutgoingTransferQuery): Promise<OutgoingTransferLookup> => {
-        const hits = landed.filter(
-          (l) =>
-            l.to === q.toAddress &&
-            l.amount === q.microAmount &&
-            !(q.excludeSignatures ?? []).includes(l.sig),
-        );
-        return Promise.resolve(
-          hits.length === 1
-            ? { status: "found", signature: hits[0]!.sig }
-            : { status: "not_found" },
-        );
-      }),
-    };
-    const { SolanaWalletRail } = await import("@motebit/wallet-solana");
-    const { generateKeypair } = await import("@motebit/encryption");
-    const runtime = new MotebitRuntime(
-      {
-        motebitId: "delegator",
-        tickRateHz: 0,
-        signingKeys: await generateKeypair(),
-        solanaWallet: new SolanaWalletRail(adapter),
-      },
-      { storage: createInMemoryStorage(), renderer: new NullRenderer() },
-    );
-    const toolCalls: string[] = [];
-    stubNetwork(toolCalls);
+  // The task timeout can fire while `motebit_task` is pending (the usual
+  // order) or before it is sent (a loaded machine: the timer is armed before
+  // the token mint and the session handshake). Both orders are the same money
+  // outcome, and neither may hang. The second case pins the abort first:
+  // a 1 ms timeout against a 25 ms session handshake.
+  it.each([
+    { order: "abort while motebit_task is pending", timeoutMs: 30, sessionDelayMs: 0 },
+    { order: "abort before motebit_task is sent", timeoutMs: 1, sessionDelayMs: 25 },
+  ])(
+    "a lost send response is confirmed onchain, a timed-out task is recorded as owed, and the next hire of that worker is refused before paying ($order)",
+    { timeout: 10_000 },
+    async ({ timeoutMs, sessionDelayMs }) => {
+      const landed: Array<{ to: string; amount: bigint; sig: string }> = [];
+      const adapter: SolanaRpcAdapter = {
+        ownAddress: "PayerAddr",
+        getUsdcBalance: vi.fn().mockResolvedValue(10_000_000n),
+        getUsdcBalanceOf: vi.fn().mockResolvedValue(0n),
+        getSolBalance: vi.fn().mockResolvedValue(10_000_000n),
+        // The transfer LANDS, then the confirmation response is lost.
+        sendUsdc: vi.fn((args: SendUsdcArgs) => {
+          const sig = `sig-${landed.length + 1}`;
+          landed.push({ to: args.toAddress, amount: args.microAmount, sig });
+          return Promise.reject(new Error("confirmation timed out"));
+        }),
+        sendUsdcBatch: vi.fn().mockResolvedValue([]),
+        getTransaction: vi.fn().mockResolvedValue({ status: "not_found" }),
+        isReachable: vi.fn().mockResolvedValue(true),
+        findOutgoingTransfer: vi.fn((q: OutgoingTransferQuery): Promise<OutgoingTransferLookup> => {
+          const hits = landed.filter(
+            (l) =>
+              l.to === q.toAddress &&
+              l.amount === q.microAmount &&
+              !(q.excludeSignatures ?? []).includes(l.sig),
+          );
+          return Promise.resolve(
+            hits.length === 1
+              ? { status: "found", signature: hits[0]!.sig }
+              : { status: "not_found" },
+          );
+        }),
+      };
+      const { SolanaWalletRail } = await import("@motebit/wallet-solana");
+      const { generateKeypair } = await import("@motebit/encryption");
+      const runtime = new MotebitRuntime(
+        {
+          motebitId: "delegator",
+          tickRateHz: 0,
+          signingKeys: await generateKeypair(),
+          solanaWallet: new SolanaWalletRail(adapter),
+        },
+        { storage: createInMemoryStorage(), renderer: new NullRenderer() },
+      );
+      const toolCalls: string[] = [];
+      stubNetwork(toolCalls, sessionDelayMs);
 
-    const sovereign = runtime.createSovereignDelegationAdapter("https://relay.test")!;
-    expect(sovereign).not.toBeNull();
+      const sovereign = runtime.createSovereignDelegationAdapter("https://relay.test")!;
+      expect(sovereign).not.toBeNull();
 
-    await expect(sovereign.delegateStep(step(), 30)).rejects.toThrow(
-      /^Paid, result not retrieved \(tx sig-1, worker worker-a\)/,
-    );
-    expect(landed).toHaveLength(1);
-    expect(toolCalls).toEqual([WORKER.url]);
+      await expect(sovereign.delegateStep(step(), timeoutMs)).rejects.toThrow(
+        /^Paid, result not retrieved \(tx sig-1, worker worker-a\)/,
+      );
+      expect(landed).toHaveLength(1);
+      expect(toolCalls).toEqual([WORKER.url]);
 
-    // The runtime's own ledger holds it — the same one /result reads.
-    const owed = runtime.outstandingPaidResults();
-    expect(owed).toHaveLength(1);
-    expect(owed[0]).toMatchObject({
-      workerMotebitId: WORKER.id,
-      capability: "web_search",
-      txHash: "sig-1",
-      taskId: `sovereign:${WORKER.id}:sig-1`,
-      paidMicro: 250_000,
-    });
+      // The runtime's own ledger holds it — the same one /result reads.
+      const owed = runtime.outstandingPaidResults();
+      expect(owed).toHaveLength(1);
+      expect(owed[0]).toMatchObject({
+        workerMotebitId: WORKER.id,
+        capability: "web_search",
+        txHash: "sig-1",
+        taskId: `sovereign:${WORKER.id}:sig-1`,
+        paidMicro: 250_000,
+      });
 
-    // A second hire of the same work is refused BEFORE any money moves.
-    await expect(sovereign.delegateStep(step(), 30)).rejects.toThrow(/Refused before payment/);
-    expect(landed).toHaveLength(1);
-    expect(adapter.sendUsdc).toHaveBeenCalledTimes(1);
-  });
+      // A second hire of the same work is refused BEFORE any money moves.
+      await expect(sovereign.delegateStep(step(), timeoutMs)).rejects.toThrow(
+        /Refused before payment/,
+      );
+      expect(landed).toHaveLength(1);
+      expect(adapter.sendUsdc).toHaveBeenCalledTimes(1);
+    },
+  );
 });
