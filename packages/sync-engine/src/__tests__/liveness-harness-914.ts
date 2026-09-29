@@ -10,7 +10,12 @@
  *
  *   1. the branch delivers at least as many events as main within the horizon;
  *   2. when main delivers everything, the branch does too;
- *   3. the branch's push cursor never passes an event the relay does not hold.
+ *   3. the branch's push cursor never passes an event the relay does not hold;
+ *   4. the branch never sends an event on the socket while a frame carrying
+ *      it is still in flight;
+ *   5. an acknowledgment moves the branch's cursor whenever it arrives: a
+ *      quiet L + 15 min after the horizon, the cursor has passed every event
+ *      the relay held at the horizon (push cells).
  *
  * Dimensions:
  *   - direction: push (the device's own events) or pull (a sibling's)
@@ -74,6 +79,13 @@ export interface Outcome {
   delivered: number;
   total: number;
   cursorSafe: boolean;
+  /** Socket frames that re-sent an event while a frame carrying it was still in flight (branch). */
+  resentInFlight?: number;
+  /**
+   * The push cursor reached, within a quiet L + 15 min after the horizon,
+   * every event the relay held at the horizon (branch; push cells).
+   */
+  cursorLive?: boolean;
 }
 
 let cellNo = 0;
@@ -399,8 +411,30 @@ async function runBranch(c: Cell): Promise<Outcome> {
   }
   await runFor(horizonMs(c));
   const out = await measure(w, c, engine.getCursor().last_version_clock);
+  out.resentInFlight = w.net.resentInFlight;
+  if (c.dir === "push") {
+    // An acknowledgment moves the cursor whenever it arrives: every event
+    // the relay held at the horizon is acknowledged within L, so a quiet
+    // L + 15 min later the cursor has passed them all.
+    const frontier = await heldFrontier(w);
+    await runFor(c.L * S + 15 * MIN);
+    out.cursorLive = engine.getCursor().last_version_clock >= frontier;
+  }
   for (const s of w.stop) s();
   return out;
+}
+
+/** The largest clock at or below which the relay holds every one of the device's own events. */
+async function heldFrontier(w: World): Promise<number> {
+  const mine = (await w.local.query({ motebit_id: MID }))
+    .filter((e) => e.device_id === "phone")
+    .sort((a, b) => a.version_clock - b.version_clock);
+  let frontier = 0;
+  for (const e of mine) {
+    if (!w.relay.holds(e.event_id)) break;
+    frontier = e.version_clock;
+  }
+  return frontier;
 }
 
 // ---------------------------------------------------------------------------
@@ -467,6 +501,12 @@ export function cellName(c: Cell): string {
 export function verdict(c: Cell, r: { main: Outcome; branch: Outcome }): string | null {
   const name = cellName(c);
   if (!r.branch.cursorSafe) return `${name}: the cursor passed an event the relay does not hold`;
+  if ((r.branch.resentInFlight ?? 0) > 0) {
+    return `${name}: ${r.branch.resentInFlight} socket frame(s) re-sent an event still in flight`;
+  }
+  if (r.branch.cursorLive === false) {
+    return `${name}: an acknowledgment never moved the cursor (quiet L + 15 min after the horizon)`;
+  }
   if (r.branch.delivered < r.main.delivered) {
     return `${name}: branch ${r.branch.delivered}/${r.branch.total} < main ${r.main.delivered}/${r.main.total}`;
   }
@@ -555,7 +595,7 @@ export function defineShard(k: number): void {
         }
         if (process.env.ZZ914_VERBOSE) {
           process.stdout.write(
-            `CELL ${name}: main ${r.main.delivered}/${r.main.total} branch ${r.branch.delivered}/${r.branch.total} safe=${r.branch.cursorSafe}\n`,
+            `CELL ${name}: main ${r.main.delivered}/${r.main.total} branch ${r.branch.delivered}/${r.branch.total} safe=${r.branch.cursorSafe} resent=${r.branch.resentInFlight ?? 0} live=${r.branch.cursorLive ?? "-"}\n`,
           );
         }
         const v = verdict(c, r);

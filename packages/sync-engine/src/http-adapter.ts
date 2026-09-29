@@ -226,7 +226,10 @@ export class HttpEventStoreAdapter implements EventStoreAdapter, SeqPullSource {
   /** A byte arrived for `a`: progress for it, life for the link, activity for the watchdog. */
   private heard(a: Attempt): void {
     a.progressAt = Date.now();
-    if (!a.probe) this.link.lastByteAt = a.progressAt;
+    // A probe's answer says the relay is up, not that this cycle's work
+    // moved: it is neither the link's bytes nor the watchdog's progress.
+    if (a.probe) return;
+    this.link.lastByteAt = a.progressAt;
     this.active();
   }
 

@@ -164,6 +164,29 @@ export class SimNet {
   readonly up = new Link();
   readonly down = new Link();
   sockets: SimSocket[] = [];
+  /**
+   * Per event, the socket push frames carrying it that are on the wire and
+   * not yet answered (acked, refused, or lost with a closed socket).
+   */
+  readonly framesInFlight = new Map<string, number>();
+  /** Socket push frames that carried an event already in flight in another frame (#914 r7). */
+  resentInFlight = 0;
+
+  frameOut(ids: readonly string[]): void {
+    for (const id of ids) {
+      const n = this.framesInFlight.get(id) ?? 0;
+      if (n > 0) this.resentInFlight++;
+      this.framesInFlight.set(id, n + 1);
+    }
+  }
+
+  frameAnswered(ids: readonly string[]): void {
+    for (const id of ids) {
+      const n = (this.framesInFlight.get(id) ?? 1) - 1;
+      if (n > 0) this.framesInFlight.set(id, n);
+      else this.framesInFlight.delete(id);
+    }
+  }
 
   constructor(
     readonly relay: SimRelay,
@@ -358,6 +381,8 @@ export class SimSocket {
   onerror: (() => void) | null = null;
   onmessage: ((e: { data: string }) => void) | null = null;
   private inflight: Tx[] = [];
+  /** Push frames sent on this socket and not yet answered: their event ids. */
+  private unanswered = new Set<string[]>();
   private deviceKey: string;
 
   constructor(
@@ -378,10 +403,19 @@ export class SimSocket {
     const msg = JSON.parse(data) as { type: string; events?: EventLogEntry[]; push_id?: string };
     const events = msg.type === "push" ? (msg.events ?? []) : [];
     if (msg.type === "push") trace(`ws push ${msg.push_id ?? "-"} n=${events.length} sent`);
+    const ids = events.map((e) => e.event_id);
+    if (msg.type === "push") {
+      this.net.frameOut(ids);
+      this.unanswered.add(ids);
+    }
+    const answered = (): void => {
+      if (msg.type === "push" && this.unanswered.delete(ids)) this.net.frameAnswered(ids);
+    };
     const tx = this.net.up.send(this.net.cfg.upMs * events.length, () => {
       this.inflight.splice(this.inflight.indexOf(tx), 1);
       if (this.readyState !== 1) return;
       if (!this.net.relay.admit(this.deviceKey)) {
+        answered();
         this.reply({ type: "error", message: "Rate limit exceeded" }, REPLY_MS);
         return;
       }
@@ -399,13 +433,15 @@ export class SimSocket {
           ...(msg.push_id !== undefined ? { push_id: msg.push_id } : {}),
         },
         this.net.relay.latencyMs,
+        answered,
       );
     });
     this.inflight.push(tx);
   }
 
-  private reply(msg: unknown, ms: number): void {
+  private reply(msg: unknown, ms: number, onDelivered?: () => void): void {
     setTimeout(() => {
+      onDelivered?.();
       if (this.readyState === 1) this.onmessage?.({ data: JSON.stringify(msg) });
     }, ms);
   }
@@ -414,6 +450,9 @@ export class SimSocket {
     if (this.readyState === 3) return;
     this.readyState = 3;
     trace(`ws close (${this.inflight.length} unsent)`);
+    // Frames not yet answered are lost with the connection: no longer in flight.
+    for (const ids of this.unanswered) this.net.frameAnswered(ids);
+    this.unanswered.clear();
     // Bytes not yet sent are lost with the connection.
     for (const tx of this.inflight.splice(0)) this.net.up.cancel(tx);
   }
