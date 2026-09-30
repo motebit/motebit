@@ -76,6 +76,7 @@ import {
   recordTaskRoute,
   cleanupTaskRoutes,
   TASK_ROUTE_RETENTION_MS,
+  forwardTaskViaMcp,
 } from "../task-routing.js";
 import {
   persistReceiptChain,
@@ -1494,4 +1495,430 @@ describe("#890 r7 (P1) a late MCP answer never overwrites a settled task's recei
       await w.relay.close();
     }
   }, 30_000);
+});
+
+// ── #890 round 8 — the ANSWER dimension: one chokepoint decides a task's answer ──
+//
+// door (result POST, MCP forward, federation result)
+//   × entry state (unsettled; settled by W's completed / failed over the POST;
+//     settled by W's completed over the MCP forward; answered-not-settled by
+//     W's completed through the peer; settled then evicted to the archive)
+//   × signer (W the routed executor; W2 a second recorded executor — the
+//     ranking fan-out records several local picks and one federated route;
+//     E a foreign identity; a bad signature naming W; D the delegator's own
+//     device — its admission route makes it a recorded executor; a receipt
+//     POSTed under the master token by an identity with no key on file)
+//   × receipt status (completed, failed).
+//
+// Oracles, per cell:
+//   (1) WRITE-ONCE   the poll answer after the door is the answer before it,
+//                    except: an unanswered entry takes an accepted receipt,
+//                    and a settled `failed` is replaced by a verified
+//                    `completed` from a recorded executor (the archive's
+//                    completed-outranks-failed rule, applied identically);
+//   (2) ONE KEY      a planner that adopted X (409 naming X) never submits a
+//                    second Idempotency-Key while X's answer is `completed`
+//                    or undetermined (a `failed` answer from a recorded
+//                    executor is positive evidence: its rotation is owed);
+//   (3) POSITIVE     a door (POST, federation) reports acceptance (2xx) only
+//                    when the entry took THIS receipt.
+type AnswerDoor = "post" | "mcp" | "fed";
+type AnswerState =
+  | "unsettled"
+  | "settled_completed"
+  | "settled_failed"
+  | "settled_completed_mcp"
+  | "answered_not_settled"
+  | "evicted";
+type AnswerSigner = "routed" | "second" | "foreign" | "bad_sig" | "delegator" | "master";
+const ANSWER_STATES: AnswerState[] = [
+  "unsettled",
+  "settled_completed",
+  "settled_failed",
+  "settled_completed_mcp",
+  "answered_not_settled",
+  "evicted",
+];
+const ANSWER_SIGNERS: AnswerSigner[] = [
+  "routed",
+  "second",
+  "foreign",
+  "bad_sig",
+  "delegator",
+  "master",
+];
+
+/** The poll's answer for X, as D sees it (live entry, else the archive). */
+async function pollAnswer(w: World, taskId: string): Promise<ExecutionReceipt | null> {
+  const r = await w.relay.app.request(`/agent/${w.D.id}/task/${taskId}`, { headers: AUTH_HEADER });
+  if (!r.ok) return null;
+  return ((await r.json()) as { receipt?: ExecutionReceipt | null }).receipt ?? null;
+}
+
+/**
+ * A RelayDelegationAdapter that adopted X: every submission under the
+ * step's first key (`…:0`) is answered 409 naming X (#888); any other key
+ * is a SECOND paid submission, recorded and refused (never admitted).
+ * Returns the keys other than the first one it submitted.
+ */
+async function adoptedAdapterKeys(w: World, X: string): Promise<string[]> {
+  const secondKeys: string[] = [];
+  const realFetch = globalThis.fetch;
+  vi.stubGlobal("fetch", async (input: string, init?: RequestInit) => {
+    const url = String(input);
+    if (!url.startsWith("http://relay")) return realFetch(input, init);
+    const path = url.replace("http://relay", "");
+    if (init?.method === "POST" && /\/agent\/[^/]+\/task$/.test(path)) {
+      const key = new Headers(init.headers).get("idempotency-key") ?? "(no key)";
+      if (key.endsWith(":0")) {
+        return new Response(JSON.stringify({ code: "TASK_CONFLICT", task_id: X }), {
+          status: 409,
+        });
+      }
+      secondKeys.push(key);
+      return new Response("{}", { status: 503 });
+    }
+    return w.relay.app.request(path, init);
+  });
+  try {
+    const adapter = new RelayDelegationAdapter({
+      syncUrl: "http://relay",
+      motebitId: w.D.id,
+      authToken: async () => API_TOKEN,
+      sendRaw: () => {},
+      onCustomMessage: () => () => {},
+      maxDelegationRetries: 1,
+    });
+    const step: PlanStep = {
+      step_id: "s1",
+      plan_id: "p1" as PlanId,
+      ordinal: 0,
+      description: "remote",
+      prompt: "adopted",
+      depends_on: [],
+      optional: false,
+      required_capabilities: ["cap890" as never],
+      status: StepStatus.Pending,
+      result_summary: null,
+      error_message: null,
+      tool_calls_made: 0,
+      started_at: null,
+      completed_at: null,
+      retry_count: 0,
+      updated_at: 0,
+    };
+    await adapter.delegateStep(step, 20).catch((e: unknown) => e);
+  } finally {
+    vi.unstubAllGlobals();
+  }
+  return secondKeys;
+}
+
+async function runAnswerCell(
+  door: AnswerDoor,
+  state: AnswerState,
+  signer: AnswerSigner,
+  status: "completed" | "failed",
+): Promise<string[]> {
+  const failures: string[] = [];
+  const w = await world();
+  try {
+    const db = w.relay.moteDb.db;
+    const W2 = await agent(w.relay);
+    const tag = crypto.randomUUID();
+    const pX = `answer ${tag}`;
+    let release: () => void = () => {};
+    const gate = new Promise<void>((r) => (release = r));
+    let mcpAnswered = false;
+    let sent: ExecutionReceipt | null = null;
+    const operator = { id: `operator-${tag}`, device: "op-dev", kp: await generateKeypair() };
+    const build = async (id: string): Promise<ExecutionReceipt> => {
+      if (signer === "routed") return receiptBy(w.W, id, status);
+      if (signer === "second") return receiptBy(W2, id, status);
+      if (signer === "foreign") return receiptBy(w.E, id, status);
+      if (signer === "delegator") return receiptBy(w.D, id, status);
+      if (signer === "master") return receiptBy(operator, id, status);
+      const kp = await generateKeypair();
+      return receiptBy({ ...w.W, kp }, id, status); // bad_sig: names W, not W's key
+    };
+    mcpReplies.set(pX, async (id) => {
+      if (state === "settled_completed_mcp") return receiptBy(w.W, id, "completed");
+      if (door !== "mcp") return null;
+      await gate;
+      sent = await build(id);
+      mcpAnswered = true;
+      return sent;
+    });
+    const X = await admit(w, pX);
+    // The ranking fan-out's further recorded executors: a second local pick,
+    // and the federated route (W and W2 through `peer`).
+    recordTaskRoute(db, X, W2.id);
+    recordTaskRoute(db, X, w.W.id, w.peer.id);
+    recordTaskRoute(db, X, W2.id, w.peer.id);
+
+    // ── the state ──
+    if (state === "settled_completed" || state === "evicted") {
+      expect(await postResult(w, X, await receiptBy(w.W, X, "completed"))).toBe(200);
+    } else if (state === "settled_failed") {
+      expect(await postResult(w, X, await receiptBy(w.W, X, "failed"))).toBe(200);
+    } else if (state === "answered_not_settled") {
+      expect(await fedResult(w, w.peer, X, await receiptBy(w.W, X, "completed"))).toBe(200);
+    } else if (state === "settled_completed_mcp") {
+      for (let i = 0; i < 50 && (await pollAnswer(w, X)) == null; i++) await settle(20);
+    }
+    if (state === "evicted") {
+      db.prepare("DELETE FROM relay_task_queue WHERE task_id = ?").run(X);
+    }
+    const before = await pollAnswer(w, X);
+
+    // ── the door ──
+    let reported: number | null = null;
+    if (door === "mcp") {
+      // The forward's acceptance report is its `task.mcp_forward_completed`
+      // line for X: observed, never inferred.
+      let mcpReported = false;
+      const write = process.stdout.write.bind(process.stdout);
+      const spy = vi
+        .spyOn(process.stdout, "write")
+        .mockImplementation((chunk: string | Uint8Array, ...rest: unknown[]) => {
+          const line = String(chunk);
+          if (line.includes('"task.mcp_forward_completed"') && line.includes(X)) {
+            mcpReported = true;
+          }
+          return (write as (c: string | Uint8Array, ...r: unknown[]) => boolean)(chunk, ...rest);
+        });
+      try {
+        release();
+        for (let i = 0; i < 50 && !mcpAnswered; i++) await settle(20);
+        await settle(150);
+      } finally {
+        spy.mockRestore();
+      }
+      reported = mcpReported ? 200 : 499;
+    } else {
+      sent = await build(X);
+      if (door === "post") reported = await postResult(w, X, sent);
+      else {
+        const key = signer === "master" ? bytesToHex(operator.kp.publicKey) : undefined;
+        reported = await fedResult(w, w.peer, X, sent, key);
+      }
+    }
+    const after = await pollAnswer(w, X);
+
+    // ── the law's expected answer ──
+    const sigValid = signer !== "bad_sig";
+    const recorded =
+      door === "fed"
+        ? signer === "routed" || signer === "second"
+        : door === "mcp"
+          ? signer === "routed" // the forward presented X to W alone
+          : signer === "routed" || signer === "second" || signer === "delegator";
+    const admissible = sigValid && recorded && state !== "evicted";
+    let expected: ExecutionReceipt | null = before;
+    if (admissible && sent != null) {
+      if (before == null) expected = sent;
+      else if (before.status !== "completed" && status === "completed") expected = sent;
+    }
+    const sig = (r: ExecutionReceipt | null): string =>
+      r == null ? "none" : `${r.status}/${r.motebit_id.slice(0, 8)}/${r.signature.slice(0, 8)}`;
+    if (sig(after) !== sig(expected)) {
+      failures.push(
+        `WRITE-ONCE: answer ${sig(before)} became ${sig(after)}, law says ${sig(expected)}`,
+      );
+    }
+    if (
+      reported != null &&
+      reported < 300 &&
+      (after == null || sent == null || after.signature !== sent.signature)
+    ) {
+      failures.push(
+        `POSITIVE: the door reported ${reported} but the entry did not take the receipt`,
+      );
+    }
+    if (expected == null || expected.status === "completed") {
+      const keys = await adoptedAdapterKeys(w, X);
+      if (keys.length > 0)
+        failures.push(`ONE KEY: the adopted planner submitted ${keys.join(",")}`);
+    }
+  } finally {
+    await w.relay.close();
+  }
+  return failures;
+}
+
+async function answerDoor(door: AnswerDoor): Promise<{ cells: number; failures: string[] }> {
+  vi.spyOn(console, "warn").mockImplementation(() => {});
+  const failures: string[] = [];
+  let cells = 0;
+  for (const state of ANSWER_STATES) {
+    if (door === "mcp" && state === "settled_completed_mcp") continue; // one presentation per task
+    for (const signer of ANSWER_SIGNERS) {
+      for (const status of ["completed", "failed"] as const) {
+        cells++;
+        for (const f of await runAnswerCell(door, state, signer, status)) {
+          failures.push(`${door}/${state}/${signer}/${status}: ${f}`);
+        }
+      }
+    }
+  }
+  return { cells, failures };
+}
+
+describe("#890 r8 the ANSWER dimension — one chokepoint, write-once, positive acceptance", () => {
+  for (const door of ["post", "mcp", "fed"] as AnswerDoor[]) {
+    it(`${door} door × entry state × signer × status`, async () => {
+      const { cells, failures } = await answerDoor(door);
+      expect(cells).toBeGreaterThan(0);
+      // One line per failing cell, so a red run names every cell.
+      expect(`${failures.length} failing of ${cells}\n${failures.join("\n")}`).toBe(
+        `0 failing of ${cells}\n`,
+      );
+    }, 600_000);
+  }
+});
+
+describe("#890 r8 the reviewer's probes", () => {
+  it("C1(a)(d): after W's completed settles X, a failed POST by E, a bad signature, W or D is refused; the poll stays completed; the adopted planner never pays twice", async () => {
+    const failures: string[] = [];
+    for (const signer of ["foreign", "bad_sig", "routed", "delegator"] as AnswerSigner[]) {
+      for (const state of ["settled_completed", "settled_completed_mcp"] as AnswerState[]) {
+        for (const f of await runAnswerCell("post", state, signer, "failed")) {
+          failures.push(`${state}/${signer}: ${f}`);
+        }
+      }
+    }
+    expect(failures).toEqual([]);
+  }, 300_000);
+
+  it("C2(a): after a local W completes X, a failed federation result from the second recorded executor (the ranked federated route) is refused", async () => {
+    expect(await runAnswerCell("fed", "settled_completed", "second", "failed")).toEqual([]);
+    expect(await runAnswerCell("fed", "answered_not_settled", "second", "failed")).toEqual([]);
+  }, 120_000);
+});
+
+describe("#890 r8 (P1) `duplicate` only to the peer whose forward holds the id", () => {
+  it("an id held only by peer's inbound route: peer's re-forward is `duplicate`, otherPeer's is a collision", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const w = await world(true);
+    try {
+      const db = w.relay.moteDb.db;
+      await w.relay.app.request("/api/v1/agents/register", {
+        method: "POST",
+        headers: JSON_AUTH,
+        body: JSON.stringify({
+          motebit_id: w.E.id,
+          endpoint_url: "http://e.invalid/mcp",
+          capabilities: [],
+        }),
+      });
+      const F = crypto.randomUUID();
+      expect(await fedForward(w, w.peer, F, w.W.id)).toBe(202);
+      db.prepare("DELETE FROM relay_task_queue WHERE task_id = ?").run(F);
+      const other = await fedForwardBody(w, w.otherPeer, F, w.E.id);
+      const same = await fedForwardBody(w, w.peer, F, w.W.id);
+      expect({ other: other.body, same: same.body }).toEqual({
+        other: "rejected",
+        same: "duplicate",
+      });
+    } finally {
+      await w.relay.close();
+    }
+  });
+});
+
+describe("#890 r8 (P3) an MCP forward reports acceptance only on a positive ingestion", () => {
+  it("forwardTaskViaMcp logs the forward completed only when onReceipt answered true — never with no callback", async () => {
+    const w = await world();
+    try {
+      const completedLogs = async (
+        onReceipt: undefined | (() => Promise<boolean>),
+      ): Promise<{ completed: number; ingested: number }> => {
+        const X = crypto.randomUUID();
+        mcpReplies.set(`p3 ${X}`, (id) => receiptBy(w.W, id, "completed"));
+        const queue = new Map<string, { task: { status: string }; receipt?: unknown }>([
+          [X, { task: { status: "pending" } }],
+        ]);
+        let completed = 0;
+        let ingested = 0;
+        const log = {
+          info: (msg: string) => {
+            if (msg === "task.mcp_forward_completed") completed++;
+          },
+          warn: () => {},
+        };
+        await forwardTaskViaMcp(
+          `http://127.0.0.1:${PORT}/mcp`,
+          X,
+          `p3 ${X}`,
+          w.W.id,
+          queue,
+          log,
+          undefined,
+          onReceipt == null
+            ? undefined
+            : async () => {
+                ingested++;
+                return onReceipt();
+              },
+          "dispatch-token",
+          { allowPrivateNetwork: true },
+          () => Promise.resolve("bearer"),
+        );
+        return { completed, ingested };
+      };
+      // Positive control: the forward reached the endpoint and the callback.
+      expect(await completedLogs(() => Promise.resolve(true))).toEqual({
+        completed: 1,
+        ingested: 1,
+      });
+      expect(await completedLogs(() => Promise.resolve(false))).toEqual({
+        completed: 0,
+        ingested: 1,
+      });
+      // No callback: nothing ingested it, so nothing is accepted.
+      expect(await completedLogs(undefined)).toEqual({ completed: 0, ingested: 0 });
+    } finally {
+      await w.relay.close();
+    }
+  });
+});
+
+describe("#890 r8 the answer has ONE writer", () => {
+  it("no source file outside task-answer.ts assigns a queue entry's receipt or terminal status", async () => {
+    const { readdirSync, readFileSync } = await import("node:fs");
+    const { join } = await import("node:path");
+    const dir = join(__dirname, "..");
+    const offenders: string[] = [];
+    const walk = (d: string): void => {
+      for (const e of readdirSync(d, { withFileTypes: true })) {
+        if (e.isDirectory()) {
+          if (e.name !== "__tests__" && e.name !== "node_modules") walk(join(d, e.name));
+          continue;
+        }
+        if (!e.name.endsWith(".ts") || e.name === "task-answer.ts") continue;
+        const src = readFileSync(join(d, e.name), "utf8").split("\n");
+        src.forEach((line, i) => {
+          const code = line.replace(/\/\/.*$/, "");
+          const receiptWrite = /\.receipt\s*=(?!=)/.test(code);
+          const statusWrite = /\.task\.status\s*=(?!=)/.test(code);
+          if (!receiptWrite && !statusWrite) return;
+          // Allowed: the durable queue hydrating a stored row, and the socket
+          // claim's Pending ⇄ Claimed transition (never a terminal status).
+          if (
+            e.name === "task-queue.ts" &&
+            /entry\.receipt = JSON\.parse\(row\.receipt\)/.test(code)
+          )
+            return;
+          if (
+            e.name === "websocket.ts" &&
+            /\.task\.status = AgentTaskStatus\.(Claimed|Pending);/.test(code)
+          )
+            return;
+          offenders.push(`${e.name}:${i + 1}: ${line.trim()}`);
+        });
+      }
+    };
+    walk(dir);
+    expect(offenders, "route the write through answerTask (task-answer.ts)").toEqual([]);
+  });
 });
