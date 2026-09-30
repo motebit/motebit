@@ -63,6 +63,60 @@ class FakeRelay implements EventStoreAdapter {
   }
 }
 
+/**
+ * The same relay read by seq (an HTTP adapter, or the E2E wrapper over one):
+ * `seqCursorKey` names the relay stream AND the payload mode, as
+ * `HttpEventStoreAdapter` (`raw:<url>#<id>`) and `EncryptedEventStoreAdapter`
+ * (`e2e:raw:<url>#<id>`) do. Shares `held` with the socket-shaped FakeRelay
+ * over the same relay (#962 F1).
+ */
+class FakeSeqRelay extends FakeRelay {
+  constructor(
+    readonly seqCursorKey: string,
+    shared?: FakeRelay,
+  ) {
+    super();
+    if (shared) {
+      this.held = shared.held;
+      this.received = shared.received;
+    }
+  }
+  async pullAfterSeq(
+    _afterSeq: number,
+    fallbackAfterClock: number,
+  ): Promise<{ kind: "clock"; events: EventLogEntry[] }> {
+    return {
+      kind: "clock",
+      events: await this.query({ motebit_id: MID, after_version_clock: fallbackAfterClock }),
+    };
+  }
+}
+
+/** A socket-shaped adapter over the same relay as `shared` (`push:relay:<stream>`). */
+function socketOver(shared: FakeRelay, stream: string): FakeRelay {
+  const ws = new FakeRelay(stream);
+  ws.held = shared.held;
+  ws.received = shared.received;
+  return ws;
+}
+
+/**
+ * The store as a process whose cursor writes never land (#962 F2: the
+ * enrollment write lost in the Tauri IPC window, or failing): reads go
+ * through, `setSyncSeqCursor` rejects.
+ */
+function cursorWritesFail(store: EventStoreAdapter): EventStoreAdapter {
+  return new Proxy(store, {
+    get(target, prop) {
+      if (prop === "setSyncSeqCursor") {
+        return () => Promise.reject(new Error("IPC window closed"));
+      }
+      const v = Reflect.get(target, prop, target) as unknown;
+      return typeof v === "function" ? (v as (...a: unknown[]) => unknown).bind(target) : v;
+    },
+  });
+}
+
 type Kind = "memory" | "sqlite" | "idb";
 
 /** A surface's local event store, and a way to open the same store again (a later process). */
@@ -97,12 +151,17 @@ afterEach(() => {
   for (const e of engines.splice(0)) e.stop();
 });
 
-function runtimeOver(store: EventStoreAdapter): MotebitRuntime {
+/**
+ * `syncConfigured` is what the surface knows from its config (#962 F2): a
+ * relay is configured whether or not a cursor was ever persisted.
+ */
+function runtimeOver(
+  store: EventStoreAdapter,
+  syncConfigured?: boolean | (() => boolean | Promise<boolean>),
+): MotebitRuntime {
   const storage = { ...createInMemoryStorage(), eventStore: store };
-  const rt = new MotebitRuntime(
-    { motebitId: MID, compactionThreshold: 1, tickRateHz: 0 },
-    { storage, renderer: new NullRenderer() },
-  );
+  const config = { motebitId: MID, compactionThreshold: 1, tickRateHz: 0, syncConfigured };
+  const rt = new MotebitRuntime(config, { storage, renderer: new NullRenderer() });
   rt.start();
   live.push(rt);
   return rt;
@@ -297,4 +356,150 @@ describe("#962 compaction push floor — fail closed", () => {
       expect([...(await present(store))].sort()).toEqual(ids);
     },
   );
+});
+
+/**
+ * #962 round 2 — the cold review of 85f1f4a (FIX-THEN-MERGE).
+ *
+ * F1: ONE relay can carry several persisted push cursors — mobile's /sync
+ * pushes through the E2E HTTP adapter (`push:e2e:raw:<url>#<id>`) while the
+ * live cycle pushes through the socket (`push:relay:<url>#<id>`); a raw CLI
+ * process writes `push:raw:<url>#<id>` beside the E2E one. A MIN over keys
+ * freezes compaction at the least-recent writer forever. The floor groups
+ * keys by relay stream: the MAX within a stream (any acked cursor proves
+ * that relay holds those events), the MIN across distinct streams.
+ *
+ * F2 / P-a: whether sync is CONFIGURED is not whether a cursor was persisted.
+ * A configured relay with no stream cursor (the enrollment write lost, or a
+ * process that never reached connect) compacts nothing until an ack.
+ */
+const STREAM = "https://relay.one#mote-962";
+
+describe.each(["sqlite", "idb"] as const)("#962 round 2 — %s store", (kind) => {
+  it("F1 mobile: a /sync cursor and the live cursor on one relay never pin compaction", async () => {
+    const { store } = await openStore(kind);
+    const rt = runtimeOver(store, true);
+    const relay = new FakeRelay();
+    const live = socketOver(relay, STREAM);
+    rt.connectSync(live);
+    // syncNow: a temp engine over the E2E HTTP adapter, same relay.
+    const http = new FakeSeqRelay(`e2e:raw:${STREAM}`, relay);
+    const syncNow = new SyncEngine(store, MID);
+    engines.push(syncNow);
+    syncNow.connectRemote(http);
+    await appendN(store, 1, 5);
+    await syncNow.sync();
+    const ids = [...(await appendN(store, 6, 100))];
+    await rt.sync.sync();
+    for (let i = 1; i <= 100; i++) expect(relay.held.has(`e-${i}`)).toBe(true);
+    await trigger(rt, "stop");
+    // The relay holds all 100: compaction proceeds as on main.
+    expect([...(await present(store))]).toEqual(["e-100"]);
+    expect(ids).toContain("e-100");
+  });
+
+  it("F1 CLI: a raw cursor beside an E2E cursor on one relay never pins compaction", async () => {
+    const { store } = await openStore(kind);
+    const relay = new FakeRelay();
+    const e2e = new SyncEngine(store, MID);
+    engines.push(e2e);
+    e2e.connectRemote(new FakeSeqRelay(`e2e:${`raw:${STREAM}`}`, relay));
+    await appendN(store, 1, 5);
+    await e2e.sync();
+    e2e.stop();
+    const rt = runtimeOver(store, true);
+    rt.connectSync(new FakeSeqRelay(`raw:${STREAM}`, relay));
+    await appendN(store, 6, 20);
+    await rt.sync.sync();
+    await trigger(rt, "compact");
+    expect([...(await present(store))]).toEqual(["e-20"]);
+  });
+
+  it("F1: two DISTINCT relays still take the minimum", async () => {
+    const { store } = await openStore(kind);
+    const rt = runtimeOver(store, true);
+    const a = new FakeRelay();
+    const b = new FakeRelay();
+    rt.connectSync(socketOver(a, "https://relay.a#mote-962"));
+    const other = new SyncEngine(store, MID);
+    engines.push(other);
+    other.connectRemote(new FakeSeqRelay("e2e:raw:https://relay.b#mote-962", b));
+    await appendN(store, 1, 3);
+    await other.sync();
+    const unacked = await appendN(store, 4, 8);
+    await rt.sync.sync(); // relay a: 8; relay b: 3
+    await trigger(rt, "compact");
+    const after = await present(store);
+    for (const id of unacked) expect(after.has(id)).toBe(true);
+    await other.sync();
+    for (const id of unacked) expect(b.times(id)).toBe(1);
+  });
+
+  it("F2: the enrollment write lost, a later process keeps every unpushed event", async () => {
+    const { store, reopen } = await openStore(kind);
+    const relay = new FakeRelay();
+    const firstStore = cursorWritesFail(store);
+    const first = runtimeOver(firstStore, true);
+    first.connectSync(socketOver(relay, STREAM));
+    const ids = await appendN(store, 1, 5);
+    await settle();
+    // Process 1 dies: no ack ever happened, the enrollment never landed.
+    first.sync.stop();
+    live.splice(live.indexOf(first), 1);
+
+    const store2 = await reopen();
+    const second = runtimeOver(store2, true);
+    await trigger(second, "stop");
+    expect([...(await present(store2))].sort()).toEqual(ids);
+    const third = runtimeOver(store2, true);
+    third.connectSync(socketOver(relay, STREAM));
+    await third.sync.sync();
+    for (const id of ids) expect(relay.times(id)).toBe(1);
+  });
+
+  it("P-a: a relay configured but never connected compacts nothing", async () => {
+    const { store } = await openStore(kind);
+    const rt = runtimeOver(store, true);
+    const ids = await appendN(store, 1, 5);
+    await trigger(rt, "stop");
+    expect([...(await present(store))].sort()).toEqual(ids);
+  });
+
+  it("P-a: an async provider (mobile's getSyncUrl) that says configured compacts nothing", async () => {
+    const { store } = await openStore(kind);
+    const rt = runtimeOver(store, () => Promise.resolve(true));
+    const ids = await appendN(store, 1, 5);
+    await trigger(rt, "compact");
+    expect([...(await present(store))].sort()).toEqual(ids);
+  });
+
+  it("P-a: a provider that cannot tell (throws) fails closed", async () => {
+    const { store } = await openStore(kind);
+    const rt = runtimeOver(store, () => {
+      throw new Error("config unreadable");
+    });
+    const ids = await appendN(store, 1, 5);
+    await trigger(rt, "compact");
+    expect([...(await present(store))].sort()).toEqual(ids);
+  });
+
+  it("no relay configured (explicit false): compaction proceeds as before", async () => {
+    const { store } = await openStore(kind);
+    const rt = runtimeOver(store, false);
+    await appendN(store, 1, 5);
+    await trigger(rt, "compact");
+    expect((await present(store)).size).toBe(1);
+  });
+
+  it("configured and every stream acked: compaction proceeds (no permanent pin)", async () => {
+    const { store } = await openStore(kind);
+    const rt = runtimeOver(store, true);
+    const relay = new FakeRelay();
+    rt.connectSync(socketOver(relay, STREAM));
+    const ids = await appendN(store, 1, 5);
+    await rt.sync.sync();
+    await trigger(rt, "compact");
+    expect([...(await present(store))]).toEqual(["e-5"]);
+    for (const id of ids) expect(relay.times(id)).toBe(1);
+  });
 });
