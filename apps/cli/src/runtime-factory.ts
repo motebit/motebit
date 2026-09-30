@@ -796,6 +796,10 @@ export async function createRuntime(
     {
       motebitId,
       mcpServers,
+      // #962: the CLI always configures a relay (`resolveRelayUrl` falls back
+      // to the default relay) and every CLI runtime shares motebit.db, so
+      // compaction waits on that relay's acknowledged push cursor.
+      syncConfigured: true,
       // Renderer-aware logger: runtime warnings (delegation poll failures
       // above all) flow through the terminal renderer as calm status/dim
       // lines instead of the default console.warn JSON dump that corrupted

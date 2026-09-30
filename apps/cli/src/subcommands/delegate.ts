@@ -112,6 +112,10 @@ async function handleDelegatePlan(
   const runtime = new MotebitRuntime(
     {
       motebitId,
+      // #962: the CLI always configures a relay (`resolveRelayUrl` falls back
+      // to the default relay) and every CLI runtime shares motebit.db, so
+      // compaction waits on that relay's acknowledged push cursor.
+      syncConfigured: true,
       policy: {
         maxRiskLevel: governance.policyApproval.maxRiskLevel,
         requireApprovalAbove: governance.policyApproval.requireApprovalAbove,

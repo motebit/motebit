@@ -635,6 +635,8 @@ export class MotebitRuntime {
   private compactionThreshold: number;
   /** The local event store adapter the sync engines push from — keys the #962 compaction floor. */
   private readonly localEventStore: EventStoreAdapter;
+  /** The host's word on whether a relay is configured (#962; `RuntimeConfig.syncConfigured`). */
+  private readonly syncConfigured: RuntimeConfig["syncConfigured"];
   private running = false;
   private toolRegistry: SimpleToolRegistry;
   /** Presence-scoped view onto `toolRegistry`. Filters tool visibility +
@@ -922,6 +924,7 @@ export class MotebitRuntime {
     this._onToolActivity = config.onToolActivity ?? null;
     this._onApprovalDecision = config.onApprovalDecision ?? null;
     this.compactionThreshold = config.compactionThreshold ?? 1000;
+    this.syncConfigured = config.syncConfigured;
     this.mcpConfigs = config.mcpServers ?? [];
     this.taskRouter = config.taskRouter ? new TaskRouter(config.taskRouter) : null;
     // Take OWNERSHIP of signingKeys by copying the bytes. The caller lends
@@ -4094,12 +4097,26 @@ export class MotebitRuntime {
    * `requested`, but never past what every relay stream has acknowledged
    * (`pushCompactionFloor`) — an event not yet pushed is never compacted
    * away before it reaches the owner's other devices. Unreadable cursor ⇒
-   * nothing is deleted. No relay configured ⇒ `requested`, as before.
+   * nothing is deleted. A relay configured (`syncConfigured`) but no stream
+   * cursor yet ⇒ nothing is deleted. No relay configured ⇒ `requested`.
    */
   private async compactUpTo(requested: number): Promise<number> {
-    const floor = await pushCompactionFloor(this.localEventStore, requested);
+    const floor = await pushCompactionFloor(this.localEventStore, requested, {
+      syncConfigured: await this.resolveSyncConfigured(),
+    });
     if (floor <= 0) return 0;
     return this.events.compact(this.motebitId, floor);
+  }
+
+  /** `RuntimeConfig.syncConfigured`, resolved; a provider that cannot tell ⇒ true (fail closed). */
+  private async resolveSyncConfigured(): Promise<boolean | undefined> {
+    const c = this.syncConfigured;
+    if (typeof c !== "function") return c;
+    try {
+      return (await c()) !== false;
+    } catch {
+      return true;
+    }
   }
 
   private async autoCompact(): Promise<void> {

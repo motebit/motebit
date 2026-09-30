@@ -1356,6 +1356,9 @@ export class DesktopApp {
         motebitId: this.motebitId,
         deviceId: this.deviceId,
         tickRateHz: 2,
+        // #962: a configured relay holds compaction at its acked push cursor,
+        // even before this process connects sync.
+        syncConfigured: config.syncUrl != null && config.syncUrl !== "",
         policy: mergedPolicy,
         memoryGovernance: {
           persistenceThreshold: gov.persistenceThreshold,

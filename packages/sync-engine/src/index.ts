@@ -188,35 +188,69 @@ const PUSH_CURSOR_PREFIX = "push:";
 const connectedPushStreams = new WeakMap<object, Map<string, SyncSeqCursorStore>>();
 
 /**
+ * The relay stream a push-cursor key describes (#962 round 2), whatever
+ * adapter wrote it: `push:relay:<stream>` (a socket), `push:<mode>:<stream>`
+ * (a seq source — `raw:` HTTP, `e2e:raw:` its E2E wrapper; `relayStreamOfKey`)
+ * all name one relay's record, so mobile's /sync cursor and its live cursor,
+ * or a raw CLI process beside an E2E one, are ONE stream. `push:#<id>` (a
+ * remote that names no relay) stays a stream of its own.
+ */
+export function relayStreamOfPushKey(key: string): string {
+  const rest = key.startsWith(PUSH_CURSOR_PREFIX) ? key.slice(PUSH_CURSOR_PREFIX.length) : key;
+  return rest.startsWith("relay:") ? rest.slice("relay:".length) : relayStreamOfKey(rest);
+}
+
+/** What the host knows about sync from its config (#962 round 2). */
+export interface PushCompactionFloorOptions {
+  /**
+   * Is a relay configured for this store? `true`: with no stream cursor
+   * persisted or connected, compact nothing (the enrollment write may never
+   * have landed; the first process may never have connected). `false` or
+   * absent: with no stream, `requested` — compaction as before. Streams that
+   * exist bound the floor either way.
+   */
+  syncConfigured?: boolean;
+}
+
+/**
  * The highest clock compaction may delete up to in `localStore` (#962): the
  * smaller of `requested` and every relay stream's ACKED push cursor — so an
  * event no relay has acknowledged is never compacted away before it is
  * pushed. The streams are those a `SyncEngine` connected over this store in
  * this process, plus every push cursor the store persists (a relay an
- * earlier process pushed to, before this one connects). The minimum across
- * streams: a relay that has acknowledged nothing holds everything.
+ * earlier process pushed to, before this one connects).
  *
- * No stream at all (no relay ever configured over this store): `requested`,
- * compaction as before. A cursor that cannot be read: 0 — compact nothing
- * (fail closed).
+ * Keys are grouped by relay stream (`relayStreamOfPushKey`): within one
+ * stream the MAX cursor counts — any acked cursor for that relay proves the
+ * relay holds those events (the relay keys events by event_id, whatever the
+ * payload mode a push carried; #914 round 8 already counts one relay's raw
+ * and E2E record as one) — and across distinct streams the MIN: a relay
+ * that has acknowledged nothing holds everything.
+ *
+ * No stream: 0 when `syncConfigured`, else `requested`. A cursor that cannot
+ * be read: 0 — compact nothing (fail closed).
  */
 export async function pushCompactionFloor(
   localStore: EventStoreAdapter,
   requested: number,
+  options: PushCompactionFloorOptions = {},
 ): Promise<number> {
   try {
-    const streams = new Map<string, SyncSeqCursorStore>(connectedPushStreams.get(localStore) ?? []);
+    const keys = new Map<string, SyncSeqCursorStore>(connectedPushStreams.get(localStore) ?? []);
     const own = resolveSeqCursorStore(localStore);
     if (own.listSyncSeqCursorKeys) {
       for (const key of await own.listSyncSeqCursorKeys(PUSH_CURSOR_PREFIX)) {
-        if (!streams.has(key)) streams.set(key, own);
+        if (!keys.has(key)) keys.set(key, own);
       }
     }
-    let floor = requested;
-    for (const [key, store] of streams) {
-      floor = Math.min(floor, (await store.getSyncSeqCursor(key)) ?? 0);
+    const acked = new Map<string, number>();
+    for (const [key, store] of keys) {
+      const stream = relayStreamOfPushKey(key);
+      const cursor = (await store.getSyncSeqCursor(key)) ?? 0;
+      acked.set(stream, Math.max(acked.get(stream) ?? 0, cursor));
     }
-    return floor;
+    if (acked.size === 0) return options.syncConfigured === true ? 0 : requested;
+    return Math.min(requested, ...acked.values());
   } catch {
     return 0;
   }

@@ -724,6 +724,13 @@ export class UnbootedWebApp {
       {
         motebitId: this._motebitId,
         tickRateHz: 2,
+        // #962: a saved relay holds compaction at its acked push cursor, even
+        // before this page connects sync. Read at compaction time; a read
+        // that throws counts as configured (the runtime fails closed).
+        syncConfigured: () => {
+          const url = loadSyncUrl();
+          return url != null && url !== "";
+        },
         policy: {
           operatorMode: false,
           maxRiskLevel: preset.maxRiskLevel,
