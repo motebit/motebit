@@ -986,6 +986,18 @@ export async function probeLeak(): Promise<boolean> {
       ),
   },
   {
+    script: "check-model-picker-canonical",
+    proves:
+      "flags a hand-copied Anthropic model option list in app surface source — the exact #654 incident where web's BYOK <select> offered Opus 4.7 / Sonnet 4.6 after Opus 5.5 / Sonnet 5 shipped, because the list was typed into index.html instead of rendered from @motebit/sdk ANTHROPIC_PICKER",
+    perturb: () =>
+      // A fixture surface module replaying the verbatim pre-#654 option rows.
+      // writeFixture cleans it up after the probe.
+      writeFixture(
+        `apps/web/src/ui/${PROBE_PREFIX}picker.ts`,
+        `export const OPTIONS = \`<option value="claude-opus-4-7">Claude Opus 4.7 — most capable</option>\n<option value="claude-sonnet-4-6" selected>Claude Sonnet 4.6 — recommended</option>\`;\n`,
+      ),
+  },
+  {
     script: "check-public-fee-claims",
     proves:
       "flags a public surface claiming a fee-free settlement — the exact 2026-05-30 #125 incident where README/docs/llms said P2P settlement charges 'zero fees' after Arc 2 shipped the 5% P2P fee leg. Rule B fires on a line conjoining a settlement/P2P context with a fee-exemption phrase.",

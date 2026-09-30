@@ -161,6 +161,7 @@
     "check-docs-cli-claims": "npx tsx scripts/check-docs-cli-claims.ts",
     "check-docs-slash-claims": "npx tsx scripts/check-docs-slash-claims.ts",
     "check-docs-default-models": "npx tsx scripts/check-docs-default-models.ts",
+    "check-model-picker-canonical": "npx tsx scripts/check-model-picker-canonical.ts",
     "check-docs-quickstart-runs": "npx tsx scripts/check-docs-quickstart-runs.ts",
     "check-public-fee-claims": "npx tsx scripts/check-public-fee-claims.ts",
     "check-llms-txt-fresh": "npx tsx scripts/check-llms-txt-fresh.ts",

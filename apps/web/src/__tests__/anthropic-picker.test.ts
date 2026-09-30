@@ -16,8 +16,10 @@ describe("renderAnthropicPicker", () => {
   it("renders the sdk picker rows with the default selected", () => {
     const el = select();
     renderAnthropicPicker(el);
-    expect([...el.options].map((o) => o.value)).toEqual(ANTHROPIC_PICKER.map((o) => o.id));
-    expect([...el.options].map((o) => o.textContent)).toEqual(ANTHROPIC_PICKER.map((o) => o.label));
+    expect(Array.from(el.options).map((o) => o.value)).toEqual(ANTHROPIC_PICKER.map((o) => o.id));
+    expect(Array.from(el.options).map((o) => o.textContent)).toEqual(
+      ANTHROPIC_PICKER.map((o) => o.label),
+    );
     expect(el.value).toBe(DEFAULT_ANTHROPIC_MODEL);
   });
 
