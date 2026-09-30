@@ -509,4 +509,90 @@ export const MUTATIONS: readonly Mutation[] = [
         addStep(d, "publish", { uses: "actions/download-artifact@v4", with: { name: "dist" } }, 5),
       ),
   },
+  // ── #997 round 4: one row per sub-rule a cold review found deletable ──
+  // Each row is refused by exactly ONE sub-rule (one violation), so deleting
+  // that sub-rule turns its row green (the law test's "turns the gate RED").
+  {
+    id: "R4-W1 writer job env NODE_OPTIONS",
+    shape: "ci.yml#check job env NODE_OPTIONS: --require ./x.cjs (reaches every step)",
+    apply: (r) =>
+      editWorkflow(r, "ci.yml", (d) =>
+        d.setIn(["jobs", "check", "env", "NODE_OPTIONS"], "--require ./x.cjs"),
+      ),
+  },
+  {
+    id: "R4-W2 writer job defaults",
+    shape: "ci.yml#check defaults.run.working-directory: apps/web",
+    apply: (r) =>
+      editWorkflow(r, "ci.yml", (d) =>
+        d.setIn(
+          ["jobs", "check", "defaults"],
+          d.createNode({ run: { "working-directory": "apps/web" } }),
+        ),
+      ),
+  },
+  {
+    id: "R4-W3 GITHUB_STATE write",
+    shape: 'ci.yml#check: a step runs echo k=v >> "$GITHUB_STATE"',
+    apply: (r) =>
+      editWorkflow(r, "ci.yml", (d) =>
+        addStep(d, "check", { name: "State", run: 'echo k=v >> "$GITHUB_STATE"' }, 3),
+      ),
+  },
+  {
+    id: "R4-W4 legacy ::set-env",
+    shape: "ci.yml#check: a step prints the legacy ::set-env workflow command",
+    apply: (r) =>
+      editWorkflow(r, "ci.yml", (d) =>
+        addStep(
+          d,
+          "check",
+          { name: "Legacy env", run: 'echo "::set-env name=NODE_OPTIONS::--require ./x.cjs"' },
+          3,
+        ),
+      ),
+  },
+  {
+    id: "R4-W5 legacy ::add-path",
+    shape: "ci.yml#check: a step prints the legacy ::add-path workflow command",
+    apply: (r) =>
+      editWorkflow(r, "ci.yml", (d) =>
+        addStep(d, "check", { name: "Legacy path", run: 'echo "::add-path::$PWD/bin"' }, 3),
+      ),
+  },
+  {
+    id: "R4-L1 download-artifact run-id (PR)",
+    shape: "PR job `format`: actions/download-artifact with run-id (another run's artifacts)",
+    apply: (r) =>
+      editWorkflow(r, "ci.yml", (d) =>
+        addStep(
+          d,
+          "format",
+          {
+            uses: "actions/download-artifact@v4",
+            with: { name: "web-build", "run-id": "123", "github-token": "${{ github.token }}" },
+          },
+          3,
+        ),
+      ),
+  },
+  {
+    id: "R4-L2 cache apps/web/dist (PR)",
+    shape: "PR job `format`: actions/cache with path: apps/web/dist",
+    apply: (r) =>
+      editWorkflow(r, "ci.yml", (d) => addStep(d, "format", CACHE_STEP("apps/web/dist"), 3)),
+  },
+  {
+    id: "R4-L3 cache ~/work (PR)",
+    shape: "PR job `format`: actions/cache with path: ~/work (a home-rooted tree)",
+    apply: (r) => editWorkflow(r, "ci.yml", (d) => addStep(d, "format", CACHE_STEP("~/work"), 3)),
+  },
+  {
+    id: "R4-V1 READ_ONLY false (PR)",
+    shape: "PR job `format`: step env TURBO_REMOTE_CACHE_READ_ONLY: 'false'",
+    apply: (r) =>
+      editWorkflow(r, "ci.yml", (d) =>
+        addStep(d, "format", { run: "true", env: { TURBO_REMOTE_CACHE_READ_ONLY: "false" } }),
+      ),
+  },
 ];

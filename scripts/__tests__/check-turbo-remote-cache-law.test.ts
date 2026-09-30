@@ -12,7 +12,13 @@ import { rmSync } from "node:fs";
 import { afterAll, describe, expect, it } from "vitest";
 
 import { runTurboRemoteCacheGate } from "../check-turbo-remote-cache.js";
-import { judgeSecretExpression, LAW_RULES, type LawRule } from "../lib/turbo-remote-cache.js";
+import {
+  judgeSecretExpression,
+  LAW_RULES,
+  type LawRule,
+  WRITER_ENVIRONMENT,
+  WRITER_ENVIRONMENT_EXPR,
+} from "../lib/turbo-remote-cache.js";
 import { copyRepo, MUTATIONS } from "./turbo-remote-cache-mutations.js";
 
 const dirs: string[] = [];
@@ -33,6 +39,18 @@ describe("the law, on a copy of this repository", () => {
     m.apply(d);
     expect(runTurboRemoteCacheGate(d).violations, m.shape).not.toEqual([]);
   });
+
+  // Round 4: each R4 row is refused by ONE sub-rule alone, so deleting that
+  // sub-rule turns the row's "turns the gate RED" test red. Exactly one
+  // violation keeps a second rule from silently covering for a deleted one.
+  it.each(MUTATIONS.filter((m) => m.id.startsWith("R4-")).map((m) => [m.id, m] as const))(
+    "%s is refused by exactly one violation",
+    (_id, m) => {
+      const d = fresh();
+      m.apply(d);
+      expect(runTurboRemoteCacheGate(d).violations, m.shape).toHaveLength(1);
+    },
+  );
 });
 
 describe("gate mutation: every rule of the law is load-bearing", () => {
@@ -109,6 +127,9 @@ describe("gate mutation: every rule of the law is load-bearing", () => {
         "C3c cache **/dist",
         "C3d cache path expr",
         "A1 local action caches .turbo",
+        "R4-L1 download-artifact run-id (PR)",
+        "R4-L2 cache apps/web/dist (PR)",
+        "R4-L3 cache ~/work (PR)",
       ],
       "tracked-turbo-state": ["C4 committed .turbo/config.json"],
       // #997 round 3. R3-C1 (Build >> $GITHUB_ENV) and R3-C2 (outputs chain)
@@ -118,9 +139,17 @@ describe("gate mutation: every rule of the law is load-bearing", () => {
         "R3-P2 the word turbo",
         "R3-X1 writer step working-directory",
         "R3-X2 writer step extra env",
+        "R4-W1 writer job env NODE_OPTIONS",
+        "R4-W2 writer job defaults",
       ],
       "writer-job-outputs": ["R3-C2b job outputs"],
-      "writer-env-files": ["R3-C1b GITHUB_ENV write, no writer env", "R3-C1c GITHUB_PATH write"],
+      "writer-env-files": [
+        "R3-C1b GITHUB_ENV write, no writer env",
+        "R3-C1c GITHUB_PATH write",
+        "R4-W3 GITHUB_STATE write",
+        "R4-W4 legacy ::set-env",
+        "R4-W5 legacy ::add-path",
+      ],
       "publish-artifact-fetch": [
         "R3-P3 gh run download (publish)",
         "R3-P3b gh api artifacts (release)",
@@ -156,5 +185,90 @@ describe("secret expression shapes", () => {
     " fromJSON('[1]')[0] && secrets.X ",
   ])("refuses %s", (expr) => {
     expect(judgeSecretExpression(expr).bad).not.toBeNull();
+  });
+});
+
+/**
+ * WRITER_ENVIRONMENT_EXPR under GitHub expression semantics: `==` compares
+ * strings case-insensitively, `&&` / `||` return an OPERAND (not a boolean),
+ * and `''` is falsy. Enough of the grammar to evaluate the one expression —
+ * identifiers (context lookups), string literals, `==`, `&&`, `||`, parens.
+ */
+function evalGithubExpr(src: string, ctx: Record<string, string>): unknown {
+  const m = /^\$\{\{([\s\S]*)\}\}$/.exec(src.trim());
+  if (!m) throw new Error(`not an expression: ${src}`);
+  const toks = m[1]!.match(/'(?:[^']|'')*'|==|&&|\|\||[()]|[A-Za-z_][\w.-]*|\S/g) ?? [];
+  let i = 0;
+  const falsy = (v: unknown): boolean => v === false || v === "" || v === 0 || v == null;
+  const primary = (): unknown => {
+    const t = toks[i++];
+    if (t === "(") {
+      const v = or();
+      if (toks[i++] !== ")") throw new Error("expected )");
+      return v;
+    }
+    if (t?.startsWith("'")) return t.slice(1, -1).replace(/''/g, "'");
+    if (t != null && /^[A-Za-z_]/.test(t)) {
+      if (!(t in ctx)) throw new Error(`unknown context ${t}`);
+      return ctx[t];
+    }
+    throw new Error(`unexpected token ${t}`);
+  };
+  const eq = (): unknown => {
+    let l = primary();
+    while (toks[i] === "==") {
+      i++;
+      const r = primary();
+      l = String(l).toLowerCase() === String(r).toLowerCase();
+    }
+    return l;
+  };
+  const and = (): unknown => {
+    let l = eq();
+    while (toks[i] === "&&") {
+      i++;
+      const r = eq();
+      l = falsy(l) ? l : r;
+    }
+    return l;
+  };
+  const or = (): unknown => {
+    let l = and();
+    while (toks[i] === "||") {
+      i++;
+      const r = and();
+      l = falsy(l) ? r : l;
+    }
+    return l;
+  };
+  const v = or();
+  if (i !== toks.length) throw new Error(`trailing tokens in ${src}`);
+  return v;
+}
+
+describe("WRITER_ENVIRONMENT_EXPR (GitHub expression semantics)", () => {
+  const at = (event_name: string, ref: string): unknown =>
+    evalGithubExpr(WRITER_ENVIRONMENT_EXPR, {
+      "github.event_name": event_name,
+      "github.ref": ref,
+    });
+
+  it("resolves to the writer environment only on a push to main", () => {
+    expect(at("push", "refs/heads/main")).toBe(WRITER_ENVIRONMENT);
+    expect(WRITER_ENVIRONMENT).toBe("turbo-cache-writer");
+  });
+
+  it.each([
+    ["pull_request", "refs/pull/1/merge"],
+    ["pull_request", "refs/heads/main"],
+    ["pull_request_target", "refs/heads/main"],
+    ["merge_group", "refs/heads/gh-readonly-queue/main/pr-1-abc"],
+    ["push", "refs/heads/feature"],
+    ["push", "refs/heads/main-x"],
+    ["push", "refs/tags/v1.0.0"],
+    ["workflow_dispatch", "refs/heads/main"],
+    ["schedule", "refs/heads/main"],
+  ])("resolves to '' (no environment) for %s on %s", (event, ref) => {
+    expect(at(event, ref)).toBe("");
   });
 });
