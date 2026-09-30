@@ -5,10 +5,21 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  # Merge queue: the queue builds a `gh-readonly-queue/main/pr-N-<sha>` commit
+  # and fires `merge_group` against it; every check the main-protection ruleset
+  # requires (.github/required-checks.json) must report on that commit or the
+  # entry stalls. scripts/check-merge-queue-readiness.ts holds every job below
+  # to it; docs/ops/RUNBOOK.md §16 is the operator flow.
+  merge_group:
+    types: [checks_requested]
 
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  # A queue entry keys on its own queue ref, so entries never share (and cancel)
+  # a group with each other or with the PR's own runs, and a queue run is never
+  # cancelled — a cancelled required check fails the entry. PR and push runs
+  # keep the prior per-ref cancel-superseded behaviour.
+  group: ${{ github.workflow }}-${{ github.event_name == 'merge_group' && github.event.merge_group.head_ref || github.ref }}
+  cancel-in-progress: ${{ github.event_name != 'merge_group' }}
 
 # Turbo remote cache — restores build/typecheck/lint/lint:pack outputs for
 # packages whose inputs haven't changed since the last passing run. Each
@@ -224,8 +235,10 @@ jobs:
     # scripts/ (#115). This job ALWAYS runs (so the `needs` below is always
     # satisfied — a skipped need would otherwise cascade-skip gate-effectiveness
     # even on push) and emits a `scripts` output; on push the value is unused
-    # (gate-effectiveness runs unconditionally). git diff vs the base ref is the
-    # same idiom the sibling-audit job uses.
+    # (gate-effectiveness runs unconditionally). The diff base comes from
+    # scripts/ci-diff-base.sh — the same resolver sibling-audit and changeset
+    # use — so a merge-queue run diffs the queue commit against its
+    # merge_group.base_sha instead of an empty `github.base_ref`.
     runs-on: ubuntu-latest
     timeout-minutes: 3
     outputs:
@@ -236,13 +249,24 @@ jobs:
         with:
           fetch-depth: 0
 
+      - id: base
+        name: Resolve the diff base (pull_request or merge_group)
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_BASE_REF: ${{ github.base_ref }}
+          MG_BASE_SHA: ${{ github.event.merge_group.base_sha }}
+          MG_HEAD_SHA: ${{ github.event.merge_group.head_sha }}
+        run: bash scripts/ci-diff-base.sh
+
       - id: filter
         name: Detect scripts/ and services/relay/ changes vs base
+        env:
+          BASE: ${{ steps.base.outputs.base }}
         run: |
           scripts=false
           relay=false
-          if [ "${{ github.event_name }}" = "pull_request" ]; then
-            changed=$(git diff --name-only "origin/${{ github.base_ref }}...HEAD")
+          if [ -n "$BASE" ]; then
+            changed=$(git diff --name-only "$BASE" HEAD)
             # Probes read repo data outside scripts/ (coverage-graduation.json
             # is the live example: #589 moved a date there, the probe keyed on
             # that literal went vacuous, and gate-effectiveness never ran on
@@ -261,7 +285,7 @@ jobs:
           fi
           echo "scripts=$scripts" >> "$GITHUB_OUTPUT"
           echo "relay=$relay" >> "$GITHUB_OUTPUT"
-          echo "scripts/ touched vs '${{ github.base_ref }}': $scripts; services/relay/ touched: $relay"
+          echo "scripts/ touched vs '${BASE:-<not diff-scoped>}': $scripts; services/relay/ touched: $relay"
 
   gate-effectiveness:
     # Probe every drift-defense gate with a known-violating fixture to prove
@@ -350,7 +374,9 @@ jobs:
         run: pnpm check-activation-effective
 
   sibling-audit:
-    if: github.event_name == 'pull_request'
+    # Runs on the queue commit too: skipping it there would report a SKIPPED
+    # required check, which GitHub counts as success — a vacuous pass.
+    if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
     runs-on: ubuntu-latest
     timeout-minutes: 5
 
@@ -369,8 +395,19 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - id: base
+        name: Resolve the diff base (pull_request or merge_group)
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_BASE_REF: ${{ github.base_ref }}
+          MG_BASE_SHA: ${{ github.event.merge_group.base_sha }}
+          MG_HEAD_SHA: ${{ github.event.merge_group.head_sha }}
+        run: bash scripts/ci-diff-base.sh
+
       - name: Sibling boundary audit
-        run: git diff --name-only origin/main...HEAD | npx tsx scripts/check-sibling-boundaries.ts
+        env:
+          BASE: ${{ steps.base.outputs.base }}
+        run: git diff --name-only "$BASE" HEAD | npx tsx scripts/check-sibling-boundaries.ts
 
   python-conformance:
     # Smoke-test that the Python reference implementation of
@@ -595,7 +632,11 @@ jobs:
           retention-days: 7
 
   changeset:
-    if: github.event_name == 'pull_request'
+    # Re-checked on the queue commit, diffing it against merge_group.base_sha:
+    # the queue commit is the PR re-applied on top of whatever is ahead of it
+    # (a tree the PR run never saw), and a skipped required check would report
+    # success vacuously.
+    if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
     runs-on: ubuntu-latest
     timeout-minutes: 5
 
@@ -614,8 +655,19 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - id: base
+        name: Resolve the diff base (pull_request or merge_group)
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_BASE_REF: ${{ github.base_ref }}
+          MG_BASE_SHA: ${{ github.event.merge_group.base_sha }}
+          MG_HEAD_SHA: ${{ github.event.merge_group.head_sha }}
+        run: bash scripts/ci-diff-base.sh
+
       - name: Require a changeset when a published package's source changed
         # Fails (exit 1) only when a non-private package's `src/` changed without
         # a changeset — docs/test/service/CI-only PRs pass. Derives the published
         # set from package.json (no hardcoded list). See the script header.
+        env:
+          CHANGESET_BASE_REF: ${{ steps.base.outputs.base }}
         run: npx tsx scripts/check-changeset-required.ts

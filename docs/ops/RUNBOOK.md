@@ -840,3 +840,52 @@ Identity is Ed25519 keypairs. Relay stores them in SQLite, encrypted at rest wit
 | Rate limited            | Check `fly logs` for 429s, adjust tiers in `services/api/src/index.ts`                           |
 | Federation peer failing | Check circuit breaker (>50% failure rate suspends peer automatically)                            |
 | Reconciliation failing  | Freeze immediately, record output, investigate, fix before unfreeze                              |
+
+---
+
+## 16. Merge Queue (`main`)
+
+`main` is protected by the `main-protection` ruleset. Its required status checks are mirrored, one name per entry, in [`.github/required-checks.json`](../../.github/required-checks.json) — that file is the list to enter in the ruleset, and `check-merge-queue-readiness` (drift-defense #166) proves every one of them reports correctly on the merge queue's `merge_group` event. Change the ruleset and that file in the same PR.
+
+### How a queued PR is checked
+
+| Required check  | Producer (workflow → job)                      | On `merge_group`                                                                                                                                                                       |
+| --------------- | ---------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `check`         | `.github/workflows/ci.yml` → `check`           | Full run on the queue commit (build, `pnpm check`, typecheck, lint, tests). No diff inputs.                                                                                            |
+| `format`        | `.github/workflows/ci.yml` → `format`          | Full `pnpm format:check` on the queue commit.                                                                                                                                          |
+| `e2e`           | `.github/workflows/ci.yml` → `e2e`             | Runs after `check` on the queue commit, from that run's `web-build` artifact.                                                                                                          |
+| `sibling-audit` | `.github/workflows/ci.yml` → `sibling-audit`   | Diffs the queue commit against `merge_group.base_sha` via `scripts/ci-diff-base.sh`.                                                                                                   |
+| `changeset`     | `.github/workflows/ci.yml` → `changeset`       | `check-changeset-required` with `CHANGESET_BASE_REF` = `merge_group.base_sha`.                                                                                                         |
+| `cla`           | `.github/workflows/cla.yml` → `cla` (workflow) | Explicit pass-through step: the verdict is a property of the PR's authors, which the queue commit cannot change; the CLA action itself needs a pull request the payload doesn't carry. |
+
+1. A PR reaches the queue only after every required check is green on its own head.
+2. The queue builds `gh-readonly-queue/main/pr-<N>-<sha>` (the PR on top of `main` and anything ahead of it) and fires `merge_group` (`checks_requested`). `ci.yml` and `cla.yml` run on it; no other workflow does — deploys, publishes and releases never run from a queue ref (rule R5).
+3. Diff-scoped jobs (`changes`, `sibling-audit`, `changeset`) take their base from `scripts/ci-diff-base.sh`, which fails closed on a missing base, a HEAD that is not the queue commit, a base absent from the clone, or an EMPTY queue diff — a required check never passes having checked nothing.
+4. Concurrency keys on `merge_group.head_ref` and queue runs are never cancelled (a cancelled required check fails the entry). PR and push runs keep cancel-superseded.
+5. When every required check is green on the queue commit, GitHub fast-forwards `main` to it. That is an ordinary push: `ci.yml` runs again on `main`, and the deploy workflows fire on the push as before. Their CI gates (`deploy-sync.yml`, `deploy-sync-staging.yml`) poll `gh run list --workflow ci.yml --branch main`, which matches only the push run on `main` — queue runs carry `headBranch = gh-readonly-queue/…` and are not mistaken for it.
+
+### Enabling it (operator, GitHub settings — not repo content)
+
+Prerequisite: this repo's `main` carries the `merge_group` triggers (`pnpm check-merge-queue-readiness` green).
+
+Settings → Rules → Rulesets → `main-protection` → add the **Require merge queue** rule. Recommended parameters (ruleset `merge_queue` rule, [REST reference](https://docs.github.com/en/rest/repos/rules)):
+
+| Parameter                                                       | Value      | Why                                                                                                                                                      |
+| --------------------------------------------------------------- | ---------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Merge method (`merge_method`)                                   | `SQUASH`   | Matches the existing one-commit-per-PR history (`title (#N)`).                                                                                           |
+| Build concurrency (`max_entries_to_build`)                      | `1`        | One entry at a time — the one-at-a-time merge discipline; each queue commit is exactly one PR on `main`. Raise only once queue runs are routinely green. |
+| Maximum group size (`max_entries_to_merge`)                     | `1`        | Never merge a batch.                                                                                                                                     |
+| Minimum group size (`min_entries_to_merge`)                     | `1`        | Don't wait for company.                                                                                                                                  |
+| Wait time to meet minimum (`min_entries_to_merge_wait_minutes`) | `0`        | Nothing to wait for at group size 1.                                                                                                                     |
+| Status check timeout (`check_response_timeout_minutes`)         | `60`       | `check` may take up to its 30-min ceiling and `e2e` runs after it (10 min); 60 leaves runner-queue headroom without hiding a hung run.                   |
+| Grouping strategy (`grouping_strategy`)                         | `ALLGREEN` | Every entry's required checks must pass, never just the group head's.                                                                                    |
+
+Keep the required status checks list as `.github/required-checks.json`. If a required check is pinned to a source app, keep it on **GitHub Actions**: the `merge_group` runs report from Actions like the PR runs do. Then use **Merge when ready** on a PR instead of the merge button.
+
+Docs: [Managing a merge queue](https://docs.github.com/en/repositories/configuring-branches-and-merges-in-your-repository/configuring-pull-request-merges/managing-a-merge-queue) (the `merge_group` trigger requirement) · [Handling skipped but required checks](https://docs.github.com/en/pull-requests/collaborating-with-pull-requests/collaborating-on-repositories-with-code-quality-features/troubleshooting-required-status-checks#handling-skipped-but-required-checks) (why a skipped required job would pass vacuously).
+
+### Rolling back
+
+1. Settings → Rules → Rulesets → `main-protection` → remove the **Require merge queue** rule. Queued PRs drop out of the queue and go back to ordinary merging; nothing in the repo has to change.
+2. The `merge_group` triggers may stay — with no queue, the event never fires. Remove them only together with `.github/required-checks.json` and the gate, or `check-merge-queue-readiness` goes red.
+3. A queue that stalls on one check: read the check's run on the `gh-readonly-queue/…` ref. A check that never started means a workflow lost its `merge_group` trigger (run `pnpm check-merge-queue-readiness`); a `ci-diff-base` error names the missing base, the head mismatch, or the empty diff.
