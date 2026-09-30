@@ -11,6 +11,15 @@
  * Where the bypass hides a real error, the case first PROVES the bypass: the
  * fixture's `pnpm run typecheck` exits 0 with the error in place. A case the
  * harness could not make exit 0 would be testing nothing.
+ *
+ * Each case also names the mechanism that must catch it (`reason`), so a gate
+ * mutation that disables one mechanism turns at least one case red: the
+ * wrapper-script case is caught ONLY by the canary being reported, the
+ * `sh -c '…; exit 0'` case ONLY by the non-zero-exit requirement, the
+ * `@ts-nocheck` case ONLY by the pragma scan, the `paths` / `types` /
+ * `lib` / `allowJs` / C3 cases ONLY by the options diff, the vitest-excluded
+ * e2e spec ONLY via the git listing, and the setupFiles case ONLY via vitest's
+ * collection.
  */
 import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -129,8 +138,21 @@ function script(files: Files, dir: string, typecheckScript: string): void {
   });
 }
 
+/** The gate's repair line for each mechanism. */
+const BY = {
+  canary: /a canary with a type error there was not reported/,
+  argv: /a typecheck tsc may take only/,
+  diff: /resolves compiler options differently from the build config/,
+  membership: /is not a root file of any tsc the typecheck script runs/,
+  nocheck: /carries `@ts-nocheck`/,
+  chain: /chain with `&&` only/,
+  expansion: /parameter\/command expansion/,
+} as const;
+
 interface Case {
   id: string;
+  /** Mechanisms that must each report the case. */
+  reason: (keyof typeof BY)[];
   /** Build the fixture; returns the package dir (workspace-relative). */
   build: (files: Files) => string;
   /** The fixture's own `typecheck` exits 0 with a type error in a test file. */
@@ -147,6 +169,7 @@ const appendError = (files: Files, rel: string, text = TYPE_ERROR): void => {
 const CASES: Case[] = [
   ...["--noCheck", "--listFilesOnly", "--showConfig"].map((flag): Case => ({
     id: `C1 extra tsc flag ${flag}`,
+    reason: ["argv"],
     hidesError: true,
     build: (f) => {
       script(f, P, `tsc --noEmit && tsc -p tsconfig.test.json ${flag}`);
@@ -156,6 +179,7 @@ const CASES: Case[] = [
   })),
   {
     id: "C1 --strict false --noImplicitAny false",
+    reason: ["argv"],
     hidesError: true,
     build: (f) => {
       script(
@@ -169,6 +193,7 @@ const CASES: Case[] = [
   },
   {
     id: 'C2 "noCheck": true in tsconfig.test.json',
+    reason: ["diff", "canary"],
     hidesError: true,
     build: (f) => {
       testOptions(f, P, { noCheck: true });
@@ -178,6 +203,7 @@ const CASES: Case[] = [
   },
   {
     id: "C3 strictBuiltinIteratorReturn: false",
+    reason: ["diff"],
     hidesError: true,
     build: (f) => {
       testOptions(f, P, { strictBuiltinIteratorReturn: false });
@@ -191,6 +217,7 @@ const CASES: Case[] = [
   },
   {
     id: "C4 // @ts-nocheck in a test file",
+    reason: ["nocheck"],
     hidesError: true,
     build: (f) => {
       f[TEST] = `// @ts-nocheck\n${f[TEST] as string}${TYPE_ERROR}`;
@@ -199,6 +226,7 @@ const CASES: Case[] = [
   },
   ...["build", ".hidden", "coverage"].map((d): Case => ({
     id: `C5 test under src/${d}/ excluded from both tsconfigs`,
+    reason: ["canary", "membership"],
     hidesError: true,
     build: (f) => {
       patchJson(f, `${P}/tsconfig.json`, (v) => {
@@ -213,6 +241,7 @@ const CASES: Case[] = [
   })),
   {
     id: "paths: test config redirects a module to a stub",
+    reason: ["diff"],
     hidesError: true,
     build: (f) => {
       patchJson(f, `${P}/tsconfig.json`, (v) => {
@@ -237,6 +266,7 @@ const CASES: Case[] = [
   },
   {
     id: "types: test config changes `types`",
+    reason: ["diff"],
     hidesError: false,
     build: (f) => {
       testOptions(f, P, { types: ["node"] });
@@ -245,6 +275,7 @@ const CASES: Case[] = [
   },
   {
     id: "lib: test config widens `lib`",
+    reason: ["diff"],
     hidesError: true,
     build: (f) => {
       testOptions(f, P, { lib: ["es2023"] });
@@ -254,6 +285,7 @@ const CASES: Case[] = [
   },
   {
     id: "allowJs/checkJs: test config changes JS checking",
+    reason: ["diff"],
     hidesError: false,
     build: (f) => {
       testOptions(f, P, { allowJs: true, checkJs: false });
@@ -262,6 +294,7 @@ const CASES: Case[] = [
   },
   {
     id: "vitest setupFiles outside src",
+    reason: ["canary", "membership"],
     hidesError: true,
     build: (f) => {
       f[`${P}/vitest.config.mjs`] =
@@ -272,6 +305,7 @@ const CASES: Case[] = [
   },
   {
     id: "new file under an allowlisted prefix (apps/web e2e/)",
+    reason: ["canary", "membership"],
     hidesError: true,
     globs: ["apps/*"],
     build: (f) => {
@@ -284,6 +318,7 @@ const CASES: Case[] = [
   },
   {
     id: "`;` chain hides a failing test tsc",
+    reason: ["chain"],
     hidesError: true,
     build: (f) => {
       script(f, P, "tsc -p tsconfig.test.json; tsc --noEmit");
@@ -293,9 +328,55 @@ const CASES: Case[] = [
   },
   {
     id: "`|| true` chain",
+    reason: ["chain"],
     hidesError: true,
     build: (f) => {
       script(f, P, "tsc --noEmit && tsc -p tsconfig.test.json || true");
+      appendError(f, TEST);
+      return P;
+    },
+  },
+  {
+    id: "spec vitest's config excludes (a Playwright-style e2e/)",
+    reason: ["canary", "membership"],
+    hidesError: true,
+    build: (f) => {
+      f[`${P}/vitest.config.mjs`] =
+        'export default { test: { exclude: ["**/node_modules/**", "e2e/**"] } };\n';
+      f[`${P}/e2e/flow.spec.ts`] = TYPE_ERROR;
+      return P;
+    },
+  },
+  {
+    id: "wrapper script runs a different tsc when it is being recorded",
+    reason: ["canary"],
+    hidesError: true,
+    build: (f) => {
+      script(f, P, "tsc --noEmit && node tc.mjs");
+      f[`${P}/tc.mjs`] =
+        'import { execFileSync } from "node:child_process";\n' +
+        'const cfg = process.env.MOTEBIT_TSC_RECORD_ONLY === "1" ? "tsconfig.test.json" : "tsconfig.json";\n' +
+        'execFileSync("tsc", ["--noEmit", "-p", cfg], { stdio: "inherit" });\n';
+      appendError(f, TEST);
+      return P;
+    },
+  },
+  {
+    id: "`sh -c '…; exit 0'` swallows the test tsc's failure",
+    reason: ["canary"],
+    hidesError: true,
+    build: (f) => {
+      script(f, P, "tsc --noEmit && sh -c 'tsc -p tsconfig.test.json; exit 0'");
+      appendError(f, TEST);
+      return P;
+    },
+  },
+  {
+    id: "`$` expansion in the typecheck script",
+    reason: ["expansion"],
+    hidesError: true,
+    build: (f) => {
+      script(f, P, "tsc --noEmit && tsc -p ${TC_CONFIG:-tsconfig.json}");
       appendError(f, TEST);
       return P;
     },
@@ -319,5 +400,6 @@ describe("check-tests-typechecked bypass harness", () => {
     if (c.hidesError) expect(typecheck(join(root, dir)), "bypass must be real").toBe(0);
     const g = gate(root);
     expect(g.status, g.out).not.toBe(0);
+    for (const r of c.reason) expect(g.out, `${r} must report it`).toMatch(BY[r]);
   });
 });

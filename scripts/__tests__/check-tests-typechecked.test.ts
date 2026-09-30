@@ -1,27 +1,42 @@
 /**
- * check-tests-typechecked — fixture tests.
+ * check-tests-typechecked — unit tests for the gate's pure pieces.
  *
- * Each fixture is a throwaway workspace package on disk: a package.json with a
- * `typecheck` script, a tsconfig (or two), and test files. The gate asks the
- * TypeScript config parser which files each tsconfig includes, so the fixtures
- * exercise the real `include` / `exclude` / `extends` resolution.
+ * The end-to-end behaviour (canaries, recorded argv, the options diff against
+ * real `tsc --showConfig` output, membership, `@ts-nocheck`) is exercised by
+ * check-tests-typechecked.bypass.test.ts against throwaway workspaces. These
+ * tests pin the parts a quiet edit could widen: the diff allowlist, the argv
+ * allowlist, the workspace enumeration, the chain rules, the canary matcher,
+ * and the exact-path shape of KNOWN_UNCOVERED.
  */
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import ts from "typescript";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import {
-  findTestFiles,
+  argvViolations,
+  chainViolations,
+  DIFF_ALLOWED_KEYS,
   isTestFile,
-  resolvedCompilerOptions,
-  resolveTypecheckConfigs,
-  scanPackage,
+  KNOWN_UNCOVERED,
+  nonAndOperators,
+  optionDiff,
+  reportsError,
+  workspacePackageDirs,
 } from "../check-tests-typechecked.js";
 
+const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
+
 let root: string;
+beforeEach(() => {
+  root = mkdtempSync(join(tmpdir(), "tests-typechecked-unit-"));
+});
+afterEach(() => {
+  rmSync(root, { recursive: true, force: true });
+});
 
 function write(rel: string, content: string): void {
   const abs = join(root, rel);
@@ -29,326 +44,225 @@ function write(rel: string, content: string): void {
   writeFileSync(abs, content);
 }
 
-function json(rel: string, value: unknown): void {
-  write(rel, JSON.stringify(value, null, 2));
-}
-
-/** A package whose build tsconfig excludes its tests — the #1000 shape. */
-function buildOnlyPackage(dir: string, typecheck = "tsc --noEmit"): void {
-  json(`${dir}/package.json`, { name: `@fixture/${dir}`, scripts: { typecheck } });
-  json(`${dir}/tsconfig.json`, {
-    compilerOptions: { rootDir: "src", outDir: "dist" },
-    include: ["src"],
-    exclude: ["src/__tests__"],
+describe("optionDiff — deny by default", () => {
+  it("pins the allowlist to exactly the emit/layout keys", () => {
+    expect([...DIFF_ALLOWED_KEYS].sort()).toEqual(
+      [
+        "composite",
+        "declaration",
+        "declarationMap",
+        "emitDeclarationOnly",
+        "incremental",
+        "noEmit",
+        "outDir",
+        "rootDir",
+        "sourceMap",
+        "tsBuildInfoFile",
+      ].sort(),
+    );
   });
-  write(`${dir}/src/index.ts`, "export const x = 1;\n");
-  write(`${dir}/src/__tests__/index.test.ts`, "import { x } from '../index';\nvoid x;\n");
-  write(`${dir}/src/__tests__/helpers.ts`, "export const h = 1;\n");
-}
 
-beforeEach(() => {
-  root = mkdtempSync(join(tmpdir(), "tests-typechecked-"));
+  // Every compiler option TypeScript itself declares: a difference on any of
+  // them outside the allowlist must be reported. Widening the allowlist by
+  // one key turns this red for that key.
+  const allOptions = (
+    ts as unknown as { optionDeclarations: { name: string }[] }
+  ).optionDeclarations.map((o) => o.name);
+
+  it("covers the options TypeScript declares (sanity: the list is not empty)", () => {
+    expect(allOptions.length).toBeGreaterThan(100);
+    for (const k of [
+      "noCheck",
+      "strictBuiltinIteratorReturn",
+      "paths",
+      "types",
+      "lib",
+      "allowJs",
+      "checkJs",
+    ]) {
+      expect(allOptions).toContain(k);
+    }
+  });
+
+  it("reports a difference on every declared option outside the allowlist", () => {
+    const missed = allOptions.filter((k) => {
+      if (DIFF_ALLOWED_KEYS.has(k)) return false;
+      return optionDiff({}, { [k]: true }).differing.length !== 1;
+    });
+    expect(missed).toEqual([]);
+  });
+
+  it("treats set-vs-unset as a difference, never infers equivalence", () => {
+    expect(optionDiff({ strict: true }, { strict: true, noImplicitAny: true }).differing).toEqual([
+      "noImplicitAny (build unset, typecheck true)",
+    ]);
+  });
+
+  it("compares structured values (paths, lib) by value", () => {
+    expect(optionDiff({ lib: ["es2022"] }, { lib: ["es2022"] }).differing).toEqual([]);
+    expect(optionDiff({ paths: { a: ["x"] } }, { paths: { a: ["y"] } }).differing).toHaveLength(1);
+  });
+
+  it("lets only allowlisted keys differ, and counts the keys it compared", () => {
+    const d = optionDiff(
+      { rootDir: "src", strict: true },
+      { rootDir: ".", noEmit: true, strict: true },
+    );
+    expect(d.differing).toEqual([]);
+    expect(d.compared).toBe(1);
+  });
 });
 
-afterEach(() => {
-  rmSync(root, { recursive: true, force: true });
+describe("argvViolations", () => {
+  it("accepts only -p/--project, -b/--build (with a value), --noEmit, --pretty", () => {
+    expect(argvViolations([])).toEqual([]);
+    expect(argvViolations(["--noEmit"])).toEqual([]);
+    expect(argvViolations(["-p", "tsconfig.test.json"])).toEqual([]);
+    expect(
+      argvViolations(["--project", "tsconfig.typecheck.json", "--noEmit", "--pretty"]),
+    ).toEqual([]);
+  });
+
+  it.each([
+    [["-p", "tsconfig.test.json", "--noCheck"], ["--noCheck"]],
+    [["--listFilesOnly"], ["--listFilesOnly"]],
+    [["--showConfig"], ["--showConfig"]],
+    [
+      ["--strict", "false", "--noImplicitAny", "false"],
+      ["--strict", "false", "--noImplicitAny", "false"],
+    ],
+    [["--skipLibCheck"], ["--skipLibCheck"]],
+    [["-p"], ["-p without a value"]],
+  ])("rejects %j", (argv, bad) => {
+    expect(argvViolations(argv)).toEqual(bad);
+  });
+});
+
+describe("workspacePackageDirs", () => {
+  it("expands every pnpm-workspace.yaml glob", () => {
+    write(
+      "pnpm-workspace.yaml",
+      'packages:\n  - "packages/*"\n  - "apps/*"\n  - services/*\n  - tools\n',
+    );
+    for (const d of ["packages/a", "apps/b", "services/c", "tools"])
+      write(`${d}/package.json`, "{}");
+    write("packages/not-a-package/readme.md", "");
+    expect(workspacePackageDirs(root).map((d) => d.slice(root.length + 1))).toEqual([
+      "packages/a",
+      "apps/b",
+      "services/c",
+      "tools",
+    ]);
+  });
+
+  it("refuses a glob shape it does not understand", () => {
+    write("pnpm-workspace.yaml", 'packages:\n  - "packages/**"\n');
+    expect(() => workspacePackageDirs(root)).toThrow(/unsupported/);
+  });
+
+  it("reads the real workspace (the three repo groups)", () => {
+    const groups = new Set(
+      workspacePackageDirs(REPO).map((d) => d.slice(REPO.length + 1).split("/")[0]),
+    );
+    expect([...groups].sort()).toEqual(["apps", "packages", "services"]);
+  });
+});
+
+describe("chain rules", () => {
+  it("accepts an && chain, through pnpm run hops", () => {
+    expect(
+      chainViolations({
+        typecheck: "tsc --noEmit && pnpm run typecheck:tests",
+        "typecheck:tests": "tsc -p tsconfig.test.json",
+      }),
+    ).toEqual([]);
+  });
+
+  it.each(["||", ";", "|", "&", "\n"])("rejects %j", (op) => {
+    const v = chainViolations({ typecheck: `tsc --noEmit ${op} tsc -p tsconfig.test.json` });
+    expect(v).toHaveLength(1);
+  });
+
+  it("rejects an operator in a script reached through a hop", () => {
+    const v = chainViolations({
+      typecheck: "pnpm typecheck:tests",
+      "typecheck:tests": "tsc -p x.json || true",
+    });
+    expect(v.join("\n")).toMatch(/typecheck:tests.*`\|\|`/);
+  });
+
+  it("rejects $ and backtick expansion", () => {
+    expect(chainViolations({ typecheck: "tsc -p ${CFG:-tsconfig.json}" })).toHaveLength(1);
+    expect(chainViolations({ typecheck: "tsc -p `cat cfg`" })).toHaveLength(1);
+  });
+
+  it("ignores operators inside quotes and redirections", () => {
+    expect(nonAndOperators(`echo "a || b; c" && tsc 2>&1`)).toEqual([]);
+  });
+});
+
+describe("reportsError", () => {
+  const canary = "/x/src/__tests__/__typecheck_canary_abc123.test.ts";
+  it("needs a TS error on a line naming the canary", () => {
+    expect(
+      reportsError(
+        "src/__tests__/__typecheck_canary_abc123.test.ts(2,14): error TS2322: nope",
+        canary,
+      ),
+    ).toBe(true);
+    // tsc --pretty colours the path and the word "error" separately.
+    const pretty =
+      "\u001b[96msrc/__tests__/__typecheck_canary_abc123.test.ts\u001b[0m:\u001b[93m2\u001b[0m:\u001b[93m14\u001b[0m - \u001b[91merror\u001b[0m\u001b[90m TS2322: \u001b[0mType 'string' is not assignable";
+    expect(reportsError(pretty, canary)).toBe(true);
+  });
+  it("is not fooled by a file listing", () => {
+    expect(
+      reportsError(
+        "src/__tests__/__typecheck_canary_abc123.test.ts\nerror TS2322 elsewhere",
+        canary,
+      ),
+    ).toBe(false);
+  });
 });
 
 describe("isTestFile", () => {
-  it("matches *.test / *.spec and anything under __tests__, never declarations", () => {
+  it("matches test-named files (TS or JS) and TS under __tests__, never declarations", () => {
     expect(isTestFile("src/a.test.ts")).toBe(true);
     expect(isTestFile("e2e/a.spec.tsx")).toBe(true);
+    expect(isTestFile("src/a.test.mjs")).toBe(true);
     expect(isTestFile("src/__tests__/helpers.ts")).toBe(true);
+    expect(isTestFile("src/build/x.test.ts")).toBe(true);
+    expect(isTestFile("src/__tests__/stub.cjs")).toBe(false);
     expect(isTestFile("src/__tests__/types.d.ts")).toBe(false);
-    expect(isTestFile("src/__tests__/fixture.json")).toBe(false);
     expect(isTestFile("src/index.ts")).toBe(false);
   });
+});
 
-  it("skips build output and node_modules when walking", () => {
-    buildOnlyPackage("pkg");
-    write("pkg/dist/__tests__/index.test.ts", "");
-    write("pkg/node_modules/dep/a.test.ts", "");
-    expect(findTestFiles(join(root, "pkg"))).toEqual([
-      "src/__tests__/helpers.ts",
-      "src/__tests__/index.test.ts",
-    ]);
+describe("KNOWN_UNCOVERED", () => {
+  it("holds exact, existing file paths — never a prefix", () => {
+    for (const [dir, entries] of Object.entries(KNOWN_UNCOVERED)) {
+      for (const [file, reason] of Object.entries(entries)) {
+        expect(file.endsWith("/"), `${dir}: ${file}`).toBe(false);
+        expect(isTestFile(file), `${dir}: ${file}`).toBe(true);
+        expect(existsSync(join(REPO, dir, file)), `${dir}/${file} exists`).toBe(true);
+        expect(reason.length).toBeGreaterThan(40);
+      }
+    }
   });
 });
 
-describe("resolveTypecheckConfigs", () => {
-  it("defaults a bare tsc to tsconfig.json", () => {
-    expect(resolveTypecheckConfigs({ typecheck: "tsc --noEmit" }).configs).toEqual([
-      "tsconfig.json",
-    ]);
-  });
-
-  it("reads -p / --project and chains through && and pnpm run hops", () => {
-    const r = resolveTypecheckConfigs({
-      typecheck: "tsc --noEmit && pnpm run typecheck:tests",
-      "typecheck:tests": "tsc --project tsconfig.test.json",
-    });
-    expect(r.configs).toEqual(["tsconfig.json", "tsconfig.test.json"]);
-    expect(r.unresolved).toEqual([]);
-  });
-
-  it("ignores non-tsc steps rather than guessing a config for them", () => {
-    expect(
-      resolveTypecheckConfigs({
-        typecheck: "fumadocs-mdx && tsc -p tsconfig.typecheck.json --noEmit",
-      }).configs,
-    ).toEqual(["tsconfig.typecheck.json"]);
-  });
-});
-
-describe("scanPackage", () => {
-  it("flags every test file the build tsconfig excludes (the #1000 shape)", () => {
-    buildOnlyPackage("pkg");
-    const r = scanPackage(join(root, "pkg"), root, {});
-    expect(r?.uncovered).toEqual(["src/__tests__/helpers.ts", "src/__tests__/index.test.ts"]);
-  });
-
-  it("passes when the typecheck script also compiles a test-inclusive tsconfig", () => {
-    buildOnlyPackage("pkg", "tsc --noEmit && tsc -p tsconfig.test.json");
-    json("pkg/tsconfig.test.json", {
-      extends: "./tsconfig.json",
-      compilerOptions: { rootDir: ".", noEmit: true },
-      include: ["src"],
-      exclude: [],
-    });
-    const r = scanPackage(join(root, "pkg"), root, {});
-    expect(r?.uncovered).toEqual([]);
-    expect(r?.problems).toEqual([]);
-  });
-
-  it("does not count a test-inclusive tsconfig the typecheck script never runs", () => {
-    // tsconfig.eslint.json includes the tests but only the linter reads it.
-    buildOnlyPackage("pkg");
-    json("pkg/tsconfig.eslint.json", { extends: "./tsconfig.json", include: ["src"], exclude: [] });
-    expect(scanPackage(join(root, "pkg"), root, {})?.uncovered).toHaveLength(2);
-  });
-
-  it("flags test files outside src that the tsconfig include never reaches", () => {
-    json("pkg/package.json", { name: "@fixture/pkg", scripts: { typecheck: "tsc --noEmit" } });
-    json("pkg/tsconfig.json", { include: ["src"] });
-    write("pkg/src/a.test.ts", "export {};\n");
-    write("pkg/e2e/b.spec.ts", "export {};\n");
-    expect(scanPackage(join(root, "pkg"), root, {})?.uncovered).toEqual(["e2e/b.spec.ts"]);
-  });
-
-  it("reports a typecheck script pointing at a missing tsconfig", () => {
-    buildOnlyPackage("pkg", "tsc --noEmit && tsc -p tsconfig.missing.json");
-    const r = scanPackage(join(root, "pkg"), root, {});
-    expect(r?.problems.some((p) => p.includes("tsconfig.missing.json"))).toBe(true);
-  });
-
-  it("skips packages without a typecheck script", () => {
-    json("pkg/package.json", { name: "@fixture/pkg", scripts: {} });
-    expect(scanPackage(join(root, "pkg"), root, {})).toBeNull();
-  });
-
-  it("honors an allowlist entry and fails when that entry goes stale", () => {
-    buildOnlyPackage("pkg");
-    const known = { pkg: { "src/__tests__/": "fixture reason" } };
-    const r = scanPackage(join(root, "pkg"), root, known);
-    expect(r?.uncovered).toEqual([]);
-    expect(r?.allowlisted).toHaveLength(2);
-    expect(r?.problems).toEqual([]);
-
-    const stale = scanPackage(join(root, "pkg"), root, { pkg: { "e2e/": "nothing here" } });
-    expect(stale?.problems.some((p) => p.includes("stale KNOWN_UNCOVERED entry"))).toBe(true);
-  });
-});
-
-/** The strict build flags the repo's tsconfig.base.json sets. */
-const STRICT_BUILD = {
-  strict: true,
-  noImplicitAny: true,
-  strictNullChecks: true,
-  noUncheckedIndexedAccess: true,
-  noUnusedLocals: true,
-  noUnusedParameters: true,
-  skipLibCheck: true,
-};
-
-/** A package with the fixed shape: strict build config + tsconfig.test.json. */
-function testConfigPackage(
-  dir: string,
-  testOptions: Record<string, unknown>,
-  typecheck = "tsc --noEmit && tsc -p tsconfig.test.json",
-  buildOptions: Record<string, unknown> = STRICT_BUILD,
-): void {
-  buildOnlyPackage(dir, typecheck);
-  json(`${dir}/tsconfig.json`, {
-    compilerOptions: { rootDir: "src", outDir: "dist", ...buildOptions },
-    include: ["src"],
-    exclude: ["src/__tests__"],
-  });
-  json(`${dir}/tsconfig.test.json`, {
-    extends: "./tsconfig.json",
-    compilerOptions: { rootDir: ".", noEmit: true, ...testOptions },
-    include: ["src"],
-    exclude: [],
-  });
-}
-
-function problemsOf(dir: string): string[] {
-  const r = scanPackage(join(root, dir), root, {});
-  expect(r).not.toBeNull();
-  return r!.problems;
-}
-
-describe("scanPackage — the test config is at least as strict as the build config", () => {
-  it("passes when the test config inherits the build config's strictness", () => {
-    testConfigPackage("pkg", {});
-    expect(problemsOf("pkg")).toEqual([]);
-  });
-
-  it("passes when the test config is stricter than the build config", () => {
-    testConfigPackage("pkg", { exactOptionalPropertyTypes: true, noImplicitOverride: true });
-    expect(problemsOf("pkg")).toEqual([]);
-  });
-
-  it.each([
-    ["strict", { strict: false }],
-    ["noImplicitAny", { noImplicitAny: false }],
-    ["strictNullChecks", { strictNullChecks: false }],
-    ["noUncheckedIndexedAccess", { noUncheckedIndexedAccess: false }],
-    ["noUnusedLocals", { noUnusedLocals: false }],
-    ["noUnusedParameters", { noUnusedParameters: false }],
-    ["useUnknownInCatchVariables", { useUnknownInCatchVariables: false }],
-  ])("fails when tsconfig.test.json turns off %s", (flag, opts) => {
-    testConfigPackage("pkg", opts);
-    const problems = problemsOf("pkg");
-    expect(problems.some((p) => p.includes("tsconfig.test.json") && p.includes(flag))).toBe(true);
-  });
-
-  it("fails when the test config turns on skipLibCheck the build config keeps off", () => {
-    testConfigPackage("pkg", { skipLibCheck: true }, undefined, {
-      ...STRICT_BUILD,
-      skipLibCheck: false,
-    });
-    expect(problemsOf("pkg").some((p) => p.includes("skipLibCheck"))).toBe(true);
-  });
-
-  it("fails when the test config drops a flag the build config opts into", () => {
-    testConfigPackage(
-      "pkg",
-      { exactOptionalPropertyTypes: false, noImplicitOverride: false },
-      undefined,
+describe("check-tests-typechecked (scoped smoke against the real repo)", () => {
+  it("passes on packages/protocol and states its aperture", () => {
+    const r = spawnSync(
+      join(REPO, "node_modules/.bin/tsx"),
+      ["scripts/check-tests-typechecked.ts"],
       {
-        ...STRICT_BUILD,
-        exactOptionalPropertyTypes: true,
-        noImplicitOverride: true,
+        cwd: REPO,
+        env: { ...process.env, CHECK_TESTS_TYPECHECKED_ONLY: "packages/protocol" },
+        encoding: "utf-8",
       },
     );
-    const problems = problemsOf("pkg");
-    expect(problems.some((p) => p.includes("exactOptionalPropertyTypes"))).toBe(true);
-    expect(problems.some((p) => p.includes("noImplicitOverride"))).toBe(true);
-  });
-
-  it("resolves strict-family flags as tsc does: `strict: false` weakens every implied flag", () => {
-    // The build config sets only `strict: true`; the test config only
-    // `strict: false`. No strict-family flag is named explicitly, so the gate
-    // must apply strict's implication to see noImplicitAny etc. go off.
-    testConfigPackage("pkg", { strict: false }, undefined, { strict: true });
-    const problems = problemsOf("pkg");
-    for (const flag of ["noImplicitAny", "strictNullChecks", "useUnknownInCatchVariables"]) {
-      expect(problems.some((p) => p.includes(flag))).toBe(true);
-    }
-  });
-
-  it("follows the extends chain: a weakening in an intermediate config is caught", () => {
-    testConfigPackage("pkg", {});
-    json("pkg/tsconfig.loose.json", {
-      extends: "./tsconfig.json",
-      compilerOptions: { noUncheckedIndexedAccess: false },
-    });
-    json("pkg/tsconfig.test.json", {
-      extends: "./tsconfig.loose.json",
-      compilerOptions: { rootDir: ".", noEmit: true },
-      include: ["src"],
-      exclude: [],
-    });
-    expect(problemsOf("pkg").some((p) => p.includes("noUncheckedIndexedAccess"))).toBe(true);
-  });
-
-  it("reads the same resolved options `tsc --showConfig` prints", () => {
-    testConfigPackage("pkg", { strict: false, noUncheckedIndexedAccess: false });
-    const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
-    const shown = spawnSync(
-      join(repoRoot, "node_modules", ".bin", "tsc"),
-      ["--showConfig", "-p", join(root, "pkg", "tsconfig.test.json")],
-      { encoding: "utf-8" },
-    );
-    expect(shown.status).toBe(0);
-    const showConfig = (JSON.parse(shown.stdout) as { compilerOptions: Record<string, unknown> })
-      .compilerOptions;
-    const resolved = resolvedCompilerOptions(join(root, "pkg", "tsconfig.test.json"));
-    for (const [flag, value] of Object.entries(showConfig)) {
-      if (typeof value === "boolean") expect([flag, resolved[flag]]).toEqual([flag, value]);
-    }
-    expect(resolved.strict).toBe(false);
-    expect(resolved.noUncheckedIndexedAccess).toBe(false);
-  });
-});
-
-describe("scanPackage — the typecheck script runs every tsconfig unconditionally", () => {
-  it("accepts an && chain, including through pnpm run hops", () => {
-    testConfigPackage("pkg", {}, "tsc --noEmit && pnpm run typecheck:tests");
-    json("pkg/package.json", {
-      name: "@fixture/pkg",
-      scripts: {
-        typecheck: "tsc --noEmit && pnpm run typecheck:tests",
-        "typecheck:tests": "tsc -p tsconfig.test.json",
-      },
-    });
-    expect(problemsOf("pkg")).toEqual([]);
-  });
-
-  it("does not mistake an operator inside quotes for a control operator", () => {
-    testConfigPackage("pkg", {}, 'tsc --noEmit && tsc -p tsconfig.test.json && echo "a || b; c"');
-    expect(problemsOf("pkg")).toEqual([]);
-  });
-
-  it.each([
-    ["||", "tsc --noEmit || tsc -p tsconfig.test.json"],
-    ["|| true", "tsc --noEmit && tsc -p tsconfig.test.json || true"],
-    [";", "tsc --noEmit; tsc -p tsconfig.test.json"],
-    ["|", "tsc --noEmit | tee tc.log && tsc -p tsconfig.test.json"],
-    ["&", "tsc --noEmit & tsc -p tsconfig.test.json"],
-  ])("rejects `%s` in the typecheck script", (op, script) => {
-    testConfigPackage("pkg", {}, script);
-    const problems = problemsOf("pkg");
-    expect(
-      problems.some((p) => p.includes(`\`${op.split(" ")[0]}\``) && p.includes("typecheck")),
-    ).toBe(true);
-  });
-
-  it("rejects a tolerant operator in a script reached through a pnpm run hop", () => {
-    testConfigPackage("pkg", {});
-    json("pkg/package.json", {
-      name: "@fixture/pkg",
-      scripts: {
-        typecheck: "tsc --noEmit && pnpm run typecheck:tests",
-        "typecheck:tests": "tsc -p tsconfig.test.json || echo skipped",
-      },
-    });
-    expect(problemsOf("pkg").some((p) => p.includes("typecheck:tests") && p.includes("`||`"))).toBe(
-      true,
-    );
-  });
-});
-
-describe("check-tests-typechecked (smoke)", () => {
-  it("passes against the real repo and states its aperture", () => {
-    const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
-    const result = spawnSync("npx", ["tsx", join(repoRoot, "scripts/check-tests-typechecked.ts")], {
-      encoding: "utf-8",
-      cwd: repoRoot,
-    });
-    // Non-zero = a package's test files escaped its typecheck. Fix the
-    // package's tsconfig.test.json / typecheck script, don't loosen this.
-    expect(result.status).toBe(0);
-    expect(result.stdout).toMatch(/\d+ of \d+ test file\(s\) across \d+ package\(s\)/);
+    expect(r.status, `${r.stdout}\n${r.stderr}`).toBe(0);
+    expect(r.stdout).toMatch(/1 package\(s\) scanned \(SCOPED.*canary director/);
   });
 });

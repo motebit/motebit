@@ -62,6 +62,12 @@ interface Probe {
    * runs the gate in the same mode CI does (e.g. check-specs --strict).
    */
   args?: string[];
+  /**
+   * Extra environment for the gate run. Used only to SCOPE an expensive gate
+   * to the package the probe perturbs (check-tests-typechecked runs every
+   * package's real typecheck); the scoped run takes the same code path.
+   */
+  env?: Record<string, string>;
   /** What invariant this probe proves the gate enforces. */
   proves: string;
   /** Apply a violation; return a cleanup function that reverts it. */
@@ -2865,8 +2871,9 @@ export async function probeFetch(): Promise<unknown> {
   },
   {
     script: "check-tests-typechecked",
+    env: { CHECK_TESTS_TYPECHECKED_ONLY: "packages/protocol" },
     proves:
-      "flags a test file that no tsconfig compiled by the package's `typecheck` script includes — the #1000 shape, where a published package's tests were type-checked nowhere. The fixture is a vitest file at the root of packages/protocol, outside the `src` include of every protocol tsconfig.",
+      "flags a test file the package's `typecheck` script never type-checks — the #1000 shape. The fixture is an (untracked, not-ignored) vitest file at the root of packages/protocol, outside the `src` include of every protocol tsconfig: git lists it, so the gate drops a canary with a type error beside it, runs protocol's real `pnpm run typecheck`, and the canary is never reported. Scoped to packages/protocol by env (the full run type-checks every package).",
     perturb: () =>
       writeFixture(
         `packages/protocol/${PROBE_PREFIX}uncovered.test.ts`,
@@ -3162,6 +3169,7 @@ function main(): void {
       const result = spawnSync("pnpm", cmdArgs, {
         stdio: "pipe",
         encoding: "utf-8",
+        env: probe.env ? { ...process.env, ...probe.env } : process.env,
       });
       gateExitCode = result.status;
       ok = gateExitCode !== null && gateExitCode !== 0;
