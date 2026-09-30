@@ -292,6 +292,12 @@ export function registerBudgetRoutes(deps: BudgetDeps): BudgetRoutes {
   // payout is decided) — otherwise it waits in the queue, `pending`.
   const killAfterMs = deps.payoutKillAfterMs ?? PAYOUT_KILL_AFTER_MS;
   /**
+   * The squatted lane this resolution tick found (#990 round 7): set by
+   * `firePathZero`, raised by `resolvePayoutsOnce` at the end of the tick so
+   * the supervised loop reads ERRORING at /admin/health, naming the address.
+   */
+  let squatThisTick: { address: string; reason: string } | null = null;
+  /**
    * Nonce values this process has claimed and not yet recorded. The busy
    * check, the claim and this reservation run with no await between them
    * (after the lane read), so two requests in this process never sign over
@@ -430,6 +436,14 @@ export function registerBudgetRoutes(deps: BudgetDeps): BudgetRoutes {
     const claimedAt = w.claimed_at ?? w.requested_at;
     if (verdict.killable && Date.now() - claimedAt >= killAfterMs) {
       const kill = await requestKill(moteDb.db, withdrawalId, transfer);
+      if (kill.status === "consumed") {
+        logger.error("withdrawal.solana.nonce_consumed_unrecorded", {
+          correlationId: opts.correlationId,
+          withdrawalId,
+          signature: verdict.signature,
+          note: "the payout's durable nonce moved without a finalized transaction this relay recorded: either the payout landed and its status cannot be read, or an unrecorded transaction (another tool or process holding the treasury key) consumed the nonce. The payout can never land now; the operator settles it — paid naming the payout, or not_paid with override nonce_consumed_unrecorded and an attestation",
+        });
+      }
       logger.warn("withdrawal.solana.kill_requested", {
         correlationId: opts.correlationId,
         withdrawalId,
@@ -467,6 +481,18 @@ export function registerBudgetRoutes(deps: BudgetDeps): BudgetRoutes {
         );
       } catch (err) {
         lane = { status: "unavailable", reason: err instanceof Error ? err.message : String(err) };
+      }
+      if (lane.status !== "ready" && lane.squatted !== undefined) {
+        enqueuePayout(moteDb.db, withdrawalId, Date.now());
+        squatThisTick = { address: lane.squatted.address, reason: lane.reason };
+        logger.error("withdrawal.solana.nonce_lane_squatted", {
+          correlationId,
+          withdrawalId,
+          address: lane.squatted.address,
+          reason: lane.reason,
+          note: "no payout sent: the payout nonce lane's address holds an account this treasury can never use; rotate the lane with SOLANA_PAYOUT_NONCE_SEED_SUFFIX (spec/market-v1.md §10.2). The withdrawal stays pending (queued; /fail still works)",
+        });
+        return null;
       }
       if (lane.status !== "ready") {
         enqueuePayout(moteDb.db, withdrawalId, Date.now());
@@ -549,6 +575,7 @@ export function registerBudgetRoutes(deps: BudgetDeps): BudgetRoutes {
   const resolvePayoutsOnce = async (): Promise<void> => {
     const transfer = operatorSolanaTransfer;
     if (!transfer || transfer.recordsBroadcasts !== true) return;
+    squatThisTick = null;
     // Queued payouts, oldest first, while the lane takes them.
     for (const id of queuedPayouts(moteDb.db)) {
       await firePathZero(id, null);
@@ -575,6 +602,14 @@ export function registerBudgetRoutes(deps: BudgetDeps): BudgetRoutes {
         });
       }
     });
+    // A squatted lane is an operator alarm, not a transient: fail the tick
+    // (after deciding every processing payout) so the supervisor shows it.
+    const squat = squatThisTick as { address: string; reason: string } | null;
+    if (squat !== null) {
+      throw new Error(
+        `payout nonce lane squatted at ${squat.address} (${squat.reason}); Path 0 payouts are queued until the operator rotates SOLANA_PAYOUT_NONCE_SEED_SUFFIX`,
+      );
+    }
   };
 
   // NOTE: the self-declared `POST /api/v1/agents/:id/deposit` route was
@@ -926,6 +961,12 @@ export function registerBudgetRoutes(deps: BudgetDeps): BudgetRoutes {
    *   - `kill_pending`: the operator's `not_paid` broadcast the KILL for the
    *     payout's durable nonce (#990); the refund follows its FINALIZED
    *     status (the relay settles it, or a later reconcile does);
+   *   - `nonce_consumed_unrecorded`: the payout's durable nonce already moved,
+   *     by no finalized transaction this relay recorded (#990 round 7) — the
+   *     payout can never land, but "landed, status unreadable" cannot be told
+   *     from "consumed by an unrecorded transaction": `paid` naming the
+   *     payout, or `not_paid` with `override: "nonce_consumed_unrecorded"`;
+   *   - `kill_not_sent`: the RPC refused the kill broadcast — proves nothing;
    *   - `chain_no_positive_evidence`: no positive evidence of non-landing can
    *     exist — a payout that is not durable-nonce (claimed before #990, or
    *     with no recorded signature): never refunded; `paid` accepted.
@@ -941,6 +982,8 @@ export function registerBudgetRoutes(deps: BudgetDeps): BudgetRoutes {
     | "chain_pending"
     | "chain_unreadable"
     | "kill_pending"
+    | "nonce_consumed_unrecorded"
+    | "kill_not_sent"
     | "chain_no_positive_evidence"
     | "open";
 
@@ -1017,6 +1060,10 @@ export function registerBudgetRoutes(deps: BudgetDeps): BudgetRoutes {
         "the chain could not be read — whether this payout landed is undecided; reconcile stays closed until the chain answers",
       kill_pending:
         "not_paid needs positive evidence: the relay broadcast the kill transaction for this payout's durable nonce (#990) — once it or the payout is finalized the withdrawal is settled (refunded, or completed if the payout landed first); retry the reconcile then",
+      nonce_consumed_unrecorded:
+        "this payout's durable nonce was consumed by a transaction the relay did not record (another tool or process holding the treasury key, or the payout itself whose status can no longer be read) — the payout can never land now, but the chain cannot show which. Reconcile as paid with the payout's signature if it landed; otherwise not_paid with override \"nonce_consumed_unrecorded\" and an attestation (an attested decision, logged)",
+      kill_not_sent:
+        "the RPC refused the kill broadcast for this payout's durable nonce — that proves nothing either way; retry the reconcile (the relay also retries the kill)",
       chain_no_positive_evidence:
         "no positive evidence that this payout did NOT land can exist — it was not signed over a durable nonce (claimed before #990, or no signature recorded), so no kill can make it unlandable and absence proves nothing; no refund. Reconcile as paid with the landed signature if it landed",
     };
@@ -1234,6 +1281,11 @@ export function registerBudgetRoutes(deps: BudgetDeps): BudgetRoutes {
       attestation?: unknown;
       /** Required for `paid`: the transfer that paid it. */
       payout_reference?: unknown;
+      /**
+       * `nonce_consumed_unrecorded`: the operator's attested `not_paid` for a
+       * payout whose nonce an unrecorded transaction consumed (#990 round 7).
+       */
+      override?: unknown;
       rail?: unknown;
       network?: unknown;
     } = await c.req.json<Record<string, unknown>>().catch(() => ({}));
@@ -1304,6 +1356,7 @@ export function registerBudgetRoutes(deps: BudgetDeps): BudgetRoutes {
         outcome === "paid" &&
         recordedPayout &&
         verdict.unfinalized.length === 0;
+      let attestedNotPaid = false;
       if (verdict.kind === "undecided" && !attestedPaid) {
         let kill: KillRequest | null = null;
         if (outcome === "not_paid" && verdict.killable) {
@@ -1312,31 +1365,57 @@ export function registerBudgetRoutes(deps: BudgetDeps): BudgetRoutes {
           // the resolution loop settles it, or a later reconcile does.
           kill = await requestKill(moteDb.db, withdrawalId, operatorSolanaTransfer);
         }
-        logger.warn("withdrawal.admin.reconcile_refused_chain", {
-          correlationId,
-          withdrawalId,
-          outcome,
-          reason: verdict.reason,
-          signature: verdict.signature,
-          unfinalized: verdict.unfinalized,
-          kill: kill?.status ?? null,
-          detail: verdict.detail ?? null,
-        });
-        const reason: Exclude<ReconcileState, "open"> =
-          kill !== null
-            ? "kill_pending"
-            : verdict.unfinalized.length > 0
+        // #990 round 7: the payout's nonce already moved, by no finalized
+        // transaction this relay recorded — it can never land, but the relay
+        // cannot tell "landed, status unreadable" from "consumed by an
+        // unrecorded transaction". Only the operator's explicit, attested
+        // override refunds it (logged loudly as an attested decision).
+        attestedNotPaid =
+          kill?.status === "consumed" &&
+          verdict.unfinalized.length === 0 &&
+          body.override === "nonce_consumed_unrecorded";
+        if (attestedNotPaid) {
+          logger.error("withdrawal.admin.reconcile_attested_override", {
+            correlationId,
+            withdrawalId,
+            override: "nonce_consumed_unrecorded",
+            signature: verdict.signature,
+            attestation,
+            note: "refunded on the operator's attestation: the payout's durable nonce was consumed by a transaction this relay did not record, so the payout can never land; whether it landed first is the operator's attested decision, not proven by the chain",
+          });
+        } else {
+          logger.warn("withdrawal.admin.reconcile_refused_chain", {
+            correlationId,
+            withdrawalId,
+            outcome,
+            reason: verdict.reason,
+            signature: verdict.signature,
+            unfinalized: verdict.unfinalized,
+            kill: kill?.status ?? null,
+            detail: verdict.detail ?? null,
+          });
+          const reason: Exclude<ReconcileState, "open"> =
+            verdict.unfinalized.length > 0
               ? "chain_pending"
-              : !verdict.killable
-                ? "chain_no_positive_evidence"
-                : verdict.reason === "rpc_error"
-                  ? "chain_unreadable"
-                  : "chain_pending";
-        return payoutInFlightResponse(c, withdrawalId, reason, null, {
-          signature: verdict.signature,
-          unfinalized: verdict.unfinalized,
-          ...(kill !== null ? { kill: kill.status } : {}),
-        });
+              : kill?.status === "sent"
+                ? "kill_pending"
+                : kill?.status === "consumed"
+                  ? "nonce_consumed_unrecorded"
+                  : kill?.status === "not_sent"
+                    ? "kill_not_sent"
+                    : kill?.status === "lane_unavailable"
+                      ? "chain_unreadable"
+                      : !verdict.killable
+                        ? "chain_no_positive_evidence"
+                        : verdict.reason === "rpc_error"
+                          ? "chain_unreadable"
+                          : "chain_pending";
+          return payoutInFlightResponse(c, withdrawalId, reason, null, {
+            signature: verdict.signature,
+            unfinalized: verdict.unfinalized,
+            ...(kill !== null ? { kill: kill.status } : {}),
+          });
+        }
       }
       if (verdict.kind === "paid" && verdict.landed.length > 1) {
         // Two of one payout's transactions landed: the treasury paid twice.

@@ -127,6 +127,23 @@ const ASSET_NAME_USDC = "USDC";
  */
 export const NONCE_ACCOUNT_SEED = "motebit-payout-nonce-v1";
 
+/**
+ * The lane's seed with an operator-chosen suffix (#990 round 7) — the escape
+ * hatch when the address at the current seed is squatted beyond recovery
+ * (owned by another program, or a nonce account of another authority): a
+ * new suffix derives a fresh address. `suffix` is 1–8 of `[a-z0-9]`, so the
+ * seed stays within agave's MAX_SEED_LEN (32 bytes). Undecided payouts over
+ * the old lane stay decidable by their own finalized statuses, but can no
+ * longer be killed.
+ */
+export function nonceSeedFor(suffix?: string): string {
+  if (suffix === undefined || suffix === "") return NONCE_ACCOUNT_SEED;
+  if (!/^[a-z0-9]{1,8}$/.test(suffix)) {
+    throw new Error(`nonce seed suffix must be 1-8 of [a-z0-9], got ${JSON.stringify(suffix)}`);
+  }
+  return `${NONCE_ACCOUNT_SEED}-${suffix}`;
+}
+
 /** Per-call timeout on every RPC read or send in the durable paths (#990). */
 const RPC_TIMEOUT_MS = 10_000;
 
@@ -188,6 +205,8 @@ export interface Web3JsRpcAdapterConfig {
   };
   /** Per-call RPC timeout in the durable paths. Default 10 s. */
   rpcTimeoutMs?: number;
+  /** The nonce lane's seed suffix (`nonceSeedFor`); absent ⇒ `NONCE_ACCOUNT_SEED`. */
+  nonceSeedSuffix?: string;
 }
 
 /**
@@ -220,6 +239,7 @@ export class Web3JsRpcAdapter implements SolanaRpcAdapter {
   private readonly finalityNow: () => number;
   private readonly rpcTimeoutMs: number;
   private nonceAddress: PublicKey | null = null;
+  private readonly nonceSeed: string;
   private creatingNonce: Promise<void> | null = null;
 
   constructor(config: Web3JsRpcAdapterConfig) {
@@ -247,6 +267,7 @@ export class Web3JsRpcAdapter implements SolanaRpcAdapter {
       config.finality?.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
     this.finalityNow = config.finality?.now ?? Date.now;
     this.rpcTimeoutMs = config.rpcTimeoutMs ?? RPC_TIMEOUT_MS;
+    this.nonceSeed = nonceSeedFor(config.nonceSeedSuffix);
     // Keypair.fromSeed is the standard Ed25519 seed → keypair derivation.
     // The resulting public key is identical to the motebit identity
     // public key derived from the same seed via @noble/ed25519.
@@ -804,58 +825,64 @@ export class Web3JsRpcAdapter implements SolanaRpcAdapter {
   private async nonceAccount(): Promise<PublicKey> {
     this.nonceAddress ??= await PublicKey.createWithSeed(
       this.keypair.publicKey,
-      NONCE_ACCOUNT_SEED,
+      this.nonceSeed,
       SystemProgram.programId,
     );
     return this.nonceAddress;
   }
 
-  /** The nonce lane read at FINALIZED commitment; `absent` when no account exists. */
-  private async readNonceLane(): Promise<NonceLaneState | { status: "absent" }> {
+  /**
+   * The nonce lane read at FINALIZED commitment (#990 round 7). The lane's
+   * address is PUBLIC (the treasury key and the seed are both known), so
+   * anyone can fund it before the relay creates it:
+   *
+   *   - `absent` — no account: create it;
+   *   - `takeover` — a system-owned account the treasury can still shape
+   *     (0 bytes: someone funded the address; or 80 bytes Uninitialized):
+   *     take it over;
+   *   - `unavailable` + `squatted` — owned by another program, system-owned
+   *     with other data, or a nonce account of another authority: nothing
+   *     at this seed can be used. Fail closed; the operator rotates the seed.
+   */
+  private async readNonceLane(): Promise<
+    | NonceLaneState
+    | { status: "absent" }
+    | { status: "takeover"; lamports: number; dataLen: number }
+  > {
     const address = await this.nonceAccount();
     const info = await this.timed(
       this.connection.getAccountInfo(address, { commitment: "finalized" }),
       "getAccountInfo(nonce)",
     );
     if (info == null) return { status: "absent" };
-    if (
-      info.owner.toBase58() !== SystemProgram.programId.toBase58() ||
-      info.data.length !== NONCE_ACCOUNT_LENGTH
-    ) {
-      return { status: "unavailable", reason: `${address.toBase58()} is not a nonce account` };
+    const squatted = (reason: string): NonceLaneState => ({
+      status: "unavailable",
+      reason: `nonce lane ${address.toBase58()} is unusable: ${reason}`,
+      squatted: { address: address.toBase58() },
+    });
+    if (info.owner.toBase58() !== SystemProgram.programId.toBase58()) {
+      return squatted(`owned by program ${info.owner.toBase58()}`);
+    }
+    if (info.data.length === 0) {
+      return { status: "takeover", lamports: info.lamports, dataLen: 0 };
+    }
+    if (info.data.length !== NONCE_ACCOUNT_LENGTH) {
+      return squatted(`a system account holding ${info.data.length} bytes of data`);
+    }
+    // NonceAccount layout: version u32, state u32 (0 Uninitialized, 1 Initialized).
+    if (info.data.readUInt32LE(4) === 0) {
+      return { status: "takeover", lamports: info.lamports, dataLen: NONCE_ACCOUNT_LENGTH };
     }
     const nonce = NonceAccount.fromAccountData(info.data);
     if (nonce.authorizedPubkey.toBase58() !== this.keypair.publicKey.toBase58()) {
-      return {
-        status: "unavailable",
-        reason: `nonce account ${address.toBase58()} is not authorized by the treasury`,
-      };
+      return squatted(`a nonce account of authority ${nonce.authorizedPubkey.toBase58()}`);
     }
     return { status: "ready", account: address.toBase58(), nonceValue: nonce.nonce };
   }
 
-  /** Create the nonce account (the treasury pays the rent and is its authority). */
-  private async createNonceAccount(): Promise<void> {
-    const address = await this.nonceAccount();
-    const lamports = await this.timed(
-      this.connection.getMinimumBalanceForRentExemption(NONCE_ACCOUNT_LENGTH),
-      "getMinimumBalanceForRentExemption",
-    );
-    const tx = new Transaction().add(
-      SystemProgram.createAccountWithSeed({
-        fromPubkey: this.keypair.publicKey,
-        newAccountPubkey: address,
-        basePubkey: this.keypair.publicKey,
-        seed: NONCE_ACCOUNT_SEED,
-        lamports,
-        space: NONCE_ACCOUNT_LENGTH,
-        programId: SystemProgram.programId,
-      }),
-      SystemProgram.nonceInitialize({
-        noncePubkey: address,
-        authorizedPubkey: this.keypair.publicKey,
-      }),
-    );
+  private async sendLaneTransaction(ixs: TransactionInstruction[], what: string): Promise<void> {
+    const tx = new Transaction();
+    for (const ix of ixs) tx.add(ix);
     const latest = await this.timed(
       this.connection.getLatestBlockhash(this.commitment),
       "getLatestBlockhash",
@@ -865,24 +892,113 @@ export class Web3JsRpcAdapter implements SolanaRpcAdapter {
     tx.sign(this.keypair);
     const signature = await this.timed(
       this.connection.sendRawTransaction(tx.serialize()),
-      "sendRawTransaction(create nonce)",
+      `sendRawTransaction(${what})`,
     );
-    // Creating twice is harmless (the second fails: the account exists).
+    // A failed attempt is harmless: the next read sees the account as it is.
     await this.awaitFinalized(signature);
+  }
+
+  /** Create the nonce account (the treasury pays the rent and is its authority). */
+  private async createNonceAccount(): Promise<void> {
+    const address = await this.nonceAccount();
+    const lamports = await this.timed(
+      this.connection.getMinimumBalanceForRentExemption(NONCE_ACCOUNT_LENGTH),
+      "getMinimumBalanceForRentExemption",
+    );
+    await this.sendLaneTransaction(
+      [
+        SystemProgram.createAccountWithSeed({
+          fromPubkey: this.keypair.publicKey,
+          newAccountPubkey: address,
+          basePubkey: this.keypair.publicKey,
+          seed: this.nonceSeed,
+          lamports,
+          space: NONCE_ACCOUNT_LENGTH,
+          programId: SystemProgram.programId,
+        }),
+        SystemProgram.nonceInitialize({
+          noncePubkey: address,
+          authorizedPubkey: this.keypair.publicKey,
+        }),
+      ],
+      "create nonce",
+    );
+  }
+
+  /**
+   * Take over a system-owned account at the lane's address (#990 round 7),
+   * in ONE transaction signed by the treasury — the base key, which is the
+   * signer every with-seed instruction on this address requires (agave
+   * `system_processor.rs` `Address::is_signer`: a seeded address's signer is
+   * its base):
+   *
+   *   1. `allocateWithSeed(space 80, owner System)` (only if 0 bytes) —
+   *      `allocate` requires empty data and a system owner, else
+   *      AccountAlreadyInUse; AllocateWithSeed runs `allocate_and_assign`,
+   *      whose `assign` to the System program on a system-owned account is a
+   *      no-op ("no work to do"), so no separate assignWithSeed is needed;
+   *   2. a transfer from the treasury topping the account up to the
+   *      rent-exempt minimum for 80 bytes, when it holds less (a transfer's
+   *      `to` needs no signature);
+   *   3. `nonceInitialize(authority = treasury)` — accepts an Uninitialized
+   *      80-byte account holding at least the rent-exempt minimum
+   *      (`initialize_nonce_account`; 80 zero bytes deserialize as
+   *      Uninitialized).
+   *
+   * `createAccountWithSeed` cannot be used: `create_account` refuses any
+   * address holding lamports (AccountAlreadyInUse).
+   */
+  private async takeOverNonceAccount(lamports: number, dataLen: number): Promise<void> {
+    const address = await this.nonceAccount();
+    const rent = await this.timed(
+      this.connection.getMinimumBalanceForRentExemption(NONCE_ACCOUNT_LENGTH),
+      "getMinimumBalanceForRentExemption",
+    );
+    const ixs: TransactionInstruction[] = [];
+    if (dataLen === 0) {
+      ixs.push(
+        SystemProgram.allocate({
+          accountPubkey: address,
+          basePubkey: this.keypair.publicKey,
+          seed: this.nonceSeed,
+          space: NONCE_ACCOUNT_LENGTH,
+          programId: SystemProgram.programId,
+        }),
+      );
+    }
+    if (lamports < rent) {
+      ixs.push(
+        SystemProgram.transfer({
+          fromPubkey: this.keypair.publicKey,
+          toPubkey: address,
+          lamports: rent - lamports,
+        }),
+      );
+    }
+    ixs.push(
+      SystemProgram.nonceInitialize({
+        noncePubkey: address,
+        authorizedPubkey: this.keypair.publicKey,
+      }),
+    );
+    await this.sendLaneTransaction(ixs, "take over nonce account");
   }
 
   async prepareNonceLane(): Promise<NonceLaneState> {
     try {
       const first = await this.readNonceLane();
-      if (first.status !== "absent") return first;
-      this.creatingNonce ??= this.createNonceAccount().finally(() => {
+      if (first.status === "ready" || first.status === "unavailable") return first;
+      this.creatingNonce ??= (
+        first.status === "absent"
+          ? this.createNonceAccount()
+          : this.takeOverNonceAccount(first.lamports, first.dataLen)
+      ).finally(() => {
         this.creatingNonce = null;
       });
       await this.creatingNonce;
       const second = await this.readNonceLane();
-      return second.status === "absent"
-        ? { status: "unavailable", reason: "the nonce account is not finalized yet" }
-        : second;
+      if (second.status === "ready" || second.status === "unavailable") return second;
+      return { status: "unavailable", reason: "the nonce account is not finalized yet" };
     } catch (err) {
       return { status: "unavailable", reason: err instanceof Error ? err.message : String(err) };
     }

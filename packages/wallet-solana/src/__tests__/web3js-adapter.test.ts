@@ -42,6 +42,7 @@ import { ASSOCIATED_TOKEN_PROGRAM_ID, TokenAccountNotFoundError } from "@solana/
 
 import {
   NONCE_ACCOUNT_SEED,
+  nonceSeedFor,
   Web3JsRpcAdapter,
   deriveSolanaAddress,
   isDerivedSettlementBinding,
@@ -1453,6 +1454,149 @@ describe("Web3JsRpcAdapter durable-nonce payouts (#990)", () => {
         vi.spyOn(adapter.getConnection(), "getAccountInfo").mockImplementation(answer as never);
         expect((await adapter.prepareNonceLane()).status).toBe("unavailable");
       }
+    });
+  });
+
+  describe("prepareNonceLane — the lane's address is public (#990 round 7)", () => {
+    function squatted(conn: ReturnType<Web3JsRpcAdapter["getConnection"]>, first: unknown) {
+      let taken = false;
+      vi.spyOn(conn, "getAccountInfo").mockImplementation(async () =>
+        taken
+          ? ({
+              data: nonceData(TREASURY, NONCE),
+              owner: SystemProgram.programId,
+              lamports: 1_447_680,
+              executable: false,
+              rentEpoch: 0,
+            } as never)
+          : (first as never),
+      );
+      vi.spyOn(conn, "getMinimumBalanceForRentExemption").mockResolvedValue(1_447_680);
+      vi.spyOn(conn, "getLatestBlockhash").mockResolvedValue({
+        blockhash: validBlockhash(),
+        lastValidBlockHeight: 10,
+      });
+      const sent: Transaction[] = [];
+      vi.spyOn(conn, "sendRawTransaction").mockImplementation(async (raw) => {
+        sent.push(Transaction.from(raw as Buffer));
+        taken = true;
+        return "takeoverSig";
+      });
+      vi.spyOn(conn, "getSignatureStatuses").mockResolvedValue(status("finalized") as never);
+      return sent;
+    }
+    const types = (tx: Transaction) =>
+      tx.instructions.map((ix) => SystemInstruction.decodeInstructionType(ix));
+
+    it("a pre-funded system-owned 0-byte account is TAKEN OVER: allocateWithSeed(80) + top-up to rent + nonceInitialize, one tx", async () => {
+      const adapter = makeDurable();
+      const sent = squatted(adapter.getConnection(), {
+        data: Buffer.alloc(0),
+        owner: SystemProgram.programId,
+        lamports: 890_880,
+        executable: false,
+        rentEpoch: 0,
+      });
+      expect((await adapter.prepareNonceLane()).status).toBe("ready");
+      expect(sent).toHaveLength(1);
+      expect(types(sent[0]!)).toEqual(["AllocateWithSeed", "Transfer", "InitializeNonceAccount"]);
+      const alloc = SystemInstruction.decodeAllocateWithSeed(sent[0]!.instructions[0]!);
+      expect(alloc.space).toBe(NONCE_ACCOUNT_LENGTH);
+      expect(alloc.seed).toBe(NONCE_ACCOUNT_SEED);
+      expect(alloc.basePubkey.toBase58()).toBe(TREASURY.toBase58());
+      expect(alloc.programId.toBase58()).toBe(SystemProgram.programId.toBase58());
+      const topUp = SystemInstruction.decodeTransfer(sent[0]!.instructions[1]!);
+      expect(Number(topUp.lamports)).toBe(1_447_680 - 890_880);
+      expect(topUp.toPubkey.toBase58()).toBe((await nonceAddress()).toBase58());
+      const init = SystemInstruction.decodeNonceInitialize(sent[0]!.instructions[2]!);
+      expect(init.authorizedPubkey.toBase58()).toBe(TREASURY.toBase58());
+    });
+
+    it("funded at or above the rent ⇒ no top-up; an Uninitialized 80-byte account ⇒ nonceInitialize alone", async () => {
+      const rich = makeDurable();
+      const a = squatted(rich.getConnection(), {
+        data: Buffer.alloc(0),
+        owner: SystemProgram.programId,
+        lamports: 5_000_000,
+        executable: false,
+        rentEpoch: 0,
+      });
+      expect((await rich.prepareNonceLane()).status).toBe("ready");
+      expect(types(a[0]!)).toEqual(["AllocateWithSeed", "InitializeNonceAccount"]);
+      const uninit = makeDurable();
+      const b = squatted(uninit.getConnection(), {
+        data: Buffer.alloc(NONCE_ACCOUNT_LENGTH),
+        owner: SystemProgram.programId,
+        lamports: 1_447_680,
+        executable: false,
+        rentEpoch: 0,
+      });
+      expect((await uninit.prepareNonceLane()).status).toBe("ready");
+      expect(types(b[0]!)).toEqual(["InitializeNonceAccount"]);
+    });
+
+    it("unrecoverable squats are flagged `squatted` with the address — never taken over, nothing sent", async () => {
+      const addr = (await nonceAddress()).toBase58();
+      for (const info of [
+        {
+          data: nonceData(TREASURY, NONCE),
+          owner: new PublicKey(USDC_MINT_MAINNET),
+          lamports: 1,
+          executable: false,
+          rentEpoch: 0,
+        },
+        {
+          data: Buffer.alloc(10),
+          owner: SystemProgram.programId,
+          lamports: 1,
+          executable: false,
+          rentEpoch: 0,
+        },
+        {
+          data: nonceData(Keypair.generate().publicKey, NONCE),
+          owner: SystemProgram.programId,
+          lamports: 1,
+          executable: false,
+          rentEpoch: 0,
+        },
+      ]) {
+        const adapter = makeDurable();
+        const send = vi.spyOn(adapter.getConnection(), "sendRawTransaction");
+        vi.spyOn(adapter.getConnection(), "getAccountInfo").mockResolvedValue(info as never);
+        const lane = await adapter.prepareNonceLane();
+        expect(lane).toMatchObject({ status: "unavailable", squatted: { address: addr } });
+        expect(send).not.toHaveBeenCalled();
+      }
+    });
+
+    it("the seed suffix rotates the lane to a fresh address; a bad suffix is refused", async () => {
+      expect(nonceSeedFor()).toBe(NONCE_ACCOUNT_SEED);
+      expect(nonceSeedFor("r2")).toBe(`${NONCE_ACCOUNT_SEED}-r2`);
+      expect(new TextEncoder().encode(nonceSeedFor("abcdefgh")).length).toBeLessThanOrEqual(32);
+      for (const bad of ["UPPER", "toolongsuffix", "a-b", " "]) {
+        expect(() => nonceSeedFor(bad)).toThrow(/suffix/);
+      }
+      const rotated = new Web3JsRpcAdapter({
+        rpcUrl: "https://api.devnet.solana.com",
+        identitySeed: ZERO_SEED,
+        nonceSeedSuffix: "r2",
+      });
+      const info = vi.spyOn(rotated.getConnection(), "getAccountInfo").mockResolvedValue({
+        data: nonceData(TREASURY, NONCE),
+        owner: SystemProgram.programId,
+        lamports: 1_447_680,
+        executable: false,
+        rentEpoch: 0,
+      } as never);
+      const lane = await rotated.prepareNonceLane();
+      const expected = await PublicKey.createWithSeed(
+        TREASURY,
+        `${NONCE_ACCOUNT_SEED}-r2`,
+        SystemProgram.programId,
+      );
+      expect(lane).toMatchObject({ status: "ready", account: expected.toBase58() });
+      expect((info.mock.calls[0]![0] as PublicKey).toBase58()).toBe(expected.toBase58());
+      expect(expected.toBase58()).not.toBe((await nonceAddress()).toBase58());
     });
   });
 

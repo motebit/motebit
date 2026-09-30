@@ -209,7 +209,18 @@ export interface DurableNonceLane {
 
 /** Whether the treasury's nonce lane can be used right now. */
 export type NonceLaneState =
-  ({ status: "ready" } & DurableNonceLane) | { status: "unavailable"; reason: string };
+  | ({ status: "ready" } & DurableNonceLane)
+  | {
+      status: "unavailable";
+      reason: string;
+      /**
+       * Set when the lane's address holds an account that can never become
+       * this treasury's nonce account (#990 round 7) — owned by another
+       * program, system-owned with other data, or a nonce account of another
+       * authority. Not transient: the operator must rotate the seed.
+       */
+      squatted?: { address: string };
+    };
 
 /**
  * A durable-nonce transaction, signed and about to be broadcast (#990). A

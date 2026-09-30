@@ -1743,6 +1743,10 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
       rpcUrl: process.env.SOLANA_RPC_URL,
       identitySeed: relayIdentity.privateKey,
       ...(process.env.SOLANA_USDC_MINT ? { usdcMint: process.env.SOLANA_USDC_MINT } : {}),
+      // #990 round 7: rotate the payout nonce lane off a squatted address.
+      ...(process.env.SOLANA_PAYOUT_NONCE_SEED_SUFFIX
+        ? { nonceSeedSuffix: process.env.SOLANA_PAYOUT_NONCE_SEED_SUFFIX }
+        : {}),
     });
     // The transfer records no chain id and does not consult the network
     // (#954 scope: only what records or relies on a chain id does). The

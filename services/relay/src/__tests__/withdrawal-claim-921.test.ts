@@ -1092,6 +1092,41 @@ describe("#949/#990: a Solana payout is decided by finalized chain state, never 
     expectExactlyOneOutcome(relay!, mid, id);
   });
 
+  it("round 7: the attested override refunds ONLY when the nonce was consumed by an unrecorded transaction", async () => {
+    chain.killLands = false;
+    const mid = "zz990-override-guard";
+    const id = await undecidedPayout(mid);
+    const override = {
+      outcome: "not_paid",
+      override: "nonce_consumed_unrecorded",
+      attestation: "I say the nonce moved",
+    };
+    // The lane still holds the payout's nonce: the kill is sent, no override.
+    const sent = await reconcileBody(relay!, id, override);
+    expect(sent.status).toBe(409);
+    expect(sent.json.reason).toBe("kill_pending");
+    // Consumed, but a recorded status is found below finality: not yet.
+    chain.lane = {
+      status: "ready",
+      account: "NonceAccount1111111111111111111111111111111",
+      nonceValue: "nonce-2",
+    };
+    chain.final.set(TX_SIG, { status: "unknown", reason: "not_finalized" });
+    const forked = await reconcileBody(relay!, id, override);
+    expect(forked.status).toBe(409);
+    expect(forked.json.reason).toBe("chain_pending");
+    expect(balance(relay!, mid)).toBe(FUNDED - WITHDRAW_MICRO);
+    // Consumed, nothing of ours below finality: without the override, the truth…
+    chain.final.delete(TX_SIG);
+    const honest = await reconcileBody(relay!, id, { outcome: "not_paid", attestation: "x" });
+    expect(honest.status).toBe(409);
+    expect(honest.json.reason).toBe("nonce_consumed_unrecorded");
+    expect(String(honest.json.message)).toContain("override");
+    // …and with it, the attested refund, once.
+    expect((await reconcileBody(relay!, id, override)).status).toBe(200);
+    expectExactlyOneOutcome(relay!, mid, id);
+  });
+
   it("the resolution loop kills an undecided payout past the kill-after wait and refunds once the kill is finalized", async () => {
     const mid = "zz990-loop";
     const id = await undecidedPayout(mid);

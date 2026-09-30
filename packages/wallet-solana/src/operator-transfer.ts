@@ -66,6 +66,8 @@ export interface OperatorSolanaTransferConfig {
   usdcMint?: string;
   /** RPC commitment level. Defaults to "confirmed". */
   commitment?: "processed" | "confirmed" | "finalized";
+  /** The payout nonce lane's seed suffix (`nonceSeedFor`) — rotate it to escape a squatted address. */
+  nonceSeedSuffix?: string;
 }
 
 /**
@@ -190,6 +192,7 @@ export function createOperatorSolanaTransfer(
     identitySeed: config.identitySeed,
     usdcMint: config.usdcMint,
     commitment: config.commitment,
+    ...(config.nonceSeedSuffix !== undefined ? { nonceSeedSuffix: config.nonceSeedSuffix } : {}),
   });
   return new OperatorSolanaTransfer(adapter);
 }

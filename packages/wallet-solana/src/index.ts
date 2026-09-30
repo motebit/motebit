@@ -51,6 +51,8 @@ export {
 } from "./adapter.js";
 
 export {
+  NONCE_ACCOUNT_SEED,
+  nonceSeedFor,
   Web3JsRpcAdapter,
   deriveSolanaAddress,
   isDerivedSettlementBinding,
