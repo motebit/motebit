@@ -801,7 +801,26 @@ cache miss, executing <hash>
 
 If every task is `cache miss`, the auth is broken — check that `TURBO_TOKEN` is the current local token (tokens can be rotated on vercel.com) and that `TURBO_TEAM` matches the slug the API returns for your teamId.
 
-`TURBO_REMOTE_CACHE_SIGNATURE_KEY` is optional but recommended — it adds an HMAC over every cache entry so a compromised Vercel bucket can't poison CI with a malicious build output. When set, CI and local both must know it; when absent, cache still works without signature verification.
+**Signing and who may write (#997).** `turbo.json` sets `"remoteCache": { "signature": true }`, so every remote entry carries an HMAC (`x-artifact-tag`) over the artifact, keyed by `TURBO_REMOTE_CACHE_SIGNATURE_KEY`, and turbo refuses (treats as a cache miss, then rebuilds) any entry that is unsigned or signed with a different key. Before 2026-09-30 that line was missing: turbo silently ignored the key CI had set, uploaded every artifact unsigned and replayed unsigned entries — so anyone holding `TURBO_TOKEN` could plant a `dist/` that a later CI, publish or release run shipped. This section used to call the cache HMAC-signed; it was not.
+
+The remote cache is **written only by trusted runs on `main`** and read by everything else. Each workflow that holds `TURBO_TOKEN` sets a workflow-level `TURBO_CACHE`:
+
+| Workflow      | Remote **write** (`local:rw,remote:rw`) | Everything else (`local:rw,remote:r`)               |
+| ------------- | --------------------------------------- | --------------------------------------------------- |
+| `ci.yml`      | `push` to `main`                        | every `pull_request` run                            |
+| `release.yml` | `push` to `main` (its only trigger)     | — (stated anyway, so a new trigger cannot widen it) |
+| `publish.yml` | `workflow_dispatch` on `main`           | a dispatch from any other ref                       |
+
+`.husky/pre-push` exports `TURBO_CACHE=local:rw,remote:r`, so a developer machine never writes the shared cache even after `turbo login`. **Developers do not need, and should not hold, `TURBO_REMOTE_CACHE_SIGNATURE_KEY`.** With signing on and no key, turbo does not fail the run: it logs `WARNING artifact signature error`, uploads nothing, and treats remote entries as misses (it builds locally). `pnpm check-turbo-remote-cache` fails if `turbo.json` loses `signature: true`, if a `TURBO_TOKEN` workflow can write from a non-main ref or a `pull_request*` event, or if any turbo call re-opens writes with `--force`, `--remote-only` or a remote-writing `--cache=`. `pnpm probe-turbo-remote-cache-signing` re-proves the signing behaviour against a local fake cache (no token or key needed). The gate self-tests run it too.
+
+Signing cannot stop a job that holds the key. Same-repo `pull_request` jobs still receive `TURBO_TOKEN` and the key as secrets, so a branch that edits a workflow could still write. `TURBO_CACHE` removes the write path from every workflow as written. It does not stop a job that rewrites its own workflow. Closing that needs a read-only token for untrusted refs (below).
+
+> **OPERATOR ACTION REQUIRED — not done by the #997 change.** The cache contents from before the fix are unsigned and must be treated as untrusted:
+>
+> 1. **Rotate `TURBO_TOKEN`** (vercel.com → Account Settings → Tokens: revoke the old token and create a new one), then `gh secret set TURBO_TOKEN`. Every same-repo PR run could read the old one.
+> 2. **Rotate `TURBO_REMOTE_CACHE_SIGNATURE_KEY`** (`gh secret set TURBO_REMOTE_CACHE_SIGNATURE_KEY --body "$(openssl rand -hex 32)"`). Same exposure. A new key also makes every entry signed under the old key a miss.
+> 3. **Purge the old unsigned entries.** Use Vercel → the `motebit` team → Settings → Remote Caching → purge/clear, or let them age out. With signing on, turbo already refuses them (they are misses), so purging is hygiene, not the fix. The first `main` push after the purge repopulates the cache, signed.
+> 4. **Optional hardening:** give `pull_request` runs a read-only credential (a separate read-scoped token, or none at all) so a workflow-editing branch cannot write even by rewriting its own job.
 
 ---
 

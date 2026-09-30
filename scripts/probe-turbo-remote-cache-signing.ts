@@ -35,6 +35,10 @@
  *   no-key-write          NO key, remote:rw — the run must succeed and must
  *                         not leave an unsigned entry in the cache
  *   no-key-read           NO key, remote:r, unsigned entry planted — MISS
+ *   env-read-only         TURBO_CACHE=local:rw,remote:r in the ENV (the
+ *                         workflows' mechanism, a PR job's value) — no PUT
+ *   env-main-write        TURBO_CACHE=local:rw,remote:rw in the env (a push to
+ *                         main) — a signed PUT
  *
  * Usage:  pnpm probe-turbo-remote-cache-signing [--json]
  * Exit 0 iff every expectation holds; the per-scenario record is printed
@@ -160,12 +164,28 @@ function git(cwd: string, ...args: string[]): void {
   if (r.status !== 0) throw new Error(`git ${args.join(" ")} failed: ${r.stderr}`);
 }
 
+/**
+ * The repo's own `packageManager` — the pnpm already running this repo. A
+ * fixture pinning a DIFFERENT pnpm makes pnpm fetch that version before
+ * running the build script (and, without a usable HOME, retry forever).
+ */
+function rootPackageManager(): string {
+  const pkg = JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8")) as {
+    packageManager?: string;
+  };
+  return pkg.packageManager ?? "pnpm@9.15.0";
+}
+
 export function makeFixture(remoteCache: unknown): string {
   const dir = realpathSync(mkdtempSync(join(tmpdir(), "turbo-sign-probe-")));
   mkdirSync(join(dir, "packages", "a"), { recursive: true });
   writeFileSync(
     join(dir, "package.json"),
-    JSON.stringify({ name: "turbo-sign-probe", private: true, packageManager: "pnpm@9.15.0" }),
+    JSON.stringify({
+      name: "turbo-sign-probe",
+      private: true,
+      packageManager: rootPackageManager(),
+    }),
   );
   writeFileSync(join(dir, "pnpm-workspace.yaml"), 'packages:\n  - "packages/*"\n');
   writeFileSync(
@@ -247,7 +267,9 @@ export async function runTurbo(opts: {
   fixture: string;
   cache: FakeCache;
   key: string | null;
+  /** Passed as `--cache=…`, or with `via: "env"` as TURBO_CACHE (the mechanism the workflows use). */
   cacheFlag: string;
+  via?: "flag" | "env";
   payload: string;
 }): Promise<RunRecord> {
   const { fixture, cache } = opts;
@@ -272,8 +294,11 @@ export async function runTurbo(opts: {
     TURBO_NO_UPDATE_NOTIFIER: "1",
     TURBO_PRINT_VERSION_DISABLED: "1",
     DO_NOT_TRACK: "1",
+    // Never let pnpm try to install a pnpm for the fixture (see rootPackageManager).
+    npm_config_manage_package_manager_versions: "false",
   });
   if (opts.key != null) env.TURBO_REMOTE_CACHE_SIGNATURE_KEY = opts.key;
+  if (opts.via === "env") env.TURBO_CACHE = opts.cacheFlag;
 
   const t0 = Date.now();
   const r = await spawnAsync(
@@ -282,7 +307,7 @@ export async function runTurbo(opts: {
       "run",
       "build",
       "--skip-infer",
-      `--cache=${opts.cacheFlag}`,
+      ...(opts.via === "env" ? [] : [`--cache=${opts.cacheFlag}`]),
       `--cache-dir=${localCache}`,
       "--output-logs=full",
       "--log-order=stream",
@@ -472,6 +497,39 @@ export async function runSigningProbe(
       f.scenario,
       "the unsigned entry is NOT a hit",
       f.outcome === "executed" && f.dist === "clean",
+    );
+
+    // 7. The workflows' mechanism: TURBO_CACHE in the ENVIRONMENT, no flag,
+    //    with a valid key — the value a pull_request job gets. No write.
+    cache.store.clear();
+    const g = await runTurbo({
+      scenario: "env-read-only",
+      fixture,
+      cache,
+      key: KEY_VICTIM,
+      cacheFlag: R,
+      via: "env",
+      payload: "clean",
+    });
+    runs.push(g);
+    expect(g.scenario, "the run succeeds", g.exitCode === 0);
+    expect(g.scenario, "TURBO_CACHE=local:rw,remote:r in the env writes nothing", g.puts === 0);
+
+    // 8. …and the value a push to main gets: a signed write.
+    const h = await runTurbo({
+      scenario: "env-main-write",
+      fixture,
+      cache,
+      key: KEY_VICTIM,
+      cacheFlag: RW,
+      via: "env",
+      payload: "clean",
+    });
+    runs.push(h);
+    expect(
+      h.scenario,
+      "TURBO_CACHE=local:rw,remote:rw in the env writes, signed",
+      h.puts >= 1 && h.unsignedPuts === 0,
     );
   } finally {
     await cache.close();

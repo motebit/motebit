@@ -17,6 +17,12 @@ if git symbolic-ref -q HEAD >/dev/null 2>&1; then
   # fail-closed behavior as before, now legible. Set MOTEBIT_PREPUSH_QUIET=1
   # to mute the banners (timings still print on failure).
   _gauntlet_t0=$(date +%s)
+
+  # A developer machine never WRITES the shared turbo remote cache (#997):
+  # only trusted CI on main does, signed with a key developers do not hold.
+  # Read-only remote, read-write local. Enforced by
+  # scripts/check-turbo-remote-cache.ts.
+  export TURBO_CACHE=local:rw,remote:r
   run_phase() {
     _label=$1
     shift
