@@ -12,6 +12,9 @@ import { saveFocus, restoreFocus } from "./focus";
 import { saveColdStartOptIn, loadColdStartOptIn } from "../cold-start-optin";
 import {
   ANTHROPIC_MODELS,
+  ANTHROPIC_PICKER,
+  defaultModelForVendor,
+  pickerOptionsWithStored,
   OPENAI_MODELS,
   GOOGLE_MODELS,
   DEEPSEEK_MODELS,
@@ -238,6 +241,20 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
     // (API key field visibility is governed by mode-section-byok's `.active`
     // class — no per-provider inline display hack needed.)
 
+    if (provider === "anthropic") {
+      // Curated sdk picker rows (#654); a stored non-picker id is prepended
+      // and stays selected — never migrated.
+      for (const row of pickerOptionsWithStored(currentModel)) {
+        const opt = document.createElement("option");
+        opt.value = row.id;
+        opt.textContent = row.label;
+        settingsModelSelect.appendChild(opt);
+        if (row.selected) opt.selected = true;
+      }
+      syncModelHiddenField();
+      return;
+    }
+
     for (const model of models) {
       const opt = document.createElement("option");
       opt.value = model;
@@ -341,11 +358,24 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
               ? GROQ_MODELS
               : ANTHROPIC_MODELS;
     settingsByokModels.innerHTML = "";
-    for (const model of models) {
-      const opt = document.createElement("option");
-      opt.value = model;
-      settingsByokModels.appendChild(opt);
+    if (vendor === "anthropic") {
+      // Curated rows from the sdk picker (#654) — the datalist suggests, the
+      // text field still accepts any id (Fable 5.1, a pinned older model).
+      for (const row of ANTHROPIC_PICKER) {
+        const opt = document.createElement("option");
+        opt.value = row.id;
+        opt.label = row.label;
+        settingsByokModels.appendChild(opt);
+      }
+    } else {
+      for (const model of models) {
+        const opt = document.createElement("option");
+        opt.value = model;
+        settingsByokModels.appendChild(opt);
+      }
     }
+    // Empty field ⇒ the vendor default is what runs; say so.
+    settingsByokModel.placeholder = defaultModelForVendor(vendor);
     if (currentModel != null && currentModel !== "") {
       settingsByokModel.value = currentModel;
     }

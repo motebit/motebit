@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { DEFAULT_LOCAL_SERVER_MODEL } from "@motebit/sdk";
+import { DEFAULT_ANTHROPIC_MODEL, DEFAULT_LOCAL_SERVER_MODEL } from "@motebit/sdk";
 
 // === Module Mocks ===
 
@@ -388,7 +388,7 @@ describe("MobileApp.initAI", () => {
 
   it("defaults to claude-sonnet for anthropic", async () => {
     await app.initAI({ provider: "anthropic", apiKey: "sk-ant-test" });
-    expect(app.currentModel).toBe("claude-sonnet-4-6");
+    expect(app.currentModel).toBe(DEFAULT_ANTHROPIC_MODEL);
   });
 });
 

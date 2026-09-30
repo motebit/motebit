@@ -17,6 +17,7 @@
 import "./buffer-polyfill";
 import { SpatialApp, COLOR_PRESETS, deriveInteriorColor } from "./spatial-app";
 import type { SpatialAIConfig } from "./spatial-app";
+import { ANTHROPIC_PICKER } from "@motebit/sdk";
 import type { UnifiedProviderConfig, OnDeviceBackend } from "@motebit/sdk";
 import { DEFAULT_OLLAMA_URL } from "@motebit/ai-core";
 import { WebXRThreeJSAdapter } from "@motebit/render-engine";
@@ -57,6 +58,7 @@ const localServerEndpointGroup = document.getElementById(
 const byokVendorRadios = document.querySelectorAll<HTMLInputElement>('input[name="byok-vendor"]');
 const apiKeyInput = document.getElementById("api-key-input") as HTMLInputElement;
 const modelInput = document.getElementById("model-input") as HTMLInputElement;
+const modelSuggestions = document.getElementById("model-suggestions") as HTMLDataListElement | null;
 const voiceToggle = document.getElementById("voice-toggle") as HTMLInputElement;
 const settingsSave = document.getElementById("settings-save") as HTMLButtonElement;
 const settingsSkip = document.getElementById("settings-skip") as HTMLButtonElement;
@@ -672,6 +674,20 @@ function updateProviderUI(): void {
   const vendor = getSelectedVendor();
   apiKeyInput.placeholder =
     vendor === "openai" ? "sk-..." : vendor === "google" ? "AIza..." : "sk-ant-...";
+
+  // Anthropic suggestions are the sdk picker rows (#654) — suggestions only;
+  // the field still accepts any id, and an empty field means the default.
+  if (modelSuggestions) {
+    modelSuggestions.innerHTML = "";
+    if (mode === "byok" && vendor === "anthropic") {
+      for (const row of ANTHROPIC_PICKER) {
+        const opt = document.createElement("option");
+        opt.value = row.id;
+        opt.label = row.label;
+        modelSuggestions.appendChild(opt);
+      }
+    }
+  }
 }
 
 modeRadios.forEach((r) => r.addEventListener("change", updateProviderUI));

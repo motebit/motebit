@@ -23,7 +23,8 @@ import { ELEVENLABS_VOICES, DEEPGRAM_VOICES } from "@motebit/voice";
 import { hexPublicKeyToDidKey } from "@motebit/encryption";
 import type { ColorPickerAPI } from "./color-picker";
 import { mountMachines } from "./machines-section";
-import { DEFAULT_ANTHROPIC_MODEL, DEFAULT_GOOGLE_MODEL, isLocalServerUrl } from "@motebit/sdk";
+import { DEFAULT_GOOGLE_MODEL, DEFAULT_PROXY_MODEL, isLocalServerUrl } from "@motebit/sdk";
+import { renderAnthropicPicker } from "./anthropic-picker";
 
 /** Which provider tab the UI is showing. Maps from `UnifiedProviderConfig.mode`. */
 type ProviderTab = "proxy" | "anthropic" | "openai" | "ollama" | "webllm";
@@ -184,6 +185,10 @@ function applyGovernanceToRuntime(ctx: WebContext, gov: GovernanceConfig): void 
 
 export function initSettings(ctx: WebContext, deps: SettingsDeps): SettingsAPI {
   const { colorPicker } = deps;
+
+  // The Anthropic <select> ships empty in index.html; fill it with the
+  // canonical rows (default selected) before anything reads its value.
+  renderAnthropicPicker(anthropicModel);
 
   // === Tab Switching (Appearance / Intelligence) ===
 
@@ -1215,6 +1220,12 @@ export function initSettings(ctx: WebContext, deps: SettingsDeps): SettingsAPI {
 
     // Pre-fill from current provider config
     const config = ctx.getConfig();
+    // Anthropic rows come from the sdk picker (#654); a stored non-picker id
+    // is rendered as its own selected row, never migrated.
+    renderAnthropicPicker(
+      anthropicModel,
+      config?.mode === "byok" && config.vendor === "anthropic" ? config.model : undefined,
+    );
     if (config) {
       if (maxTokensSelect) maxTokensSelect.value = String(config.maxTokens ?? 4096);
 
@@ -1233,7 +1244,6 @@ export function initSettings(ctx: WebContext, deps: SettingsDeps): SettingsAPI {
           renderByokVendorNote(config.vendor);
           if (config.vendor === "anthropic") {
             anthropicApiKey.value = config.apiKey;
-            if (config.model) anthropicModel.value = config.model;
           } else if (config.vendor === "openai") {
             openaiApiKey.value = config.apiKey;
             if (config.model) openaiModel.value = config.model;
@@ -1364,7 +1374,7 @@ export function initSettings(ctx: WebContext, deps: SettingsDeps): SettingsAPI {
         // Motebit Cloud — read model from the cloud model selector
         const cloudModel =
           (document.getElementById("cloud-model") as HTMLSelectElement | null)?.value ??
-          DEFAULT_ANTHROPIC_MODEL;
+          DEFAULT_PROXY_MODEL;
         config = { mode: "motebit-cloud", model: cloudModel, maxTokens };
         break;
       }

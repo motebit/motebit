@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, afterEach, beforeEach } from "vitest";
-import { DEFAULT_LOCAL_SERVER_MODEL } from "@motebit/sdk";
+import { DEFAULT_ANTHROPIC_MODEL, DEFAULT_LOCAL_SERVER_MODEL } from "@motebit/sdk";
 import {
   DesktopApp,
   createTauriStorage,
@@ -473,7 +473,7 @@ describe("DesktopApp.currentModel", () => {
   it("returns the model after anthropic initAI", async () => {
     app = new DesktopApp();
     await app.initAI({ provider: "anthropic", apiKey: "sk-test", isTauri: false });
-    expect(app.currentModel).toBe("claude-sonnet-4-6");
+    expect(app.currentModel).toBe(DEFAULT_ANTHROPIC_MODEL);
   });
 });
 

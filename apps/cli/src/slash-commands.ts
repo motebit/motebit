@@ -3,7 +3,7 @@
 import { disconnectMcpServer } from "./mcp-config-wiring.js";
 import type { MotebitRuntime, ReflectionResult, RelayConfig } from "@motebit/runtime";
 import type { TokenAudience } from "@motebit/sdk";
-import { isTokenAudience, fromMicro, modelVendorHint } from "@motebit/sdk";
+import { isTokenAudience, fromMicro, modelVendorHint, pickerModelForTier } from "@motebit/sdk";
 import { discoverModels } from "@motebit/ai-core";
 import {
   admitModelForProvider,
@@ -604,13 +604,14 @@ export async function handleSlashCommand(
 
     case "model": {
       // Known models with short aliases
-      // Anthropic ids are the REAL current aliases (verified against the
-      // models catalog 2026-07-29 — #471 found the previous entries were
-      // fabricated: date-suffixed and "-latest" variants that 404).
+      // Anthropic aliases resolve through the sdk picker tiers (#654) — the
+      // same three models every surface's picker offers, so `/model haiku`
+      // can never name an id the registry doesn't carry (#471 found
+      // fabricated date-suffixed / "-latest" variants that 404).
       const MODEL_ALIASES: Record<string, string> = {
-        opus: "claude-opus-5",
-        sonnet: "claude-sonnet-5",
-        haiku: "claude-haiku-4-5",
+        opus: pickerModelForTier("strongest"),
+        sonnet: pickerModelForTier("default"),
+        haiku: pickerModelForTier("fast"),
         "gpt-5.4": "gpt-5.4",
         "gpt-5.4-mini": "gpt-5.4-mini",
         "gpt-5.4-nano": "gpt-5.4-nano",

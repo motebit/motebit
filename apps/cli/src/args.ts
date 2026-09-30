@@ -581,18 +581,18 @@ Options:
 
 Providers:
   anthropic               Uses Anthropic API (requires ANTHROPIC_API_KEY)
-                          Default model: claude-sonnet-4-6
+                          Default model: ${DEFAULT_ANTHROPIC_MODEL}
   openai                  Uses OpenAI API (requires OPENAI_API_KEY)
-                          Default model: gpt-5.4-mini
+                          Default model: ${DEFAULT_OPENAI_MODEL}
   google                  Uses Google API (requires GOOGLE_API_KEY)
-                          Default model: gemini-2.5-flash
+                          Default model: ${DEFAULT_GOOGLE_MODEL}
   groq                    Uses Groq API (requires GROQ_API_KEY)
-                          Default model: llama-3.3-70b-versatile
+                          Default model: ${DEFAULT_GROQ_MODEL}
   deepseek                Uses DeepSeek API (requires DEEPSEEK_API_KEY)
-                          Default model: deepseek-chat
+                          Default model: ${DEFAULT_DEEPSEEK_MODEL}
   local-server            Uses a local inference server — Ollama, LM Studio,
                           llama.cpp, Jan, vLLM, or any OpenAI-compatible
-                          endpoint (no API key needed). Default model: llama3.2.
+                          endpoint (no API key needed). Default model: ${DEFAULT_LOCAL_SERVER_MODEL}.
                           Alias: --provider ollama
   proxy                   Motebit Cloud (subscription via the relay)
 
