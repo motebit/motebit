@@ -85,6 +85,7 @@ export function createWithdrawalChainPayoutTables(db: DatabaseDriver): void {
       kind TEXT NOT NULL DEFAULT 'payout',
       nonce_account TEXT,
       nonce_value TEXT,
+      nonce_observed_slot INTEGER,
       final_status TEXT,
       final_slot INTEGER,
       final_checked_at INTEGER,
@@ -111,6 +112,7 @@ export function createWithdrawalChainPayoutTables(db: DatabaseDriver): void {
     ["kind", "TEXT NOT NULL DEFAULT 'payout'"],
     ["nonce_account", "TEXT"],
     ["nonce_value", "TEXT"],
+    ["nonce_observed_slot", "INTEGER"],
     ["final_status", "TEXT"],
     ["final_slot", "INTEGER"],
     ["final_checked_at", "INTEGER"],
@@ -157,10 +159,18 @@ export function recordDurableAttempt(
 ): void {
   db.prepare(
     `INSERT INTO relay_withdrawal_payout_attempts
-       (withdrawal_id, signature, recorded_at, kind, nonce_account, nonce_value)
-     VALUES (?, ?, ?, ?, ?, ?)
+       (withdrawal_id, signature, recorded_at, kind, nonce_account, nonce_value, nonce_observed_slot)
+     VALUES (?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT (withdrawal_id, signature) DO NOTHING`,
-  ).run(withdrawalId, tx.signature, recordedAt, tx.kind, tx.nonceAccount, tx.nonceValue);
+  ).run(
+    withdrawalId,
+    tx.signature,
+    recordedAt,
+    tx.kind,
+    tx.nonceAccount,
+    tx.nonceValue,
+    tx.nonceObservedSlot ?? null,
+  );
 }
 
 export interface PayoutAttempt {
@@ -168,6 +178,9 @@ export interface PayoutAttempt {
   kind: "payout" | "kill";
   nonce_account: string | null;
   nonce_value: string | null;
+  /** The finalized slot the payout's nonce value was observed at (#990 round 8). */
+  nonce_observed_slot: number | null;
+  recorded_at: number;
   last_valid_block_height: number | null;
   final_status: "ok" | "err" | null;
   final_slot: number | null;
@@ -176,8 +189,8 @@ export interface PayoutAttempt {
 export function getPayoutAttempts(db: DatabaseDriver, withdrawalId: string): PayoutAttempt[] {
   return db
     .prepare(
-      `SELECT signature, kind, nonce_account, nonce_value, last_valid_block_height,
-              final_status, final_slot
+      `SELECT signature, kind, nonce_account, nonce_value, nonce_observed_slot, recorded_at,
+              last_valid_block_height, final_status, final_slot
          FROM relay_withdrawal_payout_attempts
         WHERE withdrawal_id = ?
         ORDER BY recorded_at ASC, signature ASC`,
@@ -272,7 +285,7 @@ export interface FinalityReader {
 
 /** The reads and the broadcast a kill needs — `OperatorSolanaTransfer` satisfies it. */
 export interface NonceKiller {
-  prepareNonceLane(): Promise<NonceLaneState>;
+  readNonceAccount(account: string, opts?: { minContextSlot?: number }): Promise<NonceLaneState>;
   broadcastNonceKill(
     lane: DurableNonceLane,
     hooks?: DurableBroadcastHooks,
@@ -386,15 +399,51 @@ export async function readChainVerdict(
   };
 }
 
+/** Nonce values recorded on `account` before `before` (older than any value recorded later). */
+export function earlierNonceValues(
+  db: DatabaseDriver,
+  account: string,
+  before: number,
+): Set<string> {
+  return new Set(
+    (
+      db
+        .prepare(
+          "SELECT DISTINCT nonce_value FROM relay_withdrawal_payout_attempts WHERE nonce_account = ? AND recorded_at < ? AND nonce_value IS NOT NULL",
+        )
+        .all(account, before) as Array<{ nonce_value: string }>
+    ).map((r) => r.nonce_value),
+  );
+}
+
+/** The highest finalized slot any recorded nonce value was observed at — the floor of every lane read. */
+export function laneReadFloor(db: DatabaseDriver): number | undefined {
+  const row = db
+    .prepare("SELECT MAX(nonce_observed_slot) AS m FROM relay_withdrawal_payout_attempts")
+    .get() as { m: number | null } | undefined;
+  return row?.m ?? undefined;
+}
+
 export type KillRequest =
   /** The kill was broadcast (or re-broadcast); a finalized kill will decide it. */
   | { status: "sent" }
   /** The RPC refused it (e.g. the nonce already advanced at processed) — proves nothing. */
   | { status: "not_sent"; detail: string }
-  /** The nonce has already moved past the payout's value at finalized: a recorded transaction consumed it; its status will decide. */
+  /**
+   * The nonce has PROVABLY moved past the payout's value (#990 round 8): read
+   * at finalized from a bank at or after the slot the value was observed at,
+   * holding a value that is neither the payout's nor any value this relay
+   * recorded earlier on that account. The payout can never land.
+   */
   | { status: "consumed" }
+  /**
+   * The read proves nothing: a node behind the observed slot, or an older
+   * value this relay recorded earlier (a stale bank), or a payout recorded
+   * without its observed slot. Never "consumed".
+   */
+  | { status: "stale"; detail: string }
   | { status: "lane_unavailable"; detail: string }
-  /** A blockhash payout, or a lane that does not match: no kill exists. */
+  /** A blockhash payout: no kill exists. */
   | { status: "not_killable" };
 
 /**
@@ -413,22 +462,44 @@ export async function requestKill(
   const payout = getPayoutAttempts(db, withdrawalId).find(
     (a) => a.kind === "payout" && a.nonce_account !== null && a.nonce_value !== null,
   );
-  if (!payout) return { status: "not_killable" };
+  if (!payout || payout.nonce_account === null || payout.nonce_value === null) {
+    return { status: "not_killable" };
+  }
+  const observed = payout.nonce_observed_slot;
+  if (observed === null) {
+    return { status: "stale", detail: "the payout was recorded without its observed slot" };
+  }
   const timeoutMs = opts.timeoutMs ?? CHAIN_READ_TIMEOUT_MS;
+  // The payout's OWN nonce account (#990 round 8, P-a): a seed rotation moves
+  // the current lane, never this payout — the treasury is authority of every
+  // lane it created. Read at or after the slot its value was observed at.
   let lane: NonceLaneState;
   try {
-    lane = await withTimeout(killer.prepareNonceLane(), timeoutMs, "nonce lane");
+    lane = await withTimeout(
+      killer.readNonceAccount(payout.nonce_account, { minContextSlot: observed }),
+      timeoutMs,
+      "nonce account",
+    );
   } catch (err) {
     lane = { status: "unavailable", reason: err instanceof Error ? err.message : String(err) };
   }
   if (lane.status !== "ready") return { status: "lane_unavailable", detail: lane.reason };
-  if (lane.account !== payout.nonce_account) return { status: "not_killable" };
-  if (lane.nonceValue !== payout.nonce_value) return { status: "consumed" };
+  if (lane.observedSlot === undefined || lane.observedSlot < observed) {
+    return { status: "stale", detail: `read from slot ${lane.observedSlot ?? "?"} < ${observed}` };
+  }
+  if (lane.nonceValue !== payout.nonce_value) {
+    // Belt and braces: a value this relay recorded EARLIER on this account is
+    // older than N — a stale bank, never proof that N was consumed.
+    if (earlierNonceValues(db, payout.nonce_account, payout.recorded_at).has(lane.nonceValue)) {
+      return { status: "stale", detail: "the read shows an older recorded nonce value" };
+    }
+    return { status: "consumed" };
+  }
   let result: NonceKillResult;
   try {
     result = await withTimeout(
       killer.broadcastNonceKill(
-        { account: payout.nonce_account, nonceValue: payout.nonce_value },
+        { account: payout.nonce_account, nonceValue: payout.nonce_value, observedSlot: observed },
         { beforeBroadcast: (tx) => recordDurableAttempt(db, withdrawalId, tx, Date.now()) },
       ),
       timeoutMs,

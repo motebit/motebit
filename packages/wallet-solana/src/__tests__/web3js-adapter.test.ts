@@ -884,7 +884,7 @@ describe("Web3JsRpcAdapter.sendUsdc", () => {
       lastValidBlockHeight: 100,
     });
     if (chain === "rpc_error") {
-      vi.spyOn(conn, "getEpochInfo").mockRejectedValue(new Error("429"));
+      vi.spyOn(conn, "getSignatureStatuses").mockRejectedValue(new Error("429"));
     } else {
       chainSays(conn, chain);
     }
@@ -1304,6 +1304,19 @@ describe("Web3JsRpcAdapter.getSignatureOutcome — about ONE transaction (#885, 
 
 // ── durable-nonce payouts (#990) ─────────────────────────────────────────
 
+/**
+ * `getAccountInfoAndContext` answering from context slot 100 with whatever the
+ * returned inner mock yields (#990 round 8: lane reads carry their slot).
+ */
+function accountInfoSpy(conn: ReturnType<Web3JsRpcAdapter["getConnection"]>) {
+  const inner = vi.fn();
+  vi.spyOn(conn, "getAccountInfoAndContext").mockImplementation(
+    async (...args: unknown[]) =>
+      ({ context: { slot: 100 }, value: (await inner(...args)) as unknown }) as never,
+  );
+  return inner;
+}
+
 describe("Web3JsRpcAdapter durable-nonce payouts (#990)", () => {
   const TREASURY = Keypair.fromSeed(ZERO_SEED).publicKey;
 
@@ -1351,10 +1364,10 @@ describe("Web3JsRpcAdapter durable-nonce payouts (#990)", () => {
   }
 
   describe("prepareNonceLane", () => {
-    it("reads the treasury's seed-derived nonce account at FINALIZED commitment", async () => {
+    it("reads the treasury's seed-derived nonce account at FINALIZED commitment, carrying the answering slot", async () => {
       const adapter = makeDurable();
       const conn = adapter.getConnection();
-      const info = vi.spyOn(conn, "getAccountInfo").mockResolvedValue({
+      const info = accountInfoSpy(conn).mockResolvedValue({
         data: nonceData(TREASURY, NONCE),
         owner: SystemProgram.programId,
         lamports: 1_447_680,
@@ -1366,6 +1379,7 @@ describe("Web3JsRpcAdapter durable-nonce payouts (#990)", () => {
         status: "ready",
         account: (await nonceAddress()).toBase58(),
         nonceValue: NONCE,
+        observedSlot: 100,
       });
       expect(info.mock.calls[0]?.[1]).toEqual({ commitment: "finalized" });
     });
@@ -1374,7 +1388,7 @@ describe("Web3JsRpcAdapter durable-nonce payouts (#990)", () => {
       const adapter = makeDurable();
       const conn = adapter.getConnection();
       let created = false;
-      vi.spyOn(conn, "getAccountInfo").mockImplementation(async () =>
+      accountInfoSpy(conn).mockImplementation(async () =>
         created
           ? ({
               data: nonceData(TREASURY, NONCE),
@@ -1413,7 +1427,7 @@ describe("Web3JsRpcAdapter durable-nonce payouts (#990)", () => {
     it("absent and the creation not finalized in the wait ⇒ unavailable (send nothing)", async () => {
       const adapter = makeDurable();
       const conn = adapter.getConnection();
-      vi.spyOn(conn, "getAccountInfo").mockResolvedValue(null);
+      accountInfoSpy(conn).mockResolvedValue(null);
       vi.spyOn(conn, "getMinimumBalanceForRentExemption").mockResolvedValue(1_447_680);
       vi.spyOn(conn, "getLatestBlockhash").mockResolvedValue({
         blockhash: validBlockhash(),
@@ -1451,7 +1465,7 @@ describe("Web3JsRpcAdapter durable-nonce payouts (#990)", () => {
       ];
       for (const answer of cases) {
         const adapter = makeDurable();
-        vi.spyOn(adapter.getConnection(), "getAccountInfo").mockImplementation(answer as never);
+        accountInfoSpy(adapter.getConnection()).mockImplementation(answer as never);
         expect((await adapter.prepareNonceLane()).status).toBe("unavailable");
       }
     });
@@ -1460,7 +1474,7 @@ describe("Web3JsRpcAdapter durable-nonce payouts (#990)", () => {
   describe("prepareNonceLane — the lane's address is public (#990 round 7)", () => {
     function squatted(conn: ReturnType<Web3JsRpcAdapter["getConnection"]>, first: unknown) {
       let taken = false;
-      vi.spyOn(conn, "getAccountInfo").mockImplementation(async () =>
+      accountInfoSpy(conn).mockImplementation(async () =>
         taken
           ? ({
               data: nonceData(TREASURY, NONCE),
@@ -1562,7 +1576,7 @@ describe("Web3JsRpcAdapter durable-nonce payouts (#990)", () => {
       ]) {
         const adapter = makeDurable();
         const send = vi.spyOn(adapter.getConnection(), "sendRawTransaction");
-        vi.spyOn(adapter.getConnection(), "getAccountInfo").mockResolvedValue(info as never);
+        accountInfoSpy(adapter.getConnection()).mockResolvedValue(info as never);
         const lane = await adapter.prepareNonceLane();
         expect(lane).toMatchObject({ status: "unavailable", squatted: { address: addr } });
         expect(send).not.toHaveBeenCalled();
@@ -1581,7 +1595,7 @@ describe("Web3JsRpcAdapter durable-nonce payouts (#990)", () => {
         identitySeed: ZERO_SEED,
         nonceSeedSuffix: "r2",
       });
-      const info = vi.spyOn(rotated.getConnection(), "getAccountInfo").mockResolvedValue({
+      const info = accountInfoSpy(rotated.getConnection()).mockResolvedValue({
         data: nonceData(TREASURY, NONCE),
         owner: SystemProgram.programId,
         lamports: 1_447_680,
@@ -1597,6 +1611,75 @@ describe("Web3JsRpcAdapter durable-nonce payouts (#990)", () => {
       expect(lane).toMatchObject({ status: "ready", account: expected.toBase58() });
       expect((info.mock.calls[0]![0] as PublicKey).toBase58()).toBe(expected.toBase58());
       expect(expected.toBase58()).not.toBe((await nonceAddress()).toBase58());
+    });
+  });
+
+  describe("readNonceAccount — any lane, bound by minContextSlot (#990 round 8)", () => {
+    it("reads the named account with minContextSlot; a node answering below it is refused", async () => {
+      const adapter = makeDurable();
+      const conn = adapter.getConnection();
+      const other = Keypair.generate().publicKey;
+      const spy = vi.spyOn(conn, "getAccountInfoAndContext").mockResolvedValue({
+        context: { slot: 900 },
+        value: {
+          data: nonceData(TREASURY, NONCE),
+          owner: SystemProgram.programId,
+          lamports: 1_447_680,
+          executable: false,
+          rentEpoch: 0,
+        },
+      } as never);
+      expect(await adapter.readNonceAccount(other.toBase58(), { minContextSlot: 850 })).toEqual({
+        status: "ready",
+        account: other.toBase58(),
+        nonceValue: NONCE,
+        observedSlot: 900,
+      });
+      expect((spy.mock.calls[0]![0] as PublicKey).toBase58()).toBe(other.toBase58());
+      expect(spy.mock.calls[0]![1]).toEqual({ commitment: "finalized", minContextSlot: 850 });
+      expect(
+        (await adapter.readNonceAccount(other.toBase58(), { minContextSlot: 901 })).status,
+      ).toBe("unavailable");
+    });
+
+    it("an absent or squatted account is unavailable, never created", async () => {
+      const adapter = makeDurable();
+      const conn = adapter.getConnection();
+      const send = vi.spyOn(conn, "sendRawTransaction");
+      vi.spyOn(conn, "getAccountInfoAndContext").mockResolvedValue({
+        context: { slot: 5 },
+        value: null,
+      } as never);
+      expect((await adapter.readNonceAccount(TREASURY.toBase58())).status).toBe("unavailable");
+      expect(send).not.toHaveBeenCalled();
+    });
+
+    it("prepareNonceLane passes its floor, and a payout carries the observed slot", async () => {
+      const adapter = makeDurable();
+      const conn = adapter.getConnection();
+      const spy = vi.spyOn(conn, "getAccountInfoAndContext").mockResolvedValue({
+        context: { slot: 321 },
+        value: {
+          data: nonceData(TREASURY, NONCE),
+          owner: SystemProgram.programId,
+          lamports: 1_447_680,
+          executable: false,
+          rentEpoch: 0,
+        },
+      } as never);
+      const lane = await adapter.prepareNonceLane({ minContextSlot: 300 });
+      expect(spy.mock.calls[0]![1]).toEqual({ commitment: "finalized", minContextSlot: 300 });
+      expect(lane).toMatchObject({ status: "ready", observedSlot: 321 });
+      getAccountMock.mockResolvedValue({ amount: 10_000_000n });
+      vi.spyOn(conn, "sendRawTransaction").mockResolvedValue("s");
+      vi.spyOn(conn, "getSignatureStatuses").mockResolvedValue(status("finalized") as never);
+      const seen: unknown[] = [];
+      await adapter.sendUsdcDurable(
+        { toAddress: validBase58Address(), microAmount: 1n },
+        lane as unknown as { account: string; nonceValue: string; observedSlot: number },
+        { beforeBroadcast: (tx) => void seen.push(tx) },
+      );
+      expect(seen[0]).toMatchObject({ nonceObservedSlot: 321 });
     });
   });
 
@@ -1747,7 +1830,7 @@ describe("Web3JsRpcAdapter durable-nonce payouts (#990)", () => {
       const adapter = makeDurable();
       const conn = adapter.getConnection();
       let created = false;
-      vi.spyOn(conn, "getAccountInfo").mockImplementation(async () =>
+      accountInfoSpy(conn).mockImplementation(async () =>
         created
           ? ({
               data: nonceData(TREASURY, NONCE),

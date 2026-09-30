@@ -45,6 +45,7 @@ import {
   getPayoutAttempts,
   isChainRecordedClaim,
   isNonceValueUsed,
+  laneReadFloor,
   mapBounded,
   markChainRecordedClaim,
   queuedPayouts,
@@ -475,7 +476,13 @@ export function registerBudgetRoutes(deps: BudgetDeps): BudgetRoutes {
       let lane: Awaited<ReturnType<typeof transfer.prepareNonceLane>>;
       try {
         lane = await withTimeout(
-          transfer.prepareNonceLane(),
+          // Never read the lane from a bank older than any nonce value
+          // already recorded (#990 round 8).
+          transfer.prepareNonceLane(
+            laneReadFloor(moteDb.db) !== undefined
+              ? { minContextSlot: laneReadFloor(moteDb.db)! }
+              : {},
+          ),
           CHAIN_READ_TIMEOUT_MS * 3,
           "nonce lane",
         );
@@ -528,7 +535,14 @@ export function registerBudgetRoutes(deps: BudgetDeps): BudgetRoutes {
       }
       reservedNonces.add(lane.nonceValue);
       payoutsInFlight.add(withdrawalId);
-      return { w, lane: { account: lane.account, nonceValue: lane.nonceValue } };
+      return {
+        w,
+        lane: {
+          account: lane.account,
+          nonceValue: lane.nonceValue,
+          ...(lane.observedSlot !== undefined ? { observedSlot: lane.observedSlot } : {}),
+        },
+      };
     })();
     if (!claimed) return;
     try {
@@ -1403,7 +1417,7 @@ export function registerBudgetRoutes(deps: BudgetDeps): BudgetRoutes {
                   ? "nonce_consumed_unrecorded"
                   : kill?.status === "not_sent"
                     ? "kill_not_sent"
-                    : kill?.status === "lane_unavailable"
+                    : kill?.status === "lane_unavailable" || kill?.status === "stale"
                       ? "chain_unreadable"
                       : !verdict.killable
                         ? "chain_no_positive_evidence"

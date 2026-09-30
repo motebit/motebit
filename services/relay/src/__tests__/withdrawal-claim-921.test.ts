@@ -111,6 +111,10 @@ const chain: {
   killLands: true,
 };
 const KILL_SIG = "KiLLsig".padEnd(88, "k");
+/** Every finalized read here answers from slot 100 (#990 round 8). */
+function at100(lane: NonceLaneState): NonceLaneState {
+  return lane.status === "ready" ? { ...lane, observedSlot: 100 } : { ...lane };
+}
 const FINAL_OK: FinalizedSignatureStatus = { status: "finalized", ok: true, slot: 42 };
 
 /**
@@ -123,7 +127,7 @@ const FINAL_OK: FinalizedSignatureStatus = { status: "finalized", ok: true, slot
  */
 function makeOperator(
   sendUsdc: SolanaRpcAdapter["sendUsdc"],
-  prepareNonceLane: () => Promise<NonceLaneState> = () => Promise.resolve({ ...chain.lane }),
+  prepareNonceLane: () => Promise<NonceLaneState> = () => Promise.resolve(at100(chain.lane)),
 ): { operator: OperatorSolanaTransfer; adapter: SolanaRpcAdapter } {
   const adapter: SolanaRpcAdapter = {
     honorsBroadcastHooks: true,
@@ -138,6 +142,7 @@ function makeOperator(
         kind: "payout",
         nonceAccount: lane.account,
         nonceValue: lane.nonceValue,
+        ...(lane.observedSlot !== undefined ? { nonceObservedSlot: lane.observedSlot } : {}),
       };
       await hooks?.beforeBroadcast?.(tx);
       let r: Awaited<ReturnType<SolanaRpcAdapter["sendUsdc"]>>;
@@ -172,6 +177,7 @@ function makeOperator(
     getFinalizedStatus: (signature) =>
       Promise.resolve(chain.final.get(signature) ?? { status: "unknown", reason: "absent" }),
     prepareNonceLane,
+    readNonceAccount: () => Promise.resolve(at100(chain.lane)),
     sendUsdcBatch: vi.fn().mockResolvedValue([]),
     getTransaction: vi.fn().mockResolvedValue({ status: "not_found" }),
     isReachable: vi.fn().mockResolvedValue(true),
@@ -454,7 +460,7 @@ describe("#921 claim before send", () => {
 
     const errors = captureErrors();
     try {
-      laneRead.resolve({ ...chain.lane });
+      laneRead.resolve(at100(chain.lane));
       const body = (await (await pending).json()) as WithdrawBody;
       expect(body.withdrawal.status).toBe("failed");
     } finally {

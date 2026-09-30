@@ -133,8 +133,8 @@ export const NONCE_ACCOUNT_SEED = "motebit-payout-nonce-v1";
  * (owned by another program, or a nonce account of another authority): a
  * new suffix derives a fresh address. `suffix` is 1–8 of `[a-z0-9]`, so the
  * seed stays within agave's MAX_SEED_LEN (32 bytes). Undecided payouts over
- * the old lane stay decidable by their own finalized statuses, but can no
- * longer be killed.
+ * the old lane stay decidable and killable (`readNonceAccount` reads the
+ * payout's own nonce account, #990 round 8).
  */
 export function nonceSeedFor(suffix?: string): string {
   if (suffix === undefined || suffix === "") return NONCE_ACCOUNT_SEED;
@@ -844,16 +844,32 @@ export class Web3JsRpcAdapter implements SolanaRpcAdapter {
    *     with other data, or a nonce account of another authority: nothing
    *     at this seed can be used. Fail closed; the operator rotates the seed.
    */
-  private async readNonceLane(): Promise<
+  private async readNonceLane(
+    target?: PublicKey,
+    minContextSlot?: number,
+  ): Promise<
     | NonceLaneState
     | { status: "absent" }
     | { status: "takeover"; lamports: number; dataLen: number }
   > {
-    const address = await this.nonceAccount();
-    const info = await this.timed(
-      this.connection.getAccountInfo(address, { commitment: "finalized" }),
+    const address = target ?? (await this.nonceAccount());
+    // #990 round 8: the context slot is the read's proof of recency; with
+    // minContextSlot a node behind it refuses instead of answering stale
+    // (agave rpc.rs get_account_info → get_bank_with_config).
+    const resp = await this.timed(
+      this.connection.getAccountInfoAndContext(address, {
+        commitment: "finalized",
+        ...(minContextSlot !== undefined ? { minContextSlot } : {}),
+      }),
       "getAccountInfo(nonce)",
     );
+    if (minContextSlot !== undefined && resp.context.slot < minContextSlot) {
+      throw new Error(
+        `a node answered from slot ${resp.context.slot}, behind minContextSlot ${minContextSlot}`,
+      );
+    }
+    const observedSlot = resp.context.slot;
+    const info = resp.value;
     if (info == null) return { status: "absent" };
     const squatted = (reason: string): NonceLaneState => ({
       status: "unavailable",
@@ -877,7 +893,25 @@ export class Web3JsRpcAdapter implements SolanaRpcAdapter {
     if (nonce.authorizedPubkey.toBase58() !== this.keypair.publicKey.toBase58()) {
       return squatted(`a nonce account of authority ${nonce.authorizedPubkey.toBase58()}`);
     }
-    return { status: "ready", account: address.toBase58(), nonceValue: nonce.nonce };
+    return {
+      status: "ready",
+      account: address.toBase58(),
+      nonceValue: nonce.nonce,
+      observedSlot,
+    };
+  }
+
+  async readNonceAccount(
+    account: string,
+    opts: { minContextSlot?: number } = {},
+  ): Promise<NonceLaneState> {
+    try {
+      const r = await this.readNonceLane(new PublicKey(account), opts.minContextSlot);
+      if (r.status === "ready" || r.status === "unavailable") return r;
+      return { status: "unavailable", reason: `${account} is not an initialized nonce account` };
+    } catch (err) {
+      return { status: "unavailable", reason: err instanceof Error ? err.message : String(err) };
+    }
   }
 
   private async sendLaneTransaction(ixs: TransactionInstruction[], what: string): Promise<void> {
@@ -984,9 +1018,9 @@ export class Web3JsRpcAdapter implements SolanaRpcAdapter {
     await this.sendLaneTransaction(ixs, "take over nonce account");
   }
 
-  async prepareNonceLane(): Promise<NonceLaneState> {
+  async prepareNonceLane(opts: { minContextSlot?: number } = {}): Promise<NonceLaneState> {
     try {
-      const first = await this.readNonceLane();
+      const first = await this.readNonceLane(undefined, opts.minContextSlot);
       if (first.status === "ready" || first.status === "unavailable") return first;
       this.creatingNonce ??= (
         first.status === "absent"
@@ -996,7 +1030,7 @@ export class Web3JsRpcAdapter implements SolanaRpcAdapter {
         this.creatingNonce = null;
       });
       await this.creatingNonce;
-      const second = await this.readNonceLane();
+      const second = await this.readNonceLane(undefined, opts.minContextSlot);
       if (second.status === "ready" || second.status === "unavailable") return second;
       return { status: "unavailable", reason: "the nonce account is not finalized yet" };
     } catch (err) {
@@ -1029,6 +1063,7 @@ export class Web3JsRpcAdapter implements SolanaRpcAdapter {
         kind,
         nonceAccount: lane.account,
         nonceValue: lane.nonceValue,
+        ...(lane.observedSlot !== undefined ? { nonceObservedSlot: lane.observedSlot } : {}),
       },
     };
   }

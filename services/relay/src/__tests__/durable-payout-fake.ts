@@ -52,6 +52,11 @@ export function freshChain(overrides: Partial<FakeDurableChain> = {}): FakeDurab
   };
 }
 
+/** The fake's finalized reads all answer from slot 100 (#990 round 8). */
+function observed(lane: NonceLaneState): NonceLaneState {
+  return lane.status === "ready" ? { ...lane, observedSlot: 100 } : { ...lane };
+}
+
 let seq = 0;
 /** A base58-looking signature, unique per call. */
 export function fakeSignature(tag: string): string {
@@ -97,6 +102,7 @@ export function makeDurableAdapter(
         kind: "payout",
         nonceAccount: lane.account,
         nonceValue: lane.nonceValue,
+        ...(lane.observedSlot !== undefined ? { nonceObservedSlot: lane.observedSlot } : {}),
       };
       if (hooks?.beforeBroadcast) await hooks.beforeBroadcast(tx);
       chain.payouts.push(tx);
@@ -124,6 +130,7 @@ export function makeDurableAdapter(
         kind: "kill",
         nonceAccount: lane.account,
         nonceValue: lane.nonceValue,
+        ...(lane.observedSlot !== undefined ? { nonceObservedSlot: lane.observedSlot } : {}),
       };
       if (hooks?.beforeBroadcast) await hooks.beforeBroadcast(tx);
       chain.kills.push(tx);
@@ -144,7 +151,8 @@ export function makeDurableAdapter(
     sendUsdcBatch: vi.fn().mockResolvedValue([]),
     getTransaction: vi.fn().mockResolvedValue({ status: "not_found" }),
     isReachable: vi.fn().mockResolvedValue(true),
-    prepareNonceLane: () => Promise.resolve({ ...chain.lane }),
+    prepareNonceLane: () => Promise.resolve(observed(chain.lane)),
+    readNonceAccount: () => Promise.resolve(observed(chain.lane)),
     sendUsdcDurable,
     broadcastNonceKill,
     getFinalizedStatus: (signature: string) =>
@@ -174,7 +182,11 @@ export function durableFromSendUsdc(
   signature: string,
 ): Pick<
   SolanaRpcAdapter,
-  "prepareNonceLane" | "sendUsdcDurable" | "broadcastNonceKill" | "getFinalizedStatus"
+  | "prepareNonceLane"
+  | "readNonceAccount"
+  | "sendUsdcDurable"
+  | "broadcastNonceKill"
+  | "getFinalizedStatus"
 > {
   const final = new Map<string, FinalizedSignatureStatus>();
   return {
@@ -183,6 +195,14 @@ export function durableFromSendUsdc(
         status: "ready" as const,
         account: "ProbeNonceAccount",
         nonceValue: "probe-nonce",
+        observedSlot: 100,
+      }),
+    readNonceAccount: () =>
+      Promise.resolve({
+        status: "ready" as const,
+        account: "ProbeNonceAccount",
+        nonceValue: "probe-nonce",
+        observedSlot: 100,
       }),
     sendUsdcDurable: async (args, lane, hooks) => {
       const tx: DurableTransactionRef = {
@@ -190,6 +210,7 @@ export function durableFromSendUsdc(
         kind: "payout",
         nonceAccount: lane.account,
         nonceValue: lane.nonceValue,
+        ...(lane.observedSlot !== undefined ? { nonceObservedSlot: lane.observedSlot } : {}),
       };
       await hooks?.beforeBroadcast?.(tx);
       try {
@@ -210,6 +231,7 @@ export function durableFromSendUsdc(
         kind: "kill",
         nonceAccount: lane.account,
         nonceValue: lane.nonceValue,
+        ...(lane.observedSlot !== undefined ? { nonceObservedSlot: lane.observedSlot } : {}),
       };
       await hooks?.beforeBroadcast?.(tx);
       return { tx, sent: true };

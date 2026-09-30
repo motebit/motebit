@@ -112,6 +112,7 @@ export class OperatorSolanaTransfer {
     return (
       a.honorsBroadcastHooks === true &&
       typeof a.prepareNonceLane === "function" &&
+      typeof a.readNonceAccount === "function" &&
       typeof a.sendUsdcDurable === "function" &&
       typeof a.broadcastNonceKill === "function" &&
       typeof a.getFinalizedStatus === "function"
@@ -122,11 +123,28 @@ export class OperatorSolanaTransfer {
    * The treasury's durable-nonce lane (#990), created if absent, read at
    * finalized commitment. `unavailable` ⇒ send nothing.
    */
-  prepareNonceLane(): Promise<NonceLaneState> {
+  prepareNonceLane(opts: { minContextSlot?: number } = {}): Promise<NonceLaneState> {
     if (typeof this.adapter.prepareNonceLane !== "function") {
       return Promise.resolve({ status: "unavailable", reason: "adapter has no nonce lane" });
     }
-    return this.adapter.prepareNonceLane();
+    return this.adapter.prepareNonceLane(opts);
+  }
+
+  /**
+   * Read one nonce account this treasury controls (any lane it used), bound
+   * by `minContextSlot` (#990 round 8). Never creates.
+   */
+  readNonceAccount(
+    account: string,
+    opts: { minContextSlot?: number } = {},
+  ): Promise<NonceLaneState> {
+    if (typeof this.adapter.readNonceAccount !== "function") {
+      return Promise.resolve({
+        status: "unavailable",
+        reason: "adapter cannot read nonce accounts",
+      });
+    }
+    return this.adapter.readNonceAccount(account, opts);
   }
 
   /**

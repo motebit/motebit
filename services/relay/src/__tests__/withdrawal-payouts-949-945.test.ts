@@ -69,11 +69,24 @@ async function db(): Promise<DatabaseDriver> {
 
 const LANE: DurableNonceLane = { account: "NonceAcct", nonceValue: "N1" };
 
-function payout(d: DatabaseDriver, w: string, sig: string, lane = LANE, at = 1): void {
+function payout(
+  d: DatabaseDriver,
+  w: string,
+  sig: string,
+  lane = LANE,
+  at = 1,
+  observedSlot: number | null = 100,
+): void {
   recordDurableAttempt(
     d,
     w,
-    { signature: sig, kind: "payout", nonceAccount: lane.account, nonceValue: lane.nonceValue },
+    {
+      signature: sig,
+      kind: "payout",
+      nonceAccount: lane.account,
+      nonceValue: lane.nonceValue,
+      ...(observedSlot !== null ? { nonceObservedSlot: observedSlot } : {}),
+    },
     at,
   );
 }
@@ -226,12 +239,17 @@ describe("readChainVerdict (#990: finalized statuses only)", () => {
   });
 });
 
-describe("requestKill (#990)", () => {
+describe("requestKill (#990 rounds 6–8)", () => {
   function killer(lane: NonceLaneState) {
     const sent: DurableTransactionRef[] = [];
+    const reads: Array<{ account: string; minContextSlot?: number }> = [];
     return {
       sent,
-      prepareNonceLane: () => Promise.resolve(lane),
+      reads,
+      readNonceAccount: (account: string, opts: { minContextSlot?: number } = {}) => {
+        reads.push({ account, ...opts });
+        return Promise.resolve(lane);
+      },
       broadcastNonceKill: async (
         l: DurableNonceLane,
         hooks?: { beforeBroadcast?: (tx: DurableTransactionRef) => void | Promise<void> },
@@ -248,27 +266,69 @@ describe("requestKill (#990)", () => {
       },
     };
   }
+  const at = (slot: number, value: string, account = "NonceAcct"): NonceLaneState => ({
+    status: "ready",
+    account,
+    nonceValue: value,
+    observedSlot: slot,
+  });
 
   it("broadcasts nonceAdvance over the payout's own nonce value, recorded before it is sent", async () => {
     const d = await db();
     payout(d, "k1", "p");
-    const k = killer({ status: "ready", ...LANE });
+    const k = killer(at(150, "N1"));
     expect(await requestKill(d, "k1", k)).toEqual({ status: "sent" });
     expect(k.sent[0]).toMatchObject({ kind: "kill", nonceValue: "N1", nonceAccount: "NonceAcct" });
     expect(getPayoutAttempts(d, "k1").map((a) => a.kind)).toEqual(["payout", "kill"]);
   });
 
-  it("the lane already moved past the payout's value ⇒ consumed, nothing broadcast", async () => {
+  it("reads the payout's OWN nonce account, bound by the slot its value was observed at (C-1, P-a)", async () => {
+    const d = await db();
+    payout(d, "k5", "p", { account: "OldLaneAcct", nonceValue: "N1" }, 1, 777);
+    const k = killer(at(800, "N1", "OldLaneAcct"));
+    await requestKill(d, "k5", k);
+    expect(k.reads).toEqual([{ account: "OldLaneAcct", minContextSlot: 777 }]);
+    expect(k.sent[0]).toMatchObject({ nonceAccount: "OldLaneAcct" });
+  });
+
+  it("the lane PROVABLY past the payout's value — at or after the observed slot, a value never recorded — ⇒ consumed, nothing broadcast", async () => {
     const d = await db();
     payout(d, "k2", "p");
-    const k = killer({ status: "ready", account: "NonceAcct", nonceValue: "N2" });
+    const k = killer(at(100, "N9"));
     expect(await requestKill(d, "k2", k)).toEqual({ status: "consumed" });
     expect(k.sent).toEqual([]);
   });
 
+  it("a read from BELOW the observed slot is stale, never consumed", async () => {
+    const d = await db();
+    payout(d, "k6", "p");
+    const k = killer(at(99, "N9"));
+    expect((await requestKill(d, "k6", k)).status).toBe("stale");
+    expect(k.sent).toEqual([]);
+  });
+
+  it("belt and braces: a value recorded EARLIER on the account is stale, never consumed, even at a good slot", async () => {
+    const d = await db();
+    payout(d, "k-old", "p-old", { account: "NonceAcct", nonceValue: "N0" }, 1);
+    payout(d, "k7", "p", LANE, 2);
+    const k = killer(at(150, "N0"));
+    expect((await requestKill(d, "k7", k)).status).toBe("stale");
+    // …while a value recorded LATER (a later payout over the next value) is past.
+    payout(d, "k-new", "p-new", { account: "NonceAcct", nonceValue: "N2" }, 3);
+    expect((await requestKill(d, "k7", killer(at(150, "N2")))).status).toBe("consumed");
+  });
+
+  it("a payout recorded without its observed slot can never be called consumed", async () => {
+    const d = await db();
+    payout(d, "k8", "p", LANE, 1, null);
+    const k = killer(at(150, "N9"));
+    expect((await requestKill(d, "k8", k)).status).toBe("stale");
+    expect(k.reads).toEqual([]);
+  });
+
   it("no durable payout, or an unavailable lane ⇒ nothing broadcast", async () => {
     const d = await db();
-    const k = killer({ status: "ready", ...LANE });
+    const k = killer(at(150, "N1"));
     expect(await requestKill(d, "k3", k)).toEqual({ status: "not_killable" });
     payout(d, "k4", "p");
     expect(await requestKill(d, "k4", killer({ status: "unavailable", reason: "down" }))).toEqual({

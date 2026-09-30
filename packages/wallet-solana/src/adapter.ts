@@ -205,6 +205,14 @@ export interface DurableNonceLane {
   account: string;
   /** The nonce value (base58) the transaction is signed over as its blockhash. */
   nonceValue: string;
+  /**
+   * The finalized context slot at which `nonceValue` was observed (#990
+   * round 8). Recorded with the payout, it is the floor (`minContextSlot`)
+   * of every later read that may conclude the nonce was CONSUMED: finalized
+   * account reads are not monotonic across a load-balanced pool, so a read
+   * from below this slot can show an older value.
+   */
+  observedSlot?: number;
 }
 
 /** Whether the treasury's nonce lane can be used right now. */
@@ -232,6 +240,8 @@ export interface DurableTransactionRef {
   kind: "payout" | "kill";
   nonceAccount: string;
   nonceValue: string;
+  /** `DurableNonceLane.observedSlot` of the lane it was signed over (#990 round 8). */
+  nonceObservedSlot?: number;
 }
 
 /** `beforeBroadcast` for durable transactions: record before send; a throw stops the send. */
@@ -408,7 +418,17 @@ export interface SolanaRpcAdapter {
    * its rent), then read its nonce value at FINALIZED commitment.
    * `unavailable` when it cannot — a payer then sends nothing.
    */
-  prepareNonceLane?(): Promise<NonceLaneState>;
+  prepareNonceLane?(opts?: { minContextSlot?: number }): Promise<NonceLaneState>;
+
+  /**
+   * Read ONE nonce account this treasury controls — any lane it ever used,
+   * not only the current one (#990 round 8: a payout signed over an old lane
+   * stays killable after a seed rotation) — at FINALIZED commitment, bound
+   * by `minContextSlot` (a node behind it refuses: agave
+   * `get_bank_with_config`). Never creates. `ready` carries the answering
+   * `observedSlot`; anything else is `unavailable`.
+   */
+  readNonceAccount?(account: string, opts?: { minContextSlot?: number }): Promise<NonceLaneState>;
 
   /**
    * Send USDC as a durable-nonce transaction (#990): `nonceAdvance` first,

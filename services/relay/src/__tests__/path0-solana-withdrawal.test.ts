@@ -93,7 +93,11 @@ describe("Path 0 — Solana sovereign-return withdrawal", () => {
     // lane's nonce, with the hook that records it before broadcast (#990).
     expect(adapter.sendUsdcDurable).toHaveBeenCalledWith(
       { toAddress: userSolanaWallet, microAmount: 1_500_000n },
-      { account: "NonceAccount111111111111111111111111111111", nonceValue: "nonce-1" },
+      {
+        account: "NonceAccount111111111111111111111111111111",
+        nonceValue: "nonce-1",
+        observedSlot: 100,
+      },
       expect.objectContaining({ beforeBroadcast: expect.any(Function) }),
     );
   });

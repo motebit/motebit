@@ -112,10 +112,11 @@ describe("OperatorSolanaTransfer", () => {
     expect(await op.isAvailable()).toBe(false);
   });
 
-  it("recordsBroadcasts only over an adapter that honours the hooks, has the nonce lane, the durable send, the kill AND the finalized read (#990)", () => {
+  it("recordsBroadcasts only over an adapter that honours the hooks, has the nonce lane, reads any nonce account, the durable send, the kill AND the finalized read (#990)", () => {
     const full = {
       honorsBroadcastHooks: true as const,
       prepareNonceLane: vi.fn(),
+      readNonceAccount: vi.fn(),
       sendUsdcDurable: vi.fn(),
       broadcastNonceKill: vi.fn(),
       getFinalizedStatus: vi.fn(),
@@ -142,6 +143,15 @@ describe("OperatorSolanaTransfer", () => {
       }),
     );
     expect(await op.prepareNonceLane()).toEqual({ status: "ready", ...lane });
+    const read = vi.fn().mockResolvedValue({ status: "ready", ...lane, observedSlot: 9 });
+    const reader = new OperatorSolanaTransfer(makeAdapter({ readNonceAccount: read }));
+    expect(await reader.readNonceAccount("N", { minContextSlot: 5 })).toMatchObject({
+      observedSlot: 9,
+    });
+    expect(read).toHaveBeenCalledWith("N", { minContextSlot: 5 });
+    expect((await new OperatorSolanaTransfer(makeAdapter()).readNonceAccount("N")).status).toBe(
+      "unavailable",
+    );
     expect((await op.broadcastNonceKill(lane)).sent).toBe(true);
     expect(await op.getFinalizedStatus("k")).toEqual({ status: "finalized", ok: true, slot: 1 });
     const bare = new OperatorSolanaTransfer(makeAdapter());
