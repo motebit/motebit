@@ -16,6 +16,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   findTestFiles,
   isTestFile,
+  resolvedCompilerOptions,
   resolveTypecheckConfigs,
   scanPackage,
 } from "../check-tests-typechecked.js";
@@ -155,6 +156,186 @@ describe("scanPackage", () => {
 
     const stale = scanPackage(join(root, "pkg"), root, { pkg: { "e2e/": "nothing here" } });
     expect(stale?.problems.some((p) => p.includes("stale KNOWN_UNCOVERED entry"))).toBe(true);
+  });
+});
+
+/** The strict build flags the repo's tsconfig.base.json sets. */
+const STRICT_BUILD = {
+  strict: true,
+  noImplicitAny: true,
+  strictNullChecks: true,
+  noUncheckedIndexedAccess: true,
+  noUnusedLocals: true,
+  noUnusedParameters: true,
+  skipLibCheck: true,
+};
+
+/** A package with the fixed shape: strict build config + tsconfig.test.json. */
+function testConfigPackage(
+  dir: string,
+  testOptions: Record<string, unknown>,
+  typecheck = "tsc --noEmit && tsc -p tsconfig.test.json",
+  buildOptions: Record<string, unknown> = STRICT_BUILD,
+): void {
+  buildOnlyPackage(dir, typecheck);
+  json(`${dir}/tsconfig.json`, {
+    compilerOptions: { rootDir: "src", outDir: "dist", ...buildOptions },
+    include: ["src"],
+    exclude: ["src/__tests__"],
+  });
+  json(`${dir}/tsconfig.test.json`, {
+    extends: "./tsconfig.json",
+    compilerOptions: { rootDir: ".", noEmit: true, ...testOptions },
+    include: ["src"],
+    exclude: [],
+  });
+}
+
+function problemsOf(dir: string): string[] {
+  const r = scanPackage(join(root, dir), root, {});
+  expect(r).not.toBeNull();
+  return r!.problems;
+}
+
+describe("scanPackage — the test config is at least as strict as the build config", () => {
+  it("passes when the test config inherits the build config's strictness", () => {
+    testConfigPackage("pkg", {});
+    expect(problemsOf("pkg")).toEqual([]);
+  });
+
+  it("passes when the test config is stricter than the build config", () => {
+    testConfigPackage("pkg", { exactOptionalPropertyTypes: true, noImplicitOverride: true });
+    expect(problemsOf("pkg")).toEqual([]);
+  });
+
+  it.each([
+    ["strict", { strict: false }],
+    ["noImplicitAny", { noImplicitAny: false }],
+    ["strictNullChecks", { strictNullChecks: false }],
+    ["noUncheckedIndexedAccess", { noUncheckedIndexedAccess: false }],
+    ["noUnusedLocals", { noUnusedLocals: false }],
+    ["noUnusedParameters", { noUnusedParameters: false }],
+    ["useUnknownInCatchVariables", { useUnknownInCatchVariables: false }],
+  ])("fails when tsconfig.test.json turns off %s", (flag, opts) => {
+    testConfigPackage("pkg", opts);
+    const problems = problemsOf("pkg");
+    expect(problems.some((p) => p.includes("tsconfig.test.json") && p.includes(flag))).toBe(true);
+  });
+
+  it("fails when the test config turns on skipLibCheck the build config keeps off", () => {
+    testConfigPackage("pkg", { skipLibCheck: true }, undefined, {
+      ...STRICT_BUILD,
+      skipLibCheck: false,
+    });
+    expect(problemsOf("pkg").some((p) => p.includes("skipLibCheck"))).toBe(true);
+  });
+
+  it("fails when the test config drops a flag the build config opts into", () => {
+    testConfigPackage(
+      "pkg",
+      { exactOptionalPropertyTypes: false, noImplicitOverride: false },
+      undefined,
+      {
+        ...STRICT_BUILD,
+        exactOptionalPropertyTypes: true,
+        noImplicitOverride: true,
+      },
+    );
+    const problems = problemsOf("pkg");
+    expect(problems.some((p) => p.includes("exactOptionalPropertyTypes"))).toBe(true);
+    expect(problems.some((p) => p.includes("noImplicitOverride"))).toBe(true);
+  });
+
+  it("resolves strict-family flags as tsc does: `strict: false` weakens every implied flag", () => {
+    // The build config sets only `strict: true`; the test config only
+    // `strict: false`. No strict-family flag is named explicitly, so the gate
+    // must apply strict's implication to see noImplicitAny etc. go off.
+    testConfigPackage("pkg", { strict: false }, undefined, { strict: true });
+    const problems = problemsOf("pkg");
+    for (const flag of ["noImplicitAny", "strictNullChecks", "useUnknownInCatchVariables"]) {
+      expect(problems.some((p) => p.includes(flag))).toBe(true);
+    }
+  });
+
+  it("follows the extends chain: a weakening in an intermediate config is caught", () => {
+    testConfigPackage("pkg", {});
+    json("pkg/tsconfig.loose.json", {
+      extends: "./tsconfig.json",
+      compilerOptions: { noUncheckedIndexedAccess: false },
+    });
+    json("pkg/tsconfig.test.json", {
+      extends: "./tsconfig.loose.json",
+      compilerOptions: { rootDir: ".", noEmit: true },
+      include: ["src"],
+      exclude: [],
+    });
+    expect(problemsOf("pkg").some((p) => p.includes("noUncheckedIndexedAccess"))).toBe(true);
+  });
+
+  it("reads the same resolved options `tsc --showConfig` prints", () => {
+    testConfigPackage("pkg", { strict: false, noUncheckedIndexedAccess: false });
+    const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
+    const shown = spawnSync(
+      join(repoRoot, "node_modules", ".bin", "tsc"),
+      ["--showConfig", "-p", join(root, "pkg", "tsconfig.test.json")],
+      { encoding: "utf-8" },
+    );
+    expect(shown.status).toBe(0);
+    const showConfig = (JSON.parse(shown.stdout) as { compilerOptions: Record<string, unknown> })
+      .compilerOptions;
+    const resolved = resolvedCompilerOptions(join(root, "pkg", "tsconfig.test.json"));
+    for (const [flag, value] of Object.entries(showConfig)) {
+      if (typeof value === "boolean") expect([flag, resolved[flag]]).toEqual([flag, value]);
+    }
+    expect(resolved.strict).toBe(false);
+    expect(resolved.noUncheckedIndexedAccess).toBe(false);
+  });
+});
+
+describe("scanPackage — the typecheck script runs every tsconfig unconditionally", () => {
+  it("accepts an && chain, including through pnpm run hops", () => {
+    testConfigPackage("pkg", {}, "tsc --noEmit && pnpm run typecheck:tests");
+    json("pkg/package.json", {
+      name: "@fixture/pkg",
+      scripts: {
+        typecheck: "tsc --noEmit && pnpm run typecheck:tests",
+        "typecheck:tests": "tsc -p tsconfig.test.json",
+      },
+    });
+    expect(problemsOf("pkg")).toEqual([]);
+  });
+
+  it("does not mistake an operator inside quotes for a control operator", () => {
+    testConfigPackage("pkg", {}, 'tsc --noEmit && tsc -p tsconfig.test.json && echo "a || b; c"');
+    expect(problemsOf("pkg")).toEqual([]);
+  });
+
+  it.each([
+    ["||", "tsc --noEmit || tsc -p tsconfig.test.json"],
+    ["|| true", "tsc --noEmit && tsc -p tsconfig.test.json || true"],
+    [";", "tsc --noEmit; tsc -p tsconfig.test.json"],
+    ["|", "tsc --noEmit | tee tc.log && tsc -p tsconfig.test.json"],
+    ["&", "tsc --noEmit & tsc -p tsconfig.test.json"],
+  ])("rejects `%s` in the typecheck script", (op, script) => {
+    testConfigPackage("pkg", {}, script);
+    const problems = problemsOf("pkg");
+    expect(
+      problems.some((p) => p.includes(`\`${op.split(" ")[0]}\``) && p.includes("typecheck")),
+    ).toBe(true);
+  });
+
+  it("rejects a tolerant operator in a script reached through a pnpm run hop", () => {
+    testConfigPackage("pkg", {});
+    json("pkg/package.json", {
+      name: "@fixture/pkg",
+      scripts: {
+        typecheck: "tsc --noEmit && pnpm run typecheck:tests",
+        "typecheck:tests": "tsc -p tsconfig.test.json || echo skipped",
+      },
+    });
+    expect(problemsOf("pkg").some((p) => p.includes("typecheck:tests") && p.includes("`||`"))).toBe(
+      true,
+    );
   });
 });
 

@@ -949,6 +949,34 @@ describe("verify — succession chain failures", () => {
     );
   });
 
+  it("catches an exception inside chain verification and fails closed (the catch-all)", async () => {
+    const kp1 = await makeKeypair();
+    const kp2 = await makeKeypair();
+
+    // A wire record that omits `new_key_signature` entirely. The YAML parser
+    // leaves the field undefined; the record passes the suite check, and
+    // decoding the missing signature throws (TypeError reading `.length` of
+    // undefined) — the only way into verifySuccessionChain's catch-all. The
+    // catch must turn that into an invalid chain, never a throw or a pass.
+    const record = await createSuccessionRecord(kp1, kp2, 1000000);
+    const yaml = buildYamlWithSuccession(kp2.publicKeyHex, [record])
+      .split("\n")
+      .filter((line) => !line.trimStart().startsWith("new_key_signature:"))
+      .join("\n");
+    expect(yaml).not.toContain("new_key_signature");
+
+    const frontmatterBytes = new TextEncoder().encode(yaml);
+    const signature = await ed.signAsync(frontmatterBytes, kp2.privateKey);
+    const content = buildIdentityFile(yaml, toHex(signature));
+
+    const result = await verifyIdentityFile(content);
+    expect(result.valid).toBe(true); // file signature is valid
+    expect(result.succession).toBeDefined();
+    expect(result.succession!.valid).toBe(false);
+    expect(result.succession!.rotations).toBe(0);
+    expect(result.succession!.error).toMatch(/^Succession verification error: /);
+  });
+
   it("fails when succession chain has temporal ordering violated", async () => {
     const kp1 = await makeKeypair();
     const kp2 = await makeKeypair();

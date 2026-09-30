@@ -93,6 +93,7 @@ import type {
   SignableComputerSessionReceipt,
   ComputerSessionActionRecord,
 } from "@motebit/protocol";
+import type { KeySuccessionRecord } from "../index.js";
 
 // ---------------------------------------------------------------------------
 // hash()
@@ -1856,10 +1857,11 @@ describe("verifyKeySuccession", () => {
     expect(valid).toBe(false);
   });
 
-  it("returns false for invalid hex in public keys (catch block)", async () => {
-    // Declares the suite so the record gets past the suite check and reaches
-    // hex decoding (odd-length hex → RangeError → the catch). Without `suite`
-    // this returned false at the suite check and never exercised the catch.
+  it("returns false for non-hex keys at the new-key signature check", async () => {
+    // Declares the suite so the record gets past the suite check. Hex decoding
+    // is lenient (non-hex pairs parse to 0; odd length truncates), so these
+    // keys decode without throwing and the record is rejected at the failed
+    // new_key_signature check — not in the catch block (see the next test).
     const record = {
       old_public_key: "not-valid-hex",
       new_public_key: "also-not-valid-hex",
@@ -1870,6 +1872,24 @@ describe("verifyKeySuccession", () => {
     };
     const valid = await verifyKeySuccession(record);
     expect(valid).toBe(false);
+  });
+
+  it("returns false when decoding throws (catch block)", async () => {
+    // A wire record that omits `new_key_signature`: it passes the suite check
+    // and the payload build (which excludes signatures), then decoding the
+    // missing signature throws (TypeError reading `.length` of undefined) —
+    // the path into the catch, which must fail closed with `false`.
+    const oldKp = await generateKeypair();
+    const newKp = await generateKeypair();
+    const signed = await signKeySuccession(
+      oldKp.privateKey,
+      newKp.privateKey,
+      newKp.publicKey,
+      oldKp.publicKey,
+    );
+    const { new_key_signature: _omitted, ...rest } = signed;
+    const record = rest as unknown as KeySuccessionRecord;
+    await expect(verifyKeySuccession(record)).resolves.toBe(false);
   });
 });
 
