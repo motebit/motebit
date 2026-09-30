@@ -13,7 +13,9 @@
  *
  * Why a shim and not real turbo: the real gauntlet takes minutes. The shim
  * records each `pnpm` argv and fails the ones a case names, so the test proves
- * the exact commands + filters and the abort path. That turbo's
+ * the exact commands + filters and the abort path. (`pnpm ls -r … --filter=
+ * ...{dir}` — the dependents count behind the >10 hint — answers with
+ * $SHIM_LS_REACH lines.) That turbo's
  * `...[origin/main]` really reaches a dependent's typecheck is turbo's
  * contract; it was verified end-to-end once on the real monorepo when this
  * landed (type error in a leaf's export → consumer typecheck red → push
@@ -41,14 +43,16 @@ const HOOK_SRC = readFileSync(join(ROOT, ".husky/pre-push"), "utf8");
 
 /**
  * The shim: logs argv (one line per call) and fails when argv matches
- * $SHIM_FAIL (an ERE). `pnpm exec turbo ls <filter>` answers with a package
- * count, as the real turbo does on its first stdout line.
+ * $SHIM_FAIL (an ERE). `pnpm ls -r … --parseable` answers with $SHIM_LS_REACH
+ * lines, one per package reached, as the real pnpm does.
  */
 const SHIM = `#!/bin/sh
 printf '%s\\n' "$*" >> "$SHIM_LOG"
 case "$*" in
-  "exec turbo ls --filter=[origin/main]") printf '%s packages (pnpm9)\\n' "\${SHIM_LS_CHANGED:-1}"; exit 0 ;;
-  "exec turbo ls --filter=...[origin/main]") printf '%s packages (pnpm9)\\n' "\${SHIM_LS_AFFECTED:-3}"; exit 0 ;;
+  "ls -r --depth -1 --parseable "*)
+    # pnpm's dependents walk: one line per package reached (changed + dependents).
+    i=0; while [ "$i" -lt "\${SHIM_LS_REACH:-1}" ]; do echo "/pkg/$i"; i=$((i + 1)); done
+    exit 0 ;;
 esac
 if [ -n "$SHIM_FAIL" ] && printf '%s\\n' "$*" | grep -Eq "$SHIM_FAIL"; then
   echo "shim: failing $*" >&2
@@ -94,6 +98,9 @@ function repoWith(change: Record<string, string>): string {
   git(dir, "init", "-q", "-b", "main");
   write(dir, ".husky/pre-push", HOOK_SRC);
   write(dir, "package.json", '{ "name": "fixture" }\n');
+  write(dir, "pnpm-workspace.yaml", 'packages:\n  - "packages/*"\n  - "apps/*"\n');
+  write(dir, "packages/leaf/package.json", '{ "name": "leaf" }\n');
+  write(dir, "packages/other/package.json", '{ "name": "other" }\n');
   write(dir, "pnpm-lock.yaml", "lockfileVersion: '9.0'\n");
   write(dir, "packages/leaf/src/index.ts", "export const leaf = 1;\n");
   write(dir, "packages/other/src/index.ts", "export const other = 1;\n");
@@ -145,7 +152,8 @@ function runHook(repo: string, env: Record<string, string> = {}): Run {
 
 const LEAF_CHANGE = { "packages/leaf/src/index.ts": "export const leaf = 2;\n" };
 const TYPECHECK_LINT = "turbo run typecheck lint --filter=...[origin/main] --concurrency=2";
-const TEST_CHANGED = "turbo run test --filter=[origin/main] --concurrency=2";
+const TEST_CHANGED = "turbo run test --filter=./packages/leaf --concurrency=2";
+const REACH_LEAF = "ls -r --depth -1 --parseable --filter=...{./packages/leaf}";
 
 beforeAll(() => {
   base = mkdtempSync(join(tmpdir(), "prepush-hook-"));
@@ -166,17 +174,15 @@ describe("pre-push hook — single leaf-package change", () => {
     expect(r.calls).toEqual([
       "build",
       "check",
-      "test:gates",
       TYPECHECK_LINT,
-      "exec turbo ls --filter=[origin/main]",
       TEST_CHANGED,
-      "exec turbo ls --filter=...[origin/main]",
+      REACH_LEAF,
       "exec prettier --check --no-error-on-unmatched-pattern packages/leaf/src/index.ts",
     ]);
     // Out of scope for this diff: no audit (lockfile untouched), no gate
     // perturbation (scripts/ untouched), no coverage, no whole-repo prettier.
     expect(r.stderr).toMatch(/audit — SKIPPED/);
-    expect(r.stderr).toMatch(/gate-effectiveness — SKIPPED/);
+    expect(r.stderr).toMatch(/gate self-tests \+ gate-effectiveness — SKIPPED/);
     expect(r.stderr).toMatch(/✓ pre-push gauntlet passed/);
   });
 
@@ -204,7 +210,7 @@ describe("pre-push hook — single leaf-package change", () => {
   it("(5) a failing test in the changed package blocks", () => {
     const r = runHook(repoWith(LEAF_CHANGE), { SHIM_FAIL: "^turbo run test " });
     expect(r.status).not.toBe(0);
-    expect(r.stderr).toMatch(/✗ test \(changed packages, concurrency=2\) FAILED/);
+    expect(r.stderr).toMatch(/✗ test \(1 changed package\(s\), concurrency=2\) FAILED/);
   });
 
   it("(6) a gate violation blocks", () => {
@@ -233,7 +239,7 @@ describe("pre-push hook — single leaf-package change", () => {
   });
 
   it("(9) a DEPENDENT's tests are not run locally — the stated trade-off — and the hook says so past 10 dependents", () => {
-    const r = runHook(repoWith(LEAF_CHANGE), { SHIM_LS_CHANGED: "1", SHIM_LS_AFFECTED: "25" });
+    const r = runHook(repoWith(LEAF_CHANGE), { SHIM_LS_REACH: "25" });
     expect(r.status, r.stderr).toBe(0);
     const tests = r.calls.filter((c) => /^turbo run .*\btest\b/.test(c));
     // No `...` on the test filter: dependents' suites are CI's.
@@ -245,9 +251,7 @@ describe("pre-push hook — single leaf-package change", () => {
 
 describe("pre-push hook — scope follows the diff", () => {
   it("a docs-only change runs no tests and formats only the doc", () => {
-    const r = runHook(repoWith({ "docs/guide.md": "# Guide\n\nMore.\n" }), {
-      SHIM_LS_CHANGED: "0",
-    });
+    const r = runHook(repoWith({ "docs/guide.md": "# Guide\n\nMore.\n" }));
     expect(r.status, r.stderr).toBe(0);
     expect(r.calls.some((c) => c.startsWith("turbo run test"))).toBe(false);
     expect(r.stderr).toMatch(/test — SKIPPED/);
@@ -256,9 +260,34 @@ describe("pre-push hook — scope follows the diff", () => {
     );
   });
 
-  it("a scripts/ change adds gate-effectiveness", () => {
+  it("tests follow the DIFF's package dirs, not turbo's [origin/main] (which marks all 74 packages for a core edit)", () => {
+    const r = runHook(
+      repoWith({
+        "packages/leaf/src/index.ts": "export const leaf = 2;\n",
+        "packages/other/src/index.ts": "export const other = 2;\n",
+        "tsconfig.base.json": "{}\n",
+      }),
+    );
+    expect(r.status, r.stderr).toBe(0);
+    expect(r.calls.filter((c) => c.startsWith("turbo run test"))).toEqual([
+      "turbo run test --filter=./packages/leaf --filter=./packages/other --concurrency=2",
+    ]);
+    expect(r.calls.some((c) => c.includes("test --filter=[origin/main]"))).toBe(false);
+  });
+
+  it("an unreadable workspace manifest runs every test (fail closed)", () => {
+    const repo = repoWith(LEAF_CHANGE);
+    rmSync(join(repo, "pnpm-workspace.yaml"));
+    const r = runHook(repo);
+    expect(r.status, r.stderr).toBe(0);
+    expect(r.calls).toContain("turbo run test --concurrency=2");
+    expect(r.stderr).toMatch(/ALL packages — package scope unknown, fail closed/);
+  });
+
+  it("a scripts/ change adds the gate self-tests and gate-effectiveness", () => {
     const r = runHook(repoWith({ "scripts/check-x.ts": "export const x = 1;\n" }));
     expect(r.status, r.stderr).toBe(0);
+    expect(r.calls).toContain("test:gates");
     expect(r.calls).toContain("check-gates-effective");
   });
 
@@ -282,7 +311,7 @@ describe("pre-push hook — scope follows the diff", () => {
     const r = runHook(repoWith(LEAF_CHANGE), { MOTEBIT_PREPUSH_CONCURRENCY: "6" });
     expect(r.calls.filter((c) => c.startsWith("turbo run"))).toEqual([
       "turbo run typecheck lint --filter=...[origin/main] --concurrency=6",
-      "turbo run test --filter=[origin/main] --concurrency=6",
+      "turbo run test --filter=./packages/leaf --concurrency=6",
     ]);
   });
 

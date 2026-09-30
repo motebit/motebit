@@ -81,20 +81,35 @@ if git symbolic-ref -q HEAD >/dev/null 2>&1; then
     }
     printf '%s\n' "$_cf" | sed '/^$/d' | sort -u
   }
-  # Package count of a turbo filter, or empty when it cannot be computed.
-  count_pkgs() {
-    pnpm exec turbo ls "$1" 2>/dev/null | sed -n '1s/^\([0-9][0-9]*\) .*/\1/p'
-  }
   _scope_ok=1
   git merge-base origin/main HEAD >/dev/null 2>&1 || _scope_ok=
+  _all_changed=$(changed_files)
+  [ "$_all_changed" = __DIFF_ERR__ ] && _scope_ok=
   if [ -n "$_scope_ok" ]; then
-    _filter_changed='--filter=[origin/main]'
     _filter_affected='--filter=...[origin/main]'
   else
     # No merge base → no trustworthy package scope. Run over the whole graph.
     printf '\n⚠ pre-push: cannot compute the diff vs origin/main — running every scoped step UNFILTERED (fail closed)\n' >&2
-    _filter_changed=
     _filter_affected=
+  fi
+
+  # The workspace packages this push CHANGES, as `packages/foo`-style dirs,
+  # derived from the diff — NOT from turbo's `[origin/main]`. Turbo maps a
+  # change to any package in the ROOT package.json's workspace-dependency
+  # closure (runtime, crypto, protocol, sdk, policy, semiring, …) to "every
+  # package changed": 74 of 74 for a one-line packages/runtime edit
+  # (measured 2026-09-30), which would turn "tests of the changed packages"
+  # into the whole suite for most core edits. The workspace roots are read
+  # from pnpm-workspace.yaml, so a new root is seen without editing this.
+  # Unknown roots → `_pkg_scope_ok` stays empty → tests run unfiltered.
+  _pkg_scope_ok=
+  _changed_pkg_dirs=
+  _ws_roots=$(sed -E -n 's#^[[:space:]]*-[[:space:]]*["'\'']?([A-Za-z0-9_.-]+)/\*["'\'']?[[:space:]]*$#\1#p' \
+    pnpm-workspace.yaml 2>/dev/null | paste -sd'|' -)
+  if [ -n "$_scope_ok" ] && [ -n "$_ws_roots" ]; then
+    _pkg_scope_ok=1
+    _changed_pkg_dirs=$(printf '%s\n' "$_all_changed" | sed -E -n "s#^(($_ws_roots)/[^/]+)/.*#\\1#p" |
+      sort -u | while IFS= read -r _d; do [ -f "$_d/package.json" ] && printf '%s\n' "$_d"; done)
   fi
 
   # Full build is required before the drift gates: check-api-surface shells
@@ -122,20 +137,24 @@ if git symbolic-ref -q HEAD >/dev/null 2>&1; then
   # purpose: most gates are cross-file invariants a diff cannot scope.
   run_phase "gates (pnpm check)" pnpm check
 
-  # The gates' own tests (scripts/__tests__), unconditional: the #694 class
-  # (a literal fixture date expired at UTC midnight) is not a scripts/ change,
-  # it is a day passing, so diff-scoping would make it CI-only again.
-  run_phase "gate self-tests (scripts/__tests__)" pnpm test:gates
-
-  # check-gates-effective PERTURBS every gate — the most expensive gate step,
-  # and its result changes only when gate code or a gate input changes. Same
-  # trigger set as CI's `changes` job (scripts/ or coverage-graduation.json);
-  # CI's `gate-effectiveness` job runs it on every push to main regardless.
+  # The gates' own tests (scripts/__tests__) and check-gates-effective (which
+  # PERTURBS every gate — the most expensive gate step) change verdict only
+  # when gate code or a gate input changes. Same trigger set as CI's
+  # `changes` job (scripts/ or coverage-graduation.json); CI's
+  # `gate-effectiveness` job runs both on every push to main regardless.
+  #
+  # test:gates was unconditional (2026-09-24) because of #694: a literal
+  # fixture date expired at UTC midnight — not a scripts/ change, a day
+  # passing — so diff-scoping makes that class CI-only. It was kept only
+  # while cheap (<15s); measured 2026-09-30 at 16–17s on a 4-vCPU box, so it
+  # is scoped with the rest. The #694 class is now caught by CI's push-to-main
+  # run (and by any PR touching scripts/), not by an unrelated local push.
   _scripts_changed=$(changed_files scripts/ coverage-graduation.json)
   if [ -n "$_scripts_changed" ]; then
+    run_phase "gate self-tests (scripts/ changed)" pnpm test:gates
     run_phase "gate-effectiveness (scripts/ changed)" pnpm check-gates-effective
   else
-    skip_phase "gate-effectiveness" "no scripts/ changes; CI runs it"
+    skip_phase "gate self-tests + gate-effectiveness" "no scripts/ changes; CI runs them"
   fi
 
   # `--concurrency` caps turbo's parallel task count. Each test task spawns its
@@ -165,23 +184,26 @@ if git symbolic-ref -q HEAD >/dev/null 2>&1; then
     # are never cached, so running dependents' suites is what made a low-
     # level push take 30+ min. Dependents' tests and coverage thresholds run
     # in CI (`check` → `turbo run test:coverage`, unfiltered).
-    _n_changed=
-    [ -n "$_scope_ok" ] && _n_changed=$(count_pkgs "$_filter_changed")
-    if [ "$_n_changed" = 0 ]; then
+    if [ -z "$_pkg_scope_ok" ]; then
+      run_phase "test (ALL packages — package scope unknown, fail closed; concurrency=$_concurrency)" \
+        pnpm turbo run test --concurrency="$_concurrency"
+    elif [ -z "$_changed_pkg_dirs" ]; then
       skip_phase "test" "no workspace package changed; CI runs every suite"
     else
-      # Empty count = unknown → run (turbo applies the same filter itself).
-      run_phase "test (changed packages, concurrency=$_concurrency)" \
-        pnpm turbo run test $_filter_changed --concurrency="$_concurrency"
-    fi
+      _test_filters=$(printf '%s\n' "$_changed_pkg_dirs" | sed 's#^#--filter=./#')
+      run_phase "test ($(printf '%s\n' "$_changed_pkg_dirs" | wc -l | tr -d ' ') changed package(s), concurrency=$_concurrency)" \
+        pnpm turbo run test $_test_filters --concurrency="$_concurrency"
 
-    # Say so when that trade-off is large: >10 dependents whose suites are
-    # CI-only for this push.
-    if [ -n "$_n_changed" ] && [ -z "$MOTEBIT_PREPUSH_QUIET" ]; then
-      _n_affected=$(count_pkgs "$_filter_affected")
-      if [ -n "$_n_affected" ] && [ $((_n_affected - _n_changed)) -gt 10 ]; then
-        printf '\nℹ pre-push: this push reaches %s dependent package(s) whose tests + coverage run only in CI.\n  To run them locally first: MOTEBIT_PREPUSH_FULL=1 git push\n' \
-          "$((_n_affected - _n_changed))" >&2
+      # Say so when the trade-off is large: >10 dependents whose suites are
+      # CI-only for this push. pnpm's graph, not turbo's (see above).
+      if [ -z "$MOTEBIT_PREPUSH_QUIET" ]; then
+        _n_changed=$(printf '%s\n' "$_changed_pkg_dirs" | wc -l | tr -d ' ')
+        _n_reach=$(pnpm ls -r --depth -1 --parseable \
+          $(printf '%s\n' "$_changed_pkg_dirs" | sed 's#.*#--filter=...{./&}#') 2>/dev/null | wc -l | tr -d ' ')
+        if [ $((_n_reach - _n_changed)) -gt 10 ]; then
+          printf '\nℹ pre-push: this push reaches %s dependent package(s) whose tests + coverage run only in CI.\n  To run them locally first: MOTEBIT_PREPUSH_FULL=1 git push\n' \
+            "$((_n_reach - _n_changed))" >&2
+        fi
       fi
     fi
   fi
@@ -191,7 +213,6 @@ if git symbolic-ref -q HEAD >/dev/null 2>&1; then
   # Whole-repo instead when the diff is unknown or prettier's own config /
   # version may have changed (then every file's verdict can move).
   _fmt_exts='ts|tsx|js|jsx|json|md'
-  _all_changed=$(changed_files)
   _fmt_config_changed=$(changed_files .prettierrc .prettierignore package.json pnpm-lock.yaml)
   _fmt_files=$(printf '%s\n' "$_all_changed" | grep -E "\.($_fmt_exts)\$" || true)
   format_changed() {

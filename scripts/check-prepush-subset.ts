@@ -93,7 +93,7 @@ export function hookInvocations(src: string): Invocation[] {
  * Invocations that are discovery, not checks: they decide scope or print a
  * hint and can never block a push on their own verdict.
  */
-const NON_CHECK = [/^pnpm exec turbo ls\b/];
+const NON_CHECK = [/^pnpm exec turbo ls\b/, /^pnpm ls\b/];
 
 /** Classify one hook invocation into the task keys it runs. `null` = unmapped. */
 export function classify(cmd: string): Key[] | null {
