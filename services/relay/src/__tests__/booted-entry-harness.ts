@@ -143,6 +143,8 @@ export interface FakeSolanaRpc {
   callsOf(method: string): number;
   /** `sendTransaction` requests that arrived before any genesis read was answered. */
   writesBeforeGenesis(): number;
+  /** `Date.now()` when a getGenesisHash answer was first written; null while none has been. */
+  genesisAnsweredAt(): number | null;
   close(): Promise<void>;
 }
 
@@ -150,6 +152,8 @@ export interface FakeSolanaRpcOptions {
   genesisHash?: string | null;
   genesisFailures?: number;
   genesisHang?: boolean;
+  /** Answer getGenesisHash only after this many ms (a slow, not hung, RPC). */
+  genesisDelayMs?: number;
 }
 
 export async function startFakeSolanaRpc(
@@ -165,6 +169,7 @@ export async function startFakeSolanaRpc(
   let genesisFailuresLeft = options.genesisFailures ?? 0;
   const ok = (id: unknown, result: unknown) => ({ jsonrpc: "2.0", id, result });
   let genesisAnswered = false;
+  let genesisAnsweredAt: number | null = null;
   let earlyWrites = 0;
   const amount = (a: string) => ({
     amount: a,
@@ -189,8 +194,22 @@ export async function startFakeSolanaRpc(
         return;
       }
       if (msg.method === "sendTransaction" && !genesisAnswered) earlyWrites++;
+      if (
+        msg.method === "getGenesisHash" &&
+        genesisHash !== null &&
+        options.genesisDelayMs !== undefined
+      ) {
+        setTimeout(() => {
+          genesisAnswered = true;
+          genesisAnsweredAt ??= Date.now();
+          res.writeHead(200, { "Content-Type": "application/json" });
+          res.end(JSON.stringify(ok(msg.id, genesisHash)));
+        }, options.genesisDelayMs);
+        return;
+      }
       if (msg.method === "getGenesisHash" && genesisHash !== null) {
         genesisAnswered = true;
+        genesisAnsweredAt ??= Date.now();
         body = ok(msg.id, genesisHash);
       } else if (msg.method === "getLatestBlockhash") {
         body = ok(msg.id, {
@@ -291,6 +310,7 @@ export async function startFakeSolanaRpc(
     getTransactionCalls: () => calls,
     callsOf: (method) => perMethod.get(method) ?? 0,
     writesBeforeGenesis: () => earlyWrites,
+    genesisAnsweredAt: () => genesisAnsweredAt,
     close: () =>
       new Promise<void>((r) => {
         server.closeAllConnections();
