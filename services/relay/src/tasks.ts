@@ -82,6 +82,7 @@ import type { TaskRouter } from "./task-routing.js";
 import { getBondBackingAdapter } from "./bond-backing-adapter.js";
 import { persistReceiptChain, getArchivedReceiptForKeyOwner } from "./receipts-store.js";
 import { answerTask, markTaskSettled } from "./task-answer.js";
+import type { AnswerQueue } from "./task-answer.js";
 import type { AnswerRefusal } from "./task-answer.js";
 import {
   MAX_SETTLEMENT_DEPTH,
@@ -216,6 +217,19 @@ export type TaskQueueEntry = {
   origin_relay?: string;
   /** Set to true after receipt settlement completes — prevents double-settlement. */
   settled?: boolean;
+  /**
+   * The signature of the receipt this task's settlement is CLAIMED for
+   * (#890 round 9) — set by `answerTask` in the same write that takes the
+   * answer, so the answer and its settlement are one decision: once set, the
+   * answer is frozen and every door settles only this receipt.
+   */
+  settling?: string;
+  /**
+   * The entry's answer version (#890 round 9), stepped by every answer write
+   * (`TaskQueue.writeAnswer`). A copy carrying an older version is refused by
+   * `TaskQueue.set` — it would silently undo a newer answer.
+   */
+  answer_version?: number;
   /** Settlement mode: "relay" (default) or "p2p" (direct onchain). */
   settlement_mode?: "relay" | "p2p";
   /**
@@ -271,9 +285,10 @@ export interface TasksDeps {
    * fallback is a full-table scan there). Tests may inject a plain Map;
    * the check falls back to iteration, which is fine at test scale.
    */
-  taskQueue: Map<string, TaskQueueEntry> & {
-    countBySubmitter?: (submitterId: string) => number;
-  };
+  taskQueue: Map<string, TaskQueueEntry> &
+    AnswerQueue & {
+      countBySubmitter?: (submitterId: string) => number;
+    };
   taskRouter: TaskRouter;
   issueCredentials: boolean;
   apiToken?: string;
@@ -755,7 +770,7 @@ export async function handleReceiptIngestion(
     eventStore: EventStore;
     relayIdentity: RelayIdentity;
     connections: Map<string, ConnectedDevice[]>;
-    taskQueue: Map<string, TaskQueueEntry>;
+    taskQueue: Map<string, TaskQueueEntry> & AnswerQueue;
     issueCredentials: boolean;
     /**
      * Platform fee rate (0–1) for this relay instance. Passed explicitly
@@ -772,7 +787,7 @@ export async function handleReceiptIngestion(
   },
 ): Promise<
   | { verified: true; credential_id: string | null; already_settled?: boolean }
-  | { verified: false; reason: string; refusal: AnswerRefusal }
+  | { verified: false; reason: string; refusal: AnswerRefusal; answer?: ExecutionReceipt }
 > {
   const {
     moteDb,
@@ -819,7 +834,12 @@ export async function handleReceiptIngestion(
     retainMs,
   );
   if (!verdict.took) {
-    return { verified: false, reason: verdict.reason, refusal: verdict.refusal };
+    return {
+      verified: false,
+      reason: verdict.reason,
+      refusal: verdict.refusal,
+      ...(verdict.answer != null ? { answer: verdict.answer } : {}),
+    };
   }
   entry = verdict.entry;
   const pubKeyHex = verdict.publicKeyHex;
@@ -827,16 +847,19 @@ export async function handleReceiptIngestion(
     logger.info("settlement.already_settled", { correlationId: taskId });
     return { verified: true, credential_id: null, already_settled: true };
   }
-  if (verdict.replaced) {
-    // Completed outranks failed: archive it (the archive ranks it first)
-    // and push it; the task was settled on its first answer, once.
-    persistReceiptChain(moteDb.db, receipt);
-    sendToEach(
-      connections.get(motebitId),
-      JSON.stringify({ type: "task_result", task_id: taskId, receipt }),
-    );
-    return { verified: true, credential_id: null, already_settled: true };
+  // The answer and its settlement are ONE decision (#890 round 9):
+  // `answerTask` claimed this task's settlement for the receipt it wrote,
+  // in the same write. Everything below — trust, sub-receipts, settlement,
+  // fan-out — is bound to the ENTRY'S receipt, never a door-local copy.
+  if (entry.receipt == null || entry.settling !== entry.receipt.signature) {
+    logger.error("settlement.unclaimed_answer", { correlationId: taskId });
+    return {
+      verified: false,
+      reason: `task ${taskId}'s answer is not claimed for settlement`,
+      refusal: "answered",
+    };
   }
+  receipt = entry.receipt;
   logger.info("receipt.verified", {
     correlationId: taskId,
     status: receipt.status,
@@ -868,7 +891,7 @@ export async function handleReceiptIngestion(
     .prepare("SELECT settlement_id FROM relay_settlements WHERE task_id = ? LIMIT 1")
     .get(taskId) as { settlement_id: string } | undefined;
   if (existingSettlement) {
-    markTaskSettled(taskQueue, taskId); // against the entry as it is now
+    markTaskSettled(taskQueue, taskId, receipt.signature); // against the entry as it is now
     logger.info("settlement.duplicate", { correlationId: taskId });
     return { verified: true, credential_id: null, already_settled: true };
   }
@@ -2025,7 +2048,7 @@ export async function handleReceiptIngestion(
 
   // Mark settled — against the entry as it is NOW, never a copy read
   // before the awaits above (it could carry a stale answer, #890 r8).
-  markTaskSettled(taskQueue, taskId);
+  markTaskSettled(taskQueue, taskId, receipt.signature);
 
   // --- WebSocket fan-out ---
   sendToEach(
@@ -4915,9 +4938,19 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
     );
     if (!ingestionResult.verified) {
       if (ingestionResult.refusal === "answered") {
-        throw new TaskError(
-          "TASK_ALREADY_ANSWERED",
-          `Receipt not accepted: ${ingestionResult.reason}`,
+        // A settled answer is frozen (#890 round 9): the 409 carries it, so
+        // the sender learns the task's answer instead of guessing.
+        logger.warn("task.result_already_answered", {
+          correlationId: taskId,
+          signer: receipt.motebit_id,
+        });
+        return c.json(
+          {
+            error: `Receipt not accepted: ${ingestionResult.reason}`,
+            code: "TASK_ALREADY_ANSWERED",
+            status: 409,
+            receipt: ingestionResult.answer ?? null,
+          },
           409,
         );
       }

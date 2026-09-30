@@ -19,11 +19,22 @@
  *   5. ONE write-once rule, decided and written in the same synchronous turn
  *      against the entry as it is NOW (the durable queue hands out copies):
  *      an entry with no answer that is not settled takes the receipt; an
- *      answered or settled entry is never re-answered, except that a
- *      verified `completed` replaces a `failed`/`denied` — the archive's
- *      completed-outranks-failed rule (`getArchivedReceiptForKeyOwner`),
- *      applied identically. The same receipt again is a repeat: the entry
- *      already holds it.
+ *      answered entry is never re-answered, except that a verified
+ *      `completed` replaces a `failed`/`denied` while the answer is
+ *      UNSETTLED. The same receipt again is a repeat: the entry already
+ *      holds it.
+ *
+ * An answer and its settlement are ONE decision (#890 round 9): the write
+ * that takes an answer also CLAIMS its settlement (`settling` = the
+ * receipt's signature), so from that write on the answer is frozen and
+ * every door settles the ENTRY'S receipt — never a door-local copy — and
+ * marks it settled only for that receipt (`markTaskSettled`). A settled or
+ * claimed answer is refused a different receipt (the door answers 409 with
+ * the standing answer). The write goes through `TaskQueue.writeAnswer` with
+ * the answer capability only this module holds (a compare-and-set on the
+ * entry's answer version), and archives the answer in the same transaction
+ * (`relay_task_answers`, keyed by the task), so the poll after eviction
+ * answers exactly what it answered live.
  *
  * A door reports acceptance ONLY when this returns `took: true` — positive
  * evidence that the entry holds this receipt. Anything else (settled,
@@ -38,6 +49,8 @@ import { verifyExecutionReceiptDetailed, hexToBytes } from "@motebit/encryption"
 /* eslint-enable no-restricted-imports */
 import { verifySovereignBinding } from "@motebit/crypto";
 import type { TaskQueueEntry } from "./tasks.js";
+import { issueAnswerCapability } from "./task-queue.js";
+import type { AnswerCapability } from "./task-queue.js";
 import { verificationKeyFor } from "./identity-keys.js";
 import { p2pPayeeOf, receiptDischargesP2p } from "./p2p-payee.js";
 import {
@@ -49,6 +62,24 @@ import {
 import { createLogger } from "./logger.js";
 
 const logger = createLogger({ service: "relay", module: "task-answer" });
+
+/**
+ * The answer capability (#890 round 9): issued ONCE, here, at import — the
+ * queue's `writeAnswer` refuses any other object, and a second
+ * `issueAnswerCapability` throws. It never leaves this module.
+ */
+const ANSWER_CAP: AnswerCapability = issueAnswerCapability();
+
+/** The queue surface the answer is written through. */
+export interface AnswerQueue {
+  get(taskId: string): TaskQueueEntry | undefined;
+  writeAnswer(
+    cap: AnswerCapability,
+    taskId: string,
+    expectedVersion: number,
+    mutate: (entry: TaskQueueEntry) => void,
+  ): TaskQueueEntry | null;
+}
 
 /** The door a receipt arrived by. */
 export type AnswerDoor =
@@ -79,15 +110,18 @@ export type AnswerVerdict =
       /** The key the signature verified under (hex). */
       publicKeyHex: string;
     }
-  | { took: false; refusal: AnswerRefusal; reason: string };
+  | {
+      took: false;
+      refusal: AnswerRefusal;
+      reason: string;
+      /** On `answered`: the task's standing (settled) answer. */
+      answer?: ExecutionReceipt;
+    };
 
 export interface AnswerDeps {
   db: DatabaseDriver;
   identityManager: IdentityManager;
-  taskQueue: {
-    get(taskId: string): TaskQueueEntry | undefined;
-    set(taskId: string, e: TaskQueueEntry): unknown;
-  };
+  taskQueue: AnswerQueue;
   /**
    * The door's receipt-signature verifier (`verifyExecutionReceipt` over the
    * hex key). REQUIRED: each consuming door supplies and is seen to call its
@@ -121,13 +155,29 @@ function statusOf(receipt: ExecutionReceipt): AgentTaskStatus {
 }
 
 /**
+ * An entry's answer is FROZEN once its settlement is claimed (`settling`) or
+ * done (`settled`) — or, for an entry answered before the claim existed,
+ * once any settlement record names the task (#890 round 9).
+ */
+export function answerFrozen(db: DatabaseDriver, entry: TaskQueueEntry, taskId: string): boolean {
+  if (entry.settled === true || (entry.settling != null && entry.settling !== "")) return true;
+  if (entry.receipt == null) return false;
+  return (
+    db.prepare("SELECT 1 FROM relay_settlements WHERE task_id = ? LIMIT 1").get(taskId) != null ||
+    db
+      .prepare("SELECT 1 FROM relay_federation_settlements WHERE task_id = ? LIMIT 1")
+      .get(taskId) != null
+  );
+}
+
+/**
  * The write-once rule, alone: may `incoming` become the answer of an entry
- * that holds `prior` (and is `settled`)? `repeat` when the entry already
- * holds this receipt.
+ * that holds `prior` (`frozen`: its settlement is claimed or done)? `repeat`
+ * when the entry already holds this receipt.
  */
 export function answerRule(
   prior: ExecutionReceipt | undefined,
-  settled: boolean,
+  frozen: boolean,
   incoming: ExecutionReceipt,
 ): "take" | "replace" | "repeat" | "answered" {
   if (
@@ -137,11 +187,11 @@ export function answerRule(
   ) {
     return "repeat";
   }
-  if (prior == null && !settled) return "take";
-  // Completed outranks failed — the archive's rule, identically.
-  if (prior != null && prior.status !== "completed" && incoming.status === "completed") {
-    return "replace";
-  }
+  // A settled (or settlement-claimed) answer is frozen: nothing replaces it.
+  if (frozen) return "answered";
+  if (prior == null) return "take";
+  // Completed outranks failed — only while the answer is unsettled.
+  if (prior.status !== "completed" && incoming.status === "completed") return "replace";
   return "answered";
 }
 
@@ -334,10 +384,13 @@ export async function answerTask(
   }
 
   // 5. Write-once — decided and written against the entry as it is NOW, in
-  //    one synchronous turn (no await between the read and the write).
+  //    one synchronous turn (no await between the read and the write), and
+  //    the answer's SETTLEMENT is claimed in the same write (#890 round 9):
+  //    `settling` names this receipt, so the answer is frozen from here on
+  //    and every door settles only the entry's own receipt.
   const current = taskQueue.get(taskId);
   if (current == null) return refuse("gone", `task ${taskId} left the queue`);
-  const rule = answerRule(current.receipt, current.settled === true, receipt);
+  const rule = answerRule(current.receipt, answerFrozen(db, current, taskId), receipt);
   if (rule === "answered") {
     logger.warn("task.answer_refused_answered", {
       correlationId: taskId,
@@ -345,27 +398,46 @@ export async function answerTask(
       status: receipt.status,
       prior: current.receipt?.status ?? null,
       settled: current.settled === true,
+      settling: current.settling != null,
       door: door.kind,
     });
-    return refuse(
-      "answered",
-      `task ${taskId} is already answered${current.receipt != null ? ` (${current.receipt.status})` : " (settled)"}; an answer is replaced only by a completed receipt over a failed one`,
-    );
+    return {
+      took: false,
+      refusal: "answered",
+      reason: `task ${taskId} is already answered${current.receipt != null ? ` (${current.receipt.status})` : " (settled)"}; a settled answer is never replaced`,
+      ...(current.receipt != null ? { answer: current.receipt } : {}),
+    };
   }
   if (rule === "repeat") {
+    // An entry answered before the settlement claim existed: claim it now,
+    // for the receipt it already holds, so the resubmission that recovers
+    // its settlement settles THIS answer.
+    let entry = current;
+    if (current.settled !== true && current.settling == null) {
+      entry =
+        taskQueue.writeAnswer(ANSWER_CAP, taskId, current.answer_version ?? 0, (e) => {
+          e.settling = receipt.signature;
+        }) ?? current;
+    }
     return {
       took: true,
-      entry: current,
+      entry,
       first: false,
       replaced: false,
       repeat: true,
       publicKeyHex: sig.key,
     };
   }
-  current.receipt = receipt;
-  current.task.status = statusOf(receipt);
-  current.expiresAt = Math.max(current.expiresAt, Date.now() + retainMs);
-  taskQueue.set(taskId, current); // Persist to the durable queue
+  const written = taskQueue.writeAnswer(ANSWER_CAP, taskId, current.answer_version ?? 0, (e) => {
+    e.receipt = receipt;
+    e.task.status = statusOf(receipt);
+    e.expiresAt = Math.max(e.expiresAt, Date.now() + retainMs);
+    e.settling = receipt.signature;
+  });
+  if (written == null) {
+    // Unreachable in one synchronous turn; never a silent overwrite.
+    return refuse("answered", `task ${taskId} changed while its answer was being written`);
+  }
   if (rule === "replace") {
     logger.info("task.answer_replaced", {
       correlationId: taskId,
@@ -375,7 +447,7 @@ export async function answerTask(
   }
   return {
     took: true,
-    entry: current,
+    entry: written,
     first: rule === "take",
     replaced: rule === "replace",
     repeat: false,
@@ -384,13 +456,26 @@ export async function answerTask(
 }
 
 /**
- * Mark `taskId` settled against the entry as it is NOW — never by writing
- * back a copy read before an await, which could carry a stale answer over a
- * replacement written meanwhile.
+ * Mark `taskId` settled — against the entry as it is NOW, and only when its
+ * settlement claim names `receiptSignature` (the receipt the caller settled).
  */
-export function markTaskSettled(taskQueue: AnswerDeps["taskQueue"], taskId: string): void {
+export function markTaskSettled(
+  taskQueue: AnswerQueue,
+  taskId: string,
+  receiptSignature: string,
+): void {
   const current = taskQueue.get(taskId);
   if (current == null || current.settled === true) return;
-  current.settled = true;
-  taskQueue.set(taskId, current);
+  const claimedFor = current.settling ?? current.receipt?.signature;
+  if (claimedFor !== receiptSignature) {
+    logger.error("settlement.mark_for_unclaimed_receipt", {
+      correlationId: taskId,
+      claimedFor: claimedFor ?? null,
+    });
+    return;
+  }
+  taskQueue.writeAnswer(ANSWER_CAP, taskId, current.answer_version ?? 0, (e) => {
+    e.settled = true;
+    e.settling = receiptSignature;
+  });
 }

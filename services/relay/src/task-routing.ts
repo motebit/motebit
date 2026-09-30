@@ -1766,7 +1766,12 @@ export function cleanupTaskRoutes(db: DatabaseDriver, now: number = Date.now()):
   const info = db
     .prepare("DELETE FROM relay_task_routes WHERE created_at < ?")
     .run(now - TASK_ROUTE_RETENTION_MS);
-  return info.changes;
+  // A task's archived answer (#890 round 9, `relay_task_answers`) lives as
+  // long as its route: the archive reads it only through one.
+  const answers = db
+    .prepare("DELETE FROM relay_task_answers WHERE answered_at < ?")
+    .run(now - TASK_ROUTE_RETENTION_MS);
+  return info.changes + answers.changes;
 }
 
 /**

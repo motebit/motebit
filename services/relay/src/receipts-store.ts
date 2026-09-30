@@ -184,6 +184,34 @@ export function getArchivedReceiptForKeyOwner(
   // record is no witness — it names the path agent, not the worker. A
   // completed receipt outranks a failed one (one executor delivering is
   // the task's outcome); otherwise the most recent answer.
+  //
+  // The ANSWER first (#890 round 9): `relay_task_answers` holds the task's
+  // live answer, written by the queue in the same transaction as the entry
+  // (`TaskQueue.writeAnswer`), keyed by the task alone — so the poll after
+  // eviction answers exactly what it answered before. When the task has an
+  // answer row, it is the only answer (never a different receipt from the
+  // audit archive); the ranked `relay_receipts` read below serves only
+  // tasks answered before that table existed.
+  const answered = db.prepare("SELECT 1 FROM relay_task_answers WHERE task_id = ?").get(taskId) as
+    { 1: number } | undefined;
+  if (answered != null) {
+    const a = db
+      .prepare(
+        `SELECT a.receipt_json FROM relay_task_answers a
+          WHERE a.task_id = ?
+            AND EXISTS (
+              SELECT 1 FROM relay_task_routes t
+               WHERE t.task_id = a.task_id AND t.executor_id = a.executor_id
+                 AND t.origin = 'admission'
+            )
+            AND EXISTS (
+              SELECT 1 FROM relay_idempotency_keys k
+               WHERE k.task_id = a.task_id AND k.motebit_id = ? AND k.created_at >= ?
+            )`,
+      )
+      .get(taskId, motebitId, notBefore) as { receipt_json: string } | undefined;
+    return a?.receipt_json ?? null;
+  }
   const row = db
     .prepare(
       `SELECT r.receipt_json FROM relay_receipts r

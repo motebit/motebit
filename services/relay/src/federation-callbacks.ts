@@ -42,7 +42,8 @@ import { sendToEach } from "./ws-send.js";
 import { routeToSockets } from "./task-presentation.js";
 import { bindP2pProofToTask, p2pProofKey } from "./idempotency.js";
 import { persistReceiptChain } from "./receipts-store.js";
-import { answerTask } from "./task-answer.js";
+import { answerTask, markTaskSettled } from "./task-answer.js";
+import type { AnswerQueue } from "./task-answer.js";
 import { recordTaskRoute, inboundTaskIdCollision } from "./task-routing.js";
 import {
   localWorkerAdmission,
@@ -58,7 +59,7 @@ export interface FederationCallbackDeps {
   identityManager: IdentityManager;
   relayIdentity: RelayIdentity;
   connections: Map<string, ConnectedDevice[]>;
-  taskQueue: Map<string, TaskQueueEntry>;
+  taskQueue: Map<string, TaskQueueEntry> & AnswerQueue;
   issueCredentials: boolean;
   maxTaskQueueSize: number;
   maxTasksPerSubmitter: number;
@@ -361,16 +362,25 @@ export function createFederationCallbacks(deps: FederationCallbackDeps) {
                 ? 409
                 : 403;
         throw new HTTPException(status, {
-          message: `Federated result not accepted: ${verdict.reason}`,
+          message: `Federated result not accepted: ${verdict.reason}${verdict.answer != null ? ` — the task's answer is ${verdict.answer.status}, signed by ${verdict.answer.motebit_id}` : ""}`,
         });
       }
       // The same result again: the entry already holds it — nothing re-runs.
       if (verdict.repeat) return;
+      // The answer and its settlement are ONE decision (#890 round 9):
+      // `answerTask` claimed the settlement for the receipt it wrote. Every
+      // effect below is bound to the ENTRY'S receipt.
+      const answer = verdict.entry.receipt;
+      if (answer == null || verdict.entry.settling !== answer.signature) {
+        logger.error("settlement.unclaimed_answer", { correlationId: verified.taskId });
+        throw new HTTPException(409, {
+          message: "Federated result not accepted: unclaimed answer",
+        });
+      }
 
-      // Archive the verified receipt tree (#890 r6): the queue forgets the
-      // task, and the delegator that holds its id learns how it ended from
-      // the archive — which answers only a recorded executor's receipt.
-      persistReceiptChain(moteDb.db, verified.receipt);
+      // Archive the verified receipt tree (#890 r6): the audit archive keeps
+      // every signed receipt (the answer itself is archived by the queue).
+      persistReceiptChain(moteDb.db, answer);
 
       // Fan out to submitter
       const submittedBy = entry.submitted_by ?? entry.task.submitted_by;
@@ -380,16 +390,15 @@ export function createFederationCallbacks(deps: FederationCallbackDeps) {
           JSON.stringify({
             type: "task_result",
             task_id: verified.taskId,
-            receipt: verified.receipt,
+            receipt: answer,
           }),
         );
       }
-      // A completed that replaced a failed answer (#890 r8): the task's
-      // trust and settlement were decided on its first answer, once.
-      if (verdict.replaced) return;
 
-      // Trust update via evaluateTrustTransition
+      // Trust update via evaluateTrustTransition — once per task: a completed
+      // that replaced an unsettled failed (#890 r8/r9) was counted already.
       try {
+        if (verdict.replaced) throw new Error("replacement: peer trust already counted");
         const peerRow = moteDb.db
           .prepare(
             "SELECT trust_level, successful_forwards, failed_forwards FROM relay_peers WHERE peer_relay_id = ?",
@@ -399,7 +408,7 @@ export function createFederationCallbacks(deps: FederationCallbackDeps) {
           | undefined;
 
         if (peerRow) {
-          const isSuccess = verified.receipt.status === "completed";
+          const isSuccess = answer.status === "completed";
           const newSuccessful = peerRow.successful_forwards + (isSuccess ? 1 : 0);
           const newFailed = peerRow.failed_forwards + (isSuccess ? 0 : 1);
 
@@ -498,7 +507,7 @@ export function createFederationCallbacks(deps: FederationCallbackDeps) {
               settlement_id: settlementId,
               allocation_id: `p2p-${verified.taskId}` as never,
               motebit_id: workerId,
-              receipt_hash: verified.receipt.result_hash ?? "",
+              receipt_hash: answer.result_hash ?? "",
               ledger_hash: null,
               amount_settled: proof.amount_micro,
               platform_fee: originFee,
@@ -524,7 +533,7 @@ export function createFederationCallbacks(deps: FederationCallbackDeps) {
               `p2p-${verified.taskId}`,
               verified.taskId,
               workerId,
-              verified.receipt.result_hash ?? "",
+              answer.result_hash ?? "",
               proof.amount_micro,
               originFee,
               platformFeeRate,
@@ -557,6 +566,7 @@ export function createFederationCallbacks(deps: FederationCallbackDeps) {
             error: auditErr instanceof Error ? auditErr.message : String(auditErr),
           });
         }
+        markTaskSettled(taskQueue, verified.taskId, answer.signature);
         return;
       }
 
@@ -566,7 +576,7 @@ export function createFederationCallbacks(deps: FederationCallbackDeps) {
           const grossAmount = entry.price_snapshot;
           const feeAmount = Math.round(grossAmount * platformFeeRate);
           const netAmount = grossAmount - feeAmount;
-          const receiptHash = verified.receipt.result_hash ?? verified.receipt.signature ?? "";
+          const receiptHash = answer.result_hash ?? answer.signature ?? "";
           const settlementId = crypto.randomUUID();
           const settledAt = Date.now();
 
@@ -674,6 +684,7 @@ export function createFederationCallbacks(deps: FederationCallbackDeps) {
       } catch {
         /* best-effort settlement */
       }
+      markTaskSettled(taskQueue, verified.taskId, answer.signature);
     },
 
     async onSettlementReceived(verified: VerifiedSettlement) {

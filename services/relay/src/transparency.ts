@@ -182,12 +182,13 @@ export const DECLARATION_CONTENT = {
     // Who the relay handed each task to (#890 round 6): read by every
     // receipt door and the receipt archive, swept by age.
     task_routes: {
-      tables: ["relay_task_routes"],
+      tables: ["relay_task_routes", "relay_task_answers"],
       observable: [
         "for every task the relay hands to an executor: the task id, the executor's motebit_id, the peer relay it was forwarded through (empty when local), whether the hand-off was this relay's own admission or a peer's inbound forward, and when — no content, no prompt, no amount; a receipt for the task is accepted only from a recorded executor through its recorded peer, under the task's own origin (migrations v50, v51)",
+        "for every answered task: its answer — the executor's signed receipt (its motebit_id, status, result hash, and the result text the executor signed), the receipt its settlement is claimed for, and when — so the task's poll answers the same after the queue forgets it (#890 round 9)",
       ],
       retention_window:
-        "7 days from the hand-off, swept every minute by the task-cleanup loop — beyond the 24-hour idempotency window, the longest any reader consults a route",
+        "7 days from the hand-off (a route) or the answer (an answer), swept every minute by the task-cleanup loop — beyond the 24-hour idempotency window, the longest any reader consults a route or an answer",
     },
     // The machine roster (docs/doctrine/machine-roster.md; design:
     // docs/proposals/machine-roster-relay-v1.md D3/D4). Its own category:
