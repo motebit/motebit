@@ -24,13 +24,15 @@ const TAMPERS = [
     file: join(here, "sovereign-exactly-once.test.ts"),
     text: "    if (signal?.aborted === true) return abort();\n",
     replacement: "",
-    red: "the task times out before motebit_task is sent",
+    name: "the task times out before motebit_task is sent",
+    // The EXACT full name (describe path + title) of the test that must fail.
+    red: "#887 execution — paid, then no verifiable result ⇒ stop, never pay another worker the task times out before motebit_task is sent ⇒ 'paid, result not retrieved'; exactly one payment; ledger unretrieved",
   },
 ];
 
 await runTampers(
   TAMPERS.map((t) => ({
-    name: t.red,
+    name: t.name,
     pkg: "@motebit/planner",
     test: relative(pkg, t.file),
     red: t.red,

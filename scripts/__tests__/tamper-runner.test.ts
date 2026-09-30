@@ -124,6 +124,25 @@ describe("tamper-runner evidence", () => {
     expect(d.code).toBe(1);
   });
 
+  it("C2: a suite-level error (a failing afterAll) next to a failing test is INCONCLUSIVE, never RED", () => {
+    const d = drive(
+      fx!,
+      [
+        {
+          name: "teardown trips",
+          ...SUM_TEST,
+          edits: [{ file: SUM_FILE, from: "return a + b;", to: "return a + b + 1;" }],
+        },
+      ],
+      1,
+    );
+    expect(verdicts(d)).toEqual(["INCONCLUSIVE"]);
+    expect(d.out).toMatch(
+      /INCONCLUSIVE +teardown trips +\(suite-level error: .*teardown: sum\(0, 0\) = 1/,
+    );
+    expect(d.code).toBe(1);
+  });
+
   it("a command entry goes RED only with its red marker", () => {
     const d = drive(fx!, [{ name: "cmd", ...SUM_CHECK, edits: [BREAK_SUM] }], 1);
     expect(verdicts(d)).toEqual(["RED"]);

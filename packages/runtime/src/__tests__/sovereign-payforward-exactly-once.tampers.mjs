@@ -24,13 +24,15 @@ const TAMPERS = [
     file: join(here, "sovereign-payforward-exactly-once.test.ts"),
     text: "    if (signal?.aborted === true) return abort();\n",
     replacement: "",
-    red: "abort before motebit_task is sent",
+    name: "abort before motebit_task is sent",
+    // The EXACT full name (describe path + title) of the test that must fail.
+    red: "#887 runtime pay-forward — confirmation + durable ledger are wired a lost send response is confirmed onchain, a timed-out task is recorded as owed, and the next hire of that worker is refused before paying ('abort before motebit_task is sent')",
   },
 ];
 
 await runTampers(
   TAMPERS.map((t) => ({
-    name: t.red,
+    name: t.name,
     pkg: "@motebit/runtime",
     test: relative(pkg, t.file),
     red: t.red,
