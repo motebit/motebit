@@ -1027,6 +1027,12 @@ const GATES: ReadonlyArray<Gate> = [
       "every package script a docs page tells the reader to run exists in the manifest it would run against: `pnpm --filter <pkg> <script>` resolves to a workspace package by name and one of its `scripts`; `pnpm run <script>` resolves against the most recent `cd <workspace-dir>` in the same fenced block (else the repo root); `npm run <script>` resolves against the scripts the create-motebit scaffold generates. The 2026-09-14 docs-vs-code cross-audit (#667) found three of the five app pages OPENING with a command that did not exist or did something other than the sentence claimed — the first command a new contributor types was the least-checked sentence on the site; `check-docs-tree` enforced the directory listing and `check-docs-cli-claims` the CLI subcommands, but nothing tied a documented script to a package.json. Invariant #157, added 2026-09-14",
     script: "check-docs-script-claims",
   },
+  {
+    name: "check-merge-queue-readiness",
+    defends:
+      "every status check the `main-protection` ruleset requires (mirrored in `.github/required-checks.json`, since the ruleset is GitHub settings) reports — honestly — on the `merge_group` event: each producing workflow declares `merge_group: { types: [checks_requested] }` and no other workflow does (deploys never run from a queue ref); each producing job and its `needs` evaluate TRUE under merge_group (a skipped required job reports success, so the queue would pass it vacuously) and a skipped step carries an explicit merge_group step; a job reachable under merge_group that diffs or reads pull_request-only context (`github.base_ref`, `github.event.pull_request.*`, `git diff`, the diff-scoped check scripts) takes its base from `github.event.merge_group.base_sha` (scripts/ci-diff-base.sh) with full history; concurrency keys on `merge_group.head_ref` and never cancels a queue run. Invariant #166, added 2026-09-30",
+    script: "check-merge-queue-readiness",
+  },
 ];
 
 interface Result {

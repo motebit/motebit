@@ -2895,6 +2895,44 @@ export async function probeFetch(): Promise<unknown> {
         return src.replace(re, `$1$2.${Number(m[3]) + 1}.$4`);
       }),
   },
+  {
+    script: "check-merge-queue-readiness",
+    proves:
+      "flags `merge_group` on a workflow that produces no required check (R5 — a deploy must never run from a merge-queue ref): writes a probe workflow with a push+merge_group trigger and a deploy job.",
+    perturb: () =>
+      writeFixture(
+        `.github/workflows/${PROBE_PREFIX}merge_queue.yml`,
+        [
+          "name: probe deploy",
+          "on:",
+          "  push:",
+          "    branches: [main]",
+          "  merge_group:",
+          "    types: [checks_requested]",
+          "jobs:",
+          "  deploy:",
+          "    runs-on: ubuntu-latest",
+          "    steps:",
+          "      - run: echo deploy",
+          "",
+        ].join("\n"),
+      ),
+  },
+  {
+    script: "check-merge-queue-readiness",
+    proves:
+      "flags a required check skipped under merge_group (R3 — GitHub reports a skipped required job as success, so the queue would pass it vacuously). Perturbs by PREDICATE: narrows the `changeset` job's `if:` in .github/workflows/ci.yml back to pull_request-only; throws if that job no longer names merge_group in its `if:`.",
+    perturb: () =>
+      mutateFile(".github/workflows/ci.yml", (src) => {
+        const re = /(\n  changeset:\n(?:    [^\n]*\n)*?    if: )[^\n]*merge_group[^\n]*/;
+        if (!re.test(src)) {
+          throw new Error(
+            "probe vacuous: .github/workflows/ci.yml `changeset` job has no one-line `if:` naming merge_group — retarget the probe",
+          );
+        }
+        return src.replace(re, "$1github.event_name == 'pull_request'");
+      }),
+  },
 ];
 
 /**

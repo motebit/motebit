@@ -1,0 +1,6 @@
+{
+  "_doc": "The status checks the `main-protection` ruleset requires on `main`. The ruleset itself lives in GitHub settings, not in this repo, so this file is its committed mirror: scripts/check-merge-queue-readiness.ts reads it to prove every workflow job producing one of these names also runs (correctly) on the `merge_group` event, and docs/ops/RUNBOOK.md §16 cites it as the list to enter in the ruleset. Change the ruleset and this file in the same PR.",
+  "ruleset": "main-protection",
+  "branch": "main",
+  "checks": ["check", "format", "e2e", "sibling-audit", "changeset", "cla"]
+}
