@@ -597,6 +597,14 @@ describe.each(KINDS)("#962 round 5 — sync intent is the database's (%s store)"
 });
 
 describe.each(["sqlite", "idb"] as const)("#962 round 5 — fail closed (%s store)", (kind) => {
+  it("the marker write fails: this process's own configuration still holds compaction", async () => {
+    const { store } = await openStore(kind);
+    const rt = runtimeOver(cursorWritesFail(store), true);
+    const ids = await appendN(store, 1, 5);
+    await trigger(rt, "compact");
+    expect([...(await present(store))].sort()).toEqual(ids);
+  });
+
   it("the sync-intent marker cannot be read: an unconfigured process deletes nothing", async () => {
     const { store } = await openStore(kind);
     const unreadable = new Proxy(store, {

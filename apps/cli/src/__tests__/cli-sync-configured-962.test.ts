@@ -133,7 +133,8 @@ describe("#962 C2 — the CLI's syncConfigured wiring", () => {
     const calls = daemonCalls();
     expect(calls.get("startRunEventSync")).toBe(1);
     expect(calls.get("startServeEventSync")).toBe(1);
-    expect(calls.get("daemonRelayUrl")).toBe(2);
+    // Round 5: each daemon resolves its relay wiring through `daemonRelay`.
+    expect(calls.get("daemonRelay")).toBe(2);
   });
 
   it("every `new MotebitRuntime(` in apps/cli/src builds its config with cliRuntimeConfig", () => {

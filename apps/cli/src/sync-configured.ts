@@ -3,14 +3,18 @@
  * CLI construction of a `MotebitRuntime` — the REPL (`createRuntime`), both
  * daemons (`motebit run`, `motebit serve`) and `motebit delegate`.
  *
- * Configured exactly when the process syncs its events with a relay: the
- * REPL and `delegate` always do (`resolveRelayUrl` / `getRelayUrl` fall back
- * to the default relay); `motebit run` does when a sync URL is set, and
- * `motebit serve` when it serves over HTTP with one. Each of them then
- * pushes on its own (`cli-event-push.ts`). A daemon with no relay is not
- * configured: nothing it writes is on its way to a relay, so compaction does
- * not wait on one — bounded, as always, by any relay stream `motebit.db`
- * already records (another process that did push).
+ * Configured when the process syncs its events with a relay: the REPL and
+ * `delegate` always do (`resolveRelayUrl` / `getRelayUrl` fall back to the
+ * default relay); `motebit run` does when a sync URL is set, and `motebit
+ * serve` when it serves over HTTP with one. Each of them then pushes on its
+ * own (`cli-event-push.ts`). Also configured: a daemon that pushes to no
+ * relay itself (`serve` over stdio) while a relay is NAMED for its identity
+ * (flag, env, config.json) — another process pushes its events (#962 round
+ * 5). A configured runtime records the identity's sync intent in
+ * `motebit.db` (`recordSyncIntent`), and every later process on that
+ * database floors compaction on it, configured or not; so does the REPL's
+ * identity bootstrap (`bootstrapReplIdentity`), before any runtime. Only a
+ * database whose identity was never configured for sync compacts freely.
  *
  * Configured, compaction waits on the relay's acknowledged push cursor —
  * never deletes what it has not acknowledged. Stated cost: a CLI that never
@@ -33,9 +37,10 @@ import type { CliConfig } from "./args.js";
  */
 export function cliRuntimeConfig(
   base: Omit<RuntimeConfig, "syncConfigured">,
-  relay: { syncUrl: string | undefined },
+  relay: { syncUrl: string | undefined; intentUrl?: string | undefined },
 ): RuntimeConfig {
-  return { ...base, syncConfigured: relay.syncUrl != null && relay.syncUrl !== "" };
+  const named = (u: string | undefined): boolean => u != null && u !== "";
+  return { ...base, syncConfigured: named(relay.syncUrl) || named(relay.intentUrl) };
 }
 
 /**
@@ -58,6 +63,13 @@ export function daemonRelayUrl(
 export interface DaemonRelay {
   /** The relay this daemon pushes its events to, or undefined when none. */
   syncUrl: string | undefined;
+  /**
+   * The relay NAMED for this identity (flag > env > config.json), whatever
+   * the transport (#962 round 5): stdio `serve` pushes to none, yet its
+   * identity is configured for this one, so its events wait for a relay's
+   * acknowledgment (another process pushes them).
+   */
+  intentUrl: string | undefined;
 }
 
 /**
@@ -70,5 +82,8 @@ export function daemonRelay(
   fullConfig: { sync_url?: string },
   transport: "stdio" | "http" | "run",
 ): DaemonRelay {
-  return { syncUrl: daemonRelayUrl(config, fullConfig, transport) };
+  return {
+    syncUrl: daemonRelayUrl(config, fullConfig, transport),
+    intentUrl: daemonRelayUrl(config, fullConfig, "run"),
+  };
 }

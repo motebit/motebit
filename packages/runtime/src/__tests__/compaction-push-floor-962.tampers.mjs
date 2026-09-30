@@ -111,23 +111,22 @@ const TAMPERS = [
     // F2 / P-a: configured with no stream cursor compacts nothing.
     file: join(root, "packages", "sync-engine", "src", "index.ts"),
     build: "@motebit/sync-engine",
-    text: "if (acked.size === 0) return options.syncConfigured === true ? 0 : requested;",
-    replacement:
-      "if (acked.size === 0) return options.syncConfigured === true ? requested : requested;",
-    red: "sqlite store > F2: the enrollment write lost",
+    text: "return options.syncConfigured === true || intended ? 0 : requested;",
+    replacement: "return intended ? 0 : requested;",
+    red: "sqlite store) > the marker write fails: this process's own configuration still holds compaction",
   },
   {
     // F2: the runtime passes the host's signal to the floor.
     file: join(pkg, "src", "motebit-runtime.ts"),
-    text: "syncConfigured: await this.isSyncConfigured(),",
-    replacement: "syncConfigured: undefined,",
-    red: "idb store > P-a: a relay configured but never connected",
+    text: "      syncConfigured: configured,",
+    replacement: "      syncConfigured: undefined,",
+    red: "idb store) > the marker write fails: this process's own configuration still holds compaction",
   },
   {
     // F2: a provider that cannot tell fails closed.
     file: join(pkg, "src", "motebit-runtime.ts"),
-    text: "      return answer !== false;\n    } catch {\n      return true;",
-    replacement: "      return answer !== false;\n    } catch {\n      return false;",
+    text: "    } catch {\n      return { answer: true, decided: false };",
+    replacement: "    } catch {\n      return { answer: false, decided: true };",
     red: "sqlite store > P-a: a provider that cannot tell (throws) fails closed",
   },
   {
@@ -211,8 +210,8 @@ const TAMPERS = [
     file: join(cli, "src", "sync-configured.ts"),
     testFile: cliWiringTest,
     cwd: cli,
-    text: 'return { ...base, syncConfigured: relay.syncUrl != null && relay.syncUrl !== "" };',
-    replacement: "return { ...base, syncConfigured: false && relay.syncUrl != null };",
+    text: "return { ...base, syncConfigured: named(relay.syncUrl) || named(relay.intentUrl) };",
+    replacement: "return { ...base, syncConfigured: false && named(relay.syncUrl) };",
     red: "cliRuntimeConfig: a relay URL ⇒ configured",
   },
   {
@@ -220,9 +219,9 @@ const TAMPERS = [
     file: join(cli, "src", "sync-configured.ts"),
     testFile: cliWiringTest,
     cwd: cli,
-    text: 'return { ...base, syncConfigured: relay.syncUrl != null && relay.syncUrl !== "" };',
+    text: "return { ...base, syncConfigured: named(relay.syncUrl) || named(relay.intentUrl) };",
     replacement:
-      'return { syncConfigured: relay.syncUrl != null && relay.syncUrl !== "", ...base };',
+      "return { syncConfigured: named(relay.syncUrl) || named(relay.intentUrl), ...base };",
     red: "it is set last",
   },
   {
@@ -331,8 +330,8 @@ const TAMPERS = [
     file: join(cli, "src", "cli-event-push.ts"),
     testFile: cliMatrix,
     cwd: cli,
-    text: "const timer = setInterval(() => void cycle(), opts.intervalMs);",
-    replacement: "const timer = setInterval(() => undefined, opts.intervalMs);",
+    text: "timer = setTimeout(() => void cycle(), pushRetryDelay(opts.intervalMs, failures));",
+    replacement: "timer = setTimeout(() => undefined, pushRetryDelay(opts.intervalMs, failures));",
     red: "run | bootstrapped | up | no-token",
   },
   {
@@ -340,8 +339,8 @@ const TAMPERS = [
     file: join(cli, "src", "cli-event-push.ts"),
     testFile: cliMatrix,
     cwd: cli,
-    text: "const timer = setInterval(() => void cycle(), opts.intervalMs);",
-    replacement: "const timer = setInterval(() => undefined, opts.intervalMs);",
+    text: "timer = setTimeout(() => void cycle(), pushRetryDelay(opts.intervalMs, failures));",
+    replacement: "timer = setTimeout(() => undefined, pushRetryDelay(opts.intervalMs, failures));",
     red: "repl | bootstrapped | up | no-token",
   },
   {
@@ -442,8 +441,8 @@ const TAMPERS = [
     file: join(cli, "src", "sync-configured.ts"),
     testFile: cliMatrix,
     cwd: cli,
-    text: 'return { ...base, syncConfigured: relay.syncUrl != null && relay.syncUrl !== "" };',
-    replacement: "return { ...base, syncConfigured: true || relay.syncUrl != null };",
+    text: "return { ...base, syncConfigured: named(relay.syncUrl) || named(relay.intentUrl) };",
+    replacement: "return { ...base, syncConfigured: true || named(relay.syncUrl) };",
     red: "run | no relay configured",
   },
   {
@@ -453,7 +452,7 @@ const TAMPERS = [
     cwd: cli,
     text: '  if (transport === "stdio") return undefined;\n',
     replacement: "",
-    red: "serve | no relay configured",
+    red: "serve | stdio transport with a relay named (--sync-url)",
   },
   {
     // Another identity's acked cursor in the same store floors this one.
@@ -492,7 +491,7 @@ const TAMPERS = [
   {
     // P3: a syncConfigured provider that never settles hangs compaction.
     file: join(pkg, "src", "motebit-runtime.ts"),
-    text: "timer = setTimeout(() => resolve(true), SYNC_CONFIGURED_TIMEOUT_MS);",
+    text: "timer = setTimeout(() => resolve(null), SYNC_CONFIGURED_TIMEOUT_MS);",
     replacement: "void SYNC_CONFIGURED_TIMEOUT_MS;",
     red: "P3: a provider that never settles",
   },
@@ -658,6 +657,77 @@ const TAMPERS = [
     text: "    if (eventError) {",
     replacement: '    if (eventError && url === "") {',
     red: "user /sync (syncNow)",
+  },
+  // ── round 5: sync intent is the database's ────────────────────────────────
+  {
+    // Marker write (runtime): a configured process records no sync intent.
+    file: join(pkg, "src", "motebit-runtime.ts"),
+    text: "      await recordSyncIntent(this.localEventStore, this.motebitId);",
+    replacement: "      void recordSyncIntent;",
+    red: "sqlite store) > configured process A never connects; unconfigured process B on the same database compacts nothing",
+  },
+  {
+    // Marker write (CLI): the REPL's identity bootstrap records no intent.
+    file: join(cli, "src", "cli-event-push.ts"),
+    testFile: cliMatrix,
+    cwd: cli,
+    text: "    await recordSyncIntent(db.eventStore, result.motebitId);",
+    replacement: "    void result;",
+    red: "P6 | REPL first launch (no-config)",
+  },
+  {
+    // Marker write (CLI): stdio serve with a relay named is not configured.
+    file: join(cli, "src", "sync-configured.ts"),
+    testFile: cliMatrix,
+    cwd: cli,
+    text: '    intentUrl: daemonRelayUrl(config, fullConfig, "run"),',
+    replacement: "    intentUrl: undefined,",
+    red: "serve | stdio transport with a relay named (config.json sync_url)",
+  },
+  {
+    // Marker read in the floor: only this process's own configuration counts.
+    file: join(root, "packages", "sync-engine", "src", "index.ts"),
+    build: "@motebit/sync-engine",
+    text: "return options.syncConfigured === true || intended ? 0 : requested;",
+    replacement: "return options.syncConfigured === true || (intended && false) ? 0 : requested;",
+    red: "idb store) > A's provider says configured (async): B, unconfigured, still compacts nothing",
+  },
+  {
+    // Fail-closed read: an unreadable marker reads as "never configured".
+    file: join(root, "packages", "sync-engine", "src", "index.ts"),
+    build: "@motebit/sync-engine",
+    text: '? (await readSyncIntent(localStore, options.motebitId)) === "recorded"',
+    replacement:
+      '? (await readSyncIntent(localStore, options.motebitId).catch(() => "never")) === "recorded"',
+    red: "the sync-intent marker cannot be read: an unconfigured process deletes nothing",
+  },
+  {
+    // Sanitizer (C2): relay text printed verbatim.
+    file: join(cli, "src", "runtime-factory.ts"),
+    testFile: join(cli, "src", "__tests__", "push-loop-hardening-962.test.ts"),
+    cwd: cli,
+    text: "export function sanitizeRelayText(text: string, max = RELAY_TEXT_MAX): string {\n",
+    replacement:
+      "export function sanitizeRelayText(text: string, max = RELAY_TEXT_MAX): string {\n  if (max > 0) return text;\n",
+    red: "bootstrapReplDevice: a hostile relay body",
+  },
+  {
+    // Backoff: every retry at the plain interval.
+    file: join(cli, "src", "cli-event-push.ts"),
+    testFile: join(cli, "src", "__tests__", "push-loop-hardening-962.test.ts"),
+    cwd: cli,
+    text: "timer = setTimeout(() => void cycle(), pushRetryDelay(opts.intervalMs, failures));",
+    replacement: "timer = setTimeout(() => void cycle(), pushRetryDelay(opts.intervalMs, 0));",
+    red: "N consecutive failures ⇒ growing intervals",
+  },
+  {
+    // Backoff reset: a success keeps the backed-off wait.
+    file: join(cli, "src", "cli-event-push.ts"),
+    testFile: join(cli, "src", "__tests__", "push-loop-hardening-962.test.ts"),
+    cwd: cli,
+    text: "    failures = 0;\n    return result;",
+    replacement: "    return result;",
+    red: "reset on success",
   },
 ];
 

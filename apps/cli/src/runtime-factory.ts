@@ -1013,7 +1013,7 @@ export async function bootstrapReplDevice(opts: {
     });
     if (resp.ok || resp.status === 409) return null;
     const body = await resp.text();
-    return `Device registration: ${resp.status} ${body}`;
+    return `Device registration: ${resp.status} ${sanitizeRelayText(body)}`;
   } catch {
     return null; // best-effort — the relay may be unreachable (offline start)
   }
@@ -1027,5 +1027,38 @@ export async function bootstrapReplDevice(opts: {
  */
 export function syncFailureLine(sync: { getLastError(): Error | null }): string | null {
   const err = sync.getLastError();
-  return err ? `Sync failed (continuing offline): ${err.message}` : null;
+  return err ? `Sync failed (continuing offline): ${sanitizeRelayText(err.message)}` : null;
+}
+
+/** The most relay-provided characters one line from the sync path prints (#962 round 5 C2). */
+const RELAY_TEXT_MAX = 200;
+
+/**
+ * Relay-provided text made safe for a terminal or a log line (#962 round 5
+ * C2): a relay's response body or error text reached the terminal verbatim
+ * (`Device registration: <status> <body>`), so a hostile relay could set the
+ * window title, clear the screen or write the clipboard through OSC / CSI /
+ * DCS escapes, and flood the screen. ESC sequences (7-bit and the C1 CSI)
+ * are removed whole, every remaining C0/C1 control character becomes a
+ * space, whitespace runs collapse, and the result is capped at `max`
+ * characters with the rest counted, never printed.
+ */
+export function sanitizeRelayText(text: string, max = RELAY_TEXT_MAX): string {
+  const clean = text
+    // OSC / DCS / SOS / PM / APC strings, up to their BEL or ST terminator.
+    // eslint-disable-next-line no-control-regex
+    .replace(/\x1b[\]PX^_][^\x07\x1b]*(?:\x07|\x1b\\)?/g, "")
+    // CSI sequences (ESC [ … final byte), and the one-byte C1 CSI.
+    // eslint-disable-next-line no-control-regex
+    .replace(/(?:\x1b\[|\x9b)[0-?]*[ -/]*[@-~]/g, "")
+    // Any other ESC and the byte after it.
+    // eslint-disable-next-line no-control-regex
+    .replace(/\x1b[ -~]?/g, "")
+    // eslint-disable-next-line no-control-regex
+    .replace(/[\x00-\x1f\x7f-\x9f]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  return clean.length > max
+    ? `${clean.slice(0, max)}… (${clean.length - max} more characters)`
+    : clean;
 }

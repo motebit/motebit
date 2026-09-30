@@ -17,15 +17,43 @@
  * startup, exit and `/sync` did), so a daemon-only `motebit.db` grew for
  * good with nothing said.
  */
+import { recordSyncIntent } from "@motebit/sync-engine";
 import type { SyncEngine, SyncResult } from "@motebit/sync-engine";
 import type { EventStoreAdapter } from "@motebit/event-log";
 import { createDaemonRelaySync, type DaemonRelaySync } from "./daemon-relay-sync.js";
-import { bootstrapReplDevice, openMotebitDatabase, syncFailureLine } from "./runtime-factory.js";
+import {
+  bootstrapReplDevice,
+  openMotebitDatabase,
+  sanitizeRelayText,
+  syncFailureLine,
+} from "./runtime-factory.js";
 import { bootstrapIdentity } from "./identity.js";
 import type { FullConfig } from "./config.js";
 
 /** The periodic push cadence: the plan sync's (30 s). */
 export const PUSH_INTERVAL_MS = 30_000;
+/** The longest a failing push loop waits between tries (#962 round 5). */
+export const PUSH_BACKOFF_CAP_MS = 10 * 60_000;
+
+/**
+ * The wait before the next push cycle (#962 round 5): the plain interval
+ * after a success; after `failures` consecutive failures, exponential
+ * (`intervalMs × 2^failures`, capped at `PUSH_BACKOFF_CAP_MS`) with jitter
+ * (between half and all of it), so an unreachable relay is not asked every
+ * interval for good (2 880 times a day per idle process) and many clients
+ * never retry in lockstep.
+ */
+export function pushRetryDelay(
+  intervalMs: number,
+  failures: number,
+  random: () => number = Math.random,
+): number {
+  if (failures <= 0) return intervalMs;
+  const cap = Math.max(PUSH_BACKOFF_CAP_MS, intervalMs);
+  const nominal = Math.min(cap, intervalMs * 2 ** Math.min(failures, 30));
+  return Math.round(nominal * (0.5 + 0.5 * random()));
+}
+
 /** How long `motebit delegate` waits for its last push before it exits. */
 const EXIT_FLUSH_MS = 15_000;
 
@@ -62,11 +90,14 @@ function isAuthRefusal(err: Error): boolean {
 
 /**
  * The push loop every CLI entry point runs: a push cycle now, then one every
- * `intervalMs`. A failure is reported once when it starts (and again if its
- * reason changes), and the recovery once — never a line per tick. A 401/403
- * re-introduces the device's key (`bootstrap`) once per failure streak, then
- * pushes again at once (#962 P1: a relay unreachable at start never heard
- * the startup bootstrap, and refused every push for the session).
+ * `intervalMs` — backing off exponentially, with jitter, while cycles fail
+ * (`pushRetryDelay`), back to the interval on the first success. A failure
+ * is reported once when it starts (and again if its reason changes), and the
+ * recovery once — never a line per tick. A 401/403 re-introduces the
+ * device's key (`bootstrap`) once per failure streak, then pushes again at
+ * once (#962 P1: a relay unreachable at start never heard the startup
+ * bootstrap, and refused every push for the session). Every line carrying
+ * relay text is sanitized (`sanitizeRelayText`).
  */
 function startPushLoop(opts: {
   sync: SyncEngine;
@@ -78,6 +109,9 @@ function startPushLoop(opts: {
   let failing: string | null = null;
   let rebootstrapped = false;
   let running: Promise<SyncResult | null> | null = null;
+  let failures = 0;
+  let stopped = false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
 
   const once = async (): Promise<SyncResult | null> => {
     let result = await opts.sync.sync();
@@ -93,28 +127,40 @@ function startPushLoop(opts: {
     if (line) {
       if (line !== failing) opts.report(line);
       failing = line;
+      failures++;
       return null;
     }
     if (failing) opts.report("Sync resumed: the relay acknowledged the pending events");
     failing = null;
     rebootstrapped = false;
+    failures = 0;
     return result;
+  };
+  // The next cycle, timed from the end of the last one.
+  const schedule = (): void => {
+    clearTimeout(timer);
+    if (stopped) return;
+    timer = setTimeout(() => void cycle(), pushRetryDelay(opts.intervalMs, failures));
+    timer.unref?.();
   };
   const cycle = (): Promise<SyncResult | null> => {
     running ??= once()
       .catch((err: unknown) => {
-        opts.report(
-          `Sync failed (continuing offline): ${err instanceof Error ? err.message : String(err)}`,
-        );
+        failures++;
+        const line = `Sync failed (continuing offline): ${sanitizeRelayText(
+          err instanceof Error ? err.message : String(err),
+        )}`;
+        if (line !== failing) opts.report(line);
+        failing = line;
         return null;
       })
       .finally(() => {
         running = null;
+        schedule();
       });
     return running;
   };
-  const timer = setInterval(() => void cycle(), opts.intervalMs);
-  timer.unref?.();
+  schedule();
   return {
     cycle,
     async flush() {
@@ -122,7 +168,8 @@ function startPushLoop(opts: {
       return cycle();
     },
     stop() {
-      clearInterval(timer);
+      stopped = true;
+      clearTimeout(timer);
     },
   };
 }
@@ -290,7 +337,17 @@ export async function bootstrapReplIdentity(
 ): Promise<{ motebitId: string; isFirstLaunch: boolean }> {
   const db = await openMotebitDatabase(opts.dbPath);
   try {
-    return await bootstrapIdentity(db, opts.fullConfig, opts.passphrase);
+    // #962 round 5: the REPL always syncs (its default relay applies), so
+    // this identity's sync intent is recorded in the DATABASE — before the
+    // bootstrap appends when the identity already exists, and for a new one
+    // right after it is minted, before any other process can compact. A
+    // daemon that holds the runtime socket and names no relay then floors
+    // compaction on it. A failed write aborts the launch (fail closed).
+    const known = opts.fullConfig.motebit_id;
+    if (known != null && known !== "") await recordSyncIntent(db.eventStore, known);
+    const result = await bootstrapIdentity(db, opts.fullConfig, opts.passphrase);
+    await recordSyncIntent(db.eventStore, result.motebitId);
+    return result;
   } finally {
     db.close();
   }

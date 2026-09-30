@@ -201,7 +201,7 @@ import { IdentityManager } from "@motebit/core-identity";
 import { PrivacyLayer } from "@motebit/privacy-layer";
 import type { AuditLogAdapter } from "@motebit/privacy-layer";
 import { assertSpeciesIntegrity } from "@motebit/policy-invariants";
-import { SyncEngine, pushCompactionFloor } from "@motebit/sync-engine";
+import { SyncEngine, pushCompactionFloor, recordSyncIntent } from "@motebit/sync-engine";
 import type { RenderAdapter } from "@motebit/render-engine/spec";
 import { normalizeEmbodimentMode } from "@motebit/render-engine/spec";
 import {
@@ -644,6 +644,8 @@ export class MotebitRuntime {
   private readonly localEventStore: EventStoreAdapter;
   /** The host's word on whether a relay is configured (#962; `RuntimeConfig.syncConfigured`). */
   private readonly syncConfigured: RuntimeConfig["syncConfigured"];
+  /** This process's sync-intent write (#962 round 5; never rejects). */
+  private readonly syncIntentWrite: Promise<void>;
   private running = false;
   private toolRegistry: SimpleToolRegistry;
   /** Presence-scoped view onto `toolRegistry`. Filters tool visibility +
@@ -1081,6 +1083,12 @@ export class MotebitRuntime {
     );
     this.localEventStore = adapters.storage.eventStore;
     this.sync = new SyncEngine(adapters.storage.eventStore, this.motebitId);
+    // #962 round 5: a process configured for a relay records the identity's
+    // sync intent in the DATABASE now — before its first append or
+    // compaction (a synchronous store lands the write inside this call) —
+    // so every later process on this database, configured or not, floors
+    // compaction on it.
+    this.syncIntentWrite = this.recordSyncIntentIfConfigured();
 
     // State -> cue computation
     this.state.subscribe((state: MotebitState) => {
@@ -1568,6 +1576,9 @@ export class MotebitRuntime {
     // Mark the start of this runtime session (when it woke up) so the
     // `[Now]` block can report memories-formed-this-session honestly.
     this._sessionStartedAt = this._clock?.() ?? Date.now();
+    // #962 round 5: the database's sync intent lands before this runtime
+    // appends anything of its own.
+    await this.syncIntentWrite;
     await this.renderer.init(target);
 
     // Connect to MCP servers and discover their tools.
@@ -4108,8 +4119,15 @@ export class MotebitRuntime {
    * cursor yet ⇒ nothing is deleted. No relay configured ⇒ `requested`.
    */
   private async compactUpTo(requested: number): Promise<number> {
+    await this.syncIntentWrite;
+    const { answer, decided } = await this.askSyncConfigured();
+    const configured = decided ? answer : true;
+    // Configured now (a provider may answer true only later — web's relay
+    // set after start): the database's intent is recorded before anything
+    // is deleted. A failed write still holds: `syncConfigured` below.
+    if (decided && answer === true) await this.recordSyncIntentNow();
     const floor = await pushCompactionFloor(this.localEventStore, requested, {
-      syncConfigured: await this.isSyncConfigured(),
+      syncConfigured: configured,
       // Only this identity's relay streams: another identity's cursors in
       // the same store say nothing about what a relay holds of this one.
       motebitId: this.motebitId,
@@ -4119,25 +4137,73 @@ export class MotebitRuntime {
   }
 
   /**
+   * Record this identity's sync intent in the database when this process is
+   * configured for a relay (#962 round 5). `true` writes at once (inside the
+   * constructor on a synchronous store); a provider is asked (bounded). Only
+   * an actual "configured" answer is recorded — a non-answer holds this
+   * process's compaction, never the database's for good.
+   */
+  private async recordSyncIntentIfConfigured(): Promise<void> {
+    const c = this.syncConfigured;
+    if (c === undefined || c === false) return;
+    if (c === true) return this.recordSyncIntentNow();
+    const { answer, decided } = await this.askSyncConfigured();
+    if (decided && answer === true) await this.recordSyncIntentNow();
+  }
+
+  private async recordSyncIntentNow(): Promise<void> {
+    try {
+      await recordSyncIntent(this.localEventStore, this.motebitId);
+    } catch (err: unknown) {
+      // This process still holds compaction (its own `syncConfigured`); the
+      // next compaction retries the write.
+      this._logger.warn("sync intent not recorded", {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  /**
+   * Resolves once this process's sync intent (#962 round 5) is recorded in
+   * the database, when it is configured for a relay. `init()` awaits it.
+   */
+  whenSyncIntentRecorded(): Promise<void> {
+    return this.syncIntentWrite;
+  }
+
+  /**
    * `RuntimeConfig.syncConfigured` as compaction reads it (#962): the host's
    * answer NOW; a provider that cannot tell ⇒ true (fail closed); absent ⇒
    * undefined. Public so each surface's wiring is observable at the real
    * construction seam.
    */
   async isSyncConfigured(): Promise<boolean | undefined> {
+    const { answer, decided } = await this.askSyncConfigured();
+    return decided ? answer : true;
+  }
+
+  /**
+   * The host's answer, and whether it actually gave one (#962 round 5): a
+   * provider that throws or never settles is UNDECIDED — compaction holds
+   * (`isSyncConfigured` ⇒ true), but no durable sync intent is recorded on
+   * a non-answer.
+   */
+  private async askSyncConfigured(): Promise<{ answer: boolean | undefined; decided: boolean }> {
     const c = this.syncConfigured;
-    if (typeof c !== "function") return c;
+    if (typeof c !== "function") return { answer: c, decided: true };
     // A provider that never settles counts as configured too (#962 P3):
     // compaction then deletes nothing, instead of hanging on the answer.
     let timer: ReturnType<typeof setTimeout> | undefined;
-    const undecided = new Promise<true>((resolve) => {
-      timer = setTimeout(() => resolve(true), SYNC_CONFIGURED_TIMEOUT_MS);
+    const undecided = new Promise<null>((resolve) => {
+      timer = setTimeout(() => resolve(null), SYNC_CONFIGURED_TIMEOUT_MS);
     });
     try {
       const answer = await Promise.race([Promise.resolve().then(c), undecided]);
-      return answer !== false;
+      return answer === null
+        ? { answer: true, decided: false }
+        : { answer: answer !== false, decided: true };
     } catch {
-      return true;
+      return { answer: true, decided: false };
     } finally {
       clearTimeout(timer);
     }

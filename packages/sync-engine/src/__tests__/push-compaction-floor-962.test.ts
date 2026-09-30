@@ -12,7 +12,15 @@
  */
 import { describe, it, expect } from "vitest";
 import { InMemoryEventStore } from "@motebit/event-log";
-import { pushCompactionFloor, relayStreamOfPushKey, resolveSeqCursorStore } from "../index.js";
+import {
+  clearSyncIntent,
+  pushCompactionFloor,
+  readSyncIntent,
+  recordSyncIntent,
+  relayStreamOfPushKey,
+  resolveSeqCursorStore,
+  syncIntentKey,
+} from "../index.js";
 
 describe("relayStreamOfPushKey (#962 round 2)", () => {
   it("maps every adapter's key for one relay to one stream", () => {
@@ -102,5 +110,58 @@ describe("pushCompactionFloor stream grouping (#962 round 2)", () => {
   it("streams bound the floor even when the host says no relay", async () => {
     const store = await storeWith({ "push:relay:https://a#m": 4 });
     expect(await pushCompactionFloor(store, 9, { syncConfigured: false })).toBe(4);
+  });
+});
+
+describe("the database's sync intent (#962 round 5)", () => {
+  it("never recorded: an unconfigured caller compacts freely", async () => {
+    const store = new InMemoryEventStore();
+    expect(await readSyncIntent(store, "m1")).toBe("never");
+    expect(await pushCompactionFloor(store, 99, { motebitId: "m1" })).toBe(99);
+  });
+
+  it("recorded by any process: an unconfigured caller with no stream compacts nothing", async () => {
+    const store = new InMemoryEventStore();
+    await recordSyncIntent(store, "m1");
+    expect(await readSyncIntent(store, "m1")).toBe("recorded");
+    expect(await pushCompactionFloor(store, 99, { motebitId: "m1", syncConfigured: false })).toBe(
+      0,
+    );
+    // …and without an identity named, any recorded intent holds.
+    expect(await pushCompactionFloor(store, 99)).toBe(0);
+  });
+
+  it("per identity: another identity's intent does not hold this one", async () => {
+    const store = new InMemoryEventStore();
+    await recordSyncIntent(store, "m2");
+    expect(await pushCompactionFloor(store, 99, { motebitId: "m1" })).toBe(99);
+  });
+
+  it("streams still bound the floor: an acked stream lets compaction proceed to it", async () => {
+    const store = new InMemoryEventStore();
+    await recordSyncIntent(store, "m1");
+    await resolveSeqCursorStore(store).setSyncSeqCursor("push:relay:https://r#m1", 40);
+    expect(await pushCompactionFloor(store, 99, { motebitId: "m1" })).toBe(40);
+  });
+
+  it("the marker is not a relay stream (never read as a push cursor)", () => {
+    expect(syncIntentKey("m1").startsWith("push:")).toBe(false);
+  });
+
+  it("clearing is an explicit act, and a configured process records a new intent", async () => {
+    const store = new InMemoryEventStore();
+    await recordSyncIntent(store, "m1");
+    await clearSyncIntent(store, "m1");
+    expect(await readSyncIntent(store, "m1")).toBe("cleared");
+    expect(await pushCompactionFloor(store, 99, { motebitId: "m1" })).toBe(99);
+    await recordSyncIntent(store, "m1");
+    expect(await pushCompactionFloor(store, 99, { motebitId: "m1" })).toBe(0);
+  });
+
+  it("fail closed: the marker cannot be read ⇒ 0", async () => {
+    const store = new InMemoryEventStore();
+    const cursors = resolveSeqCursorStore(store);
+    cursors.getSyncSeqCursor = () => Promise.reject(new Error("disk I/O error"));
+    expect(await pushCompactionFloor(store, 99, { motebitId: "m1" })).toBe(0);
   });
 });

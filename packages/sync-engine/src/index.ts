@@ -200,6 +200,81 @@ export function relayStreamOfPushKey(key: string): string {
   return rest.startsWith("relay:") ? rest.slice("relay:".length) : relayStreamOfKey(rest);
 }
 
+/**
+ * The cursor-store key an identity's SYNC INTENT is recorded under (#962
+ * round 5): beside the push cursors (same store, same database), never with
+ * the `push:` prefix — it is not a relay stream.
+ */
+export function syncIntentKey(motebitId: string): string {
+  return `${SYNC_INTENT_PREFIX}#${motebitId}`;
+}
+const SYNC_INTENT_PREFIX = "intent:sync";
+/** The marker's value: some process for this identity was configured for a relay. */
+const SYNC_INTENT_RECORDED = 1;
+/** The marker's value after an explicit operator opt-out (`clearSyncIntent`). */
+const SYNC_INTENT_CLEARED = -1;
+
+/** What a database records about an identity's sync intent (#962 round 5). */
+export type SyncIntent = "recorded" | "cleared" | "never";
+
+/**
+ * Record, durably and for the DATABASE, that this identity is configured
+ * for sync (#962 round 5). Whether sync is configured was decided per
+ * PROCESS through round 4, but the events it protects belong to the
+ * database's identity: a configured process that never persisted a push
+ * cursor (the REPL's identity bootstrap; a process that exited before it
+ * connected) left its events to the next UNCONFIGURED process on the same
+ * database, which compacted them away. Every process configured for a relay
+ * writes this before its first append or compaction; every process reads it
+ * (`pushCompactionFloor`). Idempotent; overrides an earlier explicit clear —
+ * a configured process is a new intent.
+ */
+export async function recordSyncIntent(
+  localStore: EventStoreAdapter,
+  motebitId: string,
+  cursorStore?: SyncSeqCursorStore,
+): Promise<void> {
+  const store = resolveSeqCursorStore(localStore, cursorStore);
+  await store.setSyncSeqCursor(syncIntentKey(motebitId), SYNC_INTENT_RECORDED);
+}
+
+/**
+ * Clear this identity's sync intent — ONLY as an explicit operator act (an
+ * explicit "this identity does not sync" choice), recorded as such (#962
+ * round 5). Absence never clears: a process that simply has no relay
+ * configured leaves the marker alone. Relay streams that exist still bound
+ * the floor after a clear.
+ */
+export async function clearSyncIntent(
+  localStore: EventStoreAdapter,
+  motebitId: string,
+  cursorStore?: SyncSeqCursorStore,
+): Promise<void> {
+  const store = resolveSeqCursorStore(localStore, cursorStore);
+  await store.setSyncSeqCursor(syncIntentKey(motebitId), SYNC_INTENT_CLEARED);
+}
+
+/** This identity's recorded sync intent. Throws when it cannot be read (callers fail closed). */
+export async function readSyncIntent(
+  localStore: EventStoreAdapter,
+  motebitId: string,
+  cursorStore?: SyncSeqCursorStore,
+): Promise<SyncIntent> {
+  const store = resolveSeqCursorStore(localStore, cursorStore);
+  const v = await store.getSyncSeqCursor(syncIntentKey(motebitId));
+  if (v === null) return "never";
+  return v === SYNC_INTENT_CLEARED ? "cleared" : "recorded";
+}
+
+/** Any identity's recorded intent in this store (for a floor asked without an identity). */
+async function anySyncIntentRecorded(store: SyncSeqCursorStore): Promise<boolean> {
+  if (!store.listSyncSeqCursorKeys) return false;
+  for (const key of await store.listSyncSeqCursorKeys(SYNC_INTENT_PREFIX)) {
+    if ((await store.getSyncSeqCursor(key)) === SYNC_INTENT_RECORDED) return true;
+  }
+  return false;
+}
+
 /** What the host knows about sync from its config (#962 round 2). */
 export interface PushCompactionFloorOptions {
   /**
@@ -236,8 +311,11 @@ export interface PushCompactionFloorOptions {
  * and E2E record as one) — and across distinct streams the MIN: a relay
  * that has acknowledged nothing holds everything.
  *
- * No stream: 0 when `syncConfigured`, else `requested`. A cursor that cannot
- * be read: 0 — compact nothing (fail closed).
+ * No stream: 0 when `syncConfigured` or when the database records this
+ * identity's sync intent (`recordSyncIntent`, #962 round 5 — whichever
+ * process recorded it), else `requested`: only a database whose identity
+ * was never configured for sync compacts freely. A cursor or marker that
+ * cannot be read: 0 — compact nothing (fail closed).
  *
  * Stated cost: the floor moves only when a relay acknowledges. A relay that
  * is configured but never reached (offline, or spatial's default relay on a
@@ -267,8 +345,16 @@ export async function pushCompactionFloor(
       const cursor = (await store.getSyncSeqCursor(key)) ?? 0;
       acked.set(stream, Math.max(acked.get(stream) ?? 0, cursor));
     }
-    if (acked.size === 0) return options.syncConfigured === true ? 0 : requested;
-    return Math.min(requested, ...acked.values());
+    if (acked.size > 0) return Math.min(requested, ...acked.values());
+    // No stream: held when this process is configured, OR when any process
+    // for this identity ever was — the database's durable sync intent
+    // (#962 round 5). Read even when this process is configured, so an
+    // unreadable marker fails closed the same way everywhere.
+    const intended =
+      options.motebitId != null
+        ? (await readSyncIntent(localStore, options.motebitId)) === "recorded"
+        : await anySyncIntentRecorded(own);
+    return options.syncConfigured === true || intended ? 0 : requested;
   } catch {
     return 0;
   }
