@@ -1,215 +1,196 @@
 /**
  * tamper-runner — the shared parallel runner every TAMPER file delegates to.
- *
- * Drives the REAL runner (in a child `node`, as a tamper file would) over a
- * throwaway git repo built from `tamper-runner-fixture/`: a function, a check
- * that fails when the function is wrong, and a check that proves which copy a
- * tamper ran in. A runner that reports a false RED, swallows a missing anchor,
- * lets two tampers share a copy, or leaves the caller's tree changed fails
- * here.
+ * This file: the verdicts and the EVIDENCE LAW (a RED is positive evidence,
+ * never the absence of a pass). Isolation lives in
+ * tamper-runner.isolation.test.ts, signals and stale copies in
+ * tamper-runner.lifecycle.test.ts; the harness is tamper-runner.harness.ts.
+ * tamper-runner.mutations.ts proves each of these tests bites.
  */
-import { execFileSync, spawnSync } from "node:child_process";
-import { cpSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import type { RunTampersSummary, TamperEntry } from "../lib/tamper-runner";
+import {
+  BREAK_SUB,
+  BREAK_SUM,
+  COMMENT_ONLY,
+  FX,
+  SUM_FILE,
+  SUM_TEST,
+  drive,
+  setupFixture,
+  snapshot,
+  teardownFixture,
+  verdicts,
+} from "./tamper-runner.harness";
+import type { Fx } from "./tamper-runner.harness";
 
-const RUNNER = resolve(__dirname, "../lib/tamper-runner.ts");
-const FIXTURE = resolve(__dirname, "tamper-runner-fixture");
+vi.setConfig({ testTimeout: 180_000, hookTimeout: 60_000 });
 
-let base: string;
-let repo: string;
-
-function git(args: string[]): string {
-  return execFileSync("git", args, { cwd: repo, encoding: "utf8" });
-}
-
-/** Every observable of the caller's tree: HEAD, status, and file bytes. */
-function snapshot(): string {
-  const files = git(["ls-files", "--cached", "--others", "--exclude-standard"]).split("\n");
-  return [
-    git(["rev-parse", "HEAD"]),
-    git(["status", "--porcelain=v1", "--untracked-files=all"]),
-    git(["worktree", "list", "--porcelain"]),
-    ...files.filter(Boolean).map((f) => `${f}\n${readFileSync(join(repo, f), "utf8")}`),
-  ].join("\0");
-}
-
-function drive(
-  entries: TamperEntry[],
-  concurrency: number,
-): { code: number | null; out: string; summary: RunTampersSummary } {
-  const driver = join(base, "drive.mjs");
-  writeFileSync(
-    driver,
-    `import { runTampers } from ${JSON.stringify(RUNNER)};\n` +
-      `const s = await runTampers(JSON.parse(process.argv[2]), { root: process.cwd(), concurrency: ${concurrency}, exit: false, argv: [] });\n` +
-      `console.log("SUMMARY " + JSON.stringify(s));\n` +
-      `process.exit(s.exitCode);\n`,
-  );
-  const env = { ...process.env };
-  delete env.TAMPER_CONCURRENCY;
-  const r = spawnSync("node", ["--no-warnings", driver, JSON.stringify(entries)], {
-    cwd: repo,
-    encoding: "utf8",
-    env,
-  });
-  const out = `${r.stdout}${r.stderr}`;
-  const line = out.split("\n").find((l) => l.startsWith("SUMMARY "));
-  if (line == null) throw new Error(`driver printed no summary:\n${out}`);
-  return { code: r.status, out, summary: JSON.parse(line.slice("SUMMARY ".length)) };
-}
-
-const CHECK = { command: ["node", "sum.check.mjs"] };
-
-beforeEach(() => {
-  base = mkdtempSync(join(tmpdir(), "tamper-runner-test-"));
-  repo = join(base, "repo");
-  cpSync(FIXTURE, repo, { recursive: true });
-  execFileSync("git", ["init", "-q"], { cwd: repo });
-  git(["add", "-A"]);
-  git([
-    "-c",
-    "user.name=t",
-    "-c",
-    "user.email=t@t",
-    "-c",
-    "commit.gpgsign=false",
-    "commit",
-    "-qm",
-    "fixture",
-  ]);
+let fx: Fx | undefined;
+beforeEach(async () => {
+  fx = await setupFixture();
 });
-
 afterEach(() => {
-  rmSync(base, { recursive: true, force: true });
+  teardownFixture(fx);
+  fx = undefined;
 });
 
-describe("tamper-runner", () => {
+const SUM_CHECK = { command: ["node", "sum.check.mjs"], redMarker: "SUM CHECK FAILED" };
+const SYNTAX_ERROR = { file: SUM_FILE, from: "return a + b;", to: "return a + ;" };
+
+describe("tamper-runner verdicts", () => {
   it("a tamper the test catches goes RED; the run exits 0", () => {
-    const before = snapshot();
-    const { code, out, summary } = drive(
-      [
-        {
-          name: "sum subtracts",
-          ...CHECK,
-          edits: [{ file: "sum.mjs", from: "a + b", to: "a - b" }],
-        },
-      ],
-      1,
-    );
-    expect(summary.results.map((r) => r.verdict)).toEqual(["RED"]);
-    expect(out).toMatch(/^RED \(ok\) +sum subtracts$/m);
-    expect(out).toContain("1/1 tampers turned their test red");
-    expect(code).toBe(0);
-    expect(snapshot()).toBe(before);
+    const before = snapshot(fx!);
+    const d = drive(fx!, [{ name: "sum subtracts", ...SUM_TEST, edits: [BREAK_SUM] }], 1);
+    expect(verdicts(d)).toEqual(["RED"]);
+    expect(d.out).toMatch(/^RED \(ok\) +sum subtracts$/m);
+    expect(d.out).toContain("1/1 tampers turned their test red");
+    expect(d.code).toBe(0);
+    expect(snapshot(fx!)).toBe(before);
   });
 
-  it("a tamper the test does not catch reports GREEN and exits non-zero", () => {
-    const { code, out, summary } = drive(
-      [
-        {
-          name: "comment edited",
-          ...CHECK,
-          edits: [{ file: "sum.mjs", from: "// marker: a comment", to: "// changed: a comment" }],
-        },
-      ],
-      1,
-    );
-    expect(summary.results.map((r) => r.verdict)).toEqual(["GREEN"]);
-    expect(out).toMatch(/^GREEN +comment edited$/m);
-    expect(out).toContain("0/1 tampers turned their test red");
-    expect(code).toBe(1);
+  it("a tamper the test does not catch reports GREEN and exits 1", () => {
+    const d = drive(fx!, [{ name: "comment edited", ...SUM_TEST, edits: [COMMENT_ONLY] }], 1);
+    expect(verdicts(d)).toEqual(["GREEN"]);
+    expect(d.out).toMatch(/^GREEN +comment edited$/m);
+    expect(d.out).toContain("0/1 tampers turned their test red");
+    expect(d.code).toBe(1);
   });
 
-  it("a missing anchor reports COULD NOT APPLY and exits non-zero", () => {
-    const { code, out, summary } = drive(
+  it("a missing anchor reports COULD NOT APPLY and exits 1", () => {
+    const d = drive(
+      fx!,
       [
         {
           name: "stale anchor",
-          ...CHECK,
-          edits: [{ file: "sum.mjs", from: "a * b", to: "a - b" }],
+          ...SUM_TEST,
+          edits: [{ file: SUM_FILE, from: "a * b", to: "a - b" }],
         },
       ],
       1,
     );
-    expect(summary.results.map((r) => r.verdict)).toEqual(["COULD NOT APPLY"]);
-    expect(out).toMatch(/^COULD NOT APPLY +stale anchor +\(sum\.mjs: text found 0×\)$/m);
-    expect(code).toBe(1);
+    expect(verdicts(d)).toEqual(["COULD NOT APPLY"]);
+    expect(d.out).toMatch(
+      /^COULD NOT APPLY +stale anchor +\(packages\/fx\/sum\.mjs: text found 0×\)$/m,
+    );
+    expect(d.code).toBe(1);
   });
 
   it("an anchor found twice is COULD NOT APPLY too (never an ambiguous edit)", () => {
-    const { code, summary } = drive(
-      [{ name: "ambiguous", ...CHECK, edits: [{ file: "sum.mjs", from: "a", to: "x" }] }],
+    const d = drive(
+      fx!,
+      [{ name: "ambiguous", ...SUM_TEST, edits: [{ file: SUM_FILE, from: "return", to: "x" }] }],
       1,
     );
-    expect(summary.results.map((r) => r.verdict)).toEqual(["COULD NOT APPLY"]);
-    expect(code).toBe(1);
+    expect(verdicts(d)).toEqual(["COULD NOT APPLY"]);
+    expect(d.code).toBe(1);
+  });
+});
+
+describe("tamper-runner evidence", () => {
+  it("C2: a misspelled test file aborts at the baseline (exit 2), never RED", () => {
+    const d = drive(fx!, [{ name: "typo", pkg: FX, test: "sum.fxx.mjs", edits: [BREAK_SUM] }], 1);
+    expect(d.out).toMatch(/^BASELINE NOT GREEN: fx sum\.fxx\.mjs/m);
+    expect(verdicts(d)).not.toContain("RED");
+    expect(d.code).toBe(2);
   });
 
-  it("never touches the caller's tree, including its uncommitted state — and tests that state", () => {
-    // An uncommitted "fix" in the caller: the tamper must see it (it is what
-    // gets tested) without the caller's copy ever changing.
-    writeFileSync(
-      join(repo, "sum.mjs"),
-      readFileSync(join(repo, "sum.mjs"), "utf8").replace("a + b", "b + a"),
-    );
-    writeFileSync(join(repo, "untracked.txt"), "caller scratch\n");
-    const before = snapshot();
-    const { code, summary } = drive(
+  it("C2: a tamper that breaks collection (a syntax error) is INCONCLUSIVE, never RED", () => {
+    const d = drive(fx!, [{ name: "syntax", ...SUM_TEST, edits: [SYNTAX_ERROR] }], 1);
+    expect(verdicts(d)).toEqual(["INCONCLUSIVE"]);
+    expect(d.out).toMatch(/INCONCLUSIVE +syntax +\(suite-level error/);
+    expect(d.code).toBe(1);
+  });
+
+  it("C2: an unhandled error with every test passing is INCONCLUSIVE, never RED", () => {
+    const d = drive(
+      fx!,
       [
         {
-          name: "dirty fix reverted",
-          ...CHECK,
-          edits: [{ file: "sum.mjs", from: "b + a", to: "b - a" }],
-        },
-        {
-          name: "HEAD text absent",
-          ...CHECK,
-          edits: [{ file: "sum.mjs", from: "a + b", to: "a - b" }],
-        },
-      ],
-      2,
-    );
-    expect(summary.results.map((r) => r.verdict)).toEqual(["RED", "COULD NOT APPLY"]);
-    expect(code).toBe(1);
-    expect(snapshot()).toBe(before);
-  });
-
-  it("two tampers on the same file run concurrently in separate copies without interfering", () => {
-    const before = snapshot();
-    const own = (mine: string, other: string): TamperEntry => ({
-      name: `edit ${mine}`,
-      command: ["node", "own-edit.check.mjs", mine, other],
-      edits: [{ file: "sum.mjs", from: "// marker: a comment", to: `// ${mine}: a comment` }],
-    });
-    const { code, out, summary } = drive([own("TOKEN_A", "TOKEN_B"), own("TOKEN_B", "TOKEN_A")], 2);
-    expect(summary.concurrency).toBe(2);
-    expect(summary.results.map((r) => r.verdict)).toEqual(["RED", "RED"]);
-    expect(new Set(summary.results.map((r) => r.slot)).size).toBe(2);
-    // Output is in entry order whatever order they finished in.
-    expect(out.indexOf("edit TOKEN_A")).toBeLessThan(out.indexOf("edit TOKEN_B"));
-    expect(code).toBe(0);
-    expect(snapshot()).toBe(before);
-  });
-
-  it("reuses a slot: a restored file carries no residue of the previous tamper", () => {
-    const { code, summary } = drive(
-      [
-        { name: "first", ...CHECK, edits: [{ file: "sum.mjs", from: "a + b", to: "a - b" }] },
-        // Would be COULD NOT APPLY if "first" were left applied in the slot.
-        { name: "second", ...CHECK, edits: [{ file: "sum.mjs", from: "a + b", to: "a * b" }] },
-        {
-          name: "third (uncaught)",
-          ...CHECK,
-          edits: [{ file: "sum.mjs", from: "// marker", to: "// m" }],
+          name: "unhandled",
+          ...SUM_TEST,
+          edits: [
+            {
+              file: SUM_FILE,
+              from: "  return a + b;",
+              to: '  Promise.reject(new Error("fx unhandled"));\n  return a + b;',
+            },
+          ],
         },
       ],
       1,
     );
-    expect(summary.results.map((r) => r.verdict)).toEqual(["RED", "RED", "GREEN"]);
-    expect(code).toBe(1);
+    expect(verdicts(d)).toEqual(["INCONCLUSIVE"]);
+    expect(d.out).toMatch(/INCONCLUSIVE +unhandled +\(unhandled error/);
+    expect(d.code).toBe(1);
+  });
+
+  it("a command entry goes RED only with its red marker", () => {
+    const d = drive(fx!, [{ name: "cmd", ...SUM_CHECK, edits: [BREAK_SUM] }], 1);
+    expect(verdicts(d)).toEqual(["RED"]);
+    expect(d.code).toBe(0);
+  });
+
+  it("C2: a command that crashes (non-zero exit, no red marker) is INCONCLUSIVE, never RED", () => {
+    const d = drive(fx!, [{ name: "cmd crash", ...SUM_CHECK, edits: [SYNTAX_ERROR] }], 1);
+    expect(verdicts(d)).toEqual(["INCONCLUSIVE"]);
+    expect(d.out).toMatch(
+      /INCONCLUSIVE +cmd crash +\(exited 1, red marker "SUM CHECK FAILED" absent\)/,
+    );
+    expect(d.code).toBe(1);
+  });
+
+  it("C2: a command entry that declares no redMarker is INCONCLUSIVE, never RED", () => {
+    const d = drive(
+      fx!,
+      [{ name: "cmd unmarked", command: ["node", "sum.check.mjs"], edits: [BREAK_SUM] }],
+      1,
+    );
+    expect(verdicts(d)).toEqual(["INCONCLUSIVE"]);
+    expect(d.out).toMatch(/INCONCLUSIVE +cmd unmarked +\(a command entry must declare redMarker/);
+    expect(d.code).toBe(1);
+  });
+
+  it("C3: red naming only the describe block does not count a failing sibling", () => {
+    const d = drive(
+      fx!,
+      [{ name: "describe only", ...SUM_TEST, red: "sum", edits: [BREAK_SUB] }],
+      1,
+    );
+    expect(verdicts(d)).toEqual(["INCONCLUSIVE"]);
+    expect(d.out).toContain('no test has the exact full name "sum"');
+    expect(d.code).toBe(1);
+  });
+
+  it("C3: red naming a bare title (no describe path) is not an exact name", () => {
+    const d = drive(
+      fx!,
+      [{ name: "bare title", ...SUM_TEST, red: "subtracts two numbers", edits: [BREAK_SUB] }],
+      1,
+    );
+    expect(verdicts(d)).toEqual(["INCONCLUSIVE"]);
+    expect(d.code).toBe(1);
+  });
+
+  it("C3: red naming the exact full name of the failing test goes RED", () => {
+    const d = drive(
+      fx!,
+      [{ name: "exact", ...SUM_TEST, red: "sum subtracts two numbers", edits: [BREAK_SUB] }],
+      1,
+    );
+    expect(verdicts(d)).toEqual(["RED"]);
+    expect(d.code).toBe(0);
+  });
+
+  it("C3: red naming a test that stays green is GREEN even when a sibling fails", () => {
+    const d = drive(
+      fx!,
+      [{ name: "sibling red", ...SUM_TEST, red: "sum adds two numbers", edits: [BREAK_SUB] }],
+      1,
+    );
+    expect(verdicts(d)).toEqual(["GREEN"]);
+    expect(d.out).toContain(
+      '"sum adds two numbers" passed; other tests failed: sum subtracts two numbers',
+    );
+    expect(d.code).toBe(1);
   });
 });
