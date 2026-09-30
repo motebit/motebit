@@ -16,10 +16,11 @@
  * the exact commands + filters and the abort path. (`pnpm ls -r … --filter=
  * ...{dir}` — the dependents count behind the >10 hint — answers with
  * $SHIM_LS_REACH lines.) That turbo's
- * `...[origin/main]` really reaches a dependent's typecheck is turbo's
- * contract; it was verified end-to-end once on the real monorepo when this
- * landed (type error in a leaf's export → consumer typecheck red → push
- * blocked), recorded in the PR.
+ * `...[origin/main]` really reaches a dependent is turbo's contract; it was
+ * verified end-to-end on the real monorepo when this landed (renaming a type
+ * @motebit/circuit-breaker exports → @motebit/relay's tsc build red → push
+ * blocked at the build phase; a relay test depending on the breaker's
+ * default threshold → push passes locally, the relay suite CI runs fails).
  */
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { spawnSync } from "node:child_process";
