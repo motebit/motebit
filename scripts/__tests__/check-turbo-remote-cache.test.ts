@@ -298,13 +298,187 @@ describe("runTurboRemoteCacheGate against a fixture repository", () => {
   });
 });
 
-describe("this repository", () => {
-  it("passes check-turbo-remote-cache", () => {
-    const r = runTurboRemoteCacheGate(ROOT);
-    expect(r.violations).toEqual([]);
-    // ci.yml, publish.yml and release.yml hold TURBO_TOKEN (#997).
-    expect(r.tokenHolders).toEqual(
-      expect.arrayContaining(["ci.yml", "publish.yml", "release.yml"]),
+// ── "Key only on main" (operator decision 2026-09-30) ───────────────────────
+//
+// The signing key and the write-capable token live ONLY in the protected
+// `turbo-cache-writer` environment (deployment branches: main). A job may
+// hold them only if it references that environment AND the reference can
+// only resolve on a push to main. Every other job — pull_request,
+// merge_group, any non-main ref — holds no token and no key and never
+// writes (local cache only). Each fixture below is an escape the
+// 9b405695a gate passed (green under the old gate and actionlint).
+
+const WRITER_ENV =
+  "${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'turbo-cache-writer' || '' }}";
+const WRITER_CACHE =
+  "${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'local:rw,remote:rw' || 'local:rw' }}";
+
+/** The canonical "key only on main" CI workflow. */
+const KEY_ONLY_ON_MAIN_CI = `name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+env:
+  TURBO_TEAM: \${{ vars.TURBO_TEAM }}
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    environment: ${WRITER_ENV}
+    env:
+      TURBO_TOKEN: \${{ secrets.TURBO_WRITER_TOKEN }}
+      TURBO_REMOTE_CACHE_SIGNATURE_KEY: \${{ secrets.TURBO_WRITER_SIGNATURE_KEY }}
+      TURBO_CACHE: ${WRITER_CACHE}
+    steps:
+      - run: pnpm build
+      - run: pnpm exec turbo run test:coverage --concurrency=4
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - run: pnpm build
+`;
+
+/** A pull_request workflow with NO turbo credentials: the base every escape is added to. */
+const prWorkflow = (jobExtra: string, run = "pnpm build"): string =>
+  `name: PR\non:\n  pull_request:\n    branches: [main]\njobs:\n  lint:\n    runs-on: ubuntu-latest\n${jobExtra}    steps:\n      - run: ${run}\n`;
+
+describe("key only on main — the escapes the 9b405695a gate missed (C2, C3)", () => {
+  it("control: the credential-free PR base and the canonical writer workflow are green", () => {
+    expect(checkWorkflow("pr.yml", prWorkflow(""), SCRIPTS).violations).toEqual([]);
+    expect(checkWorkflow("ci.yml", KEY_ONLY_ON_MAIN_CI, SCRIPTS).violations).toEqual([]);
+  });
+
+  it("C2.1 a one-line job-level flow-map env writing the remote cache", () => {
+    const text = prWorkflow('    env: { TURBO_CACHE: "local:rw,remote:rw" }\n');
+    expect(checkWorkflow("pr.yml", text, SCRIPTS).violations.join("\n")).toMatch(/TURBO_CACHE/);
+  });
+
+  it('C2.2 a quoted "TURBO_CACHE": key', () => {
+    const text = prWorkflow('    env:\n      "TURBO_CACHE": local:rw,remote:rw\n');
+    expect(checkWorkflow("pr.yml", text, SCRIPTS).violations.join("\n")).toMatch(/TURBO_CACHE/);
+  });
+
+  it("C2.3a turbo invoked as `npx turbo@2.10.9 run … --cache=…remote:rw`", () => {
+    const text = prWorkflow("", "npx turbo@2.10.9 run build --cache=local:rw,remote:rw");
+    expect(checkWorkflow("pr.yml", text, SCRIPTS).violations.join("\n")).toMatch(/--cache/);
+  });
+
+  it("C2.3b turbo invoked as `./node_modules/.bin/turbo run … --cache=…remote:rw`", () => {
+    const text = prWorkflow("", "./node_modules/.bin/turbo run build --cache=local:rw,remote:rw");
+    expect(checkWorkflow("pr.yml", text, SCRIPTS).violations.join("\n")).toMatch(/--cache/);
+  });
+
+  it('C2.4 `echo "TURBO_CACHE=$X" >> $GITHUB_ENV`', () => {
+    const text = prWorkflow("", 'echo "TURBO_CACHE=$X" >> $GITHUB_ENV');
+    expect(checkWorkflow("pr.yml", text, SCRIPTS).violations.join("\n")).toMatch(/GITHUB_ENV/);
+  });
+
+  it("TURBO_FORCE (a quoted key the old line regex could not see) overrides a read-only TURBO_CACHE", () => {
+    const text = prWorkflow('    env:\n      "TURBO_FORCE": "true"\n');
+    expect(checkWorkflow("pr.yml", text, SCRIPTS).violations.join("\n")).toMatch(/TURBO_FORCE/);
+  });
+
+  it("a --cache flag on a continuation line overrides a read-only TURBO_CACHE", () => {
+    const text = `name: PR\non:\n  pull_request:\njobs:\n  lint:\n    runs-on: ubuntu-latest\n    steps:\n      - run: |\n          pnpm exec turbo run build \\\n            --cache=local:rw,remote:rw\n`;
+    expect(checkWorkflow("pr.yml", text, SCRIPTS).violations.join("\n")).toMatch(/--cache/);
+  });
+
+  it("C3 a pull_request job that references the writer environment", () => {
+    const text = prWorkflow("    environment: turbo-cache-writer\n");
+    expect(checkWorkflow("pr.yml", text, SCRIPTS).violations.join("\n")).toMatch(
+      /turbo-cache-writer/,
     );
+    const mapped = prWorkflow("    environment:\n      name: turbo-cache-writer\n");
+    expect(checkWorkflow("pr.yml", mapped, SCRIPTS).violations.join("\n")).toMatch(
+      /turbo-cache-writer/,
+    );
+  });
+
+  it("C3 the 9b405695a shape: workflow-level secret env hands the token and key to every job", () => {
+    const text = `name: CI\non:\n  push:\n    branches: [main]\n  pull_request:\n    branches: [main]\nenv:\n  TURBO_TOKEN: \${{ secrets.TURBO_TOKEN }}\n  TURBO_REMOTE_CACHE_SIGNATURE_KEY: \${{ secrets.TURBO_REMOTE_CACHE_SIGNATURE_KEY }}\n  TURBO_CACHE: ${GOOD_CI}\njobs:\n  a:\n    runs-on: ubuntu-latest\n    steps:\n      - run: pnpm build\n`;
+    expect(checkWorkflow("ci.yml", text, SCRIPTS).violations.join("\n")).toMatch(/TURBO_TOKEN/);
+  });
+
+  it("a job that holds the token without the writer environment", () => {
+    const text = prWorkflow("    env:\n      TURBO_TOKEN: ${{ secrets.TURBO_WRITER_TOKEN }}\n");
+    expect(checkWorkflow("pr.yml", text, SCRIPTS).violations.join("\n")).toMatch(/TURBO_TOKEN/);
+  });
+});
+
+describe("key only on main — repository fixtures", () => {
+  const dirs: string[] = [];
+  afterAll(() => dirs.forEach((d) => rmSync(d, { recursive: true, force: true })));
+  const repo = (opts: { turbo?: object; workflows: Record<string, string> }): string => {
+    const d = mkdtempSync(join(tmpdir(), "turbo-gate-kom-"));
+    dirs.push(d);
+    mkdirSync(join(d, ".github", "workflows"), { recursive: true });
+    mkdirSync(join(d, ".husky"), { recursive: true });
+    writeFileSync(
+      join(d, "turbo.json"),
+      JSON.stringify(
+        opts.turbo ?? {
+          tasks: {},
+          remoteCache: { signature: true },
+          futureFlags: { longerSignatureKey: true },
+        },
+      ),
+    );
+    writeFileSync(
+      join(d, "package.json"),
+      JSON.stringify({ scripts: { build: "turbo run build" } }),
+    );
+    writeFileSync(join(d, ".husky", "pre-push"), "export TURBO_CACHE=local:rw\npnpm build\n");
+    for (const [f, t] of Object.entries(opts.workflows)) {
+      writeFileSync(join(d, ".github", "workflows", f), t);
+    }
+    return d;
+  };
+  const PUBLISH = `name: Publish\non:\n  workflow_dispatch:\nenv:\n  TURBO_CACHE: local:rw\njobs:\n  publish:\n    runs-on: ubuntu-latest\n    steps:\n      - run: pnpm build\n`;
+
+  it("is green on the key-only-on-main shape and names the writer jobs", () => {
+    const r = runTurboRemoteCacheGate(
+      repo({ workflows: { "ci.yml": KEY_ONLY_ON_MAIN_CI, "publish.yml": PUBLISH } }),
+    );
+    expect(r.violations).toEqual([]);
+    expect((r as unknown as { writerJobs: string[] }).writerJobs).toEqual(["ci.yml#check"]);
+  });
+
+  it("C1: turbo.json without futureFlags.longerSignatureKey is red", () => {
+    const r = runTurboRemoteCacheGate(
+      repo({
+        turbo: { tasks: {}, remoteCache: { signature: true } },
+        workflows: { "ci.yml": KEY_ONLY_ON_MAIN_CI },
+      }),
+    );
+    expect(r.violations.join("\n")).toMatch(/longerSignatureKey/);
+  });
+
+  it("publish/release never read the remote cache: remote:r in publish.yml is red", () => {
+    const readsRemote = PUBLISH.replace("TURBO_CACHE: local:rw", "TURBO_CACHE: local:rw,remote:r");
+    const r = runTurboRemoteCacheGate(
+      repo({ workflows: { "ci.yml": KEY_ONLY_ON_MAIN_CI, "publish.yml": readsRemote } }),
+    );
+    expect(r.violations.join("\n")).toMatch(/publish\.yml/);
+    const noPin = PUBLISH.replace("env:\n  TURBO_CACHE: local:rw\n", "");
+    expect(
+      runTurboRemoteCacheGate(
+        repo({ workflows: { "ci.yml": KEY_ONLY_ON_MAIN_CI, "publish.yml": noPin } }),
+      ).violations.join("\n"),
+    ).toMatch(/publish\.yml/);
+  });
+});
+
+describe("this repository", () => {
+  it("passes check-turbo-remote-cache with the key only on main", () => {
+    const r = runTurboRemoteCacheGate(ROOT) as ReturnType<typeof runTurboRemoteCacheGate> & {
+      writerJobs?: string[];
+    };
+    expect(r.violations).toEqual([]);
+    // Only ci.yml's `check` job, on a push to main, holds the writer
+    // environment; publish.yml and release.yml hold no turbo credential.
+    expect(r.writerJobs).toEqual(["ci.yml#check"]);
+    expect(r.tokenHolders).not.toContain("publish.yml");
+    expect(r.tokenHolders).not.toContain("release.yml");
   });
 });

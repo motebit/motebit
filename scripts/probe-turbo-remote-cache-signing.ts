@@ -39,6 +39,18 @@
  *                         workflows' mechanism, a PR job's value) — no PUT
  *   env-main-write        TURBO_CACHE=local:rw,remote:rw in the env (a push to
  *                         main) — a signed PUT
+ *   empty-key-write       key SET and EMPTY (an unset secret evaluates to ""),
+ *                         remote:rw — must FAIL with no artifact request
+ *                         (needs `futureFlags.longerSignatureKey`; without
+ *                         it turbo signs with a zero-length key and uploads)
+ *   short-key-write       a 31-byte key — same
+ *   pr-no-credentials     no token, no key, TURBO_CACHE=local:rw (a
+ *                         pull_request / merge_group / fork job) — passes,
+ *                         zero requests to the remote
+ *   writer-before-environment  token AND key set-but-empty, remote:rw (the
+ *                         writer job on main before the `turbo-cache-writer`
+ *                         environment or its secrets exist) — passes, zero
+ *                         requests, nothing stored
  *
  * Usage:  pnpm probe-turbo-remote-cache-signing [--json]
  * Exit 0 iff every expectation holds; the per-scenario record is printed
@@ -159,6 +171,15 @@ export function readRemoteCacheBlock(turboJsonPath: string): unknown {
   return parsed.remoteCache;
 }
 
+/**
+ * The `futureFlags` block of a turbo.json (`longerSignatureKey` makes a
+ * short or EMPTY signing key fatal instead of a warning), or `undefined`.
+ */
+export function readFutureFlags(turboJsonPath: string): unknown {
+  const parsed = JSON.parse(readFileSync(turboJsonPath, "utf8")) as { futureFlags?: unknown };
+  return parsed.futureFlags;
+}
+
 function git(cwd: string, ...args: string[]): void {
   const r = spawnSync("git", args, { cwd, encoding: "utf8" });
   if (r.status !== 0) throw new Error(`git ${args.join(" ")} failed: ${r.stderr}`);
@@ -176,7 +197,7 @@ function rootPackageManager(): string {
   return pkg.packageManager ?? "pnpm@9.15.0";
 }
 
-export function makeFixture(remoteCache: unknown): string {
+export function makeFixture(remoteCache: unknown, futureFlags?: unknown): string {
   const dir = realpathSync(mkdtempSync(join(tmpdir(), "turbo-sign-probe-")));
   mkdirSync(join(dir, "packages", "a"), { recursive: true });
   writeFileSync(
@@ -202,6 +223,7 @@ export function makeFixture(remoteCache: unknown): string {
   );
   const turbo: Record<string, unknown> = { tasks: { build: { outputs: ["dist/**"] } } };
   if (remoteCache !== undefined) turbo.remoteCache = remoteCache;
+  if (futureFlags !== undefined) turbo.futureFlags = futureFlags;
   writeFileSync(join(dir, "turbo.json"), JSON.stringify(turbo, null, 2));
   writeFileSync(join(dir, ".gitignore"), "payload.txt\ndist\n.turbo\n");
   writeFileSync(join(dir, "payload.txt"), "clean\n");
@@ -232,6 +254,10 @@ export interface RunRecord {
   puts: number;
   unsignedPuts: number;
   gets: number;
+  /** Every request this run sent to the fake cache (artifacts, status, events). */
+  requests: number;
+  /** Requests naming an artifact hash (PUT/GET/HEAD /v8/artifacts/:hash). */
+  artifactRequests: number;
   /** Turbo's warning lines about the cache or the signature, verbatim. */
   warnings: string[];
   durationMs: number;
@@ -267,6 +293,12 @@ export async function runTurbo(opts: {
   fixture: string;
   cache: FakeCache;
   key: string | null;
+  /**
+   * TURBO_TOKEN: `undefined` = a token (the default), `null` = unset (a fork
+   * or a job that is not given the secret), `""` = set but EMPTY (what
+   * `${{ secrets.X }}` evaluates to when the secret does not exist).
+   */
+  token?: string | null;
   /** Passed as `--cache=…`, or with `via: "env"` as TURBO_CACHE (the mechanism the workflows use). */
   cacheFlag: string;
   via?: "flag" | "env";
@@ -288,7 +320,6 @@ export async function runTurbo(opts: {
   );
   Object.assign(env, {
     TURBO_API: cache.url,
-    TURBO_TOKEN: "probe-token",
     TURBO_TEAM: "probe-team",
     TURBO_TELEMETRY_DISABLED: "1",
     TURBO_NO_UPDATE_NOTIFIER: "1",
@@ -297,6 +328,8 @@ export async function runTurbo(opts: {
     // Never let pnpm try to install a pnpm for the fixture (see rootPackageManager).
     npm_config_manage_package_manager_versions: "false",
   });
+  const token = opts.token === undefined ? "probe-token" : opts.token;
+  if (token != null) env.TURBO_TOKEN = token;
   if (opts.key != null) env.TURBO_REMOTE_CACHE_SIGNATURE_KEY = opts.key;
   if (opts.via === "env") env.TURBO_CACHE = opts.cacheFlag;
 
@@ -332,6 +365,8 @@ export async function runTurbo(opts: {
     puts: puts.length,
     unsignedPuts: puts.filter((q) => q.tag == null || q.tag === "").length,
     gets: mine.filter((q) => q.method === "GET" && q.hash != null).length,
+    requests: mine.length,
+    artifactRequests: mine.filter((q) => q.hash != null).length,
     durationMs: Date.now() - t0,
     warnings: out
       .split("\n")
@@ -353,6 +388,7 @@ export interface Expectation {
 
 export interface ProbeResult {
   remoteCache: unknown;
+  futureFlags: unknown;
   runs: RunRecord[];
   expectations: Expectation[];
   ok: boolean;
@@ -365,7 +401,8 @@ export async function runSigningProbe(
   turboJsonPath = join(ROOT, "turbo.json"),
 ): Promise<ProbeResult> {
   const remoteCache = readRemoteCacheBlock(turboJsonPath);
-  const fixture = makeFixture(remoteCache);
+  const futureFlags = readFutureFlags(turboJsonPath);
+  const fixture = makeFixture(remoteCache, futureFlags);
   const cache = await startFakeCache();
   const runs: RunRecord[] = [];
   const expectations: Expectation[] = [];
@@ -531,19 +568,94 @@ export async function runSigningProbe(
       "TURBO_CACHE=local:rw,remote:rw in the env writes, signed",
       h.puts >= 1 && h.unsignedPuts === 0,
     );
+
+    // 9. C1: an EMPTY key. `${{ secrets.KEY }}` evaluates to "" when the secret
+    //    is unset, so the variable is SET and empty. Without
+    //    `futureFlags.longerSignatureKey` turbo signs with a zero-length HMAC
+    //    key (reproducible by anyone) and uploads, with a warning only. With
+    //    the flag it must refuse: non-zero exit, no artifact request at all.
+    cache.store.clear();
+    const i = await runTurbo({
+      scenario: "empty-key-write",
+      fixture,
+      cache,
+      key: "",
+      cacheFlag: RW,
+      via: "env",
+      payload: "clean",
+    });
+    runs.push(i);
+    expect(i.scenario, "the run fails (an empty key is fatal)", i.exitCode !== 0);
+    expect(i.scenario, "no artifact request reaches the cache", i.artifactRequests === 0);
+    expect(i.scenario, "nothing is stored", cache.store.size === 0);
+
+    // 10. A SHORT key (31 bytes, one under turbo's 32-byte minimum): same.
+    const j = await runTurbo({
+      scenario: "short-key-write",
+      fixture,
+      cache,
+      key: "k".repeat(31),
+      cacheFlag: RW,
+      via: "env",
+      payload: "clean",
+    });
+    runs.push(j);
+    expect(j.scenario, "the run fails (a short key is fatal)", j.exitCode !== 0);
+    expect(j.scenario, "no artifact request reaches the cache", j.artifactRequests === 0);
+    expect(j.scenario, "nothing is stored", cache.store.size === 0);
+
+    // 11. A pull_request / merge_group / fork job after the "key only on
+    //     main" change: no token, no key, local cache only. It must pass
+    //     and never touch the remote.
+    const k = await runTurbo({
+      scenario: "pr-no-credentials",
+      fixture,
+      cache,
+      key: null,
+      token: null,
+      cacheFlag: "local:rw",
+      via: "env",
+      payload: "clean",
+    });
+    runs.push(k);
+    expect(k.scenario, "the run succeeds", k.exitCode === 0);
+    expect(k.scenario, "the task executes", k.outcome === "executed" && k.dist === "clean");
+    expect(k.scenario, "zero requests reach the remote cache", k.requests === 0);
+
+    // 12. The workflow merged BEFORE the `turbo-cache-writer` environment (or
+    //     its secrets) exists: on a push to main both secrets evaluate to ""
+    //     — token SET-and-empty, key SET-and-empty, remote:rw requested. It
+    //     must pass with no remote cache: zero requests, never a write.
+    cache.store.clear();
+    const l = await runTurbo({
+      scenario: "writer-before-environment",
+      fixture,
+      cache,
+      key: "",
+      token: "",
+      cacheFlag: RW,
+      via: "env",
+      payload: "clean",
+    });
+    runs.push(l);
+    expect(l.scenario, "the run succeeds", l.exitCode === 0);
+    expect(l.scenario, "the task executes", l.outcome === "executed" && l.dist === "clean");
+    expect(l.scenario, "zero requests reach the remote cache", l.requests === 0);
+    expect(l.scenario, "nothing is stored", cache.store.size === 0);
   } finally {
     await cache.close();
     rmSync(fixture, { recursive: true, force: true });
   }
-  return { remoteCache, runs, expectations, ok: expectations.every((x) => x.ok) };
+  return { remoteCache, futureFlags, runs, expectations, ok: expectations.every((x) => x.ok) };
 }
 
 function report(result: ProbeResult): string {
   const lines: string[] = [];
   lines.push(`turbo.json remoteCache: ${JSON.stringify(result.remoteCache) ?? "(absent)"}`);
+  lines.push(`turbo.json futureFlags: ${JSON.stringify(result.futureFlags) ?? "(absent)"}`);
   for (const r of result.runs) {
     lines.push(
-      `\n[${r.scenario}] exit=${r.exitCode} outcome=${r.outcome} dist=${r.dist ?? "(none)"} PUTs=${r.puts} (unsigned ${r.unsignedPuts}) GETs=${r.gets} (${r.durationMs}ms)`,
+      `\n[${r.scenario}] exit=${r.exitCode} outcome=${r.outcome} dist=${r.dist ?? "(none)"} PUTs=${r.puts} (unsigned ${r.unsignedPuts}) GETs=${r.gets} requests=${r.requests} (artifact ${r.artifactRequests}) (${r.durationMs}ms)`,
     );
     for (const w of r.warnings) lines.push(`    turbo: ${w}`);
     for (const x of result.expectations.filter((e) => e.scenario === r.scenario)) {

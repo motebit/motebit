@@ -6,8 +6,10 @@
  *   - the repo's own turbo.json signs every PUT and refuses an unsigned or
  *     foreign-key entry (and a key-less run neither fails nor writes);
  *   - the probe BITES: a turbo.json without `remoteCache.signature` is caught
- *     uploading unsigned and replaying the planted POISON artifact — so a
- *     green first test is a statement about the config, not a blind probe.
+ *     uploading unsigned and replaying the planted POISON artifact, and one
+ *     without `futureFlags.longerSignatureKey` is caught signing with an
+ *     EMPTY key and uploading — so a green first test is a statement about
+ *     the config, not a blind probe.
  */
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -36,6 +38,17 @@ describe("turbo remote-cache signing (fake cache)", () => {
       expect(byName["right-key-hit"]!.outcome).toBe("hit");
       expect(byName["no-key-write"]!.exitCode).toBe(0);
       expect(byName["no-key-write"]!.puts).toBe(0);
+      // C1: an empty or short key is fatal and sends no artifact request.
+      expect(byName["empty-key-write"]!.exitCode).not.toBe(0);
+      expect(byName["empty-key-write"]!.artifactRequests).toBe(0);
+      expect(byName["short-key-write"]!.exitCode).not.toBe(0);
+      expect(byName["short-key-write"]!.artifactRequests).toBe(0);
+      // Key only on main: a job without credentials, and the writer job before
+      // its environment exists, pass and never reach the remote.
+      expect(byName["pr-no-credentials"]!.exitCode).toBe(0);
+      expect(byName["pr-no-credentials"]!.requests).toBe(0);
+      expect(byName["writer-before-environment"]!.exitCode).toBe(0);
+      expect(byName["writer-before-environment"]!.requests).toBe(0);
     },
     TIMEOUT,
   );
@@ -54,6 +67,29 @@ describe("turbo remote-cache signing (fake cache)", () => {
       expect(byName["wrong-key-miss"]!.outcome).toBe("hit");
       expect(byName["wrong-key-miss"]!.dist).toBe("POISON");
       expect(byName["unsigned-miss"]!.dist).toBe("POISON");
+    },
+    TIMEOUT,
+  );
+
+  it(
+    "bites: signed but without futureFlags.longerSignatureKey, an EMPTY key signs and uploads",
+    async () => {
+      const d = mkdtempSync(join(tmpdir(), "turbo-shortkey-"));
+      dirs.push(d);
+      const p = join(d, "turbo.json");
+      writeFileSync(
+        p,
+        JSON.stringify({
+          remoteCache: { signature: true },
+          tasks: { build: { outputs: ["dist/**"] } },
+        }),
+      );
+      const r = await runSigningProbe(p);
+      expect(r.ok).toBe(false);
+      const byName = Object.fromEntries(r.runs.map((x) => [x.scenario, x]));
+      expect(byName["empty-key-write"]!.exitCode).toBe(0);
+      expect(byName["empty-key-write"]!.puts).toBeGreaterThan(0);
+      expect(byName["short-key-write"]!.puts).toBeGreaterThan(0);
     },
     TIMEOUT,
   );
