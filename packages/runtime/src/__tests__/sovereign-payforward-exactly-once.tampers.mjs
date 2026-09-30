@@ -2,17 +2,17 @@
 // Tamper check for sovereign-payforward-exactly-once.test.ts.
 //
 // Each entry reverts one fix and names the test expected to go red. The
-// script applies the tamper, runs the file, restores it, and fails if a
-// tamper did not apply (a false green) or the named test stayed green.
+// shared runner (scripts/lib/tamper-runner.ts) applies each tamper in an
+// isolated copy of the tree, runs the file, and fails if a tamper did not
+// apply (a false green) or the named test stayed green.
 //
-//   node packages/runtime/src/__tests__/sovereign-payforward-exactly-once.tampers.mjs
+//   node packages/runtime/src/__tests__/sovereign-payforward-exactly-once.tampers.mjs [--concurrency=N]
 //
 // Run from anywhere; paths resolve relative to this file.
 
-import { readFileSync, writeFileSync } from "node:fs";
-import { spawnSync } from "node:child_process";
-import { dirname, join } from "node:path";
+import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
+import { runTampers } from "../../../../scripts/lib/tamper-runner.ts";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const pkg = join(here, "..", "..");
@@ -28,31 +28,13 @@ const TAMPERS = [
   },
 ];
 
-let failed = false;
-for (const t of TAMPERS) {
-  const original = readFileSync(t.file, "utf8");
-  if (!original.includes(t.text)) {
-    console.error(`TAMPER DID NOT APPLY (re-target it): ${t.file}: ${JSON.stringify(t.text)}`);
-    failed = true;
-    continue;
-  }
-  writeFileSync(t.file, original.replace(t.text, t.replacement));
-  let out;
-  try {
-    out = spawnSync("npx", ["vitest", "run", t.file, "--reporter=verbose"], {
-      cwd: pkg,
-      encoding: "utf8",
-    });
-  } finally {
-    writeFileSync(t.file, original);
-  }
-  const log = `${out.stdout}\n${out.stderr}`;
-  const redLine = log.split("\n").find((l) => l.includes("×") && l.includes(t.red));
-  if (out.status !== 0 && redLine) {
-    console.log(`red as expected: ${t.red}`);
-  } else {
-    console.error(`STAYED GREEN with the fix removed: ${t.red}\n${log}`);
-    failed = true;
-  }
-}
-process.exit(failed ? 1 : 0);
+await runTampers(
+  TAMPERS.map((t) => ({
+    name: t.red,
+    pkg: "@motebit/runtime",
+    test: relative(pkg, t.file),
+    red: t.red,
+    edits: [{ file: t.file, from: t.text, to: t.replacement }],
+  })),
+  { root: here },
+);
