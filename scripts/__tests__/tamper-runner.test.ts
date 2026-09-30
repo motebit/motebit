@@ -110,7 +110,7 @@ describe("tamper-runner evidence", () => {
   it("C2: a tamper that breaks collection (a syntax error) is INCONCLUSIVE, never RED", () => {
     const d = drive(fx!, [{ name: "syntax", ...SUM_TEST, edits: [SYNTAX_ERROR] }], 1);
     expect(verdicts(d)).toEqual(["INCONCLUSIVE"]);
-    expect(d.out).toMatch(/INCONCLUSIVE +syntax +\((suite-level error|edit is not valid code)/);
+    expect(d.out).toMatch(/INCONCLUSIVE +syntax +\((suite-level error|edit does not type-check)/);
     expect(d.code).toBe(1);
   });
 

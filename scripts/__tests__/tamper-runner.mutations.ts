@@ -11,9 +11,11 @@
  * M1-M8 are the eight mutations a cold review of a8b2a8e found the old
  * self-test did not catch; N1-N12 remove one clause of the evidence law or
  * the isolation fixes each; X1-X10 and X17 are the ones a cold review of
- * ed573f1b9 found unnoticed; S1-S10 remove one clause of the sandwich law
- * (pre, post, reset, HOME, valid code, timeouts, reaping). Every entry must
- * print RED (ok).
+ * ed573f1b9 found unnoticed; S1-S12 remove one clause of the sandwich law
+ * (pre, post, reset, HOME, valid code, reaping); G1-G9 one clause of the
+ * causation law (the second edited run, the middle unedited run, the group
+ * kill, the survivor check, same test, same error class, no-op entries, the
+ * group-wide flake veto). Every entry must print RED (ok).
  */
 import { dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -28,6 +30,7 @@ const VERDICTS = { test: "scripts/__tests__/tamper-runner.test.ts" };
 const ISOLATION = { test: "scripts/__tests__/tamper-runner.isolation.test.ts" };
 const LIFECYCLE = { test: "scripts/__tests__/tamper-runner.lifecycle.test.ts" };
 const SANDWICH = { test: "scripts/__tests__/tamper-runner.sandwich.test.ts" };
+const CAUSATION = { test: "scripts/__tests__/tamper-runner.causation.test.ts" };
 
 const edit = (from: string, to: string) => ({ file: RUNNER, from, to });
 const NEVER = "if (false as boolean) {";
@@ -195,8 +198,8 @@ const MUTATIONS: TamperEntry[] = [
         `    ${NEVER}`,
       ),
       edit(
-        '    if (t.code !== 0 && marked) return { verdict: "RED", bites: [] };',
-        '    if (t.code !== 0 && (marked || entry.redMarker == null)) return { verdict: "RED", bites: [] };',
+        '    if (t.code !== 0 && marked) return { verdict: "RED", bites: new Map() };',
+        '    if (t.code !== 0 && (marked || entry.redMarker == null)) return { verdict: "RED", bites: new Map() };',
       ),
     ],
   },
@@ -206,8 +209,8 @@ const MUTATIONS: TamperEntry[] = [
     red: "tamper-runner evidence C2: a command that crashes (non-zero exit, no red marker) is INCONCLUSIVE, never RED",
     edits: [
       edit(
-        '    if (t.code !== 0 && marked) return { verdict: "RED", bites: [] };',
-        '    if (t.code !== 0) return { verdict: "RED", bites: [] };',
+        '    if (t.code !== 0 && marked) return { verdict: "RED", bites: new Map() };',
+        '    if (t.code !== 0) return { verdict: "RED", bites: new Map() };',
       ),
     ],
   },
@@ -318,8 +321,8 @@ const MUTATIONS: TamperEntry[] = [
   },
   {
     name: "S2 sandwich post: no post-run",
-    ...SANDWICH,
-    red: "tamper-runner sandwich post: a RED whose post-run (edit reverted) is not green is INCONCLUSIVE — state leaked",
+    ...CAUSATION,
+    red: "tamper-runner causation the post-run (run 5/5) must be green: state the edit left fails it",
     edits: [edit('  if (c.verdict === "RED" || !last) {', `  ${NEVER}`)],
   },
   {
@@ -356,22 +359,16 @@ const MUTATIONS: TamperEntry[] = [
     ],
   },
   {
-    name: "S5 no parse check of the edited files",
-    ...SANDWICH,
-    red: "tamper-runner sandwich C2: an edit that does not parse is INCONCLUSIVE when the test imports it dynamically",
-    edits: [edit("      if (plan.parsesBefore.get(rel) !== null) continue;", "      continue;")],
+    name: "S5 no type-check of the edit (the compiler never asked)",
+    ...CAUSATION,
+    red: "tamper-runner causation C3: an edit tsc rejects (TS2551) is INCONCLUSIVE, never RED",
+    edits: [edit("    if (validity.problem != null) {", `    ${NEVER}`)],
   },
   {
-    name: "S6 a code error (ReferenceError …) from the edited file counts as RED",
+    name: "S6 JS edits not type-checked (checkJs off: an undefined name loads, then throws)",
     ...SANDWICH,
     red: "tamper-runner sandwich C2: an edit that names an undefined variable (static import) is INCONCLUSIVE, never RED",
-    edits: [edit("  if (invalid != null) {", `  ${NEVER}`)],
-  },
-  {
-    name: "S7 a timeout is RED without an immediate re-run",
-    ...SANDWICH,
-    red: "tamper-runner sandwich P-a: a timeout that does not reproduce on an immediate re-run with the edit is INCONCLUSIVE",
-    edits: [edit('  if (c.verdict === "RED" && c.timeoutOnly === true) {', `  ${NEVER}`)],
+    edits: [edit("checkJs: true", "checkJs: false")],
   },
   {
     name: "S8 reaping ignores the owner's host and pid namespace",
@@ -398,15 +395,102 @@ const MUTATIONS: TamperEntry[] = [
   },
   {
     name: "S12 sandwich post: a RED's failing tests need not pass in the post-run",
-    ...SANDWICH,
-    red: "tamper-runner sandwich post: a RED whose failing test the post-run does not pass (leaked state skipped it) is INCONCLUSIVE",
-    edits: [edit('      if (c.verdict === "RED" && back.length > 0) {', `      ${NEVER}`)],
+    ...CAUSATION,
+    red: "tamper-runner causation each test a RED rests on must PASS in the post-run (skipped is not passed)",
+    edits: [edit("        if (back.length > 0) {", `        ${NEVER}`)],
   },
   {
     name: "S11 only: the narrowing (-t) not passed to vitest",
     ...VERDICTS,
     red: "tamper-runner evidence only: runs just the red test (a failing sibling is never run)",
     edits: [edit("  if (only != null) args.push(", "  if (false as boolean) args.push(")],
+  },
+  // --- the causation law (round 4): one per clause, each named for what it drops
+  {
+    name: "G1 skip the second edited run (one observation counts)",
+    ...CAUSATION,
+    red: "tamper-runner causation C2: a self-enforced timeout (vi.waitFor) that does not reproduce is INCONCLUSIVE, never RED",
+    edits: [
+      edit(
+        "  const second = await editedRun(entry, slot, plan, running, validity);",
+        "  const second = first;",
+      ),
+    ],
+  },
+  {
+    name: "G2 skip the middle unedited run",
+    ...CAUSATION,
+    red: "tamper-runner causation the unedited run BETWEEN the edited runs must be green (a failure no edit caused)",
+    edits: [
+      edit(
+        '  const mid = await unedited("run 3/5");',
+        "  const mid = { problem: null as string | null, passed: prePassed };",
+      ),
+    ],
+  },
+  {
+    name: "G2b a RED's tests need not pass in the middle unedited run",
+    ...SANDWICH,
+    red: "tamper-runner sandwich post: a RED whose failing test the next unedited run does not pass (leaked state skipped it) is INCONCLUSIVE",
+    edits: [edit("  if (midBack.length > 0) {", `  ${NEVER}`)],
+  },
+  {
+    name: "G3 drop the process-group kill after a run",
+    ...CAUSATION,
+    red: "tamper-runner causation C1: a process a run leaves holding a port (FX_HOLD=1500 ms) never turns a comment-only edit red, and dies with its run",
+    edits: [edit('      process.kill(-pgid, "SIGKILL");', "      void pgid;")],
+  },
+  {
+    name: "G4 drop the survivor check (nothing verified after the kill)",
+    ...CAUSATION,
+    red: "tamper-runner causation C1: a process that escapes its run's process group (own session) is an orphan: the run is not green, and it is killed",
+    edits: [
+      edit(
+        "    const found = scanProcesses(new Set([pgid]), [h]);",
+        "    const found: Proc[] = [];",
+      ),
+    ],
+  },
+  {
+    name: "G6 accept a different failing test in the second edited run",
+    ...CAUSATION,
+    red: "tamper-runner causation both edited runs must fail the SAME test (without red:, the same set)",
+    edits: [
+      edit(
+        "  return x.size === y.size && [...x].every(([n, c]) => y.get(n) === c);",
+        "  return x.size === y.size && [...x].every(([, c]) => [...y.values()].includes(c));",
+      ),
+    ],
+  },
+  {
+    name: "G7 accept no-op entries",
+    ...CAUSATION,
+    red: "tamper-runner causation a no-op entry (no edits) aborts the run (exit 2), never runs",
+    edits: [
+      edit("      const noop = noopReason(root, e);", "      const noop = null as string | null;"),
+    ],
+  },
+  {
+    name: "G8 accept a different error class in the second edited run",
+    ...CAUSATION,
+    red: "tamper-runner causation both edited runs must fail with the same error class",
+    edits: [
+      edit(
+        "  return x.size === y.size && [...x].every(([n, c]) => y.get(n) === c);",
+        "  return x.size === y.size && [...x].every(([n]) => y.has(n));",
+      ),
+    ],
+  },
+  {
+    name: "G9 a test seen failing with no edit does not void the REDs on it",
+    ...CAUSATION,
+    red: "tamper-runner causation a test seen failing with no edit anywhere in the run voids every RED on it",
+    edits: [
+      edit(
+        '            if (r.verdict === "RED" && g.uneditedFailure != null) {',
+        `            ${NEVER}`,
+      ),
+    ],
   },
 ];
 

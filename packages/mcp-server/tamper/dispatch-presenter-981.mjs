@@ -82,7 +82,12 @@ const TAMPERS = [
     name: "worker: a relay-signed refusal falls through to the caller path (no reason)",
     ...UNIT,
     edits: [
-      { file: SERVER, from: 'if (relay.kind === "refused") {', to: "if (false as boolean) {" },
+      // `&& false`, not `false`: relay stays narrowed inside, so the edit type-checks.
+      {
+        file: SERVER,
+        from: 'if (relay.kind === "refused") {',
+        to: 'if (relay.kind === "refused" && (false as boolean)) {',
+      },
     ],
   },
   // --- relay: the forward
@@ -118,6 +123,9 @@ const TAMPERS = [
     ...FORWARD,
     edits: [
       { file: ROUTING, from: "  if (mintBearer == null) {", to: "  if (false as boolean) {" },
+      // …and the bearer is minted only when a minter exists (else the edit
+      // does not type-check: TS2722, mintBearer possibly undefined).
+      { file: ROUTING, from: "${await mintBearer()}", to: "${await mintBearer?.()}" },
     ],
   },
   // --- round 2 (cold review of the first round)

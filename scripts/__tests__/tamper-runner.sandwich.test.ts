@@ -1,5 +1,6 @@
 /**
- * tamper-runner self-tests: THE SANDWICH. An entry is RED only when, in the
+ * tamper-runner self-tests: THE SANDWICH (round 3), which the causation law
+ * (tamper-runner.causation.test.ts) extends: an entry is RED only when, in the
  * same slot, its test is green immediately before the edit, red with it, and
  * green again after it is reverted — with the slot's TMPDIR emptied and a
  * fresh HOME for every run. State the tamper did not cause (a file a previous
@@ -81,23 +82,23 @@ describe("tamper-runner sandwich", () => {
     expect(d.code).toBe(1);
   });
 
-  it("post: a RED whose post-run (edit reverted) is not green is INCONCLUSIVE — state leaked", () => {
+  it("post: a RED whose next unedited run (edit reverted) is not green is INCONCLUSIVE — state leaked", () => {
     const d = drive(fx!, [{ name: "A1 leaks globally", ...GLOBALLEAK, edits: [BREAK_SUM] }], 1);
     expect(verdicts(d), d.out).toEqual(["INCONCLUSIVE"]);
     expect(d.out).toMatch(
-      /INCONCLUSIVE +A1 leaks globally +\(post-run not green: slot state leaked/,
+      /INCONCLUSIVE +A1 leaks globally +\(run 3\/5 \(unedited, between the edited runs\) not green: failing: "finds no global leftover"/,
     );
     expect(d.code).toBe(1);
   });
 
-  it("post: a RED whose failing test the post-run does not pass (leaked state skipped it) is INCONCLUSIVE", () => {
+  it("post: a RED whose failing test the next unedited run does not pass (leaked state skipped it) is INCONCLUSIVE", () => {
     const d = drive(
       fx!,
       [{ name: "hidden after", pkg: FX, test: "skipleak.fx.mjs", edits: [BREAK_SUM] }],
       1,
     );
     expect(verdicts(d), d.out).toEqual(["INCONCLUSIVE"]);
-    expect(d.out).toContain('(post-run: "sums unless hidden" did not pass with the edit reverted)');
+    expect(d.out).toContain('(run 3/5: "sums unless hidden" did not pass with the edit reverted)');
     expect(d.code).toBe(1);
   });
 
@@ -119,7 +120,7 @@ describe("tamper-runner sandwich", () => {
     const d = drive(fx!, [{ name: "syntax (dynamic)", ...DYNIMPORT, edits: [SYNTAX_ERROR] }], 1);
     expect(verdicts(d), d.out).toEqual(["INCONCLUSIVE"]);
     expect(d.out).toMatch(
-      /INCONCLUSIVE +syntax \(dynamic\) +\(edit is not valid code: packages\/fx\/sum\.mjs does not parse/,
+      /INCONCLUSIVE +syntax \(dynamic\) +\(edit does not type-check: packages\/fx\/sum\.mjs:\d+ TS\d+/,
     );
     expect(d.code).toBe(1);
   });
@@ -128,7 +129,7 @@ describe("tamper-runner sandwich", () => {
     const d = drive(fx!, [{ name: "syntax (static)", ...SUM_TEST, edits: [SYNTAX_ERROR] }], 1);
     expect(verdicts(d), d.out).toEqual(["INCONCLUSIVE"]);
     expect(d.out).toMatch(
-      /INCONCLUSIVE +syntax \(static\) +\(edit is not valid code: packages\/fx\/sum\.mjs does not parse/,
+      /INCONCLUSIVE +syntax \(static\) +\(edit does not type-check: packages\/fx\/sum\.mjs:\d+ TS\d+/,
     );
     expect(d.code).toBe(1);
   });
@@ -141,7 +142,7 @@ describe("tamper-runner sandwich", () => {
     );
     expect(verdicts(d), d.out).toEqual(["INCONCLUSIVE"]);
     expect(d.out).toMatch(
-      /INCONCLUSIVE +undefined \(dynamic\) +\(edit is not valid code: ReferenceError: bb is not defined/,
+      /INCONCLUSIVE +undefined \(dynamic\) +\(edit does not type-check: packages\/fx\/sum\.mjs:\d+ TS\d+ Cannot find name 'bb'/,
     );
     expect(d.code).toBe(1);
   });
@@ -154,7 +155,7 @@ describe("tamper-runner sandwich", () => {
     );
     expect(verdicts(d), d.out).toEqual(["INCONCLUSIVE"]);
     expect(d.out).toMatch(
-      /INCONCLUSIVE +undefined \(static\) +\(edit is not valid code: ReferenceError: bb is not defined/,
+      /INCONCLUSIVE +undefined \(static\) +\(edit does not type-check: packages\/fx\/sum\.mjs:\d+ TS\d+ Cannot find name 'bb'/,
     );
     expect(d.code).toBe(1);
   });
@@ -166,7 +167,9 @@ describe("tamper-runner sandwich", () => {
       1,
     );
     expect(verdicts(d), d.out).toEqual(["INCONCLUSIVE"]);
-    expect(d.out).toMatch(/INCONCLUSIVE +spike once +\(a timeout that did not reproduce/);
+    expect(d.out).toMatch(
+      /INCONCLUSIVE +spike once +\(did not reproduce: edited run 1 RED, edited run 2 GREEN/,
+    );
     expect(d.code).toBe(1);
   });
 

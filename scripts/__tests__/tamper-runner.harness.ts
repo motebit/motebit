@@ -124,6 +124,11 @@ export async function setupFixture(): Promise<Fx> {
   symlinkSync(join(MONOREPO, "node_modules/.bin/vitest"), join(nm, ".bin/vitest"));
   // The compiler the runner type-checks an edit with (fold.ts, tsconfig.json).
   symlinkSync(realpathSync(join(MONOREPO, "node_modules/typescript")), join(nm, "typescript"));
+  mkdirSync(join(nm, "@types"));
+  symlinkSync(
+    realpathSync(join(MONOREPO, "node_modules/.pnpm/node_modules/@types/node")),
+    join(nm, "@types/node"),
+  );
   mkdirSync(join(nm, ".pnpm/node_modules/@fx"), { recursive: true });
   symlinkSync("../../../../packages/lib", join(nm, ".pnpm/node_modules/@fx/lib"));
   mkdirSync(join(nm, ".pnpm/ext@1.0.0/node_modules/ext"), { recursive: true });

@@ -6,51 +6,76 @@
  * tamper file keeps its entries as data and hands them to `runTampers`; this
  * module owns everything else (docs/ops/agentic-lanes.md § tamper checks).
  *
- * THE LAW: a RED is POSITIVE EVIDENCE, never the absence of a pass. A
+ * THE LAW: a RED is REPRODUCED CAUSATION, never a single observation. A
  * non-zero exit, a missing report, a crash, a typo'd path, a port someone
- * else holds — none of these is evidence that the tamper bit. Concretely:
+ * else holds, a flaky test, a process a previous run left behind — none of
+ * these is evidence that the tamper bit. Concretely:
  *   - vitest runs with a machine-readable reporter (vitest's `json`, written to
- *     a file, plus a two-line companion reporter for the unhandled errors the
- *     `json` reporter drops) and the verdict is decided from those files,
- *     never from the exit code or a grep of the text output;
+ *     a file, plus a two-line companion reporter for the unhandled errors and
+ *     error names the `json` reporter drops) and the verdict is decided from
+ *     those files, never from the exit code or a grep of the text output;
  *   - BASELINE: before any tamper, every distinct test (pkg + test file, or
  *     command) runs once in a slot with no edit. It must run, report at least
- *     one passing test and no failure, and exit 0 — or the whole run ABORTS
- *     (exit 2, `BASELINE NOT GREEN: <test>` with the failing tests). A port held
- *     by an outside process fails the baseline loudly instead of faking a RED;
- *   - THE SANDWICH: an entry is RED only when, in the SAME slot, its test is
- *     GREEN immediately before the edit (the pre-run), RED with the edit, and
- *     GREEN again after the edit is reverted (the post-run), with the slot
- *     reset between runs. Any other sequence is INCONCLUSIVE with the reason
- *     (`pre-run not green: …`, `post-run not green: slot state leaked …`), so
- *     state a previous run left behind — wherever it lives — can never pass
- *     for the tamper's effect, and a flaky test shows as a pre/post-run that
- *     is not green. Runs chain: a green post-run (or the baseline, when
- *     nothing ran in the slot since) IS the next entry's pre-run, so an entry
- *     costs two runs, not three;
- *   - the edited run is RED only when the test file was found and ran, at
- *     least one test that PASSED in the pre-run now FAILS with a test-level
- *     failure (an assertion or error thrown inside the test), there is no
- *     suite-level/collection error and no unhandled error, and vitest exited
- *     non-zero. With `red:` set, the failing test must be the one whose EXACT
+ *     one passing test and no failure, exit 0 and leave no process behind — or
+ *     the whole run ABORTS (exit 2, `BASELINE NOT GREEN: <test>`);
+ *   - THE SEQUENCE: an entry is RED only when, in ONE slot,
+ *       U → E → U → E → U   (U = unedited, E = edited; runs 1..5)
+ *     goes green, red, green, red, green: every U green, both E runs red on
+ *     the named test (`red:`; without it, on the same set of tests that
+ *     passed in the U before), and each such test failing with the same
+ *     error CLASS (its errors' names; a vitest timeout is "timeout") in both
+ *     E runs, and passing in every U after it. GREEN when both E runs pass
+ *     (the U runs green). Anything else is INCONCLUSIVE with the reason
+ *     (`pre-run not green`, `run 3/5 (unedited, between the edited runs) not
+ *     green`, `did not reproduce`, `the edited runs failed differently`,
+ *     `post-run not green: slot state leaked`, …). Timeouts get no special
+ *     path: they reproduce or they do not. Runs chain: run 5 (or the
+ *     baseline, when nothing ran in the slot since) IS the next entry's run
+ *     1, so an entry costs four runs of its test;
+ *   - THE FLAKE VETO: a test seen failing with NO edit anywhere in the run
+ *     (any U after the baseline) voids every RED on it in that run — those
+ *     REDs' green U runs were luck, not a property of the test. A group's
+ *     verdicts print when the group finishes;
+ *   - an edited run is red only when a test that passed in the U before it
+ *     fails with a test-level failure (an assertion or error thrown inside
+ *     the test), there is no suite-level/collection error, no unhandled
+ *     error and no orphan, and vitest exited non-zero. `red:` is the EXACT
  *     full name (describe path + title, space-joined, as vitest's JSON
- *     reporter gives it) is `red` — a describe name or a bare title is not
- *     enough. GREEN only when the file ran, >= 1 test passed, none failed and
- *     vitest exited 0 (with `red:`, when that test passed). Anything else is
- *     INCONCLUSIVE, with the reason — a failure, never a RED;
- *   - an edit that is not valid code is not evidence: after the edits are
- *     applied every edited file that parsed before must still parse (`node
- *     --check`; the tree's `typescript`, syntax only; JSON), and a failure
- *     whose error is a SyntaxError / ReferenceError / "is not defined" /
- *     "Cannot find module" naming an edited file is INCONCLUSIVE (`edit is not
- *     valid code`), however the test imports it;
- *   - a RED that rests only on timeouts (a load spike is not evidence) must
- *     time out again on an immediate re-run with the edit, and its post-run
- *     must be green;
+ *     reporter gives it) — a describe name or a bare title is not enough;
+ *   - PROCESS HYGIENE: every process runs in its own process group. When it
+ *     exits, the group is SIGKILLed and the runner VERIFIES no process is
+ *     left in it and none works in the slot (cwd or an open file under the
+ *     slot's tree/TMPDIR/HOME, or the slot's TAMPER_RUNNER_SLOT token in its
+ *     environment — Linux reads /proc; elsewhere `ps` + `lsof`, best effort,
+ *     no environment check). One found outside the group escaped the kill:
+ *     it is killed and the run is INCONCLUSIVE (`orphan: …`). On exit a
+ *     final sweep does the same for every slot, and one that survives it
+ *     fails the run (exit 2);
+ *   - an edit must be VALID CODE BY THE COMPILER: before the first edited
+ *     run, the edited files are type-checked with the tree's `typescript`
+ *     (nearest tsconfig.json, else strict NodeNext defaults with the hoisted
+ *     @types; allowJs + checkJs, so .mjs/.js too; noUnused* off, since a
+ *     revert may orphan a helper), before and after the edit, and any
+ *     diagnostic the edit adds in an edited file — or an import specifier in
+ *     it that no longer resolves — is INCONCLUSIVE (`edit does not
+ *     type-check: <file>:<line> TS<code> …`). No `typescript`: .js files get
+ *     `node --check`, .ts files are INCONCLUSIVE. JSON must still parse;
+ *     other files are not checked;
+ *   - an entry that changes nothing (no edits, from === to, or edits that
+ *     leave every file as it was) ABORTS the run (exit 2) before anything runs;
  *   - a `command` (non-vitest) entry must declare `redMarker`, the text its
- *     check prints only when it fails. RED = non-zero exit AND the marker;
- *     GREEN = exit 0 and no marker; anything else INCONCLUSIVE. An entry
+ *     check prints only when it fails. Red = non-zero exit AND the marker;
+ *     green = exit 0 and no marker; the sequence applies as above. An entry
  *     without `redMarker` is INCONCLUSIVE without being run.
+ * Residual, stated: a test that fails on a schedule matching U/E/U/E/U by
+ * itself (e.g. every other run) is indistinguishable from causation by any
+ * fixed schedule; a single-entry group on a 50% flaky test still reads RED
+ * with probability 1/16 (the veto needs a U to fail); a process that
+ * leaves the group, the slot and its environment (chdir away, closes every
+ * fd, clears its env) escapes the check; and state outside the slot/TMPDIR/
+ * HOME (a hard-coded /tmp path, a fixed port two test files share) is not
+ * reset — the interleaving makes such leaks show as a U that is not green,
+ * which then vetoes the group, but not provably.
  *
  * Isolation. Every tamper runs in a private copy of the caller's tree, never
  * in the caller's tree itself. A copy (a "slot") is a `git worktree` at HEAD
@@ -75,11 +100,11 @@
  *     would have linked it inside the entry, which is then copied);
  *   - every tracked file's mtime synced to the caller's, so `tsc -b` sees the
  *     copied `dist` as up to date and a rebuild compiles only what changed.
- * Every run (baseline, pre-run, edited run, post-run) starts with the slot's
+ * Every run (baseline, unedited, edited) starts with the slot's
  * TMPDIR emptied and a fresh HOME (XDG_CONFIG/CACHE/DATA/STATE_HOME under it)
  * — the runner's own files (reports, reporter) live outside both. Measured
  * cost: about 1.4 s per run on a monorepo vitest file (caches in HOME and
- * TMPDIR start cold), on top of the third run the sandwich adds per group.
+ * TMPDIR start cold).
  * One copy is made per worker slot and REUSED. After every run in a slot the
  * edited files are restored from git (an overlaid file gets the caller's bytes
  * back) with their mtimes, and EVERY ignored path that changed — any output a
@@ -145,8 +170,7 @@ import {
   utimesSync,
   writeFileSync,
 } from "node:fs";
-import { createHash } from "node:crypto";
-import * as nodeModule from "node:module";
+import { createHash, randomBytes } from "node:crypto";
 import { availableParallelism, cpus, hostname, tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
@@ -440,6 +464,8 @@ interface Slot {
   pristineStatus: string;
   /** Ignored state of the slot as created (see ignoredState). */
   pristineIgnored: Map<string, string>;
+  /** What marks a process as this slot's (every run is swept with it). */
+  hygiene: Hygiene;
 }
 
 interface Plan {
@@ -455,8 +481,6 @@ interface Plan {
   overlayHash: Map<string, string>;
   /** pnpm package name -> package dir, repo-relative ("." for the root). */
   pkgDirs: Map<string, string>;
-  /** Edited file -> did it parse BEFORE any edit (null), not (the reason), or no parser (undefined). */
-  parsesBefore: Map<string, string | null | undefined>;
 }
 
 function makePlan(root: string, pkgs: string[]): Plan {
@@ -505,7 +529,6 @@ function makePlan(root: string, pkgs: string[]): Plan {
     tracked,
     overlayHash,
     pkgDirs,
-    parsesBefore: new Map(),
   };
 }
 
@@ -670,7 +693,22 @@ function createSlot(plan: Plan, base: string, index: number): Slot {
   }
   const pristineStatus = git(dir, ["status", "--porcelain=v1", "-z", "--untracked-files=all"]);
   const pristineIgnored = ignoredState(dir);
-  const slot: Slot = { index, dir, tmp, home, run, overlaid, pristineStatus, pristineIgnored };
+  const real = realpathSync(base);
+  const hygiene: Hygiene = {
+    dirs: [join(real, `slot-${index}`), join(real, `tmp-${index}`), join(real, `home-${index}`)],
+    token: `${randomBytes(12).toString("hex")}-${index}`,
+  };
+  const slot: Slot = {
+    index,
+    dir,
+    tmp,
+    home,
+    run,
+    overlaid,
+    pristineStatus,
+    pristineIgnored,
+    hygiene,
+  };
   resetRunState(slot);
   return slot;
 }
@@ -687,10 +725,224 @@ interface Running {
 interface Exec {
   code: number | null;
   out: string;
+  /**
+   * Processes that outlived the run: after it closed and its process group
+   * was SIGKILLed, still alive (in the group) or found elsewhere working in
+   * the slot (cwd, an open file, or the slot's token in its environment).
+   * Each was then killed. Non-empty = the run is not evidence of anything.
+   */
+  orphans: string[];
+}
+
+/** What marks a process as this slot's: its group, its dirs, its token. */
+interface Hygiene {
+  /** The slot's tree, TMPDIR and HOME. */
+  dirs: string[];
+  /** A value only this slot's runs carry in their environment (TAMPER_RUNNER_SLOT). */
+  token: string;
+}
+
+interface Proc {
+  pid: number;
+  pgid: number;
+  why: string;
+}
+
+const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+
+function under(p: string, dirs: string[]): boolean {
+  return dirs.some((d) => p === d || p.startsWith(`${d}${sep}`));
+}
+
+/**
+ * Every live (non-zombie) process, other than this one, that is in one of
+ * `pgids` or works inside `h.dirs` (cwd or an open file) or carries `h.token`
+ * in its environment. Linux: /proc. Elsewhere: `ps` (groups) and `lsof`
+ * (cwd and open files), best effort; no environment check.
+ */
+function scanProcesses(pgids: Set<number>, hs: Hygiene[]): Proc[] {
+  const found: Proc[] = [];
+  const dirs = hs.flatMap((h) => h.dirs);
+  if (existsSync("/proc/self/stat")) {
+    let pids: string[];
+    try {
+      pids = readdirSync("/proc").filter((n) => /^\d+$/.test(n));
+    } catch {
+      return found;
+    }
+    for (const n of pids) {
+      const pid = Number(n);
+      if (pid === process.pid) continue;
+      try {
+        const stat = readFileSync(`/proc/${n}/stat`, "utf8");
+        const f = stat.slice(stat.lastIndexOf(")") + 2).split(" ");
+        if (f[0] === "Z" || f[0] === "X") continue;
+        const pgid = Number(f[2]);
+        if (pgids.has(pgid)) {
+          found.push({ pid, pgid, why: `in the run's process group ${pgid}` });
+          continue;
+        }
+        let why: string | null = null;
+        try {
+          const cwd = readlinkSync(`/proc/${n}/cwd`);
+          if (under(cwd, dirs)) why = `cwd ${cwd}`;
+        } catch {
+          // not readable
+        }
+        if (why == null) {
+          try {
+            const env = readFileSync(`/proc/${n}/environ`, "utf8").split("\0");
+            const t = hs.find((h) => env.includes(`TAMPER_RUNNER_SLOT=${h.token}`));
+            if (t != null) why = "the slot's token in its environment";
+          } catch {
+            // not readable
+          }
+        }
+        if (why == null) {
+          try {
+            for (const fd of readdirSync(`/proc/${n}/fd`)) {
+              let target: string;
+              try {
+                target = readlinkSync(`/proc/${n}/fd/${fd}`);
+              } catch {
+                continue;
+              }
+              if (under(target, dirs)) {
+                why = `open file ${target}`;
+                break;
+              }
+            }
+          } catch {
+            // not readable
+          }
+        }
+        if (why != null) found.push({ pid, pgid, why });
+      } catch {
+        // exited meanwhile
+      }
+    }
+    return found;
+  }
+  // No /proc (macOS): groups from ps, cwd and open files from lsof.
+  const seen = new Set<number>();
+  try {
+    const ps = spawnSync("ps", ["-axo", "pid=,pgid=,stat="], { encoding: "utf8" });
+    for (const line of `${ps.stdout}`.split("\n")) {
+      const [pid, pgid, st] = line.trim().split(/\s+/);
+      if (pid == null || pgid == null || (st ?? "").startsWith("Z")) continue;
+      if (Number(pid) === process.pid || !pgids.has(Number(pgid))) continue;
+      seen.add(Number(pid));
+      found.push({
+        pid: Number(pid),
+        pgid: Number(pgid),
+        why: `in the run's process group ${pgid}`,
+      });
+    }
+    const lsof = spawnSync("lsof", ["-nP", "-Fpn"], {
+      encoding: "utf8",
+      maxBuffer: 256 * 1024 * 1024,
+    });
+    let cur = 0;
+    for (const line of `${lsof.stdout}`.split("\n")) {
+      if (line.startsWith("p")) cur = Number(line.slice(1));
+      else if (
+        line.startsWith("n") &&
+        cur !== process.pid &&
+        !seen.has(cur) &&
+        under(line.slice(1), dirs)
+      ) {
+        seen.add(cur);
+        found.push({ pid: cur, pgid: -1, why: `open file ${line.slice(1)}` });
+      }
+    }
+  } catch {
+    // best effort
+  }
+  return found;
+}
+
+function killQuietly(pid: number): void {
+  try {
+    process.kill(pid, "SIGKILL");
+  } catch {
+    // already gone
+  }
+}
+
+/**
+ * After a run closed: SIGKILL its whole process group, then VERIFY that no
+ * process of the group is left and none works inside the slot. Anything
+ * found outside the group escaped the kill (a new session, a double fork):
+ * it is killed too and reported, as is a group member still alive after 3 s.
+ * Returns the reports (empty = clean).
+ */
+async function sweep(pgid: number, h: Hygiene): Promise<string[]> {
+  const orphans = new Map<number, string>();
+  const deadline = Date.now() + 3000;
+  for (;;) {
+    try {
+      process.kill(-pgid, "SIGKILL");
+    } catch {
+      // no member left
+    }
+    const found = scanProcesses(new Set([pgid]), [h]);
+    for (const p of found) {
+      if (p.pgid === pgid) continue;
+      if (!orphans.has(p.pid)) orphans.set(p.pid, `pid ${p.pid} (${cmdline(p.pid)}): ${p.why}`);
+      killQuietly(p.pid);
+    }
+    if (found.length === 0) break;
+    if (Date.now() > deadline) {
+      for (const p of found) {
+        if (!orphans.has(p.pid)) {
+          orphans.set(p.pid, `pid ${p.pid} (${cmdline(p.pid)}): survived SIGKILL, ${p.why}`);
+        }
+      }
+      break;
+    }
+    await sleep(25);
+  }
+  return [...orphans.values()];
+}
+
+/**
+ * Synchronous (it runs from an `exit` handler): SIGKILL every process in one
+ * of `pgids` or working in a slot, then wait up to 3 s for them to die.
+ * Returns the ones still alive.
+ */
+function finalSweep(pgids: Set<number>, hs: Hygiene[]): string[] {
+  if (hs.length === 0 && pgids.size === 0) return [];
+  const wait = new Int32Array(new SharedArrayBuffer(4));
+  const deadline = Date.now() + 3000;
+  for (;;) {
+    for (const g of pgids) {
+      try {
+        process.kill(-g, "SIGKILL");
+      } catch {
+        // no member left
+      }
+    }
+    const found = scanProcesses(pgids, hs);
+    for (const p of found) killQuietly(p.pid);
+    if (found.length === 0) return [];
+    if (Date.now() > deadline)
+      return found.map((p) => `pid ${p.pid} (${cmdline(p.pid)}): ${p.why}`);
+    Atomics.wait(wait, 0, 0, 25);
+  }
+}
+
+function cmdline(pid: number): string {
+  try {
+    const c = readFileSync(`/proc/${pid}/cmdline`, "utf8").split("\0").join(" ").trim();
+    return c.length > 80 ? `${c.slice(0, 77)}...` : c;
+  } catch {
+    return "?";
+  }
 }
 
 function run(
   running: Running,
+  h: Hygiene,
   cmd: string,
   args: string[],
   cwd: string,
@@ -703,15 +955,38 @@ function run(
     const chunks: Buffer[] = [];
     child.stdout.on("data", (d: Buffer) => chunks.push(d));
     child.stderr.on("data", (d: Buffer) => chunks.push(d));
-    const done = (code: number | null): void => {
+    const closed = new Promise<void>((r) => child.on("close", () => r()));
+    let settled = false;
+    const finish = (code: number | null, orphans: string[]): void => {
+      if (settled) return;
+      settled = true;
       running.children.delete(child);
-      resolveRun({ code, out: Buffer.concat(chunks).toString("utf8") });
+      resolveRun({ code, out: Buffer.concat(chunks).toString("utf8"), orphans });
     };
     child.on("error", (err) => {
       chunks.push(Buffer.from(String(err)));
-      done(127);
+      finish(127, []);
     });
-    child.on("close", (code) => done(code));
+    // On EXIT, not close: a process left holding the output pipe would keep
+    // `close` from ever firing. Sweep, then give the pipes a moment to drain.
+    child.on("exit", (code) => {
+      void (async () => {
+        const orphans =
+          child.pid == null
+            ? []
+            : await sweep(child.pid, h).catch((err: unknown) => [`sweep failed: ${String(err)}`]);
+        const drained = await Promise.race([
+          closed.then(() => true),
+          sleep(5000).then(() => false),
+        ]);
+        if (!drained) {
+          child.stdout.destroy();
+          child.stderr.destroy();
+          orphans.push("its output pipe stayed open after every process was killed");
+        }
+        finish(code, orphans);
+      })();
+    });
   });
 }
 
@@ -792,6 +1067,8 @@ interface VitestEvidence {
   reason: string;
   code: number | null;
   out: string;
+  /** Processes that outlived the run (see Exec.orphans). */
+  orphans: string[];
 }
 
 interface JsonAssertion {
@@ -835,7 +1112,10 @@ async function runVitest(
     `--reporter=${reporterPath}`,
   );
   if (only != null) args.push("-t", `^${escapeRegExp(only)}$`);
-  const t = await run(running, "pnpm", args, slot.dir, { ...env, TAMPER_RUNNER_META: metaPath });
+  const t = await run(running, slot.hygiene, "pnpm", args, slot.dir, {
+    ...env,
+    TAMPER_RUNNER_META: metaPath,
+  });
   const ev: VitestEvidence = {
     fileRan: false,
     tests: new Map(),
@@ -845,6 +1125,7 @@ async function runVitest(
     reason: "",
     code: t.code,
     out: t.out,
+    orphans: t.orphans,
   };
   let report: { testResults: JsonFile[] };
   let meta: {
@@ -914,8 +1195,14 @@ function passedNames(ev: VitestEvidence): Set<string> {
   return s;
 }
 
-/** Why a run is not clean evidence of anything (collection error, unhandled error, …), or null. */
+function orphanProblem(orphans: string[]): string | null {
+  return orphans.length > 0 ? `orphan: ${orphans.join("; ")} — killed` : null;
+}
+
+/** Why a run is not clean evidence of anything (an orphan, a collection error, …), or null. */
 function unusable(ev: VitestEvidence): string | null {
+  const orphan = orphanProblem(ev.orphans);
+  if (orphan != null) return orphan;
   if (ev.unreadable != null) return ev.unreadable;
   if (!ev.fileRan) return "the test file was not found or did not run";
   if (ev.suiteErrors.length > 0) return `suite-level error: ${ev.suiteErrors.join("; ")}`;
@@ -924,7 +1211,7 @@ function unusable(ev: VitestEvidence): string | null {
   return null;
 }
 
-/** A baseline is green: clean, >= 1 test passed, none failed, exit 0. Returns the problem or null. */
+/** An unedited run is green: clean, >= 1 test passed, none failed, exit 0. Returns the problem or null. */
 function baselineProblem(ev: VitestEvidence): string | null {
   const bad = unusable(ev);
   if (bad != null) return bad;
@@ -935,73 +1222,40 @@ function baselineProblem(ev: VitestEvidence): string | null {
   return null;
 }
 
-/** A file an entry edits: repo-relative, and relative to the test's package dir. */
-interface EditedFile {
-  rel: string;
-  pkgRel: string;
-}
-
-/** The error is the edit's own code failing to load or run as code, not the test's verdict. */
-const CODE_ERROR_NAME = /^(SyntaxError|ReferenceError|RolldownError|ParseError)$/;
-const CODE_ERROR_MESSAGE =
-  /is not defined|Cannot find module|Failed to (load|resolve)|does not provide an export named|Parse fail/;
-
-/**
- * Why a failed test in the target file failed on the EDIT's invalid code — a
- * SyntaxError / ReferenceError / "is not defined" / "Cannot find module" whose
- * message or stack names an edited file — or null.
- */
-function invalidCode(ev: VitestEvidence, failed: string[], edited: EditedFile[]): string | null {
-  for (const n of failed) {
-    for (const e of ev.errors.get(n) ?? []) {
-      if (!CODE_ERROR_NAME.test(e.name) && !CODE_ERROR_MESSAGE.test(e.message)) continue;
-      const text = `${e.message}\n${e.stack}`;
-      const hit = edited.find(
-        (f) =>
-          text.includes(f.rel) || (!f.pkgRel.startsWith("..") && text.includes(`/${f.pkgRel}`)),
-      );
-      if (hit != null) return `${e.name}: ${e.message.split("\n")[0]} (in ${hit.rel})`;
-    }
-  }
-  return null;
-}
-
 const TIMEOUT = /^(Test|Hook) timed out in \d+ms/;
 
-/** Every failure of these tests is a timeout (and there is at least one). */
-function onlyTimeouts(ev: VitestEvidence, names: string[]): boolean {
-  return (
-    names.length > 0 &&
-    names.every((n) => {
-      const errs = ev.errors.get(n) ?? [];
-      return errs.length > 0 && errs.every((e) => TIMEOUT.test(e.message));
-    })
-  );
+/**
+ * The error class of a failed test in a run: its errors' names (a vitest
+ * timeout is "timeout"), sorted, deduplicated. Two edited runs are the same
+ * failure only when each failing test has the same class in both.
+ */
+function errorClass(ev: VitestEvidence, name: string): string {
+  const errs = ev.errors.get(name) ?? [];
+  const names = errs.map((e) => (TIMEOUT.test(e.message) ? "timeout" : e.name || "Error"));
+  return [...new Set(names)].sort().join("+") || "unknown";
 }
 
 interface Classified {
   verdict: TamperVerdict;
   detail?: string;
-  /** The tests the RED rests on: each must pass again in the post-run. */
-  bites?: string[];
-  /** A RED whose every relevant failure is a timeout: it must reproduce. */
-  timeoutOnly?: boolean;
+  /**
+   * For a RED: each test the RED rests on -> its error class. Both edited
+   * runs must give the same map, and each test must pass in the unedited
+   * runs around them.
+   */
+  bites?: Map<string, string>;
 }
 
 function classifyVitest(
   ev: VitestEvidence,
   prePassed: Set<string>,
   red: string | undefined,
-  edited: EditedFile[],
 ): Classified {
   const bad = unusable(ev);
   if (bad != null) return { verdict: "INCONCLUSIVE", detail: `(${bad})\n${tail(ev.out)}` };
   const failed = [...ev.tests].filter(([, l]) => l.some(isTestFailure)).map(([n]) => n);
-  const invalid = invalidCode(ev, failed, edited);
-  if (invalid != null) {
-    return { verdict: "INCONCLUSIVE", detail: `(edit is not valid code: ${invalid})` };
-  }
-  const bites = failed.filter((n) => prePassed.has(n));
+  const bite = (names: string[]): Map<string, string> =>
+    new Map(names.map((n) => [n, errorClass(ev, n)]));
   if (red != null) {
     const list = ev.tests.get(red);
     if (list == null) {
@@ -1022,9 +1276,7 @@ function classifyVitest(
       return { verdict: "INCONCLUSIVE", detail: `("${red}" did not pass in the pre-run)` };
     }
     const o = list[0]!;
-    if (isTestFailure(o) && ev.code !== 0) {
-      return { verdict: "RED", bites: [red], timeoutOnly: onlyTimeouts(ev, [red]) };
-    }
+    if (isTestFailure(o) && ev.code !== 0) return { verdict: "RED", bites: bite([red]) };
     if (o.status === "passed") {
       const others = failed.length > 0 ? `; other tests failed: ${failed.join(", ")}` : "";
       return { verdict: "GREEN", detail: `("${red}" passed${others})` };
@@ -1034,9 +1286,8 @@ function classifyVitest(
       detail: `("${red}" is ${o.status}, vitest exited ${ev.code})`,
     };
   }
-  if (bites.length > 0 && ev.code !== 0) {
-    return { verdict: "RED", bites, timeoutOnly: onlyTimeouts(ev, bites) };
-  }
+  const bites = failed.filter((n) => prePassed.has(n));
+  if (bites.length > 0 && ev.code !== 0) return { verdict: "RED", bites: bite(bites) };
   if (failed.length === 0 && passedNames(ev).size > 0 && ev.code === 0) return { verdict: "GREEN" };
   return {
     verdict: "INCONCLUSIVE",
@@ -1053,6 +1304,8 @@ interface Group {
   key: string;
   label: string;
   entries: number[];
+  /** The first unedited run of this test (after the baseline) that was not green. */
+  uneditedFailure?: string;
 }
 
 function groupKey(e: TamperEntry): { key: string; label: string } {
@@ -1080,6 +1333,7 @@ function slotEnv(slot: Slot): NodeJS.ProcessEnv {
     XDG_CACHE_HOME: join(home, ".cache"),
     XDG_DATA_HOME: join(home, ".local", "share"),
     XDG_STATE_HOME: join(home, ".local", "state"),
+    TAMPER_RUNNER_SLOT: slot.hygiene.token,
   };
 }
 
@@ -1097,84 +1351,213 @@ function resetRunState(slot: Slot): void {
 }
 
 // ---------------------------------------------------------------------------
-// Is the edit valid code? (A botched revert is not evidence.)
-
-interface TsLike {
-  transpileModule(
-    text: string,
-    o: { fileName: string; reportDiagnostics: boolean; compilerOptions: Record<string, unknown> },
-  ): { diagnostics?: { messageText: unknown; start?: number }[] };
-  flattenDiagnosticMessageText(m: unknown, nl: string): string;
-}
-
-const tsCache = new Map<string, TsLike | null>();
-
-function typescriptFor(root: string): TsLike | null {
-  if (!tsCache.has(root)) {
-    try {
-      tsCache.set(root, nodeModule.createRequire(join(root, "package.json"))("typescript"));
-    } catch {
-      tsCache.set(root, null);
-    }
-  }
-  return tsCache.get(root)!;
-}
+// Is the edit valid code? (A botched revert is not evidence.) Decided by the
+// compiler, never by the error a test happens to throw.
 
 /**
- * Why the file at `abs` does not parse, null when it does, undefined when there
- * is no parser for it. JS: `node --check`. TS: the tree's own `typescript`
- * (syntax only), else node's type stripper. JSON: JSON.parse.
+ * The type-check child (CommonJS; the tree's own `typescript`). Input: a JSON
+ * file `{ root, files: [{ abs, rel, before }], types }` where `before` holds
+ * the file's bytes before the edit, and the tree holds them after. For each
+ * group of edited .ts/.js files sharing a nearest tsconfig.json (or none: the
+ * defaults below), one program with the edited files as roots is built twice,
+ * before and after, and the edited files' syntactic + semantic diagnostics
+ * compared as multisets of `TS<code> <message>`: any diagnostic the edit adds
+ * is a problem. JS is checked too (allowJs + checkJs). Every import specifier
+ * of an edited file must resolve after the edit if it did before (or is new).
+ * noUnusedLocals / noUnusedParameters are off: a revert may orphan a helper.
+ * Prints `TAMPER_TYPECHECK {"problems":[...]}`.
  */
-function parseProblem(root: string, abs: string): string | null | undefined {
-  const ext = abs.slice(abs.lastIndexOf(".")).toLowerCase();
-  if ([".js", ".mjs", ".cjs"].includes(ext)) {
-    const r = spawnSync(process.execPath, ["--check", abs], { encoding: "utf8" });
-    if (r.status === 0) return null;
-    const lines = `${r.stderr}`.split("\n").filter((l) => l.trim() !== "");
-    return lines.find((l) => /Error/.test(l)) ?? lines[0] ?? `node --check exited ${r.status}`;
+const TYPECHECK_SCRIPT = String.raw`"use strict";
+const fs = require("node:fs");
+const path = require("node:path");
+const nodeModule = require("node:module");
+const input = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
+const problems = [];
+const done = () => {
+  process.stdout.write("\nTAMPER_TYPECHECK " + JSON.stringify({ problems }) + "\n");
+  process.exit(0);
+};
+const CODE = /\.(m|c)?(j|t)sx?$/i;
+const TSX = /\.(m|c)?tsx?$/i;
+const norm = (p) => path.resolve(p);
+const lineOf = (text, pos) => text.slice(0, pos).split("\n").length;
+const before = new Map();
+for (const f of input.files) before.set(norm(f.abs), fs.readFileSync(f.before, "utf8"));
+const after = (f) => fs.readFileSync(f.abs, "utf8");
+
+for (const f of input.files) {
+  if (!/\.json$/i.test(f.abs)) continue;
+  let was = true;
+  try { JSON.parse(before.get(norm(f.abs))); } catch { was = false; }
+  try { JSON.parse(after(f)); } catch (err) {
+    if (was) problems.push(f.rel + ": " + String(err && err.message));
   }
-  const text = readFileSync(abs, "utf8");
-  if ([".ts", ".mts", ".cts", ".tsx"].includes(ext)) {
-    const ts = typescriptFor(root);
-    if (ts != null) {
-      const out = ts.transpileModule(text, {
-        fileName: abs,
-        reportDiagnostics: true,
-        compilerOptions: { jsx: 1 },
-      });
-      const d = out.diagnostics?.[0];
-      if (d == null) return null;
-      const line = d.start != null ? text.slice(0, d.start).split("\n").length : "?";
-      return `line ${line}: ${ts.flattenDiagnosticMessageText(d.messageText, " ")}`;
+}
+const code = input.files.filter((f) => CODE.test(f.abs));
+if (code.length === 0) done();
+
+let ts = null;
+try {
+  ts = nodeModule.createRequire(path.join(input.root, "package.json"))("typescript");
+} catch {}
+if (ts == null) {
+  for (const f of code) {
+    if (TSX.test(f.abs)) {
+      problems.push(f.rel + ": no typescript in the tree to type-check it with");
+      continue;
     }
-    const strip = (
-      nodeModule as unknown as {
-        stripTypeScriptTypes?: (code: string, o: { mode: string }) => string;
+    const r = require("node:child_process").spawnSync(process.execPath, ["--check", f.abs], { encoding: "utf8" });
+    if (r.status !== 0) {
+      const lines = String(r.stderr).split("\n").filter((l) => l.trim() !== "");
+      problems.push(f.rel + ": does not parse: " + (lines.find((l) => /Error/.test(l)) || lines[0] || "node --check failed"));
+    }
+  }
+  done();
+}
+
+const nearestConfig = (abs) => {
+  for (let d = path.dirname(abs); ; d = path.dirname(d)) {
+    const c = path.join(d, "tsconfig.json");
+    if (fs.existsSync(c)) return c;
+    if (norm(d) === norm(input.root) || path.dirname(d) === d) return null;
+  }
+};
+const groups = new Map();
+for (const f of code) {
+  const c = nearestConfig(f.abs) || "";
+  if (!groups.has(c)) groups.set(c, []);
+  groups.get(c).push(f);
+}
+const flat = (m) => ts.flattenDiagnosticMessageText(m, " ");
+for (const [cfg, files] of groups) {
+  let options;
+  if (cfg !== "") {
+    const parsed = ts.getParsedCommandLineOfConfigFile(cfg, {}, {
+      ...ts.sys,
+      onUnRecoverableConfigFileDiagnostic: () => {},
+    });
+    options = parsed ? parsed.options : {};
+  } else {
+    options = ts.convertCompilerOptionsFromJson({
+      target: "ES2022", module: "NodeNext", moduleResolution: "NodeNext", strict: true,
+      skipLibCheck: true, types: input.types ? ["node"] : [],
+    }, input.root).options;
+    if (input.types) options.typeRoots = [input.types];
+  }
+  Object.assign(options, {
+    noEmit: true, allowJs: true, checkJs: true, noUnusedLocals: false, noUnusedParameters: false,
+    composite: false, incremental: false, declaration: false, declarationMap: false,
+    emitDeclarationOnly: false, sourceMap: false, allowImportingTsExtensions: true,
+  });
+  delete options.rootDir;
+  delete options.tsBuildInfoFile;
+  delete options.outDir;
+  const roots = files.map((f) => f.abs);
+  const edited = new Set(roots.map(norm));
+  const diagsOf = (program, f) => {
+    const sf = program.getSourceFile(f.abs);
+    if (sf == null) return [];
+    return [...program.getSyntacticDiagnostics(sf), ...program.getSemanticDiagnostics(sf)].map((d) => ({
+      key: "TS" + d.code + " " + flat(d.messageText),
+      line: d.start != null ? lineOf(sf.text, d.start) : "?",
+    }));
+  };
+  try {
+    const host1 = ts.createCompilerHost(options, true);
+    const get1 = host1.getSourceFile.bind(host1);
+    host1.getSourceFile = (fileName, lang, onError, create) => {
+      const t = before.get(norm(fileName));
+      return t != null ? ts.createSourceFile(fileName, t, lang, true) : get1(fileName, lang, onError, create);
+    };
+    const read1 = host1.readFile.bind(host1);
+    host1.readFile = (fileName) => {
+      const t = before.get(norm(fileName));
+      return t != null ? t : read1(fileName);
+    };
+    const p1 = ts.createProgram(roots, options, host1);
+    const host2 = ts.createCompilerHost(options, true);
+    const get2 = host2.getSourceFile.bind(host2);
+    host2.getSourceFile = (fileName, lang, onError, create) =>
+      (!edited.has(norm(fileName)) && p1.getSourceFile(fileName)) || get2(fileName, lang, onError, create);
+    const p2 = ts.createProgram(roots, options, host2);
+    for (const f of files) {
+      const was = new Map();
+      for (const d of diagsOf(p1, f)) was.set(d.key, (was.get(d.key) || 0) + 1);
+      for (const d of diagsOf(p2, f)) {
+        const n = was.get(d.key) || 0;
+        if (n > 0) was.set(d.key, n - 1);
+        else problems.push(f.rel + ":" + d.line + " " + d.key);
       }
-    ).stripTypeScriptTypes;
-    if (strip == null || ext === ".tsx") return undefined;
-    try {
-      strip(text, { mode: "transform" });
-      return null;
-    } catch (err) {
-      return (err instanceof Error ? err.message : String(err)).split("\n")[0]!;
+      // Every import specifier resolves after the edit unless it did not before.
+      const specs = (text) =>
+        ts.preProcessFile(text, true, true).importedFiles.map((i) => ({ spec: i.fileName, line: lineOf(text, i.pos) }));
+      const resolves = (spec) =>
+        nodeModule.isBuiltin(spec) ||
+        ts.resolveModuleName(spec, f.abs, options, ts.sys).resolvedModule != null;
+      const unresolvedBefore = new Set(specs(before.get(norm(f.abs))).filter((i) => !resolves(i.spec)).map((i) => i.spec));
+      for (const i of specs(after(f))) {
+        if (!unresolvedBefore.has(i.spec) && !resolves(i.spec)) {
+          problems.push(f.rel + ":" + i.line + ' import "' + i.spec + '" does not resolve');
+        }
+      }
     }
+  } catch (err) {
+    problems.push("the type-check itself failed: " + String(err && err.stack || err).split("\n")[0]);
   }
-  if (ext === ".json") {
-    try {
-      JSON.parse(text);
-      return null;
-    } catch (err) {
-      return err instanceof Error ? err.message : String(err);
-    }
-  }
-  return undefined;
+}
+done();
+`;
+
+/**
+ * Type-check the entry's edits in the slot (edited): null when the edit is
+ * valid code by the compiler, else the first problem. Run like any other
+ * process of the slot (its own group, swept).
+ */
+async function checkEdit(
+  slot: Slot,
+  plan: Plan,
+  running: Running,
+  originals: Map<string, { bytes: Buffer }>,
+): Promise<string | null> {
+  const script = join(slot.run, "tamper-runner-typecheck.cjs");
+  writeFileSync(script, TYPECHECK_SCRIPT);
+  const files = [...originals].map(([rel, o], i) => {
+    const before = join(slot.run, `before-${i}`);
+    writeFileSync(before, o.bytes);
+    return { abs: join(slot.dir, rel), rel, before };
+  });
+  const hoisted = join(slot.dir, "node_modules", ".pnpm", "node_modules", "@types");
+  const input = join(slot.run, "typecheck-input.json");
+  writeFileSync(
+    input,
+    JSON.stringify({
+      root: slot.dir,
+      files,
+      types: existsSync(join(hoisted, "node")) ? hoisted : null,
+    }),
+  );
+  const t = await run(
+    running,
+    slot.hygiene,
+    process.execPath,
+    [script, input],
+    slot.dir,
+    slotEnv(slot),
+  );
+  const orphan = orphanProblem(t.orphans);
+  if (orphan != null) return `the type-check left a process running: ${orphan}`;
+  const line = t.out.split("\n").find((l) => l.startsWith("TAMPER_TYPECHECK "));
+  if (line == null) return `the type-check printed no result (exit ${t.code})\n${tail(t.out)}`;
+  const { problems } = JSON.parse(line.slice("TAMPER_TYPECHECK ".length)) as { problems: string[] };
+  if (problems.length === 0) return null;
+  const more = problems.length > 1 ? ` (+${problems.length - 1} more)` : "";
+  return `${problems[0]}${more}`;
 }
 
 // ---------------------------------------------------------------------------
-// One run: unedited (a pre- or post-run) or with the entry's edits.
+// One run: unedited (a pre-, middle or post-run) or with the entry's edits.
 
-/** Run the group's test with NO edit (a baseline, pre- or post-run); null problem = green. */
+/** Run the group's test with NO edit (a baseline, pre-, middle or post-run); null problem = green. */
 async function uneditedRun(
   entry: TamperEntry,
   slot: Slot,
@@ -1187,7 +1570,9 @@ async function uneditedRun(
     const env = slotEnv(slot);
     if (entry.command != null) {
       const [cmd, ...args] = entry.command;
-      const t = await run(running, cmd!, args, join(slot.dir, entry.cwd ?? "."), env);
+      const t = await run(running, slot.hygiene, cmd!, args, join(slot.dir, entry.cwd ?? "."), env);
+      const orphan = orphanProblem(t.orphans);
+      if (orphan != null) return { problem: orphan, passed: new Set() };
       if (t.code !== 0) return { problem: `exited ${t.code}\n${tail(t.out)}`, passed: new Set() };
       if (t.out.includes(entry.redMarker!)) {
         return { problem: `printed its red marker "${entry.redMarker}"`, passed: new Set() };
@@ -1216,11 +1601,18 @@ interface EditedRun {
   cmd?: Exec;
 }
 
+/** The entry's type-check verdict, computed on its first edited run and kept. */
+interface Validity {
+  checked: boolean;
+  problem: string | null;
+}
+
 async function editedRun(
   entry: TamperEntry,
   slot: Slot,
   plan: Plan,
   running: Running,
+  validity: Validity,
 ): Promise<EditedRun> {
   const { dir } = slot;
   resetRunState(slot);
@@ -1240,7 +1632,6 @@ async function editedRun(
       if (!originals.has(rel)) {
         const st = statSync(abs);
         originals.set(rel, { bytes: readFileSync(abs), atime: st.atime, mtime: st.mtime });
-        if (!plan.parsesBefore.has(rel)) plan.parsesBefore.set(rel, parseProblem(plan.root, abs));
       }
       const count = current.split(e.from).length - 1;
       if (count !== 1) {
@@ -1255,24 +1646,32 @@ async function editedRun(
       );
     }
 
-    // A file that parsed before the edit and does not after: the edit is not
-    // valid code, and nothing it makes fail is evidence.
-    for (const rel of originals.keys()) {
-      if (plan.parsesBefore.get(rel) !== null) continue;
-      const problem = parseProblem(plan.root, join(dir, rel));
-      if (problem != null) {
-        return {
-          ran: false,
-          final: {
-            verdict: "INCONCLUSIVE",
-            detail: `(edit is not valid code: ${rel} does not parse: ${problem})`,
-          },
-        };
-      }
+    // The edit must be valid code by the compiler: a new diagnostic in an
+    // edited file, or an import that no longer resolves, and nothing the edit
+    // makes fail is evidence.
+    if (!validity.checked) {
+      validity.problem = await checkEdit(slot, plan, running, originals);
+      validity.checked = true;
+    }
+    if (validity.problem != null) {
+      return {
+        ran: false,
+        final: {
+          verdict: "INCONCLUSIVE",
+          detail: `(edit does not type-check: ${validity.problem})`,
+        },
+      };
     }
 
     for (const p of entry.rebuild ?? []) {
-      const b = await run(running, "pnpm", ["--filter", p, "build"], dir, env);
+      const b = await run(running, slot.hygiene, "pnpm", ["--filter", p, "build"], dir, env);
+      const orphan = orphanProblem(b.orphans);
+      if (orphan != null) {
+        return {
+          ran: true,
+          final: { verdict: "INCONCLUSIVE", detail: `(the rebuild of ${p}: ${orphan})` },
+        };
+      }
       if (b.code !== 0) {
         return {
           ran: true,
@@ -1286,7 +1685,8 @@ async function editedRun(
 
     if (entry.command != null) {
       const [cmd, ...args] = entry.command;
-      return { ran: true, cmd: await run(running, cmd!, args, join(dir, entry.cwd ?? "."), env) };
+      const t = await run(running, slot.hygiene, cmd!, args, join(dir, entry.cwd ?? "."), env);
+      return { ran: true, cmd: t };
     }
     const only = entry.only === true ? entry.red : undefined;
     return {
@@ -1298,37 +1698,52 @@ async function editedRun(
   }
 }
 
-function classifyEdited(
-  entry: TamperEntry,
-  r: EditedRun,
-  prePassed: Set<string>,
-  edited: EditedFile[],
-): Classified {
+function classifyEdited(entry: TamperEntry, r: EditedRun, prePassed: Set<string>): Classified {
   if (r.final != null) return r.final;
   if (r.cmd != null) {
     const t = r.cmd;
+    const orphan = orphanProblem(t.orphans);
+    if (orphan != null) return { verdict: "INCONCLUSIVE", detail: `(${orphan})` };
     const marked = t.out.includes(entry.redMarker!);
-    if (t.code !== 0 && marked) return { verdict: "RED", bites: [] };
+    if (t.code !== 0 && marked) return { verdict: "RED", bites: new Map() };
     if (t.code === 0 && !marked) return { verdict: "GREEN" };
     return {
       verdict: "INCONCLUSIVE",
       detail: `(exited ${t.code}, red marker "${entry.redMarker}" ${marked ? "printed" : "absent"})\n${tail(t.out)}`,
     };
   }
-  return classifyVitest(r.ev!, prePassed, entry.red, edited);
+  return classifyVitest(r.ev!, prePassed, entry.red);
 }
 
 function firstLine(text: string | undefined): string {
   return (text ?? "").split("\n")[0]!;
 }
 
+/** `"name" (Class), …` — what an edited run's RED rests on. */
+function describeBites(b: Map<string, string> | undefined): string {
+  const list = [...(b ?? new Map<string, string>())].map(([n, c]) => `"${n}" (${c})`);
+  return list.length > 0 ? list.join(", ") : "its red marker";
+}
+
+function sameBites(
+  a: Map<string, string> | undefined,
+  b: Map<string, string> | undefined,
+): boolean {
+  const x = a ?? new Map<string, string>();
+  const y = b ?? new Map<string, string>();
+  return x.size === y.size && [...x].every(([n, c]) => y.get(n) === c);
+}
+
 /**
- * One entry under THE SANDWICH: in this slot, the test is green immediately
- * before the edit (the pre-run — or the previous entry's green post-run, or
- * the baseline, when nothing ran since), red with it, and green again after
- * it is reverted (the post-run). Anything else is INCONCLUSIVE, with the
- * reason. A RED that rests only on timeouts must reproduce on an immediate
- * re-run with the edit.
+ * One entry under THE LAW: in this slot, the sequence
+ *   U (run 1, the pre-run) → E (run 2) → U (run 3) → E (run 4) → U (run 5, the post-run)
+ * with U = unedited and E = edited must go green, red, green, red, green:
+ * every U green, both E runs red on the same test(s) with the same error
+ * class. Both E green (every U green) is GREEN; anything else INCONCLUSIVE,
+ * with the reason. Run 1 is the previous entry's post-run (or the baseline)
+ * when nothing ran in the slot since; run 5 is skipped only where nothing
+ * rests on it (a non-RED last entry of its group). A failing U also marks the
+ * group (see runTampers: no RED on a test seen failing with no edit counts).
  */
 async function runOne(
   entry: TamperEntry,
@@ -1346,68 +1761,81 @@ async function runOne(
     slot: slot.index,
     ...(c.detail != null ? { detail: c.detail } : {}),
   });
+  const inconclusive = (detail: string): TamperResult =>
+    result({ verdict: "INCONCLUSIVE", detail: `(${detail})` });
 
   const key = chainKey(group, entry);
-  if (slot.chain?.key !== key) {
-    const pre = await uneditedRun(entry, slot, plan, running, true);
-    if (pre.problem != null) {
+  const unedited = async (
+    label: string,
+  ): Promise<{ problem: string | null; passed: Set<string> }> => {
+    const u = await uneditedRun(entry, slot, plan, running, true);
+    if (u.problem != null) {
       slot.chain = undefined;
-      return result({
-        verdict: "INCONCLUSIVE",
-        detail: `(pre-run not green: with no edit, just before it, in this slot: ${pre.problem})`,
-      });
+      group.uneditedFailure ??= `"${entry.name}", ${label}: ${firstLine(u.problem)}`;
+    } else slot.chain = { key, passed: u.passed };
+    return u;
+  };
+
+  if (slot.chain?.key !== key) {
+    const pre = await unedited("run 1/5");
+    if (pre.problem != null) {
+      return inconclusive(
+        `pre-run not green: with no edit, just before it, in this slot: ${pre.problem}`,
+      );
     }
-    slot.chain = { key, passed: pre.passed };
   }
-  const prePassed = slot.chain.passed;
+  const prePassed = slot.chain!.passed;
+  const validity: Validity = { checked: false, problem: null };
 
-  const pkgDir = entry.pkg != null ? (plan.pkgDirs.get(entry.pkg) ?? ".") : ".";
-  const edited: EditedFile[] = entry.edits.map((e) => {
-    const rel = relEdit(plan.root, e.file);
-    return { rel, pkgRel: relative(pkgDir, rel).split("\\").join("/") };
-  });
-
-  const first = await editedRun(entry, slot, plan, running);
+  const first = await editedRun(entry, slot, plan, running, validity);
   if (!first.ran) return result(first.final!); // nothing ran: the chain still holds
   slot.chain = undefined;
-  let c = classifyEdited(entry, first, prePassed, edited);
+  const c1 = classifyEdited(entry, first, prePassed);
+  if (c1.verdict !== "RED" && c1.verdict !== "GREEN") return result(c1);
 
-  if (c.verdict === "RED" && c.timeoutOnly === true) {
-    const again = classifyEdited(
-      entry,
-      await editedRun(entry, slot, plan, running),
-      prePassed,
-      edited,
+  const mid = await unedited("run 3/5");
+  if (mid.problem != null) {
+    return inconclusive(`run 3/5 (unedited, between the edited runs) not green: ${mid.problem}`);
+  }
+  const midBack = [...(c1.bites?.keys() ?? [])].filter((n) => !mid.passed.has(n));
+  if (midBack.length > 0) {
+    return inconclusive(
+      `run 3/5: ${midBack.map((n) => `"${n}"`).join(", ")} did not pass with the edit reverted`,
     );
-    if (again.verdict !== "RED") {
-      c = {
-        verdict: "INCONCLUSIVE",
-        detail:
-          `(a timeout that did not reproduce: on an immediate re-run with the edit the test was ` +
-          `${again.verdict} ${firstLine(again.detail)})`,
-      };
-    }
   }
 
-  // The post-run: also the next entry's pre-run. Skipped only where nothing
-  // rests on it (a non-RED last entry of its group).
+  const second = await editedRun(entry, slot, plan, running, validity);
+  slot.chain = undefined;
+  const c2 = classifyEdited(entry, second, mid.passed);
+  if (c2.verdict !== c1.verdict) {
+    return inconclusive(
+      `did not reproduce: edited run 1 ${c1.verdict}, edited run 2 ${c2.verdict} ${firstLine(c2.detail)}`.trimEnd(),
+    );
+  }
+  if (c1.verdict === "RED" && !sameBites(c1.bites, c2.bites)) {
+    return inconclusive(
+      `the edited runs failed differently: run 2 failed ${describeBites(c1.bites)}; ` +
+        `run 4 failed ${describeBites(c2.bites)}`,
+    );
+  }
+
+  let c: Classified = c2;
   if (c.verdict === "RED" || !last) {
-    const post = await uneditedRun(entry, slot, plan, running, true);
-    if (post.problem != null) {
-      if (c.verdict === "RED") {
+    const post = await unedited("run 5/5");
+    if (c.verdict === "RED") {
+      if (post.problem != null) {
         c = {
           verdict: "INCONCLUSIVE",
           detail: `(post-run not green: slot state leaked — with the edit reverted the test fails: ${post.problem})`,
         };
-      }
-    } else {
-      slot.chain = { key, passed: post.passed };
-      const back = (c.bites ?? []).filter((n) => !post.passed.has(n));
-      if (c.verdict === "RED" && back.length > 0) {
-        c = {
-          verdict: "INCONCLUSIVE",
-          detail: `(post-run: ${back.map((n) => `"${n}"`).join(", ")} did not pass with the edit reverted)`,
-        };
+      } else {
+        const back = [...(c.bites?.keys() ?? [])].filter((n) => !post.passed.has(n));
+        if (back.length > 0) {
+          c = {
+            verdict: "INCONCLUSIVE",
+            detail: `(post-run: ${back.map((n) => `"${n}"`).join(", ")} did not pass with the edit reverted)`,
+          };
+        }
       }
     }
   }
@@ -1484,6 +1912,46 @@ function verifySlot(slot: Slot, plan: Plan): void {
 // ---------------------------------------------------------------------------
 
 /**
+ * Why an entry is a no-op — no edits, an edit whose `from` equals its `to`,
+ * or edits that leave every file they touch as it was (read from the
+ * caller's tree) — or null. A no-op entry proves nothing about any fix, and
+ * against a flaky test it could still print RED: the run aborts on it.
+ */
+function noopReason(root: string, e: TamperEntry): string | null {
+  if (e.edits.length === 0) return "it has no edits";
+  const same = e.edits.findIndex((x) => x.from === x.to);
+  if (same >= 0) return `edit ${same + 1} replaces its text with itself (from === to)`;
+  const was = new Map<string, string>();
+  const now = new Map<string, string>();
+  for (const x of e.edits) {
+    let rel: string;
+    try {
+      rel = relEdit(root, x.file);
+    } catch {
+      return null;
+    }
+    if (!now.has(rel)) {
+      try {
+        const text = readFileSync(join(root, rel), "utf8");
+        was.set(rel, text);
+        now.set(rel, text);
+      } catch {
+        return null; // COULD NOT APPLY decides it
+      }
+    }
+    const text = now.get(rel)!;
+    if (text.split(x.from).length - 1 !== 1) return null; // COULD NOT APPLY decides it
+    now.set(
+      rel,
+      text.replace(x.from, () => x.to),
+    );
+  }
+  return [...now].every(([rel, text]) => text === was.get(rel))
+    ? "its edits leave every file they touch as it was"
+    : null;
+}
+
+/**
  * Run every tamper, `concurrency` at a time, each in an isolated copy, after a
  * green baseline of every distinct test. Resolves with the summary (and, by
  * default, exits the process with it).
@@ -1495,17 +1963,17 @@ export async function runTampers(
   const log = opts.log ?? ((line: string) => process.stdout.write(`${line}\n`));
   const root = git(resolve(opts.root), ["rev-parse", "--show-toplevel"]).trim();
 
-  const malformed = entries.filter(
-    (e) => (e.command == null && e.test == null) || (e.only === true && e.red == null),
-  );
+  const malformed = entries
+    .map((e) => {
+      if (e.command == null && e.test == null)
+        return `entry "${e.name}" needs test (+ pkg), or command`;
+      if (e.only === true && e.red == null) return `entry "${e.name}" sets only without red`;
+      const noop = noopReason(root, e);
+      return noop != null ? `entry "${e.name}" changes nothing: ${noop}` : null;
+    })
+    .filter((m): m is string => m != null);
   if (malformed.length > 0) {
-    for (const e of malformed) {
-      log(
-        e.only === true && e.red == null
-          ? `tamper-runner: ABORTED — entry "${e.name}" sets only without red`
-          : `tamper-runner: ABORTED — entry "${e.name}" needs test (+ pkg), or command`,
-      );
-    }
+    for (const m of malformed) log(`tamper-runner: ABORTED — ${m}`);
     if (opts.exit !== false) process.exit(2);
     return { ok: false, results: [], concurrency: 0, exitCode: 2 };
   }
@@ -1565,6 +2033,15 @@ export async function runTampers(
       writeOwner();
     },
   };
+  // Holders, not `let`s: workers assign them from callbacks TS cannot see.
+  const state: {
+    fatal?: unknown;
+    baselineFailed: { label: string; problem: string }[];
+    survivors: string[];
+  } = {
+    baselineFailed: [],
+    survivors: [],
+  };
   const slots: Slot[] = [];
   let cleaned = false;
   const cleanup = (): void => {
@@ -1576,6 +2053,17 @@ export async function runTampers(
       } catch {
         // already gone
       }
+    }
+    // The final sweep: nothing this run started may outlive it — any process
+    // still in a group it started or working in a slot is killed, and one
+    // that survives that is reported (exit 2).
+    const live = [...running.children].map((c) => c.pid).filter((p): p is number => p != null);
+    const left = finalSweep(
+      new Set(live),
+      slots.map((s) => s.hygiene),
+    );
+    if (left.length > 0) {
+      state.survivors.push(...left);
     }
     for (const s of slots) {
       try {
@@ -1616,10 +2104,6 @@ export async function runTampers(
   };
 
   let exitCode = 0;
-  // Holders, not `let`s: workers assign them from callbacks TS cannot see.
-  const state: { fatal?: unknown; baselineFailed: { label: string; problem: string }[] } = {
-    baselineFailed: [],
-  };
   try {
     const pkgs = [
       ...new Set(entries.filter((e) => e.command == null && e.pkg != null).map((e) => e.pkg!)),
@@ -1664,14 +2148,30 @@ export async function runTampers(
     });
 
     // Phase 2: each group's entries, sequentially, in one slot, each under
-    // the sandwich (runOne).
+    // the law (runOne). A group's verdicts are published when it finishes: a
+    // test seen failing with NO edit anywhere in the group (a flaky test, a
+    // leak) voids every RED on it — each RED's green unedited runs were then
+    // luck, not a property of the test.
     if (state.fatal == null && state.baselineFailed.length === 0) {
       flush();
       await pool(async (slot, g) => {
-        for (const [k, idx] of g.entries.entries()) {
-          if (state.fatal != null) return;
-          const last = k === g.entries.length - 1;
-          results[idx] = await runOne(entries[idx]!, idx, g, slot, plan, running, last);
+        const mine: TamperResult[] = [];
+        try {
+          for (const [k, idx] of g.entries.entries()) {
+            if (state.fatal != null) return;
+            const last = k === g.entries.length - 1;
+            mine.push(await runOne(entries[idx]!, idx, g, slot, plan, running, last));
+          }
+        } finally {
+          for (const r of mine) {
+            if (r.verdict === "RED" && g.uneditedFailure != null) {
+              r.verdict = "INCONCLUSIVE";
+              r.detail =
+                `(the test failed with no edit in this run — ${g.uneditedFailure} — ` +
+                "so no RED on it is reproducible causation)";
+            }
+            results[r.index] = r;
+          }
           flush();
         }
       });
@@ -1699,6 +2199,10 @@ export async function runTampers(
   if (state.fatal != null) {
     const f = state.fatal;
     log(`tamper-runner: ABORTED — ${f instanceof Error ? f.message : JSON.stringify(f)}`);
+    exitCode = 2;
+  }
+  if (state.survivors.length > 0) {
+    log(`tamper-runner: a process survived the final sweep: ${state.survivors.join("; ")}`);
     exitCode = 2;
   }
   if (treeFingerprint(root) !== start) {

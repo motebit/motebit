@@ -181,7 +181,8 @@ describe("tamper-runner isolation", () => {
             {
               file: "packages/fx/build.mjs",
               from: "for (const dir of",
-              to: "process.exit(3);\nfor (const dir of",
+              // Conditional, so what follows stays reachable: the edit must type-check.
+              to: "if (process.env.FX_NEVER == null) process.exit(3);\nfor (const dir of",
             },
           ],
         },
