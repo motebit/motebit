@@ -2898,7 +2898,7 @@ export async function probeFetch(): Promise<unknown> {
   {
     script: "check-no-secrets-in-client-bundles",
     proves:
-      "flags a credential-named public env var read in app source — the 2026-09-30 shape, where apps/web read a provider URL from VITE_* and Vite inlined its `?api-key=` into motebit.com's public bundle. The fixture reads `import.meta.env.VITE_PROBE_HELIUS_API_KEY` in apps/web/src, which is not in PUBLIC_ENV_ALLOWLIST; the gate scans textually (no build needed).",
+      "flags a credential-named public env var read in app source — the 2026-09-30 shape, where apps/web read a provider URL from VITE_* and Vite inlined its `?api-key=` into motebit.com's public bundle. The fixture reads `import.meta.env.VITE_PROBE_HELIUS_API_KEY` in apps/web/src, which is not in PUBLIC_BUILD_ENV.web (deny by default); the static arm scans textually (no build needed).",
     perturb: () =>
       writeFixture(
         `apps/web/src/${PROBE_PREFIX}client_secret.ts`,
