@@ -4,7 +4,7 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { createSyncRelay } from "../index.js";
 import type { SyncRelay } from "../index.js";
-import { seedBalance } from "./test-helpers.js";
+import { seedBalance, TEST_RELAY_NETWORK, UNREACHABLE_FACILITATOR_CLIENT } from "./test-helpers.js";
 // eslint-disable-next-line no-restricted-imports -- tests need direct keypair generation
 import {
   generateKeypair,
@@ -22,6 +22,10 @@ const AUTH_HEADER = { Authorization: `Bearer ${API_TOKEN}` };
 
 async function createTestRelay(): Promise<SyncRelay> {
   return createSyncRelay({
+    ...TEST_RELAY_NETWORK,
+    // This file pins the relay's behaviour with the facilitator DOWN (a wallet
+    // payout that never settles) — in-process, not by failing a real fetch.
+    x402FacilitatorClient: UNREACHABLE_FACILITATOR_CLIENT,
     allowPrivateEndpoints: true,
     apiToken: API_TOKEN,
     enableDeviceAuth: true,

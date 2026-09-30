@@ -365,6 +365,16 @@ export interface SyncRelayConfig {
    */
   drainGraceMs?: number;
   /**
+   * The bound on how long `close()` waits for the network I/O boot started
+   * without awaiting (the x402 facilitator initialize, the deposit
+   * detector's boot tick, the Solana network warm-up). Past it that I/O is
+   * aborted (where its client supports it) and abandoned, and the database
+   * closes regardless: a peer that accepts and never answers must not hold
+   * a shutdown past Fly's `kill_timeout` (5 s). Default
+   * {@link SHUTDOWN_STARTUP_WORK_DEADLINE_MS} (2 s).
+   */
+  shutdownDeadlineMs?: number;
+  /**
    * How long a runtime-side command (`POST /api/v1/agents/:id/command`)
    * waits for the runtime's answer before answering 504. Default 30000.
    * Held per relay — the route closure passes it into every forward — so
@@ -566,6 +576,26 @@ export interface SyncRelay {
 
 // === Factory ===
 
+/**
+ * Default bound on how long `close()` waits for boot's untracked network I/O
+ * (`SyncRelayConfig.shutdownDeadlineMs`). Well inside Fly's 5 s
+ * `kill_timeout`, so the database always closes before the machine is killed.
+ */
+export const SHUTDOWN_STARTUP_WORK_DEADLINE_MS = 2_000;
+/** Of that deadline, the share left for aborted work to settle and log. */
+const SHUTDOWN_ABORT_GRACE_MS = 100;
+
+/** Whether `work` settles within `ms` — the timer never outlives the answer. */
+function settlesWithin(work: Promise<unknown>, ms: number): Promise<boolean> {
+  return new Promise<boolean>((resolve) => {
+    const timer = setTimeout(() => resolve(false), Math.max(0, ms));
+    void work.then(() => {
+      clearTimeout(timer);
+      resolve(true);
+    });
+  });
+}
+
 export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRelay> {
   const {
     dbPath = ":memory:",
@@ -590,12 +620,24 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
   } = config;
 
   // Async work boot starts but does not await (a warm-up read, a first loop
-  // tick, a facilitator handshake). close() awaits all of it, so no request,
-  // log line or database write outlives the relay that started it.
+  // tick, a facilitator handshake). close() waits for all of it — so on a
+  // healthy network no request, log line or database write outlives the
+  // relay that started it — but only up to `shutdownDeadlineMs`: past it,
+  // `shutdownSignal` aborts what can be aborted and the DB closes anyway.
   const startupWork: Promise<unknown>[] = [];
   const trackStartupWork = (work: Promise<unknown>): void => {
     startupWork.push(work);
   };
+  const shutdownController = new AbortController();
+  const shutdownDeadlineMs = config.shutdownDeadlineMs ?? SHUTDOWN_STARTUP_WORK_DEADLINE_MS;
+  /** `fetch` whose requests the relay's shutdown aborts (on top of the caller's own signal). */
+  const shutdownAwareFetch: typeof globalThis.fetch = (input, init) =>
+    globalThis.fetch(input, {
+      ...init,
+      signal: init?.signal
+        ? AbortSignal.any([init.signal, shutdownController.signal])
+        : shutdownController.signal,
+    });
 
   const stripeClient = stripeConfig ? new Stripe(stripeConfig.secretKey) : null;
   const subscriptionEventAdapter: SubscriptionEventAdapter | null =
@@ -1472,13 +1514,14 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
         ...(config.solanaNetworkTimeoutMs !== undefined
           ? { timeoutMs: config.solanaNetworkTimeoutMs }
           : {}),
+        shutdownSignal: shutdownController.signal,
       })
     : undefined;
   const solanaNetworkInterval = solanaNetwork
     ? startSolanaNetworkLoop(solanaNetwork, loopSupervisor, config.solanaNetworkCheckIntervalMs)
     : undefined;
-  // Warm-up; never awaited on the boot path, but close() awaits it (bounded
-  // by the resolver's own read timeout) so no read outlives the relay.
+  // Warm-up; never awaited on the boot path. close() waits for it up to the
+  // shutdown deadline; a read still pending then is abandoned (and silent).
   if (solanaNetwork) trackStartupWork(solanaNetwork.resolve());
   /** A payer chain that answers only once the relay's Solana network resolves. */
   const gatedPaymentChain = (
@@ -2111,6 +2154,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     chain: depositDetectorChain,
     supervisor: loopSupervisor,
     ...(config.depositDetectorRpc !== undefined ? { rpc: config.depositDetectorRpc } : {}),
+    fetch: shutdownAwareFetch,
     trackStartup: trackStartupWork,
   });
 
@@ -2383,6 +2427,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
       ? { x402FacilitatorClient: config.x402FacilitatorClient }
       : {}),
     trackStartup: trackStartupWork,
+    shutdownSignal: shutdownController.signal,
     parseTokenPayloadUnsafe,
     verifySignedTokenForDevice: verifySignedTokenForDeviceWithFallback,
     isTokenBlacklisted,
@@ -2501,10 +2546,44 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     receiptExchangeHub.close();
     // Every async init boot started without awaiting (the x402 facilitator
     // initialize, the deposit detector's boot tick, the Solana network
-    // warm-up) settles before the database closes and before close()
-    // resolves: nothing the relay started may log or write after it.
-    await Promise.allSettled(startupWork);
-    moteDb.close();
+    // warm-up) settles before the database closes — bounded: a peer that
+    // never answers is aborted and abandoned at the deadline, and the
+    // database closes unconditionally.
+    try {
+      await settleStartupWork();
+    } finally {
+      shutdownController.abort();
+      moteDb.close();
+    }
+  }
+
+  /**
+   * Wait for boot's untracked I/O, up to `shutdownDeadlineMs` in total: at
+   * `deadline - SHUTDOWN_ABORT_GRACE_MS` abort what is still in flight, then
+   * give the aborted work the grace to settle (and log) before the DB goes.
+   */
+  async function settleStartupWork(): Promise<void> {
+    if (startupWork.length === 0) return;
+    let pending = startupWork.length;
+    const all = Promise.allSettled(
+      startupWork.map((w) =>
+        w.finally(() => {
+          pending--;
+        }),
+      ),
+    );
+    const grace = Math.min(SHUTDOWN_ABORT_GRACE_MS, shutdownDeadlineMs);
+    if (await settlesWithin(all, shutdownDeadlineMs - grace)) return;
+    logger.warn("relay.shutdown.startup_work_aborted", {
+      pending,
+      deadlineMs: shutdownDeadlineMs,
+    });
+    shutdownController.abort();
+    if (await settlesWithin(all, grace)) return;
+    logger.warn("relay.shutdown.startup_work_abandoned", {
+      pending,
+      deadlineMs: shutdownDeadlineMs,
+    });
   }
 
   // Inject WebSocket support into the underlying Node.js server

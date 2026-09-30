@@ -7,7 +7,7 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { createSyncRelay } from "../index.js";
 import type { SyncRelay } from "../index.js";
-import { seedBalance } from "./test-helpers.js";
+import { seedBalance, TEST_RELAY_NETWORK } from "./test-helpers.js";
 import { checkIdempotency, completeIdempotency, cleanupIdempotencyKeys } from "../idempotency.js";
 
 const API_TOKEN = "test-token";
@@ -16,6 +16,7 @@ const JSON_AUTH = { "Content-Type": "application/json", ...AUTH };
 
 async function createTestRelay(): Promise<SyncRelay> {
   return createSyncRelay({
+    ...TEST_RELAY_NETWORK,
     allowPrivateEndpoints: true,
     apiToken: API_TOKEN,
     enableDeviceAuth: true,

@@ -47,6 +47,9 @@ export const USDC_CONTRACTS: Record<string, string> = {
 };
 
 /** Default public RPC endpoints by CAIP-2 chain ID. */
+/** Default per-request bound on the deposit detector's JSON-RPC calls. */
+export const DEPOSIT_RPC_REQUEST_TIMEOUT_MS = 10_000;
+
 export const DEFAULT_RPC_URLS: Record<string, string> = {
   "eip155:1": "https://eth.llamarpc.com",
   "eip155:8453": "https://mainnet.base.org",
@@ -248,6 +251,13 @@ export interface DepositDetectorConfig {
   /** Injected fetch for the default adapter. Ignored when `rpc` is provided. */
   fetch?: typeof globalThis.fetch;
   /**
+   * Per-request bound on the default adapter (`HttpJsonRpcEvmAdapter` has no
+   * timeout of its own): an RPC that accepts and never answers fails the
+   * tick instead of holding it forever. Default
+   * {@link DEPOSIT_RPC_REQUEST_TIMEOUT_MS}. Ignored when `rpc` is provided.
+   */
+  requestTimeoutMs?: number;
+  /**
    * Receives the immediate boot tick (started, not awaited) so the caller's
    * shutdown can await it — no scan outlives the relay that started it.
    */
@@ -298,7 +308,12 @@ export function startDepositDetector(
   createDepositDetectorTable(config.db);
 
   const rpc: EvmRpcAdapter =
-    config.rpc ?? new HttpJsonRpcEvmAdapter({ rpcUrl: rpcUrl!, fetch: config.fetch });
+    config.rpc ??
+    new HttpJsonRpcEvmAdapter({
+      rpcUrl: rpcUrl!,
+      fetch: config.fetch,
+      requestTimeoutMs: config.requestTimeoutMs ?? DEPOSIT_RPC_REQUEST_TIMEOUT_MS,
+    });
   const store = new SqliteDepositDetectorStore(config.db);
   const onDeposit = buildCreditOnDepositCallback(config.db);
 

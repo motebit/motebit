@@ -14,6 +14,7 @@ import {
   type EvmTransferLog,
 } from "../deposit-detector.js";
 import { getAccountBalance } from "../accounts.js";
+import { TEST_RELAY_NETWORK } from "./test-helpers.js";
 
 const API_TOKEN = "test-token";
 const TRANSFER_TOPIC = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef";
@@ -56,6 +57,7 @@ let relay: SyncRelay;
 
 beforeEach(async () => {
   relay = await createSyncRelay({
+    ...TEST_RELAY_NETWORK,
     allowPrivateEndpoints: true,
     apiToken: API_TOKEN,
     enableDeviceAuth: true,

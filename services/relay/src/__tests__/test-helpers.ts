@@ -99,6 +99,31 @@ export const X402_TEST_CONFIG = {
   testnet: true,
 } as const;
 
+/**
+ * The network-touching boot services, replaced for tests: x402 talks to the
+ * in-process facilitator (its `initialize()` otherwise fetches x402.org), and
+ * the deposit detector — whose boot tick otherwise scans a public Base RPC —
+ * is off. `createTestRelay` applies it; a test that calls
+ * `createSyncRelay({...})` directly spreads it in. The relay suite's network
+ * guard (`network-guard.setup.ts`) fails any test that reaches past it.
+ */
+export const TEST_RELAY_NETWORK = {
+  x402FacilitatorClient: fakeFacilitatorClient,
+  depositDetectorRpc: null,
+} as const satisfies Partial<SyncRelayConfig>;
+
+/**
+ * A facilitator that is never reachable — for tests that pin what the relay
+ * does when the x402 facilitator is down (a payout that never settles). Every
+ * call rejects the way a failed fetch does, in-process, without a socket.
+ */
+export const UNREACHABLE_FACILITATOR_CLIENT: unknown = {
+  getSupported: () =>
+    Promise.reject(new TypeError("fetch failed (facilitator unreachable in test)")),
+  verify: () => Promise.reject(new TypeError("fetch failed (facilitator unreachable in test)")),
+  settle: () => Promise.reject(new TypeError("fetch failed (facilitator unreachable in test)")),
+};
+
 // === Relay factory ===
 
 /**
@@ -125,8 +150,7 @@ export async function createTestRelay(overrides?: Partial<SyncRelayConfig>): Pro
     // to, warned after the file's worker had closed — the relay suite's
     // `EnvironmentTeardownError` flake), and the deposit detector, whose boot
     // tick otherwise scans the public Base Sepolia RPC, is off.
-    x402FacilitatorClient: fakeFacilitatorClient,
-    depositDetectorRpc: null,
+    ...TEST_RELAY_NETWORK,
     // Tests use mock WebSocket connections that never disconnect, so the
     // production 5s drain grace would be paid in full on every `close()`
     // (afterEach) — ~5s/test, making the suite slow and timer-bound (the

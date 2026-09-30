@@ -20,7 +20,7 @@ import {
 import { generateKeypair, bytesToHex } from "@motebit/crypto";
 // eslint-disable-next-line no-restricted-imports -- test mints its own bearer token
 import { createSignedToken } from "@motebit/encryption";
-import { seedBalance } from "./test-helpers.js";
+import { seedBalance, TEST_RELAY_NETWORK } from "./test-helpers.js";
 
 const API_TOKEN = "test-token";
 
@@ -67,6 +67,7 @@ const CFG: FreeCreditConfig = {
 
 async function createTestRelay(): Promise<SyncRelay> {
   return createSyncRelay({
+    ...TEST_RELAY_NETWORK,
     allowPrivateEndpoints: true,
     apiToken: API_TOKEN,
     enableDeviceAuth: true,

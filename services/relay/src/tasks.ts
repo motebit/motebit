@@ -281,6 +281,11 @@ export interface TasksDeps {
    * facilitator `initialize()`), so `close()` awaits it. Omitted: untracked.
    */
   trackStartup?: (work: Promise<unknown>) => void;
+  /**
+   * Aborts when the relay shuts down: a facilitator handshake still pending
+   * then rejects at once instead of holding `close()`. Omitted: unbounded.
+   */
+  shutdownSignal?: AbortSignal;
   /** Auth helpers from relay auth layer */
   parseTokenPayloadUnsafe: (token: string) => import("./auth.js").TokenPayload | null;
   verifySignedTokenForDevice: (
@@ -2208,6 +2213,7 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
     x402Config,
     x402FacilitatorClient,
     trackStartup,
+    shutdownSignal,
     parseTokenPayloadUnsafe,
     verifySignedTokenForDevice,
     isTokenBlacklisted,
@@ -2319,10 +2325,11 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
     // misconfiguration so the route registration fails fast rather than
     // silently leaving the x402 surface broken. See x402-facilitator.ts.
     const { createX402FacilitatorClient } = await import("./x402-facilitator.js");
-    const facilitatorClient = (x402FacilitatorClient ??
-      (await createX402FacilitatorClient(x402Config))) as ConstructorParameters<
-      typeof x402ResourceServer
-    >[0];
+    const { abortGetSupportedOnShutdown } = await import("./x402-facilitator-shutdown.js");
+    const facilitatorClient = abortGetSupportedOnShutdown(
+      (x402FacilitatorClient ?? (await createX402FacilitatorClient(x402Config))) as object,
+      shutdownSignal,
+    ) as ConstructorParameters<typeof x402ResourceServer>[0];
 
     const network = x402Config.network as `${string}:${string}`;
     const treasury = x402Config.payToAddress;
