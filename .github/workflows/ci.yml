@@ -47,7 +47,7 @@ jobs:
 
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v6
         with:
-          node-version: "22"
+          node-version-file: .node-version
           cache: "pnpm"
 
       - name: Install dependencies
@@ -105,12 +105,14 @@ jobs:
         # test flakes. Cap it at the core count so vitest's per-package
         # parallelism doesn't collide with turbo's cross-package parallelism.
         #
-        # Invoke turbo directly via `pnpm exec` rather than `pnpm run
+        # Invoke turbo through scripts/turbo-run.mjs, not `pnpm run
         # test:coverage -- --concurrency=4`. The `--` form causes pnpm to
         # preserve `--` when forwarding to turbo, and turbo then treats `--`
         # as "pass everything after to the task," which routes --concurrency
-        # into vitest (where it's an unknown option and fails the run).
-        run: pnpm exec turbo run test:coverage --concurrency=4
+        # into vitest (where it's an unknown option and fails the run). The
+        # wrapper hashes the running runtime (MOTEBIT_TEST_RUNTIME) into every
+        # cached test result; the runtime input tracer fails a run without it.
+        run: node scripts/turbo-run.mjs run test:coverage --concurrency=4
 
       - name: Coverage summary
         if: always()
@@ -145,7 +147,7 @@ jobs:
 
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v6
         with:
-          node-version: "22"
+          node-version-file: .node-version
           cache: "pnpm"
 
       - name: Install dependencies
@@ -172,7 +174,7 @@ jobs:
 
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v6
         with:
-          node-version: "22"
+          node-version-file: .node-version
           cache: "pnpm"
 
       - name: Install dependencies
@@ -284,7 +286,7 @@ jobs:
 
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v6
         with:
-          node-version: "22"
+          node-version-file: .node-version
           cache: "pnpm"
 
       - name: Install dependencies
@@ -334,7 +336,7 @@ jobs:
 
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v6
         with:
-          node-version: "22"
+          node-version-file: .node-version
           cache: "pnpm"
 
       - name: Install dependencies
@@ -363,7 +365,7 @@ jobs:
 
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v6
         with:
-          node-version: "22"
+          node-version-file: .node-version
           cache: "pnpm"
 
       - name: Install dependencies
@@ -395,7 +397,7 @@ jobs:
 
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v6
         with:
-          node-version: "22"
+          node-version-file: .node-version
           cache: "pnpm"
 
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
@@ -497,7 +499,7 @@ jobs:
 
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v6
         with:
-          node-version: "22"
+          node-version-file: .node-version
           cache: "pnpm"
 
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
@@ -608,7 +610,7 @@ jobs:
 
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v6
         with:
-          node-version: "22"
+          node-version-file: .node-version
           cache: "pnpm"
 
       - name: Install dependencies

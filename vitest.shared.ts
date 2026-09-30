@@ -24,6 +24,8 @@
  * declaration prevents accidental omission.
  */
 
+import { fileURLToPath } from "node:url";
+
 import { defineConfig, type ViteUserConfig } from "vitest/config";
 import type { InlineConfig } from "vitest/node";
 
@@ -88,6 +90,21 @@ const BASE_COVERAGE_EXCLUDE = ["src/__tests__/**", "src/**/*.d.ts"];
 // (turbo `--concurrency`, or vitest workers) rather than bumping this again.
 const DEFAULT_TEST_TIMEOUT_MS = 30_000;
 
+// The runtime input tracer (scripts/test-support/input-tracer.ts) — the law
+// behind CACHED test results. It runs first in every test file of every
+// package that builds its config here, records every file, module, env var and
+// spawn the test observes, and fails the file on any input outside the turbo
+// task hash, naming the turbo.json entry to add. Always first and never
+// replaceable by `extra.setupFiles` (those are appended). It and this file are
+// globalDependencies, so a change to either invalidates every cached result.
+const INPUT_TRACER = fileURLToPath(
+  new URL("./scripts/test-support/input-tracer.ts", import.meta.url),
+);
+
+function asList(v: string | string[] | undefined): string[] {
+  return v === undefined ? [] : Array.isArray(v) ? v : [v];
+}
+
 export function defineMotebitTest(opts: MotebitVitestOptions): ViteUserConfig {
   const { thresholds, testExclude = [], coverageInclude, coverageExclude = [], extra, vite } = opts;
 
@@ -97,6 +114,7 @@ export function defineMotebitTest(opts: MotebitVitestOptions): ViteUserConfig {
       testTimeout: DEFAULT_TEST_TIMEOUT_MS,
       // `extra` spreads after, so a package can still override the default.
       ...(extra ?? {}),
+      setupFiles: [INPUT_TRACER, ...asList(extra?.setupFiles)],
       exclude: [...BASE_TEST_EXCLUDE, ...testExclude],
       coverage: {
         include: coverageInclude ?? BASE_COVERAGE_INCLUDE,

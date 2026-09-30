@@ -1,5 +1,5 @@
 /**
- * Turbo test-cache input gate (invariant #166).
+ * Turbo test-cache input gate (invariant #166) — the static PRE-CHECK.
  *
  * Enforces: a CACHED test result is only as honest as its task hash. Turbo
  * replays a package's `test` / `test:coverage` result whenever the task hash
@@ -7,134 +7,104 @@
  * that hash. A missed input is a silently weakened gate — a change to the
  * missed file replays yesterday's green — which is worse than slowness.
  *
- * ## What is already in the hash (and why this gate only checks the rest)
+ * ## The law is the RUNTIME input tracer, not this scan
  *
- *   - every git-visible file in the package itself (`$TURBO_DEFAULT$`);
- *   - every workspace DEPENDENCY's files, transitively — `test` dependsOn the
- *     package's own `build`, which dependsOn `^build`, and a task hash folds
- *     in the hashes of the tasks it depends on;
- *   - the lockfile resolution of external deps (`node_modules/**`);
- *   - `globalDependencies` and declared `env` / `globalEnv` values.
+ * scripts/test-support/input-tracer.ts runs inside every cached test run and
+ * fails any test that observes an input (file, module, env var, spawn)
+ * outside its hash, naming the turbo.json entry to add. A static scan of path
+ * expressions can never be complete (template literals, cwd-relative reads,
+ * spreads, modules resolved through another package's closure — all reproduced
+ * by scripts/turbo-stale-cache-harness.ts), so the path/env scan below is a
+ * fast, best-effort pre-check that catches the common shapes before a test
+ * run. What this gate DOES own completely is the configuration that makes the
+ * tracer and the hash sound:
  *
- * Turbo runs in STRICT env mode, so an env var that is not declared never
- * reaches the task at all (it is stripped) — reading it is hermetic. The only
- * undeclared vars that DO reach a test are turbo's built-in pass-through set
- * (`CI`, `TZ`, `LANG`, `HOME`, `PATH`, …) plus anything in `passThroughEnv`.
- *
- * ## What this gate checks
- *
- *   1. ROOT CONFIG — `test` and `test:coverage` in turbo.json: dependsOn
- *      `build`, declare `coverage/**` as outputs (CI uploads it), hash the
- *      pass-through vars that change outcomes implicitly (IMPLICIT_ENV), and
- *      `globalDependencies` carries the repo-wide files every package's
- *      vitest config reads (GLOBAL_TEST_FILES). Env mode stays strict.
- *   2. OUT-OF-PACKAGE PATHS — every code file of every workspace package is
- *      parsed and its path expressions are statically evaluated
+ *   1. ROOT CONFIG — `test` / `test:coverage`: dependsOn `build`, outputs
+ *      `coverage/**`, hash REQUIRED_TEST_ENV (CI, TZ, LANG, NODE_OPTIONS,
+ *      LD_LIBRARY_PATH, MOTEBIT_TEST_RUNTIME), no passThroughEnv, strict env
+ *      mode; `globalDependencies` carries GLOBAL_TEST_FILES (vitest.shared.ts,
+ *      tsconfig.base.json, .node-version, the tracer).
+ *   2. RUNTIME (C1) — `.node-version` is an exact version; every setup-node in
+ *      .github/workflows reads it (`node-version-file`); every entry point
+ *      that runs a test task goes through scripts/turbo-run.mjs (which hashes
+ *      the running runtime as MOTEBIT_TEST_RUNTIME): root package.json
+ *      scripts, .husky/pre-push, workflows. turbo itself is pinned exactly.
+ *   3. PASS-THROUGH ENV (C6) — measured, not listed: the gate runs the
+ *      INSTALLED turbo on a probe task that dumps its env, with every
+ *      env-shaped name in the turbo binary (and every prefix wildcard) set,
+ *      and requires every var that reaches the task to be classified in
+ *      scripts/test-support/env-policy.ts; a `hash`-class var must be hashed.
+ *   4. TRACER ADOPTION — every cached package's vitest config builds through
+ *      `defineMotebitTest` (vitest.shared.ts), which registers the tracer.
+ *   5. UNCACHED — a package whose tests cannot be made hermetic (or that
+ *      cannot run the tracer) sets `cache: false` on both test tasks and is
+ *      listed in UNCACHED with the reason. Both directions are checked.
+ *   6. PRE-CHECK SCAN — statically evaluated path expressions
  *      (`resolve/join(__dirname, …)`, `new URL("../…", import.meta.url)`,
- *      `dirname(fileURLToPath(import.meta.url))`, template literals, `+`,
- *      const bindings, relative `import` / `vi.mock` / `require` specifiers).
- *      A reference that escapes the package must be covered by (a) a
- *      workspace dependency (its files are hashed through `^build`), (b) the
- *      package's declared `inputs` on BOTH test tasks, or (c)
- *      `globalDependencies`. A reference whose tail is dynamic (a
- *      `REPO_ROOT` joined with a loop variable) must be covered as a whole
- *      directory (`dir/**`) — the gate cannot see which file is read.
- *   3. PASS-THROUGH ENV — every `process.env.X` read of a var that reaches
- *      the task unhashed must be hashed (`env`) or a reviewed PLUMBING var.
- *   4. UNCACHED — a package whose tests cannot be made hermetic sets
- *      `cache: false` on both test tasks in its own turbo.json and is listed
- *      in UNCACHED below with the reason. Both directions are checked.
+ *      template literals, `+`, const bindings, relative imports) that escape
+ *      the package must be hashed; `process.env.X` reads of a measured
+ *      pass-through var must be hashed or policy-benign.
  *
- * Aperture: every tracked code file (.ts/.tsx/.mts/.cts/.js/.mjs/.cjs) of
- * every workspace package that has a test script, not only `*.test.ts` —
- * code under test runs at test time too.
- *
- * Doctrine: docs/ops/RUNBOOK.md § "Turbo remote cache" (test caching).
+ * Doctrine: docs/ops/RUNBOOK.md § "Test results are cached too".
  *
  * ## Usage
  *
  *   tsx scripts/check-turbo-test-inputs.ts            # exit 1 on any violation
- *   tsx scripts/check-turbo-test-inputs.ts --root DIR # run against a fixture tree
+ *   tsx scripts/check-turbo-test-inputs.ts --root DIR [--passthrough FILE.json]
+ *                                                     # a fixture tree (and its measured set)
  */
 
-import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  realpathSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
+import { createRequire } from "node:module";
+import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import ts from "typescript";
 
 import { formatRepair } from "./lib/gate-report.js";
+import { classifyEnv, ENV_POLICY, REQUIRED_TEST_ENV } from "./test-support/env-policy.js";
 
 const TEST_TASKS = ["test", "test:coverage"] as const;
 
 /**
- * Pass-through vars that change a test's OUTCOME without any `process.env`
- * read in repo code, so the gate requires them hashed on both test tasks:
- *   CI   — vitest's snapshot mode (CI refuses to write a missing snapshot;
- *          locally it writes it and passes), and it separates CI-produced
- *          cache entries from local ones (different Node/OS never cross).
- *   TZ   — every `Date` local-time conversion.
- *   LANG — ICU's default locale for every `Intl` / `toLocaleString`.
- */
-const IMPLICIT_ENV = ["CI", "TZ", "LANG"] as const;
-
-/**
  * Repo-root files every package's test task reads, required in
  * `globalDependencies`: each vitest.config imports vitest.shared.ts (test
- * defaults, timeout, coverage reporters); every tsconfig extends
- * tsconfig.base.json, which vitest's esbuild transform reads.
+ * defaults, timeout, coverage reporters, the tracer registration); every
+ * tsconfig extends tsconfig.base.json, which vitest's esbuild transform reads;
+ * .node-version pins the runtime CI runs; the tracer is the law every cached
+ * result was checked under.
  */
-const GLOBAL_TEST_FILES = ["vitest.shared.ts", "tsconfig.base.json"] as const;
+const GLOBAL_TEST_FILES = [
+  "vitest.shared.ts",
+  "tsconfig.base.json",
+  ".node-version",
+  "scripts/test-support/**",
+] as const;
 
-/**
- * Env vars turbo passes to a strict-mode task without being declared
- * (measured against turbo 2.10: run a task whose script is `env` with each
- * candidate exported). A read of one of these is NOT stripped, so it must be
- * hashed or reviewed as plumbing. Unlisted vars are stripped → hermetic.
- */
-const TURBO_BUILTIN_PASSTHROUGH = new Set([
-  "CI",
-  "COLORTERM",
-  "COREPACK_ENABLE_AUTO_PIN",
-  "DISPLAY",
-  "FORCE_COLOR",
-  "GITHUB_ACTIONS",
-  "GITHUB_TOKEN",
-  "HOME",
-  "INIT_CWD",
-  "LANG",
-  "NODE",
-  "NODE_OPTIONS",
-  "NO_COLOR",
-  "PATH",
-  "PWD",
-  "RUNNER_OS",
-  "SHELL",
-  "TERM",
-  "TZ",
-  "USER",
-  "VERCEL",
-]);
+/** The one wrapper every test entry point goes through (C1). */
+const WRAPPER = "node scripts/turbo-run.mjs";
 
-/**
- * Pass-through vars that are reviewed plumbing: they reach the task unhashed
- * and that is correct, because hashing the VALUE would not capture what the
- * read depends on (or the read only affects output formatting).
- */
-const PLUMBING_ENV: Record<string, string> = {
-  HOME:
-    "a LOCATION, not content — hashing the path cannot capture what lives there. Every test " +
-    "that exercises a HOME-reading code path redirects HOME / MOTEBIT_CONFIG_DIR to an mkdtemp " +
-    "dir (apps/cli config/relay tests, packages/tools key-file-guard); a test that read the real " +
-    "~ would be non-hermetic by content and belongs in UNCACHED",
-  PATH: "process lookup only; tool versions are pinned by the lockfile",
-  TERM: "output formatting only",
-  COLORTERM: "output formatting only",
-  FORCE_COLOR: "output formatting only",
-  NO_COLOR: "output formatting only",
-  PWD: "equals the package dir under turbo",
-  INIT_CWD: "pnpm plumbing",
-  SHELL: "process plumbing",
-};
+/** Measured pass-through: exact var names, and prefixes whose probe passed. */
+export interface Passthrough {
+  exact: string[];
+  prefixes: string[];
+  /** vars present in the task that nobody set — turbo / pnpm inject them */
+  injected: string[];
+  /** how the set was obtained, for the aperture line */
+  source: string;
+}
 
 /**
  * Packages whose tests cannot be made hermetic. Each sets `cache: false` on
@@ -150,6 +120,22 @@ export const UNCACHED: Record<string, string> = {
   "@motebit/crypto-tpm":
     "tpm-roots.test.ts asserts the REAL clock sits inside each pinned TPM vendor root's validity " +
     "window (earliest notAfter 2035-10-15) — a wall-clock input no hash can carry",
+  "@motebit/ai-core":
+    "config.test.ts calls loadConfig() with no path, which reads the REAL ~/.motebit/config.json " +
+    "(the runtime input tracer caught it) — user state no hash can carry. Cache it once the test " +
+    "points HOME (or the path) at an mkdtemp dir",
+  "@motebit/tools":
+    "builtins.test.ts reaches path-sandbox's realpath of the REAL ~/.motebit (HOME is not " +
+    "redirected; the runtime input tracer caught it) — user state no hash can carry. Cache it once " +
+    "the test pins HOME / MOTEBIT_CONFIG_DIR to an mkdtemp dir",
+  motebit:
+    "apps/cli/vitest.config.ts is a bare defineConfig, not defineMotebitTest — the runtime input " +
+    "tracer never runs, so no cached result could be proven hermetic. Cache it once the config " +
+    "builds through vitest.shared.ts",
+  "@motebit/inspector":
+    "tests run from vite.config.ts with no vitest.shared.ts — the input tracer never runs",
+  "@motebit/operator":
+    "tests run from vite.config.ts with no vitest.shared.ts — the input tracer never runs",
 };
 
 /**
@@ -157,15 +143,7 @@ export const UNCACHED: Record<string, string> = {
  * `<file>|<target>` (repo-relative). Each must still be produced by the scan —
  * a stale entry fails the gate, so an exemption cannot outlive its site.
  */
-export const REVIEWED_SITES: Record<string, string> = {
-  "apps/cli/src/subcommands/up.ts|apps":
-    "resolveYamlPath() walks up from process.cwd() looking for motebit.yaml — interactive CLI " +
-    "discovery. No test reaches it (yaml-config.test.ts imports only diffPlan); if one ever " +
-    "does, it must pass an explicit path or a tmp cwd",
-  "apps/cli/src/subcommands/rotate.ts|apps":
-    "discoverIdentityFile() walks up from process.cwd() looking for motebit.md — interactive " +
-    "CLI discovery reached only through handleRotate(), which no test calls",
-};
+export const REVIEWED_SITES: Record<string, string> = {};
 
 const CODE_EXT = /\.(?:ts|tsx|mts|cts|js|mjs|cjs)$/;
 const SKIP_DIRS = new Set(["node_modules", "dist", "coverage", ".turbo", ".next", "target"]);
@@ -198,11 +176,15 @@ export interface GateStats {
   envPlumbing: number;
   uncached: number;
   reviewed: number;
+  passthrough: number;
+  entryPoints: number;
+  workflows: number;
 }
 
 export interface GateResult {
   violations: Violation[];
   stats: GateStats;
+  passthroughSource?: string;
 }
 
 interface TaskCfg {
@@ -778,9 +760,257 @@ function scanEnv(file: string): EnvRead[] {
   return out;
 }
 
+// ── Measured pass-through env (C6) ───────────────────────────────────────
+
+/**
+ * Names the probe must not set to a junk value: they configure the processes
+ * the probe runs (turbo, pnpm, node, git, the loader). Their FAMILIES are
+ * still measured, through a prefix probe (`NODE_MOTEBIT_PROBE`); the exact
+ * names with a safe value are in SAFE_PROBE_VALUES.
+ */
+const UNSAFE_PROBE =
+  /^(?:NODE_|LD_|DYLD_|GIT_|TURBO_|TOKIO_|PNPM_|COREPACK_|NPM_|YARN_|HTTPS?_|NO_PROXY|ALL_PROXY|SSL_|RUST|CARGO|TMP|TEMP|HOME$|PATH$|SHELL$|PWD$|USER$|PYTHON|VITEST|CI$)/i;
+const SAFE_PROBE_VALUES: Record<string, string> = {
+  NODE_OPTIONS: "--no-deprecation",
+  LD_LIBRARY_PATH: "/nonexistent-motebit-probe",
+  TMP: tmpdir(),
+  TEMP: tmpdir(),
+  TMPDIR: tmpdir(),
+  CI: "1",
+  COREPACK_ENABLE_AUTO_PIN: "0",
+};
+const PROBE_SUFFIX = "MOTEBIT_PROBE";
+
+/** The installed turbo's native binary, or null. */
+function turboBinary(root: string): string | null {
+  try {
+    const req = createRequire(join(root, "package.json"));
+    const turboPkg = realpathSync(req.resolve("turbo/package.json"));
+    const os = { darwin: "darwin", linux: "linux", win32: "windows" }[process.platform as string];
+    const arch = process.arch === "x64" ? "64" : process.arch;
+    const bin = createRequire(turboPkg).resolve(`@turbo/${os}-${arch}/package.json`);
+    const exe = join(dirname(bin), "bin", process.platform === "win32" ? "turbo.exe" : "turbo");
+    return existsSync(exe) ? exe : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Candidate names: every env-shaped token in the turbo binary (strings are
+ * packed, so every identifier-shaped substring of each token), the caller's
+ * env, and the policy's exact names; prefixes: every `X_*` token's `_`-ended
+ * suffixes, plus the policy's prefixes and common families.
+ */
+export function probeCandidates(binaryText: string): { exact: string[]; prefixes: string[] } {
+  const exact = new Set<string>(Object.keys(process.env));
+  const prefixes = new Set<string>([
+    "NODE_",
+    "LD_",
+    "GIT_",
+    "PNPM_",
+    "NPM_",
+    "LC_",
+    "npm_config_",
+    "npm_package_",
+    "AWS_",
+    "GOOGLE_",
+    "AZURE_",
+  ]);
+  for (const r of ENV_POLICY) {
+    if (r.pattern.endsWith("*")) prefixes.add(r.pattern.slice(0, -1));
+    else exact.add(r.pattern);
+  }
+  for (const tok of binaryText.match(/[A-Z][A-Z0-9_]{1,}\*?/g) ?? []) {
+    const star = tok.endsWith("*");
+    const w = star ? tok.slice(0, -1) : tok;
+    if (w.length > 120) continue;
+    if (star) {
+      for (let i = 0; i < w.length; i++) if (/[A-Z]/.test(w[i]!)) prefixes.add(w.slice(i));
+    }
+    for (let i = 0; i < w.length; i++) {
+      if (!/[A-Z]/.test(w[i]!)) continue;
+      for (let j = i + 2; j <= w.length; j++) {
+        const x = w.slice(i, j);
+        if (!x.endsWith("_")) exact.add(x);
+      }
+    }
+  }
+  return { exact: [...exact], prefixes: [...prefixes].filter((p) => p.length > 0) };
+}
+
+/**
+ * Run the INSTALLED turbo on a probe task that dumps its env, with every
+ * candidate set, and report which vars reach the task. Cached per binary.
+ */
+export function measurePassthrough(root: string): Passthrough {
+  const exe = turboBinary(root);
+  const text = exe ? readFileSync(exe).toString("latin1") : "";
+  const key = createHash("sha256")
+    .update(text)
+    .update(JSON.stringify(ENV_POLICY.map((r) => r.pattern)))
+    .update(readFileSync(fileURLToPath(import.meta.url))) // this measurement code itself
+    .update(Object.keys(process.env).sort().join(","))
+    .digest("hex")
+    .slice(0, 16);
+  const cacheFile = join(
+    root,
+    "node_modules",
+    ".cache",
+    "motebit",
+    `turbo-passthrough-${key}.json`,
+  );
+  if (existsSync(cacheFile)) {
+    return JSON.parse(readFileSync(cacheFile, "utf-8")) as Passthrough;
+  }
+  const cand = probeCandidates(text);
+  const probe: Record<string, string> = {};
+  for (const n of cand.exact) {
+    if (process.env[n] !== undefined) continue; // the caller's env is set anyway
+    // EMPTY values: turbo filters by name, and an empty var is inert to the
+    // tools the probe runs (a non-empty junk value in one of turbo's own config
+    // vars — XDG_DATA_HOME, SCCACHE_START_SERVER — breaks the run).
+    if (SAFE_PROBE_VALUES[n] !== undefined) probe[n] = SAFE_PROBE_VALUES[n];
+    else if (!UNSAFE_PROBE.test(n)) probe[n] = "";
+  }
+  for (const p of cand.prefixes) probe[`${p}${PROBE_SUFFIX}`] = "";
+  const fx = mkdtempSync(join(tmpdir(), "turbo-passthrough-"));
+  const seen = new Set<string>();
+  const unprobeable: string[] = [];
+  const base: Record<string, string> = {
+    ...(process.env as Record<string, string>),
+    TURBO_TELEMETRY_DISABLED: "1",
+    DO_NOT_TRACK: "1",
+    TURBO_NO_UPDATE_NOTIFIER: "1",
+  };
+  try {
+    writeFileSync(
+      join(fx, "package.json"),
+      JSON.stringify({ name: "probe-root", private: true, packageManager: readRootPm(root) }),
+    );
+    writeFileSync(join(fx, "pnpm-workspace.yaml"), 'packages:\n  - "p"\n');
+    writeFileSync(join(fx, "turbo.json"), JSON.stringify({ tasks: { dump: { cache: false } } }));
+    writeFileSync(
+      join(fx, "pnpm-lock.yaml"),
+      "lockfileVersion: '9.0'\n\nimporters:\n\n  .: {}\n\n  p: {}\n",
+    );
+    mkdirSync(join(fx, "p"));
+    writeFileSync(
+      join(fx, "p", "package.json"),
+      JSON.stringify({
+        name: "p",
+        scripts: {
+          dump: `node -e "process.stdout.write('ENVKEYS'+JSON.stringify(Object.keys(process.env))+'ENVEND')"`,
+        },
+      }),
+    );
+    // Batches keep the environment block well under ARG_MAX.
+    const names = Object.keys(probe);
+    const batches: string[][] = [[]];
+    let size = 0;
+    for (const n of names) {
+      if (size > 600_000) {
+        batches.push([]);
+        size = 0;
+      }
+      batches[batches.length - 1]!.push(n);
+      size += n.length + 3;
+    }
+    const run = (b: string[]): string[] | null => {
+      const env = { ...base };
+      for (const n of b) env[n] = probe[n]!;
+      const r = spawnSync(exe ?? "turbo", ["run", "dump", "--ui=stream", "--output-logs=full"], {
+        cwd: fx,
+        env,
+        encoding: "utf-8",
+        timeout: 30_000,
+      });
+      const m = /ENVKEYS(\[.*?\])ENVEND/s.exec(`${r.stdout}${r.stderr}`);
+      return m && r.status === 0 ? (JSON.parse(m[1]!) as string[]) : null;
+    };
+    // A batch that breaks the run (a name turbo itself consumes, set empty)
+    // is bisected: the breaking names are reported as unprobeable, the rest
+    // are still measured.
+    const measure = (b: string[]): void => {
+      const keys = run(b);
+      if (keys) {
+        for (const k of keys) seen.add(k);
+        return;
+      }
+      if (b.length === 1) {
+        unprobeable.push(b[0]!);
+        return;
+      }
+      const h = b.length >> 1;
+      measure(b.slice(0, h));
+      measure(b.slice(h));
+    };
+    if (!run([]))
+      throw new Error(
+        `turbo pass-through probe cannot run turbo at all (${exe ?? "turbo on PATH"})`,
+      );
+    for (const b of batches) measure(b);
+  } finally {
+    rmSync(fx, { recursive: true, force: true });
+  }
+  // A prefix whose probe passed is a wildcard; the shortest passing prefix
+  // subsumes the longer ones and every exact name under it.
+  const passing = cand.prefixes.filter((p) => seen.has(`${p}${PROBE_SUFFIX}`)).sort();
+  const prefixes = passing.filter((p) => !passing.some((q) => q !== p && p.startsWith(q)));
+  const underPrefix = (k: string) => prefixes.some((p) => k.startsWith(p));
+  const ours = new Set([...Object.keys(probe), ...Object.keys(process.env)]);
+  const out: Passthrough = {
+    exact: [...seen]
+      .filter((k) => ours.has(k) && !k.endsWith(PROBE_SUFFIX) && !underPrefix(k))
+      .sort(),
+    prefixes,
+    injected: [...seen].filter((k) => !ours.has(k) && !(k in base) && !underPrefix(k)).sort(),
+    source:
+      `measured from ${exe ? `turbo ${turboVersion(root)}: ${Object.keys(probe).length} probed name(s), ${cand.prefixes.length} prefix probe(s)` : "turbo on PATH"}` +
+      (unprobeable.length
+        ? `, ${unprobeable.length} unprobeable (turbo consumes them): ${unprobeable.join(", ")}`
+        : ""),
+  };
+  mkdirSync(dirname(cacheFile), { recursive: true });
+  writeFileSync(cacheFile, JSON.stringify(out));
+  return out;
+}
+
+function readRootPm(root: string): string {
+  const pj = JSON.parse(readFileSync(join(root, "package.json"), "utf-8")) as {
+    packageManager?: string;
+  };
+  return pj.packageManager ?? "pnpm@9.15.0";
+}
+
+function turboVersion(root: string): string {
+  try {
+    const req = createRequire(join(root, "package.json"));
+    return (
+      JSON.parse(readFileSync(req.resolve("turbo/package.json"), "utf-8")) as { version: string }
+    ).version;
+  } catch {
+    return "?";
+  }
+}
+
+/** Is `name` a var turbo passes through (measured)? */
+function passesThrough(pt: Passthrough, name: string): boolean {
+  return (
+    pt.exact.includes(name) ||
+    pt.injected.includes(name) ||
+    pt.prefixes.some((p) => name.startsWith(p))
+  );
+}
+
 // ── The gate ─────────────────────────────────────────────────────────────
 
-export function runGate(root: string): GateResult {
+export interface GateOptions {
+  /** The measured pass-through set; measured from the installed turbo when omitted. */
+  passthrough?: Passthrough;
+}
+
+export function runGate(root: string, opts: GateOptions = {}): GateResult {
   const violations: Violation[] = [];
   const stats: GateStats = {
     packages: 0,
@@ -797,6 +1027,9 @@ export function runGate(root: string): GateResult {
     envPlumbing: 0,
     uncached: 0,
     reviewed: 0,
+    passthrough: 0,
+    entryPoints: 0,
+    workflows: 0,
   };
   const reviewedHit = new Set<string>();
   const rel = (p: string): string => relative(root, p).split(sep).join("/") || ".";
@@ -822,14 +1055,125 @@ export function runGate(root: string): GateResult {
       cfgViolation(`task "${t}" must dependsOn "build" so dependency files feed its hash`);
     if (cfg.inputs && !cfg.inputs.includes("$TURBO_DEFAULT$"))
       cfgViolation(`task "${t}" inputs must include "$TURBO_DEFAULT$" (the package's own files)`);
-    for (const e of IMPLICIT_ENV)
+    for (const e of REQUIRED_TEST_ENV)
       if (!(cfg.env ?? []).includes(e) && !(rootCfg.globalEnv ?? []).includes(e))
-        cfgViolation(`task "${t}" must hash "${e}" in env (changes outcomes with no code read)`);
+        cfgViolation(
+          `task "${t}" must hash "${e}" in env (${classifyEnv(e)?.reason ?? "the runtime the result is valid for"})`,
+        );
     if (cfg.passThroughEnv?.length)
       cfgViolation(`task "${t}" declares passThroughEnv — declare outcome-changing vars in env`);
   }
   if (!(rootTasks["test:coverage"]?.outputs ?? []).includes("coverage/**"))
     cfgViolation(`task "test:coverage" must declare outputs ["coverage/**"] (CI uploads it)`);
+
+  // 2. Runtime (C1): exact .node-version, workflows read it, entry points wrap.
+  const nodeVersionFile = join(root, ".node-version");
+  const nodeVersion = existsSync(nodeVersionFile)
+    ? readFileSync(nodeVersionFile, "utf-8").trim()
+    : "";
+  if (!/^\d+\.\d+\.\d+$/.test(nodeVersion))
+    violations.push({
+      pkg: "(root)",
+      site: ".node-version",
+      kind: "config",
+      detail: `must hold an exact Node version (e.g. 22.22.2), found ${nodeVersion ? `"${nodeVersion}"` : "nothing"} — CI's runtime must be one exact value`,
+    });
+  const rootPj = JSON.parse(readFileSync(join(root, "package.json"), "utf-8")) as {
+    scripts?: Record<string, string>;
+    devDependencies?: Record<string, string>;
+  };
+  const turboSpec = rootPj.devDependencies?.turbo ?? "";
+  if (!/^\d+\.\d+\.\d+$/.test(turboSpec))
+    violations.push({
+      pkg: "(root)",
+      site: "package.json",
+      kind: "config",
+      detail: `devDependencies.turbo is "${turboSpec}" — pin it exactly (e.g. "2.10.9"): the pass-through env set and hashing rules are per turbo version`,
+    });
+  const TEST_TASK_RUN = /\bturbo(?:\.cmd)?\s+run\b[^\n]*?\btest(?::coverage)?\b/;
+  const WRAPPED = /node\s+scripts\/turbo-run\.mjs\s+run\b[^\n]*?\btest(?::coverage)?\b/;
+  for (const [name, cmd] of Object.entries(rootPj.scripts ?? {})) {
+    if (!TEST_TASK_RUN.test(cmd) && !WRAPPED.test(cmd)) continue;
+    stats.entryPoints++;
+    if (!cmd.trim().startsWith(WRAPPER))
+      violations.push({
+        pkg: "(root)",
+        site: `package.json scripts.${name}`,
+        kind: "config",
+        detail: `runs a test task without ${WRAPPER} ("${cmd}") — MOTEBIT_TEST_RUNTIME would be unset and every cached test fails the tracer; use "${WRAPPER} run …"`,
+      });
+  }
+  const scanLines = (file: string, label: string): void => {
+    if (!existsSync(file)) return;
+    readFileSync(file, "utf-8")
+      .split("\n")
+      .forEach((line, i) => {
+        if (/^\s*#/.test(line)) return;
+        if (!TEST_TASK_RUN.test(line) && !WRAPPED.test(line)) return;
+        stats.entryPoints++;
+        if (!line.includes(WRAPPER))
+          violations.push({
+            pkg: "(root)",
+            site: `${label}:${i + 1}`,
+            kind: "config",
+            detail: `runs a test task through turbo without ${WRAPPER} — use "${WRAPPER} run …" so the runtime is in the hash`,
+          });
+      });
+  };
+  scanLines(join(root, ".husky", "pre-push"), ".husky/pre-push");
+  const wfDir = join(root, ".github", "workflows");
+  if (existsSync(wfDir)) {
+    for (const wf of readdirSync(wfDir)
+      .filter((f) => /\.ya?ml$/.test(f))
+      .sort()) {
+      stats.workflows++;
+      const file = join(wfDir, wf);
+      scanLines(file, `.github/workflows/${wf}`);
+      readFileSync(file, "utf-8")
+        .split("\n")
+        .forEach((line, i) => {
+          if (/^\s*node-version\s*:/.test(line))
+            violations.push({
+              pkg: "(root)",
+              site: `.github/workflows/${wf}:${i + 1}`,
+              kind: "config",
+              detail: `setup-node pins "${line.trim()}" — use \`node-version-file: .node-version\` so CI runs the one exact runtime`,
+            });
+        });
+    }
+  }
+
+  // 3. Measured pass-through env (C6): every var that reaches a test task is classified.
+  const pt = opts.passthrough ?? measurePassthrough(root);
+  const rootTestEnv = TEST_TASKS.map((t) => [
+    ...(rootTasks[t]?.env ?? []),
+    ...(rootCfg.globalEnv ?? []),
+  ]);
+  for (const name of [...pt.exact, ...pt.injected]) {
+    stats.passthrough++;
+    const rule = classifyEnv(name);
+    if (!rule)
+      violations.push({
+        pkg: "(turbo)",
+        site: "scripts/test-support/env-policy.ts",
+        kind: "env",
+        detail: `turbo passes "${name}" into test tasks unhashed and ENV_POLICY does not classify it — add a rule: "hash" (consumed without a JS read → also add it to env of both test tasks) or "benign"/"guarded" with the reason`,
+      });
+    else if (rule.class === "hash" && rootTestEnv.some((e) => !e.includes(name)))
+      cfgViolation(
+        `"${name}" is a hash-class pass-through var (${rule.reason}) — add it to env of both test tasks`,
+      );
+  }
+  for (const p of pt.prefixes) {
+    stats.passthrough++;
+    if (!classifyEnv(`${p}${PROBE_SUFFIX}`))
+      violations.push({
+        pkg: "(turbo)",
+        site: "scripts/test-support/env-policy.ts",
+        kind: "env",
+        detail: `turbo passes every "${p}*" var into test tasks unhashed and ENV_POLICY does not classify the family — add a "${p}*" rule with its class and reason`,
+      });
+  }
 
   const globalGlobs = (rootCfg.globalDependencies ?? []).map((g) => absGlob(root, root, g));
   const dirs = allPackageDirs(root);
@@ -866,6 +1210,28 @@ export function runGate(root: string): GateResult {
       });
       continue;
     }
+    // 4. Tracer adoption: the package's vitest config builds through vitest.shared.ts.
+    const vcfg = ["vitest.config.ts", "vitest.config.mts", "vitest.config.js", "vitest.config.mjs"]
+      .map((f) => join(pkg.dir, f))
+      .find((f) => existsSync(f));
+    if (!vcfg || !/\bdefineMotebitTest\s*\(/.test(readFileSync(vcfg, "utf-8")))
+      violations.push({
+        pkg: pkg.name,
+        site: site(vcfg ?? join(pkg.dir, "vitest.config.ts")),
+        kind: "config",
+        detail:
+          `test results are cached but ${vcfg ? "the vitest config does not call defineMotebitTest" : "there is no vitest.config"} — ` +
+          `the runtime input tracer (registered by vitest.shared.ts) would never run. Build the config with ` +
+          `defineMotebitTest from vitest.shared.ts, or set cache:false on both test tasks and list it in UNCACHED`,
+      });
+    const inTask = TEST_TASKS.map((t) => JSON.stringify(taskCfg(t).inputs ?? null));
+    if (inTask[0] !== inTask[1])
+      violations.push({
+        pkg: pkg.name,
+        site: site(join(pkg.dir, "turbo.json")),
+        kind: "config",
+        detail: `"test" and "test:coverage" declare different inputs — a file hashed by one is stale in the other; declare the same list on both`,
+      });
     for (const t of TEST_TASKS) {
       const inputs = pkgTasks[t]?.inputs;
       if (inputs && !inputs.includes("$TURBO_DEFAULT$"))
@@ -1009,12 +1375,12 @@ export function runGate(root: string): GateResult {
             (taskCfg(t).env ?? []).includes(e.name) || (rootCfg.globalEnv ?? []).includes(e.name),
         );
         const passes =
-          TURBO_BUILTIN_PASSTHROUGH.has(e.name) ||
+          passesThrough(pt, e.name) ||
           TEST_TASKS.some((t) => (taskCfg(t).passThroughEnv ?? []).includes(e.name)) ||
           (rootCfg.globalPassThroughEnv ?? []).includes(e.name);
         if (hashed) stats.envHashed++;
         else if (!passes) stats.envStripped++;
-        else if (PLUMBING_ENV[e.name] !== undefined) stats.envPlumbing++;
+        else if (classifyEnv(e.name)?.class === "benign") stats.envPlumbing++;
         else
           violations.push({
             pkg: pkg.name,
@@ -1022,8 +1388,8 @@ export function runGate(root: string): GateResult {
             kind: "env",
             detail:
               `reads process.env.${e.name}, which reaches the test task UNHASHED — add "${e.name}" ` +
-              `to env of both test tasks (${rel(pkg.dir)}/turbo.json), or to PLUMBING_ENV in ` +
-              `scripts/check-turbo-test-inputs.ts if its value cannot change an outcome`,
+              `to env of both test tasks (turbo.json), or classify it "benign" in ` +
+              `scripts/test-support/env-policy.ts if its value cannot change an outcome`,
           });
       }
     }
@@ -1036,14 +1402,20 @@ export function runGate(root: string): GateResult {
         kind: "config",
         detail: `REVIEWED_SITES entry "${key}" no longer matches any scanned reference — remove the stale entry`,
       });
-  return { violations, stats };
+  return { violations, stats, passthroughSource: pt.source };
 }
 
 function main(): void {
   const argRoot = process.argv.indexOf("--root");
   const here = dirname(fileURLToPath(import.meta.url));
   const root = argRoot > -1 ? resolve(process.argv[argRoot + 1]!) : resolve(here, "..");
-  const { violations, stats: s } = runGate(root);
+  // --passthrough FILE: a fixture's measured set (tests), instead of measuring.
+  const argPt = process.argv.indexOf("--passthrough");
+  const passthrough =
+    argPt > -1
+      ? (JSON.parse(readFileSync(resolve(process.argv[argPt + 1]!), "utf-8")) as Passthrough)
+      : undefined;
+  const { violations, stats: s, passthroughSource } = runGate(root, { passthrough });
   const aperture =
     `${s.packages} package(s) with test tasks, ${s.files} test-time code file(s) scanned ` +
     `(the import/path closure of ${s.filesSeen} package code files); ` +
@@ -1051,7 +1423,10 @@ function main(): void {
     `${s.coveredByInputs} via declared inputs, ${s.coveredByGlobal} via globalDependencies, ` +
     `${s.coveredByLockfile} via the lockfile, ${s.reviewed} reviewed non-input(s); ${s.envReads} process.env read(s) — ` +
     `${s.envHashed} hashed, ${s.envStripped} stripped by strict env mode, ${s.envPlumbing} reviewed plumbing; ` +
-    `${s.uncached} package(s) explicitly uncached`;
+    `${s.uncached} package(s) explicitly uncached; ${s.passthrough} pass-through var(s)/prefix(es) ` +
+    `classified (${passthroughSource}); ${s.entryPoints} test entry point(s) and ${s.workflows} workflow(s) checked ` +
+    `for the runtime wrapper. The runtime input tracer (scripts/test-support/input-tracer.ts) is the law; ` +
+    `this scan is its pre-check`;
   if (violations.length === 0) {
     console.log(
       `✓ check-turbo-test-inputs: every cached test input is in its task hash\n  ${aperture}`,
@@ -1067,7 +1442,7 @@ function main(): void {
       fix:
         'declare each outside file in the package turbo.json: { "extends": ["//"], "tasks": { "test": { "inputs": ["$TURBO_DEFAULT$", "$TURBO_ROOT$/<path>"] }, "test:coverage": { same } } }; ' +
         "or add the owner as a workspace dependency; or, if the test cannot be hermetic, set cache:false on both tasks and add the package to UNCACHED in scripts/check-turbo-test-inputs.ts with the reason",
-      doctrine: "docs/ops/RUNBOOK.md § Turbo remote cache",
+      doctrine: 'docs/ops/RUNBOOK.md § "Test results are cached too"',
     }),
   );
   process.stderr.write(`  Aperture: ${aperture}\n\n`);

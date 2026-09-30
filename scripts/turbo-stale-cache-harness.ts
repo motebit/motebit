@@ -94,7 +94,7 @@ interface RunResult {
   miss: boolean;
 }
 
-interface Case {
+export interface Case {
   name: string;
   claim: string;
   /** The package (in `packages/`) whose test task is observed. */
@@ -110,7 +110,7 @@ interface Case {
 
 // ── Fixture workspace ───────────────────────────────────────────────────
 
-function testFile(body: string): string {
+export function testFile(body: string): string {
   return (
     `import { describe, expect, it } from "vitest";\n` +
     `import { existsSync, readFileSync } from "node:fs";\n` +
@@ -123,7 +123,7 @@ function testFile(body: string): string {
   );
 }
 
-function pkgJson(name: string, extra: Record<string, unknown> = {}): string {
+export function pkgJson(name: string, extra: Record<string, unknown> = {}): string {
   return JSON.stringify(
     {
       name,
@@ -142,13 +142,13 @@ function pkgJson(name: string, extra: Record<string, unknown> = {}): string {
   );
 }
 
-const VITEST_CONFIG =
+export const VITEST_CONFIG =
   `import { defineMotebitTest } from "../../vitest.shared.js";\n` +
   `export default defineMotebitTest({\n` +
   `  thresholds: { statements: 0, branches: 0, functions: 0, lines: 0 },\n` +
   `});\n`;
 
-function lockfile(importers: Record<string, Record<string, string>>): string {
+export function lockfile(importers: Record<string, Record<string, string>>): string {
   const lines = [
     "lockfileVersion: '9.0'",
     "",
@@ -187,7 +187,7 @@ function lockfile(importers: Record<string, Record<string, string>>): string {
 }
 
 /** A fake external package laid out the way pnpm lays it out. */
-function fakeDep(root: string, name: string, version: string, value: number): string {
+export function fakeDep(root: string, name: string, version: string, value: number): string {
   const dir = join(root, "node_modules", ".pnpm", `${name}@${version}`, "node_modules", name);
   mkdirSync(dir, { recursive: true });
   writeFileSync(join(dir, "package.json"), JSON.stringify({ name, version, main: "index.cjs" }));
@@ -195,14 +195,14 @@ function fakeDep(root: string, name: string, version: string, value: number): st
   return dir;
 }
 
-function linkDep(root: string, importerDir: string, name: string, target: string): void {
+export function linkDep(root: string, importerDir: string, name: string, target: string): void {
   const nm = join(root, importerDir, "node_modules");
   mkdirSync(nm, { recursive: true });
   rmSync(join(nm, name), { force: true, recursive: true });
   symlinkSync(target, join(nm, name), "dir");
 }
 
-function buildFixture(c: Case): string {
+export function buildFixture(c: Case): string {
   const root = mkdtempSync(join(tmpdir(), `turbo-stale-${c.name}-`));
   for (const rel of COPIED) {
     const src = join(REPO, rel);
@@ -319,11 +319,13 @@ interface Repair {
 
 function applyRepair(root: string, r: Repair): void {
   const file = join(root, r.file);
-  const cfg = existsSync(file)
+  const cfg: { extends?: string[]; tasks?: Record<string, Record<string, string[]>> } = existsSync(
+    file,
+  )
     ? (JSON.parse(readFileSync(file, "utf-8")) as {
         tasks?: Record<string, Record<string, string[]>>;
       })
-    : { $schema: "https://turbo.build/schema.json", extends: ["//"], tasks: {} };
+    : { extends: ["//"], tasks: {} };
   cfg.tasks ??= {};
   for (const t of r.tasks) {
     const task = (cfg.tasks[t] ??= {});
@@ -369,9 +371,9 @@ async function runCase(c: Case): Promise<CaseResult> {
     if (outcome !== "TRACER_FAIL") return done(outcome, detail);
     // Apply the repair the tracer named, reset the input, and re-run the case.
     const m = REPAIR.exec(detail);
-    const repairs = [...detail.matchAll(new RegExp(REPAIR.source, "g"))].map(
-      (x) => JSON.parse(x[1]) as Repair,
-    );
+    const repairs = [
+      ...new Set([...detail.matchAll(new RegExp(REPAIR.source, "g"))].map((x) => x[1])),
+    ].map((x) => JSON.parse(x) as Repair);
     if (!m || repairs.length === 0) return done(outcome, detail);
     for (const r of repairs) applyRepair(root, r);
     spawnSync("git", ["add", "-A"], { cwd: root });

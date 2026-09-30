@@ -1,0 +1,381 @@
+{
+  "$comment": "Single-line mutations of every claim the turbo test-cache defenses make: G = the static gate (scripts/check-turbo-test-inputs.ts), S = the tracer's hash-surface model (scripts/test-support/input-surface.ts), P = the env policy, T = the runtime input tracer (scripts/test-support/input-tracer.ts). scripts/turbo-cache-mutations.ts applies each one alone and requires the named test file(s) to go RED; a survivor is a claim nothing pins. The cold review's 16 gate mutations were not recorded verbatim; G01-G24 re-derive one per gate claim. A registerHooks resolve hook was dropped from the tracer after it measured as an equivalent mutant (Node 22's loaders read through the patched fs).",
+  "mutations": [
+    {
+      "id": "G01",
+      "claim": "envMode must be strict",
+      "file": "scripts/check-turbo-test-inputs.ts",
+      "find": "if (rootCfg.envMode && rootCfg.envMode !== \"strict\")",
+      "replace": "if (false)",
+      "tests": ["check-turbo-test-inputs"]
+    },
+    {
+      "id": "G02",
+      "claim": "globalDependencies carries GLOBAL_TEST_FILES",
+      "file": "scripts/check-turbo-test-inputs.ts",
+      "find": "  \".node-version\",\n  \"scripts/test-support/**\",\n] as const;",
+      "replace": "  \"scripts/test-support/**\",\n] as const;",
+      "tests": ["check-turbo-test-inputs"]
+    },
+    {
+      "id": "G03",
+      "claim": "test tasks dependsOn build",
+      "file": "scripts/check-turbo-test-inputs.ts",
+      "find": "if (!(cfg.dependsOn ?? []).includes(\"build\"))",
+      "replace": "if (false)",
+      "tests": ["check-turbo-test-inputs"]
+    },
+    {
+      "id": "G04",
+      "claim": "REQUIRED_TEST_ENV hashed on both tasks",
+      "file": "scripts/check-turbo-test-inputs.ts",
+      "find": "if (!(cfg.env ?? []).includes(e) && !(rootCfg.globalEnv ?? []).includes(e))",
+      "replace": "if (false)",
+      "tests": ["check-turbo-test-inputs"]
+    },
+    {
+      "id": "G05",
+      "claim": "no passThroughEnv on test tasks",
+      "file": "scripts/check-turbo-test-inputs.ts",
+      "find": "if (cfg.passThroughEnv?.length)",
+      "replace": "if (false)",
+      "tests": ["check-turbo-test-inputs"]
+    },
+    {
+      "id": "G06",
+      "claim": "test:coverage outputs coverage/**",
+      "file": "scripts/check-turbo-test-inputs.ts",
+      "find": "if (!(rootTasks[\"test:coverage\"]?.outputs ?? []).includes(\"coverage/**\"))",
+      "replace": "if (false)",
+      "tests": ["check-turbo-test-inputs"]
+    },
+    {
+      "id": "G07",
+      "claim": ".node-version is exact",
+      "file": "scripts/check-turbo-test-inputs.ts",
+      "find": "if (!/^\\d+\\.\\d+\\.\\d+$/.test(nodeVersion))",
+      "replace": "if (!/^\\d+/.test(nodeVersion))",
+      "tests": ["check-turbo-test-inputs"]
+    },
+    {
+      "id": "G08",
+      "claim": "turbo pinned exactly",
+      "file": "scripts/check-turbo-test-inputs.ts",
+      "find": "if (!/^\\d+\\.\\d+\\.\\d+$/.test(turboSpec))",
+      "replace": "if (!/\\d+\\.\\d+\\.\\d+/.test(turboSpec))",
+      "tests": ["check-turbo-test-inputs"]
+    },
+    {
+      "id": "G09",
+      "claim": "root test scripts go through the wrapper",
+      "file": "scripts/check-turbo-test-inputs.ts",
+      "find": "if (!cmd.trim().startsWith(WRAPPER))",
+      "replace": "if (false)",
+      "tests": ["check-turbo-test-inputs"]
+    },
+    {
+      "id": "G10",
+      "claim": "pre-push / workflows go through the wrapper",
+      "file": "scripts/check-turbo-test-inputs.ts",
+      "find": "if (!line.includes(WRAPPER))",
+      "replace": "if (false)",
+      "tests": ["check-turbo-test-inputs"]
+    },
+    {
+      "id": "G11",
+      "claim": "setup-node reads .node-version",
+      "file": "scripts/check-turbo-test-inputs.ts",
+      "find": "if (/^\\s*node-version\\s*:/.test(line))",
+      "replace": "if (/^\\s*node-version\\s*:\\s*lts/.test(line))",
+      "tests": ["check-turbo-test-inputs"]
+    },
+    {
+      "id": "G12",
+      "claim": "every measured pass-through var is classified",
+      "file": "scripts/check-turbo-test-inputs.ts",
+      "find": "    if (!rule)\n",
+      "replace": "    if (false)\n",
+      "tests": ["check-turbo-test-inputs"]
+    },
+    {
+      "id": "G13",
+      "claim": "a hash-class pass-through var is hashed",
+      "file": "scripts/check-turbo-test-inputs.ts",
+      "find": "else if (rule.class === \"hash\" && rootTestEnv.some((e) => !e.includes(name)))",
+      "replace": "else if (false)",
+      "tests": ["check-turbo-test-inputs"]
+    },
+    {
+      "id": "G14",
+      "claim": "every measured pass-through prefix is classified",
+      "file": "scripts/check-turbo-test-inputs.ts",
+      "find": "if (!classifyEnv(`${p}${PROBE_SUFFIX}`))",
+      "replace": "if (false)",
+      "tests": ["check-turbo-test-inputs"]
+    },
+    {
+      "id": "G15",
+      "claim": "cached packages build their vitest config through defineMotebitTest (tracer adoption)",
+      "file": "scripts/check-turbo-test-inputs.ts",
+      "find": "if (!vcfg || !/\\bdefineMotebitTest\\s*\\(/.test(readFileSync(vcfg, \"utf-8\")))",
+      "replace": "if (!vcfg)",
+      "tests": ["check-turbo-test-inputs"]
+    },
+    {
+      "id": "G16",
+      "claim": "test and test:coverage declare identical inputs",
+      "file": "scripts/check-turbo-test-inputs.ts",
+      "find": "if (inTask[0] !== inTask[1])",
+      "replace": "if (false)",
+      "tests": ["check-turbo-test-inputs"]
+    },
+    {
+      "id": "G17",
+      "claim": "UNCACHED ⇒ cache:false on both tasks",
+      "file": "scripts/check-turbo-test-inputs.ts",
+      "find": "      if (!offBoth)\n",
+      "replace": "      if (false)\n",
+      "tests": ["check-turbo-test-inputs"]
+    },
+    {
+      "id": "G18",
+      "claim": "cache:false ⇒ listed in UNCACHED",
+      "file": "scripts/check-turbo-test-inputs.ts",
+      "find": "    if (offAny) {\n      violations.push(",
+      "replace": "    if (offAny) {\n      if (0) violations.push(",
+      "tests": ["check-turbo-test-inputs"]
+    },
+    {
+      "id": "G19",
+      "claim": "package inputs keep $TURBO_DEFAULT$",
+      "file": "scripts/check-turbo-test-inputs.ts",
+      "find": "if (inputs && !inputs.includes(\"$TURBO_DEFAULT$\"))",
+      "replace": "if (false)",
+      "tests": ["check-turbo-test-inputs"]
+    },
+    {
+      "id": "G20",
+      "claim": "pre-check: an outside read must be covered on BOTH tasks",
+      "file": "scripts/check-turbo-test-inputs.ts",
+      "find": "          return !covers(globs, t2, isDir);",
+      "replace": "          return false;",
+      "tests": ["check-turbo-test-inputs"]
+    },
+    {
+      "id": "G21",
+      "claim": "pre-check: a pass-through env read must be hashed or benign",
+      "file": "scripts/check-turbo-test-inputs.ts",
+      "find": "else if (classifyEnv(e.name)?.class === \"benign\") stats.envPlumbing++;",
+      "replace": "else stats.envPlumbing++;",
+      "tests": ["check-turbo-test-inputs"]
+    },
+    {
+      "id": "G22",
+      "claim": "pre-check: measured PREFIX pass-through counts",
+      "file": "scripts/check-turbo-test-inputs.ts",
+      "find": "    pt.prefixes.some((p) => name.startsWith(p))",
+      "replace": "    false",
+      "tests": ["check-turbo-test-inputs"]
+    },
+    {
+      "id": "G23",
+      "claim": "measurement: every prefix is probed",
+      "file": "scripts/check-turbo-test-inputs.ts",
+      "find": "  for (const p of cand.prefixes) probe[`${p}${PROBE_SUFFIX}`] = \"\";",
+      "replace": "",
+      "tests": ["check-turbo-test-inputs"]
+    },
+    {
+      "id": "G24",
+      "claim": "measurement: names packed in the turbo binary are candidates",
+      "file": "scripts/check-turbo-test-inputs.ts",
+      "find": "    if (w.length > 120) continue;",
+      "replace": "    continue;",
+      "tests": ["check-turbo-test-inputs"]
+    },
+    {
+      "id": "S01",
+      "claim": "the package's own files are hashed",
+      "file": "scripts/test-support/input-surface.ts",
+      "find": "if (inside(r, pkgReal) && !/[/\\\\]node_modules[/\\\\]\\.pnpm[/\\\\]/.test(r)) return null;",
+      "replace": "if (false) return null;",
+      "tests": ["input-surface", "input-tracer"]
+    },
+    {
+      "id": "S02",
+      "claim": "an input counts only when declared on BOTH tasks",
+      "file": "scripts/test-support/input-surface.ts",
+      "find": "const inputGlobs = perTask[0].filter((g) => perTask[1].includes(g));",
+      "replace": "const inputGlobs = [...perTask[0], ...perTask[1]];",
+      "tests": ["input-surface", "input-tracer"]
+    },
+    {
+      "id": "S03",
+      "claim": "globalDependencies / declared inputs are the only outside files hashed",
+      "file": "scripts/test-support/input-surface.ts",
+      "find": "if (covers(s.globalGlobs, relAbs, isDir) || covers(s.inputGlobs, relAbs, isDir)) return null;",
+      "replace": "if (true) return null;",
+      "tests": ["input-surface", "input-tracer"]
+    },
+    {
+      "id": "S04",
+      "claim": "workspace dependencies are hashed through ^build",
+      "file": "scripts/test-support/input-surface.ts",
+      "find": "    if (inside(r, dr)) return null;",
+      "replace": "    if (false) return null;",
+      "tests": ["input-surface", "input-tracer"]
+    },
+    {
+      "id": "S05",
+      "claim": "C5: a store package outside the lockfile closure is refused",
+      "file": "scripts/test-support/input-surface.ts",
+      "find": "if (id && s.extIds.has(id)) return null;",
+      "replace": "if (id) return null;",
+      "tests": ["input-surface", "input-tracer"]
+    },
+    {
+      "id": "S06",
+      "claim": "C5: only a DECLARED lockfile waives the closure",
+      "file": "scripts/test-support/input-surface.ts",
+      "find": "    if (s.lockfileDeclared) return null;",
+      "replace": "    if (true) return null;",
+      "tests": ["input-surface", "input-tracer"]
+    },
+    {
+      "id": "S07",
+      "claim": "content under $HOME is user state",
+      "file": "scripts/test-support/input-surface.ts",
+      "find": "if (home !== sep && inside(r, home)) {",
+      "replace": "if (false) {",
+      "tests": ["input-surface", "input-tracer"]
+    },
+    {
+      "id": "S08",
+      "claim": "only a PROBE of an ancestor is exempt (a readdir is an input)",
+      "file": "scripts/test-support/input-surface.ts",
+      "find": "if (kind === \"probe\" && inside(pkgReal, r)) return null;",
+      "replace": "if (inside(pkgReal, r)) return null;",
+      "tests": ["input-surface", "input-tracer"]
+    },
+    {
+      "id": "S09",
+      "claim": "an env read is accepted only when hashed or BENIGN (guarded fails)",
+      "file": "scripts/test-support/input-surface.ts",
+      "find": "if (rule?.class === \"benign\") return null;",
+      "replace": "if (rule) return null;",
+      "tests": ["input-surface", "input-tracer"]
+    },
+    {
+      "id": "S10",
+      "claim": "the closure follows workspace links",
+      "file": "scripts/test-support/input-surface.ts",
+      "find": "      visitImporter(relative(\".\", join(d, l)).split(sep).join(\"/\") || \".\");",
+      "replace": "      void l;",
+      "tests": ["input-surface"]
+    },
+    {
+      "id": "S11",
+      "claim": "lockfile ids strip peer suffixes",
+      "file": "scripts/test-support/input-surface.ts",
+      "find": "const stripPeers = (v: string) => v.replace(/\\(.*$/, \"\");",
+      "replace": "const stripPeers = (v: string) => v;",
+      "tests": ["input-surface"]
+    },
+    {
+      "id": "P01",
+      "claim": "env policy: the longest pattern wins",
+      "file": "scripts/test-support/env-policy.ts",
+      "find": "if (!best || r.pattern.replace(\"*\", \"\").length > best.pattern.replace(\"*\", \"\").length) best = r;",
+      "replace": "if (!best) best = r;",
+      "tests": ["input-surface"]
+    },
+    {
+      "id": "P02",
+      "claim": "env policy: `*` is a prefix, not a substring",
+      "file": "scripts/test-support/env-policy.ts",
+      "find": "return pattern.endsWith(\"*\") ? name.startsWith(pattern.slice(0, -1)) : pattern === name;",
+      "replace": "return pattern.endsWith(\"*\") ? name.includes(pattern.slice(0, -1)) : pattern === name;",
+      "tests": ["input-surface"]
+    },
+    {
+      "id": "T01",
+      "claim": "C1: the hashed runtime must be the running runtime",
+      "file": "scripts/test-support/input-tracer.ts",
+      "find": "if (declared !== runtimeId()) {",
+      "replace": "if (false) {",
+      "tests": ["input-tracer"]
+    },
+    {
+      "id": "T02",
+      "claim": "NODE_OPTIONS must be hashed when set",
+      "file": "scripts/test-support/input-tracer.ts",
+      "find": "if (process.env.NODE_OPTIONS && !s.hashedEnv.includes(\"NODE_OPTIONS\")) {",
+      "replace": "if (false) {",
+      "tests": ["input-tracer"]
+    },
+    {
+      "id": "T03",
+      "claim": "a whole-env copy is not a read",
+      "file": "scripts/test-support/input-tracer.ts",
+      "find": "if (typeof k !== \"string\" || !state.recording || enumerating) return;",
+      "replace": "if (typeof k !== \"string\" || !state.recording) return;",
+      "tests": ["input-tracer"]
+    },
+    {
+      "id": "T04",
+      "claim": "path-shaped spawn arguments are inputs",
+      "file": "scripts/test-support/input-tracer.ts",
+      "find": "    if (fs.existsSync(abs)) note(abs, \"exec\");",
+      "replace": "    void abs;",
+      "tests": ["input-tracer"]
+    },
+    {
+      "id": "T05",
+      "claim": "vite-loaded modules (the worker's module graph) are inputs",
+      "file": "scripts/test-support/input-tracer.ts",
+      "find": "if (f.startsWith(\"/\") && !state.paths.has(f)) state.paths.set(f, \"module\");",
+      "replace": "void f;",
+      "tests": ["input-tracer"]
+    },
+    {
+      "id": "T07",
+      "claim": "the promisified exec keeps its { stdout, stderr } shape",
+      "file": "scripts/test-support/input-tracer.ts",
+      "find": "if (key === promisify.custom && typeof d.value === \"function\") {",
+      "replace": "if (key === promisify.custom) continue;\n    if (false) {",
+      "tests": ["input-tracer"]
+    },
+    {
+      "id": "T08",
+      "claim": "only the package's vitest `test.env` is exempt from the env check",
+      "file": "scripts/test-support/input-tracer.ts",
+      "find": "const configEnv = new Set(Object.keys(worker?.config?.env ?? {}));",
+      "replace": "const configEnv = new Set(Object.keys(process.env));",
+      "tests": ["input-tracer"]
+    },
+    {
+      "id": "T09",
+      "claim": "fs reads are recorded (this is also how natively loaded modules are seen)",
+      "file": "scripts/test-support/input-tracer.ts",
+      "find": "      wrap(o, FS_READ, \"read\");",
+      "replace": "      void FS_READ;",
+      "tests": ["input-tracer"]
+    },
+    {
+      "id": "T10",
+      "claim": "directory listings are recorded",
+      "file": "scripts/test-support/input-tracer.ts",
+      "find": "      wrap(o, FS_DIR, \"readdir\");",
+      "replace": "      void FS_DIR;",
+      "tests": ["input-tracer"]
+    },
+    {
+      "id": "T11",
+      "claim": "enforcement turns on under turbo (TURBO_HASH)",
+      "file": "scripts/test-support/input-tracer.ts",
+      "find": "  process.env.TURBO_HASH !== undefined || process.env.MOTEBIT_INPUT_TRACER === \"enforce\";",
+      "replace": "  process.env.MOTEBIT_INPUT_TRACER === \"enforce\";",
+      "tests": ["input-tracer"]
+    }
+  ]
+}

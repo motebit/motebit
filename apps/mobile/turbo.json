@@ -12,10 +12,18 @@
       "outputs": ["src/creature-webview-bundle.generated.ts"]
     },
     "test": {
-      "inputs": ["$TURBO_DEFAULT$", "$TURBO_ROOT$/packages/persistence/package.json"]
+      "inputs": [
+        "$TURBO_DEFAULT$",
+        "$TURBO_ROOT$/packages/persistence/package.json",
+        "$TURBO_ROOT$/pnpm-lock.yaml"
+      ]
     },
     "test:coverage": {
-      "inputs": ["$TURBO_DEFAULT$", "$TURBO_ROOT$/packages/persistence/package.json"]
+      "inputs": [
+        "$TURBO_DEFAULT$",
+        "$TURBO_ROOT$/packages/persistence/package.json",
+        "$TURBO_ROOT$/pnpm-lock.yaml"
+      ]
     }
   }
 }

@@ -8,7 +8,8 @@
         "$TURBO_ROOT$/apps/mobile/package.json",
         "$TURBO_ROOT$/apps/desktop/src/sync-controller.ts",
         "$TURBO_ROOT$/apps/web/src/web-app.ts",
-        "$TURBO_ROOT$/apps/spatial/src/sync-controller.ts"
+        "$TURBO_ROOT$/apps/spatial/src/sync-controller.ts",
+        "$TURBO_ROOT$/pnpm-lock.yaml"
       ]
     },
     "test:coverage": {
@@ -17,7 +18,8 @@
         "$TURBO_ROOT$/apps/mobile/package.json",
         "$TURBO_ROOT$/apps/desktop/src/sync-controller.ts",
         "$TURBO_ROOT$/apps/web/src/web-app.ts",
-        "$TURBO_ROOT$/apps/spatial/src/sync-controller.ts"
+        "$TURBO_ROOT$/apps/spatial/src/sync-controller.ts",
+        "$TURBO_ROOT$/pnpm-lock.yaml"
       ]
     }
   }

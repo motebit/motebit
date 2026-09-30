@@ -1,6 +1,11 @@
 {
   "$schema": "https://turbo.build/schema.json",
-  "globalDependencies": ["vitest.shared.ts", "tsconfig.base.json"],
+  "globalDependencies": [
+    "vitest.shared.ts",
+    "tsconfig.base.json",
+    ".node-version",
+    "scripts/test-support/**"
+  ],
   "tasks": {
     "build": {
       "dependsOn": ["^build"],
@@ -8,12 +13,28 @@
     },
     "test": {
       "dependsOn": ["build"],
-      "env": ["CI", "TZ", "LANG"],
+      "env": [
+        "CI",
+        "TZ",
+        "LANG",
+        "NODE_OPTIONS",
+        "LD_LIBRARY_PATH",
+        "GITHUB_PAT",
+        "MOTEBIT_TEST_RUNTIME"
+      ],
       "outputs": []
     },
     "test:coverage": {
       "dependsOn": ["build"],
-      "env": ["CI", "TZ", "LANG"],
+      "env": [
+        "CI",
+        "TZ",
+        "LANG",
+        "NODE_OPTIONS",
+        "LD_LIBRARY_PATH",
+        "GITHUB_PAT",
+        "MOTEBIT_TEST_RUNTIME"
+      ],
       "outputs": ["coverage/**"]
     },
     "typecheck": {

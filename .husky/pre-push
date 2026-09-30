@@ -112,6 +112,10 @@ if git symbolic-ref -q HEAD >/dev/null 2>&1; then
   # own full parallelism regardless.
   _concurrency=${MOTEBIT_PREPUSH_CONCURRENCY:-2}
 
+  # Through scripts/turbo-run.mjs (never bare `pnpm turbo`): it hashes the
+  # running runtime (MOTEBIT_TEST_RUNTIME) into every cached test result, and
+  # the runtime input tracer fails a cached test run that lacks it.
+  #
   # `test:coverage`, not `test`: CI's `check` job runs `test:coverage` (tests +
   # coverage-threshold enforcement). Running plain `test` here let three pushes
   # (vitest-4 upgrade arc, 2026-06) ship with CI red on coverage — the gate hole
@@ -122,10 +126,10 @@ if git symbolic-ref -q HEAD >/dev/null 2>&1; then
   if [ -n "$SKIP_COVERAGE" ]; then
     echo "⚠ SKIP_COVERAGE set — running 'test' without coverage thresholds (CI still enforces them)"
     run_phase "typecheck+lint+test (affected, concurrency=$_concurrency)" \
-      pnpm turbo run typecheck lint test --filter="...[origin/main]" --concurrency="$_concurrency"
+      node scripts/turbo-run.mjs run typecheck lint test --filter="...[origin/main]" --concurrency="$_concurrency"
   else
     run_phase "typecheck+lint+test:coverage (affected, concurrency=$_concurrency)" \
-      pnpm turbo run typecheck lint test:coverage --filter="...[origin/main]" --concurrency="$_concurrency"
+      node scripts/turbo-run.mjs run typecheck lint test:coverage --filter="...[origin/main]" --concurrency="$_concurrency"
   fi
 
   run_phase "format:check" pnpm format:check
