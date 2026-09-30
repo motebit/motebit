@@ -239,10 +239,19 @@ export interface DepositDetectorConfig {
   maxBlocksPerCycle?: number;
   /** Custom RPC URLs. Merged with defaults. Ignored when `rpc` is provided. */
   rpcUrls?: Record<string, string>;
-  /** Injected RPC adapter for testability. Default: HttpJsonRpcEvmAdapter from the chain's URL. */
-  rpc?: EvmRpcAdapter;
+  /**
+   * Injected RPC adapter for testability. Default: HttpJsonRpcEvmAdapter from
+   * the chain's URL. `null` disables the detector (an embedder — a test relay
+   * — that must not reach a public RPC).
+   */
+  rpc?: EvmRpcAdapter | null;
   /** Injected fetch for the default adapter. Ignored when `rpc` is provided. */
   fetch?: typeof globalThis.fetch;
+  /**
+   * Receives the immediate boot tick (started, not awaited) so the caller's
+   * shutdown can await it — no scan outlives the relay that started it.
+   */
+  trackStartup?: (work: Promise<unknown>) => void;
 }
 
 /**
@@ -265,14 +274,22 @@ export function startDepositDetector(
   const intervalMs = config.intervalMs ?? 15_000;
   const maxBlocksPerCycle = config.maxBlocksPerCycle ?? 1000;
 
-  if (!contractAddress || (!config.rpc && !rpcUrl) || confirmations === undefined) {
+  if (
+    config.rpc === null ||
+    !contractAddress ||
+    (!config.rpc && !rpcUrl) ||
+    confirmations === undefined
+  ) {
     logger.warn("deposit-detector.disabled", {
       chain: config.chain,
-      reason: !contractAddress
-        ? "no USDC contract"
-        : !rpcUrl
-          ? "no RPC URL"
-          : "no confirmation depth registered (add to CONFIRMATIONS_BY_CHAIN)",
+      reason:
+        config.rpc === null
+          ? "no RPC (disabled by the embedder)"
+          : !contractAddress
+            ? "no USDC contract"
+            : !rpcUrl
+              ? "no RPC URL"
+              : "no confirmation depth registered (add to CONFIRMATIONS_BY_CHAIN)",
     });
     // Return a no-op interval so `clearInterval` remains a safe call.
     return setInterval(() => {}, 2_147_483_647);
@@ -323,6 +340,7 @@ export function startDepositDetector(
     }
   };
 
-  void tick().catch(() => {});
+  const bootTick = tick().catch(() => {});
+  config.trackStartup?.(bootTick);
   return superviseInterval(config.supervisor, "deposit-detector", intervalMs, tick);
 }

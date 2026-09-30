@@ -271,6 +271,16 @@ export interface TasksDeps {
     facilitatorUrl?: string;
     testnet?: boolean;
   };
+  /**
+   * An injected facilitator client (tests: the in-process fake). Omitted:
+   * `createX402FacilitatorClient(x402Config)`, the canonical construction.
+   */
+  x402FacilitatorClient?: unknown;
+  /**
+   * Hands the relay a promise this module started but does not await (the
+   * facilitator `initialize()`), so `close()` awaits it. Omitted: untracked.
+   */
+  trackStartup?: (work: Promise<unknown>) => void;
   /** Auth helpers from relay auth layer */
   parseTokenPayloadUnsafe: (token: string) => import("./auth.js").TokenPayload | null;
   verifySignedTokenForDevice: (
@@ -2196,6 +2206,8 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
     enableDeviceAuth,
     maxTasksPerSubmitter,
     x402Config,
+    x402FacilitatorClient,
+    trackStartup,
     parseTokenPayloadUnsafe,
     verifySignedTokenForDevice,
     isTokenBlacklisted,
@@ -2307,9 +2319,10 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
     // misconfiguration so the route registration fails fast rather than
     // silently leaving the x402 surface broken. See x402-facilitator.ts.
     const { createX402FacilitatorClient } = await import("./x402-facilitator.js");
-    const facilitatorClient = (await createX402FacilitatorClient(
-      x402Config,
-    )) as ConstructorParameters<typeof x402ResourceServer>[0];
+    const facilitatorClient = (x402FacilitatorClient ??
+      (await createX402FacilitatorClient(x402Config))) as ConstructorParameters<
+      typeof x402ResourceServer
+    >[0];
 
     const network = x402Config.network as `${string}:${string}`;
     const treasury = x402Config.payToAddress;
@@ -2393,6 +2406,7 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
           facilitator: x402Config.facilitatorUrl ?? "https://x402.org/facilitator",
         }),
       );
+    trackStartup?.(x402InitPromise);
     const paywallConfig = { testnet: x402Config.testnet ?? true };
 
     // One priceSubmission() quote per request. Free tasks (no listing / zero

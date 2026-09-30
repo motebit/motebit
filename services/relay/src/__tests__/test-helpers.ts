@@ -13,6 +13,7 @@ import { AgentTaskStatus, asMotebitId, asAllocationId, asGoalId } from "@motebit
 import { allocateBudget, computeGrossAmount } from "@motebit/market";
 import { TaskQueue } from "../task-queue.js";
 import type { P2pPaymentChain } from "../p2p-payer.js";
+import { fakeFacilitatorClient } from "./x402-fake-facilitator.js";
 import {
   creditAccount,
   debitSpendableAccount,
@@ -119,6 +120,13 @@ export async function createTestRelay(overrides?: Partial<SyncRelayConfig>): Pro
     // (#907 round 2): tests that exercise it inject a fake reader and call
     // `reconcilePendingX402Settlements` directly.
     x402ChainReader: null,
+    // A test relay never reaches the network: x402 talks to the in-process
+    // facilitator (its `initialize()` otherwise fetched x402.org and, unable
+    // to, warned after the file's worker had closed — the relay suite's
+    // `EnvironmentTeardownError` flake), and the deposit detector, whose boot
+    // tick otherwise scans the public Base Sepolia RPC, is off.
+    x402FacilitatorClient: fakeFacilitatorClient,
+    depositDetectorRpc: null,
     // Tests use mock WebSocket connections that never disconnect, so the
     // production 5s drain grace would be paid in full on every `close()`
     // (afterEach) — ~5s/test, making the suite slow and timer-bound (the

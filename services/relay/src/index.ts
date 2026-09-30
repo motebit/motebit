@@ -500,6 +500,20 @@ export interface SyncRelayConfig {
    */
   x402ChainReader?: import("./x402-settlements.js").X402ChainReader | null;
   /**
+   * The x402 facilitator client both consumers use (the settlement rail and
+   * the task-route middleware). Omitted: `createX402FacilitatorClient` — the
+   * one canonical construction (rule 16), which talks HTTP to the
+   * facilitator. Tests inject the in-process fake (`x402-fake-facilitator.ts`)
+   * so a test relay never reaches the network.
+   */
+  x402FacilitatorClient?: unknown;
+  /**
+   * The EVM RPC the deposit detector scans with. Omitted: JSON-RPC over
+   * `DEFAULT_RPC_URLS[x402.network]`; `null` disables the detector (tests —
+   * its boot tick is otherwise a real request to a public RPC).
+   */
+  depositDetectorRpc?: import("@motebit/evm-rpc").EvmRpcAdapter | null;
+  /**
    * Cadence (ms) of the supervised re-read of the Solana RPC's genesis hash
    * while the network is unresolved (#954, `solana-network.ts`). Default
    * `SOLANA_NETWORK_CHECK_INTERVAL_MS` (30s).
@@ -575,6 +589,14 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     platformFeeRate = parseFloatEnv("MOTEBIT_PLATFORM_FEE_RATE", 0.05),
   } = config;
 
+  // Async work boot starts but does not await (a warm-up read, a first loop
+  // tick, a facilitator handshake). close() awaits all of it, so no request,
+  // log line or database write outlives the relay that started it.
+  const startupWork: Promise<unknown>[] = [];
+  const trackStartupWork = (work: Promise<unknown>): void => {
+    startupWork.push(work);
+  };
+
   const stripeClient = stripeConfig ? new Stripe(stripeConfig.secretKey) : null;
   const subscriptionEventAdapter: SubscriptionEventAdapter | null =
     stripeClient && stripeConfig
@@ -646,9 +668,10 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
       // Single canonical adapter — chooses CDP vs default facilitator based on
       // env shape, fail-fast on mainnet misconfiguration. See x402-facilitator.ts.
       const { createX402FacilitatorClient } = await import("./x402-facilitator.js");
-      const facilitatorClient = (await createX402FacilitatorClient(
-        x402Config,
-      )) as ConstructorParameters<typeof X402SettlementRail>[0]["facilitatorClient"];
+      const facilitatorClient = (config.x402FacilitatorClient ??
+        (await createX402FacilitatorClient(x402Config))) as ConstructorParameters<
+        typeof X402SettlementRail
+      >[0]["facilitatorClient"];
       railRegistry.register(
         new X402SettlementRail({
           facilitatorClient,
@@ -1454,7 +1477,9 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
   const solanaNetworkInterval = solanaNetwork
     ? startSolanaNetworkLoop(solanaNetwork, loopSupervisor, config.solanaNetworkCheckIntervalMs)
     : undefined;
-  void solanaNetwork?.resolve(); // warm-up; never awaited
+  // Warm-up; never awaited on the boot path, but close() awaits it (bounded
+  // by the resolver's own read timeout) so no read outlives the relay.
+  if (solanaNetwork) trackStartupWork(solanaNetwork.resolve());
   /** A payer chain that answers only once the relay's Solana network resolves. */
   const gatedPaymentChain = (
     chain: import("./p2p-payer.js").P2pPaymentChain | null,
@@ -2085,6 +2110,8 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     db: moteDb.db,
     chain: depositDetectorChain,
     supervisor: loopSupervisor,
+    ...(config.depositDetectorRpc !== undefined ? { rpc: config.depositDetectorRpc } : {}),
+    trackStartup: trackStartupWork,
   });
 
   // --- Treasury reconciliation (compares recorded x402 fees to onchain balance) ---
@@ -2352,6 +2379,10 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     enableDeviceAuth,
     maxTasksPerSubmitter: MAX_TASKS_PER_SUBMITTER,
     x402Config: x402Config,
+    ...(config.x402FacilitatorClient !== undefined
+      ? { x402FacilitatorClient: config.x402FacilitatorClient }
+      : {}),
+    trackStartup: trackStartupWork,
     parseTokenPayloadUnsafe,
     verifySignedTokenForDevice: verifySignedTokenForDeviceWithFallback,
     isTokenBlacklisted,
@@ -2468,6 +2499,11 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     clearInterval(batchWithdrawalInterval);
     clearInterval(orchestrationWorkerInterval);
     receiptExchangeHub.close();
+    // Every async init boot started without awaiting (the x402 facilitator
+    // initialize, the deposit detector's boot tick, the Solana network
+    // warm-up) settles before the database closes and before close()
+    // resolves: nothing the relay started may log or write after it.
+    await Promise.allSettled(startupWork);
     moteDb.close();
   }
 

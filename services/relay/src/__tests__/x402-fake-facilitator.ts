@@ -299,6 +299,12 @@ const client = {
   },
 };
 
+/**
+ * The in-process facilitator client itself — what `createTestRelay` injects
+ * (`x402FacilitatorClient`) so no test relay reaches a real facilitator.
+ */
+export const fakeFacilitatorClient: unknown = client;
+
 /** The `../x402-facilitator.js` module, with the facilitator replaced. */
 export const fakeFacilitatorModule = {
   createX402FacilitatorClient: () => Promise.resolve(client),
