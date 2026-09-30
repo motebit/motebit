@@ -34,7 +34,7 @@ const TARGET = resolve(ROOT, "services", "relay", "src", "identity-transparency.
  * under the gate-self-test lock, backup outside the tree
  * (`repo-file-mutation.ts`).
  */
-function runGateWith(source: string): string {
+function runGateWith(source: string): Promise<string> {
   return withRepoFileReplaced(TARGET, source, () => {
     const r = spawnSync("npx", ["tsx", SCRIPT], { cwd: ROOT, encoding: "utf8" });
     return `${r.stdout}\n${r.stderr}`;
@@ -82,9 +82,9 @@ ${filler}  app.get("/api/v1/identity/:motebitId", async (c) => {
 const IDENTITY_ROUTE = 'route "GET /api/v1/identity/:motebitId"';
 
 describe("check-spec-routes annotation scanning", () => {
-  it("accepts a multi-paragraph @reason — comment length is not staleness", () => {
+  it("accepts a multi-paragraph @reason — comment length is not staleness", async () => {
     // The exact shape from #573: a blank `*` line inside the rationale.
-    const out = runGateWith(
+    const out = await runGateWith(
       fixture({
         reasonLines: [
           "@reason First paragraph of the rationale.",
@@ -101,8 +101,8 @@ describe("check-spec-routes annotation scanning", () => {
     expect(out).toContain("0 unclassified");
   });
 
-  it("still reports a route that genuinely has no annotation", () => {
-    const out = runGateWith(`import type { Hono } from "hono";
+  it("still reports a route that genuinely has no annotation", async () => {
+    const out = await runGateWith(`import type { Hono } from "hono";
 
 export function registerIdentityTransparencyRoutes(deps: { app: Hono; db: unknown }): void {
   const { app } = deps;
@@ -117,8 +117,8 @@ export function registerIdentityTransparencyRoutes(deps: { app: Hono; db: unknow
     expect(out).toContain("has no @spec/@internal/@experimental annotation");
   });
 
-  it("names an annotation that is present but too far from the route", () => {
-    const out = runGateWith(fixture({ reasonLines: ["@reason Short."], filler: 14 }));
+  it("names an annotation that is present but too far from the route", async () => {
+    const out = await runGateWith(fixture({ reasonLines: ["@reason Short."], filler: 14 }));
 
     expect(out).toContain(IDENTITY_ROUTE);
     expect(out).toContain("has an annotation at line");
@@ -127,8 +127,10 @@ export function registerIdentityTransparencyRoutes(deps: { app: Hono; db: unknow
     expect(out).not.toContain("has no @spec/@internal/@experimental annotation");
   });
 
-  it("names a JSDoc block from which no tag parsed", () => {
-    const out = runGateWith(fixture({ reasonLines: ["@reason Short."], tag: "@experimentall" }));
+  it("names a JSDoc block from which no tag parsed", async () => {
+    const out = await runGateWith(
+      fixture({ reasonLines: ["@reason Short."], tag: "@experimentall" }),
+    );
 
     expect(out).toContain(IDENTITY_ROUTE);
     expect(out).toContain("no @spec/@internal/@experimental tag was parsed from it");

@@ -42,10 +42,11 @@ import { fileURLToPath } from "node:url";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const DRIVER = resolve(ROOT, "scripts", "__tests__", "repo-lock.driver.ts");
-const LOCK = join(
-  tmpdir(),
-  `motebit-gate-self-test-lock-${createHash("sha256").update(ROOT).digest("hex").slice(0, 12)}`,
-);
+const KEY = createHash("sha256").update(ROOT).digest("hex").slice(0, 12);
+/** 48f1547: one directory, `owner` = a bare pid. */
+const LOCK_FLAT = join(tmpdir(), `motebit-gate-self-test-lock-${KEY}`);
+/** After it: a directory of generations, `g<N>/owner` = JSON with pid + start time. */
+const LOCK_GENS = join(tmpdir(), `motebit-gate-self-test-locks-${KEY}`);
 const REL = "services/relay/src/identity-transparency.ts";
 const TARGET = resolve(ROOT, REL);
 const HEAD_BYTES = spawnSync("git", ["show", `HEAD:${REL}`], { cwd: ROOT }).stdout as Buffer;
@@ -113,20 +114,20 @@ async function killInsideLock(perturb = false): Promise<void> {
 
 /**
  * Re-point every live owner record at `pid` — a process that is alive but is
- * not the one that took the lock: PID reuse. Knows both on-disk formats: the
- * 48f1547 `<lock>/owner` (a bare pid) and the generation dirs after it
- * (`<lock>/g<N>/owner`, JSON with pid + start time; `released` = free).
+ * not the one that took the lock: PID reuse. Knows both on-disk formats
+ * (`LOCK_FLAT`, `LOCK_GENS`; in the latter `released` marks a free one).
  */
 function fakePidReuse(pid: number): number {
   let n = 0;
-  const flat = join(LOCK, "owner");
+  const flat = join(LOCK_FLAT, "owner");
   if (existsSync(flat) && /^\d+$/.test(readFileSync(flat, "utf8").trim())) {
     writeFileSync(flat, String(pid));
-    return 1;
+    n++;
   }
-  for (const e of existsSync(LOCK) ? readdirSync(LOCK) : []) {
-    const owner = join(LOCK, e, "owner");
-    if (!/^g\d+$/.test(e) || !existsSync(owner) || existsSync(join(LOCK, e, "released"))) continue;
+  for (const e of existsSync(LOCK_GENS) ? readdirSync(LOCK_GENS) : []) {
+    const owner = join(LOCK_GENS, e, "owner");
+    if (!/^g\d+$/.test(e) || !existsSync(owner)) continue;
+    if (existsSync(join(LOCK_GENS, e, "released"))) continue;
     const rec = JSON.parse(readFileSync(owner, "utf8")) as { pid: number };
     rec.pid = pid;
     writeFileSync(owner, JSON.stringify(rec));
@@ -135,8 +136,10 @@ function fakePidReuse(pid: number): number {
   return n;
 }
 
+/** Both formats; the harness owns this checkout's lock while it runs. */
 function resetLock(): void {
-  rmSync(LOCK, { recursive: true, force: true });
+  rmSync(LOCK_FLAT, { recursive: true, force: true });
+  rmSync(LOCK_GENS, { recursive: true, force: true });
 }
 
 function targetAtHead(): boolean {
@@ -293,6 +296,7 @@ async function h4(): Promise<void> {
 }
 
 async function main(): Promise<void> {
+  resetLock();
   try {
     if (which === "h1" || which === "all") await h1();
     if (which === "h2" || which === "all") await h2();
