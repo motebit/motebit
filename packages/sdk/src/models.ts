@@ -13,6 +13,7 @@
  * snapshot drifts from what the provider serves. Never construct an id. */
 export const ANTHROPIC_MODELS = [
   "claude-fable-5-1",
+  "claude-opus-5-5",
   "claude-fable-5",
   "claude-opus-5",
   "claude-opus-4-8",
@@ -184,8 +185,8 @@ export const PROXY_MODELS = [
 
 // === Default Models ===
 
-/** Default Anthropic model. */
-export const DEFAULT_ANTHROPIC_MODEL = "claude-sonnet-4-6";
+/** Default Anthropic model — the picker's `recommended` row (#654). */
+export const DEFAULT_ANTHROPIC_MODEL = "claude-sonnet-5";
 
 /** Default OpenAI model. */
 export const DEFAULT_OPENAI_MODEL = "gpt-5.4-mini";
@@ -242,7 +243,7 @@ export const DEFAULT_PROXY_MODEL = "claude-sonnet-4-6";
  * the date with or without a model change. The gate never bumps a model.
  */
 export const MODEL_DEFAULT_REVIEW_BY: Record<string, string> = {
-  anthropic: "2026-10-31",
+  anthropic: "2026-12-31",
   openai: "2026-10-31",
   google: "2026-10-31",
   deepseek: "2026-10-31",
@@ -250,6 +251,75 @@ export const MODEL_DEFAULT_REVIEW_BY: Record<string, string> = {
   "local-server": "2026-10-31",
   proxy: "2026-10-31",
 };
+
+// === Anthropic picker (#654) ===
+//
+// The curated rows every surface's Anthropic model picker renders. Born
+// because each surface had hand-copied its own option list, and they drifted
+// independently (web offered Opus 4.7 / Sonnet 4.6 after Opus 5.5 / Sonnet 5
+// shipped; desktop dumped all of ANTHROPIC_MODELS; the CLI's `/model haiku`
+// alias named an id the registry does not carry). One table here, rendered
+// everywhere; `check-model-picker-canonical` refuses a hand-copied list.
+//
+// Three tiers, one row each. Every other ANTHROPIC_MODELS id (Fable 5.1
+// included) stays selectable by typing its id — the picker is curation, not
+// an allowlist. A stored non-picker id is shown and kept selected, never
+// migrated (`pickerOptionsWithStored`): changing the default must not
+// silently change a model the user chose.
+
+/** A picker tier — strongest, recommended default, fastest. */
+export type AnthropicPickerTier = "strongest" | "default" | "fast";
+
+export interface AnthropicPickerOption {
+  readonly id: AnthropicModel;
+  readonly label: string;
+  readonly tier: AnthropicPickerTier;
+}
+
+/** Rows in display order. The `default` row's id IS `DEFAULT_ANTHROPIC_MODEL`
+ *  (asserted in tests). */
+export const ANTHROPIC_PICKER: readonly AnthropicPickerOption[] = [
+  { id: "claude-opus-5-5", label: "Claude Opus 5.5 — most capable", tier: "strongest" },
+  { id: DEFAULT_ANTHROPIC_MODEL, label: "Claude Sonnet 5 — recommended", tier: "default" },
+  { id: "claude-haiku-4-5-20251001", label: "Claude Haiku 4.5 — fastest", tier: "fast" },
+] as const;
+
+/** The picker's model id for a tier. */
+export function pickerModelForTier(tier: AnthropicPickerTier): AnthropicModel {
+  const row = ANTHROPIC_PICKER.find((o) => o.tier === tier);
+  // Unreachable by construction (one row per tier); fail loud, not silent.
+  if (row == null) throw new Error(`ANTHROPIC_PICKER has no row for tier "${tier}"`);
+  return row.id;
+}
+
+/** A rendered picker row: `selected` marks the one to pre-select. */
+export interface PickerRenderOption {
+  readonly id: string;
+  readonly label: string;
+  readonly selected: boolean;
+}
+
+/**
+ * The rows a surface renders, given the user's stored model (if any).
+ *
+ *   - no stored model → the picker rows, the default row selected;
+ *   - a stored picker id → that row selected;
+ *   - a stored NON-picker id (e.g. `claude-sonnet-4-6` from before #654, or a
+ *     typed `claude-fable-5-1`) → prepended as its own row and selected. Never
+ *     migrated to the new default: the user's choice outranks the curation.
+ */
+export function pickerOptionsWithStored(stored?: string | null): PickerRenderOption[] {
+  const s = stored?.trim() ?? "";
+  const inPicker = s !== "" && ANTHROPIC_PICKER.some((o) => o.id === s);
+  const selectedId = s === "" ? DEFAULT_ANTHROPIC_MODEL : s;
+  const rows: PickerRenderOption[] = ANTHROPIC_PICKER.map((o) => ({
+    id: o.id,
+    label: o.label,
+    selected: o.id === selectedId,
+  }));
+  if (s !== "" && !inPicker) rows.unshift({ id: s, label: s, selected: true });
+  return rows;
+}
 
 // === Type Helpers ===
 

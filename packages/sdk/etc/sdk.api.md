@@ -72,10 +72,26 @@ export interface AIResponse {
 export const ANTHROPIC_CANONICAL_URL = "https://api.anthropic.com";
 
 // @public
-export const ANTHROPIC_MODELS: readonly ["claude-fable-5-1", "claude-fable-5", "claude-opus-5", "claude-opus-4-8", "claude-opus-4-7", "claude-opus-4-6", "claude-sonnet-5", "claude-sonnet-4-6", "claude-haiku-4-5-20251001", "claude-opus-4-5-20251101", "claude-sonnet-4-5-20250929"];
+export const ANTHROPIC_MODELS: readonly ["claude-fable-5-1", "claude-opus-5-5", "claude-fable-5", "claude-opus-5", "claude-opus-4-8", "claude-opus-4-7", "claude-opus-4-6", "claude-sonnet-5", "claude-sonnet-4-6", "claude-haiku-4-5-20251001", "claude-opus-4-5-20251101", "claude-sonnet-4-5-20250929"];
+
+// @public
+export const ANTHROPIC_PICKER: readonly AnthropicPickerOption[];
 
 // @public (undocumented)
 export type AnthropicModel = (typeof ANTHROPIC_MODELS)[number];
+
+// @public (undocumented)
+export interface AnthropicPickerOption {
+    // (undocumented)
+    readonly id: AnthropicModel;
+    // (undocumented)
+    readonly label: string;
+    // (undocumented)
+    readonly tier: AnthropicPickerTier;
+}
+
+// @public
+export type AnthropicPickerTier = "strongest" | "default" | "fast";
 
 // @public
 export interface AppearanceConfig {
@@ -264,7 +280,7 @@ export const DEEPSEEK_CANONICAL_URL = "https://api.deepseek.com";
 export const DEEPSEEK_MODELS: readonly ["deepseek-chat"];
 
 // @public
-export const DEFAULT_ANTHROPIC_MODEL = "claude-sonnet-4-6";
+export const DEFAULT_ANTHROPIC_MODEL = "claude-sonnet-5";
 
 // @public
 export const DEFAULT_APPEARANCE_CONFIG: AppearanceConfig;
@@ -753,6 +769,22 @@ export interface PaidIntentStoreAdapter {
     listOutstanding(motebitId: string): PaidIntentRecord[];
     record(entry: Omit<PaidIntentRecord, "resolution" | "resolved_at">): void;
     resolve(motebitId: string, taskId: string, resolution: "retrieved" | "dismissed", resolvedAt: number): boolean;
+}
+
+// @public
+export function pickerModelForTier(tier: AnthropicPickerTier): AnthropicModel;
+
+// @public
+export function pickerOptionsWithStored(stored?: string | null): PickerRenderOption[];
+
+// @public
+export interface PickerRenderOption {
+    // (undocumented)
+    readonly id: string;
+    // (undocumented)
+    readonly label: string;
+    // (undocumented)
+    readonly selected: boolean;
 }
 
 // @public
