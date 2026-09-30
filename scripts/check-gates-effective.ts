@@ -898,6 +898,32 @@ export async function probeLeak(): Promise<boolean> {
       ),
   },
   {
+    script: "check-prepush-subset",
+    proves:
+      "flags a pre-push phase with no CI counterpart — here the hook growing a `turbo run test:e2e` phase this gate cannot map to any CI step, the shape where a push is blocked locally for a reason CI never enforces",
+    perturb: () =>
+      // Insert a phase before the build. The line carries the drain needle so
+      // an interrupted run is recovered from the tracked hook.
+      mutateFile(".husky/pre-push", (src) =>
+        src.replace(
+          '  run_phase "build" pnpm build\n',
+          `  run_phase "${PROBE_PREFIX}injected e2e" pnpm turbo run test:e2e\n  run_phase "build" pnpm build\n`,
+        ),
+      ),
+  },
+  {
+    script: "check-prepush-subset",
+    proves:
+      "flags CI's `check` job narrowing `turbo run test:coverage` with a --filter — the change that would make a dependent's failing test (skipped by the fast pre-push by design) CI-invisible too, i.e. untested anywhere",
+    perturb: () =>
+      mutateFile(".github/workflows/ci.yml", (src) =>
+        src.replace(
+          "run: pnpm exec turbo run test:coverage --concurrency=4\n",
+          `run: pnpm exec turbo run test:coverage --concurrency=4 --filter=[origin/main] # ${PROBE_PREFIX}injected\n`,
+        ),
+      ),
+  },
+  {
     script: "check-readme-bin-claims",
     proves:
       "flags an `npm i -g @motebit/<pkg>` invocation in any README.md / CLAUDE.md naming a workspace package whose package.json has no `bin` field",

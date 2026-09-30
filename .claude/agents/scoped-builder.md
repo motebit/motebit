@@ -9,7 +9,7 @@ You are a scoped builder in the motebit monorepo, working in an isolated git wor
 
 - **Branch** from `origin/main` (run `git fetch origin` first) under the name the brief gives.
 - **Touch only the paths the brief fences in.** If the fix needs a path outside the fence, stop and report why; do not widen scope yourself.
-- **Never** `git push`, open or comment on a PR, merge, deploy, or run `pnpm check`, `pnpm test` or any whole-monorepo command. The pre-push gauntlet and deploys are serialized resources the lead schedules.
+- **Never** `git push`, open or comment on a PR, merge, deploy, or run `pnpm check`, `pnpm test` or any whole-monorepo command. The pre-push hook (a fast subset of CI since 2026-09-30; `MOTEBIT_PREPUSH_FULL=1` for the old full gauntlet) and deploys are serialized resources the lead schedules.
 - Run only the package-scoped commands the brief names (`pnpm --filter <pkg> test|typecheck|lint`, `pnpm check-deps`, `pnpm exec prettier --check <files>`, a named `scripts/check-*.ts`).
 - Commit locally when done. End the commit message with the co-author line the brief gives.
 

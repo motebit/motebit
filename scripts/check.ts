@@ -1027,6 +1027,12 @@ const GATES: ReadonlyArray<Gate> = [
       "every package script a docs page tells the reader to run exists in the manifest it would run against: `pnpm --filter <pkg> <script>` resolves to a workspace package by name and one of its `scripts`; `pnpm run <script>` resolves against the most recent `cd <workspace-dir>` in the same fenced block (else the repo root); `npm run <script>` resolves against the scripts the create-motebit scaffold generates. The 2026-09-14 docs-vs-code cross-audit (#667) found three of the five app pages OPENING with a command that did not exist or did something other than the sentence claimed — the first command a new contributor types was the least-checked sentence on the site; `check-docs-tree` enforced the directory listing and `check-docs-cli-claims` the CLI subcommands, but nothing tied a documented script to a package.json. Invariant #157, added 2026-09-14",
     script: "check-docs-script-claims",
   },
+  {
+    name: "check-prepush-subset",
+    defends:
+      "pre-push ⊆ CI: every check `.husky/pre-push` runs has a counterpart in `.github/workflows/ci.yml` that runs at least as wide — same command, no narrower `--filter`, in a job that runs on every push to main — and the hook's changed-file prettier extension set sits inside the root `format:check` glob. On 2026-09-30 the hook became a FAST gate by scope (tests of changed packages only, no coverage; typecheck+lint over changed + dependents) with CI as the authority; that trade-off is only safe while CI's `check` job runs `turbo run test:coverage` unfiltered, which this gate asserts. Replaces the hook's unenforced prose rule \"must match ci.yml\". An unclassifiable pnpm invocation in the hook is itself a violation, so a new phase is mapped deliberately. Invariant #166, added 2026-09-30",
+    script: "check-prepush-subset",
+  },
 ];
 
 interface Result {
