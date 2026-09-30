@@ -2734,6 +2734,22 @@ export async function probeFetch(): Promise<unknown> {
       }),
   },
   {
+    script: "check-turbo-remote-cache",
+    proves:
+      "flags a turbo.json that loses `remoteCache.signature: true` — the #997 shape, where turbo silently ignores TURBO_REMOTE_CACHE_SIGNATURE_KEY and uploads/replays unsigned artifacts. Perturbs by PREDICATE: parses the real turbo.json and deletes the `remoteCache` block, so the probe cannot go vacuous if other keys move.",
+    perturb: () =>
+      mutateFile("turbo.json", (src) => {
+        const parsed = JSON.parse(src) as Record<string, unknown>;
+        if (!("remoteCache" in parsed)) {
+          throw new Error(
+            "probe vacuous: turbo.json has no remoteCache block to remove — retarget the probe",
+          );
+        }
+        delete parsed.remoteCache;
+        return `${JSON.stringify(parsed, null, 2)}\n`;
+      }),
+  },
+  {
     script: "check-docs-script-claims",
     proves:
       "flags a docs page that tells the reader to run a package script that does not exist — exactly the #667 finding (`pnpm --filter motebit dev` when the CLI has only `start`). Drops a fixture MDX page with a fenced `pnpm --filter motebit` command naming a script no manifest defines; the gate's manifest lookup finds the package and misses the script.",

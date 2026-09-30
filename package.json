@@ -194,6 +194,8 @@
     "check-registry-never-deleted": "npx tsx scripts/check-registry-never-deleted.ts",
     "check-audience-route-parity": "npx tsx scripts/check-audience-route-parity.ts",
     "check-worker-no-master-token": "npx tsx scripts/check-worker-no-master-token.ts",
+    "check-turbo-remote-cache": "npx tsx scripts/check-turbo-remote-cache.ts",
+    "probe-turbo-remote-cache-signing": "npx tsx scripts/probe-turbo-remote-cache-signing.ts",
     "check-mobile-expo-alignment": "npx tsx scripts/check-mobile-expo-alignment.ts",
     "build-self-knowledge": "npx tsx scripts/build-self-knowledge.ts",
     "lint:pack": "turbo run lint:pack",

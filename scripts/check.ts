@@ -992,6 +992,12 @@ const GATES: ReadonlyArray<Gate> = [
     script: "check-worker-no-master-token",
   },
   {
+    name: "check-turbo-remote-cache",
+    defends:
+      "the shared turbo remote cache is SIGNED and WRITTEN only by trusted runs on main: turbo.json carries `remoteCache.signature: true` (nothing sets `TURBO_SIGNATURE=0`); every workflow holding TURBO_TOKEN declares a workflow-level `TURBO_CACHE` whose remote-write branch requires `github.ref == 'refs/heads/main'` AND a trusted `github.event_name` (push / workflow_dispatch / schedule — never pull_request*, whose `_target` form runs with ref = main), with a non-writing fallback; no turbo invocation re-opens writes by flag (`--cache=…remote:w`, `--force`, `--remote-only`); `.husky/pre-push` pins a read-only `TURBO_CACHE`. Until 2026-09-30 turbo.json never enabled signing, so turbo ignored the TURBO_REMOTE_CACHE_SIGNATURE_KEY CI set: every PUT went up unsigned and every GET replayed whatever the cache served, so any TURBO_TOKEN holder (every same-repo PR job included) could plant a `dist/` that a later publish or release shipped — while the RUNBOOK called the cache HMAC-signed. The behaviour is proven by `scripts/probe-turbo-remote-cache-signing.ts` against a local fake cache (gate self-tests). Invariant #166, added 2026-09-30 (#997)",
+    script: "check-turbo-remote-cache",
+  },
+  {
     name: "check-relay-frame-origin",
     defends:
       "a file that handles a relay `command_request` frame never reaches `executeCommand` without saying where the command came from — it calls `executeRemoteCommand`, or passes `origin` explicitly. `origin` has to default to `local` (that is what nearly every call site is, and a halt mislabelled `remote` is an untruth in the durable record), but the return view reads the SAME field to decide whether the credential membrane applies, where `local` means disclose. One parameter with two opposite safe defaults is a thing a reader gets wrong, and did: five surfaces forwarded a relay frame with no origin at all, so a command that arrived over the wire answered as if typed on the machine — latent only because none of them wired a run ledger yet. Nothing fails when a surface forgets: the command runs, the answer returns, the tests pass, and the only thing wrong is a membrane that did not close. Same permanent-structural-lock shape as `check-affordance-routing`. Invariant #158, added 2026-09-17",
