@@ -1,0 +1,900 @@
+/**
+ * #914 — the PUSH cursor. A device's own events must reach the relay.
+ *
+ * Before #914, `SyncEngine.sync()` pushed one batch after its push cursor and
+ * then set the cursor to the local max clock read AFTER the pull:
+ *   Probe A — an event appended while `sync()` awaited its pull was never
+ *             pushed (the cursor jumped over it).
+ *   Probe B — with more unpushed events than `batch_size` (a restart: the
+ *             cursor was in memory), only the first batch was ever pushed.
+ * And the socket door resolved `append` when a frame was SENT (or merely
+ * queued), so even a correct cursor would have moved on no acknowledgment.
+ *
+ * The law: the push cursor moves only as far as the relay ACKNOWLEDGED, is
+ * persisted after the acknowledgment (a crash in between re-pushes, never
+ * loses), and a backlog drains batch by batch within bounded syncs.
+ */
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
+import { InMemoryEventStore } from "@motebit/event-log";
+import type { EventStoreAdapter } from "@motebit/event-log";
+import { EventType } from "@motebit/sdk";
+import type { EventLogEntry } from "@motebit/sdk";
+import {
+  SyncEngine,
+  HttpEventStoreAdapter,
+  WebSocketEventStoreAdapter,
+  EncryptedEventStoreAdapter,
+  InMemorySyncSeqCursorStore,
+  MAX_PUSH_BATCHES_PER_SYNC,
+  ackedPushCursor,
+  pushCursorKey,
+  liveAdapter,
+} from "../index.js";
+import type { SyncSeqCursorStore } from "../index.js";
+import { FakeRelay } from "./fake-relay.js";
+
+const MID = "motebit-zz914";
+const KEY = new Uint8Array(32).fill(9);
+
+function entry(id: string, clock: number, timestamp = 1_700_000_000_000 + clock): EventLogEntry {
+  return {
+    event_id: id,
+    motebit_id: MID as EventLogEntry["motebit_id"],
+    timestamp,
+    event_type: EventType.StateUpdated,
+    payload: { id },
+    version_clock: clock,
+    tombstoned: false,
+  };
+}
+
+/** Append as the runtime does: the store assigns the next clock. */
+async function write(store: InMemoryEventStore, id: string): Promise<void> {
+  await store.appendWithClock({
+    event_id: id,
+    motebit_id: MID as EventLogEntry["motebit_id"],
+    timestamp: Date.now(),
+    event_type: EventType.StateUpdated,
+    payload: { id },
+    tombstoned: false,
+  });
+}
+
+function http(relay: FakeRelay): HttpEventStoreAdapter {
+  return new HttpEventStoreAdapter({ baseUrl: relay.baseUrl, motebitId: MID, maxRetries: 0 });
+}
+
+const sorted = (xs: string[]): string[] => [...xs].sort();
+
+// ---------------------------------------------------------------------------
+// The engine over the HTTP door (the CLI, the daemon, mobile's syncNow)
+// ---------------------------------------------------------------------------
+
+describe("#914 SyncEngine push cursor — HTTP door", () => {
+  let relay: FakeRelay;
+  beforeEach(() => {
+    relay = new FakeRelay();
+    vi.stubGlobal("fetch", (input: string | URL, init?: RequestInit) => relay.fetch(input, init));
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("Probe A: an event appended while sync() awaits its pull is pushed", async () => {
+    const local = new InMemoryEventStore();
+    const engine = new SyncEngine(local, MID);
+    engine.connectRemote(http(relay));
+    await write(local, "before");
+
+    let armed = true;
+    const inner = relay.fetch;
+    vi.stubGlobal("fetch", async (input: string | URL, init?: RequestInit) => {
+      if (armed && String(input).includes("/pull")) {
+        armed = false;
+        await write(local, "during"); // the runtime writes while the pull is on the wire
+      }
+      return inner(input, init);
+    });
+
+    for (let i = 0; i < 3; i++) {
+      await engine.sync();
+      expect(engine.getStatus()).toBe("idle");
+    }
+    expect(sorted(relay.heldIds(MID))).toEqual(["before", "during"]);
+  });
+
+  it("Probe B: after a restart, a backlog larger than batch_size is pushed whole", async () => {
+    const local = new InMemoryEventStore();
+    for (let i = 0; i < 5; i++) await write(local, `x${i}`);
+    // A fresh process: a new engine, and no cursor anywhere yet.
+    const engine = new SyncEngine(local, MID, { batch_size: 2 });
+    engine.connectRemote(http(relay));
+    const r = await engine.sync();
+    expect(r.pushed).toBe(5);
+    expect(sorted(relay.heldIds(MID))).toEqual(["x0", "x1", "x2", "x3", "x4"]);
+    expect(engine.getCursor().last_version_clock).toBe(5);
+  });
+
+  it("a backlog beyond MAX_PUSH_BATCHES_PER_SYNC drains over bounded syncs, from the persisted cursor", async () => {
+    const local = new InMemoryEventStore();
+    const total = MAX_PUSH_BATCHES_PER_SYNC + 7;
+    for (let i = 0; i < total; i++) await write(local, `b${i}`);
+    const cursors = new InMemorySyncSeqCursorStore();
+    const engine = new SyncEngine(local, MID, { batch_size: 1, seqCursorStore: cursors });
+    engine.connectRemote(http(relay));
+
+    const first = await engine.sync();
+    expect(first.pushed).toBe(MAX_PUSH_BATCHES_PER_SYNC);
+    expect(relay.heldIds(MID)).toHaveLength(MAX_PUSH_BATCHES_PER_SYNC);
+    // The cursor is persisted, so a restart continues where this stopped.
+    const restarted = new SyncEngine(local, MID, { batch_size: 1, seqCursorStore: cursors });
+    restarted.connectRemote(http(relay));
+    const second = await restarted.sync();
+    expect(second.pushed).toBe(7);
+    expect(relay.heldIds(MID)).toHaveLength(total);
+    expect(relay.pushedIds).toHaveLength(total); // nothing acknowledged was sent twice
+  });
+
+  it("restart mid-backlog: a push that fails part-way keeps what was acknowledged, and resumes after it", async () => {
+    const local = new InMemoryEventStore();
+    for (let i = 0; i < 6; i++) await write(local, `m${i}`);
+    const cursors = new InMemorySyncSeqCursorStore();
+
+    let accepted = 0;
+    vi.stubGlobal("fetch", async (input: string | URL, init?: RequestInit) => {
+      if (String(input).includes("/push")) {
+        if (accepted >= 3) return new Response("down", { status: 503 });
+        accepted++;
+      }
+      return relay.fetch(input, init);
+    });
+    const engine = new SyncEngine(local, MID, { batch_size: 2, seqCursorStore: cursors });
+    engine.connectRemote(http(relay));
+    await engine.sync();
+    expect(engine.getStatus()).toBe("error");
+    // m0,m1 (batch 1) acknowledged; m2 acknowledged, m3 refused: the cursor is at m2.
+    expect(engine.getCursor().last_version_clock).toBe(3);
+    expect(await cursors.getSyncSeqCursor(pushCursorKey(http(relay), MID))).toBe(3);
+
+    // The process dies; the relay recovers; a new process resumes from the cursor.
+    vi.stubGlobal("fetch", (input: string | URL, init?: RequestInit) => relay.fetch(input, init));
+    const restarted = new SyncEngine(local, MID, { batch_size: 2, seqCursorStore: cursors });
+    restarted.connectRemote(http(relay));
+    const r = await restarted.sync();
+    expect(restarted.getStatus()).toBe("idle");
+    expect(r.pushed).toBe(3);
+    expect(sorted(relay.heldIds(MID))).toEqual(["m0", "m1", "m2", "m3", "m4", "m5"]);
+  });
+
+  it("crash between the acknowledgment and the cursor write: the next process re-pushes, the relay stores each event once", async () => {
+    const local = new InMemoryEventStore();
+    for (let i = 0; i < 3; i++) await write(local, `c${i}`);
+    const durable = new InMemorySyncSeqCursorStore();
+    let crash = true;
+    const crashing: SyncSeqCursorStore = {
+      getSyncSeqCursor: (k) => durable.getSyncSeqCursor(k),
+      setSyncSeqCursor: (k, v) => {
+        if (crash && k.startsWith("push:")) return Promise.reject(new Error("process died"));
+        return durable.setSyncSeqCursor(k, v);
+      },
+    };
+    const engine = new SyncEngine(local, MID, { seqCursorStore: crashing });
+    engine.connectRemote(http(relay));
+    await engine.sync();
+    expect(engine.getStatus()).toBe("error");
+    expect(relay.heldIds(MID)).toHaveLength(3); // the relay acknowledged them…
+    expect(await durable.getSyncSeqCursor(pushCursorKey(http(relay), MID))).toBeNull(); // …the cursor never landed
+
+    crash = false;
+    const restarted = new SyncEngine(local, MID, { seqCursorStore: crashing });
+    restarted.connectRemote(http(relay));
+    const r = await restarted.sync();
+    expect(r.pushed).toBe(3); // re-pushed: never lost
+    expect(sorted(relay.heldIds(MID))).toEqual(["c0", "c1", "c2"]); // stored once each
+    expect(await durable.getSyncSeqCursor(pushCursorKey(http(relay), MID))).toBe(3);
+  });
+
+  it("events pulled from the relay are never pushed back to it", async () => {
+    const local = new InMemoryEventStore();
+    const engine = new SyncEngine(local, MID);
+    engine.connectRemote(http(relay));
+    relay.ingest(entry("sibling-1", 7));
+    relay.ingest(entry("sibling-2", 8));
+    await engine.sync(); // pulls both
+    await write(local, "mine"); // clock 9
+    await engine.sync();
+    await engine.sync();
+    expect(relay.pushedIds).toEqual(["mine"]);
+    expect(engine.getCursor().last_version_clock).toBe(9);
+  });
+
+  it("a sync called while one runs joins it — one push, never two racing cursors", async () => {
+    const local = new InMemoryEventStore();
+    await write(local, "once");
+    const engine = new SyncEngine(local, MID);
+    engine.connectRemote(http(relay));
+    const [a, b] = await Promise.all([engine.sync(), engine.sync()]);
+    expect(a).toBe(b);
+    expect(relay.pushedIds).toEqual(["once"]);
+  });
+
+  it("the push cursor is kept apart from the pull cursor, per relay stream", () => {
+    const k = pushCursorKey(http(relay), MID);
+    expect(k.startsWith("push:")).toBe(true);
+    expect(k).not.toBe(http(relay).seqCursorKey);
+    expect(pushCursorKey(new InMemoryEventStore(), MID)).toBe(`push:#${MID}`);
+  });
+
+  it("an unordered local store (IndexedDB returns by timestamp) never lets the cursor pass an unpushed event", async () => {
+    // Own event at clock 5 written at t=1000; a sibling's event pulled at
+    // clock 9 but stamped t=500 by a slow wall clock. In timestamp order the
+    // sibling comes first, so a `limit`-bounded read of one event would see
+    // only it and move the cursor to 9 — over the own event, forever.
+    const inner = new InMemoryEventStore();
+    await inner.append(entry("own-5", 5, 1000));
+    await inner.append(entry("sib-9", 9, 500));
+    const byTimestamp: EventStoreAdapter = {
+      append: (e) => inner.append(e),
+      appendWithClock: (e) => inner.appendWithClock(e),
+      getLatestClock: (m) => inner.getLatestClock(m),
+      tombstone: (id, m) => inner.tombstone(id, m),
+      query: async (f) => {
+        const all = await inner.query({ ...f, limit: undefined });
+        all.sort((a, b) => a.timestamp - b.timestamp);
+        return f.limit !== undefined ? all.slice(0, f.limit) : all;
+      },
+    };
+    const engine = new SyncEngine(byTimestamp, MID, { batch_size: 1 });
+    engine.connectRemote(http(relay));
+    await engine.sync();
+    await engine.sync();
+    expect(sorted(relay.heldIds(MID))).toEqual(["own-5", "sib-9"]);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The cursor arithmetic
+// ---------------------------------------------------------------------------
+
+describe("#914 ackedPushCursor", () => {
+  const evs = [entry("a", 1), entry("b", 2), entry("c", 2), entry("d", 3)];
+  it("moves over whole acknowledged clock groups only", () => {
+    expect(ackedPushCursor(0, evs, new Set(["a", "b", "c", "d"]))).toBe(3);
+    expect(ackedPushCursor(0, evs, new Set(["a", "b"]))).toBe(1); // c (clock 2) unacknowledged
+    expect(ackedPushCursor(0, evs, new Set(["b", "c", "d"]))).toBe(0); // a unacknowledged
+    expect(ackedPushCursor(0, evs, new Set(["a", "b", "c"]))).toBe(2);
+  });
+  it("never moves below where it was", () => {
+    expect(ackedPushCursor(7, [], new Set())).toBe(7);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The socket door (desktop, web, spatial, mobile): append = acknowledged
+// ---------------------------------------------------------------------------
+
+class MockSocket {
+  static instances: MockSocket[] = [];
+  readyState = 1;
+  onopen: (() => void) | null = null;
+  onclose: (() => void) | null = null;
+  onerror: (() => void) | null = null;
+  onmessage: ((event: { data: string }) => void) | null = null;
+  sent: string[] = [];
+  closed = false;
+  constructor(public url: string) {
+    MockSocket.instances.push(this);
+  }
+  send(data: string): void {
+    this.sent.push(data);
+  }
+  close(): void {
+    this.closed = true;
+    this.readyState = 3;
+  }
+  open(): void {
+    this.onopen?.();
+  }
+  frames(): string[][] {
+    return this.sent
+      .map((s) => JSON.parse(s) as { type: string; events?: EventLogEntry[] })
+      .filter((f) => f.type === "push")
+      .map((f) => (f.events ?? []).map((e) => e.event_id));
+  }
+  answer(msg: unknown): void {
+    this.onmessage?.({ data: JSON.stringify(msg) });
+  }
+  drop(): void {
+    this.readyState = 3;
+    this.onclose?.();
+  }
+}
+
+const lastSocket = (): MockSocket => MockSocket.instances[MockSocket.instances.length - 1]!;
+
+describe("#914 WebSocketEventStoreAdapter — an append resolves on the relay's ack", () => {
+  let original: typeof globalThis.WebSocket;
+  beforeEach(() => {
+    vi.useFakeTimers();
+    MockSocket.instances = [];
+    original = globalThis.WebSocket;
+    globalThis.WebSocket = MockSocket as unknown as typeof WebSocket;
+  });
+  afterEach(() => {
+    globalThis.WebSocket = original;
+    vi.useRealTimers();
+  });
+
+  // A stream of its own per test: what a link teaches is kept per stream for
+  // the life of the process (#914 rounds 6–7), and fake clocks restart.
+  let stream = 0;
+  function adapter(): WebSocketEventStoreAdapter {
+    const a = new WebSocketEventStoreAdapter({
+      url: `ws://r/ws/sync/m${++stream}`,
+      motebitId: MID,
+      pushAckTimeoutMs: 1_000,
+      reconnectBaseMs: 10,
+    });
+    a.connect();
+    lastSocket().open();
+    return a;
+  }
+
+  function track(p: Promise<void>): { state: "pending" | "ok" | "err" } {
+    const t = { state: "pending" as "pending" | "ok" | "err" };
+    p.then(
+      () => (t.state = "ok"),
+      () => (t.state = "err"),
+    );
+    return t;
+  }
+
+  it("one frame in flight; what is appended meanwhile goes out in the next frame, after the ack", async () => {
+    const a = adapter();
+    const s = lastSocket();
+    const p1 = track(a.append(entry("e1", 1)));
+    await vi.advanceTimersByTimeAsync(20); // the linger
+    expect(s.frames()).toEqual([["e1"]]);
+    const p2 = track(a.append(entry("e2", 2)));
+    const p3 = track(a.append(entry("e3", 3)));
+    await vi.advanceTimersByTimeAsync(20);
+    expect(s.frames()).toEqual([["e1"]]); // behind the frame in flight
+    expect([p1.state, p2.state, p3.state]).toEqual(["pending", "pending", "pending"]);
+
+    s.answer({ type: "ack", accepted: 1 });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(p1.state).toBe("ok");
+    expect(s.frames()).toEqual([["e1"], ["e2", "e3"]]);
+    expect(p2.state).toBe("pending");
+
+    s.answer({ type: "ack", accepted: 2 });
+    await vi.advanceTimersByTimeAsync(0);
+    expect([p2.state, p3.state]).toEqual(["ok", "ok"]);
+  });
+
+  it("the socket closing before the ack rejects the frame; queued events go out on the next connection", async () => {
+    const a = adapter();
+    const s = lastSocket();
+    const p1 = track(a.append(entry("e1", 1)));
+    await vi.advanceTimersByTimeAsync(20);
+    const p2 = track(a.append(entry("e2", 2)));
+    await vi.advanceTimersByTimeAsync(20);
+    s.drop();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(p1.state).toBe("err");
+    expect(p2.state).toBe("pending");
+
+    await vi.advanceTimersByTimeAsync(20); // reconnect backoff
+    const s2 = lastSocket();
+    expect(s2).not.toBe(s);
+    s2.open();
+    expect(s2.frames()).toEqual([["e2"]]);
+    s2.answer({ type: "ack", accepted: 1 });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(p2.state).toBe("ok");
+  });
+
+  it("no ack in time: the frame STAYS in flight and its socket stays open — a late ack still resolves it (#914 round 7)", async () => {
+    const a = adapter();
+    const s = lastSocket();
+    const p1 = track(a.append(entry("e1", 1)));
+    await vi.advanceTimersByTimeAsync(20); // sent
+    await vi.advanceTimersByTimeAsync(5_000); // five times the 1 s deadline
+    expect(p1.state).toBe("pending");
+    expect(s.closed).toBe(false);
+    const p2 = track(a.append(entry("e1", 1))); // a later sync re-appends it…
+    await vi.advanceTimersByTimeAsync(20);
+    expect(s.frames()).toEqual([["e1"]]); // …it is never sent twice
+    s.answer({ type: "ack", accepted: 1 }); // the late ack
+    await vi.advanceTimersByTimeAsync(0);
+    expect([p1.state, p2.state]).toEqual(["ok", "ok"]);
+  });
+
+  it("a DEAD socket — nothing at all arrives for the full stretch — is dropped, and the frame goes out again on the next", async () => {
+    const a = adapter();
+    const s = lastSocket();
+    const p1 = track(a.append(entry("e1", 1)));
+    await vi.advanceTimersByTimeAsync(20);
+    await vi.advanceTimersByTimeAsync(63_000);
+    expect(s.closed).toBe(false); // still within 64 × the deadline
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(s.closed).toBe(true);
+    expect(p1.state).toBe("err");
+  });
+
+  it("inbound traffic does not keep an unanswered frame alive: 64 deadlines with no answer on its socket drop it (#914 round 8)", async () => {
+    const a = adapter();
+    const s = lastSocket();
+    const p1 = track(a.append(entry("e1", 1)));
+    await vi.advanceTimersByTimeAsync(20);
+    for (let i = 0; i < 6; i++) {
+      await vi.advanceTimersByTimeAsync(10_000);
+      s.answer({ type: "event", event: entry(`sib-${i}`, 100 + i) }); // a sibling's events
+    }
+    expect(s.closed).toBe(false); // 60 s: within 64 × the 1 s deadline
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(s.closed).toBe(true); // answered nothing in 64 deadlines, however much it received
+    expect(p1.state).toBe("err");
+  });
+
+  it("an OVERTAKEN frame (a later frame on its socket answered by push_id) is lost, and sent again once (#914 round 8)", async () => {
+    const a = adapter();
+    const s = lastSocket();
+    const pid = (i: number): string =>
+      (JSON.parse(s.sent.filter((m) => m.includes('"type":"push"'))[i]!) as { push_id: string })
+        .push_id;
+    const p0 = track(a.append(entry("e0", 1)));
+    await vi.advanceTimersByTimeAsync(20);
+    s.answer({ type: "ack", accepted: 1, push_id: pid(0) }); // the echo is seen: window 16
+    await vi.advanceTimersByTimeAsync(0);
+    const p1 = track(a.append(entry("e1", 2)));
+    await vi.advanceTimersByTimeAsync(200);
+    const p2 = track(a.append(entry("e2", 3)));
+    await vi.advanceTimersByTimeAsync(200);
+    expect(s.frames()).toEqual([["e0"], ["e1"], ["e2"]]); // overlapping
+    s.answer({ type: "ack", accepted: 1, push_id: pid(2) }); // e2 answered; e1 (dropped) never
+    await vi.advanceTimersByTimeAsync(500);
+    expect(s.frames()).toHaveLength(3); // not yet: one deadline of grace
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(s.frames()).toEqual([["e0"], ["e1"], ["e2"], ["e1"]]); // lost: sent again, once
+    s.answer({ type: "ack", accepted: 1, push_id: pid(3) });
+    await vi.advanceTimersByTimeAsync(0);
+    expect([p0.state, p1.state, p2.state]).toEqual(["ok", "ok", "ok"]);
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(s.frames()).toHaveLength(4);
+  });
+
+  it("an OVERTAKEN frame on a RETIRED adapter is never re-queued there: its append fails, retryably (#914 round 9)", async () => {
+    const a = adapter();
+    const s = lastSocket();
+    const pid = (i: number): string =>
+      (JSON.parse(s.sent.filter((m) => m.includes('"type":"push"'))[i]!) as { push_id: string })
+        .push_id;
+    void a.append(entry("e0", 1)).catch(() => {});
+    await vi.advanceTimersByTimeAsync(20);
+    s.answer({ type: "ack", accepted: 1, push_id: pid(0) }); // window 16
+    await vi.advanceTimersByTimeAsync(0);
+    const p1 = track(a.append(entry("e1", 2))); // the relay will drop this one
+    await vi.advanceTimersByTimeAsync(200);
+    const p2 = track(a.append(entry("e2", 3)));
+    await vi.advanceTimersByTimeAsync(200);
+    s.answer({ type: "ack", accepted: 1, push_id: pid(2) }); // e1 is overtaken
+    await vi.advanceTimersByTimeAsync(0);
+    a.disconnect(); // a token refresh: the socket drains, the adapter is retired
+    await vi.advanceTimersByTimeAsync(5_000); // past the overtaken frame's grace
+    expect(p2.state).toBe("ok");
+    expect(p1.state).toBe("err"); // settled — never parked in an outbox nothing flushes
+    expect(s.frames()).toHaveLength(3); // and not sent from the retired adapter
+  });
+
+  it("a lost frame on a retired adapter is failed AT ONCE and parked nowhere: nothing is left for takePendingEvents (#914 round 9)", async () => {
+    const a = adapter();
+    const s = lastSocket();
+    const pid = (i: number): string =>
+      (JSON.parse(s.sent.filter((m) => m.includes('"type":"push"'))[i]!) as { push_id: string })
+        .push_id;
+    void a.append(entry("e0", 1)).catch(() => {});
+    await vi.advanceTimersByTimeAsync(20);
+    s.answer({ type: "ack", accepted: 1, push_id: pid(0) });
+    await vi.advanceTimersByTimeAsync(0);
+    const p1 = track(a.append(entry("e1", 2)));
+    await vi.advanceTimersByTimeAsync(200);
+    void a.append(entry("e2", 3)).catch(() => {});
+    await vi.advanceTimersByTimeAsync(200);
+    s.answer({ type: "ack", accepted: 1, push_id: pid(2) }); // e1 overtaken
+    await vi.advanceTimersByTimeAsync(0);
+    a.disconnect();
+    await vi.advanceTimersByTimeAsync(1_100); // just past the one-deadline grace
+    expect(p1.state).toBe("err"); // failed at the judgement, not a queue deadline later
+    expect(a.takePendingEvents()).toEqual([]); // not parked in the retired outbox
+  });
+
+  it("a lost frame re-queued on a RECONNECTING adapter whose socket never opens is bounded: its append errors (#914 round 9)", async () => {
+    const a = adapter();
+    const s = lastSocket();
+    const pid = (i: number): string =>
+      (JSON.parse(s.sent.filter((m) => m.includes('"type":"push"'))[i]!) as { push_id: string })
+        .push_id;
+    void a.append(entry("e0", 1)).catch(() => {});
+    await vi.advanceTimersByTimeAsync(20);
+    s.answer({ type: "ack", accepted: 1, push_id: pid(0) });
+    await vi.advanceTimersByTimeAsync(0);
+    const p1 = track(a.append(entry("e1", 2)));
+    await vi.advanceTimersByTimeAsync(200);
+    void a.append(entry("e2", 3)).catch(() => {});
+    await vi.advanceTimersByTimeAsync(200);
+    s.answer({ type: "ack", accepted: 1, push_id: pid(2) }); // e1 overtaken
+    await vi.advanceTimersByTimeAsync(0);
+    a.disconnect();
+    a.connect(); // the same adapter reconnects — but its new socket never opens
+    expect(lastSocket()).not.toBe(s);
+    await vi.advanceTimersByTimeAsync(1_000); // the grace: e1 re-queued, not connected
+    expect(p1.state).toBe("pending");
+    await vi.advanceTimersByTimeAsync(1_500); // …bounded by the queue deadline
+    expect(p1.state).toBe("err");
+  });
+
+  it("frames flushed in one tick are still ordered: a later one answered overtakes an earlier one (#914 round 9)", async () => {
+    const a = adapter();
+    const s = lastSocket();
+    const pid = (i: number): string =>
+      (JSON.parse(s.sent.filter((m) => m.includes('"type":"push"'))[i]!) as { push_id: string })
+        .push_id;
+    void a.append(entry("e0", 1)).catch(() => {});
+    await vi.advanceTimersByTimeAsync(20);
+    s.answer({ type: "ack", accepted: 1, push_id: pid(0) }); // window 16
+    await vi.advanceTimersByTimeAsync(0);
+    // A backlog larger than a frame: several frames leave in the same tick.
+    const many: Array<{ state: string }> = [];
+    for (let i = 1; i <= 1_000; i++) many.push(track(a.append(entry(`b${i}`, i + 1))));
+    await vi.advanceTimersByTimeAsync(200);
+    const frames = s.frames();
+    expect(frames.length).toBeGreaterThanOrEqual(3); // 1 + two frames of 500
+    s.answer({ type: "ack", accepted: 500, push_id: pid(2) }); // the second is answered first
+    await vi.advanceTimersByTimeAsync(1_500);
+    expect(s.frames()).toHaveLength(frames.length + 1); // the first was overtaken: sent again
+    expect(s.frames()[frames.length]![0]).toBe("b1");
+  });
+
+  it("a rate-limit refusal on a retired socket spares the frames on the adapter's CURRENT socket (#914 round 9)", async () => {
+    const a = adapter();
+    const s = lastSocket();
+    void a.append(entry("e0", 1)).catch(() => {});
+    await vi.advanceTimersByTimeAsync(20);
+    const first = JSON.parse(s.sent.filter((m) => m.includes('"type":"push"'))[0]!) as {
+      push_id: string;
+    };
+    s.answer({ type: "ack", accepted: 1, push_id: first.push_id }); // window 16
+    await vi.advanceTimersByTimeAsync(0);
+    const p1 = track(a.append(entry("e1", 1)));
+    await vi.advanceTimersByTimeAsync(20);
+    a.disconnect(); // s drains
+    a.connect(); // the same adapter, a new socket
+    const t = lastSocket();
+    expect(t).not.toBe(s);
+    t.open();
+    const p2 = track(a.append(entry("e2", 2)));
+    await vi.advanceTimersByTimeAsync(200);
+    expect(t.frames()).toEqual([["e2"]]);
+    s.answer({ type: "error", message: "Rate limit exceeded" }); // on the RETIRED socket
+    await vi.advanceTimersByTimeAsync(0);
+    expect(p1.state).toBe("err");
+    expect(p2.state).toBe("pending"); // the current socket's frame is untouched
+    t.answer({ type: "ack", accepted: 1 });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(p2.state).toBe("ok");
+  });
+
+  it("a rate-limit refusal on a DRAINING retired socket fails its frames and closes it (#914 round 8)", async () => {
+    const a = adapter();
+    const s = lastSocket();
+    const p1 = track(a.append(entry("e1", 1)));
+    await vi.advanceTimersByTimeAsync(20);
+    a.disconnect(); // a token refresh: the socket drains its frame
+    expect(s.closed).toBe(false);
+    s.answer({ type: "error", message: "Rate limit exceeded" });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(p1.state).toBe("err");
+    expect(s.closed).toBe(true);
+  });
+
+  it("a relay rolled back to one that does not echo: an ack naming no frame of several credits NONE, and the window closes to one (#914 round 8)", async () => {
+    const a = adapter();
+    const s = lastSocket();
+    const pid = (i: number): string =>
+      (JSON.parse(s.sent.filter((m) => m.includes('"type":"push"'))[i]!) as { push_id: string })
+        .push_id;
+    void a.append(entry("e0", 1)).catch(() => {});
+    await vi.advanceTimersByTimeAsync(20);
+    s.answer({ type: "ack", accepted: 1, push_id: pid(0) }); // echoes: window 16
+    await vi.advanceTimersByTimeAsync(0);
+    s.drop(); // the relay restarts, as an older version
+    await vi.advanceTimersByTimeAsync(100);
+    const t = lastSocket();
+    expect(t).not.toBe(s);
+    t.open();
+    const p1 = track(a.append(entry("e1", 2)));
+    await vi.advanceTimersByTimeAsync(200);
+    const p2 = track(a.append(entry("e2", 3)));
+    await vi.advanceTimersByTimeAsync(200);
+    expect(t.frames()).toEqual([["e1"], ["e2"]]); // the window is still the hint's
+    // The old relay dropped e1 and acks e2 — naming no frame.
+    t.answer({ type: "ack", accepted: 1 });
+    await vi.advanceTimersByTimeAsync(0);
+    // Neither is credited (crediting the oldest would pass e1, never stored).
+    expect([p1.state, p2.state]).toEqual(["err", "err"]);
+    expect(t.closed).toBe(true);
+    await vi.advanceTimersByTimeAsync(100);
+    const u = lastSocket();
+    u.open();
+    void a.append(entry("e1", 2)).catch(() => {});
+    await vi.advanceTimersByTimeAsync(200);
+    void a.append(entry("e2", 3)).catch(() => {});
+    await vi.advanceTimersByTimeAsync(200);
+    expect(u.frames()).toEqual([["e1"]]); // one frame at a time now
+  });
+
+  it("a push refusal rejects the frame", async () => {
+    const a = adapter();
+    const s = lastSocket();
+    const p1 = track(a.append(entry("e1", 1)));
+    await vi.advanceTimersByTimeAsync(20);
+    s.answer({ type: "error", message: "push refused: every entry's motebit_id must be …" });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(p1.state).toBe("err");
+    expect(s.closed).toBe(false);
+  });
+
+  it("a rate-limit refusal is a definite answer: the frame fails at once, the socket is replaced, the next frame waits a window", async () => {
+    const a = adapter();
+    const s = lastSocket();
+    const p1 = track(a.append(entry("e1", 1)));
+    await vi.advanceTimersByTimeAsync(20);
+    // The relay's reply shape (services/relay/src/websocket.ts).
+    s.answer({ type: "error", message: "Rate limit exceeded" });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(p1.state).toBe("err"); // not after the 1 s ack deadline
+    expect(s.closed).toBe(true); // a late ack can never be credited to the next frame
+
+    await vi.advanceTimersByTimeAsync(20);
+    const s2 = lastSocket();
+    s2.open();
+    const p2 = track(a.append(entry("e2", 2)));
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(s2.frames()).toEqual([]); // the budget is spent for the window
+    await vi.advanceTimersByTimeAsync(5_100);
+    expect(s2.frames()).toEqual([["e2"]]);
+    s2.answer({ type: "ack", accepted: 1 });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(p2.state).toBe("ok");
+  });
+
+  it("offline: the append rejects at its deadline, the event stays queued once, and goes out on connect", async () => {
+    const a = new WebSocketEventStoreAdapter({
+      url: "ws://r/ws/sync/m",
+      motebitId: MID,
+      pushAckTimeoutMs: 1_000,
+    });
+    const p1 = track(a.append(entry("q", 1)));
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(p1.state).toBe("err"); // unknown whether the relay has it: the caller retries
+    // A sync engine re-pushing through the outage joins the queued event.
+    const p2 = track(a.append(entry("q", 1)));
+    a.connect();
+    const s = lastSocket();
+    s.open();
+    expect(s.frames()).toEqual([["q"]]);
+    s.answer({ type: "ack", accepted: 1 });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(p2.state).toBe("ok");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// The engine over the encrypted socket door, exactly as the surfaces wire it
+// ---------------------------------------------------------------------------
+
+describe("#914 r9: a push held by a replaced adapter is never joined", () => {
+  it("the next sync pushes through the replacement, never waiting on the retired adapter's promise", async () => {
+    const local = new InMemoryEventStore();
+    await write(local, "r1");
+    const delivered: string[] = [];
+    // A: its promise is one nothing will settle — and A no longer holds the
+    // push on any wire (`holdsPush` false), though it says it is live.
+    const retired = {
+      holdsPush: () => false,
+      append: () => new Promise<void>(() => {}),
+      query: () => Promise.resolve([]),
+      getLatestClock: () => Promise.resolve(0),
+      tombstone: () => Promise.resolve(),
+      hasLiveWork: () => true,
+    };
+    const replacement = {
+      append: (e: EventLogEntry) => {
+        delivered.push(e.event_id);
+        return Promise.resolve();
+      },
+      query: () => Promise.resolve([]),
+      getLatestClock: () => Promise.resolve(0),
+      tombstone: () => Promise.resolve(),
+      hasLiveWork: () => false,
+    };
+    let current: EventStoreAdapter = retired;
+    const engine = new SyncEngine(local, MID, { push_patience_ms: 50 });
+    engine.connectRemote(liveAdapter(() => current));
+    await engine.sync(); // ends at its patience; A holds r1
+    current = replacement; // a token refresh
+    await engine.sync();
+    expect(delivered).toEqual(["r1"]);
+    expect(engine.getCursor().last_version_clock).toBe(1);
+  });
+
+  it("a push still on the retired adapter's wire (a draining frame) is joined, never sent twice", async () => {
+    const local = new InMemoryEventStore();
+    await write(local, "d1");
+    let settleOld!: () => void;
+    const draining = {
+      holdsPush: () => true, // its frame is still on the wire
+      append: () => new Promise<void>((r) => (settleOld = r)),
+      query: () => Promise.resolve([]),
+      getLatestClock: () => Promise.resolve(0),
+      tombstone: () => Promise.resolve(),
+      hasLiveWork: () => true,
+    };
+    const sentViaNew: string[] = [];
+    const replacement = {
+      append: (e: EventLogEntry) => {
+        sentViaNew.push(e.event_id);
+        return Promise.resolve();
+      },
+      query: () => Promise.resolve([]),
+      getLatestClock: () => Promise.resolve(0),
+      tombstone: () => Promise.resolve(),
+      hasLiveWork: () => true,
+    };
+    let current: EventStoreAdapter = draining;
+    const engine = new SyncEngine(local, MID, { push_patience_ms: 50 });
+    engine.connectRemote(liveAdapter(() => current));
+    await engine.sync();
+    current = replacement;
+    void engine.sync();
+    await new Promise((r) => setTimeout(r, 20));
+    expect(sentViaNew).toEqual([]); // joined: the draining frame's answer is awaited
+    settleOld(); // the late ack on the retired socket
+    await new Promise((r) => setTimeout(r, 100));
+    expect(engine.getCursor().last_version_clock).toBe(1);
+  });
+});
+
+describe("#914 SyncEngine over EncryptedEventStoreAdapter(socket)", () => {
+  let original: typeof globalThis.WebSocket;
+  beforeEach(() => {
+    MockSocket.instances = [];
+    original = globalThis.WebSocket;
+    globalThis.WebSocket = MockSocket as unknown as typeof WebSocket;
+  });
+  afterEach(() => {
+    globalThis.WebSocket = original;
+  });
+
+  async function until(pred: () => boolean, what: string): Promise<void> {
+    const start = Date.now();
+    while (!pred()) {
+      if (Date.now() - start > 3_000) throw new Error(`timed out waiting for ${what}`);
+      await new Promise((r) => setTimeout(r, 2));
+    }
+  }
+
+  it("mobile rebuild through the ENCRYPTED wrapper: a frame draining on the retired adapter is joined, never sent again through the new one (#914 round 9)", async () => {
+    const local = new InMemoryEventStore();
+    await write(local, "p0");
+    const socketAdapter = (): WebSocketEventStoreAdapter =>
+      new WebSocketEventStoreAdapter({
+        url: "ws://r/ws/sync/rebuild",
+        motebitId: MID,
+        payloads: "e2e",
+        pushAckTimeoutMs: 60_000,
+      });
+    const engine = new SyncEngine(local, MID, { push_patience_ms: 50 });
+    // Cycle 1: adapter A, wrapped as mobile wraps it.
+    const a = socketAdapter();
+    engine.connectRemote(new EncryptedEventStoreAdapter({ inner: a, key: KEY }));
+    a.connect();
+    const sa = lastSocket();
+    sa.open();
+    // p0 goes out and is acked by push_id: the relay echoes, the window opens.
+    const warm = engine.sync();
+    await until(() => sa.frames().length === 1, "p0's frame");
+    const pushIdOf = (i: number): string =>
+      (JSON.parse(sa.sent.filter((m) => m.includes('"type":"push"'))[i]!) as { push_id: string })
+        .push_id;
+    sa.answer({ type: "ack", accepted: 1, push_id: pushIdOf(0) });
+    await warm;
+    await write(local, "p1");
+    await engine.sync(); // ends at its patience: p1's frame is on sa, unanswered
+    expect(sa.frames()).toEqual([["p0"], ["p1"]]);
+    // Cycle 2: mobile rebuilds — A retired (its socket drains), B and a NEW wrapper.
+    a.disconnect();
+    const b = socketAdapter();
+    engine.connectRemote(new EncryptedEventStoreAdapter({ inner: b, key: KEY }));
+    b.connect();
+    const sb = lastSocket();
+    expect(sb).not.toBe(sa);
+    sb.open();
+    const second = engine.sync(); // waits on the joined push (B has no work of its own)
+    await new Promise((r) => setTimeout(r, 150));
+    expect(sb.frames().flat()).not.toContain("p1"); // joined through the wrapper, not re-sent
+    sa.answer({ type: "ack", accepted: 1, push_id: pushIdOf(1) }); // the late ack, on the retired socket
+    await second;
+    await until(() => engine.getCursor().last_version_clock === 2, "the cursor to reach 2");
+    a.disconnect();
+    b.disconnect();
+  });
+
+  it("the cursor stays put until the relay acks, and a dropped frame is re-pushed by the next sync", async () => {
+    const local = new InMemoryEventStore();
+    await write(local, "s1");
+    await write(local, "s2");
+    const ws = new WebSocketEventStoreAdapter({
+      url: "ws://r/ws/sync/m",
+      motebitId: MID,
+      payloads: "e2e",
+      pushAckTimeoutMs: 2_000,
+      reconnectBaseMs: 5,
+    });
+    // The surfaces' indirection: a plain object over the current socket adapter.
+    const live: EventStoreAdapter = {
+      append: (e) => ws.append(e),
+      query: (f) => ws.query(f),
+      getLatestClock: (id) => ws.getLatestClock(id),
+      tombstone: (id, m) => ws.tombstone(id, m),
+    };
+    const engine = new SyncEngine(local, MID);
+    engine.connectRemote(new EncryptedEventStoreAdapter({ inner: live, key: KEY }));
+    ws.connect();
+    lastSocket().open();
+
+    // Sync 1: the frame goes out; the socket drops before the relay acks.
+    const first = engine.sync();
+    await until(() => lastSocket().frames().length > 0, "the first frame");
+    expect(engine.getCursor().last_version_clock).toBe(0);
+    lastSocket().drop();
+    await first;
+    expect(engine.getStatus()).toBe("error");
+    expect(engine.getCursor().last_version_clock).toBe(0); // sent is not acknowledged
+
+    // Reconnected: sync 2 re-pushes, and the relay's ack moves the cursor.
+    await until(() => MockSocket.instances.length === 2, "the reconnect");
+    lastSocket().open();
+    const second = engine.sync();
+    await until(() => lastSocket().frames().length === 1, "the re-push");
+    expect(engine.getCursor().last_version_clock).toBe(0);
+    // The relay acks each frame as it arrives (one in flight at a time).
+    let acked = 0;
+    let settled = false;
+    void second.then(() => (settled = true));
+    while (!settled) {
+      if (lastSocket().frames().length > acked) {
+        acked++;
+        lastSocket().answer({ type: "ack", accepted: 1 });
+      }
+      await new Promise((r) => setTimeout(r, 2));
+    }
+    // s2 stayed queued through the drop and went out on reconnect; the re-push
+    // may send it again — a duplicate the relay stores once (by event_id).
+    expect([...new Set(lastSocket().frames().flat())].sort()).toEqual(["s1", "s2"]);
+    expect(engine.getStatus()).toBe("idle");
+    expect(engine.getCursor().last_version_clock).toBe(2);
+    // Every pushed payload was an envelope (#928 still holds on the re-push).
+    const pushed = MockSocket.instances.flatMap((s) =>
+      s.sent
+        .map((x) => JSON.parse(x) as { type: string; events?: EventLogEntry[] })
+        .filter((f) => f.type === "push")
+        .flatMap((f) => f.events ?? []),
+    );
+    expect(pushed.every((e) => (e.payload as { _encrypted?: unknown })._encrypted === true)).toBe(
+      true,
+    );
+    ws.disconnect();
+  });
+});

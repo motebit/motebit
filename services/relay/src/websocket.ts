@@ -819,6 +819,8 @@ export function registerWebSocketRoutes(deps: WebSocketDeps): void {
               messages?: SyncConversationMessage[];
               task_id?: string;
               capabilities?: string[];
+              /** A push frame's own id, echoed in its ack (#914; additive). */
+              push_id?: unknown;
             };
 
             // Post-connect auth frame: client sends { type: "auth", token: "..." }
@@ -1002,8 +1004,19 @@ export function registerWebSocketRoutes(deps: WebSocketDeps): void {
                 }
               }
 
-              // Acknowledge
-              ws.send(JSON.stringify({ type: "ack", accepted: wsAccepted }));
+              // Acknowledge. A frame that names itself (`push_id`) has its id
+              // echoed, so a client may keep several frames in flight and
+              // credit each ack to its own frame (#914). Additive: a frame
+              // without one gets the unchanged ack.
+              ws.send(
+                JSON.stringify({
+                  type: "ack",
+                  accepted: wsAccepted,
+                  ...(typeof msg.push_id === "string" && msg.push_id.length <= 64
+                    ? { push_id: msg.push_id }
+                    : {}),
+                }),
+              );
 
               // Fan out to other connected clients for the same motebitId
               const peers = connections.get(motebitId);

@@ -2830,7 +2830,7 @@ External callers cannot store high-sensitivity memories. The `motebit_remember` 
 
 ### Signed token authentication
 
-When connecting with `--motebit`, the client creates a short-lived signed token (5-minute expiry) containing its own `motebit_id` and `device_id`, signed with its Ed25519 private key. The server verifies this token against known caller public keys. The `Authorization` header format is `Bearer motebit:{token}`.
+When connecting with `--motebit`, the client signs a short-lived token (60-second lifetime; the server allows at most 2 minutes, a minute of clock skew either way) with its Ed25519 private key for **every HTTP request**. The token carries the client's own `motebit_id` and `device_id`, the audience `mcp:call`, and `sub` = the target server's `motebit_id`, so it is bound to that one server. The `Authorization` header format is `Bearer motebit:{token}`. The server accepts the token only if its audience is `mcp:call`, its `sub` is the server's own id, its signature verifies against the caller's known public key, it has not expired, and its `jti` has not been seen before. A token is therefore single-use: a token minted for one server is refused by every other, and a replayed token is refused everywhere. The client takes the target id from its config (`motebitId`, pinned after the first verified connect) or, on first contact, from the server's `/health`. An older client that mints one `task:submit` token per session is refused with a 401 whose `reason` names the fix (#957).
 
 ### Receipt integrity
 
@@ -5076,6 +5076,8 @@ Authorization: Bearer my-secret-token
 
 Requests with a missing or incorrect token receive a `401 Unauthorized` response. HTTP transport is **fail-closed**: if no `authToken` is configured, every request except `/health` is still rejected with 401 unless the caller presents a motebit signed token (`Authorization: Bearer motebit:<signed-token>`). Open access is never a default.
 
+A motebit signed token is accepted only when its audience is `mcp:call`, its `sub` is this server's `motebit_id` (the token is bound to its target), its signature and expiry hold, and its `jti` has not been used before. Callers mint a fresh token for every HTTP request; `@motebit/mcp-client` does this for you. A refused token gets `401 {"error":"invalid motebit token","reason":"..."}`. The relay authenticates on a forwarded task with its own `mcp:call` token, bound to this server and signed by the relay key; a server with `relayTrust` verifies it against the pinned relay key and serves the caller as its relay. A `task:dispatch` token is never accepted as the bearer: it is an admission record passed only as the `motebit_task` `dispatch_token` argument, and a submitter may hold one too (#981).
+
 ## Identity tagging
 
 Every result — from synthetic tools and proxied tools alike — is tagged with the motebit's identity:
@@ -5440,7 +5442,7 @@ These tools are conditionally registered when the agent provides the necessary b
 All MCP tools require authentication. Two mechanisms are supported:
 
 1. **Static bearer token** — Set via `authToken` in the server config. The caller passes `Authorization: Bearer <token>`.
-2. **Motebit signed token** — The caller passes `Authorization: Bearer motebit:<signed-token>`. The server verifies the Ed25519 signature, resolves the caller's identity, and applies trust-level-based policy decisions.
+2. **Motebit signed token** — The caller passes `Authorization: Bearer motebit:<signed-token>`, minted fresh for each HTTP request with audience `mcp:call` and `sub` = the server's `motebit_id`. The server accepts it only if the audience is `mcp:call`, `sub` names this server, the Ed25519 signature and expiry hold, and the `jti` has not been used before (single-use). It then resolves the caller's identity and applies trust-level-based policy decisions.
 
 If no auth mechanism is configured and no valid token is provided, the server returns 401. Open access is never permitted on HTTP transport.
 

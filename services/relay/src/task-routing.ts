@@ -34,7 +34,11 @@ import {
   mintAudienceToken,
   sha256,
 } from "@motebit/encryption";
-import { TASK_DISPATCH_AUDIENCE } from "@motebit/protocol";
+import {
+  TASK_DISPATCH_AUDIENCE,
+  MCP_CALL_AUDIENCE,
+  REFERENCE_MCP_CALL_TOKEN_TTL_MS,
+} from "@motebit/protocol";
 import type { DatabaseDriver } from "@motebit/persistence";
 import type { RelayIdentity, FederationConfig } from "./federation.js";
 import { signDiscoverBody } from "./federation.js";
@@ -1058,6 +1062,36 @@ export async function mintTaskDispatchToken(
 }
 
 /**
+ * Mint the relay's OWN transport bearer for one HTTP request to a worker's
+ * MCP endpoint (#981): `aud: "mcp:call"`, `sub` = the worker, signed by the
+ * relay key, a fresh `jti`, a 60 s lifetime. The worker serves it as its
+ * relay only because it verifies under the PINNED relay key, and accepts it
+ * once.
+ *
+ * This is the only relay transport credential. The `task:dispatch` token is
+ * an admission record — the relay also hands it to a submitter that presents
+ * the task itself — so it must never double as proof that the caller is the
+ * relay. Nothing but `forwardTaskViaMcp` receives this token: it is minted
+ * per request inside the forward and never returned in a response body.
+ */
+export async function mintRelayMcpBearer(
+  relayIdentity: RelayIdentity,
+  workerMotebitId: string,
+): Promise<string> {
+  const { token } = await mintAudienceToken(
+    {
+      mid: relayIdentity.relayMotebitId,
+      did: relayIdentity.did,
+      aud: MCP_CALL_AUDIENCE,
+      sub: workerMotebitId,
+      ttlMs: REFERENCE_MCP_CALL_TOKEN_TTL_MS,
+    },
+    relayIdentity.privateKey,
+  );
+  return token;
+}
+
+/**
  * Forward a task to an agent's MCP endpoint via HTTP StreamableHTTP.
  * Called as fire-and-forget when no WebSocket connection is available.
  * On success, stores the receipt in the task queue for polling.
@@ -1076,15 +1110,22 @@ export async function forwardTaskViaMcp(
    * Retired: the relay's master token is NEVER sent to a worker endpoint.
    * Kept positionally so existing call sites and tests do not shift; any
    * value passed here is ignored. The relay authenticates as itself with
-   * the dispatch token below (`Authorization: Bearer motebit:<token>`),
+   * `mintBearer` below (a relay-signed `mcp:call` token per request),
    * which the worker verifies under its pinned relay key.
    */
   _retiredApiToken?: string,
   onReceipt?: (receipt: ReceiptCandidate) => Promise<void>,
-  /** Relay-signed admission artifact for THIS worker + task (`mintTaskDispatchToken`) — also the bearer. */
+  /** Relay-signed admission artifact for THIS worker + task (`mintTaskDispatchToken`) — the `dispatch_token` argument, never the bearer (#981). */
   dispatchToken?: string,
   /** Outbound URL law (`buildOutboundPolicy`); absent ⇒ literals + names only. */
   outboundPolicy?: OutboundUrlOptions,
+  /**
+   * Mints the transport bearer for ONE HTTP request — the relay's own
+   * `mcp:call` token bound to this worker (`mintRelayMcpBearer`). Called once
+   * per request: the worker accepts each token once. Absent ⇒ the forward is
+   * refused before any socket opens (there is nothing to authenticate with).
+   */
+  mintBearer?: () => Promise<string>,
 ): Promise<void> {
   // Re-check at CONNECT time, not only at registration: the registry row is
   // months old by the time a task arrives, and this forward carries a bearer.
@@ -1107,18 +1148,32 @@ export async function forwardTaskViaMcp(
     });
     return;
   }
+  if (mintBearer == null) {
+    logger.warn("task.mcp_forward_refused", {
+      correlationId: taskId,
+      agent: agentId,
+      endpoint: endpointUrl,
+      reason: "no_relay_bearer",
+    });
+    return;
+  }
   const mcpEndpoint = endpointUrl.endsWith("/mcp") ? endpointUrl : `${endpointUrl}/mcp`;
   const mcpHeaders: Record<string, string> = {
     "Content-Type": "application/json",
     Accept: "application/json, text/event-stream",
   };
-  // The relay authenticates AS ITSELF: the per-task, per-worker dispatch
-  // token is the bearer. The master token never leaves the relay — before
-  // this, any registered endpoint received the relay's admin credential on
-  // its first forwarded task (docs/doctrine/task-admission.md §"The relay
+  // The relay authenticates AS ITSELF with a relay-signed mcp:call token bound
+  // to this worker, minted fresh for EVERY request (the worker accepts each
+  // once). Never the master token — before 2026-09-13 any registered endpoint
+  // received the relay's admin credential on its first forwarded task — and
+  // never the dispatch token, which is an admission record the relay may also
+  // hand to a submitter (#981; docs/doctrine/task-admission.md §"The relay
   // authenticates as itself"). A worker on an older @motebit/mcp-server
-  // (no relayTrust) answers 401, which is logged loudly below.
-  if (dispatchToken) mcpHeaders["Authorization"] = `Bearer motebit:${dispatchToken}`;
+  // answers 401, which is logged loudly below.
+  const authed = async (): Promise<Record<string, string>> => ({
+    ...mcpHeaders,
+    Authorization: `Bearer motebit:${await mintBearer()}`,
+  });
 
   // Wake-on-delegation: Fly.io `auto_stop_machines = "stop"` services
   // require an HTTP GET to trigger auto-start. MCP POSTs don't wake
@@ -1146,7 +1201,7 @@ export async function forwardTaskViaMcp(
     // Step 1: Initialize MCP session
     const initResp = await fetch(mcpEndpoint, {
       method: "POST",
-      headers: mcpHeaders,
+      headers: await authed(),
       body: JSON.stringify({
         jsonrpc: "2.0",
         method: "initialize",
@@ -1186,7 +1241,7 @@ export async function forwardTaskViaMcp(
     // Step 2: Send initialized notification
     await fetch(mcpEndpoint, {
       method: "POST",
-      headers: mcpHeaders,
+      headers: await authed(),
       body: JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }),
       signal: AbortSignal.timeout(5000),
     });
@@ -1194,7 +1249,7 @@ export async function forwardTaskViaMcp(
     // Step 3: Call motebit_task
     const taskResp = await fetch(mcpEndpoint, {
       method: "POST",
-      headers: mcpHeaders,
+      headers: await authed(),
       body: JSON.stringify({
         jsonrpc: "2.0",
         method: "tools/call",

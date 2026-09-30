@@ -170,6 +170,8 @@ Authorization: Bearer my-secret-token
 
 Requests with a missing or incorrect token receive a `401 Unauthorized` response. HTTP transport is **fail-closed**: if no `authToken` is configured, every request except `/health` is still rejected with 401 unless the caller presents a motebit signed token (`Authorization: Bearer motebit:<signed-token>`). Open access is never a default.
 
+A motebit signed token is accepted only when its audience is `mcp:call`, its `sub` is this server's `motebit_id` (the token is bound to its target), its signature and expiry hold, and its `jti` has not been used before. Callers mint a fresh token for every HTTP request; `@motebit/mcp-client` does this for you. A refused token gets `401 {"error":"invalid motebit token","reason":"..."}`. The relay authenticates on a forwarded task with its own `mcp:call` token, bound to this server and signed by the relay key; a server with `relayTrust` verifies it against the pinned relay key and serves the caller as its relay. A `task:dispatch` token is never accepted as the bearer: it is an admission record passed only as the `motebit_task` `dispatch_token` argument, and a submitter may hold one too (#981).
+
 ## Identity tagging
 
 Every result — from synthetic tools and proxied tools alike — is tagged with the motebit's identity:

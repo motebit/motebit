@@ -1,8 +1,8 @@
 # motebit/agent-mcp-surface@1.0
 
 **Status:** Draft
-**Version:** 1.3
-**Date:** 2026-09-28
+**Version:** 1.5
+**Date:** 2026-09-29
 
 ---
 
@@ -35,7 +35,7 @@ This specification pins the **tool names and input schemas** of the agent-MCP su
 
 - Output payload shapes — those live in their owning specs (`execution-ledger-v1.md`, `credential-v1.md`, `delegation-v1.md` §7.1, `identity-v1.md`).
 - Transport — MCP stdio vs. Streamable HTTP. The reference implementation supports both; the surface is identical.
-- Authentication — bearer tokens, motebit signed tokens. Specified by `auth-token-v1.md`.
+- Authentication — bearer tokens, motebit signed tokens. Specified by `auth-token-v1.md`; a motebit signed token on this surface is an `mcp:call` token bound to the server's `motebit_id` and accepted once (auth-token §7.3).
 - Builtin tool surfaces (`web_search`, `read_url`, `read_file`, `shell_exec`, etc.). Those are local tools registered into the runtime; only the canonical delegated capabilities cross delegation boundaries (`delegation-v1.md`).
 - Resources and prompts (`motebit://identity`, `motebit://state`, `motebit://memories`, MCP `prompt` registrations). v1 covers tools only; resources/prompts are a v1.1 extension.
 
@@ -123,6 +123,8 @@ When the worker is configured for **task admission** (`taskAdmission: "relay"` i
 
 The relay mints the token after submission clears its settlement gates. Exactly one presenter holds it: the relay attaches it to its own MCP forward, or — when nothing routed the task — returns it from `POST /agent/:motebit_id/task` (delegation-v1 §3.2) bound to the intended worker so the submitter can present the task directly. Workers not configured for admission ignore the field. Doctrine: `docs/doctrine/task-admission.md`.
 
+The dispatch token is an admission record, never a transport credential (1.5, #981). A worker MUST NOT authenticate an HTTP caller as its relay on the strength of a `task:dispatch` token presented as the bearer, whoever presents it: the submitter holds one whenever it is the presenter. The relay authenticates AS ITSELF with an `mcp:call` token signed by the relay key, `sub` = the worker's `motebit_id`, fresh per HTTP request (auth-token §7.3), which the worker verifies under its pinned relay key and accepts once. A direct presenter authenticates with its own `mcp:call` token and passes the dispatch token only as the `dispatch_token` argument, so it is served as itself, never as the relay.
+
 When `delegation_token` is present:
 
 - The token MUST verify (`@motebit/encryption.verifyDelegation`).
@@ -173,19 +175,21 @@ A motebit is conformant with `motebit/agent-mcp-surface@1.0` if all of:
 
 ## 9. Relationship to Other Specs
 
-| Spec                  | Relationship                                                                                           |
-| --------------------- | ------------------------------------------------------------------------------------------------------ |
-| identity-v1.0         | `motebit_identity` exposes the identity surface defined here.                                          |
-| execution-ledger-v1.0 | `motebit_task` returns the `ExecutionReceipt` shape pinned in §11.                                     |
-| delegation-v1.0       | `motebit_service_listing` returns the `AgentServiceListing` pinned in §7.1.                            |
-| credential-v1.0       | `motebit_credentials` returns the `VerifiablePresentation` pinned in §2.2.                             |
-| memory-delta-v1.0     | `motebit_remember` writes produce `memory_formed` events, gated by this spec's §3.5 sensitivity floor. |
-| auth-token-v1.0       | All tools are reachable behind motebit signed tokens or operator-configured bearer tokens.             |
+| Spec                  | Relationship                                                                                                                                                                                                                                              |
+| --------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| identity-v1.0         | `motebit_identity` exposes the identity surface defined here.                                                                                                                                                                                             |
+| execution-ledger-v1.0 | `motebit_task` returns the `ExecutionReceipt` shape pinned in §11.                                                                                                                                                                                        |
+| delegation-v1.0       | `motebit_service_listing` returns the `AgentServiceListing` pinned in §7.1.                                                                                                                                                                               |
+| credential-v1.0       | `motebit_credentials` returns the `VerifiablePresentation` pinned in §2.2.                                                                                                                                                                                |
+| memory-delta-v1.0     | `motebit_remember` writes produce `memory_formed` events, gated by this spec's §3.5 sensitivity floor.                                                                                                                                                    |
+| auth-token-v1.3       | All tools are reachable behind motebit signed tokens (`mcp:call`, bound to this server, single-use — auth-token §7.3; the relay's own is signed by the relay key) or operator-configured bearer tokens. A `task:dispatch` token is never a bearer (§5.1). |
 
 ---
 
 ## Change Log
 
+- **1.5 (2026-09-29)** — Normative tightening (#981): a `task:dispatch` token is never accepted as the transport bearer (§5.1); the relay authenticates with a relay-signed `mcp:call` token bound to the worker, fresh per request (auth-token 1.3 §7.3). Before 1.5 a submitter holding the dispatch token could present it as the bearer and be served as the relay. A 1.5 worker refuses a pre-1.5 relay's forward with a 401 reason; deploy relay and workers together.
+- **1.4 (2026-09-29)** — Normative tightening (#957): a motebit signed token presented to this surface over HTTP MUST be an `mcp:call` token whose `sub` is this server's `motebit_id`, and each is accepted once (auth-token 1.2 §7.3). A token of any other audience, bound to another server or to none, or presented a second time, is refused with a 401 carrying a reason. Pre-1.4 clients (one `task:submit` token per session) are refused until upgraded. The relay's `task:dispatch` bearer (§5.1) is unchanged.
 - **1.3 (2026-09-28)** — Normative tightening (#943): `motebit_recall` and memory resources are served to the motebit's owner principal only, and the owner principal is the local stdio session; HTTP callers are never the owner, including a token signed under the motebit's own key (the owner signs those for workers, servers and the relay, who could replay them). Every other caller is refused with no memory content. A foreign-principal turn receives none of the owner's memories or private context. Wire format unchanged; a caller that is not the owner now receives a refusal instead of memories.
 - **1.2 (2026-09-13)** — Clarifying: the §5.1 single-use rule is "one COMPLETED execution per admitted `sub`, at most one in flight" — a receiptless run may be re-presented under the same admission so an honest retry is not stranded for the token's TTL. Wire format unchanged.
 - **1.1 (2026-09-12)** — Additive: optional `dispatch_token` on `motebit_task` (§5.1) — the relay-signed `task:dispatch` admission artifact, REQUIRED by workers configured for task admission (priced relay-registered services), ignored by others. Backward-compatible: an older worker's zod shape strips the unknown field; an older relay simply omits it. Doctrine: `docs/doctrine/task-admission.md`.

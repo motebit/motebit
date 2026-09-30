@@ -84,13 +84,50 @@ export class EncryptedEventStoreAdapter implements EventStoreAdapter {
     }
   }
 
-  async append(entry: EventLogEntry): Promise<void> {
-    const encrypted = await this.encryptPayload(entry.payload);
-    const encEntry: EventLogEntry = {
-      ...entry,
-      payload: { _encrypted: true, _data: encrypted },
+  /**
+   * Wire activity of the inner adapter, when it reports any (the HTTP
+   * adapter does) — the sync engine's watchdog counts it as progress.
+   */
+  onActivity(listener: () => void): () => void {
+    const inner = this.inner as EventStoreAdapter & {
+      onActivity?: (l: () => void) => () => void;
     };
-    await this.inner.append(encEntry);
+    return typeof inner.onActivity === "function" ? inner.onActivity(listener) : () => {};
+  }
+
+  /** Whether the inner adapter has work on the wire that may still complete (the sync engine's watchdog asks). */
+  hasLiveWork(): boolean {
+    return (this.inner as { hasLiveWork?: () => boolean }).hasLiveWork?.() === true;
+  }
+
+  /** End the inner adapter's requests on the wire, when it can (the sync engine's abandoned cycle). */
+  abortInFlight(): void {
+    (this.inner as { abortInFlight?: () => void }).abortInFlight?.();
+  }
+
+  /** Settles when the previous append has been handed to the inner adapter. */
+  private handedOn: Promise<void> = Promise.resolve();
+
+  /**
+   * Encrypt and push. Appends reach the inner adapter in CALL order (#914
+   * round 2): encryptions run concurrently and may finish in any order, but
+   * each is handed on only after the one called before it — so the sync
+   * engine's clock order is the order the relay receives, which a client
+   * still pulling by clock relies on.
+   */
+  async append(entry: EventLogEntry): Promise<void> {
+    const before = this.handedOn;
+    let handOn!: () => void;
+    this.handedOn = new Promise<void>((resolve) => (handOn = resolve));
+    let pushed: Promise<void>;
+    try {
+      const encrypted = await this.encryptPayload(entry.payload);
+      await before;
+      pushed = this.inner.append({ ...entry, payload: { _encrypted: true, _data: encrypted } });
+    } finally {
+      handOn();
+    }
+    await pushed;
   }
 
   async query(filter: EventFilter): Promise<EventLogEntry[]> {
@@ -104,6 +141,16 @@ export class EncryptedEventStoreAdapter implements EventStoreAdapter {
    * undefined, and this adapter is not a seq source. Distinct from the raw
    * key, so a raw pull over the same store never advances this cursor.
    */
+  /** The adapter instance a push goes out through (#914 round 9). */
+  get pushTransport(): object {
+    return (this.inner as { pushTransport?: object }).pushTransport ?? this.inner;
+  }
+
+  /** The inner adapter's relay stream, when it names one (a socket; #914 round 8). */
+  get relayStreamKey(): string | undefined {
+    return (this.inner as { relayStreamKey?: string }).relayStreamKey;
+  }
+
   get seqCursorKey(): string | undefined {
     return isSeqPullSource(this.inner) ? `e2e:${this.inner.seqCursorKey}` : undefined;
   }

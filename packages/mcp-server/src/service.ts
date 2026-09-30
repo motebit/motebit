@@ -483,7 +483,11 @@ export interface ServiceServerConfig {
    * to every forward and returns it to the submitter.
    */
   taskAdmission?: TaskAdmissionConfig;
-  /** Pinned relay key — lets the relay authenticate to this worker with its dispatch token. */
+  /**
+   * Pinned relay key — lets the relay authenticate to this worker AS ITSELF
+   * with a relay-signed `mcp:call` token bound to this worker (never with a
+   * dispatch token, which admits a task but authenticates no one — #981).
+   */
   relayTrust?: { relayPublicKey: string | (() => Promise<string | null>) };
 
   /** Sync relay URL for discovery registration. */

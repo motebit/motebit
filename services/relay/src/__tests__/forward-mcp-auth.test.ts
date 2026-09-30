@@ -79,6 +79,7 @@ describe("forwardTaskViaMcp — non-2xx is loud, never silent", () => {
       },
       "disp.token",
       { allowPrivateNetwork: true },
+      async () => "relay.bearer",
     );
 
     const failure = cap.entries.find((e) => e.msg === "task.mcp_forward_failed");

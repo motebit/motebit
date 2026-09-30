@@ -151,6 +151,10 @@ const NON_RELAY_AUDIENCES: ReadonlyMap<string, string> = new Map([
   ["runtime:attach", "the local runtime-host socket (@motebit/runtime-host)"],
   ["task:dispatch", "relay-signed; verified by the worker (@motebit/mcp-server)"],
   ["browser-sandbox", "relay-signed; verified by services/browser-sandbox"],
+  [
+    "mcp:call",
+    "caller-signed, sub = target motebit_id; verified by the MCP server (@motebit/mcp-server)",
+  ],
 ]);
 
 /**

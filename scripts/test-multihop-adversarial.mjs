@@ -87,7 +87,8 @@ async function mcpCall(url, method, params, authToken) {
   const headers = {
     "Content-Type": "application/json",
     Accept: "application/json, text/event-stream",
-    Authorization: `Bearer motebit:${authToken}`,
+    // #957: a worker accepts each caller token once — a factory mints per request.
+    Authorization: `Bearer motebit:${typeof authToken === "function" ? authToken() : authToken}`,
   };
   if (sessionId) headers["Mcp-Session-Id"] = sessionId;
 
@@ -130,10 +131,11 @@ function expect(cond, reason) { if (cond) pass(); else fail(reason); }
 // ---------------------------------------------------------------------------
 
 async function getMultiHopReceipt(privBytes, prompt) {
-  const tok = signToken({
+  // MCP caller token factory (#957): aud "mcp:call", bound to Bob, fresh per request.
+  const tok = () => signToken({
     mid: ALICE_ID, did: ALICE_DEVICE,
-    iat: Date.now(), exp: Date.now() + 5 * 60 * 1000,
-    jti: crypto.randomUUID(), aud: "task:submit",
+    iat: Date.now(), exp: Date.now() + 60_000,
+    jti: crypto.randomUUID(), aud: "mcp:call", sub: BOB_ID,
   }, privBytes);
 
   sessionId = null;
@@ -146,7 +148,7 @@ async function getMultiHopReceipt(privBytes, prompt) {
   }, tok);
   await fetch(BOB_MCP, {
     method: "POST",
-    headers: { "Content-Type": "application/json", Authorization: `Bearer motebit:${tok}`, ...(sessionId ? { "Mcp-Session-Id": sessionId } : {}) },
+    headers: { "Content-Type": "application/json", Authorization: `Bearer motebit:${tok()}`, ...(sessionId ? { "Mcp-Session-Id": sessionId } : {}) },
     body: JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }),
   });
 

@@ -109,7 +109,8 @@ async function mcpCall(method, params, authToken) {
   const headers = {
     "Content-Type": "application/json",
     Accept: "application/json, text/event-stream",
-    Authorization: `Bearer motebit:${authToken}`,
+    // #957: a worker accepts each caller token once — a factory mints per request.
+    Authorization: `Bearer motebit:${typeof authToken === "function" ? authToken() : authToken}`,
   };
   if (sessionId) headers["Mcp-Session-Id"] = sessionId;
 
@@ -177,15 +178,17 @@ async function main() {
 
   // 2. Create signed auth token
   log(2, "Creating motebit signed token...");
-  const token = signToken({
+  // #957: aud "mcp:call", bound to Bob (sub), fresh jti — a factory, one token per request.
+  const token = () => signToken({
     mid: ALICE_ID,
     did: ALICE_DEVICE,
     iat: Date.now(),
-    exp: Date.now() + 5 * 60 * 1000,
+    exp: Date.now() + 60_000, // mcp:call lifetime (#957: server allows ≤ 2 min)
     jti: crypto.randomUUID(),
-    aud: "task:submit",
+    aud: "mcp:call",
+    sub: BOB_ID,
   }, privBytes);
-  ok(`Token: ${token.slice(0, 50)}...`);
+  ok(`Token: ${token().slice(0, 50)}...`);
 
   // 3. MCP initialize
   log(3, `Connecting to Bob at ${BOB_MCP}...`);
@@ -205,7 +208,7 @@ async function main() {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      Authorization: `Bearer motebit:${token}`,
+      Authorization: `Bearer motebit:${token()}`,
       ...(sessionId ? { "Mcp-Session-Id": sessionId } : {}),
     },
     body: JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }),

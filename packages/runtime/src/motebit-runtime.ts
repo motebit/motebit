@@ -2150,7 +2150,7 @@ export class MotebitRuntime {
       maxRetries: opts?.maxRetries,
       onDelegationFailure: opts?.onDelegationFailure,
       mintAudienceToken: async (
-        input: { mid: string; did: string; aud: string; ttlMs?: number },
+        input: { mid: string; did: string; aud: string; sub?: string; ttlMs?: number },
         privateKey: Uint8Array,
       ): Promise<{ token: string }> => {
         // The minter owns iat/exp/jti/suite assembly — the planner's inline

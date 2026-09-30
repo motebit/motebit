@@ -55,13 +55,13 @@
  *   POST /api/v1/agents/bootstrap                       — register identity + device in one unauthenticated call (rate-limited)
  *
  * WebSocket protocol:
- *   Client → Server:  { type: "push", events: EventLogEntry[] }
+ *   Client → Server:  { type: "push", events: EventLogEntry[], push_id?: string }
  *   Client → Server:  { type: "push_conversations", conversations: SyncConversation[] }
  *   Client → Server:  { type: "push_messages", messages: SyncConversationMessage[] }
  *   Server → Client:  { type: "event", event: EventLogEntry }
  *   Server → Client:  { type: "conversation", conversation: SyncConversation }
  *   Server → Client:  { type: "conversation_message", message: SyncConversationMessage }
- *   Server → Client:  { type: "ack", accepted: number }
+ *   Server → Client:  { type: "ack", accepted: number, push_id?: string }  (push_id echoed when the push named one)
  *   Server → Client:  { type: "ack_conversations", accepted: number }
  *   Server → Client:  { type: "ack_messages", accepted: number }
  */

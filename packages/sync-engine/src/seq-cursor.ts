@@ -251,6 +251,61 @@ export async function filterUnseen(
   return fresh;
 }
 
+/**
+ * The relay's own record as an acknowledgment (#914 round 7). Every event a
+ * pull shows the relay HOLDS — the device's own events included — is noted
+ * against the local store the pull writes into, and a push counts it
+ * acknowledged. A push whose ack is lost (a socket rebuilt before a slow ack
+ * arrives, a response that never comes back) is still known delivered once
+ * the relay's stream shows it, so the push cursor passes it instead of
+ * re-sending it forever. Keyed by the local store object (one device's
+ * record), bounded; forgetting one only costs a re-push.
+ */
+const relayHeld = new WeakMap<object, Map<string, Map<string, number>>>();
+const RELAY_HELD_KEPT = 50_000;
+
+/**
+ * The relay a cursor key reads, whatever the payload mode: `raw:` and
+ * `e2e:` keys over the same relay origin + identity are one relay's record
+ * (#914 round 8).
+ */
+export function relayStreamOfKey(seqCursorKey: string): string {
+  return seqCursorKey.replace(/^(?:e2e:|raw:)+/, "");
+}
+
+/**
+ * Note that the relay stream `relayStream` (see `relayStreamOfKey`) holds
+ * these events. Keyed by the local store AND the relay: what relay A served
+ * says nothing about what relay B holds (#914 round 8 — a device pointed at
+ * a new relay must push it the whole log, its own events included).
+ */
+export function noteRelayHolds(
+  localStore: object,
+  relayStream: string,
+  events: readonly EventLogEntry[],
+): void {
+  let perRelay = relayHeld.get(localStore);
+  if (!perRelay) {
+    perRelay = new Map();
+    relayHeld.set(localStore, perRelay);
+  }
+  let held = perRelay.get(relayStream);
+  if (!held) {
+    held = new Map();
+    perRelay.set(relayStream, held);
+  }
+  for (const e of events) {
+    held.delete(e.event_id);
+    held.set(e.event_id, e.version_clock);
+  }
+  while (held.size > RELAY_HELD_KEPT) held.delete(held.keys().next().value!);
+}
+
+/** Has a pull from `relayStream` into `localStore` shown that relay holding `eventId`? */
+export function relayHolds(localStore: object, relayStream: string, eventId: string): boolean {
+  return relayHeld.get(localStore)?.get(relayStream)?.has(eventId) ?? false;
+}
+
 /** Bounded so a single pull call cannot spin; the next sync continues from the saved cursor. */
 export const MAX_SEQ_PAGES_PER_PULL = 100;
 
@@ -292,6 +347,12 @@ export async function pullBySeq(opts: {
   maxPages?: number;
   /** Told of every event moved past without being applied. */
   onSkipped?: (skipped: SkippedSyncEvent) => void;
+  /**
+   * Told after each page is applied, with the events it appended (#914 round
+   * 3): a caller can count the page as progress, and learn which events the
+   * relay holds before the pull as a whole returns.
+   */
+  onPage?: (fresh: readonly EventLogEntry[]) => void;
 }): Promise<SeqPullOutcome> {
   const { source, localStore, cursorStore, motebitId, fallbackAfterClock } = opts;
   const key = source.seqCursorKey;
@@ -342,9 +403,17 @@ export async function pullBySeq(opts: {
 
   for (let page = 0; page < maxPages; page++) {
     const res = await source.pullAfterSeq(cursor, fallbackAfterClock);
+    noteRelayHolds(
+      localStore,
+      relayStreamOfKey(source.seqCursorKey),
+      (res.kind === "clock" ? res.events : res.entries.map((x) => x.event)).filter(
+        (e) => e.motebit_id === motebitId,
+      ),
+    );
     if (res.kind === "clock") {
       const unseen = await filterUnseen(localStore, motebitId, res.events);
       await apply(unseen, () => null);
+      opts.onPage?.(fresh);
       return { mode: "clock", fresh, skipped, encryptedOnRawPath };
     }
     if (res.latestSeq < cursor && !resetOnce) {
@@ -362,7 +431,9 @@ export async function pullBySeq(opts: {
       motebitId,
       res.entries.map((x) => x.event),
     );
+    const before = fresh.length;
     await apply(unseen, (id) => seqs.get(id) ?? null);
+    opts.onPage?.(fresh.slice(before));
     // Only now, with the page processed (applied or recorded), may the cursor pass it.
     if (res.nextSeq > cursor) {
       cursor = res.nextSeq;
