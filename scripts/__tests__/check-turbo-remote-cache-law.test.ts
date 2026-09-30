@@ -65,6 +65,18 @@ describe("gate mutation: every rule of the law is load-bearing", () => {
     60_000,
   );
 
+  it("R3-C1 and R3-C2 are refused by more than one rule (defence in depth)", () => {
+    for (const id of ["R3-C1 GITHUB_ENV leak in Build", "R3-C2 outputs chain to e2e"]) {
+      const d = applied.find((a) => a.m.id === id)!.d;
+      const rules = LAW_RULES.filter(
+        (r) =>
+          runTurboRemoteCacheGate(d, { disabled: new Set(LAW_RULES.filter((x) => x !== r)) })
+            .violations.length > 0,
+      );
+      expect(rules.length, id).toBeGreaterThanOrEqual(2);
+    }
+  }, 60_000);
+
   it("the table the report quotes", () => {
     const table = Object.fromEntries(LAW_RULES.map((r) => [r, escapes(r)]));
     expect(table).toEqual({
@@ -81,11 +93,9 @@ describe("gate mutation: every rule of the law is load-bearing", () => {
         "S2 known secret, wrong job",
         "S3 secret in if:",
       ],
-      "writer-secret-placement": [
-        "P1 writer env job-level",
-        "P2 writer secret on non-turbo step",
-        "P3 writer secret in run text",
-      ],
+      // P2 is now ALSO caught by writer-exact-run (a credential-env step
+      // must run an exact turbo command), so it is no longer placement-only.
+      "writer-secret-placement": ["P1 writer env job-level", "P3 writer secret in run text"],
       "environment-allowlist": [
         "C1a env-format-expr",
         "C1b env-concat-expr",
@@ -101,6 +111,22 @@ describe("gate mutation: every rule of the law is load-bearing", () => {
         "A1 local action caches .turbo",
       ],
       "tracked-turbo-state": ["C4 committed .turbo/config.json"],
+      // #997 round 3. R3-C1 (Build >> $GITHUB_ENV) and R3-C2 (outputs chain)
+      // are caught by two or three of these at once, so neither is listed.
+      "writer-exact-run": [
+        "R3-C3 printenv into uploaded artifact",
+        "R3-P2 the word turbo",
+        "R3-X1 writer step working-directory",
+        "R3-X2 writer step extra env",
+      ],
+      "writer-job-outputs": ["R3-C2b job outputs"],
+      "writer-env-files": ["R3-C1b GITHUB_ENV write, no writer env", "R3-C1c GITHUB_PATH write"],
+      "publish-artifact-fetch": [
+        "R3-P3 gh run download (publish)",
+        "R3-P3b gh api artifacts (release)",
+        "R3-P3c curl artifacts URL (release)",
+        "R3-P3d download-artifact (publish)",
+      ],
     });
   }, 60_000);
 });

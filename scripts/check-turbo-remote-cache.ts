@@ -35,6 +35,17 @@
  *   - publish.yml / release.yml pin a local-only TURBO_CACHE (build from source)
  *   - .husky/pre-push pins a non-writing TURBO_CACHE; root scripts never write
  *
+ * Round 3 (#997) narrowed the CLAIM to what holds: the writer key/token exist
+ * only in jobs running main-merged code on a main push; PR/non-main code never
+ * receives them; any code merged to main runs with them (turbo exposes them to
+ * every task — strict env mode does not filter TURBO_*). The threat closed is
+ * PR/untrusted-ref poisoning of the cache main replays. It also closed the
+ * cheap deny-by-default holes inside the writer job: a step holding the key
+ * runs EXACTLY one of WRITER_TURBO_COMMANDS (no `&& printenv > dist/…`, no
+ * `>> $GITHUB_ENV`, no `; echo turbo`); the job has no `outputs:` and no step
+ * writes $GITHUB_ENV / $GITHUB_OUTPUT / $GITHUB_PATH / $GITHUB_STATE; and
+ * publish/release fetch no CI artifact.
+ *
  * The behavioural half — signing, the fatal empty/short key, and "no
  * credentials ⇒ zero remote requests" — is proven by
  * `scripts/probe-turbo-remote-cache-signing.ts` against a local fake cache
@@ -66,6 +77,7 @@ import {
   WRITER_ENVIRONMENT_EXPR,
   WRITER_KEY_SECRET,
   WRITER_TOKEN_SECRET,
+  WRITER_TURBO_COMMANDS,
 } from "./lib/turbo-remote-cache.js";
 
 export interface GateResult {
@@ -253,22 +265,22 @@ function main(): void {
   if (r.violations.length > 0) {
     failWithRepair({
       invariant:
-        "the shared turbo remote cache is SIGNED with a real key (turbo.json `remoteCache.signature` + `futureFlags.longerSignatureKey`) and the key and write token exist ONLY in the main-push `turbo-cache-writer` job — any other job holding them (a PR job can edit its own workflow) can plant a correctly-signed `dist/` that main replays (#997)",
+        "the shared turbo remote cache is SIGNED with a real key (turbo.json `remoteCache.signature` + `futureFlags.longerSignatureKey`), and the writer key/token exist only in jobs running main-merged code on a main push; PR/non-main code never receives them (a PR job can edit its own workflow and would plant a correctly-signed `dist/` that main replays). Any code merged to main runs with them — turbo exposes them to every task — so the writer job is closed: exact turbo commands, no job outputs, no runner-file writes (#997)",
       sites: r.violations,
       canonical:
         "scripts/lib/turbo-remote-cache.ts (the rules) + docs/ops/RUNBOOK.md § Turbo remote cache (the policy and OPERATOR steps)",
-      fix: `In turbo.json set "remoteCache": { "signature": true } and "futureFlags": { "longerSignatureKey": true }. Delete TURBO_TOKEN / TURBO_REMOTE_CACHE_SIGNATURE_KEY from every workflow-level env and every job that is not the writer. On the one writer job (ci.yml#check) set \`environment: ${WRITER_ENVIRONMENT_EXPR}\` and, in the STEP-level env of each step that runs turbo only, \`TURBO_TOKEN: \${{ secrets.${WRITER_TOKEN_SECRET} }}\` and \`TURBO_REMOTE_CACHE_SIGNATURE_KEY: \${{ secrets.${WRITER_KEY_SECRET} }}\`. Reference secrets only as a bare literal \`\${{ secrets.NAME }}\` granted in SECRET_ALLOWLIST (never toJSON(secrets), secrets[…], format(…secrets…) or a job-level \`secrets:\`); give a job an \`environment:\` only as its ENVIRONMENT_ALLOWLIST literal; never cache \`.turbo\`, \`node_modules/.cache/turbo\` or \`dist\` with a cache action, and \`git rm --cached\` anything tracked under \`.turbo/\`. Remove any remote-writing TURBO_CACHE / TURBO_FORCE / TURBO_REMOTE_ONLY / $GITHUB_ENV write and any turbo --force / --remote-only / remote-writing --cache= outside it. In ${PUBLISH_WORKFLOWS.join(" and ")} pin \`TURBO_CACHE: ${LOCAL_ONLY_CACHE}\` at workflow level. Then run \`pnpm check-turbo-remote-cache\` and \`pnpm probe-turbo-remote-cache-signing\`.`,
+      fix: `In turbo.json set "remoteCache": { "signature": true } and "futureFlags": { "longerSignatureKey": true }. Delete TURBO_TOKEN / TURBO_REMOTE_CACHE_SIGNATURE_KEY from every workflow-level env and every job that is not the writer. On the one writer job (ci.yml#check) set \`environment: ${WRITER_ENVIRONMENT_EXPR}\` and, in the STEP-level env of each step that runs turbo only, \`TURBO_TOKEN: \${{ secrets.${WRITER_TOKEN_SECRET} }}\` and \`TURBO_REMOTE_CACHE_SIGNATURE_KEY: \${{ secrets.${WRITER_KEY_SECRET} }}\` — and nothing else in that env; such a step's \`run:\` must be EXACTLY one of ${WRITER_TURBO_COMMANDS.map((c) => `\`${c}\``).join(", ")} (add a new one to WRITER_TURBO_COMMANDS in review) with no uses/with/shell/working-directory. The writer job declares no \`outputs:\` and \`defaults:\`, and no step in it writes $GITHUB_ENV / $GITHUB_OUTPUT / $GITHUB_PATH / $GITHUB_STATE or a \`::set-*\` command. ${PUBLISH_WORKFLOWS.join(" and ")} fetch no CI artifact (no download-artifact, \`gh run download\`, or …/actions/artifacts API path). Reference secrets only as a bare literal \`\${{ secrets.NAME }}\` granted in SECRET_ALLOWLIST (never toJSON(secrets), secrets[…], format(…secrets…) or a job-level \`secrets:\`); give a job an \`environment:\` only as its ENVIRONMENT_ALLOWLIST literal; never cache \`.turbo\`, \`node_modules/.cache/turbo\` or \`dist\` with a cache action, and \`git rm --cached\` anything tracked under \`.turbo/\`. Remove any remote-writing TURBO_CACHE / TURBO_FORCE / TURBO_REMOTE_ONLY / $GITHUB_ENV write and any turbo --force / --remote-only / remote-writing --cache= outside it. In ${PUBLISH_WORKFLOWS.join(" and ")} pin \`TURBO_CACHE: ${LOCAL_ONLY_CACHE}\` at workflow level. Then run \`pnpm check-turbo-remote-cache\` and \`pnpm probe-turbo-remote-cache-signing\`.`,
       doctrine: "docs/doctrine/composition-preserves-enforcement.md",
     });
   }
   console.log(
     `✓ turbo remote cache: turbo.json signs with longerSignatureKey; ${r.workflows} workflow(s), ${r.jobs} job(s) and ${r.localActions} local action(s) parsed as YAML.\n` +
-      `  L1 secrets: ${r.secretRefs.length} literal secrets.NAME reference(s) in every string and key (\${{ }} bodies and if:), each granted by SECRET_ALLOWLIST (${SECRET_ALLOWLIST.length} grant(s)); no toJSON(secrets) / secrets[…] / function call on secrets / job-level secrets:. Writer secrets only on turbo steps of ${r.writerJobs.join(", ") || "none"}.` +
+      `  L1 secrets: ${r.secretRefs.length} literal secrets.NAME reference(s) in every string and key (\${{ }} bodies and if:), each granted by SECRET_ALLOWLIST (${SECRET_ALLOWLIST.length} grant(s)); no toJSON(secrets) / secrets[…] / function call on secrets / job-level secrets:. Writer secrets only in the step env of ${r.writerJobs.join(", ") || "none"} steps whose run: is exactly one of ${WRITER_TURBO_COMMANDS.length} WRITER_TURBO_COMMANDS; that job has no outputs:, no defaults:, and no step writing $GITHUB_ENV/$GITHUB_OUTPUT/$GITHUB_PATH/$GITHUB_STATE. Claim: the writer key/token exist only in jobs running main-merged code on a main push; PR/non-main code never receives them; any code merged to main runs with them (turbo exposes them to every task).` +
       (r.unusedGrants.length > 0 ? ` Unused grant(s): ${r.unusedGrants.join(", ")}.` : "") +
       `\n  L2 environments: ${r.environments.length} declared, each its exact ENVIRONMENT_ALLOWLIST (${ENVIRONMENT_ALLOWLIST.length} grant(s)) value: ${r.environments.join("; ") || "none"}.\n` +
       `  L3 cache state: ${r.cacheSteps} cache action step(s) (none may restore .turbo / .cache/turbo / dist / a root-wide glob); no cross-run download-artifact; ${r.trackedFiles} tracked file(s), none under .turbo/.\n` +
-      `  Remote-write rules: ${EVALUATED_VARS.join("/")} in ${r.envScopes} env scope(s) (workflow, job, container, step), ${r.runScripts} run: script(s) for shell assignments, $GITHUB_ENV writes (${r.githubEnvWrites} found) and ${r.turboLines} turbo invocation(s) in any form (turbo, pnpm [exec|dlx] turbo, npx turbo@x, node_modules/.bin/turbo, root turbo scripts) with --cache/--force/--remote-only/--remote-cache-read-only; ${r.cacheDecls} TURBO_CACHE declaration(s); ${PUBLISH_WORKFLOWS.join(", ")} build from source; .husky/pre-push and ${r.rootScripts} root package.json script(s) never write remote.\n` +
-      `  Not examined: reusable workflows and actions in OTHER repos (their inputs are scanned, their bodies are not), scripts called from run: steps, non-root package.json scripts, secrets a third-party action reads from env.`,
+      `  Remote-write rules: ${EVALUATED_VARS.join("/")} in ${r.envScopes} env scope(s) (workflow, job, container, step), ${r.runScripts} run: script(s) for shell assignments, $GITHUB_ENV writes (${r.githubEnvWrites} found) and ${r.turboLines} turbo invocation(s) in any form (turbo, pnpm [exec|dlx] turbo, npx turbo@x, node_modules/.bin/turbo, root turbo scripts) with --cache/--force/--remote-only/--remote-cache-read-only; ${r.cacheDecls} TURBO_CACHE declaration(s); ${PUBLISH_WORKFLOWS.join(", ")} build from source and fetch no CI artifact (download-artifact, gh run download, …/actions/artifacts); .husky/pre-push and ${r.rootScripts} root package.json script(s) never write remote.\n` +
+      `  Not examined: reusable workflows and actions in OTHER repos (their inputs are scanned, their bodies are not), scripts called from run: steps, non-root package.json scripts, secrets a third-party action reads from env, runner-file writes made by a \`uses:\` action (setup-node, pnpm/action-setup) in the writer job, what turbo tasks (main-merged code) do with the key they are handed.`,
   );
 }
 

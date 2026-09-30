@@ -10,21 +10,28 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
-# Turbo remote cache (#997 — "key only on main"). Only the `check` job, and
-# only on a push to main, holds the remote-cache token and the signing key:
-# they live in the protected `turbo-cache-writer` environment (deployment
-# branches: main only), referenced below, and are handed ONLY to the steps
-# that run turbo (step-level env), never to the whole job. Every other run —
-# pull_request, any non-main ref, every other job on main — gets NO token
-# and NO key, so it neither reads nor writes the remote cache (local cache
-# only). This workflow has no merge_group trigger. A same-repo PR that edits
-# this file to reach the environment or its secrets by another route is
-# refused at run time by GitHub's deployment-branch rule (main only), and at
-# review time by scripts/check-turbo-remote-cache.ts, which is
-# deny-by-default: every secret reference is a literal `secrets.NAME` granted
-# per workflow+job, and every `environment:` is its job's exact allowlisted
-# string. Signing (turbo.json) stops a job that does NOT hold the key;
-# keeping the key off every non-main job stops the ones that would.
+# Turbo remote cache (#997 — "key only on main"). THE CLAIM, and no more:
+# the writer key/token exist only in jobs running main-merged code on a main
+# push; PR/non-main code never receives them; any code merged to main runs
+# with them (turbo exposes them to every task). They live in the protected
+# `turbo-cache-writer` environment (deployment branches: main only),
+# referenced only by the `check` job below, and are handed to that job's five
+# turbo steps (step-level env). Every other run — pull_request, any non-main
+# ref, every other job on main — gets NO token and NO key, so it neither reads
+# nor writes the remote cache (local cache only). This workflow has no
+# merge_group trigger. A same-repo PR that edits this file to reach the
+# environment or its secrets by another route is refused at run time by
+# GitHub's deployment-branch rule (main only), and at review time by
+# scripts/check-turbo-remote-cache.ts (deny-by-default: literal
+# `secrets.NAME` granted per workflow+job, exact allowlisted `environment:`
+# strings, and a CLOSED writer job — each step holding the key runs one exact
+# turbo command, no job `outputs:`, no $GITHUB_ENV/$GITHUB_OUTPUT/$GITHUB_PATH
+# writes). NOT claimed: that only turbo can read the key — turbo passes
+# TURBO_TOKEN and the signing key into every task's environment, so every
+# build/lint/test script and plugin in those steps can read them. Code that
+# reaches main is trusted with the key by construction; the gate keeps
+# untrusted (PR/non-main) code from ever holding it. Signing (turbo.json)
+# stops a job that does NOT hold the key.
 # Operator setup: docs/ops/RUNBOOK.md § Turbo remote cache.
 env:
   TURBO_TEAM: ${{ vars.TURBO_TEAM }}
@@ -54,8 +61,12 @@ jobs:
     # local-only with zero remote requests (proven by the probe's
     # `writer-before-environment` scenario). The token and key are STEP-level
     # env on the five turbo steps (Build, Typecheck, Lint, Publish-integrity,
-    # Test) only — never job-level, where `pnpm install` lifecycle scripts,
-    # third-party actions and every other step would see them.
+    # Test), each of which must run EXACTLY its allowlisted command
+    # (WRITER_TURBO_COMMANDS) — never job-level, where `pnpm install`
+    # lifecycle scripts and third-party actions would see them. Inside those
+    # steps turbo hands them to every task (trusted: main-merged code only).
+    # This job declares no `outputs:` and no step writes $GITHUB_ENV /
+    # $GITHUB_OUTPUT / $GITHUB_PATH (check-turbo-remote-cache refuses both).
     environment: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'turbo-cache-writer' || '' }}
     env:
       TURBO_CACHE: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'local:rw,remote:rw' || 'local:rw' }}

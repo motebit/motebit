@@ -120,6 +120,11 @@ const CACHE_STEP = (path: string, uses = "actions/cache@v4") => ({
   with: { path, key: "turbo-${{ github.sha }}" },
 });
 
+/** Set the `run:` of the check step whose name matches. */
+function setRun(doc: Document, name: RegExp, run: string): void {
+  doc.setIn(["jobs", "check", "steps", stepIndex(doc, "check", name), "run"], run);
+}
+
 export const MUTATIONS: readonly Mutation[] = [
   {
     id: "C1a env-format-expr",
@@ -360,6 +365,148 @@ export const MUTATIONS: readonly Mutation[] = [
           ["jobs", "format", "environment"],
           "${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'turbo-cache-writer' || '' }}",
         ),
+      ),
+  },
+  // ── #997 round 3: leaks INSIDE the writer job, and publish-side fetches ──
+  {
+    id: "R3-C1 GITHUB_ENV leak in Build",
+    shape:
+      "ci.yml#check Build: run: pnpm build + env | grep '^TURBO_' >> $GITHUB_ENV (every later step holds the key)",
+    apply: (r) =>
+      editWorkflow(r, "ci.yml", (d) =>
+        setRun(d, /^Build$/, "pnpm build\nenv | grep '^TURBO_' >> \"$GITHUB_ENV\"\n"),
+      ),
+  },
+  {
+    id: "R3-C1b GITHUB_ENV write, no writer env",
+    shape:
+      "ci.yml#check: a step without the writer env writes $GITHUB_ENV (e.g. BASH_ENV/NODE_OPTIONS into the later turbo steps)",
+    apply: (r) =>
+      editWorkflow(r, "ci.yml", (d) =>
+        addStep(
+          d,
+          "check",
+          { name: "Prime", run: 'echo "NODE_OPTIONS=--require ./x.cjs" >> "$GITHUB_ENV"' },
+          stepIndex(d, "check", /^Build$/),
+        ),
+      ),
+  },
+  {
+    id: "R3-C1c GITHUB_PATH write",
+    shape:
+      "ci.yml#check: a step prepends a directory to $GITHUB_PATH (shadows `pnpm` in turbo steps)",
+    apply: (r) =>
+      editWorkflow(r, "ci.yml", (d) =>
+        addStep(d, "check", { name: "Path", run: 'echo "$PWD/bin" >> $GITHUB_PATH' }, 3),
+      ),
+  },
+  {
+    id: "R3-C2 outputs chain to e2e",
+    shape:
+      "check Build writes base64(key) to $GITHUB_OUTPUT, jobs.check.outputs.t re-exports it, e2e reads needs.check.outputs.t",
+    apply: (r) =>
+      editWorkflow(r, "ci.yml", (d) => {
+        const i = stepIndex(d, "check", /^Build$/);
+        d.setIn(["jobs", "check", "steps", i, "id"], "b");
+        setRun(
+          d,
+          /^Build$/,
+          'pnpm build\necho "t=$(printf %s "$TURBO_REMOTE_CACHE_SIGNATURE_KEY" | base64 -w0)" >> "$GITHUB_OUTPUT"\n',
+        );
+        d.setIn(["jobs", "check", "outputs"], d.createNode({ t: "${{ steps.b.outputs.t }}" }));
+        addStep(d, "e2e", { run: 'echo "${{ needs.check.outputs.t }}" | base64 -d' });
+      }),
+  },
+  {
+    id: "R3-C2b job outputs",
+    shape: "ci.yml#check declares job `outputs:` (a cross-job channel out of the writer)",
+    apply: (r) =>
+      editWorkflow(r, "ci.yml", (d) =>
+        d.setIn(["jobs", "check", "outputs"], d.createNode({ t: "${{ steps.b.outputs.t }}" })),
+      ),
+  },
+  {
+    id: "R3-C3 printenv into uploaded artifact",
+    shape:
+      "check Build: pnpm build && printenv > apps/web/dist/env.txt (the web-build upload publishes it)",
+    apply: (r) =>
+      editWorkflow(r, "ci.yml", (d) =>
+        setRun(d, /^Build$/, "pnpm build && printenv > apps/web/dist/env.txt"),
+      ),
+  },
+  {
+    id: "R3-P2 the word turbo",
+    shape:
+      "check Coverage summary gets the writer env; run: node scripts/coverage-summary.mjs; echo turbo",
+    apply: (r) =>
+      editWorkflow(r, "ci.yml", (d) => {
+        const i = stepIndex(d, "check", /^Coverage summary$/);
+        d.setIn(["jobs", "check", "steps", i, "env"], d.createNode(WRITER_SECRETS));
+        setRun(d, /^Coverage summary$/, "node scripts/coverage-summary.mjs; echo turbo");
+      }),
+  },
+  {
+    id: "R3-X1 writer step working-directory",
+    shape: "check Build: working-directory: apps/web (pnpm build is then not the turbo build)",
+    apply: (r) =>
+      editWorkflow(r, "ci.yml", (d) =>
+        d.setIn(
+          ["jobs", "check", "steps", stepIndex(d, "check", /^Build$/), "working-directory"],
+          "apps/web",
+        ),
+      ),
+  },
+  {
+    id: "R3-X2 writer step extra env",
+    shape: "check Build: env BASH_ENV: ./x.sh next to the writer secrets",
+    apply: (r) =>
+      editWorkflow(r, "ci.yml", (d) =>
+        d.setIn(
+          ["jobs", "check", "steps", stepIndex(d, "check", /^Build$/), "env", "BASH_ENV"],
+          "./x.sh",
+        ),
+      ),
+  },
+  {
+    id: "R3-P3 gh run download (publish)",
+    shape: "publish.yml: run: gh run download <id> -n dist before the publish step",
+    apply: (r) =>
+      editWorkflow(r, "publish.yml", (d) =>
+        addStep(d, "publish", { run: "gh run download ${{ github.run_id }} -n dist" }, 5),
+      ),
+  },
+  {
+    id: "R3-P3b gh api artifacts (release)",
+    shape: "release.yml: gh api repos/o/r/actions/artifacts/1/zip > dist.zip",
+    apply: (r) =>
+      editWorkflow(r, "release.yml", (d) =>
+        addStep(
+          d,
+          "release",
+          { run: "gh api repos/motebit/motebit/actions/artifacts/1/zip > d.zip && unzip d.zip" },
+          5,
+        ),
+      ),
+  },
+  {
+    id: "R3-P3c curl artifacts URL (release)",
+    shape: "release.yml: curl -L https://api.github.com/repos/o/r/actions/runs/1/artifacts",
+    apply: (r) =>
+      editWorkflow(r, "release.yml", (d) =>
+        addStep(
+          d,
+          "release",
+          { run: "curl -sL https://api.github.com/repos/motebit/motebit/actions/runs/1/artifacts" },
+          5,
+        ),
+      ),
+  },
+  {
+    id: "R3-P3d download-artifact (publish)",
+    shape: "publish.yml: actions/download-artifact (same run) before the publish step",
+    apply: (r) =>
+      editWorkflow(r, "publish.yml", (d) =>
+        addStep(d, "publish", { uses: "actions/download-artifact@v4", with: { name: "dist" } }, 5),
       ),
   },
 ];

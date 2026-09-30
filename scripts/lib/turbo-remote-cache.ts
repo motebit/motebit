@@ -14,6 +14,12 @@
  *      uploads (a warning only); with it, an empty or <32-byte key is fatal
  *      before any artifact request (proven by the probe).
  *
+ *   THE CLAIM (narrowed, #997 round 3): the writer key/token exist only in
+ *   jobs running main-merged code on a main push; PR/non-main code never
+ *   receives them; any code merged to main runs with them (turbo exposes them
+ *   to every task). NOT claimed: "only turbo reads them" — turbo passes
+ *   TURBO_TOKEN and the key into every task's process.env.
+ *
  *   2. THE KEY AND THE WRITE TOKEN EXIST ONLY IN THE WRITER JOB. They live in
  *      the protected GitHub Environment `turbo-cache-writer` (deployment
  *      branches: main) as `TURBO_WRITER_TOKEN` / `TURBO_WRITER_SIGNATURE_KEY`
@@ -43,6 +49,16 @@
  *          file under a `.turbo/` directory (a committed
  *          `.turbo/config.json` overrides turbo.json — proven by the probe's
  *          `committed-turbo-config` scenario).
+ *
+ *     (L4) THE WRITER JOB IS CLOSED (round 3). `writer-exact-run`: a step
+ *          holding the writer env runs EXACTLY one of WRITER_TURBO_COMMANDS,
+ *          with only WRITER_STEP_KEYS and only the two credential env keys;
+ *          no job/workflow env beyond TURBO_CACHE / TURBO_TEAM, no
+ *          `defaults:`. `writer-job-outputs`: no job `outputs:`.
+ *          `writer-env-files`: no `run:` writes $GITHUB_ENV / $GITHUB_OUTPUT /
+ *          $GITHUB_PATH / $GITHUB_STATE or `::set-*`. `publish-artifact-fetch`:
+ *          publish.yml / release.yml use no download-artifact, `gh run
+ *          download`, or Actions artifacts API path.
  *
  *   3. NOTHING OUTSIDE A WRITER JOB TOUCHES THE REMOTE. Evaluated on a real
  *      YAML parse (block and flow maps, quoted keys, anchors) at workflow, job
@@ -105,12 +121,69 @@ export const LAW_RULES = [
   "environment-allowlist",
   "cache-state",
   "tracked-turbo-state",
+  "writer-exact-run",
+  "writer-job-outputs",
+  "writer-env-files",
+  "publish-artifact-fetch",
 ] as const;
 export type LawRule = (typeof LAW_RULES)[number];
 export interface LawOptions {
   /** Rules to switch OFF (test-only: proves each rule is load-bearing). */
   disabled?: ReadonlySet<LawRule>;
 }
+
+/**
+ * THE EXACT-RUN ALLOWLIST (#997 round 3). A step of the writer job that carries
+ * the writer env (`TURBO_TOKEN` / `TURBO_REMOTE_CACHE_SIGNATURE_KEY`) must have
+ * `run:` EXACTLY one of these strings (after trimming surrounding whitespace),
+ * its step keys within `WRITER_STEP_KEYS`, and its `env` keys exactly the two
+ * credential variables. Matching the word `turbo` is not enough: `…; echo turbo`
+ * or `pnpm build && printenv > apps/web/dist/env.txt` would pass.
+ */
+export const WRITER_TURBO_COMMANDS = [
+  "pnpm build",
+  "pnpm typecheck",
+  "pnpm lint",
+  "pnpm lint:pack",
+  "pnpm exec turbo run test:coverage --concurrency=4",
+] as const;
+/** Keys a writer-env step may carry (no `uses`, `with`, `shell`, `working-directory`). */
+export const WRITER_STEP_KEYS = [
+  "name",
+  "id",
+  "if",
+  "env",
+  "run",
+  "timeout-minutes",
+  "continue-on-error",
+] as const;
+/** Job-level env keys the writer job may declare. */
+export const WRITER_JOB_ENV_KEYS = ["TURBO_CACHE"] as const;
+/** Workflow-level env keys the writer's workflow may declare (they reach every step of the writer). */
+export const WRITER_WORKFLOW_ENV_KEYS = ["TURBO_TEAM"] as const;
+
+/**
+ * A `run:` in the writer job that writes a runner file command (`$GITHUB_ENV`,
+ * `$GITHUB_OUTPUT`, `$GITHUB_PATH`, `$GITHUB_STATE`) or a legacy workflow
+ * command (`::set-env`, `::set-output`, `::add-path`, `::save-state`) — the
+ * channels that carry a value past the step: into later steps' env / PATH,
+ * or into job outputs. Refused on EVERY step of the writer job, not just the
+ * writer-env ones (a prior step's `BASH_ENV`/`NODE_OPTIONS`/PATH would run in
+ * the turbo steps). `$GITHUB_STEP_SUMMARY` is not a channel and is allowed.
+ */
+export const RUNNER_CHANNEL =
+  /\bGITHUB_(ENV|OUTPUT|PATH|STATE)\b|::(set-env|set-output|add-path|save-state)\b/;
+
+/**
+ * A `run:` in publish.yml / release.yml that fetches a CI artifact — the
+ * build must come from source in this job, never from another run's output:
+ * `gh run download`, and any GitHub Actions artifacts API path
+ * (`…/actions/artifacts…`, `…/actions/runs/<id>/artifacts`) whatever client
+ * requests it (`gh api`, `curl`, `wget`, a script). `download-artifact` (any
+ * form, same run included) is refused in those workflows too.
+ */
+export const PUBLISH_ARTIFACT_FETCH =
+  /\bgh\s+run\s+download\b|\/actions\/(runs\/[^\s/]+\/)?artifacts\b/;
 
 /** Scope name for a reference outside any job (workflow-level `env`, `run-name`, …). */
 export const WORKFLOW_SCOPE = "(workflow)";
@@ -969,6 +1042,11 @@ export function checkWorkflow(
     turboSteps.set(jobId, runsTurbo);
   }
 
+  const extra: { rule: LawRule; message: string }[] = [];
+  if (base === WRITER_WORKFLOW) extra.push(...checkWriterJobShape(file, doc));
+  if (publishing) extra.push(...checkPublishFetches(file, doc));
+  for (const x of extra) if (!off.has(x.rule)) v.violations.push(x.message);
+
   const lawV = checkLaw(base, doc, {
     action: false,
     turboStep: (job, i) => turboSteps.get(job)?.has(i) ?? false,
@@ -978,6 +1056,143 @@ export function checkWorkflow(
   v.environments = lawV.environments;
   v.cacheSteps = lawV.cacheSteps;
   return v;
+}
+
+const credentialEnvKeys = (env: unknown): string[] =>
+  isObj(env)
+    ? Object.keys(env).filter((k) =>
+        (CREDENTIAL_VARS as readonly string[]).includes(k.trim().toUpperCase()),
+      )
+    : [];
+
+/**
+ * #997 round 3 — the writer job (`ci.yml#check`, whatever its environment) is
+ * closed by construction, deny-by-default:
+ *   (writer-job-outputs) no job `outputs:` — nothing leaves the writer to
+ *     another job through `needs.check.outputs.*` (base64 defeats masking);
+ *   (writer-env-files) no `run:` in ANY step writes `$GITHUB_ENV`,
+ *     `$GITHUB_OUTPUT`, `$GITHUB_PATH`, `$GITHUB_STATE` or a legacy `::set-*`
+ *     command — nothing carries the key past its step, and nothing injects
+ *     env/PATH into the turbo steps;
+ *   (writer-exact-run) a step carrying the writer env runs EXACTLY one of
+ *     `WRITER_TURBO_COMMANDS`, has only `WRITER_STEP_KEYS` keys and exactly
+ *     the two credential env keys; the job's env keys are within
+ *     `WRITER_JOB_ENV_KEYS`, the workflow's within `WRITER_WORKFLOW_ENV_KEYS`,
+ *     and neither sets `defaults:` (a default shell / working directory would
+ *     change what the exact command runs).
+ */
+export function checkWriterJobShape(file: string, doc: Obj): { rule: LawRule; message: string }[] {
+  const out: { rule: LawRule; message: string }[] = [];
+  const jobs = isObj(doc.jobs) ? doc.jobs : {};
+  const job = jobs[WRITER_JOB];
+  if (!isObj(job)) return out;
+  const at = `${file} jobs.${WRITER_JOB}`;
+  if ("outputs" in job) {
+    out.push({
+      rule: "writer-job-outputs",
+      message: `${at}.outputs: the writer job declares job outputs — any value a step writes there (a base64'd key defeats log masking) reaches every job that \`needs: ${WRITER_JOB}\`; the writer job exports nothing`,
+    });
+  }
+  const exact = (message: string): void => {
+    out.push({ rule: "writer-exact-run", message });
+  };
+  for (const [scopeAt, scope, keys] of [
+    [`${file} env`, doc.env, WRITER_WORKFLOW_ENV_KEYS],
+    [`${at}.env`, job.env, WRITER_JOB_ENV_KEYS],
+  ] as const) {
+    if (scope == null) continue;
+    const extraKeys = isObj(scope)
+      ? Object.keys(scope).filter(
+          // Credential vars here are writer-secret-placement's refusal, not this rule's.
+          (k) =>
+            !(keys as readonly string[]).includes(k) &&
+            !(CREDENTIAL_VARS as readonly string[]).includes(k.trim().toUpperCase()),
+        )
+      : ["(not a mapping)"];
+    if (extraKeys.length > 0) {
+      exact(
+        `${scopeAt}: key(s) ${extraKeys.join(", ")} reach every step of the writer job (the turbo steps included) — only ${keys.join(", ")} may be set there; BASH_ENV / NODE_OPTIONS / PATH-like variables would run code inside the steps that hold the key`,
+      );
+    }
+  }
+  for (const [defAt, d] of [
+    [`${file} defaults`, doc.defaults],
+    [`${at}.defaults`, job.defaults],
+  ] as const) {
+    if (d != null) {
+      exact(
+        `${defAt}: \`defaults:\` changes the shell or working directory the writer's exact turbo commands run under — the writer workflow declares none`,
+      );
+    }
+  }
+  const steps = Array.isArray(job.steps) ? job.steps : [];
+  steps.forEach((step, i) => {
+    if (!isObj(step)) return;
+    const sat = `${at}.steps[${i}]${typeof step.name === "string" ? ` (${step.name})` : ""}`;
+    if (typeof step.run === "string" && RUNNER_CHANNEL.test(step.run)) {
+      out.push({
+        rule: "writer-env-files",
+        message: `${sat}.run: writes a runner file/command (\`${RUNNER_CHANNEL.exec(step.run)![0]}\`) in the writer job — $GITHUB_ENV/$GITHUB_PATH carry values (or injected BASH_ENV/NODE_OPTIONS/PATH) into every later step, $GITHUB_OUTPUT into job outputs; the writer job writes none of them`,
+      });
+    }
+    // A writer secret anywhere else in the step (run text, `with:`) is
+    // writer-secret-placement's refusal; this rule judges the steps that carry
+    // the credential env.
+    if (credentialEnvKeys(step.env).length === 0) return;
+    const run = typeof step.run === "string" ? step.run.trim() : null;
+    if (run == null || !(WRITER_TURBO_COMMANDS as readonly string[]).includes(run)) {
+      exact(
+        `${sat}.run: a step holding the writer token/key must run EXACTLY one of ${WRITER_TURBO_COMMANDS.map((c) => `\`${c}\``).join(", ")} (got ${run == null ? "no run:" : `\`${run.replace(/\n/g, "\\n")}\``}) — anything more (\`&& printenv > dist/…\`, \`>> $GITHUB_ENV\`, \`; echo turbo\`) runs with the key`,
+      );
+    }
+    const badKeys = Object.keys(step).filter(
+      (k) => !(WRITER_STEP_KEYS as readonly string[]).includes(k),
+    );
+    if (badKeys.length > 0) {
+      exact(
+        `${sat}: key(s) ${badKeys.join(", ")} on a step holding the writer token/key — only ${WRITER_STEP_KEYS.join(", ")} (no uses/with/shell/working-directory: each changes what actually runs with the key)`,
+      );
+    }
+    const envKeys = isObj(step.env) ? Object.keys(step.env) : [];
+    const envExtra = envKeys.filter((k) => !(CREDENTIAL_VARS as readonly string[]).includes(k));
+    if (envExtra.length > 0 || credentialEnvKeys(step.env).length !== CREDENTIAL_VARS.length) {
+      exact(
+        `${sat}.env: a step holding the writer token/key sets exactly ${CREDENTIAL_VARS.join(" + ")}${envExtra.length > 0 ? ` (extra: ${envExtra.join(", ")} — BASH_ENV/NODE_OPTIONS would run code beside the key)` : ""}`,
+      );
+    }
+  });
+  return out;
+}
+
+/**
+ * #997 round 3 — publish.yml / release.yml fetch no CI artifact: no
+ * `download-artifact` (any form), no `gh run download`, no Actions artifacts
+ * API path in any `run:`. Deny by pattern over the only two fetch routes
+ * GitHub offers (the action and the REST API / its gh wrapper).
+ */
+export function checkPublishFetches(file: string, doc: Obj): { rule: LawRule; message: string }[] {
+  const out: { rule: LawRule; message: string }[] = [];
+  const jobs = isObj(doc.jobs) ? doc.jobs : {};
+  for (const [jobId, job] of Object.entries(jobs)) {
+    const steps = isObj(job) && Array.isArray(job.steps) ? job.steps : [];
+    steps.forEach((step, i) => {
+      if (!isObj(step)) return;
+      const sat = `${file} jobs.${jobId}.steps[${i}]`;
+      if (typeof step.uses === "string" && /(^|\/)download-artifact(@|$)/i.test(step.uses)) {
+        out.push({
+          rule: "publish-artifact-fetch",
+          message: `${sat} (${step.uses}): a publishing workflow downloads a CI artifact — a published package must be built from source in this job`,
+        });
+      }
+      if (typeof step.run === "string" && PUBLISH_ARTIFACT_FETCH.test(step.run)) {
+        out.push({
+          rule: "publish-artifact-fetch",
+          message: `${sat}.run: fetches a CI artifact (\`${PUBLISH_ARTIFACT_FETCH.exec(step.run)![0]}\`) in a publishing workflow — a published package must be built from source in this job`,
+        });
+      }
+    });
+  }
+  return out;
 }
 
 /**
