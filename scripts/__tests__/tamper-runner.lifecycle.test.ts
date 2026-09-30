@@ -31,6 +31,25 @@ beforeEach(async () => {
   fx = await setupFixture();
 });
 afterEach(() => {
+  // When a test fails (a runner that did not clean up), the slow check and
+  // its grandchild are still running: kill their group, so no failing test
+  // leaves a process behind (the tamper runner that runs these self-tests
+  // would rightly call that an orphan).
+  const sentinel = fx != null ? join(fx.base, "slow.pid") : "";
+  if (sentinel !== "" && existsSync(sentinel)) {
+    const pid = Number(readFileSync(sentinel, "utf8"));
+    try {
+      const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
+      process.kill(-Number(stat.slice(stat.lastIndexOf(")") + 2).split(" ")[2]), "SIGKILL");
+    } catch {
+      // gone, or no /proc
+    }
+    try {
+      process.kill(pid, "SIGKILL");
+    } catch {
+      // gone
+    }
+  }
   teardownFixture(fx);
   fx = undefined;
 });

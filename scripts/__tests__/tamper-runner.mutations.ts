@@ -56,7 +56,7 @@ const MUTATIONS: TamperEntry[] = [
     name: "M3 red ignores the named test",
     ...VERDICTS,
     red: "tamper-runner evidence C3: red naming a test that stays green is GREEN even when a sibling fails",
-    edits: [edit("  if (red != null) {", `  ${NEVER}`)],
+    edits: [edit("  if (red != null) {", "  if (red != null && (false as boolean)) {")],
   },
   {
     name: "M4 shared TMPDIR",
@@ -136,10 +136,13 @@ const MUTATIONS: TamperEntry[] = [
     name: "N3 red matched by substring",
     ...VERDICTS,
     red: "tamper-runner evidence C3: red naming only the describe block does not count a failing sibling",
+    // At the call site: reassigning the parameter inside classifyVitest
+    // loses its narrowing in the closures below (TS2345), and the runner
+    // rejects an edit the compiler rejects.
     edits: [
       edit(
-        "    const list = ev.tests.get(red);",
-        "    red = [...ev.tests.keys()].find((n) => n.includes(red!)) ?? red;\n    const list = ev.tests.get(red);",
+        "  return classifyVitest(r.ev!, prePassed, entry.red);",
+        "  const red = entry.red;\n  return classifyVitest(r.ev!, prePassed, red == null ? red : ([...r.ev!.tests.keys()].find((n) => n.includes(red)) ?? red));",
       ),
     ],
   },
@@ -228,13 +231,19 @@ const MUTATIONS: TamperEntry[] = [
   },
   // --- the cold review of ed573f1b9: mutations its self-test did not notice
   {
-    name: "X1 cleanup kills only the direct child, not its process group",
+    name: "X1 cleanup kills only the direct child, not its process group (and no final sweep)",
     ...LIFECYCLE,
     red: "tamper-runner lifecycle a SIGINT mid-tamper kills the running test (its whole process group) and removes every copy",
+    // The final sweep kills the group too (and anything working in a slot):
+    // the guarantee now has two holders, so the mutation removes both.
     edits: [
       edit(
         '        if (c.pid != null) process.kill(-c.pid, "SIGKILL");',
         '        if (c.pid != null) process.kill(c.pid, "SIGKILL");',
+      ),
+      edit(
+        "    const left = finalSweep(\n      new Set(live),\n      slots.map((s) => s.hygiene),\n    );",
+        "    const left: string[] = [];\n    void live;",
       ),
     ],
   },
@@ -403,7 +412,12 @@ const MUTATIONS: TamperEntry[] = [
     name: "S11 only: the narrowing (-t) not passed to vitest",
     ...VERDICTS,
     red: "tamper-runner evidence only: runs just the red test (a failing sibling is never run)",
-    edits: [edit("  if (only != null) args.push(", "  if (false as boolean) args.push(")],
+    edits: [
+      edit(
+        "  if (only != null) args.push(",
+        "  if (only != null && (false as boolean)) args.push(",
+      ),
+    ],
   },
   // --- the causation law (round 4): one per clause, each named for what it drops
   {
@@ -437,7 +451,8 @@ const MUTATIONS: TamperEntry[] = [
   {
     name: "G3 drop the process-group kill after a run",
     ...CAUSATION,
-    red: "tamper-runner causation C1: a process a run leaves holding a port (FX_HOLD=1500 ms) never turns a comment-only edit red, and dies with its run",
+    // FX_HOLD=60000: a 1.5 s holder exits by itself inside the sweep's 3 s wait.
+    red: "tamper-runner causation C1: a process a run leaves holding a port (FX_HOLD=60000 ms) never turns a comment-only edit red, and dies with its run",
     edits: [edit('      process.kill(-pgid, "SIGKILL");', "      void pgid;")],
   },
   {
