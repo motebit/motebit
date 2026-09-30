@@ -23,7 +23,8 @@ import type { StepDelegationAdapter } from "@motebit/planner";
 import type { CliConfig } from "../args.js";
 import { loadFullConfig } from "../config.js";
 import { getDbPath } from "../runtime-factory.js";
-import { CLI_SYNC_CONFIGURED } from "../sync-configured.js";
+import { cliRuntimeConfig } from "../sync-configured.js";
+import { openDelegateEventSync } from "../cli-event-push.js";
 import { electCoordinatorRole } from "../runtime-host.js";
 import { getRelayUrl, getRelayAuthHeaders, requireMotebitId } from "./_helpers.js";
 
@@ -111,26 +112,35 @@ async function handleDelegatePlan(
   }
 
   const runtime = new MotebitRuntime(
-    {
-      motebitId,
-      // #962: compaction waits on the relay's acknowledged push cursor.
-      syncConfigured: CLI_SYNC_CONFIGURED,
-      policy: {
-        maxRiskLevel: governance.policyApproval.maxRiskLevel,
-        requireApprovalAbove: governance.policyApproval.requireApprovalAbove,
-        denyAbove: governance.policyApproval.denyAbove,
-        budget: governance.policyBudget,
+    // #962: `syncConfigured` is decided by `cliRuntimeConfig`, last.
+    cliRuntimeConfig(
+      {
+        motebitId,
+        policy: {
+          maxRiskLevel: governance.policyApproval.maxRiskLevel,
+          requireApprovalAbove: governance.policyApproval.requireApprovalAbove,
+          denyAbove: governance.policyApproval.denyAbove,
+          budget: governance.policyBudget,
+        },
+        memoryGovernance: governance.memoryGovernance,
+        taskRouter: PLANNING_TASK_ROUTER,
+        ...(signingKeys ? { signingKeys } : {}),
+        ...(solanaConfig ? { solana: solanaConfig } : {}),
       },
-      memoryGovernance: governance.memoryGovernance,
-      taskRouter: PLANNING_TASK_ROUTER,
-      ...(signingKeys ? { signingKeys } : {}),
-      ...(solanaConfig ? { solana: solanaConfig } : {}),
-    },
+      { syncUrl: relayUrl },
+    ),
     { storage, renderer: new NullRenderer(), tools: registry },
   );
   runtimeRef.current = runtime;
   await runtime.init();
   runtime.setProvider(provider);
+  // #962: this command's events and their sync, closed before it exits
+  // (`openDelegateEventSync` is the wiring under test).
+  const eventSync = await openDelegateEventSync(runtime, {
+    syncUrl: relayUrl,
+    log: (line) => console.log(line),
+    privateKey: () => signingKeys?.privateKey,
+  });
 
   // Enable credential publishing to relay (sovereign trust → network trust bridge).
   // The relay is used for discovery; credentials published here feed the routing graph.
@@ -239,6 +249,7 @@ async function handleDelegatePlan(
       }
     }
   } finally {
+    await eventSync.close();
     runtime.stop();
     moteDb.close();
     // Release the bind so the next coordinator-role process can elect.

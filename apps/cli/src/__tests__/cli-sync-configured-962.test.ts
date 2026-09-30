@@ -6,12 +6,12 @@
  * events no relay has acknowledged, whenever no cursor was persisted.
  *
  * The REPL is checked at its real construction seam (`createRuntime`, the
- * runtime's own answer). `motebit run` / `motebit serve` / `motebit delegate`
- * cannot be driven in a unit test (signed identity file, passphrase prompt,
- * runtime-host socket), so each of their `new MotebitRuntime(` sites is read
- * from source: its config literal must carry `syncConfigured:
- * CLI_SYNC_CONFIGURED`. The scan covers every non-test `.ts` under
- * `apps/cli/src` and names the sites it found.
+ * runtime's own answer). Every entry point's behaviour — push liveness,
+ * compaction safety, surfacing — is held by
+ * `every-configured-surface-pushes-962.test.ts`; this file keeps a secondary
+ * source guard: every non-test `new MotebitRuntime(` under `apps/cli/src`
+ * builds its config with `cliRuntimeConfig` (which sets `syncConfigured`
+ * last), and names the sites it found.
  */
 import { mkdtempSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -50,9 +50,9 @@ function sourceFiles(dir: string): string[] {
   return out;
 }
 
-/** Each `new MotebitRuntime(...)` under apps/cli/src: its file and its `syncConfigured` initializer. */
-function runtimeSites(): Array<{ file: string; syncConfigured: string | null }> {
-  const sites: Array<{ file: string; syncConfigured: string | null }> = [];
+/** Each `new MotebitRuntime(...)` under apps/cli/src: its file and the callee its config is built by. */
+function runtimeSites(): Array<{ file: string; builtBy: string | null }> {
+  const sites: Array<{ file: string; builtBy: string | null }> = [];
   for (const file of sourceFiles(SRC)) {
     const text = readFileSync(file, "utf-8");
     if (!text.includes("MotebitRuntime(")) continue;
@@ -64,19 +64,11 @@ function runtimeSites(): Array<{ file: string; syncConfigured: string | null }> 
         node.expression.text === "MotebitRuntime"
       ) {
         const arg = node.arguments?.[0];
-        let init: string | null = null;
-        if (arg && ts.isObjectLiteralExpression(arg)) {
-          for (const prop of arg.properties) {
-            if (
-              ts.isPropertyAssignment(prop) &&
-              ts.isIdentifier(prop.name) &&
-              prop.name.text === "syncConfigured"
-            ) {
-              init = prop.initializer.getText(sf);
-            }
-          }
-        }
-        sites.push({ file: relative(SRC, file), syncConfigured: init });
+        const builtBy =
+          arg && ts.isCallExpression(arg) && ts.isIdentifier(arg.expression)
+            ? arg.expression.text
+            : null;
+        sites.push({ file: relative(SRC, file), builtBy });
       }
       ts.forEachChild(node, visit);
     };
@@ -110,17 +102,17 @@ describe("#962 C2 — the CLI's syncConfigured wiring", () => {
     }
   });
 
-  it("every `new MotebitRuntime(` in apps/cli/src passes syncConfigured: CLI_SYNC_CONFIGURED", () => {
+  it("every `new MotebitRuntime(` in apps/cli/src builds its config with cliRuntimeConfig", () => {
+    // A secondary guard: `cliRuntimeConfig` sets `syncConfigured` LAST, so no
+    // spread at a site can override it. The behaviour of each site is held by
+    // every-configured-surface-pushes-962.test.ts.
     const sites = runtimeSites();
     // Aperture: the sites this scan found — the REPL, both daemons, delegate.
     expect(sites.map((s) => s.file).sort()).toEqual(
       ["daemon.ts", "daemon.ts", "runtime-factory.ts", join("subcommands", "delegate.ts")].sort(),
     );
     for (const site of sites) {
-      expect({ file: site.file, syncConfigured: site.syncConfigured }).toEqual({
-        file: site.file,
-        syncConfigured: "CLI_SYNC_CONFIGURED",
-      });
+      expect(site).toEqual({ file: site.file, builtBy: "cliRuntimeConfig" });
     }
   });
 });

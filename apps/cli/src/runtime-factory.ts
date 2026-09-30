@@ -89,7 +89,7 @@ import { CONFIG_DIR, loadFullConfig } from "./config.js";
 import { mkdirOwnerOnly } from "./durable-file.js";
 import { resolveRelayUrl } from "./subcommands/_helpers.js";
 import { createRelayEventTransport } from "./relay-sync-socket.js";
-import { CLI_SYNC_CONFIGURED } from "./sync-configured.js";
+import { cliRuntimeConfig } from "./sync-configured.js";
 
 export function getApiKey(
   provider: "anthropic" | "openai" | "google" | "deepseek" | "groq" = "anthropic",
@@ -800,58 +800,63 @@ export async function createRuntime(
   // `runtimeRef`; the assignment after construction wires it up. The
   // closure only fires per-turn, well after construction — no TDZ.
   let runtimeRef: MotebitRuntime | null = null;
+  // One resolver for every command that talks to a relay (#702: `rotate`
+  // resolved it differently and stranded the default-relay case).
+  const syncUrl = resolveRelayUrl(config);
   const runtime = new MotebitRuntime(
-    {
-      motebitId,
-      mcpServers,
-      // #962: compaction waits on the relay's acknowledged push cursor.
-      syncConfigured: CLI_SYNC_CONFIGURED,
-      // Renderer-aware logger: runtime warnings (delegation poll failures
-      // above all) flow through the terminal renderer as calm status/dim
-      // lines instead of the default console.warn JSON dump that corrupted
-      // the input line mid-edit (#456).
-      logger: createCliLogger(),
-      // Persistent blast-radius accumulator — load-bearing for the money
-      // meter's LIFETIME ceiling (an in-memory accumulator re-arms the
-      // delegator's total bound on every restart). The CLI hosts the
-      // canonical local runtime, so it always wires the durable store.
-      grantSpendStore: moteDb.grantSpendStore,
-      // The sovereign Solana rail, constructed by the caller from the
-      // decrypted identity seed. Its presence is what makes
-      // delegate_to_agent a REAL money tool: R4 risk hint, late-bound
-      // metering, and the wrapped P2P payment builder all key on it
-      // (enableInteractiveDelegation). Absent ⇒ delegation degrades to
-      // relay-mode honestly.
-      ...(solanaWallet ? { solanaWallet } : {}),
-      // #501 — sovereign override for capability-tiered tool admission.
-      // Default (absent/false): a minimal-tier model is never offered
-      // R4_MONEY tools; the owner can restore full exposure in config.
-      ...(loadFullConfig().offer_money_tools_to_minimal_models === true
-        ? { offerMoneyToolsToMinimalModels: true }
-        : {}),
-      policy: {
-        operatorMode: config.operator,
-        pathAllowList: config.allowedPaths,
-        maxRiskLevel: governance.policyApproval.maxRiskLevel,
-        requireApprovalAbove: governance.policyApproval.requireApprovalAbove,
-        denyAbove: governance.policyApproval.denyAbove,
-        budget: governance.policyBudget,
+    // #962: `syncConfigured` is decided by `cliRuntimeConfig`, last.
+    cliRuntimeConfig(
+      {
+        motebitId,
+        mcpServers,
+        // Renderer-aware logger: runtime warnings (delegation poll failures
+        // above all) flow through the terminal renderer as calm status/dim
+        // lines instead of the default console.warn JSON dump that corrupted
+        // the input line mid-edit (#456).
+        logger: createCliLogger(),
+        // Persistent blast-radius accumulator — load-bearing for the money
+        // meter's LIFETIME ceiling (an in-memory accumulator re-arms the
+        // delegator's total bound on every restart). The CLI hosts the
+        // canonical local runtime, so it always wires the durable store.
+        grantSpendStore: moteDb.grantSpendStore,
+        // The sovereign Solana rail, constructed by the caller from the
+        // decrypted identity seed. Its presence is what makes
+        // delegate_to_agent a REAL money tool: R4 risk hint, late-bound
+        // metering, and the wrapped P2P payment builder all key on it
+        // (enableInteractiveDelegation). Absent ⇒ delegation degrades to
+        // relay-mode honestly.
+        ...(solanaWallet ? { solanaWallet } : {}),
+        // #501 — sovereign override for capability-tiered tool admission.
+        // Default (absent/false): a minimal-tier model is never offered
+        // R4_MONEY tools; the owner can restore full exposure in config.
+        ...(loadFullConfig().offer_money_tools_to_minimal_models === true
+          ? { offerMoneyToolsToMinimalModels: true }
+          : {}),
+        policy: {
+          operatorMode: config.operator,
+          pathAllowList: config.allowedPaths,
+          maxRiskLevel: governance.policyApproval.maxRiskLevel,
+          requireApprovalAbove: governance.policyApproval.requireApprovalAbove,
+          denyAbove: governance.policyApproval.denyAbove,
+          budget: governance.policyBudget,
+        },
+        memoryGovernance: governance.memoryGovernance,
+        taskRouter: PLANNING_TASK_ROUTER,
+        // Late-bound runtime reference: the skillSelector hook fires
+        // per-turn (after construction completes), so the closure here
+        // resolves through `runtimeRef` cleanly. Without this indirection
+        // the CLI would have to hardcode the score, defeating the
+        // architectural contract that surfaces with real attestation
+        // channels (desktop, mobile) override via
+        // `runtime.setLocalHardwareAttestationClaim`. Default `0`
+        // (semiring zero) before the assignment lands; in practice the
+        // hook never fires before construction completes.
+        skillSelector: buildCliSkillSelectorHook(
+          () => runtimeRef?.getLocalHardwareAttestationScore() ?? 0,
+        ),
       },
-      memoryGovernance: governance.memoryGovernance,
-      taskRouter: PLANNING_TASK_ROUTER,
-      // Late-bound runtime reference: the skillSelector hook fires
-      // per-turn (after construction completes), so the closure here
-      // resolves through `runtimeRef` cleanly. Without this indirection
-      // the CLI would have to hardcode the score, defeating the
-      // architectural contract that surfaces with real attestation
-      // channels (desktop, mobile) override via
-      // `runtime.setLocalHardwareAttestationClaim`. Default `0`
-      // (semiring zero) before the assignment lands; in practice the
-      // hook never fires before construction completes.
-      skillSelector: buildCliSkillSelectorHook(
-        () => runtimeRef?.getLocalHardwareAttestationScore() ?? 0,
-      ),
-    },
+      { syncUrl },
+    ),
     {
       storage,
       renderer: new NullRenderer(),
@@ -860,10 +865,7 @@ export async function createRuntime(
     },
   );
 
-  // Wire sync — default relay is always available
-  // One resolver for every command that talks to a relay (#702: `rotate`
-  // resolved it differently and stranded the default-relay case).
-  const syncUrl = resolveRelayUrl(config);
+  // Wire sync — default relay is always available (`syncUrl` above).
   // Accept both env var names — they have been aliases for the life of the
   // CLI; see subcommands/_helpers.ts:getRelayAuthHeaders for the canonical
   // fallback order. create-motebit's scaffold writes MOTEBIT_API_TOKEN, so

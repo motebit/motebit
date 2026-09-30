@@ -483,6 +483,18 @@ describe.each(["sqlite", "idb"] as const)("#962 round 2 — %s store", (kind) =>
     expect([...(await present(store))].sort()).toEqual(ids);
   });
 
+  it("P3: a provider that never settles: compaction still settles, bounded, and deletes nothing", async () => {
+    const { store } = await openStore(kind);
+    const rt = runtimeOver(store, () => new Promise<boolean>(() => {}));
+    const ids = await appendN(store, 1, 5);
+    const outcome = await Promise.race([
+      rt.compact().then(() => "settled"),
+      new Promise((r) => setTimeout(() => r("hung"), 8_000)),
+    ]);
+    expect(outcome).toBe("settled");
+    expect([...(await present(store))].sort()).toEqual(ids);
+  }, 15_000);
+
   it("no relay configured (explicit false): compaction proceeds as before", async () => {
     const { store } = await openStore(kind);
     const rt = runtimeOver(store, false);

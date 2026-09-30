@@ -57,8 +57,9 @@ import { handleRelayCommandFrame } from "./relay-command-frame.js";
 import { fromHex, loadActiveSigningKey, IdentityKeyError } from "./identity.js";
 import { registerWithRelay, type RelayRegistrationHandle } from "./relay-registration.js";
 import { createRelaySyncSocket } from "./relay-sync-socket.js";
-import { CLI_SYNC_CONFIGURED } from "./sync-configured.js";
+import { cliRuntimeConfig, daemonRelayUrl } from "./sync-configured.js";
 import { createDaemonRelaySync } from "./daemon-relay-sync.js";
+import { startRunEventSync, startServeEventSync, type CliEventPush } from "./cli-event-push.js";
 import { enrollOnAnnounce } from "./machine-roster.js";
 import { taskResultBearer } from "./task-result-bearer.js";
 import {
@@ -201,23 +202,28 @@ export async function handleRun(config: CliConfig): Promise<void> {
   const provider = createProvider(config, personalityConfig);
   const governance = deriveGovernanceForRuntime(fullConfig.governance);
 
+  // The relay this daemon syncs with. Fallback chain: CLI arg > env var >
+  // config file. Decided before the runtime: its `syncConfigured` reads it.
+  const syncUrl = daemonRelayUrl(config, fullConfig, "run");
   const runtime = new MotebitRuntime(
-    {
-      motebitId,
-      mcpServers,
-      // #962: compaction waits on the relay's acknowledged push cursor.
-      syncConfigured: CLI_SYNC_CONFIGURED,
-      policy: {
-        operatorMode: config.operator,
-        maxRiskLevel: maxRiskAuto,
-        requireApprovalAbove: policyConfig.requireApprovalAbove,
-        denyAbove: policyConfig.denyAbove,
-        pathAllowList: config.allowedPaths,
-        budget: governance.policyBudget,
+    // #962: `syncConfigured` is decided by `cliRuntimeConfig`, last.
+    cliRuntimeConfig(
+      {
+        motebitId,
+        mcpServers,
+        policy: {
+          operatorMode: config.operator,
+          maxRiskLevel: maxRiskAuto,
+          requireApprovalAbove: policyConfig.requireApprovalAbove,
+          denyAbove: policyConfig.denyAbove,
+          pathAllowList: config.allowedPaths,
+          budget: governance.policyBudget,
+        },
+        memoryGovernance: governance.memoryGovernance,
+        taskRouter: PLANNING_TASK_ROUTER,
       },
-      memoryGovernance: governance.memoryGovernance,
-      taskRouter: PLANNING_TASK_ROUTER,
-    },
+      { syncUrl },
+    ),
     {
       storage: buildStorageAdapters(moteDb),
       renderer: new NullRenderer(),
@@ -394,12 +400,11 @@ export async function handleRun(config: CliConfig): Promise<void> {
     }
   }
 
-  // Wire agent task handler via WebSocket (if sync URL configured)
-  // Fallback chain: CLI arg > env var > config file
-  const syncUrl = config.syncUrl ?? process.env["MOTEBIT_SYNC_URL"] ?? fullConfig.sync_url;
+  // Wire agent task handler via WebSocket (if sync URL configured — `syncUrl` above)
   const syncToken = config.syncToken ?? process.env["MOTEBIT_SYNC_TOKEN"];
   let wsAdapter: WebSocketEventStoreAdapter | null = null;
   let daemonRegistration: RelayRegistrationHandle | undefined;
+  let runEventPush: CliEventPush | undefined;
   let privKeyBytes: Uint8Array | undefined;
 
   if (syncUrl != null && syncUrl !== "") {
@@ -757,8 +762,21 @@ export async function handleRun(config: CliConfig): Promise<void> {
       );
     }
 
-    // Also wire sync via the HTTP adapter
-    runtime.connectSync(eventTransport.remote);
+    // The daemon's own events sync through the same transport (#962;
+    // `startRunEventSync` is the wiring under test).
+    runEventPush = startRunEventSync(runtime, relaySync, {
+      syncUrl,
+      log: (line) => console.log(line),
+      ...(privKeyBytes && fullConfig.device_id && fullConfig.device_public_key
+        ? {
+            device: {
+              motebitId,
+              deviceId: fullConfig.device_id,
+              publicKeyHex: fullConfig.device_public_key,
+            },
+          }
+        : {}),
+    });
 
     // Hardware-attestation peer flow — production wiring. Without these
     // two setters the runtime hook in `bumpTrustFromReceipt` is dormant.
@@ -792,6 +810,7 @@ export async function handleRun(config: CliConfig): Promise<void> {
       // Best-effort deregistration from agent discovery registry (signed as us).
       if (daemonRegistration) void daemonRegistration.deregister().catch(() => {});
       scheduler.stop();
+      runEventPush?.stop();
       wsAdapter?.disconnect();
       // Release the runtime-host socket so a successor can elect.
       void runtimeHostServer.close().catch(() => {});
@@ -1123,29 +1142,34 @@ export async function handleServe(config: CliConfig): Promise<void> {
   const governance = deriveGovernanceForRuntime(fullConfig.governance);
   const hasIdentityPolicy = policyOverrides.maxRiskLevel !== undefined;
 
+  // The relay `serve` syncs with: the HTTP transport only (stdio serve never
+  // reaches one). Fallback chain: CLI arg > env var > config file.
+  const syncUrl = daemonRelayUrl(config, fullConfig, transport);
   const runtime = new MotebitRuntime(
-    {
-      motebitId,
-      mcpServers,
-      // #962: compaction waits on the relay's acknowledged push cursor.
-      syncConfigured: CLI_SYNC_CONFIGURED,
-      policy: {
-        operatorMode: config.operator,
-        pathAllowList: config.allowedPaths,
-        // When no identity file governs policy, fall back to config governance.
-        ...(hasIdentityPolicy
-          ? {}
-          : {
-              maxRiskLevel: governance.policyApproval.maxRiskLevel,
-              requireApprovalAbove: governance.policyApproval.requireApprovalAbove,
-              denyAbove: governance.policyApproval.denyAbove,
-            }),
-        budget: governance.policyBudget,
-        ...policyOverrides,
+    // #962: `syncConfigured` is decided by `cliRuntimeConfig`, last.
+    cliRuntimeConfig(
+      {
+        motebitId,
+        mcpServers,
+        policy: {
+          operatorMode: config.operator,
+          pathAllowList: config.allowedPaths,
+          // When no identity file governs policy, fall back to config governance.
+          ...(hasIdentityPolicy
+            ? {}
+            : {
+                maxRiskLevel: governance.policyApproval.maxRiskLevel,
+                requireApprovalAbove: governance.policyApproval.requireApprovalAbove,
+                denyAbove: governance.policyApproval.denyAbove,
+              }),
+          budget: governance.policyBudget,
+          ...policyOverrides,
+        },
+        memoryGovernance: governance.memoryGovernance,
+        taskRouter: PLANNING_TASK_ROUTER,
       },
-      memoryGovernance: governance.memoryGovernance,
-      taskRouter: PLANNING_TASK_ROUTER,
-    },
+      { syncUrl },
+    ),
     {
       storage: buildStorageAdapters(moteDb),
       renderer: new NullRenderer(),
@@ -1508,7 +1532,7 @@ export async function handleServe(config: CliConfig): Promise<void> {
   // Fallback chain: CLI arg > env var > config file
   let serveRegistration: RelayRegistrationHandle | undefined;
   let serveWsAdapter: WebSocketEventStoreAdapter | null = null;
-  const syncUrl = config.syncUrl ?? process.env["MOTEBIT_SYNC_URL"] ?? fullConfig.sync_url;
+  let serveEventPush: CliEventPush | undefined;
   if (transport === "http" && syncUrl) {
     // Wire WebSocket for task dispatch (same adapter as daemon mode)
     const masterToken = config.syncToken ?? process.env["MOTEBIT_API_TOKEN"];
@@ -1520,15 +1544,28 @@ export async function handleServe(config: CliConfig): Promise<void> {
 
       // The socket's catch-up (#927, #928): credentials per request, E2E
       // with the key this process already holds.
-      const serveEventTransport = (
-        await createDaemonRelaySync({
-          syncUrl,
-          motebitId,
-          deviceId: fullConfigForServe.device_id ?? undefined,
-          privateKey: () => servePrivateKey,
-          ...(masterToken != null ? { configuredToken: masterToken } : {}),
-        })
-      ).transport;
+      const serveRelaySync = await createDaemonRelaySync({
+        syncUrl,
+        motebitId,
+        deviceId: fullConfigForServe.device_id ?? undefined,
+        privateKey: () => servePrivateKey,
+        ...(masterToken != null ? { configuredToken: masterToken } : {}),
+      });
+      const serveEventTransport = serveRelaySync.transport;
+      // `serve`'s own events (#962; `startServeEventSync` is the wiring under test).
+      serveEventPush = startServeEventSync(runtime, serveRelaySync, {
+        syncUrl,
+        log,
+        ...(fullConfigForServe.device_id && publicKeyHex
+          ? {
+              device: {
+                motebitId,
+                deviceId: fullConfigForServe.device_id,
+                publicKeyHex,
+              },
+            }
+          : {}),
+      });
 
       serveWsAdapter = createRelaySyncSocket({
         syncUrl,
@@ -1787,6 +1824,7 @@ export async function handleServe(config: CliConfig): Promise<void> {
     if (typeof forceExit.unref === "function") forceExit.unref();
     try {
       if (serveRegistration) await serveRegistration.deregister();
+      serveEventPush?.stop();
       serveWsAdapter?.disconnect();
       await mcpServer.stop();
       // Release the runtime-host socket so a successor can elect.

@@ -44,9 +44,9 @@ import {
   buildToolRegistry,
   createRuntime,
   openMotebitDatabase,
-  bootstrapReplDevice,
   syncFailureLine,
 } from "./runtime-factory.js";
+import { replStartupSync, type CliEventPush } from "./cli-event-push.js";
 import { connectConfigMcpServers, runtimeMcpServersForRepl } from "./mcp-config-wiring.js";
 import { createRunLedgerReader } from "./run-ledger-reader.js";
 import { consumeStream } from "./stream.js";
@@ -932,41 +932,21 @@ async function main(): Promise<void> {
 
   // Enable interactive delegation if relay + signing keys are available
   const syncUrl = resolveRelayUrl(config, reloadedConfig);
+  let replPush: CliEventPush | undefined;
   // Initial sync — default relay is always available
   {
-    // Register device with relay BEFORE the first push and before enabling
-    // delegation. Signed device tokens — the event remote's included (#962)
-    // — require the device's public key in the relay's identity manager.
-    // Without this, verifySignedTokenForDevice rejects them with "Device not
-    // authorized": a fresh identity's first sync was refused.
-    if (syncUrl && privateKeyBytes && deviceId && reloadedConfig.device_public_key) {
-      const refused = await bootstrapReplDevice({
-        syncUrl,
-        motebitId,
-        deviceId,
-        publicKeyHex: reloadedConfig.device_public_key,
-      });
-      if (refused) console.warn(refused);
-    }
-
-    try {
-      console.log(dim("Syncing..."));
-      const result = await runtime.sync.sync();
-      // sync() never rejects: a refused push (401/403) is read here, never
-      // silent — it holds compaction until the relay acknowledges (#962).
-      const failed = syncFailureLine(runtime.sync);
-      if (failed) {
-        console.warn(failed);
-      } else {
-        console.log(dim(`Synced: pulled ${result.pulled} events, pushed ${result.pushed} events`));
-      }
-      if (result.conflicts.length > 0) {
-        console.log(`  [${result.conflicts.length} conflicts detected]`);
-      }
-    } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : String(err);
-      console.warn(`Sync failed (continuing offline): ${message}`);
-    }
+    // Register the device, then the first push, then the periodic push — in
+    // that order (#962; `replStartupSync` is the wiring under test).
+    replPush = await replStartupSync({
+      runtime,
+      syncUrl,
+      motebitId,
+      ...(syncUrl && privateKeyBytes && deviceId && reloadedConfig.device_public_key
+        ? { device: { deviceId, publicKeyHex: reloadedConfig.device_public_key } }
+        : {}),
+      log: (line) => console.log(dim(line)),
+      warn: (line) => console.warn(line),
+    });
 
     // Enable delegation with audience-scoped device tokens (submit vs query).
     // Falls back to raw API token only when device keys are unavailable.
@@ -1058,6 +1038,7 @@ async function main(): Promise<void> {
     destroyTerminal();
     // Release the runtime-host socket first so a successor can elect.
     await runtimeHostServer.close().catch(() => {});
+    replPush?.stop();
     runtime.stop();
     // Disconnect MCP servers
     await Promise.allSettled(mcpAdapters.map((a) => a.disconnect()));
