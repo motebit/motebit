@@ -3,6 +3,9 @@
   "remoteCache": {
     "signature": true
   },
+  "futureFlags": {
+    "longerSignatureKey": true
+  },
   "tasks": {
     "build": {
       "dependsOn": ["^build"],

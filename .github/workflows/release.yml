@@ -7,17 +7,13 @@ on:
 
 concurrency: ${{ github.workflow }}-${{ github.ref }}
 
-# Turbo remote cache — restores build outputs for packages whose inputs
-# haven't changed since the last passing run. Silently no-ops when the
-# secrets aren't set.
+# Turbo cache: LOCAL ONLY (#997). This workflow publishes to npm, so it builds
+# from source and never reads the shared remote cache — a published package
+# can never be assembled from a cache entry. No turbo token or signing key
+# here. Slower release, by design (docs/ops/RUNBOOK.md § Turbo remote cache).
+# Enforced by scripts/check-turbo-remote-cache.ts.
 env:
-  TURBO_TOKEN: ${{ secrets.TURBO_TOKEN }}
-  TURBO_TEAM: ${{ vars.TURBO_TEAM }}
-  TURBO_REMOTE_CACHE_SIGNATURE_KEY: ${{ secrets.TURBO_REMOTE_CACHE_SIGNATURE_KEY }}
-  # Remote cache WRITES only from a push to main — this workflow's only
-  # trigger, stated again so a new trigger cannot silently widen it (#997).
-  # Enforced by scripts/check-turbo-remote-cache.ts.
-  TURBO_CACHE: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'local:rw,remote:rw' || 'local:rw,remote:r' }}
+  TURBO_CACHE: local:rw
   # Surfaced so a step-level `if` can gate the GitHub App token step on the
   # App actually being configured. `secrets` can't be read in `if`, but `env`
   # (which may reference secrets) can — so this maps the secret's presence

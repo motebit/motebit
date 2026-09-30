@@ -666,7 +666,7 @@ function report(result: ProbeResult): string {
   lines.push(
     failed === 0
       ? `\n✓ turbo remote-cache signing: ${result.expectations.length} expectation(s) held across ${result.runs.length} turbo run(s) against a local fake cache.`
-      : `\n✗ turbo remote-cache signing: ${failed} of ${result.expectations.length} expectation(s) FAILED. Fix: set "remoteCache": { "signature": true } in turbo.json (docs/ops/RUNBOOK.md § Turbo remote cache) and re-run \`pnpm probe-turbo-remote-cache-signing\`.`,
+      : `\n✗ turbo remote-cache signing: ${failed} of ${result.expectations.length} expectation(s) FAILED. Fix: set "remoteCache": { "signature": true } and "futureFlags": { "longerSignatureKey": true } in turbo.json (docs/ops/RUNBOOK.md § Turbo remote cache) and re-run \`pnpm probe-turbo-remote-cache-signing\`.`,
   );
   return lines.join("\n");
 }

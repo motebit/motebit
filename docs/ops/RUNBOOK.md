@@ -735,20 +735,9 @@ Requires: Node >= 20, pnpm 9.15.
 
 ### Turbo remote cache
 
-Turbo caches every task's output locally and (when linked) in a shared Vercel Remote Cache. CI restores cached artifacts for packages whose inputs haven't changed since the last green build — typical speedup is 30–50% on a PR touching one package.
+Turbo caches every task's output locally and in a shared Vercel Remote Cache. **Only one job reads or writes the remote cache: `ci.yml`'s `check` job, on a push to `main`** (#997, operator decision 2026-09-30, "key only on main"). Every other run — pull requests, merge-queue (`merge_group`) runs, other refs, the other CI jobs, `publish.yml`, `release.yml`, developer machines — uses the local cache only.
 
-**One-time setup (per developer / per CI secret rotation):**
-
-```bash
-# 1. Authenticate. Opens a browser; choose the team that should own the cache.
-npx turbo login
-
-# 2. Link this repo to the team's cache. Writes .turbo/config.json
-#    (which is gitignored — the link is per-checkout).
-npx turbo link
-```
-
-**GitHub Actions secrets — required for CI to hit the shared cache.** All are optional; Turbo silently falls back to local-cache-only when absent, so CI never hard-fails on missing secrets. But when `TURBO_TEAM` is set to the _wrong_ slug, CI auth fails silently (logs one `Remote caching unavailable` warning, then every task cache-misses), so the runbook here is the authoritative source — **don't copy the slug from memory**, always verify against the Vercel API below.
+**Developers do not use the remote cache.** Do not run `npx turbo login` / `npx turbo link` for day-to-day work; `.husky/pre-push` exports `TURBO_CACHE=local:rw` regardless. The steps below are for the operator who provisions the CI writer token.
 
 **Token location (macOS vs Linux):**
 
@@ -775,17 +764,17 @@ curl -s -H "Authorization: Bearer $TOKEN" "https://api.vercel.com/v2/teams/$TEAM
 
 The Vercel team slug for this repo is **`motebit`** (not `hakimlabs` — an earlier version of this runbook had that wrong and sent a principal-engineer audit on a 10-minute detour setting the variable to a non-existent team, which the cache silently accepted then rejected at auth time). If `curl` returns a different slug in the future (team renamed, fresh turbo link), update this doc.
 
-**Set the three Actions values:**
+**Set the Actions values** (the token and key go into the `turbo-cache-writer` ENVIRONMENT, never the repository — see the OPERATOR steps below):
 
 ```bash
-gh secret set TURBO_TOKEN --body "$TOKEN"                                # from step above
-gh variable set TURBO_TEAM --body motebit                                # from `curl | .slug` above
-gh secret set TURBO_REMOTE_CACHE_SIGNATURE_KEY --body "$(openssl rand -hex 32)"
+gh variable set TURBO_TEAM --body motebit                                  # repo variable, not secret
+gh secret set TURBO_WRITER_TOKEN --env turbo-cache-writer --body "<new vercel token>"  # step (b)
+gh secret set TURBO_WRITER_SIGNATURE_KEY --env turbo-cache-writer --body "$(openssl rand -hex 32)"
 ```
 
 **Verify CI is hitting the cache (not silently falling back):**
 
-Look at any CI run's `Build` step log. Healthy output starts with lines like:
+Look at a `check` run on a **push to `main`** (the only run that uses the remote cache). Its `Build` step log should start with lines like:
 
 ```
 cache hit, replaying logs 5dbb80b84f320ebc
@@ -799,28 +788,58 @@ WARNING  • Remote caching unavailable (Authentication failed — check TURBO_T
 cache miss, executing <hash>
 ```
 
-If every task is `cache miss`, the auth is broken — check that `TURBO_TOKEN` is the current local token (tokens can be rotated on vercel.com) and that `TURBO_TEAM` matches the slug the API returns for your teamId.
+If every task on a `main` push is `cache miss`, the auth is broken — check that the `turbo-cache-writer` environment secret `TURBO_WRITER_TOKEN` is a live Vercel token (tokens can be rotated on vercel.com) and that `TURBO_TEAM` matches the slug the API returns for your teamId. (On pull requests every task is a `cache miss` by design.)
 
-**Signing and who may write (#997).** `turbo.json` sets `"remoteCache": { "signature": true }`, so every remote entry carries an HMAC (`x-artifact-tag`) over the artifact, keyed by `TURBO_REMOTE_CACHE_SIGNATURE_KEY`, and turbo refuses (treats as a cache miss, then rebuilds) any entry that is unsigned or signed with a different key. Before 2026-09-30 that line was missing: turbo silently ignored the key CI had set, uploaded every artifact unsigned and replayed unsigned entries — so anyone holding `TURBO_TOKEN` could plant a `dist/` that a later CI, publish or release run shipped. This section used to call the cache HMAC-signed; it was not.
+**Signing (#997).** `turbo.json` sets `"remoteCache": { "signature": true }`, so every remote entry carries an HMAC (`x-artifact-tag`) over the artifact, keyed by `TURBO_REMOTE_CACHE_SIGNATURE_KEY`, and turbo treats any entry that is unsigned or signed with a different key as a cache miss and rebuilds. It also sets `"futureFlags": { "longerSignatureKey": true }`: without it, an EMPTY key — what `${{ secrets.X }}` evaluates to when the secret is unset — makes turbo sign with a zero-length HMAC key anyone can reproduce and upload anyway, with only a warning. With it, an empty or shorter-than-32-byte key is fatal before any artifact request. Before 2026-09-30 the `signature` line was missing: turbo ignored the key CI had set, uploaded every artifact unsigned and replayed unsigned entries. This section used to call the cache HMAC-signed; it was not.
 
-The remote cache is **written only by trusted runs on `main`** and read by everything else. Each workflow that holds `TURBO_TOKEN` sets a workflow-level `TURBO_CACHE`:
+**Key only on `main`.** Signing stops a job that does not hold the key. It cannot stop one that does. Until this change every same-repo `pull_request` job received `TURBO_TOKEN` and the signing key, and ran the PR's OWN copy of the workflow, so a branch could add a job that uploads a correctly signed entry under a hash `main` later reuses. So the token and the key now exist in exactly one place:
 
-| Workflow      | Remote **write** (`local:rw,remote:rw`) | Everything else (`local:rw,remote:r`)               |
-| ------------- | --------------------------------------- | --------------------------------------------------- |
-| `ci.yml`      | `push` to `main`                        | every `pull_request` run                            |
-| `release.yml` | `push` to `main` (its only trigger)     | — (stated anyway, so a new trigger cannot widen it) |
-| `publish.yml` | `workflow_dispatch` on `main`           | a dispatch from any other ref                       |
+| Where                                                                  | Remote cache                                       | Holds token + key                          |
+| ---------------------------------------------------------------------- | -------------------------------------------------- | ------------------------------------------ |
+| `ci.yml` job `check`, **push to `main`**                               | read + write, signed (`local:rw,remote:rw`)        | yes, from environment `turbo-cache-writer` |
+| `ci.yml` job `check` on `pull_request` / `merge_group` / any other ref | none (`local:rw`)                                  | no (secrets resolve to `""`)               |
+| every other `ci.yml` job, any event                                    | none                                               | no                                         |
+| `release.yml`, `publish.yml` (npm publish)                             | none — build from source (`TURBO_CACHE: local:rw`) | no                                         |
+| developer machines (`.husky/pre-push`)                                 | none (`TURBO_CACHE=local:rw`)                      | no — and old `turbo login` tokens revoked  |
 
-`.husky/pre-push` exports `TURBO_CACHE=local:rw,remote:r`, so a developer machine never writes the shared cache even after `turbo login`. **Developers do not need, and should not hold, `TURBO_REMOTE_CACHE_SIGNATURE_KEY`.** With signing on and no key, turbo does not fail the run: it logs `WARNING artifact signature error`, uploads nothing, and treats remote entries as misses (it builds locally). `pnpm check-turbo-remote-cache` fails if `turbo.json` loses `signature: true`, if a `TURBO_TOKEN` workflow can write from a non-main ref or a `pull_request*` event, or if any turbo call re-opens writes with `--force`, `--remote-only` or a remote-writing `--cache=`. `pnpm probe-turbo-remote-cache-signing` re-proves the signing behaviour against a local fake cache (no token or key needed). The gate self-tests run it too.
+- The `check` job references the environment as `${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'turbo-cache-writer' || '' }}` (an empty string means no environment). The environment's deployment-branch rule is `main` only, so **a PR that edits its own workflow to reference `turbo-cache-writer` is refused by GitHub** (the job fails before it gets the secrets). `pnpm check-turbo-remote-cache` also refuses it at review time: only a job whose reference can resolve solely on a push to `main` may name the environment.
+- The secrets are named `TURBO_WRITER_TOKEN` and `TURBO_WRITER_SIGNATURE_KEY`. No repo-level secret carries these names, so outside the environment they resolve to `""`: turbo then makes zero remote requests (probe scenarios `pr-no-credentials` and `writer-before-environment`). **Never create repo-level secrets with these names.**
+- **Release trade-off.** `release.yml` and `publish.yml` never read the remote cache, so every npm publish rebuilds the whole graph from source. That is slower (a full cold `pnpm build`, several minutes) but a published package can never be assembled from a cache entry. PR CI and the non-`check` jobs also lose the remote cache (slower PR runs); `main`'s `check` job keeps it.
+- `pnpm check-turbo-remote-cache` parses every workflow as YAML and fails if: `turbo.json` loses `signature` or `longerSignatureKey`; any job other than the main-push writer (or any workflow-level `env`) references `TURBO_TOKEN`, `TURBO_REMOTE_CACHE_SIGNATURE_KEY` or a `secrets.TURBO_*`; anything outside the writer writes the remote via `TURBO_CACHE`, `TURBO_FORCE`, `TURBO_REMOTE_ONLY`, `TURBO_REMOTE_CACHE_READ_ONLY=false`, a `$GITHUB_ENV` write, or a turbo flag in any invocation form (`turbo`, `pnpm [exec|dlx] turbo`, `npx turbo@x`, `node_modules/.bin/turbo`, a root turbo script) — `--cache=…remote:w`, `--force`, `--remote-only`, `--remote-cache-read-only=false`; or `publish.yml` / `release.yml` can read the remote. `pnpm probe-turbo-remote-cache-signing` re-proves the turbo behaviour against a local fake cache (no token or key needed); the gate self-tests run it too.
 
-Signing cannot stop a job that holds the key. Same-repo `pull_request` jobs still receive `TURBO_TOKEN` and the key as secrets, so a branch that edits a workflow could still write. `TURBO_CACHE` removes the write path from every workflow as written. It does not stop a job that rewrites its own workflow. Closing that needs a read-only token for untrusted refs (below).
+**If this change merges BEFORE the environment exists.** Fail safe. On a push to `main` GitHub auto-creates an empty `turbo-cache-writer` environment on first reference. It has no secrets, and no repo-level secret has the `TURBO_WRITER_*` names, so the `check` job gets `TURBO_TOKEN=""` and `TURBO_REMOTE_CACHE_SIGNATURE_KEY=""`. turbo prints "Remote caching disabled", builds locally, sends **zero** requests to the remote and writes nothing (probe scenario `writer-before-environment`). If only the token is set and the key is missing or short, turbo fails the `check` job with **no** artifact request (probe scenarios `empty-key-write`, `short-key-write`). It never writes an unsigned or empty-key entry. An auto-created environment has **no** branch rule until step (a) adds it. It holds no secrets until step (b), so do (a) before (b).
 
-> **OPERATOR ACTION REQUIRED — not done by the #997 change.** The cache contents from before the fix are unsigned and must be treated as untrusted:
+> **OPERATOR ACTION REQUIRED — in this order. Not done by the #997 change; the builder has no access to repository settings.**
 >
-> 1. **Rotate `TURBO_TOKEN`** (vercel.com → Account Settings → Tokens: revoke the old token and create a new one), then `gh secret set TURBO_TOKEN`. Every same-repo PR run could read the old one.
-> 2. **Rotate `TURBO_REMOTE_CACHE_SIGNATURE_KEY`** (`gh secret set TURBO_REMOTE_CACHE_SIGNATURE_KEY --body "$(openssl rand -hex 32)"`). Same exposure. A new key also makes every entry signed under the old key a miss.
-> 3. **Purge the old unsigned entries.** Use Vercel → the `motebit` team → Settings → Remote Caching → purge/clear, or let them age out. With signing on, turbo already refuses them (they are misses), so purging is hygiene, not the fix. The first `main` push after the purge repopulates the cache, signed.
-> 4. **Optional hardening:** give `pull_request` runs a read-only credential (a separate read-scoped token, or none at all) so a workflow-editing branch cannot write even by rewriting its own job.
+> **(a) Create the environment.** GitHub → repo Settings → Environments → **New environment** → name `turbo-cache-writer` (or open it if a `main` push already auto-created it). Deployment branches and tags → **Selected branches and tags** → add rule `main` (branch). No tags. Required reviewers are optional. Adding them makes every `main` CI run wait for an approval, so leave them off unless that is wanted. Verify: `gh api repos/motebit/motebit/environments/turbo-cache-writer --jq '.deployment_branch_policy'` shows `custom_branch_policies: true`, and `gh api repos/motebit/motebit/environments/turbo-cache-writer/deployment-branch-policies --jq '.branch_policies[].name'` prints only `main`.
+>
+> **(b) New credentials, as ENVIRONMENT secrets.** Create a NEW Vercel token (vercel.com → Account Settings → Tokens → Create, scope: the `motebit` team). Generate a NEW signing key of at least 32 bytes. Set both on the environment only:
+>
+> ```bash
+> gh secret set TURBO_WRITER_TOKEN --env turbo-cache-writer --body "<new vercel token>"
+> gh secret set TURBO_WRITER_SIGNATURE_KEY --env turbo-cache-writer --body "$(openssl rand -hex 32)"
+> gh secret list --env turbo-cache-writer   # shows exactly these two
+> ```
+>
+> **(c) Delete the repo-level secrets.** Every same-repo PR job could read them.
+>
+> ```bash
+> gh secret delete TURBO_TOKEN
+> gh secret delete TURBO_REMOTE_CACHE_SIGNATURE_KEY
+> gh secret list | grep TURBO_ || echo "no repo-level TURBO_* secrets"   # must print the echo
+> ```
+>
+> Keep the `TURBO_TEAM` repo **variable**. It is not secret.
+>
+> **(d) Revoke the old tokens.** vercel.com → Account Settings → Tokens: revoke the token that was in the repo-level `TURBO_TOKEN`. Also revoke every developer `turbo login` token: on each developer machine run `npx turbo logout`, and on vercel.com revoke any token named for a `turbo login` / CLI session. Any live token can read the shared cache and upload to it. Without the new key its uploads are misses for `main`, but it can still fill the cache with junk and a leaked key would make them hits.
+>
+> **(e) Purge the old cache.** Everything written before the new key is unsigned or signed with the old key. Turbo already treats it as a miss, so this is hygiene, not the fix. On vercel.com → team `motebit` → Settings → **Caching** (Remote Caching) → **Purge Cache**, or wait for Vercel's retention to age it out. The first `main` push after the purge repopulates it, signed.
+>
+> **(f) Verify.**
+>
+> - A **push to `main`**: the `check` job shows environment `turbo-cache-writer` in the run summary. Its `Build` log shows `Remote caching enabled` and `cache hit` / `cache miss` lines, with no `artifact signature error` and no `too short` warning. Vercel → Caching shows new artifacts after the run.
+> - A **pull request** (or `merge_group`) run: the `check` job shows no environment. Its log shows `Remote caching disabled` and every task `cache miss, executing`. The run makes no remote requests (the remote-cache usage graph on vercel.com does not move for it).
+> - Locally, the same behaviour: `pnpm probe-turbo-remote-cache-signing` (12 scenarios, ~10 s, no token) and `pnpm check-turbo-remote-cache`.
 
 ---
 

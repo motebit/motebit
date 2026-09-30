@@ -47,7 +47,7 @@ describe("judgeTurboCacheValue", () => {
       ),
     ).toBeNull();
     expect(judgeTurboCacheValue('"local:rw,remote:r"')).toBeNull();
-    expect(judgeTurboCacheValue("local:rw # no remote")).toBeNull();
+    expect(judgeTurboCacheValue("local:rw")).toBeNull();
   });
   it("rejects an unconditional remote write", () => {
     expect(judgeTurboCacheValue("local:rw,remote:rw")).toMatch(/unconditionally/);
@@ -126,83 +126,118 @@ describe("turbo invocations", () => {
 });
 
 describe("checkTurboJson", () => {
-  it("requires remoteCache.signature === true", () => {
-    expect(checkTurboJson(JSON.stringify({ tasks: {} }))).toHaveLength(1);
-    expect(checkTurboJson(JSON.stringify({ remoteCache: { signature: false } }))).toHaveLength(1);
-    expect(checkTurboJson(JSON.stringify({ remoteCache: { signature: "true" } }))).toHaveLength(1);
-    expect(checkTurboJson(JSON.stringify({ remoteCache: { signature: true } }))).toEqual([]);
+  it("requires remoteCache.signature AND futureFlags.longerSignatureKey", () => {
+    const flags = { futureFlags: { longerSignatureKey: true } };
+    expect(checkTurboJson(JSON.stringify({ tasks: {}, ...flags }))).toHaveLength(1);
+    expect(
+      checkTurboJson(JSON.stringify({ remoteCache: { signature: false }, ...flags })),
+    ).toHaveLength(1);
+    expect(
+      checkTurboJson(JSON.stringify({ remoteCache: { signature: "true" }, ...flags })),
+    ).toHaveLength(1);
+    expect(checkTurboJson(JSON.stringify({ remoteCache: { signature: true } }))).toHaveLength(1);
+    expect(checkTurboJson(JSON.stringify({ remoteCache: { signature: true }, ...flags }))).toEqual(
+      [],
+    );
     expect(checkTurboJson("{")).toHaveLength(1);
   });
 });
 
-const wf = (env: string, run = "pnpm build"): string =>
-  `name: X\non:\n  push:\n    branches: [main]\n  pull_request:\n    branches: [main]\n\nenv:\n  TURBO_TOKEN: \${{ secrets.TURBO_TOKEN }}\n${env}\njobs:\n  a:\n    runs-on: ubuntu-latest\n    steps:\n      - run: ${run}\n`;
+describe("checkWorkflow (key only on main)", () => {
+  const withCheckEnv = (extra: string): string =>
+    KEY_ONLY_ON_MAIN_CI.replace(
+      `      TURBO_CACHE: ${WRITER_CACHE}\n`,
+      `      TURBO_CACHE: ${WRITER_CACHE}\n${extra}`,
+    );
 
-describe("checkWorkflow", () => {
-  it("passes the canonical shape", () => {
-    const v = checkWorkflow("ci.yml", wf(`  TURBO_CACHE: ${GOOD_CI}`), SCRIPTS);
+  it("passes the canonical shape and names the writer", () => {
+    const v = checkWorkflow(".github/workflows/ci.yml", KEY_ONLY_ON_MAIN_CI, SCRIPTS);
     expect(v.violations).toEqual([]);
+    expect(v.writerJobs).toEqual(["ci.yml#check"]);
     expect(v.holdsToken).toBe(true);
-    expect(v.turboLines).toBe(1);
+    expect(v.turboLines).toBe(3);
   });
-  it("flags a token holder with no workflow-level TURBO_CACHE (turbo default = rw)", () => {
-    expect(checkWorkflow("ci.yml", wf(""), SCRIPTS).violations.join()).toMatch(
-      /declares no workflow-level/,
+  it("admits the literal environment name only in a push-to-[main]-only workflow", () => {
+    const pushOnly = `on:\n  push:\n    branches: [main]\njobs:\n  w:\n    environment: turbo-cache-writer\n    env:\n      TURBO_TOKEN: \${{ secrets.TURBO_WRITER_TOKEN }}\n    steps:\n      - run: pnpm build\n`;
+    expect(checkWorkflow("w.yml", pushOnly, SCRIPTS).violations).toEqual([]);
+    const tags = pushOnly.replace(
+      "    branches: [main]\n",
+      "    branches: [main]\n    tags: ['v*']\n",
+    );
+    expect(checkWorkflow("w.yml", tags, SCRIPTS).violations.join()).toMatch(/turbo-cache-writer/);
+    const mq = pushOnly.replace("on:\n", "on:\n  merge_group:\n");
+    expect(checkWorkflow("w.yml", mq, SCRIPTS).violations.join()).toMatch(/turbo-cache-writer/);
+    const widened = KEY_ONLY_ON_MAIN_CI.replace(
+      "github.event_name == 'push' && github.ref == 'refs/heads/main' && 'turbo-cache-writer'",
+      "github.ref == 'refs/heads/main' && 'turbo-cache-writer'",
+    );
+    expect(checkWorkflow("ci.yml", widened, SCRIPTS).violations.join()).toMatch(
+      /turbo-cache-writer/,
     );
   });
-  it("does not count a job-level TURBO_CACHE as the workflow-level policy", () => {
-    const text = wf("").replace(
-      "    runs-on:",
-      `    env:\n      TURBO_CACHE: local:rw,remote:r\n    runs-on:`,
-    );
-    expect(checkWorkflow("ci.yml", text, SCRIPTS).violations.join()).toMatch(
-      /declares no workflow-level/,
+  it("the writer takes only the environment-only secret names", () => {
+    const legacy = KEY_ONLY_ON_MAIN_CI.replace("secrets.TURBO_WRITER_TOKEN", "secrets.TURBO_TOKEN");
+    expect(checkWorkflow("ci.yml", legacy, SCRIPTS).violations.join()).toMatch(
+      /TURBO_WRITER_TOKEN/,
     );
   });
-  it("flags a job-level override that writes", () => {
-    const text = wf(`  TURBO_CACHE: ${GOOD_CI}`).replace(
-      "    runs-on:",
-      `    env:\n      TURBO_CACHE: local:rw,remote:rw\n    runs-on:`,
+  it("the writer's TURBO_CACHE is still held to main + a trusted event", () => {
+    const text = KEY_ONLY_ON_MAIN_CI.replace(
+      `TURBO_CACHE: ${WRITER_CACHE}`,
+      "TURBO_CACHE: ${{ github.ref == 'refs/heads/main' && 'local:rw,remote:rw' || 'local:rw' }}",
     );
-    expect(checkWorkflow("ci.yml", text, SCRIPTS).violations.join()).toMatch(/unconditionally/);
+    expect(checkWorkflow("ci.yml", text, SCRIPTS).violations.join()).toMatch(/pull_request_target/);
   });
-  it("flags a flag that overrides the env", () => {
+  it("flags a remote-writing TURBO_CACHE, flag or variable on a non-writer job", () => {
+    const lint = (extra: string, run = "pnpm build"): string =>
+      KEY_ONLY_ON_MAIN_CI.replace(
+        "  lint:\n    runs-on: ubuntu-latest\n    steps:\n      - run: pnpm build\n",
+        `  lint:\n    runs-on: ubuntu-latest\n${extra}    steps:\n      - run: ${run}\n`,
+      );
+    const bad = (t: string): string => checkWorkflow("ci.yml", t, SCRIPTS).violations.join();
+    expect(bad(lint("    env:\n      TURBO_CACHE: local:rw,remote:rw\n"))).toMatch(/TURBO_CACHE/);
+    expect(bad(lint("    env:\n      TURBO_CACHE: ${{ vars.X }}\n"))).toMatch(/TURBO_CACHE/);
+    expect(bad(lint("    env: ${{ fromJSON(vars.E) }}\n"))).toMatch(/expression/);
+    expect(bad(lint("", "pnpm build --force"))).toMatch(/--force/);
+    expect(bad(lint("", "pnpm turbo run lint --remote-only"))).toMatch(/--remote-only/);
+    expect(bad(lint("", "turbo run lint --remote-cache-read-only=false"))).toMatch(
+      /read-only=false/,
+    );
+    expect(bad(lint("", "TURBO_CACHE=remote:rw pnpm build"))).toMatch(/shell assignment/);
+    expect(bad(lint("", "export TURBO_REMOTE_ONLY=1"))).toMatch(/TURBO_REMOTE_ONLY/);
+    expect(bad(lint("", "TURBO_TOKEN=$T pnpm build"))).toMatch(/TURBO_TOKEN/);
+    expect(
+      bad(lint("", "cat >> $GITHUB_ENV <<EOF\n          TURBO_FORCE=1\n          EOF")),
+    ).toMatch(/GITHUB_ENV/);
+    expect(
+      bad(lint("    container:\n      image: node\n      env:\n        TURBO_FORCE: 1\n")),
+    ).toMatch(/container\.env\.TURBO_FORCE/);
+    // Harmless look-alikes stay green.
+    expect(bad(lint("", "git push --force"))).toBe("");
+    expect(bad(lint("", "pnpm exec turbo run lint --cache-dir=.turbo --cache=local:rw"))).toBe("");
+  });
+  it("signing switched off is flagged anywhere, the writer included", () => {
     expect(
       checkWorkflow(
         "ci.yml",
-        wf(`  TURBO_CACHE: ${GOOD_CI}`, "pnpm exec turbo run build --cache=local:rw,remote:rw"),
-        SCRIPTS,
-      ).violations.join(),
-    ).toMatch(/overrides TURBO_CACHE/);
-    expect(
-      checkWorkflow("ci.yml", wf(`  TURBO_CACHE: ${GOOD_CI}`, "pnpm build --force"), SCRIPTS)
-        .violations,
-    ).toHaveLength(1);
-  });
-  it("flags an inline TURBO_CACHE that writes, and signing switched off", () => {
-    expect(
-      checkWorkflow(
-        "ci.yml",
-        wf(`  TURBO_CACHE: ${GOOD_CI}`, "TURBO_CACHE=remote:rw pnpm build"),
-        SCRIPTS,
-      ).violations.join(),
-    ).toMatch(/inline TURBO_CACHE/);
-    expect(
-      checkWorkflow(
-        "ci.yml",
-        wf(`  TURBO_CACHE: ${GOOD_CI}\n  TURBO_SIGNATURE: "0"`),
+        withCheckEnv("      TURBO_SIGNATURE: 'false'\n"),
         SCRIPTS,
       ).violations.join(),
     ).toMatch(/signing OFF/);
+  });
+  it("unparseable YAML and duplicate keys fail closed", () => {
+    expect(checkWorkflow("x.yml", "on: [push\njobs: {", SCRIPTS).violations.join()).toMatch(
+      /not parseable/,
+    );
     expect(
       checkWorkflow(
-        "ci.yml",
-        wf(`  TURBO_CACHE: ${GOOD_CI}\n  TURBO_REMOTE_ONLY: "true"`),
+        "x.yml",
+        "on: push\njobs:\n  a:\n    env:\n      TURBO_CACHE: local:rw\n      TURBO_CACHE: remote:rw\n",
         SCRIPTS,
       ).violations.join(),
-    ).toMatch(/re-opens remote writes/);
+    ).toMatch(/not parseable/);
   });
-  it("ignores a workflow without the token, and comment lines", () => {
+  it("ignores a workflow without turbo, and YAML comments", () => {
     const v = checkWorkflow("x.yml", "on:\n  push:\n# TURBO_CACHE: remote:rw\njobs: {}\n", SCRIPTS);
     expect(v.violations).toEqual([]);
     expect(v.holdsToken).toBe(false);
@@ -213,19 +248,21 @@ describe("checkPrePush / checkPackageScripts", () => {
   it("requires the hook to pin a non-writing TURBO_CACHE", () => {
     expect(checkPrePush("pnpm build\n", SCRIPTS).join()).toMatch(/no `export TURBO_CACHE/);
     expect(checkPrePush("export TURBO_CACHE=local:rw,remote:rw\n", SCRIPTS).join()).toMatch(
-      /write the remote/,
+      /writes the remote/,
     );
-    expect(checkPrePush("export TURBO_CACHE=local:rw,remote:r\npnpm build\n", SCRIPTS)).toEqual([]);
+    expect(checkPrePush("export TURBO_CACHE=local:rw\npnpm build\n", SCRIPTS)).toEqual([]);
     expect(
-      checkPrePush(
-        "export TURBO_CACHE=local:rw,remote:r\npnpm turbo run test --force\n",
-        SCRIPTS,
-      ).join(),
+      checkPrePush("export TURBO_CACHE=local:rw\npnpm turbo run test --force\n", SCRIPTS).join(),
     ).toMatch(/--force/);
   });
   it("rejects a remote-writing flag in a root script", () => {
     expect(
       checkPackageScripts(JSON.stringify({ scripts: { build: "turbo run build --force" } })),
+    ).toHaveLength(1);
+    expect(
+      checkPackageScripts(
+        JSON.stringify({ scripts: { b: "npx turbo@2 run build --cache=remote:rw" } }),
+      ),
     ).toHaveLength(1);
     expect(checkPackageScripts(JSON.stringify({ scripts: { build: "turbo run build" } }))).toEqual(
       [],
@@ -233,10 +270,10 @@ describe("checkPrePush / checkPackageScripts", () => {
   });
 });
 
-describe("runTurboRemoteCacheGate against a fixture repository", () => {
+describe("runTurboRemoteCacheGate CLI", () => {
   const dirs: string[] = [];
   afterAll(() => dirs.forEach((d) => rmSync(d, { recursive: true, force: true })));
-  const fixture = (opts: { signature: boolean; cache: boolean; hookPin: boolean }): string => {
+  const fixture = (opts: { signature: boolean; writer: boolean; hookPin: boolean }): string => {
     const d = mkdtempSync(join(tmpdir(), "turbo-gate-"));
     dirs.push(d);
     mkdirSync(join(d, ".github", "workflows"), { recursive: true });
@@ -244,7 +281,13 @@ describe("runTurboRemoteCacheGate against a fixture repository", () => {
     writeFileSync(
       join(d, "turbo.json"),
       JSON.stringify(
-        opts.signature ? { tasks: {}, remoteCache: { signature: true } } : { tasks: {} },
+        opts.signature
+          ? {
+              tasks: {},
+              remoteCache: { signature: true },
+              futureFlags: { longerSignatureKey: true },
+            }
+          : { tasks: {} },
       ),
     );
     writeFileSync(
@@ -253,48 +296,56 @@ describe("runTurboRemoteCacheGate against a fixture repository", () => {
     );
     writeFileSync(
       join(d, ".husky", "pre-push"),
-      `${opts.hookPin ? "export TURBO_CACHE=local:rw,remote:r\n" : ""}pnpm build\n`,
+      `${opts.hookPin ? "export TURBO_CACHE=local:rw\n" : ""}pnpm build\n`,
     );
     writeFileSync(
       join(d, ".github", "workflows", "ci.yml"),
-      wf(opts.cache ? `  TURBO_CACHE: ${GOOD_CI}` : ""),
+      opts.writer
+        ? KEY_ONLY_ON_MAIN_CI
+        : KEY_ONLY_ON_MAIN_CI.replace(`    environment: ${WRITER_ENV}\n`, ""),
     );
     writeFileSync(join(d, ".github", "workflows", "other.yml"), "on:\n  push:\njobs: {}\n");
     return d;
   };
+  const cli = (d: string) =>
+    spawnSync("npx", ["tsx", "scripts/check-turbo-remote-cache.ts", "--root", d], {
+      cwd: ROOT,
+      encoding: "utf8",
+    });
 
   it("is green on a compliant repository and discloses its aperture", () => {
-    const d = fixture({ signature: true, cache: true, hookPin: true });
+    const d = fixture({ signature: true, writer: true, hookPin: true });
     const r = runTurboRemoteCacheGate(d);
     expect(r.violations).toEqual([]);
     expect(r.workflows).toBe(2);
     expect(r.tokenHolders).toEqual(["ci.yml"]);
-    const cli = spawnSync("npx", ["tsx", "scripts/check-turbo-remote-cache.ts", "--root", d], {
-      cwd: ROOT,
-      encoding: "utf8",
-    });
-    expect(cli.status).toBe(0);
-    expect(cli.stdout).toMatch(/2 workflow\(s\) scanned/);
+    const out = cli(d);
+    expect(out.status).toBe(0);
+    expect(out.stdout).toMatch(/2 workflow\(s\), 2 job\(s\) parsed as YAML/);
+    expect(out.stdout).toMatch(/ci\.yml#check/);
+    expect(out.stdout).toMatch(/npx turbo@x/);
+    expect(out.stdout).toMatch(/\$GITHUB_ENV/);
+    expect(out.stdout).toMatch(/Not examined/);
   });
 
   it("goes red — with a repair instruction — for each broken half", () => {
     expect(
-      runTurboRemoteCacheGate(fixture({ signature: false, cache: true, hookPin: true })).violations,
-    ).toHaveLength(1);
+      runTurboRemoteCacheGate(fixture({ signature: false, writer: true, hookPin: true }))
+        .violations,
+    ).toHaveLength(2);
+    // Without the writer environment the job's token and key are violations.
     expect(
-      runTurboRemoteCacheGate(fixture({ signature: true, cache: false, hookPin: true })).violations,
-    ).toHaveLength(1);
+      runTurboRemoteCacheGate(fixture({ signature: true, writer: false, hookPin: true })).violations
+        .length,
+    ).toBeGreaterThanOrEqual(2);
     expect(
-      runTurboRemoteCacheGate(fixture({ signature: true, cache: true, hookPin: false })).violations,
+      runTurboRemoteCacheGate(fixture({ signature: true, writer: true, hookPin: false }))
+        .violations,
     ).toHaveLength(1);
-    const d = fixture({ signature: false, cache: false, hookPin: false });
-    const cli = spawnSync("npx", ["tsx", "scripts/check-turbo-remote-cache.ts", "--root", d], {
-      cwd: ROOT,
-      encoding: "utf8",
-    });
-    expect(cli.status).toBe(1);
-    expect(cli.stderr).toMatch(/Fix:/);
-    expect(cli.stderr).toMatch(/remoteCache/);
+    const out = cli(fixture({ signature: false, writer: false, hookPin: false }));
+    expect(out.status).toBe(1);
+    expect(out.stderr).toMatch(/Fix:/);
+    expect(out.stderr).toMatch(/turbo-cache-writer/);
   });
 });
 
@@ -441,7 +492,7 @@ describe("key only on main — repository fixtures", () => {
       repo({ workflows: { "ci.yml": KEY_ONLY_ON_MAIN_CI, "publish.yml": PUBLISH } }),
     );
     expect(r.violations).toEqual([]);
-    expect((r as unknown as { writerJobs: string[] }).writerJobs).toEqual(["ci.yml#check"]);
+    expect(r.writerJobs).toEqual(["ci.yml#check"]);
   });
 
   it("C1: turbo.json without futureFlags.longerSignatureKey is red", () => {
@@ -471,9 +522,7 @@ describe("key only on main — repository fixtures", () => {
 
 describe("this repository", () => {
   it("passes check-turbo-remote-cache with the key only on main", () => {
-    const r = runTurboRemoteCacheGate(ROOT) as ReturnType<typeof runTurboRemoteCacheGate> & {
-      writerJobs?: string[];
-    };
+    const r = runTurboRemoteCacheGate(ROOT);
     expect(r.violations).toEqual([]);
     // Only ci.yml's `check` job, on a push to main, holds the writer
     // environment; publish.yml and release.yml hold no turbo credential.
