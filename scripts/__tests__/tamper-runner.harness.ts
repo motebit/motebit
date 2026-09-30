@@ -11,6 +11,7 @@
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 import type { ChildProcess } from "node:child_process";
 import {
+  chmodSync,
   cpSync,
   existsSync,
   mkdirSync,
@@ -38,6 +39,12 @@ export interface Fx {
   repo: string;
   /** The driver's TMPDIR: where the runner puts its motebit-tamper-* copies. */
   tmp: string;
+  /** The driver's HOME (never the real one: a leak test writes there). */
+  home: string;
+  /** A path outside every slot and the repo (FX_LEAK): state no reset can clear. */
+  leak: string;
+  /** A path prefix outside every slot (FX_STATE) for fixture tests that count runs. */
+  state: string;
   /** A free port for port.fx.mjs (handed to it as FX_PORT). */
   port: number;
 }
@@ -80,9 +87,21 @@ export async function setupFixture(): Promise<Fx> {
     scripts: { build: "node build.mjs" },
   });
   json("packages/lib/package.json", { name: "@fx/lib", private: true });
+  json("packages/bail/package.json", { name: "bail", private: true, type: "module" });
+  json("packages/exit7/package.json", { name: "exit7", private: true, type: "module" });
   writeFileSync(join(repo, "pnpm-workspace.yaml"), 'packages:\n  - "packages/*"\n');
   writeFileSync(join(repo, ".gitignore"), "node_modules/\ndist/\nout/\n");
-  const fx: Fx = { base, repo, tmp, port: await freePort() };
+  const home = join(base, "home");
+  mkdirSync(home);
+  const fx: Fx = {
+    base,
+    repo,
+    tmp,
+    home,
+    leak: join(base, "leak"),
+    state: join(base, "state"),
+    port: await freePort(),
+  };
   execFileSync("git", ["init", "-q"], { cwd: repo });
   git(fx, ["add", "-A"]);
   git(fx, [
@@ -108,6 +127,14 @@ export async function setupFixture(): Promise<Fx> {
   mkdirSync(join(nm, ".pnpm/ext@1.0.0/node_modules/ext"), { recursive: true });
   writeFileSync(join(nm, ".pnpm/ext@1.0.0/node_modules/ext/index.js"), "module.exports = 1;\n");
   writeFileSync(join(nm, ".pnpm/lock.yaml"), "lockfileVersion: '9.0'\n");
+  // A store ENTRY (not the hoisted dir) whose dependency links back into the
+  // workspace, as pnpm writes for an external package depending on one.
+  mkdirSync(join(nm, ".pnpm/dep@1.0.0/node_modules/@fx"), { recursive: true });
+  symlinkSync("../../../../../packages/lib", join(nm, ".pnpm/dep@1.0.0/node_modules/@fx/lib"));
+  // A pnpm-style `.bin` shim that bakes the tree's ABSOLUTE path in.
+  const shim = join(nm, ".bin/fxlib");
+  writeFileSync(shim, `#!/bin/sh\nexec cat "${realpathSync(repo)}/packages/lib/value.txt"\n`);
+  chmodSync(shim, 0o755);
 
   // Built outputs, as the caller would have them.
   execFileSync("node", ["build.mjs"], { cwd: join(repo, "packages/fx") });
@@ -160,8 +187,18 @@ function writeDriver(fx: Fx, concurrency: number): string {
 }
 
 function driverEnv(fx: Fx): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = { ...process.env, TMPDIR: fx.tmp, FX_PORT: String(fx.port) };
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    TMPDIR: fx.tmp,
+    HOME: fx.home,
+    FX_PORT: String(fx.port),
+    FX_LEAK: fx.leak,
+    FX_STATE: fx.state,
+  };
   delete env.TAMPER_CONCURRENCY;
+  for (const k of ["XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME", "XDG_STATE_HOME"]) {
+    delete env[k];
+  }
   return env;
 }
 
@@ -208,6 +245,14 @@ export const SUM_FILE = "packages/fx/sum.mjs";
 export const SUM_TEST = { pkg: FX, test: "sum.fx.mjs" };
 export const BREAK_SUM = { file: SUM_FILE, from: "a + b", to: "a - b" };
 export const BREAK_SUB = { file: SUM_FILE, from: "a - b", to: "a + b" };
+export const SYNTAX_ERROR = { file: SUM_FILE, from: "return a + b;", to: "return a + ;" };
+export const UNDEFINED_NAME = { file: SUM_FILE, from: "return a + b;", to: "return a + bb;" };
+/** A comment-only edit carrying a token a fixture check or test looks for. */
+export const tokenEdit = (token: string) => ({
+  file: SUM_FILE,
+  from: "// marker: a comment",
+  to: `// ${token}: a comment`,
+});
 export const COMMENT_ONLY = {
   file: SUM_FILE,
   from: "// marker: a comment",

@@ -21,6 +21,7 @@ import {
   setupFixture,
   snapshot,
   teardownFixture,
+  tokenEdit,
   verdicts,
 } from "./tamper-runner.harness";
 import type { Fx } from "./tamper-runner.harness";
@@ -37,12 +38,6 @@ afterEach(async () => {
   held = undefined;
   teardownFixture(fx);
   fx = undefined;
-});
-
-const tokenEdit = (token: string) => ({
-  file: SUM_FILE,
-  from: "// marker: a comment",
-  to: `// ${token}: a comment`,
 });
 
 describe("tamper-runner isolation", () => {
@@ -240,6 +235,82 @@ describe("tamper-runner isolation", () => {
     );
     expect(d.out).toMatch(/^BASELINE NOT GREEN: fx port\.fx\.mjs/m);
     expect(verdicts(d)).not.toContain("RED");
+    expect(d.code).toBe(2);
+  });
+
+  it("X2: a node_modules/.bin shim that bakes the tree's absolute path runs against the copy", () => {
+    const d = drive(
+      fx!,
+      [
+        {
+          name: "shim reads lib",
+          command: ["node", "shim.check.mjs"],
+          redMarker: "SHIM READ THIS COPY",
+          edits: [{ file: "packages/lib/value.txt", from: "ok", to: "bad" }],
+        },
+      ],
+      1,
+    );
+    expect(verdicts(d), d.out).toEqual(["RED"]);
+    expect(d.code).toBe(0);
+  });
+
+  it("X3: a store entry whose dependency links into the workspace resolves to the copy's package", () => {
+    const d = drive(
+      fx!,
+      [
+        {
+          name: "lib value changed",
+          pkg: FX,
+          test: "link2.fx.mjs",
+          edits: [{ file: "packages/lib/value.txt", from: "ok", to: "bad" }],
+        },
+      ],
+      1,
+    );
+    expect(verdicts(d), d.out).toEqual(["RED"]);
+    expect(d.code).toBe(0);
+  });
+
+  it("X10: a copy whose caller-dirty (overlaid) file a check changed is never reused: exit 2", () => {
+    // value.txt is uncommitted in the caller, so git status in the copy shows it
+    // modified before AND after the check appends to it: only its bytes tell.
+    const value = join(fx!.repo, "packages/lib/value.txt");
+    writeFileSync(value, "ok\nlocal\n");
+    const d = drive(
+      fx!,
+      [
+        {
+          name: "dirties an overlaid file",
+          command: ["node", "dirty.check.mjs", "TOKEN_A", "overlay"],
+          redMarker: "DIRTY SLOT",
+          edits: [tokenEdit("TOKEN_A")],
+        },
+      ],
+      1,
+    );
+    expect(d.out).toMatch(
+      /ABORTED — tamper-runner: slot 0: overlaid packages\/lib\/value\.txt did not restore/,
+    );
+    expect(d.code).toBe(2);
+  });
+
+  it("X17: a check that appends to an UNTRACKED caller file fails the run (exit 2)", () => {
+    const scratch = join(fx!.repo, "scratch.txt");
+    writeFileSync(scratch, "caller scratch\n");
+    const d = drive(
+      fx!,
+      [
+        {
+          name: "writes an untracked caller file",
+          command: ["node", "caller.check.mjs", "TOKEN_A", scratch],
+          redMarker: "CALLER WRITE",
+          edits: [tokenEdit("TOKEN_A")],
+        },
+      ],
+      1,
+    );
+    expect(d.out).toContain("the caller's working tree CHANGED during the run");
     expect(d.code).toBe(2);
   });
 });

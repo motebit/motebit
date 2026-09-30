@@ -14,6 +14,7 @@ import {
   COMMENT_ONLY,
   FX,
   SUM_FILE,
+  SYNTAX_ERROR,
   SUM_TEST,
   drive,
   setupFixture,
@@ -34,8 +35,20 @@ afterEach(() => {
   fx = undefined;
 });
 
+/** Adds a test that fails: it did not exist, so it cannot have passed before the edit. */
+const ADD_FAILING_TEST = {
+  file: "packages/fx/sum.fx.mjs",
+  from: 'describe("sum", () => {',
+  to: 'describe("sum", () => {\n  it("fresh", () => {\n    throw new Error("a test the edit adds");\n  });',
+};
+
 const SUM_CHECK = { command: ["node", "sum.check.mjs"], redMarker: "SUM CHECK FAILED" };
-const SYNTAX_ERROR = { file: SUM_FILE, from: "return a + b;", to: "return a + ;" };
+/** Parses, but throws when sum() runs: a crash that is not a syntax error. */
+const THROWS = {
+  file: SUM_FILE,
+  from: "return a + b;",
+  to: 'throw new Error("fx crash");',
+};
 
 describe("tamper-runner verdicts", () => {
   it("a tamper the test catches goes RED; the run exits 0", () => {
@@ -97,7 +110,7 @@ describe("tamper-runner evidence", () => {
   it("C2: a tamper that breaks collection (a syntax error) is INCONCLUSIVE, never RED", () => {
     const d = drive(fx!, [{ name: "syntax", ...SUM_TEST, edits: [SYNTAX_ERROR] }], 1);
     expect(verdicts(d)).toEqual(["INCONCLUSIVE"]);
-    expect(d.out).toMatch(/INCONCLUSIVE +syntax +\(suite-level error/);
+    expect(d.out).toMatch(/INCONCLUSIVE +syntax +\((suite-level error|edit is not valid code)/);
     expect(d.code).toBe(1);
   });
 
@@ -150,7 +163,7 @@ describe("tamper-runner evidence", () => {
   });
 
   it("C2: a command that crashes (non-zero exit, no red marker) is INCONCLUSIVE, never RED", () => {
-    const d = drive(fx!, [{ name: "cmd crash", ...SUM_CHECK, edits: [SYNTAX_ERROR] }], 1);
+    const d = drive(fx!, [{ name: "cmd crash", ...SUM_CHECK, edits: [THROWS] }], 1);
     expect(verdicts(d)).toEqual(["INCONCLUSIVE"]);
     expect(d.out).toMatch(
       /INCONCLUSIVE +cmd crash +\(exited 1, red marker "SUM CHECK FAILED" absent\)/,
@@ -211,5 +224,68 @@ describe("tamper-runner evidence", () => {
       '"sum adds two numbers" passed; other tests failed: sum subtracts two numbers',
     );
     expect(d.code).toBe(1);
+  });
+
+  it("X4: red naming a test that did not pass before the edit (one the edit adds) is never RED", () => {
+    const d = drive(
+      fx!,
+      [{ name: "new test", ...SUM_TEST, red: "sum fresh", edits: [ADD_FAILING_TEST] }],
+      1,
+    );
+    expect(verdicts(d)).toEqual(["INCONCLUSIVE"]);
+    expect(d.out).toContain('"sum fresh" did not pass');
+    expect(d.code).toBe(1);
+  });
+
+  it("X5: without red, only a test that passed before the edit can bite (a new failing test cannot)", () => {
+    const d = drive(fx!, [{ name: "new test", ...SUM_TEST, edits: [ADD_FAILING_TEST] }], 1);
+    expect(verdicts(d)).toEqual(["INCONCLUSIVE"]);
+    expect(d.code).toBe(1);
+  });
+
+  it("X6: red naming a full name two tests share is INCONCLUSIVE, never RED", () => {
+    const d = drive(
+      fx!,
+      [{ name: "dup", pkg: FX, test: "dup.fx.mjs", red: "dup same", edits: [BREAK_SUM] }],
+      1,
+    );
+    expect(verdicts(d)).toEqual(["INCONCLUSIVE"]);
+    expect(d.out).toContain('(2 tests are named "dup same")');
+    expect(d.code).toBe(1);
+  });
+
+  it("X7: a run that ended other than passed/failed (a bail: interrupted) is INCONCLUSIVE, never RED", () => {
+    const d = drive(
+      fx!,
+      [{ name: "bailed", pkg: "bail", test: "bail.fx.mjs", edits: [BREAK_SUM] }],
+      1,
+    );
+    expect(verdicts(d)).toEqual(["INCONCLUSIVE"]);
+    expect(d.out).toContain('the run ended "interrupted"');
+    expect(d.code).toBe(1);
+  });
+
+  it("X8: a failure in another file the filter also matched is not the target's", () => {
+    // `vitest run inner.fx.mjs` also runs winner.fx.mjs, which fails.
+    const d = drive(
+      fx!,
+      [{ name: "other file", pkg: FX, test: "inner.fx.mjs", edits: [BREAK_SUM] }],
+      1,
+    );
+    expect(verdicts(d)).toEqual(["INCONCLUSIVE"]);
+    expect(d.code).toBe(1);
+  });
+
+  it("X9: a baseline where every test passed but vitest exited non-zero aborts (exit 2)", () => {
+    const d = drive(
+      fx!,
+      [{ name: "exit 7", pkg: "exit7", test: "ok.fx.mjs", edits: [BREAK_SUM] }],
+      1,
+    );
+    expect(d.out).toMatch(
+      /^BASELINE NOT GREEN: exit7 ok\.fx\.mjs +\(vitest exited [1-9]\d* with every test passing/m,
+    );
+    expect(verdicts(d)).not.toContain("RED");
+    expect(d.code).toBe(2);
   });
 });
