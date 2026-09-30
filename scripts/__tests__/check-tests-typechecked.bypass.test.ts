@@ -21,12 +21,14 @@
  * e2e spec ONLY via the git listing, and the setupFiles case ONLY via vitest's
  * collection.
  */
-import { spawnSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { spawn, spawnSync } from "node:child_process";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { hostname, tmpdir } from "node:os";
 import { delimiter, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, describe, expect, it } from "vitest";
+
+import { CANARY_PREFIX, canaryContent } from "../check-tests-typechecked.js";
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 const GATE = join(REPO, "scripts/check-tests-typechecked.ts");
@@ -111,6 +113,11 @@ function typecheck(pkgAbs: string): number | null {
   return spawnSync("pnpm", ["--silent", "run", "typecheck"], { cwd: pkgAbs, env: ENV }).status;
 }
 
+function gitAdd(root: string, ...rels: string[]): void {
+  const r = spawnSync("git", ["add", "--", ...rels], { cwd: root, encoding: "utf-8" });
+  if (r.status !== 0) throw new Error(`git add failed: ${r.stderr}`);
+}
+
 function gate(root: string): { status: number | null; out: string } {
   const r = spawnSync(TSX, [GATE], {
     cwd: REPO,
@@ -146,6 +153,8 @@ const BY = {
   membership: /is not a root file of any tsc the typecheck script runs/,
   nocheck: /carries `@ts-nocheck`/,
   chain: /chain with `&&` only/,
+  outside: /is outside the package/,
+  reserved: /reserved canary prefix/,
   expansion: /parameter\/command expansion/,
 } as const;
 
@@ -221,6 +230,41 @@ const CASES: Case[] = [
     hidesError: true,
     build: (f) => {
       f[TEST] = `// @ts-nocheck\n${f[TEST] as string}${TYPE_ERROR}`;
+      return P;
+    },
+  },
+  // Round 4 C1: tsc matches the pragma name case-insensitively, in any
+  // single-line comment (`//` or `///`) of the file's leading comment block —
+  // after a BOM, a shebang, leading blanks or a license block comment. Each
+  // fixture's own typecheck exits 0 with the error in place (hidesError).
+  ...(
+    [
+      ["upper case", "// @TS-NOCHECK\n"],
+      ["mixed case, no space", "//@Ts-NoCheck\n"],
+      ["leading spaces", "   // @ts-nocheck\n"],
+      ["triple slash", "/// @ts-nocheck\n"],
+      ["BOM then upper case", "\uFEFF// @Ts-Nocheck\n"],
+      ["with a reason", "// @TS-NOCHECK: legacy fixture\n"],
+      ["after a license block comment", "/* license */\n\n// @ts-NoCheck\n"],
+      ["after a shebang", "#!/usr/bin/env node\n// @TS-NOCHECK\n"],
+      ["overriding an earlier @ts-check", "// @ts-check\n// @TS-NOCHECK\n"],
+    ] as const
+  ).map(([label, head]): Case => ({
+    id: `R4-C1 @ts-nocheck variant: ${label}`,
+    reason: ["nocheck"],
+    hidesError: true,
+    build: (f) => {
+      f[TEST] = `${head}${f[TEST] as string}${TYPE_ERROR}`;
+      return P;
+    },
+  })),
+  {
+    id: 'R4-C3 vitest collects a test outside the package dir (`dir: ".."`)',
+    reason: ["outside"],
+    hidesError: true,
+    build: (f) => {
+      f[`${P}/vitest.config.mjs`] = 'export default { test: { dir: ".." } };\n';
+      f["packages/stray/probe.test.ts"] = TYPE_ERROR;
       return P;
     },
   },
@@ -401,5 +445,120 @@ describe("check-tests-typechecked bypass harness", () => {
     const g = gate(root);
     expect(g.status, g.out).not.toBe(0);
     for (const r of c.reason) expect(g.out, `${r} must report it`).toMatch(BY[r]);
+  });
+});
+
+describe("check-tests-typechecked — round-4 canary-prefix and concurrency cases", () => {
+  it("R4-C2 a COMMITTED test named with the canary prefix, in a dir no tsconfig covers → gate RED", () => {
+    const files = basePackage(P);
+    patchJson(files, `${P}/tsconfig.json`, (v) => {
+      v.exclude = ["src/__tests__", "src/extra"];
+    });
+    patchJson(files, `${P}/tsconfig.test.json`, (v) => {
+      v.exclude = ["src/extra"];
+    });
+    const rel = `${P}/src/extra/${CANARY_PREFIX}real.test.ts`;
+    files[rel] = TYPE_ERROR;
+    const root = workspace(files);
+    gitAdd(root, rel);
+    expect(typecheck(join(root, P)), "bypass must be real").toBe(0);
+    const g = gate(root);
+    expect(g.status, g.out).not.toBe(0);
+    expect(g.out).toMatch(BY.reserved);
+    expect(g.out).toMatch(BY.canary);
+    expect(g.out).toMatch(BY.membership);
+  });
+
+  it("R4-C2 an UNTRACKED user file with the canary prefix survives the gate (never deleted by name)", () => {
+    const files = basePackage(P);
+    const rel = `${P}/src/__tests__/${CANARY_PREFIX}mine.test.ts`;
+    const mine = "export const mine = 1;\n";
+    files[rel] = mine;
+    const root = workspace(files);
+    const g = gate(root);
+    expect(existsSync(join(root, rel)), "the user's file must survive").toBe(true);
+    expect(g.status, g.out).not.toBe(0);
+    expect(g.out).toMatch(BY.reserved);
+  });
+
+  it("R4-C2 a file whose content is a canary template with a different id than its name is not drained", () => {
+    const files = basePackage(P);
+    const rel = `${P}/src/__tests__/${CANARY_PREFIX}aaaaaaaaaaaa.test.ts`;
+    // a dead owner, but the id inside does not match the file name: not ours
+    files[rel] = canaryContent("bbbbbbbbbbbb", { run: "r", pid: 2 ** 22 + 7, host: hostname() });
+    const root = workspace(files);
+    gate(root);
+    expect(existsSync(join(root, rel))).toBe(true);
+  });
+
+  it("R4-concurrency: a live canary of ANOTHER running gate is neither drained nor flagged; a dead run's canary is drained", async () => {
+    const files = basePackage(P);
+    const other = spawn("sleep", ["120"], { stdio: "ignore" });
+    try {
+      const livePid = other.pid!;
+      const dead = spawnSync(
+        process.execPath,
+        ["-e", "process.stdout.write(String(process.pid))"],
+        {
+          encoding: "utf-8",
+        },
+      );
+      const deadPid = Number(dead.stdout);
+      const liveRel = `${P}/src/__tests__/${CANARY_PREFIX}0123456789ab.test.ts`;
+      const deadRel = `${P}/src/__tests__/${CANARY_PREFIX}ba9876543210.test.ts`;
+      files[liveRel] = canaryContent("0123456789ab", {
+        run: "otherrun",
+        pid: livePid,
+        host: hostname(),
+      });
+      files[deadRel] = canaryContent("ba9876543210", {
+        run: "deadrun",
+        pid: deadPid,
+        host: hostname(),
+      });
+      const root = workspace(files);
+      const g = gate(root);
+      expect(existsSync(join(root, liveRel)), "a live run's canary must survive").toBe(true);
+      expect(existsSync(join(root, deadRel)), "a dead run's canary is drained").toBe(false);
+      expect(g.status, g.out).toBe(0);
+    } finally {
+      other.kill();
+    }
+  });
+
+  it("R4-concurrency: two gate runs at once on one workspace both pass and leave no canary", async () => {
+    const root = workspace(basePackage(P));
+    const run = (): Promise<{ status: number | null; out: string }> =>
+      new Promise((done) => {
+        const c = spawn(TSX, [GATE], {
+          cwd: REPO,
+          env: { ...ENV, CHECK_TESTS_TYPECHECKED_ROOT: root },
+        });
+        let out = "";
+        c.stdout.on("data", (d: Buffer) => (out += d.toString()));
+        c.stderr.on("data", (d: Buffer) => (out += d.toString()));
+        c.on("close", (status) => done({ status, out }));
+      });
+    const [a, b] = await Promise.all([run(), run()]);
+    expect(a.status, a.out).toBe(0);
+    expect(b.status, b.out).toBe(0);
+    const left = spawnSync("git", ["ls-files", "--others", "--exclude-standard"], {
+      cwd: root,
+      encoding: "utf-8",
+    }).stdout;
+    expect(left).not.toContain(CANARY_PREFIX);
+  });
+
+  it("control: a pragma tsc does not honour is not flagged (string mention, after code, overridden by a later @ts-check, block comment)", () => {
+    const files = basePackage(P);
+    files[TEST] =
+      '// @ts-nocheck\n// @ts-check\n/* @ts-nocheck */\nimport { double } from "../index";\nexport const r: number = double(2);\nexport const s = "// @ts-nocheck";\n// @TS-NOCHECK\n';
+    const root = workspace(files);
+    appendError(files, TEST);
+    writeTree(root, { [TEST]: files[TEST] as string });
+    expect(typecheck(join(root, P)), "tsc still checks this file").not.toBe(0);
+    writeTree(root, { [TEST]: (files[TEST] as string).replace(TYPE_ERROR, "") });
+    const g = gate(root);
+    expect(g.status, g.out).toBe(0);
   });
 });
