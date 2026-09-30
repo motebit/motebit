@@ -18,29 +18,27 @@
  * real gate over fixture files so they fail if either half regresses: the
  * length-independence, or the three distinct repair instructions.
  */
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect } from "vitest";
 import { spawnSync } from "node:child_process";
-import { rmSync, writeFileSync, cpSync, existsSync } from "node:fs";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { withRepoFileReplaced } from "./repo-file-mutation.ts";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, "..", "..");
 const SCRIPT = resolve(ROOT, "scripts", "check-spec-routes.ts");
 const TARGET = resolve(ROOT, "services", "relay", "src", "identity-transparency.ts");
 
-/** Run the gate against the real repo, with `TARGET` temporarily replaced. */
+/**
+ * Run the gate against the real repo, with `TARGET` temporarily replaced —
+ * under the gate-self-test lock, backup outside the tree
+ * (`repo-file-mutation.ts`).
+ */
 function runGateWith(source: string): string {
-  const backup = `${TARGET}.gate-test-backup`;
-  cpSync(TARGET, backup);
-  try {
-    writeFileSync(TARGET, source);
+  return withRepoFileReplaced(TARGET, source, () => {
     const r = spawnSync("npx", ["tsx", SCRIPT], { cwd: ROOT, encoding: "utf8" });
     return `${r.stdout}\n${r.stderr}`;
-  } finally {
-    cpSync(backup, TARGET);
-    rmSync(backup, { force: true });
-  }
+  });
 }
 
 /**
@@ -84,15 +82,6 @@ ${filler}  app.get("/api/v1/identity/:motebitId", async (c) => {
 const IDENTITY_ROUTE = 'route "GET /api/v1/identity/:motebitId"';
 
 describe("check-spec-routes annotation scanning", () => {
-  beforeEach(() => {
-    // Guard the guard: if a previous crash left a backup, the repo is dirty.
-    expect(existsSync(`${TARGET}.gate-test-backup`)).toBe(false);
-  });
-
-  afterEach(() => {
-    rmSync(`${TARGET}.gate-test-backup`, { force: true });
-  });
-
   it("accepts a multi-paragraph @reason — comment length is not staleness", () => {
     // The exact shape from #573: a blank `*` line inside the rationale.
     const out = runGateWith(

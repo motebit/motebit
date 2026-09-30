@@ -18,36 +18,41 @@
  * These tests drive the REAL gate over a perturbed manifest, so they fail if
  * the exemption ever leaks back to mapped packages.
  */
-import { describe, it, expect, afterEach } from "vitest";
+import { describe, it, expect } from "vitest";
 import { spawnSync } from "node:child_process";
-import { readFileSync, writeFileSync, existsSync, rmSync, cpSync } from "node:fs";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
+import { withRepoFileReplaced, withRepoLock } from "./repo-file-mutation.ts";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, "..", "..");
 const SCRIPT = resolve(ROOT, "scripts", "check-deps.ts");
 
-/** Run the real gate with one package.json temporarily mutated. */
+/**
+ * Run the real gate with one package.json temporarily mutated — under the
+ * gate-self-test lock, backup outside the tree (`repo-file-mutation.ts`).
+ */
 function runWithManifest(pkgPath: string, mutate: (m: Record<string, never>) => void): string {
-  const full = resolve(ROOT, pkgPath);
-  const backup = `${full}.deps-test-backup`;
-  cpSync(full, backup);
-  try {
-    const manifest = JSON.parse(readFileSync(full, "utf-8")) as Record<string, never>;
-    mutate(manifest);
-    writeFileSync(full, `${JSON.stringify(manifest, null, 2)}\n`);
-    const r = spawnSync("npx", ["tsx", SCRIPT], { cwd: ROOT, encoding: "utf8" });
-    return `${r.stdout}\n${r.stderr}`;
-  } finally {
-    cpSync(backup, full);
-    rmSync(backup, { force: true });
-  }
+  return withRepoFileReplaced(
+    resolve(ROOT, pkgPath),
+    (original) => {
+      const manifest = JSON.parse(original) as Record<string, never>;
+      mutate(manifest);
+      return `${JSON.stringify(manifest, null, 2)}\n`;
+    },
+    () => {
+      const r = spawnSync("npx", ["tsx", SCRIPT], { cwd: ROOT, encoding: "utf8" });
+      return `${r.stdout}\n${r.stderr}`;
+    },
+  );
 }
 
+/** The gate over the repo as committed — never over another self-test's perturbation. */
 function runClean(): string {
-  const r = spawnSync("npx", ["tsx", SCRIPT], { cwd: ROOT, encoding: "utf8" });
-  return `${r.stdout}\n${r.stderr}`;
+  return withRepoLock(() => {
+    const r = spawnSync("npx", ["tsx", SCRIPT], { cwd: ROOT, encoding: "utf8" });
+    return `${r.stdout}\n${r.stderr}`;
+  });
 }
 
 const VERIFIER = "packages/verifier/package.json";
@@ -58,11 +63,6 @@ const VERIFIER = "packages/verifier/package.json";
 // `test:gates` script (root package.json: --testTimeout=30000), ONCE for every
 // spawning self-test in this directory, not per file.
 describe("check-deps layer enforcement", () => {
-  afterEach(() => {
-    const stale = resolve(ROOT, `${VERIFIER}.deps-test-backup`);
-    if (existsSync(stale)) rmSync(stale, { force: true });
-  });
-
   it("passes on the repo as committed", () => {
     expect(runClean()).toContain("All architectural checks passed");
   });
