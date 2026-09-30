@@ -16,11 +16,7 @@
 
 import { describe, expect, it } from "vitest";
 
-import type {
-  DeletionCertificate,
-  DeletionCertificateVerifyContext,
-  HorizonSubject,
-} from "@motebit/protocol";
+import type { DeletionCertificate, HorizonSubject } from "@motebit/protocol";
 import { asMotebitId, asNodeId } from "@motebit/protocol";
 
 import { generateEd25519Keypair } from "../suite-dispatch.js";
@@ -39,6 +35,7 @@ import {
   signHorizonWitnessRequestBody,
   verifyHorizonWitnessRequestSignature,
 } from "../deletion-certificate.js";
+import type { DeletionCertificateVerifyContext } from "../deletion-certificate.js";
 import type { HorizonWitnessRequestBody, RetentionManifest } from "@motebit/protocol";
 import { EMPTY_FEDERATION_GRAPH_ANCHOR } from "@motebit/protocol";
 import { canonicalJson } from "../signing.js";

@@ -77,15 +77,15 @@ describe("lookupKeyRevocation", () => {
   });
 
   it("unknown (not 'not_revoked') on a non-2xx RPC response", async () => {
-    const fetch = (async () => new Response("x", { status: 500 })) as unknown as typeof fetch;
+    const fetch: typeof globalThis.fetch = async () => new Response("x", { status: 500 });
     const r = await lookupKeyRevocation(ADDR, KEY, { fetch });
     expect(r.status).toBe("unknown");
   });
 
   it("unknown on a transport throw", async () => {
-    const fetch = (async () => {
+    const fetch: typeof globalThis.fetch = async () => {
       throw new Error("offline");
-    }) as unknown as typeof fetch;
+    };
     const r = await lookupKeyRevocation(ADDR, KEY, { fetch });
     expect(r.status).toBe("unknown");
     if (r.status === "unknown") expect(r.detail).toContain("offline");

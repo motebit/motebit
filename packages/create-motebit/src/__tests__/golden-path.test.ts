@@ -7,6 +7,7 @@
 
 import { describe, it, expect } from "vitest";
 import { verify } from "@motebit/crypto";
+import type { IdentityVerifyResult } from "@motebit/crypto";
 import * as ed from "@noble/ed25519";
 import { sha512 } from "@noble/hashes/sha2.js";
 import { generateIdentity, fromHex, toHex, decrypt } from "../generate.js";
@@ -14,6 +15,18 @@ import { generateIdentity, fromHex, toHex, decrypt } from "../generate.js";
 // @noble/ed25519 v3 requires explicit SHA-512 binding
 if (!ed.hashes.sha512) {
   ed.hashes.sha512 = (msg: Uint8Array) => sha512(msg);
+}
+
+/**
+ * `verify()` returns the `VerifyResult` union; identity fields exist only on
+ * its `type: "identity"` member. Assert the discriminant, then narrow.
+ */
+async function verifyIdentityFile(content: string): Promise<IdentityVerifyResult> {
+  const result = await verify(content);
+  expect(result.type).toBe("identity");
+  if (result.type !== "identity")
+    throw new Error(`expected an identity result, got ${result.type}`);
+  return result;
 }
 
 describe("golden path: generate -> verify -> decrypt -> match", () => {
@@ -33,7 +46,7 @@ describe("golden path: generate -> verify -> decrypt -> match", () => {
     expect(result.identityFileContent).toContain("motebit/identity@1.0");
 
     // Step 2: Verify the generated motebit.md using @motebit/crypto
-    const verification = await verify(result.identityFileContent);
+    const verification = await verifyIdentityFile(result.identityFileContent);
 
     expect(verification.valid).toBe(true);
     expect(verification.errors).toBeUndefined();
@@ -52,7 +65,7 @@ describe("golden path: generate -> verify -> decrypt -> match", () => {
 
     const keyMaterial = await crypto.subtle.importKey(
       "raw",
-      new TextEncoder().encode(TEST_PARAMS.passphrase) as BufferSource,
+      new TextEncoder().encode(TEST_PARAMS.passphrase),
       "PBKDF2",
       false,
       ["deriveBits"],
@@ -60,7 +73,7 @@ describe("golden path: generate -> verify -> decrypt -> match", () => {
     const bits = await crypto.subtle.deriveBits(
       {
         name: "PBKDF2",
-        salt: salt as BufferSource,
+        salt: new Uint8Array(salt),
         iterations: Number(process.env["MOTEBIT_PBKDF2_ITERATIONS"] ?? 600_000),
         hash: "SHA-256",
       },
@@ -113,7 +126,7 @@ describe("golden path: generate -> verify -> decrypt -> match", () => {
     // Derive key with wrong passphrase
     const keyMaterial = await crypto.subtle.importKey(
       "raw",
-      new TextEncoder().encode("wrong-passphrase") as BufferSource,
+      new TextEncoder().encode("wrong-passphrase"),
       "PBKDF2",
       false,
       ["deriveBits"],
@@ -121,7 +134,7 @@ describe("golden path: generate -> verify -> decrypt -> match", () => {
     const bits = await crypto.subtle.deriveBits(
       {
         name: "PBKDF2",
-        salt: salt as BufferSource,
+        salt: new Uint8Array(salt),
         iterations: Number(process.env["MOTEBIT_PBKDF2_ITERATIONS"] ?? 600_000),
         hash: "SHA-256",
       },

@@ -189,7 +189,7 @@ describe("computeCredentialLeaf", () => {
     );
 
     const withProof = await computeCredentialLeaf(vc as unknown as Record<string, unknown>);
-    const { proof: _, ...withoutProof } = vc as Record<string, unknown>;
+    const { proof: _, ...withoutProof } = vc;
     const stripped = await computeCredentialLeaf(withoutProof);
     expect(withProof).not.toBe(stripped);
   });
@@ -354,7 +354,7 @@ describe("verifyCredentialAnchor", () => {
     const batchSignature = await signBatchPayload(batchPayload, relayKeypair.privateKey);
 
     // Tamper with the credential
-    const tampered = { ...(vc as Record<string, unknown>), extra_field: "injected" };
+    const tampered = { ...vc, extra_field: "injected" };
 
     const result = await verifyCredentialAnchor(tampered, {
       credential_hash: leaf,

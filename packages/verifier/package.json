@@ -57,7 +57,7 @@
     "build": "tsc -b",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit && tsc -p tsconfig.test.json",
     "lint": "eslint --parser-options=project:tsconfig.eslint.json src/",
     "lint:pack": "publint --strict && attw --pack --profile esm-only",
     "clean": "rm -rf dist .turbo *.tsbuildinfo",

@@ -149,7 +149,7 @@ describe("verifiedStateExportFetch — failure modes", () => {
           t[0] = t[0]! ^ 0x01;
           return t;
         })()
-      : bodyBytes;
+      : new Uint8Array(bodyBytes);
 
     const mockFetch: typeof globalThis.fetch = async () =>
       new Response(responseBytes, {

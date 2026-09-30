@@ -322,7 +322,7 @@ function main(): void {
       sites,
       canonical:
         "the package's tsconfig.json (build) + tsconfig.test.json (tests), compiled by its package.json `typecheck` script",
-      fix: 'keep the build tsconfig excluding tests; add `tsconfig.test.json` (`extends: ./tsconfig.json`, `compilerOptions: { rootDir: ".", noEmit: true, composite: false }`, `include` covering src and every test dir, `exclude: []`) and make `typecheck` run `tsc --noEmit && tsc -p tsconfig.test.json`. Then fix the surfaced errors in the tests — never loosen the config. Verify with `pnpm check-tests-typechecked --table`.',
+      fix: 'keep the build tsconfig excluding tests; add `tsconfig.test.json` (copy packages/crypto/tsconfig.test.json: `extends: ./tsconfig.json`, `rootDir: \".\"`, `noEmit: true`, emitDeclarationOnly/composite/incremental off, `include` covering src and every test dir, `exclude: []`) and make `typecheck` run `tsc --noEmit && tsc -p tsconfig.test.json`. Then fix the surfaced errors in the tests — never loosen the config. Verify with `pnpm check-tests-typechecked --table`.',
       doctrine: "docs/drift-defenses.md (check-tests-typechecked), issue #1000",
     }),
   );

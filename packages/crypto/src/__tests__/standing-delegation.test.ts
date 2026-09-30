@@ -18,6 +18,7 @@ import type {
   StandingDelegation,
   DelegationRevocation,
   SubjectBindingV1,
+  SpendCeilingV1,
 } from "@motebit/protocol";
 
 type Kp = { publicKey: Uint8Array; privateKey: Uint8Array };
@@ -55,7 +56,9 @@ async function makeGrant(
 async function mintTick(
   grant: StandingDelegation,
   delegator: Kp,
-  delegate: Kp,
+  // Unused: the tick's delegate identity comes from the grant. Kept so call
+  // sites read as (grant, delegator, delegate).
+  _delegate: Kp,
   over: Partial<Omit<DelegationToken, "signature" | "suite">> = {},
 ): Promise<DelegationToken> {
   const now = Date.now();

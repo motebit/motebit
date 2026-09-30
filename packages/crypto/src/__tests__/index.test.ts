@@ -2,6 +2,19 @@ import { describe, it, expect } from "vitest";
 import * as ed from "@noble/ed25519";
 import { sha512 } from "@noble/hashes/sha2.js";
 import { parse, verify, generateKeypair, signApprovalDecision } from "../index";
+import type { IdentityVerifyResult } from "../index";
+
+/**
+ * `verify()` returns the `VerifyResult` union; identity fields exist only on
+ * its `type: "identity"` member. Assert the discriminant, then narrow.
+ */
+async function verifyIdentityFile(content: string): Promise<IdentityVerifyResult> {
+  const result = await verify(content);
+  expect(result.type).toBe("identity");
+  if (result.type !== "identity")
+    throw new Error(`expected an identity result, got ${result.type}`);
+  return result;
+}
 
 // @noble/ed25519 v3 requires explicit SHA-512 binding
 if (!ed.hashes.sha512) {
@@ -131,7 +144,7 @@ describe("parse", () => {
 describe("verify — valid signatures", () => {
   it("verifies a correctly signed identity file", async () => {
     const { content } = await generateValidFile();
-    const result = await verify(content);
+    const result = await verifyIdentityFile(content);
 
     expect(result.valid).toBe(true);
     expect(result.identity).not.toBeNull();
@@ -143,15 +156,15 @@ describe("verify — valid signatures", () => {
 
   it("returns deterministic did:key on valid verification", async () => {
     const { content } = await generateValidFile();
-    const a = await verify(content);
-    const b = await verify(content);
+    const a = await verifyIdentityFile(content);
+    const b = await verifyIdentityFile(content);
     expect(a.did).toBe(b.did);
     expect(a.did).toMatch(/^did:key:z/);
   });
 
   it("returns full identity on success", async () => {
     const { content, publicKeyHex } = await generateValidFile();
-    const result = await verify(content);
+    const result = await verifyIdentityFile(content);
 
     expect(result.valid).toBe(true);
     expect(result.identity!.identity.public_key).toBe(publicKeyHex);
@@ -170,7 +183,7 @@ describe("verify — tamper detection", () => {
     const { content } = await generateValidFile();
     const tampered = content.replace("owner-test", "evil-owner");
 
-    const result = await verify(tampered);
+    const result = await verifyIdentityFile(tampered);
     expect(result.valid).toBe(false);
     expect(result.identity).toBeNull();
     expect(result.errors?.[0]?.message).toBe("Signature verification failed");
@@ -342,7 +355,7 @@ describe("verify — files with devices", () => {
     const signature = await ed.signAsync(frontmatterBytes, kp.privateKey);
     const content = buildIdentityFile(yaml, toHex(signature));
 
-    const result = await verify(content);
+    const result = await verifyIdentityFile(content);
     expect(result.valid).toBe(true);
     expect(result.identity!.devices).toHaveLength(1);
     expect(result.identity!.devices[0]!.device_id).toBe("dev-001");
@@ -398,7 +411,7 @@ describe("verify — service identity", () => {
     const signature = await ed.signAsync(frontmatterBytes, kp.privateKey);
     const content = buildIdentityFile(yaml, toHex(signature));
 
-    const result = await verify(content);
+    const result = await verifyIdentityFile(content);
     expect(result.valid).toBe(true);
     expect(result.identity!.type).toBe("service");
     expect(result.identity!.service_name).toBe("Flight Search");
@@ -414,7 +427,7 @@ describe("verify — service identity", () => {
 
   it("verifies a personal identity file without service fields", async () => {
     const { content } = await generateValidFile();
-    const result = await verify(content);
+    const result = await verifyIdentityFile(content);
     expect(result.valid).toBe(true);
     expect(result.identity!.type).toBeUndefined();
     expect(result.identity!.service_name).toBeUndefined();
@@ -585,7 +598,7 @@ describe("verify — succession chain", () => {
     const signature = await ed.signAsync(frontmatterBytes, kp2.privateKey);
     const content = buildIdentityFile(yaml, toHex(signature));
 
-    const result = await verify(content);
+    const result = await verifyIdentityFile(content);
     expect(result.valid).toBe(true);
     expect(result.succession).toBeDefined();
     expect(result.succession!.valid).toBe(true);
@@ -605,7 +618,7 @@ describe("verify — succession chain", () => {
     const signature = await ed.signAsync(frontmatterBytes, kp2.privateKey);
     const content = buildIdentityFile(yaml, toHex(signature));
 
-    const result = await verify(content);
+    const result = await verifyIdentityFile(content);
     expect(result.valid).toBe(true);
     expect(result.succession!.valid).toBe(true);
     expect(result.succession!.rotations).toBe(1);
@@ -624,7 +637,7 @@ describe("verify — succession chain", () => {
     const signature = await ed.signAsync(frontmatterBytes, kp3.privateKey);
     const content = buildIdentityFile(yaml, toHex(signature));
 
-    const result = await verify(content);
+    const result = await verifyIdentityFile(content);
     expect(result.valid).toBe(true);
     expect(result.succession!.valid).toBe(true);
     expect(result.succession!.rotations).toBe(2);
@@ -633,7 +646,7 @@ describe("verify — succession chain", () => {
 
   it("backward compat: no succession field returns no succession result", async () => {
     const { content } = await generateValidFile();
-    const result = await verify(content);
+    const result = await verifyIdentityFile(content);
     expect(result.valid).toBe(true);
     expect(result.succession).toBeUndefined();
   });
@@ -654,7 +667,7 @@ describe("verify — succession chain", () => {
     const signature = await ed.signAsync(frontmatterBytes, kp3.privateKey);
     const content = buildIdentityFile(yaml, toHex(signature));
 
-    const result = await verify(content);
+    const result = await verifyIdentityFile(content);
     expect(result.valid).toBe(true); // file signature is valid
     expect(result.succession).toBeDefined();
     expect(result.succession!.valid).toBe(false);
@@ -674,7 +687,7 @@ describe("verify — succession chain", () => {
     const signature = await ed.signAsync(frontmatterBytes, kpActual.privateKey);
     const content = buildIdentityFile(yaml, toHex(signature));
 
-    const result = await verify(content);
+    const result = await verifyIdentityFile(content);
     expect(result.valid).toBe(true); // file signature is valid
     expect(result.succession).toBeDefined();
     expect(result.succession!.valid).toBe(false);
@@ -857,7 +870,7 @@ describe("verify — succession chain failures", () => {
     const signature = await ed.signAsync(frontmatterBytes, kp2.privateKey);
     const content = buildIdentityFile(yaml, toHex(signature));
 
-    const result = await verify(content);
+    const result = await verifyIdentityFile(content);
     expect(result.valid).toBe(true); // file signature is valid
     expect(result.succession).toBeDefined();
     expect(result.succession!.valid).toBe(false);
@@ -896,24 +909,29 @@ describe("verify — succession chain failures", () => {
     const signature = await ed.signAsync(frontmatterBytes, kp2.privateKey);
     const content = buildIdentityFile(yaml, toHex(signature));
 
-    const result = await verify(content);
+    const result = await verifyIdentityFile(content);
     expect(result.valid).toBe(true);
     expect(result.succession).toBeDefined();
     expect(result.succession!.valid).toBe(false);
     expect(result.succession!.error).toContain("new_key_signature verification failed");
   });
 
-  it("catches unexpected errors in succession chain verification", async () => {
+  it("fails closed on a truncated succession signature (suite-dispatch returns false, never throws)", async () => {
     const kp1 = await makeKeypair();
     const kp2 = await makeKeypair();
 
-    // Create a succession record with a truncated old_key_signature (not 64 bytes)
-    // This will cause ed.verifyAsync to throw instead of returning false
+    // A succession record whose signatures are truncated (10 bytes, not 64).
+    // It declares the suite so verification reaches the signature step — the
+    // earlier version omitted `suite` and passed on the missing-suite early
+    // return instead, never exercising the truncated-signature path it named.
+    // suite-dispatch turns the primitive's exception into `false`, so the
+    // chain fails as a signature failure rather than through the catch-all.
     const record = {
       old_public_key: kp1.publicKeyHex,
       new_public_key: kp2.publicKeyHex,
       timestamp: 1000000,
-      old_key_signature: "ab".repeat(10), // 10 bytes, not 64 — will throw
+      suite: IDENTITY_FILE_SUITE,
+      old_key_signature: "ab".repeat(10), // 10 bytes, not 64
       new_key_signature: "cd".repeat(10),
     };
 
@@ -922,11 +940,13 @@ describe("verify — succession chain failures", () => {
     const signature = await ed.signAsync(frontmatterBytes, kp2.privateKey);
     const content = buildIdentityFile(yaml, toHex(signature));
 
-    const result = await verify(content);
+    const result = await verifyIdentityFile(content);
     expect(result.valid).toBe(true); // file signature is valid
     expect(result.succession).toBeDefined();
     expect(result.succession!.valid).toBe(false);
-    expect(result.succession!.error).toContain("Succession");
+    expect(result.succession!.error).toBe(
+      "Succession record 0: new_key_signature verification failed",
+    );
   });
 
   it("fails when succession chain has temporal ordering violated", async () => {
@@ -943,7 +963,7 @@ describe("verify — succession chain failures", () => {
     const signature = await ed.signAsync(frontmatterBytes, kp3.privateKey);
     const content = buildIdentityFile(yaml, toHex(signature));
 
-    const result = await verify(content);
+    const result = await verifyIdentityFile(content);
     expect(result.valid).toBe(true);
     expect(result.succession).toBeDefined();
     expect(result.succession!.valid).toBe(false);
@@ -1230,7 +1250,7 @@ describe("verify — guardian recovery succession", () => {
     const sigHex = toHex(sig);
     const content = `---\n${yaml}\n---\n<!-- motebit:sig:${IDENTITY_FILE_SUITE}:${sigHex} -->`;
 
-    const result = await verify(content);
+    const result = await verifyIdentityFile(content);
     expect(result.valid).toBe(true);
     expect(result.succession).toBeDefined();
     expect(result.succession!.valid).toBe(true);
@@ -1261,7 +1281,7 @@ describe("verify — guardian recovery succession", () => {
     const sigHex = toHex(sig);
     const content = `---\n${yaml}\n---\n<!-- motebit:sig:${IDENTITY_FILE_SUITE}:${sigHex} -->`;
 
-    const result = await verify(content);
+    const result = await verifyIdentityFile(content);
     expect(result.valid).toBe(true);
     expect(result.succession!.valid).toBe(true);
     expect(result.succession!.genesis_public_key).toBe(kp1.publicKeyHex);
@@ -1321,7 +1341,7 @@ describe("verify — guardian recovery succession", () => {
     const sigHex = toHex(sig);
     const content = `---\n${lines}\n---\n<!-- motebit:sig:${IDENTITY_FILE_SUITE}:${sigHex} -->`;
 
-    const result = await verify(content);
+    const result = await verifyIdentityFile(content);
     expect(result.valid).toBe(true); // signature is valid
     expect(result.succession!.valid).toBe(false);
     expect(result.succession!.error).toContain("no guardian public key");
@@ -1349,7 +1369,7 @@ describe("verify — guardian recovery succession", () => {
     const sigHex = toHex(sig);
     const content = `---\n${yaml}\n---\n<!-- motebit:sig:${IDENTITY_FILE_SUITE}:${sigHex} -->`;
 
-    const result = await verify(content);
+    const result = await verifyIdentityFile(content);
     expect(result.valid).toBe(true); // file signature valid
     expect(result.succession!.valid).toBe(false);
     expect(result.succession!.error).toContain("guardian_signature verification failed");
@@ -1479,6 +1499,11 @@ describe("verify — presentation dispatch", () => {
       "did:key:zSubjectVP",
     );
 
+    // @ts-expect-error -- PRODUCT TYPE DEFECT (#1000 report): createPresentation
+    // takes VerifiableCredential<Record<string, unknown>>[], which rejects the
+    // VerifiableCredential<ReputationCredentialSubject> that this package's own
+    // issueReputationCredential returns (an interface has no index signature).
+    // Delete this directive when createPresentation accepts typed credentials.
     const vp = await createPresentation([vc], kp.privateKey, kp.publicKey);
 
     const result = await verify(vp);
@@ -1506,6 +1531,11 @@ describe("verify — presentation dispatch", () => {
       "did:key:zSubjectVPStr",
     );
 
+    // @ts-expect-error -- PRODUCT TYPE DEFECT (#1000 report): createPresentation
+    // takes VerifiableCredential<Record<string, unknown>>[], which rejects the
+    // VerifiableCredential<ReputationCredentialSubject> that this package's own
+    // issueReputationCredential returns (an interface has no index signature).
+    // Delete this directive when createPresentation accepts typed credentials.
     const vp = await createPresentation([vc], kp.privateKey, kp.publicKey);
 
     const result = await verify(JSON.stringify(vp));

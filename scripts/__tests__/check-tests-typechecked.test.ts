@@ -6,9 +6,11 @@
  * TypeScript config parser which files each tsconfig includes, so the fixtures
  * exercise the real `include` / `exclude` / `extends` resolution.
  */
+import { spawnSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import {
@@ -153,5 +155,19 @@ describe("scanPackage", () => {
 
     const stale = scanPackage(join(root, "pkg"), root, { pkg: { "e2e/": "nothing here" } });
     expect(stale?.problems.some((p) => p.includes("stale KNOWN_UNCOVERED entry"))).toBe(true);
+  });
+});
+
+describe("check-tests-typechecked (smoke)", () => {
+  it("passes against the real repo and states its aperture", () => {
+    const repoRoot = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
+    const result = spawnSync("npx", ["tsx", join(repoRoot, "scripts/check-tests-typechecked.ts")], {
+      encoding: "utf-8",
+      cwd: repoRoot,
+    });
+    // Non-zero = a package's test files escaped its typecheck. Fix the
+    // package's tsconfig.test.json / typecheck script, don't loosen this.
+    expect(result.status).toBe(0);
+    expect(result.stdout).toMatch(/\d+ of \d+ test file\(s\) across \d+ package\(s\)/);
   });
 });

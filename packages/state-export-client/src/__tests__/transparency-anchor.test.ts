@@ -22,7 +22,7 @@ import {
   type SignedTransparencyDeclaration,
 } from "../transparency-anchor.js";
 
-const SUITE: SuiteId = "motebit-jcs-ed25519-hex-v1";
+const SUITE = "motebit-jcs-ed25519-hex-v1" satisfies SuiteId;
 
 interface Keys {
   publicKey: Uint8Array;

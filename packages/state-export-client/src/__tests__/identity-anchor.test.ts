@@ -74,29 +74,29 @@ describe("lookupIdentityLogAnchor", () => {
   });
 
   it("rpc_failed on non-2xx", async () => {
-    const fetch = (async () => new Response("nope", { status: 500 })) as unknown as typeof fetch;
+    const fetch: typeof globalThis.fetch = async () => new Response("nope", { status: 500 });
     const r = await lookupIdentityLogAnchor(ADDR, ROOT, { fetch });
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.reason).toBe("rpc_failed");
   });
 
   it("rpc_failed on a JSON-RPC error body", async () => {
-    const fetch = (async () =>
+    const fetch: typeof globalThis.fetch = async () =>
       new Response(
         JSON.stringify({ jsonrpc: "2.0", id: 1, error: { code: -32000, message: "x" } }),
         {
           status: 200,
         },
-      )) as unknown as typeof fetch;
+      );
     const r = await lookupIdentityLogAnchor(ADDR, ROOT, { fetch });
     expect(r.ok).toBe(false);
     if (!r.ok) expect(r.reason).toBe("rpc_failed");
   });
 
   it("rpc_failed on transport throw", async () => {
-    const fetch = (async () => {
+    const fetch: typeof globalThis.fetch = async () => {
       throw new Error("network down");
-    }) as unknown as typeof fetch;
+    };
     const r = await lookupIdentityLogAnchor(ADDR, ROOT, { fetch });
     expect(r.ok).toBe(false);
     if (!r.ok) {

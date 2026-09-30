@@ -183,7 +183,7 @@ describe("ed25519Sign and ed25519Verify", () => {
 describe("createSignedToken / verifySignedToken", () => {
   it("round-trips correctly", async () => {
     const kp = await generateKeypair();
-    const payload: SignedTokenPayload = {
+    const payload: Omit<SignedTokenPayload, "suite"> = {
       mid: "mote-123",
       did: "device-456",
       iat: Date.now(),
@@ -204,7 +204,7 @@ describe("createSignedToken / verifySignedToken", () => {
 
   it("round-trips with audience claim preserved", async () => {
     const kp = await generateKeypair();
-    const payload: SignedTokenPayload = {
+    const payload: Omit<SignedTokenPayload, "suite"> = {
       mid: "mote-123",
       did: "device-456",
       iat: Date.now(),
@@ -235,7 +235,7 @@ describe("createSignedToken / verifySignedToken", () => {
 
   it("rejects expired token", async () => {
     const kp = await generateKeypair();
-    const payload: SignedTokenPayload = {
+    const payload: Omit<SignedTokenPayload, "suite"> = {
       mid: "mote-123",
       did: "device-456",
       iat: Date.now() - 10 * 60 * 1000,
@@ -251,7 +251,7 @@ describe("createSignedToken / verifySignedToken", () => {
   it("rejects invalid signature (wrong key)", async () => {
     const kpA = await generateKeypair();
     const kpB = await generateKeypair();
-    const payload: SignedTokenPayload = {
+    const payload: Omit<SignedTokenPayload, "suite"> = {
       mid: "mote-123",
       did: "device-456",
       iat: Date.now(),
@@ -1158,6 +1158,9 @@ describe("signApprovalDecision / verifyApprovalDecision", () => {
     const signed = await signApprovalDecision(makeDecision(), kp.privateKey, kp.publicKey);
     expect(signed.suite).toBe("motebit-jcs-ed25519-b64-v1");
     expect(signed.signature).toBeTruthy();
+    // @ts-expect-error -- PRODUCT TYPE DEFECT (#1000 report): signApprovalDecision
+    // embeds `public_key` when given one, but its return type (T & { suite;
+    // signature }) omits it. Delete this directive when the return type does not.
     expect(signed.public_key).toBeTruthy();
     expect(await verifyApprovalDecision(signed, kp.publicKey)).toBe(true);
   });
@@ -1165,6 +1168,7 @@ describe("signApprovalDecision / verifyApprovalDecision", () => {
   it("verifies without an embedded public_key (caller supplies the key)", async () => {
     const kp = await generateKeypair();
     const signed = await signApprovalDecision(makeDecision(), kp.privateKey);
+    // @ts-expect-error -- PRODUCT TYPE DEFECT (#1000 report): see the test above.
     expect(signed.public_key).toBeUndefined();
     expect(await verifyApprovalDecision(signed, kp.publicKey)).toBe(true);
   });
@@ -1246,15 +1250,15 @@ describe("signDisputeResolution / verifyDisputeResolution", () => {
 
     const votes = await Promise.all([
       signAdjudicatorVote(
-        { dispute_id: "d-1", peer_id: "p1", vote: "upheld", rationale: "ok" },
+        { dispute_id: "d-1", round: 1, peer_id: "p1", vote: "upheld", rationale: "ok" },
         peer1.privateKey,
       ),
       signAdjudicatorVote(
-        { dispute_id: "d-1", peer_id: "p2", vote: "upheld", rationale: "ok" },
+        { dispute_id: "d-1", round: 1, peer_id: "p2", vote: "upheld", rationale: "ok" },
         peer2.privateKey,
       ),
       signAdjudicatorVote(
-        { dispute_id: "d-1", peer_id: "p3", vote: "split", rationale: "partial" },
+        { dispute_id: "d-1", round: 1, peer_id: "p3", vote: "split", rationale: "partial" },
         peer3.privateKey,
       ),
     ]);
@@ -1277,7 +1281,7 @@ describe("signDisputeResolution / verifyDisputeResolution", () => {
     const leaderKp = await generateKeypair();
     const peer1 = await generateKeypair();
     const vote = await signAdjudicatorVote(
-      { dispute_id: "d-2", peer_id: "p1", vote: "upheld", rationale: "ok" },
+      { dispute_id: "d-2", round: 1, peer_id: "p1", vote: "upheld", rationale: "ok" },
       peer1.privateKey,
     );
     const signed = await signDisputeResolution(
@@ -1291,7 +1295,7 @@ describe("signDisputeResolution / verifyDisputeResolution", () => {
     const leaderKp = await generateKeypair();
     const peer1 = await generateKeypair();
     const vote = await signAdjudicatorVote(
-      { dispute_id: "d-3", peer_id: "p1", vote: "upheld", rationale: "ok" },
+      { dispute_id: "d-3", round: 1, peer_id: "p1", vote: "upheld", rationale: "ok" },
       peer1.privateKey,
     );
     const tamperedVote = { ...vote, vote: "overturned" as const };
@@ -1307,7 +1311,7 @@ describe("signDisputeResolution / verifyDisputeResolution", () => {
     const leaderKp = await generateKeypair();
     const peer1 = await generateKeypair();
     const voteForOtherDispute = await signAdjudicatorVote(
-      { dispute_id: "d-OTHER", peer_id: "p1", vote: "upheld", rationale: "ok" },
+      { dispute_id: "d-OTHER", round: 1, peer_id: "p1", vote: "upheld", rationale: "ok" },
       peer1.privateKey,
     );
     const signed = await signDisputeResolution(
@@ -1853,10 +1857,14 @@ describe("verifyKeySuccession", () => {
   });
 
   it("returns false for invalid hex in public keys (catch block)", async () => {
+    // Declares the suite so the record gets past the suite check and reaches
+    // hex decoding (odd-length hex → RangeError → the catch). Without `suite`
+    // this returned false at the suite check and never exercised the catch.
     const record = {
       old_public_key: "not-valid-hex",
       new_public_key: "also-not-valid-hex",
       timestamp: Date.now(),
+      suite: "motebit-jcs-ed25519-hex-v1" as const,
       old_key_signature: "aa".repeat(64),
       new_key_signature: "bb".repeat(64),
     };
@@ -2533,7 +2541,7 @@ describe("signComputerSessionReceipt / verifyComputerSessionReceipt", () => {
 
 describe("verifyGoalExecutionManifest", () => {
   const timeline: ExecutionTimelineEntry[] = [
-    { timestamp: 1, type: "goal_created", payload: { goal_id: "g" } },
+    { timestamp: 1, type: "goal_started", payload: { goal_id: "g" } },
     { timestamp: 2, type: "plan_completed", payload: { plan_id: "p" } },
   ];
 

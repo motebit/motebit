@@ -167,7 +167,15 @@ export async function buildChainWithKeyDescription(input: {
     signingAlgorithm: alg,
     publicKey: leafKeys.publicKey,
     signingKey: intermediateKeys.privateKey,
-    extensions: [new x509.Extension(ANDROID_KEY_ATTESTATION_OID, false, input.keyDescriptionDer)],
+    extensions: [
+      // Copy into a fresh ArrayBuffer-backed view: x509 takes a BufferSource,
+      // which a Uint8Array<ArrayBufferLike> (possibly SharedArrayBuffer) is not.
+      new x509.Extension(
+        ANDROID_KEY_ATTESTATION_OID,
+        false,
+        new Uint8Array(input.keyDescriptionDer),
+      ),
+    ],
   });
 
   return { rootPem: input.rootPem, leaf, intermediate };

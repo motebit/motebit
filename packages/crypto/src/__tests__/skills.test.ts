@@ -82,6 +82,9 @@ describe("verifySkillManifest", () => {
       ...signed,
       motebit: {
         ...signed.motebit,
+        // Deliberate type violation: the test feeds the verifier a suite the
+        // SkillManifest type forbids, to prove the runtime rejects it too.
+        // @ts-expect-error -- suite outside the closed SkillManifest suite union
         signature: { ...signed.motebit.signature!, suite: "eddsa-jcs-2022" },
       },
     };

@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { verify, deriveSovereignMotebitId, verifySovereignBinding } from "@motebit/crypto";
+import type { IdentityVerifyResult } from "@motebit/crypto";
 import {
   generateIdentity,
   GOVERNANCE_PRESETS,
@@ -11,6 +12,18 @@ import {
 } from "../generate.js";
 import type { TrustMode } from "../generate.js";
 
+/**
+ * `verify()` returns the `VerifyResult` union; identity fields exist only on
+ * its `type: "identity"` member. Assert the discriminant, then narrow.
+ */
+async function verifyIdentityFile(content: string): Promise<IdentityVerifyResult> {
+  const result = await verify(content);
+  expect(result.type).toBe("identity");
+  if (result.type !== "identity")
+    throw new Error(`expected an identity result, got ${result.type}`);
+  return result;
+}
+
 describe("generateIdentity", () => {
   it("produces a motebit.md that passes @motebit/crypto", async () => {
     const result = await generateIdentity({
@@ -19,7 +32,7 @@ describe("generateIdentity", () => {
       passphrase: "test-passphrase-123",
     });
 
-    const verification = await verify(result.identityFileContent);
+    const verification = await verifyIdentityFile(result.identityFileContent);
     expect(verification.valid).toBe(true);
     expect(verification.identity).not.toBeNull();
     expect(verification.identity!.motebit_id).toBe(result.motebitId);
@@ -84,7 +97,7 @@ describe("generateIdentity", () => {
       passphrase: "pw",
     });
 
-    const verification = await verify(result.identityFileContent);
+    const verification = await verifyIdentityFile(result.identityFileContent);
     expect(verification.identity!.identity.public_key).toBe(result.publicKeyHex);
   });
 
@@ -101,7 +114,7 @@ describe("generateIdentity", () => {
     const salt = fromHex(enc.salt);
     const keyMaterial = await crypto.subtle.importKey(
       "raw",
-      new TextEncoder().encode(passphrase) as BufferSource,
+      new TextEncoder().encode(passphrase),
       "PBKDF2",
       false,
       ["deriveBits"],
@@ -109,7 +122,7 @@ describe("generateIdentity", () => {
     const bits = await crypto.subtle.deriveBits(
       {
         name: "PBKDF2",
-        salt: salt as BufferSource,
+        salt: new Uint8Array(salt),
         iterations: Number(process.env["MOTEBIT_PBKDF2_ITERATIONS"] ?? 600_000),
         hash: "SHA-256",
       },
@@ -141,7 +154,7 @@ describe("generateIdentity", () => {
         passphrase: "pw",
       });
 
-      const verification = await verify(result.identityFileContent);
+      const verification = await verifyIdentityFile(result.identityFileContent);
       const gov = verification.identity!.governance;
       const expected = GOVERNANCE_PRESETS[mode];
 
@@ -169,7 +182,7 @@ describe("generateIdentity", () => {
       passphrase: "pw",
     });
 
-    const verification = await verify(result.identityFileContent);
+    const verification = await verifyIdentityFile(result.identityFileContent);
     expect(verification.identity!.devices).toHaveLength(1);
     expect(verification.identity!.devices[0]!.device_id).toBe(result.deviceId);
     expect(verification.identity!.devices[0]!.name).toBe("my-agent");
@@ -212,7 +225,7 @@ describe("service identity generation", () => {
       },
     });
 
-    const verification = await verify(result.identityFileContent);
+    const verification = await verifyIdentityFile(result.identityFileContent);
     expect(verification.valid).toBe(true);
     expect(verification.identity!.type).toBe("service");
     expect(verification.identity!.service_name).toBe("Flight Search");
@@ -235,7 +248,7 @@ describe("service identity generation", () => {
       },
     });
 
-    const verification = await verify(result.identityFileContent);
+    const verification = await verifyIdentityFile(result.identityFileContent);
     expect(verification.identity!.governance.max_risk_auto).toBe("R2_WRITE");
     expect(verification.identity!.governance.require_approval_above).toBe("R2_WRITE");
   });
@@ -247,7 +260,7 @@ describe("service identity generation", () => {
       passphrase: "pw",
     });
 
-    const verification = await verify(result.identityFileContent);
+    const verification = await verifyIdentityFile(result.identityFileContent);
     expect(verification.identity!.type).toBeUndefined();
     expect(verification.identity!.service_name).toBeUndefined();
     expect(verification.identity!.governance.max_risk_auto).toBe("R1_DRAFT");
@@ -296,7 +309,7 @@ describe("regenerateIdentityFile", () => {
       trustMode: "guarded",
     });
 
-    const verification = await verify(regenerated);
+    const verification = await verifyIdentityFile(regenerated);
     expect(verification.valid).toBe(true);
     expect(verification.identity!.motebit_id).toBe(result.motebitId);
     expect(verification.identity!.identity.public_key).toBe(result.publicKeyHex);
@@ -320,7 +333,7 @@ describe("regenerateIdentityFile", () => {
       trustMode: "minimal",
     });
 
-    const verification = await verify(regenerated);
+    const verification = await verifyIdentityFile(regenerated);
     expect(verification.valid).toBe(true);
     expect(verification.identity!.governance.trust_mode).toBe("minimal");
   });
