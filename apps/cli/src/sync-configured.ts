@@ -53,3 +53,22 @@ export function daemonRelayUrl(
   const url = config.syncUrl ?? process.env["MOTEBIT_SYNC_URL"] ?? fullConfig.sync_url;
   return url != null && url !== "" ? url : undefined;
 }
+
+/** The relay wiring a daemon is built from (#962): `daemonRelay`. */
+export interface DaemonRelay {
+  /** The relay this daemon pushes its events to, or undefined when none. */
+  syncUrl: string | undefined;
+}
+
+/**
+ * Everything a daemon's runtime config and relay wiring read about the relay
+ * (#962): what `cliRuntimeConfig` takes, as `daemon.ts` passes it for `run`
+ * and `serve`.
+ */
+export function daemonRelay(
+  config: Pick<CliConfig, "syncUrl">,
+  fullConfig: { sync_url?: string },
+  transport: "stdio" | "http" | "run",
+): DaemonRelay {
+  return { syncUrl: daemonRelayUrl(config, fullConfig, transport) };
+}

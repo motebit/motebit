@@ -57,7 +57,7 @@ import { handleRelayCommandFrame } from "./relay-command-frame.js";
 import { fromHex, loadActiveSigningKey, IdentityKeyError } from "./identity.js";
 import { registerWithRelay, type RelayRegistrationHandle } from "./relay-registration.js";
 import { createRelaySyncSocket } from "./relay-sync-socket.js";
-import { cliRuntimeConfig, daemonRelayUrl } from "./sync-configured.js";
+import { cliRuntimeConfig, daemonRelay } from "./sync-configured.js";
 import { createDaemonRelaySync } from "./daemon-relay-sync.js";
 import { startRunEventSync, startServeEventSync, type CliEventPush } from "./cli-event-push.js";
 import { enrollOnAnnounce } from "./machine-roster.js";
@@ -204,7 +204,8 @@ export async function handleRun(config: CliConfig): Promise<void> {
 
   // The relay this daemon syncs with. Fallback chain: CLI arg > env var >
   // config file. Decided before the runtime: its `syncConfigured` reads it.
-  const syncUrl = daemonRelayUrl(config, fullConfig, "run");
+  const relay = daemonRelay(config, fullConfig, "run");
+  const syncUrl = relay.syncUrl;
   const runtime = new MotebitRuntime(
     // #962: `syncConfigured` is decided by `cliRuntimeConfig`, last.
     cliRuntimeConfig(
@@ -222,7 +223,7 @@ export async function handleRun(config: CliConfig): Promise<void> {
         memoryGovernance: governance.memoryGovernance,
         taskRouter: PLANNING_TASK_ROUTER,
       },
-      { syncUrl },
+      relay,
     ),
     {
       storage: buildStorageAdapters(moteDb),
@@ -1144,7 +1145,8 @@ export async function handleServe(config: CliConfig): Promise<void> {
 
   // The relay `serve` syncs with: the HTTP transport only (stdio serve never
   // reaches one). Fallback chain: CLI arg > env var > config file.
-  const syncUrl = daemonRelayUrl(config, fullConfig, transport);
+  const relay = daemonRelay(config, fullConfig, transport);
+  const syncUrl = relay.syncUrl;
   const runtime = new MotebitRuntime(
     // #962: `syncConfigured` is decided by `cliRuntimeConfig`, last.
     cliRuntimeConfig(
@@ -1168,7 +1170,7 @@ export async function handleServe(config: CliConfig): Promise<void> {
         memoryGovernance: governance.memoryGovernance,
         taskRouter: PLANNING_TASK_ROUTER,
       },
-      { syncUrl },
+      relay,
     ),
     {
       storage: buildStorageAdapters(moteDb),

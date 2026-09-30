@@ -20,7 +20,9 @@
 import type { SyncEngine, SyncResult } from "@motebit/sync-engine";
 import type { EventStoreAdapter } from "@motebit/event-log";
 import { createDaemonRelaySync, type DaemonRelaySync } from "./daemon-relay-sync.js";
-import { bootstrapReplDevice, syncFailureLine } from "./runtime-factory.js";
+import { bootstrapReplDevice, openMotebitDatabase, syncFailureLine } from "./runtime-factory.js";
+import { bootstrapIdentity } from "./identity.js";
+import type { FullConfig } from "./config.js";
 
 /** The periodic push cadence: the plan sync's (30 s). */
 export const PUSH_INTERVAL_MS = 30_000;
@@ -267,4 +269,29 @@ export async function openDelegateEventSync(
       return closing;
     },
   };
+}
+
+export interface ReplIdentityOptions {
+  /** The REPL's `motebit.db`. */
+  dbPath: string;
+  fullConfig: FullConfig;
+  passphrase: string;
+}
+
+/**
+ * The REPL's identity bootstrap (index.ts), before any runtime or sync: the
+ * first launch mints the identity and appends its events to `motebit.db`.
+ * On a machine where another motebit process already holds the runtime
+ * socket, the REPL then attaches as a frontend and never connects sync
+ * itself.
+ */
+export async function bootstrapReplIdentity(
+  opts: ReplIdentityOptions,
+): Promise<{ motebitId: string; isFirstLaunch: boolean }> {
+  const db = await openMotebitDatabase(opts.dbPath);
+  try {
+    return await bootstrapIdentity(db, opts.fullConfig, opts.passphrase);
+  } finally {
+    db.close();
+  }
 }

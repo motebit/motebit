@@ -78,10 +78,12 @@ import {
 } from "../runtime-factory.js";
 import type { MotebitDatabase } from "../runtime-factory.js";
 import { parseCliArgs } from "../args.js";
-import { cliRuntimeConfig, daemonRelayUrl } from "../sync-configured.js";
+import { cliRuntimeConfig, daemonRelay } from "../sync-configured.js";
 import { createDaemonRelaySync } from "../daemon-relay-sync.js";
 import { registerWithRelay } from "../relay-registration.js";
+import { decryptPrivateKey, fromHex } from "../identity.js";
 import {
+  bootstrapReplIdentity,
   openDelegateEventSync,
   replStartupSync,
   startRunEventSync,
@@ -518,21 +520,269 @@ describe("#962 — every configured CLI entry point gets its pushes acknowledged
 
   it.concurrent.each([
     ["run", "no sync URL", undefined, "run"],
-    ["serve", "stdio transport", "http://relay.zz962h.test", "stdio"],
+    ["serve", "stdio transport, no relay named anywhere", undefined, "stdio"],
   ] as const)(
     "%s | no relay configured (%s): sync is not configured, compaction is not held",
     async (_entry, _why, flag, transport) => {
       const { ctx } = await newCell(undefined);
       const db = await openMotebitDatabase(join(ctx.dir, "motebit.db"));
       // The relay each daemon resolves (none), passed as the daemons pass it.
-      const syncUrl = daemonRelayUrl({ syncUrl: flag }, {}, transport);
-      expect(syncUrl).toBeUndefined();
-      const runtime = daemonRuntime(ctx, db, syncUrl);
+      const relay = daemonRelay({ syncUrl: flag }, {}, transport);
+      expect(relay.syncUrl).toBeUndefined();
+      const runtime = new MotebitRuntime(cliRuntimeConfig({ motebitId: ctx.mid }, relay), {
+        storage: buildStorageAdapters(db),
+        renderer: new NullRenderer(),
+      });
       cleanups.push(async () => runtime.stop());
       lowerCompactionThreshold(runtime);
       await appendEvents(db.eventStore, ctx.mid, 12);
       expect(await runtime.isSyncConfigured()).toBe(false);
       expect(await runtime.compact()).toBeGreaterThan(0);
     },
+  );
+
+  // #962 round 5: `serve` over stdio pushes to no relay, but a relay NAMED
+  // for it (flag, env or config.json) makes the identity configured — its
+  // events wait for a relay's acknowledgment (another process pushes them).
+  it.concurrent.each([
+    ["--sync-url", { syncUrl: "http://relay.zz962h.test" }, {}],
+    ["config.json sync_url", { syncUrl: undefined }, { sync_url: "http://relay.zz962h.test" }],
+  ] as const)(
+    "serve | stdio transport with a relay named (%s): the identity is configured, compaction is held",
+    async (_why, flags, fullConfig) => {
+      const { ctx } = await newCell(undefined);
+      const db = await openMotebitDatabase(join(ctx.dir, "motebit.db"));
+      const relay = daemonRelay(flags, fullConfig, "stdio");
+      // It reaches no relay itself…
+      expect(relay.syncUrl).toBeUndefined();
+      const runtime = new MotebitRuntime(cliRuntimeConfig({ motebitId: ctx.mid }, relay), {
+        storage: buildStorageAdapters(db),
+        renderer: new NullRenderer(),
+      });
+      cleanups.push(async () => runtime.stop());
+      lowerCompactionThreshold(runtime);
+      await appendEvents(db.eventStore, ctx.mid, 12);
+      // …but nothing it wrote is deleted before a relay acknowledged it.
+      expect(await runtime.compact()).toBe(0);
+    },
+  );
+});
+
+// ── #962 round 5: sync intent belongs to the DATABASE, across processes ─────
+//
+// Rounds 2–4 decided "is sync configured?" per PROCESS; the events it
+// protects belong to the database's identity. Here two processes share ONE
+// `motebit.db` — process A writes (and compacts, as `runtime.stop()` does),
+// then process B, another entry point, writes and compacts — with the relay
+// unreachable throughout; the relay comes up later and the REPL pushes. The
+// law: once ANY process for this identity was configured for a relay, no
+// event is deleted before a relay acknowledged it. Only a database whose
+// identity was NEVER configured compacts freely.
+
+/** The processes of the cross-process dimension. */
+type Proc = "repl" | "repl-bootstrap" | "serve-stdio" | "run" | "delegate";
+/** Does the identity's config.json name a relay? */
+type Cfg = "config-sync_url" | "no-config";
+
+interface XCell {
+  ctx: CellCtx;
+  port: number;
+  relayDb: string;
+  dbPath: string;
+  fullConfig: { sync_url?: string };
+}
+
+const PASS = "pass-962x";
+
+/**
+ * One process on the cell's `motebit.db`: runs, writes, compacts, exits.
+ * Returns every event id of the identity the database held BEFORE this
+ * process compacted — what the safety check accounts for.
+ */
+async function runProcess(x: XCell, proc: Proc): Promise<string[]> {
+  const { ctx } = x;
+  if (proc === "repl-bootstrap") {
+    // The REPL's first launch: the identity is minted into motebit.db
+    // before any runtime or sync (and the REPL may then attach to a running
+    // daemon as a frontend, never connecting sync itself).
+    const full = { ...x.fullConfig } as import("../config.js").FullConfig;
+    const { motebitId } = await bootstrapReplIdentity({
+      dbPath: x.dbPath,
+      fullConfig: full,
+      passphrase: PASS,
+    });
+    const priv = fromHex(await decryptPrivateKey(full.cli_encrypted_key!, PASS));
+    ctx.mid = motebitId;
+    ctx.deviceId = full.device_id!;
+    ctx.kp = { publicKey: fromHex(full.device_public_key!), privateKey: priv };
+    return [...(await dbIds(x.dbPath, ctx.mid))];
+  }
+  let s: Started;
+  if (proc === "repl" || proc === "delegate") {
+    s = await ENTRIES[proc](ctx);
+  } else {
+    const db = await openMotebitDatabase(x.dbPath);
+    // Exactly the relay wiring the daemon resolves from its flags + config.
+    const relay = daemonRelay(
+      { syncUrl: undefined },
+      x.fullConfig,
+      proc === "run" ? "run" : "stdio",
+    );
+    const runtime = new MotebitRuntime(cliRuntimeConfig({ motebitId: ctx.mid }, relay), {
+      storage: buildStorageAdapters(db),
+      renderer: new NullRenderer(),
+    });
+    let push: { stop(): void } | undefined;
+    if (relay.syncUrl) {
+      const relaySync = await createDaemonRelaySync({
+        syncUrl: relay.syncUrl,
+        motebitId: ctx.mid,
+        deviceId: ctx.deviceId,
+        privateKey: () => ctx.kp.privateKey,
+      });
+      push = startRunEventSync(runtime, relaySync, {
+        syncUrl: relay.syncUrl,
+        log: (l) => ctx.lines.push(l),
+        device: device(ctx),
+        pushIntervalMs: PUSH_MS,
+      });
+    }
+    s = {
+      runtime,
+      store: db.eventStore,
+      db,
+      async stop() {
+        push?.stop();
+        runtime.stop();
+      },
+    };
+  }
+  lowerCompactionThreshold(s.runtime);
+  await appendEvents(s.store, ctx.mid, 10);
+  await s.finish?.();
+  const written = [...(await localIds(s.store, ctx.mid))];
+  // What `runtime.stop()`'s autoCompact would do, awaited.
+  await s.runtime.compact();
+  await s.stop();
+  await sleep(50);
+  s.db.close();
+  return written;
+}
+
+/** Every event id of the identity the database holds now. */
+async function dbIds(dbPath: string, mid: string): Promise<Set<string>> {
+  const db = await openMotebitDatabase(dbPath);
+  try {
+    return await localIds(db.eventStore, mid);
+  } finally {
+    db.close();
+  }
+}
+
+/** Is this process configured for a relay for this identity (in its own right)? */
+function configures(proc: Proc, cfg: Cfg): boolean {
+  if (proc === "repl" || proc === "repl-bootstrap" || proc === "delegate") return true;
+  // A daemon whose identity's config names a relay: `run` pushes to it; a
+  // stdio `serve` does not reach it, but the identity is configured.
+  return cfg === "config-sync_url";
+}
+
+/** The REPL, the relay reachable at last: pushes; everything local reaches the relay. */
+async function replPushesLater(x: XCell): Promise<{ relay: ServedRelay; held: Set<string> }> {
+  const relay = await startRelay(x.port, x.relayDb);
+  cleanups.push(() => relay.close());
+  const s = await ENTRIES.repl(x.ctx);
+  cleanups.push(() => s.stop());
+  const latest = await s.store.getLatestClock(x.ctx.mid);
+  const done = await waitFor(
+    async () => (await pushCompactionFloor(s.store, latest, { syncConfigured: true })) >= latest,
+    LIVE_MS,
+  );
+  expect(done, `the REPL's push was never acknowledged; ${JSON.stringify(x.ctx.lines)}`).toBe(true);
+  const held = await relayIds(relay, x.ctx.mid);
+  await s.stop();
+  return { relay, held };
+}
+
+async function newXCell(cfg: Cfg): Promise<XCell> {
+  const { ctx, port, relayDb } = await newCell(undefined);
+  return {
+    ctx,
+    port,
+    relayDb,
+    dbPath: join(ctx.dir, "motebit.db"),
+    fullConfig: cfg === "config-sync_url" ? { sync_url: ctx.base } : {},
+  };
+}
+
+describe.sequential("#962 round 5 — sync intent is the database's, across processes", () => {
+  const PROCS_A: Proc[] = ["repl", "repl-bootstrap", "serve-stdio", "run", "delegate"];
+  const PROCS_B: Proc[] = ["repl", "serve-stdio", "run", "delegate"];
+  const CFGS: Cfg[] = ["config-sync_url", "no-config"];
+  const xcells: Array<[Proc, Proc, Cfg]> = [];
+  for (const a of PROCS_A)
+    for (const b of PROCS_B) if (a !== b) for (const c of CFGS) xcells.push([a, b, c]);
+
+  it.each(xcells)(
+    "A=%s writes, then B=%s writes + compacts | %s | relay reachable later",
+    async (a, b, cfg) => {
+      const x = await newXCell(cfg);
+      // The events the law protects: everything on the database from the
+      // moment the first configured process for this identity started. An
+      // unconfigured process that compacted BEFORE any was configured
+      // compacted a never-configured database — allowed.
+      const appended = new Set<string>();
+      let configuredYet = false;
+      for (const proc of [a, b]) {
+        configuredYet ||= configures(proc, cfg);
+        const before = proc === "repl-bootstrap" ? [] : [...(await dbIds(x.dbPath, x.ctx.mid))];
+        const written = await runProcess(x, proc);
+        if (configuredYet) for (const id of [...before, ...written]) appended.add(id);
+      }
+      const configured = configuredYet;
+      if (!configured) {
+        // Never configured: compaction ran free (and nothing to push).
+        expect((await dbIds(x.dbPath, x.ctx.mid)).size).toBeLessThan(20);
+        return;
+      }
+      const { held } = await replPushesLater(x);
+      const local = await dbIds(x.dbPath, x.ctx.mid);
+      const lost = [...appended].filter((id) => !local.has(id) && !held.has(id));
+      expect(lost, "events deleted before any relay acknowledged them").toEqual([]);
+      expect(appended.size).toBeGreaterThanOrEqual(10);
+    },
+    CELL_TIMEOUT,
+  );
+
+  // The round-4 cold reviewer's exact probe P6: the REPL's first launch
+  // mints the identity (config.json naming a relay, or the REPL's default
+  // relay) without connecting sync; then a no-relay daemon — `serve` over
+  // stdio — writes 20 events and compacts; later the REPL pushes. On
+  // a00b5a298 compaction deleted 19 of 20 and the relay held 1.
+  it.each(["config-sync_url", "no-config"] as const)(
+    "P6 | REPL first launch (%s), stdio serve writes 20 + compacts, REPL pushes later: the relay holds all 20",
+    async (cfg) => {
+      const x = await newXCell(cfg);
+      await runProcess(x, "repl-bootstrap");
+      const db = await openMotebitDatabase(x.dbPath);
+      const relay = daemonRelay({ syncUrl: undefined }, x.fullConfig, "stdio");
+      const runtime = new MotebitRuntime(cliRuntimeConfig({ motebitId: x.ctx.mid }, relay), {
+        storage: buildStorageAdapters(db),
+        renderer: new NullRenderer(),
+      });
+      lowerCompactionThreshold(runtime);
+      const twenty = await appendEvents(db.eventStore, x.ctx.mid, 20);
+      // What `runtime.stop()`'s autoCompact would do, awaited.
+      await runtime.compact();
+      runtime.stop();
+      await sleep(50);
+      db.close();
+      const { held } = await replPushesLater(x);
+      expect(
+        twenty.filter((id) => held.has(id)).length,
+        "events the relay holds of the 20 the daemon wrote",
+      ).toBe(20);
+    },
+    CELL_TIMEOUT,
   );
 });

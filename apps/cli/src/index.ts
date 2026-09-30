@@ -35,18 +35,11 @@ import {
   resolveUnlockPassphrase,
   encryptPrivateKey,
   decryptPrivateKey,
-  bootstrapIdentity,
   fromHex,
   refuseIdentityWithoutKey,
 } from "./identity.js";
-import {
-  getDbPath,
-  buildToolRegistry,
-  createRuntime,
-  openMotebitDatabase,
-  syncFailureLine,
-} from "./runtime-factory.js";
-import { replStartupSync, type CliEventPush } from "./cli-event-push.js";
+import { getDbPath, buildToolRegistry, createRuntime, syncFailureLine } from "./runtime-factory.js";
+import { bootstrapReplIdentity, replStartupSync, type CliEventPush } from "./cli-event-push.js";
 import { connectConfigMcpServers, runtimeMcpServersForRepl } from "./mcp-config-wiring.js";
 import { createRunLedgerReader } from "./run-ledger-reader.js";
 import { consumeStream } from "./stream.js";
@@ -754,9 +747,11 @@ async function main(): Promise<void> {
 
   // Bootstrap identity — need DB first for identity storage
   const dbPath = getDbPath(config.dbPath);
-  const tempDb = await openMotebitDatabase(dbPath);
-  const { motebitId, isFirstLaunch } = await bootstrapIdentity(tempDb, fullConfig, passphrase);
-  tempDb.close();
+  const { motebitId, isFirstLaunch } = await bootstrapReplIdentity({
+    dbPath,
+    fullConfig,
+    passphrase,
+  });
 
   if (isFirstLaunch) {
     console.log();

@@ -515,3 +515,102 @@ describe.each(["sqlite", "idb"] as const)("#962 round 2 — %s store", (kind) =>
     for (const id of ids) expect(relay.times(id)).toBe(1);
   });
 });
+
+/**
+ * #962 round 5 — sync intent is a property of the DATABASE for an identity,
+ * never of the process that happens to compact. Rounds 2–4 floored
+ * compaction on "is THIS process configured?", so a configured process that
+ * wrote events but never persisted a push cursor (the REPL's identity
+ * bootstrap; a process that exited before connecting) left them to the next
+ * UNCONFIGURED process on the same database — which compacted them away.
+ */
+describe.each(KINDS)("#962 round 5 — sync intent is the database's (%s store)", (kind) => {
+  it("configured process A never connects; unconfigured process B on the same database compacts nothing", async () => {
+    const { store, reopen } = await openStore(kind);
+    const a = runtimeOver(store, true);
+    const ids = await appendN(store, 1, 5);
+    await trigger(a, "stop");
+    const store2 = await reopen();
+    const b = runtimeOver(store2, false);
+    ids.push(...(await appendN(store2, 6, 10)));
+    await trigger(b, "compact");
+    await trigger(b, "stop");
+    expect([...(await present(store2))].sort()).toEqual([...ids].sort());
+  });
+
+  it("A's provider says configured (async): B, unconfigured, still compacts nothing", async () => {
+    const { store, reopen } = await openStore(kind);
+    const a = runtimeOver(store, () => Promise.resolve(true));
+    const ids = await appendN(store, 1, 5);
+    await trigger(a, "stop");
+    const store2 = await reopen();
+    const b = runtimeOver(store2, false);
+    ids.push(...(await appendN(store2, 6, 10)));
+    await trigger(b, "compact");
+    expect([...(await present(store2))].sort()).toEqual([...ids].sort());
+  });
+
+  it("B, unconfigured, compacts FIRST; then configured A: A's events are never deleted by B's later run", async () => {
+    const { store, reopen } = await openStore(kind);
+    const b1 = runtimeOver(store, false);
+    await appendN(store, 1, 5);
+    await trigger(b1, "compact");
+    // Never configured so far: B compacted freely.
+    expect((await present(store)).size).toBe(1);
+    const store2 = await reopen();
+    const a = runtimeOver(store2, true);
+    const ids = await appendN(store2, 6, 10);
+    await trigger(a, "stop");
+    const store3 = await reopen();
+    const b2 = runtimeOver(store3, false);
+    await trigger(b2, "compact");
+    const left = await present(store3);
+    for (const id of ids) expect(left.has(id)).toBe(true);
+  });
+
+  it("A configured and every event acked: B, unconfigured, compacts up to the ack (no permanent pin)", async () => {
+    const { store, reopen } = await openStore(kind);
+    const a = runtimeOver(store, true);
+    const relay = new FakeRelay();
+    a.connectSync(socketOver(relay, STREAM));
+    await appendN(store, 1, 5);
+    await a.sync.sync();
+    a.sync.stop();
+    await trigger(a, "stop");
+    const store2 = await reopen();
+    const b = runtimeOver(store2, false);
+    await trigger(b, "compact");
+    expect([...(await present(store2))]).toEqual(["e-5"]);
+  });
+
+  it("never configured: an unconfigured process compacts freely", async () => {
+    const { store, reopen } = await openStore(kind);
+    const b1 = runtimeOver(store, false);
+    await appendN(store, 1, 5);
+    await trigger(b1, "stop");
+    const store2 = await reopen();
+    const b2 = runtimeOver(store2, undefined);
+    await appendN(store2, 6, 10);
+    await trigger(b2, "compact");
+    expect([...(await present(store2))]).toEqual(["e-10"]);
+  });
+});
+
+describe.each(["sqlite", "idb"] as const)("#962 round 5 — fail closed (%s store)", (kind) => {
+  it("the sync-intent marker cannot be read: an unconfigured process deletes nothing", async () => {
+    const { store } = await openStore(kind);
+    const unreadable = new Proxy(store, {
+      get(target, prop) {
+        if (prop === "getSyncSeqCursor") {
+          return () => Promise.reject(new Error("disk I/O error"));
+        }
+        const v = Reflect.get(target, prop, target) as unknown;
+        return typeof v === "function" ? (v as (...a: unknown[]) => unknown).bind(target) : v;
+      },
+    });
+    const b = runtimeOver(unreadable, false);
+    const ids = await appendN(store, 1, 5);
+    await trigger(b, "compact");
+    expect([...(await present(store))].sort()).toEqual(ids);
+  });
+});
