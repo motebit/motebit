@@ -107,8 +107,23 @@ interface ClusterTx {
   slot?: number;
   forkSlot?: number;
   forkErr?: boolean;
-  createsNonce?: { account: string; authority: string };
+  createsNonce?: {
+    account: string;
+    authority: string;
+    /** `create`: createAccountWithSeed; `allocate`: allocateWithSeed (take over a squat); `init`: nonceInitialize only. */
+    mode: "create" | "allocate" | "init";
+    topUp: number;
+  };
 }
+
+/** A raw (non-nonce) account sitting at an address — a squat. */
+interface RawAccount {
+  owner: string;
+  dataLen: number;
+  lamports: number;
+}
+
+const NONCE_RENT = 1_447_680;
 
 type Witness = "honest" | "lagging_lb" | "bigtable_absent";
 
@@ -118,6 +133,8 @@ class AgaveCluster {
   witness: Witness = "honest";
   /** The cluster halts the moment a payout is broadcast. */
   haltOnPayout = false;
+  /** Raw accounts (squats): anyone can fund an address; only its key (or base) can shape it. */
+  readonly raw = new Map<string, RawAccount>();
   /** The blockhash confirmation wait's connection drops (a non-expiry error). */
   confirmError: string | null = null;
   readonly txs = new Map<string, ClusterTx>();
@@ -189,6 +206,24 @@ class AgaveCluster {
       this.nonces.get(tx.nonceAccount)!.history.push({ slot: this.slot, value: this.freshValue() });
     }
     if (tx.createsNonce && !tx.landErr) {
+      // agave system_processor: create_account refuses an address with
+      // lamports > 0 (AccountAlreadyInUse); allocate(_with_seed) needs a
+      // system-owned account with empty data; initialize needs an
+      // Uninitialized 80-byte account holding the rent-exempt minimum.
+      const c = tx.createsNonce;
+      const r = this.raw.get(c.account);
+      const ok =
+        !this.nonces.has(c.account) &&
+        (c.mode === "create"
+          ? r === undefined
+          : r !== undefined &&
+            r.owner === web3.SystemProgram.programId.toBase58() &&
+            r.dataLen === (c.mode === "allocate" ? 0 : 80) &&
+            r.lamports + c.topUp >= NONCE_RENT);
+      if (!ok) tx.landErr = true;
+    }
+    if (tx.createsNonce && !tx.landErr) {
+      this.raw.delete(tx.createsNonce.account);
       this.nonces.set(tx.createsNonce.account, {
         authority: tx.createsNonce.authority,
         created: this.slot,
@@ -246,6 +281,16 @@ class AgaveCluster {
         const commitment = typeof c === "string" ? c : (c as { commitment?: string })?.commitment;
         const bank = this.bankSlot(commitment ?? "confirmed", this.viewTip());
         const address = pubkey.toBase58();
+        const squat = this.raw.get(address);
+        if (squat && !this.nonces.has(address)) {
+          return Promise.resolve({
+            data: Buffer.alloc(squat.dataLen),
+            owner: new web3.PublicKey(squat.owner),
+            lamports: squat.lamports,
+            executable: false,
+            rentEpoch: 0,
+          });
+        }
         const nonce = this.nonces.get(address);
         if (nonce) {
           const value = this.nonceAt(address, bank);
@@ -397,9 +442,21 @@ class AgaveCluster {
         ixs.find((ix) => typeOf(ix) === "InitializeNonceAccount"),
       );
       kind = "create_nonce";
+      const account = init.noncePubkey.toBase58();
+      const topUp = ixs
+        .filter((ix) => typeOf(ix) === "Transfer")
+        .map((ix) => web3.SystemInstruction.decodeTransfer(ix))
+        .filter((t: any) => t.toPubkey.toBase58() === account)
+        .reduce((a: number, t: any) => a + Number(t.lamports), 0);
       rec.createsNonce = {
-        account: init.noncePubkey.toBase58(),
+        account,
         authority: init.authorizedPubkey.toBase58(),
+        mode: ixs.some((ix) => typeOf(ix) === "CreateWithSeed" || typeOf(ix) === "Create")
+          ? "create"
+          : ixs.some((ix) => typeOf(ix) === "AllocateWithSeed" || typeOf(ix) === "Allocate")
+            ? "allocate"
+            : "init",
+        topUp,
       };
       rec.lastValid = (this.blockhashes.get(tx.recentBlockhash) ?? this.slot) + 150;
     } else {
@@ -437,6 +494,11 @@ class AgaveCluster {
     this.settle(rec);
     if (this.haltOnPayout && (kind === "payout" || kind === "blockhash_payout")) this.halted = true;
     return Promise.resolve(sig);
+  }
+
+  /** An UNRECORDED transaction (another tool, another process) advances the nonce. */
+  externalAdvance(account: string): void {
+    this.nonces.get(account)!.history.push({ slot: this.slot, value: this.freshValue() });
   }
 
   payouts(): ClusterTx[] {
@@ -579,11 +641,18 @@ async function registerAndFund(r: SyncRelay, mid: string): Promise<void> {
 }
 
 /** The relay's background resolution, one tick — whichever this build has. */
+/** Errors the resolution tick raised (the supervisor's alarm), per cell. */
+let alarms: string[] = [];
+
 async function resolveOnce(r: SyncRelay, operator: OperatorSolanaTransfer): Promise<void> {
   const hook = (r as unknown as { withdrawalPayouts?: { resolveOnce(): Promise<void> } })
     .withdrawalPayouts;
   if (hook) {
-    await hook.resolveOnce();
+    try {
+      await hook.resolveOnce();
+    } catch (err) {
+      alarms.push(err instanceof Error ? err.message : String(err));
+    }
     return;
   }
   const sweep = (chainPayouts as unknown as Record<string, unknown>).runFreshVerdictSweep as
@@ -758,17 +827,36 @@ afterEach(async () => {
   relay = undefined;
 });
 
+/** The treasury's derived nonce address (the default seed). */
+async function nonceAddressOf(): Promise<string> {
+  const treasury = web3.Keypair.fromSeed(TREASURY_SEED).publicKey;
+  return (
+    await web3.PublicKey.createWithSeed(
+      treasury,
+      "motebit-payout-nonce-v1",
+      web3.SystemProgram.programId,
+    )
+  ).toBase58();
+}
+
 /** What the last cell's cluster saw, for the mechanism checks below. */
 let lastCluster: AgaveCluster | undefined;
 let lastRows: Row[] = [];
 
-async function runCell(script: Script, witness: Witness, timing: Timing): Promise<string[]> {
+async function runCell(
+  script: Script,
+  witness: Witness,
+  timing: Timing,
+  setup?: (c: AgaveCluster, nonceAddress: string) => void,
+): Promise<string[]> {
+  alarms = [];
   const treasury = web3.Keypair.fromSeed(TREASURY_SEED).publicKey;
   const sourceAta: string = spl
     .getAssociatedTokenAddressSync(new web3.PublicKey(USDC_MAINNET), treasury)
     .toBase58();
   const cluster = new AgaveCluster(fatesFor(script), new Set([sourceAta]));
   cluster.witness = witness;
+  setup?.(cluster, await nonceAddressOf());
   const operator = makeRealTransfer(cluster);
   relay = await createTestRelay({ enableDeviceAuth: false, operatorSolanaTransfer: operator });
   const mid = `zzag-${script}-${witness}-${timing}`;
@@ -946,4 +1034,130 @@ describe("the mechanism: durable nonce, finalized status, kill (#990)", () => {
       expect(rowsOf(relay, mid)[0]!.status).toBe(lands ? "completed" : "processing");
     },
   );
+});
+
+// ── round 7: the lane's public address can be squatted (C1) ──────────────
+
+describe("the nonce lane's address is public: every squat state (#990 round 7, C1)", () => {
+  const SYSTEM = () => web3.SystemProgram.programId.toBase58();
+
+  it("pre-funded, system-owned, 0 bytes (the ~$0.15 attack): the relay TAKES IT OVER and pays", async () => {
+    expect(
+      await runCell("lands", "honest", "prompt", (c, addr) =>
+        c.raw.set(addr, { owner: SYSTEM(), dataLen: 0, lamports: 890_880 }),
+      ),
+    ).toEqual([]);
+    expect(lastCluster!.landedOk()).toHaveLength(1);
+    expect(lastRows.map((r) => r.status)).toEqual(["completed"]);
+  });
+
+  it("pre-funded with MORE than the rent: taken over without a top-up, pays", async () => {
+    expect(
+      await runCell("lands", "honest", "prompt", (c, addr) =>
+        c.raw.set(addr, { owner: SYSTEM(), dataLen: 0, lamports: 5_000_000 }),
+      ),
+    ).toEqual([]);
+    expect(lastRows.map((r) => r.status)).toEqual(["completed"]);
+  });
+
+  const UNRECOVERABLE: Array<{ name: string; set: (c: AgaveCluster, addr: string) => void }> = [
+    {
+      name: "owned by another program",
+      set: (c, addr) =>
+        c.raw.set(addr, {
+          owner: spl.TOKEN_PROGRAM_ID.toBase58(),
+          dataLen: 165,
+          lamports: 2_039_280,
+        }),
+    },
+    {
+      name: "system-owned with partial data (unreachable without the treasury key; fail closed anyway)",
+      set: (c, addr) => c.raw.set(addr, { owner: SYSTEM(), dataLen: 10, lamports: 1_000_000 }),
+    },
+    {
+      name: "a nonce account whose authority is not the treasury",
+      set: (c, addr) =>
+        c.nonces.set(addr, {
+          authority: web3.Keypair.generate().publicKey.toBase58(),
+          created: 0,
+          history: [{ slot: 0, value: web3.Keypair.generate().publicKey.toBase58() }],
+        }),
+    },
+  ];
+
+  it.each(UNRECOVERABLE)(
+    "$name: fail closed — nothing sent, the withdrawal stays pending (/fail works), and the loop raises an alarm naming the address",
+    async ({ set }) => {
+      expect(await runCell("lands", "honest", "prompt", set)).toEqual([]);
+      expect(lastCluster!.payouts()).toHaveLength(0);
+      const addr = await nonceAddressOf();
+      expect(alarms.some((a) => a.includes(addr))).toBe(true);
+    },
+  );
+});
+
+// ── round 7: the nonce advanced by a transaction we never recorded (P1) ───
+
+describe("an unrecorded transaction consumes the in-flight payout's nonce (#990 round 7, P1)", () => {
+  async function inFlightThenExternalAdvance(mid: string) {
+    const treasury = web3.Keypair.fromSeed(TREASURY_SEED).publicKey;
+    const sourceAta: string = spl
+      .getAssociatedTokenAddressSync(new web3.PublicKey(USDC_MAINNET), treasury)
+      .toBase58();
+    const cluster = new AgaveCluster(fatesFor("dropped"), new Set([sourceAta]));
+    const operator = makeRealTransfer(cluster);
+    relay = await createTestRelay({ enableDeviceAuth: false, operatorSolanaTransfer: operator });
+    await registerAndFund(relay, mid);
+    await relay.app.request(`/api/v1/agents/${mid}/withdraw`, {
+      method: "POST",
+      headers: jsonAuthWithIdempotency(),
+      body: JSON.stringify({ amount: W_USD, destination: DEST }),
+    });
+    const id = rowsOf(relay, mid)[0]!.withdrawal_id;
+    expect(rowsOf(relay, mid)[0]!.status).toBe("processing");
+    cluster.externalAdvance(await nonceAddressOf());
+    cluster.advance(80); // finalized sees the advance
+    return { cluster, id };
+  }
+
+  it("not_paid answers the truth — 409 nonce_consumed_unrecorded, and no kill is recorded as sent", async () => {
+    const mid = "zzag-p1-honest";
+    const { cluster, id } = await inFlightThenExternalAdvance(mid);
+    const res = await admin(relay!, id, "reconcile", {
+      outcome: "not_paid",
+      attestation: "explorer shows nothing",
+    });
+    expect(res.status).toBe(409);
+    const body = (await res.json()) as { reason: string };
+    expect(body.reason).toBe("nonce_consumed_unrecorded");
+    expect([...cluster.txs.values()].filter((t) => t.kind === "kill")).toHaveLength(0);
+    expect(refunds(relay!, mid)).toBe(0);
+  });
+
+  it("the operator's explicit, attested not_paid override refunds once — the payout provably cannot land", async () => {
+    const mid = "zzag-p1-override";
+    const { cluster, id } = await inFlightThenExternalAdvance(mid);
+    const res = await admin(relay!, id, "reconcile", {
+      outcome: "not_paid",
+      override: "nonce_consumed_unrecorded",
+      attestation: "the treasury ran a manual nonce advance at 12:00; the payout never landed",
+    });
+    expect(res.status).toBe(200);
+    expect(refunds(relay!, mid)).toBe(1);
+    expect(cluster.payouts().some((t) => cluster.canLand(t))).toBe(false);
+    expect(cluster.landedOk()).toHaveLength(0);
+  });
+
+  it("paid naming the recorded payout is still accepted", async () => {
+    const mid = "zzag-p1-paid";
+    const { cluster, id } = await inFlightThenExternalAdvance(mid);
+    const sig = cluster.payouts()[0]!.signature;
+    const res = await admin(relay!, id, "reconcile", {
+      outcome: "paid",
+      payout_reference: sig,
+      attestation: "an archive explorer shows it landed",
+    });
+    expect(res.status).toBe(200);
+    expect(refunds(relay!, mid)).toBe(0);
+  });
 });
