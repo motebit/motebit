@@ -485,7 +485,11 @@ describe("check-tests-typechecked — round-4 canary-prefix and concurrency case
     const files = basePackage(P);
     const rel = `${P}/src/__tests__/${CANARY_PREFIX}aaaaaaaaaaaa.test.ts`;
     // a dead owner, but the id inside does not match the file name: not ours
-    files[rel] = canaryContent("bbbbbbbbbbbb", { run: "r", pid: 2 ** 22 + 7, host: hostname() });
+    files[rel] = canaryContent("bbbbbbbbbbbb", {
+      run: "abcdef0123456789",
+      pid: 2 ** 22 + 7,
+      host: hostname(),
+    });
     const root = workspace(files);
     gate(root);
     expect(existsSync(join(root, rel))).toBe(true);
@@ -507,12 +511,12 @@ describe("check-tests-typechecked — round-4 canary-prefix and concurrency case
       const liveRel = `${P}/src/__tests__/${CANARY_PREFIX}0123456789ab.test.ts`;
       const deadRel = `${P}/src/__tests__/${CANARY_PREFIX}ba9876543210.test.ts`;
       files[liveRel] = canaryContent("0123456789ab", {
-        run: "otherrun",
+        run: "0e0e0e0e0e0e0e0e",
         pid: livePid,
         host: hostname(),
       });
       files[deadRel] = canaryContent("ba9876543210", {
-        run: "deadrun",
+        run: "dead0000dead0000",
         pid: deadPid,
         host: hostname(),
       });
@@ -560,5 +564,35 @@ describe("check-tests-typechecked — round-4 canary-prefix and concurrency case
     writeTree(root, { [TEST]: (files[TEST] as string).replace(TYPE_ERROR, "") });
     const g = gate(root);
     expect(g.status, g.out).toBe(0);
+  });
+});
+
+describe("check-tests-typechecked — diff scope (pre-push)", () => {
+  it("--changed checks only packages with a test/config change, and falls back to the full run without a base", () => {
+    const files = { ...basePackage("packages/a"), ...basePackage("packages/b") };
+    const root = workspace(files);
+    const git = (...a: string[]): void => {
+      const r = spawnSync("git", a, { cwd: root, encoding: "utf-8" });
+      if (r.status !== 0) throw new Error(r.stderr);
+    };
+    git("add", "-A");
+    git("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "base");
+    git("update-ref", "refs/remotes/origin/main", "HEAD");
+    writeTree(root, { "packages/b/src/__tests__/more.test.ts": "export const m = 1;\n" });
+    const run = (): { status: number | null; out: string } => {
+      const r = spawnSync(TSX, [GATE, "--changed"], {
+        cwd: REPO,
+        env: { ...ENV, CHECK_TESTS_TYPECHECKED_ROOT: root },
+        encoding: "utf-8",
+      });
+      return { status: r.status, out: `${r.stdout}\n${r.stderr}` };
+    };
+    let g = run();
+    expect(g.status, g.out).toBe(0);
+    expect(g.out).toMatch(/1 package\(s\) scanned \(DIFF-SCOPED: 1 of 2 package\(s\)/);
+    git("update-ref", "-d", "refs/remotes/origin/main");
+    g = run();
+    expect(g.status, g.out).toBe(0);
+    expect(g.out).toMatch(/2 package\(s\) scanned \(diff scope requested, FULL run: merge-base/);
   });
 });

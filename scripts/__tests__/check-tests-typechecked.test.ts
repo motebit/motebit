@@ -10,21 +10,27 @@
  */
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { hostname, tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import {
+  affectsPackage,
   argvViolations,
+  canaryContent,
+  canaryOwnerLive,
   chainViolations,
+  changedScope,
   DIFF_ALLOWED_KEYS,
   isTestFile,
   KNOWN_UNCOVERED,
   nonAndOperators,
   optionDiff,
+  parseCanary,
   reportsError,
+  tscSkipsChecking,
   workspacePackageDirs,
 } from "../check-tests-typechecked.js";
 
@@ -248,6 +254,128 @@ describe("KNOWN_UNCOVERED", () => {
         expect(reason.length).toBeGreaterThan(40);
       }
     }
+  });
+});
+
+describe("tscSkipsChecking — the pragma forms tsc honours, and only those", () => {
+  it.each([
+    "// @ts-nocheck\n",
+    "// @TS-NOCHECK\n",
+    "//@Ts-NoCheck\n",
+    "   // @ts-nocheck\n",
+    "/// @ts-nocheck\n",
+    "\uFEFF// @ts-nocheck\n",
+    "\uFEFF// @TS-NoCheck\n",
+    "// @ts-nocheck: reason\n",
+    "#!/usr/bin/env node\n// @ts-nocheck\n",
+    "/* license */\n// @TS-NOCHECK\n",
+    "// @ts-check\n// @ts-nocheck\n",
+    "\t\n\n// @ts-nocheck\nexport {};\n",
+  ])("honoured: %j", (head) => {
+    expect(tscSkipsChecking("a.test.ts", `${head}export const x = 1;\n`)).toBe(true);
+  });
+  it.each([
+    "export {};\n// @ts-nocheck\n",
+    "/* @ts-nocheck */\n",
+    "/** @ts-nocheck */\n",
+    "// @ts-nocheck\n// @ts-check\n",
+    'export const s = "// @ts-nocheck";\n',
+    "// @ts-nocheckx\n",
+    "// ts-nocheck\n",
+  ])("not honoured: %j", (head) => {
+    expect(tscSkipsChecking("a.test.ts", `${head}export const x = 1;\n`)).toBe(false);
+  });
+});
+
+describe("canaries — identified by content and owner, never by name", () => {
+  const owner = { run: "0123abcd0123abcd", pid: process.pid, host: hostname() };
+  const name = "/p/__typecheck_canary_0123456789ab.test.ts";
+
+  it("round-trips a canary the gate writes", () => {
+    expect(parseCanary(name, canaryContent("0123456789ab", owner))).toEqual(owner);
+  });
+  it("rejects a prefix-named file with other content, a changed byte, or a mismatched id", () => {
+    const c = canaryContent("0123456789ab", owner);
+    expect(parseCanary(name, "export const mine = 1;\n")).toBeNull();
+    expect(parseCanary(name, `${c} `)).toBeNull();
+    expect(parseCanary(name, c.replace("canary 0123", "canary 9123"))).toBeNull();
+    expect(parseCanary(name, canaryContent("ffffffffffff", owner))).toBeNull();
+    expect(parseCanary("/p/__typecheck_canary_real.test.ts", c)).toBeNull();
+  });
+  it("owner liveness: a live pid on this host is live; a dead pid, an aged canary are not; another host is live until it ages", () => {
+    const now = Date.now();
+    expect(canaryOwnerLive({ ...owner, run: "ffff" }, now, now)).toBe(true);
+    expect(canaryOwnerLive({ ...owner, run: "ffff", pid: 2 ** 22 + 7 }, now, now)).toBe(false);
+    expect(canaryOwnerLive({ ...owner, run: "ffff" }, now - 2 * 3600_000, now)).toBe(false);
+    expect(
+      canaryOwnerLive({ ...owner, run: "ffff", host: "elsewhere", pid: 2 ** 22 + 7 }, now, now),
+    ).toBe(true);
+    expect(
+      canaryOwnerLive({ ...owner, run: "ffff", host: "elsewhere" }, now - 2 * 3600_000, now),
+    ).toBe(false);
+  });
+});
+
+describe("diff scope", () => {
+  it("affectsPackage: tests, configs, manifests, test-ish paths — not plain sources or docs", () => {
+    for (const p of [
+      "src/__tests__/a.ts",
+      "e2e/x.spec.ts",
+      "tsconfig.test.json",
+      "tsconfig.json",
+      "vitest.config.ts",
+      "package.json",
+      "test-setup/setup.ts",
+      "src/vitest.setup.ts",
+      "fixtures/data.ts",
+      "src/__typecheck_canary_x.ts",
+    ])
+      expect(affectsPackage(p), p).toBe(true);
+    for (const p of ["src/index.ts", "README.md", "src/lib/money.ts"])
+      expect(affectsPackage(p), p).toBe(false);
+  });
+
+  function repo(): string {
+    const g = (...a: string[]): void => {
+      const r = spawnSync("git", a, { cwd: root, encoding: "utf-8" });
+      if (r.status !== 0) throw new Error(r.stderr);
+    };
+    write("pnpm-workspace.yaml", 'packages:\n  - "packages/*"\n');
+    write("tsconfig.base.json", "{}\n");
+    for (const n of ["a", "b"]) {
+      write(`packages/${n}/package.json`, "{}\n");
+      write(`packages/${n}/src/index.ts`, "export {};\n");
+      write(`packages/${n}/src/__tests__/i.test.ts`, "export {};\n");
+    }
+    g("init", "-q");
+    g("add", "-A");
+    g("-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "base");
+    g("update-ref", "refs/remotes/origin/main", "HEAD");
+    return root;
+  }
+  const dirsOf = (): string[] => workspacePackageDirs(root);
+
+  it("scopes to packages with a test/config change (committed, unstaged or untracked); none for a source-only change", () => {
+    repo();
+    write("packages/a/src/index.ts", "export const y = 2;\n");
+    let s = changedScope(root, dirsOf());
+    expect(s).toMatchObject({ kind: "scoped", dirs: [] });
+    write("packages/b/src/__tests__/new.test.ts", "export {};\n");
+    s = changedScope(root, dirsOf());
+    expect(s.kind === "scoped" && s.dirs.map((d) => d.slice(root.length + 1))).toEqual([
+      "packages/b",
+    ]);
+  });
+
+  it("fails CLOSED to the full run: no origin/main, or a shared config changed", () => {
+    repo();
+    write("tsconfig.base.json", '{ "compilerOptions": {} }\n');
+    expect(changedScope(root, dirsOf())).toMatchObject({
+      kind: "full",
+      reason: "tsconfig.base.json changed",
+    });
+    spawnSync("git", ["update-ref", "-d", "refs/remotes/origin/main"], { cwd: root });
+    expect(changedScope(root, dirsOf())).toMatchObject({ kind: "full" });
   });
 });
 

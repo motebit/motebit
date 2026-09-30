@@ -37,6 +37,10 @@
  *    chain can stop at its first failing `tsc`, so canaries still unreported
  *    are re-run alone until a pass reports none of them. Canaries are always
  *    removed (try/finally, exit and signal handlers, and a drain at start).
+ *    A canary's content names its run id, pid and host; the drain removes
+ *    only untracked files byte-identical to a canary whose run is no longer
+ *    live (dead pid on this host, or older than an hour) — never a file by
+ *    its name, never a concurrent run's canary.
  * 3. **Recorded invocations.** Every `tsc` a script actually runs is recorded
  *    with its exact argv by a node preload (`scripts/lib/tsc-recorder.cjs`),
  *    in a record-only pass that enumerates the whole chain without compiling,
@@ -51,7 +55,13 @@
  *    recorded invocation's `--showConfig` (catches a per-file `exclude` a
  *    directory canary cannot see).
  * 6. **`@ts-nocheck`** in any collected file fails (a canary cannot prove a
- *    file-local pragma). A collected JS test file fails (tsc never checks it).
+ *    file-local pragma) — detected by TypeScript's own parser, so exactly the
+ *    forms tsc honours (any case, `//` or `///`, leading comments after a
+ *    BOM/shebang/block comment, last directive wins). A collected JS test file
+ *    fails (tsc never checks it). A collected file outside the package dir
+ *    fails (vitest `dir: ".."`). A collected file named with the canary prefix
+ *    fails unless it is this run's canary or a byte-exact canary of another
+ *    live run (untracked only).
  * 7. The `typecheck` script — and every package script it runs via
  *    `pnpm run` / `pnpm <x>` / `npm run` — may chain only with `&&`, and may
  *    not use `$` or backtick expansion (a chain that varies by environment).
@@ -64,18 +74,28 @@
  * The canary pass is one full `typecheck` per package (more for a chain that
  * stops early), run `availableParallelism()` packages at a time
  * (`CHECK_TESTS_TYPECHECKED_CONCURRENCY` overrides). Measured 2026-09-30 on 4
- * cores: 119s standalone, 103s inside `pnpm check` (the longest gate; the
- * whole `pnpm check` took 2m51s). Under the 4-minute bar, so it stays in
- * `pnpm check` — CI's `check` job and the local pre-push both run it.
+ * cores: ~120-128s standalone for the full run (74 packages). CI's `check`
+ * job runs it in full. The pre-push runs it DIFF-SCOPED
+ * (`CHECK_TESTS_TYPECHECKED_SCOPE=changed`, or `--changed`): only packages
+ * with a test / tsconfig / package.json / vitest-config / test-ish-path change
+ * vs merge-base(origin/main, HEAD), committed or not. It fails CLOSED to the
+ * full run when the merge-base or diff can't be computed, or when a shared
+ * config outside every package (tsconfig.base.json, a vitest config, the
+ * root package.json, pnpm-workspace.yaml, pnpm-lock.yaml) or the gate's own
+ * code changed. The aperture line names which it did.
  *
  * ## Usage
  *
  *   tsx scripts/check-tests-typechecked.ts           # exit 1 on any failure
  *   tsx scripts/check-tests-typechecked.ts --table   # per-package table
+ *   tsx scripts/check-tests-typechecked.ts --changed # diff-scoped (pre-push)
  *
  * Env: `CHECK_TESTS_TYPECHECKED_ROOT` (fixture workspace root, the harness),
  * `CHECK_TESTS_TYPECHECKED_ONLY` (comma list of package dirs — the
- * check-gates-effective probe; the aperture line says when it is set).
+ * check-gates-effective probe; the aperture line says when it is set; wins
+ * over the diff scope), `CHECK_TESTS_TYPECHECKED_SCOPE=changed` (diff scope,
+ * above), `CHECK_TESTS_TYPECHECKED_BASE` (the diff's base ref, default
+ * origin/main).
  */
 
 import { spawn, spawnSync } from "node:child_process";
@@ -90,9 +110,11 @@ import {
   unlinkSync,
   writeFileSync,
 } from "node:fs";
-import { availableParallelism, tmpdir } from "node:os";
+import { availableParallelism, hostname, tmpdir } from "node:os";
 import { basename, dirname, extname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+
+import ts from "typescript";
 
 import { formatRepair } from "./lib/gate-report.js";
 
@@ -165,6 +187,45 @@ export function isTestFile(relPath: string): boolean {
   if (DECLARATION.test(posix)) return false;
   if (TEST_NAME.test(posix)) return true;
   return TS_SOURCE.test(posix) && posix.split("/").includes("__tests__");
+}
+
+// ── @ts-nocheck, exactly as tsc reads it ─────────────────────────────────────
+
+/**
+ * Whether tsc skips type-checking this file because of a `@ts-nocheck`
+ * pragma — decided by TypeScript's own parser, never a regex. tsc reads the
+ * pragma from the file's LEADING comments only (after a BOM, a shebang,
+ * blanks and block comments), in a `//` or `///` comment, matching the name
+ * case-insensitively (`// @TS-NOCHECK`, `//@Ts-NoCheck: why`); the LAST
+ * `@ts-check` / `@ts-nocheck` there wins; a block comment, a mention after
+ * code, or one inside a string is not a pragma. `createSourceFile` records
+ * the outcome as `checkJsDirective` (the field the checker's skip test reads,
+ * for TS files as well as JS). The repo's own typescript is used; the
+ * self-test in `assertPragmaDetectionWorks` fails the gate closed if a
+ * TypeScript upgrade renames that field.
+ */
+export function tscSkipsChecking(fileName: string, text: string): boolean {
+  const sf = ts.createSourceFile(fileName, text, ts.ScriptTarget.Latest, false);
+  const d = (sf as unknown as { checkJsDirective?: { enabled: boolean } }).checkJsDirective;
+  return d !== undefined && !d.enabled;
+}
+
+/** Fail closed if `tscSkipsChecking` can no longer see a pragma tsc honours. */
+export function assertPragmaDetectionWorks(): void {
+  const honoured = ["// @ts-nocheck\n", "\uFEFF// @TS-NOCHECK\nlet a = 1;\n", "//@Ts-NoCheck: x\n"];
+  const ignored = [
+    "let a = 1;\n// @ts-nocheck\n",
+    "/* @ts-nocheck */\n",
+    "// @ts-nocheck\n// @ts-check\n",
+  ];
+  const ok =
+    honoured.every((t) => tscSkipsChecking("probe.ts", t)) &&
+    ignored.every((t) => !tscSkipsChecking("probe.ts", t));
+  if (!ok) {
+    throw new Error(
+      `@ts-nocheck detection no longer matches tsc ${ts.version} (SourceFile.checkJsDirective changed?) — update tscSkipsChecking in scripts/check-tests-typechecked.ts`,
+    );
+  }
 }
 
 // ── workspace ────────────────────────────────────────────────────────────────
@@ -398,24 +459,40 @@ export function vitestCollect(
   }
 }
 
-/** Git-listed (tracked, or untracked-not-ignored) test-named files under a package, absolute. */
-export function gitTestFiles(pkgAbs: string): { files: string[]; error?: string } {
-  const r = spawnSync(
-    "git",
-    ["ls-files", "-z", "--cached", "--others", "--exclude-standard", "--", "."],
-    {
-      cwd: pkgAbs,
-      encoding: "utf-8",
-      maxBuffer: 256 * 1024 * 1024,
-    },
-  );
+/** `git ls-files -z <args> -- .` in `cwd`, absolute paths. */
+function gitList(cwd: string, args: string[]): { files: string[]; error?: string } {
+  const r = spawnSync("git", ["ls-files", "-z", ...args, "--", "."], {
+    cwd,
+    encoding: "utf-8",
+    maxBuffer: 256 * 1024 * 1024,
+  });
   if (r.status !== 0) return { files: [], error: `git ls-files failed: ${r.stderr.trim()}` };
   return {
     files: r.stdout
       .split("\0")
-      .filter((f) => f.length > 0 && isTestFile(f) && !basename(f).startsWith(CANARY_PREFIX))
-      .map((f) => resolve(pkgAbs, f))
-      .filter((f) => existsSync(f)),
+      .filter((f) => f.length > 0)
+      .map((f) => resolve(cwd, f)),
+  };
+}
+
+/**
+ * Git-listed (tracked, or untracked-not-ignored) test-named files under a
+ * package, absolute — canary-prefixed names included (whether one is this
+ * run's canary is decided by `isExemptCanary`, never by the name) — plus the
+ * set of those that are tracked.
+ */
+export function gitTestFiles(pkgAbs: string): {
+  files: string[];
+  tracked: Set<string>;
+  error?: string;
+} {
+  const all = gitList(pkgAbs, ["--cached", "--others", "--exclude-standard"]);
+  const cached = gitList(pkgAbs, ["--cached"]);
+  const error = all.error ?? cached.error;
+  return {
+    files: all.files.filter((f) => isTestFile(relative(pkgAbs, f)) && existsSync(f)),
+    tracked: new Set(cached.files),
+    ...(error ? { error } : {}),
   };
 }
 
@@ -474,6 +551,72 @@ function runTypecheck(
 
 // ── canaries ─────────────────────────────────────────────────────────────────
 
+/** Who wrote a canary: the run (random per process), its pid and host. */
+export interface CanaryOwner {
+  run: string;
+  pid: number;
+  host: string;
+}
+
+const THIS_RUN: CanaryOwner = {
+  run: randomBytes(8).toString("hex"),
+  pid: process.pid,
+  host: hostname(),
+};
+
+/** A canary older than this is stale whatever its pid says (pid reuse). One lives for one typecheck. */
+const CANARY_MAX_AGE_MS = 60 * 60 * 1000;
+
+const CANARY_NAME = new RegExp(`^${CANARY_PREFIX}([0-9a-f]{12})\\.test(\\.(?:ts|tsx|mts|cts))$`);
+const CANARY_HEADER =
+  /^\/\/ check-tests-typechecked canary run=([0-9a-f]+) pid=(\d+) host=(\S+) — /;
+
+/** The exact bytes of a canary: its id (from the file name) and its owner. */
+export function canaryContent(id: string, owner: CanaryOwner): string {
+  return `// check-tests-typechecked canary run=${owner.run} pid=${owner.pid} host=${owner.host} — deliberately ill-typed; removed by the gate. Delete it if you see it.\nexport const ${CANARY_PREFIX}${id}: number = "canary ${id}";\n`;
+}
+
+/**
+ * The owner of the canary at `fileName` with `content`, or null when the file
+ * is not byte-for-byte a canary the gate writes (a user's file that merely
+ * carries the prefix, a template whose id differs from its name).
+ */
+export function parseCanary(fileName: string, content: string): CanaryOwner | null {
+  const name = CANARY_NAME.exec(basename(fileName));
+  const head = CANARY_HEADER.exec(content);
+  if (!name || !head) return null;
+  const owner = { run: head[1]!, pid: Number(head[2]), host: head[3]! };
+  return content === canaryContent(name[1]!, owner) ? owner : null;
+}
+
+/**
+ * Whether the run that wrote a canary may still be using it: this run; or a
+ * process that is alive on this host (a concurrent gate run) and a canary
+ * younger than CANARY_MAX_AGE_MS. A canary from another host cannot be
+ * probed, so it counts as live until it ages out — never deleted on a guess.
+ */
+export function canaryOwnerLive(owner: CanaryOwner, mtimeMs: number, now = Date.now()): boolean {
+  if (owner.run === THIS_RUN.run) return true;
+  if (now - mtimeMs > CANARY_MAX_AGE_MS) return false;
+  if (owner.host !== THIS_RUN.host) return true;
+  try {
+    process.kill(owner.pid, 0);
+    return true;
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code === "EPERM";
+  }
+}
+
+/** Content + mtime of a file, or null if it is gone. */
+function readIfPresent(abs: string): { text: string; mtimeMs: number } | null {
+  try {
+    return { text: readFileSync(abs, "utf-8"), mtimeMs: statSync(abs).mtimeMs };
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw err;
+  }
+}
+
 const liveCanaries = new Set<string>();
 
 function removeCanaries(paths: Iterable<string>): void {
@@ -504,26 +647,52 @@ function installCleanupHandlers(): void {
   }
 }
 
-/** Remove canaries an interrupted earlier run left behind. */
+/**
+ * Remove canaries an interrupted earlier run left behind: an untracked file
+ * whose content is byte-for-byte a canary template (id matching its name)
+ * whose owner is no longer live. A file that merely carries the prefix is
+ * never touched (the collection then fails it as a reserved name), and a
+ * concurrent run's canary is left alone.
+ */
 export function drainCanaries(root = ROOT): string[] {
   const r = spawnSync("git", ["ls-files", "-z", "--others", "--exclude-standard"], {
     cwd: root,
     encoding: "utf-8",
+    maxBuffer: 256 * 1024 * 1024,
   });
   if (r.status !== 0) return [];
-  const stale = r.stdout.split("\0").filter((f) => basename(f).startsWith(CANARY_PREFIX));
-  for (const f of stale) rmSync(join(root, f), { force: true });
-  return stale;
+  const drained: string[] = [];
+  for (const f of r.stdout.split("\0")) {
+    if (!basename(f).startsWith(CANARY_PREFIX)) continue;
+    const abs = join(root, f);
+    const got = readIfPresent(abs);
+    const owner = got ? parseCanary(abs, got.text) : null;
+    if (!got || !owner || canaryOwnerLive(owner, got.mtimeMs)) continue;
+    rmSync(abs, { force: true });
+    drained.push(f);
+  }
+  return drained;
+}
+
+/**
+ * Whether a collected file is a canary to leave out of the collection: this
+ * run's (the in-memory set), or an untracked, byte-exact canary of another
+ * live run. Never by name alone, never a tracked file.
+ */
+function isExemptCanary(abs: string, tracked: ReadonlySet<string>): boolean {
+  if (liveCanaries.has(abs)) return true;
+  if (tracked.has(abs) || !basename(abs).startsWith(CANARY_PREFIX)) return false;
+  const got = readIfPresent(abs);
+  if (!got) return true; // gone: a run removed it between listing and now
+  const owner = parseCanary(abs, got.text);
+  return owner !== null && canaryOwnerLive(owner, got.mtimeMs);
 }
 
 function writeCanary(dirAbs: string, ext: string): string {
   const id = randomBytes(6).toString("hex");
   const file = join(dirAbs, `${CANARY_PREFIX}${id}.test${ext}`);
   liveCanaries.add(file);
-  writeFileSync(
-    file,
-    `// check-tests-typechecked canary — deliberately ill-typed; removed by the gate. Delete it if you see it.\nexport const ${CANARY_PREFIX}${id}: number = "canary ${id}";\n`,
-  );
+  writeFileSync(file, canaryContent(id, THIS_RUN));
   return file;
 }
 
@@ -588,9 +757,23 @@ export async function checkPackage(
   const g = gitTestFiles(pkgAbs);
   if (g.error) res.problems.push(g.error);
   for (const f of [...v.files, ...g.files]) {
-    if (f.startsWith(pkgAbs + "/") && !basename(f).startsWith(CANARY_PREFIX)) collected.add(f);
+    if (isExemptCanary(f, g.tracked) || !existsSync(f)) continue;
+    if (!f.startsWith(pkgAbs + "/")) {
+      res.problems.push(
+        `${relative(root, f).split("\\").join("/")} is collected by this package's vitest but is outside the package (${dir}/) — no check here proves its typecheck covers it; keep every test (and setup file) inside the package that runs it, or narrow the vitest config (\`dir\`, \`include\`, \`setupFiles\`) to the package`,
+      );
+      continue;
+    }
+    collected.add(f);
   }
   const files = [...collected].sort();
+  for (const f of files) {
+    if (basename(f).startsWith(CANARY_PREFIX)) {
+      res.problems.push(
+        `${rel(f)} uses the reserved canary prefix \`${CANARY_PREFIX}\` — the gate writes and removes files with that name; rename it`,
+      );
+    }
+  }
   res.testFiles = files.length;
   if (scripts.typecheck === undefined) {
     if (files.length > 0) {
@@ -612,10 +795,10 @@ export async function checkPackage(
         `${rel(f)} is a JavaScript test file — tsc never checks it; write it in TypeScript`,
       );
     }
-    const text = readFileSync(f, "utf-8");
-    if (/@ts-nocheck/.test(text)) {
+    const got = readIfPresent(f);
+    if (got && tscSkipsChecking(f, got.text)) {
       res.problems.push(
-        `${rel(f)} carries \`@ts-nocheck\` — remove it and fix the errors it hides`,
+        `${rel(f)} carries \`@ts-nocheck\` (tsc reads it in the leading comments, any case) — remove it and fix the errors it hides`,
       );
     }
   }
@@ -734,6 +917,76 @@ export async function checkPackage(
   return res;
 }
 
+// ── diff scope (pre-push) ────────────────────────────────────────────────────
+
+/**
+ * Files outside every package whose change can move any package's result:
+ * shared tsconfigs / vitest configs, the workspace and lockfile (the
+ * typescript/vitest versions), and the gate's own code.
+ */
+const GLOBAL_TRIGGER_NAME =
+  /(?:tsconfig|vitest|vite\.config)|^package\.json$|^pnpm-(?:workspace\.yaml|lock\.yaml)$|^\.npmrc$/;
+const GLOBAL_TRIGGER_PATHS = new Set([
+  "scripts/check-tests-typechecked.ts",
+  "scripts/lib/vitest-collect.mjs",
+  "scripts/lib/tsc-recorder.cjs",
+]);
+
+/**
+ * Whether a changed package-relative path can change that package's result:
+ * a test file (or a canary-prefixed name), a tsconfig / vitest / vite config
+ * or package.json, or anything under a test-ish path segment (a setup or
+ * fixture module a `setupFiles` entry may name).
+ */
+export function affectsPackage(relPath: string): boolean {
+  const posix = relPath.split("\\").join("/");
+  const name = basename(posix);
+  if (isTestFile(posix) || name.startsWith(CANARY_PREFIX)) return true;
+  if (/tsconfig|vitest|vite\.config/.test(name) || name === "package.json") return true;
+  return posix.split("/").some((seg) => /test|spec|setup|fixture|mock|e2e/i.test(seg));
+}
+
+export type Scope =
+  { kind: "scoped"; base: string; dirs: string[] } | { kind: "full"; reason: string };
+
+/**
+ * The packages a diff-scoped run checks: those with a change `affectsPackage`
+ * accepts vs merge-base(origin/main, HEAD) — committed, staged, unstaged and
+ * untracked (`CHECK_TESTS_TYPECHECKED_BASE` names another base ref). Fails CLOSED to the full run whenever the diff cannot be
+ * computed or a global trigger changed.
+ */
+export function changedScope(root: string, dirs: readonly string[]): Scope {
+  const git = (args: string[]): string | null => {
+    const r = spawnSync("git", args, {
+      cwd: root,
+      encoding: "utf-8",
+      maxBuffer: 256 * 1024 * 1024,
+    });
+    return r.status === 0 ? r.stdout : null;
+  };
+  const baseRef = process.env.CHECK_TESTS_TYPECHECKED_BASE || "origin/main";
+  const base = git(["merge-base", baseRef, "HEAD"])?.trim();
+  if (!base) return { kind: "full", reason: `merge-base(${baseRef}, HEAD) unavailable` };
+  const diff = git(["diff", "--name-only", "--no-renames", "-z", base]);
+  const untracked = git(["ls-files", "-z", "--others", "--exclude-standard"]);
+  if (diff === null || untracked === null) {
+    return { kind: "full", reason: `git diff against ${base.slice(0, 9)} failed` };
+  }
+  const rels = dirs.map((d) => relative(root, d).split("\\").join("/"));
+  const hit = new Set<string>();
+  for (const p of `${diff}\0${untracked}`.split("\0").filter(Boolean)) {
+    const owner = rels.filter((d) => p.startsWith(`${d}/`)).sort((a, b) => b.length - a.length)[0];
+    if (owner === undefined) {
+      if (GLOBAL_TRIGGER_PATHS.has(p) || GLOBAL_TRIGGER_NAME.test(basename(p))) {
+        return { kind: "full", reason: `${p} changed` };
+      }
+      continue;
+    }
+    if (affectsPackage(p.slice(owner.length + 1))) hit.add(owner);
+  }
+  return { kind: "scoped", base, dirs: dirs.filter((_, i) => hit.has(rels[i]!)) };
+}
+
 async function pool<T, R>(items: T[], n: number, fn: (t: T) => Promise<R>): Promise<R[]> {
   const out: R[] = new Array(items.length);
   let next = 0;
@@ -751,6 +1004,7 @@ async function pool<T, R>(items: T[], n: number, fn: (t: T) => Promise<R>): Prom
 async function main(): Promise<void> {
   const started = Date.now();
   const table = process.argv.includes("--table");
+  assertPragmaDetectionWorks();
   const drained = drainCanaries();
   if (drained.length > 0) process.stderr.write(`drained ${drained.length} stale canary file(s)\n`);
   const only = (process.env.CHECK_TESTS_TYPECHECKED_ONLY ?? "")
@@ -758,8 +1012,23 @@ async function main(): Promise<void> {
     .map((s) => s.trim())
     .filter(Boolean);
   let dirs = workspacePackageDirs();
-  if (only.length > 0)
+  let scopeNote = "";
+  if (only.length > 0) {
     dirs = dirs.filter((d) => only.includes(relative(ROOT, d).split("\\").join("/")));
+    scopeNote = ` (SCOPED by CHECK_TESTS_TYPECHECKED_ONLY to ${only.join(", ")})`;
+  } else if (
+    process.argv.includes("--changed") ||
+    process.env.CHECK_TESTS_TYPECHECKED_SCOPE === "changed"
+  ) {
+    const all = dirs.length;
+    const scope = changedScope(ROOT, dirs);
+    if (scope.kind === "scoped") {
+      dirs = scope.dirs;
+      scopeNote = ` (DIFF-SCOPED: ${dirs.length} of ${all} package(s) have test/config changes vs merge-base ${scope.base.slice(0, 9)}; CI runs all)`;
+    } else {
+      scopeNote = ` (diff scope requested, FULL run: ${scope.reason})`;
+    }
+  }
   const concurrency = Math.max(
     1,
     Number(process.env.CHECK_TESTS_TYPECHECKED_CONCURRENCY) || availableParallelism(),
@@ -786,7 +1055,7 @@ async function main(): Promise<void> {
   }
 
   const sum = (f: (r: PackageResult) => number): number => results.reduce((n, r) => n + f(r), 0);
-  const aperture = `${results.length} package(s) scanned${only.length > 0 ? ` (SCOPED by CHECK_TESTS_TYPECHECKED_ONLY to ${only.join(", ")})` : ""}; ${sum((r) => r.testFiles)} collected test file(s) (vitest collection + setupFiles + git-listed test-named files); ${sum((r) => r.canaryDirs)} canary director(ies) run through each package's real typecheck; ${sum((r) => r.invocations)} recorded tsc invocation(s) diffed against tsconfig.json over ${sum((r) => r.keysCompared)} compilerOptions key comparison(s) (only ${DIFF_ALLOWED_KEYS.size} emit/layout keys may differ); ${sum((r) => r.allowlisted.length)} file(s) allowlisted in KNOWN_UNCOVERED; ${Math.round((Date.now() - started) / 1000)}s`;
+  const aperture = `${results.length} package(s) scanned${scopeNote}; ${sum((r) => r.testFiles)} collected test file(s) (vitest collection + setupFiles + git-listed test-named files); ${sum((r) => r.canaryDirs)} canary director(ies) run through each package's real typecheck; ${sum((r) => r.invocations)} recorded tsc invocation(s) diffed against tsconfig.json over ${sum((r) => r.keysCompared)} compilerOptions key comparison(s) (only ${DIFF_ALLOWED_KEYS.size} emit/layout keys may differ); ${sum((r) => r.allowlisted.length)} file(s) allowlisted in KNOWN_UNCOVERED; ${Math.round((Date.now() - started) / 1000)}s`;
   const failing = results.filter((r) => r.problems.length > 0);
   if (failing.length === 0) {
     process.stdout.write(`✓ check-tests-typechecked: ${aperture}.\n`);

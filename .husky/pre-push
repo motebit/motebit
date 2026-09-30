@@ -70,7 +70,12 @@ if git symbolic-ref -q HEAD >/dev/null 2>&1; then
       printf '\n▷ pre-push: audit — SKIPPED (no pnpm-lock.yaml changes; CI runs it)\n' >&2
   fi
 
-  run_phase "gates (pnpm check)" pnpm check
+  # check-tests-typechecked runs every package's real typecheck with canaries
+  # (~2 min full — the slowest gate). Here it is DIFF-SCOPED to packages whose
+  # tests/tsconfigs/package.json/vitest config changed vs merge-base(origin/main);
+  # it falls back to the full run itself when the diff can't be computed or a
+  # shared config / the gate changed. CI's check job runs it in full.
+  run_phase "gates (pnpm check)" env CHECK_TESTS_TYPECHECKED_SCOPE=changed pnpm check
 
   # The gates' own tests (scripts/__tests__). ~8s. Until 2026-09-24 only CI's
   # gate-effectiveness job ran them, so a self-test broken by the calendar
