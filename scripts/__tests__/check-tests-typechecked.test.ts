@@ -10,6 +10,7 @@
  */
 import { spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { hostname, tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -232,14 +233,16 @@ describe("reportsError", () => {
 });
 
 describe("isTestFile", () => {
-  it("matches test-named files (TS or JS) and TS under __tests__, never declarations", () => {
+  it("matches test-named files (TS or JS) and TS under __tests__, declarations included", () => {
     expect(isTestFile("src/a.test.ts")).toBe(true);
     expect(isTestFile("e2e/a.spec.tsx")).toBe(true);
     expect(isTestFile("src/a.test.mjs")).toBe(true);
     expect(isTestFile("src/__tests__/helpers.ts")).toBe(true);
     expect(isTestFile("src/build/x.test.ts")).toBe(true);
     expect(isTestFile("src/__tests__/stub.cjs")).toBe(false);
-    expect(isTestFile("src/__tests__/types.d.ts")).toBe(false);
+    // a declaration under __tests__ is collected — and then RED (tsc skips it)
+    expect(isTestFile("src/__tests__/types.d.ts")).toBe(true);
+    expect(isTestFile("src/__tests__/api.d.test.ts")).toBe(true);
     expect(isTestFile("src/index.ts")).toBe(false);
   });
 });
@@ -367,6 +370,40 @@ describe("diff scope", () => {
     ]);
   });
 
+  // Every global trigger, named literally (never read back from the gate's
+  // own set): emptying or narrowing the set turns the matching case red.
+  it.each([
+    "scripts/check-tests-typechecked.ts",
+    "scripts/lib/vitest-collect.mjs",
+    "scripts/lib/tsc-recorder.cjs",
+    "scripts/lib/tsc-checked-files.cjs",
+    "scripts/lib/repo-lock.ts",
+    "tsconfig.base.json",
+    "tsconfig.json",
+    "vitest.config.ts",
+    "vitest.workspace.ts",
+    "vite.config.ts",
+    "package.json",
+    "pnpm-workspace.yaml",
+    "pnpm-lock.yaml",
+    ".npmrc",
+  ])("fails CLOSED to the full run when %s changes", (p) => {
+    repo();
+    const abs = join(root, p);
+    const extra = p === "pnpm-workspace.yaml" ? "# touched\n" : "\n// touched\n";
+    const prev = existsSync(abs) ? String(spawnSync("cat", [abs]).stdout) : "";
+    write(p, `${prev}${extra}`);
+    expect(changedScope(root, dirsOf())).toEqual({ kind: "full", reason: `${p} changed` });
+  });
+
+  it("fails CLOSED to the full run when git diff fails after merge-base succeeded (corrupt index)", () => {
+    repo();
+    writeFileSync(join(root, ".git/index"), "not an index");
+    const s = changedScope(root, dirsOf());
+    expect(s.kind, JSON.stringify(s)).toBe("full");
+    expect(s.kind === "full" && s.reason).toMatch(/git diff against [0-9a-f]+ failed/);
+  });
+
   it("fails CLOSED to the full run: no origin/main, or a shared config changed", () => {
     repo();
     write("tsconfig.base.json", '{ "compilerOptions": {} }\n');
@@ -376,6 +413,55 @@ describe("diff scope", () => {
     });
     spawnSync("git", ["update-ref", "-d", "refs/remotes/origin/main"], { cwd: root });
     expect(changedScope(root, dirsOf())).toMatchObject({ kind: "full" });
+  });
+});
+
+describe("tsc-checked-files — the compiler's own skip decision", () => {
+  const lib = createRequire(import.meta.url)("../lib/tsc-checked-files.cjs") as {
+    selfTest: (t: typeof ts) => void;
+    skipReason: (
+      t: typeof ts,
+      sf: ts.SourceFile,
+      o: ts.CompilerOptions,
+      host: unknown,
+    ) => string | null;
+  };
+  const host = { isSourceOfProjectReferenceRedirect: () => false };
+  const sf = (name: string, text: string): ts.SourceFile =>
+    ts.createSourceFile(name, text, ts.ScriptTarget.Latest, false);
+
+  it("self-test passes on the repo's TypeScript", () => {
+    expect(() => lib.selfTest(ts)).not.toThrow();
+  });
+  it("self-test THROWS when checkJsDirective is stubbed away (a TS upgrade renamed it)", () => {
+    const broken = {
+      ...ts,
+      createSourceFile: (...a: Parameters<typeof ts.createSourceFile>) => {
+        const s = ts.createSourceFile(...a) as unknown as Record<string, unknown>;
+        delete s.checkJsDirective;
+        return s as unknown as ts.SourceFile;
+      },
+    } as typeof ts;
+    expect(() => lib.selfTest(broken)).toThrow(/no longer matches what tsc/);
+  });
+  it("self-test THROWS when isDeclarationFileName stops treating `.d.test.ts` as a declaration", () => {
+    const broken = { ...ts, isDeclarationFileName: (f: string) => /\.d\.ts$/.test(f) } as typeof ts;
+    expect(() => lib.selfTest(broken)).toThrow(/no longer matches what tsc/);
+  });
+  it("names why tsc skips a file, or null when it checks it", () => {
+    expect(lib.skipReason(ts, sf("a.test.ts", "export {};\n"), {}, host)).toBeNull();
+    expect(
+      lib.skipReason(ts, sf("a.d.test.ts", "export {};\n"), { skipLibCheck: true }, host),
+    ).toMatch(/declaration file/);
+    expect(lib.skipReason(ts, sf("a.d.test.ts", "export {};\n"), {}, host)).toMatch(
+      /declaration file/,
+    );
+    expect(lib.skipReason(ts, sf("a.test.ts", "// @TS-NOCHECK\nexport {};\n"), {}, host)).toMatch(
+      /@ts-nocheck/,
+    );
+    expect(lib.skipReason(ts, sf("a.test.ts", "export {};\n"), { noCheck: true }, host)).toMatch(
+      /noCheck/,
+    );
   });
 });
 

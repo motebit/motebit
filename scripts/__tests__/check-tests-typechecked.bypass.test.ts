@@ -55,6 +55,7 @@ function writeTree(root: string, files: Files): void {
     writeFileSync(
       abs,
       typeof content === "string" ? content : `${JSON.stringify(content, null, 2)}\n`,
+      { mode: /\/\.bin\//.test(rel) ? 0o755 : 0o644 },
     );
   }
 }
@@ -156,6 +157,9 @@ const BY = {
   outside: /is outside the package/,
   reserved: /reserved canary prefix/,
   expansion: /parameter\/command expansion/,
+  declaration: /is a declaration file to TypeScript/,
+  unknownKey: /unknown file-valued vitest key/,
+  selfTest: /no longer matches what tsc/,
 } as const;
 
 interface Case {
@@ -425,6 +429,126 @@ const CASES: Case[] = [
       return P;
     },
   },
+  // ── round 5 ────────────────────────────────────────────────────────────
+  {
+    // TypeScript 5.x treats any `*.d.<ext>.ts` as a declaration file, and
+    // skipLibCheck (the repo's base config) skips declaration files entirely;
+    // vitest still runs it as a test.
+    id: "R5-C1 a test named `*.d.test.ts` is a declaration file tsc skips",
+    reason: ["declaration"],
+    hidesError: true,
+    build: (f) => {
+      f[`${P}/src/__tests__/api.d.test.ts`] = TYPE_ERROR;
+      return P;
+    },
+  },
+  {
+    id: "R5-PLAUSIBLE a `.d.ts` under __tests__ (can `declare module` imports to any)",
+    reason: ["declaration"],
+    hidesError: false,
+    build: (f) => {
+      f[`${P}/src/__tests__/shims.d.ts`] =
+        'declare module "#anything" {\n  const x: any;\n  export = x;\n}\n';
+      return P;
+    },
+  },
+  {
+    id: "R5-C2 vitest globalSetup file outside every tsconfig",
+    reason: ["canary", "membership"],
+    hidesError: true,
+    build: (f) => {
+      f[`${P}/vitest.config.mjs`] =
+        'export default { test: { globalSetup: ["./test-setup/global.ts"] } };\n';
+      f[`${P}/test-setup/global.ts`] = `export default function setup(): void {}\n${TYPE_ERROR}`;
+      return P;
+    },
+  },
+  {
+    id: "R5-C2 vitest snapshotSerializers file outside every tsconfig",
+    reason: ["canary", "membership"],
+    hidesError: true,
+    build: (f) => {
+      f[`${P}/vitest.config.mjs`] =
+        'export default { test: { snapshotSerializers: ["./test-setup/serializer.ts"] } };\n';
+      f[`${P}/test-setup/serializer.ts`] =
+        `export default { test: (): boolean => false, serialize: (): string => "" };\n${TYPE_ERROR}`;
+      return P;
+    },
+  },
+  {
+    id: "R5-C2 vitest custom environment file outside every tsconfig",
+    reason: ["canary", "membership"],
+    hidesError: true,
+    build: (f) => {
+      f[`${P}/vitest.config.mjs`] =
+        'export default { test: { environment: "./test-setup/env.ts" } };\n';
+      f[`${P}/test-setup/env.ts`] =
+        `export default { name: "probe", transformMode: "ssr", setup: () => ({ teardown(): void {} }) };\n${TYPE_ERROR}`;
+      return P;
+    },
+  },
+  {
+    id: "R5-C2 a file-valued vitest key the gate does not know",
+    reason: ["unknownKey"],
+    hidesError: true,
+    build: (f) => {
+      f[`${P}/vitest.config.mjs`] =
+        'export default { test: { someFutureHook: { module: "./test-setup/future.ts" } } };\n';
+      f[`${P}/test-setup/future.ts`] = TYPE_ERROR;
+      return P;
+    },
+  },
+  {
+    id: "R5-PLAUSIBLE the test script runs vitest with a non-default `-c` config",
+    reason: ["canary", "membership"],
+    hidesError: true,
+    build: (f) => {
+      patchJson(f, `${P}/package.json`, (v) => {
+        v.scripts = {
+          ...(v.scripts as object),
+          test: "vitest run -c vitest.unit.config.mjs",
+        };
+      });
+      f[`${P}/vitest.unit.config.mjs`] =
+        'export default { test: { setupFiles: ["./unit-setup/setup.ts"] } };\n';
+      f[`${P}/unit-setup/setup.ts`] = TYPE_ERROR;
+      return P;
+    },
+  },
+  {
+    // The TypeScript that ran lost the field the checker's skip test reads
+    // (simulated: its exported createSourceFile drops checkJsDirective). The
+    // gate must refuse to trust its skip detection, not go green.
+    id: "R5-C3 the recorded TypeScript fails the gate's skip-detection self-test",
+    reason: ["selfTest"],
+    hidesError: false,
+    build: (f) => {
+      const tsReal = join(REPO, "node_modules/typescript/lib");
+      const nm = `${P}/node_modules`;
+      f[`${nm}/typescript/package.json`] = {
+        name: "typescript",
+        version: "5.9.3",
+        main: "lib/typescript.js",
+        bin: { tsc: "bin/tsc" },
+      };
+      f[`${nm}/typescript/bin/tsc`] = '#!/usr/bin/env node\nrequire("../lib/tsc.js");\n';
+      f[`${nm}/typescript/lib/tsc.js`] = `require(${JSON.stringify(join(tsReal, "tsc.js"))});\n`;
+      f[`${nm}/typescript/lib/typescript.js`] =
+        `const real = require(${JSON.stringify(join(tsReal, "typescript.js"))});\n` +
+        "module.exports = new Proxy(real, {\n" +
+        "  get(t, k) {\n" +
+        '    if (k !== "createSourceFile") return t[k];\n' +
+        "    return (...a) => {\n" +
+        "      const sf = real.createSourceFile(...a);\n" +
+        "      delete sf.checkJsDirective;\n" +
+        "      return sf;\n" +
+        "    };\n" +
+        "  },\n" +
+        "});\n";
+      f[`${nm}/.bin/tsc`] = '#!/bin/sh\nexec node "$(dirname "$0")/../typescript/bin/tsc" "$@"\n';
+      return P;
+    },
+  },
 ];
 
 describe("check-tests-typechecked bypass harness", () => {
@@ -552,6 +676,58 @@ describe("check-tests-typechecked — round-4 canary-prefix and concurrency case
     }).stdout;
     expect(left).not.toContain(CANARY_PREFIX);
   });
+
+  it("R5-C4 ten concurrent pairs of gate runs, each pair on one workspace: zero false RED, no canary left", async () => {
+    const run = (root: string, delayMs: number): Promise<{ status: number | null; out: string }> =>
+      new Promise((done) => {
+        setTimeout(() => {
+          const c = spawn(TSX, [GATE], {
+            cwd: REPO,
+            env: { ...ENV, CHECK_TESTS_TYPECHECKED_ROOT: root },
+          });
+          let out = "";
+          c.stdout.on("data", (d: Buffer) => (out += d.toString()));
+          c.stderr.on("data", (d: Buffer) => (out += d.toString()));
+          c.on("close", (status) => done({ status, out }));
+        }, delayMs);
+      });
+    // Each run's canaries sit in ten test dirs the other run's tsc globs; a
+    // large file the test tsc reads BEFORE those dirs widens the window in
+    // which the other run can delete a canary this tsc already globbed (the
+    // TS6053 that stops the && chain before this run's canaries report).
+    const racy = (): Files => {
+      const f = basePackage(P);
+      f[`${P}/src/__tests__/Big.ts`] = Array.from(
+        { length: 60_000 },
+        (_, i) => `export const big${i}: number = ${i};\n`,
+      ).join("");
+      for (let i = 0; i < 10; i++) {
+        f[`${P}/src/__tests__/d${i}/t.test.ts`] = `export const t${i}: number = ${i};\n`;
+      }
+      return f;
+    };
+    const pairs = Array.from({ length: 10 }, () => workspace(racy()));
+    const results: { status: number | null; out: string }[] = [];
+    // five pairs at a time; the second run of each pair starts 0-2s later
+    for (let i = 0; i < pairs.length; i += 5) {
+      const batch = pairs.slice(i, i + 5);
+      results.push(
+        ...(
+          await Promise.all(batch.map((root, j) => Promise.all([run(root, 0), run(root, 400 * j)])))
+        ).flat(),
+      );
+    }
+    const red = results.filter((r) => r.status !== 0);
+    expect(red.map((r) => r.out)).toEqual([]);
+    for (const root of pairs) {
+      const left = spawnSync("git", ["ls-files", "--others", "--exclude-standard"], {
+        cwd: root,
+        encoding: "utf-8",
+      }).stdout;
+      expect(left).not.toContain(CANARY_PREFIX);
+    }
+  }, // repo's 30s test timeout (the gate's lock budget). // 20 gate runs, ten at a time; each run's own lock wait stays below the
+  300_000);
 
   it("control: a pragma tsc does not honour is not flagged (string mention, after code, overridden by a later @ts-check, block comment)", () => {
     const files = basePackage(P);
