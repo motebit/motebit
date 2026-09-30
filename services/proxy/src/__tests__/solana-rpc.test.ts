@@ -12,6 +12,7 @@ import {
   createMemoryRateLimiter,
   handleSolanaRpcOptions,
   handleSolanaRpcPost,
+  rateLimitBucket,
   redactUrl,
   scrubUpstream,
   type RateLimiter,
@@ -191,6 +192,26 @@ describe("solana-rpc: the key never crosses", () => {
     expect(h.logs).toHaveLength(1);
   });
 
+  it("scrubs a body-read failure that names the URL (the read is inside the try)", async () => {
+    const h = harness({
+      upstream: () =>
+        new Response(
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              controller.enqueue(new TextEncoder().encode('{"jsonrpc":"2.0",'));
+              controller.error(new TypeError(`terminated: socket reset reading ${UPSTREAM}`));
+            },
+          }),
+          { status: 200 },
+        ),
+    });
+    const res = await handleSolanaRpcPost(rpc(call("getBalance")), h.deps);
+    expect(res.status).toBe(502);
+    await assertNoKey(res, h.logs);
+    expect(h.logs).toHaveLength(1);
+    expect(h.logs[0]).toContain("host=mainnet.helius-rpc.com");
+  });
+
   it("never passes upstream headers through", async () => {
     const h = harness({
       upstream: () =>
@@ -237,6 +258,16 @@ describe("solana-rpc: CORS", () => {
     expect(res.status).toBe(204);
     expect(res.headers.get("access-control-allow-origin")).toBe(ORIGIN);
     expect(res.headers.get("access-control-allow-headers")).toContain("solana-client");
+  });
+
+  it("allows receipt.computer (apps/verify's deployed origin) by default", async () => {
+    const h = harness();
+    const res = await handleSolanaRpcPost(
+      rpc(call("getSignaturesForAddress"), { Origin: "https://receipt.computer" }),
+      h.deps,
+    );
+    expect(res.status).toBe(200);
+    expect(res.headers.get("access-control-allow-origin")).toBe("https://receipt.computer");
   });
 
   it("refuses foreign or missing origins (preflight and POST)", async () => {
@@ -298,6 +329,42 @@ describe("solana-rpc: rate limit + size cap", () => {
       h.deps,
     );
     expect(other.status).toBe(200);
+  });
+
+  it("buckets IPv6 clients by /64 — rotating the interface id buys no fresh budget", async () => {
+    const h = harness();
+    for (let i = 0; i < SOLANA_RPC_PER_MINUTE_LIMIT; i++) {
+      const ip = `2001:db8:1:2:${(i + 1).toString(16)}::${(i % 7) + 1}`;
+      expect(
+        (await handleSolanaRpcPost(rpc(call("getBalance"), { "x-forwarded-for": ip }), h.deps))
+          .status,
+      ).toBe(200);
+    }
+    const same64 = await handleSolanaRpcPost(
+      rpc(call("getBalance"), { "x-forwarded-for": "2001:0db8:0001:0002:ffff:ffff:ffff:ffff" }),
+      h.deps,
+    );
+    expect(same64.status).toBe(429);
+    const other64 = await handleSolanaRpcPost(
+      rpc(call("getBalance"), { "x-forwarded-for": "2001:db8:1:3::1" }),
+      h.deps,
+    );
+    expect(other64.status).toBe(200);
+  });
+
+  it("rateLimitBucket: IPv4 per address, IPv6 per /64, garbage shares one bucket", () => {
+    expect(rateLimitBucket("203.0.113.9")).toBe("203.0.113.9");
+    expect(rateLimitBucket("2001:db8:1:2::1")).toBe("2001:db8:1:2::/64");
+    expect(rateLimitBucket("2001:0DB8:0001:0002:aaaa:bbbb:cccc:dddd")).toBe("2001:db8:1:2::/64");
+    expect(rateLimitBucket("[2001:db8:1:2::5]:443")).toBe("2001:db8:1:2::/64");
+    expect(rateLimitBucket("fe80::1%eth0")).toBe("fe80:0:0:0::/64");
+    expect(rateLimitBucket("2001:db8::")).toBe("2001:db8:0:0::/64");
+    expect(rateLimitBucket("::ffff:198.51.100.7")).toBe("198.51.100.7");
+    expect(rateLimitBucket("::1")).toBe("0:0:0:0::/64");
+    for (const bad of ["1::2::3", "zzzz::1", "2001:db8", "1:2:3:4:5:6:7:8:9::"]) {
+      expect(rateLimitBucket(bad)).toBe("invalid");
+    }
+    expect(rateLimitBucket("")).toBe("unknown");
   });
 
   it("a limiter that fails closed denies", async () => {

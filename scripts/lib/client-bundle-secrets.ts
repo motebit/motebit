@@ -10,13 +10,18 @@
  * in `https://motebit.com/assets/main-*.js`. Strangers spent the account's
  * credits to 1M/1M and the provider halted every key on it.
  *
- * Three consumers, one module (zero imports so vite configs can load it):
- *   - `assertPublicBuildEnv` — called by apps/web + apps/verify `vite.config.ts`;
- *     the build FAILS when a resolved public env value is credential-shaped, and
- *     `VITE_SOLANA_RPC_URL` may carry no query string or userinfo at all.
- *   - `scanSourceForPublicEnvNames` + `PUBLIC_ENV_ALLOWLIST` — the static half
- *     of `scripts/check-no-secrets-in-client-bundles.ts`.
- *   - `scanArtifactText` + `CREDENTIAL_RULES` — the built-artifact half.
+ * Consumers, one module (zero imports so vite configs can load it):
+ *   - `enforcePublicBuildEnv` + `PUBLIC_BUILD_ENV` — called by apps/web +
+ *     apps/verify `vite.config.ts`; DENY BY DEFAULT: the build FAILS on any
+ *     public-prefixed var (any case) not named for that surface, and every named
+ *     var has a value validator (URL: https + host allowlist + no userinfo/query/
+ *     key-in-path; Stripe: publishable only).
+ *   - `publicEnvViolations` — the same law, reused by the gate's static arm (names
+ *     referenced in a governed surface's source) and dist arm (the env literal a
+ *     bundler emitted), so the build and the gate refuse exactly the same things.
+ *   - `scanSourceForPublicEnvNames` + `PUBLIC_ENV_ALLOWLIST` — the static arm for
+ *     every OTHER app (local-only surfaces), credential-shaped names.
+ *   - `scanArtifactText` + `CREDENTIAL_RULES` — credential shapes in any dist.
  *
  * Doctrine: CLAUDE.md "Fail-closed privacy"; docs/doctrine/security-boundaries.md.
  */
@@ -27,7 +32,8 @@ export const PUBLIC_ENV_PREFIXES = ["VITE_", "NEXT_PUBLIC_", "EXPO_PUBLIC_"] as 
 /** A public env NAME that smells like a credential or a credential-bearing URL. */
 export const SECRET_ENV_NAME = /KEY|TOKEN|SECRET|PASSWORD|PRIVATE|RPC_URL|API/;
 
-const PUBLIC_ENV_TOKEN = /\b(?:VITE|NEXT_PUBLIC|EXPO_PUBLIC)_[A-Z0-9_]+\b/g;
+/** Case-insensitive: vite inlines `VITE_helius_api_key` exactly like `VITE_HELIUS_API_KEY`. */
+const PUBLIC_ENV_TOKEN = /\b(?:VITE|NEXT_PUBLIC|EXPO_PUBLIC)_[A-Za-z0-9_]+\b/gi;
 
 export interface PublicEnvAllowEntry {
   /** Repo-relative file the name may appear in. */
@@ -43,26 +49,13 @@ const LOCAL_OPERATOR_TOKEN =
   "local-only operator console (never deployed: no vercel.json, no deploy workflow) — the operator bakes their own relay bearer into a bundle served on their own machine";
 
 /**
- * Every public env name matching `SECRET_ENV_NAME` that may appear in app
- * source, with its justification. Deny by default: a name not listed here, or
- * listed for a different file, is RED.
+ * Every public env name matching `SECRET_ENV_NAME` that may appear in the source
+ * of an app NOT governed by `PUBLIC_BUILD_ENV` (local-only surfaces), with its
+ * justification. Deny by default: a name not listed here, or listed for a
+ * different file, is RED. Governed surfaces (web, verify) answer to
+ * `PUBLIC_BUILD_ENV` instead — every public name, not only credential-shaped ones.
  */
 export const PUBLIC_ENV_ALLOWLIST: readonly PublicEnvAllowEntry[] = [
-  {
-    file: "apps/web/src/web-app.ts",
-    name: "VITE_SOLANA_RPC_URL",
-    why: "local-dev override of the server-side passthrough (api.motebit.com/v1/solana-rpc); apps/web/vite.config.ts refuses any value with a query string, userinfo or key-shaped token (assertPublicBuildEnv)",
-  },
-  {
-    file: "apps/verify/src/main.ts",
-    name: "VITE_SOLANA_RPC_URL",
-    why: "same law as apps/web: local-dev override only, guarded by assertPublicBuildEnv in apps/verify/vite.config.ts",
-  },
-  {
-    file: "apps/verify/src/vite-env.d.ts",
-    name: "VITE_SOLANA_RPC_URL",
-    why: "type declaration only (no value)",
-  },
   {
     file: "apps/desktop/src/desktop-tools.ts",
     name: "VITE_BRAVE_SEARCH_API_KEY",
@@ -106,8 +99,8 @@ export function scanSourceForPublicEnvNames(text: string): { name: string; offse
 }
 
 export function isSecretShapedEnvName(name: string): boolean {
-  const bare = name.replace(/^(?:VITE|NEXT_PUBLIC|EXPO_PUBLIC)_/, "");
-  return SECRET_ENV_NAME.test(bare);
+  const bare = name.replace(/^(?:VITE|NEXT_PUBLIC|EXPO_PUBLIC)_/i, "");
+  return SECRET_ENV_NAME.test(bare.toUpperCase());
 }
 
 /** `abcd…(36)` — enough to locate, never enough to use. */
@@ -235,68 +228,264 @@ export function scanArtifactText(
   return out;
 }
 
+// ── The public build env law (deny by default, per surface) ────────────────
+//
+// A shape denylist over VALUES missed the next leak before it happened: a key in
+// a URL PATH (Alchemy `/v2/<key>`, QuickNode `/<40hex>/`, Triton `/<uuid>`),
+// under a non-credential name (`VITE_RPC_ENDPOINT`), or under a lowercase name
+// (`VITE_helius_api_key`) all shipped green. So the law is inverted: a deployed
+// browser surface names EVERY public env var it may be built with, each with a
+// value validator; anything else in the build env refuses the build.
+
+/** How a public env value is validated. */
+export type PublicValueRule =
+  | {
+      readonly kind: "url";
+      /** Exact hostnames, or `*.example.com` (subdomains only — list the apex separately). */
+      readonly hosts: readonly string[];
+    }
+  | { readonly kind: "stripe-publishable" }
+  | { readonly kind: "enum"; readonly values: readonly string[] };
+
+export interface PublicBuildEnvEntry {
+  readonly name: string;
+  readonly rule: PublicValueRule;
+  /** Why this var may be inlined into public JS. Required. */
+  readonly why: string;
+}
+
+/** Hosts every URL-valued var may point at during local development. */
+const LOCAL_HOSTS = ["localhost", "127.0.0.1"] as const;
+const MOTEBIT_HOSTS = ["motebit.com", "*.motebit.com", ...LOCAL_HOSTS] as const;
+
+/** Set by vite itself when a `.env` file carries NODE_ENV; public metadata only. */
+const VITE_USER_NODE_ENV: PublicBuildEnvEntry = {
+  name: "VITE_USER_NODE_ENV",
+  rule: { kind: "enum", values: ["production", "development", "test"] },
+  why: "written into process.env by vite's own loadEnv when a .env file sets NODE_ENV; a mode label, never a credential",
+};
+
 /**
- * Why a browser Solana RPC URL is refused, or null when it is acceptable. The
- * value is public by construction, so it may carry NO query string, NO
- * userinfo, and no key-shaped path/query fragment.
+ * Every public env var a deployed Vite surface may be built with — keyed by the
+ * app directory under `apps/`. Deny by default: a public-prefixed name (any case)
+ * not listed for that surface refuses the build (`enforcePublicBuildEnv`) and
+ * turns `check-no-secrets-in-client-bundles` red (static + dist arms).
  */
-export function publicRpcUrlViolation(raw: string): string | null {
+export const PUBLIC_BUILD_ENV: Readonly<Record<string, readonly PublicBuildEnvEntry[]>> = {
+  web: [
+    {
+      name: "VITE_PROXY_URL",
+      rule: { kind: "url", hosts: MOTEBIT_HOSTS },
+      why: "set in Vercel project motebit-web: the motebit relay/proxy base (deprecated alias of VITE_MOTEBIT_RELAY_URL); a public origin",
+    },
+    {
+      name: "VITE_MOTEBIT_RELAY_URL",
+      rule: { kind: "url", hosts: MOTEBIT_HOSTS },
+      why: "canonical relay/proxy base URL (apps/web/src/providers.ts); a public origin",
+    },
+    {
+      name: "VITE_RELAY_URL",
+      rule: { kind: "url", hosts: MOTEBIT_HOSTS },
+      why: "relay base URL override (apps/web/src/storage.ts); a public origin",
+    },
+    {
+      name: "VITE_SEARCH_URL",
+      rule: { kind: "url", hosts: [...MOTEBIT_HOSTS, "motebit-web-search.fly.dev"] },
+      why: "web-search worker base URL (apps/web/src/web-app.ts); a public origin",
+    },
+    {
+      name: "VITE_BROWSER_SANDBOX_URL",
+      rule: { kind: "url", hosts: [...MOTEBIT_HOSTS, "motebit-browser-sandbox.fly.dev"] },
+      why: "set in Vercel project motebit-web: the services/browser-sandbox origin (auth is a per-session relay grant, never a baked key)",
+    },
+    {
+      name: "VITE_SOLANA_RPC_URL",
+      rule: { kind: "url", hosts: MOTEBIT_HOSTS },
+      why: "local-dev override of the server-side passthrough https://api.motebit.com/v1/solana-rpc; a provider host can never validate",
+    },
+    {
+      name: "VITE_STRIPE_PUBLISHABLE_KEY",
+      rule: { kind: "stripe-publishable" },
+      why: "set in Vercel project motebit-web: a Stripe publishable key (pk_live_/pk_test_), public by design; secret/restricted keys cannot validate",
+    },
+    VITE_USER_NODE_ENV,
+  ],
+  verify: [
+    {
+      name: "VITE_RELAY_URL",
+      rule: { kind: "url", hosts: [...MOTEBIT_HOSTS, "receipt.computer"] },
+      why: "relay base URL override (apps/verify/src/main.ts); Vercel project receipt-computer sets no VITE_* var",
+    },
+    {
+      name: "VITE_SOLANA_RPC_URL",
+      rule: { kind: "url", hosts: [...MOTEBIT_HOSTS, "receipt.computer"] },
+      why: "local-dev override of https://api.motebit.com/v1/solana-rpc (apps/verify/src/main.ts); a provider host can never validate",
+    },
+    VITE_USER_NODE_ENV,
+  ],
+};
+
+/** A public-prefixed env name, case-insensitive (`vite_x` is refused too). */
+export function isPublicEnvName(name: string): boolean {
+  return /^(?:VITE|NEXT_PUBLIC|EXPO_PUBLIC)_/i.test(name);
+}
+
+/**
+ * Vercel's "automatically expose System Environment Variables" injects
+ * `VITE_VERCEL_*` (commit sha/message/author, deployment urls) into every Vite
+ * build. No source reads them; `enforcePublicBuildEnv` deletes them from
+ * process.env before Vite reads it, so they never ship. Dropping is the safe
+ * direction: a dropped var is never inlined. Only process.env is dropped from —
+ * the same name in a `.env` file is an unknown var and refuses.
+ */
+export const PLATFORM_DROPPED_PUBLIC_ENV = /^VITE_VERCEL_[A-Z0-9_]*$/;
+
+function hostAllowed(hostname: string, hosts: readonly string[]): boolean {
+  const h = hostname.toLowerCase();
+  return hosts.some((p) =>
+    p.startsWith("*.") ? h.endsWith(p.slice(1)) && h.length > p.length - 1 : h === p,
+  );
+}
+
+/**
+ * A path segment ≥ 20 chars is refused unless it is a plain hyphenated word
+ * slug (`solana-rpc`, `browser-sandbox`): a key, hex id or uuid never is one.
+ */
+const WORD_SLUG = /^[a-z]{1,15}(?:-[a-z]{1,15})*$/;
+
+/** Why a URL-valued public env value is refused, or null when acceptable. */
+export function publicUrlViolation(raw: string, hosts: readonly string[]): string | null {
   const v = raw.trim();
-  if (v === "") return null;
-  if (/api-?key|apikey|token=|key=/i.test(v)) return "contains a key/token parameter";
+  if (v !== raw) return "has surrounding whitespace";
   let u: URL;
   try {
     u = new URL(v);
   } catch {
     return "is not a parseable URL";
   }
-  if (u.username !== "" || u.password !== "") return "carries basic-auth userinfo";
+  const local = (LOCAL_HOSTS as readonly string[]).includes(u.hostname);
+  if (u.protocol !== "https:" && !(u.protocol === "http:" && local)) {
+    return `uses ${u.protocol} (only https:, or http: for localhost/127.0.0.1)`;
+  }
+  if (u.username !== "" || u.password !== "" || /\/\/[^/]*@/.test(v)) {
+    return "carries userinfo";
+  }
   if (u.search !== "" || v.includes("?")) return "carries a query string";
-  if (u.protocol !== "https:" && u.protocol !== "http:") return "is not http(s)";
+  if (u.hash !== "" || v.includes("#")) return "carries a fragment";
+  if (!hostAllowed(u.hostname, hosts)) {
+    return `host ${u.hostname} is not in its host allowlist (${hosts.join(", ")})`;
+  }
+  for (const seg of u.pathname.split("/")) {
+    let s = seg;
+    try {
+      s = decodeURIComponent(seg);
+    } catch {
+      return "has an undecodable path segment";
+    }
+    if (s.length >= 20 && !WORD_SLUG.test(s)) {
+      return `has a ${s.length}-char high-entropy path segment (a key-in-path shape)`;
+    }
+  }
   return null;
 }
 
+/** Why `value` is refused for a named entry, or null when acceptable. */
+export function publicValueViolation(value: string, rule: PublicValueRule): string | null {
+  if (value === "") return null;
+  switch (rule.kind) {
+    case "url":
+      return publicUrlViolation(value, rule.hosts);
+    case "stripe-publishable":
+      return /^pk_(?:live|test)_[A-Za-z0-9]+$/.test(value)
+        ? null
+        : "is not a Stripe publishable key (^pk_(live|test)_[A-Za-z0-9]+$)";
+    case "enum":
+      return rule.values.includes(value) ? null : `is not one of ${rule.values.join(" | ")}`;
+  }
+}
+
 /**
- * Build-time guard for a Vite browser surface. Throws — failing the build — when
- * a resolved public env value would inline a credential. `env` is vite's
- * `loadEnv(mode, cwd, "VITE_")` (includes process.env VITE_* vars).
- *
- * Vite replaces whole-object `import.meta.env` access (the `env?.VITE_X` shape
- * apps/web uses) with a literal of EVERY `VITE_*` var in the build environment,
- * so a var ships whether or not the source names it. Hence two refusals: any
- * credential-shaped VALUE, and any credential-shaped NAME not in `allowedNames`
- * (a stale `VITE_*_TOKEN` in a Vercel project is published even if unused).
+ * The one law, applied to a set of public env entries for a surface. Returns
+ * every violation (values redacted). Used by the build guard AND by the gate's
+ * static + dist arms, so all three refuse exactly the same things.
  */
-export function assertPublicBuildEnv(
-  env: Record<string, string | undefined>,
-  surface: string,
-  allowedNames: readonly string[] = ["VITE_SOLANA_RPC_URL"],
-): void {
+export function publicEnvViolations(
+  app: string,
+  entries: readonly { name: string; value?: string }[],
+  spec: Readonly<Record<string, readonly PublicBuildEnvEntry[]>> = PUBLIC_BUILD_ENV,
+): string[] {
+  const allowed = spec[app];
+  if (allowed == null)
+    return [`apps/${app} has no PUBLIC_BUILD_ENV entry — every surface must name its public env`];
+  const byName = new Map(allowed.map((e) => [e.name, e]));
   const problems: string[] = [];
-  for (const [name, value] of Object.entries(env)) {
-    if (value == null || value === "") continue;
-    if (isSecretShapedEnvName(name) && !allowedNames.includes(name)) {
+  for (const { name, value } of entries) {
+    if (!isPublicEnvName(name)) continue;
+    const shown = value == null ? "" : ` (value ${redactValue(value)})`;
+    const entry = byName.get(name);
+    if (entry == null) {
       problems.push(
-        `${name} has a credential-shaped name and would be inlined into every chunk (value ${redactValue(value)})`,
+        `${name} is not in PUBLIC_BUILD_ENV.${app} — an unlisted public env var is inlined into client JS${shown}`,
       );
       continue;
     }
-    if (name === "VITE_SOLANA_RPC_URL") {
-      const why = publicRpcUrlViolation(value);
-      if (why) problems.push(`${name} ${why} (value ${redactValue(value)})`);
-      continue;
-    }
-    for (const f of scanArtifactText(value)) {
-      problems.push(`${name} matches credential shape ${f.rule} (value ${f.redacted})`);
-    }
+    if (value == null) continue;
+    const why = publicValueViolation(value, entry.rule);
+    if (why) problems.push(`${name} ${why}${shown}`);
   }
+  return problems;
+}
+
+/**
+ * Build-time guard for a deployed Vite surface — the vite config's FIRST act.
+ * Drops Vercel's injected `VITE_VERCEL_*` from `processEnv`, then loads the env
+ * exactly as vite will (`loadEnv(mode, cwd, "")` — every var, any case) and
+ * throws — failing `vite build` / `vite dev` — on any public-prefixed var not in
+ * `PUBLIC_BUILD_ENV[app]` or whose value fails its validator.
+ *
+ * Why every var, not just the ones source reads: vite replaces whole-object
+ * `import.meta.env` access (the `env?.VITE_X` shape apps/web uses) with a literal
+ * of EVERY `VITE_*` var in the build environment, so an unused var still ships.
+ */
+export function enforcePublicBuildEnv(
+  app: string,
+  processEnv: Record<string, string | undefined>,
+  loadAll: () => Record<string, string | undefined>,
+): void {
+  for (const k of Object.keys(processEnv)) {
+    if (PLATFORM_DROPPED_PUBLIC_ENV.test(k)) delete processEnv[k];
+  }
+  const env = loadAll();
+  const problems = publicEnvViolations(
+    app,
+    Object.entries(env).map(([name, value]) => ({ name, value: value ?? "" })),
+  );
   if (problems.length > 0) {
     throw new Error(
-      `[${surface}] refusing to build: a public env value would ship a credential in client JS.\n` +
+      `[apps/${app}] refusing to build: the build env carries a public var that would ship in client JS unvalidated.\n` +
         problems.map((p) => `  - ${p}`).join("\n") +
-        "\n  Fix: unset it from the build environment (Vercel project env / .env*). Browser Solana RPC goes through " +
+        `\n  Fix: unset it from the build environment (Vercel project env / .env*), or — only if it is genuinely public — ` +
+        `add it to PUBLIC_BUILD_ENV.${app} with a value validator and a why. Browser Solana RPC goes through ` +
         "https://api.motebit.com/v1/solana-rpc (services/proxy), which holds the provider key as the server secret " +
         "SOLANA_RPC_UPSTREAM_URL. Law: scripts/lib/client-bundle-secrets.ts.",
     );
   }
+}
+
+/**
+ * Every `NAME: "value"` pair a bundler emitted for a public-prefixed name (the
+ * whole-object `import.meta.env` literal, quoted with `"`, `'` or backticks).
+ * Object-literal keys only (preceded by `{` or `,`), so a minified ternary
+ * `c.VITE_X!==``?c.VITE_X:`…`` is not mistaken for a pair.
+ */
+export function scanArtifactForPublicEnvPairs(
+  text: string,
+): { name: string; value: string; offset: number }[] {
+  const re =
+    /(?<=[{,]\s*)["'`]?((?:VITE|NEXT_PUBLIC|EXPO_PUBLIC)_[A-Za-z0-9_]*)["'`]?\s*:\s*(["'`])((?:\\.|(?!\2)[^\\])*)\2/gi;
+  const out: { name: string; value: string; offset: number }[] = [];
+  for (const m of text.matchAll(re)) {
+    out.push({ name: m[1] ?? "", value: m[3] ?? "", offset: m.index ?? 0 });
+  }
+  return out;
 }

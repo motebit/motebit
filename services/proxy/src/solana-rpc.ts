@@ -65,12 +65,13 @@ const UPSTREAM_TIMEOUT_MS = 20_000;
 
 /**
  * Browser origins that may call. `SOLANA_RPC_ALLOWED_ORIGINS` (comma list)
- * appends — the deployed apps/verify origin is configured there, since the repo
- * does not pin where that Vercel project is served.
+ * appends further https origins. apps/verify is served by Vercel project
+ * receipt-computer at https://receipt.computer and defaults to this route.
  */
 export const SOLANA_RPC_DEFAULT_ORIGINS: readonly string[] = [
   "https://motebit.com",
   "https://www.motebit.com",
+  "https://receipt.computer", // apps/verify (Vercel project receipt-computer)
   "http://localhost:5173", // apps/web dev
   "http://localhost:5176", // apps/verify dev
   "http://localhost:4173", // vite preview
@@ -174,6 +175,43 @@ function clientIp(request: Request): string {
   );
 }
 
+/**
+ * The rate-limit bucket for a client address. IPv4 is per address; IPv6 is per
+ * /64 — one subscriber is routinely handed a whole /64, so a per-address key
+ * would give a single client 2^64 fresh budgets. An unparseable address shares
+ * ONE bucket (never a per-string key a caller could vary).
+ */
+export function rateLimitBucket(ip: string): string {
+  const raw =
+    ip
+      .trim()
+      .replace(/^\[|\](?::\d+)?$/g, "")
+      .split("%")[0] ?? "";
+  if (!raw.includes(":")) return raw === "" ? "unknown" : raw;
+  // IPv4-mapped (::ffff:1.2.3.4) is an IPv4 client.
+  const mapped = /^(?:0{0,4}:){0,5}(?:0{0,4}:)?ffff:(\d+\.\d+\.\d+\.\d+)$/i.exec(raw);
+  if (mapped?.[1]) return mapped[1];
+  let groups: string[];
+  const halves = raw.split("::");
+  if (halves.length > 2) return "invalid";
+  const head = halves[0] ? halves[0].split(":") : [];
+  const tail = halves.length === 2 && halves[1] ? halves[1].split(":") : [];
+  // An embedded dotted-quad tail counts as two groups.
+  const tailGroups = tail.at(-1)?.includes(".") === true ? tail.length + 1 : tail.length;
+  if (halves.length === 2) {
+    const fill = 8 - head.length - tailGroups;
+    if (fill < 0) return "invalid";
+    groups = [...head, ...Array<string>(fill).fill("0"), ...tail];
+  } else {
+    groups = head;
+  }
+  const prefix = groups.slice(0, 4);
+  if (prefix.length < 4 || prefix.some((g) => !/^[0-9a-f]{1,4}$/i.test(g))) {
+    return "invalid";
+  }
+  return `${prefix.map((g) => parseInt(g, 16).toString(16)).join(":")}::/64`;
+}
+
 /** Read at most `cap` bytes; null when the body is larger. */
 async function readCapped(request: Request, cap: number): Promise<string | null> {
   const declared = Number(request.headers.get("content-length") ?? "0");
@@ -226,7 +264,7 @@ export async function handleSolanaRpcPost(
   const now = deps.now?.() ?? Date.now();
   const minute = Math.floor(now / 60_000);
   const allowed = await deps.limiter.hit(
-    `proxy:solana-rpc:${clientIp(request)}:${minute}`,
+    `proxy:solana-rpc:${rateLimitBucket(clientIp(request))}:${minute}`,
     SOLANA_RPC_PER_MINUTE_LIMIT,
   );
   if (!allowed) {
@@ -269,7 +307,10 @@ export async function handleSolanaRpcPost(
     ...(req.params !== undefined ? { params: req.params } : {}),
   });
 
+  // The fetch AND the body read share one scrubbing try: a body stream can
+  // fail (abort, reset, timeout mid-body) with an error naming the URL.
   let upstreamRes: Response;
+  let upstreamBody: string;
   try {
     upstreamRes = await deps.fetch(upstream, {
       method: "POST",
@@ -277,6 +318,7 @@ export async function handleSolanaRpcPost(
       body: forward,
       signal: AbortSignal.timeout(UPSTREAM_TIMEOUT_MS),
     });
+    upstreamBody = await upstreamRes.text();
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     deps.log(
@@ -285,7 +327,7 @@ export async function handleSolanaRpcPost(
     return rpcError(502, -32603, "upstream unavailable", id, cors);
   }
 
-  const upstreamText = scrubUpstream(await upstreamRes.text(), upstream);
+  const upstreamText = scrubUpstream(upstreamBody, upstream);
   if (!upstreamRes.ok) {
     deps.log(
       `[solana-rpc] upstream status=${upstreamRes.status} host=${redactUrl(upstream)} method=${req.method}`,

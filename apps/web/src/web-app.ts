@@ -682,8 +682,9 @@ export class UnbootedWebApp {
     // server secret. A provider URL is never a browser value — Vite inlines
     // every VITE_* var into public JS (incident 2026-09-30: a Helius
     // `?api-key=` shipped in this bundle). `VITE_SOLANA_RPC_URL` remains a
-    // local-dev override only; the vite build refuses any value carrying a
-    // query string, userinfo or key-shaped token (scripts/lib/client-bundle-secrets.ts).
+    // local-dev override only; the vite build refuses any value whose host is
+    // not a motebit/localhost host, or that carries userinfo, a query or a
+    // key-in-path segment (PUBLIC_BUILD_ENV, scripts/lib/client-bundle-secrets.ts).
     const env = (import.meta as { env?: Record<string, string | undefined> }).env;
     const solanaRpcUrl =
       env?.VITE_SOLANA_RPC_URL != null && env.VITE_SOLANA_RPC_URL !== ""

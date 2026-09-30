@@ -18,20 +18,37 @@ the browser needs a real Solana RPC, and the deployed bundle drifts behind `main
 
 ## Env
 
-| Where                            | Var                          | Value                                                                       |
-| -------------------------------- | ---------------------------- | --------------------------------------------------------------------------- |
-| proxy (Vercel, `services/proxy`) | `SOLANA_RPC_UPSTREAM_URL`    | the provider mainnet URL **with its key** — a server secret, never `VITE_*` |
-| proxy (optional)                 | `SOLANA_RPC_ALLOWED_ORIGINS` | extra browser origins (comma list) beyond motebit.com / verify / localhost  |
-| web (Vercel)                     | `VITE_MOTEBIT_RELAY_URL`     | `https://relay.motebit.com` (replaces the deprecated `VITE_PROXY_URL`)      |
+| Where                                                                | Var                           | Value                                                                                        |
+| -------------------------------------------------------------------- | ----------------------------- | -------------------------------------------------------------------------------------------- |
+| proxy (Vercel, `services/proxy`)                                     | `SOLANA_RPC_UPSTREAM_URL`     | the provider mainnet URL **with its key** — a server secret, never `VITE_*`                  |
+| proxy (optional)                                                     | `SOLANA_RPC_ALLOWED_ORIGINS`  | extra https origins (comma list) beyond the defaults below                                   |
+| web (Vercel project `motebit-web`)                                   | `VITE_PROXY_URL`              | a motebit origin (`https://…motebit.com`) — deprecated alias of `VITE_MOTEBIT_RELAY_URL`     |
+| web (Vercel project `motebit-web`)                                   | `VITE_BROWSER_SANDBOX_URL`    | the `services/browser-sandbox` origin (`*.motebit.com` or `motebit-browser-sandbox.fly.dev`) |
+| web (Vercel project `motebit-web`)                                   | `VITE_STRIPE_PUBLISHABLE_KEY` | a Stripe **publishable** key (`pk_live_…`) — public by design                                |
+| verify (Vercel project `receipt-computer`, https://receipt.computer) | —                             | sets **no** `VITE_*` var; defaults to the passthrough                                        |
 
-**Never set `VITE_SOLANA_RPC_URL` in a deployed project.** Vite inlines every
+The proxy's default browser origins are `https://motebit.com`, `https://www.motebit.com`,
+`https://receipt.computer` (apps/verify) and the localhost dev ports.
+
+**The web + verify builds are deny-by-default on public env.** Vite inlines every
 `VITE_*` value into public JS — incident 2026-09-30: a Helius `?api-key=` shipped
 in `motebit.com/assets/main-*.js`, the credits were drained and the provider
-halted every key on the account. It is a local-dev override only, and the
-`apps/web` / `apps/verify` builds now refuse any value with a query string,
-userinfo or key-shaped token; `check-no-secrets-in-client-bundles` (#166) scans
-the built bundles. Redeploy after changing env (Vercel doesn't rebuild on env
-change alone).
+halted every key on the account. `apps/web` and `apps/verify` `vite.config.ts`
+now refuse the build when the build env carries ANY public-prefixed var (any
+case) not named in `PUBLIC_BUILD_ENV` (`scripts/lib/client-bundle-secrets.ts`),
+or a named one whose value fails its validator: URL vars must be `https:` to a
+host in that var's allowlist (motebit.com / \*.motebit.com / the named Fly
+origin / receipt.computer for verify; `http:` only for localhost), with no
+userinfo, query, fragment or key-shaped path segment; the Stripe var must be
+`pk_live_`/`pk_test_`. So a provider URL — with its key in a query OR a path
+(Alchemy `/v2/<key>`, QuickNode `/<hex>/`, Triton `/<uuid>`) — cannot be built
+into a browser surface under any name. Adding a var to Vercel means adding it
+to `PUBLIC_BUILD_ENV` first (a reviewed edit with a validator and a why), or the
+next deploy fails loudly. Vercel's auto-exposed `VITE_VERCEL_*` system vars are
+dropped before Vite reads them (no source reads them). **Never set
+`VITE_SOLANA_RPC_URL` in a deployed project** — it is a local-dev override only.
+`check-no-secrets-in-client-bundles` (#166) also scans the built bundles.
+Redeploy after changing env (Vercel doesn't rebuild on env change alone).
 
 ## Deploy
 
