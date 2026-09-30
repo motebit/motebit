@@ -122,6 +122,8 @@ export async function setupFixture(): Promise<Fx> {
   mkdirSync(join(nm, ".bin"), { recursive: true });
   symlinkSync(realpathSync(join(MONOREPO, "node_modules/vitest")), join(nm, "vitest"));
   symlinkSync(join(MONOREPO, "node_modules/.bin/vitest"), join(nm, ".bin/vitest"));
+  // The compiler the runner type-checks an edit with (fold.ts, tsconfig.json).
+  symlinkSync(realpathSync(join(MONOREPO, "node_modules/typescript")), join(nm, "typescript"));
   mkdirSync(join(nm, ".pnpm/node_modules/@fx"), { recursive: true });
   symlinkSync("../../../../packages/lib", join(nm, ".pnpm/node_modules/@fx/lib"));
   mkdirSync(join(nm, ".pnpm/ext@1.0.0/node_modules/ext"), { recursive: true });
@@ -186,9 +188,10 @@ function writeDriver(fx: Fx, concurrency: number): string {
   return driver;
 }
 
-function driverEnv(fx: Fx): NodeJS.ProcessEnv {
+function driverEnv(fx: Fx, extra: Record<string, string> = {}): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {
     ...process.env,
+    ...extra,
     TMPDIR: fx.tmp,
     HOME: fx.home,
     FX_PORT: String(fx.port),
@@ -203,20 +206,21 @@ function driverEnv(fx: Fx): NodeJS.ProcessEnv {
 }
 
 /**
- * Run the entries through the real runner. Unless `allowLeftovers`, also
- * requires that the run left no copy and no worktree registration behind.
+ * Run the entries through the real runner (`env`: extra variables for it and
+ * the tests it runs). Unless `allowLeftovers`, also requires that the run
+ * left no copy and no worktree registration behind.
  */
 export function drive(
   fx: Fx,
   entries: TamperEntry[],
   concurrency: number,
-  opts: { allowLeftovers?: boolean } = {},
+  opts: { allowLeftovers?: boolean; env?: Record<string, string> } = {},
 ): Driven {
   const driver = writeDriver(fx, concurrency);
   const r = spawnSync("node", ["--no-warnings", driver, JSON.stringify(entries)], {
     cwd: fx.repo,
     encoding: "utf8",
-    env: driverEnv(fx),
+    env: driverEnv(fx, opts.env),
   });
   const out = `${r.stdout}${r.stderr}`;
   const line = out.split("\n").find((l) => l.startsWith("SUMMARY "));
