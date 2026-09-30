@@ -9,7 +9,7 @@
  * Both flows poll the relay every 2 seconds until resolved or cancelled.
  */
 import type { WebContext } from "../types";
-import { loadSyncUrl, DEFAULT_RELAY_URL, normalizeRelayUrl } from "../storage";
+import { loadSyncUrl, saveSyncUrl, DEFAULT_RELAY_URL, normalizeRelayUrl } from "../storage";
 
 const POLL_INTERVAL_MS = 2000;
 // Consecutive poll failures before we tell the user the connection dropped.
@@ -268,6 +268,9 @@ export function startClaimDevice(ctx: WebContext): void {
                       }
                     : undefined,
                 );
+                // #962: the paired relay is saved before sync starts, so a
+                // reload knows it may hold unacknowledged pushes.
+                saveSyncUrl(url);
                 try {
                   await ctx.app.startSync(url);
                 } catch {

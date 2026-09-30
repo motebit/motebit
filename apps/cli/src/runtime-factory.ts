@@ -88,6 +88,8 @@ import type { CliConfig } from "./args.js";
 import { CONFIG_DIR, loadFullConfig } from "./config.js";
 import { mkdirOwnerOnly } from "./durable-file.js";
 import { resolveRelayUrl } from "./subcommands/_helpers.js";
+import { createRelayEventTransport } from "./relay-sync-socket.js";
+import { CLI_SYNC_CONFIGURED } from "./sync-configured.js";
 
 export function getApiKey(
   provider: "anthropic" | "openai" | "google" | "deepseek" | "groq" = "anthropic",
@@ -769,6 +771,12 @@ export async function createRuntime(
   personalityConfig?: MotebitPersonalityConfig,
   encKey?: Uint8Array,
   solanaWallet?: import("@motebit/runtime").RuntimeConfig["solanaWallet"],
+  /**
+   * This device's id and signing key: the event remote's credential is a
+   * device token minted from them per request (#962 — without it every push
+   * went unauthenticated, the relay refused it, and nothing ever compacted).
+   */
+  device?: ReplDeviceCredentials,
 ): Promise<{ runtime: MotebitRuntime; moteDb: MotebitDatabase }> {
   const dbPath = getDbPath(config.dbPath);
   const moteDb = await openMotebitDatabase(dbPath);
@@ -796,10 +804,8 @@ export async function createRuntime(
     {
       motebitId,
       mcpServers,
-      // #962: the CLI always configures a relay (`resolveRelayUrl` falls back
-      // to the default relay) and every CLI runtime shares motebit.db, so
-      // compaction waits on that relay's acknowledged push cursor.
-      syncConfigured: true,
+      // #962: compaction waits on the relay's acknowledged push cursor.
+      syncConfigured: CLI_SYNC_CONFIGURED,
       // Renderer-aware logger: runtime warnings (delegation poll failures
       // above all) flow through the terminal renderer as calm status/dim
       // lines instead of the default console.warn JSON dump that corrupted
@@ -867,7 +873,13 @@ export async function createRuntime(
     config.syncToken ?? process.env["MOTEBIT_API_TOKEN"] ?? process.env["MOTEBIT_SYNC_TOKEN"];
 
   // E2E with the sync key (#928); raw only when there is no key to encrypt with.
-  const { remote: remoteStore } = createReplEventRemote({ syncUrl, motebitId, syncToken, encKey });
+  const { remote: remoteStore } = createReplEventRemote({
+    syncUrl,
+    motebitId,
+    syncToken,
+    encKey,
+    ...(device ? { deviceId: device.deviceId, privateKey: device.privateKey } : {}),
+  });
   runtime.connectSync(remoteStore);
   console.log(dim(`Sync: ${syncUrl}${encKey ? " (encrypted)" : ""}`));
 
@@ -931,27 +943,87 @@ export {
 };
 export type { StorageAdapters, MotebitDatabase, StreamingProvider, McpServerConfig };
 
+/** The REPL device's credentials for relay sync (#962). */
+export interface ReplDeviceCredentials {
+  /** The device id minted tokens name as `did`. */
+  deviceId: string | undefined;
+  /** The device signing key, read at each mint. Nothing once erased. */
+  privateKey: () => Uint8Array | undefined;
+}
+
 /**
- * The REPL's event sync remote (#928). With the sync key held the transport
- * is E2E-only — a payload that skipped the encrypting wrapper is refused,
- * never pushed in plaintext — under the encrypting wrapper. Without it (the
- * identity key did not decrypt) the REPL has nothing to encrypt with and
- * syncs raw: the one raw-by-design push path. Exported for its test.
+ * The REPL's event sync remote (#928, #962): the daemon's relay event
+ * transport (`createRelayEventTransport`), so the credential is resolved per
+ * request — the configured sync token when one is set, else a `sync` device
+ * token minted from the identity key. The REPL used to present only the
+ * configured token; without one every push went unauthenticated, the relay's
+ * device auth refused it, the push cursor never moved and compaction never
+ * ran again (#962). With the sync key held the transport is E2E-only — a
+ * payload that skipped the encrypting wrapper is refused, never pushed in
+ * plaintext. Without it (the identity key did not decrypt) the REPL syncs
+ * raw: the one raw-by-design push path. Exported for its test.
  */
 export function createReplEventRemote(opts: {
   syncUrl: string;
   motebitId: string;
   syncToken: string | undefined;
   encKey: Uint8Array | undefined;
+  /** No device id or key ⇒ only the configured token (if any) is presented. */
+  deviceId?: string | undefined;
+  privateKey?: () => Uint8Array | undefined;
 }): { remote: EventStoreAdapter; transport: HttpEventStoreAdapter } {
-  const transport = new HttpEventStoreAdapter({
-    baseUrl: opts.syncUrl,
+  const t = createRelayEventTransport({
+    syncUrl: opts.syncUrl,
     motebitId: opts.motebitId,
-    authToken: opts.syncToken,
-    payloads: opts.encKey ? "e2e" : "raw",
+    deviceId: opts.deviceId,
+    privateKey: opts.privateKey ?? (() => undefined),
+    ...(opts.syncToken != null && opts.syncToken !== "" ? { configuredToken: opts.syncToken } : {}),
+    ...(opts.encKey ? { encKey: opts.encKey } : {}),
   });
-  const remote = opts.encKey
-    ? new EncryptedEventStoreAdapter({ inner: transport, key: opts.encKey })
-    : transport;
-  return { remote, transport };
+  return { remote: t.remote, transport: t.http };
+}
+
+/**
+ * Introduce this device's key to the relay (`POST /api/v1/agents/bootstrap`)
+ * so its signed device tokens verify (#962). Runs BEFORE the REPL's first
+ * push: it used to run after, so a fresh identity's first sync was refused.
+ * Idempotent; best-effort — returns the line to print when the relay
+ * answered with an error, null otherwise. A 409 stays quiet, as before: a
+ * push it leaves refused is reported by `syncFailureLine`.
+ */
+export async function bootstrapReplDevice(opts: {
+  syncUrl: string;
+  motebitId: string;
+  deviceId: string;
+  publicKeyHex: string;
+  fetchImpl?: typeof fetch;
+}): Promise<string | null> {
+  const fetchImpl = opts.fetchImpl ?? fetch;
+  try {
+    const resp = await fetchImpl(`${opts.syncUrl}/api/v1/agents/bootstrap`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        motebit_id: opts.motebitId,
+        device_id: opts.deviceId,
+        public_key: opts.publicKeyHex,
+      }),
+    });
+    if (resp.ok || resp.status === 409) return null;
+    const body = await resp.text();
+    return `Device registration: ${resp.status} ${body}`;
+  } catch {
+    return null; // best-effort — the relay may be unreachable (offline start)
+  }
+}
+
+/**
+ * The one line the REPL prints when its last sync cycle failed (#962):
+ * `SyncEngine.sync()` never rejects, so a relay refusing every push (a
+ * revoked device, a bad token) was silent — and it holds compaction, since
+ * nothing the relay has not acknowledged is deleted. Null when it synced.
+ */
+export function syncFailureLine(sync: { getLastError(): Error | null }): string | null {
+  const err = sync.getLastError();
+  return err ? `Sync failed (continuing offline): ${err.message}` : null;
 }

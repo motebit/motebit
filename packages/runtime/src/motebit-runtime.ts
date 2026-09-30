@@ -4102,14 +4102,19 @@ export class MotebitRuntime {
    */
   private async compactUpTo(requested: number): Promise<number> {
     const floor = await pushCompactionFloor(this.localEventStore, requested, {
-      syncConfigured: await this.resolveSyncConfigured(),
+      syncConfigured: await this.isSyncConfigured(),
     });
     if (floor <= 0) return 0;
     return this.events.compact(this.motebitId, floor);
   }
 
-  /** `RuntimeConfig.syncConfigured`, resolved; a provider that cannot tell ⇒ true (fail closed). */
-  private async resolveSyncConfigured(): Promise<boolean | undefined> {
+  /**
+   * `RuntimeConfig.syncConfigured` as compaction reads it (#962): the host's
+   * answer NOW; a provider that cannot tell ⇒ true (fail closed); absent ⇒
+   * undefined. Public so each surface's wiring is observable at the real
+   * construction seam.
+   */
+  async isSyncConfigured(): Promise<boolean | undefined> {
     const c = this.syncConfigured;
     if (typeof c !== "function") return c;
     try {

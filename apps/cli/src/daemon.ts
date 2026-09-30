@@ -57,6 +57,7 @@ import { handleRelayCommandFrame } from "./relay-command-frame.js";
 import { fromHex, loadActiveSigningKey, IdentityKeyError } from "./identity.js";
 import { registerWithRelay, type RelayRegistrationHandle } from "./relay-registration.js";
 import { createRelaySyncSocket } from "./relay-sync-socket.js";
+import { CLI_SYNC_CONFIGURED } from "./sync-configured.js";
 import { createDaemonRelaySync } from "./daemon-relay-sync.js";
 import { enrollOnAnnounce } from "./machine-roster.js";
 import { taskResultBearer } from "./task-result-bearer.js";
@@ -204,10 +205,8 @@ export async function handleRun(config: CliConfig): Promise<void> {
     {
       motebitId,
       mcpServers,
-      // #962: the CLI always configures a relay (`resolveRelayUrl` falls back
-      // to the default relay) and every CLI runtime shares motebit.db, so
-      // compaction waits on that relay's acknowledged push cursor.
-      syncConfigured: true,
+      // #962: compaction waits on the relay's acknowledged push cursor.
+      syncConfigured: CLI_SYNC_CONFIGURED,
       policy: {
         operatorMode: config.operator,
         maxRiskLevel: maxRiskAuto,
@@ -1128,10 +1127,8 @@ export async function handleServe(config: CliConfig): Promise<void> {
     {
       motebitId,
       mcpServers,
-      // #962: the CLI always configures a relay (`resolveRelayUrl` falls back
-      // to the default relay) and every CLI runtime shares motebit.db, so
-      // compaction waits on that relay's acknowledged push cursor.
-      syncConfigured: true,
+      // #962: compaction waits on the relay's acknowledged push cursor.
+      syncConfigured: CLI_SYNC_CONFIGURED,
       policy: {
         operatorMode: config.operator,
         pathAllowList: config.allowedPaths,

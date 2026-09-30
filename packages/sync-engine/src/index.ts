@@ -229,6 +229,14 @@ export interface PushCompactionFloorOptions {
  *
  * No stream: 0 when `syncConfigured`, else `requested`. A cursor that cannot
  * be read: 0 — compact nothing (fail closed).
+ *
+ * Stated cost: the floor moves only when a relay acknowledges. A relay that
+ * is configured but never reached (offline, or spatial's default relay on a
+ * machine that never connects) or that keeps refusing the push (a revoked
+ * device, a bad token) holds compaction, and the local log grows until an
+ * acknowledgment arrives. That is the direction the invariant chooses —
+ * never delete what the relay has not acknowledged — and it is surfaced,
+ * never silent: `SyncEngine.getLastError()` carries the refusal.
  */
 export async function pushCompactionFloor(
   localStore: EventStoreAdapter,
@@ -421,6 +429,8 @@ export class SyncEngine {
   /** The relay-ingest-sequence pull cursor, per relay stream (#868). */
   private seqCursorStore: SyncSeqCursorStore;
   private status: SyncStatus = "idle";
+  /** Why the last sync cycle failed; null once a cycle succeeds (`getLastError`). */
+  private lastError: Error | null = null;
   private statusListeners: Set<SyncStatusListener> = new Set();
   private syncInterval: ReturnType<typeof setInterval> | null = null;
   private conflicts: ConflictEdge[] = [];
@@ -552,6 +562,7 @@ export class SyncEngine {
           // …and its requests end with it: a request left on the wire would
           // hold the push slot against the next cycle (#914 round 6).
           (remote as { abortInFlight?: () => void } | null)?.abortInFlight?.();
+          this.lastError = new Error(`Sync stalled: no progress for ${stallMs}ms`);
           this.setStatus("error");
         }
       };
@@ -618,6 +629,7 @@ export class SyncEngine {
       this.pullAfterClock = await this.localStore.getLatestClock(this.cursor.motebit_id);
 
       this.setCycleStatus(cycle, "idle");
+      if (cycle === this.cycle) this.lastError = null;
 
       return {
         pushed: pushed.count,
@@ -626,7 +638,10 @@ export class SyncEngine {
         ...(pulled.skipped && pulled.skipped.length > 0 ? { skipped: pulled.skipped } : {}),
         ...(pulled.encryptedOnRawPath ? { encryptedOnRawPath: pulled.encryptedOnRawPath } : {}),
       };
-    } catch {
+    } catch (err: unknown) {
+      if (cycle === this.cycle) {
+        this.lastError = err instanceof Error ? err : new Error("sync failed", { cause: err });
+      }
       this.setCycleStatus(cycle, "error");
       return { pushed: 0, pulled: 0, conflicts: [] };
     }
@@ -647,6 +662,17 @@ export class SyncEngine {
    */
   getStatus(): SyncStatus {
     return this.status;
+  }
+
+  /**
+   * Why the last sync cycle failed — a relay that refused the push (401/403),
+   * a network error — or null when it succeeded (#962). `sync()` never
+   * rejects, so a host that surfaces sync failures reads them here: a relay
+   * that keeps refusing holds compaction (nothing it has not acknowledged is
+   * deleted), and that must never be silent.
+   */
+  getLastError(): Error | null {
+    return this.lastError;
   }
 
   /**

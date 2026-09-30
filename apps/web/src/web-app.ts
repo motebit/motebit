@@ -137,6 +137,8 @@ import {
   loadColdStartOptIn,
   loadProviderConfig,
   loadSyncUrl,
+  saveSyncUrl,
+  isSyncUrlConfigured,
   DEFAULT_RELAY_URL,
   isAnnounced,
   markAnnounced,
@@ -725,12 +727,9 @@ export class UnbootedWebApp {
         motebitId: this._motebitId,
         tickRateHz: 2,
         // #962: a saved relay holds compaction at its acked push cursor, even
-        // before this page connects sync. Read at compaction time; a read
-        // that throws counts as configured (the runtime fails closed).
-        syncConfigured: () => {
-          const url = loadSyncUrl();
-          return url != null && url !== "";
-        },
+        // before this page connects sync. Read at compaction time; storage
+        // that cannot be read counts as configured (fail closed).
+        syncConfigured: () => isSyncUrlConfigured(),
         policy: {
           operatorMode: false,
           maxRiskLevel: preset.maxRiskLevel,
@@ -3618,6 +3617,11 @@ export class UnbootedWebApp {
 
   async startSync(relayUrl: string): Promise<void> {
     if (!this.runtime) throw new Error("Runtime not initialized");
+    // #962: the relay this page syncs with is saved BEFORE anything is
+    // pushed, whoever started sync (pairing did not save it). Compaction's
+    // `syncConfigured` reads the saved URL, so a reload never forgets a relay
+    // that may hold unacknowledged pushes.
+    if (relayUrl !== "") saveSyncUrl(relayUrl);
 
     this.setSyncStatus("connecting");
 

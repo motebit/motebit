@@ -1067,6 +1067,8 @@ export class DesktopApp {
 
   // Internal cache fields for proxy adapter (synchronous access required by ProxySessionAdapter)
   private _proxySyncUrlCache: string | null = null;
+  /** The relay `startSync` last started this session (#962: `syncConfigured`). */
+  private _syncStartedUrl: string | null = null;
   private _proxyTokenCache: {
     token: string;
     balance: number;
@@ -1357,8 +1359,10 @@ export class DesktopApp {
         deviceId: this.deviceId,
         tickRateHz: 2,
         // #962: a configured relay holds compaction at its acked push cursor,
-        // even before this process connects sync.
-        syncConfigured: config.syncUrl != null && config.syncUrl !== "",
+        // even before this process connects sync — and so does one this
+        // session started later (pairing, settings), read at compaction time.
+        syncConfigured: () =>
+          (config.syncUrl != null && config.syncUrl !== "") || this._syncStartedUrl != null,
         policy: mergedPolicy,
         memoryGovernance: {
           persistenceThreshold: gov.persistenceThreshold,
@@ -2433,6 +2437,9 @@ export class DesktopApp {
     authToken?: string,
     masterToken?: string,
   ): Promise<void> {
+    // #962: from here on a relay may hold this store's pushes — compaction
+    // waits on its acknowledgment, whether or not the config named it.
+    if (syncUrl !== "") this._syncStartedUrl = syncUrl;
     await this.sync.startSync(invoke, syncUrl, authToken, masterToken);
     // S4 — the roster is read (and presented, when due) whenever this
     // desktop connects. Under its own device:auth token, never `authToken`.

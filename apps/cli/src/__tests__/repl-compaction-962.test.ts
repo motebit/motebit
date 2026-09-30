@@ -17,11 +17,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, it, expect, afterEach, vi } from "vitest";
 
-vi.hoisted(() => {
+await vi.hoisted(async () => {
   // CONFIG_DIR is read at module load: no test reads the developer's ~/.motebit.
-  const fs = require("node:fs") as typeof import("node:fs");
-  const os = require("node:os") as typeof import("node:os");
-  const p = require("node:path") as typeof import("node:path");
+  const fs = await import("node:fs");
+  const os = await import("node:os");
+  const p = await import("node:path");
   process.env["MOTEBIT_CONFIG_DIR"] = fs.mkdtempSync(p.join(os.tmpdir(), "motebit-962-cfg-"));
 });
 

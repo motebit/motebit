@@ -44,6 +44,8 @@ import {
   buildToolRegistry,
   createRuntime,
   openMotebitDatabase,
+  bootstrapReplDevice,
+  syncFailureLine,
 } from "./runtime-factory.js";
 import { connectConfigMcpServers, runtimeMcpServersForRepl } from "./mcp-config-wiring.js";
 import { createRunLedgerReader } from "./run-ledger-reader.js";
@@ -865,6 +867,8 @@ async function main(): Promise<void> {
     personalityConfig,
     syncEncKey,
     solanaWallet,
+    // #962: the event remote mints its `sync` device token from these.
+    { deviceId, privateKey: () => privateKeyBytes },
   );
   runtimeRef.current = runtime;
   // The interactive terminal holds this machine's ledger, so `/runs`
@@ -930,43 +934,38 @@ async function main(): Promise<void> {
   const syncUrl = resolveRelayUrl(config, reloadedConfig);
   // Initial sync — default relay is always available
   {
+    // Register device with relay BEFORE the first push and before enabling
+    // delegation. Signed device tokens — the event remote's included (#962)
+    // — require the device's public key in the relay's identity manager.
+    // Without this, verifySignedTokenForDevice rejects them with "Device not
+    // authorized": a fresh identity's first sync was refused.
+    if (syncUrl && privateKeyBytes && deviceId && reloadedConfig.device_public_key) {
+      const refused = await bootstrapReplDevice({
+        syncUrl,
+        motebitId,
+        deviceId,
+        publicKeyHex: reloadedConfig.device_public_key,
+      });
+      if (refused) console.warn(refused);
+    }
+
     try {
       console.log(dim("Syncing..."));
       const result = await runtime.sync.sync();
-      console.log(dim(`Synced: pulled ${result.pulled} events, pushed ${result.pushed} events`));
+      // sync() never rejects: a refused push (401/403) is read here, never
+      // silent — it holds compaction until the relay acknowledges (#962).
+      const failed = syncFailureLine(runtime.sync);
+      if (failed) {
+        console.warn(failed);
+      } else {
+        console.log(dim(`Synced: pulled ${result.pulled} events, pushed ${result.pushed} events`));
+      }
       if (result.conflicts.length > 0) {
         console.log(`  [${result.conflicts.length} conflicts detected]`);
       }
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
       console.warn(`Sync failed (continuing offline): ${message}`);
-    }
-
-    // Register device with relay BEFORE enabling delegation.
-    // Signed device tokens require the device's public key in the relay's
-    // identity manager. Without this, verifySignedTokenForDevice rejects
-    // poll requests with "Device not authorized".
-    if (syncUrl && privateKeyBytes && deviceId && reloadedConfig.device_public_key) {
-      try {
-        const resp = await fetch(`${syncUrl}/api/v1/agents/bootstrap`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            motebit_id: motebitId,
-            device_id: deviceId,
-            public_key: reloadedConfig.device_public_key,
-          }),
-        });
-        if (!resp.ok && resp.status !== 200 && resp.status !== 201) {
-          const body = await resp.text();
-          // 409 = already registered with same key, that's fine
-          if (resp.status !== 409) {
-            console.warn(`Device registration: ${resp.status} ${body}`);
-          }
-        }
-      } catch {
-        // Best-effort — relay may be unreachable
-      }
     }
 
     // Enable delegation with audience-scoped device tokens (submit vs query).
@@ -1064,7 +1063,9 @@ async function main(): Promise<void> {
     await Promise.allSettled(mcpAdapters.map((a) => a.disconnect()));
     try {
       const result = await runtime.sync.sync();
-      console.log(`Synced on exit: pushed ${result.pushed}, pulled ${result.pulled}`);
+      const failed = syncFailureLine(runtime.sync);
+      if (failed) console.warn(failed);
+      else console.log(`Synced on exit: pushed ${result.pushed}, pulled ${result.pulled}`);
     } catch {
       console.warn("Sync on exit failed (changes saved locally)");
     }

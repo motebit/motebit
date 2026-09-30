@@ -19,10 +19,10 @@ import { join, relative } from "node:path";
 import { describe, it, expect, vi, afterEach } from "vitest";
 import ts from "typescript";
 
-vi.hoisted(() => {
-  const fs = require("node:fs") as typeof import("node:fs");
-  const os = require("node:os") as typeof import("node:os");
-  const p = require("node:path") as typeof import("node:path");
+await vi.hoisted(async () => {
+  const fs = await import("node:fs");
+  const os = await import("node:os");
+  const p = await import("node:path");
   process.env["MOTEBIT_CONFIG_DIR"] = fs.mkdtempSync(p.join(os.tmpdir(), "motebit-962-cfg-"));
 });
 

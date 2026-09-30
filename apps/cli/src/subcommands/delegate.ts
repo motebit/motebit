@@ -23,6 +23,7 @@ import type { StepDelegationAdapter } from "@motebit/planner";
 import type { CliConfig } from "../args.js";
 import { loadFullConfig } from "../config.js";
 import { getDbPath } from "../runtime-factory.js";
+import { CLI_SYNC_CONFIGURED } from "../sync-configured.js";
 import { electCoordinatorRole } from "../runtime-host.js";
 import { getRelayUrl, getRelayAuthHeaders, requireMotebitId } from "./_helpers.js";
 
@@ -112,10 +113,8 @@ async function handleDelegatePlan(
   const runtime = new MotebitRuntime(
     {
       motebitId,
-      // #962: the CLI always configures a relay (`resolveRelayUrl` falls back
-      // to the default relay) and every CLI runtime shares motebit.db, so
-      // compaction waits on that relay's acknowledged push cursor.
-      syncConfigured: true,
+      // #962: compaction waits on the relay's acknowledged push cursor.
+      syncConfigured: CLI_SYNC_CONFIGURED,
       policy: {
         maxRiskLevel: governance.policyApproval.maxRiskLevel,
         requireApprovalAbove: governance.policyApproval.requireApprovalAbove,

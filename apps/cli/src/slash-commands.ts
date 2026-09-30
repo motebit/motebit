@@ -763,6 +763,9 @@ export async function handleSlashCommand(
       try {
         console.log("Syncing events...");
         const result = await runtime.sync.sync();
+        // sync() never rejects: a refused push is read here, never silent (#962).
+        const failed = runtime.sync.getLastError();
+        if (failed) console.error(`Event sync failed: ${failed.message}`);
         console.log(`  Events — pushed: ${result.pushed}, pulled: ${result.pulled}`);
         if (result.conflicts.length > 0) {
           console.log(`  Conflicts: ${result.conflicts.length}`);
