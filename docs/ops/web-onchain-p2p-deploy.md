@@ -9,33 +9,29 @@ the browser needs a real Solana RPC, and the deployed bundle drifts behind `main
 
 1. **Browser RPC.** `api.mainnet-beta.solana.com` **403s browser origins** — it
    can neither read the balance nor broadcast the payment tx. The web surface
-   needs a CORS-capable provider. Without it the balance shows "—/Couldn't
-   refresh" (after the false-zero fix) and any onchain send errors.
+   calls motebit's server-side passthrough `https://api.motebit.com/v1/solana-rpc`
+   (`services/proxy`, `src/solana-rpc.ts`), which holds the provider key as the
+   server secret `SOLANA_RPC_UPSTREAM_URL`. Unset ⇒ the passthrough answers 503
+   and the balance shows "—/Couldn't refresh" (never a false $0).
 2. **Stale bundle.** A deployed web build behind `main` calls dead relay paths
    (e.g. `/agent/:id/budget` → 404) and lacks the current P2P client. Redeploy.
 
-## Vercel env (Project → Settings → Environment Variables)
+## Env
 
-| Var                      | Value                                                                                                                                            | Why                                                                                |
-| ------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------- |
-| `VITE_SOLANA_RPC_URL`    | a browser-capable mainnet RPC, e.g. `https://mainnet.helius-rpc.com/?api-key=…` (Helius/Triton/QuickNode free tier — they allow browser origins) | balance read + P2P broadcast from the browser                                      |
-| `VITE_MOTEBIT_RELAY_URL` | `https://relay.motebit.com`                                                                                                                      | canonical relay env (replaces the deprecated `VITE_PROXY_URL`; remove the old one) |
+| Where                            | Var                          | Value                                                                       |
+| -------------------------------- | ---------------------------- | --------------------------------------------------------------------------- |
+| proxy (Vercel, `services/proxy`) | `SOLANA_RPC_UPSTREAM_URL`    | the provider mainnet URL **with its key** — a server secret, never `VITE_*` |
+| proxy (optional)                 | `SOLANA_RPC_ALLOWED_ORIGINS` | extra browser origins (comma list) beyond motebit.com / verify / localhost  |
+| web (Vercel)                     | `VITE_MOTEBIT_RELAY_URL`     | `https://relay.motebit.com` (replaces the deprecated `VITE_PROXY_URL`)      |
 
-Redeploy after changing env (Vercel doesn't rebuild on env change alone).
-
-### RPC key security
-
-`VITE_*` vars ship in the client bundle, so the RPC key is publicly extractable.
-The provider is commodity: it never touches keys or funds (it only relays signed
-bytes and reads public chain data) and it is swappable behind `SolanaRpcAdapter`,
-so the only exposure is quota abuse. Two mitigations:
-
-- **Now:** in the Helius dashboard, restrict the key by allowed origin/domain
-  (`motebit.com`). Rotate if abused (free tier — low stakes).
-- **Later:** proxy RPC through our own relay (which already holds a server-side
-  `SOLANA_RPC_URL`) so no key ships in the browser. Display reads proxy cleanly;
-  the broadcast can move to a relay forward-signed-bytes endpoint (the relay
-  forwards an already-signed tx — still sovereign; the relay never holds the key).
+**Never set `VITE_SOLANA_RPC_URL` in a deployed project.** Vite inlines every
+`VITE_*` value into public JS — incident 2026-09-30: a Helius `?api-key=` shipped
+in `motebit.com/assets/main-*.js`, the credits were drained and the provider
+halted every key on the account. It is a local-dev override only, and the
+`apps/web` / `apps/verify` builds now refuse any value with a query string,
+userinfo or key-shaped token; `check-no-secrets-in-client-bundles` (#166) scans
+the built bundles. Redeploy after changing env (Vercel doesn't rebuild on env
+change alone).
 
 ## Deploy
 
