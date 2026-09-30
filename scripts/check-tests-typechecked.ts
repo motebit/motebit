@@ -60,7 +60,10 @@ import ts from "typescript";
 import { formatRepair } from "./lib/gate-report.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const ROOT = resolve(__dirname, "..");
+/** `CHECK_TESTS_TYPECHECKED_ROOT` points the gate at a fixture workspace (the bypass harness). */
+const ROOT = process.env.CHECK_TESTS_TYPECHECKED_ROOT
+  ? resolve(process.env.CHECK_TESTS_TYPECHECKED_ROOT)
+  : resolve(__dirname, "..");
 
 const WORKSPACE_GLOBS = ["packages", "apps", "services"];
 
