@@ -2754,6 +2754,22 @@ export async function probeFetch(): Promise<unknown> {
       ),
   },
   {
+    script: "check-turbo-test-inputs",
+    proves:
+      "flags a package test that reads a file OUTSIDE its package without declaring it in the task's turbo `inputs` — the stale-cached-pass class: turbo replays a test result whenever the task hash is unchanged, so an undeclared outside read (a spec corpus, a sibling app's source) could change and the cached green would be replayed over the now-failing test. Drops a fixture test into packages/circuit-breaker (which declares no outside inputs) that reads spec/relay-federation-v1.md through `resolve(__dirname, ...)`; the gate's static path evaluation resolves it outside the package and finds no covering input.",
+    perturb: () =>
+      writeFixture(
+        `packages/circuit-breaker/src/__tests__/${PROBE_PREFIX}turbo_input.test.ts`,
+        [
+          "// Probe fixture — a test reading an undeclared out-of-package file.",
+          'import { readFileSync } from "node:fs";',
+          'import { resolve } from "node:path";',
+          'export const spec = readFileSync(resolve(__dirname, "../../../../spec/relay-federation-v1.md"), "utf-8");',
+          "",
+        ].join("\n"),
+      ),
+  },
+  {
     script: "check-relay-frame-origin",
     proves:
       "flags a surface that handles a relay `command_request` and executes it through `executeCommand` without saying where the command came from — the 2026-09-16 class where five surfaces forwarded a relay frame with no origin, so a command that arrived over the wire answered as if typed on the machine and the return view's credential membrane never closed. Drops a fixture handler that reads a `command_request` frame and calls `executeCommand` bare; the gate finds the frame marker and no door and no explicit origin.",

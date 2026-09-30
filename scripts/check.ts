@@ -1027,6 +1027,12 @@ const GATES: ReadonlyArray<Gate> = [
       "every package script a docs page tells the reader to run exists in the manifest it would run against: `pnpm --filter <pkg> <script>` resolves to a workspace package by name and one of its `scripts`; `pnpm run <script>` resolves against the most recent `cd <workspace-dir>` in the same fenced block (else the repo root); `npm run <script>` resolves against the scripts the create-motebit scaffold generates. The 2026-09-14 docs-vs-code cross-audit (#667) found three of the five app pages OPENING with a command that did not exist or did something other than the sentence claimed — the first command a new contributor types was the least-checked sentence on the site; `check-docs-tree` enforced the directory listing and `check-docs-cli-claims` the CLI subcommands, but nothing tied a documented script to a package.json. Invariant #157, added 2026-09-14",
     script: "check-docs-script-claims",
   },
+  {
+    name: "check-turbo-test-inputs",
+    defends:
+      "a CACHED test result is valid only if every input that can change its outcome is in its turbo task hash — test / test:coverage are cached, so a missed input silently replays yesterday's green over a now-failing test (a weakened gate, worse than slowness). The gate statically evaluates every path expression in each package's test-time closure (test files + vitest config, followed through in-package imports and path references) and requires each out-of-package reference to be hashed: through a workspace dependency (`dependsOn: build` → `^build`), the package's declared `inputs` on BOTH test tasks (`$TURBO_ROOT$/…`), or `globalDependencies`; an import of an undeclared workspace package is refused (it resolves through a hoisted link, outside the hash). Env: turbo runs strict, so an undeclared var is stripped; a read of a var turbo passes through unhashed must be declared or reviewed plumbing, and the root tasks hash CI / TZ / LANG (outcome-changing with no code read). A test that cannot be hermetic (a real-clock root-cert validity check) is `cache: false` AND listed in UNCACHED with the reason, both directions checked (invariant #166)",
+    script: "check-turbo-test-inputs",
+  },
 ];
 
 interface Result {
