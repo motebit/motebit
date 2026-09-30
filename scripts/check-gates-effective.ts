@@ -2864,6 +2864,16 @@ export async function probeFetch(): Promise<unknown> {
       }),
   },
   {
+    script: "check-tests-typechecked",
+    proves:
+      "flags a test file that no tsconfig compiled by the package's `typecheck` script includes — the #1000 shape, where a published package's tests were type-checked nowhere. The fixture is a vitest file at the root of packages/protocol, outside the `src` include of every protocol tsconfig.",
+    perturb: () =>
+      writeFixture(
+        `packages/protocol/${PROBE_PREFIX}uncovered.test.ts`,
+        `// Probe fixture — a test file no typecheck tsconfig includes.\nexport {};\n`,
+      ),
+  },
+  {
     script: "check-worker-no-master-token",
     proves:
       "flags a worker reading the relay master token again — the 2026-09-13 blast-radius class (every first-party worker held MOTEBIT_API_TOKEN, so a compromised worker container was a compromised relay). Probe reinstates the env read in research's config loader; byte-identical restoration on cleanup.",

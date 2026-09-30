@@ -1027,6 +1027,12 @@ const GATES: ReadonlyArray<Gate> = [
       "every package script a docs page tells the reader to run exists in the manifest it would run against: `pnpm --filter <pkg> <script>` resolves to a workspace package by name and one of its `scripts`; `pnpm run <script>` resolves against the most recent `cd <workspace-dir>` in the same fenced block (else the repo root); `npm run <script>` resolves against the scripts the create-motebit scaffold generates. The 2026-09-14 docs-vs-code cross-audit (#667) found three of the five app pages OPENING with a command that did not exist or did something other than the sentence claimed — the first command a new contributor types was the least-checked sentence on the site; `check-docs-tree` enforced the directory listing and `check-docs-cli-claims` the CLI subcommands, but nothing tied a documented script to a package.json. Invariant #157, added 2026-09-14",
     script: "check-docs-script-claims",
   },
+  {
+    name: "check-tests-typechecked",
+    defends:
+      "every test file (`*.test.*` / `*.spec.*` / anything under `__tests__/`) of every workspace package with a `typecheck` script is included by a tsconfig that script compiles — resolved by TypeScript's own config parser, following `pnpm run` hops. #1000: the 11 published packages built declarations from a tsconfig that excludes `src/__tests__` and type-checked that same tsconfig, so their tests were type-checked nowhere (vitest strips types unchecked; `tsconfig.eslint.json` is read only by the linter's parser); `packages/crypto` alone carried 90 latent errors, including an import of a type `@motebit/protocol` does not export. The fix keeps the build config excluding tests and adds a `tsconfig.test.json` the typecheck script also runs. Invariant #166, added 2026-09-30",
+    script: "check-tests-typechecked",
+  },
 ];
 
 interface Result {
