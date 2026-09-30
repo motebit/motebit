@@ -31,7 +31,9 @@ import {
   optionDiff,
   parseCanary,
   reportsError,
-  tscSkipsChecking,
+  VITEST_NON_CODE_KEYS,
+  VITEST_TEST_CODE_KEYS,
+  vitestArgvs,
   workspacePackageDirs,
 } from "../check-tests-typechecked.js";
 
@@ -260,7 +262,19 @@ describe("KNOWN_UNCOVERED", () => {
   });
 });
 
-describe("tscSkipsChecking — the pragma forms tsc honours, and only those", () => {
+describe("@ts-nocheck — the pragma forms tsc honours, and only those (asked of the compiler)", () => {
+  const { skipReason } = createRequire(import.meta.url)("../lib/tsc-checked-files.cjs") as {
+    skipReason: (
+      t: typeof ts,
+      sf: ts.SourceFile,
+      o: ts.CompilerOptions,
+      host: unknown,
+    ) => string | null;
+  };
+  const host = { isSourceOfProjectReferenceRedirect: () => false };
+  const tscSkipsChecking = (name: string, text: string): boolean =>
+    skipReason(ts, ts.createSourceFile(name, text, ts.ScriptTarget.Latest, false), {}, host) !==
+    null;
   it.each([
     "// @ts-nocheck\n",
     "// @TS-NOCHECK\n",
@@ -287,6 +301,49 @@ describe("tscSkipsChecking — the pragma forms tsc honours, and only those", ()
     "// ts-nocheck\n",
   ])("not honoured: %j", (head) => {
     expect(tscSkipsChecking("a.test.ts", `${head}export const x = 1;\n`)).toBe(false);
+  });
+});
+
+describe("vitest collection policy", () => {
+  it("pins which file-valued vitest keys are test code, and which never run", () => {
+    expect([...VITEST_TEST_CODE_KEYS].sort()).toEqual(
+      [
+        "benchmark.include",
+        "environment",
+        "globalSetup",
+        "include",
+        "includeSource",
+        "reporters",
+        "sequence.sequencer",
+        "setupFiles",
+        "snapshotSerializers",
+        "typecheck.include",
+      ].sort(),
+    );
+    expect(Object.keys(VITEST_NON_CODE_KEYS).sort()).toEqual(
+      ["config", "coverage.exclude", "coverage.include", "forceRerunTriggers"].sort(),
+    );
+  });
+
+  it("reads each vitest invocation's arguments from test scripts, through hops", () => {
+    expect(vitestArgvs({ test: "vitest run" }).argvs).toEqual([["run"]]);
+    expect(vitestArgvs({ build: "tsc" }).argvs).toEqual([[]]);
+    expect(
+      vitestArgvs({
+        test: "pnpm run test:unit && CI=1 vitest run --dir src",
+        "test:unit": 'vitest run -c "vitest.unit.config.ts"',
+        "test:e2e": "playwright test",
+      }).argvs,
+    ).toEqual([
+      ["run", "--dir", "src"],
+      ["run", "-c", "vitest.unit.config.ts"],
+    ]);
+    expect(vitestArgvs({ test: "npx vitest --config=x.ts 2>&1 | tee log" }).argvs).toEqual([
+      ["--config=x.ts", "2>&1"],
+    ]);
+    const bad = vitestArgvs({ test: "vitest run -c $CFG" });
+    expect(bad.problems).toHaveLength(1);
+    expect(bad.problems[0]).toMatch(/expansion/);
   });
 });
 

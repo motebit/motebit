@@ -726,8 +726,7 @@ describe("check-tests-typechecked — round-4 canary-prefix and concurrency case
       }).stdout;
       expect(left).not.toContain(CANARY_PREFIX);
     }
-  }, // repo's 30s test timeout (the gate's lock budget). // 20 gate runs, ten at a time; each run's own lock wait stays below the
-  300_000);
+  }, 300_000); // repo's 30s test timeout (the gate's lock budget). // 20 gate runs, ten at a time; each run's own lock wait stays below the
 
   it("control: a pragma tsc does not honour is not flagged (string mention, after code, overridden by a later @ts-check, block comment)", () => {
     const files = basePackage(P);

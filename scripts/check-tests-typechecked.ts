@@ -24,11 +24,20 @@
  * test under a directory the gate's own walker skipped). So nothing here is
  * inferred from script text or a flag list:
  *
- * 1. **What is a test file** is what vitest collects — vitest's own config
- *    loading and globbing (`scripts/lib/vitest-collect.mjs`), plus every
- *    `setupFiles` entry — united with every git-listed file named
+ * 1. **What is a test file** is what vitest loads — vitest's own config
+ *    loading and globbing (`scripts/lib/vitest-collect.mjs`), run with the
+ *    exact arguments each `test` / `test:*` script passes to `vitest`
+ *    (`-c`/`--config`/`--dir`/`--root` included, parsed by vitest's own
+ *    `parseCLI`), plus EVERY file-valued entry of the resolved config: a key
+ *    in `VITEST_TEST_CODE_KEYS` (setupFiles, globalSetup, environment,
+ *    reporters, snapshotSerializers, …) is collected; a key in
+ *    `VITEST_NON_CODE_KEYS` (the config file, coverage selection, watch
+ *    triggers) is not; any other key with a file value fails ("unknown
+ *    file-valued vitest key") — the list is enumerated from the resolved
+ *    config object, never hand-picked. United with every git-listed file named
  *    `*.test.*` / `*.spec.*` or under a `__tests__/` directory (tracked, or
- *    untracked-and-not-ignored). No directory is skipped by name.
+ *    untracked-and-not-ignored), declaration files included. No directory is
+ *    skipped by name.
  * 2. **Canary execution.** For every directory holding such a file, the gate
  *    writes a canary `__typecheck_canary_<rand>.test.<ext>` with a guaranteed
  *    type error (one per TS extension present there), runs the package's REAL
@@ -51,17 +60,26 @@
  *    against the package build config's (`tsc --showConfig -p tsconfig.json`)
  *    over EVERY compilerOptions key either side prints — implied strict-family
  *    flags included. Only `DIFF_ALLOWED_KEYS` may differ.
- * 5. **Membership.** Every collected TS file must be in the `files` of some
- *    recorded invocation's `--showConfig` (catches a per-file `exclude` a
- *    directory canary cannot see).
- * 6. **`@ts-nocheck`** in any collected file fails (a canary cannot prove a
- *    file-local pragma) — detected by TypeScript's own parser, so exactly the
- *    forms tsc honours (any case, `//` or `///`, leading comments after a
- *    BOM/shebang/block comment, last directive wins). A collected JS test file
- *    fails (tsc never checks it). A collected file outside the package dir
- *    fails (vitest `dir: ".."`). A collected file named with the canary prefix
- *    fails unless it is this run's canary or a byte-exact canary of another
- *    live run (untracked only).
+ * 5. **Type-checked, asked of the compiler.** Every collected file must be a
+ *    ROOT file of some recorded invocation's program AND type-checked there —
+ *    decided by the TypeScript that invocation ran
+ *    (`scripts/lib/tsc-checked-files.cjs` builds its Program): not a
+ *    declaration file (`SourceFile.isDeclarationFile` — so `api.d.test.ts`,
+ *    which TypeScript 5 treats as one and skipLibCheck skips, fails), and not
+ *    skipped by `ts.skipTypeChecking` (noCheck, skipDefaultLibCheck,
+ *    project-reference redirects, `@ts-nocheck` read as tsc reads it — any
+ *    case, `//` or `///`, leading comments only, last directive wins —, JS
+ *    without checkJs). No filename rule. That helper self-tests the compiler
+ *    it loaded and fails closed if its skip rules changed shape. A collected
+ *    file outside the package dir fails (vitest `dir: ".."`). A collected
+ *    file named with the canary prefix fails unless it is this run's canary
+ *    or a byte-exact canary of another live run (untracked only).
+ * 6. **One run per worktree.** Concurrent runs serialise on a lock
+ *    (`scripts/lib/repo-lock.ts`, `<git-dir>/check-tests-typechecked.lock`):
+ *    a second run waits up to `LOCK_WAIT_MS` (below the 30s gate-test
+ *    timeout; `CHECK_TESTS_TYPECHECKED_LOCK_WAIT_MS` overrides) and then fails
+ *    naming the holder — another run's canary, globbed by this run's tsc and
+ *    deleted before it is read, would stop the chain with TS6053.
  * 7. The `typecheck` script — and every package script it runs via
  *    `pnpm run` / `pnpm <x>` / `npm run` — may chain only with `&&`, and may
  *    not use `$` or backtick expansion (a chain that varies by environment).
@@ -81,8 +99,9 @@
  * vs merge-base(origin/main, HEAD), committed or not. It fails CLOSED to the
  * full run when the merge-base or diff can't be computed, or when a shared
  * config outside every package (tsconfig.base.json, a vitest config, the
- * root package.json, pnpm-workspace.yaml, pnpm-lock.yaml) or the gate's own
- * code changed. The aperture line names which it did.
+ * root package.json, pnpm-workspace.yaml, pnpm-lock.yaml, .npmrc) or the
+ * gate's own code (this file and its five scripts/lib helpers) changed. The
+ * aperture line names which it did; every trigger is pinned by a test.
  *
  * ## Usage
  *
@@ -114,9 +133,8 @@ import { availableParallelism, hostname, tmpdir } from "node:os";
 import { basename, dirname, extname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import ts from "typescript";
-
 import { formatRepair } from "./lib/gate-report.js";
+import { acquireRepoLock, lockPath } from "./lib/repo-lock.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = process.env.CHECK_TESTS_TYPECHECKED_ROOT
@@ -124,11 +142,11 @@ const ROOT = process.env.CHECK_TESTS_TYPECHECKED_ROOT
   : resolve(__dirname, "..");
 const COLLECTOR = join(__dirname, "lib/vitest-collect.mjs");
 const RECORDER = join(__dirname, "lib/tsc-recorder.cjs");
+const TSC_CHECKED = join(__dirname, "lib/tsc-checked-files.cjs");
 
 export const CANARY_PREFIX = "__typecheck_canary_";
 
 const TS_SOURCE = /\.(?:ts|tsx|mts|cts)$/;
-const DECLARATION = /\.d\.(?:ts|mts|cts)$/;
 const TEST_NAME = /\.(?:test|spec)\.(?:ts|tsx|mts|cts|js|jsx|mjs|cjs)$/;
 
 /**
@@ -180,52 +198,15 @@ export const KNOWN_UNCOVERED: Readonly<Record<string, Readonly<Record<string, st
  * Test-named (`*.test.*` / `*.spec.*`, TS or JS), or a TS file under a
  * `__tests__/` directory (helpers and fixtures a test imports are part of the
  * test's contract). A JS helper under `__tests__/` (a `.cjs` module stub) is
- * not a test file; a JS file vitest would RUN is, and fails.
+ * not a test file; a JS file vitest would RUN is, and fails. Declaration
+ * files are NOT exempt by name: whether tsc checks a collected file is asked
+ * of the compiler (`scripts/lib/tsc-checked-files.cjs`), and it answers that a
+ * `.d.ts` — or a `*.d.test.ts` — is never checked as code.
  */
 export function isTestFile(relPath: string): boolean {
   const posix = relPath.split("\\").join("/");
-  if (DECLARATION.test(posix)) return false;
   if (TEST_NAME.test(posix)) return true;
   return TS_SOURCE.test(posix) && posix.split("/").includes("__tests__");
-}
-
-// ── @ts-nocheck, exactly as tsc reads it ─────────────────────────────────────
-
-/**
- * Whether tsc skips type-checking this file because of a `@ts-nocheck`
- * pragma — decided by TypeScript's own parser, never a regex. tsc reads the
- * pragma from the file's LEADING comments only (after a BOM, a shebang,
- * blanks and block comments), in a `//` or `///` comment, matching the name
- * case-insensitively (`// @TS-NOCHECK`, `//@Ts-NoCheck: why`); the LAST
- * `@ts-check` / `@ts-nocheck` there wins; a block comment, a mention after
- * code, or one inside a string is not a pragma. `createSourceFile` records
- * the outcome as `checkJsDirective` (the field the checker's skip test reads,
- * for TS files as well as JS). The repo's own typescript is used; the
- * self-test in `assertPragmaDetectionWorks` fails the gate closed if a
- * TypeScript upgrade renames that field.
- */
-export function tscSkipsChecking(fileName: string, text: string): boolean {
-  const sf = ts.createSourceFile(fileName, text, ts.ScriptTarget.Latest, false);
-  const d = (sf as unknown as { checkJsDirective?: { enabled: boolean } }).checkJsDirective;
-  return d !== undefined && !d.enabled;
-}
-
-/** Fail closed if `tscSkipsChecking` can no longer see a pragma tsc honours. */
-export function assertPragmaDetectionWorks(): void {
-  const honoured = ["// @ts-nocheck\n", "\uFEFF// @TS-NOCHECK\nlet a = 1;\n", "//@Ts-NoCheck: x\n"];
-  const ignored = [
-    "let a = 1;\n// @ts-nocheck\n",
-    "/* @ts-nocheck */\n",
-    "// @ts-nocheck\n// @ts-check\n",
-  ];
-  const ok =
-    honoured.every((t) => tscSkipsChecking("probe.ts", t)) &&
-    ignored.every((t) => !tscSkipsChecking("probe.ts", t));
-  if (!ok) {
-    throw new Error(
-      `@ts-nocheck detection no longer matches tsc ${ts.version} (SourceFile.checkJsDirective changed?) — update tscSkipsChecking in scripts/check-tests-typechecked.ts`,
-    );
-  }
 }
 
 // ── workspace ────────────────────────────────────────────────────────────────
@@ -431,32 +412,221 @@ export function optionDiff(
 
 // ── collection ───────────────────────────────────────────────────────────────
 
-/** The files vitest collects for a package (tests + setupFiles), absolute. */
-export function vitestCollect(
-  pkgAbs: string,
-  env: NodeJS.ProcessEnv,
-): { files: string[]; error?: string } {
-  const r = spawnSync(process.execPath, [COLLECTOR], {
-    cwd: pkgAbs,
-    encoding: "utf-8",
-    env: { ...env, MOTEBIT_VITEST_RESOLVE_FALLBACK: resolve(__dirname, "..") },
-    maxBuffer: 64 * 1024 * 1024,
+/** A child `node` run, async (the package pool must not block on it). */
+function runNode(
+  args: string[],
+  opts: { cwd: string; env: NodeJS.ProcessEnv; input?: string },
+): Promise<{ status: number | null; stdout: string; stderr: string }> {
+  return new Promise((done) => {
+    const child = spawn(process.execPath, args, {
+      cwd: opts.cwd,
+      env: opts.env,
+      stdio: [opts.input === undefined ? "ignore" : "pipe", "pipe", "pipe"],
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (d: Buffer) => (stdout += d.toString()));
+    child.stderr.on("data", (d: Buffer) => (stderr += d.toString()));
+    child.on("close", (status) => done({ status, stdout, stderr }));
+    if (opts.input !== undefined) child.stdin!.end(opts.input);
   });
-  if (r.status !== 0) {
-    return {
-      files: [],
-      error: `vitest collection failed: ${(r.stderr || r.stdout).trim().slice(0, 400)}`,
-    };
+}
+
+/**
+ * Resolved-vitest-config keys whose file value vitest LOADS AND RUNS as test
+ * code: such a file is collected (canaried, membership-checked) like a test.
+ */
+export const VITEST_TEST_CODE_KEYS: ReadonlySet<string> = new Set([
+  "setupFiles",
+  "globalSetup",
+  "snapshotSerializers",
+  "environment",
+  "reporters",
+  "sequence.sequencer",
+  "include",
+  "includeSource",
+  "typecheck.include",
+  "benchmark.include",
+]);
+
+/**
+ * Resolved-vitest-config keys whose file value vitest never runs as test
+ * code, each with the reason. Every other key with a file value fails the
+ * gate ("unknown file-valued vitest key") until it is classified here or in
+ * VITEST_TEST_CODE_KEYS. Widening this set is a policy change; the tests pin it.
+ */
+export const VITEST_NON_CODE_KEYS: Readonly<Record<string, string>> = {
+  config:
+    "the config file itself — vite evaluates it to resolve the config; it is not a test module",
+  "coverage.include": "selects which files coverage REPORTS on; vitest does not load them as tests",
+  "coverage.exclude": "removes files from the coverage report; vitest does not load them as tests",
+  forceRerunTriggers:
+    "watch-mode rerun triggers — vitest only watches them (setupFiles appear here too, and are collected under their own key)",
+};
+
+/**
+ * The argument lists each package script passes to `vitest`: every script
+ * named `test` / `test:*`, and every package script those reach through
+ * `pnpm run x` / `pnpm x` / `npm run x`. A segment that invokes vitest with
+ * `$`/backtick expansion cannot be resolved and is reported. With no vitest
+ * invocation in any of them, the default (no arguments) is used.
+ */
+export function vitestArgvs(scripts: Record<string, string>): {
+  argvs: string[][];
+  problems: string[];
+} {
+  const argvs = new Map<string, string[]>();
+  const problems: string[] = [];
+  const seen = new Set<string>();
+  const visit = (name: string): void => {
+    if (seen.has(name) || scripts[name] === undefined) return;
+    seen.add(name);
+    const cmd = scripts[name]!;
+    for (const segment of shellSegments(cmd)) {
+      const words = shellWords(segment);
+      const at = words.findIndex((w) => /^vitest(?:\.m?js)?$/.test(basename(w)));
+      if (at < 0) continue;
+      if (/[$`]/.test(segment)) {
+        problems.push(
+          `script "${name}" runs vitest with \`$\`/backtick expansion ("${segment.trim()}") — the gate cannot resolve which config that vitest loads; spell its arguments out literally`,
+        );
+        continue;
+      }
+      const args = words.slice(at + 1);
+      argvs.set(JSON.stringify(args), args);
+    }
+    for (const m of cmd.matchAll(/\b(?:pnpm|npm|yarn)\s+(?:run\s+)?([\w:.-]+)/g)) visit(m[1]!);
+  };
+  for (const name of Object.keys(scripts).sort()) if (/^test(?::|$)/.test(name)) visit(name);
+  return { argvs: argvs.size > 0 ? [...argvs.values()] : [[]], problems };
+}
+
+/** `cmd` split at shell control operators outside quotes. */
+function shellSegments(cmd: string): string[] {
+  const out: string[] = [];
+  let cur = "";
+  let quote: string | null = null;
+  for (let i = 0; i < cmd.length; i++) {
+    const c = cmd[i]!;
+    if (quote) {
+      if (c === quote) quote = null;
+      cur += c;
+    } else if (c === '"' || c === "'") {
+      quote = c;
+      cur += c;
+    } else if (c === "&" || c === "|" || c === ";" || c === "\n") {
+      if (c === "&" && (cmd[i - 1] === ">" || cmd[i + 1] === ">")) {
+        cur += c;
+        continue;
+      }
+      out.push(cur);
+      cur = "";
+    } else {
+      cur += c;
+    }
   }
+  out.push(cur);
+  return out.filter((x) => x.trim().length > 0);
+}
+
+/** Shell-style words of one segment (quotes removed; no expansion). */
+function shellWords(segment: string): string[] {
+  const words: string[] = [];
+  let cur: string | null = null;
+  let quote: string | null = null;
+  for (const c of segment) {
+    if (quote) {
+      if (c === quote) quote = null;
+      else cur += c;
+    } else if (c === '"' || c === "'") {
+      quote = c;
+      cur ??= "";
+    } else if (/\s/.test(c)) {
+      if (cur !== null) words.push(cur);
+      cur = null;
+    } else {
+      cur = (cur ?? "") + c;
+    }
+  }
+  if (cur !== null) words.push(cur);
+  return words;
+}
+
+/**
+ * What vitest loads for a package under one script's arguments: its test
+ * files and every file-valued entry of the resolved config, absolute.
+ */
+export async function vitestCollect(
+  pkgAbs: string,
+  args: readonly string[],
+  env: NodeJS.ProcessEnv,
+  repoRoot = ROOT,
+): Promise<{ files: string[]; fileValued: { key: string; file: string }[]; error?: string }> {
+  const dir = mkdtempSync(join(tmpdir(), "vitest-collect-"));
+  const out = join(dir, "out.json");
   try {
-    const j = JSON.parse(r.stdout) as { files: string[]; setupFiles: string[] };
-    return { files: [...j.files, ...j.setupFiles].map((f) => resolve(f)) };
+    const r = await runNode([COLLECTOR], {
+      cwd: pkgAbs,
+      env: {
+        ...env,
+        MOTEBIT_VITEST_RESOLVE_FALLBACK: resolve(__dirname, ".."),
+        MOTEBIT_VITEST_ARGV: JSON.stringify(args),
+        MOTEBIT_VITEST_COLLECT_OUT: out,
+        MOTEBIT_REPO_ROOT: repoRoot,
+      },
+    });
+    const label = `vitest ${args.join(" ")}`.trim();
+    if (r.status !== 0 || !existsSync(out)) {
+      return {
+        files: [],
+        fileValued: [],
+        error: `vitest collection (\`${label}\`) failed: ${(r.stderr || r.stdout).trim().slice(0, 400)}`,
+      };
+    }
+    const j = JSON.parse(readFileSync(out, "utf-8")) as {
+      files: string[];
+      fileValued: { key: string; file: string }[];
+    };
+    return { files: j.files.map((f) => resolve(f)), fileValued: j.fileValued };
   } catch (err) {
     return {
       files: [],
+      fileValued: [],
       error: `vitest collection printed no JSON: ${err instanceof Error ? err.message : String(err)}`,
     };
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
   }
+}
+
+/** Per file: whether it is a root of the invocation's program, and why tsc skips it (null: checked). */
+type CheckedFiles = Record<string, { root: boolean; skip: string | null }>;
+
+/**
+ * Ask the TypeScript that ran the recorded invocation (the `typescript.js`
+ * beside its `tsc`) whether it type-checks each of `files`
+ * (scripts/lib/tsc-checked-files.cjs builds that invocation's own Program).
+ */
+export async function tscChecked(
+  inv: { cwd: string; tsc: string; argv: string[] },
+  files: string[],
+  env: NodeJS.ProcessEnv,
+): Promise<CheckedFiles> {
+  const tsLib = inv.tsc.endsWith("/bin/tsc")
+    ? resolve(dirname(inv.tsc), "../lib/typescript.js")
+    : join(dirname(inv.tsc), "typescript.js");
+  const r = await runNode([TSC_CHECKED], {
+    cwd: inv.cwd,
+    env,
+    input: JSON.stringify({ tsLib, argv: inv.argv, files }),
+  });
+  if (r.status !== 0) {
+    const msg = /Error: (.*)/.exec(r.stderr)?.[1] ?? (r.stderr || r.stdout).trim().slice(0, 400);
+    throw new Error(
+      `asking tsc ${inv.argv.join(" ")} (in ${inv.cwd}) which files it checks: ${msg}`,
+    );
+  }
+  return (JSON.parse(r.stdout) as { results: CheckedFiles }).results;
 }
 
 /** `git ls-files -z <args> -- .` in `cwd`, absolute paths. */
@@ -752,11 +922,25 @@ export async function checkPackage(
 
   // 1. Collection.
   const collected = new Set<string>();
-  const v = vitestCollect(pkgAbs, env);
-  if (v.error) res.problems.push(v.error);
+  const vitestFiles: string[] = [];
+  const va = vitestArgvs(scripts);
+  res.problems.push(...va.problems);
+  for (const args of va.argvs) {
+    const v = await vitestCollect(pkgAbs, args, env, root);
+    if (v.error) res.problems.push(v.error);
+    vitestFiles.push(...v.files);
+    for (const { key, file } of v.fileValued) {
+      if (VITEST_TEST_CODE_KEYS.has(key)) vitestFiles.push(file);
+      else if (!Object.hasOwn(VITEST_NON_CODE_KEYS, key)) {
+        res.problems.push(
+          `${relative(root, file).split("\\").join("/")} is the value of \`${key}\` in the resolved vitest config${args.length > 0 ? ` (\`vitest ${args.join(" ")}\`)` : ""} — an unknown file-valued vitest key: the gate cannot tell whether vitest runs that file as test code. Classify the key in scripts/check-tests-typechecked.ts: VITEST_TEST_CODE_KEYS if vitest loads it (it is then canaried and membership-checked like a test), VITEST_NON_CODE_KEYS with the reason if it never does`,
+        );
+      }
+    }
+  }
   const g = gitTestFiles(pkgAbs);
   if (g.error) res.problems.push(g.error);
-  for (const f of [...v.files, ...g.files]) {
+  for (const f of [...new Set([...vitestFiles, ...g.files])]) {
     if (isExemptCanary(f, g.tracked) || !existsSync(f)) continue;
     if (!f.startsWith(pkgAbs + "/")) {
       res.problems.push(
@@ -788,20 +972,7 @@ export async function checkPackage(
 
   const knownHere = known[dir] ?? {};
   const isKnown = (abs: string): boolean => Object.hasOwn(knownHere, rel(abs));
-  const tsFiles = files.filter((f) => TS_SOURCE.test(f) && !DECLARATION.test(f));
-  for (const f of files) {
-    if (!tsFiles.includes(f) && !isKnown(f)) {
-      res.problems.push(
-        `${rel(f)} is a JavaScript test file — tsc never checks it; write it in TypeScript`,
-      );
-    }
-    const got = readIfPresent(f);
-    if (got && tscSkipsChecking(f, got.text)) {
-      res.problems.push(
-        `${rel(f)} carries \`@ts-nocheck\` (tsc reads it in the leading comments, any case) — remove it and fix the errors it hides`,
-      );
-    }
-  }
+  const tsFiles = files.filter((f) => TS_SOURCE.test(f));
 
   // 2. Chain operators.
   res.problems.push(...chainViolations(scripts));
@@ -871,7 +1042,8 @@ export async function checkPackage(
       res.problems.push(err instanceof Error ? err.message : String(err));
     }
   }
-  const covered = new Set<string>();
+  // Per collected file: some tsc checks it, or why the ones rooting it skip it.
+  const verdicts = new Map<string, { checked: boolean; skips: string[] }>();
   for (const inv of invocations.values()) {
     const label = `tsc ${inv.argv.join(" ")}`.trim();
     const bad = argvViolations(inv.argv);
@@ -888,7 +1060,23 @@ export async function checkPackage(
       res.problems.push(err instanceof Error ? err.message : String(err));
       continue;
     }
-    for (const f of shown.files) covered.add(f);
+    const roots = new Set(shown.files);
+    const mine = files.filter((f) => roots.has(f));
+    if (mine.length > 0) {
+      try {
+        const answer = await tscChecked(inv, mine, env);
+        for (const f of mine) {
+          const a = answer[f];
+          if (!a?.root) continue;
+          const v = verdicts.get(f) ?? { checked: false, skips: [] };
+          if (a.skip === null) v.checked = true;
+          else v.skips.push(`${a.skip} (\`${label}\`)`);
+          verdicts.set(f, v);
+        }
+      } catch (err) {
+        res.problems.push(err instanceof Error ? err.message : String(err));
+      }
+    }
     if (reference) {
       const d = optionDiff(reference.compilerOptions, shown.compilerOptions);
       res.keysCompared += d.compared;
@@ -899,12 +1087,14 @@ export async function checkPackage(
       }
     }
   }
-  const notMember = tsFiles.filter((f) => !covered.has(f));
-  for (const f of notMember) {
+  for (const f of files) {
+    const v = verdicts.get(f);
+    if (v?.checked) continue;
     if (isKnown(f)) res.allowlisted.push(rel(f));
+    else if (v && v.skips.length > 0) res.problems.push(`${rel(f)} ${v.skips.join("; ")}`);
     else
       res.problems.push(
-        `${rel(f)} is not a root file of any tsc the typecheck script runs (tsc --showConfig files)`,
+        `${rel(f)} is not a root file of any tsc the typecheck script runs (tsc --showConfig files)${TS_SOURCE.test(f) ? "" : " — a JavaScript test file; tsc never checks it: write it in TypeScript"}`,
       );
   }
   for (const k of Object.keys(knownHere)) {
@@ -930,6 +1120,8 @@ const GLOBAL_TRIGGER_PATHS = new Set([
   "scripts/check-tests-typechecked.ts",
   "scripts/lib/vitest-collect.mjs",
   "scripts/lib/tsc-recorder.cjs",
+  "scripts/lib/tsc-checked-files.cjs",
+  "scripts/lib/repo-lock.ts",
 ]);
 
 /**
@@ -1001,12 +1193,17 @@ async function pool<T, R>(items: T[], n: number, fn: (t: T) => Promise<R>): Prom
   return out;
 }
 
+/**
+ * How long a run waits for a concurrent run of this gate on the same worktree
+ * before giving up (RED, naming the holder). Kept below the repo's 30s test
+ * timeout (`test:gates`) so a harness run that waits fails with this message,
+ * not a timeout. `CHECK_TESTS_TYPECHECKED_LOCK_WAIT_MS` overrides.
+ */
+const LOCK_WAIT_MS = 25_000;
+
 async function main(): Promise<void> {
   const started = Date.now();
   const table = process.argv.includes("--table");
-  assertPragmaDetectionWorks();
-  const drained = drainCanaries();
-  if (drained.length > 0) process.stderr.write(`drained ${drained.length} stale canary file(s)\n`);
   const only = (process.env.CHECK_TESTS_TYPECHECKED_ONLY ?? "")
     .split(",")
     .map((s) => s.trim())
@@ -1033,9 +1230,32 @@ async function main(): Promise<void> {
     1,
     Number(process.env.CHECK_TESTS_TYPECHECKED_CONCURRENCY) || availableParallelism(),
   );
-  const results = (await pool(dirs, concurrency, (d) => checkPackage(d))).filter(
-    (r): r is PackageResult => r !== null && r.scanned,
-  );
+  // One run at a time per worktree: a concurrent run's canaries, globbed by
+  // this run's tsc and deleted before it reads them, stop the chain (TS6053).
+  let release = (): void => {};
+  if (dirs.length > 0) {
+    const budgetMs = Number(process.env.CHECK_TESTS_TYPECHECKED_LOCK_WAIT_MS) || LOCK_WAIT_MS;
+    try {
+      release = await acquireRepoLock(lockPath(ROOT, "check-tests-typechecked"), { budgetMs });
+    } catch (err) {
+      process.stderr.write(
+        `✗ check-tests-typechecked: another run of this gate is using this worktree — ${err instanceof Error ? err.message : String(err)}.\n  Its canaries would corrupt this run's tsc (TS6053), so this run did not start. Fix: let that run finish and re-run, or raise CHECK_TESTS_TYPECHECKED_LOCK_WAIT_MS (default ${LOCK_WAIT_MS}). A dead holder's lock is reclaimed automatically.\n`,
+      );
+      process.exit(1);
+    }
+  }
+  let results: PackageResult[];
+  try {
+    const drained = drainCanaries();
+    if (drained.length > 0) {
+      process.stderr.write(`drained ${drained.length} stale canary file(s)\n`);
+    }
+    results = (await pool(dirs, concurrency, (d) => checkPackage(d))).filter(
+      (r): r is PackageResult => r !== null && r.scanned,
+    );
+  } finally {
+    release();
+  }
 
   if (table) {
     process.stdout.write(
@@ -1055,7 +1275,7 @@ async function main(): Promise<void> {
   }
 
   const sum = (f: (r: PackageResult) => number): number => results.reduce((n, r) => n + f(r), 0);
-  const aperture = `${results.length} package(s) scanned${scopeNote}; ${sum((r) => r.testFiles)} collected test file(s) (vitest collection + setupFiles + git-listed test-named files); ${sum((r) => r.canaryDirs)} canary director(ies) run through each package's real typecheck; ${sum((r) => r.invocations)} recorded tsc invocation(s) diffed against tsconfig.json over ${sum((r) => r.keysCompared)} compilerOptions key comparison(s) (only ${DIFF_ALLOWED_KEYS.size} emit/layout keys may differ); ${sum((r) => r.allowlisted.length)} file(s) allowlisted in KNOWN_UNCOVERED; ${Math.round((Date.now() - started) / 1000)}s`;
+  const aperture = `${results.length} package(s) scanned${scopeNote}; ${sum((r) => r.testFiles)} collected test file(s) (vitest collection under each test script's arguments + every file-valued config entry vitest runs + git-listed test-named files); ${sum((r) => r.canaryDirs)} canary director(ies) run through each package's real typecheck; every collected file asked of the recorded tsc's own Program (root + not skipped); ${sum((r) => r.invocations)} recorded tsc invocation(s) diffed against tsconfig.json over ${sum((r) => r.keysCompared)} compilerOptions key comparison(s) (only ${DIFF_ALLOWED_KEYS.size} emit/layout keys may differ); ${sum((r) => r.allowlisted.length)} file(s) allowlisted in KNOWN_UNCOVERED; ${Math.round((Date.now() - started) / 1000)}s`;
   const failing = results.filter((r) => r.problems.length > 0);
   if (failing.length === 0) {
     process.stdout.write(`✓ check-tests-typechecked: ${aperture}.\n`);
