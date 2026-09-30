@@ -1521,7 +1521,12 @@ describe("#890 r7 (P1) a late MCP answer never overwrites a settled task's recei
 //                    or undetermined (a `failed` answer from a recorded
 //                    executor is positive evidence: its rotation is owed);
 //   (3) POSITIVE     a door (POST, federation) reports acceptance (2xx) only
-//                    when the entry took THIS receipt.
+//                    when the entry took THIS receipt;
+//   (4) EVICTION     (#890 r9) the queue then forgets X, and the poll answers
+//                    exactly what it answered live.
+// #890 r9 narrows (1): a SETTLED answer is frozen — the completed-over-failed
+// replacement applies only to an entry neither settled nor claimed for
+// settlement (`settling`).
 type AnswerDoor = "post" | "mcp" | "fed";
 type AnswerState =
   | "unsettled"
@@ -1547,6 +1552,16 @@ const ANSWER_SIGNERS: AnswerSigner[] = [
   "delegator",
   "master",
 ];
+
+/** The entry is settled, or claimed for settlement (#890 r9: its answer is frozen). */
+function entryFrozen(w: World, taskId: string): boolean {
+  const row = w.relay.moteDb.db
+    .prepare("SELECT task_json FROM relay_task_queue WHERE task_id = ?")
+    .get(taskId) as { task_json: string } | undefined;
+  if (row == null) return false;
+  const e = JSON.parse(row.task_json) as { settled?: boolean; settling?: string };
+  return e.settled === true || (typeof e.settling === "string" && e.settling !== "");
+}
 
 /** The poll's answer for X, as D sees it (live entry, else the archive). */
 async function pollAnswer(w: World, taskId: string): Promise<ExecutionReceipt | null> {
@@ -1670,6 +1685,8 @@ async function runAnswerCell(
       db.prepare("DELETE FROM relay_task_queue WHERE task_id = ?").run(X);
     }
     const before = await pollAnswer(w, X);
+    // #890 r9: a SETTLED answer is frozen — settled, or claimed for settlement.
+    const frozen = entryFrozen(w, X);
 
     // ── the door ──
     let reported: number | null = null;
@@ -1715,7 +1732,7 @@ async function runAnswerCell(
           : signer === "routed" || signer === "second" || signer === "delegator";
     const admissible = sigValid && recorded && state !== "evicted";
     let expected: ExecutionReceipt | null = before;
-    if (admissible && sent != null) {
+    if (admissible && sent != null && !frozen) {
       if (before == null) expected = sent;
       else if (before.status !== "completed" && status === "completed") expected = sent;
     }
@@ -1734,6 +1751,17 @@ async function runAnswerCell(
       failures.push(
         `POSITIVE: the door reported ${reported} but the entry did not take the receipt`,
       );
+    }
+    // ── the eviction dimension (#890 r9): the queue forgets X; the poll
+    //    answers exactly what it answered before (the archive IS the answer).
+    if (state !== "evicted") {
+      db.prepare("DELETE FROM relay_task_queue WHERE task_id = ?").run(X);
+      const evicted = await pollAnswer(w, X);
+      if (sig(evicted) !== sig(after)) {
+        failures.push(
+          `EVICTION: the live answer ${sig(after)} became ${sig(evicted)} once evicted`,
+        );
+      }
     }
     if (expected == null || expected.status === "completed") {
       const keys = await adoptedAdapterKeys(w, X);
@@ -1884,7 +1912,7 @@ describe("#890 r8 (P3) an MCP forward reports acceptance only on a positive inge
 });
 
 describe("#890 r8 the answer has ONE writer", () => {
-  it("no source file outside task-answer.ts assigns a queue entry's receipt or terminal status", async () => {
+  it("no source file outside task-answer.ts assigns a queue entry's receipt, terminal status or settlement claim, or writes the queue in SQL", async () => {
     const { readdirSync, readFileSync } = await import("node:fs");
     const { join } = await import("node:path");
     const dir = join(__dirname, "..");
@@ -1901,7 +1929,18 @@ describe("#890 r8 the answer has ONE writer", () => {
           const code = line.replace(/\/\/.*$/, "");
           const receiptWrite = /\.receipt\s*=(?!=)/.test(code);
           const statusWrite = /\.task\.status\s*=(?!=)/.test(code);
-          if (!receiptWrite && !statusWrite) return;
+          // #890 r9 (a secondary signal — the queue's answer capability and
+          // its triggers are the enforcement): the settlement claim, bracket
+          // writes, and SQL that writes the queue outside task-queue.ts.
+          const settleWrite = /\.(settled|settling)\s*=(?!=)/.test(code);
+          const bracketWrite =
+            /\[\s*["'`](receipt|settled|settling|status)["'`]\s*\]\s*=(?!=)/.test(code);
+          const sqlWrite =
+            e.name !== "task-queue.ts" &&
+            /(UPDATE|INSERT\s+(OR\s+\w+\s+)?INTO|REPLACE\s+INTO)\s+relay_task_(queue|answers)\b/i.test(
+              code,
+            );
+          if (!receiptWrite && !statusWrite && !settleWrite && !bracketWrite && !sqlWrite) return;
           // Allowed: the durable queue hydrating a stored row, and the socket
           // claim's Pending ⇄ Claimed transition (never a terminal status).
           if (
