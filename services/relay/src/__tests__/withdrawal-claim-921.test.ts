@@ -56,6 +56,7 @@ import {
   createWithdrawalTables,
 } from "../account-store-sqlite.js";
 import { evaluateAndFireRail, enqueuePendingWithdrawal } from "../batch-withdrawals.js";
+import { recordDurableAttempt } from "../withdrawal-chain-payouts.js";
 import { AUTH_HEADER, createTestRelay, jsonAuthWithIdempotency } from "./test-helpers.js";
 
 const TX_SIG =
@@ -437,6 +438,55 @@ describe("#921 admin during the in-flight send", () => {
     expect(lost[0]).toContain('"level":"error"');
     // No receipt signed onto a row the payout did not settle.
     expect(row(relay, id).relay_signature).toBeNull();
+  });
+});
+
+describe("#990 round 8: a new payout is signed only over a lane read at or above every recorded observation", () => {
+  // A load-balanced pool can answer a finalized read from a lagging bank.
+  // The lane read that a NEW payout is signed over must come from a bank at
+  // or after the highest slot any recorded nonce value was observed at —
+  // else the payout can be signed over a value the chain already moved past.
+  it("with no recorded payout the lane read carries no floor", async () => {
+    const prepareNonceLane = vi.fn(() => Promise.resolve(at100(chain.lane)));
+    const sendUsdc = vi.fn().mockResolvedValue({ signature: TX_SIG, slot: 1, confirmed: true });
+    const { operator } = makeOperator(sendUsdc, prepareNonceLane);
+    relay = await createTestRelay({ enableDeviceAuth: false, operatorSolanaTransfer: operator });
+    const mid = "zz990-floor-none";
+    await registerAndFund(relay, mid);
+    await startWithdraw(relay, mid);
+    expect(prepareNonceLane).toHaveBeenCalledTimes(1);
+    expect(prepareNonceLane.mock.calls[0]).toEqual([{}]);
+  });
+
+  it("the lane read's minContextSlot is the HIGHEST observed slot recorded on any payout", async () => {
+    const prepareNonceLane = vi.fn(() => Promise.resolve(at100(chain.lane)));
+    const sendUsdc = vi.fn().mockResolvedValue({ signature: TX_SIG, slot: 1, confirmed: true });
+    const { operator } = makeOperator(sendUsdc, prepareNonceLane);
+    relay = await createTestRelay({ enableDeviceAuth: false, operatorSolanaTransfer: operator });
+    const db = relay.moteDb.db;
+    for (const [w, sig, slot] of [
+      ["zz990-prior-a", "PriorSigA".padEnd(88, "a"), 500],
+      ["zz990-prior-b", "PriorSigB".padEnd(88, "b"), 777],
+      ["zz990-prior-c", "PriorSigC".padEnd(88, "c"), 640],
+    ] as const) {
+      recordDurableAttempt(
+        db,
+        w,
+        {
+          signature: sig,
+          kind: "payout",
+          nonceAccount: "NonceAccount1111111111111111111111111111111",
+          nonceValue: `nonce-at-${slot}`,
+          nonceObservedSlot: slot,
+        },
+        1,
+      );
+    }
+    const mid = "zz990-floor-max";
+    await registerAndFund(relay, mid);
+    await startWithdraw(relay, mid);
+    expect(prepareNonceLane).toHaveBeenCalledTimes(1);
+    expect(prepareNonceLane.mock.calls[0]).toEqual([{ minContextSlot: 777 }]);
   });
 });
 

@@ -572,6 +572,23 @@ export const TAMPERS: Tamper[] = [
     replace: "          true;",
     test: AGAVE,
   },
+  // ── round 8b: a new payout's lane read is floored at the highest observed slot
+  {
+    name: "C-1 (3) a new payout's lane read carries no minContextSlot floor",
+    pkg: RELAY,
+    file: "src/budget.ts",
+    find: "            laneReadFloor(moteDb.db) !== undefined\n",
+    replace: "            false\n",
+    test: T921,
+  },
+  {
+    name: "C-1 (3) the lane-read floor is the LOWEST observed slot, not the highest",
+    pkg: RELAY,
+    file: "src/withdrawal-chain-payouts.ts",
+    find: '"SELECT MAX(nonce_observed_slot) AS m FROM relay_withdrawal_payout_attempts"',
+    replace: '"SELECT MIN(nonce_observed_slot) AS m FROM relay_withdrawal_payout_attempts"',
+    test: T921,
+  },
   // ── round 8: "consumed" means provably PAST (C-1); the payout's own lane (P-a)
   {
     name: "C-1 (1) the kill/consumed read is not bound by the observed slot (relay)",
