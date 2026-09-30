@@ -30,8 +30,18 @@
  *   tsx scripts/turbo-stale-cache-harness.ts            # all cases, table
  *   tsx scripts/turbo-stale-cache-harness.ts c3-template c5-lockfile-closure
  *
+ * Every case runs in two MODES (a case is GREEN iff, after the input change, the
+ * run is a MISS or FAILS — never a replayed PASS — in BOTH):
+ *
+ *   law   the fixture package is opted into test caching only if the static
+ *         hermeticity gate (scripts/check-test-hermeticity.ts, L1) proves it
+ *         hermetic — exactly what the committed config allows. Where the gate
+ *         does not exist, the committed config decides.
+ *   l2    the package is opted in regardless (L1 bypassed, as a mistaken
+ *         exemption would): the runtime input tracer (L2) alone must hold.
+ *
  * The committed test (scripts/__tests__/turbo-stale-cache.test.ts) asserts no
- * case is STALE.
+ * case is STALE in either mode.
  */
 import { spawn, spawnSync } from "node:child_process";
 import {
@@ -64,10 +74,14 @@ const COPIED = [
   "scripts/turbo-run.mjs",
 ];
 
+export type Mode = "law" | "l2";
+export const MODES: Mode[] = ["law", "l2"];
+
 export type Outcome = "STALE" | "MISS" | "HIT_VALID" | "TRACER_FAIL" | "FIRST_FAIL" | "SKIPPED";
 
 export interface CaseResult {
   name: string;
+  mode: Mode;
   claim: string;
   outcome: Outcome;
   detail: string;
@@ -106,6 +120,8 @@ export interface Case {
   /** Precondition; a string is the skip reason. */
   pre?: () => string | null;
   setup?: (root: string) => void;
+  /** Remove anything the case created outside its fixture root. */
+  cleanup?: (root: string) => void;
 }
 
 // ── Fixture workspace ───────────────────────────────────────────────────
@@ -202,7 +218,36 @@ export function linkDep(root: string, importerDir: string, name: string, target:
   symlinkSync(target, join(nm, name), "dir");
 }
 
-export function buildFixture(c: Case): string {
+/** The static hermeticity gate (L1), when this checkout has one. */
+const L1_GATE = join(REPO, "scripts", "check-test-hermeticity.ts");
+
+/**
+ * Does L1 prove the fixture package hermetic? Without the gate (before it
+ * existed) the committed config alone decides, which the opt-in leaves as is.
+ */
+function l1Proves(root: string, pkg: string): { proven: boolean; why: string } {
+  if (!existsSync(L1_GATE)) return { proven: true, why: "no L1 gate in this checkout" };
+  const r = spawnSync(
+    join(REPO, "node_modules", ".bin", "tsx"),
+    [L1_GATE, "--root", root, "--verdict", `@fx/${pkg}`],
+    { cwd: root, encoding: "utf-8", env: { ...baseEnv(), PATH: process.env.PATH ?? "" } },
+  );
+  const out = `${r.stdout}${r.stderr}`.replace(ANSI, "").trim();
+  return { proven: r.status === 0, why: out.split("\n").slice(-1)[0] ?? "" };
+}
+
+/** Opt the package into test caching (both tasks), merging any turbo.json it has. */
+export function optIn(root: string, pkg: string): void {
+  const file = join(root, "packages", pkg, "turbo.json");
+  const cfg = (
+    existsSync(file) ? JSON.parse(readFileSync(file, "utf-8")) : { extends: ["//"] }
+  ) as { tasks?: Record<string, Record<string, unknown>> };
+  cfg.tasks ??= {};
+  for (const t of ["test", "test:coverage"]) cfg.tasks[t] = { ...cfg.tasks[t], cache: true };
+  writeFileSync(file, JSON.stringify(cfg, null, 2));
+}
+
+export function buildFixture(c: Case, mode?: Mode): string {
   const root = mkdtempSync(join(tmpdir(), `turbo-stale-${c.name}-`));
   for (const rel of COPIED) {
     const src = join(REPO, rel);
@@ -248,6 +293,7 @@ export function buildFixture(c: Case): string {
     writeFileSync(join(root, p), content);
   }
   c.setup?.(root);
+  if (mode === "l2" || (mode === "law" && l1Proves(root, c.pkg).proven)) optIn(root, c.pkg);
   const git = (...a: string[]) =>
     spawnSync("git", a, { cwd: root, encoding: "utf-8", env: baseEnv() });
   git("init", "-q");
@@ -335,10 +381,11 @@ function applyRepair(root: string, r: Repair): void {
   writeFileSync(file, JSON.stringify(cfg, null, 2));
 }
 
-async function runCase(c: Case): Promise<CaseResult> {
+async function runCase(c: Case, mode: Mode): Promise<CaseResult> {
   const t0 = Date.now();
   const done = (outcome: Outcome, detail: string, extra: Partial<CaseResult> = {}): CaseResult => ({
     name: c.name,
+    mode,
     claim: c.claim,
     outcome,
     detail,
@@ -347,7 +394,7 @@ async function runCase(c: Case): Promise<CaseResult> {
   });
   const skip = c.pre?.();
   if (skip) return done("SKIPPED", skip);
-  const root = buildFixture(c);
+  const root = buildFixture(c, mode);
   try {
     const flow = async (): Promise<[Outcome, string]> => {
       const first = await runTurbo(root, c.pkg, c.first);
@@ -384,6 +431,7 @@ async function runCase(c: Case): Promise<CaseResult> {
       detail: `${tracerLine(detail)} || after repair: ${again} — ${againDetail}`,
     });
   } finally {
+    c.cleanup?.(root);
     rmSync(root, { recursive: true, force: true });
   }
 }
@@ -579,22 +627,348 @@ export const CASES: Case[] = [
   },
 ];
 
-export async function runCases(names: string[] = []): Promise<CaseResult[]> {
+// ── Round-2 shapes: inputs the round-1 tracer never observed ─────────────
+
+const ROOT_OF_TEST = `const ROOT = resolve(__dir, "../../../..");\n`;
+const one = (name: string, body: string, head = ""): string =>
+  head +
+  testFile(
+    ROOT_OF_TEST +
+      `describe("${name}", () => {\n  it("${name}", async () => {\n${body}\n  });\n});\n`,
+  );
+const DATA = { "data.txt": "v1\n" };
+const bumpData = (root: string): void => writeFileSync(join(root, "data.txt"), "v2\n");
+const testPath = (pkg = "p", f = "shape") => `packages/${pkg}/src/__tests__/${f}.test.ts`;
+const tag = (root: string): string => root.replace(/^.*[/\\]/, "");
+const fixedTmp = (root: string): string => join(tmpdir(), `motebit-harness-${tag(root)}.txt`);
+const optDir = (root: string): string => join("/opt", `motebit-harness-${tag(root)}`);
+const GITHUB_A = { env: { GITHUB_SHA: "a" } };
+
+export const ROUND2: Case[] = [
+  {
+    name: "r2-01-child-process",
+    claim: "a child process (node -e) reads ../../data.txt",
+    pkg: "p",
+    files: {
+      ...DATA,
+      [testPath()]: one(
+        "child",
+        `    const { execFileSync } = await import("node:child_process");\n` +
+          `    const out = execFileSync(process.execPath, ["-e", "process.stdout.write(require('fs').readFileSync('../../data.txt','utf8'))"], { encoding: "utf-8" });\n` +
+          `    expect(out.trim()).toBe("v1");`,
+      ),
+    },
+    mutate: bumpData,
+  },
+  {
+    name: "r2-02-worker-thread",
+    claim: "a worker_thread (eval) reads a root file",
+    pkg: "p",
+    files: {
+      ...DATA,
+      [testPath()]: one(
+        "worker",
+        `    const { Worker } = await import("node:worker_threads");\n` +
+          `    const w = new Worker("require('worker_threads').parentPort.postMessage(require('fs').readFileSync(require('path').join(process.cwd(), '../../data.txt'), 'utf8'))", { eval: true });\n` +
+          `    const msg = await new Promise<string>((ok) => w.once("message", ok));\n` +
+          `    await w.terminate();\n` +
+          `    expect(msg.trim()).toBe("v1");`,
+      ),
+    },
+    mutate: bumpData,
+  },
+  {
+    name: "r2-03-gitignored",
+    claim: "a gitignored file INSIDE the package ($TURBO_DEFAULT$ hashes git-visible files only)",
+    pkg: "p",
+    files: {
+      "packages/p/.gitignore": "fixture.local\n",
+      "packages/p/fixture.local": "v1\n",
+      [testPath()]: one(
+        "ignored",
+        `    expect(readFileSync(join(__dir, "../../fixture.local"), "utf-8").trim()).toBe("v1");`,
+      ),
+    },
+    mutate: (root) => writeFileSync(join(root, "packages/p/fixture.local"), "v2\n"),
+  },
+  {
+    name: "r2-04-env-copy",
+    claim: "env read through a copy: `{ ...process.env }.GITHUB_SHA` (GITHUB_* is pass-through)",
+    pkg: "p",
+    files: {
+      [testPath()]: one(
+        "copy",
+        `    const e = { ...process.env };\n    expect(e.GITHUB_SHA).toBe("a");`,
+      ),
+    },
+    first: GITHUB_A,
+    mutate: () => ({ env: { GITHUB_SHA: "b" } }),
+  },
+  {
+    name: "r2-05-env-enum-turn",
+    claim: "env read in the same sync turn as Object.keys(process.env)",
+    pkg: "p",
+    files: {
+      [testPath()]: one(
+        "enumturn",
+        `    const keys = Object.keys(process.env);\n    expect(keys.length).toBeGreaterThan(0);\n` +
+          `    expect(process.env.GITHUB_SHA).toBe("a");`,
+      ),
+    },
+    first: GITHUB_A,
+    mutate: () => ({ env: { GITHUB_SHA: "b" } }),
+  },
+  {
+    name: "r2-06-env-descriptor",
+    claim: "env read through Object.getOwnPropertyDescriptor(process.env, …)",
+    pkg: "p",
+    files: {
+      [testPath()]: one(
+        "descriptor",
+        `    expect(Object.getOwnPropertyDescriptor(process.env, "GITHUB_SHA")?.value).toBe("a");`,
+      ),
+    },
+    first: GITHUB_A,
+    mutate: () => ({ env: { GITHUB_SHA: "b" } }),
+  },
+  {
+    name: "r2-07-config-time-read",
+    claim: "a root file read while the vitest config evaluates (vite define)",
+    pkg: "p",
+    files: {
+      ...DATA,
+      "packages/p/vitest.config.ts":
+        `import { readFileSync } from "node:fs";\n` +
+        `import { defineMotebitTest } from "../../vitest.shared.js";\n` +
+        `export default defineMotebitTest({\n` +
+        `  thresholds: { statements: 0, branches: 0, functions: 0, lines: 0 },\n` +
+        `  vite: { define: { __DATA__: JSON.stringify(readFileSync(new URL("../../data.txt", import.meta.url), "utf-8").trim()) } },\n` +
+        `});\n`,
+      [testPath()]: one(
+        "define",
+        `    expect(__DATA__).toBe("v1");`,
+        `declare const __DATA__: string;\n`,
+      ),
+    },
+    mutate: bumpData,
+  },
+  {
+    name: "r2-08-global-setup",
+    claim: "a root file read in globalSetup, handed to the test via provide/inject",
+    pkg: "p",
+    files: {
+      ...DATA,
+      "packages/p/global-setup.ts":
+        `import { readFileSync } from "node:fs";\n` +
+        `export default function setup(project: { provide: (k: string, v: unknown) => void }): void {\n` +
+        `  project.provide("data", readFileSync(new URL("../../data.txt", import.meta.url), "utf-8").trim());\n` +
+        `}\n`,
+      "packages/p/vitest.config.ts":
+        `import { defineMotebitTest } from "../../vitest.shared.js";\n` +
+        `export default defineMotebitTest({\n` +
+        `  thresholds: { statements: 0, branches: 0, functions: 0, lines: 0 },\n` +
+        `  extra: { globalSetup: ["./global-setup.ts"] },\n` +
+        `});\n`,
+      [testPath()]: one(
+        "inject",
+        `    const { inject } = await import("vitest");\n    expect(inject("data" as never)).toBe("v1");`,
+      ),
+    },
+    mutate: bumpData,
+  },
+  {
+    name: "r2-09-fixed-tmp",
+    claim: "a fixed file under tmpdir the test did not create",
+    pkg: "p",
+    files: {},
+    setup: (root) => {
+      writeFileSync(fixedTmp(root), "v1\n");
+      mkdirSync(join(root, "packages/p/src/__tests__"), { recursive: true });
+      writeFileSync(
+        join(root, testPath()),
+        one(
+          "tmp",
+          `    const { tmpdir } = await import("node:os");\n` +
+            `    expect(readFileSync(join(tmpdir(), ${JSON.stringify(fixedTmp(root).replace(/^.*[/\\]/, ""))}), "utf-8").trim()).toBe("v1");`,
+        ),
+      );
+    },
+    mutate: (root) => writeFileSync(fixedTmp(root), "v2\n"),
+    cleanup: (root) => rmSync(fixedTmp(root), { force: true }),
+  },
+  {
+    name: "r2-10-system-path",
+    claim: "a file outside repo / home / tmp (/opt/…)",
+    pkg: "p",
+    files: {},
+    pre: () => {
+      try {
+        const d = mkdtempSync("/opt/motebit-harness-probe-");
+        rmSync(d, { recursive: true, force: true });
+        return null;
+      } catch {
+        return "/opt is not writable here";
+      }
+    },
+    setup: (root) => {
+      mkdirSync(optDir(root), { recursive: true });
+      writeFileSync(join(optDir(root), "data.txt"), "v1\n");
+      mkdirSync(join(root, "packages/p/src/__tests__"), { recursive: true });
+      writeFileSync(
+        join(root, testPath()),
+        one(
+          "system",
+          `    expect(readFileSync(${JSON.stringify(join(optDir(root), "data.txt"))}, "utf-8").trim()).toBe("v1");`,
+        ),
+      );
+    },
+    mutate: (root) => writeFileSync(join(optDir(root), "data.txt"), "v2\n"),
+    cleanup: (root) => rmSync(optDir(root), { recursive: true, force: true }),
+  },
+  {
+    name: "r2-11-git-state",
+    claim: "git state through a bare `git log` spawn, then an empty commit",
+    pkg: "p",
+    files: {
+      [testPath()]: one(
+        "git",
+        `    const { execSync } = await import("node:child_process");\n` +
+          `    expect(execSync("git log -1 --format=%s", { encoding: "utf-8" }).trim()).toBe("fixture");`,
+      ),
+    },
+    mutate: (root) => {
+      spawnSync(
+        "git",
+        [
+          "-c",
+          "user.name=h",
+          "-c",
+          "user.email=h@h",
+          "commit",
+          "-q",
+          "--allow-empty",
+          "-m",
+          "moved",
+        ],
+        { cwd: root },
+      );
+    },
+  },
+  {
+    name: "r2-12-glob-empty-dir",
+    claim: "import.meta.glob over an empty dir outside the package, then a file added",
+    pkg: "p",
+    files: {
+      "globdir/.keep": "",
+      [testPath()]: one(
+        "glob",
+        `    const mods = import.meta.glob("../../../../globdir/*.txt", { eager: true, query: "?raw" });\n` +
+          `    expect(Object.keys(mods)).toEqual([]);`,
+      ),
+    },
+    mutate: (root) => writeFileSync(join(root, "globdir/a.txt"), "new\n"),
+  },
+  // ── Controls: shapes the round-1 tracer caught; they must stay caught ──
+  {
+    name: "ctl-raw-import",
+    claim: "control: `?raw` import of a root file",
+    pkg: "p",
+    files: {
+      "spec/raw.md": "v1\n",
+      [testPath()]: one(
+        "raw",
+        `    expect(raw.trim()).toBe("v1");`,
+        `import raw from "../../../../spec/raw.md?raw";\n`,
+      ),
+    },
+    mutate: (root) => writeFileSync(join(root, "spec/raw.md"), "v2\n"),
+  },
+  {
+    name: "ctl-exists-probe",
+    claim: "control: existsSync probe of a root path",
+    pkg: "p",
+    files: {
+      "spec/.keep": "",
+      [testPath()]: one("probe", `    expect(existsSync(join(ROOT, "spec/flag"))).toBe(false);`),
+    },
+    mutate: (root) => writeFileSync(join(root, "spec/flag"), "1\n"),
+  },
+  {
+    name: "ctl-promises-read",
+    claim: "control: fs/promises readFile of a root file",
+    pkg: "p",
+    files: {
+      ...DATA,
+      [testPath()]: one(
+        "promises",
+        `    const { readFile } = await import("node:fs/promises");\n` +
+          `    expect((await readFile(join(ROOT, "data.txt"), "utf-8")).trim()).toBe("v1");`,
+      ),
+    },
+    mutate: bumpData,
+  },
+  {
+    name: "ctl-in-env",
+    claim: 'control: `"GITHUB_SHA" in process.env`',
+    pkg: "p",
+    files: {
+      [testPath()]: one("inenv", `    expect("GITHUB_SHA" in process.env).toBe(true);`),
+    },
+    first: GITHUB_A,
+    mutate: () => ({ env: {} }),
+  },
+  {
+    name: "ctl-exec-cat",
+    claim: "control: execSync('cat ../../data.txt')",
+    pkg: "p",
+    files: {
+      ...DATA,
+      [testPath()]: one(
+        "cat",
+        `    const { execSync } = await import("node:child_process");\n` +
+          `    expect(execSync("cat ../../data.txt", { encoding: "utf-8" }).trim()).toBe("v1");`,
+      ),
+    },
+    mutate: bumpData,
+  },
+];
+
+CASES.push(...ROUND2);
+
+/** Cases run in parallel, at most this many fixtures at a time. */
+const CONCURRENCY = Number(process.env.MOTEBIT_HARNESS_CONCURRENCY ?? 8);
+
+export async function runCases(names: string[] = [], modes: Mode[] = MODES): Promise<CaseResult[]> {
   const selected = names.length ? CASES.filter((c) => names.includes(c.name)) : CASES;
-  return Promise.all(selected.map((c) => runCase(c)));
+  const jobs = selected.flatMap((c) => modes.map((m) => [c, m] as const));
+  const results: CaseResult[] = new Array<CaseResult>(jobs.length);
+  let next = 0;
+  const lane = async (): Promise<void> => {
+    while (next < jobs.length) {
+      const i = next++;
+      results[i] = await runCase(jobs[i]![0], jobs[i]![1]);
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(CONCURRENCY, jobs.length) }, lane));
+  return results;
 }
 
 async function main(): Promise<void> {
-  const results = await runCases(process.argv.slice(2));
+  const args = process.argv.slice(2);
+  const modes = MODES.filter((m) => args.includes(`--${m}`));
+  const results = await runCases(
+    args.filter((a) => !a.startsWith("--")),
+    modes.length ? modes : MODES,
+  );
   for (const r of results) {
     const rep = r.repair ? `  [repair: ${r.repair} → ${r.repaired}]` : "";
     console.log(
-      `${r.outcome.padEnd(11)} ${r.name.padEnd(22)} ${String(r.seconds).padStart(5)}s  ${r.claim}${rep}`,
+      `${r.outcome.padEnd(11)} ${r.mode.padEnd(3)} ${r.name.padEnd(24)} ${String(r.seconds).padStart(5)}s  ${r.claim}${rep}`,
     );
     console.log(`            ${r.detail.split("\n")[0].slice(0, 300)}`);
   }
   const stale = results.filter((r) => r.outcome === "STALE" || r.repaired === "STALE").length;
-  console.log(`\n${stale}/${results.length} case(s) replayed a stale cached PASS.`);
+  console.log(`\n${stale}/${results.length} case run(s) replayed a stale cached PASS.`);
   process.exitCode = stale > 0 ? 1 : 0;
 }
 
