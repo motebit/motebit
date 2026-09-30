@@ -136,6 +136,7 @@ beforeAll(async () => {
   await new Promise<void>((r) => server.listen(PORT, "127.0.0.1", r));
 });
 afterAll(async () => {
+  server.closeAllConnections();
   await new Promise<void>((r) => server.close(() => r()));
 });
 
@@ -217,8 +218,13 @@ interface World {
   otherPeer: { id: string; kp: KeyPair };
 }
 
-async function world(): Promise<World> {
-  const relay = await createTestRelay({ enableDeviceAuth: false });
+async function world(federation = false): Promise<World> {
+  const relay = await createTestRelay({
+    enableDeviceAuth: false,
+    ...(federation
+      ? { federation: { endpointUrl: "http://relay-890.test", displayName: "relay-890" } }
+      : {}),
+  });
   const D = await agent(relay);
   const W = await agent(relay);
   const E = await agent(relay);
@@ -831,4 +837,464 @@ describe("#890 r6 routes are swept past their horizon; legacy nested rows never 
     const served = JSON.parse(getStoredReceiptJson(db, V.id, Y)!) as ExecutionReceipt;
     expect(served.status).toBe("completed");
   });
+});
+
+// ───────────────────────────────────────────────────────────────────────────
+// #890 round 7 — the COLLISION dimension.
+//
+// A task id is relay-minted: a federation peer never gets to choose one that
+// already means something here. Round 6's inbound door refused a colliding
+// forward only while the id sat in the task queue — routes, keys and
+// receipts outlive the queue — and the archive answered ANY recorded
+// executor's receipt, including the one a peer's inbound forward recorded.
+//
+// Dimension, through the real relay routes: every way a task id reaches this
+// relay × every local state of that id × every receipt door.
+//
+//   way    ranked      own admission, ranked to W over its MCP endpoint
+//          pinned      own admission, pinned P2P to W (the relay presents it)
+//          submitter   own admission, pinned P2P, presented by its submitter
+//          fed_p2p     own admission, pinned P2P, forwarded to W via `peer`
+//          fed_ranked  own admission, no local worker, forwarded to a
+//                      remote R via `peer`
+//          inbound     `peer` forwarded the task here, to local agent W
+//   (the two outbound federated ways are recorded by the route their forward
+//   writes — `recordTaskRoute(X, executor, peer)` — as the r6 harness does.)
+//   state  queued      X is in the task queue
+//          expired     the queue forgot X; its routes (and key) remain
+//          completed   X's routed executor answered it; the queue forgot X
+//          key_only    only X's Idempotency-Key row remains
+//   door   post        T (a local agent the attacker controls) POSTs its
+//                      signed receipt for X, then the owner's live view
+//          mcp         W's pending MCP presentation answers with T's receipt
+//          fed         `otherPeer` delivers T's receipt for X
+//          archive     T POSTs; the owner polls after the queue forgets X
+//
+// The attack in every cell: `otherPeer` forwards {task_id: X, target: T}.
+// Oracle:
+//   REFUSED      the colliding forward is answered 409 (never 2xx);
+//   OWNER'S OWN  nothing the owner observes about X (socket push, live poll,
+//                archive) is signed by an executor not recorded under the
+//                owner's own admission — never T. For `inbound`, the owner is
+//                the origin peer: T's receipt is refused at every door.
+// ───────────────────────────────────────────────────────────────────────────
+
+type Way = "ranked" | "pinned" | "submitter" | "fed_p2p" | "fed_ranked" | "inbound";
+type IdState = "queued" | "expired" | "completed" | "key_only";
+type CDoor = "post" | "mcp" | "fed" | "archive";
+
+async function registerPinned(w: World): Promise<string> {
+  const addr = walletOf(bytesToHex(w.W.kp.publicKey));
+  await w.relay.app.request("/api/v1/agents/register", {
+    method: "POST",
+    headers: JSON_AUTH,
+    body: JSON.stringify({
+      motebit_id: w.W.id,
+      endpoint_url: `http://127.0.0.1:${PORT}/mcp`,
+      capabilities: ["cap890"],
+      settlement_address: addr,
+      settlement_modes: "relay,p2p",
+    }),
+  });
+  await w.relay.app.request(`/api/v1/agents/${w.W.id}/listing`, {
+    method: "POST",
+    headers: JSON_AUTH,
+    body: JSON.stringify({
+      capabilities: ["cap890"],
+      pricing: [{ capability: "cap890", unit_cost: 0.5, currency: "USD", per: "task" }],
+      sla: { max_latency_ms: 5000, availability_guarantee: 0.99 },
+      description: "pinned",
+      pay_to_address: addr,
+    }),
+  });
+  return addr;
+}
+
+async function submitPinned(
+  w: World,
+  addr: string,
+  prompt: string,
+  presenter?: "submitter",
+): Promise<Response> {
+  const proof = buildP2pPaymentProof(w.relay, { workerAddress: addr, unitCostMicro: 500_000 });
+  return w.relay.app.request(`/agent/${w.D.id}/task`, {
+    method: "POST",
+    headers: { ...JSON_AUTH, "Idempotency-Key": proof.tx_hash },
+    body: JSON.stringify({
+      prompt,
+      submitted_by: w.D.id,
+      target_agent: w.W.id,
+      settlement_mode: "p2p",
+      payment_proof: proof,
+      required_capabilities: ["cap890"],
+      delegator_acknowledges_no_history_risk: true,
+      ...(presenter != null ? { presenter } : {}),
+    }),
+  });
+}
+
+/** A peer-signed inbound forward of `taskId` to local agent `target`. */
+async function fedForward(
+  w: World,
+  from: { id: string; kp: KeyPair },
+  taskId: string,
+  target: string,
+): Promise<number> {
+  const payload = {
+    task_id: taskId,
+    origin_relay: from.id,
+    target_agent: target,
+    task_payload: { prompt: `forwarded ${taskId}` },
+    timestamp: Date.now(),
+  };
+  const sig = await sign(new TextEncoder().encode(canonicalJson(payload)), from.kp.privateKey);
+  const res = await w.relay.app.request("/federation/v1/task/forward", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ...payload, signature: bytesToHex(sig) }),
+  });
+  return res.status;
+}
+
+async function postResultAs(
+  w: World,
+  pathAgent: string,
+  taskId: string,
+  receipt: ExecutionReceipt,
+): Promise<number> {
+  const res = await w.relay.app.request(`/agent/${pathAgent}/task/${taskId}/result`, {
+    method: "POST",
+    headers: JSON_AUTH,
+    body: JSON.stringify(receipt),
+  });
+  return res.status;
+}
+
+/** What the owner D sees of X right now: its socket pushes and its live poll. */
+async function liveView(w: World, taskId: string): Promise<ExecutionReceipt[]> {
+  const out: ExecutionReceipt[] = [];
+  for (const f of w.frames) if (f.task_id === taskId && f.receipt != null) out.push(f.receipt);
+  const poll = await w.relay.app.request(`/agent/${w.D.id}/task/${taskId}`, {
+    headers: AUTH_HEADER,
+  });
+  if (poll.ok) {
+    const body = (await poll.json()) as { receipt?: ExecutionReceipt | null };
+    if (body.receipt != null) out.push(body.receipt);
+  }
+  return out;
+}
+
+/** The owner's poll once the queue has forgotten X: the archive's answer. */
+async function archiveView(w: World, taskId: string): Promise<ExecutionReceipt | null> {
+  w.relay.moteDb.db.prepare("DELETE FROM relay_task_queue WHERE task_id = ?").run(taskId);
+  const r = await w.relay.app.request(`/agent/${w.D.id}/task/${taskId}`, { headers: AUTH_HEADER });
+  if (!r.ok) return null;
+  return ((await r.json()) as { receipt?: ExecutionReceipt | null }).receipt ?? null;
+}
+
+const settle = (ms = 80): Promise<void> => new Promise((r) => setTimeout(r, ms));
+
+/** One cell. `null` = the door does not exist for this way (not counted). */
+async function collisionCell(
+  way: Way,
+  state: IdState,
+  door: CDoor,
+  bypass = false,
+): Promise<string[] | null> {
+  if (way === "inbound" && state === "key_only") return null; // an inbound id has no key here
+  if (way === "inbound" && bypass) return null; // an inbound task has no owner's admission
+  if (way === "inbound" && door !== "post") return null; // T's local POST is its only door
+  const w = await world(true);
+  const failures: string[] = [];
+  let release: () => void = () => {};
+  try {
+    const db = w.relay.moteDb.db;
+    const T = await agent(w.relay); // the attacker's local agent
+    await w.relay.app.request("/api/v1/agents/register", {
+      method: "POST",
+      headers: JSON_AUTH,
+      body: JSON.stringify({
+        motebit_id: T.id,
+        endpoint_url: "http://t.invalid/mcp",
+        capabilities: [],
+      }),
+    });
+    const R = { id: `remote-${crypto.randomUUID()}`, device: "r-dev", kp: await generateKeypair() };
+    const tag = crypto.randomUUID();
+    const pX = `C ${tag}`;
+    // W's MCP endpoint holds its answer until the attack has happened; for
+    // the mcp door that answer is T's receipt, relayed by W's endpoint.
+    const gate = new Promise<void>((r) => (release = r));
+    let presented = false;
+    mcpReplies.set(pX, async (id) => {
+      presented = true;
+      await gate;
+      return door === "mcp" ? receiptBy(T, id, "failed") : null;
+    });
+
+    // ── the way X reached this relay ──
+    let X: string;
+    let executor: Agent | typeof R = w.W;
+    let viaPeer = "";
+    if (way === "ranked") {
+      X = await admit(w, pX);
+    } else if (way === "inbound") {
+      X = crypto.randomUUID();
+      const st = await fedForward(w, w.peer, X, w.W.id);
+      if (st >= 300) failures.push(`SETUP: inbound forward answered ${st}`);
+    } else if (way === "fed_ranked") {
+      const res = await w.relay.app.request(`/agent/${w.D.id}/task`, {
+        method: "POST",
+        headers: { ...JSON_AUTH, "Idempotency-Key": crypto.randomUUID() },
+        body: JSON.stringify({ prompt: pX, submitted_by: w.D.id }),
+      });
+      X = ((await res.json()) as { task_id: string }).task_id;
+      recordTaskRoute(db, X, R.id, w.peer.id);
+      executor = R;
+      viaPeer = w.peer.id;
+    } else {
+      const addr = await registerPinned(w);
+      const res = await submitPinned(w, addr, pX, way === "submitter" ? "submitter" : undefined);
+      if (res.status !== 201) failures.push(`SETUP: pinned submit answered ${res.status}`);
+      X = ((await res.json()) as { task_id: string }).task_id;
+      await settle(60);
+      if (way === "fed_p2p") {
+        recordTaskRoute(db, X, w.W.id, w.peer.id);
+        // The forward's admission names the peer it went through.
+        db.prepare(
+          `UPDATE relay_task_queue SET task_json = json_set(task_json, '$.p2p_admission.planned_peer', ?) WHERE task_id = ?`,
+        ).run(w.peer.id, X);
+        viaPeer = w.peer.id;
+      }
+    }
+
+    // ── the local state of X ──
+    if (state === "completed") {
+      const r = await receiptBy(executor, X, "completed");
+      const st =
+        viaPeer === ""
+          ? way === "inbound"
+            ? await postResultAs(w, w.W.id, X, r)
+            : await postResultAs(w, w.D.id, X, r)
+          : await fedResult(w, w.peer, X, r, bytesToHex(executor.kp.publicKey));
+      if (st !== 200) failures.push(`SETUP: the routed executor's receipt answered ${st}`);
+    }
+    if (state !== "queued") db.prepare("DELETE FROM relay_task_queue WHERE task_id = ?").run(X);
+    if (state === "key_only") {
+      db.prepare("DELETE FROM relay_task_routes WHERE task_id = ?").run(X);
+    }
+
+    // ── the attack: another peer re-uses X for the attacker's agent ──
+    if (!bypass) {
+      const fwd = await fedForward(w, w.otherPeer, X, T.id);
+      if (fwd !== 409) failures.push(`REFUSED: the colliding forward answered ${fwd}`);
+    } else {
+      // Defence in depth: the inbound door let the collision through anyway
+      // — the route an inbound forward writes for T sits beside X's own.
+      (recordTaskRoute as (...a: unknown[]) => void)(db, X, T.id, "", "inbound_forward");
+    }
+
+    // T answers through `door` — a FAILED receipt, which makes a planner pay
+    // again; in the completed state a COMPLETED one (it would outrank).
+    const tStatus = state === "completed" ? "completed" : "failed";
+    const tReceipt = await receiptBy(T, X, tStatus);
+    if (bypass && door === "archive") {
+      // T's receipt sits in the archive, as the door of its inbound task
+      // would have archived it.
+      persistReceiptChain(db, tReceipt);
+    } else if (door === "post" || door === "archive") {
+      const st = await postResultAs(w, T.id, X, tReceipt);
+      if (way === "inbound" && st < 400) {
+        failures.push(`OWNER'S OWN: T's receipt for the inbound task was accepted (${st})`);
+      }
+      if (way !== "inbound") await postResultAs(w, w.D.id, X, tReceipt);
+    } else if (door === "mcp") {
+      if (!presented) {
+        release();
+        return null; // this way has no relay MCP presentation
+      }
+    } else {
+      await fedResult(w, w.otherPeer, X, tReceipt, bytesToHex(T.kp.publicKey));
+    }
+    release();
+    await settle();
+
+    if (way !== "inbound") {
+      const seen = door === "archive" ? [await archiveView(w, X)] : await liveView(w, X);
+      for (const r of seen) {
+        if (r != null && r.motebit_id === T.id) {
+          failures.push(`OWNER'S OWN: the owner was answered T's ${r.status} receipt`);
+        }
+      }
+    }
+  } finally {
+    release();
+    await w.relay.close();
+  }
+  return failures;
+}
+
+describe("#890 r7 collision dimension — a re-used task id never answers its owner", () => {
+  it("way × state × door, through the real relay routes", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const failures: string[] = [];
+    let cells = 0;
+    const failingCells = new Set<string>();
+    for (const way of [
+      "ranked",
+      "pinned",
+      "submitter",
+      "fed_p2p",
+      "fed_ranked",
+      "inbound",
+    ] as Way[]) {
+      for (const state of ["queued", "expired", "completed", "key_only"] as IdState[]) {
+        for (const door of ["post", "mcp", "fed", "archive"] as CDoor[]) {
+          for (const bypass of [false, true]) {
+            const f = await collisionCell(way, state, door, bypass);
+            if (f == null) continue;
+            cells++;
+            const cell = `${bypass ? "bypass:" : ""}${way}/${state}/${door}`;
+            for (const m of f) {
+              failures.push(`${cell}: ${m}`);
+              failingCells.add(cell);
+            }
+          }
+        }
+      }
+    }
+    expect(failures, `${failingCells.size}/${cells} cells failing`).toEqual([]);
+  }, 600_000);
+});
+
+describe("#890 r7 the reviewer's probe — a re-used id answered by a foreign executor never rotates a planner", () => {
+  it("D's expired X, re-forwarded by a peer to T, answered FAILED by T: D's poll holds and the adapter never buys again", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const w = await world(true);
+    try {
+      const T = await agent(w.relay);
+      await w.relay.app.request("/api/v1/agents/register", {
+        method: "POST",
+        headers: JSON_AUTH,
+        body: JSON.stringify({
+          motebit_id: T.id,
+          endpoint_url: "http://t.invalid/mcp",
+          capabilities: [],
+        }),
+      });
+      // D submits X; the relay ranks W and presents it over MCP; W never answers.
+      mcpReplies.set("probe r7", () => Promise.resolve(null));
+      const X = await admit(w, "probe r7");
+      // The queue expires X: D's poll is a 404 (hold).
+      w.relay.moteDb.db.prepare("DELETE FROM relay_task_queue WHERE task_id = ?").run(X);
+      const before = await w.relay.app.request(`/agent/${w.D.id}/task/${X}`, {
+        headers: AUTH_HEADER,
+      });
+      expect(before.status).toBe(404);
+      // A peer forwards {task_id: X, target_agent: T}.
+      const fwd = await fedForward(w, w.peer, X, T.id);
+      // T POSTs a signed FAILED receipt for X.
+      const tPost = await postResultAs(w, T.id, X, await receiptBy(T, X, "failed"));
+      // The queue forgets the forwarded entry too (its TTL).
+      w.relay.moteDb.db.prepare("DELETE FROM relay_task_queue WHERE task_id = ?").run(X);
+      const poll = await w.relay.app.request(`/agent/${w.D.id}/task/${X}`, {
+        headers: AUTH_HEADER,
+      });
+      const polled = poll.ok
+        ? ((await poll.json()) as { receipt?: ExecutionReceipt | null }).receipt
+        : null;
+
+      // A RelayDelegationAdapter that adopted X from a 409 (#888, no routing_choice).
+      const posts: string[] = [];
+      const realFetch = globalThis.fetch;
+      let first = true;
+      vi.stubGlobal("fetch", async (input: string, init?: RequestInit) => {
+        const url = String(input);
+        if (!url.startsWith("http://relay")) return realFetch(input, init);
+        const path = url.replace("http://relay", "");
+        if (init?.method === "POST" && /\/agent\/[^/]+\/task$/.test(path)) {
+          posts.push(new Headers(init.headers).get("idempotency-key") ?? "(no key)");
+          if (first) {
+            first = false;
+            return new Response(JSON.stringify({ code: "TASK_CONFLICT", task_id: X }), {
+              status: 409,
+            });
+          }
+        }
+        return w.relay.app.request(path, init);
+      });
+      const adapter = new RelayDelegationAdapter({
+        syncUrl: "http://relay",
+        motebitId: w.D.id,
+        authToken: async () => API_TOKEN,
+        sendRaw: () => {},
+        onCustomMessage: () => () => {},
+        maxDelegationRetries: 1,
+      });
+      const step: PlanStep = {
+        step_id: "s1",
+        plan_id: "p1" as PlanId,
+        ordinal: 0,
+        description: "remote",
+        prompt: "probe r7",
+        depends_on: [],
+        optional: false,
+        required_capabilities: ["cap890" as never],
+        status: StepStatus.Pending,
+        result_summary: null,
+        error_message: null,
+        tool_calls_made: 0,
+        started_at: null,
+        completed_at: null,
+        retry_count: 0,
+        updated_at: 0,
+      };
+      const outcome = await adapter.delegateStep(step, 100).catch((e: unknown) => e);
+      vi.unstubAllGlobals();
+
+      expect({
+        forward: fwd,
+        tPost,
+        polledSigner: polled?.motebit_id === T.id ? "T" : (polled?.motebit_id ?? null),
+        rotated: posts.filter((k) => !k.endsWith(":0")),
+        undetermined: outcome instanceof DelegationUndeterminedError,
+      }).toEqual({ forward: 409, tPost: 404, polledSigner: null, rotated: [], undetermined: true });
+    } finally {
+      vi.unstubAllGlobals();
+      await w.relay.close();
+    }
+  }, 30_000);
+});
+
+describe("#890 r7 (P1) a late MCP answer never overwrites a settled task's receipt", () => {
+  it("after W's POSTed receipt settles X, W's endpoint answering later with an unverified receipt changes nothing", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const w = await world();
+    try {
+      let release: () => void = () => {};
+      const gate = new Promise<void>((r) => (release = r));
+      let answered = false;
+      mcpReplies.set("late p1", async (id) => {
+        await gate;
+        answered = true;
+        // Names W, bound to X — but not signed by W's key.
+        return badSigBy(w.W, id);
+      });
+      const X = await admit(w, "late p1");
+      expect(await postResult(w, X, await receiptBy(w.W, X, "completed"))).toBe(200);
+      release();
+      for (let i = 0; i < 50 && !answered; i++) await settle(20);
+      await settle(100);
+      const poll = await w.relay.app.request(`/agent/${w.D.id}/task/${X}`, {
+        headers: AUTH_HEADER,
+      });
+      const body = (await poll.json()) as { receipt?: ExecutionReceipt | null };
+      expect(answered).toBe(true);
+      expect(body.receipt?.status).toBe("completed");
+      expect(await verifyExecutionReceipt(body.receipt!, w.W.kp.publicKey)).toBe(true);
+    } finally {
+      await w.relay.close();
+    }
+  }, 30_000);
 });
