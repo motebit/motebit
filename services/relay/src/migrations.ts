@@ -2501,4 +2501,33 @@ export const relayMigrations: Migration[] = [
       }
     },
   },
+  {
+    version: 52,
+    name: "task_routes_from_peer",
+    up: (db) => {
+      // WHICH peer's forward an inbound route records (#890 round 8): the
+      // inbound door answers `duplicate` (a retry: held, never run twice)
+      // only to the peer whose own forward holds the id; any other peer
+      // re-using it gets a collision (`rejected`/`task_id_in_use`) and so
+      // clears its planned peer instead of waiting on a door this relay never
+      // opened for it. '' on `admission` routes, and on inbound routes
+      // written before this migration — those name no peer and are refused
+      // to every peer (fail-closed).
+      //
+      // Deploy-straddle (the v51 relabel, P2 of round 8): v50, v51 and v52
+      // first apply in ONE migration run (none is on main before this
+      // change), so relay_task_routes is empty when v51 relabels and when
+      // this column is added — no pre-deploy inbound route exists to be
+      // mislabelled 'admission'. Only a relay that ran an unreleased build
+      // of this branch could hold one; it stays 'admission' with no
+      // from_peer (refused to every peer as an inbound id, answerable only
+      // by an own admission's recorded executor).
+      const cols = db.prepare("PRAGMA table_info(relay_task_routes)").all() as Array<{
+        name: string;
+      }>;
+      if (!cols.some((c) => c.name === "from_peer")) {
+        db.exec("ALTER TABLE relay_task_routes ADD COLUMN from_peer TEXT NOT NULL DEFAULT ''");
+      }
+    },
+  },
 ];

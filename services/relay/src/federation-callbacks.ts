@@ -32,31 +32,22 @@ import {
   hexToBytes,
 } from "@motebit/encryption";
 /* eslint-enable no-restricted-imports */
-import { verifySovereignBinding } from "@motebit/crypto";
 import { getRelayKeypair } from "./credentials.js";
 import { creditAccount } from "./accounts.js";
 import type { RelayIdentity, VerifiedSettlement } from "./federation.js";
 import type { TaskQueueEntry } from "./tasks.js";
 import type { ConnectedDevice } from "./index.js";
 import { createLogger } from "./logger.js";
-import { verificationKeyFor } from "./identity-keys.js";
 import { sendToEach } from "./ws-send.js";
 import { routeToSockets } from "./task-presentation.js";
 import { bindP2pProofToTask, p2pProofKey } from "./idempotency.js";
 import { persistReceiptChain } from "./receipts-store.js";
-import {
-  recordTaskRoute,
-  isRoutedExecutor,
-  receiptRelayTaskId,
-  taskRoutes,
-  admittedBeforeTaskRoutes,
-  inboundTaskIdCollision,
-} from "./task-routing.js";
+import { answerTask } from "./task-answer.js";
+import { recordTaskRoute, inboundTaskIdCollision } from "./task-routing.js";
 import {
   localWorkerAdmission,
   p2pPayeeOf,
   p2pWorkerLegScope,
-  receiptDischargesP2p,
   type P2pAdmission,
 } from "./p2p-payee.js";
 
@@ -161,7 +152,9 @@ export function createFederationCallbacks(deps: FederationCallbackDeps) {
         }
         return collision(verified.taskId, verified.originRelay, "queued");
       }
-      const known = inboundTaskIdCollision(moteDb.db, verified.taskId);
+      // `duplicate` only to the peer whose own forward holds the id (#890
+      // r8): routes record the forwarding peer (v52).
+      const known = inboundTaskIdCollision(moteDb.db, verified.taskId, verified.originRelay);
       if (known === "inbound_held") {
         return { status: "duplicate" as const, task_id: verified.taskId };
       }
@@ -203,7 +196,14 @@ export function createFederationCallbacks(deps: FederationCallbackDeps) {
       const enqueue = (): void => {
         // The executor relay hands the task to its own agent: that agent is
         // the one executor whose receipt this relay accepts for it (#890 r6).
-        recordTaskRoute(moteDb.db, verified.taskId, verified.targetAgent, "", "inbound_forward");
+        recordTaskRoute(
+          moteDb.db,
+          verified.taskId,
+          verified.targetAgent,
+          "",
+          "inbound_forward",
+          verified.originRelay,
+        );
         taskQueue.set(verified.taskId, {
           task,
           expiresAt: Date.now() + taskTtlMs,
@@ -295,76 +295,6 @@ export function createFederationCallbacks(deps: FederationCallbackDeps) {
       const entry = taskQueue.get(verified.taskId);
       if (!entry) throw new HTTPException(404, { message: "Task not found or expired" });
 
-      // A federated result answers a task only when the receipt is bound to
-      // THAT task and signed by the executor this relay forwarded it to,
-      // through the peer it forwarded it through (#890 round 6). Any other
-      // active peer — or the right peer vouching for an invented signer — is
-      // refused before the entry, the submitter's socket, trust or
-      // settlement is touched. A task routed locally has no peer on its
-      // route, so no peer can answer it at all.
-      const boundTo = receiptRelayTaskId(verified.receipt);
-      if (boundTo !== verified.taskId) {
-        logger.error("federation.result_bound_to_other_task", {
-          correlationId: verified.taskId,
-          boundTo,
-          originRelay: verified.originRelay,
-        });
-        throw new HTTPException(400, {
-          message: `Federated receipt is bound to task ${boundTo}, not ${verified.taskId}`,
-        });
-      }
-      // A P2P task admitted before the routing record existed (in flight
-      // across the deploy) carries its route in its admission: the payee
-      // (checked below) through the planned peer (checked below).
-      const admittedRoute =
-        entry.settlement_mode === "p2p" &&
-        entry.p2p_admission?.planned_peer != null &&
-        admittedBeforeTaskRoutes(moteDb.db, entry.task.submitted_at);
-      // Only this relay's own admission forwards a task to a peer, so only
-      // an `admission` route answers here (#890 r7): a route a peer's
-      // inbound forward wrote never makes a federated result this task's.
-      const routed =
-        taskRoutes(moteDb.db, verified.taskId, "admission").length === 0 && admittedRoute
-          ? true
-          : isRoutedExecutor(
-              moteDb.db,
-              verified.taskId,
-              verified.receipt.motebit_id,
-              verified.originRelay,
-              null,
-              "admission",
-            );
-      if (!routed) {
-        logger.error("federation.result_not_from_routed_executor", {
-          correlationId: verified.taskId,
-          signer: verified.receipt.motebit_id,
-          originRelay: verified.originRelay,
-        });
-        throw new HTTPException(403, {
-          message:
-            "Federated result is not from the executor, through the peer, this task was forwarded to",
-        });
-      }
-
-      // A P2P task was paid to ONE worker (#959): a result whose receipt is
-      // signed by anyone else is not the work paid for. Refused before the
-      // entry is touched — it neither overwrites the delivered result nor
-      // reaches the submitter, trust, or the settlement record.
-      if (
-        entry.settlement_mode === "p2p" &&
-        !receiptDischargesP2p(entry, verified.receipt.motebit_id)
-      ) {
-        logger.error("settlement.federated_p2p_receipt_not_from_payee", {
-          correlationId: verified.taskId,
-          payee: p2pPayeeOf(entry),
-          signer: verified.receipt.motebit_id,
-          originRelay: verified.originRelay,
-        });
-        throw new HTTPException(403, {
-          message: "Federated P2P result is not signed by the worker the task was paid to",
-        });
-      }
-
       // A P2P task this relay admitted is settled from a federation result
       // only when that result comes from the executor relay its plan chose
       // (#959 round 4): the origin row records the worker leg as that
@@ -389,102 +319,58 @@ export function createFederationCallbacks(deps: FederationCallbackDeps) {
         });
       }
 
-      // Verify executing agent's Ed25519 receipt signature (sibling of direct receipt path).
-      // Without this, a malicious peer relay could forge or tamper with receipts.
-      if (verified.receipt.signature) {
-        let pubKeyHex: string | undefined;
-        let keySource: "local_registry" | "local_device" | "peer_forwarded" | undefined;
-        const regRow = moteDb.db
-          .prepare("SELECT public_key FROM agent_registry WHERE motebit_id = ?")
-          .get(verified.receipt.motebit_id) as { public_key: string } | undefined;
-        // Holder, else main's registry read (§5f verification reader).
-        const localKey = verificationKeyFor(
-          moteDb.db,
-          verified.receipt.motebit_id,
-          regRow?.public_key,
-        );
-        if (localKey !== null) {
-          pubKeyHex = localKey;
-          keySource = "local_registry";
-        } else {
-          const devices = await identityManager.listDevices(
-            asMotebitId(verified.receipt.motebit_id),
-          );
-          const device = devices.find((d) => d.public_key);
-          if (device?.public_key) {
-            pubKeyHex = device.public_key;
-            keySource = "local_device";
-          }
-        }
-        // Fallback: the executor relay forwards the worker's key (the worker is
-        // registered THERE, not here). This closes federation.receipt_key_missing
-        // for cross-relay results — the origin can now verify the worker's inner
-        // receipt instead of trusting only the peer-envelope signature.
-        if (!pubKeyHex && verified.agentPublicKey) {
-          pubKeyHex = verified.agentPublicKey;
-          keySource = "peer_forwarded";
-        }
-        if (pubKeyHex) {
-          const sigValid = await verifyExecutionReceipt(verified.receipt, hexToBytes(pubKeyHex));
-          if (!sigValid) {
-            logger.error("federation.receipt_signature_invalid", {
-              correlationId: verified.taskId,
-              executingAgent: verified.receipt.motebit_id,
-              originRelay: verified.originRelay,
-              keySource,
-            });
-            throw new HTTPException(403, {
-              message: "Federated receipt signature verification failed",
-            });
-          }
-          // Binding strength (identity-binding-verification.md ladder): for a
-          // sovereign motebit_id the presented key MUST derive the id — proven
-          // offline, no trust in the peer. Legacy/random ids can't be checked
-          // this way; the signature is verified and we trust the peer envelope
-          // for the key. Recorded for observability, never a gate (additive).
-          const sovereignlyBound = await verifySovereignBinding(
-            verified.receipt.motebit_id,
-            pubKeyHex,
-          );
-          logger.info("federation.receipt_verified", {
-            correlationId: verified.taskId,
-            executingAgent: verified.receipt.motebit_id,
-            keySource,
-            bindingStrength: sovereignlyBound ? "sovereign" : "peer_attested",
-          });
-        } else {
-          logger.warn("federation.receipt_key_missing", {
-            correlationId: verified.taskId,
-            executingAgent: verified.receipt.motebit_id,
-          });
-          // Unverifiable is not an answer (#890 r6): with no key to check
-          // the executor's signature, the receipt could be anyone's.
-          throw new HTTPException(403, {
-            message: "Federated receipt could not be verified: no key for its signer",
-          });
-        }
-      } else {
-        throw new HTTPException(403, { message: "Federated receipt is unsigned" });
+      // The answer is decided at ONE chokepoint (#890 r8): the receipt is
+      // bound to THIS task, a P2P task's payee signed it, the signer is an
+      // executor this relay forwarded the task to THROUGH this peer (an
+      // `admission` route — only an own admission forwards outward), its
+      // signature verifies (the peer's forwarded key only as a fallback), and
+      // the write-once rule holds: a settled or answered task is never
+      // re-answered, except a verified completed over a failed. The door
+      // answers 200 only when the entry took this receipt.
+      const verdict = await answerTask(
+        {
+          db: moteDb.db,
+          identityManager,
+          taskQueue,
+          // Without this, a malicious peer relay could forge or tamper with
+          // receipts: the executing agent's own signature is verified.
+          verifyReceipt: (r, keyHex) => verifyExecutionReceipt(r, hexToBytes(keyHex)),
+        },
+        verified.taskId,
+        verified.receipt,
+        {
+          kind: "federation_result",
+          viaPeer: verified.originRelay,
+          ...(verified.agentPublicKey != null ? { peerKey: verified.agentPublicKey } : {}),
+        },
+        taskTtlMs,
+      );
+      if (!verdict.took) {
+        logger.error("federation.result_not_taken", {
+          correlationId: verified.taskId,
+          signer: verified.receipt.motebit_id,
+          originRelay: verified.originRelay,
+          refusal: verdict.refusal,
+        });
+        const status =
+          verdict.refusal === "gone"
+            ? 404
+            : verdict.refusal === "not_bound"
+              ? 400
+              : verdict.refusal === "answered"
+                ? 409
+                : 403;
+        throw new HTTPException(status, {
+          message: `Federated result not accepted: ${verdict.reason}`,
+        });
       }
+      // The same result again: the entry already holds it — nothing re-runs.
+      if (verdict.repeat) return;
 
       // Archive the verified receipt tree (#890 r6): the queue forgets the
       // task, and the delegator that holds its id learns how it ended from
       // the archive — which answers only a recorded executor's receipt.
       persistReceiptChain(moteDb.db, verified.receipt);
-
-      // Update task
-      entry.receipt = verified.receipt;
-      entry.expiresAt = Math.max(entry.expiresAt, Date.now() + taskTtlMs);
-      entry.task.status =
-        verified.receipt.status === "completed"
-          ? AgentTaskStatus.Completed
-          : verified.receipt.status === "denied"
-            ? AgentTaskStatus.Denied
-            : AgentTaskStatus.Failed;
-      // The durable queue hands out copies: without this write the poll never
-      // saw a federated result (#890 r6 — the delegator's poll is its
-      // fallback when the socket push is lost).
-      taskQueue.set(verified.taskId, entry);
 
       // Fan out to submitter
       const submittedBy = entry.submitted_by ?? entry.task.submitted_by;
@@ -498,6 +384,9 @@ export function createFederationCallbacks(deps: FederationCallbackDeps) {
           }),
         );
       }
+      // A completed that replaced a failed answer (#890 r8): the task's
+      // trust and settlement were decided on its first answer, once.
+      if (verdict.replaced) return;
 
       // Trust update via evaluateTrustTransition
       try {

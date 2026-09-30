@@ -147,6 +147,7 @@ export class TaskError extends RelayError {
       | "TASK_NOT_FOUND"
       | "TASK_EXPIRED"
       | "TASK_ALREADY_CLAIMED"
+      | "TASK_ALREADY_ANSWERED"
       | "TASK_INVALID_INPUT"
       | "TASK_QUEUE_FULL"
       | "TASK_PER_SUBMITTER_LIMIT"

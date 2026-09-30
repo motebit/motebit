@@ -1101,7 +1101,12 @@ export async function forwardTaskViaMcp(
   taskId: string,
   prompt: string,
   agentId: string,
-  taskQueue: Map<string, { task: { status: string }; receipt?: unknown }>,
+  /**
+   * Retired (#890 r8): the forward never writes the queue entry — the
+   * answer is `answerTask`'s alone, reached through `onReceipt`. Kept
+   * positionally so call sites and tests do not shift.
+   */
+  _taskQueue: Map<string, { task: { status: string }; receipt?: unknown }>,
   logger: {
     info: (msg: string, ctx: Record<string, unknown>) => void;
     warn: (msg: string, ctx: Record<string, unknown>) => void;
@@ -1307,45 +1312,37 @@ export async function forwardTaskViaMcp(
             endpoint: mcpEndpoint,
           });
         } else if (receiptData) {
-          const qEntry = taskQueue.get(taskId);
-          if (qEntry) {
-            // The entry takes the receipt only once ingestion accepted it
-            // (#890 r6): one it refuses (a bad signature, an unrouted signer)
-            // never stands as the task's answer, not even mid-ingestion.
-            const accept = (): void => {
-              qEntry.task.status =
-                receiptData.status === "completed"
-                  ? "completed"
-                  : receiptData.status === "denied"
-                    ? "denied"
-                    : "failed";
-              qEntry.receipt = receiptData;
-              taskQueue.set(taskId, qEntry); // Persist to durable queue
-              logger.info("task.mcp_forward_completed", {
+          // The answer is decided by the relay's one chokepoint (`answerTask`,
+          // reached through `onReceipt` → ingestion, #890 r8): this forward
+          // never writes the entry. It reports the forward completed only on
+          // a positive `true` — no callback, a refusal, or a throw is never
+          // acceptance (#890 r8 P3).
+          let ingested = false;
+          if (onReceipt != null) {
+            try {
+              ingested = (await onReceipt(receiptData)) === true;
+            } catch (settlementErr) {
+              logger.warn("task.mcp_forward_settlement_failed", {
                 correlationId: taskId,
                 agent: agentId,
-                endpoint: mcpEndpoint,
+                error:
+                  settlementErr instanceof Error ? settlementErr.message : String(settlementErr),
               });
-            };
-            if (!onReceipt) {
-              accept();
-            } else {
-              // Settlement callback (orchestration layer handles economics).
-              // A throw leaves the answer unknown: the entry is not given it.
-              try {
-                // Only a positive answer is acceptance (#890 r7): absence of
-                // a refusal is never evidence the receipt was ingested.
-                const ingested = await onReceipt(receiptData);
-                if (ingested === true) accept();
-              } catch (settlementErr) {
-                logger.warn("task.mcp_forward_settlement_failed", {
-                  correlationId: taskId,
-                  agent: agentId,
-                  error:
-                    settlementErr instanceof Error ? settlementErr.message : String(settlementErr),
-                });
-              }
             }
+          }
+          if (ingested) {
+            logger.info("task.mcp_forward_completed", {
+              correlationId: taskId,
+              agent: agentId,
+              endpoint: mcpEndpoint,
+            });
+          } else {
+            logger.warn("task.mcp_forward_receipt_not_taken", {
+              correlationId: taskId,
+              agent: agentId,
+              endpoint: mcpEndpoint,
+              hasIngestion: onReceipt != null,
+            });
           }
         } else {
           logger.warn("task.mcp_forward_receipt_invalid", {
@@ -1803,11 +1800,17 @@ export function recordTaskRoute(
   executorId: string,
   viaPeer = "",
   origin: TaskRouteOrigin = "admission",
+  /**
+   * The peer relay whose forward this is — `inbound_forward` routes only
+   * (migration v52, #890 r8): only that peer's re-forward of the id is its
+   * retry (`duplicate`); any other peer's is a collision.
+   */
+  fromPeer = "",
 ): void {
   if (executorId === "") return;
   db.prepare(
-    "INSERT OR IGNORE INTO relay_task_routes (task_id, executor_id, via_peer, created_at, origin) VALUES (?, ?, ?, ?, ?)",
-  ).run(taskId, executorId, viaPeer, Date.now(), origin);
+    "INSERT OR IGNORE INTO relay_task_routes (task_id, executor_id, via_peer, created_at, origin, from_peer) VALUES (?, ?, ?, ?, ?, ?)",
+  ).run(taskId, executorId, viaPeer, Date.now(), origin, fromPeer);
 }
 
 /**
@@ -1830,20 +1833,34 @@ export function taskRoutes(
  * relay-minted: a peer's inbound forward never gets to choose one this
  * relay already knows, in ANY durable form — a route, an Idempotency-Key
  * that admitted it, or an archived top-level receipt. Answers
- * `inbound_held` when the only trace is an earlier inbound forward's route
- * (a peer's retry after the queue forgot it: that task is held, not
- * re-run), `in_use` for anything else, or null when the id is new here.
+ * `inbound_held` only when the only trace is an earlier inbound forward's
+ * route written for THIS peer (`fromPeer`, migration v52 — #890 r8: that
+ * peer's retry after the queue forgot it: held, not re-run), `in_use` for
+ * anything else — another peer's inbound route, or one written before v52
+ * that names no peer (fail-closed: the id is refused, never `duplicate`,
+ * so the sender clears its planned peer instead of waiting on a door this
+ * relay never opened for it) — or null when the id is new here.
  */
 export function inboundTaskIdCollision(
   db: DatabaseDriver,
   taskId: string,
+  fromPeer: string,
 ): "inbound_held" | "in_use" | null {
   const key = db
     .prepare("SELECT 1 FROM relay_idempotency_keys WHERE task_id = ? LIMIT 1")
     .get(taskId);
   if (key != null) return "in_use";
   if (taskRoutes(db, taskId, "admission").length > 0) return "in_use";
-  if (taskRoutes(db, taskId, "inbound_forward").length > 0) return "inbound_held";
+  const inbound = db
+    .prepare(
+      "SELECT from_peer FROM relay_task_routes WHERE task_id = ? AND origin = 'inbound_forward'",
+    )
+    .all(taskId) as Array<{ from_peer: string }>;
+  if (inbound.length > 0) {
+    return inbound.every((r) => r.from_peer !== "" && r.from_peer === fromPeer)
+      ? "inbound_held"
+      : "in_use";
+  }
   const receipt = db.prepare("SELECT 1 FROM relay_receipts WHERE task_id = ? LIMIT 1").get(taskId);
   if (receipt != null) return "in_use";
   return null;

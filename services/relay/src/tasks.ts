@@ -42,7 +42,6 @@ import {
   canonicalJson,
   bytesToHex,
   hexToBytes,
-  verifyExecutionReceiptDetailed,
 } from "@motebit/encryption";
 /* eslint-enable no-restricted-imports */
 import {
@@ -78,11 +77,12 @@ import {
   mintTaskDispatchToken,
   mintRelayMcpBearer,
   recordTaskRoute,
-  isRoutedExecutor,
 } from "./task-routing.js";
 import type { TaskRouter } from "./task-routing.js";
 import { getBondBackingAdapter } from "./bond-backing-adapter.js";
 import { persistReceiptChain, getArchivedReceiptForKeyOwner } from "./receipts-store.js";
+import { answerTask, markTaskSettled } from "./task-answer.js";
+import type { AnswerRefusal } from "./task-answer.js";
 import {
   MAX_SETTLEMENT_DEPTH,
   exceedsSettlementDepth,
@@ -185,6 +185,19 @@ export const TASK_TTL_MS = 10 * 60 * 1000; // 10 minutes
  * refund-race guard in index.ts is not implicated by this longer retention.
  */
 export const PAID_TASK_RESULT_RETENTION_MS = 60 * 60 * 1000; // 1 hour
+
+/**
+ * How long an answered entry stays readable: paid (P2P) results outlive the
+ * free-task TTL — the payer settled onchain and must be able to recover the
+ * artifact after a stalled poll.
+ */
+function resultRetentionMs(
+  entry: Pick<TaskQueueEntry, "settlement_mode" | "p2p_payment_proof">,
+): number {
+  return entry.settlement_mode === "p2p" || entry.p2p_payment_proof != null
+    ? PAID_TASK_RESULT_RETENTION_MS
+    : TASK_TTL_MS;
+}
 const MAX_TASK_QUEUE_SIZE = 100_000; // Hard cap prevents memory exhaustion
 
 /** Shape of each entry in the in-memory task queue. */
@@ -732,6 +745,10 @@ export async function handleReceiptIngestion(
   taskId: string,
   motebitId: string,
   entry: TaskQueueEntry,
+  /** The local door the receipt arrived by (#890 r8). */
+  door: "result_post" | "mcp_forward",
+  /** How long the answered entry is kept readable. */
+  retainMs: number,
   deps: {
     moteDb: MotebitDatabase;
     identityManager: IdentityManager;
@@ -755,7 +772,7 @@ export async function handleReceiptIngestion(
   },
 ): Promise<
   | { verified: true; credential_id: string | null; already_settled?: boolean }
-  | { verified: false; reason: string }
+  | { verified: false; reason: string; refusal: AnswerRefusal }
 > {
   const {
     moteDb,
@@ -768,162 +785,58 @@ export async function handleReceiptIngestion(
     platformFeeRate,
   } = deps;
 
-  // --- Idempotency: settled flag (persisted in durable queue) ---
-  if (entry.settled) {
+  // --- The answer (#890 r8): ONE chokepoint decides it ---
+  // Binding, P2P payee (#959), recorded executor for this task's origin
+  // (#890 r6/r7), signature — then the write-once rule. The entry holds the
+  // receipt only when `answerTask` took it; every effect below runs only
+  // for an answer the entry took. A settled or answered entry is never
+  // re-answered, except that a verified `completed` replaces a `failed`.
+  const verdict = await answerTask(
+    {
+      db: moteDb.db,
+      identityManager,
+      taskQueue,
+      verifyReceipt: (r, keyHex) => verifyExecutionReceipt(r, hexToBytes(keyHex)),
+      // Main's heal (#758 review): the registry is departure's and the
+      // signature readers' INPUT for an identity with no holder. The
+      // chokepoint calls this only for an embedded key that is ALREADY a
+      // registered device of the signer and that the receipt verified under
+      // — never an arbitrary self-signed key (a cross-identity hijack).
+      // Legitimate rotation is the /rotate-key succession route.
+      healRegistryKey: (signer, keyHex) => {
+        moteDb.db
+          .prepare("UPDATE agent_registry SET public_key = ? WHERE motebit_id = ?")
+          .run(keyHex, signer);
+        // The registry key is the fallback a socket with no device row was
+        // admitted under; a socket the previous value admitted is no longer
+        // admitted and is closed (#776).
+        deps.reconcileKeyConnections(signer);
+      },
+    },
+    taskId,
+    receipt,
+    { kind: door },
+    retainMs,
+  );
+  if (!verdict.took) {
+    return { verified: false, reason: verdict.reason, refusal: verdict.refusal };
+  }
+  entry = verdict.entry;
+  const pubKeyHex = verdict.publicKeyHex;
+  if (verdict.repeat && entry.settled === true) {
     logger.info("settlement.already_settled", { correlationId: taskId });
     return { verified: true, credential_id: null, already_settled: true };
   }
-
-  // --- P2P: only the paid worker's receipt discharges the payment (#959) ---
-  // A P2P task was bought from ONE worker: the proof's worker leg was
-  // validated against its address at admission and the dispatch token binds
-  // it. A receipt signed by any other identity is not that work, so it
-  // neither settles the task nor marks it settled — the paid worker's receipt
-  // still can. Checked before the receipt is archived or any trust is written.
-  if (entry.settlement_mode === "p2p" && !receiptDischargesP2p(entry, receipt.motebit_id)) {
-    logger.error("settlement.p2p_receipt_not_from_payee", {
-      correlationId: taskId,
-      payee: p2pPayeeOf(entry),
-      signer: receipt.motebit_id,
-    });
-    return {
-      verified: false,
-      reason: `receipt is signed by ${receipt.motebit_id}, not by the worker this P2P task was paid to (${p2pPayeeOf(entry)})`,
-    };
+  if (verdict.replaced) {
+    // Completed outranks failed: archive it (the archive ranks it first)
+    // and push it; the task was settled on its first answer, once.
+    persistReceiptChain(moteDb.db, receipt);
+    sendToEach(
+      connections.get(motebitId),
+      JSON.stringify({ type: "task_result", task_id: taskId, receipt }),
+    );
+    return { verified: true, credential_id: null, already_settled: true };
   }
-
-  // --- Only the routed executor answers (#890 r6) ---
-  // Every local door (the result POST, the MCP forward's callback) ends
-  // here, each having bound the receipt to this task first: a receipt
-  // signed by an identity this relay never handed the task to is refused
-  // before it is archived, pushed to the submitter, trusted or settled —
-  // and the door gives the entry the receipt only after this accepts it.
-  if (
-    !isRoutedExecutor(
-      moteDb.db,
-      taskId,
-      receipt.motebit_id,
-      "",
-      { executor: entry.task.motebit_id, submittedAt: entry.task.submitted_at },
-      // The task this door answers decides whose routes count (#890 r7): a
-      // peer's inbound task is answered by its forward's route, an own
-      // admission only by a route of that admission.
-      entry.origin_relay != null ? "inbound_forward" : "admission",
-    )
-  ) {
-    logger.error("receipt.signer_not_routed_executor", {
-      correlationId: taskId,
-      signer: receipt.motebit_id,
-      door: "ingestion",
-    });
-    return {
-      verified: false,
-      reason: `receipt is signed by ${receipt.motebit_id}, which this relay never handed task ${taskId} to`,
-    };
-  }
-
-  // --- Ed25519 verification ---
-  let pubKeyHex: string | undefined;
-  const regRow = moteDb.db
-    .prepare("SELECT public_key FROM agent_registry WHERE motebit_id = ?")
-    .get(receipt.motebit_id) as { public_key: string } | undefined;
-  // Holder, else main's registry read (§5f verification reader).
-  const ingestKey = verificationKeyFor(moteDb.db, receipt.motebit_id, regRow?.public_key);
-  if (ingestKey !== null) {
-    pubKeyHex = ingestKey;
-  } else {
-    const devices = await identityManager.listDevices(receipt.motebit_id);
-    const device =
-      (receipt.device_id != null
-        ? devices.find((d) => d.device_id === receipt.device_id)
-        : undefined) ?? devices.find((d) => d.public_key);
-    if (device?.public_key) {
-      pubKeyHex = device.public_key;
-    }
-  }
-
-  if (!pubKeyHex) {
-    const executingId = receipt.motebit_id;
-    logger.error("receipt.verification_failed", {
-      correlationId: taskId,
-      executingAgentId: executingId,
-      reason: "no public key found for executing agent",
-    });
-    return { verified: false, reason: `no public key on file for agent ${executingId}` };
-  }
-
-  let receiptValid = await verifyExecutionReceipt(receipt, hexToBytes(pubKeyHex));
-
-  // Fallback: reconcile the registry from the key embedded in the receipt —
-  // but ONLY when that embedded key is ALREADY a registered device of
-  // receipt.motebit_id. Without this binding, an attacker could POST a receipt
-  // under a VICTIM's motebit_id carrying its own key embedded: the fallback
-  // would verify against the attacker key and OVERWRITE the victim's registry
-  // key (a cross-identity hijack). Binding the heal to key material already
-  // associated with the identity closes that — an arbitrary self-signed
-  // embedded key is refused, and the receipt fails closed below. Legitimate
-  // key rotation is the authenticated /rotate-key succession route (which
-  // proves possession of the CURRENT key), never a receipt.
-  if (
-    !receiptValid &&
-    receipt.public_key &&
-    typeof receipt.public_key === "string" &&
-    receipt.public_key !== pubKeyHex
-  ) {
-    const devices = await identityManager.listDevices(receipt.motebit_id);
-    const embeddedIsRegisteredDevice = devices.some((d) => d.public_key === receipt.public_key);
-    if (embeddedIsRegisteredDevice) {
-      receiptValid = await verifyExecutionReceipt(receipt, hexToBytes(receipt.public_key));
-      // Main's heal, restored exactly (#758 review): the registry is departure's
-      // and the signature readers' INPUT for an identity with no holder, and
-      // build 4's contract is main's rule with main's inputs. It is never
-      // SERVED (the holder is), so R2's harm — a paired device's key read as
-      // the identity's — no longer reaches a foundation-law route.
-      if (receiptValid) {
-        moteDb.db
-          .prepare("UPDATE agent_registry SET public_key = ? WHERE motebit_id = ?")
-          .run(receipt.public_key, receipt.motebit_id);
-        logger.info("receipt.public_key_updated", {
-          correlationId: taskId,
-          motebitId: receipt.motebit_id,
-          reason: "embedded key is a registered device, registry reconciled",
-        });
-        // The registry key is the fallback a socket with no device row was
-        // admitted under; a socket the previous value admitted is no longer
-        // admitted and is closed (#776). A holder, when the identity has
-        // one, still answers the fallback — then nothing moved and nothing
-        // closes; a device-row socket is resolved by its own row.
-        deps.reconcileKeyConnections(receipt.motebit_id);
-      }
-    }
-  }
-
-  if (!receiptValid) {
-    // Diagnostic: emit the canonical bytes the verifier reproduced so the
-    // producer can byte-diff against its own sign-time hash. The producer
-    // logs the same hash via signExecutionReceipt's debug path when
-    // DEBUG_RECEIPT_BYTES=1. A hash mismatch localizes the bug to the wire
-    // path; a hash match would localize it to the signature primitive
-    // (which standalone tests rule out). See
-    // packages/crypto/src/__tests__/device-registration.test.ts and
-    // packages/mcp-server/src/__tests__/build-receipt.test.ts for the
-    // contract this gate defends.
-    const detail = await verifyExecutionReceiptDetailed(receipt, hexToBytes(pubKeyHex));
-    logger.error("receipt.verification_failed", {
-      correlationId: taskId,
-      reason: "invalid Ed25519 signature",
-      canonical_sha256: detail.canonical_sha256,
-      canonical_preview: detail.canonical_preview,
-      detail_reason: detail.reason,
-      chain_length: Array.isArray(
-        (receipt as unknown as Record<string, unknown>).delegation_receipts,
-      )
-        ? ((receipt as unknown as Record<string, unknown>).delegation_receipts as unknown[]).length
-        : 0,
-    });
-    return { verified: false, reason: "invalid Ed25519 signature" };
-  }
-
   logger.info("receipt.verified", {
     correlationId: taskId,
     status: receipt.status,
@@ -955,8 +868,7 @@ export async function handleReceiptIngestion(
     .prepare("SELECT settlement_id FROM relay_settlements WHERE task_id = ? LIMIT 1")
     .get(taskId) as { settlement_id: string } | undefined;
   if (existingSettlement) {
-    entry.settled = true;
-    taskQueue.set(taskId, entry); // Persist settled flag to durable queue
+    markTaskSettled(taskQueue, taskId); // against the entry as it is now
     logger.info("settlement.duplicate", { correlationId: taskId });
     return { verified: true, credential_id: null, already_settled: true };
   }
@@ -2111,9 +2023,9 @@ export async function handleReceiptIngestion(
     }
   }
 
-  // Mark settled and persist to durable queue
-  entry.settled = true;
-  taskQueue.set(taskId, entry);
+  // Mark settled — against the entry as it is NOW, never a copy read
+  // before the awaits above (it could carry a stale answer, #890 r8).
+  markTaskSettled(taskQueue, taskId);
 
   // --- WebSocket fan-out ---
   sendToEach(
@@ -4105,15 +4017,18 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
         apiToken,
         async (receiptCandidate: ReceiptCandidate) => {
           const mcpEntry = taskQueue.get(taskId);
-          // Gone or already settled: this answer is not ingested, so the
-          // forward must not give the entry it (#890 r7 — `false`, never
-          // `undefined`: absence is never acceptance).
-          if (!mcpEntry || mcpEntry.settled) return false;
+          // Gone: nothing to answer (`false`, never `undefined`: absence is
+          // never acceptance). Settled or answered is the chokepoint's call
+          // (#890 r8): `answerTask` refuses it unless completed outranks
+          // failed, and `verified` is true only when the entry took it.
+          if (!mcpEntry) return false;
           const ingested = await handleReceiptIngestion(
             receiptCandidate as unknown as ExecutionReceipt,
             taskId,
             mcpEntry.task.motebit_id,
             mcpEntry,
+            "mcp_forward",
+            resultRetentionMs(mcpEntry),
             ingestionDeps,
           );
           return ingested.verified;
@@ -4985,46 +4900,43 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
       );
     }
 
-    // Unified receipt ingestion: task binding → routed executor (#890 r6) →
-    // Ed25519 verification → settlement → trust → credentials. The entry
-    // takes the receipt only AFTER ingestion accepted it: a receipt for
-    // another task, signed by an identity this relay never handed the task
-    // to, or failing its signature never stands as the task's answer — not
-    // even for the length of an in-flight poll.
+    // Unified receipt ingestion: the answer chokepoint (`answerTask`, #890
+    // r8 — binding, routed executor, signature, write-once) → settlement →
+    // trust → credentials. The entry takes the receipt only inside
+    // `answerTask`; this door reports acceptance only when it took it.
     const ingestionResult = await handleReceiptIngestion(
       receipt,
       taskId,
       motebitId,
       entry,
+      "result_post",
+      resultRetentionMs(entry),
       ingestionDeps,
     );
     if (!ingestionResult.verified) {
+      if (ingestionResult.refusal === "answered") {
+        throw new TaskError(
+          "TASK_ALREADY_ANSWERED",
+          `Receipt not accepted: ${ingestionResult.reason}`,
+          409,
+        );
+      }
+      if (ingestionResult.refusal === "gone") {
+        throw new TaskError("TASK_NOT_FOUND", `Task not found — ${ingestionResult.reason}`, 404);
+      }
       throw new AuthorizationError(
         "AUTHZ_INVALID_CREDENTIALS",
         `Receipt verification failed: ${ingestionResult.reason}`,
       );
     }
 
-    // Paid (P2P) results are retained longer than the free-task TTL — the
-    // payer settled onchain and must be able to recover the artifact after a
-    // stalled poll.
-    const resultRetentionMs =
-      entry.settlement_mode === "p2p" || entry.p2p_payment_proof != null
-        ? PAID_TASK_RESULT_RETENTION_MS
-        : TASK_TTL_MS;
-    entry.receipt = receipt;
-    entry.expiresAt = Math.max(entry.expiresAt, Date.now() + resultRetentionMs);
-    entry.task.status =
-      receipt.status === "completed"
-        ? AgentTaskStatus.Completed
-        : receipt.status === "denied"
-          ? AgentTaskStatus.Denied
-          : AgentTaskStatus.Failed;
-    taskQueue.set(taskId, entry); // Persist to durable queue
-
     if (ingestionResult.already_settled) {
       return c.json({ status: "already_settled" });
     }
-    return c.json({ status: entry.task.status, credential_id: ingestionResult.credential_id });
+    const answered = taskQueue.get(taskId);
+    return c.json({
+      status: answered?.task.status ?? receipt.status,
+      credential_id: ingestionResult.credential_id,
+    });
   });
 }

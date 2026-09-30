@@ -103,10 +103,24 @@ describe("#890 r5: the MCP forward accepts only the presented worker's receipt",
     expect(r.warns).toContain("task.mcp_forward_receipt_not_from_worker");
   });
 
-  it("the presented worker's own receipt is stored and ingested", async () => {
+  it("the worker's receipt bound to ANOTHER task is not ingested (#890 r6 — the forward's own layer)", async () => {
+    const r = await forward({
+      ...receipt("routed-worker", "failed"),
+      task_id: "other-task",
+      relay_task_id: "other-task",
+    });
+    expect(r.ingested).toEqual([]);
+    expect(r.stored).toBeUndefined();
+    expect(r.warns).toContain("task.mcp_forward_receipt_not_from_worker");
+  });
+
+  it("the presented worker's own receipt is handed to ingestion — and only there (#890 r8)", async () => {
     const r = await forward(receipt("routed-worker", "completed"));
     expect(r.ingested).toHaveLength(1);
-    expect((r.stored as { motebit_id: string }).motebit_id).toBe("routed-worker");
+    expect((r.ingested[0] as { motebit_id: string }).motebit_id).toBe("routed-worker");
+    // The answer is `answerTask`'s alone, reached through ingestion: the
+    // forward never writes the entry itself.
+    expect(r.stored).toBeUndefined();
   });
 
   it("#890 r7: only a positive answer from ingestion gives the entry the receipt — refusal and absence alike leave it", async () => {
