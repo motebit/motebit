@@ -40,6 +40,7 @@ import type {
   SyncStatus as SyncEngineStatus,
 } from "@motebit/sync-engine";
 import { deriveSyncEncryptionKey, secureErase } from "@motebit/encryption";
+import { registerDeviceWithRelay } from "@motebit/core-identity";
 import {
   HttpEventStoreAdapter,
   WebSocketEventStoreAdapter,
@@ -65,6 +66,15 @@ type InternalSyncStatus =
   "disconnected" | "connecting" | "connected" | "syncing" | "error" | "conflict";
 
 const HEARTBEAT_INTERVAL_MS = 5 * 60_000; // 5 minutes
+/** Device self-registration retry backoff (#962): 1s, doubling, capped here. */
+const REGISTRATION_RETRY_MAX_MS = 60_000;
+
+/**
+ * What `connectRelay` achieved (#962) — read by the HUD, so a relay that
+ * cannot take this device's events is never shown "online". `ok` only when
+ * events sync and the relay has accepted this device.
+ */
+export type RelayConnectOutcome = { ok: true } | { ok: false; reason: string };
 
 export interface SpatialSyncControllerDeps {
   getRuntime: () => MotebitRuntime | null;
@@ -103,7 +113,23 @@ export class SpatialSyncController {
   private _planSyncEngine: PlanSyncEngine | null = null;
   private _convSyncEngine: ConversationSyncEngine | null = null;
 
+  /**
+   * #962: the background retry of a device self-registration the relay has
+   * not accepted yet. While it runs the relay cannot verify this device's
+   * tokens, nothing is pushed, compaction holds — the status reads "error".
+   */
+  private _registrationRetry: {
+    timer: ReturnType<typeof setTimeout> | null;
+    stopped: boolean;
+  } | null = null;
+  private _lastError: string | null = null;
+
   constructor(private deps: SpatialSyncControllerDeps) {}
+
+  /** Why sync is not running (the "error"/"disconnected" status's reason), or null. */
+  get lastError(): string | null {
+    return this._lastError;
+  }
 
   get syncStatus(): string {
     return this._syncStatus;
@@ -123,7 +149,14 @@ export class SpatialSyncController {
     };
   }
 
-  private setSyncStatus(status: InternalSyncStatus): void {
+  private setSyncStatus(requested: InternalSyncStatus): void {
+    // #962: a device the relay has not accepted cannot push — whatever the
+    // socket or engine report, the status shows the failure until it is.
+    const status: InternalSyncStatus =
+      this._registrationRetry != null &&
+      (requested === "connecting" || requested === "connected" || requested === "syncing")
+        ? "error"
+        : requested;
     this._syncStatus = status;
     for (const cb of this._syncStatusListeners) cb(status);
   }
@@ -136,10 +169,12 @@ export class SpatialSyncController {
    * Best-effort — any relay error is swallowed; the app works offline.
    * Must be called after bootstrap() and initAI().
    */
-  async connectRelay(): Promise<void> {
+  async connectRelay(): Promise<RelayConnectOutcome> {
     const { relayUrl, showNetwork } = this.deps.getNetworkSettings();
-    if (relayUrl === "" || !showNetwork) return;
+    if (relayUrl === "" || !showNetwork) return { ok: false, reason: "network sync is off" };
 
+    this.stopRegistrationRetry();
+    this._lastError = null;
     this.setSyncStatus("connecting");
 
     const motebitId = this.deps.getMotebitId();
@@ -159,20 +194,15 @@ export class SpatialSyncController {
     const headers: Record<string, string> = { "Content-Type": "application/json" };
     if (authToken) headers["Authorization"] = `Bearer ${authToken}`;
 
-    // 1. Bootstrap identity on relay
-    try {
-      await fetch(`${relayUrl}/api/v1/agents/bootstrap`, {
-        method: "POST",
-        headers,
-        body: JSON.stringify({
-          motebit_id: motebitId,
-          device_id: this.deps.getDeviceId(),
-          public_key: this.deps.getPublicKey(),
-        }),
-      });
-    } catch {
-      // Best-effort
-    }
+    // 1. Signed device self-registration (spec/device-self-registration-v1.md)
+    // — the relay must know this device's key before it can verify any token
+    // it signs. #962: the first attempt runs before the socket connects; one
+    // the relay does not accept (unreachable, refused) is retried in the
+    // background until it is. The one-shot unsigned bootstrap POST this
+    // replaces left a device whose relay was down at startup unknown to it for
+    // good: every push refused, compaction held forever.
+    const regKey = this.deps.getPrivKey();
+    const registered = regKey != null ? await this.registerDeviceOnce(relayUrl, regKey) : false;
 
     // 2. Register capabilities for discovery
     const runtime = this.deps.getRuntime();
@@ -381,6 +411,7 @@ export class SpatialSyncController {
         let unsubRelayFrame = wsAdapter.onCustomMessage(onRelayFrame);
 
         runtime.connectSync(encryptedWs);
+        if (!registered) this.retryRegistration(relayUrl);
         wsAdapter.connect();
 
         // Subscribe to sync engine status
@@ -501,8 +532,16 @@ export class SpatialSyncController {
           })();
         }, 4.5 * 60_000);
         this._wsTokenRefreshTimer = refreshTimer;
-      } catch {
+        if (!registered) {
+          return {
+            ok: false,
+            reason: "the relay has not accepted this device yet; retrying",
+          };
+        }
+        return { ok: true };
+      } catch (err: unknown) {
         // Sync setup failed — fall back to delegation-only
+        this._lastError = `sync setup failed: ${err instanceof Error ? err.message : String(err)}`;
         this.setSyncStatus("error");
         const rt = this.deps.getRuntime();
         const tf = this.deps.getTokenFactory();
@@ -517,6 +556,7 @@ export class SpatialSyncController {
           });
           rt.setDelegationAdapter(inner);
         }
+        return { ok: false, reason: this._lastError ?? "sync setup failed" };
       }
     } else if (runtime && tokenFactory) {
       // No private key bytes — delegation only (no encrypted sync)
@@ -529,14 +569,96 @@ export class SpatialSyncController {
         getExplorationDrive: () => this.deps.getRuntime()?.getPrecision().explorationDrive,
       });
       runtime.setDelegationAdapter(inner);
+      this._lastError = "no device key: delegation only, events are not synced";
       this.setSyncStatus("disconnected");
+      return { ok: false, reason: this._lastError };
     }
+    // #962: no signing key, so no token — nothing can authenticate with the
+    // relay and no event is ever pushed. Said, never left "connecting".
+    this._lastError = runtime
+      ? "no device key: cannot authenticate with the relay, events are not synced"
+      : "no runtime: sync cannot start";
+    this.setSyncStatus("error");
+    return { ok: false, reason: this._lastError };
+  }
+
+  /**
+   * One signed device self-registration with the relay (#962). True when the
+   * relay accepted it. Never throws; the status carries a refusal.
+   */
+  private async registerDeviceOnce(relayUrl: string, privateKey: Uint8Array): Promise<boolean> {
+    try {
+      const reg = await registerDeviceWithRelay({
+        motebitId: this.deps.getMotebitId(),
+        deviceId: this.deps.getDeviceId(),
+        publicKey: this.deps.getPublicKey(),
+        privateKey,
+        syncUrl: relayUrl,
+        deviceName: "spatial",
+      });
+      if (!reg.ok) this._lastError = `device registration refused: ${reg.code}`;
+      return reg.ok;
+    } catch (err: unknown) {
+      this._lastError = `device registration failed: ${err instanceof Error ? err.message : String(err)}`;
+      return false;
+    }
+  }
+
+  /**
+   * Retry the device self-registration in the background until the relay
+   * accepts it (#962): 1s, doubling to 60s; unref'd timers; ended by
+   * `disconnectRelay` or the next `connectRelay`. While it runs the status
+   * reads "error". Once accepted, a socket waiting out its reconnect backoff
+   * reconnects now.
+   */
+  private retryRegistration(relayUrl: string): void {
+    this.stopRegistrationRetry();
+    const loop: { timer: ReturnType<typeof setTimeout> | null; stopped: boolean } = {
+      timer: null,
+      stopped: false,
+    };
+    this._registrationRetry = loop;
+    this.setSyncStatus("error");
+    let delay = 1_000;
+    const schedule = (): void => {
+      const t = setTimeout(() => {
+        loop.timer = null;
+        void (async () => {
+          if (loop.stopped) return;
+          const key = this.deps.getPrivKey();
+          const ok = key != null && (await this.registerDeviceOnce(relayUrl, key));
+          if (loop.stopped) return;
+          if (!ok) {
+            delay = Math.min(delay * 2, REGISTRATION_RETRY_MAX_MS);
+            schedule();
+            return;
+          }
+          this._registrationRetry = null;
+          this._lastError = null;
+          const ws = this._wsAdapter;
+          if (ws != null && !ws.isConnected) ws.connect();
+          this.setSyncStatus("connecting");
+        })();
+      }, delay);
+      (t as { unref?: () => void }).unref?.();
+      loop.timer = t;
+    };
+    schedule();
+  }
+
+  private stopRegistrationRetry(): void {
+    const loop = this._registrationRetry;
+    if (loop == null) return;
+    loop.stopped = true;
+    if (loop.timer != null) clearTimeout(loop.timer);
+    this._registrationRetry = null;
   }
 
   /**
    * Disconnect from the relay: stop sync, close WebSocket, deregister.
    */
   async disconnectRelay(): Promise<void> {
+    this.stopRegistrationRetry();
     // Stop token refresh
     if (this._wsTokenRefreshTimer) {
       clearInterval(this._wsTokenRefreshTimer);

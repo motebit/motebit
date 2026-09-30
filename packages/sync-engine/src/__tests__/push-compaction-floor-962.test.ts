@@ -78,6 +78,27 @@ describe("pushCompactionFloor stream grouping (#962 round 2)", () => {
     expect(await pushCompactionFloor(store, 9)).toBe(9);
   });
 
+  it("round 4: only the compacted identity's streams count — another identity's cursor never floors it", async () => {
+    // One store, two identities (a restored or re-created identity on one
+    // browser origin): m-old's relay acknowledged 50; m-new's never connected.
+    const store = await storeWith({
+      "push:relay:https://a#m-old": 50,
+      "push:e2e:raw:https://a#m-old": 50,
+    });
+    expect(await pushCompactionFloor(store, 9, { syncConfigured: true, motebitId: "m-new" })).toBe(
+      0,
+    );
+    expect(await pushCompactionFloor(store, 9, { syncConfigured: false, motebitId: "m-new" })).toBe(
+      9,
+    );
+    // Its own streams still bound it; the other identity's do not.
+    const both = await storeWith({ "push:relay:https://a#m-old": 50, "push:#m-new": 3 });
+    expect(await pushCompactionFloor(both, 9, { syncConfigured: true, motebitId: "m-new" })).toBe(
+      3,
+    );
+    expect(await pushCompactionFloor(both, 60, { motebitId: "m-old" })).toBe(50);
+  });
+
   it("streams bound the floor even when the host says no relay", async () => {
     const store = await storeWith({ "push:relay:https://a#m": 4 });
     expect(await pushCompactionFloor(store, 9, { syncConfigured: false })).toBe(4);

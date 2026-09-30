@@ -9,7 +9,11 @@
 //
 //   node packages/runtime/src/__tests__/compaction-push-floor-962.tampers.mjs
 //
-// Run from anywhere; paths resolve relative to this file.
+// Run from anywhere; paths resolve relative to this file (TAMPER_DRY=1 only
+// checks that every tamper still applies). It EDITS the tree it
+// sits in (and restores it), so run it in a copy: `cp -a` the checkout and
+// run the copy's script. A package with a `pretest` script (mobile generates
+// its creature bundle there) runs it before its entries, as `pnpm test` would.
 
 import { readFileSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
@@ -33,6 +37,7 @@ const desktopWiringTest = join(desktop, "src", "__tests__", "sync-configured-962
 const webWiringTest = join(web, "src", "__tests__", "sync-configured-962.test.ts");
 const spatialWiringTest = join(spatial, "src", "__tests__", "sync-configured-962.test.ts");
 const mobileWiringTest = join(mobile, "src", "__tests__", "mobile-app.test.ts");
+const cliMatrix = join(cli, "src", "__tests__", "every-configured-surface-pushes-962.test.ts");
 
 const TAMPERS = [
   {
@@ -121,8 +126,8 @@ const TAMPERS = [
   {
     // F2: a provider that cannot tell fails closed.
     file: join(pkg, "src", "motebit-runtime.ts"),
-    text: "      return (await c()) !== false;\n    } catch {\n      return true;",
-    replacement: "      return (await c()) !== false;\n    } catch {\n      return false;",
+    text: "      return answer !== false;\n    } catch {\n      return true;",
+    replacement: "      return answer !== false;\n    } catch {\n      return false;",
     red: "sqlite store > P-a: a provider that cannot tell (throws) fails closed",
   },
   {
@@ -202,51 +207,51 @@ const TAMPERS = [
   },
   // --- #962 round 3 C2: each surface's syncConfigured wiring. ---
   {
-    // CLI: the shared answer inverted.
+    // CLI: a relay URL no longer makes a runtime configured.
     file: join(cli, "src", "sync-configured.ts"),
     testFile: cliWiringTest,
     cwd: cli,
-    text: "export const CLI_SYNC_CONFIGURED = true;",
-    replacement: "export const CLI_SYNC_CONFIGURED = false;",
-    red: "CLI_SYNC_CONFIGURED is true",
+    text: 'return { ...base, syncConfigured: relay.syncUrl != null && relay.syncUrl !== "" };',
+    replacement: "return { ...base, syncConfigured: false && relay.syncUrl != null };",
+    red: "cliRuntimeConfig: a relay URL ⇒ configured",
   },
   {
-    // CLI REPL (createRuntime): the wiring inverted.
+    // CLI: a call site's own syncConfigured overrides the relay's answer.
+    file: join(cli, "src", "sync-configured.ts"),
+    testFile: cliWiringTest,
+    cwd: cli,
+    text: 'return { ...base, syncConfigured: relay.syncUrl != null && relay.syncUrl !== "" };',
+    replacement:
+      'return { syncConfigured: relay.syncUrl != null && relay.syncUrl !== "", ...base };',
+    red: "it is set last",
+  },
+  {
+    // CLI REPL (createRuntime): its relay dropped from the runtime config.
     file: join(cli, "src", "runtime-factory.ts"),
     testFile: cliWiringTest,
     cwd: cli,
-    text: "syncConfigured: CLI_SYNC_CONFIGURED,",
-    replacement: "syncConfigured: false,",
+    text: "      { syncUrl },\n    ),",
+    replacement: "      { syncUrl: undefined },\n    ),",
     red: "the REPL runtime (createRuntime) answers configured",
   },
   {
-    // `motebit run`: the wiring dropped.
+    // `motebit run`: its runtime config no longer built by cliRuntimeConfig.
     file: join(cli, "src", "daemon.ts"),
     testFile: cliWiringTest,
     cwd: cli,
-    text: "      syncConfigured: CLI_SYNC_CONFIGURED,\n      policy: {\n        operatorMode: config.operator,\n        maxRiskLevel: maxRiskAuto,",
+    text: "    // #962: `syncConfigured` is decided by `cliRuntimeConfig`, last.\n    cliRuntimeConfig(\n      {\n        motebitId,\n        mcpServers,\n        policy: {\n          operatorMode: config.operator,\n          maxRiskLevel: maxRiskAuto,",
     replacement:
-      "      policy: {\n        operatorMode: config.operator,\n        maxRiskLevel: maxRiskAuto,",
-    red: "passes syncConfigured: CLI_SYNC_CONFIGURED",
+      "    // #962: `syncConfigured` is decided by `cliRuntimeConfig`, last.\n    ((b: RuntimeConfig, _r: unknown) => b)(\n      {\n        motebitId,\n        mcpServers,\n        policy: {\n          operatorMode: config.operator,\n          maxRiskLevel: maxRiskAuto,",
+    red: "builds its config with cliRuntimeConfig",
   },
   {
-    // `motebit serve`: the wiring inverted.
-    file: join(cli, "src", "daemon.ts"),
-    testFile: cliWiringTest,
-    cwd: cli,
-    text: "      syncConfigured: CLI_SYNC_CONFIGURED,\n      policy: {\n        operatorMode: config.operator,\n        pathAllowList: config.allowedPaths,",
-    replacement:
-      "      syncConfigured: false,\n      policy: {\n        operatorMode: config.operator,\n        pathAllowList: config.allowedPaths,",
-    red: "passes syncConfigured: CLI_SYNC_CONFIGURED",
-  },
-  {
-    // `motebit delegate`: the wiring inverted.
+    // `motebit delegate`: likewise.
     file: join(cli, "src", "subcommands", "delegate.ts"),
     testFile: cliWiringTest,
     cwd: cli,
-    text: "syncConfigured: CLI_SYNC_CONFIGURED,",
-    replacement: "syncConfigured: !CLI_SYNC_CONFIGURED,",
-    red: "passes syncConfigured: CLI_SYNC_CONFIGURED",
+    text: "    cliRuntimeConfig(\n",
+    replacement: "    ((b: object, _r: unknown) => b as never)(\n",
+    red: "builds its config with cliRuntimeConfig",
   },
   {
     // Desktop: the configured relay ignored.
@@ -320,12 +325,357 @@ const TAMPERS = [
     replacement: "          const url = await this.getSyncUrl();\n          return url == null;",
     red: "#962 — MobileApp's syncConfigured > a persisted relay URL",
   },
+  // --- #962 round 4: every configured CLI entry point pushes (the matrix). ---
+  {
+    // The daemons' push loop never ticks: only the startup cycle pushes.
+    file: join(cli, "src", "cli-event-push.ts"),
+    testFile: cliMatrix,
+    cwd: cli,
+    text: "const timer = setInterval(() => void cycle(), opts.intervalMs);",
+    replacement: "const timer = setInterval(() => undefined, opts.intervalMs);",
+    red: "run | bootstrapped | up | no-token",
+  },
+  {
+    // The REPL's push loop never ticks (the same clause, read from the REPL).
+    file: join(cli, "src", "cli-event-push.ts"),
+    testFile: cliMatrix,
+    cwd: cli,
+    text: "const timer = setInterval(() => void cycle(), opts.intervalMs);",
+    replacement: "const timer = setInterval(() => undefined, opts.intervalMs);",
+    red: "repl | bootstrapped | up | no-token",
+  },
+  {
+    // `motebit run` connects its remote and never pushes (round 3's C1).
+    file: join(cli, "src", "cli-event-push.ts"),
+    testFile: cliMatrix,
+    cwd: cli,
+    text: "): CliEventPush {\n  return startDaemonEventSync(runtime, relaySync, opts);\n}\n\n/**\n * `motebit serve`",
+    replacement:
+      "): CliEventPush {\n  runtime.connectSync(relaySync.transport.remote);\n  void opts;\n  return { stop() {} };\n}\n\n/**\n * `motebit serve`",
+    red: "run | fresh | up | token",
+  },
+  {
+    // `motebit serve` connects nothing (round 3's C1).
+    file: join(cli, "src", "cli-event-push.ts"),
+    testFile: cliMatrix,
+    cwd: cli,
+    text: "): CliEventPush {\n  return startDaemonEventSync(runtime, relaySync, opts);\n}\n\nexport interface DelegateEventSyncOptions",
+    replacement:
+      "): CliEventPush {\n  void runtime;\n  void relaySync;\n  void opts;\n  return { stop() {} };\n}\n\nexport interface DelegateEventSyncOptions",
+    red: "serve | bootstrapped | up | token",
+  },
+  {
+    // `serve` in daemon.ts: its events' sync never started.
+    file: join(cli, "src", "daemon.ts"),
+    testFile: cliWiringTest,
+    cwd: cli,
+    text: "serveEventPush = startServeEventSync(runtime, serveRelaySync, {",
+    replacement: "serveEventPush = ((..._a: unknown[]) => undefined)(runtime, serveRelaySync, {",
+    red: "every daemon starts its event push",
+  },
+  {
+    // `run` in daemon.ts: its events' sync never started.
+    file: join(cli, "src", "daemon.ts"),
+    testFile: cliWiringTest,
+    cwd: cli,
+    text: "runEventPush = startRunEventSync(runtime, relaySync, {",
+    replacement: "runEventPush = ((..._a: unknown[]) => undefined)(runtime, relaySync, {",
+    red: "every daemon starts its event push",
+  },
+  {
+    // P1: no re-bootstrap on a 401/403 — a relay unreachable at start never
+    // learns the device's key, and refuses every push for the session.
+    file: join(cli, "src", "cli-event-push.ts"),
+    testFile: cliMatrix,
+    cwd: cli,
+    text: "if (err && isAuthRefusal(err) && opts.device && !rebootstrapped) {",
+    replacement: "if (err && isAuthRefusal(err) && opts.device && rebootstrapped) {",
+    red: "run | fresh | down→up | no-token",
+  },
+  {
+    // P1, the REPL: the same clause.
+    file: join(cli, "src", "cli-event-push.ts"),
+    testFile: cliMatrix,
+    cwd: cli,
+    text: "if (err && isAuthRefusal(err) && opts.device && !rebootstrapped) {",
+    replacement: "if (err && isAuthRefusal(err) && opts.device && rebootstrapped) {",
+    red: "repl | fresh | down→up | no-token",
+  },
+  {
+    // C2: the REPL bootstraps AFTER its first push — refused once.
+    file: join(cli, "src", "cli-event-push.ts"),
+    testFile: cliMatrix,
+    cwd: cli,
+    text: "  if (pushDevice) {\n    const refused = await bootstrapReplDevice({ syncUrl, ...pushDevice });\n    if (refused) warn(refused);\n  }\n",
+    replacement: "",
+    red: "repl | fresh | up | no-token",
+  },
+  {
+    // delegate bootstraps AFTER its first push — refused once.
+    file: join(cli, "src", "cli-event-push.ts"),
+    testFile: cliMatrix,
+    cwd: cli,
+    text: "  if (opts.device) {\n    const refused = await bootstrapReplDevice({ syncUrl: opts.syncUrl, ...opts.device });\n    if (refused) opts.log(refused);\n  }\n",
+    replacement: "",
+    red: "delegate | fresh | up | no-token",
+  },
+  {
+    // A failure is never reported: a refusing relay is silent.
+    file: join(cli, "src", "cli-event-push.ts"),
+    testFile: cliMatrix,
+    cwd: cli,
+    text: "if (line !== failing) opts.report(line);",
+    replacement: "if (line !== failing) void opts;",
+    red: "run | bootstrapped | up | REFUSED",
+  },
+  {
+    // delegate exits without its last push.
+    file: join(cli, "src", "cli-event-push.ts"),
+    testFile: cliMatrix,
+    cwd: cli,
+    text: "const outcome = await Promise.race([loop.flush(), late]);",
+    replacement: "const outcome = await Promise.race([Promise.resolve(null), late]);",
+    red: "delegate | bootstrapped | up | no-token",
+  },
+  {
+    // A daemon with no relay is still "configured": compaction held for good.
+    file: join(cli, "src", "sync-configured.ts"),
+    testFile: cliMatrix,
+    cwd: cli,
+    text: 'return { ...base, syncConfigured: relay.syncUrl != null && relay.syncUrl !== "" };',
+    replacement: "return { ...base, syncConfigured: true || relay.syncUrl != null };",
+    red: "run | no relay configured",
+  },
+  {
+    // `serve` over stdio resolves a relay it never reaches.
+    file: join(cli, "src", "sync-configured.ts"),
+    testFile: cliMatrix,
+    cwd: cli,
+    text: '  if (transport === "stdio") return undefined;\n',
+    replacement: "",
+    red: "serve | no relay configured",
+  },
+  {
+    // Another identity's acked cursor in the same store floors this one.
+    file: join(root, "packages", "sync-engine", "src", "index.ts"),
+    build: "@motebit/sync-engine",
+    testFile: join(
+      root,
+      "packages",
+      "sync-engine",
+      "src",
+      "__tests__",
+      "push-compaction-floor-962.test.ts",
+    ),
+    cwd: join(root, "packages", "sync-engine"),
+    text: "if (options.motebitId != null && !stream.endsWith(`#${options.motebitId}`)) continue;",
+    replacement: "void options.motebitId;",
+    red: "only the compacted identity's streams count",
+  },
+  {
+    // The runtime does not name its identity to the floor (web: restored identity).
+    file: join(pkg, "src", "motebit-runtime.ts"),
+    testFile: join(
+      root,
+      "apps",
+      "web",
+      "src",
+      "__tests__",
+      "every-configured-surface-pushes-962.test.ts",
+    ),
+    cwd: join(root, "apps", "web"),
+    build: "@motebit/runtime",
+    text: "      motebitId: this.motebitId,\n    });",
+    replacement: "    });",
+    red: "identity changed on one origin",
+  },
+  {
+    // P3: a syncConfigured provider that never settles hangs compaction.
+    file: join(pkg, "src", "motebit-runtime.ts"),
+    text: "timer = setTimeout(() => resolve(true), SYNC_CONFIGURED_TIMEOUT_MS);",
+    replacement: "void SYNC_CONFIGURED_TIMEOUT_MS;",
+    red: "P3: a provider that never settles",
+  },
+  // --- #962 round 4: the app surfaces' matrices. ---
+  {
+    // Web: a refused device registration is never retried.
+    file: join(root, "apps", "web", "src", "web-app.ts"),
+    testFile: join(
+      root,
+      "apps",
+      "web",
+      "src",
+      "__tests__",
+      "every-configured-surface-pushes-962.test.ts",
+    ),
+    cwd: join(root, "apps", "web"),
+    text: "    if (!registered) this.retryRegistration(relayUrl);",
+    replacement: "    void registered;",
+    red: "web | fresh | down→up | token",
+  },
+  {
+    // Spatial: a refused device registration is never retried.
+    file: join(root, "apps", "spatial", "src", "sync-controller.ts"),
+    testFile: join(
+      root,
+      "apps",
+      "spatial",
+      "src",
+      "__tests__",
+      "every-configured-surface-pushes-962.test.ts",
+    ),
+    cwd: join(root, "apps", "spatial"),
+    text: "        if (!registered) this.retryRegistration(relayUrl);",
+    replacement: "        void registered;",
+    red: "spatial | fresh | down→up | token",
+  },
+  {
+    // Spatial: no token leaves the status at "connecting" forever.
+    file: join(root, "apps", "spatial", "src", "sync-controller.ts"),
+    testFile: join(
+      root,
+      "apps",
+      "spatial",
+      "src",
+      "__tests__",
+      "every-configured-surface-pushes-962.test.ts",
+    ),
+    cwd: join(root, "apps", "spatial"),
+    text: '      : "no runtime: sync cannot start";\n    this.setSyncStatus("error");',
+    replacement: '      : "no runtime: sync cannot start";',
+    red: "spatial | fresh | up | no-token",
+  },
+  {
+    // Desktop: the legacy unsigned registration (the relay never learns the key).
+    file: join(root, "apps", "desktop", "src", "identity-manager.ts"),
+    testFile: join(
+      root,
+      "apps",
+      "desktop",
+      "src",
+      "__tests__",
+      "every-configured-surface-pushes-962.test.ts",
+    ),
+    cwd: join(root, "apps", "desktop"),
+    text: "      result = await registerDeviceWithRelay({",
+    replacement:
+      "      result = { ok: true, created: false, registered_at: 0 } as never;\n      void ({",
+    red: "desktop | fresh | up | no-token",
+  },
+  {
+    // Desktop: a failed registration stops sync from starting.
+    file: join(root, "apps", "desktop", "src", "sync-startup.ts"),
+    testFile: join(
+      root,
+      "apps",
+      "desktop",
+      "src",
+      "__tests__",
+      "every-configured-surface-pushes-962.test.ts",
+    ),
+    cwd: join(root, "apps", "desktop"),
+    text: "  // Start background sync. Safe to call",
+    replacement:
+      "  if (failure !== null) return onFailure(failure, () => {});\n  // Start background sync. Safe to call",
+    red: "desktop | bootstrapped | down→up | no-token",
+  },
+  {
+    // Desktop: a refused registration is never retried in the background.
+    file: join(root, "apps", "desktop", "src", "sync-startup.ts"),
+    testFile: join(
+      root,
+      "apps",
+      "desktop",
+      "src",
+      "__tests__",
+      "every-configured-surface-pushes-962.test.ts",
+    ),
+    cwd: join(root, "apps", "desktop"),
+    text: "  schedule();\n  return () => {",
+    replacement: "  return () => {",
+    red: "desktop | fresh | down→up | no-token",
+  },
+  {
+    // Mobile: the device is never registered before its first push.
+    file: join(root, "apps", "mobile", "src", "sync-controller.ts"),
+    testFile: join(
+      root,
+      "apps",
+      "mobile",
+      "src",
+      "__tests__",
+      "every-configured-surface-pushes-962.test.ts",
+    ),
+    cwd: join(root, "apps", "mobile"),
+    text: "    await this.attemptRegistration(url, session);",
+    replacement: "    this._registered = true;",
+    red: "mobile | fresh | up",
+  },
+  {
+    // Mobile: a refused registration is never retried.
+    file: join(root, "apps", "mobile", "src", "sync-controller.ts"),
+    testFile: join(
+      root,
+      "apps",
+      "mobile",
+      "src",
+      "__tests__",
+      "every-configured-surface-pushes-962.test.ts",
+    ),
+    cwd: join(root, "apps", "mobile"),
+    text: "      void this.attemptRegistration(url, session);",
+    replacement: "      void session;",
+    red: "mobile | fresh | down→up",
+  },
+  {
+    // Mobile: a refused sync cycle reads "idle".
+    file: join(root, "apps", "mobile", "src", "sync-controller.ts"),
+    testFile: join(
+      root,
+      "apps",
+      "mobile",
+      "src",
+      "__tests__",
+      "every-configured-surface-pushes-962.test.ts",
+    ),
+    cwd: join(root, "apps", "mobile"),
+    text: "      if (eventError) throw eventError;",
+    replacement: "      void eventError;",
+    red: "mobile | bootstrapped | refusing (identity revoked) | N/A-token",
+  },
+  {
+    // Mobile: a refused /sync toasts "Synced".
+    file: join(root, "apps", "mobile", "src", "sync-controller.ts"),
+    testFile: join(
+      root,
+      "apps",
+      "mobile",
+      "src",
+      "__tests__",
+      "every-configured-surface-pushes-962.test.ts",
+    ),
+    cwd: join(root, "apps", "mobile"),
+    text: "    if (eventError) {",
+    replacement: '    if (eventError && url === "") {',
+    red: "user /sync (syncNow)",
+  },
 ];
 
 function build(name) {
   if (!name) return;
   const out = spawnSync("pnpm", ["--filter", name, "build"], { cwd: root, encoding: "utf8" });
   if (out.status !== 0) throw new Error(`build ${name} failed:\n${out.stdout}\n${out.stderr}`);
+}
+
+// A package's `pretest` (mobile's generated creature bundle), once per package.
+const pretested = new Set();
+function pretest(cwd) {
+  if (pretested.has(cwd)) return;
+  pretested.add(cwd);
+  const scripts = JSON.parse(readFileSync(join(cwd, "package.json"), "utf8")).scripts ?? {};
+  if (!scripts.pretest) return;
+  const out = spawnSync("pnpm", ["run", "pretest"], { cwd, encoding: "utf8" });
+  if (out.status !== 0) throw new Error(`pretest in ${cwd} failed:\n${out.stdout}\n${out.stderr}`);
 }
 
 let failed = false;
@@ -336,10 +686,13 @@ for (const t of TAMPERS) {
     failed = true;
     continue;
   }
+  // TAMPER_DRY=1: check every tamper still applies, run nothing.
+  if (process.env.TAMPER_DRY) continue;
   writeFileSync(t.file, original.replace(t.text, t.replacement));
   let out;
   try {
     build(t.build);
+    pretest(t.cwd ?? pkg);
     out = spawnSync("npx", ["vitest", "run", t.testFile ?? testFile, "--reporter=verbose"], {
       cwd: t.cwd ?? pkg,
       encoding: "utf8",

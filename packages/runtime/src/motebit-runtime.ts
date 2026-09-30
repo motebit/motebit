@@ -466,6 +466,13 @@ function randomSuffix(): string {
  */
 const HALT_STOPPER_TIMEOUT_MS = 10_000;
 
+/**
+ * How long compaction waits for a `syncConfigured` provider's answer (#962
+ * P3). Past it the answer is "configured" (fail closed): compaction deletes
+ * nothing this time rather than hanging on a provider that never settles.
+ */
+const SYNC_CONFIGURED_TIMEOUT_MS = 3_000;
+
 export class MotebitRuntime {
   readonly motebitId: string;
   readonly state: StateVectorEngine;
@@ -4103,6 +4110,9 @@ export class MotebitRuntime {
   private async compactUpTo(requested: number): Promise<number> {
     const floor = await pushCompactionFloor(this.localEventStore, requested, {
       syncConfigured: await this.isSyncConfigured(),
+      // Only this identity's relay streams: another identity's cursors in
+      // the same store say nothing about what a relay holds of this one.
+      motebitId: this.motebitId,
     });
     if (floor <= 0) return 0;
     return this.events.compact(this.motebitId, floor);
@@ -4117,10 +4127,19 @@ export class MotebitRuntime {
   async isSyncConfigured(): Promise<boolean | undefined> {
     const c = this.syncConfigured;
     if (typeof c !== "function") return c;
+    // A provider that never settles counts as configured too (#962 P3):
+    // compaction then deletes nothing, instead of hanging on the answer.
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const undecided = new Promise<true>((resolve) => {
+      timer = setTimeout(() => resolve(true), SYNC_CONFIGURED_TIMEOUT_MS);
+    });
     try {
-      return (await c()) !== false;
+      const answer = await Promise.race([Promise.resolve().then(c), undecided]);
+      return answer !== false;
     } catch {
       return true;
+    } finally {
+      clearTimeout(timer);
     }
   }
 

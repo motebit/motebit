@@ -72,6 +72,7 @@ import { EncryptedKeyStore } from "./encrypted-keystore";
 import { spatialSpecToProvider } from "./providers";
 export { WebLLMProvider } from "./providers";
 import { SpatialSyncController } from "./sync-controller";
+import type { RelayConnectOutcome } from "./sync-controller";
 import { SpatialMcpManager } from "./mcp-manager";
 import { tryVoiceCommand } from "./voice-commands";
 import { dispatchSlabChrome, renderCellToActivity } from "./slab-chrome";
@@ -1033,7 +1034,7 @@ export class SpatialApp {
     return this.sync.onSyncStatusChange(cb);
   }
 
-  connectRelay(): Promise<void> {
+  connectRelay(): Promise<RelayConnectOutcome> {
     return this.sync.connectRelay();
   }
 

@@ -136,10 +136,38 @@ async function handleDelegatePlan(
   runtime.setProvider(provider);
   // #962: this command's events and their sync, closed before it exits
   // (`openDelegateEventSync` is the wiring under test).
+  // The push is E2E and signs its device tokens with the identity key: the
+  // sovereign keys when loaded, else the key unlocked here (the passphrase is
+  // session-cached by the auth headers above). No key: the configured token
+  // alone, raw — the one raw-by-design push path.
+  const syncCfg = loadFullConfig();
+  let pushKey: Uint8Array | undefined = signingKeys?.privateKey;
+  let pushKeyOwned = false;
+  if (!pushKey) {
+    try {
+      const { loadActiveSigningKey } = await import("../identity.js");
+      pushKey = (await loadActiveSigningKey(syncCfg, { promptLabel: "Passphrase: " })).privateKey;
+      pushKeyOwned = true;
+    } catch {
+      pushKey = undefined;
+    }
+  }
+  const masterToken =
+    config.syncToken ?? process.env["MOTEBIT_API_TOKEN"] ?? process.env["MOTEBIT_SYNC_TOKEN"];
   const eventSync = await openDelegateEventSync(runtime, {
     syncUrl: relayUrl,
     log: (line) => console.log(line),
-    privateKey: () => signingKeys?.privateKey,
+    privateKey: () => pushKey,
+    ...(masterToken ? { configuredToken: masterToken } : {}),
+    ...(pushKey && syncCfg.device_id && syncCfg.device_public_key
+      ? {
+          device: {
+            motebitId,
+            deviceId: syncCfg.device_id,
+            publicKeyHex: syncCfg.device_public_key,
+          },
+        }
+      : {}),
   });
 
   // Enable credential publishing to relay (sovereign trust → network trust bridge).
@@ -250,6 +278,11 @@ async function handleDelegatePlan(
     }
   } finally {
     await eventSync.close();
+    if (pushKeyOwned && pushKey) {
+      const { secureErase } = await import("@motebit/encryption");
+      secureErase(pushKey);
+      pushKey = undefined;
+    }
     runtime.stop();
     moteDb.close();
     // Release the bind so the next coordinator-role process can elect.

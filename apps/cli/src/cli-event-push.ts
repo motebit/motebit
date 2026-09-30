@@ -7,14 +7,29 @@
  * (`every-configured-surface-pushes-962.test.ts`): the entry points
  * themselves prompt for a passphrase, bind the runtime-host socket and
  * register with a relay, and cannot be driven in a unit test.
+ *
+ * The invariant every entry point keeps: when sync is configured and the
+ * relay accepts, the events this process appends are acknowledged within
+ * one push interval with no user action — so compaction, floored at the
+ * relay's acknowledged push cursor, keeps running — and while the relay is
+ * unreachable or refusing, that is said in one line, never silently. The
+ * daemons connected their event remote and never pushed (only the REPL's
+ * startup, exit and `/sync` did), so a daemon-only `motebit.db` grew for
+ * good with nothing said.
  */
-import type { SyncEngine } from "@motebit/sync-engine";
+import type { SyncEngine, SyncResult } from "@motebit/sync-engine";
 import type { EventStoreAdapter } from "@motebit/event-log";
-import type { DaemonRelaySync } from "./daemon-relay-sync.js";
+import { createDaemonRelaySync, type DaemonRelaySync } from "./daemon-relay-sync.js";
 import { bootstrapReplDevice, syncFailureLine } from "./runtime-factory.js";
+
+/** The periodic push cadence: the plan sync's (30 s). */
+export const PUSH_INTERVAL_MS = 30_000;
+/** How long `motebit delegate` waits for its last push before it exits. */
+const EXIT_FLUSH_MS = 15_000;
 
 /** The part of a `MotebitRuntime` the push wiring touches. */
 export interface PushingRuntime {
+  readonly motebitId: string;
   readonly sync: SyncEngine;
   connectSync(remote: EventStoreAdapter): void;
 }
@@ -31,6 +46,85 @@ export interface PushDevice {
   publicKeyHex: string;
 }
 
+interface PushLoop extends CliEventPush {
+  /** One push cycle now (joining one in flight): its result, or null when it failed. */
+  cycle(): Promise<SyncResult | null>;
+  /** The cycle in flight settles, then one more runs: everything appended so far is tried. */
+  flush(): Promise<SyncResult | null>;
+}
+
+/** A refusal of this device's credential — the relay does not know its key (yet). */
+function isAuthRefusal(err: Error): boolean {
+  return /\b40[13]\b/.test(err.message);
+}
+
+/**
+ * The push loop every CLI entry point runs: a push cycle now, then one every
+ * `intervalMs`. A failure is reported once when it starts (and again if its
+ * reason changes), and the recovery once — never a line per tick. A 401/403
+ * re-introduces the device's key (`bootstrap`) once per failure streak, then
+ * pushes again at once (#962 P1: a relay unreachable at start never heard
+ * the startup bootstrap, and refused every push for the session).
+ */
+function startPushLoop(opts: {
+  sync: SyncEngine;
+  intervalMs: number;
+  report: (line: string) => void;
+  syncUrl: string;
+  device?: PushDevice | undefined;
+}): PushLoop {
+  let failing: string | null = null;
+  let rebootstrapped = false;
+  let running: Promise<SyncResult | null> | null = null;
+
+  const once = async (): Promise<SyncResult | null> => {
+    let result = await opts.sync.sync();
+    let err = opts.sync.getLastError();
+    if (err && isAuthRefusal(err) && opts.device && !rebootstrapped) {
+      rebootstrapped = true;
+      const refused = await bootstrapReplDevice({ syncUrl: opts.syncUrl, ...opts.device });
+      if (refused) opts.report(refused);
+      result = await opts.sync.sync();
+      err = opts.sync.getLastError();
+    }
+    const line = syncFailureLine(opts.sync);
+    if (line) {
+      if (line !== failing) opts.report(line);
+      failing = line;
+      return null;
+    }
+    if (failing) opts.report("Sync resumed: the relay acknowledged the pending events");
+    failing = null;
+    rebootstrapped = false;
+    return result;
+  };
+  const cycle = (): Promise<SyncResult | null> => {
+    running ??= once()
+      .catch((err: unknown) => {
+        opts.report(
+          `Sync failed (continuing offline): ${err instanceof Error ? err.message : String(err)}`,
+        );
+        return null;
+      })
+      .finally(() => {
+        running = null;
+      });
+    return running;
+  };
+  const timer = setInterval(() => void cycle(), opts.intervalMs);
+  timer.unref?.();
+  return {
+    cycle,
+    async flush() {
+      if (running) await running;
+      return cycle();
+    },
+    stop() {
+      clearInterval(timer);
+    },
+  };
+}
+
 export interface ReplStartupSyncOptions {
   runtime: PushingRuntime;
   syncUrl: string;
@@ -39,45 +133,40 @@ export interface ReplStartupSyncOptions {
   device?: { deviceId: string; publicKeyHex: string };
   log: (line: string) => void;
   warn: (line: string) => void;
-  /** The periodic push interval (ms). */
+  /** The periodic push interval (ms). Default `PUSH_INTERVAL_MS`. */
   pushIntervalMs?: number;
 }
 
 /**
  * The REPL's sync at startup (index.ts): introduce the device's key to the
  * relay BEFORE the first push — signed device tokens do not verify
- * otherwise — then sync once, printing the result or the refusal.
+ * otherwise — then sync once, printing the result or the refusal, then keep
+ * pushing every interval for the session.
  */
 export async function replStartupSync(opts: ReplStartupSyncOptions): Promise<CliEventPush> {
   const { runtime, syncUrl, motebitId, device, log, warn } = opts;
-  if (device) {
-    const refused = await bootstrapReplDevice({
-      syncUrl,
-      motebitId,
-      deviceId: device.deviceId,
-      publicKeyHex: device.publicKeyHex,
-    });
+  const pushDevice = device ? { motebitId, ...device } : undefined;
+  if (pushDevice) {
+    const refused = await bootstrapReplDevice({ syncUrl, ...pushDevice });
     if (refused) warn(refused);
   }
-  try {
-    log("Syncing...");
-    const result = await runtime.sync.sync();
-    // sync() never rejects: a refused push (401/403) is read here, never
-    // silent — it holds compaction until the relay acknowledges (#962).
-    const failed = syncFailureLine(runtime.sync);
-    if (failed) {
-      warn(failed);
-    } else {
-      log(`Synced: pulled ${result.pulled} events, pushed ${result.pushed} events`);
-    }
+  log("Syncing...");
+  const loop = startPushLoop({
+    sync: runtime.sync,
+    intervalMs: opts.pushIntervalMs ?? PUSH_INTERVAL_MS,
+    report: warn,
+    syncUrl,
+    device: pushDevice,
+  });
+  // The first cycle reports its own refusal (warn); success is printed here.
+  const result = await loop.cycle();
+  if (result) {
+    log(`Synced: pulled ${result.pulled} events, pushed ${result.pushed} events`);
     if (result.conflicts.length > 0) {
       log(`  [${result.conflicts.length} conflicts detected]`);
     }
-  } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : String(err);
-    warn(`Sync failed (continuing offline): ${message}`);
   }
-  return { stop() {} };
+  return loop;
 }
 
 export interface DaemonEventSyncOptions {
@@ -85,27 +174,47 @@ export interface DaemonEventSyncOptions {
   /** This daemon's device, when its identity key opened. */
   device?: PushDevice;
   syncUrl: string;
-  /** The periodic push interval (ms). */
+  /** The periodic push interval (ms). Default `PUSH_INTERVAL_MS`. */
   pushIntervalMs?: number;
 }
 
-/** `motebit run`: its events sync through the daemon's relay event transport. */
+/** A daemon's events: connected through its relay event transport, and pushed. */
+function startDaemonEventSync(
+  runtime: PushingRuntime,
+  relaySync: DaemonRelaySync,
+  opts: DaemonEventSyncOptions,
+): PushLoop {
+  runtime.connectSync(relaySync.transport.remote);
+  const loop = startPushLoop({
+    sync: runtime.sync,
+    intervalMs: opts.pushIntervalMs ?? PUSH_INTERVAL_MS,
+    report: opts.log,
+    syncUrl: opts.syncUrl,
+    device: opts.device,
+  });
+  void loop.cycle();
+  return loop;
+}
+
+/** `motebit run`: its events sync through the daemon's relay event transport, pushed every interval. */
 export function startRunEventSync(
   runtime: PushingRuntime,
   relaySync: DaemonRelaySync,
-  _opts: DaemonEventSyncOptions,
+  opts: DaemonEventSyncOptions,
 ): CliEventPush {
-  runtime.connectSync(relaySync.transport.remote);
-  return { stop() {} };
+  return startDaemonEventSync(runtime, relaySync, opts);
 }
 
-/** `motebit serve` (HTTP transport with a relay): its events' sync. */
+/**
+ * `motebit serve` (HTTP transport with a relay): its events sync exactly as
+ * `run`'s do. It used to connect no event remote at all.
+ */
 export function startServeEventSync(
-  _runtime: PushingRuntime,
-  _relaySync: DaemonRelaySync,
-  _opts: DaemonEventSyncOptions,
+  runtime: PushingRuntime,
+  relaySync: DaemonRelaySync,
+  opts: DaemonEventSyncOptions,
 ): CliEventPush {
-  return { stop() {} };
+  return startDaemonEventSync(runtime, relaySync, opts);
 }
 
 export interface DelegateEventSyncOptions extends DaemonEventSyncOptions {
@@ -115,10 +224,47 @@ export interface DelegateEventSyncOptions extends DaemonEventSyncOptions {
   configuredToken?: string;
 }
 
-/** `motebit delegate`: its events' sync, closed before the command exits. */
-export function openDelegateEventSync(
-  _runtime: PushingRuntime,
-  _opts: DelegateEventSyncOptions,
+/**
+ * `motebit delegate`: its events push while the plan runs, and once more
+ * before the command exits (bounded); a last push that does not finish is
+ * said, and the events stay local for the next process to push.
+ */
+export async function openDelegateEventSync(
+  runtime: PushingRuntime,
+  opts: DelegateEventSyncOptions,
 ): Promise<{ close(): Promise<void> }> {
-  return Promise.resolve({ close: () => Promise.resolve() });
+  const relaySync = await createDaemonRelaySync({
+    syncUrl: opts.syncUrl,
+    motebitId: runtime.motebitId,
+    deviceId: opts.device?.deviceId,
+    privateKey: opts.privateKey,
+    ...(opts.configuredToken != null ? { configuredToken: opts.configuredToken } : {}),
+  });
+  // The device's key is introduced before the first push, as the REPL and
+  // the daemons (registration) do.
+  if (opts.device) {
+    const refused = await bootstrapReplDevice({ syncUrl: opts.syncUrl, ...opts.device });
+    if (refused) opts.log(refused);
+  }
+  const loop = startDaemonEventSync(runtime, relaySync, opts);
+  let closing: Promise<void> | null = null;
+  return {
+    close() {
+      closing ??= (async () => {
+        loop.stop();
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        const late = new Promise<"late">((r) => {
+          timer = setTimeout(() => r("late"), EXIT_FLUSH_MS);
+        });
+        const outcome = await Promise.race([loop.flush(), late]);
+        clearTimeout(timer);
+        if (outcome === "late") {
+          opts.log(
+            "Sync on exit did not finish: the events stay in motebit.db and the next motebit process pushes them",
+          );
+        }
+      })();
+      return closing;
+    },
+  };
 }

@@ -3,38 +3,39 @@
  * CLI construction of a `MotebitRuntime` — the REPL (`createRuntime`), both
  * daemons (`motebit run`, `motebit serve`) and `motebit delegate`.
  *
- * `true`: every CLI runtime opens the one `motebit.db`, and the REPL always
- * syncs it to a relay (`resolveRelayUrl` falls back to the default relay), so
- * an event any of them writes is on its way to that relay. Compaction waits
- * on the relay's acknowledged push cursor — never deletes what it has not
- * acknowledged. The REPL's push authenticates with a device token minted
- * from the identity key (`createReplEventRemote`), so the cursor advances.
+ * Configured exactly when the process syncs its events with a relay: the
+ * REPL and `delegate` always do (`resolveRelayUrl` / `getRelayUrl` fall back
+ * to the default relay); `motebit run` does when a sync URL is set, and
+ * `motebit serve` when it serves over HTTP with one. Each of them then
+ * pushes on its own (`cli-event-push.ts`). A daemon with no relay is not
+ * configured: nothing it writes is on its way to a relay, so compaction does
+ * not wait on one — bounded, as always, by any relay stream `motebit.db`
+ * already records (another process that did push).
  *
- * Stated cost: a CLI that never reaches its relay, or whose push the relay
- * keeps refusing, holds compaction and `motebit.db` grows until a push is
- * acknowledged. The refusal is surfaced as one line (`syncFailureLine`),
- * never silently.
+ * Configured, compaction waits on the relay's acknowledged push cursor —
+ * never deletes what it has not acknowledged. Stated cost: a CLI that never
+ * reaches its relay, or whose push the relay keeps refusing, holds
+ * compaction and `motebit.db` grows until a push is acknowledged. The
+ * refusal is surfaced as one line (`syncFailureLine`), never silently.
  *
  * Every MotebitRuntime construction under `apps/cli/src` builds its config
- * through `cliRuntimeConfig`; `cli-sync-configured-962.test.ts` holds each
- * site to it.
+ * through `cliRuntimeConfig`; `every-configured-surface-pushes-962.test.ts`
+ * holds each entry point's behaviour to it.
  */
 import type { RuntimeConfig } from "@motebit/runtime";
 import type { CliConfig } from "./args.js";
 
-export const CLI_SYNC_CONFIGURED = true;
-
 /**
- * The config every CLI `new MotebitRuntime(` is built from (#962): the
+ * The config every CLI runtime construction is built from (#962): the
  * caller's config with `syncConfigured` decided HERE, last, so no spread at
  * a call site can drop or override it. `relay.syncUrl` is the relay this
- * process syncs its events with (undefined: none configured).
+ * process syncs its events with (undefined or empty: none).
  */
 export function cliRuntimeConfig(
   base: Omit<RuntimeConfig, "syncConfigured">,
-  _relay: { syncUrl: string | undefined },
+  relay: { syncUrl: string | undefined },
 ): RuntimeConfig {
-  return { ...base, syncConfigured: CLI_SYNC_CONFIGURED };
+  return { ...base, syncConfigured: relay.syncUrl != null && relay.syncUrl !== "" };
 }
 
 /**

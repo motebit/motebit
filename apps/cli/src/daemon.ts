@@ -1537,35 +1537,36 @@ export async function handleServe(config: CliConfig): Promise<void> {
     // Wire WebSocket for task dispatch (same adapter as daemon mode)
     const masterToken = config.syncToken ?? process.env["MOTEBIT_API_TOKEN"];
 
+    // The relay event transport (#927, #928): credentials per request, E2E
+    // with the key this process already holds — the socket's catch-up below,
+    // and `serve`'s own events, which it connected nowhere and never pushed
+    // (#962; `startServeEventSync` is the wiring under test).
+    const serveRelaySync = await createDaemonRelaySync({
+      syncUrl,
+      motebitId,
+      deviceId: fullConfigForServe.device_id ?? undefined,
+      privateKey: () => servePrivateKey,
+      ...(masterToken != null ? { configuredToken: masterToken } : {}),
+    });
+    serveEventPush = startServeEventSync(runtime, serveRelaySync, {
+      syncUrl,
+      log,
+      ...(servePrivateKey && fullConfigForServe.device_id && publicKeyHex
+        ? {
+            device: {
+              motebitId,
+              deviceId: fullConfigForServe.device_id,
+              publicKeyHex,
+            },
+          }
+        : {}),
+    });
+
     if (servePrivateKey && deps.handleAgentTask) {
       // Built below by `createRelaySyncSocket`: a fresh signed sync token
       // on every (re)connect, the master token only when none can be
       // minted (#820 — the same once-minted token as `motebit run`'s).
-
-      // The socket's catch-up (#927, #928): credentials per request, E2E
-      // with the key this process already holds.
-      const serveRelaySync = await createDaemonRelaySync({
-        syncUrl,
-        motebitId,
-        deviceId: fullConfigForServe.device_id ?? undefined,
-        privateKey: () => servePrivateKey,
-        ...(masterToken != null ? { configuredToken: masterToken } : {}),
-      });
       const serveEventTransport = serveRelaySync.transport;
-      // `serve`'s own events (#962; `startServeEventSync` is the wiring under test).
-      serveEventPush = startServeEventSync(runtime, serveRelaySync, {
-        syncUrl,
-        log,
-        ...(fullConfigForServe.device_id && publicKeyHex
-          ? {
-              device: {
-                motebitId,
-                deviceId: fullConfigForServe.device_id,
-                publicKeyHex,
-              },
-            }
-          : {}),
-      });
 
       serveWsAdapter = createRelaySyncSocket({
         syncUrl,

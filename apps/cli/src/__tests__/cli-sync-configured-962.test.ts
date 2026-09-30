@@ -1,9 +1,10 @@
 /**
- * #962 C2 — the CLI's `syncConfigured` wiring. Every CLI runtime shares
- * `motebit.db` and the REPL always syncs it to a relay, so compaction waits
- * on the relay's acknowledged push cursor: each construction must pass
- * `CLI_SYNC_CONFIGURED` (true). Dropped or inverted, compaction deletes
- * events no relay has acknowledged, whenever no cursor was persisted.
+ * #962 C2 — the CLI's `syncConfigured` wiring. A CLI runtime that syncs
+ * with a relay (the REPL and `delegate` always; a daemon when it has one) is
+ * configured, so compaction waits on the relay's acknowledged push cursor;
+ * each construction's config is built by `cliRuntimeConfig`, which decides
+ * it from the relay URL, last. Dropped or inverted, compaction deletes events
+ * no relay has acknowledged, whenever no cursor was persisted.
  *
  * The REPL is checked at its real construction seam (`createRuntime`, the
  * runtime's own answer). Every entry point's behaviour — push liveness,
@@ -26,7 +27,7 @@ await vi.hoisted(async () => {
   process.env["MOTEBIT_CONFIG_DIR"] = fs.mkdtempSync(p.join(os.tmpdir(), "motebit-962-cfg-"));
 });
 
-import { CLI_SYNC_CONFIGURED } from "../sync-configured.js";
+import { cliRuntimeConfig } from "../sync-configured.js";
 import { createRuntime, InMemoryToolRegistry } from "../runtime-factory.js";
 import { parseCliArgs } from "../args.js";
 
@@ -77,9 +78,33 @@ function runtimeSites(): Array<{ file: string; builtBy: string | null }> {
   return sites;
 }
 
+/** The callees `daemon.ts` calls, by name, with how many call sites each. */
+function daemonCalls(): Map<string, number> {
+  const file = join(SRC, "daemon.ts");
+  const sf = ts.createSourceFile(file, readFileSync(file, "utf-8"), ts.ScriptTarget.Latest, true);
+  const calls = new Map<string, number>();
+  const visit = (node: ts.Node): void => {
+    if (ts.isCallExpression(node) && ts.isIdentifier(node.expression)) {
+      calls.set(node.expression.text, (calls.get(node.expression.text) ?? 0) + 1);
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sf);
+  return calls;
+}
+
 describe("#962 C2 — the CLI's syncConfigured wiring", () => {
-  it("CLI_SYNC_CONFIGURED is true: the CLI always syncs motebit.db to a relay", () => {
-    expect(CLI_SYNC_CONFIGURED).toBe(true);
+  it("cliRuntimeConfig: a relay URL ⇒ configured; none ⇒ not; it is set last", () => {
+    expect(cliRuntimeConfig({ motebitId: "m" }, { syncUrl: "https://r" }).syncConfigured).toBe(
+      true,
+    );
+    expect(cliRuntimeConfig({ motebitId: "m" }, { syncUrl: undefined }).syncConfigured).toBe(false);
+    expect(cliRuntimeConfig({ motebitId: "m" }, { syncUrl: "" }).syncConfigured).toBe(false);
+    // A caller's own value never survives: the relay decides.
+    const smuggled = { motebitId: "m", syncConfigured: false } as Parameters<
+      typeof cliRuntimeConfig
+    >[0];
+    expect(cliRuntimeConfig(smuggled, { syncUrl: "https://r" }).syncConfigured).toBe(true);
   });
 
   it("the REPL runtime (createRuntime) answers configured", async () => {
@@ -100,6 +125,15 @@ describe("#962 C2 — the CLI's syncConfigured wiring", () => {
     } finally {
       moteDb.close();
     }
+  });
+
+  it("every daemon starts its event push (run and serve), and resolves its relay once", () => {
+    // Secondary guard: the push each daemon starts is held behaviourally by
+    // every-configured-surface-pushes-962.test.ts; this holds the calls.
+    const calls = daemonCalls();
+    expect(calls.get("startRunEventSync")).toBe(1);
+    expect(calls.get("startServeEventSync")).toBe(1);
+    expect(calls.get("daemonRelayUrl")).toBe(2);
   });
 
   it("every `new MotebitRuntime(` in apps/cli/src builds its config with cliRuntimeConfig", () => {

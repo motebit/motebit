@@ -210,6 +210,15 @@ export interface PushCompactionFloorOptions {
    * exist bound the floor either way.
    */
   syncConfigured?: boolean;
+  /**
+   * The identity being compacted (#962 round 4). Only its relay streams
+   * bound the floor: every stream key names its identity (`…#<motebit_id>`),
+   * and one local store can hold another identity's cursors (a restored or
+   * re-created identity on the same browser origin or database). Counted,
+   * the OTHER identity's acknowledged cursor let compaction delete events of
+   * this one that no relay had received. Absent: every stream counts.
+   */
+  motebitId?: string;
 }
 
 /**
@@ -254,6 +263,7 @@ export async function pushCompactionFloor(
     const acked = new Map<string, number>();
     for (const [key, store] of keys) {
       const stream = relayStreamOfPushKey(key);
+      if (options.motebitId != null && !stream.endsWith(`#${options.motebitId}`)) continue;
       const cursor = (await store.getSyncSeqCursor(key)) ?? 0;
       acked.set(stream, Math.max(acked.get(stream) ?? 0, cursor));
     }

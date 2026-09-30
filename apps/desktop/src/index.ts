@@ -2448,6 +2448,11 @@ export class DesktopApp {
     }
   }
 
+  /** Run `stop` when sync stops; returns an unsubscribe. */
+  onSyncStop(stop: () => void): () => void {
+    return this.sync.onStop(stop);
+  }
+
   /** Start serving — register with relay and accept delegations. */
   startServing(): Promise<{ ok: boolean; error?: string }> {
     return this.sync.startServing(this.publicKey);
