@@ -13,15 +13,25 @@
  * the token AND the key, so a PR editing its own workflow could plant a
  * correctly-signed entry (C3) — signing cannot stop the key holder.
  *
- * What this gate holds (rules in scripts/lib/turbo-remote-cache.ts):
+ * A round-2 cold review then showed the gate matched the BAD shape and so
+ * missed every shape it did not name: a computed `environment:` name,
+ * `toJSON(secrets)`, `secrets[format(…)]`, `secrets: inherit`, a cache action
+ * restoring `.turbo`, a committed `.turbo/config.json`. So the gate is now a
+ * deny-by-default LAW (rules in scripts/lib/turbo-remote-cache.ts):
  *   - turbo.json: `remoteCache.signature: true` and
  *     `futureFlags.longerSignatureKey: true`; nothing sets TURBO_SIGNATURE off
- *   - the token and key are referenced ONLY by jobs holding the
- *     `turbo-cache-writer` environment via a main-push-only reference, from
- *     environment-only secret names; never at workflow level
- *   - outside those jobs nothing writes the remote: env at workflow, job,
- *     container and step level (real YAML parse), shell assignments, $GITHUB_ENV
- *     writes, and every turbo invocation form with a remote-writing flag
+ *   - L1 secrets: every secret reference in every workflow and local action is
+ *     a literal `secrets.NAME` granted per workflow+job in SECRET_ALLOWLIST;
+ *     the writer's two secrets only in the step env of ci.yml#check's turbo
+ *     steps
+ *   - L2 environments: every `environment:` is its job's exact allowlisted
+ *     string
+ *   - L3 cache state: no cache action restores turbo state or `dist`, no
+ *     cross-run artifact download, no tracked file under `.turbo/`
+ *   - outside the writer nothing writes the remote: env at workflow, job,
+ *     container and step level (real YAML parse), shell assignments,
+ *     $GITHUB_ENV writes, and every turbo invocation form with a
+ *     remote-writing flag
  *   - publish.yml / release.yml pin a local-only TURBO_CACHE (build from source)
  *   - .husky/pre-push pins a non-writing TURBO_CACHE; root scripts never write
  *
@@ -39,11 +49,16 @@ import { fileURLToPath } from "node:url";
 
 import { failWithRepair } from "./lib/gate-report.js";
 import {
+  checkLocalAction,
   checkPackageScripts,
   checkPrePush,
   checkTurboJson,
   checkWorkflow,
+  ENVIRONMENT_ALLOWLIST,
   EVALUATED_VARS,
+  type LawOptions,
+  SECRET_ALLOWLIST,
+  trackedTurboFiles,
   LOCAL_ONLY_CACHE,
   PUBLISH_WORKFLOWS,
   turboScripts,
@@ -67,9 +82,30 @@ export interface GateResult {
   cacheDecls: number;
   githubEnvWrites: number;
   rootScripts: number;
+  /** Local composite actions scanned (`.github/actions/**\/action.y?ml`). */
+  localActions: number;
+  /** Every literal `secrets.NAME` reference, as `workflow#job:NAME`. */
+  secretRefs: string[];
+  /** SECRET_ALLOWLIST entries no reference uses (stale grants — informational). */
+  unusedGrants: string[];
+  /** Every declared job environment, as `workflow#job: name`. */
+  environments: string[];
+  cacheSteps: number;
+  /** Files `git ls-files` lists in the repository (the tracked-`.turbo/` scan). */
+  trackedFiles: number;
 }
 
-export function runTurboRemoteCacheGate(root: string): GateResult {
+function listActions(dir: string, rel: string): string[] {
+  if (!existsSync(dir)) return [];
+  const out: string[] = [];
+  for (const e of readdirSync(dir, { withFileTypes: true })) {
+    if (e.isDirectory()) out.push(...listActions(join(dir, e.name), `${rel}/${e.name}`));
+    else if (/^action\.ya?ml$/.test(e.name)) out.push(`${rel}/${e.name}`);
+  }
+  return out.sort();
+}
+
+export function runTurboRemoteCacheGate(root: string, law: LawOptions = {}): GateResult {
   const violations: string[] = [];
   const read = (rel: string): string | null => {
     const p = join(root, rel);
@@ -114,10 +150,33 @@ export function runTurboRemoteCacheGate(root: string): GateResult {
     cacheDecls: 0,
     githubEnvWrites: 0,
     rootScripts,
+    localActions: 0,
+    secretRefs: [],
+    unusedGrants: [],
+    environments: [],
+    cacheSteps: 0,
+    trackedFiles: 0,
+  };
+  const used = new Set<string>();
+  const pendingUses: string[] = [];
+  const collect = (wf: string, v: ReturnType<typeof checkWorkflow>, action: boolean): void => {
+    for (const u of v.secretUses) {
+      const job = action
+        ? "(action)"
+        : u.path[0] === "jobs" && typeof u.path[1] === "string"
+          ? u.path[1]
+          : "(workflow)";
+      r.secretRefs.push(`${wf}#${job}:${u.name}`);
+      used.add(`${wf}#${job}:${u.name}`);
+    }
+    r.environments.push(...v.environments);
+    r.cacheSteps += v.cacheSteps;
   };
   for (const f of files) {
     const rel = `.github/workflows/${f}`;
-    const v = checkWorkflow(rel, readFileSync(join(wfDir, f), "utf8"), scripts);
+    const v = checkWorkflow(rel, readFileSync(join(wfDir, f), "utf8"), scripts, law);
+    collect(f, v, false);
+    pendingUses.push(...v.localUses);
     violations.push(...v.violations);
     if (v.holdsToken) r.tokenHolders.push(f);
     r.writerJobs.push(...v.writerJobs);
@@ -130,6 +189,57 @@ export function runTurboRemoteCacheGate(root: string): GateResult {
   }
   if (files.length === 0)
     violations.push(".github/workflows: no workflow files found — the gate examined nothing");
+
+  // Local actions: everything under .github/actions, plus every `uses: ./path`
+  // any workflow or action calls (transitively) — wherever it lives.
+  const queue = listActions(join(root, ".github", "actions"), ".github/actions");
+  queue.push(...pendingUses);
+  const seen = new Set<string>();
+  while (queue.length > 0) {
+    const ref = queue.shift()!;
+    let a = ref;
+    if (!/\/action\.ya?ml$/.test(a)) {
+      if (a.startsWith(".github/workflows/")) continue; // a reusable workflow: scanned above
+      const found = ["action.yml", "action.yaml"]
+        .map((f) => `${a}/${f}`)
+        .find((f) => existsSync(join(root, f)));
+      if (found == null) {
+        violations.push(
+          `${ref}: a step calls local action \`./${ref}\` but no action.yml/action.yaml is there — the gate cannot evaluate what it runs`,
+        );
+        continue;
+      }
+      a = found;
+    }
+    if (seen.has(a)) continue;
+    seen.add(a);
+    r.localActions++;
+    const v = checkLocalAction(a, readFileSync(join(root, a), "utf8"), scripts, law);
+    violations.push(...v.violations);
+    collect(a, v, true);
+    r.runScripts += v.runScripts;
+    r.turboLines += v.turboLines;
+    queue.push(...v.localUses);
+  }
+  r.unusedGrants = SECRET_ALLOWLIST.map((g) => `${g.workflow}#${g.job}:${g.secret}`).filter(
+    (k) => !used.has(k),
+  );
+
+  if (!law.disabled?.has("tracked-turbo-state")) {
+    const tracked = trackedTurboFiles(root);
+    if (tracked == null) {
+      violations.push(
+        `${root}: not a git work tree — the gate cannot list tracked files, so it cannot prove no \`.turbo/\` state is committed`,
+      );
+    } else {
+      r.trackedFiles = tracked.scanned;
+      for (const f of tracked.turbo) {
+        violations.push(
+          `${f}: tracked under a \`.turbo/\` directory — a committed \`.turbo/config.json\` overrides turbo.json (e.g. \`{"signature":false}\` uploads UNSIGNED; probe scenario \`committed-turbo-config\`); \`git rm --cached\` it`,
+        );
+      }
+    }
+  }
   return r;
 }
 
@@ -147,12 +257,18 @@ function main(): void {
       sites: r.violations,
       canonical:
         "scripts/lib/turbo-remote-cache.ts (the rules) + docs/ops/RUNBOOK.md § Turbo remote cache (the policy and OPERATOR steps)",
-      fix: `In turbo.json set "remoteCache": { "signature": true } and "futureFlags": { "longerSignatureKey": true }. Delete TURBO_TOKEN / TURBO_REMOTE_CACHE_SIGNATURE_KEY from every workflow-level env and every job that is not the writer. On the one writer job set \`environment: ${WRITER_ENVIRONMENT_EXPR}\` and job-level \`TURBO_TOKEN: \${{ secrets.${WRITER_TOKEN_SECRET} }}\`, \`TURBO_REMOTE_CACHE_SIGNATURE_KEY: \${{ secrets.${WRITER_KEY_SECRET} }}\`. Remove any remote-writing TURBO_CACHE / TURBO_FORCE / TURBO_REMOTE_ONLY / $GITHUB_ENV write and any turbo --force / --remote-only / remote-writing --cache= outside it. In ${PUBLISH_WORKFLOWS.join(" and ")} pin \`TURBO_CACHE: ${LOCAL_ONLY_CACHE}\` at workflow level. Then run \`pnpm check-turbo-remote-cache\` and \`pnpm probe-turbo-remote-cache-signing\`.`,
+      fix: `In turbo.json set "remoteCache": { "signature": true } and "futureFlags": { "longerSignatureKey": true }. Delete TURBO_TOKEN / TURBO_REMOTE_CACHE_SIGNATURE_KEY from every workflow-level env and every job that is not the writer. On the one writer job (ci.yml#check) set \`environment: ${WRITER_ENVIRONMENT_EXPR}\` and, in the STEP-level env of each step that runs turbo only, \`TURBO_TOKEN: \${{ secrets.${WRITER_TOKEN_SECRET} }}\` and \`TURBO_REMOTE_CACHE_SIGNATURE_KEY: \${{ secrets.${WRITER_KEY_SECRET} }}\`. Reference secrets only as a bare literal \`\${{ secrets.NAME }}\` granted in SECRET_ALLOWLIST (never toJSON(secrets), secrets[…], format(…secrets…) or a job-level \`secrets:\`); give a job an \`environment:\` only as its ENVIRONMENT_ALLOWLIST literal; never cache \`.turbo\`, \`node_modules/.cache/turbo\` or \`dist\` with a cache action, and \`git rm --cached\` anything tracked under \`.turbo/\`. Remove any remote-writing TURBO_CACHE / TURBO_FORCE / TURBO_REMOTE_ONLY / $GITHUB_ENV write and any turbo --force / --remote-only / remote-writing --cache= outside it. In ${PUBLISH_WORKFLOWS.join(" and ")} pin \`TURBO_CACHE: ${LOCAL_ONLY_CACHE}\` at workflow level. Then run \`pnpm check-turbo-remote-cache\` and \`pnpm probe-turbo-remote-cache-signing\`.`,
       doctrine: "docs/doctrine/composition-preserves-enforcement.md",
     });
   }
   console.log(
-    `✓ turbo remote cache: turbo.json signs with longerSignatureKey; ${r.workflows} workflow(s), ${r.jobs} job(s) parsed as YAML; writer job(s) holding \`${WRITER_ENVIRONMENT}\` on main-push only: ${r.writerJobs.join(", ") || "none"}; evaluated ${EVALUATED_VARS.join("/")} in ${r.envScopes} env scope(s) (workflow, job, container, step; block/flow maps, quoted keys), ${r.runScripts} run: script(s) for shell assignments, $GITHUB_ENV writes (${r.githubEnvWrites} found) and ${r.turboLines} turbo invocation(s) in any form (turbo, pnpm [exec|dlx] turbo, npx turbo@x, node_modules/.bin/turbo, root turbo scripts) with --cache/--force/--remote-only/--remote-cache-read-only; ${r.cacheDecls} TURBO_CACHE declaration(s); ${PUBLISH_WORKFLOWS.join(", ")} build from source; .husky/pre-push and ${r.rootScripts} root package.json script(s) never write remote. Not examined: composite actions, reusable workflows in other repos, scripts called from run: steps, non-root package.json scripts.`,
+    `✓ turbo remote cache: turbo.json signs with longerSignatureKey; ${r.workflows} workflow(s), ${r.jobs} job(s) and ${r.localActions} local action(s) parsed as YAML.\n` +
+      `  L1 secrets: ${r.secretRefs.length} literal secrets.NAME reference(s) in every string and key (\${{ }} bodies and if:), each granted by SECRET_ALLOWLIST (${SECRET_ALLOWLIST.length} grant(s)); no toJSON(secrets) / secrets[…] / function call on secrets / job-level secrets:. Writer secrets only on turbo steps of ${r.writerJobs.join(", ") || "none"}.` +
+      (r.unusedGrants.length > 0 ? ` Unused grant(s): ${r.unusedGrants.join(", ")}.` : "") +
+      `\n  L2 environments: ${r.environments.length} declared, each its exact ENVIRONMENT_ALLOWLIST (${ENVIRONMENT_ALLOWLIST.length} grant(s)) value: ${r.environments.join("; ") || "none"}.\n` +
+      `  L3 cache state: ${r.cacheSteps} cache action step(s) (none may restore .turbo / .cache/turbo / dist / a root-wide glob); no cross-run download-artifact; ${r.trackedFiles} tracked file(s), none under .turbo/.\n` +
+      `  Remote-write rules: ${EVALUATED_VARS.join("/")} in ${r.envScopes} env scope(s) (workflow, job, container, step), ${r.runScripts} run: script(s) for shell assignments, $GITHUB_ENV writes (${r.githubEnvWrites} found) and ${r.turboLines} turbo invocation(s) in any form (turbo, pnpm [exec|dlx] turbo, npx turbo@x, node_modules/.bin/turbo, root turbo scripts) with --cache/--force/--remote-only/--remote-cache-read-only; ${r.cacheDecls} TURBO_CACHE declaration(s); ${PUBLISH_WORKFLOWS.join(", ")} build from source; .husky/pre-push and ${r.rootScripts} root package.json script(s) never write remote.\n` +
+      `  Not examined: reusable workflows and actions in OTHER repos (their inputs are scanned, their bodies are not), scripts called from run: steps, non-root package.json scripts, secrets a third-party action reads from env.`,
   );
 }
 

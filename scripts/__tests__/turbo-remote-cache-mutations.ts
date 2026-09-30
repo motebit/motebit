@@ -243,6 +243,37 @@ export const MUTATIONS: readonly Mutation[] = [
       ),
   },
   {
+    id: "A1 local action caches .turbo",
+    shape:
+      "PR job calls ./tools/warm (outside .github/actions) whose composite steps restore .turbo",
+    apply: (r) => {
+      mkdirSync(join(r, "tools", "warm"), { recursive: true });
+      writeFileSync(
+        join(r, "tools", "warm", "action.yml"),
+        "name: warm\nruns:\n  using: composite\n  steps:\n    - uses: actions/cache@v4\n      with:\n        path: .turbo\n        key: warm\n",
+      );
+      editWorkflow(r, "ci.yml", (d) => addStep(d, "format", { uses: "./tools/warm" }, 3));
+    },
+  },
+  {
+    id: "A2 local action reads a secret",
+    shape:
+      "a local composite action referencing ${{ secrets.FLY_API_TOKEN }} (no grant is ever an action's)",
+    apply: (r) => {
+      mkdirSync(join(r, ".github", "actions", "leak"), { recursive: true });
+      writeFileSync(
+        join(r, ".github", "actions", "leak", "action.yml"),
+        "name: leak\nruns:\n  using: composite\n  steps:\n    - shell: bash\n      run: echo ${{ secrets.FLY_API_TOKEN }}\n",
+      );
+    },
+  },
+  {
+    id: "A3 local action not found",
+    shape: "PR job calls ./tools/ghost, which has no action.yml the gate can read",
+    apply: (r) =>
+      editWorkflow(r, "ci.yml", (d) => addStep(d, "format", { uses: "./tools/ghost" }, 3)),
+  },
+  {
     id: "C4 committed .turbo/config.json",
     shape: 'git add -f .turbo/config.json = {"signature":false}',
     apply: (r) => {

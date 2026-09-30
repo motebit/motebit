@@ -18,14 +18,31 @@
  *      the protected GitHub Environment `turbo-cache-writer` (deployment
  *      branches: main) as `TURBO_WRITER_TOKEN` / `TURBO_WRITER_SIGNATURE_KEY`
  *      — names no repo-level secret carries, so nothing resolves them outside
- *      that environment. A WRITER JOB is a job whose `environment:` names
- *      `turbo-cache-writer` and can only resolve on a push to main: either the
- *      canonical `${{ github.event_name == 'push' && github.ref ==
- *      'refs/heads/main' && 'turbo-cache-writer' || '' }}`, or the literal
- *      name in a workflow whose only trigger is `push` to `[main]`. Any other
- *      reference (a pull_request / merge_group / workflow_call job naming it)
- *      is a violation — GitHub's deployment-branch rule refuses it at run
- *      time, and the gate refuses it at review time.
+ *      that environment. The WRITER JOB is exactly `ci.yml#check` with
+ *      `environment:` equal, as a string, to `WRITER_ENVIRONMENT_EXPR` (it
+ *      resolves only on a push to main). The two secrets appear ONLY in the
+ *      STEP-level `env` of that job's steps that run turbo — never job- or
+ *      workflow-level, where every step (install lifecycle scripts,
+ *      third-party actions, tests) would see them.
+ *
+ *   THE LAW (#997 round 2) — deny-by-default, never pattern-matching for a
+ *   bad shape. Over every workflow AND every local action:
+ *     (L1) SECRETS. The only permitted secret reference is a literal
+ *          `secrets.NAME` inside `${{ }}` (or an `if:`) with (workflow, job,
+ *          NAME) in `SECRET_ALLOWLIST`. `toJSON(secrets)`, `secrets[...]`,
+ *          any function call in an expression touching secrets, a job-level
+ *          `secrets:` (`inherit` or a map), or an unlisted name is RED.
+ *     (L2) ENVIRONMENTS. Every job `environment:` (string or `{ name }`) must
+ *          equal, as an exact string, its (workflow, job) entry in
+ *          `ENVIRONMENT_ALLOWLIST`. An expression is admitted only as the
+ *          writer's exact guarded expression on the writer job.
+ *     (L3) CACHE STATE. A cache action (`*\/cache`, `*\/cache/restore|save`)
+ *          whose `path` touches `.turbo`, `.cache/turbo`, `dist`, a
+ *          root-wide glob or an expression is RED; so is a cross-run
+ *          `download-artifact` (`run-id` / `repository`), and any tracked
+ *          file under a `.turbo/` directory (a committed
+ *          `.turbo/config.json` overrides turbo.json — proven by the probe's
+ *          `committed-turbo-config` scenario).
  *
  *   3. NOTHING OUTSIDE A WRITER JOB TOUCHES THE REMOTE. Evaluated on a real
  *      YAML parse (block and flow maps, quoted keys, anchors) at workflow, job
@@ -57,6 +74,8 @@
  * expression, a TURBO_CACHE expression of an unknown shape) is a violation,
  * never "fine".
  */
+import { spawnSync } from "node:child_process";
+
 import { parse as parseYaml } from "yaml";
 
 export const MAIN_REF_TEST = "github.ref == 'refs/heads/main'";
@@ -73,6 +92,108 @@ export const WRITER_TOKEN_SECRET = "TURBO_WRITER_TOKEN";
 export const WRITER_KEY_SECRET = "TURBO_WRITER_SIGNATURE_KEY";
 /** Workflows that publish to npm: build from source, never from the cache. */
 export const PUBLISH_WORKFLOWS = ["publish.yml", "release.yml"] as const;
+
+/** The one writer job: `ci.yml` job `check`. */
+export const WRITER_WORKFLOW = "ci.yml";
+export const WRITER_JOB = "check";
+
+/** The rules of the law, by id — each can be switched off by the gate-mutation test. */
+export const LAW_RULES = [
+  "secret-shape",
+  "secret-allowlist",
+  "writer-secret-placement",
+  "environment-allowlist",
+  "cache-state",
+  "tracked-turbo-state",
+] as const;
+export type LawRule = (typeof LAW_RULES)[number];
+export interface LawOptions {
+  /** Rules to switch OFF (test-only: proves each rule is load-bearing). */
+  disabled?: ReadonlySet<LawRule>;
+}
+
+/** Scope name for a reference outside any job (workflow-level `env`, `run-name`, …). */
+export const WORKFLOW_SCOPE = "(workflow)";
+
+export interface SecretGrant {
+  /** Workflow file basename, or a local action's repo-relative path. */
+  workflow: string;
+  /** Job id, or `(workflow)` for workflow-level. */
+  job: string;
+  secret: string;
+}
+
+/**
+ * Every secret reference this repository makes, by workflow + job (L1).
+ * Derived 2026-09-30 from the workflows as they stand; anything not listed
+ * is RED. `GITHUB_TOKEN` is listed too: it is a secret reference like any
+ * other, and a new job wanting it is a reviewable diff here.
+ */
+export const SECRET_ALLOWLIST: readonly SecretGrant[] = [
+  { workflow: "archetype-conformance.yml", job: "conformance", secret: "PROBE_DELEGATOR_SEED_HEX" },
+  { workflow: "archetype-conformance.yml", job: "conformance", secret: "STG_SOLANA_RPC_URL" },
+  { workflow: "archetype-conformance.yml", job: "prod-presence", secret: "PROD_AUTH_TOKEN" },
+  { workflow: "ci.yml", job: "check", secret: WRITER_TOKEN_SECRET },
+  { workflow: "ci.yml", job: "check", secret: WRITER_KEY_SECRET },
+  { workflow: "cla.yml", job: "cla", secret: "GITHUB_TOKEN" },
+  ...[
+    "deploy-archetype-staging.yml",
+    "deploy-auditor.yml",
+    "deploy-browser-sandbox.yml",
+    "deploy-clerk.yml",
+    "deploy-code-review.yml",
+    "deploy-embed.yml",
+    "deploy-read-url.yml",
+    "deploy-research.yml",
+    "deploy-summarize.yml",
+    "deploy-sync-staging.yml",
+    "deploy-sync.yml",
+    "deploy-web-search.yml",
+  ].map((workflow) => ({ workflow, job: "deploy", secret: "FLY_API_TOKEN" })),
+  { workflow: "deploy-freshness.yml", job: "freshness", secret: "FLY_API_TOKEN" },
+  { workflow: "deploy-proxy.yml", job: "deploy", secret: "VERCEL_TOKEN" },
+  { workflow: "deploy-proxy.yml", job: "deploy", secret: "VERCEL_ORG_ID" },
+  { workflow: "deploy-proxy.yml", job: "deploy", secret: "VERCEL_PROJECT_ID" },
+  { workflow: "deploy-sync-staging.yml", job: "gate", secret: "GITHUB_TOKEN" },
+  { workflow: "deploy-sync.yml", job: "gate", secret: "GITHUB_TOKEN" },
+  { workflow: "deploy-web.yml", job: "deploy", secret: "VERCEL_TOKEN" },
+  { workflow: "deploy-web.yml", job: "deploy", secret: "VERCEL_ORG_ID" },
+  { workflow: "deploy-web.yml", job: "deploy", secret: "VERCEL_WEB_PROJECT_ID" },
+  { workflow: "model-catalog-drift.yml", job: "drift", secret: "ANTHROPIC_API_KEY" },
+  { workflow: "model-catalog-drift.yml", job: "drift", secret: "OPENAI_API_KEY" },
+  ...[
+    "ANTHROPIC_API_KEY",
+    "OPENAI_API_KEY",
+    "GOOGLE_API_KEY",
+    "GROQ_API_KEY",
+    "DEEPSEEK_API_KEY",
+  ].map((secret) => ({ workflow: "provider-probe.yml", job: "probe", secret })),
+  { workflow: "publish-images.yml", job: "relay", secret: "GITHUB_TOKEN" },
+  { workflow: "release-desktop.yml", job: "create-release", secret: "GITHUB_TOKEN" },
+  { workflow: "release-mobile.yml", job: "build-mobile", secret: "EXPO_TOKEN" },
+  { workflow: "release-train.yml", job: WORKFLOW_SCOPE, secret: "APP_ID" },
+  { workflow: "release-train.yml", job: "merge-version-packages-pr", secret: "APP_ID" },
+  { workflow: "release-train.yml", job: "merge-version-packages-pr", secret: "APP_PRIVATE_KEY" },
+  { workflow: "release-train.yml", job: "merge-version-packages-pr", secret: "GITHUB_TOKEN" },
+  { workflow: "release.yml", job: WORKFLOW_SCOPE, secret: "APP_ID" },
+  { workflow: "release.yml", job: "release", secret: "APP_ID" },
+  { workflow: "release.yml", job: "release", secret: "APP_PRIVATE_KEY" },
+  { workflow: "release.yml", job: "release", secret: "GITHUB_TOKEN" },
+];
+
+export interface EnvironmentGrant {
+  workflow: string;
+  job: string;
+  /** The exact `environment:` string (or `environment.name`). */
+  environment: string;
+}
+
+/** Every job `environment:` this repository declares (L2); anything else is RED. */
+export const ENVIRONMENT_ALLOWLIST: readonly EnvironmentGrant[] = [
+  { workflow: "archetype-conformance.yml", job: "conformance", environment: "staging" },
+  { workflow: "archetype-conformance.yml", job: "prod-presence", environment: "production" },
+  { workflow: WRITER_WORKFLOW, job: WRITER_JOB, environment: WRITER_ENVIRONMENT_EXPR },
+];
 
 /** Every TURBO_* variable this gate evaluates. */
 const CREDENTIAL_VARS = ["TURBO_TOKEN", "TURBO_REMOTE_CACHE_SIGNATURE_KEY"] as const;
@@ -288,7 +409,7 @@ export function judgeVar(
     case "TURBO_TOKEN":
     case "TURBO_REMOTE_CACHE_SIGNATURE_KEY": {
       if (scope.workflowLevel) {
-        return `${upper} at WORKFLOW level hands it to every job (pull_request and merge_group included) — declare it only on the \`${WRITER_ENVIRONMENT}\` writer job`;
+        return `${upper} at WORKFLOW level hands it to every job (pull_request included) — declare it only on the \`${WRITER_ENVIRONMENT}\` writer job`;
       }
       if (!scope.writer) {
         return `${upper} outside the \`${WRITER_ENVIRONMENT}\` writer job — only a main-push job may hold the remote-cache token or signing key`;
@@ -413,46 +534,266 @@ export function checkTurboJson(text: string): string[] {
 type Obj = Record<string, unknown>;
 const isObj = (v: unknown): v is Obj => v != null && typeof v === "object" && !Array.isArray(v);
 
-/** The workflow's trigger names, and the push branch filter (null: unfiltered). */
-export function workflowTriggers(on: unknown): {
-  events: string[];
-  pushBranches: string[] | null;
-  pushOther: boolean;
-} {
-  if (typeof on === "string") return { events: [on], pushBranches: null, pushOther: false };
-  if (Array.isArray(on)) return { events: on.map(String), pushBranches: null, pushOther: false };
-  if (!isObj(on)) return { events: [], pushBranches: null, pushOther: false };
-  const push = on.push;
-  let pushBranches: string[] | null = null;
-  let pushOther = false;
-  if (isObj(push)) {
-    if (Array.isArray(push.branches)) pushBranches = push.branches.map(String);
-    pushOther = "tags" in push || "branches-ignore" in push || "tags-ignore" in push;
+// ── the law: secrets, environments, cache state ─────────────────────────────
+
+/** Is this job THE writer (`ci.yml#check` with the exact guarded environment)? */
+export function isWriterJob(workflow: string, jobId: string, environment: unknown): boolean {
+  return (
+    workflow === WRITER_WORKFLOW && jobId === WRITER_JOB && environment === WRITER_ENVIRONMENT_EXPR
+  );
+}
+
+type Path = readonly (string | number)[];
+
+/** Every string in a parsed YAML tree — mapping KEYS included — with its path. */
+export function walkStrings(
+  node: unknown,
+  visit: (path: Path, text: string, isKey: boolean) => void,
+  path: Path = [],
+): void {
+  if (typeof node === "string") visit(path, node, false);
+  else if (Array.isArray(node)) node.forEach((n, i) => walkStrings(n, visit, [...path, i]));
+  else if (isObj(node)) {
+    for (const [k, v] of Object.entries(node)) {
+      visit([...path, k], k, true);
+      walkStrings(v, visit, [...path, k]);
+    }
+  } else if (node != null && typeof node !== "boolean" && typeof node !== "number") {
+    visit(path, String(node), false);
   }
-  return { events: Object.keys(on), pushBranches, pushOther };
 }
 
 /**
- * Is this job's `environment:` a reference to the writer environment, and is
- * that reference admitted (resolvable only on a push to main)?
+ * The expression texts GitHub evaluates in one string: every `${{ … }}`
+ * body, and — for an `if:` value — the whole string (an implicit expression).
+ * An unterminated `${{` yields the rest of the string (fail closed).
  */
-export function judgeWriterEnvironment(
-  environment: unknown,
-  triggers: ReturnType<typeof workflowTriggers>,
-): { references: boolean; admitted: boolean } {
-  const raw = isObj(environment) ? environment.name : environment;
-  const text = JSON.stringify(environment ?? null);
-  if (!text.includes(WRITER_ENVIRONMENT)) return { references: false, admitted: false };
-  if (typeof raw !== "string") return { references: true, admitted: false };
-  if (norm(raw) === norm(WRITER_ENVIRONMENT_EXPR)) return { references: true, admitted: true };
-  const pushMainOnly =
-    triggers.events.length === 1 &&
-    triggers.events[0] === "push" &&
-    !triggers.pushOther &&
-    triggers.pushBranches != null &&
-    triggers.pushBranches.length === 1 &&
-    triggers.pushBranches[0] === "main";
-  return { references: true, admitted: raw.trim() === WRITER_ENVIRONMENT && pushMainOnly };
+export function expressionsIn(text: string, isIf: boolean): string[] {
+  const out: string[] = [];
+  let i = 0;
+  for (;;) {
+    const open = text.indexOf("${{", i);
+    if (open < 0) break;
+    const close = text.indexOf("}}", open + 3);
+    out.push(text.slice(open + 3, close < 0 ? undefined : close));
+    if (close < 0) break;
+    i = close + 2;
+  }
+  if (isIf && out.length === 0 && text.trim() !== "") out.push(text);
+  return out;
+}
+
+export interface SecretUse {
+  /** Upper-cased secret name — GitHub resolves property access case-insensitively. */
+  name: string;
+  path: Path;
+  /** The raw string the reference sits in. */
+  text: string;
+}
+
+/**
+ * Judge every `secrets` occurrence in one expression. A literal
+ * `secrets.NAME` (not followed by `.`, `[` or `(`) in an expression that
+ * calls no function is a use; anything else is a shape violation.
+ */
+export function judgeSecretExpression(expr: string): { names: string[]; bad: string | null } {
+  const names: string[] = [];
+  const re = /\bsecrets\b/gi;
+  let m: RegExpExecArray | null;
+  let any = false;
+  while ((m = re.exec(expr)) != null) {
+    any = true;
+    const rest = expr.slice(m.index + m[0].length);
+    const lit = /^\s*\.\s*([A-Za-z_][A-Za-z0-9_]*)(?!\s*[.[(\w-])/.exec(rest);
+    if (lit == null) {
+      return {
+        names,
+        bad: `\`secrets\` used as a value, not as a literal \`secrets.NAME\` (\`${expr.trim()}\`) — toJSON(secrets) / secrets[…] / a computed name can reach any secret, allowlisted or not`,
+      };
+    }
+    names.push(lit[1]!.toUpperCase());
+  }
+  if (any && /[A-Za-z_][A-Za-z0-9_]*\s*\(/.test(expr)) {
+    return {
+      names,
+      bad: `a function call in an expression that touches secrets (\`${expr.trim()}\`) — format()/join()/toJSON() can re-encode or re-select a secret; reference \`secrets.NAME\` bare`,
+    };
+  }
+  return { names, bad: null };
+}
+
+/** Path → the job id it sits in, or `(workflow)`. */
+function jobOf(path: Path): string {
+  return path[0] === "jobs" && typeof path[1] === "string" ? path[1] : WORKFLOW_SCOPE;
+}
+
+const WRITER_VAR_FOR: Record<string, string> = {
+  [WRITER_TOKEN_SECRET]: "TURBO_TOKEN",
+  [WRITER_KEY_SECRET]: "TURBO_REMOTE_CACHE_SIGNATURE_KEY",
+};
+
+export interface LawVerdict {
+  violations: { rule: LawRule; message: string }[];
+  secretUses: SecretUse[];
+  /** `workflow#job: environment` for every declared environment. */
+  environments: string[];
+  cacheSteps: number;
+}
+
+/**
+ * L1 + L2 + L3 (cache actions) over one parsed workflow or local action.
+ * `workflow` is the allowlist key (basename, or the action's path);
+ * `turboStep(job, i)` says whether step i of that job runs turbo.
+ */
+export function checkLaw(
+  workflow: string,
+  doc: Obj,
+  opts: { action: boolean; turboStep: (job: string, i: number) => boolean },
+): LawVerdict {
+  const v: LawVerdict = { violations: [], secretUses: [], environments: [], cacheSteps: 0 };
+  const add = (rule: LawRule, message: string): void => {
+    v.violations.push({ rule, message });
+  };
+  const where = (path: Path): string =>
+    `${workflow} ${path.map((p) => (typeof p === "number" ? `[${p}]` : p)).join(".")}`;
+
+  // L1 — every secret reference, anywhere in the tree (keys included).
+  walkStrings(doc, (path, text, isKey) => {
+    const isIf = !isKey && path[path.length - 1] === "if";
+    for (const expr of expressionsIn(text, isIf)) {
+      const j = judgeSecretExpression(expr);
+      if (j.bad) add("secret-shape", `${where(path)}: ${j.bad}`);
+      for (const name of j.names) v.secretUses.push({ name, path, text });
+    }
+  });
+  const jobs = isObj(doc.jobs) ? doc.jobs : {};
+  for (const [jobId, job] of Object.entries(jobs)) {
+    if (isObj(job) && "secrets" in job) {
+      add(
+        "secret-shape",
+        `${workflow} jobs.${jobId}.secrets: passes secrets to a called workflow (${JSON.stringify(job.secrets)}) — \`inherit\` hands over EVERY secret, and a callee is outside this job's allowlist; call it without \`secrets:\` or inline the job`,
+      );
+    }
+  }
+  for (const use of v.secretUses) {
+    const job = opts.action ? "(action)" : jobOf(use.path);
+    const granted = SECRET_ALLOWLIST.some(
+      (g) => g.workflow === workflow && g.job === job && g.secret === use.name,
+    );
+    if (!granted) {
+      add(
+        "secret-allowlist",
+        `${where(use.path)}: \`secrets.${use.name}\` is not granted to ${workflow}#${job} — add a reviewed entry to SECRET_ALLOWLIST (scripts/lib/turbo-remote-cache.ts) or remove the reference`,
+      );
+    }
+    // The writer's two secrets: only `env.<VAR>: ${{ secrets.NAME }}` on a turbo step of the writer.
+    const want = WRITER_VAR_FOR[use.name];
+    if (want != null) {
+      const [j0, jid, s0, si, e0, key] = use.path;
+      const placed =
+        use.path.length === 6 &&
+        j0 === "jobs" &&
+        jid === WRITER_JOB &&
+        workflow === WRITER_WORKFLOW &&
+        s0 === "steps" &&
+        typeof si === "number" &&
+        e0 === "env" &&
+        key === want &&
+        use.text === `\${{ secrets.${use.name} }}` &&
+        opts.turboStep(WRITER_JOB, si);
+      if (!placed) {
+        add(
+          "writer-secret-placement",
+          `${where(use.path)}: \`secrets.${use.name}\` may appear only as \`${want}: \${{ secrets.${use.name} }}\` in the STEP-level env of a turbo step (Build/Typecheck/Lint/lint:pack/Test) of ${WRITER_WORKFLOW}#${WRITER_JOB} — anywhere else every step, lifecycle script and action sees it`,
+        );
+      }
+    }
+  }
+
+  // L2 — environments.
+  for (const [jobId, job] of Object.entries(jobs)) {
+    if (!isObj(job) || !("environment" in job)) continue;
+    const raw = isObj(job.environment) ? job.environment.name : job.environment;
+    const grant = ENVIRONMENT_ALLOWLIST.find((g) => g.workflow === workflow && g.job === jobId);
+    v.environments.push(`${workflow}#${jobId}: ${typeof raw === "string" ? raw : "?"}`);
+    if (typeof raw !== "string" || grant == null || raw !== grant.environment) {
+      add(
+        "environment-allowlist",
+        `${workflow} jobs.${jobId}.environment: ${JSON.stringify(job.environment)} is not this job's allowlisted environment${grant ? ` (\`${grant.environment}\`)` : " (none)"} — an environment name must be the exact literal, or the writer's exact guarded expression on ${WRITER_WORKFLOW}#${WRITER_JOB}; a computed name (\`\${{ format(…) }}\`, \`\${{ vars.X }}\`, \`turbo-cache-\${{ … }}\`) can resolve to a protected environment the gate never saw`,
+      );
+    }
+  }
+
+  // L3 — cache actions and cross-run artifacts.
+  const stepLists: [string, unknown[]][] = opts.action
+    ? [["(action)", isObj(doc.runs) && Array.isArray(doc.runs.steps) ? doc.runs.steps : []]]
+    : Object.entries(jobs).map(([id, job]) => [
+        id,
+        isObj(job) && Array.isArray(job.steps) ? job.steps : [],
+      ]);
+  for (const [jobId, steps] of stepLists) {
+    steps.forEach((step, i) => {
+      if (!isObj(step) || typeof step.uses !== "string") return;
+      const at = `${workflow} ${opts.action ? "runs" : `jobs.${jobId}`}.steps[${i}] (${step.uses})`;
+      const uses = step.uses.toLowerCase();
+      const withs = isObj(step.with) ? step.with : {};
+      if (
+        /(^|\/)cache(\/(restore|save))?@/.test(uses) ||
+        /(^|\/)cache(\/(restore|save))?$/.test(uses)
+      ) {
+        v.cacheSteps++;
+        const why = judgeCachePath(withs.path);
+        if (why) add("cache-state", `${at}: ${why}`);
+      }
+      if (/(^|\/)download-artifact@/.test(uses) && ("run-id" in withs || "repository" in withs)) {
+        add(
+          "cache-state",
+          `${at}: downloads another run's artifacts (\`run-id\`/\`repository\`) — build state must come from this run or from source`,
+        );
+      }
+    });
+  }
+  return v;
+}
+
+/** Why a cache action's `path` is refused, or null. */
+export function judgeCachePath(path: unknown): string | null {
+  if (typeof path !== "string" || path.trim() === "") {
+    return "cache `path` is missing or not a string — the gate cannot see what it restores";
+  }
+  if (path.includes("${{")) {
+    return `cache \`path\` is an expression (\`${path.trim()}\`) — the gate cannot see what it restores`;
+  }
+  for (const entry of path.split(/\r?\n/).map((e) => e.trim())) {
+    if (entry === "" || entry.startsWith("!")) continue;
+    const e = entry.replace(/^\.\//, "");
+    if (
+      /(^|\/)\.turbo(\/|$)/.test(e) ||
+      /(^|\/)\.cache\/turbo(\/|$)/.test(e) ||
+      /(^|\/)dist(\/|$)/.test(e) ||
+      /^(\.|\*+|\*\*\/\*|\/|~|\$\w+|\$\{\w+\})\/?$/.test(e) ||
+      e.startsWith("**") ||
+      e.startsWith("~/") ||
+      e.startsWith("/")
+    ) {
+      return `cache \`path\` entry \`${entry}\` can restore turbo state (\`.turbo\`, \`node_modules/.cache/turbo\`, \`dist\`, or a root-wide glob) from an entry any branch may have written — turbo would replay it as its own`;
+    }
+  }
+  return null;
+}
+
+/**
+ * Tracked files under any `.turbo/` directory (C4), with the number of
+ * tracked files scanned; null when `root` is not a git work tree.
+ */
+export function trackedTurboFiles(root: string): { scanned: number; turbo: string[] } | null {
+  const r = spawnSync("git", ["-C", root, "ls-files", "-z"], {
+    encoding: "utf8",
+    maxBuffer: 256 * 1024 * 1024,
+  });
+  if (r.status !== 0) return null;
+  const all = r.stdout.split("\0").filter((f) => f !== "");
+  return { scanned: all.length, turbo: all.filter((f) => f.split("/").includes(".turbo")) };
 }
 
 export interface WorkflowVerdict {
@@ -467,25 +808,37 @@ export interface WorkflowVerdict {
   turboLines: number;
   cacheDecls: number;
   githubEnvWrites: number;
+  secretUses: SecretUse[];
+  environments: string[];
+  cacheSteps: number;
+  /** Local actions this file's steps call (`uses: ./path`), repo-relative. */
+  localUses: string[];
 }
 
-export function checkWorkflow(
-  file: string,
-  text: string,
-  scripts: readonly string[],
-): WorkflowVerdict {
-  const base = file.split("/").pop()!;
-  const v: WorkflowVerdict = {
-    violations: [],
-    holdsToken: false,
-    writerJobs: [],
-    jobs: 0,
-    envScopes: 0,
-    runScripts: 0,
-    turboLines: 0,
-    cacheDecls: 0,
-    githubEnvWrites: 0,
-  };
+/** Repo-relative paths of local actions (`uses: ./x`) called by a list of steps. */
+function localUsesOf(steps: unknown[]): string[] {
+  return steps
+    .filter((s): s is Obj => isObj(s) && typeof s.uses === "string" && s.uses.startsWith("./"))
+    .map((s) => (s.uses as string).replace(/^\.\//, "").replace(/\/+$/, ""));
+}
+
+const emptyVerdict = (): WorkflowVerdict => ({
+  violations: [],
+  holdsToken: false,
+  writerJobs: [],
+  jobs: 0,
+  envScopes: 0,
+  runScripts: 0,
+  turboLines: 0,
+  cacheDecls: 0,
+  githubEnvWrites: 0,
+  secretUses: [],
+  environments: [],
+  cacheSteps: 0,
+  localUses: [],
+});
+
+function parseDoc(file: string, text: string, v: WorkflowVerdict): Obj | null {
   let doc: unknown;
   try {
     doc = parseYaml(text, { merge: true, uniqueKeys: true, maxAliasCount: 1000 });
@@ -493,14 +846,27 @@ export function checkWorkflow(
     v.violations.push(
       `${file}: not parseable YAML (${err instanceof Error ? err.message : String(err)}) — the gate cannot evaluate it`,
     );
-    return v;
+    return null;
   }
   if (!isObj(doc)) {
     if (doc != null) v.violations.push(`${file}: top level is not a mapping`);
-    return v;
+    return null;
   }
+  return doc;
+}
+
+export function checkWorkflow(
+  file: string,
+  text: string,
+  scripts: readonly string[],
+  law: LawOptions = {},
+): WorkflowVerdict {
+  const base = file.split("/").pop()!;
+  const v = emptyVerdict();
+  const doc = parseDoc(file, text, v);
+  if (doc == null) return v;
+  const off = law.disabled ?? new Set<LawRule>();
   const publishing = (PUBLISH_WORKFLOWS as readonly string[]).includes(base);
-  const triggers = workflowTriggers(doc.on);
 
   const evalEnv = (
     env: unknown,
@@ -530,15 +896,6 @@ export function checkWorkflow(
     workflowLevel: true,
     noRemote: publishing,
   });
-  const rest: Obj = { ...doc };
-  delete rest.jobs;
-  for (const ref of secretRefs(JSON.stringify(rest))) {
-    if (ref.startsWith("TURBO_")) {
-      v.violations.push(
-        `${file}: \`secrets.${ref}\` referenced outside any job — a workflow-level secret reaches every job (pull_request and merge_group included)`,
-      );
-    }
-  }
   if (publishing) {
     const pin = isObj(doc.env) ? doc.env.TURBO_CACHE : undefined;
     if (pin == null) {
@@ -549,52 +906,111 @@ export function checkWorkflow(
   }
 
   const jobs = isObj(doc.jobs) ? doc.jobs : {};
+  const turboSteps = new Map<string, Set<number>>();
   for (const [jobId, job] of Object.entries(jobs)) {
     v.jobs++;
     if (!isObj(job)) continue;
     const at = `${file} jobs.${jobId}`;
-    const env = judgeWriterEnvironment(job.environment, triggers);
-    if (env.references && !env.admitted) {
+    const references = JSON.stringify(job.environment ?? null).includes(WRITER_ENVIRONMENT);
+    let writer = isWriterJob(base, jobId, job.environment);
+    if (references && !writer) {
       v.violations.push(
-        `${at}.environment: references \`${WRITER_ENVIRONMENT}\` in a way that can resolve on a run that is not a push to main (pull_request, merge_group, workflow_call, a non-main ref) — use exactly \`${WRITER_ENVIRONMENT_EXPR}\`, or the literal name only in a workflow triggered solely by push to [main]`,
+        `${at}.environment: references \`${WRITER_ENVIRONMENT}\` but is not ${WRITER_WORKFLOW}#${WRITER_JOB} with exactly \`${WRITER_ENVIRONMENT_EXPR}\` — only that job, on a push to main, may hold the writer environment`,
       );
     }
-    let writer = env.references && env.admitted;
-    if (writer && publishing) {
-      v.violations.push(
-        `${at}.environment: a publishing workflow must not hold the \`${WRITER_ENVIRONMENT}\` writer environment — it builds from source`,
-      );
-      writer = false;
-    }
+    if (writer && publishing) writer = false;
     if (writer) v.writerJobs.push(`${base}#${jobId}`);
     const scope = { writer, workflowLevel: false, noRemote: publishing };
 
-    // Secret references anywhere in the job.
-    const allowed = writer ? [WRITER_TOKEN_SECRET, WRITER_KEY_SECRET] : [];
-    for (const ref of new Set(secretRefs(JSON.stringify(job)))) {
-      if (ref.startsWith("TURBO_") && !allowed.includes(ref)) {
-        v.violations.push(
-          `${at}: references \`secrets.${ref}\` — ${writer ? `a writer job takes only secrets.${WRITER_TOKEN_SECRET} / secrets.${WRITER_KEY_SECRET} (environment-only names)` : `only the \`${WRITER_ENVIRONMENT}\` writer job may reference a turbo secret`}`,
-        );
-      }
-    }
-
     evalEnv(job.env, `${at}.env`, scope);
     if (isObj(job.container)) evalEnv(job.container.env, `${at}.container.env`, scope);
+    // The writer's token and key never at job level: every step would see them.
+    if (writer && !off.has("writer-secret-placement")) {
+      for (const [envAt, env] of [
+        [`${at}.env`, job.env],
+        [`${at}.container.env`, isObj(job.container) ? job.container.env : undefined],
+      ] as const) {
+        if (!isObj(env)) continue;
+        for (const k of Object.keys(env)) {
+          if ((CREDENTIAL_VARS as readonly string[]).includes(k.trim().toUpperCase())) {
+            v.violations.push(
+              `${envAt}.${k}: the writer's ${k} at JOB level — every step (pnpm install lifecycle scripts, third-party actions, tests) sees it; declare it only in the env of the steps that run turbo`,
+            );
+          }
+        }
+      }
+    }
     const steps = Array.isArray(job.steps) ? job.steps : [];
+    v.localUses.push(...localUsesOf(steps));
+    const runsTurbo = new Set<number>();
     steps.forEach((step, i) => {
       if (!isObj(step)) return;
       const sat = `${at}.steps[${i}]${typeof step.name === "string" ? ` (${step.name})` : ""}`;
+      const sh =
+        typeof step.run === "string" ? checkShell(step.run, `${sat}.run`, scripts, scope) : null;
+      if (sh && sh.turboInvocations > 0) runsTurbo.add(i);
+      if (writer && !off.has("writer-secret-placement") && isObj(step.env) && !runsTurbo.has(i)) {
+        for (const k of Object.keys(step.env)) {
+          if ((CREDENTIAL_VARS as readonly string[]).includes(k.trim().toUpperCase())) {
+            v.violations.push(
+              `${sat}.env.${k}: the writer's ${k} on a step that does not run turbo — only turbo steps may hold it`,
+            );
+          }
+        }
+      }
       evalEnv(step.env, `${sat}.env`, scope);
-      if (typeof step.run === "string") {
+      if (sh) {
         v.runScripts++;
-        const sh = checkShell(step.run, `${sat}.run`, scripts, scope);
         v.violations.push(...sh.violations);
         v.turboLines += sh.turboInvocations;
         v.githubEnvWrites += sh.githubEnvWrites;
       }
     });
+    turboSteps.set(jobId, runsTurbo);
   }
+
+  const lawV = checkLaw(base, doc, {
+    action: false,
+    turboStep: (job, i) => turboSteps.get(job)?.has(i) ?? false,
+  });
+  for (const x of lawV.violations) if (!off.has(x.rule)) v.violations.push(x.message);
+  v.secretUses = lawV.secretUses;
+  v.environments = lawV.environments;
+  v.cacheSteps = lawV.cacheSteps;
+  return v;
+}
+
+/**
+ * A local composite action (`.github/actions/**\/action.yml`): no secret
+ * reference is granted to it, its cache steps are held to L3, and its `run:`
+ * steps to the non-writer shell rules.
+ */
+export function checkLocalAction(
+  file: string,
+  text: string,
+  scripts: readonly string[],
+  law: LawOptions = {},
+): WorkflowVerdict {
+  const v = emptyVerdict();
+  const doc = parseDoc(file, text, v);
+  if (doc == null) return v;
+  const off = law.disabled ?? new Set<LawRule>();
+  const lawV = checkLaw(file, doc, { action: true, turboStep: () => false });
+  for (const x of lawV.violations) if (!off.has(x.rule)) v.violations.push(x.message);
+  v.secretUses = lawV.secretUses;
+  v.cacheSteps = lawV.cacheSteps;
+  const steps = isObj(doc.runs) && Array.isArray(doc.runs.steps) ? doc.runs.steps : [];
+  v.localUses.push(...localUsesOf(steps));
+  steps.forEach((step, i) => {
+    if (!isObj(step) || typeof step.run !== "string") return;
+    v.runScripts++;
+    const sh = checkShell(step.run, `${file} runs.steps[${i}].run`, scripts, {
+      writer: false,
+      noRemote: false,
+    });
+    v.violations.push(...sh.violations);
+    v.turboLines += sh.turboInvocations;
+  });
   return v;
 }
 

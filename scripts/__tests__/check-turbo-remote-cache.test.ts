@@ -24,6 +24,12 @@ import {
 } from "../lib/turbo-remote-cache.js";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
+
+/** The gate lists tracked files (no committed `.turbo/`), so a fixture is a git work tree. */
+function gitInit(d: string): void {
+  const r = spawnSync("git", ["init", "-q", d], { encoding: "utf8" });
+  if (r.status !== 0) throw new Error(`git init failed: ${r.stderr}`);
+}
 const SCRIPTS = ["build", "test", "test:coverage", "typecheck", "lint", "lint:pack"];
 const GOOD_CI =
   "${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'local:rw,remote:rw' || 'local:rw,remote:r' }}";
@@ -157,21 +163,25 @@ describe("checkWorkflow (key only on main)", () => {
     expect(v.holdsToken).toBe(true);
     expect(v.turboLines).toBe(3);
   });
-  it("admits the literal environment name only in a push-to-[main]-only workflow", () => {
-    const pushOnly = `on:\n  push:\n    branches: [main]\njobs:\n  w:\n    environment: turbo-cache-writer\n    env:\n      TURBO_TOKEN: \${{ secrets.TURBO_WRITER_TOKEN }}\n    steps:\n      - run: pnpm build\n`;
-    expect(checkWorkflow("w.yml", pushOnly, SCRIPTS).violations).toEqual([]);
-    const tags = pushOnly.replace(
-      "    branches: [main]\n",
-      "    branches: [main]\n    tags: ['v*']\n",
+  it("refuses the writer environment anywhere but ci.yml#check with the exact guarded expression", () => {
+    const pushOnly = `on:\n  push:\n    branches: [main]\njobs:\n  w:\n    environment: turbo-cache-writer\n    steps:\n      - run: pnpm build\n        env:\n          TURBO_TOKEN: \${{ secrets.TURBO_WRITER_TOKEN }}\n`;
+    // Even a push-to-[main]-only workflow: the writer is exactly one job.
+    expect(checkWorkflow("w.yml", pushOnly, SCRIPTS).violations.join()).toMatch(
+      /turbo-cache-writer/,
     );
-    expect(checkWorkflow("w.yml", tags, SCRIPTS).violations.join()).toMatch(/turbo-cache-writer/);
-    const mq = pushOnly.replace("on:\n", "on:\n  merge_group:\n");
-    expect(checkWorkflow("w.yml", mq, SCRIPTS).violations.join()).toMatch(/turbo-cache-writer/);
     const widened = KEY_ONLY_ON_MAIN_CI.replace(
       "github.event_name == 'push' && github.ref == 'refs/heads/main' && 'turbo-cache-writer'",
       "github.ref == 'refs/heads/main' && 'turbo-cache-writer'",
     );
     expect(checkWorkflow("ci.yml", widened, SCRIPTS).violations.join()).toMatch(
+      /turbo-cache-writer/,
+    );
+    // Whitespace-equivalent is not exact: compared as a string.
+    const spaced = KEY_ONLY_ON_MAIN_CI.replace(
+      "github.event_name == 'push'",
+      "github.event_name  == 'push'",
+    );
+    expect(checkWorkflow("ci.yml", spaced, SCRIPTS).violations.join()).toMatch(
       /turbo-cache-writer/,
     );
   });
@@ -305,6 +315,7 @@ describe("runTurboRemoteCacheGate CLI", () => {
         : KEY_ONLY_ON_MAIN_CI.replace(`    environment: ${WRITER_ENV}\n`, ""),
     );
     writeFileSync(join(d, ".github", "workflows", "other.yml"), "on:\n  push:\njobs: {}\n");
+    gitInit(d);
     return d;
   };
   const cli = (d: string) =>
@@ -321,7 +332,14 @@ describe("runTurboRemoteCacheGate CLI", () => {
     expect(r.tokenHolders).toEqual(["ci.yml"]);
     const out = cli(d);
     expect(out.status).toBe(0);
-    expect(out.stdout).toMatch(/2 workflow\(s\), 2 job\(s\) parsed as YAML/);
+    expect(out.stdout).toMatch(
+      /2 workflow\(s\), 2 job\(s\) and 0 local action\(s\) parsed as YAML/,
+    );
+    // The law names what it scanned: secret references, environments, cache state.
+    expect(out.stdout).toMatch(/L1 secrets: 4 literal secrets\.NAME reference\(s\)/);
+    expect(out.stdout).toMatch(/L2 environments: 1 declared/);
+    expect(out.stdout).toMatch(/L3 cache state: 0 cache action step\(s\)/);
+    expect(out.stdout).toMatch(/tracked file\(s\), none under \.turbo\//);
     expect(out.stdout).toMatch(/ci\.yml#check/);
     expect(out.stdout).toMatch(/npx turbo@x/);
     expect(out.stdout).toMatch(/\$GITHUB_ENV/);
@@ -378,12 +396,16 @@ jobs:
     runs-on: ubuntu-latest
     environment: ${WRITER_ENV}
     env:
-      TURBO_TOKEN: \${{ secrets.TURBO_WRITER_TOKEN }}
-      TURBO_REMOTE_CACHE_SIGNATURE_KEY: \${{ secrets.TURBO_WRITER_SIGNATURE_KEY }}
       TURBO_CACHE: ${WRITER_CACHE}
     steps:
       - run: pnpm build
+        env:
+          TURBO_TOKEN: \${{ secrets.TURBO_WRITER_TOKEN }}
+          TURBO_REMOTE_CACHE_SIGNATURE_KEY: \${{ secrets.TURBO_WRITER_SIGNATURE_KEY }}
       - run: pnpm exec turbo run test:coverage --concurrency=4
+        env:
+          TURBO_TOKEN: \${{ secrets.TURBO_WRITER_TOKEN }}
+          TURBO_REMOTE_CACHE_SIGNATURE_KEY: \${{ secrets.TURBO_WRITER_SIGNATURE_KEY }}
   lint:
     runs-on: ubuntu-latest
     steps:
@@ -483,6 +505,7 @@ describe("key only on main — repository fixtures", () => {
     for (const [f, t] of Object.entries(opts.workflows)) {
       writeFileSync(join(d, ".github", "workflows", f), t);
     }
+    gitInit(d);
     return d;
   };
   const PUBLISH = `name: Publish\non:\n  workflow_dispatch:\nenv:\n  TURBO_CACHE: local:rw\njobs:\n  publish:\n    runs-on: ubuntu-latest\n    steps:\n      - run: pnpm build\n`;

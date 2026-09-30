@@ -49,6 +49,11 @@ describe("turbo remote-cache signing (fake cache)", () => {
       expect(byName["pr-no-credentials"]!.requests).toBe(0);
       expect(byName["writer-before-environment"]!.exitCode).toBe(0);
       expect(byName["writer-before-environment"]!.requests).toBe(0);
+      // C4: a committed .turbo/config.json overrides turbo.json (unsigned PUT)
+      // — the hazard check-turbo-remote-cache's tracked-.turbo rule refuses.
+      // Control: the same key without the file signs every PUT.
+      expect(byName["committed-turbo-config"]!.unsignedPuts).toBeGreaterThan(0);
+      expect(byName["env-main-write"]!.unsignedPuts).toBe(0);
     },
     TIMEOUT,
   );

@@ -13,14 +13,19 @@ concurrency:
 # Turbo remote cache (#997 — "key only on main"). Only the `check` job, and
 # only on a push to main, holds the remote-cache token and the signing key:
 # they live in the protected `turbo-cache-writer` environment (deployment
-# branches: main only), referenced below. Every other job — pull_request,
-# merge_group, any non-main ref, every other job on main — gets NO token and
-# NO key, so it neither reads nor writes the remote cache (local cache only).
-# A same-repo PR that edits this file to reference the environment is
-# refused by GitHub's deployment-branch rule, and by
-# scripts/check-turbo-remote-cache.ts. Signing (turbo.json) stops a job that
-# does NOT hold the key; keeping the key off every non-main job stops the
-# ones that would. Operator setup: docs/ops/RUNBOOK.md § Turbo remote cache.
+# branches: main only), referenced below, and are handed ONLY to the steps
+# that run turbo (step-level env), never to the whole job. Every other run —
+# pull_request, any non-main ref, every other job on main — gets NO token
+# and NO key, so it neither reads nor writes the remote cache (local cache
+# only). This workflow has no merge_group trigger. A same-repo PR that edits
+# this file to reach the environment or its secrets by another route is
+# refused at run time by GitHub's deployment-branch rule (main only), and at
+# review time by scripts/check-turbo-remote-cache.ts, which is
+# deny-by-default: every secret reference is a literal `secrets.NAME` granted
+# per workflow+job, and every `environment:` is its job's exact allowlisted
+# string. Signing (turbo.json) stops a job that does NOT hold the key;
+# keeping the key off every non-main job stops the ones that would.
+# Operator setup: docs/ops/RUNBOOK.md § Turbo remote cache.
 env:
   TURBO_TEAM: ${{ vars.TURBO_TEAM }}
 
@@ -47,11 +52,12 @@ jobs:
     # names no repo-level secret carries, so on any other run — and on main
     # before the environment exists — both resolve to "" and turbo runs
     # local-only with zero remote requests (proven by the probe's
-    # `writer-before-environment` scenario).
+    # `writer-before-environment` scenario). The token and key are STEP-level
+    # env on the five turbo steps (Build, Typecheck, Lint, Publish-integrity,
+    # Test) only — never job-level, where `pnpm install` lifecycle scripts,
+    # third-party actions and every other step would see them.
     environment: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'turbo-cache-writer' || '' }}
     env:
-      TURBO_TOKEN: ${{ secrets.TURBO_WRITER_TOKEN }}
-      TURBO_REMOTE_CACHE_SIGNATURE_KEY: ${{ secrets.TURBO_WRITER_SIGNATURE_KEY }}
       TURBO_CACHE: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' && 'local:rw,remote:rw' || 'local:rw' }}
 
     steps:
@@ -88,15 +94,24 @@ jobs:
       - name: Build
         # Must run before drift defenses because check-api-surface shells out
         # to api-extractor, which reads from each package's dist/index.d.ts.
+        env:
+          TURBO_TOKEN: ${{ secrets.TURBO_WRITER_TOKEN }}
+          TURBO_REMOTE_CACHE_SIGNATURE_KEY: ${{ secrets.TURBO_WRITER_SIGNATURE_KEY }}
         run: pnpm build
 
       - name: Drift defenses (deps, specs, service/app primitives, API surface, changeset discipline)
         run: pnpm check
 
       - name: Typecheck
+        env:
+          TURBO_TOKEN: ${{ secrets.TURBO_WRITER_TOKEN }}
+          TURBO_REMOTE_CACHE_SIGNATURE_KEY: ${{ secrets.TURBO_WRITER_SIGNATURE_KEY }}
         run: pnpm typecheck
 
       - name: Lint
+        env:
+          TURBO_TOKEN: ${{ secrets.TURBO_WRITER_TOKEN }}
+          TURBO_REMOTE_CACHE_SIGNATURE_KEY: ${{ secrets.TURBO_WRITER_SIGNATURE_KEY }}
         run: pnpm lint
 
       - name: Publish-integrity (publint + attw on every published package)
@@ -104,6 +119,9 @@ jobs:
         # shipped in dist/, and that TypeScript consumers can resolve types
         # under Node16/Bundler/etc. resolution modes. Catches dual-package-
         # hazard before it reaches npm.
+        env:
+          TURBO_TOKEN: ${{ secrets.TURBO_WRITER_TOKEN }}
+          TURBO_REMOTE_CACHE_SIGNATURE_KEY: ${{ secrets.TURBO_WRITER_SIGNATURE_KEY }}
         run: pnpm lint:pack
 
       - name: Dead code detection
@@ -124,6 +142,9 @@ jobs:
         # preserve `--` when forwarding to turbo, and turbo then treats `--`
         # as "pass everything after to the task," which routes --concurrency
         # into vitest (where it's an unknown option and fails the run).
+        env:
+          TURBO_TOKEN: ${{ secrets.TURBO_WRITER_TOKEN }}
+          TURBO_REMOTE_CACHE_SIGNATURE_KEY: ${{ secrets.TURBO_WRITER_SIGNATURE_KEY }}
         run: pnpm exec turbo run test:coverage --concurrency=4
 
       - name: Coverage summary

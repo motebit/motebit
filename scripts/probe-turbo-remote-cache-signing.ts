@@ -45,12 +45,21 @@
  *                         it turbo signs with a zero-length key and uploads)
  *   short-key-write       a 31-byte key — same
  *   pr-no-credentials     no token, no key, TURBO_CACHE=local:rw (a
- *                         pull_request / merge_group / fork job) — passes,
+ *                         pull_request / fork / non-main job) — passes,
  *                         zero requests to the remote
  *   writer-before-environment  token AND key set-but-empty, remote:rw (the
  *                         writer job on main before the `turbo-cache-writer`
  *                         environment or its secrets exist) — passes, zero
  *                         requests, nothing stored
+ *   committed-turbo-config  key V, remote:rw, with `.turbo/config.json` =
+ *                         `{"signature":false}` in the workspace (what a
+ *                         `git add -f .turbo/config.json` commits). This one
+ *                         proves a HAZARD, not a defence: the file overrides
+ *                         turbo.json and the PUT goes up UNSIGNED — which is
+ *                         why check-turbo-remote-cache refuses any tracked
+ *                         file under `.turbo/`. If a turbo upgrade stops
+ *                         honouring the file, this expectation goes red:
+ *                         re-evaluate the rule then, do not delete it.
  *
  * Usage:  pnpm probe-turbo-remote-cache-signing [--json]
  * Exit 0 iff every expectation holds; the per-scenario record is printed
@@ -303,12 +312,18 @@ export async function runTurbo(opts: {
   cacheFlag: string;
   via?: "flag" | "env";
   payload: string;
+  /** Written to `<fixture>/.turbo/config.json` for this run (a committed repo-local turbo config). */
+  turboConfig?: Record<string, unknown>;
 }): Promise<RunRecord> {
   const { fixture, cache } = opts;
   writeFileSync(join(fixture, "payload.txt"), `${opts.payload}\n`);
   rmSync(join(fixture, "packages", "a", "dist"), { recursive: true, force: true });
   const localCache = join(fixture, ".turbo", "probe-cache");
   rmSync(join(fixture, ".turbo"), { recursive: true, force: true });
+  if (opts.turboConfig !== undefined) {
+    mkdirSync(join(fixture, ".turbo"), { recursive: true });
+    writeFileSync(join(fixture, ".turbo", "config.json"), JSON.stringify(opts.turboConfig));
+  }
   const before = cache.requests.length;
 
   // The caller's environment minus every TURBO_* variable (a developer's own
@@ -604,7 +619,7 @@ export async function runSigningProbe(
     expect(j.scenario, "no artifact request reaches the cache", j.artifactRequests === 0);
     expect(j.scenario, "nothing is stored", cache.store.size === 0);
 
-    // 11. A pull_request / merge_group / fork job after the "key only on
+    // 11. A pull_request / fork / non-main job after the "key only on
     //     main" change: no token, no key, local cache only. It must pass
     //     and never touch the remote.
     const k = await runTurbo({
@@ -642,6 +657,30 @@ export async function runSigningProbe(
     expect(l.scenario, "the task executes", l.outcome === "executed" && l.dist === "clean");
     expect(l.scenario, "zero requests reach the remote cache", l.requests === 0);
     expect(l.scenario, "nothing is stored", cache.store.size === 0);
+
+    // 13. HAZARD (#997 round 2, C4): a repo-local `.turbo/config.json` —
+    //     gitignored, but `git add -f` commits it — overrides turbo.json.
+    //     `{"signature":false}` with a real key and remote:rw uploads
+    //     UNSIGNED. The expectation is that the override IS honoured: that is
+    //     the reason check-turbo-remote-cache refuses tracked `.turbo/` files.
+    cache.store.clear();
+    const m = await runTurbo({
+      scenario: "committed-turbo-config",
+      fixture,
+      cache,
+      key: KEY_VICTIM,
+      cacheFlag: RW,
+      via: "env",
+      payload: "clean",
+      turboConfig: { signature: false },
+    });
+    runs.push(m);
+    expect(m.scenario, "the run succeeds", m.exitCode === 0);
+    expect(
+      m.scenario,
+      "HAZARD: the repo-local .turbo/config.json overrides turbo.json — the PUT goes up UNSIGNED (so the gate must refuse a tracked .turbo/)",
+      m.puts >= 1 && m.unsignedPuts === m.puts,
+    );
   } finally {
     await cache.close();
     rmSync(fixture, { recursive: true, force: true });
