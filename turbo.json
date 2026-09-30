@@ -1,5 +1,6 @@
 {
   "$schema": "https://turbo.build/schema.json",
+  "globalDependencies": ["vitest.shared.ts", "tsconfig.base.json"],
   "tasks": {
     "build": {
       "dependsOn": ["^build"],
@@ -7,11 +8,13 @@
     },
     "test": {
       "dependsOn": ["build"],
-      "cache": false
+      "env": ["CI", "TZ", "LANG"],
+      "outputs": []
     },
     "test:coverage": {
       "dependsOn": ["build"],
-      "cache": false
+      "env": ["CI", "TZ", "LANG"],
+      "outputs": ["coverage/**"]
     },
     "typecheck": {
       "dependsOn": ["build"],

@@ -1,0 +1,20 @@
+{
+  "$schema": "https://turbo.build/schema.json",
+  "extends": ["//"],
+  "tasks": {
+    "test": {
+      "inputs": [
+        "$TURBO_DEFAULT$",
+        "$TURBO_ROOT$/spec/relay-federation-v1.md",
+        "$TURBO_ROOT$/packages/sync-engine/src/**"
+      ]
+    },
+    "test:coverage": {
+      "inputs": [
+        "$TURBO_DEFAULT$",
+        "$TURBO_ROOT$/spec/relay-federation-v1.md",
+        "$TURBO_ROOT$/packages/sync-engine/src/**"
+      ]
+    }
+  }
+}

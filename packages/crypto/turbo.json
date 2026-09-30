@@ -1,0 +1,22 @@
+{
+  "$schema": "https://turbo.build/schema.json",
+  "extends": ["//"],
+  "tasks": {
+    "test": {
+      "inputs": [
+        "$TURBO_DEFAULT$",
+        "$TURBO_ROOT$/spec/conformance/eval-attestation/corpus.json",
+        "$TURBO_ROOT$/spec/conformance/routing-transcript/corpus.json",
+        "$TURBO_ROOT$/spec/conformance/verification-verdict/corpus.json"
+      ]
+    },
+    "test:coverage": {
+      "inputs": [
+        "$TURBO_DEFAULT$",
+        "$TURBO_ROOT$/spec/conformance/eval-attestation/corpus.json",
+        "$TURBO_ROOT$/spec/conformance/routing-transcript/corpus.json",
+        "$TURBO_ROOT$/spec/conformance/verification-verdict/corpus.json"
+      ]
+    }
+  }
+}

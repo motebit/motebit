@@ -1,0 +1,20 @@
+{
+  "$schema": "https://turbo.build/schema.json",
+  "extends": ["//"],
+  "tasks": {
+    "test": {
+      "inputs": [
+        "$TURBO_DEFAULT$",
+        "$TURBO_ROOT$/THE_EMERGENT_INTERIOR.md",
+        "$TURBO_ROOT$/packages/tools/src/builtins/**"
+      ]
+    },
+    "test:coverage": {
+      "inputs": [
+        "$TURBO_DEFAULT$",
+        "$TURBO_ROOT$/THE_EMERGENT_INTERIOR.md",
+        "$TURBO_ROOT$/packages/tools/src/builtins/**"
+      ]
+    }
+  }
+}

@@ -803,6 +803,46 @@ If every task is `cache miss`, the auth is broken — check that `TURBO_TOKEN` i
 
 `TURBO_REMOTE_CACHE_SIGNATURE_KEY` is optional but recommended — it adds an HMAC over every cache entry so a compromised Vercel bucket can't poison CI with a malicious build output. When set, CI and local both must know it; when absent, cache still works without signature verification.
 
+#### Test results are cached too — the input discipline
+
+`test` and `test:coverage` are cached like every other task (they were `cache: false` from the initial scaffold until 2026-09-30). A package whose task hash is unchanged replays its last result — pass, coverage thresholds and `coverage/**` included — instead of re-running vitest. That covers CI, the pre-push gauntlet, and any local `turbo run`.
+
+**The law: a cached test result is valid only if every input that can change its outcome is in the task hash.** A missed input is a silently weakened gate — the file changes, the hash doesn't, and yesterday's green is replayed over a test that would now fail. That is worse than slowness. What is in the hash:
+
+| Input                                            | How it gets into the hash                                                                                                                                                                                                |
+| ------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| The package's own files                          | `$TURBO_DEFAULT$` (every git-visible file in the package)                                                                                                                                                                |
+| Every workspace dependency's files, transitively | `dependsOn: ["build"]` → the package's `build` → `^build`; a task hash folds in the hashes of the tasks it depends on                                                                                                    |
+| External packages                                | the lockfile resolution                                                                                                                                                                                                  |
+| Repo-wide test config                            | root `globalDependencies`: `vitest.shared.ts`, `tsconfig.base.json`                                                                                                                                                      |
+| `CI`, `TZ`, `LANG`                               | `env` on both test tasks. `CI` flips vitest's snapshot mode and keeps CI-produced entries apart from local ones (a different Node or OS never replays into CI); `TZ` / `LANG` change `Date` and `Intl` with no code read |
+| Any other env var                                | nothing to hash: turbo runs in **strict** env mode, so an undeclared var is stripped before the task starts (`ANTHROPIC_API_KEY` in your shell never reaches a test)                                                     |
+| A file OUTSIDE the package that a test reads     | **declared per package** — `$TURBO_ROOT$/<path>` in `inputs` of BOTH `test` and `test:coverage` in `<package>/turbo.json`                                                                                                |
+
+**Rule: a test that reads a new outside file must declare it.** Reading `spec/…`, a root doc, another app's source, or another package's fixture by relative path puts that file outside the package's hash unless the package depends on the owner. Declare it in the package's `turbo.json`, keeping `$TURBO_DEFAULT$` first (package `inputs` replace the root's, so dropping it would take the package's own files out of the hash):
+
+```jsonc
+// packages/<pkg>/turbo.json
+{
+  "$schema": "https://turbo.build/schema.json",
+  "extends": ["//"],
+  "tasks": {
+    "test": { "inputs": ["$TURBO_DEFAULT$", "$TURBO_ROOT$/spec/conformance/foo/corpus.json"] },
+    "test:coverage": {
+      "inputs": ["$TURBO_DEFAULT$", "$TURBO_ROOT$/spec/conformance/foo/corpus.json"],
+    },
+  },
+}
+```
+
+A read whose tail is dynamic (`join(REPO_ROOT, "spec", name)`) declares the directory (`$TURBO_ROOT$/spec/**`). Importing another workspace package by bare name requires declaring it as a `workspace:*` dependency — otherwise it resolves through a hoisted link and its files are not in the hash. A test that reads a new pass-through env var (one turbo does not strip — `CI`, `HOME`, `GITHUB_TOKEN`, …) declares it in `env`.
+
+`pnpm check-turbo-test-inputs` (in `pnpm check`) enforces all of this: it statically evaluates the path expressions in each package's test-time closure and fails on any outside read no hash covers, naming the exact `inputs` line to add. Declared outside inputs today: `crypto` and `semiring` (spec conformance corpora), `wire-schemas` (`spec/schemas/**`), `relay` (`spec/relay-federation-v1.md`, `packages/sync-engine/src/**` loaded by relative path), `runtime` (`THE_EMERGENT_INTERIOR.md`, `packages/tools/src/builtins/**`), `sync-engine` (sibling-app sync controllers, `apps/mobile/package.json`), `tools` (a crypto fixture), `mobile` (`packages/persistence/package.json`).
+
+**Tests that cannot be hermetic stay uncached**, with `cache: false` on both test tasks in the package's `turbo.json` and the reason in `UNCACHED` in `scripts/check-turbo-test-inputs.ts` (the gate checks both directions). Today: `crypto-appattest`, `crypto-android-keystore`, `crypto-tpm` — each asserts the REAL clock sits inside a pinned root certificate's validity window, an input no hash can carry.
+
+**Escape hatches.** `turbo run test:coverage --force` re-runs everything, ignoring the cache (do this after changing your local Node major — Node's version is not in the hash, and only CI entries are separated from local ones by `CI`). `turbo run test:coverage --dry=json --filter=<pkg>` prints a task's hash and its full `inputs` list — the first thing to check when a cached result looks wrong.
+
 ---
 
 ## 14. Architecture Quick Map

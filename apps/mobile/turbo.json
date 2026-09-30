@@ -10,6 +10,12 @@
       "dependsOn": ["@motebit/render-engine#build"],
       "inputs": ["scripts/build-creature-html.mjs"],
       "outputs": ["src/creature-webview-bundle.generated.ts"]
+    },
+    "test": {
+      "inputs": ["$TURBO_DEFAULT$", "$TURBO_ROOT$/packages/persistence/package.json"]
+    },
+    "test:coverage": {
+      "inputs": ["$TURBO_DEFAULT$", "$TURBO_ROOT$/packages/persistence/package.json"]
     }
   }
 }
