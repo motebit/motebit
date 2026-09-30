@@ -90,6 +90,17 @@ describe("tamper-runner sandwich", () => {
     expect(d.code).toBe(1);
   });
 
+  it("post: a RED whose failing test the post-run does not pass (leaked state skipped it) is INCONCLUSIVE", () => {
+    const d = drive(
+      fx!,
+      [{ name: "hidden after", pkg: FX, test: "skipleak.fx.mjs", edits: [BREAK_SUM] }],
+      1,
+    );
+    expect(verdicts(d), d.out).toEqual(["INCONCLUSIVE"]);
+    expect(d.out).toContain('(post-run: "sums unless hidden" did not pass with the edit reverted)');
+    expect(d.code).toBe(1);
+  });
+
   it("pre: an entry whose pre-run (no edit, same slot, just before) is not green is never RED", () => {
     const d = drive(
       fx!,

@@ -110,6 +110,7 @@ describe("tamper-runner lifecycle", () => {
       const dir = join(base, "slot-0");
       git(fx!, ["worktree", "add", "--detach", "--quiet", dir, "HEAD"]);
       if (owner != null) {
+        // owner.pid is ed573f1b9's format (ignored now): the test ran against both.
         writeFileSync(join(base, "owner.pid"), `${owner}\n`);
         writeFileSync(join(base, "owner.json"), ownerRecord(owner));
       }
@@ -159,6 +160,7 @@ describe("tamper-runner lifecycle", () => {
       const base = join(fx!.tmp, `motebit-tamper-${tag}`);
       mkdirSync(base);
       git(fx!, ["worktree", "add", "--detach", "--quiet", join(base, "slot-0"), "HEAD"]);
+      // A dead pid in ed573f1b9's owner.pid made it reap these regardless.
       writeFileSync(join(base, "owner.pid"), `${dead}\n`);
       writeFileSync(join(base, "owner.json"), ownerRecord(dead, over));
       return base;

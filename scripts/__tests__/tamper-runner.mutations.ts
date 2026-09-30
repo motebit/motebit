@@ -3,13 +3,17 @@
  * Mutations of the tamper runner itself: each entry removes ONE of its
  * anti-false-RED guarantees and names the self-test that must go red. Run by
  * the runner (so the law applies to its own proof: a green baseline of every
- * self-test file first, then a positive, exactly-named failure per mutation).
+ * self-test file first, then, per mutation, the sandwich: its named test
+ * green just before, red with the mutation, green again after).
  *
  *   node scripts/__tests__/tamper-runner.mutations.ts [--concurrency=N]
  *
  * M1-M8 are the eight mutations a cold review of a8b2a8e found the old
  * self-test did not catch; N1-N12 remove one clause of the evidence law or
- * the isolation fixes each. Every entry must print RED (ok).
+ * the isolation fixes each; X1-X10 and X17 are the ones a cold review of
+ * ed573f1b9 found unnoticed; S1-S10 remove one clause of the sandwich law
+ * (pre, post, reset, HOME, valid code, timeouts, reaping). Every entry must
+ * print RED (ok).
  */
 import { dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -23,6 +27,7 @@ const RUNNER = "scripts/lib/tamper-runner.ts";
 const VERDICTS = { test: "scripts/__tests__/tamper-runner.test.ts" };
 const ISOLATION = { test: "scripts/__tests__/tamper-runner.isolation.test.ts" };
 const LIFECYCLE = { test: "scripts/__tests__/tamper-runner.lifecycle.test.ts" };
+const SANDWICH = { test: "scripts/__tests__/tamper-runner.sandwich.test.ts" };
 
 const edit = (from: string, to: string) => ({ file: RUNNER, from, to });
 const NEVER = "if (false as boolean) {";
@@ -54,12 +59,7 @@ const MUTATIONS: TamperEntry[] = [
     name: "M4 shared TMPDIR",
     ...ISOLATION,
     red: "tamper-runner isolation each copy has a private TMPDIR",
-    edits: [
-      edit(
-        "  return { ...process.env, TMPDIR: slot.tmp, TMP: slot.tmp, TEMP: slot.tmp };",
-        "  return { ...process.env };",
-      ),
-    ],
+    edits: [edit("    TMPDIR: tmp,\n    TMP: tmp,\n    TEMP: tmp,\n", "")],
   },
   {
     name: "M5 no ignored-state copy",
@@ -76,7 +76,7 @@ const MUTATIONS: TamperEntry[] = [
     name: "M6 BUILD FAILED never reported",
     ...ISOLATION,
     red: "tamper-runner isolation a rebuild that fails reports BUILD FAILED",
-    edits: [edit("        if (b.code !== 0) {", `        ${NEVER}`)],
+    edits: [edit("      if (b.code !== 0) {", `      ${NEVER}`)],
   },
   {
     name: "M7 no restore verification (hash check, git status, overlay, ignored state)",
@@ -90,7 +90,7 @@ const MUTATIONS: TamperEntry[] = [
   {
     name: "M8 no SIGINT cleanup",
     ...LIFECYCLE,
-    red: "tamper-runner lifecycle a SIGINT mid-tamper kills the running test and removes every copy",
+    red: "tamper-runner lifecycle a SIGINT mid-tamper kills the running test (its whole process group) and removes every copy",
     edits: [edit('  process.on("SIGINT", onSignal);\n', "")],
   },
   // --- one per clause of the law and per isolation fix
@@ -100,8 +100,8 @@ const MUTATIONS: TamperEntry[] = [
     red: "tamper-runner evidence C2: a misspelled test file aborts at the baseline (exit 2), never RED",
     edits: [
       edit(
-        "      if (problem != null) state.baselineFailed.push({ label: g.label, problem });",
-        "      void problem;",
+        "        state.baselineFailed.push({ label: g.label, problem: r.problem });",
+        "        void 0;",
       ),
     ],
   },
@@ -111,20 +111,17 @@ const MUTATIONS: TamperEntry[] = [
     red: "tamper-runner isolation C1: a fixed port held outside the run aborts it at the baseline, never a false RED",
     edits: [
       edit(
-        "      if (problem != null) state.baselineFailed.push({ label: g.label, problem });",
-        "      void problem;",
+        "        state.baselineFailed.push({ label: g.label, problem: r.problem });",
+        "        void 0;",
       ),
       // …and a tamper's failure counted without a baseline pass.
-      edit(
-        "  const bites = failed.filter((n) => baselinePassed.has(n));",
-        "  const bites = failed;",
-      ),
+      edit("  const bites = failed.filter((n) => prePassed.has(n));", "  const bites = failed;"),
     ],
   },
   {
     name: "N2 verdict from the exit code",
     ...VERDICTS,
-    red: "tamper-runner evidence C2: a tamper that breaks collection (a syntax error) is INCONCLUSIVE, never RED",
+    red: "tamper-runner evidence C2: an unhandled error with every test passing is INCONCLUSIVE, never RED",
     edits: [
       edit(
         '  const bad = unusable(ev);\n  if (bad != null) return { verdict: "INCONCLUSIVE", detail: `(${bad})\\n${tail(ev.out)}` };',
@@ -168,7 +165,7 @@ const MUTATIONS: TamperEntry[] = [
   {
     name: "N6 SIGHUP not handled",
     ...LIFECYCLE,
-    red: "tamper-runner lifecycle a SIGHUP mid-tamper kills the running test and removes every copy",
+    red: "tamper-runner lifecycle a SIGHUP mid-tamper kills the running test (its whole process group) and removes every copy",
     edits: [edit('  process.on("SIGHUP", onSignal);\n', "")],
   },
   {
@@ -198,8 +195,8 @@ const MUTATIONS: TamperEntry[] = [
         `    ${NEVER}`,
       ),
       edit(
-        '        if (t.code !== 0 && marked) outcome = result("RED");',
-        '        if (t.code !== 0 && (marked || entry.redMarker == null)) outcome = result("RED");',
+        '    if (t.code !== 0 && marked) return { verdict: "RED", bites: [] };',
+        '    if (t.code !== 0 && (marked || entry.redMarker == null)) return { verdict: "RED", bites: [] };',
       ),
     ],
   },
@@ -209,8 +206,8 @@ const MUTATIONS: TamperEntry[] = [
     red: "tamper-runner evidence C2: a command that crashes (non-zero exit, no red marker) is INCONCLUSIVE, never RED",
     edits: [
       edit(
-        '        if (t.code !== 0 && marked) outcome = result("RED");',
-        '        if (t.code !== 0) outcome = result("RED");',
+        '    if (t.code !== 0 && marked) return { verdict: "RED", bites: [] };',
+        '    if (t.code !== 0) return { verdict: "RED", bites: [] };',
       ),
     ],
   },
@@ -226,6 +223,196 @@ const MUTATIONS: TamperEntry[] = [
     red: "tamper-runner evidence C2: a suite-level error (a failing afterAll) next to a failing test is INCONCLUSIVE, never RED",
     edits: [edit("  if (ev.suiteErrors.length > 0) return", "  if (false as boolean) return")],
   },
+  // --- the cold review of ed573f1b9: mutations its self-test did not notice
+  {
+    name: "X1 cleanup kills only the direct child, not its process group",
+    ...LIFECYCLE,
+    red: "tamper-runner lifecycle a SIGINT mid-tamper kills the running test (its whole process group) and removes every copy",
+    edits: [
+      edit(
+        '        if (c.pid != null) process.kill(-c.pid, "SIGKILL");',
+        '        if (c.pid != null) process.kill(c.pid, "SIGKILL");',
+      ),
+    ],
+  },
+  {
+    name: "X2 no .bin shim rewrite",
+    ...ISOLATION,
+    red: "tamper-runner isolation X2: a node_modules/.bin shim that bakes the tree's absolute path runs against the copy",
+    edits: [edit("  rewriteBinShims(root, dir, plan.ignored);\n", "")],
+  },
+  {
+    name: "X3 store entries linking into the workspace symlinked, not copied",
+    ...ISOLATION,
+    red: "tamper-runner isolation X3: a store entry whose dependency links into the workspace resolves to the copy's package",
+    edits: [
+      edit(
+        '      if (s === "node_modules" || linksOutOfStore(store, s))',
+        '      if (s === "node_modules")',
+      ),
+    ],
+  },
+  {
+    name: "X4 red need not have passed before the edit",
+    ...VERDICTS,
+    red: "tamper-runner evidence X4: red naming a test that did not pass before the edit (one the edit adds) is never RED",
+    edits: [edit("    if (!prePassed.has(red)) {", `    ${NEVER}`)],
+  },
+  {
+    name: "X5 any failing test bites (not only one that passed before the edit)",
+    ...VERDICTS,
+    red: "tamper-runner evidence X5: without red, only a test that passed before the edit can bite (a new failing test cannot)",
+    edits: [
+      edit("  const bites = failed.filter((n) => prePassed.has(n));", "  const bites = failed;"),
+    ],
+  },
+  {
+    name: "X6 duplicate full names not rejected",
+    ...VERDICTS,
+    red: "tamper-runner evidence X6: red naming a full name two tests share is INCONCLUSIVE, never RED",
+    edits: [edit("    if (list.length !== 1) {", `    ${NEVER}`)],
+  },
+  {
+    name: "X7 the run-end reason ignored",
+    ...VERDICTS,
+    red: "tamper-runner evidence X7: a run that ended other than passed/failed (a bail: interrupted) is INCONCLUSIVE, never RED",
+    edits: [
+      edit(
+        '  if (ev.reason !== "passed" && ev.reason !== "failed") return',
+        "  if (false as boolean) return",
+      ),
+    ],
+  },
+  {
+    name: "X8 results from ANY file the filter matched count as the target's",
+    ...VERDICTS,
+    red: "tamper-runner evidence X8: a failure in another file the filter also matched is not the target's",
+    edits: [edit("    if (!isTarget(name)) continue;\n", "")],
+  },
+  {
+    name: "X9 the baseline's exit code ignored",
+    ...VERDICTS,
+    red: "tamper-runner evidence X9: a baseline where every test passed but vitest exited non-zero aborts (exit 2)",
+    edits: [
+      edit("  if (ev.code !== 0) return `vitest exited ${ev.code} with every test passing`;\n", ""),
+    ],
+  },
+  {
+    name: "X10 overlay bytes not verified after a run",
+    ...ISOLATION,
+    red: "tamper-runner isolation X10: a copy whose caller-dirty (overlaid) file a check changed is never reused: exit 2",
+    edits: [edit("    if (h !== plan.overlayHash.get(rel)) {", `    ${NEVER}`)],
+  },
+  {
+    name: "X17 untracked caller bytes not fingerprinted",
+    ...ISOLATION,
+    red: "tamper-runner isolation X17: a check that appends to an UNTRACKED caller file fails the run (exit 2)",
+    edits: [edit("      h.update(readFileSync(join(root, f)));", "      void f;")],
+  },
+  // --- one per clause of the sandwich law (this round's fix)
+  {
+    name: "S1 sandwich pre: a pre-run that is not green is ignored",
+    ...SANDWICH,
+    red: "tamper-runner sandwich pre: an entry whose pre-run (no edit, same slot, just before) is not green is never RED",
+    edits: [edit("    if (pre.problem != null) {", `    ${NEVER}`)],
+  },
+  {
+    name: "S2 sandwich post: no post-run",
+    ...SANDWICH,
+    red: "tamper-runner sandwich post: a RED whose post-run (edit reverted) is not green is INCONCLUSIVE — state leaked",
+    edits: [edit('  if (c.verdict === "RED" || !last) {', `  ${NEVER}`)],
+  },
+  {
+    name: "S3 TMPDIR not emptied between runs",
+    ...SANDWICH,
+    red: "tamper-runner sandwich C1: a file a failing run left in TMPDIR does not turn the next entry red (same test file)",
+    edits: [
+      edit(
+        "    rmSync(d, { recursive: true, force: true });",
+        "    if (d !== slot.tmp) rmSync(d, { recursive: true, force: true });",
+      ),
+    ],
+  },
+  {
+    name: "S3b TMPDIR not emptied: a cache from another test file",
+    ...SANDWICH,
+    red: "tamper-runner sandwich C1: a cache another test file left in TMPDIR does not turn later entries red (cross-file)",
+    edits: [
+      edit(
+        "    rmSync(d, { recursive: true, force: true });",
+        "    if (d !== slot.tmp) rmSync(d, { recursive: true, force: true });",
+      ),
+    ],
+  },
+  {
+    name: "S4 HOME (and XDG dirs) not isolated",
+    ...SANDWICH,
+    red: "tamper-runner sandwich HOME: a file a failing run left in HOME (or XDG_CACHE_HOME) does not turn the next entry red",
+    edits: [
+      edit(
+        '    HOME: home,\n    USERPROFILE: home,\n    XDG_CONFIG_HOME: join(home, ".config"),\n    XDG_CACHE_HOME: join(home, ".cache"),\n    XDG_DATA_HOME: join(home, ".local", "share"),\n    XDG_STATE_HOME: join(home, ".local", "state"),\n',
+        "",
+      ),
+    ],
+  },
+  {
+    name: "S5 no parse check of the edited files",
+    ...SANDWICH,
+    red: "tamper-runner sandwich C2: an edit that does not parse is INCONCLUSIVE when the test imports it dynamically",
+    edits: [edit("      if (plan.parsesBefore.get(rel) !== null) continue;", "      continue;")],
+  },
+  {
+    name: "S6 a code error (ReferenceError …) from the edited file counts as RED",
+    ...SANDWICH,
+    red: "tamper-runner sandwich C2: an edit that names an undefined variable (static import) is INCONCLUSIVE, never RED",
+    edits: [edit("  if (invalid != null) {", `  ${NEVER}`)],
+  },
+  {
+    name: "S7 a timeout is RED without an immediate re-run",
+    ...SANDWICH,
+    red: "tamper-runner sandwich P-a: a timeout that does not reproduce on an immediate re-run with the edit is INCONCLUSIVE",
+    edits: [edit('  if (c.verdict === "RED" && c.timeoutOnly === true) {', `  ${NEVER}`)],
+  },
+  {
+    name: "S8 reaping ignores the owner's host and pid namespace",
+    ...LIFECYCLE,
+    red: "tamper-runner lifecycle P-e: startup never reaps a dead-owner copy recorded by another host or pid namespace",
+    edits: [
+      edit(
+        "      if (owner.host !== hostname() || owner.pidns !== pidNamespace()) continue;\n",
+        "",
+      ),
+    ],
+  },
+  {
+    name: "S9 startup reaps a dead run's slot without killing its process groups",
+    ...LIFECYCLE,
+    red: "tamper-runner lifecycle P-e: startup kills the process group a SIGKILLed run left running, then removes its copy",
+    edits: [edit("      killLeftoverGroups(base, owner.pgids);\n", "")],
+  },
+  {
+    name: "S10 the process groups a run starts are not recorded",
+    ...LIFECYCLE,
+    red: "tamper-runner lifecycle P-e: startup kills the process group a SIGKILLed run left running, then removes its copy",
+    edits: [edit("      owner.pgids.push(pgid);\n", "")],
+  },
+  {
+    name: "S12 sandwich post: a RED's failing tests need not pass in the post-run",
+    ...SANDWICH,
+    red: "tamper-runner sandwich post: a RED whose failing test the post-run does not pass (leaked state skipped it) is INCONCLUSIVE",
+    edits: [edit('      if (c.verdict === "RED" && back.length > 0) {', `      ${NEVER}`)],
+  },
+  {
+    name: "S11 only: the narrowing (-t) not passed to vitest",
+    ...VERDICTS,
+    red: "tamper-runner evidence only: runs just the red test (a failing sibling is never run)",
+    edits: [edit("  if (only != null) args.push(", "  if (false as boolean) args.push(")],
+  },
 ];
 
-await runTampers(MUTATIONS, { root: here });
+// Every self-test is independent (each builds its own fixture), so each
+// mutation runs only its red test: the sandwich runs it three times.
+await runTampers(
+  MUTATIONS.map((m) => ({ ...m, only: true })),
+  { root: here },
+);

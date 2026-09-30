@@ -18,9 +18,19 @@
  *     one passing test and no failure, and exit 0 — or the whole run ABORTS
  *     (exit 2, `BASELINE NOT GREEN: <test>` with the failing tests). A port held
  *     by an outside process fails the baseline loudly instead of faking a RED;
- *   - RED only when the test file was found and ran, at least one test that
- *     PASSED in the baseline now FAILS with a test-level failure (an assertion
- *     or error thrown inside the test, a timeout included), there is no
+ *   - THE SANDWICH: an entry is RED only when, in the SAME slot, its test is
+ *     GREEN immediately before the edit (the pre-run), RED with the edit, and
+ *     GREEN again after the edit is reverted (the post-run), with the slot
+ *     reset between runs. Any other sequence is INCONCLUSIVE with the reason
+ *     (`pre-run not green: …`, `post-run not green: slot state leaked …`), so
+ *     state a previous run left behind — wherever it lives — can never pass
+ *     for the tamper's effect, and a flaky test shows as a pre/post-run that
+ *     is not green. Runs chain: a green post-run (or the baseline, when
+ *     nothing ran in the slot since) IS the next entry's pre-run, so an entry
+ *     costs two runs, not three;
+ *   - the edited run is RED only when the test file was found and ran, at
+ *     least one test that PASSED in the pre-run now FAILS with a test-level
+ *     failure (an assertion or error thrown inside the test), there is no
  *     suite-level/collection error and no unhandled error, and vitest exited
  *     non-zero. With `red:` set, the failing test must be the one whose EXACT
  *     full name (describe path + title, space-joined, as vitest's JSON
@@ -28,6 +38,15 @@
  *     enough. GREEN only when the file ran, >= 1 test passed, none failed and
  *     vitest exited 0 (with `red:`, when that test passed). Anything else is
  *     INCONCLUSIVE, with the reason — a failure, never a RED;
+ *   - an edit that is not valid code is not evidence: after the edits are
+ *     applied every edited file that parsed before must still parse (`node
+ *     --check`; the tree's `typescript`, syntax only; JSON), and a failure
+ *     whose error is a SyntaxError / ReferenceError / "is not defined" /
+ *     "Cannot find module" naming an edited file is INCONCLUSIVE (`edit is not
+ *     valid code`), however the test imports it;
+ *   - a RED that rests only on timeouts (a load spike is not evidence) must
+ *     time out again on an immediate re-run with the edit, and its post-run
+ *     must be green;
  *   - a `command` (non-vitest) entry must declare `redMarker`, the text its
  *     check prints only when it fails. RED = non-zero exit AND the marker;
  *     GREEN = exit 0 and no marker; anything else INCONCLUSIVE. An entry
@@ -56,6 +75,11 @@
  *     would have linked it inside the entry, which is then copied);
  *   - every tracked file's mtime synced to the caller's, so `tsc -b` sees the
  *     copied `dist` as up to date and a rebuild compiles only what changed.
+ * Every run (baseline, pre-run, edited run, post-run) starts with the slot's
+ * TMPDIR emptied and a fresh HOME (XDG_CONFIG/CACHE/DATA/STATE_HOME under it)
+ * — the runner's own files (reports, reporter) live outside both. Measured
+ * cost: about 1.4 s per run on a monorepo vitest file (caches in HOME and
+ * TMPDIR start cold), on top of the third run the sandwich adds per group.
  * One copy is made per worker slot and REUSED. After every run in a slot the
  * edited files are restored from git (an overlaid file gets the caller's bytes
  * back) with their mtimes, and EVERY ignored path that changed — any output a
@@ -85,11 +109,18 @@
  * baseline not green, a copy that could not be made, restored or verified,
  * the caller's tree changing under it).
  *
- * Lifecycle. Slots live under `$TMPDIR/motebit-tamper-*` with an `owner.pid`.
+ * Lifecycle. Slots live under `$TMPDIR/motebit-tamper-*` with an
+ * `owner.json`: the owner's pid, hostname, pid namespace (`/proc/self/ns/pid`)
+ * and every process group it started (each test runs detached, in its own).
  * Exit, SIGINT, SIGTERM and SIGHUP kill the running tests (their whole process
- * group) and remove every slot and its worktree registration. On startup, any
- * `motebit-tamper-*` worktree this repo registered whose directory is gone or
- * whose owner pid is dead is removed (a SIGKILLed run leaves such litter).
+ * group) and remove every slot and its worktree registration. A SIGKILLed run
+ * can do neither, so on startup, for any `motebit-tamper-*` worktree this repo
+ * registered whose owner is a dead pid of THIS host and pid namespace, the
+ * recorded groups still working inside the slot (a member's cwd under it,
+ * read from /proc) are SIGKILLed first, then the slot is removed. A slot
+ * recorded by another host or pid namespace is never touched (its pid means
+ * nothing here); one with no owner record is removed only when its directory
+ * is already gone.
  *
  * Concurrency: default max(1, floor(cpus / 2)); `--concurrency=N` / `-j N`
  * on the tamper file's command line, or `TAMPER_CONCURRENCY=N`, overrides.
@@ -97,7 +128,7 @@
  * Plain-node loadable: erasable TypeScript only (Node >= 22.18 strips types),
  * node built-ins only, so `node <tamper file>.mjs` keeps working.
  */
-import { spawn, execFileSync } from "node:child_process";
+import { spawn, spawnSync, execFileSync } from "node:child_process";
 import type { ChildProcess } from "node:child_process";
 import {
   existsSync,
@@ -115,7 +146,8 @@ import {
   writeFileSync,
 } from "node:fs";
 import { createHash } from "node:crypto";
-import { availableParallelism, cpus, tmpdir } from "node:os";
+import * as nodeModule from "node:module";
+import { availableParallelism, cpus, hostname, tmpdir } from "node:os";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
 /** One exact edit that reverts (part of) a fix. `file` is repo-relative. */
@@ -143,6 +175,13 @@ export interface TamperEntry {
    * name or a bare title is not a match.
    */
   red?: string;
+  /**
+   * Run ONLY the `red` test (vitest `-t`, anchored to its exact full name) in
+   * the entry's pre-run, edited run(s) and post-run; the group's baseline
+   * still runs the whole file. For a file whose tests do not depend on each
+   * other and are slow to run all at once. Needs `red`.
+   */
+  only?: boolean;
   /** Packages to rebuild (in the copy only) before the test, because the test reads their `dist`. */
   rebuild?: string[];
   /** Escape hatch for non-vitest tests: argv to run instead of the vitest command. Needs `redMarker`. */
@@ -261,6 +300,72 @@ class RunnerError extends Error {}
 // ---------------------------------------------------------------------------
 // Stale-slot pruning (a SIGKILLed or crashed run leaves registered worktrees).
 
+/** What a slot base's `owner.json` records: who may reap it, and what to kill first. */
+interface OwnerRecord {
+  pid: number;
+  host: string;
+  /** `/proc/self/ns/pid` of the owner (null where there is no /proc). */
+  pidns: string | null;
+  /** Every process group the owner started (each test/build runs in its own). */
+  pgids: number[];
+}
+
+function pidNamespace(): string | null {
+  try {
+    return readlinkSync("/proc/self/ns/pid");
+  } catch {
+    return null;
+  }
+}
+
+function readOwner(base: string): OwnerRecord | null {
+  try {
+    const o = JSON.parse(readFileSync(join(base, "owner.json"), "utf8")) as OwnerRecord;
+    if (!Number.isInteger(o.pid) || typeof o.host !== "string" || !Array.isArray(o.pgids)) {
+      return null;
+    }
+    return o;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * SIGKILL every recorded process group that still has a member working inside
+ * `base` (its cwd under it: proof the group is this slot's, not a later
+ * process that reused the id). Needs /proc; without it nothing is killed.
+ */
+function killLeftoverGroups(base: string, pgids: number[]): void {
+  let baseReal: string;
+  let procs: string[];
+  try {
+    baseReal = realpathSync(base);
+    procs = readdirSync("/proc").filter((n) => /^\d+$/.test(n));
+  } catch {
+    return;
+  }
+  const wanted = new Set(pgids);
+  const proven = new Set<number>();
+  for (const n of procs) {
+    try {
+      const stat = readFileSync(`/proc/${n}/stat`, "utf8");
+      const pgrp = Number(stat.slice(stat.lastIndexOf(")") + 2).split(" ")[2]);
+      if (!wanted.has(pgrp)) continue;
+      const cwd = readlinkSync(`/proc/${n}/cwd`);
+      if (`${cwd}${sep}`.startsWith(`${baseReal}${sep}`)) proven.add(pgrp);
+    } catch {
+      // exited meanwhile, or not ours to read
+    }
+  }
+  for (const g of proven) {
+    try {
+      process.kill(-g, "SIGKILL");
+    } catch {
+      // already gone
+    }
+  }
+}
+
 function pidAlive(pid: number): boolean {
   try {
     process.kill(pid, 0);
@@ -272,7 +377,11 @@ function pidAlive(pid: number): boolean {
 
 /**
  * Remove every `motebit-tamper-*` worktree registered in this repo whose
- * directory is gone or whose owner pid is dead. Returns the paths removed.
+ * owner (`owner.json`) is provably a dead process of THIS host and pid
+ * namespace — after killing the process groups it left running — or, with no
+ * owner record, whose directory is gone. A slot recorded by another host or
+ * pid namespace is never touched: its pid means nothing here. Returns the
+ * paths removed.
  */
 function pruneStaleSlots(root: string): string[] {
   const removed: string[] = [];
@@ -284,16 +393,16 @@ function pruneStaleSlots(root: string): string[] {
   for (const p of paths) {
     const base = dirname(p);
     if (!basename(base).startsWith(BASE_PREFIX) || !/^slot-\d+$/.test(basename(p))) continue;
-    let stale = !existsSync(p);
-    if (!stale) {
-      try {
-        const pid = Number(readFileSync(join(base, "owner.pid"), "utf8").trim());
-        stale = Number.isInteger(pid) && pid > 0 && !pidAlive(pid);
-      } catch {
-        // no owner.pid: not provably ours to reap
-      }
+    const owner = readOwner(base);
+    if (owner != null) {
+      if (owner.host !== hostname() || owner.pidns !== pidNamespace()) continue;
+      if (owner.pid <= 0 || pidAlive(owner.pid)) continue;
+      killLeftoverGroups(base, owner.pgids);
+    } else if (existsSync(p)) {
+      // no owner record: not provably ours to reap (a missing directory is
+      // only a stale registration)
+      continue;
     }
-    if (!stale) continue;
     try {
       execFileSync("git", ["worktree", "remove", "--force", p], { cwd: root, stdio: "ignore" });
     } catch {
@@ -314,7 +423,17 @@ function pruneStaleSlots(root: string): string[] {
 interface Slot {
   index: number;
   dir: string;
+  /** The tests' TMPDIR: emptied before every run. */
   tmp: string;
+  /** The tests' HOME (and XDG dirs under it): recreated before every run. */
+  home: string;
+  /** The runner's own files (reports, reporter): never visible to a test. */
+  run: string;
+  /**
+   * The last run in this slot was an UNEDITED green run of group `key` (and
+   * nothing ran since): the pre-run the next entry of that group stands on.
+   */
+  chain?: { key: string; passed: Set<string> };
   /** repo-relative paths whose content in the slot is the caller's dirty bytes, not HEAD's. */
   overlaid: Set<string>;
   /** `git status` of the slot as created. */
@@ -336,6 +455,8 @@ interface Plan {
   overlayHash: Map<string, string>;
   /** pnpm package name -> package dir, repo-relative ("." for the root). */
   pkgDirs: Map<string, string>;
+  /** Edited file -> did it parse BEFORE any edit (null), not (the reason), or no parser (undefined). */
+  parsesBefore: Map<string, string | null | undefined>;
 }
 
 function makePlan(root: string, pkgs: string[]): Plan {
@@ -376,7 +497,16 @@ function makePlan(root: string, pkgs: string[]): Plan {
     }
     pkgDirs.set(pkg, relative(realpathSync(root), realpathSync(lines[0]!.trim())) || ".");
   }
-  return { root, ignored, dirty, untracked, tracked, overlayHash, pkgDirs };
+  return {
+    root,
+    ignored,
+    dirty,
+    untracked,
+    tracked,
+    overlayHash,
+    pkgDirs,
+    parsesBefore: new Map(),
+  };
 }
 
 /** Does any link under `.pnpm/<entry>/node_modules` point outside the store (into the workspace)? */
@@ -500,7 +630,9 @@ function createSlot(plan: Plan, base: string, index: number): Slot {
   const dir = join(base, `slot-${index}`);
   git(root, ["worktree", "add", "--detach", "--quiet", dir, "HEAD"]);
   const tmp = join(base, `tmp-${index}`);
-  mkdirSync(tmp, { recursive: true });
+  const home = join(base, `home-${index}`);
+  const run = join(base, `run-${index}`);
+  mkdirSync(run, { recursive: true });
 
   // Ignored build state.
   for (const p of plan.ignored) {
@@ -538,7 +670,9 @@ function createSlot(plan: Plan, base: string, index: number): Slot {
   }
   const pristineStatus = git(dir, ["status", "--porcelain=v1", "-z", "--untracked-files=all"]);
   const pristineIgnored = ignoredState(dir);
-  return { index, dir, tmp, overlaid, pristineStatus, pristineIgnored };
+  const slot: Slot = { index, dir, tmp, home, run, overlaid, pristineStatus, pristineIgnored };
+  resetRunState(slot);
+  return slot;
 }
 
 // ---------------------------------------------------------------------------
@@ -546,6 +680,8 @@ function createSlot(plan: Plan, base: string, index: number): Slot {
 
 interface Running {
   children: Set<ChildProcess>;
+  /** Called with each new child's process group id (= its pid: it is detached). */
+  onSpawn?: (pgid: number) => void;
 }
 
 interface Exec {
@@ -563,6 +699,7 @@ function run(
   return new Promise((resolveRun) => {
     const child = spawn(cmd, args, { cwd, env, detached: true, stdio: ["ignore", "pipe", "pipe"] });
     running.children.add(child);
+    if (child.pid != null) running.onSpawn?.(child.pid);
     const chunks: Buffer[] = [];
     child.stdout.on("data", (d: Buffer) => chunks.push(d));
     child.stderr.on("data", (d: Buffer) => chunks.push(d));
@@ -596,15 +733,43 @@ function relEdit(root: string, file: string): string {
 // ---------------------------------------------------------------------------
 // Evidence.
 
-/** The companion reporter: vitest's `json` reporter drops unhandled errors and the run's end reason. */
+/**
+ * The companion reporter: vitest's `json` reporter drops unhandled errors, the
+ * run's end reason, and each failed test's error NAME and message (a timeout's
+ * message included: its failureMessages carry only a placeholder stack).
+ */
 const META_REPORTER = `import { writeFileSync } from "node:fs";
 export default class TamperRunnerMeta {
-  onTestRunEnd(_modules, errors, reason) {
+  onTestRunEnd(modules, errors, reason) {
     const unhandled = (errors ?? []).map((e) => String(e?.stack ?? e?.message ?? e));
-    writeFileSync(process.env.TAMPER_RUNNER_META, JSON.stringify({ reason, unhandled }));
+    const failed = [];
+    for (const m of modules ?? []) {
+      for (const t of m.children.allTests()) {
+        const r = t.result();
+        if (r.state !== "failed") continue;
+        const names = [];
+        for (let p = t.parent; p != null && p.type === "suite"; p = p.parent) names.unshift(p.name);
+        failed.push({
+          file: m.moduleId,
+          name: [...names, t.name].join(" "),
+          errors: (r.errors ?? []).map((e) => ({
+            name: String(e?.name ?? ""),
+            message: String(e?.message ?? ""),
+            stack: String(e?.stack ?? ""),
+          })),
+        });
+      }
+    }
+    writeFileSync(process.env.TAMPER_RUNNER_META, JSON.stringify({ reason, unhandled, failed }));
   }
 }
 `;
+
+interface TestError {
+  name: string;
+  message: string;
+  stack: string;
+}
 
 interface TestOutcome {
   status: string;
@@ -619,6 +784,8 @@ interface VitestEvidence {
   fileRan: boolean;
   /** Full test name -> every test with that name, in the target file. */
   tests: Map<string, TestOutcome[]>;
+  /** Full test name -> the errors of its failed instances, in the target file. */
+  errors: Map<string, TestError[]>;
   /** Suite-level / collection errors (any file). */
   suiteErrors: string[];
   unhandled: string[];
@@ -639,6 +806,10 @@ interface JsonFile {
   assertionResults: JsonAssertion[];
 }
 
+function escapeRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
 async function runVitest(
   running: Running,
   slot: Slot,
@@ -646,10 +817,11 @@ async function runVitest(
   pkg: string | undefined,
   test: string,
   env: NodeJS.ProcessEnv,
+  only?: string,
 ): Promise<VitestEvidence> {
-  const jsonPath = join(slot.tmp, "vitest-report.json");
-  const metaPath = join(slot.tmp, "vitest-meta.json");
-  const reporterPath = join(slot.tmp, "tamper-runner-meta-reporter.mjs");
+  const jsonPath = join(slot.run, "vitest-report.json");
+  const metaPath = join(slot.run, "vitest-meta.json");
+  const reporterPath = join(slot.run, "tamper-runner-meta-reporter.mjs");
   rmSync(jsonPath, { force: true });
   rmSync(metaPath, { force: true });
   writeFileSync(reporterPath, META_REPORTER);
@@ -662,10 +834,12 @@ async function runVitest(
     `--outputFile.json=${jsonPath}`,
     `--reporter=${reporterPath}`,
   );
+  if (only != null) args.push("-t", `^${escapeRegExp(only)}$`);
   const t = await run(running, "pnpm", args, slot.dir, { ...env, TAMPER_RUNNER_META: metaPath });
   const ev: VitestEvidence = {
     fileRan: false,
     tests: new Map(),
+    errors: new Map(),
     suiteErrors: [],
     unhandled: [],
     reason: "",
@@ -673,7 +847,11 @@ async function runVitest(
     out: t.out,
   };
   let report: { testResults: JsonFile[] };
-  let meta: { reason: string; unhandled: string[] };
+  let meta: {
+    reason: string;
+    unhandled: string[];
+    failed?: { file: string; name: string; errors: TestError[] }[];
+  };
   try {
     report = JSON.parse(readFileSync(jsonPath, "utf8"));
   } catch {
@@ -690,6 +868,19 @@ async function runVitest(
   ev.unhandled = meta.unhandled;
   const pkgDir = pkg != null ? plan.pkgDirs.get(pkg)! : ".";
   const target = realpathSync(slot.dir) + sep + join(pkgDir, test);
+  const isTarget = (file: string): boolean => {
+    let name = file;
+    try {
+      name = realpathSync(file);
+    } catch {
+      // keep as reported
+    }
+    return resolve(name) === resolve(target);
+  };
+  for (const f of meta.failed ?? []) {
+    if (!isTarget(f.file)) continue;
+    ev.errors.set(f.name, [...(ev.errors.get(f.name) ?? []), ...f.errors]);
+  }
   for (const f of report.testResults) {
     let name = f.name;
     try {
@@ -701,7 +892,7 @@ async function runVitest(
     if ((f.message ?? "") !== "" || (f.status === "failed" && !failedTests)) {
       ev.suiteErrors.push(`${relative(slot.dir, name)}: ${f.message || "failed outside any test"}`);
     }
-    if (resolve(name) !== resolve(target)) continue;
+    if (!isTarget(name)) continue;
     ev.fileRan = true;
     for (const a of f.assertionResults) {
       const list = ev.tests.get(a.fullName) ?? [];
@@ -744,15 +935,73 @@ function baselineProblem(ev: VitestEvidence): string | null {
   return null;
 }
 
+/** A file an entry edits: repo-relative, and relative to the test's package dir. */
+interface EditedFile {
+  rel: string;
+  pkgRel: string;
+}
+
+/** The error is the edit's own code failing to load or run as code, not the test's verdict. */
+const CODE_ERROR_NAME = /^(SyntaxError|ReferenceError|RolldownError|ParseError)$/;
+const CODE_ERROR_MESSAGE =
+  /is not defined|Cannot find module|Failed to (load|resolve)|does not provide an export named|Parse fail/;
+
+/**
+ * Why a failed test in the target file failed on the EDIT's invalid code — a
+ * SyntaxError / ReferenceError / "is not defined" / "Cannot find module" whose
+ * message or stack names an edited file — or null.
+ */
+function invalidCode(ev: VitestEvidence, failed: string[], edited: EditedFile[]): string | null {
+  for (const n of failed) {
+    for (const e of ev.errors.get(n) ?? []) {
+      if (!CODE_ERROR_NAME.test(e.name) && !CODE_ERROR_MESSAGE.test(e.message)) continue;
+      const text = `${e.message}\n${e.stack}`;
+      const hit = edited.find(
+        (f) =>
+          text.includes(f.rel) || (!f.pkgRel.startsWith("..") && text.includes(`/${f.pkgRel}`)),
+      );
+      if (hit != null) return `${e.name}: ${e.message.split("\n")[0]} (in ${hit.rel})`;
+    }
+  }
+  return null;
+}
+
+const TIMEOUT = /^(Test|Hook) timed out in \d+ms/;
+
+/** Every failure of these tests is a timeout (and there is at least one). */
+function onlyTimeouts(ev: VitestEvidence, names: string[]): boolean {
+  return (
+    names.length > 0 &&
+    names.every((n) => {
+      const errs = ev.errors.get(n) ?? [];
+      return errs.length > 0 && errs.every((e) => TIMEOUT.test(e.message));
+    })
+  );
+}
+
+interface Classified {
+  verdict: TamperVerdict;
+  detail?: string;
+  /** The tests the RED rests on: each must pass again in the post-run. */
+  bites?: string[];
+  /** A RED whose every relevant failure is a timeout: it must reproduce. */
+  timeoutOnly?: boolean;
+}
+
 function classifyVitest(
   ev: VitestEvidence,
-  baselinePassed: Set<string>,
+  prePassed: Set<string>,
   red: string | undefined,
-): { verdict: TamperVerdict; detail?: string } {
+  edited: EditedFile[],
+): Classified {
   const bad = unusable(ev);
   if (bad != null) return { verdict: "INCONCLUSIVE", detail: `(${bad})\n${tail(ev.out)}` };
   const failed = [...ev.tests].filter(([, l]) => l.some(isTestFailure)).map(([n]) => n);
-  const bites = failed.filter((n) => baselinePassed.has(n));
+  const invalid = invalidCode(ev, failed, edited);
+  if (invalid != null) {
+    return { verdict: "INCONCLUSIVE", detail: `(edit is not valid code: ${invalid})` };
+  }
+  const bites = failed.filter((n) => prePassed.has(n));
   if (red != null) {
     const list = ev.tests.get(red);
     if (list == null) {
@@ -769,11 +1018,13 @@ function classifyVitest(
     if (list.length !== 1) {
       return { verdict: "INCONCLUSIVE", detail: `(${list.length} tests are named "${red}")` };
     }
-    if (!baselinePassed.has(red)) {
-      return { verdict: "INCONCLUSIVE", detail: `("${red}" did not pass in the baseline)` };
+    if (!prePassed.has(red)) {
+      return { verdict: "INCONCLUSIVE", detail: `("${red}" did not pass in the pre-run)` };
     }
     const o = list[0]!;
-    if (isTestFailure(o) && ev.code !== 0) return { verdict: "RED" };
+    if (isTestFailure(o) && ev.code !== 0) {
+      return { verdict: "RED", bites: [red], timeoutOnly: onlyTimeouts(ev, [red]) };
+    }
     if (o.status === "passed") {
       const others = failed.length > 0 ? `; other tests failed: ${failed.join(", ")}` : "";
       return { verdict: "GREEN", detail: `("${red}" passed${others})` };
@@ -783,12 +1034,14 @@ function classifyVitest(
       detail: `("${red}" is ${o.status}, vitest exited ${ev.code})`,
     };
   }
-  if (bites.length > 0 && ev.code !== 0) return { verdict: "RED" };
+  if (bites.length > 0 && ev.code !== 0) {
+    return { verdict: "RED", bites, timeoutOnly: onlyTimeouts(ev, bites) };
+  }
   if (failed.length === 0 && passedNames(ev).size > 0 && ev.code === 0) return { verdict: "GREEN" };
   return {
     verdict: "INCONCLUSIVE",
     detail:
-      `(no baseline-passing test failed inside a test: failed=[${failed.join(", ")}], ` +
+      `(no test that passed in the pre-run failed inside a test: failed=[${failed.join(", ")}], ` +
       `vitest exited ${ev.code})\n${tail(ev.out)}`,
   };
 }
@@ -800,8 +1053,6 @@ interface Group {
   key: string;
   label: string;
   entries: number[];
-  /** Names of the tests that passed in the baseline (vitest groups). */
-  baselinePassed?: Set<string>;
 }
 
 function groupKey(e: TamperEntry): { key: string; label: string } {
@@ -817,73 +1068,186 @@ function groupKey(e: TamperEntry): { key: string; label: string } {
 }
 
 function slotEnv(slot: Slot): NodeJS.ProcessEnv {
-  return { ...process.env, TMPDIR: slot.tmp, TMP: slot.tmp, TEMP: slot.tmp };
+  const { tmp, home } = slot;
+  return {
+    ...process.env,
+    TMPDIR: tmp,
+    TMP: tmp,
+    TEMP: tmp,
+    HOME: home,
+    USERPROFILE: home,
+    XDG_CONFIG_HOME: join(home, ".config"),
+    XDG_CACHE_HOME: join(home, ".cache"),
+    XDG_DATA_HOME: join(home, ".local", "share"),
+    XDG_STATE_HOME: join(home, ".local", "state"),
+  };
 }
 
-/** Run a group's test once with no edit; returns the problem, or null when green. */
-async function runBaseline(
-  group: Group,
+/** What a green unedited run proves green: the group's test, narrowed to `red` under `only`. */
+function chainKey(group: Group, entry: TamperEntry): string {
+  return entry.only === true ? `${group.key}\0-t\0${entry.red}` : group.key;
+}
+
+/** Before EVERY run: an empty TMPDIR and a fresh HOME, so no run sees another's files there. */
+function resetRunState(slot: Slot): void {
+  for (const d of [slot.tmp, slot.home]) {
+    rmSync(d, { recursive: true, force: true });
+    mkdirSync(d, { recursive: true });
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Is the edit valid code? (A botched revert is not evidence.)
+
+interface TsLike {
+  transpileModule(
+    text: string,
+    o: { fileName: string; reportDiagnostics: boolean; compilerOptions: Record<string, unknown> },
+  ): { diagnostics?: { messageText: unknown; start?: number }[] };
+  flattenDiagnosticMessageText(m: unknown, nl: string): string;
+}
+
+const tsCache = new Map<string, TsLike | null>();
+
+function typescriptFor(root: string): TsLike | null {
+  if (!tsCache.has(root)) {
+    try {
+      tsCache.set(root, nodeModule.createRequire(join(root, "package.json"))("typescript"));
+    } catch {
+      tsCache.set(root, null);
+    }
+  }
+  return tsCache.get(root)!;
+}
+
+/**
+ * Why the file at `abs` does not parse, null when it does, undefined when there
+ * is no parser for it. JS: `node --check`. TS: the tree's own `typescript`
+ * (syntax only), else node's type stripper. JSON: JSON.parse.
+ */
+function parseProblem(root: string, abs: string): string | null | undefined {
+  const ext = abs.slice(abs.lastIndexOf(".")).toLowerCase();
+  if ([".js", ".mjs", ".cjs"].includes(ext)) {
+    const r = spawnSync(process.execPath, ["--check", abs], { encoding: "utf8" });
+    if (r.status === 0) return null;
+    const lines = `${r.stderr}`.split("\n").filter((l) => l.trim() !== "");
+    return lines.find((l) => /Error/.test(l)) ?? lines[0] ?? `node --check exited ${r.status}`;
+  }
+  const text = readFileSync(abs, "utf8");
+  if ([".ts", ".mts", ".cts", ".tsx"].includes(ext)) {
+    const ts = typescriptFor(root);
+    if (ts != null) {
+      const out = ts.transpileModule(text, {
+        fileName: abs,
+        reportDiagnostics: true,
+        compilerOptions: { jsx: 1 },
+      });
+      const d = out.diagnostics?.[0];
+      if (d == null) return null;
+      const line = d.start != null ? text.slice(0, d.start).split("\n").length : "?";
+      return `line ${line}: ${ts.flattenDiagnosticMessageText(d.messageText, " ")}`;
+    }
+    const strip = (
+      nodeModule as unknown as {
+        stripTypeScriptTypes?: (code: string, o: { mode: string }) => string;
+      }
+    ).stripTypeScriptTypes;
+    if (strip == null || ext === ".tsx") return undefined;
+    try {
+      strip(text, { mode: "transform" });
+      return null;
+    } catch (err) {
+      return (err instanceof Error ? err.message : String(err)).split("\n")[0]!;
+    }
+  }
+  if (ext === ".json") {
+    try {
+      JSON.parse(text);
+      return null;
+    } catch (err) {
+      return err instanceof Error ? err.message : String(err);
+    }
+  }
+  return undefined;
+}
+
+// ---------------------------------------------------------------------------
+// One run: unedited (a pre- or post-run) or with the entry's edits.
+
+/** Run the group's test with NO edit (a baseline, pre- or post-run); null problem = green. */
+async function uneditedRun(
   entry: TamperEntry,
   slot: Slot,
   plan: Plan,
   running: Running,
-): Promise<string | null> {
+  narrow: boolean,
+): Promise<{ problem: string | null; passed: Set<string> }> {
+  resetRunState(slot);
   try {
     const env = slotEnv(slot);
     if (entry.command != null) {
       const [cmd, ...args] = entry.command;
       const t = await run(running, cmd!, args, join(slot.dir, entry.cwd ?? "."), env);
-      if (t.code !== 0) return `exited ${t.code}\n${tail(t.out)}`;
-      if (t.out.includes(entry.redMarker!)) return `printed its red marker "${entry.redMarker}"`;
-      return null;
+      if (t.code !== 0) return { problem: `exited ${t.code}\n${tail(t.out)}`, passed: new Set() };
+      if (t.out.includes(entry.redMarker!)) {
+        return { problem: `printed its red marker "${entry.redMarker}"`, passed: new Set() };
+      }
+      return { problem: null, passed: new Set() };
     }
-    const ev = await runVitest(running, slot, plan, entry.pkg, entry.test!, env);
+    const only = narrow && entry.only === true ? entry.red : undefined;
+    const ev = await runVitest(running, slot, plan, entry.pkg, entry.test!, env, only);
     const problem = baselineProblem(ev);
-    if (problem != null) return `${problem}\n${tail(ev.out)}`;
-    group.baselinePassed = passedNames(ev);
-    return null;
+    return {
+      problem: problem != null ? `${problem}\n${tail(ev.out)}` : null,
+      passed: passedNames(ev),
+    };
   } finally {
     restore(slot, plan, new Map());
   }
 }
 
-async function runOne(
+/** The outcome of one run with the edits applied. */
+interface EditedRun {
+  /** Did any process (a rebuild or the test) run with the edit? */
+  ran: boolean;
+  /** Set when the edit settles the entry without a test verdict. */
+  final?: Classified;
+  ev?: VitestEvidence;
+  cmd?: Exec;
+}
+
+async function editedRun(
   entry: TamperEntry,
-  index: number,
-  group: Group,
   slot: Slot,
   plan: Plan,
   running: Running,
-): Promise<TamperResult> {
+): Promise<EditedRun> {
   const { dir } = slot;
+  resetRunState(slot);
   const env = slotEnv(slot);
   const originals = new Map<string, { bytes: Buffer; atime: Date; mtime: Date }>();
-  const result = (verdict: TamperVerdict, detail?: string): TamperResult => ({
-    index,
-    name: entry.name,
-    verdict,
-    slot: slot.index,
-    ...(detail != null ? { detail } : {}),
-  });
-
-  let outcome: TamperResult | undefined;
   try {
     for (const e of entry.edits) {
       const rel = relEdit(plan.root, e.file);
       const abs = join(dir, rel);
       if (!existsSync(abs)) {
-        outcome = result("COULD NOT APPLY", `(${rel}: file not found)`);
-        break;
+        return {
+          ran: false,
+          final: { verdict: "COULD NOT APPLY", detail: `(${rel}: file not found)` },
+        };
       }
       const current = readFileSync(abs, "utf8");
       if (!originals.has(rel)) {
         const st = statSync(abs);
         originals.set(rel, { bytes: readFileSync(abs), atime: st.atime, mtime: st.mtime });
+        if (!plan.parsesBefore.has(rel)) plan.parsesBefore.set(rel, parseProblem(plan.root, abs));
       }
       const count = current.split(e.from).length - 1;
       if (count !== 1) {
-        outcome = result("COULD NOT APPLY", `(${rel}: text found ${count}×)`);
-        break;
+        return {
+          ran: false,
+          final: { verdict: "COULD NOT APPLY", detail: `(${rel}: text found ${count}×)` },
+        };
       }
       writeFileSync(
         abs,
@@ -891,42 +1255,163 @@ async function runOne(
       );
     }
 
-    if (outcome == null && entry.rebuild != null && entry.rebuild.length > 0) {
-      for (const p of entry.rebuild) {
-        const b = await run(running, "pnpm", ["--filter", p, "build"], dir, env);
-        if (b.code !== 0) {
-          outcome = result(
-            "BUILD FAILED",
-            `(pnpm --filter ${p} build exited ${b.code})\n${tail(b.out)}`,
-          );
-          break;
-        }
+    // A file that parsed before the edit and does not after: the edit is not
+    // valid code, and nothing it makes fail is evidence.
+    for (const rel of originals.keys()) {
+      if (plan.parsesBefore.get(rel) !== null) continue;
+      const problem = parseProblem(plan.root, join(dir, rel));
+      if (problem != null) {
+        return {
+          ran: false,
+          final: {
+            verdict: "INCONCLUSIVE",
+            detail: `(edit is not valid code: ${rel} does not parse: ${problem})`,
+          },
+        };
       }
     }
 
-    if (outcome == null) {
-      if (entry.command != null) {
-        const [cmd, ...args] = entry.command;
-        const t = await run(running, cmd!, args, join(dir, entry.cwd ?? "."), env);
-        const marked = t.out.includes(entry.redMarker!);
-        if (t.code !== 0 && marked) outcome = result("RED");
-        else if (t.code === 0 && !marked) outcome = result("GREEN");
-        else {
-          outcome = result(
-            "INCONCLUSIVE",
-            `(exited ${t.code}, red marker "${entry.redMarker}" ${marked ? "printed" : "absent"})\n${tail(t.out)}`,
-          );
-        }
-      } else {
-        const ev = await runVitest(running, slot, plan, entry.pkg, entry.test!, env);
-        const c = classifyVitest(ev, group.baselinePassed ?? new Set(), entry.red);
-        outcome = result(c.verdict, c.detail);
+    for (const p of entry.rebuild ?? []) {
+      const b = await run(running, "pnpm", ["--filter", p, "build"], dir, env);
+      if (b.code !== 0) {
+        return {
+          ran: true,
+          final: {
+            verdict: "BUILD FAILED",
+            detail: `(pnpm --filter ${p} build exited ${b.code})\n${tail(b.out)}`,
+          },
+        };
       }
     }
+
+    if (entry.command != null) {
+      const [cmd, ...args] = entry.command;
+      return { ran: true, cmd: await run(running, cmd!, args, join(dir, entry.cwd ?? "."), env) };
+    }
+    const only = entry.only === true ? entry.red : undefined;
+    return {
+      ran: true,
+      ev: await runVitest(running, slot, plan, entry.pkg, entry.test!, env, only),
+    };
   } finally {
     restore(slot, plan, originals);
   }
-  return outcome;
+}
+
+function classifyEdited(
+  entry: TamperEntry,
+  r: EditedRun,
+  prePassed: Set<string>,
+  edited: EditedFile[],
+): Classified {
+  if (r.final != null) return r.final;
+  if (r.cmd != null) {
+    const t = r.cmd;
+    const marked = t.out.includes(entry.redMarker!);
+    if (t.code !== 0 && marked) return { verdict: "RED", bites: [] };
+    if (t.code === 0 && !marked) return { verdict: "GREEN" };
+    return {
+      verdict: "INCONCLUSIVE",
+      detail: `(exited ${t.code}, red marker "${entry.redMarker}" ${marked ? "printed" : "absent"})\n${tail(t.out)}`,
+    };
+  }
+  return classifyVitest(r.ev!, prePassed, entry.red, edited);
+}
+
+function firstLine(text: string | undefined): string {
+  return (text ?? "").split("\n")[0]!;
+}
+
+/**
+ * One entry under THE SANDWICH: in this slot, the test is green immediately
+ * before the edit (the pre-run — or the previous entry's green post-run, or
+ * the baseline, when nothing ran since), red with it, and green again after
+ * it is reverted (the post-run). Anything else is INCONCLUSIVE, with the
+ * reason. A RED that rests only on timeouts must reproduce on an immediate
+ * re-run with the edit.
+ */
+async function runOne(
+  entry: TamperEntry,
+  index: number,
+  group: Group,
+  slot: Slot,
+  plan: Plan,
+  running: Running,
+  last: boolean,
+): Promise<TamperResult> {
+  const result = (c: Classified): TamperResult => ({
+    index,
+    name: entry.name,
+    verdict: c.verdict,
+    slot: slot.index,
+    ...(c.detail != null ? { detail: c.detail } : {}),
+  });
+
+  const key = chainKey(group, entry);
+  if (slot.chain?.key !== key) {
+    const pre = await uneditedRun(entry, slot, plan, running, true);
+    if (pre.problem != null) {
+      slot.chain = undefined;
+      return result({
+        verdict: "INCONCLUSIVE",
+        detail: `(pre-run not green: with no edit, just before it, in this slot: ${pre.problem})`,
+      });
+    }
+    slot.chain = { key, passed: pre.passed };
+  }
+  const prePassed = slot.chain.passed;
+
+  const pkgDir = entry.pkg != null ? (plan.pkgDirs.get(entry.pkg) ?? ".") : ".";
+  const edited: EditedFile[] = entry.edits.map((e) => {
+    const rel = relEdit(plan.root, e.file);
+    return { rel, pkgRel: relative(pkgDir, rel).split("\\").join("/") };
+  });
+
+  const first = await editedRun(entry, slot, plan, running);
+  if (!first.ran) return result(first.final!); // nothing ran: the chain still holds
+  slot.chain = undefined;
+  let c = classifyEdited(entry, first, prePassed, edited);
+
+  if (c.verdict === "RED" && c.timeoutOnly === true) {
+    const again = classifyEdited(
+      entry,
+      await editedRun(entry, slot, plan, running),
+      prePassed,
+      edited,
+    );
+    if (again.verdict !== "RED") {
+      c = {
+        verdict: "INCONCLUSIVE",
+        detail:
+          `(a timeout that did not reproduce: on an immediate re-run with the edit the test was ` +
+          `${again.verdict} ${firstLine(again.detail)})`,
+      };
+    }
+  }
+
+  // The post-run: also the next entry's pre-run. Skipped only where nothing
+  // rests on it (a non-RED last entry of its group).
+  if (c.verdict === "RED" || !last) {
+    const post = await uneditedRun(entry, slot, plan, running, true);
+    if (post.problem != null) {
+      if (c.verdict === "RED") {
+        c = {
+          verdict: "INCONCLUSIVE",
+          detail: `(post-run not green: slot state leaked — with the edit reverted the test fails: ${post.problem})`,
+        };
+      }
+    } else {
+      slot.chain = { key, passed: post.passed };
+      const back = (c.bites ?? []).filter((n) => !post.passed.has(n));
+      if (c.verdict === "RED" && back.length > 0) {
+        c = {
+          verdict: "INCONCLUSIVE",
+          detail: `(post-run: ${back.map((n) => `"${n}"`).join(", ")} did not pass with the edit reverted)`,
+        };
+      }
+    }
+  }
+  return result(c);
 }
 
 /**
@@ -1010,10 +1495,16 @@ export async function runTampers(
   const log = opts.log ?? ((line: string) => process.stdout.write(`${line}\n`));
   const root = git(resolve(opts.root), ["rev-parse", "--show-toplevel"]).trim();
 
-  const malformed = entries.filter((e) => e.command == null && e.test == null);
+  const malformed = entries.filter(
+    (e) => (e.command == null && e.test == null) || (e.only === true && e.red == null),
+  );
   if (malformed.length > 0) {
     for (const e of malformed) {
-      log(`tamper-runner: ABORTED — entry "${e.name}" needs test (+ pkg), or command`);
+      log(
+        e.only === true && e.red == null
+          ? `tamper-runner: ABORTED — entry "${e.name}" sets only without red`
+          : `tamper-runner: ABORTED — entry "${e.name}" needs test (+ pkg), or command`,
+      );
     }
     if (opts.exit !== false) process.exit(2);
     return { ok: false, results: [], concurrency: 0, exitCode: 2 };
@@ -1050,9 +1541,30 @@ export async function runTampers(
 
   for (const p of pruneStaleSlots(root)) log(`tamper-runner: removed a stale slot ${p}`);
 
-  const running: Running = { children: new Set() };
   const base = mkdtempSync(join(tmpdir(), BASE_PREFIX));
-  writeFileSync(join(base, "owner.pid"), `${process.pid}\n`);
+  // Who may reap this base, and every process group to kill first if this
+  // process dies without cleaning up (SIGKILL): the tests run detached.
+  const owner: OwnerRecord = {
+    pid: process.pid,
+    host: hostname(),
+    pidns: pidNamespace(),
+    pgids: [],
+  };
+  const writeOwner = (): void => {
+    try {
+      writeFileSync(join(base, "owner.json"), JSON.stringify(owner));
+    } catch {
+      // the base is gone (cleanup ran): nothing left to record
+    }
+  };
+  writeOwner();
+  const running: Running = {
+    children: new Set(),
+    onSpawn: (pgid) => {
+      owner.pgids.push(pgid);
+      writeOwner();
+    },
+  };
   const slots: Slot[] = [];
   let cleaned = false;
   const cleanup = (): void => {
@@ -1141,19 +1653,25 @@ export async function runTampers(
     };
 
     // Phase 1: every distinct test, once, with no edit. Nothing is tampered
-    // until all of them are green.
+    // until all of them are green. A green baseline is the first entry's
+    // pre-run when it was the last run in the slot that runs the group.
     await pool(async (slot, g) => {
-      const problem = await runBaseline(g, entries[g.entries[0]!]!, slot, plan, running);
-      if (problem != null) state.baselineFailed.push({ label: g.label, problem });
+      const r = await uneditedRun(entries[g.entries[0]!]!, slot, plan, running, false);
+      if (r.problem != null) {
+        slot.chain = undefined;
+        state.baselineFailed.push({ label: g.label, problem: r.problem });
+      } else slot.chain = { key: g.key, passed: r.passed };
     });
 
-    // Phase 2: each group's entries, sequentially, in one slot.
+    // Phase 2: each group's entries, sequentially, in one slot, each under
+    // the sandwich (runOne).
     if (state.fatal == null && state.baselineFailed.length === 0) {
       flush();
       await pool(async (slot, g) => {
-        for (const idx of g.entries) {
+        for (const [k, idx] of g.entries.entries()) {
           if (state.fatal != null) return;
-          results[idx] = await runOne(entries[idx]!, idx, g, slot, plan, running);
+          const last = k === g.entries.length - 1;
+          results[idx] = await runOne(entries[idx]!, idx, g, slot, plan, running, last);
           flush();
         }
       });

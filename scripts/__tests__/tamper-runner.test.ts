@@ -233,13 +233,14 @@ describe("tamper-runner evidence", () => {
       1,
     );
     expect(verdicts(d)).toEqual(["INCONCLUSIVE"]);
-    expect(d.out).toContain('"sum fresh" did not pass');
+    expect(d.out).toContain('("sum fresh" did not pass in the pre-run)');
     expect(d.code).toBe(1);
   });
 
   it("X5: without red, only a test that passed before the edit can bite (a new failing test cannot)", () => {
     const d = drive(fx!, [{ name: "new test", ...SUM_TEST, edits: [ADD_FAILING_TEST] }], 1);
     expect(verdicts(d)).toEqual(["INCONCLUSIVE"]);
+    expect(d.out).toContain("(no test that passed in the pre-run failed inside a test");
     expect(d.code).toBe(1);
   });
 
@@ -286,6 +287,38 @@ describe("tamper-runner evidence", () => {
       /^BASELINE NOT GREEN: exit7 ok\.fx\.mjs +\(vitest exited [1-9]\d* with every test passing/m,
     );
     expect(verdicts(d)).not.toContain("RED");
+    expect(d.code).toBe(2);
+  });
+
+  it("only: runs just the red test (a failing sibling is never run)", () => {
+    const d = drive(
+      fx!,
+      [
+        {
+          name: "narrowed, sibling broken",
+          ...SUM_TEST,
+          red: "sum adds two numbers",
+          only: true,
+          edits: [BREAK_SUB],
+        },
+        {
+          name: "narrowed, red broken",
+          ...SUM_TEST,
+          red: "sum subtracts two numbers",
+          only: true,
+          edits: [BREAK_SUB],
+        },
+      ],
+      1,
+    );
+    expect(verdicts(d), d.out).toEqual(["GREEN", "RED"]);
+    expect(d.out).toMatch(/^GREEN +narrowed, sibling broken +\("sum adds two numbers" passed\)$/m);
+    expect(d.code).toBe(1);
+  });
+
+  it("only without red aborts (exit 2)", () => {
+    const d = drive(fx!, [{ name: "no red", ...SUM_TEST, only: true, edits: [BREAK_SUM] }], 1);
+    expect(d.out).toContain('entry "no red" sets only without red');
     expect(d.code).toBe(2);
   });
 });
