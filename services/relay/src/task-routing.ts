@@ -1114,8 +1114,8 @@ export async function forwardTaskViaMcp(
    * which the worker verifies under its pinned relay key.
    */
   _retiredApiToken?: string,
-  /** Ingests the receipt; answers `false` when ingestion refused it. */
-  onReceipt?: (receipt: ReceiptCandidate) => Promise<boolean | void>,
+  /** Ingests the receipt; answers `true` only when ingestion accepted it. */
+  onReceipt?: (receipt: ReceiptCandidate) => Promise<boolean>,
   /** Relay-signed admission artifact for THIS worker + task (`mintTaskDispatchToken`) — the `dispatch_token` argument, never the bearer (#981). */
   dispatchToken?: string,
   /** Outbound URL law (`buildOutboundPolicy`); absent ⇒ literals + names only. */
@@ -1333,8 +1333,10 @@ export async function forwardTaskViaMcp(
               // Settlement callback (orchestration layer handles economics).
               // A throw leaves the answer unknown: the entry is not given it.
               try {
+                // Only a positive answer is acceptance (#890 r7): absence of
+                // a refusal is never evidence the receipt was ingested.
                 const ingested = await onReceipt(receiptData);
-                if (ingested !== false) accept();
+                if (ingested === true) accept();
               } catch (settlementErr) {
                 logger.warn("task.mcp_forward_settlement_failed", {
                   correlationId: taskId,
@@ -1771,33 +1773,80 @@ export function cleanupTaskRoutes(db: DatabaseDriver, now: number = Date.now()):
 }
 
 /**
+ * Whose hand-off a route records (#890 round 7, migration v51).
+ *
+ * - `admission` — this relay admitted the task for its own key owner (the
+ *   path agent) and handed it on: the path agent's own devices, a pinned or
+ *   ranked worker, a submitter-presented worker, a federated forward.
+ * - `inbound_forward` — a peer relay forwarded the task here and this relay
+ *   handed it to its own agent.
+ *
+ * The two never answer each other: a key owner is answered only by a route
+ * of its own admission, and an inbound task only by the route its forward
+ * wrote. A peer chooses the task id it forwards, so without the origin an
+ * inbound route under a re-used id would stand as the owner's executor.
+ */
+export type TaskRouteOrigin = "admission" | "inbound_forward";
+
+/**
  * Record that the relay handed `taskId` to `executorId` — locally
  * (`viaPeer` ''), or through the peer relay `viaPeer`. Written at EVERY
  * hand-off: admission (the path agent's own devices), a pinned or ranked
- * dispatch over a socket or an MCP forward, a federated forward, and the
- * executor relay's inbound forward. Idempotent. `relay_task_routes`
- * (migration v50) outlives the queue entry.
+ * dispatch over a socket or an MCP forward, a federated forward (all
+ * `admission`), and the executor relay's inbound forward
+ * (`inbound_forward`). Idempotent. `relay_task_routes` (migration v50;
+ * `origin` v51) outlives the queue entry.
  */
 export function recordTaskRoute(
   db: DatabaseDriver,
   taskId: string,
   executorId: string,
   viaPeer = "",
+  origin: TaskRouteOrigin = "admission",
 ): void {
   if (executorId === "") return;
   db.prepare(
-    "INSERT OR IGNORE INTO relay_task_routes (task_id, executor_id, via_peer, created_at) VALUES (?, ?, ?, ?)",
-  ).run(taskId, executorId, viaPeer, Date.now());
+    "INSERT OR IGNORE INTO relay_task_routes (task_id, executor_id, via_peer, created_at, origin) VALUES (?, ?, ?, ?, ?)",
+  ).run(taskId, executorId, viaPeer, Date.now(), origin);
 }
 
-/** Every recorded executor of `taskId`, with the peer it went through ('' = local). */
+/**
+ * The recorded executors of `taskId` whose hand-off was of `origin`, with
+ * the peer each went through ('' = local).
+ */
 export function taskRoutes(
   db: DatabaseDriver,
   taskId: string,
+  origin: TaskRouteOrigin,
 ): Array<{ executor_id: string; via_peer: string }> {
   return db
-    .prepare("SELECT executor_id, via_peer FROM relay_task_routes WHERE task_id = ?")
-    .all(taskId) as Array<{ executor_id: string; via_peer: string }>;
+    .prepare("SELECT executor_id, via_peer FROM relay_task_routes WHERE task_id = ? AND origin = ?")
+    .all(taskId, origin) as Array<{ executor_id: string; via_peer: string }>;
+}
+
+/**
+ * Does `taskId` already mean something on this relay — outside the task
+ * queue, which the caller checks first (#890 round 7)? Task ids are
+ * relay-minted: a peer's inbound forward never gets to choose one this
+ * relay already knows, in ANY durable form — a route, an Idempotency-Key
+ * that admitted it, or an archived top-level receipt. Answers
+ * `inbound_held` when the only trace is an earlier inbound forward's route
+ * (a peer's retry after the queue forgot it: that task is held, not
+ * re-run), `in_use` for anything else, or null when the id is new here.
+ */
+export function inboundTaskIdCollision(
+  db: DatabaseDriver,
+  taskId: string,
+): "inbound_held" | "in_use" | null {
+  const key = db
+    .prepare("SELECT 1 FROM relay_idempotency_keys WHERE task_id = ? LIMIT 1")
+    .get(taskId);
+  if (key != null) return "in_use";
+  if (taskRoutes(db, taskId, "admission").length > 0) return "in_use";
+  if (taskRoutes(db, taskId, "inbound_forward").length > 0) return "inbound_held";
+  const receipt = db.prepare("SELECT 1 FROM relay_receipts WHERE task_id = ? LIMIT 1").get(taskId);
+  if (receipt != null) return "in_use";
+  return null;
 }
 
 /**
@@ -1824,9 +1873,12 @@ export function admittedBeforeTaskRoutes(db: DatabaseDriver, submittedAt: number
 /**
  * May a receipt signed by `signer`, arriving through `viaPeer` ('' for a
  * local door — the result POST, the MCP forward), answer `taskId`? Only if
- * the relay handed the task to that signer through that peer. The one
- * exception is a task admitted BEFORE the record existed (in flight across
- * the deploy, `legacy`): with no route, it is answerable only by its own
+ * the relay handed the task to that signer through that peer, in a hand-off
+ * of `origin` — the origin of the task the door is answering (#890 r7): an
+ * own-admission task is answered only by an `admission` route, an inbound
+ * task only by its `inbound_forward` route. The one exception is a task
+ * admitted BEFORE the record existed (in flight across the deploy,
+ * `legacy`): with no route of its origin, it is answerable only by its own
  * agent, locally — never by an arbitrary signer. A task admitted after it
  * with no route is answerable by no one.
  */
@@ -1836,8 +1888,9 @@ export function isRoutedExecutor(
   signer: string,
   viaPeer: string,
   legacy: { executor: string; submittedAt: number } | null,
+  origin: TaskRouteOrigin,
 ): boolean {
-  const routes = taskRoutes(db, taskId);
+  const routes = taskRoutes(db, taskId, origin);
   if (routes.length === 0) {
     return (
       viaPeer === "" &&

@@ -66,7 +66,10 @@ describe("#890 r5: the MCP forward accepts only the presented worker's receipt",
     server = undefined;
   });
 
-  async function forward(r: Record<string, unknown>) {
+  async function forward(
+    r: Record<string, unknown>,
+    answer: { v: boolean | undefined } = { v: true },
+  ) {
     server = workerReturning(r);
     const queue = new Map<string, { task: { status: string }; receipt?: unknown }>([
       ["task-890", { task: { status: "pending" } }],
@@ -83,6 +86,7 @@ describe("#890 r5: the MCP forward accepts only the presented worker's receipt",
       undefined,
       async (rc) => {
         ingested.push(rc);
+        return answer.v as boolean;
       },
       "disp.token",
       { allowPrivateNetwork: true },
@@ -103,5 +107,15 @@ describe("#890 r5: the MCP forward accepts only the presented worker's receipt",
     const r = await forward(receipt("routed-worker", "completed"));
     expect(r.ingested).toHaveLength(1);
     expect((r.stored as { motebit_id: string }).motebit_id).toBe("routed-worker");
+  });
+
+  it("#890 r7: only a positive answer from ingestion gives the entry the receipt — refusal and absence alike leave it", async () => {
+    for (const answer of [false, undefined]) {
+      const r = await forward(receipt("routed-worker", "failed"), { v: answer });
+      expect(r.ingested).toHaveLength(1);
+      expect(r.stored, `ingestion answered ${String(answer)}`).toBeUndefined();
+      await new Promise<void>((res) => server!.close(() => res()));
+      server = undefined;
+    }
   });
 });

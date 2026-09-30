@@ -50,6 +50,7 @@ import {
   receiptRelayTaskId,
   taskRoutes,
   admittedBeforeTaskRoutes,
+  inboundTaskIdCollision,
 } from "./task-routing.js";
 import {
   localWorkerAdmission,
@@ -117,6 +118,11 @@ export function createFederationCallbacks(deps: FederationCallbackDeps) {
       : { worker_leg: "local" };
   };
 
+  const collision = (taskId: string, originRelay: string, where: "queued" | "stored") => {
+    logger.warn("federation.forward_task_id_in_use", { correlationId: taskId, originRelay, where });
+    return { status: "rejected" as const, reason: "task_id_in_use" };
+  };
+
   return {
     onTaskForwarded(verified: {
       taskId: string;
@@ -140,11 +146,26 @@ export function createFederationCallbacks(deps: FederationCallbackDeps) {
         b_fee_amount_micro?: number;
       };
     }) {
-      // Idempotency: reject duplicate task_id to prevent double-execution
-      // when the origin relay retries after a timeout.
-      if (taskQueue.has(verified.taskId)) {
+      // A task id is relay-minted: a peer never gets to choose one that
+      // already means something here (#890 round 7). Refused (409) in ANY
+      // local form — the task queue, a route, an Idempotency-Key, an
+      // archived receipt — never enqueued beside it: an inbound route under
+      // a re-used id would otherwise stand as the id's executor after the
+      // queue forgot the owner's task. The same peer re-forwarding a task
+      // this relay holds for it is its retry (`duplicate` — held, never run
+      // twice); anything else is a collision.
+      const queued = taskQueue.get(verified.taskId);
+      if (queued != null) {
+        if (queued.origin_relay === verified.originRelay) {
+          return { status: "duplicate" as const, task_id: verified.taskId };
+        }
+        return collision(verified.taskId, verified.originRelay, "queued");
+      }
+      const known = inboundTaskIdCollision(moteDb.db, verified.taskId);
+      if (known === "inbound_held") {
         return { status: "duplicate" as const, task_id: verified.taskId };
       }
+      if (known === "in_use") return collision(verified.taskId, verified.originRelay, "stored");
 
       // Global queue capacity check (sibling of direct task submission path)
       if (taskQueue.size >= maxTaskQueueSize) {
@@ -182,7 +203,7 @@ export function createFederationCallbacks(deps: FederationCallbackDeps) {
       const enqueue = (): void => {
         // The executor relay hands the task to its own agent: that agent is
         // the one executor whose receipt this relay accepts for it (#890 r6).
-        recordTaskRoute(moteDb.db, verified.taskId, verified.targetAgent);
+        recordTaskRoute(moteDb.db, verified.taskId, verified.targetAgent, "", "inbound_forward");
         taskQueue.set(verified.taskId, {
           task,
           expiresAt: Date.now() + taskTtlMs,
@@ -299,8 +320,11 @@ export function createFederationCallbacks(deps: FederationCallbackDeps) {
         entry.settlement_mode === "p2p" &&
         entry.p2p_admission?.planned_peer != null &&
         admittedBeforeTaskRoutes(moteDb.db, entry.task.submitted_at);
+      // Only this relay's own admission forwards a task to a peer, so only
+      // an `admission` route answers here (#890 r7): a route a peer's
+      // inbound forward wrote never makes a federated result this task's.
       const routed =
-        taskRoutes(moteDb.db, verified.taskId).length === 0 && admittedRoute
+        taskRoutes(moteDb.db, verified.taskId, "admission").length === 0 && admittedRoute
           ? true
           : isRoutedExecutor(
               moteDb.db,
@@ -308,6 +332,7 @@ export function createFederationCallbacks(deps: FederationCallbackDeps) {
               verified.receipt.motebit_id,
               verified.originRelay,
               null,
+              "admission",
             );
       if (!routed) {
         logger.error("federation.result_not_from_routed_executor", {

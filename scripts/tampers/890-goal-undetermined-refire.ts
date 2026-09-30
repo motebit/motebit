@@ -26,6 +26,8 @@ interface Tamper {
   /** Package dir the test runs in, and the test file. */
   pkg: string;
   test: string;
+  /** Further edits applied with this one (a layered fix whose layers cover each other). */
+  also?: Array<{ file: string; find: string; replace: string }>;
 }
 
 const TAMPERS: Tamper[] = [
@@ -663,7 +665,7 @@ const TAMPERS: Tamper[] = [
   {
     name: "relay r6 (A): the executor relay does not record its own agent for a forwarded task",
     file: "services/relay/src/federation-callbacks.ts",
-    find: "        recordTaskRoute(moteDb.db, verified.taskId, verified.targetAgent);\n",
+    find: '        recordTaskRoute(moteDb.db, verified.taskId, verified.targetAgent, "", "inbound_forward");\n',
     replace: "",
     pkg: "services/relay",
     test: "src/__tests__/federation-e2e.test.ts",
@@ -671,8 +673,8 @@ const TAMPERS: Tamper[] = [
   {
     name: "relay r6 (B): local ingestion accepts a receipt from an identity the task was never handed to",
     file: "services/relay/src/tasks.ts",
-    find: '    !isRoutedExecutor(moteDb.db, taskId, receipt.motebit_id, "", {',
-    replace: '    false && !isRoutedExecutor(moteDb.db, taskId, receipt.motebit_id, "", {',
+    find: "  if (\n    !isRoutedExecutor(\n",
+    replace: "  if (\n    false &&\n    !isRoutedExecutor(\n",
     pkg: "services/relay",
     test: "src/__tests__/receipt-doors-890.test.ts",
   },
@@ -735,7 +737,7 @@ const TAMPERS: Tamper[] = [
   {
     name: "relay r6 (B): the MCP forward gives the entry a receipt ingestion refused",
     file: "services/relay/src/task-routing.ts",
-    find: "                if (ingested !== false) accept();",
+    find: "                if (ingested === true) accept();",
     replace: "                accept();",
     pkg: "services/relay",
     test: "src/__tests__/receipt-doors-890.test.ts",
@@ -828,6 +830,160 @@ const TAMPERS: Tamper[] = [
     pkg: "services/relay",
     test: "src/__tests__/receipt-doors-890.test.ts",
   },
+  {
+    name: "relay r7 (inbound door): a colliding forward is refused only while the id is QUEUED — the queue store dropped",
+    file: "services/relay/src/federation-callbacks.ts",
+    find: "      if (queued != null) {",
+    replace: "      if (queued != null && (false as boolean)) {",
+    pkg: "services/relay",
+    test: "src/__tests__/receipt-doors-890.test.ts",
+  },
+  {
+    name: "relay r7 (inbound door): the same peer re-forwarding its queued task is not answered `duplicate`",
+    file: "services/relay/src/federation-callbacks.ts",
+    find: "        if (queued.origin_relay === verified.originRelay) {",
+    replace: "        if (false as boolean) {",
+    pkg: "services/relay",
+    test: "src/__tests__/receipt-doors-890.test.ts",
+  },
+  {
+    name: "relay r7 (inbound door): an id an own admission ROUTED is not refused",
+    file: "services/relay/src/task-routing.ts",
+    find: '  if (taskRoutes(db, taskId, "admission").length > 0) return "in_use";\n',
+    replace: "",
+    pkg: "services/relay",
+    test: "src/__tests__/receipt-doors-890.test.ts",
+  },
+  {
+    name: "relay r7 (inbound door): an id an Idempotency-Key admitted is not refused",
+    file: "services/relay/src/task-routing.ts",
+    find: '  if (key != null) return "in_use";\n',
+    replace: "",
+    pkg: "services/relay",
+    test: "src/__tests__/receipt-doors-890.test.ts",
+  },
+  {
+    name: "relay r7 (inbound door): an id with an archived receipt is not refused",
+    file: "services/relay/src/task-routing.ts",
+    find: '  if (receipt != null) return "in_use";\n',
+    replace: "",
+    pkg: "services/relay",
+    test: "src/__tests__/receipt-doors-890.test.ts",
+  },
+  {
+    name: "relay r7 (inbound door): a peer's retry of a task held only by its inbound route is re-run",
+    file: "services/relay/src/federation-callbacks.ts",
+    find: '      if (known === "inbound_held") {',
+    replace: "      if (false as boolean) {",
+    pkg: "services/relay",
+    test: "src/__tests__/receipt-doors-890.test.ts",
+  },
+  {
+    name: "relay r7 (inbound door): an id in use is not refused at all",
+    file: "services/relay/src/federation-callbacks.ts",
+    find: '      if (known === "in_use") return collision(verified.taskId, verified.originRelay, "stored");\n',
+    replace: "",
+    pkg: "services/relay",
+    test: "src/__tests__/receipt-doors-890.test.ts",
+  },
+  {
+    name: "relay r7 (inbound door): a task id in use answers 429, not 409",
+    file: "services/relay/src/federation.ts",
+    find: ' || result.reason === "task_id_in_use"',
+    replace: "",
+    pkg: "services/relay",
+    test: "src/__tests__/receipt-doors-890.test.ts",
+  },
+  {
+    name: "relay r7 (route origin write): the inbound forward records its route as an own admission",
+    file: "services/relay/src/federation-callbacks.ts",
+    find: 'recordTaskRoute(moteDb.db, verified.taskId, verified.targetAgent, "", "inbound_forward");',
+    replace: 'recordTaskRoute(moteDb.db, verified.taskId, verified.targetAgent, "");',
+    pkg: "services/relay",
+    test: "src/__tests__/receipt-doors-890.test.ts",
+  },
+  {
+    name: "relay r7 (route origin read): routes are read without their origin",
+    file: "services/relay/src/task-routing.ts",
+    find: "WHERE task_id = ? AND origin = ?",
+    replace: "WHERE task_id = ? AND ? IS NOT NULL",
+    pkg: "services/relay",
+    test: "src/__tests__/receipt-doors-890.test.ts",
+  },
+  {
+    name: "relay r7 (archive origin filter): the archive answers an inbound forward's executor",
+    file: "services/relay/src/receipts-store.ts",
+    find: "               AND t.origin = 'admission'\n",
+    replace: "",
+    pkg: "services/relay",
+    test: "src/__tests__/receipt-doors-890.test.ts",
+  },
+  {
+    name: "relay r7 (local door origin): an own admission is answered by an inbound forward's route",
+    file: "services/relay/src/tasks.ts",
+    find: '      entry.origin_relay != null ? "inbound_forward" : "admission",',
+    replace: '      "inbound_forward",',
+    pkg: "services/relay",
+    test: "src/__tests__/receipt-doors-890.test.ts",
+  },
+  {
+    name: "relay r7 (local door origin): an inbound task is answered only by admission routes",
+    file: "services/relay/src/tasks.ts",
+    find: '      entry.origin_relay != null ? "inbound_forward" : "admission",',
+    replace: '      "admission",',
+    pkg: "services/relay",
+    test: "src/__tests__/receipt-doors-890.test.ts",
+  },
+  {
+    name: "relay r7 (federation door origin): a federated result is checked against inbound routes",
+    file: "services/relay/src/federation-callbacks.ts",
+    find: '              null,\n              "admission",',
+    replace: '              null,\n              "inbound_forward",',
+    pkg: "services/relay",
+    test: "src/__tests__/receipt-doors-890.test.ts",
+  },
+  {
+    name: "relay r7 (migration v51): existing routes default to inbound, not admission",
+    file: "services/relay/src/migrations.ts",
+    find: "ADD COLUMN origin TEXT NOT NULL DEFAULT 'admission'",
+    replace: "ADD COLUMN origin TEXT NOT NULL DEFAULT 'inbound_forward'",
+    pkg: "services/relay",
+    test: "src/__tests__/receipt-doors-890.test.ts",
+  },
+  {
+    name: "relay r7 (migration v51): a still-queued inbound route is not relabelled",
+    file: "services/relay/src/migrations.ts",
+    find: "UPDATE relay_task_routes SET origin = 'inbound_forward'",
+    replace: "UPDATE relay_task_routes SET origin = 'admission'",
+    pkg: "services/relay",
+    test: "src/__tests__/receipt-doors-890.test.ts",
+  },
+  {
+    name: "relay r7 (P1 positive check): the MCP forward accepts a receipt ingestion never positively accepted",
+    file: "services/relay/src/task-routing.ts",
+    find: "if (ingested === true) accept();",
+    replace: "if (ingested !== false) accept();",
+    pkg: "services/relay",
+    test: "src/__tests__/forward-receipt-signer-890.test.ts",
+  },
+  {
+    // Two layers guard a late MCP answer to a settled entry — the callback's
+    // `false` and the forward's positive check — each covering the other, so
+    // the callback's layer goes red only with the positive check reverted too.
+    name: "relay r7 (P1 return false): a gone or settled entry's late MCP answer is accepted (with the positive check reverted)",
+    file: "services/relay/src/tasks.ts",
+    find: "          if (!mcpEntry || mcpEntry.settled) return false;",
+    replace: "          if (!mcpEntry || mcpEntry.settled) return undefined as unknown as boolean;",
+    pkg: "services/relay",
+    test: "src/__tests__/receipt-doors-890.test.ts",
+    also: [
+      {
+        file: "services/relay/src/task-routing.ts",
+        find: "if (ingested === true) accept();",
+        replace: "if (ingested !== false) accept();",
+      },
+    ],
+  },
 ];
 
 /** Tampers in these packages change a `dist` that app tests import. */
@@ -851,7 +1007,21 @@ for (const t of TAMPERS) {
     failures++;
     continue;
   }
+  const extra = (t.also ?? []).map((a) => {
+    const aAbs = path.join(ROOT, a.file);
+    return { ...a, abs: aAbs, original: readFileSync(aAbs, "utf8") };
+  });
+  const staleExtra = extra.find((a) => !a.original.includes(a.find));
+  if (staleExtra != null) {
+    console.error(`STALE  ${t.name}: text not found in ${staleExtra.file}`);
+    failures++;
+    continue;
+  }
   writeFileSync(abs, original.replace(t.find, t.replace));
+  for (const a of extra) {
+    const cur = readFileSync(a.abs, "utf8");
+    writeFileSync(a.abs, cur.replace(a.find, a.replace));
+  }
   try {
     const pkgDir = t.file.split("/").slice(0, 2).join("/");
     if (DIST_PACKAGES.has(pkgDir) && pkgDir !== t.pkg) run("npx", ["tsc", "-b"], pkgDir);
@@ -863,6 +1033,7 @@ for (const t of TAMPERS) {
       console.log(`red    ${t.name}`);
     }
   } finally {
+    for (const a of [...extra].reverse()) writeFileSync(a.abs, a.original);
     writeFileSync(abs, original);
     const pkgDir = t.file.split("/").slice(0, 2).join("/");
     if (DIST_PACKAGES.has(pkgDir) && pkgDir !== t.pkg) run("npx", ["tsc", "-b"], pkgDir);

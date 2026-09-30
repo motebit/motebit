@@ -178,7 +178,9 @@ export function getArchivedReceiptForKeyOwner(
   // Only the task's recorded executor answers (#890 r6): the receipt the
   // delegator reads as a signed failure makes it pay for a new task, so it
   // must be the depth-0 receipt of an identity the relay HANDED this task
-  // to (`relay_task_routes`, written at every hand-off). The settlement
+  // to (`relay_task_routes`, written at every hand-off) — under the key
+  // owner's OWN admission (#890 r7, `origin = 'admission'`): a route a
+  // peer's inbound forward wrote under a re-used id never answers it. The settlement
   // record is no witness — it names the path agent, not the worker. A
   // completed receipt outranks a failed one (one executor delivering is
   // the task's outcome); otherwise the most recent answer.
@@ -189,6 +191,7 @@ export function getArchivedReceiptForKeyOwner(
           AND EXISTS (
             SELECT 1 FROM relay_task_routes t
              WHERE t.task_id = r.task_id AND t.executor_id = r.motebit_id
+               AND t.origin = 'admission'
           )
           AND EXISTS (
             SELECT 1 FROM relay_idempotency_keys k

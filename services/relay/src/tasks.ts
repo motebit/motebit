@@ -799,10 +799,17 @@ export async function handleReceiptIngestion(
   // before it is archived, pushed to the submitter, trusted or settled —
   // and the door gives the entry the receipt only after this accepts it.
   if (
-    !isRoutedExecutor(moteDb.db, taskId, receipt.motebit_id, "", {
-      executor: entry.task.motebit_id,
-      submittedAt: entry.task.submitted_at,
-    })
+    !isRoutedExecutor(
+      moteDb.db,
+      taskId,
+      receipt.motebit_id,
+      "",
+      { executor: entry.task.motebit_id, submittedAt: entry.task.submitted_at },
+      // The task this door answers decides whose routes count (#890 r7): a
+      // peer's inbound task is answered by its forward's route, an own
+      // admission only by a route of that admission.
+      entry.origin_relay != null ? "inbound_forward" : "admission",
+    )
   ) {
     logger.error("receipt.signer_not_routed_executor", {
       correlationId: taskId,
@@ -4098,7 +4105,10 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
         apiToken,
         async (receiptCandidate: ReceiptCandidate) => {
           const mcpEntry = taskQueue.get(taskId);
-          if (!mcpEntry || mcpEntry.settled) return;
+          // Gone or already settled: this answer is not ingested, so the
+          // forward must not give the entry it (#890 r7 — `false`, never
+          // `undefined`: absence is never acceptance).
+          if (!mcpEntry || mcpEntry.settled) return false;
           const ingested = await handleReceiptIngestion(
             receiptCandidate as unknown as ExecutionReceipt,
             taskId,

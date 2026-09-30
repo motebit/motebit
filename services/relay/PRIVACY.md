@@ -96,7 +96,7 @@ Retention window: 30-day rolling window, swept every minute by the task-cleanup 
 Tables: `relay_task_routes`.
 
 Observable:
-- for every task the relay hands to an executor: the task id, the executor's motebit_id, the peer relay it was forwarded through (empty when local), and when — no content, no prompt, no amount; a receipt for the task is accepted only from a recorded executor through its recorded peer (migration v50)
+- for every task the relay hands to an executor: the task id, the executor's motebit_id, the peer relay it was forwarded through (empty when local), whether the hand-off was this relay's own admission or a peer's inbound forward, and when — no content, no prompt, no amount; a receipt for the task is accepted only from a recorded executor through its recorded peer, under the task's own origin (migrations v50, v51)
 
 Retention window: 7 days from the hand-off, swept every minute by the task-cleanup loop — beyond the 24-hour idempotency window, the longest any reader consults a route.
 

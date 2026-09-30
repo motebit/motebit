@@ -2452,4 +2452,53 @@ export const relayMigrations: Migration[] = [
       `);
     },
   },
+  {
+    version: 51,
+    name: "task_routes_origin",
+    up: (db) => {
+      // WHOSE hand-off each route records (#890 round 7): 'admission' — this
+      // relay admitted the task for its own key owner and handed it on — or
+      // 'inbound_forward' — a peer forwarded it here and this relay handed
+      // it to its own agent. A key owner is answered only by a route of its
+      // own admission; a peer chooses the ids it forwards, so an inbound
+      // route under a re-used id must never stand as the owner's executor.
+      //
+      // Existing v50 rows default to 'admission', which is what they are:
+      // v50 ships in the same change as this migration, and the only writer
+      // of a non-admission route is an inbound forward from an ACTIVE peer —
+      // a relay with no active peers holds only its own admissions' routes.
+      // A row that IS still identifiable as inbound (its task is queued as
+      // an inbound forward: `origin_relay` set, executor = that entry's
+      // agent) is relabelled. An inbound row whose queue entry is already
+      // gone stays 'admission', and can answer only an owner whose own key
+      // admitted that same id — which, since v51 refuses a colliding
+      // forward, only a forward accepted before v51 could have produced.
+      // Re-runnable (an upgrade test replays migrations over a live DB).
+      const cols = db.prepare("PRAGMA table_info(relay_task_routes)").all() as Array<{
+        name: string;
+      }>;
+      if (!cols.some((c) => c.name === "origin")) {
+        db.exec(
+          "ALTER TABLE relay_task_routes ADD COLUMN origin TEXT NOT NULL DEFAULT 'admission'",
+        );
+      }
+      const hasQueue =
+        db
+          .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'relay_task_queue'")
+          .get() != null;
+      if (hasQueue) {
+        db.exec(`
+          UPDATE relay_task_routes SET origin = 'inbound_forward'
+           WHERE via_peer = ''
+             AND EXISTS (
+               SELECT 1 FROM relay_task_queue q
+                WHERE q.task_id = relay_task_routes.task_id
+                  AND json_valid(q.task_json)
+                  AND json_extract(q.task_json, '$.origin_relay') IS NOT NULL
+                  AND json_extract(q.task_json, '$.task.motebit_id') = relay_task_routes.executor_id
+             )
+        `);
+      }
+    },
+  },
 ];

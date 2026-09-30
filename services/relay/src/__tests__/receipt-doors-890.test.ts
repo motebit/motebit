@@ -82,6 +82,7 @@ import {
   getStoredReceiptJson,
   getArchivedReceiptForKeyOwner,
 } from "../receipts-store.js";
+import { relayMigrations } from "../migrations.js";
 
 const PORT = 18953;
 type Door = "post" | "mcp" | "fed";
@@ -623,24 +624,209 @@ describe("#890 r6 the routing record's only exception is a task admitted before 
 
   it("with no route, a task admitted BEFORE the record is answerable by its own agent, locally", () => {
     const before = { executor: "agent-x", submittedAt: epoch() - 1 };
-    expect(isRoutedExecutor(relay.moteDb.db, "legacy-1", "agent-x", "", before)).toBe(true);
-    expect(isRoutedExecutor(relay.moteDb.db, "legacy-1", "stranger", "", before)).toBe(false);
-    expect(isRoutedExecutor(relay.moteDb.db, "legacy-1", "agent-x", "some-peer", before)).toBe(
+    expect(isRoutedExecutor(relay.moteDb.db, "legacy-1", "agent-x", "", before, "admission")).toBe(
+      true,
+    );
+    expect(isRoutedExecutor(relay.moteDb.db, "legacy-1", "stranger", "", before, "admission")).toBe(
       false,
     );
+    expect(
+      isRoutedExecutor(relay.moteDb.db, "legacy-1", "agent-x", "some-peer", before, "admission"),
+    ).toBe(false);
   });
 
   it("with no route, a task admitted AFTER the record is answerable by no one", () => {
     const after = { executor: "agent-x", submittedAt: epoch() + 1 };
-    expect(isRoutedExecutor(relay.moteDb.db, "unrouted-1", "agent-x", "", after)).toBe(false);
+    expect(isRoutedExecutor(relay.moteDb.db, "unrouted-1", "agent-x", "", after, "admission")).toBe(
+      false,
+    );
   });
 
   it("a route admits its executor through its peer, and nobody else", () => {
     recordTaskRoute(relay.moteDb.db, "routed-1", "worker-w", "peer-p");
-    expect(isRoutedExecutor(relay.moteDb.db, "routed-1", "worker-w", "peer-p", null)).toBe(true);
-    expect(isRoutedExecutor(relay.moteDb.db, "routed-1", "worker-w", "", null)).toBe(false);
-    expect(isRoutedExecutor(relay.moteDb.db, "routed-1", "worker-w", "peer-q", null)).toBe(false);
-    expect(isRoutedExecutor(relay.moteDb.db, "routed-1", "worker-e", "peer-p", null)).toBe(false);
+    expect(
+      isRoutedExecutor(relay.moteDb.db, "routed-1", "worker-w", "peer-p", null, "admission"),
+    ).toBe(true);
+    expect(isRoutedExecutor(relay.moteDb.db, "routed-1", "worker-w", "", null, "admission")).toBe(
+      false,
+    );
+    expect(
+      isRoutedExecutor(relay.moteDb.db, "routed-1", "worker-w", "peer-q", null, "admission"),
+    ).toBe(false);
+    expect(
+      isRoutedExecutor(relay.moteDb.db, "routed-1", "worker-e", "peer-p", null, "admission"),
+    ).toBe(false);
+  });
+});
+
+describe("#890 r7 a route answers only the task of its own origin", () => {
+  let relay: SyncRelay;
+  beforeAll(async () => {
+    relay = await createTestRelay();
+  });
+  afterAll(async () => {
+    await relay.close();
+  });
+
+  it("an inbound forward's route never answers an own admission, and an admission's never an inbound task", () => {
+    const db = relay.moteDb.db;
+    recordTaskRoute(db, "origin-1", "agent-t", "", "inbound_forward");
+    recordTaskRoute(db, "origin-1", "agent-w");
+    expect(isRoutedExecutor(db, "origin-1", "agent-t", "", null, "admission")).toBe(false);
+    expect(isRoutedExecutor(db, "origin-1", "agent-t", "", null, "inbound_forward")).toBe(true);
+    expect(isRoutedExecutor(db, "origin-1", "agent-w", "", null, "admission")).toBe(true);
+    expect(isRoutedExecutor(db, "origin-1", "agent-w", "", null, "inbound_forward")).toBe(false);
+    const origins = db
+      .prepare(
+        "SELECT executor_id, origin FROM relay_task_routes WHERE task_id = 'origin-1' ORDER BY executor_id",
+      )
+      .all();
+    expect(origins).toEqual([
+      { executor_id: "agent-t", origin: "inbound_forward" },
+      { executor_id: "agent-w", origin: "admission" },
+    ]);
+  });
+
+  it("a pre-v50 task with only an inbound route of a re-used id is still answered by its own agent, and never by the inbound executor", () => {
+    const db = relay.moteDb.db;
+    const epoch = (
+      db.prepare("SELECT applied_at FROM relay_schema_migrations WHERE version = 50").get() as {
+        applied_at: number;
+      }
+    ).applied_at;
+    recordTaskRoute(db, "legacy-2", "agent-t", "", "inbound_forward");
+    const legacy = { executor: "agent-x", submittedAt: epoch - 1 };
+    expect(isRoutedExecutor(db, "legacy-2", "agent-x", "", legacy, "admission")).toBe(true);
+    expect(isRoutedExecutor(db, "legacy-2", "agent-t", "", legacy, "admission")).toBe(false);
+  });
+});
+
+describe("#890 r7 the inbound door refuses an id held in ANY single local store", () => {
+  it("queue, admission route, Idempotency-Key, archived receipt — each alone refuses a peer's colliding forward (409)", async () => {
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    const w = await world(true);
+    try {
+      const db = w.relay.moteDb.db;
+      await w.relay.app.request("/api/v1/agents/register", {
+        method: "POST",
+        headers: JSON_AUTH,
+        body: JSON.stringify({
+          motebit_id: w.E.id,
+          endpoint_url: "http://e.invalid/mcp",
+          capabilities: [],
+        }),
+      });
+      const answers: Record<string, number> = {};
+      // queue alone: an inbound task `peer` forwarded, its route swept.
+      const Q = crypto.randomUUID();
+      expect(await fedForward(w, w.peer, Q, w.W.id)).toBeLessThan(300);
+      db.prepare("DELETE FROM relay_task_routes WHERE task_id = ?").run(Q);
+      answers.queue = await fedForward(w, w.otherPeer, Q, w.E.id);
+      // an own admission's route alone.
+      const R = crypto.randomUUID();
+      recordTaskRoute(db, R, w.W.id);
+      answers.route = await fedForward(w, w.otherPeer, R, w.E.id);
+      // an Idempotency-Key alone.
+      const K = crypto.randomUUID();
+      db.prepare(
+        `INSERT INTO relay_idempotency_keys (idempotency_key, motebit_id, status, response_status, response_body, created_at, completed_at, task_id)
+         VALUES (?, ?, 'completed', 201, '{}', ?, ?, ?)`,
+      ).run(crypto.randomUUID(), w.D.id, Date.now(), Date.now(), K);
+      answers.key = await fedForward(w, w.otherPeer, K, w.E.id);
+      // an archived top-level receipt alone.
+      const A = crypto.randomUUID();
+      persistReceiptChain(db, await receiptBy(w.W, A, "completed"));
+      answers.receipt = await fedForward(w, w.otherPeer, A, w.E.id);
+      // a fresh id is admitted; the same peer re-forwarding it (queued, then
+      // forgotten by the queue) is its retry — held, never run twice.
+      const F = crypto.randomUUID();
+      answers.fresh = await fedForward(w, w.peer, F, w.W.id);
+      const rq = await fedForwardBody(w, w.peer, F, w.W.id);
+      answers.retry_queued = rq.status;
+      // The same id from ANOTHER peer while queued is a collision, not a retry.
+      const oq = await fedForwardBody(w, w.otherPeer, F, w.E.id);
+      answers.other_peer_queued = oq.status;
+      db.prepare("DELETE FROM relay_task_queue WHERE task_id = ?").run(F);
+      const rf = await fedForwardBody(w, w.peer, F, w.W.id);
+      answers.retry_forgotten = rf.status;
+      expect({ rq: rq.body, oq: oq.body, rf: rf.body }).toEqual({
+        rq: "duplicate",
+        oq: "rejected",
+        rf: "duplicate",
+      });
+      expect(answers).toEqual({
+        queue: 409,
+        route: 409,
+        key: 409,
+        receipt: 409,
+        fresh: 202,
+        retry_queued: 409,
+        other_peer_queued: 409,
+        retry_forgotten: 409,
+      });
+    } finally {
+      await w.relay.close();
+    }
+  });
+});
+
+describe("#890 r7 migration v51 — existing v50 routes keep answering their owners", () => {
+  it("over a pre-v51 table: own-admission rows become 'admission', a still-queued inbound row 'inbound_forward'", async () => {
+    const relay = await createTestRelay();
+    try {
+      const db = relay.moteDb.db;
+      // Rebuild relay_task_routes as v50 left it (no origin column).
+      db.exec("DROP TABLE relay_task_routes");
+      relayMigrations.find((m) => m.version === 50)!.up(db);
+      const cols = (
+        db.prepare("PRAGMA table_info(relay_task_routes)").all() as Array<{ name: string }>
+      ).map((c) => c.name);
+      expect(cols).not.toContain("origin");
+      const X = crypto.randomUUID();
+      const V = { id: `v-${crypto.randomUUID()}`, device: "v-dev", kp: await generateKeypair() };
+      db.prepare(
+        "INSERT INTO relay_task_routes (task_id, executor_id, via_peer, created_at) VALUES (?, ?, '', ?)",
+      ).run(X, V.id, Date.now());
+      db.prepare(
+        "INSERT INTO relay_task_routes (task_id, executor_id, via_peer, created_at) VALUES (?, 'fed-w', 'peer-p', ?)",
+      ).run(X, Date.now());
+      // An inbound forward still queued: its route is identifiable.
+      const I = crypto.randomUUID();
+      db.prepare(
+        "INSERT INTO relay_task_routes (task_id, executor_id, via_peer, created_at) VALUES (?, 'inbound-t', '', ?)",
+      ).run(I, Date.now());
+      db.prepare(
+        `INSERT INTO relay_task_queue (task_id, submitter_id, worker_id, status, prompt, created_at, expires_at, task_json)
+         VALUES (?, 'relay:p', 'inbound-t', 'pending', 'p', ?, ?, ?)`,
+      ).run(
+        I,
+        Date.now(),
+        Date.now() + 60_000,
+        JSON.stringify({ task: { task_id: I, motebit_id: "inbound-t" }, origin_relay: "peer-p" }),
+      );
+      relayMigrations.find((m) => m.version === 51)!.up(db);
+      expect(
+        db
+          .prepare(
+            "SELECT task_id, executor_id, origin FROM relay_task_routes ORDER BY executor_id",
+          )
+          .all(),
+      ).toEqual([
+        { task_id: X, executor_id: "fed-w", origin: "admission" },
+        { task_id: I, executor_id: "inbound-t", origin: "inbound_forward" },
+        { task_id: X, executor_id: V.id, origin: "admission" },
+      ]);
+      // The owner's archive still answers its recorded executor.
+      db.prepare(
+        `INSERT INTO relay_idempotency_keys (idempotency_key, motebit_id, status, response_status, response_body, created_at, completed_at, task_id)
+         VALUES (?, 'owner', 'completed', 201, '{}', ?, ?, ?)`,
+      ).run(crypto.randomUUID(), Date.now(), Date.now(), X);
+      persistReceiptChain(db, await receiptBy(V, X, "completed"));
+      const a = getArchivedReceiptForKeyOwner(db, "owner", X, 0);
+      expect((JSON.parse(a!) as ExecutionReceipt).motebit_id).toBe(V.id);
+    } finally {
+      await relay.close();
+    }
   });
 });
 
@@ -940,6 +1126,16 @@ async function fedForward(
   taskId: string,
   target: string,
 ): Promise<number> {
+  return (await fedForwardBody(w, from, taskId, target)).status;
+}
+
+/** The forward's HTTP status and its body's `status` ("duplicate", "rejected", …). */
+async function fedForwardBody(
+  w: World,
+  from: { id: string; kp: KeyPair },
+  taskId: string,
+  target: string,
+): Promise<{ status: number; body: string }> {
   const payload = {
     task_id: taskId,
     origin_relay: from.id,
@@ -953,7 +1149,8 @@ async function fedForward(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ ...payload, signature: bytesToHex(sig) }),
   });
-  return res.status;
+  const body = (await res.json().catch(() => ({}))) as { status?: string };
+  return { status: res.status, body: body.status ?? "" };
 }
 
 async function postResultAs(
@@ -1091,7 +1288,7 @@ async function collisionCell(
     } else {
       // Defence in depth: the inbound door let the collision through anyway
       // — the route an inbound forward writes for T sits beside X's own.
-      (recordTaskRoute as (...a: unknown[]) => void)(db, X, T.id, "", "inbound_forward");
+      recordTaskRoute(db, X, T.id, "", "inbound_forward");
     }
 
     // T answers through `door` — a FAILED receipt, which makes a planner pay
