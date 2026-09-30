@@ -133,6 +133,14 @@ class AgaveCluster {
   witness: Witness = "honest";
   /** The cluster halts the moment a payout is broadcast. */
   haltOnPayout = false;
+  /**
+   * The next N account reads are served by a node 40 slots behind (a
+   * load-balanced pool; finalized account reads are not monotonic across it).
+   * Such a node honours minContextSlot (agave rpc.rs get_bank_with_config).
+   */
+  staleAccountReads = 0;
+  /** A payout send forwards the transaction, then the RPC call errors. */
+  forwardThenError = false;
   /** Raw accounts (squats): anyone can fund an address; only its key (or base) can shape it. */
   readonly raw = new Map<string, RawAccount>();
   /** The blockhash confirmation wait's connection drops (a non-expiry error). */
@@ -277,65 +285,31 @@ class AgaveCluster {
       },
       getBalance: () => Promise.resolve(10_000_000_000),
       getMinimumBalanceForRentExemption: () => Promise.resolve(1_447_680),
+      getAccountInfoAndContext: (
+        pubkey: { toBase58(): string },
+        c?: { commitment?: string; minContextSlot?: number },
+      ) => {
+        const tip =
+          this.staleAccountReads > 0 ? (this.staleAccountReads--, this.slot - 40) : this.viewTip();
+        const bank = this.bankSlot(c?.commitment ?? "confirmed", tip);
+        if (c?.minContextSlot !== undefined && c.minContextSlot > bank) {
+          return Promise.reject(
+            new Error(
+              `failed to get info about account: Minimum context slot has not been reached (context slot ${bank})`,
+            ),
+          );
+        }
+        return (this.accountAt(pubkey.toBase58(), bank) as Promise<unknown>).then((value) => ({
+          context: { slot: bank },
+          value,
+        }));
+      },
       getAccountInfo: (pubkey: { toBase58(): string }, c?: unknown) => {
         const commitment = typeof c === "string" ? c : (c as { commitment?: string })?.commitment;
-        const bank = this.bankSlot(commitment ?? "confirmed", this.viewTip());
-        const address = pubkey.toBase58();
-        const squat = this.raw.get(address);
-        if (squat && !this.nonces.has(address)) {
-          return Promise.resolve({
-            data: Buffer.alloc(squat.dataLen),
-            owner: new web3.PublicKey(squat.owner),
-            lamports: squat.lamports,
-            executable: false,
-            rentEpoch: 0,
-          });
-        }
-        const nonce = this.nonces.get(address);
-        if (nonce) {
-          const value = this.nonceAt(address, bank);
-          if (value === null) return Promise.resolve(null);
-          const data = Buffer.alloc(80);
-          data.writeUInt32LE(1, 0);
-          data.writeUInt32LE(1, 4);
-          Buffer.from(new web3.PublicKey(nonce.authority).toBytes()).copy(data, 8);
-          Buffer.from(new web3.PublicKey(value).toBytes()).copy(data, 40);
-          data.writeBigUInt64LE(5000n, 72);
-          return Promise.resolve({
-            data,
-            owner: web3.SystemProgram.programId,
-            lamports: 1_447_680,
-            executable: false,
-            rentEpoch: 0,
-          });
-        }
-        if (this.tokenAccounts.has(address)) {
-          const data = Buffer.alloc(spl.ACCOUNT_SIZE);
-          spl.AccountLayout.encode(
-            {
-              mint: new web3.PublicKey(USDC_MAINNET),
-              owner: web3.Keypair.fromSeed(TREASURY_SEED).publicKey,
-              amount: 10_000_000_000n,
-              delegateOption: 0,
-              delegate: web3.PublicKey.default,
-              state: 1,
-              isNativeOption: 0,
-              isNative: 0n,
-              delegatedAmount: 0n,
-              closeAuthorityOption: 0,
-              closeAuthority: web3.PublicKey.default,
-            },
-            data,
-          );
-          return Promise.resolve({
-            data,
-            owner: spl.TOKEN_PROGRAM_ID,
-            lamports: 2_039_280,
-            executable: false,
-            rentEpoch: 0,
-          });
-        }
-        return Promise.resolve(null);
+        const tip =
+          this.staleAccountReads > 0 ? (this.staleAccountReads--, this.slot - 40) : this.viewTip();
+        const bank = this.bankSlot(commitment ?? "confirmed", tip);
+        return this.accountAt(pubkey.toBase58(), bank);
       },
       sendRawTransaction: (raw: Uint8Array, opts?: { skipPreflight?: boolean }) =>
         this.send(raw, opts?.skipPreflight === true),
@@ -492,8 +466,70 @@ class AgaveCluster {
     }
     this.txs.set(sig, rec);
     this.settle(rec);
+    if (this.forwardThenError && kind === "payout") {
+      this.forwardThenError = false;
+      return Promise.reject(new Error("fetch failed: socket hang up (the RPC forwarded it)"));
+    }
     if (this.haltOnPayout && (kind === "payout" || kind === "blockhash_payout")) this.halted = true;
     return Promise.resolve(sig);
+  }
+
+  accountAt(address: string, bank: number): Promise<unknown> {
+    const squat = this.raw.get(address);
+    if (squat && !this.nonces.has(address)) {
+      return Promise.resolve({
+        data: Buffer.alloc(squat.dataLen),
+        owner: new web3.PublicKey(squat.owner),
+        lamports: squat.lamports,
+        executable: false,
+        rentEpoch: 0,
+      });
+    }
+    const nonce = this.nonces.get(address);
+    if (nonce) {
+      const value = this.nonceAt(address, bank);
+      if (value === null) return Promise.resolve(null);
+      const data = Buffer.alloc(80);
+      data.writeUInt32LE(1, 0);
+      data.writeUInt32LE(1, 4);
+      Buffer.from(new web3.PublicKey(nonce.authority).toBytes()).copy(data, 8);
+      Buffer.from(new web3.PublicKey(value).toBytes()).copy(data, 40);
+      data.writeBigUInt64LE(5000n, 72);
+      return Promise.resolve({
+        data,
+        owner: web3.SystemProgram.programId,
+        lamports: 1_447_680,
+        executable: false,
+        rentEpoch: 0,
+      });
+    }
+    if (this.tokenAccounts.has(address)) {
+      const data = Buffer.alloc(spl.ACCOUNT_SIZE);
+      spl.AccountLayout.encode(
+        {
+          mint: new web3.PublicKey(USDC_MAINNET),
+          owner: web3.Keypair.fromSeed(TREASURY_SEED).publicKey,
+          amount: 10_000_000_000n,
+          delegateOption: 0,
+          delegate: web3.PublicKey.default,
+          state: 1,
+          isNativeOption: 0,
+          isNative: 0n,
+          delegatedAmount: 0n,
+          closeAuthorityOption: 0,
+          closeAuthority: web3.PublicKey.default,
+        },
+        data,
+      );
+      return Promise.resolve({
+        data,
+        owner: spl.TOKEN_PROGRAM_ID,
+        lamports: 2_039_280,
+        executable: false,
+        rentEpoch: 0,
+      });
+    }
+    return Promise.resolve(null);
   }
 
   /** An UNRECORDED transaction (another tool, another process) advances the nonce. */
@@ -660,7 +696,10 @@ async function resolveOnce(r: SyncRelay, operator: OperatorSolanaTransfer): Prom
   if (sweep) await sweep(r.moteDb.db, operator);
 }
 
-function makeRealTransfer(cluster: AgaveCluster): OperatorSolanaTransfer {
+function makeRealTransfer(
+  cluster: AgaveCluster,
+  opts: { nonceSeedSuffix?: string } = {},
+): OperatorSolanaTransfer {
   let virtualNow = realNow();
   const waits = {
     pollMs: 2_000,
@@ -678,6 +717,7 @@ function makeRealTransfer(cluster: AgaveCluster): OperatorSolanaTransfer {
     identitySeed: TREASURY_SEED,
     expiryConfirm: waits,
     ...({ finality: waits, rpcTimeoutMs: 5_000 } as Record<string, unknown>),
+    ...(opts.nonceSeedSuffix !== undefined ? { nonceSeedSuffix: opts.nonceSeedSuffix } : {}),
   });
   (adapter as unknown as { connection: unknown }).connection = cluster.connection();
   return new OperatorSolanaTransfer(adapter);
@@ -1159,5 +1199,127 @@ describe("an unrecorded transaction consumes the in-flight payout's nonce (#990 
     });
     expect(res.status).toBe(200);
     expect(refunds(relay!, mid)).toBe(0);
+  });
+});
+
+// ── round 8: "different" is not "past" (C-1); seed rotation (P-a) ────────
+
+describe("a stale finalized account read never proves a nonce consumed (#990 round 8, C-1)", () => {
+  /** W2 alone: refunded while its own payout landed or can still land is value out twice. */
+  function w2Violations(cluster: AgaveCluster, mid: string, id: string, step: string): string[] {
+    const sigs = new Set(
+      (
+        relay!.moteDb.db
+          .prepare(
+            "SELECT signature FROM relay_withdrawal_payout_attempts WHERE withdrawal_id = ? AND kind = 'payout'",
+          )
+          .all(id) as Array<{ signature: string }>
+      ).map((r) => r.signature),
+    );
+    const mine = cluster.payouts().filter((t) => sigs.has(t.signature));
+    const refunded = getTransactions(relay!.moteDb.db, mid, 200).some(
+      (t) => t.reference_id === id && t.amount > 0,
+    );
+    const out: string[] = [];
+    if (refunded && mine.some((t) => t.state === "canonical" && !t.landErr)) {
+      out.push(`${step}: W2 refunded AND its payout landed — value out twice`);
+    }
+    if (refunded && mine.some((t) => cluster.canLand(t))) {
+      out.push(`${step}: W2 refunded while its payout can still land`);
+    }
+    return out;
+  }
+
+  async function twoPayouts(mid: string, externalBetween: boolean) {
+    const treasury = web3.Keypair.fromSeed(TREASURY_SEED).publicKey;
+    const sourceAta: string = spl
+      .getAssociatedTokenAddressSync(new web3.PublicKey(USDC_MAINNET), treasury)
+      .toBase58();
+    // W1 lands at once; W2 is forwarded, the send errors, and it lands 200
+    // slots later — if its nonce is still there.
+    const cluster = new AgaveCluster(
+      (kind, index) =>
+        kind === "payout"
+          ? { kind: "land", delay: index === 0 ? 2 : 200 }
+          : { kind: "land", delay: 1 },
+      new Set([sourceAta]),
+    );
+    const operator = makeRealTransfer(cluster);
+    relay = await createTestRelay({ enableDeviceAuth: false, operatorSolanaTransfer: operator });
+    await registerAndFund(relay, mid);
+    const post = () =>
+      relay!.app.request(`/api/v1/agents/${mid}/withdraw`, {
+        method: "POST",
+        headers: jsonAuthWithIdempotency(),
+        body: JSON.stringify({ amount: W_USD, destination: DEST }),
+      });
+    await post(); // W1: completes
+    if (externalBetween) {
+      // An unrecorded transaction advances the lane between W1 and W2.
+      cluster.externalAdvance(await nonceAddressOf());
+      cluster.advance(40);
+    }
+    cluster.forwardThenError = true;
+    await post(); // W2: forwarded, then the send errors ⇒ processing
+    const w2 = rowsOf(relay, mid).find((r) => r.status === "processing")!;
+    return { cluster, w2 };
+  }
+
+  for (const externalBetween of [false, true]) {
+    it(`an honest operator's not_paid + override while a lagging node serves the lane${externalBetween ? " (after an unrecorded advance)" : ""}: never value out twice`, async () => {
+      const mid = `zzag-c1-${externalBetween ? "ext" : "plain"}`;
+      const { cluster, w2 } = await twoPayouts(mid, externalBetween);
+      const violations: string[] = [];
+      for (const body of [
+        { outcome: "not_paid", attestation: "explorer shows nothing" },
+        {
+          outcome: "not_paid",
+          override: "nonce_consumed_unrecorded",
+          attestation: "the relay says the nonce moved and nothing of ours landed",
+        },
+      ]) {
+        cluster.staleAccountReads = 1;
+        await admin(relay!, w2.withdrawal_id, "reconcile", body);
+        violations.push(...w2Violations(cluster, mid, w2.withdrawal_id, "after reconcile"));
+      }
+      cluster.advance(260);
+      await resolveOnce(relay!, undefined as unknown as OperatorSolanaTransfer);
+      await resolveOnce(relay!, undefined as unknown as OperatorSolanaTransfer);
+      violations.push(...w2Violations(cluster, mid, w2.withdrawal_id, "after W2's landing window"));
+      expect(violations).toEqual([]);
+    });
+  }
+});
+
+describe("seed rotation never strands a payout over the OLD lane (#990 round 8, P-a)", () => {
+  it("a dropped old-lane payout is killed on its OWN nonce account after rotation, then refunded", async () => {
+    const treasury = web3.Keypair.fromSeed(TREASURY_SEED).publicKey;
+    const sourceAta: string = spl
+      .getAssociatedTokenAddressSync(new web3.PublicKey(USDC_MAINNET), treasury)
+      .toBase58();
+    const cluster = new AgaveCluster(fatesFor("dropped"), new Set([sourceAta]));
+    const operator = makeRealTransfer(cluster);
+    relay = await createTestRelay({ enableDeviceAuth: false, operatorSolanaTransfer: operator });
+    const mid = "zzag-pa-rotate";
+    await registerAndFund(relay, mid);
+    await relay.app.request(`/api/v1/agents/${mid}/withdraw`, {
+      method: "POST",
+      headers: jsonAuthWithIdempotency(),
+      body: JSON.stringify({ amount: W_USD, destination: DEST }),
+    });
+    expect(rowsOf(relay, mid)[0]!.status).toBe("processing");
+    // The operator rotates the lane (the same relay, now deriving "-r2").
+    const adapter = (operator as unknown as { adapter: Record<string, unknown> }).adapter;
+    adapter["nonceSeed"] = "motebit-payout-nonce-v1-r2";
+    adapter["nonceAddress"] = null;
+    const violations: string[] = [];
+    for (let i = 0; i < 4; i++) {
+      cluster.advance(80);
+      jumpClock(3 * MIN);
+      await resolveOnce(relay, operator);
+    }
+    violations.push(...(await oracle(relay, mid, cluster, "after rotation", true)));
+    expect(violations).toEqual([]);
+    expect(rowsOf(relay, mid)[0]!.status).toBe("failed");
   });
 });
