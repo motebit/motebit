@@ -1159,7 +1159,7 @@ describe("signApprovalDecision / verifyApprovalDecision", () => {
     const signed = await signApprovalDecision(makeDecision(), kp.privateKey, kp.publicKey);
     expect(signed.suite).toBe("motebit-jcs-ed25519-b64-v1");
     expect(signed.signature).toBeTruthy();
-    // @ts-expect-error -- PRODUCT TYPE DEFECT (#1000 report): signApprovalDecision
+    // @ts-expect-error -- PRODUCT TYPE DEFECT (#1001): signApprovalDecision
     // embeds `public_key` when given one, but its return type (T & { suite;
     // signature }) omits it. Delete this directive when the return type does not.
     expect(signed.public_key).toBeTruthy();
@@ -1169,7 +1169,7 @@ describe("signApprovalDecision / verifyApprovalDecision", () => {
   it("verifies without an embedded public_key (caller supplies the key)", async () => {
     const kp = await generateKeypair();
     const signed = await signApprovalDecision(makeDecision(), kp.privateKey);
-    // @ts-expect-error -- PRODUCT TYPE DEFECT (#1000 report): see the test above.
+    // @ts-expect-error -- PRODUCT TYPE DEFECT (#1001): see the test above.
     expect(signed.public_key).toBeUndefined();
     expect(await verifyApprovalDecision(signed, kp.publicKey)).toBe(true);
   });

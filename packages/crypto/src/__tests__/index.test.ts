@@ -1527,7 +1527,7 @@ describe("verify — presentation dispatch", () => {
       "did:key:zSubjectVP",
     );
 
-    // @ts-expect-error -- PRODUCT TYPE DEFECT (#1000 report): createPresentation
+    // @ts-expect-error -- PRODUCT TYPE DEFECT (#1001): createPresentation
     // takes VerifiableCredential<Record<string, unknown>>[], which rejects the
     // VerifiableCredential<ReputationCredentialSubject> that this package's own
     // issueReputationCredential returns (an interface has no index signature).
@@ -1559,7 +1559,7 @@ describe("verify — presentation dispatch", () => {
       "did:key:zSubjectVPStr",
     );
 
-    // @ts-expect-error -- PRODUCT TYPE DEFECT (#1000 report): createPresentation
+    // @ts-expect-error -- PRODUCT TYPE DEFECT (#1001): createPresentation
     // takes VerifiableCredential<Record<string, unknown>>[], which rejects the
     // VerifiableCredential<ReputationCredentialSubject> that this package's own
     // issueReputationCredential returns (an interface has no index signature).

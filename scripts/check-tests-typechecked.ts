@@ -24,6 +24,21 @@
  * which files each one includes — `include` / `exclude` / `files` / `extends`
  * resolved exactly as `tsc` resolves them.
  *
+ * Inclusion alone is not enough, so the gate holds two more properties:
+ *
+ * - **At least as strict as the build.** Every tsconfig the `typecheck`
+ *   script compiles is compared, on its RESOLVED compiler options (the view
+ *   `tsc --showConfig -p` prints: `extends` applied, strict-family flags
+ *   implied from `strict`), against the package's build config(s)
+ *   (`tsconfig.json` plus any `tsc` config the `build` script compiles). A
+ *   test config that turns off `strict`, `noImplicitAny`,
+ *   `noUncheckedIndexedAccess`, … (or turns on `skipLibCheck`) would compile
+ *   the tests while hiding exactly the errors the build reports — it fails.
+ * - **Unconditional.** The `typecheck` script (and every script it hops
+ *   into) may chain commands only with `&&`. `||` (incl. `|| true`), `;`,
+ *   `|` and a background `&` each let one `tsc` run only when another fails,
+ *   or let a failing `tsc` exit green — they fail.
+ *
  * ## What counts as a test file
  *
  * Any `.ts` / `.tsx` / `.mts` / `.cts` file (not `.d.ts`) whose name matches
@@ -119,6 +134,48 @@ export interface TypecheckResolution {
   configs: string[];
   /** Commands in the chain the resolver could not interpret (reported, never guessed). */
   unresolved: string[];
+  /**
+   * Control operators other than `&&` in the chain — each one lets a `tsc`
+   * run conditionally on another's failure, or a failing `tsc` exit green.
+   */
+  conditional: string[];
+}
+
+/**
+ * Shell control operators in `cmd` other than `&&`, outside quotes: `||`,
+ * `;`, `|`, a background `&`, or a newline. `&` inside a redirection
+ * (`2>&1`, `&>`) is not a control operator.
+ */
+export function nonAndOperators(cmd: string): string[] {
+  const found: string[] = [];
+  let quote: string | null = null;
+  for (let i = 0; i < cmd.length; i++) {
+    const c = cmd[i]!;
+    if (quote) {
+      if (c === quote) quote = null;
+      continue;
+    }
+    if (c === '"' || c === "'") {
+      quote = c;
+      continue;
+    }
+    const next = cmd[i + 1];
+    if (c === "&" && next === "&") {
+      i++;
+    } else if (c === "|" && next === "|") {
+      found.push("||");
+      i++;
+    } else if (c === "|") {
+      found.push("|");
+    } else if (c === ";") {
+      found.push(";");
+    } else if (c === "\n") {
+      found.push("newline");
+    } else if (c === "&" && cmd[i - 1] !== ">" && next !== ">") {
+      found.push("&");
+    }
+  }
+  return found;
 }
 
 /**
@@ -133,6 +190,7 @@ export function resolveTypecheckConfigs(
 ): TypecheckResolution {
   const configs: string[] = [];
   const unresolved: string[] = [];
+  const conditional: string[] = [];
   const seen = new Set<string>();
   const visit = (name: string): void => {
     if (seen.has(name)) return;
@@ -142,7 +200,12 @@ export function resolveTypecheckConfigs(
       unresolved.push(`script "${name}" is referenced but not defined`);
       return;
     }
-    for (const segment of cmd.split(/&&|\|\||;/)) {
+    for (const op of new Set(nonAndOperators(cmd))) {
+      conditional.push(
+        `script "${name}" ("${cmd}") uses \`${op}\` — every tsc in the typecheck chain must run unconditionally; chain with \`&&\` only`,
+      );
+    }
+    for (const segment of cmd.split(/&&|\|\||;|\||&|\n/)) {
       const tokens = tokenize(segment.trim());
       if (tokens.length === 0) continue;
       let i = 0;
@@ -176,7 +239,86 @@ export function resolveTypecheckConfigs(
     }
   };
   visit(entry);
-  return { configs: [...new Set(configs)], unresolved };
+  return { configs: [...new Set(configs)], unresolved, conditional };
+}
+
+/**
+ * Compiler flags a test config must not weaken relative to the build config.
+ * `true` is the strict value for each, except the `LOOSE_WHEN_TRUE` ones.
+ */
+export const STRICTNESS_FLAGS = [
+  "strict",
+  "noImplicitAny",
+  "strictNullChecks",
+  "strictFunctionTypes",
+  "strictBindCallApply",
+  "strictPropertyInitialization",
+  "noImplicitThis",
+  "alwaysStrict",
+  "useUnknownInCatchVariables",
+  "noUncheckedIndexedAccess",
+  "exactOptionalPropertyTypes",
+  "noImplicitOverride",
+  "noImplicitReturns",
+  "noFallthroughCasesInSwitch",
+  "noPropertyAccessFromIndexSignature",
+  "noUnusedLocals",
+  "noUnusedParameters",
+  "skipLibCheck",
+] as const;
+
+const LOOSE_WHEN_TRUE = new Set<string>(["skipLibCheck"]);
+
+/** Flags that default to the value of `strict` when not set explicitly (as tsc resolves them). */
+const STRICT_FAMILY = new Set<string>([
+  "noImplicitAny",
+  "strictNullChecks",
+  "strictFunctionTypes",
+  "strictBindCallApply",
+  "strictPropertyInitialization",
+  "noImplicitThis",
+  "alwaysStrict",
+  "useUnknownInCatchVariables",
+]);
+
+/**
+ * A tsconfig's resolved compiler options — `extends` applied, exactly the
+ * options `tsc --showConfig -p <config>` prints. Throws if it cannot be parsed.
+ */
+export function resolvedCompilerOptions(configAbs: string): Record<string, unknown> {
+  let diagnostic: string | undefined;
+  const host: ts.ParseConfigFileHost = {
+    ...ts.sys,
+    onUnRecoverableConfigFileDiagnostic: (d) => {
+      diagnostic = ts.flattenDiagnosticMessageText(d.messageText, "\n");
+    },
+  };
+  const parsed = ts.getParsedCommandLineOfConfigFile(configAbs, undefined, host);
+  if (!parsed) throw new Error(diagnostic ?? `could not parse ${configAbs}`);
+  return parsed.options as Record<string, unknown>;
+}
+
+/** The value tsc acts on: explicit flag, else `strict` for the strict family, else off. */
+function effectiveFlag(options: Record<string, unknown>, flag: string): boolean {
+  const explicit = options[flag];
+  if (typeof explicit === "boolean") return explicit;
+  if (STRICT_FAMILY.has(flag)) return options.strict === true;
+  return false;
+}
+
+/** Each flag on which `test` is looser than `build`, as "flag (build X, test Y)". */
+export function strictnessWeakenings(
+  build: Record<string, unknown>,
+  test: Record<string, unknown>,
+): string[] {
+  const out: string[] = [];
+  for (const flag of STRICTNESS_FLAGS) {
+    const b = effectiveFlag(build, flag);
+    const t = effectiveFlag(test, flag);
+    const weaker = LOOSE_WHEN_TRUE.has(flag) ? !b && t : b && !t;
+    if (weaker) out.push(`${flag} (build ${String(b)}, test ${String(t)})`);
+  }
+  return out;
 }
 
 /** Absolute paths of every file a tsconfig includes, as `tsc -p` resolves it. */
@@ -204,6 +346,8 @@ export interface PackageCoverage {
   uncovered: string[];
   /** Package-relative test files uncovered but named by a KNOWN_UNCOVERED entry. */
   allowlisted: string[];
+  /** Typecheck configs (other than a build config) compared for strictness. */
+  strictnessCompared: number;
   problems: string[];
 }
 
@@ -220,8 +364,8 @@ export function scanPackage(
   };
   const scripts = manifest.scripts ?? {};
   if (scripts.typecheck === undefined) return null;
-  const { configs, unresolved } = resolveTypecheckConfigs(scripts);
-  const problems = [...unresolved];
+  const { configs, unresolved, conditional } = resolveTypecheckConfigs(scripts);
+  const problems = [...unresolved, ...conditional];
   const covered = new Set<string>();
   for (const cfg of configs) {
     const { files, error } = filesIncludedBy(resolve(pkgDirAbs, cfg));
@@ -230,6 +374,38 @@ export function scanPackage(
   }
   if (configs.length === 0)
     problems.push(`the typecheck script ("${scripts.typecheck}") runs no tsc`);
+  // Build configs: tsconfig.json plus whatever the build script compiles.
+  const buildConfigs = new Set<string>();
+  if (existsSync(join(pkgDirAbs, "tsconfig.json"))) buildConfigs.add("tsconfig.json");
+  if (scripts.build !== undefined) {
+    for (const c of resolveTypecheckConfigs(scripts, "build").configs) {
+      if (existsSync(resolve(pkgDirAbs, c))) buildConfigs.add(c);
+    }
+  }
+  const buildPaths = new Set([...buildConfigs].map((c) => resolve(pkgDirAbs, c)));
+  let strictnessCompared = 0;
+  for (const cfg of configs) {
+    const cfgAbs = resolve(pkgDirAbs, cfg);
+    if (buildPaths.has(cfgAbs) || !existsSync(cfgAbs)) continue;
+    if (buildConfigs.size > 0) strictnessCompared++;
+    for (const b of buildConfigs) {
+      let weakened: string[];
+      try {
+        weakened = strictnessWeakenings(
+          resolvedCompilerOptions(resolve(pkgDirAbs, b)),
+          resolvedCompilerOptions(cfgAbs),
+        );
+      } catch (err) {
+        problems.push(err instanceof Error ? err.message : String(err));
+        continue;
+      }
+      if (weakened.length > 0) {
+        problems.push(
+          `${cfg} is less strict than the build config ${b}: ${weakened.join(", ")} — a test config must never loosen what the build checks; remove the override`,
+        );
+      }
+    }
+  }
   const testFiles = findTestFiles(pkgDirAbs);
   const dir = relative(root, pkgDirAbs).split("\\").join("/");
   const prefixes = Object.keys(known[dir] ?? {});
@@ -250,6 +426,7 @@ export function scanPackage(
     testFiles,
     uncovered,
     allowlisted,
+    strictnessCompared,
     problems,
   };
 }
@@ -295,9 +472,10 @@ function main(): void {
   const totalTests = results.reduce((n, r) => n + r.testFiles.length, 0);
   const failing = results.filter((r) => r.uncovered.length > 0 || r.problems.length > 0);
   const totalAllowlisted = results.reduce((n, r) => n + r.allowlisted.length, 0);
+  const strictChecked = results.reduce((n, r) => n + r.strictnessCompared, 0);
   if (failing.length === 0) {
     process.stdout.write(
-      `✓ check-tests-typechecked: ${totalTests - totalAllowlisted} of ${totalTests} test file(s) across ${results.length} package(s) with a typecheck script are compiled by their typecheck tsconfig(s); ${totalAllowlisted} test file(s) allowlisted in KNOWN_UNCOVERED.\n`,
+      `✓ check-tests-typechecked: ${totalTests - totalAllowlisted} of ${totalTests} test file(s) across ${results.length} package(s) with a typecheck script are compiled by their typecheck tsconfig(s); ${totalAllowlisted} test file(s) allowlisted in KNOWN_UNCOVERED. ${strictChecked} non-build typecheck config(s) compared against their build config on ${STRICTNESS_FLAGS.length} resolved strictness flags; every typecheck script chains with \`&&\` only.\n`,
     );
     return;
   }
@@ -318,11 +496,11 @@ function main(): void {
   }
   process.stderr.write(
     formatRepair({
-      invariant: `${failing.length} package(s) have test files their \`typecheck\` script never type-checks (${totalTests} test file(s) across ${results.length} package(s) scanned)`,
+      invariant: `${failing.length} package(s) have test files their \`typecheck\` script never type-checks, checks less strictly than the build, or checks only conditionally (${totalTests} test file(s) across ${results.length} package(s) scanned)`,
       sites,
       canonical:
         "the package's tsconfig.json (build) + tsconfig.test.json (tests), compiled by its package.json `typecheck` script",
-      fix: 'keep the build tsconfig excluding tests; add `tsconfig.test.json` (copy packages/crypto/tsconfig.test.json: `extends: ./tsconfig.json`, `rootDir: \".\"`, `noEmit: true`, emitDeclarationOnly/composite/incremental off, `include` covering src and every test dir, `exclude: []`) and make `typecheck` run `tsc --noEmit && tsc -p tsconfig.test.json`. Then fix the surfaced errors in the tests — never loosen the config. Verify with `pnpm check-tests-typechecked --table`.',
+      fix: 'keep the build tsconfig excluding tests; add `tsconfig.test.json` (copy packages/crypto/tsconfig.test.json: `extends: ./tsconfig.json`, `rootDir: \".\"`, `noEmit: true`, emitDeclarationOnly/composite/incremental off, `include` covering src and every test dir, `exclude: []`) and make `typecheck` run `tsc --noEmit && tsc -p tsconfig.test.json` (chained with `&&` only — never `||`, `;`, `|` or `&`). The test config must not override any strictness flag weaker than the build config (compare `tsc --showConfig -p` of each). Then fix the surfaced errors in the tests — never loosen the config. Verify with `pnpm check-tests-typechecked --table`.',
       doctrine: "docs/drift-defenses.md (check-tests-typechecked), issue #1000",
     }),
   );

@@ -247,7 +247,7 @@ describe("verify — execution receipts", () => {
     const body = makeReceiptBody(kp.publicKeyHex);
     const receipt: ExecutionReceipt = {
       ...body,
-      // @ts-expect-error -- PRODUCT TYPE DEFECT (#1000 report): @motebit/crypto's
+      // @ts-expect-error -- PRODUCT TYPE DEFECT (#1001): @motebit/crypto's
       // exported `ExecutionReceipt` has no `suite`, though @motebit/protocol's
       // ExecutionReceipt carries it and verify() signs over it. Delete this
       // directive when the crypto type gains `suite`.
@@ -266,7 +266,7 @@ describe("verify — execution receipts", () => {
     const body = makeReceiptBody(kp.publicKeyHex);
     const receipt: ExecutionReceipt = {
       ...body,
-      // @ts-expect-error -- PRODUCT TYPE DEFECT (#1000 report): @motebit/crypto's
+      // @ts-expect-error -- PRODUCT TYPE DEFECT (#1001): @motebit/crypto's
       // exported `ExecutionReceipt` has no `suite`, though @motebit/protocol's
       // ExecutionReceipt carries it and verify() signs over it. Delete this
       // directive when the crypto type gains `suite`.
@@ -286,7 +286,7 @@ describe("verify — execution receipts", () => {
     const shortSig = toBase64Url(new Uint8Array(32));
     const receipt: ExecutionReceipt = {
       ...body,
-      // @ts-expect-error -- PRODUCT TYPE DEFECT (#1000 report): @motebit/crypto's
+      // @ts-expect-error -- PRODUCT TYPE DEFECT (#1001): @motebit/crypto's
       // exported `ExecutionReceipt` has no `suite`, though @motebit/protocol's
       // ExecutionReceipt carries it and verify() signs over it. Delete this
       // directive when the crypto type gains `suite`.
