@@ -1,0 +1,17 @@
+{
+  "$comment": "Reviewed exemptions for scripts/check-test-hermeticity.ts (L1 of the test-cache law). Each entry names one site (file + rule + exact source text) and why it cannot change a test outcome outside the task hash. An entry matching no finding fails the gate.",
+  "exemptions": [
+    {
+      "file": "src/skills/__tests__/registry-backed-adapter.test.ts",
+      "rule": "absolute-path",
+      "text": "\"/tmp/skill\"",
+      "why": "a directory-install source used as DATA: a fake adapter records it (controller.test) or the registry-backed adapter rejects directory installs before touching any filesystem (registry-backed-adapter.test) \u2014 nothing at /tmp is opened or probed"
+    },
+    {
+      "file": "src/skills/__tests__/controller.test.ts",
+      "rule": "absolute-path",
+      "text": "\"/tmp/x\"",
+      "why": "a directory-install source used as DATA: a fake adapter records it (controller.test) or the registry-backed adapter rejects directory installs before touching any filesystem (registry-backed-adapter.test) \u2014 nothing at /tmp is opened or probed"
+    }
+  ]
+}

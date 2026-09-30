@@ -1,0 +1,11 @@
+{
+  "$comment": "Reviewed exemptions for scripts/check-test-hermeticity.ts (L1 of the test-cache law). Each entry names one site (file + rule + exact source text) and why it cannot change a test outcome outside the task hash. An entry matching no finding fails the gate.",
+  "exemptions": [
+    {
+      "file": "src/__tests__/worker-selection-transcript.test.ts",
+      "rule": "escape",
+      "text": "join( dirname(fileURLToPath(import.meta.url)), \"../../../../spec/conformance/routing-transcript/corpus.json\", )",
+      "why": "reads spec/conformance/routing-transcript/corpus.json, declared in \"inputs\" of BOTH test tasks in packages/semiring/turbo.json \u2014 in the task hash"
+    }
+  ]
+}

@@ -13,6 +13,7 @@
     },
     "test": {
       "dependsOn": ["build"],
+      "cache": false,
       "env": [
         "CI",
         "TZ",
@@ -26,6 +27,7 @@
     },
     "test:coverage": {
       "dependsOn": ["build"],
+      "cache": false,
       "env": [
         "CI",
         "TZ",

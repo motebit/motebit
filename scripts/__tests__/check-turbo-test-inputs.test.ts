@@ -407,13 +407,16 @@ describe("check-turbo-test-inputs — tracer adoption (4) and UNCACHED (5)", () 
     expect(details(root).filter((d) => d.includes(`drop "$TURBO_DEFAULT$"`))).toHaveLength(2);
   });
 
-  it("an uncached package must be registered in UNCACHED (with its reason)", () => {
+  it("an uncached package is the default: not scanned, no registration needed", () => {
+    // Uncached is the root default; check-test-hermeticity owns why a package
+    // stays uncached. Its undeclared outside read cannot replay anything.
     const off = {
       extends: ["//"],
       tasks: { test: { cache: false }, "test:coverage": { cache: false } },
     };
     const root = fixture({ "packages/declared/turbo.json": JSON.stringify(off) });
-    expect(details(root)).toEqual([expect.stringContaining("not in UNCACHED")]);
+    expect(details(root)).toEqual([]);
+    expect(gate(root).stats.uncached).toBeGreaterThanOrEqual(1);
   });
 
   it("a package in UNCACHED must set cache:false on both test tasks", () => {

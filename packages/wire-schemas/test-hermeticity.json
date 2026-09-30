@@ -1,0 +1,11 @@
+{
+  "$comment": "Reviewed exemptions for scripts/check-test-hermeticity.ts (L1 of the test-cache law). Each entry names one site (file + rule + exact source text) and why it cannot change a test outcome outside the task hash. An entry matching no finding fails the gate.",
+  "exemptions": [
+    {
+      "file": "src/__tests__/drift.test.ts",
+      "rule": "escape",
+      "text": "resolve( import.meta.dirname, \"..\", \"..\", \"..\", \"..\", \"spec\", \"schemas\", c.filename, )",
+      "why": "reads the committed JSON Schemas under spec/schemas/ (c.filename is a literal from the CASES table), declared as \"$TURBO_ROOT$/spec/schemas/**\" in \"inputs\" of BOTH test tasks in packages/wire-schemas/turbo.json \u2014 in the task hash"
+    }
+  ]
+}

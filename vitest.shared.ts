@@ -29,6 +29,15 @@ import { fileURLToPath } from "node:url";
 import { defineConfig, type ViteUserConfig } from "vitest/config";
 import type { InlineConfig } from "vitest/node";
 
+import { configTracePlugin, startConfigTrace } from "./scripts/test-support/config-tracer.js";
+
+// The config-phase tracer (scripts/test-support/config-tracer.ts) records from
+// here — this module is imported before the importing config's body runs —
+// until the config resolves, then fails a CACHED package whose config read an
+// input outside its hash, or that uses globalSetup / provide. The worker
+// tracer below never sees the main process.
+startConfigTrace();
+
 /** The four coverage axes, as a package floor or a per-glob floor. */
 export interface CoverageFloors {
   statements: number;
@@ -109,7 +118,15 @@ export function defineMotebitTest(opts: MotebitVitestOptions): ViteUserConfig {
   const { thresholds, testExclude = [], coverageInclude, coverageExclude = [], extra, vite } = opts;
 
   return defineConfig({
+    // No .env / .env.local / .env.test loading: a gitignored .env.local would
+    // feed import.meta.env from outside the task hash. A package that needs one
+    // passes `vite.envDir` (and the config tracer then records the read).
+    envDir: false,
     ...(vite ?? {}),
+    plugins: [
+      ...((vite?.plugins as unknown[] | undefined) ?? []),
+      configTracePlugin(),
+    ] as ViteUserConfig["plugins"],
     test: {
       testTimeout: DEFAULT_TEST_TIMEOUT_MS,
       // `extra` spreads after, so a package can still override the default.

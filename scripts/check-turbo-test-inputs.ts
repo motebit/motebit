@@ -36,9 +36,11 @@
  *      scripts/test-support/env-policy.ts; a `hash`-class var must be hashed.
  *   4. TRACER ADOPTION — every cached package's vitest config builds through
  *      `defineMotebitTest` (vitest.shared.ts), which registers the tracer.
- *   5. UNCACHED — a package whose tests cannot be made hermetic (or that
- *      cannot run the tracer) sets `cache: false` on both test tasks and is
- *      listed in UNCACHED with the reason. Both directions are checked.
+ *   5. UNCACHED — test tasks are UNCACHED by default (root `cache: false`);
+ *      a package opts in only once scripts/check-test-hermeticity.ts (L1)
+ *      proves it hermetic, and that gate owns the cached set. UNCACHED names
+ *      packages that must stay uncached even if L1 passes (the real clock,
+ *      user state, no tracer); a listed package that opts in is refused.
  *   6. PRE-CHECK SCAN — statically evaluated path expressions
  *      (`resolve/join(__dirname, …)`, `new URL("../…", import.meta.url)`,
  *      template literals, `+`, const bindings, relative imports) that escape
@@ -107,8 +109,11 @@ export interface Passthrough {
 }
 
 /**
- * Packages whose tests cannot be made hermetic. Each sets `cache: false` on
- * both test tasks in its own turbo.json; the gate checks both directions.
+ * Packages whose tests cannot be made hermetic for a reason the static
+ * hermeticity lint (check-test-hermeticity, L1) cannot see — the real clock,
+ * real user state, no tracer. They must never opt into caching; this gate
+ * refuses a listed package whose turbo.json caches a test task, and
+ * check-test-hermeticity reports each as uncached with this reason.
  */
 export const UNCACHED: Record<string, string> = {
   "@motebit/crypto-appattest":
@@ -128,6 +133,12 @@ export const UNCACHED: Record<string, string> = {
     "builtins.test.ts reaches path-sandbox's realpath of the REAL ~/.motebit (HOME is not " +
     "redirected; the runtime input tracer caught it) — user state no hash can carry. Cache it once " +
     "the test pins HOME / MOTEBIT_CONFIG_DIR to an mkdtemp dir",
+  "@motebit/wallet-solana":
+    "its tests load a native addon through node-gyp-build, which picks the prebuild from " +
+    "/etc/alpine-release (musl vs glibc) and the unhashed pass-through npm_config_arch / " +
+    "npm_config_platform / ARM_VERSION / ELECTRON_RUN_AS_NODE — machine state and env no hash " +
+    "carries (the runtime input tracer caught it; the static lint cannot see into external " +
+    "packages). Cache it once MOTEBIT_TEST_RUNTIME carries the libc and those vars are hashed",
   motebit:
     "apps/cli/vitest.config.ts is a bare defineConfig, not defineMotebitTest — the runtime input " +
     "tracer never runs, so no cached result could be proven hermetic. Cache it once the config " +
@@ -397,7 +408,7 @@ function strip(n: ts.Expression): ts.Expression {
   return n;
 }
 
-class Evaluator {
+export class Evaluator {
   private bindings = new Map<string, ts.Expression>();
   private visiting = new Set<string>();
 
@@ -506,7 +517,7 @@ class Evaluator {
 }
 
 /** Parents through which a path value flows into a LARGER path value (not a read yet). */
-function feedsLargerPath(n: ts.Node): boolean {
+export function feedsLargerPath(n: ts.Node): boolean {
   const p = n.parent;
   if (!p) return false;
   if (ts.isParenthesizedExpression(p) || ts.isAsExpression(p) || ts.isNonNullExpression(p))
@@ -665,7 +676,7 @@ function isExpr(n: ts.Node): n is ts.Expression {
 }
 
 /** A relative module specifier names `x.js` for `x.ts` on disk, or omits the extension. */
-function resolveModule(target: string): string {
+export function resolveModule(target: string): string {
   if (existsSync(target) && !isDirPath(target)) return target;
   const swapped = target.replace(/\.(m|c)?js$/, (_m, x: string | undefined) => `.${x ?? ""}ts`);
   const candidates = [
@@ -677,7 +688,7 @@ function resolveModule(target: string): string {
   return candidates.find((c) => existsSync(c)) ?? target;
 }
 
-function isDirPath(p: string): boolean {
+export function isDirPath(p: string): boolean {
   try {
     return statSync(p).isDirectory();
   } catch {
@@ -1201,13 +1212,11 @@ export function runGate(root: string, opts: GateOptions = {}): GateResult {
         });
       continue;
     }
+    // Uncached is the DEFAULT (root cache:false): a package is cached only
+    // once check-test-hermeticity proves it hermetic, and that gate owns the
+    // reason every other package stays uncached.
     if (offAny) {
-      violations.push({
-        pkg: pkg.name,
-        site: site(join(pkg.dir, "turbo.json")),
-        kind: "config",
-        detail: `test caching is disabled but the package is not in UNCACHED (state the reason there)`,
-      });
+      stats.uncached++;
       continue;
     }
     // 4. Tracer adoption: the package's vitest config builds through vitest.shared.ts.

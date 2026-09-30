@@ -1,0 +1,32 @@
+{
+  "$comment": "Reviewed exemptions for scripts/check-test-hermeticity.ts (L1 of the test-cache law). Each entry names one site (file + rule + exact source text) and why it cannot change a test outcome outside the task hash. An entry matching no finding fails the gate.",
+  "exemptions": [
+    {
+      "file": "src/__tests__/paths.test.ts",
+      "rule": "absolute-path",
+      "text": [
+        "\"/home/alice\"",
+        "\"/home/alice/.motebit/runtime.sock\"",
+        "\"/home/alice/.motebit/runtime.lock\"",
+        "\"/Users/bob\"",
+        "\"/Users/bob/.motebit/runtime.sock\"",
+        "\"C:\\\\Users\\\\carol\"",
+        "\"C:\\\\Users\\\\dave\"",
+        "\"/tmp/agent-a/.motebit\"",
+        "\"/tmp/agent-a/.motebit/runtime.sock\"",
+        "\"/tmp/agent-a/.motebit/runtime.lock\"",
+        "\"/tmp/agent-b/.motebit\"",
+        "\"/home/alice/.motebit\"",
+        "\"/tmp/\"",
+        "\"C:\\\\Users\\\\\""
+      ],
+      "why": "home / config-root strings handed to the pure path derivations in src/paths.ts (defaultRuntimeHostPaths, runtimeHostPathsForDir), which only join and hash strings \u2014 the test never opens, probes or binds these paths"
+    },
+    {
+      "file": "src/__tests__/chat-proxy.test.ts",
+      "rule": "absolute-path",
+      "text": "\"/tmp/x\"",
+      "why": "home / config-root strings handed to the pure path derivations in src/paths.ts (defaultRuntimeHostPaths, runtimeHostPathsForDir), which only join and hash strings \u2014 the test never opens, probes or binds these paths"
+    }
+  ]
+}

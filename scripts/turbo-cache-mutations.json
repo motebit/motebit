@@ -1,5 +1,5 @@
 {
-  "$comment": "Single-line mutations of every claim the turbo test-cache defenses make: G = the static gate (scripts/check-turbo-test-inputs.ts), S = the tracer's hash-surface model (scripts/test-support/input-surface.ts), P = the env policy, T = the runtime input tracer (scripts/test-support/input-tracer.ts). scripts/turbo-cache-mutations.ts applies each one alone and requires the named test file(s) to go RED; a survivor is a claim nothing pins. The cold review's 16 gate mutations were not recorded verbatim; G01-G24 re-derive one per gate claim. A registerHooks resolve hook was dropped from the tracer after it measured as an equivalent mutant (Node 22's loaders read through the patched fs).",
+  "$comment": "Single-line mutations of every claim the turbo test-cache defenses make: G = the static gate (scripts/check-turbo-test-inputs.ts), S = the tracer's hash-surface model (scripts/test-support/input-surface.ts), P = the env policy, T = the runtime input tracer (scripts/test-support/input-tracer.ts, recorder.ts, config-tracer.ts); X = the round-2 aperture holes (tracer mutations that survived the round-1 tests). scripts/turbo-cache-mutations.ts applies each one alone and requires the named test file(s) to go RED; a survivor is a claim nothing pins. The cold review's 16 gate mutations were not recorded verbatim; G01-G24 re-derive one per gate claim. A registerHooks resolve hook was dropped from the tracer after it measured as an equivalent mutant (Node 22's loaders read through the patched fs). T03 (\"a whole-env copy is not a read\") was retired in round 2: the claim is reversed — any enumeration of process.env in a cached package fails (T12).",
   "mutations": [
     {
       "id": "G01",
@@ -139,10 +139,10 @@
     },
     {
       "id": "G18",
-      "claim": "cache:false ⇒ listed in UNCACHED",
+      "claim": "an uncached package (the default) is skipped, never scanned as if cached",
       "file": "scripts/check-turbo-test-inputs.ts",
-      "find": "    if (offAny) {\n      violations.push(",
-      "replace": "    if (offAny) {\n      if (0) violations.push(",
+      "find": "    if (offAny) {\n      stats.uncached++;\n      continue;\n    }",
+      "replace": "    if (offAny) {\n      stats.uncached++;\n    }",
       "tests": ["check-turbo-test-inputs"]
     },
     {
@@ -253,8 +253,8 @@
       "id": "S08",
       "claim": "only a PROBE of an ancestor is exempt (a readdir is an input)",
       "file": "scripts/test-support/input-surface.ts",
-      "find": "if (kind === \"probe\" && inside(pkgReal, r)) return null;",
-      "replace": "if (inside(pkgReal, r)) return null;",
+      "find": "  // discovery) observes nothing but that the directory exists.\n  if (kind === \"probe\" && inside(pkgReal, r)) return null;",
+      "replace": "  // discovery) observes nothing but that the directory exists.\n  if (inside(pkgReal, r)) return null;",
       "tests": ["input-surface", "input-tracer"]
     },
     {
@@ -314,33 +314,25 @@
       "tests": ["input-tracer"]
     },
     {
-      "id": "T03",
-      "claim": "a whole-env copy is not a read",
-      "file": "scripts/test-support/input-tracer.ts",
-      "find": "if (typeof k !== \"string\" || !state.recording || enumerating) return;",
-      "replace": "if (typeof k !== \"string\" || !state.recording) return;",
-      "tests": ["input-tracer"]
-    },
-    {
       "id": "T04",
       "claim": "path-shaped spawn arguments are inputs",
-      "file": "scripts/test-support/input-tracer.ts",
-      "find": "    if (fs.existsSync(abs)) note(abs, \"exec\");",
-      "replace": "    void abs;",
+      "file": "scripts/test-support/recorder.ts",
+      "find": "note(state, t, \"exec\", typeof o?.cwd",
+      "replace": "void (state, t, \"exec\", typeof o?.cwd",
       "tests": ["input-tracer"]
     },
     {
       "id": "T05",
       "claim": "vite-loaded modules (the worker's module graph) are inputs",
       "file": "scripts/test-support/input-tracer.ts",
-      "find": "if (f.startsWith(\"/\") && !state.paths.has(f)) state.paths.set(f, \"module\");",
-      "replace": "void f;",
+      "find": "for (const f of modules) if (!state.paths.has(f)) state.paths.set(f, \"module\");",
+      "replace": "void modules;",
       "tests": ["input-tracer"]
     },
     {
       "id": "T07",
       "claim": "the promisified exec keeps its { stdout, stderr } shape",
-      "file": "scripts/test-support/input-tracer.ts",
+      "file": "scripts/test-support/recorder.ts",
       "find": "if (key === promisify.custom && typeof d.value === \"function\") {",
       "replace": "if (key === promisify.custom) continue;\n    if (false) {",
       "tests": ["input-tracer"]
@@ -356,17 +348,17 @@
     {
       "id": "T09",
       "claim": "fs reads are recorded (this is also how natively loaded modules are seen)",
-      "file": "scripts/test-support/input-tracer.ts",
-      "find": "      wrap(o, FS_READ, \"read\");",
-      "replace": "      void FS_READ;",
+      "file": "scripts/test-support/recorder.ts",
+      "find": "    wrap(o, FS_READ, \"read\");",
+      "replace": "    void FS_READ;",
       "tests": ["input-tracer"]
     },
     {
       "id": "T10",
       "claim": "directory listings are recorded",
-      "file": "scripts/test-support/input-tracer.ts",
-      "find": "      wrap(o, FS_DIR, \"readdir\");",
-      "replace": "      void FS_DIR;",
+      "file": "scripts/test-support/recorder.ts",
+      "find": "    wrap(o, FS_DIR, \"readdir\");",
+      "replace": "    void FS_DIR;",
       "tests": ["input-tracer"]
     },
     {
@@ -375,6 +367,134 @@
       "file": "scripts/test-support/input-tracer.ts",
       "find": "  process.env.TURBO_HASH !== undefined || process.env.MOTEBIT_INPUT_TRACER === \"enforce\";",
       "replace": "  process.env.MOTEBIT_INPUT_TRACER === \"enforce\";",
+      "tests": ["input-tracer"]
+    },
+    {
+      "id": "X03",
+      "claim": "fs/promises reads are recorded (readFile)",
+      "file": "scripts/test-support/recorder.ts",
+      "find": "  wrap(promises, PROMISE_READ, \"read\");\n",
+      "replace": "",
+      "tests": ["input-tracer"]
+    },
+    {
+      "id": "X04",
+      "claim": "fs/promises directory listings are recorded (readdir)",
+      "file": "scripts/test-support/recorder.ts",
+      "find": "  wrap(promises, PROMISE_DIR, \"readdir\");\n",
+      "replace": "",
+      "tests": ["input-tracer"]
+    },
+    {
+      "id": "X06",
+      "claim": "exec / execSync are spawns (a bare-name command is still a process)",
+      "file": "scripts/test-support/recorder.ts",
+      "find": "  \"exec\",\n  \"execSync\",\n] as const;",
+      "replace": "] as const;",
+      "tests": ["input-tracer"]
+    },
+    {
+      "id": "X07",
+      "claim": "`in process.env` (the Proxy has trap) is an env read",
+      "file": "scripts/test-support/recorder.ts",
+      "find": "    has(t, k) {\n      noteEnv(t, k);",
+      "replace": "    has(t, k) {\n      void noteEnv;",
+      "tests": ["input-tracer"]
+    },
+    {
+      "id": "X10",
+      "claim": "a var the test WROTE is test-controlled, not an input (written-var tracking)",
+      "file": "scripts/test-support/recorder.ts",
+      "find": "    set(t, k, v) {\n      if (typeof k === \"string\") state.written.add(k);",
+      "replace": "    set(t, k, v) {",
+      "tests": ["input-tracer"]
+    },
+    {
+      "id": "T12",
+      "claim": "an enumeration of process.env fails a cached test (no enumerating skip)",
+      "file": "scripts/test-support/recorder.ts",
+      "find": "      if (state.recording) state.enumerations++;\n",
+      "replace": "",
+      "tests": ["input-tracer"]
+    },
+    {
+      "id": "T13",
+      "claim": "getOwnPropertyDescriptor(process.env, …) is an env read",
+      "file": "scripts/test-support/recorder.ts",
+      "find": "    getOwnPropertyDescriptor(t, k) {\n      noteEnv(t, k);",
+      "replace": "    getOwnPropertyDescriptor(t, k) {\n      void noteEnv;",
+      "tests": ["input-tracer"]
+    },
+    {
+      "id": "T14",
+      "claim": "constructing a worker_threads Worker is a spawn",
+      "file": "scripts/test-support/recorder.ts",
+      "find": "    wt.Worker = Traced;",
+      "replace": "    void Traced;",
+      "tests": ["input-tracer"]
+    },
+    {
+      "id": "T15",
+      "claim": "a git-ignored in-package file is outside $TURBO_DEFAULT$",
+      "file": "scripts/test-support/input-tracer.ts",
+      "find": "  for (const p of gitIgnored(s, state.paths, state.orig))",
+      "replace": "  for (const p of [] as string[])",
+      "tests": ["input-tracer"]
+    },
+    {
+      "id": "T16",
+      "claim": "every recorded spawn fails a cached test",
+      "file": "scripts/test-support/input-tracer.ts",
+      "find": "  for (const sp of new Set(state.spawns))",
+      "replace": "  for (const sp of new Set<string>())",
+      "tests": ["input-tracer"]
+    },
+    {
+      "id": "T17",
+      "claim": "import.meta.glob in an evaluated module fails a cached test",
+      "file": "scripts/test-support/input-tracer.ts",
+      "find": "  for (const f of globbers(s, modules))",
+      "replace": "  for (const f of [] as string[])",
+      "tests": ["input-tracer"]
+    },
+    {
+      "id": "T18",
+      "claim": "a tmp path the test did not create is machine state",
+      "file": "scripts/test-support/input-surface.ts",
+      "find": "    if (inside(r, tmp) || inside(abs, tmpdir())) {",
+      "replace": "    if (inside(r, tmp) || inside(abs, tmpdir())) return null;\n    if (Math.random() > 2) {",
+      "tests": ["input-tracer"]
+    },
+    {
+      "id": "T19",
+      "claim": "mkdtemp marks its directory as the test's own",
+      "file": "scripts/test-support/recorder.ts",
+      "find": "    wrapMkdtemp(o, \"mkdtempSync\", \"sync\");\n",
+      "replace": "",
+      "tests": ["input-tracer"]
+    },
+    {
+      "id": "T20",
+      "claim": "a system path outside repo / tmp / the Node install is machine state",
+      "file": "scripts/test-support/input-surface.ts",
+      "find": "    return uncacheRepair(\n      s,\n      `${kind} ${abs}`,\n      \"a system path outside the repo",
+      "replace": "    return null;\n    return uncacheRepair(\n      s,\n      `${kind} ${abs}`,\n      \"a system path outside the repo",
+      "tests": ["input-tracer"]
+    },
+    {
+      "id": "T21",
+      "claim": "an ABSENT pass-through var read is an input (set later, it would replay)",
+      "file": "scripts/test-support/input-surface.ts",
+      "find": "  if (!present && !rule) return null;",
+      "replace": "  if (!present) return null;",
+      "tests": ["input-tracer"]
+    },
+    {
+      "id": "T22",
+      "claim": "the config-phase tracer enforces on cached packages (config-time reads, globalSetup)",
+      "file": "scripts/test-support/config-tracer.ts",
+      "find": "  const s = computeSurface(ROOT, config.root);\n  if (!s.cached) return;",
+      "replace": "  const s = computeSurface(ROOT, config.root);\n  if (s.cached || !s.cached) return;",
       "tests": ["input-tracer"]
     }
   ]

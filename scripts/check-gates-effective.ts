@@ -2770,6 +2770,21 @@ export async function probeFetch(): Promise<unknown> {
       ),
   },
   {
+    script: "check-test-hermeticity",
+    proves:
+      "flags a CACHED package whose test spawns a process — the round-2 stale-cached-pass class: a child process, worker thread or bare `git` spawn reads inputs no turbo hash carries, so a cached green replays over a test that now fails. Drops a fixture test into packages/circuit-breaker (opted into caching as proven hermetic) that imports node:child_process; the static lint refuses to prove the package and the gate fails because its turbo.json still caches it.",
+    perturb: () =>
+      writeFixture(
+        `packages/circuit-breaker/src/__tests__/${PROBE_PREFIX}hermeticity.test.ts`,
+        [
+          "// Probe fixture — a cached package's test that spawns a process.",
+          'import { execSync } from "node:child_process";',
+          'export const head = execSync("git log -1 --format=%s", { encoding: "utf-8" });',
+          "",
+        ].join("\n"),
+      ),
+  },
+  {
     script: "check-relay-frame-origin",
     proves:
       "flags a surface that handles a relay `command_request` and executes it through `executeCommand` without saying where the command came from — the 2026-09-16 class where five surfaces forwarded a relay frame with no origin, so a command that arrived over the wire answered as if typed on the machine and the return view's credential membrane never closed. Drops a fixture handler that reads a `command_request` frame and calls `executeCommand` bare; the gate finds the frame marker and no door and no explicit origin.",

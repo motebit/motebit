@@ -1,0 +1,11 @@
+{
+  "$comment": "Reviewed exemptions for scripts/check-test-hermeticity.ts (L1 of the test-cache law). Each entry names one site (file + rule + exact source text) and why it cannot change a test outcome outside the task hash. An entry matching no finding fails the gate.",
+  "exemptions": [
+    {
+      "file": "src/__tests__/transparency-anchor.test.ts",
+      "rule": "absolute-path",
+      "text": "\"/fixtures/transparency.json\"",
+      "why": "a URL PATH handed to fetchTransparencyAnchor with an injected mockFetch \u2014 it is joined onto https://relay.example.com and asserted as a URL; nothing touches the filesystem"
+    }
+  ]
+}

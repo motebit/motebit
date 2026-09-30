@@ -1,0 +1,32 @@
+{
+  "$comment": "Reviewed exemptions for scripts/check-test-hermeticity.ts (L1 of the test-cache law). Each entry names one site (file + rule + exact source text) and why it cannot change a test outcome outside the task hash. An entry matching no finding fails the gate.",
+  "exemptions": [
+    {
+      "file": "src/__tests__/sim-net.ts",
+      "rule": "escape",
+      "text": "new URL(\"../../../../apps/mobile/package.json\", import.meta.url)",
+      "why": "resolves react-native's whatwg-fetch / abort-controller through apps/mobile/package.json (declared in inputs, with $TURBO_ROOT$/pnpm-lock.yaml, so every resolution is lockfile-hashed), or reads the three app sources the #914 test names (each declared in \"inputs\" of BOTH test tasks in packages/sync-engine/turbo.json)"
+    },
+    {
+      "file": "src/__tests__/rn-fetch.ts",
+      "rule": "escape",
+      "text": "new URL(\"../../../../apps/mobile/package.json\", import.meta.url)",
+      "why": "resolves react-native's whatwg-fetch / abort-controller through apps/mobile/package.json (declared in inputs, with $TURBO_ROOT$/pnpm-lock.yaml, so every resolution is lockfile-hashed), or reads the three app sources the #914 test names (each declared in \"inputs\" of BOTH test tasks in packages/sync-engine/turbo.json)"
+    },
+    {
+      "file": "src/__tests__/push-914-r5.test.ts",
+      "rule": "escape",
+      "text": [
+        "new URL(\"../../../../apps/mobile/package.json\", import.meta.url)",
+        "fileURLToPath(new URL(\"../../../../\", import.meta.url))"
+      ],
+      "why": "resolves react-native's whatwg-fetch / abort-controller through apps/mobile/package.json (declared in inputs, with $TURBO_ROOT$/pnpm-lock.yaml, so every resolution is lockfile-hashed), or reads the three app sources the #914 test names (each declared in \"inputs\" of BOTH test tasks in packages/sync-engine/turbo.json)"
+    },
+    {
+      "file": "src/__tests__/push-914-r4.test.ts",
+      "rule": "escape",
+      "text": "new URL(\"../../../../apps/mobile/package.json\", import.meta.url)",
+      "why": "resolves react-native's whatwg-fetch / abort-controller through apps/mobile/package.json (declared in inputs, with $TURBO_ROOT$/pnpm-lock.yaml, so every resolution is lockfile-hashed), or reads the three app sources the #914 test names (each declared in \"inputs\" of BOTH test tasks in packages/sync-engine/turbo.json)"
+    }
+  ]
+}

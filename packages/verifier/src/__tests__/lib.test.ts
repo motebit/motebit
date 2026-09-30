@@ -265,7 +265,9 @@ describe("verifyFile", () => {
   });
 
   it("throws an I/O error for a missing path (caller handles)", async () => {
-    await expect(verifyFile("/nonexistent/path/will/not/exist.json")).rejects.toThrow();
+    // Missing inside a fresh mkdtemp dir — never a machine path that might exist.
+    const missing = join(mkdtempSync(join(tmpdir(), "verifier-missing-")), "absent.json");
+    await expect(verifyFile(missing)).rejects.toThrow();
   });
 });
 

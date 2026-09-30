@@ -27,10 +27,7 @@
  * and is only observed. MOTEBIT_TRACER_DEBUG=<VAR> prints the stack of each
  * read of that env var.
  */
-import * as fs from "node:fs";
-import * as nodeModule from "node:module";
-import { dirname, resolve } from "node:path";
-import { promisify } from "node:util";
+import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll } from "vitest";
 
@@ -40,215 +37,23 @@ import {
   classifyPath,
   computeSurface,
   formatViolation,
-  type ObsKind,
+  gitIgnored,
+  uncacheRepair,
   type Surface,
+  type Violation,
 } from "./input-surface.js";
+import { installRecorder, isCreated, newState, type RecorderState } from "./recorder.js";
 
-interface TracerState {
-  installed: boolean;
-  recording: boolean;
-  paths: Map<string, ObsKind>;
-  env: Set<string>;
-  initialEnv: Set<string>;
-  written: Set<string>;
+interface TracerState extends RecorderState {
   surface?: Surface | null;
   surfaceError?: string;
+  /** file → does its source use import.meta.glob (cached per worker) */
+  globSrc: Map<string, boolean>;
 }
 
 const KEY = Symbol.for("motebit.inputTracer");
-const DEBUG_ENV = process.env.MOTEBIT_TRACER_DEBUG;
 const g = globalThis as unknown as Record<symbol, TracerState | undefined>;
-const state: TracerState = (g[KEY] ??= {
-  installed: false,
-  recording: false,
-  paths: new Map(),
-  env: new Set(),
-  initialEnv: new Set(),
-  written: new Set(),
-});
-
-const RANK: Record<ObsKind, number> = { probe: 0, module: 1, readdir: 2, exec: 3, read: 4 };
-
-function note(p: unknown, kind: ObsKind, cwd?: string): void {
-  if (!state.recording) return;
-  let s: string | null = null;
-  if (typeof p === "string") s = p;
-  else if (p && typeof p === "object" && typeof (p as { href?: unknown }).href === "string") {
-    const href = (p as { href: string }).href; // a URL, whichever realm's
-    s = href.startsWith("file:") ? href : null;
-  } else if (Buffer.isBuffer(p)) s = p.toString();
-  if (!s || s.startsWith("data:") || s.startsWith("node:")) return;
-  if (s.startsWith("file:")) s = fileURLToPath(s);
-  const abs = resolve(cwd ?? process.cwd(), s);
-  const prev = state.paths.get(abs);
-  if (prev === undefined || RANK[kind] > RANK[prev]) state.paths.set(abs, kind);
-}
-
-// ── Installation (once per worker) ───────────────────────────────────────
-
-const FS_READ = [
-  "readFileSync",
-  "readFile",
-  "openSync",
-  "open",
-  "createReadStream",
-  "copyFileSync",
-  "copyFile",
-  "cpSync",
-  "cp",
-  "readlinkSync",
-  "readlink",
-] as const;
-const FS_DIR = ["readdirSync", "readdir", "opendirSync", "opendir"] as const;
-const FS_PROBE = [
-  "statSync",
-  "stat",
-  "lstatSync",
-  "lstat",
-  "existsSync",
-  "exists",
-  "accessSync",
-  "access",
-  "realpathSync",
-  "realpath",
-] as const;
-const PROMISE_READ = ["readFile", "open", "copyFile", "cp", "readlink"] as const;
-const PROMISE_DIR = ["readdir", "opendir"] as const;
-const PROMISE_PROBE = ["stat", "lstat", "access", "realpath"] as const;
-
-type AnyFn = (...a: unknown[]) => unknown;
-
-/**
- * Replace `obj[name]` with `before(...args)` + the original, keeping every own
- * property of the original (realpathSync.native, util.promisify.custom — the
- * promisified exec/execFile resolve to `{ stdout, stderr }` only through it).
- */
-function patch(obj: Record<string, unknown>, name: string, before: (a: unknown[]) => void): void {
-  const orig = obj[name] as AnyFn | undefined;
-  if (typeof orig !== "function" || (orig as { __traced?: boolean }).__traced) return;
-  const w = function (this: unknown, ...a: unknown[]) {
-    before(a);
-    return orig.apply(this, a);
-  };
-  for (const key of Reflect.ownKeys(orig)) {
-    if (key === "length" || key === "name" || key === "prototype") continue;
-    const d = Object.getOwnPropertyDescriptor(orig, key)!;
-    if (key === promisify.custom && typeof d.value === "function") {
-      const custom = d.value as AnyFn;
-      d.value = function (this: unknown, ...a: unknown[]) {
-        before(a);
-        return custom.apply(this, a);
-      };
-    }
-    Object.defineProperty(w, key, d);
-  }
-  Object.defineProperty(w, "__traced", { value: true });
-  obj[name] = w;
-}
-
-function wrap(obj: Record<string, unknown>, names: readonly string[], kind: ObsKind): void {
-  for (const n of names) patch(obj, n, (a) => note(a[0], kind));
-}
-
-const SPAWN = ["spawn", "spawnSync", "execFile", "execFileSync", "fork"] as const;
-const EXEC = ["exec", "execSync"] as const;
-
-function noteExec(cmd: unknown, args: unknown, opts: unknown): void {
-  if (!state.recording) return;
-  const cwd =
-    opts && typeof opts === "object" && typeof (opts as { cwd?: unknown }).cwd === "string"
-      ? (opts as { cwd: string }).cwd
-      : undefined;
-  const tokens: string[] = [];
-  if (typeof cmd === "string") tokens.push(cmd);
-  if (Array.isArray(args)) for (const a of args) if (typeof a === "string") tokens.push(a);
-  for (const t of tokens) {
-    // Path-shaped arguments only: a bare command name is PATH lookup.
-    if (!/[/\\]/.test(t) || t === process.execPath) continue;
-    const abs = resolve(cwd ?? process.cwd(), t);
-    if (fs.existsSync(abs)) note(abs, "exec");
-  }
-}
-
-function install(): void {
-  if (state.installed) return;
-  state.installed = true;
-  const fsObj = fs as unknown as Record<string, unknown>;
-  // `import * as fs` is the ESM namespace; patch the CJS object behind it.
-  const cjsFs = nodeModule.createRequire(import.meta.url)("node:fs") as Record<string, unknown>;
-  for (const o of [cjsFs, fsObj]) {
-    try {
-      wrap(o, FS_READ, "read");
-      wrap(o, FS_DIR, "readdir");
-      wrap(o, FS_PROBE, "probe");
-    } catch {
-      /* the ESM namespace is read-only — the CJS object is what matters */
-    }
-  }
-  const promises = cjsFs.promises as Record<string, unknown>;
-  wrap(promises, PROMISE_READ, "read");
-  wrap(promises, PROMISE_DIR, "readdir");
-  wrap(promises, PROMISE_PROBE, "probe");
-  const cp = nodeModule.createRequire(import.meta.url)("node:child_process") as Record<
-    string,
-    unknown
-  >;
-  for (const n of SPAWN) {
-    patch(cp, n, (a) =>
-      noteExec(a[0], Array.isArray(a[1]) ? a[1] : [], Array.isArray(a[1]) ? a[2] : a[1]),
-    );
-  }
-  for (const n of EXEC) {
-    patch(cp, n, (a) => noteExec(null, typeof a[0] === "string" ? a[0].split(/\s+/) : [], a[1]));
-  }
-  nodeModule.syncBuiltinESMExports();
-
-  // Natively loaded modules (externals, createRequire, require.resolve, native
-  // ESM imports) need no hook of their own: on the pinned runtime (.node-version)
-  // Node's CJS and ESM loaders read and realpath through the public `fs`
-  // patched above, so every one is recorded as a read/probe. A resolve hook
-  // (module.registerHooks) was measured to be an equivalent mutant and removed;
-  // the stale-cache harness's C5 case goes red if a Node upgrade breaks this.
-
-  // Env: record reads of vars that were PRESENT when the task started.
-  for (const k of Object.keys(process.env)) state.initialEnv.add(k);
-  // A whole-env copy (`{ ...process.env }`, or spawn's default env) enumerates
-  // and then gets every key in the same synchronous turn: that forwards the
-  // env, it does not read a var. Reads inside an enumeration turn are skipped.
-  let enumerating = false;
-  const noteEnv = (k: string | symbol): void => {
-    if (typeof k !== "string" || !state.recording || enumerating) return;
-    if (!state.initialEnv.has(k) || state.written.has(k)) return;
-    state.env.add(k);
-    if (DEBUG_ENV === k) console.error(new Error(`[input-tracer] env read ${k}`).stack);
-  };
-  const target = process.env;
-  process.env = new Proxy(target, {
-    get(t, k, r) {
-      noteEnv(k);
-      return Reflect.get(t, k, r);
-    },
-    has(t, k) {
-      noteEnv(k);
-      return Reflect.has(t, k);
-    },
-    ownKeys(t) {
-      if (!enumerating) {
-        enumerating = true;
-        queueMicrotask(() => (enumerating = false));
-      }
-      return Reflect.ownKeys(t);
-    },
-    set(t, k, v) {
-      if (typeof k === "string") state.written.add(k);
-      return Reflect.set(t, k, v);
-    },
-    deleteProperty(t, k) {
-      if (typeof k === "string") state.written.add(k);
-      return Reflect.deleteProperty(t, k);
-    },
-  });
-}
+const state: TracerState = (g[KEY] ??= { ...newState(), globSrc: new Map() });
 
 // ── Per test file ────────────────────────────────────────────────────────
 
@@ -259,7 +64,8 @@ const enforce =
 
 const worker = (globalThis as { __vitest_worker__?: WorkerState }).__vitest_worker__;
 interface WorkerState {
-  config?: { root?: string; env?: Record<string, unknown> };
+  config?: { root?: string; env?: Record<string, unknown>; globalSetup?: string | string[] };
+  providedContext?: unknown;
   filepath?: string;
   evaluatedModules?: { fileToModulesMap?: Map<string, unknown> };
 }
@@ -312,30 +118,99 @@ if (enforce) {
   }
 }
 
-install();
+installRecorder(state, { env: true });
 state.paths.clear();
 state.env.clear();
+state.created.clear();
+state.spawns.length = 0;
+state.enumerations = 0;
 state.recording = true;
+
+/** In-repo modules this file evaluated whose SOURCE uses import.meta.glob. */
+function globbers(s: Surface, modules: string[]): string[] {
+  const out: string[] = [];
+  for (const f of modules) {
+    if (!f.startsWith(s.root + sep) || /[/\\]node_modules[/\\]/.test(f)) continue;
+    if (f.startsWith(join(s.root, "scripts", "test-support") + sep)) continue; // the tracer itself
+    let hit = state.globSrc.get(f);
+    if (hit === undefined) {
+      try {
+        hit = /\bimport\.meta\.glob(?:Eager)?\b/.test(
+          state.orig.readFileSync!(f, "utf-8") as string,
+        );
+      } catch {
+        hit = false;
+      }
+      state.globSrc.set(f, hit);
+    }
+    if (hit) out.push(f);
+  }
+  return out;
+}
 
 afterAll(() => {
   state.recording = false;
   const s = enforce ? surface() : null;
   if (!s || !s.cached) return;
-  for (const f of worker?.evaluatedModules?.fileToModulesMap?.keys() ?? []) {
-    if (f.startsWith("/") && !state.paths.has(f)) state.paths.set(f, "module");
-  }
+  const modules = [...(worker?.evaluatedModules?.fileToModulesMap?.keys() ?? [])].filter((f) =>
+    f.startsWith("/"),
+  );
+  for (const f of modules) if (!state.paths.has(f)) state.paths.set(f, "module");
   const lines: string[] = [];
   const file = worker?.filepath ? worker.filepath.replace(`${PKG}/`, "") : "(setup)";
+  const push = (v: Violation) => lines.push(formatViolation(s.pkgName, file, v));
+  const created = (abs: string, real: string | null) => isCreated(state, abs, real);
   for (const [p, kind] of state.paths) {
-    const v = classifyPath(s, p, kind);
-    if (v) lines.push(formatViolation(s.pkgName, file, v));
+    const v = classifyPath(s, p, kind, { created });
+    if (v) push(v);
   }
+  for (const p of gitIgnored(s, state.paths, state.orig))
+    push(
+      uncacheRepair(
+        s,
+        `${state.paths.get(p) ?? "list"} ${relative(s.root, p)}`,
+        "a git-IGNORED file inside the package — $TURBO_DEFAULT$ hashes only git-visible files; commit it, or generate it in an mkdtemp dir",
+      ),
+    );
+  for (const sp of new Set(state.spawns))
+    push(
+      uncacheRepair(
+        s,
+        `spawn ${sp}`,
+        "a process / worker thread / fork — its reads, env and binary are outside every hash",
+      ),
+    );
+  if (state.enumerations > 0)
+    push(
+      uncacheRepair(
+        s,
+        `process.env enumerated ${state.enumerations}x (spread / Object.keys / entries / assign / a spawn's default env)`,
+        "the whole env flows somewhere no read is visible — read vars by name (process.env.NAME)",
+      ),
+    );
+  for (const f of globbers(s, modules))
+    push(
+      uncacheRepair(
+        s,
+        `import.meta.glob in ${relative(s.root, f)}`,
+        "the set of files a glob matches is not a hashed file — adding one never changes the hash",
+      ),
+    );
+  const setup = worker?.config?.globalSetup;
+  if ((Array.isArray(setup) ? setup.length : setup) || Object.keys(provided()).length > 0)
+    push(
+      uncacheRepair(
+        s,
+        "vitest globalSetup / provide",
+        "globalSetup runs in the main process, where no tracer sees what it reads",
+      ),
+    );
   // `test.env` in the package's vitest config sets these — the config is hashed.
   const configEnv = new Set(Object.keys(worker?.config?.env ?? {}));
-  for (const k of state.env) {
+  for (const [k, present] of state.env) {
     if (configEnv.has(k)) continue;
-    const v = classifyEnvRead(s, k);
-    if (v) lines.push(formatViolation(s.pkgName, file, v));
+    const v = classifyEnvRead(s, k, present);
+    if (v) push(v);
   }
   if (lines.length) {
     throw new Error(
@@ -345,3 +220,19 @@ afterAll(() => {
     );
   }
 });
+
+function provided(): Record<string, unknown> {
+  const pc = worker?.providedContext;
+  if (!pc) return {};
+  if (typeof pc === "string") {
+    try {
+      const v = JSON.parse(pc) as unknown;
+      return Array.isArray(v) && v[0] && typeof v[0] === "object"
+        ? (v[0] as Record<string, unknown>)
+        : {};
+    } catch {
+      return {};
+    }
+  }
+  return pc as Record<string, unknown>;
+}

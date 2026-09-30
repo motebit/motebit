@@ -17,7 +17,7 @@
  */
 import { existsSync, readFileSync, readdirSync, realpathSync, statSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
-import { dirname, join, relative, resolve, sep } from "node:path";
+import { basename, dirname, join, relative, resolve, sep } from "node:path";
 
 import { classifyEnv, envPatternMatches } from "./env-policy.js";
 
@@ -326,7 +326,15 @@ export interface Violation {
   what: string;
   why: string;
   repair: string;
-  repairJson: { file: string; tasks: string[]; key: "inputs" | "env"; add: string };
+  repairJson:
+    | { file: string; tasks: string[]; key: "inputs" | "env"; add: string }
+    | { file: string; tasks: string[]; key: "cache"; set: false };
+}
+
+/** Everything the classifier needs beyond the surface. */
+export interface ClassifyCtx {
+  /** Did the test itself create this path (mkdtemp / mkdir / write)? */
+  created?: (abs: string, real: string | null) => boolean;
 }
 
 const realCache = new Map<string, string | null>();
@@ -369,7 +377,52 @@ export function storeIdOf(file: string): string | null {
   return v ? `${m[1].split(sep).join("/")}@${v}` : null;
 }
 
-const RUNTIME_DIR = dirname(dirname(process.execPath));
+/**
+ * Exact system paths the test TOOLING probes on every run, reviewed as not
+ * outcome-changing. Probe only (existence), never a read.
+ *   /opt/.devin  vite's bundled @vercel/detect-agent — selects log formatting
+ */
+const TOOLING_PROBES = new Set(["/opt/.devin"]);
+
+/** Workspace-root / config discovery files tooling probes in each ancestor dir. */
+const DISCOVERY_NAMES = new Set([
+  "package.json",
+  "pnpm-workspace.yaml",
+  "lerna.json",
+  "deno.json",
+  "deno.jsonc",
+]);
+
+/**
+ * The running Node install: the binary, and its own lib / include trees
+ * (never all of `/usr` when node is `/usr/bin/node`). Hashed as
+ * MOTEBIT_TEST_RUNTIME.
+ */
+const NODE_BIN = (() => {
+  try {
+    return realpathSync(process.execPath);
+  } catch {
+    return process.execPath;
+  }
+})();
+const NODE_PREFIX = dirname(dirname(NODE_BIN));
+const RUNTIME_PATHS = [
+  NODE_BIN,
+  join(NODE_PREFIX, "lib", "node_modules"),
+  join(NODE_PREFIX, "include", "node"),
+];
+
+/** The repair for an input no hash can carry: the package stays uncached. */
+export function uncacheRepair(s: Surface, what: string, why: string): Violation {
+  return {
+    what,
+    why,
+    repair:
+      `remove it, or remove "cache": true from BOTH "test" and "test:coverage" in ${s.turboFile} ` +
+      `(the package is then uncached — scripts/check-test-hermeticity.ts should not have proven it)`,
+    repairJson: { file: s.turboFile, tasks: [...TEST_TASKS], key: "cache", set: false },
+  };
+}
 
 function inputRepair(s: Surface, add: string, what: string, why: string): Violation {
   return {
@@ -386,26 +439,50 @@ function inputRepair(s: Surface, add: string, what: string, why: string): Violat
  * Classify one observed filesystem input. Returns null when the hash covers
  * it, else the violation with its repair.
  */
-export function classifyPath(s: Surface, path: string, kind: ObsKind): Violation | null {
+export function classifyPath(
+  s: Surface,
+  path: string,
+  kind: ObsKind,
+  ctx: ClassifyCtx = {},
+): Violation | null {
   const abs = resolve(path);
   const r = real(abs) ?? abs;
   const root = real(s.root) ?? s.root;
   const tmp = real(tmpdir()) ?? tmpdir();
   if (!inside(r, root) && !inside(abs, s.root)) {
-    // Outside the repo: temp files the test made, the Node install, and the
-    // system are the runtime (hashed as MOTEBIT_TEST_RUNTIME). User state is not.
+    // Outside the repo, only three things are not machine state: what the
+    // test created itself, the running Node install, and store/tooling
+    // packages resolved through node_modules (lockfile-hashed).
+    if (ctx.created?.(abs, real(abs))) return null;
+    if (RUNTIME_PATHS.some((p) => inside(r, p))) return null;
+    if (/[/\\]node_modules[/\\]/.test(r)) return null;
+    // A probe of a directory on the way up to the package (config discovery)
+    // observes only that the directory exists.
+    const pkgReal = real(s.pkgDir) ?? s.pkgDir;
+    if (kind === "probe" && inside(pkgReal, r)) return null;
+    if (kind === "probe" && TOOLING_PROBES.has(abs)) return null;
     const home = real(homedir()) ?? homedir();
-    if (inside(r, tmp) || inside(r, RUNTIME_DIR) || /[/\\]node_modules[/\\]/.test(r)) return null;
+    if (inside(r, tmp) || inside(abs, tmpdir())) {
+      return uncacheRepair(
+        s,
+        `${kind} ${abs}`,
+        "a path under tmp the test did not create (mkdtemp / mkdir / write) — content left by anything else is machine state",
+      );
+    }
     if (home !== sep && inside(r, home)) {
       return {
         what: `${kind} ${abs}`,
         why: "user state under $HOME — no hash can carry it",
         repair:
           "redirect it to an mkdtemp dir (or HOME/MOTEBIT_CONFIG_DIR at a tmp dir), or mark the package UNCACHED",
-        repairJson: { file: s.turboFile, tasks: [...TEST_TASKS], key: "inputs", add: abs },
+        repairJson: { file: s.turboFile, tasks: [...TEST_TASKS], key: "cache", set: false },
       };
     }
-    return null;
+    return uncacheRepair(
+      s,
+      `${kind} ${abs}`,
+      "a system path outside the repo, tmp and the running Node install — machine state no hash carries",
+    );
   }
   const rr = relative(root, r).split(sep).join("/");
   const relAbs = join(s.root, rr);
@@ -415,6 +492,11 @@ export function classifyPath(s: Surface, path: string, kind: ObsKind): Violation
   // Ancestors of the package: a probe of a directory on the way up (config
   // discovery) observes nothing but that the directory exists.
   if (kind === "probe" && inside(pkgReal, r)) return null;
+  // Tooling's workspace-root / config discovery probes these NAMES in every
+  // ancestor directory (vite's searchForWorkspaceRoot). Only a probe, only
+  // this closed list, only in an ancestor of the package.
+  if (kind === "probe" && DISCOVERY_NAMES.has(basename(r)) && inside(pkgReal, dirname(r)))
+    return null;
   // External packages.
   if (/[/\\]node_modules[/\\]/.test(r)) {
     if (s.lockfileDeclared) return null;
@@ -452,19 +534,88 @@ export function classifyPath(s: Surface, path: string, kind: ObsKind): Violation
  * Classify one env read of a var PRESENT in the task's environment. Returns
  * null when it is hashed or reviewed-benign.
  */
-export function classifyEnvRead(s: Surface, name: string): Violation | null {
+export function classifyEnvRead(s: Surface, name: string, present = true): Violation | null {
   if (s.hashedEnv.some((p) => envPatternMatches(p, name))) return null;
   const rule = classifyEnv(name);
   if (rule?.class === "benign") return null;
+  // Absent and unclassified: strict env mode strips every var turbo does not
+  // pass through, and the static gate proves every pass-through var is
+  // classified — so this name can never reach the task.
+  if (!present && !rule) return null;
   return {
-    what: `env ${name}`,
+    what: `env ${name}${present ? "" : " (absent)"}`,
     why:
       rule?.class === "hash"
         ? "it changes outcomes and must be hashed, but this task does not hash it"
-        : "it reaches the task unhashed (turbo pass-through), so a change to it replays the cached result",
+        : present
+          ? "it reaches the task unhashed (turbo pass-through), so a change to it replays the cached result"
+          : "turbo passes it through unhashed: absent now, setting it later would replay the cached result",
     repair: `add "${name}" to "env" of BOTH "test" and "test:coverage" in turbo.json`,
     repairJson: { file: "turbo.json", tasks: [...TEST_TASKS], key: "env", add: name },
   };
+}
+
+/** Build outputs of the package (turbo `build` outputs): hashed through `dependsOn: build`. */
+export function buildOutputGlobs(s: Surface): string[] {
+  const rootCfg = readJsonc<TurboCfg>(join(s.root, "turbo.json"));
+  let outs = rootCfg.tasks?.build?.outputs ?? [];
+  try {
+    const pkgCfg = readJsonc<TurboCfg>(join(s.pkgDir, "turbo.json"));
+    outs = pkgCfg.tasks?.build?.outputs ?? outs;
+  } catch {
+    /* no package turbo.json */
+  }
+  return [...outs, ".turbo/**", "coverage/**"].map((o) => absGlob(s.root, s.pkgDir, o));
+}
+
+/**
+ * In-package paths git ignores: `$TURBO_DEFAULT$` hashes only git-visible
+ * files, so an ignored file the test reads, probes or lists is outside the
+ * hash (a `.env.local`, a fixture written by a previous run, …). Build outputs
+ * and node_modules are hashed another way (dependsOn build / the lockfile).
+ */
+export interface OrigFs {
+  readdirSync?: (p: string) => unknown;
+  spawnSync?: typeof import("node:child_process").spawnSync;
+}
+
+export function gitIgnored(s: Surface, observed: Map<string, ObsKind>, orig: OrigFs): string[] {
+  const outs = buildOutputGlobs(s);
+  const cand = new Set<string>();
+  const pkgReal = s.pkgDir;
+  const consider = (p: string): void => {
+    if (!p.startsWith(pkgReal + sep) || /[/\\]node_modules([/\\]|$)/.test(p)) return;
+    if (covers(outs, p) || covers(outs, p, true)) return;
+    cand.add(p);
+  };
+  for (const [p, kind] of observed) {
+    consider(p);
+    // A listing observes the names of what it lists.
+    if (kind === "readdir") {
+      try {
+        for (const e of orig.readdirSync!(p) as string[]) consider(join(p, e));
+      } catch {
+        /* vanished */
+      }
+    }
+  }
+  if (cand.size === 0) return [];
+  const list = [...cand].map((p) => relative(s.root, p)).join("\0");
+  const r = orig.spawnSync!("git", ["check-ignore", "--stdin", "-z"], {
+    cwd: s.root,
+    input: list,
+    encoding: "utf-8",
+  });
+  if (r.status !== 0 && r.status !== 1) {
+    throw new Error(
+      `[input-tracer] ${s.pkgName}: \`git check-ignore\` failed (${r.error?.message ?? r.stderr}) — ` +
+        `a cached package must prove every file it read is git-visible. Run tests inside the git checkout.`,
+    );
+  }
+  return r.stdout
+    .split("\0")
+    .filter(Boolean)
+    .map((x) => join(s.root, x));
 }
 
 export function formatViolation(pkg: string, file: string, v: Violation): string {

@@ -356,26 +356,27 @@ function runTurbo(root: string, pkg: string, o: RunOpts = {}): Promise<RunResult
 
 const REPAIR = /REPAIR-JSON (\{.*\})/;
 
-interface Repair {
-  file: string;
-  tasks: string[];
-  key: "inputs" | "env";
-  add: string;
-}
+type Repair =
+  | { file: string; tasks: string[]; key: "inputs" | "env"; add: string }
+  | { file: string; tasks: string[]; key: "cache"; set: false };
 
 function applyRepair(root: string, r: Repair): void {
   const file = join(root, r.file);
-  const cfg: { extends?: string[]; tasks?: Record<string, Record<string, string[]>> } = existsSync(
+  const cfg: { extends?: string[]; tasks?: Record<string, Record<string, unknown>> } = existsSync(
     file,
   )
     ? (JSON.parse(readFileSync(file, "utf-8")) as {
-        tasks?: Record<string, Record<string, string[]>>;
+        tasks?: Record<string, Record<string, unknown>>;
       })
     : { extends: ["//"], tasks: {} };
   cfg.tasks ??= {};
   for (const t of r.tasks) {
     const task = (cfg.tasks[t] ??= {});
-    const list = (task[r.key] ??= r.key === "inputs" ? ["$TURBO_DEFAULT$"] : []);
+    if (r.key === "cache") {
+      task.cache = r.set;
+      continue;
+    }
+    const list = (task[r.key] ??= r.key === "inputs" ? ["$TURBO_DEFAULT$"] : []) as string[];
     if (!list.includes(r.add)) list.push(r.add);
   }
   writeFileSync(file, JSON.stringify(cfg, null, 2));
@@ -426,7 +427,11 @@ async function runCase(c: Case, mode: Mode): Promise<CaseResult> {
     spawnSync("git", ["add", "-A"], { cwd: root });
     const [again, againDetail] = await flow();
     return done(outcome, tracerLine(detail), {
-      repair: repairs.map((r) => `${r.file} ${r.key} += ${r.add}`).join("; "),
+      repair: repairs
+        .map((r) =>
+          r.key === "cache" ? `${r.file} cache = false` : `${r.file} ${r.key} += ${r.add}`,
+        )
+        .join("; "),
       repaired: again,
       detail: `${tracerLine(detail)} || after repair: ${again} — ${againDetail}`,
     });

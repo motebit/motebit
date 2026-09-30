@@ -183,12 +183,11 @@ describe("SqliteAuditChainStore — durability across reopen", () => {
     // bytes — same shape as a true file-backed driver. Validates
     // the durability claim end-to-end without a native dep.
     //
-    // Per-test temp file with unique suffix so concurrent test
-    // workers don't share state. Cleaned up at the end.
-    const dbPath = path.join(
-      os.tmpdir(),
-      `audit-chain-${Date.now()}-${Math.random().toString(36).slice(2)}.db`,
-    );
+    // A fresh mkdtemp dir per test, so concurrent workers never share
+    // state and nothing left in tmp by another run is read. Cleaned up
+    // at the end.
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "audit-chain-"));
+    const dbPath = path.join(dir, "audit-chain.db");
     try {
       const driver1 = await SqlJsDriver.open(dbPath);
       createMotebitDatabaseFromDriver(driver1);
@@ -214,7 +213,7 @@ describe("SqliteAuditChainStore — durability across reopen", () => {
       driver2.close();
     } finally {
       try {
-        fs.rmSync(dbPath, { force: true });
+        fs.rmSync(dir, { recursive: true, force: true });
       } catch {
         // best-effort cleanup
       }

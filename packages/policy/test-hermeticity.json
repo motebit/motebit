@@ -1,0 +1,21 @@
+{
+  "$comment": "Reviewed exemptions for scripts/check-test-hermeticity.ts (L1 of the test-cache law). Each entry names one site (file + rule + exact source text) and why it cannot change a test outcome outside the task hash. An entry matching no finding fails the gate.",
+  "exemptions": [
+    {
+      "file": "src/__tests__/index.test.ts",
+      "rule": "absolute-path",
+      "text": [
+        "\"/tmp/x\"",
+        "\"/home/user/project\"",
+        "\"/etc/passwd\"",
+        "\"/home/user/project/src/index.ts\"",
+        "\"/home/user/project-evil/steal.txt\"",
+        "\"/home/user/project/\"",
+        "\"/home/user\"",
+        "\"/etc\"",
+        "\"/etc/shadow\""
+      ],
+      "why": "path strings used as DATA: tool-call args and pathAllowList entries handed to PolicyGate / AuditLogger, which compare strings \u2014 @motebit/policy src imports no fs, so no file at these paths is ever opened or probed"
+    }
+  ]
+}

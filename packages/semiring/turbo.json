@@ -3,9 +3,11 @@
   "extends": ["//"],
   "tasks": {
     "test": {
+      "cache": true,
       "inputs": ["$TURBO_DEFAULT$", "$TURBO_ROOT$/spec/conformance/routing-transcript/corpus.json"]
     },
     "test:coverage": {
+      "cache": true,
       "inputs": ["$TURBO_DEFAULT$", "$TURBO_ROOT$/spec/conformance/routing-transcript/corpus.json"]
     }
   }

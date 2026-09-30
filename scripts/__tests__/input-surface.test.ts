@@ -204,10 +204,18 @@ describe("classifyPath / classifyEnvRead", () => {
     expect(classifyPath(a, root, "readdir")?.repairJson.add).toBe("$TURBO_ROOT$/**");
   });
 
-  it("temp files are the test's own; content under $HOME is user state", () => {
+  it("tmp is an input unless the test created it; $HOME is user state; system paths are machine state", () => {
     const root = workspace();
     const a = computeSurface(root, join(root, "packages/a"));
-    expect(classifyPath(a, join(tmpdir(), "anything.json"), "read")).toBeNull();
+    const foreign = classifyPath(a, join(tmpdir(), "anything.json"), "read");
+    expect(foreign?.why).toContain("under tmp the test did not create");
+    expect(foreign?.repairJson).toMatchObject({ key: "cache", set: false });
+    const own = join(tmpdir(), "made-by-the-test");
+    const created = (p: string) => p === own || p.startsWith(own + "/");
+    expect(classifyPath(a, join(own, "f.json"), "read", { created })).toBeNull();
+    expect(classifyPath(a, "/opt/somewhere/data.txt", "read")?.why).toContain("a system path");
+    expect(classifyPath(a, "/opt/.devin", "probe")).toBeNull(); // reviewed tooling probe
+    expect(classifyPath(a, process.execPath, "read")).toBeNull(); // the running Node install
     const home = process.env.HOME;
     if (home && !home.startsWith(tmpdir()))
       expect(classifyPath(a, join(home, ".motebit", "config.json"), "read")?.why).toContain(
@@ -222,5 +230,8 @@ describe("classifyPath / classifyEnvRead", () => {
     expect(classifyEnvRead(a, "PATH")).toBeNull(); // benign
     expect(classifyEnvRead(a, "XDG_RUNTIME_DIR")?.repairJson.add).toBe("XDG_RUNTIME_DIR"); // guarded
     expect(classifyEnvRead(a, "LANG")?.why).toContain("must be hashed"); // hash-class, unhashed here
+    // Absent: a pass-through var could be set later; an unclassified one never reaches the task.
+    expect(classifyEnvRead(a, "GITHUB_SHA", false)?.what).toBe("env GITHUB_SHA (absent)");
+    expect(classifyEnvRead(a, "MOTEBIT_NEVER_PASSED", false)).toBeNull();
   });
 });

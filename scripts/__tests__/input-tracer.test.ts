@@ -9,6 +9,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { spawnSync } from "node:child_process";
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { runtimeId } from "../test-support/env-policy.js";
@@ -39,26 +40,68 @@ const EXPECT: Record<string, string> = {
   "env-read":
     'REPAIR-JSON {"file":"turbo.json","tasks":["test","test:coverage"],"key":"env","add":"XDG_RUNTIME_DIR"}',
   "env-hashed": "pass",
-  "env-spread": "pass",
+  "env-spread": "process.env enumerated",
   "module-closure": "fx-fetch@1.0.0 is outside @fx/p's lockfile closure",
   "exec-path": '"add":"$TURBO_ROOT$/scripts/tool.mjs"',
-  promisify: "pass",
+  promisify: "spawn execFile(",
   home: "user state under $HOME",
   "dep-file": "pass",
   "native-esm": "fx-inner@1.0.0 is outside @fx/p's lockfile closure",
   "resolve-only": "fx-fetch@1.0.0 is outside @fx/p's lockfile closure",
+  // ── round 2: every clause below replayed a stale PASS before it existed ──
+  "promises-read": '"add":"$TURBO_ROOT$/spec/undeclared.md"',
+  "promises-readdir": '"add":"$TURBO_ROOT$/spec/**"',
+  "exec-cat": "spawn execSync(cat ../../spec/declared.md)",
+  "exec-bare": "spawn execSync(git --version)",
+  "in-env": '"key":"env","add":"XDG_RUNTIME_DIR"',
+  "descriptor-env": '"key":"env","add":"XDG_RUNTIME_DIR"',
+  "write-then-read": "pass",
+  "read-then-write": '"key":"env","add":"XDG_RUNTIME_DIR"',
+  "absent-guarded": "env GITHUB_SHA (absent)",
+  "absent-unclassified": "pass",
+  enumerate: "process.env enumerated",
+  worker: "spawn new Worker(",
+  ignored: "a git-IGNORED file inside the package",
+  "tmp-foreign": "under tmp the test did not create",
+  "tmp-own": "pass",
+  "system-probe": "a system path outside the repo",
+  glob: "import.meta.glob in packages/p/src/__tests__/glob.test.ts",
 };
+
+/** A cached package with its own vitest config and one passing test. */
+function configPkg(name: string, config: string): Record<string, string> {
+  return {
+    [`packages/${name}/package.json`]: pkgJson(`@fx/${name}`),
+    [`packages/${name}/turbo.json`]: JSON.stringify({
+      extends: ["//"],
+      tasks: { test: { cache: true }, "test:coverage": { cache: true } },
+    }),
+    [`packages/${name}/vitest.config.ts`]: config,
+    [`packages/${name}/src/__tests__/ok.test.ts`]: testFile(
+      `describe("ok", () => {\n  it("ok", () => {\n    expect(1).toBe(1);\n  });\n});\n`,
+    ),
+  };
+}
+
+/** A fixed tmp file the TEST never creates (the fixture writes it). */
+const FOREIGN_TMP = "motebit-input-tracer-foreign.txt";
 
 const FILES: Record<string, string> = {
   "packages/p/turbo.json": JSON.stringify({
     extends: ["//"],
     tasks: {
       test: {
+        cache: true,
         inputs: ["$TURBO_DEFAULT$", "$TURBO_ROOT$/spec/declared.md", "$TURBO_ROOT$/spec/half.md"],
       },
-      "test:coverage": { inputs: ["$TURBO_DEFAULT$", "$TURBO_ROOT$/spec/declared.md"] },
+      "test:coverage": {
+        cache: true,
+        inputs: ["$TURBO_DEFAULT$", "$TURBO_ROOT$/spec/declared.md"],
+      },
     },
   }),
+  "packages/p/.gitignore": "*.local\n",
+  "packages/p/fixture.local": "ignored\n",
   "packages/p/package.json": pkgJson("@fx/p", { dependencies: { "@fx/lib": "workspace:*" } }),
   "packages/p/src/own.json": "{}\n",
   "packages/lib/package.json": pkgJson("@fx/lib"),
@@ -143,6 +186,105 @@ const FILES: Record<string, string> = {
     `    const req = createRequire(join(ROOT, "apps/mob/package.json"));\n` +
       `    expect(req.resolve("fx-fetch")).toMatch(/index\\.cjs$/);`,
   ),
+  "packages/p/src/__tests__/promises-read.test.ts": t(
+    "promises-read",
+    `    const { readFile } = await import("node:fs/promises");\n` +
+      `    await readFile(join(ROOT, "spec/undeclared.md"), "utf-8");`,
+  ),
+  "packages/p/src/__tests__/promises-readdir.test.ts": t(
+    "promises-readdir",
+    `    const { readdir } = await import("node:fs/promises");\n    await readdir(join(ROOT, "spec"));`,
+  ),
+  "packages/p/src/__tests__/exec-cat.test.ts": t(
+    "exec-cat",
+    `    const { execSync } = await import("node:child_process");\n` +
+      `    expect(execSync("cat ../../spec/declared.md", { encoding: "utf-8" })).toBe("d\\n");`,
+  ),
+  "packages/p/src/__tests__/exec-bare.test.ts": t(
+    "exec-bare",
+    `    const { execSync } = await import("node:child_process");\n    execSync("git --version");`,
+  ),
+  "packages/p/src/__tests__/in-env.test.ts": t(
+    "in-env",
+    `    expect("XDG_RUNTIME_DIR" in process.env).toBe(true);`,
+  ),
+  "packages/p/src/__tests__/descriptor-env.test.ts": t(
+    "descriptor-env",
+    `    expect(Object.getOwnPropertyDescriptor(process.env, "XDG_RUNTIME_DIR")?.value).toBe("/run/tracer");`,
+  ),
+  "packages/p/src/__tests__/write-then-read.test.ts": t(
+    "write-then-read",
+    `    process.env.XDG_RUNTIME_DIR = "/run/set-by-test";\n` +
+      `    expect(process.env.XDG_RUNTIME_DIR).toBe("/run/set-by-test");\n` +
+      `    expect("XDG_RUNTIME_DIR" in process.env).toBe(true);`,
+  ),
+  "packages/p/src/__tests__/read-then-write.test.ts": t(
+    "read-then-write",
+    `    const before = process.env.XDG_RUNTIME_DIR;\n` +
+      `    process.env.XDG_RUNTIME_DIR = "/run/set-by-test";\n    expect(before).toBe("/run/tracer");`,
+  ),
+  "packages/p/src/__tests__/absent-guarded.test.ts": t(
+    "absent-guarded",
+    `    expect(process.env.GITHUB_SHA).toBeUndefined();`,
+  ),
+  "packages/p/src/__tests__/absent-unclassified.test.ts": t(
+    "absent-unclassified",
+    `    expect(process.env.MOTEBIT_NEVER_PASSED_THROUGH).toBeUndefined();`,
+  ),
+  "packages/p/src/__tests__/enumerate.test.ts": t(
+    "enumerate",
+    `    expect(Object.keys(process.env).length).toBeGreaterThan(0);`,
+  ),
+  "packages/p/src/__tests__/worker.test.ts": t(
+    "worker",
+    `    const { Worker } = await import("node:worker_threads");\n` +
+      `    const w = new Worker("0", { eval: true });\n    await new Promise((ok) => w.once("exit", ok));`,
+  ),
+  "packages/p/src/__tests__/ignored.test.ts": t(
+    "ignored",
+    `    expect(readFileSync(join(__dir, "../../fixture.local"), "utf-8")).toBe("ignored\\n");`,
+  ),
+  "packages/p/src/__tests__/tmp-foreign.test.ts": t(
+    "tmp-foreign",
+    `    const { tmpdir } = await import("node:os");\n` +
+      `    readFileSync(join(tmpdir(), "${FOREIGN_TMP}"), "utf-8");`,
+  ),
+  "packages/p/src/__tests__/tmp-own.test.ts": t(
+    "tmp-own",
+    `    const { mkdtempSync, mkdirSync, writeFileSync, rmSync, readdirSync } = await import("node:fs");\n` +
+      `    const { tmpdir } = await import("node:os");\n` +
+      `    const dir = mkdtempSync(join(tmpdir(), "tracer-own-"));\n` +
+      `    mkdirSync(join(dir, "a", "b"), { recursive: true });\n` +
+      `    writeFileSync(join(dir, "a", "b", "f.txt"), "x");\n` +
+      `    expect(readFileSync(join(dir, "a", "b", "f.txt"), "utf-8")).toBe("x");\n` +
+      `    expect(readdirSync(dir)).toEqual(["a"]);\n` +
+      `    rmSync(dir, { recursive: true, force: true });`,
+  ),
+  "packages/p/src/__tests__/system-probe.test.ts": t(
+    "system-probe",
+    `    expect(existsSync("/etc/motebit-input-tracer-probe")).toBe(false);`,
+  ),
+  "packages/p/src/__tests__/glob.test.ts": t(
+    "glob",
+    `    const mods = import.meta.glob("../../../../spec/*.md", { eager: true, query: "?raw" });\n` +
+      `    expect(Object.keys(mods).length).toBeGreaterThan(0);`,
+  ),
+  // Config-phase packages (the vitest MAIN process): each fails at startup.
+  ...configPkg(
+    "cfg",
+    `import { readFileSync } from "node:fs";\n` +
+      `import { defineMotebitTest } from "../../vitest.shared.js";\n` +
+      `const v = readFileSync(new URL("../../spec/undeclared.md", import.meta.url), "utf-8");\n` +
+      `export default defineMotebitTest({\n  thresholds: { statements: 0, branches: 0, functions: 0, lines: 0 },\n` +
+      `  vite: { define: { __V__: JSON.stringify(v) } },\n});\n`,
+  ),
+  ...configPkg(
+    "gs",
+    `import { defineMotebitTest } from "../../vitest.shared.js";\n` +
+      `export default defineMotebitTest({\n  thresholds: { statements: 0, branches: 0, functions: 0, lines: 0 },\n` +
+      `  extra: { globalSetup: ["./setup.ts"] },\n});\n`,
+  ),
+  "packages/gs/setup.ts": "export default function setup(): void {}\n",
   "packages/p/src/__tests__/dep-file.test.ts": t(
     "dep-file",
     `    expect(readFileSync(join(ROOT, "packages/lib/src/data.json"), "utf-8")).toContain("1");`,
@@ -207,6 +349,7 @@ beforeAll(() => {
     files: FILES,
     mutate: () => undefined,
     setup: (r) => {
+      writeFileSync(join(tmpdir(), FOREIGN_TMP), "not the test's\n");
       writeFileSync(
         join(r, "pnpm-lock.yaml"),
         lockfile({
@@ -242,6 +385,7 @@ beforeAll(() => {
 
 afterAll(() => {
   if (root) rmSync(root, { recursive: true, force: true });
+  rmSync(join(tmpdir(), FOREIGN_TMP), { force: true });
 });
 
 describe("input tracer — enforcement, one clause per file", () => {
@@ -263,6 +407,37 @@ describe("input tracer — enforcement, one clause per file", () => {
       }
     });
   }
+});
+
+describe("config-phase tracer — the vitest main process", () => {
+  const run = (pkg: string, env: Record<string, string>): string => {
+    const r = spawnSync(
+      process.execPath,
+      [join(root, "node_modules", "vitest", "vitest.mjs"), "run"],
+      {
+        cwd: join(root, "packages", pkg),
+        encoding: "utf-8",
+        env: { PATH: process.env.PATH ?? "", HOME: process.env.HOME ?? "", TZ: "UTC", ...env },
+      },
+    );
+    return `${r.status}\n${r.stdout}${r.stderr}`;
+  };
+
+  it("fails a cached package whose config reads a file outside its hash", () => {
+    const out = run("cfg", ENFORCE);
+    expect(out).toContain("(vitest config): read spec/undeclared.md");
+    expect(out.startsWith("0\n")).toBe(false);
+  }, 120_000);
+
+  it("fails a cached package whose config declares globalSetup", () => {
+    const out = run("gs", ENFORCE);
+    expect(out).toContain("(vitest config): vitest globalSetup / provide");
+    expect(out.startsWith("0\n")).toBe(false);
+  }, 120_000);
+
+  it("only observes outside enforcement", () => {
+    expect(run("cfg", { MOTEBIT_TEST_RUNTIME: runtimeId() }).startsWith("0\n")).toBe(true);
+  }, 120_000);
 });
 
 describe("input tracer — run-level clauses", () => {
@@ -298,6 +473,8 @@ describe("input tracer — run-level clauses", () => {
   it("only observes outside a turbo task (a bare vitest run caches nothing)", () => {
     const res = vitest({ MOTEBIT_TEST_RUNTIME: runtimeId() });
     expect(res.get("read-outside")!.status).toBe("passed");
+    // The patched exec/execFile keep their promisified { stdout, stderr } shape.
+    expect(res.get("promisify")!.status, res.get("promisify")!.message).toBe("passed");
     // TURBO_HASH is what turns enforcement on under turbo.
     expect(
       vitest({ TURBO_HASH: "abc", MOTEBIT_TEST_RUNTIME: runtimeId() }).get("read-outside")!.status,

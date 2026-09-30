@@ -1,0 +1,17 @@
+{
+  "$comment": "Reviewed exemptions for scripts/check-test-hermeticity.ts (L1 of the test-cache law). Each entry names one site (file + rule + exact source text) and why it cannot change a test outcome outside the task hash. An entry matching no finding fails the gate.",
+  "exemptions": [
+    {
+      "file": "src/__tests__/sqljs-driver.test.ts",
+      "rule": "absolute-path",
+      "text": "\"/tmp\"",
+      "why": "a tool-call argument used as DATA: stored in / read back from an in-memory sql.js database as JSON (approval args_json, policy-decision args) \u2014 the path is never opened or probed"
+    },
+    {
+      "file": "src/__tests__/goal-runs.test.ts",
+      "rule": "absolute-path",
+      "text": "\"/tmp/x\"",
+      "why": "a tool-call argument used as DATA: stored in / read back from an in-memory sql.js database as JSON (approval args_json, policy-decision args) \u2014 the path is never opened or probed"
+    }
+  ]
+}
