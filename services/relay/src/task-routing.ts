@@ -1114,7 +1114,8 @@ export async function forwardTaskViaMcp(
    * which the worker verifies under its pinned relay key.
    */
   _retiredApiToken?: string,
-  onReceipt?: (receipt: ReceiptCandidate) => Promise<void>,
+  /** Ingests the receipt; answers `false` when ingestion refused it. */
+  onReceipt?: (receipt: ReceiptCandidate) => Promise<boolean | void>,
   /** Relay-signed admission artifact for THIS worker + task (`mintTaskDispatchToken`) — the `dispatch_token` argument, never the bearer (#981). */
   dispatchToken?: string,
   /** Outbound URL law (`buildOutboundPolicy`); absent ⇒ literals + names only. */
@@ -1287,33 +1288,53 @@ export async function forwardTaskViaMcp(
       const textContent = mcpResult.result.content.find((c) => c.type === "text");
       if (textContent?.text) {
         const receiptData = extractReceipt(textContent.text);
-        if (receiptData && receiptData.motebit_id !== agentId) {
+        if (
+          receiptData &&
+          (receiptData.motebit_id !== agentId || receiptRelayTaskId(receiptData) !== taskId)
+        ) {
           // The relay presented this task to ONE worker (#890 r5): a receipt
           // signed by any other identity is not that worker's result. It is
           // neither stored (the delegator's poll would read it) nor ingested
           // (ingestion verifies against the receipt's OWN signer, so a
           // foreign signed failure would otherwise stand as the task's).
+          // Nor is a receipt the worker bound to ANOTHER task (#890 r6):
+          // the answer to this presentation names this task or nothing.
           logger.warn("task.mcp_forward_receipt_not_from_worker", {
             correlationId: taskId,
             agent: agentId,
             signer: receiptData.motebit_id,
+            boundTo: receiptRelayTaskId(receiptData),
             endpoint: mcpEndpoint,
           });
         } else if (receiptData) {
           const qEntry = taskQueue.get(taskId);
           if (qEntry) {
-            qEntry.task.status = "completed";
-            qEntry.receipt = receiptData;
-            taskQueue.set(taskId, qEntry); // Persist to durable queue
-            logger.info("task.mcp_forward_completed", {
-              correlationId: taskId,
-              agent: agentId,
-              endpoint: mcpEndpoint,
-            });
-            // Invoke settlement callback (orchestration layer handles economics)
-            if (onReceipt) {
+            // The entry takes the receipt only once ingestion accepted it
+            // (#890 r6): one it refuses (a bad signature, an unrouted signer)
+            // never stands as the task's answer, not even mid-ingestion.
+            const accept = (): void => {
+              qEntry.task.status =
+                receiptData.status === "completed"
+                  ? "completed"
+                  : receiptData.status === "denied"
+                    ? "denied"
+                    : "failed";
+              qEntry.receipt = receiptData;
+              taskQueue.set(taskId, qEntry); // Persist to durable queue
+              logger.info("task.mcp_forward_completed", {
+                correlationId: taskId,
+                agent: agentId,
+                endpoint: mcpEndpoint,
+              });
+            };
+            if (!onReceipt) {
+              accept();
+            } else {
+              // Settlement callback (orchestration layer handles economics).
+              // A throw leaves the answer unknown: the entry is not given it.
               try {
-                await onReceipt(receiptData);
+                const ingested = await onReceipt(receiptData);
+                if (ingested !== false) accept();
               } catch (settlementErr) {
                 logger.warn("task.mcp_forward_settlement_failed", {
                   correlationId: taskId,
@@ -1723,4 +1744,117 @@ export async function evaluateSettlementEligibility(
       ? `Trust ${score} / ${interactions} interactions below established-pair threshold (${P2P_MIN_TRUST_SCORE} / ${P2P_MIN_INTERACTIONS}); delegator did not acknowledge cold-start risk`
       : "No trust history between agents; delegator did not acknowledge cold-start risk",
   };
+}
+
+// ---------------------------------------------------------------------------
+// The routing record — who may answer a task (#890 round 6)
+// ---------------------------------------------------------------------------
+
+/**
+ * How long a route is kept (#890 r6). Every reader of a route answers only
+ * within the idempotency window: a receipt door reads it while the task is
+ * queued (TASK_TTL_MS, at most PAID_TASK_RESULT_RETENTION_MS once answered),
+ * and the archive answers only a task whose Idempotency-Key is inside
+ * IDEMPOTENCY_TTL_MS (24 h). Seven days is that window with a wide margin —
+ * a paused sweep, a clock step, a task re-presented by reconnect recovery
+ * late in its life — while never growing without bound. A route past it is
+ * read by nothing.
+ */
+export const TASK_ROUTE_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
+
+/** Delete routes older than `TASK_ROUTE_RETENTION_MS`; returns the count. */
+export function cleanupTaskRoutes(db: DatabaseDriver, now: number = Date.now()): number {
+  const info = db
+    .prepare("DELETE FROM relay_task_routes WHERE created_at < ?")
+    .run(now - TASK_ROUTE_RETENTION_MS);
+  return info.changes;
+}
+
+/**
+ * Record that the relay handed `taskId` to `executorId` — locally
+ * (`viaPeer` ''), or through the peer relay `viaPeer`. Written at EVERY
+ * hand-off: admission (the path agent's own devices), a pinned or ranked
+ * dispatch over a socket or an MCP forward, a federated forward, and the
+ * executor relay's inbound forward. Idempotent. `relay_task_routes`
+ * (migration v50) outlives the queue entry.
+ */
+export function recordTaskRoute(
+  db: DatabaseDriver,
+  taskId: string,
+  executorId: string,
+  viaPeer = "",
+): void {
+  if (executorId === "") return;
+  db.prepare(
+    "INSERT OR IGNORE INTO relay_task_routes (task_id, executor_id, via_peer, created_at) VALUES (?, ?, ?, ?)",
+  ).run(taskId, executorId, viaPeer, Date.now());
+}
+
+/** Every recorded executor of `taskId`, with the peer it went through ('' = local). */
+export function taskRoutes(
+  db: DatabaseDriver,
+  taskId: string,
+): Array<{ executor_id: string; via_peer: string }> {
+  return db
+    .prepare("SELECT executor_id, via_peer FROM relay_task_routes WHERE task_id = ?")
+    .all(taskId) as Array<{ executor_id: string; via_peer: string }>;
+}
+
+/**
+ * When this relay began recording routes (migration v50 applied), or null
+ * when the record does not exist. A task submitted before it was admitted
+ * without a route; every task submitted after it has one from admission.
+ */
+export function taskRoutesEpoch(db: DatabaseDriver): number | null {
+  const row = db
+    .prepare("SELECT applied_at FROM relay_schema_migrations WHERE version = 50")
+    .get() as { applied_at: number } | undefined;
+  return row?.applied_at ?? null;
+}
+
+/**
+ * Was `submittedAt` before the routing record existed — a task in flight
+ * across the deploy that introduced it? Only such a task may lack a route.
+ */
+export function admittedBeforeTaskRoutes(db: DatabaseDriver, submittedAt: number): boolean {
+  const epoch = taskRoutesEpoch(db);
+  return epoch != null && submittedAt < epoch;
+}
+
+/**
+ * May a receipt signed by `signer`, arriving through `viaPeer` ('' for a
+ * local door — the result POST, the MCP forward), answer `taskId`? Only if
+ * the relay handed the task to that signer through that peer. The one
+ * exception is a task admitted BEFORE the record existed (in flight across
+ * the deploy, `legacy`): with no route, it is answerable only by its own
+ * agent, locally — never by an arbitrary signer. A task admitted after it
+ * with no route is answerable by no one.
+ */
+export function isRoutedExecutor(
+  db: DatabaseDriver,
+  taskId: string,
+  signer: string,
+  viaPeer: string,
+  legacy: { executor: string; submittedAt: number } | null,
+): boolean {
+  const routes = taskRoutes(db, taskId);
+  if (routes.length === 0) {
+    return (
+      viaPeer === "" &&
+      legacy != null &&
+      signer === legacy.executor &&
+      admittedBeforeTaskRoutes(db, legacy.submittedAt)
+    );
+  }
+  return routes.some((r) => r.executor_id === signer && r.via_peer === viaPeer);
+}
+
+/** The relay task a receipt names (`relay_task_id`, else `task_id`). */
+export function receiptRelayTaskId(receipt: {
+  relay_task_id?: unknown;
+  task_id?: unknown;
+}): string {
+  const r = receipt.relay_task_id;
+  if (typeof r === "string" && r !== "") return r;
+  return typeof receipt.task_id === "string" ? receipt.task_id : "";
 }

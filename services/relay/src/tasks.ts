@@ -77,6 +77,8 @@ import {
   type ReceiptCandidate,
   mintTaskDispatchToken,
   mintRelayMcpBearer,
+  recordTaskRoute,
+  isRoutedExecutor,
 } from "./task-routing.js";
 import type { TaskRouter } from "./task-routing.js";
 import { getBondBackingAdapter } from "./bond-backing-adapter.js";
@@ -787,6 +789,29 @@ export async function handleReceiptIngestion(
     return {
       verified: false,
       reason: `receipt is signed by ${receipt.motebit_id}, not by the worker this P2P task was paid to (${p2pPayeeOf(entry)})`,
+    };
+  }
+
+  // --- Only the routed executor answers (#890 r6) ---
+  // Every local door (the result POST, the MCP forward's callback) ends
+  // here, each having bound the receipt to this task first: a receipt
+  // signed by an identity this relay never handed the task to is refused
+  // before it is archived, pushed to the submitter, trusted or settled —
+  // and the door gives the entry the receipt only after this accepts it.
+  if (
+    !isRoutedExecutor(moteDb.db, taskId, receipt.motebit_id, "", {
+      executor: entry.task.motebit_id,
+      submittedAt: entry.task.submitted_at,
+    })
+  ) {
+    logger.error("receipt.signer_not_routed_executor", {
+      correlationId: taskId,
+      signer: receipt.motebit_id,
+      door: "ingestion",
+    });
+    return {
+      verified: false,
+      reason: `receipt is signed by ${receipt.motebit_id}, which this relay never handed task ${taskId} to`,
     };
   }
 
@@ -3541,6 +3566,7 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
     let federatedP2pPlan:
       | {
           peerEndpoint: string;
+          peerRelayId: string;
           targetId: string;
           budgetMicro: number;
           workerNetMicro: number;
@@ -3690,6 +3716,7 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
       }
       federatedP2pPlan = {
         peerEndpoint,
+        peerRelayId: peerRow.peer_relay_id,
         targetId,
         budgetMicro,
         workerNetMicro,
@@ -4026,6 +4053,13 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
     }
     const admitted: AdmittedTask = { key: idempotencyKey, motebitId, taskId };
     c.set(ADMITTED_TASK_KEY as never, admitted as never);
+    // The routing record (#890 round 6): the path agent is this task's
+    // executor from admission — its own devices take the broadcast and its
+    // reconnect recovery re-presents the task. Every later hand-off below
+    // records its executor BEFORE the hand-off, so a lost answer still
+    // leaves the executor on record. Only a recorded executor's receipt,
+    // through the recorded peer, may answer the task (every ingestion door).
+    recordTaskRoute(moteDb.db, taskId, motebitId);
 
     logger.info("task.submitted", {
       correlationId: taskId,
@@ -4052,6 +4086,7 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
     // had left (#811; presentation-matrix.probe.ts). Shared with main: a
     // device that reconnects mid-forward can run the task beside the forward.
     const presentViaMcp = async (endpointUrl: string, workerId: string): Promise<void> => {
+      recordTaskRoute(moteDb.db, taskId, workerId);
       const token = await dispatchTokenFor(workerId);
       void forwardTaskViaMcp(
         endpointUrl,
@@ -4064,13 +4099,14 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
         async (receiptCandidate: ReceiptCandidate) => {
           const mcpEntry = taskQueue.get(taskId);
           if (!mcpEntry || mcpEntry.settled) return;
-          await handleReceiptIngestion(
+          const ingested = await handleReceiptIngestion(
             receiptCandidate as unknown as ExecutionReceipt,
             taskId,
             mcpEntry.task.motebit_id,
             mcpEntry,
             ingestionDeps,
           );
+          return ingested.verified;
         },
         token,
         outboundPolicy,
@@ -4135,6 +4171,9 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
       // all, where main forwarded to the MCP endpoint and so does this relay.
       const pinnedRoute = routeToSockets(connections.get(pinnedId), payload);
       if (pinnedRoute !== "no_socket") {
+        // Recorded in the same synchronous turn as the hand-off, before any
+        // answer can arrive (an MCP forward records inside presentViaMcp).
+        recordTaskRoute(moteDb.db, taskId, pinnedId);
         routed = true;
         heldForReconnect = pinnedRoute === "held_for_recovery";
         logger.info("task.p2p_pinned_dispatched", {
@@ -4175,7 +4214,8 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
     // Its failure comes after an attempt, and the peer may have accepted, so
     // it is a post-admission outcome recorded under the key.
     if (federatedP2pPlan != null) {
-      const { peerEndpoint, targetId, workerNetMicro, aFeeMicro, bFeeMicro } = federatedP2pPlan;
+      const { peerEndpoint, peerRelayId, targetId, workerNetMicro, aFeeMicro, bFeeMicro } =
+        federatedP2pPlan;
       const proof = p2pPaymentProof!;
       federationAttempted = true;
       routingChoice = {
@@ -4205,6 +4245,7 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
       };
       const forwardBytes = new TextEncoder().encode(canonicalJson(forwardBody));
       const forwardSig = await sign(forwardBytes, relayIdentity.privateKey);
+      recordTaskRoute(moteDb.db, taskId, targetId, peerRelayId);
       try {
         const resp = await fetch(`${peerEndpoint}/federation/v1/task/forward`, {
           method: "POST",
@@ -4534,6 +4575,7 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
                   };
                   const forwardBytes = new TextEncoder().encode(canonicalJson(forwardBody));
                   const forwardSig = await sign(forwardBytes, relayIdentity.privateKey);
+                  recordTaskRoute(moteDb.db, taskId, selId, plannedPeer);
 
                   const resp = await fetch(`${peerEndpoint}/federation/v1/task/forward`, {
                     method: "POST",
@@ -4585,6 +4627,8 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
                 // all takes the MCP fallback, as on main.
                 const localRoute = routeToSockets(connections.get(selId), payload);
                 if (localRoute !== "no_socket") {
+                  // Same synchronous turn as the hand-off (MCP: presentViaMcp).
+                  recordTaskRoute(moteDb.db, taskId, selId);
                   routed = true;
                   if (localRoute === "held_for_recovery") heldForReconnect = true;
                 } else {
@@ -4703,6 +4747,7 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
     // (#901 round 3): one reading of the submission decides price, route and
     // admission binding, so they cannot diverge.
     const intendedWorker = terms.routedTo;
+    if (submitterPresents) recordTaskRoute(moteDb.db, taskId, intendedWorker);
     const responseBody = {
       task_id: taskId,
       status: task.status,
@@ -4930,24 +4975,12 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
       );
     }
 
-    // Update task status and store receipt before settlement. Paid (P2P)
-    // results are retained longer than the free-task TTL — the payer settled
-    // onchain and must be able to recover the artifact after a stalled poll.
-    const resultRetentionMs =
-      entry.settlement_mode === "p2p" || entry.p2p_payment_proof != null
-        ? PAID_TASK_RESULT_RETENTION_MS
-        : TASK_TTL_MS;
-    entry.receipt = receipt;
-    entry.expiresAt = Math.max(entry.expiresAt, Date.now() + resultRetentionMs);
-    entry.task.status =
-      receipt.status === "completed"
-        ? AgentTaskStatus.Completed
-        : receipt.status === "denied"
-          ? AgentTaskStatus.Denied
-          : AgentTaskStatus.Failed;
-    taskQueue.set(taskId, entry); // Persist to durable queue
-
-    // Unified receipt ingestion: Ed25519 verification → settlement → trust → credentials
+    // Unified receipt ingestion: task binding → routed executor (#890 r6) →
+    // Ed25519 verification → settlement → trust → credentials. The entry
+    // takes the receipt only AFTER ingestion accepted it: a receipt for
+    // another task, signed by an identity this relay never handed the task
+    // to, or failing its signature never stands as the task's answer — not
+    // even for the length of an in-flight poll.
     const ingestionResult = await handleReceiptIngestion(
       receipt,
       taskId,
@@ -4961,6 +4994,23 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
         `Receipt verification failed: ${ingestionResult.reason}`,
       );
     }
+
+    // Paid (P2P) results are retained longer than the free-task TTL — the
+    // payer settled onchain and must be able to recover the artifact after a
+    // stalled poll.
+    const resultRetentionMs =
+      entry.settlement_mode === "p2p" || entry.p2p_payment_proof != null
+        ? PAID_TASK_RESULT_RETENTION_MS
+        : TASK_TTL_MS;
+    entry.receipt = receipt;
+    entry.expiresAt = Math.max(entry.expiresAt, Date.now() + resultRetentionMs);
+    entry.task.status =
+      receipt.status === "completed"
+        ? AgentTaskStatus.Completed
+        : receipt.status === "denied"
+          ? AgentTaskStatus.Denied
+          : AgentTaskStatus.Failed;
+    taskQueue.set(taskId, entry); // Persist to durable queue
 
     if (ingestionResult.already_settled) {
       return c.json({ status: "already_settled" });

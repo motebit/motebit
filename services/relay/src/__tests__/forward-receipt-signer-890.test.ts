@@ -86,6 +86,8 @@ describe("#890 r5: the MCP forward accepts only the presented worker's receipt",
       },
       "disp.token",
       { allowPrivateNetwork: true },
+      // The relay's own transport bearer (#981); the dispatch token never is.
+      () => Promise.resolve("relay.mcp.bearer"),
     );
     return { ingested, stored: queue.get("task-890")!.receipt, warns };
   }

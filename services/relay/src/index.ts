@@ -159,7 +159,7 @@ import {
   type OnrampAdapter,
 } from "./onramp.js";
 import { registerOfframpRoutes, BridgeOfframpAdapter, type OfframpAdapter } from "./offramp.js";
-import { createTaskRouter } from "./task-routing.js";
+import { createTaskRouter, cleanupTaskRoutes } from "./task-routing.js";
 import { createDataSyncTables, registerDataSyncRoutes } from "./data-sync.js";
 import {
   createAccountTables,
@@ -1086,6 +1086,13 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     // Clean expired idempotency keys (older than 24 hours)
     try {
       cleanupIdempotencyKeys(moteDb.db);
+    } catch {
+      // Best-effort cleanup
+    }
+    // Clean task routes past their horizon (7 days — beyond every reader's
+    // window; #890 r6, TASK_ROUTE_RETENTION_MS)
+    try {
+      cleanupTaskRoutes(moteDb.db);
     } catch {
       // Best-effort cleanup
     }

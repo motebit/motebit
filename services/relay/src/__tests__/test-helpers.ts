@@ -12,6 +12,7 @@ import type { AgentTask } from "@motebit/sdk";
 import { AgentTaskStatus, asMotebitId, asAllocationId, asGoalId } from "@motebit/sdk";
 import { allocateBudget, computeGrossAmount } from "@motebit/market";
 import { TaskQueue } from "../task-queue.js";
+import { recordTaskRoute } from "../task-routing.js";
 import type { P2pPaymentChain } from "../p2p-payer.js";
 import {
   creditAccount,
@@ -317,6 +318,8 @@ export function seedX402PaidTask(relay: SyncRelay, args: SeedX402PaidTaskArgs): 
     status: AgentTaskStatus.Pending,
   };
 
+  // Admission records the path agent as the task's executor (#890 r6).
+  recordTaskRoute(db, taskId, task.motebit_id);
   new TaskQueue(db).set(taskId, {
     task,
     expiresAt: now + 10 * 60 * 1000, // TASK_TTL_MS
@@ -427,6 +430,8 @@ export function seedP2pSubTask(relay: SyncRelay, args: SeedP2pSubTaskArgs): stri
     status: AgentTaskStatus.Pending,
   };
 
+  // Admission records the path agent as the task's executor (#890 r6).
+  recordTaskRoute(db, taskId, task.motebit_id);
   new TaskQueue(db).set(taskId, {
     task,
     expiresAt: now + 10 * 60 * 1000, // TASK_TTL_MS

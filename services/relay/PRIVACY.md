@@ -91,6 +91,15 @@ Observable:
 
 Retention window: 30-day rolling window, swept every minute by the task-cleanup loop; an operator's audit aid ("who presented the master token, what did we refuse") readable at GET /api/v1/admin/auth-events, not a surveillance log.
 
+### Task routes
+
+Tables: `relay_task_routes`.
+
+Observable:
+- for every task the relay hands to an executor: the task id, the executor's motebit_id, the peer relay it was forwarded through (empty when local), and when — no content, no prompt, no amount; a receipt for the task is accepted only from a recorded executor through its recorded peer (migration v50)
+
+Retention window: 7 days from the hand-off, swept every minute by the task-cleanup loop — beyond the 24-hour idempotency window, the longest any reader consults a route.
+
 ### Machine roster
 
 Tables: `relay_host_roster_entries`, `relay_host_liveness`.

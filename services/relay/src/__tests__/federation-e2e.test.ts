@@ -1423,6 +1423,19 @@ describe("Federation E2E", () => {
       );
       const receiptBody = await receiptRes.text();
       expect(receiptRes.status, `Receipt post failed: ${receiptBody}`).toBeLessThan(300);
+
+      // 7. The result returns to Relay A, which accepts it because its
+      // forward recorded Bob through Relay B as the task's executor (#890 r6).
+      await vi.waitFor(
+        async () => {
+          const poll = await relayA.app.request(`/agent/${alice.motebitId}/task/${taskId}`, {
+            headers: AUTH_HEADER,
+          });
+          const polled = (await poll.json()) as { receipt?: { motebit_id: string } | null };
+          expect(polled.receipt?.motebit_id).toBe(bob.motebitId);
+        },
+        { timeout: 3000 },
+      );
     });
 
     it("PHASE 3 P2P: a paid cross-operator task settles P2P — delegator pays all three legs onchain, neither relay custodies or transmits", async () => {

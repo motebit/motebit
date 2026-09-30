@@ -28,12 +28,25 @@ function admitByKey(relay: SyncRelay, key: string, motebitId: string, taskId: st
     .run(key, motebitId, JSON.stringify({ task_id: taskId }), at, at, taskId);
 }
 
+/** The relay handed `taskId` to `executor` (what every hand-off writes, #890 r6). */
+function route(relay: SyncRelay, taskId: string, executor: string, viaPeer = "") {
+  relay.moteDb.db
+    .prepare(
+      "INSERT OR IGNORE INTO relay_task_routes (task_id, executor_id, via_peer, created_at) VALUES (?, ?, ?, ?)",
+    )
+    .run(taskId, executor, viaPeer, Date.now());
+}
+
+/** Archive a depth-0 receipt; by default its signer is a recorded executor of the task. */
 function archiveReceipt(
   relay: SyncRelay,
   taskId: string,
   status: "completed" | "failed",
   signer = "worker-1",
+  routed = true,
+  receivedAt = Date.now(),
 ) {
+  if (routed) route(relay, taskId, signer);
   const receipt = {
     task_id: taskId,
     relay_task_id: taskId,
@@ -55,7 +68,7 @@ function archiveReceipt(
       `INSERT INTO relay_receipts (motebit_id, task_id, parent_task_id, depth, status, suite, public_key, signature, invocation_origin, receipt_json, received_at)
        VALUES (?, ?, NULL, 0, ?, 'motebit-jcs-ed25519-b64-v1', 'pk', 'sig', NULL, ?, ?)`,
     )
-    .run(signer, taskId, status, JSON.stringify(receipt), Date.now());
+    .run(signer, taskId, status, JSON.stringify(receipt), receivedAt);
 }
 
 async function poll(relay: SyncRelay, motebitId: string, taskId: string) {
@@ -122,7 +135,7 @@ function settle(relay: SyncRelay, taskId: string, payee: string) {
     .run(crypto.randomUUID(), crypto.randomUUID(), taskId, payee, Date.now());
 }
 
-describe("#890 r5 (3ii): the archive answers only the task's own worker's receipt", () => {
+describe("#890 r6 (C): the archive answers only a recorded executor's receipt", () => {
   let relay: SyncRelay;
   beforeEach(async () => {
     relay = await createTestRelay();
@@ -131,28 +144,38 @@ describe("#890 r5 (3ii): the archive answers only the task's own worker's receip
     await relay.close();
   });
 
-  it("a second, FOREIGN-signed receipt under the same task id makes the answer ambiguous: 404, never the foreign one", async () => {
+  it("a FOREIGN-signed receipt beside the routed worker's is never the answer", async () => {
     admitByKey(relay, "plan-step:p:s:0", "agent-a", "task-v", Date.now());
+    archiveReceipt(relay, "task-v", "failed", "evil-worker", false);
     archiveReceipt(relay, "task-v", "completed", "routed-worker");
-    archiveReceipt(relay, "task-v", "failed", "evil-worker");
-    expect((await poll(relay, "agent-a", "task-v")).status).toBe(404);
-  });
-
-  it("with a settlement record, the archive answers the receipt of the worker the task settled to", async () => {
-    admitByKey(relay, "plan-step:p:s:0", "agent-a", "task-s", Date.now());
-    archiveReceipt(relay, "task-s", "completed", "routed-worker");
-    archiveReceipt(relay, "task-s", "failed", "evil-worker");
-    settle(relay, "task-s", "routed-worker");
-    const r = await poll(relay, "agent-a", "task-s");
+    const r = await poll(relay, "agent-a", "task-v");
     expect(r.status).toBe(200);
     expect(r.body.receipt?.status).toBe("completed");
   });
 
-  it("a receipt from anyone but the settled worker is never answered", async () => {
+  it("a receipt from anyone the relay never handed the task to is never answered", async () => {
     admitByKey(relay, "plan-step:p:s:0", "agent-a", "task-e", Date.now());
-    archiveReceipt(relay, "task-e", "failed", "evil-worker");
-    settle(relay, "task-e", "routed-worker");
+    route(relay, "task-e", "routed-worker");
+    archiveReceipt(relay, "task-e", "failed", "evil-worker", false);
     expect((await poll(relay, "agent-a", "task-e")).status).toBe(404);
+  });
+
+  it("the settlement record is no witness: a row naming the path agent does not make a foreign receipt the answer", async () => {
+    admitByKey(relay, "plan-step:p:s:0", "agent-a", "task-s", Date.now());
+    route(relay, "task-s", "routed-worker");
+    archiveReceipt(relay, "task-s", "failed", "evil-worker", false);
+    settle(relay, "task-s", "evil-worker");
+    expect((await poll(relay, "agent-a", "task-s")).status).toBe(404);
+  });
+
+  it("between recorded executors, a completed receipt outranks a failed one", async () => {
+    admitByKey(relay, "plan-step:p:s:0", "agent-a", "task-two", Date.now());
+    // The failed one is the more recent: completion still decides.
+    archiveReceipt(relay, "task-two", "completed", "worker-one", true, Date.now() - 5_000);
+    archiveReceipt(relay, "task-two", "failed", "worker-two", true, Date.now());
+    const r = await poll(relay, "agent-a", "task-two");
+    expect(r.status).toBe(200);
+    expect(r.body.receipt?.status).toBe("completed");
   });
 });
 

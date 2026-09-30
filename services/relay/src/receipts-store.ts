@@ -31,6 +31,9 @@ const logger = createLogger({ service: "receipts-store" });
  */
 const MAX_RECEIPT_DEPTH = 10;
 
+/** Separates a displaced nested child's key from its parent task (#890 r6). */
+const NESTED_KEY_SEP = "#nested:";
+
 const INSERT_SQL = `
   INSERT OR IGNORE INTO relay_receipts (
     motebit_id, task_id, parent_task_id, depth, status,
@@ -93,11 +96,20 @@ export function persistReceiptChain(
   // verifies against `public_key` — offline, no relay required.
   const receiptJson = canonicalJson(receipt);
 
+  // A nested child never occupies — or shadows — a top-level key (#890 r6).
+  // Children are copied out of ANOTHER task's tree unverified (only the
+  // root's signature was checked), so a child claiming (V, X) is archived
+  // under its own namespaced key `X#nested:<parent>` — never under (V, X),
+  // the key V's own top-level receipt for X is archived and looked up
+  // under. It stays readable there (`getStoredReceiptJson` falls back to
+  // it for an audit read) and inside its parent's receipt_json. Rows are
+  // only ever inserted (rule 12).
+  const key = depth === 0 ? taskId : `${taskId}${NESTED_KEY_SEP}${parentTaskId ?? ""}`;
   const info = db
     .prepare(INSERT_SQL)
     .run(
       receipt.motebit_id,
-      taskId,
+      key,
       parentTaskId,
       depth,
       receipt.status,
@@ -126,9 +138,22 @@ export function getStoredReceiptJson(
   motebitId: string,
   taskId: string,
 ): string | null {
+  // An audit read: the bytes are served for the reader to re-verify. The
+  // top-level row for (motebitId, taskId) when there is one; else a nested
+  // copy archived under `taskId#nested:<parent>` (never verified by the
+  // relay on its own). It never DECIDES anything: the archive answer a
+  // delegator acts on is `getArchivedReceiptForKeyOwner` (top-level, routed
+  // executor only).
+  const prefix = `${taskId}${NESTED_KEY_SEP}`;
   const row = db
-    .prepare("SELECT receipt_json FROM relay_receipts WHERE motebit_id = ? AND task_id = ?")
-    .get(motebitId, taskId) as { receipt_json: string } | undefined;
+    .prepare(
+      `SELECT receipt_json FROM relay_receipts
+        WHERE motebit_id = ?
+          AND (task_id = ? OR substr(task_id, 1, ?) = ?)
+        ORDER BY depth, received_at
+        LIMIT 1`,
+    )
+    .get(motebitId, taskId, prefix.length, prefix) as { receipt_json: string } | undefined;
   return row?.receipt_json ?? null;
 }
 
@@ -150,30 +175,30 @@ export function getArchivedReceiptForKeyOwner(
   taskId: string,
   notBefore: number,
 ): string | null {
-  const rows = db
+  // Only the task's recorded executor answers (#890 r6): the receipt the
+  // delegator reads as a signed failure makes it pay for a new task, so it
+  // must be the depth-0 receipt of an identity the relay HANDED this task
+  // to (`relay_task_routes`, written at every hand-off). The settlement
+  // record is no witness — it names the path agent, not the worker. A
+  // completed receipt outranks a failed one (one executor delivering is
+  // the task's outcome); otherwise the most recent answer.
+  const row = db
     .prepare(
-      `SELECT r.motebit_id, r.receipt_json FROM relay_receipts r
+      `SELECT r.receipt_json FROM relay_receipts r
         WHERE r.task_id = ? AND r.depth = 0
+          AND EXISTS (
+            SELECT 1 FROM relay_task_routes t
+             WHERE t.task_id = r.task_id AND t.executor_id = r.motebit_id
+          )
           AND EXISTS (
             SELECT 1 FROM relay_idempotency_keys k
              WHERE k.task_id = r.task_id AND k.motebit_id = ? AND k.created_at >= ?
-          )`,
+          )
+        ORDER BY (r.status = 'completed') DESC, r.received_at DESC
+        LIMIT 1`,
     )
-    .all(taskId, motebitId, notBefore) as Array<{ motebit_id: string; receipt_json: string }>;
-  if (rows.length === 0) return null;
-  // Only the task's OWN worker's receipt is an answer (#890 r5): a receipt
-  // the delegator reads as a signed failure makes it pay for a new task, so
-  // it must be the verdict of the worker the task went to. The settlement
-  // record names that worker once the task settled (one settlement per
-  // task). Without one, only an unambiguous archive answers — two signers
-  // under one task id is exactly the case where the wrong one could speak.
-  const settled = db
-    .prepare("SELECT motebit_id FROM relay_settlements WHERE task_id = ? LIMIT 1")
-    .get(taskId) as { motebit_id: string } | undefined;
-  if (settled != null && settled.motebit_id !== "") {
-    return rows.find((r) => r.motebit_id === settled.motebit_id)?.receipt_json ?? null;
-  }
-  return rows.length === 1 ? rows[0]!.receipt_json : null;
+    .get(taskId, motebitId, notBefore) as { receipt_json: string } | undefined;
+  return row?.receipt_json ?? null;
 }
 
 /** A row in a motebit's own receipt history. `receipt_json` is the

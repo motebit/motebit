@@ -21,6 +21,19 @@
  *                                                            → the real one wins
  *   wrong_task   W's receipt that names another task, delivered for X
  *                                                            → refused
+ *   bad_sig      a receipt for X naming W but not signed by W's key
+ *                                                            → refused, and
+ *                never stands as X's answer, not even mid-ingestion
+ *
+ * Federation door: X is forwarded to W through `peer` (the route the
+ * relay's forward records), and every variant arrives as a peer-signed
+ * result — `foreign` is a key the peer invents for an invented signer,
+ * `wrong_peer` is W's own receipt arriving from `otherPeer`. Two more:
+ *   local_task   X was routed LOCALLY (no peer on its route): any active
+ *                peer's result for it — W's own, or an invented signer's
+ *                with the key the peer supplies — is refused  (CONFIRMED 1)
+ *   no_key       X forwarded to an executor this relay holds no key for; the
+ *                peer supplies none — unverifiable, refused
  *
  * Oracle over every cell, from everything the delegator can observe about X
  * (the socket push, the poll, the archive after the queue forgets X):
@@ -43,16 +56,44 @@ import {
   signExecutionReceipt,
   sign,
   canonicalJson,
+  verifyExecutionReceipt,
 } from "@motebit/encryption";
 import type { KeyPair } from "@motebit/encryption";
 import type { ExecutionReceipt, MotebitId, DeviceId, PlanStep, PlanId } from "@motebit/sdk";
 import { StepStatus } from "@motebit/sdk";
 import { RelayDelegationAdapter, DelegationUndeterminedError } from "@motebit/planner";
-import { createTestRelay, createAgent, JSON_AUTH, AUTH_HEADER, API_TOKEN } from "./test-helpers.js";
+import {
+  createTestRelay,
+  createAgent,
+  JSON_AUTH,
+  AUTH_HEADER,
+  API_TOKEN,
+  walletOf,
+  buildP2pPaymentProof,
+} from "./test-helpers.js";
+import {
+  isRoutedExecutor,
+  recordTaskRoute,
+  cleanupTaskRoutes,
+  TASK_ROUTE_RETENTION_MS,
+} from "../task-routing.js";
+import {
+  persistReceiptChain,
+  getStoredReceiptJson,
+  getArchivedReceiptForKeyOwner,
+} from "../receipts-store.js";
 
 const PORT = 18953;
 type Door = "post" | "mcp" | "fed";
-type Variant = "routed" | "foreign" | "wrong_peer" | "nested_squat" | "wrong_task";
+type Variant =
+  | "routed"
+  | "foreign"
+  | "wrong_peer"
+  | "nested_squat"
+  | "wrong_task"
+  | "bad_sig"
+  | "local_task"
+  | "no_key";
 
 // ── the worker's MCP endpoint: answers each presented task from a script ──
 
@@ -135,6 +176,15 @@ async function receiptBy(
     },
     who.kp.privateKey,
   ) as Promise<ExecutionReceipt>;
+}
+
+/** A receipt naming `who` but signed with another key. */
+async function badSigBy(
+  who: { id: string; device: string },
+  relayTaskId: string,
+): Promise<ExecutionReceipt> {
+  const kp = await generateKeypair();
+  return receiptBy({ ...who, kp }, relayTaskId, "failed");
 }
 
 /** An UNSIGNED nested child claiming (motebitId, taskId, failed). */
@@ -297,9 +347,14 @@ async function runCell(door: Door, variant: Variant): Promise<string[]> {
     let expectArchive: "failed" | "completed" | null = null;
 
     const none = (): Promise<null> => Promise.resolve(null);
-    if (variant === "wrong_peer" && door !== "fed") return [];
-    if (variant === "routed" && door === "fed") return []; // X is routed locally; no peer may answer it
+    if (door !== "fed" && ["wrong_peer", "local_task", "no_key"].includes(variant)) return [];
     const pX = `X ${tag}`;
+    /** The relay forwarded `id` to W through `peer` (what its forward records). */
+    const forwarded = (id: string, executor = w.W.id): void =>
+      recordTaskRoute(w.relay.moteDb.db, id, executor, w.peer.id);
+    const refused = (st: number, what: string): void => {
+      if (st < 400) failures.push(`REFUSED: ${what} was accepted (${st})`);
+    };
 
     if (variant === "nested_squat") {
       // W answers ANOTHER task T honestly, nesting an unsigned child that
@@ -315,7 +370,10 @@ async function runCell(door: Door, variant: Variant): Promise<string[]> {
         mcpReplies.set(pT, none);
         const T = await admit(w, pT);
         if (door === "post") await postResult(w, T, await squatFor(T));
-        else await fedResult(w, w.peer, T, await squatFor(T));
+        else {
+          forwarded(T);
+          await fedResult(w, w.peer, T, await squatFor(T));
+        }
       }
       await postResult(w, X, await receiptBy(w.W, X, "completed"));
       expectArchive = "completed";
@@ -324,40 +382,68 @@ async function runCell(door: Door, variant: Variant): Promise<string[]> {
       mcpReplies.set(pX, (id) => {
         if (variant === "routed") return receiptBy(w.W, id, "failed");
         if (variant === "foreign") return receiptBy(w.E, id, "failed");
+        if (variant === "bad_sig") return badSigBy(w.W, id);
         return receiptBy(w.W, `other-${id}`, "failed"); // wrong_task
       });
       X = await admit(w, pX);
       if (variant === "routed") expectArchive = "failed";
-    } else {
+    } else if (door === "post") {
       mcpReplies.set(pX, none);
       X = await admit(w, pX);
       if (variant === "routed") {
         await postResult(w, X, await receiptBy(w.W, X, "failed"));
         expectArchive = "failed";
       }
-      if (variant === "foreign") {
-        if (door === "post") await postResult(w, X, await receiptBy(w.E, X, "failed"));
-        else {
-          // A key the peer invents, forwarded as the "worker's" key.
-          const kp = await generateKeypair();
-          const forged = await receiptBy(
-            { id: `evil-${tag}`, device: "evil-dev", kp },
-            X,
-            "failed",
-          );
-          await fedResult(w, w.peer, X, forged, bytesToHex(kp.publicKey));
+      if (variant === "foreign") await postResult(w, X, await receiptBy(w.E, X, "failed"));
+      if (variant === "wrong_task")
+        await postResult(w, X, await receiptBy(w.W, crypto.randomUUID(), "failed"));
+      if (variant === "bad_sig") await postResult(w, X, await badSigBy(w.W, X));
+    } else {
+      mcpReplies.set(pX, none);
+      X = await admit(w, pX);
+      const invented = async (): Promise<[ExecutionReceipt, string]> => {
+        const kp = await generateKeypair();
+        const r = await receiptBy({ id: `evil-${tag}`, device: "evil-dev", kp }, X, "failed");
+        return [r, bytesToHex(kp.publicKey)];
+      };
+      if (variant === "local_task") {
+        refused(
+          await fedResult(w, w.peer, X, await receiptBy(w.W, X, "failed")),
+          "a peer's result for a task routed locally",
+        );
+        const [r, key] = await invented();
+        refused(await fedResult(w, w.peer, X, r, key), "a peer's invented signer for a local task");
+      } else if (variant === "no_key") {
+        const kp = await generateKeypair();
+        const remote = { id: `remote-${tag}`, device: "remote-dev", kp };
+        forwarded(X, remote.id);
+        refused(
+          await fedResult(w, w.peer, X, await receiptBy(remote, X, "failed")),
+          "a federated receipt with no key to verify it",
+        );
+      } else {
+        forwarded(X);
+        if (variant === "routed") {
+          expect(await fedResult(w, w.peer, X, await receiptBy(w.W, X, "failed"))).toBe(200);
+          expectArchive = "failed";
         }
-      }
-      if (variant === "wrong_peer") {
-        // W's own signed receipt — but X was never forwarded through this peer.
-        const st = await fedResult(w, w.peer, X, await receiptBy(w.W, X, "failed"));
-        if (st < 400)
-          failures.push(`REFUSED: a result from a peer X never went through was accepted (${st})`);
-      }
-      if (variant === "wrong_task") {
-        const r = await receiptBy(w.W, crypto.randomUUID(), "failed");
-        if (door === "post") await postResult(w, X, r);
-        else await fedResult(w, w.peer, X, r);
+        if (variant === "foreign") {
+          const [r, key] = await invented();
+          refused(await fedResult(w, w.peer, X, r, key), "the routed peer's invented signer");
+        }
+        if (variant === "wrong_peer") {
+          refused(
+            await fedResult(w, w.otherPeer, X, await receiptBy(w.W, X, "failed")),
+            "a result from a peer X was never forwarded through",
+          );
+        }
+        if (variant === "wrong_task") {
+          const r = await receiptBy(w.W, crypto.randomUUID(), "failed");
+          refused(await fedResult(w, w.peer, X, r), "a receipt bound to another task");
+        }
+        if (variant === "bad_sig") {
+          refused(await fedResult(w, w.peer, X, await badSigBy(w.W, X)), "a bad signature");
+        }
       }
     }
 
@@ -366,6 +452,8 @@ async function runCell(door: Door, variant: Variant): Promise<string[]> {
         failures.push(
           `ONLY THE EXECUTOR: observed ${r.status} receipt for ${bound(r)} signed by ${r.motebit_id === w.E.id ? "E" : r.motebit_id}`,
         );
+      } else if (!(await verifyExecutionReceipt(r, w.W.kp.publicKey))) {
+        failures.push(`ONLY THE EXECUTOR: observed a receipt naming W that W's key did not sign`);
       }
     }
     const a = await archived(w, X);
@@ -394,6 +482,9 @@ describe("#890 r6 receipt doors — only a task's recorded executor may answer i
         "wrong_peer",
         "nested_squat",
         "wrong_task",
+        "bad_sig",
+        "local_task",
+        "no_key",
       ] as Variant[]) {
         for (const f of await runCell(door, variant)) failures.push(`${door}/${variant}: ${f}`);
       }
@@ -422,11 +513,14 @@ describe("#890 r6 adopted-task probe — a forged federation failure never rotat
         },
       ]);
       const posts: string[] = [];
+      const realFetch = globalThis.fetch;
       let first = true;
       vi.stubGlobal("fetch", async (input: string, init?: RequestInit) => {
-        const path = String(input).replace("http://relay", "");
-        if (init?.method === "POST") {
-          posts.push((init.headers as Record<string, string>)["Idempotency-Key"]!);
+        const url = String(input);
+        if (!url.startsWith("http://relay")) return realFetch(input, init);
+        const path = url.replace("http://relay", "");
+        if (init?.method === "POST" && /\/agent\/[^/]+\/task$/.test(path)) {
+          posts.push(new Headers(init.headers).get("idempotency-key") ?? "(no key)");
           if (first) {
             first = false;
             // The relay says the key already admitted X (#888).
@@ -482,4 +576,259 @@ describe("#890 r6 adopted-task probe — a forged federation failure never rotat
       await w.relay.close();
     }
   }, 30_000);
+});
+
+describe("#890 r6 admission is a route — the path agent's own devices answer its task", () => {
+  it("a task the relay broadcast to its path agent's devices is answered by that agent, from the archive too", async () => {
+    const w = await world();
+    try {
+      // No capability: nothing is ranked, the relay hands X to D's own devices.
+      const res = await w.relay.app.request(`/agent/${w.D.id}/task`, {
+        method: "POST",
+        headers: { ...JSON_AUTH, "Idempotency-Key": crypto.randomUUID() },
+        body: JSON.stringify({ prompt: "own devices", submitted_by: w.D.id }),
+      });
+      expect(res.status).toBe(201);
+      const { task_id: X } = (await res.json()) as { task_id: string };
+      expect(await postResult(w, X, await receiptBy(w.D, X, "completed"))).toBe(200);
+      const a = await archived(w, X);
+      expect(a?.motebit_id).toBe(w.D.id);
+      expect(a?.status).toBe("completed");
+    } finally {
+      await w.relay.close();
+    }
+  });
+});
+
+describe("#890 r6 the routing record's only exception is a task admitted before it existed", () => {
+  let relay: SyncRelay;
+  beforeAll(async () => {
+    relay = await createTestRelay();
+  });
+  afterAll(async () => {
+    await relay.close();
+  });
+  const epoch = (): number =>
+    (
+      relay.moteDb.db
+        .prepare("SELECT applied_at FROM relay_schema_migrations WHERE version = 50")
+        .get() as { applied_at: number }
+    ).applied_at;
+
+  it("with no route, a task admitted BEFORE the record is answerable by its own agent, locally", () => {
+    const before = { executor: "agent-x", submittedAt: epoch() - 1 };
+    expect(isRoutedExecutor(relay.moteDb.db, "legacy-1", "agent-x", "", before)).toBe(true);
+    expect(isRoutedExecutor(relay.moteDb.db, "legacy-1", "stranger", "", before)).toBe(false);
+    expect(isRoutedExecutor(relay.moteDb.db, "legacy-1", "agent-x", "some-peer", before)).toBe(
+      false,
+    );
+  });
+
+  it("with no route, a task admitted AFTER the record is answerable by no one", () => {
+    const after = { executor: "agent-x", submittedAt: epoch() + 1 };
+    expect(isRoutedExecutor(relay.moteDb.db, "unrouted-1", "agent-x", "", after)).toBe(false);
+  });
+
+  it("a route admits its executor through its peer, and nobody else", () => {
+    recordTaskRoute(relay.moteDb.db, "routed-1", "worker-w", "peer-p");
+    expect(isRoutedExecutor(relay.moteDb.db, "routed-1", "worker-w", "peer-p", null)).toBe(true);
+    expect(isRoutedExecutor(relay.moteDb.db, "routed-1", "worker-w", "", null)).toBe(false);
+    expect(isRoutedExecutor(relay.moteDb.db, "routed-1", "worker-w", "peer-q", null)).toBe(false);
+    expect(isRoutedExecutor(relay.moteDb.db, "routed-1", "worker-e", "peer-p", null)).toBe(false);
+  });
+});
+
+describe("#890 r6 (D) a nested child never occupies a top-level key — and is not lost either", () => {
+  let relay: SyncRelay;
+  beforeAll(async () => {
+    relay = await createTestRelay();
+  });
+  afterAll(async () => {
+    await relay.close();
+  });
+  const rows = (motebitId: string, like: string) =>
+    relay.moteDb.db
+      .prepare(
+        "SELECT task_id, depth, status FROM relay_receipts WHERE motebit_id = ? AND task_id LIKE ? ORDER BY depth",
+      )
+      .all(motebitId, like) as Array<{ task_id: string; depth: number; status: string }>;
+
+  it("a child arriving AFTER V's own top-level receipt for X is kept under its namespaced key", async () => {
+    const V = { id: `v-${crypto.randomUUID()}`, device: "v-dev", kp: await generateKeypair() };
+    const P = { id: `p-${crypto.randomUUID()}`, device: "p-dev", kp: await generateKeypair() };
+    const X = crypto.randomUUID();
+    const T = crypto.randomUUID();
+    persistReceiptChain(relay.moteDb.db, await receiptBy(V, X, "completed"));
+    persistReceiptChain(relay.moteDb.db, await receiptBy(P, T, "completed", [squatChild(V.id, X)]));
+    expect(rows(V.id, `${X}%`)).toEqual([
+      { task_id: X, depth: 0, status: "completed" },
+      { task_id: `${X}#nested:${T}`, depth: 1, status: "failed" },
+    ]);
+  });
+
+  it("a child arriving BEFORE V's own receipt moves aside when it arrives", async () => {
+    const V = { id: `v-${crypto.randomUUID()}`, device: "v-dev", kp: await generateKeypair() };
+    const P = { id: `p-${crypto.randomUUID()}`, device: "p-dev", kp: await generateKeypair() };
+    const X = crypto.randomUUID();
+    const T = crypto.randomUUID();
+    persistReceiptChain(relay.moteDb.db, await receiptBy(P, T, "completed", [squatChild(V.id, X)]));
+    expect(persistReceiptChain(relay.moteDb.db, await receiptBy(V, X, "completed"))).toBe(true);
+    expect(rows(V.id, `${X}%`)).toEqual([
+      { task_id: X, depth: 0, status: "completed" },
+      { task_id: `${X}#nested:${T}`, depth: 1, status: "failed" },
+    ]);
+  });
+});
+
+describe("#890 r6 (A) every hand-off records its executor — a pinned paid task", () => {
+  async function pinnedWorld(): Promise<{
+    w: World;
+    submit: (prompt: string, presenter?: "submitter") => Promise<Response>;
+  }> {
+    const w = await world();
+    const addr = walletOf(bytesToHex(w.W.kp.publicKey));
+    await w.relay.app.request("/api/v1/agents/register", {
+      method: "POST",
+      headers: JSON_AUTH,
+      body: JSON.stringify({
+        motebit_id: w.W.id,
+        endpoint_url: `http://127.0.0.1:${PORT}/mcp`,
+        capabilities: ["cap890"],
+        settlement_address: addr,
+        settlement_modes: "relay,p2p",
+      }),
+    });
+    await w.relay.app.request(`/api/v1/agents/${w.W.id}/listing`, {
+      method: "POST",
+      headers: JSON_AUTH,
+      body: JSON.stringify({
+        capabilities: ["cap890"],
+        pricing: [{ capability: "cap890", unit_cost: 0.5, currency: "USD", per: "task" }],
+        sla: { max_latency_ms: 5000, availability_guarantee: 0.99 },
+        description: "pinned",
+        pay_to_address: addr,
+      }),
+    });
+    const submit = async (prompt: string, presenter?: "submitter"): Promise<Response> => {
+      const proof = buildP2pPaymentProof(w.relay, {
+        workerAddress: addr,
+        unitCostMicro: 500_000,
+      });
+      return w.relay.app.request(`/agent/${w.D.id}/task`, {
+        method: "POST",
+        headers: { ...JSON_AUTH, "Idempotency-Key": proof.tx_hash },
+        body: JSON.stringify({
+          prompt,
+          submitted_by: w.D.id,
+          target_agent: w.W.id,
+          settlement_mode: "p2p",
+          payment_proof: proof,
+          required_capabilities: ["cap890"],
+          delegator_acknowledges_no_history_risk: true,
+          ...(presenter != null ? { presenter } : {}),
+        }),
+      });
+    };
+    return { w, submit };
+  }
+
+  it("dispatched to the pinned worker's socket: that worker answers it", async () => {
+    const { w, submit } = await pinnedWorld();
+    try {
+      const sent: string[] = [];
+      w.relay.connections.set(w.W.id, [
+        {
+          ws: { readyState: 1, send: (m: string) => sent.push(m), close: () => {} } as never,
+          deviceId: "w-dev",
+          capabilities: ["cap890"],
+        },
+      ]);
+      const res = await submit("pinned socket");
+      expect(res.status, await res.clone().text()).toBe(201);
+      const { task_id: X } = (await res.json()) as { task_id: string };
+      expect(sent.some((m) => m.includes(X))).toBe(true);
+      expect(await postResult(w, X, await receiptBy(w.W, X, "completed"))).toBe(200);
+    } finally {
+      await w.relay.close();
+    }
+  });
+
+  it("presented by its submitter (presenter: submitter): the worker the token binds answers it", async () => {
+    const { w, submit } = await pinnedWorld();
+    try {
+      const res = await submit("submitter presents", "submitter");
+      expect(res.status, await res.clone().text()).toBe(201);
+      const body = (await res.json()) as { task_id: string; dispatch_token?: string };
+      expect(typeof body.dispatch_token).toBe("string");
+      expect(
+        await postResult(w, body.task_id, await receiptBy(w.W, body.task_id, "completed")),
+      ).toBe(200);
+    } finally {
+      await w.relay.close();
+    }
+  });
+});
+
+describe("#890 r6 routes are swept past their horizon; legacy nested rows never answer", () => {
+  let relay: SyncRelay;
+  beforeAll(async () => {
+    relay = await createTestRelay();
+  });
+  afterAll(async () => {
+    await relay.close();
+  });
+
+  it("a route older than TASK_ROUTE_RETENTION_MS is swept; a fresh one — and one inside the idempotency window — stays", () => {
+    const db = relay.moteDb.db;
+    const now = Date.now();
+    const insert = (task: string, at: number) =>
+      db
+        .prepare(
+          "INSERT INTO relay_task_routes (task_id, executor_id, via_peer, created_at) VALUES (?, 'w', '', ?)",
+        )
+        .run(task, at);
+    insert("route-old", now - TASK_ROUTE_RETENTION_MS - 1);
+    insert("route-day", now - 25 * 60 * 60 * 1000);
+    insert("route-new", now);
+    expect(TASK_ROUTE_RETENTION_MS).toBeGreaterThanOrEqual(24 * 60 * 60 * 1000);
+    expect(cleanupTaskRoutes(db, now)).toBe(1);
+    const left = (
+      db
+        .prepare(
+          "SELECT task_id FROM relay_task_routes WHERE task_id LIKE 'route-%' ORDER BY task_id",
+        )
+        .all() as Array<{ task_id: string }>
+    ).map((r) => r.task_id);
+    expect(left).toEqual(["route-day", "route-new"]);
+  });
+
+  it("a legacy nested row at a task's plain key is never the archive's answer, and an audit read prefers the top-level receipt", async () => {
+    const db = relay.moteDb.db;
+    const V = { id: `v-${crypto.randomUUID()}`, device: "v-dev", kp: await generateKeypair() };
+    const X = crypto.randomUUID();
+    // A pre-v50 squat: an unsigned nested child claiming (V, X) at the plain key.
+    const squat = squatChild(V.id, X);
+    db.prepare(
+      `INSERT INTO relay_receipts (motebit_id, task_id, parent_task_id, depth, status, suite, public_key, signature, invocation_origin, receipt_json, received_at)
+       VALUES (?, ?, 'legacy-parent', 1, 'failed', 'motebit-jcs-ed25519-b64-v1', '', 'AAAA', NULL, ?, ?)`,
+    ).run(V.id, X, JSON.stringify(squat), Date.now());
+    db.prepare(
+      `INSERT INTO relay_idempotency_keys (idempotency_key, motebit_id, status, response_status, response_body, created_at, completed_at, task_id)
+       VALUES (?, 'owner', 'completed', 201, '{}', ?, ?, ?)`,
+    ).run(crypto.randomUUID(), Date.now(), Date.now(), X);
+    recordTaskRoute(db, X, V.id);
+    expect(getArchivedReceiptForKeyOwner(db, "owner", X, 0)).toBeNull();
+
+    // A task whose own top-level receipt AND a nested copy are archived:
+    // the audit read serves the top-level one.
+    const Y = crypto.randomUUID();
+    const P = { id: `p-${crypto.randomUUID()}`, device: "p-dev", kp: await generateKeypair() };
+    persistReceiptChain(
+      db,
+      await receiptBy(P, crypto.randomUUID(), "completed", [squatChild(V.id, Y)]),
+    );
+    persistReceiptChain(db, await receiptBy(V, Y, "completed"));
+    const served = JSON.parse(getStoredReceiptJson(db, V.id, Y)!) as ExecutionReceipt;
+    expect(served.status).toBe("completed");
+  });
 });

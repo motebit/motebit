@@ -2426,4 +2426,30 @@ export const relayMigrations: Migration[] = [
       `);
     },
   },
+  {
+    version: 50,
+    name: "task_routes",
+    up: (db) => {
+      // WHO the relay handed each task to (#890 round 6): the relay's single
+      // durable source of truth for "who may answer task X". One row per
+      // (task, executor, via-peer) — a task can be presented to several
+      // executors (the path agent's own devices, a ranked worker, a peer
+      // relay's worker). Written at every hand-off; read by every
+      // receipt-ingestion door and by the receipt archive. Outlives the
+      // queue entry, which is evicted minutes after a receipt. via_peer is
+      // '' for a local executor, else the peer relay the task was forwarded
+      // through (a federated result is accepted only from that peer).
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS relay_task_routes (
+          task_id     TEXT NOT NULL,
+          executor_id TEXT NOT NULL,
+          via_peer    TEXT NOT NULL DEFAULT '',
+          created_at  INTEGER NOT NULL,
+          PRIMARY KEY (task_id, executor_id, via_peer)
+        );
+        CREATE INDEX IF NOT EXISTS idx_relay_task_routes_created
+          ON relay_task_routes(created_at);
+      `);
+    },
+  },
 ];

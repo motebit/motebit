@@ -179,6 +179,16 @@ export const DECLARATION_CONTENT = {
       retention_window:
         '30-day rolling window, swept every minute by the task-cleanup loop; an operator\'s audit aid ("who presented the master token, what did we refuse") readable at GET /api/v1/admin/auth-events, not a surveillance log',
     },
+    // Who the relay handed each task to (#890 round 6): read by every
+    // receipt door and the receipt archive, swept by age.
+    task_routes: {
+      tables: ["relay_task_routes"],
+      observable: [
+        "for every task the relay hands to an executor: the task id, the executor's motebit_id, the peer relay it was forwarded through (empty when local), and when — no content, no prompt, no amount; a receipt for the task is accepted only from a recorded executor through its recorded peer (migration v50)",
+      ],
+      retention_window:
+        "7 days from the hand-off, swept every minute by the task-cleanup loop — beyond the 24-hour idempotency window, the longest any reader consults a route",
+    },
     // The machine roster (docs/doctrine/machine-roster.md; design:
     // docs/proposals/machine-roster-relay-v1.md D3/D4). Its own category:
     // one table is indefinite with no removal path, the other TTL-governed,
@@ -649,6 +659,16 @@ export function renderMarkdown(): string {
   for (const item of c.retention.auth_events.observable) lines.push(`- ${item}`);
   lines.push("");
   lines.push(`Retention window: ${c.retention.auth_events.retention_window}.`);
+  lines.push("");
+
+  lines.push("### Task routes");
+  lines.push("");
+  lines.push(`Tables: ${c.retention.task_routes.tables.map((t) => `\`${t}\``).join(", ")}.`);
+  lines.push("");
+  lines.push("Observable:");
+  for (const item of c.retention.task_routes.observable) lines.push(`- ${item}`);
+  lines.push("");
+  lines.push(`Retention window: ${c.retention.task_routes.retention_window}.`);
   lines.push("");
 
   lines.push("### Machine roster");
