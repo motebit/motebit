@@ -1737,28 +1737,30 @@ async function main(): Promise<void> {
   }
 
   const sum = (f: (r: PackageResult) => number): number => results.reduce((n, r) => n + f(r), 0);
-  // A full run (no scope) must see every allowlisted config import used.
-  if (only.length === 0 && !scopeNote.includes("DIFF-SCOPED")) {
+  // A full run of the repo itself (not a fixture root, no scope) must see
+  // every allowlisted config import in use.
+  const globalProblems: string[] = [];
+  if (
+    !process.env.CHECK_TESTS_TYPECHECKED_ROOT &&
+    only.length === 0 &&
+    !scopeNote.includes("DIFF-SCOPED")
+  ) {
     const seen = new Set(results.flatMap((r) => r.configImportsSeen));
     for (const k of Object.keys(KNOWN_CONFIG_IMPORTS)) {
       if (!seen.has(k)) {
-        results.push({
-          ...(results[0] ?? { dir: ".", name: ".", scanned: true }),
-          dir: ".",
-          problems: [
-            `stale KNOWN_CONFIG_IMPORTS entry "${k}" — no recorded vitest config imports it any more; delete it from scripts/check-tests-typechecked.ts`,
-          ],
-        } as PackageResult);
+        globalProblems.push(
+          `stale KNOWN_CONFIG_IMPORTS entry "${k}" — no recorded vitest config imports it any more; delete it from scripts/check-tests-typechecked.ts`,
+        );
       }
     }
   }
   const aperture = `${results.length} package(s) scanned${scopeNote}; ${sum((r) => r.scriptsRecorded)} test script(s) RUN under the vitest recorder (collection-only), which saw vitest load ${sum((r) => r.recordedFiles)} repo file(s) as code (${sum((r) => r.buildOutput)} untracked build output and ${sum((r) => r.configImportsSeen.length)} KNOWN_CONFIG_IMPORTS use(s) exempt, ${sum((r) => r.configFiles)} vitest config file(s) exempt by rule; every other one must be type-checked) and cross-checked the static prediction; ${sum((r) => r.testFiles)} collected test file(s) (recorded specs + static prediction + git-listed test-named files); ${sum((r) => r.canaryDirs)} canary director(ies) run through each package's real typecheck; every collected file asked of the recorded tsc's own Program (root + not skipped), every other recorded file too (in the program + not skipped); ${sum((r) => r.invocations)} recorded tsc invocation(s) diffed against tsconfig.json over ${sum((r) => r.keysCompared)} compilerOptions key comparison(s) (only ${DIFF_ALLOWED_KEYS.size} emit/layout keys may differ); ${sum((r) => r.allowlisted.length)} file(s) allowlisted in KNOWN_UNCOVERED; ${Math.round((Date.now() - started) / 1000)}s`;
   const failing = results.filter((r) => r.problems.length > 0);
-  if (failing.length === 0) {
+  if (failing.length === 0 && globalProblems.length === 0) {
     process.stdout.write(`✓ check-tests-typechecked: ${aperture}.\n`);
     return;
   }
-  const sites: string[] = [];
+  const sites: string[] = [...globalProblems];
   for (const r of failing) for (const p of r.problems) sites.push(`${r.dir}: ${p}`);
   process.stderr.write(
     formatRepair({

@@ -19,7 +19,9 @@
  * `@ts-nocheck` case ONLY by the pragma scan, the `paths` / `types` /
  * `lib` / `allowJs` / C3 cases ONLY by the options diff, the vitest-excluded
  * e2e spec ONLY via the git listing, and the setupFiles case ONLY via vitest's
- * collection.
+ * collection. The round-7 cases (R6-*, R7-*) are each caught only because the
+ * gate RUNS the package's test scripts under the vitest recorder: the round-6
+ * gate, which predicted what vitest loads, passed every one of them.
  */
 import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
@@ -616,7 +618,8 @@ const CASES: Case[] = [
   },
   {
     id: "R6-C3 `vitest bench` files (*.bench.ts) outside every tsconfig",
-    reason: ["loaded"],
+    // a recorded bench file is a collected spec: root-of-a-tsc + canary apply
+    reason: ["canary", "membership"],
     hidesError: true,
     build: (f) => {
       vitestPackage(
@@ -625,13 +628,14 @@ const CASES: Case[] = [
         'export default { test: { globals: true, benchmark: { include: ["bench/**/*.bench.ts"] } } };\n',
       );
       f[`${P}/bench/sort.bench.ts`] =
-        `declare const bench: (name: string, fn: () => void) => void;\nbench("sort", () => {});\n${TYPE_ERROR}`;
+        `(globalThis as { bench?: (name: string, fn: () => void) => void }).bench?.("sort", () => {});\n${TYPE_ERROR}`;
       return P;
     },
   },
   {
     id: "R6 a node script wrapping vitest (`node scripts/run-tests.mjs` → startVitest with its own config)",
-    reason: ["loaded"],
+    // the wrapper's config is only ever seen inside the recorded process
+    reason: ["canary", "membership"],
     hidesError: true,
     build: (f) => {
       vitestPackage(f, { test: "node scripts/run-tests.mjs" }, "export default {};\n");
