@@ -41,7 +41,14 @@
  */
 
 import { spawnSync } from "node:child_process";
-import { writeFileSync, unlinkSync, existsSync, readFileSync, readdirSync } from "node:fs";
+import {
+  writeFileSync,
+  unlinkSync,
+  existsSync,
+  readFileSync,
+  readdirSync,
+  statSync,
+} from "node:fs";
 import { resolve, dirname, relative } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -933,6 +940,19 @@ export async function probeLeak(): Promise<boolean> {
           "run: pnpm exec turbo run test:coverage --concurrency=4\n",
           `run: pnpm exec turbo run test:coverage --concurrency=4\n        continue-on-error: true # ${PROBE_PREFIX}injected\n`,
         ),
+      ),
+  },
+  {
+    script: "check-prepush-subset",
+    proves:
+      "flags a per-package turbo.json that re-enables caching for `test:coverage` (final cold review: CI's `turbo run test:coverage` then replays a stale pass after a test breaks, while every root-turbo.json check stays green) — resolved by `turbo --dry=json`, not read from the root file",
+    perturb: () =>
+      // A NEW untracked file whose name cannot carry the prefix (turbo reads
+      // only `turbo.json`), so the drain needle rides in its content — the
+      // drain removes an untracked file carrying it.
+      writeFixture(
+        "services/embed/turbo.json",
+        `{"$schema":"https://turbo.build/schema.json#${PROBE_PREFIX}injected","extends":["//"],"tasks":{"test:coverage":{"dependsOn":[],"cache":true,"inputs":["package.json"]}}}\n`,
       ),
   },
   {
@@ -3055,8 +3075,9 @@ function assertProbeCoverage(): void {
  * Two leakage shapes need draining:
  *
  *   1. Orphan fixture files — probes that synthesize new files (their
- *      basename always carries PROBE_PREFIX). git tracks these as
- *      untracked; the prefix in the path is the signature.
+ *      basename carries PROBE_PREFIX, or — when the name is fixed, like a
+ *      package's turbo.json — their content carries the injected needle).
+ *      git lists these as untracked; the prefix / needle is the signature.
  *
  *   2. Mutated baselines — probes that splice a one-line marker comment
  *      into an existing tracked file (e.g. an api-extractor baseline).
@@ -3082,9 +3103,18 @@ function drainStalePerturbations(): void {
     cwd: ROOT,
     encoding: "utf-8",
   });
-  const orphanFixtures = untracked.stdout
-    .split("\n")
-    .filter((line) => line && line.includes(PROBE_PREFIX));
+  const orphanFixtures = untracked.stdout.split("\n").filter((line) => {
+    if (!line) return false;
+    if (line.includes(PROBE_PREFIX)) return true;
+    // A fixture whose NAME is fixed (a package's turbo.json) carries the
+    // needle in its content instead.
+    try {
+      const abs = resolve(ROOT, line);
+      return statSync(abs).size < 65_536 && readFileSync(abs, "utf-8").includes(INJECTED_NEEDLE);
+    } catch {
+      return false;
+    }
+  });
 
   // Mutated baselines — tracked, dirty, containing the injected marker.
   // Parse `git diff HEAD` once and pluck filenames where an added line

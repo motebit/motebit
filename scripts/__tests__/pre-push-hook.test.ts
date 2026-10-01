@@ -202,7 +202,7 @@ describe("pre-push hook — single leaf-package change", () => {
       TYPECHECK_LINT,
       TEST_CHANGED,
       REACH_LEAF,
-      "exec prettier --check --no-error-on-unmatched-pattern packages/leaf/src/index.ts",
+      "exec prettier --check --no-error-on-unmatched-pattern -- packages/leaf/src/index.ts",
     ]);
     // Out of scope for this diff: no audit (lockfile untouched), no gate
     // perturbation (scripts/ untouched), no coverage, no whole-repo prettier.
@@ -281,7 +281,7 @@ describe("pre-push hook — scope follows the diff", () => {
     expect(r.calls.some((c) => c.startsWith("turbo run test"))).toBe(false);
     expect(r.stderr).toMatch(/test — SKIPPED/);
     expect(r.calls).toContain(
-      "exec prettier --check --no-error-on-unmatched-pattern docs/guide.md",
+      "exec prettier --check --no-error-on-unmatched-pattern -- docs/guide.md",
     );
   });
 
@@ -504,6 +504,27 @@ const SCENARIOS: Record<string, (hook: string) => Scenario> = {
     );
     return { ok: r.status === 0 && r.calls.includes("format:check"), detail: show(r) };
   },
+  /** Final cold review (3): prettier 3 honours .gitignore — a nested one moves CI's verdict. */
+  "nested .gitignore triggers whole-repo format": (hook) => {
+    const r = runHook(repoWith({ "packages/leaf/.gitignore": "src/\n" }, { hook }));
+    return { ok: r.status === 0 && r.calls.includes("format:check"), detail: show(r) };
+  },
+  /**
+   * Final cold review (1): a changed file named `-x.md` reached prettier as an
+   * OPTION (prettier exited 0, CI's format:check failed). Every path must be
+   * an operand: after a `--`, or not starting with `-`.
+   */
+  "a dash-leading file name reaches prettier as a path, not an option": (hook) => {
+    const r = runHook(repoWith({ "-x.md": "# X\n" }, { hook }));
+    const call = r.calls.find((c) => c.startsWith("exec prettier")) ?? "";
+    const argv = call.split(" ");
+    const dd = argv.indexOf("--");
+    const operands = argv.filter((a, i) => (dd >= 0 && i > dd) || (!a.startsWith("-") && i > 1));
+    return {
+      ok: r.status === 0 && operands.some((a) => a === "-x.md" || a === "./-x.md"),
+      detail: show(r),
+    };
+  },
   /** A3: a workspace glob the hook cannot map (examples/*\/*) → package scope unknown → every test. */
   "unmappable workspace glob runs every test": (hook) => {
     const r = runHook(
@@ -687,6 +708,18 @@ const HOOK_MUTANTS: { name: string; from: string | RegExp; to: string; killedBy:
     from: "|package\\.json|package\\.yaml",
     to: "",
     killedBy: "a package.json (prettier key) triggers whole-repo format",
+  },
+  {
+    name: "final review (3): .gitignore dropped (prettier 3 honours it)",
+    from: "|\\.gitignore",
+    to: "",
+    killedBy: "nested .gitignore triggers whole-repo format",
+  },
+  {
+    name: "final review (1): paths handed to prettier without `--` (a `-x.md` is an option)",
+    from: "--no-error-on-unmatched-pattern --",
+    to: "--no-error-on-unmatched-pattern",
+    killedBy: "a dash-leading file name reaches prettier as a path, not an option",
   },
 ];
 

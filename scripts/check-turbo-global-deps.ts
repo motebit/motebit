@@ -37,7 +37,9 @@
  *
  * Aperture: config files only. A package's SOURCE reading a root file at
  * test time is not discovered — harmless today because `test` and
- * `test:coverage` are `cache: false` in turbo.json (asserted below).
+ * `test:coverage` are `cache: false` in turbo.json (asserted below for the
+ * root file; per package, as RESOLVED by `turbo --dry=json`, by
+ * check-prepush-subset — a package-level turbo.json can override the root).
  */
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, statSync } from "node:fs";

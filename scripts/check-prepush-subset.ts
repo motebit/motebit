@@ -46,11 +46,22 @@
  *   - the root package.json scripts those forms reach compare by exact value,
  *     and every workspace package's `test:coverage` runs its `test` (plus
  *     coverage), so CI's test:coverage really is a superset of the hook's test.
+ * And BY EXECUTION (evaluateTestCache): CI's `turbo run test:coverage` (and the
+ * hook's `turbo run test`) must really RUN every suite, never replay a cached
+ * pass. A per-package turbo.json (`{"extends":["//"],"tasks":{"test:coverage":
+ * {"cache":true,"inputs":["package.json"]}}}`) overrides the root's
+ * `cache: false` for that package only — CI then replays a stale green after a
+ * test breaks, and no root-turbo.json check sees it. So every package's `test`
+ * and `test:coverage` are resolved through `turbo run test test:coverage
+ * --dry=json` and must be `cache: false` as RESOLVED, and any non-root
+ * turbo.json that configures `test` / `test:coverage` at all is a violation
+ * unless PACKAGE_TURBO_TEST_ALLOWLIST names it with a reason.
  *
  * Changing the hook or ci.yml in a way this gate does not know is therefore a
  * red gate whose repair is a deliberate edit to the tables below — the review
  * the pre-push ⊆ CI claim needs, made unskippable.
  */
+import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
@@ -189,7 +200,7 @@ export const PINNED_FUNCTIONS: Record<string, string> = {
   run_phase: "91e637577b02ae44",
   skip_phase: "f3194ff4fb1a93f9",
   changed_files: "2d6237cb53d2691a",
-  format_changed: "7a97c9aef0af3a16",
+  format_changed: "620fef7d17b67873",
 };
 
 export const canonHash = (canon: string) =>
@@ -783,6 +794,132 @@ export function evaluate(inp: Inputs): Evaluation {
   return { violations, keys: [...h.keys].sort(), commands: h.commands, phases: h.phases };
 }
 
+// ---------------------------------------------------------------------------
+// Test tasks are never cached — by execution
+
+/** The tasks whose cached replay would make the hook's or CI's suite a no-op. */
+const TEST_TASKS = ["test", "test:coverage"] as const;
+
+/**
+ * Non-root turbo.json files allowed to configure `test` / `test:coverage`,
+ * path → reason. Empty: no package needs it, and any such override is the
+ * stale-pass shape until reviewed (the resolved `cache: false` check below
+ * still applies to an allowlisted file).
+ */
+export const PACKAGE_TURBO_TEST_ALLOWLIST: Record<string, string> = {};
+
+export interface DryTask {
+  task: string;
+  directory: string;
+  resolvedTaskDefinition?: { cache?: boolean };
+}
+
+export interface TestCacheInputs {
+  /** `tasks` of `turbo run test test:coverage --dry=json`, or the error text. */
+  dry: DryTask[] | string;
+  /** Every non-root turbo.json / turbo.jsonc on disk → its text. */
+  turboConfigs: Record<string, string>;
+  /** package dir → scripts (as readInputs). */
+  packageScripts: Record<string, Record<string, string>>;
+}
+
+export function evaluateTestCache(inp: TestCacheInputs): string[] {
+  const v: string[] = [];
+  for (const [file, text] of Object.entries(inp.turboConfigs)) {
+    let tasks: Record<string, unknown> = {};
+    try {
+      tasks =
+        (JSON.parse(text.replace(/^\s*\/\/.*$/gm, "")) as { tasks?: Record<string, unknown> })
+          .tasks ?? {};
+    } catch {
+      v.push(`${file} is not parseable JSON — its task overrides are unknown (fail closed)`);
+      continue;
+    }
+    const hits = Object.keys(tasks).filter((k) =>
+      (TEST_TASKS as readonly string[]).includes(k.replace(/^[^#]*#/, "")),
+    );
+    if (hits.length > 0 && PACKAGE_TURBO_TEST_ALLOWLIST[file] == null)
+      v.push(
+        `${file} configures ${hits.map((h) => `"${h}"`).join(", ")} — a package-level override of a test task can re-enable caching (CI's test:coverage then replays a stale pass); remove it, or allowlist it with a reason in PACKAGE_TURBO_TEST_ALLOWLIST`,
+      );
+  }
+  if (typeof inp.dry === "string") {
+    v.push(
+      `\`turbo run test test:coverage --dry=json\` failed — test caching unknown (fail closed): ${inp.dry}`,
+    );
+    return v;
+  }
+  const resolved = new Map<string, boolean | undefined>();
+  for (const t of inp.dry) {
+    if (!(TEST_TASKS as readonly string[]).includes(t.task)) continue;
+    resolved.set(`${t.directory}#${t.task}`, t.resolvedTaskDefinition?.cache);
+  }
+  for (const [key, cache] of resolved)
+    if (cache !== false)
+      v.push(
+        `${key} resolves to cache: ${String(cache)} — a cached test task replays a stale pass after a test breaks; it must resolve to cache: false`,
+      );
+  // Deny by default: a suite the dry run did not resolve is unverified.
+  for (const [dir, scripts] of Object.entries(inp.packageScripts))
+    for (const task of TEST_TASKS)
+      if (scripts[task] != null && !resolved.has(`${dir}#${task}`))
+        v.push(
+          `${dir}#${task} is a script but turbo's dry run did not resolve it — its caching is unverified`,
+        );
+  if (resolved.size === 0) v.push("turbo's dry run resolved no test task at all (fail closed)");
+  return v;
+}
+
+export function readTestCacheInputs(
+  root: string,
+  packageScripts: Record<string, Record<string, string>>,
+): TestCacheInputs {
+  // `root` decides the repo, never an inherited GIT_DIR / GIT_WORK_TREE (a
+  // hook's environment) — so scrub every GIT_* for both child processes.
+  const env: Record<string, string> = { TURBO_TELEMETRY_DISABLED: "1" };
+  for (const [k, val] of Object.entries(process.env))
+    if (val != null && !k.startsWith("GIT_")) env[k] ??= val;
+  let dry: DryTask[] | string;
+  try {
+    const out = execFileSync(
+      join(root, "node_modules", ".bin", "turbo"),
+      ["run", ...TEST_TASKS, "--dry=json"],
+      {
+        cwd: root,
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe"],
+        env,
+      },
+    );
+    dry = (JSON.parse(out.slice(out.indexOf("{"))) as { tasks: DryTask[] }).tasks;
+  } catch (err) {
+    dry = err instanceof Error ? err.message : String(err);
+  }
+  // Tracked AND untracked (turbo reads the working tree), every depth.
+  const files = execFileSync(
+    "git",
+    [
+      "-c",
+      "core.quotePath=false",
+      "ls-files",
+      "--cached",
+      "--others",
+      "--exclude-standard",
+      "--",
+      "*turbo.json",
+      "*turbo.jsonc",
+    ],
+    { cwd: root, encoding: "utf8", env },
+  )
+    .split("\n")
+    .filter(
+      (f) => f && f !== "turbo.json" && /(^|\/)turbo\.jsonc?$/.test(f) && existsSync(join(root, f)),
+    );
+  const turboConfigs: Record<string, string> = {};
+  for (const f of [...new Set(files)]) turboConfigs[f] = readFileSync(join(root, f), "utf8");
+  return { dry, turboConfigs, packageScripts };
+}
+
 export function readInputs(root: string): Inputs {
   const rootScripts =
     (
@@ -814,18 +951,20 @@ export function readInputs(root: string): Inputs {
 function main(): void {
   const inp = readInputs(ROOT);
   const { violations, keys, commands, phases } = evaluate(inp);
+  const testCache = readTestCacheInputs(ROOT, inp.packageScripts);
+  violations.push(...evaluateTestCache(testCache));
   if (violations.length > 0) {
     failWithRepair({
       invariant:
         "pre-push ⊆ CI, deny by default — every command the local pre-push hook runs is a pure builtin, an exact allowlisted line, or a run_phase form mapped to a CI step that runs at least as wide (exact `run`, only name/run keys, in a job with the pinned if:/needs: chain, in a workflow on every push to main)",
       sites: violations,
-      canonical: `${CI} (the authority) and ${HOOK} (the fast subset); the allowlists are RUN_PHASE_FORMS / EXACT_COMMANDS / ASSIGNMENTS / PINNED_FUNCTIONS / CI_FORMS / CI_JOBS / CI_JOB_STEPS / ROOT_SCRIPTS in scripts/check-prepush-subset.ts`,
-      fix: "Undo the edit, or — if it is deliberate — add its CI counterpart first and then extend the matching table in scripts/check-prepush-subset.ts (a changed pinned function: review it and paste the printed hash into PINNED_FUNCTIONS).",
+      canonical: `${CI} (the authority) and ${HOOK} (the fast subset); turbo.json (test / test:coverage cache: false, resolved per package); the allowlists are RUN_PHASE_FORMS / EXACT_COMMANDS / ASSIGNMENTS / PINNED_FUNCTIONS / CI_FORMS / CI_JOBS / CI_JOB_STEPS / ROOT_SCRIPTS in scripts/check-prepush-subset.ts`,
+      fix: "Undo the edit, or — if it is deliberate — add its CI counterpart first and then extend the matching table in scripts/check-prepush-subset.ts (a changed pinned function: review it and paste the printed hash into PINNED_FUNCTIONS). A cached test task: delete the package-level turbo.json test/test:coverage override so the root's cache: false applies.",
       doctrine: "docs/drift-defenses.md",
     });
   }
   console.log(
-    `✓ check-prepush-subset: ${commands} hook command(s) read (${phases} run_phase call(s)) → ${keys.length} task(s) [${keys.join(", ")}], each with an exact CI counterpart; ${Object.keys(inp.packageScripts).length} package(s)' test:coverage cover their test.`,
+    `✓ check-prepush-subset: ${commands} hook command(s) read (${phases} run_phase call(s)) → ${keys.length} task(s) [${keys.join(", ")}], each with an exact CI counterpart; ${Object.keys(inp.packageScripts).length} package(s)' test:coverage cover their test; ${typeof testCache.dry === "string" ? 0 : testCache.dry.filter((t) => t.task === "test" || t.task === "test:coverage").length} test task(s) resolved by \`turbo --dry=json\`, all cache: false; ${Object.keys(testCache.turboConfigs).length} non-root turbo.json file(s) scanned.`,
   );
 }
 

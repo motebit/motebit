@@ -4,10 +4,22 @@
  * first, regex version let through, plus siblings) is RED; every CONTROL
  * (an edit the invariant is not about) stays GREEN. See prepush-subset-mutants.ts.
  */
-import { describe, it, expect } from "vitest";
-import { dirname, resolve } from "node:path";
+import { describe, it, expect, beforeAll, afterAll } from "vitest";
+import { execFileSync } from "node:child_process";
+import { copyFileSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { evaluate, readInputs, canonHash, CI_JOBS, CI_JOB_STEPS } from "../check-prepush-subset.js";
+import {
+  evaluate,
+  evaluateTestCache,
+  readInputs,
+  readTestCacheInputs,
+  canonHash,
+  CI_JOBS,
+  CI_JOB_STEPS,
+  type TestCacheInputs,
+} from "../check-prepush-subset.js";
 import { parseSh, walk } from "../lib/posix-sh.js";
 import { MUTANTS, CONTROLS } from "./prepush-subset-mutants.js";
 
@@ -82,5 +94,118 @@ describe("the POSIX-sh reader", () => {
     };
     expect(fn("f() {\n  # c\n  a  b\n}\n")).toBe(fn("f() { a b; }"));
     expect(fn("f() { a b; }")).not.toBe(fn("f() { a c; }"));
+  });
+});
+
+/**
+ * Final cold review (2): a per-package turbo.json re-enabling the cache for
+ * `test:coverage` made CI replay a stale pass, while the root-turbo.json
+ * checks stayed green. Proven BY EXECUTION: the real `turbo --dry=json` over a
+ * throwaway worktree carrying that file must turn the gate red.
+ */
+describe("test tasks are never cached (turbo --dry=json, per package)", () => {
+  const RED_SHAPE =
+    '{"extends":["//"],"tasks":{"test:coverage":{"dependsOn":[],"cache":true,"inputs":["package.json"]}}}';
+  let base: string;
+  let wt: string;
+  const gitEnv = () => {
+    const env: Record<string, string> = {};
+    for (const [k, v] of Object.entries(process.env))
+      if (v != null && !k.startsWith("GIT_")) env[k] = v;
+    return env;
+  };
+  const git = (cwd: string, ...args: string[]) =>
+    execFileSync("git", args, { cwd, encoding: "utf8", env: gitEnv() });
+
+  beforeAll(() => {
+    base = mkdtempSync(join(tmpdir(), "prepush-test-cache-"));
+    wt = join(base, "wt");
+    git(ROOT, "worktree", "add", "-q", "--detach", wt, "HEAD");
+    symlinkSync(join(ROOT, "node_modules"), join(wt, "node_modules"));
+    // The working tree's turbo.json, not HEAD's (uncommitted edits count).
+    copyFileSync(join(ROOT, "turbo.json"), join(wt, "turbo.json"));
+  }, 120_000);
+
+  afterAll(() => {
+    git(ROOT, "worktree", "remove", "--force", wt);
+    rmSync(base, { recursive: true, force: true });
+  });
+
+  const run = () => evaluateTestCache(readTestCacheInputs(wt, readInputs(wt).packageScripts));
+
+  it("the real repo resolves every package's test + test:coverage to cache: false", () => {
+    expect(run()).toEqual([]);
+  }, 120_000);
+
+  it("RED: services/embed/turbo.json re-enabling the test:coverage cache", () => {
+    const f = join(wt, "services/embed/turbo.json");
+    writeFileSync(f, RED_SHAPE);
+    try {
+      const v = run();
+      expect(
+        v.some((x) => x.startsWith("services/embed#test:coverage resolves to cache: true")),
+      ).toBe(true);
+      expect(v.some((x) => x.startsWith("services/embed/turbo.json configures"))).toBe(true);
+    } finally {
+      rmSync(f);
+    }
+  }, 120_000);
+
+  it("RED: a root `pkg#test` override that re-enables the cache (resolved, not just declared)", () => {
+    const t = join(wt, "turbo.json");
+    const saved = execFileSync("cat", [t], { encoding: "utf8" });
+    const j = JSON.parse(saved) as { tasks: Record<string, unknown> };
+    j.tasks["@motebit/embed#test"] = { dependsOn: [], cache: true };
+    writeFileSync(t, JSON.stringify(j));
+    try {
+      expect(run().some((x) => x.startsWith("services/embed#test resolves to cache: true"))).toBe(
+        true,
+      );
+    } finally {
+      writeFileSync(t, saved);
+    }
+  }, 120_000);
+
+  const fixture = (over: Partial<TestCacheInputs>): TestCacheInputs => ({
+    dry: [
+      { task: "test", directory: "packages/a", resolvedTaskDefinition: { cache: false } },
+      { task: "test:coverage", directory: "packages/a", resolvedTaskDefinition: { cache: false } },
+    ],
+    turboConfigs: {},
+    packageScripts: {
+      "packages/a": { test: "vitest run", "test:coverage": "vitest run --coverage" },
+    },
+    ...over,
+  });
+
+  it("fixture control is green", () => {
+    expect(evaluateTestCache(fixture({}))).toEqual([]);
+  });
+
+  it("RED: a package-level turbo.json that sets test at all (even cache: false) without an allowlist reason", () => {
+    const v = evaluateTestCache(
+      fixture({
+        turboConfigs: { "packages/a/turbo.json": '{"tasks":{"test":{"cache":false,"inputs":[]}}}' },
+      }),
+    );
+    expect(v.some((x) => x.includes('configures "test"'))).toBe(true);
+  });
+
+  it("control: a package-level turbo.json configuring only non-test tasks is green", () => {
+    expect(
+      evaluateTestCache(
+        fixture({
+          turboConfigs: { "packages/a/turbo.json": '{"tasks":{"build":{"outputs":[]}}}' },
+        }),
+      ),
+    ).toEqual([]);
+  });
+
+  it("RED (deny by default): a test script the dry run did not resolve, a failed dry run, unparseable config", () => {
+    expect(evaluateTestCache(fixture({ dry: [] })).length).toBeGreaterThan(0);
+    expect(evaluateTestCache(fixture({ dry: "turbo: boom" })).length).toBeGreaterThan(0);
+    expect(
+      evaluateTestCache(fixture({ turboConfigs: { "packages/a/turbo.json": "{ nope" } })).length,
+    ).toBeGreaterThan(0);
   });
 });

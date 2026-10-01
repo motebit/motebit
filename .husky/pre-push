@@ -258,13 +258,15 @@ if git symbolic-ref -q HEAD >/dev/null 2>&1; then
   # .prettierignore, .editorconfig, .gitignore (prettier 3 honours both
   # ignore files), every package.json / package.yaml (a "prettier" key is
   # config — any manifest counts, deny by default) and the lockfile (version).
+  # Paths go after `--` (final cold review): a changed `-x.md` was otherwise
+  # parsed as prettier OPTIONS, prettier exited 0 and CI's format:check failed.
   _fmt_exts='ts|tsx|js|jsx|json|md'
   _fmt_config_changed=$(printf '%s\n' "$_all_changed" |
     grep -E '(^|/)(\.prettierrc[^/]*|prettier\.config\.[^/]*|\.prettierignore|\.editorconfig|\.gitignore|package\.json|package\.yaml|pnpm-lock\.yaml)$' || true)
   _fmt_files=$(printf '%s\n' "$_all_changed" | grep -E "\.($_fmt_exts)\$" || true)
   format_changed() {
     printf '%s\n' "$_fmt_files" | while IFS= read -r _f; do if [ -f "$_f" ]; then printf '%s\n' "$_f"; fi; done |
-      tr '\n' '\0' | xargs -0 -r pnpm exec prettier --check --no-error-on-unmatched-pattern
+      tr '\n' '\0' | xargs -0 -r pnpm exec prettier --check --no-error-on-unmatched-pattern --
   }
   if [ "$_all_changed" = __DIFF_ERR__ ] || [ -n "$_fmt_config_changed" ]; then
     run_phase "format:check (whole repo — diff unknown or prettier config/deps changed)" pnpm format:check
