@@ -236,6 +236,11 @@ export function judgeSurfaceWiring(
     return out;
   }
   const cmd = scripts[script] ?? "";
+  if (/--expo-config-only\b/.test(cmd)) {
+    out.push(
+      `${rel("package.json")} scripts.${script} — uses \`--expo-config-only\`, which skips the bundle (never-vacuous floor); scan the emitted bundle with --dir`,
+    );
+  }
   if (!new RegExp(`check-client-build-output\\.ts ${app}(?:\\s|$)`).test(cmd)) {
     out.push(
       `${rel("package.json")} scripts.${script} — does not run \`check-client-build-output.ts ${app}\` after the bundler (the output scan is the law)`,

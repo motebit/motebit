@@ -47,7 +47,11 @@ import {
   judgeSurfaceWiring,
   runGate,
 } from "../check-no-secrets-in-client-bundles.js";
-import { checkBuildOutput, expoPublicConfig } from "../check-client-build-output.js";
+import {
+  checkBuildOutput,
+  expoPublicConfig,
+  outputVacuityRefusal,
+} from "../check-client-build-output.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, "..", "..");
@@ -896,7 +900,7 @@ describe("R3 the law: output scan — exclusion rule, encodings, redaction", () 
       "public (PUBLIC_BUILD_ENV)",
     );
     expect(outputScanExclusion("a".repeat(15), allowed)).toBe("short");
-    expect(outputScanExclusion("12345678901234567", allowed)).toBe("scalar");
+    expect(outputScanExclusion("1234567890.12345", allowed)).toBe("scalar");
     expect(outputScanExclusion("/usr/local/bin:/usr/bin:/bin", allowed)).toBe("path");
     expect(outputScanExclusion("https://github.com/motebit/motebit", allowed)).toBe(
       "credential-free locator",
@@ -1181,5 +1185,177 @@ describe("R3 wiring: every governed surface runs the law from its build", () => 
     expect(
       judgeSurfaceWiring("docs", join(root, "apps", "docs"), { bundler: "next" }).join("\n"),
     ).toMatch(/scripts\.build — does not run `check-client-build-output\.ts docs`/);
+  });
+});
+
+// ── Cold review R4: the exclusion rule is deny-by-default ──────────────────
+//
+// Each plant below shipped green on 9073c24: the value went into emitted
+// output and the scan excluded it (or never read the file). Each must be RED.
+
+/** A planted `/`-leading base64 secret (~1 in 64 `openssl rand -base64 32`). */
+const SLASH_B64 = "/q8Zr3Kx9WvT2mLp7Yb4Nc6Hd1Fg5Js0Ae+uIoP3kQ=";
+const SLASH_HEX = `/${fake(HEX, 64, 5)}`;
+
+/** Plants `value` as `name` into apps/<app>/<outDir>/<file> under a fresh root and runs the law. */
+function plantOutput(
+  label: string,
+  app: string,
+  file: string,
+  name: string,
+  value: string,
+): ReturnType<typeof checkBuildOutput> {
+  const root = join(tmp, label);
+  const full = join(root, "apps", app, file);
+  mkdirSync(dirname(full), { recursive: true });
+  writeFileSync(full, `const k=${JSON.stringify(value)};`);
+  return checkBuildOutput(app, { repo: root, processEnv: { [name]: value } });
+}
+
+describe("R4 (1) a `/`-leading value is a path only when it has the real shape of one", () => {
+  it("a `/`-leading base64 and hex secret are scanned for, and refused in apps/verify output", () => {
+    for (const v of [
+      SLASH_B64,
+      SLASH_HEX,
+      "/q8Zr3Kx9Wv/T2mLp7Yb4Nc6H/d1Fg5Js0Ae+uIoP3kQ=",
+      "/q8Zr3Kx9WvT2/mLp7Yb4Nc6Hd/1Fg5Js0Ae+uIo",
+    ]) {
+      expect(outputScanExclusion(v, new Set()), v.slice(0, 6)).toBeNull();
+    }
+    for (const [i, v] of [SLASH_B64, SLASH_HEX].entries()) {
+      const r = plantOutput(`r4-slash-${i}`, "verify", "dist/assets/index.js", "SESSION_KEY", v);
+      expect(r.findings.join("\n")).toMatch(
+        /apps\/verify\/dist\/assets\/index\.js carries the value of SESSION_KEY/,
+      );
+      expect(r.findings.join("\n")).not.toContain(v);
+    }
+  });
+
+  it("real paths stay excluded: existing on disk, or multi-segment and low-entropy", () => {
+    for (const v of [
+      ROOT,
+      `${ROOT}/apps/docs:${ROOT}/node_modules/.bin`,
+      "/vercel/path0/apps/docs",
+      "/opt/does-not-exist/node_modules/.bin:/usr/bin",
+    ]) {
+      expect(outputScanExclusion(v, new Set()), v).toBe("path");
+    }
+    // A non-existent single segment, or one carrying a base64/hex run, is not a path.
+    for (const v of [
+      "/nonexistent-dir-xyz",
+      `/opt/${fake(AN, 20, 9)}/bin`,
+      `/srv/${fake(HEX, 32, 4)}`,
+    ]) {
+      expect(outputScanExclusion(v, new Set()), v).toBeNull();
+    }
+  });
+});
+
+describe("R4 (2) apps/docs/public/ ships verbatim and is scanned", () => {
+  it("a value written into apps/docs/public/ is refused (also under a nested cache/ dir)", () => {
+    for (const f of ["public/cfg.json", "public/cache/x.txt"]) {
+      const r = plantOutput(
+        `r4-docs-public-${f.length}`,
+        "docs",
+        f,
+        "DOCS_SERVER_SECRET",
+        SERVER_SECRET,
+      );
+      expect(r.findings.join("\n"), f).toContain(
+        `apps/docs/${f} carries the value of DOCS_SERVER_SECRET`,
+      );
+    }
+    // .next/cache stays out of the scan (build cache, never served).
+    const r = plantOutput(
+      "r4-docs-cache",
+      "docs",
+      ".next/cache/x.txt",
+      "DOCS_SERVER_SECRET",
+      SERVER_SECRET,
+    );
+    expect(r.findings).toEqual([]);
+  });
+});
+
+describe("R4 (3) the mobile EAS hook can never pass vacuously", () => {
+  it("--dir paths that do not exist (or hold no JS bundle) are refused even when the Expo config was scanned", () => {
+    const root = join(tmp, "r4-vacuous");
+    mkdirSync(join(root, "apps", "mobile"), { recursive: true });
+    const dirs = ["android/app/build/generated", "ios/build"];
+    const run = (): ReturnType<typeof checkBuildOutput> =>
+      checkBuildOutput("mobile", { repo: root, dirs, expoConfigJson: "{}", processEnv: {} });
+    let r = run();
+    expect(r.findings).toEqual([]);
+    expect(outputVacuityRefusal("mobile", r, { expoConfigOnly: false })).toMatch(/no JS bundle/);
+    // A dir that exists but holds no JS bundle is still vacuous.
+    mkdirSync(join(root, "apps", "mobile", "ios", "build"), { recursive: true });
+    writeFileSync(join(root, "apps", "mobile", "ios", "build", "Info.plist"), "<plist/>");
+    r = run();
+    expect(outputVacuityRefusal("mobile", r, { expoConfigOnly: false })).toMatch(/no JS bundle/);
+    // The real Android bundle satisfies it.
+    const gen = join(root, "apps", "mobile", "android", "app", "build", "generated", "assets");
+    mkdirSync(gen, { recursive: true });
+    writeFileSync(join(gen, "index.android.bundle"), "__d(function(){})");
+    r = run();
+    expect(outputVacuityRefusal("mobile", r, { expoConfigOnly: false })).toBeNull();
+    // An explicit config-only mode needs no bundle; with nothing at all it is still refused.
+    const bare = checkBuildOutput("mobile", {
+      repo: join(tmp, "r4-none"),
+      expoConfigJson: "{}",
+      processEnv: {},
+    });
+    expect(outputVacuityRefusal("mobile", bare, { expoConfigOnly: true })).toBeNull();
+    const none = checkBuildOutput("mobile", { repo: join(tmp, "r4-none"), processEnv: {} });
+    expect(outputVacuityRefusal("mobile", none, { expoConfigOnly: true })).toMatch(
+      /nothing to scan/,
+    );
+  });
+
+  it("the EAS hook must not use --expo-config-only (wiring is RED if it does)", () => {
+    const root = join(tmp, "r4-eas");
+    stageApp(root, "mobile", {
+      "package.json": JSON.stringify({
+        scripts: {
+          "eas-build-on-success":
+            "npx tsx ../../scripts/check-client-build-output.ts mobile --expo-config-only",
+        },
+      }),
+    });
+    expect(
+      judgeSurfaceWiring("mobile", join(root, "apps", "mobile"), { bundler: "expo" }).join("\n"),
+    ).toMatch(/--expo-config-only/);
+  });
+});
+
+describe("R4 (4) long digit runs and short-segment URLs are scanned", () => {
+  it("an all-digit value of 16+ digits is scanned (unless a known public numeric name) and refused", () => {
+    const digits = "4929173859201746";
+    expect(outputScanExclusion(digits, new Set())).toBeNull();
+    expect(outputScanExclusion("123456789012345", new Set())).toBe("short");
+    expect(outputScanExclusion("1700000000.123", new Set())).toBe("short");
+    expect(outputScanExclusion("1234567890.12345", new Set())).toBe("scalar");
+    expect(outputScanExclusion(digits, new Set(), "SOURCE_DATE_EPOCH")).toBe("scalar");
+    const r = plantOutput("r4-digits", "verify", "dist/assets/a.js", "PIN_SECRET", digits);
+    expect(r.findings.join("\n")).toMatch(/carries the value of PIN_SECRET/);
+  });
+
+  it("a URL whose key segments are 8-11 chars (or mixed-case letters) is not credential-free, and is refused", () => {
+    for (const u of [
+      "https://hooks.example.com/services/T0a1B2c3/B9z8Y7x6/Qw3Er5Ty7U",
+      "https://x.example.com/k/AbCdEfGhIjKlMnOpQr",
+    ]) {
+      expect(outputScanExclusion(u, new Set()), u).toBeNull();
+      const r = plantOutput(`r4-url-${u.length}`, "verify", "dist/assets/u.js", "WEBHOOK_URL", u);
+      expect(r.findings.join("\n"), u).toMatch(/carries the value of WEBHOOK_URL/);
+    }
+    // Real public locators stay excluded.
+    for (const u of [
+      "https://motebit-browser-sandbox.fly.dev",
+      "https://github.com/motebit/motebit",
+      "https://api.motebit.com/v1/agents",
+      "https://registry.npmjs.org/",
+    ]) {
+      expect(outputScanExclusion(u, new Set()), u).toBe("credential-free locator");
+    }
   });
 });

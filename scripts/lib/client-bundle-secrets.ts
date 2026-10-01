@@ -40,7 +40,7 @@
  * Doctrine: CLAUDE.md "Fail-closed privacy"; docs/doctrine/security-boundaries.md.
  */
 
-import { readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { isAbsolute, join, relative, resolve } from "node:path";
 
 /** Env prefixes a bundler inlines into client code. */
@@ -839,19 +839,79 @@ export function scanArtifactForPublicEnvPairs(
 /** Values shorter than this are never scanned for (collision-prone). */
 export const OUTPUT_SCAN_MIN_LENGTH = 16;
 
-/** A path segment / host label that cannot be a key: short, or letters-only words. */
+/** Segments shorter than this are low-entropy whatever they hold. */
+const LOCATOR_SEGMENT_MIN_KEY_LENGTH = 8;
+
+/**
+ * A path segment / host label that cannot be a key: shorter than 8 chars, or
+ * single-case letter words (`motebit-browser-sandbox`, `Services`, `API`) —
+ * mixed-case letter runs (`AbCdEfGhIj`) are key-shaped and do not qualify.
+ */
 function lowEntropySegment(seg: string): boolean {
-  return seg.length < 12 || /^[A-Za-z]+(?:[-_.][A-Za-z]+)*$/.test(seg);
+  return (
+    seg.length < LOCATOR_SEGMENT_MIN_KEY_LENGTH ||
+    seg.split(/[-_.]/).every((w) => /^(?:[a-z]+|[A-Z][a-z]*|[A-Z]+)$/.test(w))
+  );
 }
 
-/** `true`/`false`, or a plain decimal number. */
-function isScalar(v: string): boolean {
-  return /^(?:true|false)$/i.test(v) || /^[+-]?\d+(?:\.\d+)?$/.test(v);
+/**
+ * Public CI/build metadata whose values are long all-digit ids. An all-digit
+ * value of 16+ digits under any other name is scanned (a PIN, an account
+ * number, a numeric token).
+ */
+export const PUBLIC_NUMERIC_ENV_NAMES: ReadonlySet<string> = new Set([
+  "SOURCE_DATE_EPOCH",
+  "GITHUB_RUN_ID",
+  "GITHUB_RUN_NUMBER",
+  "GITHUB_RUN_ATTEMPT",
+  "GITHUB_REPOSITORY_ID",
+  "GITHUB_REPOSITORY_OWNER_ID",
+  "GITHUB_ACTOR_ID",
+  "GITHUB_TRIGGERING_ACTOR_ID",
+]);
+
+/** Digit runs of this length or more are never a scalar (unless a public numeric name). */
+const SCALAR_MAX_DIGITS = 15;
+
+/** `true`/`false`, or a plain decimal number of at most 15 digits (any length under a public numeric name). */
+function isScalar(v: string, name?: string): boolean {
+  if (/^(?:true|false)$/i.test(v)) return true;
+  if (!/^[+-]?\d+(?:\.\d+)?$/.test(v)) return false;
+  return (
+    v.replace(/\D/g, "").length <= SCALAR_MAX_DIGITS ||
+    (name != null && PUBLIC_NUMERIC_ENV_NAMES.has(name))
+  );
 }
 
-/** One or more absolute POSIX paths joined by `:` (PATH, HOME, PWD, …). */
+/** A base64/base64url/hex run long enough to be key material inside one path segment. */
+const PATH_SEGMENT_KEY_RUN = /[A-Za-z0-9+=_-]{16,}/;
+/** A whole entry (slashes included) that is 24+ chars of the standard base64 alphabet. */
+const PATH_ENTRY_KEY_SHAPED = /^[A-Za-z0-9+/=]{24,}$/;
+
+/**
+ * One absolute POSIX path entry with the real shape of a path (deny by
+ * default — a `/`-leading base64 key is ~1 in 64 `openssl rand -base64 32`):
+ *   (i)  it exists on disk at build time (PWD, HOME, an existing PATH dir), or
+ *   (ii) it has ≥ 2 `/`-separated segments, NO segment contains a
+ *        base64/base64url/hex run of 16+ chars, AND the whole entry is not
+ *        24+ chars of the standard base64 alphabet (`/` included).
+ * Existence wins over (ii)'s entropy test: a random key never names an
+ * existing path, and real dirs (PWD) do land in output (Next's
+ * required-server-files.json embeds the app dir).
+ */
+function isRealPathEntry(e: string): boolean {
+  if (existsSync(e)) return true;
+  const segs = e.split("/").filter((s) => s !== "");
+  return (
+    segs.length >= 2 &&
+    segs.every((s) => !PATH_SEGMENT_KEY_RUN.test(s)) &&
+    !PATH_ENTRY_KEY_SHAPED.test(e)
+  );
+}
+
+/** One or more absolute POSIX paths joined by `:` (PATH, HOME, PWD, …), each a real path (`isRealPathEntry`). */
 function isAbsolutePathList(v: string): boolean {
-  return /^\/[^:\s]*(?::\/[^:\s]*)*$/.test(v);
+  return /^\/[^:\s]*(?::\/[^:\s]*)*$/.test(v) && v.split(":").every(isRealPathEntry);
 }
 
 /**
@@ -889,20 +949,24 @@ function isCredentialFreeLocator(v: string): boolean {
  *       that entry's validator (a value-level allowlist: the same value under
  *       another name is excluded too);
  *   (b) it is shorter than OUTPUT_SCAN_MIN_LENGTH (16) characters;
- *   (c) it is `true`/`false` (any case) or a plain decimal number;
- *   (d) it is one or more absolute POSIX paths joined by `:`;
+ *   (c) it is `true`/`false` (any case) or a plain decimal number of at most
+ *       15 digits (any length only under a `PUBLIC_NUMERIC_ENV_NAMES` name);
+ *   (d) it is one or more absolute POSIX paths joined by `:`, EACH existing on
+ *       disk at build time or multi-segment with no key-shaped run
+ *       (`isRealPathEntry` — deny by default);
  *   (e) it is a credential-free locator: an http(s) URL or bare DNS name with no
  *       userinfo/query/fragment whose every host label and path segment is
- *       shorter than 12 chars or letters-only words (`isCredentialFreeLocator`).
+ *       shorter than 8 chars or single-case letter words (`isCredentialFreeLocator`).
  * Everything else — every other value of every var — is searched for.
  */
 export function outputScanExclusion(
   value: string,
   allowedValues: ReadonlySet<string>,
+  name?: string,
 ): string | null {
   if (allowedValues.has(value)) return "public (PUBLIC_BUILD_ENV)";
   if (value.length < OUTPUT_SCAN_MIN_LENGTH) return "short";
-  if (isScalar(value)) return "scalar";
+  if (isScalar(value, name)) return "scalar";
   if (isAbsolutePathList(value)) return "path";
   if (isCredentialFreeLocator(value)) return "credential-free locator";
   return null;
@@ -1032,7 +1096,7 @@ export function collectBuildEnv(
   return out;
 }
 
-/** Every file under `dir` (recursively), skipping directory names in `skip`. */
+/** Every file under `dir` (recursively), skipping directories whose name OR absolute path is in `skip`. */
 export function listOutputFiles(dir: string, skip: ReadonlySet<string> = new Set()): string[] {
   const out: string[] = [];
   const walkDir = (d: string): void => {
@@ -1051,7 +1115,7 @@ export function listOutputFiles(dir: string, skip: ReadonlySet<string> = new Set
         continue;
       }
       if (st.isDirectory()) {
-        if (!skip.has(e)) walkDir(full);
+        if (!skip.has(e) && !skip.has(full)) walkDir(full);
       } else if (st.isFile()) out.push(full);
     }
   };
@@ -1089,7 +1153,7 @@ export function scanOutputForEnvValues(
   const seenValue = new Set<string>();
   const scannedNames = new Set<string>();
   for (const { name, value, source } of vars) {
-    const why = outputScanExclusion(value, allowed);
+    const why = outputScanExclusion(value, allowed, name);
     if (why != null) {
       excluded[why] = (excluded[why] ?? 0) + 1;
       continue;
