@@ -187,7 +187,7 @@ import { observeHostConnection, sweepHostLiveness } from "./host-roster-store.js
 import { createFederationCallbacks } from "./federation-callbacks.js";
 import { registerTaskRoutes, TASK_TTL_MS } from "./tasks.js";
 import { ExpoPushAdapter } from "./push-adapter.js";
-import { TaskQueue } from "./task-queue.js";
+import { TaskQueue, installSettlementGuards } from "./task-queue.js";
 import {
   registerCommandRoutes,
   handleCommandResponse,
@@ -1271,6 +1271,9 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
   const { registerDisputeRoutes, createDisputeTables, startDeferredOrchestrationWorker } =
     await import("./disputes.js");
   createDisputeTables(moteDb.db);
+  // The settlement guards again, now the dispute table exists: a dispute's
+  // resolution credits `settlement_credit` under the dispute id (#890 r9).
+  installSettlementGuards(moteDb.db);
   registerDisputeRoutes({
     db: moteDb.db,
     app,

@@ -101,18 +101,15 @@ async function pricedWorker(payTo: boolean): Promise<string> {
  */
 function seedEscrowHold(motebitId: string, micro: number, credit: boolean): void {
   const db = relay.moteDb.db;
+  const settlementId = crypto.randomUUID();
   db.prepare(
     `INSERT INTO relay_settlements (settlement_id, allocation_id, task_id, motebit_id, amount_settled, status, settled_at)
      VALUES (?, ?, ?, ?, ?, 'completed', ?)`,
-  ).run(
-    crypto.randomUUID(),
-    crypto.randomUUID(),
-    crypto.randomUUID(),
-    motebitId,
-    micro,
-    Date.now(),
-  );
-  if (credit) creditAccount(db, motebitId, micro, "settlement_credit", null, "901 held earnings");
+  ).run(settlementId, crypto.randomUUID(), crypto.randomUUID(), motebitId, micro, Date.now());
+  // The credit names its settlement row (#890 r9).
+  if (credit) {
+    creditAccount(db, motebitId, micro, "settlement_credit", settlementId, "901 held earnings");
+  }
 }
 
 /**

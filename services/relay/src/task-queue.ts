@@ -599,8 +599,11 @@ export function installSettlementGuards(db: DatabaseDriver): void {
     const disputes = tableExists(db, "relay_disputes")
       ? "AND NOT EXISTS (SELECT 1 FROM relay_disputes WHERE dispute_id = NEW.reference_id)"
       : "";
+    // Recreated on every install: the dispute exemption names a table the
+    // relay creates after the queue (index.ts installs again once it exists).
+    db.exec("DROP TRIGGER IF EXISTS relay_transactions_settlement_credit_guard");
     db.exec(`
-      CREATE TRIGGER IF NOT EXISTS relay_transactions_settlement_credit_guard
+      CREATE TRIGGER relay_transactions_settlement_credit_guard
       BEFORE INSERT ON relay_transactions
       WHEN NEW.type = 'settlement_credit'
         AND NOT EXISTS (SELECT 1 FROM relay_settlements WHERE settlement_id = NEW.reference_id)
