@@ -8,7 +8,7 @@
  * with the caller's environment. Under `pnpm test:gates` from a pre-push hook
  * in a linked worktree, GIT_DIR pointed at the real repository, so those
  * commands rewrote the real repository. Rules now:
- *   - every child process gets `cleanEnv()` (EVERY `GIT_*` removed) and an
+ *   - every child process gets `fixtureGitEnv()` (EVERY `GIT_*` removed) and an
  *     explicit `cwd` inside this test's temp dir;
  *   - every git command runs through `fxGit`, which sets
  *     GIT_CEILING_DIRECTORIES to the temp dir and, before any command that
@@ -61,7 +61,6 @@ import { fileURLToPath } from "node:url";
 import {
   READ_ONLY_GIT,
   baseBuildCommand,
-  cleanEnv,
   dependencyClosure,
   installLevelDifferences,
   mirrorNodeModules,
@@ -71,6 +70,7 @@ import {
   topoOrder,
   type WorkspacePackage,
 } from "../lib/differential-tree.js";
+import { fixtureGitEnv } from "../lib/fixture-git-env.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = realpathSync(resolve(__dirname, "..", ".."));
@@ -125,7 +125,7 @@ function fxGit(
   opts: { baseEnv?: NodeJS.ProcessEnv; extraEnv?: Record<string, string>; input?: string } = {},
 ): string {
   if (!inside(jail, cwd)) throw new Error(`fxGit: cwd ${cwd} is outside ${jail}`);
-  const env = cleanEnv(opts.baseEnv ?? process.env, {
+  const env = fixtureGitEnv(opts.baseEnv ?? process.env, {
     GIT_CEILING_DIRECTORIES: realpathSync(jail),
     ...NO_AUTO_MAINTENANCE,
     ...opts.extraEnv,
@@ -170,7 +170,7 @@ function fxRun(
   baseEnv: NodeJS.ProcessEnv = process.env,
 ): string {
   if (!inside(jail, cwd)) throw new Error(`fxRun: cwd ${cwd} is outside ${jail}`);
-  const r = spawnSync(cmd, args, { cwd, env: cleanEnv(baseEnv), encoding: "utf8" });
+  const r = spawnSync(cmd, args, { cwd, env: fixtureGitEnv(baseEnv), encoding: "utf8" });
   if (r.status !== 0) throw new Error(`${cmd} ${args.join(" ")} failed:\n${show(r)}`);
   return r.stdout;
 }
@@ -182,8 +182,8 @@ const pkg = (dir: string, name: string, deps: string[]): [string, WorkspacePacka
 ];
 
 describe("differential-tree units", () => {
-  it("cleanEnv removes every GIT_* variable and keeps the rest", () => {
-    const env = cleanEnv({
+  it("fixtureGitEnv removes every GIT_* and credential variable and keeps the rest", () => {
+    const env = fixtureGitEnv({
       GIT_DIR: "/x",
       GIT_WORK_TREE: "/y",
       GIT_INDEX_FILE: "/z",
@@ -191,9 +191,17 @@ describe("differential-tree units", () => {
       GIT_ALTERNATE_OBJECT_DIRECTORIES: "/a",
       GIT_COMMON_DIR: "/c",
       GIT_CEILING_DIRECTORIES: "/d",
+      GIT_CONFIG_COUNT: "1",
+      GIT_ASKPASS: "/p",
+      SSH_AUTH_SOCK: "/s",
+      GH_TOKEN: "t",
+      GITHUB_TOKEN: "t",
       PATH: "/bin",
     });
     expect(Object.keys(env).filter((k) => k.startsWith("GIT_"))).toEqual([]);
+    expect(env.SSH_AUTH_SOCK).toBeUndefined();
+    expect(env.GH_TOKEN).toBeUndefined();
+    expect(env.GITHUB_TOKEN).toBeUndefined();
     expect(env.PATH).toBe("/bin");
   });
 
@@ -607,7 +615,7 @@ function mobileArgs(fx: Fixture, out: string, fromMain = "packages/proto"): stri
   ];
 }
 
-const fxEnv = (extra: Record<string, string> = {}) => cleanEnv(process.env, extra);
+const fxEnv = (extra: Record<string, string> = {}) => fixtureGitEnv(process.env, extra);
 
 /**
  * The slower fixture cases run only with MOTEBIT_DIFFERENTIAL_FIXTURE=1
