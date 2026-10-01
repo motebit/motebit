@@ -171,8 +171,11 @@ describe("#962 round 6 C1 — a typo'd stream pins the floor: reported, then ret
     await doors.retireRelayStream!(store, MID, doors.relayStreamOfUrl!(TYPO, MID));
     const cs = resolveSeqCursorStore(store);
     const get = cs.getSyncSeqCursor.bind(cs);
+    // Only the typo'd stream's marker is unreadable: read as "retired" (fail
+    // open), the right relay alone would free 10.
+    const typoMarker = `retired:push:${doors.relayStreamOfUrl!(TYPO, MID)}`;
     cs.getSyncSeqCursor = (key: string) =>
-      key.startsWith("retired:") ? Promise.reject(new Error("disk")) : get(key);
+      key === typoMarker ? Promise.reject(new Error("disk")) : get(key);
     expect(await pushCompactionFloor(store, 19, { motebitId: MID })).toBe(0);
   });
 });

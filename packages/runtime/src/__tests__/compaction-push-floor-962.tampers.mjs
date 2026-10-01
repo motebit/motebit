@@ -873,6 +873,9 @@ const TAMPERS = [
     replacement: "new Error(`sync push: ${msg.message}`)",
     red: "static: every Error a sync-engine source builds",
   },
+  // (No entry for the BOM or U+2028/U+2029 clauses: `\s` matches them too,
+  // so the whitespace collapse strips them a second time — removing either
+  // clause alone changes no output. Their tests still hold the law.)
   {
     // Bidi embeddings / overrides survive.
     file: join(root, "packages", "sync-engine", "src", "relay-text.ts"),
@@ -899,24 +902,6 @@ const TAMPERS = [
     text: '.replace(/[\\u200b-\\u200f\\u202a-\\u202e\\u2066-\\u2069\\ufeff]/g, "")',
     replacement: '.replace(/[\\u202a-\\u202e\\u2066-\\u2069\\ufeff]/g, "")',
     red: "strips U+200B ZWSP",
-  },
-  {
-    // The BOM survives.
-    file: join(root, "packages", "sync-engine", "src", "relay-text.ts"),
-    testFile: join(root, "packages", "sync-engine", "src", "__tests__", "relay-text-962.test.ts"),
-    cwd: join(root, "packages", "sync-engine"),
-    text: '\\u2066-\\u2069\\ufeff]/g, "")',
-    replacement: '\\u2066-\\u2069]/g, "")',
-    red: "strips U+FEFF BOM",
-  },
-  {
-    // The Unicode line / paragraph separators survive.
-    file: join(root, "packages", "sync-engine", "src", "relay-text.ts"),
-    testFile: join(root, "packages", "sync-engine", "src", "__tests__", "relay-text-962.test.ts"),
-    cwd: join(root, "packages", "sync-engine"),
-    text: '\\x9f\\u2028\\u2029]/g, " ")',
-    replacement: '\\x9f]/g, " ")',
-    red: "strips U+2028 LINE SEPARATOR",
   },
   {
     // DEL survives.
