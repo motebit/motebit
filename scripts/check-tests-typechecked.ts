@@ -1651,7 +1651,7 @@ async function pool<T, R>(items: T[], n: number, fn: (t: T) => Promise<R>): Prom
  * (scripts/lib/repo-lock.ts). `CHECK_TESTS_TYPECHECKED_LOCK_WAIT_MS` overrides
  * (the gate's harness sets a short wait where it tests the timeout itself).
  */
-const LOCK_WAIT_MS = 10 * 60 * 1000;
+export const LOCK_WAIT_MS = 10 * 60 * 1000;
 
 async function main(): Promise<void> {
   const started = Date.now();

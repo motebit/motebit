@@ -34,6 +34,7 @@ import {
   VITEST_NON_CODE_KEYS,
   VITEST_TEST_CODE_KEYS,
   KNOWN_CONFIG_IMPORTS,
+  LOCK_WAIT_MS,
   NON_VITEST_TEST_SCRIPTS,
   nonVitestProblems,
   readRecording,
@@ -421,6 +422,12 @@ describe("vitest collection policy", () => {
     expect(recordedFile("\0virtual:x", root)).toBeNull();
     expect(recordedFile("/elsewhere/a.ts", root)).toBeNull();
     rmSync(root, { recursive: true, force: true });
+  });
+});
+
+describe("lock wait (C5)", () => {
+  it("covers a whole full run (~6 min measured), so a second honest concurrent run waits instead of failing", () => {
+    expect(LOCK_WAIT_MS).toBeGreaterThanOrEqual(10 * 60 * 1000);
   });
 });
 

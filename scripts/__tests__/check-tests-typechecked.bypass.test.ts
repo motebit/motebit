@@ -677,6 +677,33 @@ const CASES: Case[] = [
     },
   },
   {
+    // With isolate off (the recorder's collection), a.test.ts mocks the
+    // helper and evaluates mid.ts against the mock; b.test.ts then gets the
+    // cached mid.ts, so the real helper — which `vitest run` (isolated) DOES
+    // execute for b.test.ts — is never transformed. Its resolution is.
+    id: "R7 a module the collection only reaches through a vi.mock'd import (isolate off would hide its real load)",
+    reason: ["loaded"],
+    hidesError: true,
+    build: (f) => {
+      vitestPackage(
+        f,
+        { test: "vitest run" },
+        "export default { test: { globals: true, sequence: { shuffle: false } } };\n",
+      );
+      const vi = "declare const vi: { mock(path: string, factory: () => unknown): void };\n";
+      f[`${P}/src/__tests__/a.test.ts`] =
+        `${GLOBALS_TEST}${vi}vi.mock("../../harness/helper", () => ({ helper: 0 }));\nimport { mid } from "./mid";\nexport const m: number = mid;\n// ${"padding so the sequencer runs this larger file first ".repeat(20)}\n`;
+      f[`${P}/src/__tests__/b.test.ts`] =
+        `${GLOBALS_TEST}import { mid } from "./mid";\nexport const n: number = mid;\n`;
+      // A computed specifier: tsc never follows it, so (tsconfig.test.json
+      // covering src/ only) the helper is in no program.
+      f[`${P}/src/__tests__/mid.ts`] =
+        'const p = "../../harness/helper";\nexport const mid: number = ((await import(p)) as { helper: number }).helper;\n';
+      f[`${P}/harness/helper.ts`] = `export const helper: number = 1;\n${TYPE_ERROR}`;
+      return P;
+    },
+  },
+  {
     id: "R7 deny by default: a test script that runs no vitest the recorder can see",
     reason: ["noVitest"],
     hidesError: false,
@@ -738,15 +765,19 @@ describe("check-tests-typechecked bypass harness", () => {
     expect(typecheck(join(root, P))).not.toBe(0);
   });
 
-  it.concurrent.each(CASES.map((c) => [c.id, c] as const))("%s → gate RED", async (_id, c) => {
-    const files = basePackage(P);
-    const dir = c.build(files);
-    const root = workspace(files, c.globs);
-    if (c.hidesError) expect(typecheck(join(root, dir)), "bypass must be real").toBe(0);
-    const g = gate(root);
-    expect(g.status, g.out).not.toBe(0);
-    for (const r of c.reason) expect(g.out, `${r} must report it`).toMatch(BY[r]);
-  });
+  it.concurrent.each(CASES.map((c) => [c.id, c] as const))(
+    "%s → gate RED",
+    async (_id, c) => {
+      const files = basePackage(P);
+      const dir = c.build(files);
+      const root = workspace(files, c.globs);
+      if (c.hidesError) expect(typecheck(join(root, dir)), "bypass must be real").toBe(0);
+      const g = gate(root);
+      expect(g.status, g.out).not.toBe(0);
+      for (const r of c.reason) expect(g.out, `${r} must report it`).toMatch(BY[r]);
+    },
+    300_000,
+  ); // each case runs its fixture's typecheck AND test scripts; the gate spawns are synchronous, so concurrent cases queue behind one another
 });
 
 describe("check-tests-typechecked — round-4 canary-prefix and concurrency cases", () => {
@@ -903,7 +934,7 @@ describe("check-tests-typechecked — round-4 canary-prefix and concurrency case
       }).stdout;
       expect(left).not.toContain(CANARY_PREFIX);
     }
-  }, 300_000); // repo's 30s test timeout (the gate's lock budget). // 20 gate runs, ten at a time; each run's own lock wait stays below the
+  }, 300_000); // 20 gate runs, ten at a time; the second of each pair waits on the per-worktree lock
 
   it("control: a pragma tsc does not honour is not flagged (string mention, after code, overridden by a later @ts-check, block comment)", () => {
     const files = basePackage(P);
