@@ -12,9 +12,6 @@
  *     own admission consumes).
  */
 import { describe, it, expect, vi } from "vitest";
-import * as fs from "node:fs";
-import * as path from "node:path";
-import { fileURLToPath } from "node:url";
 
 vi.mock("react-native", () => {
   const host = (name: string) => name;
@@ -45,6 +42,17 @@ import {
 import { IntelligenceTab, type IntelligenceTabProps } from "../components/settings/IntelligenceTab";
 import type { ProviderType } from "../components/settings/settings-shared";
 import { modelForProviderSwitch } from "../provider-model";
+
+// The app tsconfig carries no Node types (browser / React Native target), so
+// the Node built-in is loaded through a non-literal specifier (the pattern
+// expo-sqlite-sync-cursor.test.ts uses).
+const NODE_FS = "node:fs";
+const { readFileSync } = (await import(/* @vite-ignore */ NODE_FS)) as {
+  readFileSync: (p: string, enc: "utf8") => string;
+};
+/** Read a file relative to this test file. */
+const readRel = (rel: string): string =>
+  readFileSync(decodeURIComponent(new URL(rel, import.meta.url).pathname), "utf8");
 
 function props(over: Partial<IntelligenceTabProps>): IntelligenceTabProps {
   const noop = (): void => {};
@@ -140,7 +148,7 @@ describe("mobile provider switch → Motebit Cloud (C2)", () => {
     const cloud = r.root.find(
       (n: ReactTestInstance) =>
         typeof n.type === "string" &&
-        n.type === "TouchableOpacity" &&
+        String(n.type) === "TouchableOpacity" &&
         n.findAll((c: ReactTestInstance) => c.children.includes("Motebit Cloud")).length > 0,
     );
     act(() => (cloud.props.onPress as () => void)());
@@ -152,8 +160,7 @@ describe("mobile provider switch → Motebit Cloud (C2)", () => {
   it("SettingsModal derives the switched model through modelForProviderSwitch", () => {
     // The modal itself needs SecureStore/FileSystem/the whole app to mount;
     // pin that its onChangeProvider has no private derivation left.
-    const here = path.dirname(fileURLToPath(import.meta.url));
-    const src = fs.readFileSync(path.join(here, "../components/SettingsModal.tsx"), "utf8");
+    const src = readRel("../components/SettingsModal.tsx");
     expect(src).toMatch(/model: modelForProviderSwitch\(p\)/);
     expect(src).not.toMatch(/DEFAULT_ANTHROPIC_MODEL/);
   });

@@ -7,15 +7,23 @@
  * reverting settings.ts's picker wiring leaves no options and this goes red.
  */
 import { describe, it, expect, vi, beforeAll } from "vitest";
-import * as fs from "node:fs";
-import * as path from "node:path";
-import { fileURLToPath } from "node:url";
 import {
   ANTHROPIC_PICKER,
   DEFAULT_ANTHROPIC_MODEL,
   motebitCloudAdmitsModel,
   type UnifiedProviderConfig,
 } from "@motebit/sdk";
+
+// The app tsconfig carries no Node types (browser / React Native target), so
+// the Node built-in is loaded through a non-literal specifier (the pattern
+// expo-sqlite-sync-cursor.test.ts uses).
+const NODE_FS = "node:fs";
+const { readFileSync } = (await import(/* @vite-ignore */ NODE_FS)) as {
+  readFileSync: (p: string, enc: "utf8") => string;
+};
+/** Read a file relative to this test file. */
+const readRel = (rel: string): string =>
+  readFileSync(decodeURIComponent(new URL(rel, import.meta.url).pathname), "utf8");
 
 // settings.ts imports the app entry (main.ts boots the whole app) and a few
 // browser-only modules; stub only those — the settings module itself is real.
@@ -33,13 +41,11 @@ vi.mock("../bootstrap", () => ({
 }));
 vi.mock("../ui/machines-section", () => ({ mountMachines: vi.fn() }));
 
-const HERE = path.dirname(fileURLToPath(import.meta.url));
-
 type Settings = typeof import("../ui/settings");
 let mod: Settings;
 
 beforeAll(async () => {
-  const html = fs.readFileSync(path.join(HERE, "../../index.html"), "utf8");
+  const html = readRel("../../index.html");
   const body = /<body[^>]*>([\s\S]*)<\/body>/i.exec(html)![1]!;
   document.body.innerHTML = body.replace(/<script[\s\S]*?<\/script>/gi, "");
   mod = await import("../ui/settings");
@@ -82,7 +88,7 @@ function anthropicSelect(): HTMLSelectElement {
 
 describe("web Settings — Anthropic picker (C3)", () => {
   it("index.html ships the select empty (the rows can only come from the sdk)", () => {
-    const html = fs.readFileSync(path.join(HERE, "../../index.html"), "utf8");
+    const html = readRel("../../index.html");
     expect(html).toMatch(/<select id="anthropic-model"><\/select>/);
   });
 

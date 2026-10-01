@@ -13,9 +13,6 @@
  *     admits.
  */
 import { describe, it, expect, vi, beforeAll } from "vitest";
-import * as fs from "node:fs";
-import * as path from "node:path";
-import { fileURLToPath } from "node:url";
 import {
   ANTHROPIC_PICKER,
   DEFAULT_ANTHROPIC_MODEL,
@@ -23,6 +20,17 @@ import {
   resolveProviderSpec,
   type UnifiedProviderConfig,
 } from "@motebit/sdk";
+
+// The app tsconfig carries no Node types (browser / React Native target), so
+// the Node built-in is loaded through a non-literal specifier (the pattern
+// expo-sqlite-sync-cursor.test.ts uses).
+const NODE_FS = "node:fs";
+const { readFileSync } = (await import(/* @vite-ignore */ NODE_FS)) as {
+  readFileSync: (p: string, enc: "utf8") => string;
+};
+/** Read a file relative to this test file. */
+const readRel = (rel: string): string =>
+  readFileSync(decodeURIComponent(new URL(rel, import.meta.url).pathname), "utf8");
 
 const initAI = vi.fn(async (_cfg: { provider: UnifiedProviderConfig }) => false);
 
@@ -67,7 +75,6 @@ vi.mock("../voice-pipeline", () => ({ SpatialVoicePipeline: StubClass }));
 vi.mock("../hud", () => ({ bindHud: () => stubObj() }));
 vi.mock("../receipt-satellites", () => ({ ReceiptSatelliteCoordinator: StubClass }));
 
-const HERE = path.dirname(fileURLToPath(import.meta.url));
 const STORAGE_KEY = "motebit:spatial_settings";
 
 async function boot(stored: Record<string, unknown> | null): Promise<void> {
@@ -75,7 +82,7 @@ async function boot(stored: Record<string, unknown> | null): Promise<void> {
   initAI.mockClear();
   localStorage.clear();
   if (stored) localStorage.setItem(STORAGE_KEY, JSON.stringify(stored));
-  const html = fs.readFileSync(path.join(HERE, "../../index.html"), "utf8");
+  const html = readRel("../../index.html");
   const body = /<body[^>]*>([\s\S]*)<\/body>/i.exec(html)![1]!;
   document.body.innerHTML = body.replace(/<script[\s\S]*?<\/script>/gi, "");
   await import("../app");
