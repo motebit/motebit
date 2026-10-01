@@ -1007,6 +1007,27 @@ export function startDeferredOrchestrationWorker(deps: {
 
 // === Route Registration ===
 
+/**
+ * The delegator of a relay-custody allocation, from money-path records only:
+ * the settlement row's `delegator_id` once settled, else the payer of the
+ * `allocation_hold` debit that funded the allocation (tasks.ts submission —
+ * reference_id = allocation_id). Null when neither exists; callers fail closed.
+ */
+function allocationDelegator(db: DatabaseDriver, allocationId: string): string | null {
+  const settled = db
+    .prepare("SELECT delegator_id FROM relay_settlements WHERE allocation_id = ?")
+    .get(allocationId) as { delegator_id: string | null } | undefined;
+  if (settled?.delegator_id) return settled.delegator_id;
+  const hold = db
+    .prepare(
+      "SELECT DISTINCT motebit_id FROM relay_transactions WHERE reference_id = ? AND type = 'allocation_hold' LIMIT 2",
+    )
+    .all(allocationId) as Array<{ motebit_id: string }>;
+  // Exactly one payer funds an allocation; anything else is not a party set
+  // the relay can vouch for.
+  return hold.length === 1 ? hold[0]!.motebit_id : null;
+}
+
 export function registerDisputeRoutes(deps: DisputeDeps): void {
   const { db, app, relayIdentity } = deps;
   // Defer-bind the default so vi.stubGlobal in tests is observed at
@@ -1089,28 +1110,69 @@ export function registerDisputeRoutes(deps: DisputeDeps): void {
     // Create a trust-layer dispute (amount_locked = 0, no fund movement).
     let isP2pDispute = false;
     let workerId: string;
+    let delegatorId: string | null;
     if (allocation) {
+      // §4.2: the body's task_id must be the allocation's task. Fund action
+      // and the §7.5 hold key on task_id, so a mismatch would lock one
+      // allocation while pointing resolution at another task's settlement.
+      if (req.task_id !== allocation.task_id) {
+        throw new HTTPException(400, {
+          message: "DisputeRequest.task_id does not match the allocation's task",
+        });
+      }
       workerId = allocation.motebit_id;
+      delegatorId = allocationDelegator(db, allocation.allocation_id);
     } else {
       const p2pSettlement = db
         .prepare(
-          "SELECT settlement_id, task_id, motebit_id FROM relay_settlements WHERE task_id = ? AND settlement_mode = 'p2p'",
+          "SELECT settlement_id, task_id, motebit_id, delegator_id FROM relay_settlements WHERE task_id = ? AND settlement_mode = 'p2p'",
         )
         .get(req.task_id) as
-        { settlement_id: string; task_id: string; motebit_id: string } | undefined;
+        | {
+            settlement_id: string;
+            task_id: string;
+            motebit_id: string;
+            delegator_id: string | null;
+          }
+        | undefined;
 
       if (!p2pSettlement) {
         throw new HTTPException(404, { message: "Allocation not found" });
       }
       isP2pDispute = true;
       workerId = p2pSettlement.motebit_id;
+      delegatorId = p2pSettlement.delegator_id || null;
     }
-    // Capture filer_role at filing time (when task / allocation / p2p
+
+    // §4.1 / §4.4: the filer must be a direct party — the allocation's worker
+    // or its delegator — and the respondent the OTHER party. The signature
+    // check above proves only that `filed_by` signed; it says nothing about
+    // standing. filer_role is DERIVED from the party match, never defaulted:
+    // a pre-settlement fund action pays the delegator share to the delegator-
+    // role party and the worker share to the worker-role party, so an
+    // unchecked filer or respondent would redirect escrow to a stranger.
+    // Fail-closed when the delegator cannot be established from the ledger.
+    let filerRole: FilerRole;
+    if (req.filed_by === workerId && delegatorId !== null && req.respondent === delegatorId) {
+      filerRole = "worker";
+    } else if (
+      delegatorId !== null &&
+      req.filed_by === delegatorId &&
+      req.respondent === workerId &&
+      delegatorId !== workerId
+    ) {
+      filerRole = "delegator";
+    } else {
+      throw new HTTPException(403, {
+        message:
+          "Filing party and respondent must be the delegator and worker of the referenced task (dispute-v1 §4.4)",
+      });
+    }
+    // filer_role is captured at filing time (when task / allocation / p2p
     // settlement is definitely present) per the §7.2 retention-safety
     // constraint — the row may be pruned before the orchestrator runs,
     // and a federation resolution that depends on the task row at
     // orchestration time becomes unresolvable post-pruning.
-    const filerRole: FilerRole = req.filed_by === workerId ? "worker" : "delegator";
 
     // Rate limit: max active disputes per agent (§9.2)
     const activeCount = db
