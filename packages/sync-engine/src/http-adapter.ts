@@ -4,6 +4,7 @@ import type { EventStoreAdapter, EventFilter } from "@motebit/event-log";
 import type { CredentialSource, CredentialRequest } from "./credential-source.js";
 import type { SeqPullResult, SeqPullSource } from "./seq-cursor.js";
 import { assertPushable, type RelayPayloadMode } from "./event-payload.js";
+import { sanitizeRelayText } from "./relay-text.js";
 
 /** Drop the relay's transport `seq` from an entry before it is stored anywhere. */
 function stripSeq(e: EventLogEntry & { seq?: unknown }): EventLogEntry {
@@ -305,7 +306,7 @@ export class HttpEventStoreAdapter implements EventStoreAdapter, SeqPullSource {
         init: { method: "POST", body: JSON.stringify({ events: [entry] }) },
       }));
       if (!res.ok) {
-        throw new Error(`Push failed: ${res.status} ${res.statusText}`);
+        throw new Error(`Push failed: ${res.status} ${sanitizeRelayText(res.statusText)}`);
       }
     } catch (err: unknown) {
       failed = err instanceof Error ? err : new Error(String(err));
@@ -407,7 +408,7 @@ export class HttpEventStoreAdapter implements EventStoreAdapter, SeqPullSource {
     const url = `${this.baseUrl}/sync/${this.motebitId}/pull?after_clock=${afterClock}`;
     const res = await this.request(() => ({ url, init: { method: "GET" } }));
     if (!res.ok) {
-      throw new Error(`Pull failed: ${res.status} ${res.statusText}`);
+      throw new Error(`Pull failed: ${res.status} ${sanitizeRelayText(res.statusText)}`);
     }
     const body = (await res.json()) as { events: EventLogEntry[] };
     return body.events;
@@ -495,7 +496,7 @@ export class HttpEventStoreAdapter implements EventStoreAdapter, SeqPullSource {
       },
     );
     if (!res.ok) {
-      throw new Error(`Pull failed: ${res.status} ${res.statusText}`);
+      throw new Error(`Pull failed: ${res.status} ${sanitizeRelayText(res.statusText)}`);
     }
     const body = (await res.json()) as {
       events: Array<EventLogEntry & { seq?: unknown }>;
@@ -528,7 +529,7 @@ export class HttpEventStoreAdapter implements EventStoreAdapter, SeqPullSource {
     const url = `${this.baseUrl}/sync/${this.motebitId}/clock`;
     const res = await this.request(() => ({ url, init: { method: "GET" } }));
     if (!res.ok) {
-      throw new Error(`Clock failed: ${res.status} ${res.statusText}`);
+      throw new Error(`Clock failed: ${res.status} ${sanitizeRelayText(res.statusText)}`);
     }
     const body = (await res.json()) as { latest_clock: number };
     return body.latest_clock;

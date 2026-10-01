@@ -15,6 +15,7 @@ import { openInBrowser, safeExternalUrl } from "../open-external.js";
 import { loadFullConfig } from "../config.js";
 import { formatTimeAgo } from "../utils.js";
 import { fetchRelayJson, getRelayUrl, getRelayAuthHeaders, requireMotebitId } from "./_helpers.js";
+import { sanitizeRelayText } from "@motebit/sync-engine";
 
 export async function handleBalance(config: CliConfig): Promise<void> {
   const motebitId = requireMotebitId(loadFullConfig());
@@ -103,7 +104,7 @@ export async function handleWithdraw(config: CliConfig): Promise<void> {
     }
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
-    console.error(`Error: could not reach relay: ${msg}`);
+    console.error(`Error: could not reach relay: ${sanitizeRelayText(msg)}`);
     process.exit(1);
   }
 }
@@ -158,7 +159,7 @@ export async function handleFund(config: CliConfig): Promise<void> {
       if (body !== null && typeof body === "object" && "error" in body) {
         const e = body as { error: string; message?: string; stripe_code?: string | null };
         console.error(`Checkout failed (${res.status}): ${e.error}`);
-        if (e.message) console.error(`  ${e.message}`);
+        if (e.message) console.error(`  ${sanitizeRelayText(e.message)}`);
         if (e.error === "STRIPE_ACCOUNT_NOT_ACTIVATED") {
           console.error(
             "  → Complete the past-due task at https://dashboard.stripe.com/account/onboarding",
@@ -180,7 +181,7 @@ export async function handleFund(config: CliConfig): Promise<void> {
     checkoutUrl = parsed.href;
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
-    console.error(`Error: could not reach relay: ${msg}`);
+    console.error(`Error: could not reach relay: ${sanitizeRelayText(msg)}`);
     process.exit(1);
   }
 

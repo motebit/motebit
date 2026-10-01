@@ -35,6 +35,7 @@ import {
 } from "@motebit/voice";
 
 import { dim, warn } from "./colors.js";
+import { sanitizeRelayText } from "@motebit/sync-engine";
 
 // ---------------------------------------------------------------------------
 // ElevenLabs (CLI-native — writes MP3 to tmp and plays via system player)
@@ -386,7 +387,7 @@ export class VoiceController {
       return { spoke: true };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      console.warn(dim(`[voice] ${message}`));
+      console.warn(dim(`[voice] ${sanitizeRelayText(message)}`));
       const ret: { spoke: boolean; error?: string } = { spoke: false };
       ret.error = message;
       return ret;

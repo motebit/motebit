@@ -14,6 +14,7 @@ import type { CliConfig } from "../args.js";
 import { loadFullConfig } from "../config.js";
 import { getDbPath } from "../runtime-factory.js";
 import { getRelayAuthHeaders, requireMotebitId } from "./_helpers.js";
+import { sanitizeRelayText } from "@motebit/sync-engine";
 
 export async function handleCredentials(config: CliConfig): Promise<void> {
   const motebitId = requireMotebitId(loadFullConfig());
@@ -64,7 +65,7 @@ export async function handleCredentials(config: CliConfig): Promise<void> {
       res = await fetch(url, { method: "POST", headers });
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
-      console.error(`Error: failed to reach relay: ${msg}`);
+      console.error(`Error: failed to reach relay: ${sanitizeRelayText(msg)}`);
       process.exit(1);
     }
 

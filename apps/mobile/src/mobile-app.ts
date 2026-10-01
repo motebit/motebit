@@ -1099,6 +1099,13 @@ export class MobileApp {
       {
         motebitId: this.motebitId,
         tickRateHz: 2,
+        // #962: a persisted relay URL holds compaction at its acked push
+        // cursor, even when this launch's sync cycle never reaches connect.
+        // A read that fails counts as configured (the runtime fails closed).
+        syncConfigured: async () => {
+          const url = await this.getSyncUrl();
+          return url != null && url !== "";
+        },
         policy: policyConfig,
         taskRouter: PLANNING_TASK_ROUTER,
         signingKeys,

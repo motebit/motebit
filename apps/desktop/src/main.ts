@@ -63,6 +63,7 @@ import {
   mergeDiscoveredServers,
   type DiscoveryResult,
 } from "./mcp-discovery";
+import { startDesktopSync } from "./sync-startup.js";
 
 // === Core Objects ===
 
@@ -347,31 +348,17 @@ async function tryInitAI(config: DesktopAIConfig): Promise<boolean> {
 }
 
 /**
- * Attempt sync relay registration with error recovery UI.
+ * Attempt sync relay registration with error recovery UI (the sequence is
+ * `startDesktopSync`, #962).
  */
 async function trySyncRegistration(
   invoke: import("./tauri-storage.js").InvokeFn,
   syncUrl: string,
   masterToken: string,
 ): Promise<void> {
-  try {
-    const token = await app.registerWithRelay(invoke, syncUrl, masterToken);
-    // Start background sync polling after successful registration.
-    // Safe to call before AI init — startSync no-ops when runtime is absent.
-    // `token` is the device `sync` token registration returned; the master
-    // token is passed separately and only when configured, so serving calls
-    // never mistake the sync token for it (#827).
-    await app.startSync(invoke, syncUrl, token ?? masterToken, masterToken || undefined);
-  } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : String(err);
-    addActionMessage(`Sync relay connection failed: ${msg}`, [
-      {
-        label: "Retry",
-        primary: true,
-        onClick: () => {
-          void trySyncRegistration(invoke, syncUrl, masterToken);
-        },
-      },
+  await startDesktopSync(app, invoke, syncUrl, masterToken, (message, retry) => {
+    addActionMessage(message, [
+      { label: "Retry", primary: true, onClick: retry },
       {
         label: "Dismiss",
         onClick: () => {
@@ -379,7 +366,7 @@ async function trySyncRegistration(
         },
       },
     ]);
-  }
+  });
 }
 
 /**

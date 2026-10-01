@@ -137,6 +137,8 @@ import {
   loadColdStartOptIn,
   loadProviderConfig,
   loadSyncUrl,
+  saveSyncUrl,
+  isSyncUrlConfigured,
   DEFAULT_RELAY_URL,
   isAnnounced,
   markAnnounced,
@@ -439,6 +441,16 @@ export class UnbootedWebApp {
   private _wsTokenRefreshTimer: ReturnType<typeof setInterval> | null = null;
   private _wsUnsubOnEvent: (() => void) | null = null;
   private _wsUnsubOnCustom: (() => void) | null = null;
+  /**
+   * #962: the background retry of a device self-registration the relay has
+   * not accepted yet (see {@link startSync}). While it runs the relay cannot
+   * verify this device's tokens, so nothing is pushed and compaction holds:
+   * the sync status reads "error" until it is accepted.
+   */
+  private _registrationRetry: {
+    timer: ReturnType<typeof setTimeout> | null;
+    stopped: boolean;
+  } | null = null;
   private _serving = false;
   private _servingSyncUrl: string | null = null;
   private _activeTaskCount = 0;
@@ -724,6 +736,10 @@ export class UnbootedWebApp {
       {
         motebitId: this._motebitId,
         tickRateHz: 2,
+        // #962: a saved relay holds compaction at its acked push cursor, even
+        // before this page connects sync. Read at compaction time; storage
+        // that cannot be read counts as configured (fail closed).
+        syncConfigured: () => isSyncUrlConfigured(),
         policy: {
           operatorMode: false,
           maxRiskLevel: preset.maxRiskLevel,
@@ -3543,7 +3559,14 @@ export class UnbootedWebApp {
     };
   }
 
-  private setSyncStatus(status: WebSyncStatus): void {
+  private setSyncStatus(requested: WebSyncStatus): void {
+    // #962: a device the relay has not accepted cannot push — whatever the
+    // socket or engine report, the page shows the failure until it is.
+    const status: WebSyncStatus =
+      this._registrationRetry != null &&
+      (requested === "connecting" || requested === "connected" || requested === "syncing")
+        ? "error"
+        : requested;
     const changed = this._syncStatus !== status;
     this._syncStatus = status;
     // S4 — the roster is read (and, from the presenting tab, presented)
@@ -3609,8 +3632,102 @@ export class UnbootedWebApp {
     }
   }
 
+  /**
+   * One signed device self-registration with the relay (#962). True when the
+   * relay accepted it. Never throws; a refusal is logged — the sync status
+   * carries it to the page (see {@link retryRegistration}).
+   */
+  private async registerDeviceOnce(relayUrl: string, privateKey?: Uint8Array): Promise<boolean> {
+    let key = privateKey;
+    let owned = false;
+    if (key == null) {
+      const hex = await this.keyStore.loadPrivateKey().catch(() => null);
+      if (hex == null || hex === "") return false;
+      key = new Uint8Array(hex.length / 2);
+      for (let i = 0; i < hex.length; i += 2) key[i / 2] = parseInt(hex.slice(i, i + 2), 16);
+      owned = true;
+    }
+    try {
+      const reg = await registerDeviceWithRelay({
+        motebitId: this._motebitId,
+        deviceId: this._deviceId,
+        publicKey: this._publicKeyHex,
+        privateKey: key,
+        syncUrl: relayUrl,
+        deviceName: "web",
+      });
+      if (!reg.ok) {
+        // eslint-disable-next-line no-console -- the status says it failed; the log says why
+        console.warn("[motebit] device self-registration failed:", reg.code, reg.message);
+      }
+      return reg.ok;
+    } catch (err: unknown) {
+      // eslint-disable-next-line no-console -- the status says it failed; the log says why
+      console.warn(
+        "[motebit] device self-registration threw:",
+        err instanceof Error ? err.message : String(err),
+      );
+      return false;
+    } finally {
+      if (owned) secureErase(key);
+    }
+  }
+
+  /**
+   * Retry the device self-registration in the background until the relay
+   * accepts it (#962): 1s, doubling to 60s; unref'd timers; ended by
+   * `stopSync` or the next `startSync`. While it runs the sync status reads
+   * "error". Once accepted, a socket waiting out its reconnect backoff
+   * reconnects now — its token is verifiable from here on.
+   */
+  private retryRegistration(relayUrl: string): void {
+    this.stopRegistrationRetry();
+    const loop: { timer: ReturnType<typeof setTimeout> | null; stopped: boolean } = {
+      timer: null,
+      stopped: false,
+    };
+    this._registrationRetry = loop;
+    this.setSyncStatus("error");
+    let delay = 1_000;
+    const schedule = (): void => {
+      const t = setTimeout(() => {
+        loop.timer = null;
+        void (async () => {
+          if (loop.stopped) return;
+          const ok = await this.registerDeviceOnce(relayUrl);
+          if (loop.stopped) return;
+          if (!ok) {
+            delay = Math.min(delay * 2, 60_000);
+            schedule();
+            return;
+          }
+          this._registrationRetry = null;
+          const ws = this._wsAdapter;
+          if (ws != null && !ws.isConnected) ws.connect();
+          this.setSyncStatus("connecting");
+        })();
+      }, delay);
+      (t as { unref?: () => void }).unref?.();
+      loop.timer = t;
+    };
+    schedule();
+  }
+
+  private stopRegistrationRetry(): void {
+    const loop = this._registrationRetry;
+    if (loop == null) return;
+    loop.stopped = true;
+    if (loop.timer != null) clearTimeout(loop.timer);
+    this._registrationRetry = null;
+  }
+
   async startSync(relayUrl: string): Promise<void> {
     if (!this.runtime) throw new Error("Runtime not initialized");
+    // #962: the relay this page syncs with is saved BEFORE anything is
+    // pushed, whoever started sync (pairing did not save it). Compaction's
+    // `syncConfigured` reads the saved URL, so a reload never forgets a relay
+    // that may hold unacknowledged pushes.
+    if (relayUrl !== "") saveSyncUrl(relayUrl);
 
     this.setSyncStatus("connecting");
 
@@ -3633,32 +3750,13 @@ export class UnbootedWebApp {
     // page loads re-register, the relay short-circuits on matching public_key.
     // Spec: spec/device-self-registration-v1.md.
     //
-    // Failures here degrade honestly via setSyncStatus("error") + a console
-    // warning; the surface-determinism path's own `sync_not_enabled` /
-    // `auth_expired` codes will surface a user-facing remediation if the
-    // user later attempts a deterministic invocation.
-    try {
-      const reg = await registerDeviceWithRelay({
-        motebitId: this._motebitId,
-        deviceId: this._deviceId,
-        publicKey: this._publicKeyHex,
-        privateKey: privKeyBytes,
-        syncUrl: relayUrl,
-        deviceName: "web",
-      });
-      if (!reg.ok) {
-        // Log once — the user-visible failure surfaces through the chip-tap
-        // path's `sync_not_enabled` copy if/when they try to invoke.
-        // eslint-disable-next-line no-console -- honest-degrade diagnostic; user-facing remediation arrives via the deterministic-invocation path
-        console.warn("[motebit] device self-registration failed:", reg.code, reg.message);
-      }
-    } catch (err: unknown) {
-      // eslint-disable-next-line no-console -- honest-degrade diagnostic; user-facing remediation arrives via the deterministic-invocation path
-      console.warn(
-        "[motebit] device self-registration threw:",
-        err instanceof Error ? err.message : String(err),
-      );
-    }
+    // #962: the first attempt runs before the socket connects. One the relay
+    // does not accept (unreachable, refused) is retried in the background
+    // until it is — a one-shot attempt left a device whose relay was down at
+    // startup unknown to it for good: every push refused, compaction held
+    // forever, silently. Until accepted, the sync status reads "error".
+    this.stopRegistrationRetry();
+    const registered = await this.registerDeviceOnce(relayUrl, privKeyBytes);
 
     // First network action → announce to the intake ledger, silently. Enabling
     // sync is the motebit's first relay presence; that's the calm, consent-free
@@ -3955,6 +4053,7 @@ export class UnbootedWebApp {
     this._wsUnsubOnEvent = wsAdapter.onEvent(onInboundEvent);
 
     this.runtime.connectSync(encryptedWs);
+    if (!registered) this.retryRegistration(relayUrl);
     wsAdapter.connect();
 
     // Subscribe to SyncEngine status changes
@@ -4237,6 +4336,7 @@ export class UnbootedWebApp {
 
   stopSync(): void {
     this._serving = false;
+    this.stopRegistrationRetry();
     if (this._wsTokenRefreshTimer != null) {
       clearInterval(this._wsTokenRefreshTimer);
       this._wsTokenRefreshTimer = null;
