@@ -24,20 +24,38 @@
  * test under a directory the gate's own walker skipped). So nothing here is
  * inferred from script text or a flag list:
  *
- * 1. **What is a test file** is what vitest loads — vitest's own config
- *    loading and globbing (`scripts/lib/vitest-collect.mjs`), run with the
- *    exact arguments each `test` / `test:*` script passes to `vitest`
- *    (`-c`/`--config`/`--dir`/`--root` included, parsed by vitest's own
- *    `parseCLI`), plus EVERY file-valued entry of the resolved config: a key
- *    in `VITEST_TEST_CODE_KEYS` (setupFiles, globalSetup, environment,
- *    reporters, snapshotSerializers, …) is collected; a key in
- *    `VITEST_NON_CODE_KEYS` (the config file, coverage selection, watch
- *    triggers) is not; any other key with a file value fails ("unknown
- *    file-valued vitest key") — the list is enumerated from the resolved
- *    config object, never hand-picked. United with every git-listed file named
- *    `*.test.*` / `*.spec.*` or under a `__tests__/` directory (tracked, or
- *    untracked-and-not-ignored), declaration files included. No directory is
- *    skipped by name.
+ * 1. **What vitest runs is RECORDED, never predicted.** Rounds 4-6 each
+ *    found another way vitest runs a file a parse of scripts and configs
+ *    missed (an extensionless setupFiles entry, an env- or
+ *    npm_lifecycle_event-keyed config, `vitest bench`, a node wrapper calling
+ *    `startVitest`, code only a config imports). So every `test` / `test:*`
+ *    script, and every script whose command mentions vitest, is RUN for real
+ *    (`pnpm run <script>`) under a node preload
+ *    (`scripts/lib/vitest-recorder.cjs`) that injects a vite plugin
+ *    (`scripts/lib/vitest-record-plugin.mjs`) into every vite server vitest
+ *    creates, however vitest was started. The plugin makes the run
+ *    collection-only (vitest's own `collectTests`: globalSetup runs, setup and
+ *    test files are imported, no test body runs; isolate off, one worker) and
+ *    records every module vite transforms or resolves for vitest (test and
+ *    bench files, setupFiles, globalSetup, environment, reporters,
+ *    serializers, `vi.mock` targets and everything they import), the config
+ *    file's imports, and every CommonJS file a worker requires natively.
+ *    Every recorded repo file must be type-checked (step 5) unless it is
+ *    untracked build output (under a package's build outDir), the resolved
+ *    vitest config itself, or a `KNOWN_CONFIG_IMPORTS` entry. Deny by
+ *    default: a test script whose vitest the recorder never observed (unless
+ *    pinned in `NON_VITEST_TEST_SCRIPTS` by exact command + file hash), a
+ *    vitest the plugin never attached to, a collection that did not finish, a
+ *    file that threw while collecting, the native module runner or browser
+ *    mode — each fails. A package with a vitest config and no such script is
+ *    recorded under the default `vitest run`. The static prediction (vitest's
+ *    globbing + every file-valued entry of the resolved config, a key in
+ *    `VITEST_TEST_CODE_KEYS` collected, one in `VITEST_NON_CODE_KEYS` not, any
+ *    other failing as "unknown file-valued vitest key") runs inside each
+ *    recorded process as a CROSS-CHECK: a predicted file no recorded run
+ *    loaded fails. Test files = recorded specs ∪ the prediction ∪ every
+ *    git-listed file named `*.test.*` / `*.spec.*` or under `__tests__/`
+ *    (tracked, or untracked-and-not-ignored), declarations included.
  * 2. **Canary execution.** For every directory holding such a file, the gate
  *    writes a canary `__typecheck_canary_<rand>.test.<ext>` with a guaranteed
  *    type error (one per TS extension present there), runs the package's REAL
@@ -61,7 +79,9 @@
  *    over EVERY compilerOptions key either side prints — implied strict-family
  *    flags included. Only `DIFF_ALLOWED_KEYS` may differ.
  * 5. **Type-checked, asked of the compiler.** Every collected file must be a
- *    ROOT file of some recorded invocation's program AND type-checked there —
+ *    ROOT file of some recorded invocation's program AND type-checked there
+ *    (every other recorded file: IN that program — a root or imported by one —
+ *    and type-checked there) —
  *    decided by the TypeScript that invocation ran
  *    (`scripts/lib/tsc-checked-files.cjs` builds its Program): not a
  *    declaration file (`SourceFile.isDeclarationFile` — so `api.d.test.ts`,
@@ -76,32 +96,40 @@
  *    or a byte-exact canary of another live run (untracked only).
  * 6. **One run per worktree.** Concurrent runs serialise on a lock
  *    (`scripts/lib/repo-lock.ts`, `<git-dir>/check-tests-typechecked.lock`):
- *    a second run waits up to `LOCK_WAIT_MS` (below the 30s gate-test
- *    timeout; `CHECK_TESTS_TYPECHECKED_LOCK_WAIT_MS` overrides) and then fails
- *    naming the holder — another run's canary, globbed by this run's tsc and
- *    deleted before it is read, would stop the chain with TS6053.
+ *    a second run waits up to `LOCK_WAIT_MS` (10 min — a whole full run;
+ *    `CHECK_TESTS_TYPECHECKED_LOCK_WAIT_MS` overrides) and then fails naming
+ *    the holder — another run's canary, globbed by this run's tsc and deleted
+ *    before it is read, would stop the chain with TS6053. A dead holder is
+ *    reclaimed at once, a hung one or a reused pid once its token + heartbeat
+ *    stops changing.
  * 7. The `typecheck` script — and every package script it runs via
- *    `pnpm run` / `pnpm <x>` / `npm run` — may chain only with `&&`, and may
- *    not use `$` or backtick expansion (a chain that varies by environment).
+ *    `pnpm run <x>` / `pnpm <x>` — may chain only with `&&`, may not use `$`
+ *    or backtick expansion, and every step must be `tsc ...` or such a hop
+ *    (deny by default: an error-baseline wrapper like `node scripts/tc.mjs`
+ *    fails; `TYPECHECK_EXTRA_STEPS` allows an exact codegen step by package).
  *
  * Packages come from `pnpm-workspace.yaml`; a package with collected test
  * files and no `typecheck` script fails.
  *
  * ## Cost
  *
- * The canary pass is one full `typecheck` per package (more for a chain that
- * stops early), run `availableParallelism()` packages at a time
- * (`CHECK_TESTS_TYPECHECKED_CONCURRENCY` overrides). Measured 2026-09-30 on 4
- * cores: ~120-128s standalone for the full run (74 packages). CI's `check`
- * job runs it in full. The pre-push runs it DIFF-SCOPED
- * (`CHECK_TESTS_TYPECHECKED_SCOPE=changed`, or `--changed`): only packages
- * with a test / tsconfig / package.json / vitest-config / test-ish-path change
- * vs merge-base(origin/main, HEAD), committed or not. It fails CLOSED to the
- * full run when the merge-base or diff can't be computed, or when a shared
- * config outside every package (tsconfig.base.json, a vitest config, the
- * root package.json, pnpm-workspace.yaml, pnpm-lock.yaml, .npmrc) or the
- * gate's own code (this file and its five scripts/lib helpers) changed. The
- * aperture line names which it did; every trigger is pinned by a test.
+ * Per package: every test script run collection-only under the recorder,
+ * one record-only typecheck and one full canary `typecheck` (more for a chain
+ * that stops early), run `availableParallelism()` packages at a time, largest
+ * first (`CHECK_TESTS_TYPECHECKED_CONCURRENCY` overrides). Measured 2026-10-01
+ * on a 4-core container: ~370s for the full run (74 packages, 144 recorded
+ * test scripts) against ~205s for the round-5 gate on the same machine — the
+ * recording is ~40% of the CPU: each test script costs a pnpm start, a vitest
+ * boot and an import of every test file. CI's `check` job runs it in full.
+ * The pre-push runs it DIFF-SCOPED (`CHECK_TESTS_TYPECHECKED_SCOPE=changed`,
+ * or `--changed`): only packages with a non-documentation change vs
+ * merge-base(origin/main, HEAD), committed or not (vitest may load any file
+ * of a package). It fails CLOSED to the full run when the merge-base or diff
+ * can't be computed, or when a shared config outside every package
+ * (tsconfig.base.json, a vitest config, the root package.json,
+ * pnpm-workspace.yaml, pnpm-lock.yaml, .npmrc) or the gate's own code (this
+ * file and its seven scripts/lib helpers) changed. The aperture line names
+ * which it did; every trigger is pinned by a test.
  *
  * ## Usage
  *
@@ -110,7 +138,8 @@
  *   tsx scripts/check-tests-typechecked.ts --changed # diff-scoped (pre-push)
  *
  * Env: `CHECK_TESTS_TYPECHECKED_ROOT` (fixture workspace root, the harness),
- * `CHECK_TESTS_TYPECHECKED_ONLY` (comma list of package dirs — the
+ * `CHECK_TESTS_TYPECHECKED_VITEST_TIMEOUT_MS` (one recorded test script's
+ * limit, default 300000), `CHECK_TESTS_TYPECHECKED_ONLY` (comma list of package dirs — the
  * check-gates-effective probe; the aperture line says when it is set; wins
  * over the diff scope), `CHECK_TESTS_TYPECHECKED_SCOPE=changed` (diff scope,
  * above), `CHECK_TESTS_TYPECHECKED_BASE` (the diff's base ref, default
@@ -118,7 +147,7 @@
  */
 
 import { spawn, spawnSync } from "node:child_process";
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import {
   existsSync,
   mkdtempSync,
@@ -140,8 +169,8 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = process.env.CHECK_TESTS_TYPECHECKED_ROOT
   ? resolve(process.env.CHECK_TESTS_TYPECHECKED_ROOT)
   : resolve(__dirname, "..");
-const COLLECTOR = join(__dirname, "lib/vitest-collect.mjs");
 const RECORDER = join(__dirname, "lib/tsc-recorder.cjs");
+const VITEST_RECORDER = join(__dirname, "lib/vitest-recorder.cjs");
 const TSC_CHECKED = join(__dirname, "lib/tsc-checked-files.cjs");
 
 export const CANARY_PREFIX = "__typecheck_canary_";
@@ -182,7 +211,13 @@ const ARGV_FLAGS_BARE = new Set(["--noEmit", "--pretty"]);
 const WEB_E2E_REASON =
   "Playwright spec, run by the ci.yml e2e job (not vitest). apps/web/tsconfig.json has rootDir src and no e2e tsconfig exists; adding one is an apps/web config change outside the #1000 published-packages lane. Measured 2026-09-30: e2e/golden/golden.spec.ts has 1 error (`Buffer` without node types). Follow-up: give apps/web an e2e tsconfig compiled by its typecheck script, then delete these entries.";
 
+const AJV_STUB_REASON =
+  "CommonJS module stub for ajv-formats / ajv codegen (the ajv@6 vs ajv-formats@3 conflict): vitest.config.ts aliases ajv-formats to it and src/__tests__/__stubs__/patch-ajv.ts redirects Node's native require to it, so it must stay plain CommonJS that Node (engines >=20, no type stripping) can require; tsc checks no JavaScript in this package (no checkJs). Recorded by the vitest recorder 2026-10-01. Follow-up: drop the stub when the ajv pin moves to 8.";
+
 export const KNOWN_UNCOVERED: Readonly<Record<string, Readonly<Record<string, string>>>> = {
+  "packages/mcp-server": {
+    "src/__tests__/__stubs__/ajv-formats-stub.cjs": AJV_STUB_REASON,
+  },
   "apps/web": {
     "e2e/app-loads.spec.ts": WEB_E2E_REASON,
     "e2e/chat-input.spec.ts": WEB_E2E_REASON,
@@ -293,11 +328,31 @@ export function nonAndOperators(cmd: string): string[] {
 }
 
 /**
- * Every non-`&&` operator in `entry` and in each package script it runs by
- * name (`pnpm run x`, `pnpm x`, `npm run x`, `yarn x`). This is a deny rule on
- * the script text, not an inference of what the script compiles.
+ * Steps of a `typecheck` chain that are neither `tsc` nor `pnpm run <script>`,
+ * allowed per package by exact text with the reason. Deny by default: any
+ * other step (an error-baseline wrapper such as `node scripts/tc.mjs`, `npx`,
+ * a binary) fails — a wrapper can run tsc and filter its result.
  */
-export function chainViolations(scripts: Record<string, string>, entry = "typecheck"): string[] {
+export const TYPECHECK_EXTRA_STEPS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
+  "apps/docs": {
+    "fumadocs-mdx":
+      "codegen: writes the .source/ module tsc then type-checks (fumadocs' MDX collections); it runs no tsc and reports no type errors",
+  },
+};
+
+/**
+ * Every rule violation of the typecheck chain in `entry` and each package
+ * script it runs: non-`&&` operators, `$`/backtick expansion, and any step
+ * that is not `tsc ...` or `pnpm run <script>` / `pnpm <script>` (a script of
+ * this package, whose steps are held to the same rule) — unless `extraSteps`
+ * names that exact step. A deny rule on the script text, not an inference of
+ * what the script compiles (the recorder supplies that).
+ */
+export function chainViolations(
+  scripts: Record<string, string>,
+  entry = "typecheck",
+  extraSteps: Readonly<Record<string, string>> = {},
+): string[] {
   const out: string[] = [];
   const seen = new Set<string>();
   const visit = (name: string): void => {
@@ -309,15 +364,82 @@ export function chainViolations(scripts: Record<string, string>, entry = "typech
         `script "${name}" ("${cmd}") uses \`$\` or a backtick — parameter/command expansion lets the typecheck chain vary by environment; spell it out literally`,
       );
     }
-    for (const op of new Set(nonAndOperators(cmd))) {
+    const ops = new Set(nonAndOperators(cmd));
+    for (const op of ops) {
       out.push(
         `script "${name}" ("${cmd}") uses \`${op}\` — every step of the typecheck chain must run unconditionally; chain with \`&&\` only`,
       );
     }
-    for (const m of cmd.matchAll(/\b(?:pnpm|npm|yarn)\s+(?:run\s+)?([\w:.-]+)/g)) visit(m[1]!);
+    if (ops.size > 0) return;
+    for (const segment of shellSegments(cmd)) {
+      const step = segment.trim();
+      const words = shellWords(step);
+      if (words[0] === "tsc") continue;
+      const hop = words[0] === "pnpm" ? (words[1] === "run" ? words[2] : words[1]) : undefined;
+      const hopArity = words[1] === "run" ? 3 : 2;
+      if (hop !== undefined && scripts[hop] !== undefined && words.length === hopArity) {
+        visit(hop);
+        continue;
+      }
+      if (Object.hasOwn(extraSteps, step)) continue;
+      out.push(
+        `script "${name}" step "${step}" is neither \`tsc ...\` nor \`pnpm run <script>\` — deny by default: a wrapper can run tsc and filter its errors (an error baseline); run tsc directly, or, for a step that runs no tsc (codegen), allow its exact text in TYPECHECK_EXTRA_STEPS (scripts/check-tests-typechecked.ts) with the reason`,
+      );
+    }
   };
   visit(entry);
   return out;
+}
+
+/** `cmd` split at shell control operators outside quotes. */
+function shellSegments(cmd: string): string[] {
+  const out: string[] = [];
+  let cur = "";
+  let quote: string | null = null;
+  for (let i = 0; i < cmd.length; i++) {
+    const c = cmd[i]!;
+    if (quote) {
+      if (c === quote) quote = null;
+      cur += c;
+    } else if (c === '"' || c === "'") {
+      quote = c;
+      cur += c;
+    } else if (c === "&" || c === "|" || c === ";" || c === "\n") {
+      if (c === "&" && (cmd[i - 1] === ">" || cmd[i + 1] === ">")) {
+        cur += c;
+        continue;
+      }
+      out.push(cur);
+      cur = "";
+    } else {
+      cur += c;
+    }
+  }
+  out.push(cur);
+  return out.filter((x) => x.trim().length > 0);
+}
+
+/** Shell-style words of one segment (quotes removed; no expansion). */
+function shellWords(segment: string): string[] {
+  const words: string[] = [];
+  let cur: string | null = null;
+  let quote: string | null = null;
+  for (const c of segment) {
+    if (quote) {
+      if (c === quote) quote = null;
+      else cur += c;
+    } else if (c === '"' || c === "'") {
+      quote = c;
+      cur ??= "";
+    } else if (/\s/.test(c)) {
+      if (cur !== null) words.push(cur);
+      cur = null;
+    } else {
+      cur = (cur ?? "") + c;
+    }
+  }
+  if (cur !== null) words.push(cur);
+  return words;
 }
 
 // ── argv + options ───────────────────────────────────────────────────────────
@@ -465,142 +587,362 @@ export const VITEST_NON_CODE_KEYS: Readonly<Record<string, string>> = {
 };
 
 /**
- * The argument lists each package script passes to `vitest`: every script
- * named `test` / `test:*`, and every package script those reach through
- * `pnpm run x` / `pnpm x` / `npm run x`. A segment that invokes vitest with
- * `$`/backtick expansion cannot be resolved and is reported. With no vitest
- * invocation in any of them, the default (no arguments) is used.
+ * Package scripts that are not vitest, each pinned to its exact command (and
+ * the sha256 of every package file the command runs) with the reason. The
+ * gate does not run them (an e2e browser run, a two-relay smoke test); every
+ * OTHER `test` / `test:*` script, and every script whose command mentions
+ * vitest, is RUN under the vitest recorder, and one whose run starts no vitest
+ * the recorder observes fails (deny by default). An entry whose script is gone
+ * or whose command or pinned file changed fails as stale.
  */
-export function vitestArgvs(scripts: Record<string, string>): {
-  argvs: string[][];
-  problems: string[];
-} {
-  const argvs = new Map<string, string[]>();
-  const problems: string[] = [];
-  const seen = new Set<string>();
-  const visit = (name: string): void => {
-    if (seen.has(name) || scripts[name] === undefined) return;
-    seen.add(name);
-    const cmd = scripts[name]!;
-    for (const segment of shellSegments(cmd)) {
-      const words = shellWords(segment);
-      const at = words.findIndex((w) => /^vitest(?:\.m?js)?$/.test(basename(w)));
-      if (at < 0) continue;
-      if (/[$`]/.test(segment)) {
-        problems.push(
-          `script "${name}" runs vitest with \`$\`/backtick expansion ("${segment.trim()}") — the gate cannot resolve which config that vitest loads; spell its arguments out literally`,
-        );
-        continue;
-      }
-      const args = words.slice(at + 1);
-      argvs.set(JSON.stringify(args), args);
-    }
-    for (const m of cmd.matchAll(/\b(?:pnpm|npm|yarn)\s+(?:run\s+)?([\w:.-]+)/g)) visit(m[1]!);
-  };
-  for (const name of Object.keys(scripts).sort()) if (/^test(?::|$)/.test(name)) visit(name);
-  return { argvs: argvs.size > 0 ? [...argvs.values()] : [[]], problems };
-}
-
-/** `cmd` split at shell control operators outside quotes. */
-function shellSegments(cmd: string): string[] {
-  const out: string[] = [];
-  let cur = "";
-  let quote: string | null = null;
-  for (let i = 0; i < cmd.length; i++) {
-    const c = cmd[i]!;
-    if (quote) {
-      if (c === quote) quote = null;
-      cur += c;
-    } else if (c === '"' || c === "'") {
-      quote = c;
-      cur += c;
-    } else if (c === "&" || c === "|" || c === ";" || c === "\n") {
-      if (c === "&" && (cmd[i - 1] === ">" || cmd[i + 1] === ">")) {
-        cur += c;
-        continue;
-      }
-      out.push(cur);
-      cur = "";
-    } else {
-      cur += c;
-    }
-  }
-  out.push(cur);
-  return out.filter((x) => x.trim().length > 0);
-}
-
-/** Shell-style words of one segment (quotes removed; no expansion). */
-function shellWords(segment: string): string[] {
-  const words: string[] = [];
-  let cur: string | null = null;
-  let quote: string | null = null;
-  for (const c of segment) {
-    if (quote) {
-      if (c === quote) quote = null;
-      else cur += c;
-    } else if (c === '"' || c === "'") {
-      quote = c;
-      cur ??= "";
-    } else if (/\s/.test(c)) {
-      if (cur !== null) words.push(cur);
-      cur = null;
-    } else {
-      cur = (cur ?? "") + c;
-    }
-  }
-  if (cur !== null) words.push(cur);
-  return words;
-}
+export const NON_VITEST_TEST_SCRIPTS: Readonly<
+  Record<
+    string,
+    Readonly<
+      Record<string, { command: string; reason: string; files?: Readonly<Record<string, string>> }>
+    >
+  >
+> = {
+  "apps/web": {
+    "test:e2e": {
+      command: "playwright test",
+      reason:
+        "Playwright e2e (a browser run, the ci.yml e2e job), not vitest; its specs are git-listed test files covered by KNOWN_UNCOVERED",
+    },
+    "test:e2e:ui": {
+      command: "playwright test --ui",
+      reason: "the interactive Playwright UI over the same e2e specs; not vitest",
+    },
+  },
+  "apps/cli": {
+    "test:dogfood": {
+      command: "scripts/federation-dogfood.sh",
+      files: {
+        "scripts/federation-dogfood.sh":
+          "d84a8972ff2f9405c8c9ea1b30824960dfe11f4480b1b28566749fc2fba6886e",
+      },
+      reason:
+        "a bash smoke test that boots two real relays and drives the built CLI against them; it runs no vitest",
+    },
+  },
+};
 
 /**
- * What vitest loads for a package under one script's arguments: its test
- * files and every file-valued entry of the resolved config, absolute.
+ * Problems with a package's NON_VITEST_TEST_SCRIPTS entries: the script is
+ * gone, its command changed, or a pinned file's bytes changed (stale — the
+ * exemption was granted to exactly that command).
  */
-export async function vitestCollect(
+export function nonVitestProblems(
   pkgAbs: string,
-  args: readonly string[],
-  env: NodeJS.ProcessEnv,
-  repoRoot = ROOT,
-): Promise<{ files: string[]; fileValued: { key: string; file: string }[]; error?: string }> {
-  const dir = mkdtempSync(join(tmpdir(), "vitest-collect-"));
-  const out = join(dir, "out.json");
-  try {
-    const r = await runNode([COLLECTOR], {
-      cwd: pkgAbs,
-      env: {
-        ...env,
-        MOTEBIT_VITEST_RESOLVE_FALLBACK: resolve(__dirname, ".."),
-        MOTEBIT_VITEST_ARGV: JSON.stringify(args),
-        MOTEBIT_VITEST_COLLECT_OUT: out,
-        MOTEBIT_REPO_ROOT: repoRoot,
-      },
-    });
-    const label = `vitest ${args.join(" ")}`.trim();
-    if (r.status !== 0 || !existsSync(out)) {
-      return {
-        files: [],
-        fileValued: [],
-        error: `vitest collection (\`${label}\`) failed: ${(r.stderr || r.stdout).trim().slice(0, 400)}`,
-      };
+  scripts: Record<string, string>,
+  entries: Readonly<Record<string, { command: string; files?: Readonly<Record<string, string>> }>>,
+): string[] {
+  const out: string[] = [];
+  for (const [name, e] of Object.entries(entries)) {
+    if (scripts[name] !== e.command) {
+      out.push(
+        `stale NON_VITEST_TEST_SCRIPTS entry "${name}": the script is ${scripts[name] === undefined ? "gone" : `now "${scripts[name]}"`}, the entry pins "${e.command}" — the gate runs every test script under the vitest recorder unless pinned; delete or re-pin the entry (scripts/check-tests-typechecked.ts)`,
+      );
+      continue;
     }
-    const j = JSON.parse(readFileSync(out, "utf-8")) as {
-      files: string[];
-      fileValued: { key: string; file: string }[];
-    };
-    return { files: j.files.map((f) => resolve(f)), fileValued: j.fileValued };
-  } catch (err) {
-    return {
-      files: [],
-      fileValued: [],
-      error: `vitest collection printed no JSON: ${err instanceof Error ? err.message : String(err)}`,
-    };
-  } finally {
-    rmSync(dir, { recursive: true, force: true });
+    for (const [file, sha] of Object.entries(e.files ?? {})) {
+      const abs = join(pkgAbs, file);
+      const got = existsSync(abs)
+        ? createHash("sha256").update(readFileSync(abs)).digest("hex")
+        : "missing";
+      if (got !== sha) {
+        out.push(
+          `stale NON_VITEST_TEST_SCRIPTS entry "${name}": ${file} changed (sha256 ${got}, pinned ${sha}) — confirm it still runs no vitest, then re-pin the hash`,
+        );
+      }
+    }
+  }
+  return out;
+}
+
+/** The scripts the gate runs under the vitest recorder: `test`, `test:*`, any that mention vitest. */
+export function vitestScripts(
+  scripts: Record<string, string>,
+  exempt: Readonly<Record<string, unknown>> = {},
+): string[] {
+  return Object.keys(scripts)
+    .filter((n) => /^test(?::|$)/.test(n) || /\bvitest\b/.test(scripts[n]!))
+    .filter((n) => !Object.hasOwn(exempt, n))
+    .sort();
+}
+
+/** One JSONL line of scripts/lib/vitest-recorder.cjs / vitest-record-plugin.mjs. */
+export interface VitestRecord {
+  pid: number;
+  event: string;
+  id?: string;
+  configFile?: string | null;
+  deps?: string[];
+  argv?: string[];
+  why?: string[];
+  specs?: string[];
+  failed?: { file: string | null; error: string }[];
+  static?: { files: string[]; fileValued: { key: string; file: string }[] };
+}
+
+/** What one recorded script run says vitest loaded. */
+export interface VitestRecording {
+  /** Test files vitest collected (specs). */
+  specs: Set<string>;
+  /** Every repo code file vite transformed or resolved for vitest, or a config imported → how. */
+  loaded: Map<string, string>;
+  /** The config files vite resolved (exempt themselves; their imports are not). */
+  configFiles: Set<string>;
+  /** The static prediction over the same resolved configs (the cross-check). */
+  staticFiles: string[];
+  staticFileValued: { key: string; file: string }[];
+  problems: string[];
+}
+
+/** Ids vite loads as a string, never as code (`?raw`, `?url`, `?inline`). */
+const NON_CODE_QUERY = /[?&](?:raw|url|inline)(?:[&=]|$)/;
+/** Extensions of data a test imports (never type-checked as code). Every other extension counts. */
+const DATA_EXT =
+  /\.(?:json5?|css|scss|sass|less|html?|svg|png|jpe?g|gif|webp|avif|ico|txt|md|mdx|wasm|woff2?|ttf|otf|ya?ml|sql|csv|map|node)$/i;
+
+/** The absolute file a recorded id names, or null when it is not a repo code file. */
+export function recordedFile(id: string, repoRoot: string): string | null {
+  if (id.startsWith("\0") || NON_CODE_QUERY.test(id)) return null;
+  const file = id.replace(/[?#].*$/, "");
+  if (!file.startsWith("/") || file.split("/").includes("node_modules")) return null;
+  if (!file.startsWith(repoRoot + "/") || DATA_EXT.test(file)) return null;
+  try {
+    return statSync(file).isFile() ? file : null;
+  } catch {
+    return null;
   }
 }
 
-/** Per file: whether it is a root of the invocation's program, and why tsc skips it (null: checked). */
-type CheckedFiles = Record<string, { root: boolean; skip: string | null }>;
+/** How long one recorded script run may take (it is collection-only). */
+const VITEST_RUN_TIMEOUT_MS =
+  Number(process.env.CHECK_TESTS_TYPECHECKED_VITEST_TIMEOUT_MS) || 300_000;
+
+/**
+ * Read one script's recording. Deny by default: a run with no vitest the
+ * recorder saw, a vitest process the plugin never attached to or that ended
+ * before its collection finished, a mode whose modules bypass vite, a file
+ * vitest could not collect (what it would load is unknown) — each is a problem.
+ */
+export function readRecording(
+  script: string,
+  records: VitestRecord[],
+  run: { status: number | null; output: string; timedOut: boolean },
+  repoRoot: string,
+): VitestRecording {
+  const res: VitestRecording = {
+    specs: new Set(),
+    loaded: new Map(),
+    configFiles: new Set(),
+    staticFiles: [],
+    staticFileValued: [],
+    problems: [],
+  };
+  const tail = run.output.replace(ANSI, "").trim().split("\n").slice(-3).join(" | ").slice(0, 300);
+  if (run.timedOut) {
+    res.problems.push(
+      `script "${script}" did not finish under the vitest recorder within ${VITEST_RUN_TIMEOUT_MS}ms (the run is collection-only) — a watch mode or a hang; make it exit (\`vitest run\`), or raise CHECK_TESTS_TYPECHECKED_VITEST_TIMEOUT_MS`,
+    );
+  }
+  if (records.some((r) => r.event === "no-hooks")) {
+    res.problems.push(
+      `the vitest recorder cannot run: node ${process.version} has no module.registerHooks — use node >= 22.15`,
+    );
+  }
+  const pids = [...new Set(records.filter((r) => r.event === "vitest-loaded").map((r) => r.pid))];
+  if (pids.length === 0) {
+    res.problems.push(
+      `script "${script}" ran (exit ${run.status}) but started no vitest the recorder observed${tail ? ` (output: ${tail})` : ""} — deny by default: the gate records what vitest loads by running each test script, so a script that hides its vitest (an env that drops NODE_OPTIONS, a non-node runner) cannot be checked. Run vitest from the script (directly, through \`pnpm run\` hops or a node wrapper); if the script is not vitest at all, pin it in NON_VITEST_TEST_SCRIPTS (scripts/check-tests-typechecked.ts) with the reason`,
+    );
+  }
+  const add = (id: string, how: string): void => {
+    const f = recordedFile(id, repoRoot);
+    if (f && (!res.loaded.has(f) || res.loaded.get(f) === CONFIG_IMPORT_HOW))
+      res.loaded.set(f, how);
+  };
+  for (const pid of pids) {
+    const mine = records.filter((r) => r.pid === pid);
+    const argv = mine.find((r) => r.event === "vitest-loaded")?.argv ?? [];
+    const label = `script "${script}" (vitest pid ${pid}: ${[basename(argv[0] ?? "node"), ...argv.slice(1)].join(" ")})`;
+    if (!mine.some((r) => r.event === "vitest")) {
+      res.problems.push(
+        `${label}: vitest loaded but the recording plugin never attached to it — the recorder was bypassed, so what it loads is unknown`,
+      );
+      continue;
+    }
+    for (const r of mine.filter((x) => x.event === "unsupported")) {
+      res.problems.push(
+        `${label}: ${(r.why ?? []).join("; ")} — the recorder sees only modules vite serves; run these tests through vite's module runner`,
+      );
+    }
+    const collected = mine.filter((r) => r.event === "collected");
+    if (collected.length === 0) {
+      res.problems.push(
+        `${label}: vitest exited (exit ${run.status}) before its collection finished${tail ? ` (output: ${tail})` : ""} — what it loads is unknown; make \`vitest list\` succeed for this package`,
+      );
+    }
+    for (const c of collected) {
+      for (const f of c.specs ?? []) res.specs.add(f);
+      // A file whose collection threw: what it would have imported after the
+      // throw is unknown. (A run-level unhandled error — e.g. a worker rpc
+      // closing during teardown — stops no import; it is not counted.)
+      // "No test suite found" means the file imported to the end — nothing hidden.
+      const threw = (c.failed ?? []).filter(
+        (x) => x.file !== null && !x.error.startsWith("No test suite found"),
+      );
+      for (const f of threw) {
+        res.problems.push(
+          `${label}: vitest could not collect ${relative(repoRoot, f.file!)} (${f.error}) — an import that throws hides what would load after it; fix it so the file collects`,
+        );
+      }
+      res.staticFiles.push(...(c.static?.files ?? []));
+      res.staticFileValued.push(...(c.static?.fileValued ?? []));
+    }
+    for (const r of mine) {
+      if (r.event === "module" && r.id) add(r.id, "transformed by vite for vitest");
+      else if (r.event === "resolved" && r.id) add(r.id, "resolved by vite for vitest");
+      else if (r.event === "config") {
+        if (r.configFile) res.configFiles.add(r.configFile);
+        for (const d of r.deps ?? []) {
+          const f = recordedFile(d, repoRoot);
+          if (f && d !== r.configFile && !res.loaded.has(f)) res.loaded.set(f, CONFIG_IMPORT_HOW);
+        }
+      }
+    }
+  }
+  for (const r of records) {
+    if (r.event === "native" && r.id) add(r.id, "required natively in a vitest worker");
+  }
+  for (const f of res.specs) res.loaded.set(f, "a test file vitest collected");
+  return res;
+}
+
+/** How a file only the vitest config imports is recorded. */
+const CONFIG_IMPORT_HOW = "imported by the vitest config";
+
+/**
+ * Repo-relative files that vitest configs import and no typecheck covers, each
+ * with the reason — exempt ONLY while nothing but a config imports them (a
+ * test importing one makes it test code). Exact paths; a full run fails on a
+ * stale entry. A package's own resolved config file is exempt by rule (vite
+ * evaluates it in its config-loading phase, bundled by esbuild); every OTHER
+ * import of a config must be type-checked.
+ */
+export const KNOWN_CONFIG_IMPORTS: Readonly<Record<string, string>> = {
+  "vitest.shared.ts":
+    "the repo-root vitest config factory every package config imports (defineMotebitTest); it is outside every package, and no root typecheck exists yet. Follow-up: type-check the vitest configs and this factory (a root tsconfig for configs), then delete this entry and the config-file rule",
+};
+
+/** The build's outDir (absolute), from `tsc --showConfig` of tsconfig.json, or null. */
+function outDirOf(shown: ShownConfig | undefined, pkgAbs: string): string | null {
+  const o = shown?.compilerOptions.outDir;
+  return typeof o === "string" ? resolve(pkgAbs, o) : null;
+}
+
+const foreignOutDirs = new Map<string, string | null>();
+/** Another workspace package's build outDir (cached), or null. */
+function foreignOutDir(tscBin: string, pkgAbs: string): string | null {
+  if (!foreignOutDirs.has(pkgAbs)) {
+    let out: string | null = null;
+    if (existsSync(join(pkgAbs, "tsconfig.json"))) {
+      try {
+        out = outDirOf(showConfig(tscBin, pkgAbs, []), pkgAbs);
+      } catch {
+        out = null;
+      }
+    }
+    foreignOutDirs.set(pkgAbs, out);
+  }
+  return foreignOutDirs.get(pkgAbs)!;
+}
+
+const trackedCache = new Map<string, Set<string>>();
+/** Every git-tracked file under `root`, absolute (cached per root). */
+function trackedFiles(root: string): Set<string> {
+  if (!trackedCache.has(root)) trackedCache.set(root, new Set(gitList(root, ["--cached"]).files));
+  return trackedCache.get(root)!;
+}
+
+const workspaceCache = new Map<string, string[]>();
+/** The deepest workspace package dir containing `abs`, or null. */
+function ownerPackage(root: string, abs: string): string | null {
+  if (!workspaceCache.has(root)) workspaceCache.set(root, workspacePackageDirs(root));
+  return (
+    workspaceCache
+      .get(root)!
+      .filter((d) => abs.startsWith(d + "/"))
+      .sort((a, b) => b.length - a.length)[0] ?? null
+  );
+}
+
+/** A vitest config vitest would find with no `-c` (a package with one but no test script). */
+const DEFAULT_VITEST_CONFIG = /^vite(?:st)?\.config\.(?:[cm]?[jt]s)$/;
+
+/**
+ * Run one package script for real (`pnpm run <name>`) under the vitest
+ * recorder — or, with `name` null, the default `pnpm exec vitest run` (a
+ * package that has a vitest config but no script running vitest).
+ */
+export function recordVitestScript(
+  pkgAbs: string,
+  name: string | null,
+  env: NodeJS.ProcessEnv,
+  repoRoot = ROOT,
+): Promise<VitestRecording> {
+  const dir = mkdtempSync(join(tmpdir(), "vitest-record-"));
+  const record = join(dir, "record.jsonl");
+  const nodeOptions = [env.NODE_OPTIONS, `--require ${JSON.stringify(VITEST_RECORDER)}`]
+    .filter(Boolean)
+    .join(" ");
+  const childEnv: NodeJS.ProcessEnv = {
+    ...env,
+    NODE_OPTIONS: nodeOptions,
+    MOTEBIT_VITEST_RECORD: record,
+    MOTEBIT_REPO_ROOT: repoRoot,
+    FORCE_COLOR: "0",
+  };
+  delete childEnv.MOTEBIT_VITEST_INSIDE;
+  return new Promise((done) => {
+    const child = spawn("pnpm", name === null ? ["exec", "vitest", "run"] : ["run", name], {
+      cwd: pkgAbs,
+      env: childEnv,
+      stdio: ["ignore", "pipe", "pipe"],
+      detached: true,
+    });
+    let output = "";
+    let timedOut = false;
+    const timer = setTimeout(() => {
+      timedOut = true;
+      try {
+        process.kill(-child.pid!, "SIGKILL");
+      } catch {
+        /* already gone */
+      }
+    }, VITEST_RUN_TIMEOUT_MS);
+    child.stdout.on("data", (d: Buffer) => (output += d.toString()));
+    child.stderr.on("data", (d: Buffer) => (output += d.toString()));
+    child.on("close", (status) => {
+      clearTimeout(timer);
+      let records: VitestRecord[] = [];
+      if (existsSync(record)) {
+        records = readFileSync(record, "utf-8")
+          .split("\n")
+          .filter(Boolean)
+          .map((l) => JSON.parse(l) as VitestRecord);
+      }
+      rmSync(dir, { recursive: true, force: true });
+      const label = name ?? "(none: default `vitest run`)";
+      done(readRecording(label, records, { status, output, timedOut }, repoRoot));
+    });
+  });
+}
+
+/** Per file: whether it is a root of / in the invocation's program, and why tsc skips it (null: checked). */
+type CheckedFiles = Record<string, { root: boolean; inProgram: boolean; skip: string | null }>;
 
 /**
  * Ask the TypeScript that ran the recorded invocation (the `typescript.js`
@@ -889,12 +1231,27 @@ export interface PackageResult {
   invocations: number;
   keysCompared: number;
   allowlisted: string[];
+  /** Test scripts run under the vitest recorder. */
+  scriptsRecorded: number;
+  /** Distinct repo files the recorder saw vitest load as code. */
+  recordedFiles: number;
+  /** Vitest config files the recorder saw resolved (exempt by rule; their imports are not). */
+  configFiles: number;
+  /** KNOWN_CONFIG_IMPORTS entries this package's configs import. */
+  configImportsSeen: string[];
+  /** Recorded files that are untracked build output (a build outDir). */
+  buildOutput: number;
   problems: string[];
 }
 
 export async function checkPackage(
   pkgAbs: string,
-  opts: { root?: string; known?: typeof KNOWN_UNCOVERED; env?: NodeJS.ProcessEnv } = {},
+  opts: {
+    root?: string;
+    known?: typeof KNOWN_UNCOVERED;
+    nonVitest?: typeof NON_VITEST_TEST_SCRIPTS;
+    env?: NodeJS.ProcessEnv;
+  } = {},
 ): Promise<PackageResult | null> {
   const root = opts.root ?? ROOT;
   const known = opts.known ?? KNOWN_UNCOVERED;
@@ -916,27 +1273,66 @@ export async function checkPackage(
     invocations: 0,
     keysCompared: 0,
     allowlisted: [],
+    scriptsRecorded: 0,
+    recordedFiles: 0,
+    configFiles: 0,
+    configImportsSeen: [],
+    buildOutput: 0,
     problems: [],
   };
   const rel = (abs: string): string => relative(pkgAbs, abs).split("\\").join("/");
 
-  // 1. Collection.
+  // 1. Collection: RECORDED by running every test script for real under
+  // the vitest recorder, united with the static prediction (cross-check) and
+  // every git-listed test-named file.
   const collected = new Set<string>();
   const vitestFiles: string[] = [];
-  const va = vitestArgvs(scripts);
-  res.problems.push(...va.problems);
-  for (const args of va.argvs) {
-    const v = await vitestCollect(pkgAbs, args, env, root);
-    if (v.error) res.problems.push(v.error);
-    vitestFiles.push(...v.files);
-    for (const { key, file } of v.fileValued) {
-      if (VITEST_TEST_CODE_KEYS.has(key)) vitestFiles.push(file);
-      else if (!Object.hasOwn(VITEST_NON_CODE_KEYS, key)) {
+  const recorded = new Map<string, { how: string; script: string }>();
+  const configFiles = new Set<string>();
+  const predicted = new Map<string, string>();
+  const exemptScripts = (opts.nonVitest ?? NON_VITEST_TEST_SCRIPTS)[dir] ?? {};
+  res.problems.push(...nonVitestProblems(pkgAbs, scripts, exemptScripts));
+  const toRecord: (string | null)[] = vitestScripts(scripts, exemptScripts);
+  // No script runs vitest but vitest would find a config here: record the
+  // default `vitest run` (what `npx vitest` in the package would load).
+  if (toRecord.length === 0 && readdirSync(pkgAbs).some((f) => DEFAULT_VITEST_CONFIG.test(f))) {
+    toRecord.push(null);
+  }
+  for (const script of toRecord) {
+    const name = script ?? "(none: default `vitest run`)";
+    const rec = await recordVitestScript(pkgAbs, script, env, root);
+    res.scriptsRecorded++;
+    res.problems.push(...rec.problems);
+    vitestFiles.push(...rec.specs);
+    for (const [f, how] of rec.loaded) {
+      const had = recorded.get(f);
+      if (!had || (had.how === CONFIG_IMPORT_HOW && how !== CONFIG_IMPORT_HOW)) {
+        recorded.set(f, { how, script: name });
+      }
+    }
+    for (const f of rec.configFiles) configFiles.add(f);
+    for (const f of rec.staticFiles)
+      predicted.set(f, `a test file vitest's globs match (script "${name}")`);
+    for (const { key, file } of rec.staticFileValued) {
+      if (VITEST_TEST_CODE_KEYS.has(key)) {
+        vitestFiles.push(file);
+        predicted.set(
+          file,
+          `the value of \`${key}\` in the resolved vitest config (script "${name}")`,
+        );
+      } else if (!Object.hasOwn(VITEST_NON_CODE_KEYS, key)) {
         res.problems.push(
-          `${relative(root, file).split("\\").join("/")} is the value of \`${key}\` in the resolved vitest config${args.length > 0 ? ` (\`vitest ${args.join(" ")}\`)` : ""} — an unknown file-valued vitest key: the gate cannot tell whether vitest runs that file as test code. Classify the key in scripts/check-tests-typechecked.ts: VITEST_TEST_CODE_KEYS if vitest loads it (it is then canaried and membership-checked like a test), VITEST_NON_CODE_KEYS with the reason if it never does`,
+          `${relative(root, file).split("\\").join("/")} is the value of \`${key}\` in the resolved vitest config (script "${name}") — an unknown file-valued vitest key: the gate cannot tell whether vitest runs that file as test code. Classify the key in scripts/check-tests-typechecked.ts: VITEST_TEST_CODE_KEYS if vitest loads it (it is then canaried and membership-checked like a test), VITEST_NON_CODE_KEYS with the reason if it never does`,
         );
       }
     }
+  }
+  // Cross-check: what the static prediction says vitest runs, the recorder must have seen load.
+  for (const [f, why] of predicted) {
+    if (recorded.has(f) || isExemptCanary(f, new Set())) continue;
+    res.problems.push(
+      `${relative(root, f).split("\\").join("/")} is ${why}, but no recorded vitest run of this package loaded it — the static prediction and the recording disagree; the gate trusts neither alone. Make the script that should run it run it, or remove it from the config`,
+    );
   }
   const g = gitTestFiles(pkgAbs);
   if (g.error) res.problems.push(g.error);
@@ -975,7 +1371,7 @@ export async function checkPackage(
   const tsFiles = files.filter((f) => TS_SOURCE.test(f));
 
   // 2. Chain operators.
-  res.problems.push(...chainViolations(scripts));
+  res.problems.push(...chainViolations(scripts, "typecheck", TYPECHECK_EXTRA_STEPS[dir] ?? {}));
 
   // 3. Record the whole chain without compiling.
   const dry = await runTypecheck(pkgAbs, env, true);
@@ -1042,8 +1438,43 @@ export async function checkPackage(
       res.problems.push(err instanceof Error ? err.message : String(err));
     }
   }
+  // Every recorded file vitest loads as code, beyond the collected test
+  // files: in the package it must be type-checked (below) unless it is the
+  // vitest config itself or untracked build output; outside the package it
+  // fails unless it is another package's untracked build output or an
+  // allowlisted config import.
+  const mustCheck = new Map<string, string>();
+  const ownOut = outDirOf(reference, pkgAbs);
+  const tracked = trackedFiles(root);
+  for (const [f, { how: kind, script }] of recorded) {
+    const how = `${kind}, script "${script}"`;
+    if (collected.has(f) || isExemptCanary(f, g.tracked)) continue;
+    if (configFiles.has(f)) continue;
+    if (f.startsWith(pkgAbs + "/")) {
+      if (ownOut && f.startsWith(ownOut + "/") && !tracked.has(f)) res.buildOutput++;
+      else mustCheck.set(f, how);
+      continue;
+    }
+    const relRoot = relative(root, f).split("\\").join("/");
+    if (kind === CONFIG_IMPORT_HOW && Object.hasOwn(KNOWN_CONFIG_IMPORTS, relRoot)) {
+      res.configImportsSeen.push(relRoot);
+      continue;
+    }
+    const owner = ownerPackage(root, f);
+    const theirOut = owner && tscFallback ? foreignOutDir(tscFallback, owner) : null;
+    if (theirOut && f.startsWith(theirOut + "/") && !tracked.has(f)) {
+      res.buildOutput++;
+      continue;
+    }
+    res.problems.push(
+      `${relRoot} is loaded as code by this package's vitest (recorded: ${how}) but is outside the package (${dir}/) and is not another package's build output — no check here proves a typecheck covers it; keep test code (setup, harness, config imports) inside the package that runs it`,
+    );
+  }
+  res.recordedFiles = recorded.size;
+  res.configFiles = configFiles.size;
   // Per collected file: some tsc checks it, or why the ones rooting it skip it.
   const verdicts = new Map<string, { checked: boolean; skips: string[] }>();
+  const loadedVerdicts = new Map<string, { checked: boolean; skips: string[] }>();
   for (const inv of invocations.values()) {
     const label = `tsc ${inv.argv.join(" ")}`.trim();
     const bad = argvViolations(inv.argv);
@@ -1062,9 +1493,9 @@ export async function checkPackage(
     }
     const roots = new Set(shown.files);
     const mine = files.filter((f) => roots.has(f));
-    if (mine.length > 0) {
+    if (mine.length > 0 || mustCheck.size > 0) {
       try {
-        const answer = await tscChecked(inv, mine, env);
+        const answer = await tscChecked(inv, [...new Set([...mine, ...mustCheck.keys()])], env);
         for (const f of mine) {
           const a = answer[f];
           if (!a?.root) continue;
@@ -1072,6 +1503,16 @@ export async function checkPackage(
           if (a.skip === null) v.checked = true;
           else v.skips.push(`${a.skip} (\`${label}\`)`);
           verdicts.set(f, v);
+        }
+        // A recorded module need not be a root: tsc checks every source file
+        // in its program, roots and what they import alike.
+        for (const f of mustCheck.keys()) {
+          const a = answer[f];
+          if (!a?.inProgram) continue;
+          const v = loadedVerdicts.get(f) ?? { checked: false, skips: [] };
+          if (a.skip === null) v.checked = true;
+          else v.skips.push(`${a.skip} (\`${label}\`)`);
+          loadedVerdicts.set(f, v);
         }
       } catch (err) {
         res.problems.push(err instanceof Error ? err.message : String(err));
@@ -1097,6 +1538,17 @@ export async function checkPackage(
         `${rel(f)} is not a root file of any tsc the typecheck script runs (tsc --showConfig files)${TS_SOURCE.test(f) ? "" : " — a JavaScript test file; tsc never checks it: write it in TypeScript"}`,
       );
   }
+  for (const [f, how] of mustCheck) {
+    const v = loadedVerdicts.get(f);
+    if (v?.checked) continue;
+    if (isKnown(f)) {
+      res.allowlisted.push(rel(f));
+      continue;
+    }
+    res.problems.push(
+      `${rel(f)} is loaded as code by vitest (recorded: ${how}) but ${v && v.skips.length > 0 ? `the tsc that has it in its program skips it: ${v.skips.join("; ")}` : "it is in the program of no tsc the typecheck script runs"} — include it in the package's test tsconfig (\`include\`), or stop vitest loading it`,
+    );
+  }
   for (const k of Object.keys(knownHere)) {
     if (!res.allowlisted.includes(k)) {
       res.problems.push(
@@ -1119,6 +1571,8 @@ const GLOBAL_TRIGGER_NAME =
 const GLOBAL_TRIGGER_PATHS = new Set([
   "scripts/check-tests-typechecked.ts",
   "scripts/lib/vitest-collect.mjs",
+  "scripts/lib/vitest-recorder.cjs",
+  "scripts/lib/vitest-record-plugin.mjs",
   "scripts/lib/tsc-recorder.cjs",
   "scripts/lib/tsc-checked-files.cjs",
   "scripts/lib/repo-lock.ts",
@@ -1126,16 +1580,12 @@ const GLOBAL_TRIGGER_PATHS = new Set([
 
 /**
  * Whether a changed package-relative path can change that package's result:
- * a test file (or a canary-prefixed name), a tsconfig / vitest / vite config
- * or package.json, or anything under a test-ish path segment (a setup or
- * fixture module a `setupFiles` entry may name).
+ * every change but documentation. vitest can load ANY file of the package (a
+ * harness module a setup file imports, a source file a test imports), and a
+ * changed source can import a new, unchecked one.
  */
 export function affectsPackage(relPath: string): boolean {
-  const posix = relPath.split("\\").join("/");
-  const name = basename(posix);
-  if (isTestFile(posix) || name.startsWith(CANARY_PREFIX)) return true;
-  if (/tsconfig|vitest|vite\.config/.test(name) || name === "package.json") return true;
-  return posix.split("/").some((seg) => /test|spec|setup|fixture|mock|e2e/i.test(seg));
+  return !/\.mdx?$/i.test(relPath);
 }
 
 export type Scope =
@@ -1195,11 +1645,13 @@ async function pool<T, R>(items: T[], n: number, fn: (t: T) => Promise<R>): Prom
 
 /**
  * How long a run waits for a concurrent run of this gate on the same worktree
- * before giving up (RED, naming the holder). Kept below the repo's 30s test
- * timeout (`test:gates`) so a harness run that waits fails with this message,
- * not a timeout. `CHECK_TESTS_TYPECHECKED_LOCK_WAIT_MS` overrides.
+ * before giving up (RED, naming the holder): long enough to cover a whole full
+ * run (~3-5 min), so two honest concurrent runs both pass — the second just
+ * waits. A dead or hung holder is reclaimed by heartbeat well before this
+ * (scripts/lib/repo-lock.ts). `CHECK_TESTS_TYPECHECKED_LOCK_WAIT_MS` overrides
+ * (the gate's harness sets a short wait where it tests the timeout itself).
  */
-const LOCK_WAIT_MS = 25_000;
+const LOCK_WAIT_MS = 10 * 60 * 1000;
 
 async function main(): Promise<void> {
   const started = Date.now();
@@ -1239,7 +1691,7 @@ async function main(): Promise<void> {
       release = await acquireRepoLock(lockPath(ROOT, "check-tests-typechecked"), { budgetMs });
     } catch (err) {
       process.stderr.write(
-        `✗ check-tests-typechecked: another run of this gate is using this worktree — ${err instanceof Error ? err.message : String(err)}.\n  Its canaries would corrupt this run's tsc (TS6053), so this run did not start. Fix: let that run finish and re-run, or raise CHECK_TESTS_TYPECHECKED_LOCK_WAIT_MS (default ${LOCK_WAIT_MS}). A dead holder's lock is reclaimed automatically.\n`,
+        `✗ check-tests-typechecked: another run of this gate is using this worktree — ${err instanceof Error ? err.message : String(err)}.\n  Its canaries would corrupt this run's tsc (TS6053), so this run did not start. Fix: let that run finish and re-run, or raise CHECK_TESTS_TYPECHECKED_LOCK_WAIT_MS (default ${LOCK_WAIT_MS}). A dead or hung holder's lock is reclaimed automatically (its heartbeat stops).\n`,
       );
       process.exit(1);
     }
@@ -1250,9 +1702,19 @@ async function main(): Promise<void> {
     if (drained.length > 0) {
       process.stderr.write(`drained ${drained.length} stale canary file(s)\n`);
     }
-    results = (await pool(dirs, concurrency, (d) => checkPackage(d))).filter(
-      (r): r is PackageResult => r !== null && r.scanned,
+    // Largest packages first (tracked-file count as the cost proxy): the
+    // pool then packs short jobs into the tail instead of ending on one long
+    // one. Results keep workspace order.
+    const tracked = trackedFiles(ROOT);
+    const size = new Map(
+      dirs.map((d) => [d, [...tracked].filter((f) => f.startsWith(d + "/")).length]),
     );
+    const order = [...dirs].sort((a, b) => size.get(b)! - size.get(a)!);
+    const byDir = new Map<string, PackageResult | null>();
+    await pool(order, concurrency, async (d) => byDir.set(d, await checkPackage(d)));
+    results = dirs
+      .map((d) => byDir.get(d) ?? null)
+      .filter((r): r is PackageResult => r !== null && r.scanned);
   } finally {
     release();
   }
@@ -1275,7 +1737,22 @@ async function main(): Promise<void> {
   }
 
   const sum = (f: (r: PackageResult) => number): number => results.reduce((n, r) => n + f(r), 0);
-  const aperture = `${results.length} package(s) scanned${scopeNote}; ${sum((r) => r.testFiles)} collected test file(s) (vitest collection under each test script's arguments + every file-valued config entry vitest runs + git-listed test-named files); ${sum((r) => r.canaryDirs)} canary director(ies) run through each package's real typecheck; every collected file asked of the recorded tsc's own Program (root + not skipped); ${sum((r) => r.invocations)} recorded tsc invocation(s) diffed against tsconfig.json over ${sum((r) => r.keysCompared)} compilerOptions key comparison(s) (only ${DIFF_ALLOWED_KEYS.size} emit/layout keys may differ); ${sum((r) => r.allowlisted.length)} file(s) allowlisted in KNOWN_UNCOVERED; ${Math.round((Date.now() - started) / 1000)}s`;
+  // A full run (no scope) must see every allowlisted config import used.
+  if (only.length === 0 && !scopeNote.includes("DIFF-SCOPED")) {
+    const seen = new Set(results.flatMap((r) => r.configImportsSeen));
+    for (const k of Object.keys(KNOWN_CONFIG_IMPORTS)) {
+      if (!seen.has(k)) {
+        results.push({
+          ...(results[0] ?? { dir: ".", name: ".", scanned: true }),
+          dir: ".",
+          problems: [
+            `stale KNOWN_CONFIG_IMPORTS entry "${k}" — no recorded vitest config imports it any more; delete it from scripts/check-tests-typechecked.ts`,
+          ],
+        } as PackageResult);
+      }
+    }
+  }
+  const aperture = `${results.length} package(s) scanned${scopeNote}; ${sum((r) => r.scriptsRecorded)} test script(s) RUN under the vitest recorder (collection-only), which saw vitest load ${sum((r) => r.recordedFiles)} repo file(s) as code (${sum((r) => r.buildOutput)} untracked build output and ${sum((r) => r.configImportsSeen.length)} KNOWN_CONFIG_IMPORTS use(s) exempt, ${sum((r) => r.configFiles)} vitest config file(s) exempt by rule; every other one must be type-checked) and cross-checked the static prediction; ${sum((r) => r.testFiles)} collected test file(s) (recorded specs + static prediction + git-listed test-named files); ${sum((r) => r.canaryDirs)} canary director(ies) run through each package's real typecheck; every collected file asked of the recorded tsc's own Program (root + not skipped), every other recorded file too (in the program + not skipped); ${sum((r) => r.invocations)} recorded tsc invocation(s) diffed against tsconfig.json over ${sum((r) => r.keysCompared)} compilerOptions key comparison(s) (only ${DIFF_ALLOWED_KEYS.size} emit/layout keys may differ); ${sum((r) => r.allowlisted.length)} file(s) allowlisted in KNOWN_UNCOVERED; ${Math.round((Date.now() - started) / 1000)}s`;
   const failing = results.filter((r) => r.problems.length > 0);
   if (failing.length === 0) {
     process.stdout.write(`✓ check-tests-typechecked: ${aperture}.\n`);

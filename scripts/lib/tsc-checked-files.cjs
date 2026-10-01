@@ -7,8 +7,10 @@
  * recorded `tsc`, the recorded argv (allowlisted: -p/--project, -b/--build,
  * --noEmit, --pretty) and the absolute paths to ask about. It builds that
  * invocation's own Program (config parse + createProgram, no type-check) and
- * prints `{ roots, results: { [file]: { root, skip } } }`: `root` = the file
- * is one of the program's root files; `skip` = null when tsc type-checks it,
+ * prints `{ roots, results: { [file]: { root, inProgram, skip } } }`: `root` =
+ * the file is one of the program's root files; `inProgram` = it is in the
+ * program at all (a root, or reached by an import); `skip` = null when tsc
+ * type-checks it,
  * else the reason it does not, read from the compiler itself:
  *
  * - a declaration file (`SourceFile.isDeclarationFile`, i.e.
@@ -134,6 +136,7 @@ function check(ts, argv, files) {
     const sf = program.getSourceFile(f);
     results[f] = {
       root: roots.has(path.resolve(f)),
+      inProgram: Boolean(sf),
       skip: sf ? skipReason(ts, sf, options, program) : "is not in the program tsc builds",
     };
   }

@@ -9,14 +9,28 @@
  * false RED, 2026-09-30 round-5 review).
  *
  * Mechanics: `mkdir` of `<git-dir>/<name>.lock` is the atomic acquire; the
- * holder writes `owner.json` { pid, host, start (process start, ms), run }.
- * A lock is stale — and reclaimed — when its owner on this host is dead, or
- * its pid now belongs to a process that started at another time (pid reuse),
- * or it is older than `maxAgeMs`; a lock from another host is only reclaimed
- * by age. Reclaim is serialised by a second `mkdir` (`.reclaim`) and re-reads
- * the owner under it, so two waiters never both delete a fresh lock.
- * Released in `finally`, on exit and on SIGINT/SIGTERM/SIGHUP (via the exit
- * handler the caller's signal handlers reach through `process.exit`).
+ * holder writes `owner.json` { pid, host, run } (run = a random token) and
+ * then keeps a heartbeat file `beat` = "<run> <counter>", rewritten every
+ * `heartbeatMs` with the counter incremented.
+ *
+ * Liveness is decided from the holder's token and heartbeat, never from a
+ * clock comparison (no process start-time window, no wall-clock age):
+ *
+ * - a holder on this host whose pid is dead is stale at once;
+ * - otherwise the waiter watches the (token, beat) signature on its OWN
+ *   monotonic clock: a holder is live while that signature keeps changing,
+ *   and stale once it has not changed for `staleMs`. A reused pid (alive, but
+ *   not the holder) never beats, so it goes stale; a wall-clock jump on
+ *   either side changes nothing, since no timestamp is compared; a holder on
+ *   another host is judged by its beat alone.
+ * - a lock dir with no owner.json yet (a holder mid-acquire) is judged the
+ *   same way: stale only if it stays ownerless for `staleMs`.
+ *
+ * Reclaim is serialised by a second `mkdir` (`.reclaim`) and removes the lock
+ * only if, re-read under it, the signature is still the one judged stale — so
+ * two waiters never both delete a fresh lock. Released in `finally` and on
+ * exit (the caller's signal handlers reach it through `process.exit`);
+ * release removes only a lock whose owner.json still carries this run's token.
  *
  * Duplication, noted for consolidation: scripts/lib/probe-lock.ts is the
  * repo's other lock (O_EXCL file, refuses rather than waits, pid-only
@@ -26,35 +40,32 @@
  */
 
 import { spawnSync } from "node:child_process";
-import { randomBytes } from "node:crypto";
-import { mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { createHash, randomBytes } from "node:crypto";
+import { mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { hostname, tmpdir } from "node:os";
-import { createHash } from "node:crypto";
 import { join, resolve } from "node:path";
 
 export interface LockOwner {
   pid: number;
   host: string;
-  /** Process start time, epoch ms. */
-  start: number;
+  /** Random per-acquire token; the heartbeat carries it. */
   run: string;
 }
 
 export interface LockOptions {
   /** How long to wait for another holder before giving up. */
   budgetMs: number;
-  /** A lock older than this is stale whatever its owner says. */
-  maxAgeMs?: number;
+  /** A holder whose (token, beat) signature has not changed for this long is stale. */
+  staleMs?: number;
+  /** How often the holder beats. Must be well below staleMs. */
+  heartbeatMs?: number;
   /** Poll interval (jittered ±50%). */
   pollMs?: number;
+  /** The waiter's monotonic clock, ms (tests inject one). */
+  now?: () => number;
 }
 
-const SELF: LockOwner = {
-  pid: process.pid,
-  host: hostname(),
-  start: Math.round(performance.timeOrigin),
-  run: randomBytes(8).toString("hex"),
-};
+const SELF_HOST = hostname();
 
 /** The lock directory for `root`: in its git dir, else in tmpdir keyed by the path. */
 export function lockPath(root: string, name: string): string {
@@ -64,15 +75,7 @@ export function lockPath(root: string, name: string): string {
   return join(tmpdir(), `${name}-${h}.lock`);
 }
 
-/** Start time (epoch ms, second resolution) of a live pid, or null when unknown. */
-function pidStart(pid: number): number | null {
-  const r = spawnSync("ps", ["-o", "lstart=", "-p", String(pid)], { encoding: "utf-8" });
-  if (r.status !== 0) return null;
-  const t = Date.parse(r.stdout.trim());
-  return Number.isFinite(t) ? t : null;
-}
-
-function pidAlive(pid: number): boolean {
+export function pidAlive(pid: number): boolean {
   try {
     process.kill(pid, 0);
     return true;
@@ -81,26 +84,7 @@ function pidAlive(pid: number): boolean {
   }
 }
 
-/** Whether the lock `owner` holds (dir mtime `mtimeMs`) may still be in use. */
-export function ownerLive(
-  owner: LockOwner | null,
-  mtimeMs: number,
-  maxAgeMs: number,
-  now = Date.now(),
-): boolean {
-  if (now - mtimeMs > maxAgeMs) return false;
-  // mkdir happened but owner.json is not written yet (or unreadable): a
-  // holder mid-acquire. Live while young.
-  if (owner === null) return now - mtimeMs < 10_000;
-  if (owner.host !== SELF.host) return true;
-  if (!pidAlive(owner.pid)) return false;
-  const started = pidStart(owner.pid);
-  // ps unavailable: trust the pid. Otherwise the pid must be the same process
-  // (lstart has one-second resolution).
-  return started === null || Math.abs(started - owner.start) < 3_000;
-}
-
-function readOwner(dir: string): LockOwner | null {
+export function readOwner(dir: string): LockOwner | null {
   try {
     return JSON.parse(readFileSync(join(dir, "owner.json"), "utf-8")) as LockOwner;
   } catch {
@@ -108,27 +92,71 @@ function readOwner(dir: string): LockOwner | null {
   }
 }
 
-function mtimeOf(p: string): number | null {
+function readBeat(dir: string): string | null {
   try {
-    return statSync(p).mtimeMs;
+    return readFileSync(join(dir, "beat"), "utf-8");
   } catch {
     return null;
   }
 }
 
-/** Remove `dir` if (re-read under the reclaim mutex) its holder is still not live. */
-function reclaim(dir: string, maxAgeMs: number): void {
+function exists(p: string): boolean {
+  try {
+    statSync(p);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** What a waiter remembers about the holder it is watching. */
+export interface Observation {
+  sig: string | null;
+  since: number;
+}
+
+/**
+ * Judge the lock at `dir` (pure in its inputs: the owner record, the beat, a
+ * pid probe and the waiter's monotonic `now`). Updates `obs`; returns the
+ * signature judged and whether it is stale.
+ */
+export function assess(
+  owner: LockOwner | null,
+  beat: string | null,
+  obs: Observation,
+  now: number,
+  staleMs: number,
+  alive: (pid: number) => boolean = pidAlive,
+): { sig: string; stale: boolean } {
+  const sig = JSON.stringify([owner, beat]);
+  if (owner && owner.host === SELF_HOST && !alive(owner.pid)) return { sig, stale: true };
+  if (sig !== obs.sig) {
+    obs.sig = sig;
+    obs.since = now;
+    return { sig, stale: false };
+  }
+  return { sig, stale: now - obs.since >= staleMs };
+}
+
+/** Remove `dir` if, re-read under the reclaim mutex, its signature is still `judged`. */
+function reclaim(dir: string, judged: string): void {
   const guard = `${dir}.reclaim`;
   try {
     mkdirSync(guard);
   } catch {
-    const m = mtimeOf(guard);
-    if (m !== null && Date.now() - m > 10_000) rmSync(guard, { recursive: true, force: true });
+    // Another waiter is reclaiming; if its guard outlives a crash, the
+    // guard's own (wall-clock) age is the only signal left — an hour.
+    try {
+      if (Date.now() - statSync(guard).mtimeMs > 60 * 60 * 1000) {
+        rmSync(guard, { recursive: true, force: true });
+      }
+    } catch {
+      /* gone */
+    }
     return;
   }
   try {
-    const m = mtimeOf(dir);
-    if (m !== null && !ownerLive(readOwner(dir), m, maxAgeMs)) {
+    if (exists(dir) && JSON.stringify([readOwner(dir), readBeat(dir)]) === judged) {
       rmSync(dir, { recursive: true, force: true });
     }
   } finally {
@@ -141,35 +169,60 @@ function reclaim(dir: string, maxAgeMs: number): void {
  * function. Throws (naming the holder) when the budget runs out.
  */
 export async function acquireRepoLock(dir: string, opts: LockOptions): Promise<() => void> {
-  const maxAgeMs = opts.maxAgeMs ?? 60 * 60 * 1000;
+  const staleMs = opts.staleMs ?? 15_000;
+  const heartbeatMs = opts.heartbeatMs ?? 1_000;
   const pollMs = opts.pollMs ?? 200;
-  const deadline = Date.now() + opts.budgetMs;
+  const now = opts.now ?? (() => performance.now());
+  const deadline = now() + opts.budgetMs;
+  const obs: Observation = { sig: null, since: now() };
   for (;;) {
     try {
       mkdirSync(dir);
-      writeFileSync(join(dir, "owner.json"), JSON.stringify(SELF));
+      const me: LockOwner = {
+        pid: process.pid,
+        host: SELF_HOST,
+        run: randomBytes(8).toString("hex"),
+      };
+      writeFileSync(join(dir, "owner.json"), JSON.stringify(me));
+      let counter = 0;
+      const beat = (): void => {
+        if (readOwner(dir)?.run !== me.run) return; // reclaimed from under us: never beat for another
+        const tmp = join(dir, `beat.${me.run}`);
+        try {
+          writeFileSync(tmp, `${me.run} ${++counter}`);
+          renameSync(tmp, join(dir, "beat"));
+        } catch {
+          /* the lock dir is gone */
+        }
+      };
+      beat();
+      const timer = setInterval(beat, heartbeatMs);
+      timer.unref();
       let released = false;
       const release = (): void => {
         if (released) return;
         released = true;
+        clearInterval(timer);
         process.off("exit", release);
         // only our own lock: never remove one a reclaimer handed to another run
-        if (readOwner(dir)?.run === SELF.run) rmSync(dir, { recursive: true, force: true });
+        if (readOwner(dir)?.run === me.run) rmSync(dir, { recursive: true, force: true });
       };
       process.on("exit", release);
       return release;
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code !== "EEXIST") throw err;
     }
-    const m = mtimeOf(dir);
-    if (m !== null && !ownerLive(readOwner(dir), m, maxAgeMs)) {
-      reclaim(dir, maxAgeMs);
+    const owner = readOwner(dir);
+    const { sig, stale } = assess(owner, readBeat(dir), obs, now(), staleMs);
+    if (stale) {
+      reclaim(dir, sig);
+      obs.sig = null;
+      obs.since = now();
       continue;
     }
-    if (Date.now() >= deadline) {
-      const o = readOwner(dir);
+    if (now() >= deadline) {
       throw new Error(
-        `${dir} is held by ${o ? `pid ${o.pid} on ${o.host} (run ${o.run}, started ${new Date(o.start).toISOString()})` : "a run still writing its owner record"} and was not released within ${opts.budgetMs}ms`,
+        `${dir} is held by ${owner ? `pid ${owner.pid} on ${owner.host} (run ${owner.run}, heartbeat live)` : "a run still writing its owner record"} and was not released within ${opts.budgetMs}ms`,
       );
     }
     await new Promise((r) => setTimeout(r, pollMs * (0.5 + Math.random())));

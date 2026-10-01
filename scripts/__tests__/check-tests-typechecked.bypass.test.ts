@@ -25,7 +25,8 @@ import { spawn, spawnSync } from "node:child_process";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { hostname, tmpdir } from "node:os";
 import { delimiter, dirname, join, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { createRequire } from "node:module";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterAll, describe, expect, it } from "vitest";
 
 import { CANARY_PREFIX, canaryContent } from "../check-tests-typechecked.js";
@@ -160,7 +161,28 @@ const BY = {
   declaration: /is a declaration file to TypeScript/,
   unknownKey: /unknown file-valued vitest key/,
   selfTest: /no longer matches what tsc/,
+  loaded: /is loaded as code by vitest \(recorded:/,
+  noVitest: /started no vitest the recorder observed/,
+  step: /is neither `tsc \.\.\.` nor `pnpm run <script>`/,
+  crossCheck: /no recorded vitest run of this package loaded it/,
 } as const;
+
+/** A test file vitest collects (globals: no `vitest` import tsc would need to resolve). */
+const GLOBALS_TEST =
+  'declare const it: (name: string, fn: () => void) => void;\nit("runs", () => {});\n';
+/** The repo's vitest node API, for a fixture's node wrapper (fixtures have no node_modules). */
+const VITEST_NODE = pathToFileURL(
+  createRequire(join(REPO, "package.json")).resolve("vitest/node"),
+).href;
+
+/** Give the fixture package a vitest test script and a collectable test. */
+function vitestPackage(f: Files, scripts: Record<string, string>, config: string): void {
+  patchJson(f, `${P}/package.json`, (v) => {
+    v.scripts = { ...(v.scripts as object), ...scripts };
+  });
+  f[`${P}/vitest.config.mjs`] = config;
+  f[TEST] = GLOBALS_TEST;
+}
 
 interface Case {
   id: string;
@@ -546,6 +568,157 @@ const CASES: Case[] = [
         "  },\n" +
         "});\n";
       f[`${nm}/.bin/tsc`] = '#!/bin/sh\nexec node "$(dirname "$0")/../typescript/bin/tsc" "$@"\n';
+      return P;
+    },
+  },
+  // ── round 7: what vitest runs is RECORDED by running the real scripts ──
+  {
+    id: "R6-C1 an extensionless setupFiles entry (./harness/boot) — vitest resolves it, the static collector drops it",
+    reason: ["loaded"],
+    hidesError: true,
+    build: (f) => {
+      vitestPackage(
+        f,
+        { test: "vitest run" },
+        'export default { test: { globals: true, setupFiles: ["./harness/boot"] } };\n',
+      );
+      f[`${P}/harness/boot.ts`] = TYPE_ERROR;
+      return P;
+    },
+  },
+  {
+    id: "R6-C2 an env-dependent config: `MOTEBIT_SLOW=1 vitest run` adds a setup file",
+    reason: ["loaded"],
+    hidesError: true,
+    build: (f) => {
+      vitestPackage(
+        f,
+        { test: "MOTEBIT_SLOW=1 vitest run" },
+        'export default { test: { globals: true, setupFiles: process.env.MOTEBIT_SLOW ? ["./slow/setup"] : [] } };\n',
+      );
+      f[`${P}/slow/setup.ts`] = TYPE_ERROR;
+      return P;
+    },
+  },
+  {
+    id: "R6-C2 a config keyed on npm_lifecycle_event (only `pnpm run test:slow` loads the setup file)",
+    reason: ["loaded"],
+    hidesError: true,
+    build: (f) => {
+      vitestPackage(
+        f,
+        { "test:slow": "vitest run" },
+        'export default { test: { globals: true, setupFiles: process.env.npm_lifecycle_event === "test:slow" ? ["./slow/setup"] : [] } };\n',
+      );
+      f[`${P}/slow/setup.ts`] = TYPE_ERROR;
+      return P;
+    },
+  },
+  {
+    id: "R6-C3 `vitest bench` files (*.bench.ts) outside every tsconfig",
+    reason: ["loaded"],
+    hidesError: true,
+    build: (f) => {
+      vitestPackage(
+        f,
+        { bench: "vitest bench --run" },
+        'export default { test: { globals: true, benchmark: { include: ["bench/**/*.bench.ts"] } } };\n',
+      );
+      f[`${P}/bench/sort.bench.ts`] =
+        `declare const bench: (name: string, fn: () => void) => void;\nbench("sort", () => {});\n${TYPE_ERROR}`;
+      return P;
+    },
+  },
+  {
+    id: "R6 a node script wrapping vitest (`node scripts/run-tests.mjs` → startVitest with its own config)",
+    reason: ["loaded"],
+    hidesError: true,
+    build: (f) => {
+      vitestPackage(f, { test: "node scripts/run-tests.mjs" }, "export default {};\n");
+      f[`${P}/scripts/run-tests.mjs`] =
+        `const { startVitest } = await import(${JSON.stringify(VITEST_NODE)});\n` +
+        'const v = await startVitest("test", [], { config: "./vitest.wrapped.config.mjs", watch: false });\n' +
+        "await v?.close();\n";
+      f[`${P}/vitest.wrapped.config.mjs`] =
+        'export default { test: { globals: true, setupFiles: ["./wrapped/setup.ts"] } };\n';
+      f[`${P}/wrapped/setup.ts`] = TYPE_ERROR;
+      return P;
+    },
+  },
+  {
+    id: "R6 code reached only through a vitest.config import",
+    reason: ["loaded"],
+    hidesError: true,
+    build: (f) => {
+      vitestPackage(
+        f,
+        { test: "vitest run" },
+        'import { setupFiles } from "./harness/config-helper.ts";\nexport default { test: { globals: true, setupFiles } };\n',
+      );
+      f[`${P}/harness/config-helper.ts`] = `export const setupFiles: string[] = [];\n${TYPE_ERROR}`;
+      return P;
+    },
+  },
+  {
+    id: "R7 a test that requires a module natively (createRequire, outside vite)",
+    reason: ["loaded"],
+    hidesError: false,
+    build: (f) => {
+      vitestPackage(f, { test: "vitest run" }, "export default { test: { globals: true } };\n");
+      f[TEST] =
+        `${GLOBALS_TEST}declare const process: { getBuiltinModule(id: string): { createRequire(from: string): (id: string) => unknown } };\n` +
+        'process.getBuiltinModule("node:module").createRequire((import.meta as unknown as { url: string }).url)("../../native/helper.cjs");\n';
+      f[`${P}/native/helper.cjs`] = "module.exports = 1;\n";
+      return P;
+    },
+  },
+  {
+    id: "R7 deny by default: a test script that runs no vitest the recorder can see",
+    reason: ["noVitest"],
+    hidesError: false,
+    build: (f) => {
+      vitestPackage(f, { test: "echo no tests here" }, "export default {};\n");
+      return P;
+    },
+  },
+  {
+    id: "R7 deny by default: a test script that drops NODE_OPTIONS before vitest",
+    reason: ["noVitest"],
+    hidesError: false,
+    build: (f) => {
+      vitestPackage(
+        f,
+        { test: "env -u NODE_OPTIONS vitest run" },
+        "export default { test: { globals: true } };\n",
+      );
+      return P;
+    },
+  },
+  {
+    id: "R7 the static prediction names a file no recorded run loads (benchmark.include, no bench script)",
+    reason: ["crossCheck"],
+    hidesError: false,
+    build: (f) => {
+      vitestPackage(
+        f,
+        { test: "vitest run" },
+        'export default { test: { globals: true, benchmark: { include: ["./b/x.bench.ts"] } } };\n',
+      );
+      f[`${P}/b/x.bench.ts`] = "export {};\n";
+      return P;
+    },
+  },
+  {
+    id: "R7-P1 a typecheck step that is neither tsc nor pnpm run (an error-baseline wrapper)",
+    reason: ["step"],
+    hidesError: true,
+    build: (f) => {
+      script(f, P, "node scripts/tc.mjs && tsc --noEmit");
+      f[`${P}/scripts/tc.mjs`] =
+        'import { spawnSync } from "node:child_process";\n' +
+        'spawnSync("tsc", ["-p", "tsconfig.test.json"], { stdio: "inherit" });\n' +
+        "process.exit(0);\n";
+      appendError(f, TEST);
       return P;
     },
   },

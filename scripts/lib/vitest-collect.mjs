@@ -2,7 +2,9 @@
  * Report what vitest would load as test code for the package at
  * `process.cwd()`, resolved by vitest's own config loading and globbing
  * (never a hand-written walker). Used by scripts/check-tests-typechecked.ts;
- * run with the package dir as cwd.
+ * run with the package dir as cwd. The gate runs `staticCollect` IN-PROCESS,
+ * inside each vitest process its recorder observes (the cross-check against
+ * the recording); the standalone entry is for diagnosis.
  *
  * Input (env): `MOTEBIT_VITEST_ARGV` — JSON array of the arguments a package
  * script passes after `vitest` (`["run", "-c", "vitest.unit.config.ts"]`),
@@ -63,6 +65,23 @@ export function fileValuedEntries(value, base, repoRoot) {
   return out;
 }
 
+/**
+ * The static prediction for a live Vitest instance: the test files its globs
+ * match and every file-valued entry of its resolved configs. Called in-process
+ * by scripts/lib/vitest-record-plugin.mjs (the gate's cross-check against what
+ * the recorder saw load) and by the standalone entry below.
+ */
+export async function staticCollect(vitest, repoRoot) {
+  const specs = await vitest.globTestSpecifications();
+  const files = [...new Set(specs.map((s) => s.moduleId))].sort();
+  const fileValued = [];
+  for (const config of [vitest.config, ...vitest.projects.map((p) => p.config)]) {
+    fileValued.push(...fileValuedEntries(config, config.root ?? process.cwd(), repoRoot));
+  }
+  const uniq = [...new Map(fileValued.map((e) => [`${e.key}\0${e.file}`, e])).values()];
+  return { files, fileValued: uniq };
+}
+
 if (process.argv[1] && resolve(process.argv[1]) === resolve(new URL(import.meta.url).pathname)) {
   const node = await import(pathToFileURL(resolveVitest()).href);
   const args = JSON.parse(process.env.MOTEBIT_VITEST_ARGV || "[]");
@@ -73,17 +92,10 @@ if (process.argv[1] && resolve(process.argv[1]) === resolve(new URL(import.meta.
     { logLevel: "silent" },
   );
   try {
-    const specs = await vitest.globTestSpecifications();
-    const files = [...new Set(specs.map((s) => s.moduleId))].sort();
     const repoRoot = resolve(process.env.MOTEBIT_REPO_ROOT || process.cwd());
-    const fileValued = [];
-    for (const config of [vitest.config, ...vitest.projects.map((p) => p.config)]) {
-      fileValued.push(...fileValuedEntries(config, config.root ?? process.cwd(), repoRoot));
-    }
-    const uniq = [...new Map(fileValued.map((e) => [`${e.key}\0${e.file}`, e])).values()];
     writeFileSync(
       process.env.MOTEBIT_VITEST_COLLECT_OUT,
-      JSON.stringify({ files, fileValued: uniq }),
+      JSON.stringify(await staticCollect(vitest, repoRoot)),
     );
   } finally {
     await vitest.close();

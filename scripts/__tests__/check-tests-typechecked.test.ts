@@ -33,7 +33,14 @@ import {
   reportsError,
   VITEST_NON_CODE_KEYS,
   VITEST_TEST_CODE_KEYS,
-  vitestArgvs,
+  KNOWN_CONFIG_IMPORTS,
+  NON_VITEST_TEST_SCRIPTS,
+  nonVitestProblems,
+  readRecording,
+  recordedFile,
+  TYPECHECK_EXTRA_STEPS,
+  type VitestRecord,
+  vitestScripts,
   workspacePackageDirs,
 } from "../check-tests-typechecked.js";
 
@@ -205,6 +212,29 @@ describe("chain rules", () => {
     expect(chainViolations({ typecheck: "tsc -p `cat cfg`" })).toHaveLength(1);
   });
 
+  it("P1: every step must be tsc or pnpm run <script> (deny by default)", () => {
+    expect(
+      chainViolations({ typecheck: "node scripts/tc.mjs && tsc -p tsconfig.test.json" }).join(),
+    ).toMatch(/step "node scripts\/tc\.mjs" is neither/);
+    expect(chainViolations({ typecheck: "npx tsc --noEmit" }).join()).toMatch(/is neither/);
+    expect(chainViolations({ typecheck: "pnpm tsc-baseline" }).join(), "not a script").toMatch(
+      /is neither/,
+    );
+    expect(
+      chainViolations({ typecheck: "pnpm run x", x: "node wrap.mjs" }).join(),
+      "held through a hop",
+    ).toMatch(/script "x" step "node wrap\.mjs"/);
+    expect(chainViolations({ typecheck: "pnpm run x --silent", x: "tsc" })).toHaveLength(1);
+    expect(chainViolations({ typecheck: "fumadocs-mdx && tsc --noEmit" })).toHaveLength(1);
+    expect(
+      chainViolations({ typecheck: "fumadocs-mdx && tsc --noEmit" }, "typecheck", {
+        "fumadocs-mdx": "codegen",
+      }),
+    ).toEqual([]);
+    expect(Object.keys(TYPECHECK_EXTRA_STEPS)).toEqual(["apps/docs"]);
+    expect(Object.keys(TYPECHECK_EXTRA_STEPS["apps/docs"]!)).toEqual(["fumadocs-mdx"]);
+  });
+
   it("ignores operators inside quotes and redirections", () => {
     expect(nonAndOperators(`echo "a || b; c" && tsc 2>&1`)).toEqual([]);
   });
@@ -254,7 +284,11 @@ describe("KNOWN_UNCOVERED", () => {
     for (const [dir, entries] of Object.entries(KNOWN_UNCOVERED)) {
       for (const [file, reason] of Object.entries(entries)) {
         expect(file.endsWith("/"), `${dir}: ${file}`).toBe(false);
-        expect(isTestFile(file), `${dir}: ${file}`).toBe(true);
+        // a test file, or a file the vitest recorder saw load as code (named so in the reason)
+        expect(
+          isTestFile(file) || /Recorded by the vitest recorder/.test(reason),
+          `${dir}: ${file}`,
+        ).toBe(true);
         expect(existsSync(join(REPO, dir, file)), `${dir}/${file} exists`).toBe(true);
         expect(reason.length).toBeGreaterThan(40);
       }
@@ -325,25 +359,147 @@ describe("vitest collection policy", () => {
     );
   });
 
-  it("reads each vitest invocation's arguments from test scripts, through hops", () => {
-    expect(vitestArgvs({ test: "vitest run" }).argvs).toEqual([["run"]]);
-    expect(vitestArgvs({ build: "tsc" }).argvs).toEqual([[]]);
+  it("runs every test / test:* script and every script mentioning vitest, minus pinned non-vitest scripts", () => {
     expect(
-      vitestArgvs({
-        test: "pnpm run test:unit && CI=1 vitest run --dir src",
-        "test:unit": 'vitest run -c "vitest.unit.config.ts"',
+      vitestScripts({
+        test: "vitest run",
+        "test:coverage": "vitest run --coverage",
         "test:e2e": "playwright test",
-      }).argvs,
-    ).toEqual([
-      ["run", "--dir", "src"],
-      ["run", "-c", "vitest.unit.config.ts"],
+        bench: "vitest bench --run",
+        build: "tsc",
+        tests: "node run.mjs",
+      }),
+    ).toEqual(["bench", "test", "test:coverage", "test:e2e"]);
+    expect(
+      vitestScripts({ test: "vitest run", "test:e2e": "playwright test" }, { "test:e2e": {} }),
+    ).toEqual(["test"]);
+  });
+
+  it("pins the non-vitest test scripts exactly; an entry goes stale when its script or pinned file changes", () => {
+    expect(Object.keys(NON_VITEST_TEST_SCRIPTS).sort()).toEqual(["apps/cli", "apps/web"]);
+    expect(Object.keys(NON_VITEST_TEST_SCRIPTS["apps/web"]!).sort()).toEqual([
+      "test:e2e",
+      "test:e2e:ui",
     ]);
-    expect(vitestArgvs({ test: "npx vitest --config=x.ts 2>&1 | tee log" }).argvs).toEqual([
-      ["--config=x.ts", "2>&1"],
-    ]);
-    const bad = vitestArgvs({ test: "vitest run -c $CFG" });
-    expect(bad.problems).toHaveLength(1);
-    expect(bad.problems[0]).toMatch(/expansion/);
+    const dir = mkdtempSync(join(tmpdir(), "nonvitest-"));
+    writeFileSync(join(dir, "smoke.sh"), "echo hi\n");
+    const entries = {
+      smoke: {
+        command: "./smoke.sh",
+        files: { "smoke.sh": "2a2b0e6e8fc0c8d5d6e3ddbd8c7a0b7bb7a6f9b3b9b08f3b6fbd3c4e2f3a4b5c" },
+      },
+    };
+    expect(nonVitestProblems(dir, { smoke: "./smoke.sh" }, entries).join()).toMatch(
+      /smoke\.sh changed/,
+    );
+    expect(nonVitestProblems(dir, { smoke: "./smoke.sh --x" }, entries).join()).toMatch(
+      /now "\.\/smoke\.sh --x"/,
+    );
+    expect(nonVitestProblems(dir, {}, entries).join()).toMatch(/the script is gone/);
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("pins the config imports exempt from type-checking to exactly vitest.shared.ts", () => {
+    expect(Object.keys(KNOWN_CONFIG_IMPORTS)).toEqual(["vitest.shared.ts"]);
+  });
+
+  it("recordedFile: repo code files only — no node_modules, virtual ids, data or ?raw imports", () => {
+    const root = mkdtempSync(join(tmpdir(), "recorded-"));
+    for (const f of ["a.ts", "b.json", "c.cjs", "node_modules/x/i.js", "d.vue"]) {
+      mkdirSync(dirname(join(root, f)), { recursive: true });
+      writeFileSync(join(root, f), "");
+    }
+    expect(recordedFile(join(root, "a.ts"), root)).toBe(join(root, "a.ts"));
+    expect(recordedFile(`${join(root, "a.ts")}?v=1`, root)).toBe(join(root, "a.ts"));
+    expect(recordedFile(join(root, "c.cjs"), root)).toBe(join(root, "c.cjs"));
+    expect(recordedFile(join(root, "d.vue"), root), "unknown extensions count").toBe(
+      join(root, "d.vue"),
+    );
+    expect(recordedFile(join(root, "b.json"), root)).toBeNull();
+    expect(recordedFile(`${join(root, "a.ts")}?raw`, root)).toBeNull();
+    expect(recordedFile(join(root, "node_modules/x/i.js"), root)).toBeNull();
+    expect(recordedFile("\0virtual:x", root)).toBeNull();
+    expect(recordedFile("/elsewhere/a.ts", root)).toBeNull();
+    rmSync(root, { recursive: true, force: true });
+  });
+});
+
+describe("readRecording — deny by default", () => {
+  const root = REPO;
+  const ok = { status: 0, output: "", timedOut: false };
+  const file = join(REPO, "scripts/check-tests-typechecked.ts");
+  const healthy = (pid: number): VitestRecord[] => [
+    { pid, event: "vitest-loaded", argv: ["/x/vitest.mjs", "run"] },
+    { pid, event: "config", configFile: "/c.ts", deps: [] },
+    { pid, event: "vitest" },
+    { pid, event: "module", id: file },
+    { pid, event: "collected", specs: [], failed: [], static: { files: [], fileValued: [] } },
+  ];
+
+  it("a healthy run records its modules and has no problems", () => {
+    const r = readRecording("test", healthy(1), ok, root);
+    expect(r.problems).toEqual([]);
+    expect([...r.loaded.keys()]).toEqual([file]);
+  });
+
+  it("no vitest observed → problem", () => {
+    expect(readRecording("test", [], ok, root).problems.join()).toMatch(
+      /started no vitest the recorder observed/,
+    );
+  });
+
+  it("the plugin never attached → problem; collection never finished → problem", () => {
+    const noPlugin = healthy(1).filter((r) => r.event === "vitest-loaded");
+    expect(readRecording("test", noPlugin, ok, root).problems.join()).toMatch(
+      /plugin never attached/,
+    );
+    const noCollect = healthy(1).filter((r) => r.event !== "collected");
+    expect(readRecording("test", noCollect, ok, root).problems.join()).toMatch(
+      /before its collection finished/,
+    );
+  });
+
+  it("a file that threw during collection → problem; no-suite and run-level errors are not", () => {
+    const rec = healthy(1);
+    rec[4] = {
+      ...rec[4]!,
+      failed: [
+        { file, error: "boom" },
+        { file, error: "No test suite found in file x" },
+        { file: null, error: 'Closing rpc while "onUserConsoleLog" was pending' },
+      ],
+    };
+    const p = readRecording("test", rec, ok, root).problems;
+    expect(p).toHaveLength(1);
+    expect(p[0]).toMatch(/could not collect .*\(boom\)/);
+  });
+
+  it("an unsupported mode, a timeout, a node without registerHooks → problems", () => {
+    const rec = [...healthy(1), { pid: 1, event: "unsupported", why: ["browser mode"] }];
+    expect(readRecording("test", rec, ok, root).problems.join()).toMatch(/browser mode/);
+    expect(
+      readRecording("test", healthy(1), { ...ok, timedOut: true }, root).problems.join(),
+    ).toMatch(/did not finish/);
+    expect(
+      readRecording(
+        "test",
+        [...healthy(1), { pid: 2, event: "no-hooks" }],
+        ok,
+        root,
+      ).problems.join(),
+    ).toMatch(/registerHooks/);
+  });
+
+  it("a config-only import is marked as such, unless something loads it at runtime too", () => {
+    const rec = healthy(1);
+    rec[1] = { pid: 1, event: "config", configFile: "/c.ts", deps: [file] };
+    rec.splice(3, 1);
+    expect(readRecording("test", rec, ok, root).loaded.get(file)).toBe(
+      "imported by the vitest config",
+    );
+    expect(
+      readRecording("test", healthy(1).toSpliced(1, 1, rec[1]!), ok, root).loaded.get(file),
+    ).toBe("transformed by vite for vitest");
   });
 });
 
@@ -377,7 +533,7 @@ describe("canaries — identified by content and owner, never by name", () => {
 });
 
 describe("diff scope", () => {
-  it("affectsPackage: tests, configs, manifests, test-ish paths — not plain sources or docs", () => {
+  it("affectsPackage: every change but documentation", () => {
     for (const p of [
       "src/__tests__/a.ts",
       "e2e/x.spec.ts",
@@ -391,7 +547,11 @@ describe("diff scope", () => {
       "src/__typecheck_canary_x.ts",
     ])
       expect(affectsPackage(p), p).toBe(true);
-    for (const p of ["src/index.ts", "README.md", "src/lib/money.ts"])
+    // vitest may load ANY file (a harness module a setup file imports), so
+    // every change but documentation moves the package's result.
+    for (const p of ["src/index.ts", "harness/boot.ts", "src/lib/money.ts"])
+      expect(affectsPackage(p), p).toBe(true);
+    for (const p of ["README.md", "CHANGELOG.md", "docs/x.mdx"])
       expect(affectsPackage(p), p).toBe(false);
   });
 
@@ -415,9 +575,9 @@ describe("diff scope", () => {
   }
   const dirsOf = (): string[] => workspacePackageDirs(root);
 
-  it("scopes to packages with a test/config change (committed, unstaged or untracked); none for a source-only change", () => {
+  it("scopes to packages with a change (committed, unstaged or untracked); none for a docs-only change", () => {
     repo();
-    write("packages/a/src/index.ts", "export const y = 2;\n");
+    write("packages/a/README.md", "# a\n");
     let s = changedScope(root, dirsOf());
     expect(s).toMatchObject({ kind: "scoped", dirs: [] });
     write("packages/b/src/__tests__/new.test.ts", "export {};\n");
@@ -433,6 +593,8 @@ describe("diff scope", () => {
     "scripts/check-tests-typechecked.ts",
     "scripts/lib/vitest-collect.mjs",
     "scripts/lib/tsc-recorder.cjs",
+    "scripts/lib/vitest-recorder.cjs",
+    "scripts/lib/vitest-record-plugin.mjs",
     "scripts/lib/tsc-checked-files.cjs",
     "scripts/lib/repo-lock.ts",
     "tsconfig.base.json",
