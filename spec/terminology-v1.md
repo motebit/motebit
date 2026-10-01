@@ -36,10 +36,10 @@ doctrine and MUST be re-checked before the vocabulary freeze.
 
 These rules bind every wire term defined below unless its entry records a deviation:
 
-- Canonicalization is JCS ([RFC 8785](https://www.rfc-editor.org/rfc/rfc8785)); signatures are Ed25519 ([RFC 8032](https://www.rfc-editor.org/rfc/rfc8032)) over the canonical bytes of the artifact minus its signature field(s), dispatched by `SuiteId` (§9.1).
+- Canonicalization is JCS ([RFC 8785](https://www.rfc-editor.org/rfc/rfc8785)); signatures are Ed25519 ([RFC 8032](https://www.rfc-editor.org/rfc/rfc8032)) over the canonical bytes of the artifact minus its signature field(s), dispatched by `SuiteId` (§9.1). Two registered suites do not canonicalize with JCS: `motebit-jwt-ed25519-v1` (signed bearer tokens) signs the raw UTF-8 bytes of the JSON payload exactly as serialized (`JSON.stringify`, no JCS; [`auth-token-v1.md`](auth-token-v1.md) §3.1, §4.1), and `motebit-concat-ed25519-hex-v1` (federation handshake challenges and heartbeats) signs a UTF-8 concatenation of a fixed template.
 - Public keys are 64 lowercase hex characters unless a suite says otherwise.
 - Timestamps are integer milliseconds since the Unix epoch unless an entry notes a deviation.
-- Money amounts are integer micro-units (1 USD = 1,000,000) in fields suffixed `_micro`, unless an entry notes a deviation.
+- Money amounts are integer micro-units (1 USD = 1,000,000) in fields suffixed `_micro`, unless an entry notes a deviation. Recorded deviations: `CostAttestationV1.cost_nanos` (integer nano-USD, §6.6) and the `*_minor` amounts of `InvoiceV1` (integer minor units, e.g. cents, of the invoice `currency`; [`settlement-invoice-v1.md`](settlement-invoice-v1.md)).
 
 ## 2. Identity
 
@@ -55,8 +55,8 @@ These rules bind every wire term defined below unless its entry records a deviat
 
 - **Definition:** the stable identifier of a motebit. Three forms are accepted:
   1. **UUIDv8 self-certifying commitment (default for new motebits).** A UUID version 8 ([RFC 9562](https://www.rfc-editor.org/rfc/rfc9562) §5.8) whose 122 free bits are the first 16 bytes of `SHA-256(genesis_public_key)` with version nibble `8` and variant `10b`. A verifier recomputes it from the genesis key (`deriveSovereignMotebitId`, `verifySovereignBinding` in `@motebit/crypto`) without contacting any operator.
-  2. **Legacy UUIDv7.** A random, time-ordered UUID ([RFC 9562](https://www.rfc-editor.org/rfc/rfc9562) §5.7) minted before sovereign-by-default minting. It does not commit to a key; its key binding needs an identity file, a succession chain or a transparency-log anchor (§10.1). A UUIDv7 can never equal a UUIDv8 commitment.
-  3. **`did:key`.** A W3C `did:key` URI ([did:key method](https://w3c-ccg.github.io/did-method-key/)) whose multicodec payload is the Ed25519 public key; it is self-certifying by construction. Accepted as a `motebit_id` by verifiers; also derivable from any motebit key for interop (identity-v1 §did:key).
+  2. **UUIDv7 (legacy form).** A random, time-ordered UUID ([RFC 9562](https://www.rfc-editor.org/rfc/rfc9562) §5.7). Clients minted it before sovereign-by-default minting, and the reference relay still mints one: its internal `POST /identity` route creates the id through the identity manager in the BSL `@motebit/core-identity` package, which mints a random UUIDv7. It does not commit to a key; its key binding needs an identity file, a succession chain or a transparency-log anchor (§10.1). A UUIDv7 can never equal a UUIDv8 commitment.
+  3. **`did:key`.** A W3C `did:key` URI ([did:key method](https://w3c-ccg.github.io/did-method-key/)) whose multicodec payload is the Ed25519 public key; it is self-certifying by construction. Accepted as a `motebit_id` by verifiers; also derivable from any motebit key for interop ([`identity-v1.md`](identity-v1.md) §10).
 - **Layer:** protocol (`MotebitId` branded string), crypto (derivation and binding checks).
 - **Wire:** string field `motebit_id`; role-qualified as `<role>_motebit_id` in new artifacts (some existing artifacts use `<role>_id`, e.g. `delegator_id`, `issuer_id`).
 - **Standard:** RFC 9562 (UUID), W3C DID Core + did:key.
@@ -64,7 +64,7 @@ These rules bind every wire term defined below unless its entry records a deviat
 
 ### 2.3 identity file
 
-- **Definition:** a `motebit.md` document: YAML frontmatter (`MotebitIdentity`) signed by the motebit's identity key, followed by non-binding Markdown. It declares the `motebit_id`, current public key, guardian, devices, and governance settings, and carries the key succession history.
+- **Definition:** a `motebit.md` document: YAML frontmatter (`MotebitIdentityFile` in `@motebit/crypto`) signed by the motebit's identity key, followed by non-binding Markdown. It declares the `motebit_id`, current public key, guardian, devices, and governance settings, and carries the key succession history.
 - **Layer:** protocol (format), `@motebit/identity-file` (reference parser/signer).
 - **Wire:** the `motebit.md` text file; see [`identity-v1.md`](identity-v1.md).
 - **Standard:** novel because it is a human-readable, self-signed agent descriptor; YAML 1.2 and Ed25519 are the only standards it uses.
@@ -140,9 +140,9 @@ These rules bind every wire term defined below unless its entry records a deviat
 
 ### 4.2 goal
 
-- **Definition:** a user-declared outcome with a cadence (`once | hourly | daily | weekly`) and a strategy (`simple | plan`). A goal is pursued by runs; each run may create a plan and tasks. A goal is never emitted by the motebit itself.
+- **Definition:** a declared outcome (a natural-language `prompt`) with a schedule, pursued by runs; each run may create a plan and tasks. The schedule is a `mode` (`recurring | once` today; other values reserved) and, for a recurring goal, a cadence `interval_ms` in milliseconds. There is no strategy field. A goal is declared by the user, or by the motebit itself as a child of a goal it is running (the `create_sub_goal` tool, which sets `parent_goal_id`).
 - **Layer:** protocol (`GoalId`, goal lifecycle events), runtime.
-- **Wire:** `goal_id`; `goal_*` events; see [`goal-lifecycle-v1.md`](goal-lifecycle-v1.md).
+- **Wire:** `goal_id`; `goal_*` events; schedule fields `mode` (string) and `interval_ms` (integer, absent for one-shot goals) on `goal_created`; see [`goal-lifecycle-v1.md`](goal-lifecycle-v1.md).
 - **Standard:** novel.
 - **Forbidden synonyms:** task, job, intent (reserved for `IntentOrigin`), objective.
 
@@ -166,10 +166,10 @@ These rules bind every wire term defined below unless its entry records a deviat
 
 ### 5.1 DelegationToken
 
-- **Definition:** a delegator-signed authorization for one delegate to act within a `scope` (comma-separated capability list or `*`) between `issued_at` (or `not_before`, when present) and `expires_at`. It authorizes one act and is short-lived (RECOMMENDED 1 h, maximum 24 h). A token with `grant_id` is one tick of a standing delegation.
+- **Definition:** a delegator-signed authorization for one delegate to act within a `scope` (comma-separated capability list or `*`) until `expires_at`, and not before `not_before` when present. `issued_at` is a signed field but `verifyDelegation` does not check it against the clock; a token without `not_before` is active as soon as it is signed. It authorizes one act and is short-lived: the RECOMMENDED lifetime is 1 h, and issuers SHOULD NOT issue lifetimes over 24 h ([`market-v1.md`](market-v1.md) §12), which no verifier enforces (a standing-delegation tick is bounded by the grant's `max_token_ttl_ms` instead). A token with `grant_id` is one tick of a standing delegation.
 - **Layer:** protocol (`DelegationToken`), crypto (sign/verify).
 - **Wire:** `spec/schemas/delegation-token-v1.json`; suite `motebit-jcs-ed25519-b64-v1`. See [`market-v1.md`](market-v1.md) §12 and [`delegation-v1.md`](delegation-v1.md).
-- **Expiry note:** the existing verifier rejects when `expires_at < now`, i.e. the token is valid while `now <= expires_at` (inclusive). New artifacts use exclusive expiry (naming-by-layer § Time); this artifact is frozen as is.
+- **Expiry note:** the existing verifier rejects when `expires_at < now`, i.e. the token is valid while `now <= expires_at` (inclusive). New artifacts use exclusive expiry (naming-by-layer § Time); this artifact is frozen as is, as is `StandingDelegation` (§5.2).
 - **Standard:** novel; structurally comparable to a UCAN or a signed OAuth token, conforming to neither.
 - **Forbidden synonyms:** permission (superseded), grant (reserved, §5.2), capability token, bearer token, API key.
 
@@ -178,6 +178,7 @@ These rules bind every wire term defined below unless its entry records a deviat
 - **Definition:** a delegator-signed, revocable, finite authorization that does not authorize a task itself; it authorizes per-tick `DelegationToken`s, each signed by the delegator, within a scope ceiling, a cadence, a maximum token TTL and an optional spend ceiling. **"Grant" means a `StandingDelegation` and nothing else.** A grant is terminated by a signed `DelegationRevocation`.
 - **Layer:** protocol (`StandingDelegation`), crypto.
 - **Wire:** `spec/schemas/standing-delegation-v1.json`; `grant_id`. See [`standing-delegation-v1.md`](standing-delegation-v1.md).
+- **Expiry note:** `verifyStandingDelegation` rejects when `expires_at < now`, so a grant is valid while `now <= expires_at` (inclusive; standing-delegation-v1 §3.1). Frozen as is, like `DelegationToken` (§5.1). Signed bearer tokens ([`auth-token-v1.md`](auth-token-v1.md)) already expire exclusively: `verifySignedToken` rejects when `exp <= now`.
 - **Standard:** novel because the standing authority is offline-verifiable and revocable without a server-side session.
 - **Forbidden synonyms:** subscription, mandate, policy, permission, consent. Calling any other artifact a "grant" is forbidden.
 
@@ -220,7 +221,7 @@ These rules bind every wire term defined below unless its entry records a deviat
 
 - **Definition:** a signed record of one tool call inside a task: invocation id, tool name, args and result hashes, status, timestamps, and `invocation_origin`. Signed by the motebit that made the call.
 - **Layer:** protocol (`ToolInvocationReceipt`).
-- **Wire:** suite `motebit-jcs-ed25519-b64-v1`; see [`execution-ledger-v1.md`](execution-ledger-v1.md) §4.
+- **Wire:** suite `motebit-jcs-ed25519-b64-v1`; no spec section defines it yet — the canonical shape is the `ToolInvocationReceipt` type in `@motebit/protocol`, signed and verified by `signToolInvocationReceipt` / `verifyToolInvocationReceipt` in `@motebit/crypto`. (`execution-ledger-v1.md` §4 is the step summary, not this receipt.)
 - **Standard:** novel.
 - **Forbidden synonyms:** tool log, trace, span.
 
@@ -253,6 +254,7 @@ These rules bind every wire term defined below unless its entry records a deviat
 - **Definition:** a signed statement **about a subject other than the signer** (subject ≠ signer). This distinguishes an attestation from a receipt (subject = signer). Exceptions, each named and closed:
   - **Hardware attestation** (`HardwareAttestationClaim`): a platform key (Secure Enclave, TPM, Android Keystore, WebAuthn authenticator, App Attest) vouches for the motebit's identity key. This is the RATS-class case ([RFC 9334](https://www.rfc-editor.org/rfc/rfc9334)): the attesting environment and the attested key share a device, but the attesting key is a distinct, vendor-rooted key. It is additive scoring, never an admission gate.
   - **`CostAttestationV1`** (documented exception): an issuer-signed declaration of the cost of one execution (integer **nano-USD**, a recorded deviation from `_micro`), referencing an `ExecutionReceipt` by id and digest. The issuer may be the party whose execution it prices, so subject ≠ signer does not always hold; the name is kept and the exception is recorded here. See [`settlement-invoice-v1.md`](settlement-invoice-v1.md).
+  - **Self-issued `EvalAttestation`** (§6.7): the subject MAY equal the issuer (the self-issued floor), so subject ≠ signer does not hold for that case; the name is kept and the exception is recorded here.
 - **Layer:** protocol, crypto.
 - **Wire:** per artifact.
 - **Standard:** RFC 9334 (RATS) for hardware attestation; otherwise novel.
@@ -289,7 +291,7 @@ These rules bind every wire term defined below unless its entry records a deviat
 - **Definition:** the closed set of ways a priced task is paid:
   - `relay` — **relay-custody**: the delegator's funds are held in a relay-run virtual account; the relay debits the delegator, credits the worker and deducts its fee at the account boundary.
   - `p2p` — **agent-custody**: the delegator pays the worker directly on-chain; the relay's fee is a composed leg of the same atomic transaction; the relay verifies and records it but never transmits the principal.
-    New settlements are written only as `p2p` (`WritableSettlementMode`); `relay` remains readable for existing records.
+    `WritableSettlementMode` restricts typed new worker-settlement writes to `p2p`. The reference relay still writes `relay` on its carve-out paths — self-delegation, zero-cost delegation, legacy non-P2P paths that predate the submission gate, and paid sub-receipts nested in a parent receipt (multi-hop) — so `relay` appears on new records as well as existing ones.
 - **Layer:** protocol (`SettlementMode`, `ALL_SETTLEMENT_MODES`).
 - **Wire:** string values `relay | p2p`. See [`settlement-v1.md`](settlement-v1.md).
 - **Standard:** novel.

@@ -26,7 +26,7 @@ goal, plan, step, task (`AgentTask` and its status), tools and `ToolDefinition` 
 
 ### 5. Settlement — how value moves
 
-`SettlementMode` (`relay` = relay-custody virtual account; `p2p` = agent-custody on-chain with a composed fee leg), custody, settlement rails, settlement assets, micro-unit money, `BondCommitment` (eligibility signal, never custodied), `CostAttestation` and `Invoice` (the bill format).
+`SettlementMode` (`relay` = relay-custody virtual account; `p2p` = agent-custody on-chain with a composed fee leg), custody, settlement rails, settlement assets, micro-unit money, `BondCommitment` (eligibility signal, never custodied), `CostAttestationV1` and `InvoiceV1` (the bill format).
 
 ### 6. Verification — how a third party checks any of it
 

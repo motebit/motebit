@@ -1396,7 +1396,7 @@ export const CORPUS_INDEX: CorpusIndex = {
       source: "README.md",
       title: "Architecture",
       content:
-        "**53 packages across 7 architectural layers · 5 surfaces + 6 supporting apps · 1 relay + 2 molecule agents + 5 atom providers + 1 glue service.** A pnpm + Turborepo monorepo, TypeScript throughout. The dependency graph is layered and enforced by `pnpm check-deps` — layer violations break the build.\n\n**The permissive / BSL split is algebra vs. judgment.** The Apache-2.0 protocol packages don't just export types — `@motebit/protocol` ships the semiring combinators, graph traversal, and trust composition math that define _how trust computes along a path_. The BSL `@motebit/semiring` package holds the judgment: _which_ semirings Motebit weights, _how_ it builds its live agent graph, _what_ \"best path\" means for this product. A competing relay can reuse the algebra, pick its own judgment, and still interoperate — because the foundation law lives on the permissive floor. The `check-spec-permissive-boundary` CI gate enforces this: every callable referenced in a spec must be exported from a permissive-floor package or explicitly waived as reference-implementation convention.\n\n**Packages** ([`packages/`](packages/)) — 53 packages on a strict layer DAG. Layer 0 is the open protocol surface (Apache-2.0, zero monorepo deps): [`@motebit/protocol`](packages/protocol/), [`@motebit/crypto`](packages/crypto/), [`@motebit/sdk`](packages/sdk/), [`create-motebit`](packages/create-motebit/). Layers 1–6 are BSL engines — `runtime`, `ai-core`, `memory-graph`, `policy`, `semiring`, `render-engine`, `mcp-server`/`mcp-client`, `sync-engine`, `market`, `wallet-solana`, `core-identity`, `encryption`, and the rest of the interior machinery.\n\n**Surfaces** ([`apps/`](apps/)) — Five user-facing (`web`, `cli`, `desktop`, `mobile`, `spatial`) and four supporting (`admin` dashboard, `identity` viewer, `docs` site, `vscode` extension).\n\n**Marketplace** ([`services/`](services/)) — 11 services in four roles:\n\n- **The relay** — `api` (sync, settlement, federation, 5-tier rate limiting, the only piece with legitimate centralization)\n- **Molecules** — agents that reason and compose other agents: `research` (Claude + web search with cryptographic citation chain), `code-review` (Claude-powered), `auditor` ($0.01/audit, LLM-free — measures another agent's public verification surface and signs the result as an eval attestation), `clerk` ($0.01/task — the money-execution pole: a metered R4 spend under a self-issued signed grant, fail-closed, dry-run-first)\n- **Atoms** — stateless capability providers anyone can wrap: `web-search` ($0.003/request), `read-url` ($0.002/request), `summarize`, `embed` — priced market participants that settle P2P per hop now the multi-hop settlement arc has landed\n- **Glue** — `proxy` (Vercel edge CORS for the web app)\n\n**Protocol** ([`spec/`](spec/)) — 36 open specifications, each `motebit/<name>@1.0`: `identity`, `execution-ledger`, `relay-federation`, `relay-transparency`, `market`, `credential`, `settlement`, `auth-token`, `signed-request-envelope`, `credential-anchor`, `delegation`, `standing-delegation`, `discovery`, `migration`, `seed-escrow`, `dispute`, `agent-settlement-anchor`, `consolidation-receipt`, `consolidation-mutation-manifest`, `device-self-registration`, `goal-lifecycle`, `memory-delta`, `plan-lifecycle`, `computer-use`, `agent-mcp-surface`, `proposals`, `skills`, `skills-registry`, `agent-revocation`, `bond`, `evidence-provenance`, `settlement-invoice`, `eval-attestation`, `routing-transcript`, `machine-roster`. All have a working reference implementation in this repo.\n\n→ Full directory tree, package-by-package descriptions, layer-by-layer breakdown, and data flow: **[docs.motebit.com/docs/operator/architecture](https://docs.motebit.com/docs/operator/architecture)**.",
+        "**53 packages across 7 architectural layers · 5 surfaces + 6 supporting apps · 1 relay + 2 molecule agents + 5 atom providers + 1 glue service.** A pnpm + Turborepo monorepo, TypeScript throughout. The dependency graph is layered and enforced by `pnpm check-deps` — layer violations break the build.\n\n**The permissive / BSL split is algebra vs. judgment.** The Apache-2.0 protocol packages don't just export types — `@motebit/protocol` ships the semiring combinators, graph traversal, and trust composition math that define _how trust computes along a path_. The BSL `@motebit/semiring` package holds the judgment: _which_ semirings Motebit weights, _how_ it builds its live agent graph, _what_ \"best path\" means for this product. A competing relay can reuse the algebra, pick its own judgment, and still interoperate — because the foundation law lives on the permissive floor. The `check-spec-permissive-boundary` CI gate enforces this: every callable referenced in a spec must be exported from a permissive-floor package or explicitly waived as reference-implementation convention.\n\n**Packages** ([`packages/`](packages/)) — 53 packages on a strict layer DAG. Layer 0 is the open protocol surface (Apache-2.0, zero monorepo deps): [`@motebit/protocol`](packages/protocol/), [`@motebit/crypto`](packages/crypto/), [`@motebit/sdk`](packages/sdk/), [`create-motebit`](packages/create-motebit/). Layers 1–6 are BSL engines — `runtime`, `ai-core`, `memory-graph`, `policy`, `semiring`, `render-engine`, `mcp-server`/`mcp-client`, `sync-engine`, `market`, `wallet-solana`, `core-identity`, `encryption`, and the rest of the interior machinery.\n\n**Surfaces** ([`apps/`](apps/)) — Five user-facing (`web`, `cli`, `desktop`, `mobile`, `spatial`) and four supporting (`admin` dashboard, `identity` viewer, `docs` site, `vscode` extension).\n\n**Marketplace** ([`services/`](services/)) — 11 services in four roles:\n\n- **The relay** — `api` (sync, settlement, federation, 5-tier rate limiting, the only piece with legitimate centralization)\n- **Molecules** — agents that reason and compose other agents: `research` (Claude + web search with cryptographic citation chain), `code-review` (Claude-powered), `auditor` ($0.01/audit, LLM-free — measures another agent's public verification surface and signs the result as an eval attestation), `clerk` ($0.01/task — the money-execution pole: a metered R4 spend under a self-issued signed grant, fail-closed, dry-run-first)\n- **Atoms** — stateless capability providers anyone can wrap: `web-search` ($0.003/request), `read-url` ($0.002/request), `summarize`, `embed` — priced market participants that settle P2P per hop now the multi-hop settlement arc has landed\n- **Glue** — `proxy` (Vercel edge CORS for the web app)\n\n**Protocol** ([`spec/`](spec/)) — 36 open specifications, each `motebit/<name>@1.0`: `identity`, `execution-ledger`, `relay-federation`, `relay-transparency`, `market`, `credential`, `settlement`, `auth-token`, `signed-request-envelope`, `credential-anchor`, `delegation`, `standing-delegation`, `discovery`, `migration`, `seed-escrow`, `dispute`, `agent-settlement-anchor`, `consolidation-receipt`, `consolidation-mutation-manifest`, `device-self-registration`, `goal-lifecycle`, `memory-delta`, `plan-lifecycle`, `computer-use`, `agent-mcp-surface`, `proposals`, `skills`, `skills-registry`, `agent-revocation`, `bond`, `evidence-provenance`, `settlement-invoice`, `eval-attestation`, `routing-transcript`, `machine-roster`, `terminology`. All have a working reference implementation in this repo.\n\n→ Full directory tree, package-by-package descriptions, layer-by-layer breakdown, and data flow: **[docs.motebit.com/docs/operator/architecture](https://docs.motebit.com/docs/operator/architecture)**.",
       termFrequencies: {
         "0": 8,
         "1": 4,
@@ -1665,6 +1665,7 @@ export const CORPUS_INDEX: CorpusIndex = {
         transcript: 1,
         machine: 1,
         roster: 1,
+        terminology: 1,
         all: 1,
         working: 1,
         repo: 1,
@@ -1680,7 +1681,7 @@ export const CORPUS_INDEX: CorpusIndex = {
         architecture: 2,
         https: 1,
       },
-      length: 422,
+      length: 423,
     },
     {
       id: "README.md#specification",
@@ -7341,6 +7342,7 @@ export const CORPUS_INDEX: CorpusIndex = {
     transcript: 1,
     machine: 1,
     roster: 1,
+    terminology: 1,
     working: 3,
     directory: 1,
     tree: 1,
@@ -8743,8 +8745,8 @@ export const CORPUS_INDEX: CorpusIndex = {
     ensuring: 1,
     commodity: 1,
   },
-  averageLength: 94.5,
+  averageLength: 94.51190476190476,
   totalDocuments: 84,
-  sourceHash: "f69cbe0935325b4bb55422994e70ee23264b49ab7809242cf5fa21914440a619",
-  generatedAt: "sha256:f69cbe0935325b4b",
+  sourceHash: "841315e4d400b1622617d934e2a38f007132b4309a271bc90e7d32daef5168e4",
+  generatedAt: "sha256:841315e4d400b162",
 };

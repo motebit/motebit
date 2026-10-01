@@ -23,7 +23,7 @@ A spec MAY carry explanatory prose that uses doctrine vocabulary, provided it is
 Within a layer, a term has exactly one meaning, and that meaning is its entry in `spec/terminology-v1.md`. The following words are **reserved**; using one for anything other than its defined meaning is a naming defect:
 
 - **admission** — the relay-signed `task:dispatch` token that authorizes a worker to execute one priced task. Nothing else is an admission.
-- **attestation** — a signed statement about a subject other than the signer. The closed exceptions (hardware attestation, `CostAttestation`) are listed in the terminology spec, and the list does not grow by precedent.
+- **attestation** — a signed statement about a subject other than the signer. The closed exceptions (hardware attestation, `CostAttestationV1`, self-issued `EvalAttestation`) are listed in the terminology spec, and the list does not grow by precedent.
 - **anchor** — an on-chain commitment of a Merkle root. A key pinned out of band is a **trust root**, never an anchor.
 - **grant** — a `StandingDelegation`. A single-act `DelegationToken` is not a grant; a policy allowlist is not a grant.
 - **receipt** — a signed record whose signer is its subject (the agent signs what it did).
@@ -50,7 +50,7 @@ The suffix of a signed artifact's type name states the signer's relationship to 
 | `Commitment`  | signer binds itself to a value that is checked against external state later        |
 | `Transcript`  | signer records the inputs and outputs of a decision so a verifier can recompute it |
 
-A new signed artifact MUST take one of these suffixes. An artifact whose relationship fits none is a missing suffix, admitted by amending this table and the terminology spec, not by improvising.
+A new signed artifact MUST take one of these suffixes. Signed artifacts that predate this table and carry none of them (e.g. `HostEnrollment`, `HostRetirement`, `DelegationRevocation`, `SignedRequestEnvelope`, `InvoiceV1`, `VerifiableCredential`) are frozen as named; they are not precedent for a new suffix. An artifact whose relationship fits none is a missing suffix, admitted by amending this table and the terminology spec, not by improvising.
 
 ## Verbs
 
@@ -66,8 +66,8 @@ A verifier that returns a single success bit names it `valid`. A verifier whose 
 - Field names are `snake_case`.
 - A party is named by role: `<role>_motebit_id`, `<role>_public_key` (e.g. `delegator_motebit_id`, `issuer_public_key`).
 - A versioned artifact carries `spec: "motebit/<artifact>@<major>.<minor>"`.
-- **Time:** `*_at`, integer milliseconds since the Unix epoch. **Expiry is exclusive for new artifacts:** an artifact is valid iff `now < expires_at`. (The existing `DelegationToken` verifier is inclusive; it is frozen and recorded in the terminology spec.)
-- **Money:** integer micro-units in fields suffixed `_micro`. Any other unit is a declared deviation with its own suffix (e.g. `CostAttestation`'s nano-USD).
+- **Time:** `*_at`, integer milliseconds since the Unix epoch. **Expiry is exclusive for new artifacts:** an artifact is valid iff `now < expires_at`. (The existing `DelegationToken` and `StandingDelegation` verifiers are inclusive — valid while `now <= expires_at`; both are frozen and recorded in the terminology spec. Signed bearer tokens already expire exclusively.)
+- **Money:** integer micro-units in fields suffixed `_micro`. Any other unit is a declared deviation with its own suffix (e.g. `CostAttestationV1.cost_nanos` in nano-USD, `InvoiceV1`'s `*_minor` amounts in minor units of its `currency`).
 - **Hash algorithm** is a field value (`algorithm: "sha-256"`), never baked into a field name.
 
 ## Registries, audiences, events, errors
