@@ -269,6 +269,7 @@ export const MUTATIONS: readonly Mutation[] = [
     id: "A2 local action reads a secret",
     shape:
       "a local composite action referencing ${{ secrets.FLY_API_TOKEN }} (no grant is ever an action's)",
+    expect: [/^\.github\/actions\/leak\/action\.yml:\d+: the raw text has `secrets…FLY_API_TOKEN`/],
     apply: (r) => {
       mkdirSync(join(r, ".github", "actions", "leak"), { recursive: true });
       writeFileSync(
@@ -295,11 +296,15 @@ export const MUTATIONS: readonly Mutation[] = [
   {
     id: "P1 writer env job-level",
     shape: "ci.yml#check: TURBO_TOKEN / signing key at JOB level (every step sees them)",
+    expect: [/jobs\.check\.env\.TURBO_TOKEN: the writer's TURBO_TOKEN at JOB level/],
     apply: (r) => editWorkflow(r, "ci.yml", writerSecretsAtJobLevel),
   },
   {
     id: "P2 writer secret on non-turbo step",
     shape: "ci.yml#check: the writer token on the `Install dependencies` step",
+    expect: [
+      /\(Install dependencies\)\.env\.TURBO_TOKEN: the writer's TURBO_TOKEN on a step that does not run turbo/,
+    ],
     apply: (r) =>
       editWorkflow(r, "ci.yml", (d) => {
         const i = stepIndex(d, "check", /^Install dependencies$/);

@@ -838,7 +838,9 @@ export function checkRawCensus(
   };
   const sites = scalarSites(text);
   if (sites == null) {
-    // parseDoc reports the unparseable file; the census refuses to vouch for it too.
+    // Defence in depth (a documented duplicate): parseDoc already reports an
+    // unparseable file, so no test can make this push the sole refusal. The
+    // census still refuses to vouch for bytes it cannot locate.
     out.push({
       rule: "raw-census",
       message: `${workflow}: the census cannot locate YAML nodes in a file that does not parse`,
