@@ -758,6 +758,31 @@ export async function probeLeak(): Promise<boolean> {
     skipWhen: () => scanChangesetsForMajor("@motebit/protocol"),
   },
   {
+    script: "check-api-surface",
+    // Requires packages/verifier/dist (see the build note on the probe above).
+    proves:
+      "flags an exported symbol removed from @motebit/verifier — the pinned surface agency.computer codes against (docs/doctrine/agency-proof-integration.md §2)",
+    perturb: () =>
+      // Perturb the SOURCE side of the comparison, not the baseline: drop
+      // `verifyFile` from the built entry's export list, exactly what a
+      // consumer would see if the export were deleted. api-extractor then
+      // extracts a surface missing a symbol the committed baseline still
+      // promises. The guard throws if the export line moved, so a reshaped
+      // dist fails the probe loudly instead of perturbing nothing.
+      mutateFile("packages/verifier/dist/index.d.ts", (src) => {
+        const line =
+          'export { verifyFile, verifyArtifact, verifySkillDirectory, formatHuman } from "./lib.js";';
+        if (!src.includes(line)) {
+          throw new Error("verifier dist/index.d.ts export line not found — update this probe");
+        }
+        return src.replace(
+          line,
+          `// ${PROBE_PREFIX}verifyFile export removed\nexport { verifyArtifact, verifySkillDirectory, formatHuman } from "./lib.js";`,
+        );
+      }),
+    skipWhen: () => scanChangesetsForMajor("@motebit/verifier"),
+  },
+  {
     script: "check-docs-tree",
     proves:
       "flags an architecture.mdx package whose [Ln] layer tag diverges from scripts/check-deps.ts LAYER map",
