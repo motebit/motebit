@@ -452,6 +452,7 @@ export async function answerTask(
       e.task.status = statusOf(receipt);
       e.expiresAt = Math.max(e.expiresAt, Date.now() + retainMs);
       e.settling = receipt.signature;
+      e.settle_via = door;
       e.settled = true;
     });
     if (adopted == null) {
@@ -493,6 +494,7 @@ export async function answerTask(
       entry =
         taskQueue.writeAnswer(ANSWER_CAP, taskId, current.answer_version ?? 0, (e) => {
           e.settling = receipt.signature;
+          e.settle_via = door;
         }) ?? current;
     }
     return {
@@ -509,6 +511,7 @@ export async function answerTask(
     e.task.status = statusOf(receipt);
     e.expiresAt = Math.max(e.expiresAt, Date.now() + retainMs);
     e.settling = receipt.signature;
+    e.settle_via = door;
   });
   if (written == null) {
     // Unreachable in one synchronous turn; never a silent overwrite.
@@ -644,6 +647,35 @@ export async function admitReceipt(
     settled: done,
     newlyArchived,
   };
+}
+
+/**
+ * An entry answered before the settlement claim existed (a pre-deploy answer:
+ * `receipt` set, no `settling`) adopts the claim for exactly its STORED
+ * answer's signature — the legacy repeat's rule (`answerTask`), taken where no
+ * repeat will come: the executor relay's settlement forward (a §7.4 retry
+ * that straddles the deploy) and the settlement-recovery sweep (#890 round
+ * 10). Nothing is re-answered; the claim names the receipt the entry already
+ * holds, so the table guard admits exactly that receipt's settlement. Returns
+ * the entry as it stands (claimed), or `null` when it holds no answer.
+ */
+export function claimStoredAnswer(
+  taskQueue: AnswerQueue,
+  taskId: string,
+  door: AnswerDoor,
+): TaskQueueEntry | null {
+  const current = taskQueue.get(taskId);
+  if (current?.receipt == null) return null;
+  if (current.settling != null && current.settling !== "") return current;
+  const signature = current.receipt.signature;
+  const claimed = taskQueue.writeAnswer(ANSWER_CAP, taskId, current.answer_version ?? 0, (e) => {
+    e.settling = signature;
+    e.settle_via = door;
+  });
+  if (claimed != null) {
+    logger.info("settlement.legacy_answer_claimed", { correlationId: taskId, door: door.kind });
+  }
+  return claimed ?? taskQueue.get(taskId) ?? null;
 }
 
 /**

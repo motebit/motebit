@@ -182,13 +182,14 @@ export const DECLARATION_CONTENT = {
     // Who the relay handed each task to (#890 round 6): read by every
     // receipt door and the receipt archive, swept by age.
     task_routes: {
-      tables: ["relay_task_routes", "relay_task_answers"],
+      tables: ["relay_task_routes", "relay_task_answers", "relay_result_deliveries"],
       observable: [
         "for every task the relay hands to an executor: the task id, the executor's motebit_id, the peer relay it was forwarded through (empty when local), whether the hand-off was this relay's own admission or a peer's inbound forward, and when — no content, no prompt, no amount; a receipt for the task is accepted only from a recorded executor through its recorded peer, under the task's own origin (migrations v50, v51)",
         "for every answered task: its answer — the executor's signed receipt (its motebit_id, status, result hash, and the result text the executor signed), the receipt its settlement is claimed for, and when — so the task's poll answers the same after the queue forgets it (#890 round 9)",
+        "for every task a peer forwarded here and this relay's agent answered: that its answer is owed to the origin relay — the task id, the origin relay id, the delivery attempts, the last error, and when it was delivered — so the result is retried until the origin acknowledges it (#890 round 10, migration v53); the answer itself is the archived one above",
       ],
       retention_window:
-        "7 days from the hand-off (a route) or the answer (an answer), swept every minute by the task-cleanup loop — beyond the 24-hour idempotency window, the longest any reader consults a route or an answer; an answer whose settlement is claimed but not yet written is kept while its task is still queued, so the next retry settles it",
+        "7 days from the hand-off (a route) or the answer (an answer), swept every minute by the task-cleanup loop — beyond the 24-hour idempotency window, the longest any reader consults a route or an answer; an answer whose settlement is claimed but not yet written is kept while its task is still queued (a queued task with such an answer is held up to 7 days past its expiry), so the next retry or the settlement-recovery sweep settles it; an owed result is kept while it is still owed, and 7 days from its first attempt once delivered, refused or out of attempts",
     },
     // The machine roster (docs/doctrine/machine-roster.md; design:
     // docs/proposals/machine-roster-relay-v1.md D3/D4). Its own category:

@@ -2530,4 +2530,34 @@ export const relayMigrations: Migration[] = [
       }
     },
   },
+  {
+    version: 53,
+    name: "result_deliveries",
+    up: (db) => {
+      // The executor relay's federation result OUTBOX (#890 round 10). A task
+      // a peer forwarded here is answered by this relay's agent; the answer
+      // goes back to the origin by `POST /federation/v1/task/result`, and the
+      // origin settles the task only on it. One send, best-effort, left the
+      // origin waiting for a retry that never came when it was down. A row
+      // is written before the first send and retried (supervised, bounded,
+      // backoff) until the origin acknowledges (2xx), refuses definitively
+      // (4xx), or the attempts run out. Keyed by the task: one result per
+      // task. The body is rebuilt from the archived answer at each attempt.
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS relay_result_deliveries (
+          task_id         TEXT PRIMARY KEY,
+          peer_relay_id   TEXT NOT NULL,
+          attempts        INTEGER NOT NULL DEFAULT 0,
+          max_attempts    INTEGER NOT NULL DEFAULT 12,
+          next_attempt_at INTEGER NOT NULL,
+          status          TEXT NOT NULL DEFAULT 'pending',
+          last_error      TEXT,
+          created_at      INTEGER NOT NULL,
+          delivered_at    INTEGER
+        );
+        CREATE INDEX IF NOT EXISTS idx_relay_result_deliveries_due
+          ON relay_result_deliveries(status, next_attempt_at);
+      `);
+    },
+  },
 ];

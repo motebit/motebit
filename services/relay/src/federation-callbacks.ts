@@ -41,7 +41,7 @@ import { createLogger } from "./logger.js";
 import { sendToEach } from "./ws-send.js";
 import { routeToSockets } from "./task-presentation.js";
 import { bindP2pProofToTask, p2pProofKey } from "./idempotency.js";
-import { admitReceipt } from "./task-answer.js";
+import { admitReceipt, claimStoredAnswer } from "./task-answer.js";
 import type { AnswerQueue } from "./task-answer.js";
 import { recordTaskRoute, inboundTaskIdCollision } from "./task-routing.js";
 import {
@@ -732,8 +732,37 @@ export function createFederationCallbacks(deps: FederationCallbackDeps) {
       // local to this relay — it ran the forwarded task — so the queue entry
       // created by onTaskForwarded names the worker. The forward body does NOT
       // carry agent_id (§7.3); the receiving relay resolves it locally.
-      const workerEntry = taskQueue.get(verified.taskId);
-      const workerId = workerEntry?.task.motebit_id ?? null;
+      //
+      // The receipt this relay's answer is claimed for (#890 r9): the row
+      // names it, and the table refuses any other for a task it knows. An
+      // entry answered BEFORE the claim existed (a pre-deploy answer whose
+      // origin's forward — or its §7.4 retry — lands after the deploy) adopts
+      // the claim for exactly its stored answer now, the legacy repeat's rule
+      // (#890 r10); an entry the queue already forgot is read from its
+      // archived answer (its executor and its claim), unless the task is one
+      // of this relay's OWN admissions (a peer's forward never pays those).
+      let workerEntry = taskQueue.get(verified.taskId);
+      if (workerEntry?.receipt != null && (workerEntry.settling ?? "") === "") {
+        workerEntry =
+          claimStoredAnswer(taskQueue, verified.taskId, { kind: "result_post" }) ?? workerEntry;
+      }
+      const archived =
+        workerEntry == null
+          ? (moteDb.db
+              .prepare("SELECT executor_id, settling FROM relay_task_answers WHERE task_id = ?")
+              .get(verified.taskId) as { executor_id: string; settling: string | null } | undefined)
+          : undefined;
+      const ownAdmission =
+        archived != null &&
+        moteDb.db
+          .prepare("SELECT 1 FROM relay_task_routes WHERE task_id = ? AND origin = 'admission'")
+          .get(verified.taskId) != null;
+      const archivedWorker =
+        archived != null && (archived.settling ?? "") !== "" && !ownAdmission
+          ? archived.executor_id
+          : null;
+      const workerId = workerEntry?.task.motebit_id ?? archivedWorker;
+      const receiptSignature = workerEntry?.settling ?? archived?.settling ?? null;
 
       // This relay signs its OWN copy of the received settlement (issuer = this
       // relay), persisting the verbatim signed record for the §9.1 anchor leaf —
@@ -775,12 +804,6 @@ export function createFederationCallbacks(deps: FederationCallbackDeps) {
         )
         .get(verified.taskId, verified.originRelay);
       if (delivered != null) return { feeAmount, netAmount };
-      // The receipt this relay's answer is claimed for (#890 r9): the row
-      // names it, and the table refuses any other for a task it knows.
-      const claimedRow = moteDb.db
-        .prepare("SELECT settling FROM relay_task_answers WHERE task_id = ?")
-        .get(verified.taskId) as { settling: string | null } | undefined;
-      const receiptSignature = workerEntry?.settling ?? claimedRow?.settling ?? null;
 
       moteDb.db.exec("BEGIN");
       try {

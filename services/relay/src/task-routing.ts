@@ -1776,7 +1776,13 @@ export function cleanupTaskRoutes(db: DatabaseDriver, now: number = Date.now()):
          AND NOT (settled = 0 AND task_id IN (SELECT task_id FROM relay_task_queue))`,
     )
     .run(now - TASK_ROUTE_RETENTION_MS);
-  return info.changes + answers.changes;
+  // A federation result delivery (#890 round 10) the origin acknowledged,
+  // refused, or that ran out of attempts, ages out with the routes; a
+  // PENDING one is still owed to the origin and is kept.
+  const deliveries = db
+    .prepare("DELETE FROM relay_result_deliveries WHERE status <> 'pending' AND created_at < ?")
+    .run(now - TASK_ROUTE_RETENTION_MS);
+  return info.changes + answers.changes + deliveries.changes;
 }
 
 /**

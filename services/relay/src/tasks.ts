@@ -11,7 +11,7 @@ import type { Hono } from "hono";
 import type { TokenAudience } from "@motebit/protocol";
 import type { OutboundUrlOptions } from "@motebit/sdk";
 import { HTTPException } from "hono/http-exception";
-import type { MotebitDatabase } from "@motebit/persistence";
+import type { DatabaseDriver, MotebitDatabase } from "@motebit/persistence";
 import type { IdentityManager } from "@motebit/core-identity";
 import type { EventStore } from "@motebit/event-log";
 import {
@@ -70,6 +70,7 @@ import {
 import { attemptPushWake } from "./push-adapter.js";
 import { getRelayKeypair } from "./credentials.js";
 import type { RelayIdentity } from "./federation.js";
+import { attemptResultDelivery, enqueueResultDelivery } from "./federation.js";
 import {
   forwardTaskViaMcp,
   evaluateSettlementEligibility,
@@ -224,6 +225,13 @@ export type TaskQueueEntry = {
    * answer is frozen and every door settles only this receipt.
    */
   settling?: string;
+  /**
+   * The door the settlement claim was taken by (#890 round 10) — written with
+   * `settling`, in the same write. The settlement-recovery sweep replays a
+   * claimed-but-unsettled answer through THIS door's settlement step (the
+   * federation door with its peer, a sub-task through its parent's answer).
+   */
+  settle_via?: import("./task-answer.js").AnswerDoor;
   /**
    * The entry's answer version (#890 round 9), stepped by every answer write
    * (`TaskQueue.writeAnswer`). A copy carrying an older version is refused by
@@ -737,6 +745,17 @@ export async function recordAdmissionOutcome(
   return new Response(serialized, { status: res.status, headers });
 }
 
+/**
+ * The worker key an executor relay sends with a federation result: the
+ * holder, else main's registry read (§5f verification reader).
+ */
+export function workerKeyFor(db: DatabaseDriver, motebitId: string): string | null {
+  const reg = db
+    .prepare("SELECT public_key FROM agent_registry WHERE motebit_id = ?")
+    .get(motebitId) as { public_key: string | null } | undefined;
+  return verificationKeyFor(db, motebitId, reg?.public_key);
+}
+
 // ---------------------------------------------------------------------------
 // Unified receipt ingestion pipeline
 // ---------------------------------------------------------------------------
@@ -852,6 +871,13 @@ export async function handleReceiptIngestion(
     };
   }
   if (admission.alreadySettled) {
+    if (admission.repeat) {
+      // The parent's identical retry re-walks its nested sub-receipts whose
+      // claims a failed sub-settlement left unsettled (#890 r10).
+      entry = admission.entry;
+      receipt = admission.receipt;
+      await settleNestedReceipts(true);
+    }
     return { verified: true, credential_id: null, already_settled: true };
   }
   entry = admission.entry;
@@ -1042,428 +1068,7 @@ export async function handleReceiptIngestion(
     }
 
     // --- Multi-hop settlement (recursive) ---
-    const delegationReceipts = receipt.delegation_receipts ?? [];
-    if (delegationReceipts.length > 0) {
-      const maxSettlementDepth = deps.maxSettlementDepth ?? MAX_SETTLEMENT_DEPTH;
-
-      /**
-       * The sub-receipt door's settlement step: settle sub-task `subRelayTaskId`
-       * on `sub`, its CLAIMED answer. `true` once the decision is complete.
-       */
-      const settleSubAnswer = async (
-        subEntry: TaskQueueEntry,
-        sub: ExecutionReceipt,
-        parentTaskId: string,
-        depth: number,
-        subRelayTaskId: string,
-      ): Promise<boolean> => {
-        {
-          const subUnitCost = getListingUnitCost(moteDb, sub.motebit_id);
-          const subGross =
-            subEntry.price_snapshot ??
-            (subUnitCost > 0 ? toMicro(computeGrossAmount(subUnitCost, platformFeeRate)) : 0);
-          if (subGross <= 0) {
-            // No cost — still recurse into nested receipts
-            return true;
-          }
-
-          // === Multi-hop-as-P2P reconciliation: honor the sub-task's SUBMITTED
-          // settlement_mode ===
-          // A p2p-submitted sub-hop (B paid C onchain from its OWN wallet — net +
-          // fee legs — at sub-submission time, exactly the Clerk's move) settles as
-          // an AUDIT-ONLY p2p row, mirroring the parent-P2P write in
-          // handleReceiptIngestion. NO `creditAccount`, NO allocation claim: the
-          // money already moved onchain, so a relay credit would double-pay on top
-          // of the delegator's principal action. The p2p-verifier walks
-          // `transfers[]` on `p2p_tx_hash` and flips `pending → verified` once both
-          // legs match. This is the reconciliation the multi-hop-as-P2P arc names;
-          // the relay-mode branch below survives only for the same-party carve-out
-          // (self-delegation has no cross-party onchain payment to record) and
-          // legacy in-flight nested settlements. Doctrine:
-          // `docs/doctrine/off-ramp-as-user-action.md` § "Multi-hop-as-P2P — Increment 1".
-          if (subEntry.settlement_mode === "p2p") {
-            // Payee = the worker the sub-hop's payment paid (#959): the sub-task's
-            // admitted `target_agent`. A nested receipt signed by anyone else is
-            // not the work B paid for — record nothing for it (the paid worker's
-            // own receipt can still settle the sub-task directly).
-            const subPayee = p2pPayeeOf(subEntry);
-            if (sub.motebit_id !== subPayee) {
-              logger.error("multihop.settlement.p2p_receipt_not_from_payee", {
-                correlationId: parentTaskId,
-                subTaskId: subRelayTaskId,
-                payee: subPayee,
-                signer: sub.motebit_id,
-                depth,
-              });
-              return false;
-            }
-            const subP2pProof = subEntry.p2p_payment_proof;
-            const subWorkerAmount = subP2pProof?.amount_micro ?? 0;
-            // Which fee leg funds THIS relay's treasury — mirror the parent-P2P
-            // rule: federated-executor hop uses `b_fee_amount_micro`, single-op
-            // uses `fee_amount_micro`.
-            const subIsFederatedExecutor = subEntry.origin_relay != null;
-            const subFeeAmount = subIsFederatedExecutor
-              ? (subP2pProof?.b_fee_amount_micro ?? 0)
-              : (subP2pProof?.fee_amount_micro ?? 0);
-            const subP2pGross = subWorkerAmount + subFeeAmount;
-            const subP2pFeeRate =
-              subP2pGross > 0 ? Math.round((subFeeAmount / subP2pGross) * 10000) / 10000 : 0;
-            const subP2pSettlementId = crypto.randomUUID();
-            const subP2pSettledAt = Date.now();
-
-            const signedSubP2p = await signSettlement(
-              {
-                settlement_id: subP2pSettlementId,
-                allocation_id: `p2p-${subRelayTaskId}` as never,
-                // Payee = the sub-hop's admitted worker, paid onchain (equal to
-                // the signer, checked above).
-                motebit_id: subPayee,
-                receipt_hash: sub.result_hash ?? "",
-                ledger_hash: null,
-                amount_settled: subWorkerAmount,
-                platform_fee: subFeeAmount,
-                platform_fee_rate: subP2pFeeRate,
-                // Lane in the signed body — the relay's custody posture is
-                // committed-to, not derivable.
-                settlement_mode: "p2p",
-                status: "completed",
-                settled_at: subP2pSettledAt,
-                issuer_relay_id: relayIdentity.relayMotebitId,
-              },
-              relayIdentity.privateKey,
-            );
-
-            moteDb.db
-              .prepare(
-                `INSERT OR IGNORE INTO relay_settlements
-               (settlement_id, allocation_id, task_id, motebit_id, receipt_hash,
-                amount_settled, platform_fee, platform_fee_rate, status, settled_at,
-                settlement_mode, p2p_tx_hash, payment_verification_status, delegator_id,
-                p2p_worker_leg, p2p_worker_address, p2p_worker_address_rung, issuer_relay_id, suite, signature, record_json,
-                receipt_signature)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-              )
-              .run(
-                subP2pSettlementId,
-                `p2p-${subRelayTaskId}`,
-                subRelayTaskId,
-                signedSubP2p.motebit_id,
-                sub.result_hash ?? "",
-                subWorkerAmount,
-                subFeeAmount,
-                subP2pFeeRate,
-                "completed",
-                subP2pSettledAt,
-                "p2p",
-                subP2pProof != null ? p2pProofKey(subP2pProof.tx_hash) : null,
-                "pending",
-                subEntry.submitted_by ?? null,
-                p2pWorkerLegScope(subEntry),
-                subEntry.p2p_admission?.worker_address ?? null,
-                subEntry.p2p_admission?.worker_address_rung ?? null,
-                signedSubP2p.issuer_relay_id,
-                signedSubP2p.suite,
-                signedSubP2p.signature,
-                canonicalJson(signedSubP2p),
-                sub.signature,
-              );
-
-            logger.info("multihop.settlement.p2p_recorded", {
-              correlationId: parentTaskId,
-              subTaskId: subRelayTaskId,
-              subAgent: sub.motebit_id,
-              net: subWorkerAmount,
-              fee: subFeeAmount,
-              depth,
-            });
-
-            // Recurse into nested receipts, then done — the relay-mode residual
-            // write below is skipped for p2p sub-hops.
-            return true;
-          }
-
-          // ARC-MARKER(multi-hop-as-P2P): the relay-mode multi-hop settlement WRITE.
-          // Multi-hop-as-P2P Increment 1 (2026-07-15) reconciled the p2p case ABOVE
-          // — a p2p-submitted sub-hop now settles as an audit-only p2p row and never
-          // reaches here. This branch is therefore the narrow CARVE-OUT residual:
-          // a same-party self-delegated sub-hop (no cross-party onchain payment to
-          // record) or a legacy in-flight nested settlement from before the p2p
-          // reconciliation. It is instrumented LOUDLY rather than thrown — a legacy
-          // nested settlement can still legitimately land here, and a throw would
-          // regress exactly the state this residual preserves. Inverting to a hard
-          // throw belongs to the later increment that makes direct delegation
-          // P2P-only; until then this write is correct for the carve-out. The
-          // error-level event name is the metric (structured logs, not a counter) —
-          // alerting keys on `multihop.settlement.relay_residual_fired`. Doctrine:
-          // `docs/doctrine/off-ramp-as-user-action.md` § "Multi-hop-as-P2P — Increment 1".
-          logger.error("multihop.settlement.relay_residual_fired", {
-            correlationId: parentTaskId,
-            subTaskId: subRelayTaskId,
-            subAgent: sub.motebit_id,
-            depth,
-            amountLocked: subGross,
-            marker: "ARC:multi-hop-as-P2P",
-          });
-
-          const subSettlementId = asSettlementId(crypto.randomUUID());
-          const subAllocationId = asAllocationId(`x402-${subRelayTaskId}`);
-          const subAllocation: BudgetAllocation = {
-            allocation_id: subAllocationId,
-            goal_id: asGoalId(subRelayTaskId),
-            candidate_motebit_id: sub.motebit_id,
-            amount_locked: subGross,
-            currency: "USDC",
-            created_at: sub.submitted_at ?? Date.now(),
-            status: "settled",
-          };
-
-          // Same injected-rate threading as the main settlement below — the
-          // sub-hop gross was locked with `platformFeeRate` (via subGross), so
-          // its split must use the same rate, not the 0.05 default.
-          const subSettlement = settleOnReceipt(
-            subAllocation,
-            sub,
-            null,
-            subSettlementId,
-            platformFeeRate,
-          );
-          // Conserving round to whole micro-units: `net + fee` must still equal
-          // the gross after rounding. Rounding each leg independently overstates
-          // the fee by one micro on 5% of grosses (see roundSettlementSplitMicro).
-          {
-            const rounded = roundSettlementSplitMicro(
-              subSettlement.amount_settled,
-              subSettlement.platform_fee,
-            );
-            subSettlement.amount_settled = rounded.netMicro;
-            subSettlement.platform_fee = rounded.feeMicro;
-          }
-
-          // Self-attesting sub-settlement. Sign BEFORE the synchronous
-          // BEGIN/COMMIT block — see the canonical settlement site for the
-          // concurrency rationale (await inside transaction interleaves).
-          const signedSubSettlement = await signSettlement(
-            {
-              settlement_id: subSettlement.settlement_id,
-              allocation_id: subSettlement.allocation_id,
-              // Payee = the sub-agent named on the sub-receipt.
-              motebit_id: subSettlement.motebit_id,
-              receipt_hash: subSettlement.receipt_hash,
-              ledger_hash: subSettlement.ledger_hash,
-              amount_settled: subSettlement.amount_settled,
-              platform_fee: subSettlement.platform_fee,
-              platform_fee_rate: subSettlement.platform_fee_rate,
-              // Multi-hop sub-receipt settlement-write. NOTE the precise
-              // scope: the sub-task SUBMISSION (B→C) is a real
-              // `POST /agent/C/task` and, once Arc 3.5's gate lands, a *paid*
-              // sub-hop is gated exactly like a direct delegation (it needs
-              // its own P2P proof). This relay-mode WRITE is therefore a
-              // residual of the pre-gate topology — reachable only for a
-              // paid sub-receipt that has no settlement of its own (e.g. the
-              // sub-agent's receipt was nested in the parent's rather than
-              // posted directly). Reconciling this write to honor the
-              // sub-task's submitted settlement_mode (so a p2p-submitted
-              // sub-hop settles p2p, not relay) is the deferred
-              // multi-hop-as-P2P arc. See
-              // `docs/doctrine/off-ramp-as-user-action.md` § "Arc 3.5".
-              settlement_mode: "relay",
-              status: subSettlement.status,
-              settled_at: subSettlement.settled_at,
-              issuer_relay_id: relayIdentity.relayMotebitId,
-            },
-            relayIdentity.privateKey,
-          );
-
-          try {
-            moteDb.db.exec("BEGIN");
-
-            // Fail-closed funding claim — mirror of the canonical settlement
-            // site (handleReceiptIngestion), including its claim-ORDER.
-            //
-            // What the delegator actually has at stake for this sub-task:
-            // `allocation_hold` debits minus `allocation_release` credits for
-            // `x402-<subRelayTaskId>`, read from the transaction ledger. NEVER
-            // the allocation row's status alone — a `'locked'` row also exists
-            // on never-debited paths (free-agent best-effort holds), and a paid
-            // sub-delegation is a real `POST /agent/:worker/task` (rule 8), so
-            // it reaches that same branch. Crediting against such a row mints
-            // balance the relay never received, and `reconcileLedger` cannot
-            // see it because the credit is itself a ledger row.
-            //
-            // READ BEFORE CLAIMING, and the ordering is load-bearing. The
-            // UPDATE is not a predicate — it EXECUTES. Claiming first and
-            // consulting the ledger second would leave an unfunded allocation
-            // permanently `'settled'` with no settlement row: a hard error in
-            // `reconcileLedger` invariant 3, and the exact defect that sent the
-            // direct-path fix back for rework (#541 review → #566). Deriving
-            // funding first and claiming only when funded keeps the claim and
-            // the INSERT atomic.
-            //
-            // subGross > 0 is guaranteed above, so there is no zero-cost
-            // carve-out to make here: unfunded always means skip.
-            const subHeldOnLedger = getAllocationHoldRemaining(moteDb.db, subAllocationId);
-            const subClaimed =
-              subHeldOnLedger > 0 &&
-              moteDb.db
-                .prepare(
-                  "UPDATE relay_allocations SET status = 'settled', settled_at = ? WHERE task_id = ? AND status = 'locked'",
-                )
-                .run(Date.now(), subRelayTaskId).changes > 0;
-
-            if (!subClaimed) {
-              moteDb.db.exec("ROLLBACK");
-              logger.error("multihop.settlement.unfunded_skipped", {
-                correlationId: parentTaskId,
-                subTaskId: subRelayTaskId,
-                subAgent: sub.motebit_id,
-                gross: subGross,
-                subHeldOnLedger,
-                reason:
-                  subHeldOnLedger > 0
-                    ? "sub-allocation not locked — never funded (e.g. P2P sub-hop) or already released; relay credit skipped to prevent unfunded credit / double-pay"
-                    : "sub-allocation holds nothing on the ledger — never debited (best-effort path, or a P2P-submitted sub-hop that moved money onchain), so crediting the sub-agent would mint balance the relay never received",
-              });
-            } else {
-              moteDb.db
-                .prepare(
-                  `INSERT OR IGNORE INTO relay_settlements
-             (settlement_id, allocation_id, task_id, motebit_id, receipt_hash, ledger_hash, amount_settled, platform_fee, platform_fee_rate, status, settled_at, settlement_mode, issuer_relay_id, suite, signature, record_json, receipt_signature)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-                )
-                .run(
-                  signedSubSettlement.settlement_id,
-                  signedSubSettlement.allocation_id,
-                  subRelayTaskId,
-                  sub.motebit_id,
-                  signedSubSettlement.receipt_hash,
-                  signedSubSettlement.ledger_hash,
-                  signedSubSettlement.amount_settled,
-                  signedSubSettlement.platform_fee,
-                  signedSubSettlement.platform_fee_rate,
-                  signedSubSettlement.status,
-                  signedSubSettlement.settled_at,
-                  signedSubSettlement.settlement_mode,
-                  signedSubSettlement.issuer_relay_id,
-                  signedSubSettlement.suite,
-                  signedSubSettlement.signature,
-                  // Rule 11: store the exact canonical signed bytes. The anchor
-                  // leaf is SHA-256 of THIS, so it equals the bytes the worker holds.
-                  canonicalJson(signedSubSettlement),
-                  sub.signature,
-                );
-
-              if (subSettlement.amount_settled > 0) {
-                creditAccount(
-                  moteDb.db,
-                  sub.motebit_id,
-                  subSettlement.amount_settled,
-                  "settlement_credit",
-                  subSettlement.settlement_id,
-                  `Payment for sub-delegated task ${subRelayTaskId}`,
-                );
-              }
-
-              moteDb.db.exec("COMMIT");
-              logger.info("multihop.settlement.created", {
-                correlationId: parentTaskId,
-                subTaskId: subRelayTaskId,
-                subAgent: sub.motebit_id,
-                net: subSettlement.amount_settled,
-                fee: subSettlement.platform_fee,
-                depth,
-              });
-            }
-          } catch (txnErr) {
-            moteDb.db.exec("ROLLBACK");
-            logger.warn("multihop.settlement.failed", {
-              correlationId: parentTaskId,
-              subTaskId: subRelayTaskId,
-              error: txnErr instanceof Error ? txnErr.message : String(txnErr),
-            });
-            return false;
-          }
-          return true;
-        }
-      };
-
-      const settleSubReceipt = async (
-        sub: ExecutionReceipt,
-        parentTaskId: string,
-        depth: number,
-      ): Promise<void> => {
-        if (exceedsSettlementDepth(depth, maxSettlementDepth)) {
-          const subRelayTaskId = (sub as unknown as Record<string, unknown>).relay_task_id;
-          logger.error("multihop.settlement.depth_limit_exceeded", {
-            correlationId: parentTaskId,
-            subAgent: sub.motebit_id,
-            subTaskId: typeof subRelayTaskId === "string" ? subRelayTaskId : null,
-            depth,
-            maxDepth: maxSettlementDepth,
-            reason: "depth_limit_exceeded",
-            action: "unsettled — agent will not be paid for this sub-delegation",
-          });
-          return;
-        }
-
-        const subRelayTaskId = (sub as unknown as Record<string, unknown>).relay_task_id;
-        if (typeof subRelayTaskId !== "string" || subRelayTaskId === "") return;
-
-        // The sub-task's receipt is the sub-task's OWN answer (#890 r9 C1): it
-        // enters by the one door routine like any other — bound to the
-        // sub-task, its payee, a recorded executor, its signature, write-once —
-        // and is settled only as the sub-task's CLAIMED answer. A sub-task
-        // answered (or settled) on another receipt is never paid on this one;
-        // a sub-task paid here answers its poll with this receipt.
-        try {
-          const subAdmission = await admitReceipt(
-            {
-              db: moteDb.db,
-              identityManager,
-              taskQueue,
-              verifyReceipt: (r, keyHex) => verifyExecutionReceipt(r, hexToBytes(keyHex)),
-            },
-            subRelayTaskId,
-            sub,
-            { kind: "sub_receipt", parentTaskId },
-            0,
-            async ({ entry: subEntry, receipt: subAnswer }) =>
-              settleSubAnswer(subEntry, subAnswer, parentTaskId, depth, subRelayTaskId),
-          );
-          if (!subAdmission.took) {
-            logger.warn("multihop.settlement.sub_receipt_not_taken", {
-              correlationId: parentTaskId,
-              subTaskId: subRelayTaskId,
-              subAgent: sub.motebit_id,
-              refusal: subAdmission.refusal,
-            });
-          }
-        } catch (subErr: unknown) {
-          logger.warn("multihop.settlement.sub_error", {
-            correlationId: parentTaskId,
-            subRelayTaskId,
-            error: subErr instanceof Error ? subErr.message : String(subErr),
-          });
-        }
-
-        // Recurse into nested delegation_receipts
-        const nestedReceipts = sub.delegation_receipts ?? [];
-        for (const nested of nestedReceipts) {
-          await settleSubReceipt(nested, parentTaskId, depth + 1);
-        }
-      };
-
-      const treeNodes = settlementTreeDepths(receipt, maxSettlementDepth);
-      logger.info("multihop.settlement.start", {
-        correlationId: taskId,
-        count: delegationReceipts.length,
-        treeDepth: treeNodes.reduce((m, n) => Math.max(m, n.depth), 0),
-        depthBlockedCount: treeNodes.filter((n) => n.depthBlocked).length,
-      });
-      for (const sub of delegationReceipts) {
-        await settleSubReceipt(sub, taskId, 1);
-      }
-    }
+    await settleNestedReceipts(false);
 
     // --- Latency recording ---
     if (receipt.completed_at && entry.task.submitted_at) {
@@ -2026,6 +1631,451 @@ export async function handleReceiptIngestion(
     return true;
   }
 
+  /**
+   * Multi-hop settlement: each sub-receipt nested in the ENTRY'S answer is
+   * admitted as its sub-task's own answer and settled. `onlyUnsettledClaims`:
+   * the parent's repeat (#890 r10) — only sub-tasks claimed for their nested
+   * receipt and left unsettled (a failed sub-settlement) are re-admitted.
+   */
+  async function settleNestedReceipts(onlyUnsettledClaims: boolean): Promise<void> {
+    const delegationReceipts = receipt.delegation_receipts ?? [];
+    if (delegationReceipts.length > 0) {
+      const maxSettlementDepth = deps.maxSettlementDepth ?? MAX_SETTLEMENT_DEPTH;
+
+      /**
+       * The sub-receipt door's settlement step: settle sub-task `subRelayTaskId`
+       * on `sub`, its CLAIMED answer. `true` once the decision is complete.
+       */
+      const settleSubAnswer = async (
+        subEntry: TaskQueueEntry,
+        sub: ExecutionReceipt,
+        parentTaskId: string,
+        depth: number,
+        subRelayTaskId: string,
+      ): Promise<boolean> => {
+        {
+          const subUnitCost = getListingUnitCost(moteDb, sub.motebit_id);
+          const subGross =
+            subEntry.price_snapshot ??
+            (subUnitCost > 0 ? toMicro(computeGrossAmount(subUnitCost, platformFeeRate)) : 0);
+          if (subGross <= 0) {
+            // No cost — still recurse into nested receipts
+            return true;
+          }
+
+          // === Multi-hop-as-P2P reconciliation: honor the sub-task's SUBMITTED
+          // settlement_mode ===
+          // A p2p-submitted sub-hop (B paid C onchain from its OWN wallet — net +
+          // fee legs — at sub-submission time, exactly the Clerk's move) settles as
+          // an AUDIT-ONLY p2p row, mirroring the parent-P2P write in
+          // handleReceiptIngestion. NO `creditAccount`, NO allocation claim: the
+          // money already moved onchain, so a relay credit would double-pay on top
+          // of the delegator's principal action. The p2p-verifier walks
+          // `transfers[]` on `p2p_tx_hash` and flips `pending → verified` once both
+          // legs match. This is the reconciliation the multi-hop-as-P2P arc names;
+          // the relay-mode branch below survives only for the same-party carve-out
+          // (self-delegation has no cross-party onchain payment to record) and
+          // legacy in-flight nested settlements. Doctrine:
+          // `docs/doctrine/off-ramp-as-user-action.md` § "Multi-hop-as-P2P — Increment 1".
+          if (subEntry.settlement_mode === "p2p") {
+            // Payee = the worker the sub-hop's payment paid (#959): the sub-task's
+            // admitted `target_agent`. A nested receipt signed by anyone else is
+            // not the work B paid for — record nothing for it (the paid worker's
+            // own receipt can still settle the sub-task directly).
+            const subPayee = p2pPayeeOf(subEntry);
+            if (sub.motebit_id !== subPayee) {
+              logger.error("multihop.settlement.p2p_receipt_not_from_payee", {
+                correlationId: parentTaskId,
+                subTaskId: subRelayTaskId,
+                payee: subPayee,
+                signer: sub.motebit_id,
+                depth,
+              });
+              return false;
+            }
+            const subP2pProof = subEntry.p2p_payment_proof;
+            const subWorkerAmount = subP2pProof?.amount_micro ?? 0;
+            // Which fee leg funds THIS relay's treasury — mirror the parent-P2P
+            // rule: federated-executor hop uses `b_fee_amount_micro`, single-op
+            // uses `fee_amount_micro`.
+            const subIsFederatedExecutor = subEntry.origin_relay != null;
+            const subFeeAmount = subIsFederatedExecutor
+              ? (subP2pProof?.b_fee_amount_micro ?? 0)
+              : (subP2pProof?.fee_amount_micro ?? 0);
+            const subP2pGross = subWorkerAmount + subFeeAmount;
+            const subP2pFeeRate =
+              subP2pGross > 0 ? Math.round((subFeeAmount / subP2pGross) * 10000) / 10000 : 0;
+            const subP2pSettlementId = crypto.randomUUID();
+            const subP2pSettledAt = Date.now();
+
+            const signedSubP2p = await signSettlement(
+              {
+                settlement_id: subP2pSettlementId,
+                allocation_id: `p2p-${subRelayTaskId}` as never,
+                // Payee = the sub-hop's admitted worker, paid onchain (equal to
+                // the signer, checked above).
+                motebit_id: subPayee,
+                receipt_hash: sub.result_hash ?? "",
+                ledger_hash: null,
+                amount_settled: subWorkerAmount,
+                platform_fee: subFeeAmount,
+                platform_fee_rate: subP2pFeeRate,
+                // Lane in the signed body — the relay's custody posture is
+                // committed-to, not derivable.
+                settlement_mode: "p2p",
+                status: "completed",
+                settled_at: subP2pSettledAt,
+                issuer_relay_id: relayIdentity.relayMotebitId,
+              },
+              relayIdentity.privateKey,
+            );
+
+            moteDb.db
+              .prepare(
+                `INSERT OR IGNORE INTO relay_settlements
+               (settlement_id, allocation_id, task_id, motebit_id, receipt_hash,
+                amount_settled, platform_fee, platform_fee_rate, status, settled_at,
+                settlement_mode, p2p_tx_hash, payment_verification_status, delegator_id,
+                p2p_worker_leg, p2p_worker_address, p2p_worker_address_rung, issuer_relay_id, suite, signature, record_json,
+                receipt_signature)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+              )
+              .run(
+                subP2pSettlementId,
+                `p2p-${subRelayTaskId}`,
+                subRelayTaskId,
+                signedSubP2p.motebit_id,
+                sub.result_hash ?? "",
+                subWorkerAmount,
+                subFeeAmount,
+                subP2pFeeRate,
+                "completed",
+                subP2pSettledAt,
+                "p2p",
+                subP2pProof != null ? p2pProofKey(subP2pProof.tx_hash) : null,
+                "pending",
+                subEntry.submitted_by ?? null,
+                p2pWorkerLegScope(subEntry),
+                subEntry.p2p_admission?.worker_address ?? null,
+                subEntry.p2p_admission?.worker_address_rung ?? null,
+                signedSubP2p.issuer_relay_id,
+                signedSubP2p.suite,
+                signedSubP2p.signature,
+                canonicalJson(signedSubP2p),
+                sub.signature,
+              );
+
+            logger.info("multihop.settlement.p2p_recorded", {
+              correlationId: parentTaskId,
+              subTaskId: subRelayTaskId,
+              subAgent: sub.motebit_id,
+              net: subWorkerAmount,
+              fee: subFeeAmount,
+              depth,
+            });
+
+            // Recurse into nested receipts, then done — the relay-mode residual
+            // write below is skipped for p2p sub-hops.
+            return true;
+          }
+
+          // ARC-MARKER(multi-hop-as-P2P): the relay-mode multi-hop settlement WRITE.
+          // Multi-hop-as-P2P Increment 1 (2026-07-15) reconciled the p2p case ABOVE
+          // — a p2p-submitted sub-hop now settles as an audit-only p2p row and never
+          // reaches here. This branch is therefore the narrow CARVE-OUT residual:
+          // a same-party self-delegated sub-hop (no cross-party onchain payment to
+          // record) or a legacy in-flight nested settlement from before the p2p
+          // reconciliation. It is instrumented LOUDLY rather than thrown — a legacy
+          // nested settlement can still legitimately land here, and a throw would
+          // regress exactly the state this residual preserves. Inverting to a hard
+          // throw belongs to the later increment that makes direct delegation
+          // P2P-only; until then this write is correct for the carve-out. The
+          // error-level event name is the metric (structured logs, not a counter) —
+          // alerting keys on `multihop.settlement.relay_residual_fired`. Doctrine:
+          // `docs/doctrine/off-ramp-as-user-action.md` § "Multi-hop-as-P2P — Increment 1".
+          logger.error("multihop.settlement.relay_residual_fired", {
+            correlationId: parentTaskId,
+            subTaskId: subRelayTaskId,
+            subAgent: sub.motebit_id,
+            depth,
+            amountLocked: subGross,
+            marker: "ARC:multi-hop-as-P2P",
+          });
+
+          const subSettlementId = asSettlementId(crypto.randomUUID());
+          const subAllocationId = asAllocationId(`x402-${subRelayTaskId}`);
+          const subAllocation: BudgetAllocation = {
+            allocation_id: subAllocationId,
+            goal_id: asGoalId(subRelayTaskId),
+            candidate_motebit_id: sub.motebit_id,
+            amount_locked: subGross,
+            currency: "USDC",
+            created_at: sub.submitted_at ?? Date.now(),
+            status: "settled",
+          };
+
+          // Same injected-rate threading as the main settlement below — the
+          // sub-hop gross was locked with `platformFeeRate` (via subGross), so
+          // its split must use the same rate, not the 0.05 default.
+          const subSettlement = settleOnReceipt(
+            subAllocation,
+            sub,
+            null,
+            subSettlementId,
+            platformFeeRate,
+          );
+          // Conserving round to whole micro-units: `net + fee` must still equal
+          // the gross after rounding. Rounding each leg independently overstates
+          // the fee by one micro on 5% of grosses (see roundSettlementSplitMicro).
+          {
+            const rounded = roundSettlementSplitMicro(
+              subSettlement.amount_settled,
+              subSettlement.platform_fee,
+            );
+            subSettlement.amount_settled = rounded.netMicro;
+            subSettlement.platform_fee = rounded.feeMicro;
+          }
+
+          // Self-attesting sub-settlement. Sign BEFORE the synchronous
+          // BEGIN/COMMIT block — see the canonical settlement site for the
+          // concurrency rationale (await inside transaction interleaves).
+          const signedSubSettlement = await signSettlement(
+            {
+              settlement_id: subSettlement.settlement_id,
+              allocation_id: subSettlement.allocation_id,
+              // Payee = the sub-agent named on the sub-receipt.
+              motebit_id: subSettlement.motebit_id,
+              receipt_hash: subSettlement.receipt_hash,
+              ledger_hash: subSettlement.ledger_hash,
+              amount_settled: subSettlement.amount_settled,
+              platform_fee: subSettlement.platform_fee,
+              platform_fee_rate: subSettlement.platform_fee_rate,
+              // Multi-hop sub-receipt settlement-write. NOTE the precise
+              // scope: the sub-task SUBMISSION (B→C) is a real
+              // `POST /agent/C/task` and, once Arc 3.5's gate lands, a *paid*
+              // sub-hop is gated exactly like a direct delegation (it needs
+              // its own P2P proof). This relay-mode WRITE is therefore a
+              // residual of the pre-gate topology — reachable only for a
+              // paid sub-receipt that has no settlement of its own (e.g. the
+              // sub-agent's receipt was nested in the parent's rather than
+              // posted directly). Reconciling this write to honor the
+              // sub-task's submitted settlement_mode (so a p2p-submitted
+              // sub-hop settles p2p, not relay) is the deferred
+              // multi-hop-as-P2P arc. See
+              // `docs/doctrine/off-ramp-as-user-action.md` § "Arc 3.5".
+              settlement_mode: "relay",
+              status: subSettlement.status,
+              settled_at: subSettlement.settled_at,
+              issuer_relay_id: relayIdentity.relayMotebitId,
+            },
+            relayIdentity.privateKey,
+          );
+
+          try {
+            moteDb.db.exec("BEGIN");
+
+            // Fail-closed funding claim — mirror of the canonical settlement
+            // site (handleReceiptIngestion), including its claim-ORDER.
+            //
+            // What the delegator actually has at stake for this sub-task:
+            // `allocation_hold` debits minus `allocation_release` credits for
+            // `x402-<subRelayTaskId>`, read from the transaction ledger. NEVER
+            // the allocation row's status alone — a `'locked'` row also exists
+            // on never-debited paths (free-agent best-effort holds), and a paid
+            // sub-delegation is a real `POST /agent/:worker/task` (rule 8), so
+            // it reaches that same branch. Crediting against such a row mints
+            // balance the relay never received, and `reconcileLedger` cannot
+            // see it because the credit is itself a ledger row.
+            //
+            // READ BEFORE CLAIMING, and the ordering is load-bearing. The
+            // UPDATE is not a predicate — it EXECUTES. Claiming first and
+            // consulting the ledger second would leave an unfunded allocation
+            // permanently `'settled'` with no settlement row: a hard error in
+            // `reconcileLedger` invariant 3, and the exact defect that sent the
+            // direct-path fix back for rework (#541 review → #566). Deriving
+            // funding first and claiming only when funded keeps the claim and
+            // the INSERT atomic.
+            //
+            // subGross > 0 is guaranteed above, so there is no zero-cost
+            // carve-out to make here: unfunded always means skip.
+            const subHeldOnLedger = getAllocationHoldRemaining(moteDb.db, subAllocationId);
+            const subClaimed =
+              subHeldOnLedger > 0 &&
+              moteDb.db
+                .prepare(
+                  "UPDATE relay_allocations SET status = 'settled', settled_at = ? WHERE task_id = ? AND status = 'locked'",
+                )
+                .run(Date.now(), subRelayTaskId).changes > 0;
+
+            if (!subClaimed) {
+              moteDb.db.exec("ROLLBACK");
+              logger.error("multihop.settlement.unfunded_skipped", {
+                correlationId: parentTaskId,
+                subTaskId: subRelayTaskId,
+                subAgent: sub.motebit_id,
+                gross: subGross,
+                subHeldOnLedger,
+                reason:
+                  subHeldOnLedger > 0
+                    ? "sub-allocation not locked — never funded (e.g. P2P sub-hop) or already released; relay credit skipped to prevent unfunded credit / double-pay"
+                    : "sub-allocation holds nothing on the ledger — never debited (best-effort path, or a P2P-submitted sub-hop that moved money onchain), so crediting the sub-agent would mint balance the relay never received",
+              });
+            } else {
+              moteDb.db
+                .prepare(
+                  `INSERT OR IGNORE INTO relay_settlements
+             (settlement_id, allocation_id, task_id, motebit_id, receipt_hash, ledger_hash, amount_settled, platform_fee, platform_fee_rate, status, settled_at, settlement_mode, issuer_relay_id, suite, signature, record_json, receipt_signature)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                )
+                .run(
+                  signedSubSettlement.settlement_id,
+                  signedSubSettlement.allocation_id,
+                  subRelayTaskId,
+                  sub.motebit_id,
+                  signedSubSettlement.receipt_hash,
+                  signedSubSettlement.ledger_hash,
+                  signedSubSettlement.amount_settled,
+                  signedSubSettlement.platform_fee,
+                  signedSubSettlement.platform_fee_rate,
+                  signedSubSettlement.status,
+                  signedSubSettlement.settled_at,
+                  signedSubSettlement.settlement_mode,
+                  signedSubSettlement.issuer_relay_id,
+                  signedSubSettlement.suite,
+                  signedSubSettlement.signature,
+                  // Rule 11: store the exact canonical signed bytes. The anchor
+                  // leaf is SHA-256 of THIS, so it equals the bytes the worker holds.
+                  canonicalJson(signedSubSettlement),
+                  sub.signature,
+                );
+
+              if (subSettlement.amount_settled > 0) {
+                creditAccount(
+                  moteDb.db,
+                  sub.motebit_id,
+                  subSettlement.amount_settled,
+                  "settlement_credit",
+                  subSettlement.settlement_id,
+                  `Payment for sub-delegated task ${subRelayTaskId}`,
+                );
+              }
+
+              moteDb.db.exec("COMMIT");
+              logger.info("multihop.settlement.created", {
+                correlationId: parentTaskId,
+                subTaskId: subRelayTaskId,
+                subAgent: sub.motebit_id,
+                net: subSettlement.amount_settled,
+                fee: subSettlement.platform_fee,
+                depth,
+              });
+            }
+          } catch (txnErr) {
+            moteDb.db.exec("ROLLBACK");
+            logger.warn("multihop.settlement.failed", {
+              correlationId: parentTaskId,
+              subTaskId: subRelayTaskId,
+              error: txnErr instanceof Error ? txnErr.message : String(txnErr),
+            });
+            return false;
+          }
+          return true;
+        }
+      };
+
+      const settleSubReceipt = async (
+        sub: ExecutionReceipt,
+        parentTaskId: string,
+        depth: number,
+      ): Promise<void> => {
+        if (exceedsSettlementDepth(depth, maxSettlementDepth)) {
+          const subRelayTaskId = (sub as unknown as Record<string, unknown>).relay_task_id;
+          logger.error("multihop.settlement.depth_limit_exceeded", {
+            correlationId: parentTaskId,
+            subAgent: sub.motebit_id,
+            subTaskId: typeof subRelayTaskId === "string" ? subRelayTaskId : null,
+            depth,
+            maxDepth: maxSettlementDepth,
+            reason: "depth_limit_exceeded",
+            action: "unsettled — agent will not be paid for this sub-delegation",
+          });
+          return;
+        }
+
+        const subRelayTaskId = (sub as unknown as Record<string, unknown>).relay_task_id;
+        if (typeof subRelayTaskId !== "string" || subRelayTaskId === "") return;
+
+        // A parent's REPEAT re-walks only the sub-tasks whose settlement is
+        // claimed for this very receipt and was never completed (#890 r10: a
+        // sub-settlement that failed once is not stranded behind its settled
+        // parent); each still enters by the one door routine below.
+        const subClaim = onlyUnsettledClaims ? taskQueue.get(subRelayTaskId) : undefined;
+        const strandedClaim =
+          subClaim != null && subClaim.settled !== true && subClaim.settling === sub.signature;
+        if (onlyUnsettledClaims && !strandedClaim) {
+          for (const nested of sub.delegation_receipts ?? []) {
+            await settleSubReceipt(nested, parentTaskId, depth + 1);
+          }
+          return;
+        }
+
+        // The sub-task's receipt is the sub-task's OWN answer (#890 r9 C1): it
+        // enters by the one door routine like any other — bound to the
+        // sub-task, its payee, a recorded executor, its signature, write-once —
+        // and is settled only as the sub-task's CLAIMED answer. A sub-task
+        // answered (or settled) on another receipt is never paid on this one;
+        // a sub-task paid here answers its poll with this receipt.
+        try {
+          const subAdmission = await admitReceipt(
+            {
+              db: moteDb.db,
+              identityManager,
+              taskQueue,
+              verifyReceipt: (r, keyHex) => verifyExecutionReceipt(r, hexToBytes(keyHex)),
+            },
+            subRelayTaskId,
+            sub,
+            { kind: "sub_receipt", parentTaskId },
+            0,
+            async ({ entry: subEntry, receipt: subAnswer }) =>
+              settleSubAnswer(subEntry, subAnswer, parentTaskId, depth, subRelayTaskId),
+          );
+          if (!subAdmission.took) {
+            logger.warn("multihop.settlement.sub_receipt_not_taken", {
+              correlationId: parentTaskId,
+              subTaskId: subRelayTaskId,
+              subAgent: sub.motebit_id,
+              refusal: subAdmission.refusal,
+            });
+          }
+        } catch (subErr: unknown) {
+          logger.warn("multihop.settlement.sub_error", {
+            correlationId: parentTaskId,
+            subRelayTaskId,
+            error: subErr instanceof Error ? subErr.message : String(subErr),
+          });
+        }
+
+        // Recurse into nested delegation_receipts
+        const nestedReceipts = sub.delegation_receipts ?? [];
+        for (const nested of nestedReceipts) {
+          await settleSubReceipt(nested, parentTaskId, depth + 1);
+        }
+      };
+
+      const treeNodes = settlementTreeDepths(receipt, maxSettlementDepth);
+      logger.info("multihop.settlement.start", {
+        correlationId: taskId,
+        count: delegationReceipts.length,
+        treeDepth: treeNodes.reduce((m, n) => Math.max(m, n.depth), 0),
+        depthBlockedCount: treeNodes.filter((n) => n.depthBlocked).length,
+      });
+      for (const sub of delegationReceipts) {
+        await settleSubReceipt(sub, taskId, 1);
+      }
+    }
+  }
+
   /** After the settlement step: fan-out and the federation result return. */
   async function deliverLocalAnswer(): Promise<{ verified: true; credential_id: string | null }> {
     // --- WebSocket fan-out ---
@@ -2036,44 +2086,23 @@ export async function handleReceiptIngestion(
 
     // --- Federation result forwarding ---
     if (entry.origin_relay) {
+      // An outbox row first, then one send (#890 r10): the origin settles the
+      // task only on this result, so an origin that is down now is retried
+      // by the supervised recovery loop until it acknowledges — never left
+      // waiting on a single best-effort send. The worker's key travels with
+      // the receipt (it is registered HERE, not at the origin), so the
+      // origin verifies the worker's own signature — and, for a sovereign
+      // motebit_id, the key→id binding offline.
       try {
-        const originPeer = moteDb.db
-          .prepare("SELECT endpoint_url, public_key FROM relay_peers WHERE peer_relay_id = ?")
-          .get(entry.origin_relay) as { endpoint_url: string } | undefined;
-        if (originPeer) {
-          // Propagate the executing worker's public key to the origin relay. The
-          // worker is registered HERE (the executor relay), not on the origin, so
-          // without this the origin can't verify the worker's inner receipt
-          // signature and falls back to trusting only our peer-envelope sig
-          // (federation.receipt_key_missing). Carrying the key lets the origin
-          // verify the receipt — and, for sovereign motebit_ids, verify the
-          // key→motebit_id binding offline (no trust in us required).
-          const workerReg = moteDb.db
-            .prepare("SELECT public_key FROM agent_registry WHERE motebit_id = ?")
-            .get(receipt.motebit_id) as { public_key: string | null } | undefined;
-          const resultBody = {
-            task_id: taskId,
-            origin_relay: relayIdentity.relayMotebitId,
-            receipt,
-            ...((): { agent_public_key?: string } => {
-              // Holder, else main's registry read (§5f verification reader).
-              const k = verificationKeyFor(moteDb.db, receipt.motebit_id, workerReg?.public_key);
-              return k !== null ? { agent_public_key: k } : {};
-            })(),
-            timestamp: Date.now(),
-          };
-          const resultBytes = new TextEncoder().encode(canonicalJson(resultBody));
-          const resultSig = await sign(resultBytes, relayIdentity.privateKey);
-
-          await fetch(`${originPeer.endpoint_url}/federation/v1/task/result`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json", "X-Correlation-ID": taskId },
-            body: JSON.stringify({ ...resultBody, signature: bytesToHex(resultSig) }),
-            signal: AbortSignal.timeout(10000),
-          });
-        }
-      } catch {
-        // Best-effort federation result return — receipt is already stored locally
+        enqueueResultDelivery(moteDb.db, taskId, entry.origin_relay);
+        await attemptResultDelivery(moteDb.db, relayIdentity, taskId, (signer) =>
+          workerKeyFor(moteDb.db, signer),
+        );
+      } catch (err) {
+        logger.warn("federation.result_delivery_failed", {
+          correlationId: taskId,
+          error: err instanceof Error ? err.message : String(err),
+        });
       }
 
       // Update trust for the originating relay
@@ -2127,7 +2156,18 @@ export async function handleReceiptIngestion(
 // Route registration
 // ---------------------------------------------------------------------------
 
-export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
+/** What the task routes hand back to the relay (#890 round 10). */
+export interface TaskRoutesHandle {
+  /**
+   * Replay `taskId`'s OWN answer through the local door its settlement was
+   * claimed by (`handleReceiptIngestion` → `admitReceipt`): the identical
+   * retry a crash between claim and settle waits for. The door decides it
+   * again; nothing is settled around it.
+   */
+  replayLocalAnswer(taskId: string, door: "result_post" | "mcp_forward"): Promise<boolean>;
+}
+
+export async function registerTaskRoutes(deps: TasksDeps): Promise<TaskRoutesHandle> {
   const {
     app,
     moteDb,
@@ -2166,6 +2206,24 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
     issueCredentials,
     platformFeeRate,
     reconcileKeyConnections: deps.reconcileKeyConnections,
+  };
+
+  const replayLocalAnswer = async (
+    taskId: string,
+    door: "result_post" | "mcp_forward",
+  ): Promise<boolean> => {
+    const entry = taskQueue.get(taskId);
+    if (entry?.receipt == null) return false;
+    const replayed = await handleReceiptIngestion(
+      entry.receipt,
+      taskId,
+      entry.task.motebit_id,
+      entry,
+      door,
+      resultRetentionMs(entry),
+      ingestionDeps,
+    );
+    return replayed.verified;
   };
 
   // === x402: a request's handler relies only on ITS OWN verified payment (#907) ===
@@ -4951,4 +5009,6 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
       credential_id: ingestionResult.credential_id,
     });
   });
+
+  return { replayLocalAnswer };
 }

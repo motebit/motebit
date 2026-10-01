@@ -33,6 +33,12 @@ import type { TaskQueueEntry } from "./tasks.js";
 // or INSERT OR REPLACE cannot write an answer either (unless it forges the
 // version: the triggers are the second layer, the capability the first).
 
+/**
+ * How long past its expiry a claimed-but-unsettled entry is held for the
+ * settlement-recovery sweep (#890 round 10) — the answers' retention.
+ */
+export const UNSETTLED_CLAIM_HOLD_MS = 7 * 24 * 60 * 60 * 1000;
+
 /** The opaque capability `writeAnswer` demands. */
 export type AnswerCapability = { readonly __brand: "AnswerCapability" };
 
@@ -133,9 +139,18 @@ export class TaskQueue implements Map<string, TaskQueueEntry> {
       "SELECT COUNT(*) as cnt FROM relay_task_queue WHERE submitter_id = ? AND status IN ('pending', 'claimed')",
     );
     this.stmtAll = db.prepare("SELECT * FROM relay_task_queue");
-    this.stmtCleanup = db.prepare("DELETE FROM relay_task_queue WHERE expires_at < ?");
+    // An entry whose answer is claimed but not settled (#890 round 10) is
+    // money still owed a decision: expiry and the size cap leave it for the
+    // settlement-recovery sweep — for at most UNSETTLED_CLAIM_HOLD_MS past
+    // its expiry, after which it goes like any other.
+    const heldClaim = `(json_extract(task_json, '$.settling') IS NOT NULL
+        AND COALESCE(json_extract(task_json, '$.settled'), 0) = 0
+        AND expires_at >= ?)`;
+    this.stmtCleanup = db.prepare(
+      `DELETE FROM relay_task_queue WHERE expires_at < ? AND NOT ${heldClaim}`,
+    );
     this.stmtEvictOldest = db.prepare(
-      "DELETE FROM relay_task_queue WHERE task_id IN (SELECT task_id FROM relay_task_queue ORDER BY expires_at ASC LIMIT ?)",
+      `DELETE FROM relay_task_queue WHERE task_id IN (SELECT task_id FROM relay_task_queue WHERE NOT ${heldClaim} ORDER BY expires_at ASC LIMIT ?)`,
     );
   }
 
@@ -440,7 +455,7 @@ export class TaskQueue implements Map<string, TaskQueueEntry> {
 
   /** Delete expired tasks. Returns number of deleted rows. */
   cleanup(now: number = Date.now()): number {
-    const result = this.stmtCleanup.run(now);
+    const result = this.stmtCleanup.run(now, now - UNSETTLED_CLAIM_HOLD_MS);
     return result.changes;
   }
 
@@ -449,7 +464,7 @@ export class TaskQueue implements Map<string, TaskQueueEntry> {
     const currentSize = this.size;
     if (currentSize <= maxSize) return 0;
     const toEvict = currentSize - maxSize;
-    const result = this.stmtEvictOldest.run(toEvict);
+    const result = this.stmtEvictOldest.run(Date.now() - UNSETTLED_CLAIM_HOLD_MS, toEvict);
     return result.changes;
   }
 
@@ -486,6 +501,7 @@ export class TaskQueue implements Map<string, TaskQueueEntry> {
       origin_relay: entry.origin_relay,
       settled: entry.settled,
       settling: entry.settling,
+      settle_via: entry.settle_via,
       settlement_mode: entry.settlement_mode,
       p2p_payment_proof: entry.p2p_payment_proof,
       target_agent: entry.target_agent,
@@ -511,6 +527,7 @@ export class TaskQueue implements Map<string, TaskQueueEntry> {
       origin_relay: (stored.origin_relay as string) ?? undefined,
       settled: (stored.settled as boolean) ?? undefined,
       settling: (stored.settling as string) ?? undefined,
+      settle_via: (stored.settle_via as TaskQueueEntry["settle_via"]) ?? undefined,
       answer_version: row.answer_version ?? 0,
       settlement_mode: (stored.settlement_mode as "relay" | "p2p") ?? undefined,
       p2p_payment_proof:

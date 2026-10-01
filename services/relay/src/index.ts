@@ -109,6 +109,7 @@ import {
   registerFederationRoutes,
   startHeartbeatLoop,
   startSettlementRetryLoop,
+  processResultDeliveries,
 } from "./federation.js";
 import type { RelayIdentity } from "./federation.js";
 import { startRevocationHorizonLoop } from "./horizon.js";
@@ -185,7 +186,9 @@ import { registerAgentRoutes, registerAgentAuthMiddleware } from "./agents.js";
 import { registerHostRosterRoutes } from "./host-roster-routes.js";
 import { observeHostConnection, sweepHostLiveness } from "./host-roster-store.js";
 import { createFederationCallbacks } from "./federation-callbacks.js";
-import { registerTaskRoutes, TASK_TTL_MS } from "./tasks.js";
+import { recoverSettlements } from "./settlement-recovery.js";
+import type { SettlementRecoveryDeps, SettlementRecoveryReport } from "./settlement-recovery.js";
+import { registerTaskRoutes, TASK_TTL_MS, workerKeyFor } from "./tasks.js";
 import { ExpoPushAdapter } from "./push-adapter.js";
 import { TaskQueue, installSettlementGuards } from "./task-queue.js";
 import {
@@ -548,6 +551,14 @@ export interface SyncRelay {
   getConnectionCount(): number;
   /** Whether the relay is currently draining WebSocket connections. */
   isDraining: boolean;
+  /**
+   * Settlement recovery (#890 round 10): the boot pass, and one pass on
+   * demand (the supervised loop runs it every minute). Exposed for testing.
+   */
+  settlementRecovery: {
+    booted: Promise<SettlementRecoveryReport | null>;
+    sweep(opts?: { graceMs?: number; now?: number }): Promise<SettlementRecoveryReport>;
+  };
 }
 
 // === Factory ===
@@ -2347,7 +2358,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
   logger.info("relay.push_wake", { enabled: pushAdapter !== undefined });
 
   // --- Task routes (submission, polling, receipt settlement) ---
-  await registerTaskRoutes({
+  const taskRoutes = await registerTaskRoutes({
     app,
     outboundPolicy,
     moteDb,
@@ -2381,6 +2392,64 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
         ? config.p2pPaymentChain
         : gatedPaymentChain(paymentChainFromEnv()),
   });
+
+  // --- Settlement recovery (#890 round 10): supervised, on boot and every minute ---
+  // A claimed-but-unsettled answer (a crash or a failed step between the
+  // claim and the settle) is replayed through the door its claim was taken
+  // by — the one door routine decides it again; an inbound forward answered
+  // before the claim existed adopts it; owed federation results are
+  // redelivered until the origin acknowledges. One pass at a time; `close()`
+  // waits for the pass in flight.
+  const recoveryDeps: SettlementRecoveryDeps = {
+    db: moteDb.db,
+    taskQueue,
+    replayLocalAnswer: (taskId, door) => taskRoutes.replayLocalAnswer(taskId, door),
+    replayFederationResult: (v) => federationCallbacks.onTaskResultReceived(v),
+    deliverPendingResults: (now) =>
+      processResultDeliveries(
+        moteDb.db,
+        relayIdentity,
+        (signer) => workerKeyFor(moteDb.db, signer),
+        now,
+      ),
+  };
+  let recoveryInFlight: Promise<SettlementRecoveryReport> | null = null;
+  const runSettlementRecovery = (
+    opts: { graceMs?: number; now?: number } = {},
+  ): Promise<SettlementRecoveryReport> => {
+    const run = (recoveryInFlight ?? Promise.resolve(null))
+      .catch(() => null)
+      .then(() => recoverSettlements(recoveryDeps, opts));
+    recoveryInFlight = run;
+    void run
+      .finally(() => {
+        if (recoveryInFlight === run) recoveryInFlight = null;
+      })
+      .catch(() => {});
+    return run;
+  };
+  const settlementRecoveryInterval = superviseInterval(
+    loopSupervisor,
+    "settlement-recovery",
+    60_000,
+    () => runSettlementRecovery().then(() => undefined),
+    { isFrozen: () => getEmergencyFreeze() },
+  );
+  // The boot pass: no grace — no door is in flight in a process that just
+  // started. Supervised like a tick (markStart → markOk/markError).
+  loopSupervisor.markStart("settlement-recovery");
+  const settlementRecoveryBooted: Promise<SettlementRecoveryReport | null> = getEmergencyFreeze()
+    ? Promise.resolve(null)
+    : runSettlementRecovery({ graceMs: 0 }).then(
+        (r) => {
+          loopSupervisor.markOk("settlement-recovery");
+          return r;
+        },
+        (err: unknown) => {
+          loopSupervisor.markError("settlement-recovery", err);
+          return null;
+        },
+      );
 
   // --- Helper: count all connected WebSocket clients ---
   function getConnectionCount(): number {
@@ -2461,6 +2530,8 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     clearInterval(heartbeatInterval);
     clearInterval(revocationHorizonInterval);
     clearInterval(settlementRetryInterval);
+    clearInterval(settlementRecoveryInterval);
+    await (recoveryInFlight ?? Promise.resolve()).catch(() => {});
     clearInterval(batchAnchorInterval);
     clearInterval(agentAnchorInterval);
     clearInterval(credentialAnchorInterval);
@@ -2501,6 +2572,10 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     getConnectionCount,
     get isDraining() {
       return draining;
+    },
+    settlementRecovery: {
+      booted: settlementRecoveryBooted,
+      sweep: (opts) => runSettlementRecovery(opts),
     },
   };
 }
