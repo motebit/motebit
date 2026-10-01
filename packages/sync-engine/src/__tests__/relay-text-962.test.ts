@@ -57,8 +57,8 @@ const STRIPPED: Array<[string, string]> = [
 ];
 
 /** Anything the law forbids in printed relay text. */
-// eslint-disable-next-line no-control-regex
 const FORBIDDEN =
+  // eslint-disable-next-line no-control-regex
   /[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u202a-\u202e\u2066-\u2069\u2028\u2029\ufeff]/;
 const LONE_SURROGATE = /[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/;
 
@@ -69,7 +69,9 @@ describe("#962 round 6 C3 — sanitizeRelayText", () => {
 
   for (const [name, ch] of STRIPPED) {
     it(`strips ${name}`, () => {
-      const out = sanitize!(`safe${ch}text`);
+      // A newline after: an ESC (or a C1 CSI) takes the printable bytes after
+      // it as its sequence ("ESC t" is one), never a control character.
+      const out = sanitize!(`safe${ch}\ntext`);
       expect(FORBIDDEN.test(out), JSON.stringify(out)).toBe(false);
       expect(out.replace(/ /g, "")).toBe("safetext");
     });
@@ -178,7 +180,11 @@ describe("#962 round 6 C2 — relay text is sanitized at the sync-engine boundar
       const lines = readFileSync(join(src, f), "utf8").split("\n");
       lines.forEach((line, i) => {
         if (!/new Error\(/.test(line)) return;
-        if (!/statusText|msg\.message|\.text\(\)|\bbody\b|data\.error|json\.error/.test(line))
+        if (
+          !/statusText|msg\.message|\.text\(\)|\bbody\b|data\.error|json\.error|err\.error/.test(
+            line,
+          )
+        )
           return;
         examined++;
         if (!/sanitizeRelayText\(/.test(line)) offenders.push(`${f}:${i + 1}: ${line.trim()}`);

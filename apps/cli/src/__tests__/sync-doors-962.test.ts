@@ -349,8 +349,8 @@ describe("#962 round 6 P3 — motebit sync clear-intent", () => {
 
 /** The reviewer's probe: OSC title set, BEL, clear screen; 544 characters. */
 const HOSTILE = "\x1b]0;PWNED\x07\x1b[2J" + "X".repeat(530);
-// eslint-disable-next-line no-control-regex
 const FORBIDDEN =
+  // eslint-disable-next-line no-control-regex
   /[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u202a-\u202e\u2066-\u2069\u2028\u2029\ufeff]/;
 
 describe("#962 round 6 C2 — /sync prints relay text sanitized and capped", () => {

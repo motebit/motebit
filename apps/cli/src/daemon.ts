@@ -21,7 +21,7 @@ import { embedText } from "@motebit/memory-graph";
 import type { MotebitPersonalityConfig } from "@motebit/ai-core";
 import { DEFAULT_CONFIG } from "@motebit/ai-core";
 import { openMotebitDatabase } from "@motebit/persistence";
-import { WebSocketEventStoreAdapter } from "@motebit/sync-engine";
+import { sanitizeRelayText, WebSocketEventStoreAdapter } from "@motebit/sync-engine";
 import type { AgentTask, ToolDefinition, ToolHandler } from "@motebit/sdk";
 import {
   EventType,
@@ -127,7 +127,7 @@ export async function handleRun(config: CliConfig): Promise<void> {
   if (verifyResult.type !== "identity" || !verifyResult.valid || !verifyResult.identity) {
     console.error(`Error: invalid identity file signature.`);
     const msg = verifyResult.errors?.[0]?.message;
-    if (msg) console.error(`  ${msg}`);
+    if (msg) console.error(`  ${sanitizeRelayText(msg)}`);
     process.exit(1);
   }
 
@@ -386,7 +386,7 @@ export async function handleRun(config: CliConfig): Promise<void> {
               }
             } catch (err: unknown) {
               const msg = err instanceof Error ? err.message : String(err);
-              console.error(`motebit.yaml reload error: ${msg}`);
+              console.error(`motebit.yaml reload error: ${sanitizeRelayText(msg)}`);
             } finally {
               yamlApplyInFlight = false;
             }
@@ -397,7 +397,7 @@ export async function handleRun(config: CliConfig): Promise<void> {
       // fs.watch errors on some filesystems (e.g., NFS). Non-fatal — the
       // user can still run `motebit up` by hand.
       const msg = err instanceof Error ? err.message : String(err);
-      console.log(`(hot-reload unavailable: ${msg}; use 'motebit up' manually)`);
+      console.log(`(hot-reload unavailable: ${sanitizeRelayText(msg)}; use 'motebit up' manually)`);
     }
   }
 
@@ -419,10 +419,12 @@ export async function handleRun(config: CliConfig): Promise<void> {
       privKeyBytes = loaded.privateKey;
     } catch (err) {
       if (err instanceof IdentityKeyError) {
-        console.log(`Warning: agent tasks disabled (${err.kind}: ${err.message}). → ${err.remedy}`);
+        console.log(
+          `Warning: agent tasks disabled (${err.kind}: ${sanitizeRelayText(err.message)}). → ${err.remedy}`,
+        );
       } else {
         console.log(
-          `Warning: could not decrypt private key — agent tasks disabled (${err instanceof Error ? err.message : String(err)})`,
+          `Warning: could not decrypt private key — agent tasks disabled (${sanitizeRelayText(err instanceof Error ? err.message : String(err))})`,
         );
       }
     }
@@ -482,7 +484,7 @@ export async function handleRun(config: CliConfig): Promise<void> {
       ...(syncToken != null ? { fallbackToken: syncToken } : {}),
       onMintError: (err: unknown) => {
         console.warn(
-          `Warning: could not mint a relay sync token (${err instanceof Error ? err.message : String(err)}) — connecting with the configured token instead`,
+          `Warning: could not mint a relay sync token (${sanitizeRelayText(err instanceof Error ? err.message : String(err))}) — connecting with the configured token instead`,
         );
       },
       capabilities: cliCapabilities,
@@ -570,14 +572,14 @@ export async function handleRun(config: CliConfig): Promise<void> {
             runHalt = runtime.haltInForce();
           } catch (err: unknown) {
             console.log(
-              `[halt] could not read halt state, refusing the task to be safe: ${err instanceof Error ? err.message : String(err)}`,
+              `[halt] could not read halt state, refusing the task to be safe: ${sanitizeRelayText(err instanceof Error ? err.message : String(err))}`,
             );
             return;
           }
           if (runHalt != null) {
             void runtime.honorHalts().catch((err: unknown) => {
               console.log(
-                `[halt] honoring failed (will retry): ${err instanceof Error ? err.message : String(err)}`,
+                `[halt] honoring failed (will retry): ${sanitizeRelayText(err instanceof Error ? err.message : String(err))}`,
               );
             });
             console.log(`\nAgent task not claimed — halted (${runHalt.halt_id.slice(0, 8)})`);
@@ -654,7 +656,9 @@ export async function handleRun(config: CliConfig): Promise<void> {
               }
             } catch (err: unknown) {
               const errMsg = err instanceof Error ? err.message : String(err);
-              console.error(`Agent task ${task.task_id.slice(0, 8)}... error: ${errMsg}`);
+              console.error(
+                `Agent task ${task.task_id.slice(0, 8)}... error: ${sanitizeRelayText(errMsg)}`,
+              );
             }
           })();
         }
@@ -825,7 +829,10 @@ export async function handleRun(config: CliConfig): Promise<void> {
         privKeyBytes = undefined;
       }
     } catch (err: unknown) {
-      console.error("Shutdown error:", err instanceof Error ? err.message : String(err));
+      console.error(
+        "Shutdown error:",
+        sanitizeRelayText(err instanceof Error ? err.message : String(err)),
+      );
     }
     clearTimeout(forceExit);
     process.exit(0);
@@ -1028,7 +1035,7 @@ export async function handleServe(config: CliConfig): Promise<void> {
     if (verifyResult.type !== "identity" || !verifyResult.valid || !verifyResult.identity) {
       console.error(`Error: invalid identity file signature.`);
       const msg = verifyResult.errors?.[0]?.message;
-      if (msg) console.error(`  ${msg}`);
+      if (msg) console.error(`  ${sanitizeRelayText(msg)}`);
       process.exit(1);
     }
 
@@ -1369,10 +1376,12 @@ export async function handleServe(config: CliConfig): Promise<void> {
     servePrivateKey = loaded.privateKey;
   } catch (err) {
     if (err instanceof IdentityKeyError) {
-      log(`Warning: motebit_task tool disabled (${err.kind}: ${err.message}). → ${err.remedy}`);
+      log(
+        `Warning: motebit_task tool disabled (${err.kind}: ${sanitizeRelayText(err.message)}). → ${err.remedy}`,
+      );
     } else {
       log(
-        `Warning: could not decrypt private key — motebit_task tool disabled (${err instanceof Error ? err.message : String(err)})`,
+        `Warning: could not decrypt private key — motebit_task tool disabled (${sanitizeRelayText(err instanceof Error ? err.message : String(err))})`,
       );
     }
   }
@@ -1579,7 +1588,7 @@ export async function handleServe(config: CliConfig): Promise<void> {
         ...(masterToken != null ? { fallbackToken: masterToken } : {}),
         onMintError: (err: unknown) => {
           log(
-            `Warning: could not mint a relay sync token (${err instanceof Error ? err.message : String(err)}) — connecting with the master token instead`,
+            `Warning: could not mint a relay sync token (${sanitizeRelayText(err instanceof Error ? err.message : String(err))}) — connecting with the master token instead`,
           );
         },
         // Serve mode wires the halt store and executes relay-dispatched
@@ -1633,7 +1642,9 @@ export async function handleServe(config: CliConfig): Promise<void> {
           // SQLite, which throws on a busy database. A halted worker
           // must refuse the task, not take the process down.
           void runtimeRef.current?.honorHalts().catch((err: unknown) => {
-            log(`[halt] honoring failed: ${err instanceof Error ? err.message : String(err)}`);
+            log(
+              `[halt] honoring failed: ${sanitizeRelayText(err instanceof Error ? err.message : String(err))}`,
+            );
           });
           // Not claimed, and deliberately not answered with an invented
           // frame: the relay's inbound vocabulary has `task_claim` and no
@@ -1698,7 +1709,7 @@ export async function handleServe(config: CliConfig): Promise<void> {
             }
           } catch (err: unknown) {
             const errMsg = err instanceof Error ? err.message : String(err);
-            log(`Agent task ${task.task_id.slice(0, 8)}... error: ${errMsg}`);
+            log(`Agent task ${task.task_id.slice(0, 8)}... error: ${sanitizeRelayText(errMsg)}`);
           }
         })();
       });
@@ -1801,20 +1812,20 @@ export async function handleServe(config: CliConfig): Promise<void> {
             log(`[self-test] ${result.summary}`);
           } catch (err: unknown) {
             const errMsg = err instanceof Error ? err.message : String(err);
-            log(`[self-test] error: ${errMsg}`);
+            log(`[self-test] error: ${sanitizeRelayText(errMsg)}`);
           }
         }
       }
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
-      log(`Registry registration error: ${msg}`);
+      log(`Registry registration error: ${sanitizeRelayText(msg)}`);
     }
   }
 
   const serveHaltTicker = setInterval(() => {
     void runtimeRef.current?.honorHalts().catch((err: unknown) => {
       log(
-        `[halt] honoring failed (will retry): ${err instanceof Error ? err.message : String(err)}`,
+        `[halt] honoring failed (will retry): ${sanitizeRelayText(err instanceof Error ? err.message : String(err))}`,
       );
     });
   }, 15_000);
@@ -1847,7 +1858,7 @@ export async function handleServe(config: CliConfig): Promise<void> {
         servePrivateKey = undefined;
       }
     } catch (err: unknown) {
-      log(`Shutdown error: ${err instanceof Error ? err.message : String(err)}`);
+      log(`Shutdown error: ${sanitizeRelayText(err instanceof Error ? err.message : String(err))}`);
     }
     clearTimeout(forceExit);
     process.exit(0);

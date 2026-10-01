@@ -27,6 +27,7 @@ import { cliRuntimeConfig } from "../sync-configured.js";
 import { openDelegateEventSync } from "../cli-event-push.js";
 import { electCoordinatorRole } from "../runtime-host.js";
 import { getRelayUrl, getRelayAuthHeaders, requireMotebitId } from "./_helpers.js";
+import { sanitizeRelayText } from "@motebit/sync-engine";
 
 // ---------------------------------------------------------------------------
 // motebit delegate --plan — multi-agent orchestration via PlanEngine
@@ -337,7 +338,7 @@ export async function handleDelegate(config: CliConfig): Promise<void> {
       });
     } catch (err: unknown) {
       console.error(
-        `Sovereign delegation requires identity keys: ${err instanceof Error ? err.message : String(err)}`,
+        `Sovereign delegation requires identity keys: ${sanitizeRelayText(err instanceof Error ? err.message : String(err))}`,
       );
       process.exit(1);
     }
@@ -392,7 +393,9 @@ export async function handleDelegate(config: CliConfig): Promise<void> {
     ledgerDb.close();
 
     if (!result.ok) {
-      console.error(`Sovereign delegation failed (${result.error.code}): ${result.error.message}`);
+      console.error(
+        `Sovereign delegation failed (${result.error.code}): ${sanitizeRelayText(result.error.message)}`,
+      );
       const settled = result.error.settledPayment;
       const unconfirmed = result.error.unconfirmedPayment;
       if (
@@ -498,7 +501,7 @@ export async function handleDelegate(config: CliConfig): Promise<void> {
       );
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
-      console.error(`Discovery error: ${msg}`);
+      console.error(`Discovery error: ${sanitizeRelayText(msg)}`);
       process.exit(1);
     }
   }
@@ -530,7 +533,7 @@ export async function handleDelegate(config: CliConfig): Promise<void> {
     console.log(`Task submitted: ${taskId.slice(0, 12)}...`);
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
-    console.error(`Task submission error: ${msg}`);
+    console.error(`Task submission error: ${sanitizeRelayText(msg)}`);
     process.exit(1);
   }
 

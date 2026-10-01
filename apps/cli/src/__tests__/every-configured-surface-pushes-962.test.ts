@@ -282,6 +282,7 @@ const ENTRIES: Record<Entry, (ctx: CellCtx) => Promise<Started>> = {
       runtime,
       syncUrl: ctx.base,
       motebitId: ctx.mid,
+      eventStore: moteDb.eventStore,
       device: { deviceId: ctx.deviceId, publicKeyHex: hex(ctx.kp) },
       log: (l) => ctx.lines.push(l),
       warn: (l) => ctx.lines.push(l),

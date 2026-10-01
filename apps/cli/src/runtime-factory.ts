@@ -21,6 +21,7 @@ import {
   EncryptedEventStoreAdapter,
   ConversationSyncEngine,
   HttpConversationSyncAdapter,
+  sanitizeRelayText,
 } from "@motebit/sync-engine";
 import { SkillRegistry, SkillSelector } from "@motebit/skills";
 import { NodeFsSkillStorageAdapter } from "@motebit/skills/node-fs";
@@ -1030,35 +1031,11 @@ export function syncFailureLine(sync: { getLastError(): Error | null }): string 
   return err ? `Sync failed (continuing offline): ${sanitizeRelayText(err.message)}` : null;
 }
 
-/** The most relay-provided characters one line from the sync path prints (#962 round 5 C2). */
-const RELAY_TEXT_MAX = 200;
-
 /**
- * Relay-provided text made safe for a terminal or a log line (#962 round 5
- * C2): a relay's response body or error text reached the terminal verbatim
- * (`Device registration: <status> <body>`), so a hostile relay could set the
- * window title, clear the screen or write the clipboard through OSC / CSI /
- * DCS escapes, and flood the screen. ESC sequences (7-bit and the C1 CSI)
- * are removed whole, every remaining C0/C1 control character becomes a
- * space, whitespace runs collapse, and the result is capped at `max`
- * characters with the rest counted, never printed.
+ * Relay-provided text made safe for a terminal or a log line (#962 rounds
+ * 5-6): `@motebit/sync-engine`'s one sanitizer (ESC sequences, C0/C1, DEL,
+ * bidi and zero-width controls, BOM, U+2028/9; grapheme-safe cap). Every CLI
+ * print of an error message goes through it
+ * (`sync-doors-962.test.ts` enumerates them).
  */
-export function sanitizeRelayText(text: string, max = RELAY_TEXT_MAX): string {
-  const clean = text
-    // OSC / DCS / SOS / PM / APC strings, up to their BEL or ST terminator.
-    // eslint-disable-next-line no-control-regex
-    .replace(/\x1b[\]PX^_][^\x07\x1b]*(?:\x07|\x1b\\)?/g, "")
-    // CSI sequences (ESC [ … final byte), and the one-byte C1 CSI.
-    // eslint-disable-next-line no-control-regex
-    .replace(/(?:\x1b\[|\x9b)[0-?]*[ -/]*[@-~]/g, "")
-    // Any other ESC and the byte after it.
-    // eslint-disable-next-line no-control-regex
-    .replace(/\x1b[ -~]?/g, "")
-    // eslint-disable-next-line no-control-regex
-    .replace(/[\x00-\x1f\x7f-\x9f]/g, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-  return clean.length > max
-    ? `${clean.slice(0, max)}… (${clean.length - max} more characters)`
-    : clean;
-}
+export { sanitizeRelayText };

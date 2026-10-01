@@ -146,11 +146,14 @@ import {
   handleSkillsUntrust,
   handleSkillsPublish,
   handleSkillsRunScript,
+  handleStatus,
+  handleSync,
 } from "./subcommands/index.js";
 import { handleRun, handleServe } from "./daemon.js";
 import { resolveRelayUrl } from "./subcommands/_helpers.js";
 import { formatMs, formatTimeAgo } from "./utils.js";
 import { VoiceController } from "./voice.js";
+import { sanitizeRelayText } from "@motebit/sync-engine";
 
 // --- Re-exports for tests and external consumers ---
 export {
@@ -175,7 +178,7 @@ async function main(): Promise<void> {
     config = parseCliArgs();
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
-    console.error(`Error: ${message}`);
+    console.error(`Error: ${sanitizeRelayText(message)}`);
     printHelp();
     process.exit(1);
   }
@@ -494,6 +497,16 @@ async function main(): Promise<void> {
     return;
   }
 
+  if (subcommand === "sync") {
+    await handleSync(config);
+    return;
+  }
+
+  if (subcommand === "status") {
+    await handleStatus(config);
+    return;
+  }
+
   if (subcommand === "skills") {
     const skillsCmd = config.positionals[1];
     if (skillsCmd === "install") {
@@ -798,7 +811,7 @@ async function main(): Promise<void> {
   } catch (err: unknown) {
     destroyTerminal();
     const msg = err instanceof Error ? err.message : String(err);
-    console.error(`Runtime-host election failed: ${msg}`);
+    console.error(`Runtime-host election failed: ${sanitizeRelayText(msg)}`);
     // #512 — bind failures and attach failures have different causes and
     // different repairs; the old one-size advice ("incompatible build")
     // sent the 2026-07-31 socket-path bug hunting in the wrong direction.
@@ -913,7 +926,7 @@ async function main(): Promise<void> {
       persistMotebitPublicKeys(mcpAdapters, fullConfig);
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
-      console.warn(`MCP connection failed: ${message}`);
+      console.warn(`MCP connection failed: ${sanitizeRelayText(message)}`);
     }
   }
 
@@ -936,6 +949,7 @@ async function main(): Promise<void> {
       runtime,
       syncUrl,
       motebitId,
+      eventStore: moteDb.eventStore,
       ...(syncUrl && privateKeyBytes && deviceId && reloadedConfig.device_public_key
         ? { device: { deviceId, publicKeyHex: reloadedConfig.device_public_key } }
         : {}),
@@ -1126,7 +1140,7 @@ async function main(): Promise<void> {
     } catch (err: unknown) {
       // Activation is best-effort — if it fails, user still gets the prompt
       const msg = err instanceof Error ? err.message : String(err);
-      console.error(dim(`  [activation failed: ${msg}]`));
+      console.error(dim(`  [activation failed: ${sanitizeRelayText(msg)}]`));
     }
     console.log();
   }
@@ -1273,7 +1287,7 @@ async function main(): Promise<void> {
       }
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
-      console.error(`\n  ${errorColor("[error: " + message + "]")}\n`);
+      console.error(`\n  ${errorColor("[error: " + sanitizeRelayText(message) + "]")}\n`);
     }
 
     prompt();
@@ -1291,7 +1305,7 @@ main().catch((err: unknown) => {
     err instanceof ConfigIdentityChangedError ||
     err instanceof IdentityBootstrapRefusedError
   ) {
-    console.error(`Error: ${err.message}`);
+    console.error(`Error: ${sanitizeRelayText(err.message)}`);
     process.exit(1);
   }
   console.error("Fatal error:", err);

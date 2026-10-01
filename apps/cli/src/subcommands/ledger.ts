@@ -10,6 +10,7 @@
 import type { CliConfig } from "../args.js";
 import { loadFullConfig } from "../config.js";
 import { getRelayAuthHeaders, requireMotebitId } from "./_helpers.js";
+import { sanitizeRelayText } from "@motebit/sync-engine";
 
 export async function handleLedger(config: CliConfig): Promise<void> {
   const goalId = config.positionals[1];
@@ -36,7 +37,7 @@ export async function handleLedger(config: CliConfig): Promise<void> {
     res = await fetch(url, { headers });
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
-    console.error(`Error: failed to reach relay: ${msg}`);
+    console.error(`Error: failed to reach relay: ${sanitizeRelayText(msg)}`);
     process.exit(1);
   }
 

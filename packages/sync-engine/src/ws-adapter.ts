@@ -11,6 +11,7 @@ import {
   type SyncSeqCursorStore,
 } from "./seq-cursor.js";
 import { assertPushable, type RelayPayloadMode } from "./event-payload.js";
+import { sanitizeRelayText } from "./relay-text.js";
 
 // Resolve WebSocket: use the global (Node 22+, browsers) or fall back to the `ws` package (Node 20).
 // globalThis.WebSocket is checked every time (tests may mock it). The `ws` import result is cached.
@@ -548,7 +549,10 @@ export class WebSocketEventStoreAdapter implements EventStoreAdapter {
           ) {
             // The relay refused the frame in flight (it answers a push with
             // an ack OR this error, never both).
-            this.onPushAnswered(thisSocket, new Error(`sync push: ${msg.message}`));
+            this.onPushAnswered(
+              thisSocket,
+              new Error(`sync push: ${sanitizeRelayText(msg.message)}`),
+            );
           } else if (
             msg.type === "error" &&
             msg.message === "Rate limit exceeded" &&

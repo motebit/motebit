@@ -20,7 +20,11 @@
  * never deletes what it has not acknowledged. Stated cost: a CLI that never
  * reaches its relay, or whose push the relay keeps refusing, holds
  * compaction and `motebit.db` grows until a push is acknowledged. The
- * refusal is surfaced as one line (`syncFailureLine`), never silently.
+ * refusal is surfaced as one line (`syncFailureLine`), never silently. A
+ * relay connected once and abandoned (a mistyped `--sync-url`, a relay
+ * switch) holds compaction too — never retired automatically — and is named
+ * once at REPL start and in `motebit status`; `motebit sync status | retire |
+ * clear-intent` are the operator's doors (#962 round 6, `subcommands/sync.ts`).
  *
  * Every MotebitRuntime construction under `apps/cli/src` builds its config
  * through `cliRuntimeConfig`; `every-configured-surface-pushes-962.test.ts`

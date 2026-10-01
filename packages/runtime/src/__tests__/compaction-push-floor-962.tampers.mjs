@@ -184,8 +184,9 @@ const TAMPERS = [
     build: "@motebit/sync-engine",
     testFile: replTest,
     cwd: cli,
-    text: 'this.lastError = err instanceof Error ? err : new Error("sync failed", { cause: err });',
-    replacement: "void err;",
+    text: "        this.lastError = new Error(\n          sanitizeRelayText(",
+    replacement:
+      "        this.lastError = null;\n        void new Error(\n          sanitizeRelayText(",
     red: "the refusal is one line, never silent",
   },
   {
@@ -467,8 +468,8 @@ const TAMPERS = [
       "push-compaction-floor-962.test.ts",
     ),
     cwd: join(root, "packages", "sync-engine"),
-    text: "if (options.motebitId != null && !stream.endsWith(`#${options.motebitId}`)) continue;",
-    replacement: "void options.motebitId;",
+    text: "if (motebitId != null && !stream.endsWith(`#${motebitId}`)) continue;",
+    replacement: "void motebitId;",
     red: "only the compacted identity's streams count",
   },
   {
@@ -702,13 +703,14 @@ const TAMPERS = [
     red: "the sync-intent marker cannot be read: an unconfigured process deletes nothing",
   },
   {
-    // Sanitizer (C2): relay text printed verbatim.
-    file: join(cli, "src", "runtime-factory.ts"),
+    // Sanitizer (C2): relay text printed verbatim. Round 6: the sanitizer is
+    // sync-engine's (one for every surface); the CLI tests read its dist.
+    file: join(root, "packages", "sync-engine", "src", "relay-text.ts"),
+    build: "@motebit/sync-engine",
     testFile: join(cli, "src", "__tests__", "push-loop-hardening-962.test.ts"),
     cwd: cli,
-    text: "export function sanitizeRelayText(text: string, max = RELAY_TEXT_MAX): string {\n",
-    replacement:
-      "export function sanitizeRelayText(text: string, max = RELAY_TEXT_MAX): string {\n  if (max > 0) return text;\n",
+    text: "  const clean = String(text)\n",
+    replacement: "  if (max > 0) return text;\n  const clean = String(text)\n",
     red: "bootstrapReplDevice: a hostile relay body",
   },
   {
@@ -728,6 +730,311 @@ const TAMPERS = [
     text: "    failures = 0;\n    return result;",
     replacement: "    return result;",
     red: "reset on success",
+  },
+  {
+    // --- #962 round 6 C1: a pinned floor is never silent or doorless. ---
+    // The floor ignores the operator's retirement.
+    file: join(root, "packages", "sync-engine", "src", "index.ts"),
+    testFile: join(
+      root,
+      "packages",
+      "sync-engine",
+      "src",
+      "__tests__",
+      "relay-stream-doors-962.test.ts",
+    ),
+    cwd: join(root, "packages", "sync-engine"),
+    text: "if (stream === exclude || retired !== null) {",
+    replacement: "if (stream === exclude || (retired as unknown) === own) {",
+    red: "the probe: one connect to a typo'd relay; the right relay acked 10 of 20",
+  },
+  {
+    // A retirement marker that cannot be read counts as retired (fail open).
+    file: join(root, "packages", "sync-engine", "src", "index.ts"),
+    testFile: join(
+      root,
+      "packages",
+      "sync-engine",
+      "src",
+      "__tests__",
+      "relay-stream-doors-962.test.ts",
+    ),
+    cwd: join(root, "packages", "sync-engine"),
+    text: "const at = await store.getSyncSeqCursor(retiredStreamKey(stream));",
+    replacement:
+      "const at = await store.getSyncSeqCursor(retiredStreamKey(stream)).catch(() => 1);",
+    red: "an unreadable retirement marker fails closed",
+  },
+  {
+    // Connecting to a retired relay again does not restore it.
+    file: join(root, "packages", "sync-engine", "src", "index.ts"),
+    testFile: join(
+      root,
+      "packages",
+      "sync-engine",
+      "src",
+      "__tests__",
+      "relay-stream-doors-962.test.ts",
+    ),
+    cwd: join(root, "packages", "sync-engine"),
+    text: "            await store.setSyncSeqCursor(retired, 0);",
+    replacement: "            void store;",
+    red: "a retired stream that is connected again holds the floor again",
+  },
+  {
+    // An acknowledgment records no time.
+    file: join(root, "packages", "sync-engine", "src", "index.ts"),
+    testFile: join(
+      root,
+      "packages",
+      "sync-engine",
+      "src",
+      "__tests__",
+      "relay-stream-doors-962.test.ts",
+    ),
+    cwd: join(root, "packages", "sync-engine"),
+    text: "            pushAckedAtKey(relayStreamOfPushKey(key)),",
+    replacement: "            pushAckedAtKey(`x${key}`),",
+    red: "an acknowledgment records its time",
+  },
+  {
+    // The report says nothing of the events a stream holds back.
+    file: join(root, "packages", "sync-engine", "src", "index.ts"),
+    testFile: join(
+      root,
+      "packages",
+      "sync-engine",
+      "src",
+      "__tests__",
+      "relay-stream-doors-962.test.ts",
+    ),
+    cwd: join(root, "packages", "sync-engine"),
+    text: "heldBack = above.filter((e) => e.version_clock <= without).length;",
+    replacement: "heldBack = without < 0 ? above.length : 0;",
+    red: "the probe: one connect to a typo'd relay; the right relay acked 10 of 20",
+  },
+  {
+    // Never-acked only: a stream stale for > 7 days is never named.
+    file: join(root, "packages", "sync-engine", "src", "index.ts"),
+    testFile: join(
+      root,
+      "packages",
+      "sync-engine",
+      "src",
+      "__tests__",
+      "relay-stream-doors-962.test.ts",
+    ),
+    cwd: join(root, "packages", "sync-engine"),
+    text: "if (holder.lastAckAt === null || now - holder.lastAckAt > staleMs) {",
+    replacement: "if (holder.lastAckAt === null && now > staleMs) {",
+    red: "a stream that acked, then stopped for > 7 days",
+  },
+  {
+    // The notice names a stream whose retirement would free nothing.
+    file: join(root, "packages", "sync-engine", "src", "index.ts"),
+    testFile: join(
+      root,
+      "packages",
+      "sync-engine",
+      "src",
+      "__tests__",
+      "relay-stream-doors-962.test.ts",
+    ),
+    cwd: join(root, "packages", "sync-engine"),
+    text: "s.retiredAt === null && s.holdsFloor && s.heldBack > 0",
+    replacement: "s.retiredAt === null && s.holdsFloor",
+    red: "the only stream, never acked: no notice",
+  },
+  {
+    // --- #962 round 6 C2/C3: relay text never prints raw. ---
+    // getLastError() carries the relay's text raw.
+    file: join(root, "packages", "sync-engine", "src", "index.ts"),
+    testFile: join(root, "packages", "sync-engine", "src", "__tests__", "relay-text-962.test.ts"),
+    cwd: join(root, "packages", "sync-engine"),
+    text: "sanitizeRelayText(err instanceof Error ? err.message : String(err)),",
+    replacement: "err instanceof Error ? err.message : String(err),",
+    red: "getLastError() never carries raw relay text",
+  },
+  {
+    // The HTTP adapter builds its Error from the raw status text.
+    file: join(root, "packages", "sync-engine", "src", "http-adapter.ts"),
+    testFile: join(root, "packages", "sync-engine", "src", "__tests__", "relay-text-962.test.ts"),
+    cwd: join(root, "packages", "sync-engine"),
+    text: "throw new Error(`Push failed: ${res.status} ${sanitizeRelayText(res.statusText)}`);",
+    replacement: "throw new Error(`Push failed: ${res.status} ${res.statusText}`);",
+    red: "the HTTP adapter's refusal",
+  },
+  {
+    // The socket's refusal carries the relay's message raw.
+    file: join(root, "packages", "sync-engine", "src", "ws-adapter.ts"),
+    testFile: join(root, "packages", "sync-engine", "src", "__tests__", "relay-text-962.test.ts"),
+    cwd: join(root, "packages", "sync-engine"),
+    text: "new Error(`sync push: ${sanitizeRelayText(msg.message)}`)",
+    replacement: "new Error(`sync push: ${msg.message}`)",
+    red: "static: every Error a sync-engine source builds",
+  },
+  {
+    // Bidi embeddings / overrides survive.
+    file: join(root, "packages", "sync-engine", "src", "relay-text.ts"),
+    testFile: join(root, "packages", "sync-engine", "src", "__tests__", "relay-text-962.test.ts"),
+    cwd: join(root, "packages", "sync-engine"),
+    text: '.replace(/[\\u200b-\\u200f\\u202a-\\u202e\\u2066-\\u2069\\ufeff]/g, "")',
+    replacement: '.replace(/[\\u200b-\\u200f\\u2066-\\u2069\\ufeff]/g, "")',
+    red: "strips U+202E RLO",
+  },
+  {
+    // Bidi isolates survive.
+    file: join(root, "packages", "sync-engine", "src", "relay-text.ts"),
+    testFile: join(root, "packages", "sync-engine", "src", "__tests__", "relay-text-962.test.ts"),
+    cwd: join(root, "packages", "sync-engine"),
+    text: '.replace(/[\\u200b-\\u200f\\u202a-\\u202e\\u2066-\\u2069\\ufeff]/g, "")',
+    replacement: '.replace(/[\\u200b-\\u200f\\u202a-\\u202e\\ufeff]/g, "")',
+    red: "strips U+2066 LRI",
+  },
+  {
+    // Zero-width characters survive.
+    file: join(root, "packages", "sync-engine", "src", "relay-text.ts"),
+    testFile: join(root, "packages", "sync-engine", "src", "__tests__", "relay-text-962.test.ts"),
+    cwd: join(root, "packages", "sync-engine"),
+    text: '.replace(/[\\u200b-\\u200f\\u202a-\\u202e\\u2066-\\u2069\\ufeff]/g, "")',
+    replacement: '.replace(/[\\u202a-\\u202e\\u2066-\\u2069\\ufeff]/g, "")',
+    red: "strips U+200B ZWSP",
+  },
+  {
+    // The BOM survives.
+    file: join(root, "packages", "sync-engine", "src", "relay-text.ts"),
+    testFile: join(root, "packages", "sync-engine", "src", "__tests__", "relay-text-962.test.ts"),
+    cwd: join(root, "packages", "sync-engine"),
+    text: '\\u2066-\\u2069\\ufeff]/g, "")',
+    replacement: '\\u2066-\\u2069]/g, "")',
+    red: "strips U+FEFF BOM",
+  },
+  {
+    // The Unicode line / paragraph separators survive.
+    file: join(root, "packages", "sync-engine", "src", "relay-text.ts"),
+    testFile: join(root, "packages", "sync-engine", "src", "__tests__", "relay-text-962.test.ts"),
+    cwd: join(root, "packages", "sync-engine"),
+    text: '\\x9f\\u2028\\u2029]/g, " ")',
+    replacement: '\\x9f]/g, " ")',
+    red: "strips U+2028 LINE SEPARATOR",
+  },
+  {
+    // DEL survives.
+    file: join(root, "packages", "sync-engine", "src", "relay-text.ts"),
+    testFile: join(root, "packages", "sync-engine", "src", "__tests__", "relay-text-962.test.ts"),
+    cwd: join(root, "packages", "sync-engine"),
+    text: ".replace(/[\\x00-\\x1f\\x7f-\\x9f",
+    replacement: ".replace(/[\\x00-\\x1f\\x80-\\x9f",
+    red: "strips U+007F DEL",
+  },
+  {
+    // Truncation by UTF-16 code unit: a surrogate pair is split at the cap.
+    file: join(root, "packages", "sync-engine", "src", "relay-text.ts"),
+    testFile: join(root, "packages", "sync-engine", "src", "__tests__", "relay-text-962.test.ts"),
+    cwd: join(root, "packages", "sync-engine"),
+    text: "? Array.from(segmenter.segment(clean), (s) => s.segment)",
+    replacement: '? clean.split("")',
+    red: "truncation never splits a surrogate pair",
+  },
+  {
+    // A lone surrogate in the input is printed.
+    file: join(root, "packages", "sync-engine", "src", "relay-text.ts"),
+    testFile: join(root, "packages", "sync-engine", "src", "__tests__", "relay-text-962.test.ts"),
+    cwd: join(root, "packages", "sync-engine"),
+    text: '/g, "\\ufffd")',
+    replacement: "/g, (c) => c)",
+    red: "a lone surrogate in the input is not printed",
+  },
+  {
+    // /sync prints getLastError() raw (the reviewer's C2).
+    file: join(cli, "src", "slash-commands.ts"),
+    testFile: join(cli, "src", "__tests__", "sync-doors-962.test.ts"),
+    cwd: cli,
+    text: "        const failed = syncFailureLine(runtime.sync);\n        if (failed) console.error(failed);",
+    replacement:
+      "        const failed = runtime.sync.getLastError();\n        if (failed) console.error(`Event sync failed: ${failed.message}`);",
+    red: "getLastError() carrying the probe",
+  },
+  {
+    // One CLI print of an error message, unsanitized: the static scan names it.
+    file: join(cli, "src", "slash-commands.ts"),
+    testFile: join(cli, "src", "__tests__", "sync-doors-962.test.ts"),
+    cwd: cli,
+    text: "console.error(`Event sync failed: ${sanitizeRelayText(message)}`);",
+    replacement: "console.error(`Event sync failed: ${message}`);",
+    red: "enumerates each console/log/warn/report call carrying an error message",
+  },
+  {
+    // `motebit sync status` does not say which stream holds the floor.
+    file: join(cli, "src", "subcommands", "sync.ts"),
+    testFile: join(cli, "src", "__tests__", "sync-doors-962.test.ts"),
+    cwd: cli,
+    text: "  else if (s.holdsFloor) {",
+    replacement: "  else if (s.holdsFloor && s.acked < 0) {",
+    red: "the typo scenario: the typo'd stream holds the floor",
+  },
+  {
+    // REPL start: the pinned floor is never said.
+    file: join(cli, "src", "cli-event-push.ts"),
+    testFile: join(cli, "src", "__tests__", "sync-doors-962.test.ts"),
+    cwd: cli,
+    text: "  if (pinned) log(pinned);",
+    replacement: "  void pinned;",
+    red: "REPL start: replStartupSync prints the notice once",
+  },
+  {
+    // `motebit status`: the pinned floor is never said.
+    file: join(cli, "src", "subcommands", "sync.ts"),
+    testFile: join(cli, "src", "__tests__", "sync-doors-962.test.ts"),
+    cwd: cli,
+    text: "  if (notice) out.push(`  ${notice}`);",
+    replacement: "  void notice;",
+    red: "motebit status: one line naming the stream and the retire command",
+  },
+  {
+    // retire: the configured relay is retired without --force.
+    file: join(cli, "src", "subcommands", "sync.ts"),
+    testFile: join(cli, "src", "__tests__", "sync-doors-962.test.ts"),
+    cwd: cli,
+    text: "if (configured && !ctx.force) {",
+    replacement: "if (configured && ctx.force && !ctx.force) {",
+    red: "refuses the currently configured relay unless --force",
+  },
+  {
+    // retire: acts without asking.
+    file: join(cli, "src", "subcommands", "sync.ts"),
+    testFile: join(cli, "src", "__tests__", "sync-doors-962.test.ts"),
+    cwd: cli,
+    text: 'if (!ctx.yes && !(await ctx.confirm(question))) {\n      ctx.print("Not retired.");',
+    replacement: 'if (ctx.yes) {\n      ctx.print("Not retired.");',
+    red: "declined at the prompt: nothing changes",
+  },
+  {
+    // retire: not recorded as an event.
+    file: join(cli, "src", "subcommands", "sync.ts"),
+    testFile: join(cli, "src", "__tests__", "sync-doors-962.test.ts"),
+    cwd: cli,
+    text: '    await recordAct(store, ctx.motebitId, {\n      action: "sync_stream_retired",',
+    replacement: '    void recordAct;\n    void ({\n      action: "sync_stream_retired",',
+    red: "confirms, records an event",
+  },
+  {
+    // clear-intent: clears with unacknowledged events on the configured relay.
+    file: join(cli, "src", "subcommands", "sync.ts"),
+    testFile: join(cli, "src", "__tests__", "sync-doors-962.test.ts"),
+    cwd: cli,
+    text: "if (unacked > 0 && !ctx.force) {",
+    replacement: "if (unacked < 0 && !ctx.force) {",
+    red: "refuses while the configured relay has unacked events",
+  },
+  {
+    // clear-intent: not recorded as an event.
+    file: join(cli, "src", "subcommands", "sync.ts"),
+    testFile: join(cli, "src", "__tests__", "sync-doors-962.test.ts"),
+    cwd: cli,
+    text: '    await recordAct(store, ctx.motebitId, {\n      action: "sync_intent_cleared",',
+    replacement: '    void recordAct;\n    void ({\n      action: "sync_intent_cleared",',
+    red: "refuses while the configured relay has unacked events",
   },
 ];
 

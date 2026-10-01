@@ -28,6 +28,7 @@ import {
   syncFailureLine,
 } from "./runtime-factory.js";
 import { bootstrapIdentity } from "./identity.js";
+import { pinnedFloorNotice } from "./subcommands/sync.js";
 import type { FullConfig } from "./config.js";
 
 /** The periodic push cadence: the plan sync's (30 s). */
@@ -184,13 +185,20 @@ export interface ReplStartupSyncOptions {
   warn: (line: string) => void;
   /** The periodic push interval (ms). Default `PUSH_INTERVAL_MS`. */
   pushIntervalMs?: number;
+  /**
+   * The REPL's `motebit.db` event store (#962 round 6): after the first
+   * cycle, a relay stream pinning compaction is named in one line
+   * (`pinnedFloorNotice`). Required, so no REPL start can skip it.
+   */
+  eventStore: EventStoreAdapter;
 }
 
 /**
  * The REPL's sync at startup (index.ts): introduce the device's key to the
  * relay BEFORE the first push — signed device tokens do not verify
  * otherwise — then sync once, printing the result or the refusal, then keep
- * pushing every interval for the session.
+ * pushing every interval for the session. A relay stream pinning compaction
+ * is then named once (#962 round 6).
  */
 export async function replStartupSync(opts: ReplStartupSyncOptions): Promise<CliEventPush> {
   const { runtime, syncUrl, motebitId, device, log, warn } = opts;
@@ -215,6 +223,11 @@ export async function replStartupSync(opts: ReplStartupSyncOptions): Promise<Cli
       log(`  [${result.conflicts.length} conflicts detected]`);
     }
   }
+  // Once per session, after the first cycle (a reachable relay has acked by
+  // now): a relay stream holding compaction back is never silent (#962
+  // round 6). Best-effort — a report that cannot be read prints nothing.
+  const pinned = await pinnedFloorNotice(opts.eventStore, motebitId, syncUrl).catch(() => null);
+  if (pinned) log(pinned);
   return loop;
 }
 
