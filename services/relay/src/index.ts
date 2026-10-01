@@ -186,7 +186,7 @@ import { registerAgentRoutes, registerAgentAuthMiddleware } from "./agents.js";
 import { registerHostRosterRoutes } from "./host-roster-routes.js";
 import { observeHostConnection, sweepHostLiveness } from "./host-roster-store.js";
 import { createFederationCallbacks } from "./federation-callbacks.js";
-import { recoverSettlements } from "./settlement-recovery.js";
+import { recoverSettlements, SETTLEMENT_RECOVERY_CLOSE_BOUND_MS } from "./settlement-recovery.js";
 import type { SettlementRecoveryDeps, SettlementRecoveryReport } from "./settlement-recovery.js";
 import { registerTaskRoutes, TASK_TTL_MS, workerKeyFor } from "./tasks.js";
 import { ExpoPushAdapter } from "./push-adapter.js";
@@ -2398,28 +2398,33 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
   // claim and the settle) is replayed through the door its claim was taken
   // by — the one door routine decides it again; an inbound forward answered
   // before the claim existed adopts it; owed federation results are
-  // redelivered until the origin acknowledges. One pass at a time; `close()`
-  // waits for the pass in flight.
+  // redelivered until the origin acknowledges. One pass at a time, never a
+  // queue: a tick or sweep arriving while a pass is in flight joins it. The
+  // freeze is checked inside the pass (before each replay and delivery);
+  // `close()` aborts the pass's outbox fetch and waits for it, bounded.
+  const recoveryAbort = new AbortController();
   const recoveryDeps: SettlementRecoveryDeps = {
     db: moteDb.db,
     taskQueue,
     replayLocalAnswer: (taskId, door) => taskRoutes.replayLocalAnswer(taskId, door),
     replayFederationResult: (v) => federationCallbacks.onTaskResultReceived(v),
-    deliverPendingResults: (now) =>
+    deliverPendingResults: (now, ctl) =>
       processResultDeliveries(
         moteDb.db,
         relayIdentity,
         (signer) => workerKeyFor(moteDb.db, signer),
         now,
+        ctl,
       ),
+    isFrozen: () => getEmergencyFreeze(),
   };
   let recoveryInFlight: Promise<SettlementRecoveryReport> | null = null;
   const runSettlementRecovery = (
     opts: { graceMs?: number; now?: number } = {},
   ): Promise<SettlementRecoveryReport> => {
-    const run = (recoveryInFlight ?? Promise.resolve(null))
-      .catch(() => null)
-      .then(() => recoverSettlements(recoveryDeps, opts));
+    // Single-flight, never chain: the pass in flight answers this call too.
+    if (recoveryInFlight != null) return recoveryInFlight;
+    const run = recoverSettlements(recoveryDeps, { ...opts, signal: recoveryAbort.signal });
     recoveryInFlight = run;
     void run
       .finally(() => {
@@ -2531,7 +2536,29 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     clearInterval(revocationHorizonInterval);
     clearInterval(settlementRetryInterval);
     clearInterval(settlementRecoveryInterval);
-    await (recoveryInFlight ?? Promise.resolve()).catch(() => {});
+    // The pass in flight stops at its next step; its outbox fetch is aborted
+    // (that delivery stays pending). Waited for, but never past the bound — a
+    // pass still awaiting a door afterwards meets a closed database and writes
+    // nothing (each settlement is one transaction).
+    recoveryAbort.abort();
+    if (recoveryInFlight != null) {
+      let bound: ReturnType<typeof setTimeout> | undefined;
+      const outlived = await Promise.race([
+        recoveryInFlight.then(
+          () => false,
+          () => false,
+        ),
+        new Promise<boolean>((r) => {
+          bound = setTimeout(() => r(true), SETTLEMENT_RECOVERY_CLOSE_BOUND_MS);
+        }),
+      ]);
+      clearTimeout(bound);
+      if (outlived) {
+        logger.warn("settlement.recovery_close_bound", {
+          boundMs: SETTLEMENT_RECOVERY_CLOSE_BOUND_MS,
+        });
+      }
+    }
     clearInterval(batchAnchorInterval);
     clearInterval(agentAnchorInterval);
     clearInterval(credentialAnchorInterval);

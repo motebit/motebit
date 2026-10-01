@@ -1503,6 +1503,31 @@ const TAMPERS: Tamper[] = [
     pkg: "services/relay",
     test: "src/__tests__/settlement-liveness-890.test.ts",
   },
+  {
+    name: "relay r10 (5) recovery loop: a sweep arriving mid-pass queues a pass behind it (chain, not skip)",
+    file: "services/relay/src/index.ts",
+    find: "    if (recoveryInFlight != null) return recoveryInFlight;\n    const run = recoverSettlements(recoveryDeps, { ...opts, signal: recoveryAbort.signal });",
+    replace:
+      "    const run = (recoveryInFlight ?? Promise.resolve(null))\n      .catch(() => null)\n      .then(() => recoverSettlements(recoveryDeps, { ...opts, signal: recoveryAbort.signal }));",
+    pkg: "services/relay",
+    test: "src/__tests__/settlement-liveness-890.test.ts",
+  },
+  {
+    name: "relay r10 (5) recovery loop: the pass never checks the freeze (P6)",
+    file: "services/relay/src/settlement-recovery.ts",
+    find: '    else if (deps.isFrozen?.() === true) report.halted = "frozen";\n',
+    replace: "",
+    pkg: "services/relay",
+    test: "src/__tests__/settlement-liveness-890.test.ts",
+  },
+  {
+    name: "relay r10 (5) recovery loop: close() does not abort the pass in flight (P5)",
+    file: "services/relay/src/index.ts",
+    find: "    recoveryAbort.abort();\n",
+    replace: "",
+    pkg: "services/relay",
+    test: "src/__tests__/settlement-liveness-890.test.ts",
+  },
 ];
 
 /** Tampers in these packages change a `dist` that app tests import. */

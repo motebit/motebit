@@ -51,6 +51,9 @@ const logger = createLogger({ service: "relay", module: "settlement-recovery" })
 /** How long a fresh claim is left to its own door before the periodic pass replays it. */
 export const SETTLEMENT_RECOVERY_GRACE_MS = 2 * 60 * 1000;
 
+/** How long the relay's `close()` waits for the pass in flight after aborting it. */
+export const SETTLEMENT_RECOVERY_CLOSE_BOUND_MS = 2_000;
+
 export interface SettlementRecoveryDeps {
   db: DatabaseDriver;
   taskQueue: AnswerQueue;
@@ -63,8 +66,17 @@ export interface SettlementRecoveryDeps {
     receipt: ExecutionReceipt;
     agentPublicKey?: string;
   }): Promise<void>;
-  /** The executor relay's pending federation result deliveries. */
-  deliverPendingResults(now: number): Promise<number>;
+  /**
+   * The executor relay's pending federation result deliveries. `shouldStop`
+   * is checked before each delivery; `signal` aborts the one in flight (an
+   * aborted delivery stays pending, its attempt not counted).
+   */
+  deliverPendingResults(
+    now: number,
+    ctl: { signal?: AbortSignal; shouldStop: () => boolean },
+  ): Promise<number>;
+  /** The emergency freeze: checked before the pass and before each replay and delivery. */
+  isFrozen?(): boolean;
 }
 
 export interface SettlementRecoveryReport {
@@ -76,6 +88,8 @@ export interface SettlementRecoveryReport {
   settled: string[];
   /** Federation results the origin acknowledged in this pass. */
   delivered: number;
+  /** Why the pass stopped early, writing nothing further: the freeze or `close()`. */
+  halted?: "frozen" | "closing";
 }
 
 const claimedUnsettled = (e: TaskQueueEntry): boolean =>
@@ -85,15 +99,26 @@ const claimedUnsettled = (e: TaskQueueEntry): boolean =>
   e.settling !== "" &&
   e.settling === e.receipt.signature;
 
-/** One recovery pass. */
+/**
+ * One recovery pass. The freeze (and `opts.signal`, the relay's `close()`)
+ * is checked before the pass and before each replay and each delivery — a
+ * pass already in flight when the freeze lands stops at its next step and
+ * writes nothing further.
+ */
 export async function recoverSettlements(
   deps: SettlementRecoveryDeps,
-  opts: { graceMs?: number; now?: number } = {},
+  opts: { graceMs?: number; now?: number; signal?: AbortSignal } = {},
 ): Promise<SettlementRecoveryReport> {
   const now = opts.now ?? Date.now();
   const graceMs = opts.graceMs ?? SETTLEMENT_RECOVERY_GRACE_MS;
   const { db, taskQueue } = deps;
   const report: SettlementRecoveryReport = { claimed: [], replayed: [], settled: [], delivered: 0 };
+  const halt = (): boolean => {
+    if (opts.signal?.aborted === true) report.halted = "closing";
+    else if (deps.isFrozen?.() === true) report.halted = "frozen";
+    return report.halted != null;
+  };
+  if (halt()) return report;
 
   // 1. Legacy claim: an inbound forward answered before the claim existed.
   const legacy = db
@@ -130,6 +155,7 @@ export async function recoverSettlements(
     )
     .all(now - graceMs) as Array<{ task_id: string }>;
   for (const { task_id } of candidates) {
+    if (halt()) return report;
     const entry = taskQueue.get(task_id);
     if (entry == null || !claimedUnsettled(entry)) continue;
     report.replayed.push(task_id);
@@ -154,8 +180,12 @@ export async function recoverSettlements(
   }
 
   // 3. Deliver the executor relay's owed federation results.
+  if (halt()) return report;
   try {
-    report.delivered = await deps.deliverPendingResults(now);
+    report.delivered = await deps.deliverPendingResults(now, {
+      ...(opts.signal != null ? { signal: opts.signal } : {}),
+      shouldStop: halt,
+    });
   } catch (err) {
     logger.warn("federation.result_delivery_pass_failed", {
       error: err instanceof Error ? err.message : String(err),

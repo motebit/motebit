@@ -42,7 +42,7 @@ import {
 } from "@motebit/encryption";
 import type { KeyPair } from "@motebit/encryption";
 import type { ExecutionReceipt, MotebitId, DeviceId } from "@motebit/sdk";
-import { createTestRelay, createAgent, JSON_AUTH } from "./test-helpers.js";
+import { createTestRelay, createAgent, JSON_AUTH, seedBalance } from "./test-helpers.js";
 import { recordTaskRoute } from "../task-routing.js";
 import { TaskQueue } from "../task-queue.js";
 import { getAccountBalance } from "../accounts.js";
@@ -800,4 +800,236 @@ describe("#890 r10 (4) pins — the guards' clauses and the door routine's commi
       await w.relay.close();
     }
   });
+});
+
+// ───────────────────────────────────────────────────────────────────────────
+// (5) The recovery loop's own lifecycle (#890 r10 final review): one pass at
+// a time and never a queue behind it; the emergency freeze is honoured INSIDE
+// a pass (P6); `close()` is bounded against a blackholed origin (P5).
+// ───────────────────────────────────────────────────────────────────────────
+
+/** The executor relay under test with `n` federation results owed to a fake origin. */
+interface Outbox {
+  w: World;
+  peer: Peer;
+  /** How the origin answers a result delivery: thrown, blackholed, 503, 200. */
+  mode: "down" | "hang" | "fail" | "up";
+  /** Result deliveries the origin received. */
+  results: number;
+  /** Blackholed deliveries, released with a 503. */
+  hung: Array<() => void>;
+  tasks: string[];
+}
+
+async function until(cond: () => boolean, ms = 5_000): Promise<void> {
+  const end = Date.now() + ms;
+  while (!cond()) {
+    if (Date.now() > end) throw new Error("condition not reached");
+    await settle(10);
+  }
+}
+
+async function outbox(n: number, cfg: Partial<SyncRelayConfig> = {}): Promise<Outbox> {
+  const w = await world({ ...FEDERATED("relay-exec"), ...cfg });
+  await w.relay.settlementRecovery.booted;
+  const peer = await addPeer(w.relay);
+  const o: Outbox = { w, peer, mode: "down", results: 0, hung: [], tasks: [] };
+  routeFetch({
+    [peer.url]: (path, init) => {
+      if (path !== "/federation/v1/task/result") {
+        return Promise.resolve(new Response("{}", { status: 200 }));
+      }
+      o.results++;
+      if (o.mode === "down") return Promise.reject(new TypeError("fetch failed: origin down"));
+      if (o.mode === "fail") return Promise.resolve(new Response("{}", { status: 503 }));
+      if (o.mode === "up") return Promise.resolve(new Response("{}", { status: 200 }));
+      // Blackholed: no answer, ever — only the caller's abort ends it.
+      return new Promise<Response>((resolve, reject) => {
+        const signal = init?.signal;
+        signal?.addEventListener("abort", () => reject(signal.reason), { once: true });
+        o.hung.push(() => resolve(new Response("{}", { status: 503 })));
+      });
+    },
+  });
+  for (let i = 0; i < n; i++) {
+    const S = `owed-${crypto.randomUUID()}`;
+    await inboundForward(w, peer, S);
+    const R = await receiptBy(w.W, S, "completed");
+    expect((await postResult(w, S, R, w.W.id)).code).toBe(200);
+    o.tasks.push(S);
+  }
+  await settle(20);
+  return o;
+}
+
+const release = (o: Outbox): void => {
+  o.mode = "fail";
+  for (const r of o.hung.splice(0)) r();
+};
+
+const owedRows = (w: World, tasks: string[]): Array<{ status: string; attempts: number }> =>
+  tasks.map(
+    (S) =>
+      w.relay.moteDb.db
+        .prepare("SELECT status, attempts FROM relay_result_deliveries WHERE task_id = ?")
+        .get(S) as { status: string; attempts: number },
+  );
+
+/** A relay-custody self-delegated task of W's (a funded hold; settling it credits W). */
+async function custodyTask(w: World): Promise<string> {
+  const listing = await w.relay.app.request(`/api/v1/agents/${w.W.id}/listing`, {
+    method: "POST",
+    headers: JSON_AUTH,
+    body: JSON.stringify({
+      capabilities: ["cap890l"],
+      pricing: [{ capability: "cap890l", unit_cost: 1.0, currency: "USD", per: "task" }],
+      description: "custody",
+      pay_to_address: "0x1234567890abcdef1234567890abcdef12345678",
+    }),
+  });
+  expect(listing.status, await listing.clone().text()).toBe(200);
+  seedBalance(w.relay, w.W.id, 10);
+  const res = await w.relay.app.request(`/agent/${w.W.id}/task`, {
+    method: "POST",
+    headers: { ...JSON_AUTH, "Idempotency-Key": crypto.randomUUID() },
+    body: JSON.stringify({
+      prompt: `custody ${crypto.randomUUID()}`,
+      required_capabilities: ["cap890l"],
+      submitted_by: w.W.id,
+    }),
+  });
+  expect(res.status, await res.clone().text()).toBe(201);
+  const { task_id } = (await res.json()) as { task_id: string };
+  await settle(60);
+  return task_id;
+}
+
+const credits = (w: World, id: string): number =>
+  (
+    w.relay.moteDb.db
+      .prepare(
+        "SELECT COUNT(*) AS n FROM relay_transactions WHERE motebit_id = ? AND type = 'settlement_credit'",
+      )
+      .get(id) as { n: number }
+  ).n;
+
+async function admin(w: World, op: "freeze" | "unfreeze"): Promise<number> {
+  const res = await w.relay.app.request(`/api/v1/admin/${op}`, {
+    method: "POST",
+    headers: JSON_AUTH,
+    body: JSON.stringify({ reason: "#890 r10 P6" }),
+  });
+  return res.status;
+}
+
+/** Far enough ahead that every owed delivery is due again, whatever its backoff. */
+const FAR = (): { graceMs: number; now: number } => ({
+  graceMs: 0,
+  now: Date.now() + 30 * 24 * 60 * 60_000,
+});
+
+describe("#890 r10 (5) the recovery loop — single-flight, freeze inside the pass, bounded close", () => {
+  it("single-flight, never chain: sweeps arriving while a pass is in flight join it — no pass is queued behind it", async () => {
+    const o = await outbox(1);
+    try {
+      const sweep = o.w.relay.settlementRecovery.sweep;
+      const before = o.results;
+      o.mode = "hang";
+      const p1 = sweep(FAR());
+      await until(() => o.hung.length === 1);
+      const joined = [sweep(FAR()), sweep(FAR()), sweep(FAR())];
+      release(o);
+      const reports = await Promise.all([p1, ...joined]);
+      await settle(50);
+      // One pass ran: one delivery attempt, every caller got that pass's report.
+      expect(o.results - before).toBe(1);
+      for (const r of reports) expect(r).toBe(reports[0]);
+      // The pass is over: the next sweep is a pass of its own.
+      o.mode = "up";
+      expect((await sweep(FAR())).delivered).toBe(1);
+      expect(o.results - before).toBe(2);
+    } finally {
+      await o.w.relay.close();
+    }
+  }, 60_000);
+
+  it("P6 freeze inside the pass: a pass hung on the outbox, a claimed-unsettled relay-custody task, freeze — zero settlement_credit while frozen; unfreeze — settled exactly once", async () => {
+    const o = await outbox(1);
+    const w = o.w;
+    try {
+      const sweep = w.relay.settlementRecovery.sweep;
+      const S = await custodyTask(w);
+      o.mode = "hang";
+      const p1 = sweep(FAR());
+      await until(() => o.hung.length === 1);
+      // While pass 1 hangs on the outbox, W's answer is claimed and its
+      // settlement step dies.
+      const R = await receiptBy(w.W, S, "completed");
+      crash(w, S, true);
+      expect((await postResult(w, S, R, w.W.id)).code).toBe(200);
+      crash(w, S, false);
+      expect(claim(w, S)).toEqual({ settled: false, settling: R.signature });
+      const base = credits(w, w.W.id);
+      expect(await admin(w, "freeze")).toBe(200);
+      // A sweep arriving now, the hung pass resuming, and a fresh pass — all frozen.
+      const p2 = sweep({ graceMs: 0 });
+      release(o);
+      await Promise.all([p1, p2]);
+      await sweep({ graceMs: 0 });
+      expect(credits(w, w.W.id) - base).toBe(0);
+      expect(rows(w, S)).toEqual([]);
+      expect(claim(w, S)).toEqual({ settled: false, settling: R.signature });
+      // Unfrozen: the next pass settles it exactly once.
+      expect(await admin(w, "unfreeze")).toBe(200);
+      expect((await sweep({ graceMs: 0 })).settled).toEqual([S]);
+      await sweep({ graceMs: 0 });
+      expect(credits(w, w.W.id) - base).toBe(1);
+      expect(sigs(w, S)).toEqual([R.signature]);
+      expect(claim(w, S)).toEqual({ settled: true, settling: R.signature });
+    } finally {
+      await w.relay.close();
+    }
+  }, 60_000);
+
+  it("P5 bounded close(): 3 owed deliveries to a blackholed origin and a pass in flight — close() returns promptly; the aborted delivery stays pending, unburned, and is delivered after restart", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "relay-890-r10-close-"));
+    const cfg = { ...FEDERATED("relay-exec"), dbPath: join(dir, "close.db") };
+    try {
+      const o = await outbox(3, cfg);
+      expect(owedRows(o.w, o.tasks)).toEqual(
+        o.tasks.map(() => ({ status: "pending", attempts: 1 })),
+      );
+      o.mode = "hang";
+      const pass = o.w.relay.settlementRecovery.sweep(FAR());
+      await until(() => o.hung.length === 1);
+      const t0 = Date.now();
+      await o.w.relay.close();
+      const took = Date.now() - t0;
+      expect(took).toBeLessThan(3_000);
+      // The pass itself was stopped by the close, not left running past it.
+      const done = await Promise.race([pass, settle(0).then(() => "running" as const)]);
+      expect(done).not.toBe("running");
+      expect(done !== "running" ? done.halted : undefined).toBe("closing");
+      // Restart: nothing was burned by the abort; every result is delivered once.
+      o.mode = "up";
+      const relay = await createTestRelay({ enableDeviceAuth: false, ...cfg });
+      const w = { ...o.w, relay, q: new TaskQueue(relay.moteDb.db) };
+      try {
+        await relay.settlementRecovery.booted;
+        expect(owedRows(w, o.tasks)).toEqual(
+          o.tasks.map(() => ({ status: "pending", attempts: 1 })),
+        );
+        const before = o.results;
+        expect((await relay.settlementRecovery.sweep(FAR())).delivered).toBe(3);
+        expect(o.results - before).toBe(3);
+        expect(owedRows(w, o.tasks)).toEqual(
+          o.tasks.map(() => ({ status: "delivered", attempts: 2 })),
+        );
+      } finally {
+        await relay.close();
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 120_000);
 });

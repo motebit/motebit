@@ -1122,6 +1122,8 @@ export async function attemptResultDelivery(
   /** The worker's key the origin verifies the receipt with (`verificationKeyFor`). */
   agentKeyFor: (motebitId: string) => string | null,
   retryPolicy: RetryPolicy = DEFAULT_RETRY_POLICY,
+  /** The relay's shutdown: aborts the fetch; the delivery stays pending, the attempt uncounted. */
+  signal?: AbortSignal,
 ): Promise<"pending" | "delivered" | "refused" | "exhausted" | "none"> {
   const row = db
     .prepare("SELECT * FROM relay_result_deliveries WHERE task_id = ? AND status = 'pending'")
@@ -1166,7 +1168,10 @@ export async function attemptResultDelivery(
       method: "POST",
       headers: { "Content-Type": "application/json", "X-Correlation-ID": taskId },
       body: JSON.stringify({ ...resultBody, signature: bytesToHex(sig) }),
-      signal: AbortSignal.timeout(10_000),
+      signal:
+        signal != null
+          ? AbortSignal.any([AbortSignal.timeout(10_000), signal])
+          : AbortSignal.timeout(10_000),
     });
     if (resp.ok) return finish("delivered", null);
     // A definitive refusal (the origin holds another answer, the task is gone
@@ -1176,6 +1181,9 @@ export async function attemptResultDelivery(
     }
     error = `HTTP ${resp.status}`;
   } catch (err: unknown) {
+    // Aborted by the relay's shutdown, not refused by the origin: the row is
+    // left exactly as it was, retried after the restart.
+    if (signal?.aborted === true) return "pending";
     error = err instanceof Error ? err.message : String(err);
   }
   const attempts = row.attempts + 1;
@@ -1201,6 +1209,8 @@ export async function processResultDeliveries(
   relayIdentity: RelayIdentity,
   agentKeyFor: (motebitId: string) => string | null,
   now: number = Date.now(),
+  /** Checked before each delivery (the freeze, the shutdown); `signal` aborts the one in flight. */
+  ctl: { signal?: AbortSignal; shouldStop?: () => boolean } = {},
 ): Promise<number> {
   const due = db
     .prepare(
@@ -1209,9 +1219,16 @@ export async function processResultDeliveries(
     .all(now) as Array<{ task_id: string }>;
   let delivered = 0;
   for (const d of due) {
-    if ((await attemptResultDelivery(db, relayIdentity, d.task_id, agentKeyFor)) === "delivered") {
-      delivered++;
-    }
+    if (ctl.shouldStop?.() === true || ctl.signal?.aborted === true) break;
+    const status = await attemptResultDelivery(
+      db,
+      relayIdentity,
+      d.task_id,
+      agentKeyFor,
+      DEFAULT_RETRY_POLICY,
+      ctl.signal,
+    );
+    if (status === "delivered") delivered++;
   }
   return delivered;
 }
