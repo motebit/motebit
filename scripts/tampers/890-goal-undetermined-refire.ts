@@ -1219,6 +1219,12 @@ const TAMPERS: Tamper[] = [
         find: '  if (frozen) return "answered";\n',
         replace: "",
       },
+      // r9 cold review: the table refuses moving a settled answer too.
+      {
+        file: "services/relay/src/task-queue.ts",
+        find: "      SELECT RAISE(ABORT, 'relay_task_queue: a settled answer is frozen — never moved off the receipt its settlement names (#890 r9)');",
+        replace: "      SELECT 1;",
+      },
     ],
     pkg: "services/relay",
     test: "src/__tests__/receipt-doors-890.test.ts",
