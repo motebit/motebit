@@ -2180,7 +2180,17 @@ export async function handleReceiptIngestion(
 // Route registration
 // ---------------------------------------------------------------------------
 
-export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
+/**
+ * What `registerTaskRoutes` started that outlives the call: the x402
+ * facilitator handshake runs unawaited from boot. `close()` cancels it and
+ * resolves only once it — and everything it logs — has finished, so nothing
+ * the routes started runs after the relay's own `close()`.
+ */
+export interface TaskRoutesHandle {
+  close(): Promise<void>;
+}
+
+export async function registerTaskRoutes(deps: TasksDeps): Promise<TaskRoutesHandle> {
   const {
     app,
     moteDb,
@@ -2297,6 +2307,10 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
   };
   const X402_PAYMENT_KEY = "x402Payment";
 
+  // Aborted by the returned handle's `close()`; ends the boot handshake below.
+  const shutdown = new AbortController();
+  let x402InitDone: Promise<void> = Promise.resolve();
+
   {
     const { x402HTTPResourceServer, x402ResourceServer, HonoAdapter } = await import("@x402/hono");
     const { FacilitatorResponseError } = await import("@x402/core/server");
@@ -2307,9 +2321,10 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
     // misconfiguration so the route registration fails fast rather than
     // silently leaving the x402 surface broken. See x402-facilitator.ts.
     const { createX402FacilitatorClient } = await import("./x402-facilitator.js");
-    const facilitatorClient = (await createX402FacilitatorClient(
-      x402Config,
-    )) as ConstructorParameters<typeof x402ResourceServer>[0];
+    const facilitatorClient = abortGetSupportedOn(
+      (await createX402FacilitatorClient(x402Config)) as object,
+      shutdown.signal,
+    ) as ConstructorParameters<typeof x402ResourceServer>[0];
 
     const network = x402Config.network as `${string}:${string}`;
     const treasury = x402Config.payToAddress;
@@ -2393,6 +2408,7 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
           facilitator: x402Config.facilitatorUrl ?? "https://x402.org/facilitator",
         }),
       );
+    x402InitDone = x402InitPromise;
     const paywallConfig = { testnet: x402Config.testnet ?? true };
 
     // One priceSubmission() quote per request. Free tasks (no listing / zero
@@ -4945,5 +4961,51 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<void> {
       return c.json({ status: "already_settled" });
     }
     return c.json({ status: entry.task.status, credential_id: ingestionResult.credential_id });
+  });
+
+  return {
+    async close() {
+      shutdown.abort();
+      await x402InitDone;
+    },
+  };
+}
+
+/**
+ * The facilitator client with its `getSupported()` — the handshake
+ * `x402HTTPResourceServer.initialize()` runs unawaited at boot — ended by
+ * `signal`: once it aborts, a pending call rejects at once instead of
+ * outliving the relay (up to the client's own request timeout, plus its 429
+ * backoff retries). `HTTPFacilitatorClient` takes no external signal, so the
+ * request itself is abandoned and its late outcome dropped. `verify` /
+ * `settle` pass through untouched — a payment in flight is never cut short.
+ */
+export function abortGetSupportedOn<T extends object>(client: T, signal: AbortSignal): T {
+  return new Proxy(client, {
+    get(target, prop) {
+      const value: unknown = Reflect.get(target, prop, target);
+      if (typeof value !== "function") return value;
+      const fn = value as (...args: unknown[]) => unknown;
+      if (prop !== "getSupported") return fn.bind(target);
+      return (...args: unknown[]): Promise<unknown> => {
+        const aborted = () => new Error("facilitator getSupported aborted: relay closed");
+        if (signal.aborted) return Promise.reject(aborted());
+        const call = Promise.resolve(fn.apply(target, args));
+        return new Promise((resolve, reject) => {
+          const onAbort = () => reject(aborted());
+          signal.addEventListener("abort", onAbort, { once: true });
+          call.then(
+            (v) => {
+              signal.removeEventListener("abort", onAbort);
+              resolve(v);
+            },
+            (err: unknown) => {
+              signal.removeEventListener("abort", onAbort);
+              reject(err instanceof Error ? err : new Error(String(err)));
+            },
+          );
+        });
+      };
+    },
   });
 }

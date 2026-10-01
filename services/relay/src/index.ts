@@ -2337,7 +2337,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
   logger.info("relay.push_wake", { enabled: pushAdapter !== undefined });
 
   // --- Task routes (submission, polling, receipt settlement) ---
-  await registerTaskRoutes({
+  const taskRoutes = await registerTaskRoutes({
     app,
     outboundPolicy,
     moteDb,
@@ -2468,6 +2468,10 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     clearInterval(batchWithdrawalInterval);
     clearInterval(orchestrationWorkerInterval);
     receiptExchangeHub.close();
+    // The x402 facilitator handshake started at boot: cancelled and awaited
+    // (with its failure log) before the database closes, so nothing it does
+    // lands after close() resolves.
+    await taskRoutes.close();
     moteDb.close();
   }
 
