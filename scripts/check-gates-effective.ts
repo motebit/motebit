@@ -2895,6 +2895,24 @@ export async function probeFetch(): Promise<unknown> {
         return src.replace(re, `$1$2.${Number(m[3]) + 1}.$4`);
       }),
   },
+  {
+    script: "check-vercel-ignore-build",
+    proves:
+      "flags a vercel.json ignoreCommand that does not route through scripts/vercel-ignore-build.sh — the #1012 shape (an inline `git diff --quiet … || exit 1` that skipped the production deploy of 42ce27f). Probe restores that inline command in services/proxy/vercel.json; byte-identical restoration on cleanup.",
+    perturb: () =>
+      mutateFile("services/proxy/vercel.json", (src) => {
+        const re = /"ignoreCommand": "[^"]*"/;
+        if (!re.test(src) || !src.includes("vercel-ignore-build.sh")) {
+          throw new Error(
+            "probe vacuous: services/proxy/vercel.json no longer routes its ignoreCommand through scripts/vercel-ignore-build.sh — retarget the probe",
+          );
+        }
+        return src.replace(
+          re,
+          '"ignoreCommand": "git diff --quiet ${VERCEL_GIT_PREVIOUS_SHA:-HEAD^} $VERCEL_GIT_COMMIT_SHA -- services/proxy/ pnpm-lock.yaml package.json 2>/dev/null || exit 1"',
+        );
+      }),
+  },
 ];
 
 /**
