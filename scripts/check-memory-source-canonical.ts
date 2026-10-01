@@ -79,7 +79,16 @@ function walkTsFiles(dir: string): string[] {
   for (const entry of entries) {
     const rel = join(dir, entry);
     const full = resolve(ROOT, rel);
-    const st = statSync(full);
+    let st: ReturnType<typeof statSync>;
+    try {
+      st = statSync(full);
+    } catch (err) {
+      // A dangling symlink (e.g. a stale Expo prebuild under the gitignored
+      // apps/mobile/ios/Pods after node_modules changed) has no content to
+      // scan. Any other stat failure still fails the gate.
+      if ((err as NodeJS.ErrnoException).code === "ENOENT") continue;
+      throw err;
+    }
     if (st.isDirectory()) {
       out.push(...walkTsFiles(rel));
     } else if (entry.endsWith(".ts") && !entry.endsWith(".d.ts")) {
