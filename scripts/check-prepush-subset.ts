@@ -61,9 +61,18 @@
  * red gate whose repair is a deliberate edit to the tables below — the review
  * the pre-push ⊆ CI claim needs, made unskippable.
  */
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import {
+  closeSync,
+  existsSync,
+  mkdtempSync,
+  openSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { parse as parseYaml } from "yaml";
@@ -870,6 +879,44 @@ export function evaluateTestCache(inp: TestCacheInputs): string[] {
   return v;
 }
 
+/**
+ * Run a command and return its stdout, unbounded by construction. The dry-run
+ * JSON lists every task's inputs and grows with the repo; it passed Node's
+ * default 1 MiB pipe `maxBuffer` (ENOBUFS, so the gate failed closed on a
+ * healthy repo). stdout and stderr go to files, never an in-memory pipe, so
+ * there is no buffer to outgrow. Throws with the exit status and stderr on
+ * failure.
+ */
+export function runToFile(
+  cmd: string,
+  args: readonly string[],
+  cwd: string,
+  env: Record<string, string>,
+): string {
+  const dir = mkdtempSync(join(tmpdir(), "prepush-subset-"));
+  try {
+    const outPath = join(dir, "stdout");
+    const errPath = join(dir, "stderr");
+    const outFd = openSync(outPath, "w");
+    const errFd = openSync(errPath, "w");
+    let r: ReturnType<typeof spawnSync>;
+    try {
+      r = spawnSync(cmd, args, { cwd, env, stdio: ["ignore", outFd, errFd] });
+    } finally {
+      closeSync(outFd);
+      closeSync(errFd);
+    }
+    if (r.error) throw r.error;
+    if (r.status !== 0)
+      throw new Error(
+        `${cmd} ${args.join(" ")} exited ${String(r.status ?? r.signal)}: ${readFileSync(errPath, "utf8").trim()}`,
+      );
+    return readFileSync(outPath, "utf8");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
 export function readTestCacheInputs(
   root: string,
   packageScripts: Record<string, Record<string, string>>,
@@ -881,15 +928,11 @@ export function readTestCacheInputs(
     if (val != null && !k.startsWith("GIT_")) env[k] ??= val;
   let dry: DryTask[] | string;
   try {
-    const out = execFileSync(
+    const out = runToFile(
       join(root, "node_modules", ".bin", "turbo"),
       ["run", ...TEST_TASKS, "--dry=json"],
-      {
-        cwd: root,
-        encoding: "utf8",
-        stdio: ["ignore", "pipe", "pipe"],
-        env,
-      },
+      root,
+      env,
     );
     dry = (JSON.parse(out.slice(out.indexOf("{"))) as { tasks: DryTask[] }).tasks;
   } catch (err) {
