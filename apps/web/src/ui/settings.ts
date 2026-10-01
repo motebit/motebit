@@ -24,7 +24,7 @@ import { hexPublicKeyToDidKey } from "@motebit/encryption";
 import type { ColorPickerAPI } from "./color-picker";
 import { mountMachines } from "./machines-section";
 import { DEFAULT_GOOGLE_MODEL, DEFAULT_PROXY_MODEL, isLocalServerUrl } from "@motebit/sdk";
-import { selectStoredCloudModel } from "./cloud-model";
+import { selectStoredCloudModel, selectStoredModel } from "./cloud-model";
 import { renderAnthropicPicker } from "./anthropic-picker";
 
 /** Which provider tab the UI is showing. Maps from `UnifiedProviderConfig.mode`. */
@@ -1247,19 +1247,19 @@ export function initSettings(ctx: WebContext, deps: SettingsDeps): SettingsAPI {
             anthropicApiKey.value = config.apiKey;
           } else if (config.vendor === "openai") {
             openaiApiKey.value = config.apiKey;
-            if (config.model) openaiModel.value = config.model;
+            selectStoredModel(openaiModel, config.model);
           } else if (config.vendor === "google") {
             const googleApiKey = document.getElementById(
               "google-api-key",
             ) as HTMLInputElement | null;
             const googleModel = document.getElementById("google-model") as HTMLSelectElement | null;
             if (googleApiKey) googleApiKey.value = config.apiKey;
-            if (googleModel) googleModel.value = config.model ?? DEFAULT_GOOGLE_MODEL;
+            if (googleModel) selectStoredModel(googleModel, config.model ?? DEFAULT_GOOGLE_MODEL);
           } else if (config.vendor === "groq") {
             const groqApiKey = document.getElementById("groq-api-key") as HTMLInputElement | null;
             const groqModel = document.getElementById("groq-model") as HTMLSelectElement | null;
             if (groqApiKey) groqApiKey.value = config.apiKey;
-            if (groqModel) groqModel.value = config.model ?? "llama-3.3-70b-versatile";
+            if (groqModel) selectStoredModel(groqModel, config.model ?? "llama-3.3-70b-versatile");
           } else if (config.vendor === "deepseek") {
             const deepseekApiKey = document.getElementById(
               "deepseek-api-key",
@@ -1268,7 +1268,7 @@ export function initSettings(ctx: WebContext, deps: SettingsDeps): SettingsAPI {
               "deepseek-model",
             ) as HTMLSelectElement | null;
             if (deepseekApiKey) deepseekApiKey.value = config.apiKey;
-            if (deepseekModel) deepseekModel.value = config.model ?? "deepseek-chat";
+            if (deepseekModel) selectStoredModel(deepseekModel, config.model ?? "deepseek-chat");
           }
           break;
         }

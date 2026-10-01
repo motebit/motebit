@@ -192,8 +192,42 @@ describe("spatial Settings — stored Cloud model is never rewritten (R2)", () =
     });
   }
 
-  it("a stored id the proxy refuses is cleared to the Cloud default", async () => {
+  it("a stored id the proxy refuses is still never cleared at boot", async () => {
     await boot({ mode: "motebit-cloud", model: "claude-sonnet-5" });
-    expect($<HTMLInputElement>("model-input").value).toBe("");
+    expect($<HTMLInputElement>("model-input").value).toBe("claude-sonnet-5");
+  });
+});
+
+// The field is cleared ONLY on a user flip of mode or vendor — never at boot,
+// never on a Save that keeps the lane. `providerAcceptsModel` guesses the
+// vendor from the id's name (`gemma-*` reads as local), so a boot-time
+// sanitizer cleared a BYOK Google Gemma the user had saved, and the next
+// Save silently switched them to the vendor default.
+describe("spatial Settings — stored model survives boot (lane flips only)", () => {
+  const stored = { mode: "byok", byokVendor: "google", apiKey: "AIza", model: "gemma-3-27b-it" };
+
+  it("BYOK Google + stored gemma: kept through boot and Save", async () => {
+    await boot(stored);
+    expect($<HTMLInputElement>("model-input").value).toBe("gemma-3-27b-it");
+    expect(resolvedModel(initAI.mock.calls[0]![0].provider)).toBe("gemma-3-27b-it");
+    initAI.mockClear();
+    $<HTMLButtonElement>("settings-save").click();
+    await vi.waitFor(() => expect(initAI).toHaveBeenCalled());
+    expect(resolvedModel(initAI.mock.calls.at(-1)![0].provider)).toBe("gemma-3-27b-it");
+    expect(JSON.parse(localStorage.getItem(STORAGE_KEY)!).model).toBe("gemma-3-27b-it");
+  });
+
+  it("re-selecting the same vendor does not clear it", async () => {
+    await boot(stored);
+    choose("byok-vendor", "google");
+    expect($<HTMLInputElement>("model-input").value).toBe("gemma-3-27b-it");
+  });
+
+  it("a vendor flip still clears an id the new vendor refuses", async () => {
+    await boot(stored);
+    choose("byok-vendor", "anthropic");
+    const field = $<HTMLInputElement>("model-input");
+    expect(field.value).toBe("");
+    expect(field.placeholder).toContain(DEFAULT_ANTHROPIC_MODEL);
   });
 });

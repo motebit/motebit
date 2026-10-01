@@ -143,3 +143,24 @@ describe("web Settings — stored Cloud model is never rewritten (R2)", () => {
     expect((setConfig.mock.calls.at(-1)?.[0] as { model?: string }).model).toBe(stored);
   });
 });
+
+// The same boot-time clearing on the BYOK vendor selects: assigning
+// `select.value` to a stored id with no <option> (a Gemma on Google, a model
+// newer than the hard-coded list) left nothing selected, and the next Save
+// silently swapped in another model. The stored id is shown and kept.
+describe("web Settings — stored BYOK model is never rewritten", () => {
+  it.each([
+    ["google", "gemma-3-27b-it"],
+    ["openai", "gpt-5-mini"],
+    ["groq", "qwen/qwen3-32b"],
+    ["deepseek", "deepseek-reasoner-x"],
+  ] as const)("%s + %s: shown selected and saved verbatim", (vendor, stored) => {
+    const { setConfig } = mount({ mode: "byok", vendor, apiKey: "k", model: stored });
+    const sel = document.getElementById(`${vendor}-model`) as HTMLSelectElement;
+    expect(sel.value).toBe(stored);
+    (document.getElementById("settings-save") as HTMLButtonElement).click();
+    const saved = setConfig.mock.calls.at(-1)?.[0] as { vendor?: string; model?: string };
+    expect(saved.vendor).toBe(vendor);
+    expect(saved.model).toBe(stored);
+  });
+});

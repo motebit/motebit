@@ -159,3 +159,17 @@ describe("desktop Settings — Cloud picker offers only admitted ids", () => {
     },
   );
 });
+
+// Boot never clears a stored BYOK id the vendor-name guess would misread
+// (`gemma-*` reads as local): open + Save keeps it verbatim.
+describe("desktop Settings — stored BYOK model survives open and Save", () => {
+  it("google + gemma-3-27b-it: kept in the field and saved verbatim", async () => {
+    const { initAI } = mount({ provider: "google", model: "gemma-3-27b-it", isTauri: false });
+    expect($<HTMLInputElement>("settings-byok-model").value).toBe("gemma-3-27b-it");
+    $<HTMLButtonElement>("settings-save").click();
+    await vi.waitFor(() => expect(initAI).toHaveBeenCalled());
+    const cfg = (initAI.mock.calls.at(-1) as unknown as [Cfg])[0];
+    expect(cfg.provider).toBe("google");
+    expect(cfg.model).toBe("gemma-3-27b-it");
+  });
+});

@@ -1,6 +1,8 @@
 /**
- * The model-field sanitizer spatial runs on every mode/vendor flip and at
- * boot (#654 cold review). One field serves every mode, so an id the new
+ * The model-field sanitizer spatial runs on a user flip of mode or vendor
+ * (#654 cold review) — never at boot and never on a Save that keeps the
+ * lane: `providerAcceptsModel` guesses the vendor from the id's name, so a
+ * boot-time run cleared a stored BYOK Google `gemma-*`. One field serves every mode, so an id the new
  * lane refuses must not ride a flip — but an id the lane SERVES must never
  * be cleared: on Motebit Cloud the verdict is `motebitCloudAdmission`, the
  * exact function the proxy route runs (alias step included), so a stored

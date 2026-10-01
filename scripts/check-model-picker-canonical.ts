@@ -45,6 +45,13 @@
  *   decoded BEFORE the rules run, so `"claude-\⏎sonnet-5"`,
  *   `"\u0063laude-sonnet-5"` and `"claude\-opus-5-5"` are the token they spell.
  *
+ *   Scope (declared limit): this gate guards against ACCIDENTAL hand-copied
+ *   ids — the copy a person types or pastes. Deliberately obfuscated ids are
+ *   OUT OF SCOPE and the decoder is not extended to chase them: a `\`
+ *   continuation followed by CR, U+2028 or U+2029 (or any other exotic line
+ *   terminator), and ids assembled at runtime. Those are covered by the
+ *   per-surface picker tests below, which render from `@motebit/sdk`.
+ *
  *   What the scan cannot see: an id assembled from pieces that never spell
  *   `claude` next to a quote (`"cla" + "ude-…"`, a lookup table keyed by
  *   tier). Those are covered by EXECUTION — but only for the five picker /
@@ -423,7 +430,7 @@ function main(): void {
   const pairs = ALLOWLIST.reduce((n, a) => n + a.ids.length, 0);
 
   console.log(
-    `▸ check-model-picker-canonical — aperture: ${textFiles} text file(s) of ${files.length} git-tracked/untracked-unignored path(s) under apps/ (all extensions, case-insensitive, comments included); ${seenAllow.size} of ${pairs} allowlisted (file, token) pair(s) matched. Line continuations joined and \\u/\\x/&#, legacy-octal (\\143) and identity (\\-) escapes decoded before scanning. Dynamically-assembled ids that never spell "claude" beside a quote are NOT seen by this scan; execution tests cover only the five picker/alias consumers — web/desktop/spatial settings-anthropic-picker.test, mobile intelligence-tab-picker.test, CLI slash-model-tiers.test — and no other apps/ code path.`,
+    `▸ check-model-picker-canonical — aperture: ${textFiles} text file(s) of ${files.length} git-tracked/untracked-unignored path(s) under apps/ (all extensions, case-insensitive, comments included); ${seenAllow.size} of ${pairs} allowlisted (file, token) pair(s) matched. Line continuations joined and \\u/\\x/&#, legacy-octal (\\143) and identity (\\-) escapes decoded before scanning. Scope: guards ACCIDENTAL hand-copied ids; deliberately obfuscated ids (a \\ continuation before CR/U+2028/U+2029, runtime assembly) are out of scope, covered by the per-surface picker tests that render from @motebit/sdk. Dynamically-assembled ids that never spell "claude" beside a quote are NOT seen by this scan; execution tests cover only the five picker/alias consumers — web/desktop/spatial settings-anthropic-picker.test, mobile intelligence-tab-picker.test, CLI slash-model-tiers.test — and no other apps/ code path.`,
   );
 
   if (findings.length === 0 && stale.length === 0) {

@@ -660,6 +660,10 @@ function setVendorRadio(vendor: SpatialByokVendor): void {
  * sub-pick. Also adjusts the api-key input placeholder for the selected
  * BYOK vendor.
  */
+/** The `mode:vendor` lane the model field was last shown under; `null`
+ *  until the first render (boot), which never clears the stored model. */
+let modelFieldLane: string | null = null;
+
 function updateProviderUI(): void {
   const mode = getSelectedMode();
   onDeviceSection.style.display = mode === "on-device" ? "" : "none";
@@ -681,10 +685,17 @@ function updateProviderUI(): void {
   // and then saved under Motebit Cloud is a 451 on the first turn. An id the
   // new provider can't take is cleared — empty means "the provider's
   // default", which the placeholder names from the sdk's one derivation.
+  // Only a user FLIP of mode or vendor clears: never boot, never a re-pick
+  // of the same lane. The verdict guesses the vendor from the id's name
+  // (`gemma-*` reads as local), so a boot-time sanitize cleared a saved
+  // BYOK Google Gemma and the next Save persisted the downgrade.
+  const lane = `${mode}:${vendor}`;
+  const flipped = modelFieldLane !== null && modelFieldLane !== lane;
+  modelFieldLane = lane;
   if (mode === "motebit-cloud" || mode === "byok") {
     const provider = mode === "motebit-cloud" ? "proxy" : vendor;
     const typed = modelInput.value.trim();
-    if (modelFieldValueForLane(mode, vendor, typed) !== typed) modelInput.value = "";
+    if (flipped && modelFieldValueForLane(mode, vendor, typed) !== typed) modelInput.value = "";
     modelInput.placeholder = `Default (${defaultModelForProvider(provider)})`;
   } else {
     modelInput.placeholder = "Default";
