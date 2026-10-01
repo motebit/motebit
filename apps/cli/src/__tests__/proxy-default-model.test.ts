@@ -15,7 +15,7 @@ import {
   pickerModelForTier,
 } from "@motebit/sdk";
 import { parseCliArgs, defaultModelForProvider } from "../args.js";
-import { applyConfiguredProvider } from "../provider-config.js";
+import { applyConfiguredProvider, argvHasFlag } from "../provider-config.js";
 import { admitModelForProvider } from "../model-admission.js";
 
 const SRC = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
@@ -58,6 +58,55 @@ describe("CLI → Motebit Cloud model (C1/C2)", () => {
       "motebit",
     ]);
     expect(config.model).toBe("gpt-5.4-mini");
+  });
+
+  // R2: the proxy resolves aliases before admitting — so must the CLI. A
+  // stored alias / legacy id the proxy serves is never rewritten, and never
+  // gets a "belongs to another provider" notice.
+  it.each([
+    "claude-opus-4-20250115",
+    "claude-opus",
+    "claude-sonnet",
+    "claude-3-5-sonnet-20241022",
+    "gpt-4o",
+    "gemini-flash",
+    "llama-3.3-70b-versatile",
+    "auto",
+  ])("a stored Cloud default_model the proxy admits (%s) is kept verbatim", (m) => {
+    const config = parseCliArgs([]);
+    const lines: string[] = [];
+    applyConfiguredProvider(config, { default_provider: "proxy", default_model: m }, [], (l) =>
+      lines.push(l),
+    );
+    expect(config.model).toBe(m);
+    expect(lines).toEqual([]);
+    expect(admitModelForProvider("proxy", m).admissible).toBe(true);
+  });
+
+  it("the yield notice on proxy names Motebit Cloud, not 'another provider'", () => {
+    const config = parseCliArgs([]);
+    const lines: string[] = [];
+    applyConfiguredProvider(
+      config,
+      { default_provider: "proxy", default_model: "claude-sonnet-5" },
+      [],
+      (l) => lines.push(l),
+    );
+    expect(lines.join("\n")).toContain("not served by Motebit Cloud");
+    expect(lines.join("\n")).not.toContain("another provider");
+  });
+
+  it("`--provider=x` / `--model=x` (= form) outrank the persisted pair", () => {
+    const config = parseCliArgs(["--provider=proxy", "--model=gpt-4o"]);
+    applyConfiguredProvider(
+      config,
+      { default_provider: "anthropic", default_model: "claude-sonnet-4-6" },
+      ["node", "motebit", "--provider=proxy", "--model=gpt-4o"],
+    );
+    expect(config.provider).toBe("proxy");
+    expect(config.model).toBe("gpt-4o");
+    expect(argvHasFlag(["--model=x"], "--model")).toBe(true);
+    expect(argvHasFlag(["--modelx"], "--model")).toBe(false);
   });
 
   it("an explicit --model is the user's word (provider flip keeps it)", () => {

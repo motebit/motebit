@@ -647,7 +647,30 @@ export const MOTEBIT_CLOUD_ACCEPTED_MODELS: readonly ["claude-opus-4-6", "claude
 export const MOTEBIT_CLOUD_AUTO_MODEL = "auto";
 
 // @public
+export const MOTEBIT_CLOUD_CATALOG: MotebitCloudCatalog;
+
+// @public
+export const MOTEBIT_CLOUD_MODEL_ALIASES: Readonly<Record<string, string>>;
+
+// @public
+export interface MotebitCloudAdmission {
+    readonly admitted: boolean;
+    readonly resolved: string;
+}
+
+// @public
+export function motebitCloudAdmission(model: unknown, catalog?: MotebitCloudCatalog): MotebitCloudAdmission;
+
+// @public
 export function motebitCloudAdmitsModel(model: string): boolean;
+
+// @public
+export interface MotebitCloudCatalog {
+    // (undocumented)
+    readonly accepted: readonly string[];
+    // (undocumented)
+    readonly aliases: Readonly<Record<string, string>>;
+}
 
 // @public
 export interface MotebitCloudProviderConfig {

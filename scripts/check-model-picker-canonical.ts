@@ -39,13 +39,25 @@
  *   listed token is exempt only in its file, only in that exact spelling;
  *   every listed (file, token) pair that no longer occurs is itself red.
  *
+ *   Decoding (#654 cold review R2): a line ending in `\` is joined to the
+ *   next (string continuation) and `\uXXXX` / `\u{…}` / `\xNN` / `&#…;`
+ *   escapes are decoded BEFORE the rules run, so `"claude-\⏎sonnet-5"` and
+ *   `"\u0063laude-sonnet-5"` are the token they spell.
+ *
  *   What the scan cannot see: an id assembled from pieces that never spell
  *   `claude` next to a quote (`"cla" + "ude-…"`, a lookup table keyed by
- *   tier). Those are covered by EXECUTION, not by this scan: each surface's
- *   settings test renders the real UI and asserts the Anthropic rows equal
- *   `ANTHROPIC_PICKER` (web/desktop/spatial `settings-anthropic-picker.test`,
- *   mobile `intelligence-tab-picker.test`), so a dynamically-constructed
- *   picker that diverges is red there.
+ *   tier). Those are covered by EXECUTION — but only for the five picker /
+ *   alias consumers, each of which has a test that runs the real code and
+ *   compares against the sdk:
+ *     web      settings-anthropic-picker.test   real index.html + initSettings
+ *     desktop  settings-anthropic-picker.test   real index.html + initSettings
+ *     spatial  settings-anthropic-picker.test   boots the real app.ts
+ *     mobile   intelligence-tab-picker.test     renders the real IntelligenceTab
+ *     cli      slash-model-tiers.test           runs `/model opus|sonnet|haiku`
+ *   NOT execution-covered: any OTHER apps/ code path that constructs a
+ *   Claude id dynamically (CLI `--help` / motebit.yaml schema text are
+ *   interpolated from sdk constants, docs pages are gated by
+ *   check-docs-default-models — neither is executed against the picker).
  */
 
 import { execFileSync } from "node:child_process";
@@ -190,7 +202,7 @@ const ALLOWLIST: readonly AllowEntry[] = [
   },
   {
     file: "apps/desktop/src/__tests__/settings-anthropic-picker.test.ts",
-    ids: ["claude-sonnet-4-6"],
+    ids: ["claude-opus", "claude-opus-4-20250115", "claude-sonnet-4-6"],
     why: TEST_FIXTURE,
   },
   {
@@ -215,7 +227,7 @@ const ALLOWLIST: readonly AllowEntry[] = [
   },
   {
     file: "apps/spatial/src/__tests__/settings-anthropic-picker.test.ts",
-    ids: ["claude-sonnet-4-6"],
+    ids: ["claude-opus", "claude-opus-4-20250115", "claude-sonnet-4-6", "claude-sonnet-5"],
     why: TEST_FIXTURE,
   },
   {
@@ -235,7 +247,7 @@ const ALLOWLIST: readonly AllowEntry[] = [
   },
   {
     file: "apps/web/src/__tests__/settings-anthropic-picker.test.ts",
-    ids: ["claude-sonnet-4-6"],
+    ids: ["claude-opus", "claude-opus-4-20250115", "claude-sonnet-4-6"],
     why: TEST_FIXTURE,
   },
   {
@@ -246,6 +258,28 @@ const ALLOWLIST: readonly AllowEntry[] = [
   {
     file: "apps/web/src/__tests__/web-app.test.ts",
     ids: ["claude-sonnet-4-6"],
+    why: TEST_FIXTURE,
+  },
+  {
+    file: "apps/cli/src/__tests__/proxy-default-model.test.ts",
+    ids: [
+      "claude-3-5-sonnet-20241022",
+      "claude-opus",
+      "claude-opus-4-20250115",
+      "claude-sonnet",
+      "claude-sonnet-4-6",
+      "claude-sonnet-5",
+    ],
+    why: TEST_FIXTURE,
+  },
+  {
+    file: "apps/cli/src/__tests__/slash-model-tiers.test.ts",
+    ids: ["claude-opus", "claude-opus-4-20250115", "claude-sonnet-4-6", "claude-sonnet-5"],
+    why: TEST_FIXTURE,
+  },
+  {
+    file: "apps/mobile/src/__tests__/settings-modal-provider-switch.test.tsx",
+    ids: ["claude-opus", "claude-opus-4-20250115", "claude-sonnet-4-6"],
     why: TEST_FIXTURE,
   },
 ];
@@ -273,6 +307,52 @@ function readText(rel: string): string | null {
   return buf.toString("utf8");
 }
 
+/**
+ * The source as the scan sees it (#654 cold review R2, item 5). Two encodings
+ * spell an id without the bytes `claude-…` ever sitting on one physical line:
+ *
+ *   - a string CONTINUATION — a line ending in `\` joins the next line
+ *     (`"claude-\⏎sonnet-5"` is `"claude-sonnet-5"` at runtime);
+ *   - an ESCAPE — `\u0063laude`, `\u{63}laude`, `\x63laude`, `&#99;laude`,
+ *     `&#x63;laude` all decode to `claude`.
+ *
+ * Continuations are joined into one logical line (reported at its first
+ * physical line), then escapes are decoded before the rules run.
+ */
+function logicalLines(src: string): { line: string; at: number }[] {
+  const physical = src.split("\n");
+  const out: { line: string; at: number }[] = [];
+  let buf = "";
+  let start = 1;
+  let continuing = false;
+  physical.forEach((raw, i) => {
+    const l = raw.replace(/\r$/, "");
+    if (!continuing) start = i + 1;
+    // An odd run of trailing backslashes = a continuation (`\\` is a literal).
+    const trailing = /\\+$/.exec(l)?.[0].length ?? 0;
+    if (trailing % 2 === 1) {
+      buf += l.slice(0, -1);
+      continuing = true;
+      return;
+    }
+    out.push({ line: decodeEscapes(buf + l), at: start });
+    buf = "";
+    continuing = false;
+  });
+  if (continuing) out.push({ line: decodeEscapes(buf), at: start });
+  return out;
+}
+
+function decodeEscapes(line: string): string {
+  const cp = (n: number): string => (n >= 0 && n <= 0x10ffff ? String.fromCodePoint(n) : "");
+  return line
+    .replace(/\\u\{([0-9a-f]{1,6})\}/gi, (_m, h: string) => cp(parseInt(h, 16)))
+    .replace(/\\u([0-9a-f]{4})/gi, (_m, h: string) => cp(parseInt(h, 16)))
+    .replace(/\\x([0-9a-f]{2})/gi, (_m, h: string) => cp(parseInt(h, 16)))
+    .replace(/&#x([0-9a-f]{1,6});/gi, (_m, h: string) => cp(parseInt(h, 16)))
+    .replace(/&#(\d{1,7});/g, (_m, d: string) => cp(parseInt(d, 10)));
+}
+
 interface Finding {
   readonly file: string;
   readonly line: number;
@@ -297,8 +377,7 @@ function main(): void {
     const src = readText(rel);
     if (src == null) continue;
     textFiles++;
-    const lines = src.split("\n");
-    lines.forEach((line, i) => {
+    for (const { line, at } of logicalLines(src)) {
       for (const { kind, re } of RULES) {
         for (const m of line.matchAll(re)) {
           // A sentence-final "." / "-" is punctuation, not part of the id.
@@ -307,10 +386,10 @@ function main(): void {
             seenAllow.add(`${rel}\0${token}`);
             continue;
           }
-          findings.push({ file: rel, line: i + 1, token, kind, source: line.trim() });
+          findings.push({ file: rel, line: at, token, kind, source: line.trim() });
         }
       }
-    });
+    }
   }
 
   const stale = ALLOWLIST.flatMap((a) =>
@@ -319,7 +398,7 @@ function main(): void {
   const pairs = ALLOWLIST.reduce((n, a) => n + a.ids.length, 0);
 
   console.log(
-    `▸ check-model-picker-canonical — aperture: ${textFiles} text file(s) of ${files.length} git-tracked/untracked-unignored path(s) under apps/ (all extensions, case-insensitive, comments included); ${seenAllow.size} of ${pairs} allowlisted (file, token) pair(s) matched. Dynamically-assembled ids that never spell "claude" beside a quote are covered by the per-surface settings execution tests, not this scan.`,
+    `▸ check-model-picker-canonical — aperture: ${textFiles} text file(s) of ${files.length} git-tracked/untracked-unignored path(s) under apps/ (all extensions, case-insensitive, comments included); ${seenAllow.size} of ${pairs} allowlisted (file, token) pair(s) matched. Line continuations joined and \\u/\\x/&# escapes decoded before scanning. Dynamically-assembled ids that never spell "claude" beside a quote are NOT seen by this scan; execution tests cover only the five picker/alias consumers — web/desktop/spatial settings-anthropic-picker.test, mobile intelligence-tab-picker.test, CLI slash-model-tiers.test — and no other apps/ code path.`,
   );
 
   if (findings.length === 0 && stale.length === 0) {

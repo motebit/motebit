@@ -16,6 +16,7 @@ import { describe, it, expect, vi, beforeAll } from "vitest";
 import {
   ANTHROPIC_PICKER,
   DEFAULT_ANTHROPIC_MODEL,
+  motebitCloudAdmission,
   motebitCloudAdmitsModel,
   resolveProviderSpec,
   type UnifiedProviderConfig,
@@ -162,5 +163,37 @@ describe("spatial Settings — Motebit Cloud (C2)", () => {
     const cfg = initAI.mock.calls[0]![0].provider;
     expect(cfg.mode).toBe("motebit-cloud");
     expect(motebitCloudAdmitsModel(String(resolvedModel(cfg)))).toBe(true);
+  });
+});
+
+// R2: the Cloud lane's sanitizer is the proxy's own admission. A stored id
+// the proxy serves — alias or legacy included — survives boot AND the next
+// Save; the old accepted-set-only check cleared these at boot and Save
+// persisted the downgrade.
+describe("spatial Settings — stored Cloud model is never rewritten (R2)", () => {
+  for (const stored of [
+    "claude-opus-4-20250115",
+    "claude-opus",
+    "gpt-4o",
+    "gemini-flash",
+    "llama-3.3-70b-versatile",
+    "claude-sonnet-4-6",
+  ]) {
+    it(`${stored}: kept through boot and Save`, async () => {
+      expect(motebitCloudAdmission(stored).admitted).toBe(true);
+      await boot({ mode: "motebit-cloud", model: stored });
+      expect($<HTMLInputElement>("model-input").value).toBe(stored);
+      expect(resolvedModel(initAI.mock.calls[0]![0].provider)).toBe(stored);
+      initAI.mockClear();
+      $<HTMLButtonElement>("settings-save").click();
+      await vi.waitFor(() => expect(initAI).toHaveBeenCalled());
+      expect(resolvedModel(initAI.mock.calls.at(-1)![0].provider)).toBe(stored);
+      expect(JSON.parse(localStorage.getItem(STORAGE_KEY)!).model).toBe(stored);
+    });
+  }
+
+  it("a stored id the proxy refuses is cleared to the Cloud default", async () => {
+    await boot({ mode: "motebit-cloud", model: "claude-sonnet-5" });
+    expect($<HTMLInputElement>("model-input").value).toBe("");
   });
 });

@@ -307,3 +307,48 @@ describe("spend controls — the token snapshot is not the bound", () => {
     expect(store.map.size).toBe(0);
   });
 });
+
+// ── Cloud admission is the sdk's one function (#654 cold review R2) ─────────
+describe("model admission — motebitCloudAdmission is the route's rule", () => {
+  let store: ReturnType<typeof memorySpendStore>;
+  beforeEach(() => {
+    store = memorySpendStore();
+    setSpendStoreForTests(store);
+    process.env.ANTHROPIC_API_KEY = "sk-server-test";
+    process.env.OPENAI_API_KEY = "sk-openai-test";
+  });
+  afterEach(() => {
+    setSpendStoreForTests(undefined);
+    delete process.env.ANTHROPIC_API_KEY;
+    delete process.env.OPENAI_API_KEY;
+  });
+
+  it.each([
+    ["claude-opus", "claude-opus-4-6"],
+    ["claude-opus-4-20250115", "claude-opus-4-6"],
+    ["gpt-4o", "gpt-5.4-mini"],
+  ])("alias %s is admitted and routed upstream as %s", async (sent, routed) => {
+    vi.mocked(validation.parseProxyToken).mockResolvedValue(tokenFor({ models: [] }));
+    const fetchSpy = vi.fn().mockResolvedValue(new Response(sseBody(), { status: 200 }));
+    vi.stubGlobal("fetch", fetchSpy);
+    const res = await post(
+      PROXY,
+      JSON.stringify({ model: sent, messages: [{ role: "user", content: "hi" }] }),
+    );
+    await res.text();
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(String(fetchSpy.mock.calls[0]![1]?.body)).toContain(`"${routed}"`);
+  });
+
+  it("an id outside the catalog (the BYOK default) is 451, never sent upstream", async () => {
+    vi.mocked(validation.parseProxyToken).mockResolvedValue(tokenFor({ models: [] }));
+    const fetchSpy = vi.fn();
+    vi.stubGlobal("fetch", fetchSpy);
+    const res = await post(
+      PROXY,
+      JSON.stringify({ model: "claude-sonnet-5", messages: [{ role: "user", content: "hi" }] }),
+    );
+    expect(res.status).toBe(451);
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+});

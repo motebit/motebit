@@ -15,7 +15,7 @@ import {
   DEFAULT_LOCAL_SERVER_MODEL,
   DEFAULT_PROXY_MODEL,
   modelVendorHint,
-  motebitCloudAdmitsModel,
+  motebitCloudAdmission,
   providerAcceptsModel,
 } from "@motebit/sdk";
 
@@ -50,17 +50,20 @@ export function admitModelForProvider(provider: string, model: string): ModelAdm
     };
   }
 
-  // Motebit Cloud serves a FIXED catalog (#654 cold review): a known hosted
-  // id outside it — the BYOK Anthropic default (DEFAULT_ANTHROPIC_MODEL) riding a
-  // persisted default_model onto `proxy` — is refused by the proxy (451) on
-  // the first turn. The sdk primitive only checks the vendor family; the
-  // affordance knows the exact set and refuses before any turn runs.
-  if (provider === "proxy" && hint !== "unknown" && !motebitCloudAdmitsModel(model)) {
+  // Motebit Cloud answers by ITS rule, not a guess (#654 cold review R2):
+  // `motebitCloudAdmission` is the exact function the proxy route runs —
+  // alias step included — so the CLI refuses only what the proxy refuses
+  // (class aliases and legacy dated ids resolve and are served) and never
+  // lets through what it 451s (the BYOK default riding a
+  // persisted default_model onto `proxy`).
+  if (provider === "proxy") {
+    if (motebitCloudAdmission(model).admitted) return { admissible: true };
+    const flag = VENDOR_PROVIDER_FLAG[hint];
     return {
       admissible: false,
       teach:
-        `${model} is not served by Motebit Cloud. Drop --model to use ${DEFAULT_PROXY_MODEL}, ` +
-        `or restart with --provider ${VENDOR_PROVIDER_FLAG[hint] ?? hint} and your own key.`,
+        `${model} is not served by Motebit Cloud. Drop --model to use ${DEFAULT_PROXY_MODEL}` +
+        (flag != null ? `, or restart with --provider ${flag} and your own key.` : "."),
     };
   }
 

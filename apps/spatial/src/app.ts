@@ -17,12 +17,8 @@
 import "./buffer-polyfill";
 import { SpatialApp, COLOR_PRESETS, deriveInteriorColor } from "./spatial-app";
 import type { SpatialAIConfig } from "./spatial-app";
-import {
-  ANTHROPIC_PICKER,
-  defaultModelForProvider,
-  motebitCloudAdmitsModel,
-  providerAcceptsModel,
-} from "@motebit/sdk";
+import { ANTHROPIC_PICKER, defaultModelForProvider } from "@motebit/sdk";
+import { modelFieldValueForLane } from "./model-field";
 import type { UnifiedProviderConfig, OnDeviceBackend } from "@motebit/sdk";
 import { DEFAULT_OLLAMA_URL } from "@motebit/ai-core";
 import { WebXRThreeJSAdapter } from "@motebit/render-engine";
@@ -688,11 +684,7 @@ function updateProviderUI(): void {
   if (mode === "motebit-cloud" || mode === "byok") {
     const provider = mode === "motebit-cloud" ? "proxy" : vendor;
     const typed = modelInput.value.trim();
-    const admitted =
-      mode === "motebit-cloud"
-        ? motebitCloudAdmitsModel(typed)
-        : providerAcceptsModel(provider, typed);
-    if (typed !== "" && !admitted) modelInput.value = "";
+    if (modelFieldValueForLane(mode, vendor, typed) !== typed) modelInput.value = "";
     modelInput.placeholder = `Default (${defaultModelForProvider(provider)})`;
   } else {
     modelInput.placeholder = "Default";

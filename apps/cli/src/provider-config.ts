@@ -22,6 +22,15 @@ import type { CliConfig } from "./args.js";
 import { defaultModelForProvider } from "./args.js";
 import { admitModelForProvider } from "./model-admission.js";
 
+/**
+ * Was `--flag` given on the command line, in either spelling `parseArgs`
+ * accepts (`--model x` or `--model=x`)? A bare `includes("--model")` missed
+ * the `=` form, so `--provider=proxy` lost to a persisted provider.
+ */
+export function argvHasFlag(argv: readonly string[], flag: string): boolean {
+  return argv.some((a) => a === flag || a.startsWith(`${flag}=`));
+}
+
 /** Providers a persisted `default_provider` may switch the CLI to. */
 const CONFIG_PROVIDERS = ["anthropic", "openai", "google", "local-server", "proxy"] as const;
 
@@ -42,7 +51,7 @@ export function applyConfiguredProvider(
   notice: (line: string) => void = () => {},
 ): void {
   const provider = persisted.default_provider;
-  if (provider != null && provider !== "" && !argv.includes("--provider")) {
+  if (provider != null && provider !== "" && !argvHasFlag(argv, "--provider")) {
     if ((CONFIG_PROVIDERS as readonly string[]).includes(provider)) {
       config.provider = provider as CliConfig["provider"];
       if (!config.modelExplicit) {
@@ -51,15 +60,18 @@ export function applyConfiguredProvider(
     }
   }
   const model = persisted.default_model;
-  if (model != null && model !== "" && !argv.includes("--model")) {
+  if (model != null && model !== "" && !argvHasFlag(argv, "--model")) {
     // The CLI-strict check also refuses a hosted-vendor id on local-server
-    // (#471) and an id outside Motebit Cloud's catalog on proxy (#654).
+    // (#471); on proxy it is Motebit Cloud's own admission (#654 R2), so a
+    // stored id the proxy serves — alias or not — is never rewritten.
     if (admitModelForProvider(config.provider, model).admissible) {
       config.model = model;
     } else {
       config.model = defaultModelForProvider(config.provider);
       notice(
-        `[config default_model "${model}" belongs to another provider; using ${config.model} for ${config.provider}]`,
+        config.provider === "proxy"
+          ? `[config default_model "${model}" is not served by Motebit Cloud; using ${config.model}]`
+          : `[config default_model "${model}" belongs to another provider; using ${config.model} for ${config.provider}]`,
       );
     }
   }

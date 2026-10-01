@@ -1037,6 +1037,20 @@ export async function probeLeak(): Promise<boolean> {
         "apps/web/src/ui/__P__slash.ts",
         'export const M = "see // claude-opus-4-7";\n',
       ],
+      // #654 cold review R2 item 5: encodings that spell the id without the
+      // bytes sitting on one physical line.
+      [
+        "string continuation (line ending in a backslash)",
+        "apps/web/src/ui/__P__cont.ts",
+        'export const M = "claude-\\\nsonnet-5";\n',
+      ],
+      ["\\u escape", "apps/web/src/ui/__P__uesc.ts", 'export const M = "\\u0063laude-sonnet-5";\n'],
+      ["\\x escape", "apps/web/src/ui/__P__xesc.ts", 'export const M = "\\x63laude-opus-4-7";\n'],
+      [
+        "HTML numeric entity",
+        "apps/web/src/ui/__P__ent.html",
+        '<option value="&#99;laude-opus-4-7">Opus</option>\n',
+      ],
     ] as const
   ).map(([row, file, body]): Probe => ({
     script: "check-model-picker-canonical",

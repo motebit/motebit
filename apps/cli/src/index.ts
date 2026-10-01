@@ -4,7 +4,7 @@ import { deriveSyncEncryptionKey, mintAudienceToken } from "@motebit/encryption"
 import type { connectMcpServers } from "@motebit/mcp-client";
 import { paidResultsNotice } from "@motebit/runtime";
 import { admitModelForProvider, MONEY_TOOLS_WITHHELD_NOTICE } from "./model-admission.js";
-import { applyConfiguredProvider } from "./provider-config.js";
+import { applyConfiguredProvider, argvHasFlag } from "./provider-config.js";
 import { createSolanaWalletRail } from "@motebit/wallet-solana";
 import { preflightGrant, renderPreflight } from "./grant-preflight.js";
 import { installTaskPollFault } from "./fault-injection.js";
@@ -540,7 +540,7 @@ async function main(): Promise<void> {
   );
   // An EXPLICIT contradiction fails loud at startup, naming both — never
   // deferred to an opaque first-call API error.
-  if (process.argv.includes("--model")) {
+  if (argvHasFlag(process.argv, "--model")) {
     const admission = admitModelForProvider(config.provider, config.model);
     if (!admission.admissible) {
       console.error(
@@ -549,7 +549,7 @@ async function main(): Promise<void> {
       process.exit(1);
     }
   }
-  if (fullConfig.max_tokens != null && !process.argv.includes("--max-tokens")) {
+  if (fullConfig.max_tokens != null && !argvHasFlag(process.argv, "--max-tokens")) {
     config.maxTokens = fullConfig.max_tokens;
   }
 

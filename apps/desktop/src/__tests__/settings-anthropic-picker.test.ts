@@ -16,7 +16,12 @@ import { describe, it, expect, vi, beforeAll } from "vitest";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
-import { ANTHROPIC_PICKER, DEFAULT_ANTHROPIC_MODEL, motebitCloudAdmitsModel } from "@motebit/sdk";
+import {
+  ANTHROPIC_PICKER,
+  DEFAULT_ANTHROPIC_MODEL,
+  motebitCloudAdmission,
+  motebitCloudAdmitsModel,
+} from "@motebit/sdk";
 
 vi.mock("../ui/chat", () => ({ addMessage: vi.fn() }));
 vi.mock("../ui/mcp-connections", () => ({ getMcpServersConfig: vi.fn(() => []) }));
@@ -121,4 +126,21 @@ describe("desktop Settings — Motebit Cloud default (C2)", () => {
     expect(cfg.provider).toBe("proxy");
     expect(motebitCloudAdmitsModel(String(cfg.model))).toBe(true);
   });
+});
+
+// R2: a stored Cloud id the proxy serves — alias, legacy or outside the
+// PROXY_MODELS picker — is shown selected and Saved verbatim, never migrated.
+describe("desktop Settings — stored Cloud model is never rewritten (R2)", () => {
+  it.each(["claude-opus-4-20250115", "claude-opus", "gpt-4o", "llama-3.3-70b-versatile", "auto"])(
+    "%s: shown selected and saved verbatim",
+    async (stored) => {
+      expect(motebitCloudAdmission(stored).admitted).toBe(true);
+      const { initAI } = mount({ provider: "proxy", model: stored, isTauri: false });
+      expect($<HTMLSelectElement>("settings-cloud-model").value).toBe(stored);
+      $<HTMLButtonElement>("settings-save").click();
+      await vi.waitFor(() => expect(initAI).toHaveBeenCalled());
+      const cfg = (initAI.mock.calls.at(-1) as unknown as [Cfg])[0];
+      expect(cfg.model).toBe(stored);
+    },
+  );
 });

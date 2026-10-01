@@ -10,6 +10,7 @@ import { describe, it, expect, vi, beforeAll } from "vitest";
 import {
   ANTHROPIC_PICKER,
   DEFAULT_ANTHROPIC_MODEL,
+  motebitCloudAdmission,
   motebitCloudAdmitsModel,
   type UnifiedProviderConfig,
 } from "@motebit/sdk";
@@ -120,5 +121,25 @@ describe("web Settings — Motebit Cloud save (C2)", () => {
     const saved = setConfig.mock.calls.at(-1)?.[0];
     expect(saved?.mode).toBe("motebit-cloud");
     expect(motebitCloudAdmitsModel(String((saved as { model?: string }).model))).toBe(true);
+  });
+});
+
+// R2: a stored Cloud id the proxy serves but the hard-coded <select> has no
+// <option> for used to leave NOTHING selected — the next Save persisted "".
+describe("web Settings — stored Cloud model is never rewritten (R2)", () => {
+  it.each([
+    "claude-sonnet-4-6",
+    "claude-opus-4-20250115",
+    "claude-opus",
+    "gpt-4o",
+    "llama-3.3-70b-versatile",
+    "auto",
+  ])("%s: shown selected and saved verbatim", (stored) => {
+    expect(motebitCloudAdmission(stored).admitted).toBe(true);
+    const { setConfig } = mount({ mode: "motebit-cloud", model: stored });
+    const sel = document.getElementById("cloud-model") as HTMLSelectElement;
+    expect(sel.value).toBe(stored);
+    (document.getElementById("settings-save") as HTMLButtonElement).click();
+    expect((setConfig.mock.calls.at(-1)?.[0] as { model?: string }).model).toBe(stored);
   });
 });

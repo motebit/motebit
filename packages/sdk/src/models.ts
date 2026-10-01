@@ -262,14 +262,95 @@ export const MOTEBIT_CLOUD_ACCEPTED_MODELS = [
 export const MOTEBIT_CLOUD_AUTO_MODEL = "auto";
 
 /**
- * Would Motebit Cloud's proxy-token path admit `model` as sent? Mirrors the
- * route: `"auto"` is routed server-side; anything else must be an accepted id.
+ * Legacy and class-level model aliases Motebit Cloud resolves to a current
+ * accepted id. Frontends send whatever model string they were built with;
+ * the proxy resolves it here, so when a model version ships, updating the
+ * right-hand side upgrades every deployed client without a redeploy.
+ *
+ * Lifted from `services/proxy` (#654 cold review R2): a client pre-flight
+ * that checked only {@link MOTEBIT_CLOUD_ACCEPTED_MODELS} skipped this step
+ * and refused `claude-opus`, `gpt-4o`, a stored `claude-opus-4-20250115` —
+ * ids the proxy serves. The table lives here so the proxy and every client
+ * run {@link motebitCloudAdmission}, one function, never a copy.
  */
+export const MOTEBIT_CLOUD_MODEL_ALIASES: Readonly<Record<string, string>> = {
+  // Class aliases — "give me the best Sonnet" without caring about the version
+  "claude-sonnet": "claude-sonnet-4-6",
+  "claude-opus": "claude-opus-4-6",
+  "claude-haiku": "claude-haiku-4-5-20251001",
+
+  // Legacy dated versions → current
+  "claude-sonnet-4-20250514": "claude-sonnet-4-6",
+  "claude-opus-4-20250115": "claude-opus-4-6",
+  "claude-3-5-sonnet-20241022": "claude-sonnet-4-6",
+  "claude-3-5-haiku-20241022": "claude-haiku-4-5-20251001",
+  "claude-3-opus-20240229": "claude-opus-4-6",
+
+  // OpenAI aliases
+  "gpt-5": "gpt-5.4",
+  "gpt-4o": "gpt-5.4-mini",
+  "gpt-4o-mini": "gpt-5.4-nano",
+  "gpt-4o-2024-11-20": "gpt-5.4-mini",
+  "gpt-4o-mini-2024-07-18": "gpt-5.4-nano",
+
+  // Google aliases
+  "gemini-pro": "gemini-2.5-pro",
+  "gemini-flash": "gemini-2.5-flash",
+  "gemini-flash-lite": "gemini-2.5-flash-lite",
+  "gemini-1.5-pro": "gemini-2.5-pro",
+  "gemini-1.5-flash": "gemini-2.5-flash",
+};
+
+/** The verdict of {@link motebitCloudAdmission}. */
+export interface MotebitCloudAdmission {
+  /** Would Motebit Cloud's metered (proxy-token) path admit the id as sent? */
+  readonly admitted: boolean;
+  /** The id the proxy routes after alias resolution (`""` for a non-string). */
+  readonly resolved: string;
+}
+
+/** The two tables an admission is computed over. */
+export interface MotebitCloudCatalog {
+  readonly aliases: Readonly<Record<string, string>>;
+  readonly accepted: readonly string[];
+}
+
+/** The shipped catalog. */
+export const MOTEBIT_CLOUD_CATALOG: MotebitCloudCatalog = {
+  aliases: MOTEBIT_CLOUD_MODEL_ALIASES,
+  accepted: MOTEBIT_CLOUD_ACCEPTED_MODELS,
+};
+
+/**
+ * Motebit Cloud's model admission — THE rule. `services/proxy` calls it on
+ * every request (it holds no private copy) and every client pre-flight or
+ * stored-setting sanitizer calls it, so a client can never refuse or rewrite
+ * a model the proxy would serve (#654 cold review R2). Pure, no I/O.
+ *
+ *   - a non-string or empty id → refused;
+ *   - `"auto"` → admitted (the proxy routes it server-side);
+ *   - otherwise the id is alias-resolved, then admitted iff the resolved id
+ *     is in the accepted set. Exact match: no trimming, no case folding —
+ *     the proxy does neither.
+ *
+ * `catalog` exists for tests that prove the accepted-set check is
+ * load-bearing (an alias whose target is outside the set is refused).
+ */
+export function motebitCloudAdmission(
+  model: unknown,
+  catalog: MotebitCloudCatalog = MOTEBIT_CLOUD_CATALOG,
+): MotebitCloudAdmission {
+  if (typeof model !== "string" || model.length === 0) return { admitted: false, resolved: "" };
+  if (model === MOTEBIT_CLOUD_AUTO_MODEL) return { admitted: true, resolved: model };
+  const resolved = Object.prototype.hasOwnProperty.call(catalog.aliases, model)
+    ? (catalog.aliases[model] as string)
+    : model;
+  return { admitted: catalog.accepted.includes(resolved), resolved };
+}
+
+/** Would Motebit Cloud admit `model` as sent? `motebitCloudAdmission(model).admitted`. */
 export function motebitCloudAdmitsModel(model: string): boolean {
-  return (
-    model === MOTEBIT_CLOUD_AUTO_MODEL ||
-    (MOTEBIT_CLOUD_ACCEPTED_MODELS as readonly string[]).includes(model)
-  );
+  return motebitCloudAdmission(model).admitted;
 }
 
 /** Every provider a surface can switch to, under any of its spellings. */
@@ -464,16 +545,22 @@ export function modelVendorHint(
 /**
  * Pre-flight admission: may `model` be served by `provider`?
  * Permissive where honesty demands it — `local-server` runs whatever the
- * user's server hosts, the proxy routes multiple vendors, and an
- * `"unknown"` vendor hint never blocks (the registry lags new releases).
+ * user's server hosts, and an `"unknown"` vendor hint never blocks a BYOK
+ * vendor (the registry lags new releases). Motebit Cloud (`proxy`) is the
+ * exception: its catalog ships with this package, so it answers exactly
+ * {@link motebitCloudAdmission}.
  * It answers `false` only for a KNOWN cross-vendor mismatch — exactly
  * the class that fails opaquely at the API otherwise.
  */
 export function providerAcceptsModel(provider: string, model: string): boolean {
   if (provider === "local-server" || provider === "ollama") return true;
+  // Motebit Cloud is a fixed catalog with an alias step, so it answers by
+  // its own rule, not a vendor-family guess (#654 cold review R2): the guess
+  // both over-admitted (`claude-sonnet-5`, which Cloud refuses) and
+  // under-admitted (`llama-3.3-70b-versatile`, which Cloud serves).
+  if (provider === "proxy" || provider === "motebit-cloud") return motebitCloudAdmitsModel(model);
   const hint = modelVendorHint(model);
   if (hint === "unknown") return true;
-  if (provider === "proxy") return hint === "anthropic" || hint === "openai" || hint === "google";
   if (provider === "groq") return hint === "groq" || hint === "local"; // groq serves open models
   return hint === provider;
 }

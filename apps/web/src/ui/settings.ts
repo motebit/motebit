@@ -24,6 +24,7 @@ import { hexPublicKeyToDidKey } from "@motebit/encryption";
 import type { ColorPickerAPI } from "./color-picker";
 import { mountMachines } from "./machines-section";
 import { DEFAULT_GOOGLE_MODEL, DEFAULT_PROXY_MODEL, isLocalServerUrl } from "@motebit/sdk";
+import { selectStoredCloudModel } from "./cloud-model";
 import { renderAnthropicPicker } from "./anthropic-picker";
 
 /** Which provider tab the UI is showing. Maps from `UnifiedProviderConfig.mode`. */
@@ -1233,7 +1234,7 @@ export function initSettings(ctx: WebContext, deps: SettingsDeps): SettingsAPI {
         case "motebit-cloud": {
           switchProviderTab("proxy");
           const cloudModelEl = document.getElementById("cloud-model") as HTMLSelectElement | null;
-          if (cloudModelEl && config.model) cloudModelEl.value = config.model;
+          if (cloudModelEl) selectStoredCloudModel(cloudModelEl, config.model);
           break;
         }
         case "byok": {
@@ -1372,8 +1373,10 @@ export function initSettings(ctx: WebContext, deps: SettingsDeps): SettingsAPI {
     switch (activeProviderTab) {
       case "proxy": {
         // Motebit Cloud — read model from the cloud model selector
+        // `||`, not `??`: a select with nothing selected reads "" — never
+        // persist an empty model (#654 cold review R2).
         const cloudModel =
-          (document.getElementById("cloud-model") as HTMLSelectElement | null)?.value ??
+          (document.getElementById("cloud-model") as HTMLSelectElement | null)?.value ||
           DEFAULT_PROXY_MODEL;
         config = { mode: "motebit-cloud", model: cloudModel, maxTokens };
         break;

@@ -43,17 +43,6 @@ import { IntelligenceTab, type IntelligenceTabProps } from "../components/settin
 import type { ProviderType } from "../components/settings/settings-shared";
 import { modelForProviderSwitch } from "../provider-model";
 
-// The app tsconfig carries no Node types (browser / React Native target), so
-// the Node built-in is loaded through a non-literal specifier (the pattern
-// expo-sqlite-sync-cursor.test.ts uses).
-const NODE_FS = "node:fs";
-const { readFileSync } = (await import(/* @vite-ignore */ NODE_FS)) as {
-  readFileSync: (p: string, enc: "utf8") => string;
-};
-/** Read a file relative to this test file. */
-const readRel = (rel: string): string =>
-  readFileSync(decodeURIComponent(new URL(rel, import.meta.url).pathname), "utf8");
-
 function props(over: Partial<IntelligenceTabProps>): IntelligenceTabProps {
   const noop = (): void => {};
   return {
@@ -157,11 +146,6 @@ describe("mobile provider switch → Motebit Cloud (C2)", () => {
     expect(motebitCloudAdmitsModel(model)).toBe(true);
   });
 
-  it("SettingsModal derives the switched model through modelForProviderSwitch", () => {
-    // The modal itself needs SecureStore/FileSystem/the whole app to mount;
-    // pin that its onChangeProvider has no private derivation left.
-    const src = readRel("../components/SettingsModal.tsx");
-    expect(src).toMatch(/model: modelForProviderSwitch\(p\)/);
-    expect(src).not.toMatch(/DEFAULT_ANTHROPIC_MODEL/);
-  });
+  // The modal's own wiring (onChangeProvider → saved model) is executed in
+  // settings-modal-provider-switch.test.tsx — no source-regex pin here.
 });
