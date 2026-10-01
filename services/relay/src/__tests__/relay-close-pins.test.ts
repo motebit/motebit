@@ -128,6 +128,12 @@ describe("(a) a hung facilitator's handshake says nothing after close()", () => 
 });
 
 describe("(b) the deposit detector's default adapter is bounded", () => {
+  it("sizes the default bound for catch-up: 60 000 ms", () => {
+    // A catch-up eth_getLogs over up to 1000 blocks may take >10s to headers;
+    // the bound must stay finite but fit it.
+    expect(DEPOSIT_RPC_REQUEST_TIMEOUT_MS).toBe(60_000);
+  });
+
   it(`aborts a request the RPC never answers at ${DEPOSIT_RPC_REQUEST_TIMEOUT_MS} ms`, async () => {
     const relay = await createSyncRelay({
       apiToken: "t",

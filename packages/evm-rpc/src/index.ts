@@ -203,9 +203,12 @@ export class HttpJsonRpcEvmAdapter implements EvmRpcAdapter {
    *   - BODY: an IDLE bound — the timer re-arms on every body chunk, so the
    *     read fails only after `requestTimeoutMs` with NO progress.
    * A stalled body (headers, then silence) cannot hang the caller (a periodic
-   * deposit tick); a slow body that keeps progressing — a large `eth_getLogs`
-   * on catch-up after downtime — completes however long it takes in total.
-   * A total bound would fail that catch-up on every tick and stall crediting.
+   * deposit tick). A large `eth_getLogs` on catch-up after downtime is held to
+   * both bounds: its headers must arrive within `requestTimeoutMs` (a total
+   * bound — size it for the server's slowest query; the deposit detector uses
+   * 60s), and its body may then take any total time so long as no gap between
+   * chunks exceeds `requestTimeoutMs`. A total bound on the body would fail
+   * that catch-up on every tick and stall crediting.
    */
   private async call<T>(method: string, params: unknown[]): Promise<T> {
     const ms = this.requestTimeoutMs;

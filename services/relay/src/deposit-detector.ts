@@ -46,10 +46,14 @@ export const USDC_CONTRACTS: Record<string, string> = {
   "eip155:42161": "0xaf88d065e77c8cC2239327C5EDb3A432268e5831",
 };
 
-/** Default public RPC endpoints by CAIP-2 chain ID. */
-/** Default per-request bound on the deposit detector's JSON-RPC calls. */
-export const DEPOSIT_RPC_REQUEST_TIMEOUT_MS = 10_000;
+/**
+ * Default per-request bound on the deposit detector's JSON-RPC calls: 60s, not
+ * 10s, because a catch-up `eth_getLogs` over up to 1000 blocks may take the
+ * server well over 10s before it sends headers — still bounded, never a hang.
+ */
+export const DEPOSIT_RPC_REQUEST_TIMEOUT_MS = 60_000;
 
+/** Default public RPC endpoints by CAIP-2 chain ID. */
 export const DEFAULT_RPC_URLS: Record<string, string> = {
   "eip155:1": "https://eth.llamarpc.com",
   "eip155:8453": "https://mainnet.base.org",
