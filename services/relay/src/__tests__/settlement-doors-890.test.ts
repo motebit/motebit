@@ -44,6 +44,7 @@
 import { describe, it, expect, vi, beforeAll, afterAll } from "vitest";
 import { createServer } from "node:http";
 import type { Server } from "node:http";
+import type { AddressInfo } from "node:net";
 import { appendFileSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import type { SyncRelay } from "../index.js";
@@ -63,7 +64,9 @@ import * as taskQueueModule from "../task-queue.js";
 import { TaskQueue } from "../task-queue.js";
 import { persistReceiptChain } from "../receipts-store.js";
 
-const PORT = 18971;
+// An ephemeral port (#890 r10): a fixed one collided with another suite's
+// allocator when the relay suite ran together.
+let PORT = 0;
 
 // ── W's MCP endpoint: answers each presented task from a script ──
 const mcpReplies = new Map<string, (relayTaskId: string) => Promise<ExecutionReceipt | null>>();
@@ -101,7 +104,8 @@ beforeAll(async () => {
       })();
     });
   });
-  await new Promise<void>((r) => server.listen(PORT, "127.0.0.1", r));
+  await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+  PORT = (server.address() as AddressInfo).port;
 });
 afterAll(async () => {
   server.closeAllConnections();

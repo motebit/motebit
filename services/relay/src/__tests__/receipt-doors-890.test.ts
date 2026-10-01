@@ -48,6 +48,7 @@
 import { describe, it, expect, vi, beforeAll, afterAll } from "vitest";
 import { createServer } from "node:http";
 import type { Server } from "node:http";
+import type { AddressInfo } from "node:net";
 import type { SyncRelay } from "../index.js";
 // eslint-disable-next-line no-restricted-imports -- tests need direct keypair generation, receipt and envelope signing
 import {
@@ -85,7 +86,8 @@ import {
 } from "../receipts-store.js";
 import { relayMigrations } from "../migrations.js";
 
-const PORT = 18963; // its own port: task-presenter.test.ts binds 18953
+// An ephemeral port (#890 r10): fixed ports collided across the relay suite.
+let PORT = 0;
 type Door = "post" | "mcp" | "fed";
 type Variant =
   | "routed"
@@ -135,7 +137,8 @@ beforeAll(async () => {
       })();
     });
   });
-  await new Promise<void>((r) => server.listen(PORT, "127.0.0.1", r));
+  await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+  PORT = (server.address() as AddressInfo).port;
 });
 afterAll(async () => {
   server.closeAllConnections();
