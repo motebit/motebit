@@ -91,13 +91,22 @@ let n = 0;
  * A fresh clone of a tiny origin (main = one commit), on branch `feature`
  * with `change` applied and committed. The hook is the real one.
  */
-function repoWith(change: Record<string, string>): string {
+interface RepoOpts {
+  /** The hook under test — the real one unless a mutant is being run. */
+  hook?: string;
+  /** Paths deleted in the committed change. */
+  remove?: string[];
+  /** Runs after the change is committed (uncommitted/untracked edits). */
+  after?: (dir: string) => void;
+}
+
+function repoWith(change: Record<string, string>, opts: RepoOpts = {}): string {
   const dir = join(base, `case-${n++}`);
   const origin = `${dir}-origin.git`;
   mkdirSync(dir, { recursive: true });
   git(base, "init", "-q", "--bare", "-b", "main", origin);
   git(dir, "init", "-q", "-b", "main");
-  write(dir, ".husky/pre-push", HOOK_SRC);
+  write(dir, ".husky/pre-push", opts.hook ?? HOOK_SRC);
   write(dir, "package.json", '{ "name": "fixture" }\n');
   write(dir, "pnpm-workspace.yaml", 'packages:\n  - "packages/*"\n  - "apps/*"\n');
   write(dir, "packages/leaf/package.json", '{ "name": "leaf" }\n');
@@ -107,15 +116,28 @@ function repoWith(change: Record<string, string>): string {
   write(dir, "packages/other/src/index.ts", "export const other = 1;\n");
   write(dir, "docs/guide.md", "# Guide\n");
   write(dir, "scripts/check-x.ts", "export {};\n");
+  write(dir, "coverage-graduation.json", "{}\n");
+  // A workspace-root dir with no package.json (the real packages/github-action/
+  // is an action.yml + README), and a package a change can delete outright.
+  write(dir, "packages/github-action/action.yml", "name: x\n");
+  write(dir, "packages/gone/package.json", '{ "name": "gone" }\n');
+  write(dir, "packages/gone/src/index.ts", "export const gone = 1;\n");
+  write(
+    dir,
+    "packages/leaf/src/moved.ts",
+    "export const moved = 'a long enough body to rename';\n",
+  );
   git(dir, "add", "-A");
   git(dir, "commit", "-qm", "base");
   git(dir, "remote", "add", "origin", origin);
   git(dir, "push", "-q", "origin", "main");
   git(dir, "fetch", "-q", "origin");
   git(dir, "checkout", "-qb", "feature");
+  for (const rel of opts.remove ?? []) rmSync(join(dir, rel));
   for (const [rel, content] of Object.entries(change)) write(dir, rel, content);
   git(dir, "add", "-A");
   git(dir, "commit", "-qm", "change");
+  opts.after?.(dir);
   return dir;
 }
 
@@ -322,6 +344,218 @@ describe("pre-push hook — scope follows the diff", () => {
     git(repo, "checkout", "-q", "--detach");
     expect(runHook(repo).calls).toEqual([]);
   });
+});
+
+/**
+ * Path-shape and exit-status cases, each written as a SCENARIO — a function of
+ * the hook source that says whether the hook behaved correctly — so the same
+ * scenario runs against the real hook (must hold) and against the mutants in
+ * HOOK_MUTANTS below (must break). Each one was RED on 86a3c1e5c before the
+ * fix it names landed.
+ */
+interface Scenario {
+  ok: boolean;
+  detail: string;
+}
+const show = (r: Run) => `status=${r.status}\ncalls=${JSON.stringify(r.calls)}\n${r.stderr}`;
+const testCalls = (r: Run) => r.calls.filter((c) => c.startsWith("turbo run test"));
+
+const SCENARIOS: Record<string, (hook: string) => Scenario> = {
+  /** C1: git quotes non-ASCII paths ("packages/leaf/src/na\303\257ve.ts") unless core.quotePath=false. */
+  "non-ASCII path": (hook) => {
+    const r = runHook(
+      repoWith({ "packages/leaf/src/naïve.ts": "export const n = 1;\n" }, { hook }),
+    );
+    return {
+      ok:
+        r.status === 0 &&
+        testCalls(r).includes(TEST_CHANGED) &&
+        r.calls.some(
+          (c) => c.startsWith("exec prettier") && c.includes("packages/leaf/src/naïve.ts"),
+        ),
+      detail: show(r),
+    };
+  },
+  /** C1 residue: a path git STILL quotes (a `"` in the name) cannot be scoped — fail closed. */
+  "still-quoted path fails closed": (hook) => {
+    const r = runHook(repoWith({ 'packages/leaf/src/q"t.ts': "export const q = 1;\n" }, { hook }));
+    return {
+      ok:
+        r.status === 0 &&
+        /UNFILTERED \(fail closed\)/.test(r.stderr) &&
+        r.calls.includes("turbo run test --concurrency=2") &&
+        r.calls.includes("format:check"),
+      detail: show(r),
+    };
+  },
+  /** C2: a cross-package rename lists only the destination unless --no-renames. */
+  "cross-package rename tests both packages": (hook) => {
+    const r = runHook(
+      repoWith(
+        { "packages/other/src/moved.ts": "export const moved = 'a long enough body to rename';\n" },
+        { hook, remove: ["packages/leaf/src/moved.ts"] },
+      ),
+    );
+    return {
+      ok:
+        r.status === 0 &&
+        testCalls(r).includes(
+          "turbo run test --filter=./packages/leaf --filter=./packages/other --concurrency=2",
+        ),
+      detail: show(r),
+    };
+  },
+  /** C3: the last changed workspace dir has no package.json → `[ -f ] && printf` is the loop's status. */
+  "changed dir without package.json": (hook) => {
+    const r = runHook(repoWith({ "packages/github-action/action.yml": "name: y\n" }, { hook }));
+    return {
+      ok: r.status === 0 && /test — SKIPPED/.test(r.stderr) && /gauntlet passed/.test(r.stderr),
+      detail: show(r),
+    };
+  },
+  "deleted package": (hook) => {
+    const r = runHook(
+      repoWith({}, { hook, remove: ["packages/gone/package.json", "packages/gone/src/index.ts"] }),
+    );
+    return { ok: r.status === 0 && /gauntlet passed/.test(r.stderr), detail: show(r) };
+  },
+  /** C3: MOTEBIT_PREPUSH_QUIET=1 made the hook's LAST command `[ -z set ] && printf` → exit 1. */
+  "MOTEBIT_PREPUSH_QUIET=1 passes silently": (hook) => {
+    const r = runHook(repoWith(LEAF_CHANGE, { hook }), { MOTEBIT_PREPUSH_QUIET: "1" });
+    return {
+      ok: r.status === 0 && r.stderr === "" && r.calls.includes(TEST_CHANGED),
+      detail: show(r),
+    };
+  },
+  /** An uncommitted edit to a tracked file is in the tree turbo + prettier see. */
+  "uncommitted edit is in scope": (hook) => {
+    const r = runHook(
+      repoWith(
+        { "docs/guide.md": "# Guide\n\nMore.\n" },
+        { hook, after: (d) => write(d, "packages/leaf/src/index.ts", "export const leaf = 3;\n") },
+      ),
+    );
+    return { ok: r.status === 0 && testCalls(r).includes(TEST_CHANGED), detail: show(r) };
+  },
+  /** An untracked file is in the tree turbo + prettier see. */
+  "untracked file is in scope": (hook) => {
+    const r = runHook(
+      repoWith(
+        { "docs/guide.md": "# Guide\n\nMore.\n" },
+        { hook, after: (d) => write(d, "packages/other/src/new.ts", "export const n = 1;\n") },
+      ),
+    );
+    return {
+      ok:
+        r.status === 0 &&
+        testCalls(r).includes("turbo run test --filter=./packages/other --concurrency=2"),
+      detail: show(r),
+    };
+  },
+  /** coverage-graduation.json is a gate INPUT (#589) — same trigger as CI's `changes` job. */
+  "coverage-graduation.json triggers the gate self-tests": (hook) => {
+    const r = runHook(repoWith({ "coverage-graduation.json": '{ "x": 1 }\n' }, { hook }));
+    return {
+      ok:
+        r.status === 0 &&
+        r.calls.includes("test:gates") &&
+        r.calls.includes("check-gates-effective"),
+      detail: show(r),
+    };
+  },
+  /** A failing phase aborts the push with a non-zero code. */
+  "a failing gate blocks": (hook) => {
+    const r = runHook(repoWith(LEAF_CHANGE, { hook }), { SHIM_FAIL: "^check$" });
+    return {
+      ok: r.status !== 0 && /✗ gates \(pnpm check\) FAILED/.test(r.stderr),
+      detail: show(r),
+    };
+  },
+};
+
+describe("pre-push hook — path shapes and exit status (scenarios on the real hook)", () => {
+  for (const [name, scenario] of Object.entries(SCENARIOS)) {
+    it(name, () => {
+      const s = scenario(HOOK_SRC);
+      expect(s.ok, s.detail).toBe(true);
+    });
+  }
+});
+
+/**
+ * Permanent mutant table: each row is a plausible edit to the hook that
+ * silently narrows what it checks or turns a pass into a silent failure, and
+ * the scenario that must KILL it (go false). A row whose `from` no longer
+ * appears in the hook fails too — rename the row with the hook, never drop it.
+ */
+const HOOK_MUTANTS: { name: string; from: string | RegExp; to: string; killedBy: string }[] = [
+  {
+    name: "uncommitted `git diff HEAD` term dropped from changed_files",
+    from: /\n\s*git -c core\.quotePath=false diff --no-renames --name-only HEAD -- "\$@" &&/,
+    to: "",
+    killedBy: "uncommitted edit is in scope",
+  },
+  {
+    name: "untracked `ls-files --others` term dropped from changed_files",
+    from: /&&\n\s*git -c core\.quotePath=false ls-files --others --exclude-standard -- "\$@";/,
+    to: ";",
+    killedBy: "untracked file is in scope",
+  },
+  {
+    name: "coverage-graduation.json dropped from the gate-input trigger",
+    from: "changed_files scripts/ coverage-graduation.json",
+    to: "changed_files scripts/",
+    killedBy: "coverage-graduation.json triggers the gate self-tests",
+  },
+  {
+    name: "core.quotePath=false dropped (C1)",
+    from: /git -c core\.quotePath=false /g,
+    to: "git ",
+    killedBy: "non-ASCII path",
+  },
+  {
+    name: "still-quoted-path fail-closed dropped (C1 residue)",
+    from: /\n\s*if printf '%s\\n' "\$_cf" \| grep -q '\^"'; then\n[^\n]*\n[^\n]*\n\s*fi/,
+    to: "",
+    killedBy: "still-quoted path fails closed",
+  },
+  {
+    name: "--no-renames dropped (C2)",
+    from: / --no-renames/g,
+    to: "",
+    killedBy: "cross-package rename tests both packages",
+  },
+  {
+    name: "package.json filter back to `[ -f ] && printf` (C3)",
+    from: 'if [ -f "$_d/package.json" ]; then printf \'%s\\n\' "$_d"; fi',
+    to: '[ -f "$_d/package.json" ] && printf \'%s\\n\' "$_d"',
+    killedBy: "changed dir without package.json",
+  },
+  {
+    name: "closing banner back to `[ -z QUIET ] && printf` as the last command (C3)",
+    from: /if \[ -z "\$MOTEBIT_PREPUSH_QUIET" \]; then\n(\s*printf '\\n✓ pre-push gauntlet passed[^\n]*\n)\s*fi\n/,
+    to: '[ -z "$MOTEBIT_PREPUSH_QUIET" ] &&\n$1',
+    killedBy: "MOTEBIT_PREPUSH_QUIET=1 passes silently",
+  },
+  {
+    name: "run_phase exits 0 on failure (the `$?`-read-after-`fi` shape)",
+    from: /else\n(\s*)_rc=\$\?\n/,
+    to: "else\n$1_rc=0\n",
+    killedBy: "a failing gate blocks",
+  },
+];
+
+describe("pre-push hook — mutant table (every mutant must be killed)", () => {
+  for (const m of HOOK_MUTANTS) {
+    it(`${m.name} — killed by "${m.killedBy}"`, () => {
+      const mutant = HOOK_SRC.replace(m.from, m.to);
+      expect(mutant, `mutant "${m.name}" no longer applies to the hook`).not.toBe(HOOK_SRC);
+      const scenario = SCENARIOS[m.killedBy];
+      expect(scenario, `unknown scenario ${m.killedBy}`).toBeDefined();
+      const s = scenario!(mutant);
+      expect(s.ok, `mutant survived:\n${s.detail}`).toBe(false);
+    });
+  }
 });
 
 describe("(9, CI half) check-prepush-subset over the real hook and ci.yml", () => {
