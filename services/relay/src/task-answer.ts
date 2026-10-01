@@ -2,8 +2,10 @@
  * A task's ANSWER is decided here, and only here (#890 round 8).
  *
  * Every door a receipt enters by — the result POST, the MCP forward's
- * callback (both through `handleReceiptIngestion`), and the federation result
- * (`onTaskResultReceived`) — calls `answerTask`. It is the one writer of a
+ * callback (both through `handleReceiptIngestion`), the federation result
+ * (`onTaskResultReceived`) and a sub-task's receipt embedded in its parent's
+ * answer (`settleSubReceipt`) — admits it through `admitReceipt`, the one
+ * door routine, which calls `answerTask`. It is the one writer of a
  * queue entry's `receipt` and terminal `task.status` (a static test in
  * `__tests__/receipt-doors-890.test.ts` fails on any other assignment), and
  * it decides in a fixed order:

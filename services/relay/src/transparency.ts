@@ -135,7 +135,7 @@ export const DECLARATION_CONTENT = {
         "every x402 payment the relay settles for a task submission (the EIP-3009 authorization's payer address and nonce, network, token, treasury address, amount, validAfter and validBefore, the Idempotency-Key and path motebit_id it was presented under, the delegator credited, the task id reserved for it, status pending/credited/failed, tx hash, failure reason, the reconciler's block-scan range and cursors (start, fixed end, pass cursor, last visit), expiry-observation and re-check bookkeeping, the latest chain observation, whether an AuthorizationUsed log was seen (with the transaction hash, for the operator), and the chain-time visit cadence (wall-clock and the confirmed chain head's timestamp at each), the consumed Transfer log index, timestamps — no content): written before the facilitator is called, so a settle whose outcome is unknown is reconciled from the chain's EIP-3009 events (proof of execution; a cancelled authorization is never credited) and credited once; one authorization is settled at most once; never deleted (migration v49, #907)",
         "every signed execution receipt the relay verified",
         "full signed execution receipt JSON, byte-identical to the signer's canonical form, archived per (motebit_id, task_id) for independent audit re-verification",
-        "every settlement (relay-mediated and p2p audit)",
+        "every settlement (relay-mediated and p2p audit), naming the signature of the receipt it settled — a task settles once, only on the receipt its answer is claimed for (#890 round 9)",
         "every pending aggregated withdrawal intent enqueued by the sweep, with state machine history until fired or failed",
         "every credential issued, anchored, or revoked",
         "every operator agent de-listing and reinstatement — the signed, append-only `AgentRevocationRecord` history (motebit_id, reason, actor, note, effective_at) served publicly at GET /api/v1/agents/revocations and verifiable against the relay's pinned key; a de-list removes an agent from Discover only — its identity, key, succession chain, and receipts stay served",
@@ -188,7 +188,7 @@ export const DECLARATION_CONTENT = {
         "for every answered task: its answer — the executor's signed receipt (its motebit_id, status, result hash, and the result text the executor signed), the receipt its settlement is claimed for, and when — so the task's poll answers the same after the queue forgets it (#890 round 9)",
       ],
       retention_window:
-        "7 days from the hand-off (a route) or the answer (an answer), swept every minute by the task-cleanup loop — beyond the 24-hour idempotency window, the longest any reader consults a route or an answer",
+        "7 days from the hand-off (a route) or the answer (an answer), swept every minute by the task-cleanup loop — beyond the 24-hour idempotency window, the longest any reader consults a route or an answer; an answer whose settlement is claimed but not yet written is kept while its task is still queued, so the next retry settles it",
     },
     // The machine roster (docs/doctrine/machine-roster.md; design:
     // docs/proposals/machine-roster-relay-v1.md D3/D4). Its own category:
