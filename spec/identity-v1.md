@@ -28,16 +28,16 @@ The file is valid Markdown. It can be opened in any text editor, rendered by any
 A `motebit.md` file consists of two parts:
 
 1. **YAML frontmatter** between `---` delimiters
-2. **Signature comment** in the format `<!-- motebit:sig:{algorithm}:{signature} -->`
+2. **Signature comment** in the format `<!-- motebit:sig:{suite}:{signature} -->`, where `{suite}` MUST be `motebit-jcs-ed25519-hex-v1` (the only suite identity files are signed under; see `@motebit/protocol` `SUITE_REGISTRY`)
 
 ```
 ---
 {YAML frontmatter}
 ---
-<!-- motebit:sig:Ed25519:{base64url_signature} -->
+<!-- motebit:sig:motebit-jcs-ed25519-hex-v1:{hex_signature} -->
 ```
 
-The frontmatter contains the identity specification. The signature covers the frontmatter content — the bytes between the opening `---\n` and the closing `\n---`, exclusive of the delimiters themselves.
+The frontmatter contains the identity specification. The signature covers the frontmatter content — the bytes between the opening `---\n` and the closing `\n---`, exclusive of the delimiters themselves. The `{suite}` token in the comment is NOT covered by the signature; verifiers MUST therefore pin it (accept only `motebit-jcs-ed25519-hex-v1`) rather than dispatch on it. The legacy `motebit:sig:Ed25519:` form is rejected fail-closed.
 
 Additional Markdown content MAY appear after the signature comment. It is not covered by the signature and has no effect on verification. This allows agents or users to add human-readable notes, documentation, or context below the signed identity.
 
@@ -330,8 +330,8 @@ The signature is computed as follows:
 1. Serialize the identity data as YAML.
 2. Let `frontmatter_bytes` be the UTF-8 encoding of the YAML text (the content between `---\n` and `\n---`, not including the delimiters).
 3. Compute `signature = Ed25519_Sign(frontmatter_bytes, private_key)` where `private_key` is the 64-byte Ed25519 private key (also called "secret key" or "seed + public key" depending on library) corresponding to the `identity.public_key` in the frontmatter.
-4. Encode the 64-byte signature as base64url (RFC 4648 §5, no padding).
-5. Emit the signature as an HTML comment: `<!-- motebit:sig:Ed25519:{base64url_signature} -->`.
+4. Encode the 64-byte signature as lowercase hex (128 characters).
+5. Emit the signature as an HTML comment: `<!-- motebit:sig:motebit-jcs-ed25519-hex-v1:{hex_signature} -->`.
 
 ### 4.2 — Signature Placement
 
@@ -341,7 +341,7 @@ The signature comment MUST appear on the line immediately following the closing 
 ---
 {YAML}
 ---
-<!-- motebit:sig:Ed25519:abc123... -->
+<!-- motebit:sig:motebit-jcs-ed25519-hex-v1:a1b2c3... -->
 ```
 
 ### 4.3 — Verification Algorithm
@@ -361,10 +361,12 @@ function verify(content: string) -> { valid: bool, identity: object | null }
   3. Let raw_frontmatter = content[body_start .. position_of("\n---")].
      Parse raw_frontmatter as YAML into an object `identity`.
 
-  4. Find the substring "<!-- motebit:sig:Ed25519:" in content.
-     If not found, return { valid: false, identity: null }.
+  4. Find the substring "<!-- motebit:sig:motebit-jcs-ed25519-hex-v1:" in content.
+     If not found (including a comment naming any other suite, or the legacy
+     "Ed25519:" form), return { valid: false, identity: null }. The suite token
+     is outside the signed bytes, so it is pinned here, never dispatched on.
 
-  5. Extract the base64url string between the prefix and the next " -->".
+  5. Extract the hex string between the prefix and the next " -->".
      Decode it to a 64-byte signature.
      If decoding fails or length != 64, return { valid: false, identity: null }.
 
@@ -433,7 +435,7 @@ devices:
     registered_at: "2026-02-18T00:00:00.000Z"
 ---
 
-<!-- motebit:sig:Ed25519:dGhpcyBpcyBhIHBsYWNlaG9sZGVyIHNpZ25hdHVyZQ -->
+<!-- motebit:sig:motebit-jcs-ed25519-hex-v1:00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000 -->
 ```
 
 Note: The signature above is illustrative. A real file would contain a valid Ed25519 signature that passes verification against the declared public key.
@@ -484,7 +486,7 @@ succession:
     new_key_signature: "e5f6a1b2...128_hex_chars...representing_new_key_signing_canonical_payload"
 ---
 
-<!-- motebit:sig:Ed25519:dGhpcyBpcyBhIHBsYWNlaG9sZGVyIHNpZ25hdHVyZQ -->
+<!-- motebit:sig:motebit-jcs-ed25519-hex-v1:00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000 -->
 ```
 
 Note: The `motebit_id` remains unchanged from the original identity. The `identity.public_key` now matches `succession[0].new_public_key`. The file is signed by the new key. The succession record's dual signatures prove the old key authorized the rotation and the new key accepted it. Signatures above are illustrative.
@@ -533,7 +535,7 @@ memory:
 devices: []
 ---
 
-<!-- motebit:sig:Ed25519:dGhpcyBpcyBhIHBsYWNlaG9sZGVyIHNpZ25hdHVyZQ -->
+<!-- motebit:sig:motebit-jcs-ed25519-hex-v1:00000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000 -->
 ```
 
 Note: When `type` is absent, the identity is treated as `"personal"`. The service fields (`service_name`, `service_description`, `service_url`, `capabilities`, `terms_url`) are only meaningful when `type` is `"service"`.

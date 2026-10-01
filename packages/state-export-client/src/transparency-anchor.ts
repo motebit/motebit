@@ -23,6 +23,7 @@
  */
 
 import { canonicalJson, hexToBytes, sha256, bytesToHex, verifyBySuite } from "@motebit/crypto";
+import { TRANSPARENCY_SUITE } from "@motebit/protocol";
 import type { SignedTransparencyDeclaration } from "@motebit/protocol";
 
 // Re-export the canonical wire type so consumers of this package can
@@ -189,10 +190,15 @@ export async function verifyTransparencyDeclaration(
     return { ok: false, reason: "malformed_signature" };
   }
 
-  // Verify under the declared suite.
+  // `suite` is a post-sign field — NOT in the canonical bytes — so the
+  // declared value is never trusted as the dispatch key. Pin it to the
+  // suite transparency declarations are produced under.
+  if (declaration.suite !== TRANSPARENCY_SUITE) {
+    return { ok: false, reason: "unsupported_suite" };
+  }
   let valid: boolean;
   try {
-    valid = await verifyBySuite(declaration.suite, canonical, sigBytes, publicKey);
+    valid = await verifyBySuite(TRANSPARENCY_SUITE, canonical, sigBytes, publicKey);
   } catch {
     return { ok: false, reason: "unsupported_suite" };
   }
