@@ -11,11 +11,13 @@
  * credits to 1M/1M and the provider halted every key on it.
  *
  * Consumers, one module (zero imports so vite configs can load it):
- *   - `enforcePublicBuildEnv` + `PUBLIC_BUILD_ENV` — called by apps/web +
- *     apps/verify `vite.config.ts`; DENY BY DEFAULT: the build FAILS on any
- *     public-prefixed var (any case) not named for that surface, and every named
- *     var has a value validator (URL: https + host allowlist + no userinfo/query/
- *     key-in-path; Stripe: publishable only).
+ *   - `publicBuildEnvGuard` + `PUBLIC_BUILD_ENV` — a Vite plugin in apps/web +
+ *     apps/verify `vite.config.ts` that judges Vite's OWN resolved env
+ *     (`config.env` + `import.meta.env.*` defines) in `configResolved`; DENY BY
+ *     DEFAULT: the build FAILS on any var not named for that surface, and every
+ *     named var has a value validator (URL: https + host allowlist + no userinfo/
+ *     query/key-in-path; Stripe: publishable only). `generateBundle` re-checks
+ *     the emitted chunks for any refused value (defence in depth).
  *   - `publicEnvViolations` — the same law, reused by the gate's static arm (names
  *     referenced in a governed surface's source) and dist arm (the env literal a
  *     bundler emitted), so the build and the gate refuse exactly the same things.
@@ -333,8 +335,8 @@ export function isPublicEnvName(name: string): boolean {
 /**
  * Vercel's "automatically expose System Environment Variables" injects
  * `VITE_VERCEL_*` (commit sha/message/author, deployment urls) into every Vite
- * build. No source reads them; `enforcePublicBuildEnv` deletes them from
- * process.env before Vite reads it, so they never ship. Dropping is the safe
+ * build. No source reads them; `publicBuildEnvGuard`'s `config` hook deletes
+ * them from process.env before Vite reads it, so they never ship. Dropping is the safe
  * direction: a dropped var is never inlined. Only process.env is dropped from —
  * the same name in a `.env` file is an unknown var and refuses.
  */
@@ -436,40 +438,230 @@ export function publicEnvViolations(
   return problems;
 }
 
+/** Keys Vite itself puts in `import.meta.env` (never a user var). */
+export const VITE_BUILTIN_ENV: ReadonlySet<string> = new Set([
+  "BASE_URL",
+  "MODE",
+  "DEV",
+  "PROD",
+  "SSR",
+]);
+
+function envValueString(v: unknown): string {
+  return typeof v === "string" ? v : (JSON.stringify(v) ?? String(v));
+}
+
+/** A `define` value is a JS expression; a JSON string literal is judged as its string. */
+function defineValueString(v: unknown): string {
+  if (typeof v !== "string") return envValueString(v);
+  try {
+    const parsed: unknown = JSON.parse(v);
+    return typeof parsed === "string" ? parsed : v;
+  } catch {
+    return v;
+  }
+}
+
 /**
- * Build-time guard for a deployed Vite surface — the vite config's FIRST act.
- * Drops Vercel's injected `VITE_VERCEL_*` from `processEnv`, then loads the env
- * exactly as vite will (`loadEnv(mode, cwd, "")` — every var, any case) and
- * throws — failing `vite build` / `vite dev` — on any public-prefixed var not in
- * `PUBLIC_BUILD_ENV[app]` or whose value fails its validator.
+ * The law applied to what Vite will ACTUALLY inline: its resolved `config.env`
+ * (every var loaded from `envDir` — which defaults to `root`, not the cwd — for
+ * the build's `mode`, plus matching process.env vars) and every `define` key
+ * under `import.meta.env.`. Deny by default: every non-builtin key must be named
+ * in `PUBLIC_BUILD_ENV[app]` — a key Vite resolved under a custom `envPrefix`
+ * is judged too — and its value must pass that entry's validator.
+ */
+export function resolvedEnvViolations(
+  app: string,
+  env: Readonly<Record<string, unknown>>,
+  define: Readonly<Record<string, unknown>> = {},
+  spec: Readonly<Record<string, readonly PublicBuildEnvEntry[]>> = PUBLIC_BUILD_ENV,
+): string[] {
+  const allowed = spec[app];
+  if (allowed == null)
+    return [`apps/${app} has no PUBLIC_BUILD_ENV entry — every surface must name its public env`];
+  const byName = new Map(allowed.map((e) => [e.name, e]));
+  const entries: { name: string; value: string; via: string }[] = [];
+  for (const [name, v] of Object.entries(env)) {
+    if (VITE_BUILTIN_ENV.has(name)) continue;
+    entries.push({ name, value: envValueString(v), via: "" });
+  }
+  for (const [key, v] of Object.entries(define)) {
+    if (!key.startsWith("import.meta.env.")) continue;
+    const name = key.slice("import.meta.env.".length);
+    if (VITE_BUILTIN_ENV.has(name)) continue;
+    entries.push({ name, value: defineValueString(v), via: " (via define)" });
+  }
+  const problems: string[] = [];
+  for (const { name, value, via } of entries) {
+    const shown = ` (value ${redactValue(value)})`;
+    const entry = byName.get(name);
+    if (entry == null) {
+      problems.push(
+        `${name}${via} is not in PUBLIC_BUILD_ENV.${app} — an unlisted var in Vite's resolved env is inlined into client JS${shown}`,
+      );
+      continue;
+    }
+    const why = publicValueViolation(value, entry.rule);
+    if (why) problems.push(`${name}${via} ${why}${shown}`);
+  }
+  return problems;
+}
+
+function refusalMessage(app: string, problems: readonly string[], where: string): string {
+  return (
+    `[apps/${app}] refusing to build: ${where}.\n` +
+    problems.map((p) => `  - ${p}`).join("\n") +
+    `\n  Fix: unset it from the build environment (Vercel project env / .env* in the app's envDir), or — only if it is genuinely public — ` +
+    `add it to PUBLIC_BUILD_ENV.${app} with a value validator and a why. Browser Solana RPC goes through ` +
+    "https://api.motebit.com/v1/solana-rpc (services/proxy), which holds the provider key as the server secret " +
+    "SOLANA_RPC_UPSTREAM_URL. Law: scripts/lib/client-bundle-secrets.ts."
+  );
+}
+
+/**
+ * Throws when Vite's resolved env (+ `import.meta.env.*` defines) breaks the
+ * law. Pure: the plugin passes `config.env` / `config.define`.
  *
  * Why every var, not just the ones source reads: vite replaces whole-object
  * `import.meta.env` access (the `env?.VITE_X` shape apps/web uses) with a literal
- * of EVERY `VITE_*` var in the build environment, so an unused var still ships.
+ * of EVERY var in its resolved env, so an unused var still ships.
  */
 export function enforcePublicBuildEnv(
   app: string,
-  processEnv: Record<string, string | undefined>,
-  loadAll: () => Record<string, string | undefined>,
+  env: Readonly<Record<string, unknown>>,
+  define: Readonly<Record<string, unknown>> = {},
 ): void {
-  for (const k of Object.keys(processEnv)) {
-    if (PLATFORM_DROPPED_PUBLIC_ENV.test(k)) delete processEnv[k];
-  }
-  const env = loadAll();
-  const problems = publicEnvViolations(
-    app,
-    Object.entries(env).map(([name, value]) => ({ name, value: value ?? "" })),
-  );
+  const problems = resolvedEnvViolations(app, env, define);
   if (problems.length > 0) {
     throw new Error(
-      `[apps/${app}] refusing to build: the build env carries a public var that would ship in client JS unvalidated.\n` +
-        problems.map((p) => `  - ${p}`).join("\n") +
-        `\n  Fix: unset it from the build environment (Vercel project env / .env*), or — only if it is genuinely public — ` +
-        `add it to PUBLIC_BUILD_ENV.${app} with a value validator and a why. Browser Solana RPC goes through ` +
-        "https://api.motebit.com/v1/solana-rpc (services/proxy), which holds the provider key as the server secret " +
-        "SOLANA_RPC_UPSTREAM_URL. Law: scripts/lib/client-bundle-secrets.ts.",
+      refusalMessage(
+        app,
+        problems,
+        "Vite's resolved env carries a var that would ship in client JS unvalidated",
+      ),
     );
   }
+}
+
+/** Values shorter than this are not scanned for in the output (too collision-prone). */
+const MIN_SCANNED_VALUE = 8;
+
+/**
+ * Every value that must NOT appear in emitted output: any public-prefixed var
+ * (any case) in `processEnv`, and any key in the resolved env / defines, whose
+ * name is unlisted for `app` or whose value fails its validator.
+ */
+export function forbiddenEnvValues(
+  app: string,
+  env: Readonly<Record<string, unknown>>,
+  define: Readonly<Record<string, unknown>>,
+  processEnv: Readonly<Record<string, string | undefined>>,
+): { name: string; value: string }[] {
+  const byName = new Map((PUBLIC_BUILD_ENV[app] ?? []).map((e) => [e.name, e]));
+  const candidates: { name: string; value: string }[] = [];
+  for (const [name, v] of Object.entries(processEnv)) {
+    if (isPublicEnvName(name) && v != null) candidates.push({ name, value: v });
+  }
+  for (const [name, v] of Object.entries(env)) {
+    if (!VITE_BUILTIN_ENV.has(name)) candidates.push({ name, value: envValueString(v) });
+  }
+  for (const [key, v] of Object.entries(define)) {
+    if (key.startsWith("import.meta.env.")) {
+      candidates.push({ name: key.slice(16), value: defineValueString(v) });
+    }
+  }
+  return candidates.filter(({ name, value }) => {
+    if (value.length < MIN_SCANNED_VALUE) return false;
+    const entry = byName.get(name);
+    return entry == null || publicValueViolation(value, entry.rule) != null;
+  });
+}
+
+/** The structural slice of a Vite plugin this guard implements (zero imports). */
+export interface PublicBuildEnvGuardPlugin {
+  readonly name: string;
+  readonly enforce: "pre";
+  config(): void;
+  configResolved(config: { env: Record<string, unknown>; define?: Record<string, unknown> }): void;
+  generateBundle(
+    this: { error(message: string): never },
+    options: unknown,
+    bundle: Record<
+      string,
+      { type: "chunk"; code: string } | { type: "asset"; source: string | Uint8Array }
+    >,
+  ): void;
+}
+
+/**
+ * The build guard for a deployed Vite surface: a Vite plugin, so it judges the
+ * env Vite RESOLVED (root/envDir/mode/.env.local, whatever the invocation) —
+ * never a re-derivation of it from the cwd (cold review R2: `vite build
+ * apps/verify` from the repo root shipped a key from apps/verify/.env.production
+ * while a `loadEnv(mode, process.cwd())` guard saw nothing).
+ *
+ *   - `config` (runs before Vite loads env): drops Vercel's injected
+ *     `VITE_VERCEL_*` from process.env, so they are never resolved or inlined.
+ *   - `configResolved`: `enforcePublicBuildEnv(app, config.env, config.define)` —
+ *     the build (and dev server) refuses on any violation.
+ *   - `generateBundle` (defence in depth): re-judges the final config (a later
+ *     plugin may mutate it), then refuses if any forbidden value
+ *     (`forbiddenEnvValues`) appears in any emitted chunk or asset.
+ */
+export function publicBuildEnvGuard(
+  app: string,
+  processEnv: Record<string, string | undefined> = process.env,
+): PublicBuildEnvGuardPlugin {
+  let resolved: { env: Record<string, unknown>; define: Record<string, unknown> } | null = null;
+  return {
+    name: "motebit:public-build-env-guard",
+    enforce: "pre",
+    config() {
+      for (const k of Object.keys(processEnv)) {
+        if (PLATFORM_DROPPED_PUBLIC_ENV.test(k)) delete processEnv[k];
+      }
+    },
+    configResolved(config) {
+      resolved = { env: config.env, define: config.define ?? {} };
+      enforcePublicBuildEnv(app, resolved.env, resolved.define);
+    },
+    generateBundle(_options, bundle) {
+      if (resolved == null) {
+        this.error(
+          refusalMessage(
+            app,
+            ["configResolved never ran"],
+            "the env guard did not see the resolved config",
+          ),
+        );
+      }
+      const problems = resolvedEnvViolations(app, resolved.env, resolved.define);
+      if (problems.length > 0) {
+        this.error(
+          refusalMessage(app, problems, "Vite's resolved env changed after configResolved"),
+        );
+      }
+      const forbidden = forbiddenEnvValues(app, resolved.env, resolved.define, processEnv);
+      const hits: string[] = [];
+      for (const [file, out] of Object.entries(bundle)) {
+        const text =
+          out.type === "chunk"
+            ? out.code
+            : typeof out.source === "string"
+              ? out.source
+              : new TextDecoder().decode(out.source);
+        for (const { name, value } of forbidden) {
+          if (text.includes(value))
+            hits.push(`${file} contains the value of ${name} (${redactValue(value)})`);
+        }
+      }
+      if (hits.length > 0) {
+        this.error(
+          refusalMessage(app, hits, "an emitted file carries an env value the law refuses"),
+        );
+      }
+    },
+  };
 }
 
 /**

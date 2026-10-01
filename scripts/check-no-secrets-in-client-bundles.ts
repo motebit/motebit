@@ -35,7 +35,16 @@
  * Canonical law: scripts/lib/client-bundle-secrets.ts. See docs/drift-defenses.md #166.
  */
 
-import { readdirSync, readFileSync, statSync, existsSync } from "node:fs";
+import {
+  readdirSync,
+  readFileSync,
+  statSync,
+  existsSync,
+  mkdtempSync,
+  writeFileSync,
+  rmSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
 import { createRequire } from "node:module";
 import { join, resolve, dirname, relative, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -218,10 +227,27 @@ export function runGate(
 /** An unlisted public var planted to prove a surface's vite config refuses it. */
 export const WIRING_PROBE_VAR = "VITE___GATE_WIRING_PROBE";
 
+type ViteResolve = {
+  resolveConfig: (
+    inline: {
+      root: string;
+      configFile: string;
+      logLevel: "silent";
+      envDir?: string;
+      mode?: string;
+    },
+    command: "build",
+    mode: string,
+  ) => Promise<unknown>;
+};
+
 /**
- * Arm (c): load each governed surface's real vite config through vite's own
- * `loadConfigFromFile` (the code path `vite build` takes) with an unlisted
- * public var planted in process.env. The config must throw naming that var.
+ * Arm (c): resolve each governed surface's real vite config through vite's own
+ * `resolveConfig` (the code path `vite build` takes, plugins and env included),
+ * from THIS process's cwd (never the app dir), twice: once with an unlisted
+ * public var planted in process.env, once with it only in a `.env` file inside
+ * a separate `envDir` — so a guard that re-derives env from the cwd instead of
+ * judging Vite's resolved env goes red. Both must refuse naming the var.
  * Vite is resolved from this repo's `apps/<app>` install.
  */
 export async function checkWiring(
@@ -241,45 +267,54 @@ export async function checkWiring(
       );
       continue;
     }
-    let vite: {
-      loadConfigFromFile: (
-        env: { command: "build"; mode: string; isSsrBuild: boolean; isPreview: boolean },
-        file: string,
-        root: string,
-        logLevel: "silent",
-      ) => Promise<unknown>;
-    };
+    let vite: ViteResolve;
     try {
       const req = createRequire(join(REPO, "apps", app, "package.json"));
-      vite = (await import(pathToFileURL(req.resolve("vite")).href)) as typeof vite;
+      vite = (await import(pathToFileURL(req.resolve("vite")).href)) as ViteResolve;
     } catch (err) {
       findings.push(
         `${rel} — cannot resolve vite to execute the config (${err instanceof Error ? err.message : String(err)}); run pnpm install`,
       );
       continue;
     }
-    const prev = process.env[WIRING_PROBE_VAR];
-    process.env[WIRING_PROBE_VAR] = "1";
-    let refused = "";
+    const envDir = mkdtempSync(join(tmpdir(), `gate-wiring-${app}-`));
+    writeFileSync(join(envDir, ".env.production"), `${WIRING_PROBE_VAR}=from-env-file\n`);
+    const probes: { label: string; inline: { envDir?: string }; plant: boolean }[] = [
+      { label: "planted in process.env", inline: {}, plant: true },
+      {
+        label: "only in <envDir>/.env.production (envDir != cwd)",
+        inline: { envDir },
+        plant: false,
+      },
+    ];
     try {
-      await vite.loadConfigFromFile(
-        { command: "build", mode: "production", isSsrBuild: false, isPreview: false },
-        cfg,
-        appDir,
-        "silent",
-      );
-    } catch (err) {
-      refused = err instanceof Error ? err.message : String(err);
+      for (const probe of probes) {
+        const prev = process.env[WIRING_PROBE_VAR];
+        if (probe.plant) process.env[WIRING_PROBE_VAR] = "1";
+        else delete process.env[WIRING_PROBE_VAR];
+        let refused = "";
+        try {
+          await vite.resolveConfig(
+            { root: appDir, configFile: cfg, logLevel: "silent", ...probe.inline },
+            "build",
+            "production",
+          );
+        } catch (err) {
+          refused = err instanceof Error ? err.message : String(err);
+        } finally {
+          if (prev === undefined) delete process.env[WIRING_PROBE_VAR];
+          else process.env[WIRING_PROBE_VAR] = prev;
+        }
+        if (!refused.includes("refusing to build") || !refused.includes(WIRING_PROBE_VAR)) {
+          findings.push(
+            `${rel} — resolving the config with an unlisted ${WIRING_PROBE_VAR} ${probe.label} did not refuse the build; ` +
+              `its plugins must include publicBuildEnvGuard("${app}") (it judges Vite's resolved config.env in configResolved)` +
+              (refused ? ` (it threw something else: ${refused.split("\n")[0]})` : ""),
+          );
+        }
+      }
     } finally {
-      if (prev === undefined) delete process.env[WIRING_PROBE_VAR];
-      else process.env[WIRING_PROBE_VAR] = prev;
-    }
-    if (!refused.includes("refusing to build") || !refused.includes(WIRING_PROBE_VAR)) {
-      findings.push(
-        `${rel} — executing the config with an unlisted ${WIRING_PROBE_VAR} did not refuse the build; ` +
-          `its default export must call enforcePublicBuildEnv("${app}", process.env, () => loadEnv(mode, process.cwd(), "")) first` +
-          (refused ? ` (it threw something else: ${refused.split("\n")[0]})` : ""),
-      );
+      rmSync(envDir, { recursive: true, force: true });
     }
   }
   return { findings, checked };

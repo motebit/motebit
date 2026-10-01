@@ -1,5 +1,5 @@
-import { defineConfig, loadEnv, type UserConfig } from "vite";
-import { enforcePublicBuildEnv } from "../../scripts/lib/client-bundle-secrets";
+import { defineConfig, type UserConfig } from "vite";
+import { publicBuildEnvGuard } from "../../scripts/lib/client-bundle-secrets";
 import { resolve } from "node:path";
 
 /**
@@ -110,18 +110,16 @@ function manualChunks(id: string): string | undefined {
   return undefined;
 }
 
-// A provider credential never reaches a browser: refuse to build (or serve)
-// when the build env carries any public var not named in PUBLIC_BUILD_ENV.web,
-// or a named one whose value fails its validator (deny by default). Pinned by
-// execution: scripts/__tests__/check-no-secrets-in-client-bundles.test.ts runs
-// the real `vite build` with a planted var. Law + rationale:
+// A provider credential never reaches a browser: the guard plugin judges the
+// env Vite itself resolved (whatever root/envDir/mode the build was invoked
+// with) and refuses to build (or serve) on any var not named in
+// PUBLIC_BUILD_ENV.web, or a named one whose value fails its validator (deny by
+// default); it re-checks the emitted chunks too. Pinned by execution:
+// scripts/__tests__/check-no-secrets-in-client-bundles.test.ts runs the real
+// `vite build` with planted vars. Law + rationale:
 // scripts/lib/client-bundle-secrets.ts (incident 2026-09-30).
-export default defineConfig(({ mode }) => {
-  enforcePublicBuildEnv("web", process.env, () => loadEnv(mode, process.cwd(), ""));
-  return webConfig;
-});
-
-const webConfig = {
+export default defineConfig({
+  plugins: [publicBuildEnvGuard("web")],
   // @solana/web3.js and @solana/spl-token use Node's Buffer which
   // doesn't exist in browsers. Vite externalizes Node built-ins for
   // browser compat, but these Solana libs need the polyfill at
@@ -205,4 +203,4 @@ const webConfig = {
     // muscle memory; a drift there is exactly what this config avoids.
     strictPort: true,
   },
-} satisfies UserConfig;
+} satisfies UserConfig);

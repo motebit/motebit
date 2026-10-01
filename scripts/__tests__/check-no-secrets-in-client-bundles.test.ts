@@ -26,7 +26,9 @@ import {
   PUBLIC_BUILD_ENV,
   PUBLIC_ENV_ALLOWLIST,
   enforcePublicBuildEnv,
+  forbiddenEnvValues,
   isSecretShapedEnvName,
+  publicBuildEnvGuard,
   publicEnvViolations,
   publicUrlViolation,
   scanArtifactForPublicEnvPairs,
@@ -262,16 +264,16 @@ const R1_SHAPES: [label: string, env: Record<string, string>, why: RegExp][] = [
   ],
 ];
 
-function refusal(env: Record<string, string>, app = "web"): string {
+function refusal(env: Record<string, unknown>, app = "web"): string {
   try {
-    enforcePublicBuildEnv(app, {}, () => env);
+    enforcePublicBuildEnv(app, env);
   } catch (err) {
     return err instanceof Error ? err.message : String(err);
   }
   return "";
 }
 
-describe("build guard: enforcePublicBuildEnv refuses every R1 shape (deny by default)", () => {
+describe("build guard: the resolved-env law refuses every R1 shape (deny by default)", () => {
   it.each(R1_SHAPES)("%s", (_label, env, why) => {
     const msg = refusal(env);
     expect(msg).toContain("refusing to build");
@@ -366,16 +368,61 @@ describe("build guard: enforcePublicBuildEnv refuses every R1 shape (deny by def
     expect(refusal({ VITE_X: "1" }, "nope")).toMatch(/no PUBLIC_BUILD_ENV entry/);
   });
 
-  it("drops Vercel's injected VITE_VERCEL_* from process.env before vite reads it", () => {
+  it("the guard plugin's config hook drops Vercel's VITE_VERCEL_* from process.env before vite reads it", () => {
     const proc: Record<string, string | undefined> = {
       VITE_VERCEL_GIT_COMMIT_SHA: "a".repeat(40),
       VITE_VERCEL_URL: "motebit-web-abc.vercel.app",
       PATH: "/bin",
     };
-    enforcePublicBuildEnv("web", proc, () => ({ ...proc }) as Record<string, string>);
+    publicBuildEnvGuard("web", proc).config();
     expect(proc).toEqual({ PATH: "/bin" });
-    // The same name from a .env file (not process.env) is an unknown var → refused.
+    // The same name in Vite's resolved env (e.g. from a .env file) is an unknown var → refused.
     expect(refusal({ VITE_VERCEL_URL: "x" })).toMatch(/not in PUBLIC_BUILD_ENV\.web/);
+  });
+
+  it("VITE_USER_NODE_ENV is an enum: a mode label passes, anything else is refused", () => {
+    for (const ok of ["production", "development", "test"]) {
+      expect(refusal({ VITE_USER_NODE_ENV: ok })).toBe("");
+      expect(refusal({ VITE_USER_NODE_ENV: ok }, "verify")).toBe("");
+    }
+    for (const bad of ["staging", `https://x.example/${FAKE_UUID}`, "Production"]) {
+      expect(refusal({ VITE_USER_NODE_ENV: bad })).toMatch(/VITE_USER_NODE_ENV is not one of/);
+    }
+  });
+
+  it("judges Vite's resolved env exactly: builtins pass, any other unlisted key (custom envPrefix) refuses", () => {
+    const builtins = { BASE_URL: "/", MODE: "production", DEV: false, PROD: true, SSR: false };
+    expect(refusal(builtins)).toBe("");
+    expect(refusal({ ...builtins, APP_SECRET: "x".repeat(20) })).toMatch(
+      /APP_SECRET is not in PUBLIC_BUILD_ENV\.web/,
+    );
+  });
+
+  it("judges `define` entries under import.meta.env.* (name + JSON-string value)", () => {
+    const def = (k: string, v: string) => {
+      try {
+        enforcePublicBuildEnv("web", {}, { [k]: v });
+      } catch (err) {
+        return err instanceof Error ? err.message : String(err);
+      }
+      return "";
+    };
+    expect(def("import.meta.env.VITE_FOO", JSON.stringify("bar"))).toMatch(
+      /VITE_FOO \(via define\) is not in PUBLIC_BUILD_ENV\.web/,
+    );
+    expect(
+      def(
+        "import.meta.env.VITE_SOLANA_RPC_URL",
+        JSON.stringify(`https://api.motebit.com/${FAKE_UUID}`),
+      ),
+    ).toMatch(/high-entropy path segment/);
+    expect(
+      def(
+        "import.meta.env.VITE_SOLANA_RPC_URL",
+        JSON.stringify("https://api.motebit.com/v1/solana-rpc"),
+      ),
+    ).toBe("");
+    expect(def("global", "globalThis")).toBe("");
   });
 
   it("every PUBLIC_BUILD_ENV entry carries a reason; URL entries name hosts", () => {
@@ -482,11 +529,194 @@ describe("wiring: the real vite build refuses (execution, not text)", () => {
     );
     mkdirSync(join(root, "apps", "web"), { recursive: true });
     const w = await checkWiring(root);
-    expect(w.findings.some((f) => f.startsWith("apps/verify/vite.config.ts — executing"))).toBe(
+    expect(w.findings.some((f) => f.startsWith("apps/verify/vite.config.ts — resolving"))).toBe(
       true,
     );
     expect(
       w.findings.some((f) => f.startsWith("apps/web/vite.config.ts — governed surface has no")),
     ).toBe(true);
+  });
+});
+
+// ── Cold review R2: the guard judges the env VITE resolved, not the cwd's ───
+//
+// R2: `vite build apps/verify` from the repo root shipped a key-in-path value
+// from apps/verify/.env.production — the old guard re-derived env with
+// loadEnv(mode, process.cwd()) while Vite loads from root/envDir. Every case
+// below executes a real `vite build` in a child process.
+
+const PATH_KEY_URL = `https://api.motebit.com/v2/${ALCHEMY_KEY}`;
+
+function viteBuild(args: string[], cwd: string, extra: Record<string, string> = {}) {
+  const r = spawnSync(process.execPath, [viteBin("verify"), "build", ...args], {
+    cwd,
+    encoding: "utf-8",
+    env: cleanEnv(extra),
+    timeout: 120_000,
+  });
+  return { status: r.status, out: (r.stdout ?? "") + (r.stderr ?? "") };
+}
+
+describe("R2: the gate's wiring arm judges Vite's resolved env, not process.env", () => {
+  it("a guard that reads only process.env (the R2 shape) is RED on the envDir probe", async () => {
+    const root = join(tmp, "process-env-only");
+    for (const app of ["web", "verify"]) {
+      mkdirSync(join(root, "apps", app), { recursive: true });
+      writeFileSync(
+        join(root, "apps", app, "vite.config.ts"),
+        `export default () => { if (process.env.${WIRING_PROBE_VAR}) throw new Error("refusing to build: ${WIRING_PROBE_VAR}"); return {}; };\n`,
+      );
+    }
+    const w = await checkWiring(root);
+    expect(w.findings.filter((f) => f.includes("planted in process.env"))).toEqual([]);
+    expect(w.findings.filter((f) => f.includes("envDir != cwd"))).toHaveLength(2);
+  });
+});
+
+describe("R2: the real apps refuse env from their own root, whatever the cwd", () => {
+  for (const app of ["verify", "web"]) {
+    it(`apps/${app}: a violating var in apps/${app}/.env.<mode> refuses — cwd = repo root, and cwd elsewhere`, () => {
+      const mode = `gateprobe${app}`;
+      const envFile = join(ROOT, "apps", app, `.env.${mode}`);
+      writeFileSync(envFile, `VITE_SOLANA_RPC_URL=${PATH_KEY_URL}\n`);
+      try {
+        // Form 1: `vite build apps/<app>` from the repo root (root != cwd).
+        const a = viteBuild(
+          [`apps/${app}`, "--mode", mode, "--outDir", join(tmp, `r2-${app}-a`)],
+          ROOT,
+        );
+        // Form 2: an absolute root from an unrelated cwd.
+        const b = viteBuild(
+          [join(ROOT, "apps", app), "--mode", mode, "--outDir", join(tmp, `r2-${app}-b`)],
+          tmp,
+        );
+        for (const r of [a, b]) {
+          expect(r.status).not.toBe(0);
+          expect(r.out).toContain("refusing to build");
+          expect(r.out).toMatch(/VITE_SOLANA_RPC_URL has a 32-char high-entropy path segment/);
+          expect(r.out).not.toContain(ALCHEMY_KEY);
+        }
+      } finally {
+        rmSync(envFile, { force: true });
+      }
+    });
+  }
+});
+
+/** A minimal Vite project wired with the real guard plugin (whole-object env access). */
+function fixtureProject(name: string, configExtra = "", pluginsExtra = ""): string {
+  const dir = join(tmp, name);
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(
+    join(dir, "index.html"),
+    '<!doctype html><script type="module" src="/main.js"></script>\n',
+  );
+  writeFileSync(join(dir, "main.js"), "console.log(import.meta.env);\n");
+  const guard = JSON.stringify(join(ROOT, "scripts", "lib", "client-bundle-secrets.ts"));
+  writeFileSync(
+    join(dir, "vite.config.ts"),
+    `import { publicBuildEnvGuard } from ${guard};\n` +
+      `export default { logLevel: "warn", ${configExtra} plugins: [publicBuildEnvGuard("verify"), ${pluginsExtra}] };\n`,
+  );
+  return dir;
+}
+
+describe("R2: every way Vite resolves env is judged (fixture project, real vite build)", () => {
+  it("baseline: a clean fixture builds and inlines its (valid) env", () => {
+    const dir = fixtureProject("fx-clean");
+    writeFileSync(join(dir, ".env"), "VITE_RELAY_URL=https://relay.motebit.com\n");
+    const r = viteBuild([dir, "--outDir", join(dir, "dist")], tmp);
+    expect(r.status, r.out).toBe(0);
+  });
+
+  it("envDir override: a violating var in the configured envDir refuses", () => {
+    const envDir = join(tmp, "fx-envdir-env");
+    mkdirSync(envDir, { recursive: true });
+    writeFileSync(join(envDir, ".env"), `VITE_SOLANA_RPC_URL=${PATH_KEY_URL}\n`);
+    const dir = fixtureProject("fx-envdir", `envDir: ${JSON.stringify(envDir)},`);
+    const r = viteBuild([dir, "--outDir", join(dir, "dist")], ROOT);
+    expect(r.status).not.toBe(0);
+    expect(r.out).toMatch(/VITE_SOLANA_RPC_URL has a 32-char high-entropy path segment/);
+    expect(r.out).not.toContain(ALCHEMY_KEY);
+  });
+
+  it("--mode x with .env.x refuses (and the default mode does not read it)", () => {
+    const dir = fixtureProject("fx-mode");
+    writeFileSync(join(dir, ".env.staging"), "VITE_RPC_ENDPOINT=https://x.example/rpc\n");
+    const bad = viteBuild([dir, "--mode", "staging", "--outDir", join(dir, "dist")], ROOT);
+    expect(bad.status).not.toBe(0);
+    expect(bad.out).toMatch(/VITE_RPC_ENDPOINT is not in PUBLIC_BUILD_ENV\.verify/);
+    expect(viteBuild([dir, "--outDir", join(dir, "dist")], ROOT).status).toBe(0);
+  });
+
+  it(".env.local refuses", () => {
+    const dir = fixtureProject("fx-local");
+    writeFileSync(join(dir, ".env.local"), `VITE_HELIUS_API_KEY=${FAKE_UUID}\n`);
+    const r = viteBuild([dir, "--outDir", join(dir, "dist")], ROOT);
+    expect(r.status).not.toBe(0);
+    expect(r.out).toMatch(/VITE_HELIUS_API_KEY is not in PUBLIC_BUILD_ENV\.verify/);
+    expect(r.out).not.toContain(FAKE_UUID);
+  });
+
+  it("NODE_ENV in a .env file becomes VITE_USER_NODE_ENV — a mode label passes, anything else refuses", () => {
+    const ok = fixtureProject("fx-nodeenv-ok");
+    writeFileSync(join(ok, ".env"), "NODE_ENV=development\n");
+    expect(viteBuild([ok, "--outDir", join(ok, "dist")], ROOT).status).toBe(0);
+    const bad = fixtureProject("fx-nodeenv-bad");
+    writeFileSync(join(bad, ".env"), "NODE_ENV=staging\n");
+    const r = viteBuild([bad, "--outDir", join(bad, "dist")], ROOT);
+    expect(r.status).not.toBe(0);
+    expect(r.out).toMatch(/VITE_USER_NODE_ENV is not one of/);
+  });
+
+  it("a `define` under import.meta.env.* refuses", () => {
+    const dir = fixtureProject(
+      "fx-define",
+      `define: { "import.meta.env.VITE_SECRET_THING": ${JSON.stringify(JSON.stringify(FAKE_UUID))} },`,
+    );
+    const r = viteBuild([dir, "--outDir", join(dir, "dist")], ROOT);
+    expect(r.status).not.toBe(0);
+    expect(r.out).toMatch(/VITE_SECRET_THING \(via define\) is not in PUBLIC_BUILD_ENV\.verify/);
+    expect(r.out).not.toContain(FAKE_UUID);
+  });
+
+  it("defence in depth: a later plugin that mutates config.env after configResolved is refused at generateBundle", () => {
+    const dir = fixtureProject(
+      "fx-mutate",
+      "",
+      `{ name: "sneak", configResolved(c) { c.env.VITE_SNEAK = ${JSON.stringify(PATH_KEY_URL)}; } }`,
+    );
+    const r = viteBuild([dir, "--outDir", join(dir, "dist")], ROOT);
+    expect(r.status).not.toBe(0);
+    expect(r.out).toMatch(/changed after configResolved[\s\S]*VITE_SNEAK/);
+    expect(r.out).not.toContain(ALCHEMY_KEY);
+  });
+
+  it("defence in depth: a refused process.env value inlined by another path is caught in the emitted chunk", () => {
+    const dir = fixtureProject(
+      "fx-inject",
+      "",
+      `{ name: "inject", transform(code, id) { return id.endsWith("main.js") ? code + "\\nconsole.log(" + JSON.stringify(process.env.vite_lower_key) + ");" : null; } }`,
+    );
+    const r = viteBuild([dir, "--outDir", join(dir, "dist")], ROOT, { vite_lower_key: FAKE_UUID });
+    expect(r.status).not.toBe(0);
+    expect(r.out).toMatch(
+      /emitted file carries an env value[\s\S]*contains the value of vite_lower_key/,
+    );
+    expect(r.out).not.toContain(FAKE_UUID);
+  });
+
+  it("forbiddenEnvValues: unlisted or invalid values (>= 8 chars) only; valid listed values are not forbidden", () => {
+    const f = forbiddenEnvValues(
+      "verify",
+      {
+        VITE_RELAY_URL: "https://relay.motebit.com",
+        VITE_SOLANA_RPC_URL: PATH_KEY_URL,
+        MODE: "production",
+      },
+      { "import.meta.env.VITE_D": JSON.stringify("dddddddddd") },
+      { vite_x: "xxxxxxxxxx", VITE_SHORT: "abc", PATH: "/usr/bin:/bin:/x/y" },
+    ).map((x) => x.name);
+    expect(f.sort()).toEqual(["VITE_D", "VITE_SOLANA_RPC_URL", "vite_x"]);
   });
 });

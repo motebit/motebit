@@ -2908,33 +2908,31 @@ export async function probeFetch(): Promise<unknown> {
   {
     script: "check-no-secrets-in-client-bundles",
     proves:
-      "pins the build guard's WIRING by execution (cold review R1: deleting the guard call from both vite configs left every test and the gate green). Deletes the `enforcePublicBuildEnv(\"web\", …)` call from apps/web/vite.config.ts; the gate's wiring arm loads that config through vite's own loadConfigFromFile with a planted unlisted VITE_* var and must go red because the config no longer refuses. Throws if the call is not found (probe vacuous).",
+      "pins the build guard's WIRING by execution (cold review R1: deleting the guard call from both vite configs left every test and the gate green). Removes `publicBuildEnvGuard(\"web\")` from apps/web/vite.config.ts's plugins; the gate's wiring arm resolves that config through vite's own resolveConfig with a planted unlisted VITE_* var (in process.env, and in a .env file in a non-cwd envDir) and must go red because the config no longer refuses. Throws if the plugin is not found (probe vacuous).",
     perturb: () =>
       mutateFile("apps/web/vite.config.ts", (src) => {
-        const call =
-          'enforcePublicBuildEnv("web", process.env, () => loadEnv(mode, process.cwd(), ""));';
+        const call = 'plugins: [publicBuildEnvGuard("web")],';
         if (!src.includes(call)) {
           throw new Error(
-            "probe vacuous: apps/web/vite.config.ts no longer calls enforcePublicBuildEnv verbatim — retarget the probe",
+            "probe vacuous: apps/web/vite.config.ts no longer lists publicBuildEnvGuard verbatim — retarget the probe",
           );
         }
-        return src.replace(call, "void mode;");
+        return src.replace(call, "plugins: [],");
       }),
   },
   {
     script: "check-no-secrets-in-client-bundles",
     proves:
-      "pins the build guard's WIRING by execution (cold review R1: deleting the guard call from both vite configs left every test and the gate green). Deletes the `enforcePublicBuildEnv(\"verify\", …)` call from apps/verify/vite.config.ts; the gate's wiring arm loads that config through vite's own loadConfigFromFile with a planted unlisted VITE_* var and must go red because the config no longer refuses. Throws if the call is not found (probe vacuous).",
+      "pins the build guard's WIRING by execution (cold review R1: deleting the guard call from both vite configs left every test and the gate green). Removes `publicBuildEnvGuard(\"verify\")` from apps/verify/vite.config.ts's plugins; the gate's wiring arm resolves that config through vite's own resolveConfig with a planted unlisted VITE_* var (in process.env, and in a .env file in a non-cwd envDir) and must go red because the config no longer refuses. Throws if the plugin is not found (probe vacuous).",
     perturb: () =>
       mutateFile("apps/verify/vite.config.ts", (src) => {
-        const call =
-          'enforcePublicBuildEnv("verify", process.env, () => loadEnv(mode, process.cwd(), ""));';
+        const call = 'plugins: [publicBuildEnvGuard("verify")],';
         if (!src.includes(call)) {
           throw new Error(
-            "probe vacuous: apps/verify/vite.config.ts no longer calls enforcePublicBuildEnv verbatim — retarget the probe",
+            "probe vacuous: apps/verify/vite.config.ts no longer lists publicBuildEnvGuard verbatim — retarget the probe",
           );
         }
-        return src.replace(call, "void mode;");
+        return src.replace(call, "plugins: [],");
       }),
   },
 ];
