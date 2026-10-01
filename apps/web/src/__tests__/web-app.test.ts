@@ -159,6 +159,17 @@ vi.mock("../encrypted-keystore.js", () => ({
   },
 }));
 
+// Spy on the Solana rail constructors (real implementations) so the RPC URL
+// the bootstrapped app hands them is observable.
+vi.mock("@motebit/wallet-solana", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@motebit/wallet-solana")>();
+  return {
+    ...actual,
+    createSolanaWalletRail: vi.fn(actual.createSolanaWalletRail),
+    createSolanaMemoSubmitter: vi.fn(actual.createSolanaMemoSubmitter),
+  };
+});
+
 // Mock provider module — avoid importing real WebLLM
 vi.mock("../providers.js", () => ({
   createProvider: vi.fn().mockReturnValue({
@@ -191,6 +202,43 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.restoreAllMocks();
+});
+
+describe("Solana RPC default (incident 2026-09-30)", () => {
+  // A provider URL is never a browser value: with no VITE_SOLANA_RPC_URL the
+  // bootstrapped app must hand its Solana rail motebit's server-side
+  // passthrough — never a public/provider endpoint. Cold review R2: reverting
+  // the default to api.mainnet-beta stayed green until this ran the real bootstrap.
+  const PASSTHROUGH = "https://api.motebit.com/v1/solana-rpc";
+
+  it.each([
+    ["unset", undefined],
+    ["empty", ""],
+  ])("VITE_SOLANA_RPC_URL %s → the rail gets the passthrough", async (_label, value) => {
+    const wallet = await import("@motebit/wallet-solana");
+    const rail = vi.mocked(wallet.createSolanaWalletRail);
+    rail.mockClear();
+    const env = (import.meta as unknown as { env: Record<string, string | undefined> }).env;
+    const saved = env.VITE_SOLANA_RPC_URL;
+    if (value === undefined) delete env.VITE_SOLANA_RPC_URL;
+    else env.VITE_SOLANA_RPC_URL = value;
+    try {
+      const app = new WebApp();
+      await app.init(null as unknown as HTMLCanvasElement);
+      await app.bootstrap();
+      // Second bootstrap loads the persisted signing key → the rail is built.
+      const again = new WebApp();
+      await again.init(null as unknown as HTMLCanvasElement);
+      await again.bootstrap();
+      expect(rail).toHaveBeenCalled();
+      for (const [cfg] of rail.mock.calls) expect(cfg.rpcUrl).toBe(PASSTHROUGH);
+      app.stop();
+      again.stop();
+    } finally {
+      if (saved === undefined) delete env.VITE_SOLANA_RPC_URL;
+      else env.VITE_SOLANA_RPC_URL = saved;
+    }
+  });
 });
 
 describe("WebApp lifecycle", () => {
