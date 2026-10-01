@@ -23,11 +23,11 @@ concurrency:
 # environment or its secrets by another route is refused at run time by
 # GitHub's deployment-branch rule (main only), and at review time by
 # scripts/check-turbo-remote-cache.ts (deny-by-default: literal
-# `secrets.NAME` granted per workflow+job, exact allowlisted `environment:`
-# strings, and a CLOSED writer job — each step holding the key runs one exact
+# secret references granted per workflow+job, exact allowlisted environment
+# names, and a CLOSED writer job — each step holding the key runs one exact
 # turbo command, no job `outputs:`, no $GITHUB_ENV/$GITHUB_OUTPUT/$GITHUB_PATH
 # writes). NOT claimed: that only turbo can read the key — turbo passes
-# TURBO_TOKEN and the signing key into every task's environment, so every
+# the cache token and the signing key into every task's environment, so every
 # build/lint/test script and plugin in those steps can read them. Code that
 # reaches main is trusted with the key by construction; the gate keeps
 # untrusted (PR/non-main) code from ever holding it. Signing (turbo.json)

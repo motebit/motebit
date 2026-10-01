@@ -78,7 +78,7 @@ jobs:
       # The `-stg` apps, volumes and secrets are provisioned once by
       # `RUN=1 npx tsx scripts/deploy-archetype-slate.ts`. This workflow only
       # ships code onto apps that already exist; it deliberately does not
-      # create apps or restage secrets, so a missing app is a loud failure
+      # create apps or restage secrets; a missing app is a loud failure
       # rather than a silent half-provisioned slate.
       - name: Deploy ${{ matrix.service }} (staging)
         # A HANG must fail, not vanish: a job killed by the ceiling

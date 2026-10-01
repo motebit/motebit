@@ -92,7 +92,7 @@
  */
 import { spawnSync } from "node:child_process";
 
-import { parse as parseYaml } from "yaml";
+import { isMap, isPair, isScalar, isSeq, parse as parseYaml, parseDocument } from "yaml";
 
 export const MAIN_REF_TEST = "github.ref == 'refs/heads/main'";
 export const TRUSTED_EVENTS = ["push", "workflow_dispatch", "schedule"] as const;
@@ -125,6 +125,7 @@ export const LAW_RULES = [
   "writer-job-outputs",
   "writer-env-files",
   "publish-artifact-fetch",
+  "raw-census",
 ] as const;
 export type LawRule = (typeof LAW_RULES)[number];
 export interface LawOptions {
@@ -637,21 +638,53 @@ export function walkStrings(
 }
 
 /**
+ * GitHub's expression-boundary scan, ported EXACTLY from the runner's
+ * TemplateReader.ParseScalar (actions/runner
+ * src/Sdk/DTPipelines/Pipelines/ObjectTemplating/TemplateReader.cs, #997
+ * round 5): an expression opens at `${{`; inside it a single quote toggles
+ * "in a string literal" (so the `''` escape toggles twice and stays inside),
+ * and it closes at the first `}}` seen OUTSIDE a string literal — a `}}` inside
+ * `'…'` does not end it. The next expression is searched for after the close.
+ * A `${{` with no close is a load error for GitHub (`unterminated` here).
+ *
+ * The round-4 scan ended at the first `}}` anywhere, so
+ * `${{ '}}' != '' && secrets.X }}` handed the judge only ` '` and hid the
+ * secret reference behind it.
+ */
+export function scanExpressions(text: string): { exprs: string[]; unterminated: boolean } {
+  const exprs: string[] = [];
+  let start = text.indexOf("${{");
+  while (start >= 0) {
+    let inString = false;
+    let end = -1;
+    let i = start + 3;
+    for (; i < text.length; i++) {
+      if (text[i] === "'") inString = !inString;
+      else if (!inString && text[i] === "}" && text[i - 1] === "}") {
+        end = i;
+        i++;
+        break;
+      }
+    }
+    if (end < 0) {
+      // Fail closed: the judge sees everything after the `${{`.
+      exprs.push(text.slice(start + 3));
+      return { exprs, unterminated: true };
+    }
+    exprs.push(text.slice(start + 3, end - 1));
+    start = i < text.length ? text.indexOf("${{", i) : -1;
+  }
+  return { exprs, unterminated: false };
+}
+
+/**
  * The expression texts GitHub evaluates in one string: every `${{ … }}`
- * body, and — for an `if:` value — the whole string (an implicit expression).
- * An unterminated `${{` yields the rest of the string (fail closed).
+ * body (runner boundaries — `scanExpressions`), and — for an `if:` value —
+ * the whole string (an implicit expression). An unterminated `${{` yields
+ * the rest of the string (fail closed; `checkLaw` also refuses it).
  */
 export function expressionsIn(text: string, isIf: boolean): string[] {
-  const out: string[] = [];
-  let i = 0;
-  for (;;) {
-    const open = text.indexOf("${{", i);
-    if (open < 0) break;
-    const close = text.indexOf("}}", open + 3);
-    out.push(text.slice(open + 3, close < 0 ? undefined : close));
-    if (close < 0) break;
-    i = close + 2;
-  }
+  const out = scanExpressions(text).exprs;
   if (isIf && out.length === 0 && text.trim() !== "") out.push(text);
   return out;
 }
@@ -695,10 +728,265 @@ export function judgeSecretExpression(expr: string): { names: string[]; bad: str
   return { names, bad: null };
 }
 
+// ── the raw-text census (#997 round 5) ─────────────────────────────────────
+
+/**
+ * The census reads the RAW FILE BYTES, not the parse: every case-insensitive
+ * `secrets` followed by `.`, `[`, `)`, `}` or `,` (so `toJSON(secrets)`,
+ * `secrets[…]`, `secrets.NAME`, a bare `secrets }}`).
+ */
+export const CENSUS_SECRET = /\bsecrets(?=\s*[.[)},])(?:\s*\.\s*([A-Za-z_][A-Za-z0-9_]*))?/gi;
+/** Every TURBO_* name that looks like a credential (token, key, signature, writer). */
+export const CENSUS_TURBO_CREDENTIAL =
+  /TURBO_[A-Z0-9_]*?(?:TOKEN|KEY|SIGNATURE|WRITER)[A-Z0-9_]*/gi;
+/** An `environment` mapping key in any YAML key form (`environment:`, `"environment":`, flow). */
+export const CENSUS_ENVIRONMENT_KEY = /\benvironment\b["']?\s*:/gi;
+/** A `vars.` / `env.` indirection (or `vars[` / `env[`). */
+export const CENSUS_INDIRECTION = /\b(?:vars|env)\s*[.[]/gi;
+
+interface ScalarSite {
+  path: Path;
+  isKey: boolean;
+  value: string;
+  start: number;
+  end: number;
+}
+
+/** Every scalar node (keys included) with its source range — aliases are not re-walked. */
+function scalarSites(text: string): ScalarSite[] | null {
+  const doc = parseDocument(text, { merge: true, uniqueKeys: true });
+  if (doc.errors.length > 0) return null;
+  const out: ScalarSite[] = [];
+  const walk = (node: unknown, path: Path): void => {
+    if (isScalar(node)) {
+      if (node.range) {
+        out.push({
+          path,
+          isKey: false,
+          value: node.value == null ? "" : String(node.value),
+          start: node.range[0],
+          end: node.range[1],
+        });
+      }
+    } else if (isMap(node)) {
+      for (const pair of node.items) {
+        if (!isPair(pair)) continue;
+        const k = isScalar(pair.key) ? String(pair.key.value) : JSON.stringify(pair.key);
+        const p = [...path, k];
+        if (isScalar(pair.key) && pair.key.range) {
+          out.push({
+            path: p,
+            isKey: true,
+            value: k,
+            start: pair.key.range[0],
+            end: pair.key.range[1],
+          });
+        } else if (pair.key != null) walk(pair.key, p);
+        walk(pair.value, p);
+      }
+    } else if (isSeq(node)) {
+      node.items.forEach((n, i) => walk(n, [...path, i]));
+    }
+  };
+  walk(doc.contents, []);
+  return out;
+}
+
+const lineOf = (text: string, offset: number): number => text.slice(0, offset).split("\n").length;
+
+/**
+ * THE CENSUS (#997 round 5) — deny by default, independent of how the gate
+ * parses YAML or expressions. It counts, in the raw bytes of a workflow or
+ * local action, every occurrence of:
+ *   (1) `secrets` adjacent to `.`, `[`, `)`, `}` or `,` (`CENSUS_SECRET`);
+ *   (2) a TURBO_* credential-looking name (`CENSUS_TURBO_CREDENTIAL`);
+ *   (3) an `environment` key (`CENSUS_ENVIRONMENT_KEY`), and every
+ *       `vars.` / `env.` indirection inside that key's raw region (its line
+ *       and the more-indented lines under it, located by text, not by parse).
+ * and requires each one to be ATTRIBUTED to the parse at that exact location:
+ *   (1) inside a scalar node whose parsed value yields, through the runner's
+ *       expression scan, exactly the same multiset of literal `secrets.NAME`
+ *       references as the census counted in its raw text, each granted to
+ *       this workflow + job (a comment, a `}}`-split expression, an escaped
+ *       or `[…]`/`toJSON` form never attributes);
+ *   (2) the key of, or the exact `${{ secrets.TURBO_WRITER_* }}` value of,
+ *       `TURBO_TOKEN` / `TURBO_REMOTE_CACHE_SIGNATURE_KEY` in the step env of
+ *       a turbo step of ci.yml#check;
+ *   (3) the key of a job `environment:` whose parsed value is that job's
+ *       ENVIRONMENT_ALLOWLIST entry; and no indirection in its region.
+ * Anything unattributed is RED with its line — whatever shape the parser
+ * failed to see (a YAML-1.1 line break inside a comment, a parse
+ * differential, a boundary bug) still shows up here as a count mismatch.
+ */
+export function checkRawCensus(
+  workflow: string,
+  text: string,
+  opts: { action: boolean; turboStep: (job: string, i: number) => boolean },
+): { violations: { rule: LawRule; message: string }[]; counted: number } {
+  const out: { rule: LawRule; message: string }[] = [];
+  const red = (offset: number, message: string): void => {
+    out.push({ rule: "raw-census", message: `${workflow}:${lineOf(text, offset)}: ${message}` });
+  };
+  const sites = scalarSites(text);
+  if (sites == null) {
+    // parseDoc reports the unparseable file; the census refuses to vouch for it too.
+    out.push({
+      rule: "raw-census",
+      message: `${workflow}: the census cannot locate YAML nodes in a file that does not parse`,
+    });
+    return { violations: out, counted: 0 };
+  }
+  const siteAt = (o: number): ScalarSite | undefined =>
+    sites
+      .filter((s) => s.start <= o && o < s.end)
+      .sort((a, b) => a.end - a.start - (b.end - b.start))[0];
+  const jobFor = (path: Path): string => (opts.action ? "(action)" : jobOf(path));
+  let counted = 0;
+
+  // (1) secrets
+  const bySite = new Map<ScalarSite, { offset: number; name: string | null }[]>();
+  for (const m of text.matchAll(CENSUS_SECRET)) {
+    counted++;
+    const site = siteAt(m.index);
+    if (site == null) {
+      red(
+        m.index,
+        `\`${m[0]}\` in the raw text is in no YAML scalar the gate parsed (a comment, or a parse differential) — the census cannot attribute it to a granted literal secret reference; remove it`,
+      );
+      continue;
+    }
+    const list = bySite.get(site) ?? [];
+    list.push({ offset: m.index, name: m[1] ? m[1].toUpperCase() : null });
+    bySite.set(site, list);
+  }
+  for (const [site, hits] of bySite) {
+    const isIf = !site.isKey && site.path[site.path.length - 1] === "if";
+    const scan = scanExpressions(site.value);
+    const parsed: string[] = [];
+    let bad = scan.unterminated;
+    for (const expr of expressionsIn(site.value, isIf)) {
+      const j = judgeSecretExpression(expr);
+      if (j.bad) bad = true;
+      parsed.push(...j.names);
+    }
+    const raw = hits.map((h) => h.name ?? "?").sort();
+    const same = !bad && JSON.stringify(raw) === JSON.stringify([...parsed].sort());
+    const job = jobFor(site.path);
+    for (const h of hits) {
+      const granted =
+        h.name != null &&
+        SECRET_ALLOWLIST.some(
+          (g) => g.workflow === workflow && g.job === job && g.secret === h.name,
+        );
+      if (!same || !granted) {
+        red(
+          h.offset,
+          `the raw text has \`secrets…${h.name ?? ""}\` that the parse does not account for as a granted literal \`\${{ secrets.NAME }}\` here (raw: ${raw.join(", ")}; parsed: ${parsed.join(", ") || "none"}${bad ? "; the expression is refused" : ""}; grant for ${workflow}#${job}: ${granted ? "yes" : "no"}) — the gate and GitHub would read this text differently`,
+        );
+      }
+    }
+  }
+
+  // (2) TURBO_* credential names
+  for (const m of text.matchAll(CENSUS_TURBO_CREDENTIAL)) {
+    counted++;
+    const site = siteAt(m.index);
+    const p = site?.path ?? [];
+    const placed =
+      site != null &&
+      !opts.action &&
+      workflow === WRITER_WORKFLOW &&
+      p.length === 6 &&
+      p[0] === "jobs" &&
+      p[1] === WRITER_JOB &&
+      p[2] === "steps" &&
+      typeof p[3] === "number" &&
+      p[4] === "env" &&
+      opts.turboStep(WRITER_JOB, p[3]) &&
+      (site.isKey
+        ? site.value === m[0] && site.value === p[5] && site.value in WRITER_SECRET_FOR
+        : site.value === `\${{ secrets.${WRITER_SECRET_FOR[p[5] as string] ?? "?"} }}` &&
+          m[0] === WRITER_SECRET_FOR[p[5] as string]);
+    if (!placed) {
+      red(
+        m.index,
+        `\`${m[0]}\` in the raw text is not the key or the exact \`\${{ secrets.TURBO_WRITER_* }}\` value of TURBO_TOKEN / TURBO_REMOTE_CACHE_SIGNATURE_KEY in the step env of a turbo step of ${WRITER_WORKFLOW}#${WRITER_JOB} — no other mention of a turbo credential is admitted (comments included: the gate cannot prove GitHub reads a comment as one)`,
+      );
+    }
+  }
+
+  // (3) environment keys, and indirections in their raw region
+  const lines = text.split("\n");
+  const lineStart: number[] = [];
+  let acc = 0;
+  for (const l of lines) {
+    lineStart.push(acc);
+    acc += l.length + 1;
+  }
+  const indent = (l: string): number => /^[ \t]*/.exec(l)![0].length;
+  for (const m of text.matchAll(CENSUS_ENVIRONMENT_KEY)) {
+    counted++;
+    const site = siteAt(m.index);
+    const p = site?.path ?? [];
+    let ok =
+      site != null &&
+      site.isKey &&
+      !opts.action &&
+      p.length === 3 &&
+      p[0] === "jobs" &&
+      p[2] === "environment";
+    if (ok) {
+      const grant = ENVIRONMENT_ALLOWLIST.find((g) => g.workflow === workflow && g.job === p[1]);
+      const val = sites.find(
+        (s) =>
+          !s.isKey &&
+          s.path.length === 3 &&
+          s.path[0] === "jobs" &&
+          s.path[1] === p[1] &&
+          s.path[2] === "environment",
+      )?.value;
+      ok = grant != null && val === grant.environment;
+    }
+    if (!ok) {
+      red(
+        m.index,
+        `\`${m[0]}\` in the raw text is not the key of a job \`environment:\` whose parsed value is its ENVIRONMENT_ALLOWLIST entry — every environment key must be one the law judged`,
+      );
+    }
+    // The key's raw region: the rest of its line and every more-indented line under it.
+    const li = lineOf(text, m.index) - 1;
+    const base = indent(lines[li]!);
+    let endLine = li + 1;
+    while (
+      endLine < lines.length &&
+      (lines[endLine]!.trim() === "" || indent(lines[endLine]!) > base)
+    ) {
+      endLine++;
+    }
+    const regionStart = m.index + m[0].length;
+    const regionEnd = endLine < lines.length ? lineStart[endLine]! : text.length;
+    const region = text.slice(regionStart, regionEnd);
+    for (const x of region.matchAll(CENSUS_INDIRECTION)) {
+      counted++;
+      red(
+        regionStart + x.index,
+        `\`${x[0]}\` inside an \`environment:\` value — an environment name computed from vars/env can resolve to a protected environment the gate never saw`,
+      );
+    }
+  }
+  return { violations: out, counted };
+}
+
 /** Path → the job id it sits in, or `(workflow)`. */
 function jobOf(path: Path): string {
   return path[0] === "jobs" && typeof path[1] === "string" ? path[1] : WORKFLOW_SCOPE;
 }
+
+/** Writer credential env var → the environment-only secret it takes. */
+const WRITER_SECRET_FOR: Record<string, string> = {
+  TURBO_TOKEN: WRITER_TOKEN_SECRET,
+  TURBO_REMOTE_CACHE_SIGNATURE_KEY: WRITER_KEY_SECRET,
+};
 
 const WRITER_VAR_FOR: Record<string, string> = {
   [WRITER_TOKEN_SECRET]: "TURBO_TOKEN",
@@ -733,6 +1021,12 @@ export function checkLaw(
   // L1 — every secret reference, anywhere in the tree (keys included).
   walkStrings(doc, (path, text, isKey) => {
     const isIf = !isKey && path[path.length - 1] === "if";
+    if (scanExpressions(text).unterminated) {
+      add(
+        "secret-shape",
+        `${where(path)}: an unterminated \`\${{\` (no \`}}\` outside a '…' string literal) — GitHub refuses to load the file and the gate cannot tell where the expression ends`,
+      );
+    }
     for (const expr of expressionsIn(text, isIf)) {
       const j = judgeSecretExpression(expr);
       if (j.bad) add("secret-shape", `${where(path)}: ${j.bad}`);
@@ -886,6 +1180,8 @@ export interface WorkflowVerdict {
   cacheSteps: number;
   /** Local actions this file's steps call (`uses: ./path`), repo-relative. */
   localUses: string[];
+  /** Raw-text census occurrences counted (each attributed, or a violation). */
+  censused: number;
 }
 
 /** Repo-relative paths of local actions (`uses: ./x`) called by a list of steps. */
@@ -909,6 +1205,7 @@ const emptyVerdict = (): WorkflowVerdict => ({
   environments: [],
   cacheSteps: 0,
   localUses: [],
+  censused: 0,
 });
 
 function parseDoc(file: string, text: string, v: WorkflowVerdict): Obj | null {
@@ -1047,11 +1344,12 @@ export function checkWorkflow(
   if (publishing) extra.push(...checkPublishFetches(file, doc));
   for (const x of extra) if (!off.has(x.rule)) v.violations.push(x.message);
 
-  const lawV = checkLaw(base, doc, {
-    action: false,
-    turboStep: (job, i) => turboSteps.get(job)?.has(i) ?? false,
-  });
+  const turboStep = (job: string, i: number): boolean => turboSteps.get(job)?.has(i) ?? false;
+  const lawV = checkLaw(base, doc, { action: false, turboStep });
   for (const x of lawV.violations) if (!off.has(x.rule)) v.violations.push(x.message);
+  const census = checkRawCensus(base, text, { action: false, turboStep });
+  for (const x of census.violations) if (!off.has(x.rule)) v.violations.push(x.message);
+  v.censused = census.counted;
   v.secretUses = lawV.secretUses;
   v.environments = lawV.environments;
   v.cacheSteps = lawV.cacheSteps;
@@ -1212,6 +1510,9 @@ export function checkLocalAction(
   const off = law.disabled ?? new Set<LawRule>();
   const lawV = checkLaw(file, doc, { action: true, turboStep: () => false });
   for (const x of lawV.violations) if (!off.has(x.rule)) v.violations.push(x.message);
+  const census = checkRawCensus(file, text, { action: true, turboStep: () => false });
+  for (const x of census.violations) if (!off.has(x.rule)) v.violations.push(x.message);
+  v.censused = census.counted;
   v.secretUses = lawV.secretUses;
   v.cacheSteps = lawV.cacheSteps;
   const steps = isObj(doc.runs) && Array.isArray(doc.runs.steps) ? doc.runs.steps : [];

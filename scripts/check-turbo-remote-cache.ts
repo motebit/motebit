@@ -105,6 +105,8 @@ export interface GateResult {
   cacheSteps: number;
   /** Files `git ls-files` lists in the repository (the tracked-`.turbo/` scan). */
   trackedFiles: number;
+  /** Raw-text census occurrences counted across workflows and local actions (#997 round 5). */
+  censused: number;
 }
 
 function listActions(dir: string, rel: string): string[] {
@@ -168,6 +170,7 @@ export function runTurboRemoteCacheGate(root: string, law: LawOptions = {}): Gat
     environments: [],
     cacheSteps: 0,
     trackedFiles: 0,
+    censused: 0,
   };
   const used = new Set<string>();
   const pendingUses: string[] = [];
@@ -183,6 +186,7 @@ export function runTurboRemoteCacheGate(root: string, law: LawOptions = {}): Gat
     }
     r.environments.push(...v.environments);
     r.cacheSteps += v.cacheSteps;
+    r.censused += v.censused;
   };
   for (const f of files) {
     const rel = `.github/workflows/${f}`;
@@ -279,6 +283,7 @@ function main(): void {
       (r.unusedGrants.length > 0 ? ` Unused grant(s): ${r.unusedGrants.join(", ")}.` : "") +
       `\n  L2 environments: ${r.environments.length} declared, each its exact ENVIRONMENT_ALLOWLIST (${ENVIRONMENT_ALLOWLIST.length} grant(s)) value: ${r.environments.join("; ") || "none"}.\n` +
       `  L3 cache state: ${r.cacheSteps} cache action step(s) (none may restore .turbo / .cache/turbo / dist / a root-wide glob); no cross-run download-artifact; ${r.trackedFiles} tracked file(s), none under .turbo/.\n` +
+      `  Raw-text census (parse-independent, deny by default): ${r.censused} occurrence(s) in the raw bytes of ${r.workflows} workflow(s) and ${r.localActions} local action(s) of \`secrets\` before . [ ) } , (toJSON(secrets) included), TURBO_* credential names, and \`environment:\` keys (with vars./env. in their region) — each attributed to a granted parsed reference, the writer's step env, or an allowlisted job environment at that exact location; expression bounds follow the runner's TemplateReader scan ('…' literals, '' escapes).\n` +
       `  Remote-write rules: ${EVALUATED_VARS.join("/")} in ${r.envScopes} env scope(s) (workflow, job, container, step), ${r.runScripts} run: script(s) for shell assignments, $GITHUB_ENV writes (${r.githubEnvWrites} found) and ${r.turboLines} turbo invocation(s) in any form (turbo, pnpm [exec|dlx] turbo, npx turbo@x, node_modules/.bin/turbo, root turbo scripts) with --cache/--force/--remote-only/--remote-cache-read-only; ${r.cacheDecls} TURBO_CACHE declaration(s); ${PUBLISH_WORKFLOWS.join(", ")} build from source and fetch no CI artifact (download-artifact, gh run download, …/actions/artifacts); .husky/pre-push and ${r.rootScripts} root package.json script(s) never write remote.\n` +
       `  Not examined: reusable workflows and actions in OTHER repos (their inputs are scanned, their bodies are not), scripts called from run: steps, non-root package.json scripts, secrets a third-party action reads from env, runner-file writes made by a \`uses:\` action (setup-node, pnpm/action-setup) in the writer job, what turbo tasks (main-merged code) do with the key they are handed.`,
   );

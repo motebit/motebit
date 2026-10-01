@@ -7,6 +7,7 @@
  * least one row through — no rule is dead weight, and no row is caught only
  * by accident.
  */
+import { spawnSync } from "node:child_process";
 import { rmSync } from "node:fs";
 
 import { afterAll, describe, expect, it } from "vitest";
@@ -15,11 +16,12 @@ import { runTurboRemoteCacheGate } from "../check-turbo-remote-cache.js";
 import {
   judgeSecretExpression,
   LAW_RULES,
+  scanExpressions,
   type LawRule,
   WRITER_ENVIRONMENT,
   WRITER_ENVIRONMENT_EXPR,
 } from "../lib/turbo-remote-cache.js";
-import { copyRepo, MUTATIONS } from "./turbo-remote-cache-mutations.js";
+import { copyRepo, MUTATIONS, REPO_ROOT } from "./turbo-remote-cache-mutations.js";
 
 const dirs: string[] = [];
 afterAll(() => dirs.forEach((d) => rmSync(d, { recursive: true, force: true })));
@@ -39,6 +41,23 @@ describe("the law, on a copy of this repository", () => {
     m.apply(d);
     expect(runTurboRemoteCacheGate(d).violations, m.shape).not.toEqual([]);
   });
+
+  // Round 5: a row that names its refusal must be refused FOR THAT reason
+  // (so deleting the one push site that emits it turns this test red, even
+  // when the row also cascades into other violations).
+  it.each(MUTATIONS.filter((m) => m.expect != null).map((m) => [m.id, m] as const))(
+    "%s is refused for its named reason",
+    (_id, m) => {
+      const d = fresh();
+      m.apply(d);
+      const v = runTurboRemoteCacheGate(d).violations;
+      for (const re of m.expect!)
+        expect(
+          v.some((x) => re.test(x)),
+          `${m.shape}: ${re}`,
+        ).toBe(true);
+    },
+  );
 
   // Round 4: each R4 row is refused by ONE sub-rule alone, so deleting that
   // sub-rule turns the row's "turns the gate RED" test red. Exactly one
@@ -60,17 +79,23 @@ describe("gate mutation: every rule of the law is load-bearing", () => {
     m.apply(d);
     return { m, d };
   });
-  /** The rows each rule, when switched off, lets through (should be non-empty). */
+  /**
+   * The rows each rule, when switched off, lets through (should be non-empty).
+   * Round 5: the raw-text census is a SECOND, parse-independent layer that
+   * re-catches most parser-rule rows, so a parser rule is measured with the
+   * census off too (is it load-bearing in the parser layer?), and the census
+   * alone (is it load-bearing at all — the rows the parser cannot see?).
+   */
   const memo = new Map<LawRule, string[]>();
   const escapes = (rule: LawRule): string[] => {
     const hit = memo.get(rule);
     if (hit) return hit;
+    const disabled = new Set<LawRule>(rule === "raw-census" ? [rule] : [rule, "raw-census"]);
+    const censusOnly = rule === "raw-census" ? [] : escapes("raw-census");
     const out = applied
-      .filter(
-        ({ d }) =>
-          runTurboRemoteCacheGate(d, { disabled: new Set([rule]) }).violations.length === 0,
-      )
-      .map(({ m }) => m.id);
+      .filter(({ d }) => runTurboRemoteCacheGate(d, { disabled }).violations.length === 0)
+      .map(({ m }) => m.id)
+      .filter((id) => !censusOnly.includes(id));
     memo.set(rule, out);
     return out;
   };
@@ -82,6 +107,17 @@ describe("gate mutation: every rule of the law is load-bearing", () => {
     },
     60_000,
   );
+
+  it("the census alone (every parser rule off) still refuses both C1 probes", () => {
+    const parserOff = new Set<LawRule>(LAW_RULES.filter((r) => r !== "raw-census"));
+    for (const id of [
+      "R5-C1a '}}' literal hides the writer key",
+      "R5-C1b '}}' literal hides toJSON(secrets)",
+    ]) {
+      const d = applied.find((a) => a.m.id === id)!.d;
+      expect(runTurboRemoteCacheGate(d, { disabled: parserOff }).violations, id).not.toEqual([]);
+    }
+  }, 60_000);
 
   it("R3-C1 and R3-C2 are refused by more than one rule (defence in depth)", () => {
     for (const id of ["R3-C1 GITHUB_ENV leak in Build", "R3-C2 outputs chain to e2e"]) {
@@ -104,6 +140,10 @@ describe("gate mutation: every rule of the law is load-bearing", () => {
         "C2c secrets: inherit",
         "C2d secrets: inherit (clean callee)",
         "C2e format(secrets.X)",
+        // #997 round 5: with the runner's boundary scan the `'}}'` literal no
+        // longer hides `toJSON(secrets)`; an unterminated `${{` fails closed.
+        "R5-C1b '}}' literal hides toJSON(secrets)",
+        "R5-C1c unterminated expression",
       ],
       "secret-allowlist": [
         "A2 local action reads a secret",
@@ -131,7 +171,7 @@ describe("gate mutation: every rule of the law is load-bearing", () => {
         "R4-L2 cache apps/web/dist (PR)",
         "R4-L3 cache ~/work (PR)",
       ],
-      "tracked-turbo-state": ["C4 committed .turbo/config.json"],
+      "tracked-turbo-state": ["C4 committed .turbo/config.json", "R5-F6 not a git tree"],
       // #997 round 3. R3-C1 (Build >> $GITHUB_ENV) and R3-C2 (outputs chain)
       // are caught by two or three of these at once, so neither is listed.
       "writer-exact-run": [
@@ -155,6 +195,13 @@ describe("gate mutation: every rule of the law is load-bearing", () => {
         "R3-P3b gh api artifacts (release)",
         "R3-P3c curl artifacts URL (release)",
         "R3-P3d download-artifact (publish)",
+      ],
+      // Round 5: shapes only the raw-text census sees (the parser reads them
+      // as comments; a YAML 1.1 scanner would not).
+      "raw-census": [
+        "R5-K1 toJSON(secrets) after U+2028 in a comment",
+        "R5-K2 writer secret in a comment",
+        "R5-K3 environment from vars after U+2028",
       ],
     });
   }, 60_000);
@@ -271,4 +318,58 @@ describe("WRITER_ENVIRONMENT_EXPR (GitHub expression semantics)", () => {
   ])("resolves to '' (no environment) for %s on %s", (event, ref) => {
     expect(at(event, ref)).toBe("");
   });
+});
+
+/**
+ * #997 round 5 — the expression-boundary scan must equal the runner's
+ * (TemplateReader.ParseScalar): a single quote toggles "in a string literal"
+ * (`''` toggles twice), and only a `}}` OUTSIDE a literal closes. The
+ * expected bodies are what GitHub hands its expression parser.
+ */
+describe("scanExpressions (GitHub's TemplateReader boundaries)", () => {
+  it.each<[string, string[], boolean]>([
+    ["no expression", [], false],
+    ["${{ a }}", [" a "], false],
+    ["${{}}", [""], false],
+    ["${{ '}}' != '' && secrets.X }}", [" '}}' != '' && secrets.X "], false],
+    ["echo '${{ '}}' && toJSON(secrets) }}'", [" '}}' && toJSON(secrets) "], false],
+    ["${{ 'it''s }} here' }}", [" 'it''s }} here' "], false],
+    ["${{ '''}}''' }}", [" '''}}''' "], false],
+    ["${{ a }} and ${{ b }}", [" a ", " b "], false],
+    ["${{ a }}${{ b }}", [" a ", " b "], false],
+    ["x ${{ 'a' }} y ${{ '}}' }} z", [" 'a' ", " '}}' "], false],
+    ["${{ a }}}", [" a "], false],
+    ["${{ a }}}}", [" a "], false],
+    ["${{ '${{' }} ${{ b }}", [" '${{' ", " b "], false],
+    ["${{ a }", [" a }"], true],
+    ["${{ 'unterminated }}", [" 'unterminated }}"], true],
+    ["${{ a }} ${{ 'b }}", [" a ", " 'b }}"], true],
+    ["${{ secrets.X }}: key", [" secrets.X "], false],
+  ])("%j", (text, exprs, unterminated) => {
+    expect(scanExpressions(text)).toEqual({ exprs, unterminated });
+  });
+
+  it("the round-4 shapes now reach the judge whole", () => {
+    expect(
+      judgeSecretExpression(scanExpressions("${{ '}}' && toJSON(secrets) }}").exprs[0]!).bad,
+    ).not.toBeNull();
+    expect(
+      judgeSecretExpression(
+        scanExpressions("${{ '}}' != '' && secrets.TURBO_WRITER_SIGNATURE_KEY }}").exprs[0]!,
+      ).names,
+    ).toEqual(["TURBO_WRITER_SIGNATURE_KEY"]);
+  });
+});
+
+describe("the CLI exits red on a root script that writes the remote (C2)", () => {
+  it("package.json scripts.build: turbo run build --cache=local:rw,remote:rw", () => {
+    const d = fresh();
+    MUTATIONS.find((m) => m.id === "R5-F1 root build script writes remote")!.apply(d);
+    const out = spawnSync("npx", ["tsx", "scripts/check-turbo-remote-cache.ts", "--root", d], {
+      cwd: REPO_ROOT,
+      encoding: "utf8",
+    });
+    expect(out.status).toBe(1);
+    expect(out.stderr).toMatch(/package\.json scripts\.build: turbo invoked with --cache=/);
+  }, 60_000);
 });

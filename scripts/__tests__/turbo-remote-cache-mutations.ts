@@ -11,12 +11,15 @@
  */
 import { spawnSync } from "node:child_process";
 import {
+  appendFileSync,
   cpSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   realpathSync,
+  rmSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -112,6 +115,8 @@ export interface Mutation {
   /** What the review reproduced / what the shape is. */
   shape: string;
   apply: (root: string) => void;
+  /** Round 5: messages the refusal must include (one per push site the row pins). */
+  expect?: readonly RegExp[];
 }
 
 const CACHE_STEP = (path: string, uses = "actions/cache@v4") => ({
@@ -594,5 +599,147 @@ export const MUTATIONS: readonly Mutation[] = [
       editWorkflow(r, "ci.yml", (d) =>
         addStep(d, "format", { run: "true", env: { TURBO_REMOTE_CACHE_READ_ONLY: "false" } }),
       ),
+  },
+  // ── #997 round 5 ─────────────────────────────────────────────────────────
+  // C1: the gate ended `${{ … }}` at the first `}}`, but GitHub's
+  // TemplateReader skips a `}}` inside a '…' string literal — so the rest of
+  // the expression (the secret reference) was never judged.
+  {
+    id: "R5-C1a '}}' literal hides the writer key",
+    shape:
+      "PR job `format`, non-turbo step env: X: ${{ '}}' != '' && secrets.TURBO_WRITER_SIGNATURE_KEY }}",
+    expect: [
+      /not granted to ci\.yml#format/,
+      /may appear only as/,
+      /ci\.yml:\d+: the raw text has `secrets…TURBO_WRITER_SIGNATURE_KEY`/,
+      /ci\.yml:\d+: `TURBO_WRITER_SIGNATURE_KEY` in the raw text/,
+    ],
+    apply: (r) =>
+      editWorkflow(r, "ci.yml", (d) =>
+        addStep(d, "format", {
+          name: "probe",
+          run: "echo hi",
+          env: { X: "${{ '}}' != '' && secrets.TURBO_WRITER_SIGNATURE_KEY }}" },
+        }),
+      ),
+  },
+  {
+    id: "R5-C1b '}}' literal hides toJSON(secrets)",
+    shape: "PR job `format`: run: echo '${{ '}}' && toJSON(secrets) }}'",
+    expect: [/`secrets` used as a value/, /ci\.yml:\d+: the raw text has `secrets…`/],
+    apply: (r) =>
+      editWorkflow(r, "ci.yml", (d) =>
+        addStep(d, "format", { run: "echo '${{ '}}' && toJSON(secrets) }}'" }),
+      ),
+  },
+  {
+    id: "R5-C1c unterminated expression",
+    shape: "PR job `format`: run: echo '${{ github.sha' (no close — GitHub refuses the file)",
+    expect: [/an unterminated `\$\{\{`/],
+    apply: (r) =>
+      editWorkflow(r, "ci.yml", (d) => addStep(d, "format", { run: "echo '${{ github.sha'" })),
+  },
+  // The census: shapes the parser cannot see at all. A YAML 1.1 scanner
+  // (YamlDotNet) treats U+2028 / U+0085 as a line break; the `yaml` package
+  // (1.2) keeps it inside the comment — whichever GitHub does, the raw bytes
+  // carry a secret/credential/environment token the parse never judged.
+  {
+    id: "R5-K1 toJSON(secrets) after U+2028 in a comment",
+    shape: "ci.yml: `# note       - run: echo '${{ toJSON(secrets) }}'` (census only)",
+    expect: [/ci\.yml:\d+: `secrets` in the raw text is in no YAML scalar/],
+    apply: (r) =>
+      appendFileSync(
+        join(r, ".github", "workflows", "ci.yml"),
+        "      # note       - run: echo '${{ toJSON(secrets) }}'\n",
+      ),
+  },
+  {
+    id: "R5-K2 writer secret in a comment",
+    shape: "ci.yml: `# TURBO_TOKEN: ${{ secrets.TURBO_WRITER_TOKEN }}` (census only)",
+    expect: [
+      /`secrets\.TURBO_WRITER_TOKEN` in the raw text is in no YAML scalar/,
+      /`TURBO_TOKEN` in the raw text is not the key/,
+    ],
+    apply: (r) =>
+      appendFileSync(
+        join(r, ".github", "workflows", "ci.yml"),
+        "# TURBO_TOKEN: ${{ secrets.TURBO_WRITER_TOKEN }}\n",
+      ),
+  },
+  {
+    id: "R5-K3 environment from vars after U+2028",
+    shape: "ci.yml: `#     environment: ${{ vars.ENV }}` (census only)",
+    expect: [
+      /`environment:` in the raw text is not the key of a job/,
+      /`vars\.` inside an `environment:` value/,
+    ],
+    apply: (r) =>
+      appendFileSync(
+        join(r, ".github", "workflows", "ci.yml"),
+        "    #     environment: ${{ vars.ENV }}\n",
+      ),
+  },
+  // C2: the CLI's own fail-closed paths and the root package.json scripts.
+  {
+    id: "R5-F1 root build script writes remote",
+    shape: "package.json scripts.build: turbo run build --cache=local:rw,remote:rw",
+    expect: [/^package\.json scripts\.build: turbo invoked with --cache=local:rw,remote:rw/],
+    apply: (r) => {
+      const p = join(r, "package.json");
+      const pkg = JSON.parse(readFileSync(p, "utf8")) as { scripts: Record<string, string> };
+      pkg.scripts.build = "turbo run build --cache=local:rw,remote:rw";
+      writeFileSync(p, JSON.stringify(pkg, null, 2));
+    },
+  },
+  {
+    id: "R5-F2 turbo.json missing",
+    shape: "no turbo.json",
+    expect: [/^turbo\.json: missing$/],
+    apply: (r) => rmSync(join(r, "turbo.json")),
+  },
+  {
+    id: "R5-F3 package.json missing",
+    shape: "no package.json",
+    expect: [/^package\.json: missing$/],
+    apply: (r) => rmSync(join(r, "package.json")),
+  },
+  {
+    id: "R5-F4 pre-push hook missing",
+    shape: "no .husky/pre-push",
+    expect: [/^\.husky\/pre-push: missing$/],
+    apply: (r) => rmSync(join(r, ".husky", "pre-push")),
+  },
+  {
+    id: "R5-F5 no workflows",
+    shape: ".github/workflows holds no workflow file",
+    expect: [/no workflow files found/],
+    apply: (r) => {
+      const dir = join(r, ".github", "workflows");
+      for (const f of readdirSync(dir)) rmSync(join(dir, f));
+    },
+  },
+  {
+    id: "R5-F6 not a git tree",
+    shape: "the root is not a git work tree (tracked .turbo/ state unprovable)",
+    expect: [/not a git work tree/],
+    apply: (r) => rmSync(join(r, ".git"), { recursive: true, force: true }),
+  },
+  {
+    id: "R5-F7 workflow top level not a mapping",
+    shape: ".github/workflows/list.yml is a YAML sequence",
+    expect: [/list\.yml: top level is not a mapping/],
+    apply: (r) => writeFileSync(wf(r, "list.yml"), "- a\n- b\n"),
+  },
+  {
+    id: "R5-F8 local action run: writes remote",
+    shape: "a local composite action whose run: is `turbo run build --force`",
+    expect: [/action\.yml runs\.steps\[0\]\.run: turbo invoked with --force/],
+    apply: (r) => {
+      mkdirSync(join(r, ".github", "actions", "force"), { recursive: true });
+      writeFileSync(
+        join(r, ".github", "actions", "force", "action.yml"),
+        "name: force\nruns:\n  using: composite\n  steps:\n    - shell: bash\n      run: turbo run build --force\n",
+      );
+    },
   },
 ];

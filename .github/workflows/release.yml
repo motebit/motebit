@@ -16,7 +16,7 @@ env:
   TURBO_CACHE: local:rw
   # Surfaced so a step-level `if` can gate the GitHub App token step on the
   # App actually being configured. `secrets` can't be read in `if`, but `env`
-  # (which may reference secrets) can — so this maps the secret's presence
+  # (which may reference a secret) can — so this maps the secret's presence
   # into the `env` context the conditional can see.
   RELEASE_APP_ID: ${{ secrets.APP_ID }}
 
@@ -240,7 +240,7 @@ jobs:
       # `action_required` with 0s duration. Diagnosed 2026-05-13.
       #
       # Fallback to GITHUB_TOKEN keeps forks and pre-App-setup boots
-      # working — same graceful-degradation pattern the TURBO_TOKEN
+      # working — same graceful-degradation pattern the turbo-cache token
       # block above uses. The fallback path still has the
       # action_required gate; configuring the GitHub App (APP_ID +
       # APP_PRIVATE_KEY) is what removes it.
