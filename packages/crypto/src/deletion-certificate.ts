@@ -656,13 +656,18 @@ async function verifyOneSignature(
   publicKey: Uint8Array | null,
 ): Promise<boolean> {
   if (publicKey === null) return false;
+  // Per-signer `suite` on the multi-signature arms is stripped from the
+  // canonical bytes with the rest of its signature block, so it is never
+  // trusted as the dispatch key: every deletion-certificate signature is
+  // produced under DELETION_CERTIFICATE_SUITE, and anything else rejects.
+  if (suite !== DELETION_CERTIFICATE_SUITE) return false;
   let sigBytes: Uint8Array;
   try {
     sigBytes = fromBase64Url(signatureBase64Url);
   } catch {
     return false;
   }
-  return verifyBySuite(suite, canonicalBytes, sigBytes, publicKey);
+  return verifyBySuite(DELETION_CERTIFICATE_SUITE, canonicalBytes, sigBytes, publicKey);
 }
 
 function failResult(message: string): DeletionCertificateVerifyResult {
