@@ -90,10 +90,17 @@ import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
-const LOCK = join(
-  tmpdir(),
-  `motebit-gate-self-test-locks-${createHash("sha256").update(ROOT).digest("hex").slice(0, 12)}`,
-);
+/**
+ * `MOTEBIT_GATE_LOCK_DIR` relocates the lock — only the lock's own tests
+ * (`repo-file-mutation.test.ts`) set it, to drive it without contending with
+ * the gate self-tests that share this checkout's real lock.
+ */
+const LOCK =
+  process.env.MOTEBIT_GATE_LOCK_DIR ??
+  join(
+    tmpdir(),
+    `motebit-gate-self-test-locks-${createHash("sha256").update(ROOT).digest("hex").slice(0, 12)}`,
+  );
 /** Strictly below `test:gates`' 30 s per-test budget, so the lock names the holder first. */
 const WAIT_MS = ((v) => (Number.isFinite(v) && v > 0 ? v : 25_000))(
   Number(process.env.MOTEBIT_GATE_LOCK_WAIT_MS),
@@ -223,6 +230,13 @@ interface Entry {
   rel: string;
   backup: string;
   blob: string;
+  /**
+   * Blob hash of the bytes the perturbation writes. Recovery restores only a
+   * file that still holds exactly these bytes (or already the HEAD bytes):
+   * anything else is an edit made since the crash, never overwritten.
+   * Absent in a manifest written before this field existed.
+   */
+  perturbed?: string;
 }
 
 function readManifest(gen: string): Entry[] {
@@ -238,9 +252,30 @@ function writeManifest(gen: string, entries: Entry[]): void {
   writeAtomic(join(gen, "manifest.json"), JSON.stringify({ entries }));
 }
 
-/** Put `e.rel` back to its recorded HEAD blob — from the backup, else from git — and verify. */
-function restoreEntry(e: Entry): void {
+/**
+ * Put `e.rel` back to its recorded HEAD blob — from the backup, else from git
+ * — and verify. `afterCrash`: the perturbing process died, so time has passed;
+ * a file that holds neither the perturbed bytes nor the HEAD bytes was edited
+ * since, and is refused loudly rather than overwritten.
+ */
+function restoreEntry(e: Entry, afterCrash = false): void {
   const abs = resolve(ROOT, e.rel);
+  if (afterCrash && e.perturbed !== undefined) {
+    let onDisk: string | null;
+    try {
+      onDisk = blobHash(readFileSync(abs));
+    } catch {
+      onDisk = null;
+    }
+    if (onDisk !== e.perturbed && onDisk !== e.blob) {
+      throw new Error(
+        `gate self-test recovery refused to restore ${e.rel}: a self-test that perturbed it ` +
+          `died, but the file no longer holds the perturbed bytes (${onDisk === null ? "missing" : `blob ${onDisk}`}) ` +
+          `— it was edited since. Keep your edit and drop the crashed state ` +
+          `(rm -rf ${LOCK}), or restore HEAD with: git checkout HEAD -- ${e.rel}`,
+      );
+    }
+  }
   let bytes: Buffer | null = null;
   try {
     bytes = readFileSync(e.backup);
@@ -301,9 +336,9 @@ function recover(own: number): void {
     const path = join(LOCK, e);
     const g = /^g(\d+)$/.exec(e);
     if (g && Number(g[1]) !== own) {
-      for (const entry of readManifest(path)) restoreEntry(entry);
+      for (const entry of readManifest(path)) restoreEntry(entry, true);
       tombstone(path);
-    } else if (/^(stage|dead)-/.test(e) && age(path) > DEBRIS_MS) {
+    } else if ((/^(stage|dead)-/.test(e) || isStagedTemp(e)) && age(path) > DEBRIS_MS) {
       rmSync(path, { recursive: true, force: true });
     }
   }
@@ -340,10 +375,19 @@ function look(): View {
   return isDead(owner) ? { top, state: "stale" } : { top, state: "held", owner };
 }
 
+/**
+ * A `writeAtomic` temp (`<name>.<hex>.tmp`) — never a ticket: a waiter
+ * killed mid-write leaves an empty one, and treating it as a ticket made it
+ * the queue's head for `DEBRIS_MS`, starving every acquirer.
+ */
+function isStagedTemp(name: string): boolean {
+  return name.endsWith(".tmp");
+}
+
 /** The earliest ticket whose owner is alive, clearing dead owners' tickets on the way. */
 function headTicket(): { name: string; owner: Owner | null } | null {
   for (const name of readdirSync(LOCK)
-    .filter((e) => e.startsWith("t-"))
+    .filter((e) => e.startsWith("t-") && !isStagedTemp(e))
     .sort()) {
     const owner = readOwner(join(LOCK, name));
     if (owner !== null && isDead(owner)) {
@@ -464,12 +508,18 @@ export async function withRepoFileReplaced<T>(
           `uncommitted edit). Restore with: git checkout HEAD -- ${rel}`,
       );
     }
+    const perturbedText = typeof next === "string" ? next : next(original.toString("utf8"));
     const dir = mkdtempSync(join(tmpdir(), "motebit-gate-self-test-"));
-    const entry: Entry = { rel, backup: join(dir, basename(absPath)), blob };
+    const entry: Entry = {
+      rel,
+      backup: join(dir, basename(absPath)),
+      blob,
+      perturbed: blobHash(Buffer.from(perturbedText)),
+    };
     writeDurable(entry.backup, original);
     writeManifest(gen, [...readManifest(gen), entry]);
     try {
-      writeFileSync(absPath, typeof next === "string" ? next : next(original.toString("utf8")));
+      writeFileSync(absPath, perturbedText);
       return await fn();
     } finally {
       // Guard the guard, still under the lock: restored and verified against
