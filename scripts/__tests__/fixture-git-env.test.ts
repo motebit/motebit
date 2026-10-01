@@ -38,22 +38,17 @@ import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { readGit, runPretest } from "../lib/differential-tree.js";
+import { fixtureGitEnv } from "../lib/fixture-git-env.js";
+import { analyzeSh, analyzeTs } from "../check-fixture-git-env.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = realpathSync(resolve(__dirname, "..", ".."));
-
-/** An environment with no GIT_* at all — used only to BUILD the decoy and fixtures. */
-function bareEnv(): NodeJS.ProcessEnv {
-  const env: NodeJS.ProcessEnv = {};
-  for (const [k, v] of Object.entries(process.env)) if (!k.startsWith("GIT_")) env[k] = v;
-  return env;
-}
 
 function git(cwd: string, args: string[]): string {
   const r = spawnSync(
     "git",
     ["-c", "maintenance.auto=false", "-c", "gc.auto=0", "-c", "commit.gpgsign=false", ...args],
-    { cwd, env: bareEnv(), encoding: "utf8" },
+    { cwd, env: fixtureGitEnv(), encoding: "utf8" },
   );
   if (r.status !== 0) throw new Error(`git ${args.join(" ")} failed in ${cwd}:\n${r.stderr}`);
   return r.stdout.trim();
@@ -213,7 +208,7 @@ describe("fixture helpers under a leaked GIT_* environment (decoy repository)", 
     const pin = initRepo(spec, "tool/build.sh", "#!/bin/sh\nexit 7\n");
     const r = spawnSync("bash", [join(ROOT, "scripts", "verify-pdf-text-v1-reproduction.sh")], {
       cwd: jail,
-      env: { ...bareEnv(), ...leaked, SPEC_REPO: spec, SPEC_SHA: pin },
+      env: { ...fixtureGitEnv(), ...leaked, SPEC_REPO: spec, SPEC_SHA: pin },
       encoding: "utf8",
       timeout: 60_000,
     });
@@ -226,5 +221,46 @@ describe("fixture helpers under a leaked GIT_* environment (decoy repository)", 
   it("the decoy's final state is the snapshot taken before any helper ran", () => {
     expectDecoyUnchanged();
     expect(statSync(join(decoy, ".git", "config")).isFile()).toBe(true);
+  });
+});
+
+describe("check-fixture-git-env classification", () => {
+  it("repo-root git spawns need no scrub; anything else needs fixtureGitEnv", () => {
+    // Built at runtime so this file's own source carries no unscrubbed spawn for the gate to see.
+    const src = [
+      'S("git", ["status"], { cwd: ROOT });',
+      'X(`git diff ${x}`, { cwd: ROOT, encoding: "utf-8" });',
+      'S("git", ["-C", dir, "status"], { cwd: ROOT });',
+      'S("git", ["init"], { cwd: tmp });',
+      'S("git", ["init"], { cwd: tmp, env: fixtureGitEnv() });',
+      "const env = fixtureGitEnv(process.env, {});",
+      'S("git", args, { cwd, env, encoding: "utf8" });',
+      'S("git", args, { cwd, env: process.env });',
+      'S("node", ["x"], { cwd: tmp });',
+      "let e2 = fixtureGitEnv();",
+      "e2 = process.env;",
+      'S("git", args, { cwd, env: e2 });',
+    ]
+      .join("\n")
+      .replace(/^S\(/gm, "spawnSync(")
+      .replace(/^X\(/gm, "execSync(");
+    expect(analyzeTs(src).map((s) => [s.line, s.target, s.scrubbed])).toEqual([
+      [1, "repo", false],
+      [2, "repo", false],
+      [3, "fixture", false],
+      [4, "fixture", false],
+      [5, "fixture", true],
+      [7, "fixture", true],
+      [8, "fixture", false],
+      [12, "fixture", false],
+    ]);
+  });
+
+  it("shell git into a temp dir must follow fixture_git_env_scrub", () => {
+    const unscrubbed = 'git clone "$R" "$W"\n# fixture_git_env_scrub\ngit diff --cached\n';
+    expect(analyzeSh(unscrubbed).map((s) => [s.line, s.scrubbed])).toEqual([[1, false]]);
+    const scrubbed =
+      '. lib/fixture-git-env.sh\nfixture_git_env_scrub\nX="$(git -C "$W" rev-parse HEAD)"\n';
+    expect(analyzeSh(scrubbed).map((s) => [s.line, s.scrubbed])).toEqual([[3, true]]);
   });
 });

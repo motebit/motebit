@@ -1027,6 +1027,12 @@ const GATES: ReadonlyArray<Gate> = [
       "every package script a docs page tells the reader to run exists in the manifest it would run against: `pnpm --filter <pkg> <script>` resolves to a workspace package by name and one of its `scripts`; `pnpm run <script>` resolves against the most recent `cd <workspace-dir>` in the same fenced block (else the repo root); `npm run <script>` resolves against the scripts the create-motebit scaffold generates. The 2026-09-14 docs-vs-code cross-audit (#667) found three of the five app pages OPENING with a command that did not exist or did something other than the sentence claimed — the first command a new contributor types was the least-checked sentence on the site; `check-docs-tree` enforced the directory listing and `check-docs-cli-claims` the CLI subcommands, but nothing tied a documented script to a package.json. Invariant #157, added 2026-09-14",
     script: "check-docs-script-claims",
   },
+  {
+    name: "check-fixture-git-env",
+    defends:
+      "every git spawn under scripts/ (TS spawn/exec of `git`, and `git clone|init|-C` in shell scripts) that targets anything other than the repo root — a temp dir, a fixture, a copied tree — runs with `fixtureGitEnv()` (scripts/lib/fixture-git-env.ts; shell twin `fixture_git_env_scrub`), which drops every GIT_* (GIT_CONFIG_* included) and credential variable. A pre-push hook from a linked worktree exports GIT_DIR into the shared repository; an inheriting fixture `git init` wrote `core.worktree=<fixture>` into the real .git/config and a fixture `git commit` landed on a real branch (#835, again 2026-10-01). The decoy harness scripts/__tests__/fixture-git-env.test.ts proves today's helpers; this gate keeps a new one from skipping the scrub. Invariant #166, added 2026-10-01",
+    script: "check-fixture-git-env",
+  },
 ];
 
 interface Result {
