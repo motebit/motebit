@@ -17,7 +17,6 @@ export { X402SettlementRail } from "./x402-rail.js";
 export type { X402RailConfig, X402FacilitatorClient } from "./x402-rail.js";
 export { BridgeSettlementRail } from "./bridge-rail.js";
 export {
-  X402_WITHDRAWAL_VALIDITY_SECONDS,
   isManualPayoutRail,
   payoutValidityMsOf,
   type PayoutHorizonDeclaration,

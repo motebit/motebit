@@ -42,7 +42,15 @@
  */
 
 import { Web3JsRpcAdapter } from "./web3js-adapter.js";
-import type { SendUsdcResult, SolanaRpcAdapter } from "./adapter.js";
+import type {
+  DurableBroadcastHooks,
+  DurableNonceLane,
+  DurableSendResult,
+  FinalizedSignatureStatus,
+  NonceKillResult,
+  NonceLaneState,
+  SolanaRpcAdapter,
+} from "./adapter.js";
 
 export interface OperatorSolanaTransferConfig {
   /** Solana RPC endpoint URL. Same value as `SOLANA_RPC_URL` used by the memo submitter. */
@@ -58,11 +66,13 @@ export interface OperatorSolanaTransferConfig {
   usdcMint?: string;
   /** RPC commitment level. Defaults to "confirmed". */
   commitment?: "processed" | "confirmed" | "finalized";
+  /** The payout nonce lane's seed suffix (`nonceSeedFor`) — rotate it to escape a squatted address. */
+  nonceSeedSuffix?: string;
 }
 
 /**
  * Operator-side USDC sending primitive. Construct once at relay boot
- * via the factory; call `sendUsdc` from the withdrawal-path dispatch
+ * via the factory; call `sendPayout` from the withdrawal-path dispatch
  * when the destination is a Solana sovereign wallet.
  *
  * The constructor accepts a pre-built `SolanaRpcAdapter` for test
@@ -89,16 +99,97 @@ export class OperatorSolanaTransfer {
   }
 
   /**
-   * Send USDC from the relay treasury to a recipient sovereign wallet.
-   * Amount in micro-units. Returns the transaction signature once the
-   * network reaches the configured commitment.
-   *
-   * Throws `InsufficientUsdcBalanceError` when the treasury balance is
-   * below `microAmount`. Throws `InvalidSolanaAddressError` when
-   * `toAddress` is not a valid base58 public key.
+   * True only when the adapter can make a payout the payer can later DECIDE
+   * from consensus rules (#990): it reports every transaction it signs to
+   * `hooks.beforeBroadcast` before sending it, signs payouts over the
+   * treasury's durable nonce (so they never expire and exactly one
+   * transaction per nonce value can land), can broadcast the kill for a
+   * nonce value, and can read a signature's FINALIZED status. A payer must
+   * not send a payout it cannot decide this way.
    */
-  sendUsdc(toAddress: string, microAmount: bigint): Promise<SendUsdcResult> {
-    return this.adapter.sendUsdc({ toAddress, microAmount });
+  get recordsBroadcasts(): boolean {
+    const a = this.adapter;
+    return (
+      a.honorsBroadcastHooks === true &&
+      typeof a.prepareNonceLane === "function" &&
+      typeof a.readNonceAccount === "function" &&
+      typeof a.sendUsdcDurable === "function" &&
+      typeof a.broadcastNonceKill === "function" &&
+      typeof a.getFinalizedStatus === "function"
+    );
+  }
+
+  /**
+   * The treasury's durable-nonce lane (#990), created if absent, read at
+   * finalized commitment. `unavailable` ⇒ send nothing.
+   */
+  prepareNonceLane(opts: { minContextSlot?: number } = {}): Promise<NonceLaneState> {
+    if (typeof this.adapter.prepareNonceLane !== "function") {
+      return Promise.resolve({ status: "unavailable", reason: "adapter has no nonce lane" });
+    }
+    return this.adapter.prepareNonceLane(opts);
+  }
+
+  /**
+   * Read one nonce account this treasury controls (any lane it used), bound
+   * by `minContextSlot` (#990 round 8). Never creates.
+   */
+  readNonceAccount(
+    account: string,
+    opts: { minContextSlot?: number } = {},
+  ): Promise<NonceLaneState> {
+    if (typeof this.adapter.readNonceAccount !== "function") {
+      return Promise.resolve({
+        status: "unavailable",
+        reason: "adapter cannot read nonce accounts",
+      });
+    }
+    return this.adapter.readNonceAccount(account, opts);
+  }
+
+  /**
+   * Send USDC from the relay treasury to a recipient sovereign wallet as a
+   * durable-nonce payout over `lane` (#990). Amount in micro-units.
+   * Throws `InsufficientUsdcBalanceError` / `InvalidSolanaAddressError` only
+   * before anything is recorded or sent; afterwards it resolves with the
+   * transaction and the finalized status its bounded wait last read.
+   */
+  sendPayout(
+    toAddress: string,
+    microAmount: bigint,
+    lane: DurableNonceLane,
+    hooks?: DurableBroadcastHooks,
+  ): Promise<DurableSendResult> {
+    if (typeof this.adapter.sendUsdcDurable !== "function") {
+      return Promise.reject(new Error("adapter cannot send a durable-nonce payout"));
+    }
+    return this.adapter.sendUsdcDurable({ toAddress, microAmount }, lane, hooks);
+  }
+
+  /** Broadcast the kill for `lane.nonceValue` (#990): once finalized, no payout over it can land. */
+  broadcastNonceKill(
+    lane: DurableNonceLane,
+    hooks?: DurableBroadcastHooks,
+  ): Promise<NonceKillResult> {
+    if (typeof this.adapter.broadcastNonceKill !== "function") {
+      return Promise.reject(new Error("adapter cannot broadcast a nonce kill"));
+    }
+    return this.adapter.broadcastNonceKill(lane, hooks);
+  }
+
+  /**
+   * One signature's FINALIZED status (#990). An adapter that cannot read it
+   * reports `unknown` — never absence as evidence.
+   */
+  getFinalizedStatus(signature: string): Promise<FinalizedSignatureStatus> {
+    if (typeof this.adapter.getFinalizedStatus !== "function") {
+      return Promise.resolve({
+        status: "unknown",
+        reason: "rpc_error",
+        detail: "adapter cannot read finalized statuses",
+      });
+    }
+    return this.adapter.getFinalizedStatus(signature);
   }
 
   /** Whether the RPC endpoint is reachable right now. */
@@ -119,6 +210,7 @@ export function createOperatorSolanaTransfer(
     identitySeed: config.identitySeed,
     usdcMint: config.usdcMint,
     commitment: config.commitment,
+    ...(config.nonceSeedSuffix !== undefined ? { nonceSeedSuffix: config.nonceSeedSuffix } : {}),
   });
   return new OperatorSolanaTransfer(adapter);
 }

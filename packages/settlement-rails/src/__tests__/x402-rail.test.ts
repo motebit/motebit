@@ -5,8 +5,8 @@
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { X402SettlementRail } from "../x402-rail.js";
-import { SettlementRailRegistry } from "../index.js";
-import { isDepositableRail } from "@motebit/sdk";
+import { SettlementRailRegistry, isManualPayoutRail, payoutValidityMsOf } from "../index.js";
+import { isDepositableRail, isWithdrawableRail, isBatchableRail } from "@motebit/sdk";
 import type { X402FacilitatorClient } from "../x402-rail.js";
 
 // --- Mock x402 facilitator ---
@@ -75,90 +75,34 @@ describe("X402SettlementRail", () => {
     });
   });
 
-  describe("withdraw", () => {
-    it("settles via facilitator and returns proof", async () => {
-      const result = await rail.withdraw("agent-001", 5.0, "USDC", "0xDestination", "idem-key-w1");
-
-      expect(result.amount).toBe(5.0);
-      expect(result.currency).toBe("USDC");
-      expect(result.proof.reference).toBe("0xabc123def456");
-      expect(result.proof.railType).toBe("protocol");
-      expect(result.proof.network).toBe("eip155:84532");
-      expect(result.proof.confirmedAt).toBeGreaterThan(0);
-
-      expect(facilitator.settle).toHaveBeenCalledWith(
-        expect.objectContaining({
-          x402Version: 1,
-          scheme: "exact",
-          network: "eip155:84532",
-          payload: expect.objectContaining({
-            authorization: expect.objectContaining({
-              from: "0xRelayOperator",
-              to: "0xDestination",
-              value: "5000000", // 5.0 * 1e6
-            }),
-          }),
-        }),
-        expect.objectContaining({
-          scheme: "exact",
-          network: "eip155:84532",
-          payTo: "0xDestination",
-        }),
-      );
+  // #948: the withdraw this rail carried put the idempotency key where the
+  // EIP-3009 signature belongs — no facilitator can execute that. The relay
+  // cannot sign one (it holds no EVM treasury key), so the method is removed
+  // at the type level, like Bridge's: no relay path can hand x402 a payout.
+  describe("withdraw is structurally absent (#948)", () => {
+    it("declares supportsWithdraw false and has no withdraw method", () => {
+      expect(rail.supportsWithdraw).toBe(false);
+      expect(rail.supportsBatch).toBe(false);
+      expect((rail as unknown as { withdraw?: unknown }).withdraw).toBeUndefined();
+      expect(
+        (X402SettlementRail.prototype as unknown as { withdraw?: unknown }).withdraw,
+      ).toBeUndefined();
     });
 
-    it("rejects zero or negative amounts", async () => {
-      await expect(rail.withdraw("agent-001", 0, "USDC", "0xDest", "k1")).rejects.toThrow(
-        "Withdrawal amount must be positive",
-      );
-
-      await expect(rail.withdraw("agent-001", -5, "USDC", "0xDest", "k2")).rejects.toThrow(
-        "Withdrawal amount must be positive",
-      );
+    it("is rejected by the withdrawable and batchable type guards", () => {
+      expect(isWithdrawableRail(rail)).toBe(false);
+      expect(isBatchableRail(rail)).toBe(false);
     });
 
-    it("rejects empty destination", async () => {
-      await expect(rail.withdraw("agent-001", 5.0, "USDC", "", "k3")).rejects.toThrow(
-        "Destination address is required",
-      );
+    it("declares no payout horizon (it never sends a payout)", () => {
+      expect(isManualPayoutRail(rail)).toBe(false);
+      expect(payoutValidityMsOf(rail)).toBeNull();
     });
 
-    it("throws on facilitator settlement failure", async () => {
-      (facilitator.settle as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
-        success: false,
-        transaction: "",
-        network: "eip155:84532",
-        errorReason: "insufficient_funds",
-      });
-
-      await expect(rail.withdraw("agent-001", 5.0, "USDC", "0xDest", "k4")).rejects.toThrow(
-        "x402 withdrawal failed: insufficient_funds",
-      );
-    });
-
-    it("throws on facilitator network error (fail-closed)", async () => {
-      (facilitator.settle as ReturnType<typeof vi.fn>).mockRejectedValueOnce(
-        new Error("ECONNREFUSED"),
-      );
-
-      await expect(rail.withdraw("agent-001", 5.0, "USDC", "0xDest", "k5")).rejects.toThrow(
-        "ECONNREFUSED",
-      );
-    });
-
-    it("converts amount to micro-units (6 decimals) for USDC", async () => {
-      await rail.withdraw("agent-001", 0.01, "USDC", "0xDest", "k6");
-
-      expect(facilitator.settle).toHaveBeenCalledWith(
-        expect.objectContaining({
-          payload: expect.objectContaining({
-            authorization: expect.objectContaining({
-              value: "10000", // 0.01 * 1e6
-            }),
-          }),
-        }),
-        expect.anything(),
-      );
+    it("never calls the facilitator's settle", async () => {
+      await rail.isAvailable();
+      await rail.attachProof("s-1", { reference: "0x1", railType: "protocol", confirmedAt: 1 });
+      expect(facilitator.settle).not.toHaveBeenCalled();
     });
   });
 

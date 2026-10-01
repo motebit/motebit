@@ -41,9 +41,18 @@ export {
   type BroadcastHooks,
   type SignedTransactionRef,
   type SignatureOutcome,
+  type DurableNonceLane,
+  type NonceLaneState,
+  type DurableTransactionRef,
+  type DurableBroadcastHooks,
+  type FinalizedSignatureStatus,
+  type DurableSendResult,
+  type NonceKillResult,
 } from "./adapter.js";
 
 export {
+  NONCE_ACCOUNT_SEED,
+  nonceSeedFor,
   Web3JsRpcAdapter,
   deriveSolanaAddress,
   isDerivedSettlementBinding,

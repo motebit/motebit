@@ -25,13 +25,25 @@
  * that declares itself MANUAL (`payoutMode: "manual"`, Stripe) sends
  * nothing, so its fire is an ordinary `pending` withdrawal (`firedRecordFor`).
  *
- * Failure posture:
- *   - Rail call throws → pending row becomes `failed`, balance stays
- *     debited, operator resolves via admin endpoint. The debit is the
- *     audit trail that funds were claimed for this sweep.
- *   - Stale `firing` rows (no terminal state after STALE_FIRING_MS) are
- *     logged but NOT automatically retried; the rail side-effect may
- *     have partially completed.
+ * Failure posture (#945) — every claimed queue row ends with exactly ONE
+ * relay_withdrawals row, the operator's settle door, written in the same
+ * transaction as the queue row's terminal status:
+ *   - Rail call throws, or a batch reports the item failed → the queue row
+ *     becomes `failed` AND a relay_withdrawals row is recorded for it: a
+ *     sent-mode rail's payout may have been accepted, so `processing`
+ *     (settled only through the operator's reconcile, after the rail's
+ *     horizon); a manual rail sent nothing, so `pending` (admin
+ *     complete/fail). The balance stays debited either way — the debit is
+ *     the audit trail that funds were claimed. Before #945 a throw left the
+ *     queue row `failed` with the debit in place and NO withdrawal row, so
+ *     no admin door could ever settle it: funds stranded.
+ *   - A `firing` row this process is not firing, older than
+ *     STALE_FIRING_MS, is one an earlier process claimed and died on — the
+ *     rail may have been called. It is recovered the same way (never
+ *     re-fired: the side effect may have happened), with the horizon counted
+ *     from its fire time. Before #945 such rows were only logged.
+ *   - A terminal write that finds the queue row no longer `firing` writes
+ *     nothing and is logged at error level (`batch.settle_lost`).
  */
 
 import type { DatabaseDriver } from "@motebit/persistence";
@@ -57,8 +69,20 @@ const logger = createLogger({ service: "batch-withdrawals" });
 /** Default loop interval: 10 minutes. */
 const DEFAULT_LOOP_INTERVAL_MS = 10 * 60 * 1000;
 
-/** Stale `firing` rows older than this are anomalies — logged, not retried. */
+/**
+ * A `firing` row not being fired by this process and older than this was
+ * claimed by a process that died mid-fire — recovered to a settle door,
+ * never re-fired (#945).
+ */
 const STALE_FIRING_MS = 2 * 60 * 1000;
+
+/**
+ * Queue rows THIS process claimed and has not yet settled — from
+ * `claimForFiring` until the fire's outcome is written. Stale-firing
+ * recovery never touches them: a slow rail call in this process is not a
+ * crash.
+ */
+const firingHere = new Set<string>();
 
 export interface BatchWithdrawalConfig {
   /** How often to evaluate pending queues (ms). Default: 600_000. */
@@ -226,26 +250,49 @@ function claimForFiring(db: DatabaseDriver, pendingIds: string[], now: number): 
   for (const id of pendingIds) {
     const info = update.run(now, id);
     if (info.changes === 0) continue;
+    firingHere.add(id);
     const row = select.get(id) as PendingRow | undefined;
     if (row) claimed.push(row);
   }
   return claimed;
 }
 
-function markFired(db: DatabaseDriver, pendingId: string, withdrawalId: string, now: number): void {
-  db.prepare(
-    `UPDATE relay_pending_withdrawals
-     SET status = 'fired', withdrawal_id = ?, last_attempt_at = ?
-     WHERE pending_id = ?`,
-  ).run(withdrawalId, now, pendingId);
+/** Compare-and-set `firing → fired`, linking the settle door. True when this call moved it. */
+function markFired(
+  db: DatabaseDriver,
+  pendingId: string,
+  withdrawalId: string,
+  now: number,
+): boolean {
+  const info = db
+    .prepare(
+      `UPDATE relay_pending_withdrawals
+       SET status = 'fired', withdrawal_id = ?, last_attempt_at = ?
+       WHERE pending_id = ? AND status = 'firing'`,
+    )
+    .run(withdrawalId, now, pendingId);
+  return info.changes > 0;
 }
 
-function markFailed(db: DatabaseDriver, pendingId: string, reason: string, now: number): void {
-  db.prepare(
-    `UPDATE relay_pending_withdrawals
-     SET status = 'failed', last_error = ?, last_attempt_at = ?
-     WHERE pending_id = ?`,
-  ).run(reason, now, pendingId);
+/**
+ * Compare-and-set `firing → failed`, linking the settle door the failure
+ * was parked under (#945). True when this call moved it.
+ */
+function markFailed(
+  db: DatabaseDriver,
+  pendingId: string,
+  withdrawalId: string,
+  reason: string,
+  now: number,
+): boolean {
+  const info = db
+    .prepare(
+      `UPDATE relay_pending_withdrawals
+       SET status = 'failed', withdrawal_id = ?, last_error = ?, last_attempt_at = ?
+       WHERE pending_id = ? AND status = 'firing'`,
+    )
+    .run(withdrawalId, reason, now, pendingId);
+  return info.changes > 0;
 }
 
 /**
@@ -265,6 +312,10 @@ interface FiredRecord {
   status: "completed" | "pending" | "processing";
   payoutReference: string | null;
   payoutValidUntil: number | null;
+  /** When the rail was (or may have been) handed the payout — the claim time. */
+  firedAt: number;
+  /** Why the outcome is unresolved (a throw, a crash), for the operator. */
+  failureReason: string | null;
 }
 
 function firedRecordFor(
@@ -274,35 +325,82 @@ function firedRecordFor(
 ): FiredRecord {
   const reference = result.proof?.reference ?? null;
   if ((result.proof?.confirmedAt ?? 0) > 0) {
-    return { status: "completed", payoutReference: reference, payoutValidUntil: null };
+    return {
+      status: "completed",
+      payoutReference: reference,
+      payoutValidUntil: null,
+      firedAt: now,
+      failureReason: null,
+    };
   }
   if (isManualPayoutRail(rail)) {
-    return { status: "pending", payoutReference: null, payoutValidUntil: null };
+    return {
+      status: "pending",
+      payoutReference: null,
+      payoutValidUntil: null,
+      firedAt: now,
+      failureReason: null,
+    };
   }
   return {
     status: "processing",
     payoutReference: reference,
     payoutValidUntil: now + (payoutValidityMsOf(rail) ?? UNDECLARED_PAYOUT_HORIZON_MS),
+    firedAt: now,
+    failureReason: null,
   };
 }
 
 /**
- * Insert a relay_withdrawals row for an already-debited, already-FIRED
- * pending item, in the state `firedRecordFor` decided.
+ * How a fire whose outcome is unknown is recorded (#945): the rail threw,
+ * a batch reported the item failed, or the process died mid-fire. A manual
+ * rail sent nothing ⇒ `pending`. Anything else may have been accepted by
+ * the provider ⇒ `processing`, with the rail's horizon counted from the
+ * fire (a rail this relay no longer has registered is treated as
+ * sent-with-no-declared-horizon — the conservative floor).
+ */
+function unresolvedRecordFor(
+  rail: WithdrawableGuestRail | null,
+  reason: string,
+  firedAt: number,
+): FiredRecord {
+  if (rail !== null && isManualPayoutRail(rail)) {
+    return {
+      status: "pending",
+      payoutReference: null,
+      payoutValidUntil: null,
+      firedAt,
+      failureReason: `batch fire failed before any payout (manual rail): ${reason}`,
+    };
+  }
+  return {
+    status: "processing",
+    payoutReference: null,
+    payoutValidUntil:
+      firedAt + ((rail !== null ? payoutValidityMsOf(rail) : null) ?? UNDECLARED_PAYOUT_HORIZON_MS),
+    firedAt,
+    failureReason: `unresolved payout: batch fire outcome unknown (${reason}); the provider may have accepted it — reconcile against the provider before completing or failing`,
+  };
+}
+
+/**
+ * Insert a relay_withdrawals row for an already-debited, already-claimed
+ * pending item, in the state `firedRecordFor` / `unresolvedRecordFor`
+ * decided.
  */
 function recordFiredWithdrawal(
   db: DatabaseDriver,
+  withdrawalId: string,
   row: PendingRow,
   fired: FiredRecord,
   now: number,
-): string {
-  const withdrawalId = crypto.randomUUID();
+): void {
   db.prepare(
     `INSERT INTO relay_withdrawals
        (withdrawal_id, motebit_id, amount, currency, destination, status,
         idempotency_key, payout_reference, requested_at, completed_at, claimed_at,
-        payout_valid_until)
-     VALUES (?, ?, ?, 'USD', ?, ?, ?, ?, ?, ?, ?, ?)`,
+        payout_valid_until, failure_reason)
+     VALUES (?, ?, ?, 'USD', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   ).run(
     withdrawalId,
     row.motebit_id,
@@ -313,9 +411,46 @@ function recordFiredWithdrawal(
     fired.payoutReference,
     row.enqueued_at,
     fired.status === "completed" ? now : null,
-    fired.status === "pending" ? null : now,
+    fired.status === "pending" ? null : fired.firedAt,
     fired.payoutValidUntil,
+    fired.failureReason,
   );
+}
+
+/**
+ * Write a claimed queue row's outcome and its settle door in ONE
+ * transaction (#945): the queue row's CAS `firing → fired|failed` and the
+ * relay_withdrawals row it links. A CAS that loses (the row is no longer
+ * `firing`) writes nothing and is logged — never a second door.
+ */
+function settleFire(
+  db: DatabaseDriver,
+  row: PendingRow,
+  record: FiredRecord,
+  queueOutcome: { kind: "fired" } | { kind: "failed"; reason: string },
+  now: number,
+): string | null {
+  const withdrawalId = crypto.randomUUID();
+  const written = db.transaction(() => {
+    const moved =
+      queueOutcome.kind === "fired"
+        ? markFired(db, row.pending_id, withdrawalId, now)
+        : markFailed(db, row.pending_id, withdrawalId, queueOutcome.reason, now);
+    if (!moved) return false;
+    recordFiredWithdrawal(db, withdrawalId, row, record, now);
+    return true;
+  });
+  firingHere.delete(row.pending_id);
+  if (!written) {
+    logger.error("batch.settle_lost", {
+      pendingId: row.pending_id,
+      motebitId: row.motebit_id,
+      outcome: queueOutcome.kind,
+      recorded: record.status,
+      note: "the queue row is no longer `firing`; no withdrawal row was written for this outcome",
+    });
+    return null;
+  }
   return withdrawalId;
 }
 
@@ -387,10 +522,16 @@ export async function evaluateAndFireRail(
     mode: isBatchableRail(rail) ? "batch" : "serial",
   });
 
-  if (isBatchableRail(rail)) {
-    await fireBatch(db, rail, claimed);
-  } else {
-    await fireSerial(db, rail, claimed);
+  try {
+    if (isBatchableRail(rail)) {
+      await fireBatch(db, rail, claimed);
+    } else {
+      await fireSerial(db, rail, claimed);
+    }
+  } finally {
+    // A row the fire left unsettled (a batch that did not report it) is no
+    // longer being fired here: the next tick recovers it (#945).
+    for (const row of claimed) firingHere.delete(row.pending_id);
   }
 }
 
@@ -429,9 +570,12 @@ async function fireBatch(
   try {
     result = await rail.withdrawBatch(items);
   } catch (err) {
+    // Outcome unknown for every item: each gets its settle door (#945).
     const reason = err instanceof Error ? err.message : String(err);
     const now = Date.now();
-    for (const row of rows) markFailed(db, row.pending_id, reason, now);
+    for (const row of rows) {
+      settleFire(db, row, unresolvedRecordFor(rail, reason, now), { kind: "failed", reason }, now);
+    }
     logger.error("batch.fire_failed", { rail: rail.name, count: rows.length, error: reason });
     return;
   }
@@ -440,13 +584,14 @@ async function fireBatch(
   for (const { item, result: perItem } of result.fired) {
     const row = byKey.get(item.idempotency_key);
     if (!row) continue;
-    const withdrawalId = recordFiredWithdrawal(db, row, firedRecordFor(rail, perItem, now), now);
-    markFired(db, row.pending_id, withdrawalId, now);
+    settleFire(db, row, firedRecordFor(rail, perItem, now), { kind: "fired" }, now);
   }
   for (const { item, reason } of result.failed) {
     const row = byKey.get(item.idempotency_key);
     if (!row) continue;
-    markFailed(db, row.pending_id, reason, now);
+    // A per-item failure a sent-mode rail reports is not proof nothing was
+    // accepted; it is parked on the same door as a throw (#945).
+    settleFire(db, row, unresolvedRecordFor(rail, reason, now), { kind: "failed", reason }, now);
   }
   logger.info("batch.fire_complete", {
     rail: rail.name,
@@ -464,26 +609,26 @@ async function fireSerial(
   let failed = 0;
   for (const row of rows) {
     const idempotencyKey = row.idempotency_key ?? `pending-${row.pending_id}`;
+    let result: WithdrawalResult;
     try {
       // GuestRail.withdraw takes the amount in whole units (dollars/USDC,
       // not micros). The pending ledger stores micros; convert at the
       // boundary. Batch-capable rails take micros directly via
       // BatchWithdrawalItem.amount_micro — this conversion is only for
       // the serial-fallback path.
-      const result = await rail.withdraw(
+      result = await rail.withdraw(
         row.motebit_id,
         fromMicro(row.amount_micro),
         "USDC",
         row.destination,
         idempotencyKey,
       );
-      const now = Date.now();
-      const withdrawalId = recordFiredWithdrawal(db, row, firedRecordFor(rail, result, now), now);
-      markFired(db, row.pending_id, withdrawalId, now);
-      fired++;
     } catch (err) {
+      // Outcome unknown: the provider may have accepted it before failing.
+      // Parked on a settle door, never re-fired (#945).
       const reason = err instanceof Error ? err.message : String(err);
-      markFailed(db, row.pending_id, reason, Date.now());
+      const now = Date.now();
+      settleFire(db, row, unresolvedRecordFor(rail, reason, now), { kind: "failed", reason }, now);
       failed++;
       logger.warn("batch.serial_item_failed", {
         rail: rail.name,
@@ -492,32 +637,75 @@ async function fireSerial(
         amountMicro: row.amount_micro,
         error: reason,
       });
+      continue;
     }
+    const now = Date.now();
+    settleFire(db, row, firedRecordFor(rail, result, now), { kind: "fired" }, now);
+    fired++;
   }
   logger.info("batch.fire_complete", { rail: rail.name, mode: "serial", fired, failed });
 }
 
-/** Log any `firing` rows that have exceeded STALE_FIRING_MS. */
-function logStaleFiring(db: DatabaseDriver): void {
-  const cutoff = Date.now() - STALE_FIRING_MS;
+/**
+ * Recover `firing` rows an earlier process claimed and died on (#945): a
+ * row not being fired here and older than STALE_FIRING_MS. The rail may
+ * have been called, so the row is never re-fired: it is parked on a settle
+ * door — `processing` for a sent-mode (or no longer registered) rail,
+ * `pending` for a manual one — with the horizon counted from NOW (every
+ * call the dead process made happened before this moment).
+ */
+export function recoverStaleFiring(
+  db: DatabaseDriver,
+  rails: ReadonlyArray<WithdrawableGuestRail>,
+): number {
+  const now = Date.now();
   const stale = db
     .prepare(
-      `SELECT pending_id, motebit_id, rail, last_attempt_at FROM relay_pending_withdrawals
-       WHERE status = 'firing' AND last_attempt_at IS NOT NULL AND last_attempt_at < ?`,
+      `SELECT pending_id, motebit_id, amount_micro, destination, rail, source,
+              enqueued_at, status, idempotency_key, last_attempt_at
+       FROM relay_pending_withdrawals
+       WHERE status = 'firing' AND (last_attempt_at IS NULL OR last_attempt_at < ?)`,
     )
-    .all(cutoff) as Array<{
-    pending_id: string;
-    motebit_id: string;
-    rail: string;
-    last_attempt_at: number;
-  }>;
+    .all(now - STALE_FIRING_MS) as Array<PendingRow & { last_attempt_at: number | null }>;
+  let recovered = 0;
   for (const row of stale) {
-    logger.warn("batch.stale_firing", {
+    if (firingHere.has(row.pending_id)) continue;
+    const rail = rails.find((r) => r.name === row.rail) ?? null;
+    const reason = "the process firing this payout ended before recording its outcome";
+    const withdrawalId = settleFire(
+      db,
+      row,
+      unresolvedRecordFor(rail, reason, now),
+      { kind: "failed", reason },
+      now,
+    );
+    if (withdrawalId !== null) recovered++;
+    logger.warn("batch.stale_firing_recovered", {
       pendingId: row.pending_id,
       motebitId: row.motebit_id,
       rail: row.rail,
-      ageMs: Date.now() - row.last_attempt_at,
+      railRegistered: rail !== null,
+      ageMs: row.last_attempt_at != null ? now - row.last_attempt_at : null,
+      withdrawalId,
     });
+  }
+  return recovered;
+}
+
+/**
+ * One tick of the batch-withdrawal loop: recover crashed fires, then
+ * evaluate and fire each withdrawable rail. Exported for tests; the
+ * production caller is `startBatchWithdrawalLoop`.
+ */
+export async function runBatchWithdrawalTick(
+  db: DatabaseDriver,
+  rails: ReadonlyArray<GuestRail>,
+  config: BatchWithdrawalConfig,
+): Promise<void> {
+  const withdrawableRails = rails.filter(isWithdrawableRail);
+  recoverStaleFiring(db, withdrawableRails);
+  for (const rail of withdrawableRails) {
+    await evaluateAndFireRail(db, rail, config);
   }
 }
 
@@ -553,14 +741,14 @@ export function startBatchWithdrawalLoop(
     intervalMs,
     async () => {
       try {
-        logStaleFiring(db);
-        for (const rail of withdrawableRails) {
-          await evaluateAndFireRail(db, rail, config);
-        }
+        await runBatchWithdrawalTick(db, withdrawableRails, config);
       } catch (err) {
+        // Log, then rethrow so the supervisor records the failed tick
+        // (services/relay/CLAUDE.md rule 19).
         logger.error("batch_withdrawals.tick_error", {
           error: err instanceof Error ? err.message : String(err),
         });
+        throw err;
       }
     },
     { isFrozen },

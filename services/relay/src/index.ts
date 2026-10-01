@@ -180,6 +180,7 @@ import { registerBrowserSandboxRoutes } from "./browser-sandbox.js";
 import { registerBudgetRoutes } from "./budget.js";
 import { startSweepLoop } from "./sweep.js";
 import { startBatchWithdrawalLoop, getPendingWithdrawalsSummary } from "./batch-withdrawals.js";
+import { startPayoutResolutionLoop } from "./withdrawal-chain-payouts.js";
 import { LoopSupervisor, superviseInterval } from "./loop-supervisor.js";
 import { registerAgentRoutes, registerAgentAuthMiddleware } from "./agents.js";
 import { registerHostRosterRoutes } from "./host-roster-routes.js";
@@ -548,6 +549,11 @@ export interface SyncRelay {
   getConnectionCount(): number;
   /** Whether the relay is currently draining WebSocket connections. */
   isDraining: boolean;
+  /**
+   * Path 0 payout resolution (#990) — the supervised loop's tick, exposed so
+   * a test can run one deterministically.
+   */
+  withdrawalPayouts: { resolveOnce(): Promise<void> };
 }
 
 // === Factory ===
@@ -1727,8 +1733,8 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
   // (`packages/wallet-solana/CLAUDE.md` Rule 2 + Rule 6). Constructed once
   // and passed into budget routes; used by Path 0 to return self-deposited
   // custody to a user's sovereign wallet without any third-party
-  // orchestrator. Falls through to Path 1 (x402 EVM) or Path 2 (Bridge)
-  // when SOLANA_RPC_URL is unset.
+  // orchestrator. When SOLANA_RPC_URL is unset a Solana withdrawal stays
+  // pending for the operator (Path 1 is retired, #948; Path 2 was deleted).
   let operatorSolanaTransfer: import("@motebit/wallet-solana").OperatorSolanaTransfer | undefined =
     operatorSolanaTransferOverride;
   if (!operatorSolanaTransfer && process.env.SOLANA_RPC_URL) {
@@ -1737,6 +1743,10 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
       rpcUrl: process.env.SOLANA_RPC_URL,
       identitySeed: relayIdentity.privateKey,
       ...(process.env.SOLANA_USDC_MINT ? { usdcMint: process.env.SOLANA_USDC_MINT } : {}),
+      // #990 round 7: rotate the payout nonce lane off a squatted address.
+      ...(process.env.SOLANA_PAYOUT_NONCE_SEED_SUFFIX
+        ? { nonceSeedSuffix: process.env.SOLANA_PAYOUT_NONCE_SEED_SUFFIX }
+        : {}),
     });
     // The transfer records no chain id and does not consult the network
     // (#954 scope: only what records or relies on a chain id does). The
@@ -1747,7 +1757,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
   }
 
   // --- Budget, accounts & admin routes (after auth middleware) ---
-  registerBudgetRoutes({
+  const budgetRoutes = registerBudgetRoutes({
     app,
     moteDb,
     relayIdentity,
@@ -1757,6 +1767,20 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     railRegistry,
     ...(operatorSolanaTransfer ? { operatorSolanaTransfer } : {}),
   });
+
+  // --- Path 0 payout resolution (#990) ---
+  // Fires queued durable-nonce payouts when the treasury's nonce lane is
+  // free, and settles every processing payout from FINALIZED chain state
+  // (a finalized payout completes it; a finalized kill or failure refunds
+  // it), broadcasting the kill for one undecided past the kill-after wait.
+  // It moves money, so an emergency freeze stops it.
+  const payoutResolutionInterval = operatorSolanaTransfer
+    ? startPayoutResolutionLoop(
+        () => budgetRoutes.resolvePayoutsOnce(),
+        () => getEmergencyFreeze(),
+        loopSupervisor,
+      )
+    : null;
 
   // --- Agent routes (registration, discovery, capabilities, settlements, ledger) ---
   registerAgentRoutes({
@@ -2466,6 +2490,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     if (feePayerGuardInterval) clearInterval(feePayerGuardInterval);
     clearInterval(sweepInterval);
     clearInterval(batchWithdrawalInterval);
+    if (payoutResolutionInterval) clearInterval(payoutResolutionInterval);
     clearInterval(orchestrationWorkerInterval);
     receiptExchangeHub.close();
     moteDb.close();
@@ -2492,6 +2517,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     get isDraining() {
       return draining;
     },
+    withdrawalPayouts: { resolveOnce: () => budgetRoutes.resolvePayoutsOnce() },
   };
 }
 

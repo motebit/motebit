@@ -107,9 +107,9 @@ Env vars: `BRIDGE_API_KEY`, `BRIDGE_CUSTOMER_ID`, optional `BRIDGE_SOURCE_RAIL` 
 
 ## X402SettlementRail (protocol guest)
 
-Wraps x402 facilitator behind `GuestRail`. `custody: "relay"`, `railType: "protocol"`, `name: "x402"`, `supportsDeposit: false`.
+Wraps x402 facilitator behind `GuestRail`. `custody: "relay"`, `railType: "protocol"`, `name: "x402"`, `supportsDeposit: false`, `supportsWithdraw: false` — an inbound settlement rail only.
 
-x402 is pay-per-request: deposits happen at the HTTP boundary via x402 middleware, not the rail — the base `GuestRail` interface has no `deposit()` method, so no throwing stub needed. `withdraw()` settles via the facilitator client — constructs payment payload, calls `facilitator.settle()`, returns `WithdrawalResult` with tx hash proof. `isAvailable()` checks facilitator `/supported` endpoint. `attachProof()` records x402 tx hash + CAIP-2 network — called by the task submission handler after x402 auto-deposit succeeds, achieving sibling parity with the Stripe webhook → `stripeRail.attachProof()` flow.
+x402 is pay-per-request: deposits happen at the HTTP boundary via x402 middleware, not the rail — the base `GuestRail` interface has no `deposit()` method, so no throwing stub needed. It has no `withdraw()` (#948): an x402 payout needs an EIP-3009 authorization signed by the treasury's EVM key, which the relay does not hold, and the former withdraw sent the idempotency key in its place, so no payout ever settled. Path 1 is retired and deferred-with-trigger ([`off-ramp-as-user-action.md`](off-ramp-as-user-action.md)). `isAvailable()` checks facilitator `/supported` endpoint. `attachProof()` records x402 tx hash + CAIP-2 network — called by the task submission handler after x402 auto-deposit succeeds, achieving sibling parity with the Stripe webhook → `stripeRail.attachProof()` flow.
 
 Constructor takes `X402FacilitatorClient` (satisfied by `HTTPFacilitatorClient` from `@x402/core/server`). Lives in `packages/settlement-rails/src/x402-rail.ts`.
 
@@ -121,10 +121,10 @@ Table schema: `(settlement_id, reference, rail_type, rail_name, network, confirm
 
 ## Withdrawal through rails
 
-Withdrawals flow through the rail boundary at two points:
+Withdrawals flow through the rail boundary at the admin door; the automated payouts are Path 0 (Solana, `OperatorSolanaTransfer` — not a rail) and the batch worker's withdrawable rails:
 
 1. **Admin-complete** — admin marks a withdrawal completed; accepts optional `rail` and `network` fields. If provided, calls `rail.attachProof()` with the payout reference. Manual/off-rail payouts omit; the signed relay receipt is the audit trail.
-2. **Automated x402 withdrawal** — agent requests withdrawal to a wallet address (`/^0x[0-9a-fA-F]{40}$/`) and the x402 rail is available; the relay attempts immediate settlement via `x402Rail.withdraw()`. On success, auto-completes with signed receipt and proof attachment. On failure, falls back to manual pending (fail-safe — funds already held by `requestWithdrawal`).
+2. **No automated x402 withdrawal (#948).** A withdrawal to a 0x address is refused 400 `WITHDRAWAL_DESTINATION_UNSUPPORTED` before any debit. Path 1 was retired: it never settled a payout (see above).
 
 This achieves full money-flow parity: deposits, proofs, and withdrawals all flow through the rail boundary.
 

@@ -6,8 +6,10 @@
  * Money-out doctrine (docs/doctrine/off-ramp-as-user-action.md): the
  * relay's user-funds transmitter surface is structurally zero. A
  * withdrawal request debits the caller's virtual-account balance and
- * either auto-settles to a user-held wallet (Path 0 sovereign Solana /
- * Path 1 x402 EVM) or parks as `pending` for operator resolution. The
+ * either auto-settles to a user-held wallet (Path 0 sovereign Solana) or
+ * parks as `pending` for operator resolution. Path 1 (x402 to an EVM
+ * wallet) is retired (#948): the reference relay refuses an EVM `0x`
+ * destination with 400 before any debit. The
  * relay is the native principal of its own on-chain transfer to the
  * user's own address; it never transmits third-party funds.
  *
@@ -77,9 +79,11 @@ export interface AccountWithdrawRequest {
   /** Positive decimal USD to withdraw. */
   amount: number;
   /**
-   * Payout target: a Solana base58 address (Path 0), an EVM 0x-hex
-   * address (Path 1), or omitted for a manual/pending withdrawal the
-   * operator resolves. The reference relay stores `"pending"` when absent.
+   * Payout target: a Solana base58 address (Path 0), or omitted for a
+   * manual/pending withdrawal the operator resolves. The reference relay
+   * stores `"pending"` when absent, and refuses an EVM 0x-hex address with
+   * 400 `WITHDRAWAL_DESTINATION_UNSUPPORTED` before any debit (Path 1
+   * retired, #948).
    */
   destination?: string;
   /**
