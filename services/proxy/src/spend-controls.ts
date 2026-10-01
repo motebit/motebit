@@ -94,6 +94,14 @@ export async function admitSpend(token: {
   jti: string;
   bal: number;
 }): Promise<SpendAdmission> {
+  // Defense in depth: a balance that is not a non-negative integer can only
+  // come from a token that is not a relay proxy token. Every comparison with
+  // NaN/undefined is false, so `remaining <= 0` would ADMIT it — refuse
+  // before anything is counted or spent, with or without a store.
+  if (!Number.isSafeInteger(token.bal) || token.bal < 0) {
+    return { ok: false, reason: "balance_exhausted", remainingMicro: 0 };
+  }
+
   let store: SpendStore | null;
   try {
     store = await resolveStore();
@@ -111,7 +119,7 @@ export async function admitSpend(token: {
     // 1. Live-ish balance: the snapshot minus what THIS token has already spent.
     const spent = (await store.get(spentKey)) ?? 0;
     const remaining = token.bal - spent;
-    if (remaining <= 0) {
+    if (!(remaining > 0)) {
       return { ok: false, reason: "balance_exhausted", remainingMicro: Math.max(0, remaining) };
     }
 
