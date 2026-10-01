@@ -985,13 +985,81 @@ export async function probeLeak(): Promise<boolean> {
         `# Probe README\n\nSet \`default_model: "claude-sonnet-4-5-20250929"\` to pin the previous default.\n`,
       ),
   },
+  // check-model-picker-canonical — one probe per evasion row the #654 cold
+  // review found exiting 0 against the first (context-pattern) version. Each
+  // is a fixture the deny-by-default token scan must see. Ids assembled from
+  // pieces that never spell "claude" beside a quote are out of the scan's
+  // reach by design and are proven by the per-surface settings tests.
+  ...(
+    [
+      [
+        "concatenation across lines",
+        "apps/web/src/ui/__P__concat.ts",
+        'export const M =\n  "claude-" +\n  "sonnet-5";\n',
+      ],
+      [
+        "template literal",
+        "apps/web/src/ui/__P__tpl.ts",
+        "export const m = (t: string) => `claude-${t}`;\n",
+      ],
+      [
+        "array.join",
+        "apps/web/src/ui/__P__join.ts",
+        'export const M = ["claude", "sonnet", "5"].join("-");\n',
+      ],
+      [
+        "UPPERCASE id",
+        "apps/web/src/ui/__P__upper.ts",
+        'export const M = "CLAUDE-SONNET-5".toLowerCase();\n',
+      ],
+      [
+        "legacy id shape",
+        "apps/web/src/ui/__P__legacy.ts",
+        'export const M = "claude-3-5-sonnet-20241022";\n',
+      ],
+      [
+        "unquoted HTML attribute",
+        "apps/web/src/ui/__P__attr.html",
+        "<option value=claude-sonnet-5>Sonnet</option>\n",
+      ],
+      ["HTML text content", "apps/web/src/ui/__P__text.html", "<option>claude-sonnet-5</option>\n"],
+      [
+        "apps/*/public/*.html",
+        "apps/web/public/__P__.html",
+        '<option value="claude-opus-4-7">Opus</option>\n',
+      ],
+      [".mjs under src", "apps/web/src/ui/__P__.mjs", 'export const M = "claude-opus-4-7";\n'],
+      [".json under src", "apps/web/src/ui/__P__.json", '{ "model": "claude-opus-4-7" }\n'],
+      [".ts at an app root", "apps/web/__P__root.ts", 'export const M = "claude-opus-4-7";\n'],
+      [".mdx docs", "apps/docs/content/docs/__P__.mdx", "Pick `claude-opus-4-7` for depth.\n"],
+      [
+        'id after " // " in a string',
+        "apps/web/src/ui/__P__slash.ts",
+        'export const M = "see // claude-opus-4-7";\n',
+      ],
+    ] as const
+  ).map(([row, file, body]): Probe => ({
+    script: "check-model-picker-canonical",
+    proves: `flags a hand-copied Claude model id smuggled past the first version via ${row} (#654 cold review C4 evasion row) — deny-by-default token scan over every apps/ file`,
+    perturb: () => writeFixture(file.replace("__P__", PROBE_PREFIX), body),
+  })),
+  {
+    script: "check-model-picker-canonical",
+    proves:
+      "an allowlist exemption is per (file, exact token), never per line — appending a stale picker <option> to a line that carries an allowlisted Cloud id still fires (#654 cold review C4: the line-substring allowlist passed this)",
+    perturb: () =>
+      mutateFile("apps/web/index.html", (src) =>
+        src.replace(
+          '<option value="claude-haiku-4-5-20251001">Claude Haiku</option>',
+          '<option value="claude-haiku-4-5-20251001">Claude Haiku</option><option value="claude-opus-4-7">Opus 4.7</option>',
+        ),
+      ),
+  },
   {
     script: "check-model-picker-canonical",
     proves:
       "flags a hand-copied Anthropic model option list in app surface source — the exact #654 incident where web's BYOK <select> offered Opus 4.7 / Sonnet 4.6 after Opus 5.5 / Sonnet 5 shipped, because the list was typed into index.html instead of rendered from @motebit/sdk ANTHROPIC_PICKER",
     perturb: () =>
-      // A fixture surface module replaying the verbatim pre-#654 option rows.
-      // writeFixture cleans it up after the probe.
       writeFixture(
         `apps/web/src/ui/${PROBE_PREFIX}picker.ts`,
         `export const OPTIONS = \`<option value="claude-opus-4-7">Claude Opus 4.7 — most capable</option>\n<option value="claude-sonnet-4-6" selected>Claude Sonnet 4.6 — recommended</option>\`;\n`,

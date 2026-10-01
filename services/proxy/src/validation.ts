@@ -6,6 +6,7 @@
 import { verifyBySuite } from "@motebit/crypto/suite-dispatch";
 import type { InferenceHost, ModelLab, Jurisdiction, TaskShape } from "@motebit/protocol";
 import { REFERENCE_ROUTING_POLICY } from "@motebit/policy";
+import { MOTEBIT_CLOUD_ACCEPTED_MODELS } from "@motebit/sdk";
 
 // Re-export the lifted unions for back-compat with proxy-internal
 // callers. The canonical home is `@motebit/protocol/src/routing.ts`;
@@ -329,6 +330,10 @@ export function getModelJurisdiction(model: string): Jurisdiction | null {
  *  BYOK mode skips this check entirely (the user's own key, the user's own
  *  choice; sovereignty doctrine stays orthogonal to tier policy). */
 export function isModelAllowedInMotebitCloud(model: string): boolean {
+  // The surfaces derive their Cloud defaults from the same sdk list (#654):
+  // membership here is what makes it ONE set, not a copy that can drift.
+  // `motebit-cloud-accepted.test.ts` pins it to MODEL_CONFIG both ways.
+  if (!(MOTEBIT_CLOUD_ACCEPTED_MODELS as readonly string[]).includes(model)) return false;
   const jurisdiction = getModelJurisdiction(model);
   return jurisdiction != null && MOTEBIT_CLOUD_ALLOWED_JURISDICTIONS.has(jurisdiction);
 }

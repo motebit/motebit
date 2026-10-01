@@ -7,23 +7,48 @@
  * Born 2026-09-30: after Opus 5.5 and Sonnet 5 shipped, the surfaces
  * disagreed about which Claude models exist. Web's BYOK <select> offered
  * Opus 4.7 / Sonnet 4.6 (hand-typed in index.html), desktop's placeholder
- * pinned `claude-sonnet-4-6`, the CLI's `/model haiku` alias named
- * `claude-haiku-4-5` (not a registry id), and `--help` printed a default the
- * code no longer used. Each copy was correct the day it was typed; nothing
- * tied it to the registry, so every Claude release silently staled N copies.
+ * pinned an old id, the CLI's `/model haiku` alias named a non-registry id,
+ * and `--help` printed a default the code no longer used. Each copy was
+ * correct the day it was typed; nothing tied it to the registry, so every
+ * Claude release silently staled N copies.
  *
- * Rule (deny-by-default): no Claude model-id literal — a quoted string or
- * HTML attribute value starting `claude-opus|sonnet|haiku|fable|mythos` — in
- * app surface source (`apps/<app>/src/**` .ts/.tsx/.html and each app's root
- * `*.html`), outside tests and comments. The id comes from the sdk; the
- * surface only renders it. A literal that is genuinely NOT a picker (the
- * Motebit Cloud selector, whose list is `PROXY_MODELS`' concern) goes in
- * ALLOWLIST with file + exact text + why, so every exception is argued in
- * one place and a stale one is itself reported.
+ * Rule — DENY BY DEFAULT over the whole aperture (#654 cold review C4). The
+ * first version scanned only quoted literals in `src/**` .ts/.tsx/.html with
+ * comments stripped and a line-substring allowlist; a cold review exited 0
+ * on concatenation, template literals, `.join`, UPPERCASE, the legacy
+ * `claude-3-5-sonnet-…` shape, unquoted attributes, `<option>` text content,
+ * `public/*.html`, `.js/.mjs/.json`, root-level `.ts`, `.mdx`, an id after
+ * " // " inside a string, and a stale `<option>` appended to an allowlisted
+ * line. That is the pattern-match class; the fix is to stop pattern-matching
+ * on CONTEXT and match on the TOKEN, everywhere:
  *
- * Aperture: prints the number of files scanned and allowlist entries used.
+ *   Aperture: EVERY git-tracked (and untracked, non-ignored) text file under
+ *   `apps/` — all extensions, `public/`, app roots, tests, docs, changelogs.
+ *   Case-insensitive. No comment stripping (a comment is a copy too).
+ *
+ *   Flagged tokens:
+ *     ID       `claude` + optional `-`/`_` + a family (opus|sonnet|haiku|
+ *              fable|mythos|instant) or a digit, then the id tail —
+ *              `claude-sonnet-5`, `CLAUDE_OPUS_5_5`, `claude-3-5-sonnet-…`.
+ *     LABEL    the spaced display form with a version — `Claude Opus 4.7`.
+ *     FRAGMENT `claude` / `claude-` immediately followed by a quote, backtick
+ *              or `${` — the visible head of a concatenation, template
+ *              literal or `[...].join` that assembles an id at runtime.
+ *
+ *   Allowlist: per (file, EXACT token as written, why) — never per line. A
+ *   listed token is exempt only in its file, only in that exact spelling;
+ *   every listed (file, token) pair that no longer occurs is itself red.
+ *
+ *   What the scan cannot see: an id assembled from pieces that never spell
+ *   `claude` next to a quote (`"cla" + "ude-…"`, a lookup table keyed by
+ *   tier). Those are covered by EXECUTION, not by this scan: each surface's
+ *   settings test renders the real UI and asserts the Anthropic rows equal
+ *   `ANTHROPIC_PICKER` (web/desktop/spatial `settings-anthropic-picker.test`,
+ *   mobile `intelligence-tab-picker.test`), so a dynamically-constructed
+ *   picker that diverges is red there.
  */
 
+import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -31,138 +56,275 @@ import { formatRepair } from "./lib/gate-report.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, "..");
-const APPS_ROOT = path.join(REPO_ROOT, "apps");
 
-const SKIP_DIRS = new Set([
-  "node_modules",
-  "dist",
-  "build",
-  "coverage",
-  ".next",
-  ".turbo",
-  ".expo",
-  "__tests__",
-  "android",
-  "ios",
-  "src-tauri",
-  "public",
-]);
-
-/** A quoted literal (or attribute value) that opens with a Claude model id. */
-const CLAUDE_ID_LITERAL = /(["'`])(claude-(?:opus|sonnet|haiku|fable|mythos)[\w.-]*)/g;
+const FAMILY = "(?:opus|sonnet|haiku|fable|mythos|instant)";
+const RULES: readonly { readonly kind: string; readonly re: RegExp }[] = [
+  { kind: "id", re: new RegExp(`claude[-_]?(?:${FAMILY}|\\d)[a-z0-9._-]*`, "gi") },
+  { kind: "label", re: new RegExp(`claude\\s+${FAMILY}\\s+\\d+(?:\\.\\d+)?`, "gi") },
+  { kind: "fragment", re: /claude[-_]?(?=["'`]|\$\{)/gi },
+];
 
 interface AllowEntry {
   /** Repo-relative path. */
   readonly file: string;
-  /** Exact source text that must appear on the offending line. */
-  readonly text: string;
-  /** Why this literal is not a hand-copied Anthropic picker. */
+  /** Exact tokens as written (case-sensitive) exempt in this file only. */
+  readonly ids: readonly string[];
+  /** Why these are not a hand-copied Anthropic picker / default. */
   readonly why: string;
 }
+
+const CLOUD_LANE =
+  "Motebit Cloud (#cloud-model) selector — its list is the Cloud catalog's concern, out of #654 scope (Cloud/proxy untouched).";
+const TEST_FIXTURE =
+  "test fixture: a stored / typed / legacy id the test feeds in to prove it is shown, admitted or refused — the test's subject, not a picker copy.";
+const DOCS_PICKER =
+  "docs prose naming the current picker rows; kept in sync with @motebit/sdk by check-docs-default-models (#56), its own drift gate.";
+const CHANGELOG = "release history: records what shipped at that version; immutable by design.";
+const GENERATED =
+  "generated JSON Schema: the default is interpolated from DEFAULT_ANTHROPIC_MODEL in apps/cli/src/yaml-config.ts and the committed file is regenerated from it.";
+const LLMS_FULL =
+  "generated concatenation of the docs content (the DOCS_PICKER pages above); regenerated with the docs, never hand-edited.";
 
 const ALLOWLIST: readonly AllowEntry[] = [
   {
     file: "apps/web/index.html",
-    text: '<option value="claude-sonnet-4-20250514">Claude Sonnet</option>',
-    why: "Motebit Cloud (#cloud-model) selector — its list is PROXY_MODELS' concern, out of #654 scope (Cloud/proxy untouched).",
+    ids: ["claude-sonnet-4-20250514", "claude-opus-4-20250115", "claude-haiku-4-5-20251001"],
+    why: CLOUD_LANE,
   },
   {
-    file: "apps/web/index.html",
-    text: '<option value="claude-opus-4-20250115">Claude Opus</option>',
-    why: "Motebit Cloud (#cloud-model) selector — its list is PROXY_MODELS' concern, out of #654 scope (Cloud/proxy untouched).",
+    file: "apps/cli/schema/motebit-yaml-v1.json",
+    ids: ["claude-sonnet-5"],
+    why: GENERATED,
   },
   {
-    file: "apps/web/index.html",
-    text: '<option value="claude-haiku-4-5-20251001">Claude Haiku</option>',
-    why: "Motebit Cloud (#cloud-model) selector — its list is PROXY_MODELS' concern, out of #654 scope (Cloud/proxy untouched).",
+    file: "apps/cli/CHANGELOG.md",
+    ids: [
+      "Claude-5",
+      "claude-haiku-4-5",
+      "claude-opus",
+      "claude-opus-4-6",
+      "claude-opus-4-6-20250414",
+      "claude-opus-5",
+      "claude-sonnet-4-5-latest",
+      "claude-sonnet-4-6",
+      "claude-sonnet-5",
+    ],
+    why: CHANGELOG,
+  },
+  {
+    file: "apps/docs/content/docs/apps/cli.mdx",
+    ids: ["claude-sonnet-5"],
+    why: DOCS_PICKER,
+  },
+  {
+    file: "apps/docs/content/docs/apps/configuration.mdx",
+    ids: [
+      "Claude Haiku 4.5",
+      "Claude Opus 5.5",
+      "Claude Sonnet 5",
+      "claude-fable-5-1",
+      "claude-haiku-4-5-20251001",
+      "claude-opus-5-5",
+      "claude-sonnet-5",
+    ],
+    why: DOCS_PICKER,
+  },
+  {
+    file: "apps/docs/content/docs/apps/desktop.mdx",
+    ids: [
+      "Claude Haiku 4.5",
+      "Claude Opus 5.5",
+      "Claude Sonnet 5",
+      "claude-fable-5-1",
+      "claude-sonnet-5",
+    ],
+    why: DOCS_PICKER,
+  },
+  {
+    file: "apps/docs/public/llms-full.txt",
+    ids: [
+      "Claude Haiku 4.5",
+      "Claude Opus 5.5",
+      "Claude Sonnet 5",
+      "claude-fable-5-1",
+      "claude-haiku-4-5-20251001",
+      "claude-opus-5-5",
+      "claude-sonnet-5",
+    ],
+    why: LLMS_FULL,
+  },
+  {
+    file: "apps/cli/src/__tests__/bare-command-routing.test.ts",
+    ids: ["claude-opus-5"],
+    why: TEST_FIXTURE,
+  },
+  {
+    file: "apps/cli/src/__tests__/index.test.ts",
+    ids: ["claude-haiku-3"],
+    why: TEST_FIXTURE,
+  },
+  {
+    file: "apps/cli/src/__tests__/mode-render.test.ts",
+    ids: ["claude-opus-4-6"],
+    why: TEST_FIXTURE,
+  },
+  {
+    file: "apps/cli/src/__tests__/model-admission.test.ts",
+    ids: ["claude-opus-5", "claude-sonnet-4-6"],
+    why: TEST_FIXTURE,
+  },
+  {
+    file: "apps/cli/src/__tests__/money-flows.test.ts",
+    ids: ["claude-sonnet-4-6"],
+    why: TEST_FIXTURE,
+  },
+  {
+    file: "apps/cli/src/__tests__/terminal-render.test.ts",
+    ids: ["claude-haiku-4-5", "claude-opus-4-6"],
+    why: TEST_FIXTURE,
+  },
+  {
+    file: "apps/desktop/src/__tests__/index.test.ts",
+    ids: ["claude-haiku-4-5-20251001"],
+    why: TEST_FIXTURE,
+  },
+  {
+    file: "apps/desktop/src/__tests__/settings-anthropic-picker.test.ts",
+    ids: ["claude-sonnet-4-6"],
+    why: TEST_FIXTURE,
+  },
+  {
+    file: "apps/mobile/src/__tests__/intelligence-tab-picker.test.tsx",
+    ids: ["claude-sonnet-4-6"],
+    why: TEST_FIXTURE,
+  },
+  {
+    file: "apps/mobile/src/__tests__/mobile-app.test.ts",
+    ids: ["claude-haiku-4-5-20251001", "claude-sonnet"],
+    why: TEST_FIXTURE,
+  },
+  {
+    file: "apps/mobile/src/__tests__/slash-commands.test.ts",
+    ids: ["claude-haiku-4-5"],
+    why: TEST_FIXTURE,
+  },
+  {
+    file: "apps/spatial/src/__tests__/providers.test.ts",
+    ids: ["claude-3"],
+    why: TEST_FIXTURE,
+  },
+  {
+    file: "apps/spatial/src/__tests__/settings-anthropic-picker.test.ts",
+    ids: ["claude-sonnet-4-6"],
+    why: TEST_FIXTURE,
+  },
+  {
+    file: "apps/web/src/__tests__/anthropic-picker.test.ts",
+    ids: ["claude-sonnet-4-6"],
+    why: TEST_FIXTURE,
+  },
+  {
+    file: "apps/web/src/__tests__/bootstrap.test.ts",
+    ids: ["claude-sonnet-4-6"],
+    why: TEST_FIXTURE,
+  },
+  {
+    file: "apps/web/src/__tests__/providers.test.ts",
+    ids: ["claude-sonnet-4-20250514"],
+    why: TEST_FIXTURE,
+  },
+  {
+    file: "apps/web/src/__tests__/settings-anthropic-picker.test.ts",
+    ids: ["claude-sonnet-4-6"],
+    why: TEST_FIXTURE,
+  },
+  {
+    file: "apps/web/src/__tests__/storage.test.ts",
+    ids: ["claude-opus-4-6", "claude-sonnet-4-6"],
+    why: TEST_FIXTURE,
+  },
+  {
+    file: "apps/web/src/__tests__/web-app.test.ts",
+    ids: ["claude-sonnet-4-6"],
+    why: TEST_FIXTURE,
   },
 ];
 
-function isTestFile(p: string): boolean {
-  return /\.(test|spec)\.(ts|tsx)$/.test(p);
+function trackedFiles(): string[] {
+  const out = execFileSync(
+    "git",
+    ["ls-files", "-z", "--cached", "--others", "--exclude-standard", "--", "apps"],
+    { cwd: REPO_ROOT, encoding: "utf8", maxBuffer: 64 * 1024 * 1024 },
+  );
+  return [...new Set(out.split("\0").filter((f) => f !== ""))].sort();
 }
 
-function walk(dir: string, out: string[]): void {
-  let entries: fs.Dirent[];
+/** Text = readable and no NUL in the first 8 KiB (git's own heuristic). */
+function readText(rel: string): string | null {
+  const abs = path.join(REPO_ROOT, rel);
+  let buf: Buffer;
   try {
-    entries = fs.readdirSync(dir, { withFileTypes: true });
+    if (!fs.statSync(abs).isFile()) return null;
+    buf = fs.readFileSync(abs);
   } catch {
-    return;
+    return null; // deleted in the worktree but still in the index
   }
-  for (const e of entries) {
-    if (SKIP_DIRS.has(e.name)) continue;
-    const full = path.join(dir, e.name);
-    if (e.isDirectory()) walk(full, out);
-    else if (/\.(ts|tsx|html)$/.test(e.name) && !e.name.endsWith(".d.ts") && !isTestFile(full))
-      out.push(full);
-  }
-}
-
-function candidateFiles(): string[] {
-  const out: string[] = [];
-  for (const app of fs.readdirSync(APPS_ROOT, { withFileTypes: true })) {
-    if (!app.isDirectory()) continue;
-    const appDir = path.join(APPS_ROOT, app.name);
-    walk(path.join(appDir, "src"), out);
-    for (const f of fs.readdirSync(appDir)) {
-      if (f.endsWith(".html")) out.push(path.join(appDir, f));
-    }
-  }
-  return out.sort();
-}
-
-/**
- * Blank comments while preserving line structure (so reported line numbers
- * stay true). `//` only counts as a comment at line start or after
- * whitespace, so a URL inside a string is not mistaken for one.
- */
-function stripComments(src: string, html: boolean): string {
-  const blank = (m: string) => m.replace(/[^\n]/g, " ");
-  let s = src.replace(/<!--[\s\S]*?-->/g, blank);
-  s = s.replace(/\/\*[\s\S]*?\*\//g, blank);
-  if (!html || /<script/i.test(s)) s = s.replace(/(^|\s)\/\/[^\n]*/g, (m) => blank(m));
-  return s;
+  if (buf.subarray(0, 8192).includes(0)) return null;
+  return buf.toString("utf8");
 }
 
 interface Finding {
   readonly file: string;
   readonly line: number;
-  readonly id: string;
+  readonly token: string;
+  readonly kind: string;
   readonly source: string;
 }
 
 function main(): void {
-  const files = candidateFiles();
+  const files = trackedFiles();
   const findings: Finding[] = [];
-  const usedAllow = new Set<number>();
+  const seenAllow = new Set<string>(); // `${file}\0${token}`
+  const allowed = new Map<string, Set<string>>();
+  for (const a of ALLOWLIST) {
+    const s = allowed.get(a.file) ?? new Set<string>();
+    for (const id of a.ids) s.add(id);
+    allowed.set(a.file, s);
+  }
 
-  for (const abs of files) {
-    const rel = path.relative(REPO_ROOT, abs);
-    const raw = fs.readFileSync(abs, "utf8");
-    const rawLines = raw.split("\n");
-    const lines = stripComments(raw, abs.endsWith(".html")).split("\n");
+  let textFiles = 0;
+  for (const rel of files) {
+    const src = readText(rel);
+    if (src == null) continue;
+    textFiles++;
+    const lines = src.split("\n");
     lines.forEach((line, i) => {
-      for (const m of line.matchAll(CLAUDE_ID_LITERAL)) {
-        const source = rawLines[i] ?? line;
-        const allowIdx = ALLOWLIST.findIndex((a) => a.file === rel && source.includes(a.text));
-        if (allowIdx >= 0) {
-          usedAllow.add(allowIdx);
-          continue;
+      for (const { kind, re } of RULES) {
+        for (const m of line.matchAll(re)) {
+          // A sentence-final "." / "-" is punctuation, not part of the id.
+          const token = m[0].replace(/[._-]+$/, "");
+          if (allowed.get(rel)?.has(token)) {
+            seenAllow.add(`${rel}\0${token}`);
+            continue;
+          }
+          findings.push({ file: rel, line: i + 1, token, kind, source: line.trim() });
         }
-        findings.push({ file: rel, line: i + 1, id: m[2]!, source: source.trim() });
       }
     });
   }
 
-  const staleAllow = ALLOWLIST.map((a, i) => ({ a, i })).filter(({ i }) => !usedAllow.has(i));
+  const stale = ALLOWLIST.flatMap((a) =>
+    a.ids.filter((id) => !seenAllow.has(`${a.file}\0${id}`)).map((id) => ({ file: a.file, id })),
+  );
+  const pairs = ALLOWLIST.reduce((n, a) => n + a.ids.length, 0);
 
   console.log(
-    `▸ check-model-picker-canonical — ${files.length} app surface file(s) scanned for hand-copied Claude model ids; ${usedAllow.size} of ${ALLOWLIST.length} allowlist entr(ies) matched.`,
+    `▸ check-model-picker-canonical — aperture: ${textFiles} text file(s) of ${files.length} git-tracked/untracked-unignored path(s) under apps/ (all extensions, case-insensitive, comments included); ${seenAllow.size} of ${pairs} allowlisted (file, token) pair(s) matched. Dynamically-assembled ids that never spell "claude" beside a quote are covered by the per-surface settings execution tests, not this scan.`,
   );
 
-  if (findings.length === 0 && staleAllow.length === 0) {
+  if (findings.length === 0 && stale.length === 0) {
     console.log(
-      `✓ check-model-picker-canonical: 0 Claude id literals outside the allowlist across ${files.length} file(s); every Anthropic picker renders from @motebit/sdk ANTHROPIC_PICKER.`,
+      `✓ check-model-picker-canonical: 0 Claude model-id tokens outside the allowlist across ${textFiles} file(s); every Anthropic picker renders from @motebit/sdk ANTHROPIC_PICKER.`,
     );
     return;
   }
@@ -170,24 +332,26 @@ function main(): void {
   let out = "";
   if (findings.length > 0) {
     out += formatRepair({
-      invariant: `${findings.length} hand-copied Claude model id(s) in app surface source — an Anthropic picker, default or alias that will stale on the next Claude release.`,
+      invariant: `${findings.length} Claude model-id token(s) under apps/ outside the allowlist — a hand-copied picker row, default, alias or label that will stale on the next Claude release.`,
       canonical:
-        "packages/sdk/src/models.ts (ANTHROPIC_PICKER, pickerModelForTier, DEFAULT_ANTHROPIC_MODEL)",
+        "packages/sdk/src/models.ts (ANTHROPIC_PICKER, pickerModelForTier, pickerOptionsWithStored, DEFAULT_ANTHROPIC_MODEL, defaultModelForProvider)",
       fix:
         "import the id from @motebit/sdk instead — render picker rows with pickerOptionsWithStored()/ANTHROPIC_PICKER, " +
-        "resolve a tier with pickerModelForTier(), use DEFAULT_ANTHROPIC_MODEL for the default. " +
-        "If the literal is genuinely not an Anthropic picker (e.g. the Cloud selector), add it to ALLOWLIST in " +
-        "scripts/check-model-picker-canonical.ts with file + exact text + why.",
-      sites: findings.map((f) => `${f.file}:${f.line}  ${f.id}  — ${f.source.slice(0, 120)}`),
+        "resolve a tier with pickerModelForTier(), a provider default with defaultModelForProvider(). Do not assemble an " +
+        "id from pieces. If the token is genuinely not a picker copy (a test fixture, the Cloud selector, release history), " +
+        "add {file, ids: [exact token], why} to ALLOWLIST in scripts/check-model-picker-canonical.ts.",
+      sites: findings.map(
+        (f) => `${f.file}:${f.line}  [${f.kind}] ${f.token}  — ${f.source.slice(0, 110)}`,
+      ),
       doctrine: "docs/doctrine/intelligence-pluggability-contract.md; docs/drift-defenses.md",
     });
   }
-  if (staleAllow.length > 0) {
+  if (stale.length > 0) {
     out += formatRepair({
-      invariant: `${staleAllow.length} stale ALLOWLIST entr(ies) — the argued exception no longer matches any source line.`,
+      invariant: `${stale.length} stale ALLOWLIST (file, token) pair(s) — the argued exception no longer occurs in that file.`,
       canonical: "scripts/check-model-picker-canonical.ts (ALLOWLIST)",
-      fix: "remove the stale entries (or update their `text` to the current source line).",
-      sites: staleAllow.map(({ a }) => `${a.file}: ${a.text}`),
+      fix: "remove the stale token from the entry's `ids` (drop the entry when it empties).",
+      sites: stale.map((s) => `${s.file}: ${s.id}`),
     });
   }
   process.stderr.write(out);

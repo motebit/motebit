@@ -17,7 +17,12 @@
 import "./buffer-polyfill";
 import { SpatialApp, COLOR_PRESETS, deriveInteriorColor } from "./spatial-app";
 import type { SpatialAIConfig } from "./spatial-app";
-import { ANTHROPIC_PICKER } from "@motebit/sdk";
+import {
+  ANTHROPIC_PICKER,
+  defaultModelForProvider,
+  motebitCloudAdmitsModel,
+  providerAcceptsModel,
+} from "@motebit/sdk";
 import type { UnifiedProviderConfig, OnDeviceBackend } from "@motebit/sdk";
 import { DEFAULT_OLLAMA_URL } from "@motebit/ai-core";
 import { WebXRThreeJSAdapter } from "@motebit/render-engine";
@@ -674,6 +679,24 @@ function updateProviderUI(): void {
   const vendor = getSelectedVendor();
   apiKeyInput.placeholder =
     vendor === "openai" ? "sk-..." : vendor === "google" ? "AIza..." : "sk-ant-...";
+
+  // One model field serves every mode, so a flip must not carry an id the
+  // new lane refuses (#654 cold review): the BYOK default picked under BYOK
+  // and then saved under Motebit Cloud is a 451 on the first turn. An id the
+  // new provider can't take is cleared — empty means "the provider's
+  // default", which the placeholder names from the sdk's one derivation.
+  if (mode === "motebit-cloud" || mode === "byok") {
+    const provider = mode === "motebit-cloud" ? "proxy" : vendor;
+    const typed = modelInput.value.trim();
+    const admitted =
+      mode === "motebit-cloud"
+        ? motebitCloudAdmitsModel(typed)
+        : providerAcceptsModel(provider, typed);
+    if (typed !== "" && !admitted) modelInput.value = "";
+    modelInput.placeholder = `Default (${defaultModelForProvider(provider)})`;
+  } else {
+    modelInput.placeholder = "Default";
+  }
 
   // Anthropic suggestions are the sdk picker rows (#654) — suggestions only;
   // the field still accepts any id, and an empty field means the default.

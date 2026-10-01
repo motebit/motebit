@@ -4,17 +4,11 @@ import { deriveSyncEncryptionKey, mintAudienceToken } from "@motebit/encryption"
 import type { connectMcpServers } from "@motebit/mcp-client";
 import { paidResultsNotice } from "@motebit/runtime";
 import { admitModelForProvider, MONEY_TOOLS_WITHHELD_NOTICE } from "./model-admission.js";
+import { applyConfiguredProvider } from "./provider-config.js";
 import { createSolanaWalletRail } from "@motebit/wallet-solana";
 import { preflightGrant, renderPreflight } from "./grant-preflight.js";
 import { installTaskPollFault } from "./fault-injection.js";
-import {
-  parseCliArgs,
-  printHelp,
-  printVersion,
-  printBanner,
-  trimHistory,
-  defaultModelForProvider,
-} from "./args.js";
+import { parseCliArgs, printHelp, printVersion, printBanner, trimHistory } from "./args.js";
 import type { CliConfig } from "./args.js";
 import { IdentityBootstrapRefusedError } from "@motebit/core-identity";
 import {
@@ -539,47 +533,11 @@ async function main(): Promise<void> {
     ...extractPersonality(fullConfig),
   };
 
-  if (personalityConfig.default_provider && !process.argv.includes("--provider")) {
-    const validProviders = ["anthropic", "openai", "google", "local-server", "proxy"] as const;
-    if (validProviders.includes(personalityConfig.default_provider)) {
-      config.provider = personalityConfig.default_provider;
-      // An implicit model FOLLOWS the provider (2026-07-31 live find): the
-      // parse-time default was derived from the parse-time provider, so a
-      // persisted default_provider flip left the OLD provider's default on
-      // config.model — bare `motebit` rendered `local-server ·
-      // claude-sonnet-4-6`, the illegal pairing minted by the fallback
-      // path itself. An explicit --model is the user's word and stays.
-      if (!config.modelExplicit) {
-        config.model = defaultModelForProvider(config.provider);
-      }
-    }
-  }
-  if (
-    personalityConfig.default_model != null &&
-    personalityConfig.default_model !== "" &&
-    !process.argv.includes("--model")
-  ) {
-    // Config residue yields politely: a default_model from a previous
-    // provider era must not ride along onto a different provider (the
-    // 2026-07-06 "anthropic · llama3.2:latest" pairing — pre-flight
-    // admission per intelligence-pluggability-contract). The CLI-strict
-    // check also refuses a hosted-vendor id on local-server (#471: a bare
-    // launch with a persisted claude-* default 404'd against ollama — the
-    // sdk primitive is deliberately permissive there, the affordance isn't).
-    if (admitModelForProvider(config.provider, personalityConfig.default_model).admissible) {
-      config.model = personalityConfig.default_model;
-    } else {
-      // The yield target is DERIVED, never trusted: config.model can carry
-      // another provider's default across a provider flip (the live find
-      // above) — re-derive so the fallback is admissible by construction.
-      config.model = defaultModelForProvider(config.provider);
-      console.log(
-        dim(
-          `  [config default_model "${personalityConfig.default_model}" belongs to another provider; using ${config.model} for ${config.provider}]`,
-        ),
-      );
-    }
-  }
+  // Persisted provider/model → config; shared with the daemon (#654 cold
+  // review: the daemon's copy forgot to re-derive the model on a flip).
+  applyConfiguredProvider(config, personalityConfig, process.argv, (line) =>
+    console.log(dim(`  ${line}`)),
+  );
   // An EXPLICIT contradiction fails loud at startup, naming both — never
   // deferred to an opaque first-call API error.
   if (process.argv.includes("--model")) {

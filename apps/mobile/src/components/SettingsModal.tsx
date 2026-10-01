@@ -45,14 +45,7 @@ import * as DocumentPicker from "expo-document-picker";
 import type { MobileApp, MobileSettings, MobileAIConfig } from "../mobile-app";
 import { SECURE_STORE_KEYS } from "../storage-keys";
 import { APPROVAL_PRESET_CONFIGS } from "../mobile-app";
-import {
-  DEFAULT_ANTHROPIC_MODEL,
-  DEFAULT_OPENAI_MODEL,
-  DEFAULT_GOOGLE_MODEL,
-  DEFAULT_DEEPSEEK_MODEL,
-  DEFAULT_GROQ_MODEL,
-  DEFAULT_OLLAMA_MODEL,
-} from "@motebit/sdk";
+import { modelForProviderSwitch } from "../provider-model";
 import { BillingPanel } from "./BillingPanel";
 import { RestoreIdentityModal } from "./RestoreIdentityModal";
 import {
@@ -348,23 +341,7 @@ export function SettingsModal({
                 openaiKey={openaiKey}
                 elevenLabsKey={elevenLabsKey}
                 onChangeProvider={(p) =>
-                  updateDraft({
-                    provider: p,
-                    model:
-                      p === "on-device"
-                        ? "on-device"
-                        : p === "local-server"
-                          ? DEFAULT_OLLAMA_MODEL
-                          : p === "openai"
-                            ? DEFAULT_OPENAI_MODEL
-                            : p === "google"
-                              ? DEFAULT_GOOGLE_MODEL
-                              : p === "deepseek"
-                                ? DEFAULT_DEEPSEEK_MODEL
-                                : p === "groq"
-                                  ? DEFAULT_GROQ_MODEL
-                                  : DEFAULT_ANTHROPIC_MODEL,
-                  })
+                  updateDraft({ provider: p, model: modelForProviderSwitch(p) })
                 }
                 onChangeModel={(m) => updateDraft({ model: m })}
                 onChangeApiKey={setApiKey}

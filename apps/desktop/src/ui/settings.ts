@@ -13,6 +13,7 @@ import { saveColdStartOptIn, loadColdStartOptIn } from "../cold-start-optin";
 import {
   ANTHROPIC_MODELS,
   ANTHROPIC_PICKER,
+  defaultModelForProvider,
   defaultModelForVendor,
   pickerOptionsWithStored,
   OPENAI_MODELS,
@@ -340,7 +341,14 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
   }
 
   function populateCloudModeModels(currentModel?: string): void {
-    fillModelSelect(settingsCloudModel, PROXY_MODELS, currentModel);
+    // No stored model ⇒ pre-select the sdk's Cloud default (#654 cold
+    // review). Left to the browser, the select fell to PROXY_MODELS[0]
+    // (a picker row the proxy's catalog lacks), which Motebit Cloud refuses (451).
+    fillModelSelect(
+      settingsCloudModel,
+      PROXY_MODELS,
+      currentModel != null && currentModel !== "" ? currentModel : defaultModelForProvider("proxy"),
+    );
   }
 
   function populateByokModeModels(

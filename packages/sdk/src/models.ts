@@ -232,6 +232,90 @@ export const DEFAULT_LOCAL_SERVER_MODEL = DEFAULT_OLLAMA_MODEL;
 export const DEFAULT_PROXY_MODEL = "claude-sonnet-4-6";
 
 /**
+ * The model ids Motebit Cloud (`services/proxy`) admits on the metered
+ * proxy-token path — the exact set its `isModelAllowedInMotebitCloud`
+ * accepts (a `MODEL_CONFIG` row in an allowed jurisdiction). Born #654 cold
+ * review: a surface that fell through to `DEFAULT_ANTHROPIC_MODEL` on the
+ * Cloud path sent `claude-sonnet-5`, which the proxy refuses (451) — the
+ * BYOK default and the Cloud catalog are different lanes. The proxy CONSUMES
+ * this list (its admission requires membership) and its tests pin the list
+ * to `MODEL_CONFIG` both ways, so the surfaces and the proxy share one set.
+ *
+ * Distinct from {@link PROXY_MODELS} (the Cloud PICKER's display list, which
+ * is a UI concern). Changing this list is a Cloud catalog change.
+ */
+export const MOTEBIT_CLOUD_ACCEPTED_MODELS = [
+  "claude-opus-4-6",
+  "claude-sonnet-4-6",
+  "claude-haiku-4-5-20251001",
+  "gpt-5.4",
+  "gpt-5.4-mini",
+  "gpt-5.4-nano",
+  "gemini-2.5-pro",
+  "gemini-2.5-flash",
+  "gemini-2.5-flash-lite",
+  "llama-3.3-70b-versatile",
+  "openai/gpt-oss-120b",
+] as const;
+
+/** The Cloud router sentinel: the proxy classifies the turn and picks a model. */
+export const MOTEBIT_CLOUD_AUTO_MODEL = "auto";
+
+/**
+ * Would Motebit Cloud's proxy-token path admit `model` as sent? Mirrors the
+ * route: `"auto"` is routed server-side; anything else must be an accepted id.
+ */
+export function motebitCloudAdmitsModel(model: string): boolean {
+  return (
+    model === MOTEBIT_CLOUD_AUTO_MODEL ||
+    (MOTEBIT_CLOUD_ACCEPTED_MODELS as readonly string[]).includes(model)
+  );
+}
+
+/** Every provider a surface can switch to, under any of its spellings. */
+export type ModelDefaultProvider =
+  | "anthropic"
+  | "openai"
+  | "google"
+  | "groq"
+  | "deepseek"
+  | "local-server"
+  | "ollama"
+  | "proxy"
+  | "motebit-cloud";
+
+/**
+ * The model a surface uses when the provider changes (or is first chosen)
+ * and the user named no model. The ONE derivation every surface's
+ * provider-switch / default path calls (#654 cold review): each surface used
+ * to hand-roll a ternary chain whose fall-through arm was
+ * `DEFAULT_ANTHROPIC_MODEL`, so a provider the chain forgot — `proxy` —
+ * silently got the BYOK Anthropic default, which Motebit Cloud refuses.
+ * Exhaustive by construction: a new provider is a compile error here, never
+ * a silent fall-through.
+ */
+export function defaultModelForProvider(provider: ModelDefaultProvider): string {
+  switch (provider) {
+    case "anthropic":
+      return DEFAULT_ANTHROPIC_MODEL;
+    case "openai":
+      return DEFAULT_OPENAI_MODEL;
+    case "google":
+      return DEFAULT_GOOGLE_MODEL;
+    case "groq":
+      return DEFAULT_GROQ_MODEL;
+    case "deepseek":
+      return DEFAULT_DEEPSEEK_MODEL;
+    case "local-server":
+    case "ollama":
+      return DEFAULT_LOCAL_SERVER_MODEL;
+    case "proxy":
+    case "motebit-cloud":
+      return DEFAULT_PROXY_MODEL;
+  }
+}
+
+/**
  * Review-by dates for the DEFAULT_*_MODEL constants — defaults as
  * perishable inventory with a printed expiry. Model half-life is months
  * now; a default frozen at authoring time ships an old brain in a new

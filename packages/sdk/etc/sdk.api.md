@@ -322,6 +322,9 @@ export const DEFAULT_VOICE_CONFIG: VoiceConfig;
 export const DEFAULT_WEBLLM_MODEL = "Llama-3.2-3B-Instruct-q4f16_1-MLC";
 
 // @public
+export function defaultModelForProvider(provider: ModelDefaultProvider): string;
+
+// @public
 export function defaultModelForVendor(vendor: ByokVendor): string;
 
 // @public
@@ -632,7 +635,19 @@ export type ModelCapabilityTier = "frontier" | "capable" | "minimal";
 export function modelCapabilityTier(model: string): ModelCapabilityTier;
 
 // @public
+export type ModelDefaultProvider = "anthropic" | "openai" | "google" | "groq" | "deepseek" | "local-server" | "ollama" | "proxy" | "motebit-cloud";
+
+// @public
 export function modelVendorHint(model: string): "anthropic" | "openai" | "google" | "deepseek" | "groq" | "local" | "unknown";
+
+// @public
+export const MOTEBIT_CLOUD_ACCEPTED_MODELS: readonly ["claude-opus-4-6", "claude-sonnet-4-6", "claude-haiku-4-5-20251001", "gpt-5.4", "gpt-5.4-mini", "gpt-5.4-nano", "gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.5-flash-lite", "llama-3.3-70b-versatile", "openai/gpt-oss-120b"];
+
+// @public
+export const MOTEBIT_CLOUD_AUTO_MODEL = "auto";
+
+// @public
+export function motebitCloudAdmitsModel(model: string): boolean;
 
 // @public
 export interface MotebitCloudProviderConfig {

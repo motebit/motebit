@@ -11,7 +11,13 @@
  * admissible — registry lag must never brick a switch.
  */
 
-import { DEFAULT_LOCAL_SERVER_MODEL, modelVendorHint, providerAcceptsModel } from "@motebit/sdk";
+import {
+  DEFAULT_LOCAL_SERVER_MODEL,
+  DEFAULT_PROXY_MODEL,
+  modelVendorHint,
+  motebitCloudAdmitsModel,
+  providerAcceptsModel,
+} from "@motebit/sdk";
 
 /** Vendors whose models are served by a hosted API, never a local server. */
 const HOSTED_VENDORS = new Set(["anthropic", "openai", "google", "deepseek"]);
@@ -41,6 +47,20 @@ export function admitModelForProvider(provider: string, model: string): ModelAdm
         (flag != null
           ? `Restart with --provider ${flag}, or pick a local model (e.g. /model ${DEFAULT_LOCAL_SERVER_MODEL}).`
           : `Pick a local model instead (e.g. /model ${DEFAULT_LOCAL_SERVER_MODEL}).`),
+    };
+  }
+
+  // Motebit Cloud serves a FIXED catalog (#654 cold review): a known hosted
+  // id outside it — the BYOK Anthropic default (DEFAULT_ANTHROPIC_MODEL) riding a
+  // persisted default_model onto `proxy` — is refused by the proxy (451) on
+  // the first turn. The sdk primitive only checks the vendor family; the
+  // affordance knows the exact set and refuses before any turn runs.
+  if (provider === "proxy" && hint !== "unknown" && !motebitCloudAdmitsModel(model)) {
+    return {
+      admissible: false,
+      teach:
+        `${model} is not served by Motebit Cloud. Drop --model to use ${DEFAULT_PROXY_MODEL}, ` +
+        `or restart with --provider ${VENDOR_PROVIDER_FLAG[hint] ?? hint} and your own key.`,
     };
   }
 
