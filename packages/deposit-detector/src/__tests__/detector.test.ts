@@ -617,4 +617,34 @@ describe("detectDeposits — a failed cycle is observable", () => {
     ]);
     expect(store.getCursor(CHAIN)).toBe(BigInt(500));
   });
+
+  it("logs a non-Error rejection as its string form at either stage", async () => {
+    for (const rpc of [
+      mockRpc({ getBlockNumber: vi.fn().mockRejectedValue("socket hang up") }),
+      mockRpc({
+        blockNumber: BigInt(600),
+        getTransferLogs: vi.fn().mockRejectedValue("socket hang up"),
+      }),
+    ]) {
+      const store = new InMemoryDepositDetectorStore({
+        wallets: [{ agentId: ALICE_ID, address: ALICE_WALLET }],
+        cursors: { [CHAIN]: BigInt(500) },
+      });
+      const { warns, logger } = recordingLogger();
+      await detectDeposits({
+        store,
+        rpc,
+        chain: CHAIN,
+        contractAddress: USDC,
+        transferTopic: TRANSFER_TOPIC,
+        maxBlocksPerCycle: 100,
+        confirmations: 0,
+        onDeposit: vi.fn(),
+        logger,
+      });
+      expect(warns.map((w) => [w.event, w.data?.error])).toEqual([
+        ["deposit.cycle_failed", "socket hang up"],
+      ]);
+    }
+  });
 });
