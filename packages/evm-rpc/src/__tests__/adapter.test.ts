@@ -535,3 +535,92 @@ describe("HttpJsonRpcEvmAdapter request timeout covers the response body", () =>
     }
   });
 });
+
+describe("HttpJsonRpcEvmAdapter body read is bounded by IDLE time, not total time", () => {
+  /** A loopback RPC server whose handler writes the response body itself. */
+  async function withServer(
+    handler: (res: import("node:http").ServerResponse) => void,
+    run: (url: string) => Promise<void>,
+  ): Promise<void> {
+    const { createServer } = await import("node:http");
+    const server = createServer((_req, res) => handler(res));
+    await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+    const { port } = server.address() as { port: number };
+    try {
+      await run(`http://127.0.0.1:${port}`);
+    } finally {
+      server.closeAllConnections();
+      await new Promise<void>((r) => server.close(() => r()));
+    }
+  }
+
+  it("succeeds on a slow body that keeps progressing past requestTimeoutMs in total", async () => {
+    // A large eth_getLogs on catch-up: the body trickles for ~1.5s, never
+    // idle for more than ~150ms. A total bound of 1000ms fails it every tick
+    // (the deposit cursor never moves); an idle bound lets it complete.
+    const body = '{"jsonrpc":"2.0","id":1,"result":"0x2a"}';
+    const timers: ReturnType<typeof setTimeout>[] = [];
+    await withServer(
+      (res) => {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.flushHeaders();
+        const chars = body.split("");
+        const step = Math.ceil(chars.length / 10);
+        for (let i = 0; i < 10; i++) {
+          timers.push(
+            setTimeout(
+              () => {
+                res.write(chars.slice(i * step, (i + 1) * step).join(""));
+                if (i === 9) res.end();
+              },
+              150 * (i + 1),
+            ),
+          );
+        }
+      },
+      async (rpcUrl) => {
+        const adapter = new HttpJsonRpcEvmAdapter({ rpcUrl, requestTimeoutMs: 1_000 });
+        const started = Date.now();
+        await expect(adapter.getBlockNumber()).resolves.toBe(42n);
+        expect(Date.now() - started).toBeGreaterThanOrEqual(1_400);
+      },
+    );
+    timers.forEach(clearTimeout);
+  });
+
+  it("fails at the idle bound when the body stops progressing", async () => {
+    await withServer(
+      (res) => {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.write('{"jsonrpc":"2.0",');
+        // ...one more chunk at 200ms, then silence.
+        setTimeout(() => res.write('"id":1,'), 200);
+      },
+      async (rpcUrl) => {
+        const adapter = new HttpJsonRpcEvmAdapter({ rpcUrl, requestTimeoutMs: 500 });
+        const started = Date.now();
+        await expect(adapter.getBlockNumber()).rejects.toThrow(
+          /eth_blockNumber timed out reading the response body \(no progress for 500ms\)/,
+        );
+        const elapsed = Date.now() - started;
+        // Idle bound measured from the LAST chunk (~200ms), not from the start.
+        expect(elapsed).toBeGreaterThanOrEqual(650);
+        expect(elapsed).toBeLessThan(2_000);
+      },
+    );
+  });
+
+  it("keeps the header timeout: no headers within requestTimeoutMs fails", async () => {
+    await withServer(
+      () => {
+        // never respond
+      },
+      async (rpcUrl) => {
+        const adapter = new HttpJsonRpcEvmAdapter({ rpcUrl, requestTimeoutMs: 300 });
+        const started = Date.now();
+        await expect(adapter.getBlockNumber()).rejects.toThrow(/eth_blockNumber network error/);
+        expect(Date.now() - started).toBeLessThan(2_000);
+      },
+    );
+  });
+});

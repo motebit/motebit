@@ -11,26 +11,41 @@
  * http Agent passes for every `http.request` / `https.request`, `ws` and
  * Stripe dial) — is refused before it dials.
  *
- * SCOPE — what the guard covers, in the process it is installed in:
- *   - TCP/TLS: `net.Socket.prototype.connect` (undici/fetch, http(s), ws,
- *     tls, Stripe) and `globalThis.fetch`;
- *   - UDP: `dgram.Socket.prototype.send` / `connect` to a non-loopback
- *     address;
- *   - proxies: a request written over an (allowed) loopback socket that is
- *     an HTTP `CONNECT` or an absolute-form request to a non-loopback host
- *     (a loopback forward proxy); the `*_PROXY` env vars are deleted;
+ * WHAT THIS IS: a test-hygiene guard — it makes an accidental network call
+ * from relay code under test fail loudly. It is NOT a security boundary: code
+ * written to get past it can (see the declared limits).
+ *
+ * ENFORCED — exactly this, in the process it is installed in:
+ *   - TCP/TLS (`net.Socket.prototype.connect`, so undici/fetch, http(s), ws,
+ *     tls, Stripe): the dial is allowed only for a unix socket (non-empty
+ *     string `path`) or a loopback host NAME/literal, AND — checked on the
+ *     socket's `lookup` event, before Node dials — every address the lookup
+ *     RESOLVES to (system resolver or a custom `lookup` option) is loopback;
+ *   - `globalThis.fetch`: a non-loopback http(s)/ws(s) URL host is refused;
+ *   - UDP: `dgram.Socket.prototype.send` / `connect` whose address ARGUMENT
+ *     is not a loopback literal/name (the argument, not its resolution);
+ *   - loopback forward proxy, as Node's http client writes it: a socket
+ *     `write` whose chunk BEGINS with `CONNECT ` or an absolute-form request
+ *     line (`METHOD http(s)|ws(s)://host…`, lowercase scheme) naming a
+ *     non-loopback host — i.e. `http.request` with method `CONNECT` or an
+ *     absolute `path`; and every `*_PROXY` env var is deleted;
  *   - worker threads: creating a `worker_threads.Worker` is REFUSED (a
  *     Worker never runs the setup file, so it would be unguarded).
- * What it does NOT cover — declared limits, not open rounds:
+ * DECLARED LIMITS — not enforced, and not open rounds:
+ *   - raw hand-written proxy bytes over an allowed loopback socket: the
+ *     proxy check reads only the start of ONE `write` chunk in the form
+ *     Node's http client emits, so a request split over several writes,
+ *     sent via `end(data)`, preceded by a CRLF, with an uppercase scheme
+ *     (`HTTP://`) or a userinfo host (`http://127.0.0.1:80@evil.com/`)
+ *     passes; so does any proxy protocol other than HTTP (SOCKS), or a
+ *     loopback peer that relays bytes on its own;
  *   - native addons and anything that opens sockets below Node's JS
  *     `net`/`dgram` layer (raw `process.binding`/`internalBinding` handles);
  *   - DNS lookups themselves (`dns.lookup`/`dns.resolve` still query the
  *     resolver; only the dial that follows is refused);
  *   - child processes other than the relay children the booted-entry
  *     harness spawns (`child_process.spawn('curl', …)` is unguarded);
- *   - a proxy protocol other than HTTP (SOCKS over loopback), or a loopback
- *     peer that relays bytes it was not asked to via HTTP;
- *   - code that captured `net.Socket.prototype.connect`, `dgram`'s
+ *   - code that captured `net.Socket.prototype.connect` / `write`, `dgram`'s
  *     `send`, `Worker` or `fetch` before the guard was installed.
  */
 import dgram from "node:dgram";
@@ -86,6 +101,25 @@ export function classifyConnect(args) {
 }
 
 /**
+ * Check the RESOLVED address, not just the host name: a loopback-named
+ * connect (`localhost`) whose lookup — the system resolver or a custom
+ * `lookup` option — yields a non-loopback address is refused. Node emits
+ * `lookup` once per resolved address BEFORE it dials any of them (with
+ * `autoSelectFamily` too), and a synchronous `destroy` there stops the dial.
+ * @param {net.Socket} socket @param {string} target
+ * @param {(target: string) => Error} refuse
+ */
+function refuseNonLoopbackLookup(socket, target, refuse) {
+  /** @param {Error | null} err @param {unknown} address */
+  const onLookup = (err, address) => {
+    if (err || isLoopbackHost(address) || socket.destroyed) return;
+    socket.destroy(refuse(`${target} resolved to ${String(address)}`));
+  };
+  socket.on("lookup", onLookup);
+  socket.once("close", () => socket.off("lookup", onLookup));
+}
+
+/**
  * Patch `net.Socket.prototype.connect` (every TCP/TLS client: undici,
  * `http(s).request`, `ws`, `tls.connect`). `refuse(target)` records the
  * violation and returns the error the socket is destroyed with.
@@ -101,6 +135,7 @@ export function installSocketGuard(refuse) {
       process.nextTick(() => this.destroy(err));
       return this;
     }
+    if (!target.startsWith("unix ")) refuseNonLoopbackLookup(this, target, refuse);
     return Reflect.apply(realConnect, this, args);
   }
   net.Socket.prototype.connect = /** @type {typeof realConnect} */ (

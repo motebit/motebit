@@ -198,24 +198,31 @@ export class HttpJsonRpcEvmAdapter implements EvmRpcAdapter {
    * Execute a JSON-RPC call. Collapses every failure mode
    * (network / non-2xx / JSON-RPC error / malformed envelope) to an `Error`.
    *
-   * `requestTimeoutMs` bounds the WHOLE request — headers AND body. The abort
-   * timer stays armed through `res.json()`: a server that sends headers and
-   * then stalls the body would otherwise hang the caller (a periodic deposit
-   * tick) forever.
+   * `requestTimeoutMs` is two bounds on one abort timer:
+   *   - HEADERS: the response headers must arrive within `requestTimeoutMs`;
+   *   - BODY: an IDLE bound — the timer re-arms on every body chunk, so the
+   *     read fails only after `requestTimeoutMs` with NO progress.
+   * A stalled body (headers, then silence) cannot hang the caller (a periodic
+   * deposit tick); a slow body that keeps progressing — a large `eth_getLogs`
+   * on catch-up after downtime — completes however long it takes in total.
+   * A total bound would fail that catch-up on every tick and stall crediting.
    */
   private async call<T>(method: string, params: unknown[]): Promise<T> {
+    const ms = this.requestTimeoutMs;
     const controller =
-      this.requestTimeoutMs !== undefined && typeof AbortController !== "undefined"
-        ? new AbortController()
-        : null;
-    const timeoutHandle =
-      controller && this.requestTimeoutMs !== undefined
-        ? setTimeout(() => controller.abort(), this.requestTimeoutMs)
-        : null;
+      ms !== undefined && typeof AbortController !== "undefined" ? new AbortController() : null;
+    // A holder, not a `let`: the handle is reassigned inside `arm`.
+    const timer: { handle: ReturnType<typeof setTimeout> | undefined } = { handle: undefined };
+    const arm = (): void => {
+      if (!controller || ms === undefined) return;
+      clearTimeout(timer.handle);
+      timer.handle = setTimeout(() => controller.abort(), ms);
+    };
+    arm();
     try {
-      return await this.callWithin<T>(method, params, controller?.signal);
+      return await this.callWithin<T>(method, params, controller?.signal, arm);
     } finally {
-      if (timeoutHandle) clearTimeout(timeoutHandle);
+      clearTimeout(timer.handle);
     }
   }
 
@@ -223,6 +230,7 @@ export class HttpJsonRpcEvmAdapter implements EvmRpcAdapter {
     method: string,
     params: unknown[],
     signal: AbortSignal | undefined,
+    onProgress: () => void,
   ): Promise<T> {
     let res: Response;
     try {
@@ -235,6 +243,8 @@ export class HttpJsonRpcEvmAdapter implements EvmRpcAdapter {
     } catch (err) {
       throw new Error(`RPC ${method} network error`, { cause: err });
     }
+    // Headers arrived — the timer becomes the body's idle bound.
+    onProgress();
 
     if (!res.ok) {
       throw new Error(`RPC ${method} returned HTTP ${res.status}`);
@@ -242,10 +252,13 @@ export class HttpJsonRpcEvmAdapter implements EvmRpcAdapter {
 
     let json: { result?: unknown; error?: { code?: number; message?: string } };
     try {
-      json = (await res.json()) as typeof json;
+      json = (await readBodyJson(res, onProgress)) as typeof json;
     } catch (err) {
       if (signal?.aborted === true) {
-        throw new Error(`RPC ${method} timed out reading the response body`, { cause: err });
+        throw new Error(
+          `RPC ${method} timed out reading the response body (no progress for ${String(this.requestTimeoutMs)}ms)`,
+          { cause: err },
+        );
       }
       throw new Error(`RPC ${method} returned non-JSON body`, { cause: err });
     }
@@ -260,4 +273,23 @@ export class HttpJsonRpcEvmAdapter implements EvmRpcAdapter {
     }
     return json.result as T;
   }
+}
+
+/**
+ * Read a response body as JSON, calling `onProgress` per chunk (the idle
+ * bound re-arms on it). A `Response` without a readable stream (an injected
+ * fetch) falls back to `json()`.
+ */
+async function readBodyJson(res: Response, onProgress: () => void): Promise<unknown> {
+  const reader = res.body?.getReader();
+  if (reader === undefined) return res.json();
+  const decoder = new TextDecoder();
+  let text = "";
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    onProgress();
+    text += decoder.decode(value, { stream: true });
+  }
+  return JSON.parse(text + decoder.decode()) as unknown;
 }

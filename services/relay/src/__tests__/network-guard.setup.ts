@@ -20,14 +20,17 @@
  *     refused too.
  *
  * Plus, since the guard's third round: UDP (`dgram` send/connect), a
- * loopback FORWARD PROXY (a `CONNECT` or absolute-form request written over
- * a loopback socket; every `*_PROXY` env var is deleted here, so the spawned
- * children inherit none), and worker threads — `new Worker()` is REFUSED,
- * because a Worker never runs this setup file. The full stated scope — what
- * the guard covers and its declared limits (native addons, raw handles, DNS
- * queries, child processes the booted-entry harness did not spawn, SOCKS) —
- * is the header of `network-guard-core.mjs`; a gap outside it is a declared
- * limit, not a new round.
+ * loopback FORWARD PROXY (a `CONNECT` or absolute-form request as Node's
+ * http client writes it over a loopback socket; every `*_PROXY` env var is
+ * deleted here, so the spawned children inherit none), the RESOLVED address
+ * of a loopback-named connect (a `lookup` yielding a non-loopback address is
+ * refused before the dial), and worker threads — `new Worker()` is REFUSED,
+ * because a Worker never runs this setup file. This is a test-hygiene guard,
+ * not a security boundary. The exact enforced scope and its declared limits
+ * (raw hand-written proxy bytes, native addons, raw handles, DNS queries,
+ * child processes the booted-entry harness did not spawn, SOCKS) are the
+ * header of `network-guard-core.mjs`; a gap outside it is a declared limit,
+ * not a new round.
  *
  * A test that stubs `fetch` itself (`vi.stubGlobal`) owns what that stub
  * does; the socket layer still refuses a real dial. Loopback (`localhost`,

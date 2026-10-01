@@ -216,3 +216,64 @@ describe("network guard: UDP, worker threads, loopback forward proxy", () => {
     }
   });
 });
+
+describe("network guard: the RESOLVED address is checked, not just the host name", () => {
+  it("refuses a loopback-named connect whose lookup resolves to a non-loopback address", async () => {
+    const lookup = ((
+      _host: string,
+      opts: { all?: boolean },
+      cb: (err: Error | null, address: unknown, family?: number) => void,
+    ) =>
+      opts.all === true
+        ? cb(null, [{ address: REMOTE, family: 4 }])
+        : cb(null, REMOTE, 4)) as unknown as net.LookupFunction;
+    for (const autoSelectFamily of [true, false]) {
+      let connected = false;
+      const err = await errorOf((onError) => {
+        const sock = net.connect({ host: "localhost", port: 9, lookup, autoSelectFamily });
+        sock.on("connect", () => (connected = true));
+        sock.on("error", onError);
+      });
+      expect(connected).toBe(false);
+      expectRefused(err);
+    }
+  });
+
+  it("refuses when ANY resolved address is non-loopback (happy-eyeballs fallback)", async () => {
+    const lookup = ((
+      _host: string,
+      _opts: unknown,
+      cb: (err: Error | null, addresses: Array<{ address: string; family: number }>) => void,
+    ) =>
+      cb(null, [
+        { address: "127.0.0.1", family: 4 },
+        { address: REMOTE, family: 4 },
+      ])) as unknown as net.LookupFunction;
+    const err = await errorOf((onError) => {
+      net
+        .connect({ host: "localhost", port: 1, lookup, autoSelectFamily: true })
+        .on("error", onError);
+    });
+    expectRefused(err);
+  });
+
+  it("still allows a loopback-named connect that resolves to loopback", async () => {
+    const server = net.createServer((s) => s.end("hi"));
+    await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+    const { port } = server.address() as net.AddressInfo;
+    try {
+      const got = await new Promise<string>((resolve, reject) => {
+        let b = "";
+        net
+          .connect({ host: "localhost", port, family: 4 })
+          .on("data", (c: Buffer) => (b += c.toString()))
+          .on("end", () => resolve(b))
+          .on("error", reject);
+      });
+      expect(got).toBe("hi");
+    } finally {
+      await new Promise<void>((r) => server.close(() => r()));
+    }
+    expect(GUARD.drain()).toEqual([]);
+  });
+});
