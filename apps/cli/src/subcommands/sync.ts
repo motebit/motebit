@@ -17,7 +17,12 @@
  *
  * Scope (stated): the marker and the streams live in a DATABASE
  * (`motebit.db`, or the one `--db` / `MOTEBIT_DB_PATH` names); these doors
- * act on that database. CLI only: no surface has a sync settings panel.
+ * act on that database. Not CLI-only by nature: web (and any surface with a
+ * relay-URL setting) can pin the floor too — web's relay-URL panel
+ * (`apps/web/src/ui/gated-panels.ts`) connects whatever URL is typed, so a
+ * typo-then-fix leaves a stream at 0 that holds compaction. These doors are
+ * the CLI's; that surface's notice and retire door are tracked as a
+ * follow-up. Until then its storage grows; no data is lost.
  */
 import * as readline from "node:readline";
 import { EventType } from "@motebit/sdk";
@@ -78,18 +83,25 @@ function streamLine(s: RelayStreamReport, configuredUrl: string | undefined): st
   let state = "";
   if (s.retiredAt != null) state = ` — retired ${when(s.retiredAt)}, no longer bounds the floor`;
   else if (s.holdsFloor) {
+    // #962 round 7: a stream tied at the floor frees nothing ALONE — its
+    // twin still holds it — so the tied set's count is what the line says.
+    const others = s.tiedWith.length;
     state =
-      s.heldBack > 0
-        ? ` — holds the floor: ${s.heldBack} events held back`
-        : " — holds the floor (retiring it frees nothing: no other relay acknowledged more)";
+      others > 0 && s.heldBackTied > 0
+        ? ` — holds the floor, tied with ${others} other relay stream${others === 1 ? "" : "s"} at this clock: retiring all of them frees ${s.heldBackTied} events`
+        : s.heldBack > 0
+          ? ` — holds the floor: ${s.heldBack} events held back`
+          : " — holds the floor (retiring it frees nothing: no other relay acknowledged more)";
   }
   return `    ${name}${configured} — acked clock ${s.acked}, last ack ${last}${state}`;
 }
 
 /**
- * The one calm line a pinned floor gets (#962 round 6), or null: the stream
- * holding compaction back has acknowledged nothing, or not advanced in more
- * than 7 days while another stream acknowledged past it (`pinnedFloor`).
+ * The one calm line a pinned floor gets (#962 rounds 6-7), or null: the
+ * streams holding compaction back — one, or several tied at the floor —
+ * have acknowledged nothing, or not advanced in more than 7 days while
+ * another stream acknowledged past them (`pinnedFloor`). A tied set is named
+ * whole, with what retiring all of it frees.
  */
 export function pinnedFloorLine(
   report: SyncFloorReport,
@@ -98,17 +110,31 @@ export function pinnedFloorLine(
 ): string | null {
   const pinned = pinnedFloor(report, now);
   if (!pinned) return null;
+  const tied = pinned.streams;
+  const one = tied.length === 1;
   const s = pinned.stream;
   const why =
     pinned.reason === "never-acked"
-      ? "it has acknowledged nothing"
-      : s.lastAckAt != null
+      ? `${one ? "it has" : "they have"} acknowledged nothing`
+      : one && s.lastAckAt != null
         ? `no acknowledgment since ${when(s.lastAckAt)}`
-        : "no acknowledgment time recorded";
-  const head = `Compaction is held at clock ${report.floor} by relay ${shown(retireArg(s))} (${why}; ${s.heldBack} events wait on it).`;
-  return sameUrl(s.relayUrl, configuredUrl)
-    ? `${head} It is the configured relay: they are freed once it acknowledges.`
-    : `${head} If it is no longer used: motebit sync retire ${shown(retireArg(s))}`;
+        : one
+          ? "no acknowledgment time recorded"
+          : "none has acknowledged in more than 7 days";
+  const names = tied.map((x) => shown(retireArg(x)));
+  const head = one
+    ? `Compaction is held at clock ${report.floor} by relay ${names[0]} (${why}; ${pinned.heldBack} events wait on it).`
+    : `Compaction is held at clock ${report.floor} by ${tied.length} relays tied there: ${names.join(", ")} (${why}; ${pinned.heldBack} events wait on all of them).`;
+  const configured = tied.filter((x) => sameUrl(x.relayUrl, configuredUrl));
+  const others = tied.filter((x) => !sameUrl(x.relayUrl, configuredUrl));
+  const retire = others.map((x) => `motebit sync retire ${shown(retireArg(x))}`).join("; ");
+  if (configured.length === 0) {
+    return `${head} If ${one ? "it is" : "they are"} no longer used: ${retire}`;
+  }
+  if (others.length === 0) {
+    return `${head} It is the configured relay: they are freed once it acknowledges.`;
+  }
+  return `${head} ${shown(retireArg(configured[0]!))} is the configured relay: they are freed once it acknowledges and the others, if no longer used, are retired: ${retire}`;
 }
 
 /** `pinnedFloorLine` over a store: what the REPL prints once at start. */
@@ -228,9 +254,16 @@ async function retire(url: string | undefined, ctx: SyncCommandContext): Promise
       return 1;
     }
     const frees = s.heldBack;
+    // #962 round 7: retiring one of several streams tied at the floor frees
+    // nothing alone; say so, naming the twins and what retiring all frees.
+    const twins = report.streams.filter((x) => s.tiedWith.includes(x.stream));
+    const tie =
+      twins.length > 0 && frees === 0
+        ? ` It is tied at clock ${s.acked} with ${twins.map((x) => shown(retireArg(x))).join(", ")}, which still hold the floor: retiring all of them frees ${s.heldBackTied} events.`
+        : "";
     const question =
       `Retire relay ${shown(retireArg(s))} from ${ctx.motebitId}'s compaction floor? ` +
-      `It acknowledged clock ${s.acked}; compaction will then free ${frees} events it now holds back.`;
+      `It acknowledged clock ${s.acked}; compaction will then free ${frees} events it now holds back.${tie}`;
     if (!ctx.yes && !(await ctx.confirm(question))) {
       ctx.print("Not retired.");
       return 1;
@@ -245,7 +278,7 @@ async function retire(url: string | undefined, ctx: SyncCommandContext): Promise
       forced: configured,
     });
     ctx.print(
-      `Retired ${shown(retireArg(s))}: compaction will then free ${frees} events. Connecting to it again restores it.`,
+      `Retired ${shown(retireArg(s))}: compaction will then free ${frees} events.${tie} Connecting to it again restores it.`,
     );
     return 0;
   });

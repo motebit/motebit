@@ -233,10 +233,27 @@ function settle(item: PendingPush, err?: Error): void {
   for (const w of item.waiters) settleWaiter(w, err);
 }
 
-/** The default report of a failed catch-up: one warning line. */
+/**
+ * The default report of a failed catch-up: one warning line. Its input is
+ * always `sanitizedCatchUpError`'s (`reportCatchUpError`, #962 round 7).
+ */
 function warnCatchUpError(err: unknown): void {
   // eslint-disable-next-line no-console -- the runtime's pluggable-logger default (CLAUDE.md conventions); callers pass onCatchUpError to route it
   console.warn(`sync: socket sync failed: ${err instanceof Error ? err.message : String(err)}`);
+}
+
+/**
+ * A catch-up failure as it leaves the adapter (#962 round 7): its message is
+ * often the relay's — a 200 body that is not JSON makes `res.json()` throw a
+ * SyntaxError QUOTING the body — so every report (the default, and each
+ * surface's `onCatchUpError`) receives it sanitized. The original stays the
+ * `cause`.
+ */
+function sanitizedCatchUpError(err: unknown): Error {
+  const raw = err instanceof Error ? err.message : String(err);
+  const clean = new Error(sanitizeRelayText(raw), { cause: err });
+  if (err instanceof Error) clean.name = sanitizeRelayText(err.name);
+  return clean;
 }
 
 export type EventReceivedCallback = (event: EventLogEntry) => void;
@@ -410,7 +427,7 @@ export class WebSocketEventStoreAdapter implements EventStoreAdapter {
           // offline for good. Report it, then retry on the backoff (#928
           // round 2). A retired adapter does neither.
           if (generation !== this.generation) return;
-          (this.config.onCatchUpError ?? warnCatchUpError)(
+          this.reportCatchUpError(
             new Error(
               `sync token unavailable: ${err instanceof Error ? err.message : String(err)}`,
               { cause: err },
@@ -859,7 +876,7 @@ export class WebSocketEventStoreAdapter implements EventStoreAdapter {
         // Catch-up failed; the cursor was not advanced past anything
         // unapplied, and the next reconnect retries. Surfaced, never
         // swallowed (#927): this is the surface's only pull door.
-        (this.config.onCatchUpError ?? warnCatchUpError)(err);
+        this.reportCatchUpError(err);
       }
       return;
     }
@@ -878,8 +895,13 @@ export class WebSocketEventStoreAdapter implements EventStoreAdapter {
       this.config.onCatchUp?.(missed.length);
     } catch (err: unknown) {
       // Catch-up failed; retried on the next reconnect. Surfaced (#927).
-      (this.config.onCatchUpError ?? warnCatchUpError)(err);
+      this.reportCatchUpError(err);
     }
+  }
+
+  /** Report a catch-up failure, sanitized (#962 round 7), to the surface's handler or the default. */
+  private reportCatchUpError(err: unknown): void {
+    (this.config.onCatchUpError ?? warnCatchUpError)(sanitizedCatchUpError(err));
   }
 
   private get ackTimeoutMs(): number {

@@ -20,7 +20,9 @@ const segmenter: { segment(s: string): Iterable<{ segment: string }> } | null =
  * `text` safe to print: ESC sequences (OSC / DCS / SOS / PM / APC strings,
  * CSI, the C1 CSI, any other ESC and the byte after it) removed whole; bidi
  * embeddings, overrides and isolates (U+202A-U+202E, U+2066-U+2069),
- * zero-width characters (U+200B-U+200F) and the BOM (U+FEFF) removed; every
+ * zero-width characters (U+200B-U+200F), the BOM (U+FEFF), the Arabic
+ * letter mark (U+061C), the invisible operators (U+2060-U+2064) and the tag
+ * characters (U+E0000-U+E007F) removed; every
  * C0 / C1 control, DEL and the Unicode line / paragraph separators
  * (U+2028/U+2029) become a space; a lone surrogate becomes U+FFFD;
  * whitespace runs collapse. Capped at `max` grapheme clusters
@@ -43,6 +45,10 @@ export function sanitizeRelayText(text: string, max = RELAY_TEXT_MAX): string {
     .replace(/[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/g, "\ufffd")
     // Bidi embeddings / overrides / isolates, zero-width characters, BOM.
     .replace(/[\u200b-\u200f\u202a-\u202e\u2066-\u2069\ufeff]/g, "")
+    // The Arabic letter mark and the invisible operators (word joiner … invisible plus).
+    .replace(/[\u061c\u2060-\u2064]/g, "")
+    // Tag characters (U+E0000-U+E007F): invisible ASCII, a smuggling channel.
+    .replace(/[\u{e0000}-\u{e007f}]/gu, "")
     // C0, DEL, C1, and the Unicode line / paragraph separators.
     // eslint-disable-next-line no-control-regex
     .replace(/[\x00-\x1f\x7f-\x9f\u2028\u2029]/g, " ")

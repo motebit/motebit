@@ -37,6 +37,7 @@
 import type { EventLogEntry } from "@motebit/sdk";
 import type { EventStoreAdapter } from "@motebit/event-log";
 import { classifyEventPayload } from "./event-payload.js";
+import { RELAY_TEXT_MAX, sanitizeRelayText } from "./relay-text.js";
 
 /** One event of a seq page: the entry in its TRANSPORT form, and its relay seq. */
 export interface SeqPullEntry {
@@ -158,9 +159,12 @@ function hasHeldEventIdLookup(x: unknown): x is HeldEventIdLookup {
 export function warnSkippedSyncEvent(s: SkippedSyncEvent): void {
   // eslint-disable-next-line no-console -- the runtime's pluggable-logger default (CLAUDE.md conventions); callers pass onSkippedEvent to route it
   console.warn(
-    `sync: moved past event ${s.event_id} (seq ${s.seq ?? "n/a"}) without applying it: ${s.reason}${
-      s.detail ? ` — ${s.detail}` : ""
-    }`,
+    sanitizeRelayText(
+      `sync: moved past event ${s.event_id} (seq ${s.seq ?? "n/a"}) without applying it: ${s.reason}${
+        s.detail ? ` — ${s.detail}` : ""
+      }`,
+      RELAY_TEXT_MAX * 2,
+    ),
   );
 }
 

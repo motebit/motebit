@@ -24,7 +24,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { EventType } from "@motebit/sdk";
 import type { EventFilter, EventLogEntry, EventStoreAdapter } from "@motebit/sdk";
 import { InMemoryEventStore } from "@motebit/event-log";
-import { SyncEngine } from "@motebit/sync-engine";
+import { SyncEngine, readSyncIntent } from "@motebit/sync-engine";
 import { createMotebitDatabase } from "@motebit/persistence";
 import { IdbEventStore, openMotebitDB } from "@motebit/browser-persistence";
 import { MotebitRuntime, NullRenderer, createInMemoryStorage } from "../index";
@@ -581,6 +581,25 @@ describe.each(KINDS)("#962 round 5 — sync intent is the database's (%s store)"
     const b = runtimeOver(store2, false);
     await trigger(b, "compact");
     expect([...(await present(store2))]).toEqual(["e-5"]);
+  });
+
+  it("A's provider answers 'not configured' at start, 'configured' later (web: relay set after start): A's compaction records the intent, so B compacts nothing", async () => {
+    // #962 round 7: the start-time write cannot see this — the provider said
+    // false then. Only compaction's own `recordSyncIntentNow()` (on a
+    // decided "configured" answer) records the database's intent before B.
+    const { store, reopen } = await openStore(kind);
+    let relaySet = false;
+    const a = runtimeOver(store, () => relaySet);
+    await a.whenSyncIntentRecorded();
+    relaySet = true;
+    const ids = await appendN(store, 1, 5);
+    await trigger(a, "compact");
+    expect(await readSyncIntent(store, MID)).toBe("recorded");
+    const store2 = await reopen();
+    const b = runtimeOver(store2, false);
+    ids.push(...(await appendN(store2, 6, 10)));
+    await trigger(b, "compact");
+    expect([...(await present(store2))].sort()).toEqual([...ids].sort());
   });
 
   it("never configured: an unconfigured process compacts freely", async () => {

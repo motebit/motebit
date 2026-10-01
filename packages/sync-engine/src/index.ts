@@ -342,14 +342,19 @@ export interface PushCompactionFloorOptions {
  * (`MOTEBIT_DB_PATH`, `--db-path`) sees no marker there — the design is per
  * database, the law per identity. A desktop elected FRONTEND (another
  * process holds the runtime) constructs no runtime, so records no marker;
- * the coordinator daemon's `syncConfigured` is read when it starts.
+ * the coordinator daemon's `syncConfigured` is read when it starts. The
+ * doors onto a pinned floor (`motebit sync status|retire`, the REPL notice)
+ * are the CLI's, but any surface with a relay-URL setting can pin the floor
+ * (web: a mistyped relay URL, then the right one); that surface's notice
+ * and retire door are a tracked follow-up — until then its storage grows,
+ * no data is lost.
  */
 export async function pushCompactionFloor(
   localStore: EventStoreAdapter,
   requested: number,
   options: PushCompactionFloorOptions = {},
 ): Promise<number> {
-  return floorExcluding(localStore, requested, options, null);
+  return floorExcluding(localStore, requested, options, new Set());
 }
 
 /**
@@ -402,12 +407,12 @@ async function streamRetiredAt(
   return null;
 }
 
-/** `pushCompactionFloor`, as if the stream `exclude` were retired (the "held back" count). */
+/** `pushCompactionFloor`, as if the streams in `exclude` were retired (the "held back" counts). */
 async function floorExcluding(
   localStore: EventStoreAdapter,
   requested: number,
   options: PushCompactionFloorOptions,
-  exclude: string | null,
+  exclude: ReadonlySet<string>,
 ): Promise<number> {
   try {
     const own = resolveSeqCursorStore(localStore);
@@ -417,7 +422,7 @@ async function floorExcluding(
     // never will — and undone by connecting to that relay again.
     for (const stream of [...acked.keys()]) {
       const retired = await streamRetiredAt(stream, stores.get(stream) ?? [own]);
-      if (stream === exclude || retired !== null) {
+      if (exclude.has(stream) || retired !== null) {
         acked.delete(stream);
       }
     }
@@ -493,8 +498,24 @@ export interface RelayStreamReport {
   retiredAt: number | null;
   /** It is the stream the floor stops at, below what compaction asked for. */
   holdsFloor: boolean;
-  /** Events compaction would free were this stream retired (0 when retired). */
+  /**
+   * Events compaction would free were this stream ALONE retired (0 when
+   * retired). 0 for a stream tied at the floor with another: its twin still
+   * holds it — see `heldBackTied`.
+   */
   heldBack: number;
+  /**
+   * The other active streams holding the floor at the same clock (#962
+   * round 7), sorted; empty when this stream holds it alone or not at all.
+   */
+  tiedWith: string[];
+  /**
+   * Events compaction would free were this stream and every stream in
+   * `tiedWith` retired — the gap to the next distinct stream (or, with no
+   * stream past them, to what the recorded intent allows). Equals `heldBack`
+   * when untied; 0 when the stream does not hold the floor.
+   */
+  heldBackTied: number;
 }
 
 /** What holds `motebitId`'s compaction floor, and by how much (#962 round 6). */
@@ -542,11 +563,6 @@ export async function syncFloorReport(
     }
     const active = retiredAt === null;
     const holdsFloor = active && floor < requested && cursor === floor;
-    let heldBack = 0;
-    if (active && holdsFloor) {
-      const without = await floorExcluding(localStore, requested, options, stream);
-      heldBack = above.filter((e) => e.version_clock <= without).length;
-    }
     streams.push({
       stream,
       relayUrl: relayUrlOfStream(stream),
@@ -554,8 +570,28 @@ export async function syncFloorReport(
       lastAckAt,
       retiredAt,
       holdsFloor,
-      heldBack,
+      heldBack: 0,
+      tiedWith: [],
+      heldBackTied: 0,
     });
+  }
+  // What retiring frees (#962 round 7): each holder alone, and the whole set
+  // tied at the floor. With two dead streams at the floor, retiring either
+  // alone frees nothing — the tied count is the one that says it is pinned.
+  const freed = async (exclude: ReadonlySet<string>): Promise<number> => {
+    const without = await floorExcluding(localStore, requested, options, exclude);
+    return above.filter((e) => e.version_clock <= without).length;
+  };
+  const holders = streams.filter((s) => s.holdsFloor);
+  const tiedSet = new Set(holders.map((s) => s.stream));
+  const tiedFrees = holders.length > 0 ? await freed(tiedSet) : 0;
+  for (const s of holders) {
+    s.heldBack = holders.length === 1 ? tiedFrees : await freed(new Set([s.stream]));
+    s.tiedWith = holders
+      .map((h) => h.stream)
+      .filter((h) => h !== s.stream)
+      .sort();
+    s.heldBackTied = tiedFrees;
   }
   streams.sort((a, b) => a.acked - b.acked || a.stream.localeCompare(b.stream));
   return { motebitId, intent, requested, floor, streams };
@@ -564,24 +600,41 @@ export async function syncFloorReport(
 /** How long a lagging stream may go without acknowledging before it is reported (7 days). */
 export const PINNED_FLOOR_STALE_MS = 7 * 86_400_000;
 
+/** A pinned floor, as `pinnedFloor` reports it. */
+export interface PinnedFloor {
+  /** The first stream holding the floor (sorted as the report is). */
+  stream: RelayStreamReport;
+  /** EVERY active stream holding the floor — several when they are tied (#962 round 7). */
+  streams: RelayStreamReport[];
+  /** Events compaction would free were every stream in `streams` retired (> 0). */
+  heldBack: number;
+  reason: "never-acked" | "stale";
+}
+
 /**
- * The stream pinning compaction, when the operator should hear of it (#962
- * round 6): it holds the floor, retiring it would free events, and it has
- * acknowledged nothing ("never-acked") or not advanced in more than
- * `staleMs` ("stale"; a time never recorded counts as stale). Null
- * otherwise — the only stream behind a recorded intent frees nothing when
- * retired, and is never reported.
+ * The streams pinning compaction, when the operator should hear of it (#962
+ * rounds 6-7): the active streams holding the floor — one, or several tied
+ * at the same clock — whose retirement together would free events, and
+ * each of which has acknowledged nothing ("never-acked") or not advanced in
+ * more than `staleMs` ("stale"; a time never recorded counts as stale).
+ * Null otherwise: the only stream behind a recorded intent frees nothing
+ * when retired, and a tie that includes a stream acknowledging recently is
+ * live — that relay moves the floor.
  */
 export function pinnedFloor(
   report: SyncFloorReport,
   now: number = Date.now(),
   staleMs: number = PINNED_FLOOR_STALE_MS,
-): { stream: RelayStreamReport; reason: "never-acked" | "stale" } | null {
-  const holder = report.streams.find((s) => s.retiredAt === null && s.holdsFloor && s.heldBack > 0);
-  if (!holder) return null;
-  if (holder.acked === 0) return { stream: holder, reason: "never-acked" };
-  if (holder.lastAckAt === null || now - holder.lastAckAt > staleMs) {
-    return { stream: holder, reason: "stale" };
+): PinnedFloor | null {
+  const holders = report.streams.filter((s) => s.retiredAt === null && s.holdsFloor);
+  const holder = holders[0];
+  if (!holder || holder.heldBackTied <= 0) return null;
+  const heldBack = holder.heldBackTied;
+  if (holders.every((s) => s.acked === 0)) {
+    return { stream: holder, streams: holders, heldBack, reason: "never-acked" };
+  }
+  if (holders.every((s) => s.lastAckAt === null || now - s.lastAckAt > staleMs)) {
+    return { stream: holder, streams: holders, heldBack, reason: "stale" };
   }
   return null;
 }

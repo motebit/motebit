@@ -744,8 +744,8 @@ const TAMPERS = [
       "relay-stream-doors-962.test.ts",
     ),
     cwd: join(root, "packages", "sync-engine"),
-    text: "if (stream === exclude || retired !== null) {",
-    replacement: "if (stream === exclude || (retired as unknown) === own) {",
+    text: "if (exclude.has(stream) || retired !== null) {",
+    replacement: "if (exclude.has(stream) || (retired as unknown) === own) {",
     red: "the probe: one connect to a typo'd relay; the right relay acked 10 of 20",
   },
   {
@@ -809,8 +809,8 @@ const TAMPERS = [
       "relay-stream-doors-962.test.ts",
     ),
     cwd: join(root, "packages", "sync-engine"),
-    text: "heldBack = above.filter((e) => e.version_clock <= without).length;",
-    replacement: "heldBack = without < 0 ? above.length : 0;",
+    text: "return above.filter((e) => e.version_clock <= without).length;",
+    replacement: "return without < 0 ? above.length : 0;",
     red: "the probe: one connect to a typo'd relay; the right relay acked 10 of 20",
   },
   {
@@ -825,8 +825,8 @@ const TAMPERS = [
       "relay-stream-doors-962.test.ts",
     ),
     cwd: join(root, "packages", "sync-engine"),
-    text: "if (holder.lastAckAt === null || now - holder.lastAckAt > staleMs) {",
-    replacement: "if (holder.lastAckAt === null && now > staleMs) {",
+    text: "if (holders.every((s) => s.lastAckAt === null || now - s.lastAckAt > staleMs)) {",
+    replacement: "if (holders.every((s) => s.lastAckAt === null && now > staleMs)) {",
     red: "a stream that acked, then stopped for > 7 days",
   },
   {
@@ -841,8 +841,8 @@ const TAMPERS = [
       "relay-stream-doors-962.test.ts",
     ),
     cwd: join(root, "packages", "sync-engine"),
-    text: "s.retiredAt === null && s.holdsFloor && s.heldBack > 0",
-    replacement: "s.retiredAt === null && s.holdsFloor",
+    text: "if (!holder || holder.heldBackTied <= 0) return null;",
+    replacement: "if (!holder) return null;",
     red: "the only stream, never acked: no notice",
   },
   {
@@ -1020,6 +1020,169 @@ const TAMPERS = [
     text: '    await recordAct(store, ctx.motebitId, {\n      action: "sync_intent_cleared",',
     replacement: '    void recordAct;\n    void ({\n      action: "sync_intent_cleared",',
     red: "refuses while the configured relay has unacked events",
+  },
+  // --- #962 round 7: ties, the socket catch-up's text, the compaction-time intent. ---
+  {
+    // The tied count is the single-stream count: two dead twins report 0.
+    file: join(root, "packages", "sync-engine", "src", "index.ts"),
+    testFile: join(
+      root,
+      "packages",
+      "sync-engine",
+      "src",
+      "__tests__",
+      "relay-stream-ties-962.test.ts",
+    ),
+    cwd: join(root, "packages", "sync-engine"),
+    text: "    s.heldBackTied = tiedFrees;",
+    replacement: "    s.heldBackTied = s.heldBack;",
+    red: "each tied stream frees nothing alone; together they free 90",
+  },
+  {
+    // The notice reads the single-stream count: a tied set is never reported.
+    file: join(root, "packages", "sync-engine", "src", "index.ts"),
+    testFile: join(
+      root,
+      "packages",
+      "sync-engine",
+      "src",
+      "__tests__",
+      "relay-stream-ties-962.test.ts",
+    ),
+    cwd: join(root, "packages", "sync-engine"),
+    text: "if (!holder || holder.heldBackTied <= 0) return null;",
+    replacement: "if (!holder || holder.heldBack <= 0) return null;",
+    red: "the stale tie is reported with the gap to the next distinct stream",
+  },
+  {
+    // One stale twin is enough: a tie with a live relay is reported.
+    file: join(root, "packages", "sync-engine", "src", "index.ts"),
+    testFile: join(
+      root,
+      "packages",
+      "sync-engine",
+      "src",
+      "__tests__",
+      "relay-stream-ties-962.test.ts",
+    ),
+    cwd: join(root, "packages", "sync-engine"),
+    text: "if (holders.every((s) => s.lastAckAt === null || now - s.lastAckAt > staleMs)) {",
+    replacement: "if (holders.some((s) => s.lastAckAt === null || now - s.lastAckAt > staleMs)) {",
+    red: "a tie with a stream that acked recently is not reported",
+  },
+  {
+    // The socket catch-up reports a relay-derived failure raw (the CLI daemon's default).
+    file: join(root, "packages", "sync-engine", "src", "ws-adapter.ts"),
+    testFile: join(
+      root,
+      "packages",
+      "sync-engine",
+      "src",
+      "__tests__",
+      "relay-text-962-r7.test.ts",
+    ),
+    cwd: join(root, "packages", "sync-engine"),
+    text: "(this.config.onCatchUpError ?? warnCatchUpError)(sanitizedCatchUpError(err));",
+    replacement: "(this.config.onCatchUpError ?? warnCatchUpError)(err);",
+    red: "the default report (no onCatchUpError",
+  },
+  {
+    // The same clause, read by a surface's own onCatchUpError.
+    file: join(root, "packages", "sync-engine", "src", "ws-adapter.ts"),
+    testFile: join(
+      root,
+      "packages",
+      "sync-engine",
+      "src",
+      "__tests__",
+      "relay-text-962-r7.test.ts",
+    ),
+    cwd: join(root, "packages", "sync-engine"),
+    text: "(this.config.onCatchUpError ?? warnCatchUpError)(sanitizedCatchUpError(err));",
+    replacement: "(this.config.onCatchUpError ?? warnCatchUpError)(err);",
+    red: "a surface's onCatchUpError receives the failure sanitized",
+  },
+  {
+    // The skipped-event default report prints its detail raw.
+    file: join(root, "packages", "sync-engine", "src", "seq-cursor.ts"),
+    testFile: join(
+      root,
+      "packages",
+      "sync-engine",
+      "src",
+      "__tests__",
+      "relay-text-962-r7.test.ts",
+    ),
+    cwd: join(root, "packages", "sync-engine"),
+    text: "    sanitizeRelayText(\n      `sync: moved past event",
+    replacement: "    String(\n      `sync: moved past event",
+    red: "prints a relay-derived reason / detail sanitized",
+  },
+  {
+    // The Arabic letter mark and the invisible operators survive.
+    file: join(root, "packages", "sync-engine", "src", "relay-text.ts"),
+    testFile: join(
+      root,
+      "packages",
+      "sync-engine",
+      "src",
+      "__tests__",
+      "relay-text-962-r7.test.ts",
+    ),
+    cwd: join(root, "packages", "sync-engine"),
+    text: '    .replace(/[\\u061c\\u2060-\\u2064]/g, "")\n',
+    replacement: "",
+    red: "strips U+2063 INVISIBLE SEPARATOR",
+  },
+  {
+    // Tag characters survive.
+    file: join(root, "packages", "sync-engine", "src", "relay-text.ts"),
+    testFile: join(
+      root,
+      "packages",
+      "sync-engine",
+      "src",
+      "__tests__",
+      "relay-text-962-r7.test.ts",
+    ),
+    cwd: join(root, "packages", "sync-engine"),
+    text: '    .replace(/[\\u{e0000}-\\u{e007f}]/gu, "")\n',
+    replacement: "",
+    red: "strips U+E0041 TAG LATIN CAPITAL A",
+  },
+  {
+    // `motebit sync status`: a tied stream says retiring it frees nothing.
+    file: join(cli, "src", "subcommands/sync.ts"),
+    testFile: join(cli, "src", "__tests__", "sync-ties-962.test.ts"),
+    cwd: cli,
+    text: "others > 0 && s.heldBackTied > 0",
+    replacement: "others < 0 && s.heldBackTied > 0",
+    red: "never 'frees nothing'",
+  },
+  {
+    // The notice names one stream of the tied set.
+    file: join(cli, "src", "subcommands/sync.ts"),
+    testFile: join(cli, "src", "__tests__", "sync-ties-962.test.ts"),
+    cwd: cli,
+    text: "  const tied = pinned.streams;\n",
+    replacement: "  const tied = pinned.streams.slice(0, 1);\n",
+    red: "one line naming both streams",
+  },
+  {
+    // `motebit sync retire` on one twin says nothing of the other.
+    file: join(cli, "src", "subcommands/sync.ts"),
+    testFile: join(cli, "src", "__tests__", "sync-ties-962.test.ts"),
+    cwd: cli,
+    text: "twins.length > 0 && frees === 0",
+    replacement: "twins.length < 0 && frees === 0",
+    red: "motebit sync retire on one twin",
+  },
+  {
+    // Compaction never records the intent of a provider that answers "configured" only later.
+    file: join(pkg, "src", "motebit-runtime.ts"),
+    text: "    if (decided && answer === true) await this.recordSyncIntentNow();\n    const floor",
+    replacement: "    const floor",
+    red: "answers 'not configured' at start",
   },
 ];
 
