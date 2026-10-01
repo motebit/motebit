@@ -15,6 +15,7 @@ import {
   redactMemoryConsolidatedPayload,
 } from "./redaction.js";
 import { IDENTITY_KEYS_BACKFILL_SQL } from "./identity-keys.js";
+import { DISPUTE_FUND_ACTIONS_DDL, backfillDisputeFundActions } from "./dispute-fund-ledger.js";
 
 const logger = createLogger({ service: "migrations" });
 
@@ -2424,6 +2425,28 @@ export const relayMigrations: Migration[] = [
         CREATE INDEX IF NOT EXISTS idx_x402_settlements_key
           ON relay_x402_settlements(idempotency_key, motebit_id);
       `);
+    },
+  },
+  {
+    version: 50,
+    name: "dispute_fund_actions_backfill",
+    up: (db) => {
+      // C2 — relay_dispute_fund_actions (the write-once claim of an
+      // allocation's ONE dispute fund action) is new; on upgrade it starts
+      // empty while disputes a pre-claim relay already finalized have paid
+      // out and left their allocation `disputed`. Claim each such allocation
+      // for its earliest final dispute so a legacy duplicate still live
+      // cannot be paid again. Fresh install: relay_disputes does not exist
+      // yet (createDisputeTables runs after migrations) — nothing to claim.
+      // Ledger rows of a dispute that is not final are not claimed here; the
+      // fund action reads them live in its own transaction.
+      const has = (name: string): boolean =>
+        db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(name) !==
+        undefined;
+      if (!has("relay_disputes") || !has("relay_allocations") || !has("relay_transactions")) return;
+      db.exec(DISPUTE_FUND_ACTIONS_DDL);
+      const claimed = backfillDisputeFundActions(db);
+      logger.info("migration.dispute_fund_actions_backfill", { claimed });
     },
   },
 ];

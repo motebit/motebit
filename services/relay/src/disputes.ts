@@ -55,6 +55,7 @@ import {
   type OrchestrationRow,
 } from "./dispute-orchestration.js";
 import { verificationKeyFor } from "./identity-keys.js";
+import { DISPUTE_FUND_ACTIONS_DDL, allocationLedgerPosition } from "./dispute-fund-ledger.js";
 
 const logger = createLogger({ service: "relay", module: "disputes" });
 
@@ -166,19 +167,7 @@ export function createDisputeTables(db: DatabaseDriver): void {
   // row is written; a second claim for the same allocation, task or dispute
   // inserts nothing and so moves nothing. Never updated, never deleted —
   // the audit row of where the escrow went.
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS relay_dispute_fund_actions (
-      allocation_id     TEXT PRIMARY KEY,
-      task_id           TEXT NOT NULL UNIQUE,
-      dispute_id        TEXT NOT NULL UNIQUE,
-      fund_action       TEXT NOT NULL,
-      split_ratio       REAL NOT NULL,
-      regime            TEXT NOT NULL,
-      worker_amount     INTEGER NOT NULL,
-      delegator_amount  INTEGER NOT NULL,
-      executed_at       INTEGER NOT NULL
-    );
-  `);
+  db.exec(DISPUTE_FUND_ACTIONS_DDL);
 
   // At most one non-expired dispute per task (and so per allocation —
   // relay_allocations.task_id is UNIQUE and filing binds task_id to the
@@ -2075,6 +2064,7 @@ function executeFundAction(
   }
   const disputeId = dispute.dispute_id as string;
   const taskId = dispute.task_id as string;
+  const allocationId = dispute.allocation_id as string;
   // §7.3 integer split: worker = floor(base * ratio), delegator = remainder.
   // A ratio outside [0, 1] would pay one side more than the base — refuse
   // (throws inside the caller's transaction, which rolls back).
@@ -2082,82 +2072,75 @@ function executeFundAction(
     throw new Error(`Dispute ${disputeId}: split_ratio ${splitRatio} outside [0, 1]`);
   }
 
-  // Funding-state split (the mint fix). A relay settlement that credited the
-  // worker `amount_settled` means the funds ALREADY left escrow into the
-  // worker's balance (held non-spendable/non-withdrawable, never re-pooled).
-  // Crediting the winner without reclaiming that credit would mint money
-  // (refund/split) or double-pay (release). So a POST-settlement dispute
-  // REDISTRIBUTES the worker's net by clawing it back; a PRE-settlement
-  // dispute releases the still-locked escrow. See dispute-v1.md §7.
-  const settlement = db
-    .prepare(
-      `SELECT amount_settled, motebit_id, delegator_id, status
-       FROM relay_settlements
-       WHERE task_id = ? AND COALESCE(settlement_mode, 'relay') = 'relay'
-         AND status IN ('completed', 'partial')`,
-    )
-    .get(taskId) as
-    | { amount_settled: number; motebit_id: string; delegator_id: string | null; status: string }
-    | undefined;
+  // What may move comes from the LEDGER, read in this transaction — never
+  // from `amount_locked` or the allocation's status (see dispute-fund-ledger.ts:
+  // a failed receipt's refund, a federated forward and a pre-claim-table
+  // payout all leave the row saying "held" when nothing is).
+  const pos = allocationLedgerPosition(db, allocationId, taskId);
+  const closeAs = pos.settled ? "settled" : "released";
 
-  if (settlement && settlement.amount_settled > 0) {
-    // ── Case B: POST-SETTLEMENT. Worker already holds the net. Redistribute it. ──
-    // Authoritative identities from the settlement row — NOT the dispute's
-    // filed_by/respondent, which are filer/counterparty and do not reliably
-    // map to worker/delegator (e.g. a worker-filed dispute).
-    // §7.4: redistribute the NET only (the platform fee was already taken and
-    // is not re-extracted). split_ratio unifies all three fund actions:
-    //   refund→0.0, release→1.0, split→0.5  ⇒  workerShare = floor(net*ratio).
-    const net = settlement.amount_settled;
-    const worker = settlement.motebit_id;
-    const delegator = settlement.delegator_id;
+  // A ledger row already referenced to a dispute of this allocation is a fund
+  // action that already ran — claimed or not (relay_dispute_fund_actions
+  // starts empty on upgrade, so an empty claim table authorizes nothing).
+  if (pos.priorDisputeRows > 0) {
+    logger.warn("dispute.fund_action.already_executed", {
+      disputeId,
+      allocationId,
+      taskId,
+      priorDisputeRows: pos.priorDisputeRows,
+      reason: "the ledger already holds dispute fund movement for this allocation",
+    });
+    closeDisputedAllocation(db, dispute, closeAs);
+    return;
+  }
+
+  if (pos.paid.length > 0) {
+    // ── POST-SETTLEMENT. The worker leg was paid; redistribute what was paid. ──
+    // §7.4: the NET only (the platform fee is not re-extracted). Reversed
+    // only from the account the ledger shows was paid — never the
+    // settlement row's motebit_id, which names the path agent (#959).
+    // split_ratio unifies the fund actions: refund→0.0, release→1.0,
+    // split→0.5 ⇒ workerShare = floor(paid*ratio).
+    const recipient = pos.paid.length === 1 ? pos.paid[0]! : null;
+    const net = pos.paid.reduce((sum, p) => sum + p.amount, 0);
     const workerShare = Math.floor(net * splitRatio);
-    const delegatorShare = net - workerShare; // reclaimed from worker → delegator
-
-    // One fund action per allocation: a second upheld dispute must not claw
-    // the same net back again from the worker's other funds.
+    const wanted = net - workerShare;
+    const routable = recipient !== null && pos.delegator !== null;
+    const delegatorShare = routable ? wanted : 0;
     if (
       !claimFundAction(db, dispute, {
         fundAction,
         splitRatio,
         regime: "post_settlement",
-        workerAmount: workerShare,
+        workerAmount: net - delegatorShare,
         delegatorAmount: delegatorShare,
       })
     ) {
       return;
     }
     closeDisputedAllocation(db, dispute, "settled");
-
-    if (delegatorShare <= 0) {
-      // release_to_worker (ratio 1.0): the original settlement stands. The
-      // worker keeps the net it already holds — no fund movement.
-      logger.info("dispute.fund_action.post_settlement_noop", {
-        disputeId,
-        fundAction,
-        worker,
-        net,
-      });
-      return;
-    }
-    if (delegator == null || delegator === "") {
-      // No recorded payer — cannot route the refund. Do NOT debit the worker
-      // (that would destroy money) and do NOT mint. Trust-layer outcome only.
-      logger.error("dispute.fund_action.no_delegator", {
+    if (wanted > 0 && !routable) {
+      // Fail closed: more than one paid account, or no single hold payer to
+      // refund. Neither debit nor credit — the settlement stands.
+      logger.error("dispute.fund_action.unroutable", {
         disputeId,
         taskId,
-        worker,
-        delegatorShare,
-        reason:
-          "settlement has no delegator_id — post-settlement refund unroutable; funds stay with worker",
+        paidAccounts: pos.paid.length,
+        delegator: pos.delegator,
+        wanted,
+        reason: "post-settlement refund has no single paid account and hold payer",
       });
       return;
     }
-    // Reclaim the disputed portion from the worker. Phase-1 escrow (the
-    // non-spendable + non-withdrawable hold over recent/disputed settlements)
-    // guarantees these funds are still present, so this raw debit — which
-    // bypasses the hold, since it reclaims the held funds themselves —
-    // succeeds. Both legs run inside the caller's BEGIN/COMMIT.
+    if (delegatorShare <= 0) {
+      logger.info("dispute.fund_action.post_settlement_noop", { disputeId, fundAction, net });
+      return;
+    }
+    const worker = recipient!.account;
+    const delegator = pos.delegator!;
+    // Phase-1 escrow (non-spendable + non-withdrawable hold over recent and
+    // disputed settlements) keeps these funds present; this raw debit
+    // reclaims the held funds themselves. Both legs in the caller's txn.
     const after = debitCanonical(
       db,
       worker,
@@ -2167,13 +2150,13 @@ function executeFundAction(
       `Dispute claw-back (${fundAction}): ${disputeId}`,
     );
     if (after === null) {
-      // Escrow invariant violated — should be unreachable after Phase 1. Fail
-      // closed: never credit the delegator from funds we could not reclaim.
+      // Escrow invariant violated — unreachable after Phase 1. Fail closed:
+      // never credit the delegator from funds we could not reclaim.
       logger.error("dispute.fund_action.clawback_insufficient", {
         disputeId,
         worker,
         delegatorShare,
-        reason: "worker balance below disputed amount despite escrow hold — refund withheld",
+        reason: "paid account below disputed amount despite escrow hold — refund withheld",
       });
       return;
     }
@@ -2197,32 +2180,14 @@ function executeFundAction(
     return;
   }
 
-  // ── Case A: PRE-SETTLEMENT. Escrow (amount_locked) still held; distribute it. ──
-  // The delegator was debited amount_locked at submission and the worker was
-  // never paid (no settlement row), so the funds sit in escrow — distribute
-  // them with no claw-back.
-  //
-  // No settlement row means worker/delegator are NOT in the ledger and must be
-  // recovered from the dispute parties. `filed_by`/`respondent` are filer and
-  // counterparty — they map to delegator/worker ONLY when the delegator filed;
-  // a worker-filed dispute INVERTS them. (This is the exact hazard Case B's
-  // comment warns about; pre-fix this path credited `filed_by`/`respondent`
-  // directly and so paid escrow to the losing party on every worker-filed
-  // dispute.) So resolve the roles explicitly from the filer_role captured at
-  // filing, then divide by split_ratio exactly as Case B divides the net:
-  // refund→0.0, release→1.0, split→0.5. filer_role NULL (pre-migration-21
-  // disputes, always emitted as the v1 `split` shape) falls back to the v1
-  // assumption filer=delegator / respondent=worker, which the ternary preserves
-  // (worker = respondent whenever the role is not "worker").
-  const filedBy = dispute.filed_by as string;
-  const respondent = dispute.respondent as string;
-  const filerRole = (dispute.filer_role as FilerRole | null) ?? null;
-  const worker = filerRole === "worker" ? filedBy : respondent;
-  const delegator = filerRole === "worker" ? respondent : filedBy;
-  const workerShare = Math.floor(amountLocked * splitRatio);
-  const delegatorShare = amountLocked - workerShare;
-
-  // One fund action per allocation: the escrow is distributed exactly once.
+  // ── PRE-SETTLEMENT. Distribute what the ledger still holds, to the parties. ──
+  // Parties from the money path, not the dispute's filed_by/respondent: the
+  // delegator is the sole hold payer, the worker the allocation's worker
+  // (the pair filing standing is checked against, §4.4). Escrow 0 — refunded,
+  // forwarded, or never debited — is a recorded no-op.
+  const base = pos.delegator !== null && pos.worker !== null ? pos.escrowRemaining : 0;
+  const workerShare = Math.floor(base * splitRatio);
+  const delegatorShare = base - workerShare;
   if (
     !claimFundAction(db, dispute, {
       fundAction,
@@ -2234,12 +2199,11 @@ function executeFundAction(
   ) {
     return;
   }
-  closeDisputedAllocation(db, dispute, "released");
-
+  closeDisputedAllocation(db, dispute, closeAs);
   if (workerShare > 0) {
     creditAccountCanonical(
       db,
-      worker,
+      pos.worker!,
       workerShare,
       "settlement_credit",
       disputeId,
@@ -2249,7 +2213,7 @@ function executeFundAction(
   if (delegatorShare > 0) {
     creditAccountCanonical(
       db,
-      delegator,
+      pos.delegator!,
       delegatorShare,
       "settlement_credit",
       disputeId,
@@ -2259,9 +2223,9 @@ function executeFundAction(
   logger.info("dispute.fund_action.pre_settlement", {
     disputeId,
     fundAction,
-    filerRole,
-    worker,
-    delegator,
+    worker: pos.worker,
+    delegator: pos.delegator,
+    escrowRemaining: pos.escrowRemaining,
     amountLocked,
     workerShare,
     delegatorShare,

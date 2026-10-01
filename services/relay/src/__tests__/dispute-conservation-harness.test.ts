@@ -20,6 +20,15 @@
  *       dispute on it reaches `final` (legacy duplicate rows a start state
  *       already holds are counted as given, never as licence for more).
  *   L4  A rejected request (non-2xx) writes nothing to the ledger.
+ *   L5  The first dispute to reach `final` owns the allocation's one fund
+ *       action: no other dispute writes a ledger row after it (whether or not
+ *       that verdict moved money — release_to_worker post-settlement moves none).
+ *   L6  PAYEE-IS-PARTY: every dispute-driven credit lands on the allocation's
+ *       delegator or its worker.
+ *   L7  A dispute reverses only what was paid, from the account that was paid
+ *       (dispute debits on an account ≤ the settlement credits it received).
+ *   L8  A verdict executes once: no account holds two credits from one dispute.
+ *   L1 counts gross a federated origin forwarded to the executing peer.
  *
  * Alphabet: delegator files, worker files, operator upholds / overturns /
  * splits dispute k (fund_action + split_ratio per dispute-v1 §7.2 from the
@@ -36,6 +45,15 @@
  * (locked or settled + two live disputes a pre-fix relay admitted, with the
  * one-dispute-per-task index unbuildable) — the state in which only the
  * fund-movement chokepoint stands between the escrow and a second payout.
+ * The third money finding added: failed (receipt refunded the whole hold, the
+ * allocation still `settled`), partial settlement, rerouted (#959: the receipt
+ * signer is not the allocation's worker, who holds funds of its own),
+ * federated-origin (gross forwarded, no settlement row, allocation `locked`),
+ * legacy-final locked/settled (one dispute already final with no claim row and
+ * the allocation left `disputed`, as a pre-claim-table relay left it, plus a
+ * live duplicate; the upgrade backfill migration then runs), and legacy-paid
+ * locked/settled (a dispute whose ledger rows exist but which holds no claim
+ * and is still to be finalized).
  *
  * Enumeration is a memoized DFS over normalized observable states (see
  * `fingerprint`): a step that is rejected, or accepted but changes nothing
@@ -61,10 +79,14 @@ import {
 } from "@motebit/encryption";
 import type { MotebitId, DeviceId } from "@motebit/sdk";
 import { AUTH_HEADER, JSON_AUTH, createTestRelay, seedX402PaidTask } from "./test-helpers.js";
+import { creditAccount, debitAccount } from "../accounts.js";
+import { relayMigrations } from "../migrations.js";
 
 const MAX_DEPTH = Number(process.env.DISPUTE_HARNESS_DEPTH ?? 6);
 const DELEGATOR = "del-cons";
 const WORKER = "wrk-cons";
+/** A third registered agent: the receipt signer on a re-routed task (#959). */
+const OTHER = "oth-cons";
 
 type Keypair = { publicKey: Uint8Array; privateKey: Uint8Array };
 type StartState =
@@ -74,7 +96,15 @@ type StartState =
   | "p2p"
   | "disputed"
   | "legacy-dup-locked"
-  | "legacy-dup-settled";
+  | "legacy-dup-settled"
+  | "failed"
+  | "partial"
+  | "rerouted"
+  | "federated-origin"
+  | "legacy-final-locked"
+  | "legacy-final-settled"
+  | "legacy-paid-locked"
+  | "legacy-paid-settled";
 type Action =
   | { kind: "fileD" }
   | { kind: "fileW" }
@@ -90,6 +120,14 @@ const START_STATES: StartState[] = [
   "disputed",
   "legacy-dup-locked",
   "legacy-dup-settled",
+  "failed",
+  "partial",
+  "rerouted",
+  "federated-origin",
+  "legacy-final-locked",
+  "legacy-final-settled",
+  "legacy-paid-locked",
+  "legacy-paid-settled",
 ];
 
 function label(a: Action): string {
@@ -104,6 +142,8 @@ interface World {
   disputes: string[];
   /** Live disputes the start state already held (legacy duplicates). */
   startLive: number;
+  /** Highest ledger rowid the start state holds — rows up to it are given. */
+  startTxMax: number;
 }
 
 interface Violation {
@@ -115,6 +155,7 @@ interface Violation {
 
 let delegatorKp: Keypair;
 let workerKp: Keypair;
+let otherKp: Keypair;
 let seq = 0;
 
 async function register(relay: SyncRelay, motebitId: string, kp: Keypair): Promise<void> {
@@ -131,24 +172,30 @@ async function register(relay: SyncRelay, motebitId: string, kp: Keypair): Promi
   if (res.status !== 200) throw new Error(`register ${motebitId}: ${res.status}`);
 }
 
-async function settleViaReceipt(relay: SyncRelay, taskId: string): Promise<void> {
+async function settleViaReceipt(
+  relay: SyncRelay,
+  taskId: string,
+  opts: { status?: "completed" | "failed"; signer?: "worker" | "other" } = {},
+): Promise<void> {
+  const signerId = opts.signer === "other" ? OTHER : WORKER;
+  const signerKp = opts.signer === "other" ? otherKp : workerKp;
   const enc = new TextEncoder();
   const receipt = await signExecutionReceipt(
     {
       task_id: taskId,
       relay_task_id: taskId,
-      motebit_id: WORKER as unknown as MotebitId,
+      motebit_id: signerId as unknown as MotebitId,
       device_id: "svc" as unknown as DeviceId,
       submitted_at: Date.now() - 1000,
       completed_at: Date.now(),
-      status: "completed" as const,
+      status: opts.status ?? "completed",
       result: "done",
       tools_used: ["web_search"],
       memories_formed: 0,
       prompt_hash: await sha256(enc.encode("search for something")),
       result_hash: await sha256(enc.encode("done")),
     },
-    workerKp.privateKey,
+    signerKp.privateKey,
   );
   const res = await relay.app.request(`/agent/${WORKER}/task/${taskId}/result`, {
     method: "POST",
@@ -202,7 +249,14 @@ async function buildWorld(start: StartState): Promise<World> {
                  'p2p', 'fakeTxHash', 'pending', ?)`,
       )
       .run(taskId, WORKER, Date.now(), DELEGATOR);
-    return { relay, taskId, allocationId: "p2p-alloc-cons", disputes: [], startLive: 0 };
+    return {
+      relay,
+      taskId,
+      allocationId: "p2p-alloc-cons",
+      disputes: [],
+      startLive: 0,
+      startTxMax: maxRowid(relay),
+    };
   }
   const taskId = seedX402PaidTask(relay, {
     workerId: WORKER,
@@ -216,8 +270,47 @@ async function buildWorld(start: StartState): Promise<World> {
     allocationId: `x402-${taskId}`,
     disputes: [],
     startLive: 0,
+    startTxMax: 0,
   };
-  if (start === "settled" || start === "legacy-dup-settled") await settleViaReceipt(relay, taskId);
+  if (
+    start === "settled" ||
+    start === "legacy-dup-settled" ||
+    start === "legacy-final-settled" ||
+    start === "legacy-paid-settled"
+  ) {
+    await settleViaReceipt(relay, taskId);
+  }
+  if (start === "failed") await settleViaReceipt(relay, taskId, { status: "failed" });
+  if (start === "rerouted") {
+    // #959: the receipt signer is not the allocation's worker. The signer is
+    // credited; the allocation's worker holds unrelated funds of its own.
+    await register(relay, OTHER, otherKp);
+    creditAccount(relay.moteDb.db, WORKER, 5_000_000, "deposit", "wrk-own", "worker's own funds");
+    await settleViaReceipt(relay, taskId, { signer: "other" });
+  }
+  if (start === "partial") seedPartialSettlement(w);
+  if (start === "federated-origin") {
+    // The origin relay forwarded the task's gross to the executing peer
+    // (relay_federation_settlements) — no relay_settlements row, and the
+    // allocation row is never touched by that path, so it stays `locked`.
+    const snap = relay.moteDb.db
+      .prepare("SELECT amount_locked FROM relay_allocations WHERE allocation_id = ?")
+      .get(w.allocationId) as { amount_locked: number };
+    relay.moteDb.db
+      .prepare(
+        `INSERT INTO relay_federation_settlements
+         (settlement_id, task_id, upstream_relay_id, downstream_relay_id, agent_id,
+          gross_amount, fee_amount, net_amount, fee_rate, settled_at, receipt_hash)
+         VALUES ('fed-stl-cons', ?, 'relay-self', 'relay-peer', NULL, ?, ?, ?, 0.05, ?, 'rh')`,
+      )
+      .run(taskId, snap.amount_locked, 0, snap.amount_locked, Date.now());
+  }
+  if (start === "legacy-final-locked" || start === "legacy-final-settled") {
+    await seedLegacyFinal(w, start === "legacy-final-locked" ? "upheld" : "overturned");
+  }
+  if (start === "legacy-paid-locked" || start === "legacy-paid-settled") {
+    await seedLegacyPaidUnclaimed(w, start === "legacy-paid-settled");
+  }
   if (start === "released") {
     const n = releaseStaleAllocations(relay.moteDb.db, Date.now() + 1000, 0, () => DELEGATOR);
     if (n !== 1) throw new Error(`release: ${n}`);
@@ -261,7 +354,146 @@ async function buildWorld(start: StartState): Promise<World> {
     w.disputes.push(legacyId);
     w.startLive = 2;
   }
+  w.startTxMax = maxRowid(relay);
   return w;
+}
+
+function maxRowid(relay: SyncRelay): number {
+  return (
+    relay.moteDb.db
+      .prepare("SELECT COALESCE(MAX(rowid), 0) AS m FROM relay_transactions")
+      .get() as {
+      m: number;
+    }
+  ).m;
+}
+
+/**
+ * A partial settlement in the exact row shape the receipt route writes
+ * (tasks.ts): half the gross settled — worker credited the net under the
+ * settlement id, the unsettled remainder released to the delegator under the
+ * allocation id, the allocation claimed `settled`.
+ */
+function seedPartialSettlement(w: World): void {
+  const db = w.relay.moteDb.db;
+  const { amount_locked: held } = db
+    .prepare("SELECT amount_locked FROM relay_allocations WHERE allocation_id = ?")
+    .get(w.allocationId) as { amount_locked: number };
+  const gross = Math.floor(held / 2);
+  const fee = Math.round(gross * 0.05);
+  const net = gross - fee;
+  db.prepare(
+    "UPDATE relay_allocations SET status = 'settled', settled_at = ? WHERE allocation_id = ?",
+  ).run(Date.now(), w.allocationId);
+  db.prepare(
+    `INSERT INTO relay_settlements
+     (settlement_id, allocation_id, task_id, motebit_id, receipt_hash, amount_settled,
+      platform_fee, platform_fee_rate, status, settled_at, settlement_mode, delegator_id)
+     VALUES ('stl-partial-cons', ?, ?, ?, 'rh', ?, ?, 0.05, 'partial', ?, 'relay', ?)`,
+  ).run(w.allocationId, w.taskId, WORKER, net, fee, Date.now(), DELEGATOR);
+  creditAccount(db, WORKER, net, "settlement_credit", "stl-partial-cons", "Payment (partial)");
+  creditAccount(
+    db,
+    DELEGATOR,
+    held - gross,
+    "allocation_release",
+    w.allocationId,
+    "Partial release",
+  );
+}
+
+/** Back-date every `resolved` dispute's window and read it — lazy finalize. */
+async function expireAll(w: World): Promise<void> {
+  w.relay.moteDb.db
+    .prepare(
+      "UPDATE relay_disputes SET resolved_at = ? WHERE state = 'resolved' AND appealed_at IS NULL",
+    )
+    .run(Date.now() - 25 * 60 * 60 * 1000);
+  for (const id of w.disputes)
+    await w.relay.app.request(`/api/v1/disputes/${id}`, { headers: AUTH_HEADER });
+}
+
+/**
+ * The pre-claim-table shape at upgrade (C2): dispute 0 reached `final` and its
+ * fund action ran on a relay with no relay_dispute_fund_actions table — so no
+ * claim row, and that relay left the allocation `disputed`. A second, legacy
+ * duplicate dispute is still live. The upgrade's migration then runs.
+ */
+async function seedLegacyFinal(w: World, verdict: "upheld" | "overturned"): Promise<void> {
+  const res = await fileDispute(w, "D");
+  if (res.status !== 200) throw new Error(`legacy-final file: ${res.status}`);
+  if ((await step(w, { kind: verdict, k: 0 })) !== 200) throw new Error("legacy-final resolve");
+  await expireAll(w);
+  const db = w.relay.moteDb.db;
+  db.exec("DELETE FROM relay_dispute_fund_actions");
+  db.prepare("UPDATE relay_allocations SET status = 'disputed' WHERE allocation_id = ?").run(
+    w.allocationId,
+  );
+  insertLegacyLiveDispute(w);
+  w.startLive = 2;
+  runUpgradeBackfill(w.relay);
+}
+
+/**
+ * A dispute that already moved money but holds no claim row: its ledger rows
+ * reference it, it sits `resolved` and is still to be finalized. Locked: the
+ * escrow was refunded to the delegator. Settled: a split was applied — half
+ * the worker's net clawed back to the delegator.
+ */
+async function seedLegacyPaidUnclaimed(w: World, settled: boolean): Promise<void> {
+  const res = await fileDispute(w, "D");
+  if (res.status !== 200) throw new Error(`legacy-paid file: ${res.status}`);
+  const verdict = settled ? "split" : "upheld";
+  if ((await step(w, { kind: verdict, k: 0 })) !== 200) throw new Error("legacy-paid resolve");
+  const db = w.relay.moteDb.db;
+  const d0 = w.disputes[0]!;
+  if (settled) {
+    const { amount_settled: net } = db
+      .prepare("SELECT amount_settled FROM relay_settlements WHERE allocation_id = ?")
+      .get(w.allocationId) as { amount_settled: number };
+    const back = net - Math.floor(net * 0.5);
+    debitAccount(db, WORKER, back, "settlement_debit", d0, "Dispute claw-back (legacy)");
+    creditAccount(db, DELEGATOR, back, "settlement_credit", d0, "Dispute refund (legacy)");
+  } else {
+    const { amount_locked: locked } = db
+      .prepare("SELECT amount_locked FROM relay_allocations WHERE allocation_id = ?")
+      .get(w.allocationId) as { amount_locked: number };
+    creditAccount(db, DELEGATOR, locked, "settlement_credit", d0, "Dispute refund (legacy)");
+  }
+  w.startLive = 1;
+  runUpgradeBackfill(w.relay);
+}
+
+function insertLegacyLiveDispute(w: World): void {
+  const db = w.relay.moteDb.db;
+  db.exec("DROP INDEX IF EXISTS idx_disputes_one_per_task");
+  const first = db
+    .prepare("SELECT amount_locked, filing_fee FROM relay_disputes WHERE dispute_id = ?")
+    .get(w.disputes[0]) as { amount_locked: number; filing_fee: number };
+  seq += 1;
+  const legacyId = `dsp-cons-${seq}`;
+  db.prepare(
+    `INSERT INTO relay_disputes
+     (dispute_id, task_id, allocation_id, filed_by, respondent, category, description, state,
+      amount_locked, filing_fee, filed_at, evidence_deadline, body_json, filer_role)
+     VALUES (?, ?, ?, ?, ?, 'quality', 'contested', 'evidence', ?, ?, ?, ?, '', 'worker')`,
+  ).run(
+    legacyId,
+    w.taskId,
+    w.allocationId,
+    WORKER,
+    DELEGATOR,
+    first.amount_locked,
+    first.filing_fee,
+    Date.now(),
+    Date.now() + 48 * 3600_000,
+  );
+  w.disputes.push(legacyId);
+}
+
+/** Run the upgrade's dispute fund-action backfill migration, as boot would. */
+function runUpgradeBackfill(relay: SyncRelay): void {
+  relayMigrations.find((m) => m.name === "dispute_fund_actions_backfill")?.up(relay.moteDb.db);
 }
 
 function filerOf(w: World, k: number): "delegator" | "worker" {
@@ -418,11 +650,20 @@ function checkLaws(w: World): Array<{ law: string; detail: string }> {
       )
       .get() as { f: number }
   ).f;
-  const paidOut = ledgerOut + fees;
+  // A federated origin forwards the task's gross to the executing peer: it
+  // leaves escrow with no local ledger row.
+  const forwarded = (
+    db
+      .prepare(
+        "SELECT COALESCE(SUM(gross_amount), 0) AS g FROM relay_federation_settlements WHERE task_id = ?",
+      )
+      .get(w.taskId) as { g: number }
+  ).g;
+  const paidOut = ledgerOut + fees + forwarded;
   if (paidOut > locked) {
     out.push({
       law: "L1 payout<=locked",
-      detail: `paid out ${paidOut} (ledger ${ledgerOut} + fee ${fees}) from ${locked} locked`,
+      detail: `paid out ${paidOut} (ledger ${ledgerOut} + fee ${fees} + forwarded ${forwarded}) from ${locked} locked`,
     });
   }
 
@@ -454,6 +695,97 @@ function checkLaws(w: World): Array<{ law: string; detail: string }> {
   // made to have fewer; the law is that resolution adds no further one.
   if (finals > Math.max(1, w.startLive)) {
     out.push({ law: "L3 one-fund-action", detail: `${finals} disputes reached final` });
+  }
+
+  // Rows this run wrote (the start state's rows are given).
+  const fresh = db
+    .prepare(
+      "SELECT motebit_id, type, amount, reference_id FROM relay_transactions WHERE rowid > ?",
+    )
+    .all(w.startTxMax) as Array<{
+    motebit_id: string;
+    type: string;
+    amount: number;
+    reference_id: string;
+  }>;
+  const freshDispute = fresh.filter((t) => disputeIds.has(t.reference_id));
+
+  // L5 The first verdict to become final is the allocation's one fund action:
+  // no other dispute moves money afterwards, whether or not that verdict
+  // itself moved any (release_to_worker after settlement moves nothing).
+  const firstFinal = db
+    .prepare(
+      "SELECT dispute_id FROM relay_disputes WHERE allocation_id = ? AND state = 'final' ORDER BY final_at, rowid LIMIT 1",
+    )
+    .get(w.allocationId) as { dispute_id: string } | undefined;
+  if (firstFinal) {
+    const others = freshDispute.filter((t) => t.reference_id !== firstFinal.dispute_id);
+    if (others.length > 0) {
+      out.push({
+        law: "L5 first-final-owns-funds",
+        detail: `${others.length} row(s) from a dispute other than the first final (${others.map((t) => t.reference_id).join(",")})`,
+      });
+    }
+  }
+
+  // L6 PAYEE-IS-PARTY: every dispute-driven credit lands on the allocation's
+  // delegator (the hold payer) or its worker.
+  const allocWorker = (
+    db
+      .prepare("SELECT motebit_id FROM relay_allocations WHERE allocation_id = ?")
+      .get(w.allocationId) as { motebit_id: string } | undefined
+  )?.motebit_id;
+  const parties = new Set([DELEGATOR, allocWorker ?? WORKER]);
+  for (const t of freshDispute) {
+    if (t.amount > 0 && !parties.has(t.motebit_id)) {
+      out.push({
+        law: "L6 payee-is-party",
+        detail: `dispute credit of ${t.amount} to non-party ${t.motebit_id}`,
+      });
+    }
+  }
+
+  // L8 A verdict executes once: no account holds two credits from one dispute.
+  const creditsPerDispute = new Map<string, number>();
+  for (const t of txns) {
+    if (t.amount > 0 && disputeIds.has(t.reference_id)) {
+      const key = `${t.reference_id}→${t.motebit_id}`;
+      creditsPerDispute.set(key, (creditsPerDispute.get(key) ?? 0) + 1);
+    }
+  }
+  for (const [key, n] of creditsPerDispute) {
+    if (n > 1) out.push({ law: "L8 verdict-executes-once", detail: `${n} credits ${key}` });
+  }
+
+  // L7 A dispute reverses only what was paid, from the account that was paid:
+  // dispute-driven debits on an account never exceed the settlement credits
+  // that account received for this allocation.
+  const received = new Map<string, number>();
+  const settlementIds = new Set(
+    (
+      db
+        .prepare("SELECT settlement_id FROM relay_settlements WHERE allocation_id = ?")
+        .all(w.allocationId) as Array<{ settlement_id: string }>
+    ).map((r) => r.settlement_id),
+  );
+  for (const t of txns) {
+    if (t.type === "settlement_credit" && settlementIds.has(t.reference_id)) {
+      received.set(t.motebit_id, (received.get(t.motebit_id) ?? 0) + t.amount);
+    }
+  }
+  const reversed = new Map<string, number>();
+  for (const t of txns) {
+    if (t.amount < 0 && disputeIds.has(t.reference_id)) {
+      reversed.set(t.motebit_id, (reversed.get(t.motebit_id) ?? 0) - t.amount);
+    }
+  }
+  for (const [acct, amt] of reversed) {
+    if (amt > (received.get(acct) ?? 0)) {
+      out.push({
+        law: "L7 reverse-only-what-was-paid",
+        detail: `${acct} debited ${amt} by disputes, received ${received.get(acct) ?? 0}`,
+      });
+    }
   }
   return out;
 }
@@ -530,6 +862,7 @@ describe("Dispute conservation harness (exhaustive, real routes)", () => {
   beforeAll(async () => {
     delegatorKp = await generateKeypair();
     workerKp = await generateKeypair();
+    otherKp = await generateKeypair();
   });
 
   for (const start of START_STATES) {
