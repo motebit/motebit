@@ -2908,6 +2908,26 @@ export async function probeFetch(): Promise<unknown> {
   {
     script: "check-no-secrets-in-client-bundles",
     proves:
+      "governs apps/mobile (Expo/EAS, shipped) deny-by-default (cold review R2: a planted EXPO_PUBLIC_SOLANA_ENDPOINT in apps/mobile stayed green). babel-preset-expo inlines every `process.env.EXPO_PUBLIC_*` read into the app bundle; the fixture reads one not in PUBLIC_BUILD_ENV.mobile.",
+    perturb: () =>
+      writeFixture(
+        `apps/mobile/src/${PROBE_PREFIX}expo_public.ts`,
+        "export const e = process.env.EXPO_PUBLIC_PROBE_SOLANA_ENDPOINT;\n",
+      ),
+  },
+  {
+    script: "check-no-secrets-in-client-bundles",
+    proves:
+      "governs apps/docs (Next/Vercel) deny-by-default (cold review R2: docs was ungoverned). Next inlines every `process.env.NEXT_PUBLIC_*` read into client JS; PUBLIC_BUILD_ENV.docs names none, so the fixture's read is RED.",
+    perturb: () =>
+      writeFixture(
+        `apps/docs/src/${PROBE_PREFIX}next_public.ts`,
+        "export const e = process.env.NEXT_PUBLIC_PROBE_RPC;\n",
+      ),
+  },
+  {
+    script: "check-no-secrets-in-client-bundles",
+    proves:
       "pins the build guard's WIRING by execution (cold review R1: deleting the guard call from both vite configs left every test and the gate green). Removes `publicBuildEnvGuard(\"web\")` from apps/web/vite.config.ts's plugins; the gate's wiring arm resolves that config through vite's own resolveConfig with a planted unlisted VITE_* var (in process.env, and in a .env file in a non-cwd envDir) and must go red because the config no longer refuses. Throws if the plugin is not found (probe vacuous).",
     perturb: () =>
       mutateFile("apps/web/vite.config.ts", (src) => {

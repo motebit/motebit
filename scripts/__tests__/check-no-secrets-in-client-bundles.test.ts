@@ -25,6 +25,7 @@ import {
   CREDENTIAL_RULES,
   PUBLIC_BUILD_ENV,
   PUBLIC_ENV_ALLOWLIST,
+  PUBLIC_ENV_SURFACES,
   enforcePublicBuildEnv,
   forbiddenEnvValues,
   isSecretShapedEnvName,
@@ -718,5 +719,105 @@ describe("R2: every way Vite resolves env is judged (fixture project, real vite 
       { vite_x: "xxxxxxxxxx", VITE_SHORT: "abc", PATH: "/usr/bin:/bin:/x/y" },
     ).map((x) => x.name);
     expect(f.sort()).toEqual(["VITE_D", "VITE_SOLANA_RPC_URL", "vite_x"]);
+  });
+});
+
+// ── Cold review R2 (4): mobile (Expo/EAS) and docs (Next/Vercel) are governed ──
+
+describe("R2: mobile and docs are governed deny-by-default (static arm)", () => {
+  function app(root: string, name: string, files: Record<string, string>): void {
+    for (const [rel, text] of Object.entries(files)) {
+      const full = join(root, "apps", name, rel);
+      mkdirSync(dirname(full), { recursive: true });
+      writeFileSync(full, text);
+    }
+  }
+
+  it("every governed surface has a PUBLIC_BUILD_ENV entry and vice versa", () => {
+    expect(Object.keys(PUBLIC_ENV_SURFACES).sort()).toEqual(Object.keys(PUBLIC_BUILD_ENV).sort());
+    expect(Object.keys(PUBLIC_ENV_SURFACES).sort()).toEqual(["docs", "mobile", "verify", "web"]);
+  });
+
+  it("mobile: an unlisted EXPO_PUBLIC_* in source is RED (the R2 plant), the listed one is green", () => {
+    const root = join(tmp, "gov-mobile-src");
+    app(root, "mobile", {
+      "src/a.ts":
+        "export const a = process.env.EXPO_PUBLIC_SOLANA_ENDPOINT;\n" +
+        "export const b = process.env.EXPO_PUBLIC_MOTEBIT_RELAY_URL;\n" +
+        "export const c = process.env.expo_public_lower;\n",
+    });
+    const f = runGate(root).staticFindings.join("\n");
+    expect(f).toMatch(/EXPO_PUBLIC_SOLANA_ENDPOINT is not in PUBLIC_BUILD_ENV\.mobile/);
+    expect(f).toMatch(/expo_public_lower is not in PUBLIC_BUILD_ENV\.mobile/);
+    expect(f).not.toContain("EXPO_PUBLIC_MOTEBIT_RELAY_URL");
+  });
+
+  it("mobile config: app.json names, eas.json env names AND values, credential shapes", () => {
+    const root = join(tmp, "gov-mobile-cfg");
+    app(root, "mobile", {
+      "app.json": JSON.stringify({
+        expo: { extra: { note: "EXPO_PUBLIC_FROM_APP_JSON", stripe: `sk_live_${"0".repeat(24)}` } },
+      }),
+      "eas.json": JSON.stringify({
+        build: {
+          production: {
+            env: {
+              EXPO_PUBLIC_MOTEBIT_RELAY_URL: `https://solana-mainnet.g.alchemy.com/v2/${ALCHEMY_KEY}`,
+              EXPO_PUBLIC_HELIUS: FAKE_UUID,
+              SENTRY_DSN_BUILD_ONLY: "x",
+            },
+          },
+          preview: { env: { EXPO_PUBLIC_MOTEBIT_RELAY_URL: "https://relay.motebit.com" } },
+        },
+      }),
+      "package.json": JSON.stringify({ scripts: { start: "EXPO_PUBLIC_DEV_KEY=1 expo start" } }),
+    });
+    const r = runGate(root);
+    const f = r.staticFindings.join("\n");
+    expect(f).toMatch(/app\.json:1 — EXPO_PUBLIC_FROM_APP_JSON is not in PUBLIC_BUILD_ENV\.mobile/);
+    expect(f).toMatch(/app\.json @ offset \d+ — stripe-secret/);
+    expect(f).toMatch(
+      /eas\.json build\.production\.env — EXPO_PUBLIC_MOTEBIT_RELAY_URL host solana-mainnet\.g\.alchemy\.com is not in its host allowlist/,
+    );
+    expect(f).toMatch(/EXPO_PUBLIC_HELIUS is not in PUBLIC_BUILD_ENV\.mobile/);
+    expect(f).toMatch(/package\.json:1 — EXPO_PUBLIC_DEV_KEY is not in PUBLIC_BUILD_ENV\.mobile/);
+    expect(f).not.toContain("build.preview");
+    expect(f).not.toContain("SENTRY_DSN_BUILD_ONLY");
+    expect(f).not.toContain(ALCHEMY_KEY);
+    expect(f).not.toContain(FAKE_UUID);
+    expect(r.configFiles).toEqual([
+      "apps/mobile/app.json",
+      "apps/mobile/eas.json",
+      "apps/mobile/package.json",
+    ]);
+  });
+
+  it("docs: any NEXT_PUBLIC_* (source, .mdx, config) is RED; next.config env/publicRuntimeConfig is RED; VITE_* prose is not", () => {
+    const root = join(tmp, "gov-docs");
+    app(root, "docs", {
+      "src/page.tsx": "export const k = process.env.NEXT_PUBLIC_RPC_URL;\n",
+      "content/docs/a.mdx":
+        "Set `VITE_ANTHROPIC_API_KEY` for desktop.\n\n{process.env.NEXT_PUBLIC_FROM_MDX}\n",
+      "next.config.mjs":
+        "export default { env: { HELIUS: process.env.HELIUS }, publicRuntimeConfig: {} };\n",
+    });
+    const f = runGate(root).staticFindings.join("\n");
+    expect(f).toMatch(/src\/page\.tsx:1 — NEXT_PUBLIC_RPC_URL is not in PUBLIC_BUILD_ENV\.docs/);
+    expect(f).toMatch(/a\.mdx:3 — NEXT_PUBLIC_FROM_MDX is not in PUBLIC_BUILD_ENV\.docs/);
+    expect(f).toMatch(/next\.config\.mjs:1 — next\.config `env` inlines arbitrary/);
+    expect(f).toMatch(/next\.config\.mjs:1 — next\.config `publicRuntimeConfig` inlines arbitrary/);
+    expect(f).not.toContain("VITE_ANTHROPIC_API_KEY");
+  });
+
+  it("the gate's dist arm judges only the names a surface's bundler inlines", () => {
+    const root = join(tmp, "gov-docs-dist");
+    mkdirSync(join(root, "apps", "docs", ".next", "static", "chunks"), { recursive: true });
+    writeFileSync(
+      join(root, "apps", "docs", ".next", "static", "chunks", "a.js"),
+      'const sample={"VITE_API_URL":"http://localhost:3000"},e={NEXT_PUBLIC_X:"y"};',
+    );
+    const f = runGate(root).artifactFindings.join("\n");
+    expect(f).toMatch(/NEXT_PUBLIC_X is not in PUBLIC_BUILD_ENV\.docs/);
+    expect(f).not.toContain("VITE_API_URL");
   });
 });

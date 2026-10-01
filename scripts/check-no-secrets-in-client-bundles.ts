@@ -12,10 +12,14 @@
  * public env names or at built bundles, so nothing went red.
  *
  * Three arms, one law (`publicEnvViolations` in the canonical module):
- *   (a) STATIC — in a deployed surface governed by `PUBLIC_BUILD_ENV` (web,
- *       verify), EVERY public-prefixed env name (`VITE_*`, `NEXT_PUBLIC_*`,
- *       `EXPO_PUBLIC_*`, any case) its source references must be named for that
- *       surface. In every other app, a credential-shaped name
+ *   (a) STATIC — in a deployed surface governed by `PUBLIC_BUILD_ENV`
+ *       (`PUBLIC_ENV_SURFACES`: web + verify on Vite, mobile on Expo/EAS, docs on
+ *       Next/Vercel), EVERY public env name its bundler inlines (any case) that
+ *       its source (incl. .mdx) or committed config (app.json, eas.json — names
+ *       AND values —, next.config, vercel.json, package.json) references must be
+ *       named for that surface; next.config `env`/`publicRuntimeConfig` are
+ *       refused. Expo and Next inline only names that appear in source, so this
+ *       arm is their whole guard (no build hook). In every other app, a credential-shaped name
  *       (/KEY|TOKEN|SECRET|PASSWORD|PRIVATE|RPC_URL|API/, any case) is RED unless
  *       `PUBLIC_ENV_ALLOWLIST` names that file + name + why; a stale entry is RED.
  *   (b) BUILT ARTIFACT — every text file under apps/<app>/dist (and
@@ -23,10 +27,12 @@
  *       (`CREDENTIAL_RULES`); in a governed surface, every public env pair the
  *       bundler emitted (the whole-object `import.meta.env` literal) must pass
  *       the same name + value law as the build. RED with file + offset, redacted.
- *   (c) WIRING, BY EXECUTION — each governed surface's real `vite.config.ts` is
- *       loaded through vite's own `loadConfigFromFile` with a planted unlisted
- *       `VITE_*` var; it must refuse. Deleting the `enforcePublicBuildEnv` call
- *       turns this red (a check-gates-effective probe does exactly that).
+ *   (c) WIRING, BY EXECUTION — each Vite surface's real `vite.config.ts` is
+ *       resolved through vite's own `resolveConfig` (plugins + env, from the repo
+ *       cwd) with an unlisted `VITE_*` var planted in process.env, and again with
+ *       it only in a `.env` file in a separate `envDir`; both must refuse.
+ *       Removing `publicBuildEnvGuard` from the plugins turns this red (a
+ *       check-gates-effective probe does exactly that).
  *
  * Flags: `--root <dir>` scans a fixture tree instead of the repo;
  * `--require-dist <a,b>` fails when those apps have no dist (CI runs this after
@@ -52,6 +58,7 @@ import { formatRepair } from "./lib/gate-report.js";
 import {
   PUBLIC_BUILD_ENV,
   PUBLIC_ENV_ALLOWLIST,
+  PUBLIC_ENV_SURFACES,
   isSecretShapedEnvName,
   publicEnvViolations,
   scanArtifactForPublicEnvPairs,
@@ -63,7 +70,7 @@ import {
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const REPO = resolve(__dirname, "..");
 
-const SOURCE_EXT = /\.(?:ts|tsx|js|jsx|mjs|cjs|vue|svelte|html)$/;
+const SOURCE_EXT = /\.(?:ts|tsx|js|jsx|mjs|cjs|vue|svelte|html|mdx)$/;
 const ARTIFACT_EXT = /\.(?:js|mjs|cjs|html|css|json|map|txt|webmanifest|svg)$/;
 const SOURCE_SKIP_DIRS = new Set([
   "node_modules",
@@ -104,10 +111,63 @@ function walk(dir: string, skip: Set<string>, keep: RegExp, out: string[] = []):
   return out;
 }
 
+/**
+ * A governed surface's committed config file: every public name its bundler
+ * inlines must be in PUBLIC_BUILD_ENV[app]; eas.json `build.<profile>.env`
+ * values are judged by the same validators; next.config `env` /
+ * `publicRuntimeConfig` (which inline ANY name) are refused; and the whole file
+ * is scanned for credential shapes.
+ */
+export function judgeConfigFile(
+  app: string,
+  rel: string,
+  text: string,
+  surface: { bundler: string; inlines: RegExp },
+): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const { name, offset } of scanSourceForPublicEnvNames(text)) {
+    if (seen.has(name) || !surface.inlines.test(name)) continue;
+    seen.add(name);
+    const line = text.slice(0, offset).split("\n").length;
+    for (const p of publicEnvViolations(app, [{ name }])) out.push(`${rel}:${line} — ${p}`);
+  }
+  if (rel.endsWith("/eas.json")) {
+    let eas: { build?: Record<string, { env?: Record<string, unknown> }> } = {};
+    try {
+      eas = JSON.parse(text) as typeof eas;
+    } catch {
+      out.push(`${rel} — unparseable JSON; cannot judge its build env`);
+    }
+    for (const [profile, cfg] of Object.entries(eas.build ?? {})) {
+      for (const [name, value] of Object.entries(cfg?.env ?? {})) {
+        if (!surface.inlines.test(name)) continue;
+        for (const p of publicEnvViolations(app, [{ name, value: String(value) }])) {
+          out.push(`${rel} build.${profile}.env — ${p}`);
+        }
+      }
+    }
+  }
+  if (surface.bundler === "next" && /\/next\.config\.[cm]?[jt]s$/.test(rel)) {
+    for (const m of text.matchAll(/\b(env|publicRuntimeConfig)\s*:/g)) {
+      const line = text.slice(0, m.index ?? 0).split("\n").length;
+      out.push(
+        `${rel}:${line} — next.config \`${m[1]}\` inlines arbitrary (non-NEXT_PUBLIC_) names into client JS; read NEXT_PUBLIC_* names listed in PUBLIC_BUILD_ENV.${app} instead`,
+      );
+    }
+  }
+  for (const f of scanArtifactText(text)) {
+    out.push(`${rel} @ offset ${f.offset} — ${f.rule}: ${f.redacted}`);
+  }
+  return out;
+}
+
 export interface GateResult {
   staticFindings: string[];
   artifactFindings: string[];
   sourceFiles: number;
+  /** Committed config files read for governed surfaces (names, eas env values, credential shapes). */
+  configFiles: string[];
   apps: number;
   distDirs: string[];
   artifactFiles: number;
@@ -142,9 +202,20 @@ export function runGate(
   for (const a of allowlist) allow.set(`${a.file}\u0000${a.name}`, a.why);
 
   const staticFindings: string[] = [];
+  const configFiles: string[] = [];
   let sourceFiles = 0;
   for (const app of apps) {
-    const governed = Object.hasOwn(PUBLIC_BUILD_ENV, app);
+    const surface = Object.hasOwn(PUBLIC_ENV_SURFACES, app) ? PUBLIC_ENV_SURFACES[app] : undefined;
+    const governed = surface != null;
+    if (surface != null) {
+      for (const cf of surface.configFiles) {
+        const full = join(appsDir, app, cf);
+        if (!existsSync(full)) continue;
+        const rel = relative(root, full).split(sep).join("/");
+        configFiles.push(rel);
+        staticFindings.push(...judgeConfigFile(app, rel, readFileSync(full, "utf8"), surface));
+      }
+    }
     for (const file of walk(join(appsDir, app), SOURCE_SKIP_DIRS, SOURCE_EXT)) {
       sourceFiles++;
       const rel = relative(root, file).split(sep).join("/");
@@ -155,6 +226,9 @@ export function runGate(
         seen.add(name);
         const line = text.slice(0, offset).split("\n").length;
         if (governed) {
+          // Only names this surface's bundler inlines can ship (vite: every
+          // public prefix; expo: EXPO_PUBLIC_*; next: NEXT_PUBLIC_*).
+          if (!surface.inlines.test(name)) continue;
           for (const p of publicEnvViolations(app, [{ name }])) {
             staticFindings.push(`${rel}:${line} — ${p}`);
           }
@@ -196,7 +270,7 @@ export function runGate(
   const artifactFindings: string[] = [];
   let artifactFiles = 0;
   for (const { app, dir } of distDirs) {
-    const governed = Object.hasOwn(PUBLIC_BUILD_ENV, app);
+    const surface = Object.hasOwn(PUBLIC_ENV_SURFACES, app) ? PUBLIC_ENV_SURFACES[app] : undefined;
     for (const file of walk(dir, new Set(["node_modules"]), ARTIFACT_EXT)) {
       artifactFiles++;
       const text = readFileSync(file, "utf8");
@@ -204,8 +278,9 @@ export function runGate(
       for (const f of scanArtifactText(text)) {
         artifactFindings.push(`${rel} @ offset ${f.offset} — ${f.rule}: ${f.redacted}`);
       }
-      if (!governed) continue;
+      if (surface == null) continue;
       for (const pair of scanArtifactForPublicEnvPairs(text)) {
+        if (!surface.inlines.test(pair.name)) continue;
         for (const p of publicEnvViolations(app, [pair])) {
           artifactFindings.push(`${rel} @ offset ${pair.offset} — public-env-law: ${p}`);
         }
@@ -217,6 +292,7 @@ export function runGate(
     staticFindings,
     artifactFindings,
     sourceFiles,
+    configFiles,
     apps: apps.length,
     distDirs: distDirs.map((d) => relative(root, d.dir).split(sep).join("/")),
     artifactFiles,
@@ -255,7 +331,8 @@ export async function checkWiring(
 ): Promise<{ findings: string[]; checked: string[] }> {
   const findings: string[] = [];
   const checked: string[] = [];
-  for (const app of Object.keys(PUBLIC_BUILD_ENV)) {
+  for (const [app, surface] of Object.entries(PUBLIC_ENV_SURFACES)) {
+    if (surface.bundler !== "vite") continue;
     const appDir = join(root, "apps", app);
     if (!existsSync(appDir)) continue;
     const cfg = join(appDir, "vite.config.ts");
@@ -349,13 +426,13 @@ async function main(): Promise<void> {
       formatRepair({
         invariant: `check-no-secrets-in-client-bundles: ${sites.length} way(s) a credential can reach a browser bundle`,
         canonical:
-          "scripts/lib/client-bundle-secrets.ts (PUBLIC_BUILD_ENV, enforcePublicBuildEnv, PUBLIC_ENV_ALLOWLIST, CREDENTIAL_RULES)",
+          "scripts/lib/client-bundle-secrets.ts (PUBLIC_BUILD_ENV, PUBLIC_ENV_SURFACES, publicBuildEnvGuard, PUBLIC_ENV_ALLOWLIST, CREDENTIAL_RULES)",
         fix:
           "Remove the credential from the client: move it to a server secret and have the browser call a motebit server " +
           "that holds it (browser Solana RPC → services/proxy/src/solana-rpc.ts at https://api.motebit.com/v1/solana-rpc). " +
-          "In apps/web or apps/verify, a public env name that is genuinely public goes in PUBLIC_BUILD_ENV with a value " +
+          "In a governed surface (apps/web, apps/verify, apps/mobile, apps/docs), a public env name that is genuinely public goes in PUBLIC_BUILD_ENV with a value " +
           "validator + why (a URL: its exact host allowlist); elsewhere a PUBLIC_ENV_ALLOWLIST entry with file + name + why. " +
-          "A wiring finding means a governed vite.config.ts no longer calls enforcePublicBuildEnv first — restore it. " +
+          "A wiring finding means a governed vite.config.ts no longer lists publicBuildEnvGuard(app) in plugins — restore it. " +
           "For a built-artifact hit, unset the env var that inlined it and rebuild " +
           "(pnpm --filter @motebit/web build). Rotate any real key that was published.",
         sites,
@@ -369,10 +446,17 @@ async function main(): Promise<void> {
   const governed = Object.entries(PUBLIC_BUILD_ENV)
     .map(([a, e]) => `${a}: ${e.length}`)
     .join(", ");
+  const staticOnly = Object.entries(PUBLIC_ENV_SURFACES)
+    .filter(([, s]) => s.bundler !== "vite")
+    .map(([a, s]) => `${a} (${s.bundler})`)
+    .join(", ");
   console.log(
-    `✓ check-no-secrets-in-client-bundles: ${r.sourceFiles} app source file(s) across ${r.apps} apps scanned — governed surfaces ` +
-      `against PUBLIC_BUILD_ENV (${governed} named vars), the rest for credential-shaped public env names ` +
-      `(${PUBLIC_ENV_ALLOWLIST.length} allowlisted with a reason); ${r.artifactFiles} built artifact file(s) in ${r.distDirs.length} dist dir(s) ` +
+    `✓ check-no-secrets-in-client-bundles: ${r.sourceFiles} app source file(s) (incl. .mdx) across ${r.apps} apps scanned — governed surfaces ` +
+      `against PUBLIC_BUILD_ENV (${governed} named vars; deny by default), the rest for credential-shaped public env names ` +
+      `(${PUBLIC_ENV_ALLOWLIST.length} allowlisted with a reason); ${r.configFiles.length} governed config file(s) judged ` +
+      `(${r.configFiles.join(", ")}); ${staticOnly} governed STATICALLY ONLY — no build hook, their bundlers inline only the names ` +
+      `that appear in source + config, all of which this scan covers; ` +
+      `${r.artifactFiles} built artifact file(s) in ${r.distDirs.length} dist dir(s) ` +
       `scanned for credential shapes + the public env law${r.distDirs.length > 0 ? ` (${r.distDirs.join(", ")})` : " — none built; CI runs --require-dist after pnpm build"}; ` +
       `${wiring.checked.length} vite config(s) executed with a planted unlisted var and refused (${wiring.checked.join(", ") || "none present"}).`,
   );

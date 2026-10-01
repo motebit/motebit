@@ -268,10 +268,11 @@ const VITE_USER_NODE_ENV: PublicBuildEnvEntry = {
 };
 
 /**
- * Every public env var a deployed Vite surface may be built with — keyed by the
- * app directory under `apps/`. Deny by default: a public-prefixed name (any case)
- * not listed for that surface refuses the build (`enforcePublicBuildEnv`) and
- * turns `check-no-secrets-in-client-bundles` red (static + dist arms).
+ * Every public env var a deployed surface may be built with — keyed by the app
+ * directory under `apps/` (how each surface's bundler inlines env:
+ * `PUBLIC_ENV_SURFACES`). Deny by default: a name not listed for that surface
+ * refuses a Vite build (`publicBuildEnvGuard`) and turns
+ * `check-no-secrets-in-client-bundles` red (static + dist arms).
  */
 export const PUBLIC_BUILD_ENV: Readonly<Record<string, readonly PublicBuildEnvEntry[]>> = {
   web: [
@@ -325,6 +326,74 @@ export const PUBLIC_BUILD_ENV: Readonly<Record<string, readonly PublicBuildEnvEn
     },
     VITE_USER_NODE_ENV,
   ],
+  mobile: [
+    {
+      name: "EXPO_PUBLIC_MOTEBIT_RELAY_URL",
+      rule: { kind: "url", hosts: MOTEBIT_HOSTS },
+      why: "relay base URL fallback (apps/mobile/src/mobile-app.ts, after session state + AsyncStorage); a public origin. eas.json sets no env",
+    },
+  ],
+  // apps/docs (Vercel, Next) reads NO NEXT_PUBLIC_* var today: deny by default.
+  docs: [],
+};
+
+/**
+ * How each deployed surface's bundler inlines public env, and which committed
+ * config files can carry it. Every surface here is governed by PUBLIC_BUILD_ENV.
+ *   - vite (web, verify): the whole-object `import.meta.env` literal inlines
+ *     EVERY resolved var, so the build itself is guarded (`publicBuildEnvGuard`)
+ *     and every public prefix is judged in source.
+ *   - expo (mobile, EAS) / next (docs, Vercel): babel-preset-expo and Next
+ *     inline only `process.env.<PREFIX>_X` member reads that appear in source,
+ *     so a name absent from source + config cannot ship. No build hook — the
+ *     gate's static arm covers ALL their source (incl. .mdx) and the listed
+ *     config files (names; eas.json `env` values; credential shapes), and
+ *     refuses next.config `env` / `publicRuntimeConfig` (which inline ANY name).
+ */
+export interface PublicEnvSurface {
+  readonly bundler: "vite" | "expo" | "next";
+  /** Names this surface's bundler inlines (any case is judged). */
+  readonly inlines: RegExp;
+  /** App-relative config files the static arm reads (when present). */
+  readonly configFiles: readonly string[];
+}
+
+export const PUBLIC_ENV_SURFACES: Readonly<Record<string, PublicEnvSurface>> = {
+  web: {
+    bundler: "vite",
+    inlines: /^(?:VITE|NEXT_PUBLIC|EXPO_PUBLIC)_/i,
+    configFiles: ["vite.config.ts", "vercel.json"],
+  },
+  verify: {
+    bundler: "vite",
+    inlines: /^(?:VITE|NEXT_PUBLIC|EXPO_PUBLIC)_/i,
+    configFiles: ["vite.config.ts", "vercel.json"],
+  },
+  mobile: {
+    bundler: "expo",
+    inlines: /^EXPO_PUBLIC_/i,
+    configFiles: [
+      "app.json",
+      "app.config.js",
+      "app.config.ts",
+      "eas.json",
+      "babel.config.js",
+      "metro.config.js",
+      "package.json",
+    ],
+  },
+  docs: {
+    bundler: "next",
+    inlines: /^NEXT_PUBLIC_/i,
+    configFiles: [
+      "next.config.mjs",
+      "next.config.js",
+      "next.config.ts",
+      "source.config.ts",
+      "vercel.json",
+      "package.json",
+    ],
+  },
 };
 
 /** A public-prefixed env name, case-insensitive (`vite_x` is refused too). */
