@@ -1375,11 +1375,11 @@ const REAL_COMMIT_MESSAGES = [
   "chore(deps): bump @modelcontextprotocol/sdk and vitest-coverage-v8 to the patched majors",
 ];
 
-describe("R5 the second net claims only what it checks: needle policy + platform commit metadata", () => {
+describe("R5 the second net claims only what it checks: needle policy + platform metadata", () => {
   const SECRET = `sk_${fake(AN, 32, 7)}`;
   const KEYISH = `Zq8Rt3Kx9Wv2mLp7Yb4N`; // a 20-char letters+digits run (fragment-shaped)
 
-  it("platform commit metadata is excluded by EXACT name — never a pattern", () => {
+  it("platform metadata is excluded by EXACT name — never a pattern", () => {
     for (const n of [
       "VERCEL_GIT_COMMIT_MESSAGE",
       "VERCEL_GIT_COMMIT_AUTHOR_NAME",
@@ -1390,9 +1390,11 @@ describe("R5 the second net claims only what it checks: needle policy + platform
       "GITHUB_REF",
       "GITHUB_HEAD_REF",
       "GITHUB_ACTOR",
+      "NEXT_DEPLOYMENT_ID",
+      "VERCEL_DEPLOYMENT_ID",
     ]) {
       expect(OUTPUT_SCAN_EXCLUDED_ENV_NAMES.has(n), n).toBe(true);
-      expect(outputScanExclusion(SECRET, new Set(), n), n).toBe("platform commit metadata");
+      expect(outputScanExclusion(SECRET, new Set(), n), n).toBe("platform metadata");
     }
     // A name that merely RESEMBLES the list is scanned (no prefix/suffix matching).
     for (const n of [
@@ -1401,10 +1403,13 @@ describe("R5 the second net claims only what it checks: needle policy + platform
       "VERCEL_GIT_COMMIT_SHA",
       "vercel_git_commit_message",
       "GITHUB_TOKEN",
+      "NEXT_PUBLIC_DEPLOYMENT_ID",
+      "VERCEL_DEPLOYMENT_ID_KEY",
+      "DEPLOYMENT_ID",
     ]) {
       expect(outputScanExclusion(SECRET, new Set(), n), n).toBeNull();
     }
-    // The list is small and named; every entry is commit metadata, never a credential name.
+    // The list is small and named; every entry is platform metadata, never a credential name.
     expect(OUTPUT_SCAN_EXCLUDED_ENV_NAMES.size).toBeLessThanOrEqual(20);
     for (const n of OUTPUT_SCAN_EXCLUDED_ENV_NAMES) {
       expect(isSecretShapedEnvName(n), n).toBe(false);
@@ -1532,7 +1537,60 @@ describe("R5 the second net claims only what it checks: needle policy + platform
       processEnv: { ...env, STRIPE_SECRET_KEY: SECRET },
     });
     expect(red.findings.join("\n")).toMatch(/carries the value of STRIPE_SECRET_KEY/);
-    expect(red.excluded["platform commit metadata"]).toBe(3);
+    expect(red.excluded["platform metadata"]).toBe(3);
+  });
+
+  it("Skew Protection: a docs/web build whose every file carries the deployment id builds green; a secret beside it is RED", () => {
+    // Vercel sets NEXT_DEPLOYMENT_ID / VERCEL_DEPLOYMENT_ID; Next inlines it as `?dpl=` into every page/chunk.
+    const DPL = `dpl_${fake(AN, 28, 11)}`;
+    expect(DPL).toHaveLength(32);
+    // Without the exact-name exclusion the id would be scanned (32 chars, not scalar/path/locator).
+    expect(outputScanExclusion(DPL, new Set())).toBeNull();
+    const env = {
+      VERCEL: "1",
+      CI: "1",
+      VERCEL_ENV: "production",
+      VERCEL_URL: "motebit-docs-git-fix-motebit.vercel.app",
+      VERCEL_GIT_COMMIT_MESSAGE: REAL_COMMIT_MESSAGES[0],
+      NEXT_DEPLOYMENT_ID: DPL,
+      VERCEL_DEPLOYMENT_ID: DPL,
+    };
+    const builds: [string, string[]][] = [
+      [
+        "docs",
+        [
+          ".next/static/chunks/main-app.js",
+          ".next/server/app/index.html",
+          ".next/server/app/docs/page.html",
+        ],
+      ],
+      ["web", ["dist/index.html", "dist/assets/main-abc.js"]],
+    ];
+    for (const [app, files] of builds) {
+      const root = join(tmp, `r5-dpl-${app}`);
+      for (const f of files) {
+        const full = join(root, "apps", app, f);
+        mkdirSync(dirname(full), { recursive: true });
+        writeFileSync(
+          full,
+          `<script src="/_next/static/chunks/x.js?dpl=${DPL}"></script>` +
+            `self.__next_f.push([1,${JSON.stringify(JSON.stringify({ dpl: DPL }))}]);` +
+            `const k=${JSON.stringify(SECRET)};`,
+        );
+      }
+      const green = checkBuildOutput(app, { repo: root, processEnv: env });
+      expect(green.files, app).toBeGreaterThan(0);
+      expect(green.findings, app).toEqual([]);
+      expect(green.excluded["platform metadata"], app).toBe(3);
+      const red = checkBuildOutput(app, {
+        repo: root,
+        processEnv: { ...env, STRIPE_SECRET_KEY: SECRET },
+      });
+      const msg = red.findings.join("\n");
+      expect(msg, app).toMatch(/carries the value of STRIPE_SECRET_KEY/);
+      expect(msg, app).not.toMatch(/DEPLOYMENT_ID/);
+      expect(msg, app).not.toContain(DPL);
+    }
   });
 
   it("the repair hint never tells you to allowlist a non-public var", () => {
@@ -1543,7 +1601,7 @@ describe("R5 the second net claims only what it checks: needle policy + platform
   });
 });
 
-describe("R5 mutation pins: json-escaped twice and the latin1 conversion", () => {
+describe("R5 mutation pins: json-escaped twice, base64url and the latin1 conversion", () => {
   it("json-escaped twice is the ONLY needle that finds a double-escaped value (no fragment rescue)", () => {
     // Non-secret name: no fragments. The value has `"` and `\\`, so twice ≠ once ≠ raw.
     const v = `abc"def\\ghi"jkl mno pqr`;
@@ -1556,6 +1614,27 @@ describe("R5 mutation pins: json-escaped twice and the latin1 conversion", () =>
       [{ label: "server.js", text }],
     );
     expect(r.findings.join("\n")).toMatch(/DEPLOY_NOTE \(json-escaped twice;/);
+  });
+
+  it("a secret whose base64 carries `+`/`/`, shipped as base64url, is found ONLY by the base64url needle", () => {
+    // All escape-stable chars, so the value is its own (and only) fragment: no fragment rescue.
+    const v = "sk_live_~~~Q7m2Xr9KpZ4t8WvN3bLc~~~";
+    const b64 = Buffer.from(v, "utf8").toString("base64");
+    expect(b64).toMatch(/[+/]/);
+    const shipped = Buffer.from(v, "utf8").toString("base64url");
+    expect(shipped).not.toBe(b64.replace(/=+$/, ""));
+    const text = `const blob="${shipped}";`;
+    expect(valueNeedles(v).some((n) => n.encoding === "fragment")).toBe(false);
+    const hits = valueNeedles(v).filter((n) => text.includes(n.needle));
+    expect(hits.length).toBeGreaterThan(0);
+    expect(hits.every((n) => n.encoding.startsWith("base64url of "))).toBe(true);
+    const r = scanOutputForEnvValues(
+      "web",
+      [{ name: "HELIUS_API_KEY", value: v }],
+      [{ label: "dist/assets/b.js", text }],
+    );
+    expect(r.findings.join("\n")).toMatch(/HELIUS_API_KEY \(base64url of /);
+    expect(r.findings.join("\n")).not.toContain(v);
   });
 
   it("a non-ASCII value is found byte-for-byte in output read as latin1 (only via the latin1 conversion)", () => {

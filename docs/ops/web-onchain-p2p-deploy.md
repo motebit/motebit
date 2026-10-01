@@ -42,6 +42,9 @@ requests/min across every client). **KV is required in production:** with
 than fall back to a per-isolate memory limiter (N isolates = N budgets, no global
 cap). A KV error also fails closed (429). Size the global budget to the provider
 plan: budget × 60 × 24 × 30 is the monthly worst case.
+Scope `SOLANA_RPC_UPSTREAM_URL` to **Production only** on the `motebit-proxy`
+Vercel project: a Preview deploy without KV runs on per-isolate limits only (no
+global cap), so it must never hold the provider key.
 
 **The web + verify builds are deny-by-default on public env.** Vite inlines every
 `VITE_*` value into public JS — incident 2026-09-30: a Helius `?api-key=` shipped

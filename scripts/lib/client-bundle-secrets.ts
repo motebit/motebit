@@ -851,8 +851,8 @@ export function scanArtifactForPublicEnvPairs(
 //     for any public-prefixed var that is unlisted or fails its validator
 //     (`fragmentNeedlesApply`): every key-shaped run of escape-stable chars
 //     (>= 16, letters + digits) of the value, in the same encodings.
-// Platform commit metadata (`OUTPUT_SCAN_EXCLUDED_ENV_NAMES`, exact names) is
-// never scanned: free text that legitimately overlaps docs content.
+// Platform metadata (`OUTPUT_SCAN_EXCLUDED_ENV_NAMES`, exact names: commit
+// message/author/ref, deployment id) is never scanned.
 // Declared limit — NOT caught: hex, reversed, char-code arrays, split or
 // concatenated strings, any other encoding. Each needs code that deliberately
 // transforms the value; for a public var the per-var allowlist guard already
@@ -967,12 +967,15 @@ function isCredentialFreeLocator(v: string): boolean {
 }
 
 /**
- * Platform commit metadata, by EXACT name (never a pattern): free text a
- * deployer does not choose (commit message, author, branch) that legitimately
- * overlaps docs content (a commit message naming `claude-sonnet-4-6` matched 17
- * docs files). Vercel injects `VERCEL_GIT_*` and, with "automatically expose
- * System Environment Variables", the `VITE_` / `NEXT_PUBLIC_` copies of them;
- * GitHub Actions injects the ref/actor names. Never scanned.
+ * Platform metadata, by EXACT name (never a pattern): free text a deployer
+ * does not choose (commit message, author, branch) that legitimately overlaps
+ * docs content (a commit message naming `claude-sonnet-4-6` matched 17 docs
+ * files), and the deployment id. Vercel injects `VERCEL_GIT_*` and, with
+ * "automatically expose System Environment Variables", the `VITE_` /
+ * `NEXT_PUBLIC_` copies of them; GitHub Actions injects the ref/actor names.
+ * With Skew Protection on, Vercel sets `NEXT_DEPLOYMENT_ID` /
+ * `VERCEL_DEPLOYMENT_ID` (`dpl_…`) and Next inlines it into every page and
+ * chunk (`?dpl=`) — a routing id, not a credential. Never scanned.
  */
 export const OUTPUT_SCAN_EXCLUDED_ENV_NAMES: ReadonlySet<string> = new Set([
   "VERCEL_GIT_COMMIT_MESSAGE",
@@ -993,6 +996,8 @@ export const OUTPUT_SCAN_EXCLUDED_ENV_NAMES: ReadonlySet<string> = new Set([
   "GITHUB_BASE_REF",
   "GITHUB_ACTOR",
   "GITHUB_TRIGGERING_ACTOR",
+  "NEXT_DEPLOYMENT_ID",
+  "VERCEL_DEPLOYMENT_ID",
 ]);
 
 /**
@@ -1029,7 +1034,7 @@ export function outputScanExclusion(
   allowedValues: ReadonlySet<string>,
   name?: string,
 ): string | null {
-  if (name != null && OUTPUT_SCAN_EXCLUDED_ENV_NAMES.has(name)) return "platform commit metadata";
+  if (name != null && OUTPUT_SCAN_EXCLUDED_ENV_NAMES.has(name)) return "platform metadata";
   if (allowedValues.has(value)) return "public (PUBLIC_BUILD_ENV)";
   if (value.length < OUTPUT_SCAN_MIN_LENGTH) return "short";
   if (isScalar(value, name)) return "scalar";
