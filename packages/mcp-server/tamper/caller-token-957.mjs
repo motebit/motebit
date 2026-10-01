@@ -262,7 +262,7 @@ const TAMPERS = [
     test: "src/__tests__/sub-delegate-binding.test.ts",
     edits: [
       {
-        file: "services/web-search/src/index.ts",
+        file: "services/web-search/src/sub-delegate.ts",
         from: "    ...(args.targetMotebitId != null ? { motebitId: args.targetMotebitId } : {}),\n",
         to: "",
       },
