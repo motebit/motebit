@@ -12,7 +12,7 @@
  * self-test did not catch; N1-N12 remove one clause of the evidence law or
  * the isolation fixes each; X1-X10 and X17 are the ones a cold review of
  * ed573f1b9 found unnoticed; S1-S12 remove one clause of the sandwich law
- * (pre, post, reset, HOME, valid code, reaping); G1-G9 one clause of the
+ * (pre, post, reset, HOME, valid code, reaping); G1-G13 one clause of the
  * causation law (the second edited run, the middle unedited run, the group
  * kill, the survivor check, same test, same error class, no-op entries, the
  * group-wide flake veto). Every entry must print RED (ok).
@@ -426,7 +426,7 @@ const MUTATIONS: TamperEntry[] = [
     red: "tamper-runner causation C2: a self-enforced timeout (vi.waitFor) that does not reproduce is INCONCLUSIVE, never RED",
     edits: [
       edit(
-        "  const second = await editedRun(entry, slot, plan, running, validity);",
+        '  const second = await editedRun(entry, slot, plan, running, validity, c1.verdict === "GREEN");',
         "  const second = first;",
       ),
     ],
@@ -504,6 +504,45 @@ const MUTATIONS: TamperEntry[] = [
       edit(
         '            if (r.verdict === "RED" && g.uneditedFailure != null) {',
         `            ${NEVER}`,
+      ),
+    ],
+  },
+  // --- cold review R4: a GREEN must rest on a LOADED edit; a timeout is its own class
+  {
+    name: "G10 a vitest timeout is not its own error class (it is a plain Error)",
+    ...CAUSATION,
+    red: "tamper-runner causation a timeout and a thrown Error are different error classes (vitest's timeout is a plain Error)",
+    edits: [
+      edit('(TIMEOUT.test(e.message) ? "timeout" : e.name || "Error")', '(e.name || "Error")'),
+    ],
+  },
+  {
+    name: "G11 a GREEN need not prove the edit was loaded",
+    ...CAUSATION,
+    red: "tamper-runner causation a GREEN needs the edit LOADED: an edit the test reaches only through a build output, with no rebuild:, is INCONCLUSIVE",
+    edits: [
+      edit("  if (unseen != null) c = {", `  if (unseen != null && (false as boolean)) c = {`),
+    ],
+  },
+  {
+    name: "G12 no load sentinel placed (no GREEN can be proven)",
+    ...CAUSATION,
+    red: "tamper-runner causation a GREEN needs the edit LOADED: an edit the test reaches only through a build output, with no rebuild:, is INCONCLUSIVE",
+    edits: [
+      edit(
+        "    if (proveLoad) {\n      const nonce",
+        "    if (proveLoad && (false as boolean)) {\n      const nonce",
+      ),
+    ],
+  },
+  {
+    name: "G13 an edited file that cannot carry a sentinel counts as loaded",
+    ...CAUSATION,
+    red: "tamper-runner causation a GREEN needs the edit LOADED: an edit to a file no sentinel can mark (a .txt read as text) is INCONCLUSIVE",
+    edits: [
+      edit(
+        '        if (token == null) return [{ file, why: "unprovable" as const }];',
+        "        if (token == null) return [];",
       ),
     ],
   },

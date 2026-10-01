@@ -25,7 +25,8 @@
  *     passed in the U before), and each such test failing with the same
  *     error CLASS (its errors' names; a vitest timeout is "timeout") in both
  *     E runs, and passing in every U after it. GREEN when both E runs pass
- *     (the U runs green). Anything else is INCONCLUSIVE with the reason
+ *     (the U runs green) AND the edit was LOADED (below). Anything else is
+ *     INCONCLUSIVE with the reason
  *     (`pre-run not green`, `run 3/5 (unedited, between the edited runs) not
  *     green`, `did not reproduce`, `the edited runs failed differently`,
  *     `post-run not green: slot state leaked`, …). Timeouts get no special
@@ -61,6 +62,22 @@
  *     type-check: <file>:<line> TS<code> …`). No `typescript`: .js files get
  *     `node --check`, .ts files are INCONCLUSIVE. JSON must still parse;
  *     other files are not checked;
+ *   - a GREEN must rest on an edit the run LOADED, never on a test that never
+ *     saw it (one that reads only a `dist` the entry does not rebuild):
+ *     when run 2 is green, run 4 carries, appended to each edited JS/TS module
+ *     after the type-check, a LOAD SENTINEL — one statement that, when the
+ *     module is evaluated (from the source, or from the build output a
+ *     rebuild emitted from it, in the test or the rebuild), appends a per-run
+ *     token to a runner-owned file. GREEN needs every edited file's token;
+ *     an edited file whose token never came, or that cannot carry one (not a
+ *     JS/TS module: JSON, text, .d.ts), is INCONCLUSIVE (`edit not loaded:
+ *     …; missing rebuild: [pkg]?`, naming the file's package when the entry
+ *     does not rebuild it). A RED's runs never carry it. Residual, stated: a
+ *     load is not an execution of the edited lines (a loaded module whose
+ *     edited function the test never calls still reads GREEN, honestly: the
+ *     test did not catch it), a module evaluated where `globalThis.process`
+ *     is not Node's (a browser) cannot record, and a bundler that drops the
+ *     statement (a `sideEffects: false` package) reads not-loaded;
  *   - an entry that changes nothing (no edits, from === to, or edits that
  *     leave every file as it was) ABORTS the run (exit 2) before anything runs;
  *   - a `command` (non-vitest) entry must declare `redMarker`, the text its
@@ -125,7 +142,7 @@
  *
  * Contract (one line per entry, in entry order whatever the execution order):
  *   RED (ok)         positive evidence the tamper bites (above)
- *   GREEN            the test passed with the fix reverted — a failure
+ *   GREEN            the test passed with the fix reverted (and loaded it) — a failure
  *   INCONCLUSIVE     neither: the reason follows — a failure
  *   COULD NOT APPLY  an edit's text is not found exactly once — a failure
  *   BUILD FAILED     a rebuild the test needs failed — a failure
@@ -1599,6 +1616,72 @@ interface EditedRun {
   final?: Classified;
   ev?: VitestEvidence;
   cmd?: Exec;
+  /** With `proveLoad`: the edited files no process of the run was proven to load. */
+  unloaded?: { file: string; why: "not-loaded" | "unprovable" }[];
+}
+
+/** A file a load sentinel can be appended to: a JS/TS module some process evaluates. */
+const SENTINEL_FILE = /\.(?:[cm]?[jt]s|[jt]sx)$/;
+
+/**
+ * The load sentinel appended (after the type-check) to an edited module: one
+ * statement that, when the module is EVALUATED — from the source, or from a
+ * build output a rebuild emitted from it — appends `token` to `log` (the
+ * runner's own file, outside the slot). `process.getBuiltinModule` reaches
+ * the real `fs` whatever the test mocks, and needs no import; the path is
+ * baked in, so a test that clears its children's environment still records.
+ */
+function loadSentinel(log: string, token: string): string {
+  return (
+    "\n// @ts-ignore -- tamper-runner load sentinel (removed with the edit)\n" +
+    `;try { globalThis.process.getBuiltinModule("node:fs").appendFileSync(${JSON.stringify(log)}, ${JSON.stringify(`${token}\n`)}); } catch {}\n`
+  );
+}
+
+/** The workspace package (nearest package.json's name) a repo-relative file belongs to. */
+function ownerPackage(root: string, rel: string): string | null {
+  for (let d = dirname(rel); ; d = dirname(d)) {
+    try {
+      const name = (
+        JSON.parse(readFileSync(join(root, d, "package.json"), "utf8")) as {
+          name?: unknown;
+        }
+      ).name;
+      if (typeof name === "string") return name;
+    } catch {
+      // no (readable) package.json here
+    }
+    if (d === "." || d === "") return null;
+  }
+}
+
+/**
+ * Why a GREEN is not evidence: an edited file no process of the edited run
+ * was proven to load — the test never saw the edit (it reads a build output
+ * the entry does not rebuild, or never imports the file). Null when every
+ * edited file was loaded.
+ */
+function notLoaded(entry: TamperEntry, r: EditedRun, root: string): string | null {
+  const list = r.unloaded ?? [];
+  if (list.length === 0) return null;
+  const unprovable = list.filter((u) => u.why === "unprovable").map((u) => u.file);
+  const missing = list.filter((u) => u.why === "not-loaded").map((u) => u.file);
+  const parts: string[] = [];
+  if (missing.length > 0) {
+    const pkgs = [...new Set(missing.map((f) => ownerPackage(root, f)))].filter(
+      (p): p is string => p != null && !(entry.rebuild ?? []).includes(p),
+    );
+    parts.push(
+      `no process of edited run 2 loaded ${missing.join(", ")}` +
+        (pkgs.length > 0 ? `; missing rebuild: [${pkgs.join(", ")}]?` : ""),
+    );
+  }
+  if (unprovable.length > 0) {
+    parts.push(
+      `a load of ${unprovable.join(", ")} cannot be proven (only a JS/TS module carries a load sentinel)`,
+    );
+  }
+  return `edit not loaded: ${parts.join("; ")}`;
 }
 
 /** The entry's type-check verdict, computed on its first edited run and kept. */
@@ -1613,10 +1696,14 @@ async function editedRun(
   plan: Plan,
   running: Running,
   validity: Validity,
+  proveLoad = false,
 ): Promise<EditedRun> {
   const { dir } = slot;
   resetRunState(slot);
   const env = slotEnv(slot);
+  const loadLog = join(slot.run, "loaded.log");
+  rmSync(loadLog, { force: true });
+  const sentinels = new Map<string, string>();
   const originals = new Map<string, { bytes: Buffer; atime: Date; mtime: Date }>();
   try {
     for (const e of entry.edits) {
@@ -1663,6 +1750,34 @@ async function editedRun(
       };
     }
 
+    // GREEN must rest on an edit some process LOADED: mark each edited module
+    // (after the type-check, so the check sees only the edit).
+    if (proveLoad) {
+      const nonce = randomBytes(8).toString("hex");
+      for (const rel of originals.keys()) {
+        if (!SENTINEL_FILE.test(rel) || /\.d\.[cm]?ts$/.test(rel)) continue;
+        const token = `${nonce}:${sentinels.size}`;
+        sentinels.set(rel, token);
+        const abs = join(dir, rel);
+        writeFileSync(abs, readFileSync(abs, "utf8") + loadSentinel(loadLog, token));
+      }
+    }
+    const proof = (r: EditedRun): EditedRun => {
+      if (!proveLoad) return r;
+      let seen = new Set<string>();
+      try {
+        seen = new Set(readFileSync(loadLog, "utf8").split("\n"));
+      } catch {
+        // nothing loaded
+      }
+      r.unloaded = [...originals.keys()].flatMap((file) => {
+        const token = sentinels.get(file);
+        if (token == null) return [{ file, why: "unprovable" as const }];
+        return seen.has(token) ? [] : [{ file, why: "not-loaded" as const }];
+      });
+      return r;
+    };
+
     for (const p of entry.rebuild ?? []) {
       const b = await run(running, slot.hygiene, "pnpm", ["--filter", p, "build"], dir, env);
       const orphan = orphanProblem(b.orphans);
@@ -1686,13 +1801,13 @@ async function editedRun(
     if (entry.command != null) {
       const [cmd, ...args] = entry.command;
       const t = await run(running, slot.hygiene, cmd!, args, join(dir, entry.cwd ?? "."), env);
-      return { ran: true, cmd: t };
+      return proof({ ran: true, cmd: t });
     }
     const only = entry.only === true ? entry.red : undefined;
-    return {
+    return proof({
       ran: true,
       ev: await runVitest(running, slot, plan, entry.pkg, entry.test!, env, only),
-    };
+    });
   } finally {
     restore(slot, plan, originals);
   }
@@ -1804,7 +1919,9 @@ async function runOne(
     );
   }
 
-  const second = await editedRun(entry, slot, plan, running, validity);
+  // Only a GREEN needs the load proof, so only then does run 4 carry the
+  // sentinel: a RED's edited runs are the edit and nothing else.
+  const second = await editedRun(entry, slot, plan, running, validity, c1.verdict === "GREEN");
   slot.chain = undefined;
   const c2 = classifyEdited(entry, second, mid.passed);
   if (c2.verdict !== c1.verdict) {
@@ -1820,6 +1937,8 @@ async function runOne(
   }
 
   let c: Classified = c2;
+  const unseen = c.verdict === "GREEN" ? notLoaded(entry, second, plan.root) : null;
+  if (unseen != null) c = { verdict: "INCONCLUSIVE", detail: `(${unseen})` };
   if (c.verdict === "RED" || !last) {
     const post = await unedited("run 5/5");
     if (c.verdict === "RED") {

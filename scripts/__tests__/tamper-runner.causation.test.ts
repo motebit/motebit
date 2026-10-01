@@ -230,6 +230,57 @@ describe("tamper-runner causation", () => {
     );
   });
 
+  it("a timeout and a thrown Error are different error classes (vitest's timeout is a plain Error)", () => {
+    const d = drive(
+      fx!,
+      [{ name: "timeout", ...COUNTED, red: "first", edits: [COMMENT_ONLY] }],
+      1,
+      {
+        env: { FX_HANG_FIRST: "1", FX_THROW_ERROR: "3" },
+      },
+    );
+    expect(verdicts(d), d.out).toEqual(["INCONCLUSIVE"]);
+    expect(d.out).toMatch(
+      /INCONCLUSIVE +timeout +\(the edited runs failed differently: run 2 failed "first" \(timeout\); run 4 failed "first" \(Error\)\)/,
+    );
+  });
+
+  it("a GREEN needs the edit LOADED: an edit the test reaches only through a build output, with no rebuild:, is INCONCLUSIVE", () => {
+    const GEN = { pkg: FX, test: "gen.fx.mjs" };
+    const d = drive(
+      fx!,
+      [
+        { name: "unbuilt", ...GEN, edits: [BREAK_SUM] },
+        { name: "rebuilt", ...GEN, rebuild: [FX], edits: [BREAK_SUM] },
+        { name: "rebuilt, comment only", ...GEN, rebuild: [FX], edits: [COMMENT_ONLY] },
+      ],
+      1,
+    );
+    expect(verdicts(d), d.out).toEqual(["INCONCLUSIVE", "RED", "GREEN"]);
+    expect(d.out).toMatch(
+      /INCONCLUSIVE +unbuilt +\(edit not loaded: no process of edited run 2 loaded packages\/fx\/sum\.mjs; missing rebuild: \[fx\]\?\)/,
+    );
+  });
+
+  it("a GREEN needs the edit LOADED: an edit to a file no sentinel can mark (a .txt read as text) is INCONCLUSIVE", () => {
+    const d = drive(
+      fx!,
+      [
+        {
+          name: "text edit",
+          pkg: FX,
+          test: "sum.fx.mjs",
+          edits: [{ file: "packages/lib/value.txt", from: "ok", to: "bad" }],
+        },
+      ],
+      1,
+    );
+    expect(verdicts(d), d.out).toEqual(["INCONCLUSIVE"]);
+    expect(d.out).toMatch(
+      /INCONCLUSIVE +text edit +\(edit not loaded: a load of packages\/lib\/value\.txt cannot be proven/,
+    );
+  });
+
   it("the post-run (run 5/5) must be green: state the edit left fails it", () => {
     const d = drive(fx!, [{ name: "post", ...COUNTED, edits: [COMMENT_ONLY] }], 1, {
       env: { FX_FAIL_FIRST: "1,3,4" },

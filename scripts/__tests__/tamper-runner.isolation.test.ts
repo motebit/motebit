@@ -160,7 +160,13 @@ describe("tamper-runner isolation", () => {
           edits: [{ file: SUM_FILE, from: "a + b", to: "a * b" }],
         },
         // Same test file, same copy: sees the rebuilt outputs unless they were restored.
-        { name: "comment only, after the rebuild", ...GEN, edits: [COMMENT_ONLY] },
+        // rebuild: too, or the comment edit is never loaded (a GREEN needs the load).
+        {
+          name: "comment only, after the rebuild",
+          ...GEN,
+          rebuild: [FX],
+          edits: [COMMENT_ONLY],
+        },
       ],
       1,
     );
