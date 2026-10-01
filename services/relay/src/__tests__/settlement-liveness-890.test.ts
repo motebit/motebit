@@ -846,7 +846,14 @@ async function outbox(n: number, cfg: Partial<SyncRelayConfig> = {}): Promise<Ou
       // Blackholed: no answer, ever — only the caller's abort ends it.
       return new Promise<Response>((resolve, reject) => {
         const signal = init?.signal;
-        signal?.addEventListener("abort", () => reject(signal.reason), { once: true });
+        signal?.addEventListener(
+          "abort",
+          () =>
+            reject(
+              signal.reason instanceof Error ? signal.reason : new Error(String(signal.reason)),
+            ),
+          { once: true },
+        );
         o.hung.push(() => resolve(new Response("{}", { status: 503 })));
       });
     },
