@@ -20,22 +20,39 @@
  * The author still has to update the baseline (via `pnpm -r run api:extract`)
  * and commit it, so a reviewer sees the diff in the PR.
  *
+ * That comparison alone is blind to its own instruction: once an author
+ * regenerates and commits the baseline, surface and baseline agree again and
+ * a break would pass with no changeset at all. So the gate runs a second,
+ * history check (scripts/lib/api-baseline-history.ts): each tracked baseline
+ * as checked out is compared with the same file at `git merge-base HEAD
+ * origin/main`. A removed or changed declaration line is BREAKING and needs a
+ * pending `major` changeset for that package; only added lines are ADDITIVE
+ * and need at least a `minor`. When the merge-base cannot be resolved
+ * (origin/main not fetched, shallow clone) the gate fails closed with a
+ * repair instruction — CI checks out with `fetch-depth: 0` for this.
+ *
  * Companion gate: check-changeset-discipline.ts requires every `major`
  * changeset to ship with a `## Migration` section. Together they enforce:
  * breaking → major changeset → migration guide → baseline updated. The
  * protocol behaves like a protocol.
  */
 
-import { readFileSync, readdirSync, existsSync, rmSync } from "node:fs";
+import { readFileSync, existsSync, rmSync } from "node:fs";
 import { dirname, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { spawnSync } from "node:child_process";
+import {
+  checkBaselineHistory,
+  classifyBaselineChange,
+  pendingBumps,
+  type HistoryVerdict,
+} from "./lib/api-baseline-history.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, "..");
 
 /** Packages whose API surface is tracked by this gate. */
-interface TrackedPackage {
+export interface TrackedPackage {
   /** Filesystem path relative to ROOT. */
   path: string;
   /** npm package name (matches the `name` field in its package.json). */
@@ -44,7 +61,7 @@ interface TrackedPackage {
   baseline: string;
 }
 
-const TRACKED: ReadonlyArray<TrackedPackage> = [
+export const TRACKED: ReadonlyArray<TrackedPackage> = [
   { path: "packages/protocol", name: "@motebit/protocol", baseline: "etc/protocol.api.md" },
   { path: "packages/crypto", name: "@motebit/crypto", baseline: "etc/crypto.api.md" },
   { path: "packages/sdk", name: "@motebit/sdk", baseline: "etc/sdk.api.md" },
@@ -59,36 +76,6 @@ const TRACKED: ReadonlyArray<TrackedPackage> = [
   // `major` (otherwise changesets would cascade it as a patch).
   { path: "packages/verifier", name: "@motebit/verifier", baseline: "etc/verifier.api.md" },
 ];
-
-/**
- * Parse pending changesets and collect which tracked packages have a `major`
- * bump already declared. If the API surface diff is covered by a declared
- * major, the gate passes (the break is intentional and in the record).
- */
-function majorBumpsFromPendingChangesets(): Set<string> {
-  const dir = resolve(ROOT, ".changeset");
-  if (!existsSync(dir)) return new Set();
-  const files = readdirSync(dir).filter(
-    (f) => f.endsWith(".md") && f !== "README.md" && f !== "CHANGELOG.md",
-  );
-  const majors = new Set<string>();
-  for (const file of files) {
-    const content = readFileSync(resolve(dir, file), "utf-8");
-    // Frontmatter between --- markers; one `"@pkg/name": major` per line.
-    const frontMatch = content.match(/^---\n([\s\S]*?)\n---/);
-    if (!frontMatch) continue;
-    const front = frontMatch[1];
-    if (!front) continue;
-    for (const line of front.split("\n")) {
-      const entry = line.match(/^"([^"]+)":\s*(patch|minor|major)/);
-      if (entry && entry[2] === "major") {
-        // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
-        majors.add(entry[1]!);
-      }
-    }
-  }
-  return majors;
-}
 
 /**
  * api-extractor prints exactly one of these lines when it finished analysing
@@ -113,12 +100,17 @@ const EXTRACTOR_COMPLETED = /API Extractor completed (?:successfully|with warnin
  * that aborted before completing is an `error`, never a match — otherwise an
  * unbuilt package would silently pass.
  */
-function runExtractorAndDiff(
-  pkgPath: string,
-  baselineRel: string,
-): { ok: boolean; output: string; error?: string } {
+export interface ExtractResult {
+  ok: boolean;
+  output: string;
+  error?: string;
+  /** The extracted surface when it diverges from the committed baseline. */
+  extracted?: string;
+}
+
+function runExtractorAndDiff(root: string, pkgPath: string, baselineRel: string): ExtractResult {
   const entryRel = `${pkgPath}/dist/index.d.ts`;
-  if (!existsSync(resolve(ROOT, entryRel))) {
+  if (!existsSync(resolve(root, entryRel))) {
     return {
       ok: false,
       output: "",
@@ -133,14 +125,14 @@ function runExtractorAndDiff(
   const lastSlash = baselineRel.lastIndexOf("/");
   const dir = lastSlash === -1 ? "" : baselineRel.slice(0, lastSlash);
   const file = lastSlash === -1 ? baselineRel : baselineRel.slice(lastSlash + 1);
-  const tempPath = resolve(ROOT, pkgPath, dir, "temp", file);
-  const baselinePath = resolve(ROOT, pkgPath, baselineRel);
+  const tempPath = resolve(root, pkgPath, dir, "temp", file);
+  const baselinePath = resolve(root, pkgPath, baselineRel);
 
   // A temp file left by an earlier run must not stand in for this run's result.
   rmSync(tempPath, { force: true });
 
   const result = spawnSync("pnpm", ["--silent", "exec", "api-extractor", "run", "--verbose"], {
-    cwd: resolve(ROOT, pkgPath),
+    cwd: resolve(root, pkgPath),
     encoding: "utf-8",
   });
   const extractorOutput = `${result.stdout ?? ""}${result.stderr ?? ""}`;
@@ -165,39 +157,66 @@ function runExtractorAndDiff(
     return { ok: true, output: extractorOutput };
   }
 
-  return { ok: false, output: extractorOutput };
+  return { ok: false, output: extractorOutput, extracted: tempContent };
 }
 
-function main(): void {
-  const declaredMajors = majorBumpsFromPendingChangesets();
-  const failures: Array<{ pkg: TrackedPackage; output: string }> = [];
+export interface GateOptions {
+  root: string;
+  tracked: ReadonlyArray<TrackedPackage>;
+  /** The base branch the history check diffs against (merge-base with HEAD). */
+  baseRef: string;
+  /** Injected in tests; defaults to running api-extractor in `root`. */
+  extract?: (pkg: TrackedPackage) => ExtractResult;
+  write?: (text: string) => void;
+}
+
+const MAX_LISTED_LINES = 20;
+
+function listLines(write: (text: string) => void, label: string, lines: string[]): void {
+  if (lines.length === 0) return;
+  write(`    ${label}:\n`);
+  for (const line of lines.slice(0, MAX_LISTED_LINES)) write(`      ${line}\n`);
+  if (lines.length > MAX_LISTED_LINES) {
+    write(`      … and ${lines.length - MAX_LISTED_LINES} more\n`);
+  }
+}
+
+/** Run both halves of the gate; returns the process exit code. */
+export function runApiSurfaceGate(opts: GateOptions): number {
+  const { root, tracked } = opts;
+  const write = opts.write ?? ((text: string) => void process.stderr.write(text));
+  const extract =
+    opts.extract ?? ((pkg: TrackedPackage) => runExtractorAndDiff(root, pkg.path, pkg.baseline));
+  const bumps = pendingBumps(resolve(root, ".changeset"));
+  const failures: Array<{ pkg: TrackedPackage; result: ExtractResult }> = [];
   const extractionErrors: Array<{ pkg: TrackedPackage; output: string; error: string }> = [];
 
-  for (const pkg of TRACKED) {
+  write("Extracted surface vs committed baseline:\n");
+  for (const pkg of tracked) {
     // Confirm the baseline exists. Absence is a config bug, not a drift.
-    const baselinePath = resolve(ROOT, pkg.path, pkg.baseline);
+    const baselinePath = resolve(root, pkg.path, pkg.baseline);
     if (!existsSync(baselinePath)) {
-      process.stderr.write(
+      write(
         `error: ${pkg.name} baseline missing at ${pkg.baseline}. Run \`pnpm --filter ${pkg.name} run api:extract\` and commit the result.\n`,
       );
-      process.exit(2);
+      return 2;
     }
 
-    const { ok, output, error } = runExtractorAndDiff(pkg.path, pkg.baseline);
-    if (error !== undefined) {
+    const result = extract(pkg);
+    if (result.error !== undefined) {
       // Not a drift verdict at all — the surface was never extracted. A
       // pending `major` changeset does not cover this: there is nothing to
       // compare, so the gate fails closed.
-      process.stderr.write(`  ✗ ${pkg.name.padEnd(24)} API surface NOT extracted\n`);
-      extractionErrors.push({ pkg, output, error });
+      write(`  ✗ ${pkg.name.padEnd(24)} API surface NOT extracted\n`);
+      extractionErrors.push({ pkg, output: result.output, error: result.error });
       continue;
     }
-    if (ok) {
-      process.stderr.write(`  ✓ ${pkg.name.padEnd(24)} API surface matches baseline\n`);
+    if (result.ok) {
+      write(`  ✓ ${pkg.name.padEnd(24)} API surface matches baseline\n`);
       continue;
     }
 
-    if (declaredMajors.has(pkg.name)) {
+    if (bumps.get(pkg.name) === "major") {
       // The author already declared this as a breaking change. Accept the
       // diff — but the baseline still needs to be regenerated and committed
       // so reviewers see exactly what changed.
@@ -207,56 +226,145 @@ function main(): void {
       // That asymmetry is deliberate: it forces the author to run the
       // extractor locally (`pnpm -r run api:extract`) and commit the result,
       // which puts the diff in the PR for review.
-      process.stderr.write(
-        `  ⚠ ${pkg.name.padEnd(24)} API changed — covered by pending \`major\` changeset\n`,
-      );
-      process.stderr.write(
+      write(`  ⚠ ${pkg.name.padEnd(24)} API changed — covered by pending \`major\` changeset\n`);
+      write(
         `    Remember to run \`pnpm --filter ${pkg.name} run api:extract\` and commit the updated baseline.\n`,
       );
       continue;
     }
 
-    failures.push({ pkg, output });
+    write(`  ✗ ${pkg.name.padEnd(24)} API surface diverges from the committed baseline\n`);
+    failures.push({ pkg, result });
+  }
+
+  // History half: what this branch changed in each committed baseline.
+  // Without it, regenerating the baseline (the instruction above) would make
+  // any break invisible to the extractor half.
+  write(`\nCommitted baseline vs merge-base with ${opts.baseRef}:\n`);
+  const history = checkBaselineHistory({
+    root,
+    baseRef: opts.baseRef,
+    packages: tracked.map((pkg) => ({
+      name: pkg.name,
+      baselinePath: `${pkg.path}/${pkg.baseline}`,
+    })),
+  });
+  const historyFailures: HistoryVerdict[] = [];
+  if (history.ok) {
+    for (const v of history.verdicts) {
+      const name = v.pkg.name.padEnd(24);
+      const declared = v.declared === undefined ? "none" : `\`${v.declared}\``;
+      if (v.change.kind === "new") {
+        write(`  ✓ ${name} newly tracked (no baseline at the merge-base)\n`);
+      } else if (v.change.kind === "unchanged") {
+        write(`  ✓ ${name} no declaration changed since the merge-base\n`);
+      } else if (v.ok) {
+        write(`  ✓ ${name} ${v.change.kind} change covered by pending ${declared} changeset\n`);
+      } else {
+        write(
+          `  ✗ ${name} ${v.change.kind.toUpperCase()} change needs a pending \`${v.required ?? "major"}\` changeset (declared: ${declared})\n`,
+        );
+        historyFailures.push(v);
+      }
+    }
+  } else {
+    write(`  ✗ history NOT checked — ${history.error}\n`);
   }
 
   if (extractionErrors.length > 0) {
-    process.stderr.write(
-      `\nerror: could not extract the API surface for ${extractionErrors.length} of ${TRACKED.length} package(s) — the gate fails closed rather than treat an unchecked surface as matching:\n\n`,
+    write(
+      `\nerror: could not extract the API surface for ${extractionErrors.length} of ${tracked.length} package(s) — the gate fails closed rather than treat an unchecked surface as matching:\n\n`,
     );
     for (const { pkg, output, error } of extractionErrors) {
-      process.stderr.write(`─── ${pkg.name} ───\n  ${error}\n`);
-      if (output) process.stderr.write(output);
-      process.stderr.write(
+      write(`─── ${pkg.name} ───\n  ${error}\n`);
+      if (output) write(output);
+      write(
         `  Fix: run \`pnpm --filter ${pkg.name} build\` so ${pkg.path}/dist/index.d.ts exists (or fix the api-extractor error shown above), then re-run \`pnpm check-api-surface\`.\n\n`,
       );
     }
-    process.exit(1);
   }
 
-  if (failures.length === 0) {
-    process.stderr.write(
-      `\nAPI surface check passed — ${TRACKED.length} packages match their baselines.\n`,
+  if (!history.ok) {
+    write(
+      `\nerror: could not compare the committed baselines with the merge-base — the gate fails closed rather than assume this branch changed no baseline (scripts/lib/api-baseline-history.ts):\n  ${history.error}\n  Fix: ${history.repair}\n`,
     );
-    return;
   }
 
-  process.stderr.write(
-    `\nerror: API surface diverged for ${failures.length} package(s) without a corresponding \`major\` changeset:\n\n`,
-  );
-  for (const { pkg, output } of failures) {
-    process.stderr.write(`─── ${pkg.name} ───\n`);
-    // api-extractor's own output includes the diff location and guidance.
-    process.stderr.write(output);
-    process.stderr.write("\n");
+  if (failures.length > 0) {
+    write(
+      `\nerror: the extracted API surface diverges from the committed baseline for ${failures.length} package(s):\n\n`,
+    );
+    for (const { pkg, result } of failures) {
+      write(`─── ${pkg.name} ───\n`);
+      // api-extractor's own output includes the diff location and guidance.
+      write(result.output);
+      const baseline = readFileSync(resolve(root, pkg.path, pkg.baseline), "utf-8");
+      const change =
+        result.extracted === undefined
+          ? undefined
+          : classifyBaselineChange(baseline, result.extracted);
+      if (change?.kind === "additive") {
+        write(
+          `\n  The change is ADDITIVE (declarations only added). Resolution:\n` +
+            `    run \`pnpm --filter ${pkg.name} run api:extract\`, commit the updated baseline,\n` +
+            `    and add a changeset declaring "${pkg.name}": minor (or higher).\n`,
+        );
+        listLines(write, "added", change.added);
+      } else {
+        write(
+          `\n  The change is BREAKING (a declaration was removed or changed). Resolution:\n` +
+            `    1. Intentional → add a changeset declaring "${pkg.name}": major with a \`## Migration\`\n` +
+            `       section, run \`pnpm --filter ${pkg.name} run api:extract\`, and commit the updated baseline.\n` +
+            `    2. Accidental → revert the API change.\n`,
+        );
+        if (change) {
+          listLines(write, "removed or changed", change.removed);
+          listLines(write, "added", change.added);
+        }
+      }
+      write("\n");
+    }
   }
-  process.stderr.write(
-    "Resolution paths:\n" +
-      "  1. If the change is intentional and breaking → add a changeset marking the package `major`\n" +
-      "     with a \\`## Migration\\` section, then run \\`pnpm --filter <pkg> run api:extract\\`\n" +
-      "     and commit the updated baseline.\n" +
-      "  2. If the change was accidental → revert the API change.\n",
+
+  if (historyFailures.length > 0) {
+    write(
+      `\nerror: the committed API baseline changed since the merge-base without a covering changeset for ${historyFailures.length} package(s):\n\n`,
+    );
+    for (const v of historyFailures) {
+      write(`─── ${v.pkg.name} (${v.pkg.baselinePath}) ───\n`);
+      if (v.change.kind === "additive") {
+        write(
+          `  ADDITIVE (declarations only added). Resolution: add a changeset declaring\n` +
+            `  "${v.pkg.name}": minor (or higher) and commit it.\n`,
+        );
+        listLines(write, "added", v.change.added);
+      } else {
+        write(
+          `  BREAKING (a declaration was removed or changed). Resolution:\n` +
+            `    1. Intentional → add a changeset declaring "${v.pkg.name}": major with a \`## Migration\` section.\n` +
+            `    2. Accidental → revert the API change and re-run \`pnpm --filter ${v.pkg.name} run api:extract\`.\n`,
+        );
+        listLines(write, "removed or changed", v.change.removed);
+        listLines(write, "added", v.change.added);
+      }
+      write("\n");
+    }
+  }
+
+  if (
+    extractionErrors.length > 0 ||
+    !history.ok ||
+    failures.length > 0 ||
+    historyFailures.length > 0
+  ) {
+    return 1;
+  }
+  write(
+    `\nAPI surface check passed — ${tracked.length} packages match their baselines, and every baseline change since the merge-base is covered by a pending changeset.\n`,
   );
-  process.exit(1);
+  return 0;
 }
 
-main();
+if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) {
+  process.exit(runApiSurfaceGate({ root: ROOT, tracked: TRACKED, baseRef: "origin/main" }));
+}

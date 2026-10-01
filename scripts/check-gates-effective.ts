@@ -823,6 +823,74 @@ export async function probeLeak(): Promise<boolean> {
   {
     script: "check-api-surface",
     proves:
+      "flags a breaking change whose author regenerated and committed the baselines (`api:extract`, as the gate's own resolution text instructs) with no changeset — the history half compares each baseline with the merge-base with origin/main, so a removed declaration line needs a pending `major` even when the extracted surface and the baseline agree again",
+    perturb: () => {
+      // The review-2 bypass, reproduced: narrow crypto's `VerifyResult` in the
+      // built .d.ts, then regenerate BOTH affected baselines with the real
+      // extractor (`--local` overwrites etc/*.api.md). The extractor half now
+      // sees surface == baseline and passes; only the merge-base comparison
+      // can still go red. Cleanup restores the dist and both baselines.
+      const restoreDist = mutateFile("packages/crypto/dist/index.d.ts", (src) => {
+        const tail = " | UnknownVerifyResult;";
+        const line = src.split("\n").find((l) => l.startsWith("export type VerifyResult = "));
+        if (line === undefined || !line.endsWith(tail)) {
+          throw new Error(
+            "crypto dist/index.d.ts VerifyResult union (ending in UnknownVerifyResult) not found — update this probe",
+          );
+        }
+        return src.replace(line, `${line.slice(0, -tail.length)};`);
+      });
+      const baselines = [
+        "packages/crypto/etc/crypto.api.md",
+        "packages/verifier/etc/verifier.api.md",
+      ];
+      const originals = baselines.map((rel) => readFileSync(resolve(ROOT, rel), "utf-8"));
+      const restoreBaselines = () => {
+        baselines.forEach((rel, i) => {
+          const absolute = resolve(ROOT, rel);
+          activePerturbations.delete(absolute);
+          writeFileSync(absolute, originals[i]!);
+        });
+      };
+      try {
+        for (const pkg of ["packages/crypto", "packages/verifier"]) {
+          const r = spawnSync(
+            "pnpm",
+            ["--silent", "exec", "api-extractor", "run", "--local", "--verbose"],
+            { cwd: resolve(ROOT, pkg), encoding: "utf-8" },
+          );
+          if (!/API Extractor completed/.test(`${r.stdout ?? ""}${r.stderr ?? ""}`)) {
+            throw new Error(
+              `api-extractor --local did not complete in ${pkg} — run \`pnpm build\` first`,
+            );
+          }
+        }
+        baselines.forEach((rel, i) => {
+          const absolute = resolve(ROOT, rel);
+          const regenerated = readFileSync(absolute, "utf-8");
+          if (regenerated === originals[i]) {
+            throw new Error(`${rel} did not change after regeneration — update this probe`);
+          }
+          activePerturbations.set(absolute, regenerated);
+        });
+      } catch (err) {
+        restoreBaselines();
+        restoreDist();
+        throw err;
+      }
+      return () => {
+        restoreBaselines();
+        restoreDist();
+      };
+    },
+    skipWhen: () => {
+      const verifier = scanChangesetsForMajor("@motebit/verifier");
+      return verifier.skip ? verifier : scanChangesetsForMajor("@motebit/crypto");
+    },
+  },
+  {
+    script: "check-api-surface",
+    proves:
       "fails closed when a tracked package's dist/index.d.ts is missing — an unbuilt package is never reported as matching its baseline",
     perturb: () => {
       // Move the entry point aside rather than delete it, so cleanup restores
