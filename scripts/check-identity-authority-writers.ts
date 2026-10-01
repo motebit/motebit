@@ -1010,22 +1010,23 @@ const WRITERS: readonly Writer[] = [
     table: "relay_disputes",
     count: 1,
     principal:
-      "the filer — a DisputeRequest signed by `filed_by`'s registered key. KNOWN GAP (#846 v2 audit): nothing checks `filed_by` is a party to the task (§4.4) — reported, not fixed here",
+      "the filer — a DisputeRequest signed by `filed_by`'s registered key, and `filed_by` must be the allocation's worker or delegator (read from the settlement row / allocation_hold payer, never the body) with the other party as respondent (§4.4); guarded to one non-expired dispute per task",
   },
   {
     file: R + "disputes.ts",
     verb: "UPDATE",
     table: "relay_allocations",
-    count: 1,
-    principal: "the same filing (flips the allocation to `disputed`) — same gap",
+    count: 2,
+    principal:
+      "(1) the same filing (flips a `locked`/`settled` allocation to `disputed`, guarded on the status it read); (2) the fund action that resolves the dispute — reached only from the operator's verdict finalized (lazy window expiry or round-2 appeal), closing `disputed` → `settled`/`released` once, behind the write-once `relay_dispute_fund_actions` claim",
   },
   {
     file: R + "disputes.ts",
     verb: "UPDATE",
     table: "relay_disputes",
-    count: 6,
+    count: 5,
     principal:
-      "state transitions: the filing above; `/resolve` — the OPERATOR's act, master token only (#846 v2: it took any caller's verdict); appeal (a party's signature); lazy finalize (time-driven)",
+      "state transitions: `/resolve` — the OPERATOR's act, master token only (#846 v2: it took any caller's verdict); appeal (a party's signature); lazy finalize and opened-expiry (time-driven). The filing's own `evidence` state is now set by its guarded INSERT",
   },
   {
     file: R + "disputes.ts",

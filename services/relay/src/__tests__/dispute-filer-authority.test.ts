@@ -16,6 +16,8 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import type { SyncRelay } from "../index.js";
 import { generateKeypair, bytesToHex, signDisputeRequest } from "@motebit/encryption";
+import { creditAccount, debitAccount } from "../accounts.js";
+import { releaseStaleAllocations } from "../index.js";
 import { AUTH_HEADER, createTestRelay, seedX402PaidTask } from "./test-helpers.js";
 
 type Keypair = { publicKey: Uint8Array; privateKey: Uint8Array };
@@ -156,6 +158,138 @@ describe("Dispute filing authority (dispute-v1 §4.4)", () => {
       .prepare("SELECT filer_role FROM relay_disputes WHERE dispute_id = ?")
       .get(dispute_id) as { filer_role: string };
     expect(row.filer_role).toBe("worker");
+  });
+
+  // Each party guard is a distinct, live refusal — a mutation that drops any
+  // one of them turns a 403 here into a 200 (or a different refusal).
+  describe("party guards (each one live)", () => {
+    it("rejects the worker naming a stranger as respondent", async () => {
+      const res = await file({ allocationId, taskId, filedBy: "wrk-auth", respondent: "mallory" });
+      expect(res.status).toBe(403);
+      expect(await res.text()).toContain("Respondent must be the other party");
+      expect(allocationStatus(allocationId)).toBe("locked");
+    });
+
+    it("rejects a self-delegated task (no counterparty)", async () => {
+      const selfTask = seedX402PaidTask(relay, {
+        workerId: "wrk-auth",
+        delegatorId: "wrk-auth",
+        prompt: "self",
+        unitCostUsd: 1.0,
+      });
+      const res = await file({
+        allocationId: `x402-${selfTask}`,
+        taskId: selfTask,
+        filedBy: "wrk-auth",
+        respondent: "wrk-auth",
+      });
+      expect(res.status).toBe(403);
+      expect(await res.text()).toContain("self-delegated");
+      expect(allocationStatus(`x402-${selfTask}`)).toBe("locked");
+    });
+
+    it("fails closed when no ledger record names the delegator", async () => {
+      // An allocation with neither a settlement row nor an allocation_hold
+      // debit (the never-debited best-effort shape).
+      relay.moteDb.db
+        .prepare(
+          `INSERT INTO relay_allocations (allocation_id, task_id, motebit_id, amount_locked, status, created_at)
+           VALUES ('alloc-nohold', 'task-nohold', 'wrk-auth', 1000, 'locked', ?)`,
+        )
+        .run(Date.now());
+      for (const respondent of ["del-auth", "mallory"]) {
+        const res = await file({
+          allocationId: "alloc-nohold",
+          taskId: "task-nohold",
+          filedBy: "wrk-auth",
+          respondent,
+        });
+        expect(res.status).toBe(403);
+        expect(await res.text()).toContain("cannot be established");
+      }
+      expect(allocationStatus("alloc-nohold")).toBe("locked");
+    });
+
+    it("fails closed when more than one payer held funds for the allocation", async () => {
+      creditAccount(relay.moteDb.db, "mallory", 10, "deposit", "dep-m", "deposit");
+      debitAccount(relay.moteDb.db, "mallory", 10, "allocation_hold", allocationId, "second hold");
+      for (const filedBy of ["del-auth", "mallory"]) {
+        const res = await file({ allocationId, taskId, filedBy, respondent: "wrk-auth" });
+        expect(res.status).toBe(403);
+        expect(await res.text()).toContain("cannot be established");
+      }
+      expect(allocationStatus(allocationId)).toBe("locked");
+    });
+
+    it("reads the delegator from the settlement row when one exists", async () => {
+      // Settled allocation whose ledger carries no hold row: only the
+      // settlement's delegator_id names the delegator.
+      const db = relay.moteDb.db;
+      db.prepare(
+        `INSERT INTO relay_allocations (allocation_id, task_id, motebit_id, amount_locked, status, created_at)
+         VALUES ('alloc-stl', 'task-stl', 'wrk-auth', 1000, 'settled', ?)`,
+      ).run(Date.now());
+      db.prepare(
+        `INSERT INTO relay_settlements
+         (settlement_id, allocation_id, task_id, motebit_id, receipt_hash, amount_settled,
+          platform_fee, platform_fee_rate, status, settled_at, settlement_mode, delegator_id)
+         VALUES ('stl-1', 'alloc-stl', 'task-stl', 'wrk-auth', '', 950, 50, 0.05, 'completed', ?, 'relay', 'del-auth')`,
+      ).run(Date.now());
+      const res = await file({
+        allocationId: "alloc-stl",
+        taskId: "task-stl",
+        filedBy: "del-auth",
+        respondent: "wrk-auth",
+      });
+      expect(res.status).toBe(200);
+      expect(allocationStatus("alloc-stl")).toBe("disputed");
+    });
+  });
+
+  // §7.1: only an allocation still holding its funds can be disputed, and an
+  // allocation carries at most one non-expired dispute.
+  describe("allocation state at filing", () => {
+    it("rejects a dispute on a released (refunded) allocation", async () => {
+      expect(releaseStaleAllocations(relay.moteDb.db, Date.now() + 1000, 0, () => "del-auth")).toBe(
+        1,
+      );
+      const res = await file({ allocationId, taskId, filedBy: "del-auth", respondent: "wrk-auth" });
+      expect(res.status).toBe(409);
+      expect(allocationStatus(allocationId)).toBe("released");
+      expect(disputeCount()).toBe(0);
+    });
+
+    it("rejects a second dispute on an allocation already under dispute, from either party", async () => {
+      const first = await file({
+        allocationId,
+        taskId,
+        filedBy: "del-auth",
+        respondent: "wrk-auth",
+      });
+      expect(first.status).toBe(200);
+      for (const [filedBy, respondent] of [
+        ["del-auth", "wrk-auth"],
+        ["wrk-auth", "del-auth"],
+      ] as const) {
+        const again = await file({ allocationId, taskId, filedBy, respondent });
+        expect(again.status).toBe(409);
+      }
+      expect(disputeCount()).toBe(1);
+    });
+
+    it("the one-dispute-per-task index refuses a second live row even past the route", () => {
+      const db = relay.moteDb.db;
+      const insert = (id: string) =>
+        db
+          .prepare(
+            `INSERT INTO relay_disputes
+             (dispute_id, task_id, allocation_id, filed_by, respondent, category, description, state, filed_at, evidence_deadline)
+             VALUES (?, ?, ?, 'del-auth', 'wrk-auth', 'quality', 'x', 'evidence', 0, 0)`,
+          )
+          .run(id, taskId, allocationId);
+      insert("dsp-direct-1");
+      expect(() => insert("dsp-direct-2")).toThrow(/UNIQUE/);
+    });
   });
 
   describe("p2p trust-layer disputes", () => {

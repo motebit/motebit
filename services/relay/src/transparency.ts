@@ -114,6 +114,7 @@ export const DECLARATION_CONTENT = {
         "relay_disputes",
         "relay_dispute_evidence",
         "relay_dispute_resolutions",
+        "relay_dispute_fund_actions",
         "relay_peers",
         "relay_federation_settlements",
         "relay_execution_ledgers",
