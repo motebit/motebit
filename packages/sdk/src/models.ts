@@ -301,12 +301,64 @@ export const MOTEBIT_CLOUD_MODEL_ALIASES: Readonly<Record<string, string>> = {
   "gemini-1.5-flash": "gemini-2.5-flash",
 };
 
+/**
+ * The model list a relay-minted proxy token carries once the account has
+ * REAL funding (a deposit, settlement earnings — anything that is not the
+ * welcome credit). The relay MINTS from this list and the proxy refuses (400)
+ * any id outside the token's list, so it is the second half of Cloud
+ * admission (#654 cold review R3): an id in
+ * {@link MOTEBIT_CLOUD_ACCEPTED_MODELS} but not here (the Groq rows) is never
+ * served to a paying account. Every id here must be accepted.
+ */
+export const MOTEBIT_CLOUD_DEPOSIT_MODELS = [
+  "claude-opus-4-6",
+  "claude-sonnet-4-6",
+  "claude-haiku-4-5-20251001",
+  "gpt-5.4",
+  "gpt-5.4-mini",
+  "gpt-5.4-nano",
+  "gemini-2.5-pro",
+  "gemini-2.5-flash",
+  "gemini-2.5-flash-lite",
+] as const;
+
+/**
+ * The model list a token carries while the account holds ONLY the welcome
+ * credit. The frontier tier is excluded: a $0.10 free identity naming Opus at
+ * 16k output tokens in parallel is the overspend shape the 2026-09-12 audit
+ * named. A subset of {@link MOTEBIT_CLOUD_DEPOSIT_MODELS}.
+ */
+export const MOTEBIT_CLOUD_FREE_CREDIT_MODELS = [
+  "claude-sonnet-4-6",
+  "claude-haiku-4-5-20251001",
+  "gpt-5.4-mini",
+  "gpt-5.4-nano",
+  "gemini-2.5-flash",
+  "gemini-2.5-flash-lite",
+] as const;
+
+/** How an account is funded — the relay picks the token's model list by it. */
+export type MotebitCloudFundingTier = "deposit" | "free-credit";
+
+/** The list the relay mints into a proxy token, per funding tier. */
+export const MOTEBIT_CLOUD_TOKEN_MODELS: Readonly<
+  Record<MotebitCloudFundingTier, readonly string[]>
+> = {
+  deposit: MOTEBIT_CLOUD_DEPOSIT_MODELS,
+  "free-credit": MOTEBIT_CLOUD_FREE_CREDIT_MODELS,
+};
+
+/** Why {@link motebitCloudAdmission} refused: the proxy's 400 vs its 451. */
+export type MotebitCloudRefusal = "token_model" | "not_in_catalog";
+
 /** The verdict of {@link motebitCloudAdmission}. */
 export interface MotebitCloudAdmission {
   /** Would Motebit Cloud's metered (proxy-token) path admit the id as sent? */
   readonly admitted: boolean;
   /** The id the proxy routes after alias resolution (`""` for a non-string). */
   readonly resolved: string;
+  /** Set when refused: outside the token's list (400) or the catalog (451). */
+  readonly refusal?: MotebitCloudRefusal;
 }
 
 /** The two tables an admission is computed over. */
@@ -321,34 +373,63 @@ export const MOTEBIT_CLOUD_CATALOG: MotebitCloudCatalog = {
   accepted: MOTEBIT_CLOUD_ACCEPTED_MODELS,
 };
 
+/** Which token the admission is asked about. */
+export interface MotebitCloudAdmissionOptions {
+  /**
+   * The model list the token carries. The proxy passes the presented token's
+   * list; an empty list means "no per-token list" (the catalog alone
+   * decides), exactly as the route treats it. Overrides `tier`.
+   */
+  readonly tokenModels?: readonly string[];
+  /**
+   * A client that does not hold the token names the funding tier instead;
+   * default `"deposit"` — the ceiling the relay mints for a paying account.
+   */
+  readonly tier?: MotebitCloudFundingTier;
+  /** Test seam: prove the catalog checks are load-bearing. */
+  readonly catalog?: MotebitCloudCatalog;
+}
+
 /**
  * Motebit Cloud's model admission — THE rule. `services/proxy` calls it on
- * every request (it holds no private copy) and every client pre-flight or
- * stored-setting sanitizer calls it, so a client can never refuse or rewrite
- * a model the proxy would serve (#654 cold review R2). Pure, no I/O.
+ * every request with the presented token's model list (it holds no private
+ * copy) and every client pre-flight or stored-setting sanitizer calls it with
+ * the funding tier, so a client can never refuse or rewrite a model the proxy
+ * would serve, nor admit one it would refuse (#654 cold review R2, R3). The
+ * relay mints the token's list from {@link MOTEBIT_CLOUD_TOKEN_MODELS}, so
+ * the relay, the proxy and every client read one table. Pure, no I/O.
  *
  *   - a non-string or empty id → refused;
  *   - `"auto"` → admitted (the proxy routes it server-side);
- *   - otherwise the id is alias-resolved, then admitted iff the resolved id
- *     is in the accepted set. Exact match: no trimming, no case folding —
- *     the proxy does neither.
- *
- * `catalog` exists for tests that prove the accepted-set check is
- * load-bearing (an alias whose target is outside the set is refused).
+ *   - otherwise the id is alias-resolved, then refused with `token_model`
+ *     when a non-empty token list does not name the resolved id (the route's
+ *     400), else with `not_in_catalog` when the accepted set does not (its
+ *     451). Exact match: no trimming, no case folding — the proxy does
+ *     neither.
  */
 export function motebitCloudAdmission(
   model: unknown,
-  catalog: MotebitCloudCatalog = MOTEBIT_CLOUD_CATALOG,
+  options: MotebitCloudAdmissionOptions = {},
 ): MotebitCloudAdmission {
-  if (typeof model !== "string" || model.length === 0) return { admitted: false, resolved: "" };
+  const catalog = options.catalog ?? MOTEBIT_CLOUD_CATALOG;
+  const tokenModels = options.tokenModels ?? MOTEBIT_CLOUD_TOKEN_MODELS[options.tier ?? "deposit"];
+  if (typeof model !== "string" || model.length === 0) {
+    return { admitted: false, resolved: "", refusal: "not_in_catalog" };
+  }
   if (model === MOTEBIT_CLOUD_AUTO_MODEL) return { admitted: true, resolved: model };
   const resolved = Object.prototype.hasOwnProperty.call(catalog.aliases, model)
     ? (catalog.aliases[model] as string)
     : model;
-  return { admitted: catalog.accepted.includes(resolved), resolved };
+  if (tokenModels.length > 0 && !tokenModels.includes(resolved)) {
+    return { admitted: false, resolved, refusal: "token_model" };
+  }
+  if (!catalog.accepted.includes(resolved)) {
+    return { admitted: false, resolved, refusal: "not_in_catalog" };
+  }
+  return { admitted: true, resolved };
 }
 
-/** Would Motebit Cloud admit `model` as sent? `motebitCloudAdmission(model).admitted`. */
+/** Would Motebit Cloud admit `model` as sent, for a paying (deposit-funded) account? */
 export function motebitCloudAdmitsModel(model: string): boolean {
   return motebitCloudAdmission(model).admitted;
 }

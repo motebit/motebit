@@ -650,16 +650,33 @@ export const MOTEBIT_CLOUD_AUTO_MODEL = "auto";
 export const MOTEBIT_CLOUD_CATALOG: MotebitCloudCatalog;
 
 // @public
+export const MOTEBIT_CLOUD_DEPOSIT_MODELS: readonly ["claude-opus-4-6", "claude-sonnet-4-6", "claude-haiku-4-5-20251001", "gpt-5.4", "gpt-5.4-mini", "gpt-5.4-nano", "gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.5-flash-lite"];
+
+// @public
+export const MOTEBIT_CLOUD_FREE_CREDIT_MODELS: readonly ["claude-sonnet-4-6", "claude-haiku-4-5-20251001", "gpt-5.4-mini", "gpt-5.4-nano", "gemini-2.5-flash", "gemini-2.5-flash-lite"];
+
+// @public
 export const MOTEBIT_CLOUD_MODEL_ALIASES: Readonly<Record<string, string>>;
+
+// @public
+export const MOTEBIT_CLOUD_TOKEN_MODELS: Readonly<Record<MotebitCloudFundingTier, readonly string[]>>;
 
 // @public
 export interface MotebitCloudAdmission {
     readonly admitted: boolean;
+    readonly refusal?: MotebitCloudRefusal;
     readonly resolved: string;
 }
 
 // @public
-export function motebitCloudAdmission(model: unknown, catalog?: MotebitCloudCatalog): MotebitCloudAdmission;
+export function motebitCloudAdmission(model: unknown, options?: MotebitCloudAdmissionOptions): MotebitCloudAdmission;
+
+// @public
+export interface MotebitCloudAdmissionOptions {
+    readonly catalog?: MotebitCloudCatalog;
+    readonly tier?: MotebitCloudFundingTier;
+    readonly tokenModels?: readonly string[];
+}
 
 // @public
 export function motebitCloudAdmitsModel(model: string): boolean;
@@ -673,6 +690,9 @@ export interface MotebitCloudCatalog {
 }
 
 // @public
+export type MotebitCloudFundingTier = "deposit" | "free-credit";
+
+// @public
 export interface MotebitCloudProviderConfig {
     baseUrl?: string;
     // (undocumented)
@@ -684,6 +704,9 @@ export interface MotebitCloudProviderConfig {
     // (undocumented)
     temperature?: number;
 }
+
+// @public
+export type MotebitCloudRefusal = "token_model" | "not_in_catalog";
 
 // @public (undocumented)
 export interface MotebitState {

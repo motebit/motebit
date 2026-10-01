@@ -59,6 +59,7 @@ import { admitModelForProvider } from "../../apps/cli/src/model-admission";
 import { applyConfiguredProvider } from "../../apps/cli/src/provider-config";
 import { parseCliArgs } from "../../apps/cli/src/args";
 import { modelFieldValueForLane } from "../../apps/spatial/src/model-field";
+import { modelsForFunding } from "../../services/relay/src/proxy-token-models";
 
 // ── Corpus ───────────────────────────────────────────────────────────────
 
@@ -216,13 +217,14 @@ interface ProxyVerdict {
 const ORIGIN = "http://localhost:3000";
 const PROVIDER_ENV = ["ANTHROPIC_API_KEY", "OPENAI_API_KEY", "GOOGLE_AI_API_KEY", "GROQ_API_KEY"];
 
-async function proxyVerdict(model: string): Promise<ProxyVerdict> {
+async function proxyVerdict(model: string, models: readonly string[]): Promise<ProxyVerdict> {
   vi.mocked(validation.parseProxyToken).mockResolvedValue({
     mid: "mote-diff",
     jti: `jti-${Math.random()}`,
     bal: 100_000_000,
-    // Empty = no per-token allowlist: the route's catalog rule alone decides.
-    models: [],
+    // The REAL list the relay mints (#654 R3): the route also checks the
+    // token's model list, so an empty list would hide that second check.
+    models: [...models],
     iat: Date.now(),
     exp: Date.now() + 3_600_000,
   } as ProxyTokenPayload);
@@ -262,7 +264,16 @@ async function proxyVerdict(model: string): Promise<ProxyVerdict> {
   }
 }
 
+/** The two lists the relay can mint for an account with a balance. */
+const MINTED = {
+  deposit: modelsForFunding(true),
+  "free-credit": modelsForFunding(false),
+} as const;
+
+/** Verdicts under a deposit-funded token (the paying account). */
 const verdicts = new Map<string, ProxyVerdict>();
+/** Verdicts under a welcome-credit-only token. */
+const freeVerdicts = new Map<string, ProxyVerdict>();
 
 beforeAll(async () => {
   process.env.RELAY_PUBLIC_KEY = "test-pubkey";
@@ -272,9 +283,11 @@ beforeAll(async () => {
   vi.spyOn(console, "error").mockImplementation(() => {});
   for (const m of CORPUS) {
     setSpendStoreForTests(memorySpendStore());
-    verdicts.set(m, await proxyVerdict(m));
+    verdicts.set(m, await proxyVerdict(m, MINTED.deposit));
+    setSpendStoreForTests(memorySpendStore());
+    freeVerdicts.set(m, await proxyVerdict(m, MINTED["free-credit"]));
   }
-}, 120_000);
+}, 240_000);
 
 afterAll(() => {
   setSpendStoreForTests(undefined);
@@ -317,6 +330,43 @@ describe("Motebit Cloud admission — proxy route ⇔ every client (#654 R2)", (
       if (!a.admitted || m === "auto") continue;
       // The upstream request carries the resolved id, quoted.
       expect(verdicts.get(m)!.upstream, m).toContain(a.resolved);
+    }
+  });
+
+  it("the relay mints only non-empty lists, and every minted id is served", () => {
+    for (const [tier, list] of Object.entries(MINTED)) {
+      expect(list.length, tier).toBeGreaterThan(0);
+      const map = tier === "deposit" ? verdicts : freeVerdicts;
+      for (const m of list) expect(map.get(m)?.admitted, `${tier}: ${m}`).toBe(true);
+    }
+  });
+
+  it("the shared function with the minted tier IS the route's verdict for each tier", () => {
+    expect(disagreements((m) => motebitCloudAdmission(m, { tier: "deposit" }).admitted)).toEqual(
+      [],
+    );
+    const free = CORPUS.filter(
+      (m) =>
+        motebitCloudAdmission(m, { tier: "free-credit" }).admitted !==
+        freeVerdicts.get(m)!.admitted,
+    );
+    expect(free).toEqual([]);
+    // And with the token's own list, as the route calls it.
+    for (const [tier, list] of Object.entries(MINTED)) {
+      const map = tier === "deposit" ? verdicts : freeVerdicts;
+      const bad = CORPUS.filter(
+        (m) => motebitCloudAdmission(m, { tokenModels: list }).admitted !== map.get(m)!.admitted,
+      );
+      expect(bad, tier).toEqual([]);
+    }
+  });
+
+  it("C1 witnesses: Groq ids are refused for every minted token, so clients refuse them", () => {
+    for (const m of ["llama-3.3-70b-versatile", "openai/gpt-oss-120b"]) {
+      expect(admittedByProxy(m), m).toBe(false);
+      expect(freeVerdicts.get(m)!.admitted, m).toBe(false);
+      expect(admitModelForProvider("proxy", m).admissible, m).toBe(false);
+      expect(providerAcceptsModel("proxy", m), m).toBe(false);
     }
   });
 

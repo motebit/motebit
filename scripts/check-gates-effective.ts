@@ -1051,6 +1051,32 @@ export async function probeLeak(): Promise<boolean> {
         "apps/web/src/ui/__P__ent.html",
         '<option value="&#99;laude-opus-4-7">Opus</option>\n',
       ],
+      // #654 cold review R3: zero-padded escapes and `;`-free numeric refs.
+      [
+        "zero-padded \\u{} escape",
+        "apps/web/src/ui/__P__upad.ts",
+        'export const M = "\\u{0000063}laude-sonnet-5";\n',
+      ],
+      [
+        "zero-padded decimal entity",
+        "apps/web/src/ui/__P__dpad.html",
+        '<option value="&#0000000099;laude-sonnet-5">S</option>\n',
+      ],
+      [
+        "zero-padded hex entity",
+        "apps/web/src/ui/__P__xpad.html",
+        '<option value="&#x00000063;laude-sonnet-5">S</option>\n',
+      ],
+      [
+        "decimal entity without ;",
+        "apps/web/src/ui/__P__nosemi.html",
+        '<option value="&#99laude-sonnet-5">S</option>\n',
+      ],
+      [
+        "hyphen entity without ;",
+        "apps/web/src/ui/__P__hyph.html",
+        '<option value="claude&#45sonnet-5">S</option>\n',
+      ],
     ] as const
   ).map(([row, file, body]): Probe => ({
     script: "check-model-picker-canonical",

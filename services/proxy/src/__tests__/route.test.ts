@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import * as validation from "../validation";
 import type { ProxyTokenPayload } from "../validation";
+import { MOTEBIT_CLOUD_TOKEN_MODELS } from "@motebit/sdk";
 
 // Partial-mock the validation module: keep every real function, override only
 // `parseProxyToken` so we can drive the proxy-token balance path without minting
@@ -339,6 +340,31 @@ describe("model admission — motebitCloudAdmission is the route's rule", () => 
     expect(fetchSpy).toHaveBeenCalledTimes(1);
     expect(String(fetchSpy.mock.calls[0]![1]?.body)).toContain(`"${routed}"`);
   });
+
+  it.each([
+    ["deposit", "llama-3.3-70b-versatile"],
+    ["deposit", "openai/gpt-oss-120b"],
+    ["free-credit", "claude-opus-4-6"],
+    ["free-credit", "claude-opus"],
+  ] as const)(
+    "#654 R3: a %s token refuses %s with 400 — outside the relay-minted list",
+    async (tier, sent) => {
+      process.env.GROQ_API_KEY = "sk-groq-test";
+      vi.mocked(validation.parseProxyToken).mockResolvedValue(
+        tokenFor({ models: [...MOTEBIT_CLOUD_TOKEN_MODELS[tier]] }),
+      );
+      const fetchSpy = vi.fn();
+      vi.stubGlobal("fetch", fetchSpy);
+      const res = await post(
+        PROXY,
+        JSON.stringify({ model: sent, messages: [{ role: "user", content: "hi" }] }),
+      );
+      delete process.env.GROQ_API_KEY;
+      expect(res.status).toBe(400);
+      expect(((await res.json()) as { error: string }).error).toBe("invalid_model");
+      expect(fetchSpy).not.toHaveBeenCalled();
+    },
+  );
 
   it("an id outside the catalog (the BYOK default) is 451, never sent upstream", async () => {
     vi.mocked(validation.parseProxyToken).mockResolvedValue(tokenFor({ models: [] }));

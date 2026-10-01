@@ -131,7 +131,7 @@ describe("desktop Settings — Motebit Cloud default (C2)", () => {
 // R2: a stored Cloud id the proxy serves — alias, legacy or outside the
 // PROXY_MODELS picker — is shown selected and Saved verbatim, never migrated.
 describe("desktop Settings — stored Cloud model is never rewritten (R2)", () => {
-  it.each(["claude-opus-4-20250115", "claude-opus", "gpt-4o", "llama-3.3-70b-versatile", "auto"])(
+  it.each(["claude-opus-4-20250115", "claude-opus", "gpt-4o", "gemini-flash", "auto"])(
     "%s: shown selected and saved verbatim",
     async (stored) => {
       expect(motebitCloudAdmission(stored).admitted).toBe(true);

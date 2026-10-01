@@ -76,3 +76,41 @@ export function applyConfiguredProvider(
     }
   }
 }
+
+/**
+ * Every launch path's provider/model step — the interactive CLI, `motebit
+ * run` and `motebit serve` (#654 cold review R3: the daemon applied the
+ * persisted provider but ran no pre-flight, so `motebit run --provider proxy
+ * --model llama-3.3-70b-versatile` started and failed every turn).
+ *
+ * Applies the persisted choice ({@link applyConfiguredProvider}), then
+ * refuses an EXPLICIT `--model` (either spelling) that the provider would
+ * not serve. Returns the one-line error to print before exiting, or `null`.
+ * An implicit model is derived, so it is admissible by construction.
+ */
+export function applyLaunchProvider(
+  config: CliConfig,
+  persisted: PersistedProviderChoice,
+  argv: readonly string[],
+  notice: (line: string) => void = () => {},
+): string | null {
+  applyConfiguredProvider(config, persisted, argv, notice);
+  if (!argvHasFlag(argv, "--model")) return null;
+  const admission = admitModelForProvider(config.provider, config.model);
+  if (admission.admissible) return null;
+  return `Model "${config.model}" does not belong to provider "${config.provider}" — ${admission.teach ?? "pick a matching pair, or drop --model to use the provider's default."}`;
+}
+
+/**
+ * A persisted `max_tokens` applies unless `--max-tokens` was given on the
+ * command line, in either spelling (`--max-tokens 500` or `--max-tokens=500`).
+ */
+export function applyConfiguredMaxTokens(
+  config: CliConfig,
+  persisted: number | null | undefined,
+  argv: readonly string[],
+): void {
+  if (persisted != null && !argvHasFlag(argv, "--max-tokens")) {
+    config.maxTokens = persisted;
+  }
+}

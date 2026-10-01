@@ -132,7 +132,7 @@ describe("web Settings — stored Cloud model is never rewritten (R2)", () => {
     "claude-opus-4-20250115",
     "claude-opus",
     "gpt-4o",
-    "llama-3.3-70b-versatile",
+    "gemini-flash",
     "auto",
   ])("%s: shown selected and saved verbatim", (stored) => {
     expect(motebitCloudAdmission(stored).admitted).toBe(true);

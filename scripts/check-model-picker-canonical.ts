@@ -314,7 +314,9 @@ function readText(rel: string): string | null {
  *   - a string CONTINUATION — a line ending in `\` joins the next line
  *     (`"claude-\⏎sonnet-5"` is `"claude-sonnet-5"` at runtime);
  *   - an ESCAPE — `\u0063laude`, `\u{63}laude`, `\x63laude`, `&#99;laude`,
- *     `&#x63;laude` all decode to `claude`.
+ *     `&#x63;laude` all decode to `claude`, as do zero-padded forms
+ *     (`\u{0000063}`, `&#0000000099;`, `&#x00000063;`) and numeric references
+ *     without the `;` (`&#99laude`, `claude&#45sonnet`).
  *
  * Continuations are joined into one logical line (reported at its first
  * physical line), then escapes are decoded before the rules run.
@@ -345,12 +347,17 @@ function logicalLines(src: string): { line: string; at: number }[] {
 
 function decodeEscapes(line: string): string {
   const cp = (n: number): string => (n >= 0 && n <= 0x10ffff ? String.fromCodePoint(n) : "");
-  return line
-    .replace(/\\u\{([0-9a-f]{1,6})\}/gi, (_m, h: string) => cp(parseInt(h, 16)))
-    .replace(/\\u([0-9a-f]{4})/gi, (_m, h: string) => cp(parseInt(h, 16)))
-    .replace(/\\x([0-9a-f]{2})/gi, (_m, h: string) => cp(parseInt(h, 16)))
-    .replace(/&#x([0-9a-f]{1,6});/gi, (_m, h: string) => cp(parseInt(h, 16)))
-    .replace(/&#(\d{1,7});/g, (_m, d: string) => cp(parseInt(d, 10)));
+  return (
+    line
+      // Leading zeros are unbounded (`\u{0000063}`, `&#0000000099;`) and a
+      // numeric reference's `;` is optional (`&#99laude`, `claude&#45sonnet`) —
+      // both are how JS and HTML parsers read them (#654 cold review R3).
+      .replace(/\\u\{0*([0-9a-f]{1,6})\}/gi, (_m, h: string) => cp(parseInt(h, 16)))
+      .replace(/\\u([0-9a-f]{4})/gi, (_m, h: string) => cp(parseInt(h, 16)))
+      .replace(/\\x([0-9a-f]{2})/gi, (_m, h: string) => cp(parseInt(h, 16)))
+      .replace(/&#x0*([0-9a-f]{1,6});?/gi, (_m, h: string) => cp(parseInt(h, 16)))
+      .replace(/&#0*(\d{1,7});?/g, (_m, d: string) => cp(parseInt(d, 10)))
+  );
 }
 
 interface Finding {

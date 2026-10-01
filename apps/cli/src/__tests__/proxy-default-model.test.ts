@@ -70,7 +70,7 @@ describe("CLI → Motebit Cloud model (C1/C2)", () => {
     "claude-3-5-sonnet-20241022",
     "gpt-4o",
     "gemini-flash",
-    "llama-3.3-70b-versatile",
+    "gemini-2.5-pro",
     "auto",
   ])("a stored Cloud default_model the proxy admits (%s) is kept verbatim", (m) => {
     const config = parseCliArgs([]);
@@ -82,6 +82,21 @@ describe("CLI → Motebit Cloud model (C1/C2)", () => {
     expect(lines).toEqual([]);
     expect(admitModelForProvider("proxy", m).admissible).toBe(true);
   });
+
+  // R3: accepted by the catalog but named by no token the relay mints, so the
+  // proxy 400s it for every real account — the stored id yields.
+  it.each(["llama-3.3-70b-versatile", "openai/gpt-oss-120b"])(
+    "a stored Cloud default_model no minted token names (%s) yields to the Cloud default",
+    (m) => {
+      const config = parseCliArgs([]);
+      const lines: string[] = [];
+      applyConfiguredProvider(config, { default_provider: "proxy", default_model: m }, [], (l) =>
+        lines.push(l),
+      );
+      expect(config.model).toBe(DEFAULT_PROXY_MODEL);
+      expect(lines.join("\n")).toContain("not served by Motebit Cloud");
+    },
+  );
 
   it("the yield notice on proxy names Motebit Cloud, not 'another provider'", () => {
     const config = parseCliArgs([]);
@@ -133,10 +148,10 @@ describe("CLI → Motebit Cloud model (C1/C2)", () => {
   // above PLUS this structural pin: both entry points route through
   // applyConfiguredProvider and neither keeps a private copy.
   it.each(["index.ts", "daemon.ts"])(
-    "%s routes the persisted provider through applyConfiguredProvider",
+    "%s routes the persisted provider through applyLaunchProvider",
     (file) => {
       const src = fs.readFileSync(path.join(SRC, file), "utf8");
-      expect(src).toMatch(/applyConfiguredProvider\(config, personalityConfig, process\.argv/);
+      expect(src).toMatch(/applyLaunchProvider\(config, personalityConfig, process\.argv/);
       expect(src).not.toMatch(/config\.provider = personalityConfig\.default_provider/);
       expect(src).not.toMatch(/config\.model = personalityConfig\.default_model/);
     },

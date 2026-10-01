@@ -51,7 +51,7 @@ import { applyMotebitYaml, resolveYamlPath } from "./subcommands/up.js";
 import { formatDiagnostic } from "./yaml-config.js";
 import type { CliConfig } from "./args.js";
 import { loadFullConfig, extractPersonality } from "./config.js";
-import { applyConfiguredProvider } from "./provider-config.js";
+import { applyLaunchProvider } from "./provider-config.js";
 import { createRunLedgerReader } from "./run-ledger-reader.js";
 import { LIVENESS_SESSION_GAP_MS } from "./runtime-coverage.js";
 import { handleRelayCommandFrame } from "./relay-command-frame.js";
@@ -161,7 +161,14 @@ export async function handleRun(config: CliConfig): Promise<void> {
   // Same derivation as the interactive CLI (#654 cold review): a persisted
   // default_provider flip re-derives an implicit model, and a default_model
   // from another provider era yields — never the BYOK default onto proxy.
-  applyConfiguredProvider(config, personalityConfig, process.argv, (line) => console.log(line));
+  // An explicit --model the provider would not serve fails at start (#654 R3).
+  const launchError = applyLaunchProvider(config, personalityConfig, process.argv, (line) =>
+    console.log(line),
+  );
+  if (launchError != null) {
+    console.error(`Error: ${launchError}`);
+    process.exit(1);
+  }
 
   const motebitId = identity.motebit_id;
 
@@ -1048,7 +1055,13 @@ export async function handleServe(config: CliConfig): Promise<void> {
 
   // Same derivation as the interactive CLI and `motebit daemon` (#654 cold
   // review) — `motebit serve` had a third private copy.
-  applyConfiguredProvider(config, personalityConfig, process.argv, (line) => log(line));
+  const launchError = applyLaunchProvider(config, personalityConfig, process.argv, (line) =>
+    log(line),
+  );
+  if (launchError != null) {
+    console.error(`Error: ${launchError}`);
+    process.exit(1);
+  }
 
   // Build tool registry
   const runtimeRef: { current: MotebitRuntime | null } = { current: null };

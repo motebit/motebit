@@ -3,8 +3,8 @@ import type { MotebitPersonalityConfig } from "@motebit/ai-core";
 import { deriveSyncEncryptionKey, mintAudienceToken } from "@motebit/encryption";
 import type { connectMcpServers } from "@motebit/mcp-client";
 import { paidResultsNotice } from "@motebit/runtime";
-import { admitModelForProvider, MONEY_TOOLS_WITHHELD_NOTICE } from "./model-admission.js";
-import { applyConfiguredProvider, argvHasFlag } from "./provider-config.js";
+import { MONEY_TOOLS_WITHHELD_NOTICE } from "./model-admission.js";
+import { applyConfiguredMaxTokens, applyLaunchProvider } from "./provider-config.js";
 import { createSolanaWalletRail } from "@motebit/wallet-solana";
 import { preflightGrant, renderPreflight } from "./grant-preflight.js";
 import { installTaskPollFault } from "./fault-injection.js";
@@ -535,23 +535,16 @@ async function main(): Promise<void> {
 
   // Persisted provider/model → config; shared with the daemon (#654 cold
   // review: the daemon's copy forgot to re-derive the model on a flip).
-  applyConfiguredProvider(config, personalityConfig, process.argv, (line) =>
+  const launchError = applyLaunchProvider(config, personalityConfig, process.argv, (line) =>
     console.log(dim(`  ${line}`)),
   );
   // An EXPLICIT contradiction fails loud at startup, naming both — never
   // deferred to an opaque first-call API error.
-  if (argvHasFlag(process.argv, "--model")) {
-    const admission = admitModelForProvider(config.provider, config.model);
-    if (!admission.admissible) {
-      console.error(
-        `Model "${config.model}" does not belong to provider "${config.provider}" — ${admission.teach ?? "pick a matching pair, or drop --model to use the provider's default."}`,
-      );
-      process.exit(1);
-    }
+  if (launchError != null) {
+    console.error(launchError);
+    process.exit(1);
   }
-  if (fullConfig.max_tokens != null && !argvHasFlag(process.argv, "--max-tokens")) {
-    config.maxTokens = fullConfig.max_tokens;
-  }
+  applyConfiguredMaxTokens(config, fullConfig.max_tokens, process.argv);
 
   // --- Two-phase onboarding ---
   // Phase 1: Infra (API key) — fail early, deterministic, no narrative.

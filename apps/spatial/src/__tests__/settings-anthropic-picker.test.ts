@@ -176,7 +176,7 @@ describe("spatial Settings — stored Cloud model is never rewritten (R2)", () =
     "claude-opus",
     "gpt-4o",
     "gemini-flash",
-    "llama-3.3-70b-versatile",
+    "gemini-2.5-pro",
     "claude-sonnet-4-6",
   ]) {
     it(`${stored}: kept through boot and Save`, async () => {

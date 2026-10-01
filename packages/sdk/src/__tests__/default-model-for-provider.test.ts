@@ -8,6 +8,7 @@ import {
   DEFAULT_ANTHROPIC_MODEL,
   DEFAULT_PROXY_MODEL,
   MOTEBIT_CLOUD_ACCEPTED_MODELS,
+  MOTEBIT_CLOUD_DEPOSIT_MODELS,
   PROXY_MODELS,
   defaultModelForProvider,
   defaultModelForVendor,
@@ -55,9 +56,14 @@ describe("defaultModelForProvider", () => {
     }
   });
 
-  it("motebitCloudAdmitsModel: auto + the accepted set, nothing else", () => {
+  it("motebitCloudAdmitsModel: auto + the paying-account token list, nothing else", () => {
     expect(motebitCloudAdmitsModel("auto")).toBe(true);
-    for (const m of MOTEBIT_CLOUD_ACCEPTED_MODELS) expect(motebitCloudAdmitsModel(m)).toBe(true);
+    for (const m of MOTEBIT_CLOUD_ACCEPTED_MODELS) {
+      const minted = (MOTEBIT_CLOUD_DEPOSIT_MODELS as readonly string[]).includes(m);
+      expect(motebitCloudAdmitsModel(m), m).toBe(minted);
+    }
+    // #654 R3: accepted by the catalog, named by no token the relay mints.
+    expect(motebitCloudAdmitsModel("llama-3.3-70b-versatile")).toBe(false);
     expect(motebitCloudAdmitsModel("claude-sonnet-5")).toBe(false);
     expect(motebitCloudAdmitsModel("")).toBe(false);
   });

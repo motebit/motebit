@@ -373,8 +373,12 @@ export async function POST(request: Request): Promise<Response> {
   // ONE function (#654 cold review R2): `motebitCloudAdmission` from
   // `@motebit/sdk` is the alias step AND the Cloud admission verdict, and
   // every client pre-flight runs the same function — a client can never
-  // refuse or rewrite a model this route serves.
-  const cloudAdmission = motebitCloudAdmission(resolvedModel);
+  // refuse or rewrite a model this route serves. It is asked about the
+  // presented token's model list (the relay mints that list from the same
+  // sdk table, #654 R3), so the 400 below is its verdict too.
+  const cloudAdmission = motebitCloudAdmission(resolvedModel, {
+    tokenModels: tokenPayload?.models ?? [],
+  });
   if (resolvedModel !== "auto") {
     resolvedModel = cloudAdmission.resolved;
   }
@@ -468,12 +472,9 @@ export async function POST(request: Request): Promise<Response> {
   // decision; PR 4a (this) only plumbs the data through.
 
   if (authMode === "proxy-token" && tokenPayload) {
-    // "auto" is always allowed; for specific models check the allowlist
-    if (
-      body.model !== "auto" &&
-      tokenPayload.models.length > 0 &&
-      !tokenPayload.models.includes(resolvedModel)
-    ) {
+    // "auto" is always allowed; for specific models the token's list decides
+    // (`motebitCloudAdmission` was asked with it above).
+    if (cloudAdmission.refusal === "token_model") {
       return released(
         failureResponse({
           requestId,
