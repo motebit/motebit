@@ -9,7 +9,12 @@ import {
   SOLANA_RPC_MAX_BODY_BYTES,
   SOLANA_RPC_METHOD_ALLOWLIST,
   SOLANA_RPC_PER_MINUTE_LIMIT,
+  SOLANA_RPC_PER_48_LIMIT,
+  SOLANA_RPC_GLOBAL_PER_MINUTE_DEFAULT,
+  INVALID_IP_BUCKET,
   createMemoryRateLimiter,
+  globalBudget,
+  rateLimitAggregateBucket,
   handleSolanaRpcOptions,
   handleSolanaRpcPost,
   rateLimitBucket,
@@ -129,11 +134,18 @@ describe("solana-rpc: method allowlist", () => {
     ]);
   });
 
-  it("refuses batches", async () => {
-    const h = harness();
-    const res = await handleSolanaRpcPost(rpc([call("getBalance"), call("getBalance", 2)]), h.deps);
-    expect(res.status).toBe(400);
-    expect(h.forwarded).toHaveLength(0);
+  it("refuses batches with the batch error (not the generic invalid-request path)", async () => {
+    for (const batch of [[call("getBalance"), call("getBalance", 2)], [], [call("getBalance")]]) {
+      const h = harness();
+      const res = await handleSolanaRpcPost(rpc(batch), h.deps);
+      expect(res.status).toBe(400);
+      expect(await res.json()).toEqual({
+        jsonrpc: "2.0",
+        error: { code: -32600, message: "batch requests are not supported" },
+        id: null,
+      });
+      expect(h.forwarded).toHaveLength(0);
+    }
   });
 
   it("refuses malformed JSON-RPC", async () => {
@@ -361,14 +373,134 @@ describe("solana-rpc: rate limit + size cap", () => {
     expect(rateLimitBucket("2001:db8::")).toBe("2001:db8:0:0::/64");
     expect(rateLimitBucket("::ffff:198.51.100.7")).toBe("198.51.100.7");
     expect(rateLimitBucket("::1")).toBe("0:0:0:0::/64");
-    for (const bad of ["1::2::3", "zzzz::1", "2001:db8", "1:2:3:4:5:6:7:8:9::"]) {
-      expect(rateLimitBucket(bad)).toBe("invalid");
+    expect(rateLimitBucket("64:ff9b::192.0.2.33")).toBe("64:ff9b:0:0::/64");
+    // Every non-IP string shares ONE bucket — a caller who controls the header
+    // value can never mint a fresh budget by varying it.
+    for (const bad of [
+      "1::2::3",
+      "zzzz::1",
+      "2001:db8",
+      "1:2:3:4:5:6:7:8:9::",
+      "",
+      "unknown",
+      "garbage-1",
+      "garbage-2",
+      "1.2.3",
+      "1.2.3.999",
+      "01.2.3.4",
+      "1.2.3.4.5",
+      "::ffff:1.2.3.999",
+      "1:2:3:4:5:6:7:8:9",
+      "1:2:3:4:5:6:7",
+      "1.2.3.4:5:6::",
+    ]) {
+      expect(rateLimitBucket(bad), bad).toBe(INVALID_IP_BUCKET);
     }
-    expect(rateLimitBucket("")).toBe("unknown");
+    expect(INVALID_IP_BUCKET).toBe("invalid");
+  });
+
+  it("non-IP forwarded-for strings share one budget (varying the string buys nothing)", async () => {
+    const h = harness();
+    for (let i = 0; i < SOLANA_RPC_PER_MINUTE_LIMIT; i++) {
+      const res = await handleSolanaRpcPost(
+        rpc(call("getBalance"), { "x-forwarded-for": `not-an-ip-${i}` }),
+        h.deps,
+      );
+      expect(res.status).toBe(200);
+    }
+    const res = await handleSolanaRpcPost(
+      rpc(call("getBalance"), { "x-forwarded-for": "yet-another-string" }),
+      h.deps,
+    );
+    expect(res.status).toBe(429);
+  });
+
+  it("rateLimitAggregateBucket: IPv6 per /48, IPv4 and invalid have none", () => {
+    expect(rateLimitAggregateBucket("2001:db8:1:2::1")).toBe("2001:db8:1::/48");
+    expect(rateLimitAggregateBucket("2001:0db8:0001:ffff:aaaa::1")).toBe("2001:db8:1::/48");
+    expect(rateLimitAggregateBucket("203.0.113.9")).toBeNull();
+    expect(rateLimitAggregateBucket("::ffff:198.51.100.7")).toBeNull();
+    expect(rateLimitAggregateBucket("garbage")).toBeNull();
+  });
+
+  it("aggregates IPv6 by /48 — rotating across 65,536 /64s buys no fresh budget", async () => {
+    const h = harness();
+    for (let i = 0; i < SOLANA_RPC_PER_48_LIMIT; i++) {
+      const ip = `2001:db8:7:${(i + 1).toString(16)}::1`; // a fresh /64 every request
+      const res = await handleSolanaRpcPost(
+        rpc(call("getBalance"), { "x-forwarded-for": ip }),
+        h.deps,
+      );
+      expect(res.status).toBe(200);
+    }
+    const same48 = await handleSolanaRpcPost(
+      rpc(call("getBalance"), { "x-forwarded-for": "2001:db8:7:ffff::1" }),
+      h.deps,
+    );
+    expect(same48.status).toBe(429);
+    const other48 = await handleSolanaRpcPost(
+      rpc(call("getBalance"), { "x-forwarded-for": "2001:db8:8:1::1" }),
+      h.deps,
+    );
+    expect(other48.status).toBe(200);
+  });
+
+  it("a GLOBAL per-minute upstream budget caps every client together", async () => {
+    const h = harness({
+      env: { SOLANA_RPC_UPSTREAM_URL: UPSTREAM, SOLANA_RPC_GLOBAL_PER_MINUTE: "5" },
+    });
+    // Requests that are refused before forwarding do not spend the budget.
+    for (let i = 0; i < 10; i++) {
+      await handleSolanaRpcPost(
+        rpc(call("requestAirdrop"), { "x-forwarded-for": `198.51.100.${i}` }),
+        h.deps,
+      );
+    }
+    for (let i = 0; i < 5; i++) {
+      const res = await handleSolanaRpcPost(
+        rpc(call("getBalance"), { "x-forwarded-for": `203.0.113.${i}` }),
+        h.deps,
+      );
+      expect(res.status).toBe(200);
+    }
+    const res = await handleSolanaRpcPost(
+      rpc(call("getBalance"), { "x-forwarded-for": "192.0.2.77" }),
+      h.deps,
+    );
+    expect(res.status).toBe(429);
+    expect(h.forwarded).toHaveLength(5);
+    expect(h.logs.some((l) => l.includes("global upstream budget exhausted"))).toBe(true);
+  });
+
+  it("globalBudget: a positive integer overrides; anything else is the default (never unlimited)", () => {
+    expect(SOLANA_RPC_GLOBAL_PER_MINUTE_DEFAULT).toBe(3000);
+    expect(globalBudget({})).toBe(3000);
+    expect(globalBudget({ SOLANA_RPC_GLOBAL_PER_MINUTE: "500" })).toBe(500);
+    for (const bad of ["0", "-1", "1e9", "Infinity", "abc", "", "1.5", "9999999999"]) {
+      expect(globalBudget({ SOLANA_RPC_GLOBAL_PER_MINUTE: bad }), bad).toBe(3000);
+    }
+  });
+
+  it("production refuses (503) on a per-isolate memory limiter; serves on a shared one", async () => {
+    const prodEnv = { SOLANA_RPC_UPSTREAM_URL: UPSTREAM, VERCEL_ENV: "production" };
+    const mem = harness({ env: prodEnv });
+    const res = await handleSolanaRpcPost(rpc(call("getBalance")), mem.deps);
+    expect(res.status).toBe(503);
+    expect(mem.forwarded).toHaveLength(0);
+    await assertNoKey(res, mem.logs);
+    const inner = createMemoryRateLimiter();
+    const shared = harness({
+      env: prodEnv,
+      limiter: { kind: "shared", hit: (k, l) => inner.hit(k, l) },
+    });
+    expect((await handleSolanaRpcPost(rpc(call("getBalance")), shared.deps)).status).toBe(200);
+    // Preview / local dev keep the memory floor.
+    const preview = harness({ env: { SOLANA_RPC_UPSTREAM_URL: UPSTREAM, VERCEL_ENV: "preview" } });
+    expect((await handleSolanaRpcPost(rpc(call("getBalance")), preview.deps)).status).toBe(200);
   });
 
   it("a limiter that fails closed denies", async () => {
-    const h = harness({ limiter: { hit: () => Promise.resolve(false) } });
+    const h = harness({ limiter: { kind: "shared", hit: () => Promise.resolve(false) } });
     expect((await handleSolanaRpcPost(rpc(call("getBalance")), h.deps)).status).toBe(429);
     expect(h.forwarded).toHaveLength(0);
   });
@@ -386,11 +518,16 @@ describe("solana-rpc: rate limit + size cap", () => {
     expect(lying.forwarded).toHaveLength(0);
   });
 
-  it("the memory limiter bounds its key set", async () => {
+  it("the memory limiter bounds its key set by evicting the OLDEST key, never every counter", async () => {
     const l = createMemoryRateLimiter(2);
+    expect(l.kind).toBe("memory");
     await l.hit("a", 1);
     await l.hit("b", 1);
-    expect(await l.hit("c", 1)).toBe(true);
+    expect(await l.hit("c", 1)).toBe(true); // evicts "a" only
     expect(await l.hit("c", 1)).toBe(false);
+    // "b" kept its count: a clear-all would have handed it a fresh budget.
+    expect(await l.hit("b", 1)).toBe(false);
+    // "a" was evicted, so it starts over (and evicts the next-oldest).
+    expect(await l.hit("a", 1)).toBe(true);
   });
 });

@@ -18,24 +18,38 @@ the browser needs a real Solana RPC, and the deployed bundle drifts behind `main
 
 ## Env
 
-| Where                                                                | Var                           | Value                                                                                        |
-| -------------------------------------------------------------------- | ----------------------------- | -------------------------------------------------------------------------------------------- |
-| proxy (Vercel, `services/proxy`)                                     | `SOLANA_RPC_UPSTREAM_URL`     | the provider mainnet URL **with its key** — a server secret, never `VITE_*`                  |
-| proxy (optional)                                                     | `SOLANA_RPC_ALLOWED_ORIGINS`  | extra https origins (comma list) beyond the defaults below                                   |
-| web (Vercel project `motebit-web`)                                   | `VITE_PROXY_URL`              | a motebit origin (`https://…motebit.com`) — deprecated alias of `VITE_MOTEBIT_RELAY_URL`     |
-| web (Vercel project `motebit-web`)                                   | `VITE_BROWSER_SANDBOX_URL`    | the `services/browser-sandbox` origin (`*.motebit.com` or `motebit-browser-sandbox.fly.dev`) |
-| web (Vercel project `motebit-web`)                                   | `VITE_STRIPE_PUBLISHABLE_KEY` | a Stripe **publishable** key (`pk_live_…`) — public by design                                |
-| verify (Vercel project `receipt-computer`, https://receipt.computer) | —                             | sets **no** `VITE_*` var; defaults to the passthrough                                        |
+| Where                                                                | Var                            | Value                                                                                           |
+| -------------------------------------------------------------------- | ------------------------------ | ----------------------------------------------------------------------------------------------- |
+| proxy (Vercel, `services/proxy`)                                     | `SOLANA_RPC_UPSTREAM_URL`      | the provider mainnet URL **with its key** — a server secret, never `VITE_*`                     |
+| proxy (**required in production**)                                   | `KV_REST_API_URL` + token      | Vercel KV — the shared rate-limit store. Unset with `VERCEL_ENV=production` ⇒ 503 (fail closed) |
+| proxy (optional)                                                     | `SOLANA_RPC_GLOBAL_PER_MINUTE` | global upstream budget, forwarded requests/min across ALL clients (default 3000)                |
+| proxy (optional)                                                     | `SOLANA_RPC_ALLOWED_ORIGINS`   | extra https origins (comma list) beyond the defaults below                                      |
+| web (Vercel project `motebit-web`)                                   | `VITE_PROXY_URL`               | a motebit origin (`https://…motebit.com`) — deprecated alias of `VITE_MOTEBIT_RELAY_URL`        |
+| web (Vercel project `motebit-web`)                                   | `VITE_BROWSER_SANDBOX_URL`     | the `services/browser-sandbox` origin (`*.motebit.com` or `motebit-browser-sandbox.fly.dev`)    |
+| web (Vercel project `motebit-web`)                                   | `VITE_STRIPE_PUBLISHABLE_KEY`  | a Stripe **publishable** key (`pk_live_…`) — public by design                                   |
+| verify (Vercel project `receipt-computer`, https://receipt.computer) | —                              | sets **no** `VITE_*` var; defaults to the passthrough                                           |
 
 The proxy's default browser origins are `https://motebit.com`, `https://www.motebit.com`,
 `https://receipt.computer` (apps/verify) and the localhost dev ports.
+
+**The passthrough spends provider credit, so its limits are the drain bound.**
+`Origin` is spoofable off-browser, so the origin allowlist is not a spend
+control. Three limits apply, all in Vercel KV: per client (IPv4 address / IPv6
+/64, 120/min), per IPv6 /48 (600/min — one /48 is 65,536 /64s), and a GLOBAL
+upstream budget (`SOLANA_RPC_GLOBAL_PER_MINUTE`, default 3000 forwarded
+requests/min across every client). **KV is required in production:** with
+`VERCEL_ENV=production` and no `KV_REST_API_URL` the route answers 503 rather
+than fall back to a per-isolate memory limiter (N isolates = N budgets, no global
+cap). A KV error also fails closed (429). Size the global budget to the provider
+plan: budget × 60 × 24 × 30 is the monthly worst case.
 
 **The web + verify builds are deny-by-default on public env.** Vite inlines every
 `VITE_*` value into public JS — incident 2026-09-30: a Helius `?api-key=` shipped
 in `motebit.com/assets/main-*.js`, the credits were drained and the provider
 halted every key on the account. `apps/web` and `apps/verify` `vite.config.ts`
-now refuse the build when the build env carries ANY public-prefixed var (any
-case) not named in `PUBLIC_BUILD_ENV` (`scripts/lib/client-bundle-secrets.ts`),
+run a guard plugin that judges the env Vite itself resolved (process env plus
+the app's own `.env*` files, whatever directory the build is run from) and
+refuses the build when it carries ANY var not named in `PUBLIC_BUILD_ENV` (`scripts/lib/client-bundle-secrets.ts`),
 or a named one whose value fails its validator: URL vars must be `https:` to a
 host in that var's allowlist (motebit.com / \*.motebit.com / the named Fly
 origin / receipt.computer for verify; `http:` only for localhost), with no
