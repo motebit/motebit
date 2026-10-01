@@ -11,15 +11,24 @@
  * 1M/1M credits and the provider halted every key on it. No gate looked at
  * public env names or at built bundles, so nothing went red.
  *
- * Three arms, one law (`publicEnvViolations` in the canonical module):
+ * THE LAW (cold review R3) is the ground-truth OUTPUT scan
+ * (`scanOutputForEnvValues`, scripts/check-client-build-output.ts): every build
+ * env value, minus the stated exclusion rule, must be absent from every emitted
+ * file. Each governed surface runs it from its own build (package.json `build`,
+ * the Vite guard's `closeBundle`, EAS `eas-build-on-success`); this gate re-runs
+ * it over whatever governed output is on disk, refuses a build script that
+ * drops it, and refuses a second `vite.config.*` beside a Vite surface's
+ * `vite.config.ts`. The arms below are EARLY WARNINGS — they judge source and
+ * config, not what ships.
+ *
+ * Three early-warning arms (`publicEnvViolations` in the canonical module):
  *   (a) STATIC — in a deployed surface governed by `PUBLIC_BUILD_ENV`
  *       (`PUBLIC_ENV_SURFACES`: web + verify on Vite, mobile on Expo/EAS, docs on
  *       Next/Vercel), EVERY public env name its bundler inlines (any case) that
  *       its source (incl. .mdx) or committed config (app.json, eas.json — names
  *       AND values —, next.config, vercel.json, package.json) references must be
  *       named for that surface; next.config `env`/`publicRuntimeConfig` are
- *       refused. Expo and Next inline only names that appear in source, so this
- *       arm is their whole guard (no build hook). In every other app, a credential-shaped name
+ *       refused (any spelling, plus `compiler.define`). In every other app, a credential-shaped name
  *       (/KEY|TOKEN|SECRET|PASSWORD|PRIVATE|RPC_URL|API/, any case) is RED unless
  *       `PUBLIC_ENV_ALLOWLIST` names that file + name + why; a stale entry is RED.
  *   (b) BUILT ARTIFACT — every text file under apps/<app>/dist (and
@@ -55,6 +64,7 @@ import { createRequire } from "node:module";
 import { join, resolve, dirname, relative, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { formatRepair } from "./lib/gate-report.js";
+import { checkBuildOutput } from "./check-client-build-output.js";
 import {
   PUBLIC_BUILD_ENV,
   PUBLIC_ENV_ALLOWLIST,
@@ -72,24 +82,31 @@ const REPO = resolve(__dirname, "..");
 
 const SOURCE_EXT = /\.(?:ts|tsx|js|jsx|mjs|cjs|vue|svelte|html|mdx)$/;
 const ARTIFACT_EXT = /\.(?:js|mjs|cjs|html|css|json|map|txt|webmanifest|svg)$/;
+/** Skipped at ANY depth (dependencies, tests, native trees, tool caches). */
 const SOURCE_SKIP_DIRS = new Set([
   "node_modules",
-  "dist",
-  ".next",
-  "build",
-  "out",
-  "public",
   "__tests__",
   "e2e",
-  "coverage",
   ".turbo",
   "src-tauri",
   "android",
   "ios",
   "target",
 ]);
+/**
+ * Skipped only at the app ROOT (build output / static assets there). Cold
+ * review R3: skipping `build/` `out/` `public/` at any depth hid source that
+ * Expo and Next still inline from. (The output scan is the law regardless.)
+ */
+const ROOT_ONLY_SKIP_DIRS = new Set([".next", "dist", "build", "out", "public", "coverage"]);
 
-function walk(dir: string, skip: Set<string>, keep: RegExp, out: string[] = []): string[] {
+function walk(
+  dir: string,
+  skip: Set<string>,
+  keep: RegExp,
+  out: string[] = [],
+  rootSkip: ReadonlySet<string> = new Set(),
+): string[] {
   let entries: string[];
   try {
     entries = readdirSync(dir);
@@ -97,7 +114,7 @@ function walk(dir: string, skip: Set<string>, keep: RegExp, out: string[] = []):
     return out;
   }
   for (const e of entries) {
-    if (skip.has(e)) continue;
+    if (skip.has(e) || rootSkip.has(e)) continue;
     const full = join(dir, e);
     let s;
     try {
@@ -149,15 +166,80 @@ export function judgeConfigFile(
     }
   }
   if (surface.bundler === "next" && /\/next\.config\.[cm]?[jt]s$/.test(rel)) {
-    for (const m of text.matchAll(/\b(env|publicRuntimeConfig)\s*:/g)) {
+    // Any spelling: `env:`, `"env":`, `'env':`, shorthand `env,` / `{ env }`,
+    // and `compiler.define` / `defineServer` (cold review R3). Early warning
+    // only — the output scan is the law.
+    const re =
+      /(?:^|[{,\s])["'`]?(env|publicRuntimeConfig|serverRuntimeConfig|define|defineServer)["'`]?\s*(?=[:,}(])/gm;
+    for (const m of text.matchAll(re)) {
       const line = text.slice(0, m.index ?? 0).split("\n").length;
       out.push(
-        `${rel}:${line} — next.config \`${m[1]}\` inlines arbitrary (non-NEXT_PUBLIC_) names into client JS; read NEXT_PUBLIC_* names listed in PUBLIC_BUILD_ENV.${app} instead`,
+        `${rel}:${line} — next.config \`${m[1]}\` inlines arbitrary (non-NEXT_PUBLIC_) values into client JS; read NEXT_PUBLIC_* names listed in PUBLIC_BUILD_ENV.${app} instead`,
       );
     }
   }
   for (const f of scanArtifactText(text)) {
     out.push(`${rel} @ offset ${f.offset} — ${f.rule}: ${f.redacted}`);
+  }
+  return out;
+}
+
+/** The package.json script that must run the output scan (the law) per bundler. */
+export const OUTPUT_SCAN_SCRIPT: Readonly<Record<string, string>> = {
+  vite: "build",
+  next: "build",
+  expo: "eas-build-on-success",
+};
+
+/**
+ * Cheap, explicit wiring for a governed surface:
+ *   - a Vite surface has exactly ONE vite config, `vite.config.ts` (Vite prefers
+ *     `vite.config.js` / `.mjs` over `.ts`, so a sibling without the guard
+ *     would silently replace it — cold review R3);
+ *   - its package.json `OUTPUT_SCAN_SCRIPT` script runs
+ *     `check-client-build-output.ts <app>` (the law) after the bundler.
+ */
+export function judgeSurfaceWiring(
+  app: string,
+  appDir: string,
+  surface: { bundler: string },
+): string[] {
+  const out: string[] = [];
+  const rel = (f: string): string => `apps/${app}/${f}`;
+  let entries: string[] = [];
+  try {
+    entries = readdirSync(appDir);
+  } catch {
+    return out;
+  }
+  if (surface.bundler === "vite") {
+    for (const f of entries) {
+      if (/^vite\.config\./.test(f) && f !== "vite.config.ts") {
+        out.push(
+          `${rel(f)} — a second vite config beside vite.config.ts (Vite loads .js/.mjs/.cjs before .ts, bypassing publicBuildEnvGuard("${app}")); delete it`,
+        );
+      }
+    }
+  }
+  const script = OUTPUT_SCAN_SCRIPT[surface.bundler];
+  if (script == null || !entries.includes("package.json")) return out;
+  let scripts: Record<string, string> = {};
+  try {
+    scripts =
+      (
+        JSON.parse(readFileSync(join(appDir, "package.json"), "utf8")) as {
+          scripts?: Record<string, string>;
+        }
+      ).scripts ?? {};
+  } catch {
+    out.push(`${rel("package.json")} — unparseable; cannot confirm the output scan runs`);
+    return out;
+  }
+  const cmd = scripts[script] ?? "";
+  if (!new RegExp(`check-client-build-output\\.ts ${app}(?:\\s|$)`).test(cmd)) {
+    out.push(
+      `${rel("package.json")} scripts.${script} — does not run \`check-client-build-output.ts ${app}\` after the bundler (the output scan is the law)`,
+    );
   }
   return out;
 }
@@ -172,6 +254,8 @@ export interface GateResult {
   distDirs: string[];
   artifactFiles: number;
   missingDist: string[];
+  /** Governed output dirs the ground-truth output scan (the law) read. */
+  outputScanned: string[];
 }
 
 export interface GateOptions {
@@ -215,8 +299,15 @@ export function runGate(
         configFiles.push(rel);
         staticFindings.push(...judgeConfigFile(app, rel, readFileSync(full, "utf8"), surface));
       }
+      staticFindings.push(...judgeSurfaceWiring(app, join(appsDir, app), surface));
     }
-    for (const file of walk(join(appsDir, app), SOURCE_SKIP_DIRS, SOURCE_EXT)) {
+    for (const file of walk(
+      join(appsDir, app),
+      SOURCE_SKIP_DIRS,
+      SOURCE_EXT,
+      [],
+      ROOT_ONLY_SKIP_DIRS,
+    )) {
       sourceFiles++;
       const rel = relative(root, file).split(sep).join("/");
       const text = readFileSync(file, "utf8");
@@ -288,9 +379,22 @@ export function runGate(
     }
   }
 
+  // THE LAW over whatever governed output is on disk, judged against THIS
+  // process's env (in CI: the env the build just ran with). Each surface's own
+  // build script already ran it; this re-run keeps the gate honest about it.
+  const outputScanned: string[] = [];
+  for (const app of apps) {
+    if (!Object.hasOwn(PUBLIC_ENV_SURFACES, app)) continue;
+    const r = checkBuildOutput(app, { repo: root });
+    if (r.files === 0) continue;
+    outputScanned.push(...r.scanned);
+    artifactFindings.push(...r.findings.map((f) => `${f} — output-scan (the law)`));
+  }
+
   return {
     staticFindings,
     artifactFindings,
+    outputScanned,
     sourceFiles,
     configFiles,
     apps: apps.length,
@@ -451,14 +555,19 @@ async function main(): Promise<void> {
     .map(([a, s]) => `${a} (${s.bundler})`)
     .join(", ");
   console.log(
-    `✓ check-no-secrets-in-client-bundles: ${r.sourceFiles} app source file(s) (incl. .mdx) across ${r.apps} apps scanned — governed surfaces ` +
+    `✓ check-no-secrets-in-client-bundles: THE LAW is the ground-truth output scan (scripts/check-client-build-output.ts — ` +
+      `every build env value, minus the stated exclusion rule, absent from every emitted file; run by each governed surface's ` +
+      `build script / the vite guard's closeBundle / EAS eas-build-on-success, and here over ` +
+      `${r.outputScanned.length > 0 ? r.outputScanned.join(", ") : "no governed output on disk — none built"}). ` +
+      `Early warnings below (static arms judge source/config, not what ships): ` +
+      `${r.sourceFiles} app source file(s) (incl. .mdx) across ${r.apps} apps — governed surfaces ` +
       `against PUBLIC_BUILD_ENV (${governed} named vars; deny by default), the rest for credential-shaped public env names ` +
       `(${PUBLIC_ENV_ALLOWLIST.length} allowlisted with a reason); ${r.configFiles.length} governed config file(s) judged ` +
-      `(${r.configFiles.join(", ")}); ${staticOnly} governed STATICALLY ONLY — no build hook, their bundlers inline only the names ` +
-      `that appear in source + config, all of which this scan covers; ` +
+      `(${r.configFiles.join(", ")}); ${staticOnly} have no in-bundler hook — their output scan runs from the build script / EAS hook; ` +
       `${r.artifactFiles} built artifact file(s) in ${r.distDirs.length} dist dir(s) ` +
-      `scanned for credential shapes + the public env law${r.distDirs.length > 0 ? ` (${r.distDirs.join(", ")})` : " — none built; CI runs --require-dist after pnpm build"}; ` +
-      `${wiring.checked.length} vite config(s) executed with a planted unlisted var and refused (${wiring.checked.join(", ") || "none present"}).`,
+      `scanned for credential shapes + the public env literal${r.distDirs.length > 0 ? ` (${r.distDirs.join(", ")})` : " — none built; CI runs --require-dist after pnpm build"}; ` +
+      `${wiring.checked.length} vite config(s) executed with a planted unlisted var and refused (${wiring.checked.join(", ") || "none present"}); ` +
+      `sibling vite.config.* refused; every governed build script runs the output scan.`,
   );
 }
 

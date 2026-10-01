@@ -28,6 +28,11 @@ import {
   PUBLIC_ENV_SURFACES,
   enforcePublicBuildEnv,
   forbiddenEnvValues,
+  outputScanExclusion,
+  parseDotenv,
+  publicValueViolation,
+  scanOutputForEnvValues,
+  valueNeedles,
   isSecretShapedEnvName,
   publicBuildEnvGuard,
   publicEnvViolations,
@@ -35,7 +40,14 @@ import {
   scanArtifactForPublicEnvPairs,
   scanArtifactText,
 } from "../lib/client-bundle-secrets.js";
-import { WIRING_PROBE_VAR, checkWiring, runGate } from "../check-no-secrets-in-client-bundles.js";
+import {
+  WIRING_PROBE_VAR,
+  checkWiring,
+  judgeConfigFile,
+  judgeSurfaceWiring,
+  runGate,
+} from "../check-no-secrets-in-client-bundles.js";
+import { checkBuildOutput, expoPublicConfig } from "../check-client-build-output.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, "..", "..");
@@ -363,7 +375,7 @@ describe("build guard: the resolved-env law refuses every R1 shape (deny by defa
     expect(refusal(PROD_WEB_ENV)).toBe("");
     expect(refusal({ VITE_SOLANA_RPC_URL: "" })).toBe("");
     expect(refusal({ VITE_RELAY_URL: "https://relay.motebit.com" }, "verify")).toBe("");
-    expect(refusal({ VITE_STRIPE_PUBLISHABLE_KEY: "pk_test_abc" }, "verify")).toMatch(
+    expect(refusal({ VITE_STRIPE_PUBLISHABLE_KEY: `pk_test_${"a".repeat(24)}` }, "verify")).toMatch(
       /not in PUBLIC_BUILD_ENV\.verify/,
     );
     expect(refusal({ VITE_X: "1" }, "nope")).toMatch(/no PUBLIC_BUILD_ENV entry/);
@@ -435,9 +447,44 @@ describe("build guard: the resolved-env law refuses every R1 shape (deny by defa
       }
     }
   });
+
+  it("R3 (6): URL hosts are EXACT per var — no wildcard; a key in a subdomain label is refused", () => {
+    for (const entries of Object.values(PUBLIC_BUILD_ENV)) {
+      for (const e of entries) {
+        if (e.rule.kind !== "url") continue;
+        for (const h of e.rule.hosts) expect(h, e.name).not.toContain("*");
+      }
+    }
+    const web = new Map(PUBLIC_BUILD_ENV.web!.map((e) => [e.name, e.rule]));
+    const proxy = web.get("VITE_PROXY_URL")!;
+    expect(publicValueViolation("https://api.motebit.com", proxy)).toBeNull();
+    expect(publicValueViolation(`https://${FAKE_UUID}.motebit.com`, proxy)).toMatch(
+      /not in its host allowlist/,
+    );
+    expect(
+      publicValueViolation(`https://${ALCHEMY_KEY.toLowerCase()}.api.motebit.com`, proxy),
+    ).toMatch(/not in its host allowlist/);
+    expect(publicValueViolation("https://motebit.com", proxy)).toMatch(/not in its host allowlist/);
+    const sandbox = web.get("VITE_BROWSER_SANDBOX_URL")!;
+    expect(publicValueViolation("https://motebit-browser-sandbox.fly.dev", sandbox)).toBeNull();
+    expect(publicValueViolation("https://evil.fly.dev", sandbox)).toMatch(
+      /not in its host allowlist/,
+    );
+    expect(publicValueViolation("http://localhost:3000", sandbox)).toBeNull();
+  });
+
+  it("R3 (6): a Stripe publishable key is pk_live_/pk_test_ + 24..247 alphanumerics", () => {
+    const rule = { kind: "stripe-publishable" } as const;
+    expect(publicValueViolation(`pk_live_${fake(AN, 24, 3)}`, rule)).toBeNull();
+    expect(publicValueViolation(`pk_test_${fake(AN, 99, 5)}`, rule)).toBeNull();
+    expect(publicValueViolation("pk_live_abc", rule)).toMatch(/not a Stripe publishable key/);
+    expect(publicValueViolation(`pk_live_${"a".repeat(23)}`, rule)).toMatch(/not a Stripe/);
+    expect(publicValueViolation(`pk_live_${"a".repeat(248)}`, rule)).toMatch(/not a Stripe/);
+    expect(publicValueViolation(`sk_live_${"a".repeat(24)}`, rule)).toMatch(/not a Stripe/);
+  });
 });
 
-const PUBLIC_BUILD_ENV_HOSTS = ["motebit.com", "*.motebit.com", "localhost", "127.0.0.1"];
+const PUBLIC_BUILD_ENV_HOSTS = ["motebit.com", "api.motebit.com", "localhost", "127.0.0.1"];
 
 /** Vercel project motebit-web, 2026-09-30: exactly these three (+ platform-injected). */
 const PROD_WEB_ENV: Record<string, string> = {
@@ -767,7 +814,7 @@ describe("R2: mobile and docs are governed deny-by-default (static arm)", () => 
               SENTRY_DSN_BUILD_ONLY: "x",
             },
           },
-          preview: { env: { EXPO_PUBLIC_MOTEBIT_RELAY_URL: "https://relay.motebit.com" } },
+          preview: { env: { EXPO_PUBLIC_MOTEBIT_RELAY_URL: "https://api.motebit.com" } },
         },
       }),
       "package.json": JSON.stringify({ scripts: { start: "EXPO_PUBLIC_DEV_KEY=1 expo start" } }),
@@ -819,5 +866,320 @@ describe("R2: mobile and docs are governed deny-by-default (static arm)", () => 
     const f = runGate(root).artifactFindings.join("\n");
     expect(f).toMatch(/NEXT_PUBLIC_X is not in PUBLIC_BUILD_ENV\.docs/);
     expect(f).not.toContain("VITE_API_URL");
+  });
+});
+
+/** Writes `files` under <root>/apps/<name>/. */
+function stageApp(root: string, name: string, files: Record<string, string>): void {
+  for (const [rel, text] of Object.entries(files)) {
+    const full = join(root, "apps", name, rel);
+    mkdirSync(dirname(full), { recursive: true });
+    writeFileSync(full, text);
+  }
+}
+
+// ── Cold review R3: THE LAW is the ground-truth output scan ────────────────
+//
+// Every R3 bypass shipped a value through a route a static check did not
+// enumerate. The output scan judges what was EMITTED: every build env value
+// (minus the stated exclusion rule) must be absent from every emitted file.
+// Each plant below is (1)-(4) from the review; each fails NAMING the var,
+// never printing the value.
+
+/** A server-only secret: no public prefix, so no name-based arm judges it. */
+const SERVER_SECRET = `srv_${fake(AN, 40, 13)}`;
+
+describe("R3 the law: output scan — exclusion rule, encodings, redaction", () => {
+  it("the exclusion rule, exactly: public-allowlisted values, < 16 chars, scalars, paths, credential-free locators", () => {
+    const allowed = new Set(["https://api.motebit.com"]);
+    expect(outputScanExclusion("https://api.motebit.com", allowed)).toBe(
+      "public (PUBLIC_BUILD_ENV)",
+    );
+    expect(outputScanExclusion("a".repeat(15), allowed)).toBe("short");
+    expect(outputScanExclusion("12345678901234567", allowed)).toBe("scalar");
+    expect(outputScanExclusion("/usr/local/bin:/usr/bin:/bin", allowed)).toBe("path");
+    expect(outputScanExclusion("https://github.com/motebit/motebit", allowed)).toBe(
+      "credential-free locator",
+    );
+    expect(outputScanExclusion("motebit-browser-sandbox.fly.dev", allowed)).toBe(
+      "credential-free locator",
+    );
+    // Credential-bearing locators are NOT excluded: query, userinfo, key-in-path, key-in-label.
+    for (const v of [
+      `https://mainnet.helius-rpc.com/?api-key=${FAKE_UUID}`,
+      `https://user:${ALCHEMY_KEY}@x.example`,
+      `https://solana-mainnet.g.alchemy.com/v2/${ALCHEMY_KEY}`,
+      `https://${FAKE_UUID}.rpc.example.com`,
+      `https://hooks.slack.com/services/T0000/B0000/${ALCHEMY_KEY}`,
+      SERVER_SECRET,
+      `pk_live_${fake(AN, 24, 3)}`,
+    ]) {
+      expect(outputScanExclusion(v, allowed), v.slice(0, 12)).toBeNull();
+    }
+  });
+
+  it("finds a value raw, url-encoded, json-escaped and base64 (all alignments, std + url) — and never prints it", () => {
+    const v = `${SERVER_SECRET}/+"q`;
+    const vars = [{ name: "SNEAKY", value: v }];
+    const b = Buffer.from(v, "utf8");
+    const cases: Record<string, string> = {
+      raw: `x="${v.replace('"', "")}"`.replace(v.replace('"', ""), v),
+      "url-encoded": `a?b=${encodeURIComponent(v)}`,
+      "json-escaped": JSON.stringify({ k: v }),
+      b64a0: Buffer.concat([b]).toString("base64"),
+      b64a1: Buffer.concat([Buffer.from("x"), b]).toString("base64"),
+      b64a2: Buffer.concat([Buffer.from("xy"), b]).toString("base64"),
+      b64url: Buffer.concat([Buffer.from("x"), b]).toString("base64url"),
+      sourcemapDataUrl: `//# source${"MappingURL"}=data:application/json;base64,${Buffer.from(
+        JSON.stringify({ sourcesContent: [`const k = ${JSON.stringify(v)};`] }),
+      ).toString("base64")}`,
+    };
+    for (const [label, text] of Object.entries(cases)) {
+      const r = scanOutputForEnvValues("verify", vars, [{ label, text }]);
+      expect(r.findings, label).toHaveLength(1);
+      expect(r.findings[0]).toContain("carries the value of SNEAKY");
+      expect(r.findings[0]).not.toContain(SERVER_SECRET);
+    }
+    expect(
+      scanOutputForEnvValues("verify", vars, [{ label: "c", text: "clean" }]).findings,
+    ).toEqual([]);
+    expect(valueNeedles(v).every((n) => n.needle.length >= 16)).toBe(true);
+  });
+
+  it("the surface's public values are excluded by VALUE (also under another name); an invalid one is not", () => {
+    const pk = `pk_live_${fake(AN, 24, 3)}`;
+    const text = `{"k":"${pk}","u":"https://api.motebit.com"}`;
+    const ok = scanOutputForEnvValues(
+      "web",
+      [
+        { name: "VITE_STRIPE_PUBLISHABLE_KEY", value: pk },
+        { name: "STRIPE_PK_COPY", value: pk },
+      ],
+      [{ label: "main.js", text }],
+    );
+    expect(ok.findings).toEqual([]);
+    // The same key on a surface that does not publish it is a leak there.
+    const bad = scanOutputForEnvValues(
+      "verify",
+      [{ name: "VITE_STRIPE_PUBLISHABLE_KEY", value: pk }],
+      [{ label: "main.js", text }],
+    );
+    expect(bad.findings.join("\n")).toMatch(/carries the value of VITE_STRIPE_PUBLISHABLE_KEY/);
+  });
+
+  it("parseDotenv reads KEY=VALUE, export, quotes and comments", () => {
+    expect(
+      parseDotenv(`# c\nexport A=1\nB="two words" # x\nC='q'\nD=plain # tail\n bad line\n`),
+    ).toEqual([
+      { name: "A", value: "1" },
+      { name: "B", value: "two words" },
+      { name: "C", value: "q" },
+      { name: "D", value: "plain" },
+    ]);
+  });
+
+  it("checkBuildOutput reads .env* files in the app dir as build env too, and refuses vacuity", () => {
+    const root = join(tmp, "r3-dotenv");
+    mkdirSync(join(root, "apps", "docs", ".next", "static"), { recursive: true });
+    writeFileSync(
+      join(root, "apps", "docs", ".env.production"),
+      `DOCS_ONLY_SECRET=${SERVER_SECRET}\n`,
+    );
+    writeFileSync(
+      join(root, "apps", "docs", ".next", "static", "a.js"),
+      `x=${JSON.stringify(SERVER_SECRET)}`,
+    );
+    const r = checkBuildOutput("docs", { repo: root, processEnv: {} });
+    expect(r.findings.join("\n")).toMatch(
+      /apps\/docs\/\.next\/static\/a\.js carries the value of DOCS_ONLY_SECRET \(raw; from \.env\.production/,
+    );
+    expect(r.findings.join("\n")).not.toContain(SERVER_SECRET);
+    expect(checkBuildOutput("web", { repo: root, processEnv: {} }).files).toBe(0);
+  });
+});
+
+/** A minimal Vite app at <root>/apps/verify (the governed name) with BOTH configs. */
+function siblingConfigApp(root: string): string {
+  const dir = join(root, "apps", "verify");
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(
+    join(dir, "index.html"),
+    '<!doctype html><script type="module" src="/main.js"></script>\n',
+  );
+  writeFileSync(join(dir, "main.js"), "console.log(__BUILD_INFO__);\n");
+  const guard = JSON.stringify(join(ROOT, "scripts", "lib", "client-bundle-secrets.ts"));
+  writeFileSync(
+    join(dir, "vite.config.ts"),
+    `import { publicBuildEnvGuard } from ${guard};\nexport default { logLevel: "warn", plugins: [publicBuildEnvGuard("verify")], define: { __BUILD_INFO__: "1" } };\n`,
+  );
+  // The R3 (1) plant: Vite loads vite.config.js BEFORE vite.config.ts.
+  writeFileSync(
+    join(dir, "vite.config.js"),
+    `export default { logLevel: "warn", define: { __BUILD_INFO__: JSON.stringify(process.env.SNEAKY_SERVER_SECRET) } };\n`,
+  );
+  return dir;
+}
+
+describe("R3 plants: each bypass ships green past the static arms, and the output scan refuses it", () => {
+  it("(1) sibling vite.config.js without the guard: vite builds it; the output scan names the var; the gate refuses the file", () => {
+    const root = join(tmp, "r3-sibling");
+    const dir = siblingConfigApp(root);
+    const r = spawnSync(process.execPath, [viteBin("verify"), "build", "--outDir", "dist"], {
+      cwd: dir,
+      encoding: "utf-8",
+      env: cleanEnv({ SNEAKY_SERVER_SECRET: SERVER_SECRET }),
+      timeout: 120_000,
+    });
+    expect(r.status, r.stderr).toBe(0); // the guard never ran: the .js config won
+    const out = checkBuildOutput("verify", {
+      repo: root,
+      processEnv: { SNEAKY_SERVER_SECRET: SERVER_SECRET },
+    });
+    expect(out.files).toBeGreaterThan(0);
+    expect(out.findings.join("\n")).toMatch(
+      /apps\/verify\/dist\/assets\/.+ carries the value of SNEAKY_SERVER_SECRET/,
+    );
+    expect(out.findings.join("\n")).not.toContain(SERVER_SECRET);
+    expect(judgeSurfaceWiring("verify", dir, { bundler: "vite" }).join("\n")).toMatch(
+      /apps\/verify\/vite\.config\.js — a second vite config beside vite\.config\.ts/,
+    );
+  });
+
+  it("(1') the guard plugin's closeBundle runs the law on disk: a non-public server var inlined by any route is refused", () => {
+    const dir = fixtureProject(
+      "fx-r3-close",
+      `define: { __X__: JSON.stringify(process.env.SNEAKY_SERVER_SECRET) },`,
+    );
+    writeFileSync(join(dir, "main.js"), "console.log(import.meta.env, __X__);\n");
+    mkdirSync(join(dir, "public"), { recursive: true });
+    const r = viteBuild([dir, "--outDir", join(dir, "dist")], ROOT, {
+      SNEAKY_SERVER_SECRET: SERVER_SECRET,
+    });
+    expect(r.status).not.toBe(0);
+    expect(r.out).toMatch(
+      /ground-truth output scan[\s\S]*carries the value of SNEAKY_SERVER_SECRET/,
+    );
+    expect(r.out).not.toContain(SERVER_SECRET);
+    // Same project, value only in a copied public/ asset (never a chunk): still refused.
+    const dir2 = fixtureProject("fx-r3-public");
+    mkdirSync(join(dir2, "public"), { recursive: true });
+    writeFileSync(join(dir2, ".env.production"), `SERVER_ONLY_TOKEN=${SERVER_SECRET}\n`);
+    writeFileSync(join(dir2, "public", "cfg.json"), JSON.stringify({ t: SERVER_SECRET }));
+    const r2 = viteBuild([dir2, "--outDir", join(dir2, "dist")], ROOT);
+    expect(r2.status).not.toBe(0);
+    expect(r2.out).toMatch(/cfg\.json carries the value of SERVER_ONLY_TOKEN/);
+    expect(r2.out).not.toContain(SERVER_SECRET);
+  });
+
+  it("(2) next.config `env` quoted/shorthand and compiler.define: the static arm now warns, the output scan refuses what shipped", () => {
+    const surface = PUBLIC_ENV_SURFACES.docs!;
+    for (const cfg of [
+      `const c = { "env": { LEAK: process.env.S } };`,
+      `const c = { 'env': { LEAK: process.env.S } };`,
+      `const env = { LEAK: process.env.S }; const c = { env, x: 1 };`,
+      `const c = { compiler: { define: { "process.env.LEAK": JSON.stringify(process.env.S) } } };`,
+    ]) {
+      expect(
+        judgeConfigFile("docs", "apps/docs/next.config.mjs", cfg, surface).join("\n"),
+        cfg,
+      ).toMatch(/next\.config `(?:env|define)` inlines/);
+    }
+    const root = join(tmp, "r3-next");
+    mkdirSync(join(root, "apps", "docs", ".next", "static", "chunks"), { recursive: true });
+    writeFileSync(
+      join(root, "apps", "docs", ".next", "static", "chunks", "page-1.js"),
+      `self.__next_f.push([1,"${SERVER_SECRET}"])`,
+    );
+    const r = checkBuildOutput("docs", {
+      repo: root,
+      processEnv: { DOCS_SERVER_SECRET: SERVER_SECRET },
+    });
+    expect(r.findings.join("\n")).toMatch(/page-1\.js carries the value of DOCS_SERVER_SECRET/);
+  });
+
+  it("(3) source under build/ out/ public/ below the app root is scanned by the static arm; the output scan covers __tests__/e2e too", () => {
+    const root = join(tmp, "r3-skipdirs");
+    for (const d of ["src/build", "src/out", "src/public"]) {
+      stageApp(root, "docs", {
+        [`${d}/leak.ts`]: "export const k = process.env.NEXT_PUBLIC_SNEAK;\n",
+      });
+    }
+    const f = runGate(root).staticFindings.filter((x) => x.includes("NEXT_PUBLIC_SNEAK"));
+    expect(f.map((x) => x.split(":")[0]).sort()).toEqual([
+      "apps/docs/src/build/leak.ts",
+      "apps/docs/src/out/leak.ts",
+      "apps/docs/src/public/leak.ts",
+    ]);
+    // Whatever dir the source sat in, its value in the emitted output is refused.
+    mkdirSync(join(root, "apps", "docs", ".next", "static"), { recursive: true });
+    writeFileSync(
+      join(root, "apps", "docs", ".next", "static", "x.js"),
+      `const k="${SERVER_SECRET}"`,
+    );
+    const r = checkBuildOutput("docs", {
+      repo: root,
+      processEnv: { NEXT_PUBLIC_SNEAK: SERVER_SECRET },
+    });
+    expect(r.findings.join("\n")).toMatch(/x\.js carries the value of NEXT_PUBLIC_SNEAK/);
+  });
+
+  it("(4) Expo app.config.js `extra: { x: process.env.SECRET }`: the REAL `expo config --type public` output is refused", () => {
+    const probe = mkdtempSync(join(ROOT, "apps", "mobile", ".r3-probe-"));
+    try {
+      cpSync(join(ROOT, "apps", "mobile", "app.json"), join(probe, "app.json"));
+      cpSync(join(ROOT, "apps", "mobile", "package.json"), join(probe, "package.json"));
+      writeFileSync(
+        join(probe, "app.config.js"),
+        "module.exports = ({ config }) => ({ ...config, extra: { ...(config.extra ?? {}), x: process.env.SNEAKY_SERVER_SECRET } });\n",
+      );
+      const saved = process.env.SNEAKY_SERVER_SECRET;
+      process.env.SNEAKY_SERVER_SECRET = SERVER_SECRET;
+      let manifest = "";
+      try {
+        manifest = expoPublicConfig(probe);
+      } finally {
+        if (saved === undefined) delete process.env.SNEAKY_SERVER_SECRET;
+        else process.env.SNEAKY_SERVER_SECRET = saved;
+      }
+      expect(manifest).toContain('"extra"');
+      const root = join(tmp, "r3-expo");
+      mkdirSync(join(root, "apps", "mobile"), { recursive: true });
+      const r = checkBuildOutput("mobile", {
+        repo: root,
+        expoConfigJson: manifest,
+        processEnv: { SNEAKY_SERVER_SECRET: SERVER_SECRET },
+      });
+      expect(r.findings.join("\n")).toMatch(
+        /apps\/mobile \(expo public config\) carries the value of SNEAKY_SERVER_SECRET/,
+      );
+      expect(r.findings.join("\n")).not.toContain(SERVER_SECRET);
+      // The real app.json (no app.config.js) ships no env value.
+      const clean = checkBuildOutput("mobile", {
+        repo: root,
+        expoConfigJson: expoPublicConfig(join(ROOT, "apps", "mobile")),
+        processEnv: { SNEAKY_SERVER_SECRET: SERVER_SECRET },
+      });
+      expect(clean.findings).toEqual([]);
+    } finally {
+      rmSync(probe, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("R3 wiring: every governed surface runs the law from its build", () => {
+  it("the real repo: one vite config per Vite surface; every build script (EAS hook for mobile) runs the output scan", () => {
+    for (const [app, surface] of Object.entries(PUBLIC_ENV_SURFACES)) {
+      expect(judgeSurfaceWiring(app, join(ROOT, "apps", app), surface), app).toEqual([]);
+    }
+  });
+
+  it("a build script that drops the output scan is RED", () => {
+    const root = join(tmp, "r3-unwired");
+    stageApp(root, "docs", {
+      "package.json": JSON.stringify({ scripts: { build: "next build" } }),
+    });
+    expect(
+      judgeSurfaceWiring("docs", join(root, "apps", "docs"), { bundler: "next" }).join("\n"),
+    ).toMatch(/scripts\.build — does not run `check-client-build-output\.ts docs`/);
   });
 });

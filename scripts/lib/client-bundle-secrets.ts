@@ -10,7 +10,7 @@
  * in `https://motebit.com/assets/main-*.js`. Strangers spent the account's
  * credits to 1M/1M and the provider halted every key on it.
  *
- * Consumers, one module (zero imports so vite configs can load it):
+ * Consumers, one module:
  *   - `publicBuildEnvGuard` + `PUBLIC_BUILD_ENV` — a Vite plugin in apps/web +
  *     apps/verify `vite.config.ts` that judges Vite's OWN resolved env
  *     (`config.env` + `import.meta.env.*` defines) in `configResolved`; DENY BY
@@ -25,8 +25,23 @@
  *     every OTHER app (local-only surfaces), credential-shaped names.
  *   - `scanArtifactText` + `CREDENTIAL_RULES` — credential shapes in any dist.
  *
+ * THE LAW (cold review R3): `scanOutputForEnvValues` — after every client
+ * build, every value of every env var the build could see (process.env + every
+ * `.env*` in its env dirs), minus the exclusion rule `outputScanExclusion`,
+ * must not appear (raw / URL-encoded / JSON-escaped / base64) in ANY emitted
+ * file. Run by the Vite guard's `closeBundle` (web, verify), by
+ * scripts/check-client-build-output.ts after `vite build` / `next build` in each
+ * surface's package.json build script, and on the Expo public config + native
+ * bundles (mobile, EAS `eas-build-on-success`). Everything else here is an
+ * early warning.
+ *
+ * Imports node builtins only (vite configs load this file directly).
+ *
  * Doctrine: CLAUDE.md "Fail-closed privacy"; docs/doctrine/security-boundaries.md.
  */
+
+import { readdirSync, readFileSync, statSync } from "node:fs";
+import { isAbsolute, join, relative, resolve } from "node:path";
 
 /** Env prefixes a bundler inlines into client code. */
 export const PUBLIC_ENV_PREFIXES = ["VITE_", "NEXT_PUBLIC_", "EXPO_PUBLIC_"] as const;
@@ -243,7 +258,7 @@ export function scanArtifactText(
 export type PublicValueRule =
   | {
       readonly kind: "url";
-      /** Exact hostnames, or `*.example.com` (subdomains only — list the apex separately). */
+      /** Exact hostnames only (no wildcard: a subdomain label can carry a key). */
       readonly hosts: readonly string[];
     }
   | { readonly kind: "stripe-publishable" }
@@ -258,7 +273,13 @@ export interface PublicBuildEnvEntry {
 
 /** Hosts every URL-valued var may point at during local development. */
 const LOCAL_HOSTS = ["localhost", "127.0.0.1"] as const;
-const MOTEBIT_HOSTS = ["motebit.com", "*.motebit.com", ...LOCAL_HOSTS] as const;
+/**
+ * EXACT hosts per var — never a wildcard (cold review R3: `*.motebit.com`
+ * accepted a key smuggled into a subdomain label). These are the origins the
+ * operator actually uses (Vercel project env + the code's own defaults).
+ */
+const PROXY_HOSTS = ["api.motebit.com", ...LOCAL_HOSTS] as const;
+const RELAY_HOSTS = ["relay.motebit.com", ...LOCAL_HOSTS] as const;
 
 /** Set by vite itself when a `.env` file carries NODE_ENV; public metadata only. */
 const VITE_USER_NODE_ENV: PublicBuildEnvEntry = {
@@ -278,32 +299,32 @@ export const PUBLIC_BUILD_ENV: Readonly<Record<string, readonly PublicBuildEnvEn
   web: [
     {
       name: "VITE_PROXY_URL",
-      rule: { kind: "url", hosts: MOTEBIT_HOSTS },
+      rule: { kind: "url", hosts: PROXY_HOSTS },
       why: "set in Vercel project motebit-web: the motebit relay/proxy base (deprecated alias of VITE_MOTEBIT_RELAY_URL); a public origin",
     },
     {
       name: "VITE_MOTEBIT_RELAY_URL",
-      rule: { kind: "url", hosts: MOTEBIT_HOSTS },
+      rule: { kind: "url", hosts: PROXY_HOSTS },
       why: "canonical relay/proxy base URL (apps/web/src/providers.ts); a public origin",
     },
     {
       name: "VITE_RELAY_URL",
-      rule: { kind: "url", hosts: MOTEBIT_HOSTS },
+      rule: { kind: "url", hosts: RELAY_HOSTS },
       why: "relay base URL override (apps/web/src/storage.ts); a public origin",
     },
     {
       name: "VITE_SEARCH_URL",
-      rule: { kind: "url", hosts: [...MOTEBIT_HOSTS, "motebit-web-search.fly.dev"] },
+      rule: { kind: "url", hosts: ["motebit-web-search.fly.dev", ...LOCAL_HOSTS] },
       why: "web-search worker base URL (apps/web/src/web-app.ts); a public origin",
     },
     {
       name: "VITE_BROWSER_SANDBOX_URL",
-      rule: { kind: "url", hosts: [...MOTEBIT_HOSTS, "motebit-browser-sandbox.fly.dev"] },
+      rule: { kind: "url", hosts: ["motebit-browser-sandbox.fly.dev", ...LOCAL_HOSTS] },
       why: "set in Vercel project motebit-web: the services/browser-sandbox origin (auth is a per-session relay grant, never a baked key)",
     },
     {
       name: "VITE_SOLANA_RPC_URL",
-      rule: { kind: "url", hosts: MOTEBIT_HOSTS },
+      rule: { kind: "url", hosts: PROXY_HOSTS },
       why: "local-dev override of the server-side passthrough https://api.motebit.com/v1/solana-rpc; a provider host can never validate",
     },
     {
@@ -316,12 +337,12 @@ export const PUBLIC_BUILD_ENV: Readonly<Record<string, readonly PublicBuildEnvEn
   verify: [
     {
       name: "VITE_RELAY_URL",
-      rule: { kind: "url", hosts: [...MOTEBIT_HOSTS, "receipt.computer"] },
+      rule: { kind: "url", hosts: RELAY_HOSTS },
       why: "relay base URL override (apps/verify/src/main.ts); Vercel project receipt-computer sets no VITE_* var",
     },
     {
       name: "VITE_SOLANA_RPC_URL",
-      rule: { kind: "url", hosts: [...MOTEBIT_HOSTS, "receipt.computer"] },
+      rule: { kind: "url", hosts: PROXY_HOSTS },
       why: "local-dev override of https://api.motebit.com/v1/solana-rpc (apps/verify/src/main.ts); a provider host can never validate",
     },
     VITE_USER_NODE_ENV,
@@ -329,7 +350,7 @@ export const PUBLIC_BUILD_ENV: Readonly<Record<string, readonly PublicBuildEnvEn
   mobile: [
     {
       name: "EXPO_PUBLIC_MOTEBIT_RELAY_URL",
-      rule: { kind: "url", hosts: MOTEBIT_HOSTS },
+      rule: { kind: "url", hosts: PROXY_HOSTS },
       why: "relay base URL fallback (apps/mobile/src/mobile-app.ts, after session state + AsyncStorage); a public origin. eas.json sets no env",
     },
   ],
@@ -343,12 +364,11 @@ export const PUBLIC_BUILD_ENV: Readonly<Record<string, readonly PublicBuildEnvEn
  *   - vite (web, verify): the whole-object `import.meta.env` literal inlines
  *     EVERY resolved var, so the build itself is guarded (`publicBuildEnvGuard`)
  *     and every public prefix is judged in source.
- *   - expo (mobile, EAS) / next (docs, Vercel): babel-preset-expo and Next
- *     inline only `process.env.<PREFIX>_X` member reads that appear in source,
- *     so a name absent from source + config cannot ship. No build hook — the
- *     gate's static arm covers ALL their source (incl. .mdx) and the listed
- *     config files (names; eas.json `env` values; credential shapes), and
- *     refuses next.config `env` / `publicRuntimeConfig` (which inline ANY name).
+ *   - expo (mobile, EAS) / next (docs, Vercel): no in-bundler hook; the law
+ *     (the output scan) runs from the build script / EAS hook. The gate's
+ *     static arm is an early warning over their source (incl. .mdx) and the
+ *     listed config files (names; eas.json `env` values; credential shapes;
+ *     next.config `env` / `publicRuntimeConfig` / `define`, any spelling).
  */
 export interface PublicEnvSurface {
   readonly bundler: "vite" | "expo" | "next";
@@ -413,9 +433,7 @@ export const PLATFORM_DROPPED_PUBLIC_ENV = /^VITE_VERCEL_[A-Z0-9_]*$/;
 
 function hostAllowed(hostname: string, hosts: readonly string[]): boolean {
   const h = hostname.toLowerCase();
-  return hosts.some((p) =>
-    p.startsWith("*.") ? h.endsWith(p.slice(1)) && h.length > p.length - 1 : h === p,
-  );
+  return hosts.some((p) => h === p);
 }
 
 /**
@@ -460,6 +478,12 @@ export function publicUrlViolation(raw: string, hosts: readonly string[]): strin
   return null;
 }
 
+/**
+ * A Stripe publishable key: `pk_live_` / `pk_test_` + 24 (legacy) up to 247
+ * (Stripe's 255-char key ceiling) alphanumerics.
+ */
+const STRIPE_PUBLISHABLE = /^pk_(?:live|test)_[A-Za-z0-9]{24,247}$/;
+
 /** Why `value` is refused for a named entry, or null when acceptable. */
 export function publicValueViolation(value: string, rule: PublicValueRule): string | null {
   if (value === "") return null;
@@ -467,9 +491,9 @@ export function publicValueViolation(value: string, rule: PublicValueRule): stri
     case "url":
       return publicUrlViolation(value, rule.hosts);
     case "stripe-publishable":
-      return /^pk_(?:live|test)_[A-Za-z0-9]+$/.test(value)
+      return STRIPE_PUBLISHABLE.test(value)
         ? null
-        : "is not a Stripe publishable key (^pk_(live|test)_[A-Za-z0-9]+$)";
+        : "is not a Stripe publishable key (^pk_(live|test)_[A-Za-z0-9]{24,247}$)";
     case "enum":
       return rule.values.includes(value) ? null : `is not one of ${rule.values.join(" | ")}`;
   }
@@ -647,11 +671,20 @@ export function forbiddenEnvValues(
 }
 
 /** The structural slice of a Vite plugin this guard implements (zero imports). */
+export interface GuardResolvedConfig {
+  env: Record<string, unknown>;
+  define?: Record<string, unknown>;
+  root?: string;
+  envDir?: string | false;
+  build?: { outDir?: string; write?: boolean };
+}
+
 export interface PublicBuildEnvGuardPlugin {
   readonly name: string;
   readonly enforce: "pre";
   config(): void;
-  configResolved(config: { env: Record<string, unknown>; define?: Record<string, unknown> }): void;
+  configResolved(config: GuardResolvedConfig): void;
+  closeBundle(error?: unknown): void;
   generateBundle(
     this: { error(message: string): never },
     options: unknown,
@@ -676,12 +709,18 @@ export interface PublicBuildEnvGuardPlugin {
  *   - `generateBundle` (defence in depth): re-judges the final config (a later
  *     plugin may mutate it), then refuses if any forbidden value
  *     (`forbiddenEnvValues`) appears in any emitted chunk or asset.
+ *   - `closeBundle` — THE LAW: `scanOutputForEnvValues` over every file written
+ *     to outDir (chunks, html, maps, the copied publicDir) against every env
+ *     value the build could see (process.env + `.env*` in envDir and root).
+ * A sibling config that drops this plugin is caught by the same scan run from
+ * the surface's package.json `build` (scripts/check-client-build-output.ts).
  */
 export function publicBuildEnvGuard(
   app: string,
   processEnv: Record<string, string | undefined> = process.env,
 ): PublicBuildEnvGuardPlugin {
   let resolved: { env: Record<string, unknown>; define: Record<string, unknown> } | null = null;
+  let out: { root: string; envDirs: string[]; outDir: string | null } | null = null;
   return {
     name: "motebit:public-build-env-guard",
     enforce: "pre",
@@ -692,7 +731,39 @@ export function publicBuildEnvGuard(
     },
     configResolved(config) {
       resolved = { env: config.env, define: config.define ?? {} };
+      const root = resolve(config.root ?? process.cwd());
+      const envDir =
+        typeof config.envDir === "string"
+          ? isAbsolute(config.envDir)
+            ? config.envDir
+            : resolve(root, config.envDir)
+          : root;
+      const outDirRaw = config.build?.outDir ?? "dist";
+      out = {
+        root,
+        envDirs: [envDir, root],
+        outDir:
+          config.build?.write === false
+            ? null
+            : isAbsolute(outDirRaw)
+              ? outDirRaw
+              : resolve(root, outDirRaw),
+      };
       enforcePublicBuildEnv(app, resolved.env, resolved.define);
+    },
+    // THE LAW, on what was written: every emitted file in outDir (chunks,
+    // assets, copied publicDir, html, source maps) is searched for every env
+    // value the build could see. Runs after the bundle is on disk.
+    closeBundle(error) {
+      if (error != null || out == null || out.outDir == null) return;
+      const vars = collectBuildEnv(processEnv, out.envDirs);
+      const outDir = out.outDir;
+      const r = scanOutputForEnvValues(
+        app,
+        vars,
+        readOutputFiles(listOutputFiles(outDir), (p) => relative(outDir, p)),
+      );
+      if (r.findings.length > 0) throw new Error(outputScanRefusal(app, r.findings));
     },
     generateBundle(_options, bundle) {
       if (resolved == null) {
@@ -749,4 +820,325 @@ export function scanArtifactForPublicEnvPairs(
     out.push({ name: m[1] ?? "", value: m[3] ?? "", offset: m.index ?? 0 });
   }
   return out;
+}
+
+// ── THE LAW: the ground-truth output scan ──────────────────────────────────
+//
+// Three cold-review rounds found a pre-build/static check judging something
+// other than what ships (a sibling vite.config.js, a quoted next.config `env`,
+// source under a skipped `build/` dir, an Expo `extra`). So the primary law
+// judges the OUTPUT: after a client build, every value of every env var the
+// build process could see (process.env + every `.env*` file in the env dirs)
+// is searched for — raw, URL-encoded, JSON-escaped and base64 (std + url, all
+// three alignments) — in EVERY emitted file. A hit fails the build, naming the
+// var, never printing the value. It catches every route a value can take
+// (define, next `env`, `compiler.define`, Expo `extra`, any config spelling,
+// any source dir) without enumerating them. The static arms stay as fast early
+// warnings.
+
+/** Values shorter than this are never scanned for (collision-prone). */
+export const OUTPUT_SCAN_MIN_LENGTH = 16;
+
+/** A path segment / host label that cannot be a key: short, or letters-only words. */
+function lowEntropySegment(seg: string): boolean {
+  return seg.length < 12 || /^[A-Za-z]+(?:[-_.][A-Za-z]+)*$/.test(seg);
+}
+
+/** `true`/`false`, or a plain decimal number. */
+function isScalar(v: string): boolean {
+  return /^(?:true|false)$/i.test(v) || /^[+-]?\d+(?:\.\d+)?$/.test(v);
+}
+
+/** One or more absolute POSIX paths joined by `:` (PATH, HOME, PWD, …). */
+function isAbsolutePathList(v: string): boolean {
+  return /^\/[^:\s]*(?::\/[^:\s]*)*$/.test(v);
+}
+
+/**
+ * A URL (http/https) or bare DNS name that cannot carry a credential: no
+ * userinfo, query or fragment, and every host label and path segment is
+ * low-entropy (`lowEntropySegment`). A key in a label/segment, a query or
+ * userinfo makes it NOT credential-free, so it is scanned for.
+ */
+function isCredentialFreeLocator(v: string): boolean {
+  if (/^[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+$/.test(v)) {
+    return v.split(".").every(lowEntropySegment);
+  }
+  let u: URL;
+  try {
+    u = new URL(v);
+  } catch {
+    return false;
+  }
+  if (u.protocol !== "https:" && u.protocol !== "http:") return false;
+  if (u.username !== "" || u.password !== "" || v.includes("@")) return false;
+  if (u.search !== "" || v.includes("?") || u.hash !== "" || v.includes("#")) return false;
+  if (!u.hostname.split(".").every(lowEntropySegment)) return false;
+  return u.pathname.split("/").every((seg) => {
+    try {
+      return lowEntropySegment(decodeURIComponent(seg));
+    } catch {
+      return false;
+    }
+  });
+}
+
+/**
+ * The exclusion rule, exactly. A value is NOT scanned for iff ANY of:
+ *   (a) it is the value of a var named in PUBLIC_BUILD_ENV[app] that passes
+ *       that entry's validator (a value-level allowlist: the same value under
+ *       another name is excluded too);
+ *   (b) it is shorter than OUTPUT_SCAN_MIN_LENGTH (16) characters;
+ *   (c) it is `true`/`false` (any case) or a plain decimal number;
+ *   (d) it is one or more absolute POSIX paths joined by `:`;
+ *   (e) it is a credential-free locator: an http(s) URL or bare DNS name with no
+ *       userinfo/query/fragment whose every host label and path segment is
+ *       shorter than 12 chars or letters-only words (`isCredentialFreeLocator`).
+ * Everything else — every other value of every var — is searched for.
+ */
+export function outputScanExclusion(
+  value: string,
+  allowedValues: ReadonlySet<string>,
+): string | null {
+  if (allowedValues.has(value)) return "public (PUBLIC_BUILD_ENV)";
+  if (value.length < OUTPUT_SCAN_MIN_LENGTH) return "short";
+  if (isScalar(value)) return "scalar";
+  if (isAbsolutePathList(value)) return "path";
+  if (isCredentialFreeLocator(value)) return "credential-free locator";
+  return null;
+}
+
+/** The values a surface publishes on purpose: named vars whose value validates. */
+export function publicValuesFor(
+  app: string,
+  vars: readonly { name: string; value: string }[],
+): Set<string> {
+  const byName = new Map((PUBLIC_BUILD_ENV[app] ?? []).map((e) => [e.name, e]));
+  const out = new Set<string>();
+  for (const { name, value } of vars) {
+    const entry = byName.get(name);
+    if (entry != null && value !== "" && publicValueViolation(value, entry.rule) == null) {
+      out.add(value);
+    }
+  }
+  return out;
+}
+
+function toLatin1(s: string): string {
+  return Buffer.from(s, "utf8").toString("latin1");
+}
+
+/**
+ * Every encoding a value could ship under, as latin1 byte-strings (files are
+ * read as latin1 so non-UTF-8 output is searched byte-for-byte): raw,
+ * encodeURIComponent, JSON-escaped (once and twice), every escape-stable run
+ * ≥ 16 chars, and base64 / base64url of each at all three byte alignments
+ * (only the characters fully determined by the value).
+ */
+export function valueNeedles(value: string): { encoding: string; needle: string }[] {
+  const out = new Map<string, string>();
+  const add = (encoding: string, s: string): void => {
+    if (s.length >= OUTPUT_SCAN_MIN_LENGTH && !out.has(s)) out.set(s, encoding);
+  };
+  const forms: [string, string][] = [
+    ["raw", value],
+    ["url-encoded", encodeURIComponent(value)],
+    ["json-escaped", JSON.stringify(value).slice(1, -1)],
+    ["json-escaped twice", JSON.stringify(JSON.stringify(value)).slice(3, -3)],
+    // Every run of escape-stable characters (≥ 16) is itself a needle: an
+    // escaping layer we did not model (nested JSON in a base64 source map,
+    // a template literal) still leaves it intact.
+    ...value
+      .split(/[^A-Za-z0-9_.~-]+/)
+      .filter((p) => p !== value && isKeyShapedFragment(p))
+      .map((p): [string, string] => ["fragment", p]),
+  ];
+  for (const [encoding, form] of forms) {
+    add(encoding, toLatin1(form));
+    const bytes = Buffer.from(form, "utf8");
+    for (let k = 0; k < 3; k++) {
+      const full = Buffer.concat([Buffer.alloc(k), bytes]).toString("base64");
+      const start = Math.ceil((k * 4) / 3);
+      const end = Math.floor(((k + bytes.length) * 8) / 6);
+      const b64 = full.slice(start, end);
+      add(`base64 of ${encoding}`, b64);
+      add(`base64url of ${encoding}`, b64.replace(/\+/g, "-").replace(/\//g, "_"));
+    }
+  }
+  return [...out].map(([needle, encoding]) => ({ encoding, needle }));
+}
+
+/**
+ * A fragment is a needle only when it could be key material on its own: it is
+ * not itself excluded by the rule (short / scalar / path / credential-free
+ * locator) and mixes letters with digits. Keeps hostname lists (NO_PROXY) and
+ * flag words (JAVA_TOOL_OPTIONS) from matching public strings.
+ */
+function isKeyShapedFragment(p: string): boolean {
+  return outputScanExclusion(p, new Set()) == null && /[0-9]/.test(p) && /[A-Za-z]/.test(p);
+}
+
+/** Minimal `.env` parser (KEY=VALUE, `export`, quotes, `#` comments). */
+export function parseDotenv(text: string): { name: string; value: string }[] {
+  const out: { name: string; value: string }[] = [];
+  for (const raw of text.split(/\r?\n/)) {
+    const m = /^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_.-]*)\s*=\s*(.*)$/.exec(raw);
+    if (m == null) continue;
+    let v = (m[2] ?? "").trim();
+    const q = v[0];
+    if ((q === '"' || q === "'" || q === "`") && v.lastIndexOf(q) > 0) {
+      v = v.slice(1, v.lastIndexOf(q));
+      if (q === '"') v = v.replace(/\\n/g, "\n");
+    } else {
+      v = v.replace(/\s+#.*$/, "");
+    }
+    out.push({ name: m[1] ?? "", value: v });
+  }
+  return out;
+}
+
+/**
+ * Every env var visible to a build: `processEnv` plus every `.env*` file in
+ * each of `envDirs` (a superset of what any bundler loads from there — Vite's
+ * `.env[.mode][.local]`, Next's `.env*`, Expo's `.env*`).
+ */
+export function collectBuildEnv(
+  processEnv: Readonly<Record<string, string | undefined>>,
+  envDirs: readonly string[],
+): { name: string; value: string; source: string }[] {
+  const out: { name: string; value: string; source: string }[] = [];
+  for (const [name, value] of Object.entries(processEnv)) {
+    if (value != null) out.push({ name, value, source: "process.env" });
+  }
+  for (const dir of new Set(envDirs.map((d) => resolve(d)))) {
+    let names: string[];
+    try {
+      names = readdirSync(dir);
+    } catch {
+      continue;
+    }
+    for (const f of names.filter((n) => n.startsWith(".env")).sort()) {
+      const full = join(dir, f);
+      try {
+        if (!statSync(full).isFile()) continue;
+        for (const v of parseDotenv(readFileSync(full, "utf8"))) {
+          out.push({ ...v, source: f });
+        }
+      } catch {
+        continue;
+      }
+    }
+  }
+  return out;
+}
+
+/** Every file under `dir` (recursively), skipping directory names in `skip`. */
+export function listOutputFiles(dir: string, skip: ReadonlySet<string> = new Set()): string[] {
+  const out: string[] = [];
+  const walkDir = (d: string): void => {
+    let entries: string[];
+    try {
+      entries = readdirSync(d);
+    } catch {
+      return;
+    }
+    for (const e of entries) {
+      const full = join(d, e);
+      let st;
+      try {
+        st = statSync(full);
+      } catch {
+        continue;
+      }
+      if (st.isDirectory()) {
+        if (!skip.has(e)) walkDir(full);
+      } else if (st.isFile()) out.push(full);
+    }
+  };
+  walkDir(dir);
+  return out;
+}
+
+export interface OutputScanResult {
+  /** `file carries the value of NAME (encoding; source; N chars)` — never the value. */
+  readonly findings: string[];
+  readonly files: number;
+  readonly scannedVars: number;
+  readonly excluded: Readonly<Record<string, number>>;
+}
+
+/**
+ * THE LAW. Searches every file for every non-excluded env value (all
+ * encodings). `files` yields `{ label, bytes }` so the same law runs over a
+ * Vite bundle in memory, a dist dir on disk, or an Expo public config.
+ */
+export function scanOutputForEnvValues(
+  app: string,
+  vars: readonly { name: string; value: string; source?: string }[],
+  files: Iterable<{ label: string; text: string }>,
+): OutputScanResult {
+  const allowed = publicValuesFor(app, vars);
+  const excluded: Record<string, number> = {};
+  const needles: {
+    name: string;
+    source: string;
+    length: number;
+    encoding: string;
+    needle: string;
+  }[] = [];
+  const seenValue = new Set<string>();
+  const scannedNames = new Set<string>();
+  for (const { name, value, source } of vars) {
+    const why = outputScanExclusion(value, allowed);
+    if (why != null) {
+      excluded[why] = (excluded[why] ?? 0) + 1;
+      continue;
+    }
+    scannedNames.add(name);
+    const key = `${name}\u0000${value}`;
+    if (seenValue.has(key)) continue;
+    seenValue.add(key);
+    for (const n of valueNeedles(value)) {
+      needles.push({ name, source: source ?? "env", length: value.length, ...n });
+    }
+  }
+  const findings: string[] = [];
+  let count = 0;
+  for (const { label, text } of files) {
+    count++;
+    const reported = new Set<string>();
+    for (const n of needles) {
+      if (reported.has(n.name) || !text.includes(n.needle)) continue;
+      reported.add(n.name);
+      findings.push(
+        `${label} carries the value of ${n.name} (${n.encoding}; from ${n.source}; value redacted, ${n.length} chars)`,
+      );
+    }
+  }
+  return { findings, files: count, scannedVars: scannedNames.size, excluded };
+}
+
+/** Reads each path as latin1 (byte-exact) for `scanOutputForEnvValues`. */
+export function* readOutputFiles(
+  paths: readonly string[],
+  labelOf: (p: string) => string = (p) => p,
+): Generator<{ label: string; text: string }> {
+  for (const p of paths) {
+    let text: string;
+    try {
+      text = readFileSync(p, "latin1");
+    } catch {
+      continue;
+    }
+    yield { label: labelOf(p), text };
+  }
+}
+
+/** The refusal message for an output-scan failure (the law). */
+export function outputScanRefusal(app: string, findings: readonly string[]): string {
+  return refusalMessage(
+    app,
+    findings,
+    "an emitted file carries the value of a build env var (ground-truth output scan — the law)",
+  );
 }
