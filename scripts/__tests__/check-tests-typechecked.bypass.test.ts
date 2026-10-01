@@ -167,6 +167,9 @@ const BY = {
   noVitest: /started no vitest the recorder observed/,
   step: /is neither `tsc \.\.\.` nor `pnpm run <script>`/,
   crossCheck: /no recorded vitest run of this package loaded it/,
+  computedLoad: /loads a module through a computed specifier/,
+  testScript: /a recorded test script must be exactly one `vitest \.\.\.` step/,
+  unrecordedConfig: /is a vitest config no recorded test script used/,
 } as const;
 
 /** A test file vitest collects (globals: no `vitest` import tsc would need to resolve). */
@@ -195,9 +198,19 @@ interface Case {
   /** The fixture's own `typecheck` exits 0 with a type error in a test file. */
   hidesError: boolean;
   globs?: string[];
+  /**
+   * The bypass is live: the fixture's real `pnpm run <script>` (no recorder)
+   * loads the hidden file, which writes `<package>/loaded.marker`.
+   */
+  runs?: string;
 }
 
 const P = "packages/pkg";
+/** A file with a type error that, when vitest loads it, proves so by writing `<package>/loaded.marker`. */
+const HIDDEN =
+  'import { writeFileSync } from "node:fs";\n' +
+  'writeFileSync(new URL("../loaded.marker", import.meta.url), "1");\n' +
+  TYPE_ERROR;
 const TEST = `${P}/src/__tests__/index.test.ts`;
 const appendError = (files: Files, rel: string, text = TYPE_ERROR): void => {
   files[rel] = `${(files[rel] as string | undefined) ?? ""}${text}`;
@@ -753,6 +766,69 @@ const CASES: Case[] = [
       return P;
     },
   },
+  // ── round 8: what collection never runs, and a second vitest beside the recorded one ──
+  ...(
+    [
+      [
+        "a variable",
+        'const spec = "../../helpers/hidden.ts";',
+        "await import(/* @vite-ignore */ spec)",
+      ],
+      [
+        // a `./`-relative template vite would expand to a glob (and record); this prefix it cannot
+        "a template literal",
+        'const dir = "../../helpers";',
+        "await import(/* @vite-ignore */ `${dir}/hidden.ts`)",
+      ],
+      [
+        "vi.importActual",
+        'declare const vi: { importActual(p: string): Promise<unknown> };\nconst spec = "../../helpers/hidden.ts";',
+        "await vi.importActual(spec)",
+      ],
+    ] as const
+  ).map(([how, decl, load]): Case => ({
+    id: `R8-C1 a test body loads an unchecked helper through a computed specifier (${how})`,
+    reason: ["computedLoad"],
+    hidesError: true,
+    runs: "test",
+    build: (f) => {
+      vitestPackage(f, { test: "vitest run" }, "export default { test: { globals: true } };\n");
+      f[TEST] =
+        `declare const it: (name: string, fn: () => Promise<void>) => void;\n${decl}\n` +
+        `it("loads", async () => {\n  ${load};\n});\n`;
+      f[`${P}/helpers/hidden.ts`] = HIDDEN;
+      return P;
+    },
+  })),
+  {
+    id: "R8-C2 a second vitest beside the recorded one: `vitest run && env -u NODE_OPTIONS vitest run -c vitest.extra.config.mjs`",
+    reason: ["testScript", "unrecordedConfig"],
+    hidesError: true,
+    runs: "test",
+    build: (f) => {
+      vitestPackage(
+        f,
+        { test: "vitest run && env -u NODE_OPTIONS vitest run -c vitest.extra.config.mjs" },
+        "export default { test: { globals: true } };\n",
+      );
+      f[`${P}/vitest.extra.config.mjs`] =
+        'export default { test: { globals: true, setupFiles: ["./extra/setup.ts"] } };\n';
+      f[`${P}/extra/setup.ts`] = HIDDEN;
+      return P;
+    },
+  },
+  {
+    id: "R8-C2 a vitest config no recorded script uses (reachable only by a `vitest -c` from outside the scripts)",
+    reason: ["unrecordedConfig"],
+    hidesError: false,
+    build: (f) => {
+      vitestPackage(f, { test: "vitest run" }, "export default { test: { globals: true } };\n");
+      f[`${P}/vitest.extra.config.mjs`] =
+        'export default { test: { globals: true, setupFiles: ["./extra/setup.ts"] } };\n';
+      f[`${P}/extra/setup.ts`] = HIDDEN;
+      return P;
+    },
+  },
 ];
 
 describe("check-tests-typechecked bypass harness", () => {
@@ -772,6 +848,19 @@ describe("check-tests-typechecked bypass harness", () => {
       const dir = c.build(files);
       const root = workspace(files, c.globs);
       if (c.hidesError) expect(typecheck(join(root, dir)), "bypass must be real").toBe(0);
+      if (c.runs) {
+        const r = spawnSync("pnpm", ["--silent", "run", c.runs], {
+          cwd: join(root, dir),
+          env: ENV,
+          encoding: "utf-8",
+        });
+        expect(r.status, `${r.stdout}\n${r.stderr}`).toBe(0);
+        expect(
+          existsSync(join(root, dir, "loaded.marker")),
+          "the real test run loads the hidden file",
+        ).toBe(true);
+        rmSync(join(root, dir, "loaded.marker"));
+      }
       const g = gate(root);
       expect(g.status, g.out).not.toBe(0);
       for (const r of c.reason) expect(g.out, `${r} must report it`).toMatch(BY[r]);

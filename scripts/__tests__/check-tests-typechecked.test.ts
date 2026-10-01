@@ -9,7 +9,7 @@
  * and the exact-path shape of KNOWN_UNCOVERED.
  */
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { hostname, tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -23,6 +23,8 @@ import {
   canaryContent,
   canaryOwnerLive,
   chainViolations,
+  COMPUTED_LOADS_ALLOWED,
+  computedLoads,
   changedScope,
   DIFF_ALLOWED_KEYS,
   isTestFile,
@@ -40,6 +42,8 @@ import {
   readRecording,
   recordedFile,
   TYPECHECK_EXTRA_STEPS,
+  testScriptViolations,
+  unrecordedConfigs,
   type VitestRecord,
   vitestScripts,
   workspacePackageDirs,
@@ -425,9 +429,143 @@ describe("vitest collection policy", () => {
   });
 });
 
-describe("lock wait (C5)", () => {
-  it("covers a whole full run (~6 min measured), so a second honest concurrent run waits instead of failing", () => {
-    expect(LOCK_WAIT_MS).toBeGreaterThanOrEqual(10 * 60 * 1000);
+describe("lock wait (C5, R8)", () => {
+  it("has NO fixed cap: a run waits while the holder's heartbeat is live, so any number of concurrent runs queue instead of failing", () => {
+    expect(LOCK_WAIT_MS).toBe(Number.POSITIVE_INFINITY);
+  });
+});
+
+describe("test scripts are exactly one vitest step (R8-C2)", () => {
+  it.each([
+    ["vitest run"],
+    ["vitest run --coverage"],
+    ["MOTEBIT_SLOW=1 vitest run"],
+    ["vitest bench --run"],
+  ])("accepts %j", (cmd) => {
+    expect(testScriptViolations({ test: cmd }, "test")).toEqual([]);
+  });
+
+  it("accepts a pnpm run hop to a script that is one vitest step", () => {
+    expect(testScriptViolations({ test: "pnpm run t", t: "vitest run" }, "test")).toEqual([]);
+    expect(testScriptViolations({ test: "pnpm t", t: "vitest run" }, "test")).toEqual([]);
+  });
+
+  it.each([
+    ["vitest run && env -u NODE_OPTIONS vitest run -c vitest.extra.config.ts", /2 steps/],
+    ["vitest run; vitest run -c x.ts", /2 steps/],
+    ["vitest run || true", /2 steps/],
+    ["vitest run | tee log", /2 steps/],
+    ["node scripts/run-tests.mjs", /is not a `vitest` step/],
+    ["npx vitest run", /is not a `vitest` step/],
+    ["pnpm exec vitest run", /is not a `vitest` step/],
+    ["env -u NODE_OPTIONS vitest run", /is not a `vitest` step/],
+    ["sh -c 'vitest run'", /is not a `vitest` step/],
+    ["vitest run -c ${CFG}", /`\$` or a backtick/],
+  ])("rejects %j", (cmd, why) => {
+    expect(testScriptViolations({ test: cmd }, "test").join("\n")).toMatch(why);
+  });
+
+  it("holds a hop's target to the same rule", () => {
+    expect(
+      testScriptViolations(
+        { test: "pnpm run t", t: "vitest run && vitest run -c b.ts" },
+        "test",
+      ).join(),
+    ).toMatch(/test script "t".*2 steps/);
+  });
+});
+
+describe("every vitest config is recorded (R8-C2)", () => {
+  const read = (body: string) => () => body;
+  it("flags an unrecorded config by name, at any depth", () => {
+    for (const n of [
+      "/p/vitest.config.ts",
+      "/p/vitest.extra.config.ts",
+      "/p/e2e.vitest.config.mts",
+      "/p/vitest.workspace.ts",
+      "/p/sub/vite.config.js",
+    ]) {
+      expect(unrecordedConfigs([n], new Set(), read("")), n).toEqual([n]);
+    }
+  });
+
+  it("flags an unrecorded config by content (vitest/config or the repo factory)", () => {
+    expect(
+      unrecordedConfigs(
+        ["/p/tests.config.ts"],
+        new Set(),
+        read('import { defineConfig } from "vitest/config";'),
+      ),
+    ).toEqual(["/p/tests.config.ts"]);
+    expect(
+      unrecordedConfigs(
+        ["/p/x.ts"],
+        new Set(),
+        read('import { defineMotebitTest } from "../../vitest.shared";'),
+      ),
+    ).toEqual(["/p/x.ts"]);
+    expect(unrecordedConfigs(["/p/x.ts"], new Set(), read("export const a = 1;"))).toEqual([]);
+  });
+
+  it("accepts a recorded config, and a vite.config beside a vitest.config (vitest's default lookup takes the latter)", () => {
+    const vt = "/p/vitest.config.ts";
+    expect(unrecordedConfigs([vt, "/p/vite.config.ts"], new Set([vt]), read(""))).toEqual([]);
+    expect(unrecordedConfigs(["/p/vite.config.ts"], new Set(), read(""))).toEqual([
+      "/p/vite.config.ts",
+    ]);
+  });
+});
+
+describe("computed loads (R8-C1)", () => {
+  const hits = (code: string) => computedLoads("a.test.ts", code).map((h) => h.code);
+  it("allows literal specifiers and non-loading uses", () => {
+    expect(
+      hits(
+        'await import("./a"); await import(`./b`); require("x"); require.resolve(y); require.cache; typeof require;\n' +
+          'vi.importActual("./m"); vi.importMock("./m"); const o = { require: 1 }; o.require; createRequire(u)("./z");\n' +
+          'const req = createRequire(import.meta.url); req("./w"); const { createRequire: cr2 } = m;',
+      ),
+    ).toEqual([]);
+  });
+
+  it.each([
+    ["import(spec)", "await import(spec)"],
+    ["import(`./x/${n}`)", "await import(`./x/${n}`)"],
+    ["require(name)", "require(name)"],
+    ["require", "const r = require; r('x')"],
+    ["req(name)", "const req = createRequire(import.meta.url); req(name)"],
+    ["q(x)", "const { createRequire } = m; const q = createRequire(u); q(x)"],
+    ["createRequire", "const cr = createRequire; cr(u)('x')"],
+    [
+      'process.getBuiltinModule("node:module").createRequire(u)(name)',
+      'process.getBuiltinModule("node:module").createRequire(u)(name)',
+    ],
+    ["vi.importActual(p)", "vi.importActual(p)"],
+    ["vi.importMock(p)", "vi.importMock(p)"],
+    ["module.require(p)", "module.require(p)"],
+    ["[1].map(require)", "[1].map(require)"],
+  ])("flags %s", (want, code) => {
+    expect(hits(code)).toEqual([want]);
+  });
+
+  it("reports the line", () => {
+    expect(computedLoads("a.ts", "const a = 1;\n\nawait import(a);\n")).toEqual([
+      { line: 3, code: "import(a)" },
+    ]);
+  });
+
+  it("every COMPUTED_LOADS_ALLOWED entry carries a reason and names a real computed load", () => {
+    for (const [dir, entries] of Object.entries(COMPUTED_LOADS_ALLOWED)) {
+      for (const [key, reason] of Object.entries(entries)) {
+        expect(reason.length, key).toBeGreaterThan(40);
+        const m = /^(.*):(\d+)$/.exec(key)!;
+        const text = readFileSync(join(REPO, dir, m[1]!), "utf-8");
+        expect(
+          computedLoads(m[1]!, text).map((h) => h.line),
+          `${dir}/${key}`,
+        ).toContain(Number(m[2]));
+      }
+    }
   });
 });
 

@@ -11,7 +11,12 @@
  * Mechanics: `mkdir` of `<git-dir>/<name>.lock` is the atomic acquire; the
  * holder writes `owner.json` { pid, host, run } (run = a random token) and
  * then keeps a heartbeat file `beat` = "<run> <counter>", rewritten every
- * `heartbeatMs` with the counter incremented.
+ * `heartbeatMs` with the counter incremented — from a WORKER THREAD, so a
+ * holder whose main thread blocks (a long spawnSync) keeps beating; the
+ * worker stops once the main thread has not ticked for `mainSilenceMs`
+ * (default 5 min), so a wedged holder still goes stale. A waiter's
+ * `budgetMs` may be `Infinity`: it then waits exactly as long as the holder
+ * stays live.
  *
  * Liveness is decided from the holder's token and heartbeat, never from a
  * clock comparison (no process start-time window, no wall-clock age):
@@ -44,6 +49,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { hostname, tmpdir } from "node:os";
 import { join, resolve } from "node:path";
+import { Worker } from "node:worker_threads";
 
 export interface LockOwner {
   pid: number;
@@ -53,12 +59,24 @@ export interface LockOwner {
 }
 
 export interface LockOptions {
-  /** How long to wait for another holder before giving up. */
+  /**
+   * How long to wait for a LIVE holder before giving up; `Infinity` waits as
+   * long as its heartbeat stays live (a dead, hung or wedged holder is still
+   * reclaimed after staleMs).
+   */
   budgetMs: number;
   /** A holder whose (token, beat) signature has not changed for this long is stale. */
   staleMs?: number;
   /** How often the holder beats. Must be well below staleMs. */
   heartbeatMs?: number;
+  /**
+   * The holder's beat (on a worker thread) stops once its main thread has not
+   * ticked for this long — a wedged holder goes stale. Default 5 min: above
+   * any single blocking call the gate makes.
+   */
+  mainSilenceMs?: number;
+  /** Called once when the lock is found held by a live holder (the wait starts). */
+  onWait?: (holder: LockOwner | null) => void;
   /** Poll interval (jittered ±50%). */
   pollMs?: number;
   /** The waiter's monotonic clock, ms (tests inject one). */
@@ -66,6 +84,33 @@ export interface LockOptions {
 }
 
 const SELF_HOST = hostname();
+
+/**
+ * The heartbeat worker (plain JS, evaluated): rewrites `beat` every
+ * heartbeatMs while this run still owns the lock, the holder has not released
+ * it, and the holder's main thread ticked within mainSilenceMs.
+ */
+const BEAT_WORKER = `
+const { workerData } = require("node:worker_threads");
+const { readFileSync, renameSync, writeFileSync } = require("node:fs");
+const { join } = require("node:path");
+const { dir, run, heartbeatMs, mainSilenceMs, shared } = workerData;
+let counter = workerData.counter;
+let lastTick = Atomics.load(shared, 0);
+let tickAt = performance.now();
+setInterval(() => {
+  if (Atomics.load(shared, 1) === 1) return;
+  const t = Atomics.load(shared, 0);
+  if (t !== lastTick) { lastTick = t; tickAt = performance.now(); }
+  if (performance.now() - tickAt > mainSilenceMs) return;
+  try {
+    if (JSON.parse(readFileSync(join(dir, "owner.json"), "utf-8")).run !== run) return;
+    const tmp = join(dir, "beat." + run);
+    writeFileSync(tmp, run + " " + ++counter);
+    renameSync(tmp, join(dir, "beat"));
+  } catch {}
+}, heartbeatMs);
+`;
 
 /** The lock directory for `root`: in its git dir, else in tmpdir keyed by the path. */
 export function lockPath(root: string, name: string): string {
@@ -171,10 +216,12 @@ function reclaim(dir: string, judged: string): void {
 export async function acquireRepoLock(dir: string, opts: LockOptions): Promise<() => void> {
   const staleMs = opts.staleMs ?? 15_000;
   const heartbeatMs = opts.heartbeatMs ?? 1_000;
+  const mainSilenceMs = opts.mainSilenceMs ?? 5 * 60_000;
   const pollMs = opts.pollMs ?? 200;
   const now = opts.now ?? (() => performance.now());
   const deadline = now() + opts.budgetMs;
   const obs: Observation = { sig: null, since: now() };
+  let waited = false;
   for (;;) {
     try {
       mkdirSync(dir);
@@ -196,13 +243,27 @@ export async function acquireRepoLock(dir: string, opts: LockOptions): Promise<(
         }
       };
       beat();
-      const timer = setInterval(beat, heartbeatMs);
-      timer.unref();
+      // The beat runs on a worker thread: the holder's main thread may block
+      // (spawnSync of tsc / git) for longer than staleMs, and a heartbeat on
+      // the same event loop would then stop and the lock be reclaimed from a
+      // healthy run. The worker beats only while the main thread keeps ticking
+      // `alive` (an interval on ITS loop) within `mainSilenceMs`, so a holder
+      // whose main thread is wedged still goes stale.
+      const shared = new Int32Array(new SharedArrayBuffer(8)); // [main tick, released]
+      const ticker = setInterval(() => Atomics.add(shared, 0, 1), heartbeatMs);
+      ticker.unref();
+      const worker = new Worker(BEAT_WORKER, {
+        eval: true,
+        workerData: { dir, run: me.run, counter, heartbeatMs, mainSilenceMs, shared },
+      });
+      worker.unref();
       let released = false;
       const release = (): void => {
         if (released) return;
         released = true;
-        clearInterval(timer);
+        Atomics.store(shared, 1, 1);
+        clearInterval(ticker);
+        void worker.terminate();
         process.off("exit", release);
         // only our own lock: never remove one a reclaimer handed to another run
         if (readOwner(dir)?.run === me.run) rmSync(dir, { recursive: true, force: true });
@@ -219,6 +280,10 @@ export async function acquireRepoLock(dir: string, opts: LockOptions): Promise<(
       obs.sig = null;
       obs.since = now();
       continue;
+    }
+    if (!waited) {
+      waited = true;
+      opts.onWait?.(owner);
     }
     if (now() >= deadline) {
       throw new Error(

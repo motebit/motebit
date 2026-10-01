@@ -102,6 +102,59 @@ setTimeout(() => { release(); process.exit(0); }, 2500);
     await closed;
   }, 20_000);
 
+  /** A holder in another process that blocks its MAIN thread (as spawnSync does) for `blockMs`. */
+  function blockingHolder(dir: string, blockMs: number, mainSilenceMs: number) {
+    const script = join(dirname(dir), "blocking-holder.mts");
+    writeFileSync(
+      script,
+      `import { acquireRepoLock, readOwner } from ${JSON.stringify(join(REPO, "scripts/lib/repo-lock.ts"))};
+const release = await acquireRepoLock(${JSON.stringify(dir)}, { budgetMs: 1000, heartbeatMs: 50, mainSilenceMs: ${mainSilenceMs} });
+process.stdout.write("held\\n");
+await new Promise((r) => setTimeout(r, 200));
+Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ${blockMs});
+process.stdout.write("own " + (readOwner(${JSON.stringify(dir)})?.pid === process.pid) + "\\n");
+release();
+process.exit(0);
+`,
+    );
+    const holder = spawn(TSX, [script], { stdio: ["ignore", "pipe", "inherit"] });
+    let out = "";
+    holder.stdout.on("data", (d: Buffer) => (out += d.toString()));
+    const closed = new Promise((ok) => holder.on("close", ok));
+    const held = new Promise<void>((ok) => holder.stdout.once("data", () => ok()));
+    return { held, closed, out: () => out };
+  }
+
+  it("R8: the heartbeat survives a main thread blocked longer than staleMs (it beats on a worker thread); an uncapped waiter queues until release", async () => {
+    const dir = lockDir();
+    const h = blockingHolder(dir, 2_000, 60_000);
+    await h.held;
+    const waits: unknown[] = [];
+    const release = await acquireRepoLock(dir, {
+      budgetMs: Number.POSITIVE_INFINITY,
+      staleMs: 400,
+      pollMs: 20,
+      onWait: (o) => waits.push(o),
+    });
+    await h.closed;
+    expect(h.out(), "the blocked holder kept its lock").toMatch(/own true/);
+    expect(waits).toHaveLength(1);
+    expect(readOwner(dir)?.pid).toBe(process.pid);
+    release();
+  }, 20_000);
+
+  it("R8: a holder whose main thread is wedged past mainSilenceMs stops beating and is reclaimed", async () => {
+    const dir = lockDir();
+    const h = blockingHolder(dir, 4_000, 300);
+    await h.held;
+    const t0 = performance.now();
+    const release = await acquireRepoLock(dir, { budgetMs: 10_000, staleMs: 400, pollMs: 20 });
+    expect(performance.now() - t0).toBeLessThan(3_500);
+    release();
+    await h.closed;
+    expect(h.out()).toMatch(/own false/);
+  }, 20_000);
+
   it("assess is deterministic on the injected monotonic clock and ignores wall-clock skew", () => {
     vi.useFakeTimers();
     const owner = { pid: process.pid, host: hostname(), run: "r" };
