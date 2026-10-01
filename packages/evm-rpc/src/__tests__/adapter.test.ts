@@ -610,6 +610,32 @@ describe("HttpJsonRpcEvmAdapter body read is bounded by IDLE time, not total tim
     );
   });
 
+  it("re-arms the timer when headers arrive: late headers then a body within the idle bound succeeds", async () => {
+    // Headers at ~800ms, the whole body ~700ms later (~1500ms total). Arrival
+    // of headers must re-arm the 1000ms timer; without that re-arm the timer
+    // armed at the start fires at 1000ms, mid-body.
+    const body = '{"jsonrpc":"2.0","id":1,"result":"0x2a"}';
+    const timers: ReturnType<typeof setTimeout>[] = [];
+    await withServer(
+      (res) => {
+        timers.push(
+          setTimeout(() => {
+            res.writeHead(200, { "Content-Type": "application/json" });
+            res.flushHeaders();
+            timers.push(setTimeout(() => res.end(body), 700));
+          }, 800),
+        );
+      },
+      async (rpcUrl) => {
+        const adapter = new HttpJsonRpcEvmAdapter({ rpcUrl, requestTimeoutMs: 1_000 });
+        const started = Date.now();
+        await expect(adapter.getBlockNumber()).resolves.toBe(42n);
+        expect(Date.now() - started).toBeGreaterThanOrEqual(1_400);
+      },
+    );
+    timers.forEach(clearTimeout);
+  });
+
   it("keeps the header timeout: no headers within requestTimeoutMs fails", async () => {
     await withServer(
       () => {
