@@ -2,7 +2,7 @@ export type MotebitIdentityType = "personal" | "service" | "collaborative";
 
 export interface MotebitIdentityFile {
   spec: string; // "motebit/identity@1.0"
-  motebit_id: string; // UUID v7
+  motebit_id: string; // sovereign UUIDv8 commitment (default), legacy UUID v7, or did:key — spec/identity-v1.md §3.1.1
   created_at: string; // ISO 8601
   owner_id: string;
 
