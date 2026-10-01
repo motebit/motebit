@@ -101,7 +101,7 @@ The reference relay persists filed disputes in `relay_disputes(dispute_id PRIMAR
 ### 4.5 Convention
 
 - Dispute window: 24 hours after settlement.
-- Minimum trust threshold: `FirstContact` (trust_level >= 0.05).
+- Minimum trust threshold: see §9.4.
 
 ## 5. Evidence
 
@@ -377,7 +377,7 @@ Per-agent caps on active disputes prevent a single identity from flooding the sy
 ### 9.4 Convention
 
 - Overturned disputes produce a negative trust signal on the filing party (equivalent to one failed task in routing weight).
-- Minimum trust threshold for filing: `FirstContact` (trust_level >= 0.05).
+- Minimum trust threshold for filing: `first_contact` or higher — `first_contact`, `verified` or `trusted` (`AgentTrustLevel`); `unknown` and `blocked` filers are refused. The reference relay does not currently apply a trust threshold at filing; its sybil defense is the per-agent active-dispute cap and the filing fee (§9.2, §9.4).
 - Filing fee: 1% of the disputed allocation amount, refunded on `upheld` or `split`.
 - Maximum 3 active disputes per agent.
 - Relays MAY waive the trust threshold for `non_payment` disputes, since theft can happen on first contact.

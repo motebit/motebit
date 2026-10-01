@@ -62,9 +62,17 @@ The reference implementations persist identity files on the local filesystem (CL
 | Field        | Type   | Required | Description                                                                                   |
 | ------------ | ------ | -------- | --------------------------------------------------------------------------------------------- |
 | `spec`       | string | yes      | Specification version. MUST be `"motebit/identity@1.0"` for this version.                     |
-| `motebit_id` | string | yes      | Unique agent identifier. SHOULD be a UUID v7 (time-ordered).                                  |
+| `motebit_id` | string | yes      | Unique agent identifier. See §3.1.1 for the forms minted and accepted.                        |
 | `created_at` | string | yes      | ISO 8601 timestamp of identity creation.                                                      |
 | `owner_id`   | string | yes      | Identifier of the entity that owns this agent. Opaque string — format is application-defined. |
+
+#### 3.1.1 — `motebit_id` forms
+
+`motebit_id` is a string; the identity-file verifier does not constrain its format. Three forms are in use:
+
+1. **Sovereign commitment (the default mint).** A UUIDv8 (RFC 9562) derived from the genesis public key: the first 16 bytes of `SHA-256(genesis_public_key)`, with the version nibble set to `8` (`b[6] = 0x80 | (b[6] & 0x0f)`) and the variant set to `10b` (`b[8] = 0x80 | (b[8] & 0x3f)`), rendered as a lowercase hyphenated UUID. Implementations minting a new identity SHOULD use this form. A verifier recomputes it from the genesis key and compares case-insensitively; equality binds the id to the key without an operator (reference: `deriveSovereignMotebitId` / `verifySovereignBinding` in `@motebit/crypto`).
+2. **Legacy UUID v7.** Random, time-ordered ids minted before the sovereign commitment. They remain valid identifiers but carry version nibble `7`, so they never equal a commitment and never verify as key-bound.
+3. **`did:key`.** A `did:key` (§10) used directly as the id. The sovereign-binding check accepts it by decoding the key and comparing it to the genesis key. No reference client mints this form, and the reference relay refuses it at the routes that create identities, devices or registrations (`:` is outside the id character set it admits there).
 
 ### 3.2 — `identity`
 

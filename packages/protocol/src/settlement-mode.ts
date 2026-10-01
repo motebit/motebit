@@ -17,8 +17,8 @@ export type SettlementMode = "relay" | "p2p";
  * rows must remain readable for audit, verifier, and federation
  * compat); writes are structurally restricted to `"p2p"`.
  *
- * This is the asymmetric-typing enforcement shape from
- * [`architecture_disjointness_by_construction`](../../../../.claude/projects/-Users-daniel-src-motebit/memory/architecture_disjointness_by_construction.md)
+ * This is the asymmetric-typing enforcement shape (Arc 3 in
+ * `docs/doctrine/off-ramp-as-user-action.md`)
  * — the surface stays open for reads but closed for writes; legacy
  * data remains verifiable but no new code can re-introduce the
  * relay-custody worker-settlement path. The doctrine: *the relay does

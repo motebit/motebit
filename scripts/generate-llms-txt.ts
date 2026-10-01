@@ -79,12 +79,18 @@ A motebit is a persistent, cryptographically-anchored, sovereign agent. The inte
 - \`motebit/identity@1.0\` is the open specification (Apache-2.0 licensed)
 `;
 
+// Counted from the filesystem (same rule as check-doc-counts' countSpecMd) so
+// the footer cannot drift from spec/ the way the old hardcoded "twenty-one" did.
+const SPEC_COUNT = readdirSync(join(REPO_ROOT, "spec")).filter(
+  (f) => f.endsWith(".md") && f !== "README.md",
+).length;
+
 const LLMS_FOOTER = `## Open specification
 
 - [motebit/identity@1.0](https://github.com/motebit/motebit/blob/main/spec/identity-v1.md): the open specification for agent identity files. Apache-2.0.
 - [motebit/execution-ledger@1.0](https://github.com/motebit/motebit/blob/main/spec/execution-ledger-v1.md): the signed-receipt ledger every motebit emits. Apache-2.0.
 - [motebit/relay-federation@1.0](https://github.com/motebit/motebit/blob/main/spec/relay-federation-v1.md): bilateral peering between independent relays. Apache-2.0.
-- All twenty-one specs are in [\`spec/\`](https://github.com/motebit/motebit/tree/main/spec).
+- All ${SPEC_COUNT} specs are in [\`spec/\`](https://github.com/motebit/motebit/tree/main/spec).
 
 ## Published packages
 
