@@ -19,6 +19,16 @@
  *     Node's http Agent dials with `{ host, path: null }`, a missing host is
  *     refused too.
  *
+ * Plus, since the guard's third round: UDP (`dgram` send/connect), a
+ * loopback FORWARD PROXY (a `CONNECT` or absolute-form request written over
+ * a loopback socket; every `*_PROXY` env var is deleted here, so the spawned
+ * children inherit none), and worker threads — `new Worker()` is REFUSED,
+ * because a Worker never runs this setup file. The full stated scope — what
+ * the guard covers and its declared limits (native addons, raw handles, DNS
+ * queries, child processes the booted-entry harness did not spawn, SOCKS) —
+ * is the header of `network-guard-core.mjs`; a gap outside it is a declared
+ * limit, not a new round.
+ *
  * A test that stubs `fetch` itself (`vi.stubGlobal`) owns what that stub
  * does; the socket layer still refuses a real dial. Loopback (`localhost`,
  * `127.0.0.0/8`, `::1`) and unix sockets stay open — in-process fakes,
@@ -32,7 +42,7 @@
  * `test-helpers.ts` (the fake facilitator + the deposit detector off).
  */
 import { afterAll, afterEach } from "vitest";
-import { installFetchGuard, installSocketGuard } from "./network-guard-core.mjs";
+import { installNetworkGuard } from "./network-guard-core.mjs";
 
 const REPAIR =
   "repair: a relay test never reaches the network — use createTestRelay(), or spread " +
@@ -49,8 +59,7 @@ function refuse(target: string): Error {
   return new TypeError(`${line}\n${REPAIR}`);
 }
 
-installFetchGuard(refuse);
-installSocketGuard(refuse);
+installNetworkGuard(refuse);
 
 /**
  * The guard's own tests (`network-guard.test.ts`) provoke refusals on

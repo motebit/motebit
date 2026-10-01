@@ -18,7 +18,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { existsSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { CHILD_REFUSAL_MARKER } from "./network-guard-core.mjs";
+import { CHILD_REFUSAL_MARKER, deleteProxyEnv } from "./network-guard-core.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SERVER_ENTRY = resolve(HERE, "..", "server.ts");
@@ -104,6 +104,9 @@ export function bootRealEntry(
     delete env.MOTEBIT_ENABLE_DEVICE_AUTH;
     delete env.MOTEBIT_FEDERATION_AUTO_ACCEPT;
     delete env.MOTEBIT_DB_PATH; // ":memory:" default
+    // No proxy reaches the child, even one an override names (the preload
+    // deletes them again inside the child).
+    deleteProxyEnv(env);
     // Always last: no override drops the guard.
     env.NODE_OPTIONS = guardedNodeOptions(env.NODE_OPTIONS);
     let bootLog = "";

@@ -197,6 +197,11 @@ export class HttpJsonRpcEvmAdapter implements EvmRpcAdapter {
   /**
    * Execute a JSON-RPC call. Collapses every failure mode
    * (network / non-2xx / JSON-RPC error / malformed envelope) to an `Error`.
+   *
+   * `requestTimeoutMs` bounds the WHOLE request — headers AND body. The abort
+   * timer stays armed through `res.json()`: a server that sends headers and
+   * then stalls the body would otherwise hang the caller (a periodic deposit
+   * tick) forever.
    */
   private async call<T>(method: string, params: unknown[]): Promise<T> {
     const controller =
@@ -207,19 +212,28 @@ export class HttpJsonRpcEvmAdapter implements EvmRpcAdapter {
       controller && this.requestTimeoutMs !== undefined
         ? setTimeout(() => controller.abort(), this.requestTimeoutMs)
         : null;
+    try {
+      return await this.callWithin<T>(method, params, controller?.signal);
+    } finally {
+      if (timeoutHandle) clearTimeout(timeoutHandle);
+    }
+  }
 
+  private async callWithin<T>(
+    method: string,
+    params: unknown[],
+    signal: AbortSignal | undefined,
+  ): Promise<T> {
     let res: Response;
     try {
       res = await this.fetchFn(this.rpcUrl, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
-        signal: controller?.signal,
+        signal,
       });
     } catch (err) {
       throw new Error(`RPC ${method} network error`, { cause: err });
-    } finally {
-      if (timeoutHandle) clearTimeout(timeoutHandle);
     }
 
     if (!res.ok) {
@@ -230,6 +244,9 @@ export class HttpJsonRpcEvmAdapter implements EvmRpcAdapter {
     try {
       json = (await res.json()) as typeof json;
     } catch (err) {
+      if (signal?.aborted === true) {
+        throw new Error(`RPC ${method} timed out reading the response body`, { cause: err });
+      }
       throw new Error(`RPC ${method} returned non-JSON body`, { cause: err });
     }
 

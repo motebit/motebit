@@ -500,3 +500,38 @@ describe("HttpJsonRpcEvmAdapter request timeout", () => {
     );
   });
 });
+
+describe("HttpJsonRpcEvmAdapter request timeout covers the response body", () => {
+  it("rejects within requestTimeoutMs when the server sends headers then stalls the body", async () => {
+    // A real loopback server: headers + a partial body, then nothing. The
+    // timeout must still fire — it bounds the whole request, not just the
+    // headers — or a periodic deposit tick hangs forever on a stalled RPC.
+    const { createServer } = await import("node:http");
+    const server = createServer((_req, res) => {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.write('{"jsonrpc":"2.0","id":1,');
+      res.flushHeaders();
+    });
+    await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+    const { port } = server.address() as { port: number };
+    try {
+      const adapter = new HttpJsonRpcEvmAdapter({
+        rpcUrl: `http://127.0.0.1:${port}`,
+        requestTimeoutMs: 300,
+      });
+      const started = Date.now();
+      const outcome = await Promise.race([
+        adapter.getBlockNumber().then(
+          () => "resolved",
+          (err: unknown) => (err instanceof Error ? err.message : String(err)),
+        ),
+        new Promise<string>((r) => setTimeout(() => r("still pending"), 3_000)),
+      ]);
+      expect(outcome).toMatch(/eth_blockNumber timed out reading the response body/);
+      expect(Date.now() - started).toBeLessThan(2_000);
+    } finally {
+      server.closeAllConnections();
+      await new Promise<void>((r) => server.close(() => r()));
+    }
+  });
+});

@@ -4,9 +4,13 @@
  * non-loopback host is refused before it dials — not just `fetch`, but
  * Node's http Agent (`http.request` / `https.get`, which pass
  * `{ host, path: null }`), `ws` and `tls.connect`. Loopback and unix
- * sockets stay open. The target is TEST-NET-1 (192.0.2.1, RFC 5737): even an
+ * sockets stay open. Third round: UDP (`dgram`), worker threads (refused —
+ * a Worker never runs the setup file) and a loopback forward proxy
+ * (`CONNECT` / absolute-form over loopback; `*_PROXY` env deleted). The
+ * target is TEST-NET-1 (192.0.2.1, RFC 5737): even an
  * unguarded dial reaches nobody.
  */
+import dgram from "node:dgram";
 import http from "node:http";
 import https from "node:https";
 import net from "node:net";
@@ -14,6 +18,7 @@ import tls from "node:tls";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { Worker } from "node:worker_threads";
 import { describe, expect, it } from "vitest";
 import WebSocket from "ws";
 import { classifyConnect } from "./network-guard-core.mjs";
@@ -124,5 +129,90 @@ describe("network guard: deny by default", () => {
       rmSync(dir, { recursive: true, force: true });
     }
     expect(GUARD.drain()).toEqual([]);
+  });
+});
+
+describe("network guard: UDP, worker threads, loopback forward proxy", () => {
+  it("refuses a dgram send to a non-loopback address (and allows loopback)", async () => {
+    const sock = dgram.createSocket("udp4");
+    sock.on("error", () => {});
+    try {
+      const err = await errorOf((onError) => {
+        sock.send(Buffer.from("x"), 9, REMOTE, (e) => onError(e ?? new Error("sent")));
+      });
+      expectRefused(err);
+      const ranged = await errorOf((onError) => {
+        sock.send(Buffer.from("xy"), 0, 1, 9, REMOTE, (e) => onError(e ?? new Error("sent")));
+      });
+      expectRefused(ranged);
+      const local = await errorOf((onError) => {
+        sock.send(Buffer.from("x"), 9, "127.0.0.1", (e) => onError(e ?? new Error("sent")));
+      });
+      expect(local?.message).toBe("sent");
+      expect(GUARD.drain()).toEqual([]);
+    } finally {
+      sock.close();
+    }
+  });
+
+  it("refuses a dgram connect to a non-loopback address", async () => {
+    const sock = dgram.createSocket("udp4");
+    sock.on("error", () => {});
+    try {
+      const err = await errorOf((onError) => {
+        // Node calls a connect callback with the error when the connect fails.
+        sock.connect(9, REMOTE, ((e?: Error) =>
+          onError(e ?? new Error("connected"))) as () => void);
+      });
+      expectRefused(err);
+    } finally {
+      sock.close();
+    }
+  });
+
+  it("refuses creating a worker thread (it would run unguarded)", async () => {
+    let worker: Worker | undefined;
+    try {
+      expect(() => {
+        worker = new Worker("require('node:net')", { eval: true });
+      }).toThrow(/relay test reached the network: worker_threads\.Worker/);
+      expect(GUARD.drain().some((l) => l.includes("worker_threads.Worker"))).toBe(true);
+    } finally {
+      await worker?.terminate();
+    }
+  });
+
+  it("deletes every *_PROXY env var", () => {
+    for (const k of ["HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY"]) {
+      expect(process.env[k], k).toBeUndefined();
+      expect(process.env[k.toLowerCase()], k.toLowerCase()).toBeUndefined();
+    }
+  });
+
+  it("refuses CONNECT and absolute-form requests through a loopback forward proxy", async () => {
+    const received: string[] = [];
+    const proxy = net.createServer((s) => {
+      s.on("data", (c: Buffer) => received.push(c.toString("latin1")));
+      s.on("error", () => {});
+    });
+    await new Promise<void>((r) => proxy.listen(0, "127.0.0.1", r));
+    const { port } = proxy.address() as net.AddressInfo;
+    try {
+      const viaConnect = await errorOf((onError) => {
+        http
+          .request({ host: "127.0.0.1", port, method: "CONNECT", path: `${REMOTE}:443` })
+          .on("error", onError)
+          .end();
+      });
+      expectRefused(viaConnect);
+      const viaAbsolute = await errorOf((onError) => {
+        http.get({ host: "127.0.0.1", port, path: `http://${REMOTE}/` }).on("error", onError);
+      });
+      expectRefused(viaAbsolute);
+      await new Promise((r) => setTimeout(r, 50));
+      expect(received.join("")).not.toContain(REMOTE);
+    } finally {
+      proxy.close();
+    }
   });
 });

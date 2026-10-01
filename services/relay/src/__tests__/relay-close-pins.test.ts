@@ -11,9 +11,15 @@
  *   (c) the mid-deadline abort: at `deadline - 100 ms` the shutdown signal
  *       aborts in-flight work, so it SETTLES inside the deadline — never
  *       abandoned;
- *   (d) the wrapper's pre-aborted branch starts no request at all;
+ *   (d) the wrapper's pre-aborted branch starts no request at all, and a
+ *       settled call leaves no abort listener on the shutdown signal;
+ *   (e) close() aborts the shutdown signal even when boot work settled in
+ *       time — a request a PERIODIC tick started (never startup work) is
+ *       cancelled, not left to its own timeout;
+ *   (f) settled startup work leaves no deadline timer behind;
  *   plus `shutdownDeadlineMs` validation.
  */
+import { getEventListeners } from "node:events";
 import net from "node:net";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createSyncRelay, type SyncRelay } from "../index.js";
@@ -224,6 +230,90 @@ describe("(d) abortGetSupportedOnShutdown", () => {
       new AbortController().signal,
     );
     await expect(ok.getSupported()).resolves.toBe("v");
+  });
+
+  it("a settled call removes its abort listener (no leak per call)", async () => {
+    const c = new AbortController();
+    const ok = abortGetSupportedOnShutdown({ getSupported: () => Promise.resolve("v") }, c.signal);
+    const failing = abortGetSupportedOnShutdown(
+      { getSupported: () => Promise.reject(new Error("down")) },
+      c.signal,
+    );
+    await ok.getSupported();
+    await expect(failing.getSupported()).rejects.toThrow("down");
+    expect(getEventListeners(c.signal, "abort")).toHaveLength(0);
+  });
+});
+
+describe("(e) close() aborts the shutdown signal after boot work settled", () => {
+  it("cancels a periodic deposit tick's in-flight request", async () => {
+    const requests: Array<{ aborted: boolean; answer(): void }> = [];
+    vi.stubGlobal("fetch", (_input: unknown, init?: RequestInit) => {
+      const rec = { aborted: false, answer: () => {} };
+      requests.push(rec);
+      return new Promise<Response>((resolve, reject) => {
+        rec.answer = () => resolve(new Response("down", { status: 503 }));
+        init?.signal?.addEventListener("abort", () => {
+          rec.aborted = true;
+          reject(new DOMException("aborted", "AbortError"));
+        });
+      });
+    });
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    const relay = await createSyncRelay({
+      apiToken: "t",
+      x402: X402_TEST_CONFIG,
+      x402ChainReader: null,
+      x402FacilitatorClient: fakeFacilitatorClient,
+      drainGraceMs: 10,
+    });
+    // The boot tick's request is answered: startup work settles in time.
+    await until(() => requests.length > 0);
+    for (const r of requests) r.answer();
+    const bootRequests = requests.length;
+    // The next PERIODIC tick (15 s) dials and is left hanging.
+    await vi.advanceTimersByTimeAsync(15_000);
+    await until(() => requests.length > bootRequests);
+    const periodic = requests.slice(bootRequests);
+    const out = captureOutput();
+    try {
+      await relay.close();
+    } finally {
+      out.stop();
+    }
+    expect(out.lines.join("")).not.toContain("relay.shutdown.startup_work_aborted");
+    expect(periodic.every((r) => r.aborted)).toBe(true);
+  }, 15_000);
+});
+
+describe("(f) settlesWithin clears its deadline timer", () => {
+  it("startup work that settles leaves no shutdown-deadline timer armed", async () => {
+    const deadlineMs = 29_000;
+    const realSetTimeout = globalThis.setTimeout;
+    const armed: NodeJS.Timeout[] = [];
+    vi.spyOn(globalThis, "setTimeout").mockImplementation(((
+      fn: () => void,
+      ms?: number,
+      ...rest: unknown[]
+    ) => {
+      const t = realSetTimeout(fn, ms, ...rest);
+      if (ms === deadlineMs - 100) armed.push(t as unknown as NodeJS.Timeout);
+      return t;
+    }) as typeof setTimeout);
+    const relay = await createSyncRelay({
+      apiToken: "t",
+      x402: X402_TEST_CONFIG,
+      x402ChainReader: null,
+      x402FacilitatorClient: fakeFacilitatorClient,
+      depositDetectorRpc: null,
+      drainGraceMs: 10,
+      shutdownDeadlineMs: deadlineMs,
+    });
+    await relay.close();
+    expect(armed.length).toBeGreaterThan(0);
+    // A cleared Node timer is destroyed; one left armed would hold the
+    // process for the whole deadline after close() resolved.
+    for (const t of armed) expect((t as unknown as { _destroyed: boolean })._destroyed).toBe(true);
   });
 });
 
