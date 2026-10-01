@@ -765,6 +765,16 @@ describe("#890 r9 pinned hunks", () => {
       });
       expect(((await res.json()) as { status: string }).status).toBe("already_settled");
       expect(rows(w, S).length).toBe(1);
+      // A settled entry whose row is gone (purged): the repeat is settled by
+      // the entry alone — it writes nothing.
+      w.relay.moteDb.db.prepare("DELETE FROM relay_settlements WHERE task_id = ?").run(S);
+      const again = await w.relay.app.request(`/agent/${w.D.id}/task/${S}/result`, {
+        method: "POST",
+        headers: JSON_AUTH,
+        body: JSON.stringify(R),
+      });
+      expect(((await again.json()) as { status: string }).status).toBe("already_settled");
+      expect(rows(w, S).length).toBe(0);
 
       const F = await admit(w, `${prompt} fed`);
       fund(w, F);
