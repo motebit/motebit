@@ -924,6 +924,17 @@ export async function probeLeak(): Promise<boolean> {
       ),
   },
   {
+    script: "check-turbo-global-deps",
+    proves:
+      "flags a root file packages read that turbo.json does not declare — here `tsconfig.base.json` dropped from globalDependencies, the shape where an edit to it replays every package's stale cached typecheck",
+    perturb: () =>
+      // Swap the entry for a needle-carrying one on the same line (JSON has no
+      // comments; the drain recovers a tracked file by that needle).
+      mutateFile("turbo.json", (src) =>
+        src.replace('"tsconfig.base.json"', `"${PROBE_PREFIX}injected-dropped-tsconfig.base.json"`),
+      ),
+  },
+  {
     script: "check-readme-bin-claims",
     proves:
       "flags an `npm i -g @motebit/<pkg>` invocation in any README.md / CLAUDE.md naming a workspace package whose package.json has no `bin` field",

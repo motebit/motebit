@@ -1033,6 +1033,12 @@ const GATES: ReadonlyArray<Gate> = [
       "pre-push ⊆ CI: every check `.husky/pre-push` runs has a counterpart in `.github/workflows/ci.yml` that runs at least as wide — same command, no narrower `--filter`, in a job that runs on every push to main — and the hook's changed-file prettier extension set sits inside the root `format:check` glob. On 2026-09-30 the hook became a FAST gate by scope (tests of changed packages only, no coverage; typecheck+lint over changed + dependents) with CI as the authority; that trade-off is only safe while CI's `check` job runs `turbo run test:coverage` unfiltered, which this gate asserts. Replaces the hook's unenforced prose rule \"must match ci.yml\". An unclassifiable pnpm invocation in the hook is itself a violation, so a new phase is mapped deliberately. Invariant #166, added 2026-09-30",
     script: "check-prepush-subset",
   },
+  {
+    name: "check-turbo-global-deps",
+    defends:
+      "every repo-root file a workspace package's turbo task reads is a turbo input: turbo.json `globalDependencies` equals the set DISCOVERED from every package's config files (`../` path literals resolving outside every package — tsconfig `extends`, vitest configs importing `vitest.shared.ts`, api-extractor bases, a package script running a root script), the ESLint cascade up to `root: true`, and their transitive imports/extends/named files/declared data reads. Turbo hashes only files inside a package, so before this an edit to `tsconfig.base.json` or `.eslintrc.js` left every task hash unchanged (measured 2026-10-01 on @motebit/protocol) and replayed stale cached typecheck/lint verdicts — which the fast pre-push leans on. An unlisted input, an entry nothing reads, a glob, a root script with an unmodelled fs read, or a cacheable `test` task (source-level reads are out of the discovery aperture) is a violation; that each entry really moves the hash is proven by execution in its test. Invariant #167, added 2026-10-01",
+    script: "check-turbo-global-deps",
+  },
 ];
 
 interface Result {

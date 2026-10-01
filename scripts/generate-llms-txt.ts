@@ -268,7 +268,7 @@ function resolveSections(rootDir: string, urlPrefix: string): Section[] {
  * Throws loudly if the parse yields zero entries — that's the signal
  * DOCTRINE.md's format changed and the generator needs updating.
  */
-function parseDoctrineChain(): ReadonlyArray<{ filename: string; derives: string }> {
+export function parseDoctrineChain(): ReadonlyArray<{ filename: string; derives: string }> {
   const path = join(REPO_ROOT, DOCTRINE_FILENAME);
   const raw = readFileSync(path, "utf-8");
   const re = /^\d+\.\s+\*\*\[([^\]]+)\]\([^)]+\)\*\*\s+—\s+(.+)$/gm;
