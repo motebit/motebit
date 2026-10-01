@@ -332,12 +332,18 @@ async function archived(w: World, taskId: string): Promise<ExecutionReceipt | nu
   w.relay.moteDb.db.prepare("DELETE FROM relay_task_queue WHERE task_id = ?").run(taskId);
   // The relay's settlement row for a funded relay-mode task names the PATH
   // agent (tasks.ts, KNOWN RESIDUAL #959) — here the delegator.
-  w.relay.moteDb.db
-    .prepare(
-      `INSERT OR IGNORE INTO relay_settlements (settlement_id, allocation_id, task_id, motebit_id, receipt_hash, amount_settled, platform_fee, status, settled_at)
-       VALUES (?, ?, ?, ?, 'h', 0, 0, 'completed', ?)`,
-    )
-    .run(crypto.randomUUID(), crypto.randomUUID(), taskId, w.D.id, Date.now());
+  // Planted only where the settlement guards admit it (#890 r9: a task the
+  // relay knows settles once, on its claimed receipt) — a stand-in.
+  try {
+    w.relay.moteDb.db
+      .prepare(
+        `INSERT OR IGNORE INTO relay_settlements (settlement_id, allocation_id, task_id, motebit_id, receipt_hash, amount_settled, platform_fee, status, settled_at)
+         VALUES (?, ?, ?, ?, 'h', 0, 0, 'completed', ?)`,
+      )
+      .run(crypto.randomUUID(), crypto.randomUUID(), taskId, w.D.id, Date.now());
+  } catch {
+    /* refused by the settlement guards */
+  }
   const r = await w.relay.app.request(`/agent/${w.D.id}/task/${taskId}`, { headers: AUTH_HEADER });
   if (!r.ok) return null;
   return ((await r.json()) as { receipt?: ExecutionReceipt | null }).receipt ?? null;

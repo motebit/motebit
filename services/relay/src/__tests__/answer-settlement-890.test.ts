@@ -40,7 +40,12 @@ import type { ExecutionReceipt, MotebitId, DeviceId } from "@motebit/sdk";
 import { AgentTaskStatus } from "@motebit/sdk";
 import { createTestRelay, createAgent, JSON_AUTH, AUTH_HEADER } from "./test-helpers.js";
 import { recordTaskRoute } from "../task-routing.js";
-import { TaskQueue, AnswerWriteRefused, issueAnswerCapability } from "../task-queue.js";
+import {
+  TaskQueue,
+  AnswerWriteRefused,
+  issueAnswerCapability,
+  installSettlementGuards,
+} from "../task-queue.js";
 import { persistReceiptChain, getArchivedReceiptForKeyOwner } from "../receipts-store.js";
 import type { TaskQueueEntry } from "../tasks.js";
 
@@ -191,6 +196,21 @@ function settlements(w: World, X: string): Array<{ receipt_hash: string; status:
   return w.relay.moteDb.db
     .prepare("SELECT receipt_hash, status FROM relay_settlements WHERE task_id = ?")
     .all(X) as Array<{ receipt_hash: string; status: string }>;
+}
+
+/** Run `fn` as the pre-deploy relay did: without the settlement guards (#890 r9). */
+function preDeploy(db: SyncRelay["moteDb"]["db"], fn: () => unknown): void {
+  const guards = db
+    .prepare(
+      "SELECT name FROM sqlite_master WHERE type = 'trigger' AND (name LIKE '%_claim_guard' OR name LIKE '%_one_settlement_guard' OR name LIKE '%settlement_credit_guard' OR name LIKE '%settled_frozen_guard')",
+    )
+    .all() as Array<{ name: string }>;
+  for (const g of guards) db.exec(`DROP TRIGGER ${g.name}`);
+  try {
+    fn();
+  } finally {
+    installSettlementGuards(db);
+  }
 }
 
 const tag = (r: ExecutionReceipt | null): string =>
@@ -374,11 +394,16 @@ describe("#890 r9 a legacy answer a settlement row already names is SETTLED", ()
          WHERE task_id = ?`,
       ).run(JSON.stringify(failed), X);
       persistReceiptChain(db, failed);
-      // Its settlement ran (the pre-deploy relay did not always mark it).
-      db.prepare(
-        `INSERT INTO relay_settlements (settlement_id, allocation_id, task_id, motebit_id, receipt_hash, amount_settled, platform_fee, status, settled_at)
-         VALUES (?, ?, ?, ?, ?, 0, 0, 'refunded', ?)`,
-      ).run(crypto.randomUUID(), crypto.randomUUID(), X, w.D.id, failed.result_hash, Date.now());
+      // Its settlement ran (the pre-deploy relay did not always mark it, and
+      // wrote no receipt signature — its guards did not exist).
+      preDeploy(db, () =>
+        db
+          .prepare(
+            `INSERT INTO relay_settlements (settlement_id, allocation_id, task_id, motebit_id, receipt_hash, amount_settled, platform_fee, status, settled_at)
+             VALUES (?, ?, ?, ?, ?, 0, 0, 'refunded', ?)`,
+          )
+          .run(crypto.randomUUID(), crypto.randomUUID(), X, w.D.id, failed.result_hash, Date.now()),
+      );
       const completed = await receiptBy(w.W, X, "completed");
       const b = await postResult(w, X, completed);
       expect(b.status).toBe(409);

@@ -41,8 +41,7 @@ import { createLogger } from "./logger.js";
 import { sendToEach } from "./ws-send.js";
 import { routeToSockets } from "./task-presentation.js";
 import { bindP2pProofToTask, p2pProofKey } from "./idempotency.js";
-import { persistReceiptChain } from "./receipts-store.js";
-import { answerTask, markTaskSettled } from "./task-answer.js";
+import { admitReceipt } from "./task-answer.js";
 import type { AnswerQueue } from "./task-answer.js";
 import { recordTaskRoute, inboundTaskIdCollision } from "./task-routing.js";
 import {
@@ -328,7 +327,8 @@ export function createFederationCallbacks(deps: FederationCallbackDeps) {
       // the write-once rule holds: a settled or answered task is never
       // re-answered, except a verified completed over a failed. The door
       // answers 200 only when the entry took this receipt.
-      const verdict = await answerTask(
+      const queuedEntry: TaskQueueEntry = entry;
+      const admitted = await admitReceipt(
         {
           db: moteDb.db,
           identityManager,
@@ -345,295 +345,276 @@ export function createFederationCallbacks(deps: FederationCallbackDeps) {
           ...(verified.agentPublicKey != null ? { peerKey: verified.agentPublicKey } : {}),
         },
         taskTtlMs,
+        // The settlement step, on the ENTRY'S claimed answer (#890 round 9) —
+        // on the first pass and on a repeat whose settlement never completed
+        // (the peer's retry after this relay died between claim and settle).
+        ({ receipt: answer, verdict, newlyArchived }) =>
+          settleFederatedAnswer(answer, verdict.replaced, newlyArchived),
       );
-      if (!verdict.took) {
+      if (!admitted.took) {
         logger.error("federation.result_not_taken", {
           correlationId: verified.taskId,
           signer: verified.receipt.motebit_id,
           originRelay: verified.originRelay,
-          refusal: verdict.refusal,
+          refusal: admitted.refusal,
         });
         const status =
-          verdict.refusal === "gone"
+          admitted.refusal === "gone"
             ? 404
-            : verdict.refusal === "not_bound"
+            : admitted.refusal === "not_bound"
               ? 400
-              : verdict.refusal === "answered"
+              : admitted.refusal === "answered"
                 ? 409
                 : 403;
         throw new HTTPException(status, {
-          message: `Federated result not accepted: ${verdict.reason}${verdict.answer != null ? ` — the task's answer is ${verdict.answer.status}, signed by ${verdict.answer.motebit_id}` : ""}`,
+          message: `Federated result not accepted: ${admitted.reason}${admitted.answer != null ? ` — the task's answer is ${admitted.answer.status}, signed by ${admitted.answer.motebit_id}` : ""}`,
         });
       }
-      // The same result again: the entry already holds it — nothing re-runs.
-      if (verdict.repeat) return;
-      // The answer and its settlement are ONE decision (#890 round 9):
-      // `answerTask` claimed the settlement for the receipt it wrote. Every
-      // effect below is bound to the ENTRY'S receipt.
-      const answer = verdict.entry.receipt;
-      if (answer == null || verdict.entry.settling !== answer.signature) {
-        logger.error("settlement.unclaimed_answer", { correlationId: verified.taskId });
-        throw new HTTPException(409, {
-          message: "Federated result not accepted: unclaimed answer",
-        });
-      }
+      return;
 
-      // Archive the verified receipt tree (#890 r6): the audit archive keeps
-      // every signed receipt (the answer itself is archived by the queue).
-      persistReceiptChain(moteDb.db, answer);
+      /**
+       * The federation door's settlement step: fan-out, peer trust, and the
+       * origin's settlement (the P2P origin audit row, or the §7 federation
+       * settlement + its forward). `true` once the decision is complete.
+       */
+      async function settleFederatedAnswer(
+        answer: import("@motebit/sdk").ExecutionReceipt,
+        replaced: boolean,
+        newlyArchived: boolean,
+      ): Promise<boolean> {
+        const entry = queuedEntry;
+        // Fan out to submitter
+        const submittedBy = entry.submitted_by ?? entry.task.submitted_by;
+        if (submittedBy) {
+          sendToEach(
+            connections.get(submittedBy),
+            JSON.stringify({
+              type: "task_result",
+              task_id: verified.taskId,
+              receipt: answer,
+            }),
+          );
+        }
 
-      // Fan out to submitter
-      const submittedBy = entry.submitted_by ?? entry.task.submitted_by;
-      if (submittedBy) {
-        sendToEach(
-          connections.get(submittedBy),
-          JSON.stringify({
-            type: "task_result",
-            task_id: verified.taskId,
-            receipt: answer,
-          }),
-        );
-      }
-
-      // Trust update via evaluateTrustTransition — once per task: a completed
-      // that replaced an unsettled failed (#890 r8/r9) was counted already.
-      try {
-        if (verdict.replaced) throw new Error("replacement: peer trust already counted");
-        const peerRow = moteDb.db
-          .prepare(
-            "SELECT trust_level, successful_forwards, failed_forwards FROM relay_peers WHERE peer_relay_id = ?",
-          )
-          .get(verified.originRelay) as
-          | { trust_level: AgentTrustLevel; successful_forwards: number; failed_forwards: number }
-          | undefined;
-
-        if (peerRow) {
-          const isSuccess = answer.status === "completed";
-          const newSuccessful = peerRow.successful_forwards + (isSuccess ? 1 : 0);
-          const newFailed = peerRow.failed_forwards + (isSuccess ? 0 : 1);
-
-          const trustRecord: AgentTrustRecord = {
-            motebit_id: asMotebitId(relayIdentity.relayMotebitId),
-            remote_motebit_id: asMotebitId(verified.originRelay),
-            trust_level: peerRow.trust_level,
-            first_seen_at: 0,
-            last_seen_at: Date.now(),
-            interaction_count: newSuccessful + newFailed,
-            successful_tasks: newSuccessful,
-            failed_tasks: newFailed,
-          };
-
-          const newLevel = evaluateTrustTransition(trustRecord);
-          const trustLevel = newLevel ?? peerRow.trust_level;
-          const trustScore = trustLevelToScore(trustLevel);
-
-          moteDb.db
+        // Trust update via evaluateTrustTransition — once per task: a completed
+        // that replaced an unsettled failed (#890 r8/r9) was counted already.
+        try {
+          if (replaced) throw new Error("replacement: peer trust already counted");
+          if (!newlyArchived) throw new Error("repeat: peer trust already counted");
+          const peerRow = moteDb.db
             .prepare(
-              "UPDATE relay_peers SET successful_forwards = ?, failed_forwards = ?, trust_level = ?, trust_score = ? WHERE peer_relay_id = ?",
+              "SELECT trust_level, successful_forwards, failed_forwards FROM relay_peers WHERE peer_relay_id = ?",
             )
-            .run(newSuccessful, newFailed, trustLevel, trustScore, verified.originRelay);
+            .get(verified.originRelay) as
+            | { trust_level: AgentTrustLevel; successful_forwards: number; failed_forwards: number }
+            | undefined;
 
-          // Issue credential on trust level transition (only when relay credential issuance is enabled)
-          if (issueCredentials && newLevel != null && newLevel !== peerRow.trust_level) {
-            try {
-              const relayKeys = getRelayKeypair(relayIdentity);
-              const peerDid = hexPublicKeyToDidKey(
-                (
-                  moteDb.db
-                    .prepare("SELECT public_key FROM relay_peers WHERE peer_relay_id = ?")
-                    .get(verified.originRelay) as { public_key: string }
-                ).public_key,
-              );
-              const vc = await issueReputationCredential(
-                {
-                  success_rate: newSuccessful / Math.max(1, newSuccessful + newFailed),
-                  avg_latency_ms: 0,
-                  task_count: newSuccessful + newFailed,
-                  trust_score: trustScore,
-                  availability: 1.0,
-                  measured_at: Date.now(),
-                },
-                relayKeys.privateKey,
-                relayKeys.publicKey,
-                peerDid,
-              );
-              const credentialType =
-                vc.type.find((t) => t !== "VerifiableCredential") ?? "VerifiableCredential";
-              moteDb.db
-                .prepare(
-                  "INSERT INTO relay_credentials (credential_id, subject_motebit_id, issuer_did, credential_type, credential_json, issued_at) VALUES (?, ?, ?, ?, ?, ?)",
-                )
-                .run(
-                  crypto.randomUUID(),
-                  verified.originRelay,
-                  vc.issuer,
-                  credentialType,
-                  JSON.stringify(vc),
-                  Date.now(),
+          if (peerRow) {
+            const isSuccess = answer.status === "completed";
+            const newSuccessful = peerRow.successful_forwards + (isSuccess ? 1 : 0);
+            const newFailed = peerRow.failed_forwards + (isSuccess ? 0 : 1);
+
+            const trustRecord: AgentTrustRecord = {
+              motebit_id: asMotebitId(relayIdentity.relayMotebitId),
+              remote_motebit_id: asMotebitId(verified.originRelay),
+              trust_level: peerRow.trust_level,
+              first_seen_at: 0,
+              last_seen_at: Date.now(),
+              interaction_count: newSuccessful + newFailed,
+              successful_tasks: newSuccessful,
+              failed_tasks: newFailed,
+            };
+
+            const newLevel = evaluateTrustTransition(trustRecord);
+            const trustLevel = newLevel ?? peerRow.trust_level;
+            const trustScore = trustLevelToScore(trustLevel);
+
+            moteDb.db
+              .prepare(
+                "UPDATE relay_peers SET successful_forwards = ?, failed_forwards = ?, trust_level = ?, trust_score = ? WHERE peer_relay_id = ?",
+              )
+              .run(newSuccessful, newFailed, trustLevel, trustScore, verified.originRelay);
+
+            // Issue credential on trust level transition (only when relay credential issuance is enabled)
+            if (issueCredentials && newLevel != null && newLevel !== peerRow.trust_level) {
+              try {
+                const relayKeys = getRelayKeypair(relayIdentity);
+                const peerDid = hexPublicKeyToDidKey(
+                  (
+                    moteDb.db
+                      .prepare("SELECT public_key FROM relay_peers WHERE peer_relay_id = ?")
+                      .get(verified.originRelay) as { public_key: string }
+                  ).public_key,
                 );
-            } catch {
-              /* best-effort */
+                const vc = await issueReputationCredential(
+                  {
+                    success_rate: newSuccessful / Math.max(1, newSuccessful + newFailed),
+                    avg_latency_ms: 0,
+                    task_count: newSuccessful + newFailed,
+                    trust_score: trustScore,
+                    availability: 1.0,
+                    measured_at: Date.now(),
+                  },
+                  relayKeys.privateKey,
+                  relayKeys.publicKey,
+                  peerDid,
+                );
+                const credentialType =
+                  vc.type.find((t) => t !== "VerifiableCredential") ?? "VerifiableCredential";
+                moteDb.db
+                  .prepare(
+                    "INSERT INTO relay_credentials (credential_id, subject_motebit_id, issuer_did, credential_type, credential_json, issued_at) VALUES (?, ?, ?, ?, ?, ?)",
+                  )
+                  .run(
+                    crypto.randomUUID(),
+                    verified.originRelay,
+                    vc.issuer,
+                    credentialType,
+                    JSON.stringify(vc),
+                    Date.now(),
+                  );
+              } catch {
+                /* best-effort */
+              }
             }
           }
+        } catch {
+          /* best-effort trust update */
         }
-      } catch {
-        /* best-effort trust update */
-      }
 
-      // Cross-operator federated P2P: the delegator paid all three legs
-      // onchain (worker net + origin-fee + executor-fee) in one atomic tx. The
-      // ORIGIN relay records its OWN p2p audit row — the origin-fee leg landing
-      // in A's treasury — and does NOT run the §7 relay-custody settlement
-      // chain (no relay_federation_settlements row, no settlement forward, no
-      // worker credit). The executor relay records the mirror p2p row (worker +
-      // executor-fee leg) in handleReceiptIngestion. Across both, all three legs
-      // are recorded + verified, and the relay's transmitter surface stays zero.
-      // See docs/doctrine/off-ramp-as-user-action.md § federated P2P.
-      if (entry.settlement_mode === "p2p" && entry.p2p_payment_proof) {
-        try {
-          const proof = entry.p2p_payment_proof;
-          // Payee = the worker the delegator's proof paid: the pinned
-          // `target_agent` this relay admitted and forwarded (#959); the
-          // receipt's signer was checked against it at the top.
-          const workerId = p2pPayeeOf(entry);
-          const settlementId = crypto.randomUUID();
-          const settledAt = Date.now();
-          // This relay's recorded fee = the origin-fee leg (→ A's treasury). The
-          // gross at A's hop is the full budget (worker net + both fee legs);
-          // platform_fee_rate is the relay's configured rate.
-          const originFee = proof.fee_amount_micro;
-          const signed = await signSettlement(
-            {
-              settlement_id: settlementId,
-              allocation_id: `p2p-${verified.taskId}` as never,
-              motebit_id: workerId,
-              receipt_hash: answer.result_hash ?? "",
-              ledger_hash: null,
-              amount_settled: proof.amount_micro,
-              platform_fee: originFee,
-              platform_fee_rate: platformFeeRate,
-              settlement_mode: "p2p",
-              status: "completed",
-              settled_at: settledAt,
-              issuer_relay_id: relayIdentity.relayMotebitId,
-            },
-            relayIdentity.privateKey,
-          );
-          moteDb.db
-            .prepare(
-              `INSERT OR IGNORE INTO relay_settlements
+        // Cross-operator federated P2P: the delegator paid all three legs
+        // onchain (worker net + origin-fee + executor-fee) in one atomic tx. The
+        // ORIGIN relay records its OWN p2p audit row — the origin-fee leg landing
+        // in A's treasury — and does NOT run the §7 relay-custody settlement
+        // chain (no relay_federation_settlements row, no settlement forward, no
+        // worker credit). The executor relay records the mirror p2p row (worker +
+        // executor-fee leg) in handleReceiptIngestion. Across both, all three legs
+        // are recorded + verified, and the relay's transmitter surface stays zero.
+        // See docs/doctrine/off-ramp-as-user-action.md § federated P2P.
+        if (entry.settlement_mode === "p2p" && entry.p2p_payment_proof) {
+          try {
+            const proof = entry.p2p_payment_proof;
+            // Payee = the worker the delegator's proof paid: the pinned
+            // `target_agent` this relay admitted and forwarded (#959); the
+            // receipt's signer was checked against it at the top.
+            const workerId = p2pPayeeOf(entry);
+            const settlementId = crypto.randomUUID();
+            const settledAt = Date.now();
+            // This relay's recorded fee = the origin-fee leg (→ A's treasury). The
+            // gross at A's hop is the full budget (worker net + both fee legs);
+            // platform_fee_rate is the relay's configured rate.
+            const originFee = proof.fee_amount_micro;
+            const signed = await signSettlement(
+              {
+                settlement_id: settlementId,
+                allocation_id: `p2p-${verified.taskId}` as never,
+                motebit_id: workerId,
+                receipt_hash: answer.result_hash ?? "",
+                ledger_hash: null,
+                amount_settled: proof.amount_micro,
+                platform_fee: originFee,
+                platform_fee_rate: platformFeeRate,
+                settlement_mode: "p2p",
+                status: "completed",
+                settled_at: settledAt,
+                issuer_relay_id: relayIdentity.relayMotebitId,
+              },
+              relayIdentity.privateKey,
+            );
+            moteDb.db
+              .prepare(
+                `INSERT OR IGNORE INTO relay_settlements
                (settlement_id, allocation_id, task_id, motebit_id, receipt_hash,
                 amount_settled, platform_fee, platform_fee_rate, status, settled_at,
                 settlement_mode, p2p_tx_hash, payment_verification_status, delegator_id,
-                p2p_worker_leg, p2p_worker_address, p2p_worker_address_rung, issuer_relay_id, suite, signature, record_json)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-            )
-            .run(
-              settlementId,
-              `p2p-${verified.taskId}`,
-              verified.taskId,
-              workerId,
-              answer.result_hash ?? "",
-              proof.amount_micro,
+                p2p_worker_leg, p2p_worker_address, p2p_worker_address_rung, issuer_relay_id, suite, signature, record_json,
+                receipt_signature)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+              )
+              .run(
+                settlementId,
+                `p2p-${verified.taskId}`,
+                verified.taskId,
+                workerId,
+                answer.result_hash ?? "",
+                proof.amount_micro,
+                originFee,
+                platformFeeRate,
+                "completed",
+                settledAt,
+                "p2p",
+                p2pProofKey(proof.tx_hash),
+                "pending",
+                entry.submitted_by ?? null,
+                // The origin relay verifies only its own fee leg; the worker leg
+                // is the executor relay's (the worker is hosted there).
+                p2pWorkerLegScope(entry),
+                entry.p2p_admission?.worker_address ?? null,
+                entry.p2p_admission?.worker_address_rung ?? null,
+                signed.issuer_relay_id,
+                signed.suite,
+                signed.signature,
+                canonicalJson(signed),
+                answer.signature,
+              );
+            logger.info("settlement.federated_p2p_origin_audit", {
+              correlationId: verified.taskId,
+              worker: workerId,
               originFee,
-              platformFeeRate,
-              "completed",
-              settledAt,
-              "p2p",
-              p2pProofKey(proof.tx_hash),
-              "pending",
-              entry.submitted_by ?? null,
-              // The origin relay verifies only its own fee leg; the worker leg
-              // is the executor relay's (the worker is hosted there).
-              p2pWorkerLegScope(entry),
-              entry.p2p_admission?.worker_address ?? null,
-              entry.p2p_admission?.worker_address_rung ?? null,
-              signed.issuer_relay_id,
-              signed.suite,
-              signed.signature,
-              canonicalJson(signed),
-            );
-          logger.info("settlement.federated_p2p_origin_audit", {
-            correlationId: verified.taskId,
-            worker: workerId,
-            originFee,
-            workerNet: proof.amount_micro,
-            txHash: proof.tx_hash,
-          });
-        } catch (auditErr) {
-          logger.error("settlement.federated_p2p_origin_audit_failed", {
-            correlationId: verified.taskId,
-            error: auditErr instanceof Error ? auditErr.message : String(auditErr),
-          });
+              workerNet: proof.amount_micro,
+              txHash: proof.tx_hash,
+            });
+          } catch (auditErr) {
+            logger.error("settlement.federated_p2p_origin_audit_failed", {
+              correlationId: verified.taskId,
+              error: auditErr instanceof Error ? auditErr.message : String(auditErr),
+            });
+            // Unsettled: the peer's retry of this result settles it (#890 r9 C2).
+            return false;
+          }
+          return true;
         }
-        markTaskSettled(taskQueue, verified.taskId, answer.signature);
-        return;
-      }
 
-      // Settlement forwarding
-      try {
-        if (entry.price_snapshot != null && entry.price_snapshot > 0) {
-          const grossAmount = entry.price_snapshot;
-          const feeAmount = Math.round(grossAmount * platformFeeRate);
-          const netAmount = grossAmount - feeAmount;
-          const receiptHash = answer.result_hash ?? answer.signature ?? "";
-          const settlementId = crypto.randomUUID();
-          const settledAt = Date.now();
+        // Settlement forwarding
+        try {
+          if (entry.price_snapshot != null && entry.price_snapshot > 0) {
+            const grossAmount = entry.price_snapshot;
+            const feeAmount = Math.round(grossAmount * platformFeeRate);
+            const netAmount = grossAmount - feeAmount;
+            const receiptHash = answer.result_hash ?? answer.signature ?? "";
+            const settlementId = crypto.randomUUID();
+            const settledAt = Date.now();
 
-          // Mint + sign the canonical FederationSettlementRecord (§9.1
-          // verbatim-leaf convergence): the relay signs its own copy of this
-          // settlement; the persisted `record_json` is the exact bytes the
-          // anchor leaf hashes, so a peer holding the record reproduces the leaf
-          // with `verifyFederationSettlementAnchor`. The `settledAt` value here
-          // is the SAME one written to the row's `settled_at` column, so the
-          // anchor's reconstruction order and the record agree.
-          const signedRecord = await signFederationSettlement(
-            {
-              settlement_id: settlementId,
-              task_id: verified.taskId,
-              upstream_relay_id: relayIdentity.relayMotebitId,
-              downstream_relay_id: verified.originRelay,
-              agent_id: null,
-              gross_amount: grossAmount,
-              fee_amount: feeAmount,
-              net_amount: netAmount,
-              fee_rate: platformFeeRate,
-              receipt_hash: receiptHash,
-              settled_at: settledAt,
-              ...(entry.x402_tx_hash != null ? { x402_tx_hash: entry.x402_tx_hash } : {}),
-              ...(entry.x402_network != null ? { x402_network: entry.x402_network } : {}),
-              issuer_relay_id: relayIdentity.relayMotebitId,
-            },
-            relayIdentity.privateKey,
-          );
-
-          moteDb.db
-            .prepare(
-              `INSERT OR IGNORE INTO relay_federation_settlements (settlement_id, task_id, upstream_relay_id, downstream_relay_id, agent_id, gross_amount, fee_amount, net_amount, fee_rate, settled_at, receipt_hash, x402_tx_hash, x402_network, record_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-            )
-            .run(
-              settlementId,
-              verified.taskId,
-              relayIdentity.relayMotebitId,
-              verified.originRelay,
-              null,
-              grossAmount,
-              feeAmount,
-              netAmount,
-              platformFeeRate,
-              settledAt,
-              receiptHash,
-              entry.x402_tx_hash ?? null,
-              entry.x402_network ?? null,
-              // Rule 11 analogue: store the exact canonical signed bytes. The
-              // anchor leaf is SHA-256 of THIS, so it equals the peer's bytes.
-              canonicalJson(signedRecord),
+            // Mint + sign the canonical FederationSettlementRecord (§9.1
+            // verbatim-leaf convergence): the relay signs its own copy of this
+            // settlement; the persisted `record_json` is the exact bytes the
+            // anchor leaf hashes, so a peer holding the record reproduces the leaf
+            // with `verifyFederationSettlementAnchor`. The `settledAt` value here
+            // is the SAME one written to the row's `settled_at` column, so the
+            // anchor's reconstruction order and the record agree.
+            const signedRecord = await signFederationSettlement(
+              {
+                settlement_id: settlementId,
+                task_id: verified.taskId,
+                upstream_relay_id: relayIdentity.relayMotebitId,
+                downstream_relay_id: verified.originRelay,
+                agent_id: null,
+                gross_amount: grossAmount,
+                fee_amount: feeAmount,
+                net_amount: netAmount,
+                fee_rate: platformFeeRate,
+                receipt_hash: receiptHash,
+                settled_at: settledAt,
+                ...(entry.x402_tx_hash != null ? { x402_tx_hash: entry.x402_tx_hash } : {}),
+                ...(entry.x402_network != null ? { x402_network: entry.x402_network } : {}),
+                issuer_relay_id: relayIdentity.relayMotebitId,
+              },
+              relayIdentity.privateKey,
             );
 
-          const peerInfo = moteDb.db
-            .prepare("SELECT endpoint_url FROM relay_peers WHERE peer_relay_id = ?")
-            .get(verified.originRelay) as { endpoint_url: string } | undefined;
-          if (peerInfo) {
+            const peerInfo = moteDb.db
+              .prepare("SELECT endpoint_url FROM relay_peers WHERE peer_relay_id = ?")
+              .get(verified.originRelay) as { endpoint_url: string } | undefined;
             const settlementBody = {
               task_id: verified.taskId,
               settlement_id: settlementId,
@@ -644,47 +625,101 @@ export function createFederationCallbacks(deps: FederationCallbackDeps) {
               x402_tx_hash: entry.x402_tx_hash ?? undefined,
               x402_network: entry.x402_network ?? undefined,
             };
-            const settlementSig = await sign(
-              new TextEncoder().encode(canonicalJson(settlementBody)),
-              relayIdentity.privateKey,
-            );
+            // The settlement row AND its forward's retry row commit together
+            // (#890 r9 C2): a process that dies after the row still forwards it
+            // (the retry loop), and one that dies before it settles on the
+            // peer's retry of the result. A delivered forward retires its row.
+            const retryId = crypto.randomUUID();
+            moteDb.db.exec("BEGIN");
             try {
-              const resp = await fetch(
-                `${peerInfo.endpoint_url}/federation/v1/settlement/forward`,
-                {
-                  method: "POST",
-                  headers: {
-                    "Content-Type": "application/json",
-                    "X-Correlation-ID": verified.taskId,
-                  },
-                  body: JSON.stringify({ ...settlementBody, signature: bytesToHex(settlementSig) }),
-                  signal: AbortSignal.timeout(10000),
-                },
-              );
-              if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-            } catch {
-              // Settlement forward failed — queue for retry with exponential backoff.
-              // First retry at baseDelayMs (5s) per DEFAULT_RETRY_POLICY.
               moteDb.db
                 .prepare(
-                  `INSERT INTO relay_settlement_retries (retry_id, settlement_id, task_id, peer_relay_id, payload_json, attempts, max_attempts, next_retry_at, status, created_at) VALUES (?, ?, ?, ?, ?, 0, 8, ?, 'pending', ?)`,
+                  `INSERT INTO relay_federation_settlements (settlement_id, task_id, upstream_relay_id, downstream_relay_id, agent_id, gross_amount, fee_amount, net_amount, fee_rate, settled_at, receipt_hash, x402_tx_hash, x402_network, record_json, receipt_signature) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
                 )
                 .run(
-                  crypto.randomUUID(),
                   settlementId,
                   verified.taskId,
+                  relayIdentity.relayMotebitId,
                   verified.originRelay,
-                  JSON.stringify(settlementBody),
-                  Date.now() + 5_000,
-                  Date.now(),
+                  null,
+                  grossAmount,
+                  feeAmount,
+                  netAmount,
+                  platformFeeRate,
+                  settledAt,
+                  receiptHash,
+                  entry.x402_tx_hash ?? null,
+                  entry.x402_network ?? null,
+                  // Rule 11 analogue: store the exact canonical signed bytes. The
+                  // anchor leaf is SHA-256 of THIS, so it equals the peer's bytes.
+                  canonicalJson(signedRecord),
+                  answer.signature,
                 );
+              if (peerInfo) {
+                // First retry at baseDelayMs (5s) per DEFAULT_RETRY_POLICY.
+                moteDb.db
+                  .prepare(
+                    `INSERT INTO relay_settlement_retries (retry_id, settlement_id, task_id, peer_relay_id, payload_json, attempts, max_attempts, next_retry_at, status, created_at) VALUES (?, ?, ?, ?, ?, 0, 8, ?, 'pending', ?)`,
+                  )
+                  .run(
+                    retryId,
+                    settlementId,
+                    verified.taskId,
+                    verified.originRelay,
+                    JSON.stringify(settlementBody),
+                    Date.now() + 5_000,
+                    Date.now(),
+                  );
+              }
+              moteDb.db.exec("COMMIT");
+            } catch (txnErr) {
+              moteDb.db.exec("ROLLBACK");
+              throw txnErr;
+            }
+            if (peerInfo) {
+              const settlementSig = await sign(
+                new TextEncoder().encode(canonicalJson(settlementBody)),
+                relayIdentity.privateKey,
+              );
+              try {
+                const resp = await fetch(
+                  `${peerInfo.endpoint_url}/federation/v1/settlement/forward`,
+                  {
+                    method: "POST",
+                    headers: {
+                      "Content-Type": "application/json",
+                      "X-Correlation-ID": verified.taskId,
+                    },
+                    body: JSON.stringify({
+                      ...settlementBody,
+                      signature: bytesToHex(settlementSig),
+                    }),
+                    signal: AbortSignal.timeout(10000),
+                  },
+                );
+                if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+                // Delivered: the retry row is retired.
+                moteDb.db
+                  .prepare(
+                    "DELETE FROM relay_settlement_retries WHERE retry_id = ? AND status = 'pending' AND attempts = 0",
+                  )
+                  .run(retryId);
+              } catch {
+                // Settlement forward failed — the committed retry row carries it,
+                // with exponential backoff.
+              }
             }
           }
+        } catch (settleErr) {
+          logger.error("settlement.federated_failed", {
+            correlationId: verified.taskId,
+            error: settleErr instanceof Error ? settleErr.message : String(settleErr),
+          });
+          // Unsettled: the peer's retry of this result settles it (#890 r9 C2).
+          return false;
         }
-      } catch {
-        /* best-effort settlement */
+        return true;
       }
-      markTaskSettled(taskQueue, verified.taskId, answer.signature);
     },
 
     async onSettlementReceived(verified: VerifiedSettlement) {
@@ -731,11 +766,27 @@ export function createFederationCallbacks(deps: FederationCallbackDeps) {
       // re-delivered settlement forward (the §7.4 retry path) never double-pays.
       // Signing is async and stays OUTSIDE the transaction (sibling discipline
       // to the main settlement path — an await inside BEGIN/COMMIT interleaves).
+      // A re-delivered forward (the §7.4 retry path) is a no-op: the row it
+      // wrote stands, and pays once. Checked before the INSERT — the
+      // one-settlement-per-task guard refuses a second row outright.
+      const delivered = moteDb.db
+        .prepare(
+          "SELECT 1 FROM relay_federation_settlements WHERE task_id = ? AND upstream_relay_id = ?",
+        )
+        .get(verified.taskId, verified.originRelay);
+      if (delivered != null) return { feeAmount, netAmount };
+      // The receipt this relay's answer is claimed for (#890 r9): the row
+      // names it, and the table refuses any other for a task it knows.
+      const claimedRow = moteDb.db
+        .prepare("SELECT settling FROM relay_task_answers WHERE task_id = ?")
+        .get(verified.taskId) as { settling: string | null } | undefined;
+      const receiptSignature = workerEntry?.settling ?? claimedRow?.settling ?? null;
+
       moteDb.db.exec("BEGIN");
       try {
         const ins = moteDb.db
           .prepare(
-            `INSERT OR IGNORE INTO relay_federation_settlements (settlement_id, task_id, upstream_relay_id, downstream_relay_id, agent_id, gross_amount, fee_amount, net_amount, fee_rate, settled_at, receipt_hash, x402_tx_hash, x402_network, record_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            `INSERT OR IGNORE INTO relay_federation_settlements (settlement_id, task_id, upstream_relay_id, downstream_relay_id, agent_id, gross_amount, fee_amount, net_amount, fee_rate, settled_at, receipt_hash, x402_tx_hash, x402_network, record_json, receipt_signature) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           )
           .run(
             verified.settlementId,
@@ -752,6 +803,7 @@ export function createFederationCallbacks(deps: FederationCallbackDeps) {
             verified.x402TxHash ?? null,
             verified.x402Network ?? null,
             canonicalJson(signedRecord),
+            receiptSignature,
           );
 
         if (ins.changes > 0 && workerId != null && netAmount > 0) {

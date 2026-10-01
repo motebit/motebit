@@ -59,6 +59,7 @@ import {
   receiptRelayTaskId,
   taskRoutes,
 } from "./task-routing.js";
+import { persistReceiptChain } from "./receipts-store.js";
 import { createLogger } from "./logger.js";
 
 const logger = createLogger({ service: "relay", module: "task-answer" });
@@ -85,6 +86,12 @@ export interface AnswerQueue {
 export type AnswerDoor =
   | { kind: "result_post" }
   | { kind: "mcp_forward" }
+  /**
+   * A sub-task's receipt embedded in its parent's answer (multi-hop): the
+   * sub-task's OWN answer, taken through this chokepoint before it is
+   * settled (#890 r9 C1).
+   */
+  | { kind: "sub_receipt"; parentTaskId: string }
   | {
       kind: "federation_result";
       /** The peer relay the result arrived from (its envelope signer). */
@@ -154,20 +161,48 @@ function statusOf(receipt: ExecutionReceipt): AgentTaskStatus {
       : AgentTaskStatus.Failed;
 }
 
+/** The receipt a settlement row settled: its signature, or (legacy) its hash. */
+export interface SettlementNaming {
+  receipt_signature: string | null;
+  receipt_hash: string;
+}
+
+/** Every settlement row, in either settlement table, that names `taskId`. */
+export function settlementRowsFor(db: DatabaseDriver, taskId: string): SettlementNaming[] {
+  return [
+    ...(db
+      .prepare("SELECT receipt_signature, receipt_hash FROM relay_settlements WHERE task_id = ?")
+      .all(taskId) as SettlementNaming[]),
+    ...(db
+      .prepare(
+        "SELECT receipt_signature, receipt_hash FROM relay_federation_settlements WHERE task_id = ?",
+      )
+      .all(taskId) as SettlementNaming[]),
+  ];
+}
+
+/**
+ * Does `row` name `receipt`? By signature; a row written before the
+ * signature column existed, by the hash its writer recorded (`result_hash`,
+ * or the signature on the federation row).
+ */
+function rowNames(row: SettlementNaming, receipt: ExecutionReceipt): boolean {
+  if (row.receipt_signature != null) return row.receipt_signature === receipt.signature;
+  return (
+    row.receipt_hash !== "" &&
+    (row.receipt_hash === receipt.result_hash || row.receipt_hash === receipt.signature)
+  );
+}
+
 /**
  * An entry's answer is FROZEN once its settlement is claimed (`settling`) or
- * done (`settled`) — or, for an entry answered before the claim existed,
- * once any settlement record names the task (#890 round 9).
+ * done (`settled`) — or once ANY settlement row names the task, whether or
+ * not the entry holds an answer (#890 r9 C1: a settlement written for a
+ * receipt the entry never held freezes it too).
  */
 export function answerFrozen(db: DatabaseDriver, entry: TaskQueueEntry, taskId: string): boolean {
   if (entry.settled === true || (entry.settling != null && entry.settling !== "")) return true;
-  if (entry.receipt == null) return false;
-  return (
-    db.prepare("SELECT 1 FROM relay_settlements WHERE task_id = ? LIMIT 1").get(taskId) != null ||
-    db
-      .prepare("SELECT 1 FROM relay_federation_settlements WHERE task_id = ? LIMIT 1")
-      .get(taskId) != null
-  );
+  return settlementRowsFor(db, taskId).length > 0;
 }
 
 /**
@@ -390,6 +425,45 @@ export async function answerTask(
   //    and every door settles only the entry's own receipt.
   const current = taskQueue.get(taskId);
   if (current == null) return refuse("gone", `task ${taskId} left the queue`);
+  // A settlement row names the task but the entry holds no answer (a
+  // legacy door paid it without answering it): the entry may take exactly
+  // the receipt every row settled — settled in the same write — and nothing
+  // else (#890 r9 C1).
+  const rows = settlementRowsFor(db, taskId);
+  if (current.receipt == null && rows.length > 0) {
+    const adoptable =
+      rows.every((row) => rowNames(row, receipt)) &&
+      (current.settling == null || current.settling === receipt.signature);
+    if (!adoptable) {
+      logger.warn("task.answer_refused_settled_elsewhere", {
+        correlationId: taskId,
+        signer: receipt.motebit_id,
+        door: door.kind,
+      });
+      return refuse(
+        "answered",
+        `task ${taskId} is already settled on another receipt; a settled task is never re-answered`,
+      );
+    }
+    const adopted = taskQueue.writeAnswer(ANSWER_CAP, taskId, current.answer_version ?? 0, (e) => {
+      e.receipt = receipt;
+      e.task.status = statusOf(receipt);
+      e.expiresAt = Math.max(e.expiresAt, Date.now() + retainMs);
+      e.settling = receipt.signature;
+      e.settled = true;
+    });
+    if (adopted == null) {
+      return refuse("answered", `task ${taskId} changed while its answer was being written`);
+    }
+    return {
+      took: true,
+      entry: adopted,
+      first: true,
+      replaced: false,
+      repeat: false,
+      publicKeyHex: sig.key,
+    };
+  }
   const rule = answerRule(current.receipt, answerFrozen(db, current, taskId), receipt);
   if (rule === "answered") {
     logger.warn("task.answer_refused_answered", {
@@ -455,6 +529,121 @@ export async function answerTask(
   };
 }
 
+/** What a door's settlement step is handed: the ENTRY's claimed answer. */
+export interface SettleInput {
+  entry: TaskQueueEntry;
+  receipt: ExecutionReceipt;
+  verdict: Extract<AnswerVerdict, { took: true }>;
+  /** `persistReceiptChain` archived this receipt now (not on an earlier pass). */
+  newlyArchived: boolean;
+}
+
+/**
+ * A door's settlement step: `true` once the settlement DECISION is complete
+ * (written, or deliberately nothing to write — unfunded, free, deferred to
+ * the origin); `false` (or a throw) leaves the answer claimed and unsettled,
+ * so the next retry of the same receipt — or the next restart's — settles it.
+ */
+export type SettleStep = (input: SettleInput) => Promise<boolean>;
+
+export type Admission =
+  | Extract<AnswerVerdict, { took: false }>
+  | (Extract<AnswerVerdict, { took: true }> & {
+      /** The entry's answer (the receipt every effect is bound to). */
+      receipt: ExecutionReceipt;
+      /** Settled before this call (a repeat, or adopted from a settlement row). */
+      alreadySettled: boolean;
+      /** The entry is settled now. */
+      settled: boolean;
+      newlyArchived: boolean;
+    });
+
+/**
+ * THE door routine (#890 round 9): every door a receipt enters by — the
+ * result POST, the MCP forward's callback, the federation result, and a
+ * sub-task's receipt embedded in its parent's answer — admits it here, and
+ * only here (a static test fails on any other caller of `answerTask` or
+ * `markTaskSettled`):
+ *
+ *   1. `answerTask` decides the answer and claims its settlement in one write;
+ *   2. a settled answer is `alreadySettled` — nothing re-runs;
+ *   3. an answer claimed but not settled — the first pass, OR a repeat after a
+ *      crash or a failed settlement between the claim and the settle — is
+ *      settled NOW, on the ENTRY's receipt (`repeat && !settled → settle`);
+ *   4. a settlement row already naming the task means it settled (by whichever
+ *      door wrote it): marked, never written twice;
+ *   5. only a COMPLETED settlement step marks the entry settled.
+ *
+ * The tables enforce the rest (task-queue.ts `installSettlementGuards`): a
+ * settlement row is inserted only for the receipt its task is claimed for,
+ * once per task across both settlement tables.
+ */
+export async function admitReceipt(
+  deps: AnswerDeps,
+  taskId: string,
+  receipt: ExecutionReceipt,
+  door: AnswerDoor,
+  retainMs: number,
+  settle: SettleStep,
+): Promise<Admission> {
+  const verdict = await answerTask(deps, taskId, receipt, door, retainMs);
+  if (!verdict.took) return verdict;
+  const entry = verdict.entry;
+  const answer = entry.receipt;
+  if (answer != null && entry.settled === true) {
+    logger.info("settlement.already_settled", { correlationId: taskId, door: door.kind });
+    return {
+      ...verdict,
+      receipt: answer,
+      alreadySettled: true,
+      settled: true,
+      newlyArchived: false,
+    };
+  }
+  if (answer == null || entry.settling !== answer.signature) {
+    logger.error("settlement.unclaimed_answer", { correlationId: taskId, door: door.kind });
+    return refuse("answered", `task ${taskId}'s answer is not claimed for settlement`) as Extract<
+      AnswerVerdict,
+      { took: false }
+    >;
+  }
+  // Archive the signed receipt tree (rule 12, insert-only). Before the
+  // settlement step, so a re-submission still archives when an earlier
+  // write failed; `newlyArchived` keeps trust and credentials once per receipt.
+  const newlyArchived = persistReceiptChain(deps.db, answer);
+  if (settlementRowsFor(deps.db, taskId).length > 0) {
+    markTaskSettled(deps.taskQueue, taskId, answer.signature);
+    logger.info("settlement.duplicate", { correlationId: taskId, door: door.kind });
+    return {
+      ...verdict,
+      entry: deps.taskQueue.get(taskId) ?? entry,
+      receipt: answer,
+      alreadySettled: true,
+      settled: true,
+      newlyArchived,
+    };
+  }
+  let done = false;
+  try {
+    done = await settle({ entry, receipt: answer, verdict, newlyArchived });
+  } catch (err) {
+    logger.error("settlement.step_failed", {
+      correlationId: taskId,
+      door: door.kind,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+  if (done) markTaskSettled(deps.taskQueue, taskId, answer.signature);
+  return {
+    ...verdict,
+    entry: deps.taskQueue.get(taskId) ?? entry,
+    receipt: answer,
+    alreadySettled: false,
+    settled: done,
+    newlyArchived,
+  };
+}
+
 /**
  * Mark `taskId` settled — against the entry as it is NOW, and only when its
  * settlement claim names `receiptSignature` (the receipt the caller settled).
@@ -466,7 +655,9 @@ export function markTaskSettled(
 ): void {
   const current = taskQueue.get(taskId);
   if (current == null || current.settled === true) return;
-  const claimedFor = current.settling ?? current.receipt?.signature;
+  // Only the claim counts: a receipt the entry was never claimed for is
+  // never marked settled (#890 r9).
+  const claimedFor = current.settling;
   if (claimedFor !== receiptSignature) {
     logger.error("settlement.mark_for_unclaimed_receipt", {
       correlationId: taskId,

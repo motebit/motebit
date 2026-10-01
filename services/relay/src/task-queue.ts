@@ -224,6 +224,7 @@ export class TaskQueue implements Map<string, TaskQueueEntry> {
         SELECT RAISE(ABORT, 'relay_task_queue: an entry is inserted unanswered, once; ${guard}');
       END;
     `);
+    installSettlementGuards(this.db);
   }
 
   // ---------------------------------------------------------------------------
@@ -525,6 +526,113 @@ export class TaskQueue implements Map<string, TaskQueueEntry> {
 
     return entry;
   }
+}
+
+// ---------------------------------------------------------------------------
+// The settlement guards (#890 round 9, cold review C1/C2)
+// ---------------------------------------------------------------------------
+//
+// An answer and its settlement are ONE decision, enforced by the TABLES, so a
+// fifth door — or a writer that forgets the claim — cannot exist:
+//
+//   - a settlement row (`relay_settlements`, `relay_federation_settlements`)
+//     carries the `receipt_signature` it settles, and is inserted only when
+//     the task's entry (or, after eviction, its archived answer) is CLAIMED
+//     for exactly that signature — for every task the relay knows (a queue
+//     entry or an archived answer); and only when NO settlement row, in
+//     either table, already names the task: one settlement per task;
+//   - a `settlement_credit` ledger row names a settlement row (or a dispute,
+//     whose resolution credits under the dispute id);
+//   - an entry's answer (`receipt`) and claim (`settling`) never move off the
+//     receipt a settlement row names: a settled answer is frozen.
+
+/** Settlement-bearing tables the guards cover (the harness enumerates these). */
+export const SETTLEMENT_TABLES = ["relay_settlements", "relay_federation_settlements"] as const;
+
+function tableExists(db: DatabaseDriver, name: string): boolean {
+  return (
+    db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(name) != null
+  );
+}
+
+/**
+ * Install the settlement guards (idempotent). Called by the queue's
+ * constructor; a table that does not exist yet (a bare unit-test database) is
+ * skipped and guarded the next time a queue is constructed over it.
+ */
+export function installSettlementGuards(db: DatabaseDriver): void {
+  const present = SETTLEMENT_TABLES.filter((t) => tableExists(db, t));
+  for (const t of present) {
+    const cols = db.prepare(`PRAGMA table_info(${t})`).all() as Array<{ name: string }>;
+    if (!cols.some((c) => c.name === "receipt_signature")) {
+      db.exec(`ALTER TABLE ${t} ADD COLUMN receipt_signature TEXT`);
+    }
+  }
+  if (present.length !== SETTLEMENT_TABLES.length) return;
+  const known = `(EXISTS (SELECT 1 FROM relay_task_queue WHERE task_id = NEW.task_id)
+        OR EXISTS (SELECT 1 FROM relay_task_answers WHERE task_id = NEW.task_id))`;
+  const claimed = `(EXISTS (SELECT 1 FROM relay_task_queue WHERE task_id = NEW.task_id
+              AND json_extract(task_json, '$.settling') = NEW.receipt_signature)
+        OR (NOT EXISTS (SELECT 1 FROM relay_task_queue WHERE task_id = NEW.task_id)
+            AND EXISTS (SELECT 1 FROM relay_task_answers WHERE task_id = NEW.task_id
+              AND settling = NEW.receipt_signature)))`;
+  const any = `(EXISTS (SELECT 1 FROM relay_settlements WHERE task_id = NEW.task_id)
+        OR EXISTS (SELECT 1 FROM relay_federation_settlements WHERE task_id = NEW.task_id))`;
+  for (const t of SETTLEMENT_TABLES) {
+    db.exec(`
+      CREATE TRIGGER IF NOT EXISTS ${t}_one_settlement_guard
+      BEFORE INSERT ON ${t}
+      WHEN NEW.task_id <> '' AND ${any}
+      BEGIN
+        SELECT RAISE(ABORT, '${t}: a task settles once — a settlement row already names it (#890 r9)');
+      END;
+      CREATE TRIGGER IF NOT EXISTS ${t}_claim_guard
+      BEFORE INSERT ON ${t}
+      WHEN NEW.task_id <> '' AND ${known}
+        AND (NEW.receipt_signature IS NULL OR NOT ${claimed})
+      BEGIN
+        SELECT RAISE(ABORT, '${t}: a settlement is written only for the receipt the task is claimed for (#890 r9)');
+      END;
+    `);
+  }
+  if (tableExists(db, "relay_transactions")) {
+    const disputes = tableExists(db, "relay_disputes")
+      ? "AND NOT EXISTS (SELECT 1 FROM relay_disputes WHERE dispute_id = NEW.reference_id)"
+      : "";
+    db.exec(`
+      CREATE TRIGGER IF NOT EXISTS relay_transactions_settlement_credit_guard
+      BEFORE INSERT ON relay_transactions
+      WHEN NEW.type = 'settlement_credit'
+        AND NOT EXISTS (SELECT 1 FROM relay_settlements WHERE settlement_id = NEW.reference_id)
+        AND NOT EXISTS (SELECT 1 FROM relay_federation_settlements WHERE settlement_id = NEW.reference_id)
+        ${disputes}
+      BEGIN
+        SELECT RAISE(ABORT, 'relay_transactions: a settlement_credit names the settlement row (or dispute) it pays (#890 r9)');
+      END;
+    `);
+  }
+  // Frozen: the answer and its claim never move off what a settlement names.
+  // An entry with no answer may take — once — the receipt a legacy row
+  // (no `receipt_signature`) settled; nothing else moves a settled answer.
+  const anyRow = `(EXISTS (SELECT 1 FROM relay_settlements WHERE task_id = NEW.task_id)
+        OR EXISTS (SELECT 1 FROM relay_federation_settlements WHERE task_id = NEW.task_id))`;
+  const namesOther = (sig: string): string => `(
+        EXISTS (SELECT 1 FROM relay_settlements WHERE task_id = NEW.task_id
+          AND receipt_signature IS NOT NULL AND receipt_signature IS NOT ${sig})
+        OR EXISTS (SELECT 1 FROM relay_federation_settlements WHERE task_id = NEW.task_id
+          AND receipt_signature IS NOT NULL AND receipt_signature IS NOT ${sig}))`;
+  db.exec(`
+    CREATE TRIGGER IF NOT EXISTS relay_task_queue_settled_frozen_guard
+    BEFORE UPDATE ON relay_task_queue
+    WHEN (NEW.receipt IS NOT OLD.receipt
+          AND ((OLD.receipt IS NOT NULL AND ${anyRow})
+               OR ${namesOther("json_extract(NEW.receipt, '$.signature')")}))
+      OR (json_extract(NEW.task_json, '$.settling') IS NOT json_extract(OLD.task_json, '$.settling')
+          AND ${namesOther("json_extract(NEW.task_json, '$.settling')")})
+    BEGIN
+      SELECT RAISE(ABORT, 'relay_task_queue: a settled answer is frozen — never moved off the receipt its settlement names (#890 r9)');
+    END;
+  `);
 }
 
 // ---------------------------------------------------------------------------

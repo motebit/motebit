@@ -1767,9 +1767,14 @@ export function cleanupTaskRoutes(db: DatabaseDriver, now: number = Date.now()):
     .prepare("DELETE FROM relay_task_routes WHERE created_at < ?")
     .run(now - TASK_ROUTE_RETENTION_MS);
   // A task's archived answer (#890 round 9, `relay_task_answers`) lives as
-  // long as its route: the archive reads it only through one.
+  // long as its route: the archive reads it only through one — except an
+  // answer still claimed and UNSETTLED for a task still queued: it is the
+  // claim the settlement guards check, and the next retry settles it.
   const answers = db
-    .prepare("DELETE FROM relay_task_answers WHERE answered_at < ?")
+    .prepare(
+      `DELETE FROM relay_task_answers WHERE answered_at < ?
+         AND NOT (settled = 0 AND task_id IN (SELECT task_id FROM relay_task_queue))`,
+    )
     .run(now - TASK_ROUTE_RETENTION_MS);
   return info.changes + answers.changes;
 }
