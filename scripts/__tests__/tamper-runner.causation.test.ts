@@ -281,6 +281,67 @@ describe("tamper-runner causation", () => {
     );
   });
 
+  it("a GREEN needs the edit loaded in EVERY copy it reaches: a test that loads the source but asserts on the package's stale dist is INCONCLUSIVE", () => {
+    // The real shape: a test imports a package's src directly (so the source
+    // is loaded) while the code under test uses the package's dist.
+    const DUAL = { pkg: FX, test: "dual.fx.mjs" };
+    const d = drive(
+      fx!,
+      [
+        { name: "dual, unbuilt", ...DUAL, edits: [BREAK_SUM] },
+        { name: "dual, rebuilt", ...DUAL, rebuild: [FX], edits: [BREAK_SUM] },
+      ],
+      1,
+    );
+    expect(verdicts(d), d.out).toEqual(["INCONCLUSIVE", "RED"]);
+    expect(d.out).toMatch(
+      /INCONCLUSIVE +dual, unbuilt +\(stale dist of \[fx\] loaded; missing rebuild\?\)/,
+    );
+  });
+
+  it("a GREEN needs the edit LOADED for a command entry too: a check that never loads the edited file is INCONCLUSIVE", () => {
+    const d = drive(
+      fx!,
+      [
+        {
+          name: "cmd, unloaded",
+          command: ["node", "sum.check.mjs"],
+          redMarker: "SUM CHECK FAILED",
+          edits: [
+            {
+              file: "packages/fx/build.mjs",
+              from: "both of which gen.fx.mjs reads",
+              to: "both read by gen.fx.mjs",
+            },
+          ],
+        },
+      ],
+      1,
+    );
+    expect(verdicts(d), d.out).toEqual(["INCONCLUSIVE"]);
+    expect(d.out).toMatch(
+      /INCONCLUSIVE +cmd, unloaded +\(edit not loaded: no process of edited run 2 loaded packages\/fx\/build\.mjs/,
+    );
+  });
+
+  it("a RED's edited runs never carry the load sentinel (only a GREEN's second edited run does)", () => {
+    // pure.check.mjs exits 3, unmarked, when sum.mjs carries a sentinel.
+    const PURE = { command: ["node", "pure.check.mjs"], redMarker: "PURE CHECK FAILED" };
+    const d = drive(
+      fx!,
+      [
+        { name: "pure red", ...PURE, edits: [BREAK_SUM] },
+        // The probe is not vacuous: a GREEN's run 4 carries the sentinel, and the check sees it.
+        { name: "pure green", ...PURE, edits: [COMMENT_ONLY] },
+      ],
+      1,
+    );
+    expect(verdicts(d), d.out).toEqual(["RED", "INCONCLUSIVE"]);
+    expect(d.out).toMatch(
+      /INCONCLUSIVE +pure green +\(did not reproduce: edited run 1 GREEN, edited run 2 INCONCLUSIVE/,
+    );
+  });
+
   it("the post-run (run 5/5) must be green: state the edit left fails it", () => {
     const d = drive(fx!, [{ name: "post", ...COUNTED, edits: [COMMENT_ONLY] }], 1, {
       env: { FX_FAIL_FIRST: "1,3,4" },

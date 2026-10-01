@@ -72,7 +72,16 @@
  *     an edited file whose token never came, or that cannot carry one (not a
  *     JS/TS module: JSON, text, .d.ts), is INCONCLUSIVE (`edit not loaded:
  *     …; missing rebuild: [pkg]?`, naming the file's package when the entry
- *     does not rebuild it). A RED's runs never carry it. Residual, stated: a
+ *     does not rebuild it). A GREEN must also rest on no STALE copy of the
+ *     edit: run 4 marks, with a distinct stale token, every JS module in the
+ *     ignored `dist/` of each edited package the entry does NOT rebuild; a
+ *     test that loads the edited source but also that old build (it imports
+ *     a package's src directly while the code under it uses the dist) is
+ *     INCONCLUSIVE (`stale dist of [pkg] loaded; missing rebuild?`). A RED's
+ *     runs never carry either sentinel (a self-test enforces it). The
+ *     sentinel needs `process.getBuiltinModule` (Node >= 20.16 / >= 22.3,
+ *     narrower than the repo's `engines: >=20`): on an older Node the run
+ *     ABORTS (exit 2) before anything runs. Residual, stated: a
  *     load is not an execution of the edited lines (a loaded module whose
  *     edited function the test never calls still reads GREEN, honestly: the
  *     test did not catch it), a module evaluated where `globalThis.process`
@@ -1618,6 +1627,8 @@ interface EditedRun {
   cmd?: Exec;
   /** With `proveLoad`: the edited files no process of the run was proven to load. */
   unloaded?: { file: string; why: "not-loaded" | "unprovable" }[];
+  /** With `proveLoad`: edited packages (not rebuilt) whose stale `dist/` some process loaded. */
+  staleDist?: string[];
 }
 
 /** A file a load sentinel can be appended to: a JS/TS module some process evaluates. */
@@ -1638,8 +1649,11 @@ function loadSentinel(log: string, token: string): string {
   );
 }
 
-/** The workspace package (nearest package.json's name) a repo-relative file belongs to. */
-function ownerPackage(root: string, rel: string): string | null {
+/**
+ * The workspace package (nearest package.json with a name) a repo-relative
+ * file belongs to: its name and its repo-relative directory.
+ */
+function ownerPackageDir(root: string, rel: string): { name: string; dir: string } | null {
   for (let d = dirname(rel); ; d = dirname(d)) {
     try {
       const name = (
@@ -1647,7 +1661,7 @@ function ownerPackage(root: string, rel: string): string | null {
           name?: unknown;
         }
       ).name;
-      if (typeof name === "string") return name;
+      if (typeof name === "string") return { name, dir: d };
     } catch {
       // no (readable) package.json here
     }
@@ -1655,15 +1669,25 @@ function ownerPackage(root: string, rel: string): string | null {
   }
 }
 
+/** The workspace package (nearest package.json's name) a repo-relative file belongs to. */
+function ownerPackage(root: string, rel: string): string | null {
+  return ownerPackageDir(root, rel)?.name ?? null;
+}
+
 /**
  * Why a GREEN is not evidence: an edited file no process of the edited run
  * was proven to load — the test never saw the edit (it reads a build output
- * the entry does not rebuild, or never imports the file). Null when every
- * edited file was loaded.
+ * the entry does not rebuild, or never imports the file) — or a STALE copy
+ * of an edited package was loaded next to it (its `dist/`, not rebuilt: the
+ * source was loaded, but what the test asserts on may be the old build).
+ * Null when every edited file was loaded and no stale dist was.
  */
 function notLoaded(entry: TamperEntry, r: EditedRun, root: string): string | null {
   const list = r.unloaded ?? [];
-  if (list.length === 0) return null;
+  const stale = r.staleDist ?? [];
+  const staleNote =
+    stale.length > 0 ? `stale dist of [${stale.join(", ")}] loaded; missing rebuild?` : null;
+  if (list.length === 0) return staleNote;
   const unprovable = list.filter((u) => u.why === "unprovable").map((u) => u.file);
   const missing = list.filter((u) => u.why === "not-loaded").map((u) => u.file);
   const parts: string[] = [];
@@ -1681,7 +1705,7 @@ function notLoaded(entry: TamperEntry, r: EditedRun, root: string): string | nul
       `a load of ${unprovable.join(", ")} cannot be proven (only a JS/TS module carries a load sentinel)`,
     );
   }
-  return `edit not loaded: ${parts.join("; ")}`;
+  return `edit not loaded: ${parts.join("; ")}${staleNote != null ? `; ${staleNote}` : ""}`;
 }
 
 /** The entry's type-check verdict, computed on its first edited run and kept. */
@@ -1704,6 +1728,8 @@ async function editedRun(
   const loadLog = join(slot.run, "loaded.log");
   rmSync(loadLog, { force: true });
   const sentinels = new Map<string, string>();
+  /** Stale-dist sentinel token -> the edited package whose `dist/` carries it. */
+  const staleTokens = new Map<string, string>();
   const originals = new Map<string, { bytes: Buffer; atime: Date; mtime: Date }>();
   try {
     for (const e of entry.edits) {
@@ -1761,6 +1787,28 @@ async function editedRun(
         const abs = join(dir, rel);
         writeFileSync(abs, readFileSync(abs, "utf8") + loadSentinel(loadLog, token));
       }
+      // ...and every JS module of the ignored `dist/` of each edited package
+      // the entry does NOT rebuild, with a distinct STALE token: a copy built
+      // before the edit, which a test can load next to the edited source (it
+      // imports src directly while the code under it uses the dist). The slot
+      // restores ignored outputs after the run, so these come back too.
+      const rebuilt = new Set(entry.rebuild ?? []);
+      const staleCandidates = new Map<string, string>();
+      for (const rel of originals.keys()) {
+        const owner = ownerPackageDir(dir, rel);
+        if (owner != null && !rebuilt.has(owner.name)) staleCandidates.set(owner.name, owner.dir);
+      }
+      for (const [pkg, pdir] of staleCandidates) {
+        const prefix = pdir === "." ? "dist/" : `${pdir}/dist/`;
+        const token = `${nonce}:stale:${staleTokens.size}`;
+        staleTokens.set(token, pkg);
+        for (const [rel, stamp] of slot.pristineIgnored) {
+          if (!rel.startsWith(prefix) || !stamp.startsWith("file:")) continue;
+          if (!SENTINEL_FILE.test(rel) || /\.d\.[cm]?ts$/.test(rel)) continue;
+          const abs = join(dir, rel);
+          writeFileSync(abs, readFileSync(abs, "utf8") + loadSentinel(loadLog, token));
+        }
+      }
     }
     const proof = (r: EditedRun): EditedRun => {
       if (!proveLoad) return r;
@@ -1775,6 +1823,9 @@ async function editedRun(
         if (token == null) return [{ file, why: "unprovable" as const }];
         return seen.has(token) ? [] : [{ file, why: "not-loaded" as const }];
       });
+      r.staleDist = [
+        ...new Set([...staleTokens].filter(([t]) => seen.has(t)).map(([, pkg]) => pkg)),
+      ];
       return r;
     };
 
@@ -2093,6 +2144,17 @@ export async function runTampers(
     .filter((m): m is string => m != null);
   if (malformed.length > 0) {
     for (const m of malformed) log(`tamper-runner: ABORTED — ${m}`);
+    if (opts.exit !== false) process.exit(2);
+    return { ok: false, results: [], concurrency: 0, exitCode: 2 };
+  }
+  // The load sentinel records through `process.getBuiltinModule` (Node >=
+  // 20.16 / >= 22.3). Without it no load could record and every GREEN would
+  // read not-loaded: refuse loudly instead of reporting that.
+  if (typeof (process as { getBuiltinModule?: unknown }).getBuiltinModule !== "function") {
+    log(
+      `tamper-runner: ABORTED — Node ${process.versions.node} has no process.getBuiltinModule ` +
+        "(needs Node >= 20.16 on 20.x, >= 22.3 on 22.x): no load sentinel could record",
+    );
     if (opts.exit !== false) process.exit(2);
     return { ok: false, results: [], concurrency: 0, exitCode: 2 };
   }

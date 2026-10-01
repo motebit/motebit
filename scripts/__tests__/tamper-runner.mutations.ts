@@ -15,7 +15,8 @@
  * (pre, post, reset, HOME, valid code, reaping); G1-G13 one clause of the
  * causation law (the second edited run, the middle unedited run, the group
  * kill, the survivor check, same test, same error class, no-op entries, the
- * group-wide flake veto). Every entry must print RED (ok).
+ * group-wide flake veto; G10-G16 the error class of a timeout and the load
+ * proof). Every entry must print RED (ok).
  */
 import { dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -545,6 +546,32 @@ const MUTATIONS: TamperEntry[] = [
         "        if (token == null) return [];",
       ),
     ],
+  },
+  // --- cold review R5: load proof per COPY, for command entries, and never on a RED
+  {
+    name: "G14 a stale dist of an edited package is never marked (a test asserting on it reads GREEN)",
+    ...CAUSATION,
+    red: "tamper-runner causation a GREEN needs the edit loaded in EVERY copy it reaches: a test that loads the source but asserts on the package's stale dist is INCONCLUSIVE",
+    edits: [
+      edit(
+        "      for (const [pkg, pdir] of staleCandidates) {",
+        "      for (const [pkg, pdir] of [] as [string, string][]) {",
+      ),
+    ],
+  },
+  {
+    name: "G15 a command entry's edited run skips the load proof",
+    ...CAUSATION,
+    red: "tamper-runner causation a GREEN needs the edit LOADED for a command entry too: a check that never loads the edited file is INCONCLUSIVE",
+    edits: [
+      edit("      return proof({ ran: true, cmd: t });", "      return { ran: true, cmd: t };"),
+    ],
+  },
+  {
+    name: "G16 a RED's second edited run carries the load sentinel",
+    ...CAUSATION,
+    red: "tamper-runner causation a RED's edited runs never carry the load sentinel (only a GREEN's second edited run does)",
+    edits: [edit('validity, c1.verdict === "GREEN");', "validity, true);")],
   },
 ];
 
