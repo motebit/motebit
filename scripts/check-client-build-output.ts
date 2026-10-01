@@ -1,7 +1,8 @@
 #!/usr/bin/env tsx
 /**
- * check-client-build-output — THE LAW of invariant #166, run on what a client
- * build actually emitted (cold review R3: three rounds found a pre-build or
+ * check-client-build-output — the SECOND NET of invariant #166 (the primary
+ * control is the per-var `PUBLIC_BUILD_ENV` allowlist guard), run on what a
+ * client build actually emitted (cold review R3: three rounds found a pre-build or
  * static check judging something other than what ships).
  *
  *   tsx scripts/check-client-build-output.ts <app> [--dir <d>]... [--expo-config | --expo-config-only]
@@ -9,8 +10,11 @@
  * Takes every env var visible to this process (the build's own environment —
  * each surface's package.json build script runs this right after its bundler)
  * plus every `.env*` file in the app dir, drops the values the exclusion rule
- * (`outputScanExclusion`) names, and fails if any remaining value — raw,
- * URL-encoded, JSON-escaped or base64 — appears in any emitted file. The
+ * (`outputScanExclusion`) names, and fails if any remaining value — its full
+ * value raw, URL-encoded, JSON-escaped once or twice, or base64/base64url at
+ * any alignment; key-shaped fragments too for secret-named or public-prefixed
+ * vars (`fragmentNeedlesApply`) — appears in any emitted file. Declared limit:
+ * hex, reversed, char codes and split strings are not searched for. The
  * finding names the var; the value is never printed.
  *
  * Defaults per surface (dirs are app-relative):
@@ -192,8 +196,9 @@ function main(): void {
     .map(([k, n]) => `${n} ${k}`)
     .join(", ");
   console.log(
-    `✓ check-client-build-output [apps/${app}] (the law): ${r.files} emitted file(s) in ${r.scanned.join(", ")} carry none of ` +
-      `${r.scannedVars} build env var value(s) (raw / url-encoded / json-escaped / base64); excluded by rule: ${ex || "none"} ` +
+    `✓ check-client-build-output [apps/${app}] (second net): ${r.files} emitted file(s) in ${r.scanned.join(", ")} carry none of ` +
+      `${r.scannedVars} build env var value(s) (full value raw / url-encoded / json-escaped once+twice / base64 at all alignments; ` +
+      `fragments for secret-named or public-prefixed vars; not hex / reversed / char codes / split strings); excluded by rule: ${ex || "none"} ` +
       `(short = < ${OUTPUT_SCAN_MIN_LENGTH} chars).`,
   );
 }

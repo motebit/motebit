@@ -25,15 +25,23 @@
  *     every OTHER app (local-only surfaces), credential-shaped names.
  *   - `scanArtifactText` + `CREDENTIAL_RULES` — credential shapes in any dist.
  *
- * THE LAW (cold review R3): `scanOutputForEnvValues` — after every client
- * build, every value of every env var the build could see (process.env + every
+ * The guarantee — the browser never holds a provider key — rests on (1) the
+ * server-side passthrough (services/proxy `/v1/solana-rpc` holds the key) and
+ * (2) the deny-by-default per-var allowlist + value validators above (the
+ * PRIMARY control: the build refuses before emitting anything).
+ *
+ * SECOND NET (cold review R3): `scanOutputForEnvValues` — after every client
+ * build, no value of any env var the build could see (process.env + every
  * `.env*` in its env dirs), minus the exclusion rule `outputScanExclusion`,
- * must not appear (raw / URL-encoded / JSON-escaped / base64) in ANY emitted
- * file. Run by the Vite guard's `closeBundle` (web, verify), by
- * scripts/check-client-build-output.ts after `vite build` / `next build` in each
- * surface's package.json build script, and on the Expo public config + native
- * bundles (mobile, EAS `eas-build-on-success`). Everything else here is an
- * early warning.
+ * may appear in ANY emitted file: the full value raw / URL-encoded /
+ * JSON-escaped once or twice / base64 (std + url, all alignments); fragments
+ * too for secret-named and public-prefixed vars (`fragmentNeedlesApply`).
+ * Declared limit: hex, reversed, char-code arrays and split strings are NOT
+ * searched for (see "THE LAW's second net" below). Run by the Vite guard's
+ * `closeBundle` (web, verify), by scripts/check-client-build-output.ts after
+ * `vite build` / `next build` in each surface's package.json build script,
+ * and on the Expo public config + native bundles (mobile, EAS
+ * `eas-build-on-success`). The static arms are early warnings.
  *
  * Imports node builtins only (vite configs load this file directly).
  *
@@ -822,20 +830,35 @@ export function scanArtifactForPublicEnvPairs(
   return out;
 }
 
-// ── THE LAW: the ground-truth output scan ──────────────────────────────────
+// ── THE LAW's second net: the ground-truth output scan ─────────────────────
 //
-// Three cold-review rounds found a pre-build/static check judging something
-// other than what ships (a sibling vite.config.js, a quoted next.config `env`,
-// source under a skipped `build/` dir, an Expo `extra`). So the primary law
-// judges the OUTPUT: after a client build, every value of every env var the
-// build process could see (process.env + every `.env*` file in the env dirs)
-// is searched for — raw, URL-encoded, JSON-escaped and base64 (std + url, all
-// three alignments) — in EVERY emitted file. A hit fails the build, naming the
-// var, never printing the value. It catches every route a value can take
-// (define, next `env`, `compiler.define`, Expo `extra`, any config spelling,
-// any source dir) without enumerating them. The static arms stay as fast early
-// warnings.
-
+// The guarantee is "the browser never holds a provider key". It rests on (1)
+// the server-side passthrough (services/proxy /v1/solana-rpc holds the key) and
+// (2) the deny-by-default per-var public-env allowlist + value validators
+// (`PUBLIC_BUILD_ENV`, `publicBuildEnvGuard`) — the PRIMARY control: an
+// unlisted or invalid public var refuses the build before anything is emitted.
+//
+// This scan is the SECOND NET, judging what actually shipped (three cold-review
+// rounds found pre-build checks judging something other than the output).
+// After a client build, it searches EVERY emitted file for every env value the
+// build could see (process.env + every `.env*` in the env dirs), minus the
+// exclusion rule (`outputScanExclusion`). It claims exactly this
+// (`valueNeedles`):
+//   - every scanned var, its FULL value: raw, URL-encoded (encodeURIComponent),
+//     JSON-escaped once and twice, and base64 / base64url of each of those at
+//     all three byte alignments;
+//   - additionally, for vars whose NAME is secret-shaped (`SECRET_ENV_NAME`) and
+//     for any public-prefixed var that is unlisted or fails its validator
+//     (`fragmentNeedlesApply`): every key-shaped run of escape-stable chars
+//     (>= 16, letters + digits) of the value, in the same encodings.
+// Platform commit metadata (`OUTPUT_SCAN_EXCLUDED_ENV_NAMES`, exact names) is
+// never scanned: free text that legitimately overlaps docs content.
+// Declared limit — NOT caught: hex, reversed, char-code arrays, split or
+// concatenated strings, any other encoding. Each needs code that deliberately
+// transforms the value; for a public var the per-var allowlist guard already
+// refuses it at build time, and a non-public var never reaches client code
+// without such a deliberate route. A hit fails the build, naming the var,
+// never printing the value.
 /** Values shorter than this are never scanned for (collision-prone). */
 export const OUTPUT_SCAN_MIN_LENGTH = 16;
 
@@ -944,7 +967,49 @@ function isCredentialFreeLocator(v: string): boolean {
 }
 
 /**
+ * Platform commit metadata, by EXACT name (never a pattern): free text a
+ * deployer does not choose (commit message, author, branch) that legitimately
+ * overlaps docs content (a commit message naming `claude-sonnet-4-6` matched 17
+ * docs files). Vercel injects `VERCEL_GIT_*` and, with "automatically expose
+ * System Environment Variables", the `VITE_` / `NEXT_PUBLIC_` copies of them;
+ * GitHub Actions injects the ref/actor names. Never scanned.
+ */
+export const OUTPUT_SCAN_EXCLUDED_ENV_NAMES: ReadonlySet<string> = new Set([
+  "VERCEL_GIT_COMMIT_MESSAGE",
+  "VERCEL_GIT_COMMIT_AUTHOR_NAME",
+  "VERCEL_GIT_COMMIT_AUTHOR_LOGIN",
+  "VERCEL_GIT_COMMIT_REF",
+  "VITE_VERCEL_GIT_COMMIT_MESSAGE",
+  "VITE_VERCEL_GIT_COMMIT_AUTHOR_NAME",
+  "VITE_VERCEL_GIT_COMMIT_AUTHOR_LOGIN",
+  "VITE_VERCEL_GIT_COMMIT_REF",
+  "NEXT_PUBLIC_VERCEL_GIT_COMMIT_MESSAGE",
+  "NEXT_PUBLIC_VERCEL_GIT_COMMIT_AUTHOR_NAME",
+  "NEXT_PUBLIC_VERCEL_GIT_COMMIT_AUTHOR_LOGIN",
+  "NEXT_PUBLIC_VERCEL_GIT_COMMIT_REF",
+  "GITHUB_REF",
+  "GITHUB_REF_NAME",
+  "GITHUB_HEAD_REF",
+  "GITHUB_BASE_REF",
+  "GITHUB_ACTOR",
+  "GITHUB_TRIGGERING_ACTOR",
+]);
+
+/**
+ * Whether a scanned var's key-shaped FRAGMENTS are needles too (not only its
+ * full value): its name is secret-shaped (`SECRET_ENV_NAME`), or it is
+ * public-prefixed — a public var reaching the scan is unlisted or failed its
+ * validator (a listed, valid one is excluded by value first). Any other var's
+ * value is free text as often as a key (a commit message, a description), and
+ * its fragments would collide with ordinary output.
+ */
+export function fragmentNeedlesApply(name: string): boolean {
+  return isSecretShapedEnvName(name) || isPublicEnvName(name);
+}
+
+/**
  * The exclusion rule, exactly. A value is NOT scanned for iff ANY of:
+ *   (0) its var is named in `OUTPUT_SCAN_EXCLUDED_ENV_NAMES` (exact name);
  *   (a) it is the value of a var named in PUBLIC_BUILD_ENV[app] that passes
  *       that entry's validator (a value-level allowlist: the same value under
  *       another name is excluded too);
@@ -964,6 +1029,7 @@ export function outputScanExclusion(
   allowedValues: ReadonlySet<string>,
   name?: string,
 ): string | null {
+  if (name != null && OUTPUT_SCAN_EXCLUDED_ENV_NAMES.has(name)) return "platform commit metadata";
   if (allowedValues.has(value)) return "public (PUBLIC_BUILD_ENV)";
   if (value.length < OUTPUT_SCAN_MIN_LENGTH) return "short";
   if (isScalar(value, name)) return "scalar";
@@ -993,13 +1059,18 @@ function toLatin1(s: string): string {
 }
 
 /**
- * Every encoding a value could ship under, as latin1 byte-strings (files are
- * read as latin1 so non-UTF-8 output is searched byte-for-byte): raw,
- * encodeURIComponent, JSON-escaped (once and twice), every escape-stable run
- * ≥ 16 chars, and base64 / base64url of each at all three byte alignments
- * (only the characters fully determined by the value).
+ * The needles for one value, as latin1 byte-strings (files are read as latin1
+ * so non-UTF-8 output is searched byte-for-byte): raw, encodeURIComponent,
+ * JSON-escaped (once and twice), and — only when `fragments` (see
+ * `fragmentNeedlesApply`) — every key-shaped escape-stable run ≥ 16 chars;
+ * plus base64 / base64url of each at all three byte alignments (only the
+ * characters fully determined by the value). Nothing else (declared limit:
+ * hex, reversed, char codes, split strings are not searched for).
  */
-export function valueNeedles(value: string): { encoding: string; needle: string }[] {
+export function valueNeedles(
+  value: string,
+  opts: { fragments: boolean } = { fragments: true },
+): { encoding: string; needle: string }[] {
   const out = new Map<string, string>();
   const add = (encoding: string, s: string): void => {
     if (s.length >= OUTPUT_SCAN_MIN_LENGTH && !out.has(s)) out.set(s, encoding);
@@ -1009,13 +1080,15 @@ export function valueNeedles(value: string): { encoding: string; needle: string 
     ["url-encoded", encodeURIComponent(value)],
     ["json-escaped", JSON.stringify(value).slice(1, -1)],
     ["json-escaped twice", JSON.stringify(JSON.stringify(value)).slice(3, -3)],
-    // Every run of escape-stable characters (≥ 16) is itself a needle: an
-    // escaping layer we did not model (nested JSON in a base64 source map,
-    // a template literal) still leaves it intact.
-    ...value
-      .split(/[^A-Za-z0-9_.~-]+/)
-      .filter((p) => p !== value && isKeyShapedFragment(p))
-      .map((p): [string, string] => ["fragment", p]),
+    // For secret-named / public-prefixed vars only: every run of
+    // escape-stable characters (≥ 16) is itself a needle — an escaping layer
+    // we did not model (a template literal, a third JSON level) leaves it intact.
+    ...(opts.fragments
+      ? value
+          .split(/[^A-Za-z0-9_.~-]+/)
+          .filter((p) => p !== value && isKeyShapedFragment(p))
+          .map((p): [string, string] => ["fragment", p])
+      : []),
   ];
   for (const [encoding, form] of forms) {
     add(encoding, toLatin1(form));
@@ -1162,7 +1235,7 @@ export function scanOutputForEnvValues(
     const key = `${name}\u0000${value}`;
     if (seenValue.has(key)) continue;
     seenValue.add(key);
-    for (const n of valueNeedles(value)) {
+    for (const n of valueNeedles(value, { fragments: fragmentNeedlesApply(name) })) {
       needles.push({ name, source: source ?? "env", length: value.length, ...n });
     }
   }
@@ -1198,11 +1271,23 @@ export function* readOutputFiles(
   }
 }
 
-/** The refusal message for an output-scan failure (the law). */
+/**
+ * The refusal message for an output-scan failure. Its repair hint never tells
+ * you to allowlist a non-public var: only a public-prefixed var can ever be
+ * added to PUBLIC_BUILD_ENV, and a secret is never renamed into one.
+ */
 export function outputScanRefusal(app: string, findings: readonly string[]): string {
-  return refusalMessage(
-    app,
-    findings,
-    "an emitted file carries the value of a build env var (ground-truth output scan — the law)",
+  return (
+    `[apps/${app}] refusing to build: an emitted file carries the value of a build env var ` +
+    "(ground-truth output scan — the second net).\n" +
+    findings.map((p) => `  - ${p}`).join("\n") +
+    "\n  Fix: find the route that inlined the value (a vite `define`, next.config `env` / " +
+    "`compiler.define`, Expo `extra`, a `process.env.X` read in client code) and remove it; a " +
+    "server credential belongs behind a server route (browser Solana RPC: " +
+    "https://api.motebit.com/v1/solana-rpc, key held as SOLANA_RPC_UPSTREAM_URL in services/proxy). " +
+    "Or unset the var from this build's environment (Vercel project env / .env* in the app dir). " +
+    "Never rename a non-public var to a VITE_ / NEXT_PUBLIC_ / EXPO_PUBLIC_ name to pass. Only a " +
+    `var that ALREADY carries a public prefix and is genuinely public may be added to PUBLIC_BUILD_ENV.${app} ` +
+    "(with a value validator and a why). Law: scripts/lib/client-bundle-secrets.ts."
   );
 }

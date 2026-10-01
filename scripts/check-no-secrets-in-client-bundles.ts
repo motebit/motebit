@@ -11,10 +11,15 @@
  * 1M/1M credits and the provider halted every key on it. No gate looked at
  * public env names or at built bundles, so nothing went red.
  *
- * THE LAW (cold review R3) is the ground-truth OUTPUT scan
+ * The guarantee (the browser never holds a provider key) rests on the
+ * services/proxy `/v1/solana-rpc` passthrough and the deny-by-default per-var
+ * allowlist + validators (`PUBLIC_BUILD_ENV`) — the primary control. The
+ * SECOND NET (cold review R3) is the ground-truth OUTPUT scan
  * (`scanOutputForEnvValues`, scripts/check-client-build-output.ts): every build
  * env value, minus the stated exclusion rule, must be absent from every emitted
- * file. Each governed surface runs it from its own build (package.json `build`,
+ * file — full value raw / URL / JSON once+twice / base64 at all alignments;
+ * fragments only for secret-named or public-prefixed vars; hex, reversed,
+ * char codes and split strings are a declared limit (not searched for). Each governed surface runs it from its own build (package.json `build`,
  * the Vite guard's `closeBundle`, EAS `eas-build-on-success`); this gate re-runs
  * it over whatever governed output is on disk, refuses a build script that
  * drops it, and refuses a second `vite.config.*` beside a Vite surface's
@@ -560,8 +565,10 @@ async function main(): Promise<void> {
     .map(([a, s]) => `${a} (${s.bundler})`)
     .join(", ");
   console.log(
-    `✓ check-no-secrets-in-client-bundles: THE LAW is the ground-truth output scan (scripts/check-client-build-output.ts — ` +
-      `every build env value, minus the stated exclusion rule, absent from every emitted file; run by each governed surface's ` +
+    `✓ check-no-secrets-in-client-bundles: the second net is the ground-truth output scan (scripts/check-client-build-output.ts — ` +
+      `every build env value, minus the stated exclusion rule, absent from every emitted file: full value raw / url / ` +
+      `json once+twice / base64 at all alignments, fragments only for secret-named or public-prefixed vars; NOT hex, ` +
+      `reversed, char codes or split strings (declared limit — the per-var allowlist guard is the primary control); run by each governed surface's ` +
       `build script / the vite guard's closeBundle / EAS eas-build-on-success, and here over ` +
       `${r.outputScanned.length > 0 ? r.outputScanned.join(", ") : "no governed output on disk — none built"}). ` +
       `Early warnings below (static arms judge source/config, not what ships): ` +

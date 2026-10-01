@@ -23,12 +23,16 @@ import { join, resolve, dirname } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   CREDENTIAL_RULES,
+  OUTPUT_SCAN_EXCLUDED_ENV_NAMES,
+  OUTPUT_SCAN_MIN_LENGTH,
   PUBLIC_BUILD_ENV,
   PUBLIC_ENV_ALLOWLIST,
   PUBLIC_ENV_SURFACES,
   enforcePublicBuildEnv,
   forbiddenEnvValues,
+  fragmentNeedlesApply,
   outputScanExclusion,
+  outputScanRefusal,
   parseDotenv,
   publicValueViolation,
   scanOutputForEnvValues,
@@ -1357,5 +1361,212 @@ describe("R4 (4) long digit runs and short-segment URLs are scanned", () => {
     ]) {
       expect(outputScanExclusion(u, new Set()), u).toBe("credential-free locator");
     }
+  });
+});
+
+/**
+ * Real main commit messages (verbatim excerpts) that false-REDed the docs
+ * build on Vercel as `VERCEL_GIT_COMMIT_MESSAGE` before the needle policy was
+ * narrowed: a letters+digits fragment of 16+ chars (a model id, a package
+ * name) also appears in ordinary docs output.
+ */
+const REAL_COMMIT_MESSAGES = [
+  "fix(ai-core): 'default' tier resolves to the user's model — never the family workhorse (#533) (#534)\n\nThe default tier fell back to claude-sonnet-4-6 even when the user had picked claude-sonnet-5.",
+  "chore(deps): bump @modelcontextprotocol/sdk and vitest-coverage-v8 to the patched majors",
+];
+
+describe("R5 the second net claims only what it checks: needle policy + platform commit metadata", () => {
+  const SECRET = `sk_${fake(AN, 32, 7)}`;
+  const KEYISH = `Zq8Rt3Kx9Wv2mLp7Yb4N`; // a 20-char letters+digits run (fragment-shaped)
+
+  it("platform commit metadata is excluded by EXACT name — never a pattern", () => {
+    for (const n of [
+      "VERCEL_GIT_COMMIT_MESSAGE",
+      "VERCEL_GIT_COMMIT_AUTHOR_NAME",
+      "VERCEL_GIT_COMMIT_AUTHOR_LOGIN",
+      "VERCEL_GIT_COMMIT_REF",
+      "VITE_VERCEL_GIT_COMMIT_MESSAGE",
+      "NEXT_PUBLIC_VERCEL_GIT_COMMIT_MESSAGE",
+      "GITHUB_REF",
+      "GITHUB_HEAD_REF",
+      "GITHUB_ACTOR",
+    ]) {
+      expect(OUTPUT_SCAN_EXCLUDED_ENV_NAMES.has(n), n).toBe(true);
+      expect(outputScanExclusion(SECRET, new Set(), n), n).toBe("platform commit metadata");
+    }
+    // A name that merely RESEMBLES the list is scanned (no prefix/suffix matching).
+    for (const n of [
+      "VERCEL_GIT_COMMIT_MESSAGE_KEY",
+      "X_VERCEL_GIT_COMMIT_MESSAGE",
+      "VERCEL_GIT_COMMIT_SHA",
+      "vercel_git_commit_message",
+      "GITHUB_TOKEN",
+    ]) {
+      expect(outputScanExclusion(SECRET, new Set(), n), n).toBeNull();
+    }
+    // The list is small and named; every entry is commit metadata, never a credential name.
+    expect(OUTPUT_SCAN_EXCLUDED_ENV_NAMES.size).toBeLessThanOrEqual(20);
+    for (const n of OUTPUT_SCAN_EXCLUDED_ENV_NAMES) {
+      expect(isSecretShapedEnvName(n), n).toBe(false);
+    }
+  });
+
+  it("fragments are needles only for secret-shaped names and public-prefixed vars", () => {
+    expect(fragmentNeedlesApply("HELIUS_API_KEY")).toBe(true);
+    expect(fragmentNeedlesApply("SOLANA_RPC_URL")).toBe(true);
+    expect(fragmentNeedlesApply("DB_PASSWORD")).toBe(true);
+    expect(fragmentNeedlesApply("VITE_ANYTHING")).toBe(true);
+    expect(fragmentNeedlesApply("NEXT_PUBLIC_VERCEL_URL")).toBe(true);
+    expect(fragmentNeedlesApply("DEPLOY_NOTE")).toBe(false);
+    expect(fragmentNeedlesApply("VERCEL_GIT_COMMIT_SHA")).toBe(false);
+    const v = `note: rotated ${KEYISH} today`;
+    expect(valueNeedles(v, { fragments: false }).some((n) => n.encoding.includes("fragment"))).toBe(
+      false,
+    );
+    expect(valueNeedles(v).some((n) => n.encoding === "fragment" && n.needle === KEYISH)).toBe(
+      true,
+    );
+  });
+
+  it("a planted secret-named var goes RED raw, url, json, base64 AND fragment", () => {
+    const v = `${SECRET}/+"q ${KEYISH}`;
+    const b = Buffer.from(v, "utf8");
+    const cases: Record<string, [string, RegExp]> = {
+      raw: [`x=${v}`, /\(raw;/],
+      url: [`a?b=${encodeURIComponent(v)}`, /\(url-encoded;/],
+      json: [JSON.stringify({ k: v }), /\(json-escaped;/],
+      base64: [Buffer.concat([Buffer.from("xy"), b]).toString("base64"), /\(base64 of /],
+      fragment: [`hex(${KEYISH})`, /\(fragment;/],
+    };
+    for (const [label, [text, enc]] of Object.entries(cases)) {
+      const r = scanOutputForEnvValues(
+        "verify",
+        [{ name: "HELIUS_API_KEY", value: v }],
+        [{ label, text }],
+      );
+      expect(r.findings, label).toHaveLength(1);
+      expect(r.findings[0], label).toMatch(enc);
+      expect(r.findings[0]).not.toContain(SECRET);
+    }
+    // An unlisted public-prefixed var gets fragment needles too.
+    const pub = scanOutputForEnvValues(
+      "verify",
+      [{ name: "VITE_NOTE", value: v }],
+      [{ label: "f", text: KEYISH }],
+    );
+    expect(pub.findings.join("\n")).toMatch(/VITE_NOTE \(fragment;/);
+  });
+
+  it("any other var is scanned for its FULL value only: its fragment in output is not a finding", () => {
+    const v = `note: rotated ${KEYISH} today`;
+    const frag = scanOutputForEnvValues(
+      "docs",
+      [{ name: "DEPLOY_NOTE", value: v }],
+      [{ label: "page.html", text: `<p>${KEYISH}</p>` }],
+    );
+    expect(frag.findings).toEqual([]);
+    for (const text of [v, encodeURIComponent(v), Buffer.from(v).toString("base64")]) {
+      const full = scanOutputForEnvValues(
+        "docs",
+        [{ name: "DEPLOY_NOTE", value: v }],
+        [{ label: "page.html", text }],
+      );
+      expect(full.findings.join("\n"), text.slice(0, 8)).toMatch(
+        /carries the value of DEPLOY_NOTE/,
+      );
+    }
+  });
+
+  it("real main commit messages as VERCEL_GIT_COMMIT_MESSAGE never go RED, even when their fragments ship", () => {
+    // The docs output really contains the model id the message names.
+    const out = [
+      {
+        label: "apps/docs/.next/server/app/models.html",
+        text: "<code>claude-sonnet-4-6</code> <code>@modelcontextprotocol/sdk</code> vitest-coverage-v8x",
+      },
+    ];
+    for (const m of REAL_COMMIT_MESSAGES) {
+      expect(m.length).toBeGreaterThan(OUTPUT_SCAN_MIN_LENGTH);
+      for (const name of [
+        "VERCEL_GIT_COMMIT_MESSAGE",
+        "VITE_VERCEL_GIT_COMMIT_MESSAGE",
+        "NEXT_PUBLIC_VERCEL_GIT_COMMIT_MESSAGE",
+      ]) {
+        expect(scanOutputForEnvValues("docs", [{ name, value: m }], out).findings, name).toEqual(
+          [],
+        );
+      }
+      // Without the exact-name exclusion, the narrowed needle policy alone keeps a
+      // non-secret name green (the fragment is not a needle) ...
+      expect(
+        scanOutputForEnvValues("docs", [{ name: "BUILD_DESCRIPTION", value: m }], out).findings,
+      ).toEqual([]);
+    }
+    // ... while the same text under a secret-shaped name is still caught by fragment.
+    expect(
+      scanOutputForEnvValues(
+        "docs",
+        [{ name: "RELEASE_TOKEN", value: REAL_COMMIT_MESSAGES[0]! }],
+        out,
+      ).findings.join("\n"),
+    ).toMatch(/RELEASE_TOKEN \(fragment;/);
+  });
+
+  it("checkBuildOutput (the build-script entry) applies the same policy to a Vercel-like env", () => {
+    const root = join(tmp, "r5-vercel");
+    const full = join(root, "apps", "docs", ".next", "static", "chunks", "a.js");
+    mkdirSync(dirname(full), { recursive: true });
+    writeFileSync(full, `const m="claude-sonnet-4-6";const k=${JSON.stringify(SECRET)};`);
+    const env = {
+      VERCEL: "1",
+      CI: "1",
+      VERCEL_ENV: "preview",
+      VERCEL_URL: "motebit-docs-git-fix-motebit.vercel.app",
+      VERCEL_GIT_COMMIT_MESSAGE: REAL_COMMIT_MESSAGES[0],
+      VERCEL_GIT_COMMIT_AUTHOR_NAME: "Some Author",
+      VERCEL_GIT_COMMIT_REF: "fix/no-browser-provider-keys",
+    };
+    expect(checkBuildOutput("docs", { repo: root, processEnv: env }).findings).toEqual([]);
+    const red = checkBuildOutput("docs", {
+      repo: root,
+      processEnv: { ...env, STRIPE_SECRET_KEY: SECRET },
+    });
+    expect(red.findings.join("\n")).toMatch(/carries the value of STRIPE_SECRET_KEY/);
+    expect(red.excluded["platform commit metadata"]).toBe(3);
+  });
+
+  it("the repair hint never tells you to allowlist a non-public var", () => {
+    const msg = outputScanRefusal("docs", ["x carries the value of STRIPE_SECRET_KEY (raw)"]);
+    expect(msg).toMatch(/Never rename a non-public var/);
+    expect(msg).toMatch(/Only a var that ALREADY carries a public prefix/);
+    expect(msg).not.toMatch(/or — only if it is genuinely public — add it to PUBLIC_BUILD_ENV/);
+  });
+});
+
+describe("R5 mutation pins: json-escaped twice and the latin1 conversion", () => {
+  it("json-escaped twice is the ONLY needle that finds a double-escaped value (no fragment rescue)", () => {
+    // Non-secret name: no fragments. The value has `"` and `\\`, so twice ≠ once ≠ raw.
+    const v = `abc"def\\ghi"jkl mno pqr`;
+    const text = JSON.stringify(JSON.stringify({ k: v }));
+    const hits = valueNeedles(v, { fragments: false }).filter((n) => text.includes(n.needle));
+    expect(hits.map((n) => n.encoding)).toEqual(["json-escaped twice"]);
+    const r = scanOutputForEnvValues(
+      "verify",
+      [{ name: "DEPLOY_NOTE", value: v }],
+      [{ label: "server.js", text }],
+    );
+    expect(r.findings.join("\n")).toMatch(/DEPLOY_NOTE \(json-escaped twice;/);
+  });
+
+  it("a non-ASCII value is found byte-for-byte in output read as latin1 (only via the latin1 conversion)", () => {
+    // Non-secret name; no `"`/`\\`, so raw is the only plain-text form that matches.
+    const v = "café-Überprüfung-naïve-ñandú-ø";
+    const r = plantOutput("r5-latin1", "verify", "dist/assets/u.js", "DEPLOY_NOTE", v);
+    expect(r.findings.join("\n")).toMatch(/DEPLOY_NOTE \(raw;/);
+    const fileText = Buffer.from(`const k=${JSON.stringify(v)};`, "utf8").toString("latin1");
+    const hits = valueNeedles(v, { fragments: false }).filter((n) => fileText.includes(n.needle));
+    expect(hits.map((n) => n.encoding)).toEqual(["raw"]);
+    // The JS string itself (UTF-16 code points) is NOT in the latin1-read file.
+    expect(fileText.includes(v)).toBe(false);
   });
 });
