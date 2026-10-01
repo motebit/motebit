@@ -25,9 +25,11 @@
  * a break would pass with no changeset at all. So the gate runs a second,
  * history check (scripts/lib/api-baseline-history.ts): each tracked baseline
  * as checked out is compared with the same file at `git merge-base HEAD
- * origin/main`. A removed or changed declaration line is BREAKING and needs a
- * pending `major` changeset for that package; only added lines are ADDITIVE
- * and need at least a `minor`. When the merge-base cannot be resolved
+ * origin/main`. The rule is conservative (sound by over-approximation, not a
+ * type checker): only entirely NEW top-level declarations are ADDITIVE and
+ * need at least a `minor`; removing an existing top-level declaration or ANY
+ * change inside one — even an added optional field — is BREAKING and needs a
+ * pending `major` changeset for that package. When the merge-base cannot be resolved
  * (origin/main not fetched, shallow clone) the gate fails closed with a
  * repair instruction — CI checks out with `fetch-depth: 0` for this.
  *
@@ -45,6 +47,7 @@ import {
   checkBaselineHistory,
   classifyBaselineChange,
   pendingBumps,
+  type BaselineChange,
   type HistoryVerdict,
 } from "./lib/api-baseline-history.js";
 
@@ -181,6 +184,22 @@ function listLines(write: (text: string) => void, label: string, lines: string[]
   }
 }
 
+/**
+ * Why an addition inside an existing declaration lands here: the gate's rule
+ * is conservative, not a type checker (scripts/lib/api-baseline-history.ts).
+ */
+const BREAKING_RULE =
+  `    Note: this gate treats ANY change inside an existing declaration as breaking —\n` +
+  `    including an added optional field or union variant — by its conservative rule;\n` +
+  `    only an entirely new top-level declaration is additive. The escape is a \`major\`\n` +
+  `    changeset. (A precise type-compatibility check is a post-freeze follow-up.)\n`;
+
+function listChange(write: (text: string) => void, change: BaselineChange): void {
+  listLines(write, "removed declarations", change.removed);
+  listLines(write, "changed declarations (as at the base)", change.changed);
+  listLines(write, "new declarations", change.added);
+}
+
 /** Run both halves of the gate; returns the process exit code. */
 export function runApiSurfaceGate(opts: GateOptions): number {
   const { root, tracked } = opts;
@@ -305,22 +324,20 @@ export function runApiSurfaceGate(opts: GateOptions): number {
           : classifyBaselineChange(baseline, result.extracted);
       if (change?.kind === "additive") {
         write(
-          `\n  The change is ADDITIVE (declarations only added). Resolution:\n` +
+          `\n  The change is ADDITIVE (only new top-level declarations). Resolution:\n` +
             `    run \`pnpm --filter ${pkg.name} run api:extract\`, commit the updated baseline,\n` +
             `    and add a changeset declaring "${pkg.name}": minor (or higher).\n`,
         );
-        listLines(write, "added", change.added);
+        listLines(write, "new declarations", change.added);
       } else {
         write(
-          `\n  The change is BREAKING (a declaration was removed or changed). Resolution:\n` +
+          `\n  The change is BREAKING (an existing declaration was removed or changed). Resolution:\n` +
+            BREAKING_RULE +
             `    1. Intentional → add a changeset declaring "${pkg.name}": major with a \`## Migration\`\n` +
             `       section, run \`pnpm --filter ${pkg.name} run api:extract\`, and commit the updated baseline.\n` +
             `    2. Accidental → revert the API change.\n`,
         );
-        if (change) {
-          listLines(write, "removed or changed", change.removed);
-          listLines(write, "added", change.added);
-        }
+        if (change) listChange(write, change);
       }
       write("\n");
     }
@@ -334,18 +351,18 @@ export function runApiSurfaceGate(opts: GateOptions): number {
       write(`─── ${v.pkg.name} (${v.pkg.baselinePath}) ───\n`);
       if (v.change.kind === "additive") {
         write(
-          `  ADDITIVE (declarations only added). Resolution: add a changeset declaring\n` +
+          `  ADDITIVE (only new top-level declarations). Resolution: add a changeset declaring\n` +
             `  "${v.pkg.name}": minor (or higher) and commit it.\n`,
         );
-        listLines(write, "added", v.change.added);
+        listLines(write, "new declarations", v.change.added);
       } else {
         write(
-          `  BREAKING (a declaration was removed or changed). Resolution:\n` +
+          `  BREAKING (an existing declaration was removed or changed). Resolution:\n` +
+            BREAKING_RULE +
             `    1. Intentional → add a changeset declaring "${v.pkg.name}": major with a \`## Migration\` section.\n` +
             `    2. Accidental → revert the API change and re-run \`pnpm --filter ${v.pkg.name} run api:extract\`.\n`,
         );
-        listLines(write, "removed or changed", v.change.removed);
-        listLines(write, "added", v.change.added);
+        listChange(write, v.change);
       }
       write("\n");
     }

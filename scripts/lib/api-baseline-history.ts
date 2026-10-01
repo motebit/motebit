@@ -11,21 +11,28 @@
  * (`git merge-base HEAD origin/main`), classifying the difference, and
  * requiring the matching pending changeset for THAT package:
  *
- *   - breaking (any declaration line removed or changed) → `major`
- *   - additive (declaration lines only added)            → `minor` or `major`
- *   - unchanged (identical, or comment/blank-only edits, or pure reordering)
- *     → nothing required
+ *   - breaking (an existing top-level declaration removed, or ANY change
+ *     inside one)                                          → `major`
+ *   - additive (only entirely new top-level declarations)  → `minor` or `major`
+ *   - unchanged (identical, comment/blank-only edits, or reordering whole
+ *     top-level declarations)                              → nothing required
  *   - new (no baseline at the merge-base: the package just became tracked)
  *     → nothing required; the extractor half pins it from here on
  *
- * The classification is line-level, not a type checker. A line is keyed by
- * the chain of enclosing `{`-opening lines above it, so moving a member from
- * one interface to another is a removal, while reordering lines inside one
- * declaration (or reordering whole declarations) is not. An added line is
- * treated as additive even when it would break an implementer (a new
- * REQUIRED interface member); a changed declaration header (e.g. adding
- * `extends`) is treated as breaking. Both err toward naming the change, and
- * a reviewer still sees the baseline diff.
+ * The classification is deliberately not precise: it is SOUND by
+ * over-approximation. The report is split into top-level declarations (each
+ * starts with a column-0 identifier line after its `// @public` comment;
+ * indented lines and column-0 continuations like `} | {` belong to it) keyed
+ * by declaration name. A change is additive ONLY when every difference is a
+ * declaration whose name did not exist at the merge-base and no existing
+ * declaration's text changed. Any textual change inside an existing
+ * declaration — an added, removed, changed or reordered line, in a member list
+ * or a union variant, optional or required — is breaking, after ignoring
+ * comment-only and blank lines. So an added optional field is breaking by this
+ * rule even though it is source-compatible for most callers; the escape is a
+ * `major` changeset. A precise type-compatibility check is a post-freeze
+ * follow-up; a heuristic that tried to be precise line by line was bypassable
+ * (a swap between union variants read as a reorder).
  *
  * Every git child process runs with EVERY `GIT_*` variable removed and
  * `cwd` = the repository root, and only read-only subcommands, so a hook's
@@ -42,69 +49,124 @@ const BUMP_RANK: Record<Bump, number> = { patch: 0, minor: 1, major: 2 };
 
 export interface BaselineChange {
   kind: "unchanged" | "additive" | "breaking" | "new";
-  /** Declaration lines present at the merge-base and gone (or changed) now. */
+  /** First lines of top-level declarations present at the merge-base and gone now. */
   removed: string[];
-  /** Declaration lines present now and absent at the merge-base. */
+  /** First lines (as at the merge-base) of existing declarations whose text changed. */
+  changed: string[];
+  /** First lines of top-level declarations whose name did not exist at the merge-base. */
   added: string[];
 }
 
-/** Lines that carry no declaration: blanks, comments, the report's markdown wrapper. */
-function isNonDeclaration(raw: string, trimmed: string): boolean {
+/** Comment-only lines, which carry no declaration text. */
+function isCommentLine(trimmed: string): boolean {
   return (
-    trimmed === "" ||
     trimmed.startsWith("//") ||
     trimmed.startsWith("/*") ||
     trimmed === "*" ||
     trimmed.startsWith("* ") ||
-    trimmed.startsWith("*/") ||
-    trimmed.startsWith("```") ||
-    raw.startsWith("## ") ||
-    raw.startsWith("> ")
+    trimmed.startsWith("*/")
   );
 }
 
-/** Declaration lines keyed by their enclosing `{` openers (display text kept alongside). */
-function declarationKeys(report: string): Map<string, { count: number; text: string }> {
-  const keys = new Map<string, { count: number; text: string }>();
-  const stack: Array<{ indent: number; line: string }> = [];
-  for (const raw of report.replace(/\r\n/g, "\n").split("\n")) {
-    const trimmed = raw.trim();
-    if (isNonDeclaration(raw, trimmed)) continue;
-    const indent = raw.length - raw.trimStart().length;
-    while (stack.length > 0 && stack[stack.length - 1]!.indent >= indent) stack.pop();
-    const path = stack.map((s) => s.line).join(" › ");
-    const key = `${path}\u0000${trimmed}`;
-    const text = path === "" ? trimmed : `${path} › ${trimmed}`;
-    const entry = keys.get(key);
-    if (entry) entry.count += 1;
-    else keys.set(key, { count: 1, text });
-    if (trimmed.endsWith("{")) stack.push({ indent, line: trimmed });
+/**
+ * The report's code body: the lines inside its ```` ``` ```` fences, or every
+ * line when there is no fence (the markdown wrapper is never declaration text).
+ */
+function reportBody(report: string): string[] {
+  const lines = report.replace(/\r\n/g, "\n").split("\n");
+  if (!lines.some((l) => l.startsWith("```"))) return lines;
+  const body: string[] = [];
+  let inFence = false;
+  for (const line of lines) {
+    if (line.startsWith("```")) inFence = !inFence;
+    else if (inFence) body.push(line);
   }
-  return keys;
+  return body;
 }
 
-/** Lines of `from` not matched (with multiplicity) in `to`. */
-function missingFrom(
-  from: Map<string, { count: number; text: string }>,
-  to: Map<string, { count: number; text: string }>,
-): string[] {
-  const out: string[] = [];
-  for (const [key, { count, text }] of from) {
-    const left = count - (to.get(key)?.count ?? 0);
-    for (let i = 0; i < left; i++) out.push(text);
+const DECLARATION_NAME =
+  /^(?:(?:export|declare|default|abstract|async)\s+)*(?:const\s+enum|interface|type|class|enum|namespace|module|function\*?|const|let|var)\s+([A-Za-z_$][\w$]*)/;
+
+/** Net `{ ( [` minus `} ) ]` on a line, ignoring string and template literals. */
+function bracketDelta(line: string): number {
+  let delta = 0;
+  let quote: string | null = null;
+  for (let i = 0; i < line.length; i++) {
+    const c = line[i]!;
+    if (quote !== null) {
+      if (c === "\\") i++;
+      else if (c === quote) quote = null;
+    } else if (c === '"' || c === "'" || c === "`") quote = c;
+    else if (c === "{" || c === "(" || c === "[") delta++;
+    else if (c === "}" || c === ")" || c === "]") delta--;
   }
-  return out;
+  return delta;
+}
+
+/**
+ * Top-level declarations grouped by name: each value is the sorted list of
+ * the texts declared under that name (overloads and merged declarations
+ * share a name), so reordering whole declarations compares equal.
+ */
+function topLevelDeclarations(report: string): Map<string, { texts: string[]; header: string }> {
+  const decls: Array<{ header: string; lines: string[] }> = [];
+  // Open `{ ( [` of the current declaration (outside string literals): a
+  // column-0 line while any is open is a continuation, never a new declaration,
+  // so an added line can never split off and pass as a new export.
+  let depth = 0;
+  for (const raw of reportBody(report)) {
+    const line = raw.trimEnd();
+    const trimmed = line.trim();
+    if (trimmed === "" || isCommentLine(trimmed)) continue;
+    // The report's own `import` header is not surface: a changed import only
+    // matters through a declaration that uses it, and that declaration changes.
+    if (depth <= 0 && /^import\s/.test(line)) continue;
+    const current = decls[decls.length - 1];
+    const startsDeclaration =
+      current === undefined ||
+      (depth <= 0 &&
+        /^[A-Za-z_$]/.test(line) &&
+        (DECLARATION_NAME.test(line) || /^(?:export|declare)\b/.test(line)));
+    if (startsDeclaration) {
+      decls.push({ header: trimmed, lines: [line] });
+      depth = 0;
+    } else current.lines.push(line);
+    depth += bracketDelta(line);
+  }
+  const byName = new Map<string, { texts: string[]; header: string }>();
+  for (const d of decls) {
+    const name = d.header.match(DECLARATION_NAME)?.[1] ?? d.header;
+    const entry = byName.get(name);
+    if (entry) entry.texts.push(d.lines.join("\n"));
+    else byName.set(name, { texts: [d.lines.join("\n")], header: d.header });
+  }
+  for (const entry of byName.values()) entry.texts.sort();
+  return byName;
 }
 
 /** Classify the change from the merge-base baseline (`null` = absent) to the current one. */
 export function classifyBaselineChange(base: string | null, head: string): BaselineChange {
-  if (base === null) return { kind: "new", removed: [], added: [] };
-  const baseKeys = declarationKeys(base);
-  const headKeys = declarationKeys(head);
-  const removed = missingFrom(baseKeys, headKeys);
-  const added = missingFrom(headKeys, baseKeys);
-  const kind = removed.length > 0 ? "breaking" : added.length > 0 ? "additive" : "unchanged";
-  return { kind, removed, added };
+  if (base === null) return { kind: "new", removed: [], changed: [], added: [] };
+  const baseDecls = topLevelDeclarations(base);
+  const headDecls = topLevelDeclarations(head);
+  const removed: string[] = [];
+  const changed: string[] = [];
+  const added: string[] = [];
+  for (const [name, b] of baseDecls) {
+    const h = headDecls.get(name);
+    if (h === undefined) removed.push(b.header);
+    else if (h.texts.length !== b.texts.length || h.texts.some((t, i) => t !== b.texts[i])) {
+      changed.push(b.header);
+    }
+  }
+  for (const [name, h] of headDecls) if (!baseDecls.has(name)) added.push(h.header);
+  const kind =
+    removed.length > 0 || changed.length > 0
+      ? "breaking"
+      : added.length > 0
+        ? "additive"
+        : "unchanged";
+  return { kind, removed, changed, added };
 }
 
 /** The bump a change requires, or null when it requires none. */

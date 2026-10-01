@@ -823,7 +823,7 @@ export async function probeLeak(): Promise<boolean> {
   {
     script: "check-api-surface",
     proves:
-      "flags a breaking change whose author regenerated and committed the baselines (`api:extract`, as the gate's own resolution text instructs) with no changeset — the history half compares each baseline with the merge-base with origin/main, so a removed declaration line needs a pending `major` even when the extracted surface and the baseline agree again",
+      "flags a breaking change whose author regenerated and committed the baselines (`api:extract`, as the gate's own resolution text instructs) with no changeset — the history half compares each baseline with the merge-base with origin/main, so any change inside an existing top-level declaration needs a pending `major` even when the extracted surface and the baseline agree again",
     perturb: () => {
       // The review-2 bypass, reproduced: narrow crypto's `VerifyResult` in the
       // built .d.ts, then regenerate BOTH affected baselines with the real
