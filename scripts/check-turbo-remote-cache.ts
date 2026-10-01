@@ -46,6 +46,14 @@
  * writes $GITHUB_ENV / $GITHUB_OUTPUT / $GITHUB_PATH / $GITHUB_STATE; and
  * publish/release fetch no CI artifact.
  *
+ * Round 5 (#997): the gate bounded `${{ … }}` at the first `}}`, but GitHub
+ * skips a `}}` inside a '…' literal, so `${{ '}}' && toJSON(secrets) }}`
+ * passed. Expression bounds now follow the runner's TemplateReader exactly,
+ * and a deny-by-default RAW-TEXT CENSUS counts every `secrets` / TURBO_*
+ * credential / `environment:` token in the file bytes and requires the parse
+ * to account for each one at that location — a parse differential can no
+ * longer hide a reference.
+ *
  * The behavioural half — signing, the fatal empty/short key, and "no
  * credentials ⇒ zero remote requests" — is proven by
  * `scripts/probe-turbo-remote-cache-signing.ts` against a local fake cache

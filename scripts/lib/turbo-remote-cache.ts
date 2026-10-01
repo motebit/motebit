@@ -60,6 +60,15 @@
  *          publish.yml / release.yml use no download-artifact, `gh run
  *          download`, or Actions artifacts API path.
  *
+ *     (L5) THE PARSE IS THE RUNNER'S, AND A CENSUS BACKS IT (round 5).
+ *          `${{ … }}` bounds follow GitHub's TemplateReader (a `}}` inside a
+ *          '…' literal does not close; unterminated is refused).
+ *          `raw-census`: every `secrets` before . [ ) } , , every TURBO_*
+ *          credential name and every `environment:` key in the RAW bytes
+ *          must be attributed to a granted parsed reference / the writer's
+ *          turbo-step env / an allowlisted job environment at that exact
+ *          location — whatever the parser failed to see is RED by line.
+ *
  *   3. NOTHING OUTSIDE A WRITER JOB TOUCHES THE REMOTE. Evaluated on a real
  *      YAML parse (block and flow maps, quoted keys, anchors) at workflow, job
  *      (incl. `container.env`) and step level, and on every `run:` script
