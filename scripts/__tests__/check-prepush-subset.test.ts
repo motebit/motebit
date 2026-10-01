@@ -7,7 +7,7 @@
 import { describe, it, expect } from "vitest";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { evaluate, readInputs, canonHash } from "../check-prepush-subset.js";
+import { evaluate, readInputs, canonHash, CI_JOBS, CI_JOB_STEPS } from "../check-prepush-subset.js";
 import { parseSh, walk } from "../lib/posix-sh.js";
 import { MUTANTS, CONTROLS } from "./prepush-subset-mutants.js";
 
@@ -22,6 +22,10 @@ describe("check-prepush-subset over the real hook and ci.yml", () => {
       expect.arrayContaining(["build", "check", "typecheck", "lint", "test", "format", "audit"]),
     );
     expect(e.phases).toBeGreaterThanOrEqual(10);
+  });
+
+  it("pins the steps of EVERY counterpart job (B1: no job left unpinned)", () => {
+    expect(Object.keys(CI_JOB_STEPS).sort()).toEqual(Object.keys(CI_JOBS).sort());
   });
 });
 

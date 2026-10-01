@@ -97,6 +97,8 @@ interface RepoOpts {
   remove?: string[];
   /** Runs after the change is committed (uncommitted/untracked edits). */
   after?: (dir: string) => void;
+  /** Extra files written into origin/main itself (the base commit). */
+  base?: Record<string, string>;
 }
 
 function repoWith(change: Record<string, string>, opts: RepoOpts = {}): string {
@@ -126,6 +128,7 @@ function repoWith(change: Record<string, string>, opts: RepoOpts = {}): string {
     "packages/leaf/src/moved.ts",
     "export const moved = 'a long enough body to rename';\n",
   );
+  for (const [rel, content] of Object.entries(opts.base ?? {})) write(dir, rel, content);
   git(dir, "add", "-A");
   git(dir, "commit", "-qm", "base");
   git(dir, "remote", "add", "origin", origin);
@@ -287,7 +290,6 @@ describe("pre-push hook — scope follows the diff", () => {
       repoWith({
         "packages/leaf/src/index.ts": "export const leaf = 2;\n",
         "packages/other/src/index.ts": "export const other = 2;\n",
-        "tsconfig.base.json": "{}\n",
       }),
     );
     expect(r.status, r.stderr).toBe(0);
@@ -358,6 +360,9 @@ interface Scenario {
 }
 const show = (r: Run) => `status=${r.status}\ncalls=${JSON.stringify(r.calls)}\n${r.stderr}`;
 const testCalls = (r: Run) => r.calls.filter((c) => c.startsWith("turbo run test"));
+/** The test phase ran at FULL width (unfiltered), and only that test call. */
+const allTests = (r: Run) =>
+  JSON.stringify(testCalls(r)) === JSON.stringify(["turbo run test --concurrency=2"]);
 
 const SCENARIOS: Record<string, (hook: string) => Scenario> = {
   /** C1: git quotes non-ASCII paths ("packages/leaf/src/na\303\257ve.ts") unless core.quotePath=false. */
@@ -405,18 +410,111 @@ const SCENARIOS: Record<string, (hook: string) => Scenario> = {
     };
   },
   /** C3: the last changed workspace dir has no package.json → `[ -f ] && printf` is the loop's status. */
+  /**
+   * C3 + A1: the last changed workspace dir has no package.json → it is not a
+   * package, so the path is OUTSIDE every package → every test (deny by default).
+   */
   "changed dir without package.json": (hook) => {
     const r = runHook(repoWith({ "packages/github-action/action.yml": "name: y\n" }, { hook }));
     return {
-      ok: r.status === 0 && /test — SKIPPED/.test(r.stderr) && /gauntlet passed/.test(r.stderr),
+      ok: r.status === 0 && allTests(r) && /gauntlet passed/.test(r.stderr),
       detail: show(r),
     };
   },
+  /** A deleted package's paths sit in no package any more → every test. */
   "deleted package": (hook) => {
     const r = runHook(
       repoWith({}, { hook, remove: ["packages/gone/package.json", "packages/gone/src/index.ts"] }),
     );
-    return { ok: r.status === 0 && /gauntlet passed/.test(r.stderr), detail: show(r) };
+    return {
+      ok: r.status === 0 && allTests(r) && /gauntlet passed/.test(r.stderr),
+      detail: show(r),
+    };
+  },
+  /** A1: spec/ conformance data a package test reads — the hook skipped tests (cold review probe). */
+  "spec/ change runs every test": (hook) => {
+    const r = runHook(
+      repoWith(
+        { "spec/conformance/routing-transcript/corpus.json": '{ "valid": false }\n' },
+        { hook },
+      ),
+    );
+    return { ok: r.status === 0 && allTests(r), detail: show(r) };
+  },
+  /** A1: vitest.shared.ts (every vitest config imports it) — the hook skipped tests. */
+  "vitest.shared.ts change runs every test": (hook) => {
+    const r = runHook(
+      repoWith({ "vitest.shared.ts": "export const exclude = ['**/src/**'];\n" }, { hook }),
+    );
+    return { ok: r.status === 0 && allTests(r), detail: show(r) };
+  },
+  /** A1: a lockfile-only bump — main tested the lockfile-affected packages; the hook skipped tests. */
+  "lockfile-only bump runs every test": (hook) => {
+    const r = runHook(
+      repoWith({ "pnpm-lock.yaml": "lockfileVersion: '9.0'\n# bumped\n" }, { hook }),
+    );
+    return { ok: r.status === 0 && allTests(r), detail: show(r) };
+  },
+  /** A1: a root file next to a package change still widens the test phase. */
+  "root file + package change runs every test": (hook) => {
+    const r = runHook(repoWith({ ...LEAF_CHANGE, "tsconfig.base.json": "{}\n" }, { hook }));
+    return { ok: r.status === 0 && allTests(r), detail: show(r) };
+  },
+  /** A1 allowlist is markdown-only: a non-.md file under docs/ is not scoped. */
+  "non-markdown file under docs/ runs every test": (hook) => {
+    const r = runHook(repoWith({ "docs/operator/compose.example.yml": "x: 1\n" }, { hook }));
+    return { ok: r.status === 0 && allTests(r), detail: show(r) };
+  },
+  /** A1 allowlist (control): docs/**\/*.md and .changeset/*.md stay scoped — no tests. */
+  "allowlisted docs + changeset stay scoped": (hook) => {
+    const r = runHook(
+      repoWith(
+        { "docs/guide.md": "# Guide\n\nMore.\n", ".changeset/x.md": "---\n---\nx\n" },
+        { hook },
+      ),
+    );
+    return {
+      ok: r.status === 0 && testCalls(r).length === 0 && /test — SKIPPED/.test(r.stderr),
+      detail: show(r),
+    };
+  },
+  /** A2: a prettier config inside a package moves CI's whole-repo verdict (cold review probe). */
+  "nested .prettierrc.json triggers whole-repo format": (hook) => {
+    const r = runHook(
+      repoWith({ "packages/leaf/.prettierrc.json": '{ "semi": false }\n' }, { hook }),
+    );
+    return { ok: r.status === 0 && r.calls.includes("format:check"), detail: show(r) };
+  },
+  "nested prettier.config.mjs triggers whole-repo format": (hook) => {
+    const r = runHook(repoWith({ "apps/x/prettier.config.mjs": "export default {};\n" }, { hook }));
+    return { ok: r.status === 0 && r.calls.includes("format:check"), detail: show(r) };
+  },
+  ".editorconfig triggers whole-repo format": (hook) => {
+    const r = runHook(
+      repoWith({ "packages/leaf/.editorconfig": "[*]\nindent_size = 8\n" }, { hook }),
+    );
+    return { ok: r.status === 0 && r.calls.includes("format:check"), detail: show(r) };
+  },
+  "a package.json (prettier key) triggers whole-repo format": (hook) => {
+    const r = runHook(
+      repoWith(
+        { "packages/leaf/package.json": '{ "name": "leaf", "prettier": { "semi": false } }\n' },
+        { hook },
+      ),
+    );
+    return { ok: r.status === 0 && r.calls.includes("format:check"), detail: show(r) };
+  },
+  /** A3: a workspace glob the hook cannot map (examples/*\/*) → package scope unknown → every test. */
+  "unmappable workspace glob runs every test": (hook) => {
+    const r = runHook(
+      repoWith(LEAF_CHANGE, {
+        hook,
+        base: {
+          "pnpm-workspace.yaml": 'packages:\n  - "packages/*"\n  - "apps/*"\n  - "examples/*/*"\n',
+        },
+      }),
+    );
+    return { ok: r.status === 0 && allTests(r), detail: show(r) };
   },
   /** C3: MOTEBIT_PREPUSH_QUIET=1 made the hook's LAST command `[ -z set ] && printf` → exit 1. */
   "MOTEBIT_PREPUSH_QUIET=1 passes silently": (hook) => {
@@ -542,7 +640,107 @@ const HOOK_MUTANTS: { name: string; from: string | RegExp; to: string; killedBy:
     to: "else\n$1_rc=0\n",
     killedBy: "a failing gate blocks",
   },
+  {
+    name: "A1: unscoped-path widening dropped (root files scoped again)",
+    from: 'elif [ -n "$_unscoped_paths" ]; then',
+    to: "elif false; then",
+    killedBy: "spec/ change runs every test",
+  },
+  {
+    name: "A1: allowlist widened from docs/**/*.md to all of docs/",
+    from: "^(docs/.+\\.md|",
+    to: "^(docs/.+|",
+    killedBy: "non-markdown file under docs/ runs every test",
+  },
+  {
+    name: "A1: package.json existence dropped from the in-package test",
+    from: '{ [ -z "$_pd" ] || [ ! -f "$_pd/package.json" ]; }',
+    to: '[ -z "$_pd" ]',
+    killedBy: "deleted package",
+  },
+  {
+    name: "A3: unmappable-workspace-glob fail-closed dropped",
+    from: ' && [ -z "$_ws_unmapped" ]',
+    to: "",
+    killedBy: "unmappable workspace glob runs every test",
+  },
+  {
+    name: "A2: prettier config matched at the repo root only",
+    from: "grep -E '(^|/)(\\.prettierrc",
+    to: "grep -E '^(\\.prettierrc",
+    killedBy: "nested .prettierrc.json triggers whole-repo format",
+  },
+  {
+    name: "A2: prettier.config.* dropped",
+    from: "|prettier\\.config\\.[^/]*",
+    to: "",
+    killedBy: "nested prettier.config.mjs triggers whole-repo format",
+  },
+  {
+    name: "A2: .editorconfig dropped",
+    from: "|\\.editorconfig",
+    to: "",
+    killedBy: ".editorconfig triggers whole-repo format",
+  },
+  {
+    name: 'A2: package manifests dropped (a "prettier" key is config)',
+    from: "|package\\.json|package\\.yaml",
+    to: "",
+    killedBy: "a package.json (prettier key) triggers whole-repo format",
+  },
 ];
+
+/**
+ * The scoped-path allowlist's REASON, pinned. The hook keeps exactly two
+ * outside-package path shapes scoped (no tests): `docs/**\/*.md` and
+ * `.changeset/*.md`. That is sound only while no workspace package's build or
+ * test READS them. This scans every git-tracked non-markdown file under the
+ * workspace roots for a filesystem read / path construction that names a
+ * `docs` or `.changeset` segment, or a `../`-relative path into either.
+ * Aperture: string-literal paths (a path assembled from variables is not
+ * seen) — the same aperture as check-turbo-global-deps' config scan. Adding
+ * a path shape to the allowlist means extending this test with its reason.
+ */
+describe("pre-push hook — scoped-path allowlist", () => {
+  it("the allowlist in the hook is exactly docs/**/*.md and .changeset/*.md", () => {
+    const m = /grep -vE '(\^\([^']*\)\$)' \|\n\s*while IFS= read -r _p/.exec(HOOK_SRC);
+    expect(m?.[1]).toBe("^(docs/.+\\.md|\\.changeset/[^/]+\\.md)$");
+  });
+
+  it("no workspace package reads docs/ or .changeset/ (the allowlist's reason)", () => {
+    const files = spawnSync(
+      "git",
+      ["-c", "core.quotePath=false", "ls-files", "--", "packages", "apps", "services"],
+      { cwd: ROOT, encoding: "utf8" },
+    )
+      .stdout.split("\n")
+      .filter((f) => f && !/\.(md|mdx|txt|png|jpg|jpeg|gif|svg|webp|ico|woff2?|ttf|wasm)$/.test(f));
+    expect(files.length).toBeGreaterThan(500);
+    const READ =
+      /\b(readFileSync|readFile|readdirSync|readdir|existsSync|statSync|createReadStream|join|resolve|new URL|import)\s*\([^)]*["'`](?:\.\.\/)*(?:docs|\.changeset)(?:\/|["'`])/;
+    const REL = /(?:\.\.\/)+(?:docs|\.changeset)\//;
+    const hits: string[] = [];
+    for (const f of files) {
+      let text: string;
+      try {
+        text = readFileSync(join(ROOT, f), "utf8");
+      } catch {
+        continue;
+      }
+      text.split("\n").forEach((line, i) => {
+        const code = line.trim();
+        if (/^(\*|\/\/|\/\*|#)/.test(code)) return; // comments
+        // A markdown link in a string (`[x](../../docs/…)`) is prose, not a read.
+        const stripped = code.replace(/\]\((?:\.\.\/)+(?:docs|\.changeset)\/[^)]*\)/g, "");
+        if (READ.test(stripped) || REL.test(stripped))
+          hits.push(`${f}:${i + 1}: ${code.slice(0, 160)}`);
+      });
+    }
+    expect(hits, "a package reads an allowlisted path — drop it from the hook's allowlist").toEqual(
+      [],
+    );
+  });
+});
 
 describe("pre-push hook — mutant table (every mutant must be killed)", () => {
   for (const m of HOOK_MUTANTS) {

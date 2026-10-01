@@ -115,14 +115,38 @@ if git symbolic-ref -q HEAD >/dev/null 2>&1; then
   # into the whole suite for most core edits. The workspace roots are read
   # from pnpm-workspace.yaml, so a new root is seen without editing this.
   # Unknown roots → `_pkg_scope_ok` stays empty → tests run unfiltered.
+  #
+  # Deny by default (2026-10-01 cold review, A3): pnpm-workspace.yaml must be
+  # ONLY `packages:`, `- root/*` entries, comments and blank lines. Any other
+  # line — a glob the sed below cannot map (`examples/*/*`, `!**/test/**`),
+  # another key, a flow list — means the package set is not what this hook
+  # thinks it is, so `_ws_unmapped` is non-empty and tests run unfiltered.
   _pkg_scope_ok=
   _changed_pkg_dirs=
+  _unscoped_paths=
   _ws_roots=$(sed -E -n 's#^[[:space:]]*-[[:space:]]*["'\'']?([A-Za-z0-9_.-]+)/\*["'\'']?[[:space:]]*$#\1#p' \
     pnpm-workspace.yaml 2>/dev/null | paste -sd'|' -)
-  if [ -n "$_scope_ok" ] && [ -n "$_ws_roots" ]; then
+  _ws_unmapped=$(grep -vE '^[[:space:]]*(#.*)?$|^packages:[[:space:]]*$|^[[:space:]]*-[[:space:]]*["'\'']?[A-Za-z0-9_.-]+/\*["'\'']?[[:space:]]*$' \
+    pnpm-workspace.yaml 2>/dev/null || true)
+  if [ -n "$_scope_ok" ] && [ -n "$_ws_roots" ] && [ -z "$_ws_unmapped" ]; then
     _pkg_scope_ok=1
     _changed_pkg_dirs=$(printf '%s\n' "$_all_changed" | sed -E -n "s#^(($_ws_roots)/[^/]+)/.*#\\1#p" |
       sort -u | while IFS= read -r _d; do if [ -f "$_d/package.json" ]; then printf '%s\n' "$_d"; fi; done)
+    # Deny by default (2026-10-01 cold review, A1): a changed path OUTSIDE
+    # every workspace package — spec/ conformance data a package test reads,
+    # vitest.shared.ts, the root package.json, pnpm-workspace.yaml, the
+    # lockfile, a turbo globalDependency, any other root file, a dir under a
+    # workspace root with no package.json (a deleted package) — can move ANY
+    # package's test verdict, so it widens the test phase to every package.
+    # The ONLY paths that stay scoped are the explicit allowlist below, each
+    # with a reason pinned by a test (pre-push-hook.test.ts, "scoped-path
+    # allowlist"): docs/**/*.md and .changeset/*.md — markdown no workspace
+    # package's build or test reads (prettier still checks them).
+    _unscoped_paths=$(printf '%s\n' "$_all_changed" | grep -vE '^(docs/.+\.md|\.changeset/[^/]+\.md)$' |
+      while IFS= read -r _p; do
+        _pd=$(printf '%s\n' "$_p" | sed -E -n "s#^(($_ws_roots)/[^/]+)/.*#\\1#p")
+        if [ -n "$_p" ] && { [ -z "$_pd" ] || [ ! -f "$_pd/package.json" ]; }; then printf '%s\n' "$_p"; fi
+      done)
   fi
 
   # Full build is required before the drift gates: check-api-surface shells
@@ -200,6 +224,9 @@ if git symbolic-ref -q HEAD >/dev/null 2>&1; then
     if [ -z "$_pkg_scope_ok" ]; then
       run_phase "test (ALL packages — package scope unknown, fail closed; concurrency=$_concurrency)" \
         pnpm turbo run test --concurrency="$_concurrency"
+    elif [ -n "$_unscoped_paths" ]; then
+      run_phase "test (ALL packages — $(printf '%s\n' "$_unscoped_paths" | wc -l | tr -d ' ') changed path(s) outside every package, e.g. $(printf '%s\n' "$_unscoped_paths" | head -n 1); concurrency=$_concurrency)" \
+        pnpm turbo run test --concurrency="$_concurrency"
     elif [ -z "$_changed_pkg_dirs" ]; then
       skip_phase "test" "no workspace package changed; CI runs every suite"
     else
@@ -224,9 +251,16 @@ if git symbolic-ref -q HEAD >/dev/null 2>&1; then
   # Formatting of the files this push changes — same prettier, same
   # extension set as `pnpm format:check` (CI's `format` job, whole repo).
   # Whole-repo instead when the diff is unknown or prettier's own config /
-  # version may have changed (then every file's verdict can move).
+  # version may have changed (then every file's verdict can move). Config is
+  # matched ANYWHERE in the tree, not only at the root (2026-10-01 cold
+  # review, A2: packages/x/.prettierrc.json {semi:false} passed the hook
+  # while CI's format:check failed): .prettierrc*, prettier.config.*,
+  # .prettierignore, .editorconfig, .gitignore (prettier 3 honours both
+  # ignore files), every package.json / package.yaml (a "prettier" key is
+  # config — any manifest counts, deny by default) and the lockfile (version).
   _fmt_exts='ts|tsx|js|jsx|json|md'
-  _fmt_config_changed=$(changed_files .prettierrc .prettierignore package.json pnpm-lock.yaml)
+  _fmt_config_changed=$(printf '%s\n' "$_all_changed" |
+    grep -E '(^|/)(\.prettierrc[^/]*|prettier\.config\.[^/]*|\.prettierignore|\.editorconfig|\.gitignore|package\.json|package\.yaml|pnpm-lock\.yaml)$' || true)
   _fmt_files=$(printf '%s\n' "$_all_changed" | grep -E "\.($_fmt_exts)\$" || true)
   format_changed() {
     printf '%s\n' "$_fmt_files" | while IFS= read -r _f; do if [ -f "$_f" ]; then printf '%s\n' "$_f"; fi; done |

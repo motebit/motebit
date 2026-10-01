@@ -39,6 +39,10 @@
  *     whose `if:`/`needs:` chain is exactly the pinned one (and whose needs
  *     run unconditionally); no step in those jobs writes $GITHUB_ENV /
  *     $GITHUB_PATH or uses an action outside the pinned set;
+ *   - EVERY step of every counterpart job (check, format, gate-effectiveness,
+ *     changes) equals CI_JOB_STEPS exactly, in order — an added, removed or
+ *     changed step (another checkout `ref:`, a `rm -rf` of the tests, an
+ *     `eval`'d $GITHUB_ENV write) is RED until the pinned list is updated;
  *   - the root package.json scripts those forms reach compare by exact value,
  *     and every workspace package's `test:coverage` runs its `test` (plus
  *     coverage), so CI's test:coverage really is a superset of the hook's test.
@@ -110,6 +114,7 @@ const EXACT_COMMANDS = new Set([
   "date +%s",
   "wc -l",
   "tr -d ' '",
+  "head -n 1",
 ]);
 
 /** `exit` is allowed only as the $CI short-circuit. */
@@ -137,6 +142,23 @@ export const ASSIGNMENTS: Record<string, string[]> = {
       `$(sed -E -n 's#^[[:space:]]*-[[:space:]]*["'\\'']?([A-Za-z0-9_.-]+)/\\*["'\\'']?[[:space:]]*$#\\1#p'     pnpm-workspace.yaml 2>/dev/null | paste -sd'|' -)`,
     ),
   ],
+  _ws_unmapped: [
+    ws(
+      String.raw`$(grep -vE '^[[:space:]]*(#.*)?$|^packages:[[:space:]]*$|^[[:space:]]*-[[:space:]]*["'\'']?[A-Za-z0-9_.-]+/\*["'\'']?[[:space:]]*$' pnpm-workspace.yaml 2>/dev/null || true)`,
+    ),
+  ],
+  // Every changed path outside a workspace package, minus the explicit scoped
+  // allowlist (docs/**/*.md, .changeset/*.md) — non-empty ⇒ tests run unfiltered.
+  _unscoped_paths: [
+    "",
+    ws(
+      String.raw`$(printf '%s\n' "$_all_changed" | grep -vE '^(docs/.+\.md|\.changeset/[^/]+\.md)$' |
+      while IFS= read -r _p; do
+        _pd=$(printf '%s\n' "$_p" | sed -E -n "s#^(($_ws_roots)/[^/]+)/.*#\\1#p")
+        if [ -n "$_p" ] && { [ -z "$_pd" ] || [ ! -f "$_pd/package.json" ]; }; then printf '%s\n' "$_p"; fi
+      done)`,
+    ),
+  ],
   _deps_changed: ["$(changed_files pnpm-lock.yaml)"],
   _scripts_changed: ["$(changed_files scripts/ coverage-graduation.json)"],
   _concurrency: ["${MOTEBIT_PREPUSH_CONCURRENCY:-2}"],
@@ -149,7 +171,11 @@ export const ASSIGNMENTS: Record<string, string[]> = {
     ),
   ],
   _fmt_exts: ["'ts|tsx|js|jsx|json|md'"],
-  _fmt_config_changed: ["$(changed_files .prettierrc .prettierignore package.json pnpm-lock.yaml)"],
+  _fmt_config_changed: [
+    ws(
+      String.raw`$(printf '%s\n' "$_all_changed" | grep -E '(^|/)(\.prettierrc[^/]*|prettier\.config\.[^/]*|\.prettierignore|\.editorconfig|\.gitignore|package\.json|package\.yaml|pnpm-lock\.yaml)$' || true)`,
+    ),
+  ],
   _fmt_files: [`$(printf '%s\\n' "$_all_changed" | grep -E "\\.($_fmt_exts)\\$" || true)`],
 };
 
@@ -200,6 +226,161 @@ export const CI_JOBS: Record<string, { if?: string; needs?: string }> = {
     if: "github.event_name == 'push' ||\nneeds.changes.outputs.scripts == 'true'\n",
   },
   changes: {},
+};
+/**
+ * EVERY step of every counterpart job, exactly (name, uses, with, run, if,
+ * env, continue-on-error, id — the whole step object, in order). Deny by
+ * default (2026-10-01 cold review, B1): a step inserted before a counterpart
+ * can check out another sha, delete the tests, or write $GITHUB_ENV through
+ * an `eval` no regex sees — and the counterpart's own `run` still matches.
+ * So any added, removed, reordered or changed step is RED; the repair is a
+ * deliberate edit to this list, reviewed against the pre-push ⊆ CI claim.
+ */
+export const CI_JOB_STEPS: Record<string, Step[]> = {
+  check: [
+    {
+      uses: "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+    },
+    {
+      uses: "pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86",
+    },
+    {
+      uses: "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
+      with: {
+        "node-version": "22",
+        cache: "pnpm",
+      },
+    },
+    {
+      name: "Install dependencies",
+      run: "pnpm install --frozen-lockfile",
+    },
+    {
+      name: "Audit",
+      run: "pnpm audit --prod --audit-level=high --ignore-registry-errors",
+    },
+    {
+      name: "Build",
+      run: "pnpm build",
+    },
+    {
+      name: "Drift defenses (deps, specs, service/app primitives, API surface, changeset discipline)",
+      run: "pnpm check",
+    },
+    {
+      name: "Typecheck",
+      run: "pnpm typecheck",
+    },
+    {
+      name: "Lint",
+      run: "pnpm lint",
+    },
+    {
+      name: "Publish-integrity (publint + attw on every published package)",
+      run: "pnpm lint:pack",
+    },
+    {
+      name: "Dead code detection",
+      if: "always()",
+      "continue-on-error": true,
+      run: "pnpm run check-unused",
+    },
+    {
+      name: "Test with coverage",
+      run: "pnpm exec turbo run test:coverage --concurrency=4",
+    },
+    {
+      name: "Coverage summary",
+      if: "always()",
+      run: 'node scripts/coverage-summary.mjs >> "$GITHUB_STEP_SUMMARY"',
+    },
+    {
+      name: "Upload coverage reports",
+      if: "always()",
+      uses: "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
+      with: {
+        name: "coverage-reports",
+        path: "packages/*/coverage/\napps/*/coverage/\nservices/*/coverage/\n",
+        "retention-days": 14,
+      },
+    },
+    {
+      name: "Upload build artifacts for E2E",
+      uses: "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
+      with: {
+        name: "web-build",
+        path: "apps/web/dist/",
+        "retention-days": 1,
+      },
+    },
+  ],
+  format: [
+    {
+      uses: "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+    },
+    {
+      uses: "pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86",
+    },
+    {
+      uses: "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
+      with: {
+        "node-version": "22",
+        cache: "pnpm",
+      },
+    },
+    {
+      name: "Install dependencies",
+      run: "pnpm install --frozen-lockfile",
+    },
+    {
+      name: "Check formatting",
+      run: "pnpm format:check",
+    },
+  ],
+  "gate-effectiveness": [
+    {
+      uses: "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+    },
+    {
+      uses: "pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86",
+    },
+    {
+      uses: "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
+      with: {
+        "node-version": "22",
+        cache: "pnpm",
+      },
+    },
+    {
+      name: "Install dependencies",
+      run: "pnpm install --frozen-lockfile",
+    },
+    {
+      name: "Build",
+      run: "pnpm build",
+    },
+    {
+      name: "Prove every gate in GATES actually fires",
+      run: "pnpm check-gates-effective",
+    },
+    {
+      name: "Run gate self-tests (scripts/__tests__)",
+      run: "pnpm test:gates",
+    },
+  ],
+  changes: [
+    {
+      uses: "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+      with: {
+        "fetch-depth": 0,
+      },
+    },
+    {
+      id: "filter",
+      name: "Detect scripts/ and services/relay/ changes vs base",
+      run: 'scripts=false\nrelay=false\nif [ "${{ github.event_name }}" = "pull_request" ]; then\n  changed=$(git diff --name-only "origin/${{ github.base_ref }}...HEAD")\n  # Probes read repo data outside scripts/ (coverage-graduation.json\n  # is the live example: #589 moved a date there, the probe keyed on\n  # that literal went vacuous, and gate-effectiveness never ran on\n  # the PR because scripts/ was untouched — main went red on push).\n  # A change to a gate INPUT must trigger the same proof as a change\n  # to the gate.\n  if echo "$changed" | grep -qE \'^scripts/|^coverage-graduation\\.json$\'; then\n    scripts=true\n  fi\n  # activation-effectiveness must fire on a relay refactor (the exact\n  # regression it guards: a source change making a booted suite go\n  # vacuous), not only on gate edits.\n  if echo "$changed" | grep -qE \'^services/relay/\'; then\n    relay=true\n  fi\nfi\necho "scripts=$scripts" >> "$GITHUB_OUTPUT"\necho "relay=$relay" >> "$GITHUB_OUTPUT"\necho "scripts/ touched vs \'${{ github.base_ref }}\': $scripts; services/relay/ touched: $relay"\n',
+    },
+  ],
 };
 const JOB_KEYS = new Set(["runs-on", "timeout-minutes", "steps", "needs", "if", "outputs"]);
 const STEP_ACTIONS = [
@@ -514,6 +695,31 @@ export function evaluateCi(
     jobOk.set(name, ok);
   }
 
+  const canon = (v: unknown): string =>
+    JSON.stringify(v, (_k, x: unknown) =>
+      x && typeof x === "object" && !Array.isArray(x)
+        ? Object.fromEntries(
+            Object.entries(x as Record<string, unknown>).sort(([a], [b]) => (a < b ? -1 : 1)),
+          )
+        : x,
+    );
+  for (const [name, pinned] of Object.entries(CI_JOB_STEPS)) {
+    const actual = jobs[name]?.steps ?? [];
+    const n = Math.max(actual.length, pinned.length);
+    let drifted = false;
+    for (let i = 0; i < n; i++) {
+      const a = actual[i];
+      const want = pinned[i];
+      if (canon(a ?? null) === canon(want ?? null)) continue;
+      drifted = true;
+      violations.push(
+        `${CI} job \`${name}\` step ${i + 1} ${a == null ? "was REMOVED" : want == null ? "was ADDED" : "CHANGED"} vs the pinned list: expected ${canon(want ?? null)}, got ${canon(a ?? null)} — every step of a counterpart job is pinned; if the edit is deliberate, review that no step before a counterpart can change what it tests, then update CI_JOB_STEPS in scripts/check-prepush-subset.ts`,
+      );
+      break; // the first drift is the actionable one; later indexes shift with it
+    }
+    if (drifted) jobOk.set(name, false);
+  }
+
   for (const key of [...keys].sort()) {
     const form = CI_FORMS[key];
     const steps = jobs[form.job]?.steps ?? [];
@@ -613,7 +819,7 @@ function main(): void {
       invariant:
         "pre-push ⊆ CI, deny by default — every command the local pre-push hook runs is a pure builtin, an exact allowlisted line, or a run_phase form mapped to a CI step that runs at least as wide (exact `run`, only name/run keys, in a job with the pinned if:/needs: chain, in a workflow on every push to main)",
       sites: violations,
-      canonical: `${CI} (the authority) and ${HOOK} (the fast subset); the allowlists are RUN_PHASE_FORMS / EXACT_COMMANDS / ASSIGNMENTS / PINNED_FUNCTIONS / CI_FORMS / CI_JOBS / ROOT_SCRIPTS in scripts/check-prepush-subset.ts`,
+      canonical: `${CI} (the authority) and ${HOOK} (the fast subset); the allowlists are RUN_PHASE_FORMS / EXACT_COMMANDS / ASSIGNMENTS / PINNED_FUNCTIONS / CI_FORMS / CI_JOBS / CI_JOB_STEPS / ROOT_SCRIPTS in scripts/check-prepush-subset.ts`,
       fix: "Undo the edit, or — if it is deliberate — add its CI counterpart first and then extend the matching table in scripts/check-prepush-subset.ts (a changed pinned function: review it and paste the printed hash into PINNED_FUNCTIONS).",
       doctrine: "docs/drift-defenses.md",
     });

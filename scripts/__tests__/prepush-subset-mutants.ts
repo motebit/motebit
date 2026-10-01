@@ -45,6 +45,7 @@ const BUILD = '  run_phase "build" pnpm build\n';
 const before = (id: string, line: string) => hook(id, BUILD, `${line}\n${BUILD}`);
 const CHECK = 'run_phase "gates (pnpm check)" pnpm check\n';
 const COV = "        run: pnpm exec turbo run test:coverage --concurrency=4\n";
+const TEST_STEP = "      - name: Test with coverage\n";
 
 const m = (id: string, what: string, apply: (i: Inputs) => Inputs): Edit => ({ id, what, apply });
 
@@ -306,6 +307,70 @@ export const MUTANTS: Edit[] = [
     ci("S37", "    needs: changes\n", "    needs: e2e\n"),
   ),
 
+  // --- B1 (cold review, d97e0136d): steps inserted before a counterpart ----
+  // Every step of every counterpart job is pinned (name, uses, with, run, if,
+  // env, continue-on-error) — any added, removed or changed step is RED.
+  m(
+    "B1",
+    "ci: checkout of another sha inserted before Test with coverage",
+    ci(
+      "B1",
+      TEST_STEP,
+      `      - uses: actions/checkout@v4\n        with:\n          ref: 0000000000000000000000000000000000000000\n\n${TEST_STEP}`,
+    ),
+  ),
+  m(
+    "B2",
+    "ci: tests deleted + obfuscated $GITHUB_ENV write before Test with coverage",
+    ci(
+      "B2",
+      TEST_STEP,
+      `      - run: rm -rf packages/*/src/__tests__ && eval "echo SKIP=1 >> $GITHUB_""ENV"\n\n${TEST_STEP}`,
+    ),
+  ),
+  m(
+    "B3",
+    "ci: counterpart step renamed (was a control)",
+    ci("B3", TEST_STEP, "      - name: Tests (with coverage thresholds)\n"),
+  ),
+  m(
+    "B4",
+    "ci: a non-counterpart step removed (Install dependencies in format)",
+    ci(
+      "B4",
+      "      - name: Install dependencies\n        run: pnpm install --frozen-lockfile\n\n      - name: Check formatting\n",
+      "      - name: Check formatting\n",
+    ),
+  ),
+  m(
+    "B5",
+    "ci: setup-node `with` changed in check",
+    ci("B5", /node-version: "?22"?/, "node-version: 18"),
+  ),
+  m(
+    "B6",
+    "ci: changes job checkout loses fetch-depth (the diff the gate job reads)",
+    ci("B6", "          fetch-depth: 0\n", "          fetch-depth: 1\n"),
+  ),
+  m(
+    "B7",
+    "ci: env added to a non-counterpart step in gate-effectiveness",
+    ci(
+      "B7",
+      "      - name: Prove every gate in GATES actually fires\n",
+      "      - name: Prove every gate in GATES actually fires\n        env:\n          MOTEBIT_GATES_SKIP: all\n",
+    ),
+  ),
+  m(
+    "B8",
+    "ci: if: added to the Install step of check",
+    ci(
+      "B8",
+      "      - name: Install dependencies\n",
+      "      - name: Install dependencies\n        if: false\n",
+    ),
+  ),
+
   // --- root + package scripts ---------------------------------------------
   m(
     "S38",
@@ -363,15 +428,6 @@ export const CONTROLS: Edit[] = [
     "K5",
     "hook: the closing banner text reworded",
     hook("K5", "pre-push gauntlet passed in", "pre-push passed in"),
-  ),
-  m(
-    "K6",
-    "ci: counterpart step renamed",
-    ci(
-      "K6",
-      "      - name: Test with coverage\n",
-      "      - name: Tests (with coverage thresholds)\n",
-    ),
   ),
   m("K7", "ci: a comment added", ci("K7", COV, `        # a comment\n${COV}`)),
   m(
