@@ -19,6 +19,7 @@ import type { RelayIdentity } from "./federation.js";
 import { createLogger } from "./logger.js";
 import { grantFreeCreditIfEligible } from "./free-credit.js";
 import { getClientIp } from "./middleware.js";
+import { DEPOSIT_MODELS, modelsForFunding } from "./proxy-token-models.js";
 import {
   getAccountBalance,
   getOrCreateAccount,
@@ -33,40 +34,6 @@ import type { AuthEvent } from "./auth-events.js";
 import { bindCaller, unwrapBound, type BoundIdentity } from "./identity-binding.js";
 
 const logger = createLogger({ service: "relay", module: "proxy-tokens" });
-
-/**
- * Models a token may name once the account has REAL funding (a deposit,
- * settlement earnings — anything that is not the welcome credit). The proxy
- * enforces per-request cost and the spend controls; this list is the ceiling.
- */
-const DEPOSIT_MODELS = [
-  "claude-opus-4-6",
-  "claude-sonnet-4-6",
-  "claude-haiku-4-5-20251001",
-  "gpt-5.4",
-  "gpt-5.4-mini",
-  "gpt-5.4-nano",
-  "gemini-2.5-pro",
-  "gemini-2.5-flash",
-  "gemini-2.5-flash-lite",
-];
-
-/**
- * Models a token may name while the account holds ONLY the welcome credit.
- * The frontier tier is excluded: a $0.10 free identity naming Opus at 16k
- * output tokens in parallel is the exact overspend shape the 2026-09-12
- * audit named. Sonnet/Haiku-class is the honest first taste. The proxy
- * enforces the token's list; the source of funding is knowable only here,
- * where the ledger lives.
- */
-const FREE_CREDIT_MODELS = [
-  "claude-sonnet-4-6",
-  "claude-haiku-4-5-20251001",
-  "gpt-5.4-mini",
-  "gpt-5.4-nano",
-  "gemini-2.5-flash",
-  "gemini-2.5-flash-lite",
-];
 
 /**
  * Has this account ever been funded by something other than the welcome
@@ -88,7 +55,7 @@ export function hasRealFunding(db: DatabaseDriver, motebitId: string): boolean {
 /** The model ceiling for an account, by funding source. Empty when there is no balance. */
 export function modelsForAccount(db: DatabaseDriver, motebitId: string, balance: number): string[] {
   if (balance <= 0) return [];
-  return hasRealFunding(db, motebitId) ? [...DEPOSIT_MODELS] : [...FREE_CREDIT_MODELS];
+  return modelsForFunding(hasRealFunding(db, motebitId));
 }
 
 const PROXY_TOKEN_TTL_MS = 60 * 60 * 1000; // 1 hour

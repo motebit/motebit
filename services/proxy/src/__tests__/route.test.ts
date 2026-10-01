@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import * as validation from "../validation";
 import type { ProxyTokenPayload } from "../validation";
+import { MOTEBIT_CLOUD_TOKEN_MODELS } from "@motebit/sdk";
 
 // Partial-mock the validation module: keep every real function, override only
 // `parseProxyToken` so we can drive the proxy-token balance path without minting
@@ -305,5 +306,75 @@ describe("spend controls — the token snapshot is not the bound", () => {
     const res = await post(BYOK, BODY);
     expect(res.status).toBe(200);
     expect(store.map.size).toBe(0);
+  });
+});
+
+// ── Cloud admission is the sdk's one function (#654 cold review R2) ─────────
+describe("model admission — motebitCloudAdmission is the route's rule", () => {
+  let store: ReturnType<typeof memorySpendStore>;
+  beforeEach(() => {
+    store = memorySpendStore();
+    setSpendStoreForTests(store);
+    process.env.ANTHROPIC_API_KEY = "sk-server-test";
+    process.env.OPENAI_API_KEY = "sk-openai-test";
+  });
+  afterEach(() => {
+    setSpendStoreForTests(undefined);
+    delete process.env.ANTHROPIC_API_KEY;
+    delete process.env.OPENAI_API_KEY;
+  });
+
+  it.each([
+    ["claude-opus", "claude-opus-4-6"],
+    ["claude-opus-4-20250115", "claude-opus-4-6"],
+    ["gpt-4o", "gpt-5.4-mini"],
+  ])("alias %s is admitted and routed upstream as %s", async (sent, routed) => {
+    vi.mocked(validation.parseProxyToken).mockResolvedValue(tokenFor({ models: [] }));
+    const fetchSpy = vi.fn().mockResolvedValue(new Response(sseBody(), { status: 200 }));
+    vi.stubGlobal("fetch", fetchSpy);
+    const res = await post(
+      PROXY,
+      JSON.stringify({ model: sent, messages: [{ role: "user", content: "hi" }] }),
+    );
+    await res.text();
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(String(fetchSpy.mock.calls[0]![1]?.body)).toContain(`"${routed}"`);
+  });
+
+  it.each([
+    ["deposit", "llama-3.3-70b-versatile"],
+    ["deposit", "openai/gpt-oss-120b"],
+    ["free-credit", "claude-opus-4-6"],
+    ["free-credit", "claude-opus"],
+  ] as const)(
+    "#654 R3: a %s token refuses %s with 400 — outside the relay-minted list",
+    async (tier, sent) => {
+      process.env.GROQ_API_KEY = "sk-groq-test";
+      vi.mocked(validation.parseProxyToken).mockResolvedValue(
+        tokenFor({ models: [...MOTEBIT_CLOUD_TOKEN_MODELS[tier]] }),
+      );
+      const fetchSpy = vi.fn();
+      vi.stubGlobal("fetch", fetchSpy);
+      const res = await post(
+        PROXY,
+        JSON.stringify({ model: sent, messages: [{ role: "user", content: "hi" }] }),
+      );
+      delete process.env.GROQ_API_KEY;
+      expect(res.status).toBe(400);
+      expect(((await res.json()) as { error: string }).error).toBe("invalid_model");
+      expect(fetchSpy).not.toHaveBeenCalled();
+    },
+  );
+
+  it("an id outside the catalog (the BYOK default) is 451, never sent upstream", async () => {
+    vi.mocked(validation.parseProxyToken).mockResolvedValue(tokenFor({ models: [] }));
+    const fetchSpy = vi.fn();
+    vi.stubGlobal("fetch", fetchSpy);
+    const res = await post(
+      PROXY,
+      JSON.stringify({ model: "claude-sonnet-5", messages: [{ role: "user", content: "hi" }] }),
+    );
+    expect(res.status).toBe(451);
+    expect(fetchSpy).not.toHaveBeenCalled();
   });
 });

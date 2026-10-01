@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { DEFAULT_LOCAL_SERVER_MODEL } from "@motebit/sdk";
+import { DEFAULT_ANTHROPIC_MODEL, DEFAULT_LOCAL_SERVER_MODEL } from "@motebit/sdk";
 import {
   parseCliArgs,
   printHelp,
@@ -13,7 +13,7 @@ describe("parseCliArgs", () => {
   it("returns defaults when no args provided", () => {
     const config = parseCliArgs([]);
     expect(config.provider).toBe("anthropic");
-    expect(config.model).toBe("claude-sonnet-4-6");
+    expect(config.model).toBe(DEFAULT_ANTHROPIC_MODEL);
     expect(config.dbPath).toBeUndefined();
     expect(config.noStream).toBe(false);
     expect(config.version).toBe(false);
@@ -23,7 +23,7 @@ describe("parseCliArgs", () => {
   it("parses --provider anthropic with default model", () => {
     const config = parseCliArgs(["--provider", "anthropic"]);
     expect(config.provider).toBe("anthropic");
-    expect(config.model).toBe("claude-sonnet-4-6");
+    expect(config.model).toBe(DEFAULT_ANTHROPIC_MODEL);
   });
 
   it("parses --provider local-server with default model", () => {

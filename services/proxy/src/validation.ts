@@ -6,6 +6,7 @@
 import { verifyBySuite } from "@motebit/crypto/suite-dispatch";
 import type { InferenceHost, ModelLab, Jurisdiction, TaskShape } from "@motebit/protocol";
 import { REFERENCE_ROUTING_POLICY } from "@motebit/policy";
+import { MOTEBIT_CLOUD_ACCEPTED_MODELS, motebitCloudAdmission } from "@motebit/sdk";
 
 // Re-export the lifted unions for back-compat with proxy-internal
 // callers. The canonical home is `@motebit/protocol/src/routing.ts`;
@@ -181,43 +182,14 @@ const MODEL_CONFIG: Record<string, ModelEntry> = {
 };
 
 /**
- * Legacy and class-level model aliases → current canonical model ID.
- *
- * Frontends send whatever model string they were built with. The proxy
- * resolves it here. When a new model version ships, update the right-hand
- * side — every deployed client gets the upgrade without a redeploy.
+ * Resolve a model string to its canonical ID. Passthrough if already
+ * canonical or unknown. The alias table is `MOTEBIT_CLOUD_MODEL_ALIASES` in
+ * `@motebit/sdk` and resolution is `motebitCloudAdmission` (#654 cold review
+ * R2): the proxy holds no private copy, so a client pre-flight that runs the
+ * same function can never disagree with this service.
  */
-const MODEL_ALIASES: Record<string, string> = {
-  // Class aliases — "give me the best Sonnet" without caring about the version
-  "claude-sonnet": "claude-sonnet-4-6",
-  "claude-opus": "claude-opus-4-6",
-  "claude-haiku": "claude-haiku-4-5-20251001",
-
-  // Legacy dated versions → current
-  "claude-sonnet-4-20250514": "claude-sonnet-4-6",
-  "claude-opus-4-20250115": "claude-opus-4-6",
-  "claude-3-5-sonnet-20241022": "claude-sonnet-4-6",
-  "claude-3-5-haiku-20241022": "claude-haiku-4-5-20251001",
-  "claude-3-opus-20240229": "claude-opus-4-6",
-
-  // OpenAI aliases
-  "gpt-5": "gpt-5.4",
-  "gpt-4o": "gpt-5.4-mini",
-  "gpt-4o-mini": "gpt-5.4-nano",
-  "gpt-4o-2024-11-20": "gpt-5.4-mini",
-  "gpt-4o-mini-2024-07-18": "gpt-5.4-nano",
-
-  // Google aliases
-  "gemini-pro": "gemini-2.5-pro",
-  "gemini-flash": "gemini-2.5-flash",
-  "gemini-flash-lite": "gemini-2.5-flash-lite",
-  "gemini-1.5-pro": "gemini-2.5-pro",
-  "gemini-1.5-flash": "gemini-2.5-flash",
-};
-
-/** Resolve a model string to its canonical ID. Passthrough if already canonical or unknown. */
 export function resolveModelAlias(model: string): string {
-  return MODEL_ALIASES[model] ?? model;
+  return motebitCloudAdmission(model).resolved || model;
 }
 
 /** The classifier model used for auto-routing. Must be an Anthropic model (classifyTask calls Anthropic API). */
@@ -329,6 +301,10 @@ export function getModelJurisdiction(model: string): Jurisdiction | null {
  *  BYOK mode skips this check entirely (the user's own key, the user's own
  *  choice; sovereignty doctrine stays orthogonal to tier policy). */
 export function isModelAllowedInMotebitCloud(model: string): boolean {
+  // The surfaces derive their Cloud defaults from the same sdk list (#654):
+  // membership here is what makes it ONE set, not a copy that can drift.
+  // `motebit-cloud-accepted.test.ts` pins it to MODEL_CONFIG both ways.
+  if (!(MOTEBIT_CLOUD_ACCEPTED_MODELS as readonly string[]).includes(model)) return false;
   const jurisdiction = getModelJurisdiction(model);
   return jurisdiction != null && MOTEBIT_CLOUD_ALLOWED_JURISDICTIONS.has(jurisdiction);
 }

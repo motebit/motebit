@@ -12,12 +12,17 @@ import { saveFocus, restoreFocus } from "./focus";
 import { saveColdStartOptIn, loadColdStartOptIn } from "../cold-start-optin";
 import {
   ANTHROPIC_MODELS,
+  ANTHROPIC_PICKER,
+  defaultModelForProvider,
+  defaultModelForVendor,
+  pickerOptionsWithStored,
   OPENAI_MODELS,
   GOOGLE_MODELS,
   DEEPSEEK_MODELS,
   GROQ_MODELS,
   LOCAL_SERVER_SUGGESTED_MODELS,
   PROXY_MODELS,
+  motebitCloudAdmission,
   APPROVAL_PRESET_CONFIGS,
   type ApprovalPreset,
   type GovernanceConfig,
@@ -34,6 +39,13 @@ import { ELEVENLABS_VOICES, DEEPGRAM_VOICES } from "@motebit/voice";
 import { settingsPatch } from "./settings-config";
 import { updateConfig } from "../config-update";
 import { mountMachines } from "./machines-section";
+
+// The Cloud picker offers only ids the shared admission function admits
+// (#654): a PROXY_MODELS row a minted token refuses (400) is never offered.
+// Filtered, never hand-edited — the sdk admission rule stays the one source.
+const CLOUD_PICKER_MODELS: readonly string[] = PROXY_MODELS.filter(
+  (m) => motebitCloudAdmission(m).admitted,
+);
 
 // === DOM Refs ===
 
@@ -232,11 +244,25 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
               : provider === "local-server"
                 ? LOCAL_SERVER_MODELS
                 : provider === "proxy"
-                  ? PROXY_MODELS
+                  ? CLOUD_PICKER_MODELS
                   : ANTHROPIC_MODELS;
 
     // (API key field visibility is governed by mode-section-byok's `.active`
     // class — no per-provider inline display hack needed.)
+
+    if (provider === "anthropic") {
+      // Curated sdk picker rows (#654); a stored non-picker id is prepended
+      // and stays selected — never migrated.
+      for (const row of pickerOptionsWithStored(currentModel)) {
+        const opt = document.createElement("option");
+        opt.value = row.id;
+        opt.textContent = row.label;
+        settingsModelSelect.appendChild(opt);
+        if (row.selected) opt.selected = true;
+      }
+      syncModelHiddenField();
+      return;
+    }
 
     for (const model of models) {
       const opt = document.createElement("option");
@@ -323,7 +349,14 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
   }
 
   function populateCloudModeModels(currentModel?: string): void {
-    fillModelSelect(settingsCloudModel, PROXY_MODELS, currentModel);
+    // No stored model ⇒ pre-select the sdk's Cloud default (#654 cold
+    // review). Left to the browser, the select fell to PROXY_MODELS[0]
+    // (a picker row the proxy's catalog lacks), which Motebit Cloud refuses (451).
+    fillModelSelect(
+      settingsCloudModel,
+      CLOUD_PICKER_MODELS,
+      currentModel != null && currentModel !== "" ? currentModel : defaultModelForProvider("proxy"),
+    );
   }
 
   function populateByokModeModels(
@@ -341,11 +374,24 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
               ? GROQ_MODELS
               : ANTHROPIC_MODELS;
     settingsByokModels.innerHTML = "";
-    for (const model of models) {
-      const opt = document.createElement("option");
-      opt.value = model;
-      settingsByokModels.appendChild(opt);
+    if (vendor === "anthropic") {
+      // Curated rows from the sdk picker (#654) — the datalist suggests, the
+      // text field still accepts any id (Fable 5.1, a pinned older model).
+      for (const row of ANTHROPIC_PICKER) {
+        const opt = document.createElement("option");
+        opt.value = row.id;
+        opt.label = row.label;
+        settingsByokModels.appendChild(opt);
+      }
+    } else {
+      for (const model of models) {
+        const opt = document.createElement("option");
+        opt.value = model;
+        settingsByokModels.appendChild(opt);
+      }
     }
+    // Empty field ⇒ the vendor default is what runs; say so.
+    settingsByokModel.placeholder = defaultModelForVendor(vendor);
     if (currentModel != null && currentModel !== "") {
       settingsByokModel.value = currentModel;
     }

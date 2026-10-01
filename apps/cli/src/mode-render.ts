@@ -6,7 +6,7 @@
  *
  * Register: one dim line, no box-drawing frame — the surface reads as an
  * application because its state is legible, not because it is boxed.
- *   ── claude-opus-4-6 · anthropic
+ *   ── <model id> · anthropic
  *   ── attached · coordinator pid 4211
  */
 

@@ -10,11 +10,11 @@ import {
   calculateCostMicro,
   getModelProvider,
   getProviderCatalog,
-  resolveModelAlias,
   CLASSIFIER_MODEL,
   AUTO_DEFAULT_MODEL,
 } from "../../../validation";
 import { isTaskShape, type RoutingConstraint } from "@motebit/protocol";
+import { motebitCloudAdmission } from "@motebit/sdk";
 import { dispatchRouting, applyBalanceFilter, REFERENCE_ROUTING_POLICY } from "@motebit/policy";
 // Provider request shaping (incl. Anthropic prompt-caching) lives in a pure,
 // unit-tested sibling module — the edge route is glue, the cost-critical request
@@ -370,8 +370,17 @@ export async function POST(request: Request): Promise<Response> {
   // Resolve legacy/class aliases → current canonical model ID.
   // "claude-sonnet" → "claude-sonnet-4-6", old dated versions → current, etc.
   // Keeps deployed clients working when models are upgraded server-side.
+  // ONE function (#654 cold review R2): `motebitCloudAdmission` from
+  // `@motebit/sdk` is the alias step AND the Cloud admission verdict, and
+  // every client pre-flight runs the same function — a client can never
+  // refuse or rewrite a model this route serves. It is asked about the
+  // presented token's model list (the relay mints that list from the same
+  // sdk table, #654 R3), so the 400 below is its verdict too.
+  const cloudAdmission = motebitCloudAdmission(resolvedModel, {
+    tokenModels: tokenPayload?.models ?? [],
+  });
   if (resolvedModel !== "auto") {
-    resolvedModel = resolveModelAlias(resolvedModel);
+    resolvedModel = cloudAdmission.resolved;
   }
 
   // Auto-routing: classify with Haiku, then dispatch through the
@@ -463,12 +472,9 @@ export async function POST(request: Request): Promise<Response> {
   // decision; PR 4a (this) only plumbs the data through.
 
   if (authMode === "proxy-token" && tokenPayload) {
-    // "auto" is always allowed; for specific models check the allowlist
-    if (
-      body.model !== "auto" &&
-      tokenPayload.models.length > 0 &&
-      !tokenPayload.models.includes(resolvedModel)
-    ) {
+    // "auto" is always allowed; for specific models the token's list decides
+    // (`motebitCloudAdmission` was asked with it above).
+    if (cloudAdmission.refusal === "token_model") {
       return released(
         failureResponse({
           requestId,
@@ -492,7 +498,12 @@ export async function POST(request: Request): Promise<Response> {
     // jurisdictional policy is explicitly widened. BYOK mode bypasses
     // this filter (the user's own key, the user's own choice; sovereignty
     // doctrine stays orthogonal to tier policy).
-    if (resolvedModel !== "auto" && !isModelAllowedInMotebitCloud(resolvedModel)) {
+    // `cloudAdmission` is the requested id's verdict; the second clause
+    // re-checks the id an auto-route picked (the requested id was "auto").
+    if (
+      !cloudAdmission.admitted ||
+      (resolvedModel !== "auto" && !isModelAllowedInMotebitCloud(resolvedModel))
+    ) {
       return released(
         failureResponse({
           requestId,

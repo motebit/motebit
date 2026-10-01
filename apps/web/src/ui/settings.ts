@@ -23,7 +23,9 @@ import { ELEVENLABS_VOICES, DEEPGRAM_VOICES } from "@motebit/voice";
 import { hexPublicKeyToDidKey } from "@motebit/encryption";
 import type { ColorPickerAPI } from "./color-picker";
 import { mountMachines } from "./machines-section";
-import { DEFAULT_ANTHROPIC_MODEL, DEFAULT_GOOGLE_MODEL, isLocalServerUrl } from "@motebit/sdk";
+import { DEFAULT_GOOGLE_MODEL, DEFAULT_PROXY_MODEL, isLocalServerUrl } from "@motebit/sdk";
+import { selectStoredCloudModel, selectStoredModel } from "./cloud-model";
+import { renderAnthropicPicker } from "./anthropic-picker";
 
 /** Which provider tab the UI is showing. Maps from `UnifiedProviderConfig.mode`. */
 type ProviderTab = "proxy" | "anthropic" | "openai" | "ollama" | "webllm";
@@ -184,6 +186,10 @@ function applyGovernanceToRuntime(ctx: WebContext, gov: GovernanceConfig): void 
 
 export function initSettings(ctx: WebContext, deps: SettingsDeps): SettingsAPI {
   const { colorPicker } = deps;
+
+  // The Anthropic <select> ships empty in index.html; fill it with the
+  // canonical rows (default selected) before anything reads its value.
+  renderAnthropicPicker(anthropicModel);
 
   // === Tab Switching (Appearance / Intelligence) ===
 
@@ -1215,6 +1221,12 @@ export function initSettings(ctx: WebContext, deps: SettingsDeps): SettingsAPI {
 
     // Pre-fill from current provider config
     const config = ctx.getConfig();
+    // Anthropic rows come from the sdk picker (#654); a stored non-picker id
+    // is rendered as its own selected row, never migrated.
+    renderAnthropicPicker(
+      anthropicModel,
+      config?.mode === "byok" && config.vendor === "anthropic" ? config.model : undefined,
+    );
     if (config) {
       if (maxTokensSelect) maxTokensSelect.value = String(config.maxTokens ?? 4096);
 
@@ -1222,7 +1234,7 @@ export function initSettings(ctx: WebContext, deps: SettingsDeps): SettingsAPI {
         case "motebit-cloud": {
           switchProviderTab("proxy");
           const cloudModelEl = document.getElementById("cloud-model") as HTMLSelectElement | null;
-          if (cloudModelEl && config.model) cloudModelEl.value = config.model;
+          if (cloudModelEl) selectStoredCloudModel(cloudModelEl, config.model);
           break;
         }
         case "byok": {
@@ -1233,22 +1245,21 @@ export function initSettings(ctx: WebContext, deps: SettingsDeps): SettingsAPI {
           renderByokVendorNote(config.vendor);
           if (config.vendor === "anthropic") {
             anthropicApiKey.value = config.apiKey;
-            if (config.model) anthropicModel.value = config.model;
           } else if (config.vendor === "openai") {
             openaiApiKey.value = config.apiKey;
-            if (config.model) openaiModel.value = config.model;
+            selectStoredModel(openaiModel, config.model);
           } else if (config.vendor === "google") {
             const googleApiKey = document.getElementById(
               "google-api-key",
             ) as HTMLInputElement | null;
             const googleModel = document.getElementById("google-model") as HTMLSelectElement | null;
             if (googleApiKey) googleApiKey.value = config.apiKey;
-            if (googleModel) googleModel.value = config.model ?? DEFAULT_GOOGLE_MODEL;
+            if (googleModel) selectStoredModel(googleModel, config.model ?? DEFAULT_GOOGLE_MODEL);
           } else if (config.vendor === "groq") {
             const groqApiKey = document.getElementById("groq-api-key") as HTMLInputElement | null;
             const groqModel = document.getElementById("groq-model") as HTMLSelectElement | null;
             if (groqApiKey) groqApiKey.value = config.apiKey;
-            if (groqModel) groqModel.value = config.model ?? "llama-3.3-70b-versatile";
+            if (groqModel) selectStoredModel(groqModel, config.model ?? "llama-3.3-70b-versatile");
           } else if (config.vendor === "deepseek") {
             const deepseekApiKey = document.getElementById(
               "deepseek-api-key",
@@ -1257,7 +1268,7 @@ export function initSettings(ctx: WebContext, deps: SettingsDeps): SettingsAPI {
               "deepseek-model",
             ) as HTMLSelectElement | null;
             if (deepseekApiKey) deepseekApiKey.value = config.apiKey;
-            if (deepseekModel) deepseekModel.value = config.model ?? "deepseek-chat";
+            if (deepseekModel) selectStoredModel(deepseekModel, config.model ?? "deepseek-chat");
           }
           break;
         }
@@ -1362,9 +1373,11 @@ export function initSettings(ctx: WebContext, deps: SettingsDeps): SettingsAPI {
     switch (activeProviderTab) {
       case "proxy": {
         // Motebit Cloud — read model from the cloud model selector
+        // `||`, not `??`: a select with nothing selected reads "" — never
+        // persist an empty model (#654 cold review R2).
         const cloudModel =
-          (document.getElementById("cloud-model") as HTMLSelectElement | null)?.value ??
-          DEFAULT_ANTHROPIC_MODEL;
+          (document.getElementById("cloud-model") as HTMLSelectElement | null)?.value ||
+          DEFAULT_PROXY_MODEL;
         config = { mode: "motebit-cloud", model: cloudModel, maxTokens };
         break;
       }

@@ -48,11 +48,12 @@
  *
  * Per the closure pattern in `agility-as-role.md`: `TaskShape` is the
  * role (closed registry); the routing-policy is a consumer-side
- * function. BYOK consumers default to `REFERENCE_ROUTING_POLICY` (the
- * canonical default) but may override.
+ * function. BYOK consumers default to `REFERENCE_BYOK_ROUTING_POLICY` (the
+ * Cloud reference with its Anthropic arms moved to the sdk picker tiers)
+ * but may override.
  */
 
-import type { ByokVendor } from "@motebit/sdk";
+import { pickerModelForTier, type ByokVendor } from "@motebit/sdk";
 import type {
   ProviderCapability,
   RoutingConstraint,
@@ -62,13 +63,32 @@ import type {
 
 import { dispatchRouting, REFERENCE_ROUTING_POLICY } from "./auto-router.js";
 
+/**
+ * BYOK routing policy (#654). `REFERENCE_ROUTING_POLICY` is lifted from the
+ * Cloud proxy's `TASK_MODEL_MAP` and names the models the proxy hosts; a BYOK
+ * Anthropic user routes among the picker tiers instead, so the model a turn
+ * lands on is always one the user could have picked by hand. Non-Anthropic
+ * arms (code → openai, research → google) are unchanged. Cloud routing does
+ * not read this table.
+ */
+export const REFERENCE_BYOK_ROUTING_POLICY: Readonly<Record<TaskShape, string>> = Object.freeze({
+  ...REFERENCE_ROUTING_POLICY,
+  quick: pickerModelForTier("fast"),
+  chat: pickerModelForTier("default"),
+  reasoning: pickerModelForTier("strongest"),
+  creative: pickerModelForTier("default"),
+  math: pickerModelForTier("strongest"),
+});
+
 // === BYOK model catalog =====================================================
 
 /**
  * Per-vendor `ProviderCapability` catalog for BYOK auto-routing.
  * Pricing sourced from `services/proxy/src/validation.ts::MODEL_CONFIG`
- * for the four vendors the proxy hosts (anthropic / openai / google /
- * groq); DeepSeek added here as the BYOK-only fifth vendor.
+ * for openai / google / groq; DeepSeek added here as the BYOK-only
+ * vendor. Anthropic rows follow the sdk picker tiers (#654) at
+ * Anthropic's published first-party per-token rates — BYOK models the
+ * proxy does not host, so they are priced here, not in MODEL_CONFIG.
  *
  * Catalog ordering is the consumer's preference signal — earlier
  * entries are preferred when the dispatcher falls back. Each vendor's
@@ -82,25 +102,27 @@ import { dispatchRouting, REFERENCE_ROUTING_POLICY } from "./auto-router.js";
  * scanner needed.
  */
 export const BYOK_MODEL_CATALOG = {
+  // Anthropic rows are the sdk's `ANTHROPIC_PICKER` tiers (#654) — the same
+  // three models every surface's picker offers, strongest → fast.
   anthropic: [
     {
-      modelName: "claude-opus-4-7",
+      modelName: pickerModelForTier("strongest"),
       host: "anthropic",
       lab: "anthropic",
       jurisdiction: "US",
-      inputCostPerMillion: 5.0,
-      outputCostPerMillion: 25.0,
+      inputCostPerMillion: 4.0,
+      outputCostPerMillion: 20.0,
     },
     {
-      modelName: "claude-sonnet-4-6",
+      modelName: pickerModelForTier("default"),
       host: "anthropic",
       lab: "anthropic",
       jurisdiction: "US",
-      inputCostPerMillion: 3.0,
-      outputCostPerMillion: 15.0,
+      inputCostPerMillion: 2.0,
+      outputCostPerMillion: 10.0,
     },
     {
-      modelName: "claude-haiku-4-5-20251001",
+      modelName: pickerModelForTier("fast"),
       host: "anthropic",
       lab: "anthropic",
       jurisdiction: "US",
@@ -315,7 +337,7 @@ export function extractTaskShape(text: string): TaskShape {
  *   ```ts
  *   const shape = await classifyWithLLM(text, apiKey);
  *   const decision = dispatchRouting(shape, buildByokCatalog(vendor),
- *     constraints ?? {}, REFERENCE_ROUTING_POLICY);
+ *     constraints ?? {}, REFERENCE_BYOK_ROUTING_POLICY);
  *   ```
  *
  * Surfaces that want the cheap heuristic default just call this.
@@ -327,7 +349,7 @@ export function dispatchByokRouting(
 ): RoutingDecision {
   const taskShape = extractTaskShape(text);
   const catalog = buildByokCatalog(vendor);
-  return dispatchRouting(taskShape, catalog, constraints, REFERENCE_ROUTING_POLICY);
+  return dispatchRouting(taskShape, catalog, constraints, REFERENCE_BYOK_ROUTING_POLICY);
 }
 
 /**

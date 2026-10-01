@@ -51,6 +51,7 @@ import { applyMotebitYaml, resolveYamlPath } from "./subcommands/up.js";
 import { formatDiagnostic } from "./yaml-config.js";
 import type { CliConfig } from "./args.js";
 import { loadFullConfig, extractPersonality } from "./config.js";
+import { applyLaunchProvider } from "./provider-config.js";
 import { createRunLedgerReader } from "./run-ledger-reader.js";
 import { LIVENESS_SESSION_GAP_MS } from "./runtime-coverage.js";
 import { handleRelayCommandFrame } from "./relay-command-frame.js";
@@ -157,18 +158,16 @@ export async function handleRun(config: CliConfig): Promise<void> {
     ...extractPersonality(fullConfig),
   };
 
-  if (personalityConfig.default_provider && !process.argv.includes("--provider")) {
-    const validProviders = ["anthropic", "openai", "google", "local-server", "proxy"] as const;
-    if (validProviders.includes(personalityConfig.default_provider)) {
-      config.provider = personalityConfig.default_provider;
-    }
-  }
-  if (
-    personalityConfig.default_model != null &&
-    personalityConfig.default_model !== "" &&
-    !process.argv.includes("--model")
-  ) {
-    config.model = personalityConfig.default_model;
+  // Same derivation as the interactive CLI (#654 cold review): a persisted
+  // default_provider flip re-derives an implicit model, and a default_model
+  // from another provider era yields — never the BYOK default onto proxy.
+  // An explicit --model the provider would not serve fails at start (#654 R3).
+  const launchError = applyLaunchProvider(config, personalityConfig, process.argv, (line) =>
+    console.log(line),
+  );
+  if (launchError != null) {
+    console.error(`Error: ${launchError}`);
+    process.exit(1);
   }
 
   const motebitId = identity.motebit_id;
@@ -1054,18 +1053,14 @@ export async function handleServe(config: CliConfig): Promise<void> {
     ...extractPersonality(fullConfig),
   };
 
-  if (personalityConfig.default_provider && !process.argv.includes("--provider")) {
-    const validProviders = ["anthropic", "openai", "google", "local-server", "proxy"] as const;
-    if (validProviders.includes(personalityConfig.default_provider)) {
-      config.provider = personalityConfig.default_provider;
-    }
-  }
-  if (
-    personalityConfig.default_model != null &&
-    personalityConfig.default_model !== "" &&
-    !process.argv.includes("--model")
-  ) {
-    config.model = personalityConfig.default_model;
+  // Same derivation as the interactive CLI and `motebit daemon` (#654 cold
+  // review) — `motebit serve` had a third private copy.
+  const launchError = applyLaunchProvider(config, personalityConfig, process.argv, (line) =>
+    log(line),
+  );
+  if (launchError != null) {
+    console.error(`Error: ${launchError}`);
+    process.exit(1);
   }
 
   // Build tool registry

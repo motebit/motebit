@@ -131,8 +131,9 @@ function findFiles(dir: string, predicate: (p: string) => boolean): string[] {
  */
 function loadCanonicalClaudeModel(): string | null {
   const text = fs.readFileSync(MODELS_TS, "utf8");
-  // `export const DEFAULT_ANTHROPIC_MODEL = "claude-sonnet-N-M[-DDDDDDDD]";`
-  const pattern = /DEFAULT_ANTHROPIC_MODEL\s*=\s*"(claude-sonnet-\d+-\d+(?:-\d+)?)"\s*;/m;
+  // `export const DEFAULT_ANTHROPIC_MODEL = "claude-sonnet-N[-M][-DDDDDDDD]";`
+  // (#654: `claude-sonnet-5` has no minor — the old N-M shape stopped matching.)
+  const pattern = /DEFAULT_ANTHROPIC_MODEL\s*=\s*"(claude-sonnet-\d+(?:-\d+)*)"\s*;/m;
   const m = text.match(pattern);
   return m ? m[1]! : null;
 }
@@ -157,15 +158,15 @@ function scanDoc(doc: string, canonical: string): Finding[] {
   // default-pinning context, not a bare mention.
   const patterns: RegExp[] = [
     // JSON config: `"default_model": "claude-..."`
-    /"default_model":\s*"(claude-sonnet-\d+-\d+(?:-\d+)?)"/g,
+    /"default_model":\s*"(claude-sonnet-\d+(?:-\d+)*)"/g,
     // Prose: `default_model: "claude-..."`
-    /default_model:\s*"(claude-sonnet-\d+-\d+(?:-\d+)?)"/g,
+    /default_model:\s*"(claude-sonnet-\d+(?:-\d+)*)"/g,
     // CLI flag: `--model claude-...`
-    /--model\s+(claude-sonnet-\d+-\d+(?:-\d+)?)\b/g,
+    /--model\s+(claude-sonnet-\d+(?:-\d+)*)\b/g,
     // Markdown inline-code default examples: `` `claude-sonnet-...` `` near
     // "Default" or "Examples:" — capture only when surrounded by backticks
     // AND in a Default-or-Examples context.
-    /(?:Default model:|Examples?:[^\n]*?)`(claude-sonnet-\d+-\d+(?:-\d+)?)`/g,
+    /(?:Default model:|Examples?:[^\n]*?)`(claude-sonnet-\d+(?:-\d+)*)`/g,
   ];
 
   for (const pattern of patterns) {
@@ -219,11 +220,11 @@ function main(): void {
   for (const f of allFindings) {
     console.error(`  ${f.doc}:${f.line}`);
     console.error(
-      `    \`${f.snippet}\`\n      stale: \`${f.literal}\`\n      canonical: \`${f.canonical}\` (apps/cli/src/args.ts defaultModel)\n`,
+      `    \`${f.snippet}\`\n      stale: \`${f.literal}\`\n      canonical: \`${f.canonical}\` (packages/sdk/src/models.ts DEFAULT_ANTHROPIC_MODEL)\n`,
     );
   }
   console.error(
-    "If the canonical changed, update apps/cli/src/args.ts first; the gate auto-follows.\n" +
+    "If the canonical changed, update DEFAULT_ANTHROPIC_MODEL in packages/sdk/src/models.ts first; the gate auto-follows.\n" +
       "If the doc legitimately references a non-default model, wrap the literal in prose that\n" +
       "doesn't match the default-context patterns (see scanDoc in this file for the list).\n",
   );

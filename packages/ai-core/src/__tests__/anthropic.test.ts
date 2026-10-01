@@ -290,6 +290,11 @@ describe("modelRejectsSamplingParams — Opus 4.7+/Claude-5 request-shape guard"
       "claude-sonnet-5",
       "claude-fable-5",
       "claude-mythos-5",
+      // #654: the picker's strongest tier and the by-id Fable 5.1 — covered by
+      // the existing pattern (regex unchanged), pinned here so a narrowing
+      // of it can't silently re-send `temperature` to them.
+      "claude-opus-5-5",
+      "claude-fable-5-1",
     ]) {
       expect(modelRejectsSamplingParams(m)).toBe(true);
     }

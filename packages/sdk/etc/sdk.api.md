@@ -72,10 +72,26 @@ export interface AIResponse {
 export const ANTHROPIC_CANONICAL_URL = "https://api.anthropic.com";
 
 // @public
-export const ANTHROPIC_MODELS: readonly ["claude-fable-5-1", "claude-fable-5", "claude-opus-5", "claude-opus-4-8", "claude-opus-4-7", "claude-opus-4-6", "claude-sonnet-5", "claude-sonnet-4-6", "claude-haiku-4-5-20251001", "claude-opus-4-5-20251101", "claude-sonnet-4-5-20250929"];
+export const ANTHROPIC_MODELS: readonly ["claude-fable-5-1", "claude-opus-5-5", "claude-fable-5", "claude-opus-5", "claude-opus-4-8", "claude-opus-4-7", "claude-opus-4-6", "claude-sonnet-5", "claude-sonnet-4-6", "claude-haiku-4-5-20251001", "claude-opus-4-5-20251101", "claude-sonnet-4-5-20250929"];
+
+// @public
+export const ANTHROPIC_PICKER: readonly AnthropicPickerOption[];
 
 // @public (undocumented)
 export type AnthropicModel = (typeof ANTHROPIC_MODELS)[number];
+
+// @public (undocumented)
+export interface AnthropicPickerOption {
+    // (undocumented)
+    readonly id: AnthropicModel;
+    // (undocumented)
+    readonly label: string;
+    // (undocumented)
+    readonly tier: AnthropicPickerTier;
+}
+
+// @public
+export type AnthropicPickerTier = "strongest" | "default" | "fast";
 
 // @public
 export interface AppearanceConfig {
@@ -264,7 +280,7 @@ export const DEEPSEEK_CANONICAL_URL = "https://api.deepseek.com";
 export const DEEPSEEK_MODELS: readonly ["deepseek-chat"];
 
 // @public
-export const DEFAULT_ANTHROPIC_MODEL = "claude-sonnet-4-6";
+export const DEFAULT_ANTHROPIC_MODEL = "claude-sonnet-5";
 
 // @public
 export const DEFAULT_APPEARANCE_CONFIG: AppearanceConfig;
@@ -304,6 +320,9 @@ export const DEFAULT_VOICE_CONFIG: VoiceConfig;
 
 // @public
 export const DEFAULT_WEBLLM_MODEL = "Llama-3.2-3B-Instruct-q4f16_1-MLC";
+
+// @public
+export function defaultModelForProvider(provider: ModelDefaultProvider): string;
 
 // @public
 export function defaultModelForVendor(vendor: ByokVendor): string;
@@ -616,7 +635,62 @@ export type ModelCapabilityTier = "frontier" | "capable" | "minimal";
 export function modelCapabilityTier(model: string): ModelCapabilityTier;
 
 // @public
+export type ModelDefaultProvider = "anthropic" | "openai" | "google" | "groq" | "deepseek" | "local-server" | "ollama" | "proxy" | "motebit-cloud";
+
+// @public
 export function modelVendorHint(model: string): "anthropic" | "openai" | "google" | "deepseek" | "groq" | "local" | "unknown";
+
+// @public
+export const MOTEBIT_CLOUD_ACCEPTED_MODELS: readonly ["claude-opus-4-6", "claude-sonnet-4-6", "claude-haiku-4-5-20251001", "gpt-5.4", "gpt-5.4-mini", "gpt-5.4-nano", "gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.5-flash-lite", "llama-3.3-70b-versatile", "openai/gpt-oss-120b"];
+
+// @public
+export const MOTEBIT_CLOUD_AUTO_MODEL = "auto";
+
+// @public
+export const MOTEBIT_CLOUD_CATALOG: MotebitCloudCatalog;
+
+// @public
+export const MOTEBIT_CLOUD_DEPOSIT_MODELS: readonly ["claude-opus-4-6", "claude-sonnet-4-6", "claude-haiku-4-5-20251001", "gpt-5.4", "gpt-5.4-mini", "gpt-5.4-nano", "gemini-2.5-pro", "gemini-2.5-flash", "gemini-2.5-flash-lite"];
+
+// @public
+export const MOTEBIT_CLOUD_FREE_CREDIT_MODELS: readonly ["claude-sonnet-4-6", "claude-haiku-4-5-20251001", "gpt-5.4-mini", "gpt-5.4-nano", "gemini-2.5-flash", "gemini-2.5-flash-lite"];
+
+// @public
+export const MOTEBIT_CLOUD_MODEL_ALIASES: Readonly<Record<string, string>>;
+
+// @public
+export const MOTEBIT_CLOUD_TOKEN_MODELS: Readonly<Record<MotebitCloudFundingTier, readonly string[]>>;
+
+// @public
+export interface MotebitCloudAdmission {
+    readonly admitted: boolean;
+    readonly refusal?: MotebitCloudRefusal;
+    readonly resolved: string;
+}
+
+// @public
+export function motebitCloudAdmission(model: unknown, options?: MotebitCloudAdmissionOptions): MotebitCloudAdmission;
+
+// @public
+export interface MotebitCloudAdmissionOptions {
+    readonly catalog?: MotebitCloudCatalog;
+    readonly tier?: MotebitCloudFundingTier;
+    readonly tokenModels?: readonly string[];
+}
+
+// @public
+export function motebitCloudAdmitsModel(model: string): boolean;
+
+// @public
+export interface MotebitCloudCatalog {
+    // (undocumented)
+    readonly accepted: readonly string[];
+    // (undocumented)
+    readonly aliases: Readonly<Record<string, string>>;
+}
+
+// @public
+export type MotebitCloudFundingTier = "deposit" | "free-credit";
 
 // @public
 export interface MotebitCloudProviderConfig {
@@ -630,6 +704,9 @@ export interface MotebitCloudProviderConfig {
     // (undocumented)
     temperature?: number;
 }
+
+// @public
+export type MotebitCloudRefusal = "token_model" | "not_in_catalog";
 
 // @public (undocumented)
 export interface MotebitState {
@@ -753,6 +830,22 @@ export interface PaidIntentStoreAdapter {
     listOutstanding(motebitId: string): PaidIntentRecord[];
     record(entry: Omit<PaidIntentRecord, "resolution" | "resolved_at">): void;
     resolve(motebitId: string, taskId: string, resolution: "retrieved" | "dismissed", resolvedAt: number): boolean;
+}
+
+// @public
+export function pickerModelForTier(tier: AnthropicPickerTier): AnthropicModel;
+
+// @public
+export function pickerOptionsWithStored(stored?: string | null): PickerRenderOption[];
+
+// @public
+export interface PickerRenderOption {
+    // (undocumented)
+    readonly id: string;
+    // (undocumented)
+    readonly label: string;
+    // (undocumented)
+    readonly selected: boolean;
 }
 
 // @public
