@@ -679,11 +679,12 @@ const CASES: Case[] = [
   {
     // With isolate off (the recorder's collection), a.test.ts mocks the
     // helper and evaluates mid.ts against the mock; b.test.ts then gets the
-    // cached mid.ts, so the real helper — which `vitest run` (isolated) DOES
-    // execute for b.test.ts — is never transformed. Its resolution is.
-    id: "R7 a module the collection only reaches through a vi.mock'd import (isolate off would hide its real load)",
+    // cached mid.ts, so the real helper.js — which `vitest run` (isolated)
+    // DOES execute for b.test.ts — is never transformed. Its resolution is.
+    // tsc reads only helper.d.ts: the JavaScript vitest runs is checked nowhere.
+    id: "R7 JavaScript behind a .d.ts that the collection only reaches through a vi.mock'd import",
     reason: ["loaded"],
-    hidesError: true,
+    hidesError: false,
     build: (f) => {
       vitestPackage(
         f,
@@ -692,14 +693,13 @@ const CASES: Case[] = [
       );
       const vi = "declare const vi: { mock(path: string, factory: () => unknown): void };\n";
       f[`${P}/src/__tests__/a.test.ts`] =
-        `${GLOBALS_TEST}${vi}vi.mock("../../harness/helper", () => ({ helper: 0 }));\nimport { mid } from "./mid";\nexport const m: number = mid;\n// ${"padding so the sequencer runs this larger file first ".repeat(20)}\n`;
+        `${GLOBALS_TEST}${vi}vi.mock("../../harness/helper.js", () => ({ helper: 0 }));\nimport { mid } from "./mid";\nexport const m: number = mid;\n// ${"padding so the sequencer runs this larger file first ".repeat(20)}\n`;
       f[`${P}/src/__tests__/b.test.ts`] =
         `${GLOBALS_TEST}import { mid } from "./mid";\nexport const n: number = mid;\n`;
-      // A computed specifier: tsc never follows it, so (tsconfig.test.json
-      // covering src/ only) the helper is in no program.
       f[`${P}/src/__tests__/mid.ts`] =
-        'const p = "../../harness/helper";\nexport const mid: number = ((await import(p)) as { helper: number }).helper;\n';
-      f[`${P}/harness/helper.ts`] = `export const helper: number = 1;\n${TYPE_ERROR}`;
+        'import { helper } from "../../harness/helper.js";\nexport const mid: number = helper;\n';
+      f[`${P}/harness/helper.js`] = "export const helper = 1;\n";
+      f[`${P}/harness/helper.d.ts`] = "export declare const helper: number;\n";
       return P;
     },
   },
