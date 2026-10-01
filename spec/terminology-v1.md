@@ -142,7 +142,7 @@ These rules bind every wire term defined below unless its entry records a deviat
 
 - **Definition:** a declared outcome (a natural-language `prompt`) with a schedule, pursued by runs; each run may create a plan and tasks. The schedule is a `mode` (`recurring | once` today; other values reserved) and, for a recurring goal, a cadence `interval_ms` in milliseconds. There is no strategy field. A goal is declared by the user, or by the motebit itself as a child of a goal it is running (the `create_sub_goal` tool, which sets `parent_goal_id`).
 - **Layer:** protocol (`GoalId`, goal lifecycle events), runtime.
-- **Wire:** `goal_id`; `goal_*` events; schedule fields `mode` (string) and `interval_ms` (integer, absent for one-shot goals) on `goal_created`; see [`goal-lifecycle-v1.md`](goal-lifecycle-v1.md).
+- **Wire:** `goal_id`; `goal_*` events; schedule fields `mode` (string) and `interval_ms` (integer, optional — the cadence of a recurring goal; MAY be absent, e.g. on a revision, and MAY be present on a `once` goal, where it does not make the goal repeat) on `goal_created`; see [`goal-lifecycle-v1.md`](goal-lifecycle-v1.md).
 - **Standard:** novel.
 - **Forbidden synonyms:** task, job, intent (reserved for `IntentOrigin`), objective.
 
@@ -291,7 +291,7 @@ These rules bind every wire term defined below unless its entry records a deviat
 - **Definition:** the closed set of ways a priced task is paid:
   - `relay` — **relay-custody**: the delegator's funds are held in a relay-run virtual account; the relay debits the delegator, credits the worker and deducts its fee at the account boundary.
   - `p2p` — **agent-custody**: the delegator pays the worker directly on-chain; the relay's fee is a composed leg of the same atomic transaction; the relay verifies and records it but never transmits the principal.
-    `WritableSettlementMode` restricts typed new worker-settlement writes to `p2p`. The reference relay still writes `relay` on its carve-out paths — self-delegation, zero-cost delegation, legacy non-P2P paths that predate the submission gate, and paid sub-receipts nested in a parent receipt (multi-hop) — so `relay` appears on new records as well as existing ones.
+    `WritableSettlementMode` restricts typed new worker-settlement writes to `p2p`. The reference relay still writes `relay` on its carve-out paths — self-delegation, zero-cost delegation, x402-paid submissions (the payment verified and settled to the relay treasury before admission; the row carries `x402_tx_hash`), legacy non-P2P paths that predate the submission gate, and paid sub-receipts nested in a parent receipt (multi-hop) — so `relay` appears on new records as well as existing ones.
 - **Layer:** protocol (`SettlementMode`, `ALL_SETTLEMENT_MODES`).
 - **Wire:** string values `relay | p2p`. See [`settlement-v1.md`](settlement-v1.md).
 - **Standard:** novel.
