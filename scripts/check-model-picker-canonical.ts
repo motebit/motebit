@@ -41,8 +41,9 @@
  *
  *   Decoding (#654 cold review R2): a line ending in `\` is joined to the
  *   next (string continuation) and `\uXXXX` / `\u{…}` / `\xNN` / `&#…;`
- *   escapes are decoded BEFORE the rules run, so `"claude-\⏎sonnet-5"` and
- *   `"\u0063laude-sonnet-5"` are the token they spell.
+ *   escapes — plus legacy octal `\143` and identity escapes `\-` — are
+ *   decoded BEFORE the rules run, so `"claude-\⏎sonnet-5"`,
+ *   `"\u0063laude-sonnet-5"` and `"claude\-opus-5-5"` are the token they spell.
  *
  *   What the scan cannot see: an id assembled from pieces that never spell
  *   `claude` next to a quote (`"cla" + "ude-…"`, a lookup table keyed by
@@ -316,7 +317,8 @@ function readText(rel: string): string | null {
  *   - an ESCAPE — `\u0063laude`, `\u{63}laude`, `\x63laude`, `&#99;laude`,
  *     `&#x63;laude` all decode to `claude`, as do zero-padded forms
  *     (`\u{0000063}`, `&#0000000099;`, `&#x00000063;`) and numeric references
- *     without the `;` (`&#99laude`, `claude&#45sonnet`).
+ *     without the `;` (`&#99laude`, `claude&#45sonnet`), legacy octal
+ *     (`\143laude`) and identity escapes (`claude\-opus-5-5`, `\claude`).
  *
  * Continuations are joined into one logical line (reported at its first
  * physical line), then escapes are decoded before the rules run.
@@ -349,12 +351,28 @@ function decodeEscapes(line: string): string {
   const cp = (n: number): string => (n >= 0 && n <= 0x10ffff ? String.fromCodePoint(n) : "");
   return (
     line
-      // Leading zeros are unbounded (`\u{0000063}`, `&#0000000099;`) and a
-      // numeric reference's `;` is optional (`&#99laude`, `claude&#45sonnet`) —
-      // both are how JS and HTML parsers read them (#654 cold review R3).
-      .replace(/\\u\{0*([0-9a-f]{1,6})\}/gi, (_m, h: string) => cp(parseInt(h, 16)))
-      .replace(/\\u([0-9a-f]{4})/gi, (_m, h: string) => cp(parseInt(h, 16)))
-      .replace(/\\x([0-9a-f]{2})/gi, (_m, h: string) => cp(parseInt(h, 16)))
+      // ONE left-to-right pass over backslash escapes, so `\\` (a literal
+      // backslash) consumes its pair and never starts a second escape.
+      // Leading zeros are unbounded (`\u{0000063}`) (#654 cold review R3).
+      // Legacy octal (`\143` = `c`, sloppy-mode .js / inline <script>) and
+      // IDENTITY escapes — a backslash before a char with no escape meaning
+      // (`\-` = `-`, `\c` = `c`; node and tsc --strict both accept them in
+      // strings) — decode to the char they spell (#654 lane split). The
+      // recognised single-char escapes (\b \f \n \r \t \v) stay verbatim:
+      // they spell control chars, never an id letter.
+      .replace(
+        /\\(?:u\{0*([0-9a-f]{1,6})\}|u([0-9a-f]{4})|x([0-9a-f]{2})|([0-3][0-7]{0,2}|[4-7][0-7]?)|([bfnrtv])|([\s\S]))/gi,
+        (m, ub?: string, u4?: string, x2?: string, oct?: string, ctl?: string, id?: string) => {
+          if (ub != null) return cp(parseInt(ub, 16));
+          if (u4 != null) return cp(parseInt(u4, 16));
+          if (x2 != null) return cp(parseInt(x2, 16));
+          if (oct != null) return cp(parseInt(oct, 8));
+          if (ctl != null) return m;
+          return id ?? m;
+        },
+      )
+      // A numeric reference's `;` is optional (`&#99laude`, `claude&#45sonnet`) —
+      // how HTML parsers read them.
       .replace(/&#x0*([0-9a-f]{1,6});?/gi, (_m, h: string) => cp(parseInt(h, 16)))
       .replace(/&#0*(\d{1,7});?/g, (_m, d: string) => cp(parseInt(d, 10)))
   );
@@ -405,7 +423,7 @@ function main(): void {
   const pairs = ALLOWLIST.reduce((n, a) => n + a.ids.length, 0);
 
   console.log(
-    `▸ check-model-picker-canonical — aperture: ${textFiles} text file(s) of ${files.length} git-tracked/untracked-unignored path(s) under apps/ (all extensions, case-insensitive, comments included); ${seenAllow.size} of ${pairs} allowlisted (file, token) pair(s) matched. Line continuations joined and \\u/\\x/&# escapes decoded before scanning. Dynamically-assembled ids that never spell "claude" beside a quote are NOT seen by this scan; execution tests cover only the five picker/alias consumers — web/desktop/spatial settings-anthropic-picker.test, mobile intelligence-tab-picker.test, CLI slash-model-tiers.test — and no other apps/ code path.`,
+    `▸ check-model-picker-canonical — aperture: ${textFiles} text file(s) of ${files.length} git-tracked/untracked-unignored path(s) under apps/ (all extensions, case-insensitive, comments included); ${seenAllow.size} of ${pairs} allowlisted (file, token) pair(s) matched. Line continuations joined and \\u/\\x/&#, legacy-octal (\\143) and identity (\\-) escapes decoded before scanning. Dynamically-assembled ids that never spell "claude" beside a quote are NOT seen by this scan; execution tests cover only the five picker/alias consumers — web/desktop/spatial settings-anthropic-picker.test, mobile intelligence-tab-picker.test, CLI slash-model-tiers.test — and no other apps/ code path.`,
   );
 
   if (findings.length === 0 && stale.length === 0) {

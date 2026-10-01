@@ -144,3 +144,18 @@ describe("desktop Settings — stored Cloud model is never rewritten (R2)", () =
     },
   );
 });
+
+// Lane split (#654): the Cloud picker offers only ids the shared admission
+// function admits — PROXY_MODELS rows a minted token refuses (400) are never
+// offered. Both the Cloud select and the flat select on provider "proxy".
+describe("desktop Settings — Cloud picker offers only admitted ids", () => {
+  it.each(["settings-cloud-model", "settings-model-select"])(
+    "%s: every offered option is admitted",
+    (id) => {
+      mount({ provider: "proxy", isTauri: false });
+      const offered = Array.from($<HTMLSelectElement>(id).options).map((o) => o.value);
+      expect(offered.length).toBeGreaterThan(0);
+      expect(offered.filter((m) => !motebitCloudAdmission(m).admitted)).toEqual([]);
+    },
+  );
+});

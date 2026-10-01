@@ -19,6 +19,14 @@
  *      spatial's model-field sanitizer — and asserts each agrees with (1),
  *      and that no client path rewrites an id the proxy admits.
  *
+ * CLAIM — scoped to DEPOSIT-funded tokens: every client verdict below is
+ * compared with the proxy route under the token the relay really mints for
+ * a paying (deposit) account. Clients hold no token, so they admit at that
+ * ceiling. Known gap, owned by the Cloud-models lane (not this branch; main
+ * behaves the same): a FREE-CREDIT token mints a narrower list, so a client
+ * can admit an id that token's proxy request refuses (400). The end-game is
+ * clients admitting from the token's own `models` list the relay returns.
+ *
  * Web / desktop / mobile run no Cloud admission at all (they keep the stored
  * id verbatim); their never-rewrite tests live in their own packages.
  */
@@ -297,7 +305,8 @@ afterAll(() => {
 
 const admittedByProxy = (m: string): boolean => verdicts.get(m)!.admitted;
 
-/** Report every disagreement at once, not just the first. */
+/** Client vs the proxy under a DEPOSIT-funded token. Every disagreement at
+ *  once, not just the first. */
 function disagreements(client: (m: string) => boolean): string[] {
   return CORPUS.filter((m) => client(m) !== admittedByProxy(m)).map(
     (m) => `${JSON.stringify(m)}: proxy=${admittedByProxy(m)} client=${client(m)}`,
@@ -306,7 +315,7 @@ function disagreements(client: (m: string) => boolean): string[] {
 
 // ── Assertions ───────────────────────────────────────────────────────────
 
-describe("Motebit Cloud admission — proxy route ⇔ every client (#654 R2)", () => {
+describe("Motebit Cloud admission — proxy route ⇔ every client, deposit-funded token (#654 R2)", () => {
   it(`corpus covers every known id plus 200 garbled strings (${CORPUS.length} ids)`, () => {
     expect(CORPUS.length).toBeGreaterThanOrEqual(GARBLED_COUNT + 50);
     // The R2 witnesses are in it, and the proxy really serves them.

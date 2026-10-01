@@ -22,6 +22,7 @@ import {
   GROQ_MODELS,
   LOCAL_SERVER_SUGGESTED_MODELS,
   PROXY_MODELS,
+  motebitCloudAdmission,
   APPROVAL_PRESET_CONFIGS,
   type ApprovalPreset,
   type GovernanceConfig,
@@ -38,6 +39,13 @@ import { ELEVENLABS_VOICES, DEEPGRAM_VOICES } from "@motebit/voice";
 import { settingsPatch } from "./settings-config";
 import { updateConfig } from "../config-update";
 import { mountMachines } from "./machines-section";
+
+// The Cloud picker offers only ids the shared admission function admits
+// (#654): a PROXY_MODELS row a minted token refuses (400) is never offered.
+// Filtered, never hand-edited — the sdk admission rule stays the one source.
+const CLOUD_PICKER_MODELS: readonly string[] = PROXY_MODELS.filter(
+  (m) => motebitCloudAdmission(m).admitted,
+);
 
 // === DOM Refs ===
 
@@ -236,7 +244,7 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
               : provider === "local-server"
                 ? LOCAL_SERVER_MODELS
                 : provider === "proxy"
-                  ? PROXY_MODELS
+                  ? CLOUD_PICKER_MODELS
                   : ANTHROPIC_MODELS;
 
     // (API key field visibility is governed by mode-section-byok's `.active`
@@ -346,7 +354,7 @@ export function initSettings(ctx: DesktopContext, deps: SettingsDeps): SettingsA
     // (a picker row the proxy's catalog lacks), which Motebit Cloud refuses (451).
     fillModelSelect(
       settingsCloudModel,
-      PROXY_MODELS,
+      CLOUD_PICKER_MODELS,
       currentModel != null && currentModel !== "" ? currentModel : defaultModelForProvider("proxy"),
     );
   }

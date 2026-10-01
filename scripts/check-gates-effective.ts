@@ -1077,6 +1077,15 @@ export async function probeLeak(): Promise<boolean> {
         "apps/web/src/ui/__P__hyph.html",
         '<option value="claude&#45sonnet-5">S</option>\n',
       ],
+      // #654 lane split: identity escapes (a backslash before a char with no
+      // escape meaning — node and tsc --strict read `\-` as `-`) and legacy
+      // octal escapes (sloppy-mode .js / inline <script>).
+      [
+        "identity escape",
+        "apps/web/src/ui/__P__ident.ts",
+        'export const M = "claude\\-opus-5-5";\n',
+      ],
+      ["legacy octal escape", "apps/web/src/ui/__P__octal.js", 'var M = "\\143laude-opus-5-5";\n'],
     ] as const
   ).map(([row, file, body]): Probe => ({
     script: "check-model-picker-canonical",
