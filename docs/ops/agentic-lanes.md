@@ -16,7 +16,7 @@ About **three lanes that write, plus read-only helpers**. Past that, integration
 ## Why the ceiling is where it is
 
 1. **Integration attention.** Every agent ends in a report someone must judge. Reviews find real defects, and each needs a decision: fix, withdraw or escalate.
-2. **Serialized resources.** The pre-push gauntlet takes about 4 minutes, uses a lot of CPU, and is locked by `.motebit-gate.lock`. Relay deploys are serialized, and you must not merge during a gated deploy. A CPU-starved machine produces timing flakes that read as regressions.
+2. **Serialized resources.** The pre-push hook uses a lot of CPU, and its `pnpm check` phase is locked by `.motebit-gate.lock`. Since 2026-09-30 it is a fast gate by scope (target ≤3 min for a single-package change): typecheck + lint over the changed packages and their dependents, tests of the changed packages only, no coverage, prettier on changed files. CI is the authority and runs everything unfiltered; `check-prepush-subset` keeps the hook a subset of CI. A low-level change whose dependents you want proven before CI: `MOTEBIT_PREPUSH_FULL=1 git push`. Relay deploys are serialized, and you must not merge during a gated deploy. A CPU-starved machine produces timing flakes that read as regressions.
 3. **Subsystem overlap.** Two writers on the same subsystem conflict, and the conflict costs more than the parallelism saved.
 
 Before launching, ask: **does this share state with anything in flight?** State means the checkout, a subsystem, the gate lock, or a deploy. If yes, serialize it.

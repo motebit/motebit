@@ -1,5 +1,22 @@
 {
   "$schema": "https://turbo.build/schema.json",
+  "globalDependencies": [
+    ".eslintrc.js",
+    "config/api-extractor.base.json",
+    "DOCTRINE.md",
+    "DROPLET.md",
+    "LIQUESCENTIA.md",
+    "scripts/generate-llms-txt.ts",
+    "THE_ACTOR_PRINCIPLE.md",
+    "THE_CONFERENCE.md",
+    "THE_EMERGENT_INTERIOR.md",
+    "THE_METABOLIC_PRINCIPLE.md",
+    "THE_MUSIC_OF_THE_MEDIUM.md",
+    "THE_SELF_SIGNING_BODY.md",
+    "THE_SOVEREIGN_INTERIOR.md",
+    "tsconfig.base.json",
+    "vitest.shared.ts"
+  ],
   "tasks": {
     "build": {
       "dependsOn": ["^build"],
