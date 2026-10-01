@@ -371,7 +371,9 @@ export interface SyncRelayConfig {
    * aborted (where its client supports it) and abandoned, and the database
    * closes regardless: a peer that accepts and never answers must not hold
    * a shutdown past Fly's `kill_timeout` (5 s). Default
-   * {@link SHUTDOWN_STARTUP_WORK_DEADLINE_MS} (2 s).
+   * {@link SHUTDOWN_STARTUP_WORK_DEADLINE_MS} (2 s). Must be finite, positive
+   * and at most {@link MAX_SHUTDOWN_STARTUP_WORK_DEADLINE_MS} (30 s, the
+   * entry's force-exit); anything else throws a `RangeError` at construction.
    */
   shutdownDeadlineMs?: number;
   /**
@@ -582,6 +584,23 @@ export interface SyncRelay {
  * `kill_timeout`, so the database always closes before the machine is killed.
  */
 export const SHUTDOWN_STARTUP_WORK_DEADLINE_MS = 2_000;
+/**
+ * The largest `shutdownDeadlineMs` accepted: `server.ts` force-exits at 30 s
+ * (`SHUTDOWN_TIMEOUT_MS`), so a longer bound could never be honoured.
+ */
+export const MAX_SHUTDOWN_STARTUP_WORK_DEADLINE_MS = 30_000;
+
+/** `shutdownDeadlineMs` or the default; refuses a value no shutdown could honour. */
+function validShutdownDeadlineMs(ms: number | undefined): number {
+  if (ms === undefined) return SHUTDOWN_STARTUP_WORK_DEADLINE_MS;
+  if (!Number.isFinite(ms) || ms <= 0 || ms > MAX_SHUTDOWN_STARTUP_WORK_DEADLINE_MS) {
+    throw new RangeError(
+      `shutdownDeadlineMs must be a finite number of milliseconds in ` +
+        `(0, ${MAX_SHUTDOWN_STARTUP_WORK_DEADLINE_MS}], got ${String(ms)}`,
+    );
+  }
+  return ms;
+}
 /** Of that deadline, the share left for aborted work to settle and log. */
 const SHUTDOWN_ABORT_GRACE_MS = 100;
 
@@ -629,7 +648,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     startupWork.push(work);
   };
   const shutdownController = new AbortController();
-  const shutdownDeadlineMs = config.shutdownDeadlineMs ?? SHUTDOWN_STARTUP_WORK_DEADLINE_MS;
+  const shutdownDeadlineMs = validShutdownDeadlineMs(config.shutdownDeadlineMs);
   /** `fetch` whose requests the relay's shutdown aborts (on top of the caller's own signal). */
   const shutdownAwareFetch: typeof globalThis.fetch = (input, init) =>
     globalThis.fetch(input, {

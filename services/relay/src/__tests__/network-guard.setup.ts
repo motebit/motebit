@@ -12,20 +12,27 @@
  * The guard fails the test on any non-loopback request, two layers deep:
  *
  *   - `globalThis.fetch` — rejects at once with the URL (the precise message);
- *   - `net.Socket.prototype.connect` — every TCP client (undici's pool,
- *     `http.request`, a captured pre-guard fetch) is refused before it dials.
+ *   - `net.Socket.prototype.connect` — every TCP/TLS client (undici's pool,
+ *     `http(s).request`, `ws`, Stripe, `tls.connect`, a captured pre-guard
+ *     fetch) is refused before it dials. DENY BY DEFAULT: only a provable
+ *     unix socket (non-empty string `path`) or a loopback host is allowed —
+ *     Node's http Agent dials with `{ host, path: null }`, a missing host is
+ *     refused too.
  *
  * A test that stubs `fetch` itself (`vi.stubGlobal`) owns what that stub
  * does; the socket layer still refuses a real dial. Loopback (`localhost`,
  * `127.0.0.0/8`, `::1`) and unix sockets stay open — in-process fakes,
- * the booted-entry harness, fake RPC servers.
+ * the booted-entry harness, fake RPC servers. The decision and both hooks
+ * live in `network-guard-core.mjs`, shared with the guard the booted-entry
+ * harness preloads into every relay CHILD it spawns
+ * (`network-guard.preload.mjs`).
  *
  * Repair: inject the in-process fakes. `createTestRelay()` does it for you;
  * a direct `createSyncRelay({...})` spreads `...TEST_RELAY_NETWORK` from
  * `test-helpers.ts` (the fake facilitator + the deposit detector off).
  */
-import net from "node:net";
 import { afterAll, afterEach } from "vitest";
+import { installFetchGuard, installSocketGuard } from "./network-guard-core.mjs";
 
 const REPAIR =
   "repair: a relay test never reaches the network — use createTestRelay(), or spread " +
@@ -36,71 +43,22 @@ const REPAIR =
 
 const violations: string[] = [];
 
-function isLoopbackHost(host: string | undefined): boolean {
-  if (host === undefined || host === "") return true; // Node defaults to localhost
-  const h = host.replace(/^\[|\]$/g, "").toLowerCase();
-  return (
-    h === "localhost" ||
-    h.endsWith(".localhost") ||
-    h === "::1" ||
-    h === "0:0:0:0:0:0:0:1" ||
-    h === "::ffff:127.0.0.1" ||
-    /^127\.\d+\.\d+\.\d+$/.test(h) ||
-    h === "0.0.0.0"
-  );
-}
-
 function refuse(target: string): Error {
   const line = `relay test reached the network: ${target}`;
   violations.push(line);
   return new TypeError(`${line}\n${REPAIR}`);
 }
 
-const realFetch = globalThis.fetch;
-globalThis.fetch = ((input: string | URL | Request, init?: RequestInit) => {
-  let url: string;
-  try {
-    url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
-    const parsed = new URL(url);
-    if (
-      (parsed.protocol === "http:" || parsed.protocol === "https:" || parsed.protocol === "ws:") &&
-      !isLoopbackHost(parsed.hostname)
-    ) {
-      return Promise.reject(refuse(`fetch ${parsed.origin}${parsed.pathname}`));
-    }
-  } catch {
-    // A relative or unparsable URL never leaves the process — let fetch decide.
-  }
-  return realFetch(input, init);
-}) as typeof globalThis.fetch;
+installFetchGuard(refuse);
+installSocketGuard(refuse);
 
-type ConnectFn = (this: net.Socket, ...args: unknown[]) => net.Socket;
-const realConnect = net.Socket.prototype.connect as unknown as ConnectFn;
-net.Socket.prototype.connect = function guardedConnect(this: net.Socket, ...args: unknown[]) {
-  const first = args[0];
-  let host: string | undefined;
-  let path: string | undefined;
-  if (Array.isArray(first)) {
-    // Internal normalized form: [options, cb].
-    const opts = first[0] as { host?: string; path?: string } | undefined;
-    host = opts?.host;
-    path = opts?.path;
-  } else if (typeof first === "object" && first !== null) {
-    const opts = first as { host?: string; path?: string };
-    host = opts.host;
-    path = opts.path;
-  } else if (typeof first === "string" && Number.isNaN(Number(first))) {
-    path = first; // connect(path) — a unix socket
-  } else {
-    host = typeof args[1] === "string" ? args[1] : undefined;
-  }
-  if (path === undefined && !isLoopbackHost(host)) {
-    const err = refuse(`socket ${host}`);
-    process.nextTick(() => this.destroy(err));
-    return this;
-  }
-  return realConnect.apply(this, args);
-} as typeof net.Socket.prototype.connect;
+/**
+ * The guard's own tests (`network-guard.test.ts`) provoke refusals on
+ * purpose; they drain what they caused so the hooks below see only real ones.
+ */
+(globalThis as Record<symbol, unknown>)[Symbol.for("motebit.relay.networkGuard")] = {
+  drain: (): string[] => violations.splice(0),
+};
 
 function assertNoViolations(): void {
   if (violations.length === 0) return;

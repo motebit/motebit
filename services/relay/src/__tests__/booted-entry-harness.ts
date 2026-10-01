@@ -17,12 +17,27 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { existsSync } from "node:fs";
 import { dirname, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { CHILD_REFUSAL_MARKER } from "./network-guard-core.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SERVER_ENTRY = resolve(HERE, "..", "server.ts");
 const DIST_ENTRY = resolve(HERE, "..", "..", "dist", "server.js");
 export const BOOT_TIMEOUT_MS = 60_000;
+/**
+ * Preloaded into every spawned entry (NODE_OPTIONS `--import`): the child
+ * relay is under the same deny-by-default network guard as the vitest
+ * worker. Each refused dial is one {@link CHILD_REFUSAL_MARKER} line on the
+ * child's stderr — `BootedEntry.egressRefusals()` reads them back.
+ */
+const CHILD_NETWORK_GUARD = pathToFileURL(resolve(HERE, "network-guard.preload.mjs")).href;
+
+/** `NODE_OPTIONS` for a spawned entry: the caller's, plus the network guard preload. */
+export function guardedNodeOptions(base: string | undefined): string {
+  return [base, `--import=${CHILD_NETWORK_GUARD}`]
+    .filter((v) => v !== undefined && v !== "")
+    .join(" ");
+}
 
 export interface EntryTier {
   /** Which rung of the booted-artifact ladder this is. */
@@ -59,6 +74,15 @@ export interface BootedEntry {
   baseUrl: string;
   /** Everything the entry has logged so far (stdout + stderr, JSON lines). */
   log(): string;
+  /** The non-loopback dials the child's network guard refused so far (one target each). */
+  egressRefusals(): string[];
+}
+
+function refusalsIn(log: string): string[] {
+  return log
+    .split("\n")
+    .filter((l) => l.startsWith(CHILD_REFUSAL_MARKER))
+    .map((l) => l.slice(CHILD_REFUSAL_MARKER.length).trim());
 }
 
 /** Spawn a real deployed entry and resolve when it reports listening. */
@@ -80,6 +104,8 @@ export function bootRealEntry(
     delete env.MOTEBIT_ENABLE_DEVICE_AUTH;
     delete env.MOTEBIT_FEDERATION_AUTO_ACCEPT;
     delete env.MOTEBIT_DB_PATH; // ":memory:" default
+    // Always last: no override drops the guard.
+    env.NODE_OPTIONS = guardedNodeOptions(env.NODE_OPTIONS);
     let bootLog = "";
     const child = spawn(tier.command, tier.args, {
       env,
@@ -103,6 +129,7 @@ export function bootRealEntry(
               child,
               baseUrl: `http://127.0.0.1:${parsed.port}`,
               log: () => bootLog,
+              egressRefusals: () => refusalsIn(bootLog),
             });
             return;
           }

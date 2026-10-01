@@ -25,11 +25,11 @@ export function abortGetSupportedOnShutdown<T extends object>(
       const fn = value as (...args: unknown[]) => unknown;
       if (prop !== "getSupported") return fn.bind(target);
       return (...args: unknown[]) => {
-        const call = Promise.resolve(fn.apply(target, args));
+        // Already shut down: no request is started at all.
         if (signal.aborted) {
-          call.catch(() => {});
           return Promise.reject(new Error("facilitator getSupported aborted: relay shutting down"));
         }
+        const call = Promise.resolve(fn.apply(target, args));
         return new Promise((resolve, reject) => {
           const onAbort = () => {
             call.catch(() => {});
