@@ -8,8 +8,8 @@
  * failing closed. What makes that safe is not the hook alone but three facts:
  * the hook passes the right filter to each step, a failing step aborts the
  * push, and every step has a CI counterpart at least as wide. These tests pin
- * the first two against the real hook; `check-prepush-subset` (last block)
- * pins the third against the real ci.yml.
+ * the first two against the real hook; `check-prepush-subset` (its own test
+ * file, check-prepush-subset.test.ts) pins the third against the real ci.yml.
  *
  * Why a shim and not real turbo: the real gauntlet takes minutes. The shim
  * records each `pnpm` argv and fails the ones a case names, so the test proves
@@ -36,7 +36,6 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { evaluate } from "../check-prepush-subset.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, "..", "..");
@@ -558,60 +557,5 @@ describe("pre-push hook — mutant table (every mutant must be killed)", () => {
   }
 });
 
-describe("(9, CI half) check-prepush-subset over the real hook and ci.yml", () => {
-  const ci = readFileSync(join(ROOT, ".github/workflows/ci.yml"), "utf8");
-  const scripts = (
-    JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8")) as {
-      scripts: Record<string, string>;
-    }
-  ).scripts;
-
-  it("every pre-push phase has a CI counterpart at least as wide", () => {
-    const e = evaluate(HOOK_SRC, ci, scripts);
-    expect(e.violations).toEqual([]);
-    expect(e.keys).toEqual(expect.arrayContaining(["test", "typecheck", "lint", "format"]));
-    // The trade-off's other half: CI's `check` job runs test:coverage over the
-    // whole graph, so the dependent's failing test the hook skips still fails CI.
-    const check = e.jobs.find((j) => j.name === "check");
-    expect(check?.condition).toBeNull();
-    expect(check?.runs).toContain("pnpm exec turbo run test:coverage --concurrency=4");
-  });
-
-  it("goes red when CI's test:coverage is narrowed with a --filter", () => {
-    const narrowed = ci.replace(
-      "run: pnpm exec turbo run test:coverage --concurrency=4",
-      "run: pnpm exec turbo run test:coverage --concurrency=4 --filter=[origin/main]",
-    );
-    expect(narrowed).not.toBe(ci);
-    const v = evaluate(HOOK_SRC, narrowed, scripts).violations;
-    expect(v.some((s) => s.includes("runs test ("))).toBe(true);
-  });
-
-  it("goes red on a pre-push phase CI does not run", () => {
-    const hook = HOOK_SRC.replace(
-      '  run_phase "build" pnpm build\n',
-      '  run_phase "e2e" pnpm turbo run test:e2e\n  run_phase "build" pnpm build\n',
-    );
-    const v = evaluate(hook, ci, scripts).violations;
-    expect(v.some((s) => s.includes("cannot map"))).toBe(true);
-  });
-
-  it("goes red on the pre-2026-09-30 audit drift (all deps at critical locally, prod deps in CI)", () => {
-    const hook = HOOK_SRC.replace(
-      "pnpm audit --prod --audit-level=high",
-      "pnpm audit --audit-level=critical",
-    );
-    const v = evaluate(hook, ci, scripts).violations;
-    expect(v.some((s) => s.includes("runs audit"))).toBe(true);
-  });
-
-  it("goes red when the only counterpart sits in a job that skips pushes to main", () => {
-    const gated = ci.replace(
-      /\n {2}format:\n/,
-      "\n  format:\n    if: github.event_name == 'pull_request'\n",
-    );
-    expect(gated).not.toBe(ci);
-    const v = evaluate(HOOK_SRC, gated, scripts).violations;
-    expect(v.some((s) => s.includes("runs format"))).toBe(true);
-  });
-});
+// The CI half (pre-push ⊆ CI over the real ci.yml, with its mutation table)
+// lives in check-prepush-subset.test.ts.

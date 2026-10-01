@@ -924,6 +924,18 @@ export async function probeLeak(): Promise<boolean> {
       ),
   },
   {
+    script: "check-prepush-subset",
+    proves:
+      "flags a CI counterpart that can no longer fail — `continue-on-error: true` on the `test:coverage` step (a shape the first, regex version of the gate let through): a counterpart step carries only name/run",
+    perturb: () =>
+      mutateFile(".github/workflows/ci.yml", (src) =>
+        src.replace(
+          "run: pnpm exec turbo run test:coverage --concurrency=4\n",
+          `run: pnpm exec turbo run test:coverage --concurrency=4\n        continue-on-error: true # ${PROBE_PREFIX}injected\n`,
+        ),
+      ),
+  },
+  {
     script: "check-turbo-global-deps",
     proves:
       "flags a root file packages read that turbo.json does not declare — here `tsconfig.base.json` dropped from globalDependencies, the shape where an edit to it replays every package's stale cached typecheck",

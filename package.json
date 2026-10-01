@@ -232,7 +232,8 @@
     "turbo": "^2.10.9",
     "typescript": "^5.9.0",
     "vitest": "^4.1.10",
-    "@motebit/semiring": "workspace:*"
+    "@motebit/semiring": "workspace:*",
+    "yaml": "^2.9.0"
   },
   "pnpm": {
     "overrides": {

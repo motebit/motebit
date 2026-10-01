@@ -1,365 +1,625 @@
 #!/usr/bin/env tsx
 /**
- * Drift defense: pre-push ⊆ CI.
+ * Drift defense: pre-push ⊆ CI — DENY BY DEFAULT.
  *
  * The local pre-push hook (`.husky/pre-push`) is a FAST gate by scope; CI
- * (`.github/workflows/ci.yml`) is the authority. That split is only safe while
- * every check the hook runs has a CI counterpart that runs AT LEAST AS WIDE —
- * same command, no narrower package filter, and on every push to main. If the
- * hook grows a phase CI does not run, a push can be blocked locally for a
- * reason CI would never enforce (or, the inverse drift, a narrowing of CI goes
- * unnoticed because the local loop still covers it on the author's machine).
+ * (`.github/workflows/ci.yml`, plus the merge queue) is the authority. That
+ * split is safe only while everything the hook runs has a CI counterpart that
+ * runs AT LEAST AS WIDE, on every push to main. The trade-off that makes the
+ * hook fast — a DEPENDENT's failing test does not block locally — is only
+ * acceptable because CI's `check` job runs `turbo run test:coverage`
+ * unfiltered.
  *
- * This replaces the prose rule the hook used to carry ("must match
- * .github/workflows/ci.yml → jobs.check"), which nothing enforced. The hook
- * became deliberately narrower than CI on 2026-09-30 (tests of changed
- * packages only, no coverage), so "match" is no longer the invariant; subset
- * is. The trade-off that makes the hook fast — a DEPENDENT's failing test does
- * not block locally — is only acceptable because CI's `check` job runs
- * `turbo run test:coverage` unfiltered; this gate asserts exactly that.
+ * The first version of this gate (2026-09-30) matched `pnpm …` text with
+ * regexes and accepted anything it did not recognise as "not a check"; a
+ * review found ten edits that ran a CI-less command from the hook, or
+ * weakened the CI counterpart, with the gate still green (a `$_p` alias, an
+ * `eval`, a command inside `$( )`, `xargs`, a `continue-on-error`, an `if:`, a
+ * `paths:` filter, `|| true`, a narrowed root script …). This version inverts
+ * the default: what it does not positively recognise is a violation.
  *
- * How it reads:
- *   - The hook: every `pnpm …` invocation on a non-comment line (backslash
- *     continuations joined), each classified into a TASK KEY. An invocation
- *     this gate cannot classify is a violation — a new phase must be mapped
- *     to its CI counterpart here, deliberately.
- *   - CI: every `run:` step per job, and each job's `if:`. A counterpart only
- *     counts in a job that runs on every push to main (no `if:`, or an `if:`
- *     that admits `github.event_name == 'push'`).
+ * The hook side, read by a real POSIX-sh lexer/parser (scripts/lib/posix-sh.ts)
+ * that sees every command including those inside `$( … )`:
+ *   - every command outside a pinned function is a PURE builtin (`[`, `test`,
+ *     `printf`, `echo`, `skip_phase`), an EXACT allowlisted command line, or a
+ *     `run_phase` whose command is EXACTLY one of RUN_PHASE_FORMS — and that
+ *     `run_phase` is never forked (pipeline, subshell, `$( )`) or
+ *     backgrounded, where its `exit` would not abort the push;
+ *   - every variable assignment's value is EXACTLY one allowlisted value
+ *     (so `$_full_task`, `$_filter_affected`, `$_test_filters` … can only be
+ *     what the forms were reviewed with); no env-prefix assignments, no
+ *     `${v:=…}`, no `for`/`read` into a variable;
+ *   - the functions are pinned by a hash of their canonical token text, each
+ *     defined exactly once, at top level; no other function may be defined.
+ * The CI side, read with a real YAML parser:
+ *   - the workflow runs on `push` to `main` with no path/branch filter and no
+ *     `defaults`; its `env` is exactly the pinned turbo-cache block;
+ *   - for each task key the hook runs, a step whose `run` EXACTLY equals the
+ *     allowlisted CI form, with only `name`/`run` keys, in an allowlisted job
+ *     whose `if:`/`needs:` chain is exactly the pinned one (and whose needs
+ *     run unconditionally); no step in those jobs writes $GITHUB_ENV /
+ *     $GITHUB_PATH or uses an action outside the pinned set;
+ *   - the root package.json scripts those forms reach compare by exact value,
+ *     and every workspace package's `test:coverage` runs its `test` (plus
+ *     coverage), so CI's test:coverage really is a superset of the hook's test.
  *
- * Deliberately not a shell or YAML parser: it understands the two shapes this
- * repo writes (a `run_phase "label" pnpm …` line, a `run:` scalar or block) and
- * says so. Anything else in the hook that invokes pnpm reads as "unmapped",
- * never as "absent".
+ * Changing the hook or ci.yml in a way this gate does not know is therefore a
+ * red gate whose repair is a deliberate edit to the tables below — the review
+ * the pre-push ⊆ CI claim needs, made unskippable.
  */
-import { readFileSync } from "node:fs";
+import { createHash } from "node:crypto";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
+import { parse as parseYaml } from "yaml";
 import { failWithRepair } from "./lib/gate-report.js";
+import { ShParseError, parseSh, walk, type Word } from "./lib/posix-sh.js";
 
 const ROOT = process.cwd();
 const HOOK = ".husky/pre-push";
 const CI = ".github/workflows/ci.yml";
 
-type Key =
+export type Key =
   | "build"
+  | "audit"
   | "check"
   | "test:gates"
   | "check-gates-effective"
-  | "audit"
   | "typecheck"
   | "lint"
   | "test"
   | "test:coverage"
   | "format";
 
-interface Invocation {
-  line: number;
-  text: string;
-}
+const ws = (s: string) => s.replace(/\s+/g, " ").trim();
 
-/** Join `\`-continued lines, drop comments, keep 1-based line numbers. */
-export function logicalLines(src: string): Invocation[] {
-  const out: Invocation[] = [];
-  const raw = src.split("\n");
-  for (let i = 0; i < raw.length; i++) {
-    const start = i;
-    let text = raw[i] ?? "";
-    while (/\\\s*$/.test(text) && i + 1 < raw.length) {
-      text = text.replace(/\\\s*$/, " ") + (raw[++i] ?? "");
-    }
-    if (/^\s*#/.test(text)) continue;
-    out.push({ line: start + 1, text });
-  }
-  return out;
-}
+// ---------------------------------------------------------------------------
+// Hook tables
 
-/** Every `pnpm …` command in the hook, from `pnpm` to the end of its command. */
-export function hookInvocations(src: string): Invocation[] {
-  const found: Invocation[] = [];
-  for (const l of logicalLines(src)) {
-    // Strip quoted strings that are only labels/messages (printf/echo lines).
-    if (/^\s*(printf|echo)\b/.test(l.text)) continue;
-    const re = /\bpnpm\s+[^;|&)]*/g;
-    let m: RegExpExecArray | null;
-    while ((m = re.exec(l.text)) !== null) {
-      found.push({ line: l.line, text: m[0].trim() });
-    }
-  }
-  return found;
-}
+/** `run_phase <label> <form>` — the only commands a phase may run. */
+export const RUN_PHASE_FORMS: Record<string, Key[]> = {
+  "pnpm build": ["build"],
+  "pnpm audit --prod --audit-level=high --ignore-registry-errors": ["audit"],
+  "pnpm check": ["check"],
+  "pnpm test:gates": ["test:gates"],
+  "pnpm check-gates-effective": ["check-gates-effective"],
+  'pnpm turbo run typecheck lint "$_full_task" $_filter_affected --concurrency="$_concurrency"': [
+    "typecheck",
+    "lint",
+    "test:coverage",
+    "test",
+  ],
+  'pnpm turbo run typecheck lint $_filter_affected --concurrency="$_concurrency"': [
+    "typecheck",
+    "lint",
+  ],
+  'pnpm turbo run test --concurrency="$_concurrency"': ["test"],
+  'pnpm turbo run test $_test_filters --concurrency="$_concurrency"': ["test"],
+  "pnpm format:check": ["format"],
+  // The pinned function below: prettier --check over the changed files.
+  format_changed: ["format"],
+};
+
+/** Commands that cannot run another command and have no effect but output/status. */
+const PURE = new Set(["[", "test", "printf", "echo", "skip_phase"]);
+
+/** Every other command line allowed outside a pinned function, exactly. */
+const EXACT_COMMANDS = new Set([
+  "git symbolic-ref -q HEAD",
+  "git merge-base origin/main HEAD",
+  "date +%s",
+  "wc -l",
+  "tr -d ' '",
+]);
+
+/** `exit` is allowed only as the $CI short-circuit. */
+const EXIT_AND_OR = new Set(['[ -n "$CI" ] && exit 0']);
 
 /**
- * Invocations that are discovery, not checks: they decide scope or print a
- * hint and can never block a push on their own verdict.
+ * Every variable the hook assigns outside a pinned function, and the only
+ * values (whitespace-collapsed source text) it may be given. Pinning every
+ * assignment — not only the ones a form names — closes the transitive path
+ * (`_test_filters` ← `_changed_pkg_dirs` ← `_all_changed` / `_ws_roots`).
  */
-const NON_CHECK = [/^pnpm exec turbo ls\b/, /^pnpm ls\b/];
+export const ASSIGNMENTS: Record<string, string[]> = {
+  _gauntlet_t0: ["$(date +%s)"],
+  _scope_ok: ["1", ""],
+  _all_changed: ["$(changed_files)"],
+  _filter_affected: ["'--filter=...[origin/main]'", ""],
+  _pkg_scope_ok: ["", "1"],
+  _changed_pkg_dirs: [
+    "",
+    ws(`$(printf '%s\\n' "$_all_changed" | sed -E -n "s#^(($_ws_roots)/[^/]+)/.*#\\\\1#p" |
+      sort -u | while IFS= read -r _d; do if [ -f "$_d/package.json" ]; then printf '%s\\n' "$_d"; fi; done)`),
+  ],
+  _ws_roots: [
+    ws(
+      `$(sed -E -n 's#^[[:space:]]*-[[:space:]]*["'\\'']?([A-Za-z0-9_.-]+)/\\*["'\\'']?[[:space:]]*$#\\1#p'     pnpm-workspace.yaml 2>/dev/null | paste -sd'|' -)`,
+    ),
+  ],
+  _deps_changed: ["$(changed_files pnpm-lock.yaml)"],
+  _scripts_changed: ["$(changed_files scripts/ coverage-graduation.json)"],
+  _concurrency: ["${MOTEBIT_PREPUSH_CONCURRENCY:-2}"],
+  _full_task: ["test:coverage", "test"],
+  _test_filters: [`$(printf '%s\\n' "$_changed_pkg_dirs" | sed 's#^#--filter=./#')`],
+  _n_changed: [`$(printf '%s\\n' "$_changed_pkg_dirs" | wc -l | tr -d ' ')`],
+  _n_reach: [
+    ws(
+      `$(pnpm ls -r --depth -1 --parseable $(printf '%s\\n' "$_changed_pkg_dirs" | sed 's#.*#--filter=...{./&}#') 2>/dev/null | wc -l | tr -d ' ')`,
+    ),
+  ],
+  _fmt_exts: ["'ts|tsx|js|jsx|json|md'"],
+  _fmt_config_changed: ["$(changed_files .prettierrc .prettierignore package.json pnpm-lock.yaml)"],
+  _fmt_files: [`$(printf '%s\\n' "$_all_changed" | grep -E "\\.($_fmt_exts)\\$" || true)`],
+};
 
-/** Classify one hook invocation into the task keys it runs. `null` = unmapped. */
-export function classify(cmd: string): Key[] | null {
-  const c = cmd.replace(/\s+/g, " ");
-  if (/^pnpm build\b/.test(c)) return ["build"];
-  if (/^pnpm check\s*$/.test(c)) return ["check"];
-  if (/^pnpm test:gates\b/.test(c)) return ["test:gates"];
-  if (/^pnpm check-gates-effective\b/.test(c)) return ["check-gates-effective"];
-  if (/^pnpm audit\b/.test(c)) return ["audit"];
-  if (/^pnpm format:check\b/.test(c)) return ["format"];
-  if (/^pnpm exec prettier --check\b/.test(c)) return ["format"];
-  const turbo = /^pnpm (?:exec )?turbo run (.*)$/.exec(c);
-  if (turbo) {
-    const keys: Key[] = [];
-    for (const tok of (turbo[1] ?? "").split(" ")) {
-      if (tok.startsWith("-") || tok === "") continue;
-      const t = tok.replace(/^"|"$/g, "");
-      // `"$_full_task"` resolves to test or test:coverage — both are mapped.
-      if (t === "$_full_task") keys.push("test:coverage", "test");
-      else if (["typecheck", "lint", "test", "test:coverage"].includes(t)) keys.push(t as Key);
-      else if (t.startsWith("$"))
-        continue; // a filter/concurrency variable
-      else return null;
-    }
-    return keys.length > 0 ? keys : null;
-  }
-  return null;
+/**
+ * sha256 of each function's canonical token text (comments and layout
+ * removed). A changed body is a deliberate re-review: run_phase's `exit` is
+ * what makes a failing phase abort the push, changed_files decides scope,
+ * format_changed runs prettier.
+ */
+export const PINNED_FUNCTIONS: Record<string, string> = {
+  run_phase: "91e637577b02ae44",
+  skip_phase: "f3194ff4fb1a93f9",
+  changed_files: "2d6237cb53d2691a",
+  format_changed: "7a97c9aef0af3a16",
+};
+
+export const canonHash = (canon: string) =>
+  createHash("sha256").update(ws(canon)).digest("hex").slice(0, 16);
+
+// ---------------------------------------------------------------------------
+// CI tables
+
+interface CiForm {
+  job: string;
+  run: string;
 }
+/** The CI counterpart of each task key: a step whose `run` is exactly this. */
+export const CI_FORMS: Record<Key, CiForm> = {
+  build: { job: "check", run: "pnpm build" },
+  audit: { job: "check", run: "pnpm audit --prod --audit-level=high --ignore-registry-errors" },
+  check: { job: "check", run: "pnpm check" },
+  typecheck: { job: "check", run: "pnpm typecheck" },
+  lint: { job: "check", run: "pnpm lint" },
+  // test:coverage runs every suite AND the thresholds — a superset of `test`.
+  test: { job: "check", run: "pnpm exec turbo run test:coverage --concurrency=4" },
+  "test:coverage": { job: "check", run: "pnpm exec turbo run test:coverage --concurrency=4" },
+  format: { job: "format", run: "pnpm format:check" },
+  "test:gates": { job: "gate-effectiveness", run: "pnpm test:gates" },
+  "check-gates-effective": { job: "gate-effectiveness", run: "pnpm check-gates-effective" },
+};
 
-interface CiJob {
-  name: string;
-  /** The job-level `if:` expression, or null when the job always runs. */
-  condition: string | null;
-  runs: string[];
-}
+/** Each job a counterpart may live in, with its exact `if:` / `needs:`. */
+export const CI_JOBS: Record<string, { if?: string; needs?: string }> = {
+  check: {},
+  format: {},
+  "gate-effectiveness": {
+    needs: "changes",
+    if: "github.event_name == 'push' ||\nneeds.changes.outputs.scripts == 'true'\n",
+  },
+  changes: {},
+};
+const JOB_KEYS = new Set(["runs-on", "timeout-minutes", "steps", "needs", "if", "outputs"]);
+const STEP_ACTIONS = [
+  "actions/checkout@",
+  "pnpm/action-setup@",
+  "actions/setup-node@",
+  "actions/upload-artifact@",
+];
+const WORKFLOW_KEYS = new Set(["name", "on", "concurrency", "env", "jobs"]);
+export const WORKFLOW_ENV: Record<string, string> = {
+  TURBO_TOKEN: "${{ secrets.TURBO_TOKEN }}",
+  TURBO_TEAM: "${{ vars.TURBO_TEAM }}",
+  TURBO_REMOTE_CACHE_SIGNATURE_KEY: "${{ secrets.TURBO_REMOTE_CACHE_SIGNATURE_KEY }}",
+};
 
-/** Line-oriented read of `jobs:` → per-job `if:` and every step's `run:`. */
-export function readCiJobs(src: string): CiJob[] {
-  const jobs: CiJob[] = [];
-  const lines = src.split("\n");
-  let inJobs = false;
-  let job: CiJob | null = null;
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i] ?? "";
-    if (/^jobs:\s*$/.test(line)) {
-      inJobs = true;
-      continue;
-    }
-    if (!inJobs) continue;
-    if (/^\S/.test(line)) break;
-    const jm = /^ {2}([A-Za-z0-9_-]+):\s*$/.exec(line);
-    if (jm) {
-      job = { name: jm[1] ?? "", condition: null, runs: [] };
-      jobs.push(job);
-      continue;
-    }
-    if (!job) continue;
-    const ifm = /^ {4}if:\s*(.*)$/.exec(line);
-    if (ifm) {
-      let expr = (ifm[1] ?? "").trim();
-      if (expr === "|" || expr === ">") {
-        expr = "";
-        while (i + 1 < lines.length && /^ {6,}\S/.test(lines[i + 1] ?? ""))
-          expr += ` ${lines[++i]?.trim()}`;
-      }
-      job.condition = expr.trim();
-      continue;
-    }
-    const rm = /^\s+(?:- )?run:\s*(.*)$/.exec(line);
-    if (rm) {
-      const indent = (/^(\s*)/.exec(line)?.[1] ?? "").length;
-      let body = (rm[1] ?? "").trim();
-      if (body === "|" || body === ">") {
-        body = "";
-        while (i + 1 < lines.length) {
-          const next = lines[i + 1] ?? "";
-          const nIndent = (/^(\s*)/.exec(next)?.[1] ?? "").length;
-          if (next.trim() !== "" && nIndent <= indent) break;
-          body += `${next.trim()}\n`;
-          i++;
-        }
-      }
-      job.runs.push(body.trim());
-    }
-  }
-  return jobs;
-}
+/** Root package.json scripts the forms reach, by exact value. */
+export const ROOT_SCRIPTS: Record<string, string> = {
+  build: "turbo run build",
+  check: "npx tsx scripts/check.ts",
+  typecheck: "turbo run typecheck",
+  lint: "turbo run lint",
+  "format:check": 'prettier --check "**/*.{ts,tsx,js,jsx,json,md}"',
+  "test:gates": "vitest run --dir scripts/__tests__ --testTimeout=30000 --hookTimeout=30000",
+  "check-gates-effective": "npx tsx scripts/check-gates-effective.ts",
+};
 
-/** A job counts as a counterpart only if it runs on every push to main. */
-export function runsOnEveryPush(job: CiJob): boolean {
-  if (job.condition == null) return true;
-  return /github\.event_name\s*==\s*'push'\s*\|\|/.test(job.condition);
-}
+// ---------------------------------------------------------------------------
+// Evaluation
 
-const AUDIT_LEVELS = ["low", "moderate", "high", "critical"];
-
-interface Requirement {
-  describe: string;
-  /** True when this CI run line is a counterpart at least as wide. */
-  matches: (run: string, rootScripts: Record<string, string>) => boolean;
-}
-
-const unfiltered = (s: string) => !/--filter\b|\s-F\s/.test(s);
-
-/** A root script is an unfiltered `turbo run <task>` (so `pnpm <script>` is). */
-function rootTurboUnfiltered(scripts: Record<string, string>, script: string, task: string) {
-  const body = scripts[script] ?? "";
-  return new RegExp(`^turbo run ${task}(\\s|$)`).test(body) && unfiltered(body);
-}
-
-function turboTaskRun(run: string, task: string, scripts: Record<string, string>): boolean {
-  return run.split("\n").some((l) => {
-    const direct = new RegExp(`\\bturbo run (?:[\\w:-]+ )*${task}(\\s|$)`).test(l) && unfiltered(l);
-    const viaScript =
-      new RegExp(`^pnpm (?:run )?${task}\\s*$`).test(l.trim()) &&
-      rootTurboUnfiltered(scripts, task, task);
-    return direct || viaScript;
-  });
-}
-
-function requirementFor(key: Key, hookCmd: string): Requirement {
-  const cmdLine =
-    (re: RegExp): Requirement["matches"] =>
-    (run) =>
-      run.split("\n").some((l) => re.test(l.trim()));
-  switch (key) {
-    case "build":
-      return { describe: "`pnpm build` (unfiltered)", matches: cmdLine(/^pnpm build\s*$/) };
-    case "check":
-      return { describe: "`pnpm check`", matches: cmdLine(/^pnpm check\s*$/) };
-    case "test:gates":
-      return { describe: "`pnpm test:gates`", matches: cmdLine(/^pnpm test:gates\b/) };
-    case "check-gates-effective":
-      return {
-        describe: "`pnpm check-gates-effective`",
-        matches: cmdLine(/^pnpm check-gates-effective\b/),
-      };
-    case "typecheck":
-    case "lint":
-      return {
-        describe: `unfiltered \`turbo run ${key}\` (directly or via the root \`pnpm ${key}\` script)`,
-        matches: (run, s) => turboTaskRun(run, key, s),
-      };
-    case "test":
-    case "test:coverage":
-      // test:coverage runs every test AND the thresholds, so it covers `test`.
-      return {
-        describe: "unfiltered `turbo run test:coverage` (a superset of `test`)",
-        matches: (run, s) => turboTaskRun(run, "test:coverage", s),
-      };
-    case "format":
-      return {
-        describe: "`pnpm format:check` (whole repo)",
-        matches: cmdLine(/^pnpm format:check\s*$/),
-      };
-    case "audit": {
-      const level = /--audit-level[= ](\w+)/.exec(hookCmd)?.[1] ?? "low";
-      const hookProd = /--prod\b/.test(hookCmd);
-      return {
-        describe: `\`pnpm audit\` at --audit-level ≤ ${level}${hookProd ? "" : " over ALL deps (the hook omits --prod)"}`,
-        matches: (run) =>
-          run.split("\n").some((l) => {
-            if (!/^pnpm audit\b/.test(l.trim())) return false;
-            const ciLevel = /--audit-level[= ](\w+)/.exec(l)?.[1] ?? "low";
-            const ciProd = /--prod\b/.test(l);
-            return (
-              AUDIT_LEVELS.indexOf(ciLevel) <= AUDIT_LEVELS.indexOf(level) && (hookProd || !ciProd)
-            );
-          }),
-      };
-    }
-  }
-}
-
-/** Extensions in a `{a,b,c}` glob or an `a|b|c` alternation. */
-function extSet(s: string): Set<string> {
-  return new Set(
-    s
-      .split(/[,|]/)
-      .map((e) => e.trim())
-      .filter(Boolean),
-  );
+export interface Inputs {
+  hook: string;
+  ci: string;
+  rootScripts: Record<string, string>;
+  /** dir → { test, test:coverage } for every workspace package. */
+  packageScripts: Record<string, Record<string, string>>;
 }
 
 export interface Evaluation {
   violations: string[];
-  invocations: Invocation[];
   keys: Key[];
-  jobs: CiJob[];
-  pushJobs: CiJob[];
+  commands: number;
+  phases: number;
 }
 
-/** Pure: the whole verdict from the three inputs (exported for the self-tests). */
-export function evaluate(
-  hookSrc: string,
-  ciSrc: string,
-  rootScripts: Record<string, string>,
-): Evaluation {
-  const jobs = readCiJobs(ciSrc);
-  const pushJobs = jobs.filter(runsOnEveryPush);
-  const violations: string[] = [];
+const varRefs = (s: string) => [...s.matchAll(/\$\{?([A-Za-z_][A-Za-z0-9_]*)/g)].map((m) => m[1]!);
 
-  const invocations = hookInvocations(hookSrc).filter(
-    (inv) => !NON_CHECK.some((re) => re.test(inv.text)),
-  );
-  const keysSeen = new Set<Key>();
-  for (const inv of invocations) {
-    const keys = classify(inv.text);
-    if (keys == null) {
-      violations.push(
-        `${HOOK}:${inv.line} runs \`${inv.text}\`, which this gate cannot map to a CI counterpart`,
-      );
-      continue;
-    }
-    for (const key of keys) {
-      keysSeen.add(key);
-      const req = requirementFor(key, inv.text);
-      const hit = pushJobs.find((j) => j.runs.some((r) => req.matches(r, rootScripts)));
-      if (!hit) {
+export function evaluateHook(hook: string): {
+  violations: string[];
+  keys: Set<Key>;
+  commands: number;
+  phases: number;
+} {
+  const violations: string[] = [];
+  const keys = new Set<Key>();
+  const at = (line: number) => `${HOOK}:${line}`;
+  let prog;
+  try {
+    prog = parseSh(hook);
+  } catch (err) {
+    const msg = err instanceof ShParseError ? err.message : String(err);
+    return {
+      violations: [
+        `${HOOK} does not parse as the POSIX sh this gate reads (${msg}) — a construct it cannot read is denied`,
+      ],
+      keys,
+      commands: 0,
+      phases: 0,
+    };
+  }
+  let commands = 0;
+  let phases = 0;
+  const defined = new Map<string, number>();
+  const assigned = new Set<string>();
+  const formVars = new Set<string>();
+  const pinnedFn = (fn: string | null) => fn != null && fn in PINNED_FUNCTIONS;
+
+  const checkParams = (w: Word, line: number) => {
+    for (const p of w.params) {
+      if (/^[A-Za-z_][A-Za-z0-9_]*:?[=?]/.test(p)) {
         violations.push(
-          `${HOOK}:${inv.line} runs ${key} (\`${inv.text}\`) but no ${CI} job that runs on every push to main runs ${req.describe}`,
+          `${at(line)} \`\${${p}}\` assigns a variable inside an expansion — every assignment must be a plain, allowlisted \`NAME=value\``,
         );
       }
     }
+  };
+
+  walk(prog, {
+    func(def, ctx) {
+      defined.set(def.name, (defined.get(def.name) ?? 0) + 1);
+      if (!(def.name in PINNED_FUNCTIONS)) {
+        violations.push(
+          `${at(def.line)} defines function \`${def.name}\`, which is not one of the pinned functions (${Object.keys(PINNED_FUNCTIONS).join(", ")})`,
+        );
+      } else if (ctx.func != null) {
+        violations.push(
+          `${at(def.line)} defines \`${def.name}\` inside \`${ctx.func}\` — pinned functions are defined once, at top level`,
+        );
+      } else if (canonHash(def.canon) !== PINNED_FUNCTIONS[def.name]) {
+        violations.push(
+          `${at(def.line)} function \`${def.name}\` changed (canonical hash ${canonHash(def.canon)}, pinned ${PINNED_FUNCTIONS[def.name] || "(none)"}): review that it still aborts/scopes/formats as before, then update PINNED_FUNCTIONS. Canonical body: ${ws(def.canon)}`,
+        );
+      }
+    },
+    compound(cmd, ctx) {
+      if (pinnedFn(ctx.func)) return;
+      if (cmd.type === "for") {
+        violations.push(
+          `${at(cmd.line)} \`for ${cmd.forVar} in …\` assigns a variable outside the allowlist — every assignment must be a plain, allowlisted \`NAME=value\``,
+        );
+      }
+    },
+    word(w, ctx, role) {
+      if (pinnedFn(ctx.func)) return false;
+      checkParams(w, w.line);
+      // An allowlisted assignment's value is pinned exactly — its inner
+      // commands are part of that pin, not re-checked one by one.
+      if (role === "assign") return false;
+      return true;
+    },
+    simple(cmd, ctx) {
+      if (pinnedFn(ctx.func)) return;
+      commands++;
+      for (const a of cmd.assigns) {
+        const eq = a.raw.indexOf("=");
+        const name = a.raw.slice(0, eq);
+        const value = ws(a.raw.slice(eq + 1));
+        assigned.add(name);
+        if (cmd.words.length > 0) {
+          violations.push(
+            `${at(cmd.line)} \`${a.raw} ${cmd.words[0]!.raw} …\` sets an environment variable for one command — not allowed (it can change what the command does)`,
+          );
+          continue;
+        }
+        const allowed = ASSIGNMENTS[name];
+        if (!allowed) {
+          violations.push(`${at(cmd.line)} assigns \`${name}\`, which is not in ASSIGNMENTS`);
+        } else if (!allowed.map(ws).includes(value)) {
+          violations.push(
+            `${at(cmd.line)} assigns \`${name}=${value}\`; allowed values: ${allowed.map((v) => `\`${v}\``).join(", ")}`,
+          );
+        }
+      }
+      if (cmd.words.length === 0) return;
+      const head = cmd.words[0]!.raw;
+      const text = ws(cmd.words.map((w) => w.raw).join(" "));
+      if (!/^[A-Za-z0-9_[.:+-]+$/.test(head) || head === ".") {
+        violations.push(
+          `${at(cmd.line)} runs \`${text}\` — the command word must be a literal name (no \`$var\`, quotes or path tricks)`,
+        );
+        return;
+      }
+      if (head === "run_phase") {
+        phases++;
+        if (ctx.func != null || ctx.forked || ctx.background || ctx.cmdsub) {
+          violations.push(
+            `${at(cmd.line)} \`run_phase\` runs ${ctx.func ? `inside function \`${ctx.func}\`` : "in a pipeline, subshell, command substitution or background job"} — its \`exit\` on failure would not abort the push`,
+          );
+        }
+        const form = ws(
+          cmd.words
+            .slice(2)
+            .map((w) => w.raw)
+            .join(" "),
+        );
+        const k = RUN_PHASE_FORMS[form];
+        if (cmd.words.length < 3 || !k) {
+          violations.push(
+            `${at(cmd.line)} \`run_phase\` runs \`${form}\`, which is not one of RUN_PHASE_FORMS — map it to its CI counterpart deliberately`,
+          );
+          return;
+        }
+        for (const key of k) keys.add(key);
+        for (const v of varRefs(form)) formVars.add(v);
+        return;
+      }
+      if (head === "exit") {
+        if (ctx.func != null || !EXIT_AND_OR.has(ws(ctx.andOr))) {
+          violations.push(
+            `${at(cmd.line)} \`${ws(ctx.andOr)}\` — \`exit\` is allowed only as \`${[...EXIT_AND_OR].join("")}\``,
+          );
+        }
+        return;
+      }
+      if (PURE.has(head)) return;
+      if (head in PINNED_FUNCTIONS && head !== "changed_files") {
+        violations.push(
+          `${at(cmd.line)} calls \`${head}\` directly — a pinned phase function runs only as a run_phase form`,
+        );
+        return;
+      }
+      if (head === "changed_files") {
+        if (cmd.words.slice(1).some((w) => /[$`]/.test(w.raw))) {
+          violations.push(`${at(cmd.line)} \`${text}\` — changed_files takes literal paths only`);
+        }
+        return;
+      }
+      if (!EXACT_COMMANDS.has(text)) {
+        violations.push(
+          `${at(cmd.line)} runs \`${text}\`, which is neither a pure builtin, an EXACT_COMMANDS line, nor a run_phase form — deny by default`,
+        );
+      }
+    },
+  });
+
+  for (const name of Object.keys(PINNED_FUNCTIONS)) {
+    const n = defined.get(name) ?? 0;
+    if (n !== 1)
+      violations.push(
+        `${HOOK} defines \`${name}\` ${n} time(s) — a pinned function is defined exactly once (else \`${name}\` resolves to a PATH command or a later redefinition)`,
+      );
+  }
+  for (const v of formVars) {
+    if (!assigned.has(v))
+      violations.push(
+        `${HOOK} run_phase forms read \`$${v}\` but the hook never assigns it — it would come from the environment`,
+      );
+  }
+  return { violations, keys, commands, phases };
+}
+
+interface Step {
+  [k: string]: unknown;
+}
+interface Job {
+  [k: string]: unknown;
+  steps?: Step[];
+}
+
+export function evaluateCi(
+  ci: string,
+  keys: Set<Key>,
+  rootScripts: Record<string, string>,
+  packageScripts: Record<string, Record<string, string>>,
+): string[] {
+  const violations: string[] = [];
+  let wf: Record<string, unknown>;
+  try {
+    wf = parseYaml(ci) as Record<string, unknown>;
+  } catch (err) {
+    return [`${CI} does not parse as YAML: ${err instanceof Error ? err.message : String(err)}`];
+  }
+  for (const k of Object.keys(wf)) {
+    if (!WORKFLOW_KEYS.has(k))
+      violations.push(
+        `${CI} top-level \`${k}:\` is not allowed (only ${[...WORKFLOW_KEYS].join(", ")}) — e.g. \`defaults:\` changes every run step`,
+      );
+  }
+  const on = wf.on as Record<string, unknown> | undefined;
+  if (JSON.stringify(on?.push) !== JSON.stringify({ branches: ["main"] })) {
+    violations.push(
+      `${CI} \`on.push\` must be exactly \`{ branches: [main] }\` (every push to main, no paths/branches filter); got ${JSON.stringify(on?.push)}`,
+    );
+  }
+  if (JSON.stringify(wf.env ?? null) !== JSON.stringify(WORKFLOW_ENV)) {
+    violations.push(
+      `${CI} workflow \`env:\` must be exactly the pinned turbo remote-cache block ${JSON.stringify(WORKFLOW_ENV)}; got ${JSON.stringify(wf.env)}`,
+    );
+  }
+  const jobs = (wf.jobs ?? {}) as Record<string, Job>;
+  const chainOk = (name: string, seen = new Set<string>()): boolean => {
+    const job = jobs[name];
+    const spec = CI_JOBS[name];
+    if (!job || !spec || seen.has(name)) return false;
+    return (
+      job.if === spec.if &&
+      job.needs === spec.needs &&
+      (spec.needs == null || chainOk(spec.needs, new Set([...seen, name])))
+    );
+  };
+  const jobOk = new Map<string, boolean>();
+  for (const name of Object.keys(CI_JOBS)) {
+    const job = jobs[name];
+    if (!job) {
+      violations.push(`${CI} has no \`${name}\` job (an allowlisted counterpart job)`);
+      jobOk.set(name, false);
+      continue;
+    }
+    let ok = true;
+    for (const k of Object.keys(job)) {
+      if (!JOB_KEYS.has(k)) {
+        violations.push(
+          `${CI} job \`${name}\` has \`${k}:\` — not allowed on a counterpart job (only ${[...JOB_KEYS].join(", ")})`,
+        );
+        ok = false;
+      }
+    }
+    if (!chainOk(name)) {
+      const spec = CI_JOBS[name]!;
+      violations.push(
+        `${CI} job \`${name}\` must have exactly \`if: ${JSON.stringify(spec.if ?? null)}\` and \`needs: ${JSON.stringify(spec.needs ?? null)}\` (and so must its needs, recursively); got if=${JSON.stringify(job.if ?? null)} needs=${JSON.stringify(job.needs ?? null)}`,
+      );
+      ok = false;
+    }
+    for (const [i, step] of (job.steps ?? []).entries()) {
+      const run = typeof step.run === "string" ? step.run : "";
+      if (/GITHUB_ENV|GITHUB_PATH/.test(run)) {
+        violations.push(
+          `${CI} job \`${name}\` step ${i + 1} writes $GITHUB_ENV/$GITHUB_PATH — it can change every later step, including a counterpart`,
+        );
+        ok = false;
+      }
+      if (
+        typeof step.uses === "string" &&
+        !STEP_ACTIONS.some((a) => (step.uses as string).startsWith(a))
+      ) {
+        violations.push(
+          `${CI} job \`${name}\` step ${i + 1} uses \`${step.uses}\`, not one of the pinned actions (${STEP_ACTIONS.join(", ")})`,
+        );
+        ok = false;
+      }
+    }
+    jobOk.set(name, ok);
   }
 
-  // The format phase's changed-file extension set must be inside what CI's
-  // whole-repo `pnpm format:check` globs, or the hook formats files CI never does.
-  const hookExts = /_fmt_exts='([^']*)'/.exec(hookSrc)?.[1];
-  const ciGlob = /\{([^}]*)\}/.exec(rootScripts["format:check"] ?? "")?.[1];
-  if (keysSeen.has("format") && hookExts != null) {
-    const ci = extSet(ciGlob ?? "");
-    const extra = [...extSet(hookExts)].filter((e) => !ci.has(e));
+  for (const key of [...keys].sort()) {
+    const form = CI_FORMS[key];
+    const steps = jobs[form.job]?.steps ?? [];
+    const hit = steps.find((s) => typeof s.run === "string" && s.run.trim() === form.run);
+    if (!hit) {
+      violations.push(
+        `the hook runs ${key}, but ${CI} job \`${form.job}\` has no step whose run is exactly \`${form.run}\``,
+      );
+      continue;
+    }
+    const extra = Object.keys(hit).filter((k) => k !== "name" && k !== "run");
     if (extra.length > 0) {
       violations.push(
-        `${HOOK} _fmt_exts checks .${extra.join(", .")} but package.json "format:check" (CI's format job) globs only {${ciGlob ?? ""}}`,
+        `${CI} job \`${form.job}\` step \`${form.run}\` (the ${key} counterpart) has ${extra.map((k) => `\`${k}:\``).join(", ")} — a counterpart step carries only name/run (an if:, continue-on-error:, working-directory:, shell: or env: can each make it not run, not fail, or run something else)`,
+      );
+    }
+    if (jobOk.get(form.job) === false) {
+      violations.push(
+        `the ${key} counterpart sits in job \`${form.job}\`, which fails the job rules above`,
       );
     }
   }
-  return { violations, invocations, keys: [...keysSeen], jobs, pushJobs };
+
+  for (const [script, value] of Object.entries(ROOT_SCRIPTS)) {
+    if (rootScripts[script] !== value) {
+      violations.push(
+        `package.json script "${script}" must be exactly ${JSON.stringify(value)} (a hook form or CI counterpart reaches it); got ${JSON.stringify(rootScripts[script] ?? null)}`,
+      );
+    }
+  }
+  for (const [dir, s] of Object.entries(packageScripts)) {
+    const test = s.test;
+    if (test == null) continue;
+    const expected = `${test.replace(/ --passWithNoTests\b/, "")} --coverage`;
+    if (s["test:coverage"] !== expected) {
+      violations.push(
+        `${dir}/package.json "test:coverage" must be its "test" plus --coverage (${JSON.stringify(expected)}) so CI's test:coverage runs every test the hook's \`test\` does; got ${JSON.stringify(s["test:coverage"] ?? null)}`,
+      );
+    }
+  }
+  return violations;
 }
 
-function main(): void {
-  const hookSrc = readFileSync(join(ROOT, HOOK), "utf8");
-  const ciSrc = readFileSync(join(ROOT, CI), "utf8");
+export function evaluate(inp: Inputs): Evaluation {
+  const h = evaluateHook(inp.hook);
+  const violations = [
+    ...h.violations,
+    ...evaluateCi(inp.ci, h.keys, inp.rootScripts, inp.packageScripts),
+  ];
+  // The hook's changed-file prettier extensions must sit inside CI's glob.
+  const hookExts = /_fmt_exts='([^']*)'/.exec(inp.hook)?.[1];
+  const ciGlob = /\{([^}]*)\}/.exec(inp.rootScripts["format:check"] ?? "")?.[1] ?? "";
+  if (hookExts != null) {
+    const ci = new Set(ciGlob.split(","));
+    const extra = hookExts.split("|").filter((e) => !ci.has(e));
+    if (extra.length > 0)
+      violations.push(
+        `${HOOK} _fmt_exts checks .${extra.join(", .")} but "format:check" globs only {${ciGlob}}`,
+      );
+  }
+  return { violations, keys: [...h.keys].sort(), commands: h.commands, phases: h.phases };
+}
+
+export function readInputs(root: string): Inputs {
   const rootScripts =
     (
-      JSON.parse(readFileSync(join(ROOT, "package.json"), "utf8")) as {
+      JSON.parse(readFileSync(join(root, "package.json"), "utf8")) as {
         scripts?: Record<string, string>;
       }
     ).scripts ?? {};
-  const { violations, invocations, keys, jobs, pushJobs } = evaluate(hookSrc, ciSrc, rootScripts);
+  const packageScripts: Record<string, Record<string, string>> = {};
+  const wsYaml = readFileSync(join(root, "pnpm-workspace.yaml"), "utf8");
+  const globs = (parseYaml(wsYaml) as { packages: string[] }).packages;
+  for (const g of globs) {
+    const base = g.replace(/\/\*$/, "");
+    for (const d of readdirSync(join(root, base))) {
+      const pj = join(root, base, d, "package.json");
+      if (!existsSync(pj)) continue;
+      packageScripts[`${base}/${d}`] =
+        (JSON.parse(readFileSync(pj, "utf8")) as { scripts?: Record<string, string> }).scripts ??
+        {};
+    }
+  }
+  return {
+    hook: readFileSync(join(root, HOOK), "utf8"),
+    ci: readFileSync(join(root, CI), "utf8"),
+    rootScripts,
+    packageScripts,
+  };
+}
 
+function main(): void {
+  const inp = readInputs(ROOT);
+  const { violations, keys, commands, phases } = evaluate(inp);
   if (violations.length > 0) {
     failWithRepair({
       invariant:
-        "pre-push ⊆ CI — every check the local pre-push hook runs must have a CI counterpart that runs at least as wide (same command, no narrower --filter, in a job that runs on every push to main). CI is the authority; a local-only check blocks pushes CI would accept, and a narrowed CI step hides behind the author's local loop",
+        "pre-push ⊆ CI, deny by default — every command the local pre-push hook runs is a pure builtin, an exact allowlisted line, or a run_phase form mapped to a CI step that runs at least as wide (exact `run`, only name/run keys, in a job with the pinned if:/needs: chain, in a workflow on every push to main)",
       sites: violations,
-      canonical: `${CI} (the authority) and ${HOOK} (the fast subset); the classification table is scripts/check-prepush-subset.ts`,
-      fix: "Either add the missing CI step (unfiltered, in a job with no `if:` or one admitting `github.event_name == 'push'`), or narrow/remove the pre-push phase. A genuinely new pre-push command also needs a `classify` entry in scripts/check-prepush-subset.ts mapping it to its CI counterpart.",
+      canonical: `${CI} (the authority) and ${HOOK} (the fast subset); the allowlists are RUN_PHASE_FORMS / EXACT_COMMANDS / ASSIGNMENTS / PINNED_FUNCTIONS / CI_FORMS / CI_JOBS / ROOT_SCRIPTS in scripts/check-prepush-subset.ts`,
+      fix: "Undo the edit, or — if it is deliberate — add its CI counterpart first and then extend the matching table in scripts/check-prepush-subset.ts (a changed pinned function: review it and paste the printed hash into PINNED_FUNCTIONS).",
       doctrine: "docs/drift-defenses.md",
     });
   }
-
   console.log(
-    `✓ check-prepush-subset: ${invocations.length} pre-push invocation(s) → ${keys.length} task(s) [${keys.join(", ")}], each covered at least as wide by one of ${pushJobs.length}/${jobs.length} CI job(s) that run on every push to main.`,
+    `✓ check-prepush-subset: ${commands} hook command(s) read (${phases} run_phase call(s)) → ${keys.length} task(s) [${keys.join(", ")}], each with an exact CI counterpart; ${Object.keys(inp.packageScripts).length} package(s)' test:coverage cover their test.`,
   );
 }
 
