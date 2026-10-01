@@ -1,4 +1,20 @@
 {
   "$schema": "https://developer.microsoft.com/json-schemas/api-extractor/v7/api-extractor.schema.json",
-  "extends": "../../config/api-extractor.base.json"
+  "extends": "../../config/api-extractor.base.json",
+  "bundledPackages": ["@motebit/crypto", "@motebit/protocol"],
+  "apiReport": {
+    "enabled": true,
+    "reportFolder": "<projectFolder>/etc/",
+    "reportTempFolder": "<projectFolder>/etc/temp/",
+    "reportFileName": "<unscopedPackageName>.api.md",
+    "includeForgottenExports": true
+  },
+  "messages": {
+    "extractorMessageReporting": {
+      "ae-forgotten-export": {
+        "logLevel": "none",
+        "addToApiReportFile": false
+      }
+    }
+  }
 }

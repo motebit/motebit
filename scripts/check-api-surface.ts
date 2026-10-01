@@ -26,7 +26,7 @@
  * protocol behaves like a protocol.
  */
 
-import { readFileSync, readdirSync, existsSync } from "node:fs";
+import { readFileSync, readdirSync, existsSync, rmSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
@@ -50,8 +50,13 @@ const TRACKED: ReadonlyArray<TrackedPackage> = [
   { path: "packages/sdk", name: "@motebit/sdk", baseline: "etc/sdk.api.md" },
   // The pinned surface an external consumer (agency.computer) codes against —
   // docs/doctrine/agency-proof-integration.md §2 promises it is held stable
-  // by this gate. Re-exports from @motebit/crypto appear here by name only;
-  // their signatures are locked by the crypto baseline above.
+  // by this gate. Its api-extractor config BUNDLES @motebit/crypto and
+  // @motebit/protocol (`bundledPackages` + `includeForgottenExports`), so the
+  // baseline carries the full declaration of every re-exported symbol and of
+  // every type they transitively reach — not just the name. A breaking change
+  // to a re-exported crypto/protocol type therefore turns THIS row red, and a
+  // crypto-only `major` changeset cannot cover it: the verifier needs its own
+  // `major` (otherwise changesets would cascade it as a patch).
   { path: "packages/verifier", name: "@motebit/verifier", baseline: "etc/verifier.api.md" },
 ];
 
@@ -86,24 +91,40 @@ function majorBumpsFromPendingChangesets(): Set<string> {
 }
 
 /**
+ * api-extractor prints exactly one of these lines when it finished analysing
+ * the package. Its exit status cannot be the success signal on its own: a
+ * clean run that only emitted warnings exits 1, while an aborted run (missing
+ * entry point, config error, crash) also exits nonzero but never prints a
+ * completion line.
+ */
+const EXTRACTOR_COMPLETED = /API Extractor completed (?:successfully|with warnings)/;
+
+/**
  * Run api-extractor in non-local mode for a single package, then compare the
  * generated temp file against the committed baseline.
  *
- * api-extractor's own exit code doesn't reflect baseline divergence — it
- * treats signature changes as warnings, not errors. When it runs in
- * non-local mode and the extracted surface differs, it writes the new
- * surface to `etc/temp/<pkg>.api.md` for the developer to copy over. That
- * temp file is what we diff against the committed baseline.
+ * Divergence: api-extractor treats signature changes as warnings, not errors.
+ * When it runs in non-local mode and the extracted surface differs, it writes
+ * the new surface to `etc/temp/<pkg>.api.md` for the developer to copy over.
+ * That temp file is what we diff against the committed baseline.
+ *
+ * Fail closed: "no temp file" means "matches" ONLY when the extractor actually
+ * ran to completion. A missing `dist/index.d.ts`, a spawn failure, or a run
+ * that aborted before completing is an `error`, never a match — otherwise an
+ * unbuilt package would silently pass.
  */
 function runExtractorAndDiff(
   pkgPath: string,
   baselineRel: string,
-): { ok: boolean; output: string } {
-  const result = spawnSync("pnpm", ["--silent", "exec", "api-extractor", "run", "--verbose"], {
-    cwd: resolve(ROOT, pkgPath),
-    encoding: "utf-8",
-  });
-  const extractorOutput = `${result.stdout ?? ""}${result.stderr ?? ""}`;
+): { ok: boolean; output: string; error?: string } {
+  const entryRel = `${pkgPath}/dist/index.d.ts`;
+  if (!existsSync(resolve(ROOT, entryRel))) {
+    return {
+      ok: false,
+      output: "",
+      error: `${entryRel} is missing — api-extractor has no surface to extract`,
+    };
+  }
 
   // The temp file lives at etc/temp/<unscoped>.api.md — same filename as the
   // committed baseline, just under the temp/ directory.
@@ -115,8 +136,24 @@ function runExtractorAndDiff(
   const tempPath = resolve(ROOT, pkgPath, dir, "temp", file);
   const baselinePath = resolve(ROOT, pkgPath, baselineRel);
 
-  // If no temp file exists, api-extractor considered the baseline current —
-  // no divergence.
+  // A temp file left by an earlier run must not stand in for this run's result.
+  rmSync(tempPath, { force: true });
+
+  const result = spawnSync("pnpm", ["--silent", "exec", "api-extractor", "run", "--verbose"], {
+    cwd: resolve(ROOT, pkgPath),
+    encoding: "utf-8",
+  });
+  const extractorOutput = `${result.stdout ?? ""}${result.stderr ?? ""}`;
+
+  if (result.error || !EXTRACTOR_COMPLETED.test(extractorOutput)) {
+    const why = result.error
+      ? `could not spawn api-extractor (${result.error.message})`
+      : `api-extractor did not complete (exit status ${String(result.status)})`;
+    return { ok: false, output: extractorOutput, error: why };
+  }
+
+  // The extractor completed and wrote no temp file: it considered the
+  // baseline current — no divergence.
   if (!existsSync(tempPath)) {
     return { ok: true, output: extractorOutput };
   }
@@ -134,6 +171,7 @@ function runExtractorAndDiff(
 function main(): void {
   const declaredMajors = majorBumpsFromPendingChangesets();
   const failures: Array<{ pkg: TrackedPackage; output: string }> = [];
+  const extractionErrors: Array<{ pkg: TrackedPackage; output: string; error: string }> = [];
 
   for (const pkg of TRACKED) {
     // Confirm the baseline exists. Absence is a config bug, not a drift.
@@ -145,7 +183,15 @@ function main(): void {
       process.exit(2);
     }
 
-    const { ok, output } = runExtractorAndDiff(pkg.path, pkg.baseline);
+    const { ok, output, error } = runExtractorAndDiff(pkg.path, pkg.baseline);
+    if (error !== undefined) {
+      // Not a drift verdict at all — the surface was never extracted. A
+      // pending `major` changeset does not cover this: there is nothing to
+      // compare, so the gate fails closed.
+      process.stderr.write(`  ✗ ${pkg.name.padEnd(24)} API surface NOT extracted\n`);
+      extractionErrors.push({ pkg, output, error });
+      continue;
+    }
     if (ok) {
       process.stderr.write(`  ✓ ${pkg.name.padEnd(24)} API surface matches baseline\n`);
       continue;
@@ -171,6 +217,20 @@ function main(): void {
     }
 
     failures.push({ pkg, output });
+  }
+
+  if (extractionErrors.length > 0) {
+    process.stderr.write(
+      `\nerror: could not extract the API surface for ${extractionErrors.length} of ${TRACKED.length} package(s) — the gate fails closed rather than treat an unchecked surface as matching:\n\n`,
+    );
+    for (const { pkg, output, error } of extractionErrors) {
+      process.stderr.write(`─── ${pkg.name} ───\n  ${error}\n`);
+      if (output) process.stderr.write(output);
+      process.stderr.write(
+        `  Fix: run \`pnpm --filter ${pkg.name} build\` so ${pkg.path}/dist/index.d.ts exists (or fix the api-extractor error shown above), then re-run \`pnpm check-api-surface\`.\n\n`,
+      );
+    }
+    process.exit(1);
   }
 
   if (failures.length === 0) {

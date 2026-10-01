@@ -4,187 +4,1121 @@
 
 ```ts
 
-import { ApprovalDecision } from '@motebit/crypto';
-import { ArtifactType } from '@motebit/crypto';
-import { AuthorityVerdict } from '@motebit/crypto';
-import { costAttestationDigest } from '@motebit/crypto';
-import { CostAttestationV1 } from '@motebit/crypto';
-import { CostAttestationVerdict } from '@motebit/crypto';
-import { DelegationRevocation } from '@motebit/crypto';
-import { DelegationToken } from '@motebit/crypto';
-import { DigestAlgorithm } from '@motebit/crypto';
-import { DigestRef } from '@motebit/crypto';
-import { EVAL_ATTESTATION_SUITE } from '@motebit/crypto';
-import { EvalAttestation } from '@motebit/protocol';
-import { EvalKind } from '@motebit/protocol';
-import { EvalResult } from '@motebit/protocol';
-import { EvidenceProvenance } from '@motebit/crypto';
-import { EvidenceProvenanceResult } from '@motebit/crypto';
-import { EvidenceRef } from '@motebit/crypto';
-import { executionReceiptDigest } from '@motebit/crypto';
-import { findGrantRevocation } from '@motebit/crypto';
-import { HardwareAttestationVerifiers } from '@motebit/crypto';
-import { IdentityBindingVerdict } from '@motebit/crypto';
-import { IntegrityVerdict } from '@motebit/crypto';
-import { InvoiceV1 } from '@motebit/crypto';
-import { InvoiceVerdict } from '@motebit/crypto';
-import { isFullyVerified } from '@motebit/crypto';
-import { ProjectionClass } from '@motebit/crypto';
-import { RepairInstruction } from '@motebit/crypto';
-import { RevocationFreshness } from '@motebit/crypto';
-import { RevocationStatus } from '@motebit/crypto';
-import { RevocationVerdict } from '@motebit/crypto';
-import { ROUTING_TRANSCRIPT_SUITE } from '@motebit/crypto';
-import { RoutingDecisionTranscript } from '@motebit/protocol';
-import { SignedRequestEnvelope } from '@motebit/crypto';
-import { signEvalAttestation } from '@motebit/crypto';
-import { signRequestEnvelope } from '@motebit/crypto';
-import { signRoutingTranscript } from '@motebit/crypto';
-import { SkillFileVerifyResult } from '@motebit/crypto';
-import { SkillVerifyResult } from '@motebit/crypto';
-import { StandingDelegation } from '@motebit/crypto';
-import { subjectBindingDigest } from '@motebit/crypto';
-import { SubjectBindingV1 } from '@motebit/crypto';
-import { TemporalBasis } from '@motebit/crypto';
-import { TranscriptCandidate } from '@motebit/protocol';
-import { VerdictSubject } from '@motebit/crypto';
-import { VerificationVerdict } from '@motebit/crypto';
-import { verifyApprovalDecision } from '@motebit/crypto';
-import { verifyBondCommitment } from '@motebit/crypto';
-import { verifyCostAttestation } from '@motebit/crypto';
-import { verifyDelegation } from '@motebit/crypto';
-import { verifyDelegationRevocation } from '@motebit/crypto';
-import { verifyDelegationTokenVerdict } from '@motebit/crypto';
-import { verifyEvalAttestation } from '@motebit/crypto';
-import { VerifyEvalAttestationResult } from '@motebit/crypto';
-import { verifyEvidenceProvenance } from '@motebit/crypto';
-import { verifyInvoice } from '@motebit/crypto';
-import { verifyKeySuccession } from '@motebit/crypto';
-import { verifyMerkleInclusion } from '@motebit/crypto';
-import { verifyReceiptVerdict } from '@motebit/crypto';
-import { verifyRequestEnvelope } from '@motebit/crypto';
-import { VerifyResult } from '@motebit/crypto';
-import { verifyRoutingTranscript } from '@motebit/crypto';
-import { VerifyRoutingTranscriptResult } from '@motebit/crypto';
-import { verifySovereignBinding } from '@motebit/crypto';
-import { verifyStandingDelegation } from '@motebit/crypto';
-import { verifySubjectBinding } from '@motebit/crypto';
-import { verifySuccessionChain } from '@motebit/crypto';
-import { verifyTokenAgainstGrant } from '@motebit/crypto';
-import { verifyWithdrawalReceipt } from '@motebit/crypto';
-import { WithdrawalReceiptPayload } from '@motebit/protocol';
+// @public (undocumented)
+const __brand: unique symbol;
 
-export { ApprovalDecision }
+// @public
+export interface ApprovalDecision {
+    approval_id: string;
+    args_hash: string;
+    denied_reason?: string;
+    device_id: DeviceId;
+    motebit_id: MotebitId;
+    public_key?: string;
+    requested_at: number;
+    resolved_at: number;
+    risk_level: number;
+    run_id?: string;
+    // (undocumented)
+    signature: string;
+    suite: "motebit-jcs-ed25519-b64-v1";
+    tool_name: string;
+    verdict: "approved" | "denied";
+}
 
-export { ArtifactType }
+// @public (undocumented)
+export type ArtifactType = VerifyResult["type"];
 
-export { AuthorityVerdict }
+// @public
+type AttestationPlatform = HardwareAttestationClaim["platform"];
 
-export { costAttestationDigest }
+// @public
+export type AuthorityVerdict = "valid" | "expired" | "not_yet_valid" | "insufficient" | "unknown";
 
-export { CostAttestationV1 }
+// @public (undocumented)
+interface BaseResult {
+    // (undocumented)
+    errors?: VerificationError[];
+    // (undocumented)
+    valid: boolean;
+}
 
-export { CostAttestationVerdict }
+// @public
+interface BondCommitment {
+    asset: SettlementAsset;
+    bond_amount_micro: number;
+    bond_id: string;
+    bonded_address: string;
+    bonded_public_key: string;
+    chain: string;
+    expires_at: number;
+    issued_at: number;
+    motebit_id: string;
+    signature: string;
+    suite: "motebit-jcs-ed25519-b64-v1";
+}
 
-export { DelegationRevocation }
+// @public (undocumented)
+type Brand<T, B extends string> = T & {
+    readonly [__brand]?: B;
+};
 
-export { DelegationToken }
+// @public
+export function costAttestationDigest(att: CostAttestationV1): Promise<string>;
 
-export { DigestAlgorithm }
+// @public
+export interface CostAttestationV1 {
+    attestation_id: string;
+    attested_at: number;
+    cost_nanos: number;
+    covers: string;
+    issuer_id: string;
+    issuer_public_key?: string;
+    rate_table_id: string;
+    receipt_digest: DigestRef;
+    receipt_id: string;
+    // (undocumented)
+    schema: "motebit.cost-attestation.v1";
+    signature: string;
+    // (undocumented)
+    suite: "motebit-jcs-ed25519-b64-v1";
+}
 
-export { DigestRef }
+// @public
+export interface CostAttestationVerdict {
+    binding: "valid" | "invalid" | "unchecked";
+    cost_positive: boolean;
+    signature_valid: boolean;
+    temporal: "valid" | "invalid" | "unchecked";
+    valid: boolean;
+}
 
-export { EVAL_ATTESTATION_SUITE }
+// @public (undocumented)
+interface CredentialVerifyResult extends BaseResult {
+    // (undocumented)
+    credential: VerifiableCredential | null;
+    // (undocumented)
+    expired?: boolean;
+    hardware_attestation?: HardwareAttestationVerifyResult;
+    // (undocumented)
+    issuer?: string;
+    not_yet_valid?: boolean;
+    revocation_unchecked?: boolean;
+    // (undocumented)
+    subject?: string;
+    // (undocumented)
+    type: "credential";
+}
 
-export { EvalAttestation }
+// @public
+interface DataIntegrityProof {
+    // (undocumented)
+    created: string;
+    // (undocumented)
+    cryptosuite: "eddsa-jcs-2022";
+    // (undocumented)
+    proofPurpose: "assertionMethod" | "authentication";
+    // (undocumented)
+    proofValue: string;
+    // (undocumented)
+    type: "DataIntegrityProof";
+    // (undocumented)
+    verificationMethod: string;
+}
 
-export { EvalKind }
+// @public
+export interface DelegationRevocation {
+    // (undocumented)
+    delegator_id: string;
+    delegator_public_key: string;
+    grant_id: string;
+    // (undocumented)
+    revoked_at: number;
+    signature: string;
+    suite: "motebit-jcs-ed25519-b64-v1";
+}
 
-export { EvalResult }
+// @public
+export interface DelegationToken {
+    // (undocumented)
+    delegate_id: string;
+    delegate_public_key: string;
+    // (undocumented)
+    delegator_id: string;
+    delegator_public_key: string;
+    // (undocumented)
+    expires_at: number;
+    grant_id?: string;
+    // (undocumented)
+    issued_at: number;
+    not_before?: number;
+    scope: string;
+    signature: string;
+    suite: "motebit-jcs-ed25519-b64-v1";
+}
 
-export { EvidenceProvenance }
+// @public
+interface DeviceCheckVerifierContext {
+    // (undocumented)
+    readonly expectedAttestedAt?: number;
+    // (undocumented)
+    readonly expectedDeviceId?: string;
+    // (undocumented)
+    readonly expectedMotebitId?: string;
+}
 
-export { EvidenceProvenanceResult }
+// @public (undocumented)
+type DeviceId = Brand<string, "DeviceId">;
 
-export { EvidenceRef }
+// @public
+export type DigestAlgorithm = "sha-256";
 
-export { executionReceiptDigest }
+// @public
+export interface DigestRef {
+    readonly algorithm: DigestAlgorithm;
+    readonly value: string;
+}
 
-export { findGrantRevocation }
+// @public
+export const EVAL_ATTESTATION_SUITE: "motebit-jcs-ed25519-b64-v1";
+
+// @public
+export interface EvalAttestation {
+    readonly as_of: {
+        readonly timestamp_ms: number;
+        readonly anchor?: {
+            readonly chain: string;
+            readonly slot?: number;
+            readonly height?: number;
+        };
+    };
+    readonly attestation_id: string;
+    readonly eval_kind: EvalKind;
+    readonly evidence?: readonly EvidenceRef[];
+    readonly expires_at?: number;
+    readonly invocation?: {
+        readonly task_id?: string;
+        readonly relay_task_id?: string;
+    };
+    readonly issued_at: number;
+    readonly issuer: {
+        readonly motebit_id: string;
+        readonly public_key: string;
+    };
+    readonly results: readonly EvalResult[];
+    readonly signature: string;
+    readonly subject: {
+        readonly motebit_id: string;
+        readonly artifact_digests?: readonly DigestRef[];
+    };
+    readonly suite: "motebit-jcs-ed25519-b64-v1";
+}
+
+// @public
+export type EvalKind = "verification_audit";
+
+// @public
+export interface EvalResult {
+    readonly check: string;
+    readonly verdict: VerificationVerdict;
+}
+
+// @public
+export interface EvidenceProvenance {
+    readonly binding?: string;
+    readonly digest: DigestRef;
+    readonly locator?: {
+        readonly start: number;
+        readonly end: number;
+    };
+    readonly projection?: string;
+    readonly projectionClass?: ProjectionClass;
+    readonly span: string;
+}
+
+// @public
+export type EvidenceProvenanceResult = {
+    present: true;
+} | {
+    present: false;
+    reason: "digest_mismatch" | "projection_unresolved" | "span_absent";
+};
+
+// @public
+export interface EvidenceRef {
+    readonly kind: string;
+    readonly provenance?: EvidenceProvenance;
+    readonly ref: string;
+}
+
+// @public (undocumented)
+interface ExecutionReceipt {
+    // (undocumented)
+    completed_at: number;
+    // (undocumented)
+    delegated_scope?: string;
+    // (undocumented)
+    delegation_receipts?: ExecutionReceipt[];
+    // (undocumented)
+    device_id: string;
+    // (undocumented)
+    memories_formed: number;
+    // (undocumented)
+    motebit_id: string;
+    // (undocumented)
+    prompt_hash: string;
+    public_key?: string;
+    // (undocumented)
+    result: string;
+    // (undocumented)
+    result_hash: string;
+    // (undocumented)
+    signature: string;
+    // (undocumented)
+    status: string;
+    // (undocumented)
+    submitted_at: number;
+    // (undocumented)
+    task_id: string;
+    // (undocumented)
+    tools_used: string[];
+}
+
+// @public (undocumented)
+interface ExecutionReceipt_2 {
+    // (undocumented)
+    completed_at: number;
+    delegated_scope?: string;
+    // (undocumented)
+    delegation_receipts?: ExecutionReceipt_2[];
+    // (undocumented)
+    device_id: DeviceId;
+    invocation_origin?: IntentOrigin;
+    // (undocumented)
+    memories_formed: number;
+    // (undocumented)
+    motebit_id: MotebitId;
+    // (undocumented)
+    prompt_hash: string;
+    public_key?: string;
+    relay_task_id?: string;
+    // (undocumented)
+    result: string;
+    // (undocumented)
+    result_hash: string;
+    // (undocumented)
+    signature: string;
+    source_digest?: DigestRef;
+    source_projection?: string;
+    source_projection_class?: ProjectionClass;
+    status: "completed" | "failed" | "denied";
+    // (undocumented)
+    submitted_at: number;
+    suite: "motebit-jcs-ed25519-b64-v1";
+    // (undocumented)
+    task_id: string;
+    // (undocumented)
+    tools_used: string[];
+}
+
+// @public
+export function executionReceiptDigest(receipt: ExecutionReceipt_2): Promise<string>;
+
+// @public
+export function findGrantRevocation(grant: Pick<StandingDelegation, "grant_id" | "delegator_public_key">, revocations: readonly DelegationRevocation[]): Promise<DelegationRevocation | null>;
 
 // @public
 export function formatHuman(result: VerifyResultWithBinding): string;
 
-export { IdentityBindingVerdict }
+// @public
+interface HardwareAttestationClaim {
+    attestation_receipt?: string;
+    key_exported?: boolean;
+    platform: "secure_enclave" | "tpm" | "play_integrity" | "android_keystore" | "device_check" | "webauthn" | "software";
+}
 
-export { IntegrityVerdict }
+// @public
+interface HardwareAttestationError {
+    // (undocumented)
+    readonly message: string;
+}
 
-export { InvoiceV1 }
+// @public
+interface HardwareAttestationVerifiers {
+    // (undocumented)
+    readonly androidKeystore?: (claim: HardwareAttestationClaim, expectedIdentityPublicKeyHex: string, context?: DeviceCheckVerifierContext) => HardwareAttestationVerifyResult | PromiseLike<HardwareAttestationVerifyResult> | {
+        readonly valid: boolean;
+        readonly errors: ReadonlyArray<{
+            readonly message: string;
+        }>;
+    } | PromiseLike<{
+        readonly valid: boolean;
+        readonly errors: ReadonlyArray<{
+            readonly message: string;
+        }>;
+    }>;
+    // (undocumented)
+    readonly deviceCheck?: (claim: HardwareAttestationClaim, expectedIdentityPublicKeyHex: string, context?: DeviceCheckVerifierContext) => HardwareAttestationVerifyResult | PromiseLike<HardwareAttestationVerifyResult> | {
+        readonly valid: boolean;
+        readonly errors: ReadonlyArray<{
+            readonly message: string;
+        }>;
+    } | PromiseLike<{
+        readonly valid: boolean;
+        readonly errors: ReadonlyArray<{
+            readonly message: string;
+        }>;
+    }>;
+    // (undocumented)
+    readonly playIntegrity?: (claim: HardwareAttestationClaim, expectedIdentityPublicKeyHex: string, context?: DeviceCheckVerifierContext) => HardwareAttestationVerifyResult | PromiseLike<HardwareAttestationVerifyResult> | {
+        readonly valid: boolean;
+        readonly errors: ReadonlyArray<{
+            readonly message: string;
+        }>;
+    } | PromiseLike<{
+        readonly valid: boolean;
+        readonly errors: ReadonlyArray<{
+            readonly message: string;
+        }>;
+    }>;
+    // (undocumented)
+    readonly tpm?: (claim: HardwareAttestationClaim, expectedIdentityPublicKeyHex: string, context?: DeviceCheckVerifierContext) => HardwareAttestationVerifyResult | PromiseLike<HardwareAttestationVerifyResult> | {
+        readonly valid: boolean;
+        readonly errors: ReadonlyArray<{
+            readonly message: string;
+        }>;
+    } | PromiseLike<{
+        readonly valid: boolean;
+        readonly errors: ReadonlyArray<{
+            readonly message: string;
+        }>;
+    }>;
+    // (undocumented)
+    readonly webauthn?: (claim: HardwareAttestationClaim, expectedIdentityPublicKeyHex: string, context?: DeviceCheckVerifierContext) => HardwareAttestationVerifyResult | PromiseLike<HardwareAttestationVerifyResult> | {
+        readonly valid: boolean;
+        readonly errors: ReadonlyArray<{
+            readonly message: string;
+        }>;
+    } | PromiseLike<{
+        readonly valid: boolean;
+        readonly errors: ReadonlyArray<{
+            readonly message: string;
+        }>;
+    }>;
+}
 
-export { InvoiceVerdict }
+// @public
+interface HardwareAttestationVerifyResult {
+    readonly attested_at?: number;
+    // (undocumented)
+    readonly errors: readonly HardwareAttestationError[];
+    // (undocumented)
+    readonly platform: AttestationPlatform | null;
+    readonly se_public_key?: string;
+    // (undocumented)
+    readonly valid: boolean;
+}
 
-export { isFullyVerified }
+// @public
+export type IdentityBindingVerdict = "sovereign" | "anchored" | "pinned" | "unverified" | "invalid";
 
-export { ProjectionClass }
+// @public (undocumented)
+interface IdentityVerifyResult extends BaseResult {
+    // (undocumented)
+    did?: string;
+    error?: string;
+    // (undocumented)
+    identity: MotebitIdentityFile | null;
+    // (undocumented)
+    succession?: {
+        valid: boolean;
+        genesis_public_key?: string;
+        rotations: number;
+        error?: string;
+    };
+    // (undocumented)
+    type: "identity";
+}
 
-export { RepairInstruction }
+// @public
+export type IntegrityVerdict = "verified" | "invalid";
 
-export { RevocationFreshness }
+// @public
+type IntentOrigin = "user-tap" | "ai-loop" | "scheduled" | "agent-to-agent";
 
-export { RevocationStatus }
+// @public
+interface InvoiceLineItem {
+    cost_attestation_digest: DigestRef;
+    cost_nanos: number;
+    receipt_digest: DigestRef;
+    receipt_id: string;
+}
 
-export { RevocationVerdict }
+// @public
+export interface InvoiceV1 {
+    // (undocumented)
+    currency: "USD";
+    customer_ref: string;
+    flat_fee_minor: number;
+    invoice_id: string;
+    // (undocumented)
+    issued_at: number;
+    // (undocumented)
+    issuer_id: string;
+    issuer_public_key?: string;
+    // (undocumented)
+    line_items: InvoiceLineItem[];
+    passthrough_cost_minor: number;
+    period_end: number;
+    period_start: number;
+    // (undocumented)
+    rate_table_id: string;
+    // (undocumented)
+    schema: "motebit.invoice.v1";
+    // (undocumented)
+    signature: string;
+    // (undocumented)
+    suite: "motebit-jcs-ed25519-b64-v1";
+    total_minor: number;
+}
 
-export { ROUTING_TRANSCRIPT_SUITE }
+// @public
+export interface InvoiceVerdict {
+    arithmetic: boolean;
+    idempotency: "ok" | "duplicate_detected" | "unchecked";
+    issuer_consistency: "valid" | "invalid" | "unchecked";
+    passthrough_cap: boolean;
+    per_line_binding: "valid" | "invalid" | "unchecked";
+    // (undocumented)
+    signature_valid: boolean;
+    stale_cost_overstatement: "none" | "detected" | "unchecked";
+    valid: boolean;
+}
 
-export { RoutingDecisionTranscript }
+// @public
+export function isFullyVerified(verdict: VerificationVerdict): boolean;
 
-export { SignedRequestEnvelope }
+// @public
+const KEY_SUCCESSION_SUITE: "motebit-jcs-ed25519-hex-v1";
 
-export { signEvalAttestation }
+// @public
+interface KeySuccessionRecord {
+    guardian_signature?: string;
+    // (undocumented)
+    new_key_signature: string;
+    // (undocumented)
+    new_public_key: string;
+    // (undocumented)
+    old_key_signature?: string;
+    // (undocumented)
+    old_public_key: string;
+    // (undocumented)
+    reason?: string;
+    recovery?: boolean;
+    suite: typeof KEY_SUCCESSION_SUITE;
+    // (undocumented)
+    timestamp: number;
+}
 
-export { signRequestEnvelope }
+// @public
+type MerkleTreeVersion = "merkle-sha256-plain-v1" | "merkle-sha256-rfc6962-v2";
 
-export { signRoutingTranscript }
+// @public (undocumented)
+type MotebitId = Brand<string, "MotebitId">;
 
-export { SkillFileVerifyResult }
+// @public (undocumented)
+interface MotebitIdentityFile {
+    // (undocumented)
+    capabilities?: string[];
+    // (undocumented)
+    created_at: string;
+    // (undocumented)
+    devices: Array<{
+        device_id: string;
+        name: string;
+        public_key: string;
+        registered_at: string;
+    }>;
+    // (undocumented)
+    governance: {
+        trust_mode: "full" | "guarded" | "minimal";
+        max_risk_auto: string;
+        require_approval_above: string;
+        deny_above: string;
+        operator_mode: boolean;
+    };
+    guardian?: {
+        public_key: string;
+        organization?: string;
+        organization_id?: string;
+        established_at: string;
+        attestation?: string;
+    };
+    // (undocumented)
+    identity: {
+        algorithm: "Ed25519";
+        public_key: string;
+    };
+    // (undocumented)
+    memory: {
+        half_life_days: number;
+        confidence_threshold: number;
+        per_turn_limit: number;
+    };
+    // (undocumented)
+    motebit_id: string;
+    // (undocumented)
+    owner_id: string;
+    // (undocumented)
+    privacy: {
+        default_sensitivity: string;
+        retention_days: Record<string, number>;
+        fail_closed: boolean;
+    };
+    // (undocumented)
+    service_description?: string;
+    // (undocumented)
+    service_name?: string;
+    // (undocumented)
+    service_url?: string;
+    // (undocumented)
+    spec: string;
+    // (undocumented)
+    succession?: Array<SuccessionRecord>;
+    // (undocumented)
+    terms_url?: string;
+    // (undocumented)
+    type?: "personal" | "service" | "collaborative";
+}
 
-export { SkillVerifyResult }
+// @public (undocumented)
+interface PresentationVerifyResult extends BaseResult {
+    // (undocumented)
+    credentials?: CredentialVerifyResult[];
+    // (undocumented)
+    holder?: string;
+    // (undocumented)
+    presentation: VerifiablePresentation | null;
+    // (undocumented)
+    type: "presentation";
+}
 
-export { StandingDelegation }
+// @public
+export type ProjectionClass = "spec-reproducible" | "tool-pinned";
 
-export { subjectBindingDigest }
+// @public (undocumented)
+interface ReceiptVerifyResult extends BaseResult {
+    // (undocumented)
+    delegations?: ReceiptVerifyResult[];
+    keySource?: "embedded";
+    // (undocumented)
+    receipt: ExecutionReceipt | null;
+    // (undocumented)
+    signer?: string;
+    // (undocumented)
+    type: "receipt";
+}
 
-export { SubjectBindingV1 }
+// @public
+export interface RepairInstruction {
+    axis: "integrity" | "identityBinding" | "authority" | "revocation";
+    canonical?: string;
+    code: string;
+    fix: string;
+    summary: string;
+}
 
-export { TemporalBasis }
+// @public
+export interface RevocationFreshness {
+    // (undocumented)
+    asOf: {
+        timestamp_ms?: number;
+        anchor?: {
+            chain: string;
+            slot?: number;
+            height?: number;
+        };
+    };
+    // (undocumented)
+    basis: "asserted" | "stapled" | "ledger";
+}
 
-export { TranscriptCandidate }
+// @public
+export type RevocationStatus = "fresh" | "stale" | "unchecked" | "revoked";
 
-export { VerdictSubject }
+// @public (undocumented)
+export interface RevocationVerdict {
+    freshness?: RevocationFreshness;
+    // (undocumented)
+    status: RevocationStatus;
+}
 
-export { VerificationVerdict }
+// @public
+const ROUTING_TRANSCRIPT_SPEC_ID = "motebit/routing-transcript@1.0";
 
-export { verifyApprovalDecision }
+// @public
+export const ROUTING_TRANSCRIPT_SUITE: "motebit-jcs-ed25519-b64-v1";
+
+// @public
+export interface RoutingDecisionTranscript {
+    readonly algorithm_version: string;
+    readonly bond_explore_boost: number;
+    readonly candidates: readonly TranscriptCandidate[];
+    readonly capability: string;
+    readonly count_cap: number;
+    readonly default_latency_ms: number;
+    readonly delegator_motebit_id: string;
+    readonly delegator_public_key: string;
+    readonly explored: boolean;
+    readonly issued_at: number;
+    readonly pinned?: true;
+    readonly seed: string;
+    readonly signature: string;
+    readonly spec: typeof ROUTING_TRANSCRIPT_SPEC_ID;
+    readonly strength: number;
+    readonly suite: "motebit-jcs-ed25519-b64-v1";
+    readonly weights: {
+        readonly trust: number;
+        readonly reliability: number;
+        readonly cost: number;
+        readonly latency: number;
+    };
+    readonly winner_motebit_id: string;
+}
+
+// @public
+type SettlementAsset = "USDC";
+
+// @public
+interface SignableReceipt {
+    // (undocumented)
+    completed_at: number;
+    // (undocumented)
+    delegated_scope?: string;
+    // (undocumented)
+    delegation_receipts?: SignableReceipt[];
+    // (undocumented)
+    device_id: string;
+    // (undocumented)
+    memories_formed: number;
+    // (undocumented)
+    motebit_id: string;
+    // (undocumented)
+    prompt_hash: string;
+    public_key?: string;
+    // (undocumented)
+    relay_task_id?: string;
+    // (undocumented)
+    result: string;
+    // (undocumented)
+    result_hash: string;
+    // (undocumented)
+    signature: string;
+    source_digest?: DigestRef;
+    source_projection?: string;
+    // (undocumented)
+    status: "completed" | "failed" | "denied";
+    // (undocumented)
+    submitted_at: number;
+    suite: "motebit-jcs-ed25519-b64-v1";
+    // (undocumented)
+    task_id: string;
+    // (undocumented)
+    tools_used: string[];
+}
+
+// @public
+interface SignableToolInvocationReceipt {
+    // (undocumented)
+    args_hash: string;
+    // (undocumented)
+    completed_at: number;
+    // (undocumented)
+    device_id: string;
+    // (undocumented)
+    invocation_id: string;
+    invocation_origin?: "user-tap" | "ai-loop" | "scheduled" | "agent-to-agent";
+    // (undocumented)
+    motebit_id: string;
+    public_key?: string;
+    // (undocumented)
+    result_hash: string;
+    // (undocumented)
+    signature: string;
+    // (undocumented)
+    started_at: number;
+    // (undocumented)
+    status: "completed" | "failed" | "denied";
+    suite: "motebit-jcs-ed25519-b64-v1";
+    // (undocumented)
+    task_id: string;
+    // (undocumented)
+    tool_name: string;
+}
+
+// @public
+export interface SignedRequestEnvelope {
+    aud: string;
+    motebit_id: string;
+    nonce?: string;
+    payload_digest: string;
+    signature: string;
+    suite: "motebit-jcs-ed25519-b64-v1";
+    ts: number;
+}
+
+// @public
+export function signEvalAttestation(body: Omit<EvalAttestation, "signature" | "suite">, issuerPrivateKey: Uint8Array): Promise<EvalAttestation>;
+
+// @public
+export function signRequestEnvelope(payload: unknown, fields: {
+    motebit_id: string;
+    ts: number;
+    aud: string;
+    nonce?: string;
+}, identityPrivateKey: Uint8Array): Promise<SignedRequestEnvelope>;
+
+// @public
+export function signRoutingTranscript(body: Omit<RoutingDecisionTranscript, "signature" | "suite">, delegatorPrivateKey: Uint8Array): Promise<RoutingDecisionTranscript>;
+
+// @public
+interface SkillEnvelope {
+    body_hash: string;
+    files: SkillEnvelopeFile[];
+    manifest: SkillManifest;
+    signature: SkillSignature;
+    skill: SkillEnvelopeSkillRef;
+    spec_version: "1.0";
+}
+
+// @public
+interface SkillEnvelopeFile {
+    hash: string;
+    path: string;
+}
+
+// @public
+interface SkillEnvelopeSkillRef {
+    content_hash: string;
+    name: string;
+    version: string;
+}
+
+// @public
+export interface SkillFileVerifyResult {
+    // (undocumented)
+    readonly actual: string | null;
+    // (undocumented)
+    readonly expected: string;
+    // (undocumented)
+    readonly path: string;
+    readonly reason: "ok" | "hash_mismatch" | "missing";
+    // (undocumented)
+    readonly valid: boolean;
+}
+
+// @public
+interface SkillHardwareAttestationGate {
+    minimum_score?: number;
+    required?: boolean;
+}
+
+// @public
+interface SkillManifest {
+    description: string;
+    metadata?: SkillManifestMetadata;
+    motebit: SkillManifestMotebit;
+    name: string;
+    platforms?: SkillPlatform[];
+    version: string;
+}
+
+// @public
+interface SkillManifestMetadata {
+    author?: string;
+    category?: string;
+    config?: Record<string, unknown>;
+    tags?: string[];
+}
+
+// @public
+interface SkillManifestMotebit {
+    hardware_attestation?: SkillHardwareAttestationGate;
+    sensitivity?: SkillSensitivity;
+    signature?: SkillSignature;
+    spec_version: "1.0";
+}
+
+// @public
+type SkillPlatform = "macos" | "linux" | "windows" | "ios" | "android";
+
+// @public
+type SkillSensitivity = "none" | "personal" | "medical" | "financial" | "secret";
+
+// @public
+interface SkillSignature {
+    public_key: string;
+    suite: "motebit-jcs-ed25519-b64-v1";
+    value: string;
+}
+
+// @public
+type SkillVerifyReason = "ok" | "no_signature" | "wrong_suite" | "bad_public_key" | "bad_signature_value" | "ed25519_mismatch";
+
+// @public
+export interface SkillVerifyResult extends BaseResult {
+    // (undocumented)
+    envelope: SkillEnvelope | null;
+    signer?: string;
+    skill?: string;
+    // (undocumented)
+    steps: {
+        envelope: {
+            valid: boolean;
+            reason: SkillVerifyReason;
+        };
+        body_hash: {
+            valid: boolean;
+            expected: string;
+            actual: string;
+        } | null;
+        files: ReadonlyArray<SkillFileVerifyResult>;
+    };
+    // (undocumented)
+    type: "skill";
+}
+
+// @public
+interface SpendCeilingV1 {
+    cumulative_limit_micro?: number;
+    lifetime_limit_micro?: number;
+    max_action_count?: number;
+    per_counterparty_limit_micro?: number;
+    schema: "motebit.spend-ceiling.v1";
+    window_ms?: number;
+}
+
+// @public
+export interface StandingDelegation {
+    cadence_ms: number;
+    // (undocumented)
+    delegate_id: string;
+    delegate_public_key: string;
+    // (undocumented)
+    delegator_id: string;
+    delegator_public_key: string;
+    expires_at: number;
+    grant_id: string;
+    // (undocumented)
+    issued_at: number;
+    max_token_ttl_ms: number;
+    not_before: number | null;
+    scope: string;
+    signature: string;
+    spend_ceiling?: SpendCeilingV1;
+    subject: string;
+    subject_binding?: SubjectBindingV1;
+    suite: "motebit-jcs-ed25519-b64-v1";
+}
+
+// @public
+export function subjectBindingDigest(artifact: {
+    schema: string;
+}): Promise<string>;
+
+// @public
+export interface SubjectBindingV1 {
+    artifact_schema: string;
+    digest: string;
+    digest_method: "jcs-sha256-hex";
+    schema: "motebit.subject-binding.v1";
+}
+
+// @public
+interface SuccessionChainResult {
+    // (undocumented)
+    current_public_key: string;
+    // (undocumented)
+    error?: {
+        index: number;
+        message: string;
+    };
+    // (undocumented)
+    genesis_public_key: string;
+    // (undocumented)
+    length: number;
+    // (undocumented)
+    valid: boolean;
+}
+
+// @public (undocumented)
+interface SuccessionRecord {
+    guardian_signature?: string;
+    // (undocumented)
+    new_key_signature: string;
+    // (undocumented)
+    new_public_key: string;
+    // (undocumented)
+    old_key_signature?: string;
+    // (undocumented)
+    old_public_key: string;
+    // (undocumented)
+    reason?: string;
+    recovery?: boolean;
+    suite: "motebit-jcs-ed25519-hex-v1";
+    // (undocumented)
+    timestamp: number;
+}
+
+// @public
+export type TemporalBasis = "clockless" | "local_clock" | "ledger_anchored";
+
+// @public (undocumented)
+interface ToolInvocationVerifyResult extends BaseResult {
+    keySource?: "embedded";
+    // (undocumented)
+    signer?: string;
+    // (undocumented)
+    toolInvocation: SignableToolInvocationReceipt | null;
+    // (undocumented)
+    type: "tool-invocation";
+}
+
+// @public
+export interface TranscriptCandidate {
+    alpha?: number;
+    beta?: number;
+    bonded?: true;
+    motebit_id: string;
+    reliability_axis: number;
+    theta?: number;
+    trust_axis: number;
+    unit_cost?: number;
+}
+
+// @public
+interface UnknownVerifyResult extends BaseResult {
+    // (undocumented)
+    reason: "unrecognized_artifact_type";
+    // (undocumented)
+    type: "unknown";
+    // (undocumented)
+    valid: false;
+}
+
+// @public
+export type VerdictSubject = "identity" | "receipt" | "tool-invocation" | "credential" | "presentation" | "skill" | "unknown" | "delegation_token" | "succession" | "revocation" | "bond_commitment" | "solvency_proof";
+
+// @public (undocumented)
+interface VerifiableCredential<T = Record<string, unknown>> {
+    // (undocumented)
+    "@context": string[];
+    // (undocumented)
+    credentialStatus?: {
+        id: string;
+        type: string;
+    };
+    // (undocumented)
+    credentialSubject: T & {
+        id: string;
+    };
+    // (undocumented)
+    issuer: string;
+    // (undocumented)
+    proof: DataIntegrityProof;
+    // (undocumented)
+    type: string[];
+    // (undocumented)
+    validFrom: string;
+    // (undocumented)
+    validUntil?: string;
+}
+
+// @public (undocumented)
+interface VerifiablePresentation {
+    // (undocumented)
+    "@context": string[];
+    // (undocumented)
+    holder: string;
+    // (undocumented)
+    proof: DataIntegrityProof;
+    // (undocumented)
+    type: string[];
+    // (undocumented)
+    verifiableCredential: VerifiableCredential[];
+}
+
+// @public (undocumented)
+interface VerificationError {
+    // (undocumented)
+    message: string;
+    // (undocumented)
+    path?: string;
+}
+
+// @public
+export interface VerificationVerdict {
+    // (undocumented)
+    authority: AuthorityVerdict;
+    // (undocumented)
+    evidenceBasis: readonly EvidenceRef[];
+    // (undocumented)
+    identityBinding: IdentityBindingVerdict;
+    // (undocumented)
+    integrity: IntegrityVerdict;
+    repair?: RepairInstruction;
+    // (undocumented)
+    revocation: RevocationVerdict;
+    // (undocumented)
+    temporalBasis: TemporalBasis;
+    type: VerdictSubject;
+}
+
+// @public
+export function verifyApprovalDecision(decision: ApprovalDecision, approverPublicKey: Uint8Array): Promise<boolean>;
 
 // @public
 export function verifyArtifact(content: string | object, opts?: VerifyFileOptions): Promise<VerifyResultWithBinding>;
 
-export { verifyBondCommitment }
+// @public
+export function verifyBondCommitment(commitment: BondCommitment): Promise<boolean>;
 
-export { verifyCostAttestation }
+// @public
+export function verifyCostAttestation(att: CostAttestationV1, registeredIssuerKeyHex: string, options?: {
+    receipt?: ExecutionReceipt_2;
+}): Promise<CostAttestationVerdict>;
 
-export { verifyDelegation }
+// @public
+export function verifyDelegation(delegation: DelegationToken, options?: {
+    checkExpiry?: boolean;
+    now?: number;
+}): Promise<boolean>;
 
-export { verifyDelegationRevocation }
+// @public
+export function verifyDelegationRevocation(revocation: DelegationRevocation): Promise<boolean>;
 
-export { verifyDelegationTokenVerdict }
+// @public
+export function verifyDelegationTokenVerdict(token: DelegationToken, grant: StandingDelegation, options?: {
+    revocations?: readonly DelegationRevocation[];
+    revocationFreshness?: RevocationFreshness;
+    now?: number;
+    temporalMode?: "wall_clock" | "ordering";
+}): Promise<VerificationVerdict>;
 
-export { verifyEvalAttestation }
+// @public
+export function verifyEvalAttestation(attestation: EvalAttestation): Promise<VerifyEvalAttestationResult>;
 
-export { VerifyEvalAttestationResult }
+// @public
+export interface VerifyEvalAttestationResult {
+    readonly reason?: "unsupported_suite" | "unknown_eval_kind" | "empty_results" | "malformed_public_key" | "malformed_signature" | "signature_invalid";
+    // (undocumented)
+    readonly valid: boolean;
+}
 
-export { verifyEvidenceProvenance }
+// @public
+export function verifyEvidenceProvenance(bytes: Uint8Array, provenance: EvidenceProvenance, opts?: {
+    resolveProjection?: (recipeId: string, bytes: Uint8Array) => string | Promise<string>;
+}): Promise<EvidenceProvenanceResult>;
 
 // @public
 export function verifyFile(path: string, opts?: VerifyFileOptions): Promise<VerifyResultWithBinding>;
@@ -197,43 +1131,105 @@ export interface VerifyFileOptions {
     readonly strictHashBinding?: boolean;
 }
 
-export { verifyInvoice }
+// @public
+export function verifyInvoice(invoice: InvoiceV1, registeredIssuerKeyHex: string, options?: {
+    costAttestations?: readonly CostAttestationV1[];
+    receipts?: readonly ExecutionReceipt_2[];
+    latestCostAttestations?: ReadonlyMap<string, CostAttestationV1>;
+    otherInvoices?: readonly InvoiceV1[];
+}): Promise<InvoiceVerdict>;
 
-export { verifyKeySuccession }
+// @public
+export function verifyKeySuccession(record: KeySuccessionRecord, guardianPublicKeyHex?: string): Promise<boolean>;
 
-export { verifyMerkleInclusion }
+// @public
+export function verifyMerkleInclusion(leaf: string, index: number, siblings: string[], layerSizes: number[], expectedRoot: string, treeHashVersion?: MerkleTreeVersion): Promise<boolean>;
 
-export { verifyReceiptVerdict }
+// @public
+export function verifyReceiptVerdict(receipt: SignableReceipt): Promise<VerificationVerdict>;
 
-export { verifyRequestEnvelope }
+// @public
+export function verifyRequestEnvelope(envelope: SignedRequestEnvelope, registeredPublicKey: Uint8Array, options?: {
+    payload?: unknown;
+    expectedAud?: string;
+    checkFreshness?: boolean;
+    now?: number;
+    windowMs?: number;
+}): Promise<boolean>;
 
-export { VerifyResult }
+// @public (undocumented)
+export type VerifyResult = IdentityVerifyResult | ReceiptVerifyResult | ToolInvocationVerifyResult | CredentialVerifyResult | PresentationVerifyResult | SkillVerifyResult | UnknownVerifyResult;
 
 // @public
 export type VerifyResultWithBinding = VerifyResult & {
     readonly sovereign?: boolean;
 };
 
-export { verifyRoutingTranscript }
+// @public
+export function verifyRoutingTranscript(transcript: RoutingDecisionTranscript): Promise<VerifyRoutingTranscriptResult>;
 
-export { VerifyRoutingTranscriptResult }
+// @public
+export interface VerifyRoutingTranscriptResult {
+    readonly reason?: "unsupported_suite" | "unsupported_spec" | "empty_candidates" | "winner_not_in_candidates" | "malformed_public_key" | "malformed_signature" | "signature_invalid";
+    // (undocumented)
+    readonly valid: boolean;
+}
 
 // @public
 export function verifySkillDirectory(dir: string, opts?: VerifyFileOptions): Promise<SkillVerifyResult>;
 
-export { verifySovereignBinding }
+// @public
+export function verifySovereignBinding(motebitId: string, genesisPublicKeyHex: string): Promise<boolean>;
 
-export { verifyStandingDelegation }
+// @public
+export function verifyStandingDelegation(grant: StandingDelegation, options?: {
+    checkExpiry?: boolean;
+    now?: number;
+    isRevoked?: (grantId: string) => boolean;
+}): Promise<boolean>;
 
-export { verifySubjectBinding }
+// @public
+export function verifySubjectBinding(binding: SubjectBindingV1, artifact: {
+    schema: string;
+}): Promise<{
+    valid: boolean;
+    error?: string;
+}>;
 
-export { verifySuccessionChain }
+// @public
+export function verifySuccessionChain(chain: KeySuccessionRecord[], guardianPublicKeyHex?: string): Promise<SuccessionChainResult>;
 
-export { verifyTokenAgainstGrant }
+// @public
+export function verifyTokenAgainstGrant(token: DelegationToken, grant: StandingDelegation, options?: {
+    now?: number;
+    isRevoked?: (grantId: string) => boolean;
+}): Promise<{
+    valid: boolean;
+    error?: string;
+}>;
 
-export { verifyWithdrawalReceipt }
+// @public
+export function verifyWithdrawalReceipt(payload: WithdrawalReceiptPayload, signatureB64Url: string, publicKey: Uint8Array): Promise<boolean>;
 
-export { WithdrawalReceiptPayload }
+// @public
+export interface WithdrawalReceiptPayload {
+    // (undocumented)
+    amount: number;
+    // (undocumented)
+    completed_at: number;
+    // (undocumented)
+    currency: string;
+    // (undocumented)
+    destination: string;
+    // (undocumented)
+    motebit_id: string;
+    // (undocumented)
+    payout_reference: string;
+    // (undocumented)
+    relay_id: string;
+    // (undocumented)
+    withdrawal_id: string;
+}
 
 // (No @packageDocumentation comment for this package)
 

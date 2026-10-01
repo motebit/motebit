@@ -41,7 +41,15 @@
  */
 
 import { spawnSync } from "node:child_process";
-import { writeFileSync, unlinkSync, existsSync, readFileSync, readdirSync } from "node:fs";
+import {
+  writeFileSync,
+  unlinkSync,
+  existsSync,
+  readFileSync,
+  readdirSync,
+  renameSync,
+  rmSync,
+} from "node:fs";
 import { resolve, dirname, relative } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -732,13 +740,14 @@ export async function probeLeak(): Promise<boolean> {
   },
   {
     script: "check-api-surface",
-    // Requires packages/{protocol,crypto,sdk}/dist to exist so api-extractor
-    // can read the .d.ts and produce etc/temp/*.api.md to diff against the
-    // (mutated) baseline. Pre-push and the CI gate-effectiveness job run
-    // `pnpm build` before this probe for exactly that reason — without dist/,
-    // api-extractor errors on missing input and the probe would "pass" for
-    // the wrong reason (non-zero exit without actually proving drift
-    // detection).
+    // Requires packages/{protocol,crypto,sdk,verifier}/dist to exist so
+    // api-extractor can read the .d.ts and produce etc/temp/*.api.md to diff
+    // against the (mutated) baseline. Pre-push and the CI gate-effectiveness
+    // job run `pnpm build` before this probe for exactly that reason — without
+    // dist/, check-api-surface fails closed on the missing entry point, so
+    // this probe would "pass" for the wrong reason (non-zero exit without
+    // actually proving drift detection). The missing-dist probe below proves
+    // that fail-closed path on its own.
     proves: "flags a committed baseline that diverges from the extracted API surface",
     perturb: () =>
       mutateFile(
@@ -781,6 +790,58 @@ export async function probeLeak(): Promise<boolean> {
         );
       }),
     skipWhen: () => scanChangesetsForMajor("@motebit/verifier"),
+  },
+  {
+    script: "check-api-surface",
+    proves:
+      "flags a breaking change to a @motebit/crypto type that @motebit/verifier re-exports even when only @motebit/crypto has a pending `major` changeset — the verifier baseline carries the bundled re-exported declarations, so a crypto-only major cannot let the break cascade into a verifier patch (docs/doctrine/agency-proof-integration.md §2)",
+    perturb: () => {
+      // Narrow crypto's `VerifyResult` union (re-exported by the verifier) in
+      // the built .d.ts, and declare a crypto-only major. The crypto row is
+      // covered by that changeset, so the gate goes red ONLY if the verifier
+      // row sees the re-exported declaration change.
+      const restoreDist = mutateFile("packages/crypto/dist/index.d.ts", (src) => {
+        const head = "export type VerifyResult = IdentityVerifyResult | ";
+        if (!src.includes(head)) {
+          throw new Error(
+            "crypto dist/index.d.ts VerifyResult union not found — update this probe",
+          );
+        }
+        return src.replace(head, "export type VerifyResult = ");
+      });
+      const removeChangeset = writeFixture(
+        `.changeset/${PROBE_PREFIX}crypto-only-major.md`,
+        `---\n"@motebit/crypto": major\n---\n\nProbe-only crypto major.\n\n## Migration\n\nProbe.\n`,
+      );
+      return () => {
+        removeChangeset();
+        restoreDist();
+      };
+    },
+    skipWhen: () => scanChangesetsForMajor("@motebit/verifier"),
+  },
+  {
+    script: "check-api-surface",
+    proves:
+      "fails closed when a tracked package's dist/index.d.ts is missing — an unbuilt package is never reported as matching its baseline",
+    perturb: () => {
+      // Move the entry point aside rather than delete it, so cleanup restores
+      // the exact built file. No skipWhen: a pending `major` changeset must
+      // not cover an unextracted surface either.
+      const entry = resolve(ROOT, "packages/verifier/dist/index.d.ts");
+      const aside = `${entry}.${PROBE_PREFIX}moved`;
+      if (!existsSync(entry)) {
+        throw new Error("packages/verifier/dist/index.d.ts not found — run `pnpm build` first");
+      }
+      // Clear the generated (gitignored) temp report an earlier probe may have
+      // left behind: a stale divergent temp file would make the gate exit 1
+      // for the wrong reason and mask a fail-open on the missing entry point.
+      rmSync(resolve(ROOT, "packages/verifier/etc/temp/verifier.api.md"), { force: true });
+      renameSync(entry, aside);
+      return () => {
+        if (existsSync(aside)) renameSync(aside, entry);
+      };
+    },
   },
   {
     script: "check-docs-tree",
