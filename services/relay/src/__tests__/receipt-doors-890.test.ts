@@ -85,7 +85,7 @@ import {
 } from "../receipts-store.js";
 import { relayMigrations } from "../migrations.js";
 
-const PORT = 18953;
+const PORT = 18963; // its own port: task-presenter.test.ts binds 18953
 type Door = "post" | "mcp" | "fed";
 type Variant =
   | "routed"
