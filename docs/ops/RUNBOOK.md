@@ -229,7 +229,9 @@ When pending changesets exist in `.changeset/*.md`, the action opens a
 the workflow, which then publishes to npm.
 
 ```bash
-# 0. Sanity locally before push — the pre-push hook also runs this matrix
+# 0. Sanity locally before push — the pre-push hook runs only a scoped subset
+#    (changed packages' tests, no coverage); CI runs everything, so run the
+#    full matrix yourself before a release push
 pnpm -w check
 pnpm -w lint
 pnpm -w test

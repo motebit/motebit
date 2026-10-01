@@ -76,8 +76,9 @@ To verify a declaration:
 2. Recompute `signed_bytes` from `{spec, declared_at, relay_id, relay_public_key, content}` (excluding `hash`, `suite`, `signature`).
 3. Recompute `hash = sha256_hex(signed_bytes)`. Reject (`hash_mismatch`) if it differs from the declaration's `hash`.
 4. Decode `relay_public_key` (hex → 32 bytes) and `signature` (hex → 64 bytes). Reject (`malformed_public_key` / `malformed_signature`) on length or format failure.
-5. Verify the signature against `signed_bytes` under the declared `suite` via `verifyBySuite`. Reject (`signature_invalid`) on failure.
-6. (Optional, recommended) Cross-check the hash against an onchain anchor (§5). Reject (`anchor_hash_mismatch` / `no_anchor_found`) on failure.
+5. Check `suite` equals `motebit-jcs-ed25519-hex-v1`; reject (`unsupported_suite`) otherwise. Because `suite` is a post-sign field outside `signed_bytes`, it is pinned by the verifier and never used as an attacker-selectable dispatch key.
+6. Verify the signature against `signed_bytes` under the pinned suite via `verifyBySuite`. Reject (`signature_invalid`) on failure.
+7. (Optional, recommended) Cross-check the hash against an onchain anchor (§5). Reject (`anchor_hash_mismatch` / `no_anchor_found`) on failure.
 
 Pass: the declaration commits the operator to `relay_public_key` at `declared_at`. Verifiers cache the key and use it as the trust anchor for every other relay-asserted artifact.
 
@@ -167,7 +168,7 @@ Master-token gated. Used by the operator to inspect the live declaration without
 
 **Hash bound to envelope only.** The signed payload is the five-field envelope, not the `content` block alone. Operators MUST NOT publish a declaration whose `content` is signed separately from the envelope — verifiers reject any declaration where `hash` does not match the canonical-JSON of the full envelope.
 
-**Suite agility.** `suite` is a closed registry in `@motebit/protocol::SuiteId`. Post-quantum migration is a new suite entry and a new dispatch arm in `@motebit/crypto::suite-dispatch.ts`; the wire format does not change.
+**Suite agility.** `suite` is a closed registry in `@motebit/protocol::SuiteId`. Post-quantum migration is a new suite entry and a new dispatch arm in `@motebit/crypto::suite-dispatch.ts`; the wire format does not change. Because `suite` is outside the signed bytes in this envelope, a substituted `suite` is not detected by the signature; verifiers MUST pin the suite (today exactly `motebit-jcs-ed25519-hex-v1`) and MUST NOT dispatch on the declared value. Admitting a second suite is therefore a verifier change (an explicit allow-list entry), never a wire-only change.
 
 ## 9. Relationship to Other Specs
 

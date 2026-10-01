@@ -77,7 +77,7 @@ This doctrine does not replace; it composes.
 - **[`runtime-invariants-over-prompt-rules.md`](runtime-invariants-over-prompt-rules.md)** says the runtime should enforce; the prompt should teach. This doctrine adds: the prompt's _teaching density_ is an adaptive surface, not a constant. The runtime is constant; the teaching scales to what the model needs taught.
 - **[`auto-routing-as-protocol-primitive.md`](auto-routing-as-protocol-primitive.md)** defines the dispatcher's deny channel for "no catalog entry satisfies constraints." This doctrine adds the **admission** deny for "the chosen model cannot carry the assembled prompt." Two deny semantics; one calm-software surface (the chrome's `routingNarration` slot).
 - **Capability rings** in [`CLAUDE.md`](../../CLAUDE.md): "Ring 1 is about capability, not form — a surface may express the same capability through a different medium-native form." This doctrine extends: the same runtime expresses its invariants through a _differently-budgeted_ prompt without becoming a different runtime.
-- **[`agility-as-role.md`](agility-as-role.md)**: model selection is the 8th instance of agility-as-role (after cryptosuite, license-floor, settlement-rail, inference-host, model-lab, jurisdiction, TaskShape). The intelligence is the parameter; the runtime is the role.
+- **[`agility-as-role.md`](agility-as-role.md)**: model selection is agility-as-role's foundation-model instance (one of seven: cryptosuite, license-floor, settlement-rail, foundation-model, inference-host, model-lab, TaskShape; `Jurisdiction` is an admission predicate, not an instance). The intelligence is the parameter; the runtime is the role.
 
 ## Drift defense
 

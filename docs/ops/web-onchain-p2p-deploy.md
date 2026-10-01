@@ -64,7 +64,7 @@ to `PUBLIC_BUILD_ENV` first (a reviewed edit with a validator and a why), or the
 next deploy fails loudly. Vercel's auto-exposed `VITE_VERCEL_*` system vars are
 dropped before Vite reads them (no source reads them). **Never set
 `VITE_SOLANA_RPC_URL` in a deployed project** — it is a local-dev override only.
-`check-no-secrets-in-client-bundles` (#166) also scans the built bundles.
+`check-no-secrets-in-client-bundles` (#168) also scans the built bundles.
 Redeploy after changing env (Vercel doesn't rebuild on env change alone).
 
 ## Deploy

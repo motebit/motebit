@@ -17,7 +17,13 @@
 import { describe, it, expect, beforeAll } from "vitest";
 import { Hono } from "hono";
 // eslint-disable-next-line no-restricted-imports -- tests need direct crypto
-import { generateKeypair, createSignedToken } from "@motebit/crypto";
+import {
+  generateKeypair,
+  createSignedToken,
+  canonicalJson,
+  ed25519Sign,
+  toBase64Url,
+} from "@motebit/crypto";
 import type { SignedTokenPayload } from "@motebit/crypto";
 import { BROWSER_SANDBOX_AUDIENCE } from "@motebit/protocol";
 import { requireAuth, verifyRelaySandboxToken, extractBearer } from "../auth.js";
@@ -91,6 +97,28 @@ describe("verifyRelaySandboxToken", () => {
   it("rejects a malformed token", async () => {
     const verified = await verifyRelaySandboxToken("not-a-jwt", relayPublicKey);
     expect(verified).toBeNull();
+  });
+
+  // Reverse token confusion: the relay signs proxy tokens (`issueProxyToken`)
+  // with the SAME key it signs sandbox tokens with. A proxy token — even one
+  // carrying a smuggled `aud` — must never verify as a sandbox token.
+  it("rejects a relay-signed proxy token (cross-artifact confusion)", async () => {
+    const now = Date.now();
+    for (const extra of [{}, { aud: BROWSER_SANDBOX_AUDIENCE }]) {
+      const payload = {
+        mid: "motebit-alice",
+        bal: 5_000_000,
+        models: ["claude-sonnet-4-6"],
+        jti: crypto.randomUUID(),
+        iat: now,
+        exp: now + 3_600_000,
+        ...extra,
+      };
+      const bytes = new TextEncoder().encode(canonicalJson(payload));
+      const sig = await ed25519Sign(bytes, relayPrivateKey);
+      const token = `${toBase64Url(bytes)}.${toBase64Url(sig)}`;
+      expect(await verifyRelaySandboxToken(token, relayPublicKey)).toBeNull();
+    }
   });
 });
 
