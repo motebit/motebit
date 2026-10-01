@@ -1,123 +1,125 @@
-# Primitive vocabulary
+# Primitive vocabulary — the concept map
 
-Motebit's doctrine corpus uses different primitive vocabularies in different documents — by design. Each vocabulary serves a distinct communicative purpose: external positioning, architectural enumeration, comparative explanation, hero compression, and metabolic distillation. The vocabularies coexist legitimately; the drift problem is not their existence but their lack of cross-reference.
+This is the single canonical map of motebit's concepts. It answers "what are motebit's primitives, and how do they relate?" once. Every other primitive list in the repo — README hero table, positioning lines, pitch decks, architecture pages — is a narrative compression of this map and MUST link here rather than restate it as if it were a separate taxonomy.
 
-This memo names the vocabularies, locks the cross-translations, and identifies the unresolved taxonomy questions for future arcs to settle. It is the discoverability anchor a contributor reads first when asking "what are motebit's primitives?"
+The terms named below are defined normatively in [`spec/terminology-v1.md`](../../spec/terminology-v1.md). How terms are formed and which layer may use metaphor is [`naming-by-layer.md`](naming-by-layer.md). This map adds only the grouping and the relationships.
 
-## Why this memo exists
+## The eight domains
 
-Without an explicit vocabulary map, every reader reconstructs the cross-translations from scratch. The 2026-05-17 founder-site session is the witnessed cost: multiple hours adjudicating "which primitive list is canonical" because three different external reviewers each pattern-matched a different motebit vocabulary and proposed a different count (5 / 6 / 7). The doctrine had already answered the count question — at `delegation.md` line 73 — but the answer was discoverable only by reading that one line in that one doc.
+Each domain is a set of artifacts, types and roles that share one concern. Membership is by what the member _is about_, not by which package holds it.
 
-The motebit corpus has at least eight enumerated primitive lists across CLAUDE.md, README.md, `delegation.md`, `the-stack-one-layer-up.md`, `apps/docs/content/docs/operator/architecture.mdx`, and the cross-references that thread between them. They do not contradict each other — they serve different purposes. But the relationship was implicit, and implicit relationships drift under enough editorial pressure.
+### 1. Identity — who is acting
 
-This memo makes the relationship explicit. When a future contributor (or external reviewer, or future founder-surface artifact) asks "what are motebit's primitives?", they read this first, then follow links to the purpose-shaped vocabulary they need.
+`motebit`, `motebit_id` (UUIDv8 self-certifying commitment by default; legacy UUIDv7; `did:key`), identity file (`motebit.md`), `device_id`, key succession (`KeySuccessionRecord`), guardian, machine roster (`HostEnrollment` / `HostRetirement`), hardware attestation (`HardwareAttestationClaim`, additive scoring).
 
-## The five vocabularies, by purpose
+### 2. Authorization — what an actor may do
 
-### 1. Public positioning (5 — canonical for external surface)
+`DelegationToken` (one act, short-lived), `StandingDelegation` (the grant; per-tick tokens), `DelegationRevocation`, delegation scope, `TokenAudience`, task admission (relay-signed `task:dispatch`), policy gate and risk levels, `SensitivityLevel` (what data may cross which boundary), spend ceiling.
 
-> **identity, trust, delegation, receipts, settlement**
+### 3. Execution — what is done
 
-The five primitives motebit publicly positions itself around. Established in [`delegation.md`](delegation.md) § "Why 'delegation' is the right tagline word" and locked by line 73: _"not because the positioning sentence has six concepts, but because delegation is the architectural relationship the other five primitives instantiate."_ This is the vocabulary that ships in:
+goal, plan, step, task (`AgentTask` and its status), tools and `ToolDefinition` modes (`api` / `ax` / `pixels`), `invocation_origin`, the consolidation cycle (idle-time execution).
 
-- Public taglines, pitches, and external founder-surface artifacts
-- Investor materials, NIST submissions, talks, podcasts
-- The README hero positioning sentence (when next updated)
+### 4. Routing — who is chosen to do it
 
-Use this vocabulary when answering: _"What does motebit let an agent do?"_
+`TaskShape × ProviderCapability × Constraints → RoutingDecision` (model selection), worker selection from the delegator's own trust ledger, the trust-path semiring and its product with cost / latency / reliability semirings, Pareto ranking, Thompson exploration, `RoutingDecisionTranscript`.
 
-### 2. Architectural enumeration (5 static + 1 dynamic = 6 — for internal contributor-facing)
+### 5. Settlement — how value moves
 
-> **identity, trust, receipts, settlement, policy** (5 static surfaces)
-> **delegation** (1 dynamic connector)
+`SettlementMode` (`relay` = relay-custody virtual account; `p2p` = agent-custody on-chain with a composed fee leg), custody, settlement rails, settlement assets, micro-unit money, `BondCommitment` (eligibility signal, never custodied), `CostAttestation` and `Invoice` (the bill format).
 
-The full architectural inventory of motebit's primitives, established in [`delegation.md`](delegation.md) § "The spine" and again at line 73. The five static surfaces compose into a system via delegation, the relationship that runs through them. Policy is a static surface — its package, `@motebit/policy`, exists — but it is the scope-of-delegation, not a peer to delegation. The doctrine is explicit at `delegation.md` line 21: _"Policy is one slice of what delegation authorizes — policy is the scope of a delegation, not the delegation itself."_
+### 6. Verification — how a third party checks any of it
 
-Use this vocabulary when answering: _"What surfaces does the motebit protocol expose?"_
+`SuiteId` and suite dispatch, JCS canonicalization, `VerificationVerdict` (multi-axis, no single bit), identity binding levels (self-certifying > anchored > pinned > unverified; plus invalid), `EvidenceProvenance`, `MerkleTreeVersion`, anchor (on-chain Merkle-root commitment only), trust root (a pinned key), operator transparency.
 
-The difference between vocabulary 1 and vocabulary 2 is not a contradiction — it is a register transition from internal architecture to external communication. Policy is named in vocabulary 2; in vocabulary 1, policy is folded into delegation's scope-bounded language. Both are correct in their context.
+### 7. Trust — what has been earned
 
-### 3. Comparative — "the stack, one layer up" (5)
+`AgentTrustLevel` (first-person, per pair, never global), the trust ledger built from receipts, `EvalAttestation` (third-party measurement), dispute outcomes.
 
-> **identity, memory, capability, autonomous execution, governance**
+### 8. Memory — what is retained
 
-Established in [`the-stack-one-layer-up.md`](the-stack-one-layer-up.md). The vocabulary motebit uses to compare itself against hosted agent platforms — Claude Code, Cursor, Replit Agent, ChatGPT tasks, OpenAI Operator. Each entry maps to "the same primitive every agent host eventually exposes," with motebit's implementation differing on who owns the identity layer (vendor account vs cryptographic keypair).
+memory graph nodes and edges, `MemorySource` (forming-path provenance), `EventType` and the append-only event log, retention policy, `ConsolidationReceipt`, `DeletionCertificate`.
 
-Use this vocabulary when answering: _"How is motebit different from a hosted agent platform?"_
+### Receipts sit across domains
 
-The comparative vocabulary contains primitives (memory, capability, autonomous execution) that do NOT appear in vocabularies 1 or 2. Those primitives exist in motebit's implementation — memory in `@motebit/persistence`, capabilities in `@motebit/skills` and tool definitions, autonomous execution in `runtime.consolidationCycle()` — but they sit in a different doctrinal register than the positioning primitives. See § "Unresolved questions" below.
+The receipt family — `ExecutionReceipt`, `ToolInvocationReceipt`, `ContentArtifactManifest` — is produced by Execution, consumed by Trust and Settlement, and checked by Verification. Receipts are not a ninth domain; they are the record each act leaves, unified by JCS + Ed25519 + suite dispatch ([`receipts-unified.md`](receipts-unified.md)).
 
-### 4. Hero compression (3 — the deepest single-line summary)
+## Delegation: the authority edge
 
-> **identity, trust, governance**
+Delegation is not a ninth domain and not a peer bullet beside the others. It is the edge that carries authority from one identity to another, and every other domain is reached along it:
 
-Established in [CLAUDE.md](../../CLAUDE.md) "The three things no one else is building together" and the [`apps/docs` operator-canonical caption](../../apps/docs/content/docs/operator/architecture.mdx) (the architecture.mdx hero). The most compressed motebit positioning — when only three nouns fit, these are the three.
+```
+ Identity ──(delegator signs)──► Authorization ──(scope bounds)──► Execution
+     ▲                               │                                 │
+     │                          policy gate                       receipt signed
+     │                               ▼                                 ▼
+  Trust ◄──(receipts update)── Verification ◄──(checks chain)── Settlement
+```
 
-Use this vocabulary when answering: _"What's the one-breath pitch?"_
+- **Identity → delegation:** only an identity key can sign a `DelegationToken` or `StandingDelegation`; the delegator and delegate are named by `motebit_id` and public key.
+- **Delegation → policy:** policy is the scope of a delegation, not a separate authority. The policy gate enforces the delegated scope and sensitivity ceilings at the boundary.
+- **Delegation → execution:** a task executes under a token; its `ExecutionReceipt` carries `delegated_scope` and nests the receipts of sub-delegations (chain depth ≤ 10).
+- **Delegation → settlement:** priced work is admitted only after settlement gates clear (task admission), and the money movement references the delegated task.
+- **Delegation → verification:** a third party verifies the whole chain offline: token signatures, scope narrowing, expiry, revocation, and the receipts produced under it.
 
-The hero compression uses `governance` (not `policy`, not `delegation`) because at this compression rate the membrane concept is the load-bearing word. Translation to vocabulary 1 or 2 is provided in the translation table below.
+See [`delegation.md`](delegation.md) for the doctrine of the edge.
 
-### 5. Metabolic enzymes (4 — for the metabolic-principle expression)
+## Narrative layers
 
-> **identity, memory, trust, governance**
+The repo also uses shorter primitive lists for communication. They are legitimate **narrative layers** (doctrine/product layer per [`naming-by-layer.md`](naming-by-layer.md)): each compresses the map for one audience. None is a separate taxonomy, and none may be used in a normative sentence or a wire name.
 
-Established in [CLAUDE.md](../../CLAUDE.md) § "Metabolic" principle and `architecture.mdx` line 252. The four "enzymes" motebit builds (versus the "glucose" of solved-problem adapters like VAD, STT, embeddings, inference). This vocabulary lives inside the metabolic-principle doctrine and is not a public positioning shape — it answers a build-vs-absorb question, not a "what does motebit do" question.
+| Narrative layer                   | Words                                                                                                                     | Audience / question                                | Maps onto the eight domains                                                                                            |
+| --------------------------------- | ------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------- |
+| Positioning (5)                   | identity, trust, delegation, receipts, settlement                                                                         | external — "what does motebit let an agent do?"    | Identity; Trust; the delegation edge; the receipt family (Execution → Verification); Settlement                        |
+| Architectural (5 static + 1 edge) | identity, trust, receipts, settlement, policy + delegation                                                                | contributors — "what surfaces does it expose?"     | Identity; Trust; receipt family; Settlement; Authorization (policy) — joined by the delegation edge                    |
+| Comparative — "one layer up" (5)  | identity, memory, capability, autonomous execution, governance ([`the-stack-one-layer-up.md`](the-stack-one-layer-up.md)) | "how does it differ from a hosted agent platform?" | Identity; Memory; Execution (tools/capability); Execution (consolidation cycle); Authorization                         |
+| Hero (3)                          | identity, trust, governance (CLAUDE.md "three things")                                                                    | the one-breath pitch                               | Identity; Trust (plus Memory as accumulated state); Authorization                                                      |
+| Metabolic enzymes (4)             | identity, memory, trust, governance ([`THE_METABOLIC_PRINCIPLE.md`](../../THE_METABOLIC_PRINCIPLE.md))                    | build vs absorb                                    | Identity; Memory; Trust; Authorization. Routing, Settlement and Verification are built too, but are not called enzymes |
 
-Use this vocabulary when answering: _"What does motebit build, and what does it absorb from the ecosystem?"_
+"Governance" in every narrative layer means the Authorization domain enforced at the boundary (policy gate, sensitivity, delegated scope). "Capability" and "autonomous execution" are Execution-domain members, not domains of their own.
 
 ## Translation table
 
-The corpus uses different words for the same concept across documents. Translation is canonical when crossing doctrinal layers; preserve the source-doc's word within a single document for register consistency. Do not "fix" one document to match another — they serve different purposes.
+Translate when crossing layers; keep a single document's own words for register consistency.
 
-| Concept                                     | Canonical variants                                                                                                                                                                                                   |
-| ------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Policy (the membrane / scope-of-delegation) | `policy` (delegation.md, CLAUDE.md droplet) ≡ `governance` (architecture.mdx, README table, CLAUDE.md three-things) ≡ `policy gate` (CLAUDE.md droplet) ≡ `boundary policy gate` (architecture.mdx)                  |
-| Receipts (the signed record)                | `receipts` (delegation.md, the-stack-one-layer-up.md) ≡ `proof` (README table) ≡ `signed-receipt trust ledger` ≡ `verifiable credentials` (architecture.mdx)                                                         |
-| Delegation (the authority relationship)     | `delegation` is canonical per [`delegation.md`](delegation.md). Superseded `permissions` (deprecated — do not use in new artifacts). The relationship-shaped primitive that turns the static surfaces into a system. |
-| Trust (the reputation primitive)            | `trust` (consistent across the corpus)                                                                                                                                                                               |
-| Identity (the sovereign root)               | `identity` (consistent across the corpus); never compress to `id` or `auth`                                                                                                                                          |
-| Settlement (the value-resolution primitive) | `settlement` (consistent across the corpus)                                                                                                                                                                          |
+| Concept                                   | Words in use                                                                      | Canonical literal term                                                                         |
+| ----------------------------------------- | --------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
+| The boundary that decides what may happen | policy, governance, policy gate, boundary policy gate, membrane (doctrine only)   | Authorization domain; policy gate                                                              |
+| The authority relationship                | delegation (canonical); `permissions` is superseded and not used in new artifacts | `DelegationToken`, `StandingDelegation`                                                        |
+| Signed record of an act                   | receipts, signed-receipt trust ledger                                             | receipt family (`ExecutionReceipt`, …)                                                         |
+| Self-owned identity                       | sovereign identity (doctrine/product only)                                        | `motebit_id` + identity key; binding level `self_certifying` (wire value today: `"sovereign"`) |
+| Earned standing                           | trust, reputation (positioning only, never global)                                | `AgentTrustLevel`, trust ledger                                                                |
+| Value resolution                          | settlement                                                                        | `SettlementMode`, settlement rails                                                             |
 
-## Unresolved questions
+**Receipts, proofs and verifiable credentials are different artifact families. They are not synonyms.**
 
-Three primitives appear in the comparative vocabulary (vocabulary 3) but not in the positioning or architectural vocabularies (1 + 2). The doctrine has not adjudicated whether these are:
+- A **receipt** is signed by the party that performed the act it records (signer = subject): `ExecutionReceipt`, `ToolInvocationReceipt`, `ConsolidationReceipt`. It proves _that this key claims to have done this_; its value is integrity plus identity binding.
+- A **proof** is evidence that something holds independently of any one signer's word: a Merkle inclusion proof against an anchored root, an on-chain settlement transaction, an `EvidenceProvenance` span re-checked against raw bytes. It is verified by recomputation against external state, not by trusting a signer. "Proof" is not a name for a receipt.
+- A **verifiable credential** is a W3C VC Data Model document in which an issuer makes claims about a subject (issuer ≠ subject), verified under a Data Integrity suite (`eddsa-jcs-2022`). In motebit's vocabulary a credential is an attestation-shaped artifact ([`credential-v1.md`](../../spec/credential-v1.md)), and it conforms to the W3C model rather than to the receipt family.
 
-(a) Real motebit primitives that deserve elevation to the positioning / architectural vocabulary
-(b) Implementation surfaces that exist but are not primitives in the positioning sense
-(c) Comparative-only labels that exist to map motebit onto hosted-platform taxonomy
+The previous version of this table equated `receipts ≡ proof ≡ verifiable credentials`; that equation is withdrawn.
 
-The three:
+## Where other primitive lists must link
 
-1. **Memory.** Real motebit surface (`@motebit/persistence`, sensitivity-aware memory graph with `none / personal / medical / financial / secret` levels). Could be elevated to architectural primitive — but the positioning sentence would then drift from 5. Open question.
+The lists below restate primitives for their own audience. Each should carry a link to this map; this doc does not edit them.
 
-2. **Capability.** Real motebit surface (`@motebit/skills`, tool definitions, MCP integration). The "capability bundle" primitive named in [`the-stack-one-layer-up.md`](the-stack-one-layer-up.md) § "Where motebit has a gap" as a named gap — the task-scoped capability bundle that loads on demand and unloads when done is not yet a first-class motebit primitive. Open question, partly because the surface itself is partly-built.
+- `README.md` hero comparison table (identity, memory, trust, governance, proof).
+- `CLAUDE.md` "The three things no one else is building together" and the Metabolic principle.
+- `DOCTRINE.md` opening paragraph (shipped capabilities list).
+- `THE_METABOLIC_PRINCIPLE.md` (identity, memory, trust, governance).
+- `apps/docs/content/docs/operator/architecture.mdx` hero caption and enzyme list.
+- [`delegation.md`](delegation.md) § "The spine".
+- [`the-stack-one-layer-up.md`](the-stack-one-layer-up.md) (the comparative five).
+- [`panel-temporal-registers.md`](panel-temporal-registers.md) ("the five primitives").
+- `docs/droplet-surface-tension.md` (definition sentence).
+- `packages/self-knowledge` corpus (regenerated from the above, not edited by hand).
 
-3. **Autonomous execution.** Real motebit surface (`runtime.consolidationCycle()`, the proactive loop). Doctrinally framed by [`proactive-interior.md`](proactive-interior.md). Could be promoted; isn't, currently.
-
-These questions belong to a future arc, not this memo. This memo locks vocabularies 1–5 as they exist; the elevation question is intentionally deferred to avoid the editorial-residue trap of "shipping a vocabulary memo + a taxonomy reorg in the same arc."
-
-## Sibling-audit discipline
-
-When writing new artifacts — doctrine, README updates, public positioning, founder-surface material, external pitches, investor decks, talks, NIST followups — follow this checklist:
-
-1. Identify which vocabulary serves the artifact's purpose (1, 2, 3, 4, or 5).
-2. Use that vocabulary's exact word choices for primitive references in that artifact.
-3. If a sibling doc uses a different word for the same concept, do not "fix" it — different docs serve different purposes. Cross-translation is a feature, not a bug.
-4. If multiple primitives could fit and the artifact mixes vocabularies, prefer vocabulary 1 (canonical positioning).
-5. If the artifact is internal contributor-facing (PR descriptions, doctrine memos, code comments), use vocabulary 2 (architectural enumeration).
-
-## What this memo is not
-
-- **Not a rename.** Existing docs keep their vocabulary; this memo names the cross-translations so future readers can navigate them.
-- **Not a deprecation.** None of the five vocabularies is wrong; each serves a purpose. The only deprecated term is `permissions` (superseded by `delegation` per delegation.md).
-- **Not the elevation answer for memory / capability / execution.** That arc is deferred. This memo locks what exists; it does not adjudicate what should be added.
-- **Not a replacement for the canonical doctrines.** `delegation.md`, `the-stack-one-layer-up.md`, and the others remain canonical for their content. This memo is the index that points to them.
+The spatial "five primitives" (creature, satellite, environment, attractor, presentation) in [`spatial-as-endgame.md`](spatial-as-endgame.md) are render primitives of one surface, not concept primitives, and are out of scope of this map.
 
 ## Cross-cuts
 
-- [`docs/doctrine/delegation.md`](delegation.md) — the doctrine that names the canonical positioning 5-tuple; line 73 is the load-bearing sentence (_"not because the positioning sentence has six concepts"_).
-- [`docs/doctrine/the-stack-one-layer-up.md`](the-stack-one-layer-up.md) — the comparative vocabulary, where memory / capability / autonomous-execution appear as primitives.
-- [`README.md`](../../README.md) — the hero comparison table uses its own 5-vocabulary (identity, memory, trust, governance, proof); may be re-aligned in a future arc to use vocabulary 1.
-- [`apps/docs/content/docs/operator/architecture.mdx`](../../apps/docs/content/docs/operator/architecture.mdx) — operator-canonical surface; uses the 3-vocabulary in the hero caption.
-- [`docs/doctrine/protocol-primacy.md`](protocol-primacy.md) — the constitutional invariant; identity, trust, and governance are protocol-level (uses vocabulary 4 / hero compression).
-- [`docs/doctrine/registry-pattern-canonical.md`](registry-pattern-canonical.md) — the lattice's unit cell; orthogonal to this memo (registries are typed vocabularies for wire-format values; this memo is the prose-vocabulary index).
+- [`spec/terminology-v1.md`](../../spec/terminology-v1.md) — normative term entries.
+- [`naming-by-layer.md`](naming-by-layer.md) — the naming laws.
+- [`delegation.md`](delegation.md) — the authority edge.
+- [`receipts-unified.md`](receipts-unified.md) — the receipt family.
+- [`registry-pattern-canonical.md`](registry-pattern-canonical.md) — typed vocabularies for wire values; orthogonal to this map.

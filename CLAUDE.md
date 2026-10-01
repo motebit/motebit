@@ -16,7 +16,7 @@ MCP defines capability but not identity. A2A defines communication but has no tr
 
 ## Architecture
 
-pnpm monorepo, Turborepo, TypeScript. Node ≥ 20, pnpm 9.15. 53 packages on a 7-layer DAG enforced by `pnpm check-deps`. 5 surfaces + 6 supporting apps, 11 services, 35 open protocol specs.
+pnpm monorepo, Turborepo, TypeScript. Node ≥ 20, pnpm 9.15. 53 packages on a 7-layer DAG enforced by `pnpm check-deps`. 5 surfaces + 6 supporting apps, 11 services, 36 open protocol specs.
 
 Layout and per-package roles: [`README.md`](README.md), [`apps/docs/content/docs/operator/architecture.mdx`](apps/docs/content/docs/operator/architecture.mdx) (canonical; enforced by `check-docs-tree`).
 
@@ -49,7 +49,8 @@ Per-directory doctrine loads lazily (every sub-`CLAUDE.md` must appear here; enf
 
 Cross-cutting doctrine (read on demand):
 
-- [`docs/doctrine/primitive-vocabulary.md`](docs/doctrine/primitive-vocabulary.md) — discoverability anchor for the five primitive vocabularies (positioning, architectural, comparative, hero, metabolic) + translation table; read first when authoring any founder-surface artifact that enumerates primitives
+- [`docs/doctrine/primitive-vocabulary.md`](docs/doctrine/primitive-vocabulary.md) — THE canonical concept map: eight domains (Identity, Authorization, Execution, Routing, Settlement, Verification, Trust, Memory) with DELEGATION as the authority edge connecting them (never a peer bullet); positioning / architectural / comparative / hero / metabolic lists are labelled narrative layers mapped onto it; receipts ≠ proofs ≠ verifiable credentials. Every other primitive list links here rather than restating it
+- [`docs/doctrine/naming-by-layer.md`](docs/doctrine/naming-by-layer.md) — vocabulary by layer: metaphor permitted in doctrine/product, forbidden in protocol/wire/implementation (exported ids, wire fields, registry values, error codes, CLI, JSON-Schema descriptions, normative MUST/SHOULD/MAY sentences). Reserved words (admission, attestation, anchor, grant, receipt); `sovereign` retired from literal layers; signed-artifact suffix by signer relationship; `valid` only for single-bit verifiers. New public terms admitted only via [`spec/terminology-v1.md`](spec/terminology-v1.md); existing violations migrate alias-first, never silent rename
 - [`docs/doctrine/protocol-primacy.md`](docs/doctrine/protocol-primacy.md) — constitutional invariant: protocol with a company on top, not a company with a protocol on the side. Protocol-first audit ("does this work identically for a non-subscriber?") gates every business-side artifact
 - [`docs/doctrine/clearing-house-not-thin-waist.md`](docs/doctrine/clearing-house-not-thin-waist.md) — value-capture clause under protocol-primacy: the protocol is the thin waist given away to earn routing, the business is the clearing house/registry of record it accrues to (Visa/DTCC). Names the Docker trap (open + relay-bypassable ⇒ a hyperscaler runs the dominant managed relay) and its escape (moat = irreproducible dispute-grade history, never the software). Pricing corollary: per-layer purity — protocol captures nothing; first-party workers metered-cost-plus-thin (below cost = subsidized house bot; profit = fee × volume × history, never worker margin); third-party pricing free by construction (rate-setting = the inversion; curation editorial, never a listing gate)
 - [`docs/doctrine/receipts-unified.md`](docs/doctrine/receipts-unified.md) — three receipt types (`ExecutionReceipt`, `ToolInvocationReceipt`, `ContentArtifactManifest`) form one family unified by JCS + Ed25519 + suite-dispatch + `@motebit/verifier`
