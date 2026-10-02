@@ -5,6 +5,12 @@ on:
     branches: [main]
   pull_request:
     branches: [main]
+  # The merge queue (docs/ops/merge-queue.md). Every required check (check,
+  # format, e2e, sibling-audit, changeset) must REPORT on this event or the
+  # queue waits forever — and must run for real: the queue exists to test the
+  # COMBINED commit (main + the queued PRs), which no PR run ever saw.
+  merge_group:
+    types: [checks_requested]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -241,8 +247,17 @@ jobs:
         run: |
           scripts=false
           relay=false
+          # The diff base: the PR's base branch, or — in the merge queue — the
+          # group's parent commit (main, or the queue entry ahead of it), so
+          # the group's own changes decide, exactly as the PR's did.
+          base=""
           if [ "${{ github.event_name }}" = "pull_request" ]; then
-            changed=$(git diff --name-only "origin/${{ github.base_ref }}...HEAD")
+            base="origin/${{ github.base_ref }}"
+          elif [ "${{ github.event_name }}" = "merge_group" ]; then
+            base="${{ github.event.merge_group.base_sha }}"
+          fi
+          if [ -n "$base" ]; then
+            changed=$(git diff --name-only "$base...HEAD")
             # Probes read repo data outside scripts/ (coverage-graduation.json
             # is the live example: #589 moved a date there, the probe keyed on
             # that literal went vacuous, and gate-effectiveness never ran on
@@ -261,7 +276,7 @@ jobs:
           fi
           echo "scripts=$scripts" >> "$GITHUB_OUTPUT"
           echo "relay=$relay" >> "$GITHUB_OUTPUT"
-          echo "scripts/ touched vs '${{ github.base_ref }}': $scripts; services/relay/ touched: $relay"
+          echo "scripts/ touched vs '$base': $scripts; services/relay/ touched: $relay"
 
   gate-effectiveness-shard:
     # Probe every drift-defense gate with a known-violating fixture to prove
@@ -474,7 +489,9 @@ jobs:
         run: pnpm check-activation-effective
 
   sibling-audit:
-    if: github.event_name == 'pull_request'
+    # A required check: runs on the PR and again in the merge queue, where the
+    # diff base is the group's parent commit (main, or the entry ahead of it).
+    if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
     runs-on: ubuntu-latest
     timeout-minutes: 5
 
@@ -494,7 +511,11 @@ jobs:
         run: pnpm install --frozen-lockfile
 
       - name: Sibling boundary audit
-        run: git diff --name-only origin/main...HEAD | npx tsx scripts/check-sibling-boundaries.ts
+        env:
+          DIFF_BASE: ${{ github.event_name == 'merge_group' && github.event.merge_group.base_sha || 'origin/main' }}
+        run: |
+          set -o pipefail
+          git diff --name-only "$DIFF_BASE...HEAD" | npx tsx scripts/check-sibling-boundaries.ts
 
   python-conformance:
     # Smoke-test that the Python reference implementation of
@@ -719,7 +740,9 @@ jobs:
           retention-days: 7
 
   changeset:
-    if: github.event_name == 'pull_request'
+    # A required check: runs on the PR and again in the merge queue (diff base
+    # = the group's parent commit), never skipped there.
+    if: github.event_name == 'pull_request' || github.event_name == 'merge_group'
     runs-on: ubuntu-latest
     timeout-minutes: 5
 
@@ -742,4 +765,6 @@ jobs:
         # Fails (exit 1) only when a non-private package's `src/` changed without
         # a changeset — docs/test/service/CI-only PRs pass. Derives the published
         # set from package.json (no hardcoded list). See the script header.
+        env:
+          CHANGESET_BASE_REF: ${{ github.event_name == 'merge_group' && github.event.merge_group.base_sha || 'origin/main' }}
         run: npx tsx scripts/check-changeset-required.ts
