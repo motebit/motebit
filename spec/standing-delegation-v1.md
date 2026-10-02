@@ -6,7 +6,7 @@
 
 ## 1. Purpose
 
-`delegation@1.0` authorizes ONE act: a `DelegationToken` is short-lived by invariant (required `expires_at`, recommended 1h / max 24h, rejected once expired) and carries no cadence and no revocation. That is correct for a single delegated task. It does not model **standing** work — "this key authorizes daily research on subject S until I revoke it."
+A `DelegationToken` (`market@1.0` §12) authorizes ONE act: it is short-lived by invariant (required `expires_at`, recommended 1h / max 24h, rejected once expired) and carries no cadence and no revocation. That is correct for a single delegated task. It does not model **standing** work — "this key authorizes daily research on subject S until I revoke it."
 
 This spec defines that missing shape. A `StandingDelegation` is a signed, revocable grant that does **not** authorize a task itself — it authorizes short-lived per-tick `DelegationToken`s, **each signed by the delegator**, to be issued and exercised within a fixed scope ceiling and cadence, for a long-but-finite, revocable lifetime. The standing authority lives only on the grant; each per-tick token stays short-lived and task-scoped; revocation lives on the grant. It also closes a gap that exists independently: delegation previously had no published revocation story.
 
@@ -61,7 +61,7 @@ A complete verification has two parts: **intrinsic** validity (checkable from th
 
 1. `suite == "motebit-jcs-ed25519-b64-v1"`.
 2. `not_before == null` OR `now >= not_before`.
-3. `now <= expires_at` (unless verifying historical context).
+3. `now <= expires_at` (unless verifying historical context). The grant is still valid at `now == expires_at`.
 4. The Ed25519 signature over `canonicalJson(body)` (everything except `signature`) verifies against `delegator_public_key`.
 
 **Revocation (requires the revocation set — the consumer's responsibility):**
@@ -141,7 +141,7 @@ The `SpendCeilingV1` type in `@motebit/protocol` is the binding machine-readable
 
 ## 4. Per-tick tokens
 
-A `DelegationToken` (delegation@1.0) gains two OPTIONAL fields, `grant_id` and `not_before`. `grant_id` absent ⇒ a standalone single-act delegation (today's semantics — backward compatible); present ⇒ this token is one tick of a `StandingDelegation`. `not_before` (Unix ms) absent ⇒ active from `issued_at`; present ⇒ the token is invalid before it (verifiers reject when `now < not_before`). Both are additive and replay-compatible; 1.0 tokens verify identically.
+A `DelegationToken` (`market@1.0` §12) gains two OPTIONAL fields, `grant_id` and `not_before`. `grant_id` absent ⇒ a standalone single-act delegation (today's semantics — backward compatible); present ⇒ this token is one tick of a `StandingDelegation`. `not_before` (Unix ms) absent ⇒ active from `issued_at`; present ⇒ the token is invalid before it (verifiers reject when `now < not_before`). Both are additive and replay-compatible; 1.0 tokens verify identically.
 
 Each tick is a `DelegationToken` **signed by the delegator** (verified against `delegator_public_key`; the parties are pinned, so a tick the delegate signed for itself is rejected) with: the grant's parties; `scope ⊆ grant.scope`; `expires_at - issued_at <= grant.max_token_ttl_ms`; `issued_at` no sooner than the previous tick's `issued_at + grant.cadence_ms`; and `grant_id = grant.grant_id`. The tick's `ExecutionReceipt` references both the per-tick token and `grant_id`, anchoring the receipt chain to the grant.
 
@@ -198,11 +198,12 @@ The relay-cache routes below are the binding cross-implementation contract for r
 - **D1 — Grant lifetime.** `expires_at` is long-but-finite and renewable; implementations SHOULD NOT issue open-ended grants. Recommended max: 90 days; the delegate renews by re-signing before expiry. Rationale: revocation propagation is bounded (a feed horizon), so authority that outlives revocation reachability is unsafe — a finite grant auto-dies if propagation ever fails, while preserving an "until revoked" experience via silent renewal.
 - **D2 — Revocation source of truth** is the signed `DelegationRevocation` (offline-verifiable); the relay deny-list is a cache, not the authority.
 - **D3 — Revocation is terminal** in v1 (no unrevoke). Pausing a standing monitor is a scheduler concern (stop firing ticks), not a grant-state change.
-- **Token lifetime** (`max_token_ttl_ms`): SHOULD be ≤ the delegation@1.0 token maximum (24h); 1h recommended.
+- **Token lifetime** (`max_token_ttl_ms`): SHOULD be ≤ the `market@1.0` §12 token maximum (24h); 1h recommended.
 - **D4 — Money-grant lifetime.** A grant carrying a `spend_ceiling` SHOULD use a lifetime well below the D1 maximum: 7–30 days renewable recommended, `max_token_ttl_ms` 1h. Rationale: against a malicious offline delegate the real revocation ceiling is `expires_at`, not token TTL (a local signer manufactures fresh short-TTL ticks from stale standing authority) — so a money grant's worst-case offline exposure is deliberately (short lifetime × signed ceiling): a bounded, priced number.
 
 ## 7. Relationship to Other Specs
 
-- `delegation@1.0` — defines `DelegationToken` (this spec adds the optional `grant_id`) and the task submission/receipt/settlement loop each tick flows through.
+- `market@1.0` §12 — defines `DelegationToken` (this spec adds the optional `grant_id` and `not_before`).
+- `delegation@1.0` — the task submission/receipt/settlement loop each tick flows through.
 - `execution-ledger@1.0` — each tick's signed receipt; references `grant_id` as the authorization root.
 - `auth-token-v1 §8.1` — the deny-list pattern the relay revocation cache follows.

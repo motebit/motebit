@@ -93,7 +93,7 @@ A motebit is a persistent, cryptographically-anchored, sovereign agent. The inte
 - [motebit/identity@1.0](https://github.com/motebit/motebit/blob/main/spec/identity-v1.md): the open specification for agent identity files. Apache-2.0.
 - [motebit/execution-ledger@1.0](https://github.com/motebit/motebit/blob/main/spec/execution-ledger-v1.md): the signed-receipt ledger every motebit emits. Apache-2.0.
 - [motebit/relay-federation@1.0](https://github.com/motebit/motebit/blob/main/spec/relay-federation-v1.md): bilateral peering between independent relays. Apache-2.0.
-- All twenty-one specs are in [`spec/`](https://github.com/motebit/motebit/tree/main/spec).
+- All 35 specs are in [`spec/`](https://github.com/motebit/motebit/tree/main/spec).
 
 ## Published packages
 

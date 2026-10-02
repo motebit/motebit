@@ -79,6 +79,8 @@
     "check-claude-md": "npx tsx scripts/check-claude-md.ts",
     "check-gate-references": "npx tsx scripts/check-gate-references.ts",
     "check-root-workspace-deps": "npx tsx scripts/check-root-workspace-deps.ts",
+    "check-prepush-subset": "npx tsx scripts/check-prepush-subset.ts",
+    "check-turbo-global-deps": "npx tsx scripts/check-turbo-global-deps.ts",
     "check-skill-corpus": "npx tsx scripts/check-skill-corpus.ts",
     "check-skill-cli-coverage": "npx tsx scripts/check-skill-cli-coverage.ts",
     "check-skill-script-uses-tool-approval": "npx tsx scripts/check-skill-script-uses-tool-approval.ts",
@@ -230,7 +232,8 @@
     "turbo": "^2.10.9",
     "typescript": "^5.9.0",
     "vitest": "^4.1.10",
-    "@motebit/semiring": "workspace:*"
+    "@motebit/semiring": "workspace:*",
+    "yaml": "^2.9.0"
   },
   "pnpm": {
     "overrides": {

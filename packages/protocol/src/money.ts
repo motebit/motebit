@@ -97,7 +97,8 @@ export interface SettlementSplitMicro {
  *
  * The fee is the rounded leg and the net is the remainder — the same direction
  * as {@link computeP2pFeeMicro} and {@link computeFederatedFeeSplit}, so all
- * three lanes (relay-custody, P2P, federated) agree on who absorbs the dust.
+ * three fee computations (relay-custody, P2P, federated settlement — not the
+ * settlement lanes of `docs/doctrine/settlement-rails.md`) agree on who absorbs the dust.
  *
  * @param netExact worker net, possibly fractional micro-units
  * @param feeExact platform fee, possibly fractional micro-units

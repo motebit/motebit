@@ -130,6 +130,22 @@ export function loadSyncUrl(): string | null {
   }
 }
 
+/**
+ * Is a relay configured for this browser's motebit? (#962: compaction's
+ * `syncConfigured`.) A saved, non-empty relay URL ⇒ true. Storage that
+ * cannot be read ⇒ true — fail CLOSED: "cannot tell" must never read as "no
+ * relay", or compaction could delete events no relay has acknowledged.
+ * (`loadSyncUrl` answers null on a storage error; this must not.)
+ */
+export function isSyncUrlConfigured(): boolean {
+  try {
+    const url = localStorage.getItem(SYNC_URL_KEY);
+    return url != null && url !== "";
+  } catch {
+    return true;
+  }
+}
+
 export function clearSyncUrl(): void {
   try {
     localStorage.removeItem(SYNC_URL_KEY);

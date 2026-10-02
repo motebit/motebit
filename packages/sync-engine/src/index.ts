@@ -1,5 +1,6 @@
 import type { EventLogEntry, SyncCursor, ConflictEdge } from "@motebit/sdk";
 import type { EventStoreAdapter } from "@motebit/event-log";
+import { sanitizeRelayText } from "./relay-text.js";
 import {
   isSeqPullSource,
   pullBySeq,
@@ -41,6 +42,7 @@ export {
 } from "./event-payload.js";
 export type { EventPayloadForm, RelayPayloadMode } from "./event-payload.js";
 
+export { sanitizeRelayText, RELAY_TEXT_MAX } from "./relay-text.js";
 export { StaticCredentialSource } from "./credential-source.js";
 export type { CredentialRequest, CredentialSource } from "./credential-source.js";
 
@@ -174,6 +176,467 @@ export function pushCursorKey(remote: EventStoreAdapter, motebitId: string): str
   if (isSeqPullSource(remote)) return `push:${remote.seqCursorKey}`;
   const named = (remote as { relayStreamKey?: unknown }).relayStreamKey;
   return typeof named === "string" ? `push:relay:${named}` : `push:#${motebitId}`;
+}
+
+/** Every push-cursor key starts with this (`pushCursorKey`). */
+const PUSH_CURSOR_PREFIX = "push:";
+
+/**
+ * The relay streams a `SyncEngine` in this process connected, per LOCAL
+ * store object, with the cursor store each stream's push cursor is kept in
+ * (#962). Read by `pushCompactionFloor`; a store's own persisted push
+ * cursors cover the streams of an earlier process.
+ */
+const connectedPushStreams = new WeakMap<object, Map<string, SyncSeqCursorStore>>();
+
+/**
+ * The relay stream a push-cursor key describes (#962 round 2), whatever
+ * adapter wrote it: `push:relay:<stream>` (a socket), `push:<mode>:<stream>`
+ * (a seq source — `raw:` HTTP, `e2e:raw:` its E2E wrapper; `relayStreamOfKey`)
+ * all name one relay's record, so mobile's /sync cursor and its live cursor,
+ * or a raw CLI process beside an E2E one, are ONE stream. `push:#<id>` (a
+ * remote that names no relay) stays a stream of its own.
+ */
+export function relayStreamOfPushKey(key: string): string {
+  const rest = key.startsWith(PUSH_CURSOR_PREFIX) ? key.slice(PUSH_CURSOR_PREFIX.length) : key;
+  return rest.startsWith("relay:") ? rest.slice("relay:".length) : relayStreamOfKey(rest);
+}
+
+/**
+ * The cursor-store key an identity's SYNC INTENT is recorded under (#962
+ * round 5): beside the push cursors (same store, same database), never with
+ * the `push:` prefix — it is not a relay stream.
+ */
+export function syncIntentKey(motebitId: string): string {
+  return `${SYNC_INTENT_PREFIX}#${motebitId}`;
+}
+const SYNC_INTENT_PREFIX = "intent:sync";
+/** The marker's value: some process for this identity was configured for a relay. */
+const SYNC_INTENT_RECORDED = 1;
+/** The marker's value after an explicit operator opt-out (`clearSyncIntent`). */
+const SYNC_INTENT_CLEARED = -1;
+
+/** What a database records about an identity's sync intent (#962 round 5). */
+export type SyncIntent = "recorded" | "cleared" | "never";
+
+/**
+ * Record, durably and for the DATABASE, that this identity is configured
+ * for sync (#962 round 5). Whether sync is configured was decided per
+ * PROCESS through round 4, but the events it protects belong to the
+ * database's identity: a configured process that never persisted a push
+ * cursor (the REPL's identity bootstrap; a process that exited before it
+ * connected) left its events to the next UNCONFIGURED process on the same
+ * database, which compacted them away. Every process configured for a relay
+ * writes this before its first append or compaction; every process reads it
+ * (`pushCompactionFloor`). Idempotent; overrides an earlier explicit clear —
+ * a configured process is a new intent.
+ */
+export async function recordSyncIntent(
+  localStore: EventStoreAdapter,
+  motebitId: string,
+  cursorStore?: SyncSeqCursorStore,
+): Promise<void> {
+  const store = resolveSeqCursorStore(localStore, cursorStore);
+  await store.setSyncSeqCursor(syncIntentKey(motebitId), SYNC_INTENT_RECORDED);
+}
+
+/**
+ * Clear this identity's sync intent — ONLY as an explicit operator act (an
+ * explicit "this identity does not sync" choice), recorded as such (#962
+ * round 5). Absence never clears: a process that simply has no relay
+ * configured leaves the marker alone. Relay streams that exist still bound
+ * the floor after a clear.
+ */
+export async function clearSyncIntent(
+  localStore: EventStoreAdapter,
+  motebitId: string,
+  cursorStore?: SyncSeqCursorStore,
+): Promise<void> {
+  const store = resolveSeqCursorStore(localStore, cursorStore);
+  await store.setSyncSeqCursor(syncIntentKey(motebitId), SYNC_INTENT_CLEARED);
+}
+
+/** This identity's recorded sync intent. Throws when it cannot be read (callers fail closed). */
+export async function readSyncIntent(
+  localStore: EventStoreAdapter,
+  motebitId: string,
+  cursorStore?: SyncSeqCursorStore,
+): Promise<SyncIntent> {
+  const store = resolveSeqCursorStore(localStore, cursorStore);
+  const v = await store.getSyncSeqCursor(syncIntentKey(motebitId));
+  if (v === null) return "never";
+  return v === SYNC_INTENT_CLEARED ? "cleared" : "recorded";
+}
+
+/** Any identity's recorded intent in this store (for a floor asked without an identity). */
+async function anySyncIntentRecorded(store: SyncSeqCursorStore): Promise<boolean> {
+  if (!store.listSyncSeqCursorKeys) return false;
+  for (const key of await store.listSyncSeqCursorKeys(SYNC_INTENT_PREFIX)) {
+    if ((await store.getSyncSeqCursor(key)) === SYNC_INTENT_RECORDED) return true;
+  }
+  return false;
+}
+
+/** What the host knows about sync from its config (#962 round 2). */
+export interface PushCompactionFloorOptions {
+  /**
+   * Is a relay configured for this store? `true`: with no stream cursor
+   * persisted or connected, compact nothing (the enrollment write may never
+   * have landed; the first process may never have connected). `false` or
+   * absent: with no stream, `requested` — compaction as before. Streams that
+   * exist bound the floor either way.
+   */
+  syncConfigured?: boolean;
+  /**
+   * The identity being compacted (#962 round 4). Only its relay streams
+   * bound the floor: every stream key names its identity (`…#<motebit_id>`),
+   * and one local store can hold another identity's cursors (a restored or
+   * re-created identity on the same browser origin or database). Counted,
+   * the OTHER identity's acknowledged cursor let compaction delete events of
+   * this one that no relay had received. Absent: every stream counts.
+   */
+  motebitId?: string;
+}
+
+/**
+ * The highest clock compaction may delete up to in `localStore` (#962): the
+ * smaller of `requested` and every relay stream's ACKED push cursor — so an
+ * event no relay has acknowledged is never compacted away before it is
+ * pushed. The streams are those a `SyncEngine` connected over this store in
+ * this process, plus every push cursor the store persists (a relay an
+ * earlier process pushed to, before this one connects).
+ *
+ * Keys are grouped by relay stream (`relayStreamOfPushKey`): within one
+ * stream the MAX cursor counts — any acked cursor for that relay proves the
+ * relay holds those events (the relay keys events by event_id, whatever the
+ * payload mode a push carried; #914 round 8 already counts one relay's raw
+ * and E2E record as one) — and across distinct streams the MIN: a relay
+ * that has acknowledged nothing holds everything.
+ *
+ * A stream the operator retired (`retireRelayStream`, #962 round 6) does
+ * not count; `syncFloorReport` says which stream holds the floor.
+ *
+ * No stream: 0 when `syncConfigured` or when the database records this
+ * identity's sync intent (`recordSyncIntent`, #962 round 5 — whichever
+ * process recorded it), else `requested`: only a database whose identity
+ * was never configured for sync compacts freely. A cursor or marker that
+ * cannot be read: 0 — compact nothing (fail closed).
+ *
+ * Stated cost: the floor moves only when a relay acknowledges. A relay that
+ * is configured but never reached (offline, or spatial's default relay on a
+ * machine that never connects) or that keeps refusing the push (a revoked
+ * device, a bad token) holds compaction, and the local log grows until an
+ * acknowledgment arrives. That is the direction the invariant chooses —
+ * never delete what the relay has not acknowledged — and it is surfaced,
+ * never silent: `SyncEngine.getLastError()` carries the refusal. A relay
+ * connected once and never used again (a mistyped URL, a relay switch)
+ * holds it the same way — never retired automatically, since a relay that
+ * has not acknowledged is no proof it never will — and is never silent or
+ * doorless either (#962 round 6): `syncFloorReport` / `pinnedFloor` name the
+ * stream holding the floor and how many events it holds back, and the
+ * operator retires it (`retireRelayStream`) or clears the intent
+ * (`clearSyncIntent`) explicitly.
+ *
+ * Known scope (#962 round 6): the intent marker and the streams live in ONE
+ * database. A process opening another database for the same identity
+ * (`MOTEBIT_DB_PATH`, `--db-path`) sees no marker there — the design is per
+ * database, the law per identity. A desktop elected FRONTEND (another
+ * process holds the runtime) constructs no runtime, so records no marker;
+ * the coordinator daemon's `syncConfigured` is read when it starts. The
+ * doors onto a pinned floor (`motebit sync status|retire`, the REPL notice)
+ * are the CLI's, but any surface with a relay-URL setting can pin the floor
+ * (web: a mistyped relay URL, then the right one); that surface's notice
+ * and retire door are a tracked follow-up — until then its storage grows,
+ * no data is lost.
+ */
+export async function pushCompactionFloor(
+  localStore: EventStoreAdapter,
+  requested: number,
+  options: PushCompactionFloorOptions = {},
+): Promise<number> {
+  return floorExcluding(localStore, requested, options, new Set());
+}
+
+/**
+ * Every relay stream of `motebitId` (all identities when absent) this
+ * process connected over `localStore` or the store persists, with its ACKED
+ * cursor (the MAX within a stream, #962 round 2) and the cursor stores that
+ * hold its keys. Retired streams included (`isStreamRetired`).
+ */
+async function gatherStreams(
+  localStore: EventStoreAdapter,
+  motebitId: string | undefined,
+): Promise<{
+  acked: Map<string, number>;
+  stores: Map<string, Set<SyncSeqCursorStore>>;
+}> {
+  const keys = new Map<string, SyncSeqCursorStore>(connectedPushStreams.get(localStore) ?? []);
+  const own = resolveSeqCursorStore(localStore);
+  if (own.listSyncSeqCursorKeys) {
+    for (const key of await own.listSyncSeqCursorKeys(PUSH_CURSOR_PREFIX)) {
+      if (!keys.has(key)) keys.set(key, own);
+    }
+  }
+  const acked = new Map<string, number>();
+  const stores = new Map<string, Set<SyncSeqCursorStore>>();
+  for (const [key, store] of keys) {
+    const stream = relayStreamOfPushKey(key);
+    if (motebitId != null && !stream.endsWith(`#${motebitId}`)) continue;
+    const cursor = (await store.getSyncSeqCursor(key)) ?? 0;
+    acked.set(stream, Math.max(acked.get(stream) ?? 0, cursor));
+    const held = stores.get(stream) ?? new Set<SyncSeqCursorStore>([own]);
+    held.add(store);
+    stores.set(stream, held);
+  }
+  return { acked, stores };
+}
+
+/**
+ * When `stream` was retired by the operator (`retireRelayStream`), or null
+ * while it counts. Read from every store holding the stream's keys; a
+ * marker that cannot be read throws (the floor then fails closed).
+ */
+async function streamRetiredAt(
+  stream: string,
+  stores: Iterable<SyncSeqCursorStore>,
+): Promise<number | null> {
+  for (const store of stores) {
+    const at = await store.getSyncSeqCursor(retiredStreamKey(stream));
+    if (at != null && at > 0) return at;
+  }
+  return null;
+}
+
+/** `pushCompactionFloor`, as if the streams in `exclude` were retired (the "held back" counts). */
+async function floorExcluding(
+  localStore: EventStoreAdapter,
+  requested: number,
+  options: PushCompactionFloorOptions,
+  exclude: ReadonlySet<string>,
+): Promise<number> {
+  try {
+    const own = resolveSeqCursorStore(localStore);
+    const { acked, stores } = await gatherStreams(localStore, options.motebitId);
+    // #962 round 6: a stream the operator retired no longer bounds the
+    // floor. Never automatic — a relay that has not acked is no proof it
+    // never will — and undone by connecting to that relay again.
+    for (const stream of [...acked.keys()]) {
+      const retired = await streamRetiredAt(stream, stores.get(stream) ?? [own]);
+      if (exclude.has(stream) || retired !== null) {
+        acked.delete(stream);
+      }
+    }
+    if (acked.size > 0) return Math.min(requested, ...acked.values());
+    // No stream: held when this process is configured, OR when any process
+    // for this identity ever was — the database's durable sync intent
+    // (#962 round 5). Read even when this process is configured, so an
+    // unreadable marker fails closed the same way everywhere.
+    const intended =
+      options.motebitId != null
+        ? (await readSyncIntent(localStore, options.motebitId)) === "recorded"
+        : await anySyncIntentRecorded(own);
+    return options.syncConfigured === true || intended ? 0 : requested;
+  } catch {
+    return 0;
+  }
+}
+
+/** The cursor-store key a relay stream's retirement is recorded under (#962 round 6). */
+export function retiredStreamKey(stream: string): string {
+  return `retired:push:${stream}`;
+}
+
+/** The cursor-store key a relay stream's last acknowledgment time (ms) is kept under. */
+export function pushAckedAtKey(stream: string): string {
+  return `ackedat:push:${stream}`;
+}
+
+/** The relay stream a relay URL names for `motebitId` (the HTTP adapter's: origin + identity). */
+export function relayStreamOfUrl(url: string, motebitId: string): string {
+  return `${url.trim().replace(/\/+$/, "")}#${motebitId}`;
+}
+
+/** The relay URL a stream names, or null (a remote that names no relay: `#<id>`). */
+export function relayUrlOfStream(stream: string): string | null {
+  const at = stream.lastIndexOf("#");
+  const url = at >= 0 ? stream.slice(0, at) : stream;
+  return url === "" ? null : url;
+}
+
+/**
+ * Retire a relay stream from `motebitId`'s compaction floor (#962 round 6) —
+ * ONLY as an explicit operator act (`motebit sync retire`): a relay that has
+ * not acknowledged is never retired automatically. The stream's events are
+ * no longer waited for; connecting to that relay again (`connectRemote`)
+ * restores it. The recorded intent still holds a database with no other
+ * stream (`pushCompactionFloor`).
+ */
+export async function retireRelayStream(
+  localStore: EventStoreAdapter,
+  motebitId: string,
+  stream: string,
+  opts: { cursorStore?: SyncSeqCursorStore; now?: number } = {},
+): Promise<void> {
+  if (!stream.endsWith(`#${motebitId}`)) {
+    throw new Error(`relay stream ${stream} is not one of ${motebitId}'s`);
+  }
+  const store = resolveSeqCursorStore(localStore, opts.cursorStore);
+  await store.setSyncSeqCursor(retiredStreamKey(stream), Math.max(1, opts.now ?? Date.now()));
+}
+
+/** One relay stream as `syncFloorReport` sees it. */
+export interface RelayStreamReport {
+  /** `<relay url>#<motebit_id>`. */
+  stream: string;
+  /** The relay's URL, or null for a remote that names no relay. */
+  relayUrl: string | null;
+  /** The highest clock this relay acknowledged (0: nothing). */
+  acked: number;
+  /** When it last acknowledged (ms), or null when never recorded. */
+  lastAckAt: number | null;
+  /** When the operator retired it (ms), or null while it counts. */
+  retiredAt: number | null;
+  /** It is the stream the floor stops at, below what compaction asked for. */
+  holdsFloor: boolean;
+  /**
+   * Events compaction would free were this stream ALONE retired (0 when
+   * retired). 0 for a stream tied at the floor with another: its twin still
+   * holds it — see `heldBackTied`.
+   */
+  heldBack: number;
+  /**
+   * The other active streams holding the floor at the same clock (#962
+   * round 7), sorted; empty when this stream holds it alone or not at all.
+   */
+  tiedWith: string[];
+  /**
+   * Events compaction would free were this stream and every stream in
+   * `tiedWith` retired — the gap to the next distinct stream (or, with no
+   * stream past them, to what the recorded intent allows). Equals `heldBack`
+   * when untied; 0 when the stream does not hold the floor.
+   */
+  heldBackTied: number;
+}
+
+/** What holds `motebitId`'s compaction floor, and by how much (#962 round 6). */
+export interface SyncFloorReport {
+  motebitId: string;
+  intent: SyncIntent;
+  /** What compaction asks for (by default the latest clock - 1, as `compact()` does). */
+  requested: number;
+  /** What it may delete up to (`pushCompactionFloor`). */
+  floor: number;
+  streams: RelayStreamReport[];
+}
+
+/**
+ * The floor and every relay stream behind it, for `motebit sync status` and
+ * the pinned-floor notice (#962 round 6): a pinned floor is never silent.
+ */
+export async function syncFloorReport(
+  localStore: EventStoreAdapter,
+  motebitId: string,
+  opts: { requested?: number; syncConfigured?: boolean } = {},
+): Promise<SyncFloorReport> {
+  const latest = await localStore.getLatestClock(motebitId);
+  const requested = opts.requested ?? Math.max(0, latest - 1);
+  const options: PushCompactionFloorOptions = { motebitId };
+  if (opts.syncConfigured !== undefined) options.syncConfigured = opts.syncConfigured;
+  const floor = await pushCompactionFloor(localStore, requested, options);
+  const intent = await readSyncIntent(localStore, motebitId);
+  const own = resolveSeqCursorStore(localStore);
+  const { acked, stores } = await gatherStreams(localStore, motebitId);
+  const above =
+    floor < requested
+      ? (await localStore.query({ motebit_id: motebitId, after_version_clock: floor })).filter(
+          (e) => e.motebit_id === motebitId && e.version_clock > floor,
+        )
+      : [];
+  const streams: RelayStreamReport[] = [];
+  for (const [stream, cursor] of acked) {
+    const held = stores.get(stream) ?? new Set([own]);
+    const retiredAt = await streamRetiredAt(stream, held);
+    let lastAckAt: number | null = null;
+    for (const store of held) {
+      const at = await store.getSyncSeqCursor(pushAckedAtKey(stream));
+      if (at != null && at > 0 && (lastAckAt === null || at > lastAckAt)) lastAckAt = at;
+    }
+    const active = retiredAt === null;
+    const holdsFloor = active && floor < requested && cursor === floor;
+    streams.push({
+      stream,
+      relayUrl: relayUrlOfStream(stream),
+      acked: cursor,
+      lastAckAt,
+      retiredAt,
+      holdsFloor,
+      heldBack: 0,
+      tiedWith: [],
+      heldBackTied: 0,
+    });
+  }
+  // What retiring frees (#962 round 7): each holder alone, and the whole set
+  // tied at the floor. With two dead streams at the floor, retiring either
+  // alone frees nothing — the tied count is the one that says it is pinned.
+  const freed = async (exclude: ReadonlySet<string>): Promise<number> => {
+    const without = await floorExcluding(localStore, requested, options, exclude);
+    return above.filter((e) => e.version_clock <= without).length;
+  };
+  const holders = streams.filter((s) => s.holdsFloor);
+  const tiedSet = new Set(holders.map((s) => s.stream));
+  const tiedFrees = holders.length > 0 ? await freed(tiedSet) : 0;
+  for (const s of holders) {
+    s.heldBack = holders.length === 1 ? tiedFrees : await freed(new Set([s.stream]));
+    s.tiedWith = holders
+      .map((h) => h.stream)
+      .filter((h) => h !== s.stream)
+      .sort();
+    s.heldBackTied = tiedFrees;
+  }
+  streams.sort((a, b) => a.acked - b.acked || a.stream.localeCompare(b.stream));
+  return { motebitId, intent, requested, floor, streams };
+}
+
+/** How long a lagging stream may go without acknowledging before it is reported (7 days). */
+export const PINNED_FLOOR_STALE_MS = 7 * 86_400_000;
+
+/** A pinned floor, as `pinnedFloor` reports it. */
+export interface PinnedFloor {
+  /** The first stream holding the floor (sorted as the report is). */
+  stream: RelayStreamReport;
+  /** EVERY active stream holding the floor — several when they are tied (#962 round 7). */
+  streams: RelayStreamReport[];
+  /** Events compaction would free were every stream in `streams` retired (> 0). */
+  heldBack: number;
+  reason: "never-acked" | "stale";
+}
+
+/**
+ * The streams pinning compaction, when the operator should hear of it (#962
+ * rounds 6-7): the active streams holding the floor — one, or several tied
+ * at the same clock — whose retirement together would free events, and
+ * each of which has acknowledged nothing ("never-acked") or not advanced in
+ * more than `staleMs` ("stale"; a time never recorded counts as stale).
+ * Null otherwise: the only stream behind a recorded intent frees nothing
+ * when retired, and a tie that includes a stream acknowledging recently is
+ * live — that relay moves the floor.
+ */
+export function pinnedFloor(
+  report: SyncFloorReport,
+  now: number = Date.now(),
+  staleMs: number = PINNED_FLOOR_STALE_MS,
+): PinnedFloor | null {
+  const holders = report.streams.filter((s) => s.retiredAt === null && s.holdsFloor);
+  const holder = holders[0];
+  if (!holder || holder.heldBackTied <= 0) return null;
+  const heldBack = holder.heldBackTied;
+  if (holders.every((s) => s.acked === 0)) {
+    return { stream: holder, streams: holders, heldBack, reason: "never-acked" };
+  }
+  if (holders.every((s) => s.lastAckAt === null || now - s.lastAckAt > staleMs)) {
+    return { stream: holder, streams: holders, heldBack, reason: "stale" };
+  }
+  return null;
 }
 
 /**
@@ -341,6 +804,8 @@ export class SyncEngine {
   /** The relay-ingest-sequence pull cursor, per relay stream (#868). */
   private seqCursorStore: SyncSeqCursorStore;
   private status: SyncStatus = "idle";
+  /** Why the last sync cycle failed; null once a cycle succeeds (`getLastError`). */
+  private lastError: Error | null = null;
   private statusListeners: Set<SyncStatusListener> = new Set();
   private syncInterval: ReturnType<typeof setInterval> | null = null;
   private conflicts: ConflictEdge[] = [];
@@ -361,6 +826,33 @@ export class SyncEngine {
    */
   connectRemote(remoteStore: EventStoreAdapter): void {
     this.remoteStore = remoteStore;
+    // #962: from now on compaction over this store stops at this stream's
+    // acked push cursor — in this process at once, and in a later one
+    // through the cursor persisted here (0 until the relay acknowledges).
+    const key = pushCursorKey(remoteStore, this.cursor.motebit_id);
+    let streams = connectedPushStreams.get(this.localStore);
+    if (!streams) {
+      streams = new Map<string, SyncSeqCursorStore>();
+      connectedPushStreams.set(this.localStore, streams);
+    }
+    streams.set(key, this.seqCursorStore);
+    const cursors = this.seqCursorStore;
+    this.cursorChain = this.cursorChain
+      .then(async () => {
+        if ((await cursors.getSyncSeqCursor(key)) === null) await cursors.setSyncSeqCursor(key, 0);
+        // #962 round 6: connecting to a retired relay is a new intent for
+        // it — the stream bounds the floor again.
+        const retired = retiredStreamKey(relayStreamOfPushKey(key));
+        for (const store of new Set([cursors, resolveSeqCursorStore(this.localStore)])) {
+          if (((await store.getSyncSeqCursor(retired)) ?? 0) > 0) {
+            await store.setSyncSeqCursor(retired, 0);
+          }
+        }
+      })
+      .catch(() => {
+        // Unpersisted enrollment: this process still holds the floor; the
+        // cursor's first acknowledged write persists it.
+      });
     // What one relay served says nothing about what another holds.
     this.knownRemote.clear();
     // Wire activity (a request attempt, its headers, each body chunk) is
@@ -453,6 +945,7 @@ export class SyncEngine {
           // …and its requests end with it: a request left on the wire would
           // hold the push slot against the next cycle (#914 round 6).
           (remote as { abortInFlight?: () => void } | null)?.abortInFlight?.();
+          this.lastError = new Error(`Sync stalled: no progress for ${stallMs}ms`);
           this.setStatus("error");
         }
       };
@@ -519,6 +1012,7 @@ export class SyncEngine {
       this.pullAfterClock = await this.localStore.getLatestClock(this.cursor.motebit_id);
 
       this.setCycleStatus(cycle, "idle");
+      if (cycle === this.cycle) this.lastError = null;
 
       return {
         pushed: pushed.count,
@@ -527,7 +1021,15 @@ export class SyncEngine {
         ...(pulled.skipped && pulled.skipped.length > 0 ? { skipped: pulled.skipped } : {}),
         ...(pulled.encryptedOnRawPath ? { encryptedOnRawPath: pulled.encryptedOnRawPath } : {}),
       };
-    } catch {
+    } catch (err: unknown) {
+      if (cycle === this.cycle) {
+        // Sanitized here (#962 round 6): the reason is often the relay's own
+        // text, and a host prints it — raw relay text never leaves this.
+        this.lastError = new Error(
+          sanitizeRelayText(err instanceof Error ? err.message : String(err)),
+          { cause: err },
+        );
+      }
       this.setCycleStatus(cycle, "error");
       return { pushed: 0, pulled: 0, conflicts: [] };
     }
@@ -548,6 +1050,20 @@ export class SyncEngine {
    */
   getStatus(): SyncStatus {
     return this.status;
+  }
+
+  /**
+   * Why the last sync cycle failed — a relay that refused the push (401/403),
+   * a network error — or null when it succeeded (#962). `sync()` never
+   * rejects, so a host that surfaces sync failures reads them here: a relay
+   * that keeps refusing holds compaction (nothing it has not acknowledged is
+   * deleted), and that must never be silent. Its message is already
+   * sanitized (`sanitizeRelayText`, #962 round 6) — the reason is often the
+   * relay's own text — so a host may print it as is; the original error is
+   * its `cause`.
+   */
+  getLastError(): Error | null {
+    return this.lastError;
   }
 
   /**
@@ -798,6 +1314,17 @@ export class SyncEngine {
         // Persisted FIRST: a write that fails forgets nothing, so the next
         // fold (or this sync's own) tries again.
         await this.seqCursorStore.setSyncSeqCursor(key, next);
+        // When this relay last acknowledged (#962 round 6: `motebit sync
+        // status`, the stale-floor notice). Informational: a failed write
+        // loses only the time.
+        try {
+          await this.seqCursorStore.setSyncSeqCursor(
+            pushAckedAtKey(relayStreamOfPushKey(key)),
+            Date.now(),
+          );
+        } catch {
+          // the cursor itself is persisted
+        }
         let passed = 0;
         while (passed < above.length && above[passed]!.version_clock <= next) {
           acked.delete(above[passed]!.event_id);

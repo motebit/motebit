@@ -28,7 +28,7 @@ Credentials are signed with Ed25519 using the `eddsa-jcs-2022` Data Integrity cr
 
 ## 2. W3C VC 2.0 Structure
 
-All credentials conform to the W3C Verifiable Credentials Data Model 2.0.
+All credentials use the W3C Verifiable Credentials Data Model 2.0 envelope, with the deviations listed in §2.3.
 
 ### 2.1 Verifiable Credential
 
@@ -103,6 +103,14 @@ Presentations bundle multiple credentials for third-party evaluation. The holder
 | `holder`               | string                 | Yes      | `did:key` URI of the presenting agent                                          |
 | `verifiableCredential` | VerifiableCredential[] | Yes      | Bundled credentials, each with its own proof                                   |
 | `proof`                | DataIntegrityProof     | Yes      | Holder's proof. `proofPurpose` is `"authentication"` (not `"assertionMethod"`) |
+
+### 2.3 Deviations from VC Data Model 2.0 (normative)
+
+The wire format below is fixed for this version. A verifier built only to the W3C specifications will disagree with a motebit credential at each of these points:
+
+1. **Unregistered status type.** `credentialStatus.type` is `"RevocationList2024"`, which is not a status type registered for VC 2.0 (the W3C status mechanism is `BitstringStatusListEntry`). It carries no `statusPurpose`, `statusListIndex` or `statusListCredential`. `credentialStatus.id` is a per-credential HTTP endpoint that returns `{ "revoked": … }` (§6.1), not an entry in a status list credential.
+2. **Proof configuration without `@context`.** `eddsa-jcs-2022` sets the proof configuration's `@context` to the secured document's `@context`. Motebit proof options are exactly `{ type, cryptosuite, created, verificationMethod, proofPurpose }` with no `@context` (§5.1), so `proofHash` differs from the one a conforming `eddsa-jcs-2022` implementation computes, and the two do not verify each other's proofs.
+3. **No published motebit JSON-LD context.** `@context` is only `https://www.w3.org/ns/credentials/v2`, with one exception: the self-issued hardware-attestation `AgentTrustCredential` (`credentialSubject.hardware_attestation`, minted by `@motebit/encryption`) lists a second entry, `https://motebit.com/ns/credentials/v1`. That URL is an identifier only — no context document is published at it, and verifiers MUST NOT dereference it. The credential types (`AgentReputationCredential`, `AgentTrustCredential`, `AgentGradientCredential`) and the `credentialSubject` properties (§3) are not defined by any published context; under JSON-LD processing they fall to the base context's issuer-dependent vocabulary. Verification never performs JSON-LD processing: canonicalization is JCS (RFC 8785) over the JSON as written.
 
 ---
 
@@ -274,7 +282,7 @@ The blend factor caps at 0.5 — credentials can contribute at most half of the 
 
 ### 5.1 eddsa-jcs-2022
 
-Credentials use the `eddsa-jcs-2022` Data Integrity cryptosuite (W3C Data Integrity EdDSA Cryptosuites v1.0).
+Credentials use the `eddsa-jcs-2022` Data Integrity cryptosuite (W3C Data Integrity EdDSA Cryptosuites v1.0), with the proof-configuration deviation in §2.3.
 
 **Signing algorithm:**
 

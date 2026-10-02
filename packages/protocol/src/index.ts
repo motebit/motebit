@@ -2822,8 +2822,8 @@ export interface SovereignRail extends SettlementRail {
   /**
    * Settlement asset this rail clears in. Closed union — see
    * `SettlementAsset` in `./settlement-asset.ts`. Sub-phase A: USDC
-   * only at land; second-asset promotion lifts the registry to the
-   * 8th registered registry per `registry-pattern-canonical.md`.
+   * only at land; second-asset promotion lifts the registry to a
+   * registered registry per `registry-pattern-canonical.md`.
    */
   readonly asset: SettlementAsset;
   /** Agent's own address on this chain. Equals the motebit identity public key for Ed25519-native chains. */
@@ -4022,7 +4022,7 @@ export { ALL_ACCRUAL_KINDS, isAccrualKind, ACCRUAL_KIND_MARKERS } from "./accrua
 // ── Settlement Asset (protocol-level) ───────────────────────────
 // The closed vocabulary of stablecoin assets the protocol clears
 // settlement in. Sub-phase A: closed union with bespoke coverage;
-// promotes to the 8th registered registry per
+// promotes to a registered registry per
 // `docs/doctrine/registry-pattern-canonical.md` when a second asset
 // (PYUSD, USDP, etc.) arrives as a real consumer (sub-phase B).
 

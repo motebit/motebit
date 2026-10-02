@@ -42,8 +42,10 @@ import { green, yellow, red, dim, cyan, command, success, warn } from "./colors.
 import {
   SqliteConversationSyncStoreAdapter,
   SqlitePlanSyncStoreAdapter,
+  syncFailureLine,
 } from "./runtime-factory.js";
 import {
+  sanitizeRelayText,
   ConversationSyncEngine,
   HttpConversationSyncAdapter,
   EncryptedConversationSyncAdapter,
@@ -559,7 +561,7 @@ export async function handleSlashCommand(
         );
       } catch (err: unknown) {
         const message = err instanceof Error ? err.message : String(err);
-        console.error(`Failed to delete memory: ${message}`);
+        console.error(`Failed to delete memory: ${sanitizeRelayText(message)}`);
       }
       break;
     }
@@ -597,7 +599,7 @@ export async function handleSlashCommand(
         }
       } catch (err: unknown) {
         const message = err instanceof Error ? err.message : String(err);
-        console.error(`Summarization failed: ${message}`);
+        console.error(`Summarization failed: ${sanitizeRelayText(message)}`);
       }
       break;
     }
@@ -763,13 +765,17 @@ export async function handleSlashCommand(
       try {
         console.log("Syncing events...");
         const result = await runtime.sync.sync();
+        // sync() never rejects: a refused push is read here, never silent
+        // (#962) — and its text is the relay's, so it prints sanitized (round 6).
+        const failed = syncFailureLine(runtime.sync);
+        if (failed) console.error(failed);
         console.log(`  Events — pushed: ${result.pushed}, pulled: ${result.pulled}`);
         if (result.conflicts.length > 0) {
           console.log(`  Conflicts: ${result.conflicts.length}`);
         }
       } catch (err: unknown) {
         const message = err instanceof Error ? err.message : String(err);
-        console.error(`Event sync failed: ${message}`);
+        console.error(`Event sync failed: ${sanitizeRelayText(message)}`);
       }
 
       // Conversation sync
@@ -832,7 +838,7 @@ export async function handleSlashCommand(
             );
           } catch (err: unknown) {
             const message = err instanceof Error ? err.message : String(err);
-            console.error(`Sync failed: ${message}`);
+            console.error(`Sync failed: ${sanitizeRelayText(message)}`);
           }
         } else {
           console.log("  Sync: skipped (no sync URL)");
@@ -874,7 +880,9 @@ export async function handleSlashCommand(
         }
         console.log(success("  Registered with relay."));
       } catch (err: unknown) {
-        console.log(`  Cannot reach relay: ${err instanceof Error ? err.message : String(err)}`);
+        console.log(
+          `  Cannot reach relay: ${sanitizeRelayText(err instanceof Error ? err.message : String(err))}`,
+        );
         break;
       }
 
@@ -1039,7 +1047,9 @@ export async function handleSlashCommand(
           }
         }
       } catch (err: unknown) {
-        console.log(`  Error starting server: ${err instanceof Error ? err.message : String(err)}`);
+        console.log(
+          `  Error starting server: ${sanitizeRelayText(err instanceof Error ? err.message : String(err))}`,
+        );
       }
       break;
     }
@@ -1199,7 +1209,7 @@ export async function handleSlashCommand(
           intervalMs = parseInterval(everyMatch[1]!);
         } catch (err: unknown) {
           const msg = err instanceof Error ? err.message : String(err);
-          console.log(`Error: ${msg}`);
+          console.log(`Error: ${sanitizeRelayText(msg)}`);
           break;
         }
         const once = rest.includes("--once");
@@ -1210,7 +1220,7 @@ export async function handleSlashCommand(
             wallClockMs = parseInterval(wallClockMatch[1]!);
           } catch (err: unknown) {
             const msg = err instanceof Error ? err.message : String(err);
-            console.log(`Error parsing --wall-clock: ${msg}`);
+            console.log(`Error parsing --wall-clock: ${sanitizeRelayText(msg)}`);
             break;
           }
         }
@@ -1377,7 +1387,7 @@ export async function handleSlashCommand(
         }
       } catch (err: unknown) {
         const message = err instanceof Error ? err.message : String(err);
-        console.error(`Reflection failed: ${message}`);
+        console.error(`Reflection failed: ${sanitizeRelayText(message)}`);
       }
       break;
     }
@@ -1468,7 +1478,7 @@ export async function handleSlashCommand(
                   : /manifest|hash|tool/i.test(message)
                     ? "Manifest validation failed."
                     : "Check the URL and ensure the server accepts MCP connections.";
-          console.log(`Failed to connect to "${addName}": ${message}`);
+          console.log(`Failed to connect to "${addName}": ${sanitizeRelayText(message)}`);
           console.log(`  ${hint}`);
           break;
         }
@@ -1490,7 +1500,7 @@ export async function handleSlashCommand(
           } catch {
             /* best effort */
           }
-          console.log(`Tool registration failed for "${addName}": ${message}`);
+          console.log(`Tool registration failed for "${addName}": ${sanitizeRelayText(message)}`);
           break;
         }
         // Track adapter
@@ -1591,7 +1601,7 @@ export async function handleSlashCommand(
           }
         } catch (err: unknown) {
           const message = err instanceof Error ? err.message : String(err);
-          console.log(`Discovery error: ${message}`);
+          console.log(`Discovery error: ${sanitizeRelayText(message)}`);
         }
         break;
       }
@@ -1635,7 +1645,7 @@ export async function handleSlashCommand(
         }
       } catch (err: unknown) {
         const message = err instanceof Error ? err.message : String(err);
-        console.log(`Discovery error: ${message}`);
+        console.log(`Discovery error: ${sanitizeRelayText(message)}`);
       }
       break;
     }
@@ -1814,7 +1824,7 @@ export async function handleSlashCommand(
           console.log(`Resolved: ${rawTargetId} → ${targetMotebitId.slice(0, 12)}...`);
         } catch (err: unknown) {
           const message = err instanceof Error ? err.message : String(err);
-          console.log(`Agent resolution failed: ${message}`);
+          console.log(`Agent resolution failed: ${sanitizeRelayText(message)}`);
           break;
         }
       }
@@ -1841,7 +1851,7 @@ export async function handleSlashCommand(
           console.log(`Task submission failed (${err.status}): ${err.body ?? ""}`);
         } else {
           const message = err instanceof Error ? err.message : String(err);
-          console.log(`Task submission error: ${message}`);
+          console.log(`Task submission error: ${sanitizeRelayText(message)}`);
         }
         break;
       }
@@ -2023,7 +2033,7 @@ export async function handleSlashCommand(
         console.log(`  Use /proposal ${data.proposal_id.slice(0, 8)} to check status.`);
       } catch (err: unknown) {
         const message = err instanceof Error ? err.message : String(err);
-        console.log(`Proposal error: ${message}`);
+        console.log(`Proposal error: ${sanitizeRelayText(message)}`);
       }
       break;
     }
@@ -2074,7 +2084,7 @@ export async function handleSlashCommand(
         console.log("\nUse /proposal <id> to view details or respond.");
       } catch (err: unknown) {
         const message = err instanceof Error ? err.message : String(err);
-        console.log(`Proposals error: ${message}`);
+        console.log(`Proposals error: ${sanitizeRelayText(message)}`);
       }
       break;
     }
@@ -2155,7 +2165,7 @@ export async function handleSlashCommand(
         }
       } catch (err: unknown) {
         const message = err instanceof Error ? err.message : String(err);
-        console.log(`Proposal fetch error: ${message}`);
+        console.log(`Proposal fetch error: ${sanitizeRelayText(message)}`);
         break;
       }
 
@@ -2253,7 +2263,7 @@ export async function handleSlashCommand(
         }
       } catch (err: unknown) {
         const message = err instanceof Error ? err.message : String(err);
-        console.log(`Response error: ${message}`);
+        console.log(`Response error: ${sanitizeRelayText(message)}`);
       }
       break;
     }
@@ -2290,13 +2300,13 @@ export async function handleSlashCommand(
           console.log(`  balance      ${fromMicro(Number(microUsdc)).toFixed(2)} USDC`);
         } catch (err: unknown) {
           const msg = err instanceof Error ? err.message : String(err);
-          console.log(`  balance      (unavailable: ${msg})`);
+          console.log(`  balance      (unavailable: ${sanitizeRelayText(msg)})`);
         }
         console.log();
         for (const line of WALLET_GUIDANCE_LINES) console.log(dim(line));
       } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : String(err);
-        console.log(`Wallet error: ${msg}`);
+        console.log(`Wallet error: ${sanitizeRelayText(msg)}`);
       }
       break;
     }
@@ -2330,7 +2340,7 @@ export async function handleSlashCommand(
         for (const line of renderLedgerSummary(manifest)) console.log(line);
       } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : String(err);
-        console.log(`Ledger error: ${msg}`);
+        console.log(`Ledger error: ${sanitizeRelayText(msg)}`);
       }
       break;
     }
@@ -2362,7 +2372,7 @@ export async function handleSlashCommand(
         }
       } catch (err: unknown) {
         const message = err instanceof Error ? err.message : String(err);
-        console.log(`Balance error: ${message}`);
+        console.log(`Balance error: ${sanitizeRelayText(message)}`);
       }
       break;
     }
@@ -2411,7 +2421,7 @@ export async function handleSlashCommand(
           );
         } else {
           const message = err instanceof Error ? err.message : String(err);
-          console.log(`Withdrawal error: ${message}`);
+          console.log(`Withdrawal error: ${sanitizeRelayText(message)}`);
         }
       }
       break;
@@ -2459,7 +2469,7 @@ export async function handleSlashCommand(
         }
       } catch (err: unknown) {
         const message = err instanceof Error ? err.message : String(err);
-        console.log(`Deposits error: ${message}`);
+        console.log(`Deposits error: ${sanitizeRelayText(message)}`);
       }
       break;
     }

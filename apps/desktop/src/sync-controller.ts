@@ -116,7 +116,21 @@ export class SyncController {
   private _servingToken: ((audience: TokenAudience) => Promise<string>) | null = null;
   private _activeTaskCount = 0;
 
+  /** Work bound to this sync session (a registration retry), ended by `stopSync`. */
+  private _onStop = new Set<() => void>();
+
   constructor(private deps: SyncControllerDeps) {}
+
+  /**
+   * Run `stop` when sync stops (`stopSync`). Returns an unsubscribe for work
+   * that ended on its own.
+   */
+  onStop(stop: () => void): () => void {
+    this._onStop.add(stop);
+    return () => {
+      this._onStop.delete(stop);
+    };
+  }
 
   /** Subscribe to sync status changes. Immediately emits the current status. */
   onSyncStatus(callback: (event: SyncStatusEvent) => void): void {
@@ -817,6 +831,9 @@ export class SyncController {
 
   /** Stop background event sync. */
   stopSync(): void {
+    const hooks = [...this._onStop];
+    this._onStop.clear();
+    for (const stop of hooks) stop();
     if (this._wsTokenRefreshTimer) {
       clearInterval(this._wsTokenRefreshTimer);
       this._wsTokenRefreshTimer = null;

@@ -457,7 +457,9 @@ export async function parseProxyToken(
     );
     if (!valid) return null;
 
-    const payload = JSON.parse(new TextDecoder().decode(payloadBytes)) as ProxyTokenPayload;
+    const decoded: unknown = JSON.parse(new TextDecoder().decode(payloadBytes));
+    const payload = asProxyTokenPayload(decoded);
+    if (payload === null) return null;
 
     // Check expiry
     if (payload.exp <= Date.now()) return null;
@@ -466,6 +468,50 @@ export async function parseProxyToken(
   } catch {
     return null;
   }
+}
+
+/**
+ * The exact claim set the relay's `issueProxyToken`
+ * (`services/relay/src/subscriptions.ts`) signs — no more, no less.
+ */
+const PROXY_TOKEN_KEYS: readonly string[] = ["bal", "exp", "iat", "jti", "mid", "models"];
+
+/**
+ * Domain separation for relay signatures. The relay signs many artifacts with
+ * one identity key — audience-bound bearer tokens (`mintAudienceToken`:
+ * browser-sandbox, task:dispatch, mcp:call), canonical-JSON records
+ * (transparency declaration, revocations, …) — so a valid relay signature
+ * proves only "the relay signed these bytes", never "these bytes are a proxy
+ * token". The proxy token carries no type claim on the wire, so the type is
+ * proven structurally: the payload must be EXACTLY the proxy-token claim set
+ * with exactly its types. Any foreign claim (`aud`, `suite`, `sub`, `spec`, …),
+ * any missing claim, or any mistyped claim → reject, fail-closed. Without this
+ * an audience token or a public relay record reached the provider with
+ * `bal`/`exp` undefined (every comparison false ⇒ admitted).
+ */
+export function asProxyTokenPayload(v: unknown): ProxyTokenPayload | null {
+  if (typeof v !== "object" || v === null || Array.isArray(v)) return null;
+  const o = v as Record<string, unknown>;
+  const keys = Object.keys(o).sort();
+  if (keys.length !== PROXY_TOKEN_KEYS.length) return null;
+  for (let i = 0; i < keys.length; i++) if (keys[i] !== PROXY_TOKEN_KEYS[i]) return null;
+
+  const { mid, bal, models, jti, iat, exp } = o;
+  if (typeof mid !== "string" || mid === "") return null;
+  if (typeof jti !== "string" || jti === "") return null;
+  if (!Number.isSafeInteger(bal) || (bal as number) < 0) return null;
+  if (!Number.isSafeInteger(iat)) return null;
+  if (!Number.isSafeInteger(exp)) return null;
+  if (!Array.isArray(models) || !models.every((m) => typeof m === "string")) return null;
+
+  return {
+    mid,
+    bal: bal as number,
+    models,
+    jti,
+    iat: iat as number,
+    exp: exp as number,
+  };
 }
 
 // --- Request Validation ---
