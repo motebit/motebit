@@ -77,6 +77,11 @@ function walkTsFiles(dir: string): string[] {
     return out;
   }
   for (const entry of entries) {
+    // Never descend into node_modules: every caller discards those paths (the
+    // src roots hold none; the `apps` walk filters `node_modules` out), and
+    // following pnpm's workspace symlinks through them cost ~55s of stat per
+    // run — 5 probes x 65s was over half of check-gates-effective's runtime.
+    if (entry === "node_modules") continue;
     const rel = join(dir, entry);
     const full = resolve(ROOT, rel);
     let st: ReturnType<typeof statSync>;
