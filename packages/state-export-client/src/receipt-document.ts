@@ -85,6 +85,19 @@ export interface ReceiptDocumentVerification {
   readonly anchorTxHash?: string;
   /** When `binding === "revoked"`: the on-chain revocation timestamp (ms). */
   readonly revokedAt?: number;
+  /**
+   * Outcome of the on-chain key-revocation scan — present ONLY when the caller
+   * supplied `options.revocation` and integrity held (absent ⇒ not checked).
+   * `"not_revoked"`: no revocation found for the signing key. `"revoked_after_signing"`:
+   * the key was revoked, but after `completed_at` — the key was valid when this
+   * receipt was signed, so the binding is not poisoned (`revokedAt` carries the
+   * time). `"revoked"`: revoked at/before signing (`binding === "revoked"`).
+   * `"unknown"`: the lookup failed (RPC/transport) — revocation was NOT established
+   * either way; `revocationDetail` carries why.
+   */
+  readonly revocation?: "not_revoked" | "revoked_after_signing" | "revoked" | "unknown";
+  /** When `revocation === "unknown"`: why the lookup could not complete. */
+  readonly revocationDetail?: string;
   /** `did:key:z…` derived from the signing key when integrity holds. */
   readonly signerDid?: string;
   /** The producing `motebit_id` as carried in the receipt body — a claim, not proof. */
@@ -301,7 +314,7 @@ export async function verifyReceiptDocument(
       detail: "input is not an ExecutionReceipt (missing motebit_id / task_id / signature / suite)",
     };
   }
-  const view = toView(await verifyReceipt(parsed));
+  let view = toView(await verifyReceipt(parsed));
   if (view.integrity) {
     // Revocation is a poison verdict — check it first, independent of `identity`.
     // A key revoked on-chain at/before completed_at must not bind, no matter what
@@ -313,8 +326,14 @@ export async function verifyReceiptDocument(
         options.revocation.lookup,
       );
       if (rev.status === "revoked" && rev.revokedAt <= parsed.completed_at) {
-        return { ...view, binding: "revoked", revokedAt: rev.revokedAt };
+        return { ...view, binding: "revoked", revokedAt: rev.revokedAt, revocation: "revoked" };
       }
+      view =
+        rev.status === "revoked"
+          ? { ...view, revocation: "revoked_after_signing", revokedAt: rev.revokedAt }
+          : rev.status === "unknown"
+            ? { ...view, revocation: "unknown", revocationDetail: rev.detail }
+            : { ...view, revocation: "not_revoked" };
     }
     // Receipt-alone sovereign — the strongest root, fully offline, needs NO
     // identity file or relay: the `motebit_id` is itself the commitment to the

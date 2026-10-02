@@ -67,3 +67,6 @@ apps/*/playwright-report
 # is its sole formatter, so prettier must not re-normalize it (else regeneration
 # produces a cosmetic diff). The conformance test parses it, so whitespace is moot.
 spec/conformance/verification-verdict/corpus.json
+
+# Deterministic generator output — byte-compared by apps/verify/src/__tests__/sample.test.ts
+apps/verify/src/sample-receipt.json
