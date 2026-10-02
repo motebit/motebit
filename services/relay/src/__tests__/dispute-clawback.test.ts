@@ -12,10 +12,21 @@
  * past the appeal window, then trigger lazy-finalize via GET, and assert the
  * decisive invariant: the worker is debited and the winner credited so the
  * TOTAL across both parties is conserved — no mint.
+ *
+ * Seeds are ledger-consistent (the delegator's `allocation_hold`, the worker's
+ * credit under the settlement id): the fund action derives what it may move
+ * from the ledger, so a state the money path cannot produce moves nothing.
  */
+
+/** The delegator's escrow as the submission path books it: deposit, then hold. */
+function seedHold(relay: SyncRelay, allocationId: string, amount: number): void {
+  const db = relay.moteDb.db;
+  creditAccount(db, DELEGATOR, amount, "deposit", `dep-${allocationId}`, "Deposit");
+  debitAccount(db, DELEGATOR, amount, "allocation_hold", allocationId, "Hold");
+}
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import type { SyncRelay } from "../index.js";
-import { creditAccount, getAccountBalance } from "../accounts.js";
+import { creditAccount, debitAccount, getAccountBalance } from "../accounts.js";
 import { reconcileLedger } from "../reconciliation.js";
 import { AUTH_HEADER, createTestRelay } from "./test-helpers.js";
 
@@ -34,6 +45,10 @@ interface SeedOpts {
 function seedSettledDispute(relay: SyncRelay, o: SeedOpts): void {
   const db = relay.moteDb.db;
   const now = Date.now();
+
+  // 0. The delegator's hold (gross = NET + 50,000 fee). "No recorded
+  //    delegator" means no hold payer on the ledger.
+  if (o.withDelegator !== false) seedHold(relay, `alloc-${o.taskId}`, 1_000_000);
 
   // 1. Settlement credited the worker NET (the funds now sit in its balance,
   //    held non-spendable/non-withdrawable during the window).
@@ -188,10 +203,9 @@ describe("Dispute claw-back (post-settlement, no mint)", () => {
  * Pre-settlement distribution — the worker-filed inversion fix.
  *
  * A dispute filed BEFORE any relay settlement has no settlement row, so
- * `executeFundAction` takes Case A: it distributes the still-held escrow
- * (`amount_locked`) with no claw-back. Worker/delegator are NOT in the ledger,
- * so they must be recovered from the dispute parties + the `filer_role` captured
- * at filing. Before the 2026-06 fix, Case A credited `filed_by`/`respondent`
+ * `executeFundAction` takes Case A: it distributes the escrow the ledger still
+ * holds with no claw-back, to the hold payer (delegator) and the allocation's
+ * worker — never to `filed_by`/`respondent` as given. Before the 2026-06 fix, Case A credited `filed_by`/`respondent`
  * directly — correct only when the DELEGATOR filed. On a WORKER-filed dispute
  * `filed_by` = worker and `respondent` = delegator, so `release_to_worker` paid
  * the delegator and `refund_to_delegator` paid the worker — escrow to the LOSING
@@ -220,6 +234,13 @@ function seedPreSettlementDispute(relay: SyncRelay, o: PreSeedOpts): void {
   // row → executeFundAction takes the pre-settlement escrow path.
   const filedBy = o.filerRole === "worker" ? WORKER : DELEGATOR;
   const respondent = o.filerRole === "worker" ? DELEGATOR : WORKER;
+
+  // The escrow: the delegator's hold on the ledger, the allocation disputed.
+  seedHold(relay, `alloc-${o.taskId}`, ESCROW);
+  db.prepare(
+    `INSERT INTO relay_allocations (allocation_id, task_id, motebit_id, amount_locked, status, created_at)
+     VALUES (?, ?, ?, ?, 'disputed', ?)`,
+  ).run(`alloc-${o.taskId}`, o.taskId, WORKER, ESCROW, now);
 
   db.prepare(
     `INSERT INTO relay_disputes

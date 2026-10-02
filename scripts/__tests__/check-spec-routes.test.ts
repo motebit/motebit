@@ -23,6 +23,7 @@ import { spawnSync } from "node:child_process";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { withRepoFileReplaced } from "./repo-file-mutation.ts";
+import { cleanEnv } from "../lib/differential-tree.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, "..", "..");
@@ -36,7 +37,7 @@ const TARGET = resolve(ROOT, "services", "relay", "src", "identity-transparency.
  */
 function runGateWith(source: string): Promise<string> {
   return withRepoFileReplaced(TARGET, source, () => {
-    const r = spawnSync("npx", ["tsx", SCRIPT], { cwd: ROOT, encoding: "utf8" });
+    const r = spawnSync("npx", ["tsx", SCRIPT], { cwd: ROOT, encoding: "utf8", env: cleanEnv() });
     return `${r.stdout}\n${r.stderr}`;
   });
 }

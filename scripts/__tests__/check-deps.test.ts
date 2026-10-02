@@ -23,6 +23,7 @@ import { spawnSync } from "node:child_process";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { withRepoFileReplaced, withRepoLock } from "./repo-file-mutation.ts";
+import { cleanEnv } from "../lib/differential-tree.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, "..", "..");
@@ -44,7 +45,7 @@ function runWithManifest(
       return `${JSON.stringify(manifest, null, 2)}\n`;
     },
     () => {
-      const r = spawnSync("npx", ["tsx", SCRIPT], { cwd: ROOT, encoding: "utf8" });
+      const r = spawnSync("npx", ["tsx", SCRIPT], { cwd: ROOT, encoding: "utf8", env: cleanEnv() });
       return `${r.stdout}\n${r.stderr}`;
     },
   );
@@ -53,7 +54,7 @@ function runWithManifest(
 /** The gate over the repo as committed — never over another self-test's perturbation. */
 function runClean(): Promise<string> {
   return withRepoLock(() => {
-    const r = spawnSync("npx", ["tsx", SCRIPT], { cwd: ROOT, encoding: "utf8" });
+    const r = spawnSync("npx", ["tsx", SCRIPT], { cwd: ROOT, encoding: "utf8", env: cleanEnv() });
     return `${r.stdout}\n${r.stderr}`;
   });
 }
