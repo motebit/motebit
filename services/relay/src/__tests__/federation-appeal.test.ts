@@ -233,6 +233,12 @@ describe("Federation appeal: round-2 quorum failure", () => {
         "INSERT INTO relay_allocations (allocation_id, task_id, motebit_id, amount_locked, status, created_at) VALUES (?, ?, ?, 100000, 'settled', ?)",
       )
       .run(allocId, taskId, "del-fa", Date.now());
+    // §4.4 standing: the relay is the delegator that funded this allocation.
+    relay.moteDb.db
+      .prepare(
+        "INSERT INTO relay_transactions (transaction_id, motebit_id, type, amount, balance_after, reference_id, description, created_at) VALUES (?, ?, 'allocation_hold', -100000, 0, ?, 'test hold', ?)",
+      )
+      .run(crypto.randomUUID(), relayMotebitId, allocId, Date.now());
 
     const delPriv = agentKeys.get("del-fa")!.privateKey;
     const disputeId = `dispute-r2qf-${crypto.randomUUID().slice(0, 8)}`;
@@ -315,6 +321,12 @@ describe("Federation appeal: round-1 resolved → /appeal → round-2 → final"
         "INSERT INTO relay_allocations (allocation_id, task_id, motebit_id, amount_locked, status, created_at) VALUES (?, ?, ?, 100000, 'settled', ?)",
       )
       .run(allocId, taskId, "del-fa", Date.now());
+    // §4.4 standing: the relay is the delegator that funded this allocation.
+    relay.moteDb.db
+      .prepare(
+        "INSERT INTO relay_transactions (transaction_id, motebit_id, type, amount, balance_after, reference_id, description, created_at) VALUES (?, ?, 'allocation_hold', -100000, 0, ?, 'test hold', ?)",
+      )
+      .run(crypto.randomUUID(), relayMotebitId, allocId, Date.now());
 
     // File the dispute via the real /api/v1/allocations/:allocationId/dispute endpoint
     // so body_json is persisted (migration 18 requirement).
@@ -492,6 +504,12 @@ describe("Federation appeal: round-2 evidence union (§8.3 + §8.5)", () => {
         "INSERT INTO relay_allocations (allocation_id, task_id, motebit_id, amount_locked, status, created_at) VALUES (?, ?, ?, 100000, 'settled', ?)",
       )
       .run(allocId, taskId, "del-fa", Date.now());
+    // §4.4 standing: the relay is the delegator that funded this allocation.
+    relay.moteDb.db
+      .prepare(
+        "INSERT INTO relay_transactions (transaction_id, motebit_id, type, amount, balance_after, reference_id, description, created_at) VALUES (?, ?, 'allocation_hold', -100000, 0, ?, 'test hold', ?)",
+      )
+      .run(crypto.randomUUID(), relayMotebitId, allocId, Date.now());
 
     const delPriv = agentKeys.get("del-fa")!.privateKey;
     const disputeId = `dispute-evid-union-${crypto.randomUUID().slice(0, 8)}`;
@@ -624,6 +642,12 @@ describe("Federation appeal: round-2 evidence union (§8.3 + §8.5)", () => {
         "INSERT INTO relay_allocations (allocation_id, task_id, motebit_id, amount_locked, status, created_at) VALUES (?, ?, ?, 100000, 'settled', ?)",
       )
       .run(allocId, taskId, "del-fa", Date.now());
+    // §4.4 standing: the relay is the delegator that funded this allocation.
+    relay.moteDb.db
+      .prepare(
+        "INSERT INTO relay_transactions (transaction_id, motebit_id, type, amount, balance_after, reference_id, description, created_at) VALUES (?, ?, 'allocation_hold', -100000, 0, ?, 'test hold', ?)",
+      )
+      .run(crypto.randomUUID(), relayMotebitId, allocId, Date.now());
     const delPriv = agentKeys.get("del-fa")!.privateKey;
     const disputeId = `dispute-frozen-${crypto.randomUUID().slice(0, 8)}`;
     const disputeReq: DisputeRequest = await signDisputeRequest(
