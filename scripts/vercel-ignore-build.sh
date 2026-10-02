@@ -20,8 +20,10 @@
 # Usage (paths relative to the repo root):
 #   sh ../../scripts/vercel-ignore-build.sh <path>...
 #     preview: skip iff `git diff --quiet PREV COMMIT -- <path>...` succeeds
-#     with no changes, PREV = ${VERCEL_GIT_PREVIOUS_SHA:-HEAD^},
-#     COMMIT = $VERCEL_GIT_COMMIT_SHA (both must resolve to commits).
+#     with no changes, PREV = $VERCEL_GIT_PREVIOUS_SHA, COMMIT =
+#     $VERCEL_GIT_COMMIT_SHA (both set, both must resolve to commits). An
+#     unset PREV (a branch's first deploy) builds: HEAD^ would see only the
+#     tip commit, so a PR whose tip is README-only would skip its preview.
 #   sh ../../scripts/vercel-ignore-build.sh --turbo-ignore <workspace>
 #     preview: skip iff `npx -y turbo-ignore <workspace>` exits 0 (turbo
 #     derives the workspace's transitive dependency graph, which a hand
@@ -56,9 +58,13 @@ if [ "$#" -eq 0 ]; then
 fi
 
 commit="${VERCEL_GIT_COMMIT_SHA:-}"
-prev="${VERCEL_GIT_PREVIOUS_SHA:-HEAD^}"
+prev="${VERCEL_GIT_PREVIOUS_SHA:-}"
 if [ -z "$commit" ]; then
   say "VERCEL_GIT_COMMIT_SHA is unset; building"
+  exit 1
+fi
+if [ -z "$prev" ]; then
+  say "VERCEL_GIT_PREVIOUS_SHA is unset (first deploy of this branch); building"
   exit 1
 fi
 

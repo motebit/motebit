@@ -162,8 +162,15 @@ describe("vercel-ignore-build.sh — preview skips only when proven safe", () =>
     ).toBe(1);
   });
 
-  it("defaults the previous sha to HEAD^ when VERCEL_GIT_PREVIOUS_SHA is unset", () => {
-    // HEAD is watchedChange, HEAD^ is unrelated → the watched path changed.
+  it("builds a preview when VERCEL_GIT_PREVIOUS_SHA is unset or empty (a branch's first deploy)", () => {
+    // First deploy of a branch: Vercel has no previous sha. Diffing against
+    // HEAD^ would skip a 2-commit PR whose tip only touches README even though
+    // its first commit changed a watched path — so no previous sha builds.
+    // Probe: COMMIT = unrelated, HEAD^..unrelated has no watched change.
+    expect(run({ VERCEL_ENV: "preview", VERCEL_GIT_COMMIT_SHA: unrelated })).toBe(1);
+    expect(
+      run({ VERCEL_ENV: "preview", VERCEL_GIT_PREVIOUS_SHA: "", VERCEL_GIT_COMMIT_SHA: unrelated }),
+    ).toBe(1);
     expect(run({ VERCEL_ENV: "preview", VERCEL_GIT_COMMIT_SHA: watchedChange })).toBe(1);
   });
 
