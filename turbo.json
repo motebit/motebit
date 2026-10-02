@@ -7,6 +7,8 @@
     "DROPLET.md",
     "LIQUESCENTIA.md",
     "scripts/generate-llms-txt.ts",
+    "spec/*.md",
+    "!spec/README.md",
     "THE_ACTOR_PRINCIPLE.md",
     "THE_CONFERENCE.md",
     "THE_EMERGENT_INTERIOR.md",

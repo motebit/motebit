@@ -6,7 +6,15 @@
  */
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { execFileSync } from "node:child_process";
-import { copyFileSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  copyFileSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -15,6 +23,7 @@ import {
   evaluateTestCache,
   readInputs,
   readTestCacheInputs,
+  runToFile,
   canonHash,
   CI_JOBS,
   CI_JOB_STEPS,
@@ -207,5 +216,66 @@ describe("test tasks are never cached (turbo --dry=json, per package)", () => {
     expect(
       evaluateTestCache(fixture({ turboConfigs: { "packages/a/turbo.json": "{ nope" } })).length,
     ).toBeGreaterThan(0);
+  });
+});
+
+/**
+ * Main went red (2026-10-01) when the real `turbo run test test:coverage
+ * --dry=json` output crossed Node's default 1 MiB `maxBuffer` (ENOBUFS): the
+ * dry-run JSON lists every task's inputs and grows with the repo. A stub
+ * `turbo` emitting well over 1 MiB must still be read in full.
+ */
+describe("the dry-run read has no output-size ceiling", () => {
+  const BIG = 3 * 1024 * 1024;
+  const env = (): Record<string, string> => {
+    const e: Record<string, string> = {};
+    for (const [k, v] of Object.entries(process.env))
+      if (v != null && !k.startsWith("GIT_")) e[k] = v;
+    return e;
+  };
+
+  it("runToFile returns > 1 MiB of stdout intact", () => {
+    const out = runToFile(
+      process.execPath,
+      ["-e", `process.stdout.write("x".repeat(${BIG}))`],
+      process.cwd(),
+      env(),
+    );
+    expect(out.length).toBe(BIG);
+  });
+
+  it("runToFile surfaces a non-zero exit with its stderr", () => {
+    expect(() =>
+      runToFile(
+        process.execPath,
+        ["-e", 'process.stderr.write("boom"); process.exit(3)'],
+        process.cwd(),
+        env(),
+      ),
+    ).toThrow(/exited 3: boom/);
+  });
+
+  it("readTestCacheInputs parses a > 1 MiB dry run (stub turbo)", () => {
+    const root = mkdtempSync(join(tmpdir(), "prepush-big-dry-"));
+    try {
+      execFileSync("git", ["init", "-q"], { cwd: root, env: env() });
+      const bin = join(root, "node_modules", ".bin");
+      mkdirSync(bin, { recursive: true });
+      const payload = join(root, "dry.js");
+      writeFileSync(
+        payload,
+        `const tasks=[{task:"test",directory:"packages/a",resolvedTaskDefinition:{cache:false},pad:"y".repeat(${BIG})},{task:"test:coverage",directory:"packages/a",resolvedTaskDefinition:{cache:false}}];process.stdout.write("turbo 2\\n"+JSON.stringify({tasks}));`,
+      );
+      const turbo = join(bin, "turbo");
+      writeFileSync(turbo, `#!/bin/sh\nexec "${process.execPath}" "${payload}"\n`);
+      chmodSync(turbo, 0o755);
+      const inp = readTestCacheInputs(root, {
+        "packages/a": { test: "vitest run", "test:coverage": "vitest run --coverage" },
+      });
+      expect(typeof inp.dry).not.toBe("string");
+      expect(evaluateTestCache(inp)).toEqual([]);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });
