@@ -41,11 +41,14 @@
  * loudly as `proxy.accounting_over_budget`.
  *
  * The returned `settled` promise covers the whole lifecycle (drain → record →
- * release → debit); the route registers it with the platform's `waitUntil`
- * (Next's `after`) so an isolate teardown after the response closes cannot
- * drop the debit.
+ * release → debit). A client still attached reads EOF only AFTER the debit is
+ * sent (the fee lands before the stream ends — billing.ts's `debitRelay`, the
+ * turn's single settlement path); for a client already gone, the route
+ * registers `settled` with the platform's `waitUntil` (Next's `after`) so an
+ * isolate teardown cannot drop the debit.
  */
 import { calculateCostMicro, type InferenceHost } from "../../../validation";
+import { DEBIT_MAX_ATTEMPTS, DEBIT_TIMINGS } from "../../../billing";
 import { extractUsage, type UsageAccumulator } from "./usage";
 
 /**
@@ -61,18 +64,28 @@ export const ACCOUNTING_TIMINGS = {
   drainTimeoutMs: 15_000,
   /** Bound on each spend-KV op (record, release) on the accounting path. */
   kvTimeoutMs: 2_000,
-  /** Relay-debit retry backoff base (attempt × base). */
-  debitBackoffMs: 250,
-  /** Bound on each relay-debit attempt (the fetch is aborted past it). */
-  debitAttemptTimeoutMs: 3_000,
+  /** Relay-debit retry backoff base — a view of billing.ts's `DEBIT_TIMINGS` (one source). */
+  get debitBackoffMs(): number {
+    return DEBIT_TIMINGS.backoffMs;
+  },
+  set debitBackoffMs(ms: number) {
+    DEBIT_TIMINGS.backoffMs = ms;
+  },
+  /** Bound on each relay-debit attempt — a view of billing.ts's `DEBIT_TIMINGS`. */
+  get debitAttemptTimeoutMs(): number {
+    return DEBIT_TIMINGS.attemptTimeoutMs;
+  },
+  set debitAttemptTimeoutMs(ms: number) {
+    DEBIT_TIMINGS.attemptTimeoutMs = ms;
+  },
   /** A forwarded write held longer than this means the client has stalled. */
   writeStallMs: 30_000,
   /** The platform's post-response (`waitUntil`) budget the tail must fit. */
   afterBudgetMs: 30_000,
 };
 
-/** Relay-debit attempts (idempotent on `reference_id`, so retries are safe). */
-export const DEBIT_MAX_ATTEMPTS = 3;
+/** Relay-debit attempts — billing.ts owns the debit; re-exported for the tail bound. */
+export { DEBIT_MAX_ATTEMPTS };
 
 /**
  * Worst case from the end of forwarding to a settled debit: the drain, the
@@ -110,6 +123,10 @@ export interface StreamAccountingOptions {
   /** The `max_tokens` sent upstream (output upper bound). */
   maxOutputTokens: number;
   spend: { record: (costMicro: number) => Promise<void>; release: () => Promise<void> } | null;
+  /**
+   * The turn's ONE debit (billing.ts `debitRelay`), carrying the metered cost
+   * plus `extraCostMicro`. Called exactly once per stream.
+   */
   debit: (costMicro: number) => Promise<void>;
 }
 
@@ -253,66 +270,78 @@ export function meterStream(opts: StreamAccountingOptions): {
           drainDeadline = tailStart + ACCOUNTING_TIMINGS.drainTimeoutMs;
         }
       }
-    } finally {
-      await writer.close().catch(() => {});
+    } catch {
+      // Defensive: the loop catches its own read/write failures. Anything else
+      // still settles — billed at the upper bound, never dropped.
+      estimateReason ??= "upstream_error";
     }
     if (tailStart === 0) tailStart = Date.now();
 
-    if (estimateReason == null && !usage.outputReported) estimateReason = "usage_missing";
-    const bounded = estimateReason != null;
-    if (estimateReason == null && usage.cacheTtlBounded) estimateReason = "cache_ttl_unknown";
-    const billed = !bounded
-      ? usage
-      : upperBoundUsage(opts.provider, usage, opts.providerRequestBody, opts.maxOutputTokens);
-    const cost =
-      calculateCostMicro(
-        opts.model,
-        billed.input,
-        billed.output,
-        billed.cacheRead,
-        billed.cacheCreation,
-        billed.cacheCreation1h ?? 0,
-      ) + opts.extraCostMicro;
-    // Normalized token fields for billing verification (`input` is UNCACHED,
-    // `cacheRead` the discounted portion — additive; see usage.ts). An
-    // estimated charge says so, with the reason and the bound it billed.
-    console.log(
-      JSON.stringify({
-        event: "proxy.usage",
-        requestId: opts.requestId,
-        model: opts.model,
-        input: billed.input,
-        output: billed.output,
-        cacheRead: billed.cacheRead,
-        cacheCreation: billed.cacheCreation,
-        cacheCreation1h: billed.cacheCreation1h ?? 0,
-        costMicro: cost,
-        motebitId: opts.motebitId,
-        clientAborted: clientGone,
-        clientStalled,
-        ...(estimateReason != null
-          ? {
-              estimated: true,
-              estimateReason,
-              reported: { input: usage.input, output: usage.output },
-            }
-          : {}),
-      }),
-    );
+    // The client's stream is closed only AFTER the debit is sent (a client
+    // still attached reads EOF once the fee is recorded): nothing after the
+    // response completes is guaranteed to run, so the normal path never
+    // relies on `waitUntil`. A client already gone is unaffected; its tail
+    // is what `waitUntil` (the route's `after`) holds open.
+    let cost = 0;
+    try {
+      if (estimateReason == null && !usage.outputReported) estimateReason = "usage_missing";
+      const bounded = estimateReason != null;
+      if (estimateReason == null && usage.cacheTtlBounded) estimateReason = "cache_ttl_unknown";
+      const billed = !bounded
+        ? usage
+        : upperBoundUsage(opts.provider, usage, opts.providerRequestBody, opts.maxOutputTokens);
+      cost =
+        calculateCostMicro(
+          opts.model,
+          billed.input,
+          billed.output,
+          billed.cacheRead,
+          billed.cacheCreation,
+          billed.cacheCreation1h ?? 0,
+        ) + opts.extraCostMicro;
+      // Normalized token fields for billing verification (`input` is UNCACHED,
+      // `cacheRead` the discounted portion — additive; see usage.ts). An
+      // estimated charge says so, with the reason and the bound it billed.
+      console.log(
+        JSON.stringify({
+          event: "proxy.usage",
+          requestId: opts.requestId,
+          model: opts.model,
+          input: billed.input,
+          output: billed.output,
+          cacheRead: billed.cacheRead,
+          cacheCreation: billed.cacheCreation,
+          cacheCreation1h: billed.cacheCreation1h ?? 0,
+          costMicro: cost,
+          motebitId: opts.motebitId,
+          clientAborted: clientGone,
+          clientStalled,
+          ...(estimateReason != null
+            ? {
+                estimated: true,
+                estimateReason,
+                reported: { input: usage.input, output: usage.output },
+              }
+            : {}),
+        }),
+      );
 
-    // Spend controls first (so the identity's next request sees this spend and
-    // a free slot), each bounded so a stalled KV can never withhold the debit.
-    if (opts.spend) {
-      const spend = opts.spend;
-      await boundedKv(() => spend.record(cost), "record", opts.requestId);
-      await boundedKv(() => spend.release(), "release", opts.requestId);
-    }
-    if (cost > 0) {
+      // Spend controls first (so the identity's next request sees this spend and
+      // a free slot), each bounded so a stalled KV can never withhold the debit.
+      if (opts.spend) {
+        const spend = opts.spend;
+        await boundedKv(() => spend.record(cost), "record", opts.requestId);
+        await boundedKv(() => spend.release(), "release", opts.requestId);
+      }
+      // Always settled — a zero cost is itself reported by billing.ts
+      // (`no_billable_amount`), so no served turn ends without a debit event.
       try {
         await opts.debit(cost);
       } catch {
         /* debitRelay never throws; defensive — `settled` must not reject */
       }
+    } finally {
+      await writer.close().catch(() => {});
     }
 
     // The tail must fit the platform's post-response budget, or the isolate

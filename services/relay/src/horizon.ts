@@ -555,9 +555,14 @@ export async function advanceRelayHorizon(
         // Sign-then-persist-then-truncate (same load-bearing order as
         // EventStore.advanceHorizon in @motebit/event-log phase 4b-2):
         // truncation BEFORE the cert exists would leave a window where
-        // entries are gone but no signed attestation references them.
-        persistHorizonCert(db, cert);
-        const truncatedCount = adapter(db, horizonTs);
+        // entries are gone but no signed attestation references them. One
+        // transaction: a truncation refused (the emergency freeze guards
+        // relay_settlements) must not leave a persisted cert attesting a
+        // deletion that never happened.
+        const truncatedCount = db.transaction(() => {
+          persistHorizonCert(db, cert);
+          return adapter(db, horizonTs);
+        });
         logger.info("horizon.advance.committed", {
           storeId,
           horizonTs,

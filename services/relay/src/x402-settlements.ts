@@ -45,6 +45,7 @@
 import type { DatabaseDriver } from "@motebit/persistence";
 import { creditAccount } from "./accounts.js";
 import { createLogger } from "./logger.js";
+import { isEmergencyFrozenAbort } from "./freeze.js";
 import { superviseInterval, type LoopSupervisor } from "./loop-supervisor.js";
 
 const logger = createLogger({ service: "x402-settlements" });
@@ -1407,6 +1408,11 @@ export async function reconcileX402Settlement(
     });
     return "expired";
   } catch (err) {
+    // The operator's resolve is a request: a freeze that landed during its
+    // chain read and refused the credit is a 503 EMERGENCY_FROZEN, never a
+    // 200 reading "read_error" (the record stays pending either way; the
+    // loop does not run while frozen and credits it after unfreeze).
+    if (operator && isEmergencyFrozenAbort(err)) throw err;
     logger.error("x402.reconcile.read_failed", {
       payer: rec.payer,
       nonce: rec.nonce,

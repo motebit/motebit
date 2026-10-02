@@ -17,7 +17,7 @@
  * Driven over a real `motebit.db` (SQLite, separate opens = separate
  * processes) through the CLI's own command module.
  */
-import { mkdtempSync, readFileSync, globSync } from "node:fs";
+import { mkdtempSync, readFileSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, relative } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -399,7 +399,11 @@ describe("#962 round 6 C2 — /sync prints relay text sanitized and capped", () 
 describe("#962 round 6 C2 — static: every print of an error message in apps/cli is sanitized", () => {
   it("enumerates each console/log/warn/report call carrying an error message, and each goes through sanitizeRelayText", () => {
     const src = join(dirname(fileURLToPath(import.meta.url)), "..");
-    const files = globSync("**/*.ts", { cwd: src }).filter((f) => !f.includes("__tests__"));
+    // readdirSync({ recursive }) rather than fs.globSync: the repo supports Node >=20
+    // (package.json engines) and globSync only exists from Node 22.
+    const files = readdirSync(src, { recursive: true, encoding: "utf8" }).filter(
+      (f) => f.endsWith(".ts") && !f.includes("__tests__"),
+    );
     const PRINT = new Set(["log", "error", "warn", "info", "report", "print"]);
     const SAFE = new Set(["sanitizeRelayText", "syncFailureLine"]);
     const MESSAGE_NAMES = new Set(["message", "msg", "errMsg"]);

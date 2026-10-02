@@ -363,6 +363,8 @@ describe("stream metering boundary matrix — charged for what the provider cons
     afterTasks.length = 0;
     process.env.RELAY_PUBLIC_KEY = "test-pubkey";
     process.env.RELAY_PROXY_SECRET = "relay-secret-test";
+    // Billing must be configured for motebit-cloud to serve at all (billing.ts).
+    process.env.RELAY_API_URL = "https://relay.test";
     process.env.ANTHROPIC_API_KEY = "sk-a";
     process.env.OPENAI_API_KEY = "sk-o";
     process.env.GROQ_API_KEY = "sk-g";
@@ -377,6 +379,7 @@ describe("stream metering boundary matrix — charged for what the provider cons
     setSpendStoreForTests(undefined);
     for (const k of [
       "RELAY_PROXY_SECRET",
+      "RELAY_API_URL",
       "ANTHROPIC_API_KEY",
       "OPENAI_API_KEY",
       "GROQ_API_KEY",

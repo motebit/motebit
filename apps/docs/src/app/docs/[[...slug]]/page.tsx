@@ -60,6 +60,10 @@ export async function generateMetadata(props: { params: Promise<{ slug?: string[
   const description =
     page.data.description ?? "Sovereign agent infrastructure — identity, trust, governance.";
   const url = `https://docs.motebit.com${page.url}`;
+  // A segment-level `openGraph` replaces the root's, so the site card
+  // (app/opengraph-image.tsx) is named explicitly. The site root is a 308
+  // to /docs/introduction, so a shared docs.motebit.com link lands here.
+  const images = ["/opengraph-image"];
 
   return {
     title,
@@ -70,11 +74,13 @@ export async function generateMetadata(props: { params: Promise<{ slug?: string[
       url,
       siteName: "Motebit docs",
       type: "article",
+      images,
     },
     twitter: {
       card: "summary_large_image",
       title,
       description,
+      images,
     },
     alternates: {
       canonical: url,

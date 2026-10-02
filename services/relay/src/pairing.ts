@@ -7,6 +7,7 @@
 import type { Hono } from "hono";
 import type { TokenAudience } from "@motebit/protocol";
 import { HTTPException } from "hono/http-exception";
+import { secretEquals } from "./secret-compare.js";
 import { createLogger } from "./logger.js";
 import { admitKey, isCanonicalKey } from "./identity-keys.js";
 import { refuseInvalidIds } from "./id-bounds.js";
@@ -107,7 +108,7 @@ export function registerPairingRoutes(deps: PairingDeps): void {
     const token = authHeader.slice(7);
 
     // Master token bypass
-    if (apiToken != null && apiToken !== "" && token === apiToken) return null; // master token can't initiate pairing (no motebitId context)
+    if (secretEquals(token, apiToken)) return null; // master token can't initiate pairing (no motebitId context)
 
     if (!token.includes(".")) return null; // must be a signed token
 

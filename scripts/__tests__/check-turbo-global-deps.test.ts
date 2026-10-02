@@ -25,6 +25,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { evaluate, globSelects, isGlob } from "../check-turbo-global-deps.js";
 import { countSpecMd, SPEC_COUNT_INPUTS } from "../generate-llms-txt.js";
+import { cleanEnv } from "../lib/differential-tree.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, "..", "..");
@@ -34,13 +35,12 @@ function git(cwd: string, ...args: string[]): string {
   return execFileSync("git", args, {
     cwd,
     encoding: "utf8",
-    env: {
-      ...process.env,
+    env: cleanEnv(process.env, {
       GIT_AUTHOR_NAME: "t",
       GIT_AUTHOR_EMAIL: "t@t",
       GIT_COMMITTER_NAME: "t",
       GIT_COMMITTER_EMAIL: "t@t",
-    },
+    }),
   });
 }
 
@@ -174,7 +174,11 @@ describe("discovery (fixture repo)", () => {
 });
 
 const trackedFiles = (): string[] =>
-  execFileSync("git", ["-c", "core.quotePath=false", "ls-files"], { cwd: ROOT, encoding: "utf8" })
+  execFileSync("git", ["-c", "core.quotePath=false", "ls-files"], {
+    cwd: ROOT,
+    encoding: "utf8",
+    env: cleanEnv(),
+  })
     .split("\n")
     .filter(Boolean);
 
@@ -193,7 +197,7 @@ describe("execution: each globalDependencies entry moves the turbo task hashes",
     const out = execFileSync(
       TURBO,
       ["run", "build", "typecheck", "lint", "--dry=json", "--filter=@motebit/protocol"],
-      { cwd: wt, encoding: "utf8", env: { ...process.env, TURBO_TELEMETRY_DISABLED: "1" } },
+      { cwd: wt, encoding: "utf8", env: cleanEnv(process.env, { TURBO_TELEMETRY_DISABLED: "1" }) },
     );
     const json = JSON.parse(out.slice(out.indexOf("{"))) as {
       tasks: { taskId: string; hash: string }[];
@@ -270,7 +274,7 @@ describe("execution: each globalDependencies entry moves the turbo task hashes",
         cwd: wt,
         encoding: "utf8",
         maxBuffer: 64 * 1024 * 1024,
-        env: { ...process.env, TURBO_TELEMETRY_DISABLED: "1" },
+        env: cleanEnv(process.env, { TURBO_TELEMETRY_DISABLED: "1" }),
       });
       const json = JSON.parse(out.slice(out.indexOf("{"))) as {
         tasks: { taskId: string; hash: string }[];

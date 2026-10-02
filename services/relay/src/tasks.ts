@@ -59,14 +59,16 @@ import {
   computeFederatedFeeSplit,
   roundSettlementSplitMicro,
 } from "@motebit/protocol";
+import { getSpendableBalance, fromMicro, toMicro } from "./accounts.js";
+import { allocationEscrowHeld } from "./dispute-fund-ledger.js";
 import {
-  creditAccount,
-  debitSpendableAccount,
-  getAllocationHoldRemaining,
-  getSpendableBalance,
-  fromMicro,
-  toMicro,
-} from "./accounts.js";
+  AllocationMoneyRefused,
+  allocationHoldPayer,
+  moveAllocationMoney,
+  openAllocation,
+  recordP2pSettlementAudit,
+} from "./allocation-escrow.js";
+import { secretEquals } from "./secret-compare.js";
 import { attemptPushWake } from "./push-adapter.js";
 import { getRelayKeypair } from "./credentials.js";
 import type { RelayIdentity } from "./federation.js";
@@ -132,6 +134,7 @@ import {
   X402PaymentReplayedError,
   type X402SettlementRef,
 } from "./errors.js";
+import { isEmergencyFrozenAbort } from "./freeze.js";
 import {
   classifySettleVerdict,
   creditX402Settlement,
@@ -1180,40 +1183,30 @@ export async function handleReceiptIngestion(
             relayIdentity.privateKey,
           );
 
-          moteDb.db
-            .prepare(
-              `INSERT OR IGNORE INTO relay_settlements
-             (settlement_id, allocation_id, task_id, motebit_id, receipt_hash,
-              amount_settled, platform_fee, platform_fee_rate, status, settled_at,
-              settlement_mode, p2p_tx_hash, payment_verification_status, delegator_id,
-              p2p_worker_leg, p2p_worker_address, p2p_worker_address_rung, issuer_relay_id, suite, signature, record_json,
-              receipt_signature)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-            )
-            .run(
-              p2pSettlementId,
-              `p2p-${taskId}`,
-              taskId,
-              signedP2pAudit.motebit_id,
-              receipt.result_hash ?? "",
-              p2pWorkerAmount,
-              p2pFeeAmount,
-              p2pFeeRate,
-              "completed",
-              p2pSettledAt,
-              "p2p",
-              p2pProof != null ? p2pProofKey(p2pProof.tx_hash) : null,
-              "pending",
-              entry.submitted_by ?? null,
-              p2pWorkerLegScope(entry),
-              entry.p2p_admission?.worker_address ?? null,
-              entry.p2p_admission?.worker_address_rung ?? null,
-              signedP2pAudit.issuer_relay_id,
-              signedP2pAudit.suite,
-              signedP2pAudit.signature,
-              canonicalJson(signedP2pAudit),
-              receipt.signature,
-            );
+          recordP2pSettlementAudit(moteDb.db, {
+            settlement_id: p2pSettlementId,
+            allocation_id: `p2p-${taskId}`,
+            task_id: taskId,
+            motebit_id: signedP2pAudit.motebit_id,
+            receipt_hash: receipt.result_hash ?? "",
+            amount_settled: p2pWorkerAmount,
+            platform_fee: p2pFeeAmount,
+            platform_fee_rate: p2pFeeRate,
+            status: "completed",
+            settled_at: p2pSettledAt,
+            settlement_mode: "p2p",
+            p2p_tx_hash: p2pProof != null ? p2pProofKey(p2pProof.tx_hash) : null,
+            payment_verification_status: "pending",
+            delegator_id: entry.submitted_by ?? null,
+            p2p_worker_leg: p2pWorkerLegScope(entry),
+            p2p_worker_address: entry.p2p_admission?.worker_address ?? null,
+            p2p_worker_address_rung: entry.p2p_admission?.worker_address_rung ?? null,
+            issuer_relay_id: signedP2pAudit.issuer_relay_id,
+            suite: signedP2pAudit.suite,
+            signature: signedP2pAudit.signature,
+            record_json: canonicalJson(signedP2pAudit),
+            receipt_signature: receipt.signature,
+          });
         }
 
         // P2P tasks: settlement audit already recorded above. Skip relay settlement,
@@ -1432,7 +1425,7 @@ export async function handleReceiptIngestion(
           // settlement record). Deriving funding first and claiming only when
           // funded keeps the claim and the INSERT atomic, exactly as the previous
           // comment here promised.
-          const heldOnLedger = getAllocationHoldRemaining(moteDb.db, allocationId);
+          const heldOnLedger = allocationEscrowHeld(moteDb.db, allocationId);
           const settlementApplies = !isP2pTask && signedSettlement != null;
           const fundedOnLedger = grossAmount === 0 || heldOnLedger > 0;
 
@@ -1466,30 +1459,28 @@ export async function handleReceiptIngestion(
           // Relay settlement: INSERT record + credit/refund virtual accounts.
           // P2P tasks skip this — their audit record was inserted above.
           if (!isP2pTask && signedSettlement != null && settlementFunded) {
-            moteDb.db
-              .prepare(
-                `INSERT OR IGNORE INTO relay_settlements
-               (settlement_id, allocation_id, task_id, motebit_id, receipt_hash, ledger_hash, amount_settled, platform_fee, platform_fee_rate, status, settled_at, settlement_mode, delegator_id, x402_tx_hash, x402_network, issuer_relay_id, suite, signature, record_json, receipt_signature)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-              )
-              .run(
-                signedSettlement.settlement_id,
-                signedSettlement.allocation_id,
-                taskId,
+            moveAllocationMoney(moteDb.db, {
+              kind: "settlement_fee",
+              allocationId,
+              amount: signedSettlement.platform_fee,
+              settlement: {
+                settlement_id: signedSettlement.settlement_id,
+                allocation_id: signedSettlement.allocation_id,
+                task_id: taskId,
                 // KNOWN RESIDUAL (#959, left for its own change): this column is
                 // the PATH agent while the signed body and the credit below name
                 // the receipt signer; they differ whenever scored routing hands
                 // the task to another worker. Existing relay-mode tests read the
                 // row under the path agent, so the fix is not made here.
-                motebitId,
-                signedSettlement.receipt_hash,
-                signedSettlement.ledger_hash,
-                signedSettlement.amount_settled,
-                signedSettlement.platform_fee,
-                signedSettlement.platform_fee_rate,
-                signedSettlement.status,
-                signedSettlement.settled_at,
-                signedSettlement.settlement_mode,
+                motebit_id: motebitId,
+                receipt_hash: signedSettlement.receipt_hash,
+                ledger_hash: signedSettlement.ledger_hash,
+                amount_settled: signedSettlement.amount_settled,
+                platform_fee: signedSettlement.platform_fee,
+                platform_fee_rate: signedSettlement.platform_fee_rate,
+                status: signedSettlement.status,
+                settled_at: signedSettlement.settled_at,
+                settlement_mode: signedSettlement.settlement_mode,
                 // The payer/delegator, so the per-peer settlement-summary export
                 // (state-export.ts) can attribute relay-custody settlements to a
                 // counterparty — not only P2P rows. `null` when self-funded /
@@ -1497,18 +1488,32 @@ export async function handleReceiptIngestion(
                 // bucket rather than mis-attributing to self. Only the p2p-verifier
                 // reads this column, and it filters `settlement_mode='p2p'`, so a
                 // value on relay-custody rows is inert there.
-                entry.submitted_by ?? entry.task.submitted_by ?? null,
-                entry.x402_tx_hash ?? null,
-                entry.x402_network ?? null,
-                signedSettlement.issuer_relay_id,
-                signedSettlement.suite,
-                signedSettlement.signature,
-                canonicalJson(signedSettlement),
-                receipt.signature,
-              );
+                delegator_id: entry.submitted_by ?? entry.task.submitted_by ?? null,
+                x402_tx_hash: entry.x402_tx_hash ?? null,
+                x402_network: entry.x402_network ?? null,
+                issuer_relay_id: signedSettlement.issuer_relay_id,
+                suite: signedSettlement.suite,
+                signature: signedSettlement.signature,
+                record_json: canonicalJson(signedSettlement),
+                receipt_signature: receipt.signature,
+              },
+            });
 
             {
               const workerMotebitId = receipt.motebit_id;
+              // The allocation's hold payer — the only party a remainder of its
+              // escrow may return to (P2 / #959: never a fallback to the path
+              // agent, which names the worker).
+              const releaseTo = (amount: number, description: string): void => {
+                const payer = allocationHoldPayer(moteDb.db, allocationId);
+                moveAllocationMoney(moteDb.db, {
+                  kind: "settlement_release",
+                  allocationId,
+                  amount,
+                  party: payer ?? "",
+                  description,
+                });
+              };
 
               if (settlement.status === "refunded") {
                 // Full release of the funded hold. settleOnReceipt fixes
@@ -1517,26 +1522,18 @@ export async function handleReceiptIngestion(
                 // refund AMOUNT is what was actually debited at hold time and
                 // not yet released, from the transaction ledger.
                 if (heldRemaining > 0) {
-                  const delegatorId = entry.submitted_by ?? entry.task.submitted_by ?? motebitId;
-                  creditAccount(
-                    moteDb.db,
-                    delegatorId,
-                    heldRemaining,
-                    "allocation_release",
-                    allocationId,
-                    `Refund for task ${taskId} (${receipt.status})`,
-                  );
+                  releaseTo(heldRemaining, `Refund for task ${taskId} (${receipt.status})`);
                 }
               } else {
                 if (settlement.amount_settled > 0) {
-                  creditAccount(
-                    moteDb.db,
-                    workerMotebitId,
-                    settlement.amount_settled,
-                    "settlement_credit",
-                    settlement.settlement_id,
-                    `Payment for task ${taskId}`,
-                  );
+                  moveAllocationMoney(moteDb.db, {
+                    kind: "settlement_credit",
+                    allocationId,
+                    amount: settlement.amount_settled,
+                    party: workerMotebitId,
+                    settlementId: settlement.settlement_id,
+                    description: `Payment for task ${taskId}`,
+                  });
                 }
 
                 if (settlement.status === "partial") {
@@ -1545,15 +1542,7 @@ export async function handleReceiptIngestion(
                   const grossSettled = settlement.amount_settled + settlement.platform_fee;
                   const remainder = heldRemaining - grossSettled;
                   if (remainder > 0) {
-                    const delegatorId = entry.submitted_by ?? entry.task.submitted_by ?? motebitId;
-                    creditAccount(
-                      moteDb.db,
-                      delegatorId,
-                      remainder,
-                      "allocation_release",
-                      allocationId,
-                      `Partial release for task ${taskId}`,
-                    );
+                    releaseTo(remainder, `Partial release for task ${taskId}`);
                   }
                 }
 
@@ -1565,19 +1554,11 @@ export async function handleReceiptIngestion(
                 // double-crediting it.)
                 if (settlement.status === "completed" && heldRemaining > grossAmount) {
                   const surplus = heldRemaining - grossAmount;
-                  const delegatorId = entry.submitted_by ?? entry.task.submitted_by ?? motebitId;
-                  creditAccount(
-                    moteDb.db,
-                    delegatorId,
-                    surplus,
-                    "allocation_release",
-                    allocationId,
-                    `Risk buffer surplus release for task ${taskId}`,
-                  );
+                  releaseTo(surplus, `Risk buffer surplus release for task ${taskId}`);
                   logger.info("settlement.surplus_released", {
                     correlationId: taskId,
                     surplus,
-                    delegator: delegatorId,
+                    allocationId,
                   });
                 }
               }
@@ -1751,40 +1732,30 @@ export async function handleReceiptIngestion(
               relayIdentity.privateKey,
             );
 
-            moteDb.db
-              .prepare(
-                `INSERT OR IGNORE INTO relay_settlements
-               (settlement_id, allocation_id, task_id, motebit_id, receipt_hash,
-                amount_settled, platform_fee, platform_fee_rate, status, settled_at,
-                settlement_mode, p2p_tx_hash, payment_verification_status, delegator_id,
-                p2p_worker_leg, p2p_worker_address, p2p_worker_address_rung, issuer_relay_id, suite, signature, record_json,
-                receipt_signature)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-              )
-              .run(
-                subP2pSettlementId,
-                `p2p-${subRelayTaskId}`,
-                subRelayTaskId,
-                signedSubP2p.motebit_id,
-                sub.result_hash ?? "",
-                subWorkerAmount,
-                subFeeAmount,
-                subP2pFeeRate,
-                "completed",
-                subP2pSettledAt,
-                "p2p",
-                subP2pProof != null ? p2pProofKey(subP2pProof.tx_hash) : null,
-                "pending",
-                subEntry.submitted_by ?? null,
-                p2pWorkerLegScope(subEntry),
-                subEntry.p2p_admission?.worker_address ?? null,
-                subEntry.p2p_admission?.worker_address_rung ?? null,
-                signedSubP2p.issuer_relay_id,
-                signedSubP2p.suite,
-                signedSubP2p.signature,
-                canonicalJson(signedSubP2p),
-                sub.signature,
-              );
+            recordP2pSettlementAudit(moteDb.db, {
+              settlement_id: subP2pSettlementId,
+              allocation_id: `p2p-${subRelayTaskId}`,
+              task_id: subRelayTaskId,
+              motebit_id: signedSubP2p.motebit_id,
+              receipt_hash: sub.result_hash ?? "",
+              amount_settled: subWorkerAmount,
+              platform_fee: subFeeAmount,
+              platform_fee_rate: subP2pFeeRate,
+              status: "completed",
+              settled_at: subP2pSettledAt,
+              settlement_mode: "p2p",
+              p2p_tx_hash: subP2pProof != null ? p2pProofKey(subP2pProof.tx_hash) : null,
+              payment_verification_status: "pending",
+              delegator_id: subEntry.submitted_by ?? null,
+              p2p_worker_leg: p2pWorkerLegScope(subEntry),
+              p2p_worker_address: subEntry.p2p_admission?.worker_address ?? null,
+              p2p_worker_address_rung: subEntry.p2p_admission?.worker_address_rung ?? null,
+              issuer_relay_id: signedSubP2p.issuer_relay_id,
+              suite: signedSubP2p.suite,
+              signature: signedSubP2p.signature,
+              record_json: canonicalJson(signedSubP2p),
+              receipt_signature: sub.signature,
+            });
 
             logger.info("multihop.settlement.p2p_recorded", {
               correlationId: parentTaskId,
@@ -1919,7 +1890,7 @@ export async function handleReceiptIngestion(
             //
             // subGross > 0 is guaranteed above, so there is no zero-cost
             // carve-out to make here: unfunded always means skip.
-            const subHeldOnLedger = getAllocationHoldRemaining(moteDb.db, subAllocationId);
+            const subHeldOnLedger = allocationEscrowHeld(moteDb.db, subAllocationId);
             const subClaimed =
               subHeldOnLedger > 0 &&
               moteDb.db
@@ -1942,43 +1913,42 @@ export async function handleReceiptIngestion(
                     : "sub-allocation holds nothing on the ledger — never debited (best-effort path, or a P2P-submitted sub-hop that moved money onchain), so crediting the sub-agent would mint balance the relay never received",
               });
             } else {
-              moteDb.db
-                .prepare(
-                  `INSERT OR IGNORE INTO relay_settlements
-             (settlement_id, allocation_id, task_id, motebit_id, receipt_hash, ledger_hash, amount_settled, platform_fee, platform_fee_rate, status, settled_at, settlement_mode, issuer_relay_id, suite, signature, record_json, receipt_signature)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-                )
-                .run(
-                  signedSubSettlement.settlement_id,
-                  signedSubSettlement.allocation_id,
-                  subRelayTaskId,
-                  sub.motebit_id,
-                  signedSubSettlement.receipt_hash,
-                  signedSubSettlement.ledger_hash,
-                  signedSubSettlement.amount_settled,
-                  signedSubSettlement.platform_fee,
-                  signedSubSettlement.platform_fee_rate,
-                  signedSubSettlement.status,
-                  signedSubSettlement.settled_at,
-                  signedSubSettlement.settlement_mode,
-                  signedSubSettlement.issuer_relay_id,
-                  signedSubSettlement.suite,
-                  signedSubSettlement.signature,
+              moveAllocationMoney(moteDb.db, {
+                kind: "settlement_fee",
+                allocationId: subAllocationId,
+                amount: signedSubSettlement.platform_fee,
+                settlement: {
+                  settlement_id: signedSubSettlement.settlement_id,
+                  allocation_id: signedSubSettlement.allocation_id,
+                  task_id: subRelayTaskId,
+                  motebit_id: sub.motebit_id,
+                  receipt_hash: signedSubSettlement.receipt_hash,
+                  ledger_hash: signedSubSettlement.ledger_hash,
+                  amount_settled: signedSubSettlement.amount_settled,
+                  platform_fee: signedSubSettlement.platform_fee,
+                  platform_fee_rate: signedSubSettlement.platform_fee_rate,
+                  status: signedSubSettlement.status,
+                  settled_at: signedSubSettlement.settled_at,
+                  settlement_mode: signedSubSettlement.settlement_mode,
+                  issuer_relay_id: signedSubSettlement.issuer_relay_id,
+                  suite: signedSubSettlement.suite,
+                  signature: signedSubSettlement.signature,
                   // Rule 11: store the exact canonical signed bytes. The anchor
                   // leaf is SHA-256 of THIS, so it equals the bytes the worker holds.
-                  canonicalJson(signedSubSettlement),
-                  sub.signature,
-                );
+                  record_json: canonicalJson(signedSubSettlement),
+                  receipt_signature: sub.signature,
+                },
+              });
 
               if (subSettlement.amount_settled > 0) {
-                creditAccount(
-                  moteDb.db,
-                  sub.motebit_id,
-                  subSettlement.amount_settled,
-                  "settlement_credit",
-                  subSettlement.settlement_id,
-                  `Payment for sub-delegated task ${subRelayTaskId}`,
-                );
+                moveAllocationMoney(moteDb.db, {
+                  kind: "settlement_credit",
+                  allocationId: subAllocationId,
+                  amount: subSettlement.amount_settled,
+                  party: sub.motebit_id,
+                  settlementId: subSettlement.settlement_id,
+                  description: `Payment for sub-delegated task ${subRelayTaskId}`,
+                });
               }
 
               moteDb.db.exec("COMMIT");
@@ -3836,7 +3806,10 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<TaskRoutesHan
               error: depositErr instanceof Error ? depositErr.message : String(depositErr),
             });
             const rec = findX402Settlement(moteDb.db, settlement.payer, settlement.nonce);
-            throw new X402OutcomeUnknownError(rec != null ? x402SettlementRef(rec) : undefined);
+            throw new X402OutcomeUnknownError(
+              rec != null ? x402SettlementRef(rec) : undefined,
+              isEmergencyFrozenAbort(depositErr) ? "frozen" : "unknown",
+            );
           }
           if (!credited) {
             // The record left `pending` while the settle call was in flight.
@@ -3959,28 +3932,33 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<TaskRoutesHan
         // Lock the risk-buffered amount — committed by the admission
         // transaction below, atomically with the task it funds.
         fundingWrites = () => {
-          const afterHold = debitSpendableAccount(
-            moteDb.db,
-            delegatorId,
-            amountLocked, // Uses risk-buffered amount (rounded to micro-unit)
-            "allocation_hold",
-            `x402-${taskId}`,
-            `Hold for task ${taskId} to ${motebitId}`,
-          );
-          // A null debit is a funding REFUSAL (#901), raised inside the
-          // admission transaction: the allocation row, the queued task and
-          // the claim binding below never happen, the transaction rolls
-          // back, and the key is freed for a funded retry (a pre-admission
-          // refusal, spec/delegation-v1.md §3.3). Never book a hold the
-          // ledger did not take.
-          if (afterHold === null) {
-            throw fundingRefusal();
+          // The allocation row, then the hold through the escrow chokepoint
+          // (it stamps the debit with the allocation it funds). A refused
+          // debit is a funding REFUSAL (#901), raised inside the admission
+          // transaction: the allocation row, the queued task and the claim
+          // binding below never happen, the transaction rolls back, and the
+          // key is freed for a funded retry (a pre-admission refusal,
+          // spec/delegation-v1.md §3.3). Never book a hold the ledger did not
+          // take.
+          openAllocation(moteDb.db, {
+            allocationId: `x402-${taskId}`,
+            taskId,
+            worker: motebitId,
+            amountLocked,
+            createdAt: now,
+          });
+          try {
+            moveAllocationMoney(moteDb.db, {
+              kind: "hold",
+              allocationId: `x402-${taskId}`,
+              amount: amountLocked, // Uses risk-buffered amount (rounded to micro-unit)
+              party: delegatorId,
+              description: `Hold for task ${taskId} to ${motebitId}`,
+            });
+          } catch (err) {
+            if (err instanceof AllocationMoneyRefused) throw fundingRefusal();
+            throw err;
           }
-          moteDb.db
-            .prepare(
-              "INSERT OR IGNORE INTO relay_allocations (allocation_id, task_id, motebit_id, amount_locked, status, created_at) VALUES (?, ?, ?, ?, 'locked', ?)",
-            )
-            .run(`x402-${taskId}`, taskId, motebitId, amountLocked, now);
         };
       } catch (err) {
         // Re-throw intentional errors (RelayError, HTTPException)
@@ -4790,7 +4768,7 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<TaskRoutesHan
     }
     const token = authHeader.slice(7);
     let callerMotebitId: string | undefined;
-    if (apiToken != null && apiToken !== "" && token === apiToken) {
+    if (secretEquals(token, apiToken)) {
       // Master token bypass — caller identity unknown but trusted
     } else if (enableDeviceAuth && token.includes(".")) {
       // Verify device token against the CALLER's identity (from token claims),
@@ -4890,7 +4868,7 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<TaskRoutesHan
       throw new AuthenticationError("AUTH_MISSING_TOKEN", "Authorization required");
     }
     const token = authHeader.slice(7);
-    if (apiToken == null || token !== apiToken) {
+    if (!secretEquals(token, apiToken)) {
       // Verify as device signed token
       if (enableDeviceAuth && token.includes(".")) {
         // Same expiry-before-verify honesty as the task:query poll route (#424).

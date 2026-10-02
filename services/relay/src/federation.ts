@@ -7,6 +7,9 @@
  *
  * All 11 federation endpoints registered here.
  */
+import { beginForwardSend, forwardOf, markForwardDelivered } from "./allocation-escrow.js";
+import { assertNotFrozen, isEmergencyFrozenAbort } from "./freeze.js";
+import { EmergencyFrozenError } from "./errors.js";
 import type { Hono } from "hono";
 import { checkOutboundUrl } from "@motebit/sdk";
 import type { OutboundUrlOptions } from "@motebit/sdk";
@@ -309,7 +312,14 @@ export function createFederationTables(db: DatabaseDriver): void {
       -- the record reproduces it — the section 9.1 verbatim-artifact convergence.
       -- NULL for any pre-PR6 row (skipped by the anchor loop, which requires it).
       -- Migration v29 adds this to existing prod DBs; a fresh DB gets it here.
-      record_json TEXT
+      record_json TEXT,
+      -- Allocation escrow (allocation-escrow.ts, migration v55): a SENT forward
+      -- (downstream_relay_id set) is stamped with the origin allocation whose
+      -- escrow it moved, and carries an explicit lifecycle — 'pending' until the
+      -- peer acknowledges ('delivered') or retries are exhausted ('failed', the
+      -- gross returned to escrow). Inbound (final-hop) rows: allocation_id NULL.
+      allocation_id TEXT,
+      status TEXT NOT NULL DEFAULT 'delivered'
     );
     CREATE INDEX IF NOT EXISTS idx_fed_settlements_task ON relay_federation_settlements(task_id);
     CREATE UNIQUE INDEX IF NOT EXISTS idx_fed_settlements_dedup ON relay_federation_settlements(task_id, upstream_relay_id);
@@ -1012,8 +1022,27 @@ export async function processSettlementRetries(
 
   if (pending.length === 0) return;
 
+  const frozen = (err: unknown): boolean =>
+    err instanceof EmergencyFrozenError || isEmergencyFrozenAbort(err);
+
   for (const retry of pending) {
     try {
+      // The freeze is checked per SEND, not per pass (a pass in flight when
+      // the freeze lands must not keep sending): the forward lifecycle's send
+      // claim refuses while frozen, and the pass stops with every remaining
+      // retry left exactly as it was.
+      if (!beginForwardSend(db, retry.settlement_id)) {
+        // Delivered by another path, or failed and refunded: never re-sent.
+        const status = forwardOf(db, retry.settlement_id)?.status;
+        db.prepare(
+          "UPDATE relay_settlement_retries SET status = ?, last_error = ? WHERE retry_id = ? AND status = 'pending'",
+        ).run(
+          status === "delivered" ? "completed" : "failed",
+          `forward is ${status ?? "absent"}; not re-sent`,
+          retry.retry_id,
+        );
+        continue;
+      }
       const settlementBody = JSON.parse(retry.payload_json) as Record<string, unknown>;
       // Fresh timestamp on each retry so the receiver accepts it (±5min drift check)
       settlementBody.timestamp = Date.now();
@@ -1022,16 +1051,33 @@ export async function processSettlementRetries(
         .get(retry.peer_relay_id) as { endpoint_url: string } | undefined;
 
       if (!peerInfo) {
-        // Peer no longer exists — mark failed
+        // Peer no longer exists — the forward can never be delivered: mark the
+        // retry failed and hand it to the exhaustion path, which turns the
+        // forward `failed` and refunds the escrow (it used to stop here, the
+        // forward counted as moved forever). Synchronous from the send claim
+        // above, so no freeze can land between it and the refund.
         db.prepare(
           "UPDATE relay_settlement_retries SET status = 'failed', last_error = ? WHERE retry_id = ?",
         ).run("Peer relay no longer exists", retry.retry_id);
+        if (onRetryExhausted) {
+          try {
+            onRetryExhausted(retry);
+          } catch (refundErr) {
+            logger.warn("settlement.retry.refund_failed", {
+              retryId: retry.retry_id,
+              taskId: retry.task_id,
+              error: refundErr instanceof Error ? refundErr.message : String(refundErr),
+            });
+          }
+        }
         continue;
       }
 
       const sigBytes = new TextEncoder().encode(canonicalJson(settlementBody));
       const sig = await sign(sigBytes, relayIdentity.privateKey);
 
+      // Re-claimed after the signing await, in the same turn as the send.
+      if (!beginForwardSend(db, retry.settlement_id)) continue;
       const resp = await peerFetch(`${peerInfo.endpoint_url}/federation/v1/settlement/forward`, {
         method: "POST",
         headers: { "Content-Type": "application/json", "X-Correlation-ID": retry.task_id },
@@ -1040,9 +1086,25 @@ export async function processSettlementRetries(
       });
 
       if (resp.ok) {
-        db.prepare(
-          "UPDATE relay_settlement_retries SET status = 'completed' WHERE retry_id = ?",
-        ).run(retry.retry_id);
+        // The peer acknowledged: the retry completes and the forward's
+        // lifecycle moves `pending → delivered` in one transaction.
+        db.exec("BEGIN");
+        try {
+          db.prepare(
+            "UPDATE relay_settlement_retries SET status = 'completed' WHERE retry_id = ?",
+          ).run(retry.retry_id);
+          markForwardDelivered(db, retry.settlement_id);
+          db.exec("COMMIT");
+        } catch (err) {
+          // Never count an acknowledged delivery as a failed attempt (that
+          // path can end in a refund of money the peer holds): the retry stays
+          // pending and is re-delivered — the peer dedupes on (task, origin).
+          db.exec("ROLLBACK");
+          logger.error("settlement.retry.ack_record_failed", {
+            retryId: retry.retry_id,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
       } else {
         throw new FederationError(
           "FEDERATION_FORWARD_FAILED",
@@ -1050,10 +1112,33 @@ export async function processSettlementRetries(
         );
       }
     } catch (err: unknown) {
+      if (frozen(err)) {
+        logger.warn("settlement.retry.frozen", {
+          retryId: retry.retry_id,
+          taskId: retry.task_id,
+          reason: "emergency freeze — this and every later retry left pending for after unfreeze",
+        });
+        return;
+      }
       const newAttempts = retry.attempts + 1;
       const errorMsg = err instanceof Error ? err.message : String(err);
 
       if (newAttempts >= retry.max_attempts) {
+        // Exhaustion fails the retry AND returns + refunds the forward. A
+        // freeze that landed during the failed send's await must leave both
+        // undone (a failed retry whose refund the freeze refused would strand
+        // the forward `pending` forever): checked in the same synchronous turn
+        // as the two writes.
+        try {
+          assertNotFrozen(db);
+        } catch {
+          logger.warn("settlement.retry.frozen", {
+            retryId: retry.retry_id,
+            taskId: retry.task_id,
+            reason: "emergency freeze — exhaustion deferred until after unfreeze",
+          });
+          return;
+        }
         db.prepare(
           "UPDATE relay_settlement_retries SET status = 'failed', attempts = ?, last_error = ? WHERE retry_id = ?",
         ).run(newAttempts, errorMsg, retry.retry_id);

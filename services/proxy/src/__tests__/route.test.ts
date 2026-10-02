@@ -18,6 +18,9 @@ const ORIGIN = "http://localhost:3000";
 let logLines: string[];
 beforeEach(() => {
   process.env.RELAY_PUBLIC_KEY = "test-pubkey";
+  // Billing must be configured for motebit-cloud to serve at all (billing.ts).
+  process.env.RELAY_API_URL = "https://relay.test";
+  process.env.RELAY_PROXY_SECRET = "test-relay-proxy-secret";
   logLines = [];
   vi.spyOn(console, "log").mockImplementation((...args: unknown[]) => {
     logLines.push(args.map(String).join(" "));
@@ -26,6 +29,8 @@ beforeEach(() => {
 afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
+  delete process.env.RELAY_API_URL;
+  delete process.env.RELAY_PROXY_SECRET;
 });
 
 /** All proxy.* failure events emitted this turn (excludes proxy.usage). */
@@ -311,7 +316,9 @@ describe("spend controls — the token snapshot is not the bound", () => {
     upstream.enqueue(sse({ type: "message_delta", usage: { output_tokens: 500 } }));
     upstream.enqueue(sse({ type: "message_stop" }));
     upstream.close();
-    await res.text();
+    // The client reads concurrently: its EOF follows the debit (billing.ts's
+    // fee lands before the stream ends), so it cannot be awaited first.
+    const eof = res.text();
     await debitCalled; // the pump reached the debit: accounting has completed
 
     const cost = validation.calculateCostMicro("claude-sonnet-4-6", 1_000, 500, 0, 0);
@@ -320,6 +327,7 @@ describe("spend controls — the token snapshot is not the bound", () => {
     expect(store.map.get("proxy:active:mote-1")).toBe(0);
     expect(store.map.get(`proxy:rpm:mote-1:${Math.floor(Date.now() / 60_000)}`)).toBe(1);
     finishDebit();
+    await eof;
   });
 
   it("frees the slot and records spend before the relay debit settles, not after its retries", async () => {
@@ -330,8 +338,13 @@ describe("spend controls — the token snapshot is not the bound", () => {
     upstream.enqueue(sse({ type: "message_start", message: { usage: { input_tokens: 1_000 } } }));
     upstream.enqueue(sse({ type: "message_delta", usage: { output_tokens: 20 } }));
     upstream.close();
-    await res.text();
+    let eofReached = false;
+    const eof = res.text().then((t) => {
+      eofReached = true;
+      return t;
+    });
     await debitCalled;
+    await new Promise((r) => setTimeout(r, 10));
 
     // The debit response is still outstanding (a slow relay, or a retry in
     // backoff), yet the identity's next request must already see this spend
@@ -340,7 +353,12 @@ describe("spend controls — the token snapshot is not the bound", () => {
     expect(store.map.get("proxy:spent:jti-1")).toBe(
       validation.calculateCostMicro("claude-sonnet-4-6", 1_000, 20, 0, 0),
     );
+    // ...and the client's EOF waits on the debit: the fee is sent before the
+    // stream ends, never left to post-response work the platform may drop.
+    expect(eofReached).toBe(false);
     finishDebit();
+    await eof;
+    expect(eofReached).toBe(true);
   });
 
   it("releases the slot and records the FULL metered spend when the client aborts mid-stream", async () => {

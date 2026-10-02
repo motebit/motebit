@@ -33,7 +33,14 @@ import {
 } from "@motebit/encryption";
 /* eslint-enable no-restricted-imports */
 import { getRelayKeypair } from "./credentials.js";
-import { creditAccount } from "./accounts.js";
+import {
+  AllocationMoneyRefused,
+  markForwardDelivered,
+  beginForwardSend,
+  moveAllocationMoney,
+  recordInboundFederatedSettlement,
+  recordP2pSettlementAudit,
+} from "./allocation-escrow.js";
 import type { PeerFetch, RelayIdentity, VerifiedSettlement } from "./federation.js";
 import { defaultPeerFetch } from "./federation.js";
 import type { TaskQueueEntry } from "./tasks.js";
@@ -525,42 +532,32 @@ export function createFederationCallbacks(deps: FederationCallbackDeps) {
               },
               relayIdentity.privateKey,
             );
-            moteDb.db
-              .prepare(
-                `INSERT OR IGNORE INTO relay_settlements
-               (settlement_id, allocation_id, task_id, motebit_id, receipt_hash,
-                amount_settled, platform_fee, platform_fee_rate, status, settled_at,
-                settlement_mode, p2p_tx_hash, payment_verification_status, delegator_id,
-                p2p_worker_leg, p2p_worker_address, p2p_worker_address_rung, issuer_relay_id, suite, signature, record_json,
-                receipt_signature)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-              )
-              .run(
-                settlementId,
-                `p2p-${verified.taskId}`,
-                verified.taskId,
-                workerId,
-                answer.result_hash ?? "",
-                proof.amount_micro,
-                originFee,
-                platformFeeRate,
-                "completed",
-                settledAt,
-                "p2p",
-                p2pProofKey(proof.tx_hash),
-                "pending",
-                entry.submitted_by ?? null,
-                // The origin relay verifies only its own fee leg; the worker leg
-                // is the executor relay's (the worker is hosted there).
-                p2pWorkerLegScope(entry),
-                entry.p2p_admission?.worker_address ?? null,
-                entry.p2p_admission?.worker_address_rung ?? null,
-                signed.issuer_relay_id,
-                signed.suite,
-                signed.signature,
-                canonicalJson(signed),
-                answer.signature,
-              );
+            recordP2pSettlementAudit(moteDb.db, {
+              settlement_id: settlementId,
+              allocation_id: `p2p-${verified.taskId}`,
+              task_id: verified.taskId,
+              motebit_id: workerId,
+              receipt_hash: answer.result_hash ?? "",
+              amount_settled: proof.amount_micro,
+              platform_fee: originFee,
+              platform_fee_rate: platformFeeRate,
+              status: "completed",
+              settled_at: settledAt,
+              settlement_mode: "p2p",
+              p2p_tx_hash: p2pProofKey(proof.tx_hash),
+              payment_verification_status: "pending",
+              delegator_id: entry.submitted_by ?? null,
+              // The origin relay verifies only its own fee leg; the worker leg
+              // is the executor relay's (the worker is hosted there).
+              p2p_worker_leg: p2pWorkerLegScope(entry),
+              p2p_worker_address: entry.p2p_admission?.worker_address ?? null,
+              p2p_worker_address_rung: entry.p2p_admission?.worker_address_rung ?? null,
+              issuer_relay_id: signed.issuer_relay_id,
+              suite: signed.suite,
+              signature: signed.signature,
+              record_json: canonicalJson(signed),
+              receipt_signature: answer.signature,
+            });
             logger.info("settlement.federated_p2p_origin_audit", {
               correlationId: verified.taskId,
               worker: workerId,
@@ -573,153 +570,40 @@ export function createFederationCallbacks(deps: FederationCallbackDeps) {
               correlationId: verified.taskId,
               error: auditErr instanceof Error ? auditErr.message : String(auditErr),
             });
-            // Unsettled: the peer's retry of this result settles it (#890 r9 C2).
+            // Unsettled: the claim stays claimed-but-unsettled (a refusal by
+            // the freeze included) and the settlement-recovery sweep
+            // (`replayFederationResult`, skipped while frozen) settles it once
+            // (#890 r9 C2). The peer's delivery was answered 200 and is not
+            // retried; the sweep, not the peer, is the retry.
             return false;
           }
           return true;
         }
 
-        // Settlement forwarding
+        // Settlement forwarding — through the escrow chokepoint, with an
+        // explicit lifecycle (forwardOriginSettlement).
         try {
           if (entry.price_snapshot != null && entry.price_snapshot > 0) {
-            const grossAmount = entry.price_snapshot;
-            const feeAmount = Math.round(grossAmount * platformFeeRate);
-            const netAmount = grossAmount - feeAmount;
-            const receiptHash = answer.result_hash ?? answer.signature ?? "";
-            const settlementId = crypto.randomUUID();
-            const settledAt = Date.now();
-
-            // Mint + sign the canonical FederationSettlementRecord (§9.1
-            // verbatim-leaf convergence): the relay signs its own copy of this
-            // settlement; the persisted `record_json` is the exact bytes the
-            // anchor leaf hashes, so a peer holding the record reproduces the leaf
-            // with `verifyFederationSettlementAnchor`. The `settledAt` value here
-            // is the SAME one written to the row's `settled_at` column, so the
-            // anchor's reconstruction order and the record agree.
-            const signedRecord = await signFederationSettlement(
-              {
-                settlement_id: settlementId,
-                task_id: verified.taskId,
-                upstream_relay_id: relayIdentity.relayMotebitId,
-                downstream_relay_id: verified.originRelay,
-                agent_id: null,
-                gross_amount: grossAmount,
-                fee_amount: feeAmount,
-                net_amount: netAmount,
-                fee_rate: platformFeeRate,
-                receipt_hash: receiptHash,
-                settled_at: settledAt,
-                ...(entry.x402_tx_hash != null ? { x402_tx_hash: entry.x402_tx_hash } : {}),
-                ...(entry.x402_network != null ? { x402_network: entry.x402_network } : {}),
-                issuer_relay_id: relayIdentity.relayMotebitId,
-              },
-              relayIdentity.privateKey,
-            );
-
-            const peerInfo = moteDb.db
-              .prepare("SELECT endpoint_url FROM relay_peers WHERE peer_relay_id = ?")
-              .get(verified.originRelay) as { endpoint_url: string } | undefined;
-            const settlementBody = {
-              task_id: verified.taskId,
-              settlement_id: settlementId,
-              origin_relay: relayIdentity.relayMotebitId,
-              gross_amount: netAmount,
-              receipt_hash: receiptHash,
-              timestamp: Date.now(),
-              x402_tx_hash: entry.x402_tx_hash ?? undefined,
-              x402_network: entry.x402_network ?? undefined,
-            };
-            // The settlement row AND its forward's retry row commit together
-            // (#890 r9 C2): a process that dies after the row still forwards it
-            // (the retry loop), and one that dies before it settles on the
-            // peer's retry of the result. A delivered forward retires its row.
-            const retryId = crypto.randomUUID();
-            moteDb.db.exec("BEGIN");
-            try {
-              moteDb.db
-                .prepare(
-                  `INSERT INTO relay_federation_settlements (settlement_id, task_id, upstream_relay_id, downstream_relay_id, agent_id, gross_amount, fee_amount, net_amount, fee_rate, settled_at, receipt_hash, x402_tx_hash, x402_network, record_json, receipt_signature) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-                )
-                .run(
-                  settlementId,
-                  verified.taskId,
-                  relayIdentity.relayMotebitId,
-                  verified.originRelay,
-                  null,
-                  grossAmount,
-                  feeAmount,
-                  netAmount,
-                  platformFeeRate,
-                  settledAt,
-                  receiptHash,
-                  entry.x402_tx_hash ?? null,
-                  entry.x402_network ?? null,
-                  // Rule 11 analogue: store the exact canonical signed bytes. The
-                  // anchor leaf is SHA-256 of THIS, so it equals the peer's bytes.
-                  canonicalJson(signedRecord),
-                  answer.signature,
-                );
-              if (peerInfo) {
-                // First retry at baseDelayMs (5s) per DEFAULT_RETRY_POLICY.
-                moteDb.db
-                  .prepare(
-                    `INSERT INTO relay_settlement_retries (retry_id, settlement_id, task_id, peer_relay_id, payload_json, attempts, max_attempts, next_retry_at, status, created_at) VALUES (?, ?, ?, ?, ?, 0, 8, ?, 'pending', ?)`,
-                  )
-                  .run(
-                    retryId,
-                    settlementId,
-                    verified.taskId,
-                    verified.originRelay,
-                    JSON.stringify(settlementBody),
-                    Date.now() + 5_000,
-                    Date.now(),
-                  );
-              }
-              moteDb.db.exec("COMMIT");
-            } catch (txnErr) {
-              moteDb.db.exec("ROLLBACK");
-              throw txnErr;
-            }
-            if (peerInfo) {
-              const settlementSig = await sign(
-                new TextEncoder().encode(canonicalJson(settlementBody)),
-                relayIdentity.privateKey,
-              );
-              try {
-                const resp = await peerFetch(
-                  `${peerInfo.endpoint_url}/federation/v1/settlement/forward`,
-                  {
-                    method: "POST",
-                    headers: {
-                      "Content-Type": "application/json",
-                      "X-Correlation-ID": verified.taskId,
-                    },
-                    body: JSON.stringify({
-                      ...settlementBody,
-                      signature: bytesToHex(settlementSig),
-                    }),
-                    signal: AbortSignal.timeout(10000),
-                  },
-                );
-                if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-                // Delivered: the retry row is retired.
-                moteDb.db
-                  .prepare(
-                    "DELETE FROM relay_settlement_retries WHERE retry_id = ? AND status = 'pending' AND attempts = 0",
-                  )
-                  .run(retryId);
-              } catch {
-                // Settlement forward failed — the committed retry row carries it,
-                // with exponential backoff.
-              }
-            }
+            await forwardOriginSettlement(moteDb.db, relayIdentity, {
+              taskId: verified.taskId,
+              peerRelayId: verified.originRelay,
+              grossAmount: entry.price_snapshot,
+              platformFeeRate,
+              receiptHash: answer.result_hash ?? answer.signature ?? "",
+              receiptSignature: answer.signature,
+              x402TxHash: entry.x402_tx_hash ?? null,
+              x402Network: entry.x402_network ?? null,
+              peerFetch,
+            });
           }
         } catch (settleErr) {
           logger.error("settlement.federated_failed", {
             correlationId: verified.taskId,
             error: settleErr instanceof Error ? settleErr.message : String(settleErr),
           });
-          // Unsettled: the peer's retry of this result settles it (#890 r9 C2).
+          // Unsettled: the settlement-recovery sweep (`replayFederationResult`,
+          // skipped while frozen) settles it once (#890 r9 C2) — not the
+          // peer, whose delivery was answered 200.
           return false;
         }
         return true;
@@ -811,38 +695,31 @@ export function createFederationCallbacks(deps: FederationCallbackDeps) {
 
       moteDb.db.exec("BEGIN");
       try {
-        const ins = moteDb.db
-          .prepare(
-            `INSERT OR IGNORE INTO relay_federation_settlements (settlement_id, task_id, upstream_relay_id, downstream_relay_id, agent_id, gross_amount, fee_amount, net_amount, fee_rate, settled_at, receipt_hash, x402_tx_hash, x402_network, record_json, receipt_signature) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-          )
-          .run(
-            verified.settlementId,
-            verified.taskId,
-            verified.originRelay,
-            null,
-            workerId,
-            verified.grossAmount,
-            feeAmount,
-            netAmount,
-            platformFeeRate,
-            settledAt,
-            verified.receiptHash,
-            verified.x402TxHash ?? null,
-            verified.x402Network ?? null,
-            canonicalJson(signedRecord),
-            receiptSignature,
-          );
-
-        if (ins.changes > 0 && workerId != null && netAmount > 0) {
-          creditAccount(
-            moteDb.db,
-            workerId,
-            netAmount,
-            "settlement_credit",
-            verified.settlementId,
-            `Federated settlement for task ${verified.taskId}`,
-          );
-        }
+        recordInboundFederatedSettlement(
+          moteDb.db,
+          {
+            settlement_id: verified.settlementId,
+            task_id: verified.taskId,
+            upstream_relay_id: verified.originRelay,
+            downstream_relay_id: null,
+            agent_id: workerId,
+            gross_amount: verified.grossAmount,
+            fee_amount: feeAmount,
+            net_amount: netAmount,
+            fee_rate: platformFeeRate,
+            settled_at: settledAt,
+            receipt_hash: verified.receiptHash,
+            x402_tx_hash: verified.x402TxHash ?? null,
+            x402_network: verified.x402Network ?? null,
+            record_json: canonicalJson(signedRecord),
+            receipt_signature: receiptSignature,
+          },
+          {
+            worker: workerId,
+            amount: netAmount,
+            description: `Federated settlement for task ${verified.taskId}`,
+          },
+        );
         moteDb.db.exec("COMMIT");
       } catch (settlementErr) {
         moteDb.db.exec("ROLLBACK");
@@ -851,4 +728,194 @@ export function createFederationCallbacks(deps: FederationCallbackDeps) {
       return { feeAmount, netAmount };
     },
   };
+}
+
+/**
+ * The ORIGIN relay's settlement forward (relay-federation-v1 §7.2): the task's
+ * gross leaves this relay's escrow for the executing peer. Recorded through
+ * the escrow chokepoint as a `pending` forward of the task's allocation, in
+ * ONE transaction with its retry row (#890 r9 C2: a process that dies after
+ * the row still forwards it) — it counts as moved while the peer may still
+ * acknowledge it. The peer's 2xx retires the retry row and marks the forward
+ * `delivered`; otherwise the retry loop carries it, and retry exhaustion (or
+ * a peer that no longer exists) turns it `failed` and refunds the escrow in
+ * one transaction (`refundExhaustedForward`, index.ts). A task with no local
+ * allocation, or whose escrow no longer holds the gross, forwards nothing —
+ * the relay never sends money it does not hold.
+ *
+ * Exported so the conservation harness drives this exact function.
+ */
+export async function forwardOriginSettlement(
+  db: MotebitDatabase["db"],
+  relayIdentity: RelayIdentity,
+  args: {
+    taskId: string;
+    peerRelayId: string;
+    grossAmount: number;
+    platformFeeRate: number;
+    receiptHash: string;
+    receiptSignature?: string | null;
+    x402TxHash: string | null;
+    x402Network: string | null;
+    /** The peer-relay transport (federation.ts `PeerFetch`); defaults to the global fetch. */
+    peerFetch?: PeerFetch;
+  },
+): Promise<"delivered" | "queued" | "refused"> {
+  const grossAmount = args.grossAmount;
+  const feeAmount = Math.round(grossAmount * args.platformFeeRate);
+  const netAmount = grossAmount - feeAmount;
+  const settlementId = crypto.randomUUID();
+  const settledAt = Date.now();
+  const alloc = db
+    .prepare("SELECT allocation_id FROM relay_allocations WHERE task_id = ?")
+    .get(args.taskId) as { allocation_id: string } | undefined;
+  if (!alloc) {
+    logger.warn("federation.settlement_forward.no_allocation", {
+      correlationId: args.taskId,
+      reason: "no local escrow funds this task — nothing to forward",
+    });
+    return "refused";
+  }
+
+  // Mint + sign the canonical FederationSettlementRecord (§9.1
+  // verbatim-leaf convergence): the persisted `record_json` is the exact
+  // bytes the anchor leaf hashes; `settledAt` is the SAME value written to
+  // the row's `settled_at` column.
+  const signedRecord = await signFederationSettlement(
+    {
+      settlement_id: settlementId,
+      task_id: args.taskId,
+      upstream_relay_id: relayIdentity.relayMotebitId,
+      downstream_relay_id: args.peerRelayId,
+      agent_id: null,
+      gross_amount: grossAmount,
+      fee_amount: feeAmount,
+      net_amount: netAmount,
+      fee_rate: args.platformFeeRate,
+      receipt_hash: args.receiptHash,
+      settled_at: settledAt,
+      ...(args.x402TxHash != null ? { x402_tx_hash: args.x402TxHash } : {}),
+      ...(args.x402Network != null ? { x402_network: args.x402Network } : {}),
+      issuer_relay_id: relayIdentity.relayMotebitId,
+    },
+    relayIdentity.privateKey,
+  );
+
+  const peerInfo = db
+    .prepare("SELECT endpoint_url FROM relay_peers WHERE peer_relay_id = ?")
+    .get(args.peerRelayId) as { endpoint_url: string } | undefined;
+  const settlementBody = {
+    task_id: args.taskId,
+    settlement_id: settlementId,
+    origin_relay: relayIdentity.relayMotebitId,
+    gross_amount: netAmount,
+    receipt_hash: args.receiptHash,
+    timestamp: Date.now(),
+    x402_tx_hash: args.x402TxHash ?? undefined,
+    x402_network: args.x402Network ?? undefined,
+  };
+  const retryId = crypto.randomUUID();
+  db.exec("BEGIN");
+  try {
+    moveAllocationMoney(db, {
+      kind: "federated_forward",
+      allocationId: alloc.allocation_id,
+      amount: grossAmount,
+      forward: {
+        settlement_id: settlementId,
+        task_id: args.taskId,
+        upstream_relay_id: relayIdentity.relayMotebitId,
+        downstream_relay_id: args.peerRelayId,
+        agent_id: null,
+        gross_amount: grossAmount,
+        fee_amount: feeAmount,
+        net_amount: netAmount,
+        fee_rate: args.platformFeeRate,
+        settled_at: settledAt,
+        receipt_hash: args.receiptHash,
+        x402_tx_hash: args.x402TxHash,
+        x402_network: args.x402Network,
+        // Rule 11 analogue: store the exact canonical signed bytes. The
+        // anchor leaf is SHA-256 of THIS, so it equals the peer's bytes.
+        record_json: canonicalJson(signedRecord),
+        receipt_signature: args.receiptSignature ?? null,
+      },
+    });
+    // The retry row commits with the forward — always, even when the peer
+    // row is gone: the retry loop's peer-gone path then fails the forward
+    // and refunds the escrow (a pending forward with no retry would hold the
+    // delegator's money forever). First retry at baseDelayMs (5s).
+    db.prepare(
+      `INSERT INTO relay_settlement_retries (retry_id, settlement_id, task_id, peer_relay_id, payload_json, attempts, max_attempts, next_retry_at, status, created_at) VALUES (?, ?, ?, ?, ?, 0, 8, ?, 'pending', ?)`,
+    ).run(
+      retryId,
+      settlementId,
+      args.taskId,
+      args.peerRelayId,
+      JSON.stringify(settlementBody),
+      Date.now() + 5_000,
+      Date.now(),
+    );
+    db.exec("COMMIT");
+  } catch (err) {
+    db.exec("ROLLBACK");
+    if (err instanceof AllocationMoneyRefused) {
+      logger.error("federation.settlement_forward.refused", {
+        correlationId: args.taskId,
+        allocationId: alloc.allocation_id,
+        reason: err.reason,
+      });
+      return "refused";
+    }
+    throw err;
+  }
+
+  if (peerInfo) {
+    const settlementSig = await sign(
+      new TextEncoder().encode(canonicalJson(settlementBody)),
+      relayIdentity.privateKey,
+    );
+    // The forward lifecycle's send claim, in the same turn as the send: a
+    // freeze that landed during the signing await refuses it, and the
+    // committed retry row carries the send to after unfreeze.
+    try {
+      if (!beginForwardSend(db, settlementId)) return "queued";
+    } catch (err) {
+      logger.warn("federation.settlement_forward.send_deferred", {
+        correlationId: args.taskId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return "queued";
+    }
+    try {
+      const resp = await (args.peerFetch ?? defaultPeerFetch)(
+        `${peerInfo.endpoint_url}/federation/v1/settlement/forward`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "X-Correlation-ID": args.taskId },
+          body: JSON.stringify({ ...settlementBody, signature: bytesToHex(settlementSig) }),
+          signal: AbortSignal.timeout(10000),
+        },
+      );
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      // Delivered: the retry row is retired and the forward is `delivered`,
+      // together.
+      db.exec("BEGIN");
+      try {
+        db.prepare(
+          "DELETE FROM relay_settlement_retries WHERE retry_id = ? AND status = 'pending' AND attempts = 0",
+        ).run(retryId);
+        markForwardDelivered(db, settlementId);
+        db.exec("COMMIT");
+      } catch (err) {
+        db.exec("ROLLBACK");
+        throw err;
+      }
+      return "delivered";
+    } catch {
+      // Settlement forward failed — the committed retry row carries it,
+      // with exponential backoff; the forward stays `pending`.
+    }
+  }
+  return "queued";
 }

@@ -15,6 +15,8 @@ import {
   redactMemoryConsolidatedPayload,
 } from "./redaction.js";
 import { IDENTITY_KEYS_BACKFILL_SQL } from "./identity-keys.js";
+import { DISPUTE_FUND_ACTIONS_DDL, backfillDisputeFundActions } from "./dispute-fund-ledger.js";
+import { backfillAllocationEscrow, installAllocationEscrowGuards } from "./allocation-escrow.js";
 
 const logger = createLogger({ service: "migrations" });
 
@@ -2558,6 +2560,65 @@ export const relayMigrations: Migration[] = [
         CREATE INDEX IF NOT EXISTS idx_relay_result_deliveries_due
           ON relay_result_deliveries(status, next_attempt_at);
       `);
+    },
+  },
+  {
+    // Was v50 on the unreleased dispute-filer-authority branch; renumbered
+    // after main's v50–v53 (task routes, result deliveries).
+    version: 54,
+    name: "dispute_fund_actions_backfill",
+    up: (db) => {
+      // C2 — relay_dispute_fund_actions (the write-once claim of an
+      // allocation's ONE dispute fund action) is new; on upgrade it starts
+      // empty while disputes a pre-claim relay already finalized have paid
+      // out and left their allocation `disputed`. Claim each such allocation
+      // for its earliest final dispute so a legacy duplicate still live
+      // cannot be paid again. Fresh install: relay_disputes does not exist
+      // yet (createDisputeTables runs after migrations) — nothing to claim.
+      // Ledger rows of a dispute that is not final are not claimed here; the
+      // fund action reads them live in its own transaction. A row whose
+      // task_id is not its allocation's task (admitted before the §4.2
+      // binding) is never claimed: it is flagged `fund_refusal =
+      // 'task_mismatch'`, moves nothing, and stops holding that task's
+      // one-dispute slot, so the allocation owning the task stays disputable.
+      const has = (name: string): boolean =>
+        db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(name) !==
+        undefined;
+      if (!has("relay_disputes") || !has("relay_allocations") || !has("relay_transactions")) return;
+      db.exec(DISPUTE_FUND_ACTIONS_DDL);
+      const claimed = backfillDisputeFundActions(db);
+      logger.info("migration.dispute_fund_actions_backfill", { claimed });
+    },
+  },
+  {
+    version: 55,
+    name: "allocation_escrow_chokepoint",
+    up: (db) => {
+      // Allocation escrow (allocation-escrow.ts): every movement of
+      // allocation money now goes through one chokepoint that stamps its
+      // ledger row with the allocation it moved, and `held` is one function
+      // over explicit states. This step brings existing rows onto that model:
+      //   - relay_transactions gains allocation_id + allocation_kind;
+      //     relay_federation_settlements gains allocation_id + status;
+      //     relay_allocations gains review_reason (operator-visible flag).
+      //   - Forward lifecycle: each sent forward is stamped with its task's
+      //     allocation and its status derived from relay_settlement_retries
+      //     (a failed retry ⇒ failed, a pending one ⇒ pending, otherwise ⇒
+      //     delivered). A failed forward counts as returned to escrow.
+      //   - Dispute rows are stamped with the allocation they actually moved
+      //     (a well-formed dispute's own; a pre-§4.2 cross-allocation dispute's
+      //     rows by the parties they touched). That allocation is flagged
+      //     `review_reason` for operator review; a row touching both
+      //     allocations or neither is left unstamped and both are flagged.
+      //   - A released / settled allocation still holding escrow behind a
+      //     failed forward is flagged `failed_forward_unrefunded`.
+      //   - AFTER INSERT guard triggers refuse any allocation-money row that
+      //     would leave its allocation's held negative.
+      // Idempotent; fresh install: relay_disputes does not exist yet
+      // (createDisputeTables runs after migrations) — nothing to attribute.
+      const result = backfillAllocationEscrow(db);
+      installAllocationEscrowGuards(db);
+      logger.info("migration.allocation_escrow_chokepoint", result);
     },
   },
 ];

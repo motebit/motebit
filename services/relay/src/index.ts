@@ -76,7 +76,12 @@ import { createLogger } from "./logger.js";
 import { parseBoolEnv, parseFloatEnv, parseIntEnv } from "./env.js";
 import { buildOutboundPolicy } from "./outbound-policy.js";
 import { createRelaySchema } from "./schema.js";
-import { createRelayConfigTable, loadFreezeState, persistFreeze } from "./freeze.js";
+import {
+  createRelayConfigTable,
+  installFreezeMoneyGuards,
+  loadFreezeState,
+  persistFreeze,
+} from "./freeze.js";
 import { parseTokenPayloadUnsafe, verifySignedTokenForDevice } from "./auth.js";
 import { registerMiddleware, registerAuthMiddleware } from "./middleware.js";
 import {
@@ -131,7 +136,11 @@ import {
 } from "./credential-anchoring.js";
 import { aggregateFees } from "./fees.js";
 import { aggregateHealthSummary } from "./health-summary.js";
-import { startDepositDetector, USDC_CONTRACTS } from "./deposit-detector.js";
+import {
+  createDepositDetectorTable,
+  startDepositDetector,
+  USDC_CONTRACTS,
+} from "./deposit-detector.js";
 import {
   startTreasuryReconciliationLoop,
   getTreasuryReconciliationStats,
@@ -167,10 +176,10 @@ import {
   createWithdrawalTables,
   createProofTable,
   createWalletTable,
-  creditAccount,
-  getAllocationHoldRemaining,
   storeSettlementProof,
 } from "./accounts.js";
+import { allocationEscrowHeld } from "./dispute-fund-ledger.js";
+import { allocationHoldPayer, forwardOf, moveAllocationMoney } from "./allocation-escrow.js";
 import { createPairingTables, registerPairingRoutes } from "./pairing.js";
 import { registerStateExportRoutes } from "./state-export.js";
 import { registerTrustGraphRoutes } from "./trust-graph.js";
@@ -241,6 +250,7 @@ export interface X402Config {
 export type ShutdownStateGetter = () => boolean;
 
 const staleAllocationLogger = createLogger({ service: "stale-allocations" });
+const retryRefundLogger = createLogger({ service: "settlement-retry-refund" });
 
 /**
  * Release budget allocations that have sat `'locked'` past the horizon with no
@@ -292,14 +302,50 @@ export function releaseStaleAllocations(
     }>;
     if (stale.length === 0) return 0;
 
+    let released = 0;
     db.exec("BEGIN");
     try {
       for (const alloc of stale) {
-        const held = getAllocationHoldRemaining(db, alloc.allocation_id);
-        if (held <= 0) {
-          // Nothing was ever debited for this row (or it was already
-          // released). Skip the credit; the status flip below still retires
-          // the row so it stops being reconsidered every tick.
+        // What the ledger still holds — the one primitive every refund of an
+        // allocation pays out of (allocation-escrow.ts). Holds − releases
+        // alone (F3) missed a federated origin's forward.
+        const held = allocationEscrowHeld(db, alloc.allocation_id);
+        if (held > 0) {
+          // The refund goes to the allocation's HOLD PAYER, read from the
+          // ledger — never the queue's submitter guess, never a fallback to
+          // the allocation's motebit_id (the worker).
+          const payer = allocationHoldPayer(db, alloc.allocation_id);
+          const queued = resolveDelegator(alloc.task_id);
+          if (payer === null) {
+            // No single payer to refund: the allocation stays `locked`,
+            // flagged for the operator (visible), never retired holding money.
+            db.prepare(
+              "UPDATE relay_allocations SET review_reason = COALESCE(review_reason, 'unroutable_refund') WHERE allocation_id = ?",
+            ).run(alloc.allocation_id);
+            staleAllocationLogger.error("stale_allocation.unroutable", {
+              allocationId: alloc.allocation_id,
+              held,
+            });
+            continue;
+          }
+          if (queued !== undefined && queued !== payer) {
+            staleAllocationLogger.warn("stale_allocation.submitter_differs_from_payer", {
+              allocationId: alloc.allocation_id,
+              submitter: queued,
+              payer,
+            });
+          }
+          moveAllocationMoney(db, {
+            kind: "sweep_refund",
+            allocationId: alloc.allocation_id,
+            amount: held,
+            party: payer,
+            description: `Stale allocation release for task ${alloc.task_id}`,
+          });
+        } else {
+          // Nothing was ever debited for this row, it was already released,
+          // or a federated forward consumed it. The status flip below still
+          // retires the row so it stops being reconsidered.
           staleAllocationLogger.warn("stale_allocation.unfunded_skipped", {
             allocationId: alloc.allocation_id,
             taskId: alloc.task_id,
@@ -307,22 +353,15 @@ export function releaseStaleAllocations(
             reason:
               "allocation holds nothing on the ledger — never debited (best-effort path) or already released; release skipped to prevent minting unfunded balance",
           });
-          continue;
         }
-        creditAccount(
-          db,
-          resolveDelegator(alloc.task_id) ?? alloc.motebit_id,
-          held,
-          "allocation_release",
-          alloc.allocation_id,
-          `Stale allocation release for task ${alloc.task_id}`,
-        );
+        released += db
+          .prepare(
+            "UPDATE relay_allocations SET status = 'released', released_at = ? WHERE allocation_id = ? AND status = 'locked'",
+          )
+          .run(now, alloc.allocation_id).changes;
       }
-      db.prepare(
-        "UPDATE relay_allocations SET status = 'released', released_at = ? WHERE status = 'locked' AND created_at < ?",
-      ).run(now, cutoff);
       db.exec("COMMIT");
-      return stale.length;
+      return released;
     } catch (err) {
       db.exec("ROLLBACK");
       staleAllocationLogger.error("stale_allocation.release_failed", {
@@ -332,6 +371,112 @@ export function releaseStaleAllocations(
     }
   } catch {
     return 0; // Best-effort cleanup
+  }
+}
+
+/**
+ * A federated forward whose delivery retries are exhausted (or whose peer is
+ * gone): in ONE transaction, the forward becomes `failed` — its gross returns
+ * to the escrow (`forward_return`) — and what the escrow then holds is
+ * refunded to the allocation's HOLD PAYER (`retry_exhaustion_refund`). C1: the
+ * forward used to count as moved whether or not the peer acknowledged it, so
+ * this refund read 0 and the allocation was retired `released` holding the
+ * delegator's money. P2: the payee is read from the ledger, never the task
+ * queue's submitter with a fallback to the allocation's motebit_id (the
+ * worker). An allocation under dispute keeps its escrow for the dispute's
+ * fund action; one with no single hold payer is flagged for the operator.
+ *
+ * Extracted from the settlement-retry loop so tests drive THIS function.
+ */
+export function refundExhaustedForward(
+  db: MotebitDatabase["db"],
+  retry: { retry_id: string; settlement_id: string; task_id: string },
+): "refunded" | "returned" | "skipped" {
+  const refundId = crypto.randomUUID();
+  db.exec("BEGIN");
+  try {
+    const alloc = db
+      .prepare(
+        "SELECT allocation_id, status, amount_locked FROM relay_allocations WHERE task_id = ?",
+      )
+      .get(retry.task_id) as
+      { allocation_id: string; status: string; amount_locked: number } | undefined;
+    if (!alloc) {
+      db.exec("ROLLBACK");
+      return "skipped";
+    }
+    const fwd = forwardOf(db, retry.settlement_id);
+    let returned = false;
+    if (fwd && fwd.status === "pending" && fwd.allocation_id === alloc.allocation_id) {
+      moveAllocationMoney(db, {
+        kind: "forward_return",
+        allocationId: alloc.allocation_id,
+        amount: fwd.gross_amount,
+        settlementId: retry.settlement_id,
+      });
+      returned = true;
+    }
+    const held = allocationEscrowHeld(db, alloc.allocation_id);
+    if (alloc.status === "disputed" || held <= 0) {
+      db.exec("COMMIT");
+      retryRefundLogger.info("settlement.retry.refund_skipped", {
+        retryId: retry.retry_id,
+        taskId: retry.task_id,
+        allocationId: alloc.allocation_id,
+        forwardReturned: returned,
+        reason:
+          alloc.status === "disputed"
+            ? "allocation under dispute — its fund action distributes the escrow"
+            : "allocation holds nothing on the ledger — never debited or already released",
+      });
+      return returned ? "returned" : "skipped";
+    }
+    const payer = allocationHoldPayer(db, alloc.allocation_id);
+    if (payer === null) {
+      db.prepare(
+        "UPDATE relay_allocations SET review_reason = COALESCE(review_reason, 'unroutable_refund') WHERE allocation_id = ?",
+      ).run(alloc.allocation_id);
+      db.exec("COMMIT");
+      retryRefundLogger.error("settlement.retry.refund_unroutable", {
+        retryId: retry.retry_id,
+        allocationId: alloc.allocation_id,
+        held,
+      });
+      return returned ? "returned" : "skipped";
+    }
+    moveAllocationMoney(db, {
+      kind: "retry_exhaustion_refund",
+      allocationId: alloc.allocation_id,
+      amount: held,
+      party: payer,
+      description: `Retry exhaustion refund for task ${retry.task_id}`,
+    });
+    db.prepare(
+      "UPDATE relay_allocations SET status = 'released', released_at = ? WHERE allocation_id = ? AND status = 'locked'",
+    ).run(Date.now(), alloc.allocation_id);
+    // Audit row: what was actually refunded (the ledger hold), to whom.
+    db.prepare(
+      "INSERT OR IGNORE INTO relay_refund_log (refund_id, retry_id, task_id, allocation_id, delegator_id, amount, status, created_at) VALUES (?, ?, ?, ?, ?, ?, 'completed', ?)",
+    ).run(refundId, retry.retry_id, retry.task_id, alloc.allocation_id, payer, held, Date.now());
+    db.exec("COMMIT");
+    retryRefundLogger.info("settlement.retry.refunded", {
+      refundId,
+      taskId: retry.task_id,
+      allocationId: alloc.allocation_id,
+      amount: held,
+      claimed: alloc.amount_locked,
+      delegator: payer,
+    });
+    return "refunded";
+  } catch (err) {
+    db.exec("ROLLBACK");
+    retryRefundLogger.error("settlement.retry.refund_txn_failed", {
+      refundId,
+      retryId: retry.retry_id,
+      taskId: retry.task_id,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return "skipped";
   }
 }
 
@@ -865,6 +1010,10 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
   // --- Schema: relay-owned tables, migrations, startup cleanup ---
   const { isTokenBlacklisted, isAgentRevoked } = createRelaySchema(moteDb.db);
   createRelayConfigTable(moteDb.db);
+  // The deposit detector's tables are created here (they otherwise appear
+  // only when it starts) so the freeze guards, installed once the task queue
+  // has added its columns (below), cover them.
+  createDepositDetectorTable(moteDb.db);
 
   // Emergency freeze: persistent kill switch. When true, all state-mutating
   // operations (POST/PUT/PATCH/DELETE) return 503. Reads remain available.
@@ -901,6 +1050,12 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
   const MAX_TASK_QUEUE_SIZE = 100_000;
   const MAX_TASKS_PER_SUBMITTER = config.maxTasksPerSubmitter ?? 1_000;
   const taskQueue = new TaskQueue(moteDb.db);
+  // The freeze is re-checked where money is written, inside the write's own
+  // transaction (a request or replay past the entry check when the freeze
+  // lands commits nothing). After EVERY schema mutation — schema, migrations
+  // and the task queue's settlement columns — so the guard set is the same on
+  // a first boot as on a restart.
+  installFreezeMoneyGuards(moteDb.db);
 
   // --- Relay Identity: persistent Ed25519 keypair ---
   // One outbound URL policy for every persisted callback the relay will contact.
@@ -1984,114 +2139,10 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     moteDb.db,
     relayIdentity,
     30_000,
+    // C1/P2: forward → failed and the refund to the hold payer, in one
+    // transaction through the escrow chokepoint (refundExhaustedForward).
     (retry) => {
-      const refundId = crypto.randomUUID();
-      try {
-        const taskEntry = taskQueue.get(retry.task_id);
-        moteDb.db.exec("BEGIN");
-        try {
-          // Atomically claim the allocation: UPDATE ... WHERE status = 'locked' ensures
-          // that if settlement already completed (status = 'settled'), this is a no-op.
-          // This prevents the double-spend: settlement credits the worker AND refund credits
-          // the delegator for the same locked funds.
-          const claimResult = moteDb.db
-            .prepare(
-              "UPDATE relay_allocations SET status = 'released', released_at = ? WHERE task_id = ? AND status = 'locked'",
-            )
-            .run(Date.now(), retry.task_id);
-          if (claimResult.changes === 0) {
-            // Allocation was already settled or released — no refund needed
-            moteDb.db.exec("ROLLBACK");
-            logger.info("settlement.retry.refund_skipped", {
-              retryId: retry.retry_id,
-              taskId: retry.task_id,
-              reason: "allocation not in locked state (already settled or released)",
-            });
-            return;
-          }
-          // Allocation claimed — now safe to credit the delegator
-          const alloc = moteDb.db
-            .prepare(
-              "SELECT allocation_id, motebit_id, amount_locked FROM relay_allocations WHERE task_id = ?",
-            )
-            .get(retry.task_id) as
-            { allocation_id: string; motebit_id: string; amount_locked: number } | undefined;
-          if (!alloc) {
-            moteDb.db.exec("ROLLBACK");
-            return;
-          }
-          const delegatorId = taskEntry?.submitted_by ?? alloc.motebit_id;
-          // Refund what the LEDGER holds, never `amount_locked` — the row is a
-          // claim, the ledger is the fact. A never-debited allocation (free
-          // agent, or the priced-but-unpayable listing that used to read as
-          // free) would otherwise mint balance here as `allocation_release`,
-          // which carries no dispute-window or grant hold and is therefore
-          // immediately withdrawable. Same rule as `releaseStaleAllocations`.
-          const heldRemaining = getAllocationHoldRemaining(moteDb.db, alloc.allocation_id);
-          if (heldRemaining <= 0) {
-            moteDb.db.exec("ROLLBACK");
-            logger.warn("settlement.retry.refund_skipped_unfunded", {
-              retryId: retry.retry_id,
-              taskId: retry.task_id,
-              allocationId: alloc.allocation_id,
-              claimed: alloc.amount_locked,
-              reason:
-                "allocation holds nothing on the ledger — never debited or already released; refund skipped to prevent minting unfunded balance",
-            });
-            return;
-          }
-          creditAccount(
-            moteDb.db,
-            delegatorId,
-            heldRemaining,
-            "allocation_release",
-            alloc.allocation_id,
-            `Retry exhaustion refund for task ${retry.task_id}`,
-          );
-          // Persist refund record for audit trail
-          moteDb.db
-            .prepare(
-              "INSERT OR IGNORE INTO relay_refund_log (refund_id, retry_id, task_id, allocation_id, delegator_id, amount, status, created_at) VALUES (?, ?, ?, ?, ?, ?, 'completed', ?)",
-            )
-            .run(
-              refundId,
-              retry.retry_id,
-              retry.task_id,
-              alloc.allocation_id,
-              delegatorId,
-              // The audit row records what was actually refunded (the ledger
-              // hold), not what the allocation row claimed — otherwise the
-              // refund log asserts a payout that never happened.
-              heldRemaining,
-              Date.now(),
-            );
-          moteDb.db.exec("COMMIT");
-          logger.info("settlement.retry.refunded", {
-            refundId,
-            taskId: retry.task_id,
-            allocationId: alloc.allocation_id,
-            amount: heldRemaining,
-            claimed: alloc.amount_locked,
-            delegator: delegatorId,
-          });
-        } catch (txnErr) {
-          moteDb.db.exec("ROLLBACK");
-          // Log the failed refund attempt for operator visibility
-          logger.error("settlement.retry.refund_txn_failed", {
-            refundId,
-            retryId: retry.retry_id,
-            taskId: retry.task_id,
-            error: txnErr instanceof Error ? txnErr.message : String(txnErr),
-          });
-        }
-      } catch (err) {
-        logger.error("settlement.retry.refund_error", {
-          refundId,
-          retryId: retry.retry_id,
-          taskId: retry.task_id,
-          error: err instanceof Error ? err.message : String(err),
-        });
-      }
+      refundExhaustedForward(moteDb.db, retry);
     },
     () => getEmergencyFreeze(),
     undefined, // retryPolicy — use the default

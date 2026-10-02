@@ -62,16 +62,25 @@ const HORIZON_MS = 3_600_000;
 /** Insert an allocation row, optionally backed by a real ledger debit. */
 function seedAllocation(
   r: SyncRelay,
-  opts: { taskId: string; motebitId: string; claimMicro: number; funded: boolean; ageMs: number },
+  opts: {
+    taskId: string;
+    motebitId: string;
+    claimMicro: number;
+    funded: boolean;
+    ageMs: number;
+    /** Who funded the hold (default: the allocation's own motebit_id). */
+    payer?: string;
+  },
 ): string {
   const allocationId = `x402-${opts.taskId}`;
   if (opts.funded) {
     // A real hold: credit the delegator, then debit under the allocation
     // reference exactly as the submission path does.
-    seedBalance(r, opts.motebitId, opts.claimMicro / 1_000_000 + 1);
+    const payer = opts.payer ?? opts.motebitId;
+    seedBalance(r, payer, opts.claimMicro / 1_000_000 + 1);
     debitSpendableAccount(
       r.moteDb.db,
-      opts.motebitId,
+      payer,
       opts.claimMicro,
       "allocation_hold",
       allocationId,
@@ -189,7 +198,7 @@ describe("stale-allocation release pays the ledger, not the claim", () => {
     expect(status.status).toBe("locked");
   });
 
-  it("credits the task's submitter when the task is still queued", async () => {
+  it("credits the allocation's hold payer — never the queue's guess, never the worker", async () => {
     relay = await createTestRelay();
     const claim = toMicro(1);
     seedAllocation(relay, {
@@ -198,13 +207,16 @@ describe("stale-allocation release pays the ledger, not the claim", () => {
       claimMicro: claim,
       funded: true,
       ageMs: HORIZON_MS + 60_000,
+      payer: "delegator",
     });
 
-    // Delegator resolution routes the refund away from the allocation's own
-    // motebit_id when the queue knows who submitted it.
-    releaseStaleAllocations(relay.moteDb.db, Date.now(), HORIZON_MS, () => "delegator");
+    // The refund goes to whoever the LEDGER says funded the hold (P2): not
+    // the allocation's own motebit_id (the worker), and not a submitter the
+    // task queue names when that is someone else.
+    releaseStaleAllocations(relay.moteDb.db, Date.now(), HORIZON_MS, () => "someone-else");
 
     expect(releaseCredits(relay, "delegator")).toBe(claim);
     expect(releaseCredits(relay, "worker")).toBe(0);
+    expect(releaseCredits(relay, "someone-else")).toBe(0);
   });
 });

@@ -79,7 +79,7 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { parse as parseYaml } from "yaml";
 import { failWithRepair } from "./lib/gate-report.js";
-import { ShParseError, parseSh, walk, type Word } from "./lib/posix-sh.js";
+import { ShParseError, parseSh, walk, type Program, type Word } from "./lib/posix-sh.js";
 
 const ROOT = process.cwd();
 const HOOK = ".husky/pre-push";
@@ -129,15 +129,80 @@ export const RUN_PHASE_FORMS: Record<string, Key[]> = {
 /** Commands that cannot run another command and have no effect but output/status. */
 const PURE = new Set(["[", "test", "printf", "echo", "skip_phase"]);
 
+/**
+ * The env scrub: the FIRST command of the hook body, before any phase. In a
+ * linked worktree git exports GIT_DIR=<repo>/.git/worktrees/<name> (+
+ * GIT_PREFIX, GIT_EXEC_PATH, GIT_EDITOR) into the hook; a phase that inherits
+ * it — a fixture `git` in `pnpm test:gates` — acts on the REAL repository
+ * whatever its cwd (2026-09-27 #835, 2026-10-02: core.bare = true and
+ * `fixture` commits on the pushing branch). Its PLACEMENT is pinned by
+ * envScrubViolations, not only its text: a scrub moved after a phase, into a
+ * branch, a subshell or a `$( )` is a scrub that does not cover every phase.
+ */
+export const ENV_SCRUB = "unset $(env | sed -n 's/^\\(GIT_[A-Za-z0-9_]*\\)=.*/\\1/p')";
 /** Every other command line allowed outside a pinned function, exactly. */
 const EXACT_COMMANDS = new Set([
   "git symbolic-ref -q HEAD",
+  // The GIT_* scrub (ENV_SCRUB) and the two commands of its `$( )`; where it
+  // must stand is envScrubViolations' job.
+  ENV_SCRUB,
+  "env",
+  "sed -n 's/^\\(GIT_[A-Za-z0-9_]*\\)=.*/\\1/p'",
   "git merge-base origin/main HEAD",
   "date +%s",
   "wc -l",
   "tr -d ' '",
   "head -n 1",
 ]);
+
+/** The hook's top level: the $CI short-circuit, then `if <tag guard>; then <body> fi`. */
+const TOP_GUARDS = ['[ -n "$CI" ] && exit 0'];
+const TAG_GUARD = "git symbolic-ref -q HEAD >/dev/null 2>&1";
+
+export function envScrubViolations(prog: Program): string[] {
+  const where = `${HOOK}: the GIT_* scrub`;
+  const fix = `the hook must be \`${TOP_GUARDS.join("")}\` then \`if ${TAG_GUARD}; then\` whose FIRST command is \`${ENV_SCRUB}\` (no else/elif)`;
+  const items = prog.items;
+  if (items.length !== TOP_GUARDS.length + 1) {
+    return [
+      `${where}: the top level has ${items.length} item(s), not the CI guard + the tag-guarded body — ${fix}`,
+    ];
+  }
+  for (const [i, g] of TOP_GUARDS.entries()) {
+    if (ws(items[i]!.canon) !== g) {
+      return [`${where}: top-level item ${i + 1} is \`${ws(items[i]!.canon)}\` — ${fix}`];
+    }
+  }
+  const body = items[TOP_GUARDS.length]!;
+  const cmd =
+    body.pipelines.length === 1 && body.pipelines[0]!.cmds.length === 1
+      ? body.pipelines[0]!.cmds[0]!
+      : null;
+  if (cmd?.type !== "if" || body.background || body.pipelines[0]!.bang) {
+    return [`${where}: the hook body is not a plain top-level \`if\` — ${fix}`];
+  }
+  if (
+    cmd.bodies.length !== 2 ||
+    ws(cmd.bodies[0]!.items.map((i) => i.canon).join(" ; ")) !== TAG_GUARD
+  ) {
+    return [`${where}: the body's \`if\` is not exactly \`if ${TAG_GUARD}; then … fi\` — ${fix}`];
+  }
+  const first = cmd.bodies[1]!.items[0];
+  if (
+    first == null ||
+    first.background ||
+    first.pipelines.length !== 1 ||
+    first.pipelines[0]!.bang ||
+    first.pipelines[0]!.cmds.length !== 1 ||
+    first.pipelines[0]!.cmds[0]!.type !== "simple" ||
+    ws(first.canon) !== ENV_SCRUB
+  ) {
+    return [
+      `${where} is not the first command of the hook body (found \`${first ? ws(first.canon) : "(nothing)"}\`) — every phase would inherit a linked worktree's GIT_DIR; ${fix}`,
+    ];
+  }
+  return [];
+}
 
 /** `exit` is allowed only as the $CI short-circuit. */
 const EXIT_AND_OR = new Set(['[ -n "$CI" ] && exit 0']);
@@ -588,6 +653,7 @@ export function evaluateHook(hook: string): {
       phases: 0,
     };
   }
+  violations.push(...envScrubViolations(prog));
   let commands = 0;
   let phases = 0;
   const defined = new Map<string, number>();
@@ -1150,7 +1216,7 @@ function main(): void {
     });
   }
   console.log(
-    `✓ check-prepush-subset: ${commands} hook command(s) read (${phases} run_phase call(s)) → ${keys.length} task(s) [${keys.join(", ")}], each with an exact CI counterpart; ${Object.keys(inp.packageScripts).length} package(s)' test:coverage cover their test; ${typeof testCache.dry === "string" ? 0 : testCache.dry.filter((t) => t.task === "test" || t.task === "test:coverage").length} test task(s) resolved by \`turbo --dry=json\`, all cache: false; ${Object.keys(testCache.turboConfigs).length} non-root turbo.json file(s) scanned.`,
+    `✓ check-prepush-subset: ${commands} hook command(s) read (${phases} run_phase call(s)), the GIT_* scrub first in the hook body → ${keys.length} task(s) [${keys.join(", ")}], each with an exact CI counterpart; ${Object.keys(inp.packageScripts).length} package(s)' test:coverage cover their test; ${typeof testCache.dry === "string" ? 0 : testCache.dry.filter((t) => t.task === "test" || t.task === "test:coverage").length} test task(s) resolved by \`turbo --dry=json\`, all cache: false; ${Object.keys(testCache.turboConfigs).length} non-root turbo.json file(s) scanned.`,
   );
 }
 
