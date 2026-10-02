@@ -17,8 +17,9 @@
  * #1027: apps/web's inline path list made its ignoreCommand 1051 chars and
  * Vercel refused the config ("ignoreCommand should NOT be longer than 256
  * characters") before building — while every test here was green. Every
- * vercel.json is now validated against the vendored Vercel schema, and the
- * path list lives in a watch file.
+ * vercel.json is now validated with Vercel's own schema code (the CLI's
+ * buildVercelConfigSchema over @vercel/routing-utils + @vercel/build-utils)
+ * plus the motebit tightening layer, and the path list lives in a watch file.
  */
 import {
   cpSync,
@@ -40,13 +41,12 @@ import {
   closureDirs,
   collectVercelViolations,
   ifStaticallyFalse,
-  loadVercelSchema,
   ROOT_BUILD_FILES,
   rootBuildConfig,
   runsVercelProd,
-  VERCEL_SCHEMA,
   workspaceManifests,
 } from "../check-vercel-ignore-build.js";
+import { IGNORE_COMMAND_MAX } from "../lib/vercel-config-schema.js";
 
 const REPO = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const SCRIPT = "../../scripts/vercel-ignore-build.sh";
@@ -68,8 +68,6 @@ function mk(): string {
   writeFileSync(join(t, "pnpm-workspace.yaml"), "packages:\n  - packages/*\n");
   writeFileSync(join(t, "turbo.json"), '{"globalDependencies": ["tsconfig.base.json"]}');
   writeFileSync(join(t, "tsconfig.base.json"), "{}");
-  mkdirSync(dirname(join(t, VERCEL_SCHEMA)), { recursive: true });
-  cpSync(join(REPO, VERCEL_SCHEMA), join(t, VERCEL_SCHEMA));
   return t;
 }
 
@@ -475,12 +473,10 @@ describe("the deploy step is a pinned form (cold-review hardening: each was GREE
   });
 });
 
-describe("every vercel.json validates against the vendored Vercel schema (#1027)", () => {
-  const schema = loadVercelSchema(REPO);
-  const max = (schema.properties as Record<string, { maxLength?: number }>)["ignoreCommand"]!
-    .maxLength!;
+describe("every vercel.json validates under Vercel's own schema + the motebit tightening (#1027)", () => {
+  const max = IGNORE_COMMAND_MAX;
 
-  it("takes the ignoreCommand limit from the schema (Vercel's error: 256)", () => {
+  it("keeps Vercel's server-side ignoreCommand limit (its error: 256)", () => {
     expect(max).toBe(256);
   });
 
@@ -503,7 +499,7 @@ describe("every vercel.json validates against the vendored Vercel schema (#1027)
     expect(cmd).toHaveLength(257);
     const v = collectVercelViolations(synthetic(FULL, { ignoreCommand: cmd }), {}).violations;
     expect(v).toHaveLength(1);
-    expect(v[0]).toMatch(/schema/);
+    expect(v[0]).toMatch(/tightening/);
     expect(v[0]).toMatch(/ignoreCommand/);
   });
 
@@ -517,6 +513,40 @@ describe("every vercel.json validates against the vendored Vercel schema (#1027)
   it("RED: a wrong-typed known key (framework: 1)", () => {
     const v = collectVercelViolations(synthetic(FULL, { framework: 1 }), {}).violations;
     expect(v.join("\n")).toMatch(/schema.*framework|framework.*schema/);
+  });
+
+  /**
+   * A cold review found these four pass the interim hand-written subset while
+   * Vercel's own validator refuses them — and `vercel --prod` in
+   * deploy-web.yml would refuse them on every production deploy.
+   */
+  const REFUSED_BY_VERCEL: [string, Record<string, unknown>, RegExp][] = [
+    ["a rewrite with no destination", { rewrites: [{ source: "/a" }] }, /rewrites\/0.*destination/],
+    ["an empty rewrite", { rewrites: [{}] }, /rewrites\/0.*source/],
+    [
+      "a rewrite with an extra key",
+      { rewrites: [{ source: "/a", destination: "/b", extra: 1 }] },
+      /rewrites\/0.*additional/,
+    ],
+    ['"headers": "x"', { headers: "x" }, /headers.*array/],
+  ];
+
+  it.each(REFUSED_BY_VERCEL)("RED (Vercel's own schema): %s", (_name, extra, why) => {
+    const v = collectVercelViolations(synthetic(FULL, extra), {}).violations;
+    expect(v, v.join("\n")).toHaveLength(1);
+    expect(v[0]).toMatch(/Vercel/);
+    expect(v[0]).toMatch(why);
+  });
+
+  it("control: a valid rewrite and header set is green", () => {
+    const v = collectVercelViolations(
+      synthetic(FULL, {
+        rewrites: [{ source: "/(.*)", destination: "/index.html" }],
+        headers: [{ source: "/(.*)", headers: [{ key: "x-a", value: "b" }] }],
+      }),
+      {},
+    ).violations;
+    expect(v).toEqual([]);
   });
 
   it("validates a vercel.json with no ignoreCommand too", () => {
@@ -637,10 +667,8 @@ describe("every vercel.json on the real workspace", () => {
     expect([...pathsOf(`${dir}/vercel.json`)].sort()).toEqual(inputs);
   });
 
-  it.each(VERCEL)("%s: committed ignoreCommand fits the schema's maxLength", (f) => {
-    const max = (loadVercelSchema(REPO).properties as Record<string, { maxLength?: number }>)[
-      "ignoreCommand"
-    ]!.maxLength!;
+  it.each(VERCEL)("%s: committed ignoreCommand fits Vercel's 256-char limit", (f) => {
+    const max = IGNORE_COMMAND_MAX;
     const cmd = (cfgOf(f) as { ignoreCommand?: string }).ignoreCommand ?? "";
     expect(cmd.length).toBeLessThanOrEqual(max);
   });

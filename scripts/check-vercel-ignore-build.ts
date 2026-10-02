@@ -15,10 +15,14 @@
  * project's Root Directory (services/proxy), where the repo-root pathspecs
  * match nothing — so it exited 0 (skip) on every commit, production included.
  *
- * Every vercel.json is first validated against Vercel's own schema, vendored
- * at VERCEL_SCHEMA (scripts/vendor/vercel/README.md says where it comes from
- * and how to refresh it): every limit — the 256-char ignoreCommand, the
- * closed set of top-level keys — is read from that file, never hardcoded.
+ * Every vercel.json is first validated with Vercel's OWN schema code — the
+ * composition of the `vercel` CLI's buildVercelConfigSchema over
+ * @vercel/routing-utils and @vercel/build-utils, pinned at the CLI's exact
+ * versions (scripts/lib/vercel-config-schema.ts) — so a rewrite with no
+ * destination or `"headers": "x"` goes red here instead of breaking
+ * `vercel --prod`. On top sits a motebit tightening layer, labelled as such,
+ * for rules Vercel's server enforces that the CLI schema lacks: the 256-char
+ * ignoreCommand and a closed top-level key set (evidence in that module).
  * #1027: apps/web's inline path list made its ignoreCommand 1051 chars and
  * Vercel refused the config before building ("ignoreCommand should NOT be
  * longer than 256 characters") while every repo test and gate was green; the
@@ -79,69 +83,14 @@
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join, posix, relative, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
-import Ajv, { type ErrorObject } from "ajv";
-import Ajv2019 from "ajv/dist/2019.js";
-import Ajv2020 from "ajv/dist/2020.js";
 import { parse as parseYaml } from "yaml";
 import { failWithRepair } from "./lib/gate-report.js";
+import { compileVercelConfigValidator, VERCEL_SCHEMA_SOURCE } from "./lib/vercel-config-schema.js";
 
 const SCRIPT = "scripts/vercel-ignore-build.sh";
-/** Vercel's published vercel.json schema, vendored (see scripts/vendor/vercel/README.md). */
-export const VERCEL_SCHEMA = "scripts/vendor/vercel/vercel.schema.json";
 const WORKSPACE_GLOB_DIRS = ["packages", "apps", "services"];
 const SKIP_DIRS = new Set(["node_modules", ".git", ".next", ".turbo", "dist", "out", ".vercel"]);
 const DEP_FIELDS = ["dependencies", "devDependencies", "peerDependencies", "optionalDependencies"];
-
-export interface VercelSchema {
-  $comment?: string;
-  $schema?: string;
-  properties?: Record<string, unknown>;
-  additionalProperties?: unknown;
-  [k: string]: unknown;
-}
-
-export function loadVercelSchema(root: string): VercelSchema {
-  return JSON.parse(readFileSync(join(root, VERCEL_SCHEMA), "utf8")) as VercelSchema;
-}
-
-type Validate = ((data: unknown) => boolean) & { errors?: ErrorObject[] | null };
-
-/** Compile with the Ajv class for the schema's own draft. */
-export function compileVercelSchema(schema: VercelSchema): Validate {
-  const draft = String(schema.$schema ?? "");
-  const opts = { allErrors: true, strict: false } as const;
-  const AjvClass = draft.includes("2020-12") ? Ajv2020 : draft.includes("2019-09") ? Ajv2019 : Ajv;
-  if (/draft-0[34]/.test(draft)) {
-    throw new Error(`${VERCEL_SCHEMA}: ${draft} is not supported by the gate's validator`);
-  }
-  return new AjvClass(opts).compile(schema) as Validate;
-}
-
-/**
- * What Vercel's schema refuses in one vercel.json: every validator error,
- * plus top-level keys the schema does not declare (closed even when a
- * refreshed schema leaves additionalProperties open — Vercel refuses unknown
- * keys at deploy time).
- */
-export function schemaProblems(schema: VercelSchema, validate: Validate, cfg: unknown): string[] {
-  const out: string[] = [];
-  if (!validate(cfg)) {
-    for (const e of validate.errors ?? []) {
-      const extra =
-        e.keyword === "additionalProperties"
-          ? ` (\`${String((e.params as { additionalProperty?: unknown }).additionalProperty)}\`)`
-          : "";
-      out.push(`${e.instancePath === "" ? "/" : e.instancePath} ${e.message ?? e.keyword}${extra}`);
-    }
-  }
-  if (schema.additionalProperties !== false && cfg != null && typeof cfg === "object") {
-    const known = new Set(Object.keys(schema.properties ?? {}));
-    for (const k of Object.keys(cfg)) {
-      if (!known.has(k)) out.push(`/ unknown top-level key (\`${k}\`)`);
-    }
-  }
-  return [...new Set(out)];
-}
 
 /**
  * Projects known to deploy main both through a `vercel --prod` Action and
@@ -698,8 +647,7 @@ export function collectVercelViolations(
   const actionOwned: string[] = [];
   const knownSeen: string[] = [];
   const { deployers, rejected, broken } = actionDeployedProjects(root, files.map(dirname), secrets);
-  const schema = loadVercelSchema(root);
-  const validate = compileVercelSchema(schema);
+  const validateConfig = compileVercelConfigValidator();
 
   for (const file of files) {
     const projectDir = dirname(file);
@@ -715,10 +663,14 @@ export function collectVercelViolations(
       );
       continue;
     }
-    const refused = schemaProblems(schema, validate, cfg);
-    if (refused.length > 0)
+    const refused = validateConfig(cfg);
+    if (refused.vercel.length > 0)
       violations.push(
-        `${file}: fails Vercel's vercel.json schema (${VERCEL_SCHEMA}) — Vercel refuses this config before building, previews and \`vercel --prod\` alike: ${refused.join("; ")}`,
+        `${file}: fails Vercel's own vercel.json schema (${VERCEL_SCHEMA_SOURCE.cli}'s buildVercelConfigSchema, via scripts/lib/vercel-config-schema.ts) — \`vercel --prod\` and previews refuse this config before building: ${refused.vercel.join("; ")}`,
+      );
+    if (refused.motebit.length > 0)
+      violations.push(
+        `${file}: fails the motebit tightening layer (MOTEBIT_TIGHTENING_SCHEMA in scripts/lib/vercel-config-schema.ts — rules Vercel's server enforces beyond the CLI schema, e.g. its 256-char ignoreCommand): ${refused.motebit.join("; ")}`,
       );
     const ownName = existsSync(join(root, projectDir, "package.json"))
       ? (JSON.parse(readFileSync(join(root, projectDir, "package.json"), "utf8")) as Manifest).name
@@ -906,15 +858,18 @@ function main(): void {
       invariant: `every vercel.json ignoreCommand must route through ${SCRIPT} — a production build is never skipped, a preview is skipped only when proven safe over the right paths (#1012: proxy security fix 42ce27f was "Canceled by Ignored Build Step" on main)`,
       sites: violations,
       canonical: SCRIPT,
-      fix: `Make every vercel.json valid under ${VERCEL_SCHEMA} (Vercel's own schema — e.g. ignoreCommand within its maxLength, no unknown keys). Set the project's ignoreCommand to \`sh <relative path to ${SCRIPT}> --watch <relative path to scripts/vercel-watch/<project>.txt>\` whose file lists, one per line, exactly the project dir, every workspace dependency dir and the root build config (package.json, pnpm-lock.yaml, pnpm-workspace.yaml, turbo.json and the tsconfig extends chain) — nothing else — or \`sh <relative path to ${SCRIPT}> --turbo-ignore <own package name>\`; never compose it with || / && / ;. A project whose production a \`vercel --prod\` Action deploys sets \`"git": {"deploymentEnabled": {"main": false}}\` (and only such a project, never \`deploymentEnabled: false\`); its workflow runs exactly \`vercel --prod [--yes]\` in a step with only allowlisted keys (no continue-on-error, working-directory, shell; no job/workflow defaults), no \`if\` or \`needs\` that is false on a push to main, VERCEL_TOKEN / VERCEL_ORG_ID from their pinned secrets and VERCEL_PROJECT_ID from the project's PROJECT_ID_SECRETS entry, on.push only branches + paths (no paths-ignore, no negated path), lists every build input in on.push.paths, and restricts any non-push trigger to refs/heads/main. Then run \`pnpm check-vercel-ignore-build\`.`,
+      fix: `Make every vercel.json valid under Vercel's own schema (${VERCEL_SCHEMA_SOURCE.cli}'s buildVercelConfigSchema, composed in scripts/lib/vercel-config-schema.ts — e.g. every rewrite has a source and a destination and nothing else) and the motebit tightening layer beside it (ignoreCommand ≤ 256 chars, only known top-level keys). Set the project's ignoreCommand to \`sh <relative path to ${SCRIPT}> --watch <relative path to scripts/vercel-watch/<project>.txt>\` whose file lists, one per line, exactly the project dir, every workspace dependency dir and the root build config (package.json, pnpm-lock.yaml, pnpm-workspace.yaml, turbo.json and the tsconfig extends chain) — nothing else — or \`sh <relative path to ${SCRIPT}> --turbo-ignore <own package name>\`; never compose it with || / && / ;. A project whose production a \`vercel --prod\` Action deploys sets \`"git": {"deploymentEnabled": {"main": false}}\` (and only such a project, never \`deploymentEnabled: false\`); its workflow runs exactly \`vercel --prod [--yes]\` in a step with only allowlisted keys (no continue-on-error, working-directory, shell; no job/workflow defaults), no \`if\` or \`needs\` that is false on a push to main, VERCEL_TOKEN / VERCEL_ORG_ID from their pinned secrets and VERCEL_PROJECT_ID from the project's PROJECT_ID_SECRETS entry, on.push only branches + paths (no paths-ignore, no negated path), lists every build input in on.push.paths, and restricts any non-push trigger to refs/heads/main. Then run \`pnpm check-vercel-ignore-build\`.`,
     });
   }
 
-  const schemaNote = String(loadVercelSchema(ROOT).$comment ?? "").startsWith("INTERIM")
-    ? "an INTERIM hand-written subset — refresh it from https://openapi.vercel.sh/vercel.json per scripts/vendor/vercel/README.md"
-    : "vendored from https://openapi.vercel.sh/vercel.json";
   console.log(
-    `✓ Vercel ignore step: ${files.length} vercel.json file(s) found, all valid under ${VERCEL_SCHEMA} (${schemaNote}), ${routed.length} route their ignoreCommand through ${SCRIPT} [${routed.join("; ")}], ${noIgnore.length} declare none [${noIgnore.join(", ")}] (any dashboard-configured ignore step is not visible to this gate); production owned solely by a \`vercel --prod\` Action with Git deploys of main disabled: [${actionOwned.join("; ")}]; known double-deploy (Action + Git on main): [${knownDoubleDeploy.join(", ")}] (workflows matched to projects by their \`<dir>/**\` push path only).`,
+    `✓ Vercel ignore step: ${files.length} vercel.json file(s) found, all valid under Vercel's own schema code (${VERCEL_SCHEMA_SOURCE.cli}'s buildVercelConfigSchema over ${Object.entries(
+      VERCEL_SCHEMA_SOURCE.packages,
+    )
+      .map(([n, v]) => `${n}@${v}`)
+      .join(
+        " + ",
+      )}) and the motebit tightening layer (ignoreCommand ≤ 256, closed top-level keys), ${routed.length} route their ignoreCommand through ${SCRIPT} [${routed.join("; ")}], ${noIgnore.length} declare none [${noIgnore.join(", ")}] (any dashboard-configured ignore step is not visible to this gate); production owned solely by a \`vercel --prod\` Action with Git deploys of main disabled: [${actionOwned.join("; ")}]; known double-deploy (Action + Git on main): [${knownDoubleDeploy.join(", ")}] (workflows matched to projects by their \`<dir>/**\` push path only).`,
   );
 }
 
