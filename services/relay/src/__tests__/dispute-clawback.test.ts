@@ -50,9 +50,8 @@ function seedSettledDispute(relay: SyncRelay, o: SeedOpts): void {
   //    delegator" means no hold payer on the ledger.
   if (o.withDelegator !== false) seedHold(relay, `alloc-${o.taskId}`, 1_000_000);
 
-  // 1. Settlement credited the worker NET under the settlement id (the funds
-  //    now sit in its balance, held non-spendable/non-withdrawable).
-  creditAccount(db, WORKER, NET, "settlement_credit", `stlrow-${o.taskId}`, "Settlement");
+  // 1. Settlement credited the worker NET (the funds now sit in its balance,
+  //    held non-spendable/non-withdrawable during the window).
 
   // 2. The relay settlement row — authoritative worker (motebit_id), payer
   //    (delegator_id), and net (amount_settled).
@@ -69,6 +68,10 @@ function seedSettledDispute(relay: SyncRelay, o: SeedOpts): void {
     now,
     o.withDelegator === false ? null : DELEGATOR,
   );
+
+  // The settlement's credit names its row (#890 r9: a settlement_credit
+  // names the settlement it pays).
+  creditAccount(db, WORKER, NET, "settlement_credit", `stlrow-${o.taskId}`, "Settlement");
 
   // 3. Allocation, transitioned to disputed.
   db.prepare(

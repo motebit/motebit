@@ -76,6 +76,26 @@ async function funded(): Promise<{
   return { db, a, t, locked: allocationHeld(db, a) };
 }
 
+/** The task's answer, claimed for `sig`, as the relay's archive holds it (the queue evicted). */
+function claim(db: SyncRelay["moteDb"]["db"], t: string, sig = "sig-esc"): void {
+  db.prepare("DELETE FROM relay_task_queue WHERE task_id = ?").run(t);
+  db.prepare(
+    `INSERT OR IGNORE INTO relay_task_answers
+       (task_id, executor_id, status, receipt_json, settling, settled, answer_version, answered_at)
+     VALUES (?, 'wrk-esc', 'completed', '{}', ?, 0, 1, ?)`,
+  ).run(t, sig, Date.now());
+}
+
+/** A dispute row (a dispute credit names the dispute it pays). */
+function dispute(db: SyncRelay["moteDb"]["db"], id: string, a: string, t: string): void {
+  db.prepare(
+    `INSERT INTO relay_disputes
+     (dispute_id, task_id, allocation_id, filed_by, respondent, category, description, state,
+      amount_locked, filing_fee, filed_at, evidence_deadline, body_json, filer_role)
+     VALUES (?, ?, ?, 'del-esc', 'wrk-esc', 'quality', 'x', 'final', 1, 0, ?, ?, '', 'delegator')`,
+  ).run(id, t, a, Date.now(), Date.now());
+}
+
 function refusal(db: SyncRelay["moteDb"]["db"], move: AllocationMove): string {
   try {
     moveAllocationMoney(db, move);
@@ -90,11 +110,16 @@ function txCount(db: SyncRelay["moteDb"]["db"]): number {
   return (db.prepare("SELECT COUNT(*) AS n FROM relay_transactions").get() as { n: number }).n;
 }
 
-function settlementRow(a: string, t: string, id: string, fee: number, payee = "wrk-esc") {
+/**
+ * A relay settlement row for allocation `a`. Its task is one the queue does
+ * not know (#890 r9's claim guard governs a known task's rows; the escrow is
+ * keyed on the allocation, never the task).
+ */
+function settlementRow(a: string, _t: string, id: string, fee: number, payee = "wrk-esc") {
   return {
     settlement_id: id,
     allocation_id: a,
-    task_id: t,
+    task_id: `unq-${id}`,
     motebit_id: payee,
     receipt_hash: "rh",
     amount_settled: 1000,
@@ -157,7 +182,8 @@ describe("moveAllocationMoney refuses before it writes", () => {
   });
 
   it("pays the worker leg only to the allocation's worker, and stamps every row", async () => {
-    const { db, a } = await funded();
+    const { db, a, t } = await funded();
+    dispute(db, "d1", a, t);
     const m = {
       kind: "dispute_worker",
       allocationId: a,
@@ -336,12 +362,14 @@ describe("forward lifecycle", () => {
         fee_rate: 0,
         settled_at: Date.now(),
         receipt_hash: "rh",
+        receipt_signature: "sig-esc",
       },
     };
   }
 
   it("pending and delivered count as moved; failed returns to escrow; only a pending forward can fail", async () => {
     const { db, a, t, locked } = await funded();
+    claim(db, t);
     expect(refusal(db, forward(a, t, "f0", locked + 1))).toBe("exceeds_held");
     expect(refusal(db, { ...forward(a, t, "f0", 10), amount: 11 })).toBe("invalid_amount");
     expect(refusal(db, forward(a, t, "f0", 10, null))).toBe("not_a_party");
@@ -378,8 +406,10 @@ describe("forward lifecycle", () => {
       if (!ack) throw new Error("down");
       return new Response("{}", { status: 200 });
     });
+    claim(db, t);
     const args = {
       taskId: t,
+      receiptSignature: "sig-esc",
       peerRelayId: "peer-x",
       grossAmount: locked,
       platformFeeRate: 0.05,
@@ -415,8 +445,10 @@ describe("forward lifecycle", () => {
       `INSERT INTO relay_peers (peer_relay_id, public_key, endpoint_url, state) VALUES ('peer-y', 'aa', 'http://peer-y.test', 'active')`,
     ).run();
     vi.stubGlobal("fetch", async () => new Response("{}", { status: 200 }));
+    claim(db, t);
     const r = await forwardOriginSettlement(db, identity(relay), {
       taskId: t,
+      receiptSignature: "sig-esc",
       peerRelayId: "peer-y",
       grossAmount: locked,
       platformFeeRate: 0.05,
@@ -432,10 +464,13 @@ describe("forward lifecycle", () => {
     vi.stubGlobal("fetch", async () => {
       throw new Error("down");
     });
+    // The task queue lost the entry (P2): the payee still comes from the ledger.
+    claim(db, t);
     // No peer row: the forward is queued and the retry loop finds the peer gone.
     expect(
       await forwardOriginSettlement(db, identity(relay), {
         taskId: t,
+        receiptSignature: "sig-esc",
         peerRelayId: "gone",
         grossAmount: locked,
         platformFeeRate: 0.05,
@@ -445,8 +480,6 @@ describe("forward lifecycle", () => {
       }),
     ).toBe("queued");
     db.prepare("UPDATE relay_settlement_retries SET next_retry_at = 0").run();
-    // The task queue lost the entry (P2): the payee still comes from the ledger.
-    db.prepare("DELETE FROM relay_task_queue WHERE task_id = ?").run(t);
     await processSettlementRetries(db, identity(relay), (retry) => {
       refundExhaustedForward(db, retry);
     });
@@ -466,6 +499,7 @@ describe("forward lifecycle", () => {
     expect(refundExhaustedForward(db, { retry_id: "r", settlement_id: "x", task_id: "none" })).toBe(
       "skipped",
     );
+    claim(db, t);
     moveAllocationMoney(db, {
       kind: "federated_forward",
       allocationId: a,
@@ -482,6 +516,7 @@ describe("forward lifecycle", () => {
         fee_rate: 0,
         settled_at: Date.now(),
         receipt_hash: "rh",
+        receipt_signature: "sig-esc",
       },
     });
     db.prepare("UPDATE relay_allocations SET status = 'disputed' WHERE allocation_id = ?").run(a);
@@ -526,7 +561,7 @@ describe("the stale sweep", () => {
 
 describe("the database guard", () => {
   it("aborts a raw stamped credit, fee or forward that would overdraw the allocation", async () => {
-    const { db, a, t, locked } = await funded();
+    const { db, a, locked } = await funded();
     const raw = (sql: string, ...args: unknown[]): string => {
       try {
         db.prepare(sql).run(...(args as never[]));
@@ -547,17 +582,15 @@ describe("the database guard", () => {
     expect(
       raw(
         `INSERT INTO relay_settlements (settlement_id, allocation_id, task_id, motebit_id, receipt_hash, amount_settled, platform_fee, platform_fee_rate, status, settled_at, settlement_mode)
-         VALUES ('s9', ?, ?, 'w', '', 0, ?, 0.05, 'completed', 0, 'relay')`,
+         VALUES ('s9', ?, 'unq-s9', 'w', '', 0, ?, 0.05, 'completed', 0, 'relay')`,
         a,
-        t,
         locked + 1,
       ),
     ).toMatch(/allocation escrow overdrawn/);
     expect(
       raw(
         `INSERT INTO relay_federation_settlements (settlement_id, task_id, upstream_relay_id, downstream_relay_id, gross_amount, fee_amount, net_amount, fee_rate, settled_at, receipt_hash, allocation_id, status)
-         VALUES ('f9', ?, 'u', 'd', ?, 0, 0, 0, 0, '', ?, 'pending')`,
-        t,
+         VALUES ('f9', 'unq-f9', 'u', 'd', ?, 0, 0, 0, 0, '', ?, 'pending')`,
         locked + 1,
         a,
       ),
@@ -567,17 +600,16 @@ describe("the database guard", () => {
 });
 
 describe("non-allocation writers of the same tables", () => {
-  it("records a P2P audit row only in p2p mode, idempotently", async () => {
+  it("records a P2P audit row only in p2p mode, with an allowlisted column set", async () => {
     const { db, a, t } = await funded();
     expect(() => recordP2pSettlementAudit(db, settlementRow(a, t, "p1", 0))).toThrow(
       /p2p rows only/,
     );
     const row = { ...settlementRow(`p2p-${t}`, t, "p1", 5), settlement_mode: "p2p" };
     expect(recordP2pSettlementAudit(db, row)).toBe(1);
-    expect(recordP2pSettlementAudit(db, row)).toBe(0);
-    expect(() => recordP2pSettlementAudit(db, { ...row, settlement_id: "p2", bogus: 1 })).toThrow(
-      /not allowed/,
-    );
+    expect(() =>
+      recordP2pSettlementAudit(db, { ...row, settlement_id: "p2", task_id: "unq-p2", bogus: 1 }),
+    ).toThrow(/not allowed/);
   });
 
   it("records an inbound federated settlement once, and never for a task holding local escrow", async () => {
@@ -612,9 +644,10 @@ describe("upgrade backfill", () => {
   it("derives forward status from retries, journals fees, stamps credits, flags a failed-forward strand", async () => {
     const { db, a, t, locked } = await funded();
     // A pre-lifecycle forward (status defaults 'delivered') whose retry failed.
+    claim(db, t);
     db.prepare(
-      `INSERT INTO relay_federation_settlements (settlement_id, task_id, upstream_relay_id, downstream_relay_id, gross_amount, fee_amount, net_amount, fee_rate, settled_at, receipt_hash)
-       VALUES ('legacy-f', ?, 'self', 'peer', ?, 0, ?, 0, 0, '')`,
+      `INSERT INTO relay_federation_settlements (settlement_id, task_id, upstream_relay_id, downstream_relay_id, gross_amount, fee_amount, net_amount, fee_rate, settled_at, receipt_hash, receipt_signature)
+       VALUES ('legacy-f', ?, 'self', 'peer', ?, 0, ?, 0, 0, '', 'sig-esc')`,
     ).run(t, locked, locked);
     db.prepare(
       `INSERT INTO relay_settlement_retries (retry_id, settlement_id, task_id, peer_relay_id, payload_json, attempts, max_attempts, next_retry_at, status, created_at)
@@ -632,8 +665,8 @@ describe("upgrade backfill", () => {
     const a2 = `x402-${t2}`;
     db.prepare(
       `INSERT INTO relay_settlements (settlement_id, allocation_id, task_id, motebit_id, receipt_hash, amount_settled, platform_fee, platform_fee_rate, status, settled_at, settlement_mode)
-       VALUES ('legacy-s', ?, ?, 'w2', '', 900, 50, 0.05, 'completed', 0, 'relay')`,
-    ).run(a2, t2);
+       VALUES ('legacy-s', ?, 'unq-legacy-s', 'w2', '', 900, 50, 0.05, 'completed', 0, 'relay')`,
+    ).run(a2);
     creditAccount(db, "w2", 900, "settlement_credit", "legacy-s", "legacy");
 
     const res = backfillAllocationEscrow(db);

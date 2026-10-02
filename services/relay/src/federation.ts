@@ -295,7 +295,7 @@ export function createFederationTables(db: DatabaseDriver): void {
       -- NULL for any pre-PR6 row (skipped by the anchor loop, which requires it).
       -- Migration v29 adds this to existing prod DBs; a fresh DB gets it here.
       record_json TEXT,
-      -- Allocation escrow (allocation-escrow.ts, migration v51): a SENT forward
+      -- Allocation escrow (allocation-escrow.ts, migration v55): a SENT forward
       -- (downstream_relay_id set) is stamped with the origin allocation whose
       -- escrow it moved, and carries an explicit lifecycle — 'pending' until the
       -- peer acknowledges ('delivered') or retries are exhausted ('failed', the
@@ -1106,6 +1106,169 @@ export async function processSettlementRetries(
       }
     }
   }
+}
+
+// ── Federation result delivery (#890 round 10) ──────────────────────────
+//
+// The executor relay returns a forwarded task's answer to its origin by
+// `POST /federation/v1/task/result`; the origin settles the task ONLY on it.
+// A single best-effort send left an origin that was down at that moment
+// waiting for a retry that never came. The delivery is an outbox row
+// (`relay_result_deliveries`, migration v53) written before the first send
+// and retried — bounded, with backoff — until the origin acknowledges (2xx),
+// refuses definitively (4xx other than 429: it holds another answer, or the
+// task is gone there), or the attempts run out. The body is rebuilt and
+// re-signed from the task's archived answer at each attempt (a fresh
+// timestamp passes the origin's drift check); the origin's door decides it
+// again (`admitReceipt`), so a redelivery is a repeat there, never a second
+// settlement.
+
+/** Record that `taskId`'s answer is owed to `peerRelayId` (idempotent). */
+export function enqueueResultDelivery(
+  db: DatabaseDriver,
+  taskId: string,
+  peerRelayId: string,
+  now: number = Date.now(),
+): void {
+  db.prepare(
+    `INSERT OR IGNORE INTO relay_result_deliveries
+       (task_id, peer_relay_id, attempts, next_attempt_at, status, created_at)
+     VALUES (?, ?, 0, ?, 'pending', ?)`,
+  ).run(taskId, peerRelayId, now, now);
+}
+
+/** The answer a delivery carries: the archived answer, else the queue's (pre-archive). */
+function deliverableAnswer(db: DatabaseDriver, taskId: string): ExecutionReceipt | null {
+  const archived = db
+    .prepare("SELECT receipt_json FROM relay_task_answers WHERE task_id = ?")
+    .get(taskId) as { receipt_json: string } | undefined;
+  if (archived != null) return JSON.parse(archived.receipt_json) as ExecutionReceipt;
+  const queued = db
+    .prepare("SELECT receipt FROM relay_task_queue WHERE task_id = ?")
+    .get(taskId) as { receipt: string | null } | undefined;
+  return queued?.receipt != null ? (JSON.parse(queued.receipt) as ExecutionReceipt) : null;
+}
+
+/**
+ * One delivery attempt of `taskId`'s pending result. Returns the row's status
+ * after the attempt (`pending` when it will be retried).
+ */
+export async function attemptResultDelivery(
+  db: DatabaseDriver,
+  relayIdentity: RelayIdentity,
+  taskId: string,
+  /** The worker's key the origin verifies the receipt with (`verificationKeyFor`). */
+  agentKeyFor: (motebitId: string) => string | null,
+  retryPolicy: RetryPolicy = DEFAULT_RETRY_POLICY,
+  /** The relay's shutdown: aborts the fetch; the delivery stays pending, the attempt uncounted. */
+  signal?: AbortSignal,
+): Promise<"pending" | "delivered" | "refused" | "exhausted" | "none"> {
+  const row = db
+    .prepare("SELECT * FROM relay_result_deliveries WHERE task_id = ? AND status = 'pending'")
+    .get(taskId) as
+    { task_id: string; peer_relay_id: string; attempts: number; max_attempts: number } | undefined;
+  if (row == null) return "none";
+  const finish = (status: "delivered" | "refused" | "exhausted", error: string | null) => {
+    db.prepare(
+      `UPDATE relay_result_deliveries SET status = ?, attempts = attempts + 1, last_error = ?,
+         delivered_at = CASE WHEN ? = 'delivered' THEN ? ELSE delivered_at END
+       WHERE task_id = ? AND status = 'pending'`,
+    ).run(status, error, status, Date.now(), taskId);
+    logger.info(`federation.result_delivery_${status}`, {
+      correlationId: taskId,
+      peer: row.peer_relay_id,
+      attempts: row.attempts + 1,
+      ...(error != null ? { error } : {}),
+    });
+    return status;
+  };
+  const peer = db
+    .prepare("SELECT endpoint_url FROM relay_peers WHERE peer_relay_id = ?")
+    .get(row.peer_relay_id) as { endpoint_url: string } | undefined;
+  if (peer == null) return finish("refused", "origin relay is no longer a peer");
+  const receipt = deliverableAnswer(db, taskId);
+  if (receipt == null) return finish("refused", "no answer to deliver");
+  let error: string;
+  try {
+    const key = agentKeyFor(receipt.motebit_id);
+    const resultBody = {
+      task_id: taskId,
+      origin_relay: relayIdentity.relayMotebitId,
+      receipt,
+      ...(key !== null ? { agent_public_key: key } : {}),
+      timestamp: Date.now(),
+    };
+    const sig = await sign(
+      new TextEncoder().encode(canonicalJson(resultBody)),
+      relayIdentity.privateKey,
+    );
+    const resp = await fetch(`${peer.endpoint_url}/federation/v1/task/result`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Correlation-ID": taskId },
+      body: JSON.stringify({ ...resultBody, signature: bytesToHex(sig) }),
+      signal:
+        signal != null
+          ? AbortSignal.any([AbortSignal.timeout(10_000), signal])
+          : AbortSignal.timeout(10_000),
+    });
+    if (resp.ok) return finish("delivered", null);
+    // A definitive refusal (the origin holds another answer, the task is gone
+    // there, the result is not its executor's) — retrying changes nothing.
+    if (resp.status >= 400 && resp.status < 500 && resp.status !== 429) {
+      return finish("refused", `HTTP ${resp.status}`);
+    }
+    error = `HTTP ${resp.status}`;
+  } catch (err: unknown) {
+    // Aborted by the relay's shutdown, not refused by the origin: the row is
+    // left exactly as it was, retried after the restart.
+    if (signal?.aborted === true) return "pending";
+    error = err instanceof Error ? err.message : String(err);
+  }
+  const attempts = row.attempts + 1;
+  if (attempts >= row.max_attempts) return finish("exhausted", error);
+  const next = Date.now() + nextRetryDelay(attempts - 1, retryPolicy);
+  db.prepare(
+    `UPDATE relay_result_deliveries SET attempts = ?, next_attempt_at = ?, last_error = ?
+     WHERE task_id = ? AND status = 'pending'`,
+  ).run(attempts, next, error, taskId);
+  logger.info("federation.result_delivery_scheduled", {
+    correlationId: taskId,
+    peer: row.peer_relay_id,
+    attempt: attempts,
+    nextAttemptAt: next,
+    error,
+  });
+  return "pending";
+}
+
+/** Retry every due pending result delivery (the supervised recovery loop). */
+export async function processResultDeliveries(
+  db: DatabaseDriver,
+  relayIdentity: RelayIdentity,
+  agentKeyFor: (motebitId: string) => string | null,
+  now: number = Date.now(),
+  /** Checked before each delivery (the freeze, the shutdown); `signal` aborts the one in flight. */
+  ctl: { signal?: AbortSignal; shouldStop?: () => boolean } = {},
+): Promise<number> {
+  const due = db
+    .prepare(
+      "SELECT task_id FROM relay_result_deliveries WHERE status = 'pending' AND next_attempt_at <= ? ORDER BY next_attempt_at LIMIT 200",
+    )
+    .all(now) as Array<{ task_id: string }>;
+  let delivered = 0;
+  for (const d of due) {
+    if (ctl.shouldStop?.() === true || ctl.signal?.aborted === true) break;
+    const status = await attemptResultDelivery(
+      db,
+      relayIdentity,
+      d.task_id,
+      agentKeyFor,
+      DEFAULT_RETRY_POLICY,
+      ctl.signal,
+    );
+    if (status === "delivered") delivered++;
+  }
+  return delivered;
 }
 
 /** Start the settlement retry loop. Returns the interval handle for cleanup. */
@@ -2388,9 +2551,13 @@ export function registerFederationRoutes(deps: FederationDeps): void {
       return c.json({ task_id: body.task_id, status: "duplicate" }, 409);
     }
     if (result.status === "rejected") {
-      // A proof already bound to another task here (#918) is a conflict,
-      // not a rate limit: retrying it later changes nothing.
-      const rejectedStatus = result.reason === "p2p_proof_already_admitted" ? 409 : 429;
+      // A proof already bound to another task here (#918), or a task id
+      // that already means something here (#890 r7), is a conflict, not a
+      // rate limit: retrying it later changes nothing.
+      const rejectedStatus =
+        result.reason === "p2p_proof_already_admitted" || result.reason === "task_id_in_use"
+          ? 409
+          : 429;
       return c.json(
         { task_id: body.task_id, status: "rejected", reason: result.reason },
         rejectedStatus,

@@ -34,7 +34,7 @@ Fixed through it:
   refund now pays the allocation's hold payer, read from the ledger; an
   allocation with no single hold payer is flagged, never paid or retired.
 
-Migrations: v51 `allocation_escrow_chokepoint` adds `relay_transactions.allocation_id`
+Migrations: v55 `allocation_escrow_chokepoint` adds `relay_transactions.allocation_id`
 / `allocation_kind`, `relay_federation_settlements.allocation_id` / `status`
 (existing forwards: `failed` if a retry failed, `pending` if one is pending,
 otherwise `delivered`), `relay_allocations.review_reason`, and the append-only
@@ -44,5 +44,5 @@ credits and dispute rows with the allocation they moved, flags for operator
 review (`review_reason`) an allocation a legacy cross-allocation dispute touched
 (both allocations when a row is ambiguous) or one left released behind a failed
 forward, and installs the guard triggers. Gate `check-allocation-money-chokepoint`
-(invariant #168) keeps the chokepoint the only writer and the dispute
+(invariant #169) keeps the chokepoint the only writer and the dispute
 conservation harness at least as wide as its kinds.

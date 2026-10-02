@@ -593,7 +593,7 @@ const WRITERS: readonly Writer[] = [
     count: 1,
     principal:
       MIGRATION +
-      " (v51: `review_reason`, the operator-visible flag on an allocation a legacy row could not be attributed to cleanly — a marker, never an identity column)",
+      " (v55: `review_reason`, the operator-visible flag on an allocation a legacy row could not be attributed to cleanly — a marker, never an identity column)",
   },
   {
     file: R + "allocation-escrow.ts",
@@ -618,7 +618,7 @@ const WRITERS: readonly Writer[] = [
     count: 4,
     principal:
       LOOP +
-      ": a forward's lifecycle — `delivered` on the peer's acknowledgement (settlement retry loop), `failed` on retry exhaustion (in the refund's transaction) — and the v51 migration's stamp/status backfill; never the identity columns",
+      ": a forward's lifecycle — `delivered` on the peer's acknowledgement (settlement retry loop), `failed` on retry exhaustion (in the refund's transaction) — and the v55 migration's stamp/status backfill; never the identity columns",
   },
   {
     file: R + "allocation-escrow.ts",
@@ -627,7 +627,7 @@ const WRITERS: readonly Writer[] = [
     count: 3,
     principal:
       MIGRATION +
-      " (v51: stamps existing settlement credits and dispute rows with the allocation they moved — `allocation_id` / `allocation_kind` only, never the account)",
+      " (v55: stamps existing settlement credits and dispute rows with the allocation they moved — `allocation_id` / `allocation_kind` only, never the account)",
   },
   {
     file: R + "tasks.ts",
@@ -993,10 +993,11 @@ const WRITERS: readonly Writer[] = [
   },
   {
     file: R + "task-queue.ts",
-    verb: "REPLACE",
+    verb: "INSERT",
     table: "relay_task_queue",
     count: 1,
-    principal: "the durable mirror of an in-memory task entry the task routes already authorized",
+    principal:
+      "the durable mirror of an in-memory task entry the task routes already authorized — inserted once, unanswered (#890 r9: a live row is written by the version-checked UPDATE, never replaced)",
   },
   {
     file: R + "task-queue.ts",
@@ -1216,7 +1217,7 @@ const REFILE_ALLOWED: ReadonlyArray<{ file: string; table: string; reason: strin
     file: R + "task-queue.ts",
     table: "relay_task_queue",
     reason:
-      "the durable mirror re-writes `worker_id = task.motebit_id`, the task's own fixed target (the same value its INSERT wrote), never another identity",
+      "the durable mirror re-writes `worker_id = task.motebit_id` and `submitter_id = submitted_by`, the task's own fixed target and submitter (the values its INSERT wrote — the pre-#890-r9 INSERT OR REPLACE re-wrote the same two), never another identity",
   },
 ];
 

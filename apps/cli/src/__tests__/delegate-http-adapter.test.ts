@@ -8,7 +8,10 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { DeviceCapability, StepStatus } from "@motebit/sdk";
-import type { PlanStep, PlanId } from "@motebit/sdk";
+import type { PlanStep, PlanId, MotebitId, SensitivityCleared } from "@motebit/sdk";
+import { PlanStatus } from "@motebit/sdk";
+import type { MotebitLoopDependencies } from "@motebit/ai-core";
+import { PlanEngine, InMemoryPlanStore } from "@motebit/planner";
 import {
   createHttpPollingDelegationAdapter,
   DelegationUndeterminedError,
@@ -135,7 +138,7 @@ describe("delegate --plan HTTP-polling adapter: retries never double-admit a tas
     expect(relay.admittedCount()).toBe(1);
   });
 
-  it("the relay says the step's own task is gone (404): terminal for it — new key, its worker excluded", async () => {
+  it("#890 r4: the relay no longer knows the step's task (404): UNKNOWN — held on that key, never a new task", async () => {
     const adapter = makeAdapter();
     relay.answerWith((id) =>
       id === "task-1"
@@ -146,33 +149,69 @@ describe("delegate --plan HTTP-polling adapter: retries never double-admit a tas
           },
     );
     const p = adapter.delegateStep(step, TIMEOUT);
+    p.catch(() => {});
     await vi.advanceTimersByTimeAsync(TIMEOUT);
 
-    const r = await p;
-    expect(r.task_id).toBe("task-2");
-    expect(relay.keys).toHaveLength(2);
-    expect(relay.keys[1]).not.toBe(relay.keys[0]);
-    expect(relay.bodies[1]!.exclude_agents).toEqual(["worker-task-1"]);
+    await expect(p).rejects.toBeInstanceOf(DelegationUndeterminedError);
+    expect(relay.keys).toHaveLength(1);
+    expect(relay.admittedCount()).toBe(1);
   });
 
-  it("counts attempts, not excluded agents, when it gives up", async () => {
+  it("counts attempts when every answer is a signed failure", async () => {
     const adapter = makeAdapter();
-    // Each task is gone with no routed worker to exclude.
-    relay.answerWith(() => ({ status: 404, body: {} }));
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async (url: string, init?: RequestInit) => {
-        const resp = await relay.fetchMock(url, init);
-        if (init?.method !== "POST") return resp;
-        const body = (await resp.json()) as { task_id: string };
-        return new Response(JSON.stringify({ task_id: body.task_id }), { status: 201 });
-      }),
-    );
+    relay.answerWith((id) => ({
+      status: 200,
+      body: { task: { status: "failed" }, receipt: receipt(id, "failed", `worker-${id}`) },
+    }));
     const p = adapter.delegateStep(step, TIMEOUT);
     p.catch(() => {});
     await vi.advanceTimersByTimeAsync(3 * TIMEOUT);
 
     await expect(p).rejects.toThrow(/Delegation failed after 2 attempt\(s\)/);
+  });
+
+  it("#890 r4: a 5xx on submission is not a refusal — same key again, then undetermined", async () => {
+    const keys: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (_url: string, init?: RequestInit) => {
+        keys.push((init?.headers as Record<string, string>)["Idempotency-Key"]!);
+        return new Response("boom", { status: 503 });
+      }),
+    );
+    const p = makeAdapter().delegateStep(step, TIMEOUT);
+    p.catch(() => {});
+    await vi.advanceTimersByTimeAsync(3 * TIMEOUT);
+    await expect(p).rejects.toBeInstanceOf(DelegationUndeterminedError);
+    expect(keys).toHaveLength(2);
+    expect(new Set(keys).size).toBe(1);
+  });
+
+  it("#890 r4: rotation starts from the step's current one, and is reported before the new submission", async () => {
+    const adapter = makeAdapter();
+    relay.answerWith((id) =>
+      id === "task-1"
+        ? {
+            status: 200,
+            body: { task: { status: "failed" }, receipt: receipt(id, "failed", `worker-${id}`) },
+          }
+        : {
+            status: 200,
+            body: { task: { status: "completed" }, receipt: receipt(id, "completed") },
+          },
+    );
+    const rotations: Array<{ rotation: number; keysSoFar: number }> = [];
+    const p = adapter.delegateStep(
+      { ...step, retry_count: 2 },
+      TIMEOUT,
+      undefined,
+      undefined,
+      (r) => rotations.push({ rotation: r, keysSoFar: relay.keys.length }),
+    );
+    await vi.advanceTimersByTimeAsync(3 * TIMEOUT);
+    await p;
+    expect(relay.keys).toEqual(["plan-step:plan-1:step-1:2", "plan-step:plan-1:step-1:3"]);
+    expect(rotations).toEqual([{ rotation: 3, keysSoFar: 1 }]);
   });
 
   it("a task that genuinely FAILED retries as a new task: new key, the failed worker excluded", async () => {
@@ -181,7 +220,7 @@ describe("delegate --plan HTTP-polling adapter: retries never double-admit a tas
       id === "task-1"
         ? {
             status: 200,
-            body: { task: { status: "failed" }, receipt: receipt(id, "failed", "bad") },
+            body: { task: { status: "failed" }, receipt: receipt(id, "failed", `worker-${id}`) },
           }
         : {
             status: 200,
@@ -195,7 +234,7 @@ describe("delegate --plan HTTP-polling adapter: retries never double-admit a tas
     expect(r.task_id).toBe("task-2");
     expect(relay.keys).toHaveLength(2);
     expect(relay.keys[1]).not.toBe(relay.keys[0]);
-    expect(relay.bodies[1]!.exclude_agents).toEqual(["bad"]);
+    expect(relay.bodies[1]!.exclude_agents).toEqual(["worker-task-1"]);
   });
 
   it("a receipt landing right at the deadline is taken, not resubmitted", async () => {
@@ -340,5 +379,158 @@ describe("delegate --plan HTTP-polling adapter: an unconfirmed submission keeps 
     await vi.advanceTimersByTimeAsync(TIMEOUT);
     await p;
     expect(persisted).toEqual(["task-1"]);
+  });
+
+  it("#890 r3: the Idempotency-Key is derived from the step, so two drivers present one key", async () => {
+    vi.stubGlobal("fetch", relay.fetchMock);
+    relay.answerWith(done);
+    const a = makeAdapter().delegateStep(step, TIMEOUT);
+    const b = makeAdapter().delegateStep(step, TIMEOUT);
+    await vi.advanceTimersByTimeAsync(TIMEOUT);
+    await Promise.all([a, b]);
+    expect(relay.keys).toEqual(["plan-step:plan-1:step-1:0", "plan-step:plan-1:step-1:0"]);
+    expect(relay.admittedCount()).toBe(1);
+  });
+
+  it("#890 r3: a 409 that names the task (#888) hands over that task", async () => {
+    let posts = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        if (init?.method === "POST") {
+          posts++;
+          return new Response(JSON.stringify({ code: "TASK_CONFLICT", task_id: "task-named" }), {
+            status: 409,
+          });
+        }
+        return relay.fetchMock(url, init);
+      }),
+    );
+    relay.answerWith(done);
+    const persisted: string[] = [];
+    const p = makeAdapter().delegateStep(step, TIMEOUT, (id) => persisted.push(id));
+    await vi.advanceTimersByTimeAsync(TIMEOUT);
+    const r = await p;
+    expect(r.task_id).toBe("task-named");
+    expect(persisted).toEqual(["task-named"]);
+    expect(posts).toBe(1);
+  });
+});
+
+describe("#890 r4 T4: the http adapter re-posts a held step through the plan engine", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("a step held with no task id (offline at submit) is re-posted under its derived key on resume", async () => {
+    const relay = fakeRelay();
+    relay.answerWith((id) => ({
+      status: 200,
+      body: { task: { status: "completed" }, receipt: receipt(id, "completed") },
+    }));
+    vi.stubGlobal("fetch", relay.fetchMock);
+    const store = new InMemoryPlanStore();
+    store.savePlan({
+      plan_id: "plan-1" as PlanId,
+      goal_id: "g",
+      motebit_id: "me" as MotebitId,
+      title: "t",
+      status: PlanStatus.Active,
+      created_at: 1,
+      updated_at: 1,
+      current_step_index: 0,
+      total_steps: 1,
+    });
+    store.saveStep({
+      ...step,
+      required_capabilities: ["stdio_mcp" as never],
+      status: StepStatus.Running,
+      started_at: Date.now(),
+    });
+    const engine = new PlanEngine(store, {
+      delegationAdapter: createHttpPollingDelegationAdapter({
+        relayUrl: "http://relay",
+        motebitId: "me",
+        submitHeaders: {},
+        queryHeaders: async () => ({}),
+        maxRetries: 1,
+        pollIntervalMs: 1,
+      }),
+      localCapabilities: [],
+      enableReflection: false,
+      delegationTimeoutMs: 50,
+    });
+    const types: string[] = [];
+    for await (const c of engine.resumePlan(
+      "plan-1",
+      {} as SensitivityCleared<MotebitLoopDependencies>,
+    )) {
+      types.push(c.type);
+    }
+    expect(types).toContain("plan_completed");
+    expect(relay.keys).toEqual(["plan-step:plan-1:step-1:0"]);
+  });
+});
+
+describe("#890 r5: the http adapter adopts a named task and rotates only on the routed worker's failure", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  });
+
+  it("a post-admission 402 naming task-1 is adoption: no rotation, task-1 settles", async () => {
+    const keys: string[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        if (init?.method === "POST") {
+          keys.push((init.headers as Record<string, string>)["Idempotency-Key"]!);
+          return new Response(JSON.stringify({ error: "402", task_id: "task-1" }), { status: 402 });
+        }
+        return new Response(
+          JSON.stringify({ receipt: receipt(String(url).split("/").pop()!, "completed") }),
+          { status: 200 },
+        );
+      }),
+    );
+    const p = makeAdapter().delegateStep(step, TIMEOUT);
+    await vi.advanceTimersByTimeAsync(TIMEOUT);
+    const r = await p;
+    expect(r.task_id).toBe("task-1");
+    expect(new Set(keys)).toEqual(new Set(["plan-step:plan-1:step-1:0"]));
+  });
+
+  it("a failed receipt signed by someone other than the routed worker is not evidence: held, one key", async () => {
+    const relay = fakeRelay();
+    relay.answerWith((id) => ({
+      status: 200,
+      body: { task: { status: "failed" }, receipt: receipt(id, "failed", "evil-worker") },
+    }));
+    vi.stubGlobal("fetch", relay.fetchMock);
+    const p = makeAdapter().delegateStep(step, TIMEOUT);
+    p.catch(() => {});
+    await vi.advanceTimersByTimeAsync(3 * TIMEOUT);
+    await expect(p).rejects.toBeInstanceOf(DelegationUndeterminedError);
+    expect(new Set(relay.keys).size).toBe(1);
+  });
+
+  it("a receipt bound to another task settles nothing: held, one key", async () => {
+    const relay = fakeRelay();
+    relay.answerWith(() => ({
+      status: 200,
+      body: {
+        task: { status: "failed" },
+        receipt: receipt("task-elsewhere", "failed", "worker-task-1"),
+      },
+    }));
+    vi.stubGlobal("fetch", relay.fetchMock);
+    const p = makeAdapter().delegateStep(step, TIMEOUT);
+    p.catch(() => {});
+    await vi.advanceTimersByTimeAsync(3 * TIMEOUT);
+    await expect(p).rejects.toBeInstanceOf(DelegationUndeterminedError);
+    expect(new Set(relay.keys).size).toBe(1);
   });
 });

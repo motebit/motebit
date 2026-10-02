@@ -17,5 +17,5 @@ prior dispute rows) and, per account, what the worker leg was actually paid.
 Pre-settlement it moves at most the remaining escrow, to the hold payer and the
 allocation's worker; post-settlement it reverses at most what was paid, from the
 account the ledger shows received it. Any ledger row already referenced to a
-dispute of the allocation counts as a prior fund action, and migration 50
+dispute of the allocation counts as a prior fund action, and migration 54
 backfills `relay_dispute_fund_actions` from disputes already final.

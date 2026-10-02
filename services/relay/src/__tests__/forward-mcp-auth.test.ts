@@ -76,6 +76,7 @@ describe("forwardTaskViaMcp — non-2xx is loud, never silent", () => {
       undefined,
       async () => {
         receiptIngested = true;
+        return true;
       },
       "disp.token",
       { allowPrivateNetwork: true },

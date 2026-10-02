@@ -21,6 +21,12 @@ import { performMigration } from "@motebit/runtime";
 import { creditAccount } from "../accounts.js";
 import { AUTH_HEADER, API_TOKEN, createTestRelay } from "./test-helpers.js";
 
+// Source-relay URLs the destination may try to contact. Closed loopback ports:
+// every such fetch fails at once and offline (a real host would be refused by
+// the relay suite's network guard, `network-guard.setup.ts`).
+const SOURCE_RELAY_URL = "http://127.0.0.1:1";
+const UNREACHABLE_RELAY_URL = "http://127.0.0.1:2";
+
 // === Helpers ===
 
 async function registerAgent(relay: SyncRelay, motebitId: string, publicKeyHex: string) {
@@ -83,14 +89,7 @@ async function buildPinnedAcceptPayload(
       `INSERT INTO relay_peers (peer_relay_id, public_key, endpoint_url, display_name, state, nonce, missed_heartbeats, agent_count, trust_score, peer_protocol_version)
        VALUES (?, ?, ?, ?, 'active', ?, 0, 0, 0.5, ?)`,
     )
-    .run(
-      sourceRelayId,
-      bytesToHex(sourceKp.publicKey),
-      "http://source-relay",
-      "Source",
-      null,
-      "1.0",
-    );
+    .run(sourceRelayId, bytesToHex(sourceKp.publicKey), SOURCE_RELAY_URL, "Source", null, "1.0");
 
   // The migrating agent is sovereign — its motebit_id IS the commitment to its
   // key, so the destination can bind key↔id offline (§8.2 step 6). The agent
@@ -107,7 +106,7 @@ async function buildPinnedAcceptPayload(
     token_id: opts.tokenId,
     motebit_id: motebitId,
     source_relay_id: sourceRelayId,
-    source_relay_url: "http://source-relay",
+    source_relay_url: SOURCE_RELAY_URL,
     issued_at: now,
     expires_at: now + 72 * 60 * 60 * 1000,
     suite: "motebit-jcs-ed25519-b64-v1" as const,
@@ -116,7 +115,7 @@ async function buildPinnedAcceptPayload(
     attestation_id: `att-${opts.tokenId}`,
     motebit_id: motebitId,
     source_relay_id: sourceRelayId,
-    source_relay_url: "http://source-relay",
+    source_relay_url: SOURCE_RELAY_URL,
     first_seen: now - 86_400_000,
     last_active: now,
     trust_level: "verified",
@@ -804,7 +803,7 @@ describe("Migration: accept-migration (destination)", () => {
           token_id: `unverifiable-${now}`,
           motebit_id: "ghost-agent",
           source_relay_id: "unknown-relay",
-          source_relay_url: "http://unreachable:9999",
+          source_relay_url: UNREACHABLE_RELAY_URL,
           issued_at: now,
           expires_at: now + 72 * 60 * 60 * 1000,
           suite: "motebit-jcs-ed25519-b64-v1",
@@ -814,7 +813,7 @@ describe("Migration: accept-migration (destination)", () => {
           attestation_id: "att-ghost",
           motebit_id: "ghost-agent",
           source_relay_id: "unknown-relay",
-          source_relay_url: "http://unreachable:9999",
+          source_relay_url: UNREACHABLE_RELAY_URL,
           first_seen: now,
           last_active: now,
           trust_level: "unknown",
@@ -856,7 +855,7 @@ describe("Migration: accept-migration (destination)", () => {
           token_id: "expired-token",
           motebit_id: "expired-agent",
           source_relay_id: "src",
-          source_relay_url: "http://unreachable:9999",
+          source_relay_url: UNREACHABLE_RELAY_URL,
           issued_at: now - 100000,
           expires_at: now - 1000,
           signature: "deadbeef",
@@ -865,7 +864,7 @@ describe("Migration: accept-migration (destination)", () => {
           attestation_id: "att-expired",
           motebit_id: "expired-agent",
           source_relay_id: "src",
-          source_relay_url: "http://unreachable:9999",
+          source_relay_url: UNREACHABLE_RELAY_URL,
           first_seen: now,
           last_active: now,
           trust_level: "unknown",
@@ -918,7 +917,9 @@ describe("Migration: accept-migration (destination)", () => {
 describe("Migration: end-to-end (performMigration across two relays)", () => {
   let source: SyncRelay;
   let dest: SyncRelay;
-  const SOURCE = "http://source.test";
+  // A closed loopback port: the destination's own fetch of the source fails
+  // at once, offline (the relay suite's network guard refuses a real host).
+  const SOURCE = "http://127.0.0.1:3";
   const DEST = "http://dest.test";
 
   beforeEach(async () => {

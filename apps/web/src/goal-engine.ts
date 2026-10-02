@@ -47,7 +47,8 @@ export interface GoalRunRecord {
   goal_id: string;
   started_at: number;
   finished_at: number | null;
-  status: "running" | "fired" | "skipped" | "error";
+  /** `awaiting_result` (#890): stopped on a paid delegation whose outcome is unknown. */
+  status: "running" | "fired" | "skipped" | "error" | "awaiting_result";
   response_preview?: string | null;
   error_message?: string | null;
   /** #885: a money warning from a hire in this fire (owner-facing only). */
@@ -98,7 +99,14 @@ export type GoalFireResult =
       paymentNotice?: string;
     }
   | { outcome: "skipped" }
-  | { outcome: "error"; error: string; tokensUsed?: number; paymentNotice?: string };
+  | { outcome: "error"; error: string; tokensUsed?: number; paymentNotice?: string }
+  /**
+   * #890: the fire stopped on a paid delegation whose outcome is unknown.
+   * Not a failure: a `once` goal stays active (running it again resumes
+   * the held plan, never a second payment), a recurring goal keeps its
+   * cadence, and nothing reads as an error.
+   */
+  | { outcome: "awaiting_result"; reason: string; paymentNotice?: string };
 
 // ── Engine ──────────────────────────────────────────────────────────────────
 
@@ -322,11 +330,22 @@ export function createGoalsEngine(
 
     const finishedAt = now();
     const runStatus: GoalRunRecord["status"] =
-      result.outcome === "fired" ? "fired" : result.outcome === "skipped" ? "skipped" : "error";
+      result.outcome === "fired"
+        ? "fired"
+        : result.outcome === "skipped"
+          ? "skipped"
+          : result.outcome === "awaiting_result"
+            ? "awaiting_result"
+            : "error";
     updateRun(runId, {
       finished_at: finishedAt,
       status: runStatus,
-      response_preview: result.outcome === "fired" ? (result.responsePreview ?? null) : null,
+      response_preview:
+        result.outcome === "fired"
+          ? (result.responsePreview ?? null)
+          : result.outcome === "awaiting_result"
+            ? result.reason
+            : null,
       error_message: result.outcome === "error" ? result.error : null,
       payment_notice: result.outcome === "skipped" ? null : (result.paymentNotice ?? null),
     });
@@ -379,6 +398,11 @@ export function createGoalsEngine(
       } else {
         patch.next_run_at = finishedAt + goal.interval_ms;
       }
+    } else if (result.outcome === "awaiting_result") {
+      // Never `failed`, never `last_error`: the owner reads why it waits.
+      patch.last_error = null;
+      patch.last_response_preview = result.reason;
+      if (goal.mode !== "once") patch.next_run_at = finishedAt + goal.interval_ms;
     }
     // `skipped` leaves next_run_at alone — next tick retries.
     // After accumulating, re-evaluate the cap. Recurring goals that

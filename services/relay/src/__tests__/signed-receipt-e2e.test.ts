@@ -239,6 +239,29 @@ describe("signed-receipt E2E — multi-hop chain archive", () => {
       kpC.privateKey,
       kpC.publicKey,
     );
+    // A nested child for a sub-task this relay never admitted: no door takes
+    // it as an answer (#890 r9), so it is archived only under its parent's
+    // namespaced key — and an audit read must still find it there.
+    const taskGone = crypto.randomUUID();
+    const receiptC2 = await signExecutionReceipt(
+      {
+        task_id: taskGone,
+        relay_task_id: taskGone,
+        motebit_id: agentC.motebitId as unknown as MotebitId,
+        public_key: bytesToHex(kpC.publicKey),
+        device_id: "c-device" as unknown as DeviceId,
+        submitted_at: Date.now() - 1000,
+        completed_at: Date.now(),
+        status: "completed" as const,
+        result: "unadmitted-result",
+        tools_used: [],
+        memories_formed: 0,
+        prompt_hash: await sha256(enc.encode("unadmitted")),
+        result_hash: await sha256(enc.encode("unadmitted-result")),
+      },
+      kpC.privateKey,
+      kpC.publicKey,
+    );
     const receiptB = await signExecutionReceipt(
       {
         task_id: taskAB,
@@ -254,7 +277,7 @@ describe("signed-receipt E2E — multi-hop chain archive", () => {
         memories_formed: 0,
         prompt_hash: await sha256(enc.encode("outer")),
         result_hash: await sha256(enc.encode("outer-result")),
-        delegation_receipts: [receiptC],
+        delegation_receipts: [receiptC, receiptC2],
       },
       kpB.privateKey,
       kpB.publicKey,
@@ -301,6 +324,14 @@ describe("signed-receipt E2E — multi-hop chain archive", () => {
       hexToBytes(reconstructedC.public_key!),
     );
     expect(validC).toBe(true);
+
+    // Row 3: the unadmitted nested child, found under its namespaced key.
+    const fetchC2 = await relay.app.request(
+      `/api/v1/admin/receipts/${agentC.motebitId}/${taskGone}`,
+      { headers: AUTH },
+    );
+    expect(fetchC2.status).toBe(200);
+    expect(await fetchC2.text()).toBe(canonicalJson(receiptC2));
 
     // The two rows really are distinct (motebit_id, task_id) pairs. Cross-
     // verification fails — C's receipt does NOT verify against B's key.

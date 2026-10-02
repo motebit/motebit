@@ -2430,6 +2430,142 @@ export const relayMigrations: Migration[] = [
   },
   {
     version: 50,
+    name: "task_routes",
+    up: (db) => {
+      // WHO the relay handed each task to (#890 round 6): the relay's single
+      // durable source of truth for "who may answer task X". One row per
+      // (task, executor, via-peer) — a task can be presented to several
+      // executors (the path agent's own devices, a ranked worker, a peer
+      // relay's worker). Written at every hand-off; read by every
+      // receipt-ingestion door and by the receipt archive. Outlives the
+      // queue entry, which is evicted minutes after a receipt. via_peer is
+      // '' for a local executor, else the peer relay the task was forwarded
+      // through (a federated result is accepted only from that peer).
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS relay_task_routes (
+          task_id     TEXT NOT NULL,
+          executor_id TEXT NOT NULL,
+          via_peer    TEXT NOT NULL DEFAULT '',
+          created_at  INTEGER NOT NULL,
+          PRIMARY KEY (task_id, executor_id, via_peer)
+        );
+        CREATE INDEX IF NOT EXISTS idx_relay_task_routes_created
+          ON relay_task_routes(created_at);
+      `);
+    },
+  },
+  {
+    version: 51,
+    name: "task_routes_origin",
+    up: (db) => {
+      // WHOSE hand-off each route records (#890 round 7): 'admission' — this
+      // relay admitted the task for its own key owner and handed it on — or
+      // 'inbound_forward' — a peer forwarded it here and this relay handed
+      // it to its own agent. A key owner is answered only by a route of its
+      // own admission; a peer chooses the ids it forwards, so an inbound
+      // route under a re-used id must never stand as the owner's executor.
+      //
+      // Existing v50 rows default to 'admission', which is what they are:
+      // v50 ships in the same change as this migration, and the only writer
+      // of a non-admission route is an inbound forward from an ACTIVE peer —
+      // a relay with no active peers holds only its own admissions' routes.
+      // A row that IS still identifiable as inbound (its task is queued as
+      // an inbound forward: `origin_relay` set, executor = that entry's
+      // agent) is relabelled. An inbound row whose queue entry is already
+      // gone stays 'admission', and can answer only an owner whose own key
+      // admitted that same id — which, since v51 refuses a colliding
+      // forward, only a forward accepted before v51 could have produced.
+      // Re-runnable (an upgrade test replays migrations over a live DB).
+      const cols = db.prepare("PRAGMA table_info(relay_task_routes)").all() as Array<{
+        name: string;
+      }>;
+      if (!cols.some((c) => c.name === "origin")) {
+        db.exec(
+          "ALTER TABLE relay_task_routes ADD COLUMN origin TEXT NOT NULL DEFAULT 'admission'",
+        );
+      }
+      const hasQueue =
+        db
+          .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'relay_task_queue'")
+          .get() != null;
+      if (hasQueue) {
+        db.exec(`
+          UPDATE relay_task_routes SET origin = 'inbound_forward'
+           WHERE via_peer = ''
+             AND EXISTS (
+               SELECT 1 FROM relay_task_queue q
+                WHERE q.task_id = relay_task_routes.task_id
+                  AND json_valid(q.task_json)
+                  AND json_extract(q.task_json, '$.origin_relay') IS NOT NULL
+                  AND json_extract(q.task_json, '$.task.motebit_id') = relay_task_routes.executor_id
+             )
+        `);
+      }
+    },
+  },
+  {
+    version: 52,
+    name: "task_routes_from_peer",
+    up: (db) => {
+      // WHICH peer's forward an inbound route records (#890 round 8): the
+      // inbound door answers `duplicate` (a retry: held, never run twice)
+      // only to the peer whose own forward holds the id; any other peer
+      // re-using it gets a collision (`rejected`/`task_id_in_use`) and so
+      // clears its planned peer instead of waiting on a door this relay never
+      // opened for it. '' on `admission` routes, and on inbound routes
+      // written before this migration — those name no peer and are refused
+      // to every peer (fail-closed).
+      //
+      // Deploy-straddle (the v51 relabel, P2 of round 8): v50, v51 and v52
+      // first apply in ONE migration run (none is on main before this
+      // change), so relay_task_routes is empty when v51 relabels and when
+      // this column is added — no pre-deploy inbound route exists to be
+      // mislabelled 'admission'. Only a relay that ran an unreleased build
+      // of this branch could hold one; it stays 'admission' with no
+      // from_peer (refused to every peer as an inbound id, answerable only
+      // by an own admission's recorded executor).
+      const cols = db.prepare("PRAGMA table_info(relay_task_routes)").all() as Array<{
+        name: string;
+      }>;
+      if (!cols.some((c) => c.name === "from_peer")) {
+        db.exec("ALTER TABLE relay_task_routes ADD COLUMN from_peer TEXT NOT NULL DEFAULT ''");
+      }
+    },
+  },
+  {
+    version: 53,
+    name: "result_deliveries",
+    up: (db) => {
+      // The executor relay's federation result OUTBOX (#890 round 10). A task
+      // a peer forwarded here is answered by this relay's agent; the answer
+      // goes back to the origin by `POST /federation/v1/task/result`, and the
+      // origin settles the task only on it. One send, best-effort, left the
+      // origin waiting for a retry that never came when it was down. A row
+      // is written before the first send and retried (supervised, bounded,
+      // backoff) until the origin acknowledges (2xx), refuses definitively
+      // (4xx), or the attempts run out. Keyed by the task: one result per
+      // task. The body is rebuilt from the archived answer at each attempt.
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS relay_result_deliveries (
+          task_id         TEXT PRIMARY KEY,
+          peer_relay_id   TEXT NOT NULL,
+          attempts        INTEGER NOT NULL DEFAULT 0,
+          max_attempts    INTEGER NOT NULL DEFAULT 12,
+          next_attempt_at INTEGER NOT NULL,
+          status          TEXT NOT NULL DEFAULT 'pending',
+          last_error      TEXT,
+          created_at      INTEGER NOT NULL,
+          delivered_at    INTEGER
+        );
+        CREATE INDEX IF NOT EXISTS idx_relay_result_deliveries_due
+          ON relay_result_deliveries(status, next_attempt_at);
+      `);
+    },
+  },
+  {
+    // Was v50 on the unreleased dispute-filer-authority branch; renumbered
+    // after main's v50–v53 (task routes, result deliveries).
+    version: 54,
     name: "dispute_fund_actions_backfill",
     up: (db) => {
       // C2 — relay_dispute_fund_actions (the write-once claim of an
@@ -2455,7 +2591,7 @@ export const relayMigrations: Migration[] = [
     },
   },
   {
-    version: 51,
+    version: 55,
     name: "allocation_escrow_chokepoint",
     up: (db) => {
       // Allocation escrow (allocation-escrow.ts): every movement of

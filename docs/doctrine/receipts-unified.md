@@ -7,7 +7,7 @@ Motebit's signed-receipt surface is three types in three packages, unified by on
 | Type                      | Signed by                                   | Granularity                                          | Spec                                                                                     | Owner               |
 | ------------------------- | ------------------------------------------- | ---------------------------------------------------- | ---------------------------------------------------------------------------------------- | ------------------- |
 | `ExecutionReceipt`        | Agent (motebit identity)                    | Per-task / per-goal                                  | [`spec/execution-ledger-v1.md`](../../spec/execution-ledger-v1.md)                       | `@motebit/protocol` |
-| `ToolInvocationReceipt`   | Agent (motebit identity)                    | Per-tool-call                                        | [`spec/execution-ledger-v1.md`](../../spec/execution-ledger-v1.md) §4                    | `@motebit/protocol` |
+| `ToolInvocationReceipt`   | Agent (motebit identity)                    | Per-tool-call                                        | [`packages/protocol/src/index.ts`](../../packages/protocol/src/index.ts) (no spec yet)   | `@motebit/protocol` |
 | `ContentArtifactManifest` | Relay identity **or** agent (`goal-result`) | Per-bundle (state export) / per-fire (`goal-result`) | [`packages/protocol/src/artifact-type.ts`](../../packages/protocol/src/artifact-type.ts) | `@motebit/protocol` |
 
 Three distinct types with three distinct attestation roles. They are NOT redundant — each answers a different question:
@@ -90,5 +90,5 @@ The three receipts are the family's core, but the same JCS + Ed25519 + suite-dis
 - [`protocol-primacy.md`](protocol-primacy.md) — receipts are protocol-level, available to every motebit regardless of subscription. The convenience-tier may extend retention; it cannot gate the existence.
 - [`nist-alignment.md`](nist-alignment.md) — receipt verification is one of the eight asks the NCCoE submission shipped against; structurally bound to code via `check-execution-ledger-receipts-archived` (#89) and `check-execution-ledger-inner-receipt-verified`.
 - [`services/relay/CLAUDE.md`](../../services/relay/CLAUDE.md) rule 11 (`relay_receipts.receipt_json` append-only byte-identical) + rule 17 (`state-export.ts` envelope signing via `emitSignedExport`).
-- [`spec/execution-ledger-v1.md`](../../spec/execution-ledger-v1.md) — the canonical wire spec for `ExecutionReceipt` + `ToolInvocationReceipt`.
+- [`spec/execution-ledger-v1.md`](../../spec/execution-ledger-v1.md) — the canonical wire spec for `ExecutionReceipt` (§11); `ToolInvocationReceipt` has no spec section yet — its canonical shape is the type in `@motebit/protocol`.
 - [`packages/protocol/src/artifact-type.ts`](../../packages/protocol/src/artifact-type.ts) — the canonical artifact-type registry for `ContentArtifactManifest`.

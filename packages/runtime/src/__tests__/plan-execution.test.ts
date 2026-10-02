@@ -418,3 +418,109 @@ describe("MotebitRuntime plan execution with custom PlanStoreAdapter", () => {
     expect(chunks.some((c) => c.type === "plan_completed")).toBe(true);
   });
 });
+
+describe("#890: executePlan never re-plans a goal whose delegated step has an unknown paid outcome", () => {
+  function heldPlan(planStore: InMemoryPlanStore, taskId: string | null): void {
+    planStore.savePlan({
+      plan_id: "plan-held",
+      goal_id: "goal-890",
+      motebit_id: "held-test",
+      title: "Held plan",
+      status: PlanStatus.Active,
+      created_at: Date.now(),
+      updated_at: Date.now(),
+      current_step_index: 0,
+      total_steps: 1,
+    });
+    planStore.saveStep({
+      step_id: "step-held",
+      plan_id: "plan-held",
+      ordinal: 0,
+      description: "Hire for it",
+      prompt: "remote work",
+      depends_on: [],
+      optional: false,
+      required_capabilities: ["stdio_mcp" as never],
+      status: StepStatus.Running,
+      result_summary: null,
+      error_message: "Submission unconfirmed",
+      tool_calls_made: 0,
+      started_at: Date.now() - 1000,
+      completed_at: null,
+      retry_count: 0,
+      updated_at: Date.now(),
+      ...(taskId != null ? { delegation_task_id: taskId } : {}),
+    });
+  }
+
+  function runtimeWith(planStore: InMemoryPlanStore): {
+    runtime: MotebitRuntime;
+    provider: StreamingProvider;
+    delegateStep: ReturnType<typeof vi.fn>;
+    poll: ReturnType<typeof vi.fn>;
+  } {
+    vi.clearAllMocks();
+    const provider = createMockProvider();
+    const runtime = new MotebitRuntime(
+      { motebitId: "held-test", tickRateHz: 0 },
+      {
+        storage: { ...createInMemoryStorage(), planStore },
+        renderer: new NullRenderer(),
+        ai: provider,
+      },
+    );
+    const delegateStep = vi.fn();
+    const poll = vi.fn().mockResolvedValue(null);
+    runtime.setDelegationAdapter({ delegateStep, pollTaskResult: poll });
+    return { runtime, provider, delegateStep, poll };
+  }
+
+  it("resumes the held plan — polls the relay, holds, and neither decomposes nor delegates again", async () => {
+    const planStore = new InMemoryPlanStore();
+    heldPlan(planStore, "task-held");
+    const { runtime, provider, delegateStep, poll } = runtimeWith(planStore);
+
+    const chunks = await collectChunks(runtime.executePlan("goal-890", "Hire for it"));
+
+    expect(chunks.map((c) => c.type)).toEqual(["plan_undetermined"]);
+    expect(poll).toHaveBeenCalledWith("task-held", "step-held");
+    expect(delegateStep).not.toHaveBeenCalled();
+    // No decomposition call: no new plan was made.
+    expect(
+      vi
+        .mocked(provider.generate)
+        .mock.calls.filter((c) => c[0].user_message.includes("Decompose this goal")),
+    ).toHaveLength(0);
+    expect(planStore.getPlan("plan-held")!.status).toBe(PlanStatus.Active);
+  });
+
+  it("holds a step with no task id without polling, and never delegates it again", async () => {
+    const planStore = new InMemoryPlanStore();
+    heldPlan(planStore, null);
+    const { runtime, delegateStep, poll } = runtimeWith(planStore);
+
+    const chunks = await collectChunks(runtime.executePlan("goal-890", "Hire for it"));
+
+    expect(chunks.map((c) => c.type)).toEqual(["plan_undetermined"]);
+    expect(poll).not.toHaveBeenCalled();
+    expect(delegateStep).not.toHaveBeenCalled();
+  });
+
+  it("settles the held step from the relay's receipt and finishes the plan", async () => {
+    const planStore = new InMemoryPlanStore();
+    heldPlan(planStore, "task-held");
+    const { runtime, delegateStep, poll } = runtimeWith(planStore);
+    poll.mockResolvedValue({
+      step_id: "step-held",
+      task_id: "task-held",
+      result_text: "the work",
+      receipt: { status: "completed", result: "the work" },
+    });
+
+    const chunks = await collectChunks(runtime.executePlan("goal-890", "Hire for it"));
+
+    expect(chunks.map((c) => c.type)).toContain("plan_completed");
+    expect(delegateStep).not.toHaveBeenCalled();
+    expect(planStore.getStep("step-held")!.status).toBe(StepStatus.Completed);
+  });
+});

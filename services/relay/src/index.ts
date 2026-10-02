@@ -109,6 +109,7 @@ import {
   registerFederationRoutes,
   startHeartbeatLoop,
   startSettlementRetryLoop,
+  processResultDeliveries,
 } from "./federation.js";
 import type { RelayIdentity } from "./federation.js";
 import { startRevocationHorizonLoop } from "./horizon.js";
@@ -159,7 +160,7 @@ import {
   type OnrampAdapter,
 } from "./onramp.js";
 import { registerOfframpRoutes, BridgeOfframpAdapter, type OfframpAdapter } from "./offramp.js";
-import { createTaskRouter } from "./task-routing.js";
+import { createTaskRouter, cleanupTaskRoutes } from "./task-routing.js";
 import { createDataSyncTables, registerDataSyncRoutes } from "./data-sync.js";
 import {
   createAccountTables,
@@ -185,9 +186,11 @@ import { registerAgentRoutes, registerAgentAuthMiddleware } from "./agents.js";
 import { registerHostRosterRoutes } from "./host-roster-routes.js";
 import { observeHostConnection, sweepHostLiveness } from "./host-roster-store.js";
 import { createFederationCallbacks } from "./federation-callbacks.js";
-import { registerTaskRoutes, TASK_TTL_MS } from "./tasks.js";
+import { recoverSettlements, SETTLEMENT_RECOVERY_CLOSE_BOUND_MS } from "./settlement-recovery.js";
+import type { SettlementRecoveryDeps, SettlementRecoveryReport } from "./settlement-recovery.js";
+import { registerTaskRoutes, TASK_TTL_MS, workerKeyFor } from "./tasks.js";
 import { ExpoPushAdapter } from "./push-adapter.js";
-import { TaskQueue } from "./task-queue.js";
+import { TaskQueue, installSettlementGuards } from "./task-queue.js";
 import {
   registerCommandRoutes,
   handleCommandResponse,
@@ -501,6 +504,18 @@ export interface SyncRelayConfig {
    */
   drainGraceMs?: number;
   /**
+   * The bound on how long `close()` waits for the network I/O boot started
+   * without awaiting (the x402 facilitator initialize, the deposit
+   * detector's boot tick, the Solana network warm-up). Past it that I/O is
+   * aborted (where its client supports it) and abandoned, and the database
+   * closes regardless: a peer that accepts and never answers must not hold
+   * a shutdown past Fly's `kill_timeout` (5 s). Default
+   * {@link SHUTDOWN_STARTUP_WORK_DEADLINE_MS} (2 s). Must be finite, positive
+   * and at most {@link MAX_SHUTDOWN_STARTUP_WORK_DEADLINE_MS} (30 s, the
+   * entry's force-exit); anything else throws a `RangeError` at construction.
+   */
+  shutdownDeadlineMs?: number;
+  /**
    * How long a runtime-side command (`POST /api/v1/agents/:id/command`)
    * waits for the runtime's answer before answering 504. Default 30000.
    * Held per relay — the route closure passes it into every forward — so
@@ -636,6 +651,20 @@ export interface SyncRelayConfig {
    */
   x402ChainReader?: import("./x402-settlements.js").X402ChainReader | null;
   /**
+   * The x402 facilitator client both consumers use (the settlement rail and
+   * the task-route middleware). Omitted: `createX402FacilitatorClient` — the
+   * one canonical construction (rule 16), which talks HTTP to the
+   * facilitator. Tests inject the in-process fake (`x402-fake-facilitator.ts`)
+   * so a test relay never reaches the network.
+   */
+  x402FacilitatorClient?: unknown;
+  /**
+   * The EVM RPC the deposit detector scans with. Omitted: JSON-RPC over
+   * `DEFAULT_RPC_URLS[x402.network]`; `null` disables the detector (tests —
+   * its boot tick is otherwise a real request to a public RPC).
+   */
+  depositDetectorRpc?: import("@motebit/evm-rpc").EvmRpcAdapter | null;
+  /**
    * Cadence (ms) of the supervised re-read of the Solana RPC's genesis hash
    * while the network is unresolved (#954, `solana-network.ts`). Default
    * `SOLANA_NETWORK_CHECK_INTERVAL_MS` (30s).
@@ -684,9 +713,54 @@ export interface SyncRelay {
   getConnectionCount(): number;
   /** Whether the relay is currently draining WebSocket connections. */
   isDraining: boolean;
+  /**
+   * Settlement recovery (#890 round 10): the boot pass, and one pass on
+   * demand (the supervised loop runs it every minute). Exposed for testing.
+   */
+  settlementRecovery: {
+    booted: Promise<SettlementRecoveryReport | null>;
+    sweep(opts?: { graceMs?: number; now?: number }): Promise<SettlementRecoveryReport>;
+  };
 }
 
 // === Factory ===
+
+/**
+ * Default bound on how long `close()` waits for boot's untracked network I/O
+ * (`SyncRelayConfig.shutdownDeadlineMs`). Well inside Fly's 5 s
+ * `kill_timeout`, so the database always closes before the machine is killed.
+ */
+export const SHUTDOWN_STARTUP_WORK_DEADLINE_MS = 2_000;
+/**
+ * The largest `shutdownDeadlineMs` accepted: `server.ts` force-exits at 30 s
+ * (`SHUTDOWN_TIMEOUT_MS`), so a longer bound could never be honoured.
+ */
+export const MAX_SHUTDOWN_STARTUP_WORK_DEADLINE_MS = 30_000;
+
+/** `shutdownDeadlineMs` or the default; refuses a value no shutdown could honour. */
+function validShutdownDeadlineMs(ms: number | undefined): number {
+  if (ms === undefined) return SHUTDOWN_STARTUP_WORK_DEADLINE_MS;
+  if (!Number.isFinite(ms) || ms <= 0 || ms > MAX_SHUTDOWN_STARTUP_WORK_DEADLINE_MS) {
+    throw new RangeError(
+      `shutdownDeadlineMs must be a finite number of milliseconds in ` +
+        `(0, ${MAX_SHUTDOWN_STARTUP_WORK_DEADLINE_MS}], got ${String(ms)}`,
+    );
+  }
+  return ms;
+}
+/** Of that deadline, the share left for aborted work to settle and log. */
+const SHUTDOWN_ABORT_GRACE_MS = 100;
+
+/** Whether `work` settles within `ms` — the timer never outlives the answer. */
+function settlesWithin(work: Promise<unknown>, ms: number): Promise<boolean> {
+  return new Promise<boolean>((resolve) => {
+    const timer = setTimeout(() => resolve(false), Math.max(0, ms));
+    void work.then(() => {
+      clearTimeout(timer);
+      resolve(true);
+    });
+  });
+}
 
 export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRelay> {
   const {
@@ -710,6 +784,26 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     operatorSolanaTransfer: operatorSolanaTransferOverride,
     platformFeeRate = parseFloatEnv("MOTEBIT_PLATFORM_FEE_RATE", 0.05),
   } = config;
+
+  // Async work boot starts but does not await (a warm-up read, a first loop
+  // tick, a facilitator handshake). close() waits for all of it — so on a
+  // healthy network no request, log line or database write outlives the
+  // relay that started it — but only up to `shutdownDeadlineMs`: past it,
+  // `shutdownSignal` aborts what can be aborted and the DB closes anyway.
+  const startupWork: Promise<unknown>[] = [];
+  const trackStartupWork = (work: Promise<unknown>): void => {
+    startupWork.push(work);
+  };
+  const shutdownController = new AbortController();
+  const shutdownDeadlineMs = validShutdownDeadlineMs(config.shutdownDeadlineMs);
+  /** `fetch` whose requests the relay's shutdown aborts (on top of the caller's own signal). */
+  const shutdownAwareFetch: typeof globalThis.fetch = (input, init) =>
+    globalThis.fetch(input, {
+      ...init,
+      signal: init?.signal
+        ? AbortSignal.any([init.signal, shutdownController.signal])
+        : shutdownController.signal,
+    });
 
   const stripeClient = stripeConfig ? new Stripe(stripeConfig.secretKey) : null;
   const subscriptionEventAdapter: SubscriptionEventAdapter | null =
@@ -782,9 +876,10 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
       // Single canonical adapter — chooses CDP vs default facilitator based on
       // env shape, fail-fast on mainnet misconfiguration. See x402-facilitator.ts.
       const { createX402FacilitatorClient } = await import("./x402-facilitator.js");
-      const facilitatorClient = (await createX402FacilitatorClient(
-        x402Config,
-      )) as ConstructorParameters<typeof X402SettlementRail>[0]["facilitatorClient"];
+      const facilitatorClient = (config.x402FacilitatorClient ??
+        (await createX402FacilitatorClient(x402Config))) as ConstructorParameters<
+        typeof X402SettlementRail
+      >[0]["facilitatorClient"];
       railRegistry.register(
         new X402SettlementRail({
           facilitatorClient,
@@ -1225,6 +1320,13 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     } catch {
       // Best-effort cleanup
     }
+    // Clean task routes past their horizon (7 days — beyond every reader's
+    // window; #890 r6, TASK_ROUTE_RETENTION_MS)
+    try {
+      cleanupTaskRoutes(moteDb.db);
+    } catch {
+      // Best-effort cleanup
+    }
     // Reclaim deleted pages (works with auto_vacuum = INCREMENTAL)
     try {
       moteDb.db.pragma("incremental_vacuum(100)");
@@ -1400,6 +1502,9 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
   const { registerDisputeRoutes, createDisputeTables, startDeferredOrchestrationWorker } =
     await import("./disputes.js");
   createDisputeTables(moteDb.db);
+  // The settlement guards again, now the dispute table exists: a dispute's
+  // resolution credits `settlement_credit` under the dispute id (#890 r9).
+  installSettlementGuards(moteDb.db);
   registerDisputeRoutes({
     db: moteDb.db,
     app,
@@ -1585,12 +1690,15 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
         ...(config.solanaNetworkTimeoutMs !== undefined
           ? { timeoutMs: config.solanaNetworkTimeoutMs }
           : {}),
+        shutdownSignal: shutdownController.signal,
       })
     : undefined;
   const solanaNetworkInterval = solanaNetwork
     ? startSolanaNetworkLoop(solanaNetwork, loopSupervisor, config.solanaNetworkCheckIntervalMs)
     : undefined;
-  void solanaNetwork?.resolve(); // warm-up; never awaited
+  // Warm-up; never awaited on the boot path. close() waits for it up to the
+  // shutdown deadline; a read still pending then is abandoned (and silent).
+  if (solanaNetwork) trackStartupWork(solanaNetwork.resolve());
   /** A payer chain that answers only once the relay's Solana network resolves. */
   const gatedPaymentChain = (
     chain: import("./p2p-payer.js").P2pPaymentChain | null,
@@ -2117,6 +2225,9 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     db: moteDb.db,
     chain: depositDetectorChain,
     supervisor: loopSupervisor,
+    ...(config.depositDetectorRpc !== undefined ? { rpc: config.depositDetectorRpc } : {}),
+    fetch: shutdownAwareFetch,
+    trackStartup: trackStartupWork,
   });
 
   // --- Treasury reconciliation (compares recorded x402 fees to onchain balance) ---
@@ -2369,7 +2480,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
   logger.info("relay.push_wake", { enabled: pushAdapter !== undefined });
 
   // --- Task routes (submission, polling, receipt settlement) ---
-  await registerTaskRoutes({
+  const taskRoutes = await registerTaskRoutes({
     app,
     outboundPolicy,
     moteDb,
@@ -2384,6 +2495,11 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     enableDeviceAuth,
     maxTasksPerSubmitter: MAX_TASKS_PER_SUBMITTER,
     x402Config: x402Config,
+    ...(config.x402FacilitatorClient !== undefined
+      ? { x402FacilitatorClient: config.x402FacilitatorClient }
+      : {}),
+    trackStartup: trackStartupWork,
+    shutdownSignal: shutdownController.signal,
     parseTokenPayloadUnsafe,
     verifySignedTokenForDevice: verifySignedTokenForDeviceWithFallback,
     isTokenBlacklisted,
@@ -2403,6 +2519,69 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
         ? config.p2pPaymentChain
         : gatedPaymentChain(paymentChainFromEnv()),
   });
+
+  // --- Settlement recovery (#890 round 10): supervised, on boot and every minute ---
+  // A claimed-but-unsettled answer (a crash or a failed step between the
+  // claim and the settle) is replayed through the door its claim was taken
+  // by — the one door routine decides it again; an inbound forward answered
+  // before the claim existed adopts it; owed federation results are
+  // redelivered until the origin acknowledges. One pass at a time, never a
+  // queue: a tick or sweep arriving while a pass is in flight joins it. The
+  // freeze is checked inside the pass (before each replay and delivery);
+  // `close()` aborts the pass's outbox fetch and waits for it, bounded.
+  const recoveryAbort = new AbortController();
+  const recoveryDeps: SettlementRecoveryDeps = {
+    db: moteDb.db,
+    taskQueue,
+    replayLocalAnswer: (taskId, door) => taskRoutes.replayLocalAnswer(taskId, door),
+    replayFederationResult: (v) => federationCallbacks.onTaskResultReceived(v),
+    deliverPendingResults: (now, ctl) =>
+      processResultDeliveries(
+        moteDb.db,
+        relayIdentity,
+        (signer) => workerKeyFor(moteDb.db, signer),
+        now,
+        ctl,
+      ),
+    isFrozen: () => getEmergencyFreeze(),
+  };
+  let recoveryInFlight: Promise<SettlementRecoveryReport> | null = null;
+  const runSettlementRecovery = (
+    opts: { graceMs?: number; now?: number } = {},
+  ): Promise<SettlementRecoveryReport> => {
+    // Single-flight, never chain: the pass in flight answers this call too.
+    if (recoveryInFlight != null) return recoveryInFlight;
+    const run = recoverSettlements(recoveryDeps, { ...opts, signal: recoveryAbort.signal });
+    recoveryInFlight = run;
+    void run
+      .finally(() => {
+        if (recoveryInFlight === run) recoveryInFlight = null;
+      })
+      .catch(() => {});
+    return run;
+  };
+  const settlementRecoveryInterval = superviseInterval(
+    loopSupervisor,
+    "settlement-recovery",
+    60_000,
+    () => runSettlementRecovery().then(() => undefined),
+    { isFrozen: () => getEmergencyFreeze() },
+  );
+  // The boot pass: no grace — no door is in flight in a process that just
+  // started. Supervised like a tick (markStart → markOk/markError).
+  loopSupervisor.markStart("settlement-recovery");
+  const settlementRecoveryBooted: Promise<SettlementRecoveryReport | null> = getEmergencyFreeze()
+    ? Promise.resolve(null)
+    : runSettlementRecovery({ graceMs: 0 }).then(
+        (r) => {
+          loopSupervisor.markOk("settlement-recovery");
+          return r;
+        },
+        (err: unknown) => {
+          loopSupervisor.markError("settlement-recovery", err);
+          return null;
+        },
+      );
 
   // --- Helper: count all connected WebSocket clients ---
   function getConnectionCount(): number {
@@ -2483,6 +2662,30 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     clearInterval(heartbeatInterval);
     clearInterval(revocationHorizonInterval);
     clearInterval(settlementRetryInterval);
+    clearInterval(settlementRecoveryInterval);
+    // The pass in flight stops at its next step; its outbox fetch is aborted
+    // (that delivery stays pending). Waited for, but never past the bound — a
+    // pass still awaiting a door afterwards meets a closed database and writes
+    // nothing (each settlement is one transaction).
+    recoveryAbort.abort();
+    if (recoveryInFlight != null) {
+      let bound: ReturnType<typeof setTimeout> | undefined;
+      const outlived = await Promise.race([
+        recoveryInFlight.then(
+          () => false,
+          () => false,
+        ),
+        new Promise<boolean>((r) => {
+          bound = setTimeout(() => r(true), SETTLEMENT_RECOVERY_CLOSE_BOUND_MS);
+        }),
+      ]);
+      clearTimeout(bound);
+      if (outlived) {
+        logger.warn("settlement.recovery_close_bound", {
+          boundMs: SETTLEMENT_RECOVERY_CLOSE_BOUND_MS,
+        });
+      }
+    }
     clearInterval(batchAnchorInterval);
     clearInterval(agentAnchorInterval);
     clearInterval(credentialAnchorInterval);
@@ -2500,7 +2703,46 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     clearInterval(batchWithdrawalInterval);
     clearInterval(orchestrationWorkerInterval);
     receiptExchangeHub.close();
-    moteDb.close();
+    // Every async init boot started without awaiting (the x402 facilitator
+    // initialize, the deposit detector's boot tick, the Solana network
+    // warm-up) settles before the database closes — bounded: a peer that
+    // never answers is aborted and abandoned at the deadline, and the
+    // database closes unconditionally.
+    try {
+      await settleStartupWork();
+    } finally {
+      shutdownController.abort();
+      moteDb.close();
+    }
+  }
+
+  /**
+   * Wait for boot's untracked I/O, up to `shutdownDeadlineMs` in total: at
+   * `deadline - SHUTDOWN_ABORT_GRACE_MS` abort what is still in flight, then
+   * give the aborted work the grace to settle (and log) before the DB goes.
+   */
+  async function settleStartupWork(): Promise<void> {
+    if (startupWork.length === 0) return;
+    let pending = startupWork.length;
+    const all = Promise.allSettled(
+      startupWork.map((w) =>
+        w.finally(() => {
+          pending--;
+        }),
+      ),
+    );
+    const grace = Math.min(SHUTDOWN_ABORT_GRACE_MS, shutdownDeadlineMs);
+    if (await settlesWithin(all, shutdownDeadlineMs - grace)) return;
+    logger.warn("relay.shutdown.startup_work_aborted", {
+      pending,
+      deadlineMs: shutdownDeadlineMs,
+    });
+    shutdownController.abort();
+    if (await settlesWithin(all, grace)) return;
+    logger.warn("relay.shutdown.startup_work_abandoned", {
+      pending,
+      deadlineMs: shutdownDeadlineMs,
+    });
   }
 
   // Inject WebSocket support into the underlying Node.js server
@@ -2523,6 +2765,10 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     getConnectionCount,
     get isDraining() {
       return draining;
+    },
+    settlementRecovery: {
+      booted: settlementRecoveryBooted,
+      sweep: (opts) => runSettlementRecovery(opts),
     },
   };
 }

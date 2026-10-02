@@ -122,6 +122,7 @@ import { forwardOriginSettlement } from "../federation-callbacks.js";
 import { ALLOCATION_MONEY_KINDS } from "../allocation-escrow.js";
 import { allocationEscrowHeld } from "../dispute-fund-ledger.js";
 import { TaskQueue } from "../task-queue.js";
+import { recordTaskRoute } from "../task-routing.js";
 import { signAdjudicatorVote } from "@motebit/crypto";
 import type { DisputeOutcome, VoteRequest } from "@motebit/protocol";
 import type { RelayIdentity } from "../federation.js";
@@ -503,6 +504,9 @@ async function buildWorld(start: StartState): Promise<World> {
     // credited; the allocation's worker holds unrelated funds of its own.
     await register(relay, OTHER, otherKp);
     creditAccount(relay.moteDb.db, WORKER, 5_000_000, "deposit", "wrk-own", "worker's own funds");
+    // Scored routing handed the task to OTHER (#890 r6: only a recorded
+    // executor may answer it).
+    recordTaskRoute(relay.moteDb.db, taskId, OTHER);
     await settleViaReceipt(relay, taskId, { signer: "other" });
   }
   if (start === "partial") seedPartialSettlement(w);
@@ -513,12 +517,13 @@ async function buildWorld(start: StartState): Promise<World> {
     const snap = relay.moteDb.db
       .prepare("SELECT amount_locked FROM relay_allocations WHERE allocation_id = ?")
       .get(w.allocationId) as { amount_locked: number };
+    claimForSettlement(w);
     relay.moteDb.db
       .prepare(
         `INSERT INTO relay_federation_settlements
          (settlement_id, task_id, upstream_relay_id, downstream_relay_id, agent_id,
-          gross_amount, fee_amount, net_amount, fee_rate, settled_at, receipt_hash)
-         VALUES ('fed-stl-cons', ?, 'relay-self', 'relay-peer', NULL, ?, ?, ?, 0.05, ?, 'rh')`,
+          gross_amount, fee_amount, net_amount, fee_rate, settled_at, receipt_hash, receipt_signature)
+         VALUES ('fed-stl-cons', ?, 'relay-self', 'relay-peer', NULL, ?, ?, ?, 0.05, ?, 'rh', ?)`,
       )
       .run(
         taskId,
@@ -526,6 +531,7 @@ async function buildWorld(start: StartState): Promise<World> {
         0,
         forwardedGross(start, snap.amount_locked),
         Date.now(),
+        SEED_RECEIPT_SIG,
       );
     // A pre-lifecycle forward, as an upgraded relay holds it.
     runUpgradeBackfill(relay);
@@ -610,12 +616,13 @@ function seedPartialSettlement(w: World): void {
   db.prepare(
     "UPDATE relay_allocations SET status = 'settled', settled_at = ? WHERE allocation_id = ?",
   ).run(Date.now(), w.allocationId);
+  claimForSettlement(w);
   db.prepare(
     `INSERT INTO relay_settlements
      (settlement_id, allocation_id, task_id, motebit_id, receipt_hash, amount_settled,
-      platform_fee, platform_fee_rate, status, settled_at, settlement_mode, delegator_id)
-     VALUES ('stl-partial-cons', ?, ?, ?, 'rh', ?, ?, 0.05, 'partial', ?, 'relay', ?)`,
-  ).run(w.allocationId, w.taskId, WORKER, net, fee, Date.now(), DELEGATOR);
+      platform_fee, platform_fee_rate, status, settled_at, settlement_mode, delegator_id, receipt_signature)
+     VALUES ('stl-partial-cons', ?, ?, ?, 'rh', ?, ?, 0.05, 'partial', ?, 'relay', ?, ?)`,
+  ).run(w.allocationId, w.taskId, WORKER, net, fee, Date.now(), DELEGATOR, SEED_RECEIPT_SIG);
   creditAccount(db, WORKER, net, "settlement_credit", "stl-partial-cons", "Payment (partial)");
   creditAccount(
     db,
@@ -716,12 +723,13 @@ function seedTwoPaid(w: World): void {
   db.prepare(
     "UPDATE relay_allocations SET status = 'settled', settled_at = ? WHERE allocation_id = ?",
   ).run(Date.now(), w.allocationId);
+  claimForSettlement(w);
   db.prepare(
     `INSERT INTO relay_settlements
      (settlement_id, allocation_id, task_id, motebit_id, receipt_hash, amount_settled,
-      platform_fee, platform_fee_rate, status, settled_at, settlement_mode, delegator_id)
-     VALUES ('stl-two-cons', ?, ?, ?, 'rh', ?, ?, 0.05, 'completed', ?, 'relay', ?)`,
-  ).run(w.allocationId, w.taskId, WORKER, net, fee, Date.now(), DELEGATOR);
+      platform_fee, platform_fee_rate, status, settled_at, settlement_mode, delegator_id, receipt_signature)
+     VALUES ('stl-two-cons', ?, ?, ?, 'rh', ?, ?, 0.05, 'completed', ?, 'relay', ?, ?)`,
+  ).run(w.allocationId, w.taskId, WORKER, net, fee, Date.now(), DELEGATOR, SEED_RECEIPT_SIG);
   creditAccount(db, WORKER, half, "settlement_credit", "stl-two-cons", "Payment (split payee)");
   creditAccount(
     db,
@@ -742,6 +750,23 @@ function seedSecondPayer(w: World): void {
   creditAccount(db, OTHER, 100_000, "deposit", "oth-dep", "other's funds");
   debitAccount(db, OTHER, 100_000, "allocation_hold", w.allocationId, "co-funded hold");
   creditAccount(db, OTHER, 100_000, "allocation_release", w.allocationId, "co-funded release");
+}
+
+/**
+ * A settlement row a seed writes must name the receipt its task is claimed
+ * for (#890 r9: the relay's claim guard). The seed models the claimed answer
+ * as the relay's archive holds it once the queue has forgotten the task:
+ * the entry is evicted and `relay_task_answers` carries the claim.
+ */
+const SEED_RECEIPT_SIG = "sig-cons";
+function claimForSettlement(w: World): void {
+  const db = w.relay.moteDb.db;
+  new TaskQueue(db).delete(w.taskId);
+  db.prepare(
+    `INSERT OR IGNORE INTO relay_task_answers
+       (task_id, executor_id, status, receipt_json, settling, settled, answer_version, answered_at)
+     VALUES (?, ?, 'completed', '{}', ?, 0, 1, ?)`,
+  ).run(w.taskId, WORKER, SEED_RECEIPT_SIG, Date.now());
 }
 
 function insertPeer(
@@ -823,11 +848,12 @@ function seedUndeliveredForward(w: World, opts: { riskBuffer?: boolean } = {}): 
   // payee question then stands on its own.
   const gross = opts.riskBuffer ? priceOf(w, w.taskId) - RISK_BUFFER : priceOf(w, w.taskId);
   const settlementId = "fed-stl-undelivered";
+  claimForSettlement(w);
   db.prepare(
     `INSERT INTO relay_federation_settlements
      (settlement_id, task_id, upstream_relay_id, downstream_relay_id, agent_id,
-      gross_amount, fee_amount, net_amount, fee_rate, settled_at, receipt_hash)
-     VALUES (?, ?, ?, ?, NULL, ?, ?, ?, 0.05, ?, 'rh')`,
+      gross_amount, fee_amount, net_amount, fee_rate, settled_at, receipt_hash, receipt_signature)
+     VALUES (?, ?, ?, ?, NULL, ?, ?, ?, 0.05, ?, 'rh', ?)`,
   ).run(
     settlementId,
     w.taskId,
@@ -837,6 +863,7 @@ function seedUndeliveredForward(w: World, opts: { riskBuffer?: boolean } = {}): 
     Math.round(gross * 0.05),
     gross - Math.round(gross * 0.05),
     Date.now(),
+    SEED_RECEIPT_SIG,
   );
   db.prepare(
     `INSERT INTO relay_settlement_retries (retry_id, settlement_id, task_id, peer_relay_id, payload_json, attempts, max_attempts, next_retry_at, status, created_at)
@@ -1079,10 +1106,15 @@ async function step(w: World, a: Action): Promise<number> {
       // The origin's settlement forward with the peer down: recorded pending,
       // retry queued (federation-callbacks.ts forwardOriginSettlement).
       try {
+        // The peer's result arrived and its answer was claimed (the claim
+        // guard requires a forward to name that receipt).
+        const gross = priceOf(w, w.taskId);
+        claimForSettlement(w);
         const r = await forwardOriginSettlement(w.relay.moteDb.db, relayIdentityOf(w.relay), {
           taskId: w.taskId,
           peerRelayId: PEER_ID,
-          grossAmount: priceOf(w, w.taskId),
+          receiptSignature: SEED_RECEIPT_SIG,
+          grossAmount: gross,
           platformFeeRate: 0.05,
           receiptHash: "rh",
           x402TxHash: null,
@@ -1298,7 +1330,9 @@ function fingerprint(w: World): string {
       n: number;
     }
   ).n;
-  return JSON.stringify({ txns, alloc, disputes, forwards, retries, round2 });
+  // Whether the queue still holds the task (a claimed answer evicts it).
+  const queued = new TaskQueue(db).has(w.taskId);
+  return JSON.stringify({ txns, alloc, disputes, forwards, retries, round2, queued });
 }
 
 function txnCount(w: World): number {

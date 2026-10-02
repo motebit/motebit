@@ -521,7 +521,10 @@ export default function App(): React.ReactElement {
           ? `Goal completed: ${event.summary}`
           : event.status === "failed" && event.error != null && event.error !== ""
             ? `Goal failed: ${event.error}`
-            : null;
+            : event.status === "awaiting_result"
+              ? // #890: not a failure — a paid delegation's result has not arrived.
+                "Goal awaiting result — check /result"
+              : null;
       if (content != null) {
         setMessages((prev) => [
           ...prev,

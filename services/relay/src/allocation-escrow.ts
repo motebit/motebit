@@ -359,6 +359,7 @@ const SETTLEMENT_COLUMNS = new Set([
   "p2p_worker_leg",
   "p2p_worker_address",
   "p2p_worker_address_rung",
+  "receipt_signature",
 ]);
 
 /** Columns a federation settlement row may carry (insert allowlist). */
@@ -377,6 +378,7 @@ const FEDERATION_COLUMNS = new Set([
   "x402_tx_hash",
   "x402_network",
   "record_json",
+  "receipt_signature",
 ]);
 
 function insertRow(
@@ -711,6 +713,15 @@ export function recordInboundFederatedSettlement(
       `inbound settlement for task ${String(row.task_id)} which holds local escrow (${local.allocation_id})`,
     );
   }
+  // A re-delivered forward (the §7.4 retry path) is a no-op: the row it wrote
+  // stands, and pays once (checked before the INSERT — the one-settlement-
+  // per-task guard refuses a second row outright).
+  const already = db
+    .prepare(
+      "SELECT 1 FROM relay_federation_settlements WHERE task_id = ? AND upstream_relay_id = ?",
+    )
+    .get(row.task_id, row.upstream_relay_id);
+  if (already !== undefined) return false;
   const inserted =
     insertRow(db, "relay_federation_settlements", FEDERATION_COLUMNS, row, {}, true) > 0;
   if (inserted && credit.worker != null && credit.amount > 0) {
