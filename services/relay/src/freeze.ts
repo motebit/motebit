@@ -6,6 +6,7 @@
  */
 
 import type { DatabaseDriver } from "@motebit/persistence";
+import { EmergencyFrozenError } from "./errors.js";
 import { createLogger } from "./logger.js";
 
 const logger = createLogger({ service: "freeze" });
@@ -94,11 +95,21 @@ export function persistFreeze(
 // written: a BEFORE trigger on every money table reads the PERSISTED freeze
 // row inside the write's own transaction and aborts it.
 //
-// Table-level on purpose: any door — today's or one added later (a dispute's
-// allocation money routed through one chokepoint) — that writes a guarded
-// table is refused without knowing about the freeze. Claims and queue rows are
-// not guarded, so a refused write leaves its work exactly where a crash between
-// claim and settle would: it resumes after unfreeze, once.
+// Two layers, one rule. Allocation money moves through ONE function
+// (`moveAllocationMoney`, allocation-escrow.ts), and that function refuses
+// first (`assertNotFrozen`, below) — the freeze sits AT the escrow chokepoint,
+// as does the forward lifecycle's per-send claim (`beginForwardSend`). The
+// table triggers are the second layer: every other money writer (withdrawals,
+// deposits, x402 credit, inbound federated credit) and any raw write that
+// bypasses the chokepoint is refused without knowing about the freeze. Claims
+// and queue rows are not guarded, so a refused write leaves its work exactly
+// where a crash between claim and settle would: it resumes after unfreeze,
+// once.
+//
+// Columns, not rows: a settlement row's `anchor_batch_id` (the anchoring
+// cut's bookkeeping) and its P2P verification record are never money, so an
+// UPDATE that changes only them commits while frozen — an anchoring pass in
+// flight must not be left half-cut (`FREEZE_NON_MONEY_COLUMNS`).
 
 /** The RAISE message the guards abort with; mapped to `EmergencyFrozenError`. */
 export const EMERGENCY_FROZEN_SENTINEL = "EMERGENCY_FROZEN";
@@ -151,6 +162,51 @@ const NARROWED: Readonly<
 };
 
 /**
+ * Columns of a guarded table that are not money: an UPDATE that changes only
+ * these is not refused. The UPDATE guard of a table listed here is computed
+ * at install from its live columns — every OTHER column changing is refused —
+ * so a money column added later is guarded without an edit here.
+ */
+export const FREEZE_NON_MONEY_COLUMNS: Readonly<Record<string, readonly string[]>> = {
+  // The anchoring cut assigns leaves to a signed batch (anchoring.ts); the
+  // P2P verifier records what the chain shows of a payment the relay never
+  // held (p2p-verifier.ts) — neither moves money.
+  relay_settlements: [
+    "anchor_batch_id",
+    "payment_verification_status",
+    "payment_verified_at",
+    "payment_verification_error",
+  ],
+  relay_federation_settlements: ["anchor_batch_id"],
+};
+
+/**
+ * Status transitions on a guarded table that record an outcome rather than
+ * move money: `pending → delivered` is the peer's acknowledgement of a
+ * forward already sent (`markForwardDelivered`; `held` counts pending and
+ * delivered alike). A freeze cannot recall a send in flight; refusing its
+ * record would only re-send it after unfreeze.
+ */
+const FREEZE_RECORD_TRANSITIONS: Readonly<Record<string, string>> = {
+  relay_federation_settlements: "OLD.status = 'pending' AND NEW.status = 'delivered'",
+};
+
+/** The UPDATE guard of a column-narrowed table: some money column changes. */
+function moneyColumnsChange(db: DatabaseDriver, table: string): string {
+  const exempt = new Set(FREEZE_NON_MONEY_COLUMNS[table]);
+  const record = FREEZE_RECORD_TRANSITIONS[table];
+  const cols = (db.prepare(`PRAGMA main.table_info(${table})`).all() as Array<{ name: string }>)
+    .map((c) => c.name)
+    .filter((c) => !exempt.has(c));
+  const changes = cols.map((c) =>
+    c === "status" && record != null
+      ? `(NEW.status IS NOT OLD.status AND NOT (${record}))`
+      : `NEW.${c} IS NOT OLD.${c}`,
+  );
+  return changes.length > 0 ? changes.join(" OR ") : "0";
+}
+
+/**
  * Money-shaped tables deliberately NOT guarded, each with its reason. A table
  * whose name looks like money must be in one of the two registries
  * (`freeze-money-chokepoint.test.ts` fails on an unclassified one).
@@ -162,6 +218,10 @@ export const FREEZE_EXEMPT_TABLES: Readonly<Record<string, string>> = {
     "deposit dedup — written in the same transaction as the guarded relay_accounts credit",
   relay_refund_log:
     "refund dedup — written in the same transaction as the guarded relay_accounts credit",
+  relay_allocation_fees:
+    "the escrow fee journal — written only inside moveAllocationMoney, which refuses while frozen, in the same transaction as the guarded relay_settlements row",
+  relay_dispute_fund_actions:
+    "a dispute's write-once fund-action claim — in the same transaction as its legs, which moveAllocationMoney refuses while frozen",
   relay_free_grants:
     "promotional grant record — written in the same transaction as the guarded relay_accounts credit",
   relay_disputes: "dispute records; their money leg (refund/settlement) is guarded",
@@ -209,7 +269,10 @@ export function installFreezeMoneyGuards(db: DatabaseDriver): void {
       throw new Error(`installFreezeMoneyGuards: guarded money table ${table} does not exist`);
     }
     for (const op of ["INSERT", "UPDATE", "DELETE"] as const) {
-      const narrowed = NARROWED[table]?.[op];
+      const narrowed =
+        op === "UPDATE" && table in FREEZE_NON_MONEY_COLUMNS
+          ? moneyColumnsChange(db, table)
+          : NARROWED[table]?.[op];
       if (narrowed === null) continue;
       const extra = narrowed != null ? ` AND (${narrowed})` : "";
       db.exec(
@@ -220,6 +283,54 @@ export function installFreezeMoneyGuards(db: DatabaseDriver): void {
       );
     }
   }
+}
+
+/**
+ * Whether the PERSISTED freeze row says frozen — read inside the caller's
+ * transaction, the same row and rule the triggers read (never the in-memory
+ * cache, which a second process or a just-landed admin write may not share).
+ * A database without the row (or the table) is not frozen.
+ */
+export function isFrozenNow(db: DatabaseDriver): boolean {
+  try {
+    const row = db.prepare(`SELECT ${FROZEN_SQL} AS frozen`).get() as
+      { frozen: number | null } | undefined;
+    return row?.frozen === 1;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Refuse a money movement while frozen: throws {@link EmergencyFrozenError}.
+ * Called synchronously where money moves — first thing in
+ * `moveAllocationMoney` and in the forward lifecycle's send claim — so the
+ * check and the write share one synchronous turn (no freeze can land
+ * between them).
+ */
+export function assertNotFrozen(db: DatabaseDriver): void {
+  if (isFrozenNow(db)) throw new EmergencyFrozenError();
+}
+
+/**
+ * The expiry floor below which a claimed-but-unsettled task entry may be
+ * deleted (`TaskQueue.cleanup` / `evict`). Normally `now - holdMs`. While
+ * frozen no such claim may go — the freeze is what keeps it unsettled — and
+ * for `holdMs` after an unfreeze every claim is held, so the recovery pass
+ * gets the same hold a claim would have had without the freeze.
+ */
+export function claimHoldFloor(db: DatabaseDriver, now: number, holdMs: number): number {
+  try {
+    const row = db
+      .prepare("SELECT value, updated_at FROM relay_config WHERE key = 'freeze_state'")
+      .get() as { value: string; updated_at: number } | undefined;
+    if (row == null) return now - holdMs;
+    const frozen = (JSON.parse(row.value) as { frozen?: unknown }).frozen === true;
+    if (frozen || row.updated_at >= now - holdMs) return Number.MIN_SAFE_INTEGER;
+  } catch {
+    // No relay_config (a bare TaskQueue): the plain hold.
+  }
+  return now - holdMs;
 }
 
 /** The names of the freeze guards installed on this connection. */

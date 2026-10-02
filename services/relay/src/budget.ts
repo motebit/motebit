@@ -14,7 +14,8 @@ import type {
 import { bytesToHex, hash as sha256Hash } from "@motebit/encryption";
 import type { RelayIdentity } from "./federation.js";
 import { createLogger } from "./logger.js";
-import { persistFreeze } from "./freeze.js";
+import { isEmergencyFrozenAbort, persistFreeze } from "./freeze.js";
+import { EmergencyFrozenError } from "./errors.js";
 import {
   getAccountBalance,
   getAccountBalanceDetailed,
@@ -439,6 +440,11 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
     // earlier broadcast can land) fails the withdrawal and refunds,
     // atomically — see the outcome rule below.
     let autoSettled = false;
+    // The payout claim is a guarded write: a freeze that landed after the
+    // debit (during a path's pre-claim await) refuses it, so nothing is sent
+    // and the withdrawal stands `pending` with its amount held. That is a
+    // refusal, answered 503 — never a 200 that reads as a payout in progress.
+    let frozenAtClaim = false;
     const isSolanaDest =
       result.destination !== "pending" && SOLANA_DEST_RE.test(result.destination);
     const isWalletDest = result.destination !== "pending" && EVM_DEST_RE.test(result.destination);
@@ -658,6 +664,7 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
         // `processing`; never refund here. An unclaimed one (isAvailable
         // threw) was never sent and stays `pending`.
         const error = err instanceof Error ? err.message : String(err);
+        if (!claimed && isEmergencyFrozenAbort(err)) frozenAtClaim = true;
         if (claimed) {
           const noted = noteWithdrawalPayoutUnresolved(
             moteDb.db,
@@ -769,6 +776,7 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
           }
         } catch (err) {
           const error = err instanceof Error ? err.message : String(err);
+          if (!claimed && isEmergencyFrozenAbort(err)) frozenAtClaim = true;
           if (claimed) {
             const noted = noteWithdrawalPayoutUnresolved(
               moteDb.db,
@@ -818,6 +826,11 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
     // Re-read on EVERY outcome, not only auto-settle: a landed-and-failed
     // send (#920) moves the row to `failed` with a reason, and the response
     // must say so rather than echo the stale `pending` record.
+    if (frozenAtClaim && !autoSettled) {
+      throw new EmergencyFrozenError(
+        `Relay is in emergency freeze mode: withdrawal ${result.withdrawal_id} is recorded and its amount held, but no payout was sent. It stays pending; retry with the same Idempotency-Key after the freeze lifts — never a new key.`,
+      );
+    }
     const finalRecord = getWithdrawalById(moteDb.db, result.withdrawal_id) ?? result;
     const responseBody = {
       motebit_id: motebitId,

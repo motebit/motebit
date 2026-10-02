@@ -168,7 +168,10 @@ export class TaskError extends RelayError {
       | "TASK_X402_OUTCOME_UNKNOWN"
       | "TASK_X402_OUTCOME_PENDING"
       | "TASK_X402_PAYMENT_REPLAYED"
-      | "TASK_GRANT_REVOKED",
+      | "TASK_GRANT_REVOKED"
+      // The relay-wide freeze code, carried by an x402 outcome the freeze
+      // left uncredited (`X402OutcomeUnknownError` phase "frozen").
+      | "EMERGENCY_FROZEN",
     message: string,
     statusCode: number = 400,
     options?: ErrorOptions,
@@ -226,14 +229,31 @@ export interface X402SettlementRef {
  */
 export class X402OutcomeUnknownError extends TaskError {
   readonly settlement?: X402SettlementRef;
-  constructor(settlement: X402SettlementRef | undefined, phase: "unknown" | "pending" = "unknown") {
+  /**
+   * `frozen`: the transfer SETTLED onchain, and the emergency freeze (which
+   * landed during the settle call) refused its credit — a 503
+   * `EMERGENCY_FROZEN` that still names the record, so the client knows not
+   * to pay again. The reconciler credits it once after unfreeze.
+   */
+  constructor(
+    settlement: X402SettlementRef | undefined,
+    phase: "unknown" | "pending" | "frozen" = "unknown",
+  ) {
     super(
-      phase === "pending" ? "TASK_X402_OUTCOME_PENDING" : "TASK_X402_OUTCOME_UNKNOWN",
+      phase === "pending"
+        ? "TASK_X402_OUTCOME_PENDING"
+        : phase === "frozen"
+          ? "EMERGENCY_FROZEN"
+          : "TASK_X402_OUTCOME_UNKNOWN",
       (phase === "pending"
         ? "An earlier request under this Idempotency-Key paid via x402 and its outcome is still being reconciled. "
-        : "The x402 payment outcome is unknown: the transfer may have landed. ") +
-        "Do NOT pay again. It is reconciled against the chain; if it landed it is credited once to the delegator's account, and a same-key retry after that is funded from the account. No task was admitted.",
-      phase === "pending" ? 409 : 402,
+        : phase === "frozen"
+          ? "The x402 payment settled onchain, but the relay entered emergency freeze before crediting it. "
+          : "The x402 payment outcome is unknown: the transfer may have landed. ") +
+        (phase === "frozen"
+          ? "Do NOT pay again. Once the freeze lifts it is reconciled against the chain and credited once to the delegator's account, and a same-key retry after that is funded from the account. No task was admitted."
+          : "Do NOT pay again. It is reconciled against the chain; if it landed it is credited once to the delegator's account, and a same-key retry after that is funded from the account. No task was admitted."),
+      phase === "pending" ? 409 : phase === "frozen" ? 503 : 402,
     );
     this.name = "X402OutcomeUnknownError";
     if (settlement != null) this.settlement = settlement;

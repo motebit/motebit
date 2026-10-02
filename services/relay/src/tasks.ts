@@ -133,6 +133,7 @@ import {
   X402PaymentReplayedError,
   type X402SettlementRef,
 } from "./errors.js";
+import { isEmergencyFrozenAbort } from "./freeze.js";
 import {
   classifySettleVerdict,
   creditX402Settlement,
@@ -3804,7 +3805,10 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<TaskRoutesHan
               error: depositErr instanceof Error ? depositErr.message : String(depositErr),
             });
             const rec = findX402Settlement(moteDb.db, settlement.payer, settlement.nonce);
-            throw new X402OutcomeUnknownError(rec != null ? x402SettlementRef(rec) : undefined);
+            throw new X402OutcomeUnknownError(
+              rec != null ? x402SettlementRef(rec) : undefined,
+              isEmergencyFrozenAbort(depositErr) ? "frozen" : "unknown",
+            );
           }
           if (!credited) {
             // The record left `pending` while the settle call was in flight.

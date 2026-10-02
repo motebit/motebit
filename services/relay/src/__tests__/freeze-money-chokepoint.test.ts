@@ -12,7 +12,22 @@
  *   RESUME   after the real unfreeze route, the same work completes, once.
  *
  * Doors: local receipt (relay custody), P2P audit, federation result, recovery
- * replay, settlement forward, x402 settle, Path 0 withdrawal, batch withdrawal.
+ * replay, settlement forward, x402 settle, Path 0 withdrawal (at the body read
+ * and at the payout claim), batch withdrawal.
+ *
+ * Background writers whose pass can be in flight when the freeze lands:
+ * anchoring cuts (both streams — never an orphan batch, never a leaf in two;
+ * each cut one transaction), settlement-forward retries (claimed per send: a
+ * freeze during one send stops the rest; exhaustion never strands a forward),
+ * task-queue cleanup (a held claim outlives any freeze), horizon truncation
+ * (no cert without its deletion), a dispute's round-2 finalize (503, verdict
+ * kept, finalized after unfreeze), and the column narrowing that lets record
+ * columns commit while money columns are refused.
+ *
+ * The escrow chokepoint: frozen with the table triggers DROPPED, every
+ * `ALLOCATION_MONEY_KINDS` movement is refused by `moveAllocationMoney` itself
+ * (and the forward lifecycle's `beginForwardSend`) — RED if the chokepoint's
+ * own check is removed, as the doors are RED if the triggers are.
  *
  * Plus the registry: every money-shaped table is either guarded or exempt with
  * a reason, the guards are installed on the booted relay, and no second
@@ -29,9 +44,13 @@ import type { SyncRelay, SyncRelayConfig } from "../index.js";
 import {
   generateKeypair,
   bytesToHex,
+  hexToBytes,
   signExecutionReceipt,
   sign,
   canonicalJson,
+  signAdjudicatorVote,
+  signDisputeAppeal,
+  signDisputeRequest,
 } from "@motebit/encryption";
 import type { KeyPair } from "@motebit/encryption";
 import type {
@@ -52,7 +71,24 @@ import {
   jsonAuthWithIdempotency,
 } from "./test-helpers.js";
 import { recordTaskRoute } from "../task-routing.js";
-import { TaskQueue } from "../task-queue.js";
+import { TaskQueue, UNSETTLED_CLAIM_HOLD_MS } from "../task-queue.js";
+import { refundExhaustedForward } from "../index.js";
+import { cutAgentSettlementBatch, cutBatch } from "../anchoring.js";
+import { advanceRelayHorizon } from "../horizon.js";
+import { processSettlementRetries, type RelayIdentity } from "../federation.js";
+import { forwardOriginSettlement } from "../federation-callbacks.js";
+import {
+  ALLOCATION_MONEY_KINDS,
+  beginForwardSend,
+  forwardOf,
+  moveAllocationMoney,
+  openAllocation,
+  recordInboundFederatedSettlement,
+  recordP2pSettlementAudit,
+  type AllocationMoneyKind,
+  type AllocationMove,
+} from "../allocation-escrow.js";
+import { EmergencyFrozenError } from "../errors.js";
 import { creditAccount, getAccountBalance, toMicro } from "../accounts.js";
 import { enqueuePendingWithdrawal, evaluateAndFireRail } from "../batch-withdrawals.js";
 import { reconcilePendingX402Settlements } from "../x402-settlements.js";
@@ -71,7 +107,11 @@ import {
 // ── The seam: the await right before a settlement door's write ──────────────
 // Every settlement door signs its record (async) and then writes it. The hook
 // runs inside that await, after the request passed the entry check.
-const hook = vi.hoisted(() => ({ beforeSign: null as null | (() => Promise<void>) }));
+const hook = vi.hoisted(() => ({
+  beforeSign: null as null | (() => Promise<void>),
+  /** The anchoring cut's await before its batch write (its Merkle build). */
+  beforeMerkle: null as null | (() => Promise<void>),
+}));
 vi.mock("@motebit/encryption", async (importOriginal) => {
   const m = await importOriginal<typeof import("@motebit/encryption")>();
   const wrap =
@@ -84,8 +124,17 @@ vi.mock("@motebit/encryption", async (importOriginal) => {
       }
       return f(...a);
     };
+  const buildMerkleTree: typeof m.buildMerkleTree = async (...a) => {
+    const before = hook.beforeMerkle;
+    if (before != null) {
+      hook.beforeMerkle = null;
+      await before();
+    }
+    return m.buildMerkleTree(...a);
+  };
   return {
     ...m,
+    buildMerkleTree,
     signSettlement: wrap(m.signSettlement),
     signFederationSettlement: wrap(m.signFederationSettlement),
   };
@@ -115,11 +164,13 @@ afterAll(async () => {
 });
 beforeEach(() => {
   hook.beforeSign = null;
+  hook.beforeMerkle = null;
   facilitator.reset();
   vi.spyOn(console, "warn").mockImplementation(() => {});
 });
 afterEach(() => {
   hook.beforeSign = null;
+  hook.beforeMerkle = null;
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
@@ -582,10 +633,12 @@ describe("freeze at the money chokepoint — every door, frozen at the await bef
       await freeze(w.relay);
       release();
       const res = await pending;
-      // The paid-but-uncredited outcome #907 defined: do NOT pay again, the
-      // pending record is reconciled against the chain.
-      expect(res.status, await res.clone().text()).toBe(402);
-      expect(((await res.json()) as { code?: string }).code).toBe("TASK_X402_OUTCOME_UNKNOWN");
+      // The paid-but-uncredited outcome #907 defined, as the freeze's 503:
+      // do NOT pay again, the named pending record is credited after unfreeze.
+      expect(res.status, await res.clone().text()).toBe(503);
+      const frozenBody = (await res.json()) as { code?: string; x402_settlement?: unknown };
+      expect(frozenBody.code).toBe("EMERGENCY_FROZEN");
+      expect(frozenBody.x402_settlement, "names the record being reconciled").toBeDefined();
       const after = moneySnapshot(w.relay);
       for (const t of MONEY_TABLES.filter((t) => t !== "relay_x402_settlements")) {
         expect(after[t], `FROZEN: ${t} unchanged`).toEqual(before[t]);
@@ -764,6 +817,844 @@ describe("freeze at the money chokepoint — every door, frozen at the await bef
       await evaluateAndFireRail(db, rail, {});
       expect(sent, "never twice").toEqual(["fz-a", "fz-b"]);
       expect(balances()).toEqual(b0);
+    } finally {
+      await relay.close();
+    }
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// The harness alphabet beyond the request doors: background writers whose
+// pass can be in flight when the freeze lands, and every allocation-money
+// kind at the escrow chokepoint.
+
+/** The relay's own signing identity (the loops sign with it). */
+function relayIdentityOf(relay: SyncRelay): RelayIdentity {
+  const row = relay.moteDb.db
+    .prepare(
+      "SELECT relay_motebit_id, public_key, private_key_hex, did FROM relay_identity LIMIT 1",
+    )
+    .get() as {
+    relay_motebit_id: string;
+    public_key: string;
+    private_key_hex: string;
+    did: string;
+  };
+  return {
+    relayMotebitId: row.relay_motebit_id,
+    publicKey: hexToBytes(row.public_key),
+    privateKey: hexToBytes(row.private_key_hex),
+    publicKeyHex: row.public_key,
+    did: row.did,
+  };
+}
+
+/** Drop this connection's freeze triggers: only the escrow chokepoint's own check is left. */
+function dropFreezeTriggers(relay: SyncRelay): void {
+  for (const g of installedFreezeGuards(relay.moteDb.db)) {
+    relay.moteDb.db.exec(`DROP TRIGGER temp.${g}`);
+  }
+}
+
+/** An allocation of `locked` held from `payer`'s account, for worker `worker`. */
+function heldAllocation(relay: SyncRelay, payer: string, worker: string, locked: number) {
+  const db = relay.moteDb.db;
+  const allocationId = `alloc-${crypto.randomUUID()}`;
+  const taskId = `task-${crypto.randomUUID()}`;
+  creditAccount(db, payer, locked, "deposit", `dep-${allocationId}`, "seed");
+  db.transaction(() => {
+    openAllocation(db, {
+      allocationId,
+      taskId,
+      worker,
+      amountLocked: locked,
+      createdAt: Date.now(),
+    });
+    moveAllocationMoney(db, {
+      kind: "hold",
+      allocationId,
+      amount: locked,
+      party: payer,
+      description: "seed hold",
+    });
+  });
+  return { allocationId, taskId };
+}
+
+/** Seed `n` forwards of held allocations to `peer`, each queued for the retry loop. */
+async function queuedForwards(
+  relay: SyncRelay,
+  peer: Peer,
+  n: number,
+): Promise<Array<{ taskId: string; settlementId: string; allocationId: string }>> {
+  const db = relay.moteDb.db;
+  const out: Array<{ taskId: string; settlementId: string; allocationId: string }> = [];
+  for (let i = 0; i < n; i++) {
+    const { allocationId, taskId } = heldAllocation(
+      relay,
+      `fwd-payer-${i}`,
+      `fwd-worker-${i}`,
+      1_000_000,
+    );
+    const r = await forwardOriginSettlement(db, relayIdentityOf(relay), {
+      taskId,
+      peerRelayId: peer.id,
+      grossAmount: 1_000_000,
+      platformFeeRate: 0.05,
+      receiptHash: `rh-${taskId}`,
+      x402TxHash: null,
+      x402Network: null,
+      peerFetch: () => Promise.reject(new Error("peer down")),
+    });
+    expect(r).toBe("queued");
+    const row = db
+      .prepare("SELECT settlement_id FROM relay_settlement_retries WHERE task_id = ?")
+      .get(taskId) as { settlement_id: string };
+    out.push({ taskId, settlementId: row.settlement_id, allocationId });
+  }
+  db.prepare("UPDATE relay_settlement_retries SET next_retry_at = 0").run();
+  return out;
+}
+
+describe("freeze — the background writers a pass can carry past the freeze", () => {
+  for (const stream of ["agent", "federation"] as const) {
+    it(`anchoring cut (${stream}): a freeze landing during the cut leaves no orphan batch and no leaf anchored twice`, async () => {
+      const relay = await createTestRelay({ enableDeviceAuth: false });
+      try {
+        const db = relay.moteDb.db;
+        const settlements =
+          stream === "agent" ? "relay_settlements" : "relay_federation_settlements";
+        const batches = stream === "agent" ? "relay_agent_anchor_batches" : "relay_anchor_batches";
+        for (let i = 0; i < 3; i++) {
+          const id = crypto.randomUUID();
+          const record = canonicalJson({ settlement_id: id, n: i });
+          if (stream === "agent") {
+            recordP2pSettlementAudit(db, {
+              settlement_id: id,
+              allocation_id: `p2p-${id}`,
+              task_id: `t-${id}`,
+              motebit_id: "anchor-worker",
+              receipt_hash: "rh",
+              amount_settled: 1,
+              platform_fee: 0,
+              platform_fee_rate: 0.05,
+              status: "completed",
+              settled_at: 1_000 + i,
+              settlement_mode: "p2p",
+              signature: "sig",
+              record_json: record,
+            });
+          } else {
+            recordInboundFederatedSettlement(
+              db,
+              {
+                settlement_id: id,
+                task_id: `t-${id}`,
+                upstream_relay_id: "anchor-origin",
+                gross_amount: 1,
+                fee_amount: 0,
+                net_amount: 1,
+                fee_rate: 0.05,
+                settled_at: 1_000 + i,
+                receipt_hash: "rh",
+                record_json: record,
+              },
+              { worker: null, amount: 0, description: "seed" },
+            );
+          }
+        }
+        const cut = () =>
+          stream === "agent"
+            ? cutAgentSettlementBatch(db, relayIdentityOf(relay))
+            : cutBatch(db, relayIdentityOf(relay));
+        hook.beforeMerkle = () => freeze(relay);
+        await cut().catch(() => null);
+        const orphanFree = () =>
+          db
+            .prepare(
+              `SELECT b.batch_id, b.leaf_count,
+                      (SELECT COUNT(*) FROM ${settlements} s WHERE s.anchor_batch_id = b.batch_id) AS assigned
+                 FROM ${batches} b`,
+            )
+            .all() as Array<{ batch_id: string; leaf_count: number; assigned: number }>;
+        for (const b of orphanFree()) {
+          expect(b.assigned, "a signed batch owns exactly its leaves").toBe(b.leaf_count);
+        }
+        await unfreeze(relay);
+        await cut();
+        await cut();
+        const all = orphanFree();
+        for (const b of all) expect(b.assigned).toBe(b.leaf_count);
+        expect(
+          all.reduce((s, b) => s + b.leaf_count, 0),
+          "each leaf is in exactly one batch",
+        ).toBe(3);
+      } finally {
+        await relay.close();
+      }
+    });
+
+    it(`anchoring cut (${stream}) is one transaction: an assignment that fails leaves no batch`, async () => {
+      const relay = await createTestRelay({ enableDeviceAuth: false });
+      try {
+        const db = relay.moteDb.db;
+        const settlements =
+          stream === "agent" ? "relay_settlements" : "relay_federation_settlements";
+        const batches = stream === "agent" ? "relay_agent_anchor_batches" : "relay_anchor_batches";
+        const ids = [crypto.randomUUID(), crypto.randomUUID()];
+        for (const [i, id] of ids.entries()) {
+          const record = canonicalJson({ settlement_id: id, n: i });
+          if (stream === "agent") {
+            recordP2pSettlementAudit(db, {
+              settlement_id: id,
+              allocation_id: `p2p-${id}`,
+              task_id: `t-${id}`,
+              motebit_id: "anchor-worker",
+              receipt_hash: "rh",
+              amount_settled: 1,
+              platform_fee: 0,
+              platform_fee_rate: 0.05,
+              status: "completed",
+              settled_at: 1_000 + i,
+              settlement_mode: "p2p",
+              signature: "sig",
+              record_json: record,
+            });
+          } else {
+            recordInboundFederatedSettlement(
+              db,
+              {
+                settlement_id: id,
+                task_id: `t-${id}`,
+                upstream_relay_id: "anchor-origin",
+                gross_amount: 1,
+                fee_amount: 0,
+                net_amount: 1,
+                fee_rate: 0.05,
+                settled_at: 1_000 + i,
+                receipt_hash: "rh",
+                record_json: record,
+              },
+              { worker: null, amount: 0, description: "seed" },
+            );
+          }
+        }
+        db.exec(`CREATE TEMP TRIGGER fz_assign_fail BEFORE UPDATE OF anchor_batch_id ON main.${settlements}
+                   WHEN NEW.settlement_id = '${ids[1]}' BEGIN SELECT RAISE(ABORT, 'assign failed'); END;`);
+        await expect(
+          stream === "agent"
+            ? cutAgentSettlementBatch(db, relayIdentityOf(relay))
+            : cutBatch(db, relayIdentityOf(relay)),
+        ).rejects.toThrow(/assign failed/);
+        expect(db.prepare(`SELECT COUNT(*) AS n FROM ${batches}`).get()).toEqual({ n: 0 });
+        expect(
+          db
+            .prepare(`SELECT COUNT(*) AS n FROM ${settlements} WHERE anchor_batch_id IS NOT NULL`)
+            .get(),
+        ).toEqual({ n: 0 });
+      } finally {
+        await relay.close();
+      }
+    });
+  }
+
+  it("settlement-forward retries: a freeze landing during one send stops every later send in the pass; after unfreeze each is sent once", async () => {
+    const relay = await createTestRelay({ enableDeviceAuth: false });
+    try {
+      const db = relay.moteDb.db;
+      const peer = await addPeer(relay);
+      const fwds = await queuedForwards(relay, peer, 3);
+      const sent: string[] = [];
+      let onSend: (() => Promise<void>) | null = () => freeze(relay);
+      const peerFetch = async (_url: string, init?: RequestInit): Promise<Response> => {
+        sent.push((JSON.parse(init?.body as string) as { task_id: string }).task_id);
+        const h = onSend;
+        onSend = null;
+        if (h != null) await h();
+        return new Response("{}", { status: 200 });
+      };
+      const pass = () =>
+        processSettlementRetries(
+          db,
+          relayIdentityOf(relay),
+          undefined,
+          undefined,
+          peerFetch as never,
+        );
+      await pass().catch(() => {});
+      expect(sent, "FROZEN: nothing sent after the freeze").toHaveLength(1);
+      await pass().catch(() => {});
+      expect(sent, "a pass while frozen sends nothing").toHaveLength(1);
+      const later = fwds.filter((f) => f.taskId !== sent[0]);
+      for (const f of later) {
+        expect(forwardOf(db, f.settlementId)?.status, "a later forward stays pending").toBe(
+          "pending",
+        );
+      }
+
+      await unfreeze(relay);
+      await pass();
+      expect([...sent].sort(), "RESUME: each sent").toEqual(
+        [sent[0]!, ...later.map((f) => f.taskId)].sort(),
+      );
+      await pass();
+      for (const f of fwds) {
+        expect(forwardOf(db, f.settlementId)?.status).toBe("delivered");
+        expect(sent.filter((t) => t === f.taskId).length, "never twice").toBe(1);
+      }
+    } finally {
+      await relay.close();
+    }
+  });
+
+  it("settlement-forward exhaustion: a freeze landing during the last attempt neither fails the retry nor strands the forward; after unfreeze it refunds once", async () => {
+    const relay = await createTestRelay({ enableDeviceAuth: false });
+    try {
+      const db = relay.moteDb.db;
+      const peer = await addPeer(relay);
+      const [fwd] = await queuedForwards(relay, peer, 1);
+      db.prepare("UPDATE relay_settlement_retries SET attempts = max_attempts - 1").run();
+      const payer = "fwd-payer-0";
+      const exhausted = (retry: { retry_id: string; settlement_id: string; task_id: string }) => {
+        refundExhaustedForward(db, retry);
+      };
+      let onSend: (() => Promise<void>) | null = () => freeze(relay);
+      const peerFetch = async (): Promise<Response> => {
+        const h = onSend;
+        onSend = null;
+        if (h != null) await h();
+        return new Response("down", { status: 500 });
+      };
+      await processSettlementRetries(
+        db,
+        relayIdentityOf(relay),
+        exhausted,
+        undefined,
+        peerFetch as never,
+      ).catch(() => {});
+      const retryRow = () =>
+        db
+          .prepare("SELECT status FROM relay_settlement_retries WHERE task_id = ?")
+          .get(fwd!.taskId) as {
+          status: string;
+        };
+      expect(retryRow().status, "FROZEN: the retry is left as it was").toBe("pending");
+      expect(forwardOf(db, fwd!.settlementId)?.status).toBe("pending");
+      expect(balance(relay, payer)).toBe(0);
+
+      await unfreeze(relay);
+      await processSettlementRetries(
+        db,
+        relayIdentityOf(relay),
+        exhausted,
+        undefined,
+        peerFetch as never,
+      );
+      expect(retryRow().status).toBe("failed");
+      expect(forwardOf(db, fwd!.settlementId)?.status).toBe("failed");
+      expect(balance(relay, payer), "RESUME: refunded once").toBe(1_000_000);
+    } finally {
+      await relay.close();
+    }
+  });
+
+  it("task-queue cleanup: a freeze longer than expiry + the claim hold never deletes a held settlement claim; after unfreeze it settles once", async () => {
+    const w = await world();
+    try {
+      const db = w.relay.moteDb.db;
+      const S = await admit(w);
+      fundP2p(w, S);
+      const R = await receiptBy(w.W, S);
+      crash(w, S, true);
+      expect((await postResult(w, S, R, w.D.id)).code).toBe(200);
+      crash(w, S, false);
+      await freeze(w.relay);
+      // The freeze outlasts the entry's expiry by more than the claim hold.
+      db.prepare("UPDATE relay_task_queue SET expires_at = ? WHERE task_id = ?").run(
+        Date.now() - UNSETTLED_CLAIM_HOLD_MS - 60_000,
+        S,
+      );
+      w.q.cleanup();
+      w.q.evict(0);
+      expect(claim(w, S), "FROZEN: the held claim survives cleanup").toEqual({
+        settled: false,
+        settling: R.signature,
+      });
+
+      await unfreeze(w.relay);
+      w.q.cleanup();
+      expect(claim(w, S), "the claim is held past unfreeze for the recovery pass").not.toBeNull();
+      await w.relay.settlementRecovery.sweep({ graceMs: 0 });
+      expect(settlementRows(w, S), "RESUME: one settlement").toHaveLength(1);
+      await w.relay.settlementRecovery.sweep({ graceMs: 0 });
+      expect(settlementRows(w, S), "never twice").toHaveLength(1);
+    } finally {
+      await w.relay.close();
+    }
+  });
+
+  it("Path 0 withdrawal: the freeze lands between the debit and the payout claim — nothing sent, a 503 (never a 200), the amount held pending", async () => {
+    let releaseAvail!: () => void;
+    const availGate = new Promise<void>((r) => (releaseAvail = r));
+    const sendUsdc = vi.fn().mockResolvedValue({ signature: "sig", slot: 1, confirmed: true });
+    const adapter: SolanaRpcAdapter = {
+      ownAddress: "RelayTreasuryAddressBase58",
+      getUsdcBalance: vi.fn().mockResolvedValue(10_000_000_000n),
+      getUsdcBalanceOf: vi.fn().mockResolvedValue(10_000_000_000n),
+      getSolBalance: vi.fn().mockResolvedValue(10_000_000n),
+      sendUsdc,
+      sendUsdcBatch: vi.fn().mockResolvedValue([]),
+      getTransaction: vi.fn().mockResolvedValue({ status: "not_found" }),
+      isReachable: vi.fn().mockImplementation(async () => {
+        await availGate;
+        return true;
+      }),
+    };
+    const relay = await createTestRelay({
+      enableDeviceAuth: false,
+      operatorSolanaTransfer: new OperatorSolanaTransfer(adapter),
+    });
+    try {
+      const id = "fz-path0-claim";
+      creditAccount(relay.moteDb.db, id, 5_000_000, "deposit", "fz-deposit-2", "self-deposit");
+      const headers = jsonAuthWithIdempotency();
+      const payload = JSON.stringify({
+        amount: 1.5,
+        destination: "GJmrQzyZumWWkdBuVH3Z1hnGvjrcDMbx7ptF5t5UFZFZ",
+      });
+      const pending = relay.app.request(`/api/v1/agents/${id}/withdraw`, {
+        method: "POST",
+        headers,
+        body: payload,
+      });
+      await vi.waitFor(() => expect(adapter.isReachable).toHaveBeenCalled());
+      await freeze(relay);
+      releaseAvail();
+      const res = await pending;
+      expect(res.status, await res.clone().text()).toBe(503);
+      expect(((await res.json()) as { code?: string }).code).toBe("EMERGENCY_FROZEN");
+      expect(sendUsdc, "nothing sent").not.toHaveBeenCalled();
+      const rows = relay.moteDb.db
+        .prepare("SELECT status FROM relay_withdrawals WHERE motebit_id = ?")
+        .all(id) as Array<{ status: string }>;
+      expect(rows, "the withdrawal stands pending, its amount held").toEqual([
+        { status: "pending" },
+      ]);
+      expect(balance(relay, id)).toBe(3_500_000);
+
+      await unfreeze(relay);
+      const retry = await relay.app.request(`/api/v1/agents/${id}/withdraw`, {
+        method: "POST",
+        headers,
+        body: payload,
+      });
+      expect(retry.status, "the same-key retry is answered, never a 409").toBe(200);
+      expect(balance(relay, id), "never debited twice").toBe(3_500_000);
+    } finally {
+      await relay.close();
+    }
+  });
+  it("horizon truncation: a freeze refusing the settlement truncation persists no cert attesting it; after unfreeze it commits once", async () => {
+    const relay = await createTestRelay({ enableDeviceAuth: false });
+    try {
+      const db = relay.moteDb.db;
+      const id = crypto.randomUUID();
+      recordP2pSettlementAudit(db, {
+        settlement_id: id,
+        allocation_id: `p2p-${id}`,
+        task_id: `t-${id}`,
+        motebit_id: "horizon-worker",
+        receipt_hash: "rh",
+        amount_settled: 1,
+        platform_fee: 0,
+        platform_fee_rate: 0.05,
+        status: "completed",
+        settled_at: 1_000,
+        settlement_mode: "p2p",
+      });
+      const certs = () =>
+        db
+          .prepare(
+            "SELECT COUNT(*) AS n FROM relay_horizon_certs WHERE store_id = 'relay_settlements'",
+          )
+          .get();
+      const rows = () =>
+        db.prepare("SELECT COUNT(*) AS n FROM relay_settlements WHERE settlement_id = ?").get(id);
+      const ctx = {
+        relayIdentity: relayIdentityOf(relay),
+        fetchImpl: (() => Promise.reject(new Error("no peers"))) as never,
+      };
+      await freeze(relay);
+      await expect(advanceRelayHorizon(db, "relay_settlements", 2_000, ctx)).rejects.toThrow(
+        /EMERGENCY_FROZEN/,
+      );
+      expect(certs(), "FROZEN: no cert without its truncation").toEqual({ n: 0 });
+      expect(rows()).toEqual({ n: 1 });
+      await unfreeze(relay);
+      await advanceRelayHorizon(db, "relay_settlements", 2_000, ctx);
+      expect(certs(), "RESUME: one cert").toEqual({ n: 1 });
+      expect(rows()).toEqual({ n: 0 });
+    } finally {
+      await relay.close();
+    }
+  });
+
+  it("the settlement guards are column-narrowed: record columns commit while frozen, money columns and money transitions are refused", async () => {
+    const relay = await createTestRelay({ enableDeviceAuth: false });
+    try {
+      const db = relay.moteDb.db;
+      const peer = await addPeer(relay);
+      const [fwd] = await queuedForwards(relay, peer, 2);
+      const id = crypto.randomUUID();
+      recordP2pSettlementAudit(db, {
+        settlement_id: id,
+        allocation_id: `p2p-${id}`,
+        task_id: `t-${id}`,
+        motebit_id: "narrow-worker",
+        receipt_hash: "rh",
+        amount_settled: 1,
+        platform_fee: 0,
+        platform_fee_rate: 0.05,
+        status: "completed",
+        settled_at: 1_000,
+        settlement_mode: "p2p",
+      });
+      await freeze(relay);
+      const run =
+        (sql: string, ...a: unknown[]) =>
+        () =>
+          db.prepare(sql).run(...(a as never[]));
+      // Records: commit.
+      run("UPDATE relay_settlements SET anchor_batch_id = 'b' WHERE settlement_id = ?", id)();
+      run(
+        "UPDATE relay_settlements SET payment_verification_status = 'verified', payment_verified_at = 1 WHERE settlement_id = ?",
+        id,
+      )();
+      run(
+        "UPDATE relay_federation_settlements SET anchor_batch_id = 'b' WHERE settlement_id = ?",
+        fwd!.settlementId,
+      )();
+      run(
+        "UPDATE relay_federation_settlements SET status = 'delivered' WHERE settlement_id = ?",
+        fwd!.settlementId,
+      )();
+      // Money: refused.
+      expect(
+        run("UPDATE relay_settlements SET amount_settled = 2 WHERE settlement_id = ?", id),
+      ).toThrow(/EMERGENCY_FROZEN/);
+      expect(
+        run("UPDATE relay_settlements SET status = 'refunded' WHERE settlement_id = ?", id),
+      ).toThrow(/EMERGENCY_FROZEN/);
+      expect(
+        run(
+          "UPDATE relay_settlements SET anchor_batch_id = 'c', amount_settled = 3 WHERE settlement_id = ?",
+          id,
+        ),
+        "a record change never carries a money change through",
+      ).toThrow(/EMERGENCY_FROZEN/);
+      const [, other] = (
+        db
+          .prepare("SELECT settlement_id FROM relay_federation_settlements ORDER BY rowid")
+          .all() as Array<{
+          settlement_id: string;
+        }>
+      ).map((r) => r.settlement_id);
+      expect(
+        run(
+          "UPDATE relay_federation_settlements SET status = 'failed' WHERE settlement_id = ?",
+          other,
+        ),
+        "forward_return moves money back to escrow",
+      ).toThrow(/EMERGENCY_FROZEN/);
+      expect(
+        run(
+          "UPDATE relay_federation_settlements SET gross_amount = 1 WHERE settlement_id = ?",
+          other,
+        ),
+      ).toThrow(/EMERGENCY_FROZEN/);
+      expect(run("DELETE FROM relay_settlements WHERE settlement_id = ?", id)).toThrow(
+        /EMERGENCY_FROZEN/,
+      );
+    } finally {
+      await relay.close();
+    }
+  });
+});
+
+describe("freeze at the escrow chokepoint — every allocation-money kind", () => {
+  it("frozen, with the table triggers dropped, moveAllocationMoney refuses every kind and writes nothing", async () => {
+    const relay = await createTestRelay({ enableDeviceAuth: false });
+    try {
+      const db = relay.moteDb.db;
+      const { allocationId, taskId } = heldAllocation(
+        relay,
+        "kind-payer",
+        "kind-worker",
+        1_000_000,
+      );
+      creditAccount(db, "kind-payer", 1_000_000, "deposit", "kind-extra", "seed");
+      const settlementId = `set-${crypto.randomUUID()}`;
+      const moves: Record<AllocationMoneyKind, AllocationMove> = {
+        hold: { kind: "hold", allocationId, amount: 1_000, party: "kind-payer", description: "k" },
+        settlement_fee: {
+          kind: "settlement_fee",
+          allocationId,
+          amount: 50,
+          settlement: {
+            settlement_id: settlementId,
+            allocation_id: allocationId,
+            task_id: taskId,
+            motebit_id: "kind-worker",
+            receipt_hash: "rh",
+            amount_settled: 950,
+            platform_fee: 50,
+            platform_fee_rate: 0.05,
+            status: "completed",
+            settled_at: Date.now(),
+          },
+        },
+        settlement_credit: {
+          kind: "settlement_credit",
+          allocationId,
+          amount: 950,
+          party: "kind-worker",
+          settlementId,
+          description: "k",
+        },
+        settlement_release: {
+          kind: "settlement_release",
+          allocationId,
+          amount: 10,
+          party: "kind-payer",
+          description: "k",
+        },
+        retry_exhaustion_refund: {
+          kind: "retry_exhaustion_refund",
+          allocationId,
+          amount: 10,
+          party: "kind-payer",
+          description: "k",
+        },
+        sweep_refund: {
+          kind: "sweep_refund",
+          allocationId,
+          amount: 10,
+          party: "kind-payer",
+          description: "k",
+        },
+        federated_forward: {
+          kind: "federated_forward",
+          allocationId,
+          amount: 10,
+          forward: {
+            settlement_id: `fwd-${crypto.randomUUID()}`,
+            task_id: taskId,
+            upstream_relay_id: "self",
+            downstream_relay_id: "peer-k",
+            gross_amount: 10,
+            fee_amount: 0,
+            net_amount: 10,
+            fee_rate: 0.05,
+            settled_at: Date.now(),
+            receipt_hash: "rh",
+          },
+        },
+        forward_return: { kind: "forward_return", allocationId, amount: 10, settlementId: "fwd-x" },
+        dispute_clawback: {
+          kind: "dispute_clawback",
+          allocationId,
+          amount: 10,
+          party: "kind-worker",
+          disputeId: "d-k",
+          description: "k",
+        },
+        dispute_worker: {
+          kind: "dispute_worker",
+          allocationId,
+          amount: 10,
+          party: "kind-worker",
+          disputeId: "d-k",
+          description: "k",
+        },
+        dispute_delegator: {
+          kind: "dispute_delegator",
+          allocationId,
+          amount: 10,
+          party: "kind-payer",
+          disputeId: "d-k",
+          description: "k",
+        },
+      };
+      expect(Object.keys(moves).sort()).toEqual([...ALLOCATION_MONEY_KINDS].sort());
+      dropFreezeTriggers(relay);
+      await freeze(relay);
+      const before = moneySnapshot(relay);
+      for (const kind of ALLOCATION_MONEY_KINDS) {
+        let caught: unknown = null;
+        try {
+          db.transaction(() => moveAllocationMoney(db, moves[kind]));
+        } catch (err) {
+          caught = err;
+        }
+        expect(caught, `${kind}: refused by the freeze at the chokepoint`).toBeInstanceOf(
+          EmergencyFrozenError,
+        );
+      }
+      expect(moneySnapshot(relay), "nothing written").toEqual(before);
+      // The forward lifecycle's send claim is refused at the same place.
+      expect(() => beginForwardSend(db, "fwd-x")).toThrow(EmergencyFrozenError);
+      await unfreeze(relay);
+      db.transaction(() => moveAllocationMoney(db, moves.hold));
+    } finally {
+      await relay.close();
+    }
+  });
+});
+
+describe("freeze — a dispute's round-2 finalize", () => {
+  it("round 2: the freeze refuses the fund action at the chokepoint — a 503, the signed verdict kept, finalized once by the first read after unfreeze", async () => {
+    const relay = await createTestRelay({ enableDeviceAuth: false });
+    try {
+      const db = relay.moteDb.db;
+      const relayId = relay.relayIdentity.relayMotebitId;
+      const W = await agent(relay);
+      await register(relay, W);
+      const voters = await Promise.all(
+        [0, 1, 2].map(async (i) => ({
+          id: `relay-voter-fz-${i}`,
+          url: `http://voter-fz${i}.test`,
+          kp: await generateKeypair(),
+        })),
+      );
+      for (const v of voters) {
+        db.prepare(
+          `INSERT INTO relay_peers (peer_relay_id, public_key, endpoint_url, display_name, state, missed_heartbeats, agent_count, trust_score, peered_at, last_heartbeat_at)
+           VALUES (?, ?, ?, ?, 'active', 0, 0, 0.5, ?, ?)`,
+        ).run(v.id, bytesToHex(v.kp.publicKey), v.url, v.id, Date.now(), Date.now());
+      }
+      let onRound2: (() => Promise<void>) | null = null;
+      const real = globalThis.fetch;
+      vi.stubGlobal("fetch", async (input: string | URL | Request, init?: RequestInit) => {
+        const url =
+          typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+        const voter = voters.find((v) => url.startsWith(v.url));
+        if (voter == null) return real(input, init);
+        const body = JSON.parse(init!.body as string) as { dispute_id: string; round: number };
+        if (body.round === 2 && onRound2 != null) {
+          const h = onRound2;
+          onRound2 = null;
+          await h();
+        }
+        const vote = await signAdjudicatorVote(
+          {
+            dispute_id: body.dispute_id,
+            round: body.round,
+            peer_id: voter.id,
+            vote: "overturned",
+            rationale: "fz",
+          },
+          voter.kp.privateKey,
+        );
+        return new Response(JSON.stringify(vote), {
+          status: 200,
+          headers: { "content-type": "application/json" },
+        });
+      });
+
+      const S = seedX402PaidTask(relay, {
+        workerId: W.id,
+        delegatorId: relayId,
+        prompt: `fz r2 ${crypto.randomUUID()}`,
+        unitCostUsd: 1.0,
+      });
+      const R = await receiptBy(W, S);
+      const posted = await relay.app.request(`/agent/${W.id}/task/${S}/result`, {
+        method: "POST",
+        headers: JSON_AUTH,
+        body: JSON.stringify(R),
+      });
+      expect(posted.status, await posted.clone().text()).toBe(200);
+      const disputeId = `dsp-fz-${crypto.randomUUID()}`;
+      const filed = await relay.app.request(`/api/v1/allocations/x402-${S}/dispute`, {
+        method: "POST",
+        headers: JSON_AUTH,
+        body: JSON.stringify(
+          await signDisputeRequest(
+            {
+              dispute_id: disputeId,
+              task_id: S,
+              allocation_id: `x402-${S}`,
+              filed_by: W.id,
+              respondent: relayId,
+              category: "quality",
+              description: "contested",
+              evidence_refs: ["r"],
+              filed_at: Date.now(),
+            },
+            W.kp.privateKey,
+          ),
+        ),
+      });
+      expect(filed.status, await filed.clone().text()).toBe(200);
+      const resolved = await relay.app.request(`/api/v1/disputes/${disputeId}/resolve`, {
+        method: "POST",
+        headers: JSON_AUTH,
+        body: JSON.stringify({
+          resolution: "overturned",
+          rationale: "r1",
+          fund_action: "refund_to_delegator",
+        }),
+      });
+      expect(resolved.status, await resolved.clone().text()).toBe(200);
+
+      const before = moneySnapshot(relay);
+      onRound2 = () => freeze(relay);
+      const appealed = await relay.app.request(`/api/v1/disputes/${disputeId}/appeal`, {
+        method: "POST",
+        headers: JSON_AUTH,
+        body: JSON.stringify(
+          await signDisputeAppeal(
+            {
+              dispute_id: disputeId,
+              appealed_by: W.id,
+              reason: "disagree",
+              appealed_at: Date.now(),
+            },
+            W.kp.privateKey,
+          ),
+        ),
+      });
+      expect(appealed.status, await appealed.clone().text()).toBe(503);
+      expect(((await appealed.json()) as { code?: string }).code).toBe("EMERGENCY_FROZEN");
+      expect(moneySnapshot(relay), "FROZEN: no money row changed").toEqual(before);
+      const state = () =>
+        db
+          .prepare("SELECT state, fund_refusal FROM relay_disputes WHERE dispute_id = ?")
+          .get(disputeId) as {
+          state: string;
+          fund_refusal: string | null;
+        };
+      expect(state(), "appealed, with no refusal marker").toEqual({
+        state: "appealed",
+        fund_refusal: null,
+      });
+      expect(
+        db
+          .prepare(
+            "SELECT COUNT(*) AS n FROM relay_dispute_resolutions WHERE dispute_id = ? AND round = 2",
+          )
+          .get(disputeId),
+        "the signed round-2 verdict is kept",
+      ).toEqual({ n: 1 });
+
+      await unfreeze(relay);
+      const read = await relay.app.request(`/api/v1/disputes/${disputeId}`, { headers: JSON_AUTH });
+      expect(read.status).toBe(200);
+      expect(state().state, "RESUME: finalized by the read").toBe("final");
+      const afterFinal = moneySnapshot(relay);
+      expect(afterFinal.relay_transactions).not.toEqual(before.relay_transactions);
+      await relay.app.request(`/api/v1/disputes/${disputeId}`, { headers: JSON_AUTH });
+      expect(moneySnapshot(relay), "never twice").toEqual(afterFinal);
     } finally {
       await relay.close();
     }

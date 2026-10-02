@@ -972,9 +972,12 @@ export function registerMiddleware(deps: MiddlewareDeps): MiddlewareResult {
   // --- Error handler ---
   app.onError((caught, c) => {
     // A freeze guard aborted this request's money write (the freeze landed
-    // after the entry check): a typed 503, never a 500.
+    // after the entry check): a typed 503, never a 500. An x402 settlement the
+    // freeze left uncredited is already a 503 that names its record.
     const err =
-      !(caught instanceof EmergencyFrozenError) && isEmergencyFrozenAbort(caught)
+      !(caught instanceof EmergencyFrozenError) &&
+      !(caught instanceof X402OutcomeUnknownError) &&
+      isEmergencyFrozenAbort(caught)
         ? new EmergencyFrozenError(undefined, { cause: caught })
         : caught;
     // #459: if THIS request claimed an idempotency key and then failed

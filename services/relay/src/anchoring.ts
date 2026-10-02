@@ -251,31 +251,39 @@ export async function cutBatch(
   const treeHashVersionColumn =
     treeHashVersion === "merkle-sha256-rfc6962-v2" ? treeHashVersion : null;
 
-  // Persist atomically: create batch + assign all settlements
   const now = Date.now();
-  db.prepare(
-    `INSERT INTO relay_anchor_batches
-       (batch_id, relay_id, merkle_root, leaf_count, first_settled_at, last_settled_at,
-        signature, status, created_at, tree_hash_version)
-     VALUES (?, ?, ?, ?, ?, ?, ?, 'signed', ?, ?)`,
-  ).run(
-    batchId,
-    relayIdentity.relayMotebitId,
-    tree.root,
-    rows.length,
-    firstSettledAt,
-    lastSettledAt,
-    signature,
-    now,
-    treeHashVersionColumn,
-  );
+  // ONE transaction: the signed batch row and every leaf's assignment commit
+  // together or not at all. A batch row without its leaves would be anchored
+  // onchain beside a later batch covering the same leaves.
+  db.transaction(() => {
+    db.prepare(
+      `INSERT INTO relay_anchor_batches
+         (batch_id, relay_id, merkle_root, leaf_count, first_settled_at, last_settled_at,
+          signature, status, created_at, tree_hash_version)
+       VALUES (?, ?, ?, ?, ?, ?, ?, 'signed', ?, ?)`,
+    ).run(
+      batchId,
+      relayIdentity.relayMotebitId,
+      tree.root,
+      rows.length,
+      firstSettledAt,
+      lastSettledAt,
+      signature,
+      now,
+      treeHashVersionColumn,
+    );
 
-  const assignStmt = db.prepare(
-    "UPDATE relay_federation_settlements SET anchor_batch_id = ? WHERE settlement_id = ?",
-  );
-  for (const row of rows) {
-    assignStmt.run(batchId, row.settlement_id);
-  }
+    const assignStmt = db.prepare(
+      "UPDATE relay_federation_settlements SET anchor_batch_id = ? WHERE settlement_id = ? AND anchor_batch_id IS NULL",
+    );
+    for (const row of rows) {
+      if (assignStmt.run(batchId, row.settlement_id).changes !== 1) {
+        // Another cut took this leaf during this one's awaits: a batch must
+        // own exactly the leaves it signed, so this one is not written.
+        throw new Error(`anchoring: leaf ${row.settlement_id} was assigned during the cut`);
+      }
+    }
+  });
 
   logger.info("anchoring.batch_cut", {
     batch_id: batchId,
@@ -686,29 +694,38 @@ export async function cutAgentSettlementBatch(
     treeHashVersion === "merkle-sha256-rfc6962-v2" ? treeHashVersion : null;
 
   const now = Date.now();
-  db.prepare(
-    `INSERT INTO relay_agent_anchor_batches
-       (batch_id, relay_id, merkle_root, leaf_count, first_settled_at, last_settled_at,
-        signature, status, created_at, tree_hash_version)
-     VALUES (?, ?, ?, ?, ?, ?, ?, 'signed', ?, ?)`,
-  ).run(
-    batchId,
-    relayIdentity.relayMotebitId,
-    tree.root,
-    rows.length,
-    firstSettledAt,
-    lastSettledAt,
-    signature,
-    now,
-    treeHashVersionColumn,
-  );
+  // ONE transaction: the signed batch row and every leaf's assignment commit
+  // together or not at all. A batch row without its leaves would be anchored
+  // onchain beside a later batch covering the same leaves.
+  db.transaction(() => {
+    db.prepare(
+      `INSERT INTO relay_agent_anchor_batches
+         (batch_id, relay_id, merkle_root, leaf_count, first_settled_at, last_settled_at,
+          signature, status, created_at, tree_hash_version)
+       VALUES (?, ?, ?, ?, ?, ?, ?, 'signed', ?, ?)`,
+    ).run(
+      batchId,
+      relayIdentity.relayMotebitId,
+      tree.root,
+      rows.length,
+      firstSettledAt,
+      lastSettledAt,
+      signature,
+      now,
+      treeHashVersionColumn,
+    );
 
-  const assignStmt = db.prepare(
-    "UPDATE relay_settlements SET anchor_batch_id = ? WHERE settlement_id = ?",
-  );
-  for (const row of rows) {
-    assignStmt.run(batchId, row.settlement_id);
-  }
+    const assignStmt = db.prepare(
+      "UPDATE relay_settlements SET anchor_batch_id = ? WHERE settlement_id = ? AND anchor_batch_id IS NULL",
+    );
+    for (const row of rows) {
+      if (assignStmt.run(batchId, row.settlement_id).changes !== 1) {
+        // Another cut took this leaf during this one's awaits: a batch must
+        // own exactly the leaves it signed, so this one is not written.
+        throw new Error(`anchoring: leaf ${row.settlement_id} was assigned during the cut`);
+      }
+    }
+  });
 
   logger.info("anchoring.agent_batch_cut", {
     batch_id: batchId,

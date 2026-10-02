@@ -36,6 +36,7 @@ import { getRelayKeypair } from "./credentials.js";
 import {
   AllocationMoneyRefused,
   markForwardDelivered,
+  beginForwardSend,
   moveAllocationMoney,
   recordInboundFederatedSettlement,
   recordP2pSettlementAudit,
@@ -868,6 +869,18 @@ export async function forwardOriginSettlement(
       new TextEncoder().encode(canonicalJson(settlementBody)),
       relayIdentity.privateKey,
     );
+    // The forward lifecycle's send claim, in the same turn as the send: a
+    // freeze that landed during the signing await refuses it, and the
+    // committed retry row carries the send to after unfreeze.
+    try {
+      if (!beginForwardSend(db, settlementId)) return "queued";
+    } catch (err) {
+      logger.warn("federation.settlement_forward.send_deferred", {
+        correlationId: args.taskId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return "queued";
+    }
     try {
       const resp = await (args.peerFetch ?? defaultPeerFetch)(
         `${peerInfo.endpoint_url}/federation/v1/settlement/forward`,
