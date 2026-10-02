@@ -124,8 +124,10 @@ describe("POST /api/v1/agents/:motebitId/debit", () => {
     expect(body.balance).toBe(0);
   });
 
-  it("returns success: false when debit exceeds balance", async () => {
-    // Deposit $0.01 = 10,000 micro-units, then try to debit 20,000
+  it("drains the balance and reports the shortfall when the debit exceeds it", async () => {
+    // The turn was already served. Recording nothing would leave the balance
+    // intact for the next proxy token — an undrainable, unbilled tail.
+    // Deposit $0.01 = 10,000 micro-units, then try to debit 20,000.
     await deposit(relay, motebitId, 0.01);
     const res = await debitRequest(
       relay,
@@ -134,9 +136,55 @@ describe("POST /api/v1/agents/:motebitId/debit", () => {
       RELAY_SECRET,
     );
     expect(res.status).toBe(200);
-    const body = (await res.json()) as { success: boolean; balance: number };
-    expect(body.success).toBe(false);
-    expect(body.balance).toBe(0);
+    const body = (await res.json()) as {
+      success: boolean;
+      balance: number;
+      partial?: boolean;
+      debited?: number;
+      shortfall?: number;
+    };
+    expect(body).toMatchObject({
+      success: true,
+      balance: 0,
+      partial: true,
+      debited: 10_000,
+      shortfall: 10_000,
+    });
+    const fees = relay.moteDb.db
+      .prepare(
+        "SELECT amount, reference_id FROM relay_transactions WHERE motebit_id = ? AND type = 'fee'",
+      )
+      .all(motebitId);
+    expect(fees).toEqual([{ amount: -10_000, reference_id: "ref-overdraw" }]);
+
+    // A retry of the same reference is a replay, not a second drain.
+    const retry = await debitRequest(
+      relay,
+      motebitId,
+      { amount: 20_000, reference_id: "ref-overdraw" },
+      RELAY_SECRET,
+    );
+    expect(((await retry.json()) as { idempotent?: boolean }).idempotent).toBe(true);
+  });
+
+  it("rejects a fractional amount (micro-units are integers) with 400, not a 500", async () => {
+    await deposit(relay, motebitId, 0.01);
+    const res = await debitRequest(
+      relay,
+      motebitId,
+      { amount: 12.5, reference_id: "ref-frac" },
+      RELAY_SECRET,
+    );
+    expect(res.status).toBe(400);
+  });
+
+  it("rejects a non-JSON body with 400", async () => {
+    const res = await relay.app.request(`/api/v1/agents/${motebitId}/debit`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-relay-secret": RELAY_SECRET },
+      body: "not json",
+    });
+    expect(res.status).toBe(400);
   });
 
   // ── Successful debit ───────────────────────────────────────────────────
@@ -180,16 +228,28 @@ describe("POST /api/v1/agents/:motebitId/debit", () => {
     expect(b2.success).toBe(true);
     expect(b2.balance).toBe(15_000);
 
-    // Third debit exceeds remaining balance
+    // Third debit exceeds the remaining balance: drains it, shortfall reported.
     const r3 = await debitRequest(
       relay,
       motebitId,
       { amount: 20_000, reference_id: "ref-3" },
       RELAY_SECRET,
     );
-    const b3 = (await r3.json()) as { success: boolean; balance: number };
-    expect(b3.success).toBe(false);
+    const b3 = (await r3.json()) as { success: boolean; balance: number; shortfall?: number };
+    expect(b3.success).toBe(true);
     expect(b3.balance).toBe(0);
+    expect(b3.shortfall).toBe(5_000);
+
+    // Nothing spendable left: now the debit records nothing and says so.
+    const r4 = await debitRequest(
+      relay,
+      motebitId,
+      { amount: 1_000, reference_id: "ref-4" },
+      RELAY_SECRET,
+    );
+    const b4 = (await r4.json()) as { success: boolean; balance: number; shortfall?: number };
+    expect(b4.success).toBe(false);
+    expect(b4.shortfall).toBe(1_000);
   });
 
   // ── Idempotency on reference_id ──────────────────────────────────────────

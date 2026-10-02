@@ -18,9 +18,9 @@
  *      the slot is released in the stream pump's `finally`.
  *
  * Fail-closed on a KV error for the money path (contrast the embed route,
- * which is best-effort and fails open by design). Local dev with no KV
- * configured skips the controls, matching every sibling route; the origin
- * allowlist still gates callers there.
+ * which is best-effort and fails open by design), and fail-closed when a
+ * DEPLOYED proxy (`VERCEL_ENV`/`VERCEL` set) has no KV configured. Only local
+ * dev with no KV skips the controls; the origin allowlist still gates there.
  *
  * The store is injectable so the route's behaviour is unit-testable without
  * Vercel KV; `@vercel/kv` is loaded lazily only when configured.
@@ -52,7 +52,13 @@ export function setSpendStoreForTests(store: SpendStore | null | undefined): voi
 
 async function resolveStore(): Promise<SpendStore | null> {
   if (testStore !== undefined) return testStore;
-  if (!process.env.KV_REST_API_URL) return null;
+  if (!process.env.KV_REST_API_URL) {
+    // A deployed proxy with no shared store has no cross-isolate cap at all
+    // (balance, rate and concurrency would each be per-isolate or absent):
+    // refuse rather than serve unbounded. Only local dev skips the controls.
+    if (isDeployed()) throw new Error("spend store not configured on a deployed proxy");
+    return null;
+  }
   const { kv } = await import("@vercel/kv");
   return {
     incr: (k) => kv.incr(k),
@@ -66,6 +72,11 @@ async function resolveStore(): Promise<SpendStore | null> {
     },
     expire: (k, s) => kv.expire(k, s),
   };
+}
+
+/** True on any Vercel deployment (production or preview). */
+function isDeployed(): boolean {
+  return Boolean(process.env.VERCEL_ENV || process.env.VERCEL);
 }
 
 export type SpendAdmission =

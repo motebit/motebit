@@ -4,7 +4,7 @@
  * behavior, and that the grant flows through the proxy-token endpoint so a fresh
  * motebit's token carries a usable balance.
  */
-import { describe, it, expect, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, beforeAll, afterAll } from "vitest";
 import { createSyncRelay } from "../index.js";
 import type { SyncRelay } from "../index.js";
 import { grantFreeCreditIfEligible, type FreeCreditConfig } from "../free-credit.js";
@@ -21,6 +21,17 @@ import { generateKeypair, bytesToHex } from "@motebit/crypto";
 // eslint-disable-next-line no-restricted-imports -- test mints its own bearer token
 import { createSignedToken } from "@motebit/encryption";
 import { seedBalance, TEST_RELAY_NETWORK } from "./test-helpers.js";
+
+// Minting a proxy token requires the debit secret (subscriptions.ts): a token
+// whose debits could never land is never issued.
+const PREV_PROXY_SECRET = process.env.RELAY_PROXY_SECRET;
+beforeAll(() => {
+  process.env.RELAY_PROXY_SECRET ??= "test-relay-proxy-secret";
+});
+afterAll(() => {
+  if (PREV_PROXY_SECRET === undefined) delete process.env.RELAY_PROXY_SECRET;
+  else process.env.RELAY_PROXY_SECRET = PREV_PROXY_SECRET;
+});
 
 const API_TOKEN = "test-token";
 

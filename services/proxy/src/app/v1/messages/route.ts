@@ -34,6 +34,7 @@ import { failureResponse, emitProxyFailure } from "../../../inference/failure-re
 // Spend controls for the motebit-cloud path: live-ish balance (per-token spent
 // counter), per-identity rate and concurrency — enforced BEFORE anything spends.
 import { admitSpend, type SpendAdmission } from "../../../spend-controls";
+import { debitRelay, resolveBillingConfig } from "../../../billing";
 
 const ALLOWED_ORIGINS = new Set([
   "https://motebit.com",
@@ -95,69 +96,6 @@ Message: ${message.slice(0, 500)}`,
   } catch {
     return "chat"; // default to Sonnet on failure
   }
-}
-
-/** @internal — exported only for unit tests. */
-export const DEBIT_MAX_ATTEMPTS = 3;
-
-/**
- * Debit the relay for actual compute cost.
- *
- * Runs AFTER the response stream is returned to the client (in the stream pump's
- * `finally`), so it never delays the user — but it must NOT silently drop
- * revenue, which the old `void fetch(...).catch(() => {})` did on any network
- * error, AND on every non-2xx (a 500/401 resolves the promise, so `.catch` never
- * fired). The relay debit endpoint is idempotent on `reference_id`, so transient
- * failures (network blip, relay restart, 5xx) are retried with backoff using the
- * same reference — a retry after a missed 200 cannot double-charge. A 4xx is a
- * permanent error (bad secret / bad amount) and is not retried. On exhaustion we
- * emit a structured `proxy.debit_failed` event so the dropped debit is
- * reconcilable from logs rather than vanishing.
- */
-export async function debitRelay(
-  motebitId: string,
-  amountMicro: number,
-  referenceId: string,
-): Promise<void> {
-  const relayUrl = process.env.RELAY_API_URL ?? "https://relay.motebit.com";
-  const secret = process.env.RELAY_PROXY_SECRET;
-  if (!secret || amountMicro <= 0) return;
-
-  let lastError = "";
-  for (let attempt = 1; attempt <= DEBIT_MAX_ATTEMPTS; attempt++) {
-    try {
-      const res = await fetch(`${relayUrl}/api/v1/agents/${motebitId}/debit`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "x-relay-secret": secret },
-        body: JSON.stringify({
-          amount: amountMicro,
-          reference_id: referenceId,
-          description: "Cloud AI usage",
-        }),
-      });
-      if (res.ok) return;
-      lastError = `HTTP ${res.status}`;
-      // 4xx won't change on retry (bad secret, malformed amount) — fail fast.
-      if (res.status >= 400 && res.status < 500) break;
-    } catch (err) {
-      lastError = err instanceof Error ? err.message : String(err);
-    }
-    if (attempt < DEBIT_MAX_ATTEMPTS) {
-      await new Promise((resolve) => setTimeout(resolve, attempt * 250));
-    }
-  }
-
-  // Exhausted retries — do NOT swallow. This event is the reconciliation trail
-  // for a debit the relay never recorded (lost revenue if not recovered).
-  console.error(
-    JSON.stringify({
-      event: "proxy.debit_failed",
-      requestId: referenceId,
-      motebitId,
-      amountMicro,
-      error: lastError,
-    }),
-  );
 }
 
 // ── Provider API adapters ───────────────────────────────────────────────
@@ -227,6 +165,27 @@ export async function POST(request: Request): Promise<Response> {
         bodyObj: { error: "server_error", message: "Proxy token verification not configured" },
         headers: cors,
         failure: motebitFailure("motebit_infrastructure", "not_configured", 500),
+      });
+    }
+
+    // Billing must be able to land before motebit-cloud serves anything:
+    // refuse rather than serve a turn whose relay debit cannot be recorded.
+    const billing = resolveBillingConfig();
+    if (!billing.ok) {
+      console.error(
+        JSON.stringify({
+          event: "proxy.billing_unconfigured",
+          requestId,
+          missing: billing.missing,
+        }),
+      );
+      return failureResponse({
+        requestId,
+        status: 503,
+        bodyObj: { error: "server_error", message: "Cloud AI billing is not configured." },
+        headers: cors,
+        mode: "proxy-token",
+        failure: motebitFailure("motebit_infrastructure", "not_configured", 503),
       });
     }
 
@@ -603,6 +562,14 @@ export async function POST(request: Request): Promise<Response> {
     limits.maxTokens,
   );
 
+  // The classifier already spent on the operator key; a turn that fails before
+  // streaming still owes it.
+  const billClassifierOnly = async (): Promise<void> => {
+    if (authMode === "proxy-token" && tokenPayload && classifierCost > 0) {
+      await debitRelay(tokenPayload.mid, classifierCost, requestId);
+    }
+  };
+
   let providerRes: Response;
   try {
     providerRes = await fetch(providerReq.url, {
@@ -618,6 +585,7 @@ export async function POST(request: Request): Promise<Response> {
       provider: resolvedProvider,
       errorName: err instanceof Error ? err.name : undefined,
     });
+    await billClassifierOnly();
     return released(
       failureResponse({
         requestId,
@@ -658,6 +626,7 @@ export async function POST(request: Request): Promise<Response> {
     // still want the provider's retry guidance until in-proxy recovery (PR3)
     // exists. The rest of the upstream header set is deliberately not relayed.
     const retryAfter = providerRes.headers.get("Retry-After");
+    await billClassifierOnly();
     return released(
       new Response(bodyText, {
         status: providerRes.status,
@@ -699,42 +668,51 @@ export async function POST(request: Request): Promise<Response> {
             extractUsage(prov, line, usage);
           }
         }
+      } catch {
+        // Client disconnected (write rejected) or the upstream stream errored.
+        // Stop the upstream generation and bill what was metered — a dropped
+        // client is never a free turn.
+        await reader.cancel().catch(() => {});
       } finally {
-        await writer.close();
-        const cost =
-          calculateCostMicro(
-            model,
-            usage.input,
-            usage.output,
-            usage.cacheRead,
-            usage.cacheCreation,
-          ) + classifierCost;
-        // Log normalized token fields for billing verification. `extractUsage`
-        // normalizes every provider so `input` is UNCACHED and `cacheRead` is the
-        // cached/discounted portion (additive) — so the calculateCostMicro formula
-        // (uncached + cacheRead·discount + cacheCreation·1.25) is correct without
-        // double-counting. cacheRead > 0 here is the proof caching is landing.
-        console.log(
-          JSON.stringify({
-            event: "proxy.usage",
-            requestId,
-            model,
-            input: usage.input,
-            output: usage.output,
-            cacheRead: usage.cacheRead,
-            cacheCreation: usage.cacheCreation,
-            costMicro: cost,
-            motebitId: mid,
-          }),
-        );
-        // Awaited so retries complete before the pump task ends; the client
-        // already holds the full response (writer.close() above), so this never
-        // delays the user.
-        if (cost > 0) await debitRelay(mid, cost, requestId);
-        // Spend controls: charge this token's local counter so the NEXT request
-        // sees the live-ish balance, then free the concurrency slot.
-        await spendAdmission?.record(cost);
-        await spendAdmission?.release();
+        try {
+          const cost =
+            calculateCostMicro(
+              model,
+              usage.input,
+              usage.output,
+              usage.cacheRead,
+              usage.cacheCreation,
+            ) + classifierCost;
+          // Normalized token fields for billing verification. `extractUsage`
+          // normalizes every provider so `input` is UNCACHED and `cacheRead` is
+          // the cached/discounted portion (additive) — so calculateCostMicro
+          // (uncached + cacheRead·discount + cacheCreation·1.25) does not
+          // double-count. cacheRead > 0 here is the proof caching is landing.
+          console.log(
+            JSON.stringify({
+              event: "proxy.usage",
+              requestId,
+              model,
+              input: usage.input,
+              output: usage.output,
+              cacheRead: usage.cacheRead,
+              cacheCreation: usage.cacheCreation,
+              costMicro: cost,
+              motebitId: mid,
+            }),
+          );
+          // Debit BEFORE the client's stream ends: work after the response
+          // completes is not guaranteed to run on the edge runtime, so a debit
+          // scheduled after close is one the platform may drop. Always called —
+          // a zero cost is itself reported (`no_billable_amount`).
+          await debitRelay(mid, cost, requestId);
+          // Spend controls: charge this token's local counter so the NEXT
+          // request sees the live-ish balance.
+          await spendAdmission?.record(cost);
+        } finally {
+          await spendAdmission?.release();
+          await writer.close().catch(() => {});
+        }
       }
     })();
 
@@ -744,6 +722,8 @@ export async function POST(request: Request): Promise<Response> {
         ...cors,
         "Content-Type": providerRes.headers.get("Content-Type") ?? "text/event-stream",
         "Cache-Control": "no-cache",
+        // The relay `fee` row's reference_id — correlates a turn to its debit.
+        "X-Motebit-Request-Id": requestId,
         ...(routingReason ? { "X-Motebit-Routing-Reason": routingReason } : {}),
       },
     });

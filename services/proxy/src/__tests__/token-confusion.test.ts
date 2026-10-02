@@ -76,7 +76,9 @@ beforeEach(() => {
   process.env.OPENAI_API_KEY = "sk-openai-test-never-real";
   process.env.GOOGLE_AI_API_KEY = "google-test-never-real";
   process.env.GROQ_API_KEY = "groq-test-never-real";
-  delete process.env.RELAY_PROXY_SECRET;
+  // Billing configured (motebit-cloud refuses to serve otherwise — billing.ts).
+  process.env.RELAY_API_URL = "https://relay.test";
+  process.env.RELAY_PROXY_SECRET = "test-relay-proxy-secret";
   // Production runs with KV-backed spend controls; exercise them here too.
   setSpendStoreForTests(memoryStore());
   vi.spyOn(console, "log").mockImplementation(() => {});
@@ -101,6 +103,8 @@ afterEach(() => {
   delete process.env.OPENAI_API_KEY;
   delete process.env.GOOGLE_AI_API_KEY;
   delete process.env.GROQ_API_KEY;
+  delete process.env.RELAY_API_URL;
+  delete process.env.RELAY_PROXY_SECRET;
 });
 
 // ── Token producers (byte-for-byte the relay's shapes) ────────────────────
