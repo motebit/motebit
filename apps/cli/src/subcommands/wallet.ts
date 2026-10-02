@@ -23,6 +23,7 @@ import { secureErase } from "@motebit/encryption";
 import { loadFullConfig } from "../config.js";
 import { loadActiveSigningKey, IdentityKeyError } from "../identity.js";
 import { NO_IDENTITY_MESSAGE } from "./_helpers.js";
+import { sanitizeRelayText } from "@motebit/sync-engine";
 
 interface WalletOptions {
   /** Solana RPC endpoint. Defaults to mainnet-beta public RPC. */
@@ -62,10 +63,12 @@ export async function handleWallet(options: WalletOptions = {}): Promise<void> {
     privateKey = loaded.privateKey;
   } catch (err) {
     if (err instanceof IdentityKeyError) {
-      console.error(`Wallet unavailable: ${err.message}`);
+      console.error(`Wallet unavailable: ${sanitizeRelayText(err.message)}`);
       console.error(`  → ${err.remedy}`);
     } else {
-      console.error(`Wallet unavailable: ${err instanceof Error ? err.message : String(err)}`);
+      console.error(
+        `Wallet unavailable: ${sanitizeRelayText(err instanceof Error ? err.message : String(err))}`,
+      );
     }
     process.exit(1);
   }
@@ -151,10 +154,12 @@ export async function handleWalletSwap(
     privateKey = loaded.privateKey;
   } catch (err) {
     if (err instanceof IdentityKeyError) {
-      console.error(`Swap unavailable: ${err.message}`);
+      console.error(`Swap unavailable: ${sanitizeRelayText(err.message)}`);
       console.error(`  → ${err.remedy}`);
     } else {
-      console.error(`Swap unavailable: ${err instanceof Error ? err.message : String(err)}`);
+      console.error(
+        `Swap unavailable: ${sanitizeRelayText(err instanceof Error ? err.message : String(err))}`,
+      );
     }
     process.exit(1);
   }
@@ -178,7 +183,7 @@ export async function handleWalletSwap(
     console.log(`Run \`motebit wallet\` to see the updated balance.`);
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
-    console.error(`Swap refused or failed: ${msg}`);
+    console.error(`Swap refused or failed: ${sanitizeRelayText(msg)}`);
     process.exit(1);
   }
 }

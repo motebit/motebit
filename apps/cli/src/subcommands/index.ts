@@ -82,6 +82,7 @@ export {
   handleSkillsUntrust,
   handleSkillsVerify,
 } from "./skills.js";
+export { handleStatus, handleSync } from "./sync.js";
 export { handleVerify } from "./verify.js";
 export { handleVerifyWire, isVerifyKind } from "./verify-wire.js";
 export { handleWallet, handleWalletSwap } from "./wallet.js";

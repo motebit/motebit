@@ -22,6 +22,7 @@ import { computerDefinition } from "@motebit/tools/web-safe";
 import { CONFIG_DIR } from "./config.js";
 import type { FullConfig } from "./config.js";
 import { fromHex, loadActiveSigningKey } from "./identity.js";
+import { sanitizeRelayText } from "@motebit/sync-engine";
 
 export interface CliElectionDeps {
   fullConfig: FullConfig;
@@ -184,7 +185,7 @@ export async function electAttachOrCoordinate(
     });
   } catch (err: unknown) {
     console.error(
-      `Runtime-host election failed: ${err instanceof Error ? err.message : String(err)}`,
+      `Runtime-host election failed: ${sanitizeRelayText(err instanceof Error ? err.message : String(err))}`,
     );
     console.error(
       "A coordinator may already be running with an incompatible build or a locked signing key. Stop it and retry.",

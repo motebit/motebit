@@ -267,6 +267,11 @@ describe("web catch-up failures reach the sync status (#928 round 3)", () => {
           typeof input === "string" ? input : input instanceof URL ? input.href : input.url,
         );
         const path = url.pathname;
+        // The relay accepts this device (#962: a registration it does not
+        // accept is retried and the status reads "error" until it is).
+        if (path === "/api/v1/devices/register-self") {
+          return Response.json({ created: false, registered_at: 0 });
+        }
         if (!path.startsWith("/sync/")) {
           return new Response("{}", {
             status: 503,

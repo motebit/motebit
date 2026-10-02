@@ -15,6 +15,7 @@ import { CONFIG_DIR, listConfigBackups, listKeptKeyFiles, loadFullConfig } from 
 import { mkdirOwnerOnly } from "../durable-file.js";
 import { seedBackupStatus } from "./seed.js";
 import { getDbPath } from "../runtime-factory.js";
+import { sanitizeRelayText } from "@motebit/sync-engine";
 
 interface DoctorCheck {
   name: string;
@@ -555,7 +556,7 @@ export async function handleDoctor(): Promise<void> {
       }
     } catch (err: unknown) {
       console.log(
-        `Hosting: could not read the coverage record (${err instanceof Error ? err.message : String(err)})\n`,
+        `Hosting: could not read the coverage record (${sanitizeRelayText(err instanceof Error ? err.message : String(err))})\n`,
       );
     }
 
@@ -606,7 +607,7 @@ export async function handleDoctor(): Promise<void> {
       }
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
-      console.log(`(could not read recent outcomes: ${msg})\n`);
+      console.log(`(could not read recent outcomes: ${sanitizeRelayText(msg)})\n`);
     }
   }
 

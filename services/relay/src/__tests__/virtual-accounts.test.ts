@@ -173,8 +173,7 @@ describe("Virtual Accounts", () => {
   it("balance includes sweep config when agent registered with sweep_threshold + settlement_address", async () => {
     // Sovereign-exit UX depends on surfacing the sweep relationship. The UI
     // reads these fields to render "Auto-sweep above $X → sovereign wallet"
-    // beneath the operating balance. See /Users/daniel/.claude/plans/
-    // polymorphic-greeting-nebula.md.
+    // beneath the operating balance.
     const keypair = await generateKeypair();
     const { motebitId } = await createIdentityAndDevice(relay, bytesToHex(keypair.publicKey));
     // Valid Solana address format (base58, 32-44 chars, no 0/O/I/l). Not a
