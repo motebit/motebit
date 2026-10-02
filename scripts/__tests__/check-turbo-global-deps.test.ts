@@ -23,7 +23,8 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { evaluate } from "../check-turbo-global-deps.js";
+import { evaluate, globSelects, isGlob } from "../check-turbo-global-deps.js";
+import { countSpecMd, SPEC_COUNT_INPUTS } from "../generate-llms-txt.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, "..", "..");
@@ -126,6 +127,35 @@ describe("discovery (fixture repo)", () => {
     expect(v.some((s) => s.includes('task "test" is cacheable'))).toBe(true);
   });
 
+  it("a filename literal used only in a comparison is not a read; a named one still is", () => {
+    write(
+      dir,
+      "scripts/names.ts",
+      'export const skip = (f: string) => f !== "README.md";\nexport const cfg = "tsconfig.base.json";\n',
+    );
+    write(
+      dir,
+      "packages/a/package.json",
+      JSON.stringify({
+        name: "a",
+        scripts: { lint: "eslint src/", prebuild: "tsx ../../scripts/names.ts" },
+      }),
+    );
+    git(dir, "add", "-A");
+    turbo([...ALL, "scripts/names.ts"]);
+    const { violations, d } = evaluate(dir);
+    expect(violations).toEqual([]);
+    expect(d.inputs.has("README.md")).toBe(false);
+    expect([...d.inputs.get("tsconfig.base.json")!]).toContain("scripts/names.ts (names it)");
+    write(
+      dir,
+      "packages/a/package.json",
+      JSON.stringify({ name: "a", scripts: { lint: "eslint src/" } }),
+    );
+    rmSync(join(dir, "scripts"), { recursive: true });
+    git(dir, "add", "-A");
+  });
+
   it("fails closed on a root script input that reads files with no SCRIPT_DATA_READS entry", () => {
     write(dir, "scripts/gen.ts", 'import { readFileSync } from "node:fs";\nreadFileSync("x");\n');
     write(
@@ -142,6 +172,18 @@ describe("discovery (fixture repo)", () => {
     expect(v.some((s) => s.includes("scripts/gen.ts reads files at runtime"))).toBe(true);
   });
 });
+
+const trackedFiles = (): string[] =>
+  execFileSync("git", ["-c", "core.quotePath=false", "ls-files"], { cwd: ROOT, encoding: "utf8" })
+    .split("\n")
+    .filter(Boolean);
+
+/** globalDependencies entries → the files they name (globs expanded, turbo semantics). */
+function expand(entries: readonly string[]): string[] {
+  const globs = entries.filter(isGlob);
+  const exact = entries.filter((e) => !isGlob(e));
+  return [...exact, ...(globs.length ? trackedFiles().filter((f) => globSelects(globs, f)) : [])];
+}
 
 describe("execution: each globalDependencies entry moves the turbo task hashes", () => {
   let wt: string;
@@ -184,7 +226,7 @@ describe("execution: each globalDependencies entry moves the turbo task hashes",
       }
     ).globalDependencies;
     // The working tree's turbo.json and inputs, not HEAD's (uncommitted edits count).
-    for (const f of ["turbo.json", ...declared]) copyFileSync(join(ROOT, f), join(wt, f));
+    for (const f of ["turbo.json", ...expand(declared)]) copyFileSync(join(ROOT, f), join(wt, f));
   }, 120_000);
 
   afterAll(() => {
@@ -205,12 +247,47 @@ describe("execution: each globalDependencies entry moves the turbo task hashes",
 
   it("every entry, perturbed, changes the hashes; an unlisted root file does not", () => {
     const base = hashes();
-    const inert = declared.filter((rel) => perturbed(rel) === base);
+    // A glob is perturbed through one file it selects; an exclusion has none.
+    const inert = declared
+      .filter((g) => !g.startsWith("!"))
+      .filter((g) => perturbed(isGlob(g) ? expand([g])[0]! : g) === base);
     expect(inert, "globalDependencies entries that do not move any task hash").toEqual([]);
     expect(perturbed("CONTRIBUTING.md"), "control: an unlisted root file moved the hash").toBe(
       base,
     );
   }, 300_000);
+
+  it("the spec-count globs select exactly the files the llms.txt footer counts", () => {
+    expect(declared).toEqual(expect.arrayContaining([...SPEC_COUNT_INPUTS]));
+    const selected = trackedFiles().filter((f) => globSelects(SPEC_COUNT_INPUTS, f));
+    expect(selected.length).toBe(countSpecMd(ROOT));
+    expect(selected.length).toBeGreaterThan(0);
+  });
+
+  it("a spec/*.md edit moves the @motebit/docs build hash (the llms.txt regenerator)", () => {
+    const docs = (): string => {
+      const out = execFileSync(TURBO, ["run", "build", "--dry=json", "--filter=@motebit/docs"], {
+        cwd: wt,
+        encoding: "utf8",
+        maxBuffer: 64 * 1024 * 1024,
+        env: { ...process.env, TURBO_TELEMETRY_DISABLED: "1" },
+      });
+      const json = JSON.parse(out.slice(out.indexOf("{"))) as {
+        tasks: { taskId: string; hash: string }[];
+      };
+      return json.tasks.find((t) => t.taskId === "@motebit/docs#build")!.hash;
+    };
+    const before = docs();
+    const spec = expand(["spec/*.md"])[0]!;
+    const abs = join(wt, spec);
+    const saved = readFileSync(abs);
+    appendFileSync(abs, "\n");
+    try {
+      expect(docs()).not.toBe(before);
+    } finally {
+      writeFileSync(abs, saved);
+    }
+  }, 120_000);
 
   it("RED shape: without globalDependencies, a tsconfig.base.json edit replays the cached hash", () => {
     const t = join(wt, "turbo.json");

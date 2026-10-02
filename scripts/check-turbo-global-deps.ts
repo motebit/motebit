@@ -27,7 +27,9 @@
  *      repo-root files its string literals name, and — for a root script that
  *      reads files at runtime — the files it reads, from SCRIPT_DATA_READS
  *      (a root script with an fs read and no entry there is a violation: an
- *      unmodelled read is an unknown input, so it fails closed).
+ *      unmodelled read is an unknown input, so it fails closed). A read of a
+ *      directory LISTING (the llms generator counts spec/*.md) is modelled as
+ *      the turbo glob the script exports — the one place a glob is allowed.
  *
  * `turbo.json` `globalDependencies` must equal that set exactly: a missing
  * entry is a stale-cache hole, an extra one invalidates every cache for a
@@ -43,22 +45,26 @@
  */
 import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, statSync } from "node:fs";
-import { dirname, join, relative, resolve, sep } from "node:path";
+import { dirname, join, matchesGlob, relative, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 import { failWithRepair } from "./lib/gate-report.js";
-import { parseDoctrineChain } from "./generate-llms-txt.js";
+import { parseDoctrineChain, SPEC_COUNT_INPUTS } from "./generate-llms-txt.js";
 
 const ROOT = process.cwd();
 
 /**
  * Root scripts that READ files at runtime, and what they read. The gate asks
- * the script itself where it can (the llms.txt generator's own chain parser),
- * so the list cannot drift from the code.
+ * the script itself where it can (the llms.txt generator's own chain parser
+ * and spec-count globs), so the list cannot drift from the code. An entry is a
+ * repo-relative file, or a turbo glob (`!` = exclusion) for a directory
+ * listing; a glob must appear verbatim in turbo.json globalDependencies.
  */
 export const SCRIPT_DATA_READS: Record<string, (root: string) => string[]> = {
   "scripts/generate-llms-txt.ts": () => [
     "DOCTRINE.md",
     ...parseDoctrineChain().map((e) => e.filename),
+    // The spec count in the llms.txt footer: spec/'s *.md listing.
+    ...SPEC_COUNT_INPUTS,
     // apps/docs/content/** is inside @motebit/docs — already hashed by turbo.
   ],
 };
@@ -66,9 +72,31 @@ export const SCRIPT_DATA_READS: Record<string, (root: string) => string[]> = {
 export interface Discovery {
   /** root input → the files that made it one (for the failure text). */
   inputs: Map<string, Set<string>>;
+  /** turbo glob (a directory-listing read) → the scripts that read it. */
+  globs: Map<string, Set<string>>;
   packages: string[];
   configFiles: number;
   violations: string[];
+}
+
+export const isGlob = (g: string): boolean => g.startsWith("!") || /[*?[{]/.test(g);
+
+/** Whether a declared glob set (turbo semantics: `!` excludes) selects `file`. */
+export function globSelects(globs: readonly string[], file: string): boolean {
+  const pos = globs.filter((g) => !g.startsWith("!"));
+  const neg = globs.filter((g) => g.startsWith("!")).map((g) => g.slice(1));
+  return pos.some((g) => matchesGlob(file, g)) && !neg.some((g) => matchesGlob(file, g));
+}
+
+/**
+ * A string literal that is only an operand of `===` / `!==` is a comparison
+ * (`f !== "README.md"` filters a listing), not a path a file is read from.
+ */
+function isComparisonOperand(src: string, start: number, end: number): boolean {
+  return (
+    /[!=]==\s*$/.test(src.slice(Math.max(0, start - 8), start)) ||
+    /^\s*[!=]==/.test(src.slice(end, end + 8))
+  );
 }
 
 function gitFiles(root: string, ...paths: string[]): string[] {
@@ -146,6 +174,7 @@ function eslintCascade(root: string, pkg: string): string[] {
 export function discover(root: string): Discovery {
   const packages = workspacePackages(root);
   const inputs = new Map<string, Set<string>>();
+  const globs = new Map<string, Set<string>>();
   const violations: string[] = [];
   const queue: string[] = [];
   const add = (input: string, why: string) => {
@@ -199,6 +228,7 @@ export function discover(root: string): Discovery {
         if (file) add(file, `${input} (import)`);
       }
       for (const m of src.matchAll(/["'`]([A-Za-z0-9_.-]+\.[A-Za-z]+)["'`]/g)) {
+        if (isComparisonOperand(src, m.index, m.index + m[0].length)) continue;
         if (rootLevel.has(m[1]!) && m[1] !== input) add(m[1]!, `${input} (names it)`);
       }
       if (/\b(readFileSync|readdirSync|readFile|createReadStream)\b/.test(src)) {
@@ -208,7 +238,15 @@ export function discover(root: string): Discovery {
             `${input} reads files at runtime and is a turbo input, but SCRIPT_DATA_READS has no entry for it — its data inputs are unknown`,
           );
         } else {
+          const tracked = gitFiles(root);
           for (const r of reads(root)) {
+            if (isGlob(r)) {
+              if (!globs.has(r)) globs.set(r, new Set());
+              globs.get(r)!.add(`${input} (reads it)`);
+              if (!r.startsWith("!") && !tracked.some((f) => matchesGlob(f, r)))
+                violations.push(`${input}: SCRIPT_DATA_READS names ${r}, which matches no file`);
+              continue;
+            }
             const file = asFile(root, r);
             if (file && !insideAny(file, packages)) add(file, `${input} (reads it)`);
             else if (!file)
@@ -225,7 +263,7 @@ export function discover(root: string): Discovery {
   }
   // The ESLint cascade from a root .eslintrc is itself a root input (covered
   // above); `.md` inputs are data, never followed.
-  return { inputs, packages, configFiles, violations };
+  return { inputs, globs, packages, configFiles, violations };
 }
 
 interface TurboJson {
@@ -241,18 +279,27 @@ export function evaluate(root: string): { violations: string[]; d: Discovery; de
   const turbo = JSON.parse(readFileSync(join(root, "turbo.json"), "utf8")) as TurboJson;
   const declared = turbo.globalDependencies ?? [];
   const violations = [...d.violations];
+  const declaredGlobs = declared.filter(isGlob);
   for (const [input, why] of [...d.inputs].sort(([a], [b]) => a.localeCompare(b))) {
-    if (!declared.includes(input)) {
+    if (!declared.includes(input) && !globSelects(declaredGlobs, input)) {
       violations.push(
         `${input} is read by ${brief([...why].sort())} but is not in turbo.json globalDependencies — an edit to it replays stale cached build/typecheck/lint results`,
       );
     }
   }
-  for (const g of declared) {
-    if (/[*?[{]/.test(g)) {
+  for (const [g, why] of [...d.globs].sort(([a], [b]) => a.localeCompare(b))) {
+    if (!declared.includes(g)) {
       violations.push(
-        `turbo.json globalDependencies entry "${g}" is a glob — list discovered files exactly`,
+        `${g} is read by ${brief([...why].sort())} (a directory listing) but is not in turbo.json globalDependencies — adding or removing a matching file replays stale cached results`,
       );
+    }
+  }
+  for (const g of declared) {
+    if (isGlob(g)) {
+      if (!d.globs.has(g))
+        violations.push(
+          `turbo.json globalDependencies entry "${g}" is a glob — list discovered files exactly (a glob only as a SCRIPT_DATA_READS directory-listing read declares it)`,
+        );
     } else if (!d.inputs.has(g)) {
       violations.push(
         `turbo.json globalDependencies lists "${g}", which no package config reads (discovery found no path to it) — it invalidates every cache for nothing; remove it, or teach discovery the read`,
@@ -278,12 +325,12 @@ function main(): void {
       sites: violations,
       canonical:
         "turbo.json `globalDependencies` (the declaration) ← discovered from every workspace package's top-level config files by scripts/check-turbo-global-deps.ts",
-      fix: 'Add each missing path to turbo.json "globalDependencies" (exact path, no glob) and remove any entry nothing reads; for a root script that reads files, add its reads to SCRIPT_DATA_READS in scripts/check-turbo-global-deps.ts.',
+      fix: 'Add each missing path to turbo.json "globalDependencies" (exact path; a glob only verbatim as SCRIPT_DATA_READS declares it) and remove any entry nothing reads; for a root script that reads files, add its reads to SCRIPT_DATA_READS in scripts/check-turbo-global-deps.ts.',
       doctrine: "docs/drift-defenses.md",
     });
   }
   console.log(
-    `✓ check-turbo-global-deps: ${d.inputs.size} root input(s) discovered from ${d.configFiles} config file(s) across ${d.packages.length} workspace package(s); all ${declared.length} turbo.json globalDependencies match.`,
+    `✓ check-turbo-global-deps: ${d.inputs.size} root input(s) + ${d.globs.size} directory-listing glob(s) discovered from ${d.configFiles} config file(s) across ${d.packages.length} workspace package(s); all ${declared.length} turbo.json globalDependencies match.`,
   );
 }
 
