@@ -167,9 +167,9 @@ import {
   createProofTable,
   createWalletTable,
   creditAccount,
-  getAllocationHoldRemaining,
   storeSettlementProof,
 } from "./accounts.js";
+import { allocationEscrowHeld } from "./dispute-fund-ledger.js";
 import { createPairingTables, registerPairingRoutes } from "./pairing.js";
 import { registerStateExportRoutes } from "./state-export.js";
 import { registerTrustGraphRoutes } from "./trust-graph.js";
@@ -292,11 +292,15 @@ export function releaseStaleAllocations(
     db.exec("BEGIN");
     try {
       for (const alloc of stale) {
-        const held = getAllocationHoldRemaining(db, alloc.allocation_id);
+        // What the ledger still holds — the one primitive every refund of an
+        // allocation pays out of. Holds − releases alone (F3) missed a
+        // federated origin's forward: the sweep refunded the delegator a hold
+        // the origin had already sent to the executing peer.
+        const held = allocationEscrowHeld(db, alloc.allocation_id);
         if (held <= 0) {
-          // Nothing was ever debited for this row (or it was already
-          // released). Skip the credit; the status flip below still retires
-          // the row so it stops being reconsidered every tick.
+          // Nothing was ever debited for this row, it was already released,
+          // or a federated forward consumed it. Skip the credit; the status
+          // flip below still retires the row so it stops being reconsidered.
           staleAllocationLogger.warn("stale_allocation.unfunded_skipped", {
             allocationId: alloc.allocation_id,
             taskId: alloc.task_id,
@@ -1894,7 +1898,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
           // free) would otherwise mint balance here as `allocation_release`,
           // which carries no dispute-window or grant hold and is therefore
           // immediately withdrawable. Same rule as `releaseStaleAllocations`.
-          const heldRemaining = getAllocationHoldRemaining(moteDb.db, alloc.allocation_id);
+          const heldRemaining = allocationEscrowHeld(moteDb.db, alloc.allocation_id);
           if (heldRemaining <= 0) {
             moteDb.db.exec("ROLLBACK");
             logger.warn("settlement.retry.refund_skipped_unfunded", {

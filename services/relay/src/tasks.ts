@@ -63,11 +63,11 @@ import {
 import {
   creditAccount,
   debitSpendableAccount,
-  getAllocationHoldRemaining,
   getSpendableBalance,
   fromMicro,
   toMicro,
 } from "./accounts.js";
+import { allocationEscrowHeld } from "./dispute-fund-ledger.js";
 import { attemptPushWake } from "./push-adapter.js";
 import { getRelayKeypair } from "./credentials.js";
 import type { RelayIdentity } from "./federation.js";
@@ -1424,7 +1424,7 @@ export async function handleReceiptIngestion(
           //
           // subGross > 0 is guaranteed above, so there is no zero-cost
           // carve-out to make here: unfunded always means skip.
-          const subHeldOnLedger = getAllocationHoldRemaining(moteDb.db, subAllocationId);
+          const subHeldOnLedger = allocationEscrowHeld(moteDb.db, subAllocationId);
           const subClaimed =
             subHeldOnLedger > 0 &&
             moteDb.db
@@ -1864,7 +1864,7 @@ export async function handleReceiptIngestion(
         // settlement record). Deriving funding first and claiming only when
         // funded keeps the claim and the INSERT atomic, exactly as the previous
         // comment here promised.
-        const heldOnLedger = getAllocationHoldRemaining(moteDb.db, allocationId);
+        const heldOnLedger = allocationEscrowHeld(moteDb.db, allocationId);
         const settlementApplies = !isP2pTask && signedSettlement != null;
         const fundedOnLedger = grossAmount === 0 || heldOnLedger > 0;
 

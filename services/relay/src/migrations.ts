@@ -2439,7 +2439,11 @@ export const relayMigrations: Migration[] = [
       // cannot be paid again. Fresh install: relay_disputes does not exist
       // yet (createDisputeTables runs after migrations) — nothing to claim.
       // Ledger rows of a dispute that is not final are not claimed here; the
-      // fund action reads them live in its own transaction.
+      // fund action reads them live in its own transaction. A row whose
+      // task_id is not its allocation's task (admitted before the §4.2
+      // binding) is never claimed: it is flagged `fund_refusal =
+      // 'task_mismatch'`, moves nothing, and stops holding that task's
+      // one-dispute slot, so the allocation owning the task stays disputable.
       const has = (name: string): boolean =>
         db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(name) !==
         undefined;

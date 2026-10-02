@@ -29,6 +29,23 @@
  *       (dispute debits on an account ≤ the settlement credits it received).
  *   L8  A verdict executes once: no account holds two credits from one dispute.
  *   L1 counts gross a federated origin forwarded to the executing peer.
+ *   L9  ALLOCATION-TASK-BINDING: money for allocation A only ever references
+ *       A's own task — a dispute whose task_id is not its allocation's moves
+ *       nothing, every account a dispute touches is its allocation's hold
+ *       payer, worker, or an account its OWN settlements paid, and a claim row
+ *       names its allocation's own task.
+ *   L10 CLAIM-RECORDS-WHAT-MOVED: a claim row's amounts are the ledger deltas
+ *       of its dispute (delegator = the hold payer's net, worker = everyone
+ *       else's net), never an intent the ledger does not show.
+ *   L11 SWEEP-CONSERVATION: no allocation's refunds exceed what the ledger
+ *       still holds for it, counting federated forwards (escrow never < 0).
+ *   L12 NO-STRAND: an allocation closed `settled` / `released` holds nothing.
+ *   L13 A verdict whose window passed is executed (`final`) or visibly
+ *       refused (`fund_refusal` set) — never silently stuck in `resolved`.
+ *   L14 A locked / settled allocation with no live dispute of its OWN accepts
+ *       a party's filing (a dispute naming another allocation never blocks it).
+ *   L15 An allocation left `disputed` with no live dispute carries the
+ *       `fund_refusal` that says why its funds are held.
  *
  * Alphabet: delegator files, worker files, operator upholds / overturns /
  * splits dispute k (fund_action + split_ratio per dispute-v1 §7.2 from the
@@ -79,7 +96,12 @@ import {
 } from "@motebit/encryption";
 import type { MotebitId, DeviceId } from "@motebit/sdk";
 import { AUTH_HEADER, JSON_AUTH, createTestRelay, seedX402PaidTask } from "./test-helpers.js";
-import { creditAccount, debitAccount } from "../accounts.js";
+import {
+  creditAccount,
+  debitAccount,
+  getAccountBalanceDetailed,
+  requestWithdrawal,
+} from "../accounts.js";
 import { relayMigrations } from "../migrations.js";
 
 const MAX_DEPTH = Number(process.env.DISPUTE_HARNESS_DEPTH ?? 6);
@@ -87,6 +109,9 @@ const DELEGATOR = "del-cons";
 const WORKER = "wrk-cons";
 /** A third registered agent: the receipt signer on a re-routed task (#959). */
 const OTHER = "oth-cons";
+/** The second allocation's parties (mismatch states). */
+const DELEGATOR2 = "del2-cons";
+const WORKER2 = "wrk2-cons";
 
 type Keypair = { publicKey: Uint8Array; privateKey: Uint8Array };
 type StartState =
@@ -104,13 +129,21 @@ type StartState =
   | "legacy-final-locked"
   | "legacy-final-settled"
   | "legacy-paid-locked"
-  | "legacy-paid-settled";
+  | "legacy-paid-settled"
+  | "mismatch-live"
+  | "mismatch-final"
+  | "fed-partial"
+  | "two-paid"
+  | "two-payers";
 type Action =
   | { kind: "fileD" }
   | { kind: "fileW" }
+  | { kind: "fileD2" }
   | { kind: "upheld" | "overturned" | "split"; k: number }
   | { kind: "appeal"; k: number }
-  | { kind: "expire" };
+  | { kind: "expire" }
+  | { kind: "sweep" }
+  | { kind: "withdraw" };
 
 const START_STATES: StartState[] = [
   "locked",
@@ -128,6 +161,11 @@ const START_STATES: StartState[] = [
   "legacy-final-settled",
   "legacy-paid-locked",
   "legacy-paid-settled",
+  "mismatch-live",
+  "mismatch-final",
+  "fed-partial",
+  "two-paid",
+  "two-payers",
 ];
 
 function label(a: Action): string {
@@ -144,6 +182,10 @@ interface World {
   startLive: number;
   /** Highest ledger rowid the start state holds — rows up to it are given. */
   startTxMax: number;
+  /** A second allocation (D2 → W2, settled) — the mismatch states. */
+  alt?: { allocationId: string; taskId: string };
+  /** task_id → submitting delegator: what the stale sweep resolves (index.ts). */
+  delegators: Map<string, string>;
 }
 
 interface Violation {
@@ -156,7 +198,17 @@ interface Violation {
 let delegatorKp: Keypair;
 let workerKp: Keypair;
 let otherKp: Keypair;
+let delegator2Kp: Keypair;
+let worker2Kp: Keypair;
 let seq = 0;
+
+function kpOf(id: string): Keypair {
+  if (id === DELEGATOR) return delegatorKp;
+  if (id === WORKER) return workerKp;
+  if (id === DELEGATOR2) return delegator2Kp;
+  if (id === WORKER2) return worker2Kp;
+  return otherKp;
+}
 
 async function register(relay: SyncRelay, motebitId: string, kp: Keypair): Promise<void> {
   const res = await relay.app.request(`/api/v1/agents/register`, {
@@ -175,10 +227,11 @@ async function register(relay: SyncRelay, motebitId: string, kp: Keypair): Promi
 async function settleViaReceipt(
   relay: SyncRelay,
   taskId: string,
-  opts: { status?: "completed" | "failed"; signer?: "worker" | "other" } = {},
+  opts: { status?: "completed" | "failed"; signer?: "worker" | "other"; worker?: string } = {},
 ): Promise<void> {
-  const signerId = opts.signer === "other" ? OTHER : WORKER;
-  const signerKp = opts.signer === "other" ? otherKp : workerKp;
+  const routeWorker = opts.worker ?? WORKER;
+  const signerId = opts.signer === "other" ? OTHER : routeWorker;
+  const signerKp = kpOf(signerId);
   const enc = new TextEncoder();
   const receipt = await signExecutionReceipt(
     {
@@ -197,7 +250,7 @@ async function settleViaReceipt(
     },
     signerKp.privateKey,
   );
-  const res = await relay.app.request(`/agent/${WORKER}/task/${taskId}/result`, {
+  const res = await relay.app.request(`/agent/${routeWorker}/task/${taskId}/result`, {
     method: "POST",
     headers: JSON_AUTH,
     body: JSON.stringify(receipt),
@@ -205,16 +258,19 @@ async function settleViaReceipt(
   if (res.status !== 200) throw new Error(`receipt: ${res.status} ${await res.text()}`);
 }
 
-async function fileDispute(w: World, by: "D" | "W"): Promise<Response> {
+async function fileDispute(w: World, by: "D" | "W" | "D2"): Promise<Response> {
   seq += 1;
-  const filedBy = by === "D" ? DELEGATOR : WORKER;
-  const respondent = by === "D" ? WORKER : DELEGATOR;
+  const onAlt = by === "D2";
+  const filedBy = by === "D" ? DELEGATOR : by === "W" ? WORKER : DELEGATOR2;
+  const respondent = by === "D" ? WORKER : by === "W" ? DELEGATOR : WORKER2;
+  const taskId = onAlt ? w.alt!.taskId : w.taskId;
+  const allocationId = onAlt ? w.alt!.allocationId : w.allocationId;
   const disputeId = `dsp-cons-${seq}`;
   const signed = await signDisputeRequest(
     {
       dispute_id: disputeId,
-      task_id: w.taskId,
-      allocation_id: w.allocationId,
+      task_id: taskId,
+      allocation_id: allocationId,
       filed_by: filedBy,
       respondent,
       category: "quality",
@@ -222,9 +278,9 @@ async function fileDispute(w: World, by: "D" | "W"): Promise<Response> {
       evidence_refs: ["receipt-1"],
       filed_at: Date.now(),
     },
-    (by === "D" ? delegatorKp : workerKp).privateKey,
+    kpOf(filedBy).privateKey,
   );
-  const res = await w.relay.app.request(`/api/v1/allocations/${w.allocationId}/dispute`, {
+  const res = await w.relay.app.request(`/api/v1/allocations/${allocationId}/dispute`, {
     method: "POST",
     headers: JSON_AUTH,
     body: JSON.stringify(signed),
@@ -256,6 +312,7 @@ async function buildWorld(start: StartState): Promise<World> {
       disputes: [],
       startLive: 0,
       startTxMax: maxRowid(relay),
+      delegators: new Map([[taskId, DELEGATOR]]),
     };
   }
   const taskId = seedX402PaidTask(relay, {
@@ -271,7 +328,19 @@ async function buildWorld(start: StartState): Promise<World> {
     disputes: [],
     startLive: 0,
     startTxMax: 0,
+    delegators: new Map([[taskId, DELEGATOR]]),
   };
+  if (start === "mismatch-live" || start === "mismatch-final") {
+    await seedMismatch(w, start === "mismatch-final");
+  }
+  if (start === "two-paid" || start === "two-payers") {
+    await register(relay, OTHER, otherKp);
+    if (start === "two-paid") seedTwoPaid(w);
+    else {
+      await settleViaReceipt(relay, taskId);
+      seedSecondPayer(w);
+    }
+  }
   if (
     start === "settled" ||
     start === "legacy-dup-settled" ||
@@ -289,7 +358,7 @@ async function buildWorld(start: StartState): Promise<World> {
     await settleViaReceipt(relay, taskId, { signer: "other" });
   }
   if (start === "partial") seedPartialSettlement(w);
-  if (start === "federated-origin") {
+  if (start === "federated-origin" || start === "fed-partial") {
     // The origin relay forwarded the task's gross to the executing peer
     // (relay_federation_settlements) — no relay_settlements row, and the
     // allocation row is never touched by that path, so it stays `locked`.
@@ -303,7 +372,13 @@ async function buildWorld(start: StartState): Promise<World> {
           gross_amount, fee_amount, net_amount, fee_rate, settled_at, receipt_hash)
          VALUES ('fed-stl-cons', ?, 'relay-self', 'relay-peer', NULL, ?, ?, ?, 0.05, ?, 'rh')`,
       )
-      .run(taskId, snap.amount_locked, 0, snap.amount_locked, Date.now());
+      .run(
+        taskId,
+        forwardedGross(start, snap.amount_locked),
+        0,
+        forwardedGross(start, snap.amount_locked),
+        Date.now(),
+      );
   }
   if (start === "legacy-final-locked" || start === "legacy-final-settled") {
     await seedLegacyFinal(w, start === "legacy-final-locked" ? "upheld" : "overturned");
@@ -329,7 +404,7 @@ async function buildWorld(start: StartState): Promise<World> {
     const res = await fileDispute(w, "D");
     if (res.status !== 200) throw new Error(`pre-dispute: ${res.status}`);
     const db = relay.moteDb.db;
-    db.exec("DROP INDEX IF EXISTS idx_disputes_one_per_task");
+    dropOneLiveIndex(relay);
     const first = db
       .prepare("SELECT amount_locked, filing_fee FROM relay_disputes WHERE dispute_id = ?")
       .get(w.disputes[0]) as { amount_locked: number; filing_fee: number };
@@ -402,6 +477,136 @@ function seedPartialSettlement(w: World): void {
   );
 }
 
+/** fed-partial: the forward is the price, the hold also carried a risk buffer. */
+const RISK_BUFFER = 52_632;
+function forwardedGross(start: StartState, locked: number): number {
+  return start === "fed-partial" ? locked - RISK_BUFFER : locked;
+}
+
+/** Drop every unique index on relay_disputes to model a legacy DB that cannot build one. */
+function dropOneLiveIndex(relay: SyncRelay): void {
+  const db = relay.moteDb.db;
+  const idx = db
+    .prepare(
+      "SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'relay_disputes' AND sql LIKE 'CREATE UNIQUE%'",
+    )
+    .all() as Array<{ name: string }>;
+  for (const { name } of idx) db.exec(`DROP INDEX IF EXISTS "${name}"`);
+}
+
+/**
+ * F1: a legacy dispute row on allocation A1 (D → W, locked) whose task_id
+ * names A2's task (D2 → W2, settled through the real receipt route) — the
+ * shape a relay before the §4.2 task binding admitted. Live: it sits in
+ * `evidence` with A1 `disputed`. Final: the pre-fix relay ran its fund action
+ * keyed on the dispute's task (main's post-settlement path: split of T2's
+ * net, W2 → D2) and left A1 `disputed`; the upgrade migration then runs.
+ */
+async function seedMismatch(w: World, final: boolean): Promise<void> {
+  const relay = w.relay;
+  const db = relay.moteDb.db;
+  await register(relay, DELEGATOR2, delegator2Kp);
+  await register(relay, WORKER2, worker2Kp);
+  const t2 = seedX402PaidTask(relay, {
+    workerId: WORKER2,
+    delegatorId: DELEGATOR2,
+    prompt: "search for something",
+    unitCostUsd: 1.0,
+  });
+  await settleViaReceipt(relay, t2, { worker: WORKER2 });
+  w.alt = { allocationId: `x402-${t2}`, taskId: t2 };
+  w.delegators.set(t2, DELEGATOR2);
+  const { amount_locked: locked } = db
+    .prepare("SELECT amount_locked FROM relay_allocations WHERE allocation_id = ?")
+    .get(w.allocationId) as { amount_locked: number };
+  seq += 1;
+  const d0 = `dsp-cons-${seq}`;
+  const now = Date.now();
+  db.prepare(
+    `INSERT INTO relay_disputes
+     (dispute_id, task_id, allocation_id, filed_by, respondent, category, description, state,
+      amount_locked, filing_fee, filed_at, evidence_deadline, body_json, filer_role)
+     VALUES (?, ?, ?, ?, ?, 'quality', 'contested', 'evidence', ?, 0, ?, ?, '', 'delegator')`,
+  ).run(d0, t2, w.allocationId, DELEGATOR, WORKER, locked, now, now + 48 * 3600_000);
+  db.prepare("UPDATE relay_allocations SET status = 'disputed' WHERE allocation_id = ?").run(
+    w.allocationId,
+  );
+  w.disputes.push(d0);
+  w.startLive = 1;
+  // A mismatched row predates the §4.2 binding, so a relay running this code
+  // has run the upgrade migration over it — live (here) or final (below).
+  if (!final) runUpgradeBackfill(relay);
+  if (final) {
+    const { amount_settled: net } = db
+      .prepare("SELECT amount_settled FROM relay_settlements WHERE task_id = ?")
+      .get(t2) as { amount_settled: number };
+    const back = net - Math.floor(net * 0.5);
+    debitAccount(db, WORKER2, back, "settlement_debit", d0, "Dispute claw-back (legacy)");
+    creditAccount(db, DELEGATOR2, back, "settlement_credit", d0, "Dispute refund (legacy)");
+    db.prepare(
+      `UPDATE relay_disputes SET state = 'final', resolution = 'split', fund_action = 'split',
+         split_ratio = 0.5, resolved_at = ?, final_at = ? WHERE dispute_id = ?`,
+    ).run(now, now, d0);
+    runUpgradeBackfill(relay);
+  }
+}
+
+/**
+ * Two accounts hold the settlement's credit (a payee split under one
+ * settlement id): no single paid account to reverse from — unroutable.
+ */
+function seedTwoPaid(w: World): void {
+  const db = w.relay.moteDb.db;
+  const { amount_locked: held } = db
+    .prepare("SELECT amount_locked FROM relay_allocations WHERE allocation_id = ?")
+    .get(w.allocationId) as { amount_locked: number };
+  const fee = Math.round(held * 0.05);
+  const net = held - fee;
+  const half = Math.floor(net / 2);
+  db.prepare(
+    "UPDATE relay_allocations SET status = 'settled', settled_at = ? WHERE allocation_id = ?",
+  ).run(Date.now(), w.allocationId);
+  db.prepare(
+    `INSERT INTO relay_settlements
+     (settlement_id, allocation_id, task_id, motebit_id, receipt_hash, amount_settled,
+      platform_fee, platform_fee_rate, status, settled_at, settlement_mode, delegator_id)
+     VALUES ('stl-two-cons', ?, ?, ?, 'rh', ?, ?, 0.05, 'completed', ?, 'relay', ?)`,
+  ).run(w.allocationId, w.taskId, WORKER, net, fee, Date.now(), DELEGATOR);
+  creditAccount(db, WORKER, half, "settlement_credit", "stl-two-cons", "Payment (split payee)");
+  creditAccount(
+    db,
+    OTHER,
+    net - half,
+    "settlement_credit",
+    "stl-two-cons",
+    "Payment (split payee)",
+  );
+}
+
+/**
+ * A second account also funded the allocation's hold (and was released its
+ * share): the ledger names no single hold payer to refund — unroutable.
+ */
+function seedSecondPayer(w: World): void {
+  const db = w.relay.moteDb.db;
+  creditAccount(db, OTHER, 100_000, "deposit", "oth-dep", "other's funds");
+  debitAccount(db, OTHER, 100_000, "allocation_hold", w.allocationId, "co-funded hold");
+  creditAccount(db, OTHER, 100_000, "allocation_release", w.allocationId, "co-funded release");
+}
+
+/** Every payee withdraws what the relay lets it (the account drained). */
+function withdrawAll(w: World): number {
+  const db = w.relay.moteDb.db;
+  let moved = 0;
+  for (const acct of [WORKER, OTHER, WORKER2]) {
+    const avail = getAccountBalanceDetailed(db, acct).available_for_withdrawal;
+    if (avail <= 0) continue;
+    seq += 1;
+    if (requestWithdrawal(db, acct, avail, "pending", `wd-cons-${seq}`) !== null) moved += 1;
+  }
+  return moved;
+}
+
 /** Back-date every `resolved` dispute's window and read it — lazy finalize. */
 async function expireAll(w: World): Promise<void> {
   w.relay.moteDb.db
@@ -466,7 +671,7 @@ async function seedLegacyPaidUnclaimed(w: World, settled: boolean): Promise<void
 
 function insertLegacyLiveDispute(w: World): void {
   const db = w.relay.moteDb.db;
-  db.exec("DROP INDEX IF EXISTS idx_disputes_one_per_task");
+  dropOneLiveIndex(w.relay);
   const first = db
     .prepare("SELECT amount_locked, filing_fee FROM relay_disputes WHERE dispute_id = ?")
     .get(w.disputes[0]) as { amount_locked: number; filing_fee: number };
@@ -498,9 +703,10 @@ function runUpgradeBackfill(relay: SyncRelay): void {
 
 function filerOf(w: World, k: number): "delegator" | "worker" {
   const row = w.relay.moteDb.db
-    .prepare("SELECT filed_by FROM relay_disputes WHERE dispute_id = ?")
-    .get(w.disputes[k]) as { filed_by: string };
-  return row.filed_by === WORKER ? "worker" : "delegator";
+    .prepare("SELECT filed_by, filer_role FROM relay_disputes WHERE dispute_id = ?")
+    .get(w.disputes[k]) as { filed_by: string; filer_role: string | null };
+  if (row.filer_role === "worker" || row.filer_role === "delegator") return row.filer_role;
+  return row.filed_by === WORKER || row.filed_by === WORKER2 ? "worker" : "delegator";
 }
 
 /** One step through the real routes. Returns the HTTP status (200 for expiry). */
@@ -511,6 +717,16 @@ async function step(w: World, a: Action): Promise<number> {
       return (await fileDispute(w, "D")).status;
     case "fileW":
       return (await fileDispute(w, "W")).status;
+    case "fileD2":
+      return (await fileDispute(w, "D2")).status;
+    case "sweep": {
+      // The stale-allocation releaser exactly as the relay's interval runs it
+      // (index.ts), with every allocation past the horizon.
+      releaseStaleAllocations(w.relay.moteDb.db, Date.now() + 1000, 0, (t) => w.delegators.get(t));
+      return 200;
+    }
+    case "withdraw":
+      return withdrawAll(w) > 0 ? 200 : 402;
     case "upheld":
     case "overturned":
     case "split": {
@@ -534,7 +750,7 @@ async function step(w: World, a: Action): Promise<number> {
       const d = w.relay.moteDb.db
         .prepare("SELECT respondent FROM relay_disputes WHERE dispute_id = ?")
         .get(w.disputes[a.k]) as { respondent: string };
-      const kp = d.respondent === WORKER ? workerKp : delegatorKp;
+      const kp = kpOf(d.respondent);
       const signed = await signDisputeAppeal(
         {
           dispute_id: w.disputes[a.k]!,
@@ -568,7 +784,14 @@ async function step(w: World, a: Action): Promise<number> {
 }
 
 function alphabet(w: World): Action[] {
-  const out: Action[] = [{ kind: "fileD" }, { kind: "fileW" }, { kind: "expire" }];
+  const out: Action[] = [
+    { kind: "fileD" },
+    { kind: "fileW" },
+    { kind: "expire" },
+    { kind: "sweep" },
+    { kind: "withdraw" },
+  ];
+  if (w.alt) out.push({ kind: "fileD2" });
   for (let k = 0; k < w.disputes.length; k++) {
     out.push({ kind: "upheld", k }, { kind: "overturned", k }, { kind: "split", k });
     out.push({ kind: "appeal", k });
@@ -584,11 +807,20 @@ function alphabet(w: World): Action[] {
  */
 function fingerprint(w: World): string {
   const db = w.relay.moteDb.db;
-  const role = (id: string): string => (id === DELEGATOR ? "D" : id === WORKER ? "W" : "o");
+  const role = (id: string): string =>
+    id === DELEGATOR
+      ? "D"
+      : id === WORKER
+        ? "W"
+        : id === DELEGATOR2
+          ? "D2"
+          : id === WORKER2
+            ? "W2"
+            : "o";
   const ref = (id: string): string => {
     const k = w.disputes.indexOf(id);
     if (k >= 0) return `d${k}`;
-    return id === w.allocationId ? "A" : "x";
+    return id === w.allocationId ? "A" : id === w.alt?.allocationId ? "A2" : "x";
   };
   const txns = (
     db
@@ -597,9 +829,14 @@ function fingerprint(w: World): string {
       )
       .all() as Array<{ motebit_id: string; type: string; amount: number; reference_id: string }>
   ).map((t) => `${role(t.motebit_id)}:${t.type}:${t.amount}:${ref(t.reference_id)}`);
-  const alloc = db
-    .prepare("SELECT status FROM relay_allocations WHERE allocation_id = ?")
-    .get(w.allocationId) as { status: string } | undefined;
+  const alloc = (
+    db
+      .prepare("SELECT allocation_id, status FROM relay_allocations ORDER BY rowid")
+      .all() as Array<{
+      allocation_id: string;
+      status: string;
+    }>
+  ).map((a) => `${ref(a.allocation_id)}:${a.status}`);
   const disputes = w.disputes.map((id) => {
     const d = db
       .prepare(
@@ -612,9 +849,9 @@ function fingerprint(w: World): string {
       fund_action: string | null;
       split_ratio: number | null;
     };
-    return `${role(d.filed_by)}:${d.state}:${d.appealed_at != null}:${d.fund_action}:${d.split_ratio}`;
+    return `${role(d.filed_by)}:${d.state}:${d.appealed_at != null}:${d.fund_action}:${d.split_ratio}:${refusalOf(w, id) ?? ""}`;
   });
-  return JSON.stringify({ txns, alloc: alloc?.status ?? null, disputes });
+  return JSON.stringify({ txns, alloc, disputes });
 }
 
 function txnCount(w: World): number {
@@ -625,22 +862,93 @@ function txnCount(w: World): number {
   ).n;
 }
 
-/** L1–L3 over the current state. */
+type Txn = { motebit_id: string; type: string; amount: number; reference_id: string };
+
+/** The marker a visibly refused fund action leaves (absent before round 4). */
+function refusalOf(w: World, disputeId: string): string | null {
+  try {
+    const r = w.relay.moteDb.db
+      .prepare("SELECT fund_refusal FROM relay_disputes WHERE dispute_id = ?")
+      .get(disputeId) as { fund_refusal: string | null } | undefined;
+    return r?.fund_refusal ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The harness's OWN reading of what the ledger still holds for an
+ * allocation (independent of the relay's helper): hold debits − releases −
+ * what its own settlements consumed (credits + fee) − gross forwarded for its
+ * task − the net of rows referenced to its disputes.
+ */
+function harnessEscrow(db: SyncRelay["moteDb"]["db"], txns: Txn[], allocationId: string): number {
+  const a = db
+    .prepare("SELECT task_id FROM relay_allocations WHERE allocation_id = ?")
+    .get(allocationId) as { task_id: string };
+  const stl = db
+    .prepare(
+      "SELECT settlement_id, platform_fee FROM relay_settlements WHERE allocation_id = ? AND COALESCE(settlement_mode, 'relay') = 'relay'",
+    )
+    .all(allocationId) as Array<{ settlement_id: string; platform_fee: number }>;
+  const stlIds = new Set(stl.map((r) => r.settlement_id));
+  const fees = stl.reduce((s, r) => s + (r.platform_fee || 0), 0);
+  const forwarded = (
+    db
+      .prepare(
+        "SELECT COALESCE(SUM(gross_amount), 0) AS g FROM relay_federation_settlements WHERE task_id = ?",
+      )
+      .get(a.task_id) as { g: number }
+  ).g;
+  const disputeIds = new Set(
+    (
+      db
+        .prepare("SELECT dispute_id FROM relay_disputes WHERE allocation_id = ?")
+        .all(allocationId) as Array<{ dispute_id: string }>
+    ).map((r) => r.dispute_id),
+  );
+  let escrow = -fees - forwarded;
+  for (const t of txns) {
+    if (t.reference_id === allocationId && t.type === "allocation_hold") escrow -= t.amount;
+    else if (t.reference_id === allocationId && t.type === "allocation_release") escrow -= t.amount;
+    else if (t.type === "settlement_credit" && stlIds.has(t.reference_id)) escrow -= t.amount;
+    else if (disputeIds.has(t.reference_id)) escrow -= t.amount;
+  }
+  return escrow;
+}
+
+function holdPayers(txns: Txn[], allocationId: string): Set<string> {
+  return new Set(
+    txns
+      .filter((t) => t.type === "allocation_hold" && t.reference_id === allocationId)
+      .map((t) => t.motebit_id),
+  );
+}
+
+/** L1–L3, L5–L13, L15 over the current state. */
 function checkLaws(w: World): Array<{ law: string; detail: string }> {
   const db = w.relay.moteDb.db;
   const out: Array<{ law: string; detail: string }> = [];
   const txns = db
     .prepare("SELECT motebit_id, type, amount, reference_id FROM relay_transactions")
-    .all() as Array<{ motebit_id: string; type: string; amount: number; reference_id: string }>;
+    .all() as Txn[];
+  const allocs = db
+    .prepare("SELECT allocation_id, task_id, motebit_id, status FROM relay_allocations")
+    .all() as Array<{ allocation_id: string; task_id: string; motebit_id: string; status: string }>;
+  const allocById = new Map(allocs.map((a) => [a.allocation_id, a]));
+  const disputeRows = db
+    .prepare("SELECT dispute_id, allocation_id, task_id FROM relay_disputes")
+    .all() as Array<{ dispute_id: string; allocation_id: string; task_id: string }>;
+  const disputeById = new Map(disputeRows.map((d) => [d.dispute_id, d]));
 
-  // What the delegator actually locked: the allocation_hold debits.
+  // L1 (global): what every delegator locked bounds everything paid out of
+  // escrow, across every allocation in the world. Deposits are external money
+  // in, holds are the lock itself, withdrawals are a payee's own money out.
   const locked = -txns
-    .filter((t) => t.type === "allocation_hold" && t.reference_id === w.allocationId)
+    .filter((t) => t.type === "allocation_hold")
     .reduce((s, t) => s + t.amount, 0);
-  // Everything after the lock, net, across every account (deposits are the
-  // delegator's external money in; the hold is the lock itself).
   const ledgerOut = txns
-    .filter((t) => t.type !== "deposit" && t.type !== "allocation_hold")
+    .filter((t) => t.type !== "deposit" && t.type !== "allocation_hold" && t.type !== "withdrawal")
     .reduce((s, t) => s + t.amount, 0);
   // The platform fee leaves escrow as part of the settlement payout.
   const fees = (
@@ -654,10 +962,8 @@ function checkLaws(w: World): Array<{ law: string; detail: string }> {
   // leaves escrow with no local ledger row.
   const forwarded = (
     db
-      .prepare(
-        "SELECT COALESCE(SUM(gross_amount), 0) AS g FROM relay_federation_settlements WHERE task_id = ?",
-      )
-      .get(w.taskId) as { g: number }
+      .prepare("SELECT COALESCE(SUM(gross_amount), 0) AS g FROM relay_federation_settlements")
+      .get() as { g: number }
   ).g;
   const paidOut = ledgerOut + fees + forwarded;
   if (paidOut > locked) {
@@ -667,80 +973,122 @@ function checkLaws(w: World): Array<{ law: string; detail: string }> {
     });
   }
 
-  const disputeIds = new Set(
-    (
-      db
-        .prepare("SELECT dispute_id FROM relay_disputes WHERE allocation_id = ?")
-        .all(w.allocationId) as Array<{ dispute_id: string }>
-    ).map((r) => r.dispute_id),
-  );
-  const moving = new Set(
-    txns.filter((t) => disputeIds.has(t.reference_id)).map((t) => t.reference_id),
-  );
-  if (moving.size > 1) {
-    out.push({
-      law: "L2 one-dispute-moves-money",
-      detail: `${moving.size} disputes moved money: ${[...moving].join(",")}`,
-    });
-  }
-
-  const finals = (
-    db
-      .prepare(
-        "SELECT COUNT(*) AS n FROM relay_disputes WHERE allocation_id = ? AND state = 'final'",
-      )
-      .get(w.allocationId) as { n: number }
-  ).n;
-  // A start state that already held N live disputes (legacy rows) cannot be
-  // made to have fewer; the law is that resolution adds no further one.
-  if (finals > Math.max(1, w.startLive)) {
-    out.push({ law: "L3 one-fund-action", detail: `${finals} disputes reached final` });
-  }
-
   // Rows this run wrote (the start state's rows are given).
   const fresh = db
     .prepare(
       "SELECT motebit_id, type, amount, reference_id FROM relay_transactions WHERE rowid > ?",
     )
-    .all(w.startTxMax) as Array<{
-    motebit_id: string;
-    type: string;
-    amount: number;
-    reference_id: string;
-  }>;
-  const freshDispute = fresh.filter((t) => disputeIds.has(t.reference_id));
+    .all(w.startTxMax) as Txn[];
+  const allDisputeIds = new Set(disputeById.keys());
 
-  // L5 The first verdict to become final is the allocation's one fund action:
-  // no other dispute moves money afterwards, whether or not that verdict
-  // itself moved any (release_to_worker after settlement moves nothing).
-  const firstFinal = db
-    .prepare(
-      "SELECT dispute_id FROM relay_disputes WHERE allocation_id = ? AND state = 'final' ORDER BY final_at, rowid LIMIT 1",
-    )
-    .get(w.allocationId) as { dispute_id: string } | undefined;
-  if (firstFinal) {
-    const others = freshDispute.filter((t) => t.reference_id !== firstFinal.dispute_id);
-    if (others.length > 0) {
+  for (const a of allocs) {
+    const own = new Set(
+      disputeRows.filter((d) => d.allocation_id === a.allocation_id).map((d) => d.dispute_id),
+    );
+    // L2: the disputes NAMING this allocation — by allocation, or by its task
+    // (a pre-binding relay keyed fund movement on the dispute's task) — move
+    // its money at most once.
+    const naming = new Set(
+      disputeRows
+        .filter((d) => d.allocation_id === a.allocation_id || d.task_id === a.task_id)
+        .map((d) => d.dispute_id),
+    );
+    const moving = new Set(
+      txns.filter((t) => naming.has(t.reference_id)).map((t) => t.reference_id),
+    );
+    if (moving.size > 1) {
       out.push({
-        law: "L5 first-final-owns-funds",
-        detail: `${others.length} row(s) from a dispute other than the first final (${others.map((t) => t.reference_id).join(",")})`,
+        law: "L2 one-dispute-moves-money",
+        detail: `${moving.size} disputes moved ${a.allocation_id}'s money: ${[...moving].join(",")}`,
+      });
+    }
+
+    const finals = (
+      db
+        .prepare(
+          "SELECT COUNT(*) AS n FROM relay_disputes WHERE allocation_id = ? AND state = 'final'",
+        )
+        .get(a.allocation_id) as { n: number }
+    ).n;
+    // A start state that already held N live disputes (legacy rows) cannot be
+    // made to have fewer; the law is that resolution adds no further one.
+    if (finals > Math.max(1, w.startLive)) {
+      out.push({ law: "L3 one-fund-action", detail: `${finals} disputes reached final` });
+    }
+
+    // L5 The first verdict to become final is the allocation's one fund action:
+    // no other dispute moves money afterwards, whether or not that verdict
+    // itself moved any (release_to_worker after settlement moves nothing).
+    const firstFinal = db
+      .prepare(
+        "SELECT dispute_id FROM relay_disputes WHERE allocation_id = ? AND state = 'final' ORDER BY final_at, rowid LIMIT 1",
+      )
+      .get(a.allocation_id) as { dispute_id: string } | undefined;
+    if (firstFinal) {
+      const others = fresh.filter(
+        (t) => own.has(t.reference_id) && t.reference_id !== firstFinal.dispute_id,
+      );
+      if (others.length > 0) {
+        out.push({
+          law: "L5 first-final-owns-funds",
+          detail: `${others.length} row(s) from a dispute other than the first final (${others.map((t) => t.reference_id).join(",")})`,
+        });
+      }
+    }
+
+    // L11 SWEEP-CONSERVATION / L12 NO-STRAND, from the harness's own reading.
+    const escrow = harnessEscrow(db, txns, a.allocation_id);
+    if (escrow < 0) {
+      out.push({
+        law: "L11 sweep-conservation",
+        detail: `${a.allocation_id} paid out ${-escrow} more than the ledger held for it`,
+      });
+    }
+    if ((a.status === "settled" || a.status === "released") && escrow > 0) {
+      out.push({
+        law: "L12 no-strand",
+        detail: `${a.allocation_id} closed ${a.status} with ${escrow} still held`,
       });
     }
   }
 
-  // L6 PAYEE-IS-PARTY: every dispute-driven credit lands on the allocation's
-  // delegator (the hold payer) or its worker.
-  const allocWorker = (
-    db
-      .prepare("SELECT motebit_id FROM relay_allocations WHERE allocation_id = ?")
-      .get(w.allocationId) as { motebit_id: string } | undefined
-  )?.motebit_id;
-  const parties = new Set([DELEGATOR, allocWorker ?? WORKER]);
-  for (const t of freshDispute) {
+  // L6 PAYEE-IS-PARTY / L9 ALLOCATION-TASK-BINDING over every fresh row a
+  // dispute wrote: parties are the dispute's OWN allocation's hold payer and
+  // worker; a debit may also land on an account that allocation's own
+  // settlements paid (#959) — never on another allocation's payee.
+  for (const t of fresh) {
+    const d = disputeById.get(t.reference_id);
+    if (!d) continue;
+    const a = allocById.get(d.allocation_id);
+    if (a && a.task_id !== d.task_id) {
+      out.push({
+        law: "L9 allocation-task-binding",
+        detail: `dispute ${d.dispute_id} names task ${d.task_id}, not its allocation's ${a.task_id}, and moved ${t.amount} on ${t.motebit_id}`,
+      });
+    }
+    const payers = holdPayers(txns, d.allocation_id);
+    const parties = new Set([...payers, a?.motebit_id ?? ""]);
     if (t.amount > 0 && !parties.has(t.motebit_id)) {
       out.push({
         law: "L6 payee-is-party",
         detail: `dispute credit of ${t.amount} to non-party ${t.motebit_id}`,
+      });
+    }
+    const ownPaid = new Set(
+      (
+        db
+          .prepare(
+            `SELECT DISTINCT t.motebit_id FROM relay_transactions t
+              JOIN relay_settlements s ON s.settlement_id = t.reference_id
+             WHERE t.type = 'settlement_credit' AND s.allocation_id = ?`,
+          )
+          .all(d.allocation_id) as Array<{ motebit_id: string }>
+      ).map((r) => r.motebit_id),
+    );
+    if (!parties.has(t.motebit_id) && !ownPaid.has(t.motebit_id)) {
+      out.push({
+        law: "L9 allocation-task-binding",
+        detail: `dispute ${d.dispute_id} on ${d.allocation_id} moved ${t.amount} on ${t.motebit_id}, not a party of that allocation`,
       });
     }
   }
@@ -748,7 +1096,7 @@ function checkLaws(w: World): Array<{ law: string; detail: string }> {
   // L8 A verdict executes once: no account holds two credits from one dispute.
   const creditsPerDispute = new Map<string, number>();
   for (const t of txns) {
-    if (t.amount > 0 && disputeIds.has(t.reference_id)) {
+    if (t.amount > 0 && allDisputeIds.has(t.reference_id)) {
       const key = `${t.reference_id}→${t.motebit_id}`;
       creditsPerDispute.set(key, (creditsPerDispute.get(key) ?? 0) + 1);
     }
@@ -757,25 +1105,24 @@ function checkLaws(w: World): Array<{ law: string; detail: string }> {
     if (n > 1) out.push({ law: "L8 verdict-executes-once", detail: `${n} credits ${key}` });
   }
 
-  // L7 A dispute reverses only what was paid, from the account that was paid:
-  // dispute-driven debits on an account never exceed the settlement credits
-  // that account received for this allocation.
-  const received = new Map<string, number>();
+  // L7 A dispute reverses only what was paid: dispute-driven debits on an
+  // account never exceed the relay settlement credits it received.
   const settlementIds = new Set(
     (
       db
-        .prepare("SELECT settlement_id FROM relay_settlements WHERE allocation_id = ?")
-        .all(w.allocationId) as Array<{ settlement_id: string }>
+        .prepare(
+          "SELECT settlement_id FROM relay_settlements WHERE COALESCE(settlement_mode, 'relay') = 'relay'",
+        )
+        .all() as Array<{ settlement_id: string }>
     ).map((r) => r.settlement_id),
   );
+  const received = new Map<string, number>();
+  const reversed = new Map<string, number>();
   for (const t of txns) {
     if (t.type === "settlement_credit" && settlementIds.has(t.reference_id)) {
       received.set(t.motebit_id, (received.get(t.motebit_id) ?? 0) + t.amount);
     }
-  }
-  const reversed = new Map<string, number>();
-  for (const t of txns) {
-    if (t.amount < 0 && disputeIds.has(t.reference_id)) {
+    if (t.amount < 0 && allDisputeIds.has(t.reference_id)) {
       reversed.set(t.motebit_id, (reversed.get(t.motebit_id) ?? 0) - t.amount);
     }
   }
@@ -787,7 +1134,107 @@ function checkLaws(w: World): Array<{ law: string; detail: string }> {
       });
     }
   }
+
+  // L9 (claims) / L10 CLAIM-RECORDS-WHAT-MOVED.
+  const claims = db
+    .prepare(
+      "SELECT allocation_id, task_id, dispute_id, regime, worker_amount, delegator_amount FROM relay_dispute_fund_actions",
+    )
+    .all() as Array<{
+    allocation_id: string;
+    task_id: string;
+    dispute_id: string;
+    regime: string;
+    worker_amount: number;
+    delegator_amount: number;
+  }>;
+  for (const c of claims) {
+    const a = allocById.get(c.allocation_id);
+    if (a && a.task_id !== c.task_id) {
+      out.push({
+        law: "L9 allocation-task-binding",
+        detail: `claim for ${c.allocation_id} names task ${c.task_id}, not its own ${a.task_id}`,
+      });
+    }
+    const claimDispute = disputeById.get(c.dispute_id);
+    if (a && claimDispute && claimDispute.task_id !== a.task_id) {
+      out.push({
+        law: "L9 allocation-task-binding",
+        detail: `claim for ${c.allocation_id} is held by dispute ${c.dispute_id}, which names task ${claimDispute.task_id}`,
+      });
+    }
+    const payers = holdPayers(txns, c.allocation_id);
+    const rows = txns.filter((t) => t.reference_id === c.dispute_id);
+    const toDelegator = rows
+      .filter((t) => payers.has(t.motebit_id))
+      .reduce((s, t) => s + t.amount, 0);
+    const toWorkerSide = rows
+      .filter((t) => !payers.has(t.motebit_id))
+      .reduce((s, t) => s + t.amount, 0);
+    if (toDelegator !== c.delegator_amount) {
+      out.push({
+        law: "L10 claim-records-what-moved (delegator)",
+        detail: `claim ${c.dispute_id} (${c.regime}) says delegator ${c.delegator_amount}, ledger moved ${toDelegator}`,
+      });
+    }
+    if (toWorkerSide !== c.worker_amount) {
+      out.push({
+        law: "L10 claim-records-what-moved (worker)",
+        detail: `claim ${c.dispute_id} (${c.regime}) says worker ${c.worker_amount}, ledger moved ${toWorkerSide}`,
+      });
+    }
+  }
+
+  // L13 A verdict past its window is executed or visibly refused.
+  const stuck = db
+    .prepare(
+      "SELECT dispute_id FROM relay_disputes WHERE state = 'resolved' AND appealed_at IS NULL AND resolved_at < ?",
+    )
+    .all(Date.now() - 24 * 60 * 60 * 1000) as Array<{ dispute_id: string }>;
+  for (const r of stuck) {
+    if (refusalOf(w, r.dispute_id) === null) {
+      out.push({
+        law: "L13 verdict-executes-or-refuses-visibly",
+        detail: `${r.dispute_id} stuck resolved past its window with no fund_refusal`,
+      });
+    }
+  }
+  // L15 A held allocation is visibly held: one left `disputed` with no live
+  // dispute of its own carries the refusal that explains why.
+  for (const a of allocs) {
+    if (a.status !== "disputed") continue;
+    const own = db
+      .prepare("SELECT dispute_id, state FROM relay_disputes WHERE allocation_id = ?")
+      .all(a.allocation_id) as Array<{ dispute_id: string; state: string }>;
+    if (own.some((d) => d.state !== "final" && d.state !== "expired")) continue;
+    if (!own.some((d) => refusalOf(w, d.dispute_id) !== null)) {
+      out.push({
+        law: "L15 held-allocation-is-marked",
+        detail: `${a.allocation_id} left disputed with no live dispute and no fund_refusal`,
+      });
+    }
+  }
   return out;
+}
+
+/**
+ * L14 precondition: the filing's target allocation is locked / settled and no
+ * live dispute of its OWN exists — a 409 then means another allocation's
+ * dispute is blocking it.
+ */
+function fileTargetDisputable(w: World, a: Action): boolean {
+  if (a.kind !== "fileD" && a.kind !== "fileW" && a.kind !== "fileD2") return false;
+  const allocationId = a.kind === "fileD2" ? w.alt?.allocationId : w.allocationId;
+  if (!allocationId) return false;
+  const db = w.relay.moteDb.db;
+  const alloc = db
+    .prepare("SELECT status FROM relay_allocations WHERE allocation_id = ?")
+    .get(allocationId) as { status: string } | undefined;
+  if (!alloc || (alloc.status !== "locked" && alloc.status !== "settled")) return false;
+  const own = db
+    .prepare("SELECT 1 FROM relay_disputes WHERE allocation_id = ? AND state != 'expired' LIMIT 1")
+    .get(allocationId);
+  return own === undefined;
 }
 
 interface Stats {
@@ -830,6 +1277,7 @@ async function explore(
   for (const a of actions) {
     w ??= await replay(start, prefix);
     const txBefore = txnCount(w);
+    const disputable = fileTargetDisputable(w, a);
     const status = await step(w, a);
     stats.transitions += 1;
     const sequence = [...prefix, a].map(label).join(" → ");
@@ -839,6 +1287,14 @@ async function explore(
         sequence,
         law: "L4 rejected-writes-nothing",
         detail: `HTTP ${status} appended ledger rows`,
+      });
+    }
+    if (disputable && status === 409) {
+      stats.violations.push({
+        start,
+        sequence,
+        law: "L14 allocation-disputable",
+        detail: `filing on an allocation with no dispute of its own refused 409`,
       });
     }
     const broken = checkLaws(w);
@@ -863,6 +1319,8 @@ describe("Dispute conservation harness (exhaustive, real routes)", () => {
     delegatorKp = await generateKeypair();
     workerKp = await generateKeypair();
     otherKp = await generateKeypair();
+    delegator2Kp = await generateKeypair();
+    worker2Kp = await generateKeypair();
   });
 
   for (const start of START_STATES) {

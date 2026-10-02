@@ -1024,9 +1024,18 @@ const WRITERS: readonly Writer[] = [
     file: R + "disputes.ts",
     verb: "UPDATE",
     table: "relay_disputes",
-    count: 5,
+    count: 6,
     principal:
-      "state transitions: `/resolve` — the OPERATOR's act, master token only (#846 v2: it took any caller's verdict); appeal (a party's signature); lazy finalize and opened-expiry (time-driven). The filing's own `evidence` state is now set by its guarded INSERT",
+      "state transitions: `/resolve` — the OPERATOR's act, master token only (#846 v2: it took any caller's verdict); appeal (a party's signature; guarded on the `resolved` state it read); lazy finalize and opened-expiry (time-driven). The filing's own `evidence` state is now set by its guarded INSERT. `fund_refusal` (`recordFundRefusal`): written only by the fund action of a verdict already being finalized (same reach as lazy finalize / round-2 appeal) — a marker on that dispute, never an identity column",
+  },
+  {
+    file: R + "dispute-fund-ledger.ts",
+    verb: "UPDATE",
+    table: "relay_disputes",
+    count: 1,
+    principal:
+      MIGRATION +
+      " (v50: flag `fund_refusal = 'task_mismatch'` on disputes whose task is not their allocation's — a marker column, never an identity column)",
   },
   {
     file: R + "disputes.ts",
