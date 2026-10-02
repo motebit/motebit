@@ -46,6 +46,7 @@ const ROOT = resolve(__dirname, "..");
 const RELAY = resolve(ROOT, "services/relay");
 const TESTS_DIR = resolve(RELAY, "src/__tests__");
 const TASKS = "services/relay/src/tasks.ts";
+const TASK_ANSWER = "services/relay/src/task-answer.ts";
 const FEDERATION = "services/relay/src/federation.ts";
 
 interface Probe {
@@ -144,13 +145,16 @@ const PROBES: readonly Probe[] = [
   {
     suite: "booted-receipt-activation",
     guards: "action→receipt — settlement gated on a valid Ed25519 receipt",
-    target: TASKS,
+    target: TASK_ANSWER,
     // Force the receipt-verify result true (the #375 forgery-half severing).
+    // Since #890 the POST result door verifies inside the shared answer
+    // chokepoint (`admitReceipt` → `answerTask` → `verifySignature`), so the severing lands
+    // on the one verify call every door routes through.
     mutate: (src) =>
       replaceOnce(
         src,
-        "let receiptValid = await verifyExecutionReceipt(receipt, hexToBytes(pubKeyHex));",
-        "let receiptValid = true;\n  void verifyExecutionReceipt;\n  void hexToBytes;\n  void pubKeyHex;",
+        "let valid = await deps.verifyReceipt(receipt, pubKeyHex);",
+        "let valid = true;",
       ),
     observable: "a byte-tampered signature must yield 403 at POST /agent/:id/task/:taskId/result",
   },
@@ -298,16 +302,16 @@ function main(): void {
       process.exit(130);
     });
   }
-  // Refuse to run on a dirty tasks.ts — this gate mutates it in place, and a
-  // pre-existing edit would be indistinguishable from a probe (or clobbered by
-  // the revert). Same isolation discipline as check-gates-effective.
-  const dirty = run("git", ["status", "--porcelain", "--", TASKS]).out.trim();
+  // Refuse to run on a dirty probe target — this gate mutates each in place,
+  // and a pre-existing edit would be indistinguishable from a probe (or
+  // clobbered by the revert). Same isolation discipline as check-gates-effective.
+  const targets = [...new Set(PROBES.map((p) => p.target))];
+  const dirty = run("git", ["status", "--porcelain", "--", ...targets]).out.trim();
   if (dirty) {
     failWithRepair({
-      invariant:
-        "check-activation-effective mutates services/relay/src/tasks.ts in place and must run on a clean copy of it",
+      invariant: `check-activation-effective mutates ${targets.join(", ")} in place and must run on clean copies of them`,
       canonical: TASKS,
-      fix: `commit or stash your changes to ${TASKS} before running this gate (it reverts its own mutation, which would clobber yours).`,
+      fix: `commit or stash your changes to ${targets.join(", ")} before running this gate (it reverts its own mutation, which would clobber yours).`,
     });
   }
 
