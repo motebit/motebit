@@ -10,6 +10,7 @@
  */
 
 import type { Hono } from "hono";
+import { secretEquals } from "./secret-compare.js";
 import { FREE_CREDIT_REFERENCE_PREFIX } from "./account-store-sqlite.js";
 import { HTTPException } from "hono/http-exception";
 import Stripe from "stripe";
@@ -317,7 +318,7 @@ export function registerProxyTokenRoutes(
     const secret = c.req.header("x-relay-secret");
     const expectedSecret = process.env.RELAY_PROXY_SECRET;
     const motebitId = c.req.param("motebitId");
-    if (!expectedSecret || secret !== expectedSecret) {
+    if (!expectedSecret || !secretEquals(secret, expectedSecret)) {
       // Every refused debit is served-but-unbilled revenue: log WHY (never the
       // values) so a secret mismatch is countable from the relay side too.
       logger.warn("proxy-debit.unauthorized", {
@@ -344,7 +345,13 @@ export function registerProxyTokenRoutes(
       return c.json({ error: "amount must be a positive integer (micro-units)" }, 400);
     }
     const amount = body.amount;
-    const referenceId = typeof body.reference_id === "string" ? body.reference_id : null;
+    // reference_id is the idempotency key (the proxy's per-turn request id). A
+    // debit without one could not be deduplicated on retry — a lost 200 would
+    // record a second fee row — so it is required, not optional.
+    if (typeof body.reference_id !== "string" || body.reference_id === "") {
+      return c.json({ error: "reference_id is required (non-empty string)" }, 400);
+    }
+    const referenceId = body.reference_id;
     const description = typeof body.description === "string" ? body.description : "Cloud AI usage";
 
     // Idempotency. The proxy debits AFTER serving the response (fire-and-forget)
@@ -354,11 +361,7 @@ export function registerProxyTokenRoutes(
     // return success with the current balance. No `await` between this check and
     // the debit below, so the read+write stays atomic within this process (the
     // relay is single-instance; better-sqlite3 is synchronous).
-    if (
-      referenceId != null &&
-      referenceId !== "" &&
-      hasFeeWithReference(db, motebitId, referenceId)
-    ) {
+    if (hasFeeWithReference(db, motebitId, referenceId)) {
       const balance = getAccountBalance(db, motebitId)?.balance ?? 0;
       logger.info("proxy-debit.idempotent_replay", { motebitId, referenceId });
       return c.json({ success: true, balance, idempotent: true });

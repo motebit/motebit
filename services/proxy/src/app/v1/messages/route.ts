@@ -326,6 +326,36 @@ export async function POST(request: Request): Promise<Response> {
     );
   }
 
+  // --- Validate messages --- BEFORE the auto-routing classifier: a request
+  // whose shape is invalid is refused before anything spends on the operator key.
+  const messages = body.messages as Array<{ role: string; content: string }> | undefined;
+  if (!Array.isArray(messages) || messages.length === 0) {
+    return released(
+      failureResponse({
+        requestId,
+        status: 400,
+        bodyObj: { error: "invalid_messages" },
+        headers: cors,
+        model: resolvedModel,
+        mode: authMode,
+        failure: motebitFailure("motebit_request", "malformed_request", 400),
+      }),
+    );
+  }
+  if (messages.length > limits.maxMsgs) {
+    return released(
+      failureResponse({
+        requestId,
+        status: 400,
+        bodyObj: { error: "too_many_messages", message: `Max ${limits.maxMsgs} messages` },
+        headers: cors,
+        model: resolvedModel,
+        mode: authMode,
+        failure: motebitFailure("motebit_request", "malformed_request", 400),
+      }),
+    );
+  }
+
   // Resolve legacy/class aliases → current canonical model ID.
   // "claude-sonnet" → "claude-sonnet-4-6", old dated versions → current, etc.
   // Keeps deployed clients working when models are upgraded server-side.
@@ -350,7 +380,7 @@ export async function POST(request: Request): Promise<Response> {
   if (resolvedModel === "auto" && !isBYOK) {
     const classifierKey = process.env.ANTHROPIC_API_KEY;
     if (classifierKey) {
-      const lastMsg = (body.messages as Array<{ content: string }>)?.at(-1)?.content ?? "";
+      const lastMsg = messages.at(-1)?.content ?? "";
       const classifiedTaskType = await classifyTask(classifierKey, lastMsg);
       // Narrow to the closed TaskShape registry. Unknown classifier
       // outputs fall back to "chat" (the conversational default).
@@ -414,6 +444,31 @@ export async function POST(request: Request): Promise<Response> {
       routingReason = `ANTHROPIC_API_KEY not configured; using default ${AUTO_DEFAULT_MODEL}`;
     }
   }
+  // Header values must be ByteStrings: the router's reasons carry "→", which
+  // makes `new Response(...)` throw. Keep the reason readable, ASCII-only.
+  const routingHeader: Record<string, string> = routingReason
+    ? {
+        "X-Motebit-Routing-Reason": routingReason.replace(/→/g, "->").replace(/[^\x20-\x7e]/g, "?"),
+      }
+    : {};
+  // Classifier obligation: once the classifier has spent on the operator key,
+  // EVERY exit below owes it exactly once. Failure exits discharge it through
+  // `settled` (a classifier-only debit, then release the spend slot); the
+  // streamed turn discharges it by folding `classifierCost` into its own debit
+  // and marking it billed. No exit below may use `released` or return bare —
+  // `classifier-billing.test.ts` guards the source.
+  let classifierBilled = classifierCost === 0;
+  const settled = async <T>(r: T): Promise<T> => {
+    if (!classifierBilled) {
+      classifierBilled = true;
+      if (authMode === "proxy-token" && tokenPayload) {
+        await debitRelay(tokenPayload.mid, classifierCost, requestId);
+      }
+    }
+    await spendAdmission?.release();
+    return r;
+  };
+
   // routingReason surfaces on the successful response paths below as
   // the `X-Motebit-Routing-Reason` header (sibling-shape of
   // `X-Motebit-Content-Manifest` — observability metadata, plain
@@ -428,7 +483,7 @@ export async function POST(request: Request): Promise<Response> {
       tokenPayload.models.length > 0 &&
       !tokenPayload.models.includes(resolvedModel)
     ) {
-      return released(
+      return settled(
         failureResponse({
           requestId,
           status: 400,
@@ -452,7 +507,7 @@ export async function POST(request: Request): Promise<Response> {
     // this filter (the user's own key, the user's own choice; sovereignty
     // doctrine stays orthogonal to tier policy).
     if (resolvedModel !== "auto" && !isModelAllowedInMotebitCloud(resolvedModel)) {
-      return released(
+      return settled(
         failureResponse({
           requestId,
           status: 451,
@@ -478,7 +533,7 @@ export async function POST(request: Request): Promise<Response> {
     apiKey = clientApiKey;
   } else {
     if (!provider) {
-      return released(
+      return settled(
         failureResponse({
           requestId,
           status: 400,
@@ -492,7 +547,7 @@ export async function POST(request: Request): Promise<Response> {
     }
     apiKey = getProviderApiKey(provider);
     if (!apiKey) {
-      return released(
+      return settled(
         failureResponse({
           requestId,
           status: 501,
@@ -510,7 +565,7 @@ export async function POST(request: Request): Promise<Response> {
   }
 
   if (!apiKey) {
-    return released(
+    return settled(
       failureResponse({
         requestId,
         status: 500,
@@ -519,35 +574,6 @@ export async function POST(request: Request): Promise<Response> {
         model: resolvedModel,
         mode: authMode,
         failure: motebitFailure("motebit_infrastructure", "not_configured", 500),
-      }),
-    );
-  }
-
-  // --- Validate messages ---
-  const messages = body.messages as Array<{ role: string; content: string }> | undefined;
-  if (!Array.isArray(messages) || messages.length === 0) {
-    return released(
-      failureResponse({
-        requestId,
-        status: 400,
-        bodyObj: { error: "invalid_messages" },
-        headers: cors,
-        model: resolvedModel,
-        mode: authMode,
-        failure: motebitFailure("motebit_request", "malformed_request", 400),
-      }),
-    );
-  }
-  if (messages.length > limits.maxMsgs) {
-    return released(
-      failureResponse({
-        requestId,
-        status: 400,
-        bodyObj: { error: "too_many_messages", message: `Max ${limits.maxMsgs} messages` },
-        headers: cors,
-        model: resolvedModel,
-        mode: authMode,
-        failure: motebitFailure("motebit_request", "malformed_request", 400),
       }),
     );
   }
@@ -561,14 +587,6 @@ export async function POST(request: Request): Promise<Response> {
     body,
     limits.maxTokens,
   );
-
-  // The classifier already spent on the operator key; a turn that fails before
-  // streaming still owes it.
-  const billClassifierOnly = async (): Promise<void> => {
-    if (authMode === "proxy-token" && tokenPayload && classifierCost > 0) {
-      await debitRelay(tokenPayload.mid, classifierCost, requestId);
-    }
-  };
 
   let providerRes: Response;
   try {
@@ -585,8 +603,7 @@ export async function POST(request: Request): Promise<Response> {
       provider: resolvedProvider,
       errorName: err instanceof Error ? err.name : undefined,
     });
-    await billClassifierOnly();
-    return released(
+    return settled(
       failureResponse({
         requestId,
         status: 502,
@@ -626,8 +643,7 @@ export async function POST(request: Request): Promise<Response> {
     // still want the provider's retry guidance until in-proxy recovery (PR3)
     // exists. The rest of the upstream header set is deliberately not relayed.
     const retryAfter = providerRes.headers.get("Retry-After");
-    await billClassifierOnly();
-    return released(
+    return settled(
       new Response(bodyText, {
         status: providerRes.status,
         headers: {
@@ -647,6 +663,8 @@ export async function POST(request: Request): Promise<Response> {
     const model = resolvedModel;
     const prov = resolvedProvider;
     const usage: UsageAccumulator = { input: 0, output: 0, cacheRead: 0, cacheCreation: 0 };
+    // The turn's debit below carries `classifierCost` — the obligation is discharged there.
+    classifierBilled = true;
 
     const { readable, writable } = new TransformStream<Uint8Array, Uint8Array>();
     const writer = writable.getWriter();
@@ -724,21 +742,23 @@ export async function POST(request: Request): Promise<Response> {
         "Cache-Control": "no-cache",
         // The relay `fee` row's reference_id — correlates a turn to its debit.
         "X-Motebit-Request-Id": requestId,
-        ...(routingReason ? { "X-Motebit-Routing-Reason": routingReason } : {}),
+        ...routingHeader,
       },
     });
   }
 
   // BYOK or non-streaming: pipe directly (a proxy-token request only lands
-  // here with no upstream body — release the slot; nothing was streamed).
-  await spendAdmission?.release();
-  return new Response(providerRes.body, {
-    status: providerRes.status,
-    headers: {
-      ...cors,
-      "Content-Type": providerRes.headers.get("Content-Type") ?? "text/event-stream",
-      "Cache-Control": "no-cache",
-      ...(routingReason ? { "X-Motebit-Routing-Reason": routingReason } : {}),
-    },
-  });
+  // here with no upstream body — release the slot; nothing was streamed, but
+  // the classifier, if it ran, is still owed).
+  return settled(
+    new Response(providerRes.body, {
+      status: providerRes.status,
+      headers: {
+        ...cors,
+        "Content-Type": providerRes.headers.get("Content-Type") ?? "text/event-stream",
+        "Cache-Control": "no-cache",
+        ...routingHeader,
+      },
+    }),
+  );
 }

@@ -326,4 +326,35 @@ describe("POST /api/v1/agents/:motebitId/debit", () => {
     );
     expect(((await r2.json()) as { balance: number }).balance).toBe(80_000);
   });
+
+  // reference_id is the idempotency key. Without it a retried debit (the proxy
+  // retries after a lost 200) would record a second fee row — so it is required.
+  it("requires a non-empty string reference_id — 400, nothing recorded", async () => {
+    await deposit(relay, motebitId, 0.1); // 100,000 micro
+    for (const body of [
+      { amount: 10_000 },
+      { amount: 10_000, reference_id: "" },
+      { amount: 10_000, reference_id: 42 },
+      { amount: 10_000, reference_id: null },
+    ]) {
+      const res = await debitRequest(relay, motebitId, body, RELAY_SECRET);
+      expect(res.status).toBe(400);
+    }
+    const fees = relay.moteDb.db
+      .prepare("SELECT COUNT(*) AS n FROM relay_transactions WHERE motebit_id = ? AND type = 'fee'")
+      .get(motebitId) as { n: number };
+    expect(fees.n).toBe(0);
+  });
+
+  it("a secret differing only in its last byte, or by length, is refused", async () => {
+    for (const s of [RELAY_SECRET.slice(0, -1) + "X", RELAY_SECRET + "x", RELAY_SECRET.slice(1)]) {
+      const res = await debitRequest(
+        relay,
+        motebitId,
+        { amount: 1000, reference_id: `ref-${s.length}` },
+        s,
+      );
+      expect(res.status).toBe(401);
+    }
+  });
 });
