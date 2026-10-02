@@ -104,17 +104,31 @@ function injectDispute(
     );
 }
 
+/**
+ * Seed an allocation the way submission books one: the worker's
+ * `relay_allocations` row plus, when `delegatorId` is given, the delegator's
+ * `allocation_hold` ledger debit (reference_id = allocation_id) — the record
+ * the filing route reads to establish who the delegator is (§4.4 standing).
+ */
 function createAllocation(
   relay: SyncRelay,
   allocationId: string,
   taskId: string,
   motebitId: string,
+  delegatorId?: string,
 ) {
   relay.moteDb.db
     .prepare(
       "INSERT OR IGNORE INTO relay_allocations (allocation_id, task_id, motebit_id, amount_locked, status, created_at) VALUES (?, ?, ?, ?, 'settled', ?)",
     )
     .run(allocationId, taskId, motebitId, 100000, Date.now());
+  if (delegatorId !== undefined) {
+    relay.moteDb.db
+      .prepare(
+        "INSERT INTO relay_transactions (transaction_id, motebit_id, type, amount, balance_after, reference_id, description, created_at) VALUES (?, ?, 'allocation_hold', ?, 0, ?, 'test hold', ?)",
+      )
+      .run(crypto.randomUUID(), delegatorId, -100000, allocationId, Date.now());
+  }
 }
 
 let disputeIdCounter = 0;
@@ -238,7 +252,7 @@ describe("Dispute: POST /api/v1/allocations/:allocationId/dispute", () => {
   });
 
   it("opens a dispute and locks funds", async () => {
-    createAllocation(relay, "alloc-1", "task-1", "delegator-1");
+    createAllocation(relay, "alloc-1", "task-1", "delegator-1", "worker-1");
 
     const res = await openDispute(relay, "alloc-1", "delegator-1", "worker-1");
     expect(res.status).toBe(200);
@@ -256,7 +270,7 @@ describe("Dispute: POST /api/v1/allocations/:allocationId/dispute", () => {
   });
 
   it("rejects dispute without evidence refs", async () => {
-    createAllocation(relay, "alloc-2", "task-2", "delegator-1");
+    createAllocation(relay, "alloc-2", "task-2", "delegator-1", "worker-1");
 
     // Schema enforces evidence_refs.min(1); the relay rejects at parse
     // before any signature work (the body is still well-signed, but the
@@ -285,7 +299,7 @@ describe("Dispute: POST /api/v1/allocations/:allocationId/dispute", () => {
     // worker). The "delegator-1" label here is the test fixture's name,
     // but it's filling the worker slot in the allocation — so a dispute
     // filed by delegator-1 against this allocation has filer_role=worker.
-    createAllocation(relay, "alloc-fr-w", "task-fr-w", "delegator-1");
+    createAllocation(relay, "alloc-fr-w", "task-fr-w", "delegator-1", "worker-1");
 
     const res = await openDispute(relay, "alloc-fr-w", "delegator-1", "worker-1", "task-fr-w");
     expect(res.status).toBe(200);
@@ -300,7 +314,7 @@ describe("Dispute: POST /api/v1/allocations/:allocationId/dispute", () => {
   it("captures filer_role=delegator when filer does NOT match the allocation's motebit_id", async () => {
     // Allocation's motebit_id is "worker-1" (the actual worker this time).
     // Dispute filed by delegator-1 → filer is NOT the worker → delegator.
-    createAllocation(relay, "alloc-fr-d", "task-fr-d", "worker-1");
+    createAllocation(relay, "alloc-fr-d", "task-fr-d", "worker-1", "delegator-1");
 
     const res = await openDispute(relay, "alloc-fr-d", "delegator-1", "worker-1", "task-fr-d");
     expect(res.status).toBe(200);
@@ -320,7 +334,7 @@ describe("Dispute: evidence + resolve", () => {
     relay = await createTestRelay({ enableDeviceAuth: false });
     await registerAgent(relay, "del-ev");
     await registerAgent(relay, "wrk-ev");
-    createAllocation(relay, "alloc-ev", "task-ev", "del-ev");
+    createAllocation(relay, "alloc-ev", "task-ev", "del-ev", "wrk-ev");
   });
 
   afterEach(async () => {
@@ -709,7 +723,7 @@ describe("Dispute: appeal", () => {
     relay = await createTestRelay({ enableDeviceAuth: false });
     await registerAgent(relay, "del-ap");
     await registerAgent(relay, "wrk-ap");
-    createAllocation(relay, "alloc-ap", "task-ap", "del-ap");
+    createAllocation(relay, "alloc-ap", "task-ap", "del-ap", "wrk-ap");
   });
 
   afterEach(async () => {
@@ -782,7 +796,7 @@ describe("Dispute: GET status + admin", () => {
   beforeEach(async () => {
     relay = await createTestRelay({ enableDeviceAuth: false });
     await registerAgent(relay, "del-get");
-    createAllocation(relay, "alloc-get", "task-get", "del-get");
+    createAllocation(relay, "alloc-get", "task-get", "del-get", "wrk-get");
   });
 
   afterEach(async () => {
@@ -846,7 +860,7 @@ describe("Dispute: fund execution integrity", () => {
     // passed because executeFundAction's Case A inverted them a SECOND time via
     // filed_by/respondent; the two cancelled. The fix removes that inversion, so
     // the fixture now has to name roles honestly.)
-    createAllocation(relay, "alloc-fund", "task-fund", "wrk-fund");
+    createAllocation(relay, "alloc-fund", "task-fund", "wrk-fund", "del-fund");
   });
 
   afterEach(async () => {

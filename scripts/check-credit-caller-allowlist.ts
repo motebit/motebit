@@ -52,18 +52,15 @@ const ALLOWLIST: ReadonlyArray<{ file: string; reason: string }> = [
     reason: "defines the creditAccount wrapper + the SqliteAccountStore shim",
   },
   { file: "account-store-sqlite.ts", reason: "defines the store credit() primitive" },
+  {
+    file: "allocation-escrow.ts",
+    reason:
+      "the escrow chokepoint — credits only out of an allocation's held escrow (refused above it, " +
+      "payee a party of that allocation), plus a verified peer's inbound federated settlement_credit",
+  },
   { file: "deposit-detector.ts", reason: "onchain USDC deposit — verified by confirmation depth" },
   { file: "stripe-credit.ts", reason: "Stripe checkout — verified by server-side session read" },
   { file: "subscriptions.ts", reason: "Stripe webhook — signature-verified funding" },
-  {
-    file: "tasks.ts",
-    reason: "task settlement — settlement_credit / allocation_release from already-funded balances",
-  },
-  {
-    file: "federation-callbacks.ts",
-    reason: "federated settlement_credit from a verified peer forward",
-  },
-  { file: "index.ts", reason: "allocation_release — net-zero refund of a prior funded hold" },
   {
     file: "x402-settlements.ts",
     reason:

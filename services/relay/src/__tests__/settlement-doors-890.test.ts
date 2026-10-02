@@ -63,6 +63,31 @@ import { recordTaskRoute, cleanupTaskRoutes, TASK_ROUTE_RETENTION_MS } from "../
 import * as taskQueueModule from "../task-queue.js";
 import { TaskQueue } from "../task-queue.js";
 import { persistReceiptChain } from "../receipts-store.js";
+import { creditAccount as creditAccountForEscrow } from "../accounts.js";
+import { moveAllocationMoney, openAllocation } from "../allocation-escrow.js";
+/** A funded allocation for an origin task: the delegator's hold, through the escrow. */
+function fundOriginEscrow(
+  db: SyncRelay["moteDb"]["db"],
+  taskId: string,
+  worker: string,
+  amount: number,
+): void {
+  creditAccountForEscrow(db, "doors-delegator", amount, "deposit", `dep-${taskId}`, "deposit");
+  openAllocation(db, {
+    allocationId: `x402-${taskId}`,
+    taskId,
+    worker,
+    amountLocked: amount,
+    createdAt: Date.now(),
+  });
+  moveAllocationMoney(db, {
+    kind: "hold",
+    allocationId: `x402-${taskId}`,
+    amount,
+    party: "doors-delegator",
+    description: "hold",
+  });
+}
 
 // An ephemeral port (#890 r10): a fixed one collided with another suite's
 // allocator when the relay suite ran together.
@@ -570,6 +595,9 @@ describe("#890 r9 C2 — the federation door settles on the peer's retry after a
       w.q.update(S, (e) => {
         e.price_snapshot = 1_000_000;
       });
+      // The origin's escrow funds the forward (allocation-escrow.ts: a relay
+      // never forwards money it does not hold).
+      fundOriginEscrow(w.relay.moteDb.db, S, w.W.id, 1_000_000);
       recordTaskRoute(w.relay.moteDb.db, S, w.W.id, w.peer.id);
       const R = await receiptBy(w.W, S, "completed");
       crash(w, S, true);

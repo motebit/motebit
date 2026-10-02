@@ -438,8 +438,8 @@ describe("P2P disputes (trust-layer)", () => {
         `INSERT INTO relay_settlements
          (settlement_id, allocation_id, task_id, motebit_id, receipt_hash,
           amount_settled, platform_fee, platform_fee_rate, status, settled_at,
-          settlement_mode, p2p_tx_hash, payment_verification_status)
-         VALUES (?, ?, ?, ?, '', 0, 0, 0, 'completed', ?, 'p2p', ?, 'pending')`,
+          settlement_mode, p2p_tx_hash, payment_verification_status, delegator_id)
+         VALUES (?, ?, ?, ?, '', 0, 0, 0, 'completed', ?, 'p2p', ?, 'pending', 'del-dsp')`,
       )
       .run("stl-p2p-1", "p2p-task-1", "task-p2p-1", "wrk-dsp", Date.now(), "fakeTxHash123");
   });
