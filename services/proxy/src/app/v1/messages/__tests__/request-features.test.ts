@@ -54,7 +54,6 @@ describe("findUnsupportedFeature — admitted (metered) features", () => {
       "image base64",
       withBlock({ type: "image", source: { type: "base64", media_type: "image/png", data: "x" } }),
     ],
-    ["image url", withBlock({ type: "image", source: { type: "url", url: "https://x/y.png" } })],
     [
       "document text",
       withBlock({ type: "document", source: { type: "text", data: "x" }, title: "t" }),
@@ -115,6 +114,27 @@ describe("findUnsupportedFeature — refused (unmeterable) features", () => {
       "system non-text block",
       base({ system: [{ type: "image", source: {} }] }),
       "content.type=image",
+    ],
+    // A url source is fetched by the PROVIDER: its input size is unknown to
+    // the proxy, so the byte-based input upper bound would not bound it.
+    [
+      "image url source",
+      withBlock({ type: "image", source: { type: "url", url: "https://x/y.png" } }),
+      "image.source.type=url",
+    ],
+    [
+      "document url source",
+      withBlock({ type: "document", source: { type: "url", url: "https://x/y.pdf" } }),
+      "document.source.type=url",
+    ],
+    [
+      "url source nested in a tool_result",
+      withBlock({
+        type: "tool_result",
+        tool_use_id: "1",
+        content: [{ type: "image", source: { type: "url", url: "https://x/y.png" } }],
+      }),
+      "image.source.type=url",
     ],
     ["tools not array", base({ tools: {} }), "tools"],
     ["tool not object", base({ tools: ["x"] }), "tool"],

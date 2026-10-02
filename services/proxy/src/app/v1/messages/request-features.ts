@@ -24,8 +24,10 @@
  *     `"custom"`: name / description / input_schema / cache_control) or
  *     OpenAI `type: "function"`. The model's tool call is output tokens; the
  *     tool runs on the client.
- *   - content blocks: `text`, `image`, `document` (base64 / text / url
- *     sources — priced as input tokens), and the conversation-replay blocks
+ *   - content blocks: `text`, `image`, `document` (inline base64 / text
+ *     sources — priced as input tokens, and inside the request bytes that
+ *     bound input when usage is lost; a provider-fetched `url` source is
+ *     not, so it is refused), and the conversation-replay blocks
  *     `tool_use`, `tool_result` (nested text / image / document only),
  *     `thinking`, `redacted_thinking`. `cache_control` is priced by TTL.
  */
@@ -69,8 +71,11 @@ const TOOL_RESULT_BLOCKS: ReadonlySet<string> = new Set(["text", "image", "docum
 /** Block types a `system` array may carry. */
 const SYSTEM_BLOCKS: ReadonlySet<string> = new Set(["text"]);
 
-const IMAGE_SOURCES: ReadonlySet<string> = new Set(["base64", "url"]);
-const DOCUMENT_SOURCES: ReadonlySet<string> = new Set(["base64", "text", "url"]);
+// Inline sources only. A `url` source is fetched by the PROVIDER: the input it
+// adds is invisible to the proxy, so the request-bytes input bound (the upper
+// bound billed when usage is lost) would not bound it — refused.
+const IMAGE_SOURCES: ReadonlySet<string> = new Set(["base64"]);
+const DOCUMENT_SOURCES: ReadonlySet<string> = new Set(["base64", "text"]);
 
 const CUSTOM_TOOL_KEYS: ReadonlySet<string> = new Set([
   "type",
