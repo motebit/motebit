@@ -215,6 +215,7 @@
     "@changesets/cli": "^2.31.1",
     "@microsoft/api-extractor": "^7.58.12",
     "@motebit/runtime": "workspace:*",
+    "@motebit/semiring": "workspace:*",
     "@motebit/verifier": "workspace:*",
     "@motebit/wallet-solana": "workspace:*",
     "@solana/spl-token": "^0.4.15",
@@ -222,6 +223,7 @@
     "@typescript-eslint/eslint-plugin": "^8.67.0",
     "@typescript-eslint/parser": "^8.67.0",
     "@vitest/coverage-v8": "^4.1.10",
+    "ajv": "^8.20.0",
     "eslint": "^8.57.1",
     "eslint-import-resolver-typescript": "^4.4.5",
     "eslint-plugin-import": "^2.32.0",
@@ -234,7 +236,6 @@
     "turbo": "^2.10.9",
     "typescript": "^5.9.0",
     "vitest": "^4.1.10",
-    "@motebit/semiring": "workspace:*",
     "yaml": "^2.9.0"
   },
   "pnpm": {

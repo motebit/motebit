@@ -6,12 +6,21 @@ on:
     paths:
       - "apps/web/**"
       - "packages/**"
+      # services/relay is in @motebit/web's workspace closure (devDependency).
+      - "services/relay/**"
       # A lockfile or root-manifest change (dependency security fixes,
       # pnpm.overrides) changes the built image without touching this
       # service's own files — it must redeploy too. Witnessed 2026-09-13:
       # the advisory triage merge redeployed only the relay.
       - "pnpm-lock.yaml"
       - "package.json"
+      # Root build config the build reads: the workspace list, the task
+      # graph and the tsconfig every workspace package extends. Held by
+      # scripts/check-vercel-ignore-build.ts (paths ⊇ the project's build
+      # inputs).
+      - "pnpm-workspace.yaml"
+      - "turbo.json"
+      - "tsconfig.base.json"
   workflow_dispatch:
 
 concurrency:
@@ -26,6 +35,8 @@ jobs:
     # the job timeout, which GitHub reports as `cancelled`. 30m gives a cold
     # build ample headroom while still bounding a genuinely hung deploy.
     timeout-minutes: 30
+    # workflow_dispatch can run on any ref; only main deploys production.
+    if: github.ref == 'refs/heads/main'
 
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

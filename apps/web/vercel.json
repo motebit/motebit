@@ -1,5 +1,7 @@
 {
   "framework": "vite",
+  "ignoreCommand": "sh ../../scripts/vercel-ignore-build.sh --watch ../../scripts/vercel-watch/web.txt",
+  "git": { "deploymentEnabled": { "main": false } },
   "rewrites": [
     { "source": "/terms", "destination": "/terms.html" },
     { "source": "/(.*)", "destination": "/index.html" }
