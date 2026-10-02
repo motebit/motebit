@@ -15,10 +15,23 @@
  * project's Root Directory (services/proxy), where the repo-root pathspecs
  * match nothing — so it exited 0 (skip) on every commit, production included.
  *
+ * Every vercel.json is first validated against Vercel's own schema, vendored
+ * at VERCEL_SCHEMA (scripts/vendor/vercel/README.md says where it comes from
+ * and how to refresh it): every limit — the 256-char ignoreCommand, the
+ * closed set of top-level keys — is read from that file, never hardcoded.
+ * #1027: apps/web's inline path list made its ignoreCommand 1051 chars and
+ * Vercel refused the config before building ("ignoreCommand should NOT be
+ * longer than 256 characters") while every repo test and gate was green; the
+ * same file feeds `vercel --prod`, so production would have broken too.
+ *
  * Arguments are checked too, so a preview skip cannot be "proven" over the
  * wrong set:
- *   - paths mode: every path exists (repo-root relative), and the set covers
- *     the project's BUILD INPUTS: its own directory, the directory of every
+ *   - `--watch <file>` (the file path relative to the project dir, as the
+ *     command runs from there): the file is in the repo, lists one
+ *     repo-root-relative path per line (`#` comments and blank lines aside;
+ *     no whitespace, no duplicates, no absolute or `..` paths), every path
+ *     exists, and the set EQUALS the project's BUILD INPUTS — no more, no
+ *     less: its own directory, the directory of every
  *     workspace package in its transitive `workspace:` dependency closure
  *     (dependencies, devDependencies, peerDependencies,
  *     optionalDependencies), and the root build config the build reads —
@@ -34,7 +47,17 @@
  * step may be configured in the Vercel dashboard, which this gate cannot see.
  *
  * Production ownership (one deployer per project), parsed from the workflow
- * YAML, never grepped. A workflow deploys a project's production when it runs
+ * YAML, never grepped. The deploy step is a PINNED FORM, allowlisted rather
+ * than pattern-matched (a cold review found ten shapes the pattern let
+ * through — `continue-on-error`, `|| true`, an `exit 0` before the command,
+ * a heredoc, `--target=preview`, `needs:` on a never-running job, an `if`
+ * false on push to main, `paths-ignore`, a foreign `working-directory`, a
+ * wrong or missing org id / token): its `run` is exactly `vercel --prod`
+ * (optionally `--yes`), its keys and its job's keys come from an allowlist
+ * (no continue-on-error, working-directory, shell or defaults), no `if` on
+ * the step, its job or any job it `needs` is false on a push to main, and
+ * VERCEL_TOKEN / VERCEL_ORG_ID / VERCEL_PROJECT_ID are the pinned secrets.
+ * on.push holds only `branches` and `paths`, with no negated path. A workflow deploys a project's production when it runs
  * on push to `main` with `<project dir>/**` in its paths and has a job and
  * step (neither with a statically-false `if`) whose `run` executes
  * `vercel … --prod` (a comment or `echo` does not count) with
@@ -56,13 +79,69 @@
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join, posix, relative, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
+import Ajv, { type ErrorObject } from "ajv";
+import Ajv2019 from "ajv/dist/2019.js";
+import Ajv2020 from "ajv/dist/2020.js";
 import { parse as parseYaml } from "yaml";
 import { failWithRepair } from "./lib/gate-report.js";
 
 const SCRIPT = "scripts/vercel-ignore-build.sh";
+/** Vercel's published vercel.json schema, vendored (see scripts/vendor/vercel/README.md). */
+export const VERCEL_SCHEMA = "scripts/vendor/vercel/vercel.schema.json";
 const WORKSPACE_GLOB_DIRS = ["packages", "apps", "services"];
 const SKIP_DIRS = new Set(["node_modules", ".git", ".next", ".turbo", "dist", "out", ".vercel"]);
 const DEP_FIELDS = ["dependencies", "devDependencies", "peerDependencies", "optionalDependencies"];
+
+export interface VercelSchema {
+  $comment?: string;
+  $schema?: string;
+  properties?: Record<string, unknown>;
+  additionalProperties?: unknown;
+  [k: string]: unknown;
+}
+
+export function loadVercelSchema(root: string): VercelSchema {
+  return JSON.parse(readFileSync(join(root, VERCEL_SCHEMA), "utf8")) as VercelSchema;
+}
+
+type Validate = ((data: unknown) => boolean) & { errors?: ErrorObject[] | null };
+
+/** Compile with the Ajv class for the schema's own draft. */
+export function compileVercelSchema(schema: VercelSchema): Validate {
+  const draft = String(schema.$schema ?? "");
+  const opts = { allErrors: true, strict: false } as const;
+  const AjvClass = draft.includes("2020-12") ? Ajv2020 : draft.includes("2019-09") ? Ajv2019 : Ajv;
+  if (/draft-0[34]/.test(draft)) {
+    throw new Error(`${VERCEL_SCHEMA}: ${draft} is not supported by the gate's validator`);
+  }
+  return new AjvClass(opts).compile(schema) as Validate;
+}
+
+/**
+ * What Vercel's schema refuses in one vercel.json: every validator error,
+ * plus top-level keys the schema does not declare (closed even when a
+ * refreshed schema leaves additionalProperties open — Vercel refuses unknown
+ * keys at deploy time).
+ */
+export function schemaProblems(schema: VercelSchema, validate: Validate, cfg: unknown): string[] {
+  const out: string[] = [];
+  if (!validate(cfg)) {
+    for (const e of validate.errors ?? []) {
+      const extra =
+        e.keyword === "additionalProperties"
+          ? ` (\`${String((e.params as { additionalProperty?: unknown }).additionalProperty)}\`)`
+          : "";
+      out.push(`${e.instancePath === "" ? "/" : e.instancePath} ${e.message ?? e.keyword}${extra}`);
+    }
+  }
+  if (schema.additionalProperties !== false && cfg != null && typeof cfg === "object") {
+    const known = new Set(Object.keys(schema.properties ?? {}));
+    for (const k of Object.keys(cfg)) {
+      if (!known.has(k)) out.push(`/ unknown top-level key (\`${k}\`)`);
+    }
+  }
+  return [...new Set(out)];
+}
 
 /**
  * Projects known to deploy main both through a `vercel --prod` Action and
@@ -243,20 +322,52 @@ export function pathsCover(paths: string[], p: string): boolean {
   );
 }
 
-/** Does a `run:` script execute `vercel … --prod` (not a comment, echo or string)? */
+/**
+ * Is this step a production-deploy CANDIDATE — does its `run` mention
+ * `vercel` and `--prod` anywhere? Deliberately loose: a candidate is then held
+ * to the pinned form (deployStepProblems), so a disguised deploy is refused
+ * rather than ignored.
+ */
 export function runsVercelProd(run: string): boolean {
-  const lines = run.replace(/\\\r?\n/g, " ").split(/\r?\n|&&|;/);
-  for (const raw of lines) {
-    const line = raw.replace(/(^|\s)#.*$/, "").trim();
-    let toks = line.split(/\s+/).filter((t) => t.length > 0);
-    while (toks.length > 0 && /^[A-Za-z_][A-Za-z0-9_]*=/.test(toks[0]!)) toks = toks.slice(1);
-    if (toks[0] === "npx") toks = toks.slice(1).filter((t) => t !== "-y" && t !== "--yes");
-    else if (toks[0] === "pnpm" && (toks[1] === "dlx" || toks[1] === "exec")) toks = toks.slice(2);
-    if (toks.length === 0 || !/^vercel(@\S+)?$/.test(toks[0]!)) continue;
-    if (toks.includes("--prod")) return true;
-  }
-  return false;
+  return /\bvercel\b/.test(run) && /(^|\s)--prod(\s|$)/.test(run);
 }
+
+/** The deploy step's `run`, pinned: `vercel --prod` with optional `--yes`, nothing else. */
+const PINNED_RUN_FLAGS = new Set(["--prod", "--yes"]);
+export function isPinnedDeployRun(run: string): boolean {
+  const line = run.trim();
+  if (line.includes("\n")) return false;
+  const toks = line.split(/ +/);
+  if (toks[0] !== "vercel") return false;
+  const flags = toks.slice(1);
+  return (
+    flags.includes("--prod") &&
+    flags.every((f) => PINNED_RUN_FLAGS.has(f)) &&
+    new Set(flags).size === flags.length
+  );
+}
+
+/** Keys a deploy step / its job may carry. Everything else changes what runs or whether failure fails. */
+const STEP_KEYS = new Set(["name", "id", "run", "env", "if", "timeout-minutes"]);
+const JOB_KEYS = new Set([
+  "name",
+  "runs-on",
+  "timeout-minutes",
+  "if",
+  "needs",
+  "env",
+  "steps",
+  "permissions",
+  "concurrency",
+  "environment",
+]);
+/** on.push keys a deployer may use: no paths-ignore / branches-ignore / tags. */
+const PUSH_KEYS = new Set(["branches", "paths"]);
+/** Secrets every deploy step must use besides the project id. */
+export const PINNED_DEPLOY_SECRETS: Record<string, string> = {
+  VERCEL_TOKEN: "VERCEL_TOKEN",
+  VERCEL_ORG_ID: "VERCEL_ORG_ID",
+};
 
 const stripExpr = (e: string) =>
   e
@@ -264,6 +375,11 @@ const stripExpr = (e: string) =>
     .replace(/^\$\{\{([\s\S]*)\}\}$/, "$1")
     .trim();
 const hasContextRef = (e: string) => /[A-Za-z_][\w-]*\s*[.(\[]/.test(e);
+const unparen = (c: string) =>
+  c
+    .trim()
+    .replace(/^\((.*)\)$/, "$1")
+    .trim();
 
 /**
  * Can this `if:` be statically false? A constant expression (no context
@@ -278,15 +394,47 @@ export function ifStaticallyFalse(cond: unknown): boolean {
   if (!e.includes("||")) {
     return e
       .split("&&")
-      .map((c) =>
-        c
-          .trim()
-          .replace(/^\((.*)\)$/, "$1")
-          .trim(),
-      )
+      .map(unparen)
       .some((c) => !hasContextRef(c) && c !== "true");
   }
   return !hasContextRef(e) && e !== "true";
+}
+
+/** One comparison conjunct, evaluated in the push-to-main context; undefined = unknown. */
+function conjunctOnPushToMain(c: string): boolean | undefined {
+  const facts: Record<string, string> = {
+    "github.event_name": "push",
+    "github.ref": "refs/heads/main",
+    "github.ref_name": "main",
+  };
+  const m =
+    /^([\w.]+)\s*(==|!=)\s*'([^']*)'$/.exec(c) ??
+    (() => {
+      const r = /^'([^']*)'\s*(==|!=)\s*([\w.]+)$/.exec(c);
+      return r == null ? null : ([r[0], r[3], r[2], r[1]] as unknown as RegExpExecArray);
+    })();
+  if (m == null) return !hasContextRef(c) ? c === "true" : undefined;
+  const fact = facts[m[1]!];
+  if (fact == null) return undefined;
+  return m[2] === "==" ? fact === m[3] : fact !== m[3];
+}
+
+/**
+ * Is this `if:` false when the workflow runs on a push to main (statically
+ * false included)? Evaluates `||` of `&&` chains of comparisons against
+ * github.event_name / github.ref / github.ref_name; any other term is unknown
+ * (treated as possibly true).
+ */
+export function ifFalseOnPushToMain(cond: unknown): boolean {
+  if (ifStaticallyFalse(cond)) return true;
+  if (typeof cond !== "string") return false;
+  const e = unparen(stripExpr(cond));
+  return e.split("||").every((d) =>
+    unparen(d)
+      .split("&&")
+      .map(unparen)
+      .some((c) => conjunctOnPushToMain(c) === false),
+  );
 }
 
 /** Is this `if:` restricted to refs/heads/main (an `&&` conjunct, no `||`)? */
@@ -318,79 +466,165 @@ interface Step {
   run?: unknown;
   if?: unknown;
   env?: Record<string, unknown>;
+  [k: string]: unknown;
 }
 interface Job {
   if?: unknown;
+  needs?: unknown;
   env?: Record<string, unknown>;
   steps?: Step[];
+  [k: string]: unknown;
+}
+
+const needsOf = (job: Job | undefined): string[] =>
+  job?.needs == null ? [] : Array.isArray(job.needs) ? job.needs.map(String) : [String(job.needs)];
+
+/** Why a job `needs` chain can keep the deploy job from running on a push to main. */
+function needsProblems(jobs: Record<string, Job>, jobId: string): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>([jobId]);
+  const stack = needsOf(jobs[jobId]);
+  while (stack.length > 0) {
+    const n = stack.pop()!;
+    if (seen.has(n)) continue;
+    seen.add(n);
+    const j = jobs[n];
+    if (j == null) {
+      out.push(`job \`${jobId}\` needs \`${n}\`, which does not exist`);
+      continue;
+    }
+    if (ifFalseOnPushToMain(j.if))
+      out.push(`job \`${jobId}\` needs \`${n}\`, whose \`if\` is false on a push to main`);
+    if (j["continue-on-error"] !== undefined)
+      out.push(`job \`${jobId}\` needs \`${n}\`, which sets continue-on-error`);
+    stack.push(...needsOf(j));
+  }
+  return out;
+}
+
+/** Everything wrong with one deploy-candidate step (empty = the pinned deploy). */
+function deployStepProblems(
+  wf: { env?: Record<string, unknown>; jobs?: Record<string, Job> },
+  jobId: string,
+  job: Job,
+  step: Step,
+  projectSecret: string | undefined,
+  dir: string,
+): string[] {
+  const why: string[] = [];
+  const at = `job \`${jobId}\``;
+  if (!isPinnedDeployRun(String(step.run)))
+    why.push(
+      `${at} runs \`${String(step.run).trim().replace(/\n/g, "⏎")}\`, not the pinned form \`vercel --prod [--yes]\` (one command, nothing composed)`,
+    );
+  for (const k of Object.keys(step)) {
+    if (!STEP_KEYS.has(k))
+      why.push(`${at}: the deploy step sets \`${k}\` (allowed: ${[...STEP_KEYS].join(", ")})`);
+  }
+  for (const k of Object.keys(job)) {
+    if (!JOB_KEYS.has(k)) why.push(`${at} sets \`${k}\` (allowed: ${[...JOB_KEYS].join(", ")})`);
+  }
+  if (ifStaticallyFalse(job.if) || ifStaticallyFalse(step.if))
+    why.push(`${at} runs \`vercel --prod\` under a statically-false \`if\``);
+  else if (ifFalseOnPushToMain(job.if) || ifFalseOnPushToMain(step.if))
+    why.push(`${at} runs \`vercel --prod\` under an \`if\` that is false on a push to main`);
+  why.push(...needsProblems(wf.jobs ?? {}, jobId));
+  const envOf = (k: string) => step.env?.[k] ?? job.env?.[k] ?? wf.env?.[k];
+  if (projectSecret == null) {
+    why.push(`no project-id secret is declared for ${dir} in PROJECT_ID_SECRETS`);
+  } else {
+    const used = secretRef(envOf("VERCEL_PROJECT_ID"));
+    if (used !== projectSecret)
+      why.push(
+        `${at} deploys VERCEL_PROJECT_ID=${used == null ? "<not a secrets.* ref>" : `secrets.${used}`}, not ${dir}'s secrets.${projectSecret}`,
+      );
+  }
+  for (const [name, secret] of Object.entries(PINNED_DEPLOY_SECRETS)) {
+    const used = secretRef(envOf(name));
+    if (used !== secret)
+      why.push(
+        `${at} sets ${name}=${used == null ? "<missing or not a secrets.* ref>" : `secrets.${used}`}, not secrets.${secret}`,
+      );
+  }
+  return why;
 }
 
 /**
  * Project dirs whose production a workflow deploys: on push to main with
- * `<dir>/**` in its paths, a job (no statically-false `if`) with a step (no
- * statically-false `if`) whose `run` executes `vercel … --prod` with
- * VERCEL_PROJECT_ID = the project's PROJECT_ID_SECRETS secret. `rejected`
- * names, per dir, the workflows that list it but fail one of those.
+ * `<dir>/**` in its paths and a step in the PINNED deploy form (see the header).
+ * `rejected` names, per dir, why a workflow listing it is not its deployer;
+ * `broken` holds the subset where the workflow does try to deploy (a
+ * `vercel … --prod` candidate step exists) — those are violations outright.
  */
 export function actionDeployedProjects(
   root: string,
   projectDirs: string[],
   secrets: Record<string, string> = PROJECT_ID_SECRETS,
-): { deployers: Map<string, Deployer>; rejected: Map<string, string[]> } {
+): {
+  deployers: Map<string, Deployer>;
+  rejected: Map<string, string[]>;
+  broken: Map<string, string[]>;
+} {
   const deployers = new Map<string, Deployer>();
   const rejected = new Map<string, string[]>();
+  const broken = new Map<string, string[]>();
   const reject = (dir: string, why: string) =>
     rejected.set(dir, [...(rejected.get(dir) ?? []), why]);
   const wfDir = join(root, ".github", "workflows");
-  if (!existsSync(wfDir)) return { deployers, rejected };
+  if (!existsSync(wfDir)) return { deployers, rejected, broken };
   for (const f of readdirSync(wfDir).sort()) {
     if (!/\.ya?ml$/.test(f)) continue;
     const text = readFileSync(join(wfDir, f), "utf8");
     if (!/\bvercel\b/.test(text)) continue;
     const name = `.github/workflows/${f}`;
     const wf = parseYaml(text) as {
-      on?: Record<string, { branches?: unknown; paths?: unknown } | null>;
+      on?: Record<string, Record<string, unknown> | null>;
       env?: Record<string, unknown>;
+      defaults?: unknown;
       jobs?: Record<string, Job>;
     };
     const on = wf?.on != null && typeof wf.on === "object" ? wf.on : {};
     const push = on["push"];
-    const branches = Array.isArray(push?.branches) ? push.branches.map(String) : [];
+    const branches = Array.isArray(push?.["branches"])
+      ? (push["branches"] as unknown[]).map(String)
+      : [];
     if (!branches.includes("main")) continue;
-    const paths = Array.isArray(push?.paths) ? push.paths.map(String) : [];
+    const paths = Array.isArray(push?.["paths"]) ? (push["paths"] as unknown[]).map(String) : [];
+    const wfWhy: string[] = [];
+    for (const k of Object.keys(push ?? {})) {
+      if (!PUSH_KEYS.has(k)) wfWhy.push(`on.push sets \`${k}\` (allowed: branches, paths)`);
+    }
+    for (const g of paths)
+      if (g.startsWith("!")) wfWhy.push(`on.push.paths has a negated pattern \`${g}\``);
+    if (wf.defaults !== undefined)
+      wfWhy.push(
+        "the workflow sets `defaults` (a run shell or working-directory the deploy would inherit)",
+      );
     for (const dir of projectDirs) {
       if (!paths.includes(`${dir}/**`)) continue;
-      const secret = secrets[dir];
-      const why: string[] = [];
+      const why: string[] = [...wfWhy];
       let found: { mainOnly: boolean } | undefined;
+      let candidates = 0;
       for (const [jobId, job] of Object.entries(wf.jobs ?? {})) {
         for (const step of job?.steps ?? []) {
           if (typeof step?.run !== "string" || !runsVercelProd(step.run)) continue;
-          if (ifStaticallyFalse(job.if) || ifStaticallyFalse(step.if)) {
-            why.push(`job \`${jobId}\` runs \`vercel --prod\` under a statically-false \`if\``);
-            continue;
-          }
-          const used = secretRef(
-            step.env?.["VERCEL_PROJECT_ID"] ??
-              job.env?.["VERCEL_PROJECT_ID"] ??
-              wf.env?.["VERCEL_PROJECT_ID"],
-          );
-          if (secret == null) {
-            why.push(`no project-id secret is declared for ${dir} in PROJECT_ID_SECRETS`);
-            continue;
-          }
-          if (used !== secret) {
-            why.push(
-              `job \`${jobId}\` deploys VERCEL_PROJECT_ID=${used == null ? "<not a secrets.* ref>" : `secrets.${used}`}, not ${dir}'s secrets.${secret}`,
-            );
+          candidates++;
+          const stepWhy = deployStepProblems(wf, jobId, job, step, secrets[dir], dir);
+          if (stepWhy.length > 0) {
+            why.push(...stepWhy);
             continue;
           }
           found = { mainOnly: ifRestrictsToMain(job.if) || ifRestrictsToMain(step.if) };
         }
       }
-      if (found == null) {
-        if (why.length === 0) why.push("no step's `run` executes `vercel … --prod`");
+      if (candidates === 0) why.push("no step's `run` executes `vercel … --prod`");
+      if (found == null || why.length > 0) {
         reject(dir, `${name}: ${why.join("; ")}`);
+        if (candidates > 0)
+          broken.set(dir, [
+            ...(broken.get(dir) ?? []),
+            `${name}: deploys ${dir}'s production outside the pinned form — ${why.join("; ")}`,
+          ]);
         continue;
       }
       deployers.set(dir, {
@@ -403,7 +637,7 @@ export function actionDeployedProjects(
       });
     }
   }
-  return { deployers, rejected };
+  return { deployers, rejected, broken };
 }
 
 /** `"git": {"deploymentEnabled": …}` — only `{ "main": false }` may be off. */
@@ -463,7 +697,9 @@ export function collectVercelViolations(
   const noIgnore: string[] = [];
   const actionOwned: string[] = [];
   const knownSeen: string[] = [];
-  const { deployers, rejected } = actionDeployedProjects(root, files.map(dirname), secrets);
+  const { deployers, rejected, broken } = actionDeployedProjects(root, files.map(dirname), secrets);
+  const schema = loadVercelSchema(root);
+  const validate = compileVercelSchema(schema);
 
   for (const file of files) {
     const projectDir = dirname(file);
@@ -479,6 +715,11 @@ export function collectVercelViolations(
       );
       continue;
     }
+    const refused = schemaProblems(schema, validate, cfg);
+    if (refused.length > 0)
+      violations.push(
+        `${file}: fails Vercel's vercel.json schema (${VERCEL_SCHEMA}) — Vercel refuses this config before building, previews and \`vercel --prod\` alike: ${refused.join("; ")}`,
+      );
     const ownName = existsSync(join(root, projectDir, "package.json"))
       ? (JSON.parse(readFileSync(join(root, projectDir, "package.json"), "utf8")) as Manifest).name
       : undefined;
@@ -506,6 +747,7 @@ export function collectVercelViolations(
     } else if (deployer != null) {
       actionOwned.push(`${projectDir} (${deployer.workflow})`);
     }
+    if (!(deployer == null && mainOff)) violations.push(...(broken.get(projectDir) ?? []));
     if (deployer != null) {
       const uncovered = buildInputs.filter((p) => !pathsCover(deployer.paths, p));
       if (uncovered.length > 0)
@@ -569,25 +811,78 @@ export function collectVercelViolations(
       continue;
     }
 
-    if (args.length === 0) {
-      violations.push(`${file}: no watched paths passed to ${SCRIPT}`);
+    if (args[0] !== "--watch" || args.length !== 2) {
+      violations.push(
+        `${file}: ignoreCommand arguments must be exactly \`--watch <watch file>\` or \`--turbo-ignore <own package>\`, got \`${args.join(" ")}\` (watched paths live in a committed watch file, never inline — #1027)`,
+      );
       continue;
     }
-    const given = new Set(args.map(norm));
+    const watchFile = posix.normalize(posix.join(projectDir, args[1]!));
+    if (
+      watchFile.startsWith("..") ||
+      watchFile.startsWith("/") ||
+      !existsSync(join(root, watchFile)) ||
+      !statSync(join(root, watchFile)).isFile()
+    ) {
+      violations.push(
+        `${file}: watch file \`${args[1]}\` (from ${projectDir}) is not a file in the repo`,
+      );
+      continue;
+    }
+    const lines = readFileSync(join(root, watchFile), "utf8").split("\n");
+    const listed: string[] = [];
+    const bad: string[] = [];
+    for (const line of lines) {
+      if (line === "" || line.startsWith("#")) continue;
+      if (
+        /\s/.test(line) ||
+        line.startsWith("/") ||
+        line.split("/").some((seg) => seg === ".." || seg === ".") ||
+        norm(line) !== line
+      ) {
+        bad.push(JSON.stringify(line));
+        continue;
+      }
+      listed.push(line);
+    }
+    if (bad.length > 0) {
+      violations.push(
+        `${watchFile}: malformed watch file line(s) ${bad.join(", ")} — one repo-root-relative path per line, no whitespace, no leading /, no . or .. segments, no trailing /`,
+      );
+      continue;
+    }
+    if (listed.length === 0) {
+      violations.push(`${watchFile}: the watch file lists no paths`);
+      continue;
+    }
+    const given = new Set(listed);
+    const dups = listed.filter((p, i) => listed.indexOf(p) !== i);
+    if (dups.length > 0)
+      violations.push(
+        `${watchFile}: ${[...new Set(dups)].map((d) => `\`${d}\``).join(", ")} listed more than once`,
+      );
     for (const p of given) {
-      if (p.startsWith("/") || p.startsWith("..") || !existsSync(resolve(root, p))) {
-        violations.push(`${file}: watched path \`${p}\` does not exist relative to the repo root`);
+      if (!existsSync(resolve(root, p))) {
+        violations.push(
+          `${watchFile}: watched path \`${p}\` does not exist relative to the repo root`,
+        );
       }
     }
     const required = new Set<string>(buildInputs);
     const missing = [...required].filter((r) => !given.has(r)).sort();
+    const extra = [...given].filter((g) => !required.has(g)).sort();
     if (missing.length > 0) {
       violations.push(
-        `${file}: watched paths miss ${missing.map((m) => `\`${m}\``).join(", ")} (the project dir, a workspace package in ${ownName ?? projectDir}'s transitive workspace closure, or root build config its build reads)`,
+        `${watchFile}: watched paths miss ${missing.map((m) => `\`${m}\``).join(", ")} (the project dir, a workspace package in ${ownName ?? projectDir}'s transitive workspace closure, or root build config its build reads)`,
       );
-      continue;
     }
-    routed.push(`${projectDir} (${given.size} paths)`);
+    if (extra.length > 0) {
+      violations.push(
+        `${watchFile}: watches ${extra.map((m) => `\`${m}\``).join(", ")}, not a build input of ${ownName ?? projectDir} (the list is exactly the closure + root build config, nothing else)`,
+      );
+    }
+    if (missing.length > 0 || extra.length > 0) continue;
+    routed.push(`${projectDir} (${watchFile}: ${given.size} paths)`);
   }
 
   return { files, violations, routed, noIgnore, actionOwned, knownDoubleDeploy: knownSeen };
@@ -611,12 +906,15 @@ function main(): void {
       invariant: `every vercel.json ignoreCommand must route through ${SCRIPT} — a production build is never skipped, a preview is skipped only when proven safe over the right paths (#1012: proxy security fix 42ce27f was "Canceled by Ignored Build Step" on main)`,
       sites: violations,
       canonical: SCRIPT,
-      fix: `Set the project's ignoreCommand to \`sh <relative path to ${SCRIPT}> <repo-root paths…>\` (include the project dir, every workspace dependency dir and the root build config: package.json, pnpm-lock.yaml, pnpm-workspace.yaml, turbo.json and the tsconfig extends chain) or \`sh <relative path to ${SCRIPT}> --turbo-ignore <own package name>\`; never compose it with || / && / ;. A project whose production a \`vercel --prod\` Action deploys sets \`"git": {"deploymentEnabled": {"main": false}}\` (and only such a project, never \`deploymentEnabled: false\`); its workflow runs \`vercel --prod\` in a real step with VERCEL_PROJECT_ID from the project's PROJECT_ID_SECRETS entry, lists every build input in on.push.paths, and restricts any non-push trigger to refs/heads/main. Then run \`pnpm check-vercel-ignore-build\`.`,
+      fix: `Make every vercel.json valid under ${VERCEL_SCHEMA} (Vercel's own schema — e.g. ignoreCommand within its maxLength, no unknown keys). Set the project's ignoreCommand to \`sh <relative path to ${SCRIPT}> --watch <relative path to scripts/vercel-watch/<project>.txt>\` whose file lists, one per line, exactly the project dir, every workspace dependency dir and the root build config (package.json, pnpm-lock.yaml, pnpm-workspace.yaml, turbo.json and the tsconfig extends chain) — nothing else — or \`sh <relative path to ${SCRIPT}> --turbo-ignore <own package name>\`; never compose it with || / && / ;. A project whose production a \`vercel --prod\` Action deploys sets \`"git": {"deploymentEnabled": {"main": false}}\` (and only such a project, never \`deploymentEnabled: false\`); its workflow runs exactly \`vercel --prod [--yes]\` in a step with only allowlisted keys (no continue-on-error, working-directory, shell; no job/workflow defaults), no \`if\` or \`needs\` that is false on a push to main, VERCEL_TOKEN / VERCEL_ORG_ID from their pinned secrets and VERCEL_PROJECT_ID from the project's PROJECT_ID_SECRETS entry, on.push only branches + paths (no paths-ignore, no negated path), lists every build input in on.push.paths, and restricts any non-push trigger to refs/heads/main. Then run \`pnpm check-vercel-ignore-build\`.`,
     });
   }
 
+  const schemaNote = String(loadVercelSchema(ROOT).$comment ?? "").startsWith("INTERIM")
+    ? "an INTERIM hand-written subset — refresh it from https://openapi.vercel.sh/vercel.json per scripts/vendor/vercel/README.md"
+    : "vendored from https://openapi.vercel.sh/vercel.json";
   console.log(
-    `✓ Vercel ignore step: ${files.length} vercel.json file(s) found, ${routed.length} route their ignoreCommand through ${SCRIPT} [${routed.join("; ")}], ${noIgnore.length} declare none [${noIgnore.join(", ")}] (any dashboard-configured ignore step is not visible to this gate); production owned solely by a \`vercel --prod\` Action with Git deploys of main disabled: [${actionOwned.join("; ")}]; known double-deploy (Action + Git on main): [${knownDoubleDeploy.join(", ")}] (workflows matched to projects by their \`<dir>/**\` push path only).`,
+    `✓ Vercel ignore step: ${files.length} vercel.json file(s) found, all valid under ${VERCEL_SCHEMA} (${schemaNote}), ${routed.length} route their ignoreCommand through ${SCRIPT} [${routed.join("; ")}], ${noIgnore.length} declare none [${noIgnore.join(", ")}] (any dashboard-configured ignore step is not visible to this gate); production owned solely by a \`vercel --prod\` Action with Git deploys of main disabled: [${actionOwned.join("; ")}]; known double-deploy (Action + Git on main): [${knownDoubleDeploy.join(", ")}] (workflows matched to projects by their \`<dir>/**\` push path only).`,
   );
 }
 

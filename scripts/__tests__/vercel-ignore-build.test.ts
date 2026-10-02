@@ -22,6 +22,8 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 
 const SCRIPT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "vercel-ignore-build.sh");
 const WATCHED = ["services/proxy", "packages/crypto", "pnpm-lock.yaml"];
+/** The watch file as the vercel.json passes it: relative to the Root Directory. */
+const WATCH_ARGS = ["--watch", "../../scripts/vercel-watch/proxy.txt"];
 
 let root: string;
 let fakeBin: string;
@@ -63,7 +65,7 @@ function commitFile(path: string, body: string): string {
 }
 
 /** Runs the script from services/proxy — Vercel runs it from the Root Directory. */
-function run(env: Record<string, string | undefined>, args: string[] = WATCHED): number {
+function run(env: Record<string, string | undefined>, args: string[] = WATCH_ARGS): number {
   const r = spawnSync("sh", [SCRIPT, ...args], {
     cwd: join(root, "services/proxy"),
     env: cleanEnv(env),
@@ -78,6 +80,13 @@ beforeAll(() => {
   mkdirSync(join(root, "services/proxy"), { recursive: true });
   writeFileSync(join(root, "services/proxy/index.ts"), "v1\n");
   writeFileSync(join(root, "pnpm-lock.yaml"), "lock\n");
+  mkdirSync(join(root, "packages/crypto"), { recursive: true });
+  writeFileSync(join(root, "packages/crypto/index.ts"), "crypto\n");
+  mkdirSync(join(root, "scripts/vercel-watch"), { recursive: true });
+  writeFileSync(
+    join(root, "scripts/vercel-watch/proxy.txt"),
+    `# watched paths, repo-root relative\n${WATCHED.join("\n")}\n`,
+  );
   base = commitFile("README.md", "readme\n");
   unrelated = commitFile("apps/web/page.ts", "web\n");
   watchedChange = commitFile("services/proxy/index.ts", "v2 security fix\n");
@@ -192,6 +201,59 @@ describe("vercel-ignore-build.sh — preview skips only when proven safe", () =>
         [],
       ),
     ).toBe(1);
+  });
+});
+
+describe("vercel-ignore-build.sh — the watch file (#1027: an inline path list overflowed Vercel's 256-char ignoreCommand)", () => {
+  /** A preview with no watched change (set in beforeAll: the SHAs exist only after the fixture). */
+  let skippable: Record<string, string>;
+  beforeAll(() => {
+    skippable = {
+      VERCEL_ENV: "preview",
+      VERCEL_GIT_PREVIOUS_SHA: base,
+      VERCEL_GIT_COMMIT_SHA: unrelated,
+    };
+  });
+  const withWatch = (name: string, body: string | null): string[] => {
+    const p = join(root, "scripts/vercel-watch", name);
+    if (body != null) writeFileSync(p, body);
+    return ["--watch", `../../scripts/vercel-watch/${name}`];
+  };
+
+  it("control: the committed-shape watch file skips an irrelevant preview", () => {
+    expect(run(skippable)).toBe(0);
+  });
+
+  it("builds on production with a watch file", () => {
+    expect(run({ ...skippable, VERCEL_ENV: "production" })).toBe(1);
+  });
+
+  it("builds when the watch file is missing, empty or only comments", () => {
+    expect(run(skippable, withWatch("missing.txt", null))).toBe(1);
+    expect(run(skippable, withWatch("empty.txt", ""))).toBe(1);
+    expect(run(skippable, withWatch("comments.txt", "# nothing\n\n"))).toBe(1);
+    expect(run(skippable, ["--watch"])).toBe(1);
+    expect(run(skippable, [...WATCH_ARGS, "extra"])).toBe(1);
+  });
+
+  it("builds when a watched path does not exist at the commit (a typo would diff nothing and skip)", () => {
+    expect(run(skippable, withWatch("typo.txt", "services/proxyy\npnpm-lock.yaml\n"))).toBe(1);
+    expect(run(skippable, withWatch("crlf.txt", "services/proxy\r\npnpm-lock.yaml\r\n"))).toBe(1);
+    expect(run(skippable, withWatch("abs.txt", "/services/proxy\n"))).toBe(1);
+  });
+
+  it("builds a preview whose change is in a path listed in the watch file", () => {
+    expect(
+      run({
+        VERCEL_ENV: "preview",
+        VERCEL_GIT_PREVIOUS_SHA: unrelated,
+        VERCEL_GIT_COMMIT_SHA: watchedChange,
+      }),
+    ).toBe(1);
+  });
+
+  it("builds for the retired inline-path form (the list lives only in a watch file)", () => {
+    expect(run(skippable, WATCHED)).toBe(1);
   });
 
   it("--turbo-ignore: skips only when turbo-ignore exits 0; any other exit builds", () => {
