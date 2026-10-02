@@ -16,6 +16,7 @@ import { getDbPath } from "../runtime-factory.js";
 import { formatMs } from "../utils.js";
 import { parseInterval } from "../intervals.js";
 import { requireMotebitId } from "./_helpers.js";
+import { sanitizeRelayText } from "@motebit/sync-engine";
 
 export async function handleGoalAdd(config: CliConfig): Promise<void> {
   // positionals: ["goal", "add", "<prompt>"]
@@ -34,7 +35,7 @@ export async function handleGoalAdd(config: CliConfig): Promise<void> {
     intervalMs = parseInterval(config.every);
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
-    console.error(`Error: ${msg}`);
+    console.error(`Error: ${sanitizeRelayText(msg)}`);
     process.exit(1);
   }
 
@@ -49,7 +50,7 @@ export async function handleGoalAdd(config: CliConfig): Promise<void> {
       wallClockMs = parseInterval(config.wallClock);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
-      console.error(`Error parsing --wall-clock: ${msg}`);
+      console.error(`Error parsing --wall-clock: ${sanitizeRelayText(msg)}`);
       process.exit(1);
     }
   }

@@ -4,6 +4,7 @@ import type {
   ConversationSyncResult,
 } from "@motebit/sdk";
 import type { CredentialSource, CredentialRequest } from "./credential-source.js";
+import { sanitizeRelayText } from "./relay-text.js";
 
 // === Conversation Sync Store Adapter ===
 
@@ -70,7 +71,9 @@ export class HttpConversationSyncAdapter implements ConversationSyncRemoteAdapte
       body: JSON.stringify({ conversations }),
     });
     if (!res.ok) {
-      throw new Error(`Push conversations failed: ${res.status} ${res.statusText}`);
+      throw new Error(
+        `Push conversations failed: ${res.status} ${sanitizeRelayText(res.statusText)}`,
+      );
     }
     const body = (await res.json()) as { accepted: number };
     return body.accepted;
@@ -83,7 +86,9 @@ export class HttpConversationSyncAdapter implements ConversationSyncRemoteAdapte
       headers: await this.headers(),
     });
     if (!res.ok) {
-      throw new Error(`Pull conversations failed: ${res.status} ${res.statusText}`);
+      throw new Error(
+        `Pull conversations failed: ${res.status} ${sanitizeRelayText(res.statusText)}`,
+      );
     }
     const body = (await res.json()) as { conversations: SyncConversation[] };
     return body.conversations;
@@ -97,7 +102,7 @@ export class HttpConversationSyncAdapter implements ConversationSyncRemoteAdapte
       body: JSON.stringify({ messages }),
     });
     if (!res.ok) {
-      throw new Error(`Push messages failed: ${res.status} ${res.statusText}`);
+      throw new Error(`Push messages failed: ${res.status} ${sanitizeRelayText(res.statusText)}`);
     }
     const body = (await res.json()) as { accepted: number };
     return body.accepted;
@@ -114,7 +119,7 @@ export class HttpConversationSyncAdapter implements ConversationSyncRemoteAdapte
       headers: await this.headers(),
     });
     if (!res.ok) {
-      throw new Error(`Pull messages failed: ${res.status} ${res.statusText}`);
+      throw new Error(`Pull messages failed: ${res.status} ${sanitizeRelayText(res.statusText)}`);
     }
     const body = (await res.json()) as { messages: SyncConversationMessage[] };
     return body.messages;

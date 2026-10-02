@@ -81,9 +81,18 @@ A motebit is a persistent, cryptographically-anchored, sovereign agent. The inte
 
 // Counted from the filesystem (same rule as check-doc-counts' countSpecMd) so
 // the footer cannot drift from spec/ the way the old hardcoded "twenty-one" did.
-const SPEC_COUNT = readdirSync(join(REPO_ROOT, "spec")).filter(
-  (f) => f.endsWith(".md") && f !== "README.md",
-).length;
+// The count reads spec/'s directory listing — a repo-root input of the docs
+// build. SPEC_COUNT_INPUTS is that read as turbo globs; check-turbo-global-deps
+// imports it (so turbo.json globalDependencies must name exactly it) and its
+// test asserts the globs select exactly the files countSpecMd counts.
+export const SPEC_COUNT_INPUTS = ["spec/*.md", "!spec/README.md"] as const;
+
+export function countSpecMd(root: string = REPO_ROOT): number {
+  return readdirSync(join(root, "spec")).filter((f) => f.endsWith(".md") && f !== "README.md")
+    .length;
+}
+
+const SPEC_COUNT = countSpecMd();
 
 const LLMS_FOOTER = `## Open specification
 
@@ -274,7 +283,7 @@ function resolveSections(rootDir: string, urlPrefix: string): Section[] {
  * Throws loudly if the parse yields zero entries — that's the signal
  * DOCTRINE.md's format changed and the generator needs updating.
  */
-function parseDoctrineChain(): ReadonlyArray<{ filename: string; derives: string }> {
+export function parseDoctrineChain(): ReadonlyArray<{ filename: string; derives: string }> {
   const path = join(REPO_ROOT, DOCTRINE_FILENAME);
   const raw = readFileSync(path, "utf-8");
   const re = /^\d+\.\s+\*\*\[([^\]]+)\]\([^)]+\)\*\*\s+—\s+(.+)$/gm;

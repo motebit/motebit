@@ -24,6 +24,7 @@ import { readFileSync } from "node:fs";
 import { verifyTransparencyDeclaration } from "@motebit/state-export-client";
 import { loadFullConfig } from "../config.js";
 import { VERSION } from "../config.js";
+import { sanitizeRelayText } from "@motebit/sync-engine";
 
 interface WitnessRelease {
   version: string;
@@ -48,7 +49,7 @@ export async function handleVerifyRelease(options: { bundlePath?: string } = {})
     selfHash = createHash("sha256").update(readFileSync(bundlePath)).digest("hex");
   } catch (err) {
     console.error(
-      `verify-release: cannot read own bytes at ${bundlePath}: ${err instanceof Error ? err.message : String(err)}`,
+      `verify-release: cannot read own bytes at ${bundlePath}: ${sanitizeRelayText(err instanceof Error ? err.message : String(err))}`,
     );
     process.exit(1);
   }
@@ -73,7 +74,7 @@ export async function handleVerifyRelease(options: { bundlePath?: string } = {})
   } catch (err) {
     console.error(
       `verify-release: witness unavailable from ${relayUrl} ` +
-        `(${err instanceof Error ? err.message : String(err)}). Retry online.`,
+        `(${sanitizeRelayText(err instanceof Error ? err.message : String(err))}). Retry online.`,
     );
     process.exit(1);
   }

@@ -342,6 +342,46 @@ describe("MobileApp.bootstrap", () => {
 });
 
 // ---------------------------------------------------------------------------
+// #962 C2 — MobileApp's syncConfigured, read from the runtime initAI builds
+// (the runtime's own answer, as compaction reads it): the persisted relay URL,
+// read at compaction time; a read that fails counts as configured.
+// ---------------------------------------------------------------------------
+
+describe("#962 — MobileApp's syncConfigured", () => {
+  let app: MobileApp;
+
+  beforeEach(() => {
+    secureStoreData.clear();
+    asyncStoreData.clear();
+    app = new MobileApp();
+  });
+
+  afterEach(() => {
+    app.stop();
+  });
+
+  it("no relay URL persisted: not configured", async () => {
+    await app.initAI({ provider: "local-server" });
+    expect(await app.getRuntime()!.isSyncConfigured()).toBe(false);
+  });
+
+  it("a persisted relay URL, set after construction, is read at compaction time: configured", async () => {
+    await app.initAI({ provider: "local-server" });
+    await app.setSyncUrl("https://relay.zz962m.test");
+    expect(await app.getRuntime()!.isSyncConfigured()).toBe(true);
+    await app.setSyncUrl("");
+    expect(await app.getRuntime()!.isSyncConfigured()).toBe(false);
+  });
+
+  it("a relay URL that cannot be read counts as configured (fail closed)", async () => {
+    await app.initAI({ provider: "local-server" });
+    const AsyncStorage = (await import("@react-native-async-storage/async-storage")).default;
+    vi.mocked(AsyncStorage.getItem).mockRejectedValueOnce(new Error("storage unavailable"));
+    expect(await app.getRuntime()!.isSyncConfigured()).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
 // MobileApp.initAI
 // ---------------------------------------------------------------------------
 

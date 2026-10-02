@@ -42,6 +42,7 @@ import type { CliConfig } from "../args.js";
 import { CONFIG_DIR, loadFullConfig, saveFullConfig } from "../config.js";
 import { isTrulyAbsent, moveAside, narrowOnLoad } from "../durable-file.js";
 import { encryptPrivateKey, fromHex, toHex, promptPassphrase } from "../identity.js";
+import { sanitizeRelayText } from "@motebit/sync-engine";
 
 interface DevKeyring {
   device_private_key: string;
@@ -123,7 +124,7 @@ export async function handleMigrateKeyring(config: CliConfig): Promise<void> {
     devKeyring = JSON.parse(raw) as DevKeyring;
   } catch (err) {
     console.error(
-      `Error: dev-keyring.json is malformed: ${err instanceof Error ? err.message : String(err)}`,
+      `Error: dev-keyring.json is malformed: ${sanitizeRelayText(err instanceof Error ? err.message : String(err))}`,
     );
     process.exit(1);
   }
@@ -140,7 +141,7 @@ export async function handleMigrateKeyring(config: CliConfig): Promise<void> {
     privateKeyBytes = fromHex(devKeyring.device_private_key);
   } catch (err) {
     console.error(
-      `Error: dev-keyring.json device_private_key is not valid hex (${err instanceof Error ? err.message : String(err)}).`,
+      `Error: dev-keyring.json device_private_key is not valid hex (${sanitizeRelayText(err instanceof Error ? err.message : String(err))}).`,
     );
     process.exit(1);
   }
@@ -264,7 +265,7 @@ function retirePlaintextKeyring(devKeyringPath: string): string | null {
     return moveAside(devKeyringPath, ".migrated-");
   } catch (err) {
     console.warn(
-      `Warning: could not move ${devKeyringPath} aside (${err instanceof Error ? err.message : String(err)}); it was left in place (owner-only).`,
+      `Warning: could not move ${devKeyringPath} aside (${sanitizeRelayText(err instanceof Error ? err.message : String(err))}); it was left in place (owner-only).`,
     );
     return null;
   }
