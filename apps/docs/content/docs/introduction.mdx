@@ -1,31 +1,47 @@
 ---
 title: Introduction
-description: What is motebit, and why does it exist.
+description: What motebit is — a persistent agent identity you hold, its memory, its policy gate, and its signed receipts.
 ---
 
-A motebit is a small liquescent sphere, alive, suspended in air. It breathes because droplets oscillate. It glows when it thinks. It remembers what you've told it, forgets gracefully over time, and asks before it acts. It lives on your device — not in someone else's cloud.
+Motebit is an agent runtime built around an identity you hold:
 
-Every AI today owns the intelligence and rents you a session. When the session ends, the memory resets, the context vanishes, the relationship starts over. Motebit inverts that. The intelligence is a commodity — you can swap the LLM underneath at any time. What you own is the agent itself: its identity, its accumulated memory, its trust, its governance.
+- **Identity** — an Ed25519 keypair generated on your device; the private key stays there. A new `motebit_id` is derived from the SHA-256 of its genesis public key, so the binding checks offline.
+- **Memory** — a local memory graph owned by that identity, not by a model provider or a session.
+- **Policy-gated actions** — every tool call has a risk level (`R0_READ` … `R4_MONEY`) and is allowed, held for your approval, or denied. Stored data has a sensitivity level; `medical`, `financial`, and `secret` data is never sent to an external AI provider.
+- **Signed receipts** — work produces an `ExecutionReceipt` signed by the identity key, verifiable offline by anyone with the public key. No server, no account.
+- **Pluggable LLM** — Anthropic, OpenAI, Google, or a local server such as Ollama. Changing it leaves identity, memory, and policy as they were.
 
-## What makes it yours
+## Quickstart
 
-**It knows who it is.** Your motebit has a cryptographic identity — an Ed25519 keypair that proves it's yours across devices, sessions, and providers. Not a session cookie. A persistent entity.
+```bash
+$ npm create motebit@latest my-agent
+# Prompts for an AI provider, a trust mode, and a passphrase that encrypts the private key.
+  Generating Ed25519 keypair...
+  Signing identity file...
+  + Created ./my-agent
 
-**It remembers.** Conversations become semantic memories that compound over time. Important things stick. Trivial things decay. The agent gets more useful the longer it runs — and that accumulated knowledge belongs to you.
+$ cd my-agent
+$ export ANTHROPIC_API_KEY=sk-ant-...   # motebit run exits without a provider key
+$ npx motebit run --identity ./motebit.md
+Daemon running. motebit_id: 3f9c1a7e... Goals: 0. Policy: max_risk_auto=R1_DRAFT, deny_above=R4_MONEY
+```
 
-**It asks before it acts.** A governance layer controls what your agent can do. Read-only tasks happen automatically. Anything that writes, executes, or spends money requires your approval. You set the thresholds.
+`./my-agent` holds a signed `motebit.md` identity file and a `verify.js` that checks its signature; the encrypted private key is written to `~/.motebit/config.json`, not into the project. The policy line is the default **Guarded** trust mode: reading and drafting run automatically; writes, execution, and money wait for approval. If you chose Ollama, run the daemon with `--provider ollama` — `motebit run` does not yet pick up the scaffold's Ollama choice and otherwise defaults to Anthropic. `motebit run` is the daemon: it executes scheduled goals and queues approvals. See [Get Your Agent](/docs/get-your-agent) for the other install paths, and the [Developer Quickstart](/docs/developer/quickstart) to sign and verify a receipt in one file without a relay.
 
-**It connects to everything.** Through MCP (Model Context Protocol), your motebit can reach any tool ecosystem — file systems, APIs, databases, services — while its policy layer gates what crosses the boundary.
+## What it runs on
 
-**It proves what it's done.** Every action can be signed into a verifiable receipt — an `ExecutionReceipt` anyone can check offline, without trusting motebit or contacting a server. Identity, memory, and governance are claims; receipts are the proof. [Verify one yourself](/docs/developer/quickstart) — two packages, ~25 lines, no account.
+- **CLI** (`npm install -g motebit`) — interactive REPL, daemon, and MCP server. The most complete surface.
+- **Desktop** (Tauri) — the creature in a small transparent window, with chat and voice input. Pre-release builds are published on [GitHub Releases](https://github.com/motebit/motebit/releases); macOS builds are unsigned.
+- **Mobile** (React Native + Expo) — the same identity, memory, and governance runtime. Built from source today; not in the App Store or Play Store, and on-device testing is not yet complete.
+- **Spatial** — an AR-glasses companion prototype.
 
-## Where it lives
+The runtime connects to tools through MCP (Model Context Protocol); the policy gate governs every call that crosses that boundary.
 
-Your motebit lives on your desktop — a liquescent droplet hovering over your screen, responding to your voice, glowing when it processes, breathing at 0.3 Hz. It runs on your phone with full parity — the same identity, memory, and governance. It also runs as a command-line agent for developers.
+## Why it exists
 
-Eventually, it floats in your field of view.
+Most AI products own the intelligence and rent you a session: when the session ends, the context resets. Motebit inverts that. The model is replaceable; what persists is the agent itself — its identity, its accumulated memory, its trust relationships, its governance.
 
-The body changes. The identity persists.
+The visual form follows from the same idea. A motebit renders as a liquescent droplet: surface tension is the boundary, the interior holds memory, trust, and identity, and the body is the same on every surface. [The Droplet](/docs/concepts/the-droplet) derives the form from droplet physics.
 
 ## How these docs are organized
 
@@ -53,7 +69,7 @@ For the boundary between motebit's published packages and its workspace-internal
   <Card
     title="Get Your Agent"
     href="/docs/get-your-agent"
-    description="Download the desktop app or create an identity from the command line."
+    description="Create an identity from the command line, scaffold a service agent, or install the full CLI."
   />
   <Card
     title="The Droplet"
