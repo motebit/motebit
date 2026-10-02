@@ -236,7 +236,7 @@ export function installedFreezeGuards(db: DatabaseDriver): string[] {
 /** Whether `err` (or any error in its cause chain) is a freeze guard's abort. */
 export function isEmergencyFrozenAbort(err: unknown): boolean {
   let cur: unknown = err;
-  for (let depth = 0; cur != null && depth < 8; depth++) {
+  for (let hop = 0; cur != null && hop < 8; hop++) {
     if (cur instanceof Error) {
       if ((cur as { code?: unknown }).code === EMERGENCY_FROZEN_SENTINEL) return true;
       if (cur.message === EMERGENCY_FROZEN_SENTINEL) return true;
