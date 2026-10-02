@@ -23,6 +23,7 @@
 
 import { mintAudienceToken } from "@motebit/encryption";
 import type { TokenAudience } from "@motebit/sdk";
+import { sanitizeRelayText } from "@motebit/sync-engine";
 
 export interface RelayRegistrationIdentity {
   motebitId: string;
@@ -110,7 +111,7 @@ export async function registerWithRelay(
     }
   } catch (err: unknown) {
     log(
-      `Discovery: relay bootstrap unreachable (${err instanceof Error ? err.message : String(err)}) — continuing to register`,
+      `Discovery: relay bootstrap unreachable (${sanitizeRelayText(err instanceof Error ? err.message : String(err))}) — continuing to register`,
     );
   }
 
@@ -125,7 +126,7 @@ export async function registerWithRelay(
     });
   } catch (err: unknown) {
     log(
-      `Discovery: registry registration failed (${err instanceof Error ? err.message : String(err)}) — continuing`,
+      `Discovery: registry registration failed (${sanitizeRelayText(err instanceof Error ? err.message : String(err))}) — continuing`,
     );
     return noop;
   }

@@ -21,7 +21,7 @@ import { embedText } from "@motebit/memory-graph";
 import type { MotebitPersonalityConfig } from "@motebit/ai-core";
 import { DEFAULT_CONFIG } from "@motebit/ai-core";
 import { openMotebitDatabase } from "@motebit/persistence";
-import { WebSocketEventStoreAdapter } from "@motebit/sync-engine";
+import { sanitizeRelayText, WebSocketEventStoreAdapter } from "@motebit/sync-engine";
 import type { AgentTask, ToolDefinition, ToolHandler } from "@motebit/sdk";
 import {
   EventType,
@@ -57,7 +57,9 @@ import { handleRelayCommandFrame } from "./relay-command-frame.js";
 import { fromHex, loadActiveSigningKey, IdentityKeyError } from "./identity.js";
 import { registerWithRelay, type RelayRegistrationHandle } from "./relay-registration.js";
 import { createRelaySyncSocket } from "./relay-sync-socket.js";
+import { cliRuntimeConfig, daemonRelay } from "./sync-configured.js";
 import { createDaemonRelaySync } from "./daemon-relay-sync.js";
+import { startRunEventSync, startServeEventSync, type CliEventPush } from "./cli-event-push.js";
 import { enrollOnAnnounce } from "./machine-roster.js";
 import { taskResultBearer } from "./task-result-bearer.js";
 import {
@@ -125,7 +127,7 @@ export async function handleRun(config: CliConfig): Promise<void> {
   if (verifyResult.type !== "identity" || !verifyResult.valid || !verifyResult.identity) {
     console.error(`Error: invalid identity file signature.`);
     const msg = verifyResult.errors?.[0]?.message;
-    if (msg) console.error(`  ${msg}`);
+    if (msg) console.error(`  ${sanitizeRelayText(msg)}`);
     process.exit(1);
   }
 
@@ -200,21 +202,29 @@ export async function handleRun(config: CliConfig): Promise<void> {
   const provider = createProvider(config, personalityConfig);
   const governance = deriveGovernanceForRuntime(fullConfig.governance);
 
+  // The relay this daemon syncs with. Fallback chain: CLI arg > env var >
+  // config file. Decided before the runtime: its `syncConfigured` reads it.
+  const relay = daemonRelay(config, fullConfig, "run");
+  const syncUrl = relay.syncUrl;
   const runtime = new MotebitRuntime(
-    {
-      motebitId,
-      mcpServers,
-      policy: {
-        operatorMode: config.operator,
-        maxRiskLevel: maxRiskAuto,
-        requireApprovalAbove: policyConfig.requireApprovalAbove,
-        denyAbove: policyConfig.denyAbove,
-        pathAllowList: config.allowedPaths,
-        budget: governance.policyBudget,
+    // #962: `syncConfigured` is decided by `cliRuntimeConfig`, last.
+    cliRuntimeConfig(
+      {
+        motebitId,
+        mcpServers,
+        policy: {
+          operatorMode: config.operator,
+          maxRiskLevel: maxRiskAuto,
+          requireApprovalAbove: policyConfig.requireApprovalAbove,
+          denyAbove: policyConfig.denyAbove,
+          pathAllowList: config.allowedPaths,
+          budget: governance.policyBudget,
+        },
+        memoryGovernance: governance.memoryGovernance,
+        taskRouter: PLANNING_TASK_ROUTER,
       },
-      memoryGovernance: governance.memoryGovernance,
-      taskRouter: PLANNING_TASK_ROUTER,
-    },
+      relay,
+    ),
     {
       storage: buildStorageAdapters(moteDb),
       renderer: new NullRenderer(),
@@ -376,7 +386,7 @@ export async function handleRun(config: CliConfig): Promise<void> {
               }
             } catch (err: unknown) {
               const msg = err instanceof Error ? err.message : String(err);
-              console.error(`motebit.yaml reload error: ${msg}`);
+              console.error(`motebit.yaml reload error: ${sanitizeRelayText(msg)}`);
             } finally {
               yamlApplyInFlight = false;
             }
@@ -387,16 +397,15 @@ export async function handleRun(config: CliConfig): Promise<void> {
       // fs.watch errors on some filesystems (e.g., NFS). Non-fatal — the
       // user can still run `motebit up` by hand.
       const msg = err instanceof Error ? err.message : String(err);
-      console.log(`(hot-reload unavailable: ${msg}; use 'motebit up' manually)`);
+      console.log(`(hot-reload unavailable: ${sanitizeRelayText(msg)}; use 'motebit up' manually)`);
     }
   }
 
-  // Wire agent task handler via WebSocket (if sync URL configured)
-  // Fallback chain: CLI arg > env var > config file
-  const syncUrl = config.syncUrl ?? process.env["MOTEBIT_SYNC_URL"] ?? fullConfig.sync_url;
+  // Wire agent task handler via WebSocket (if sync URL configured — `syncUrl` above)
   const syncToken = config.syncToken ?? process.env["MOTEBIT_SYNC_TOKEN"];
   let wsAdapter: WebSocketEventStoreAdapter | null = null;
   let daemonRegistration: RelayRegistrationHandle | undefined;
+  let runEventPush: CliEventPush | undefined;
   let privKeyBytes: Uint8Array | undefined;
 
   if (syncUrl != null && syncUrl !== "") {
@@ -410,10 +419,12 @@ export async function handleRun(config: CliConfig): Promise<void> {
       privKeyBytes = loaded.privateKey;
     } catch (err) {
       if (err instanceof IdentityKeyError) {
-        console.log(`Warning: agent tasks disabled (${err.kind}: ${err.message}). → ${err.remedy}`);
+        console.log(
+          `Warning: agent tasks disabled (${err.kind}: ${sanitizeRelayText(err.message)}). → ${err.remedy}`,
+        );
       } else {
         console.log(
-          `Warning: could not decrypt private key — agent tasks disabled (${err instanceof Error ? err.message : String(err)})`,
+          `Warning: could not decrypt private key — agent tasks disabled (${sanitizeRelayText(err instanceof Error ? err.message : String(err))})`,
         );
       }
     }
@@ -473,7 +484,7 @@ export async function handleRun(config: CliConfig): Promise<void> {
       ...(syncToken != null ? { fallbackToken: syncToken } : {}),
       onMintError: (err: unknown) => {
         console.warn(
-          `Warning: could not mint a relay sync token (${err instanceof Error ? err.message : String(err)}) — connecting with the configured token instead`,
+          `Warning: could not mint a relay sync token (${sanitizeRelayText(err instanceof Error ? err.message : String(err))}) — connecting with the configured token instead`,
         );
       },
       capabilities: cliCapabilities,
@@ -561,14 +572,14 @@ export async function handleRun(config: CliConfig): Promise<void> {
             runHalt = runtime.haltInForce();
           } catch (err: unknown) {
             console.log(
-              `[halt] could not read halt state, refusing the task to be safe: ${err instanceof Error ? err.message : String(err)}`,
+              `[halt] could not read halt state, refusing the task to be safe: ${sanitizeRelayText(err instanceof Error ? err.message : String(err))}`,
             );
             return;
           }
           if (runHalt != null) {
             void runtime.honorHalts().catch((err: unknown) => {
               console.log(
-                `[halt] honoring failed (will retry): ${err instanceof Error ? err.message : String(err)}`,
+                `[halt] honoring failed (will retry): ${sanitizeRelayText(err instanceof Error ? err.message : String(err))}`,
               );
             });
             console.log(`\nAgent task not claimed — halted (${runHalt.halt_id.slice(0, 8)})`);
@@ -645,7 +656,9 @@ export async function handleRun(config: CliConfig): Promise<void> {
               }
             } catch (err: unknown) {
               const errMsg = err instanceof Error ? err.message : String(err);
-              console.error(`Agent task ${task.task_id.slice(0, 8)}... error: ${errMsg}`);
+              console.error(
+                `Agent task ${task.task_id.slice(0, 8)}... error: ${sanitizeRelayText(errMsg)}`,
+              );
             }
           })();
         }
@@ -754,8 +767,21 @@ export async function handleRun(config: CliConfig): Promise<void> {
       );
     }
 
-    // Also wire sync via the HTTP adapter
-    runtime.connectSync(eventTransport.remote);
+    // The daemon's own events sync through the same transport (#962;
+    // `startRunEventSync` is the wiring under test).
+    runEventPush = startRunEventSync(runtime, relaySync, {
+      syncUrl,
+      log: (line) => console.log(line),
+      ...(privKeyBytes && fullConfig.device_id && fullConfig.device_public_key
+        ? {
+            device: {
+              motebitId,
+              deviceId: fullConfig.device_id,
+              publicKeyHex: fullConfig.device_public_key,
+            },
+          }
+        : {}),
+    });
 
     // Hardware-attestation peer flow — production wiring. Without these
     // two setters the runtime hook in `bumpTrustFromReceipt` is dormant.
@@ -789,6 +815,7 @@ export async function handleRun(config: CliConfig): Promise<void> {
       // Best-effort deregistration from agent discovery registry (signed as us).
       if (daemonRegistration) void daemonRegistration.deregister().catch(() => {});
       scheduler.stop();
+      runEventPush?.stop();
       wsAdapter?.disconnect();
       // Release the runtime-host socket so a successor can elect.
       void runtimeHostServer.close().catch(() => {});
@@ -802,7 +829,10 @@ export async function handleRun(config: CliConfig): Promise<void> {
         privKeyBytes = undefined;
       }
     } catch (err: unknown) {
-      console.error("Shutdown error:", err instanceof Error ? err.message : String(err));
+      console.error(
+        "Shutdown error:",
+        sanitizeRelayText(err instanceof Error ? err.message : String(err)),
+      );
     }
     clearTimeout(forceExit);
     process.exit(0);
@@ -1005,7 +1035,7 @@ export async function handleServe(config: CliConfig): Promise<void> {
     if (verifyResult.type !== "identity" || !verifyResult.valid || !verifyResult.identity) {
       console.error(`Error: invalid identity file signature.`);
       const msg = verifyResult.errors?.[0]?.message;
-      if (msg) console.error(`  ${msg}`);
+      if (msg) console.error(`  ${sanitizeRelayText(msg)}`);
       process.exit(1);
     }
 
@@ -1120,27 +1150,35 @@ export async function handleServe(config: CliConfig): Promise<void> {
   const governance = deriveGovernanceForRuntime(fullConfig.governance);
   const hasIdentityPolicy = policyOverrides.maxRiskLevel !== undefined;
 
+  // The relay `serve` syncs with: the HTTP transport only (stdio serve never
+  // reaches one). Fallback chain: CLI arg > env var > config file.
+  const relay = daemonRelay(config, fullConfig, transport);
+  const syncUrl = relay.syncUrl;
   const runtime = new MotebitRuntime(
-    {
-      motebitId,
-      mcpServers,
-      policy: {
-        operatorMode: config.operator,
-        pathAllowList: config.allowedPaths,
-        // When no identity file governs policy, fall back to config governance.
-        ...(hasIdentityPolicy
-          ? {}
-          : {
-              maxRiskLevel: governance.policyApproval.maxRiskLevel,
-              requireApprovalAbove: governance.policyApproval.requireApprovalAbove,
-              denyAbove: governance.policyApproval.denyAbove,
-            }),
-        budget: governance.policyBudget,
-        ...policyOverrides,
+    // #962: `syncConfigured` is decided by `cliRuntimeConfig`, last.
+    cliRuntimeConfig(
+      {
+        motebitId,
+        mcpServers,
+        policy: {
+          operatorMode: config.operator,
+          pathAllowList: config.allowedPaths,
+          // When no identity file governs policy, fall back to config governance.
+          ...(hasIdentityPolicy
+            ? {}
+            : {
+                maxRiskLevel: governance.policyApproval.maxRiskLevel,
+                requireApprovalAbove: governance.policyApproval.requireApprovalAbove,
+                denyAbove: governance.policyApproval.denyAbove,
+              }),
+          budget: governance.policyBudget,
+          ...policyOverrides,
+        },
+        memoryGovernance: governance.memoryGovernance,
+        taskRouter: PLANNING_TASK_ROUTER,
       },
-      memoryGovernance: governance.memoryGovernance,
-      taskRouter: PLANNING_TASK_ROUTER,
-    },
+      relay,
+    ),
     {
       storage: buildStorageAdapters(moteDb),
       renderer: new NullRenderer(),
@@ -1338,10 +1376,12 @@ export async function handleServe(config: CliConfig): Promise<void> {
     servePrivateKey = loaded.privateKey;
   } catch (err) {
     if (err instanceof IdentityKeyError) {
-      log(`Warning: motebit_task tool disabled (${err.kind}: ${err.message}). → ${err.remedy}`);
+      log(
+        `Warning: motebit_task tool disabled (${err.kind}: ${sanitizeRelayText(err.message)}). → ${err.remedy}`,
+      );
     } else {
       log(
-        `Warning: could not decrypt private key — motebit_task tool disabled (${err instanceof Error ? err.message : String(err)})`,
+        `Warning: could not decrypt private key — motebit_task tool disabled (${sanitizeRelayText(err instanceof Error ? err.message : String(err))})`,
       );
     }
   }
@@ -1503,27 +1543,41 @@ export async function handleServe(config: CliConfig): Promise<void> {
   // Fallback chain: CLI arg > env var > config file
   let serveRegistration: RelayRegistrationHandle | undefined;
   let serveWsAdapter: WebSocketEventStoreAdapter | null = null;
-  const syncUrl = config.syncUrl ?? process.env["MOTEBIT_SYNC_URL"] ?? fullConfig.sync_url;
+  let serveEventPush: CliEventPush | undefined;
   if (transport === "http" && syncUrl) {
     // Wire WebSocket for task dispatch (same adapter as daemon mode)
     const masterToken = config.syncToken ?? process.env["MOTEBIT_API_TOKEN"];
+
+    // The relay event transport (#927, #928): credentials per request, E2E
+    // with the key this process already holds — the socket's catch-up below,
+    // and `serve`'s own events, which it connected nowhere and never pushed
+    // (#962; `startServeEventSync` is the wiring under test).
+    const serveRelaySync = await createDaemonRelaySync({
+      syncUrl,
+      motebitId,
+      deviceId: fullConfigForServe.device_id ?? undefined,
+      privateKey: () => servePrivateKey,
+      ...(masterToken != null ? { configuredToken: masterToken } : {}),
+    });
+    serveEventPush = startServeEventSync(runtime, serveRelaySync, {
+      syncUrl,
+      log,
+      ...(servePrivateKey && fullConfigForServe.device_id && publicKeyHex
+        ? {
+            device: {
+              motebitId,
+              deviceId: fullConfigForServe.device_id,
+              publicKeyHex,
+            },
+          }
+        : {}),
+    });
 
     if (servePrivateKey && deps.handleAgentTask) {
       // Built below by `createRelaySyncSocket`: a fresh signed sync token
       // on every (re)connect, the master token only when none can be
       // minted (#820 — the same once-minted token as `motebit run`'s).
-
-      // The socket's catch-up (#927, #928): credentials per request, E2E
-      // with the key this process already holds.
-      const serveEventTransport = (
-        await createDaemonRelaySync({
-          syncUrl,
-          motebitId,
-          deviceId: fullConfigForServe.device_id ?? undefined,
-          privateKey: () => servePrivateKey,
-          ...(masterToken != null ? { configuredToken: masterToken } : {}),
-        })
-      ).transport;
+      const serveEventTransport = serveRelaySync.transport;
 
       serveWsAdapter = createRelaySyncSocket({
         syncUrl,
@@ -1534,7 +1588,7 @@ export async function handleServe(config: CliConfig): Promise<void> {
         ...(masterToken != null ? { fallbackToken: masterToken } : {}),
         onMintError: (err: unknown) => {
           log(
-            `Warning: could not mint a relay sync token (${err instanceof Error ? err.message : String(err)}) — connecting with the master token instead`,
+            `Warning: could not mint a relay sync token (${sanitizeRelayText(err instanceof Error ? err.message : String(err))}) — connecting with the master token instead`,
           );
         },
         // Serve mode wires the halt store and executes relay-dispatched
@@ -1588,7 +1642,9 @@ export async function handleServe(config: CliConfig): Promise<void> {
           // SQLite, which throws on a busy database. A halted worker
           // must refuse the task, not take the process down.
           void runtimeRef.current?.honorHalts().catch((err: unknown) => {
-            log(`[halt] honoring failed: ${err instanceof Error ? err.message : String(err)}`);
+            log(
+              `[halt] honoring failed: ${sanitizeRelayText(err instanceof Error ? err.message : String(err))}`,
+            );
           });
           // Not claimed, and deliberately not answered with an invented
           // frame: the relay's inbound vocabulary has `task_claim` and no
@@ -1653,7 +1709,7 @@ export async function handleServe(config: CliConfig): Promise<void> {
             }
           } catch (err: unknown) {
             const errMsg = err instanceof Error ? err.message : String(err);
-            log(`Agent task ${task.task_id.slice(0, 8)}... error: ${errMsg}`);
+            log(`Agent task ${task.task_id.slice(0, 8)}... error: ${sanitizeRelayText(errMsg)}`);
           }
         })();
       });
@@ -1756,20 +1812,20 @@ export async function handleServe(config: CliConfig): Promise<void> {
             log(`[self-test] ${result.summary}`);
           } catch (err: unknown) {
             const errMsg = err instanceof Error ? err.message : String(err);
-            log(`[self-test] error: ${errMsg}`);
+            log(`[self-test] error: ${sanitizeRelayText(errMsg)}`);
           }
         }
       }
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
-      log(`Registry registration error: ${msg}`);
+      log(`Registry registration error: ${sanitizeRelayText(msg)}`);
     }
   }
 
   const serveHaltTicker = setInterval(() => {
     void runtimeRef.current?.honorHalts().catch((err: unknown) => {
       log(
-        `[halt] honoring failed (will retry): ${err instanceof Error ? err.message : String(err)}`,
+        `[halt] honoring failed (will retry): ${sanitizeRelayText(err instanceof Error ? err.message : String(err))}`,
       );
     });
   }, 15_000);
@@ -1782,6 +1838,7 @@ export async function handleServe(config: CliConfig): Promise<void> {
     if (typeof forceExit.unref === "function") forceExit.unref();
     try {
       if (serveRegistration) await serveRegistration.deregister();
+      serveEventPush?.stop();
       serveWsAdapter?.disconnect();
       await mcpServer.stop();
       // Release the runtime-host socket so a successor can elect.
@@ -1801,7 +1858,7 @@ export async function handleServe(config: CliConfig): Promise<void> {
         servePrivateKey = undefined;
       }
     } catch (err: unknown) {
-      log(`Shutdown error: ${err instanceof Error ? err.message : String(err)}`);
+      log(`Shutdown error: ${sanitizeRelayText(err instanceof Error ? err.message : String(err))}`);
     }
     clearTimeout(forceExit);
     process.exit(0);

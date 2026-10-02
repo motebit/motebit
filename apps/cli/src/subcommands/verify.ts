@@ -15,6 +15,7 @@ import * as path from "node:path";
 import { verify } from "@motebit/identity-file";
 import { verifyVerifiableCredential, verifyVerifiablePresentation } from "@motebit/encryption";
 import type { VerifiableCredential, VerifiablePresentation } from "@motebit/encryption";
+import { sanitizeRelayText } from "@motebit/sync-engine";
 
 /** Try to parse JSON from a string, returning null on failure. */
 function tryParseJson(text: string): unknown {
@@ -139,7 +140,7 @@ async function verifySingleIdentityFile(filePath: string): Promise<void> {
     console.error(`Signature:   invalid`);
     const msg = result.errors?.[0]?.message;
     if (msg) {
-      console.error(`Error:       ${msg}`);
+      console.error(`Error:       ${sanitizeRelayText(msg)}`);
     }
     process.exit(1);
   }
@@ -243,7 +244,7 @@ async function verifyBundle(dirPath: string): Promise<void> {
         console.log(`  Identity (motebit.md):     valid — motebit_id: ${idShort}`);
       } else {
         const msg = result.errors?.[0]?.message ?? "signature verification failed";
-        console.log(`  Identity (motebit.md):     INVALID — ${msg}`);
+        console.log(`  Identity (motebit.md):     INVALID — ${sanitizeRelayText(msg)}`);
         passed = false;
       }
     }

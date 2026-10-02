@@ -263,6 +263,16 @@ export class TauriEventStore implements EventStoreAdapter {
     return held;
   }
 
+  /** Cursor keys starting with `prefix` (#962: compaction reads every relay stream's push cursor). */
+  async listSyncSeqCursorKeys(prefix: string): Promise<string[]> {
+    const rows = await dbQuery<{ cursor_key: string }>(
+      this.invoke,
+      "SELECT cursor_key FROM sync_seq_cursors WHERE substr(cursor_key, 1, length(?)) = ?",
+      [prefix, prefix],
+    );
+    return rows.map((r) => r.cursor_key);
+  }
+
   async setSyncSeqCursor(key: string, seq: number): Promise<void> {
     await dbExecute(
       this.invoke,

@@ -55,6 +55,7 @@ import { CONFIG_DIR, loadFullConfig } from "../config.js";
 import { mkdirOwnerOnly } from "../durable-file.js";
 import { decryptPrivateKey, fromHex, resolveUnlockPassphrase } from "../identity.js";
 import { bold, cyan, dim, error as errorColor, success, warn } from "../colors.js";
+import { sanitizeRelayText } from "@motebit/sync-engine";
 
 const DEFAULT_RELAY_URL = "https://relay.motebit.com";
 
@@ -183,7 +184,7 @@ async function installFromDirectory(config: CliConfig, sourceArg: string): Promi
     installSource = resolveDirectorySkillSource(path);
   } catch (err: unknown) {
     console.error(errorColor(`Failed to read skill at ${path}:`));
-    console.error(`  ${err instanceof Error ? err.message : String(err)}`);
+    console.error(`  ${sanitizeRelayText(err instanceof Error ? err.message : String(err))}`);
     process.exit(1);
   }
 
@@ -211,7 +212,9 @@ async function installFromRelay(
     });
   } catch (err: unknown) {
     console.error(
-      errorColor(`  Relay request failed: ${err instanceof Error ? err.message : String(err)}`),
+      errorColor(
+        `  Relay request failed: ${sanitizeRelayText(err instanceof Error ? err.message : String(err))}`,
+      ),
     );
     process.exit(1);
   }
@@ -222,7 +225,9 @@ async function installFromRelay(
   }
   if (!resp.ok) {
     const body = await resp.text().catch(() => "");
-    console.error(errorColor(`  Relay returned ${resp.status}: ${body || resp.statusText}`));
+    console.error(
+      errorColor(`  Relay returned ${resp.status}: ${sanitizeRelayText(body || resp.statusText)}`),
+    );
     process.exit(1);
   }
 
@@ -232,7 +237,7 @@ async function installFromRelay(
   } catch (err: unknown) {
     console.error(
       errorColor(
-        `  Relay returned malformed JSON: ${err instanceof Error ? err.message : String(err)}`,
+        `  Relay returned malformed JSON: ${sanitizeRelayText(err instanceof Error ? err.message : String(err))}`,
       ),
     );
     process.exit(1);
@@ -272,7 +277,9 @@ async function installFromRelay(
     }
   } catch (err: unknown) {
     console.error(
-      errorColor(`  Local verification threw: ${err instanceof Error ? err.message : String(err)}`),
+      errorColor(
+        `  Local verification threw: ${sanitizeRelayText(err instanceof Error ? err.message : String(err))}`,
+      ),
     );
     process.exit(1);
   }
@@ -330,7 +337,7 @@ async function runInstall(
   } catch (err: unknown) {
     if (err instanceof SkillInstallError) {
       console.error();
-      console.error(errorColor(`  Install rejected: ${err.message}`));
+      console.error(errorColor(`  Install rejected: ${sanitizeRelayText(err.message)}`));
       if (err.reason === "duplicate_name") {
         console.error(dim(`  Pass ${bold("--force")} to overwrite the existing version.`));
       }
@@ -808,7 +815,9 @@ export async function handleSkillsRunScript(config: CliConfig): Promise<void> {
       env: skillScriptEnv(process.env),
     });
     if (result.error) {
-      console.error(errorColor(`Failed to spawn script: ${result.error.message}`));
+      console.error(
+        errorColor(`Failed to spawn script: ${sanitizeRelayText(result.error.message)}`),
+      );
       process.exit(1);
     }
     process.exit(result.status ?? 0);
@@ -1111,14 +1120,18 @@ export async function handleSkillsPublish(config: CliConfig): Promise<void> {
     });
   } catch (err: unknown) {
     console.error(
-      errorColor(`  Relay request failed: ${err instanceof Error ? err.message : String(err)}`),
+      errorColor(
+        `  Relay request failed: ${sanitizeRelayText(err instanceof Error ? err.message : String(err))}`,
+      ),
     );
     process.exit(1);
   }
 
   if (!resp.ok) {
     const text = await resp.text().catch(() => "");
-    console.error(errorColor(`  Relay returned ${resp.status}: ${text || resp.statusText}`));
+    console.error(
+      errorColor(`  Relay returned ${resp.status}: ${sanitizeRelayText(text || resp.statusText)}`),
+    );
     process.exit(1);
   }
 

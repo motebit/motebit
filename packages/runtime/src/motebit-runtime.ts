@@ -201,7 +201,7 @@ import { IdentityManager } from "@motebit/core-identity";
 import { PrivacyLayer } from "@motebit/privacy-layer";
 import type { AuditLogAdapter } from "@motebit/privacy-layer";
 import { assertSpeciesIntegrity } from "@motebit/policy-invariants";
-import { SyncEngine } from "@motebit/sync-engine";
+import { SyncEngine, pushCompactionFloor, recordSyncIntent } from "@motebit/sync-engine";
 import type { RenderAdapter } from "@motebit/render-engine/spec";
 import { normalizeEmbodimentMode } from "@motebit/render-engine/spec";
 import {
@@ -466,6 +466,13 @@ function randomSuffix(): string {
  */
 const HALT_STOPPER_TIMEOUT_MS = 10_000;
 
+/**
+ * How long compaction waits for a `syncConfigured` provider's answer (#962
+ * P3). Past it the answer is "configured" (fail closed): compaction deletes
+ * nothing this time rather than hanging on a provider that never settles.
+ */
+const SYNC_CONFIGURED_TIMEOUT_MS = 3_000;
+
 export class MotebitRuntime {
   readonly motebitId: string;
   readonly state: StateVectorEngine;
@@ -633,6 +640,12 @@ export class MotebitRuntime {
   };
   private stateSnapshot?: StateSnapshotAdapter;
   private compactionThreshold: number;
+  /** The local event store adapter the sync engines push from — keys the #962 compaction floor. */
+  private readonly localEventStore: EventStoreAdapter;
+  /** The host's word on whether a relay is configured (#962; `RuntimeConfig.syncConfigured`). */
+  private readonly syncConfigured: RuntimeConfig["syncConfigured"];
+  /** This process's sync-intent write (#962 round 5; never rejects). */
+  private readonly syncIntentWrite: Promise<void>;
   private running = false;
   private toolRegistry: SimpleToolRegistry;
   /** Presence-scoped view onto `toolRegistry`. Filters tool visibility +
@@ -920,6 +933,7 @@ export class MotebitRuntime {
     this._onToolActivity = config.onToolActivity ?? null;
     this._onApprovalDecision = config.onApprovalDecision ?? null;
     this.compactionThreshold = config.compactionThreshold ?? 1000;
+    this.syncConfigured = config.syncConfigured;
     this.mcpConfigs = config.mcpServers ?? [];
     this.taskRouter = config.taskRouter ? new TaskRouter(config.taskRouter) : null;
     // Take OWNERSHIP of signingKeys by copying the bytes. The caller lends
@@ -1067,7 +1081,14 @@ export class MotebitRuntime {
       deletionSigner,
       this.conversationStore,
     );
+    this.localEventStore = adapters.storage.eventStore;
     this.sync = new SyncEngine(adapters.storage.eventStore, this.motebitId);
+    // #962 round 5: a process configured for a relay records the identity's
+    // sync intent in the DATABASE now — before its first append or
+    // compaction (a synchronous store lands the write inside this call) —
+    // so every later process on this database, configured or not, floors
+    // compaction on it.
+    this.syncIntentWrite = this.recordSyncIntentIfConfigured();
 
     // State -> cue computation
     this.state.subscribe((state: MotebitState) => {
@@ -1555,6 +1576,9 @@ export class MotebitRuntime {
     // Mark the start of this runtime session (when it woke up) so the
     // `[Now]` block can report memories-formed-this-session honestly.
     this._sessionStartedAt = this._clock?.() ?? Date.now();
+    // #962 round 5: the database's sync intent lands before this runtime
+    // appends anything of its own.
+    await this.syncIntentWrite;
     await this.renderer.init(target);
 
     // Connect to MCP servers and discover their tools.
@@ -4081,10 +4105,109 @@ export class MotebitRuntime {
 
     // Delete events up to (but not including) the latest clock
     // Keep the most recent event so replay can continue from it
-    return this.events.compact(this.motebitId, clock - 1);
+    return this.compactUpTo(clock - 1);
   }
 
   // === Internal ===
+
+  /**
+   * The ONE place compaction decides what to delete (#962): up to
+   * `requested`, but never past what every relay stream has acknowledged
+   * (`pushCompactionFloor`) — an event not yet pushed is never compacted
+   * away before it reaches the owner's other devices. Unreadable cursor ⇒
+   * nothing is deleted. A relay configured (`syncConfigured`) but no stream
+   * cursor yet ⇒ nothing is deleted. No relay configured ⇒ `requested`.
+   */
+  private async compactUpTo(requested: number): Promise<number> {
+    await this.syncIntentWrite;
+    const { answer, decided } = await this.askSyncConfigured();
+    const configured = decided ? answer : true;
+    // Configured now (a provider may answer true only later — web's relay
+    // set after start): the database's intent is recorded before anything
+    // is deleted. A failed write still holds: `syncConfigured` below.
+    if (decided && answer === true) await this.recordSyncIntentNow();
+    const floor = await pushCompactionFloor(this.localEventStore, requested, {
+      syncConfigured: configured,
+      // Only this identity's relay streams: another identity's cursors in
+      // the same store say nothing about what a relay holds of this one.
+      motebitId: this.motebitId,
+    });
+    if (floor <= 0) return 0;
+    return this.events.compact(this.motebitId, floor);
+  }
+
+  /**
+   * Record this identity's sync intent in the database when this process is
+   * configured for a relay (#962 round 5). `true` writes at once (inside the
+   * constructor on a synchronous store); a provider is asked (bounded). Only
+   * an actual "configured" answer is recorded — a non-answer holds this
+   * process's compaction, never the database's for good.
+   */
+  private async recordSyncIntentIfConfigured(): Promise<void> {
+    const c = this.syncConfigured;
+    if (c === undefined || c === false) return;
+    if (c === true) return this.recordSyncIntentNow();
+    const { answer, decided } = await this.askSyncConfigured();
+    if (decided && answer === true) await this.recordSyncIntentNow();
+  }
+
+  private async recordSyncIntentNow(): Promise<void> {
+    try {
+      await recordSyncIntent(this.localEventStore, this.motebitId);
+    } catch (err: unknown) {
+      // This process still holds compaction (its own `syncConfigured`); the
+      // next compaction retries the write.
+      this._logger.warn("sync intent not recorded", {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  /**
+   * Resolves once this process's sync intent (#962 round 5) is recorded in
+   * the database, when it is configured for a relay. `init()` awaits it.
+   */
+  whenSyncIntentRecorded(): Promise<void> {
+    return this.syncIntentWrite;
+  }
+
+  /**
+   * `RuntimeConfig.syncConfigured` as compaction reads it (#962): the host's
+   * answer NOW; a provider that cannot tell ⇒ true (fail closed); absent ⇒
+   * undefined. Public so each surface's wiring is observable at the real
+   * construction seam.
+   */
+  async isSyncConfigured(): Promise<boolean | undefined> {
+    const { answer, decided } = await this.askSyncConfigured();
+    return decided ? answer : true;
+  }
+
+  /**
+   * The host's answer, and whether it actually gave one (#962 round 5): a
+   * provider that throws or never settles is UNDECIDED — compaction holds
+   * (`isSyncConfigured` ⇒ true), but no durable sync intent is recorded on
+   * a non-answer.
+   */
+  private async askSyncConfigured(): Promise<{ answer: boolean | undefined; decided: boolean }> {
+    const c = this.syncConfigured;
+    if (typeof c !== "function") return { answer: c, decided: true };
+    // A provider that never settles counts as configured too (#962 P3):
+    // compaction then deletes nothing, instead of hanging on the answer.
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const undecided = new Promise<null>((resolve) => {
+      timer = setTimeout(() => resolve(null), SYNC_CONFIGURED_TIMEOUT_MS);
+    });
+    try {
+      const answer = await Promise.race([Promise.resolve().then(c), undecided]);
+      return answer === null
+        ? { answer: true, decided: false }
+        : { answer: answer !== false, decided: true };
+    } catch {
+      return { answer: true, decided: false };
+    } finally {
+      clearTimeout(timer);
+    }
+  }
 
   private async autoCompact(): Promise<void> {
     if (this.compactionThreshold <= 0) return;
@@ -4093,7 +4216,7 @@ export class MotebitRuntime {
       if (count >= this.compactionThreshold) {
         const clock = await this.events.getLatestClock(this.motebitId);
         if (clock > 0) {
-          await this.events.compact(this.motebitId, clock - 1);
+          await this.compactUpTo(clock - 1);
         }
       }
     } catch (err: unknown) {

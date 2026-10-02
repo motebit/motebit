@@ -23,8 +23,11 @@ import type { StepDelegationAdapter } from "@motebit/planner";
 import type { CliConfig } from "../args.js";
 import { loadFullConfig } from "../config.js";
 import { getDbPath } from "../runtime-factory.js";
+import { cliRuntimeConfig } from "../sync-configured.js";
+import { openDelegateEventSync } from "../cli-event-push.js";
 import { electCoordinatorRole } from "../runtime-host.js";
 import { getRelayUrl, getRelayAuthHeaders, requireMotebitId } from "./_helpers.js";
+import { sanitizeRelayText } from "@motebit/sync-engine";
 
 // ---------------------------------------------------------------------------
 // motebit delegate --plan — multi-agent orchestration via PlanEngine
@@ -110,24 +113,63 @@ async function handleDelegatePlan(
   }
 
   const runtime = new MotebitRuntime(
-    {
-      motebitId,
-      policy: {
-        maxRiskLevel: governance.policyApproval.maxRiskLevel,
-        requireApprovalAbove: governance.policyApproval.requireApprovalAbove,
-        denyAbove: governance.policyApproval.denyAbove,
-        budget: governance.policyBudget,
+    // #962: `syncConfigured` is decided by `cliRuntimeConfig`, last.
+    cliRuntimeConfig(
+      {
+        motebitId,
+        policy: {
+          maxRiskLevel: governance.policyApproval.maxRiskLevel,
+          requireApprovalAbove: governance.policyApproval.requireApprovalAbove,
+          denyAbove: governance.policyApproval.denyAbove,
+          budget: governance.policyBudget,
+        },
+        memoryGovernance: governance.memoryGovernance,
+        taskRouter: PLANNING_TASK_ROUTER,
+        ...(signingKeys ? { signingKeys } : {}),
+        ...(solanaConfig ? { solana: solanaConfig } : {}),
       },
-      memoryGovernance: governance.memoryGovernance,
-      taskRouter: PLANNING_TASK_ROUTER,
-      ...(signingKeys ? { signingKeys } : {}),
-      ...(solanaConfig ? { solana: solanaConfig } : {}),
-    },
+      { syncUrl: relayUrl },
+    ),
     { storage, renderer: new NullRenderer(), tools: registry },
   );
   runtimeRef.current = runtime;
   await runtime.init();
   runtime.setProvider(provider);
+  // #962: this command's events and their sync, closed before it exits
+  // (`openDelegateEventSync` is the wiring under test).
+  // The push is E2E and signs its device tokens with the identity key: the
+  // sovereign keys when loaded, else the key unlocked here (the passphrase is
+  // session-cached by the auth headers above). No key: the configured token
+  // alone, raw — the one raw-by-design push path.
+  const syncCfg = loadFullConfig();
+  let pushKey: Uint8Array | undefined = signingKeys?.privateKey;
+  let pushKeyOwned = false;
+  if (!pushKey) {
+    try {
+      const { loadActiveSigningKey } = await import("../identity.js");
+      pushKey = (await loadActiveSigningKey(syncCfg, { promptLabel: "Passphrase: " })).privateKey;
+      pushKeyOwned = true;
+    } catch {
+      pushKey = undefined;
+    }
+  }
+  const masterToken =
+    config.syncToken ?? process.env["MOTEBIT_API_TOKEN"] ?? process.env["MOTEBIT_SYNC_TOKEN"];
+  const eventSync = await openDelegateEventSync(runtime, {
+    syncUrl: relayUrl,
+    log: (line) => console.log(line),
+    privateKey: () => pushKey,
+    ...(masterToken ? { configuredToken: masterToken } : {}),
+    ...(pushKey && syncCfg.device_id && syncCfg.device_public_key
+      ? {
+          device: {
+            motebitId,
+            deviceId: syncCfg.device_id,
+            publicKeyHex: syncCfg.device_public_key,
+          },
+        }
+      : {}),
+  });
 
   // Enable credential publishing to relay (sovereign trust → network trust bridge).
   // The relay is used for discovery; credentials published here feed the routing graph.
@@ -236,6 +278,12 @@ async function handleDelegatePlan(
       }
     }
   } finally {
+    await eventSync.close();
+    if (pushKeyOwned && pushKey) {
+      const { secureErase } = await import("@motebit/encryption");
+      secureErase(pushKey);
+      pushKey = undefined;
+    }
     runtime.stop();
     moteDb.close();
     // Release the bind so the next coordinator-role process can elect.
@@ -290,7 +338,7 @@ export async function handleDelegate(config: CliConfig): Promise<void> {
       });
     } catch (err: unknown) {
       console.error(
-        `Sovereign delegation requires identity keys: ${err instanceof Error ? err.message : String(err)}`,
+        `Sovereign delegation requires identity keys: ${sanitizeRelayText(err instanceof Error ? err.message : String(err))}`,
       );
       process.exit(1);
     }
@@ -345,7 +393,9 @@ export async function handleDelegate(config: CliConfig): Promise<void> {
     ledgerDb.close();
 
     if (!result.ok) {
-      console.error(`Sovereign delegation failed (${result.error.code}): ${result.error.message}`);
+      console.error(
+        `Sovereign delegation failed (${result.error.code}): ${sanitizeRelayText(result.error.message)}`,
+      );
       const settled = result.error.settledPayment;
       const unconfirmed = result.error.unconfirmedPayment;
       if (
@@ -451,7 +501,7 @@ export async function handleDelegate(config: CliConfig): Promise<void> {
       );
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
-      console.error(`Discovery error: ${msg}`);
+      console.error(`Discovery error: ${sanitizeRelayText(msg)}`);
       process.exit(1);
     }
   }
@@ -483,7 +533,7 @@ export async function handleDelegate(config: CliConfig): Promise<void> {
     console.log(`Task submitted: ${taskId.slice(0, 12)}...`);
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : String(err);
-    console.error(`Task submission error: ${msg}`);
+    console.error(`Task submission error: ${sanitizeRelayText(msg)}`);
     process.exit(1);
   }
 
