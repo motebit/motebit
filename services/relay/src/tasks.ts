@@ -68,6 +68,7 @@ import {
   openAllocation,
   recordP2pSettlementAudit,
 } from "./allocation-escrow.js";
+import { secretEquals } from "./secret-compare.js";
 import { attemptPushWake } from "./push-adapter.js";
 import { getRelayKeypair } from "./credentials.js";
 import type { RelayIdentity } from "./federation.js";
@@ -4763,7 +4764,7 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<TaskRoutesHan
     }
     const token = authHeader.slice(7);
     let callerMotebitId: string | undefined;
-    if (apiToken != null && apiToken !== "" && token === apiToken) {
+    if (secretEquals(token, apiToken)) {
       // Master token bypass — caller identity unknown but trusted
     } else if (enableDeviceAuth && token.includes(".")) {
       // Verify device token against the CALLER's identity (from token claims),
@@ -4863,7 +4864,7 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<TaskRoutesHan
       throw new AuthenticationError("AUTH_MISSING_TOKEN", "Authorization required");
     }
     const token = authHeader.slice(7);
-    if (apiToken == null || token !== apiToken) {
+    if (!secretEquals(token, apiToken)) {
       // Verify as device signed token
       if (enableDeviceAuth && token.includes(".")) {
         // Same expiry-before-verify honesty as the task:query poll route (#424).

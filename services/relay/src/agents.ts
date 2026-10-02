@@ -5,6 +5,7 @@
 import type { Hono, Context } from "hono";
 import { relayRouteAudience, type TokenAudience } from "@motebit/protocol";
 import { HTTPException } from "hono/http-exception";
+import { secretEquals } from "./secret-compare.js";
 import { refusePublicDeviceRegistration } from "./device-registration-guard.js";
 import { routeTableMatcher, type MasterTokenCarveOut } from "./middleware.js";
 import type { MotebitDatabase, DatabaseDriver } from "@motebit/persistence";
@@ -606,7 +607,7 @@ export function registerAgentAuthMiddleware(deps: AgentAuthMiddlewareDeps): void
     // Master token bypass (operator) — recorded: a master-token presentation
     // on an agent route is exactly the shape the retirement arc closed, so it
     // must be visible if it ever comes back.
-    if (apiToken != null && apiToken !== "" && token === apiToken) {
+    if (secretEquals(token, apiToken)) {
       recordMasterTokenOnce(c, recordAuthEvent, {
         method: c.req.method,
         path: c.req.path,
@@ -736,7 +737,7 @@ export function registerAgentAuthMiddleware(deps: AgentAuthMiddlewareDeps): void
     }
     const token = authHeader.slice(7);
 
-    if (apiToken != null && apiToken !== "" && token === apiToken) {
+    if (secretEquals(token, apiToken)) {
       recordMasterTokenOnce(c, recordAuthEvent, {
         method,
         path,

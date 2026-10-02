@@ -18,6 +18,9 @@ const ORIGIN = "http://localhost:3000";
 let logLines: string[];
 beforeEach(() => {
   process.env.RELAY_PUBLIC_KEY = "test-pubkey";
+  // Billing must be configured for motebit-cloud to serve at all (billing.ts).
+  process.env.RELAY_API_URL = "https://relay.test";
+  process.env.RELAY_PROXY_SECRET = "test-relay-proxy-secret";
   logLines = [];
   vi.spyOn(console, "log").mockImplementation((...args: unknown[]) => {
     logLines.push(args.map(String).join(" "));
@@ -26,6 +29,8 @@ beforeEach(() => {
 afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
+  delete process.env.RELAY_API_URL;
+  delete process.env.RELAY_PROXY_SECRET;
 });
 
 /** All proxy.* failure events emitted this turn (excludes proxy.usage). */

@@ -10,6 +10,7 @@
  */
 
 import type { Hono } from "hono";
+import { secretEquals } from "./secret-compare.js";
 import { FREE_CREDIT_REFERENCE_PREFIX } from "./account-store-sqlite.js";
 import { HTTPException } from "hono/http-exception";
 import Stripe from "stripe";
@@ -24,6 +25,7 @@ import {
   getOrCreateAccount,
   creditAccount,
   debitSpendableAccount,
+  getSpendableBalance,
   hasFeeWithReference,
   toMicro,
   fromMicro,
@@ -258,6 +260,17 @@ export function registerProxyTokenRoutes(
       throw new HTTPException(403, { message: "Cannot mint another agent's proxy token" });
     }
 
+    // A proxy token authorizes cloud spend whose cost comes back as a debit
+    // authenticated by RELAY_PROXY_SECRET. Without it every debit 401s, so the
+    // token would buy unbilled inference: refuse to mint (and grant nothing).
+    if (!process.env.RELAY_PROXY_SECRET) {
+      logger.error("proxy-token.billing_unconfigured", {
+        motebitId,
+        missing: "RELAY_PROXY_SECRET",
+      });
+      return c.json({ error: "cloud AI billing is not configured on this relay" }, 503);
+    }
+
     // Activation: grant a fresh motebit its one-time free "first taste" credit
     // (inert unless MOTEBIT_FREE_CREDIT_USD is set; one-time + per-IP + global-
     // budget capped — see free-credit.ts). This is the moment a brand-new
@@ -304,20 +317,42 @@ export function registerProxyTokenRoutes(
   app.post("/api/v1/agents/:motebitId/debit", async (c) => {
     const secret = c.req.header("x-relay-secret");
     const expectedSecret = process.env.RELAY_PROXY_SECRET;
-    if (!expectedSecret || secret !== expectedSecret) {
+    const motebitId = c.req.param("motebitId");
+    if (!expectedSecret || !secretEquals(secret, expectedSecret)) {
+      // Every refused debit is served-but-unbilled revenue: log WHY (never the
+      // values) so a secret mismatch is countable from the relay side too.
+      logger.warn("proxy-debit.unauthorized", {
+        motebitId,
+        reason: !expectedSecret
+          ? "relay_secret_unset"
+          : secret == null || secret === ""
+            ? "header_missing"
+            : "secret_mismatch",
+      });
       return c.json({ error: "unauthorized" }, 401);
     }
 
-    const motebitId = c.req.param("motebitId");
-    const body = await c.req.json<{
-      amount: number;
-      reference_id: string;
-      description?: string;
-    }>();
-
-    if (typeof body.amount !== "number" || body.amount <= 0) {
-      return c.json({ error: "amount must be a positive number (micro-units)" }, 400);
+    let body: { amount?: unknown; reference_id?: unknown; description?: unknown };
+    try {
+      body = await c.req.json();
+    } catch {
+      return c.json({ error: "body must be JSON" }, 400);
     }
+
+    // Integer micro-units only (the ledger's unit); a fractional amount would
+    // otherwise throw inside the account store as a 500.
+    if (typeof body.amount !== "number" || !Number.isSafeInteger(body.amount) || body.amount <= 0) {
+      return c.json({ error: "amount must be a positive integer (micro-units)" }, 400);
+    }
+    const amount = body.amount;
+    // reference_id is the idempotency key (the proxy's per-turn request id). A
+    // debit without one could not be deduplicated on retry — a lost 200 would
+    // record a second fee row — so it is required, not optional.
+    if (typeof body.reference_id !== "string" || body.reference_id === "") {
+      return c.json({ error: "reference_id is required (non-empty string)" }, 400);
+    }
+    const referenceId = body.reference_id;
+    const description = typeof body.description === "string" ? body.description : "Cloud AI usage";
 
     // Idempotency. The proxy debits AFTER serving the response (fire-and-forget)
     // and retries a failed debit with the SAME reference_id — it cannot tell a
@@ -326,16 +361,9 @@ export function registerProxyTokenRoutes(
     // return success with the current balance. No `await` between this check and
     // the debit below, so the read+write stays atomic within this process (the
     // relay is single-instance; better-sqlite3 is synchronous).
-    if (
-      typeof body.reference_id === "string" &&
-      body.reference_id !== "" &&
-      hasFeeWithReference(db, motebitId, body.reference_id)
-    ) {
+    if (hasFeeWithReference(db, motebitId, referenceId)) {
       const balance = getAccountBalance(db, motebitId)?.balance ?? 0;
-      logger.info("proxy-debit.idempotent_replay", {
-        motebitId,
-        referenceId: body.reference_id,
-      });
+      logger.info("proxy-debit.idempotent_replay", { motebitId, referenceId });
       return c.json({ success: true, balance, idempotent: true });
     }
 
@@ -346,26 +374,53 @@ export function registerProxyTokenRoutes(
     const newBalance = debitSpendableAccount(
       db,
       motebitId,
-      body.amount,
+      amount,
       "fee",
-      body.reference_id,
-      body.description ?? "Cloud AI usage",
+      referenceId,
+      description,
     );
 
     if (newBalance === null) {
-      // Insufficient SPENDABLE balance (raw balance may be higher but under
-      // the escrow hold) — the message was already served (fire-and-forget).
-      // Log but don't error — the 20% margin absorbs occasional overruns
-      logger.warn("proxy-debit.insufficient", {
-        motebitId,
-        amount: body.amount,
-      });
-      return c.json({ success: false, balance: 0 });
+      // The turn was already served. Recording NOTHING would leave the balance
+      // untouched, so the next proxy token would carry it again and the tail
+      // would never drain (served-but-unbilled, unbounded). Instead debit what
+      // is spendable — drain to zero under the same escrow hold — and report
+      // the shortfall. Synchronous end to end (better-sqlite3, no await), so
+      // the spendable read and the debit cannot interleave.
+      const spendable = getSpendableBalance(db, motebitId);
+      const drained =
+        spendable > 0
+          ? debitSpendableAccount(
+              db,
+              motebitId,
+              spendable,
+              "fee",
+              referenceId,
+              `${description} (partial: shortfall ${amount - spendable} micro)`,
+            )
+          : null;
+      if (drained !== null) {
+        logger.warn("proxy-debit.shortfall", {
+          motebitId,
+          amount,
+          debited: spendable,
+          shortfall: amount - spendable,
+        });
+        return c.json({
+          success: true,
+          balance: drained,
+          partial: true,
+          debited: spendable,
+          shortfall: amount - spendable,
+        });
+      }
+      logger.warn("proxy-debit.insufficient", { motebitId, amount });
+      return c.json({ success: false, balance: 0, shortfall: amount });
     }
 
     logger.info("proxy-debit.success", {
       motebitId,
-      amount: body.amount,
+      amount,
       balanceAfter: newBalance,
     });
 

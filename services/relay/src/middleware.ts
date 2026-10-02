@@ -20,6 +20,7 @@ import {
   ACCOUNT_CHECKOUT_AUDIENCE,
   MARKET_QUERY_AUDIENCE,
 } from "@motebit/protocol";
+import { secretEquals } from "./secret-compare.js";
 import { FixedWindowLimiter } from "./rate-limiter.js";
 import type { verifySignedTokenForDevice, parseTokenPayloadUnsafe } from "./auth.js";
 import { createLogger } from "./logger.js";
@@ -136,7 +137,7 @@ export function isMasterToken(
 ): boolean {
   if (apiToken == null || apiToken === "") return false;
   const authHeader = c.req.header("authorization");
-  return authHeader != null && authHeader === `Bearer ${apiToken}`;
+  return secretEquals(authHeader, `Bearer ${apiToken}`);
 }
 
 /**
@@ -199,7 +200,7 @@ export function createDualAuth(deps: MiddlewareDeps) {
     const token = authHeader.slice(7);
 
     // Master token bypass — log for audit trail (distinguishes admin from agent auth)
-    if (deps.apiToken != null && deps.apiToken !== "" && token === deps.apiToken) {
+    if (secretEquals(token, deps.apiToken)) {
       logger.info("auth.master_token", {
         correlationId: c.req.header("x-correlation-id") ?? "none",
         method: c.req.method,
@@ -832,7 +833,7 @@ export function registerMiddleware(deps: MiddlewareDeps): MiddlewareResult {
       const token = authHeader.slice(7);
 
       // Master token bypass
-      if (apiToken != null && apiToken !== "" && token === apiToken) {
+      if (secretEquals(token, apiToken)) {
         recordMasterTokenOnce(c, deps.recordAuthEvent, {
           method: c.req.method,
           path: new URL(c.req.url, "http://localhost").pathname,
@@ -955,7 +956,7 @@ export function registerMiddleware(deps: MiddlewareDeps): MiddlewareResult {
       }
       const mw = bearerAuth({ token: apiToken });
       const presented = c.req.header("authorization");
-      if (presented === `Bearer ${apiToken}`) {
+      if (secretEquals(presented, `Bearer ${apiToken}`)) {
         recordMasterTokenOnce(c, deps.recordAuthEvent, {
           method: c.req.method,
           path: c.req.path,
@@ -1220,7 +1221,7 @@ export function registerAuthMiddleware(
     const header = c.req.header("authorization");
     const presented = header != null && header.startsWith("Bearer ") ? header.slice(7) : null;
     const path = new URL(c.req.url, "http://localhost").pathname;
-    if (apiToken != null && apiToken !== "" && presented === apiToken) {
+    if (secretEquals(presented, apiToken)) {
       recordMasterTokenOnce(c, deps.recordAuthEvent, {
         method: c.req.method,
         path,
