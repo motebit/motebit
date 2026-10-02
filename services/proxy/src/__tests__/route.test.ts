@@ -328,6 +328,7 @@ describe("spend controls — the token snapshot is not the bound", () => {
     const res = await post(PROXY, BODY);
 
     upstream.enqueue(sse({ type: "message_start", message: { usage: { input_tokens: 1_000 } } }));
+    upstream.enqueue(sse({ type: "message_delta", usage: { output_tokens: 20 } }));
     upstream.close();
     await res.text();
     await debitCalled;
@@ -337,12 +338,12 @@ describe("spend controls — the token snapshot is not the bound", () => {
     // and a free slot.
     expect(store.map.get("proxy:active:mote-1")).toBe(0);
     expect(store.map.get("proxy:spent:jti-1")).toBe(
-      validation.calculateCostMicro("claude-sonnet-4-6", 1_000, 0, 0, 0),
+      validation.calculateCostMicro("claude-sonnet-4-6", 1_000, 20, 0, 0),
     );
     finishDebit();
   });
 
-  it("releases the slot and records the metered spend when the client aborts mid-stream", async () => {
+  it("releases the slot and records the FULL metered spend when the client aborts mid-stream", async () => {
     vi.mocked(validation.parseProxyToken).mockResolvedValue(tokenFor());
     const { upstream, sse, debitCalled, finishDebit } = controlledUpstream();
     const res = await post(PROXY, BODY);
@@ -351,13 +352,16 @@ describe("spend controls — the token snapshot is not the bound", () => {
     upstream.enqueue(sse({ type: "message_start", message: { usage: { input_tokens: 1_000 } } }));
     expect((await client.read()).done).toBe(false);
     await client.cancel(); // the user closed the tab / pressed stop
-    // The pump only learns of the abort on its next write.
+    // The pump learns of the abort on its next write, then keeps draining
+    // upstream: the output usage Anthropic reports last is still billed.
     upstream.enqueue(sse({ type: "content_block_delta" }));
+    upstream.enqueue(sse({ type: "message_delta", usage: { output_tokens: 500 } }));
+    upstream.close();
     await debitCalled;
 
     expect(store.map.get("proxy:active:mote-1")).toBe(0);
     expect(store.map.get("proxy:spent:jti-1")).toBe(
-      validation.calculateCostMicro("claude-sonnet-4-6", 1_000, 0, 0, 0),
+      validation.calculateCostMicro("claude-sonnet-4-6", 1_000, 500, 0, 0),
     );
     finishDebit();
   });

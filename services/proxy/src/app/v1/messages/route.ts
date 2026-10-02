@@ -14,15 +14,16 @@ import {
   CLASSIFIER_MODEL,
   AUTO_DEFAULT_MODEL,
 } from "../../../validation";
+import { after } from "next/server";
 import { isTaskShape, type RoutingConstraint } from "@motebit/protocol";
 import { dispatchRouting, applyBalanceFilter, REFERENCE_ROUTING_POLICY } from "@motebit/policy";
 // Provider request shaping (incl. Anthropic prompt-caching) lives in a pure,
 // unit-tested sibling module — the edge route is glue, the cost-critical request
 // shape is testable on its own.
 import { buildProviderRequest } from "./provider-request";
-// Streaming usage extraction (pure, unit-tested) — normalizes each provider's
-// token-usage shape for the cost calc, incl. OpenAI's cached_tokens split.
-import { extractUsage, type UsageAccumulator } from "./usage";
+// Stream metering (pure, unit-tested) — forwards the provider stream and
+// meters what the provider consumed, client abort or not.
+import { meterStream, ACCOUNTING_TIMINGS } from "./stream-accounting";
 // Pre-stream failure classification + the shared one-event-per-failure surface.
 // Observation only (no recovery) — see `inference/classify.ts`.
 import {
@@ -143,7 +144,9 @@ export async function debitRelay(
       lastError = err instanceof Error ? err.message : String(err);
     }
     if (attempt < DEBIT_MAX_ATTEMPTS) {
-      await new Promise((resolve) => setTimeout(resolve, attempt * 250));
+      await new Promise((resolve) =>
+        setTimeout(resolve, attempt * ACCOUNTING_TIMINGS.debitBackoffMs),
+      );
     }
   }
 
@@ -158,6 +161,30 @@ export async function debitRelay(
       error: lastError,
     }),
   );
+}
+
+/** The `max_tokens` actually sent upstream — the output upper bound for metering. */
+function sentMaxTokens(providerBody: string, fallback: number): number {
+  try {
+    const n = (JSON.parse(providerBody) as { max_tokens?: unknown }).max_tokens;
+    if (typeof n === "number" && Number.isFinite(n) && n > 0) return n;
+  } catch {
+    /* fall through */
+  }
+  return fallback;
+}
+
+/**
+ * Hold the isolate open for `task` via Next's `after` (the platform's
+ * `waitUntil` on Vercel, edge included). Outside a Next request scope (unit
+ * tests, a bare host) `after` throws; the task still runs, just unregistered.
+ */
+function keepAlive(task: Promise<void>): void {
+  try {
+    after(task);
+  } catch {
+    /* no request scope — nothing to register with */
+  }
 }
 
 // ── Provider API adapters ───────────────────────────────────────────────
@@ -672,84 +699,26 @@ export async function POST(request: Request): Promise<Response> {
     );
   }
 
-  // --- Stream response and extract usage for debit ---
+  // --- Stream response and meter usage for the debit ---
   if (authMode === "proxy-token" && tokenPayload && providerRes.ok && providerRes.body) {
     const mid = tokenPayload.mid;
-    const model = resolvedModel;
-    const prov = resolvedProvider;
-    const usage: UsageAccumulator = { input: 0, output: 0, cacheRead: 0, cacheCreation: 0 };
-
-    const { readable, writable } = new TransformStream<Uint8Array, Uint8Array>();
-    const writer = writable.getWriter();
-    const reader = providerRes.body.getReader();
-    const decoder = new TextDecoder();
-
-    void (async () => {
-      try {
-        let buffer = "";
-        for (;;) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          try {
-            await writer.write(value);
-          } catch {
-            // The client went away (abort/cancel errors the readable side).
-            // Stop pumping; the finally below still settles this request.
-            break;
-          }
-
-          buffer += decoder.decode(value, { stream: true });
-          const lines = buffer.split("\n");
-          buffer = lines.pop() ?? "";
-          for (const line of lines) {
-            extractUsage(prov, line, usage);
-          }
-        }
-      } finally {
-        // After a client abort the writable side is already errored and
-        // close() rejects. That must not skip the accounting below: an
-        // unreleased slot blocks this identity until the TTL heals it, and
-        // an unrecorded cost is spend the next admission cannot see.
-        await writer.close().catch(() => {});
-        const cost =
-          calculateCostMicro(
-            model,
-            usage.input,
-            usage.output,
-            usage.cacheRead,
-            usage.cacheCreation,
-          ) + classifierCost;
-        // Log normalized token fields for billing verification. `extractUsage`
-        // normalizes every provider so `input` is UNCACHED and `cacheRead` is the
-        // cached/discounted portion (additive) — so the calculateCostMicro formula
-        // (uncached + cacheRead·discount + cacheCreation·1.25) is correct without
-        // double-counting. cacheRead > 0 here is the proof caching is landing.
-        console.log(
-          JSON.stringify({
-            event: "proxy.usage",
-            requestId,
-            model,
-            input: usage.input,
-            output: usage.output,
-            cacheRead: usage.cacheRead,
-            cacheCreation: usage.cacheCreation,
-            costMicro: cost,
-            motebitId: mid,
-          }),
-        );
-        // Spend controls first: charge this token's local counter so the NEXT
-        // request sees the live-ish balance, then free the concurrency slot.
-        // Both happen before the relay debit, whose network round-trip and
-        // retry backoff must not hold a slot or hide this spend from an
-        // agent's immediate follow-up request.
-        await spendAdmission?.record(cost);
-        await spendAdmission?.release();
-        // Awaited so retries complete before the pump task ends; the client
-        // already holds the full response (writer.close() above), so this never
-        // delays the user.
-        if (cost > 0) await debitRelay(mid, cost, requestId);
-      }
-    })();
+    // Metering (meter-before-forward, drain-on-abort, KV-bounded debit) lives
+    // in a pure, unit-tested sibling module — see `stream-accounting.ts`.
+    const { readable, settled } = meterStream({
+      upstream: providerRes.body,
+      provider: resolvedProvider,
+      model: resolvedModel,
+      requestId,
+      motebitId: mid,
+      extraCostMicro: classifierCost,
+      providerRequestBody: providerReq.body,
+      maxOutputTokens: sentMaxTokens(providerReq.body, limits.maxTokens),
+      spend: spendAdmission,
+      debit: (cost) => debitRelay(mid, cost, requestId),
+    });
+    // Register the post-response accounting with the platform's waitUntil so
+    // an isolate teardown after the response closes cannot drop the debit.
+    keepAlive(settled);
 
     return new Response(readable, {
       status: providerRes.status,

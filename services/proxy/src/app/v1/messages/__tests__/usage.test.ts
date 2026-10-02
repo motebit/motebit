@@ -32,7 +32,15 @@ describe("extractUsage — anthropic", () => {
     );
     extractUsage("anthropic", sse({ type: "message_delta", usage: { output_tokens: 40 } }), u);
     // input EXCLUDES cached → additive with the cache fields.
-    expect(u).toEqual({ input: 100, output: 40, cacheRead: 3000, cacheCreation: 50 });
+    // Both halves reported → the request's usage is exact (metering needs no bound).
+    expect(u).toEqual({
+      input: 100,
+      output: 40,
+      cacheRead: 3000,
+      cacheCreation: 50,
+      inputReported: true,
+      outputReported: true,
+    });
   });
 
   it("does NOT read top-level usage on message_start (the wrong shape captures nothing)", () => {
@@ -82,7 +90,14 @@ describe("extractUsage — google/groq (not cache-optimized)", () => {
   it("records plain input/output, never a cacheRead", () => {
     const g = fresh();
     extractUsage("google", sse({ usage: { prompt_tokens: 400, completion_tokens: 30 } }), g);
-    expect(g).toEqual({ input: 400, output: 30, cacheRead: 0, cacheCreation: 0 });
+    expect(g).toEqual({
+      input: 400,
+      output: 30,
+      cacheRead: 0,
+      cacheCreation: 0,
+      inputReported: true,
+      outputReported: true,
+    });
 
     const q = fresh();
     extractUsage(
@@ -99,6 +114,31 @@ describe("extractUsage — google/groq (not cache-optimized)", () => {
     );
     expect(q.cacheRead).toBe(0);
     expect(q.input).toBe(400);
+  });
+});
+
+describe("extractUsage — reported flags (exact vs bounded metering)", () => {
+  it("anthropic: message_start reports input only; output is reported by message_delta", () => {
+    const u = fresh();
+    extractUsage(
+      "anthropic",
+      sse({ type: "message_start", message: { usage: { input_tokens: 10, output_tokens: 1 } } }),
+      u,
+    );
+    expect(u.inputReported).toBe(true);
+    expect(u.outputReported).toBeUndefined();
+    extractUsage("anthropic", sse({ type: "message_delta", usage: { output_tokens: 7 } }), u);
+    expect(u.outputReported).toBe(true);
+  });
+
+  it("openai: content chunks report nothing; the final usage chunk reports both", () => {
+    const u = fresh();
+    extractUsage("openai", sse({ choices: [{ delta: { content: "hi" } }] }), u);
+    expect(u.inputReported).toBeUndefined();
+    expect(u.outputReported).toBeUndefined();
+    extractUsage("openai", sse({ usage: { prompt_tokens: 5, completion_tokens: 2 } }), u);
+    expect(u.inputReported).toBe(true);
+    expect(u.outputReported).toBe(true);
   });
 });
 

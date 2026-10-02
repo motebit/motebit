@@ -23,6 +23,10 @@ export interface UsageAccumulator {
   output: number;
   cacheRead: number;
   cacheCreation: number;
+  /** Set once the provider has REPORTED input usage (not merely defaulted to 0). */
+  inputReported?: boolean;
+  /** Set once the provider has reported its FINAL output usage — the request's usage is then exact. */
+  outputReported?: boolean;
 }
 
 /** Extract token usage from a streaming SSE chunk, mutating the accumulator. */
@@ -49,13 +53,19 @@ export function extractUsage(provider: InferenceHost, line: string, usage: Usage
       };
       const start = (evt.message as { usage?: AnthropicUsage } | undefined)?.usage;
       if (start) {
-        if (start.input_tokens != null) usage.input = start.input_tokens;
+        if (start.input_tokens != null) {
+          usage.input = start.input_tokens;
+          usage.inputReported = true;
+        }
         if (start.cache_read_input_tokens != null) usage.cacheRead = start.cache_read_input_tokens;
         if (start.cache_creation_input_tokens != null)
           usage.cacheCreation = start.cache_creation_input_tokens;
       }
       const delta = evt.usage as AnthropicUsage | undefined;
-      if (delta?.output_tokens != null) usage.output = delta.output_tokens;
+      if (delta?.output_tokens != null) {
+        usage.output = delta.output_tokens;
+        usage.outputReported = true;
+      }
       return;
     }
 
@@ -74,15 +84,25 @@ export function extractUsage(provider: InferenceHost, line: string, usage: Usage
         const cached = u.prompt_tokens_details?.cached_tokens ?? 0;
         usage.input = u.prompt_tokens - cached;
         usage.cacheRead = cached;
+        usage.inputReported = true;
       }
-      if (u?.completion_tokens != null) usage.output = u.completion_tokens;
+      if (u?.completion_tokens != null) {
+        usage.output = u.completion_tokens;
+        usage.outputReported = true;
+      }
       return;
     }
 
     // Google / Groq — not cache-optimized here; plain input/output.
     const u = evt.usage as { prompt_tokens?: number; completion_tokens?: number } | undefined;
-    if (u?.prompt_tokens != null) usage.input = u.prompt_tokens;
-    if (u?.completion_tokens != null) usage.output = u.completion_tokens;
+    if (u?.prompt_tokens != null) {
+      usage.input = u.prompt_tokens;
+      usage.inputReported = true;
+    }
+    if (u?.completion_tokens != null) {
+      usage.output = u.completion_tokens;
+      usage.outputReported = true;
+    }
   } catch {
     // Not valid JSON — ignore
   }
