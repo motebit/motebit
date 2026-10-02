@@ -253,3 +253,22 @@ export class X402PaymentReplayedError extends TaskError {
     if (settlement != null) this.settlement = settlement;
   }
 }
+
+// ── Emergency freeze ────────────────────────────────────────────────────────
+
+/**
+ * A money-moving write refused because the relay is frozen. Raised from the
+ * write's own transaction by the freeze guards (`installFreezeMoneyGuards`),
+ * so a request or replay already past the entry check when the freeze landed
+ * commits nothing. Its claim or queue entry is left as it was; the work
+ * resumes after unfreeze.
+ */
+export class EmergencyFrozenError extends RelayError {
+  constructor(
+    message: string = "Relay is in emergency freeze mode — money-moving writes are suspended",
+    options?: ErrorOptions,
+  ) {
+    super("EMERGENCY_FROZEN", message, 503, options);
+    this.name = "EmergencyFrozenError";
+  }
+}

@@ -1,0 +1,5 @@
+---
+"@motebit/relay": patch
+---
+
+The emergency freeze now holds where money is written, not only at request entry. `installFreezeMoneyGuards` (`services/relay/src/freeze.ts`) installs SQLite TEMP `BEFORE INSERT/UPDATE/DELETE` triggers on every money table (`relay_settlements`, `relay_federation_settlements`, `relay_transactions`, `relay_accounts`, `relay_x402_settlements`, `relay_withdrawals`, `relay_pending_withdrawals`, `relay_deposit_detector`) that read the PERSISTED freeze row inside the write's own transaction, so a request, loop pass or recovery replay already past the entry check when `POST /api/v1/admin/freeze` lands commits nothing. The abort maps to a typed `EmergencyFrozenError` (503 `EMERGENCY_FROZEN`); claims and queue entries are left as they were, so the work resumes once after unfreeze. The serial batch-withdrawal path claims each row immediately before its own send, so a freeze during one send stops every later one; a withdrawal refused by the freeze reopens its idempotency key. Unfrozen behavior is unchanged. Harness: `freeze-money-chokepoint.test.ts` (eight doors, RED without the guards).

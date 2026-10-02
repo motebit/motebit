@@ -346,6 +346,11 @@ export function registerBudgetRoutes(deps: BudgetDeps): void {
       });
     }
 
+    // This request claimed the key. If the emergency freeze refuses its money
+    // write, the error boundary reopens the key so the same-key retry after
+    // unfreeze withdraws once (every other failure keeps today's behavior).
+    c.set("idempotencyClaimOnFreeze" as never, { key: idempotencyKeyHeader, motebitId } as never);
+
     const body = await c.req.json<{
       amount: number;
       destination?: string;
