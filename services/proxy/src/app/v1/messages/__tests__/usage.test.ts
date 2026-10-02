@@ -165,6 +165,7 @@ describe("extractUsage — google/groq (not cache-optimized)", () => {
       inputReported: true,
       outputReported: true,
       started: true,
+      openAiShaped: { prompt: 400, completion: 30, total: null, cached: 0 },
     });
 
     const q = fresh();
@@ -220,6 +221,49 @@ describe("extractUsage — google thinking (OpenAI-compat omits it from completi
     const u = fresh();
     extractUsage("google", sse({ usage: { prompt_tokens: 512, completion_tokens: 56 } }), u);
     expect(u.output).toBe(56);
+  });
+
+  it("usage is monotone across chunks: a later chunk without total_tokens never lowers output", () => {
+    // Reviewer's case: an earlier chunk reports total=100 (output 90 incl.
+    // thinking); a later chunk omits total_tokens. Output stays 90, not 50.
+    const u = fresh();
+    extractUsage(
+      "google",
+      sse({ usage: { prompt_tokens: 10, completion_tokens: 50, total_tokens: 100 } }),
+      u,
+    );
+    extractUsage("google", sse({ usage: { prompt_tokens: 10, completion_tokens: 50 } }), u);
+    expect(u.output).toBe(90);
+    expect(u.input).toBe(10);
+  });
+
+  it("every field takes the max seen: a later smaller report never lowers the bill", () => {
+    const u = fresh();
+    extractUsage(
+      "google",
+      sse({ usage: { prompt_tokens: 40, completion_tokens: 70, total_tokens: 150 } }),
+      u,
+    );
+    extractUsage(
+      "google",
+      sse({ usage: { prompt_tokens: 30, completion_tokens: 20, total_tokens: 60 } }),
+      u,
+    );
+    expect(u.input).toBe(40);
+    // max(completion 70, max total 150 - max prompt 40 = 110)
+    expect(u.output).toBe(110);
+
+    const o = fresh();
+    extractUsage("openai", sse({ usage: { prompt_tokens: 500, completion_tokens: 80 } }), o);
+    extractUsage("openai", sse({ usage: { prompt_tokens: 300, completion_tokens: 20 } }), o);
+    expect(o.input).toBe(500);
+    expect(o.output).toBe(80);
+
+    const q = fresh();
+    extractUsage("groq", sse({ usage: { prompt_tokens: 400, completion_tokens: 30 } }), q);
+    extractUsage("groq", sse({ usage: { prompt_tokens: 100, completion_tokens: 5 } }), q);
+    expect(q.input).toBe(400);
+    expect(q.output).toBe(30);
   });
 
   it("groq is unaffected: total_tokens never inflates output", () => {

@@ -29,6 +29,10 @@
  *     `total_tokens - prompt_tokens` when `total_tokens` is present — never less
  *     than `completion_tokens`.
  *   - Groq: not cache-optimized here — plain input/output only.
+ *   - All OpenAI-shaped hosts: usage is cumulative, so every raw field takes
+ *     the max seen across chunks and the priced fields derive from those
+ *     maxima — a later chunk reporting less, or omitting `total_tokens`,
+ *     never lowers the bill.
  *
  * Besides usage, the accumulator records whether the provider demonstrably
  * STARTED generating (`started`) and any provider error event it streamed
@@ -60,6 +64,16 @@ export interface UsageAccumulator {
    * OpenAI-shaped chunk carrying `choices` entries; any usage report.
    */
   started?: boolean;
+  /**
+   * Raw OpenAI-shaped usage maxima (openai / google / groq), from which the
+   * priced fields derive — usage is cumulative, so each field is the max seen.
+   */
+  openAiShaped?: {
+    prompt: number | null;
+    completion: number | null;
+    total: number | null;
+    cached: number;
+  };
   /** The type of an error event the provider streamed (e.g. `overloaded_error`), if any. */
   providerErrorType?: string;
 }
@@ -126,45 +140,45 @@ export function extractUsage(provider: InferenceHost, line: string, usage: Usage
     if (evt.error != null) usage.providerErrorType ??= errorTypeOf(evt.error);
     if (evt.usage != null) usage.started = true;
 
-    if (provider === "openai") {
-      // OpenAI: prompt_tokens INCLUDES cached. Split so (input + cacheRead) stays
-      // additive — billing the cached portion at OpenAI's discounted rate in
-      // calculateCostMicro rather than full price. No cache-creation concept.
-      const u = evt.usage as
-        | {
-            prompt_tokens?: number;
-            completion_tokens?: number;
-            prompt_tokens_details?: { cached_tokens?: number };
-          }
-        | undefined;
-      if (u?.prompt_tokens != null) {
-        const cached = u.prompt_tokens_details?.cached_tokens ?? 0;
-        usage.input = u.prompt_tokens - cached;
-        usage.cacheRead = cached;
-        usage.inputReported = true;
-      }
-      if (u?.completion_tokens != null) {
-        usage.output = u.completion_tokens;
-        usage.outputReported = true;
-      }
-      return;
-    }
-
-    // Google / Groq — not cache-optimized here; plain input/output.
     const u = evt.usage as
-      { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number } | undefined;
-    if (u?.prompt_tokens != null) {
-      usage.input = u.prompt_tokens;
+      | {
+          prompt_tokens?: unknown;
+          completion_tokens?: unknown;
+          total_tokens?: unknown;
+          prompt_tokens_details?: { cached_tokens?: unknown };
+        }
+      | undefined;
+    if (u == null || typeof u !== "object") return;
+    // Usage is cumulative: every field takes the max seen across chunks, so a
+    // later chunk reporting less (or omitting a field) never lowers the bill.
+    const m = (usage.openAiShaped ??= { prompt: null, completion: null, total: null, cached: 0 });
+    const num = (n: unknown): number | null =>
+      typeof n === "number" && Number.isFinite(n) && n >= 0 ? n : null;
+    const most = (a: number | null, b: number | null) => (b == null ? a : Math.max(a ?? 0, b));
+    m.prompt = most(m.prompt, num(u.prompt_tokens));
+    m.completion = most(m.completion, num(u.completion_tokens));
+    m.total = most(m.total, num(u.total_tokens));
+    m.cached = Math.max(m.cached, num(u.prompt_tokens_details?.cached_tokens) ?? 0);
+
+    if (m.prompt != null) {
+      if (provider === "openai") {
+        // OpenAI: prompt_tokens INCLUDES cached. Split so (input + cacheRead)
+        // stays additive — the cached portion at OpenAI's discounted rate.
+        // No cache-creation concept.
+        const cached = Math.min(m.cached, m.prompt);
+        usage.input = m.prompt - cached;
+        usage.cacheRead = cached;
+      } else {
+        // Google / Groq — not cache-optimized here; plain input.
+        usage.input = m.prompt;
+      }
       usage.inputReported = true;
     }
-    const completion = u?.completion_tokens;
     // Gemini: thinking is billed as output but reported only in total_tokens.
     const thinkingInclusive =
-      provider === "google" && u?.total_tokens != null && u.prompt_tokens != null
-        ? u.total_tokens - u.prompt_tokens
-        : null;
-    if (completion != null || thinkingInclusive != null) {
-      usage.output = Math.max(completion ?? 0, thinkingInclusive ?? 0);
+      provider === "google" && m.total != null && m.prompt != null ? m.total - m.prompt : null;
+    if (m.completion != null || thinkingInclusive != null) {
+      usage.output = Math.max(m.completion ?? 0, thinkingInclusive ?? 0);
       usage.outputReported = true;
     }
   } catch {
