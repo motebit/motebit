@@ -712,9 +712,10 @@
             </p>
             <p class="terminal-line">
               Same check at the terminal: <code>motebit verify &lt;receipt&gt;</code><br />
-              The signature is checked in this tab. For pasted receipts, identity and revocation
-              checks may query public proof endpoints (the relay's transparency log and Solana).
-              Shared links keep the receipt in the URL fragment, which is never sent to a server.
+              The signature is checked in this tab. For pasted receipts and shared links, identity
+              and revocation checks query public proof endpoints: the relay, with the receipt's
+              motebit_id, and Solana, with its public key. The receipt itself is never uploaded —
+              a shared link keeps it in the URL fragment, which the browser does not send.
             </p>
           </div>
 

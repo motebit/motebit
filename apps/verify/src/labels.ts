@@ -75,7 +75,7 @@ export function resultLabels(v: ReceiptDocumentVerification): ResultLabels {
       grade: "PINNED",
       headline: "Verified — identity pinned",
       detail:
-        "The signature is valid and the signing key is time-valid in the identity chain you supplied. That binds the key to this motebit's chain — it does not yet prove the chain is the operator's current, non-equivocable record (the anchored rung).",
+        "The signature is valid and the signing key is time-valid in the identity chain checked against — as served by the relay or supplied by you. That binds the key to this motebit's chain — it does not yet prove the chain is the operator's current, non-equivocable record (the anchored rung).",
     };
   }
   // integrity-only: the honest default. Signature is valid, but it was checked

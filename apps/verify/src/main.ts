@@ -44,7 +44,7 @@ const SOURCE_TEXT: Record<Source, string> = {
   sample: "sample — signed by a demo key",
   "tampered-sample": "sample, tampered — one byte of result flipped",
   minted: "minted here — demo key, generated in your browser, never sent anywhere",
-  link: "from a shared link — read from the URL fragment, never sent to a server",
+  link: "from a shared link — the receipt stays in the URL fragment and is never uploaded",
   pasted: "your receipt",
 };
 let source: Source = "sample";
