@@ -665,6 +665,15 @@ export interface SyncRelayConfig {
    */
   depositDetectorRpc?: import("@motebit/evm-rpc").EvmRpcAdapter | null;
   /**
+   * The transport to peer relays (`PeerFetch` in `federation.ts`): discover
+   * fan-out and re-forward, task forward, result delivery, settlement forward
+   * and its retries, heartbeats. Omitted: the
+   * global `fetch`. Tests inject an in-process peer network
+   * (`TEST_RELAY_NETWORK`) so a peer registered at a fake endpoint is never
+   * dialed.
+   */
+  federationPeerFetch?: import("./federation.js").PeerFetch;
+  /**
    * Cadence (ms) of the supervised re-read of the Solana RPC's genesis hash
    * while the network is unresolved (#954, `solana-network.ts`). Default
    * `SOLANA_NETWORK_CHECK_INTERVAL_MS` (30s).
@@ -1039,7 +1048,13 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
   );
 
   // --- Task routing & federation query cache ---
-  const taskRouter = createTaskRouter({ db: moteDb.db, relayIdentity, federationConfig });
+  const peerFetch = config.federationPeerFetch;
+  const taskRouter = createTaskRouter({
+    db: moteDb.db,
+    relayIdentity,
+    federationConfig,
+    ...(peerFetch !== undefined ? { peerFetch } : {}),
+  });
   const { cache: federationQueryCache, pruneInterval: federationQueryPruneInterval } =
     createFederationQueryCache(loopSupervisor);
 
@@ -1427,6 +1442,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
 
   // --- Federation routes ---
   const federationCallbacks = createFederationCallbacks({
+    ...(peerFetch !== undefined ? { peerFetch } : {}),
     moteDb,
     identityManager,
     relayIdentity,
@@ -1443,6 +1459,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     db: moteDb.db,
     app,
     outboundPolicy,
+    ...(peerFetch !== undefined ? { peerFetch } : {}),
     relayIdentity,
     federationConfig,
     federationQueryCache,
@@ -1509,6 +1526,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     db: moteDb.db,
     app,
     relayIdentity,
+    ...(peerFetch !== undefined ? { fetchImpl: peerFetch } : {}),
   });
   // §6.2 deferred orchestrator worker — picks up `in_progress`
   // orchestration rows whose next_attempt_at <= now, drives retries
@@ -1519,6 +1537,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
   const orchestrationWorkerInterval = startDeferredOrchestrationWorker({
     db: moteDb.db,
     relayIdentity,
+    ...(peerFetch !== undefined ? { fetchImpl: peerFetch } : {}),
     supervisor: loopSupervisor,
   });
   logger.info("dispute_orchestration_worker.started");
@@ -2006,6 +2025,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
   registerAgentRoutes({
     app,
     outboundPolicy,
+    ...(peerFetch !== undefined ? { peerFetch } : {}),
     moteDb,
     identityManager,
     eventStore,
@@ -2075,6 +2095,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     60_000,
     () => getEmergencyFreeze(),
     loopSupervisor,
+    peerFetch,
   );
 
   // Phase 4b-3 — periodic revocation-events horizon advance. Replaces
@@ -2084,7 +2105,11 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
   // override via `federationConfig.revocationHorizonIntervalMs`.
   const revocationHorizonInterval = startRevocationHorizonLoop(
     moteDb.db,
-    { relayIdentity, witnessSolicitationTimeoutMs: federationConfig?.witnessSolicitationTimeoutMs },
+    {
+      relayIdentity,
+      witnessSolicitationTimeoutMs: federationConfig?.witnessSolicitationTimeoutMs,
+      ...(peerFetch !== undefined ? { fetchImpl: peerFetch } : {}),
+    },
     federationConfig?.revocationHorizonIntervalMs,
     () => getEmergencyFreeze(),
     loopSupervisor,
@@ -2103,6 +2128,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     () => getEmergencyFreeze(),
     undefined, // retryPolicy — use the default
     loopSupervisor,
+    peerFetch,
   );
 
   // --- Unified chain anchor submitter (Solana Memo by default) ---
@@ -2483,6 +2509,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
   const taskRoutes = await registerTaskRoutes({
     app,
     outboundPolicy,
+    ...(peerFetch !== undefined ? { peerFetch } : {}),
     moteDb,
     identityManager,
     eventStore,
@@ -2541,7 +2568,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
         relayIdentity,
         (signer) => workerKeyFor(moteDb.db, signer),
         now,
-        ctl,
+        peerFetch !== undefined ? { ...ctl, peerFetch } : ctl,
       ),
     isFrozen: () => getEmergencyFreeze(),
   };

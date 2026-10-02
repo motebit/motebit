@@ -87,6 +87,22 @@ export interface RelayIdentity {
   did: string;
 }
 
+/**
+ * The relay's transport to PEER RELAYS — every call one relay makes to
+ * another (`/federation/v1/discover` fan-out and re-forward, `/task/forward`,
+ * `/task/result` delivery, `/settlement/forward` and its retries,
+ * `/peer/heartbeat`; and, through their own `fetchImpl` seams, the dispute
+ * vote fan-out and horizon witness solicitation). Injected through
+ * `SyncRelayConfig.federationPeerFetch`; omitted, it is the global `fetch`,
+ * resolved at call time. Tests inject an in-process peer network
+ * (`TEST_RELAY_NETWORK`), so a relay test whose peer is a registry row at a
+ * fake endpoint never dials it.
+ */
+export type PeerFetch = typeof fetch;
+
+/** The production peer transport: the global `fetch`, looked up per call. */
+export const defaultPeerFetch: PeerFetch = (input, init) => globalThis.fetch(input, init);
+
 export interface FederationConfig {
   displayName?: string;
   endpointUrl?: string;
@@ -855,6 +871,7 @@ const HEARTBEAT_REMOVE_THRESHOLD = 5;
 export async function sendHeartbeats(
   db: DatabaseDriver,
   relayIdentity: RelayIdentity,
+  peerFetch: PeerFetch = defaultPeerFetch,
 ): Promise<void> {
   const peers = db
     .prepare(
@@ -895,7 +912,7 @@ export async function sendHeartbeats(
         )?.last_heartbeat_at ?? 0;
       const revocations = getRevocationEventsSince(db, lastHb);
 
-      const resp = await fetch(`${peer.endpoint_url}/federation/v1/peer/heartbeat`, {
+      const resp = await peerFetch(`${peer.endpoint_url}/federation/v1/peer/heartbeat`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -980,6 +997,7 @@ export async function processSettlementRetries(
     payload_json: string;
   }) => void,
   retryPolicy: RetryPolicy = DEFAULT_RETRY_POLICY,
+  peerFetch: PeerFetch = defaultPeerFetch,
 ): Promise<void> {
   const now = Date.now();
   const pending = db
@@ -1036,7 +1054,7 @@ export async function processSettlementRetries(
       const sigBytes = new TextEncoder().encode(canonicalJson(settlementBody));
       const sig = await sign(sigBytes, relayIdentity.privateKey);
 
-      const resp = await fetch(`${peerInfo.endpoint_url}/federation/v1/settlement/forward`, {
+      const resp = await peerFetch(`${peerInfo.endpoint_url}/federation/v1/settlement/forward`, {
         method: "POST",
         headers: { "Content-Type": "application/json", "X-Correlation-ID": retry.task_id },
         body: JSON.stringify({ ...settlementBody, signature: bytesToHex(sig) }),
@@ -1160,9 +1178,14 @@ export async function attemptResultDelivery(
   /** The worker's key the origin verifies the receipt with (`verificationKeyFor`). */
   agentKeyFor: (motebitId: string) => string | null,
   retryPolicy: RetryPolicy = DEFAULT_RETRY_POLICY,
-  /** The relay's shutdown: aborts the fetch; the delivery stays pending, the attempt uncounted. */
-  signal?: AbortSignal,
+  transport: {
+    /** The relay's shutdown: aborts the fetch; the delivery stays pending, the attempt uncounted. */
+    signal?: AbortSignal;
+    /** The peer transport (`PeerFetch`); omitted, the global `fetch`. */
+    peerFetch?: PeerFetch;
+  } = {},
 ): Promise<"pending" | "delivered" | "refused" | "exhausted" | "none"> {
+  const { signal, peerFetch = defaultPeerFetch } = transport;
   const row = db
     .prepare("SELECT * FROM relay_result_deliveries WHERE task_id = ? AND status = 'pending'")
     .get(taskId) as
@@ -1202,7 +1225,7 @@ export async function attemptResultDelivery(
       new TextEncoder().encode(canonicalJson(resultBody)),
       relayIdentity.privateKey,
     );
-    const resp = await fetch(`${peer.endpoint_url}/federation/v1/task/result`, {
+    const resp = await peerFetch(`${peer.endpoint_url}/federation/v1/task/result`, {
       method: "POST",
       headers: { "Content-Type": "application/json", "X-Correlation-ID": taskId },
       body: JSON.stringify({ ...resultBody, signature: bytesToHex(sig) }),
@@ -1248,7 +1271,7 @@ export async function processResultDeliveries(
   agentKeyFor: (motebitId: string) => string | null,
   now: number = Date.now(),
   /** Checked before each delivery (the freeze, the shutdown); `signal` aborts the one in flight. */
-  ctl: { signal?: AbortSignal; shouldStop?: () => boolean } = {},
+  ctl: { signal?: AbortSignal; shouldStop?: () => boolean; peerFetch?: PeerFetch } = {},
 ): Promise<number> {
   const due = db
     .prepare(
@@ -1264,7 +1287,10 @@ export async function processResultDeliveries(
       d.task_id,
       agentKeyFor,
       DEFAULT_RETRY_POLICY,
-      ctl.signal,
+      {
+        ...(ctl.signal !== undefined ? { signal: ctl.signal } : {}),
+        ...(ctl.peerFetch !== undefined ? { peerFetch: ctl.peerFetch } : {}),
+      },
     );
     if (status === "delivered") delivered++;
   }
@@ -1289,12 +1315,14 @@ export function startSettlementRetryLoop(
   retryPolicy: RetryPolicy = DEFAULT_RETRY_POLICY,
   /** Optional loop supervisor for liveness/error observability. */
   supervisor?: LoopSupervisor,
+  /** The peer transport (`PeerFetch`); omitted, the global `fetch`. */
+  peerFetch?: PeerFetch,
 ): ReturnType<typeof setInterval> {
   return superviseInterval(
     supervisor,
     "settlement-retry",
     intervalMs,
-    () => processSettlementRetries(db, relayIdentity, onRetryExhausted, retryPolicy),
+    () => processSettlementRetries(db, relayIdentity, onRetryExhausted, retryPolicy, peerFetch),
     { isFrozen },
   );
 }
@@ -1308,12 +1336,14 @@ export function startHeartbeatLoop(
   isFrozen?: () => boolean,
   /** Optional loop supervisor for liveness/error observability. */
   supervisor?: LoopSupervisor,
+  /** The peer transport (`PeerFetch`); omitted, the global `fetch`. */
+  peerFetch?: PeerFetch,
 ): ReturnType<typeof setInterval> {
   return superviseInterval(
     supervisor,
     "federation-heartbeat",
     intervalMs,
-    () => sendHeartbeats(db, relayIdentity),
+    () => sendHeartbeats(db, relayIdentity, peerFetch),
     { ...(isFrozen ? { isFrozen } : {}) },
   );
 }
@@ -1450,6 +1480,8 @@ export interface FederationDeps {
   outboundPolicy?: OutboundUrlOptions;
   federationConfig?: FederationConfig;
   federationQueryCache: Map<string, number>;
+  /** The peer transport (`PeerFetch`); omitted, the global `fetch`. */
+  peerFetch?: PeerFetch;
 
   /** Optional: returns circuit breaker state for a peer endpoint (observability). */
   getCircuitBreakerState?: (peerEndpoint: string) => {
@@ -1518,6 +1550,7 @@ export interface FederationDeps {
 /** Register all 11 federation endpoints on the Hono app. */
 export function registerFederationRoutes(deps: FederationDeps): void {
   const { db, app, relayIdentity, federationConfig, federationQueryCache } = deps;
+  const peerFetch = deps.peerFetch ?? defaultPeerFetch;
 
   // Per-peer rate limiter: 30 requests per minute per relay_id.
   // Unlike the per-IP limiter in index.ts, this keys on the peer's relay_id
@@ -2428,7 +2461,7 @@ export function registerFederationRoutes(deps: FederationDeps): void {
             },
             relayIdentity,
           );
-          const resp = await fetch(`${peer.endpoint_url}/federation/v1/discover`, {
+          const resp = await peerFetch(`${peer.endpoint_url}/federation/v1/discover`, {
             method: "POST",
             headers: {
               "Content-Type": "application/json",

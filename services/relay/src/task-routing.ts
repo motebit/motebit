@@ -40,8 +40,8 @@ import {
   REFERENCE_MCP_CALL_TOKEN_TTL_MS,
 } from "@motebit/protocol";
 import type { DatabaseDriver } from "@motebit/persistence";
-import type { RelayIdentity, FederationConfig } from "./federation.js";
-import { signDiscoverBody } from "./federation.js";
+import type { RelayIdentity, FederationConfig, PeerFetch } from "./federation.js";
+import { defaultPeerFetch, signDiscoverBody } from "./federation.js";
 import { CircuitBreaker } from "@motebit/circuit-breaker";
 import type { CircuitBreakerConfig, CircuitBreakerState } from "@motebit/circuit-breaker";
 import { createLogger } from "./logger.js";
@@ -110,6 +110,8 @@ export interface TaskRouterDeps {
   relayIdentity: RelayIdentity;
   federationConfig?: FederationConfig;
   circuitBreakerConfig?: Partial<CircuitBreakerConfig>;
+  /** The peer transport (`PeerFetch`); omitted, the global `fetch`. */
+  peerFetch?: PeerFetch;
 }
 
 export interface TaskRouter {
@@ -207,6 +209,7 @@ export interface TaskRouter {
 
 export function createTaskRouter(deps: TaskRouterDeps): TaskRouter {
   const { db, relayIdentity } = deps;
+  const peerFetch = deps.peerFetch ?? defaultPeerFetch;
   const circuitBreaker = new CircuitBreaker({
     config: deps.circuitBreakerConfig,
     logger: circuitBreakerLogger,
@@ -584,7 +587,7 @@ export function createTaskRouter(deps: TaskRouterDeps): TaskRouter {
           },
           relayIdentity,
         );
-        const resp = await fetch(`${peer.endpoint_url}/federation/v1/discover`, {
+        const resp = await peerFetch(`${peer.endpoint_url}/federation/v1/discover`, {
           method: "POST",
           headers: { "Content-Type": "application/json", "X-Correlation-ID": queryId },
           body: JSON.stringify(discoverBody),

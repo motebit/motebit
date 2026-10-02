@@ -45,7 +45,8 @@
  *
  * Repair: inject the in-process fakes. `createTestRelay()` does it for you;
  * a direct `createSyncRelay({...})` spreads `...TEST_RELAY_NETWORK` from
- * `test-helpers.ts` (the fake facilitator + the deposit detector off).
+ * `test-helpers.ts` (the fake facilitator, the deposit detector off, and the
+ * in-process peer-relay network `inProcessPeerFetch`).
  */
 import { afterAll, afterEach } from "vitest";
 import { installNetworkGuard } from "./network-guard-core.mjs";
@@ -53,7 +54,7 @@ import { installNetworkGuard } from "./network-guard-core.mjs";
 const REPAIR =
   "repair: a relay test never reaches the network — use createTestRelay(), or spread " +
   "`...TEST_RELAY_NETWORK` (services/relay/src/__tests__/test-helpers.ts: in-process x402 " +
-  "facilitator, deposit detector off) into a direct createSyncRelay({...}); a service that " +
+  "facilitator, deposit detector off, in-process peer-relay network) into a direct createSyncRelay({...}); a service that " +
   "needs an RPC gets a loopback fake (e.g. startFakeSolanaRpc). Guard: " +
   "services/relay/src/__tests__/network-guard.setup.ts";
 

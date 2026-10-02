@@ -71,7 +71,8 @@ import {
 import { attemptPushWake } from "./push-adapter.js";
 import { getRelayKeypair } from "./credentials.js";
 import type { RelayIdentity } from "./federation.js";
-import { attemptResultDelivery, enqueueResultDelivery } from "./federation.js";
+import { attemptResultDelivery, defaultPeerFetch, enqueueResultDelivery } from "./federation.js";
+import type { PeerFetch } from "./federation.js";
 import {
   forwardTaskViaMcp,
   evaluateSettlementEligibility,
@@ -303,6 +304,8 @@ export interface TasksDeps {
   apiToken?: string;
   /** Outbound URL law applied to every MCP forward (`buildOutboundPolicy`). */
   outboundPolicy?: OutboundUrlOptions;
+  /** The peer transport (`PeerFetch`); omitted, the global `fetch`. */
+  peerFetch?: PeerFetch;
   enableDeviceAuth: boolean;
   maxTasksPerSubmitter: number;
   x402Config: {
@@ -819,6 +822,8 @@ export async function handleReceiptIngestion(
     maxSettlementDepth?: number;
     /** Closes the sockets the heal's moved registry key no longer admits (#776). */
     reconcileKeyConnections: ReconcileKeyConnections;
+    /** The peer transport (`PeerFetch`) the federation result is delivered by. */
+    peerFetch?: PeerFetch;
   },
 ): Promise<
   | { verified: true; credential_id: string | null; already_settled?: boolean }
@@ -834,6 +839,7 @@ export async function handleReceiptIngestion(
     issueCredentials,
     platformFeeRate,
   } = deps;
+  const peerFetch = deps.peerFetch ?? defaultPeerFetch;
 
   // --- The answer and its settlement (#890 r8/r9): ONE door routine ---
   // `admitReceipt` (task-answer.ts) decides the answer at the chokepoint —
@@ -2078,8 +2084,13 @@ export async function handleReceiptIngestion(
       // motebit_id, the key→id binding offline.
       try {
         enqueueResultDelivery(moteDb.db, taskId, entry.origin_relay);
-        await attemptResultDelivery(moteDb.db, relayIdentity, taskId, (signer) =>
-          workerKeyFor(moteDb.db, signer),
+        await attemptResultDelivery(
+          moteDb.db,
+          relayIdentity,
+          taskId,
+          (signer) => workerKeyFor(moteDb.db, signer),
+          undefined,
+          { peerFetch },
         );
       } catch (err) {
         logger.warn("federation.result_delivery_failed", {
@@ -2176,6 +2187,7 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<TaskRoutesHan
     pushAdapter,
     p2pPaymentChain,
   } = deps;
+  const peerFetch = deps.peerFetch ?? defaultPeerFetch;
 
   // Platform fee rate lives in this function's closure — every handler
   // registered below sees the same rate for its lifetime. No module-level
@@ -2192,6 +2204,7 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<TaskRoutesHan
     issueCredentials,
     platformFeeRate,
     reconcileKeyConnections: deps.reconcileKeyConnections,
+    peerFetch,
   };
 
   const replayLocalAnswer = async (
@@ -4226,7 +4239,7 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<TaskRoutesHan
       const forwardSig = await sign(forwardBytes, relayIdentity.privateKey);
       recordTaskRoute(moteDb.db, taskId, targetId, peerRelayId);
       try {
-        const resp = await fetch(`${peerEndpoint}/federation/v1/task/forward`, {
+        const resp = await peerFetch(`${peerEndpoint}/federation/v1/task/forward`, {
           method: "POST",
           headers: { "Content-Type": "application/json", "X-Correlation-ID": taskId },
           body: JSON.stringify({ ...forwardBody, signature: bytesToHex(forwardSig) }),
@@ -4556,7 +4569,7 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<TaskRoutesHan
                   const forwardSig = await sign(forwardBytes, relayIdentity.privateKey);
                   recordTaskRoute(moteDb.db, taskId, selId, plannedPeer);
 
-                  const resp = await fetch(`${peerEndpoint}/federation/v1/task/forward`, {
+                  const resp = await peerFetch(`${peerEndpoint}/federation/v1/task/forward`, {
                     method: "POST",
                     headers: { "Content-Type": "application/json", "X-Correlation-ID": taskId },
                     body: JSON.stringify({
