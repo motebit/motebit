@@ -380,6 +380,10 @@ export async function mintAudienceToken(
   return { token, payload };
 }
 
+function isNonEmptyString(v: unknown): v is string {
+  return typeof v === "string" && v.length > 0;
+}
+
 /**
  * Verify a signed token. Returns the parsed payload if valid and not
  * expired, null otherwise.
@@ -389,6 +393,9 @@ export async function mintAudienceToken(
  *   - missing `suite` field,
  *   - `suite` value other than `SIGNED_TOKEN_SUITE`,
  *   - signature mismatch,
+ *   - missing or non-string `mid` / `did` (identity binding),
+ *   - missing or non-integer `iat` / `exp` (a missing `exp` is never
+ *     "no expiry" — spec/auth-token-v1.md §3),
  *   - expired token,
  *   - missing `jti` (replay defense),
  *   - missing `aud` (cross-endpoint replay defense).
@@ -427,9 +434,14 @@ export async function verifySignedToken(
   const valid = await verifyBySuite(payload.suite, payloadBytes, signature, publicKey);
   if (!valid) return null;
 
+  // spec/auth-token-v1.md §3: the six core claims are required. Check type,
+  // not truthiness — `undefined <= now` is false, so a missing `exp` would
+  // otherwise verify as a token that never expires.
+  if (!isNonEmptyString(payload.mid) || !isNonEmptyString(payload.did)) return null;
+  if (!Number.isSafeInteger(payload.iat) || !Number.isSafeInteger(payload.exp)) return null;
   if (payload.exp <= Date.now()) return null;
-  if (!payload.jti) return null;
-  if (!payload.aud) return null;
+  if (!isNonEmptyString(payload.jti)) return null;
+  if (!isNonEmptyString(payload.aud)) return null;
 
   return payload;
 }

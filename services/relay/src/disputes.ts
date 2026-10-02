@@ -38,10 +38,7 @@ import {
 } from "@motebit/wire-schemas";
 import type { DatabaseDriver } from "@motebit/persistence";
 import type { RelayIdentity } from "./federation.js";
-import {
-  creditAccount as creditAccountCanonical,
-  debitAccount as debitCanonical,
-} from "./accounts.js";
+import { AllocationMoneyRefused, moveAllocationMoney } from "./allocation-escrow.js";
 import { createLogger } from "./logger.js";
 import { superviseInterval, type LoopSupervisor } from "./loop-supervisor.js";
 import {
@@ -55,6 +52,14 @@ import {
   type OrchestrationRow,
 } from "./dispute-orchestration.js";
 import { verificationKeyFor } from "./identity-keys.js";
+import {
+  DISPUTE_FUND_ACTIONS_DDL,
+  FundActionRefused,
+  ONE_LIVE_DISPUTE_PER_TASK_INDEX,
+  allocationLedgerPosition,
+  ensureFundRefusalColumn,
+  type FundRefusalReason,
+} from "./dispute-fund-ledger.js";
 
 const logger = createLogger({ service: "relay", module: "disputes" });
 
@@ -116,13 +121,18 @@ export function createDisputeTables(db: DatabaseDriver): void {
       appealed_at       INTEGER,
       final_at          INTEGER,
       expired_at        INTEGER,
-      created_at        INTEGER NOT NULL DEFAULT (unixepoch() * 1000)
+      created_at        INTEGER NOT NULL DEFAULT (unixepoch() * 1000),
+      fund_refusal      TEXT
     );
     CREATE INDEX IF NOT EXISTS idx_disputes_state
       ON relay_disputes(state) WHERE state NOT IN ('final', 'expired');
     CREATE INDEX IF NOT EXISTS idx_disputes_filed_by
       ON relay_disputes(filed_by);
   `);
+  // Why a verdict's fund action moved nothing (dispute-fund-ledger.ts
+  // FundRefusalReason) — the operator's marker; a table created before the
+  // column existed gains it here.
+  ensureFundRefusalColumn(db);
 
   db.exec(`
     CREATE TABLE IF NOT EXISTS relay_dispute_evidence (
@@ -159,6 +169,33 @@ export function createDisputeTables(db: DatabaseDriver): void {
       FOREIGN KEY (dispute_id) REFERENCES relay_disputes(dispute_id)
     );
   `);
+
+  // Write-once record of the ONE fund action that resolved an allocation
+  // (dispute-v1 §7.3: resolution redistributes, never mints). Claimed by
+  // `executeFundAction` inside the resolving transaction before any ledger
+  // row is written; a second claim for the same allocation, task or dispute
+  // inserts nothing and so moves nothing. Never updated, never deleted —
+  // the audit row of where the escrow went.
+  db.exec(DISPUTE_FUND_ACTIONS_DDL);
+
+  // At most one non-expired dispute per task (and so per allocation —
+  // relay_allocations.task_id is UNIQUE and filing binds task_id to the
+  // allocation). A live dispute blocks a second one; a resolved or final
+  // one means the allocation is adjudicated. A row flagged `task_mismatch`
+  // (another allocation's legacy dispute naming this task) does not count:
+  // it never adjudicated this task. Filing also guards its insert
+  // in-transaction, so the rule holds even where this index cannot be built
+  // over rows an earlier relay admitted — which is logged, never fatal.
+  db.exec("DROP INDEX IF EXISTS idx_disputes_one_per_task");
+  try {
+    db.exec(ONE_LIVE_DISPUTE_PER_TASK_INDEX);
+  } catch (err) {
+    logger.error("dispute.one_per_task_index.unbuildable", {
+      error: err instanceof Error ? err.message : String(err),
+      reason:
+        "existing rows hold more than one non-expired dispute for a task; the filing guard still refuses new ones",
+    });
+  }
 }
 
 // === Helpers ===
@@ -200,7 +237,14 @@ function getDispute(db: DatabaseDriver, disputeId: string) {
 function tryFinalizeIfWindowExpired(
   db: DatabaseDriver,
   dispute: Record<string, unknown>,
+  opts: { retryRound2: boolean } = { retryRound2: true },
 ): Record<string, unknown> {
+  // A refused round-2 verdict is retried by the dispute READ (GET); the
+  // /resolve and /appeal paths reject an `appealed` dispute anyway, and a
+  // rejected request must write nothing.
+  if (dispute.state === "appealed") {
+    return opts.retryRound2 ? tryFinalizePersistedRound2(db, dispute) : dispute;
+  }
   if (dispute.state !== "resolved") return dispute;
   if (dispute.appealed_at != null) return dispute;
   const resolvedAt = dispute.resolved_at as number | null | undefined;
@@ -260,8 +304,100 @@ function tryFinalizeIfWindowExpired(
       disputeId: dispute.dispute_id,
       error: err instanceof Error ? err.message : String(err),
     });
+    // A refused fund action leaves the verdict `resolved` (nothing moved,
+    // nothing claimed) and retried on every read; the marker is what the
+    // operator sees meanwhile.
+    if (err instanceof FundActionRefused) {
+      recordFundRefusal(db, dispute.dispute_id as string, err.reason);
+      return { ...dispute, fund_refusal: err.reason };
+    }
     return dispute;
   }
+}
+
+/**
+ * Retry of a round-2 verdict whose fund action was refused (P1). The appeal
+ * handler persists the signed round-2 resolution when its finalize rolls back
+ * (`clawback_insufficient`), leaving the dispute `appealed` and marked; every
+ * read retries the transition `appealed → final` with that verdict, in one
+ * transaction with its fund action. An `appealed` dispute with no round-2
+ * resolution is an appeal still in flight (or a single-relay appeal parked for
+ * the operator) — untouched.
+ */
+function tryFinalizePersistedRound2(
+  db: DatabaseDriver,
+  dispute: Record<string, unknown>,
+): Record<string, unknown> {
+  const round2 = db
+    .prepare(
+      "SELECT resolution, rationale, fund_action, split_ratio, adjudicator, resolved_at FROM relay_dispute_resolutions WHERE dispute_id = ? AND round = 2",
+    )
+    .get(dispute.dispute_id) as
+    | {
+        resolution: string;
+        rationale: string;
+        fund_action: DisputeFundAction;
+        split_ratio: number;
+        adjudicator: string;
+        resolved_at: number;
+      }
+    | undefined;
+  if (!round2) return dispute;
+  const finalAt = Date.now();
+  db.exec("BEGIN");
+  try {
+    const result = db
+      .prepare(
+        "UPDATE relay_disputes SET state = 'final', final_at = ?, resolution = ?, rationale = ?, fund_action = ?, split_ratio = ?, adjudicator = ?, resolved_at = ? WHERE dispute_id = ? AND state = 'appealed'",
+      )
+      .run(
+        finalAt,
+        round2.resolution,
+        round2.rationale,
+        round2.fund_action,
+        round2.split_ratio,
+        round2.adjudicator,
+        round2.resolved_at,
+        dispute.dispute_id,
+      );
+    if (result.changes === 0) {
+      db.exec("ROLLBACK");
+      return getDispute(db, dispute.dispute_id as string) ?? dispute;
+    }
+    executeFundAction(db, dispute, round2.fund_action, round2.split_ratio);
+    db.exec("COMMIT");
+    logger.info("dispute.finalized.round_2_retry", {
+      disputeId: dispute.dispute_id,
+      fundAction: round2.fund_action,
+    });
+    return getDispute(db, dispute.dispute_id as string) ?? dispute;
+  } catch (err) {
+    db.exec("ROLLBACK");
+    if (err instanceof FundActionRefused) {
+      recordFundRefusal(db, dispute.dispute_id as string, err.reason);
+      return { ...dispute, fund_refusal: err.reason };
+    }
+    logger.error("dispute.round_2_retry.failed", {
+      disputeId: dispute.dispute_id,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return dispute;
+  }
+}
+
+/**
+ * Operator-visible marker: why this dispute's verdict moved nothing (null
+ * clears it once the fund action executes).
+ */
+function recordFundRefusal(
+  db: DatabaseDriver,
+  disputeId: string,
+  reason: FundRefusalReason | null,
+): void {
+  db.prepare("UPDATE relay_disputes SET fund_refusal = ? WHERE dispute_id = ?").run(
+    reason,
+    disputeId,
+  );
 }
 
 // === Dispute Deps ===
@@ -1007,6 +1143,27 @@ export function startDeferredOrchestrationWorker(deps: {
 
 // === Route Registration ===
 
+/**
+ * The delegator of a relay-custody allocation, from money-path records only:
+ * the settlement row's `delegator_id` once settled, else the payer of the
+ * `allocation_hold` debit that funded the allocation (tasks.ts submission —
+ * reference_id = allocation_id). Null when neither exists; callers fail closed.
+ */
+function allocationDelegator(db: DatabaseDriver, allocationId: string): string | null {
+  const settled = db
+    .prepare("SELECT delegator_id FROM relay_settlements WHERE allocation_id = ?")
+    .get(allocationId) as { delegator_id: string | null } | undefined;
+  if (settled?.delegator_id) return settled.delegator_id;
+  const hold = db
+    .prepare(
+      "SELECT DISTINCT motebit_id FROM relay_transactions WHERE reference_id = ? AND type = 'allocation_hold' LIMIT 2",
+    )
+    .all(allocationId) as Array<{ motebit_id: string }>;
+  // Exactly one payer funds an allocation; anything else is not a party set
+  // the relay can vouch for.
+  return hold.length === 1 ? hold[0]!.motebit_id : null;
+}
+
 export function registerDisputeRoutes(deps: DisputeDeps): void {
   const { db, app, relayIdentity } = deps;
   // Defer-bind the default so vi.stubGlobal in tests is observed at
@@ -1089,28 +1246,94 @@ export function registerDisputeRoutes(deps: DisputeDeps): void {
     // Create a trust-layer dispute (amount_locked = 0, no fund movement).
     let isP2pDispute = false;
     let workerId: string;
+    let delegatorId: string | null;
     if (allocation) {
+      // §4.2: the body's task_id must be the allocation's task. Fund action
+      // and the §7.5 hold key on task_id, so a mismatch would lock one
+      // allocation while pointing resolution at another task's settlement.
+      if (req.task_id !== allocation.task_id) {
+        throw new HTTPException(400, {
+          message: "DisputeRequest.task_id does not match the allocation's task",
+        });
+      }
       workerId = allocation.motebit_id;
+      delegatorId = allocationDelegator(db, allocation.allocation_id);
     } else {
       const p2pSettlement = db
         .prepare(
-          "SELECT settlement_id, task_id, motebit_id FROM relay_settlements WHERE task_id = ? AND settlement_mode = 'p2p'",
+          "SELECT settlement_id, task_id, motebit_id, delegator_id FROM relay_settlements WHERE task_id = ? AND settlement_mode = 'p2p'",
         )
         .get(req.task_id) as
-        { settlement_id: string; task_id: string; motebit_id: string } | undefined;
+        | {
+            settlement_id: string;
+            task_id: string;
+            motebit_id: string;
+            delegator_id: string | null;
+          }
+        | undefined;
 
       if (!p2pSettlement) {
         throw new HTTPException(404, { message: "Allocation not found" });
       }
       isP2pDispute = true;
       workerId = p2pSettlement.motebit_id;
+      delegatorId = p2pSettlement.delegator_id || null;
     }
-    // Capture filer_role at filing time (when task / allocation / p2p
+
+    // §4.1 / §4.4: the filer must be a direct party — the allocation's worker
+    // or its delegator — and the respondent the OTHER party. The signature
+    // check above proves only that `filed_by` signed; it says nothing about
+    // standing. filer_role is DERIVED from the party match, never defaulted:
+    // a pre-settlement fund action pays the delegator share to the delegator-
+    // role party and the worker share to the worker-role party, so an
+    // unchecked filer or respondent would redirect escrow to a stranger.
+    // Each refusal below is its own reason, so none is shadowed by another.
+    if (delegatorId === null) {
+      // Fail closed: no party set the relay can vouch for.
+      throw new HTTPException(403, {
+        message: "The delegator of this allocation cannot be established from the ledger",
+      });
+    }
+    if (delegatorId === workerId) {
+      // A self-delegation has no counterparty to dispute with.
+      throw new HTTPException(403, {
+        message: "A self-delegated task has no counterparty to dispute",
+      });
+    }
+    let filerRole: FilerRole;
+    let counterparty: string;
+    if (req.filed_by === workerId) {
+      filerRole = "worker";
+      counterparty = delegatorId;
+    } else if (req.filed_by === delegatorId) {
+      filerRole = "delegator";
+      counterparty = workerId;
+    } else {
+      throw new HTTPException(403, {
+        message:
+          "Filing party must be the delegator or worker of the referenced task (dispute-v1 §4.4)",
+      });
+    }
+    if (req.respondent !== counterparty) {
+      throw new HTTPException(403, {
+        message: "Respondent must be the other party to the referenced task (dispute-v1 §4.4)",
+      });
+    }
+    // filer_role is captured at filing time (when task / allocation / p2p
     // settlement is definitely present) per the §7.2 retention-safety
     // constraint — the row may be pruned before the orchestrator runs,
     // and a federation resolution that depends on the task row at
     // orchestration time becomes unresolvable post-pruning.
-    const filerRole: FilerRole = req.filed_by === workerId ? "worker" : "delegator";
+
+    // §7.1: only an allocation still holding its funds can be disputed —
+    // `locked` (pre-settlement escrow) or `settled` (post-settlement hold).
+    // `released` was refunded, `disputed` is already under review; disputing
+    // either would let resolution pay out escrow that is no longer there.
+    if (allocation && allocation.status !== "locked" && allocation.status !== "settled") {
+      throw new HTTPException(409, {
+        message: `Allocation is ${allocation.status}; only a locked or settled allocation can be disputed`,
+      });
+    }
 
     // Rate limit: max active disputes per agent (§9.2)
     const activeCount = db
@@ -1125,45 +1348,70 @@ export function registerDisputeRoutes(deps: DisputeDeps): void {
       });
     }
 
-    // Transition allocation to disputed (§7.1) — skip for p2p (no allocation)
-    if (!isP2pDispute) {
-      db.prepare("UPDATE relay_allocations SET status = 'disputed' WHERE allocation_id = ?").run(
-        allocationId,
-      );
-    }
-
     const evidenceDeadline = req.filed_at + EVIDENCE_WINDOW_MS;
     const amountLocked = isP2pDispute ? 0 : allocation!.amount_locked;
     const filingFee = Math.floor(amountLocked * FILING_FEE_RATE);
 
-    db.prepare(
-      `INSERT INTO relay_disputes
-       (dispute_id, task_id, allocation_id, filed_by, respondent, category, description, state, amount_locked, filing_fee, filed_at, evidence_deadline, body_json, filer_role)
-       VALUES (?, ?, ?, ?, ?, ?, ?, 'opened', ?, ?, ?, ?, ?, ?)`,
-    ).run(
-      req.dispute_id,
-      req.task_id,
-      allocationId,
-      req.filed_by,
-      req.respondent,
-      req.category,
-      req.description,
-      amountLocked,
-      filingFee,
-      req.filed_at,
-      evidenceDeadline,
-      // Phase 6.2: persist the verified DisputeRequest body so the
-      // §6.2 federation orchestrator can hand the original signed
-      // artifact to peers verbatim (spec §16.2). Mirrors the
-      // relay_horizon_certs.cert_json convention from migration 16.
-      JSON.stringify(req),
-      filerRole,
-    );
-
-    // Transition to evidence state immediately (dispute has initial evidence)
-    db.prepare("UPDATE relay_disputes SET state = 'evidence' WHERE dispute_id = ?").run(
-      req.dispute_id,
-    );
+    // One transaction: lock the allocation (§7.1) and insert the dispute,
+    // each guarded so a concurrent or repeated filing changes nothing. The
+    // allocation moves only from the state read above; the insert lands only
+    // when no non-expired dispute exists for the task (one dispute per
+    // allocation — idx_disputes_one_per_task is the cross-process backstop).
+    let refusal: string | null = null;
+    db.exec("BEGIN");
+    try {
+      if (!isP2pDispute) {
+        const locked = db
+          .prepare(
+            "UPDATE relay_allocations SET status = 'disputed' WHERE allocation_id = ? AND status = ?",
+          )
+          .run(allocationId, allocation!.status);
+        if (locked.changes === 0) refusal = "Allocation changed state while filing";
+      }
+      if (refusal === null) {
+        const inserted = db
+          .prepare(
+            `INSERT INTO relay_disputes
+             (dispute_id, task_id, allocation_id, filed_by, respondent, category, description, state, amount_locked, filing_fee, filed_at, evidence_deadline, body_json, filer_role)
+             SELECT ?, ?, ?, ?, ?, ?, ?, 'evidence', ?, ?, ?, ?, ?, ?
+             WHERE NOT EXISTS (
+               SELECT 1 FROM relay_disputes
+                WHERE task_id = ? AND state != 'expired'
+                  AND COALESCE(fund_refusal, '') != 'task_mismatch'
+             )`,
+          )
+          .run(
+            req.dispute_id,
+            req.task_id,
+            allocationId,
+            req.filed_by,
+            req.respondent,
+            req.category,
+            req.description,
+            amountLocked,
+            filingFee,
+            req.filed_at,
+            evidenceDeadline,
+            // Phase 6.2: persist the verified DisputeRequest body so the
+            // §6.2 federation orchestrator can hand the original signed
+            // artifact to peers verbatim (spec §16.2). Mirrors the
+            // relay_horizon_certs.cert_json convention from migration 16.
+            JSON.stringify(req),
+            filerRole,
+            req.task_id,
+          );
+        if (inserted.changes === 0) refusal = "This task already has a dispute";
+      }
+      db.exec(refusal === null ? "COMMIT" : "ROLLBACK");
+    } catch (err) {
+      db.exec("ROLLBACK");
+      const msg = err instanceof Error ? err.message : String(err);
+      if (!msg.includes("UNIQUE")) throw err;
+      refusal = "This task already has a dispute";
+    }
+    if (refusal !== null) {
+      throw new HTTPException(409, { message: refusal });
+    }
 
     logger.info("dispute.opened", {
       disputeId: req.dispute_id,
@@ -1346,7 +1594,7 @@ export function registerDisputeRoutes(deps: DisputeDeps): void {
     // the cached-resolution check below returns. Idempotent: state
     // mutates exactly once across concurrent reads (UPDATE WHERE
     // state='resolved' guard).
-    dispute = tryFinalizeIfWindowExpired(db, dispute);
+    dispute = tryFinalizeIfWindowExpired(db, dispute, { retryRound2: false });
 
     // 1. Cached-resolution check — return existing resolution if present.
     //    Handles re-call after successful resolve + the second-caller-on-
@@ -1560,7 +1808,7 @@ export function registerDisputeRoutes(deps: DisputeDeps): void {
     // appeal, transition resolved → final BEFORE the appeal check below.
     // This converts "appeal window expired" into the cleaner "state is
     // final, can't appeal" error path. Idempotent.
-    dispute = tryFinalizeIfWindowExpired(db, dispute);
+    dispute = tryFinalizeIfWindowExpired(db, dispute, { retryRound2: false });
 
     if (dispute.state !== "resolved") {
       throw new HTTPException(400, { message: "Can only appeal a resolved dispute" });
@@ -1602,9 +1850,19 @@ export function registerDisputeRoutes(deps: DisputeDeps): void {
       });
     }
 
-    db.prepare(
-      "UPDATE relay_disputes SET state = 'appealed', appealed_at = ? WHERE dispute_id = ?",
-    ).run(ap.appealed_at, disputeId);
+    // Guarded on the state read above: the signature check awaited, and a
+    // concurrent read may have finalized the verdict (and executed its fund
+    // action) meanwhile — an appeal must never re-open a final dispute.
+    const appealed = db
+      .prepare(
+        "UPDATE relay_disputes SET state = 'appealed', appealed_at = ? WHERE dispute_id = ? AND state = 'resolved' AND appealed_at IS NULL",
+      )
+      .run(ap.appealed_at, disputeId);
+    if (appealed.changes === 0) {
+      throw new HTTPException(409, {
+        message: "Dispute changed state while appealing; it is no longer appealable",
+      });
+    }
 
     logger.info("dispute.appealed", {
       disputeId,
@@ -1715,6 +1973,31 @@ export function registerDisputeRoutes(deps: DisputeDeps): void {
       db.exec("COMMIT");
     } catch (err) {
       db.exec("ROLLBACK");
+      if (err instanceof FundActionRefused) {
+        // P1: the round-2 verdict stands even when its fund action cannot run
+        // yet (a claw-back the paid account no longer covers). Persist the
+        // signed round-2 resolution and the marker — the dispute stays
+        // `appealed`, visibly refused, and `tryFinalizeIfWindowExpired`
+        // retries it on every read (it used to roll back to `appealed` with
+        // the verdict lost and nothing ever retrying it).
+        db.prepare(
+          `INSERT OR REPLACE INTO relay_dispute_resolutions
+             (resolution_id, dispute_id, round, resolution, rationale, fund_action, split_ratio, adjudicator, adjudicator_votes, resolved_at, signature, is_appeal)
+           VALUES (?, ?, 2, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
+        ).run(
+          round2ResolutionId,
+          disputeId,
+          round2Result.resolution,
+          round2Result.rationale,
+          round2Result.fund_action,
+          round2Result.split_ratio,
+          relayIdentity.relayMotebitId,
+          JSON.stringify(round2Result.adjudicator_votes),
+          round2ResolvedAt,
+          round2Signed.signature,
+        );
+        recordFundRefusal(db, disputeId, err.reason);
+      }
       throw new HTTPException(500, {
         message: `Round-2 finalization failed: ${err instanceof Error ? err.message : String(err)}`,
       });
@@ -1844,6 +2127,72 @@ export function registerDisputeRoutes(deps: DisputeDeps): void {
 
 // === Fund Handling (§7) ===
 
+/**
+ * Claim the allocation's ONE fund action (dispute-v1 §7.3), inside the
+ * caller's transaction and before any ledger row is written. Returns false
+ * when the allocation, its task or this dispute already has a fund action —
+ * the caller then moves nothing. Write-once: the primary key and the two
+ * UNIQUE columns make every second claim an `INSERT` that changes no row.
+ */
+function claimFundAction(
+  db: DatabaseDriver,
+  dispute: Record<string, unknown>,
+  taskId: string,
+  claim: {
+    fundAction: DisputeFundAction;
+    splitRatio: number;
+    regime: "pre_settlement" | "post_settlement";
+    workerAmount: number;
+    delegatorAmount: number;
+  },
+): boolean {
+  const res = db
+    .prepare(
+      `INSERT INTO relay_dispute_fund_actions
+         (allocation_id, task_id, dispute_id, fund_action, split_ratio, regime,
+          worker_amount, delegator_amount, executed_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+       ON CONFLICT DO NOTHING`,
+    )
+    .run(
+      dispute.allocation_id,
+      taskId,
+      dispute.dispute_id,
+      claim.fundAction,
+      claim.splitRatio,
+      claim.regime,
+      claim.workerAmount,
+      claim.delegatorAmount,
+      Date.now(),
+    );
+  if (res.changes === 0) {
+    logger.warn("dispute.fund_action.already_executed", {
+      disputeId: dispute.dispute_id as string,
+      allocationId: dispute.allocation_id as string,
+      taskId,
+      reason: "allocation already resolved by a fund action — nothing moves twice",
+    });
+    return false;
+  }
+  return true;
+}
+
+/**
+ * Close the allocation the fund action resolved (delegation-v1 §6.1:
+ * `disputed → settled | released`), in the same transaction. A
+ * post-settlement dispute leaves the settlement standing as the record
+ * (`settled`); a pre-settlement one distributed the escrow (`released`).
+ */
+function closeDisputedAllocation(
+  db: DatabaseDriver,
+  dispute: Record<string, unknown>,
+  status: "settled" | "released",
+): void {
+  db.prepare(
+    "UPDATE relay_allocations SET status = ? WHERE allocation_id = ? AND status = 'disputed'",
+  ).run(status, dispute.allocation_id);
+}
+
 function executeFundAction(
   db: DatabaseDriver,
   dispute: Record<string, unknown>,
@@ -1860,161 +2209,187 @@ function executeFundAction(
     return;
   }
   const disputeId = dispute.dispute_id as string;
-  const taskId = dispute.task_id as string;
+  const allocationId = dispute.allocation_id as string;
+  // §7.3 integer split: worker = floor(base * ratio), delegator = remainder.
+  // A ratio outside [0, 1] would pay one side more than the base — refuse
+  // (throws inside the caller's transaction, which rolls back).
+  if (!Number.isFinite(splitRatio) || splitRatio < 0 || splitRatio > 1) {
+    throw new Error(`Dispute ${disputeId}: split_ratio ${splitRatio} outside [0, 1]`);
+  }
 
-  // Funding-state split (the mint fix). A relay settlement that credited the
-  // worker `amount_settled` means the funds ALREADY left escrow into the
-  // worker's balance (held non-spendable/non-withdrawable, never re-pooled).
-  // Crediting the winner without reclaiming that credit would mint money
-  // (refund/split) or double-pay (release). So a POST-settlement dispute
-  // REDISTRIBUTES the worker's net by clawing it back; a PRE-settlement
-  // dispute releases the still-locked escrow. See dispute-v1.md §7.
-  const settlement = db
-    .prepare(
-      `SELECT amount_settled, motebit_id, delegator_id, status
-       FROM relay_settlements
-       WHERE task_id = ? AND COALESCE(settlement_mode, 'relay') = 'relay'
-         AND status IN ('completed', 'partial')`,
-    )
-    .get(taskId) as
-    | { amount_settled: number; motebit_id: string; delegator_id: string | null; status: string }
-    | undefined;
+  // What may move comes from the LEDGER, read in this transaction — never
+  // from `amount_locked` or the allocation's status (see dispute-fund-ledger.ts:
+  // a failed receipt's refund, a federated forward and a pre-claim-table
+  // payout all leave the row saying "held" when nothing is). Keyed on the
+  // allocation: its task is relay_allocations.task_id, never the dispute's.
+  const pos = allocationLedgerPosition(db, allocationId);
 
-  if (settlement && settlement.amount_settled > 0) {
-    // ── Case B: POST-SETTLEMENT. Worker already holds the net. Redistribute it. ──
-    // Authoritative identities from the settlement row — NOT the dispute's
-    // filed_by/respondent, which are filer/counterparty and do not reliably
-    // map to worker/delegator (e.g. a worker-filed dispute).
-    // §7.4: redistribute the NET only (the platform fee was already taken and
-    // is not re-extracted). split_ratio unifies all three fund actions:
-    //   refund→0.0, release→1.0, split→0.5  ⇒  workerShare = floor(net*ratio).
-    const net = settlement.amount_settled;
-    const worker = settlement.motebit_id;
-    const delegator = settlement.delegator_id;
-    const workerShare = Math.floor(net * splitRatio);
-    const delegatorShare = net - workerShare; // reclaimed from worker → delegator
+  // A verdict that cannot execute as written moves nothing and says why. It
+  // still becomes final (the verdict stands); the allocation stays `disputed`
+  // — its funds held for the operator — and no claim is written.
+  const refuse = (reason: FundRefusalReason, detail: Record<string, unknown>): void => {
+    recordFundRefusal(db, disputeId, reason);
+    logger.error("dispute.fund_action.refused", { disputeId, allocationId, reason, ...detail });
+  };
+  if (pos.taskId === null) {
+    refuse("no_allocation", {});
+    return;
+  }
+  if (pos.taskId !== dispute.task_id) {
+    // F1: a legacy row naming another allocation's task. Fund action and the
+    // §7.5 hold are keyed on one allocation; moving money here would take it
+    // from that other allocation's payee.
+    refuse("task_mismatch", { disputeTaskId: dispute.task_id, allocationTaskId: pos.taskId });
+    return;
+  }
+  if (pos.reviewReason !== null) {
+    // A legacy row the upgrade could not attribute cleanly touched this
+    // allocation (allocation-escrow.ts backfill): an operator decides. The
+    // allocation stays `disputed`, its escrow held and visibly marked.
+    refuse("under_review", { reviewReason: pos.reviewReason });
+    return;
+  }
+  const closeAs = pos.settled ? "settled" : "released";
 
-    if (delegatorShare <= 0) {
-      // release_to_worker (ratio 1.0): the original settlement stands. The
-      // worker keeps the net it already holds — no fund movement.
-      logger.info("dispute.fund_action.post_settlement_noop", {
-        disputeId,
-        fundAction,
-        worker,
-        net,
-      });
-      return;
-    }
-    if (delegator == null || delegator === "") {
-      // No recorded payer — cannot route the refund. Do NOT debit the worker
-      // (that would destroy money) and do NOT mint. Trust-layer outcome only.
-      logger.error("dispute.fund_action.no_delegator", {
-        disputeId,
-        taskId,
-        worker,
-        delegatorShare,
-        reason:
-          "settlement has no delegator_id — post-settlement refund unroutable; funds stay with worker",
-      });
-      return;
-    }
-    // Reclaim the disputed portion from the worker. Phase-1 escrow (the
-    // non-spendable + non-withdrawable hold over recent/disputed settlements)
-    // guarantees these funds are still present, so this raw debit — which
-    // bypasses the hold, since it reclaims the held funds themselves —
-    // succeeds. Both legs run inside the caller's BEGIN/COMMIT.
-    const after = debitCanonical(
-      db,
-      worker,
-      delegatorShare,
-      "settlement_debit",
+  // A ledger row already referenced to a dispute of this allocation is a fund
+  // action that already ran — claimed or not (relay_dispute_fund_actions
+  // starts empty on upgrade, so an empty claim table authorizes nothing).
+  if (pos.priorDisputeRows > 0) {
+    logger.warn("dispute.fund_action.already_executed", {
       disputeId,
-      `Dispute claw-back (${fundAction}): ${disputeId}`,
-    );
-    if (after === null) {
-      // Escrow invariant violated — should be unreachable after Phase 1. Fail
-      // closed: never credit the delegator from funds we could not reclaim.
-      logger.error("dispute.fund_action.clawback_insufficient", {
-        disputeId,
-        worker,
-        delegatorShare,
-        reason: "worker balance below disputed amount despite escrow hold — refund withheld",
-      });
-      return;
-    }
-    creditAccountCanonical(
-      db,
-      delegator,
-      delegatorShare,
-      "settlement_credit",
-      disputeId,
-      `Dispute refund (${fundAction}): ${disputeId}`,
-    );
-    logger.info("dispute.fund_action.post_settlement", {
-      disputeId,
-      fundAction,
-      worker,
-      delegator,
-      net,
-      workerShare,
-      delegatorShare,
+      allocationId,
+      taskId: pos.taskId,
+      priorDisputeRows: pos.priorDisputeRows,
+      reason: "the ledger already holds dispute fund movement for this allocation",
+    });
+    closeDisputedAllocation(db, dispute, closeAs);
+    return;
+  }
+
+  // One fund action, two legs, both from the ledger, both by split_ratio
+  // (refund→0.0, release→1.0, split→0.5):
+  //  - claw-back (post-settlement): of what was PAID, the delegator's share is
+  //    reversed from the account the ledger shows received it — never the
+  //    settlement row's motebit_id, which names the path agent (#959). §7.4:
+  //    the net only (the platform fee is not re-extracted).
+  //  - escrow (pre-settlement, and whatever a settlement left held): what the
+  //    ledger still holds is distributed to the sole hold payer and the
+  //    allocation's worker — the pair filing standing is checked against.
+  // Escrow 0 and nothing paid (refunded, forwarded, never debited) is a
+  // recorded no-op.
+  const recipient = pos.paid.length === 1 ? pos.paid[0]! : null;
+  const net = pos.paid.reduce((sum, p) => sum + p.amount, 0);
+  const claw = net - Math.floor(net * splitRatio);
+  const escrowWorker = Math.floor(pos.escrowRemaining * splitRatio);
+  const escrowDelegator = pos.escrowRemaining - escrowWorker;
+  const delegatorCredit = escrowDelegator + claw;
+  const routable =
+    (claw === 0 || recipient !== null) &&
+    (delegatorCredit === 0 || pos.delegator !== null) &&
+    (escrowWorker === 0 || pos.worker !== null);
+  if (!routable) {
+    // Fail closed: more than one paid account, or no single hold payer / worker.
+    refuse("unroutable", {
+      paidAccounts: pos.paid.length,
+      delegator: pos.delegator,
+      worker: pos.worker,
+      claw,
+      escrowRemaining: pos.escrowRemaining,
     });
     return;
   }
 
-  // ── Case A: PRE-SETTLEMENT. Escrow (amount_locked) still held; distribute it. ──
-  // The delegator was debited amount_locked at submission and the worker was
-  // never paid (no settlement row), so the funds sit in escrow — distribute
-  // them with no claw-back.
-  //
-  // No settlement row means worker/delegator are NOT in the ledger and must be
-  // recovered from the dispute parties. `filed_by`/`respondent` are filer and
-  // counterparty — they map to delegator/worker ONLY when the delegator filed;
-  // a worker-filed dispute INVERTS them. (This is the exact hazard Case B's
-  // comment warns about; pre-fix this path credited `filed_by`/`respondent`
-  // directly and so paid escrow to the losing party on every worker-filed
-  // dispute.) So resolve the roles explicitly from the filer_role captured at
-  // filing, then divide by split_ratio exactly as Case B divides the net:
-  // refund→0.0, release→1.0, split→0.5. filer_role NULL (pre-migration-21
-  // disputes, always emitted as the v1 `split` shape) falls back to the v1
-  // assumption filer=delegator / respondent=worker, which the ternary preserves
-  // (worker = respondent whenever the role is not "worker").
-  const filedBy = dispute.filed_by as string;
-  const respondent = dispute.respondent as string;
-  const filerRole = (dispute.filer_role as FilerRole | null) ?? null;
-  const worker = filerRole === "worker" ? filedBy : respondent;
-  const delegator = filerRole === "worker" ? respondent : filedBy;
-  const workerShare = Math.floor(amountLocked * splitRatio);
-  const delegatorShare = amountLocked - workerShare;
-
-  if (workerShare > 0) {
-    creditAccountCanonical(
-      db,
-      worker,
-      workerShare,
-      "settlement_credit",
-      disputeId,
-      `Dispute release (${fundAction}): ${disputeId}`,
+  // The claim records what MOVES — the ledger delta on the hold payer and on
+  // everyone else — and is written in the same transaction as the movement;
+  // if the claw-back cannot be taken the whole finalize rolls back with it.
+  if (
+    !claimFundAction(db, dispute, pos.taskId, {
+      fundAction,
+      splitRatio,
+      regime: net > 0 ? "post_settlement" : "pre_settlement",
+      workerAmount: escrowWorker - claw,
+      delegatorAmount: delegatorCredit,
+    })
+  ) {
+    // The allocation's one fund action already ran (a claim written before
+    // this dispute, e.g. the upgrade backfill of a legacy final dispute that
+    // left the allocation `disputed`): nothing moves, and the allocation is
+    // closed, not left held with no live dispute (harness L15).
+    closeDisputedAllocation(db, dispute, closeAs);
+    return;
+  }
+  // Every leg moves through the escrow chokepoint, in this transaction: it
+  // re-reads what the allocation holds, refuses a payee that is not a party
+  // of THIS allocation, and stamps each row with the allocation it moved.
+  const guarded = (movement: () => void): void => {
+    try {
+      movement();
+    } catch (err) {
+      if (!(err instanceof AllocationMoneyRefused)) throw err;
+      // F2: the paid account no longer holds the claw-back (it withdrew).
+      // Never credit the delegator from funds we could not reclaim, and never
+      // record a refund that did not happen: roll the finalize back; the
+      // verdict stays `resolved` (or `appealed` with its round-2 verdict
+      // persisted), marked, and retries on every read.
+      throw new FundActionRefused(
+        err.reason === "insufficient_balance"
+          ? "clawback_insufficient"
+          : err.reason === "under_review"
+            ? "under_review"
+            : "unroutable",
+        `Dispute ${disputeId}: ${err.message}`,
+      );
+    }
+  };
+  if (claw > 0) {
+    guarded(() =>
+      moveAllocationMoney(db, {
+        kind: "dispute_clawback",
+        allocationId,
+        amount: claw,
+        party: recipient!.account,
+        disputeId,
+        description: `Dispute claw-back (${fundAction}): ${disputeId}`,
+      }),
     );
   }
-  if (delegatorShare > 0) {
-    creditAccountCanonical(
-      db,
-      delegator,
-      delegatorShare,
-      "settlement_credit",
-      disputeId,
-      `Dispute refund (${fundAction}): ${disputeId}`,
+  if (escrowWorker > 0) {
+    guarded(() =>
+      moveAllocationMoney(db, {
+        kind: "dispute_worker",
+        allocationId,
+        amount: escrowWorker,
+        party: pos.worker!,
+        disputeId,
+        description: `Dispute release (${fundAction}): ${disputeId}`,
+      }),
     );
   }
-  logger.info("dispute.fund_action.pre_settlement", {
+  if (delegatorCredit > 0) {
+    guarded(() =>
+      moveAllocationMoney(db, {
+        kind: "dispute_delegator",
+        allocationId,
+        amount: delegatorCredit,
+        party: pos.delegator!,
+        disputeId,
+        description: `Dispute refund (${fundAction}): ${disputeId}`,
+      }),
+    );
+  }
+  closeDisputedAllocation(db, dispute, closeAs);
+  recordFundRefusal(db, disputeId, null);
+  logger.info("dispute.fund_action.executed", {
     disputeId,
     fundAction,
-    filerRole,
-    worker,
-    delegator,
+    worker: pos.worker,
+    delegator: pos.delegator,
+    paidAccount: recipient?.account ?? null,
+    net,
+    claw,
+    escrowRemaining: pos.escrowRemaining,
+    escrowWorker,
+    delegatorCredit,
     amountLocked,
-    workerShare,
-    delegatorShare,
   });
 }

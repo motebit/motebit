@@ -4,6 +4,7 @@
  * Centralizes the common setup patterns (auth headers, relay factory, agent factory)
  * so that a single change to createSyncRelay's API propagates once, not 25+ times.
  */
+import { moveAllocationMoney, openAllocation } from "../allocation-escrow.js";
 import { createSyncRelay } from "../index.js";
 import type { SyncRelay, SyncRelayConfig } from "../index.js";
 import { deriveSolanaAddress, SOLANA_MAINNET_CAIP2 } from "@motebit/wallet-solana";
@@ -15,13 +16,7 @@ import { TaskQueue } from "../task-queue.js";
 import { recordTaskRoute } from "../task-routing.js";
 import type { P2pPaymentChain } from "../p2p-payer.js";
 import { fakeFacilitatorClient } from "./x402-fake-facilitator.js";
-import {
-  creditAccount,
-  debitSpendableAccount,
-  getSpendableBalance,
-  toMicro,
-  fromMicro,
-} from "../accounts.js";
+import { creditAccount, getSpendableBalance, toMicro, fromMicro } from "../accounts.js";
 
 // === Fake payment chain (#918) ===
 
@@ -420,21 +415,32 @@ export function seedX402PaidTask(relay: SyncRelay, args: SeedX402PaidTaskArgs): 
   }
   allocation.amount_locked = Math.round(allocation.amount_locked);
 
-  const afterHold = debitSpendableAccount(
-    db,
-    args.delegatorId,
-    allocation.amount_locked,
-    "allocation_hold",
-    `x402-${taskId}`,
-    `Hold for task ${taskId} to ${args.workerId}`,
-  );
-  // Mirror: a null debit is a refusal — never seed a hold the ledger did not take (#901).
-  if (afterHold === null) {
-    throw new Error("seedX402PaidTask: allocation hold debit refused — spendable balance short");
+  // Mirror: the submission path's exact calls — the allocation row, then the
+  // hold through the escrow chokepoint (allocation-escrow.ts). A refused hold
+  // is a refusal — never seed a hold the ledger did not take (#901).
+  db.exec("BEGIN");
+  try {
+    openAllocation(db, {
+      allocationId: `x402-${taskId}`,
+      taskId,
+      worker: args.workerId,
+      amountLocked: allocation.amount_locked,
+      createdAt: now,
+    });
+    moveAllocationMoney(db, {
+      kind: "hold",
+      allocationId: `x402-${taskId}`,
+      amount: allocation.amount_locked,
+      party: args.delegatorId,
+      description: `Hold for task ${taskId} to ${args.workerId}`,
+    });
+    db.exec("COMMIT");
+  } catch (err) {
+    db.exec("ROLLBACK");
+    throw new Error("seedX402PaidTask: allocation hold refused — spendable balance short", {
+      cause: err,
+    });
   }
-  db.prepare(
-    "INSERT OR IGNORE INTO relay_allocations (allocation_id, task_id, motebit_id, amount_locked, status, created_at) VALUES (?, ?, ?, ?, 'locked', ?)",
-  ).run(`x402-${taskId}`, taskId, args.workerId, allocation.amount_locked, now);
 
   return taskId;
 }
