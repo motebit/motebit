@@ -34,7 +34,8 @@ import {
 /* eslint-enable no-restricted-imports */
 import { getRelayKeypair } from "./credentials.js";
 import { creditAccount } from "./accounts.js";
-import type { RelayIdentity, VerifiedSettlement } from "./federation.js";
+import type { PeerFetch, RelayIdentity, VerifiedSettlement } from "./federation.js";
+import { defaultPeerFetch } from "./federation.js";
 import type { TaskQueueEntry } from "./tasks.js";
 import type { ConnectedDevice } from "./index.js";
 import { createLogger } from "./logger.js";
@@ -65,6 +66,8 @@ export interface FederationCallbackDeps {
   taskTtlMs: number;
   /** Platform fee rate (0–1). Defaults to SDK constant (0.05). */
   platformFeeRate?: number;
+  /** The peer transport (`PeerFetch`); omitted, the global `fetch`. */
+  peerFetch?: PeerFetch;
 }
 
 /**
@@ -92,6 +95,7 @@ export function createFederationCallbacks(deps: FederationCallbackDeps) {
   // relay instances (in tests or in a multi-tenant deployment) can have
   // different rates without clobbering each other's module state.
   const platformFeeRate = deps.platformFeeRate ?? SDK_DEFAULT_PLATFORM_FEE_RATE;
+  const peerFetch = deps.peerFetch ?? defaultPeerFetch;
 
   /** The executor relay's admission record for a federated P2P task's hosted worker (#959). */
   // The executor relay HOSTS the worker, so its scope is always `local`
@@ -682,7 +686,7 @@ export function createFederationCallbacks(deps: FederationCallbackDeps) {
                 relayIdentity.privateKey,
               );
               try {
-                const resp = await fetch(
+                const resp = await peerFetch(
                   `${peerInfo.endpoint_url}/federation/v1/settlement/forward`,
                   {
                     method: "POST",

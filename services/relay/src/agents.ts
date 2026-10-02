@@ -16,7 +16,8 @@ import type { OutboundUrlOptions } from "@motebit/sdk";
 import type { AgentTrustRecord, ExecutionReceipt, HardwareAttestationClaim } from "@motebit/sdk";
 import { scoreAttestation } from "@motebit/market";
 import type { ConnectedDevice } from "./index.js";
-import type { RelayIdentity } from "./federation.js";
+import type { PeerFetch, RelayIdentity } from "./federation.js";
+import { defaultPeerFetch } from "./federation.js";
 import { insertRevocationEvent, signDiscoverBody } from "./federation.js";
 import {
   applySuccession,
@@ -408,6 +409,8 @@ export interface AgentsDeps {
   taskRouter: TaskRouter;
   /** Outbound URL law for persisted agent endpoints (`buildOutboundPolicy`). */
   outboundPolicy?: OutboundUrlOptions;
+  /** The peer transport (`PeerFetch`); omitted, the global `fetch`. */
+  peerFetch?: PeerFetch;
   apiToken?: string;
   /** Platform fee rate for the P2P eligibility pre-flight's expected-fee hint. Defaults to PLATFORM_FEE_RATE. */
   platformFeeRate?: number;
@@ -804,6 +807,7 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
     federationQueryCache,
     parseTokenPayloadUnsafe,
   } = deps;
+  const peerFetch = deps.peerFetch ?? defaultPeerFetch;
   // Fee rate for the P2P eligibility pre-flight's expected-fee hint — the SAME
   // rate the submission gate uses, so the hint cannot disagree with what the
   // relay will accept.
@@ -1885,7 +1889,7 @@ export function registerAgentRoutes(deps: AgentsDeps): void {
           },
           relayIdentity,
         );
-        const resp = await fetch(`${peer.endpoint_url}/federation/v1/discover`, {
+        const resp = await peerFetch(`${peer.endpoint_url}/federation/v1/discover`, {
           method: "POST",
           headers: { "Content-Type": "application/json", "X-Correlation-ID": queryId },
           body: JSON.stringify(discoverBody),
