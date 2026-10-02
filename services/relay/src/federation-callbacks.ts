@@ -570,7 +570,11 @@ export function createFederationCallbacks(deps: FederationCallbackDeps) {
               correlationId: verified.taskId,
               error: auditErr instanceof Error ? auditErr.message : String(auditErr),
             });
-            // Unsettled: the peer's retry of this result settles it (#890 r9 C2).
+            // Unsettled: the claim stays claimed-but-unsettled (a refusal by
+            // the freeze included) and the settlement-recovery sweep
+            // (`replayFederationResult`, skipped while frozen) settles it once
+            // (#890 r9 C2). The peer's delivery was answered 200 and is not
+            // retried; the sweep, not the peer, is the retry.
             return false;
           }
           return true;
@@ -597,7 +601,9 @@ export function createFederationCallbacks(deps: FederationCallbackDeps) {
             correlationId: verified.taskId,
             error: settleErr instanceof Error ? settleErr.message : String(settleErr),
           });
-          // Unsettled: the peer's retry of this result settles it (#890 r9 C2).
+          // Unsettled: the settlement-recovery sweep (`replayFederationResult`,
+          // skipped while frozen) settles it once (#890 r9 C2) — not the
+          // peer, whose delivery was answered 200.
           return false;
         }
         return true;

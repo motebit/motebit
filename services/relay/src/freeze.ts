@@ -163,9 +163,9 @@ const NARROWED: Readonly<
 
 /**
  * Columns of a guarded table that are not money: an UPDATE that changes only
- * these is not refused. The UPDATE guard of a table listed here is computed
- * at install from its live columns — every OTHER column changing is refused —
- * so a money column added later is guarded without an edit here.
+ * these is not refused. The UPDATE guard of a table listed here refuses a
+ * change to any of its {@link FREEZE_MONEY_COLUMNS} (and, fail-closed, to any
+ * live column in neither list).
  */
 export const FREEZE_NON_MONEY_COLUMNS: Readonly<Record<string, readonly string[]>> = {
   // The anchoring cut assigns leaves to a signed batch (anchoring.ts); the
@@ -181,6 +181,65 @@ export const FREEZE_NON_MONEY_COLUMNS: Readonly<Record<string, readonly string[]
 };
 
 /**
+ * The MONEY columns of each column-narrowed table — declared, not read from
+ * the live schema, so the guard is the same on a first boot as on a restart
+ * (a column a later boot step adds — `receipt_signature`, added by the task
+ * queue — would otherwise be missing from a first boot's guard). Every live
+ * column must be here or in {@link FREEZE_NON_MONEY_COLUMNS}
+ * (`freeze-money-chokepoint.test.ts` fails on an unclassified one); a live
+ * column in neither is still guarded (fail-closed), and a declared one
+ * missing from the live schema makes install throw (it ran before the
+ * schema was complete).
+ */
+export const FREEZE_MONEY_COLUMNS: Readonly<Record<string, readonly string[]>> = {
+  relay_settlements: [
+    "settlement_id",
+    "allocation_id",
+    "task_id",
+    "motebit_id",
+    "receipt_hash",
+    "ledger_hash",
+    "amount_settled",
+    "platform_fee",
+    "platform_fee_rate",
+    "status",
+    "settled_at",
+    "x402_tx_hash",
+    "x402_network",
+    "settlement_mode",
+    "p2p_tx_hash",
+    "delegator_id",
+    "issuer_relay_id",
+    "suite",
+    "signature",
+    "record_json",
+    "p2p_worker_leg",
+    "p2p_worker_address",
+    "p2p_worker_address_rung",
+    "receipt_signature",
+  ],
+  relay_federation_settlements: [
+    "settlement_id",
+    "task_id",
+    "upstream_relay_id",
+    "downstream_relay_id",
+    "agent_id",
+    "gross_amount",
+    "fee_amount",
+    "net_amount",
+    "fee_rate",
+    "settled_at",
+    "receipt_hash",
+    "record_json",
+    "allocation_id",
+    "status",
+    "x402_tx_hash",
+    "x402_network",
+    "receipt_signature",
+  ],
+};
+
+/**
  * Status transitions on a guarded table that record an outcome rather than
  * move money: `pending → delivered` is the peer's acknowledgement of a
  * forward already sent (`markForwardDelivered`; `held` counts pending and
@@ -191,13 +250,33 @@ const FREEZE_RECORD_TRANSITIONS: Readonly<Record<string, string>> = {
   relay_federation_settlements: "OLD.status = 'pending' AND NEW.status = 'delivered'",
 };
 
+/**
+ * The columns whose change the UPDATE guard of a column-narrowed table
+ * refuses: the declared money columns, plus any live column classified in
+ * neither list (fail-closed). Throws if a declared money column does not
+ * exist yet — the guards must be installed after every schema mutation.
+ */
+export function freezeGuardedUpdateColumns(db: DatabaseDriver, table: string): string[] {
+  const exempt = new Set(FREEZE_NON_MONEY_COLUMNS[table]);
+  const declared = FREEZE_MONEY_COLUMNS[table] ?? [];
+  const live = (
+    db.prepare(`PRAGMA main.table_info(${table})`).all() as Array<{ name: string }>
+  ).map((c) => c.name);
+  const liveSet = new Set(live);
+  const missing = declared.filter((c) => !liveSet.has(c));
+  if (missing.length > 0) {
+    throw new Error(
+      `installFreezeMoneyGuards: ${table} lacks declared money column(s) ${missing.join(", ")} — install the guards after every schema mutation`,
+    );
+  }
+  const unclassified = live.filter((c) => !exempt.has(c) && !declared.includes(c));
+  return [...declared, ...unclassified];
+}
+
 /** The UPDATE guard of a column-narrowed table: some money column changes. */
 function moneyColumnsChange(db: DatabaseDriver, table: string): string {
-  const exempt = new Set(FREEZE_NON_MONEY_COLUMNS[table]);
   const record = FREEZE_RECORD_TRANSITIONS[table];
-  const cols = (db.prepare(`PRAGMA main.table_info(${table})`).all() as Array<{ name: string }>)
-    .map((c) => c.name)
-    .filter((c) => !exempt.has(c));
+  const cols = freezeGuardedUpdateColumns(db, table);
   const changes = cols.map((c) =>
     c === "status" && record != null
       ? `(NEW.status IS NOT OLD.status AND NOT (${record}))`
@@ -257,8 +336,9 @@ const FROZEN_SQL = `(SELECT CASE WHEN json_valid(value) THEN json_extract(value,
  * Install the freeze guards on this connection. TEMP triggers (per connection,
  * never written into the database file) on `main` tables; the relay holds ONE
  * connection, so every write of the running relay passes them. Call at boot
- * after the schema and migrations: a migration that rebuilds a table drops its
- * triggers. Idempotent. Throws if a guarded table does not exist.
+ * after EVERY schema mutation (schema, migrations, the task queue's columns):
+ * a migration that rebuilds a table drops its triggers. Idempotent. Throws if
+ * a guarded table or a declared money column does not exist.
  */
 export function installFreezeMoneyGuards(db: DatabaseDriver): void {
   for (const table of Object.keys(FREEZE_GUARDED_MONEY_TABLES)) {

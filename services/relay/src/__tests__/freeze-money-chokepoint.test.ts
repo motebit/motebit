@@ -37,7 +37,8 @@ import { describe, it, expect, vi, beforeAll, afterAll, beforeEach, afterEach } 
 import { createServer } from "node:http";
 import type { Server } from "node:http";
 import type { AddressInfo } from "node:net";
-import { readFileSync, readdirSync } from "node:fs";
+import { mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { SyncRelay, SyncRelayConfig } from "../index.js";
 // eslint-disable-next-line no-restricted-imports -- tests need direct keypair generation, receipt and envelope signing
@@ -70,6 +71,7 @@ import {
   seedX402PaidTask,
   jsonAuthWithIdempotency,
 } from "./test-helpers.js";
+import { createMotebitDatabase } from "@motebit/persistence";
 import { recordTaskRoute } from "../task-routing.js";
 import { TaskQueue, UNSETTLED_CLAIM_HOLD_MS } from "../task-queue.js";
 import { refundExhaustedForward } from "../index.js";
@@ -95,6 +97,9 @@ import { reconcilePendingX402Settlements } from "../x402-settlements.js";
 import {
   FREEZE_EXEMPT_TABLES,
   FREEZE_GUARDED_MONEY_TABLES,
+  FREEZE_MONEY_COLUMNS,
+  FREEZE_NON_MONEY_COLUMNS,
+  freezeGuardedUpdateColumns,
   installedFreezeGuards,
 } from "../freeze.js";
 import {
@@ -658,6 +663,70 @@ describe("freeze at the money chokepoint — every door, frozen at the await bef
       const gross = toMicro(computeGrossAmount(1.0, PLATFORM_FEE_RATE));
       expect(balance(w.relay, w.D.id), "RESUME: credited once").toBe(gross);
       await reconcilePendingX402Settlements(w.relay.moteDb.db, reader);
+      expect(balance(w.relay, w.D.id), "never twice").toBe(gross);
+    } finally {
+      await w.relay.close();
+    }
+  });
+
+  it("x402 operator resolve: a freeze landing during its chain read refuses the credit — a 503 (never a 200 'read_error'), the record pending; the resolve after unfreeze credits once", async () => {
+    const inner = fakeChainReader();
+    const gate: { hold: null | (() => Promise<void>) } = { hold: null };
+    const reader: typeof inner = Object.assign(Object.create(inner) as typeof inner, {
+      async getConfirmedHead() {
+        const h = gate.hold;
+        if (h != null) {
+          gate.hold = null;
+          await h();
+        }
+        return inner.getConfirmedHead();
+      },
+    });
+    const w = await world({ x402ChainReader: reader }, true);
+    try {
+      const submit = (key: string, payment?: string) =>
+        w.relay.app.request(`/agent/${w.W.id}/task`, {
+          method: "POST",
+          headers: {
+            ...JSON_AUTH,
+            "Idempotency-Key": key,
+            ...(payment != null ? { "PAYMENT-SIGNATURE": payment } : {}),
+          },
+          body: JSON.stringify({ prompt: `fz x402r ${crypto.randomUUID()}`, submitted_by: w.D.id }),
+        });
+      const header = (await submit(crypto.randomUUID())).headers.get("PAYMENT-REQUIRED")!;
+      const pay = signPayment(header, "0xFZR");
+      // The payment lands onchain; the freeze (landed then lifted) left it uncredited.
+      let release!: () => void;
+      facilitator.settleAnswerBarrier = new Promise<void>((r) => (release = r));
+      const paid = submit(crypto.randomUUID(), pay);
+      await vi.waitFor(() => expect(facilitator.settled).toHaveLength(1));
+      await freeze(w.relay);
+      release();
+      expect((await paid).status).toBe(503);
+      await unfreeze(w.relay);
+      const rec = w.relay.moteDb.db
+        .prepare("SELECT payer, nonce, status FROM relay_x402_settlements")
+        .get() as { payer: string; nonce: string; status: string };
+      expect(rec.status).toBe("pending");
+      const resolve = () =>
+        w.relay.app.request(`/api/v1/admin/x402-settlements/${rec.payer}/${rec.nonce}/resolve`, {
+          method: "POST",
+          headers: JSON_AUTH,
+        });
+
+      gate.hold = () => freeze(w.relay);
+      const res = await resolve();
+      expect(res.status, await res.clone().text()).toBe(503);
+      expect(((await res.json()) as { code?: string }).code).toBe("EMERGENCY_FROZEN");
+      expect(balance(w.relay, w.D.id), "FROZEN: not credited").toBe(0);
+
+      await unfreeze(w.relay);
+      const ok = await resolve();
+      expect(ok.status, await ok.clone().text()).toBe(200);
+      const gross = toMicro(computeGrossAmount(1.0, PLATFORM_FEE_RATE));
+      expect(balance(w.relay, w.D.id), "RESUME: credited once").toBe(gross);
+      expect((await resolve()).status).toBe(200);
       expect(balance(w.relay, w.D.id), "never twice").toBe(gross);
     } finally {
       await w.relay.close();
@@ -1254,6 +1323,91 @@ describe("freeze — the background writers a pass can carry past the freeze", (
       await relay.close();
     }
   });
+  it("Path 0 withdrawal: the freeze lands during the send, which lands and fails on-chain — the refund refused, a 503 (never a 200), the proven outcome recorded; the reconcile after unfreeze refunds once", async () => {
+    let releaseSend!: () => void;
+    const sendGate = new Promise<void>((r) => (releaseSend = r));
+    const sendUsdc = vi.fn().mockImplementation(async () => {
+      await sendGate;
+      return {
+        signature: "sigLandedFailed",
+        slot: 7,
+        confirmed: false,
+        earlierBroadcastsDead: true,
+      };
+    });
+    const adapter: SolanaRpcAdapter = {
+      ownAddress: "RelayTreasuryAddressBase58",
+      getUsdcBalance: vi.fn().mockResolvedValue(10_000_000_000n),
+      getUsdcBalanceOf: vi.fn().mockResolvedValue(10_000_000_000n),
+      getSolBalance: vi.fn().mockResolvedValue(10_000_000n),
+      sendUsdc,
+      sendUsdcBatch: vi.fn().mockResolvedValue([]),
+      getTransaction: vi.fn().mockResolvedValue({ status: "not_found" }),
+      isReachable: vi.fn().mockResolvedValue(true),
+    };
+    const relay = await createTestRelay({
+      enableDeviceAuth: false,
+      operatorSolanaTransfer: new OperatorSolanaTransfer(adapter),
+    });
+    try {
+      const id = "fz-path0-refund";
+      creditAccount(relay.moteDb.db, id, 5_000_000, "deposit", "fz-deposit-3", "self-deposit");
+      const pending = relay.app.request(`/api/v1/agents/${id}/withdraw`, {
+        method: "POST",
+        headers: jsonAuthWithIdempotency(),
+        body: JSON.stringify({
+          amount: 1.5,
+          destination: "GJmrQzyZumWWkdBuVH3Z1hnGvjrcDMbx7ptF5t5UFZFZ",
+        }),
+      });
+      await vi.waitFor(() => expect(sendUsdc).toHaveBeenCalled());
+      await freeze(relay);
+      releaseSend();
+      const res = await pending;
+      expect(res.status, await res.clone().text()).toBe(503);
+      expect(((await res.json()) as { code?: string }).code).toBe("EMERGENCY_FROZEN");
+      const row = relay.moteDb.db
+        .prepare(
+          "SELECT withdrawal_id, status, failure_reason FROM relay_withdrawals WHERE motebit_id = ?",
+        )
+        .get(id) as { withdrawal_id: string; status: string; failure_reason: string };
+      expect(row.status, "the claimed payout stays processing").toBe("processing");
+      expect(row.failure_reason, "the PROVEN outcome, never 'may have landed'").toMatch(
+        /refund refused by emergency freeze.*no USDC moved/,
+      );
+      expect(balance(relay, id), "FROZEN: not refunded").toBe(3_500_000);
+
+      await unfreeze(relay);
+      const realNow = Date.now.bind(Date);
+      vi.spyOn(Date, "now").mockImplementation(() => realNow() + 6 * 60 * 60 * 1000);
+      const rec = await relay.app.request(
+        `/api/v1/admin/withdrawals/${row.withdrawal_id}/reconcile`,
+        {
+          method: "POST",
+          headers: JSON_AUTH,
+          body: JSON.stringify({
+            outcome: "not_paid",
+            attestation: "sigLandedFailed landed and failed at slot 7",
+          }),
+        },
+      );
+      expect(rec.status, await rec.clone().text()).toBe(200);
+      expect(balance(relay, id), "RESUME: refunded once").toBe(5_000_000);
+      const again = await relay.app.request(
+        `/api/v1/admin/withdrawals/${row.withdrawal_id}/reconcile`,
+        {
+          method: "POST",
+          headers: JSON_AUTH,
+          body: JSON.stringify({ outcome: "not_paid", attestation: "again" }),
+        },
+      );
+      expect(again.status).toBeGreaterThanOrEqual(400);
+      expect(balance(relay, id), "never twice").toBe(5_000_000);
+    } finally {
+      await relay.close();
+    }
+  });
+
   it("horizon truncation: a freeze refusing the settlement truncation persists no cert attesting it; after unfreeze it commits once", async () => {
     const relay = await createTestRelay({ enableDeviceAuth: false });
     try {
@@ -1703,6 +1857,86 @@ describe("freeze guards — registry and installation", () => {
       }
     } finally {
       await relay.close();
+    }
+  });
+
+  it("a fresh boot guards exactly the declared money columns, and a restart installs the same guards", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "fz-guards-"));
+    const dbPath = join(dir, "relay.db");
+    const guardSql = (relay: SyncRelay): Record<string, string> =>
+      Object.fromEntries(
+        (
+          relay.moteDb.db
+            .prepare(
+              "SELECT name, sql FROM temp.sqlite_master WHERE type = 'trigger' AND name LIKE 'freeze_guard_%'",
+            )
+            .all() as Array<{ name: string; sql: string }>
+        ).map((r) => [r.name, r.sql]),
+      );
+    try {
+      const first = await createTestRelay({ enableDeviceAuth: false, dbPath });
+      let firstBoot: Record<string, string>;
+      try {
+        const db = first.moteDb.db;
+        firstBoot = guardSql(first);
+        for (const [table, money] of Object.entries(FREEZE_MONEY_COLUMNS)) {
+          const live = (
+            db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>
+          ).map((c) => c.name);
+          const nonMoney = FREEZE_NON_MONEY_COLUMNS[table] ?? [];
+          expect(
+            money.filter((c) => nonMoney.includes(c)),
+            `${table}: money and non-money overlap`,
+          ).toEqual([]);
+          expect(
+            [...live].sort(),
+            `${table}: classify every live column in FREEZE_MONEY_COLUMNS or FREEZE_NON_MONEY_COLUMNS (services/relay/src/freeze.ts)`,
+          ).toEqual([...money, ...nonMoney].sort());
+          // The installed UPDATE guard compares exactly the declared money columns.
+          const sql = firstBoot[`freeze_guard_${table}_update`] ?? "";
+          const guarded = [...sql.matchAll(/NEW\.(\w+) IS NOT OLD\.\1/g)].map((m) => m[1]);
+          expect([...new Set(guarded)].sort(), `${table}: first-boot guard`).toEqual(
+            [...money].sort(),
+          );
+          expect(freezeGuardedUpdateColumns(db, table).sort()).toEqual([...money].sort());
+        }
+      } finally {
+        await first.close();
+      }
+      const second = await createTestRelay({ enableDeviceAuth: false, dbPath });
+      try {
+        expect(guardSql(second), "restart installs the first boot's guards").toEqual(firstBoot);
+      } finally {
+        await second.close();
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("the guard refuses to install before a declared money column exists (install after every schema mutation)", () => {
+    const moteDb = createMotebitDatabase(":memory:");
+    try {
+      // relay_settlements as it stands before the task queue adds its column.
+      const money = FREEZE_MONEY_COLUMNS.relay_settlements!.filter(
+        (c) => c !== "receipt_signature",
+      );
+      const cols = [...money, ...(FREEZE_NON_MONEY_COLUMNS.relay_settlements ?? [])];
+      moteDb.db.exec(`CREATE TABLE relay_settlements (${cols.join(", ")})`);
+      expect(() => freezeGuardedUpdateColumns(moteDb.db, "relay_settlements")).toThrow(
+        /receipt_signature/,
+      );
+      moteDb.db.exec("ALTER TABLE relay_settlements ADD COLUMN receipt_signature TEXT");
+      expect(freezeGuardedUpdateColumns(moteDb.db, "relay_settlements").sort()).toEqual(
+        [...FREEZE_MONEY_COLUMNS.relay_settlements!].sort(),
+      );
+      // An unclassified live column is guarded (fail-closed).
+      moteDb.db.exec("ALTER TABLE relay_settlements ADD COLUMN fz_unclassified TEXT");
+      expect(freezeGuardedUpdateColumns(moteDb.db, "relay_settlements")).toContain(
+        "fz_unclassified",
+      );
+    } finally {
+      moteDb.close();
     }
   });
 
