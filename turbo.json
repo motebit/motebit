@@ -7,7 +7,6 @@
     "DROPLET.md",
     "LIQUESCENTIA.md",
     "package.json",
-    "README.md",
     "scripts/check-client-build-output.ts",
     "scripts/generate-llms-txt.ts",
     "scripts/lib/client-bundle-secrets.ts",
