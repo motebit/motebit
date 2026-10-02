@@ -372,25 +372,26 @@ export async function evaluateAndFireRail(
     return;
   }
 
-  const now = Date.now();
-  const claimed = claimForFiring(
-    db,
-    rows.map((r) => r.pending_id),
-    now,
-  );
-  if (claimed.length === 0) return;
-
   logger.info("batch.firing", {
     rail: rail.name,
-    count: claimed.length,
-    aggregatedMicro: claimed.reduce((sum, r) => sum + r.amount_micro, 0),
+    count: rows.length,
+    aggregatedMicro: aggregated,
     mode: isBatchableRail(rail) ? "batch" : "serial",
   });
 
   if (isBatchableRail(rail)) {
+    const claimed = claimForFiring(
+      db,
+      rows.map((r) => r.pending_id),
+      Date.now(),
+    );
+    if (claimed.length === 0) return;
     await fireBatch(db, rail, claimed);
   } else {
-    await fireSerial(db, rail, claimed);
+    // Serial: each row is claimed immediately before its own send, so an
+    // emergency freeze that lands during one send refuses the next claim (a
+    // guarded write) and every later row stays `pending` for after unfreeze.
+    await fireSerial(db, rail, rows, { claimEach: true });
   }
 }
 
@@ -458,11 +459,18 @@ async function fireBatch(
 async function fireSerial(
   db: DatabaseDriver,
   rail: WithdrawableGuestRail,
-  rows: PendingRow[],
+  candidates: PendingRow[],
+  opts: { claimEach: boolean } = { claimEach: false },
 ): Promise<void> {
   let fired = 0;
   let failed = 0;
-  for (const row of rows) {
+  for (const candidate of candidates) {
+    // A refused claim (emergency freeze) throws out of the pass: nothing more
+    // is sent, the remaining rows are left as they were.
+    const row = opts.claimEach
+      ? claimForFiring(db, [candidate.pending_id], Date.now())[0]
+      : candidate;
+    if (row == null) continue;
     const idempotencyKey = row.idempotency_key ?? `pending-${row.pending_id}`;
     try {
       // GuestRail.withdraw takes the amount in whole units (dollars/USDC,

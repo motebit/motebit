@@ -38,6 +38,7 @@
  */
 import type { DatabaseDriver } from "@motebit/persistence";
 import { sqliteAccountStoreFor } from "./account-store-sqlite.js";
+import { assertNotFrozen } from "./freeze.js";
 import { createLogger } from "./logger.js";
 
 const logger = createLogger({ service: "allocation-escrow" });
@@ -471,11 +472,17 @@ function refuse(
 
 /**
  * Move allocation money — the ONLY writer. Runs synchronously inside the
- * caller's transaction; throws {@link AllocationMoneyRefused} (and writes
- * nothing) when the movement would exceed what the allocation holds, pay
- * anyone but a party of that allocation, or the payer cannot cover it.
+ * caller's transaction; throws `EmergencyFrozenError` while the relay is
+ * frozen, and {@link AllocationMoneyRefused} (writing nothing either way)
+ * when the movement would exceed what the allocation holds, pay anyone but a
+ * party of that allocation, or the payer cannot cover it.
  */
 export function moveAllocationMoney(db: DatabaseDriver, move: AllocationMove): void {
+  // The emergency freeze refuses HERE, before anything is read or written:
+  // the one place allocation money moves is the one place the freeze holds
+  // for it (EmergencyFrozenError; the caller's transaction rolls back). The
+  // table triggers stay the second layer for raw writes.
+  assertNotFrozen(db);
   const { allocationId, amount } = move;
   if (!Number.isSafeInteger(amount) || amount < 0) {
     throw refuse(move, "invalid_amount", `amount ${amount} is not a non-negative integer`);
@@ -734,6 +741,23 @@ export function recordInboundFederatedSettlement(
     );
   }
   return inserted;
+}
+
+/**
+ * Forward lifecycle: claim ONE send of a pending forward. Called immediately
+ * before each POST of `/federation/v1/settlement/forward` — the first send
+ * and every retry — in the same synchronous turn as the send is started.
+ * Refuses while frozen (`EmergencyFrozenError`: the send is the moment money
+ * leaves for the peer, which credits its worker on receipt), so a freeze that
+ * lands during one send stops every later one. Returns false — send nothing —
+ * when the forward is already `delivered`, or `failed` (its gross returned to
+ * the escrow and refunded: sending it then would pay twice).
+ */
+export function beginForwardSend(db: DatabaseDriver, settlementId: string): boolean {
+  assertNotFrozen(db);
+  const status = forwardOf(db, settlementId)?.status;
+  // A forward row the lifecycle never stamped (pre-lifecycle) is sent as before.
+  return status !== "delivered" && status !== "failed";
 }
 
 /** Forward lifecycle: the peer acknowledged a pending forward. Idempotent. */

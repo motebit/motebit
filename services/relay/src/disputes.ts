@@ -39,6 +39,8 @@ import {
 import type { DatabaseDriver } from "@motebit/persistence";
 import type { RelayIdentity } from "./federation.js";
 import { AllocationMoneyRefused, moveAllocationMoney } from "./allocation-escrow.js";
+import { EmergencyFrozenError } from "./errors.js";
+import { isEmergencyFrozenAbort } from "./freeze.js";
 import { createLogger } from "./logger.js";
 import { superviseInterval, type LoopSupervisor } from "./loop-supervisor.js";
 import {
@@ -1973,7 +1975,13 @@ export function registerDisputeRoutes(deps: DisputeDeps): void {
       db.exec("COMMIT");
     } catch (err) {
       db.exec("ROLLBACK");
-      if (err instanceof FundActionRefused) {
+      // The emergency freeze refused the fund action (at the escrow
+      // chokepoint): the signed round-2 verdict is persisted exactly as for a
+      // refused fund action, so the read after unfreeze finalizes it — but
+      // with no refusal marker (nothing is wrong with the verdict) and a 503,
+      // never a 500.
+      const frozen = err instanceof EmergencyFrozenError || isEmergencyFrozenAbort(err);
+      if (err instanceof FundActionRefused || frozen) {
         // P1: the round-2 verdict stands even when its fund action cannot run
         // yet (a claw-back the paid account no longer covers). Persist the
         // signed round-2 resolution and the marker — the dispute stays
@@ -1996,7 +2004,12 @@ export function registerDisputeRoutes(deps: DisputeDeps): void {
           round2ResolvedAt,
           round2Signed.signature,
         );
-        recordFundRefusal(db, disputeId, err.reason);
+        if (err instanceof FundActionRefused) recordFundRefusal(db, disputeId, err.reason);
+      }
+      if (frozen) {
+        throw new EmergencyFrozenError(
+          `Relay is in emergency freeze mode: dispute ${disputeId}'s round-2 verdict is recorded; its fund action runs on the first read after the freeze lifts`,
+        );
       }
       throw new HTTPException(500, {
         message: `Round-2 finalization failed: ${err instanceof Error ? err.message : String(err)}`,

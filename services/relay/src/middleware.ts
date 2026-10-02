@@ -36,7 +36,9 @@ import {
   P2pProofAlreadyAdmittedError,
   X402OutcomeUnknownError,
   X402PaymentReplayedError,
+  EmergencyFrozenError,
 } from "./errors.js";
+import { isEmergencyFrozenAbort } from "./freeze.js";
 import {
   CALLER_VERIFIED_KEY,
   recordMasterTokenOnce,
@@ -969,7 +971,16 @@ export function registerMiddleware(deps: MiddlewareDeps): MiddlewareResult {
   }
 
   // --- Error handler ---
-  app.onError((err, c) => {
+  app.onError((caught, c) => {
+    // A freeze guard aborted this request's money write (the freeze landed
+    // after the entry check): a typed 503, never a 500. An x402 settlement the
+    // freeze left uncredited is already a 503 that names its record.
+    const err =
+      !(caught instanceof EmergencyFrozenError) &&
+      !(caught instanceof X402OutcomeUnknownError) &&
+      isEmergencyFrozenAbort(caught)
+        ? new EmergencyFrozenError(undefined, { cause: caught })
+        : caught;
     // #459: if THIS request claimed an idempotency key and then failed
     // before completing it, release the claim — else the key is stranded
     // in 'processing' and an honest same-key retry gets 409 until the 24h
@@ -983,7 +994,19 @@ export function registerMiddleware(deps: MiddlewareDeps): MiddlewareResult {
       } catch {
         // Release is best-effort — the 24h sweep remains the backstop.
       }
+    } // A request whose money write the freeze refused (a route that does not
+    // release on every failure stamps this): its key reopens, so the same-key
+    // retry after unfreeze does the work once instead of a 409.
+    const frozenClaim = c.get("idempotencyClaimOnFreeze" as never) as
+      { key: string; motebitId: string } | undefined;
+    if (err instanceof EmergencyFrozenError && frozenClaim != null && claim == null) {
+      try {
+        deps.releaseIdempotencyClaim?.(frozenClaim.key, frozenClaim.motebitId);
+      } catch {
+        // Best-effort — the 24h sweep remains the backstop.
+      }
     }
+
     if (err instanceof RelayError) {
       const status = err.statusCode as 400;
       if (err instanceof RateLimitError) {

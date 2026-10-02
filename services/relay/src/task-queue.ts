@@ -16,6 +16,7 @@ import { AgentTaskStatus, asMotebitId } from "@motebit/sdk";
 /* eslint-disable-next-line no-restricted-imports -- the answer archive stores canonical bytes */
 import { canonicalJson } from "@motebit/encryption";
 import type { TaskQueueEntry } from "./tasks.js";
+import { claimHoldFloor } from "./freeze.js";
 
 // ---------------------------------------------------------------------------
 // The answer capability (#890 round 9)
@@ -142,7 +143,8 @@ export class TaskQueue implements Map<string, TaskQueueEntry> {
     // An entry whose answer is claimed but not settled (#890 round 10) is
     // money still owed a decision: expiry and the size cap leave it for the
     // settlement-recovery sweep — for at most UNSETTLED_CLAIM_HOLD_MS past
-    // its expiry, after which it goes like any other.
+    // its expiry (never while frozen, and not for that long after an
+    // unfreeze: `claimHoldFloor`), after which it goes like any other.
     const heldClaim = `(json_extract(task_json, '$.settling') IS NOT NULL
         AND COALESCE(json_extract(task_json, '$.settled'), 0) = 0
         AND expires_at >= ?)`;
@@ -453,9 +455,13 @@ export class TaskQueue implements Map<string, TaskQueueEntry> {
   // Extended operations (used by cleanup interval and federation callbacks)
   // ---------------------------------------------------------------------------
 
-  /** Delete expired tasks. Returns number of deleted rows. */
+  /**
+   * Delete expired tasks. Returns number of deleted rows. A claimed-but-
+   * unsettled entry's hold never runs out while the relay is frozen (the
+   * freeze is what keeps it unsettled) — `claimHoldFloor`.
+   */
   cleanup(now: number = Date.now()): number {
-    const result = this.stmtCleanup.run(now, now - UNSETTLED_CLAIM_HOLD_MS);
+    const result = this.stmtCleanup.run(now, claimHoldFloor(this.db, now, UNSETTLED_CLAIM_HOLD_MS));
     return result.changes;
   }
 
@@ -464,7 +470,10 @@ export class TaskQueue implements Map<string, TaskQueueEntry> {
     const currentSize = this.size;
     if (currentSize <= maxSize) return 0;
     const toEvict = currentSize - maxSize;
-    const result = this.stmtEvictOldest.run(Date.now() - UNSETTLED_CLAIM_HOLD_MS, toEvict);
+    const result = this.stmtEvictOldest.run(
+      claimHoldFloor(this.db, Date.now(), UNSETTLED_CLAIM_HOLD_MS),
+      toEvict,
+    );
     return result.changes;
   }
 

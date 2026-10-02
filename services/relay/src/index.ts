@@ -76,7 +76,12 @@ import { createLogger } from "./logger.js";
 import { parseBoolEnv, parseFloatEnv, parseIntEnv } from "./env.js";
 import { buildOutboundPolicy } from "./outbound-policy.js";
 import { createRelaySchema } from "./schema.js";
-import { createRelayConfigTable, loadFreezeState, persistFreeze } from "./freeze.js";
+import {
+  createRelayConfigTable,
+  installFreezeMoneyGuards,
+  loadFreezeState,
+  persistFreeze,
+} from "./freeze.js";
 import { parseTokenPayloadUnsafe, verifySignedTokenForDevice } from "./auth.js";
 import { registerMiddleware, registerAuthMiddleware } from "./middleware.js";
 import {
@@ -131,7 +136,11 @@ import {
 } from "./credential-anchoring.js";
 import { aggregateFees } from "./fees.js";
 import { aggregateHealthSummary } from "./health-summary.js";
-import { startDepositDetector, USDC_CONTRACTS } from "./deposit-detector.js";
+import {
+  createDepositDetectorTable,
+  startDepositDetector,
+  USDC_CONTRACTS,
+} from "./deposit-detector.js";
 import {
   startTreasuryReconciliationLoop,
   getTreasuryReconciliationStats,
@@ -1001,6 +1010,10 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
   // --- Schema: relay-owned tables, migrations, startup cleanup ---
   const { isTokenBlacklisted, isAgentRevoked } = createRelaySchema(moteDb.db);
   createRelayConfigTable(moteDb.db);
+  // The deposit detector's tables are created here (they otherwise appear
+  // only when it starts) so the freeze guards, installed once the task queue
+  // has added its columns (below), cover them.
+  createDepositDetectorTable(moteDb.db);
 
   // Emergency freeze: persistent kill switch. When true, all state-mutating
   // operations (POST/PUT/PATCH/DELETE) return 503. Reads remain available.
@@ -1037,6 +1050,12 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
   const MAX_TASK_QUEUE_SIZE = 100_000;
   const MAX_TASKS_PER_SUBMITTER = config.maxTasksPerSubmitter ?? 1_000;
   const taskQueue = new TaskQueue(moteDb.db);
+  // The freeze is re-checked where money is written, inside the write's own
+  // transaction (a request or replay past the entry check when the freeze
+  // lands commits nothing). After EVERY schema mutation — schema, migrations
+  // and the task queue's settlement columns — so the guard set is the same on
+  // a first boot as on a restart.
+  installFreezeMoneyGuards(moteDb.db);
 
   // --- Relay Identity: persistent Ed25519 keypair ---
   // One outbound URL policy for every persisted callback the relay will contact.
