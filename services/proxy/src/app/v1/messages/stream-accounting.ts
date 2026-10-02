@@ -34,13 +34,19 @@
  *      `writeStallMs`; past it the pump stops forwarding (erroring the
  *      client's stream) and drains upstream exactly as on a cancel.
  *
- *   5. **A provider that never served bills nothing.** A 200 stream that
- *      carries only a provider error event (e.g. Anthropic `overloaded_error`,
- *      no `message_start`), or an empty body, reported no usage and never
- *      started a message — the provider billed nothing for it, so the turn's
- *      provider cost is 0 (the classifier, if it spent, is still billed once),
- *      logged `proxy.turn_unbilled_provider_error`. The upper bound is kept for
- *      a provider that demonstrably started generating and then lost its usage.
+ *   5. **A provider that never served bills nothing.** One state predicate
+ *      ({@link unservedProviderError}), never a list of stream shapes: a
+ *      stream that never started a message and reported no usage — however
+ *      its bytes looked and however it ended — is provider cost 0 (the
+ *      classifier, if it spent, is still billed once), logged
+ *      `proxy.turn_unbilled_provider_error` with a reason. Reported usage is
+ *      exact; a provider that demonstrably started and then lost usage is
+ *      billed the upper bound for what it did not report, logged.
+ *
+ *   6. **A client gone during a silent upstream is still noticed.** The pump
+ *      learns of a departed client from its stream being cancelled, not only
+ *      from a failed write, so an upstream that sends nothing still meets the
+ *      drain deadline and settles.
  *
  * Settle bound. From the moment forwarding ends (upstream done, client gone
  * or stalled) the accounting settles within {@link accountingTailWorstCaseMs}
@@ -146,17 +152,21 @@ export type EstimateReason =
   | "cache_ttl_unknown";
 
 /**
- * Why the provider's share of a turn is 0: it never started a message and
- * reported no usage, and either streamed an explicit error (its type) or sent
- * an empty body (`"empty_body"`). Null when the provider may have served.
+ * Why the provider's share of a turn is 0, or null when it is not.
+ *
+ * ONE state predicate, never a list of stream shapes: the provider is owed
+ * nothing iff it never STARTED generating (no Anthropic `message_start` /
+ * content event, no OpenAI-shaped chunk with `choices`) AND reported no usage.
+ * What else the bytes were — nothing, an SSE comment, a ping, an error event,
+ * a non-SSE JSON error body, garbage — and how the stream ended (clean,
+ * reset, hung past the drain deadline) do not matter; they only name the
+ * reason: the streamed error type, `"empty_body"` when no byte arrived, else
+ * `"no_generation"`.
  */
-export function unservedProviderError(
-  usage: UsageAccumulator,
-  completedEmptyBody: boolean,
-): string | null {
+export function unservedProviderError(usage: UsageAccumulator, bodyBytes: number): string | null {
   if (usage.started || usage.inputReported || usage.outputReported) return null;
   if (usage.providerErrorType != null) return usage.providerErrorType;
-  return completedEmptyBody ? "empty_body" : null;
+  return bodyBytes === 0 ? "empty_body" : "no_generation";
 }
 
 /**
@@ -192,6 +202,7 @@ export function upperBoundUsage(
 }
 
 const TIMED_OUT = Symbol("timed-out");
+const CLIENT_GONE = Symbol("client-gone");
 
 function withTimeout<T>(p: Promise<T>, ms: number): Promise<T | typeof TIMED_OUT> {
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -240,7 +251,7 @@ export function meterStream(opts: StreamAccountingOptions): {
     let drainDeadline = 0;
     /** When forwarding ended — the start of the post-response accounting tail. */
     let tailStart = 0;
-    /** Upstream body bytes received — an empty body is a provider that never served. */
+    /** Upstream body bytes received — names the reason of an unserved turn. */
     let bodyBytes = 0;
     let buffer = "";
     const meter = (text: string, flush: boolean) => {
@@ -250,13 +261,32 @@ export function meterStream(opts: StreamAccountingOptions): {
       for (const line of lines) extractUsage(opts.provider, line, usage);
     };
 
+    const markGone = () => {
+      if (clientGone) return;
+      clientGone = true;
+      tailStart = Date.now();
+      drainDeadline = tailStart + ACCOUNTING_TIMINGS.drainTimeoutMs;
+    };
+    // The client cancelling its stream errors the writable side: `closed`
+    // rejects. That is the only signal while upstream sends nothing.
+    const clientCancelled = writer.closed.then(
+      () => new Promise<never>(() => {}),
+      () => CLIENT_GONE,
+    );
+
     try {
       for (;;) {
         let result: ReadableStreamReadResult<Uint8Array> | typeof TIMED_OUT;
         try {
-          result = clientGone
-            ? await withTimeout(reader.read(), Math.max(0, drainDeadline - Date.now()))
-            : await reader.read();
+          const read = reader.read();
+          let first: ReadableStreamReadResult<Uint8Array> | typeof CLIENT_GONE | typeof TIMED_OUT =
+            clientGone ? CLIENT_GONE : await Promise.race([read, clientCancelled]);
+          if (first === CLIENT_GONE) {
+            // Keep the SAME pending read (a new one would skip a chunk's usage).
+            markGone();
+            first = await withTimeout(read, Math.max(0, drainDeadline - Date.now()));
+          }
+          result = first;
         } catch {
           estimateReason = "upstream_error";
           break;
@@ -290,9 +320,7 @@ export function meterStream(opts: StreamAccountingOptions): {
             clientStalled = true;
             forward.error(new Error("client stalled"));
           }
-          clientGone = true;
-          tailStart = Date.now();
-          drainDeadline = tailStart + ACCOUNTING_TIMINGS.drainTimeoutMs;
+          markGone();
         }
       }
     } catch {
@@ -309,11 +337,10 @@ export function meterStream(opts: StreamAccountingOptions): {
     // is what `waitUntil` (the route's `after`) holds open.
     let cost = 0;
     try {
-      // A provider that never served (explicit error / empty body, nothing
-      // started, no usage) billed nothing: its share is 0, not the bound. An
-      // empty body cut short by a read error or the drain deadline is not
-      // known to be unserved, so only a COMPLETED empty body counts.
-      const unserved = unservedProviderError(usage, estimateReason == null && bodyBytes === 0);
+      // A provider that never started and reported no usage billed nothing:
+      // its share is 0, not the bound — whatever the bytes were, however the
+      // stream ended (the end is logged as `streamEnd`).
+      const unserved = unservedProviderError(usage, bodyBytes);
       if (unserved != null) {
         console.warn(
           JSON.stringify({
