@@ -724,7 +724,16 @@ export function registerProxyTokenRoutes(
           }
 
           case "invoice_paid": {
-            // Monthly renewal — credit the account again.
+            // One credit per billing period. `billing_reason` says which
+            // period an invoice pays for (Stripe's Invoice.billing_reason):
+            //   - subscription_create: the FIRST period — the same period
+            //     checkout.session.completed and session-status credit, so it
+            //     shares their key `sub:<id>:initial` and whichever arrives
+            //     first credits it (webhook order is not guaranteed);
+            //   - subscription_cycle: a new period, keyed by its invoice;
+            //   - anything else (a subscription_update proration, manual,
+            //     subscription_threshold, …; or absent) opens no period and
+            //     credits nothing.
             const row = db
               .prepare(
                 "SELECT motebit_id FROM relay_subscriptions WHERE stripe_subscription_id = ?",
@@ -732,26 +741,44 @@ export function registerProxyTokenRoutes(
               .get(event.subscription_id) as { motebit_id: string } | undefined;
             if (!row) break;
 
-            // Idempotency: invoice id as reference.
-            const refId = `sub:${event.subscription_id}:${event.invoice_id}`;
+            let refId: string;
+            let description: string;
+            if (event.billing_reason === "subscription_create") {
+              refId = `sub:${event.subscription_id}:initial`;
+              description = `Motebit Cloud subscription — $${MONTHLY_CREDIT_USD} credits`;
+            } else if (event.billing_reason === "subscription_cycle") {
+              refId = `sub:${event.subscription_id}:${event.invoice_id}`;
+              description = `Motebit Cloud renewal — $${MONTHLY_CREDIT_USD} credits`;
+            } else {
+              logger.info("subscription.invoice_not_a_period", {
+                motebitId: row.motebit_id,
+                subscriptionId: event.subscription_id,
+                invoiceId: event.invoice_id,
+                billingReason: event.billing_reason,
+              });
+              break;
+            }
+
             const existingTxn = db
               .prepare("SELECT transaction_id FROM relay_transactions WHERE reference_id = ?")
               .get(refId);
             if (existingTxn != null) break;
 
+            getOrCreateAccount(db, row.motebit_id);
             creditAccount(
               db,
               row.motebit_id,
               toMicro(MONTHLY_CREDIT_USD),
               "deposit",
               refId,
-              `Motebit Cloud renewal — $${MONTHLY_CREDIT_USD} credits`,
+              description,
             );
 
             logger.info("subscription.renewed", {
               motebitId: row.motebit_id,
               subscriptionId: event.subscription_id,
               invoiceId: event.invoice_id,
+              billingReason: event.billing_reason,
               creditUsd: MONTHLY_CREDIT_USD,
             });
             break;

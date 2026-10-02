@@ -141,6 +141,7 @@ function invoiceEvent(subId: string, invoiceId: string) {
   return signedEvent("invoice.paid", {
     id: invoiceId,
     object: "invoice",
+    billing_reason: "subscription_cycle",
     parent: { subscription_details: { subscription: subId } },
   });
 }
