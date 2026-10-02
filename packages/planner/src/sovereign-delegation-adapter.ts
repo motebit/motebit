@@ -434,7 +434,7 @@ export class SovereignDelegationAdapter implements StepDelegationAdapter {
         (payErr as DelegationError).failedAgentId = candidate.motebit_id;
         throw payErr;
       }
-      throw terminal(
+      throw undeterminedTerminal(
         `Payment status unknown (${costMicro} micro to worker ${candidate.motebit_id} at ` +
           `${toAddress}; the send failed with "${sendMsg}" and whether it landed could not be ` +
           `confirmed: ${verdict.reason}). Not retried — check the wallet's history before ` +
@@ -493,7 +493,7 @@ export class SovereignDelegationAdapter implements StepDelegationAdapter {
    */
   private paidUnretrieved(entry: SovereignPaidEntry, reason: string): DelegationError {
     this.ledgerWrite("record_unretrieved", entry, (l) => l.recordSettledUnretrieved(entry));
-    const err = terminal(
+    const err = undeterminedTerminal(
       `Paid, result not retrieved (tx ${entry.txHash}, worker ${entry.workerMotebitId}): ` +
         `${reason}. Not retried — another attempt would pay again. The payment is recorded ` +
         `as outstanding (task ${entry.taskId}).`,
@@ -748,8 +748,23 @@ interface DelegationError extends Error {
   failedAgentId?: string;
   /** No further attempt may be made — one could pay a second time (#887). */
   terminal?: boolean;
+  /**
+   * Money may have moved and its outcome is unknown (#890) — "payment status
+   * unknown" and "paid, result not retrieved". The plan engine holds the
+   * step instead of failing it, so a scheduler never re-fires the goal into
+   * a second payment. A refusal BEFORE payment is terminal but not
+   * undetermined: nothing moved. See `isDelegationUndetermined`.
+   */
+  undetermined?: boolean;
   /** The payment this step made, when one is known to have moved. */
   paidTxHash?: string;
+}
+
+/** A terminal error for an attempt whose money may have moved: outcome unknown (#890). */
+function undeterminedTerminal(message: string, cause?: unknown): DelegationError {
+  const err = terminal(message, cause);
+  err.undetermined = true;
+  return err;
 }
 
 function terminal(message: string, cause?: unknown): DelegationError {

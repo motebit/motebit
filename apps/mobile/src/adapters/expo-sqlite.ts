@@ -1107,7 +1107,13 @@ export interface GoalOutcome {
   goal_id: string;
   motebit_id: string;
   ran_at: number;
-  status: "completed" | "failed" | "suspended";
+  /**
+   * `partial` (#890): stopped on a paid delegation whose outcome is unknown —
+   * not a failure. `running` (#890): the run's start, written before it can
+   * pay anything and replaced by its final outcome; one left behind is a
+   * run whose process died.
+   */
+  status: "completed" | "failed" | "suspended" | "partial" | "running";
   summary: string | null;
   tool_calls_made: number;
   memories_formed: number;

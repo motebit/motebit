@@ -109,6 +109,7 @@ import {
   registerFederationRoutes,
   startHeartbeatLoop,
   startSettlementRetryLoop,
+  processResultDeliveries,
 } from "./federation.js";
 import type { RelayIdentity } from "./federation.js";
 import { startRevocationHorizonLoop } from "./horizon.js";
@@ -159,7 +160,7 @@ import {
   type OnrampAdapter,
 } from "./onramp.js";
 import { registerOfframpRoutes, BridgeOfframpAdapter, type OfframpAdapter } from "./offramp.js";
-import { createTaskRouter } from "./task-routing.js";
+import { createTaskRouter, cleanupTaskRoutes } from "./task-routing.js";
 import { createDataSyncTables, registerDataSyncRoutes } from "./data-sync.js";
 import {
   createAccountTables,
@@ -185,9 +186,11 @@ import { registerAgentRoutes, registerAgentAuthMiddleware } from "./agents.js";
 import { registerHostRosterRoutes } from "./host-roster-routes.js";
 import { observeHostConnection, sweepHostLiveness } from "./host-roster-store.js";
 import { createFederationCallbacks } from "./federation-callbacks.js";
-import { registerTaskRoutes, TASK_TTL_MS } from "./tasks.js";
+import { recoverSettlements, SETTLEMENT_RECOVERY_CLOSE_BOUND_MS } from "./settlement-recovery.js";
+import type { SettlementRecoveryDeps, SettlementRecoveryReport } from "./settlement-recovery.js";
+import { registerTaskRoutes, TASK_TTL_MS, workerKeyFor } from "./tasks.js";
 import { ExpoPushAdapter } from "./push-adapter.js";
-import { TaskQueue } from "./task-queue.js";
+import { TaskQueue, installSettlementGuards } from "./task-queue.js";
 import {
   registerCommandRoutes,
   handleCommandResponse,
@@ -548,6 +551,14 @@ export interface SyncRelay {
   getConnectionCount(): number;
   /** Whether the relay is currently draining WebSocket connections. */
   isDraining: boolean;
+  /**
+   * Settlement recovery (#890 round 10): the boot pass, and one pass on
+   * demand (the supervised loop runs it every minute). Exposed for testing.
+   */
+  settlementRecovery: {
+    booted: Promise<SettlementRecoveryReport | null>;
+    sweep(opts?: { graceMs?: number; now?: number }): Promise<SettlementRecoveryReport>;
+  };
 }
 
 // === Factory ===
@@ -1089,6 +1100,13 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     } catch {
       // Best-effort cleanup
     }
+    // Clean task routes past their horizon (7 days — beyond every reader's
+    // window; #890 r6, TASK_ROUTE_RETENTION_MS)
+    try {
+      cleanupTaskRoutes(moteDb.db);
+    } catch {
+      // Best-effort cleanup
+    }
     // Reclaim deleted pages (works with auto_vacuum = INCREMENTAL)
     try {
       moteDb.db.pragma("incremental_vacuum(100)");
@@ -1264,6 +1282,9 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
   const { registerDisputeRoutes, createDisputeTables, startDeferredOrchestrationWorker } =
     await import("./disputes.js");
   createDisputeTables(moteDb.db);
+  // The settlement guards again, now the dispute table exists: a dispute's
+  // resolution credits `settlement_credit` under the dispute id (#890 r9).
+  installSettlementGuards(moteDb.db);
   registerDisputeRoutes({
     db: moteDb.db,
     app,
@@ -2337,7 +2358,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
   logger.info("relay.push_wake", { enabled: pushAdapter !== undefined });
 
   // --- Task routes (submission, polling, receipt settlement) ---
-  await registerTaskRoutes({
+  const taskRoutes = await registerTaskRoutes({
     app,
     outboundPolicy,
     moteDb,
@@ -2371,6 +2392,69 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
         ? config.p2pPaymentChain
         : gatedPaymentChain(paymentChainFromEnv()),
   });
+
+  // --- Settlement recovery (#890 round 10): supervised, on boot and every minute ---
+  // A claimed-but-unsettled answer (a crash or a failed step between the
+  // claim and the settle) is replayed through the door its claim was taken
+  // by — the one door routine decides it again; an inbound forward answered
+  // before the claim existed adopts it; owed federation results are
+  // redelivered until the origin acknowledges. One pass at a time, never a
+  // queue: a tick or sweep arriving while a pass is in flight joins it. The
+  // freeze is checked inside the pass (before each replay and delivery);
+  // `close()` aborts the pass's outbox fetch and waits for it, bounded.
+  const recoveryAbort = new AbortController();
+  const recoveryDeps: SettlementRecoveryDeps = {
+    db: moteDb.db,
+    taskQueue,
+    replayLocalAnswer: (taskId, door) => taskRoutes.replayLocalAnswer(taskId, door),
+    replayFederationResult: (v) => federationCallbacks.onTaskResultReceived(v),
+    deliverPendingResults: (now, ctl) =>
+      processResultDeliveries(
+        moteDb.db,
+        relayIdentity,
+        (signer) => workerKeyFor(moteDb.db, signer),
+        now,
+        ctl,
+      ),
+    isFrozen: () => getEmergencyFreeze(),
+  };
+  let recoveryInFlight: Promise<SettlementRecoveryReport> | null = null;
+  const runSettlementRecovery = (
+    opts: { graceMs?: number; now?: number } = {},
+  ): Promise<SettlementRecoveryReport> => {
+    // Single-flight, never chain: the pass in flight answers this call too.
+    if (recoveryInFlight != null) return recoveryInFlight;
+    const run = recoverSettlements(recoveryDeps, { ...opts, signal: recoveryAbort.signal });
+    recoveryInFlight = run;
+    void run
+      .finally(() => {
+        if (recoveryInFlight === run) recoveryInFlight = null;
+      })
+      .catch(() => {});
+    return run;
+  };
+  const settlementRecoveryInterval = superviseInterval(
+    loopSupervisor,
+    "settlement-recovery",
+    60_000,
+    () => runSettlementRecovery().then(() => undefined),
+    { isFrozen: () => getEmergencyFreeze() },
+  );
+  // The boot pass: no grace — no door is in flight in a process that just
+  // started. Supervised like a tick (markStart → markOk/markError).
+  loopSupervisor.markStart("settlement-recovery");
+  const settlementRecoveryBooted: Promise<SettlementRecoveryReport | null> = getEmergencyFreeze()
+    ? Promise.resolve(null)
+    : runSettlementRecovery({ graceMs: 0 }).then(
+        (r) => {
+          loopSupervisor.markOk("settlement-recovery");
+          return r;
+        },
+        (err: unknown) => {
+          loopSupervisor.markError("settlement-recovery", err);
+          return null;
+        },
+      );
 
   // --- Helper: count all connected WebSocket clients ---
   function getConnectionCount(): number {
@@ -2451,6 +2535,30 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     clearInterval(heartbeatInterval);
     clearInterval(revocationHorizonInterval);
     clearInterval(settlementRetryInterval);
+    clearInterval(settlementRecoveryInterval);
+    // The pass in flight stops at its next step; its outbox fetch is aborted
+    // (that delivery stays pending). Waited for, but never past the bound — a
+    // pass still awaiting a door afterwards meets a closed database and writes
+    // nothing (each settlement is one transaction).
+    recoveryAbort.abort();
+    if (recoveryInFlight != null) {
+      let bound: ReturnType<typeof setTimeout> | undefined;
+      const outlived = await Promise.race([
+        recoveryInFlight.then(
+          () => false,
+          () => false,
+        ),
+        new Promise<boolean>((r) => {
+          bound = setTimeout(() => r(true), SETTLEMENT_RECOVERY_CLOSE_BOUND_MS);
+        }),
+      ]);
+      clearTimeout(bound);
+      if (outlived) {
+        logger.warn("settlement.recovery_close_bound", {
+          boundMs: SETTLEMENT_RECOVERY_CLOSE_BOUND_MS,
+        });
+      }
+    }
     clearInterval(batchAnchorInterval);
     clearInterval(agentAnchorInterval);
     clearInterval(credentialAnchorInterval);
@@ -2491,6 +2599,10 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     getConnectionCount,
     get isDraining() {
       return draining;
+    },
+    settlementRecovery: {
+      booted: settlementRecoveryBooted,
+      sweep: (opts) => runSettlementRecovery(opts),
     },
   };
 }

@@ -970,10 +970,11 @@ const WRITERS: readonly Writer[] = [
   },
   {
     file: R + "task-queue.ts",
-    verb: "REPLACE",
+    verb: "INSERT",
     table: "relay_task_queue",
     count: 1,
-    principal: "the durable mirror of an in-memory task entry the task routes already authorized",
+    principal:
+      "the durable mirror of an in-memory task entry the task routes already authorized — inserted once, unanswered (#890 r9: a live row is written by the version-checked UPDATE, never replaced)",
   },
   {
     file: R + "task-queue.ts",
@@ -1183,7 +1184,7 @@ const REFILE_ALLOWED: ReadonlyArray<{ file: string; table: string; reason: strin
     file: R + "task-queue.ts",
     table: "relay_task_queue",
     reason:
-      "the durable mirror re-writes `worker_id = task.motebit_id`, the task's own fixed target (the same value its INSERT wrote), never another identity",
+      "the durable mirror re-writes `worker_id = task.motebit_id` and `submitter_id = submitted_by`, the task's own fixed target and submitter (the values its INSERT wrote — the pre-#890-r9 INSERT OR REPLACE re-wrote the same two), never another identity",
   },
 ];
 

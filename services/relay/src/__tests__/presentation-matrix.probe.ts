@@ -847,11 +847,12 @@ async function mcpCell(env: CellEnv, c: Cell, ip: string): Promise<Record<string
       { info: () => {}, warn: () => {} },
       undefined,
       async (receipt) => {
-        await relay.app.request(`/agent/${W.id}/task/${env.taskId}/result`, {
+        const res = await relay.app.request(`/agent/${W.id}/task/${env.taskId}/result`, {
           method: "POST",
           headers: JSON_AUTH,
           body: JSON.stringify(receipt),
         });
+        return res.ok;
       },
       j.dispatch_token,
       { allowPrivateNetwork: true } as never,
