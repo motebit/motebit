@@ -8,6 +8,7 @@ import {
   type InvokeFn,
 } from "../tauri-storage";
 import { DESKTOP_MIGRATIONS } from "../tauri-migrations";
+import { pushCompactionFloor } from "@motebit/sync-engine";
 
 // Schema matching main.rs SCHEMA constant
 const SCHEMA = `
@@ -130,6 +131,36 @@ describe("TauriEventStore", () => {
     db = new Database(":memory:");
     db.exec(SCHEMA);
     store = new TauriEventStore(createMockInvoke(db));
+  });
+
+  it("lists exactly its push: cursor keys, and the #962 floor reads them", async () => {
+    for (const sql of DESKTOP_MIGRATIONS.find((m) => m.version === 8)!.statements) db.exec(sql);
+    expect(await store.listSyncSeqCursorKeys("push:")).toEqual([]);
+    // No stream persisted, sync configured: compact nothing.
+    expect(await pushCompactionFloor(store, 100, { syncConfigured: true })).toBe(0);
+
+    await store.setSyncSeqCursor("push:relay:a%_#m", 7);
+    await store.setSyncSeqCursor("push:e2e:raw:https://r#m", 3);
+    await store.setSyncSeqCursor("push:raw:https://r#m", 9);
+    // Not push cursors: a pull cursor, near-miss prefixes, the wrong case.
+    for (const k of ["e2e:raw:https://r#m", "pushy", "push", "PUSH:x", "xpush:relay:a"]) {
+      await store.setSyncSeqCursor(k, 0);
+    }
+    expect((await store.listSyncSeqCursorKeys("push:")).sort()).toEqual([
+      "push:e2e:raw:https://r#m",
+      "push:raw:https://r#m",
+      "push:relay:a%_#m",
+    ]);
+    // The prefix is literal: LIKE metacharacters in it match only themselves.
+    expect(await store.listSyncSeqCursorKeys("push:relay:a%")).toEqual(["push:relay:a%_#m"]);
+    expect(await store.listSyncSeqCursorKeys("push:relay:a_")).toEqual([]);
+    expect(await store.listSyncSeqCursorKeys("push:relay:%")).toEqual([]);
+    // The floor over them: MAX within a relay stream (raw 9 beats e2e 3 on
+    // https://r#m), MIN across streams (a%_#m at 7).
+    expect(await pushCompactionFloor(store, 100, { syncConfigured: true })).toBe(7);
+    expect(await pushCompactionFloor(store, 5, { syncConfigured: true })).toBe(5);
+    // A later process over the same database reads the same streams.
+    expect(await pushCompactionFloor(new TauriEventStore(createMockInvoke(db)), 100)).toBe(7);
   });
 
   it("keeps the event-sync seq cursor once desktop migration v8 has run (#868)", async () => {

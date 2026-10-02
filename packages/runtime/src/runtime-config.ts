@@ -153,6 +153,18 @@ export interface RuntimeConfig {
   maxConversationHistory?: number;
   /** Compact events when count exceeds this threshold (0 = disabled, default 1000) */
   compactionThreshold?: number;
+  /**
+   * Is a sync relay configured for this motebit's event store? (#962) Read
+   * from the host's CONFIG at compaction time, independently of whether a
+   * push cursor was ever persisted: `true` (or a provider resolving `true`)
+   * compacts nothing until a relay acknowledges a push, so an enrollment
+   * write that never landed, or a process that never reached connect, can
+   * never let compaction delete an unpushed event. A provider that throws or
+   * rejects counts as `true` (fail closed). `false`: no relay — compaction as
+   * before, bounded only by streams that exist. Absent: bounded only by the
+   * streams that exist (hosts that sync set it; the surfaces all do).
+   */
+  syncConfigured?: boolean | (() => boolean | Promise<boolean>);
   /** MCP servers to connect to on init. Tools are discovered and merged into the registry. */
   mcpServers?: McpServerConfig[];
   /** Policy configuration. Controls operator mode, budgets, allow/deny lists. */

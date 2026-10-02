@@ -39,8 +39,9 @@
  *     whose `if:`/`needs:` chain is exactly the pinned one (and whose needs
  *     run unconditionally); no step in those jobs writes $GITHUB_ENV /
  *     $GITHUB_PATH or uses an action outside the pinned set;
- *   - EVERY step of every counterpart job (check, format, gate-effectiveness,
- *     changes) equals CI_JOB_STEPS exactly, in order — an added, removed or
+ *   - EVERY step of every counterpart job (check, format, the sharded
+ *     gate-effectiveness-shard + gate-self-tests, the fail-closed
+ *     gate-effectiveness verdict job, changes) equals CI_JOB_STEPS exactly, in order — an added, removed or
  *     changed step (another checkout `ref:`, a `rm -rf` of the tests, an
  *     `eval`'d $GITHUB_ENV write) is RED until the pinned list is updated;
  *   - the root package.json scripts those forms reach compare by exact value,
@@ -61,9 +62,18 @@
  * red gate whose repair is a deliberate edit to the tables below — the review
  * the pre-push ⊆ CI claim needs, made unskippable.
  */
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import {
+  closeSync,
+  existsSync,
+  mkdtempSync,
+  openSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { parse as parseYaml } from "yaml";
@@ -224,20 +234,53 @@ export const CI_FORMS: Record<Key, CiForm> = {
   test: { job: "check", run: "pnpm exec turbo run test:coverage --concurrency=4" },
   "test:coverage": { job: "check", run: "pnpm exec turbo run test:coverage --concurrency=4" },
   format: { job: "format", run: "pnpm format:check" },
-  "test:gates": { job: "gate-effectiveness", run: "pnpm test:gates" },
-  "check-gates-effective": { job: "gate-effectiveness", run: "pnpm check-gates-effective" },
+  "test:gates": { job: "gate-self-tests", run: "pnpm test:gates" },
+  // Sharded: the union of the matrix legs is the full probe set — the pinned
+  // strategy below must list every shard 1/N..N/N (matrixIsCompleteShardList),
+  // check-gates-effective re-proves the partition in every leg, and the
+  // `gate-effectiveness` job verifies the legs' manifests cover every probe.
+  "check-gates-effective": {
+    job: "gate-effectiveness-shard",
+    run: "pnpm check-gates-effective --shard ${{ matrix.shard }} --manifest /tmp/gate-shard.json",
+  },
 };
 
 /** Each job a counterpart may live in, with its exact `if:` / `needs:`. */
-export const CI_JOBS: Record<string, { if?: string; needs?: string }> = {
+export const CI_JOBS: Record<
+  string,
+  { if?: string; needs?: string | string[]; strategy?: Record<string, unknown> }
+> = {
   check: {},
   format: {},
-  "gate-effectiveness": {
+  "gate-effectiveness-shard": {
+    needs: "changes",
+    if: "github.event_name == 'push' ||\nneeds.changes.outputs.scripts == 'true'\n",
+    strategy: { "fail-fast": false, matrix: { shard: ["1/4", "2/4", "3/4", "4/4"] } },
+  },
+  "gate-self-tests": {
     needs: "changes",
     if: "github.event_name == 'push' ||\nneeds.changes.outputs.scripts == 'true'\n",
   },
+  // The verdict job: runs whatever the shards concluded and fails closed on a
+  // cancelled / skipped / failed leg (its pinned steps below).
+  "gate-effectiveness": {
+    needs: ["changes", "gate-effectiveness-shard", "gate-self-tests"],
+    if: "always()",
+  },
   changes: {},
 };
+
+/**
+ * A sharded counterpart is a superset of the hook's unsharded run only if its
+ * matrix lists EVERY shard exactly once: `["1/N", …, "N/N"]`, in order, and
+ * fail-fast is off (a failing leg must not cancel the others into "cancelled").
+ */
+export function matrixIsCompleteShardList(strategy: unknown): boolean {
+  const st = strategy as { "fail-fast"?: unknown; matrix?: { shard?: unknown } } | undefined;
+  const list = st?.matrix?.shard;
+  if (st?.["fail-fast"] !== false || !Array.isArray(list) || list.length < 1) return false;
+  return list.every((v, i) => v === `${i + 1}/${list.length}`);
+}
 /**
  * EVERY step of every counterpart job, exactly (name, uses, with, run, if,
  * env, continue-on-error, id — the whole step object, in order). Deny by
@@ -354,7 +397,7 @@ export const CI_JOB_STEPS: Record<string, Step[]> = {
       run: "pnpm format:check",
     },
   ],
-  "gate-effectiveness": [
+  "gate-effectiveness-shard": [
     {
       uses: "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
     },
@@ -377,12 +420,94 @@ export const CI_JOB_STEPS: Record<string, Step[]> = {
       run: "pnpm build",
     },
     {
-      name: "Prove every gate in GATES actually fires",
-      run: "pnpm check-gates-effective",
+      name: "Prove every gate in this shard actually fires",
+      run: "pnpm check-gates-effective --shard ${{ matrix.shard }} --manifest /tmp/gate-shard.json",
+    },
+    {
+      name: "Upload the shard manifest",
+      uses: "actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a",
+      with: {
+        name: "gate-shard-${{ strategy.job-index }}",
+        path: "/tmp/gate-shard.json",
+        "if-no-files-found": "error",
+        "retention-days": 1,
+      },
+    },
+  ],
+  "gate-self-tests": [
+    {
+      uses: "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+    },
+    {
+      uses: "pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86",
+    },
+    {
+      uses: "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
+      with: {
+        "node-version": "22",
+        cache: "pnpm",
+      },
+    },
+    {
+      name: "Install dependencies",
+      run: "pnpm install --frozen-lockfile",
+    },
+    {
+      name: "Build",
+      run: "pnpm build",
     },
     {
       name: "Run gate self-tests (scripts/__tests__)",
       run: "pnpm test:gates",
+    },
+  ],
+  "gate-effectiveness": [
+    {
+      id: "decide",
+      name: "Fail closed unless every shard and the self-tests completed",
+      env: {
+        EVENT: "${{ github.event_name }}",
+        SCRIPTS: "${{ needs.changes.outputs.scripts }}",
+        CHANGES: "${{ needs.changes.result }}",
+        SHARDS: "${{ needs.gate-effectiveness-shard.result }}",
+        SELF_TESTS: "${{ needs.gate-self-tests.result }}",
+      },
+      run: 'echo "changes=$CHANGES shards=$SHARDS self-tests=$SELF_TESTS (event=$EVENT scripts=$SCRIPTS)"\nif [ "$CHANGES" != "success" ]; then\n  echo "::error::the changes job concluded \'$CHANGES\' — whether the gate proof was required is unknown, so it is not proven"\n  exit 1\nfi\nif [ "$EVENT" != "push" ] && [ "$SCRIPTS" != "true" ]; then\n  if [ "$SHARDS" = "skipped" ] && [ "$SELF_TESTS" = "skipped" ]; then\n    echo "No gate input changed on this PR: the gate proof is not required."\n    echo "required=false" >> "$GITHUB_OUTPUT"\n    exit 0\n  fi\nfi\nif [ "$SHARDS" != "success" ] || [ "$SELF_TESTS" != "success" ]; then\n  echo "::error::gate-effectiveness shards \'$SHARDS\', self-tests \'$SELF_TESTS\' — a cancelled, skipped or failed proof is not a proof"\n  exit 1\nfi\necho "required=true" >> "$GITHUB_OUTPUT"\n',
+    },
+    {
+      if: "steps.decide.outputs.required == 'true'",
+      uses: "actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1",
+    },
+    {
+      if: "steps.decide.outputs.required == 'true'",
+      uses: "pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86",
+    },
+    {
+      if: "steps.decide.outputs.required == 'true'",
+      uses: "actions/setup-node@820762786026740c76f36085b0efc47a31fe5020",
+      with: {
+        "node-version": "22",
+        cache: "pnpm",
+      },
+    },
+    {
+      if: "steps.decide.outputs.required == 'true'",
+      name: "Install dependencies",
+      run: "pnpm install --frozen-lockfile",
+    },
+    {
+      if: "steps.decide.outputs.required == 'true'",
+      name: "Download the shard manifests",
+      uses: "actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e",
+      with: {
+        pattern: "gate-shard-*",
+        path: "/tmp/gate-shards",
+      },
+    },
+    {
+      if: "steps.decide.outputs.required == 'true'",
+      name: "Prove the shards ran every probe exactly once",
+      run: "pnpm check-gates-effective --verify-shards /tmp/gate-shards",
     },
   ],
   changes: [
@@ -405,6 +530,7 @@ const STEP_ACTIONS = [
   "pnpm/action-setup@",
   "actions/setup-node@",
   "actions/upload-artifact@",
+  "actions/download-artifact@",
 ];
 const WORKFLOW_KEYS = new Set(["name", "on", "concurrency", "env", "jobs"]);
 export const WORKFLOW_ENV: Record<string, string> = {
@@ -661,10 +787,11 @@ export function evaluateCi(
     const job = jobs[name];
     const spec = CI_JOBS[name];
     if (!job || !spec || seen.has(name)) return false;
+    const needs = spec.needs == null ? [] : Array.isArray(spec.needs) ? spec.needs : [spec.needs];
     return (
       job.if === spec.if &&
-      job.needs === spec.needs &&
-      (spec.needs == null || chainOk(spec.needs, new Set([...seen, name])))
+      JSON.stringify(job.needs ?? null) === JSON.stringify(spec.needs ?? null) &&
+      needs.every((n) => chainOk(n, new Set([...seen, name])))
     );
   };
   const jobOk = new Map<string, boolean>();
@@ -676,7 +803,23 @@ export function evaluateCi(
       continue;
     }
     let ok = true;
+    const spec0 = CI_JOBS[name]!;
+    if (spec0.strategy !== undefined) {
+      if (JSON.stringify(job.strategy ?? null) !== JSON.stringify(spec0.strategy)) {
+        violations.push(
+          `${CI} job \`${name}\` must have exactly \`strategy: ${JSON.stringify(spec0.strategy)}\`; got ${JSON.stringify(job.strategy ?? null)} — a narrowed matrix runs a subset of the probes the hook runs; to add a shard, append it here and in ci.yml together`,
+        );
+        ok = false;
+      }
+      if (!matrixIsCompleteShardList(job.strategy)) {
+        violations.push(
+          `${CI} job \`${name}\` matrix must list every shard exactly once, in order ("1/N" … "N/N"), with fail-fast: false; got ${JSON.stringify(job.strategy ?? null)}`,
+        );
+        ok = false;
+      }
+    }
     for (const k of Object.keys(job)) {
+      if (k === "strategy" && spec0.strategy !== undefined) continue;
       if (!JOB_KEYS.has(k)) {
         violations.push(
           `${CI} job \`${name}\` has \`${k}:\` — not allowed on a counterpart job (only ${[...JOB_KEYS].join(", ")})`,
@@ -876,6 +1019,44 @@ export function evaluateTestCache(inp: TestCacheInputs): string[] {
   return v;
 }
 
+/**
+ * Run a command and return its stdout, unbounded by construction. The dry-run
+ * JSON lists every task's inputs and grows with the repo; it passed Node's
+ * default 1 MiB pipe `maxBuffer` (ENOBUFS, so the gate failed closed on a
+ * healthy repo). stdout and stderr go to files, never an in-memory pipe, so
+ * there is no buffer to outgrow. Throws with the exit status and stderr on
+ * failure.
+ */
+export function runToFile(
+  cmd: string,
+  args: readonly string[],
+  cwd: string,
+  env: Record<string, string>,
+): string {
+  const dir = mkdtempSync(join(tmpdir(), "prepush-subset-"));
+  try {
+    const outPath = join(dir, "stdout");
+    const errPath = join(dir, "stderr");
+    const outFd = openSync(outPath, "w");
+    const errFd = openSync(errPath, "w");
+    let r: ReturnType<typeof spawnSync>;
+    try {
+      r = spawnSync(cmd, args, { cwd, env, stdio: ["ignore", outFd, errFd] });
+    } finally {
+      closeSync(outFd);
+      closeSync(errFd);
+    }
+    if (r.error) throw r.error;
+    if (r.status !== 0)
+      throw new Error(
+        `${cmd} ${args.join(" ")} exited ${String(r.status ?? r.signal)}: ${readFileSync(errPath, "utf8").trim()}`,
+      );
+    return readFileSync(outPath, "utf8");
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
 export function readTestCacheInputs(
   root: string,
   packageScripts: Record<string, Record<string, string>>,
@@ -887,15 +1068,11 @@ export function readTestCacheInputs(
     if (val != null && !k.startsWith("GIT_")) env[k] ??= val;
   let dry: DryTask[] | string;
   try {
-    const out = execFileSync(
+    const out = runToFile(
       join(root, "node_modules", ".bin", "turbo"),
       ["run", ...TEST_TASKS, "--dry=json"],
-      {
-        cwd: root,
-        encoding: "utf8",
-        stdio: ["ignore", "pipe", "pipe"],
-        env,
-      },
+      root,
+      env,
     );
     dry = (JSON.parse(out.slice(out.indexOf("{"))) as { tasks: DryTask[] }).tasks;
   } catch (err) {

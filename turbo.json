@@ -11,6 +11,8 @@
     "scripts/check-client-build-output.ts",
     "scripts/generate-llms-txt.ts",
     "scripts/lib/client-bundle-secrets.ts",
+    "spec/*.md",
+    "!spec/README.md",
     "THE_ACTOR_PRINCIPLE.md",
     "THE_CONFERENCE.md",
     "THE_EMERGENT_INTERIOR.md",

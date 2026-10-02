@@ -199,6 +199,13 @@ export class IdbEventStore implements EventStoreAdapter {
     return held;
   }
 
+  /** Cursor keys starting with `prefix` (#962: compaction reads every relay stream's push cursor). */
+  async listSyncSeqCursorKeys(prefix: string): Promise<string[]> {
+    const tx = this.db.transaction("sync_seq_cursors", "readonly");
+    const keys = await idbRequest(tx.objectStore("sync_seq_cursors").getAllKeys());
+    return keys.filter((k): k is string => typeof k === "string" && k.startsWith(prefix));
+  }
+
   async setSyncSeqCursor(key: string, seq: number): Promise<void> {
     const tx = this.db.transaction("sync_seq_cursors", "readwrite");
     await idbRequest(
