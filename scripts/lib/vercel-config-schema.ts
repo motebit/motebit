@@ -43,9 +43,10 @@
  * package.json; scripts/__tests__/vercel-config-schema.test.ts goes red if the
  * installed versions or the schema exports drift from this file.
  *
- * Layer 2 — MOTEBIT_TIGHTENING_SCHEMA: rules Vercel's SERVER enforces at
- * deploy time that the CLI schema does not carry. These are motebit's, not
- * Vercel's, and each states its evidence:
+ * Layer 2 — MOTEBIT_TIGHTENING_SCHEMA: motebit's rules on top of the CLI
+ * schema, not Vercel's. Only the first has evidence that Vercel's SERVER
+ * enforces it (isServerEvidenced picks its errors out); the rest are
+ * motebit's own tightening. Each states its evidence:
  *   - `ignoreCommand` ≤ 256 chars. Evidence: PR #1027's motebit-web preview
  *     failed before building with `The vercel.json schema validation failed
  *     with the following message: ignoreCommand should NOT be longer than 256
@@ -154,6 +155,15 @@ export const ROUTING_KEYS = [
 
 /** Max `ignoreCommand` length Vercel's server enforces (PR #1027's build error; see header). */
 export const IGNORE_COMMAND_MAX = 256;
+
+/**
+ * Whether a `motebit` verdict entry is the one tightening rule with evidence
+ * that Vercel's server enforces it (`ignoreCommand` ≤ IGNORE_COMMAND_MAX);
+ * every other entry is motebit's own tightening.
+ */
+export function isServerEvidenced(error: string): boolean {
+  return error.startsWith(`/ignoreCommand must NOT have more than ${IGNORE_COMMAND_MAX} `);
+}
 
 /** Vercel's documented project-configuration keys ∪ the CLI schema's keys. */
 export const VERCEL_TOP_LEVEL_KEYS = [
@@ -284,7 +294,14 @@ export function compileVercelConfigValidator(): VercelConfigValidator {
   // strict:false — Vercel's schemas carry annotation keywords (`example`,
   // `private`) and untyped `maximum`s that Ajv's strict mode rejects at
   // compile time; they constrain nothing, as in the CLI's compiled validator.
-  const ajv = new Ajv({ allErrors: true, strict: false });
+  // unicodeRegExp:false — the CLI's validator is a precompiled Ajv 6 build
+  // (dist/chunks/config-validator.mjs) whose `pattern`/`patternProperties`
+  // regexes carry no `u` flag, so `^.{1,256}$` counts UTF-16 units: a
+  // functions key of 129 U+1F600 (258 units) is refused there. Ajv 8's
+  // default `u` counts code points and would accept it. maxLength counts code
+  // points in both (ucs2length), so only the regexes need this. The astral
+  // and lone-surrogate mutants in vercel-cli-verdicts.json hold it.
+  const ajv = new Ajv({ allErrors: true, strict: false, unicodeRegExp: false });
   const vercel = ajv.compile(buildVercelConfigSchema()) as Validate;
   const motebit = ajv.compile(MOTEBIT_TIGHTENING_SCHEMA) as Validate;
   compiled = (cfg) => {

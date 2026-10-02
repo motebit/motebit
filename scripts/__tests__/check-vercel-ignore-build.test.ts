@@ -501,18 +501,37 @@ describe("every vercel.json validates under Vercel's own schema + the motebit ti
     expect(v).toHaveLength(1);
     expect(v[0]).toMatch(/tightening/);
     expect(v[0]).toMatch(/ignoreCommand/);
+    // The one tightening rule with server evidence says so, and cites it.
+    expect(v[0]).toMatch(/Vercel's server enforces/);
+    expect(v[0]).toMatch(/#1027.*should NOT be longer than 256 characters/);
+    expect(v[0]).not.toMatch(/motebit's own tightening/);
   });
 
-  it("RED: an unknown top-level key", () => {
-    const v = collectVercelViolations(synthetic(FULL, { ignoreComand: "typo" }), {}).violations;
+  /** The rest of the layer is motebit's: never labelled as a Vercel server rule. */
+  const OWN_TIGHTENING: [string, Record<string, unknown>, string][] = [
+    ["an unknown top-level key", { ignoreComand: "typo" }, "ignoreComand"],
+    ["a wrong-typed known key (framework: 1)", { framework: 1 }, "framework"],
+    ["regions: 5", { regions: 5 }, "regions"],
+    ["git.deploymentEnabled: 'no'", { git: { deploymentEnabled: "no" } }, "deploymentEnabled"],
+  ];
+
+  it.each(OWN_TIGHTENING)("RED (motebit's own tightening): %s", (_n, extra, key) => {
+    const v = collectVercelViolations(synthetic(FULL, extra), {}).violations;
+    const t = v.filter((x) => x.includes("tightening"));
+    expect(t, v.join("\n")).toHaveLength(1);
+    expect(t[0]).toContain(key);
+    expect(t[0]).toMatch(/motebit's own tightening.*not a Vercel verdict/);
+    expect(t[0]).not.toMatch(/server enforces/);
+  });
+
+  it("RED: both kinds at once are each labelled for what they are", () => {
+    const v = collectVercelViolations(
+      synthetic(FULL, { ignoreCommand: padded(max + 1), ignoreComand: "typo" }),
+      {},
+    ).violations;
     expect(v).toHaveLength(1);
-    expect(v[0]).toMatch(/schema/);
-    expect(v[0]).toContain("ignoreComand");
-  });
-
-  it("RED: a wrong-typed known key (framework: 1)", () => {
-    const v = collectVercelViolations(synthetic(FULL, { framework: 1 }), {}).violations;
-    expect(v.join("\n")).toMatch(/schema.*framework|framework.*schema/);
+    expect(v[0]).toMatch(/server enforces[^|]*ignoreCommand must NOT/);
+    expect(v[0]).toMatch(/\| motebit's own tightening[^|]*ignoreComand/);
   });
 
   /**

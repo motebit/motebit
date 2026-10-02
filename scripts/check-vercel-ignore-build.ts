@@ -24,9 +24,11 @@
  * regions, functions + builds) and `vercel build`'s route compilation
  * (getTransformedRoutes — a rewrite source "/:(" is not a regex) run too. A key
  * whose CLI schema is not mirrored is refused under motebit's own fail-closed
- * label, never reported as a Vercel refusal. On top sits a motebit tightening layer, labelled as such,
- * for rules Vercel's server enforces that the CLI schema lacks: the 256-char
- * ignoreCommand and a closed top-level key set (evidence in that module).
+ * label, never reported as a Vercel refusal. On top sits a motebit tightening layer, labelled as such:
+ * the 256-char ignoreCommand, the one rule with evidence that Vercel's server
+ * enforces it (#1027's preview failure, below), and motebit's own closed
+ * top-level key set and scalar types, which no Vercel evidence backs (each
+ * only ever refuses; details in that module).
  * #1027: apps/web's inline path list made its ignoreCommand 1051 chars and
  * Vercel refused the config before building ("ignoreCommand should NOT be
  * longer than 256 characters") while every repo test and gate was green; the
@@ -89,7 +91,12 @@ import { dirname, join, posix, relative, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { parse as parseYaml } from "yaml";
 import { failWithRepair } from "./lib/gate-report.js";
-import { compileVercelConfigValidator, VERCEL_SCHEMA_SOURCE } from "./lib/vercel-config-schema.js";
+import {
+  compileVercelConfigValidator,
+  IGNORE_COMMAND_MAX,
+  isServerEvidenced,
+  VERCEL_SCHEMA_SOURCE,
+} from "./lib/vercel-config-schema.js";
 
 const SCRIPT = "scripts/vercel-ignore-build.sh";
 const WORKSPACE_GLOB_DIRS = ["packages", "apps", "services"];
@@ -676,10 +683,22 @@ export function collectVercelViolations(
       violations.push(
         `${file}: refused by motebit's fail-closed rule, not by Vercel (Vercel may accept it): it uses a key whose schema ${VERCEL_SCHEMA_SOURCE.cli} defines inline and scripts/lib/vercel-config-schema.ts does not mirror, so this gate cannot check it — mirror that key's schema from the CLI: ${refused.unmirrored.join("; ")}`,
       );
-    if (refused.motebit.length > 0)
+    if (refused.motebit.length > 0) {
+      const server = refused.motebit.filter(isServerEvidenced);
+      const own = refused.motebit.filter((e) => !isServerEvidenced(e));
+      const parts: string[] = [];
+      if (server.length > 0)
+        parts.push(
+          `ignoreCommand ≤ ${IGNORE_COMMAND_MAX} chars, a rule Vercel's server enforces beyond the CLI schema (the CLI allows 2048) — evidence: PR #1027's motebit-web preview failed before building with "ignoreCommand should NOT be longer than 256 characters": ${server.join("; ")}`,
+        );
+      if (own.length > 0)
+        parts.push(
+          `motebit's own tightening (the closed top-level key set and documented scalar types), not a Vercel verdict — no server evidence backs it and Vercel may accept this: ${own.join("; ")}`,
+        );
       violations.push(
-        `${file}: fails the motebit tightening layer (MOTEBIT_TIGHTENING_SCHEMA in scripts/lib/vercel-config-schema.ts — rules Vercel's server enforces beyond the CLI schema, e.g. its 256-char ignoreCommand): ${refused.motebit.join("; ")}`,
+        `${file}: fails the motebit tightening layer (MOTEBIT_TIGHTENING_SCHEMA in scripts/lib/vercel-config-schema.ts): ${parts.join(" | ")}`,
       );
+    }
     const ownName = existsSync(join(root, projectDir, "package.json"))
       ? (JSON.parse(readFileSync(join(root, projectDir, "package.json"), "utf8")) as Manifest).name
       : undefined;

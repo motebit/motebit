@@ -174,7 +174,12 @@ describe("agrees with vercel@62.2.0 on every recorded mutant", () => {
     readFileSync(join(REPO, "scripts/__tests__/vercel-cli-verdicts.json"), "utf8"),
   ) as {
     $comment: string;
-    mutants: { name: string; config: unknown; cli: { ok: boolean; code?: string } }[];
+    mutants: {
+      name: string;
+      node?: string;
+      config: unknown;
+      cli: { ok: boolean; code?: string };
+    }[];
   };
   const validate = compileVercelConfigValidator();
 
@@ -197,4 +202,58 @@ describe("agrees with vercel@62.2.0 on every recorded mutant", () => {
         `the CLI refuses this (${m.cli.code ?? ""})`,
       ).toBeGreaterThan(0);
   });
+
+  /**
+   * The CLI compiles every regex without the `u` flag (UTF-16 units), Ajv 8
+   * with it by default (code points); the two disagree only on input with
+   * surrogates. So every regex-bearing node of the composed schema must have
+   * mutants tagged with its JSON pointer (`node`): one the CLI accepts (the
+   * surrounding config is otherwise valid, so the regex decides), one
+   * carrying an astral code point (surrogate pair), one a lone surrogate. A
+   * schema bump that adds a `pattern` or `patternProperties` goes red here
+   * until its mutants are recorded.
+   */
+  it("every pattern / patternProperties node in the composed schema has recorded astral and lone-surrogate mutants", () => {
+    const esc = (k: string): string => k.replace(/~/g, "~0").replace(/\//g, "~1");
+    const nodes: string[] = [];
+    const walk = (n: unknown, ptr: string): void => {
+      if (n == null || typeof n !== "object") return;
+      if (Array.isArray(n)) {
+        n.forEach((x, i) => walk(x, `${ptr}/${i}`));
+        return;
+      }
+      const o = n as Record<string, unknown>;
+      if (typeof o["pattern"] === "string") nodes.push(ptr);
+      if (o["patternProperties"] != null && typeof o["patternProperties"] === "object")
+        for (const re of Object.keys(o["patternProperties"]))
+          nodes.push(`${ptr}/patternProperties/${esc(re)}`);
+      for (const [k, v] of Object.entries(o)) walk(v, `${ptr}/${esc(k)}`);
+    };
+    walk(buildVercelConfigSchema(), "");
+    expect(nodes.length).toBeGreaterThanOrEqual(10);
+
+    const pair = /[\uD800-\uDBFF][\uDC00-\uDFFF]/;
+    const lone = /[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/;
+    const missing: string[] = [];
+    for (const node of nodes) {
+      const tagged = corpus.mutants.filter((m) => m.node === node);
+      const raw = tagged.map((m) => collectStrings(m.config).join("\n"));
+      if (!tagged.some((m) => m.cli.ok)) missing.push(`${node}: no mutant the CLI accepts`);
+      if (!raw.some((s) => pair.test(s)))
+        missing.push(`${node}: no astral (surrogate-pair) mutant`);
+      if (!raw.some((s) => lone.test(s))) missing.push(`${node}: no lone-surrogate mutant`);
+    }
+    expect(missing).toEqual([]);
+    for (const m of corpus.mutants)
+      if (m.node != null) expect(nodes, `${m.name} tags an unknown node`).toContain(m.node);
+  });
 });
+
+/** Every string in a JSON value, property names included. */
+function collectStrings(v: unknown): string[] {
+  if (typeof v === "string") return [v];
+  if (Array.isArray(v)) return v.flatMap(collectStrings);
+  if (v != null && typeof v === "object")
+    return Object.entries(v).flatMap(([k, x]) => [k, ...collectStrings(x)]);
+  return [];
+}

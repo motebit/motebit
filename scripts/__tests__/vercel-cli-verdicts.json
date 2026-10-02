@@ -1380,6 +1380,1647 @@
       "cli": {
         "ok": true
       }
+    },
+    {
+      "name": "unicode: functions key ASCII×256 (control)",
+      "node": "/properties/functions/patternProperties/^.{1,256}$",
+      "config": {
+        "functions": {
+          "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa": {
+            "memory": 1024
+          }
+        }
+      },
+      "cli": {
+        "ok": true
+      }
+    },
+    {
+      "name": "unicode: route headers key ASCII×256 (control)",
+      "node": "/properties/routes/items/anyOf/0/properties/headers/patternProperties/^.{1,256}$",
+      "config": {
+        "routes": [
+          {
+            "src": "/a",
+            "headers": {
+              "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa": "v"
+            }
+          }
+        ]
+      },
+      "cli": {
+        "ok": true
+      }
+    },
+    {
+      "name": "unicode: route locale.redirect key ASCII×256 (control)",
+      "node": "/properties/routes/items/anyOf/0/properties/locale/properties/redirect/patternProperties/^.{1,256}$",
+      "config": {
+        "routes": [
+          {
+            "src": "/a",
+            "locale": {
+              "redirect": {
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa": "/b"
+              }
+            }
+          }
+        ]
+      },
+      "cli": {
+        "ok": true
+      }
+    },
+    {
+      "name": "unicode: functions key U+1F600 alone",
+      "node": "/properties/functions/patternProperties/^.{1,256}$",
+      "config": {
+        "functions": {
+          "😀": {
+            "memory": 1024
+          }
+        }
+      },
+      "cli": {
+        "ok": true
+      }
+    },
+    {
+      "name": "unicode: route headers key U+1F600 alone",
+      "node": "/properties/routes/items/anyOf/0/properties/headers/patternProperties/^.{1,256}$",
+      "config": {
+        "routes": [
+          {
+            "src": "/a",
+            "headers": {
+              "😀": "v"
+            }
+          }
+        ]
+      },
+      "cli": {
+        "ok": true
+      }
+    },
+    {
+      "name": "unicode: route locale.redirect key U+1F600 alone",
+      "node": "/properties/routes/items/anyOf/0/properties/locale/properties/redirect/patternProperties/^.{1,256}$",
+      "config": {
+        "routes": [
+          {
+            "src": "/a",
+            "locale": {
+              "redirect": {
+                "😀": "/b"
+              }
+            }
+          }
+        ]
+      },
+      "cli": {
+        "ok": true
+      }
+    },
+    {
+      "name": "unicode: functions key U+1F600×128 (256 units)",
+      "node": "/properties/functions/patternProperties/^.{1,256}$",
+      "config": {
+        "functions": {
+          "😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀": {
+            "memory": 1024
+          }
+        }
+      },
+      "cli": {
+        "ok": true
+      }
+    },
+    {
+      "name": "unicode: route headers key U+1F600×128 (256 units)",
+      "node": "/properties/routes/items/anyOf/0/properties/headers/patternProperties/^.{1,256}$",
+      "config": {
+        "routes": [
+          {
+            "src": "/a",
+            "headers": {
+              "😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀": "v"
+            }
+          }
+        ]
+      },
+      "cli": {
+        "ok": true
+      }
+    },
+    {
+      "name": "unicode: route locale.redirect key U+1F600×128 (256 units)",
+      "node": "/properties/routes/items/anyOf/0/properties/locale/properties/redirect/patternProperties/^.{1,256}$",
+      "config": {
+        "routes": [
+          {
+            "src": "/a",
+            "locale": {
+              "redirect": {
+                "😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀": "/b"
+              }
+            }
+          }
+        ]
+      },
+      "cli": {
+        "ok": true
+      }
+    },
+    {
+      "name": "unicode: functions key U+1F600×129 (258 units, 129 code points)",
+      "node": "/properties/functions/patternProperties/^.{1,256}$",
+      "config": {
+        "functions": {
+          "😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀": {
+            "memory": 1024
+          }
+        }
+      },
+      "cli": {
+        "ok": false,
+        "stage": "validateConfig",
+        "code": "INVALID_VERCEL_CONFIG",
+        "message": "Invalid vercel.json - `functions` should NOT have additional property `😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀`. Please remove it."
+      }
+    },
+    {
+      "name": "unicode: route headers key U+1F600×129 (258 units, 129 code points)",
+      "node": "/properties/routes/items/anyOf/0/properties/headers/patternProperties/^.{1,256}$",
+      "config": {
+        "routes": [
+          {
+            "src": "/a",
+            "headers": {
+              "😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀": "v"
+            }
+          }
+        ]
+      },
+      "cli": {
+        "ok": false,
+        "stage": "validateConfig",
+        "code": "INVALID_VERCEL_CONFIG",
+        "message": "Invalid vercel.json - `routes[0].headers` should NOT have additional property `😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀`. Please remove it."
+      }
+    },
+    {
+      "name": "unicode: route locale.redirect key U+1F600×129 (258 units, 129 code points)",
+      "node": "/properties/routes/items/anyOf/0/properties/locale/properties/redirect/patternProperties/^.{1,256}$",
+      "config": {
+        "routes": [
+          {
+            "src": "/a",
+            "locale": {
+              "redirect": {
+                "😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀": "/b"
+              }
+            }
+          }
+        ]
+      },
+      "cli": {
+        "ok": false,
+        "stage": "validateConfig",
+        "code": "INVALID_VERCEL_CONFIG",
+        "message": "Invalid vercel.json - `routes[0].locale.redirect` should NOT have additional property `😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀`. Please remove it."
+      }
+    },
+    {
+      "name": "unicode: functions key U+1F600×256 (512 units, 256 code points)",
+      "node": "/properties/functions/patternProperties/^.{1,256}$",
+      "config": {
+        "functions": {
+          "😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀": {
+            "memory": 1024
+          }
+        }
+      },
+      "cli": {
+        "ok": false,
+        "stage": "validateConfig",
+        "code": "INVALID_VERCEL_CONFIG",
+        "message": "Invalid vercel.json - `functions` should NOT have additional property `😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀`. Please remove it."
+      }
+    },
+    {
+      "name": "unicode: route headers key U+1F600×256 (512 units, 256 code points)",
+      "node": "/properties/routes/items/anyOf/0/properties/headers/patternProperties/^.{1,256}$",
+      "config": {
+        "routes": [
+          {
+            "src": "/a",
+            "headers": {
+              "😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀": "v"
+            }
+          }
+        ]
+      },
+      "cli": {
+        "ok": false,
+        "stage": "validateConfig",
+        "code": "INVALID_VERCEL_CONFIG",
+        "message": "Invalid vercel.json - `routes[0].headers` should NOT have additional property `😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀`. Please remove it."
+      }
+    },
+    {
+      "name": "unicode: route locale.redirect key U+1F600×256 (512 units, 256 code points)",
+      "node": "/properties/routes/items/anyOf/0/properties/locale/properties/redirect/patternProperties/^.{1,256}$",
+      "config": {
+        "routes": [
+          {
+            "src": "/a",
+            "locale": {
+              "redirect": {
+                "😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀": "/b"
+              }
+            }
+          }
+        ]
+      },
+      "cli": {
+        "ok": false,
+        "stage": "validateConfig",
+        "code": "INVALID_VERCEL_CONFIG",
+        "message": "Invalid vercel.json - `routes[0].locale.redirect` should NOT have additional property `😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀`. Please remove it."
+      }
+    },
+    {
+      "name": "unicode: functions key U+1F600×257",
+      "node": "/properties/functions/patternProperties/^.{1,256}$",
+      "config": {
+        "functions": {
+          "😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀": {
+            "memory": 1024
+          }
+        }
+      },
+      "cli": {
+        "ok": false,
+        "stage": "validateConfig",
+        "code": "INVALID_VERCEL_CONFIG",
+        "message": "Invalid vercel.json - `functions` should NOT have additional property `😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀`. Please remove it."
+      }
+    },
+    {
+      "name": "unicode: route headers key U+1F600×257",
+      "node": "/properties/routes/items/anyOf/0/properties/headers/patternProperties/^.{1,256}$",
+      "config": {
+        "routes": [
+          {
+            "src": "/a",
+            "headers": {
+              "😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀": "v"
+            }
+          }
+        ]
+      },
+      "cli": {
+        "ok": false,
+        "stage": "validateConfig",
+        "code": "INVALID_VERCEL_CONFIG",
+        "message": "Invalid vercel.json - `routes[0].headers` should NOT have additional property `😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀`. Please remove it."
+      }
+    },
+    {
+      "name": "unicode: route locale.redirect key U+1F600×257",
+      "node": "/properties/routes/items/anyOf/0/properties/locale/properties/redirect/patternProperties/^.{1,256}$",
+      "config": {
+        "routes": [
+          {
+            "src": "/a",
+            "locale": {
+              "redirect": {
+                "😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀": "/b"
+              }
+            }
+          }
+        ]
+      },
+      "cli": {
+        "ok": false,
+        "stage": "validateConfig",
+        "code": "INVALID_VERCEL_CONFIG",
+        "message": "Invalid vercel.json - `routes[0].locale.redirect` should NOT have additional property `😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀`. Please remove it."
+      }
+    },
+    {
+      "name": "unicode: functions key ASCII×254 + U+1F600 (256 units)",
+      "node": "/properties/functions/patternProperties/^.{1,256}$",
+      "config": {
+        "functions": {
+          "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa😀": {
+            "memory": 1024
+          }
+        }
+      },
+      "cli": {
+        "ok": true
+      }
+    },
+    {
+      "name": "unicode: route headers key ASCII×254 + U+1F600 (256 units)",
+      "node": "/properties/routes/items/anyOf/0/properties/headers/patternProperties/^.{1,256}$",
+      "config": {
+        "routes": [
+          {
+            "src": "/a",
+            "headers": {
+              "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa😀": "v"
+            }
+          }
+        ]
+      },
+      "cli": {
+        "ok": true
+      }
+    },
+    {
+      "name": "unicode: route locale.redirect key ASCII×254 + U+1F600 (256 units)",
+      "node": "/properties/routes/items/anyOf/0/properties/locale/properties/redirect/patternProperties/^.{1,256}$",
+      "config": {
+        "routes": [
+          {
+            "src": "/a",
+            "locale": {
+              "redirect": {
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa😀": "/b"
+              }
+            }
+          }
+        ]
+      },
+      "cli": {
+        "ok": true
+      }
+    },
+    {
+      "name": "unicode: functions key ASCII×255 + U+1F600 (257 units, 256 code points)",
+      "node": "/properties/functions/patternProperties/^.{1,256}$",
+      "config": {
+        "functions": {
+          "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa😀": {
+            "memory": 1024
+          }
+        }
+      },
+      "cli": {
+        "ok": false,
+        "stage": "validateConfig",
+        "code": "INVALID_VERCEL_CONFIG",
+        "message": "Invalid vercel.json - `functions` should NOT have additional property `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa😀`. Please remove it."
+      }
+    },
+    {
+      "name": "unicode: route headers key ASCII×255 + U+1F600 (257 units, 256 code points)",
+      "node": "/properties/routes/items/anyOf/0/properties/headers/patternProperties/^.{1,256}$",
+      "config": {
+        "routes": [
+          {
+            "src": "/a",
+            "headers": {
+              "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa😀": "v"
+            }
+          }
+        ]
+      },
+      "cli": {
+        "ok": false,
+        "stage": "validateConfig",
+        "code": "INVALID_VERCEL_CONFIG",
+        "message": "Invalid vercel.json - `routes[0].headers` should NOT have additional property `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa😀`. Please remove it."
+      }
+    },
+    {
+      "name": "unicode: route locale.redirect key ASCII×255 + U+1F600 (257 units, 256 code points)",
+      "node": "/properties/routes/items/anyOf/0/properties/locale/properties/redirect/patternProperties/^.{1,256}$",
+      "config": {
+        "routes": [
+          {
+            "src": "/a",
+            "locale": {
+              "redirect": {
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa😀": "/b"
+              }
+            }
+          }
+        ]
+      },
+      "cli": {
+        "ok": false,
+        "stage": "validateConfig",
+        "code": "INVALID_VERCEL_CONFIG",
+        "message": "Invalid vercel.json - `routes[0].locale.redirect` should NOT have additional property `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa😀`. Please remove it."
+      }
+    },
+    {
+      "name": "unicode: functions key lone high surrogate×256",
+      "node": "/properties/functions/patternProperties/^.{1,256}$",
+      "config": {
+        "functions": {
+          "\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d": {
+            "memory": 1024
+          }
+        }
+      },
+      "cli": {
+        "ok": true
+      }
+    },
+    {
+      "name": "unicode: route headers key lone high surrogate×256",
+      "node": "/properties/routes/items/anyOf/0/properties/headers/patternProperties/^.{1,256}$",
+      "config": {
+        "routes": [
+          {
+            "src": "/a",
+            "headers": {
+              "\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d": "v"
+            }
+          }
+        ]
+      },
+      "cli": {
+        "ok": true
+      }
+    },
+    {
+      "name": "unicode: route locale.redirect key lone high surrogate×256",
+      "node": "/properties/routes/items/anyOf/0/properties/locale/properties/redirect/patternProperties/^.{1,256}$",
+      "config": {
+        "routes": [
+          {
+            "src": "/a",
+            "locale": {
+              "redirect": {
+                "\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d": "/b"
+              }
+            }
+          }
+        ]
+      },
+      "cli": {
+        "ok": true
+      }
+    },
+    {
+      "name": "unicode: functions key lone high surrogate×257",
+      "node": "/properties/functions/patternProperties/^.{1,256}$",
+      "config": {
+        "functions": {
+          "\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d": {
+            "memory": 1024
+          }
+        }
+      },
+      "cli": {
+        "ok": false,
+        "stage": "validateConfig",
+        "code": "INVALID_VERCEL_CONFIG",
+        "message": "Invalid vercel.json - `functions` should NOT have additional property `\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d`. Please remove it."
+      }
+    },
+    {
+      "name": "unicode: route headers key lone high surrogate×257",
+      "node": "/properties/routes/items/anyOf/0/properties/headers/patternProperties/^.{1,256}$",
+      "config": {
+        "routes": [
+          {
+            "src": "/a",
+            "headers": {
+              "\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d": "v"
+            }
+          }
+        ]
+      },
+      "cli": {
+        "ok": false,
+        "stage": "validateConfig",
+        "code": "INVALID_VERCEL_CONFIG",
+        "message": "Invalid vercel.json - `routes[0].headers` should NOT have additional property `\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d`. Please remove it."
+      }
+    },
+    {
+      "name": "unicode: route locale.redirect key lone high surrogate×257",
+      "node": "/properties/routes/items/anyOf/0/properties/locale/properties/redirect/patternProperties/^.{1,256}$",
+      "config": {
+        "routes": [
+          {
+            "src": "/a",
+            "locale": {
+              "redirect": {
+                "\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d": "/b"
+              }
+            }
+          }
+        ]
+      },
+      "cli": {
+        "ok": false,
+        "stage": "validateConfig",
+        "code": "INVALID_VERCEL_CONFIG",
+        "message": "Invalid vercel.json - `routes[0].locale.redirect` should NOT have additional property `\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d\ud83d`. Please remove it."
+      }
+    },
+    {
+      "name": "unicode: functions key lone low surrogate + ASCII×255",
+      "node": "/properties/functions/patternProperties/^.{1,256}$",
+      "config": {
+        "functions": {
+          "\ude00aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa": {
+            "memory": 1024
+          }
+        }
+      },
+      "cli": {
+        "ok": true
+      }
+    },
+    {
+      "name": "unicode: route headers key lone low surrogate + ASCII×255",
+      "node": "/properties/routes/items/anyOf/0/properties/headers/patternProperties/^.{1,256}$",
+      "config": {
+        "routes": [
+          {
+            "src": "/a",
+            "headers": {
+              "\ude00aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa": "v"
+            }
+          }
+        ]
+      },
+      "cli": {
+        "ok": true
+      }
+    },
+    {
+      "name": "unicode: route locale.redirect key lone low surrogate + ASCII×255",
+      "node": "/properties/routes/items/anyOf/0/properties/locale/properties/redirect/patternProperties/^.{1,256}$",
+      "config": {
+        "routes": [
+          {
+            "src": "/a",
+            "locale": {
+              "redirect": {
+                "\ude00aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa": "/b"
+              }
+            }
+          }
+        ]
+      },
+      "cli": {
+        "ok": true
+      }
+    },
+    {
+      "name": "unicode: route headers value U+1F600×16385 (maxLength 32768 in code points)",
+      "node": "/properties/routes/items/anyOf/0/properties/headers/patternProperties/^.{1,256}$",
+      "config": {
+        "routes": [
+          {
+            "src": "/a",
+            "headers": {
+              "x": "😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀"
+            }
+          }
+        ]
+      },
+      "cli": {
+        "ok": true
+      }
+    },
+    {
+      "name": "unicode: route destination.service ASCII×64 (control)",
+      "node": "/properties/routes/items/anyOf/0/properties/destination/anyOf/1/properties/service",
+      "config": {
+        "routes": [
+          {
+            "src": "/a",
+            "destination": {
+              "service": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            }
+          }
+        ]
+      },
+      "cli": {
+        "ok": true
+      }
+    },
+    {
+      "name": "unicode: rewrite destination.service ASCII×64 (control)",
+      "node": "/properties/rewrites/items/properties/destination/anyOf/1/properties/service",
+      "config": {
+        "rewrites": [
+          {
+            "source": "/a",
+            "destination": {
+              "service": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            }
+          }
+        ]
+      },
+      "cli": {
+        "ok": true
+      }
+    },
+    {
+      "name": "unicode: route destination.service a + U+1F600",
+      "node": "/properties/routes/items/anyOf/0/properties/destination/anyOf/1/properties/service",
+      "config": {
+        "routes": [
+          {
+            "src": "/a",
+            "destination": {
+              "service": "a😀"
+            }
+          }
+        ]
+      },
+      "cli": {
+        "ok": false,
+        "stage": "validateConfig",
+        "code": "INVALID_VERCEL_CONFIG",
+        "message": "Invalid vercel.json - `routes[0].destination` should be string."
+      }
+    },
+    {
+      "name": "unicode: rewrite destination.service a + U+1F600",
+      "node": "/properties/rewrites/items/properties/destination/anyOf/1/properties/service",
+      "config": {
+        "rewrites": [
+          {
+            "source": "/a",
+            "destination": {
+              "service": "a😀"
+            }
+          }
+        ]
+      },
+      "cli": {
+        "ok": false,
+        "stage": "validateConfig",
+        "code": "INVALID_VERCEL_CONFIG",
+        "message": "Invalid vercel.json - `rewrites[0].destination` should be string."
+      }
+    },
+    {
+      "name": "unicode: route destination.service U+1F600",
+      "node": "/properties/routes/items/anyOf/0/properties/destination/anyOf/1/properties/service",
+      "config": {
+        "routes": [
+          {
+            "src": "/a",
+            "destination": {
+              "service": "😀"
+            }
+          }
+        ]
+      },
+      "cli": {
+        "ok": false,
+        "stage": "validateConfig",
+        "code": "INVALID_VERCEL_CONFIG",
+        "message": "Invalid vercel.json - `routes[0].destination` should be string."
+      }
+    },
+    {
+      "name": "unicode: rewrite destination.service U+1F600",
+      "node": "/properties/rewrites/items/properties/destination/anyOf/1/properties/service",
+      "config": {
+        "rewrites": [
+          {
+            "source": "/a",
+            "destination": {
+              "service": "😀"
+            }
+          }
+        ]
+      },
+      "cli": {
+        "ok": false,
+        "stage": "validateConfig",
+        "code": "INVALID_VERCEL_CONFIG",
+        "message": "Invalid vercel.json - `rewrites[0].destination` should be string."
+      }
+    },
+    {
+      "name": "unicode: route destination.service ASCII×31 + U+1F600×16 + b",
+      "node": "/properties/routes/items/anyOf/0/properties/destination/anyOf/1/properties/service",
+      "config": {
+        "routes": [
+          {
+            "src": "/a",
+            "destination": {
+              "service": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀b"
+            }
+          }
+        ]
+      },
+      "cli": {
+        "ok": false,
+        "stage": "validateConfig",
+        "code": "INVALID_VERCEL_CONFIG",
+        "message": "Invalid vercel.json - `routes[0].destination` should be string."
+      }
+    },
+    {
+      "name": "unicode: rewrite destination.service ASCII×31 + U+1F600×16 + b",
+      "node": "/properties/rewrites/items/properties/destination/anyOf/1/properties/service",
+      "config": {
+        "rewrites": [
+          {
+            "source": "/a",
+            "destination": {
+              "service": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀b"
+            }
+          }
+        ]
+      },
+      "cli": {
+        "ok": false,
+        "stage": "validateConfig",
+        "code": "INVALID_VERCEL_CONFIG",
+        "message": "Invalid vercel.json - `rewrites[0].destination` should be string."
+      }
+    },
+    {
+      "name": "unicode: route destination.service a + lone high surrogate + b",
+      "node": "/properties/routes/items/anyOf/0/properties/destination/anyOf/1/properties/service",
+      "config": {
+        "routes": [
+          {
+            "src": "/a",
+            "destination": {
+              "service": "a\ud83db"
+            }
+          }
+        ]
+      },
+      "cli": {
+        "ok": false,
+        "stage": "validateConfig",
+        "code": "INVALID_VERCEL_CONFIG",
+        "message": "Invalid vercel.json - `routes[0].destination` should be string."
+      }
+    },
+    {
+      "name": "unicode: rewrite destination.service a + lone high surrogate + b",
+      "node": "/properties/rewrites/items/properties/destination/anyOf/1/properties/service",
+      "config": {
+        "rewrites": [
+          {
+            "source": "/a",
+            "destination": {
+              "service": "a\ud83db"
+            }
+          }
+        ]
+      },
+      "cli": {
+        "ok": false,
+        "stage": "validateConfig",
+        "code": "INVALID_VERCEL_CONFIG",
+        "message": "Invalid vercel.json - `rewrites[0].destination` should be string."
+      }
+    },
+    {
+      "name": "unicode: route destination.service a + lone low surrogate",
+      "node": "/properties/routes/items/anyOf/0/properties/destination/anyOf/1/properties/service",
+      "config": {
+        "routes": [
+          {
+            "src": "/a",
+            "destination": {
+              "service": "a\ude00"
+            }
+          }
+        ]
+      },
+      "cli": {
+        "ok": false,
+        "stage": "validateConfig",
+        "code": "INVALID_VERCEL_CONFIG",
+        "message": "Invalid vercel.json - `routes[0].destination` should be string."
+      }
+    },
+    {
+      "name": "unicode: rewrite destination.service a + lone low surrogate",
+      "node": "/properties/rewrites/items/properties/destination/anyOf/1/properties/service",
+      "config": {
+        "rewrites": [
+          {
+            "source": "/a",
+            "destination": {
+              "service": "a\ude00"
+            }
+          }
+        ]
+      },
+      "cli": {
+        "ok": false,
+        "stage": "validateConfig",
+        "code": "INVALID_VERCEL_CONFIG",
+        "message": "Invalid vercel.json - `rewrites[0].destination` should be string."
+      }
+    },
+    {
+      "name": "unicode: route header transform key ASCII (control)",
+      "node": "/properties/routes/items/anyOf/0/properties/transforms/items/allOf/1/then/properties/target/properties/key/then",
+      "config": {
+        "routes": [
+          {
+            "src": "/a",
+            "transforms": [
+              {
+                "type": "request.headers",
+                "op": "set",
+                "target": {
+                  "key": "x-a_1"
+                },
+                "args": "v"
+              }
+            ]
+          }
+        ]
+      },
+      "cli": {
+        "ok": true
+      }
+    },
+    {
+      "name": "unicode: route header transform args string ASCII (control)",
+      "node": "/properties/routes/items/anyOf/0/properties/transforms/items/allOf/1/then/properties/args/anyOf/0",
+      "config": {
+        "routes": [
+          {
+            "src": "/a",
+            "transforms": [
+              {
+                "type": "request.headers",
+                "op": "set",
+                "target": {
+                  "key": "x"
+                },
+                "args": "x-a_1"
+              }
+            ]
+          }
+        ]
+      },
+      "cli": {
+        "ok": true
+      }
+    },
+    {
+      "name": "unicode: route header transform args array ASCII (control)",
+      "node": "/properties/routes/items/anyOf/0/properties/transforms/items/allOf/1/then/properties/args/anyOf/1/items",
+      "config": {
+        "routes": [
+          {
+            "src": "/a",
+            "transforms": [
+              {
+                "type": "request.headers",
+                "op": "set",
+                "target": {
+                  "key": "x"
+                },
+                "args": ["v", "x-a_1"]
+              }
+            ]
+          }
+        ]
+      },
+      "cli": {
+        "ok": true
+      }
+    },
+    {
+      "name": "unicode: route header transform key U+1F600",
+      "node": "/properties/routes/items/anyOf/0/properties/transforms/items/allOf/1/then/properties/target/properties/key/then",
+      "config": {
+        "routes": [
+          {
+            "src": "/a",
+            "transforms": [
+              {
+                "type": "request.headers",
+                "op": "set",
+                "target": {
+                  "key": "😀"
+                },
+                "args": "v"
+              }
+            ]
+          }
+        ]
+      },
+      "cli": {
+        "ok": false,
+        "stage": "validateConfig",
+        "code": "INVALID_VERCEL_CONFIG",
+        "message": "Invalid vercel.json - `routes[0].transforms[0].target.key` should match pattern \"^[a-zA-Z0-9_-]+$\"."
+      }
+    },
+    {
+      "name": "unicode: route header transform args string U+1F600",
+      "node": "/properties/routes/items/anyOf/0/properties/transforms/items/allOf/1/then/properties/args/anyOf/0",
+      "config": {
+        "routes": [
+          {
+            "src": "/a",
+            "transforms": [
+              {
+                "type": "request.headers",
+                "op": "set",
+                "target": {
+                  "key": "x"
+                },
+                "args": "😀"
+              }
+            ]
+          }
+        ]
+      },
+      "cli": {
+        "ok": false,
+        "stage": "validateConfig",
+        "code": "INVALID_VERCEL_CONFIG",
+        "message": "Invalid vercel.json - `routes[0].transforms[0].args` should match pattern \"^[a-zA-Z0-9_ :;.,\"'?!(){}\\[\\]@<>=+*#$&`|~\\^%/-]+$\"."
+      }
+    },
+    {
+      "name": "unicode: route header transform args array U+1F600",
+      "node": "/properties/routes/items/anyOf/0/properties/transforms/items/allOf/1/then/properties/args/anyOf/1/items",
+      "config": {
+        "routes": [
+          {
+            "src": "/a",
+            "transforms": [
+              {
+                "type": "request.headers",
+                "op": "set",
+                "target": {
+                  "key": "x"
+                },
+                "args": ["v", "😀"]
+              }
+            ]
+          }
+        ]
+      },
+      "cli": {
+        "ok": false,
+        "stage": "validateConfig",
+        "code": "INVALID_VERCEL_CONFIG",
+        "message": "Invalid vercel.json - `routes[0].transforms[0].args` should be string."
+      }
+    },
+    {
+      "name": "unicode: route header transform key x + U+1F600",
+      "node": "/properties/routes/items/anyOf/0/properties/transforms/items/allOf/1/then/properties/target/properties/key/then",
+      "config": {
+        "routes": [
+          {
+            "src": "/a",
+            "transforms": [
+              {
+                "type": "request.headers",
+                "op": "set",
+                "target": {
+                  "key": "x😀"
+                },
+                "args": "v"
+              }
+            ]
+          }
+        ]
+      },
+      "cli": {
+        "ok": false,
+        "stage": "validateConfig",
+        "code": "INVALID_VERCEL_CONFIG",
+        "message": "Invalid vercel.json - `routes[0].transforms[0].target.key` should match pattern \"^[a-zA-Z0-9_-]+$\"."
+      }
+    },
+    {
+      "name": "unicode: route header transform args string x + U+1F600",
+      "node": "/properties/routes/items/anyOf/0/properties/transforms/items/allOf/1/then/properties/args/anyOf/0",
+      "config": {
+        "routes": [
+          {
+            "src": "/a",
+            "transforms": [
+              {
+                "type": "request.headers",
+                "op": "set",
+                "target": {
+                  "key": "x"
+                },
+                "args": "x😀"
+              }
+            ]
+          }
+        ]
+      },
+      "cli": {
+        "ok": false,
+        "stage": "validateConfig",
+        "code": "INVALID_VERCEL_CONFIG",
+        "message": "Invalid vercel.json - `routes[0].transforms[0].args` should match pattern \"^[a-zA-Z0-9_ :;.,\"'?!(){}\\[\\]@<>=+*#$&`|~\\^%/-]+$\"."
+      }
+    },
+    {
+      "name": "unicode: route header transform args array x + U+1F600",
+      "node": "/properties/routes/items/anyOf/0/properties/transforms/items/allOf/1/then/properties/args/anyOf/1/items",
+      "config": {
+        "routes": [
+          {
+            "src": "/a",
+            "transforms": [
+              {
+                "type": "request.headers",
+                "op": "set",
+                "target": {
+                  "key": "x"
+                },
+                "args": ["v", "x😀"]
+              }
+            ]
+          }
+        ]
+      },
+      "cli": {
+        "ok": false,
+        "stage": "validateConfig",
+        "code": "INVALID_VERCEL_CONFIG",
+        "message": "Invalid vercel.json - `routes[0].transforms[0].args` should be string."
+      }
+    },
+    {
+      "name": "unicode: route header transform key lone high surrogate",
+      "node": "/properties/routes/items/anyOf/0/properties/transforms/items/allOf/1/then/properties/target/properties/key/then",
+      "config": {
+        "routes": [
+          {
+            "src": "/a",
+            "transforms": [
+              {
+                "type": "request.headers",
+                "op": "set",
+                "target": {
+                  "key": "\ud83d"
+                },
+                "args": "v"
+              }
+            ]
+          }
+        ]
+      },
+      "cli": {
+        "ok": false,
+        "stage": "validateConfig",
+        "code": "INVALID_VERCEL_CONFIG",
+        "message": "Invalid vercel.json - `routes[0].transforms[0].target.key` should match pattern \"^[a-zA-Z0-9_-]+$\"."
+      }
+    },
+    {
+      "name": "unicode: route header transform args string lone high surrogate",
+      "node": "/properties/routes/items/anyOf/0/properties/transforms/items/allOf/1/then/properties/args/anyOf/0",
+      "config": {
+        "routes": [
+          {
+            "src": "/a",
+            "transforms": [
+              {
+                "type": "request.headers",
+                "op": "set",
+                "target": {
+                  "key": "x"
+                },
+                "args": "\ud83d"
+              }
+            ]
+          }
+        ]
+      },
+      "cli": {
+        "ok": false,
+        "stage": "validateConfig",
+        "code": "INVALID_VERCEL_CONFIG",
+        "message": "Invalid vercel.json - `routes[0].transforms[0].args` should match pattern \"^[a-zA-Z0-9_ :;.,\"'?!(){}\\[\\]@<>=+*#$&`|~\\^%/-]+$\"."
+      }
+    },
+    {
+      "name": "unicode: route header transform args array lone high surrogate",
+      "node": "/properties/routes/items/anyOf/0/properties/transforms/items/allOf/1/then/properties/args/anyOf/1/items",
+      "config": {
+        "routes": [
+          {
+            "src": "/a",
+            "transforms": [
+              {
+                "type": "request.headers",
+                "op": "set",
+                "target": {
+                  "key": "x"
+                },
+                "args": ["v", "\ud83d"]
+              }
+            ]
+          }
+        ]
+      },
+      "cli": {
+        "ok": false,
+        "stage": "validateConfig",
+        "code": "INVALID_VERCEL_CONFIG",
+        "message": "Invalid vercel.json - `routes[0].transforms[0].args` should be string."
+      }
+    },
+    {
+      "name": "unicode: route header transform key x + lone low surrogate",
+      "node": "/properties/routes/items/anyOf/0/properties/transforms/items/allOf/1/then/properties/target/properties/key/then",
+      "config": {
+        "routes": [
+          {
+            "src": "/a",
+            "transforms": [
+              {
+                "type": "request.headers",
+                "op": "set",
+                "target": {
+                  "key": "x\ude00"
+                },
+                "args": "v"
+              }
+            ]
+          }
+        ]
+      },
+      "cli": {
+        "ok": false,
+        "stage": "validateConfig",
+        "code": "INVALID_VERCEL_CONFIG",
+        "message": "Invalid vercel.json - `routes[0].transforms[0].target.key` should match pattern \"^[a-zA-Z0-9_-]+$\"."
+      }
+    },
+    {
+      "name": "unicode: route header transform args string x + lone low surrogate",
+      "node": "/properties/routes/items/anyOf/0/properties/transforms/items/allOf/1/then/properties/args/anyOf/0",
+      "config": {
+        "routes": [
+          {
+            "src": "/a",
+            "transforms": [
+              {
+                "type": "request.headers",
+                "op": "set",
+                "target": {
+                  "key": "x"
+                },
+                "args": "x\ude00"
+              }
+            ]
+          }
+        ]
+      },
+      "cli": {
+        "ok": false,
+        "stage": "validateConfig",
+        "code": "INVALID_VERCEL_CONFIG",
+        "message": "Invalid vercel.json - `routes[0].transforms[0].args` should match pattern \"^[a-zA-Z0-9_ :;.,\"'?!(){}\\[\\]@<>=+*#$&`|~\\^%/-]+$\"."
+      }
+    },
+    {
+      "name": "unicode: route header transform args array x + lone low surrogate",
+      "node": "/properties/routes/items/anyOf/0/properties/transforms/items/allOf/1/then/properties/args/anyOf/1/items",
+      "config": {
+        "routes": [
+          {
+            "src": "/a",
+            "transforms": [
+              {
+                "type": "request.headers",
+                "op": "set",
+                "target": {
+                  "key": "x"
+                },
+                "args": ["v", "x\ude00"]
+              }
+            ]
+          }
+        ]
+      },
+      "cli": {
+        "ok": false,
+        "stage": "validateConfig",
+        "code": "INVALID_VERCEL_CONFIG",
+        "message": "Invalid vercel.json - `routes[0].transforms[0].args` should be string."
+      }
+    },
+    {
+      "name": "unicode: route request.path args / + ASCII×2047 (control)",
+      "node": "/properties/routes/items/anyOf/0/properties/transforms/items/allOf/3/then/properties/args",
+      "config": {
+        "routes": [
+          {
+            "src": "/a",
+            "transforms": [
+              {
+                "type": "request.path",
+                "op": "set",
+                "args": "/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+              }
+            ]
+          }
+        ]
+      },
+      "cli": {
+        "ok": true
+      }
+    },
+    {
+      "name": "unicode: rewrite request.path args / + ASCII×2047 (control)",
+      "node": "/properties/rewrites/items/properties/transforms/items/properties/args",
+      "config": {
+        "rewrites": [
+          {
+            "source": "/a",
+            "destination": "/b",
+            "transforms": [
+              {
+                "type": "request.path",
+                "op": "set",
+                "args": "/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+              }
+            ]
+          }
+        ]
+      },
+      "cli": {
+        "ok": true
+      }
+    },
+    {
+      "name": "unicode: route request.path args / + U+1F600",
+      "node": "/properties/routes/items/anyOf/0/properties/transforms/items/allOf/3/then/properties/args",
+      "config": {
+        "routes": [
+          {
+            "src": "/a",
+            "transforms": [
+              {
+                "type": "request.path",
+                "op": "set",
+                "args": "/😀"
+              }
+            ]
+          }
+        ]
+      },
+      "cli": {
+        "ok": true
+      }
+    },
+    {
+      "name": "unicode: rewrite request.path args / + U+1F600",
+      "node": "/properties/rewrites/items/properties/transforms/items/properties/args",
+      "config": {
+        "rewrites": [
+          {
+            "source": "/a",
+            "destination": "/b",
+            "transforms": [
+              {
+                "type": "request.path",
+                "op": "set",
+                "args": "/😀"
+              }
+            ]
+          }
+        ]
+      },
+      "cli": {
+        "ok": true
+      }
+    },
+    {
+      "name": "unicode: route request.path args / + U+1F600×1023 (2047 units)",
+      "node": "/properties/routes/items/anyOf/0/properties/transforms/items/allOf/3/then/properties/args",
+      "config": {
+        "routes": [
+          {
+            "src": "/a",
+            "transforms": [
+              {
+                "type": "request.path",
+                "op": "set",
+                "args": "/😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀"
+              }
+            ]
+          }
+        ]
+      },
+      "cli": {
+        "ok": true
+      }
+    },
+    {
+      "name": "unicode: rewrite request.path args / + U+1F600×1023 (2047 units)",
+      "node": "/properties/rewrites/items/properties/transforms/items/properties/args",
+      "config": {
+        "rewrites": [
+          {
+            "source": "/a",
+            "destination": "/b",
+            "transforms": [
+              {
+                "type": "request.path",
+                "op": "set",
+                "args": "/😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀"
+              }
+            ]
+          }
+        ]
+      },
+      "cli": {
+        "ok": true
+      }
+    },
+    {
+      "name": "unicode: route request.path args / + U+1F600×1024 (2049 units, 1025 code points)",
+      "node": "/properties/routes/items/anyOf/0/properties/transforms/items/allOf/3/then/properties/args",
+      "config": {
+        "routes": [
+          {
+            "src": "/a",
+            "transforms": [
+              {
+                "type": "request.path",
+                "op": "set",
+                "args": "/😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀"
+              }
+            ]
+          }
+        ]
+      },
+      "cli": {
+        "ok": true
+      }
+    },
+    {
+      "name": "unicode: rewrite request.path args / + U+1F600×1024 (2049 units, 1025 code points)",
+      "node": "/properties/rewrites/items/properties/transforms/items/properties/args",
+      "config": {
+        "rewrites": [
+          {
+            "source": "/a",
+            "destination": "/b",
+            "transforms": [
+              {
+                "type": "request.path",
+                "op": "set",
+                "args": "/😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀"
+              }
+            ]
+          }
+        ]
+      },
+      "cli": {
+        "ok": true
+      }
+    },
+    {
+      "name": "unicode: route request.path args / + U+1F600×2047 (4095 units, 2048 code points)",
+      "node": "/properties/routes/items/anyOf/0/properties/transforms/items/allOf/3/then/properties/args",
+      "config": {
+        "routes": [
+          {
+            "src": "/a",
+            "transforms": [
+              {
+                "type": "request.path",
+                "op": "set",
+                "args": "/😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀"
+              }
+            ]
+          }
+        ]
+      },
+      "cli": {
+        "ok": true
+      }
+    },
+    {
+      "name": "unicode: rewrite request.path args / + U+1F600×2047 (4095 units, 2048 code points)",
+      "node": "/properties/rewrites/items/properties/transforms/items/properties/args",
+      "config": {
+        "rewrites": [
+          {
+            "source": "/a",
+            "destination": "/b",
+            "transforms": [
+              {
+                "type": "request.path",
+                "op": "set",
+                "args": "/😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀"
+              }
+            ]
+          }
+        ]
+      },
+      "cli": {
+        "ok": true
+      }
+    },
+    {
+      "name": "unicode: route request.path args / + U+1F600×2048 (2049 code points)",
+      "node": "/properties/routes/items/anyOf/0/properties/transforms/items/allOf/3/then/properties/args",
+      "config": {
+        "routes": [
+          {
+            "src": "/a",
+            "transforms": [
+              {
+                "type": "request.path",
+                "op": "set",
+                "args": "/😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀"
+              }
+            ]
+          }
+        ]
+      },
+      "cli": {
+        "ok": false,
+        "stage": "validateConfig",
+        "code": "INVALID_VERCEL_CONFIG",
+        "message": "Invalid vercel.json - `routes[0].transforms[0].args` should NOT be longer than 2048 characters."
+      }
+    },
+    {
+      "name": "unicode: rewrite request.path args / + U+1F600×2048 (2049 code points)",
+      "node": "/properties/rewrites/items/properties/transforms/items/properties/args",
+      "config": {
+        "rewrites": [
+          {
+            "source": "/a",
+            "destination": "/b",
+            "transforms": [
+              {
+                "type": "request.path",
+                "op": "set",
+                "args": "/😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀"
+              }
+            ]
+          }
+        ]
+      },
+      "cli": {
+        "ok": false,
+        "stage": "validateConfig",
+        "code": "INVALID_VERCEL_CONFIG",
+        "message": "Invalid vercel.json - `rewrites[0].transforms[0].args` should NOT be longer than 2048 characters."
+      }
+    },
+    {
+      "name": "unicode: route request.path args / + lone high surrogate",
+      "node": "/properties/routes/items/anyOf/0/properties/transforms/items/allOf/3/then/properties/args",
+      "config": {
+        "routes": [
+          {
+            "src": "/a",
+            "transforms": [
+              {
+                "type": "request.path",
+                "op": "set",
+                "args": "/\ud83d"
+              }
+            ]
+          }
+        ]
+      },
+      "cli": {
+        "ok": true
+      }
+    },
+    {
+      "name": "unicode: rewrite request.path args / + lone high surrogate",
+      "node": "/properties/rewrites/items/properties/transforms/items/properties/args",
+      "config": {
+        "rewrites": [
+          {
+            "source": "/a",
+            "destination": "/b",
+            "transforms": [
+              {
+                "type": "request.path",
+                "op": "set",
+                "args": "/\ud83d"
+              }
+            ]
+          }
+        ]
+      },
+      "cli": {
+        "ok": true
+      }
+    },
+    {
+      "name": "unicode: route request.path args / + lone low surrogate×2047",
+      "node": "/properties/routes/items/anyOf/0/properties/transforms/items/allOf/3/then/properties/args",
+      "config": {
+        "routes": [
+          {
+            "src": "/a",
+            "transforms": [
+              {
+                "type": "request.path",
+                "op": "set",
+                "args": "/\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00"
+              }
+            ]
+          }
+        ]
+      },
+      "cli": {
+        "ok": true
+      }
+    },
+    {
+      "name": "unicode: rewrite request.path args / + lone low surrogate×2047",
+      "node": "/properties/rewrites/items/properties/transforms/items/properties/args",
+      "config": {
+        "rewrites": [
+          {
+            "source": "/a",
+            "destination": "/b",
+            "transforms": [
+              {
+                "type": "request.path",
+                "op": "set",
+                "args": "/\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00\ude00"
+              }
+            ]
+          }
+        ]
+      },
+      "cli": {
+        "ok": true
+      }
+    },
+    {
+      "name": "unicode: route request.path args / + U+1F600 + space",
+      "node": "/properties/routes/items/anyOf/0/properties/transforms/items/allOf/3/then/properties/args",
+      "config": {
+        "routes": [
+          {
+            "src": "/a",
+            "transforms": [
+              {
+                "type": "request.path",
+                "op": "set",
+                "args": "/😀 "
+              }
+            ]
+          }
+        ]
+      },
+      "cli": {
+        "ok": false,
+        "stage": "validateConfig",
+        "code": "INVALID_VERCEL_CONFIG",
+        "message": "Invalid vercel.json - `routes[0].transforms[0].args` should match pattern \"^/(?!/)(?!.*[?#\\s\\x00-\\x1F\\x7F]).*$\"."
+      }
+    },
+    {
+      "name": "unicode: rewrite request.path args / + U+1F600 + space",
+      "node": "/properties/rewrites/items/properties/transforms/items/properties/args",
+      "config": {
+        "rewrites": [
+          {
+            "source": "/a",
+            "destination": "/b",
+            "transforms": [
+              {
+                "type": "request.path",
+                "op": "set",
+                "args": "/😀 "
+              }
+            ]
+          }
+        ]
+      },
+      "cli": {
+        "ok": false,
+        "stage": "validateConfig",
+        "code": "INVALID_VERCEL_CONFIG",
+        "message": "Invalid vercel.json - `rewrites[0].transforms[0].args` should match pattern \"^/(?!/)(?!.*[?#\\s\\x00-\\x1F\\x7F]).*$\"."
+      }
     }
   ]
 }

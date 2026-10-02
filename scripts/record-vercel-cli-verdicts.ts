@@ -17,7 +17,10 @@
  *   npx tsx scripts/record-vercel-cli-verdicts.ts "$d"
  *
  * To add a mutant: append `{ "name", "config" }` to the JSON's `mutants` and
- * re-run. On a CLI bump, bump VERCEL_SCHEMA_SOURCE first; this script refuses
+ * re-run. A mutant aimed at a `pattern`/`patternProperties` node also carries
+ * `"node"` (that node's JSON pointer in buildVercelConfigSchema()); the
+ * schema test requires, per such node, a CLI-accepted mutant, an astral one
+ * and a lone-surrogate one. Fields other than `cli` are kept as written. On a CLI bump, bump VERCEL_SCHEMA_SOURCE first; this script refuses
  * an install whose versions differ from it.
  */
 import { readdirSync, readFileSync, writeFileSync } from "node:fs";
