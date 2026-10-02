@@ -100,17 +100,44 @@ export const X402_TEST_CONFIG = {
   testnet: true,
 } as const;
 
+/** The global `fetch` as the relay suite's network guard installed it (setup runs first). */
+const GUARDED_FETCH = globalThis.fetch;
+const LOOPBACK_HOST = /^(localhost|127(\.\d{1,3}){3}|\[::1\])$/;
+
+/**
+ * The in-process peer network a test relay reaches its peer relays through
+ * (`SyncRelayConfig.federationPeerFetch`). A peer at a reserved `.invalid`
+ * host (RFC 6761 §6.4: never resolves) — the registry-row peer a test seeds
+ * to name a federated route it never answers on — is unreachable, whatever
+ * else the test stubbed. A test that stubbed `fetch` otherwise owns its peer
+ * mesh (`vi.stubGlobal("fetch", …)` routing peer URLs into in-process apps).
+ * Without a stub, a loopback peer (a real in-process server) goes to the
+ * global `fetch` and any other peer (`http://peer-….test`) is unreachable.
+ * Unreachable rejects the way a failed fetch does, in-process, without a
+ * socket. The network guard is untouched and still refuses any real dial.
+ */
+export const inProcessPeerFetch: typeof fetch = (input, init) => {
+  const url = input instanceof Request ? input.url : String(input);
+  const host = new URL(url).hostname;
+  const reachable =
+    !host.endsWith(".invalid") && (globalThis.fetch !== GUARDED_FETCH || LOOPBACK_HOST.test(host));
+  if (reachable) return globalThis.fetch(input, init);
+  return Promise.reject(new TypeError(`fetch failed (peer ${url} unreachable in test)`));
+};
+
 /**
  * The network-touching boot services, replaced for tests: x402 talks to the
  * in-process facilitator (its `initialize()` otherwise fetches x402.org), and
  * the deposit detector — whose boot tick otherwise scans a public Base RPC —
- * is off. `createTestRelay` applies it; a test that calls
+ * is off, and peer relays are the in-process peer network
+ * (`inProcessPeerFetch`). `createTestRelay` applies it; a test that calls
  * `createSyncRelay({...})` directly spreads it in. The relay suite's network
  * guard (`network-guard.setup.ts`) fails any test that reaches past it.
  */
 export const TEST_RELAY_NETWORK = {
   x402FacilitatorClient: fakeFacilitatorClient,
   depositDetectorRpc: null,
+  federationPeerFetch: inProcessPeerFetch,
 } as const satisfies Partial<SyncRelayConfig>;
 
 /**
