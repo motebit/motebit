@@ -28,40 +28,62 @@
  * builds from the repo's point of view) but is listed: its project's ignore
  * step may be configured in the Vercel dashboard, which this gate cannot see.
  *
+ * Production ownership (one deployer per project). A project whose
+ * production is deployed by a GitHub Action (`vercel --prod` in a workflow
+ * whose `on.push` covers `main` and lists `<project dir>/**` in its paths)
+ * must disable Vercel's Git-integration deploys of main in its vercel.json
+ * (`"git": {"deploymentEnabled": {"main": false}}`), or main deploys twice.
+ * Conversely, a vercel.json that disables main must have such an Action, or
+ * production never deploys. Pre-existing double deploys are named in
+ * KNOWN_DOUBLE_DEPLOY (a stale entry is itself a violation). The workflow ↔
+ * project match is by the `<dir>/**` push path only: a workflow that deploys
+ * a project without listing its dir is not seen.
+ *
  * Exit 1 on any violation.
  */
 
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join, posix, relative, resolve } from "node:path";
+import { pathToFileURL } from "node:url";
+import { parse as parseYaml } from "yaml";
 import { failWithRepair } from "./lib/gate-report.js";
 
-const ROOT = process.cwd();
 const SCRIPT = "scripts/vercel-ignore-build.sh";
 const WORKSPACE_GLOB_DIRS = ["packages", "apps", "services"];
 const SKIP_DIRS = new Set(["node_modules", ".git", ".next", ".turbo", "dist", "out", ".vercel"]);
 const DEP_FIELDS = ["dependencies", "devDependencies", "peerDependencies", "optionalDependencies"];
+
+/**
+ * Projects known to deploy main both through a `vercel --prod` Action and
+ * through Vercel's Git integration. Pre-existing; not changed by the gate.
+ * Remove an entry once its vercel.json disables Git deploys of main.
+ */
+export const KNOWN_DOUBLE_DEPLOY: Record<string, string> = {
+  "services/proxy":
+    "deploy-proxy.yml runs `vercel --prod` and the motebit-proxy Git integration also builds main (#1012)",
+};
 
 interface Manifest {
   name?: string;
   [field: string]: unknown;
 }
 
-function findVercelJsons(dir: string, out: string[]): void {
+function findVercelJsons(root: string, dir: string, out: string[]): void {
   for (const entry of readdirSync(dir)) {
     if (SKIP_DIRS.has(entry)) continue;
     const full = join(dir, entry);
     const st = statSync(full);
-    if (st.isDirectory()) findVercelJsons(full, out);
-    else if (entry === "vercel.json") out.push(relative(ROOT, full).split("\\").join("/"));
+    if (st.isDirectory()) findVercelJsons(root, full, out);
+    else if (entry === "vercel.json") out.push(relative(root, full).split("\\").join("/"));
   }
 }
 
-function workspaceManifests(): Map<string, { dir: string; manifest: Manifest }> {
+export function workspaceManifests(root: string): Map<string, { dir: string; manifest: Manifest }> {
   const out = new Map<string, { dir: string; manifest: Manifest }>();
   for (const group of WORKSPACE_GLOB_DIRS) {
-    if (!existsSync(join(ROOT, group))) continue;
-    for (const d of readdirSync(join(ROOT, group))) {
-      const p = join(ROOT, group, d, "package.json");
+    if (!existsSync(join(root, group))) continue;
+    for (const d of readdirSync(join(root, group))) {
+      const p = join(root, group, d, "package.json");
       if (!existsSync(p)) continue;
       const manifest = JSON.parse(readFileSync(p, "utf8")) as Manifest;
       if (typeof manifest.name === "string")
@@ -71,7 +93,7 @@ function workspaceManifests(): Map<string, { dir: string; manifest: Manifest }> 
   return out;
 }
 
-function closureDirs(
+export function closureDirs(
   start: string,
   ws: Map<string, { dir: string; manifest: Manifest }>,
 ): string[] {
@@ -99,34 +121,94 @@ function closureDirs(
 
 const norm = (p: string) => posix.normalize(p).replace(/\/+$/, "");
 
-function main(): void {
-  if (!existsSync(join(ROOT, SCRIPT))) {
-    failWithRepair({
-      invariant: `${SCRIPT} must exist — it is the one Ignored Build Step every Vercel project routes through`,
-      canonical: SCRIPT,
-      fix: `Restore ${SCRIPT} from git history (git log -- ${SCRIPT}).`,
-    });
+/** Project dirs whose production a `vercel --prod` workflow on push to main deploys. */
+export function actionDeployedProjects(root: string, projectDirs: string[]): Map<string, string> {
+  const out = new Map<string, string>();
+  const wfDir = join(root, ".github", "workflows");
+  if (!existsSync(wfDir)) return out;
+  for (const f of readdirSync(wfDir).sort()) {
+    if (!/\.ya?ml$/.test(f)) continue;
+    const text = readFileSync(join(wfDir, f), "utf8");
+    if (!/\bvercel\b[^\n]*--prod\b/.test(text)) continue;
+    const wf = parseYaml(text) as { on?: { push?: { branches?: unknown; paths?: unknown } } };
+    const push = wf?.on?.push;
+    const branches = Array.isArray(push?.branches) ? push.branches.map(String) : [];
+    if (!branches.includes("main")) continue;
+    const paths = Array.isArray(push?.paths) ? push.paths.map(String) : [];
+    for (const dir of projectDirs) {
+      if (paths.includes(`${dir}/**`)) out.set(dir, `.github/workflows/${f}`);
+    }
   }
+  return out;
+}
 
+function mainGitDeployDisabled(cfg: { git?: unknown }): boolean {
+  const g = cfg.git as { deploymentEnabled?: unknown } | undefined;
+  const de = g?.deploymentEnabled;
+  if (de === false) return true;
+  return de != null && typeof de === "object" && (de as Record<string, unknown>)["main"] === false;
+}
+
+export interface VercelGateResult {
+  files: string[];
+  violations: string[];
+  routed: string[];
+  noIgnore: string[];
+  actionOwned: string[];
+  knownDoubleDeploy: string[];
+}
+
+export function collectVercelViolations(
+  root: string,
+  knownDoubleDeploy: Record<string, string> = KNOWN_DOUBLE_DEPLOY,
+): VercelGateResult {
   const files: string[] = [];
-  findVercelJsons(ROOT, files);
+  findVercelJsons(root, root, files);
   files.sort();
-  const ws = workspaceManifests();
+  const ws = workspaceManifests(root);
   const violations: string[] = [];
   const routed: string[] = [];
   const noIgnore: string[] = [];
+  const actionOwned: string[] = [];
+  const knownSeen: string[] = [];
+  const deployers = actionDeployedProjects(root, files.map(dirname));
 
   for (const file of files) {
     const projectDir = dirname(file);
-    let cfg: { ignoreCommand?: unknown };
+    let cfg: { ignoreCommand?: unknown; git?: unknown };
     try {
-      cfg = JSON.parse(readFileSync(join(ROOT, file), "utf8")) as { ignoreCommand?: unknown };
+      cfg = JSON.parse(readFileSync(join(root, file), "utf8")) as {
+        ignoreCommand?: unknown;
+        git?: unknown;
+      };
     } catch (err) {
       violations.push(
         `${file}: not valid JSON (${err instanceof Error ? err.message : String(err)})`,
       );
       continue;
     }
+
+    const deployer = deployers.get(projectDir);
+    const mainOff = mainGitDeployDisabled(cfg);
+    if (deployer != null && !mainOff) {
+      if (knownDoubleDeploy[projectDir] != null) knownSeen.push(projectDir);
+      else
+        violations.push(
+          `${file}: production is deployed by ${deployer} (\`vercel --prod\`) but Git deploys of main are not disabled — main deploys twice; set "git": {"deploymentEnabled": {"main": false}}`,
+        );
+    } else if (deployer == null && mainOff) {
+      violations.push(
+        `${file}: disables Git deploys of main but no workflow runs \`vercel --prod\` on push to main with \`${projectDir}/**\` in its paths — production would never deploy`,
+      );
+    } else if (deployer != null) {
+      actionOwned.push(`${projectDir} (${deployer})`);
+    }
+    if (knownDoubleDeploy[projectDir] != null && (deployer == null || mainOff)) {
+      violations.push(
+        `${file}: KNOWN_DOUBLE_DEPLOY lists ${projectDir} but it no longer double-deploys — remove the stale entry`,
+      );
+    }
+
     if (cfg.ignoreCommand === undefined) {
       noIgnore.push(projectDir);
       continue;
@@ -151,8 +233,8 @@ function main(): void {
       continue;
     }
     const args = tokens.slice(2);
-    const ownName = existsSync(join(ROOT, projectDir, "package.json"))
-      ? (JSON.parse(readFileSync(join(ROOT, projectDir, "package.json"), "utf8")) as Manifest).name
+    const ownName = existsSync(join(root, projectDir, "package.json"))
+      ? (JSON.parse(readFileSync(join(root, projectDir, "package.json"), "utf8")) as Manifest).name
       : undefined;
 
     if (args[0] === "--turbo-ignore") {
@@ -172,7 +254,7 @@ function main(): void {
     }
     const given = new Set(args.map(norm));
     for (const p of given) {
-      if (p.startsWith("/") || p.startsWith("..") || !existsSync(resolve(ROOT, p))) {
+      if (p.startsWith("/") || p.startsWith("..") || !existsSync(resolve(root, p))) {
         violations.push(`${file}: watched path \`${p}\` does not exist relative to the repo root`);
       }
     }
@@ -188,18 +270,34 @@ function main(): void {
     routed.push(`${projectDir} (${given.size} paths)`);
   }
 
+  return { files, violations, routed, noIgnore, actionOwned, knownDoubleDeploy: knownSeen };
+}
+
+function main(): void {
+  const ROOT = process.cwd();
+  if (!existsSync(join(ROOT, SCRIPT))) {
+    failWithRepair({
+      invariant: `${SCRIPT} must exist — it is the one Ignored Build Step every Vercel project routes through`,
+      canonical: SCRIPT,
+      fix: `Restore ${SCRIPT} from git history (git log -- ${SCRIPT}).`,
+    });
+  }
+
+  const { files, violations, routed, noIgnore, actionOwned, knownDoubleDeploy } =
+    collectVercelViolations(ROOT);
+
   if (violations.length > 0) {
     failWithRepair({
       invariant: `every vercel.json ignoreCommand must route through ${SCRIPT} — a production build is never skipped, a preview is skipped only when proven safe over the right paths (#1012: proxy security fix 42ce27f was "Canceled by Ignored Build Step" on main)`,
       sites: violations,
       canonical: SCRIPT,
-      fix: `Set the project's ignoreCommand to \`sh <relative path to ${SCRIPT}> <repo-root paths…>\` (include the project dir, pnpm-lock.yaml, package.json and every workspace dependency dir) or \`sh <relative path to ${SCRIPT}> --turbo-ignore <own package name>\`; never compose it with || / && / ;. Then run \`pnpm check-vercel-ignore-build\`.`,
+      fix: `Set the project's ignoreCommand to \`sh <relative path to ${SCRIPT}> <repo-root paths…>\` (include the project dir, pnpm-lock.yaml, package.json and every workspace dependency dir) or \`sh <relative path to ${SCRIPT}> --turbo-ignore <own package name>\`; never compose it with || / && / ;. A project whose production a \`vercel --prod\` Action deploys sets \`"git": {"deploymentEnabled": {"main": false}}\` (and only such a project). Then run \`pnpm check-vercel-ignore-build\`.`,
     });
   }
 
   console.log(
-    `✓ Vercel ignore step: ${files.length} vercel.json file(s) found, ${routed.length} route their ignoreCommand through ${SCRIPT} [${routed.join("; ")}], ${noIgnore.length} declare none [${noIgnore.join(", ")}] (any dashboard-configured ignore step is not visible to this gate).`,
+    `✓ Vercel ignore step: ${files.length} vercel.json file(s) found, ${routed.length} route their ignoreCommand through ${SCRIPT} [${routed.join("; ")}], ${noIgnore.length} declare none [${noIgnore.join(", ")}] (any dashboard-configured ignore step is not visible to this gate); production owned solely by a \`vercel --prod\` Action with Git deploys of main disabled: [${actionOwned.join("; ")}]; known double-deploy (Action + Git on main): [${knownDoubleDeploy.join(", ")}] (workflows matched to projects by their \`<dir>/**\` push path only).`,
   );
 }
 
-main();
+if (import.meta.url === pathToFileURL(process.argv[1] ?? "").href) main();
