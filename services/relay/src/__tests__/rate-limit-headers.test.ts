@@ -1,11 +1,13 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { createSyncRelay } from "../index.js";
 import type { SyncRelay } from "../index.js";
+import { TEST_RELAY_NETWORK } from "./test-helpers.js";
 
 const API_TOKEN = "test-token";
 
 async function createTestRelay(): Promise<SyncRelay> {
   return createSyncRelay({
+    ...TEST_RELAY_NETWORK,
     allowPrivateEndpoints: true,
     apiToken: API_TOKEN,
     x402: {

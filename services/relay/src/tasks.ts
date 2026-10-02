@@ -310,6 +310,21 @@ export interface TasksDeps {
     facilitatorUrl?: string;
     testnet?: boolean;
   };
+  /**
+   * An injected facilitator client (tests: the in-process fake). Omitted:
+   * `createX402FacilitatorClient(x402Config)`, the canonical construction.
+   */
+  x402FacilitatorClient?: unknown;
+  /**
+   * Hands the relay a promise this module started but does not await (the
+   * facilitator `initialize()`), so `close()` awaits it. Omitted: untracked.
+   */
+  trackStartup?: (work: Promise<unknown>) => void;
+  /**
+   * Aborts when the relay shuts down: a facilitator handshake still pending
+   * then rejects at once instead of holding `close()`. Omitted: unbounded.
+   */
+  shutdownSignal?: AbortSignal;
   /** Auth helpers from relay auth layer */
   parseTokenPayloadUnsafe: (token: string) => import("./auth.js").TokenPayload | null;
   verifySignedTokenForDevice: (
@@ -2183,6 +2198,9 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<TaskRoutesHan
     enableDeviceAuth,
     maxTasksPerSubmitter,
     x402Config,
+    x402FacilitatorClient,
+    trackStartup,
+    shutdownSignal,
     parseTokenPayloadUnsafe,
     verifySignedTokenForDevice,
     isTokenBlacklisted,
@@ -2312,9 +2330,11 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<TaskRoutesHan
     // misconfiguration so the route registration fails fast rather than
     // silently leaving the x402 surface broken. See x402-facilitator.ts.
     const { createX402FacilitatorClient } = await import("./x402-facilitator.js");
-    const facilitatorClient = (await createX402FacilitatorClient(
-      x402Config,
-    )) as ConstructorParameters<typeof x402ResourceServer>[0];
+    const { abortGetSupportedOnShutdown } = await import("./x402-facilitator-shutdown.js");
+    const facilitatorClient = abortGetSupportedOnShutdown(
+      (x402FacilitatorClient ?? (await createX402FacilitatorClient(x402Config))) as object,
+      shutdownSignal,
+    ) as ConstructorParameters<typeof x402ResourceServer>[0];
 
     const network = x402Config.network as `${string}:${string}`;
     const treasury = x402Config.payToAddress;
@@ -2398,6 +2418,7 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<TaskRoutesHan
           facilitator: x402Config.facilitatorUrl ?? "https://x402.org/facilitator",
         }),
       );
+    trackStartup?.(x402InitPromise);
     const paywallConfig = { testnet: x402Config.testnet ?? true };
 
     // One priceSubmission() quote per request. Free tasks (no listing / zero

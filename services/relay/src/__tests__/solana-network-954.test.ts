@@ -33,6 +33,7 @@ import {
   type FakeSolanaRpc,
   type FakeSolanaRpcOptions,
 } from "./booted-entry-harness.js";
+import { TEST_RELAY_NETWORK } from "./test-helpers.js";
 
 const API_TOKEN = "test-admin-token-954";
 
@@ -111,6 +112,7 @@ async function boot(opts: BootOpts): Promise<{ relay: SyncRelay; bootMs: number 
   captureLogs();
   const started = Date.now();
   relay = await createSyncRelay({
+    ...TEST_RELAY_NETWORK,
     allowPrivateEndpoints: true,
     apiToken: API_TOKEN,
     enableDeviceAuth: true,

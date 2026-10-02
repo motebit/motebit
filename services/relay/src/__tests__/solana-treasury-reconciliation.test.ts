@@ -28,6 +28,7 @@ import {
   USDC_MINT_MAINNET,
   type SolanaRpcAdapter,
 } from "@motebit/wallet-solana";
+import { TEST_RELAY_NETWORK } from "./test-helpers.js";
 
 const TREASURY = "RelayTreasurySolanaBase58";
 const SOLANA_CHAIN = SOLANA_MAINNET_CAIP2;
@@ -36,6 +37,7 @@ let relay: SyncRelay;
 
 beforeEach(async () => {
   relay = await createSyncRelay({
+    ...TEST_RELAY_NETWORK,
     allowPrivateEndpoints: true,
     apiToken: "test-token",
     enableDeviceAuth: true,
