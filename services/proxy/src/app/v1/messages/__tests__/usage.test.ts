@@ -164,6 +164,7 @@ describe("extractUsage — google/groq (not cache-optimized)", () => {
       cacheCreation: 0,
       inputReported: true,
       outputReported: true,
+      started: true,
     });
 
     const q = fresh();
@@ -181,6 +182,95 @@ describe("extractUsage — google/groq (not cache-optimized)", () => {
     );
     expect(q.cacheRead).toBe(0);
     expect(q.input).toBe(400);
+  });
+});
+
+describe("extractUsage — google thinking (OpenAI-compat omits it from completion_tokens)", () => {
+  // Real-shaped final chunk from generativelanguage.googleapis.com/v1beta/openai
+  // for gemini-2.5-pro: thinking is billed as output, but appears only in
+  // total_tokens (here 1,244 thinking tokens: 1,812 - 512 - 56).
+  const GEMINI_PRO_FINAL = {
+    id: "chatcmpl-gemini",
+    object: "chat.completion.chunk",
+    created: 1759400000,
+    model: "gemini-2.5-pro",
+    choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
+    usage: { prompt_tokens: 512, completion_tokens: 56, total_tokens: 1812 },
+  };
+
+  it("bills output as total_tokens - prompt_tokens (thinking included)", () => {
+    const u = fresh();
+    extractUsage("google", sse(GEMINI_PRO_FINAL), u);
+    expect(u.input).toBe(512);
+    expect(u.output).toBe(1812 - 512);
+    expect(u.outputReported).toBe(true);
+  });
+
+  it("never bills less than completion_tokens", () => {
+    const u = fresh();
+    extractUsage(
+      "google",
+      sse({ usage: { prompt_tokens: 512, completion_tokens: 56, total_tokens: 100 } }),
+      u,
+    );
+    expect(u.output).toBe(56);
+  });
+
+  it("without total_tokens, completion_tokens stands", () => {
+    const u = fresh();
+    extractUsage("google", sse({ usage: { prompt_tokens: 512, completion_tokens: 56 } }), u);
+    expect(u.output).toBe(56);
+  });
+
+  it("groq is unaffected: total_tokens never inflates output", () => {
+    const q = fresh();
+    extractUsage(
+      "groq",
+      sse({ usage: { prompt_tokens: 400, completion_tokens: 30, total_tokens: 999 } }),
+      q,
+    );
+    expect(q.output).toBe(30);
+  });
+});
+
+describe("extractUsage — started / provider error (served vs never served)", () => {
+  it("anthropic: an error event with no message_start records the error type, not started", () => {
+    const u = fresh();
+    extractUsage(
+      "anthropic",
+      sse({ type: "error", error: { type: "overloaded_error", message: "Overloaded" } }),
+      u,
+    );
+    expect(u.providerErrorType).toBe("overloaded_error");
+    expect(u.started).toBeUndefined();
+  });
+
+  it("anthropic: message_start or a content delta marks the message started", () => {
+    const a = fresh();
+    extractUsage("anthropic", sse({ type: "message_start", message: { usage: {} } }), a);
+    expect(a.started).toBe(true);
+    const b = fresh();
+    extractUsage(
+      "anthropic",
+      sse({ type: "content_block_delta", delta: { type: "text_delta", text: "x" } }),
+      b,
+    );
+    expect(b.started).toBe(true);
+    const c = fresh();
+    extractUsage("anthropic", sse({ type: "ping" }), c);
+    expect(c.started).toBeUndefined();
+  });
+
+  it("openai-shaped: a streamed error object records its type; choices mark started", () => {
+    const u = fresh();
+    extractUsage("openai", sse({ error: { type: "server_error", message: "x" } }), u);
+    expect(u.providerErrorType).toBe("server_error");
+    expect(u.started).toBeUndefined();
+    const g = fresh();
+    extractUsage("google", sse({ error: { code: 503, status: "UNAVAILABLE" } }), g);
+    expect(g.providerErrorType).toBe("UNAVAILABLE");
+    extractUsage("google", sse({ choices: [{ delta: { content: "x" } }] }), g);
+    expect(g.started).toBe(true);
   });
 });
 

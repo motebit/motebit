@@ -34,6 +34,14 @@
  *      `writeStallMs`; past it the pump stops forwarding (erroring the
  *      client's stream) and drains upstream exactly as on a cancel.
  *
+ *   5. **A provider that never served bills nothing.** A 200 stream that
+ *      carries only a provider error event (e.g. Anthropic `overloaded_error`,
+ *      no `message_start`), or an empty body, reported no usage and never
+ *      started a message — the provider billed nothing for it, so the turn's
+ *      provider cost is 0 (the classifier, if it spent, is still billed once),
+ *      logged `proxy.turn_unbilled_provider_error`. The upper bound is kept for
+ *      a provider that demonstrably started generating and then lost its usage.
+ *
  * Settle bound. From the moment forwarding ends (upstream done, client gone
  * or stalled) the accounting settles within {@link accountingTailWorstCaseMs}
  * (drain + two KV ops + every debit attempt and backoff), which is kept inside
@@ -138,6 +146,20 @@ export type EstimateReason =
   | "cache_ttl_unknown";
 
 /**
+ * Why the provider's share of a turn is 0: it never started a message and
+ * reported no usage, and either streamed an explicit error (its type) or sent
+ * an empty body (`"empty_body"`). Null when the provider may have served.
+ */
+export function unservedProviderError(
+  usage: UsageAccumulator,
+  completedEmptyBody: boolean,
+): string | null {
+  if (usage.started || usage.inputReported || usage.outputReported) return null;
+  if (usage.providerErrorType != null) return usage.providerErrorType;
+  return completedEmptyBody ? "empty_body" : null;
+}
+
+/**
  * A conservative UPPER bound on what an unmetered request consumed. Reported
  * fields stay exact; only what the provider never reported is bounded:
  *
@@ -218,6 +240,8 @@ export function meterStream(opts: StreamAccountingOptions): {
     let drainDeadline = 0;
     /** When forwarding ended — the start of the post-response accounting tail. */
     let tailStart = 0;
+    /** Upstream body bytes received — an empty body is a provider that never served. */
+    let bodyBytes = 0;
     let buffer = "";
     const meter = (text: string, flush: boolean) => {
       buffer += text;
@@ -247,6 +271,7 @@ export function meterStream(opts: StreamAccountingOptions): {
           break;
         }
         // Meter FIRST: a chunk whose client write fails still carried usage.
+        bodyBytes += result.value.byteLength;
         meter(decoder.decode(result.value, { stream: true }), false);
         if (clientGone) continue;
         const written = await withTimeout(
@@ -284,21 +309,44 @@ export function meterStream(opts: StreamAccountingOptions): {
     // is what `waitUntil` (the route's `after`) holds open.
     let cost = 0;
     try {
-      if (estimateReason == null && !usage.outputReported) estimateReason = "usage_missing";
+      // A provider that never served (explicit error / empty body, nothing
+      // started, no usage) billed nothing: its share is 0, not the bound. An
+      // empty body cut short by a read error or the drain deadline is not
+      // known to be unserved, so only a COMPLETED empty body counts.
+      const unserved = unservedProviderError(usage, estimateReason == null && bodyBytes === 0);
+      if (unserved != null) {
+        console.warn(
+          JSON.stringify({
+            event: "proxy.turn_unbilled_provider_error",
+            requestId: opts.requestId,
+            motebitId: opts.motebitId,
+            model: opts.model,
+            providerErrorType: unserved,
+            classifierCostMicro: opts.extraCostMicro,
+            ...(estimateReason != null ? { streamEnd: estimateReason } : {}),
+          }),
+        );
+        estimateReason = null;
+      }
+      if (unserved == null && estimateReason == null && !usage.outputReported) {
+        estimateReason = "usage_missing";
+      }
       const bounded = estimateReason != null;
       if (estimateReason == null && usage.cacheTtlBounded) estimateReason = "cache_ttl_unknown";
       const billed = !bounded
         ? usage
         : upperBoundUsage(opts.provider, usage, opts.providerRequestBody, opts.maxOutputTokens);
       cost =
-        calculateCostMicro(
-          opts.model,
-          billed.input,
-          billed.output,
-          billed.cacheRead,
-          billed.cacheCreation,
-          billed.cacheCreation1h ?? 0,
-        ) + opts.extraCostMicro;
+        (unserved != null
+          ? 0
+          : calculateCostMicro(
+              opts.model,
+              billed.input,
+              billed.output,
+              billed.cacheRead,
+              billed.cacheCreation,
+              billed.cacheCreation1h ?? 0,
+            )) + opts.extraCostMicro;
       // Normalized token fields for billing verification (`input` is UNCACHED,
       // `cacheRead` the discounted portion — additive; see usage.ts). An
       // estimated charge says so, with the reason and the bound it billed.
@@ -316,6 +364,7 @@ export function meterStream(opts: StreamAccountingOptions): {
           motebitId: opts.motebitId,
           clientAborted: clientGone,
           clientStalled,
+          ...(unserved != null ? { unbilledProviderError: unserved } : {}),
           ...(estimateReason != null
             ? {
                 estimated: true,

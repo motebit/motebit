@@ -24,6 +24,9 @@ import { buildProviderRequest, resolveMaxTokens } from "./provider-request";
 // Stream metering (pure, unit-tested) — forwards the provider stream and
 // meters what the provider consumed, client abort or not.
 import { meterStream } from "./stream-accounting";
+// Deny-by-default request-feature boundary: what the meter cannot price is
+// refused before anything spends, never under-billed.
+import { findUnsupportedFeature } from "./request-features";
 // Pre-stream failure classification + the shared one-event-per-failure surface.
 // Observation only (no recovery) — see `inference/classify.ts`.
 import {
@@ -151,14 +154,25 @@ export { DEBIT_MAX_ATTEMPTS };
 
 /**
  * Hold the isolate open for `task` via Next's `after` (the platform's
- * `waitUntil` on Vercel, edge included). Outside a Next request scope (unit
- * tests, a bare host) `after` throws; the task still runs, just unregistered.
+ * `waitUntil` on Vercel, edge included). Outside a Next request scope (a bare
+ * host) `after` throws; the task still runs, unregistered — and says so.
  */
-function keepAlive(task: Promise<void>): void {
+function keepAlive(task: Promise<void>, ids: { requestId: string; motebitId: string }): void {
   try {
     after(task);
-  } catch {
-    /* no request scope — nothing to register with */
+  } catch (err) {
+    // The task still runs, but the platform does not hold the isolate open
+    // for it: a teardown after the response can drop the debit. Loud, so an
+    // unregistered tail is a counted reconciliation event, never silent.
+    console.error(
+      JSON.stringify({
+        event: "proxy.accounting_unregistered",
+        requestId: ids.requestId,
+        motebitId: ids.motebitId,
+        errorName: err instanceof Error ? err.name : typeof err,
+        errorMessage: err instanceof Error ? err.message : String(err),
+      }),
+    );
   }
 }
 
@@ -514,6 +528,31 @@ async function serveAdmitted(ctx: {
     });
   }
 
+  // --- Metered features only --- BEFORE the classifier: motebit-cloud bills
+  // what the provider reports, so a feature whose cost the stream's usage does
+  // not carry (server tools, MCP connectors, unknown keys or block types) is
+  // refused here, before anything spends. BYOK is not metered (the user's own
+  // key), so it is not gated.
+  if (authMode === "proxy-token") {
+    const unsupported = findUnsupportedFeature(body);
+    if (unsupported) {
+      return failureResponse({
+        requestId,
+        status: 400,
+        bodyObj: {
+          error: "unsupported_feature",
+          feature: unsupported.feature,
+          path: unsupported.path,
+          message: `${unsupported.feature} is not supported on motebit-cloud: its cost cannot be metered. Use BYOK for this feature.`,
+        },
+        headers: cors,
+        model: resolvedModel,
+        mode: authMode,
+        failure: motebitFailure("motebit_request", "malformed_request", 400),
+      });
+    }
+  }
+
   // Resolve legacy/class aliases → current canonical model ID.
   // "claude-sonnet" → "claude-sonnet-4-6", old dated versions → current, etc.
   // Keeps deployed clients working when models are upgraded server-side.
@@ -824,7 +863,7 @@ async function serveAdmitted(ctx: {
     });
     // Register the post-response accounting with the platform's waitUntil so
     // an isolate teardown after the response closes cannot drop the debit.
-    keepAlive(settled);
+    keepAlive(settled, { requestId, motebitId: mid });
     const streamed = new Response(readable, {
       status: providerRes.status,
       headers: streamedHeaders,

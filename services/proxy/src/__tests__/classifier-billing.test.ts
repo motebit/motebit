@@ -192,6 +192,31 @@ describe("invalid request shape is refused before the classifier spends", () => 
       messages: Array.from({ length: validation.DEPOSIT_LIMITS.maxMsgs + 1 }, () => ONE[0]),
     },
   ];
+  // An unmeterable request feature is refused at the same boundary.
+  const features: Array<{ name: string; extra: Record<string, unknown> }> = [
+    {
+      name: "server tool web_search",
+      extra: { tools: [{ type: "web_search_20250305", name: "web_search" }] },
+    },
+    {
+      name: "server tool code_execution",
+      extra: { tools: [{ type: "code_execution_20250825", name: "code_execution" }] },
+    },
+    { name: "top-level mcp_servers", extra: { mcp_servers: [] } },
+  ];
+  for (const f of features) {
+    it(`auto + ${f.name} → 400 unsupported_feature before the classifier spends`, async () => {
+      const calls = stubFetch("never");
+      const res = await post({ model: "auto", messages: ONE, ...f.extra });
+      expect(res.status).toBe(400);
+      expect(((await res.json()) as { error: string }).error).toBe("unsupported_feature");
+      expect(calls.classifier).toBe(0);
+      expect(calls.provider).toBe(0);
+      expect(calls.debits).toEqual([]);
+      expect(store.map.get("proxy:active:mote-1")).toBe(0);
+    });
+  }
+
   for (const c of cases) {
     it(`auto + ${c.name} → 400, zero provider calls, nothing to bill`, async () => {
       const calls = stubFetch("never");
@@ -269,6 +294,26 @@ describe("every exit after the classifier bills it exactly once", () => {
       name: "2xx with no body (non-streaming pipe)",
       status: 200,
       upstream: new Response(null, { status: 200 }),
+      expectedDebit: () => CLASSIFIER_COST,
+    },
+    {
+      // The provider never started a message: its share is 0, the classifier
+      // is still billed exactly once (through the streamed pump's one debit).
+      name: "200 stream with only a provider error event (classifier only, once)",
+      status: 200,
+      upstream: new Response(
+        `event: error\ndata: ${JSON.stringify({ type: "error", error: { type: "overloaded_error", message: "Overloaded" } })}\n\n`,
+        { status: 200, headers: { "Content-Type": "text/event-stream" } },
+      ),
+      expectedDebit: () => CLASSIFIER_COST,
+    },
+    {
+      name: "200 stream with an empty body (classifier only, once)",
+      status: 200,
+      upstream: new Response("", {
+        status: 200,
+        headers: { "Content-Type": "text/event-stream" },
+      }),
       expectedDebit: () => CLASSIFIER_COST,
     },
     {
@@ -428,7 +473,7 @@ describe("classifier cost is billed only when the classifier actually spent", ()
           role: "user",
           content: [
             { type: "text", text: "write a sorting function" },
-            { type: "image", source: {} },
+            { type: "image", source: { type: "base64", media_type: "image/png", data: "AAAA" } },
           ],
         },
       ],

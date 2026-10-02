@@ -15,6 +15,24 @@
  *      usage       × reported, missing
  *      client      × reads, cancels, stalls
  *
+ *   C. provider served × never (only an error event / an empty 200 body),
+ *                        started-then-errored (usage lost after generation began)
+ *      provider    × anthropic, openai, groq, google
+ *      client      × reads, cancels, stalls
+ *
+ *   D. request feature × unmeterable (server tools, MCP, unknown keys and
+ *                        block types) — refused 400 before anything spends
+ *      provider    × anthropic, openai, groq, google
+ *
+ *   E. google thinking (gemini-2.5-pro: thinking only in `total_tokens`)
+ *      client      × reads, cancels, stalls
+ *
+ * C: a provider that never served bills 0 (no debit sent, logged
+ * `proxy.turn_unbilled_provider_error`); one that started and lost its usage
+ * bills >= the worst it could have been (the upper bound). D: 400
+ * `unsupported_feature`, nothing upstream, no debit, slot released once.
+ * E: output billed as total - prompt (never below completion_tokens).
+ *
  * Per cell: an invalid max_tokens is refused at the boundary (400, nothing
  * sent upstream, no debit, slot released once); otherwise the value sent
  * upstream is a positive safe integer within the tier cap, there is exactly
@@ -38,6 +56,7 @@ vi.mock("next/server", () => ({
   }),
 }));
 
+import { after } from "next/server";
 import { POST } from "../app/v1/messages/route";
 import { ACCOUNTING_TIMINGS } from "../app/v1/messages/stream-accounting";
 import { setSpendStoreForTests, memorySpendStore, type SpendStore } from "../spend-controls";
@@ -72,12 +91,16 @@ const MODEL: Record<Provider, string> = {
   groq: "llama-3.3-70b-versatile",
   google: "gemini-2.5-flash",
 };
+const GEMINI_PRO = "gemini-2.5-pro";
+/** Gemini thinking tokens — billed as output, reported only in total_tokens. */
+const THINKING = 3_000;
 /** $/MTok, restated here so the TRUE cost is independent of the route's pricing code. */
 const RATES: Record<string, { input: number; output: number }> = {
   "claude-sonnet-4-6": { input: 3.0, output: 15.0 },
   "gpt-5.4": { input: 2.5, output: 15.0 },
   "llama-3.3-70b-versatile": { input: 0.59, output: 0.79 },
   "gemini-2.5-flash": { input: 0.3, output: 2.5 },
+  "gemini-2.5-pro": { input: 1.25, output: 10.0 },
 };
 const MAX_TOKENS: Record<MaxTok, unknown> = {
   absent: undefined,
@@ -144,6 +167,8 @@ function token(model: string): ProxyTokenPayload {
 
 const tick = (ms = 0): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
+type Served = "never_error_event" | "never_empty_body" | "started_then_error";
+
 interface CellSpec {
   provider: Provider;
   maxTok: MaxTok;
@@ -151,6 +176,12 @@ interface CellSpec {
   growth: boolean;
   usage: Usage;
   client: Client;
+  /** Axis C — absent: the provider served normally. */
+  served?: Served;
+  /** Axis E — gemini-2.5-pro reports thinking only in total_tokens. */
+  thinking?: boolean;
+  /** Axis D — extra (unmeterable) request fields. */
+  feature?: Record<string, unknown>;
 }
 
 /** Upstream SSE for the cell, given the request the proxy actually sent. */
@@ -165,6 +196,67 @@ function upstreamFor(
       : UNCAPPED_OUTPUT;
   const bodyText = JSON.stringify(sent);
   const bodyBytes = enc.encode(bodyText).byteLength;
+  const zero: Truth = { input: 0, cacheWrite5m: 0, cacheWrite1h: 0, output: 0 };
+
+  if (spec.served === "never_empty_body") return { chunks: [], truth: zero };
+  if (spec.served === "never_error_event") {
+    return {
+      chunks: [
+        spec.provider === "anthropic"
+          ? enc.encode(
+              `event: error\ndata: ${JSON.stringify({ type: "error", error: { type: "overloaded_error", message: "Overloaded" } })}\n\n`,
+            )
+          : sse({ error: { type: "server_error", code: 503, message: "unavailable" } }),
+      ],
+      truth: zero,
+    };
+  }
+  if (spec.served === "started_then_error") {
+    // Generation began, then the provider errored: usage for the output is
+    // lost, so the true cost is the worst it could have been.
+    const err =
+      spec.provider === "anthropic"
+        ? enc.encode(
+            `event: error\ndata: ${JSON.stringify({ type: "error", error: { type: "overloaded_error" } })}\n\n`,
+          )
+        : sse({ error: { type: "server_error" } });
+    return spec.provider === "anthropic"
+      ? {
+          chunks: [
+            sse({
+              type: "message_start",
+              message: { usage: { input_tokens: INPUT, output_tokens: 1 } },
+            }),
+            sse({ type: "content_block_delta", delta: { type: "text_delta", text: "Hi" } }),
+            err,
+          ],
+          truth: { input: INPUT, cacheWrite5m: 0, cacheWrite1h: 0, output },
+        }
+      : {
+          chunks: [sse({ choices: [{ delta: { content: "Hi" } }] }), err],
+          truth: { input: bodyBytes, cacheWrite5m: 0, cacheWrite1h: 0, output },
+        };
+  }
+  if (spec.thinking) {
+    // Real-shaped Gemini OpenAI-compat final chunk: completion_tokens omits
+    // the thinking tokens, total_tokens includes them.
+    const visible = Math.min(200, output);
+    return {
+      chunks: [
+        sse({ choices: [{ delta: { content: "Hi" } }] }),
+        sse({
+          choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
+          usage: {
+            prompt_tokens: INPUT,
+            completion_tokens: visible,
+            total_tokens: INPUT + visible + THINKING,
+          },
+        }),
+        enc.encode("data: [DONE]\n\n"),
+      ],
+      truth: { input: INPUT, cacheWrite5m: 0, cacheWrite1h: 0, output: visible + THINKING },
+    };
+  }
 
   if (spec.usage === "missing") {
     // The provider never reports usage: the TRUE cost is the worst it could
@@ -244,7 +336,11 @@ function upstreamFor(
 function requestBody(spec: CellSpec, model: string): Record<string, unknown> {
   // A prompt large enough that the input bound is decided by its bytes, not
   // by the fixed headroom.
-  const body: Record<string, unknown> = { model, messages: [{ role: "user", content: PROMPT }] };
+  const body: Record<string, unknown> = {
+    model,
+    messages: [{ role: "user", content: PROMPT }],
+    ...spec.feature,
+  };
   const mt = MAX_TOKENS[spec.maxTok];
   if (mt !== undefined) body.max_tokens = mt;
   if (spec.cache === "1h" || spec.cache === "split_absent") {
@@ -256,7 +352,7 @@ function requestBody(spec: CellSpec, model: string): Record<string, unknown> {
 }
 
 async function runCell(spec: CellSpec) {
-  const model = MODEL[spec.provider];
+  const model = spec.thinking ? GEMINI_PRO : MODEL[spec.provider];
   const { store, calls } = kvStore();
   setSpendStoreForTests(store);
   vi.mocked(validation.parseProxyToken).mockResolvedValue(token(model));
@@ -313,6 +409,19 @@ async function runCell(spec: CellSpec) {
   return { res, debits, sentBodies, calls, model, truth: truth as Truth | null };
 }
 
+function loggedEvents(name: string): Array<Record<string, unknown>> {
+  return [console.log, console.warn, console.error]
+    .flatMap((f) => vi.mocked(f).mock.calls.map((c) => String(c[0])))
+    .map((l) => {
+      try {
+        return JSON.parse(l) as Record<string, unknown>;
+      } catch {
+        return null;
+      }
+    })
+    .filter((e): e is Record<string, unknown> => e?.event === name);
+}
+
 const PROVIDERS: Provider[] = ["anthropic", "openai", "groq", "google"];
 const MAXTOKS: MaxTok[] = ["absent", "valid", "string", "negative", "float", "huge"];
 const CACHES: Cache[] = ["none", "5m", "1h", "split_absent"];
@@ -347,6 +456,63 @@ const B_CELLS: CellSpec[] = CACHES.flatMap((cache) =>
     ),
   ),
 );
+
+const SERVED: Served[] = ["never_error_event", "never_empty_body", "started_then_error"];
+const base = {
+  maxTok: "absent" as const,
+  cache: "none" as const,
+  growth: false,
+  usage: "reported" as const,
+};
+const C_CELLS: CellSpec[] = PROVIDERS.flatMap((provider) =>
+  SERVED.flatMap((served) => CLIENTS.map((client) => ({ ...base, provider, served, client }))),
+);
+const FEATURES: Array<[string, Record<string, unknown>]> = [
+  ["web_search", { tools: [{ type: "web_search_20250305", name: "web_search", max_uses: 5 }] }],
+  ["web_fetch", { tools: [{ type: "web_fetch_20250910", name: "web_fetch" }] }],
+  ["code_execution", { tools: [{ type: "code_execution_20250825", name: "code_execution" }] }],
+  ["mcp_servers", { mcp_servers: [{ type: "url", url: "https://mcp.example", name: "m" }] }],
+  ["container", { container: "container_123" }],
+  [
+    "server_tool_use block",
+    {
+      messages: [
+        { role: "user", content: "q" },
+        {
+          role: "assistant",
+          content: [{ type: "server_tool_use", id: "s", name: "web_search", input: {} }],
+        },
+        { role: "user", content: "more" },
+      ],
+    },
+  ],
+  [
+    "file document source",
+    {
+      messages: [
+        {
+          role: "user",
+          content: [{ type: "document", source: { type: "file", file_id: "file_1" } }],
+        },
+      ],
+    },
+  ],
+];
+const D_CELLS: Array<[string, CellSpec]> = PROVIDERS.flatMap((provider) =>
+  FEATURES.map(
+    ([f, feature]) =>
+      [`${provider} · feature=${f}`, { ...base, provider, client: "reads" as const, feature }] as [
+        string,
+        CellSpec,
+      ],
+  ),
+);
+const E_CELLS: CellSpec[] = CLIENTS.map((client) => ({
+  ...base,
+  provider: "google" as const,
+  thinking: true,
+  client,
+}));
 
 const name = (c: CellSpec) =>
   `${c.provider} · max_tokens=${c.maxTok} · cache=${c.cache} · growth=${c.growth ? "yes" : "no"} · usage=${c.usage} · client=${c.client}`;
@@ -433,5 +599,108 @@ describe("stream metering boundary matrix — charged for what the provider cons
     expect(calls.filter((c) => c.startsWith("incrby proxy:spent:"))).toEqual([
       `incrby proxy:spent:jti-1 ${amount}`,
     ]);
+  });
+
+  it.each(
+    C_CELLS.map((c) => [`${c.provider} · served=${c.served} · client=${c.client}`, c] as const),
+  )("%s", async (_n, spec) => {
+    const { res, debits, sentBodies, calls, model, truth } = await runCell(spec);
+    expect(res.status).toBe(200);
+    expect(sentBodies).toHaveLength(1);
+    expect(calls.filter((c) => c === "decr proxy:active:mote-1")).toHaveLength(1);
+    const unbilled = loggedEvents("proxy.turn_unbilled_provider_error");
+
+    if (spec.served !== "started_then_error") {
+      // The provider never served: it billed nothing, so neither does the turn.
+      expect(debits).toHaveLength(0);
+      expect(calls.filter((c) => /^incrby proxy:spent:\S+ [1-9]/.test(c))).toHaveLength(0);
+      expect(unbilled).toHaveLength(1);
+      expect(unbilled[0]!.providerErrorType).toBe(
+        spec.served === "never_empty_body"
+          ? "empty_body"
+          : spec.provider === "anthropic"
+            ? "overloaded_error"
+            : "server_error",
+      );
+      return;
+    }
+    // Generation started: the lost usage is billed at the upper bound.
+    expect(unbilled).toHaveLength(0);
+    expect(debits).toHaveLength(1);
+    expect(debits[0]!.amount).toBeGreaterThanOrEqual(trueCostMicro(model, truth!));
+  });
+
+  it.each(D_CELLS)("%s → 400 unsupported_feature before anything spends", async (_n, spec) => {
+    const { res, debits, sentBodies, calls } = await runCell(spec);
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { error: string }).error).toBe("unsupported_feature");
+    expect(sentBodies).toHaveLength(0);
+    expect(debits).toHaveLength(0);
+    expect(calls.filter((c) => c.startsWith("incrby proxy:spent:"))).toHaveLength(0);
+    expect(calls.filter((c) => c === "decr proxy:active:mote-1")).toHaveLength(1);
+  });
+
+  it.each(
+    E_CELLS.map((c) => [`google · gemini-2.5-pro thinking · client=${c.client}`, c] as const),
+  )("%s — output billed incl. thinking (total - prompt), exact", async (_n, spec) => {
+    const { res, debits, model, truth } = await runCell(spec);
+    expect(res.status).toBe(200);
+    const want = trueCostMicro(model, truth!);
+    expect(debits).toHaveLength(1);
+    expect(debits[0]!.amount).toBeGreaterThanOrEqual(want);
+    expect(debits[0]!.amount).toBeLessThanOrEqual(want + 1);
+  });
+
+  it("an `after` that throws is logged proxy.accounting_unregistered (error) and the debit still lands", async () => {
+    vi.mocked(after).mockImplementationOnce(() => {
+      throw new Error("`after` was called outside a request scope");
+    });
+    const model = MODEL.anthropic;
+    const { store, calls } = kvStore();
+    setSpendStoreForTests(store);
+    vi.mocked(validation.parseProxyToken).mockResolvedValue(token(model));
+    const debits: number[] = [];
+    let truth: Truth | null = null;
+    const spec: CellSpec = { ...base, provider: "anthropic", client: "reads" };
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init?: RequestInit) => {
+        if (String(url).includes("/debit")) {
+          debits.push((JSON.parse(init?.body as string) as { amount: number }).amount);
+          return new Response("{}", { status: 200 });
+        }
+        const up = upstreamFor(spec, JSON.parse(init?.body as string) as Record<string, unknown>);
+        truth = up.truth;
+        return new Response(
+          new ReadableStream<Uint8Array>({
+            start(c) {
+              for (const ch of up.chunks) c.enqueue(ch);
+              c.close();
+            },
+          }),
+          { status: 200 },
+        );
+      }),
+    );
+    const res = await POST(
+      new Request("https://proxy.example/v1/messages", {
+        method: "POST",
+        headers: PROXY,
+        body: JSON.stringify(requestBody(spec, model)),
+      }),
+    );
+    await res.text(); // the client reads to EOF — the debit lands before it
+
+    const unregistered = loggedEvents("proxy.accounting_unregistered");
+    expect(unregistered).toHaveLength(1);
+    expect(unregistered[0]!.motebitId).toBe("mote-1");
+    expect(unregistered[0]!.requestId).toBe(res.headers.get("X-Motebit-Request-Id"));
+    expect(
+      vi
+        .mocked(console.error)
+        .mock.calls.some((c) => String(c[0]).includes('"proxy.accounting_unregistered"')),
+    ).toBe(true);
+    expect(debits).toEqual([trueCostMicro(model, truth!)]);
+    expect(calls.filter((c) => c === "decr proxy:active:mote-1")).toHaveLength(1);
   });
 });
