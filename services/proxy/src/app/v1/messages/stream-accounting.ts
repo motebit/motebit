@@ -271,7 +271,7 @@ export function meterStream(opts: StreamAccountingOptions): {
     // rejects. That is the only signal while upstream sends nothing.
     const clientCancelled = writer.closed.then(
       () => new Promise<never>(() => {}),
-      () => CLIENT_GONE,
+      (): typeof CLIENT_GONE => CLIENT_GONE,
     );
 
     try {
