@@ -33,7 +33,8 @@
  *     defined exactly once, at top level; no other function may be defined.
  * The CI side, read with a real YAML parser:
  *   - the workflow runs on `push` to `main` with no path/branch filter and no
- *     `defaults`; its `env` is exactly the pinned turbo-cache block;
+ *     `defaults`, and on `merge_group` (checks_requested) so the merge queue's
+ *     required checks report; its `env` is exactly the pinned turbo-cache block;
  *   - for each task key the hook runs, a step whose `run` EXACTLY equals the
  *     allowlisted CI form, with only `name`/`run` keys, in an allowlisted job
  *     whose `if:`/`needs:` chain is exactly the pinned one (and whose needs
@@ -514,7 +515,7 @@ export const CI_JOB_STEPS: Record<string, Step[]> = {
     {
       id: "filter",
       name: "Detect scripts/ and services/relay/ changes vs base",
-      run: 'scripts=false\nrelay=false\nif [ "${{ github.event_name }}" = "pull_request" ]; then\n  changed=$(git diff --name-only "origin/${{ github.base_ref }}...HEAD")\n  # Probes read repo data outside scripts/ (coverage-graduation.json\n  # is the live example: #589 moved a date there, the probe keyed on\n  # that literal went vacuous, and gate-effectiveness never ran on\n  # the PR because scripts/ was untouched — main went red on push).\n  # A change to a gate INPUT must trigger the same proof as a change\n  # to the gate.\n  if echo "$changed" | grep -qE \'^scripts/|^coverage-graduation\\.json$\'; then\n    scripts=true\n  fi\n  # activation-effectiveness must fire on a relay refactor (the exact\n  # regression it guards: a source change making a booted suite go\n  # vacuous), not only on gate edits.\n  if echo "$changed" | grep -qE \'^services/relay/\'; then\n    relay=true\n  fi\nfi\necho "scripts=$scripts" >> "$GITHUB_OUTPUT"\necho "relay=$relay" >> "$GITHUB_OUTPUT"\necho "scripts/ touched vs \'${{ github.base_ref }}\': $scripts; services/relay/ touched: $relay"\n',
+      run: 'scripts=false\nrelay=false\n# The diff base: the PR\'s base branch, or — in the merge queue — the\n# group\'s parent commit (main, or the queue entry ahead of it), so\n# the group\'s own changes decide, exactly as the PR\'s did.\nbase=""\nif [ "${{ github.event_name }}" = "pull_request" ]; then\n  base="origin/${{ github.base_ref }}"\nelif [ "${{ github.event_name }}" = "merge_group" ]; then\n  base="${{ github.event.merge_group.base_sha }}"\nfi\nif [ -n "$base" ]; then\n  changed=$(git diff --name-only "$base...HEAD")\n  # Probes read repo data outside scripts/ (coverage-graduation.json\n  # is the live example: #589 moved a date there, the probe keyed on\n  # that literal went vacuous, and gate-effectiveness never ran on\n  # the PR because scripts/ was untouched — main went red on push).\n  # A change to a gate INPUT must trigger the same proof as a change\n  # to the gate.\n  if echo "$changed" | grep -qE \'^scripts/|^coverage-graduation\\.json$\'; then\n    scripts=true\n  fi\n  # activation-effectiveness must fire on a relay refactor (the exact\n  # regression it guards: a source change making a booted suite go\n  # vacuous), not only on gate edits.\n  if echo "$changed" | grep -qE \'^services/relay/\'; then\n    relay=true\n  fi\nfi\necho "scripts=$scripts" >> "$GITHUB_OUTPUT"\necho "relay=$relay" >> "$GITHUB_OUTPUT"\necho "scripts/ touched vs \'$base\': $scripts; services/relay/ touched: $relay"\n',
     },
   ],
 };
@@ -769,6 +770,14 @@ export function evaluateCi(
   if (JSON.stringify(on?.push) !== JSON.stringify({ branches: ["main"] })) {
     violations.push(
       `${CI} \`on.push\` must be exactly \`{ branches: [main] }\` (every push to main, no paths/branches filter); got ${JSON.stringify(on?.push)}`,
+    );
+  }
+  // The merge queue is the other half of "CI is the authority": its required
+  // checks report only if the workflow runs on `merge_group`, or the queue
+  // waits forever (docs/ops/merge-queue.md).
+  if (JSON.stringify(on?.merge_group) !== JSON.stringify({ types: ["checks_requested"] })) {
+    violations.push(
+      `${CI} \`on.merge_group\` must be exactly \`{ types: [checks_requested] }\` (the merge queue's required checks run on it — see docs/ops/merge-queue.md); got ${JSON.stringify(on?.merge_group)}`,
     );
   }
   if (JSON.stringify(wf.env ?? null) !== JSON.stringify(WORKFLOW_ENV)) {
