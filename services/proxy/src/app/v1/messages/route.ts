@@ -64,10 +64,48 @@ export function OPTIONS(request: Request): Response {
   return new Response(null, { status: 204, headers: corsHeaders(origin) });
 }
 
-/** Classify a user message to pick the best model. Returns a task type string. */
-async function classifyTask(apiKey: string, message: string): Promise<string> {
+/** The classifier's `max_tokens` — also the output bound of its upper-bound cost. */
+const CLASSIFIER_MAX_TOKENS = 30;
+/**
+ * Upper bound on the classifier's input tokens, billed only when a 2xx reply
+ * carries no usable `usage` block. The prompt is a ~350-char template plus at
+ * most 500 UTF-16 code units of the message; a code unit is at most 3 UTF-8
+ * bytes and a byte-level BPE token covers at least one byte, so the input is
+ * < 350 + 3·500 + framing ≈ 1.9k tokens. 2048 bounds it from above: never an
+ * undercharge, and the fallback is reachable only on a malformed 2xx.
+ */
+export const CLASSIFIER_INPUT_TOKEN_BOUND = 2048;
+
+/**
+ * Outcome of the routing classifier. `costMicro > 0` iff the classifier was
+ * actually SPENT on the operator key.
+ *
+ * Spent ⇔ Anthropic answered 2xx. The API bills a request it serves (2xx); a
+ * request it rejects (4xx, or 5xx/529 it failed to serve) is not billed, and a
+ * fetch that threw never got a response at all. So non-2xx and transport
+ * throws are free; a 2xx is billed from its own `usage` (input + output
+ * tokens) when present and well-formed, else at the documented upper bound
+ * above — even if its body then fails to parse, the API has billed it.
+ */
+interface ClassifierOutcome {
+  taskType: string;
+  costMicro: number;
+}
+
+function classifierCostFromUsage(usage: unknown): number {
+  const u = (usage ?? {}) as { input_tokens?: unknown; output_tokens?: unknown };
+  const count = (n: unknown): n is number => Number.isSafeInteger(n) && (n as number) >= 0;
+  if (count(u.input_tokens) && count(u.output_tokens)) {
+    return calculateCostMicro(CLASSIFIER_MODEL, u.input_tokens, u.output_tokens);
+  }
+  return calculateCostMicro(CLASSIFIER_MODEL, CLASSIFIER_INPUT_TOKEN_BOUND, CLASSIFIER_MAX_TOKENS);
+}
+
+/** Classify a user message to pick the best model. */
+async function classifyTask(apiKey: string, message: string): Promise<ClassifierOutcome> {
+  let res: Response;
   try {
-    const res = await fetch("https://api.anthropic.com/v1/messages", {
+    res = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -76,7 +114,7 @@ async function classifyTask(apiKey: string, message: string): Promise<string> {
       },
       body: JSON.stringify({
         model: CLASSIFIER_MODEL,
-        max_tokens: 30,
+        max_tokens: CLASSIFIER_MAX_TOKENS,
         messages: [
           {
             role: "user",
@@ -89,13 +127,47 @@ Message: ${message.slice(0, 500)}`,
         ],
       }),
     });
-    if (!res.ok) return "chat";
-    const data = (await res.json()) as { content?: Array<{ text?: string }> };
-    const reply = data.content?.[0]?.text?.trim().toLowerCase() ?? "chat";
-    return reply;
   } catch {
-    return "chat"; // default to Sonnet on failure
+    return { taskType: "chat", costMicro: 0 }; // no response — nothing billed; default to Sonnet
   }
+  if (!res.ok) return { taskType: "chat", costMicro: 0 }; // rejected by the API — not billed
+  type ClassifierReply = { content?: Array<{ text?: unknown }>; usage?: unknown };
+  let data: ClassifierReply | null;
+  try {
+    data = (await res.json()) as ClassifierReply | null;
+  } catch {
+    data = null; // a 2xx is billed even if its body is unreadable
+  }
+  const text = data?.content?.[0]?.text;
+  return {
+    taskType: typeof text === "string" ? text.trim().toLowerCase() : "chat",
+    costMicro: classifierCostFromUsage(data?.usage),
+  };
+}
+
+/** Anthropic-shaped message roles the motebit-cloud wire accepts. */
+type ProxyMessage = { role: "user" | "assistant"; content: string | unknown[] };
+
+/** Element shape check — runs BEFORE anything spends on the operator key. */
+function isProxyMessage(m: unknown): m is ProxyMessage {
+  if (typeof m !== "object" || m === null || Array.isArray(m)) return false;
+  const { role, content } = m as { role?: unknown; content?: unknown };
+  return (
+    (role === "user" || role === "assistant") &&
+    (typeof content === "string" || Array.isArray(content))
+  );
+}
+
+/** The text the classifier sees: string content, or the text blocks of block content. */
+function messageText(m: ProxyMessage): string {
+  if (typeof m.content === "string") return m.content;
+  return m.content
+    .map((b) => {
+      const t = (b as { type?: unknown; text?: unknown } | null)?.text;
+      return (b as { type?: unknown } | null)?.type === "text" && typeof t === "string" ? t : "";
+    })
+    .filter((t) => t !== "")
+    .join("\n");
 }
 
 // ── Provider API adapters ───────────────────────────────────────────────
@@ -149,10 +221,6 @@ export async function POST(request: Request): Promise<Response> {
   let tokenPayload: ProxyTokenPayload | null = null;
   /** Granted spend admission (proxy-token mode). Released on every exit after grant. */
   let spendAdmission: (SpendAdmission & { ok: true }) | null = null;
-  const released = async <T>(r: T): Promise<T> => {
-    await spendAdmission?.release();
-    return r;
-  };
 
   if (clientApiKey != null && clientApiKey !== "") {
     authMode = "byok";
@@ -266,94 +334,151 @@ export async function POST(request: Request): Promise<Response> {
 
     authMode = "proxy-token";
   } else {
-    return released(
-      failureResponse({
-        requestId,
-        status: 401,
-        bodyObj: { error: "unauthorized", message: "Provide a proxy token or API key." },
-        headers: cors,
-        failure: motebitFailure("motebit_request", "authentication", 401),
-      }),
-    );
+    return failureResponse({
+      requestId,
+      status: 401,
+      bodyObj: { error: "unauthorized", message: "Provide a proxy token or API key." },
+      headers: cors,
+      failure: motebitFailure("motebit_request", "authentication", 401),
+    });
   }
 
+  // ── The single settlement obligation ──────────────────────────────────
+  // Everything after admission runs inside ONE try/finally. The `finally`
+  // settles the turn exactly once — bills the classifier if it was spent and
+  // releases the spend slot — on every exit, including a throw at any stage.
+  // The only exit that does not settle here is the streamed response, whose
+  // pump takes the obligation over (`bill.handedOff`) and settles in its own
+  // `finally`, folding the classifier cost into the turn's debit.
+  const bill: TurnBill = { classifierCostMicro: 0, handedOff: false };
+  try {
+    return await serveAdmitted({
+      request,
+      cors,
+      requestId,
+      authMode,
+      tokenPayload,
+      clientApiKey,
+      spendAdmission,
+      bill,
+    });
+  } catch (err) {
+    console.error(
+      JSON.stringify({
+        event: "proxy.unhandled_error",
+        requestId,
+        errorName: err instanceof Error ? err.name : typeof err,
+      }),
+    );
+    return failureResponse({
+      requestId,
+      status: 500,
+      bodyObj: { error: "server_error", message: "Internal error" },
+      headers: cors,
+      mode: authMode,
+      failure: motebitFailure("motebit_infrastructure", "server_error", 500),
+    });
+  } finally {
+    if (!bill.handedOff) {
+      if (bill.classifierCostMicro > 0 && authMode === "proxy-token" && tokenPayload) {
+        await debitRelay(tokenPayload.mid, bill.classifierCostMicro, requestId);
+        await spendAdmission?.record(bill.classifierCostMicro);
+      }
+      await spendAdmission?.release();
+    }
+  }
+}
+
+/**
+ * The turn's settlement state. `classifierCostMicro` is set only from a
+ * classifier that actually spent; `handedOff` is set only when the streamed
+ * pump has taken the obligation over.
+ */
+interface TurnBill {
+  classifierCostMicro: number;
+  handedOff: boolean;
+}
+
+/** Everything after admission. Never settles itself — see POST's `finally`. */
+async function serveAdmitted(ctx: {
+  request: Request;
+  cors: Record<string, string>;
+  requestId: string;
+  authMode: "proxy-token" | "byok";
+  tokenPayload: ProxyTokenPayload | null;
+  clientApiKey: string | null;
+  spendAdmission: (SpendAdmission & { ok: true }) | null;
+  bill: TurnBill;
+}): Promise<Response> {
+  const { request, cors, requestId, authMode, tokenPayload, clientApiKey, spendAdmission, bill } =
+    ctx;
   const isBYOK = authMode === "byok";
   const limits = isBYOK ? BYOK_LIMITS : DEPOSIT_LIMITS;
 
   // --- Parse body ---
   const raw = await request.text();
   if (raw.length > limits.maxBody) {
-    return released(
-      failureResponse({
-        requestId,
-        status: 413,
-        bodyObj: { error: "request_too_large" },
-        headers: cors,
-        mode: authMode,
-        failure: motebitFailure("motebit_request", "malformed_request", 413),
-      }),
-    );
+    return failureResponse({
+      requestId,
+      status: 413,
+      bodyObj: { error: "request_too_large" },
+      headers: cors,
+      mode: authMode,
+      failure: motebitFailure("motebit_request", "malformed_request", 413),
+    });
   }
 
   let body: Record<string, unknown>;
   try {
     body = JSON.parse(raw) as Record<string, unknown>;
   } catch {
-    return released(
-      failureResponse({
-        requestId,
-        status: 400,
-        bodyObj: { error: "invalid_json" },
-        headers: cors,
-        mode: authMode,
-        failure: motebitFailure("motebit_request", "malformed_request", 400),
-      }),
-    );
+    return failureResponse({
+      requestId,
+      status: 400,
+      bodyObj: { error: "invalid_json" },
+      headers: cors,
+      mode: authMode,
+      failure: motebitFailure("motebit_request", "malformed_request", 400),
+    });
   }
 
   // --- Validate and resolve model ---
   let resolvedModel = body.model as string | undefined;
   if (!resolvedModel) {
-    return released(
-      failureResponse({
-        requestId,
-        status: 400,
-        bodyObj: { error: "invalid_model", message: "Model is required" },
-        headers: cors,
-        mode: authMode,
-        failure: motebitFailure("motebit_request", "malformed_request", 400),
-      }),
-    );
+    return failureResponse({
+      requestId,
+      status: 400,
+      bodyObj: { error: "invalid_model", message: "Model is required" },
+      headers: cors,
+      mode: authMode,
+      failure: motebitFailure("motebit_request", "malformed_request", 400),
+    });
   }
 
   // --- Validate messages --- BEFORE the auto-routing classifier: a request
   // whose shape is invalid is refused before anything spends on the operator key.
-  const messages = body.messages as Array<{ role: string; content: string }> | undefined;
-  if (!Array.isArray(messages) || messages.length === 0) {
-    return released(
-      failureResponse({
-        requestId,
-        status: 400,
-        bodyObj: { error: "invalid_messages" },
-        headers: cors,
-        model: resolvedModel,
-        mode: authMode,
-        failure: motebitFailure("motebit_request", "malformed_request", 400),
-      }),
-    );
+  const messages = body.messages as unknown[] | undefined;
+  if (!Array.isArray(messages) || messages.length === 0 || !messages.every(isProxyMessage)) {
+    return failureResponse({
+      requestId,
+      status: 400,
+      bodyObj: { error: "invalid_messages" },
+      headers: cors,
+      model: resolvedModel,
+      mode: authMode,
+      failure: motebitFailure("motebit_request", "malformed_request", 400),
+    });
   }
   if (messages.length > limits.maxMsgs) {
-    return released(
-      failureResponse({
-        requestId,
-        status: 400,
-        bodyObj: { error: "too_many_messages", message: `Max ${limits.maxMsgs} messages` },
-        headers: cors,
-        model: resolvedModel,
-        mode: authMode,
-        failure: motebitFailure("motebit_request", "malformed_request", 400),
-      }),
-    );
+    return failureResponse({
+      requestId,
+      status: 400,
+      bodyObj: { error: "too_many_messages", message: `Max ${limits.maxMsgs} messages` },
+      headers: cors,
+      model: resolvedModel,
+      mode: authMode,
+      failure: motebitFailure("motebit_request", "malformed_request", 400),
+    });
   }
 
   // Resolve legacy/class aliases → current canonical model ID.
@@ -375,13 +500,15 @@ export async function POST(request: Request): Promise<Response> {
   //     neutral primitive stays consumer-agnostic)
   //   → dispatchRouting (protocol primitive in @motebit/policy)
   //   → handle RoutingDecision { route | fallback | deny }
-  let classifierCost = 0;
   let routingReason: string | undefined;
   if (resolvedModel === "auto" && !isBYOK) {
     const classifierKey = process.env.ANTHROPIC_API_KEY;
     if (classifierKey) {
-      const lastMsg = messages.at(-1)?.content ?? "";
-      const classifiedTaskType = await classifyTask(classifierKey, lastMsg);
+      const last = messages.at(-1);
+      const classified = await classifyTask(classifierKey, last ? messageText(last) : "");
+      // Billed exactly when spent — set before anything below can throw.
+      bill.classifierCostMicro = classified.costMicro;
+      const classifiedTaskType = classified.taskType;
       // Narrow to the closed TaskShape registry. Unknown classifier
       // outputs fall back to "chat" (the conversational default).
       const taskShape = isTaskShape(classifiedTaskType) ? classifiedTaskType : "chat";
@@ -437,8 +564,6 @@ export async function POST(request: Request): Promise<Response> {
           break;
         }
       }
-      // Estimate classifier cost (~200 tokens in + ~20 tokens out via Haiku)
-      classifierCost = calculateCostMicro(CLASSIFIER_MODEL, 200, 20);
     } else {
       resolvedModel = AUTO_DEFAULT_MODEL;
       routingReason = `ANTHROPIC_API_KEY not configured; using default ${AUTO_DEFAULT_MODEL}`;
@@ -451,24 +576,6 @@ export async function POST(request: Request): Promise<Response> {
         "X-Motebit-Routing-Reason": routingReason.replace(/→/g, "->").replace(/[^\x20-\x7e]/g, "?"),
       }
     : {};
-  // Classifier obligation: once the classifier has spent on the operator key,
-  // EVERY exit below owes it exactly once. Failure exits discharge it through
-  // `settled` (a classifier-only debit, then release the spend slot); the
-  // streamed turn discharges it by folding `classifierCost` into its own debit
-  // and marking it billed. No exit below may use `released` or return bare —
-  // `classifier-billing.test.ts` guards the source.
-  let classifierBilled = classifierCost === 0;
-  const settled = async <T>(r: T): Promise<T> => {
-    if (!classifierBilled) {
-      classifierBilled = true;
-      if (authMode === "proxy-token" && tokenPayload) {
-        await debitRelay(tokenPayload.mid, classifierCost, requestId);
-      }
-    }
-    await spendAdmission?.release();
-    return r;
-  };
-
   // routingReason surfaces on the successful response paths below as
   // the `X-Motebit-Routing-Reason` header (sibling-shape of
   // `X-Motebit-Content-Manifest` — observability metadata, plain
@@ -483,20 +590,18 @@ export async function POST(request: Request): Promise<Response> {
       tokenPayload.models.length > 0 &&
       !tokenPayload.models.includes(resolvedModel)
     ) {
-      return settled(
-        failureResponse({
-          requestId,
-          status: 400,
-          bodyObj: {
-            error: "invalid_model",
-            message: `Allowed: ${tokenPayload.models.join(", ")}`,
-          },
-          headers: cors,
-          model: resolvedModel,
-          mode: "proxy-token",
-          failure: motebitFailure("motebit_request", "model_unavailable", 400),
-        }),
-      );
+      return failureResponse({
+        requestId,
+        status: 400,
+        bodyObj: {
+          error: "invalid_model",
+          message: `Allowed: ${tokenPayload.models.join(", ")}`,
+        },
+        headers: cors,
+        model: resolvedModel,
+        mode: "proxy-token",
+        failure: motebitFailure("motebit_request", "model_unavailable", 400),
+      });
     }
 
     // Motebit-cloud jurisdiction admission predicate. Lifts the previously-
@@ -507,20 +612,18 @@ export async function POST(request: Request): Promise<Response> {
     // this filter (the user's own key, the user's own choice; sovereignty
     // doctrine stays orthogonal to tier policy).
     if (resolvedModel !== "auto" && !isModelAllowedInMotebitCloud(resolvedModel)) {
-      return settled(
-        failureResponse({
-          requestId,
-          status: 451,
-          bodyObj: {
-            error: "jurisdiction_not_permitted",
-            message: `${resolvedModel} is not available in motebit-cloud routing. Use BYOK to call this model with your own API key.`,
-          },
-          headers: cors,
-          model: resolvedModel,
-          mode: "proxy-token",
-          failure: motebitFailure("motebit_request", "model_unavailable", 451),
-        }),
-      );
+      return failureResponse({
+        requestId,
+        status: 451,
+        bodyObj: {
+          error: "jurisdiction_not_permitted",
+          message: `${resolvedModel} is not available in motebit-cloud routing. Use BYOK to call this model with your own API key.`,
+        },
+        headers: cors,
+        model: resolvedModel,
+        mode: "proxy-token",
+        failure: motebitFailure("motebit_request", "model_unavailable", 451),
+      });
     }
   }
 
@@ -533,49 +636,43 @@ export async function POST(request: Request): Promise<Response> {
     apiKey = clientApiKey;
   } else {
     if (!provider) {
-      return settled(
-        failureResponse({
-          requestId,
-          status: 400,
-          bodyObj: { error: "invalid_model", message: `Model not supported: ${resolvedModel}` },
-          headers: cors,
-          model: resolvedModel,
-          mode: authMode,
-          failure: motebitFailure("motebit_request", "model_unavailable", 400),
-        }),
-      );
+      return failureResponse({
+        requestId,
+        status: 400,
+        bodyObj: { error: "invalid_model", message: `Model not supported: ${resolvedModel}` },
+        headers: cors,
+        model: resolvedModel,
+        mode: authMode,
+        failure: motebitFailure("motebit_request", "model_unavailable", 400),
+      });
     }
     apiKey = getProviderApiKey(provider);
     if (!apiKey) {
-      return settled(
-        failureResponse({
-          requestId,
-          status: 501,
-          bodyObj: {
-            error: "provider_not_configured",
-            message: `${provider} is not configured on this proxy`,
-          },
-          headers: cors,
-          model: resolvedModel,
-          mode: authMode,
-          failure: motebitFailure("motebit_infrastructure", "not_configured", 501),
-        }),
-      );
+      return failureResponse({
+        requestId,
+        status: 501,
+        bodyObj: {
+          error: "provider_not_configured",
+          message: `${provider} is not configured on this proxy`,
+        },
+        headers: cors,
+        model: resolvedModel,
+        mode: authMode,
+        failure: motebitFailure("motebit_infrastructure", "not_configured", 501),
+      });
     }
   }
 
   if (!apiKey) {
-    return settled(
-      failureResponse({
-        requestId,
-        status: 500,
-        bodyObj: { error: "server_error", message: "No API key available" },
-        headers: cors,
-        model: resolvedModel,
-        mode: authMode,
-        failure: motebitFailure("motebit_infrastructure", "not_configured", 500),
-      }),
-    );
+    return failureResponse({
+      requestId,
+      status: 500,
+      bodyObj: { error: "server_error", message: "No API key available" },
+      headers: cors,
+      model: resolvedModel,
+      mode: authMode,
+      failure: motebitFailure("motebit_infrastructure", "not_configured", 500),
+    });
   }
 
   // --- Build and send provider request ---
@@ -603,20 +700,18 @@ export async function POST(request: Request): Promise<Response> {
       provider: resolvedProvider,
       errorName: err instanceof Error ? err.name : undefined,
     });
-    return settled(
-      failureResponse({
-        requestId,
-        status: 502,
-        bodyObj: {
-          error: "provider_unreachable",
-          message: "Upstream provider could not be reached.",
-        },
-        headers: cors,
-        model: resolvedModel,
-        mode: authMode,
-        failure,
-      }),
-    );
+    return failureResponse({
+      requestId,
+      status: 502,
+      bodyObj: {
+        error: "provider_unreachable",
+        message: "Upstream provider could not be reached.",
+      },
+      headers: cors,
+      model: resolvedModel,
+      mode: authMode,
+      failure,
+    });
   }
 
   // Pre-stream upstream failure: classify + emit one event, then preserve the
@@ -643,18 +738,16 @@ export async function POST(request: Request): Promise<Response> {
     // still want the provider's retry guidance until in-proxy recovery (PR3)
     // exists. The rest of the upstream header set is deliberately not relayed.
     const retryAfter = providerRes.headers.get("Retry-After");
-    return settled(
-      new Response(bodyText, {
-        status: providerRes.status,
-        headers: {
-          ...cors,
-          "Content-Type": providerRes.headers.get("Content-Type") ?? "application/json",
-          "Cache-Control": "no-cache",
-          "X-Motebit-Request-Id": requestId,
-          ...(retryAfter != null ? { "Retry-After": retryAfter } : {}),
-        },
-      }),
-    );
+    return new Response(bodyText, {
+      status: providerRes.status,
+      headers: {
+        ...cors,
+        "Content-Type": providerRes.headers.get("Content-Type") ?? "application/json",
+        "Cache-Control": "no-cache",
+        "X-Motebit-Request-Id": requestId,
+        ...(retryAfter != null ? { "Retry-After": retryAfter } : {}),
+      },
+    });
   }
 
   // --- Stream response and extract usage for debit ---
@@ -663,13 +756,29 @@ export async function POST(request: Request): Promise<Response> {
     const model = resolvedModel;
     const prov = resolvedProvider;
     const usage: UsageAccumulator = { input: 0, output: 0, cacheRead: 0, cacheCreation: 0 };
-    // The turn's debit below carries `classifierCost` — the obligation is discharged there.
-    classifierBilled = true;
+    const classifierCost = bill.classifierCostMicro;
 
     const { readable, writable } = new TransformStream<Uint8Array, Uint8Array>();
     const writer = writable.getWriter();
     const reader = providerRes.body.getReader();
     const decoder = new TextDecoder();
+    // Built BEFORE the hand-off: once the pump owns the obligation, nothing
+    // between here and the return may throw (a throw would leave a pump
+    // writing into a stream no one reads, its settlement never reached).
+    const streamed = new Response(readable, {
+      status: providerRes.status,
+      headers: {
+        ...cors,
+        "Content-Type": providerRes.headers.get("Content-Type") ?? "text/event-stream",
+        "Cache-Control": "no-cache",
+        // The relay `fee` row's reference_id — correlates a turn to its debit.
+        "X-Motebit-Request-Id": requestId,
+        ...routingHeader,
+      },
+    });
+    // The pump's debit below carries `classifierCost` and its `finally`
+    // releases the slot — the obligation is handed over, POST's `finally` skips.
+    bill.handedOff = true;
 
     void (async () => {
       try {
@@ -734,31 +843,19 @@ export async function POST(request: Request): Promise<Response> {
       }
     })();
 
-    return new Response(readable, {
-      status: providerRes.status,
-      headers: {
-        ...cors,
-        "Content-Type": providerRes.headers.get("Content-Type") ?? "text/event-stream",
-        "Cache-Control": "no-cache",
-        // The relay `fee` row's reference_id — correlates a turn to its debit.
-        "X-Motebit-Request-Id": requestId,
-        ...routingHeader,
-      },
-    });
+    return streamed;
   }
 
   // BYOK or non-streaming: pipe directly (a proxy-token request only lands
-  // here with no upstream body — release the slot; nothing was streamed, but
-  // the classifier, if it ran, is still owed).
-  return settled(
-    new Response(providerRes.body, {
-      status: providerRes.status,
-      headers: {
-        ...cors,
-        "Content-Type": providerRes.headers.get("Content-Type") ?? "text/event-stream",
-        "Cache-Control": "no-cache",
-        ...routingHeader,
-      },
-    }),
-  );
+  // here with no upstream body — nothing was streamed; POST's `finally` still
+  // bills the classifier, if it spent, and releases the slot).
+  return new Response(providerRes.body, {
+    status: providerRes.status,
+    headers: {
+      ...cors,
+      "Content-Type": providerRes.headers.get("Content-Type") ?? "text/event-stream",
+      "Cache-Control": "no-cache",
+      ...routingHeader,
+    },
+  });
 }
