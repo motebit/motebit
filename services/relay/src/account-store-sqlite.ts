@@ -82,6 +82,26 @@ function assertMicroUnits(amount: number, context: string): void {
   }
 }
 
+/**
+ * The allocation-escrow stamp on a ledger row (`allocation-escrow.ts`): which
+ * allocation's money it moved, and the movement's kind. Only the escrow
+ * chokepoint passes one; every other ledger write leaves both columns NULL.
+ */
+export interface AllocationStamp {
+  allocationId: string;
+  kind: string;
+}
+
+function stampCols(stamp: AllocationStamp | undefined): string {
+  return stamp ? ", allocation_id, allocation_kind" : "";
+}
+function stampVals(stamp: AllocationStamp | undefined): string {
+  return stamp ? ", ?, ?" : "";
+}
+function stampArgs(stamp: AllocationStamp | undefined): string[] {
+  return stamp ? [stamp.allocationId, stamp.kind] : [];
+}
+
 /** Create virtual-account + transaction tables. Idempotent. */
 export function createAccountTables(db: DatabaseDriver): void {
   db.exec(`
@@ -106,7 +126,12 @@ export function createAccountTables(db: DatabaseDriver): void {
       balance_after INTEGER NOT NULL CHECK (typeof(balance_after) = 'integer'),
       reference_id TEXT,
       description TEXT,
-      created_at INTEGER NOT NULL
+      created_at INTEGER NOT NULL,
+      -- Allocation-escrow stamp (allocation-escrow.ts): the allocation whose
+      -- money this row moved and the movement's kind. Written only by the
+      -- escrow chokepoint; NULL on every other row.
+      allocation_id TEXT,
+      allocation_kind TEXT
     );
     CREATE INDEX IF NOT EXISTS idx_relay_txn_motebit ON relay_transactions (motebit_id, created_at DESC);
 
@@ -224,6 +249,7 @@ export class SqliteAccountStore implements AccountStore {
     type: TransactionType,
     referenceId: string | null,
     description: string | null,
+    stamp?: AllocationStamp,
   ): number {
     assertMicroUnits(amount, "credit");
     const now = Date.now();
@@ -245,10 +271,20 @@ export class SqliteAccountStore implements AccountStore {
 
     this.db
       .prepare(
-        `INSERT INTO relay_transactions (transaction_id, motebit_id, type, amount, balance_after, reference_id, description, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO relay_transactions (transaction_id, motebit_id, type, amount, balance_after, reference_id, description, created_at${stampCols(stamp)})
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?${stampVals(stamp)})`,
       )
-      .run(transactionId, motebitId, type, amount, newBalance, referenceId, description, now);
+      .run(
+        transactionId,
+        motebitId,
+        type,
+        amount,
+        newBalance,
+        referenceId,
+        description,
+        now,
+        ...stampArgs(stamp),
+      );
 
     return newBalance;
   }
@@ -259,6 +295,7 @@ export class SqliteAccountStore implements AccountStore {
     type: TransactionType,
     referenceId: string | null,
     description: string | null,
+    stamp?: AllocationStamp,
   ): number | null {
     assertMicroUnits(amount, "debit");
     const now = Date.now();
@@ -283,10 +320,20 @@ export class SqliteAccountStore implements AccountStore {
 
     this.db
       .prepare(
-        `INSERT INTO relay_transactions (transaction_id, motebit_id, type, amount, balance_after, reference_id, description, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO relay_transactions (transaction_id, motebit_id, type, amount, balance_after, reference_id, description, created_at${stampCols(stamp)})
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?${stampVals(stamp)})`,
       )
-      .run(transactionId, motebitId, type, -amount, newBalance, referenceId, description, now);
+      .run(
+        transactionId,
+        motebitId,
+        type,
+        -amount,
+        newBalance,
+        referenceId,
+        description,
+        now,
+        ...stampArgs(stamp),
+      );
 
     return newBalance;
   }
@@ -297,6 +344,7 @@ export class SqliteAccountStore implements AccountStore {
     type: TransactionType,
     referenceId: string | null,
     description: string | null,
+    stamp?: AllocationStamp,
   ): number | null {
     const now = Date.now();
     const transactionId = crypto.randomUUID();
@@ -324,10 +372,20 @@ export class SqliteAccountStore implements AccountStore {
 
     this.db
       .prepare(
-        `INSERT INTO relay_transactions (transaction_id, motebit_id, type, amount, balance_after, reference_id, description, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO relay_transactions (transaction_id, motebit_id, type, amount, balance_after, reference_id, description, created_at${stampCols(stamp)})
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?${stampVals(stamp)})`,
       )
-      .run(transactionId, motebitId, type, -amount, newBalance, referenceId, description, now);
+      .run(
+        transactionId,
+        motebitId,
+        type,
+        -amount,
+        newBalance,
+        referenceId,
+        description,
+        now,
+        ...stampArgs(stamp),
+      );
 
     return newBalance;
   }

@@ -38,10 +38,7 @@ import {
 } from "@motebit/wire-schemas";
 import type { DatabaseDriver } from "@motebit/persistence";
 import type { RelayIdentity } from "./federation.js";
-import {
-  creditAccount as creditAccountCanonical,
-  debitAccount as debitCanonical,
-} from "./accounts.js";
+import { AllocationMoneyRefused, moveAllocationMoney } from "./allocation-escrow.js";
 import { createLogger } from "./logger.js";
 import { superviseInterval, type LoopSupervisor } from "./loop-supervisor.js";
 import {
@@ -240,7 +237,14 @@ function getDispute(db: DatabaseDriver, disputeId: string) {
 function tryFinalizeIfWindowExpired(
   db: DatabaseDriver,
   dispute: Record<string, unknown>,
+  opts: { retryRound2: boolean } = { retryRound2: true },
 ): Record<string, unknown> {
+  // A refused round-2 verdict is retried by the dispute READ (GET); the
+  // /resolve and /appeal paths reject an `appealed` dispute anyway, and a
+  // rejected request must write nothing.
+  if (dispute.state === "appealed") {
+    return opts.retryRound2 ? tryFinalizePersistedRound2(db, dispute) : dispute;
+  }
   if (dispute.state !== "resolved") return dispute;
   if (dispute.appealed_at != null) return dispute;
   const resolvedAt = dispute.resolved_at as number | null | undefined;
@@ -307,6 +311,76 @@ function tryFinalizeIfWindowExpired(
       recordFundRefusal(db, dispute.dispute_id as string, err.reason);
       return { ...dispute, fund_refusal: err.reason };
     }
+    return dispute;
+  }
+}
+
+/**
+ * Retry of a round-2 verdict whose fund action was refused (P1). The appeal
+ * handler persists the signed round-2 resolution when its finalize rolls back
+ * (`clawback_insufficient`), leaving the dispute `appealed` and marked; every
+ * read retries the transition `appealed → final` with that verdict, in one
+ * transaction with its fund action. An `appealed` dispute with no round-2
+ * resolution is an appeal still in flight (or a single-relay appeal parked for
+ * the operator) — untouched.
+ */
+function tryFinalizePersistedRound2(
+  db: DatabaseDriver,
+  dispute: Record<string, unknown>,
+): Record<string, unknown> {
+  const round2 = db
+    .prepare(
+      "SELECT resolution, rationale, fund_action, split_ratio, adjudicator, resolved_at FROM relay_dispute_resolutions WHERE dispute_id = ? AND round = 2",
+    )
+    .get(dispute.dispute_id) as
+    | {
+        resolution: string;
+        rationale: string;
+        fund_action: DisputeFundAction;
+        split_ratio: number;
+        adjudicator: string;
+        resolved_at: number;
+      }
+    | undefined;
+  if (!round2) return dispute;
+  const finalAt = Date.now();
+  db.exec("BEGIN");
+  try {
+    const result = db
+      .prepare(
+        "UPDATE relay_disputes SET state = 'final', final_at = ?, resolution = ?, rationale = ?, fund_action = ?, split_ratio = ?, adjudicator = ?, resolved_at = ? WHERE dispute_id = ? AND state = 'appealed'",
+      )
+      .run(
+        finalAt,
+        round2.resolution,
+        round2.rationale,
+        round2.fund_action,
+        round2.split_ratio,
+        round2.adjudicator,
+        round2.resolved_at,
+        dispute.dispute_id,
+      );
+    if (result.changes === 0) {
+      db.exec("ROLLBACK");
+      return getDispute(db, dispute.dispute_id as string) ?? dispute;
+    }
+    executeFundAction(db, dispute, round2.fund_action, round2.split_ratio);
+    db.exec("COMMIT");
+    logger.info("dispute.finalized.round_2_retry", {
+      disputeId: dispute.dispute_id,
+      fundAction: round2.fund_action,
+    });
+    return getDispute(db, dispute.dispute_id as string) ?? dispute;
+  } catch (err) {
+    db.exec("ROLLBACK");
+    if (err instanceof FundActionRefused) {
+      recordFundRefusal(db, dispute.dispute_id as string, err.reason);
+      return { ...dispute, fund_refusal: err.reason };
+    }
+    logger.error("dispute.round_2_retry.failed", {
+      disputeId: dispute.dispute_id,
+      error: err instanceof Error ? err.message : String(err),
+    });
     return dispute;
   }
 }
@@ -1520,7 +1594,7 @@ export function registerDisputeRoutes(deps: DisputeDeps): void {
     // the cached-resolution check below returns. Idempotent: state
     // mutates exactly once across concurrent reads (UPDATE WHERE
     // state='resolved' guard).
-    dispute = tryFinalizeIfWindowExpired(db, dispute);
+    dispute = tryFinalizeIfWindowExpired(db, dispute, { retryRound2: false });
 
     // 1. Cached-resolution check — return existing resolution if present.
     //    Handles re-call after successful resolve + the second-caller-on-
@@ -1734,7 +1808,7 @@ export function registerDisputeRoutes(deps: DisputeDeps): void {
     // appeal, transition resolved → final BEFORE the appeal check below.
     // This converts "appeal window expired" into the cleaner "state is
     // final, can't appeal" error path. Idempotent.
-    dispute = tryFinalizeIfWindowExpired(db, dispute);
+    dispute = tryFinalizeIfWindowExpired(db, dispute, { retryRound2: false });
 
     if (dispute.state !== "resolved") {
       throw new HTTPException(400, { message: "Can only appeal a resolved dispute" });
@@ -1899,7 +1973,31 @@ export function registerDisputeRoutes(deps: DisputeDeps): void {
       db.exec("COMMIT");
     } catch (err) {
       db.exec("ROLLBACK");
-      if (err instanceof FundActionRefused) recordFundRefusal(db, disputeId, err.reason);
+      if (err instanceof FundActionRefused) {
+        // P1: the round-2 verdict stands even when its fund action cannot run
+        // yet (a claw-back the paid account no longer covers). Persist the
+        // signed round-2 resolution and the marker — the dispute stays
+        // `appealed`, visibly refused, and `tryFinalizeIfWindowExpired`
+        // retries it on every read (it used to roll back to `appealed` with
+        // the verdict lost and nothing ever retrying it).
+        db.prepare(
+          `INSERT OR REPLACE INTO relay_dispute_resolutions
+             (resolution_id, dispute_id, round, resolution, rationale, fund_action, split_ratio, adjudicator, adjudicator_votes, resolved_at, signature, is_appeal)
+           VALUES (?, ?, 2, ?, ?, ?, ?, ?, ?, ?, ?, 1)`,
+        ).run(
+          round2ResolutionId,
+          disputeId,
+          round2Result.resolution,
+          round2Result.rationale,
+          round2Result.fund_action,
+          round2Result.split_ratio,
+          relayIdentity.relayMotebitId,
+          JSON.stringify(round2Result.adjudicator_votes),
+          round2ResolvedAt,
+          round2Signed.signature,
+        );
+        recordFundRefusal(db, disputeId, err.reason);
+      }
       throw new HTTPException(500, {
         message: `Round-2 finalization failed: ${err instanceof Error ? err.message : String(err)}`,
       });
@@ -2144,6 +2242,13 @@ function executeFundAction(
     refuse("task_mismatch", { disputeTaskId: dispute.task_id, allocationTaskId: pos.taskId });
     return;
   }
+  if (pos.reviewReason !== null) {
+    // A legacy row the upgrade could not attribute cleanly touched this
+    // allocation (allocation-escrow.ts backfill): an operator decides. The
+    // allocation stays `disputed`, its escrow held and visibly marked.
+    refuse("under_review", { reviewReason: pos.reviewReason });
+    return;
+  }
   const closeAs = pos.settled ? "settled" : "released";
 
   // A ledger row already referenced to a dispute of this allocation is a fund
@@ -2213,45 +2318,63 @@ function executeFundAction(
     closeDisputedAllocation(db, dispute, closeAs);
     return;
   }
-  if (claw > 0) {
-    const after = debitCanonical(
-      db,
-      recipient!.account,
-      claw,
-      "settlement_debit",
-      disputeId,
-      `Dispute claw-back (${fundAction}): ${disputeId}`,
-    );
-    if (after === null) {
-      // F2: the paid account no longer holds it (withdrew — the dispute-window
-      // hold keys on the path agent, #959). Never credit the delegator from
-      // funds we could not reclaim, and never record a refund that did not
-      // happen: roll the finalize back; the verdict stays `resolved`, marked,
-      // and retries on every read.
+  // Every leg moves through the escrow chokepoint, in this transaction: it
+  // re-reads what the allocation holds, refuses a payee that is not a party
+  // of THIS allocation, and stamps each row with the allocation it moved.
+  const guarded = (movement: () => void): void => {
+    try {
+      movement();
+    } catch (err) {
+      if (!(err instanceof AllocationMoneyRefused)) throw err;
+      // F2: the paid account no longer holds the claw-back (it withdrew).
+      // Never credit the delegator from funds we could not reclaim, and never
+      // record a refund that did not happen: roll the finalize back; the
+      // verdict stays `resolved` (or `appealed` with its round-2 verdict
+      // persisted), marked, and retries on every read.
       throw new FundActionRefused(
-        "clawback_insufficient",
-        `Dispute ${disputeId}: ${recipient!.account} holds less than the ${claw} claw-back`,
+        err.reason === "insufficient_balance"
+          ? "clawback_insufficient"
+          : err.reason === "under_review"
+            ? "under_review"
+            : "unroutable",
+        `Dispute ${disputeId}: ${err.message}`,
       );
     }
+  };
+  if (claw > 0) {
+    guarded(() =>
+      moveAllocationMoney(db, {
+        kind: "dispute_clawback",
+        allocationId,
+        amount: claw,
+        party: recipient!.account,
+        disputeId,
+        description: `Dispute claw-back (${fundAction}): ${disputeId}`,
+      }),
+    );
   }
   if (escrowWorker > 0) {
-    creditAccountCanonical(
-      db,
-      pos.worker!,
-      escrowWorker,
-      "settlement_credit",
-      disputeId,
-      `Dispute release (${fundAction}): ${disputeId}`,
+    guarded(() =>
+      moveAllocationMoney(db, {
+        kind: "dispute_worker",
+        allocationId,
+        amount: escrowWorker,
+        party: pos.worker!,
+        disputeId,
+        description: `Dispute release (${fundAction}): ${disputeId}`,
+      }),
     );
   }
   if (delegatorCredit > 0) {
-    creditAccountCanonical(
-      db,
-      pos.delegator!,
-      delegatorCredit,
-      "settlement_credit",
-      disputeId,
-      `Dispute refund (${fundAction}): ${disputeId}`,
+    guarded(() =>
+      moveAllocationMoney(db, {
+        kind: "dispute_delegator",
+        allocationId,
+        amount: delegatorCredit,
+        party: pos.delegator!,
+        disputeId,
+        description: `Dispute refund (${fundAction}): ${disputeId}`,
+      }),
     );
   }
   closeDisputedAllocation(db, dispute, closeAs);

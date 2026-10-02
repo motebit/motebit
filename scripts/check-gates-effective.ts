@@ -2873,6 +2873,55 @@ export async function probeFetch(): Promise<unknown> {
       }),
   },
   {
+    script: "check-allocation-money-chokepoint",
+    proves:
+      'flags a raw allocation-money ledger write outside the escrow chokepoint — the C1/P2 class: the retry-exhaustion refund reverted to `creditAccount(…, "allocation_release", …)` beside `moveAllocationMoney`, the shape that read a stale held and paid a fallback payee (R1).',
+    perturb: () =>
+      mutateFile("services/relay/src/index.ts", (src) => {
+        const anchor = 'kind: "retry_exhaustion_refund",';
+        if (!src.includes(anchor)) {
+          throw new Error(
+            "probe vacuous: services/relay/src/index.ts no longer refunds an exhausted forward through moveAllocationMoney — retarget the probe",
+          );
+        }
+        return src.replace(
+          "export function refundExhaustedForward(",
+          'export function __probeRawRefund(db: MotebitDatabase["db"]): void {\n  creditAccount(db, "x", 1, "allocation_release", "a", "probe");\n}\n\nexport function refundExhaustedForward(',
+        );
+      }),
+  },
+  {
+    script: "check-allocation-money-chokepoint",
+    proves:
+      "flags a raw SQL write to an allocation-money table outside the chokepoint — the C1 class: a federated forward INSERTed straight into relay_federation_settlements (recorded with no lifecycle, counted as moved forever) (R2).",
+    perturb: () =>
+      writeFixture(
+        `services/relay/src/${PROBE_PREFIX}raw-forward.ts`,
+        `// Probe-only file: a forward recorded outside the escrow chokepoint.
+// If check-allocation-money-chokepoint is working, it refuses this file.
+import type { DatabaseDriver } from "@motebit/persistence";
+export function probeForward(db: DatabaseDriver): void {
+  db.prepare("INSERT INTO relay_federation_settlements (settlement_id, task_id, upstream_relay_id, gross_amount, fee_amount, net_amount, fee_rate, settled_at, receipt_hash) VALUES ('s', 't', 'u', 1, 0, 1, 0, 0, '')").run();
+}
+`,
+      ),
+  },
+  {
+    script: "check-allocation-money-chokepoint",
+    proves:
+      "flags a chokepoint kind the conservation harness does not drive — the harness can never be narrower than the code: dropping `sweep_refund` from the harness's KIND_ACTIONS leaves a kind used in source with no action of the alphabet (R4).",
+    perturb: () =>
+      mutateFile("services/relay/src/__tests__/dispute-conservation-harness.test.ts", (src) => {
+        const anchor = '  sweep_refund: ["sweep"],\n';
+        if (!src.includes(anchor)) {
+          throw new Error(
+            "probe vacuous: the harness's KIND_ACTIONS no longer maps sweep_refund — retarget the probe",
+          );
+        }
+        return src.replace(anchor, "");
+      }),
+  },
+  {
     script: "check-master-token-carve-outs",
     proves:
       'flags a prefix carve-out in the relay\'s /api/v1/* master-token catch-all — the #855 class. Reinstates `c.req.path.startsWith("/api/v1/credentials/verify")` beside the table lookup (the carve-out that let `POST /api/v1/credentials/verify/reputation` reach the reputation route without the master token); the gate names the path read outside `isMasterTokenCarveOut`.',

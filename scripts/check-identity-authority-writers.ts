@@ -579,12 +579,55 @@ const WRITERS: readonly Writer[] = [
       "Stripe-rooted writers (webhook signature; session-status' server-side session read) and `setSubscriptionStatus(db, owner: BoundIdentity, …)`, the only writer the owner routes (cancel, resubscribe) use — `bindCaller` proves the caller is the identity or the operator (#846; the routes had no authentication at all)",
   },
   {
-    file: R + "tasks.ts",
+    file: R + "allocation-escrow.ts",
     verb: "INSERT",
     table: "relay_allocations",
     count: 1,
     principal:
-      "task submission — the budget is locked from `submittedBy = callerMotebitId` (dualAuth task:submit) or the operator's body value; written only after the hold's debit succeeded (#901 removed the unfunded best-effort insert)",
+      "task submission (`openAllocation`, called by the submission path only) — the budget is locked from `submittedBy = callerMotebitId` (dualAuth task:submit) or the operator's body value, in the admission transaction with its hold (#901: no unfunded row commits)",
+  },
+  {
+    file: R + "allocation-escrow.ts",
+    verb: "UPDATE",
+    table: "relay_allocations",
+    count: 1,
+    principal:
+      MIGRATION +
+      " (v51: `review_reason`, the operator-visible flag on an allocation a legacy row could not be attributed to cleanly — a marker, never an identity column)",
+  },
+  {
+    file: R + "allocation-escrow.ts",
+    verb: "INSERT",
+    table: "relay_settlements",
+    count: 2,
+    principal:
+      "the escrow chokepoint's `settlement_fee` (a relay-custody settlement of a verified receipt, payee = the receipt signer in the signed body, refused above what the allocation holds) and `recordP2pSettlementAudit` (a verified P2P payment proof; payee = the admitted `target_agent` the proof paid, `p2pPayeeOf`, never the path agent — #959). Known residual: the relay-mode row's column is still the path agent while its signed body names the credited receipt signer",
+  },
+  {
+    file: R + "allocation-escrow.ts",
+    verb: "INSERT",
+    table: "relay_federation_settlements",
+    count: 2,
+    principal:
+      "(1) the escrow chokepoint's `federated_forward` — this relay's own settlement forward of a task a federation peer returned a signed result for, from the allocation's held escrow; (2) `recordInboundFederatedSettlement` — a federation peer's signed settlement forward for a task this relay executed (no local escrow)",
+  },
+  {
+    file: R + "allocation-escrow.ts",
+    verb: "UPDATE",
+    table: "relay_federation_settlements",
+    count: 4,
+    principal:
+      LOOP +
+      ": a forward's lifecycle — `delivered` on the peer's acknowledgement (settlement retry loop), `failed` on retry exhaustion (in the refund's transaction) — and the v51 migration's stamp/status backfill; never the identity columns",
+  },
+  {
+    file: R + "allocation-escrow.ts",
+    verb: "UPDATE",
+    table: "relay_transactions",
+    count: 3,
+    principal:
+      MIGRATION +
+      " (v51: stamps existing settlement credits and dispute rows with the allocation they moved — `allocation_id` / `allocation_kind` only, never the account)",
   },
   {
     file: R + "tasks.ts",
@@ -593,14 +636,6 @@ const WRITERS: readonly Writer[] = [
     count: 2,
     principal:
       "settlement of a receipt whose token was verified for the path worker and whose signature verified",
-  },
-  {
-    file: R + "tasks.ts",
-    verb: "INSERT",
-    table: "relay_settlements",
-    count: 4,
-    principal:
-      "settlement of a verified receipt, or a verified P2P payment proof. A P2P row's payee is the admitted `target_agent` the proof paid (`p2pPayeeOf`, column = signed body), never the path agent, and a P2P receipt from any other signer records nothing (#959). Known residual: the relay-mode row's column is still the path agent while its signed body names the credited receipt signer",
   },
   {
     file: R + "tasks.ts",
@@ -628,8 +663,10 @@ const WRITERS: readonly Writer[] = [
     file: R + "index.ts",
     verb: "UPDATE",
     table: "relay_allocations",
-    count: 2,
-    principal: LOOP + ": stale-allocation release and settlement retry",
+    count: 4,
+    principal:
+      LOOP +
+      ": stale-allocation release and settlement retry — each retires the allocation (`released`) or, with no single hold payer to refund, marks it `review_reason = 'unroutable_refund'` (a status/marker, never an identity column)",
   },
   {
     file: R + "index.ts",
@@ -674,20 +711,6 @@ const WRITERS: readonly Writer[] = [
     table: "relay_federation_settlements",
     count: 1,
     principal: LOOP + ": federation settlement anchoring",
-  },
-  {
-    file: R + "federation-callbacks.ts",
-    verb: "INSERT",
-    table: "relay_settlements",
-    count: 1,
-    principal: "a federation peer — a signed /federation/v1 result for a task this relay forwarded",
-  },
-  {
-    file: R + "federation-callbacks.ts",
-    verb: "INSERT",
-    table: "relay_federation_settlements",
-    count: 2,
-    principal: "a federation peer — signed settlement forward for a task routed through this relay",
   },
   {
     file: R + "federation-callbacks.ts",
@@ -1024,9 +1047,9 @@ const WRITERS: readonly Writer[] = [
     file: R + "disputes.ts",
     verb: "UPDATE",
     table: "relay_disputes",
-    count: 6,
+    count: 7,
     principal:
-      "state transitions: `/resolve` — the OPERATOR's act, master token only (#846 v2: it took any caller's verdict); appeal (a party's signature; guarded on the `resolved` state it read); lazy finalize and opened-expiry (time-driven). The filing's own `evidence` state is now set by its guarded INSERT. `fund_refusal` (`recordFundRefusal`): written only by the fund action of a verdict already being finalized (same reach as lazy finalize / round-2 appeal) — a marker on that dispute, never an identity column",
+      "state transitions: `/resolve` — the OPERATOR's act, master token only (#846 v2: it took any caller's verdict); appeal (a party's signature; guarded on the `resolved` state it read); lazy finalize and opened-expiry (time-driven). The filing's own `evidence` state is now set by its guarded INSERT. `fund_refusal` (`recordFundRefusal`): written only by the fund action of a verdict already being finalized (same reach as lazy finalize / round-2 appeal) — a marker on that dispute, never an identity column. The seventh: a refused round-2 verdict's retry (`tryFinalizePersistedRound2`) — the same transition the round-2 appeal makes, reached only from a dispute READ of an `appealed` dispute whose signed round-2 resolution the appeal persisted",
   },
   {
     file: R + "dispute-fund-ledger.ts",

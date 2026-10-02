@@ -223,7 +223,8 @@ describe("Dispute filing authority (dispute-v1 §4.4)", () => {
 
     it("reads the delegator from the settlement row when one exists", async () => {
       // Settled allocation whose ledger carries no hold row: only the
-      // settlement's delegator_id names the delegator.
+      // settlement's delegator_id names the delegator. (Fee 0: a fee out of an
+      // escrow that holds nothing is refused by the escrow guard trigger.)
       const db = relay.moteDb.db;
       db.prepare(
         `INSERT INTO relay_allocations (allocation_id, task_id, motebit_id, amount_locked, status, created_at)
@@ -233,7 +234,7 @@ describe("Dispute filing authority (dispute-v1 §4.4)", () => {
         `INSERT INTO relay_settlements
          (settlement_id, allocation_id, task_id, motebit_id, receipt_hash, amount_settled,
           platform_fee, platform_fee_rate, status, settled_at, settlement_mode, delegator_id)
-         VALUES ('stl-1', 'alloc-stl', 'task-stl', 'wrk-auth', '', 950, 50, 0.05, 'completed', ?, 'relay', 'del-auth')`,
+         VALUES ('stl-1', 'alloc-stl', 'task-stl', 'wrk-auth', '', 950, 0, 0.05, 'completed', ?, 'relay', 'del-auth')`,
       ).run(Date.now());
       const res = await file({
         allocationId: "alloc-stl",

@@ -3,29 +3,30 @@
  * §7.3: resolution redistributes, never mints).
  *
  * The allocation row's `amount_locked` and `status` say what was once held,
- * not what is still there: a failed receipt refunds the whole hold and still
- * closes the allocation `settled`; a federated origin forwards the gross to
- * the executing peer and never touches the row; a dispute on a relay without
- * the claim table paid out and left the allocation `disputed`. Every one of
- * those, read from the row, paid the escrow a second time. So the fund action
- * reads, inside the resolving transaction, what the ledger says is left:
+ * not what is still there (a failed receipt refunds the whole hold and still
+ * closes the allocation `settled`; a federated origin forwards the gross and
+ * never touches the row). So the fund action reads, inside the resolving
+ * transaction, what the escrow says is left — `allocation-escrow.ts`, the one
+ * reading every payout uses:
  *
- *   escrow held   = allocation_hold debits − allocation_release credits
- *                   (`getAllocationHoldRemaining`, the settlement path's own
- *                   reading)
- *                 − what relay settlements of this allocation consumed
- *                   (the worker credits under their settlement ids, plus the
- *                   platform fee, which leaves escrow with no ledger row)
- *                 − gross a federated origin forwarded to the executing peer
- *   paid          = per account, the settlement credits it received for this
- *                   allocation
+ *   escrow held   = `allocationHeld`: the allocation's attributed ledger rows,
+ *                   its own settlements' fees, its pending/delivered forwards
+ *   paid          = per account, what the allocation's own settlements paid,
+ *                   net of the claw-backs already taken from it
  *
- * and any ledger row already referenced to a dispute of the allocation is a
- * fund action that already ran, claimed or not — a guard that stops the fund
- * action before either number is read, never a term subtracted from them.
+ * and a ledger row of a dispute movement already attributed to the allocation
+ * is a fund action that already ran, claimed or not — a guard that stops the
+ * fund action before either number is read. Every leg it then moves goes
+ * through `moveAllocationMoney`.
  */
 import type { DatabaseDriver } from "@motebit/persistence";
-import { getAllocationHoldRemaining } from "./accounts.js";
+import {
+  allocationDisputeRows,
+  allocationHeld,
+  allocationHoldPayer,
+  allocationPaid,
+  allocationReviewReason,
+} from "./allocation-escrow.js";
 
 /**
  * Write-once record of the ONE fund action that resolved an allocation.
@@ -60,7 +61,7 @@ export const DISPUTE_FUND_ACTIONS_DDL = `
  *                          `resolved` and retries on every read
  */
 export type FundRefusalReason =
-  "task_mismatch" | "no_allocation" | "unroutable" | "clawback_insufficient";
+  "task_mismatch" | "no_allocation" | "unroutable" | "clawback_insufficient" | "under_review";
 
 /** A fund action that cannot execute as the verdict says: the caller rolls back. */
 export class FundActionRefused extends Error {
@@ -149,21 +150,26 @@ export interface AllocationLedgerPosition {
   delegator: string | null;
   /** The allocation's worker (the party filing standing is checked against). */
   worker: string | null;
-  /** Escrow still held for this allocation, never negative; 0 once a dispute of its own moved money. */
+  /** Escrow still held for this allocation (`allocationHeld`), never negative. */
   escrowRemaining: number;
-  /** Accounts holding settlement credits for this allocation; empty once a dispute naming it moved money. */
+  /** Accounts this allocation's own settlements paid, net of claw-backs already taken. */
   paid: Array<{ account: string; amount: number }>;
-  /** Ledger rows already referenced to a dispute of this allocation. */
+  /** Ledger rows of a dispute movement already attributed to this allocation. */
   priorDisputeRows: number;
   /** A relay settlement row exists (the allocation closed through settlement). */
   settled: boolean;
+  /** The operator-review flag (a legacy row the upgrade could not attribute cleanly); null when clear. */
+  reviewReason: string | null;
 }
 
 /**
- * The ONE reading of an allocation's money. Keyed on the allocation; its task
- * comes from relay_allocations, never from a dispute row (F1: a legacy row
- * naming another allocation's task pointed the fund action at that
- * allocation's settlement).
+ * The ONE reading of an allocation's money, keyed on the allocation; every
+ * number comes from `allocation-escrow.ts` (explicit states: rows stamped
+ * with the allocation they moved, its own settlements, its non-failed
+ * forwards). A dispute row counts for the allocation it MOVED — never for
+ * another allocation whose task the dispute names (the removed `OR task_id`
+ * read let a legacy dispute on A1 close A2 as "already acted" with A2's
+ * escrow still held).
  */
 export function allocationLedgerPosition(
   db: DatabaseDriver,
@@ -172,111 +178,30 @@ export function allocationLedgerPosition(
   const alloc = db
     .prepare("SELECT motebit_id, task_id FROM relay_allocations WHERE allocation_id = ?")
     .get(allocationId) as { motebit_id: string; task_id: string } | undefined;
-  const taskId = alloc?.task_id ?? null;
-  const payers = db
-    .prepare(
-      "SELECT DISTINCT motebit_id FROM relay_transactions WHERE reference_id = ? AND type = 'allocation_hold' LIMIT 2",
-    )
-    .all(allocationId) as Array<{ motebit_id: string }>;
-
-  // relay_settlements.allocation_id is NOT NULL and names the allocation the
-  // receipt route claimed — the allocation key alone finds its settlements.
-  const settlements = db
-    .prepare(
-      `SELECT settlement_id, platform_fee FROM relay_settlements
-        WHERE allocation_id = ? AND COALESCE(settlement_mode, 'relay') = 'relay'`,
-    )
-    .all(allocationId) as Array<{ settlement_id: string; platform_fee: number }>;
-  const fees = settlements.reduce((s, r) => s + (r.platform_fee || 0), 0);
-
-  const paidRows = db
-    .prepare(
-      `SELECT motebit_id, SUM(amount) AS amount FROM relay_transactions
-        WHERE type = 'settlement_credit' AND reference_id IN (
-          SELECT settlement_id FROM relay_settlements
-           WHERE allocation_id = ? AND COALESCE(settlement_mode, 'relay') = 'relay')
-        GROUP BY motebit_id`,
-    )
-    .all(allocationId) as Array<{ motebit_id: string; amount: number }>;
-  const settlementCredits = paidRows.reduce((s, r) => s + r.amount, 0);
-
-  const forwarded =
-    taskId === null
-      ? 0
-      : (
-          db
-            .prepare(
-              "SELECT COALESCE(SUM(gross_amount), 0) AS g FROM relay_federation_settlements WHERE task_id = ?",
-            )
-            .get(taskId) as { g: number }
-        ).g;
-
-  // Disputes on this allocation, and disputes NAMING its task from another
-  // allocation. The second set is kept on purpose: a relay before the §4.2
-  // binding executed a dispute's fund action on the dispute's task_id (main's
-  // post-settlement path), so a mismatched legacy dispute on A1 naming A2's
-  // task clawed back A2's settlement. Those rows are prior movement of A2's
-  // money; without them A2's own dispute reverses the same settlement again
-  // (harness: mismatch-final → fileD2 → split → expire, L2). The task is A2's
-  // OWN (relay_allocations), so this never reaches a third allocation.
-  const disputeRows = db
-    .prepare(
-      `SELECT motebit_id, amount FROM relay_transactions
-        WHERE reference_id IN (
-          SELECT dispute_id FROM relay_disputes WHERE allocation_id = ? OR task_id = ?)`,
-    )
-    .all(allocationId, taskId) as Array<{ motebit_id: string; amount: number }>;
-  const ownDisputeRows = (
+  const settled =
     db
       .prepare(
-        `SELECT COUNT(*) AS n FROM relay_transactions
-          WHERE reference_id IN (SELECT dispute_id FROM relay_disputes WHERE allocation_id = ?)`,
+        `SELECT 1 FROM relay_settlements
+          WHERE allocation_id = ? AND COALESCE(settlement_mode, 'relay') = 'relay' LIMIT 1`,
       )
-      .get(allocationId) as { n: number }
-  ).n;
-
-  // Dispute rows are a GUARD here, never a term. A row referenced to a
-  // dispute naming this allocation means a fund action already ran: the fund
-  // action stops at `priorDisputeRows` before reading escrow or paid, and a
-  // refund path reads escrow only for a `locked` allocation, which a dispute
-  // of its own never leaves (filing moves it to `disputed`, the fund action
-  // closes it). So nothing is summed over dispute rows; where the invariant
-  // would break, escrow and paid read 0 (fail closed) instead of an
-  // arithmetic result no reachable state exercises.
-  const held = getAllocationHoldRemaining(db, allocationId);
-  // Every term is live in the fund action (both regimes distribute the escrow
-  // the ledger still holds) and in the stale sweep: a settlement's credit and
-  // its fee are what it consumed of the hold (harness: settled / partial go
-  // red without either), a federated forward left with no local row
-  // (federated-origin / fed-partial).
-  const escrowRemaining =
-    ownDisputeRows > 0 ? 0 : Math.max(0, held - settlementCredits - fees - forwarded);
-  const paid =
-    disputeRows.length > 0
-      ? []
-      : paidRows
-          .map((r) => ({ account: r.motebit_id, amount: r.amount }))
-          .filter((p) => p.amount > 0);
-
+      .get(allocationId) !== undefined;
   return {
-    taskId,
-    delegator: payers.length === 1 ? payers[0]!.motebit_id : null,
+    taskId: alloc?.task_id ?? null,
+    delegator: allocationHoldPayer(db, allocationId),
     worker: alloc?.motebit_id ?? null,
-    escrowRemaining,
-    paid,
-    priorDisputeRows: disputeRows.length,
-    settled: settlements.length > 0,
+    escrowRemaining: allocationHeld(db, allocationId),
+    paid: allocationPaid(db, allocationId),
+    priorDisputeRows: allocationDisputeRows(db, allocationId),
+    settled,
+    reviewReason: allocationReviewReason(db, allocationId),
   };
 }
 
 /**
  * What the ledger still holds for an allocation — the one number every refund
  * or release of it (stale sweep, retry-exhaustion refund, settlement surplus,
- * dispute fund action) pays out of. `getAllocationHoldRemaining` (holds −
- * releases) alone does not see a federated forward, a settlement or a dispute
- * payout (F3: the stale sweep refunded a hold the origin had already
- * forwarded to the executing peer).
+ * dispute fund action) pays out of. Delegates to `allocationHeld`.
  */
 export function allocationEscrowHeld(db: DatabaseDriver, allocationId: string): number {
-  return allocationLedgerPosition(db, allocationId).escrowRemaining;
+  return allocationHeld(db, allocationId);
 }
