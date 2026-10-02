@@ -4,18 +4,24 @@
  *
  *   provider    × anthropic (usage split: input first, output last)
  *               × openai / groq (ALL usage in the final chunk)
- *   abort point × none, before the first chunk, mid-stream, after the text but
- *                 before the usage, after the last chunk but before close,
- *                 under backpressure (a client that never read)
- *   relay debit × ok, 500, throw, slow
+ *   client      × reads to the end (abort=none); cancels — before the first
+ *                 chunk, mid-stream, after the text but before the usage,
+ *                 after the last chunk but before close, under backpressure
+ *                 (never read, then cancelled); stalls forever (never reads,
+ *                 never cancels — a held write must not hold the accounting)
+ *   relay debit × ok, 500, throw, slow, hang (the fetch never answers)
  *   spend KV    × ok, slow, hang (record/release never settle)
  *
  * For EVERY cell: exactly one logical debit (one reference id, one amount),
  * the amount equals the provider-reported usage cost (exact metering — the
  * upstream always finishes here, so usage is always obtainable), the
- * concurrency slot is released exactly once, and the spend recorded against
- * the token is the amount debited. A client abort must never make inference
- * cheaper than the provider made it.
+ * concurrency slot is released exactly once, the spend recorded against
+ * the token is the amount debited, and the accounting SETTLES within
+ * {@link SETTLE_BOUND_MS} (test timings). A client abort or stall must never
+ * make inference cheaper than the provider made it.
+ *
+ * The boundary axes (max_tokens shape, Anthropic cache TTL, server-tool input
+ * growth) live in the sibling `stream-metering-boundary-matrix.test.ts`.
  */
 import { describe, it, expect, vi, beforeAll, afterAll, beforeEach, afterEach } from "vitest";
 import * as validation from "../validation";
@@ -49,8 +55,9 @@ type Abort =
   | "mid_stream"
   | "after_text_before_usage"
   | "after_last_chunk_before_close"
-  | "backpressure";
-type Debit = "ok" | "500" | "throw" | "slow";
+  | "backpressure"
+  | "stalls_forever";
+type Debit = "ok" | "500" | "throw" | "slow" | "hang";
 type Kv = "ok" | "slow" | "hang";
 
 const MODEL: Record<Provider, string> = {
@@ -137,6 +144,19 @@ let errors: string[] = [];
 
 const tick = (ms = 0): Promise<void> => new Promise((r) => setTimeout(r, ms));
 
+/**
+ * Settle bound under the TEST timings below (write stall 20ms, drain 200ms,
+ * KV 10ms, debit attempt 15ms × 3): every cell must settle well inside it.
+ */
+const SETTLE_BOUND_MS = 1_500;
+const TEST_TIMINGS = {
+  kvTimeoutMs: 10,
+  debitBackoffMs: 1,
+  drainTimeoutMs: 200,
+  writeStallMs: 20,
+  debitAttemptTimeoutMs: 15,
+};
+
 async function runCell(provider: Provider, abort: Abort, debit: Debit, kv: Kv) {
   const model = MODEL[provider];
   const { store, map, calls } = kvStore(kv);
@@ -158,6 +178,13 @@ async function runCell(provider: Provider, abort: Abort, debit: Debit, kv: Kv) {
         if (debit === "throw") throw new TypeError("relay unreachable");
         if (debit === "500") return new Response("{}", { status: 500 });
         if (debit === "slow") await tick(40);
+        if (debit === "hang") {
+          // Never answers on its own — only the caller's abort signal ends it.
+          return new Promise<Response>((_, reject) => {
+            const signal = init?.signal;
+            signal?.addEventListener("abort", () => reject(signal.reason as Error));
+          });
+        }
         return new Response("{}", { status: 200 });
       }
       return new Response(body, { status: 200, headers: { "Content-Type": "text/event-stream" } });
@@ -217,13 +244,22 @@ async function runCell(provider: Provider, abort: Abort, debit: Debit, kv: Kv) {
       await tick(5);
       await client.cancel();
       break;
+    case "stalls_forever":
+      // Never reads, never cancels: the first forwarded write is held forever.
+      for (const c of all) upstream.enqueue(c);
+      upstream.close();
+      break;
   }
 
   // Completion: the accounting task the route registered with the platform's
   // waitUntil. Everything asserted below happened INSIDE that task, so an
   // isolate teardown after it resolves cannot drop any of it.
   expect(afterTasks).toHaveLength(1);
-  await afterTasks[0];
+  const settledInBound = await Promise.race([
+    afterTasks[0]!.then(() => true),
+    tick(SETTLE_BOUND_MS).then(() => false),
+  ]);
+  expect(settledInBound, `accounting did not settle within ${SETTLE_BOUND_MS}ms`).toBe(true);
   if (kv === "slow") await tick(50); // the bounded KV ops land after their timeout
 
   return { debits, map, calls, model };
@@ -237,8 +273,9 @@ const ABORTS: Abort[] = [
   "after_text_before_usage",
   "after_last_chunk_before_close",
   "backpressure",
+  "stalls_forever",
 ];
-const DEBITS: Debit[] = ["ok", "500", "throw", "slow"];
+const DEBITS: Debit[] = ["ok", "500", "throw", "slow", "hang"];
 const KVS: Kv[] = ["ok", "slow", "hang"];
 const CELLS = PROVIDERS.flatMap((p) =>
   ABORTS.flatMap((a) => DEBITS.flatMap((d) => KVS.map((k) => [p, a, d, k] as const))),
@@ -248,8 +285,7 @@ describe("stream metering matrix — charged for what the provider consumed, nev
   const saved = { ...ACCOUNTING_TIMINGS };
   beforeAll(() => {
     // Real timers, shortened bounds: the cells run in milliseconds.
-    ACCOUNTING_TIMINGS.kvTimeoutMs = 10;
-    ACCOUNTING_TIMINGS.debitBackoffMs = 1;
+    Object.assign(ACCOUNTING_TIMINGS, TEST_TIMINGS);
   });
   afterAll(() => {
     Object.assign(ACCOUNTING_TIMINGS, saved);
@@ -284,7 +320,7 @@ describe("stream metering matrix — charged for what the provider consumed, nev
     expect(debits.length).toBeGreaterThan(0);
     expect(new Set(debits.map((d) => d.reference_id)).size).toBe(1);
     expect(new Set(debits.map((d) => d.amount))).toEqual(new Set([expected]));
-    if (debit === "500" || debit === "throw") {
+    if (debit === "500" || debit === "throw" || debit === "hang") {
       expect(debits).toHaveLength(DEBIT_MAX_ATTEMPTS);
       const failed = errors.map((e) => JSON.parse(e) as Record<string, unknown>);
       expect(failed).toEqual([
