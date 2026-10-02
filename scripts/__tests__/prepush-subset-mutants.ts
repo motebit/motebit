@@ -357,8 +357,8 @@ export const MUTANTS: Edit[] = [
     "ci: env added to a non-counterpart step in gate-effectiveness",
     ci(
       "B7",
-      "      - name: Prove every gate in GATES actually fires\n",
-      "      - name: Prove every gate in GATES actually fires\n        env:\n          MOTEBIT_GATES_SKIP: all\n",
+      "      - name: Prove every gate in this shard actually fires\n",
+      "      - name: Prove every gate in this shard actually fires\n        env:\n          MOTEBIT_GATES_SKIP: all\n",
     ),
   ),
   m(
@@ -401,6 +401,64 @@ export const MUTANTS: Edit[] = [
     const { ["test:coverage"]: _drop, ...rest } = i.packageScripts["packages/crypto"] ?? {};
     return { ...i, packageScripts: { ...i.packageScripts, "packages/crypto": rest } };
   }),
+  // --- the sharded gate-effectiveness (2026-10-02) ------------------------
+  m(
+    "G1",
+    "ci: a shard dropped from the matrix (union no longer the full probe set)",
+    ci("G1", 'shard: ["1/4", "2/4", "3/4", "4/4"]', 'shard: ["1/4", "2/4", "3/4"]'),
+  ),
+  m(
+    "G2",
+    "ci: matrix relabelled so a shard index is missing (1/4 listed twice)",
+    ci("G2", 'shard: ["1/4", "2/4", "3/4", "4/4"]', 'shard: ["1/4", "1/4", "3/4", "4/4"]'),
+  ),
+  m(
+    "G3",
+    "ci: fail-fast on (a failing leg cancels the others into 'cancelled')",
+    ci("G3", "      fail-fast: false\n", "      fail-fast: true\n"),
+  ),
+  m(
+    "G4",
+    "ci: shard step runs one fixed shard instead of the matrix value",
+    ci("G4", "--shard ${{ matrix.shard }} --manifest", "--shard 1/4 --manifest"),
+  ),
+  m(
+    "G5",
+    "ci: verdict job no longer runs when a shard is cancelled",
+    ci(
+      "G5",
+      "    needs: [changes, gate-effectiveness-shard, gate-self-tests]\n    if: always()\n",
+      "    needs: [changes, gate-effectiveness-shard, gate-self-tests]\n    if: success()\n",
+    ),
+  ),
+  m(
+    "G6",
+    "ci: verdict job stops waiting on the shards",
+    ci(
+      "G6",
+      "    needs: [changes, gate-effectiveness-shard, gate-self-tests]\n",
+      "    needs: [changes, gate-self-tests]\n",
+    ),
+  ),
+  m(
+    "G7",
+    "ci: verdict job accepts a cancelled shard",
+    ci("G7", 'if [ "$SHARDS" != "success" ]', 'if [ "$SHARDS" = "failure" ]'),
+  ),
+  m(
+    "G8",
+    "ci: verdict job skips the manifest coverage proof",
+    ci(
+      "G8",
+      "        run: pnpm check-gates-effective --verify-shards /tmp/gate-shards\n",
+      "        run: echo skipped\n",
+    ),
+  ),
+  m(
+    "G9",
+    "ci: self-tests job no longer runs on push",
+    ci("G9", "  gate-self-tests:\n", "  gate-self-tests-old:\n"),
+  ),
 ];
 
 export const CONTROLS: Edit[] = [
