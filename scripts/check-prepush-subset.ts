@@ -322,6 +322,12 @@ export const CI_JOB_STEPS: Record<string, Step[]> = {
       run: "pnpm check",
     },
     {
+      // Read-only scan of the bundles the Build step emitted (#168); it
+      // writes nothing, so it cannot change what a later counterpart tests.
+      name: "No provider credentials in built client bundles",
+      run: "pnpm check-no-secrets-in-client-bundles --require-dist web,verify",
+    },
+    {
       name: "Typecheck",
       run: "pnpm typecheck",
     },

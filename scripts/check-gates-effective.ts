@@ -2965,6 +2965,66 @@ export async function probeFetch(): Promise<unknown> {
         return src.replace(re, `$1$2.${Number(m[3]) + 1}.$4`);
       }),
   },
+  {
+    script: "check-no-secrets-in-client-bundles",
+    proves:
+      "flags a credential-named public env var read in app source — the 2026-09-30 shape, where apps/web read a provider URL from VITE_* and Vite inlined its `?api-key=` into motebit.com's public bundle. The fixture reads `import.meta.env.VITE_PROBE_HELIUS_API_KEY` in apps/web/src, which is not in PUBLIC_BUILD_ENV.web (deny by default); the static arm scans textually (no build needed).",
+    perturb: () =>
+      writeFixture(
+        `apps/web/src/${PROBE_PREFIX}client_secret.ts`,
+        "export const k = import.meta.env.VITE_PROBE_HELIUS_API_KEY;\n",
+      ),
+  },
+  {
+    script: "check-no-secrets-in-client-bundles",
+    proves:
+      "governs apps/mobile (Expo/EAS, shipped) deny-by-default (cold review R2: a planted EXPO_PUBLIC_SOLANA_ENDPOINT in apps/mobile stayed green). babel-preset-expo inlines every `process.env.EXPO_PUBLIC_*` read into the app bundle; the fixture reads one not in PUBLIC_BUILD_ENV.mobile.",
+    perturb: () =>
+      writeFixture(
+        `apps/mobile/src/${PROBE_PREFIX}expo_public.ts`,
+        "export const e = process.env.EXPO_PUBLIC_PROBE_SOLANA_ENDPOINT;\n",
+      ),
+  },
+  {
+    script: "check-no-secrets-in-client-bundles",
+    proves:
+      "governs apps/docs (Next/Vercel) deny-by-default (cold review R2: docs was ungoverned). Next inlines every `process.env.NEXT_PUBLIC_*` read into client JS; PUBLIC_BUILD_ENV.docs names none, so the fixture's read is RED.",
+    perturb: () =>
+      writeFixture(
+        `apps/docs/src/${PROBE_PREFIX}next_public.ts`,
+        "export const e = process.env.NEXT_PUBLIC_PROBE_RPC;\n",
+      ),
+  },
+  {
+    script: "check-no-secrets-in-client-bundles",
+    proves:
+      "pins the build guard's WIRING by execution (cold review R1: deleting the guard call from both vite configs left every test and the gate green). Removes `publicBuildEnvGuard(\"web\")` from apps/web/vite.config.ts's plugins; the gate's wiring arm resolves that config through vite's own resolveConfig with a planted unlisted VITE_* var (in process.env, and in a .env file in a non-cwd envDir) and must go red because the config no longer refuses. Throws if the plugin is not found (probe vacuous).",
+    perturb: () =>
+      mutateFile("apps/web/vite.config.ts", (src) => {
+        const call = 'plugins: [publicBuildEnvGuard("web")],';
+        if (!src.includes(call)) {
+          throw new Error(
+            "probe vacuous: apps/web/vite.config.ts no longer lists publicBuildEnvGuard verbatim — retarget the probe",
+          );
+        }
+        return src.replace(call, "plugins: [],");
+      }),
+  },
+  {
+    script: "check-no-secrets-in-client-bundles",
+    proves:
+      "pins the build guard's WIRING by execution (cold review R1: deleting the guard call from both vite configs left every test and the gate green). Removes `publicBuildEnvGuard(\"verify\")` from apps/verify/vite.config.ts's plugins; the gate's wiring arm resolves that config through vite's own resolveConfig with a planted unlisted VITE_* var (in process.env, and in a .env file in a non-cwd envDir) and must go red because the config no longer refuses. Throws if the plugin is not found (probe vacuous).",
+    perturb: () =>
+      mutateFile("apps/verify/vite.config.ts", (src) => {
+        const call = 'plugins: [publicBuildEnvGuard("verify")],';
+        if (!src.includes(call)) {
+          throw new Error(
+            "probe vacuous: apps/verify/vite.config.ts no longer lists publicBuildEnvGuard verbatim — retarget the probe",
+          );
+        }
+        return src.replace(call, "plugins: [],");
+      }),
+  },
 ];
 
 /**

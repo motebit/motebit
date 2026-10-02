@@ -79,6 +79,12 @@ jobs:
       - name: Drift defenses (deps, specs, service/app primitives, API surface, changeset discipline)
         run: pnpm check
 
+      - name: No provider credentials in built client bundles
+        # Arm (b) of check-no-secrets-in-client-bundles against the bundles just
+        # built — --require-dist makes a missing web/verify dist RED, so the scan
+        # can never pass by looking at nothing (incident 2026-09-30, #168).
+        run: pnpm check-no-secrets-in-client-bundles --require-dist web,verify
+
       - name: Typecheck
         run: pnpm typecheck
 

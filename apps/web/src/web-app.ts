@@ -42,7 +42,12 @@ import type {
   UserInputEvent,
   UserInputForwardedPayload,
 } from "@motebit/sdk";
-import { DeviceCapability, EventType, BROWSER_SANDBOX_GRANT_AUDIENCE } from "@motebit/sdk";
+import {
+  DeviceCapability,
+  EventType,
+  BROWSER_SANDBOX_GRANT_AUDIENCE,
+  DEFAULT_MOTEBIT_CLOUD_URL,
+} from "@motebit/sdk";
 import type { ByokVendor } from "@motebit/sdk";
 import { dispatchByokRouting, formatRoutingChip } from "@motebit/policy";
 import { ThreeJSAdapter, buildComputerSessionReceiptArtifact } from "@motebit/render-engine";
@@ -684,17 +689,19 @@ export class UnbootedWebApp {
       // else. Re-attempting at next bootstrap.
     }
 
-    // Solana RPC endpoint. The public `api.mainnet-beta.solana.com` is a
-    // BROWSER DEAD-END: it 403s cross-origin browser requests, so it can read
-    // neither the sovereign balance nor broadcast the P2P payment tx — every
-    // onchain op from the web surface needs a browser-capable (CORS-enabled)
-    // provider. Set VITE_SOLANA_RPC_URL to a real endpoint (Helius/Triton/
-    // QuickNode — free tiers allow browser origins) in any deployment that
-    // does onchain work. The default is kept only as a last-resort fallback;
-    // when it fails, the balance read surfaces "—"/Couldn't refresh (never a
-    // false $0 — see fetchSolanaBalanceUsdc), and onchain sends error loudly.
+    // Solana RPC endpoint: motebit's server-side passthrough
+    // (services/proxy `/v1/solana-rpc`), which holds the provider key as a
+    // server secret. A provider URL is never a browser value — Vite inlines
+    // every VITE_* var into public JS (incident 2026-09-30: a Helius
+    // `?api-key=` shipped in this bundle). `VITE_SOLANA_RPC_URL` remains a
+    // local-dev override only; the vite build refuses any value whose host is
+    // not a motebit/localhost host, or that carries userinfo, a query or a
+    // key-in-path segment (PUBLIC_BUILD_ENV, scripts/lib/client-bundle-secrets.ts).
     const env = (import.meta as { env?: Record<string, string | undefined> }).env;
-    const solanaRpcUrl = env?.VITE_SOLANA_RPC_URL ?? "https://api.mainnet-beta.solana.com";
+    const solanaRpcUrl =
+      env?.VITE_SOLANA_RPC_URL != null && env.VITE_SOLANA_RPC_URL !== ""
+        ? env.VITE_SOLANA_RPC_URL
+        : `${DEFAULT_MOTEBIT_CLOUD_URL}/v1/solana-rpc`;
 
     // Proactive interior — defaults ON when inference is free to the user
     // (on-device / BYOK), opt-in on metered motebit-cloud. The default is

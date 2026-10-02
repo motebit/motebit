@@ -6,6 +6,7 @@ import { defineMotebitTest } from "../../vitest.shared.js";
 export default defineMotebitTest({
   coverageInclude: [
     "src/validation.ts",
+    "src/solana-rpc.ts",
     "src/app/v1/messages/provider-request.ts",
     "src/app/v1/messages/usage.ts",
     "src/inference/classify.ts",
