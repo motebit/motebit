@@ -192,6 +192,31 @@ describe("invalid request shape is refused before the classifier spends", () => 
       messages: Array.from({ length: validation.DEPOSIT_LIMITS.maxMsgs + 1 }, () => ONE[0]),
     },
   ];
+  // An unmeterable request feature is refused at the same boundary.
+  const features: Array<{ name: string; extra: Record<string, unknown> }> = [
+    {
+      name: "server tool web_search",
+      extra: { tools: [{ type: "web_search_20250305", name: "web_search" }] },
+    },
+    {
+      name: "server tool code_execution",
+      extra: { tools: [{ type: "code_execution_20250825", name: "code_execution" }] },
+    },
+    { name: "top-level mcp_servers", extra: { mcp_servers: [] } },
+  ];
+  for (const f of features) {
+    it(`auto + ${f.name} → 400 unsupported_feature before the classifier spends`, async () => {
+      const calls = stubFetch("never");
+      const res = await post({ model: "auto", messages: ONE, ...f.extra });
+      expect(res.status).toBe(400);
+      expect(((await res.json()) as { error: string }).error).toBe("unsupported_feature");
+      expect(calls.classifier).toBe(0);
+      expect(calls.provider).toBe(0);
+      expect(calls.debits).toEqual([]);
+      expect(store.map.get("proxy:active:mote-1")).toBe(0);
+    });
+  }
+
   for (const c of cases) {
     it(`auto + ${c.name} → 400, zero provider calls, nothing to bill`, async () => {
       const calls = stubFetch("never");
@@ -272,6 +297,26 @@ describe("every exit after the classifier bills it exactly once", () => {
       expectedDebit: () => CLASSIFIER_COST,
     },
     {
+      // The provider never started a message: its share is 0, the classifier
+      // is still billed exactly once (through the streamed pump's one debit).
+      name: "200 stream with only a provider error event (classifier only, once)",
+      status: 200,
+      upstream: new Response(
+        `event: error\ndata: ${JSON.stringify({ type: "error", error: { type: "overloaded_error", message: "Overloaded" } })}\n\n`,
+        { status: 200, headers: { "Content-Type": "text/event-stream" } },
+      ),
+      expectedDebit: () => CLASSIFIER_COST,
+    },
+    {
+      name: "200 stream with an empty body (classifier only, once)",
+      status: 200,
+      upstream: new Response("", {
+        status: 200,
+        headers: { "Content-Type": "text/event-stream" },
+      }),
+      expectedDebit: () => CLASSIFIER_COST,
+    },
+    {
       name: "streamed success (classifier folded into the turn's debit, not billed twice)",
       status: 200,
       upstream: sse(),
@@ -341,6 +386,14 @@ describe("classifier cost is billed only when the classifier actually spent", ()
                   `data: ${JSON.stringify({ type: "message_start", message: { usage: { input_tokens: 10 } } })}\n\n`,
                 ),
               );
+              // Final usage is reported, so the meter bills it EXACTLY (an
+              // unreported output is billed at the max_tokens upper bound —
+              // stream-accounting.ts — which would mask the classifier term).
+              ctl.enqueue(
+                enc.encode(
+                  `data: ${JSON.stringify({ type: "message_delta", usage: { output_tokens: 3 } })}\n\n`,
+                ),
+              );
               ctl.close();
             },
           }),
@@ -352,7 +405,7 @@ describe("classifier cost is billed only when the classifier actually spent", ()
       await res.text();
       await new Promise((r) => setTimeout(r, 20));
       expect(calls.debits).toEqual([
-        validation.calculateCostMicro(validation.AUTO_DEFAULT_MODEL, 10, 0, 0, 0),
+        validation.calculateCostMicro(validation.AUTO_DEFAULT_MODEL, 10, 3, 0, 0),
       ]);
     });
   }
@@ -420,7 +473,7 @@ describe("classifier cost is billed only when the classifier actually spent", ()
           role: "user",
           content: [
             { type: "text", text: "write a sorting function" },
-            { type: "image", source: {} },
+            { type: "image", source: { type: "base64", media_type: "image/png", data: "AAAA" } },
           ],
         },
       ],
@@ -514,9 +567,13 @@ describe("structural guard — one settlement obligation, no bypass", () => {
     expect(serve.match(/\.release\(\)/g)).toHaveLength(1);
     expect(serve.match(/\bdebitRelay\(/g)).toHaveLength(1);
     expect(serve.match(/bill\.handedOff = true/g)).toHaveLength(1);
-    // The pump that owns the release is the one that receives the hand-off.
+    // The pump that owns the release is the one that receives the hand-off:
+    // the metered stream pump (`meterStream`, stream-accounting.ts), started
+    // after the hand-off and handed the one release + the one debit.
     const handoff = serve.indexOf("bill.handedOff = true");
-    expect(serve.indexOf("void (async () => {")).toBeGreaterThan(handoff);
+    expect(serve.match(/\bmeterStream\(/g)).toHaveLength(1);
+    expect(serve.indexOf("meterStream(")).toBeGreaterThan(handoff);
+    expect(serve.indexOf("debitRelay(")).toBeGreaterThan(serve.indexOf("meterStream("));
     expect(serve.indexOf(".release()")).toBeGreaterThan(handoff);
   });
 
