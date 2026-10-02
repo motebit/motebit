@@ -27,6 +27,7 @@ import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { expect } from "vitest";
+import { cleanEnv } from "../lib/differential-tree.js";
 
 import type { RunTampersSummary, TamperEntry } from "../lib/tamper-runner";
 
@@ -68,7 +69,7 @@ function freePort(): Promise<number> {
 }
 
 export function git(fx: Fx, args: string[]): string {
-  return execFileSync("git", args, { cwd: fx.repo, encoding: "utf8" });
+  return execFileSync("git", args, { cwd: fx.repo, env: cleanEnv(), encoding: "utf8" });
 }
 
 export async function setupFixture(): Promise<Fx> {
@@ -102,7 +103,7 @@ export async function setupFixture(): Promise<Fx> {
     state: join(base, "state"),
     port: await freePort(),
   };
-  execFileSync("git", ["init", "-q"], { cwd: repo });
+  execFileSync("git", ["init", "-q"], { cwd: repo, env: cleanEnv() });
   git(fx, ["add", "-A"]);
   git(fx, [
     "-c",
@@ -195,7 +196,7 @@ function writeDriver(fx: Fx, concurrency: number): string {
 
 function driverEnv(fx: Fx, extra: Record<string, string> = {}): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {
-    ...process.env,
+    ...cleanEnv(),
     ...extra,
     TMPDIR: fx.tmp,
     HOME: fx.home,
