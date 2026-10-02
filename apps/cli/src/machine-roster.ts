@@ -28,6 +28,7 @@ import { CONFIG_DIR, loadFullConfig, type FullConfig } from "./config.js";
 import { loadReplica, saveReplica, withMintLock } from "./machine-roster-file.js";
 import { hasPendingRotation } from "./pending-rotation.js";
 import { signedRelayHeaders } from "./relay-registration.js";
+import { sanitizeRelayText } from "@motebit/sync-engine";
 
 export interface CliRosterContext {
   motebitId: string;
@@ -316,7 +317,7 @@ export async function enrollOnAnnounce(
     return out;
   } catch (err) {
     log(
-      `Machine roster: not updated this start (${err instanceof Error ? err.message : String(err)}); the daemon runs regardless`,
+      `Machine roster: not updated this start (${sanitizeRelayText(err instanceof Error ? err.message : String(err))}); the daemon runs regardless`,
     );
     return null;
   }

@@ -72,6 +72,7 @@ import { EncryptedKeyStore } from "./encrypted-keystore";
 import { spatialSpecToProvider } from "./providers";
 export { WebLLMProvider } from "./providers";
 import { SpatialSyncController } from "./sync-controller";
+import type { RelayConnectOutcome } from "./sync-controller";
 import { SpatialMcpManager } from "./mcp-manager";
 import { tryVoiceCommand } from "./voice-commands";
 import { dispatchSlabChrome, renderCellToActivity } from "./slab-chrome";
@@ -663,6 +664,10 @@ export class SpatialApp {
       {
         motebitId: this.motebitId,
         tickRateHz: 2,
+        // #962: a configured relay holds compaction at its acked push cursor,
+        // even before sync connects (the sync controller's own gate).
+        syncConfigured: () =>
+          this.networkSettings.relayUrl !== "" && this.networkSettings.showNetwork,
         policy: {
           operatorMode: false,
           maxRiskLevel: preset.maxRiskLevel,
@@ -1029,7 +1034,7 @@ export class SpatialApp {
     return this.sync.onSyncStatusChange(cb);
   }
 
-  connectRelay(): Promise<void> {
+  connectRelay(): Promise<RelayConnectOutcome> {
     return this.sync.connectRelay();
   }
 

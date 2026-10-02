@@ -49,6 +49,7 @@ import type { PairingSession, PairingStatus } from "@motebit/sync-engine";
 import { PairingClient } from "@motebit/sync-engine";
 import {
   bootstrapIdentity as sharedBootstrapIdentity,
+  registerDeviceWithRelay,
   writeRestoredIdentity,
   type BootstrapConfigStore,
   type BootstrapKeyStore,
@@ -257,44 +258,46 @@ export class IdentityManager {
   }
 
   /**
-   * Register this device with a sync relay. Creates the identity server-side
-   * if needed, then registers the device with its public key. Returns a
-   * signed auth token for subsequent sync requests, or `null` if no keypair.
+   * Register this device with a sync relay through the signed, self-attesting
+   * registration (`/api/v1/devices/register-self`, spec
+   * device-self-registration-v1): the signature is the auth, so no master
+   * token is needed, and the relay binds THIS `motebit_id` to this key.
+   * Idempotent. Returns a signed `sync` token, or `null` if no keypair.
+   *
+   * Throws when the relay does not accept the registration (#962). It used
+   * to post to the legacy operator routes and read none of the answers:
+   * `POST /identity` minted a relay-generated id (never this one),
+   * `/device/register` then answered 404 (400 without a master token), and a
+   * token came back anyway — the socket was refused forever, nothing was
+   * ever pushed, and the relay-floored compaction held the log growing.
+   *
+   * @param _masterToken kept for callers; registration no longer uses it.
    */
   async registerWithRelay(
     invoke: InvokeFn,
     syncUrl: string,
-    masterToken: string,
+    _masterToken: string,
   ): Promise<string | null> {
     const keypair = await this.getDeviceKeypair(invoke);
     if (!keypair) return null;
 
-    const headers = {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${masterToken}`,
-    };
-
-    // Check if identity exists server-side
-    const identityRes = await fetch(`${syncUrl}/identity/${this.motebitId}`, { headers });
-    if (identityRes.status === 404) {
-      // Create identity on server
-      await fetch(`${syncUrl}/identity`, {
-        method: "POST",
-        headers,
-        body: JSON.stringify({ owner_id: this.motebitId }),
+    const privKeyBytes = hexToBytes(keypair.privateKey);
+    let result: Awaited<ReturnType<typeof registerDeviceWithRelay>>;
+    try {
+      result = await registerDeviceWithRelay({
+        motebitId: this.motebitId,
+        deviceId: this.deviceId,
+        publicKey: keypair.publicKey,
+        privateKey: privKeyBytes,
+        syncUrl,
+        deviceName: "Desktop",
       });
+    } finally {
+      secureErase(privKeyBytes);
     }
-
-    // Register device with public key
-    await fetch(`${syncUrl}/device/register`, {
-      method: "POST",
-      headers,
-      body: JSON.stringify({
-        motebit_id: this.motebitId,
-        device_name: "Desktop",
-        public_key: keypair.publicKey,
-      }),
-    });
+    if (!result.ok) {
+      throw new Error(`relay did not accept this device (${result.code}): ${result.message}`);
+    }
 
     // Generate signed token for ongoing sync
     return this.createSyncToken(keypair.privateKey);

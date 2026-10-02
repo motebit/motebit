@@ -508,6 +508,15 @@ export class ExpoSqliteEventStore implements EventStoreAdapter {
     return held;
   }
 
+  /** Cursor keys starting with `prefix` (#962: compaction reads every relay stream's push cursor). */
+  async listSyncSeqCursorKeys(prefix: string): Promise<string[]> {
+    const rows = this.db.getAllSync<{ cursor_key: string }>(
+      "SELECT cursor_key FROM sync_seq_cursors WHERE substr(cursor_key, 1, length(?)) = ?",
+      [prefix, prefix],
+    );
+    return rows.map((r) => r.cursor_key);
+  }
+
   async setSyncSeqCursor(key: string, seq: number): Promise<void> {
     this.db.runSync(
       `INSERT INTO sync_seq_cursors (cursor_key, seq, updated_at) VALUES (?, ?, ?)

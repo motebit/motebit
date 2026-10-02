@@ -11,7 +11,7 @@ import {
   subDelegateCircuitState,
   SUB_DELEGATE_MAX_CONSECUTIVE_FAILURES,
   SUB_DELEGATE_COOLDOWN_MS,
-} from "../index.js";
+} from "../sub-delegate.js";
 
 describe("sub-delegation failure circuit", () => {
   beforeEach(() => {

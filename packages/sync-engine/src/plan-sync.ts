@@ -1,5 +1,6 @@
 import type { SyncPlan, SyncPlanStep, PlanSyncResult } from "@motebit/sdk";
 import type { CredentialSource, CredentialRequest } from "./credential-source.js";
+import { sanitizeRelayText } from "./relay-text.js";
 
 // === Plan Sync Store Adapter ===
 
@@ -62,7 +63,7 @@ export class HttpPlanSyncAdapter implements PlanSyncRemoteAdapter {
       body: JSON.stringify({ plans }),
     });
     if (!res.ok) {
-      throw new Error(`Push plans failed: ${res.status} ${res.statusText}`);
+      throw new Error(`Push plans failed: ${res.status} ${sanitizeRelayText(res.statusText)}`);
     }
     const body = (await res.json()) as { accepted: number };
     return body.accepted;
@@ -75,7 +76,7 @@ export class HttpPlanSyncAdapter implements PlanSyncRemoteAdapter {
       headers: await this.headers(),
     });
     if (!res.ok) {
-      throw new Error(`Pull plans failed: ${res.status} ${res.statusText}`);
+      throw new Error(`Pull plans failed: ${res.status} ${sanitizeRelayText(res.statusText)}`);
     }
     const body = (await res.json()) as { plans: SyncPlan[] };
     return body.plans;
@@ -89,7 +90,7 @@ export class HttpPlanSyncAdapter implements PlanSyncRemoteAdapter {
       body: JSON.stringify({ steps }),
     });
     if (!res.ok) {
-      throw new Error(`Push plan steps failed: ${res.status} ${res.statusText}`);
+      throw new Error(`Push plan steps failed: ${res.status} ${sanitizeRelayText(res.statusText)}`);
     }
     const body = (await res.json()) as { accepted: number };
     return body.accepted;
@@ -102,7 +103,7 @@ export class HttpPlanSyncAdapter implements PlanSyncRemoteAdapter {
       headers: await this.headers(),
     });
     if (!res.ok) {
-      throw new Error(`Pull plan steps failed: ${res.status} ${res.statusText}`);
+      throw new Error(`Pull plan steps failed: ${res.status} ${sanitizeRelayText(res.statusText)}`);
     }
     const body = (await res.json()) as { steps: SyncPlanStep[] };
     return body.steps;

@@ -596,12 +596,34 @@ function showMainOverlay(): void {
   });
 }
 
+let hudFollowsSync = false;
+
+/**
+ * #962: the HUD shows what `connectRelay` achieved, never "online" for a
+ * relay that cannot take this device's events (no key, device not accepted,
+ * relay unreachable) — and then follows the sync status, so a registration
+ * accepted later (or a relay that starts refusing) is shown too.
+ */
 function connectRelayWithHud(): Promise<void> {
   hud.setConnection("connecting");
+  if (!hudFollowsSync) {
+    hudFollowsSync = true;
+    app.onSyncStatusChange((status) => {
+      if (status === "connected" || status === "syncing") hud.setConnection("online");
+      else if (status === "connecting") hud.setConnection("connecting");
+      else hud.setConnection("offline");
+    });
+  }
   return app
     .connectRelay()
-    .then(() => {
-      hud.setConnection("online");
+    .then((outcome) => {
+      if (outcome.ok) {
+        hud.setConnection("online");
+        return;
+      }
+      hud.setConnection("offline");
+      // eslint-disable-next-line no-console -- the HUD says offline; the log says why
+      console.warn(`[sync] not syncing: ${outcome.reason}`);
     })
     .catch((err: unknown) => {
       hud.setConnection("offline");

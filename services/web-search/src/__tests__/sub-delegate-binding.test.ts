@@ -5,7 +5,7 @@
  * `packages/mcp-server/tamper/caller-token-957.mjs`.
  */
 import { describe, it, expect } from "vitest";
-import { subDelegateClientConfig } from "../index.js";
+import { subDelegateClientConfig } from "../sub-delegate.js";
 
 const base = {
   mcpUrl: "https://read-url.example/mcp",

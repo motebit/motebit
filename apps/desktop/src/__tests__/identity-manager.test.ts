@@ -43,6 +43,8 @@ const mockCtrl = vi.hoisted(() => ({
   restoreValidateReason: null as string | null,
   writeRestoredIdentityCalls: [] as Array<{ bornAtMs: number; motebitId: string }>,
   lastBootstrapOpts: null as unknown,
+  registerResult: { ok: true, created: true, registered_at: 1 } as unknown,
+  registerCalls: [] as Array<Record<string, unknown>>,
 }));
 
 // ---------------------------------------------------------------------------
@@ -55,6 +57,10 @@ vi.mock("@motebit/core-identity", () => ({
     return mockCtrl.bootstrapResult;
   }),
   rotateIdentityKeys: vi.fn(async () => mockCtrl.rotateResult),
+  registerDeviceWithRelay: vi.fn(async (params: Record<string, unknown>) => {
+    mockCtrl.registerCalls.push(params);
+    return mockCtrl.registerResult;
+  }),
   writeRestoredIdentity: vi.fn(async (opts: { bornAtMs: number; motebitId: string }) => {
     mockCtrl.writeRestoredIdentityCalls.push(opts);
   }),
@@ -347,13 +353,9 @@ describe("IdentityManager.registerWithRelay", () => {
     globalThis.fetch = origFetch;
   });
 
-  it("creates identity when not found, then registers device, returns token", async () => {
-    globalThis.fetch = vi
-      .fn()
-      .mockResolvedValueOnce({ ok: false, status: 404 }) // identity check
-      .mockResolvedValueOnce({ ok: true, status: 200 }) // create identity
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      .mockResolvedValueOnce({ ok: true, status: 200 }) as any;
+  it("registers through the signed self-registration and returns a sync token (#962)", async () => {
+    mockCtrl.registerCalls = [];
+    mockCtrl.registerResult = { ok: true, created: true, registered_at: 1 };
     const mgr = new IdentityManager();
     mgr.motebitId = "mot";
     mgr.deviceId = "dev";
@@ -364,24 +366,37 @@ describe("IdentityManager.registerWithRelay", () => {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const token = await mgr.registerWithRelay(invoke as any, "https://r", "tok");
     expect(token).toBe("signed-token");
+    expect(mockCtrl.registerCalls).toHaveLength(1);
+    expect(mockCtrl.registerCalls[0]).toMatchObject({
+      motebitId: "mot",
+      deviceId: "dev",
+      publicKey: "a".repeat(64),
+      syncUrl: "https://r",
+    });
+    // No legacy operator routes: the signature is the auth.
+    expect(globalThis.fetch).not.toHaveBeenCalled();
     globalThis.fetch = origFetch;
   });
 
-  it("skips identity create when it already exists", async () => {
-    globalThis.fetch = vi
-      .fn()
-      .mockResolvedValueOnce({ ok: true, status: 200 })
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      .mockResolvedValueOnce({ ok: true, status: 200 }) as any;
+  it("throws when the relay does not accept the device — never a token for a refused key (#962)", async () => {
+    mockCtrl.registerResult = {
+      ok: false,
+      code: "key_conflict",
+      message: "bound to another key",
+      status: 409,
+    };
     const mgr = new IdentityManager();
+    mgr.motebitId = "mot";
+    mgr.deviceId = "dev";
     const invoke = makeInvoke({
       device_public_key: "a".repeat(64),
       __keyring_device_private_key: "b".repeat(64),
     });
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const token = await mgr.registerWithRelay(invoke as any, "https://r", "tok");
-    expect(token).toBe("signed-token");
-    expect(globalThis.fetch).toHaveBeenCalledTimes(2); // check + register, no create
+    await expect(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      mgr.registerWithRelay(invoke as any, "https://r", "tok"),
+    ).rejects.toThrow(/key_conflict/);
+    mockCtrl.registerResult = { ok: true, created: true, registered_at: 1 };
     globalThis.fetch = origFetch;
   });
 });

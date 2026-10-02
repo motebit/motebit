@@ -23,6 +23,12 @@ vi.mock("@motebit/runtime", async () => {
   };
 });
 
+// Device self-registration (#962): the relay accepts it here; the retry
+// path is covered against a real relay in every-configured-surface-pushes-962.
+vi.mock("@motebit/core-identity", () => ({
+  registerDeviceWithRelay: vi.fn(async () => ({ ok: true, created: false, registered_at: 0 })),
+}));
+
 vi.mock("@motebit/encryption", () => ({
   deriveSyncEncryptionKey: vi.fn(() => Promise.resolve(new Uint8Array(32))),
   secureErase: vi.fn(),
