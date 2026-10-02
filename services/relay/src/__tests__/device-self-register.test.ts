@@ -19,11 +19,13 @@ import {
   generateKeypair,
   type SignableDeviceRegistration,
 } from "@motebit/encryption";
+import { TEST_RELAY_NETWORK } from "./test-helpers.js";
 
 const API_TOKEN = "test-token";
 
 async function createTestRelay(): Promise<SyncRelay> {
   return createSyncRelay({
+    ...TEST_RELAY_NETWORK,
     allowPrivateEndpoints: true,
     apiToken: API_TOKEN,
     enableDeviceAuth: true,

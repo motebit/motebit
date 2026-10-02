@@ -93,6 +93,9 @@ function createDispatcherBridge() {
   return { ws, onCustomMessage };
 }
 
+/** Register the worker in discovery so the relay routes matching steps to it. */
+let registerWorker: (capabilities: string[]) => Promise<void>;
+
 // === Tests ===
 
 describe("Delegation E2E", () => {
@@ -125,6 +128,18 @@ describe("Delegation E2E", () => {
       }),
     });
 
+    registerWorker = async (capabilities) => {
+      await relay.app.request("/api/v1/agents/register", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+        body: JSON.stringify({
+          motebit_id: workerMotebitId,
+          endpoint_url: "http://localhost:9999/mcp",
+          capabilities,
+        }),
+      });
+    };
+
     // Route RelayDelegationAdapter's fetch calls through the in-process Hono relay
     originalFetch = globalThis.fetch;
     vi.stubGlobal("fetch", (input: string | Request | URL, init?: RequestInit) => {
@@ -148,9 +163,13 @@ describe("Delegation E2E", () => {
     // Worker device with stdio_mcp capability
     const workerWs = { send: vi.fn(), close: vi.fn(), readyState: 1 };
 
-    // Inject both devices into relay's connection map
+    // The worker is its own motebit: the relay routes the step to its socket
+    // (#890 r6: only the executor the relay handed a task to may answer it).
+    await registerWorker(["stdio_mcp", "http_mcp", "file_system"]);
     relay.connections.set(MOTEBIT_ID, [
       { ws: dispatcher.ws as never, deviceId: "dispatcher-device", capabilities: ["http_mcp"] },
+    ]);
+    relay.connections.set(workerMotebitId, [
       {
         ws: workerWs as never,
         deviceId: "worker-device",
@@ -313,6 +332,9 @@ describe("Delegation E2E", () => {
     const steps = store.getStepsForPlan(plan.plan_id);
     const stepId = steps[0]!.step_id;
 
+    // The worker is its own motebit: the relay routes the step to its socket
+    // (#890 r6: only the executor the relay handed a task to may answer it).
+    await registerWorker(["file_system"]);
     // Submit a task to the relay (as if delegation had started before crash)
     const taskRes = await relay.app.request(`/agent/${MOTEBIT_ID}/task`, {
       method: "POST",
@@ -398,12 +420,16 @@ describe("Delegation E2E", () => {
 
     const types = chunks.map((c) => c.type);
     expect(types).toContain("step_started");
-    expect(types).toContain("step_failed");
-    expect(types).toContain("plan_failed");
+    // #890: undetermined is not a failure — the step is held (Running,
+    // plan Active) until the relay's receipt settles it; never re-delegated.
+    expect(types).toContain("plan_undetermined");
+    expect(types).not.toContain("step_failed");
+    expect(types).not.toContain("plan_failed");
     expect(types).not.toContain("step_delegated");
 
     const steps = store.getStepsForPlan(plan.plan_id);
-    expect(steps[0]!.status).toBe(StepStatus.Failed);
+    expect(steps[0]!.status).toBe(StepStatus.Running);
+    expect(store.getPlan(plan.plan_id)!.status).toBe("active");
     expect(steps[0]!.error_message).toContain(
       "Submission unconfirmed — the task may still complete",
     );
@@ -414,8 +440,13 @@ describe("Delegation E2E", () => {
     const dispatcher = createDispatcherBridge();
     const workerWs = { send: vi.fn(), close: vi.fn(), readyState: 1 };
 
+    // The worker is its own motebit: the relay routes the step to its socket
+    // (#890 r6: only the executor the relay handed a task to may answer it).
+    await registerWorker(["stdio_mcp", "http_mcp"]);
     relay.connections.set(MOTEBIT_ID, [
       { ws: dispatcher.ws as never, deviceId: "dispatcher-device", capabilities: ["http_mcp"] },
+    ]);
+    relay.connections.set(workerMotebitId, [
       { ws: workerWs as never, deviceId: "worker-device", capabilities: ["stdio_mcp", "http_mcp"] },
     ]);
 
@@ -507,8 +538,13 @@ describe("Delegation E2E", () => {
     const dispatcher = createDispatcherBridge();
     const workerWs = { send: vi.fn(), close: vi.fn(), readyState: 1 };
 
+    // The worker is its own motebit: the relay routes the step to its socket
+    // (#890 r6: only the executor the relay handed a task to may answer it).
+    await registerWorker(["stdio_mcp"]);
     relay.connections.set(MOTEBIT_ID, [
       { ws: dispatcher.ws as never, deviceId: "dispatcher-device", capabilities: ["http_mcp"] },
+    ]);
+    relay.connections.set(workerMotebitId, [
       { ws: workerWs as never, deviceId: "worker-device", capabilities: ["stdio_mcp"] },
     ]);
 
@@ -1089,12 +1125,13 @@ describe("Delegation E2E", () => {
     });
 
     const workerWs = { send: vi.fn(), close: vi.fn(), readyState: 1 };
-    relay.connections.set(MOTEBIT_ID, [
+    relay.connections.set(workerMotebitId, [
       { ws: workerWs as never, deviceId: "worker-device", capabilities: ["stdio_mcp"] },
     ]);
 
-    // Submit task with submitted_by === workerMotebitId (self-delegation)
-    const taskRes = await relay.app.request(`/agent/${MOTEBIT_ID}/task`, {
+    // Submit task with submitted_by === workerMotebitId (self-delegation), on
+    // its own path — the relay hands it to its own devices (#890 r6).
+    const taskRes = await relay.app.request(`/agent/${workerMotebitId}/task`, {
       method: "POST",
       headers: jsonAuthWithIdempotency(),
       body: JSON.stringify({
@@ -1108,7 +1145,7 @@ describe("Delegation E2E", () => {
     // Build receipt where executor === submitter (self-delegation)
     const receipt = await makeReceipt(taskId);
 
-    const receiptRes = await relay.app.request(`/agent/${MOTEBIT_ID}/task/${taskId}/result`, {
+    const receiptRes = await relay.app.request(`/agent/${workerMotebitId}/task/${taskId}/result`, {
       method: "POST",
       headers: { "Content-Type": "application/json", ...AUTH_HEADER },
       body: JSON.stringify(receipt),

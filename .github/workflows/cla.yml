@@ -5,21 +5,31 @@ on:
     types: [created]
   pull_request_target:
     types: [opened, closed, synchronize]
+  # The merge queue (docs/ops/merge-queue.md). `cla` is a required check, so it
+  # must report here too. The CLA bot cannot run on a merge group (no PR, no
+  # comment thread), so on this event the job does NOT sign anything and does
+  # NOT pass blindly: it proves every PR in the group already holds a
+  # successful `cla` check on the exact head commit that was queued.
+  merge_group:
+    types: [checks_requested]
 
 permissions:
   actions: write
   contents: write
   pull-requests: write
   statuses: write
+  checks: read
 
 jobs:
   cla:
     runs-on: ubuntu-latest
     if: |
       (github.event.comment.body == 'I have read the CLA Document and I hereby sign the CLA' ||
-       github.event_name == 'pull_request_target')
+       github.event_name == 'pull_request_target' ||
+       github.event_name == 'merge_group')
     steps:
       - name: CLA Assistant
+        if: github.event_name != 'merge_group'
         uses: contributor-assistant/github-action@ca4a40a7d1004f18d9960b404b97e5f30a505a08 # v2.6.1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -37,3 +47,60 @@ jobs:
 
             This is a one-time process. Once signed, all future contributions are covered.
           custom-pr-sign-comment: "I have read the CLA Document and I hereby sign the CLA"
+
+      - name: Every PR in the merge group is already CLA-verified
+        # Fail closed. The group's commits are base_sha..head_sha; with the
+        # squash merge method each is one queued PR, titled "… (#N)". Every
+        # commit must name a PR, that PR must be open against main, and the
+        # LATEST `cla` check run (GitHub Actions) on its head commit must have
+        # concluded `success`. A commit naming no PR, a missing or non-success
+        # check, or an API error fails the job — the queue then drops the group.
+        if: github.event_name == 'merge_group'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          BASE_SHA: ${{ github.event.merge_group.base_sha }}
+          HEAD_SHA: ${{ github.event.merge_group.head_sha }}
+          HEAD_REF: ${{ github.event.merge_group.head_ref }}
+        run: |
+          set -euo pipefail
+          compare=$(gh api "repos/$REPO/compare/$BASE_SHA...$HEAD_SHA")
+          total=$(jq -r '.total_commits' <<<"$compare")
+          listed=$(jq -r '.commits | length' <<<"$compare")
+          if [ "$total" -lt 1 ] || [ "$total" != "$listed" ]; then
+            echo "::error::merge group $BASE_SHA..$HEAD_SHA has $total commit(s), $listed listed — cannot account for every commit"
+            exit 1
+          fi
+          prs=""
+          while IFS= read -r subject; do
+            n=$(printf '%s\n' "$subject" | sed -nE 's/.*\(#([0-9]+)\)$/\1/p')
+            if [ -z "$n" ]; then
+              echo "::error::merge-group commit '$subject' names no PR (expected a squash title ending '(#N)')"
+              exit 1
+            fi
+            prs="$prs $n"
+          done < <(jq -r '.commits[].commit.message | split("\n")[0]' <<<"$compare")
+          # The queue branch names the PR it was created for: it must be among them.
+          last=$(printf '%s\n' "$HEAD_REF" | sed -nE 's#.*/pr-([0-9]+)-[0-9a-f]+$#\1#p')
+          if [ -z "$last" ] || ! printf '%s\n' $prs | grep -qx "$last"; then
+            echo "::error::queue ref '$HEAD_REF' names PR '$last', not among the group's PRs:$prs"
+            exit 1
+          fi
+          for n in $(printf '%s\n' $prs | sort -un); do
+            pr=$(gh api "repos/$REPO/pulls/$n")
+            state=$(jq -r '.state' <<<"$pr")
+            base=$(jq -r '.base.ref' <<<"$pr")
+            sha=$(jq -r '.head.sha' <<<"$pr")
+            if [ "$state" != "open" ] || [ "$base" != "main" ]; then
+              echo "::error::PR #$n is '$state' against '$base' — not a queued PR into main"
+              exit 1
+            fi
+            conclusion=$(gh api "repos/$REPO/commits/$sha/check-runs?check_name=cla&per_page=100" \
+              --jq '[.check_runs[] | select(.app.slug == "github-actions")] | sort_by(.id) | last | .conclusion // "missing"')
+            if [ "$conclusion" != "success" ]; then
+              echo "::error::PR #$n head $sha: latest \`cla\` check is '$conclusion', not success — sign the CLA on the PR, then re-queue"
+              exit 1
+            fi
+            echo "PR #$n head $sha: cla = success"
+          done
+          echo "Every PR in the merge group is CLA-verified:$prs"

@@ -27,6 +27,8 @@ Self-delegation executes and settles budget — it just produces no trust signal
 
 `relay_task_id` is in every `ExecutionReceipt`, inside the Ed25519 signature. The relay verifies the binding at settlement. Prevents cross-task replay. Required — no legacy fallback.
 
+The binding says which task a receipt answers; it does not say the signer was allowed to answer it. The relay records who it handed each task to (`relay_task_routes`, written at every hand-off before it happens — the path agent at admission, each dispatched worker, and the peer relay for a federated forward), and every door a receipt enters by accepts one for task X only from X's recorded executor, and a federated result only through X's recorded peer (#890 round 6). Without it, any active federation peer could post a forged failure for a locally routed task, signed by a key it invented, and a delegator that adopted the task would read it as evidence and pay for a second one. The archive answers only a recorded executor's top-level receipt, and a receipt nested inside another task's tree never holds a top-level key. Canonical detail: `services/relay/CLAUDE.md` rule 28.
+
 ## Token audience binding
 
 `aud` is required on `SignedTokenPayload` (compile-time) and enforced by `verifySignedToken` (runtime). `expectedAudience` is required on all `verifySignedTokenForDevice` calls. Tokens without `aud` are rejected at both layers. The canonical set is the closed `TokenAudience` literal union in `packages/protocol/src/audience.ts` (15 audiences today), drift-locked by `check-audience-canonical` (drift-defense #83). Prevents cross-endpoint replay; a token signed for one audience is rejected by a verifier expecting another.

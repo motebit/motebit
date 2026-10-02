@@ -1,0 +1,35 @@
+---
+title: Interior Color
+description: The creature's interior color presets — tint and glow values, where they are defined, and which surfaces expose them.
+---
+
+The creature's body is the same on every surface: one liquescent form, one set of physics. Only the interior color varies. An interior color is two RGB triples, each component in `0`–`1`:
+
+- **`tint`** — what light looks like passing through the body (absorption).
+- **`glow`** — the interior emissive color.
+
+The renderer (`@motebit/render-engine`, `InteriorColor` in `src/spec.ts`) also accepts an optional `glowIntensity`; it defaults to `0`.
+
+## Presets
+
+The canonical preset table is `COLOR_PRESETS` in `@motebit/sdk` (`packages/sdk/src/color-presets.ts`). Desktop and mobile import it from there.
+
+| Preset | `tint` | `glow` | Character |
+|---|---|---|---|
+| `moonlight` | `[0.95, 0.95, 1.0]` | `[0.8, 0.85, 1.0]` | Cool near-white — the default, unmarked substrate |
+| `amber` | `[1.0, 0.85, 0.6]` | `[0.9, 0.7, 0.3]` | Warm gold |
+| `rose` | `[1.0, 0.82, 0.88]` | `[0.9, 0.5, 0.6]` | Soft pink |
+| `violet` | `[0.88, 0.8, 1.0]` | `[0.6, 0.4, 0.9]` | Deep purple |
+| `cyan` | `[0.8, 0.95, 1.0]` | `[0.3, 0.8, 0.9]` | Electric teal |
+| `ember` | `[1.0, 0.75, 0.65]` | `[0.9, 0.35, 0.2]` | Deep red-orange |
+| `sage` | `[0.82, 0.95, 0.85]` | `[0.4, 0.75, 0.5]` | Muted green |
+
+An earlier `borosilicate` preset was removed. Desktop and mobile remap a saved `borosilicate` selection to `moonlight` on load.
+
+## Custom colors
+
+Besides the presets, the desktop and mobile appearance settings offer a custom color: a hue and saturation pair that `deriveInteriorColor(hue, saturation)` turns into an `InteriorColor`.
+
+## Why only the interior changes
+
+The body's optics (transmission, refraction, iridescence) are fixed. Color is expressed inside the body, never painted onto its surface. See [The Droplet](/docs/concepts/the-droplet) for the derivation.

@@ -8,7 +8,11 @@
  * failed agent excluded), as before.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { RelayDelegationAdapter, DelegationUndeterminedError } from "../delegation-adapter.js";
+import {
+  RelayDelegationAdapter,
+  DelegationUndeterminedError,
+  isDelegationUndetermined,
+} from "../delegation-adapter.js";
 import { DeviceCapability, StepStatus } from "@motebit/sdk";
 import type { ExecutionReceipt, MotebitId, DeviceId, PlanStep, PlanId } from "@motebit/sdk";
 
@@ -200,40 +204,85 @@ describe("RelayDelegationAdapter: a lost result frame is recovered, not resubmit
     await expect(p).rejects.toThrow(/the task may still complete/);
   });
 
-  it("the relay says the step's own task is gone (404): terminal for it — new key, its worker excluded", async () => {
-    const { adapter, push } = makeAdapter();
+  it("#890 r4: the relay no longer knows the step's task (404): UNKNOWN — held on that key, never a new task", async () => {
+    const { adapter } = makeAdapter();
     relay.setTaskState((id) =>
       id === "task-1" ? json({}, 404) : json({ task: { status: "running" }, receipt: null }),
     );
     const p = adapter.delegateStep(step, TIMEOUT);
+    p.catch(() => {});
     await vi.advanceTimersByTimeAsync(TIMEOUT + 1); // frame lost; the relay no longer has task-1
-    expect(relay.keys).toHaveLength(2);
-    expect(relay.keys[1]).not.toBe(relay.keys[0]);
-    expect(relay.bodies[1]!.exclude_agents).toEqual(["worker-task-1"]);
-    push({ type: "task_result", task_id: "task-2", receipt: receipt("task-2") });
-
-    const r = await p;
-    expect(r.task_id).toBe("task-2");
+    await expect(p).rejects.toBeInstanceOf(DelegationUndeterminedError);
+    expect(relay.keys).toHaveLength(1);
+    expect(relay.admittedCount()).toBe(1);
   });
 
-  it("counts attempts, not excluded agents, when it gives up", async () => {
+  it("#890 r4: a frame without a receipt is not evidence — the key is kept", async () => {
     const { adapter, push } = makeAdapter();
     const p = adapter.delegateStep(step, TIMEOUT);
     p.catch(() => {});
-    // Two attempts, each ending in a frame without a receipt: no agent to exclude.
     await vi.advanceTimersByTimeAsync(10);
     push({ type: "task_result", task_id: "task-1" });
     await vi.advanceTimersByTimeAsync(10);
-    push({ type: "task_result", task_id: "task-2" });
+    push({ type: "task_result", task_id: "task-1" });
+
+    await expect(p).rejects.toBeInstanceOf(DelegationUndeterminedError);
+    expect(new Set(relay.keys).size).toBe(1);
+  });
+
+  it("counts attempts when every answer is a signed failure", async () => {
+    const { adapter, push } = makeAdapter();
+    const p = adapter.delegateStep(step, TIMEOUT);
+    p.catch(() => {});
+    await vi.advanceTimersByTimeAsync(10);
+    push({
+      type: "task_result",
+      task_id: "task-1",
+      receipt: receipt("task-1", "failed", "worker-task-1"),
+    });
+    await vi.advanceTimersByTimeAsync(10);
+    push({
+      type: "task_result",
+      task_id: "task-2",
+      receipt: receipt("task-2", "failed", "worker-task-2"),
+    });
 
     await expect(p).rejects.toThrow(/Delegation failed after 2 attempt\(s\)/);
+  });
+
+  it("#890 r4: the rotation starts from the step's current one, and each rotation is reported first", async () => {
+    const { adapter, push } = makeAdapter();
+    const rotations: number[] = [];
+    const p = adapter.delegateStep(
+      { ...step, retry_count: 3 },
+      TIMEOUT,
+      undefined,
+      undefined,
+      (r) => rotations.push(r),
+    );
+    await vi.advanceTimersByTimeAsync(10);
+    expect(relay.keys).toEqual(["plan-step:plan-1:step-1:3"]);
+    push({
+      type: "task_result",
+      task_id: "task-1",
+      receipt: receipt("task-1", "failed", "worker-task-1"),
+    });
+    await vi.advanceTimersByTimeAsync(10);
+    expect(rotations).toEqual([4]);
+    expect(relay.keys[1]).toBe("plan-step:plan-1:step-1:4");
+    push({ type: "task_result", task_id: "task-2", receipt: receipt("task-2") });
+    await p;
   });
 
   it("a task that genuinely FAILED retries once as a new task, the failed agent excluded", async () => {
     const { adapter, push } = makeAdapter();
     const p = adapter.delegateStep(step, TIMEOUT);
     await vi.advanceTimersByTimeAsync(10);
-    push({ type: "task_result", task_id: "task-1", receipt: receipt("task-1", "failed", "bad") });
+    push({
+      type: "task_result",
+      task_id: "task-1",
+      receipt: receipt("task-1", "failed", "worker-task-1"),
+    });
     await vi.advanceTimersByTimeAsync(10);
     push({ type: "task_result", task_id: "task-2", receipt: receipt("task-2") });
 
@@ -241,7 +290,7 @@ describe("RelayDelegationAdapter: a lost result frame is recovered, not resubmit
     expect(r.task_id).toBe("task-2");
     expect(relay.keys).toHaveLength(2);
     expect(relay.keys[1]).not.toBe(relay.keys[0]);
-    expect(relay.bodies[1]!.exclude_agents).toEqual(["bad"]);
+    expect(relay.bodies[1]!.exclude_agents).toEqual(["worker-task-1"]);
     expect(relay.queries).toEqual([]);
   });
 
@@ -249,14 +298,14 @@ describe("RelayDelegationAdapter: a lost result frame is recovered, not resubmit
     const { adapter, push } = makeAdapter();
     relay.setTaskState((id) =>
       id === "task-1"
-        ? json({ task: { status: "failed" }, receipt: receipt(id, "failed", "bad") })
+        ? json({ task: { status: "failed" }, receipt: receipt(id, "failed", `worker-${id}`) })
         : json({ task: { status: "pending" }, receipt: null }),
     );
     const p = adapter.delegateStep(step, TIMEOUT);
     await vi.advanceTimersByTimeAsync(TIMEOUT + 1);
     expect(relay.keys).toHaveLength(2);
     expect(relay.keys[1]).not.toBe(relay.keys[0]);
-    expect(relay.bodies[1]!.exclude_agents).toEqual(["bad"]);
+    expect(relay.bodies[1]!.exclude_agents).toEqual(["worker-task-1"]);
     push({ type: "task_result", task_id: "task-2", receipt: receipt("task-2") });
 
     const r = await p;
@@ -406,5 +455,60 @@ describe("RelayDelegationAdapter: an unconfirmed submission keeps its key", () =
     expect(persisted).toEqual(["task-1"]);
     push({ type: "task_result", task_id: "task-1", receipt: receipt("task-1") });
     await p;
+  });
+});
+
+describe("#890: the step's Idempotency-Key is derived, so two drivers admit one task", () => {
+  let relay: ReturnType<typeof fakeRelay>;
+  beforeEach(() => {
+    relay = fakeRelay();
+    vi.stubGlobal("fetch", relay.fetchMock);
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("two adapters (two drivers, even two processes) submitting the same step present one key", async () => {
+    const a = makeAdapter();
+    const b = makeAdapter();
+    const pa = a.adapter.delegateStep(step, TIMEOUT);
+    const pb = b.adapter.delegateStep(step, TIMEOUT);
+    await vi.waitFor(() => expect(relay.keys).toHaveLength(2));
+    expect(relay.keys[0]).toBe(relay.keys[1]);
+    expect(relay.keys[0]).toBe("plan-step:plan-1:step-1:0");
+    expect(relay.admittedCount()).toBe(1);
+    a.push({ type: "task_result", task_id: "task-1", receipt: receipt("task-1") });
+    b.push({ type: "task_result", task_id: "task-1", receipt: receipt("task-1") });
+    await Promise.all([pa, pb]);
+  });
+
+  it("a conclusive failure rotates to the next derived key (a new task is meant)", async () => {
+    const { adapter, push } = makeAdapter();
+    const p = adapter.delegateStep(step, TIMEOUT);
+    await vi.waitFor(() => expect(relay.keys).toHaveLength(1));
+    push({
+      type: "task_result",
+      task_id: "task-1",
+      receipt: receipt("task-1", "failed", "worker-task-1"),
+    });
+    await vi.waitFor(() => expect(relay.keys).toHaveLength(2));
+    expect(relay.keys[1]).toBe("plan-step:plan-1:step-1:1");
+    push({ type: "task_result", task_id: "task-2", receipt: receipt("task-2") });
+    await p;
+  });
+});
+
+describe("#890: isDelegationUndetermined walks the cause chain", () => {
+  it("finds the flag on a wrapped cause, not only on the top-level error", () => {
+    const wrapped = new Error("Plan step failed", {
+      cause: new Error("attempt", { cause: new DelegationUndeterminedError("remote work") }),
+    });
+    expect((wrapped as { undetermined?: boolean }).undetermined).toBeUndefined();
+    expect(isDelegationUndetermined(wrapped)).toBe(true);
+  });
+
+  it("a chain with no flag is not undetermined", () => {
+    expect(isDelegationUndetermined(new Error("a", { cause: new Error("b") }))).toBe(false);
+    expect(isDelegationUndetermined("not an error")).toBe(false);
   });
 });

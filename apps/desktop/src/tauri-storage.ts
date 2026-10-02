@@ -1447,10 +1447,16 @@ export class TauriPlanStore implements PlanStoreAdapter {
   }
 
   getPlanForGoal(goalId: string): Plan | null {
+    // The goal's MOST RECENT plan, as the SQLite stores answer it
+    // (`ORDER BY created_at DESC`). Returning the first one inserted made a
+    // runner resume — or re-plan past — a stale plan, and hid a newer plan
+    // holding a delegated step with an unknown paid outcome (#890).
+    let latest: Plan | null = null;
     for (const plan of this.plans.values()) {
-      if (plan.goal_id === goalId) return { ...plan };
+      if (plan.goal_id !== goalId) continue;
+      if (latest == null || plan.created_at >= latest.created_at) latest = plan;
     }
-    return null;
+    return latest != null ? { ...latest } : null;
   }
 
   updatePlan(planId: string, updates: Partial<Plan>): void {

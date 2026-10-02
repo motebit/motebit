@@ -477,7 +477,15 @@ describe("web sync token refresh (#816)", () => {
     open[0]!.deliver({
       type: "task_result",
       task_id: "plan-1",
-      receipt: { status: "completed", result: "ok", motebit_id: "w" },
+      // A relay receipt names the task it answers (#890 r5: the adapter
+      // settles only on a receipt bound to its current task).
+      receipt: {
+        task_id: "plan-1",
+        relay_task_id: "plan-1",
+        status: "completed",
+        result: "ok",
+        motebit_id: "w",
+      },
     });
     await wait();
     expect(outcome).toBe("resolved");

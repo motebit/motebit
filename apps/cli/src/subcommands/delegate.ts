@@ -20,6 +20,13 @@ import type { TokenAudience } from "@motebit/sdk";
 import type { MotebitRuntime as MotebitRuntimeInstance } from "@motebit/runtime";
 import type { PlanStep, DelegatedStepResult, ExecutionReceipt } from "@motebit/sdk";
 import type { StepDelegationAdapter } from "@motebit/planner";
+import {
+  planStepIdempotencyKey,
+  stepRotation,
+  receiptBoundTo,
+  taskNamedBy409,
+  admittedAs,
+} from "@motebit/planner";
 import type { CliConfig } from "../args.js";
 import { loadFullConfig } from "../config.js";
 import { getDbPath } from "../runtime-factory.js";
@@ -274,6 +281,16 @@ async function handleDelegatePlan(
 
         case "plan_failed":
           console.error(`\nPlan failed: ${chunk.reason}`);
+          break;
+
+        // #890: not a failure — the task may still complete. Running the
+        // same goal again resumes this plan; it never delegates it twice.
+        case "plan_undetermined":
+          console.error(`\nAwaiting result: ${chunk.reason}`);
+          break;
+
+        case "plan_busy":
+          console.error("\nThis plan is being run elsewhere right now — try again shortly.");
           break;
       }
     }
@@ -632,6 +649,12 @@ interface StepAttemptError extends Error {
    * instead of admitting — and charging for — a second one (#816).
    */
   deliveryUncertain?: boolean;
+  /**
+   * Positive evidence nothing more is owed under the current key — a signed
+   * failed receipt, or a refusal before admission. The only errors that
+   * rotate the step to a new key (#890 r4).
+   */
+  conclusive?: boolean;
 }
 
 /**
@@ -697,6 +720,11 @@ export function createHttpPollingDelegationAdapter(
       } catch (err: unknown) {
         throw unconfirmed("Relay task submission unconfirmed: no response", err);
       }
+      if (resp.ok) return resp;
+      // A response that names a task — any status (#888; #890 r5): the key
+      // admitted it. Adopt and poll it; never read it as a refusal.
+      const named = await taskNamedBy409(resp);
+      if (named != null) return admittedAs(named);
       if (resp.status !== 409) return resp;
       if (waited >= budgetMs) {
         throw new DelegationUndeterminedError(
@@ -761,10 +789,22 @@ export function createHttpPollingDelegationAdapter(
       step.description,
     );
 
-    if (resp.status === 402) throw new Error("Insufficient balance (HTTP 402)");
+    if (resp.status === 402) {
+      const err: StepAttemptError = new Error("Insufficient balance (HTTP 402)");
+      err.conclusive = true; // refused before admission
+      throw err;
+    }
     if (!resp.ok) {
       const text = await resp.text();
-      throw new Error(`Relay task submission failed (${resp.status}): ${text.slice(0, 200)}`);
+      // 5xx: the relay may have admitted before failing — not a refusal.
+      if (resp.status >= 500) {
+        throw unconfirmed(`Relay task submission unconfirmed (${resp.status})`);
+      }
+      const err: StepAttemptError = new Error(
+        `Relay task submission failed (${resp.status}): ${text.slice(0, 200)}`,
+      );
+      err.conclusive = true; // refused before admission
+      throw err;
     }
 
     let taskResp: { task_id: string; routing_choice?: { selected_agent?: string } | null };
@@ -778,11 +818,23 @@ export function createHttpPollingDelegationAdapter(
     onTaskSubmitted?.(taskId);
 
     const settle = (receipt: ExecutionReceipt): DelegatedStepResult => {
+      // A receipt about another task answers nothing about this one (#890 r5).
+      if (!receiptBoundTo(receipt, taskId)) {
+        throw unconfirmed(`A receipt for another task arrived for ${taskId}`);
+      }
       if (receipt.status !== "completed") {
+        // Evidence only from the worker the relay routed this task to.
+        const routed = taskResp.routing_choice?.selected_agent;
+        if (routed != null && routed !== "" && receipt.motebit_id !== routed) {
+          throw unconfirmed(
+            `A failed receipt for ${taskId} is signed by ${receipt.motebit_id}, not the routed worker ${routed}`,
+          );
+        }
         const err: StepAttemptError = new Error(
           `Delegated step ${receipt.status}: ${receipt.result}`,
         );
         err.failedAgentId = receipt.motebit_id;
+        err.conclusive = true; // a signed failed receipt
         throw err;
       }
       return {
@@ -796,13 +848,13 @@ export function createHttpPollingDelegationAdapter(
     const outcome = (answer: ExecutionReceipt | "gone" | null): DelegatedStepResult | null => {
       if (answer === null) return null;
       if (answer === "gone") {
-        // Terminal for THIS task: retry as a new task, never replay its id.
-        const err: StepAttemptError = new Error(
-          `Delegated task ${taskId} expired at the relay without a result`,
+        // The relay no longer knows this task (#890 r4): absence, never
+        // evidence — it may have been admitted, paid and done. Hold the step
+        // on this task and key; never rotate to a new one.
+        throw new DelegationUndeterminedError(
+          step.description,
+          new Error(`Delegated task ${taskId} is no longer known to the relay (404)`),
         );
-        const agent = taskResp.routing_choice?.selected_agent;
-        if (agent != null && agent !== "") err.failedAgentId = agent;
-        throw err;
       }
       return settle(answer);
     };
@@ -822,14 +874,21 @@ export function createHttpPollingDelegationAdapter(
   };
 
   return {
+    // Every submission carries the step's derived key (#890).
+    resubmitsIdempotently: true,
     async delegateStep(
       step: PlanStep,
       timeoutMs: number,
       onTaskSubmitted?: (taskId: string) => void,
+      _excludeAgents?: string[],
+      onRotate?: (rotation: number) => void,
     ): Promise<DelegatedStepResult> {
       const excludeAgents: string[] = [];
       let lastError: StepAttemptError | undefined;
-      let idempotencyKey = crypto.randomUUID();
+      // Derived from the step, never random (#890) — see planStepIdempotencyKey —
+      // and starting from the step's CURRENT rotation (#890 r4).
+      let rotation = stepRotation(step);
+      let idempotencyKey = planStepIdempotencyKey(step, rotation);
       let attempts = 0;
 
       for (let attempt = 0; attempt <= maxRetries; attempt++) {
@@ -858,14 +917,19 @@ export function createHttpPollingDelegationAdapter(
           ) {
             break;
           }
-          // Only a delivery-uncertain retry keeps the key; anything else is a new task.
-          if (lastError.deliveryUncertain !== true) idempotencyKey = crypto.randomUUID();
+          // Rotate ONLY on positive evidence nothing more is owed under the
+          // current key (#890 r4); the step forgets the old task first.
+          if (lastError.conclusive === true) {
+            rotation++;
+            idempotencyKey = planStepIdempotencyKey(step, rotation);
+            onRotate?.(rotation);
+          }
           if (attempt < maxRetries) opts.onRetry?.(step, attempt + 2, maxRetries + 1);
         }
       }
       // Out of attempts while the relay never said the task ended: it may
       // have been admitted and may still complete — not a failure either.
-      if (lastError?.deliveryUncertain === true) {
+      if (lastError?.conclusive !== true) {
         throw new DelegationUndeterminedError(step.description, lastError);
       }
       throw new Error(

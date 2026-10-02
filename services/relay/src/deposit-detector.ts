@@ -46,6 +46,13 @@ export const USDC_CONTRACTS: Record<string, string> = {
   "eip155:42161": "0xaf88d065e77c8cC2239327C5EDb3A432268e5831",
 };
 
+/**
+ * Default per-request bound on the deposit detector's JSON-RPC calls: 60s, not
+ * 10s, because a catch-up `eth_getLogs` over up to 1000 blocks may take the
+ * server well over 10s before it sends headers — still bounded, never a hang.
+ */
+export const DEPOSIT_RPC_REQUEST_TIMEOUT_MS = 60_000;
+
 /** Default public RPC endpoints by CAIP-2 chain ID. */
 export const DEFAULT_RPC_URLS: Record<string, string> = {
   "eip155:1": "https://eth.llamarpc.com",
@@ -239,10 +246,26 @@ export interface DepositDetectorConfig {
   maxBlocksPerCycle?: number;
   /** Custom RPC URLs. Merged with defaults. Ignored when `rpc` is provided. */
   rpcUrls?: Record<string, string>;
-  /** Injected RPC adapter for testability. Default: HttpJsonRpcEvmAdapter from the chain's URL. */
-  rpc?: EvmRpcAdapter;
+  /**
+   * Injected RPC adapter for testability. Default: HttpJsonRpcEvmAdapter from
+   * the chain's URL. `null` disables the detector (an embedder — a test relay
+   * — that must not reach a public RPC).
+   */
+  rpc?: EvmRpcAdapter | null;
   /** Injected fetch for the default adapter. Ignored when `rpc` is provided. */
   fetch?: typeof globalThis.fetch;
+  /**
+   * Per-request bound on the default adapter (`HttpJsonRpcEvmAdapter` has no
+   * timeout of its own): an RPC that accepts and never answers fails the
+   * tick instead of holding it forever. Default
+   * {@link DEPOSIT_RPC_REQUEST_TIMEOUT_MS}. Ignored when `rpc` is provided.
+   */
+  requestTimeoutMs?: number;
+  /**
+   * Receives the immediate boot tick (started, not awaited) so the caller's
+   * shutdown can await it — no scan outlives the relay that started it.
+   */
+  trackStartup?: (work: Promise<unknown>) => void;
 }
 
 /**
@@ -265,14 +288,22 @@ export function startDepositDetector(
   const intervalMs = config.intervalMs ?? 15_000;
   const maxBlocksPerCycle = config.maxBlocksPerCycle ?? 1000;
 
-  if (!contractAddress || (!config.rpc && !rpcUrl) || confirmations === undefined) {
+  if (
+    config.rpc === null ||
+    !contractAddress ||
+    (!config.rpc && !rpcUrl) ||
+    confirmations === undefined
+  ) {
     logger.warn("deposit-detector.disabled", {
       chain: config.chain,
-      reason: !contractAddress
-        ? "no USDC contract"
-        : !rpcUrl
-          ? "no RPC URL"
-          : "no confirmation depth registered (add to CONFIRMATIONS_BY_CHAIN)",
+      reason:
+        config.rpc === null
+          ? "no RPC (disabled by the embedder)"
+          : !contractAddress
+            ? "no USDC contract"
+            : !rpcUrl
+              ? "no RPC URL"
+              : "no confirmation depth registered (add to CONFIRMATIONS_BY_CHAIN)",
     });
     // Return a no-op interval so `clearInterval` remains a safe call.
     return setInterval(() => {}, 2_147_483_647);
@@ -281,7 +312,12 @@ export function startDepositDetector(
   createDepositDetectorTable(config.db);
 
   const rpc: EvmRpcAdapter =
-    config.rpc ?? new HttpJsonRpcEvmAdapter({ rpcUrl: rpcUrl!, fetch: config.fetch });
+    config.rpc ??
+    new HttpJsonRpcEvmAdapter({
+      rpcUrl: rpcUrl!,
+      fetch: config.fetch,
+      requestTimeoutMs: config.requestTimeoutMs ?? DEPOSIT_RPC_REQUEST_TIMEOUT_MS,
+    });
   const store = new SqliteDepositDetectorStore(config.db);
   const onDeposit = buildCreditOnDepositCallback(config.db);
 
@@ -323,6 +359,7 @@ export function startDepositDetector(
     }
   };
 
-  void tick().catch(() => {});
+  const bootTick = tick().catch(() => {});
+  config.trackStartup?.(bootTick);
   return superviseInterval(config.supervisor, "deposit-detector", intervalMs, tick);
 }

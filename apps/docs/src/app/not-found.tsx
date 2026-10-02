@@ -79,15 +79,15 @@ export default function NotFound() {
         </li>
       </ul>
       <p className="text-sm" style={{ color: "var(--color-fd-muted-foreground)" }}>
-        Or jump to{" "}
-        <Link
-          href="/"
+        Looking for the product rather than the documentation? It lives at{" "}
+        <a
+          href="https://motebit.com"
           className="underline decoration-dotted underline-offset-4"
           style={{ color: "var(--color-fd-primary)" }}
         >
           motebit.com
-        </Link>{" "}
-        and meet the creature.
+        </a>
+        .
       </p>
     </main>
   );

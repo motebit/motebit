@@ -37,6 +37,7 @@ import type { AddressInfo } from "node:net";
 import { serve } from "@hono/node-server";
 import type { Hono } from "hono";
 import WebSocket from "ws";
+import { TaskQueue } from "../task-queue.js";
 // eslint-disable-next-line no-restricted-imports -- tests need direct keypair generation
 import { generateKeypair, bytesToHex } from "@motebit/encryption";
 import type { SyncRelay, ConnectedDevice } from "../index.js";
@@ -51,7 +52,6 @@ import {
 } from "./test-helpers.js";
 import { sendIfOpen, sendToEach } from "../ws-send.js";
 import { createFederationCallbacks } from "../federation-callbacks.js";
-import type { TaskQueueEntry } from "../tasks.js";
 import { toMicro } from "../accounts.js";
 
 const WORKER_SOLANA_ADDR = "7xKXtg2CW87d97TXJSDpbD5jBkheTqA83TZRuJosgHkv";
@@ -521,7 +521,7 @@ describe("federation onTaskForwarded — routed only on a real hand-off", () => 
       identityManager: {} as never,
       relayIdentity: s.relay.relayIdentity as never,
       connections: s.relay.connections,
-      taskQueue: new Map<string, TaskQueueEntry>(),
+      taskQueue: new TaskQueue(s.relay.moteDb.db),
       issueCredentials: false,
       maxTaskQueueSize: 100,
       maxTasksPerSubmitter: 100,

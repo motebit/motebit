@@ -1037,6 +1037,8 @@ describe("Sync Relay — agent protocol", () => {
   });
 
   it("POST /agent/:id/task/:taskId/result stores receipt and extends TTL", async () => {
+    // The executor answers its own task: the relay hands a task on the
+    // `/agent/:id` path to that agent (#890 r6), and only it may answer.
     // Create an executing agent identity with a real Ed25519 keypair
     const execKeypair = await generateKeypair();
     const execPubKeyHex = bytesToHex(execKeypair.publicKey);
@@ -1060,10 +1062,10 @@ describe("Sync Relay — agent protocol", () => {
     });
 
     // Submit task
-    const submitRes = await relay.app.request(`/agent/${MOTEBIT_ID}/task`, {
+    const submitRes = await relay.app.request(`/agent/${execMotebitId}/task`, {
       method: "POST",
       headers: jsonAuthWithIdempotency(),
-      body: JSON.stringify({ prompt: "Task with receipt" }),
+      body: JSON.stringify({ prompt: "Task with receipt", submitted_by: MOTEBIT_ID }),
     });
     const { task_id } = (await submitRes.json()) as { task_id: string };
 
@@ -1084,7 +1086,7 @@ describe("Sync Relay — agent protocol", () => {
     };
     const receipt = await signExecutionReceipt(unsigned, execKeypair.privateKey);
 
-    const resultRes = await relay.app.request(`/agent/${MOTEBIT_ID}/task/${task_id}/result`, {
+    const resultRes = await relay.app.request(`/agent/${execMotebitId}/task/${task_id}/result`, {
       method: "POST",
       headers: { "Content-Type": "application/json", ...AUTH_HEADER },
       body: JSON.stringify(receipt),
@@ -1092,7 +1094,7 @@ describe("Sync Relay — agent protocol", () => {
     expect(resultRes.status).toBe(200);
 
     // Poll — should now have receipt
-    const pollRes = await relay.app.request(`/agent/${MOTEBIT_ID}/task/${task_id}`, {
+    const pollRes = await relay.app.request(`/agent/${execMotebitId}/task/${task_id}`, {
       method: "GET",
       headers: AUTH_HEADER,
     });
@@ -1754,6 +1756,8 @@ describe("Sync Relay — agent protocol", () => {
   });
 
   it("verified receipt delivery issues a reputation credential", async () => {
+    // The executor answers its own task: the relay hands a task on the
+    // `/agent/:id` path to that agent (#890 r6), and only it may answer.
     // Create executing agent with real Ed25519 keypair
     const execKeypair = await generateKeypair();
     const execPubKeyHex = bytesToHex(execKeypair.publicKey);
@@ -1776,10 +1780,10 @@ describe("Sync Relay — agent protocol", () => {
     });
 
     // Submit and complete a task with a signed receipt
-    const submitRes = await relay.app.request(`/agent/${MOTEBIT_ID}/task`, {
+    const submitRes = await relay.app.request(`/agent/${execMotebitId}/task`, {
       method: "POST",
       headers: jsonAuthWithIdempotency(),
-      body: JSON.stringify({ prompt: "Credential test" }),
+      body: JSON.stringify({ prompt: "Credential test", submitted_by: MOTEBIT_ID }),
     });
     const { task_id } = (await submitRes.json()) as { task_id: string };
 
@@ -1799,7 +1803,7 @@ describe("Sync Relay — agent protocol", () => {
     };
     const receipt = await signExecutionReceipt(unsigned, execKeypair.privateKey);
 
-    const resultRes = await relay.app.request(`/agent/${MOTEBIT_ID}/task/${task_id}/result`, {
+    const resultRes = await relay.app.request(`/agent/${execMotebitId}/task/${task_id}/result`, {
       method: "POST",
       headers: { "Content-Type": "application/json", ...AUTH_HEADER },
       body: JSON.stringify(receipt),
@@ -1812,6 +1816,8 @@ describe("Sync Relay — agent protocol", () => {
   });
 
   it("GET /api/v1/agents/:motebitId/credentials returns issued credentials", async () => {
+    // The executor answers its own task: the relay hands a task on the
+    // `/agent/:id` path to that agent (#890 r6), and only it may answer.
     // Create executing agent and complete a task to trigger credential issuance
     const execKeypair = await generateKeypair();
     const execPubKeyHex = bytesToHex(execKeypair.publicKey);
@@ -1833,10 +1839,10 @@ describe("Sync Relay — agent protocol", () => {
       }),
     });
 
-    const submitRes = await relay.app.request(`/agent/${MOTEBIT_ID}/task`, {
+    const submitRes = await relay.app.request(`/agent/${execMotebitId}/task`, {
       method: "POST",
       headers: jsonAuthWithIdempotency(),
-      body: JSON.stringify({ prompt: "List creds test" }),
+      body: JSON.stringify({ prompt: "List creds test", submitted_by: MOTEBIT_ID }),
     });
     const { task_id } = (await submitRes.json()) as { task_id: string };
 
@@ -1856,7 +1862,7 @@ describe("Sync Relay — agent protocol", () => {
     };
     const signedReceipt = await signExecutionReceipt(unsigned, execKeypair.privateKey);
 
-    await relay.app.request(`/agent/${MOTEBIT_ID}/task/${task_id}/result`, {
+    await relay.app.request(`/agent/${execMotebitId}/task/${task_id}/result`, {
       method: "POST",
       headers: { "Content-Type": "application/json", ...AUTH_HEADER },
       body: JSON.stringify(signedReceipt),
@@ -1887,6 +1893,8 @@ describe("Sync Relay — agent protocol", () => {
   });
 
   it("POST /api/v1/credentials/verify validates a credential", async () => {
+    // The executor answers its own task: the relay hands a task on the
+    // `/agent/:id` path to that agent (#890 r6), and only it may answer.
     // Create an agent, complete a task, get a credential, then verify it
     const execKeypair = await generateKeypair();
     const execPubKeyHex = bytesToHex(execKeypair.publicKey);
@@ -1908,10 +1916,10 @@ describe("Sync Relay — agent protocol", () => {
       }),
     });
 
-    const submitRes = await relay.app.request(`/agent/${MOTEBIT_ID}/task`, {
+    const submitRes = await relay.app.request(`/agent/${execMotebitId}/task`, {
       method: "POST",
       headers: jsonAuthWithIdempotency(),
-      body: JSON.stringify({ prompt: "Verify cred test" }),
+      body: JSON.stringify({ prompt: "Verify cred test", submitted_by: MOTEBIT_ID }),
     });
     const { task_id } = (await submitRes.json()) as { task_id: string };
 
@@ -1931,7 +1939,7 @@ describe("Sync Relay — agent protocol", () => {
     };
     const signedReceipt = await signExecutionReceipt(unsigned, execKeypair.privateKey);
 
-    await relay.app.request(`/agent/${MOTEBIT_ID}/task/${task_id}/result`, {
+    await relay.app.request(`/agent/${execMotebitId}/task/${task_id}/result`, {
       method: "POST",
       headers: { "Content-Type": "application/json", ...AUTH_HEADER },
       body: JSON.stringify(signedReceipt),
@@ -2382,6 +2390,8 @@ describe("Sync Relay — credential presentation", () => {
   });
 
   it("GET presentation bundles credentials from verified receipts", async () => {
+    // The executor answers its own task: the relay hands a task on the
+    // `/agent/:id` path to that agent (#890 r6), and only it may answer.
     // Create executing agent with real Ed25519 keypair
     const execKeypair = await generateKeypair();
     const execPubKeyHex = bytesToHex(execKeypair.publicKey);
@@ -2404,10 +2414,10 @@ describe("Sync Relay — credential presentation", () => {
     });
 
     // Submit and complete a task to trigger credential issuance
-    const submitRes = await relay.app.request(`/agent/${MOTEBIT_ID}/task`, {
+    const submitRes = await relay.app.request(`/agent/${execMotebitId}/task`, {
       method: "POST",
       headers: jsonAuthWithIdempotency(),
-      body: JSON.stringify({ prompt: "VP test" }),
+      body: JSON.stringify({ prompt: "VP test", submitted_by: MOTEBIT_ID }),
     });
     const { task_id } = (await submitRes.json()) as { task_id: string };
 
@@ -2427,7 +2437,7 @@ describe("Sync Relay — credential presentation", () => {
     };
     const receipt = await signExecutionReceipt(unsigned, execKeypair.privateKey);
 
-    await relay.app.request(`/agent/${MOTEBIT_ID}/task/${task_id}/result`, {
+    await relay.app.request(`/agent/${execMotebitId}/task/${task_id}/result`, {
       method: "POST",
       headers: { "Content-Type": "application/json", ...AUTH_HEADER },
       body: JSON.stringify(receipt),
@@ -2948,7 +2958,20 @@ describe("Sync Relay — relay-custody fee split honors the injected platformFee
       });
     }
     const workerWs = { send: vi.fn(), close: vi.fn(), readyState: 1 };
-    relay.connections.set(DELEGATOR, [
+    // The relay routes the delegator's task to the registered worker's own
+    // socket (#890 r6: only the executor the relay handed the task to may
+    // answer it — a worker socket filed under the delegator's id is no
+    // longer a route).
+    await relay.app.request("/api/v1/agents/register", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", ...AUTH_HEADER },
+      body: JSON.stringify({
+        motebit_id: workerId,
+        endpoint_url: "http://localhost:3200/mcp",
+        capabilities: ["web_search"],
+      }),
+    });
+    relay.connections.set(workerId, [
       { ws: workerWs as never, deviceId: workerDeviceId, capabilities: ["web_search"] },
     ]);
     seedBalance(relay, DELEGATOR, 5.0);
