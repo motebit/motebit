@@ -113,7 +113,12 @@ describe("abortGetSupportedOn", () => {
 
   it("a getSupported failure is passed through as an Error", async () => {
     const ctl = new AbortController();
-    const client = abortGetSupportedOn({ getSupported: () => Promise.reject("boom") }, ctl.signal);
+    const client = abortGetSupportedOn(
+      // A non-Error rejection on purpose: the wrapper must hand back an Error.
+      // eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors
+      { getSupported: () => Promise.reject("boom") },
+      ctl.signal,
+    );
     await expect(client.getSupported()).rejects.toThrow("boom");
   });
 });
