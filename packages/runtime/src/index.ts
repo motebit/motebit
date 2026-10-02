@@ -373,6 +373,14 @@ export {
   type UnretrievedPayment,
   type PaidIntentVerdict,
 } from "./paid-intent-ledger.js";
+// #890: a goal whose last run left a paid outcome unknown does not re-fire.
+export {
+  paidResultsOwedByRun,
+  paidResultsOwedByRuns,
+  goalRunWindows,
+  goalAwaitingResultMessage,
+  type GoalRunWindow,
+} from "./goal-run-hold.js";
 // The deterministic surface-affordance entry point (chip tap / button →
 // invokeCapability). Exported so an integration test can drive the REAL entry
 // point against a live relay — the layer above selectAndRunDelegation, where

@@ -11,9 +11,16 @@ import type { SensitivityCleared } from "@motebit/sdk";
 import { runTurnStreaming, projectProviderClearance } from "@motebit/ai-core";
 import type { PlanStoreAdapter } from "./types.js";
 import type { CollaborativeDelegationAdapter } from "./delegation-adapter.js";
+import { DelegationUndeterminedError, isDelegationUndetermined } from "./delegation-adapter.js";
 import { decomposePlan } from "./decompose.js";
 import type { DecompositionContext } from "./decompose.js";
 import { reflectOnPlan } from "./reflect.js";
+import {
+  PROCESS_PLAN_LOCKS,
+  DEFAULT_PLAN_LEASE_TTL_MS,
+  isPlanLeaseStore,
+  type PlanDriverLocks,
+} from "./plan-lease.js";
 import type { ReflectionResult } from "./reflect.js";
 
 export type PlanChunk =
@@ -25,6 +32,30 @@ export type PlanChunk =
   | { type: "step_failed"; step: PlanStep; error: string }
   | { type: "plan_completed"; plan: Plan }
   | { type: "plan_failed"; plan: Plan; reason: string }
+  /**
+   * Another driver holds this plan's lease (#890): a scheduler's resume and
+   * a reconnect's recovery never drive one plan at once. Nothing was run or
+   * delegated; not a failure — try again later.
+   */
+  | { type: "plan_busy"; plan: Plan }
+  /**
+   * The plan stopped on a delegated step whose paid outcome is UNKNOWN
+   * (#890): the relay never confirmed the submission, or an earlier run died
+   * mid-submit. Not a failure. The step stays `Running` with its task
+   * handle and the plan stays `Active`; resuming the plan settles the step
+   * from the relay's signed receipt when one exists, and holds again
+   * otherwise. It is never delegated a second time, and `createPlan`
+   * refuses a new plan for the goal while it holds. A scheduler must not
+   * count this as a failure; the owner is pointed at `/result`.
+   */
+  | {
+      type: "plan_undetermined";
+      plan: Plan;
+      step: PlanStep;
+      reason: string;
+      /** The relay task the step's submission was admitted as, when known. */
+      task_id?: string;
+    }
   | { type: "approval_request"; step: PlanStep; chunk: AgenticChunk }
   | { type: "plan_retrying"; failedPlan: Plan; newPlan: Plan }
   | { type: "reflection"; result: ReflectionResult }
@@ -42,10 +73,32 @@ export interface StepDelegationAdapter {
     onTaskSubmitted?: (taskId: string) => void,
     /** Agents to exclude from routing (accumulated across plan steps). */
     excludeAgents?: string[],
+    /**
+     * Called when the step's delegation moves to a new key after positive
+     * evidence the old one owes nothing (#890 r4), BEFORE the new submission:
+     * the engine records the rotation and forgets the old task id.
+     */
+    onRotate?: (rotation: number) => void,
   ): Promise<DelegatedStepResult>;
   /** Poll relay for a previously-submitted task's result. Returns null if task not found or still pending. */
   pollTaskResult?(taskId: string, stepId: string): Promise<DelegatedStepResult | null>;
+  /**
+   * True when every submission carries the step's DERIVED Idempotency-Key
+   * (`planStepIdempotencyKey`), so re-posting a step whose first submission
+   * has no known task id replays or names the task it may have admitted —
+   * never a second one — within the relay's idempotency window (#890). An
+   * adapter that pays before submitting (sovereign pay-forward) must not
+   * set it: a re-post there is a second payment.
+   */
+  readonly resubmitsIdempotently?: boolean;
 }
+
+/**
+ * How long after a step's first submission a re-post under its derived key
+ * is still covered by the relay's idempotency window (24 h there; this
+ * keeps a margin). Past it, a key could admit a NEW task, so the step holds.
+ */
+export const DEFAULT_RESUBMIT_WINDOW_MS = 20 * 60 * 60 * 1000;
 
 export interface PlanEngineConfig {
   maxStepRetries?: number;
@@ -59,11 +112,81 @@ export interface PlanEngineConfig {
   delegationTimeoutMs?: number;
   collaborativeAdapter?: CollaborativeDelegationAdapter;
   localMotebitId?: string;
+  /** In-process plan locks (default: the process-wide set). Tests model a process with their own. */
+  driverLocks?: PlanDriverLocks;
+  /** Clock for the persisted plan lease (default `Date.now`). */
+  now?: () => number;
+  /** Persisted plan-lease lifetime, renewed each step (default 15 min). */
+  planLeaseTtlMs?: number;
+  /** See `DEFAULT_RESUBMIT_WINDOW_MS`. */
+  resubmitWindowMs?: number;
 }
 
 export class PlanEngine {
   private _isExecuting = false;
   private _timeline: ExecutionTimelineEntry[] = [];
+  /** This engine's identity as a persisted-lease holder. */
+  private readonly _leaseHolder = crypto.randomUUID();
+  /** Plans this engine is driving right now. */
+  private readonly _driving = new Set<string>();
+
+  /**
+   * Take the one-driver lease for a plan (#890): the in-process lock, then
+   * the store's persisted lease when it has one. Returns the release, or
+   * null when another driver holds the plan.
+   */
+  private acquireDriver(planId: string): (() => void) | null {
+    const locks = this.config.driverLocks ?? PROCESS_PLAN_LOCKS;
+    if (!locks.tryAcquire(planId)) return null;
+    const store = this.store;
+    if (isPlanLeaseStore(store)) {
+      let taken = false;
+      try {
+        taken = store.acquirePlanLease(planId, this._leaseHolder, this.leaseNow(), this.leaseTtl());
+      } catch {
+        taken = false; // a lease that cannot be read is not ours
+      }
+      if (!taken) {
+        locks.release(planId);
+        return null;
+      }
+    }
+    this._driving.add(planId);
+    return () => {
+      this._driving.delete(planId);
+      if (isPlanLeaseStore(store)) {
+        try {
+          store.releasePlanLease(planId, this._leaseHolder);
+        } catch {
+          // expires on its own
+        }
+      }
+      locks.release(planId);
+    };
+  }
+
+  /** Renew the persisted lease before a step; false = lost it, stop driving. */
+  private renewDriver(planId: string): boolean {
+    if (!this._driving.has(planId)) return true; // a plan this call never leased (re-plan child)
+    const store = this.store;
+    if (!isPlanLeaseStore(store)) return true;
+    try {
+      return store.acquirePlanLease(planId, this._leaseHolder, this.leaseNow(), this.leaseTtl());
+    } catch {
+      return false;
+    }
+  }
+
+  private leaseNow(): number {
+    return (this.config.now ?? Date.now)();
+  }
+
+  private leaseTtl(): number {
+    return Math.max(
+      this.config.planLeaseTtlMs ?? DEFAULT_PLAN_LEASE_TTL_MS,
+      3 * (this.config.delegationTimeoutMs ?? 300_000),
+    );
+  }
 
   constructor(
     private store: PlanStoreAdapter,
@@ -106,6 +229,13 @@ export class PlanEngine {
     deps: SensitivityCleared<MotebitLoopDependencies>,
     planningConfig?: ResolvedTaskConfig,
   ): Promise<{ plan: Plan; truncatedFrom?: number }> {
+    // A goal whose delegated step has an unknown paid outcome gets no new
+    // plan: a new plan would delegate — and pay for — the same work again
+    // (#890). The held plan is resumed instead, which settles or holds it.
+    const held = this.findUnresolvedDelegation(goalId, motebitId);
+    if (held != null) {
+      throw new DelegationUndeterminedError(held.step.description);
+    }
     const rawPlan = await decomposePlan(ctx, projectProviderClearance(deps), planningConfig);
     const maxSteps = this.config.maxStepsPerPlan ?? 10;
     let truncatedFrom: number | undefined;
@@ -177,9 +307,17 @@ export class PlanEngine {
       total_steps: steps.length,
     });
 
-    yield { type: "plan_created", plan, steps };
-
-    yield* this.runSteps(plan, steps, deps, ctx, 0, runId, reflectionConfig);
+    const release = this.acquireDriver(planId);
+    if (release == null) {
+      yield { type: "plan_busy", plan };
+      return;
+    }
+    try {
+      yield { type: "plan_created", plan, steps };
+      yield* this.runSteps(plan, steps, deps, ctx, 0, runId, reflectionConfig);
+    } finally {
+      release();
+    }
   }
 
   async *resumePlan(
@@ -195,6 +333,29 @@ export class PlanEngine {
       throw new Error(`Plan ${planId} is not active (status: ${plan.status})`);
     }
 
+    const release = this.acquireDriver(planId);
+    if (release == null) {
+      yield { type: "plan_busy", plan };
+      return;
+    }
+    try {
+      yield* this.resumeLeased(planId, deps, ctx, runId, reflectionConfig);
+    } finally {
+      release();
+    }
+  }
+
+  /** Resume a plan whose lease the caller already holds. */
+  private async *resumeLeased(
+    planId: string,
+    deps: SensitivityCleared<MotebitLoopDependencies>,
+    ctx?: DecompositionContext,
+    runId?: string,
+    reflectionConfig?: ResolvedTaskConfig,
+  ): AsyncGenerator<PlanChunk> {
+    // Re-read under the lease: another driver may have moved it on.
+    const plan = this.store.getPlan(planId);
+    if (!plan || plan.status !== PlanStatus.Active) return;
     const steps = this.store.getStepsForPlan(planId);
     yield* this.runSteps(plan, steps, deps, ctx, 0, runId, reflectionConfig);
   }
@@ -219,7 +380,15 @@ export class PlanEngine {
 
     try {
       for (let i = plan.current_step_index; i < steps.length; i++) {
-        const step = steps[i]!;
+        // Re-read the step: `steps` is a snapshot taken before the lease.
+        const step = this.store.getStep(steps[i]!.step_id) ?? steps[i]!;
+
+        // Keep the one-driver lease alive; a lease lost to another driver
+        // (it expired under us) means stop — never drive alongside it.
+        if (!this.renewDriver(plan.plan_id)) {
+          yield { type: "plan_busy", plan: this.store.getPlan(plan.plan_id) ?? plan };
+          return;
+        }
 
         // Skip already completed/skipped steps (for resume)
         if (step.status === StepStatus.Completed || step.status === StepStatus.Skipped) {
@@ -239,6 +408,25 @@ export class PlanEngine {
         ) {
           // This step belongs to another participant — wait for their result
           continue;
+        }
+
+        // A delegated step found Running on entry was submitted by an earlier
+        // run whose paid outcome is unknown — it ended undetermined, or the
+        // process died mid-submit. It is never delegated again: settle it
+        // from the relay's signed receipt, or hold (#890).
+        if (step.status === StepStatus.Running && this.isDelegatedStep(step)) {
+          const settled = yield* this.settleHeldStep(plan, step);
+          if (settled.kind === "completed") {
+            completedResults.push(
+              `[Step ${step.ordinal + 1}: ${step.description}]\n${settled.summary}`,
+            );
+            continue;
+          }
+          if (settled.kind === "skipped") continue;
+          // Nothing left the device, or nothing came back naming a task:
+          // re-post under the step's derived key (falls through to the
+          // delegated path below). The relay replays or names the task.
+          if (settled.kind !== "resubmit") return; // held, or failed its plan
         }
 
         // Check dependencies
@@ -306,11 +494,17 @@ export class PlanEngine {
             continue;
           }
 
-          // Delegate step to a capable device
+          // Delegate step to a capable device. A re-post of a held step keeps
+          // its FIRST submission time: that is when its key entered the
+          // relay's idempotency window (#890).
           const startedAt = Date.now();
+          const firstSubmittedAt =
+            step.status === StepStatus.Running && step.started_at != null
+              ? step.started_at
+              : startedAt;
           this.store.updateStep(step.step_id, {
             status: StepStatus.Running,
-            started_at: startedAt,
+            started_at: firstSubmittedAt,
             updated_at: startedAt,
           });
           this.store.updatePlan(plan.plan_id, { current_step_index: i, updated_at: startedAt });
@@ -336,6 +530,20 @@ export class PlanEngine {
                 });
               },
               demotedAgents,
+              (rotation) => {
+                // The old key's task conclusively owes nothing; the step now
+                // belongs to the next key only. "" (not undefined) so every
+                // store clears it.
+                // `started_at` becomes the NEW key's first submission: the
+                // re-post window is measured from the current key (#890 r5).
+                const rotatedAt = Date.now();
+                this.store.updateStep(step.step_id, {
+                  retry_count: rotation,
+                  delegation_task_id: "",
+                  started_at: rotatedAt,
+                  updated_at: rotatedAt,
+                });
+              },
             );
 
             const summary = delegationResult.result_text.slice(0, 2000);
@@ -370,6 +578,17 @@ export class PlanEngine {
             yield { type: "step_completed", step: completedStep };
           } catch (err: unknown) {
             const errMsg = err instanceof Error ? err.message : String(err);
+            // Paid outcome unknown: not a failure. The step keeps its task
+            // handle and stays Running, the plan stays Active, and nothing
+            // is demoted or retried — a new attempt could pay twice (#890).
+            if (isDelegationUndetermined(err)) {
+              this.store.updateStep(step.step_id, {
+                error_message: errMsg,
+                updated_at: Date.now(),
+              });
+              yield this.undeterminedChunk(plan, step.step_id, errMsg);
+              return;
+            }
             // Extract failed agent IDs from the error cause chain for cross-step demotion.
             // The delegation adapter attaches failedAgentId to errors from failed receipts.
             for (let e: unknown = err; e instanceof Error; e = e.cause) {
@@ -536,7 +755,18 @@ export class PlanEngine {
 
                 const newSteps = this.store.getStepsForPlan(newPlan.plan_id);
                 yield { type: "plan_created", plan: newPlan, steps: newSteps };
-                yield* this.runSteps(newPlan, newSteps, deps, ctx, planRetryCount + 1, runId);
+                // The replacement plan is driven under its own lease too, so a
+                // reconnect's recovery cannot drive it alongside us (#890).
+                const releaseChild = this.acquireDriver(newPlan.plan_id);
+                if (releaseChild == null) {
+                  yield { type: "plan_busy", plan: newPlan };
+                  return;
+                }
+                try {
+                  yield* this.runSteps(newPlan, newSteps, deps, ctx, planRetryCount + 1, runId);
+                } finally {
+                  releaseChild();
+                }
                 return;
               } catch {
                 // Re-planning itself failed — fall through to plan_failed
@@ -698,6 +928,155 @@ export class PlanEngine {
     return { suspended: false, toolCallsMade, responseText };
   }
 
+  /**
+   * Was this step handed to another agent? True when it carries a relay
+   * task handle, or when it needs a capability this device lacks (the
+   * engine delegates exactly those).
+   */
+  private isDelegatedStep(step: PlanStep): boolean {
+    if (step.delegation_task_id != null && step.delegation_task_id !== "") return true;
+    const local = this.config.localCapabilities ?? [];
+    return (step.required_capabilities ?? []).some((c) => !local.includes(c));
+  }
+
+  /**
+   * The goal's delegated step whose paid outcome is unknown, if any: a
+   * `Running` delegated step in one of the goal's `Active` plans (#890).
+   * While one exists the goal must not delegate again — `createPlan`
+   * refuses, and a runner resumes that plan instead, which settles the step
+   * from the relay's signed receipt or holds it.
+   */
+  findUnresolvedDelegation(
+    goalId: string,
+    motebitId: string,
+  ): { plan: Plan; step: PlanStep } | null {
+    const active =
+      this.store.listActivePlans != null
+        ? this.store.listActivePlans(motebitId).filter((p) => p.goal_id === goalId)
+        : [this.store.getPlanForGoal(goalId)].filter(
+            (p): p is Plan => p != null && p.status === PlanStatus.Active,
+          );
+    for (const plan of active) {
+      for (const step of this.store.getStepsForPlan(plan.plan_id)) {
+        if (step.status === StepStatus.Running && this.isDelegatedStep(step)) {
+          return { plan, step };
+        }
+      }
+    }
+    return null;
+  }
+
+  private undeterminedChunk(plan: Plan, stepId: string, reason: string): PlanChunk {
+    const step = this.store.getStep(stepId)!;
+    const taskId = step.delegation_task_id;
+    return {
+      type: "plan_undetermined",
+      plan: this.store.getPlan(plan.plan_id)!,
+      step,
+      reason,
+      ...(taskId != null && taskId !== "" ? { task_id: taskId } : {}),
+    };
+  }
+
+  /**
+   * Settle a held delegated step from durable facts only: the relay's
+   * signed receipt for its task. A completed receipt completes the step; a
+   * receipt with any other status is a conclusive failure; no receipt
+   * (still running, unreachable, gone, or no task handle at all) holds the
+   * step — never a timeout, never a guess, never a second submission (#890).
+   */
+  private async *settleHeldStep(
+    plan: Plan,
+    step: PlanStep,
+  ): AsyncGenerator<
+    PlanChunk,
+    | { kind: "completed"; summary: string }
+    | { kind: "skipped" }
+    | { kind: "failed" | "held" | "resubmit" }
+  > {
+    const adapter = this.config.delegationAdapter;
+    const taskId = step.delegation_task_id;
+    // No task handle: the only way to learn what the first submission did is
+    // to ask under its key again — safe only through an adapter whose key is
+    // derived, and only while the relay still remembers that key (#890).
+    if (
+      (taskId == null || taskId === "") &&
+      adapter?.resubmitsIdempotently === true &&
+      step.started_at != null &&
+      this.leaseNow() - step.started_at <
+        (this.config.resubmitWindowMs ?? DEFAULT_RESUBMIT_WINDOW_MS)
+    ) {
+      return { kind: "resubmit" };
+    }
+    let result: DelegatedStepResult | null = null;
+    if (taskId != null && taskId !== "" && adapter?.pollTaskResult != null) {
+      try {
+        result = await adapter.pollTaskResult(taskId, step.step_id);
+      } catch {
+        result = null;
+      }
+    }
+
+    if (result == null) {
+      const reason =
+        taskId != null && taskId !== ""
+          ? `Awaiting the result of delegated task ${taskId} — it may still complete; check /result (step "${step.description}")`
+          : `Submission unconfirmed and no task id was recorded — the task may still complete; check /result (step "${step.description}")`;
+      yield this.undeterminedChunk(plan, step.step_id, reason);
+      return { kind: "held" };
+    }
+
+    const summary = result.result_text.slice(0, 2000);
+    if (result.receipt.status === "completed") {
+      this.store.updateStep(step.step_id, {
+        status: StepStatus.Completed,
+        completed_at: Date.now(),
+        result_summary: summary || null,
+        error_message: null,
+        updated_at: Date.now(),
+      });
+      const completedStep = this.store.getStep(step.step_id)!;
+      this._pushTimelineEvent("step_delegated", {
+        plan_id: plan.plan_id,
+        step_id: step.step_id,
+        ordinal: step.ordinal,
+        task_id: result.task_id,
+      });
+      this._pushTimelineEvent("step_completed", {
+        plan_id: plan.plan_id,
+        step_id: step.step_id,
+        ordinal: step.ordinal,
+        tool_calls_made: 0,
+      });
+      yield { type: "step_delegated", step: completedStep, task_id: result.task_id };
+      yield { type: "step_completed", step: completedStep };
+      return { kind: "completed", summary };
+    }
+
+    const errMsg = `Delegated step ${result.receipt.status}: ${summary}`;
+    this.store.updateStep(step.step_id, {
+      status: StepStatus.Failed,
+      completed_at: Date.now(),
+      error_message: errMsg,
+      updated_at: Date.now(),
+    });
+    this._pushTimelineEvent("step_failed", {
+      plan_id: plan.plan_id,
+      step_id: step.step_id,
+      ordinal: step.ordinal,
+      error: errMsg,
+    });
+    yield { type: "step_failed", step: this.store.getStep(step.step_id)!, error: errMsg };
+    if (step.optional) {
+      this.store.updateStep(step.step_id, { status: StepStatus.Skipped, updated_at: Date.now() });
+      return { kind: "skipped" };
+    }
+    this.failPlan(plan, `Delegated step ${step.ordinal + 1} failed: ${errMsg}`);
+    this._pushTimelineEvent("plan_failed", { plan_id: plan.plan_id, reason: errMsg });
+    yield { type: "plan_failed", plan: this.store.getPlan(plan.plan_id)!, reason: errMsg };
+    return { kind: "failed" };
+  }
+
   private areDependenciesMet(step: PlanStep): boolean {
     // Simple sequential dependency: all prior steps must be completed or skipped
     const allSteps = this.store.getStepsForPlan(step.plan_id);
@@ -726,6 +1105,31 @@ export class PlanEngine {
     const activePlans = this.store.listActivePlans(motebitId);
 
     for (const plan of activePlans) {
+      // One driver per plan (#890): a plan a scheduler is resuming right now
+      // is that driver's to settle.
+      const release = this.acquireDriver(plan.plan_id);
+      if (release == null) {
+        yield { type: "plan_busy", plan };
+        continue;
+      }
+      try {
+        yield* this.recoverLeasedPlan(plan, deps);
+      } finally {
+        release();
+      }
+    }
+  }
+
+  private async *recoverLeasedPlan(
+    leasedPlan: Plan,
+    deps: SensitivityCleared<MotebitLoopDependencies>,
+  ): AsyncGenerator<PlanChunk> {
+    const adapter = this.config.delegationAdapter;
+    if (!adapter?.pollTaskResult) return;
+    {
+      // Re-read under the lease.
+      const plan = this.store.getPlan(leasedPlan.plan_id);
+      if (plan == null || plan.status !== PlanStatus.Active) return;
       const steps = this.store.getStepsForPlan(plan.plan_id);
       let recoveredAny = false;
 
@@ -783,7 +1187,7 @@ export class PlanEngine {
           };
         } else if (!hasRunning) {
           // No more running steps — resume plan execution for remaining pending steps
-          yield* this.resumePlan(plan.plan_id, deps);
+          yield* this.resumeLeased(plan.plan_id, deps);
         }
       }
     }

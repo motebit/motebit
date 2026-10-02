@@ -500,3 +500,153 @@ describe("HttpJsonRpcEvmAdapter request timeout", () => {
     );
   });
 });
+
+describe("HttpJsonRpcEvmAdapter request timeout covers the response body", () => {
+  it("rejects within requestTimeoutMs when the server sends headers then stalls the body", async () => {
+    // A real loopback server: headers + a partial body, then nothing. The
+    // timeout must still fire — it bounds the whole request, not just the
+    // headers — or a periodic deposit tick hangs forever on a stalled RPC.
+    const { createServer } = await import("node:http");
+    const server = createServer((_req, res) => {
+      res.writeHead(200, { "Content-Type": "application/json" });
+      res.write('{"jsonrpc":"2.0","id":1,');
+      res.flushHeaders();
+    });
+    await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+    const { port } = server.address() as { port: number };
+    try {
+      const adapter = new HttpJsonRpcEvmAdapter({
+        rpcUrl: `http://127.0.0.1:${port}`,
+        requestTimeoutMs: 300,
+      });
+      const started = Date.now();
+      const outcome = await Promise.race([
+        adapter.getBlockNumber().then(
+          () => "resolved",
+          (err: unknown) => (err instanceof Error ? err.message : String(err)),
+        ),
+        new Promise<string>((r) => setTimeout(() => r("still pending"), 3_000)),
+      ]);
+      expect(outcome).toMatch(/eth_blockNumber timed out reading the response body/);
+      expect(Date.now() - started).toBeLessThan(2_000);
+    } finally {
+      server.closeAllConnections();
+      await new Promise<void>((r) => server.close(() => r()));
+    }
+  });
+});
+
+describe("HttpJsonRpcEvmAdapter body read is bounded by IDLE time, not total time", () => {
+  /** A loopback RPC server whose handler writes the response body itself. */
+  async function withServer(
+    handler: (res: import("node:http").ServerResponse) => void,
+    run: (url: string) => Promise<void>,
+  ): Promise<void> {
+    const { createServer } = await import("node:http");
+    const server = createServer((_req, res) => handler(res));
+    await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+    const { port } = server.address() as { port: number };
+    try {
+      await run(`http://127.0.0.1:${port}`);
+    } finally {
+      server.closeAllConnections();
+      await new Promise<void>((r) => server.close(() => r()));
+    }
+  }
+
+  it("succeeds on a slow body that keeps progressing past requestTimeoutMs in total", async () => {
+    // A large eth_getLogs on catch-up: the body trickles for ~1.5s, never
+    // idle for more than ~150ms. A total bound of 1000ms fails it every tick
+    // (the deposit cursor never moves); an idle bound lets it complete.
+    const body = '{"jsonrpc":"2.0","id":1,"result":"0x2a"}';
+    const timers: ReturnType<typeof setTimeout>[] = [];
+    await withServer(
+      (res) => {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.flushHeaders();
+        const chars = body.split("");
+        const step = Math.ceil(chars.length / 10);
+        for (let i = 0; i < 10; i++) {
+          timers.push(
+            setTimeout(
+              () => {
+                res.write(chars.slice(i * step, (i + 1) * step).join(""));
+                if (i === 9) res.end();
+              },
+              150 * (i + 1),
+            ),
+          );
+        }
+      },
+      async (rpcUrl) => {
+        const adapter = new HttpJsonRpcEvmAdapter({ rpcUrl, requestTimeoutMs: 1_000 });
+        const started = Date.now();
+        await expect(adapter.getBlockNumber()).resolves.toBe(42n);
+        expect(Date.now() - started).toBeGreaterThanOrEqual(1_400);
+      },
+    );
+    timers.forEach(clearTimeout);
+  });
+
+  it("fails at the idle bound when the body stops progressing", async () => {
+    await withServer(
+      (res) => {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.write('{"jsonrpc":"2.0",');
+        // ...one more chunk at 200ms, then silence.
+        setTimeout(() => res.write('"id":1,'), 200);
+      },
+      async (rpcUrl) => {
+        const adapter = new HttpJsonRpcEvmAdapter({ rpcUrl, requestTimeoutMs: 500 });
+        const started = Date.now();
+        await expect(adapter.getBlockNumber()).rejects.toThrow(
+          /eth_blockNumber timed out reading the response body \(no progress for 500ms\)/,
+        );
+        const elapsed = Date.now() - started;
+        // Idle bound measured from the LAST chunk (~200ms), not from the start.
+        expect(elapsed).toBeGreaterThanOrEqual(650);
+        expect(elapsed).toBeLessThan(2_000);
+      },
+    );
+  });
+
+  it("re-arms the timer when headers arrive: late headers then a body within the idle bound succeeds", async () => {
+    // Headers at ~800ms, the whole body ~700ms later (~1500ms total). Arrival
+    // of headers must re-arm the 1000ms timer; without that re-arm the timer
+    // armed at the start fires at 1000ms, mid-body.
+    const body = '{"jsonrpc":"2.0","id":1,"result":"0x2a"}';
+    const timers: ReturnType<typeof setTimeout>[] = [];
+    await withServer(
+      (res) => {
+        timers.push(
+          setTimeout(() => {
+            res.writeHead(200, { "Content-Type": "application/json" });
+            res.flushHeaders();
+            timers.push(setTimeout(() => res.end(body), 700));
+          }, 800),
+        );
+      },
+      async (rpcUrl) => {
+        const adapter = new HttpJsonRpcEvmAdapter({ rpcUrl, requestTimeoutMs: 1_000 });
+        const started = Date.now();
+        await expect(adapter.getBlockNumber()).resolves.toBe(42n);
+        expect(Date.now() - started).toBeGreaterThanOrEqual(1_400);
+      },
+    );
+    timers.forEach(clearTimeout);
+  });
+
+  it("keeps the header timeout: no headers within requestTimeoutMs fails", async () => {
+    await withServer(
+      () => {
+        // never respond
+      },
+      async (rpcUrl) => {
+        const adapter = new HttpJsonRpcEvmAdapter({ rpcUrl, requestTimeoutMs: 300 });
+        const started = Date.now();
+        await expect(adapter.getBlockNumber()).rejects.toThrow(/eth_blockNumber network error/);
+        expect(Date.now() - started).toBeLessThan(2_000);
+      },
+    );
+  });
+});

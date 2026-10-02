@@ -52,6 +52,13 @@ export interface RelayDelegationConfig {
 }
 
 export class RelayDelegationAdapter implements StepDelegationAdapter {
+  /**
+   * Every submission carries the step's derived key (#890), so re-posting a
+   * held step replays or names the task it already admitted — never a new
+   * one — while the key lives in the relay's idempotency window.
+   */
+  readonly resubmitsIdempotently = true;
+
   constructor(private config: RelayDelegationConfig) {}
 
   private async buildHeaders(audience: TokenAudience): Promise<Record<string, string>> {
@@ -69,6 +76,7 @@ export class RelayDelegationAdapter implements StepDelegationAdapter {
     timeoutMs: number,
     onTaskSubmitted?: (taskId: string) => void,
     crossStepExclude?: string[],
+    onRotate?: (rotation: number) => void,
   ): Promise<DelegatedStepResult> {
     const maxRetries = this.config.maxDelegationRetries ?? 2;
     const excludeAgents: string[] = [...(crossStepExclude ?? [])];
@@ -79,7 +87,17 @@ export class RelayDelegationAdapter implements StepDelegationAdapter {
     // already admitted instead of admitting — and charging for — a second
     // one. Only a task that conclusively FAILED gets a new key: that retry is
     // meant to be a new task, routed away from the agent that failed (#816).
-    let idempotencyKey = crypto.randomUUID();
+    //
+    // The key is DERIVED from the step, never random (#890): two drivers
+    // that ever submit the same step — a reconnect's recovery racing a
+    // scheduler's resume — present the same key, and the relay admits one
+    // task for both.
+    //
+    // The rotation starts where the step left off (#890 r4): a resumed step
+    // re-posts under its CURRENT key, never an earlier one whose task already
+    // failed.
+    let rotation = stepRotation(step);
+    let idempotencyKey = planStepIdempotencyKey(step, rotation);
     let attempts = 0;
 
     for (let attempt = 0; attempt <= maxRetries; attempt++) {
@@ -109,8 +127,16 @@ export class RelayDelegationAdapter implements StepDelegationAdapter {
         if (failedAgentId) {
           excludeAgents.push(failedAgentId);
         }
-        if (lastError.deliveryUncertain !== true) {
-          idempotencyKey = crypto.randomUUID();
+        // Rotate ONLY on positive evidence that nothing more is owed for
+        // the current key: a signed failed receipt, or a relay refusal
+        // before admission (#890 r4). Anything else — a lost answer, a
+        // timeout, a task the relay no longer knows — keeps the key.
+        if (lastError.conclusive === true) {
+          rotation++;
+          idempotencyKey = planStepIdempotencyKey(step, rotation);
+          // The step forgets the old task BEFORE the new submission, so it
+          // can never be settled from the old task's receipt.
+          onRotate?.(rotation);
         }
 
         // Don't retry non-retryable errors (submission failures, not timeouts)
@@ -120,9 +146,10 @@ export class RelayDelegationAdapter implements StepDelegationAdapter {
       }
     }
 
-    // Out of attempts while the relay never said the task ended: it may have
-    // been admitted and may still complete, so this is not a failure either.
-    if (lastError?.deliveryUncertain === true) {
+    // Out of attempts without a conclusive answer for the current key: its
+    // task may have been admitted and may still complete, so this is not a
+    // failure either.
+    if (lastError?.conclusive !== true) {
       throw new DelegationUndeterminedError(step.description, lastError);
     }
     throw new Error(
@@ -172,6 +199,10 @@ export class RelayDelegationAdapter implements StepDelegationAdapter {
     if (!resp.ok) {
       const text = await resp.text();
       // Surface x402 payment requirement so callers can handle budget exhaustion
+      // 5xx: the relay may have admitted before it failed — not a refusal.
+      if (resp.status >= 500) {
+        throw deliveryUncertain(`Relay task submission unconfirmed (${resp.status})`);
+      }
       if (resp.status === 402) {
         let detail = text;
         try {
@@ -180,9 +211,10 @@ export class RelayDelegationAdapter implements StepDelegationAdapter {
         } catch {
           // Use raw text
         }
-        throw new Error(`Payment required (HTTP 402): ${detail}`);
+        throw conclusive(`Payment required (HTTP 402): ${detail}`);
       }
-      throw new Error(`Relay task submission failed (${resp.status}): ${text}`);
+      // A refusal before admission: nothing was admitted under this key.
+      throw conclusive(`Relay task submission failed (${resp.status}): ${text}`);
     }
 
     let taskResp: { task_id: string; routing_choice?: DelegatedStepResult["routing_choice"] };
@@ -199,6 +231,10 @@ export class RelayDelegationAdapter implements StepDelegationAdapter {
     onTaskSubmitted?.(task_id);
 
     const settle = (receipt: ExecutionReceipt): DelegatedStepResult => {
+      // A receipt about another task answers nothing about this one (#890 r5).
+      if (!receiptBoundTo(receipt, task_id)) {
+        throw deliveryUncertain(`A receipt for another task arrived for ${task_id}`);
+      }
       if (receipt.status === "completed") {
         return {
           step_id: step.step_id,
@@ -208,9 +244,19 @@ export class RelayDelegationAdapter implements StepDelegationAdapter {
           routing_choice: routingChoice ?? undefined,
         };
       }
-      // Attach the failed agent's ID to the error for exclusion
-      const err = new Error(`Delegated step ${receipt.status}: ${receipt.result}`);
-      (err as DelegationError).failedAgentId = receipt.motebit_id;
+      // A failed receipt is positive evidence only from the worker the relay
+      // routed this task to (#890 r5). One signed by anyone else is not the
+      // routed worker's verdict: hold, never rotate on it.
+      const routed = routingChoice?.selected_agent;
+      if (routed != null && routed !== "" && receipt.motebit_id !== routed) {
+        throw deliveryUncertain(
+          `A failed receipt for ${task_id} is signed by ${receipt.motebit_id}, not the routed worker ${routed}`,
+        );
+      }
+      // A signed failed receipt from the routed worker: conclusive for this
+      // key. Attach the failed agent's ID for exclusion.
+      const err = conclusive(`Delegated step ${receipt.status}: ${receipt.result}`);
+      err.failedAgentId = receipt.motebit_id;
       throw err;
     };
 
@@ -227,15 +273,13 @@ export class RelayDelegationAdapter implements StepDelegationAdapter {
       const state = await this.queryTask(task_id);
       if (state.kind === "receipt") return settle(state.receipt);
       if (state.kind === "not_found") {
-        // The task left the relay's queue without a receipt (a receipt
-        // extends its lifetime), so no result is coming. Terminal for THIS
-        // task: retry as a new task, never replay the dead task id.
-        const err: DelegationError = new Error(
-          `Delegated task ${task_id} expired at the relay without a result`,
+        // The relay no longer knows this task (#890 r4). That is ABSENCE,
+        // never evidence: the task may have been admitted, paid and done.
+        // Hold the step on this task and key — never rotate to a new one.
+        throw new DelegationUndeterminedError(
+          step.description,
+          new Error(`Delegated task ${task_id} is no longer known to the relay (404)`),
         );
-        const agent = routingChoice?.selected_agent;
-        if (agent != null && agent !== "") err.failedAgentId = agent;
-        throw err;
       }
       if (state.kind !== "pending" || remaining <= 0) {
         const err = new Error(
@@ -328,6 +372,8 @@ export class RelayDelegationAdapter implements StepDelegationAdapter {
       };
 
       if (data.receipt == null) return null; // Task still pending/running
+      // A receipt about another task is no answer for this one (#890 r5).
+      if (!receiptBoundTo(data.receipt, taskId)) return null;
 
       return {
         step_id: stepId,
@@ -344,6 +390,12 @@ export class RelayDelegationAdapter implements StepDelegationAdapter {
 /** Internal error type carrying the failed agent's ID for exclusion. */
 interface DelegationError extends Error {
   failedAgentId?: string;
+  /**
+   * Positive evidence that nothing more is owed under the current key: a
+   * signed failed receipt, or a refusal before admission. The only errors
+   * that rotate a step to a new key (#890 r4).
+   */
+  conclusive?: boolean;
   /**
    * The result was not delivered and the relay could not say how the task
    * ended: the retry resubmits under the same Idempotency-Key.
@@ -373,6 +425,83 @@ export class DelegationUndeterminedError extends Error {
     );
     this.name = "DelegationUndeterminedError";
   }
+}
+
+/** The task id a relay 409 names, when it names one (#888). */
+export async function taskNamedBy409(resp: Response): Promise<string | null> {
+  const header = resp.headers.get("x-motebit-task-id");
+  if (header != null && header !== "") return header;
+  try {
+    const body = (await resp.clone().json()) as { task_id?: unknown };
+    return typeof body.task_id === "string" && body.task_id !== "" ? body.task_id : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Is this receipt about `taskId`? A receipt names the relay task it
+ * discharges (`relay_task_id`, else `task_id`); one about any other task is
+ * not an answer for this one (#890 r5).
+ */
+export function receiptBoundTo(receipt: ExecutionReceipt, taskId: string): boolean {
+  const bound =
+    (receipt as { relay_task_id?: string }).relay_task_id != null &&
+    (receipt as { relay_task_id?: string }).relay_task_id !== ""
+      ? (receipt as { relay_task_id?: string }).relay_task_id
+      : receipt.task_id;
+  return bound === taskId;
+}
+
+/** A 201 standing for "the key admitted this task" — what a replay would have answered. */
+export function admittedAs(taskId: string): Response {
+  return new Response(JSON.stringify({ task_id: taskId }), { status: 201 });
+}
+
+/**
+ * The Idempotency-Key a plan step's submission carries: derived from the
+ * plan, the step, and how many times the step was conclusively failed and
+ * re-routed (`rotation`), never random (#890). Every submission of the same
+ * attempt of the same step — from any driver, in any process — carries the
+ * same key, so the relay admits (and charges for) at most one task for it.
+ */
+export function planStepIdempotencyKey(
+  step: Pick<PlanStep, "plan_id" | "step_id">,
+  rotation: number,
+): string {
+  return `plan-step:${step.plan_id}:${step.step_id}:${rotation}`;
+}
+
+/**
+ * Is this error the "paid outcome unknown" signal, anywhere in its cause
+ * chain? True for `DelegationUndeterminedError` and for any error that
+ * carries `undetermined === true` (the sovereign adapter's terminal errors,
+ * #887). A caller that sees it must not start the same work again until
+ * the outcome is resolved from the relay's task state or the receipt
+ * (#890) — it is not a failure.
+ */
+export function isDelegationUndetermined(err: unknown): boolean {
+  for (let e: unknown = err, depth = 0; e instanceof Error && depth < 16; e = e.cause, depth++) {
+    if ((e as { undetermined?: unknown }).undetermined === true) return true;
+  }
+  return false;
+}
+
+function conclusive(message: string): DelegationError {
+  const err: DelegationError = new Error(message);
+  err.conclusive = true;
+  return err;
+}
+
+/**
+ * The step's current key rotation — how many times its delegation was
+ * conclusively failed and moved to a new key. Kept on the step's
+ * `retry_count` (delegated steps have no local retries), so a resume starts
+ * from the current key, never an earlier one (#890 r4).
+ */
+export function stepRotation(step: Pick<PlanStep, "retry_count">): number {
+  const n = step.retry_count;
+  return typeof n === "number" && Number.isInteger(n) && n > 0 ? n : 0;
 }
 
 function deliveryUncertain(message: string, cause?: unknown): DelegationError {
@@ -408,6 +537,14 @@ async function submitUnderKey(
     } catch (err: unknown) {
       throw deliveryUncertain("Relay task submission unconfirmed: no response", err);
     }
+    if (resp.ok) return resp;
+    // A response that NAMES a task — whatever its status (#888; #890 r5) — is
+    // the relay saying this key admitted that task: a 409 while the first
+    // request is in flight, or an error that came AFTER admission (the
+    // ranking loop's 402). Adopt it; the caller polls it like any admitted
+    // task and never rotates away from it.
+    const named = await taskNamedBy409(resp);
+    if (named != null) return admittedAs(named);
     if (resp.status !== 409) return resp;
     // Still processing under this key: keep backing off, within the step's
     // own time budget, then end the step as undetermined.

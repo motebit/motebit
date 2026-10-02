@@ -530,3 +530,121 @@ describe("detectDeposits — onDeposit failure", () => {
     expect(store.getCursor(CHAIN)).toBe(BigInt(10));
   });
 });
+
+describe("detectDeposits — a failed cycle is observable", () => {
+  function recordingLogger() {
+    const warns: Array<{ event: string; data?: Record<string, unknown> }> = [];
+    return {
+      warns,
+      logger: {
+        info: () => {},
+        warn: (event: string, data?: Record<string, unknown>) => {
+          warns.push({ event, data });
+        },
+        error: () => {},
+      },
+    };
+  }
+
+  it("logs deposit.cycle_failed with the error when getTransferLogs fails (cursor unchanged)", async () => {
+    const store = new InMemoryDepositDetectorStore({
+      wallets: [{ agentId: ALICE_ID, address: ALICE_WALLET }],
+      cursors: { [CHAIN]: BigInt(500) },
+    });
+    const rpc = mockRpc({
+      blockNumber: BigInt(600),
+      getTransferLogs: vi
+        .fn()
+        .mockRejectedValue(new Error("RPC eth_getLogs timed out reading the response body")),
+    });
+    const { warns, logger } = recordingLogger();
+
+    const credits = await detectDeposits({
+      store,
+      rpc,
+      chain: CHAIN,
+      contractAddress: USDC,
+      transferTopic: TRANSFER_TOPIC,
+      maxBlocksPerCycle: 100,
+      confirmations: 0,
+      onDeposit: vi.fn(),
+      logger,
+    });
+
+    expect(credits).toBe(0);
+    expect(store.getCursor(CHAIN)).toBe(BigInt(500));
+    expect(warns).toEqual([
+      {
+        event: "deposit.cycle_failed",
+        data: {
+          chain: CHAIN,
+          stage: "eth_getLogs",
+          fromBlock: "501",
+          toBlock: "600",
+          error: "RPC eth_getLogs timed out reading the response body",
+        },
+      },
+    ]);
+  });
+
+  it("logs deposit.cycle_failed with the error when getBlockNumber fails", async () => {
+    const store = new InMemoryDepositDetectorStore({
+      wallets: [{ agentId: ALICE_ID, address: ALICE_WALLET }],
+      cursors: { [CHAIN]: BigInt(500) },
+    });
+    const rpc = mockRpc({
+      getBlockNumber: vi.fn().mockRejectedValue(new Error("ECONNREFUSED")),
+    });
+    const { warns, logger } = recordingLogger();
+
+    await detectDeposits({
+      store,
+      rpc,
+      chain: CHAIN,
+      contractAddress: USDC,
+      transferTopic: TRANSFER_TOPIC,
+      maxBlocksPerCycle: 100,
+      confirmations: 0,
+      onDeposit: vi.fn(),
+      logger,
+    });
+
+    expect(warns).toEqual([
+      {
+        event: "deposit.cycle_failed",
+        data: { chain: CHAIN, stage: "eth_blockNumber", error: "ECONNREFUSED" },
+      },
+    ]);
+    expect(store.getCursor(CHAIN)).toBe(BigInt(500));
+  });
+
+  it("logs a non-Error rejection as its string form at either stage", async () => {
+    for (const rpc of [
+      mockRpc({ getBlockNumber: vi.fn().mockRejectedValue("socket hang up") }),
+      mockRpc({
+        blockNumber: BigInt(600),
+        getTransferLogs: vi.fn().mockRejectedValue("socket hang up"),
+      }),
+    ]) {
+      const store = new InMemoryDepositDetectorStore({
+        wallets: [{ agentId: ALICE_ID, address: ALICE_WALLET }],
+        cursors: { [CHAIN]: BigInt(500) },
+      });
+      const { warns, logger } = recordingLogger();
+      await detectDeposits({
+        store,
+        rpc,
+        chain: CHAIN,
+        contractAddress: USDC,
+        transferTopic: TRANSFER_TOPIC,
+        maxBlocksPerCycle: 100,
+        confirmations: 0,
+        onDeposit: vi.fn(),
+        logger,
+      });
+      expect(warns.map((w) => [w.event, w.data?.error])).toEqual([
+        ["deposit.cycle_failed", "socket hang up"],
+      ]);
+    }
+  });
+});

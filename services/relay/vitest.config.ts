@@ -73,6 +73,9 @@ export default defineMotebitTest({
     lines: 78,
   },
   extra: {
+    // Deny-by-default network: any non-loopback request fails the test, with
+    // a repair line naming the injection helper. See network-guard.setup.ts.
+    setupFiles: ["./src/__tests__/network-guard.setup.ts"],
     pool: "forks",
     maxWorkers: 2,
     minWorkers: 1,

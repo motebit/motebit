@@ -31,6 +31,9 @@ const logger = createLogger({ service: "receipts-store" });
  */
 const MAX_RECEIPT_DEPTH = 10;
 
+/** Separates a displaced nested child's key from its parent task (#890 r6). */
+const NESTED_KEY_SEP = "#nested:";
+
 const INSERT_SQL = `
   INSERT OR IGNORE INTO relay_receipts (
     motebit_id, task_id, parent_task_id, depth, status,
@@ -93,11 +96,20 @@ export function persistReceiptChain(
   // verifies against `public_key` — offline, no relay required.
   const receiptJson = canonicalJson(receipt);
 
+  // A nested child never occupies — or shadows — a top-level key (#890 r6).
+  // Children are copied out of ANOTHER task's tree unverified (only the
+  // root's signature was checked), so a child claiming (V, X) is archived
+  // under its own namespaced key `X#nested:<parent>` — never under (V, X),
+  // the key V's own top-level receipt for X is archived and looked up
+  // under. It stays readable there (`getStoredReceiptJson` falls back to
+  // it for an audit read) and inside its parent's receipt_json. Rows are
+  // only ever inserted (rule 12).
+  const key = depth === 0 ? taskId : `${taskId}${NESTED_KEY_SEP}${parentTaskId ?? ""}`;
   const info = db
     .prepare(INSERT_SQL)
     .run(
       receipt.motebit_id,
-      taskId,
+      key,
       parentTaskId,
       depth,
       receipt.status,
@@ -126,9 +138,97 @@ export function getStoredReceiptJson(
   motebitId: string,
   taskId: string,
 ): string | null {
+  // An audit read: the bytes are served for the reader to re-verify. The
+  // top-level row for (motebitId, taskId) when there is one; else a nested
+  // copy archived under `taskId#nested:<parent>` (never verified by the
+  // relay on its own). It never DECIDES anything: the archive answer a
+  // delegator acts on is `getArchivedReceiptForKeyOwner` (top-level, routed
+  // executor only).
+  const prefix = `${taskId}${NESTED_KEY_SEP}`;
   const row = db
-    .prepare("SELECT receipt_json FROM relay_receipts WHERE motebit_id = ? AND task_id = ?")
-    .get(motebitId, taskId) as { receipt_json: string } | undefined;
+    .prepare(
+      `SELECT receipt_json FROM relay_receipts
+        WHERE motebit_id = ?
+          AND (task_id = ? OR substr(task_id, 1, ?) = ?)
+        ORDER BY depth, received_at
+        LIMIT 1`,
+    )
+    .get(motebitId, taskId, prefix.length, prefix) as { receipt_json: string } | undefined;
+  return row?.receipt_json ?? null;
+}
+
+/**
+ * The archived top-level receipt of a task that one of `motebitId`'s OWN
+ * Idempotency-Keys admitted, while that key is still inside the
+ * idempotency window (`notBefore` = now − TTL) — or null (#890 r4).
+ *
+ * The task queue forgets a task minutes after its receipt; the key that
+ * admitted it lives 24 h. A delegator re-posting under that key is
+ * replayed the task's id and must be able to learn how it ended — a 404
+ * there is absence, and absence is never evidence. The key binding is the
+ * authorization: a receipt is answered only to the agent whose key
+ * admitted the task, and never once the key could admit a new one.
+ */
+export function getArchivedReceiptForKeyOwner(
+  db: DatabaseDriver,
+  motebitId: string,
+  taskId: string,
+  notBefore: number,
+): string | null {
+  // Only the task's recorded executor answers (#890 r6): the receipt the
+  // delegator reads as a signed failure makes it pay for a new task, so it
+  // must be the depth-0 receipt of an identity the relay HANDED this task
+  // to (`relay_task_routes`, written at every hand-off) — under the key
+  // owner's OWN admission (#890 r7, `origin = 'admission'`): a route a
+  // peer's inbound forward wrote under a re-used id never answers it. The settlement
+  // record is no witness — it names the path agent, not the worker. A
+  // completed receipt outranks a failed one (one executor delivering is
+  // the task's outcome); otherwise the most recent answer.
+  //
+  // The ANSWER first (#890 round 9): `relay_task_answers` holds the task's
+  // live answer, written by the queue in the same transaction as the entry
+  // (`TaskQueue.writeAnswer`), keyed by the task alone — so the poll after
+  // eviction answers exactly what it answered before. When the task has an
+  // answer row, it is the only answer (never a different receipt from the
+  // audit archive); the ranked `relay_receipts` read below serves only
+  // tasks answered before that table existed.
+  const answered = db.prepare("SELECT 1 FROM relay_task_answers WHERE task_id = ?").get(taskId) as
+    { 1: number } | undefined;
+  if (answered != null) {
+    const a = db
+      .prepare(
+        `SELECT a.receipt_json FROM relay_task_answers a
+          WHERE a.task_id = ?
+            AND EXISTS (
+              SELECT 1 FROM relay_task_routes t
+               WHERE t.task_id = a.task_id AND t.executor_id = a.executor_id
+                 AND t.origin = 'admission'
+            )
+            AND EXISTS (
+              SELECT 1 FROM relay_idempotency_keys k
+               WHERE k.task_id = a.task_id AND k.motebit_id = ? AND k.created_at >= ?
+            )`,
+      )
+      .get(taskId, motebitId, notBefore) as { receipt_json: string } | undefined;
+    return a?.receipt_json ?? null;
+  }
+  const row = db
+    .prepare(
+      `SELECT r.receipt_json FROM relay_receipts r
+        WHERE r.task_id = ? AND r.depth = 0
+          AND EXISTS (
+            SELECT 1 FROM relay_task_routes t
+             WHERE t.task_id = r.task_id AND t.executor_id = r.motebit_id
+               AND t.origin = 'admission'
+          )
+          AND EXISTS (
+            SELECT 1 FROM relay_idempotency_keys k
+             WHERE k.task_id = r.task_id AND k.motebit_id = ? AND k.created_at >= ?
+          )
+        ORDER BY (r.status = 'completed') DESC, r.received_at DESC
+        LIMIT 1`,
+    )
+    .get(taskId, motebitId, notBefore) as { receipt_json: string } | undefined;
   return row?.receipt_json ?? null;
 }
 

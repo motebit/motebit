@@ -44,6 +44,8 @@ import { toMicro } from "../accounts.js";
 import { startP2pVerifierLoop } from "../p2p-verifier.js";
 import { relayMigrations } from "../migrations.js";
 import { createFederationCallbacks } from "../federation-callbacks.js";
+import { TaskQueue } from "../task-queue.js";
+import { recordTaskRoute } from "../task-routing.js";
 import type { TaskQueueEntry } from "../tasks.js";
 
 const A_ADDR = "De1egatorSo1anaAddr11111111111111111111111";
@@ -742,7 +744,7 @@ describe("#959 round 3 — a worker hosted here is never 'remote'; remote needs 
 
   it("the EXECUTOR relay's admission is 'local' even when its worker has no registered address", async () => {
     const W = await registerNoAddress(["web_search"]);
-    const queue = new Map<string, TaskQueueEntry>();
+    const queue = new TaskQueue(relay.moteDb.db);
     const cb = createFederationCallbacks({
       moteDb: relay.moteDb,
       identityManager: { listDevices: async () => [] } as never,
@@ -838,7 +840,7 @@ describe("#959 round 2 — the federated ORIGIN refuses a result not signed by t
       did: "did:key:origin",
     };
   });
-  function callbacks(queue: Map<string, TaskQueueEntry>) {
+  function callbacks(queue: TaskQueue) {
     return createFederationCallbacks({
       moteDb: relay.moteDb,
       identityManager: { listDevices: async () => [] } as never,
@@ -854,7 +856,7 @@ describe("#959 round 2 — the federated ORIGIN refuses a result not signed by t
 
   it("a stranger-signed result is refused 403 before it touches the entry; nothing is recorded", async () => {
     const taskId = crypto.randomUUID();
-    const queue = new Map([[taskId, originEntry(taskId)]]);
+    const queue = new TaskQueue(relay.moteDb.db).set(taskId, originEntry(taskId));
     await expect(
       callbacks(queue).onTaskResultReceived({
         taskId,
@@ -868,7 +870,9 @@ describe("#959 round 2 — the federated ORIGIN refuses a result not signed by t
 
   it("control: the paid worker's result records the origin row, payee = the worker, worker leg 'remote'", async () => {
     const taskId = crypto.randomUUID();
-    const queue = new Map([[taskId, originEntry(taskId)]]);
+    const queue = new TaskQueue(relay.moteDb.db).set(taskId, originEntry(taskId));
+    // The origin's federated forward records its route (#890 r6).
+    recordTaskRoute(relay.moteDb.db, taskId, B.motebitId, "executor-relay");
     await callbacks(queue).onTaskResultReceived({
       taskId,
       originRelay: "executor-relay",
@@ -952,9 +956,15 @@ describe("#959 — KNOWN RESIDUAL: the relay-mode row's column is the path agent
     const res = await relay.app.request(`/agent/${X.motebitId}/task`, {
       method: "POST",
       headers: jsonAuthWithIdempotency(),
-      body: JSON.stringify({ prompt: "free work" }),
+      // Scored routing hands the path-X task to B (#890 r6: only a worker
+      // the relay routed the task to may answer it).
+      body: JSON.stringify({
+        prompt: "free work",
+        submitted_by: X.motebitId,
+        required_capabilities: ["web_search"],
+      }),
     });
-    expect(res.status).toBe(201);
+    expect(res.status, await res.clone().text()).toBe(201);
     const { task_id: taskId } = (await res.json()) as { task_id: string };
     expect((await postResult(X, taskId, await receiptFrom(B, taskId, "done"))).status).toBe(200);
 
@@ -1117,7 +1127,7 @@ describe("#959 — historic rows: corrected beside the signed record, never rewr
     relay.moteDb.db
       .prepare(
         `INSERT INTO relay_task_queue (task_id, status, prompt, created_at, expires_at, task_json)
-         VALUES (?, 'completed', 'p', ?, ?, ?)`,
+         VALUES (?, 'pending', 'p', ?, ?, ?)`,
       )
       .run(
         taskId,
@@ -1145,6 +1155,14 @@ describe("#959 — historic rows: corrected beside the signed record, never rewr
           },
         }),
       );
+    // The legacy row was answered by the relay that wrote it: an answer is
+    // written one version step at a time (#890 r9 — the queue's triggers
+    // refuse an answered INSERT).
+    relay.moteDb.db
+      .prepare(
+        "UPDATE relay_task_queue SET status = 'completed', answer_version = answer_version + 1 WHERE task_id = ?",
+      )
+      .run(taskId);
     if (opts.archiveReceipt === true) {
       relay.moteDb.db
         .prepare(

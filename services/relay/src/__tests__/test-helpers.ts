@@ -12,7 +12,9 @@ import type { AgentTask } from "@motebit/sdk";
 import { AgentTaskStatus, asMotebitId, asAllocationId, asGoalId } from "@motebit/sdk";
 import { allocateBudget, computeGrossAmount } from "@motebit/market";
 import { TaskQueue } from "../task-queue.js";
+import { recordTaskRoute } from "../task-routing.js";
 import type { P2pPaymentChain } from "../p2p-payer.js";
+import { fakeFacilitatorClient } from "./x402-fake-facilitator.js";
 import {
   creditAccount,
   debitSpendableAccount,
@@ -98,6 +100,31 @@ export const X402_TEST_CONFIG = {
   testnet: true,
 } as const;
 
+/**
+ * The network-touching boot services, replaced for tests: x402 talks to the
+ * in-process facilitator (its `initialize()` otherwise fetches x402.org), and
+ * the deposit detector — whose boot tick otherwise scans a public Base RPC —
+ * is off. `createTestRelay` applies it; a test that calls
+ * `createSyncRelay({...})` directly spreads it in. The relay suite's network
+ * guard (`network-guard.setup.ts`) fails any test that reaches past it.
+ */
+export const TEST_RELAY_NETWORK = {
+  x402FacilitatorClient: fakeFacilitatorClient,
+  depositDetectorRpc: null,
+} as const satisfies Partial<SyncRelayConfig>;
+
+/**
+ * A facilitator that is never reachable — for tests that pin what the relay
+ * does when the x402 facilitator is down (a payout that never settles). Every
+ * call rejects the way a failed fetch does, in-process, without a socket.
+ */
+export const UNREACHABLE_FACILITATOR_CLIENT: unknown = {
+  getSupported: () =>
+    Promise.reject(new TypeError("fetch failed (facilitator unreachable in test)")),
+  verify: () => Promise.reject(new TypeError("fetch failed (facilitator unreachable in test)")),
+  settle: () => Promise.reject(new TypeError("fetch failed (facilitator unreachable in test)")),
+};
+
 // === Relay factory ===
 
 /**
@@ -119,6 +146,12 @@ export async function createTestRelay(overrides?: Partial<SyncRelayConfig>): Pro
     // (#907 round 2): tests that exercise it inject a fake reader and call
     // `reconcilePendingX402Settlements` directly.
     x402ChainReader: null,
+    // A test relay never reaches the network: x402 talks to the in-process
+    // facilitator (its `initialize()` otherwise fetched x402.org and, unable
+    // to, warned after the file's worker had closed — the relay suite's
+    // `EnvironmentTeardownError` flake), and the deposit detector, whose boot
+    // tick otherwise scans the public Base Sepolia RPC, is off.
+    ...TEST_RELAY_NETWORK,
     // Tests use mock WebSocket connections that never disconnect, so the
     // production 5s drain grace would be paid in full on every `close()`
     // (afterEach) — ~5s/test, making the suite slow and timer-bound (the
@@ -317,6 +350,8 @@ export function seedX402PaidTask(relay: SyncRelay, args: SeedX402PaidTaskArgs): 
     status: AgentTaskStatus.Pending,
   };
 
+  // Admission records the path agent as the task's executor (#890 r6).
+  recordTaskRoute(db, taskId, task.motebit_id);
   new TaskQueue(db).set(taskId, {
     task,
     expiresAt: now + 10 * 60 * 1000, // TASK_TTL_MS
@@ -427,6 +462,8 @@ export function seedP2pSubTask(relay: SyncRelay, args: SeedP2pSubTaskArgs): stri
     status: AgentTaskStatus.Pending,
   };
 
+  // Admission records the path agent as the task's executor (#890 r6).
+  recordTaskRoute(db, taskId, task.motebit_id);
   new TaskQueue(db).set(taskId, {
     task,
     expiresAt: now + 10 * 60 * 1000, // TASK_TTL_MS

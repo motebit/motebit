@@ -24,7 +24,7 @@ import { createLogger } from "./logger.js";
 const logger = createLogger({ service: "idempotency" });
 
 /** How long idempotency records are retained (24 hours). */
-const IDEMPOTENCY_TTL_MS = 24 * 60 * 60 * 1000;
+export const IDEMPOTENCY_TTL_MS = 24 * 60 * 60 * 1000;
 
 export interface IdempotencyRecord {
   key: string;
