@@ -34,19 +34,25 @@ export function processStripeCheckout(
 
   const store = sqliteAccountStoreFor(db);
 
-  // Idempotency: skip if this session was already processed.
-  if (store.hasDepositWithReference(motebitId, sessionId)) {
+  // Idempotency: skip if this session was already processed. The check and
+  // the credit are ONE transaction, so the dedup reads exactly what committed:
+  // a credit whose ledger row failed rolled its balance back with it, and a
+  // replay credits once.
+  const applied = db.transaction(() => {
+    if (store.hasDepositWithReference(motebitId, sessionId)) return false;
+    store.credit(
+      motebitId,
+      toMicro(amount),
+      "deposit",
+      sessionId,
+      paymentIntent ? `Stripe Checkout: ${paymentIntent}` : `Stripe Checkout: ${sessionId}`,
+    );
+    return true;
+  });
+  if (!applied) {
     logger.info("stripe.checkout.idempotent", { motebitId, sessionId });
     return false;
   }
-
-  store.credit(
-    motebitId,
-    toMicro(amount),
-    "deposit",
-    sessionId,
-    paymentIntent ? `Stripe Checkout: ${paymentIntent}` : `Stripe Checkout: ${sessionId}`,
-  );
 
   logger.info("stripe.checkout.credited", {
     motebitId,

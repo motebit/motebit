@@ -118,65 +118,77 @@ export function proxyDebitByReference(
   referenceId: string,
   description: string,
 ): ProxyDebitResult {
-  // Idempotency. The proxy debits AFTER serving the response (fire-and-forget)
-  // and retries a failed debit with the SAME reference_id — it cannot tell a
-  // dropped request from a lost 200. Re-applying would double-charge the user,
-  // so a debit whose reference_id already recorded a `fee` is a no-op replay:
-  // return success with the current balance.
-  if (hasFeeWithReference(db, motebitId, referenceId)) {
-    const balance = getAccountBalance(db, motebitId)?.balance ?? 0;
-    logger.info("proxy-debit.idempotent_replay", { motebitId, referenceId });
-    return { kind: "replay", balance };
-  }
-
-  // Spend-side debit: a worker's recent/disputed settlement earnings are
-  // under the escrow hold and MUST NOT fund their own cloud usage until they
-  // clear (true escrow — see dispute-v1.md §7.5). Deposited / cleared funds
-  // spend normally; only held earnings are blocked.
-  const newBalance = debitSpendableAccount(db, motebitId, amount, "fee", referenceId, description);
-
-  if (newBalance === null) {
-    // The turn was already served. Recording NOTHING would leave the balance
-    // untouched, so the next proxy token would carry it again and the tail
-    // would never drain (served-but-unbilled, unbounded). Instead debit what
-    // is spendable — drain to zero under the same escrow hold — and report
-    // the shortfall.
-    const spendable = getSpendableBalance(db, motebitId);
-    const drained =
-      spendable > 0
-        ? debitSpendableAccount(
-            db,
-            motebitId,
-            spendable,
-            "fee",
-            referenceId,
-            `${description} (partial: shortfall ${amount - spendable} micro)`,
-          )
-        : null;
-    if (drained !== null) {
-      logger.warn("proxy-debit.shortfall", {
-        motebitId,
-        amount,
-        debited: spendable,
-        shortfall: amount - spendable,
-      });
-      return {
-        kind: "partial",
-        balance: drained,
-        debited: spendable,
-        shortfall: amount - spendable,
-      };
+  // The reference check and every debit below are ONE transaction: the
+  // dedup reads exactly what committed, so a retry after a failed debit
+  // applies once.
+  return db.transaction((): ProxyDebitResult => {
+    // Idempotency. The proxy debits AFTER serving the response (fire-and-forget)
+    // and retries a failed debit with the SAME reference_id — it cannot tell a
+    // dropped request from a lost 200. Re-applying would double-charge the user,
+    // so a debit whose reference_id already recorded a `fee` is a no-op replay:
+    // return success with the current balance.
+    if (hasFeeWithReference(db, motebitId, referenceId)) {
+      const balance = getAccountBalance(db, motebitId)?.balance ?? 0;
+      logger.info("proxy-debit.idempotent_replay", { motebitId, referenceId });
+      return { kind: "replay", balance };
     }
-    logger.warn("proxy-debit.insufficient", { motebitId, amount });
-    return { kind: "insufficient", shortfall: amount };
-  }
 
-  logger.info("proxy-debit.success", {
-    motebitId,
-    amount,
-    balanceAfter: newBalance,
+    // Spend-side debit: a worker's recent/disputed settlement earnings are
+    // under the escrow hold and MUST NOT fund their own cloud usage until they
+    // clear (true escrow — see dispute-v1.md §7.5). Deposited / cleared funds
+    // spend normally; only held earnings are blocked.
+    const newBalance = debitSpendableAccount(
+      db,
+      motebitId,
+      amount,
+      "fee",
+      referenceId,
+      description,
+    );
+
+    if (newBalance === null) {
+      // The turn was already served. Recording NOTHING would leave the balance
+      // untouched, so the next proxy token would carry it again and the tail
+      // would never drain (served-but-unbilled, unbounded). Instead debit what
+      // is spendable — drain to zero under the same escrow hold — and report
+      // the shortfall.
+      const spendable = getSpendableBalance(db, motebitId);
+      const drained =
+        spendable > 0
+          ? debitSpendableAccount(
+              db,
+              motebitId,
+              spendable,
+              "fee",
+              referenceId,
+              `${description} (partial: shortfall ${amount - spendable} micro)`,
+            )
+          : null;
+      if (drained !== null) {
+        logger.warn("proxy-debit.shortfall", {
+          motebitId,
+          amount,
+          debited: spendable,
+          shortfall: amount - spendable,
+        });
+        return {
+          kind: "partial",
+          balance: drained,
+          debited: spendable,
+          shortfall: amount - spendable,
+        };
+      }
+      logger.warn("proxy-debit.insufficient", { motebitId, amount });
+      return { kind: "insufficient", shortfall: amount };
+    }
+
+    logger.info("proxy-debit.success", {
+      motebitId,
+      amount,
+      balanceAfter: newBalance,
+    });
+    return { kind: "debited", balance: newBalance };
   });
-  return { kind: "debited", balance: newBalance };
 }
 
 /**
@@ -189,40 +201,44 @@ export function creditSubscriptionByReference(
   args: { motebitId: string; email: string | null; customerId: string; subscriptionId: string },
 ): void {
   const { motebitId, email, customerId, subscriptionId } = args;
-  const now = Date.now();
-  const existingRow = db
-    .prepare("SELECT motebit_id FROM relay_subscriptions WHERE motebit_id = ?")
-    .get(motebitId);
+  // The subscription row, the reference check and the credit are ONE
+  // transaction, so the dedup reads exactly what committed.
+  db.transaction(() => {
+    const now = Date.now();
+    const existingRow = db
+      .prepare("SELECT motebit_id FROM relay_subscriptions WHERE motebit_id = ?")
+      .get(motebitId);
 
-  if (existingRow != null) {
-    db.prepare(
-      `UPDATE relay_subscriptions
-       SET email = COALESCE(?, email), stripe_customer_id = ?, stripe_subscription_id = ?, status = 'active', updated_at = ?
-       WHERE motebit_id = ?`,
-    ).run(email, customerId, subscriptionId, now, motebitId);
-  } else {
-    db.prepare(
-      `INSERT INTO relay_subscriptions (motebit_id, email, stripe_customer_id, stripe_subscription_id, status, created_at, updated_at)
-       VALUES (?, ?, ?, ?, 'active', ?, ?)`,
-    ).run(motebitId, email, customerId, subscriptionId, now, now);
-  }
+    if (existingRow != null) {
+      db.prepare(
+        `UPDATE relay_subscriptions
+         SET email = COALESCE(?, email), stripe_customer_id = ?, stripe_subscription_id = ?, status = 'active', updated_at = ?
+         WHERE motebit_id = ?`,
+      ).run(email, customerId, subscriptionId, now, motebitId);
+    } else {
+      db.prepare(
+        `INSERT INTO relay_subscriptions (motebit_id, email, stripe_customer_id, stripe_subscription_id, status, created_at, updated_at)
+         VALUES (?, ?, ?, ?, 'active', ?, ?)`,
+      ).run(motebitId, email, customerId, subscriptionId, now, now);
+    }
 
-  // Credit account (idempotent via reference_id)
-  const refId = `sub:${subscriptionId}:initial`;
-  const existingTxn = db
-    .prepare("SELECT transaction_id FROM relay_transactions WHERE reference_id = ?")
-    .get(refId);
-  if (existingTxn == null) {
-    getOrCreateAccount(db, motebitId);
-    creditAccount(
-      db,
-      motebitId,
-      toMicro(MONTHLY_CREDIT_USD),
-      "deposit",
-      refId,
-      `Motebit Cloud subscription — $${MONTHLY_CREDIT_USD} credits`,
-    );
-  }
+    // Credit account (idempotent via reference_id)
+    const refId = `sub:${subscriptionId}:initial`;
+    const existingTxn = db
+      .prepare("SELECT transaction_id FROM relay_transactions WHERE reference_id = ?")
+      .get(refId);
+    if (existingTxn == null) {
+      getOrCreateAccount(db, motebitId);
+      creditAccount(
+        db,
+        motebitId,
+        toMicro(MONTHLY_CREDIT_USD),
+        "deposit",
+        refId,
+        `Motebit Cloud subscription — $${MONTHLY_CREDIT_USD} credits`,
+      );
+    }
+  });
 }
 
 // ── Stripe helper ───────────────────────────────────────────────────────
