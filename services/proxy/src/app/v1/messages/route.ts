@@ -690,7 +690,13 @@ export async function POST(request: Request): Promise<Response> {
         for (;;) {
           const { done, value } = await reader.read();
           if (done) break;
-          await writer.write(value);
+          try {
+            await writer.write(value);
+          } catch {
+            // The client went away (abort/cancel errors the readable side).
+            // Stop pumping; the finally below still settles this request.
+            break;
+          }
 
           buffer += decoder.decode(value, { stream: true });
           const lines = buffer.split("\n");
@@ -700,7 +706,11 @@ export async function POST(request: Request): Promise<Response> {
           }
         }
       } finally {
-        await writer.close();
+        // After a client abort the writable side is already errored and
+        // close() rejects. That must not skip the accounting below: an
+        // unreleased slot blocks this identity until the TTL heals it, and
+        // an unrecorded cost is spend the next admission cannot see.
+        await writer.close().catch(() => {});
         const cost =
           calculateCostMicro(
             model,
@@ -727,14 +737,17 @@ export async function POST(request: Request): Promise<Response> {
             motebitId: mid,
           }),
         );
+        // Spend controls first: charge this token's local counter so the NEXT
+        // request sees the live-ish balance, then free the concurrency slot.
+        // Both happen before the relay debit, whose network round-trip and
+        // retry backoff must not hold a slot or hide this spend from an
+        // agent's immediate follow-up request.
+        await spendAdmission?.record(cost);
+        await spendAdmission?.release();
         // Awaited so retries complete before the pump task ends; the client
         // already holds the full response (writer.close() above), so this never
         // delays the user.
         if (cost > 0) await debitRelay(mid, cost, requestId);
-        // Spend controls: charge this token's local counter so the NEXT request
-        // sees the live-ish balance, then free the concurrency slot.
-        await spendAdmission?.record(cost);
-        await spendAdmission?.release();
       }
     })();
 
