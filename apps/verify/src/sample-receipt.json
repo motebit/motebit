@@ -1,0 +1,39 @@
+{
+  "task_id": "019dc500-0000-7000-a000-0000000000a1",
+  "motebit_id": "65b60673-d6ed-884b-b01c-2c222d82ada0",
+  "device_id": "sample-device",
+  "submitted_at": 1790000000000,
+  "completed_at": 1790000002000,
+  "status": "completed",
+  "result": "v2.4 adds offline receipt verification, a shareable link format for receipts, and faster key rotation.",
+  "tools_used": [
+    "delegate_to_agent"
+  ],
+  "memories_formed": 1,
+  "prompt_hash": "c28855218cf6c96a69a45b23cec4149b2209580e37c0949dffc66b22d18e4634",
+  "result_hash": "f229a4a145c4348e06c58e4f81a7916065af2ea1d81752dd64983966a9d0dc2b",
+  "delegation_receipts": [
+    {
+      "task_id": "019dc500-0000-7000-a000-0000000000c1",
+      "motebit_id": "c945cbf2-a560-8002-941e-2fb9d17054d6",
+      "device_id": "sample-worker-device",
+      "submitted_at": 1790000000400,
+      "completed_at": 1790000001100,
+      "status": "completed",
+      "result": "Fetched 3 sections from the v2.4 release notes (1,412 bytes).",
+      "tools_used": [
+        "read_url"
+      ],
+      "memories_formed": 0,
+      "prompt_hash": "5816f01d2fae33f02a376ff80e9f59b071b9cde760fd8d391c374bee89d83eae",
+      "result_hash": "cd33079b1a00b8b6e61a70784282219b0972e56576b41eec866dc2aefa13ff75",
+      "delegated_scope": "read_url",
+      "public_key": "e7f162a10bec559afea195e4dce84b69568d5d2cb0963eb446c0685e2b17f2f0",
+      "suite": "motebit-jcs-ed25519-b64-v1",
+      "signature": "o4wvTfE6ft1GMbu6AnSeKqzlcZMXOs0u0W6wcENU--pv7edfd5uUi63Wbw7BOBvYq_Hu4JAE3iEJMS9PLJ7RBg"
+    }
+  ],
+  "public_key": "79b5562e8fe654f94078b112e8a98ba7901f853ae695bed7e0e3910bad049664",
+  "suite": "motebit-jcs-ed25519-b64-v1",
+  "signature": "ie1AgSKxrrDGAOwFI70bfEuAYphg3zrttv8rctVhaYYCw_Qc7GZmrc1dH9fBS5WOROYBcCzXLwOcoABrKEgkBg"
+}
