@@ -305,6 +305,7 @@ describe("verifyReceiptDocument", () => {
     expect(v.integrity).toBe(true); // signature is still valid
     expect(v.binding).toBe("revoked"); // but the key is poisoned
     expect(v.revokedAt).toBe(1500);
+    expect(v.revocation).toBe("revoked");
   });
 
   it("a key revoked AFTER completed_at does not revoke (receipt predates revocation)", async () => {
@@ -318,6 +319,23 @@ describe("verifyReceiptDocument", () => {
       },
     });
     expect(v.binding).toBe("pinned"); // legitimately signed before the revocation
+    expect(v.revocation).toBe("revoked_after_signing");
+    expect(v.revokedAt).toBe(3000);
+  });
+
+  it("reports revocation not_revoked when the scan finds nothing, and absent when not asked", async () => {
+    const receipt = await signedReceipt({ task_id: "t-clear", motebit_id: "mote-x" });
+    const identity = identityFor("mote-x", receipt.public_key!);
+    const clear = await verifyReceiptDocument(JSON.stringify(receipt), {
+      identity,
+      revocation: {
+        relayAnchorAddress: "RelayAddr",
+        lookup: { fetch: revocationFetch(receipt.public_key!, null) },
+      },
+    });
+    expect(clear.revocation).toBe("not_revoked");
+    const unchecked = await verifyReceiptDocument(JSON.stringify(receipt), { identity });
+    expect(unchecked.revocation).toBeUndefined();
   });
 
   it("an unknown revocation status (RPC fail) does not falsely revoke", async () => {
@@ -331,6 +349,8 @@ describe("verifyReceiptDocument", () => {
       revocation: { relayAnchorAddress: "RelayAddr", lookup: { fetch: failFetch } },
     });
     expect(v.binding).toBe("pinned"); // can't prove revoked ⇒ don't claim it
+    expect(v.revocation).toBe("unknown"); // …and never claims "not revoked" either
+    expect(v.revocationDetail).toContain("rpc down");
   });
 
   it("carries a verified delegation through as a nested integrity-only result", async () => {

@@ -57,7 +57,7 @@ export function resultLabels(v: ReceiptDocumentVerification): ResultLabels {
       grade: "SOVEREIGN",
       headline: "Verified — sovereign identity",
       detail:
-        "The signature is valid and the motebit's id IS the commitment to its genesis key — so the identity binds to the key by math alone, verified right here with no relay, no chain, and no operator to trust. The strongest binding there is.",
+        "The signature is valid and the motebit_id is a hash commitment to the signing key — the id binds to the key by math alone, checked right here with no relay or operator. That is a binding, not trust: a key minted a second ago binds the same way.",
     };
   }
   if (v.binding === "anchored") {
