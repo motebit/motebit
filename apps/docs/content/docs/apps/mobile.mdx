@@ -3,7 +3,7 @@ title: Mobile App
 description: Expo setup, dual providers, voice input, goals, and MCP trust.
 ---
 
-The mobile app is a React Native + Expo surface with full parity to the desktop. Same identity, memory, and governance — different body. The creature renders via expo-gl + Three.js, and all persistence uses expo-sqlite with the same adapter pattern.
+The mobile app is a React Native + Expo surface built on the same runtime packages as the desktop: the same identity, memory, and governance code, a different body. It is built from source today — it is not distributed through the App Store or Play Store — and on-device testing is not yet complete, so treat feature parity with desktop as a design target rather than a verified state. The creature renders via expo-gl + Three.js, and all persistence uses expo-sqlite with the same adapter pattern.
 
 ## Running the mobile app
 
@@ -129,7 +129,7 @@ The settings modal has 5 tabs:
 
 | Tab | Controls |
 |---|---|
-| **Appearance** | Color preset grid (8 options: borosilicate, amber, rose, violet, cyan, ember, sage, moonlight), custom HSL sliders, theme toggle |
+| **Appearance** | Color preset grid (7 [presets](/docs/concepts/interior-color): moonlight, amber, rose, violet, cyan, ember, sage), custom hue/saturation sliders, theme toggle |
 | **Governance** | Operator mode + PIN, tool approval preset (cautious/balanced/autonomous), memory persistence threshold, reject-secrets switch, max tool calls per turn |
 | **Identity** | Motebit ID, DID, device ID, public key (copy-to-clipboard), rotate key, link device, export identity file, export all data |
 | **Intelligence** | Provider mode (Motebit Cloud / BYOK / on-device), model, BYOK vendor, on-device backend (Apple FM / MLX / local server), voice settings (TTS, auto-send, neural VAD, TTS voice) |

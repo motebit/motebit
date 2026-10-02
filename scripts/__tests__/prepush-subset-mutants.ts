@@ -228,6 +228,20 @@ export const MUTANTS: Edit[] = [
     ci("S26", "  push:\n    branches: [main]\n", "  push:\n    branches: [release]\n"),
   ),
   m(
+    "S43",
+    "ci: merge_group trigger removed (the queue's required checks never report)",
+    ci("S43", "  merge_group:\n    types: [checks_requested]\n", ""),
+  ),
+  m(
+    "S44",
+    "ci: merge_group narrowed to another activity type",
+    ci(
+      "S44",
+      "  merge_group:\n    types: [checks_requested]\n",
+      "  merge_group:\n    types: [destroyed]\n",
+    ),
+  ),
+  m(
     "S27",
     "ci: counterpart narrowed with --filter",
     ci(
