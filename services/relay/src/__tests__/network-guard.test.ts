@@ -4,12 +4,14 @@
  * non-loopback host is refused before it dials — not just `fetch`, but
  * Node's http Agent (`http.request` / `https.get`, which pass
  * `{ host, path: null }`), `ws` and `tls.connect`. Loopback and unix
- * sockets stay open. Third round: UDP (`dgram`), worker threads (refused —
- * a Worker never runs the setup file) and a loopback forward proxy
+ * sockets stay open. Third round: UDP (`dgram`), worker threads (created
+ * GUARDED — the guard is installed in every thread, so a worker's dial is
+ * refused like the main thread's) and a loopback forward proxy
  * (`CONNECT` / absolute-form over loopback; `*_PROXY` env deleted). The
  * target is TEST-NET-1 (192.0.2.1, RFC 5737): even an
  * unguarded dial reaches nobody.
  */
+import { spawnSync } from "node:child_process";
 import dgram from "node:dgram";
 import http from "node:http";
 import https from "node:https";
@@ -17,11 +19,13 @@ import net from "node:net";
 import tls from "node:tls";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
+import { createRequire } from "node:module";
 import { join } from "node:path";
-import { Worker } from "node:worker_threads";
+import { Worker, type WorkerOptions } from "node:worker_threads";
 import { describe, expect, it } from "vitest";
 import WebSocket from "ws";
-import { classifyConnect } from "./network-guard-core.mjs";
+import { guardedNodeOptions } from "./booted-entry-harness.js";
+import { CHILD_REFUSAL_MARKER, classifyConnect } from "./network-guard-core.mjs";
 
 const GUARD = (globalThis as Record<symbol, unknown>)[Symbol.for("motebit.relay.networkGuard")] as {
   drain(): string[];
@@ -170,16 +174,113 @@ describe("network guard: UDP, worker threads, loopback forward proxy", () => {
     }
   });
 
-  it("refuses creating a worker thread (it would run unguarded)", async () => {
-    let worker: Worker | undefined;
-    try {
-      expect(() => {
-        worker = new Worker("require('node:net')", { eval: true });
-      }).toThrow(/relay test reached the network: worker_threads\.Worker/);
-      expect(GUARD.drain().some((l) => l.includes("worker_threads.Worker"))).toBe(true);
-    } finally {
-      await worker?.terminate();
+  /** Run `code` (CommonJS, `eval`) in a worker; resolve with what it posts. */
+  function workerResult(code: string, options: WorkerOptions = {}): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const worker = new Worker(code, { ...options, eval: true });
+      worker.once("message", (m: unknown) => {
+        resolve(String(m));
+        void worker.terminate();
+      });
+      worker.once("error", reject);
+    });
+  }
+
+  async function drainUntil(pred: (lines: string[]) => boolean): Promise<string[]> {
+    const seen: string[] = [];
+    const deadline = Date.now() + 5_000;
+    while (Date.now() < deadline) {
+      seen.push(...GUARD.drain());
+      if (pred(seen)) return seen;
+      await new Promise((r) => setTimeout(r, 20));
     }
+    return seen;
+  }
+
+  // Each probe reports what its dial did: "refused: <message>" or "dialed".
+  const PROBES: Record<string, string> = {
+    net: `net.connect({ host: "${REMOTE}", port: 9 }).on("error", done)`,
+    http: `http.get("http://${REMOTE}:9/").on("error", done)`,
+    fetch: `fetch("http://${REMOTE}:9/").then(() => done(null), done)`,
+    "nested worker net": `new (require("node:worker_threads").Worker)(
+      'require("node:net").connect({ host: "${REMOTE}", port: 9 }).on("error", (e) => require("node:worker_threads").parentPort.postMessage(e.message))',
+      { eval: true, execArgv: [] },
+    ).on("message", (m) => done({ message: m }))`,
+  };
+
+  for (const [kind, probe] of Object.entries(PROBES)) {
+    it(`a worker thread runs GUARDED: its ${kind} dial is refused (execArgv: [] too)`, async () => {
+      const code = `
+        const net = require("node:net");
+        const http = require("node:http");
+        const { parentPort } = require("node:worker_threads");
+        const done = (e) => parentPort.postMessage(
+          e && /relay test reached the network/.test(e.message) ? "refused: " + e.message : "dialed: " + (e && e.message),
+        );
+        ${probe};
+      `;
+      // `execArgv: []` is what esbuild's service worker passes.
+      const result = await workerResult(code, { execArgv: [] });
+      expect(result).toMatch(new RegExp(`^refused: .*${REMOTE.replace(/\./g, "\\.")}`));
+      const reported = await drainUntil((l) => l.some((x) => x.includes(REMOTE)));
+      expect(reported.some((l) => l.includes(REMOTE) && l.includes("in a worker thread"))).toBe(
+        true,
+      );
+    });
+  }
+
+  it("a guarded worker still runs, and dials loopback", async () => {
+    const server = net.createServer((s) => s.end("ok"));
+    await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+    const { port } = server.address() as net.AddressInfo;
+    try {
+      const result = await workerResult(
+        `const { parentPort } = require("node:worker_threads");
+         require("node:net").connect({ host: "127.0.0.1", port: ${port} })
+           .on("data", (d) => parentPort.postMessage(String(d)))
+           .on("error", (e) => parentPort.postMessage("error: " + e.message));`,
+      );
+      expect(result).toBe("ok");
+      expect(GUARD.drain()).toEqual([]);
+    } finally {
+      server.close();
+    }
+  });
+
+  it("a guarded relay child compiles through tsx (esbuild's service worker runs guarded) and a worker's dial there is refused", () => {
+    // The source-entry rung (`tsx src/server.ts`) compiles through esbuild's
+    // `transformSync`, which starts a worker thread with `execArgv: []`;
+    // `tsx -e` takes that path every time (no transform cache).
+    const tsxCli = createRequire(import.meta.url).resolve("tsx/cli");
+    const code = `const n: number = 1;
+      new (require("node:worker_threads").Worker)(
+        'require("node:net").connect({ host: "${REMOTE}", port: 9 }).on("error", () => {})',
+        { eval: true },
+      );
+      setTimeout(() => console.log("compiled", n), 1000);`;
+    const env = { ...process.env, NODE_OPTIONS: guardedNodeOptions(process.env.NODE_OPTIONS) };
+    const run = spawnSync(process.execPath, [tsxCli, "-e", code], {
+      env,
+      encoding: "utf8",
+      timeout: 60_000,
+    });
+    const out = `${run.stdout}\n${run.stderr}`;
+    expect(run.stdout, out).toContain("compiled 1");
+    expect(out).not.toMatch(/unguarded|not a CommonJS script/);
+    const refusals = run.stderr
+      .split("\n")
+      .filter((l) => l.startsWith(CHILD_REFUSAL_MARKER) && l.includes(REMOTE));
+    expect(
+      refusals.some((l) => l.includes("in a worker thread")),
+      out,
+    ).toBe(true);
+  }, 70_000);
+
+  it("refuses an eval worker that is not a CommonJS script (its imports would precede the guard)", () => {
+    expect(
+      () => new Worker(`import net from "node:net"; net.connect(9, "${REMOTE}");`, { eval: true }),
+    ).toThrow(/relay test reached the network: worker_threads\.Worker eval code/);
+    expect(GUARD.drain().some((l) => l.includes("worker_threads.Worker"))).toBe(true);
   });
 
   it("deletes every *_PROXY env var", () => {

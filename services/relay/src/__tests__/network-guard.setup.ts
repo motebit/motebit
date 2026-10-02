@@ -24,8 +24,11 @@
  * http client writes it over a loopback socket; every `*_PROXY` env var is
  * deleted here, so the spawned children inherit none), the RESOLVED address
  * of a loopback-named connect (a `lookup` yielding a non-loopback address is
- * refused before the dial), and worker threads — `new Worker()` is REFUSED,
- * because a Worker never runs this setup file. This is a test-hygiene guard,
+ * refused before the dial), and worker threads — a Worker never runs this
+ * setup file, so `new Worker()` installs the same guard in the thread (the
+ * preload, before its code) and its refusals are reported here; a worker is
+ * guarded, not forbidden (tsx compiles through esbuild's service worker).
+ * This is a test-hygiene guard,
  * not a security boundary. The exact enforced scope and its declared limits
  * (raw hand-written proxy bytes, native addons, raw handles, DNS queries,
  * child processes the booted-entry harness did not spawn, SOCKS) are the

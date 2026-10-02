@@ -29,8 +29,14 @@
  *     line (`METHOD http(s)|ws(s)://host…`, lowercase scheme) naming a
  *     non-loopback host — i.e. `http.request` with method `CONNECT` or an
  *     absolute `path`; and every `*_PROXY` env var is deleted;
- *   - worker threads: creating a `worker_threads.Worker` is REFUSED (a
- *     Worker never runs the setup file, so it would be unguarded).
+ *   - worker threads: every `worker_threads.Worker` is created GUARDED —
+ *     the same guard is installed in the thread before its code runs
+ *     (`--import` of the preload; required ahead of `eval` code), so its
+ *     dials are refused as above and its refusals are reported to the main
+ *     thread. An `eval: true` worker whose code is not a CommonJS script (ES
+ *     module syntax, whose hoisted imports would run before the guard) is
+ *     REFUSED. (tsx compiles through esbuild's service worker; a worker is a
+ *     risk only when the guard is not installed in it.)
  * DECLARED LIMITS — not enforced, and not open rounds:
  *   - raw hand-written proxy bytes over an allowed loopback socket: the
  *     proxy check reads only the start of ONE `write` chunk in the form
@@ -51,6 +57,8 @@
 import dgram from "node:dgram";
 import { syncBuiltinESMExports } from "node:module";
 import net from "node:net";
+import { fileURLToPath } from "node:url";
+import vm from "node:vm";
 import workerThreads from "node:worker_threads";
 
 /** The line prefix a guarded relay child writes to stderr per refused dial. */
@@ -283,22 +291,91 @@ export function installProxyGuard(refuse) {
   );
 }
 
+/** The preload every guarded thread runs before its own code. */
+const GUARD_PRELOAD_URL = new URL("./network-guard.preload.mjs", import.meta.url);
+
 /**
- * Refuse `new Worker(...)`: a worker thread never runs the setup file (or a
- * `--import` preload), so it would dial unguarded. The relay tests create
- * none; one that needs a Worker must install the guard inside it first.
+ * The channel a guarded worker thread reports its refusals on. A
+ * `BroadcastChannel` reaches every thread of the process, so the MAIN
+ * thread's `refuse` records a refusal made inside a (nested) worker — the
+ * vitest setup file's violation list, or the child preload's stderr marker.
+ */
+export const WORKER_REFUSAL_CHANNEL = "motebit.relay.networkGuard.workerRefusals";
+
+/**
+ * The `Worker` constructor arguments with the guard installed in the new
+ * thread before its own code runs: `--import` of the preload in `execArgv`
+ * (the caller's list, or the inherited `process.execArgv` — so a worker that
+ * passes `execArgv: []`, like esbuild's service worker, is still guarded),
+ * and, for `eval: true` code (which `--import` does not run before), the
+ * preload required synchronously ahead of the code. `eval` code that does
+ * not compile as a CommonJS script (ES module syntax — its static imports
+ * would be hoisted above the guard) is refused: `null` is returned.
+ * @param {unknown} filename
+ * @param {Record<string, unknown> | undefined} options
+ * @returns {[unknown, Record<string, unknown>] | null}
+ */
+export function guardedWorkerArgs(filename, options) {
+  const opts = { ...(options ?? {}) };
+  const inherited = Array.isArray(opts.execArgv) ? opts.execArgv : process.execArgv;
+  opts.execArgv = [...inherited, "--import", GUARD_PRELOAD_URL.href];
+  if (opts.eval === true) {
+    try {
+      vm.compileFunction(String(filename), [
+        "exports",
+        "require",
+        "module",
+        "__filename",
+        "__dirname",
+      ]);
+    } catch {
+      return null;
+    }
+    const req = `process.getBuiltinModule("node:module").createRequire(${JSON.stringify(GUARD_PRELOAD_URL.href)})`;
+    const code = `${req}(${JSON.stringify(fileURLToPath(GUARD_PRELOAD_URL))});\n${String(filename)}`;
+    return [code, opts];
+  }
+  return [filename, opts];
+}
+
+/**
+ * Guard `new Worker(...)`: a worker thread never runs the setup file (or the
+ * process's `--import` preload when it passes its own `execArgv`), so the
+ * wrapped constructor installs the same guard in every thread it creates
+ * ({@link guardedWorkerArgs}) — the thread's dials are refused exactly as
+ * the main thread's, and its refusals reach the main thread's `refuse` over
+ * {@link WORKER_REFUSAL_CHANNEL}.
  * @param {(target: string) => Error} refuse
  */
 export function installWorkerGuard(refuse) {
-  class RefusedWorker {
-    /** @param {unknown} filename */
-    constructor(filename) {
-      throw refuse(`worker_threads.Worker ${String(filename).slice(0, 120)} (unguarded thread)`);
+  if (workerThreads.isMainThread) {
+    const channel = new BroadcastChannel(WORKER_REFUSAL_CHANNEL);
+    channel.onmessage = (/** @type {MessageEvent} */ e) => {
+      refuse(`${String(e.data)} (in a worker thread)`);
+    };
+    channel.unref();
+  }
+  const RealWorker = workerThreads.Worker;
+  class GuardedWorker extends RealWorker {
+    /**
+     * @param {string | URL} filename
+     * @param {import("node:worker_threads").WorkerOptions} [options]
+     */
+    constructor(filename, options) {
+      const args = guardedWorkerArgs(
+        filename,
+        /** @type {Record<string, unknown> | undefined} */ (options),
+      );
+      if (args === null) {
+        throw refuse(
+          `worker_threads.Worker eval code is not a CommonJS script (unguardable thread)`,
+        );
+      }
+      const [f, o] = args;
+      super(/** @type {string | URL} */ (f), o);
     }
   }
-  workerThreads.Worker = /** @type {typeof workerThreads.Worker} */ (
-    /** @type {unknown} */ (RefusedWorker)
-  );
+  workerThreads.Worker = GuardedWorker;
   // `import { Worker } from "node:worker_threads"` reads the ESM facade.
   syncBuiltinESMExports();
 }

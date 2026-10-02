@@ -10,5 +10,10 @@ export declare const PROXY_ENV_VARS: readonly string[];
 export declare function deleteProxyEnv(env: Record<string, string | undefined>): void;
 export declare function proxiedRequestTarget(chunk: unknown): string | null;
 export declare function installProxyGuard(refuse: (target: string) => Error): void;
+export declare const WORKER_REFUSAL_CHANNEL: string;
+export declare function guardedWorkerArgs(
+  filename: unknown,
+  options: Record<string, unknown> | undefined,
+): [unknown, Record<string, unknown>] | null;
 export declare function installWorkerGuard(refuse: (target: string) => Error): void;
 export declare function installNetworkGuard(refuse: (target: string) => Error): void;
