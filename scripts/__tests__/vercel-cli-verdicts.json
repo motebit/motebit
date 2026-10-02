@@ -1,0 +1,1385 @@
+{
+  "$comment": "Verdicts recorded 2026-10-02 from vercel@62.2.0's validateConfig then @vercel/routing-utils@6.6.0's getTransformedRoutes by scripts/record-vercel-cli-verdicts.ts. Edit only names/configs by hand; re-run the script for verdicts.",
+  "mutants": [
+    {
+      "name": "control: apps/web/vercel.json",
+      "config": {
+        "framework": "vite",
+        "ignoreCommand": "sh ../../scripts/vercel-ignore-build.sh --watch ../../scripts/vercel-watch/web.txt",
+        "git": {
+          "deploymentEnabled": {
+            "main": false
+          }
+        },
+        "rewrites": [
+          {
+            "source": "/terms",
+            "destination": "/terms.html"
+          },
+          {
+            "source": "/(.*)",
+            "destination": "/index.html"
+          }
+        ]
+      },
+      "cli": {
+        "ok": true
+      }
+    },
+    {
+      "name": "control: apps/docs/vercel.json",
+      "config": {
+        "ignoreCommand": "sh ../../scripts/vercel-ignore-build.sh --turbo-ignore @motebit/docs"
+      },
+      "cli": {
+        "ok": true
+      }
+    },
+    {
+      "name": "control: apps/verify/vercel.json",
+      "config": {
+        "framework": "vite",
+        "rewrites": [
+          {
+            "source": "/(.*)",
+            "destination": "/index.html"
+          }
+        ]
+      },
+      "cli": {
+        "ok": true
+      }
+    },
+    {
+      "name": "control: services/proxy/vercel.json",
+      "config": {
+        "ignoreCommand": "sh ../../scripts/vercel-ignore-build.sh --watch ../../scripts/vercel-watch/proxy.txt"
+      },
+      "cli": {
+        "ok": true
+      }
+    },
+    {
+      "name": "empty object",
+      "config": {},
+      "cli": {
+        "ok": true
+      }
+    },
+    {
+      "name": "rewrite ok",
+      "config": {
+        "rewrites": [
+          {
+            "source": "/a",
+            "destination": "/b"
+          }
+        ]
+      },
+      "cli": {
+        "ok": true
+      }
+    },
+    {
+      "name": "rewrite ok with params",
+      "config": {
+        "rewrites": [
+          {
+            "source": "/a/:id",
+            "destination": "/b/:id"
+          }
+        ]
+      },
+      "cli": {
+        "ok": true
+      }
+    },
+    {
+      "name": "rewrite ok with has",
+      "config": {
+        "rewrites": [
+          {
+            "source": "/a",
+            "destination": "/b",
+            "has": [
+              {
+                "type": "header",
+                "key": "x"
+              }
+            ]
+          }
+        ]
+      },
+      "cli": {
+        "ok": true
+      }
+    },
+    {
+      "name": "rewrite ok with missing",
+      "config": {
+        "rewrites": [
+          {
+            "source": "/a",
+            "destination": "/b",
+            "missing": [
+              {
+                "type": "cookie",
+                "key": "x"
+              }
+            ]
+          }
+        ]
+      },
+      "cli": {
+        "ok": true
+      }
+    },
+    {
+      "name": "rewrite no destination",
+      "config": {
+        "rewrites": [
+          {
+            "source": "/a"
+          }
+        ]
+      },
+      "cli": {
+        "ok": false,
+        "stage": "validateConfig",
+        "code": "INVALID_VERCEL_CONFIG",
+        "message": "Invalid vercel.json - `rewrites[0]` missing required property `destination`."
+      }
+    },
+    {
+      "name": "rewrite no source",
+      "config": {
+        "rewrites": [
+          {
+            "destination": "/a"
+          }
+        ]
+      },
+      "cli": {
+        "ok": false,
+        "stage": "validateConfig",
+        "code": "INVALID_VERCEL_CONFIG",
+        "message": "Invalid vercel.json - `rewrites[0]` missing required property `source`."
+      }
+    },
+    {
+      "name": "rewrite empty",
+      "config": {
+        "rewrites": [{}]
+      },
+      "cli": {
+        "ok": false,
+        "stage": "validateConfig",
+        "code": "INVALID_VERCEL_CONFIG",
+        "message": "Invalid vercel.json - `rewrites[0]` missing required property `source`."
+      }
+    },
+    {
+      "name": "rewrite extra key",
+      "config": {
+        "rewrites": [
+          {
+            "source": "/a",
+            "destination": "/b",
+            "x": 1
+          }
+        ]
+      },
+      "cli": {
+        "ok": false,
+        "stage": "validateConfig",
+        "code": "INVALID_VERCEL_CONFIG",
+        "message": "Invalid vercel.json - `rewrites[0]` should NOT have additional property `x`. Please remove it."
+      }
+    },
+    {
+      "name": "rewrites not array",
+      "config": {
+        "rewrites": {}
+      },
+      "cli": {
+        "ok": false,
+        "stage": "validateConfig",
+        "code": "INVALID_VERCEL_CONFIG",
+        "message": "Invalid vercel.json - `rewrites` should be array."
+      }
+    },
+    {
+      "name": "rewrite source number",
+      "config": {
+        "rewrites": [
+          {
+            "source": 1,
+            "destination": "/b"
+          }
+        ]
+      },
+      "cli": {
+        "ok": false,
+        "stage": "validateConfig",
+        "code": "INVALID_VERCEL_CONFIG",
+        "message": "Invalid vercel.json - `rewrites[0].source` should be string."
+      }
+    },
+    {
+      "name": "rewrite has bad type",
+      "config": {
+        "rewrites": [
+          {
+            "source": "/a",
+            "destination": "/b",
+            "has": [
+              {
+                "type": "nope",
+                "key": "x"
+              }
+            ]
+          }
+        ]
+      },
+      "cli": {
+        "ok": false,
+        "stage": "validateConfig",
+        "code": "INVALID_VERCEL_CONFIG",
+        "message": "Invalid vercel.json - `rewrites[0].has[0]` should NOT have additional property `key`. Please remove it."
+      }
+    },
+    {
+      "name": "rewrite source malformed regex /:(",
+      "config": {
+        "rewrites": [
+          {
+            "source": "/:(",
+            "destination": "/b"
+          }
+        ]
+      },
+      "cli": {
+        "ok": false,
+        "stage": "getTransformedRoutes",
+        "code": "invalid_rewrite",
+        "message": "Rewrite at index 0 has invalid `source` regular expression \"/:(\"."
+      }
+    },
+    {
+      "name": "rewrite source malformed regex /(a",
+      "config": {
+        "rewrites": [
+          {
+            "source": "/(a",
+            "destination": "/b"
+          }
+        ]
+      },
+      "cli": {
+        "ok": false,
+        "stage": "getTransformedRoutes",
+        "code": "invalid_rewrite",
+        "message": "Rewrite at index 0 has invalid `source` regular expression \"/(a\"."
+      }
+    },
+    {
+      "name": "rewrite destination param missing from source",
+      "config": {
+        "rewrites": [
+          {
+            "source": "/a",
+            "destination": "/b/:id"
+          }
+        ]
+      },
+      "cli": {
+        "ok": false,
+        "stage": "getTransformedRoutes",
+        "code": "invalid_rewrite",
+        "message": "Rewrite at index 0 has segment \":id\" in `destination` property but not in `source` or `has` property."
+      }
+    },
+    {
+      "name": "rewrite statusCode",
+      "config": {
+        "rewrites": [
+          {
+            "source": "/a",
+            "destination": "/b",
+            "statusCode": 200
+          }
+        ]
+      },
+      "cli": {
+        "ok": true
+      }
+    },
+    {
+      "name": "rewrite source too long",
+      "config": {
+        "rewrites": [
+          {
+            "source": "/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "destination": "/b"
+          }
+        ]
+      },
+      "cli": {
+        "ok": false,
+        "stage": "validateConfig",
+        "code": "INVALID_VERCEL_CONFIG",
+        "message": "Invalid vercel.json - `rewrites[0].source` should NOT be longer than 4096 characters."
+      }
+    },
+    {
+      "name": "redirect ok",
+      "config": {
+        "redirects": [
+          {
+            "source": "/a",
+            "destination": "/b"
+          }
+        ]
+      },
+      "cli": {
+        "ok": true
+      }
+    },
+    {
+      "name": "redirect ok permanent",
+      "config": {
+        "redirects": [
+          {
+            "source": "/a",
+            "destination": "/b",
+            "permanent": true
+          }
+        ]
+      },
+      "cli": {
+        "ok": true
+      }
+    },
+    {
+      "name": "redirect ok statusCode",
+      "config": {
+        "redirects": [
+          {
+            "source": "/a",
+            "destination": "/b",
+            "statusCode": 307
+          }
+        ]
+      },
+      "cli": {
+        "ok": true
+      }
+    },
+    {
+      "name": "redirect no destination",
+      "config": {
+        "redirects": [
+          {
+            "source": "/a"
+          }
+        ]
+      },
+      "cli": {
+        "ok": false,
+        "stage": "validateConfig",
+        "code": "INVALID_VERCEL_CONFIG",
+        "message": "Invalid vercel.json - `redirects[0]` missing required property `destination`."
+      }
+    },
+    {
+      "name": "redirect permanent string",
+      "config": {
+        "redirects": [
+          {
+            "source": "/a",
+            "destination": "/b",
+            "permanent": "yes"
+          }
+        ]
+      },
+      "cli": {
+        "ok": false,
+        "stage": "validateConfig",
+        "code": "INVALID_VERCEL_CONFIG",
+        "message": "Invalid vercel.json - `redirects[0].permanent` should be boolean."
+      }
+    },
+    {
+      "name": "redirect statusCode 200",
+      "config": {
+        "redirects": [
+          {
+            "source": "/a",
+            "destination": "/b",
+            "statusCode": 200
+          }
+        ]
+      },
+      "cli": {
+        "ok": true
+      }
+    },
+    {
+      "name": "redirect permanent and statusCode",
+      "config": {
+        "redirects": [
+          {
+            "source": "/a",
+            "destination": "/b",
+            "permanent": true,
+            "statusCode": 308
+          }
+        ]
+      },
+      "cli": {
+        "ok": false,
+        "stage": "getTransformedRoutes",
+        "code": "invalid_redirect",
+        "message": "Redirect at index 0 cannot define both `permanent` and `statusCode` properties."
+      }
+    },
+    {
+      "name": "redirect malformed source",
+      "config": {
+        "redirects": [
+          {
+            "source": "/a(",
+            "destination": "/b"
+          }
+        ]
+      },
+      "cli": {
+        "ok": false,
+        "stage": "getTransformedRoutes",
+        "code": "invalid_redirect",
+        "message": "Redirect at index 0 has invalid `source` regular expression \"/a(\"."
+      }
+    },
+    {
+      "name": "redirect destination segment not in source",
+      "config": {
+        "redirects": [
+          {
+            "source": "/a/:x",
+            "destination": "/b/:y"
+          }
+        ]
+      },
+      "cli": {
+        "ok": false,
+        "stage": "getTransformedRoutes",
+        "code": "invalid_redirect",
+        "message": "Redirect at index 0 has segment \":y\" in `destination` property but not in `source` or `has` property."
+      }
+    },
+    {
+      "name": "headers ok",
+      "config": {
+        "headers": [
+          {
+            "source": "/(.*)",
+            "headers": [
+              {
+                "key": "x-a",
+                "value": "b"
+              }
+            ]
+          }
+        ]
+      },
+      "cli": {
+        "ok": true
+      }
+    },
+    {
+      "name": "headers: \"x\"",
+      "config": {
+        "headers": "x"
+      },
+      "cli": {
+        "ok": false,
+        "stage": "validateConfig",
+        "code": "INVALID_VERCEL_CONFIG",
+        "message": "Invalid vercel.json - `headers` should be array."
+      }
+    },
+    {
+      "name": "header no headers",
+      "config": {
+        "headers": [
+          {
+            "source": "/a"
+          }
+        ]
+      },
+      "cli": {
+        "ok": false,
+        "stage": "validateConfig",
+        "code": "INVALID_VERCEL_CONFIG",
+        "message": "Invalid vercel.json - `headers[0]` missing required property `headers`."
+      }
+    },
+    {
+      "name": "header empty headers",
+      "config": {
+        "headers": [
+          {
+            "source": "/a",
+            "headers": []
+          }
+        ]
+      },
+      "cli": {
+        "ok": true
+      }
+    },
+    {
+      "name": "header entry no value",
+      "config": {
+        "headers": [
+          {
+            "source": "/a",
+            "headers": [
+              {
+                "key": "x"
+              }
+            ]
+          }
+        ]
+      },
+      "cli": {
+        "ok": false,
+        "stage": "validateConfig",
+        "code": "INVALID_VERCEL_CONFIG",
+        "message": "Invalid vercel.json - `headers[0].headers[0]` missing required property `value`."
+      }
+    },
+    {
+      "name": "header entry extra key",
+      "config": {
+        "headers": [
+          {
+            "source": "/a",
+            "headers": [
+              {
+                "key": "x",
+                "value": "y",
+                "z": 1
+              }
+            ]
+          }
+        ]
+      },
+      "cli": {
+        "ok": false,
+        "stage": "validateConfig",
+        "code": "INVALID_VERCEL_CONFIG",
+        "message": "Invalid vercel.json - `headers[0].headers[0]` should NOT have additional property `z`. Please remove it."
+      }
+    },
+    {
+      "name": "header malformed source",
+      "config": {
+        "headers": [
+          {
+            "source": "/(",
+            "headers": [
+              {
+                "key": "x-a",
+                "value": "b"
+              }
+            ]
+          }
+        ]
+      },
+      "cli": {
+        "ok": false,
+        "stage": "getTransformedRoutes",
+        "code": "invalid_header",
+        "message": "Header at index 0 has invalid `source` regular expression \"/(\"."
+      }
+    },
+    {
+      "name": "header value number",
+      "config": {
+        "headers": [
+          {
+            "source": "/a",
+            "headers": [
+              {
+                "key": "x",
+                "value": 1
+              }
+            ]
+          }
+        ]
+      },
+      "cli": {
+        "ok": false,
+        "stage": "validateConfig",
+        "code": "INVALID_VERCEL_CONFIG",
+        "message": "Invalid vercel.json - `headers[0].headers[0].value` should be string."
+      }
+    },
+    {
+      "name": "routes ok",
+      "config": {
+        "routes": [
+          {
+            "src": "/a",
+            "dest": "/b"
+          }
+        ]
+      },
+      "cli": {
+        "ok": true
+      }
+    },
+    {
+      "name": "routes handle filesystem",
+      "config": {
+        "routes": [
+          {
+            "handle": "filesystem"
+          },
+          {
+            "src": "/(.*)",
+            "dest": "/index.html"
+          }
+        ]
+      },
+      "cli": {
+        "ok": true
+      }
+    },
+    {
+      "name": "routes handle bogus",
+      "config": {
+        "routes": [
+          {
+            "handle": "bogus"
+          }
+        ]
+      },
+      "cli": {
+        "ok": false,
+        "stage": "validateConfig",
+        "code": "INVALID_VERCEL_CONFIG",
+        "message": "Invalid vercel.json - `routes[0]` should NOT have additional property `handle`. Please remove it."
+      }
+    },
+    {
+      "name": "routes no src",
+      "config": {
+        "routes": [
+          {
+            "dest": "/b"
+          }
+        ]
+      },
+      "cli": {
+        "ok": false,
+        "stage": "validateConfig",
+        "code": "INVALID_VERCEL_CONFIG",
+        "message": "Invalid vercel.json - `routes[0]` missing required property `.src`."
+      }
+    },
+    {
+      "name": "routes malformed src /a(",
+      "config": {
+        "routes": [
+          {
+            "src": "/a("
+          }
+        ]
+      },
+      "cli": {
+        "ok": false,
+        "stage": "getTransformedRoutes",
+        "code": "invalid_route",
+        "message": "Route at index 0 has invalid `src`/`source` regular expression \"^/a($\"."
+      }
+    },
+    {
+      "name": "routes malformed src [",
+      "config": {
+        "routes": [
+          {
+            "src": "/["
+          }
+        ]
+      },
+      "cli": {
+        "ok": false,
+        "stage": "getTransformedRoutes",
+        "code": "invalid_route",
+        "message": "Route at index 0 has invalid `src`/`source` regular expression \"^/[$\"."
+      }
+    },
+    {
+      "name": "routes extra key",
+      "config": {
+        "routes": [
+          {
+            "src": "/a",
+            "zz": 1
+          }
+        ]
+      },
+      "cli": {
+        "ok": false,
+        "stage": "validateConfig",
+        "code": "INVALID_VERCEL_CONFIG",
+        "message": "Invalid vercel.json - `routes[0]` should NOT have additional property `zz`. Please remove it."
+      }
+    },
+    {
+      "name": "routes status string",
+      "config": {
+        "routes": [
+          {
+            "src": "/a",
+            "status": "200"
+          }
+        ]
+      },
+      "cli": {
+        "ok": false,
+        "stage": "validateConfig",
+        "code": "INVALID_VERCEL_CONFIG",
+        "message": "Invalid vercel.json - `routes[0].status` should be integer."
+      }
+    },
+    {
+      "name": "routes with rewrites",
+      "config": {
+        "routes": [
+          {
+            "src": "/a"
+          }
+        ],
+        "rewrites": [
+          {
+            "source": "/a",
+            "destination": "/b"
+          }
+        ]
+      },
+      "cli": {
+        "ok": true
+      }
+    },
+    {
+      "name": "routes with cleanUrls",
+      "config": {
+        "routes": [
+          {
+            "src": "/a"
+          }
+        ],
+        "cleanUrls": true
+      },
+      "cli": {
+        "ok": true
+      }
+    },
+    {
+      "name": "cleanUrls true",
+      "config": {
+        "cleanUrls": true
+      },
+      "cli": {
+        "ok": true
+      }
+    },
+    {
+      "name": "cleanUrls 'yes'",
+      "config": {
+        "cleanUrls": "yes"
+      },
+      "cli": {
+        "ok": false,
+        "stage": "validateConfig",
+        "code": "INVALID_VERCEL_CONFIG",
+        "message": "Invalid vercel.json - `cleanUrls` should be boolean."
+      }
+    },
+    {
+      "name": "trailingSlash false",
+      "config": {
+        "trailingSlash": false
+      },
+      "cli": {
+        "ok": true
+      }
+    },
+    {
+      "name": "trailingSlash 1",
+      "config": {
+        "trailingSlash": 1
+      },
+      "cli": {
+        "ok": false,
+        "stage": "validateConfig",
+        "code": "INVALID_VERCEL_CONFIG",
+        "message": "Invalid vercel.json - `trailingSlash` should be boolean."
+      }
+    },
+    {
+      "name": "functions ok",
+      "config": {
+        "functions": {
+          "api/*.js": {
+            "memory": 1024,
+            "maxDuration": 10
+          }
+        }
+      },
+      "cli": {
+        "ok": true
+      }
+    },
+    {
+      "name": "functions empty object",
+      "config": {
+        "functions": {}
+      },
+      "cli": {
+        "ok": false,
+        "stage": "validateConfig",
+        "code": "INVALID_VERCEL_CONFIG",
+        "message": "Invalid vercel.json - `functions` should NOT have fewer than 1 properties."
+      }
+    },
+    {
+      "name": "functions memory too low",
+      "config": {
+        "functions": {
+          "api/*.js": {
+            "memory": 64
+          }
+        }
+      },
+      "cli": {
+        "ok": false,
+        "stage": "validateConfig",
+        "code": "INVALID_VERCEL_CONFIG",
+        "message": "Invalid vercel.json - `functions['api/*.js'].memory` should be >= 128."
+      }
+    },
+    {
+      "name": "functions memory too high",
+      "config": {
+        "functions": {
+          "api/*.js": {
+            "memory": 20000
+          }
+        }
+      },
+      "cli": {
+        "ok": false,
+        "stage": "validateConfig",
+        "code": "INVALID_VERCEL_CONFIG",
+        "message": "Invalid vercel.json - `functions['api/*.js'].memory` should be <= 10240."
+      }
+    },
+    {
+      "name": "functions maxDuration 0",
+      "config": {
+        "functions": {
+          "api/*.js": {
+            "maxDuration": 0
+          }
+        }
+      },
+      "cli": {
+        "ok": false,
+        "stage": "validateConfig",
+        "code": "INVALID_VERCEL_CONFIG",
+        "message": "Invalid vercel.json - `functions['api/*.js'].maxDuration` should be >= 1."
+      }
+    },
+    {
+      "name": "functions maxDuration max",
+      "config": {
+        "functions": {
+          "api/*.js": {
+            "maxDuration": "max"
+          }
+        }
+      },
+      "cli": {
+        "ok": true
+      }
+    },
+    {
+      "name": "functions maxDuration 1.5",
+      "config": {
+        "functions": {
+          "api/*.js": {
+            "maxDuration": 1.5
+          }
+        }
+      },
+      "cli": {
+        "ok": false,
+        "stage": "validateConfig",
+        "code": "INVALID_VERCEL_CONFIG",
+        "message": "Invalid vercel.json - `functions['api/*.js'].maxDuration` should be integer."
+      }
+    },
+    {
+      "name": "functions extra key",
+      "config": {
+        "functions": {
+          "api/*.js": {
+            "nope": 1
+          }
+        }
+      },
+      "cli": {
+        "ok": false,
+        "stage": "validateConfig",
+        "code": "INVALID_VERCEL_CONFIG",
+        "message": "Invalid vercel.json - `functions['api/*.js']` should NOT have additional property `nope`. Please remove it."
+      }
+    },
+    {
+      "name": "functions architecture bogus",
+      "config": {
+        "functions": {
+          "api/*.js": {
+            "architecture": "mips"
+          }
+        }
+      },
+      "cli": {
+        "ok": false,
+        "stage": "validateConfig",
+        "code": "INVALID_VERCEL_CONFIG",
+        "message": "Invalid vercel.json - `functions['api/*.js'].architecture` should be equal to one of the allowed values."
+      }
+    },
+    {
+      "name": "functions regions ok",
+      "config": {
+        "functions": {
+          "api/*.js": {
+            "regions": ["iad1"]
+          }
+        }
+      },
+      "cli": {
+        "ok": true
+      }
+    },
+    {
+      "name": "functions affinity strict one region",
+      "config": {
+        "functions": {
+          "api/*.js": {
+            "regions": ["iad1"],
+            "affinity": {
+              "mode": "strict"
+            }
+          }
+        }
+      },
+      "cli": {
+        "ok": true
+      }
+    },
+    {
+      "name": "functions affinity strict no regions",
+      "config": {
+        "functions": {
+          "api/*.js": {
+            "affinity": {
+              "mode": "strict"
+            }
+          }
+        }
+      },
+      "cli": {
+        "ok": true
+      }
+    },
+    {
+      "name": "functions affinity strict two regions",
+      "config": {
+        "functions": {
+          "api/*.js": {
+            "regions": ["iad1", "sfo1"],
+            "affinity": {
+              "mode": "strict"
+            }
+          }
+        }
+      },
+      "cli": {
+        "ok": false,
+        "stage": "validateConfig",
+        "code": "INVALID_FUNCTION_AFFINITY_REGIONS",
+        "message": "Function affinity mode \"strict\" requires at most one statically configured region. Update `functions[\"api/*.js\"].regions` to contain a single region."
+      }
+    },
+    {
+      "name": "functions affinity strict region all",
+      "config": {
+        "functions": {
+          "api/*.js": {
+            "regions": ["all"],
+            "affinity": {
+              "mode": "strict"
+            }
+          }
+        }
+      },
+      "cli": {
+        "ok": false,
+        "stage": "validateConfig",
+        "code": "INVALID_FUNCTION_AFFINITY_REGIONS",
+        "message": "Function affinity mode \"strict\" requires at most one statically configured region. Update `functions[\"api/*.js\"].regions` to contain a single region."
+      }
+    },
+    {
+      "name": "functions affinity strict duplicate region",
+      "config": {
+        "functions": {
+          "api/*.js": {
+            "regions": ["iad1", "iad1"],
+            "affinity": {
+              "mode": "strict"
+            }
+          }
+        }
+      },
+      "cli": {
+        "ok": true
+      }
+    },
+    {
+      "name": "functions affinity strict second pattern",
+      "config": {
+        "functions": {
+          "api/a.js": {
+            "regions": ["iad1"]
+          },
+          "api/b.js": {
+            "regions": ["iad1", "sfo1"],
+            "affinity": {
+              "mode": "strict"
+            }
+          }
+        }
+      },
+      "cli": {
+        "ok": false,
+        "stage": "validateConfig",
+        "code": "INVALID_FUNCTION_AFFINITY_REGIONS",
+        "message": "Function affinity mode \"strict\" requires at most one statically configured region. Update `functions[\"api/b.js\"].regions` to contain a single region."
+      }
+    },
+    {
+      "name": "functions affinity loose",
+      "config": {
+        "functions": {
+          "api/*.js": {
+            "affinity": {
+              "mode": "loose"
+            }
+          }
+        }
+      },
+      "cli": {
+        "ok": false,
+        "stage": "validateConfig",
+        "code": "INVALID_VERCEL_CONFIG",
+        "message": "Invalid vercel.json - `functions['api/*.js'].affinity.mode` should be equal to constant."
+      }
+    },
+    {
+      "name": "functions affinity no mode",
+      "config": {
+        "functions": {
+          "api/*.js": {
+            "affinity": {}
+          }
+        }
+      },
+      "cli": {
+        "ok": false,
+        "stage": "validateConfig",
+        "code": "INVALID_VERCEL_CONFIG",
+        "message": "Invalid vercel.json - `functions['api/*.js'].affinity` missing required property `mode`."
+      }
+    },
+    {
+      "name": "functions with builds",
+      "config": {
+        "functions": {
+          "api/*.js": {
+            "memory": 1024
+          }
+        },
+        "builds": [
+          {
+            "use": "@vercel/node"
+          }
+        ]
+      },
+      "cli": {
+        "ok": false,
+        "stage": "validateConfig",
+        "code": "FUNCTIONS_AND_BUILDS",
+        "message": "The `functions` property cannot be used in conjunction with the `builds` property. Please remove one of them."
+      }
+    },
+    {
+      "name": "functions {} with builds []",
+      "config": {
+        "functions": {},
+        "builds": []
+      },
+      "cli": {
+        "ok": false,
+        "stage": "validateConfig",
+        "code": "INVALID_VERCEL_CONFIG",
+        "message": "Invalid vercel.json - `functions` should NOT have fewer than 1 properties."
+      }
+    },
+    {
+      "name": "functions key too long",
+      "config": {
+        "functions": {
+          "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa": {
+            "memory": 1024
+          }
+        }
+      },
+      "cli": {
+        "ok": false,
+        "stage": "validateConfig",
+        "code": "INVALID_VERCEL_CONFIG",
+        "message": "Invalid vercel.json - `functions` should NOT have additional property `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`. Please remove it."
+      }
+    },
+    {
+      "name": "builds ok",
+      "config": {
+        "builds": [
+          {
+            "src": "a.js",
+            "use": "@vercel/node"
+          }
+        ]
+      },
+      "cli": {
+        "ok": true
+      }
+    },
+    {
+      "name": "builds no use",
+      "config": {
+        "builds": [
+          {
+            "src": "a.js"
+          }
+        ]
+      },
+      "cli": {
+        "ok": false,
+        "stage": "validateConfig",
+        "code": "INVALID_VERCEL_CONFIG",
+        "message": "Invalid vercel.json - `builds[0]` missing required property `use`."
+      }
+    },
+    {
+      "name": "builds use too short",
+      "config": {
+        "builds": [
+          {
+            "use": "ab"
+          }
+        ]
+      },
+      "cli": {
+        "ok": false,
+        "stage": "validateConfig",
+        "code": "INVALID_VERCEL_CONFIG",
+        "message": "Invalid vercel.json - `builds[0].use` should NOT be shorter than 3 characters."
+      }
+    },
+    {
+      "name": "builds extra key",
+      "config": {
+        "builds": [
+          {
+            "use": "@vercel/node",
+            "x": 1
+          }
+        ]
+      },
+      "cli": {
+        "ok": false,
+        "stage": "validateConfig",
+        "code": "INVALID_VERCEL_CONFIG",
+        "message": "Invalid vercel.json - `builds[0]` should NOT have additional property `x`. Please remove it."
+      }
+    },
+    {
+      "name": "crons valid",
+      "config": {
+        "crons": [
+          {
+            "path": "/api/c",
+            "schedule": "0 0 * * *"
+          }
+        ]
+      },
+      "cli": {
+        "ok": true
+      }
+    },
+    {
+      "name": "crons invalid",
+      "config": {
+        "crons": [
+          {
+            "path": 1
+          }
+        ]
+      },
+      "cli": {
+        "ok": false,
+        "stage": "validateConfig",
+        "code": "INVALID_VERCEL_CONFIG",
+        "message": "Invalid vercel.json - `crons[0].path` should be string."
+      }
+    },
+    {
+      "name": "images valid",
+      "config": {
+        "images": {
+          "sizes": [256]
+        }
+      },
+      "cli": {
+        "ok": true
+      }
+    },
+    {
+      "name": "images invalid",
+      "config": {
+        "images": {}
+      },
+      "cli": {
+        "ok": false,
+        "stage": "validateConfig",
+        "code": "INVALID_VERCEL_CONFIG",
+        "message": "Invalid vercel.json - `images` missing required property `sizes`."
+      }
+    },
+    {
+      "name": "bunVersion valid",
+      "config": {
+        "bunVersion": "1.x"
+      },
+      "cli": {
+        "ok": true
+      }
+    },
+    {
+      "name": "ignoreCommand 257 chars",
+      "config": {
+        "ignoreCommand": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+      },
+      "cli": {
+        "ok": true
+      }
+    },
+    {
+      "name": "ignoreCommand 3000 chars",
+      "config": {
+        "ignoreCommand": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+      },
+      "cli": {
+        "ok": true
+      }
+    },
+    {
+      "name": "regions: 5",
+      "config": {
+        "regions": 5
+      },
+      "cli": {
+        "ok": true
+      }
+    },
+    {
+      "name": "framework: 1",
+      "config": {
+        "framework": 1
+      },
+      "cli": {
+        "ok": true
+      }
+    },
+    {
+      "name": "unknown top-level key",
+      "config": {
+        "ignoreComand": "x"
+      },
+      "cli": {
+        "ok": true
+      }
+    },
+    {
+      "name": "git.deploymentEnabled 'no'",
+      "config": {
+        "git": {
+          "deploymentEnabled": "no"
+        }
+      },
+      "cli": {
+        "ok": true
+      }
+    },
+    {
+      "name": "git.deploymentEnabled main false",
+      "config": {
+        "git": {
+          "deploymentEnabled": {
+            "main": false
+          }
+        }
+      },
+      "cli": {
+        "ok": true
+      }
+    },
+    {
+      "name": "buildCommand null",
+      "config": {
+        "buildCommand": null
+      },
+      "cli": {
+        "ok": true
+      }
+    },
+    {
+      "name": "outputDirectory 1",
+      "config": {
+        "outputDirectory": 1
+      },
+      "cli": {
+        "ok": true
+      }
+    }
+  ]
+}

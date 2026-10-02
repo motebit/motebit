@@ -538,6 +538,82 @@ describe("every vercel.json validates under Vercel's own schema + the motebit ti
     expect(v[0]).toMatch(why);
   });
 
+  /**
+   * Cold review (vercel@62.2.0's validateConfig run side by side): schema-valid
+   * configs the CLI still refuses — its post-schema affinity check — and that
+   * `vercel build` refuses when getTransformedRoutes compiles the routes.
+   */
+  const REFUSED_AFTER_SCHEMA: [string, Record<string, unknown>, RegExp][] = [
+    [
+      'functions affinity "strict" with two regions',
+      { functions: { "api/*.js": { regions: ["iad1", "sfo1"], affinity: { mode: "strict" } } } },
+      /INVALID_FUNCTION_AFFINITY_REGIONS/,
+    ],
+    [
+      'functions affinity "strict" with regions ["all"]',
+      { functions: { "api/*.js": { regions: ["all"], affinity: { mode: "strict" } } } },
+      /INVALID_FUNCTION_AFFINITY_REGIONS/,
+    ],
+    [
+      "functions with builds",
+      { functions: { "api/*.js": { memory: 1024 } }, builds: [{ use: "@vercel/node" }] },
+      /FUNCTIONS_AND_BUILDS/,
+    ],
+    [
+      'a rewrite source "/:(" (not a regex)',
+      { rewrites: [{ source: "/:(", destination: "/b" }] },
+      /getTransformedRoutes invalid_rewrite/,
+    ],
+    [
+      'a route src "/a(" (not a regex)',
+      { routes: [{ src: "/a(" }] },
+      /getTransformedRoutes invalid_route/,
+    ],
+    [
+      'a header source "/(" (not a regex)',
+      { headers: [{ source: "/(", headers: [{ key: "x-a", value: "b" }] }] },
+      /getTransformedRoutes invalid_header/,
+    ],
+    [
+      'a redirect source "/a(" (not a regex)',
+      { redirects: [{ source: "/a(", destination: "/b" }] },
+      /getTransformedRoutes invalid_redirect/,
+    ],
+  ];
+
+  it.each(REFUSED_AFTER_SCHEMA)("RED (Vercel, after its schema): %s", (_name, extra, why) => {
+    const v = collectVercelViolations(synthetic(FULL, extra), {}).violations;
+    expect(v, v.join("\n")).toHaveLength(1);
+    expect(v[0]).toMatch(/Vercel's own checks/);
+    expect(v[0]).toMatch(why);
+  });
+
+  it.each<[string, Record<string, unknown>]>([
+    [
+      'affinity "strict" with one region',
+      { functions: { "api/*.js": { regions: ["iad1"], affinity: { mode: "strict" } } } },
+    ],
+    [
+      'affinity "strict" with a duplicated region',
+      { functions: { "api/*.js": { regions: ["iad1", "iad1"], affinity: { mode: "strict" } } } },
+    ],
+    ["a rewrite with a named param", { rewrites: [{ source: "/a/:id", destination: "/b/:id" }] }],
+  ])("control (the CLI accepts it): %s", (_name, extra) => {
+    expect(collectVercelViolations(synthetic(FULL, extra), {}).violations).toEqual([]);
+  });
+
+  it("labels a key it does not mirror as motebit's fail-closed rule, never as a Vercel refusal", () => {
+    // vercel@62.2.0 accepts this config (scripts/__tests__/vercel-cli-verdicts.json "crons valid").
+    const v = collectVercelViolations(
+      synthetic(FULL, { crons: [{ path: "/api/c", schedule: "0 0 * * *" }] }),
+      {},
+    ).violations;
+    expect(v, v.join("\n")).toHaveLength(1);
+    expect(v[0]).toMatch(/motebit's fail-closed rule, not by Vercel/);
+    expect(v[0]).toMatch(/crons/);
+    expect(v[0]).not.toMatch(/fails Vercel|refuse this config/);
+  });
+
   it("control: a valid rewrite and header set is green", () => {
     const v = collectVercelViolations(
       synthetic(FULL, {

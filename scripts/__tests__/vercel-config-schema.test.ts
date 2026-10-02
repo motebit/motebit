@@ -17,6 +17,7 @@ import {
   BUILD_UTILS_EXPORTS,
   buildVercelConfigSchema,
   CLI_INLINE_KEYS,
+  CLI_POST_SCHEMA_CHECKS,
   compileVercelConfigValidator,
   IGNORE_COMMAND_MAX,
   ROUTING_UTILS_EXPORTS,
@@ -88,10 +89,14 @@ describe("compileVercelConfigValidator", () => {
     ["services/proxy/vercel.json"],
   ])("control: committed %s passes both layers", (f) => {
     const cfg = JSON.parse(readFileSync(join(REPO, f), "utf8")) as unknown;
-    expect(validate(cfg)).toEqual({ vercel: [], motebit: [] });
+    expect(validate(cfg)).toEqual({ vercel: [], unmirrored: [], motebit: [] });
   });
 
-  it.each<[string, unknown, "vercel" | "motebit", RegExp]>([
+  it("is compiled once per process (every caller shares one validator)", () => {
+    expect(compileVercelConfigValidator()).toBe(validate);
+  });
+
+  it.each<[string, unknown, "vercel" | "unmirrored" | "motebit", RegExp]>([
     ["rewrite with no destination", { rewrites: [{ source: "/a" }] }, "vercel", /destination/],
     ["empty rewrite", { rewrites: [{}] }, "vercel", /source/],
     [
@@ -103,8 +108,38 @@ describe("compileVercelConfigValidator", () => {
     ['"headers": "x"', { headers: "x" }, "vercel", /headers must be array/],
     ["redirect with no destination", { redirects: [{ source: "/a" }] }, "vercel", /destination/],
     ["cleanUrls: 'yes'", { cleanUrls: "yes" }, "vercel", /cleanUrls must be boolean/],
-    ["functions with builds", { functions: {}, builds: [] }, "vercel", /FUNCTIONS_AND_BUILDS/],
-    ["a CLI-inline key it does not mirror", { crons: [] }, "vercel", /crons.*does not mirror/],
+    [
+      "functions with builds",
+      { functions: { "api/*.js": { memory: 1024 } }, builds: [] },
+      "vercel",
+      /FUNCTIONS_AND_BUILDS/,
+    ],
+    [
+      'functions affinity "strict" with two regions',
+      { functions: { "api/*.js": { regions: ["iad1", "sfo1"], affinity: { mode: "strict" } } } },
+      "vercel",
+      /INVALID_FUNCTION_AFFINITY_REGIONS/,
+    ],
+    [
+      'functions affinity "strict" with regions ["all"]',
+      { functions: { "api/*.js": { regions: ["all"], affinity: { mode: "strict" } } } },
+      "vercel",
+      /INVALID_FUNCTION_AFFINITY_REGIONS/,
+    ],
+    [
+      'rewrite source "/:("',
+      { rewrites: [{ source: "/:(", destination: "/b" }] },
+      "vercel",
+      /invalid `source` regular expression.*invalid_rewrite/,
+    ],
+    ['routes src "/a("', { routes: [{ src: "/a(" }] }, "vercel", /invalid_route/],
+    [
+      "redirect destination segment not in source",
+      { redirects: [{ source: "/a/:x", destination: "/b/:y" }] },
+      "vercel",
+      /invalid_redirect/,
+    ],
+    ["a CLI-inline key it does not mirror", { crons: [] }, "unmirrored", /crons.*does not mirror/],
     [
       "ignoreCommand of 257 chars",
       { ignoreCommand: "x".repeat(IGNORE_COMMAND_MAX + 1) },
@@ -123,5 +158,43 @@ describe("compileVercelConfigValidator", () => {
   ])("RED: %s", (_n, cfg, layer, why) => {
     const r = validate(cfg);
     expect(r[layer].join("\n")).toMatch(why);
+  });
+});
+
+/**
+ * Differential: every mutant in vercel-cli-verdicts.json carries the verdict
+ * the REAL vercel CLI gave it (validateConfig, then getTransformedRoutes),
+ * recorded by scripts/record-vercel-cli-verdicts.ts — re-record per its
+ * header. The validator's Vercel layer must agree on every one: refuse
+ * exactly what the CLI refuses. Keys it does not mirror may add an
+ * `unmirrored` refusal (motebit's own), never a `vercel` one the CLI lacks.
+ */
+describe("agrees with vercel@62.2.0 on every recorded mutant", () => {
+  const corpus = JSON.parse(
+    readFileSync(join(REPO, "scripts/__tests__/vercel-cli-verdicts.json"), "utf8"),
+  ) as {
+    $comment: string;
+    mutants: { name: string; config: unknown; cli: { ok: boolean; code?: string } }[];
+  };
+  const validate = compileVercelConfigValidator();
+
+  it("was recorded from the CLI release this file mirrors, and covers every mirrored post-schema check", () => {
+    expect(corpus.$comment).toContain(VERCEL_SCHEMA_SOURCE.cli);
+    expect(corpus.mutants.length).toBeGreaterThanOrEqual(80);
+    const codes = new Set(corpus.mutants.map((m) => m.cli.code));
+    for (const [code, how] of Object.entries(CLI_POST_SCHEMA_CHECKS))
+      if (how.startsWith("mirrored")) expect(codes, code).toContain(code);
+    for (const c of ["invalid_rewrite", "invalid_redirect", "invalid_header", "invalid_route"])
+      expect(codes, c).toContain(c);
+  });
+
+  it.each(corpus.mutants.map((m) => [m.name, m] as const))("%s", (_name, m) => {
+    const r = validate(structuredClone(m.config));
+    if (m.cli.ok) expect(r.vercel, "the CLI accepts this").toEqual([]);
+    else
+      expect(
+        [...r.vercel, ...r.unmirrored].length,
+        `the CLI refuses this (${m.cli.code ?? ""})`,
+      ).toBeGreaterThan(0);
   });
 });
