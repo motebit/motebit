@@ -45,7 +45,28 @@ import type { ExecutionReceipt, MotebitId, DeviceId } from "@motebit/sdk";
 import { createTestRelay, createAgent, JSON_AUTH, seedBalance } from "./test-helpers.js";
 import { recordTaskRoute } from "../task-routing.js";
 import { TaskQueue } from "../task-queue.js";
-import { getAccountBalance } from "../accounts.js";
+import { creditAccount, getAccountBalance } from "../accounts.js";
+import { moveAllocationMoney, openAllocation } from "../allocation-escrow.js";
+
+/** A funded allocation for an origin task: the delegator's hold, through the escrow. */
+function fundOriginEscrow(relay: SyncRelay, taskId: string, worker: string, amount: number): void {
+  const db = relay.moteDb.db;
+  creditAccount(db, "liveness-delegator", amount, "deposit", `dep-${taskId}`, "deposit");
+  openAllocation(db, {
+    allocationId: `x402-${taskId}`,
+    taskId,
+    worker,
+    amountLocked: amount,
+    createdAt: Date.now(),
+  });
+  moveAllocationMoney(db, {
+    kind: "hold",
+    allocationId: `x402-${taskId}`,
+    amount,
+    party: "liveness-delegator",
+    description: "hold",
+  });
+}
 
 // ── W's MCP endpoint (an ephemeral port): never answers a presentation ──
 let PORT = 0;
@@ -522,6 +543,7 @@ describe("#890 r10 (3) restart recovery — the boot sweep settles a claim a cra
       w.q.update(S, (e) => {
         e.price_snapshot = 1_000_000;
       });
+      fundOriginEscrow(w.relay, S, w.W.id, 1_000_000);
       recordTaskRoute(w.relay.moteDb.db, S, w.W.id, peer.id);
       const R = await receiptBy(w.W, S, "completed");
       crash(w, S, true);
@@ -643,6 +665,9 @@ describe("#890 r10 (3) the executor relay redelivers its federation result until
       A.q.update(S, (e) => {
         e.price_snapshot = 1_000_000;
       });
+      // The origin's escrow funds the forward (allocation-escrow.ts: a relay
+      // never forwards money it does not hold).
+      fundOriginEscrow(A.relay, S, B.W.id, 1_000_000);
       recordTaskRoute(A.relay.moteDb.db, S, B.W.id, bId);
       await inboundForward(B, aAtB, S);
       // W answers at B; B's one send finds the origin down.

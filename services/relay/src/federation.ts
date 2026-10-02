@@ -7,6 +7,7 @@
  *
  * All 11 federation endpoints registered here.
  */
+import { markForwardDelivered } from "./allocation-escrow.js";
 import type { Hono } from "hono";
 import { checkOutboundUrl } from "@motebit/sdk";
 import type { OutboundUrlOptions } from "@motebit/sdk";
@@ -309,7 +310,14 @@ export function createFederationTables(db: DatabaseDriver): void {
       -- the record reproduces it — the section 9.1 verbatim-artifact convergence.
       -- NULL for any pre-PR6 row (skipped by the anchor loop, which requires it).
       -- Migration v29 adds this to existing prod DBs; a fresh DB gets it here.
-      record_json TEXT
+      record_json TEXT,
+      -- Allocation escrow (allocation-escrow.ts, migration v55): a SENT forward
+      -- (downstream_relay_id set) is stamped with the origin allocation whose
+      -- escrow it moved, and carries an explicit lifecycle — 'pending' until the
+      -- peer acknowledges ('delivered') or retries are exhausted ('failed', the
+      -- gross returned to escrow). Inbound (final-hop) rows: allocation_id NULL.
+      allocation_id TEXT,
+      status TEXT NOT NULL DEFAULT 'delivered'
     );
     CREATE INDEX IF NOT EXISTS idx_fed_settlements_task ON relay_federation_settlements(task_id);
     CREATE UNIQUE INDEX IF NOT EXISTS idx_fed_settlements_dedup ON relay_federation_settlements(task_id, upstream_relay_id);
@@ -1022,10 +1030,24 @@ export async function processSettlementRetries(
         .get(retry.peer_relay_id) as { endpoint_url: string } | undefined;
 
       if (!peerInfo) {
-        // Peer no longer exists — mark failed
+        // Peer no longer exists — the forward can never be delivered: mark the
+        // retry failed and hand it to the exhaustion path, which turns the
+        // forward `failed` and refunds the escrow (it used to stop here, the
+        // forward counted as moved forever).
         db.prepare(
           "UPDATE relay_settlement_retries SET status = 'failed', last_error = ? WHERE retry_id = ?",
         ).run("Peer relay no longer exists", retry.retry_id);
+        if (onRetryExhausted) {
+          try {
+            onRetryExhausted(retry);
+          } catch (refundErr) {
+            logger.warn("settlement.retry.refund_failed", {
+              retryId: retry.retry_id,
+              taskId: retry.task_id,
+              error: refundErr instanceof Error ? refundErr.message : String(refundErr),
+            });
+          }
+        }
         continue;
       }
 
@@ -1040,9 +1062,25 @@ export async function processSettlementRetries(
       });
 
       if (resp.ok) {
-        db.prepare(
-          "UPDATE relay_settlement_retries SET status = 'completed' WHERE retry_id = ?",
-        ).run(retry.retry_id);
+        // The peer acknowledged: the retry completes and the forward's
+        // lifecycle moves `pending → delivered` in one transaction.
+        db.exec("BEGIN");
+        try {
+          db.prepare(
+            "UPDATE relay_settlement_retries SET status = 'completed' WHERE retry_id = ?",
+          ).run(retry.retry_id);
+          markForwardDelivered(db, retry.settlement_id);
+          db.exec("COMMIT");
+        } catch (err) {
+          // Never count an acknowledged delivery as a failed attempt (that
+          // path can end in a refund of money the peer holds): the retry stays
+          // pending and is re-delivered — the peer dedupes on (task, origin).
+          db.exec("ROLLBACK");
+          logger.error("settlement.retry.ack_record_failed", {
+            retryId: retry.retry_id,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
       } else {
         throw new FederationError(
           "FEDERATION_FORWARD_FAILED",
