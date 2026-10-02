@@ -10,6 +10,7 @@ import {
   upperBoundUsage,
   ACCOUNTING_TIMINGS,
   INPUT_BOUND_HEADROOM_TOKENS,
+  accountingTailWorstCaseMs,
   type StreamAccountingOptions,
 } from "../stream-accounting";
 import { calculateCostMicro } from "../../../../validation";
@@ -78,17 +79,19 @@ describe("upperBoundUsage", () => {
     expect(b).toMatchObject({ input: 1_000, cacheRead: 30, cacheCreation: 5, output: 2_000 });
   });
 
-  it("bounds unreported input by request bytes + headroom (Anthropic: at the 1.25× cache-write rate)", () => {
+  it("bounds unreported input by request bytes + headroom (Anthropic: at the 2× 1-hour cache-write rate)", () => {
     const zero = { input: 0, output: 0, cacheRead: 0, cacheCreation: 0 };
     const bound = BODY_BYTES + INPUT_BOUND_HEADROOM_TOKENS;
     expect(upperBoundUsage("anthropic", zero, BODY, 2_000)).toMatchObject({
       input: 0,
-      cacheCreation: bound,
+      cacheCreation: 0,
+      cacheCreation1h: bound,
       output: 2_000,
     });
     expect(upperBoundUsage("openai", zero, BODY, 2_000)).toMatchObject({
       input: bound,
       cacheCreation: 0,
+      cacheCreation1h: 0,
       output: 2_000,
     });
   });
@@ -212,6 +215,92 @@ describe("meterStream — bounded, logged estimates", () => {
       expect(r.debits).toEqual([calculateCostMicro("claude-sonnet-4-6", 10, 3, 0, 0)]);
     } finally {
       ACCOUNTING_TIMINGS.kvTimeoutMs = saved;
+    }
+  });
+
+  it("a client that never reads nor cancels is a gone client: forwarding stops, the meter settles exactly", async () => {
+    const saved = ACCOUNTING_TIMINGS.writeStallMs;
+    ACCOUNTING_TIMINGS.writeStallMs = 10;
+    try {
+      const r = run({
+        upstream: new ReadableStream({
+          start(c) {
+            c.enqueue(sse({ type: "message_start", message: { usage: { input_tokens: 10 } } }));
+            c.enqueue(sse({ type: "content_block_delta" }));
+            c.enqueue(sse({ type: "message_delta", usage: { output_tokens: 3 } }));
+            c.close();
+          },
+        }),
+      });
+      // The client holds the response and never touches it.
+      await r.settled;
+      expect(r.debits).toEqual([calculateCostMicro("claude-sonnet-4-6", 10, 3, 0, 0)]);
+      expect(r.releases()).toBe(1);
+      expect(logs[0]).toMatchObject({ clientAborted: true, clientStalled: true });
+      expect(logs[0]).not.toHaveProperty("estimated");
+      // The stalled client's stream is errored, not left hanging.
+      await expect(r.readable.getReader().read()).rejects.toThrow("client stalled");
+    } finally {
+      ACCOUNTING_TIMINGS.writeStallMs = saved;
+    }
+  });
+
+  it("a cache write with no TTL split is priced at the 1-hour rate and logged as an estimate", async () => {
+    const r = run({
+      upstream: new ReadableStream({
+        start(c) {
+          c.enqueue(
+            sse({
+              type: "message_start",
+              message: { usage: { input_tokens: 10, cache_creation_input_tokens: 1_000 } },
+            }),
+          );
+          c.enqueue(sse({ type: "message_delta", usage: { output_tokens: 3 } }));
+          c.close();
+        },
+      }),
+    });
+    void r.readable.pipeTo(new WritableStream());
+    await r.settled;
+    expect(r.debits).toEqual([calculateCostMicro("claude-sonnet-4-6", 10, 3, 0, 0, 1_000)]);
+    expect(logs[0]).toMatchObject({
+      estimated: true,
+      estimateReason: "cache_ttl_unknown",
+      cacheCreation1h: 1_000,
+    });
+  });
+});
+
+describe("accounting tail budget", () => {
+  it("the default bounds fit the post-response (waitUntil) budget", () => {
+    expect(accountingTailWorstCaseMs()).toBeLessThanOrEqual(ACCOUNTING_TIMINGS.afterBudgetMs);
+  });
+
+  it("a misconfigured budget is logged loudly, and the debit is still sent", async () => {
+    const saved = ACCOUNTING_TIMINGS.afterBudgetMs;
+    ACCOUNTING_TIMINGS.afterBudgetMs = 1;
+    const errors: string[] = [];
+    vi.spyOn(console, "error").mockImplementation(
+      (line: unknown) => void errors.push(String(line)),
+    );
+    try {
+      const r = run({
+        upstream: new ReadableStream({
+          start(c) {
+            c.enqueue(sse({ type: "message_start", message: { usage: { input_tokens: 10 } } }));
+            c.enqueue(sse({ type: "message_delta", usage: { output_tokens: 3 } }));
+            c.close();
+          },
+        }),
+      });
+      void r.readable.pipeTo(new WritableStream());
+      await r.settled;
+      expect(r.debits).toHaveLength(1);
+      expect(errors.map((e) => JSON.parse(e) as Record<string, unknown>)).toEqual([
+        expect.objectContaining({ event: "proxy.accounting_over_budget", budgetMs: 1 }),
+      ]);
+    } finally {
+      ACCOUNTING_TIMINGS.afterBudgetMs = saved;
     }
   });
 });

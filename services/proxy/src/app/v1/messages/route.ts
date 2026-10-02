@@ -20,10 +20,10 @@ import { dispatchRouting, applyBalanceFilter, REFERENCE_ROUTING_POLICY } from "@
 // Provider request shaping (incl. Anthropic prompt-caching) lives in a pure,
 // unit-tested sibling module — the edge route is glue, the cost-critical request
 // shape is testable on its own.
-import { buildProviderRequest } from "./provider-request";
+import { buildProviderRequest, resolveMaxTokens } from "./provider-request";
 // Stream metering (pure, unit-tested) — forwards the provider stream and
 // meters what the provider consumed, client abort or not.
-import { meterStream, ACCOUNTING_TIMINGS } from "./stream-accounting";
+import { meterStream, ACCOUNTING_TIMINGS, DEBIT_MAX_ATTEMPTS } from "./stream-accounting";
 // Pre-stream failure classification + the shared one-event-per-failure surface.
 // Observation only (no recovery) — see `inference/classify.ts`.
 import {
@@ -98,8 +98,8 @@ Message: ${message.slice(0, 500)}`,
   }
 }
 
-/** @internal — exported only for unit tests. */
-export const DEBIT_MAX_ATTEMPTS = 3;
+/** @internal — exported only for unit tests (defined beside the timing budget it feeds). */
+export { DEBIT_MAX_ATTEMPTS };
 
 /**
  * Debit the relay for actual compute cost.
@@ -130,6 +130,11 @@ export async function debitRelay(
       const res = await fetch(`${relayUrl}/api/v1/agents/${motebitId}/debit`, {
         method: "POST",
         headers: { "Content-Type": "application/json", "x-relay-secret": secret },
+        // Bounded per attempt, so drain + KV + every retry fits the waitUntil
+        // budget (see `accountingTailWorstCaseMs`). A timed-out attempt the
+        // relay did record is safe to retry: the debit is idempotent on
+        // `reference_id`.
+        signal: AbortSignal.timeout(ACCOUNTING_TIMINGS.debitAttemptTimeoutMs),
         body: JSON.stringify({
           amount: amountMicro,
           reference_id: referenceId,
@@ -161,17 +166,6 @@ export async function debitRelay(
       error: lastError,
     }),
   );
-}
-
-/** The `max_tokens` actually sent upstream — the output upper bound for metering. */
-function sentMaxTokens(providerBody: string, fallback: number): number {
-  try {
-    const n = (JSON.parse(providerBody) as { max_tokens?: unknown }).max_tokens;
-    if (typeof n === "number" && Number.isFinite(n) && n > 0) return n;
-  } catch {
-    /* fall through */
-  }
-  return fallback;
 }
 
 /**
@@ -372,6 +366,24 @@ export async function POST(request: Request): Promise<Response> {
         requestId,
         status: 400,
         bodyObj: { error: "invalid_json" },
+        headers: cors,
+        mode: authMode,
+        failure: motebitFailure("motebit_request", "malformed_request", 400),
+      }),
+    );
+  }
+
+  // --- Validate max_tokens — before anything spends (the classifier included); it is
+  //     the output bound the meter relies on, so it is never coerced ---
+  if (!resolveMaxTokens(body.max_tokens, limits.maxTokens).ok) {
+    return released(
+      failureResponse({
+        requestId,
+        status: 400,
+        bodyObj: {
+          error: "invalid_max_tokens",
+          message: "max_tokens must be a positive integer",
+        },
         headers: cors,
         mode: authMode,
         failure: motebitFailure("motebit_request", "malformed_request", 400),
@@ -712,7 +724,7 @@ export async function POST(request: Request): Promise<Response> {
       motebitId: mid,
       extraCostMicro: classifierCost,
       providerRequestBody: providerReq.body,
-      maxOutputTokens: sentMaxTokens(providerReq.body, limits.maxTokens),
+      maxOutputTokens: providerReq.maxTokens,
       spend: spendAdmission,
       debit: (cost) => debitRelay(mid, cost, requestId),
     });

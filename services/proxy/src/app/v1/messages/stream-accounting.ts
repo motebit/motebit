@@ -28,6 +28,18 @@
  *      are KV round-trips that can stall; each is bounded by `kvTimeoutMs` and
  *      the relay debit (the ledger of record) is sent regardless.
  *
+ *   4. **A stalled client is a gone client.** A client that neither reads nor
+ *      cancels holds a `writer.write` pending forever; nothing would ever
+ *      settle (no debit, slot held). Each forwarded write is bounded by
+ *      `writeStallMs`; past it the pump stops forwarding (erroring the
+ *      client's stream) and drains upstream exactly as on a cancel.
+ *
+ * Settle bound. From the moment forwarding ends (upstream done, client gone
+ * or stalled) the accounting settles within {@link accountingTailWorstCaseMs}
+ * (drain + two KV ops + every debit attempt and backoff), which is kept inside
+ * the platform's post-response budget `afterBudgetMs`; an overrun is logged
+ * loudly as `proxy.accounting_over_budget`.
+ *
  * The returned `settled` promise covers the whole lifecycle (drain → record →
  * release → debit); the route registers it with the platform's `waitUntil`
  * (Next's `after`) so an isolate teardown after the response closes cannot
@@ -39,17 +51,44 @@ import { extractUsage, type UsageAccumulator } from "./usage";
 /**
  * @internal — timing bounds, mutable only so tests can shorten them.
  *
- * `drainTimeoutMs` stays inside Vercel's post-response `waitUntil` window so
- * the drain cannot be cut off by the platform before the debit is sent.
+ * The tail (drain + KV + every debit attempt) stays inside `afterBudgetMs`,
+ * the platform's post-response `waitUntil` window, so the drain cannot be cut
+ * off before the debit is sent — {@link accountingTailWorstCaseMs}, asserted
+ * in the unit tests: 15s + 2×2s + 3×3s + 0.75s = 28.75s ≤ 30s.
  */
 export const ACCOUNTING_TIMINGS = {
   /** How long the pump keeps reading upstream after the client has gone. */
-  drainTimeoutMs: 20_000,
+  drainTimeoutMs: 15_000,
   /** Bound on each spend-KV op (record, release) on the accounting path. */
   kvTimeoutMs: 2_000,
   /** Relay-debit retry backoff base (attempt × base). */
   debitBackoffMs: 250,
+  /** Bound on each relay-debit attempt (the fetch is aborted past it). */
+  debitAttemptTimeoutMs: 3_000,
+  /** A forwarded write held longer than this means the client has stalled. */
+  writeStallMs: 30_000,
+  /** The platform's post-response (`waitUntil`) budget the tail must fit. */
+  afterBudgetMs: 30_000,
 };
+
+/** Relay-debit attempts (idempotent on `reference_id`, so retries are safe). */
+export const DEBIT_MAX_ATTEMPTS = 3;
+
+/**
+ * Worst case from the end of forwarding to a settled debit: the drain, the
+ * two bounded KV ops, every debit attempt at its timeout, and the backoffs.
+ */
+export function accountingTailWorstCaseMs(
+  t: typeof ACCOUNTING_TIMINGS = ACCOUNTING_TIMINGS,
+): number {
+  let backoff = 0;
+  for (let attempt = 1; attempt < DEBIT_MAX_ATTEMPTS; attempt++) {
+    backoff += attempt * t.debitBackoffMs;
+  }
+  return (
+    t.drainTimeoutMs + 2 * t.kvTimeoutMs + DEBIT_MAX_ATTEMPTS * t.debitAttemptTimeoutMs + backoff
+  );
+}
 
 /**
  * Tokens of headroom added to the input upper bound: the provider-side prompt
@@ -74,7 +113,12 @@ export interface StreamAccountingOptions {
   debit: (costMicro: number) => Promise<void>;
 }
 
-export type EstimateReason = "drain_timeout" | "upstream_error" | "usage_missing";
+export type EstimateReason =
+  | "drain_timeout"
+  | "upstream_error"
+  | "usage_missing"
+  /** Usage was reported, but some cache writes had no TTL split: priced at the 1-hour rate. */
+  | "cache_ttl_unknown";
 
 /**
  * A conservative UPPER bound on what an unmetered request consumed. Reported
@@ -85,8 +129,9 @@ export type EstimateReason = "drain_timeout" | "upstream_error" | "usage_missing
  *   - input: the UTF-8 byte length of the provider request body plus headroom
  *     — byte-level BPE tokenizers emit at most one token per byte, and the
  *     body includes the system prompt, tools and JSON framing. On Anthropic it
- *     is priced as cache CREATION (1.25×, the highest input rate there) since
- *     a cache write could have happened.
+ *     is priced as a 1-HOUR cache write (2×, the highest input rate there):
+ *     a client may set `cache_control.ttl: "1h"`, so that write could have
+ *     happened.
  */
 export function upperBoundUsage(
   provider: InferenceHost,
@@ -100,7 +145,8 @@ export function upperBoundUsage(
       new TextEncoder().encode(providerRequestBody).byteLength + INPUT_BOUND_HEADROOM_TOKENS;
     bounded.input = provider === "anthropic" ? 0 : inputBound;
     bounded.cacheRead = 0;
-    bounded.cacheCreation = provider === "anthropic" ? inputBound : 0;
+    bounded.cacheCreation = 0;
+    bounded.cacheCreation1h = provider === "anthropic" ? inputBound : 0;
   }
   if (!usage.outputReported) bounded.output = Math.max(usage.output, maxOutputTokens);
   return bounded;
@@ -136,7 +182,13 @@ export function meterStream(opts: StreamAccountingOptions): {
   readable: ReadableStream<Uint8Array>;
   settled: Promise<void>;
 } {
-  const { readable, writable } = new TransformStream<Uint8Array, Uint8Array>();
+  // The controller is kept so a stalled client's stream can be ERRORED: a
+  // `writer.abort()` waits on the in-flight (held) write and so never lands,
+  // while `controller.error` fails the held write and the client's reads.
+  let forward!: TransformStreamDefaultController<Uint8Array>;
+  const { readable, writable } = new TransformStream<Uint8Array, Uint8Array>({
+    start: (c) => void (forward = c),
+  });
   const writer = writable.getWriter();
   const reader = opts.upstream.getReader();
   const decoder = new TextDecoder();
@@ -145,7 +197,10 @@ export function meterStream(opts: StreamAccountingOptions): {
   const settled = (async () => {
     let estimateReason: EstimateReason | null = null;
     let clientGone = false;
+    let clientStalled = false;
     let drainDeadline = 0;
+    /** When forwarding ended — the start of the post-response accounting tail. */
+    let tailStart = 0;
     let buffer = "";
     const meter = (text: string, flush: boolean) => {
       buffer += text;
@@ -177,24 +232,38 @@ export function meterStream(opts: StreamAccountingOptions): {
         // Meter FIRST: a chunk whose client write fails still carried usage.
         meter(decoder.decode(result.value, { stream: true }), false);
         if (clientGone) continue;
-        try {
-          await writer.write(result.value);
-        } catch {
-          // The client went away. Keep draining upstream (without writing)
-          // until the provider reports its final usage.
+        const written = await withTimeout(
+          writer.write(result.value).then(
+            () => true,
+            () => false,
+          ),
+          ACCOUNTING_TIMINGS.writeStallMs,
+        );
+        if (written !== true) {
+          // The client went away (write failed) or stalled (write held past
+          // `writeStallMs`). Stop forwarding — a stalled client's stream is
+          // errored so the held write cannot pin the pump — and keep draining
+          // upstream (without writing) until the provider reports final usage.
+          if (written === TIMED_OUT) {
+            clientStalled = true;
+            forward.error(new Error("client stalled"));
+          }
           clientGone = true;
-          drainDeadline = Date.now() + ACCOUNTING_TIMINGS.drainTimeoutMs;
+          tailStart = Date.now();
+          drainDeadline = tailStart + ACCOUNTING_TIMINGS.drainTimeoutMs;
         }
       }
     } finally {
       await writer.close().catch(() => {});
     }
+    if (tailStart === 0) tailStart = Date.now();
 
     if (estimateReason == null && !usage.outputReported) estimateReason = "usage_missing";
-    const billed =
-      estimateReason == null
-        ? usage
-        : upperBoundUsage(opts.provider, usage, opts.providerRequestBody, opts.maxOutputTokens);
+    const bounded = estimateReason != null;
+    if (estimateReason == null && usage.cacheTtlBounded) estimateReason = "cache_ttl_unknown";
+    const billed = !bounded
+      ? usage
+      : upperBoundUsage(opts.provider, usage, opts.providerRequestBody, opts.maxOutputTokens);
     const cost =
       calculateCostMicro(
         opts.model,
@@ -202,6 +271,7 @@ export function meterStream(opts: StreamAccountingOptions): {
         billed.output,
         billed.cacheRead,
         billed.cacheCreation,
+        billed.cacheCreation1h ?? 0,
       ) + opts.extraCostMicro;
     // Normalized token fields for billing verification (`input` is UNCACHED,
     // `cacheRead` the discounted portion — additive; see usage.ts). An
@@ -215,9 +285,11 @@ export function meterStream(opts: StreamAccountingOptions): {
         output: billed.output,
         cacheRead: billed.cacheRead,
         cacheCreation: billed.cacheCreation,
+        cacheCreation1h: billed.cacheCreation1h ?? 0,
         costMicro: cost,
         motebitId: opts.motebitId,
         clientAborted: clientGone,
+        clientStalled,
         ...(estimateReason != null
           ? {
               estimated: true,
@@ -241,6 +313,25 @@ export function meterStream(opts: StreamAccountingOptions): {
       } catch {
         /* debitRelay never throws; defensive — `settled` must not reject */
       }
+    }
+
+    // The tail must fit the platform's post-response budget, or the isolate
+    // can be torn down mid-debit. Say so loudly — misconfigured bounds and an
+    // actual overrun are both reconciliation events.
+    const worst = accountingTailWorstCaseMs();
+    const elapsed = Date.now() - tailStart;
+    if (worst > ACCOUNTING_TIMINGS.afterBudgetMs || elapsed > ACCOUNTING_TIMINGS.afterBudgetMs) {
+      console.error(
+        JSON.stringify({
+          event: "proxy.accounting_over_budget",
+          requestId: opts.requestId,
+          motebitId: opts.motebitId,
+          costMicro: cost,
+          elapsedMs: elapsed,
+          worstCaseMs: worst,
+          budgetMs: ACCOUNTING_TIMINGS.afterBudgetMs,
+        }),
+      );
     }
   })();
 

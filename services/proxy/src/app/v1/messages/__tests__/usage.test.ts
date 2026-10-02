@@ -31,16 +31,81 @@ describe("extractUsage — anthropic", () => {
       u,
     );
     extractUsage("anthropic", sse({ type: "message_delta", usage: { output_tokens: 40 } }), u);
-    // input EXCLUDES cached → additive with the cache fields.
-    // Both halves reported → the request's usage is exact (metering needs no bound).
-    expect(u).toEqual({
+    // input EXCLUDES cached → additive with the cache fields. No TTL split was
+    // reported, so the write is priced at the 1-hour rate (2x, the highest)
+    // and flagged as bounded.
+    expect(u).toMatchObject({
       input: 100,
       output: 40,
       cacheRead: 3000,
-      cacheCreation: 50,
+      cacheCreation: 0,
+      cacheCreation1h: 50,
+      cacheTtlBounded: true,
       inputReported: true,
       outputReported: true,
     });
+  });
+
+  it("prices cache writes by TTL from the cache_creation split (5m 1.25x, 1h 2x)", () => {
+    const u = fresh();
+    extractUsage(
+      "anthropic",
+      sse({
+        type: "message_start",
+        message: {
+          usage: {
+            input_tokens: 100,
+            cache_creation_input_tokens: 70,
+            cache_creation: { ephemeral_5m_input_tokens: 20, ephemeral_1h_input_tokens: 50 },
+          },
+        },
+      }),
+      u,
+    );
+    expect(u).toMatchObject({ cacheCreation: 20, cacheCreation1h: 50, cacheTtlBounded: false });
+  });
+
+  it("a total the split does not cover is priced at the 1-hour rate", () => {
+    const u = fresh();
+    extractUsage(
+      "anthropic",
+      sse({
+        type: "message_start",
+        message: {
+          usage: {
+            cache_creation_input_tokens: 100,
+            cache_creation: { ephemeral_5m_input_tokens: 40 },
+          },
+        },
+      }),
+      u,
+    );
+    expect(u).toMatchObject({ cacheCreation: 40, cacheCreation1h: 60, cacheTtlBounded: true });
+  });
+
+  it("takes the GROWN input a message_delta reports (server tools), never only message_start's", () => {
+    const u = fresh();
+    extractUsage(
+      "anthropic",
+      sse({ type: "message_start", message: { usage: { input_tokens: 12_600 } } }),
+      u,
+    );
+    extractUsage(
+      "anthropic",
+      sse({
+        type: "message_delta",
+        usage: { input_tokens: 225_000, cache_read_input_tokens: 9, output_tokens: 40 },
+      }),
+      u,
+    );
+    expect(u).toMatchObject({ input: 225_000, cacheRead: 9, output: 40, outputReported: true });
+    // A later, smaller report never lowers what was already reported.
+    extractUsage(
+      "anthropic",
+      sse({ type: "message_delta", usage: { input_tokens: 5, output_tokens: 41 } }),
+      u,
+    );
+    expect(u).toMatchObject({ input: 225_000, output: 41 });
   });
 
   it("does NOT read top-level usage on message_start (the wrong shape captures nothing)", () => {
@@ -52,7 +117,9 @@ describe("extractUsage — anthropic", () => {
       sse({ usage: { input_tokens: 100, cache_read_input_tokens: 3000 } }),
       u,
     );
-    expect(u).toEqual({ input: 0, output: 0, cacheRead: 0, cacheCreation: 0 });
+    expect(u).toMatchObject({ input: 0, output: 0, cacheRead: 0, cacheCreation: 0 });
+    expect(u.inputReported).toBeUndefined();
+    expect(u.outputReported).toBeUndefined();
   });
 });
 
