@@ -7,6 +7,7 @@
     "DROPLET.md",
     "LIQUESCENTIA.md",
     "scripts/generate-llms-txt.ts",
+    "scripts/vercel-ignore-build.sh",
     "spec/*.md",
     "!spec/README.md",
     "THE_ACTOR_PRINCIPLE.md",
