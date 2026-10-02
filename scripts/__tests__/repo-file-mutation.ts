@@ -88,6 +88,7 @@ import {
 import { tmpdir } from "node:os";
 import { basename, dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
+import { cleanEnv } from "../lib/differential-tree.js";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..", "..");
 /**
@@ -217,7 +218,11 @@ function blobHash(bytes: Buffer): string {
 }
 
 function headBlob(rel: string): string {
-  const r = spawnSync("git", ["rev-parse", `HEAD:${rel}`], { cwd: ROOT, encoding: "utf8" });
+  const r = spawnSync("git", ["rev-parse", `HEAD:${rel}`], {
+    cwd: ROOT,
+    encoding: "utf8",
+    env: cleanEnv(),
+  });
   if (r.status !== 0) {
     throw new Error(`gate self-test: ${rel} is not in git HEAD (${r.stderr.trim()})`);
   }
@@ -283,7 +288,7 @@ function restoreEntry(e: Entry, afterCrash = false): void {
     bytes = null;
   }
   if (bytes === null || blobHash(bytes) !== e.blob) {
-    const r = spawnSync("git", ["cat-file", "blob", e.blob], { cwd: ROOT });
+    const r = spawnSync("git", ["cat-file", "blob", e.blob], { cwd: ROOT, env: cleanEnv() });
     bytes = r.status === 0 ? (r.stdout as Buffer) : null;
   }
   if (bytes === null || blobHash(bytes) !== e.blob) {

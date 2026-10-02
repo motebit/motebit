@@ -310,8 +310,27 @@ export function resolveConcurrency(opts: {
   return Math.max(1, Math.floor(n / 2));
 }
 
+/**
+ * `process.env` with EVERY `GIT_*` removed — the same rule as `cleanEnv` in
+ * ./differential-tree.ts, inlined because this module is loaded by plain
+ * `node` (the drivers), which does not map a `.js` specifier to `.ts`. A git
+ * hook in a linked worktree exports GIT_DIR=<repo>/.git/worktrees/<name>; a
+ * fixture or slot git that inherits it acts on THAT repository whatever its
+ * cwd (#835, 2026-10-02). Every git and slot child gets this environment.
+ */
+function cleanEnv(): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {};
+  for (const [k, v] of Object.entries(process.env)) if (!k.startsWith("GIT_")) env[k] = v;
+  return env;
+}
+
 function git(cwd: string, args: string[]): string {
-  return execFileSync("git", args, { cwd, encoding: "utf8", maxBuffer: 256 * 1024 * 1024 });
+  return execFileSync("git", args, {
+    cwd,
+    env: cleanEnv(),
+    encoding: "utf8",
+    maxBuffer: 256 * 1024 * 1024,
+  });
 }
 
 function nulList(out: string): string[] {
@@ -454,7 +473,11 @@ function pruneStaleSlots(root: string): string[] {
       continue;
     }
     try {
-      execFileSync("git", ["worktree", "remove", "--force", p], { cwd: root, stdio: "ignore" });
+      execFileSync("git", ["worktree", "remove", "--force", p], {
+        cwd: root,
+        env: cleanEnv(),
+        stdio: "ignore",
+      });
     } catch {
       // directory already gone: `worktree prune` below drops the registration
     }
@@ -462,7 +485,7 @@ function pruneStaleSlots(root: string): string[] {
     removed.push(p);
   }
   if (removed.length > 0) {
-    execFileSync("git", ["worktree", "prune"], { cwd: root, stdio: "ignore" });
+    execFileSync("git", ["worktree", "prune"], { cwd: root, env: cleanEnv(), stdio: "ignore" });
   }
   return removed;
 }
@@ -1349,7 +1372,7 @@ function groupKey(e: TamperEntry): { key: string; label: string } {
 function slotEnv(slot: Slot): NodeJS.ProcessEnv {
   const { tmp, home } = slot;
   return {
-    ...process.env,
+    ...cleanEnv(),
     TMPDIR: tmp,
     TMP: tmp,
     TEMP: tmp,
@@ -2250,6 +2273,7 @@ export async function runTampers(
       try {
         execFileSync("git", ["worktree", "remove", "--force", s.dir], {
           cwd: root,
+          env: cleanEnv(),
           stdio: "ignore",
         });
       } catch {
@@ -2258,7 +2282,7 @@ export async function runTampers(
     }
     rmSync(base, { recursive: true, force: true });
     try {
-      execFileSync("git", ["worktree", "prune"], { cwd: root, stdio: "ignore" });
+      execFileSync("git", ["worktree", "prune"], { cwd: root, env: cleanEnv(), stdio: "ignore" });
     } catch {
       // best effort
     }
