@@ -715,6 +715,37 @@ describe("MobileApp.identity", () => {
     expect(parsed.motebit_id).toBe("mobile-local");
     expect(parsed.exported_at).toBeTruthy();
   });
+  it("verifyMotebitMd: a valid signature over an invalid succession chain is not intact", async () => {
+    // Real crypto (only @motebit/encryption is stubbed in this suite).
+    const { generateKeypair, bytesToHex } = await import("@motebit/crypto");
+    const { generate, rotate } = await import("@motebit/identity-file");
+    const oldKp = await generateKeypair();
+    const newKp = await generateKeypair();
+    const original = await generate(
+      {
+        motebitId: "019e2aa5-7649-7fa3-ab27-2e4d9d4f0ffb",
+        ownerId: "owner",
+        publicKeyHex: bytesToHex(oldKp.publicKey),
+      },
+      oldKp.privateKey,
+    );
+    const forged = await rotate({
+      existingContent: original,
+      newPublicKey: newKp.publicKey,
+      newPrivateKey: newKp.privateKey,
+      successionRecord: {
+        old_public_key: bytesToHex(oldKp.publicKey),
+        new_public_key: bytesToHex(newKp.publicKey),
+        timestamp: Date.now(),
+        old_key_signature: "00".repeat(64),
+        new_key_signature: "00".repeat(64),
+      },
+    });
+    const app = new MobileApp();
+    const r = await app.verifyMotebitMd(forged);
+    expect(r.valid).toBe(false);
+    expect(r.error).toMatch(/succession/i);
+  });
 });
 
 // ---------------------------------------------------------------------------

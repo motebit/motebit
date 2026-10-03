@@ -47,7 +47,9 @@ vi.mock("@motebit/sync-engine", () => {
   return { PairingClient };
 });
 
-vi.mock("@motebit/encryption", () => ({
+vi.mock("@motebit/encryption", async (importOriginal) => ({
+  // Real unless stubbed below — the shared pairing-binding check stays real.
+  ...(await importOriginal<typeof import("@motebit/encryption")>()),
   generateX25519Keypair: vi.fn(() => ({
     publicKey: new Uint8Array(32).fill(1),
     privateKey: new Uint8Array(32).fill(2),
@@ -76,6 +78,7 @@ vi.mock("@motebit/encryption", () => ({
   }),
 }));
 
+import { deriveSovereignMotebitId } from "@motebit/crypto";
 import { MobilePairingManager } from "../pairing-manager";
 import type { PairingManagerDeps } from "../pairing-manager";
 
@@ -273,5 +276,54 @@ describe("MobilePairingManager Device B (claimer) flow", () => {
       pairingId: "pid-1",
     });
     expect(deps.setIdentity).toHaveBeenCalled();
+  });
+
+  it("completePairing refuses a relay-supplied motebit_id that does not bind to the transferred key — nothing written", async () => {
+    const deps = makeDeps();
+    await deps.keyring.set("motebit_id", "m-OLD");
+    await deps.keyring.set("device_id", "d-OLD");
+    await deps.keyring.set("device_private_key", "cc".repeat(32));
+    deps.keyring.set.mockClear();
+    // A self-certifying id — but the commitment of a DIFFERENT key than the
+    // one the pairing transferred ("ff" * 32).
+    const wrongId = await deriveSovereignMotebitId("ee".repeat(32));
+    const mgr = new MobilePairingManager(deps);
+    await expect(
+      mgr.completePairing({ motebitId: wrongId, deviceId: "d-X" }, "https://relay.test", {
+        keyTransfer: {
+          identity_pubkey_check: "ff".repeat(32),
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        } as any,
+        ephemeralPrivateKey: new Uint8Array(32),
+        pairingCode: "ABC123",
+        pairingId: "pid-1",
+      }),
+    ).rejects.toThrow(/does not bind/);
+    expect(deps.keyring.set).not.toHaveBeenCalled();
+    expect(deps.keyring._data.get("motebit_id")).toBe("m-OLD");
+    expect(deps.keyring._data.get("device_id")).toBe("d-OLD");
+    expect(deps.keyring._data.get("device_private_key")).toBe("cc".repeat(32));
+    expect(deps.setIdentity).not.toHaveBeenCalled();
+    expect(deps.setPublicKey).not.toHaveBeenCalled();
+    expect(deps.setSyncUrl).not.toHaveBeenCalled();
+    expect(mockClientDefaults.updateDeviceKey).not.toHaveBeenCalled();
+  });
+
+  it("completePairing adopts a motebit_id that is the commitment to the transferred key", async () => {
+    const deps = makeDeps();
+    const boundId = await deriveSovereignMotebitId("ff".repeat(32));
+    const mgr = new MobilePairingManager(deps);
+    await mgr.completePairing({ motebitId: boundId, deviceId: "d-X" }, "https://relay.test", {
+      keyTransfer: {
+        identity_pubkey_check: "ff".repeat(32),
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      } as any,
+      ephemeralPrivateKey: new Uint8Array(32),
+      pairingCode: "ABC123",
+      pairingId: "pid-1",
+    });
+    expect(deps.keyring._data.get("motebit_id")).toBe(boundId);
+    expect(deps.setIdentity).toHaveBeenCalledWith(boundId, "d-X");
+    expect(deps.setPublicKey).toHaveBeenCalledWith("ff".repeat(32));
   });
 });

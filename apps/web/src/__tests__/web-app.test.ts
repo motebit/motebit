@@ -931,3 +931,128 @@ describe("Machine roster (machine-roster-surfaces-v1 C-2a)", () => {
     app.stop();
   });
 });
+
+describe("Identity integrity — succession chain + pairing binding", () => {
+  async function forgedChainIdentityFile(): Promise<string> {
+    const { generateKeypair, bytesToHex } = await import("@motebit/encryption");
+    const { generate, rotate } = await import("@motebit/identity-file");
+    const oldKp = await generateKeypair();
+    const newKp = await generateKeypair();
+    const original = await generate(
+      {
+        motebitId: "019e2aa5-7649-7fa3-ab27-2e4d9d4f0ffb",
+        ownerId: "owner",
+        publicKeyHex: bytesToHex(oldKp.publicKey),
+      },
+      oldKp.privateKey,
+    );
+    return rotate({
+      existingContent: original,
+      newPublicKey: newKp.publicKey,
+      newPrivateKey: newKp.privateKey,
+      successionRecord: {
+        old_public_key: bytesToHex(oldKp.publicKey),
+        new_public_key: bytesToHex(newKp.publicKey),
+        timestamp: Date.now(),
+        old_key_signature: "00".repeat(64),
+        new_key_signature: "00".repeat(64),
+      },
+    });
+  }
+
+  it("verifyMotebitMd: a valid signature over an invalid succession chain is not intact", async () => {
+    const app = new WebApp();
+    const r = await app.verifyMotebitMd(await forgedChainIdentityFile());
+    expect(r.valid).toBe(false);
+    expect(r.error).toMatch(/succession/i);
+  });
+
+  it("completePairing refuses a relay-supplied motebit_id that does not bind to the transferred key — nothing written", async () => {
+    const enc = await import("@motebit/encryption");
+    const app = new WebApp();
+    await app.bootstrap();
+    const before = {
+      motebitId: app.motebitId,
+      deviceId: app.deviceId,
+      publicKeyHex: app.publicKeyHex,
+      privateKey: await (
+        app as unknown as { keyStore: { loadPrivateKey(): Promise<string | null> } }
+      ).keyStore.loadPrivateKey(),
+    };
+
+    // Device A's identity, transferred for real under X25519 + the pairing code.
+    const identity = await enc.generateKeypair();
+    const identityPubHex = enc.bytesToHex(identity.publicKey);
+    const claimer = enc.generateX25519Keypair();
+    const keyTransfer = await enc.buildKeyTransferPayload(
+      identity.privateKey,
+      identityPubHex,
+      claimer.publicKey,
+      "ABC123",
+    );
+    // The relay names a self-certifying id — but the commitment of ANOTHER key.
+    const other = await enc.generateKeypair();
+    const wrongId = await enc.deriveSovereignMotebitId(enc.bytesToHex(other.publicKey));
+    const fetchSpy = vi.fn(async () => new Response("{}", { status: 200 }));
+    vi.stubGlobal("fetch", fetchSpy);
+
+    await expect(
+      app.completePairing(
+        { motebitId: wrongId, deviceId: "dev-paired" },
+        {
+          keyTransfer,
+          ephemeralPrivateKey: claimer.privateKey,
+          pairingCode: "ABC123",
+          syncUrl: "https://relay.test",
+          pairingId: "pid-1",
+        },
+      ),
+    ).rejects.toThrow(/does not bind/);
+
+    expect(app.motebitId).toBe(before.motebitId);
+    expect(app.deviceId).toBe(before.deviceId);
+    expect(app.publicKeyHex).toBe(before.publicKeyHex);
+    expect(
+      await (
+        app as unknown as { keyStore: { loadPrivateKey(): Promise<string | null> } }
+      ).keyStore.loadPrivateKey(),
+    ).toBe(before.privateKey);
+    // The relay was never told this device now holds the identity key.
+    expect(fetchSpy).not.toHaveBeenCalled();
+    app.stop();
+  });
+
+  it("completePairing adopts a motebit_id that is the commitment to the transferred key", async () => {
+    const enc = await import("@motebit/encryption");
+    const app = new WebApp();
+    await app.bootstrap();
+    const identity = await enc.generateKeypair();
+    const identityPubHex = enc.bytesToHex(identity.publicKey);
+    const claimer = enc.generateX25519Keypair();
+    const keyTransfer = await enc.buildKeyTransferPayload(
+      identity.privateKey,
+      identityPubHex,
+      claimer.publicKey,
+      "ABC123",
+    );
+    const boundId = await enc.deriveSovereignMotebitId(identityPubHex);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response("{}", { status: 200 })),
+    );
+
+    await app.completePairing(
+      { motebitId: boundId, deviceId: "dev-paired" },
+      {
+        keyTransfer,
+        ephemeralPrivateKey: claimer.privateKey,
+        pairingCode: "ABC123",
+        syncUrl: "https://relay.test",
+        pairingId: "pid-1",
+      },
+    );
+    expect(app.motebitId).toBe(boundId);
+    expect(app.publicKeyHex).toBe(identityPubHex);
+    app.stop();
+  });
+});
