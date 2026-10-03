@@ -13,7 +13,7 @@
  *   spatial       — `verifyReceiptState` (the satellite orb's state)
  *   mobile        — `deriveReceiptBadge` (the RN card's badge)
  *   CLI           — `renderReceipt` (the printed verify line; the CLI has no
- *                   task-failed rung, so it is compared on the chain axis)
+ *                   task-failed rungs, so it is compared on the chain axis)
  *
  * Vectors: every receipt in examples/python-receipt-verifier/fixtures and every
  * `kind: "receipt"` case in spec/conformance/verification-verdict/corpus.json,
@@ -151,7 +151,9 @@ async function buildVectors(): Promise<Vector[]> {
   return vectors;
 }
 
-const CLI_LABEL_TO_CHAIN: Array<[string, Exclude<ReceiptVerdict, "task-failed">]> = [
+const CLI_LABEL_TO_CHAIN: Array<
+  [string, Exclude<ReceiptVerdict, "task-failed" | "task-failed-unanchored">]
+> = [
   ["verified locally · chain intact", "verified"],
   ["signature verified · identity not anchored", "integrity-only"],
   ["verification failed", "failed"],
@@ -187,18 +189,26 @@ describe("receipt verdict — every surface agrees on the shared vectors", () =>
           `${v.name}: mobile label "${mobile.label}" ≠ "${RECEIPT_VERDICT_LABELS[dom]}"`,
         );
 
-      // CLI: chain axis (it has no task-failed rung).
+      // CLI: chain axis (it has no task-failed rungs).
       const tree = await verifyReceiptChain(v.receipt, v.anchor ?? new Map());
       const chain = receiptVerdictFor({ status: "completed" }, tree);
       const cli = await cliChainVerdict(v.receipt, v.anchor);
       if (cli !== chain) disagreements.push(`${v.name}: cli=${cli} chain=${chain}`);
 
-      // Honesty floor: never "verified" without an anchor.
-      if (!v.anchor && (dom === "verified" || mobile.verdict === "verified"))
+      // Honesty floor: never an identity claim ("verified" / bound task-failed)
+      // without an anchor.
+      const bound = (x: string): boolean => x === "verified" || x === "task-failed";
+      if (!v.anchor && (bound(dom) || bound(mobile.verdict)))
         disagreements.push(`${v.name}: claimed identity binding with no trusted anchor`);
     }
     expect(disagreements).toEqual([]);
     // Coverage of the ladder: every rung is exercised by some vector.
-    expect([...seen].sort()).toEqual(["failed", "integrity-only", "task-failed", "verified"]);
+    expect([...seen].sort()).toEqual([
+      "failed",
+      "integrity-only",
+      "task-failed",
+      "task-failed-unanchored",
+      "verified",
+    ]);
   });
 });

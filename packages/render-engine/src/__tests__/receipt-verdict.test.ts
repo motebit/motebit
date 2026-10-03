@@ -29,10 +29,26 @@ describe("receiptVerdictFor", () => {
     expect(receiptVerdictFor(ok, tree)).toBe("failed");
   });
 
-  it("task-failed when signatures hold but status=failed", () => {
+  it("task-failed when signatures hold, the chain is bound, and status=failed", () => {
     expect(receiptVerdictFor({ status: "failed" }, { verified: true, keySource: "external" })).toBe(
       "task-failed",
     );
+  });
+
+  it("status never outranks binding: unbound + status=failed is task-failed-unanchored", () => {
+    const fail = { status: "failed" } as const;
+    expect(receiptVerdictFor(fail, { verified: true, keySource: "embedded" })).toBe(
+      "task-failed-unanchored",
+    );
+    expect(receiptVerdictFor(fail, { verified: true })).toBe("task-failed-unanchored");
+    const partial = {
+      verified: true,
+      keySource: "external" as const,
+      delegations: [{ verified: true, keySource: "embedded" as const }],
+    };
+    expect(receiptVerdictFor(fail, partial)).toBe("task-failed-unanchored");
+    // A broken signature still wins over the task outcome.
+    expect(receiptVerdictFor(fail, { verified: false, keySource: "external" })).toBe("failed");
   });
 
   it("verified only when every node is externally anchored", () => {
@@ -72,7 +88,12 @@ describe("verifyReceiptVerdict", () => {
 
   it("has a label for every rung, and only 'verified' claims an intact chain", () => {
     expect(RECEIPT_VERDICT_LABELS.verified).toContain("chain intact");
-    for (const k of ["integrity-only", "task-failed", "failed"] as const) {
+    for (const k of [
+      "integrity-only",
+      "task-failed",
+      "task-failed-unanchored",
+      "failed",
+    ] as const) {
       expect(RECEIPT_VERDICT_LABELS[k]).not.toContain("chain intact");
     }
   });

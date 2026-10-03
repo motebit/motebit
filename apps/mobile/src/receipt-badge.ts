@@ -1,7 +1,7 @@
 /**
  * Mobile's receipt badge — the same verdict ladder every other surface uses
  * (`verifyReceiptVerdict` in `@motebit/render-engine`: failed / task-failed /
- * verified / integrity-only), projected onto RN colors.
+ * task-failed-unanchored / verified / integrity-only), projected onto RN colors.
  *
  * Mobile previously verified against `collectKnownKeys(receipt)` — the
  * receipt's OWN embedded keys passed back in as the trust anchor — and showed
@@ -20,7 +20,8 @@ import {
   type ReceiptVerdict,
 } from "@motebit/render-engine";
 
-export type ReceiptBadgeTone = "accent" | "muted" | "integrity" | "warn" | "error";
+export type ReceiptBadgeTone =
+  "accent" | "muted" | "integrity" | "warn" | "warn-unanchored" | "error";
 
 export interface ReceiptBadge {
   readonly verdict: ReceiptVerdict | "pending";
@@ -38,6 +39,7 @@ const TONE: Readonly<Record<ReceiptVerdict, ReceiptBadgeTone>> = {
   verified: "accent",
   "integrity-only": "integrity",
   "task-failed": "warn",
+  "task-failed-unanchored": "warn-unanchored",
   failed: "error",
 };
 

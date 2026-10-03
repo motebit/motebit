@@ -107,12 +107,14 @@ export function buildReceiptArtifact(
   // pulse is the calm-software signal that a check is in flight.
   root.classList.add("is-pending");
 
-  // One ladder for every surface (receipt-verdict.ts): failed / task-failed /
+  // One ladder for every surface (receipt-verdict.ts): failed / task-failed
+  // (identity bound) / task-failed-unanchored (identity NOT bound) /
   // verified (identity bound via the trusted anchor) / integrity-only (signed
   // against the receipt's own embedded key — identity NOT anchored).
   const VERDICT_CLASS = {
     failed: "is-unverified",
     "task-failed": "is-failed",
+    "task-failed-unanchored": "is-failed-unanchored",
     verified: "is-verified",
     "integrity-only": "is-integrity-verified",
   } as const;

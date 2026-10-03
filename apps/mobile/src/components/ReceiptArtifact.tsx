@@ -63,7 +63,9 @@ export function ReceiptArtifact({
           ? "#4aa8c0"
           : badge.tone === "warn"
             ? "#c07040"
-            : "#d04050";
+            : badge.tone === "warn-unanchored"
+              ? "#9070b0"
+              : "#d04050";
   const verifyLabel = badge.label;
 
   return (

@@ -68,7 +68,9 @@ export function hueForVerifyState(state: ReceiptVerifyState): number {
     case "integrity-only":
       return 190; // cyan — signature valid, identity not anchored
     case "task-failed":
-      return 25; // orange — chain is fine, task reported failed
+      return 25; // orange — chain bound, task reported failed
+    case "task-failed-unanchored":
+      return 280; // violet — signatures intact, identity not anchored, task reported failed
     case "failed":
       return 0; // red — chain verification failed
   }

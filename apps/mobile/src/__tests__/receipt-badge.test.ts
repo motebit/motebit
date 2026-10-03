@@ -105,9 +105,22 @@ describe("mobile receipt badge — verdict ladder (L8)", () => {
     expect(badge.verdict).toBe("integrity-only");
   });
 
-  it("status=failed with intact signatures → task-failed", async () => {
+  it("status=failed with intact signatures, no anchor → task-failed-unanchored, never 'verified'", async () => {
+    // The forged-as-victim attack: an attacker self-signs a failed receipt
+    // claiming VICTIM_ID. Mobile passes no anchor; status must not outrank binding.
     const { receipt } = await signed({ status: "failed" });
-    expect((await deriveReceiptBadge(receipt)).verdict).toBe("task-failed");
+    const badge = await deriveReceiptBadge(receipt);
+    expect(badge.verdict).toBe("task-failed-unanchored");
+    expect(badge.label).toBe("signature verified · identity not anchored · completed: failed");
+    expect(badge.label).not.toBe(RECEIPT_VERDICT_LABELS["task-failed"]);
+    expect(badge.tone).toBe("warn-unanchored");
+  });
+
+  it("status=failed, bound to a trusted anchor → task-failed", async () => {
+    const { receipt, publicKey } = await signed({ status: "failed" });
+    const badge = await deriveReceiptBadge(receipt, new Map([[VICTIM_ID, publicKey]]));
+    expect(badge.verdict).toBe("task-failed");
+    expect(badge.label).toBe("verified · completed: failed");
   });
 
   it("shared python-verifier fixtures (all self-keyed) are integrity-only without an anchor, verified with one", async () => {
@@ -118,7 +131,9 @@ describe("mobile receipt badge — verdict ladder (L8)", () => {
       const r = JSON.parse(readFileSync(join(dir, f), "utf8")) as ExecutionReceipt;
       const plain = await deriveReceiptBadge(r);
       expect(plain.verdict, f).not.toBe("verified");
-      if (r.status !== "failed") expect(plain.verdict, f).toBe("integrity-only");
+      expect(plain.verdict, f).toBe(
+        r.status === "failed" ? "task-failed-unanchored" : "integrity-only",
+      );
       const anchor = new Map([[r.motebit_id, Uint8Array.from(Buffer.from(r.public_key!, "hex"))]]);
       const bound = await deriveReceiptBadge(r, anchor);
       expect(bound.verdict, f).toBe(r.status === "failed" ? "task-failed" : "verified");

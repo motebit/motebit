@@ -11,8 +11,16 @@
  *
  *   failed          — any receipt in the chain failed signature verification
  *                     (or verification threw). Fail-closed.
- *   task-failed     — every signature checks, but the task itself reported
+ *   task-failed     — every signature checks AND every signer is bound (as
+ *                     `verified` below), but the task itself reported
  *                     `status: "failed"`.
+ *   task-failed-unanchored
+ *                   — every signature checks, the task reported
+ *                     `status: "failed"`, but at least one signer's key is the
+ *                     receipt's own embedded key. Status never outranks
+ *                     binding: an attacker can self-sign a failed receipt
+ *                     claiming any `motebit_id`, so this rung makes no
+ *                     identity claim.
  *   verified        — every signature checks AND every signer's key came from
  *                     the caller's independently-trusted anchor
  *                     (`keySource === "external"`): identity is bound.
@@ -29,7 +37,8 @@
 import type { ExecutionReceipt } from "@motebit/sdk";
 import { verifyReceiptChain } from "@motebit/encryption";
 
-export type ReceiptVerdict = "verified" | "integrity-only" | "task-failed" | "failed";
+export type ReceiptVerdict =
+  "verified" | "integrity-only" | "task-failed" | "task-failed-unanchored" | "failed";
 
 /** Structural slice of `ReceiptVerification` the ladder reads. */
 export interface ReceiptVerifyTreeLike {
@@ -43,6 +52,7 @@ export const RECEIPT_VERDICT_LABELS: Readonly<Record<ReceiptVerdict, string>> = 
   verified: "verified locally · chain intact",
   "integrity-only": "signature verified · identity not anchored",
   "task-failed": "verified · completed: failed",
+  "task-failed-unanchored": "signature verified · identity not anchored · completed: failed",
   failed: "verification failed",
 };
 
@@ -68,8 +78,9 @@ export function receiptVerdictFor(
   tree: ReceiptVerifyTreeLike,
 ): ReceiptVerdict {
   if (!chainVerified(tree)) return "failed";
-  if (receipt.status === "failed") return "task-failed";
-  return chainBound(tree) ? "verified" : "integrity-only";
+  const bound = chainBound(tree);
+  if (receipt.status === "failed") return bound ? "task-failed" : "task-failed-unanchored";
+  return bound ? "verified" : "integrity-only";
 }
 
 /**
