@@ -212,7 +212,7 @@ describe("verifyPairingIdentityBinding — a ROTATED sovereign identity (success
 
 describe("verifyPairingIdentityBinding — canonical ids, sources, guardian", () => {
   it.each([
-    ["empty", (id: string) => ""],
+    ["empty", (_id: string) => ""],
     ["urn:uuid: prefix", (id: string) => `urn:uuid:${id}`],
     ["trailing space", (id: string) => `${id} `],
     ["braced", (id: string) => `{${id}}`],
