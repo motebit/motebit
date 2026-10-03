@@ -11,11 +11,12 @@ import {
   getModelProvider,
   getProviderCatalog,
   resolveModelAlias,
+  exceedsPricedPromptCeiling,
   CLASSIFIER_MODEL,
   AUTO_DEFAULT_MODEL,
 } from "../../../validation";
 import { after } from "next/server";
-import { isTaskShape, type RoutingConstraint } from "@motebit/protocol";
+import { isTaskShape, type RoutingConstraint, type TaskShape } from "@motebit/protocol";
 import { dispatchRouting, applyBalanceFilter, REFERENCE_ROUTING_POLICY } from "@motebit/policy";
 // Provider request shaping (incl. Anthropic prompt-caching) lives in a pure,
 // unit-tested sibling module — the edge route is glue, the cost-critical request
@@ -23,7 +24,7 @@ import { dispatchRouting, applyBalanceFilter, REFERENCE_ROUTING_POLICY } from "@
 import { buildProviderRequest, resolveMaxTokens } from "./provider-request";
 // Stream metering (pure, unit-tested) — forwards the provider stream and
 // meters what the provider consumed, client abort or not.
-import { meterStream } from "./stream-accounting";
+import { meterStream, promptTokenUpperBound } from "./stream-accounting";
 // Deny-by-default request-feature boundary: what the meter cannot price is
 // refused before anything spends, never under-billed.
 import { findUnsupportedFeature } from "./request-features";
@@ -572,6 +573,50 @@ async function serveAdmitted(ctx: {
   //     neutral primitive stays consumer-agnostic)
   //   → dispatchRouting (protocol primitive in @motebit/policy)
   //   → handle RoutingDecision { route | fallback | deny }
+  // What motebit-cloud may serve for THIS request: a model the token's
+  // allowlist names (empty list = unrestricted), whose provider key is
+  // configured, and whose pricing covers the prompt (an unconfirmed-tier model
+  // is refused above its ceiling). `auto` resolves only inside this set — the
+  // resolved model passes the same allowlist an explicit one does, so routing
+  // can never escalate past the token's ceiling.
+  const allowedByToken = (model: string): boolean =>
+    authMode !== "proxy-token" ||
+    tokenPayload == null ||
+    tokenPayload.models.length === 0 ||
+    tokenPayload.models.includes(model);
+  const promptBoundFor = (model: string, host: InferenceHost): number =>
+    promptTokenUpperBound(buildProviderRequest(host, "", model, body, limits.maxTokens).body);
+  const servable = (model: string): boolean => {
+    const host = getModelProvider(model);
+    return (
+      host != null &&
+      allowedByToken(model) &&
+      getProviderApiKey(host) != null &&
+      !exceedsPricedPromptCeiling(model, promptBoundFor(model, host))
+    );
+  };
+  /** The auto default when routing cannot pick: AUTO_DEFAULT_MODEL if servable,
+   *  else the best servable model for the shape, else AUTO_DEFAULT_MODEL (which
+   *  the allowlist / provider checks below then refuse — never escalate). */
+  const servableDefault = (shape: TaskShape): string => {
+    if (servable(AUTO_DEFAULT_MODEL)) return AUTO_DEFAULT_MODEL;
+    const servableCatalog = getProviderCatalog().filter((c) => servable(c.modelName));
+    const best = dispatchRouting(
+      shape,
+      servableCatalog,
+      { jurisdiction: "US" },
+      REFERENCE_ROUTING_POLICY,
+    );
+    switch (best.kind) {
+      case "route":
+        return best.model;
+      case "fallback":
+        return best.backup;
+      case "deny":
+        return AUTO_DEFAULT_MODEL;
+    }
+  };
+
   let routingReason: string | undefined;
   if (resolvedModel === "auto" && !isBYOK) {
     const classifierKey = process.env.ANTHROPIC_API_KEY;
@@ -587,7 +632,8 @@ async function serveAdmitted(ctx: {
       const balance = tokenPayload?.bal ?? 0;
       // Pre-filter the catalog by motebit-cloud balance affordability
       // (consumer-side wrapper; protocol layer stays consumer-neutral).
-      const fullCatalog = getProviderCatalog();
+      // Only what this request may be served (allowlist, key, priced ceiling).
+      const fullCatalog = getProviderCatalog().filter((c) => servable(c.modelName));
       const affordableCatalog = applyBalanceFilter(fullCatalog, balance);
       // Constrain to motebit-cloud-allowed jurisdiction (US-only today).
       const constraints: RoutingConstraint = { jurisdiction: "US" };
@@ -605,40 +651,38 @@ async function serveAdmitted(ctx: {
         case "route": {
           // Confirm the picked model's provider key is configured;
           // otherwise fall back to the auto-default (Sonnet).
-          const pickedProvider = getModelProvider(decision.model);
-          if (pickedProvider && getProviderApiKey(pickedProvider)) {
+          if (servable(decision.model)) {
             resolvedModel = decision.model;
             routingReason = decision.reason;
           } else {
-            resolvedModel = AUTO_DEFAULT_MODEL;
-            routingReason = `picked model ${decision.model} but no provider key configured; using default ${AUTO_DEFAULT_MODEL}`;
+            resolvedModel = servableDefault(taskShape);
+            routingReason = `picked model ${decision.model} but it is not servable; using ${resolvedModel}`;
           }
           break;
         }
         case "fallback": {
-          const pickedProvider = getModelProvider(decision.backup);
-          if (pickedProvider && getProviderApiKey(pickedProvider)) {
+          if (servable(decision.backup)) {
             resolvedModel = decision.backup;
             routingReason = decision.reason;
           } else {
-            resolvedModel = AUTO_DEFAULT_MODEL;
-            routingReason = `fallback model ${decision.backup} but no provider key configured; using default ${AUTO_DEFAULT_MODEL}`;
+            resolvedModel = servableDefault(taskShape);
+            routingReason = `fallback model ${decision.backup} but it is not servable; using ${resolvedModel}`;
           }
           break;
         }
         case "deny": {
-          // No catalog entry survived constraints — fall back to
-          // AUTO_DEFAULT_MODEL. Real production policy: surface the
-          // deny to the user (HTTP 4xx) rather than silently picking
-          // Sonnet; this preserves PR-1's no-regression posture.
-          resolvedModel = AUTO_DEFAULT_MODEL;
-          routingReason = `dispatch denied (${decision.reason}); using default ${AUTO_DEFAULT_MODEL}`;
+          // No servable, affordable entry survived constraints — fall back
+          // to the servable default (AUTO_DEFAULT_MODEL when the token may
+          // name it). Spend admission below still refuses what the balance
+          // cannot cover; this preserves PR-1's no-regression posture.
+          resolvedModel = servableDefault(taskShape);
+          routingReason = `dispatch denied (${decision.reason}); using default ${resolvedModel}`;
           break;
         }
       }
     } else {
-      resolvedModel = AUTO_DEFAULT_MODEL;
-      routingReason = `ANTHROPIC_API_KEY not configured; using default ${AUTO_DEFAULT_MODEL}`;
+      resolvedModel = servableDefault("chat");
+      routingReason = `ANTHROPIC_API_KEY not configured; using default ${resolvedModel}`;
     }
   }
   // Header values must be ByteStrings: the router's reasons carry "→", which
@@ -656,12 +700,8 @@ async function serveAdmitted(ctx: {
   // decision; PR 4a (this) only plumbs the data through.
 
   if (authMode === "proxy-token" && tokenPayload) {
-    // "auto" is always allowed; for specific models check the allowlist
-    if (
-      body.model !== "auto" &&
-      tokenPayload.models.length > 0 &&
-      !tokenPayload.models.includes(resolvedModel)
-    ) {
+    // The RESOLVED model — explicit or picked by auto — passes the allowlist.
+    if (!allowedByToken(resolvedModel)) {
       return failureResponse({
         requestId,
         status: 400,
@@ -756,6 +796,28 @@ async function serveAdmitted(ctx: {
     body,
     limits.maxTokens,
   );
+
+  // Priced-ceiling admission (motebit-cloud bills what the provider bills): a
+  // prompt that could exceed the rates this model's row is known to price is
+  // refused BEFORE the provider spends, never billed at a guessed rate. BYOK is
+  // not metered (the user's own key).
+  if (
+    authMode === "proxy-token" &&
+    exceedsPricedPromptCeiling(resolvedModel, promptTokenUpperBound(providerReq.body))
+  ) {
+    return failureResponse({
+      requestId,
+      status: 400,
+      bodyObj: {
+        error: "prompt_exceeds_priced_tier",
+        message: `This prompt may exceed the context length ${resolvedModel} is priced for on motebit-cloud. Shorten it, choose another model, or use BYOK.`,
+      },
+      headers: cors,
+      model: resolvedModel,
+      mode: authMode,
+      failure: motebitFailure("motebit_request", "malformed_request", 400),
+    });
+  }
 
   let providerRes: Response;
   try {

@@ -182,6 +182,17 @@ export function unservedProviderError(usage: UsageAccumulator, bodyBytes: number
  *     a client may set `cache_control.ttl: "1h"`, so that write could have
  *     happened.
  */
+/**
+ * A sound UPPER bound on the prompt tokens a provider request body can carry:
+ * its UTF-8 byte length (byte-level BPE emits at most one token per byte; the
+ * body includes the system prompt, tools and JSON framing) plus headroom for
+ * scaffolding the body does not spell out. Shared by the unmetered-usage bound
+ * below and the route's pre-spend priced-ceiling check, so both agree.
+ */
+export function promptTokenUpperBound(providerRequestBody: string): number {
+  return new TextEncoder().encode(providerRequestBody).byteLength + INPUT_BOUND_HEADROOM_TOKENS;
+}
+
 export function upperBoundUsage(
   provider: InferenceHost,
   usage: UsageAccumulator,
@@ -190,8 +201,7 @@ export function upperBoundUsage(
 ): UsageAccumulator {
   const bounded: UsageAccumulator = { ...usage };
   if (!usage.inputReported) {
-    const inputBound =
-      new TextEncoder().encode(providerRequestBody).byteLength + INPUT_BOUND_HEADROOM_TOKENS;
+    const inputBound = promptTokenUpperBound(providerRequestBody);
     bounded.input = provider === "anthropic" ? 0 : inputBound;
     bounded.cacheRead = 0;
     bounded.cacheCreation = 0;

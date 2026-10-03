@@ -296,7 +296,7 @@ The protocol surface (specs + Apache-2.0 packages) makes a stronger stability pr
 ## Development
 
 ```bash
-pnpm install           # Node >= 20, pnpm 9.15
+pnpm install           # Node >= 22, pnpm 9.15
 pnpm run build         # Build all packages
 pnpm run test          # Run all tests
 pnpm run typecheck     # Type-check all packages
