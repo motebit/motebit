@@ -24,6 +24,7 @@ import {
   RelayDelegationAdapter,
   getOrPinRelayKey,
   verifyAgentCommandEnvelope,
+  TaskClaimCoordinator,
 } from "@motebit/runtime";
 import {
   DeviceCapability,
@@ -108,6 +109,13 @@ export class MobileSyncController {
   private _servingSyncUrl: string | null = null;
   private _servingAuthToken: string | null = null;
   private _activeTaskCount = 0;
+  /**
+   * One task, one body: the relay hands a task to every serving body of
+   * this identity and grants exactly one claim — run only on the grant.
+   */
+  private readonly _taskClaims = new TaskClaimCoordinator({
+    send: (frame) => this._wsAdapter?.sendRaw(frame),
+  });
 
   constructor(private deps: SyncControllerDeps) {}
 
@@ -455,6 +463,7 @@ export class MobileSyncController {
   }
 
   stopSync(): void {
+    this._taskClaims.dispose();
     this._session++;
     if (this._registrationTimer) {
       clearTimeout(this._registrationTimer);
@@ -649,6 +658,7 @@ export class MobileSyncController {
 
         // Wire task handler — accept delegations while the app is open.
         wsAdapter.onCustomMessage((msg) => {
+          if (this._taskClaims.handleFrame(msg)) return;
           const rt = this.deps.getRuntime();
           // Handle remote command requests (forwarded by relay)
           if (msg.type === "command_request" && rt) {
@@ -706,10 +716,10 @@ export class MobileSyncController {
           const task = msg.task as AgentTask;
           const runtimeRef = rt;
 
-          this._wsAdapter?.sendRaw(JSON.stringify({ type: "task_claim", task_id: task.task_id }));
-          this._activeTaskCount++;
-
-          void (async () => {
+          // Claim the task; execute only on the relay's grant — another body
+          // of this identity may hold it.
+          this._taskClaims.offer(task.task_id, async () => {
+            this._activeTaskCount++;
             try {
               const keyring = this.deps.getKeyring();
               const privKeyHex = await keyring.get("device_private_key");
@@ -752,7 +762,7 @@ export class MobileSyncController {
             } finally {
               this._activeTaskCount = Math.max(0, this._activeTaskCount - 1);
             }
-          })();
+          });
         });
       }
 

@@ -30,9 +30,9 @@ import {
   hash as sha256,
   // eslint-disable-next-line no-restricted-imports -- tests need direct keypair generation
 } from "@motebit/encryption";
-import type { SyncRelay, SyncRelayConfig } from "../index.js";
+import { TaskClaimCoordinator } from "@motebit/runtime";
+import type { SyncRelay } from "../index.js";
 import {
-  API_TOKEN,
   JSON_AUTH,
   createAgent,
   createTestRelay,
@@ -58,9 +58,7 @@ async function waitFor(pred: () => boolean, ms = 4000): Promise<boolean> {
 const LEASE_MS = 400;
 
 async function startRelay(): Promise<{ relay: SyncRelay; port: number }> {
-  const relay = await createTestRelay({
-    taskClaimLeaseMs: LEASE_MS,
-  } as unknown as Partial<SyncRelayConfig>);
+  const relay = await createTestRelay({ taskClaimLeaseMs: LEASE_MS });
   const server = serve({ fetch: relay.app.fetch, port: 0, hostname: "127.0.0.1" });
   (relay.app as Hono & { injectWebSocket: (s: unknown) => void }).injectWebSocket(server);
   await new Promise<void>((r) => (server.listening ? r() : server.once("listening", () => r())));
@@ -147,7 +145,10 @@ class Body {
       this.onFrame(f);
     });
     const ws = this.ws;
-    cleanups.push(async () => ws.terminate());
+    cleanups.push(async () => {
+      this.claims.dispose();
+      ws.terminate();
+    });
     await waitFor(() => (relay.connections.get(motebitId)?.length ?? 0) > before);
   }
 
@@ -164,13 +165,19 @@ class Body {
     this.ws.send(frame);
   }
 
-  /** What every surface does on a relay frame today: claim, then run. */
+  /**
+   * What every surface does on a relay frame: route it through the shared
+   * claim protocol (`TaskClaimCoordinator`, `@motebit/runtime`) — claim,
+   * run only on the grant, drop on a rejection, renew while running.
+   */
+  private readonly claims = new TaskClaimCoordinator({ send: (f) => this.send(f) });
+
   private onFrame(f: Record<string, unknown>): void {
+    if (this.claims.handleFrame(f)) return;
     if (f.type !== "task_request" || f.task == null) return;
     this.requests++;
     const task = f.task as { task_id: string; prompt: string };
-    this.send(JSON.stringify({ type: "task_claim", task_id: task.task_id }));
-    void this.run(task);
+    this.claims.offer(task.task_id, () => this.run(task));
   }
 
   private async run(task: { task_id: string; prompt: string }): Promise<void> {

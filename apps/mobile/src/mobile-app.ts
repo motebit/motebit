@@ -22,6 +22,7 @@ import {
   createRelayCapabilitiesFetcher,
   cmdSelfTest,
   TurnPrincipal,
+  TaskClaimCoordinator,
 } from "@motebit/runtime";
 import { buildHardwareVerifiers } from "@motebit/verify";
 import { createSolanaWalletRail, createSolanaMemoSubmitter } from "@motebit/wallet-solana";
@@ -2643,6 +2644,20 @@ TaskManager.defineTask(BACKGROUND_TASK_WAKE, async () => {
 
     // Ephemeral WebSocket connection
     const ws = new WebSocket(wsUrl);
+    // One task, one body: this phone runs a task only when the relay grants
+    // its claim. Lost every claim it made (another body holds the tasks)
+    // means there is nothing to do this wake.
+    const claims = new TaskClaimCoordinator({
+      send: (frame) => ws.send(frame),
+      grantTimeoutMs: 5_000,
+      onEvent: (e) => {
+        if ((e.kind === "rejected" || e.kind === "grant_timeout") && claims.held === 0) {
+          ws.close();
+          clearTimeout(timer);
+          done();
+        }
+      },
+    });
 
     ws.onopen = () => {
       // Authenticate with post-connect auth frame
@@ -2651,7 +2666,7 @@ TaskManager.defineTask(BACKGROUND_TASK_WAKE, async () => {
 
     ws.onmessage = (event) => {
       if (settled) return;
-      let msg: { type?: string; task?: AgentTask; ok?: boolean };
+      let msg: { type?: string; task?: AgentTask; ok?: boolean; task_id?: unknown };
       try {
         msg = JSON.parse(typeof event.data === "string" ? event.data : "") as typeof msg;
       } catch {
@@ -2666,15 +2681,13 @@ TaskManager.defineTask(BACKGROUND_TASK_WAKE, async () => {
         return;
       }
 
+      if (claims.handleFrame(msg)) return;
       if (msg.type !== "task_request" || msg.task == null) return;
 
       const task = msg.task;
 
-      // Claim the task
-      ws.send(JSON.stringify({ type: "task_claim", task_id: task.task_id }));
-
-      // Execute with time budget
-      void (async () => {
+      // Claim the task; execute with the time budget only on the grant
+      claims.offer(task.task_id, async () => {
         try {
           let privKeyBytes: Uint8Array;
           try {
@@ -2740,19 +2753,22 @@ TaskManager.defineTask(BACKGROUND_TASK_WAKE, async () => {
         } catch {
           // Background execution failed — task stays in queue
         } finally {
+          claims.dispose();
           ws.close();
           clearTimeout(timer);
           done();
         }
-      })();
+      });
     };
 
     ws.onerror = () => {
+      claims.dispose();
       clearTimeout(timer);
       done();
     };
 
     ws.onclose = () => {
+      claims.dispose();
       clearTimeout(timer);
       done();
     };

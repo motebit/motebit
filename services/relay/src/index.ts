@@ -92,6 +92,7 @@ import {
   registerWebSocketRoutes,
   WS_OPEN,
 } from "./websocket.js";
+import { TaskClaims } from "./task-claim.js";
 import type { RetireKeyConnections } from "./succession-apply.js";
 import type {
   CloseIdentityConnections,
@@ -502,6 +503,11 @@ export interface SyncRelayConfig {
   getShuttingDown?: ShutdownStateGetter;
   /** Max pending tasks per submitter. Default: 1000. */
   maxTasksPerSubmitter?: number;
+  /**
+   * How long a serving body's leased task claim holds without a renewal
+   * (`task-claim.ts`). Default: `TASK_CLAIM_LEASE_MS` (30 s).
+   */
+  taskClaimLeaseMs?: number;
   /**
    * Graceful-shutdown drain grace in ms — how long `close()` waits for
    * connected clients to disconnect voluntarily before force-closing.
@@ -1376,8 +1382,25 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     );
   });
 
+  // --- Task claims: one body per broadcast task, a lapsed lease re-presents ---
+  const taskClaims = new TaskClaims({
+    taskQueue,
+    connections,
+    logger,
+    ...(config.taskClaimLeaseMs != null ? { leaseMs: config.taskClaimLeaseMs } : {}),
+  });
+  const taskClaimLeaseInterval = superviseInterval(
+    loopSupervisor,
+    "task-claim-lease",
+    Math.max(50, Math.floor(taskClaims.leaseMs / 4)),
+    () => {
+      taskClaims.sweep(Date.now());
+    },
+  );
+
   // --- WebSocket routes ---
   registerWebSocketRoutes({
+    taskClaims,
     app,
     upgradeWebSocket,
     connections,
@@ -2704,6 +2727,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
 
     // Clean up intervals and database
     clearInterval(taskCleanupInterval);
+    clearInterval(taskClaimLeaseInterval);
     clearInterval(federationQueryPruneInterval);
     clearInterval(heartbeatInterval);
     clearInterval(revocationHorizonInterval);

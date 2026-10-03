@@ -15,7 +15,7 @@ import type { EventStore } from "@motebit/event-log";
 import type { IdentityManager } from "@motebit/core-identity";
 import type { DatabaseDriver, MotebitDatabase } from "@motebit/persistence";
 import type { EventLogEntry, SyncConversation, SyncConversationMessage } from "@motebit/sdk";
-import { AgentTaskStatus, asMotebitId } from "@motebit/sdk";
+import { asMotebitId } from "@motebit/sdk";
 import { secretEquals } from "./secret-compare.js";
 import type { FixedWindowLimiter } from "./rate-limiter.js";
 import { upsertSyncConversation, upsertSyncMessage } from "./data-sync.js";
@@ -27,6 +27,7 @@ import type { createLogger } from "./logger.js";
 import type { AuthEvent } from "./auth-events.js";
 import { sendToEach, WS_OPEN } from "./ws-send.js";
 import { recoverableOnReconnect } from "./task-presentation.js";
+import { TaskClaims } from "./task-claim.js";
 import {
   appendBoundEvent,
   bindSocketEntries,
@@ -423,6 +424,11 @@ export interface WebSocketDeps {
   onPeerClosed?: (motebitId: string, peer: ConnectedDevice) => void;
   /** When true, new WebSocket upgrades are rejected with close code 1001. */
   isDraining?: () => boolean;
+  /**
+   * Who holds each broadcast task (`task-claim.ts`). The relay passes the
+   * one whose lease sweep it supervises; absent, a sweep-less one is made.
+   */
+  taskClaims?: TaskClaims;
 }
 
 export function registerWebSocketRoutes(deps: WebSocketDeps): void {
@@ -442,6 +448,8 @@ export function registerWebSocketRoutes(deps: WebSocketDeps): void {
     verifySignedTokenForDevice,
     logger,
   } = deps;
+  // The claim registry; hand-built deps get one with no lease sweep running.
+  const taskClaims = deps.taskClaims ?? new TaskClaims({ taskQueue, connections, logger });
 
   /** @internal */
   app.get(
@@ -819,6 +827,8 @@ export function registerWebSocketRoutes(deps: WebSocketDeps): void {
               conversations?: SyncConversation[];
               messages?: SyncConversationMessage[];
               task_id?: string;
+              /** A `task_claim` asking for a lease (task-claim.ts). */
+              lease?: unknown;
               capabilities?: string[];
               /** A push frame's own id, echoed in its ack (#914; additive). */
               push_id?: unknown;
@@ -905,67 +915,38 @@ export function registerWebSocketRoutes(deps: WebSocketDeps): void {
               }
             }
 
-            // Agent protocol: task_claim
-            if (msg.type === "task_claim" && msg.task_id) {
+            // Agent protocol: task_claim — one body wins, the rest are
+            // refused (task-claim.ts). A `lease: true` claim lapses unless
+            // renewed; the grant names the lease so the body knows its cadence.
+            if (msg.type === "task_claim" && typeof msg.task_id === "string" && msg.task_id) {
               const taskId = msg.task_id;
-              const entry = taskQueue.get(taskId);
+              const claimer = registeredPeer ?? {
+                deviceId,
+                deviceIdVerified: false,
+                capabilities: undefined,
+              };
+              const verdict = taskClaims.claim(taskId, motebitId, claimer, {
+                lease: msg.lease === true,
+                now: Date.now(),
+              });
+              ws.send(
+                JSON.stringify(
+                  verdict.granted
+                    ? {
+                        type: "task_claimed",
+                        task_id: taskId,
+                        ...(verdict.lease_ms != null ? { lease_ms: verdict.lease_ms } : {}),
+                      }
+                    : { type: "task_claim_rejected", task_id: taskId, reason: verdict.reason },
+                ),
+              );
+            }
 
-              if (!entry || entry.task.motebit_id !== motebitId) {
-                ws.send(
-                  JSON.stringify({
-                    type: "task_claim_rejected",
-                    task_id: taskId,
-                    reason: "Task not found",
-                  }),
-                );
-              } else if (entry.task.status !== AgentTaskStatus.Pending) {
-                // Already claimed — atomic check: status is read BEFORE any async work
-                ws.send(
-                  JSON.stringify({
-                    type: "task_claim_rejected",
-                    task_id: taskId,
-                    reason: "already_claimed",
-                  }),
-                );
-              } else {
-                // Atomic claim: set status BEFORE any further checks or responses.
-                // Safe in single-threaded JS; prevents bugs if relay ever runs with
-                // worker threads or multi-instance.
-                entry.task.status = AgentTaskStatus.Claimed;
-                entry.task.claimed_by = deviceId;
-                taskQueue.set(taskId, entry); // Persist claim to durable queue
-
-                // Verify claiming device has required capabilities
-                const requiredCaps = entry.task.required_capabilities ?? [];
-                if (requiredCaps.length > 0) {
-                  const claimingPeers = connections.get(motebitId);
-                  const claimingDevice = claimingPeers?.find((p) => p.ws === ws);
-                  if (claimingDevice?.capabilities) {
-                    const hasAll = requiredCaps.every((c) =>
-                      claimingDevice.capabilities!.includes(c),
-                    );
-                    if (!hasAll) {
-                      // Roll back claim — device lacks capabilities
-                      entry.task.status = AgentTaskStatus.Pending;
-                      entry.task.claimed_by = undefined;
-                      taskQueue.set(taskId, entry); // Persist rollback
-                      ws.send(
-                        JSON.stringify({
-                          type: "task_claim_rejected",
-                          task_id: taskId,
-                          reason: "Device lacks required capabilities",
-                        }),
-                      );
-                    } else {
-                      ws.send(JSON.stringify({ type: "task_claimed", task_id: taskId }));
-                    }
-                  } else {
-                    ws.send(JSON.stringify({ type: "task_claimed", task_id: taskId }));
-                  }
-                } else {
-                  ws.send(JSON.stringify({ type: "task_claimed", task_id: taskId }));
-                }
-              }
+            // Agent protocol: task_claim_renew — the lease holder is still
+            // running the task. No answer: a renewal that no longer holds
+            // (the lease lapsed and another body took it) changes nothing.
+            if (msg.type === "task_claim_renew" && typeof msg.task_id === "string" && msg.task_id) {
+              taskClaims.renew(msg.task_id, motebitId, deviceId, Date.now());
             }
 
             if (msg.type === "push" && Array.isArray(msg.events)) {

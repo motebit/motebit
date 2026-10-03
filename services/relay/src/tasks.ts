@@ -96,6 +96,7 @@ import {
 import type { ConnectedDevice } from "./index.js";
 import { sendToEach } from "./ws-send.js";
 import { routeToSockets } from "./task-presentation.js";
+import { claimRefusesAnswer } from "./task-claim.js";
 import {
   bindIdempotencyClaimToTask,
   bindP2pProofToTask,
@@ -276,6 +277,12 @@ export type TaskQueueEntry = {
    * already ran when this entry exists. Advisory id, never authority.
    */
   grant_id?: string;
+  /**
+   * The claim a serving body holds on this task (`task-claim.ts`): which
+   * device won it, whether its token proved that device, and — for a leased
+   * claim — when it lapses unless renewed.
+   */
+  claim_lease?: import("./task-claim.js").TaskClaimLease;
 };
 
 // Platform fee rate is no longer a module-level variable. It lives in the
@@ -4868,6 +4875,9 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<TaskRoutesHan
       throw new AuthenticationError("AUTH_MISSING_TOKEN", "Authorization required");
     }
     const token = authHeader.slice(7);
+    // The device that presents this result (a verified device token's
+    // `did`); none under the master token.
+    let presentingDid: string | undefined;
     if (!secretEquals(token, apiToken)) {
       // Verify as device signed token
       if (enableDeviceAuth && token.includes(".")) {
@@ -4890,6 +4900,7 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<TaskRoutesHan
         if (!verified) {
           throw new AuthorizationError("AUTHZ_DEVICE_NOT_AUTHORIZED", "Device not authorized");
         }
+        presentingDid = resultClaims?.did;
       } else {
         throw new AuthorizationError("AUTHZ_INVALID_CREDENTIALS", "Invalid authorization");
       }
@@ -4908,6 +4919,27 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<TaskRoutesHan
         "TASK_NOT_FOUND",
         "Task not found — motebit_id in URL does not match the task's target agent",
         404,
+      );
+    }
+
+    // One task, one body (task-claim.ts): while a verified device holds the
+    // task's claim, no other device of the identity answers it — a claimer
+    // whose lease lapsed and that finished late is refused, never a second
+    // answer beside its successor's.
+    if (claimRefusesAnswer(entry, presentingDid)) {
+      logger.warn("task.result_claimed_by_other", {
+        correlationId: taskId,
+        motebitId,
+        presentingDid,
+        claimedBy: entry.claim_lease?.device_id,
+      });
+      return c.json(
+        {
+          error: "Result not accepted: another device of this identity holds the task's claim",
+          code: "TASK_CLAIMED_BY_OTHER",
+          status: 409,
+        },
+        409,
       );
     }
 
