@@ -90,6 +90,7 @@ import {
   generateX25519Keypair,
   buildKeyTransferPayload,
   decryptKeyTransfer,
+  verifyPairingIdentityBinding,
   checkPreTransferBalance,
   formatWalletWarning,
 } from "@motebit/encryption";
@@ -1667,10 +1668,10 @@ export class UnbootedWebApp {
   }
 
   async verifyMotebitMd(content: string): Promise<{ valid: boolean; error?: string }> {
-    const { verify: verifyIdentity } = await import("@motebit/identity-file");
-    const result = await verifyIdentity(content, { expectedType: "identity" });
-    const error = result.errors?.[0]?.message;
-    return error !== undefined ? { valid: result.valid, error } : { valid: result.valid };
+    // Intact = signature AND succession chain (the shared fold).
+    const { verify: verifyIdentity, identityVerifyOutcome } =
+      await import("@motebit/identity-file");
+    return identityVerifyOutcome(await verifyIdentity(content, { expectedType: "identity" }));
   }
 
   // Parse + verify a motebit.md and return the flat metadata the Restore
@@ -4458,22 +4459,39 @@ export class UnbootedWebApp {
       pairingId: string;
     },
   ): Promise<string | undefined> {
-    // Update in-memory identity state
-    this._motebitId = motebitId;
-    this._deviceId = deviceId;
-    // The Machines section belonged to the previous identity (F4).
-    this._machineRoster?.dispose();
-    this._machineRoster = null;
     let walletWarning: string | undefined;
+    let identitySeed: Uint8Array | undefined;
 
-    if (keyTransferOpts) {
-      const { keyTransfer, ephemeralPrivateKey, pairingCode, syncUrl, pairingId } = keyTransferOpts;
-      try {
-        const identitySeed = await decryptKeyTransfer(
-          keyTransfer,
-          ephemeralPrivateKey,
-          pairingCode,
-        );
+    try {
+      if (keyTransferOpts) {
+        const { keyTransfer, ephemeralPrivateKey, pairingCode } = keyTransferOpts;
+        try {
+          identitySeed = await decryptKeyTransfer(keyTransfer, ephemeralPrivateKey, pairingCode);
+        } catch {
+          // Key transfer failed — device keeps its own keypair, wallet warning stays undefined
+        }
+        if (identitySeed !== undefined) {
+          // The relay names the motebit_id; the key arrived end-to-end from
+          // the paired device (identity_pubkey_check is verified against the
+          // seed during decryption). An id the key contradicts is refused
+          // before anything — in memory or at rest — changes.
+          const binding = await verifyPairingIdentityBinding(
+            motebitId,
+            keyTransfer.identity_pubkey_check,
+          );
+          if (!binding.accepted) throw new Error(`Pairing refused: ${binding.reason}`);
+        }
+      }
+
+      // Update in-memory identity state
+      this._motebitId = motebitId;
+      this._deviceId = deviceId;
+      // The Machines section belonged to the previous identity (F4).
+      this._machineRoster?.dispose();
+      this._machineRoster = null;
+
+      if (keyTransferOpts && identitySeed !== undefined) {
+        const { keyTransfer, syncUrl, pairingId } = keyTransferOpts;
         try {
           // Safety check: refuse key transfer if old wallet has funds
           const oldPrivKeyHex = await this.keyStore.loadPrivateKey();
@@ -4500,14 +4518,13 @@ export class UnbootedWebApp {
             const client = new PairingClient({ relayUrl: syncUrl });
             await client.updateDeviceKey(pairingId, this._publicKeyHex);
           }
-        } finally {
-          secureErase(identitySeed);
+        } catch {
+          // Key transfer failed — device keeps its own keypair, wallet warning stays undefined
         }
-      } catch {
-        // Key transfer failed — device keeps its own keypair, wallet warning stays undefined
-      } finally {
-        secureErase(ephemeralPrivateKey);
       }
+    } finally {
+      if (identitySeed !== undefined) secureErase(identitySeed);
+      if (keyTransferOpts) secureErase(keyTransferOpts.ephemeralPrivateKey);
     }
     return walletWarning;
   }

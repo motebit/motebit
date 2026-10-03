@@ -831,6 +831,12 @@ export interface IdentityLogInclusionProof {
 // @public
 export function identityLogLeaf(motebitId: string, currentKeyHex: string, treeHashVersion?: MerkleTreeVersion): Promise<string>;
 
+// @public
+export function identityVerifyOutcome(result: VerifyResult): {
+    valid: boolean;
+    error?: string;
+};
+
 // @public (undocumented)
 export interface IdentityVerifyResult extends BaseResult {
     // (undocumented)
@@ -1054,6 +1060,14 @@ export interface MotebitIdentityFile {
     terms_url?: string;
     // (undocumented)
     type?: "personal" | "service" | "collaborative";
+}
+
+// @public
+export interface PairingIdentityBindingResult {
+    accepted: boolean;
+    identityBinding: Extract<IdentityBindingVerdict, "sovereign" | "unverified" | "invalid">;
+    // (undocumented)
+    reason?: string;
 }
 
 // @public
@@ -2124,6 +2138,9 @@ export interface VerifyOptions {
     hardwareAttestation?: HardwareAttestationVerifiers;
     strictHashBinding?: boolean;
 }
+
+// @public
+export function verifyPairingIdentityBinding(motebitId: string, transferredPublicKeyHex: string): Promise<PairingIdentityBindingResult>;
 
 // @public
 export function verifyReceipt(receipt: ExecutionReceipt, options?: VerifyOptions): Promise<ReceiptVerifyResult>;

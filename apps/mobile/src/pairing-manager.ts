@@ -26,6 +26,7 @@ import {
   generateX25519Keypair,
   buildKeyTransferPayload,
   decryptKeyTransfer,
+  verifyPairingIdentityBinding,
   checkPreTransferBalance,
   formatWalletWarning,
   secureErase,
@@ -150,18 +151,36 @@ export class MobilePairingManager {
   ): Promise<string | undefined> {
     const keyring = this.deps.getKeyring();
     let walletWarning: string | undefined;
-    await keyring.set(KEYRING_KEYS.motebitId, result.motebitId);
-    await keyring.set("device_id", result.deviceId);
+    let identitySeed: Uint8Array | undefined;
 
-    // Decrypt and install identity key if key transfer is available
-    if (keyTransferOpts) {
-      const { keyTransfer, ephemeralPrivateKey, pairingCode, pairingId } = keyTransferOpts;
-      try {
-        const identitySeed = await decryptKeyTransfer(
-          keyTransfer,
-          ephemeralPrivateKey,
-          pairingCode,
-        );
+    try {
+      if (keyTransferOpts) {
+        const { keyTransfer, ephemeralPrivateKey, pairingCode } = keyTransferOpts;
+        try {
+          identitySeed = await decryptKeyTransfer(keyTransfer, ephemeralPrivateKey, pairingCode);
+        } catch (err) {
+          // eslint-disable-next-line no-console -- operator diagnostic: recoverable key-transfer degradation
+          console.warn("Key transfer failed, device keeps its own keypair:", err);
+        }
+        if (identitySeed !== undefined) {
+          // The relay names the motebit_id; the key arrived end-to-end from
+          // the paired device (identity_pubkey_check is verified against the
+          // seed during decryption). An id the key contradicts is refused
+          // before anything is written.
+          const binding = await verifyPairingIdentityBinding(
+            result.motebitId,
+            keyTransfer.identity_pubkey_check,
+          );
+          if (!binding.accepted) throw new Error(`Pairing refused: ${binding.reason}`);
+        }
+      }
+
+      await keyring.set(KEYRING_KEYS.motebitId, result.motebitId);
+      await keyring.set("device_id", result.deviceId);
+
+      // Install the transferred identity key
+      if (keyTransferOpts && identitySeed !== undefined) {
+        const { keyTransfer, pairingId } = keyTransferOpts;
         try {
           // Safety check: refuse key transfer if old wallet has funds
           const oldPrivKeyHex = await keyring.get("device_private_key");
@@ -193,15 +212,14 @@ export class MobilePairingManager {
               await client.updateDeviceKey(pairingId, newPubHex);
             }
           }
-        } finally {
-          secureErase(identitySeed);
+        } catch (err) {
+          // eslint-disable-next-line no-console -- operator diagnostic: recoverable key-transfer degradation
+          console.warn("Key transfer failed, device keeps its own keypair:", err);
         }
-      } catch (err) {
-        // eslint-disable-next-line no-console -- operator diagnostic: recoverable key-transfer degradation
-        console.warn("Key transfer failed, device keeps its own keypair:", err);
-      } finally {
-        secureErase(ephemeralPrivateKey);
       }
+    } finally {
+      if (identitySeed !== undefined) secureErase(identitySeed);
+      if (keyTransferOpts) secureErase(keyTransferOpts.ephemeralPrivateKey);
     }
 
     this.deps.setIdentity(result.motebitId, result.deviceId);

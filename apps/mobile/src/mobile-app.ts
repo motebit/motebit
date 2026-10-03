@@ -99,6 +99,7 @@ import {
   governanceToPolicyConfig,
   validateRestoreRequest,
   verify as verifyIdentityFile,
+  identityVerifyOutcome,
   type ImportIdentityResult,
   type RestoreIdentityRequest,
   type RestoreIdentityResult,
@@ -2472,7 +2473,8 @@ export class MobileApp {
   }
 
   /**
-   * Verify a motebit.md identity file's Ed25519 signature.
+   * Verify a motebit.md identity file: its Ed25519 signature AND its
+   * succession chain.
    *
    * Mirrors `WebApp.verifyMotebitMd` and
    * `IdentityManager.verifyIdentityFile`. Browser-and-native-safe:
@@ -2481,9 +2483,8 @@ export class MobileApp {
    * implementation.
    */
   async verifyMotebitMd(content: string): Promise<{ valid: boolean; error?: string }> {
-    const result = await verifyIdentityFile(content, { expectedType: "identity" });
-    const error = result.errors?.[0]?.message;
-    return error !== undefined ? { valid: result.valid, error } : { valid: result.valid };
+    // Intact = signature AND succession chain (the shared fold).
+    return identityVerifyOutcome(await verifyIdentityFile(content, { expectedType: "identity" }));
   }
 
   /**

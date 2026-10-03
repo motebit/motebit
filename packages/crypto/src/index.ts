@@ -1365,6 +1365,83 @@ export async function verifyMigratingKeyBinding(
 }
 
 /**
+ * Is this identity file intact? Folds an identity {@link verify} result into the
+ * one answer every surface shows: intact only when the signature AND the
+ * succession chain verify. `valid` on the raw result covers the signature
+ * alone — a file re-signed by a key its chain never legitimately reaches still
+ * has a valid signature, so a surface reading `valid` alone reports a broken
+ * identity as intact. Pure; never throws.
+ */
+export function identityVerifyOutcome(result: VerifyResult): { valid: boolean; error?: string } {
+  if (result.type !== "identity") {
+    return { valid: false, error: result.errors?.[0]?.message ?? "not an identity file" };
+  }
+  if (!result.valid) {
+    const error = result.errors?.[0]?.message;
+    return error !== undefined ? { valid: false, error } : { valid: false };
+  }
+  if (result.succession !== undefined && !result.succession.valid) {
+    return {
+      valid: false,
+      error: `succession chain invalid: ${result.succession.error ?? "verification failed"}`,
+    };
+  }
+  return { valid: true };
+}
+
+/** Outcome of {@link verifyPairingIdentityBinding}. */
+export interface PairingIdentityBindingResult {
+  /** False ⇒ the device MUST NOT persist the id (nor the transferred key under it). */
+  accepted: boolean;
+  /** `sovereign` — the id commits to the key; `unverified` — the id commits to no key; `invalid` — the id commits to a different key. */
+  identityBinding: Extract<IdentityBindingVerdict, "sovereign" | "unverified" | "invalid">;
+  reason?: string;
+}
+
+// A self-certifying motebit_id is a UUIDv8 (see `deriveSovereignMotebitId`).
+const SELF_CERTIFYING_UUID =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-8[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+/**
+ * May a pairing device adopt `motebitId` together with the identity key the
+ * pairing transferred (`transferredPublicKeyHex`)? The relay supplies the id;
+ * the key arrives end-to-end from the paired device. The binding ladder decides,
+ * offline, with no operator trust:
+ *
+ *  - the id is the self-certifying commitment to the key → accepted (`sovereign`);
+ *  - the id is self-certifying (UUIDv8 / `did:key`) but commits to a DIFFERENT
+ *    key → refused (`invalid`): adopting it would pin the device to an identity
+ *    the transferred key contradicts. (A rotated self-certifying identity's
+ *    current key also lands here — its succession chain is not carried by
+ *    pairing, so the binding cannot be shown and the pairing fails closed.)
+ *  - the id commits to no key (a legacy UUIDv7 or keyless mint) → accepted at
+ *    `unverified`, the rung such an id reads at everywhere else. No offline
+ *    check can confirm or contradict it.
+ *
+ * Never throws; malformed input is refused.
+ */
+export async function verifyPairingIdentityBinding(
+  motebitId: string,
+  transferredPublicKeyHex: string,
+): Promise<PairingIdentityBindingResult> {
+  if (await verifySovereignBinding(motebitId, transferredPublicKeyHex)) {
+    return { accepted: true, identityBinding: "sovereign" };
+  }
+  if (
+    motebitId.startsWith("did:key:") ||
+    SELF_CERTIFYING_UUID.test(motebitId) ||
+    !/^[0-9a-f]{64}$/i.test(transferredPublicKeyHex)
+  ) {
+    return {
+      accepted: false,
+      identityBinding: "invalid",
+      reason: `motebit_id ${motebitId} does not bind to the transferred identity key`,
+    };
+  }
+  return { accepted: true, identityBinding: "unverified" };
+}
+
+/**
  * Canonical leaf of the identity-transparency log: the operator's
  * non-equivocable commitment that motebit `motebitId`'s current identity key is
  * `currentKeyHex`. Hex SHA-256 of the JCS-canonical commitment. The relay that

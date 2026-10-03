@@ -8,7 +8,11 @@
  * in-process relay (composition-preserves-enforcement).
  */
 import * as fs from "node:fs";
-import { verify, rotate as rotateIdentityFile } from "@motebit/identity-file";
+import {
+  verify,
+  identityVerifyOutcome,
+  rotate as rotateIdentityFile,
+} from "@motebit/identity-file";
 import { performKeyRotation, type HeldRotation, type KeyRotationPorts } from "@motebit/surface-kit";
 import { hexToBytes } from "@motebit/encryption";
 import {
@@ -84,10 +88,10 @@ export type RotationOutcome =
 export async function performRotation(deps: RotationDeps): Promise<RotationOutcome> {
   const existingContent = fs.readFileSync(deps.identityPath, "utf-8");
   const verified = await verify(existingContent, { expectedType: "identity" });
-  if (verified.type !== "identity" || !verified.valid || !verified.identity) {
-    throw new Error(
-      `identity file verification failed: ${verified.errors?.[0]?.message ?? "invalid"}`,
-    );
+  // Intact = signature AND succession chain; never extend a broken chain.
+  const intact = identityVerifyOutcome(verified);
+  if (verified.type !== "identity" || !intact.valid || !verified.identity) {
+    throw new Error(`identity file verification failed: ${intact.error ?? "invalid"}`);
   }
   const identity = verified.identity;
   const motebitId = identity.motebit_id;
