@@ -13,8 +13,11 @@
  *
  *   - `offer(taskId, run)` sends `task_claim` (asking for a lease) and calls
  *     `run` only on the grant. A task already being claimed or run here is a
- *     duplicate (reconnect recovery can present a still-Pending task again)
- *     and is ignored.
+ *     duplicate and never runs twice; a duplicate that arrives while the
+ *     claim is still unanswered re-sends the claim — reconnect recovery
+ *     re-presents only a still-Pending task, so the first claim was lost
+ *     with its socket (a claim the relay already granted is answered
+ *     `already_claimed`, and dropped).
  *   - `handleFrame(frame)` takes every relay frame; it consumes the claim
  *     answers for tasks it is claiming.
  *   - While `run` is pending the coordinator renews the lease
@@ -101,7 +104,19 @@ export class TaskClaimCoordinator {
    * already claiming or running.
    */
   offer(taskId: string, run: () => Promise<void>): "claiming" | "duplicate" {
-    if (this.claims.has(taskId)) return "duplicate";
+    const held = this.claims.get(taskId);
+    if (held != null) {
+      // Presented again while still CLAIMING: the relay re-presents only a
+      // task that is still Pending (reconnect recovery), so the claim it is
+      // waiting on never landed — it was lost with a socket. Claim again on
+      // the current socket. If the first claim did land and was granted,
+      // the relay answers `already_claimed` and this body drops it (the
+      // relay's lease then marks it undetermined, never re-presents it).
+      if (held.phase === "claiming") {
+        this.sendSafe({ type: "task_claim", task_id: taskId, lease: true });
+      }
+      return "duplicate";
+    }
     const timer = setTimeout(() => {
       const c = this.claims.get(taskId);
       if (c?.phase !== "claiming") return;

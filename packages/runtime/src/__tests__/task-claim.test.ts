@@ -47,16 +47,45 @@ describe("TaskClaimCoordinator — run only on the relay's grant", () => {
     let finish!: () => void;
     const run = vi.fn(() => new Promise<void>((r) => (finish = r)));
     c.offer("t1", run);
+    // Re-presented while CLAIMING: the first claim was lost with a socket
+    // (recovery presents only a still-Pending task) — claim again.
     expect(c.offer("t1", run)).toBe("duplicate");
+    expect(sent.filter((f) => f.type === "task_claim")).toHaveLength(2);
     c.handleFrame({ type: "task_claimed", task_id: "t1" });
     await vi.waitFor(() => expect(run).toHaveBeenCalledTimes(1));
+    // Re-presented while RUNNING: nothing is sent, nothing runs again.
     expect(c.offer("t1", run)).toBe("duplicate");
-    expect(sent.filter((f) => f.type === "task_claim")).toHaveLength(1);
+    expect(sent.filter((f) => f.type === "task_claim")).toHaveLength(2);
     // A second grant for the same task (a duplicate frame) never runs it twice.
     expect(c.handleFrame({ type: "task_claimed", task_id: "t1" })).toBe(false);
     finish();
     await vi.waitFor(() => expect(c.holds("t1")).toBe(false));
     expect(run).toHaveBeenCalledTimes(1);
+  });
+
+  it("a claim lost with its socket: the re-presentation re-claims on the current socket, and the grant runs it once", async () => {
+    const lost: string[] = [];
+    const sent: Array<Record<string, unknown>> = [];
+    let socket: "old" | "new" = "old";
+    const c = new TaskClaimCoordinator({
+      send: (f) => (socket === "old" ? lost.push(f) : sent.push(JSON.parse(f) as never)),
+    });
+    const run = vi.fn(async () => {});
+    c.offer("t1", run); // the claim goes down with the old socket
+    socket = "new";
+    expect(c.offer("t1", run)).toBe("duplicate"); // recovery re-presents
+    expect(sent).toEqual([{ type: "task_claim", task_id: "t1", lease: true }]);
+    c.handleFrame({ type: "task_claimed", task_id: "t1" });
+    await vi.waitFor(() => expect(run).toHaveBeenCalledTimes(1));
+    // Had the first claim been granted, the re-claim is refused and dropped.
+    const d = harness();
+    const run2 = vi.fn(async () => {});
+    d.c.offer("t2", run2);
+    d.c.offer("t2", run2);
+    d.c.handleFrame({ type: "task_claim_rejected", task_id: "t2", reason: "already_claimed" });
+    await new Promise((r) => setTimeout(r, 5));
+    expect(run2).not.toHaveBeenCalled();
+    expect(d.c.holds("t2")).toBe(false);
   });
 
   it("ignores frames that are not answers to its own claims", () => {

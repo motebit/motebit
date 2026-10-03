@@ -102,6 +102,7 @@ export class TaskQueue implements Map<string, TaskQueueEntry> {
   private readonly stmtCountBySubmitter: ReturnType<DatabaseDriver["prepare"]>;
   private readonly stmtAll: ReturnType<DatabaseDriver["prepare"]>;
   private readonly stmtCleanup: ReturnType<DatabaseDriver["prepare"]>;
+  private readonly stmtUnansweredPastExpiry: ReturnType<DatabaseDriver["prepare"]>;
   private readonly stmtEvictOldest: ReturnType<DatabaseDriver["prepare"]>;
 
   constructor(db: DatabaseDriver) {
@@ -148,11 +149,26 @@ export class TaskQueue implements Map<string, TaskQueueEntry> {
     const heldClaim = `(json_extract(task_json, '$.settling') IS NOT NULL
         AND COALESCE(json_extract(task_json, '$.settled'), 0) = 0
         AND expires_at >= ?)`;
+    // A GRANTED, unanswered entry (one task, one body — task-claim.ts) is
+    // never deleted or evicted: its executor may have run it, so it stays —
+    // undetermined, with its allocation hold — until the executor's signed
+    // result answers it. An entry past expiry is never deleted unanswered at
+    // all until the claim registry's expiry pass has marked it
+    // (`TaskClaims.expire`): a never-granted one is then kept readable as
+    // visibly expired until its extended expiry.
+    const heldGrant = `(status = 'claimed' AND receipt IS NULL)`;
+    const unmarkedPending = `(status = 'pending' AND receipt IS NULL
+        AND json_extract(task_json, '$.expired_unclaimed') IS NULL)`;
     this.stmtCleanup = db.prepare(
-      `DELETE FROM relay_task_queue WHERE expires_at < ? AND NOT ${heldClaim}`,
+      `DELETE FROM relay_task_queue WHERE expires_at < ? AND NOT ${heldClaim}
+         AND NOT ${heldGrant} AND NOT ${unmarkedPending}`,
     );
     this.stmtEvictOldest = db.prepare(
-      `DELETE FROM relay_task_queue WHERE task_id IN (SELECT task_id FROM relay_task_queue WHERE NOT ${heldClaim} ORDER BY expires_at ASC LIMIT ?)`,
+      `DELETE FROM relay_task_queue WHERE task_id IN (SELECT task_id FROM relay_task_queue WHERE NOT ${heldClaim} AND NOT ${heldGrant} ORDER BY expires_at ASC LIMIT ?)`,
+    );
+    this.stmtUnansweredPastExpiry = db.prepare(
+      `SELECT task_id FROM relay_task_queue WHERE expires_at < ? AND receipt IS NULL
+         AND status IN ('pending', 'claimed')`,
     );
   }
 
@@ -465,6 +481,17 @@ export class TaskQueue implements Map<string, TaskQueueEntry> {
     return result.changes;
   }
 
+  /**
+   * Unanswered Pending/Claimed entries past their expiry — the claim
+   * registry's expiry pass (`TaskClaims.expire`) marks each visibly expired
+   * or undetermined before `cleanup` may touch it.
+   */
+  unansweredPastExpiry(now: number = Date.now()): string[] {
+    return (this.stmtUnansweredPastExpiry.all(now) as Array<{ task_id: string }>).map(
+      (r) => r.task_id,
+    );
+  }
+
   /** Evict oldest entries to bring queue below maxSize. Returns number evicted. */
   evict(maxSize: number): number {
     const currentSize = this.size;
@@ -516,6 +543,7 @@ export class TaskQueue implements Map<string, TaskQueueEntry> {
       target_agent: entry.target_agent,
       p2p_admission: entry.p2p_admission,
       claim_lease: entry.claim_lease,
+      expired_unclaimed: entry.expired_unclaimed,
       // receipt is stored in its own column for queryability
     };
   }
@@ -545,6 +573,8 @@ export class TaskQueue implements Map<string, TaskQueueEntry> {
       target_agent: (stored.target_agent as string) ?? undefined,
       p2p_admission: (stored.p2p_admission as TaskQueueEntry["p2p_admission"]) ?? undefined,
       claim_lease: (stored.claim_lease as TaskQueueEntry["claim_lease"]) ?? undefined,
+      expired_unclaimed:
+        (stored.expired_unclaimed as TaskQueueEntry["expired_unclaimed"]) ?? undefined,
     };
 
     // Restore receipt from its own column (may be updated independently)

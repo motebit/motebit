@@ -272,6 +272,18 @@ export class RelayDelegationAdapter implements StepDelegationAdapter {
     for (;;) {
       const state = await this.queryTask(task_id);
       if (state.kind === "receipt") return settle(state.receipt);
+      if (state.kind === "undetermined") {
+        // The relay says the task was GRANTED and its executor was lost (or
+        // never answered): it may have run. That is the relay's own verdict,
+        // not a timeout — end the step undetermined now. Not a failure: no
+        // trust demotion, no retry, no new task (one task, one body).
+        throw new DelegationUndeterminedError(
+          step.description,
+          new Error(
+            `Delegated task ${task_id} is undetermined at the relay (${state.reason}): ${state.detail}`,
+          ),
+        );
+      }
       if (state.kind === "not_found") {
         // The relay no longer knows this task (#890 r4). That is ABSENCE,
         // never evidence: the task may have been admitted, paid and done.
@@ -333,6 +345,7 @@ export class RelayDelegationAdapter implements StepDelegationAdapter {
   ): Promise<
     | { kind: "receipt"; receipt: ExecutionReceipt }
     | { kind: "pending" }
+    | { kind: "undetermined"; reason: string; detail: string }
     | { kind: "not_found" }
     | { kind: "unreachable" }
   > {
@@ -343,8 +356,21 @@ export class RelayDelegationAdapter implements StepDelegationAdapter {
       });
       if (resp.status === 404) return { kind: "not_found" };
       if (!resp.ok) return { kind: "unreachable" };
-      const data = (await resp.json()) as { receipt?: ExecutionReceipt | null };
+      const data = (await resp.json()) as {
+        receipt?: ExecutionReceipt | null;
+        undetermined?: { reason?: unknown; detail?: unknown } | null;
+      };
       if (data.receipt != null) return { kind: "receipt", receipt: data.receipt };
+      // One task, one body: a granted task whose executor was lost is
+      // reported `undetermined` (reason given) — never "pending" forever.
+      if (data.undetermined != null) {
+        return {
+          kind: "undetermined",
+          reason:
+            typeof data.undetermined.reason === "string" ? data.undetermined.reason : "unknown",
+          detail: typeof data.undetermined.detail === "string" ? data.undetermined.detail : "",
+        };
+      }
       return { kind: "pending" };
     } catch {
       return { kind: "unreachable" };

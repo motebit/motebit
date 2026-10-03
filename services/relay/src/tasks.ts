@@ -96,7 +96,13 @@ import {
 import type { ConnectedDevice } from "./index.js";
 import { sendToEach } from "./ws-send.js";
 import { routeToSockets } from "./task-presentation.js";
-import { claimRefusesAnswer, undeterminedOf } from "./task-claim.js";
+import {
+  TaskClaims,
+  claimRefusesAnswer,
+  expiredOf,
+  grantToSubmitter,
+  undeterminedOf,
+} from "./task-claim.js";
 import {
   bindIdempotencyClaimToTask,
   bindP2pProofToTask,
@@ -283,6 +289,12 @@ export type TaskQueueEntry = {
    * claim — when it lapses unless renewed.
    */
   claim_lease?: import("./task-claim.js").TaskClaimLease;
+  /**
+   * Set when the task outlived its TTL without ever being granted
+   * (`TaskClaims.expire`): it expired VISIBLY — never presented or claimed
+   * again, and the delegator's poll says why until the entry ages out.
+   */
+  expired_unclaimed?: { reason: "never_claimed"; since: number };
 };
 
 // Platform fee rate is no longer a module-level variable. It lives in the
@@ -298,6 +310,11 @@ export interface TasksDeps {
   eventStore: EventStore;
   relayIdentity: RelayIdentity;
   connections: Map<string, ConnectedDevice[]>;
+  /**
+   * Who holds each task's grant (`task-claim.ts`) — the relay passes the one
+   * its lease sweep supervises; hand-built deps get a sweep-less one.
+   */
+  taskClaims?: TaskClaims;
   /**
    * The production queue is `TaskQueue` (SQLite-backed) whose indexed
    * `countBySubmitter` the fairness check uses (#459 — the Map-iteration
@@ -2197,6 +2214,7 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<TaskRoutesHan
     p2pPaymentChain,
   } = deps;
   const peerFetch = deps.peerFetch ?? defaultPeerFetch;
+  const taskClaims = deps.taskClaims ?? new TaskClaims({ taskQueue, connections, logger });
 
   // Platform fee rate lives in this function's closure — every handler
   // registered below sees the same rate for its lifetime. No module-level
@@ -4017,7 +4035,7 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<TaskRoutesHan
         );
         if (!proofBinding.bound) throw proofAlreadyAdmitted(proofBinding.existing);
       }
-      taskQueue.set(taskId, {
+      const queued: TaskQueueEntry = {
         task,
         expiresAt: now + TASK_TTL_MS,
         submitted_by: submittedBy,
@@ -4031,7 +4049,14 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<TaskRoutesHan
         p2p_admission: p2pAdmission,
         target_agent: body.target_agent,
         grant_id: body.grant_id,
-      });
+      };
+      // One task, one body (task-claim.ts): the submitter's chosen
+      // presentation is a GRANT — the dispatch token it is handed below may
+      // run the task — so the task is queued already granted to it, and no
+      // body is ever presented it (reconnect recovery reads Pending only).
+      // A submitter that never presents leaves it undetermined at expiry.
+      if (submitterPresenter) grantToSubmitter(queued, submittedBy);
+      taskQueue.set(taskId, queued);
       moteDb.db.exec("COMMIT");
     } catch (admitErr) {
       moteDb.db.exec("ROLLBACK");
@@ -4079,13 +4104,28 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<TaskRoutesHan
     const dispatchTokenFor = (workerId: string): Promise<string> =>
       mintTaskDispatchToken(relayIdentity, workerId, taskId, body.prompt);
     // Every relay MCP forward goes through here (fire-and-forget, as on main).
-    // Reconnect recovery is not held back while it runs: holding it stranded
-    // tasks main completes when the forward failed and the held-back device
-    // had left (#811; presentation-matrix.probe.ts). Shared with main: a
-    // device that reconnects mid-forward can run the task beside the forward.
-    const presentViaMcp = async (endpointUrl: string, workerId: string): Promise<void> => {
+    // One task, one body (task-claim.ts): the forward is a GRANT, so it takes
+    // the task's grant BEFORE its first request — a body that reconnects
+    // mid-forward is then never presented it (recovery reads Pending only),
+    // and a body that already claimed it means no forward is sent at all.
+    // When the forward ends without sending `tools/call` (refused, wake or
+    // initialize failed, or the call's own connection refused) the worker
+    // provably never ran it: the grant is
+    // released and the task presented to the bodies connected NOW, so the
+    // ones recovery skipped are not stranded. When `tools/call` was sent and
+    // no receipt was accepted, the task is UNDETERMINED — never re-presented.
+    // Returns whether the forward was sent.
+    const presentViaMcp = async (endpointUrl: string, workerId: string): Promise<boolean> => {
+      if (!taskClaims.grantForward(taskId, workerId)) {
+        logger.info("task.forward_skipped_already_granted", {
+          correlationId: taskId,
+          worker: workerId,
+        });
+        return false;
+      }
       recordTaskRoute(moteDb.db, taskId, workerId);
       const token = await dispatchTokenFor(workerId);
+      let called = false;
       void forwardTaskViaMcp(
         endpointUrl,
         taskId,
@@ -4116,7 +4156,40 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<TaskRoutesHan
         outboundPolicy,
         // The relay's own transport credential, fresh per request (#981).
         () => mintRelayMcpBearer(relayIdentity, workerId),
-      );
+        (phase) => {
+          called = phase === "sent";
+        },
+      )
+        .catch(() => {
+          // forwardTaskViaMcp logs its own failures; the outcome is below.
+        })
+        .finally(() => {
+          let released: TaskQueueEntry | null;
+          try {
+            released = taskClaims.forwardEnded(taskId, called, Date.now());
+          } catch (endErr: unknown) {
+            // The relay closed under the forward (its database with it): the
+            // grant stays as written — Claimed — and the TTL pass marks it.
+            logger.warn("task.forward_end_unrecorded", {
+              correlationId: taskId,
+              worker: workerId,
+              error: endErr instanceof Error ? endErr.message : String(endErr),
+            });
+            return;
+          }
+          if (released != null) {
+            const reqCaps = released.task.required_capabilities ?? [];
+            routeToSockets(
+              connections.get(released.task.motebit_id),
+              JSON.stringify({ type: "task_request", task: released.task }),
+              (peer) =>
+                reqCaps.length > 0 && peer.capabilities
+                  ? reqCaps.every((cap) => peer.capabilities!.includes(cap))
+                  : true,
+            );
+          }
+        });
+      return true;
     };
     // `routed` means what it meant on main: a presenter exists — an OPEN
     // socket took the frame, a forward was taken, or the task is HELD for
@@ -4736,10 +4809,12 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<TaskRoutesHan
     }
     if (submitterPresenter) {
       // Chosen, not incidental: the submitter asked to present. Nothing above
-      // routed (every phase is guarded), so the token below is the ONLY one.
-      // Reconnect recovery still hands the task to a worker socket that
-      // registers, as on main: withholding it strands the task whenever the
-      // submitter never presents (#811; presentation-matrix.probe.ts).
+      // routed (every phase is guarded), so the token below is the ONLY one,
+      // and the task was queued granted to the submitter (task-claim.ts):
+      // reconnect recovery never hands it to a worker socket, which would be
+      // a second presenter beside the token (one-execution-matrix.probe.ts).
+      // A submitter that never presents leaves it undetermined at expiry —
+      // the token may have been used — never silently gone.
       logger.info("task.submitter_presents", {
         correlationId: taskId,
         worker: terms.routedTo,
@@ -4862,11 +4937,14 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<TaskRoutesHan
 
     // One task, one body (task-claim.ts): a claimer lost after its grant
     // leaves the outcome undetermined — said explicitly, never "pending".
+    // A task that expired before anything was granted it says so too.
     const undetermined = undeterminedOf(entry);
+    const expired = expiredOf(entry);
     return c.json({
       task: entry.task,
       receipt: entry.receipt ?? null,
       ...(undetermined != null ? { undetermined } : {}),
+      ...(expired != null ? { expired } : {}),
     });
   });
 

@@ -1,12 +1,20 @@
 /**
  * The relay's task claim (`task-claim.ts`): atomic grant, lease renewal by
- * the holder only, lapse ⇒ Pending + re-presented to every serving socket,
- * a claim without `lease` never lapses, and the claim names who may answer.
+ * the holder only, lapse ⇒ undetermined (never Pending again), a claim
+ * without `lease` never lapses on its own (the TTL pass marks it), the claim
+ * names who may answer, and the relay's own forward and the submitter's
+ * presentation are grants too.
  */
 import { describe, it, expect } from "vitest";
 import { AgentTaskStatus, asMotebitId } from "@motebit/sdk";
 import type { AgentTask } from "@motebit/sdk";
-import { TaskClaims, claimRefusesAnswer } from "../task-claim.js";
+import {
+  TaskClaims,
+  claimRefusesAnswer,
+  expiredOf,
+  grantToSubmitter,
+  undeterminedOf,
+} from "../task-claim.js";
 import type { TaskQueueEntry } from "../tasks.js";
 import type { ConnectedDevice } from "../websocket.js";
 
@@ -67,6 +75,7 @@ describe("TaskClaims", () => {
     });
     expect(taskQueue.get("t")!.task.status).toBe(AgentTaskStatus.Claimed);
     expect(taskQueue.get("t")!.claim_lease).toEqual({
+      presenter: "ws",
       device_id: "a",
       device_verified: true,
       expires_at: 100,
@@ -188,5 +197,72 @@ describe("TaskClaims", () => {
     expect(claimRefusesAnswer(u, "b")).toBe(true);
     expect(claimRefusesAnswer(u, "declared")).toBe(false);
     expect(claimRefusesAnswer(u, "proved")).toBe(false);
+  });
+});
+
+/**
+ * Every grant, not only a body's claim (round 3 — one-execution-matrix.probe.ts):
+ * the relay's MCP forward and the submitter's chosen presentation are grants
+ * too; a lost grantee is undetermined and persists; a never-granted task
+ * expires visibly.
+ */
+describe("TaskClaims — the forward's grant, the TTL pass", () => {
+  it("the MCP forward takes the grant first; a body's claim after it is refused, and a body's claim before it means no forward", () => {
+    const { taskQueue, claims } = setup();
+    taskQueue.set("t", entry("t"));
+    expect(claims.grantForward("t", "w")).toBe(true);
+    expect(taskQueue.get("t")!.task.status).toBe(AgentTaskStatus.Claimed);
+    expect(claims.claim("t", MID, peer("a"), { lease: true, now: 0 })).toEqual({
+      granted: false,
+      reason: "already_claimed",
+    });
+    taskQueue.set("u", entry("u"));
+    claims.claim("u", MID, peer("a"), { lease: true, now: 0 });
+    expect(claims.grantForward("u", "w")).toBe(false);
+  });
+
+  it("a forward that never sent tools/call is released to Pending (for re-presentation); one that did is undetermined", () => {
+    const { taskQueue, claims } = setup();
+    taskQueue.set("t", entry("t"));
+    claims.grantForward("t", "w");
+    const released = claims.forwardEnded("t", false, 5);
+    expect(released?.task.status).toBe(AgentTaskStatus.Pending);
+    expect(taskQueue.get("t")!.claim_lease).toBeUndefined();
+
+    taskQueue.set("u", entry("u"));
+    claims.grantForward("u", "w");
+    expect(claims.forwardEnded("u", true, 7)).toBeNull();
+    const e = taskQueue.get("u")!;
+    expect(e.task.status).toBe(AgentTaskStatus.Claimed);
+    expect(undeterminedOf(e)).toMatchObject({ reason: "forward_unanswered", since: 7 });
+    // A forward's grant names no device: no device token is refused by it.
+    expect(claimRefusesAnswer(e, "any-device")).toBe(false);
+  });
+
+  it("the TTL pass: never granted ⇒ expired visibly (unclaimable); granted without a live lease ⇒ undetermined; a renewing claim is left alone", () => {
+    const { taskQueue, claims } = setup(1_000);
+    taskQueue.set("p", { ...entry("p"), expiresAt: 10 });
+    taskQueue.set("c", { ...entry("c"), expiresAt: 10 });
+    claims.claim("c", MID, peer("a"), { lease: false, now: 0 });
+    taskQueue.set("r", { ...entry("r"), expiresAt: 10 });
+    claims.claim("r", MID, peer("a"), { lease: true, now: 0 });
+    claims.renew("r", MID, "a", 500); // lease now runs to 1500
+    const s = { ...entry("s"), expiresAt: 10 };
+    grantToSubmitter(s, "d");
+    taskQueue.set("s", s);
+
+    expect(claims.expire(20).sort()).toEqual(["c", "p", "s"]);
+    expect(expiredOf(taskQueue.get("p")!)).toMatchObject({ reason: "never_claimed", since: 20 });
+    expect(claims.claim("p", MID, peer("b"), { lease: true, now: 21 })).toEqual({
+      granted: false,
+      reason: "expired",
+    });
+    expect(undeterminedOf(taskQueue.get("c")!)?.reason).toBe("unanswered_at_expiry");
+    expect(undeterminedOf(taskQueue.get("s")!)?.reason).toBe("unanswered_at_expiry");
+    expect(undeterminedOf(taskQueue.get("r")!)).toBeNull();
+    expect(claims.holdsUnresolvedGrant("r")).toBe(true);
+    expect(claims.holdsUnresolvedGrant("p")).toBe(false);
+    // Idempotent.
+    expect(claims.expire(30)).toEqual([]);
   });
 });
