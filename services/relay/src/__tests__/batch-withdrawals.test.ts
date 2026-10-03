@@ -364,7 +364,7 @@ describe("evaluateAndFireRail — serial fallback", () => {
     expect(getAccountBalance(db, "agent-e")?.balance).toBe(43 * $1);
   });
 
-  it("marks rows failed on rail exception; balance stays debited", async () => {
+  it("rail exception of unknown outcome ⇒ row unknown, debit held as a processing withdrawal, never refunded", async () => {
     const failRail = new FakeGuestRail({
       name: "fake-failing",
       supportsBatch: false,
@@ -381,12 +381,19 @@ describe("evaluateAndFireRail — serial fallback", () => {
     await evaluateAndFireRail(db, failRail, {});
 
     const row = db
-      .prepare("SELECT status, last_error FROM relay_pending_withdrawals WHERE motebit_id = ?")
-      .get("agent-f") as { status: string; last_error: string };
-    expect(row.status).toBe("failed");
+      .prepare(
+        "SELECT status, last_error, withdrawal_id FROM relay_pending_withdrawals WHERE motebit_id = ?",
+      )
+      .get("agent-f") as { status: string; last_error: string; withdrawal_id: string };
+    expect(row.status).toBe("unknown");
     expect(row.last_error).toBe("rpc down");
-    // Balance stays debited — the debit is the audit trail
+    // The payout may have left: balance stays debited, held where the #921
+    // reconcile door settles it (batch-withdrawal-failed-refund.test.ts).
     expect(getAccountBalance(db, "agent-f")?.balance).toBe(6 * $1);
+    const w = db
+      .prepare("SELECT status, amount FROM relay_withdrawals WHERE withdrawal_id = ?")
+      .get(row.withdrawal_id) as { status: string; amount: number };
+    expect(w).toEqual({ status: "processing", amount: 4 * $1 });
   });
 });
 

@@ -540,11 +540,22 @@ const WRITERS: readonly Writer[] = [
       "`enqueuePendingWithdrawal` — /withdraw under `requireFirstPerson`, or the relay's sweep loop for an identity's own configured threshold",
   },
   {
+    file: R + "account-store-sqlite.ts",
+    verb: "UPDATE",
+    table: "relay_pending_withdrawals",
+    count: 1,
+    principal:
+      LOOP +
+      ": `refundPendingWithdrawal` — the batch-withdrawal refund of a payout that provably never left: the `refund_owed → refunded` CAS committed with its ledger credit, at most once",
+  },
+  {
     file: R + "batch-withdrawals.ts",
     verb: "UPDATE",
     table: "relay_pending_withdrawals",
-    count: 3,
-    principal: LOOP + ": the batch-withdrawal fire path",
+    count: 6,
+    principal:
+      LOOP +
+      ": the batch-withdrawal fire path — the claim (`pending → firing` CAS), and each outcome FROM `firing` only: `fired` (with its withdrawal row, one transaction), `unknown` (the payout may have left: a `processing` withdrawal row in the same transaction, never a refund), `refund_owed` (proven not sent: `PayoutNotSentError` or a manual rail; refunded by the account store's `refundPendingWithdrawal`)",
   },
   {
     file: R + "batch-withdrawals.ts",
@@ -553,7 +564,7 @@ const WRITERS: readonly Writer[] = [
     count: 1,
     principal:
       LOOP +
-      ": the batch-withdrawal fire path, for a queue row it claimed (`pending → firing` CAS) before calling the rail; a fired payout the rail has not confirmed is recorded `processing` (claimed_at = fire time, payout_valid_until = the rail's declared validity or a 24h floor), never `pending`, so only the operator's reconcile settles it — except a rail that declares itself manual (`payoutMode: manual`, Stripe), whose fire sends nothing and is recorded `pending` for the ordinary admin complete/fail (#921)",
+      ": the batch-withdrawal fire path, for a queue row it claimed (`pending → firing` CAS) before calling the rail; a fired payout the rail has not confirmed is recorded `processing` (claimed_at = fire time, payout_valid_until = the rail's declared validity or a 24h floor), never `pending`, so only the operator's reconcile settles it — except a rail that declares itself manual (`payoutMode: manual`, Stripe), whose fire sends nothing and is recorded `pending` for the ordinary admin complete/fail (#921); a failure whose outcome is unknown (any throw but `PayoutNotSentError` on a non-manual rail, a per-item batch failure, a send the process died in) is recorded the same `processing` way with an unresolved-payout note, never refunded",
   },
   {
     file: R + "deposit-detector.ts",

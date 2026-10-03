@@ -594,6 +594,44 @@ export class SqliteAccountStore implements AccountStore {
     });
   }
 
+  /**
+   * Refund a batched withdrawal whose payout provably never left
+   * (batch-withdrawals.ts): the queue row's `refund_owed → refunded`
+   * compare-and-set and the credit (referenced by the pending_id) commit
+   * together or not at all, so of any number of callers exactly one refunds.
+   * Only a row the fire path parked `refund_owed` qualifies — never one whose
+   * outcome is unknown. Returns true when THIS call refunded.
+   */
+  refundPendingWithdrawal(pendingId: string, refundedAt: number = Date.now()): boolean {
+    return this.db.transaction(() => {
+      const info = this.db
+        .prepare(
+          `UPDATE relay_pending_withdrawals
+           SET status = 'refunded', last_attempt_at = ?
+           WHERE pending_id = ? AND status = 'refund_owed'`,
+        )
+        .run(refundedAt, pendingId);
+      if (info.changes === 0) return false;
+      const row = this.db
+        .prepare(
+          "SELECT motebit_id, amount_micro, last_error FROM relay_pending_withdrawals WHERE pending_id = ?",
+        )
+        .get(pendingId) as
+        { motebit_id: string; amount_micro: number; last_error: string | null } | undefined;
+      if (!row) {
+        throw new Error(`refundPendingWithdrawal: ${pendingId} vanished mid-transaction`);
+      }
+      this.credit(
+        row.motebit_id,
+        row.amount_micro,
+        "withdrawal",
+        pendingId,
+        `Pending withdrawal ${pendingId} not sent: ${row.last_error ?? "refunded"}`,
+      );
+      return true;
+    });
+  }
+
   noteWithdrawalPayoutUnresolved(id: string, note: string): boolean {
     // Issue #920: an unresolved automated payout. Status and balance are
     // untouched — only the operator's reconciliation may complete or fail it.

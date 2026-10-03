@@ -19,6 +19,8 @@ export { BridgeSettlementRail } from "./bridge-rail.js";
 export {
   X402_WITHDRAWAL_VALIDITY_SECONDS,
   isManualPayoutRail,
+  isPayoutNotSent,
+  PayoutNotSentError,
   payoutValidityMsOf,
   type PayoutHorizonDeclaration,
 } from "./payout-horizon.js";

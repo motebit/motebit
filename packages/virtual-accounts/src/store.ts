@@ -235,9 +235,9 @@ export interface AccountStore {
    *
    * This is the Rule 12 invariant expressed at the interface level:
    * "Aggregated withdrawals debit at enqueue time; the fire path does
-   * NOT re-debit; a rail failure parks the row as `failed` with the
-   * debit still in place — the debit is the audit trail that funds
-   * were claimed." Breaking that ordering opens a double-spend window
+   * NOT re-debit." A rail failure is refunded only when the payout
+   * provably never left, else held for the operator's reconcile (the
+   * relay's `batch-withdrawals.ts`). Breaking that ordering opens a double-spend window
    * against concurrent sweeps. The store implementation MUST preserve
    * cross-table atomicity; a generic `withTransaction(fn)` leak is
    * explicitly NOT part of this interface.
