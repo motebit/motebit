@@ -196,6 +196,8 @@ export {
   // intact only when its succession chain verifies too.
   verifyPairingIdentityBinding,
   type PairingIdentityBindingResult,
+  type PairingIdentityRefusalCode,
+  type PairingSuccessionSource,
   identityVerifyOutcome,
   // The machine roster (spec/machine-roster-v1.md): the signers, the
   // entry ids, the one reduction, and the key chain a consumer reduces
@@ -537,10 +539,11 @@ export {
   deriveKeyTransferKey,
   buildKeyTransferPayload,
   decryptKeyTransfer,
+  openPairingKeyTransfer,
   checkPreTransferBalance,
   formatWalletWarning,
 } from "./x25519.js";
-export type { X25519Keypair, PreTransferWalletCheck } from "./x25519.js";
+export type { X25519Keypair, PreTransferWalletCheck, OpenedPairingKeyTransfer } from "./x25519.js";
 
 // ── Content-artifact verification (re-export from @motebit/crypto) ──
 // The Sovereign Ledger's local-row verification path: surfaces verify a

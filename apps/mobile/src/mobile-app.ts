@@ -113,6 +113,7 @@ import { SecureStoreAdapter } from "./adapters/secure-store";
 import { rotateMobileKey } from "./key-rotation";
 import {
   createMobileMachineRoster,
+  ownSuccessionRecords,
   rosterAfterRotationCommit,
   type MobileMachineRoster,
 } from "./machine-roster";
@@ -697,6 +698,12 @@ export class MobileApp {
       this.publicKey = pubKeyHex;
     },
     setSyncUrl: (url) => this.setSyncUrl(url),
+    loadOwnSuccessionRecords: async () =>
+      ownSuccessionRecords({
+        motebitId: this.motebitId,
+        identityFile: await AsyncStorage.getItem(IDENTITY_FILE_KEY),
+        heldPublicKeyHex: this.publicKey,
+      }),
   });
 
   // Push token lifecycle — class extracted to ./push-token-manager.ts.

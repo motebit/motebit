@@ -1065,10 +1065,27 @@ export interface MotebitIdentityFile {
 // @public
 export interface PairingIdentityBindingResult {
     accepted: boolean;
+    code?: PairingIdentityRefusalCode;
     identityBinding: Extract<IdentityBindingVerdict, "sovereign" | "unverified" | "invalid">;
-    // (undocumented)
     reason?: string;
 }
+
+// @public
+export type PairingIdentityRefusalCode =
+/** Not a canonical motebit_id: a lowercase UUIDv7 or UUIDv8, or a `did:key`. */
+"malformed_id"
+/** The transferred key is not a 32-byte hex public key. */
+| "malformed_key"
+/** A self-certifying id no verified lineage connects to the transferred key. */
+| "no_verified_lineage"
+/**
+* The only lineage to the transferred key runs through a guardian-recovery
+* link, and no guardian key is pinned on the pairing device to check it.
+*/
+| "guardian_recovery_unverifiable";
+
+// @public
+export type PairingSuccessionSource = readonly unknown[] | (() => Promise<readonly unknown[]>);
 
 // @public
 export function parse(content: string): {
@@ -2141,7 +2158,8 @@ export interface VerifyOptions {
 
 // @public
 export function verifyPairingIdentityBinding(motebitId: string, transferredPublicKeyHex: string, options?: {
-    successionChain?: readonly SuccessionRecord[] | (() => Promise<readonly SuccessionRecord[]>);
+    successionSources?: readonly PairingSuccessionSource[];
+    guardianKey?: string;
 }): Promise<PairingIdentityBindingResult>;
 
 // @public

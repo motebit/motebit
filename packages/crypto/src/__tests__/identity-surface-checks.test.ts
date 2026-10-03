@@ -9,7 +9,7 @@
  *  - `verifyPairingIdentityBinding` — the motebit_id a relay hands a pairing
  *    device must not contradict the identity key the pairing transferred.
  */
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import {
   generateKeypair,
   bytesToHex,
@@ -17,6 +17,8 @@ import {
   identityVerifyOutcome,
   verifyPairingIdentityBinding,
   signKeySuccession,
+  signGuardianRecoverySuccession,
+  hexPublicKeyToDidKey,
   type IdentityVerifyResult,
 } from "../index.js";
 
@@ -94,10 +96,13 @@ describe("verifyPairingIdentityBinding", () => {
     expect(r).toEqual({ accepted: true, identityBinding: "unverified" });
   });
 
-  it("is case-insensitive on the id", async () => {
+  it("refuses a non-canonical spelling of an id that would otherwise bind (uppercase)", async () => {
+    // The device would persist a spelling no relay or peer names it by.
     const key = bytesToHex((await generateKeypair()).publicKey);
     const id = (await deriveSovereignMotebitId(key)).toUpperCase();
-    expect((await verifyPairingIdentityBinding(id, key)).accepted).toBe(true);
+    const r = await verifyPairingIdentityBinding(id, key);
+    expect(r.accepted).toBe(false);
+    expect(r.code).toBe("malformed_id");
   });
 });
 
@@ -125,7 +130,7 @@ describe("verifyPairingIdentityBinding — a ROTATED sovereign identity (success
 
   it("accepts the rotated current key at `sovereign` when a valid chain links the id's genesis to it", async () => {
     const { id, current, chain } = await rotatedIdentity();
-    const r = await verifyPairingIdentityBinding(id, current, { successionChain: chain });
+    const r = await verifyPairingIdentityBinding(id, current, { successionSources: [chain] });
     expect(r).toEqual({ accepted: true, identityBinding: "sovereign" });
   });
 
@@ -136,21 +141,23 @@ describe("verifyPairingIdentityBinding — a ROTATED sovereign identity (success
       fetches++;
       return chain;
     };
-    expect(await verifyPairingIdentityBinding(id, current, { successionChain: loader })).toEqual({
+    expect(
+      await verifyPairingIdentityBinding(id, current, { successionSources: [loader] }),
+    ).toEqual({
       accepted: true,
       identityBinding: "sovereign",
     });
     expect(fetches).toBe(1);
     // Never-rotated key: direct derivation answers; the loader is not consulted.
     const genesisHex = bytesToHex(genesis.publicKey);
-    await verifyPairingIdentityBinding(id, genesisHex, { successionChain: loader });
+    await verifyPairingIdentityBinding(id, genesisHex, { successionSources: [loader] });
     expect(fetches).toBe(1);
   });
 
   it("refuses a forged chain (bad signature)", async () => {
     const { id, current, chain } = await rotatedIdentity();
     const forged = [{ ...chain[0]!, old_key_signature: "00".repeat(64) }];
-    const r = await verifyPairingIdentityBinding(id, current, { successionChain: forged });
+    const r = await verifyPairingIdentityBinding(id, current, { successionSources: [forged] });
     expect(r.accepted).toBe(false);
     expect(r.identityBinding).toBe("invalid");
   });
@@ -162,7 +169,7 @@ describe("verifyPairingIdentityBinding — a ROTATED sovereign identity (success
     // unrelated key is internally valid; it must not bind to the victim id.
     const victim = await rotatedIdentity();
     const r = await verifyPairingIdentityBinding(victim.id, current, {
-      successionChain: victim.chain,
+      successionSources: [victim.chain],
     });
     expect(r.accepted).toBe(false);
   });
@@ -170,19 +177,19 @@ describe("verifyPairingIdentityBinding — a ROTATED sovereign identity (success
   it("refuses a valid chain for the id that ends at a DIFFERENT key than the one transferred", async () => {
     const { id, chain } = await rotatedIdentity();
     const unrelated = bytesToHex((await generateKeypair()).publicKey);
-    const r = await verifyPairingIdentityBinding(id, unrelated, { successionChain: chain });
+    const r = await verifyPairingIdentityBinding(id, unrelated, { successionSources: [chain] });
     expect(r.accepted).toBe(false);
   });
 
   it("refuses an unrelated key whatever the chain, and a withheld/failed fetch refuses", async () => {
     const { id, current } = await rotatedIdentity();
     expect(
-      (await verifyPairingIdentityBinding(id, current, { successionChain: [] })).accepted,
+      (await verifyPairingIdentityBinding(id, current, { successionSources: [[]] })).accepted,
     ).toBe(false);
     const failing = async (): Promise<never> => {
       throw new Error("relay down");
     };
-    const r = await verifyPairingIdentityBinding(id, current, { successionChain: failing });
+    const r = await verifyPairingIdentityBinding(id, current, { successionSources: [failing] });
     expect(r.accepted).toBe(false);
     expect(r.identityBinding).toBe("invalid");
   });
@@ -191,12 +198,143 @@ describe("verifyPairingIdentityBinding — a ROTATED sovereign identity (success
     const key = bytesToHex((await generateKeypair()).publicKey);
     let fetched = false;
     const r = await verifyPairingIdentityBinding("019e2aa5-7649-7fa3-ab27-2e4d9d4f0ffb", key, {
-      successionChain: async () => {
-        fetched = true;
-        return [];
-      },
+      successionSources: [
+        async () => {
+          fetched = true;
+          return [];
+        },
+      ],
     });
     expect(r).toEqual({ accepted: true, identityBinding: "unverified" });
     expect(fetched).toBe(false);
+  });
+});
+
+describe("verifyPairingIdentityBinding — canonical ids, sources, guardian", () => {
+  it.each([
+    ["empty", (id: string) => ""],
+    ["urn:uuid: prefix", (id: string) => `urn:uuid:${id}`],
+    ["trailing space", (id: string) => `${id} `],
+    ["braced", (id: string) => `{${id}}`],
+    ["hyphenless", (id: string) => id.replace(/-/g, "")],
+  ])("refuses a non-canonical id (%s) with malformed_id", async (_label, mangle) => {
+    const key = bytesToHex((await generateKeypair()).publicKey);
+    const r = await verifyPairingIdentityBinding(mangle(await deriveSovereignMotebitId(key)), key);
+    expect(r).toMatchObject({ accepted: false, identityBinding: "invalid", code: "malformed_id" });
+  });
+
+  it("refuses an uppercase DID:key prefix, accepts the canonical did:key that binds", async () => {
+    const key = bytesToHex((await generateKeypair()).publicKey);
+    const did = hexPublicKeyToDidKey(key);
+    expect(
+      (await verifyPairingIdentityBinding(did.replace("did:key:", "DID:key:"), key)).code,
+    ).toBe("malformed_id");
+    expect(await verifyPairingIdentityBinding(did, key)).toEqual({
+      accepted: true,
+      identityBinding: "sovereign",
+    });
+  });
+
+  it("refuses a UUIDv4 or free-text id — not a minted form", async () => {
+    const key = bytesToHex((await generateKeypair()).publicKey);
+    for (const id of ["3f1c2a9e-5b7d-4e21-9c0a-6d8e2f4b1a37", "agent-alice"]) {
+      expect((await verifyPairingIdentityBinding(id, key)).code).toBe("malformed_id");
+    }
+  });
+
+  it("refuses a malformed transferred key", async () => {
+    const r = await verifyPairingIdentityBinding("019e2aa5-7649-7fa3-ab27-2e4d9d4f0ffb", "zz");
+    expect(r.code).toBe("malformed_key");
+  });
+
+  it("tries sources in order: a later source is consulted only when the earlier ones do not bind", async () => {
+    const g = await generateKeypair();
+    const k = await generateKeypair();
+    const id = await deriveSovereignMotebitId(bytesToHex(g.publicKey));
+    const rec = await signKeySuccession(g.privateKey, k.privateKey, k.publicKey, g.publicKey);
+    let relayAsked = 0;
+    const relay = async () => {
+      relayAsked++;
+      return [rec];
+    };
+    const viaTransfer = await verifyPairingIdentityBinding(id, bytesToHex(k.publicKey), {
+      successionSources: [[rec], relay],
+    });
+    expect(viaTransfer.identityBinding).toBe("sovereign");
+    expect(relayAsked).toBe(0);
+    const viaRelay = await verifyPairingIdentityBinding(id, bytesToHex(k.publicKey), {
+      successionSources: [[], relay],
+    });
+    expect(viaRelay.identityBinding).toBe("sovereign");
+    expect(relayAsked).toBe(1);
+  });
+
+  it("joins sources: a chain split across the transfer and the relay still binds", async () => {
+    const g = await generateKeypair();
+    const k1 = await generateKeypair();
+    const k2 = await generateKeypair();
+    const id = await deriveSovereignMotebitId(bytesToHex(g.publicKey));
+    const r1 = await signKeySuccession(g.privateKey, k1.privateKey, k1.publicKey, g.publicKey);
+    await new Promise((r) => setTimeout(r, 2));
+    const r2 = await signKeySuccession(k1.privateKey, k2.privateKey, k2.publicKey, k1.publicKey);
+    const r = await verifyPairingIdentityBinding(id, bytesToHex(k2.publicKey), {
+      successionSources: [[r2], async () => [r1]],
+    });
+    expect(r.identityBinding).toBe("sovereign");
+  });
+
+  it("a guardian-recovered identity: refused with an explicit reason unless the guardian key is pinned", async () => {
+    const g = await generateKeypair();
+    const k = await generateKeypair();
+    const guardian = await generateKeypair();
+    const id = await deriveSovereignMotebitId(bytesToHex(g.publicKey));
+    const rec = await signGuardianRecoverySuccession(
+      guardian.privateKey,
+      k.privateKey,
+      g.publicKey,
+      k.publicKey,
+    );
+    const held = bytesToHex(k.publicKey);
+    const refused = await verifyPairingIdentityBinding(id, held, { successionSources: [[rec]] });
+    expect(refused).toMatchObject({ accepted: false, code: "guardian_recovery_unverifiable" });
+    expect(refused.reason).toMatch(/guardian.*motebit\.md/);
+    const pinned = await verifyPairingIdentityBinding(id, held, {
+      successionSources: [[rec]],
+      guardianKey: bytesToHex(guardian.publicKey),
+    });
+    expect(pinned).toEqual({ accepted: true, identityBinding: "sovereign" });
+  });
+
+  it("a chain out of temporal order is not a lineage", async () => {
+    const g = await generateKeypair();
+    const k1 = await generateKeypair();
+    const k2 = await generateKeypair();
+    const id = await deriveSovereignMotebitId(bytesToHex(g.publicKey));
+    const now = vi.spyOn(Date, "now");
+    try {
+      now.mockReturnValue(2_000_000_000_000);
+      const r1 = await signKeySuccession(g.privateKey, k1.privateKey, k1.publicKey, g.publicKey);
+      now.mockReturnValue(1_000_000_000_000); // the second link predates the first
+      const r2 = await signKeySuccession(k1.privateKey, k2.privateKey, k2.publicKey, k1.publicKey);
+      const r = await verifyPairingIdentityBinding(id, bytesToHex(k2.publicKey), {
+        successionSources: [[r1, r2]],
+      });
+      expect(r).toMatchObject({ accepted: false, code: "no_verified_lineage" });
+    } finally {
+      now.mockRestore();
+    }
+  });
+
+  it("bounds what one source may make it verify", async () => {
+    const g = await generateKeypair();
+    const k = await generateKeypair();
+    const id = await deriveSovereignMotebitId(bytesToHex(g.publicKey));
+    const rec = await signKeySuccession(g.privateKey, k.privateKey, k.publicKey, g.publicKey);
+    const junk = Array.from({ length: 10_000 }, () => ({ junk: true }));
+    // The real link sits past the bound: the source's tail is never read.
+    const r = await verifyPairingIdentityBinding(id, bytesToHex(k.publicKey), {
+      successionSources: [[...junk, rec]],
+    });
+    expect(r.accepted).toBe(false);
   });
 });

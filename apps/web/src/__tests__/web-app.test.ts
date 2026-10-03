@@ -1101,7 +1101,15 @@ describe("Identity integrity — succession chain + pairing binding", () => {
       syncUrl: "https://relay.test",
       pairingId: "pid-1",
     };
-    return { app, unchanged, id, chain, current: enc.bytesToHex(current.publicKey), opts };
+    return {
+      app,
+      unchanged,
+      id,
+      chain,
+      current: enc.bytesToHex(current.publicKey),
+      currentSeed: current.privateKey,
+      opts,
+    };
   }
 
   function relayServing(chain: unknown[]) {
@@ -1121,6 +1129,30 @@ describe("Identity integrity — succession chain + pairing binding", () => {
     await f.app.completePairing({ motebitId: f.id, deviceId: "dev-paired" }, f.opts);
     expect(fetchSpy.mock.calls.map(([u]) => u)).toContain(
       `https://relay.test/api/v1/agents/${f.id}/succession`,
+    );
+    expect(f.app.motebitId).toBe(f.id);
+    expect(f.app.publicKeyHex).toBe(f.current);
+    f.app.stop();
+  });
+
+  it("completePairing adopts a sovereign identity rotated OFFLINE: Device A's chain rides in the transfer, the relay serves none", async () => {
+    // Real crypto end to end: Device A seals its chain inside the key
+    // transfer; the relay's /succession is [] (an offline rotation uploads
+    // nothing) — the regression the transfer-carried chain closes.
+    const enc = await import("@motebit/encryption");
+    const f = await pairingFixture(enc);
+    const claimer = enc.generateX25519Keypair();
+    const keyTransfer = await enc.buildKeyTransferPayload(
+      f.currentSeed,
+      f.current,
+      claimer.publicKey,
+      "ABC123",
+      { successionRecords: f.chain },
+    );
+    relayServing([]);
+    await f.app.completePairing(
+      { motebitId: f.id, deviceId: "dev-paired" },
+      { ...f.opts, keyTransfer, ephemeralPrivateKey: claimer.privateKey },
     );
     expect(f.app.motebitId).toBe(f.id);
     expect(f.app.publicKeyHex).toBe(f.current);

@@ -198,6 +198,7 @@ export type {
   DeviceCheckVerifierContext,
 } from "./hardware-attestation.js";
 import { verifyHardwareAttestationClaim } from "./hardware-attestation.js";
+import { resolveRosterKeyChain } from "./roster-key-chain.js";
 import type {
   HardwareAttestationVerifiers,
   HardwareAttestationVerifyResult,
@@ -1389,95 +1390,172 @@ export function identityVerifyOutcome(result: VerifyResult): { valid: boolean; e
   return { valid: true };
 }
 
-// Does a verified succession chain link the genesis key `motebitId` commits to
-// to `currentKeyHex`? Fail-closed: any load error, empty chain, guardian link,
-// bad signature, break, or mismatched endpoint → false.
-async function rotatedKeyBindsSovereignId(
-  motebitId: string,
-  currentKeyHex: string,
-  source: readonly SuccessionRecord[] | (() => Promise<readonly SuccessionRecord[]>),
-): Promise<boolean> {
-  try {
-    const chain = [...(typeof source === "function" ? await source() : source)];
-    if (chain.length === 0 || chain.some((r) => r.recovery === true)) return false;
-    const terminal = chain[chain.length - 1]!.new_public_key;
-    if (terminal.toLowerCase() !== currentKeyHex.toLowerCase()) return false;
-    const chk = await verifySuccessionChain(chain, terminal);
-    if (!chk.valid) return false;
-    return await verifySovereignBinding(motebitId, chain[0]!.old_public_key);
-  } catch {
-    return false;
-  }
-}
+/** Why {@link verifyPairingIdentityBinding} refused. */
+export type PairingIdentityRefusalCode =
+  /** Not a canonical motebit_id: a lowercase UUIDv7 or UUIDv8, or a `did:key`. */
+  | "malformed_id"
+  /** The transferred key is not a 32-byte hex public key. */
+  | "malformed_key"
+  /** A self-certifying id no verified lineage connects to the transferred key. */
+  | "no_verified_lineage"
+  /**
+   * The only lineage to the transferred key runs through a guardian-recovery
+   * link, and no guardian key is pinned on the pairing device to check it.
+   */
+  | "guardian_recovery_unverifiable";
 
 /** Outcome of {@link verifyPairingIdentityBinding}. */
 export interface PairingIdentityBindingResult {
   /** False ⇒ the device MUST NOT persist the id (nor the transferred key under it). */
   accepted: boolean;
-  /** `sovereign` — the id commits to the key; `unverified` — the id commits to no key; `invalid` — the id commits to a different key. */
+  /** `sovereign` — the id commits to the key; `unverified` — the id commits to no key; `invalid` — refused. */
   identityBinding: Extract<IdentityBindingVerdict, "sovereign" | "unverified" | "invalid">;
+  /** Set when refused. */
+  code?: PairingIdentityRefusalCode;
+  /** Set when refused: a sentence a surface can show. */
   reason?: string;
 }
 
-// A self-certifying motebit_id is a UUIDv8 (see `deriveSovereignMotebitId`).
-const SELF_CERTIFYING_UUID =
-  /^[0-9a-f]{8}-[0-9a-f]{4}-8[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+/**
+ * Succession records from one source: the records themselves, or a loader
+ * consulted only when every earlier source failed to bind the key. Untrusted —
+ * every record is verified; a loader that throws contributes nothing.
+ */
+export type PairingSuccessionSource = readonly unknown[] | (() => Promise<readonly unknown[]>);
+
+// The canonical motebit_id spellings — exactly what the minting code paths
+// emit (spec/identity-v1.md §3.1.1). Anything else (case-folded, braced,
+// `urn:uuid:`-prefixed, hyphenless, padded) is refused, never normalized: the
+// device would persist a spelling no relay or peer names it by.
+const CANONICAL_UUID_V7 = /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+const CANONICAL_UUID_V8 = /^[0-9a-f]{8}-[0-9a-f]{4}-8[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+const CANONICAL_DID_KEY = /^did:key:z[1-9A-HJ-NP-Za-km-z]+$/;
+
+// Records taken from any one succession source at pairing.
+const MAX_PAIRING_RECORDS = 256;
+
+// Does a verified lineage connect the genesis key `motebitId` commits to to
+// `held`, using only `records`? `rooted` — yes; `guardian` — only through a
+// guardian-recovery link this device cannot check; `none` — no.
+async function pairingLineage(
+  motebitId: string,
+  held: string,
+  records: readonly unknown[],
+  guardianKey: string | undefined,
+): Promise<"rooted" | "guardian" | "none"> {
+  try {
+    const walk = await resolveRosterKeyChain({
+      motebitId,
+      held,
+      records,
+      ...(guardianKey !== undefined ? { guardianKey } : {}),
+    });
+    if (!walk.ok) return "none";
+    if (walk.ancestry.kind === "recovery_limited") return "guardian";
+    if (walk.ancestry.kind !== "rooted" || walk.links.length === 0) return "none";
+    // The walk proves each link; the succession law also wants the chain
+    // continuous and strictly ordered in time (spec/identity-v1.md §3.8).
+    const chk = await verifySuccessionChain([...walk.links], held, guardianKey);
+    if (!chk.valid) return "none";
+    return (await verifySovereignBinding(motebitId, walk.chain[0]!)) ? "rooted" : "none";
+  } catch {
+    return "none";
+  }
+}
 
 /**
  * May a pairing device adopt `motebitId` together with the identity key the
  * pairing transferred (`transferredPublicKeyHex`)? The relay supplies the id;
- * the key arrives end-to-end from the paired device. The binding ladder decides,
- * offline, with no operator trust:
+ * the key arrives in the key transfer. The binding ladder decides, offline,
+ * with no operator trust:
  *
+ *  - `motebitId` is not a canonical spelling (lowercase UUIDv7 / UUIDv8, or a
+ *    `did:key`) → refused (`malformed_id`);
  *  - the id is the self-certifying commitment to the key → accepted (`sovereign`);
- *  - the id is self-certifying (UUIDv8 / `did:key`) and the key is its CURRENT
- *    key after rotation → accepted (`sovereign`) only through
- *    `options.successionChain`: the chain must verify (every link signed by the
- *    key it departs, continuous, temporally ordered), its genesis must be the
- *    key the id commits to, and its terminal key must be the transferred key.
- *    The chain is self-verifying, so its source (typically the relay's public
- *    `GET /api/v1/agents/:motebitId/succession`) is untrusted: a withheld,
- *    failed or forged chain only refuses, never accepts. Guardian-recovery
- *    links are refused here (no guardian key is pinned at pairing; a
- *    source-supplied one would let that source forge the lineage).
- *  - the id is self-certifying but no verified lineage reaches the key → refused
- *    (`invalid`): adopting it would pin the device to an identity the
- *    transferred key contradicts.
- *  - the id commits to no key (a legacy UUIDv7 or keyless mint) → accepted at
- *    `unverified`, the rung such an id reads at everywhere else. No offline
- *    check can confirm or contradict it.
+ *  - the id is a UUIDv8 / `did:key` and the key is its CURRENT key after
+ *    rotation → accepted (`sovereign`) only when the succession records
+ *    connect them: every link verified (signed by the key it departs, or by
+ *    `options.guardianKey` for a recovery link), the chain continuous and
+ *    strictly ordered in time, its genesis the key the id commits to and its
+ *    head the transferred key. `options.successionSources` are tried in order
+ *    — typically the chain Device A carried inside the key transfer, then the
+ *    relay's public `GET /api/v1/agents/:motebitId/succession` — and each later
+ *    source is consulted only when the records so far do not bind. Records are
+ *    self-verifying, so no source is trusted: a withheld, failed or forged
+ *    chain only refuses, never accepts.
+ *  - a guardian-recovery link with no `guardianKey` pinned on this device →
+ *    refused (`guardian_recovery_unverifiable`). The guardian key must come
+ *    from the device itself, never from the pairing: a source-supplied one
+ *    would let that source forge the lineage.
+ *  - any other self-certifying id → refused (`no_verified_lineage`);
+ *  - a legacy UUIDv7 commits to no key → accepted at `unverified`, the rung it
+ *    reads at everywhere else; no source is consulted.
  *
- * Never throws; malformed input is refused.
+ * Never throws.
  */
 export async function verifyPairingIdentityBinding(
   motebitId: string,
   transferredPublicKeyHex: string,
   options?: {
-    /** The id's key-succession chain, or a loader consulted only when the direct derivation fails. */
-    successionChain?: readonly SuccessionRecord[] | (() => Promise<readonly SuccessionRecord[]>);
+    successionSources?: readonly PairingSuccessionSource[];
+    /** A guardian public key pinned on THIS device (never one the pairing supplied). */
+    guardianKey?: string;
   },
 ): Promise<PairingIdentityBindingResult> {
-  if (await verifySovereignBinding(motebitId, transferredPublicKeyHex)) {
-    return { accepted: true, identityBinding: "sovereign" };
+  const refuse = (
+    code: PairingIdentityRefusalCode,
+    reason: string,
+  ): PairingIdentityBindingResult => ({
+    accepted: false,
+    identityBinding: "invalid",
+    code,
+    reason,
+  });
+  const id = typeof motebitId === "string" ? motebitId : "";
+  const legacy = CANONICAL_UUID_V7.test(id);
+  if (!legacy && !CANONICAL_UUID_V8.test(id) && !CANONICAL_DID_KEY.test(id)) {
+    return refuse(
+      "malformed_id",
+      `motebit_id ${JSON.stringify(id)} is not a canonical motebit_id (a lowercase UUIDv7 or UUIDv8, or a did:key)`,
+    );
   }
-  const malformedKey = !/^[0-9a-f]{64}$/i.test(transferredPublicKeyHex);
-  const selfCertifying = motebitId.startsWith("did:key:") || SELF_CERTIFYING_UUID.test(motebitId);
   if (
-    selfCertifying &&
-    !malformedKey &&
-    options?.successionChain !== undefined &&
-    (await rotatedKeyBindsSovereignId(motebitId, transferredPublicKeyHex, options.successionChain))
+    typeof transferredPublicKeyHex !== "string" ||
+    !/^[0-9a-fA-F]{64}$/.test(transferredPublicKeyHex)
   ) {
+    return refuse("malformed_key", "the transferred identity key is not a 32-byte public key");
+  }
+  const held = transferredPublicKeyHex.toLowerCase();
+  if (legacy) return { accepted: true, identityBinding: "unverified" };
+  if (await verifySovereignBinding(id, held))
     return { accepted: true, identityBinding: "sovereign" };
+
+  const guardianKey = options?.guardianKey?.toLowerCase();
+  const records: unknown[] = [];
+  let guardianOnly = false;
+  for (const source of options?.successionSources ?? []) {
+    try {
+      const got = typeof source === "function" ? await source() : source;
+      // Bounded: a source is untrusted, and a legitimate chain is a handful
+      // of links — never let one make this device verify without limit.
+      if (Array.isArray(got)) records.push(...(got as unknown[]).slice(0, MAX_PAIRING_RECORDS));
+    } catch {
+      continue; // a source that fails contributes nothing
+    }
+    const lineage = await pairingLineage(id, held, records, guardianKey);
+    if (lineage === "rooted") return { accepted: true, identityBinding: "sovereign" };
+    if (lineage === "guardian") guardianOnly = true;
   }
-  if (selfCertifying || malformedKey) {
-    return {
-      accepted: false,
-      identityBinding: "invalid",
-      reason: `motebit_id ${motebitId} does not bind to the transferred identity key`,
-    };
+  if (guardianOnly) {
+    return refuse(
+      "guardian_recovery_unverifiable",
+      `motebit_id ${id} was recovered through its guardian, and a guardian-recovery link cannot be checked while pairing (no guardian key is pinned on this device). Restore this device from the identity's motebit.md and its current recovery seed instead`,
+    );
   }
-  return { accepted: true, identityBinding: "unverified" };
+  return refuse(
+    "no_verified_lineage",
+    `motebit_id ${id} does not bind to the transferred identity key (no verified succession chain connects them)`,
+  );
 }
 
 /**

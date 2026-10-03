@@ -25,15 +25,14 @@ import type { PairingSession, PairingStatus } from "@motebit/sync-engine";
 import {
   generateX25519Keypair,
   buildKeyTransferPayload,
-  decryptKeyTransfer,
-  verifyPairingIdentityBinding,
+  openPairingKeyTransfer,
   checkPreTransferBalance,
   formatWalletWarning,
   secureErase,
   bytesToHex,
   hexToBytes,
 } from "@motebit/encryption";
-import type { KeyTransferPayload } from "@motebit/sdk";
+import type { KeySuccessionRecord, KeyTransferPayload } from "@motebit/sdk";
 import type { SecureStoreAdapter } from "./adapters/secure-store";
 import { KEYRING_KEYS } from "./storage-keys";
 
@@ -50,6 +49,13 @@ export interface PairingManagerDeps {
   setPublicKey: (pubKeyHex: string) => void;
   /** Persist the relay sync URL once the new device has joined. */
   setSyncUrl: (url: string) => Promise<void>;
+  /**
+   * Device A: this device's own key-succession records (the bound identity
+   * file's chain and the roster replica's links), sent inside the key
+   * transfer so Device B can bind a rotated sovereign id even when the relay
+   * has no chain. Best-effort; absent or failing ⇒ none sent.
+   */
+  loadOwnSuccessionRecords?: () => Promise<KeySuccessionRecord[]>;
 }
 
 export class MobilePairingManager {
@@ -81,11 +87,18 @@ export class MobilePairingManager {
       const privKeyHex = await this.deps.getPrivKeyHex();
       const privKeyBytes = hexToBytes(privKeyHex);
       try {
+        let successionRecords: KeySuccessionRecord[] = [];
+        try {
+          successionRecords = (await this.deps.loadOwnSuccessionRecords?.()) ?? [];
+        } catch {
+          // None sent: Device B falls back to the relay's chain.
+        }
         keyTransfer = await buildKeyTransferPayload(
           privKeyBytes,
           this.deps.getPublicKey(),
           hexToBytes(session.claiming_x25519_pubkey),
           session.pairing_code,
+          { successionRecords },
         );
       } finally {
         secureErase(privKeyBytes);
@@ -156,37 +169,28 @@ export class MobilePairingManager {
     let identitySeed: Uint8Array | undefined;
 
     try {
-      // Every in-tree Device B claims with an X25519 key and every Device A
-      // answers it with a key transfer, so an approval without one — or one
-      // that fails to decrypt — means the relay dropped or tampered with it.
-      // Refuse before anything is written: the relay-supplied motebit_id is
-      // only adopted once the transferred key is shown to bind to it.
+      // The shared acceptance path (@motebit/encryption): the transfer is
+      // required, must decrypt to the key it names, and the relay-supplied
+      // motebit_id must bind to that key — through the succession chain
+      // Device A sealed inside the transfer, else the relay's public chain
+      // (verified here; withheld or forged, it only refuses). Refused ⇒
+      // throws before anything is written.
       if (!keyTransferOpts) {
         throw new Error("Pairing refused: the approval carried no identity key transfer");
       }
-      const { keyTransfer, ephemeralPrivateKey, pairingCode } = keyTransferOpts;
-      try {
-        identitySeed = await decryptKeyTransfer(keyTransfer, ephemeralPrivateKey, pairingCode);
-      } catch (err) {
-        throw new Error("Pairing refused: the identity key transfer could not be verified", {
-          cause: err,
-        });
-      }
-      // The key arrived end-to-end from the paired device (identity_pubkey_check
-      // is verified against the seed during decryption). A rotated sovereign
-      // identity binds through its succession chain, fetched from the relay's
-      // public route and verified here — withheld or forged, it only refuses.
-      const binding = await verifyPairingIdentityBinding(
-        result.motebitId,
-        keyTransfer.identity_pubkey_check,
-        {
-          successionChain: () => {
-            if (syncUrl == null || syncUrl === "") return Promise.resolve([]);
-            return new PairingClient({ relayUrl: syncUrl }).getSuccessionChain(result.motebitId);
-          },
-        },
-      );
-      if (!binding.accepted) throw new Error(`Pairing refused: ${binding.reason}`);
+      const opened = await openPairingKeyTransfer({
+        motebitId: result.motebitId,
+        keyTransfer: keyTransferOpts.keyTransfer,
+        ephemeralPrivateKey: keyTransferOpts.ephemeralPrivateKey,
+        pairingCode: keyTransferOpts.pairingCode,
+        ...(syncUrl != null && syncUrl !== ""
+          ? {
+              fetchSuccessionChain: () =>
+                new PairingClient({ relayUrl: syncUrl }).getSuccessionChain(result.motebitId),
+            }
+          : {}),
+      });
+      identitySeed = opened.identitySeed;
 
       await keyring.set(KEYRING_KEYS.motebitId, result.motebitId);
       await keyring.set("device_id", result.deviceId);
@@ -215,7 +219,7 @@ export class MobilePairingManager {
           await keyring.set("device_private_key", newPrivHex);
 
           // The new public key is identity_pubkey_check (verified during decryption)
-          const newPubHex = keyTransfer.identity_pubkey_check;
+          const newPubHex = opened.publicKeyHex;
           this.deps.setPublicKey(newPubHex);
 
           // Update relay device registration with new public key

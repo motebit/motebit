@@ -314,3 +314,22 @@ export async function rosterAfterRotationCommit(opts: {
     // See above.
   }
 }
+
+/**
+ * This browser's own key-succession records — the roster replica's verified
+ * links — for the key transfer when it approves a pairing (Device A). A
+ * rotation made with no relay configured uploads nothing, so these are what
+ * let Device B bind a rotated sovereign id. Best-effort; Device B verifies
+ * every record. Never throws.
+ */
+export async function ownSuccessionRecords(opts: {
+  motebitId: string;
+  db?: () => Promise<IDBDatabase>;
+}): Promise<KeySuccessionRecord[]> {
+  try {
+    const replica = await loadReplica(await (opts.db ?? defaultDb)(), opts.motebitId);
+    return replica.kind === "value" ? [...replica.replica.succession] : [];
+  } catch {
+    return [];
+  }
+}

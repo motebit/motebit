@@ -32,8 +32,11 @@ import {
   signGuardianRecoverySuccession,
   hexPublicKeyToDidKey,
   bytesToHex,
-  decryptKeyTransfer,
-  verifyPairingIdentityBinding,
+  hexToBytes,
+  encrypt,
+  x25519SharedSecret,
+  deriveKeyTransferKey,
+  openPairingKeyTransfer,
 } from "../index.js";
 
 // ── Fixtures ────────────────────────────────────────────────────────────
@@ -203,9 +206,7 @@ async function deviceA(
   claimX25519: Uint8Array,
   code: string,
 ): Promise<KeyTransferPayload> {
-  // At 96a5e9ee the builder takes no chain; the extra argument is what
-  // Device A must be able to send.
-  return (buildKeyTransferPayload as (...a: unknown[]) => Promise<KeyTransferPayload>)(
+  return buildKeyTransferPayload(
     holder.privateKey,
     holder.hex,
     claimX25519,
@@ -222,10 +223,10 @@ interface Outcome {
 }
 
 /**
- * Device B — at 96a5e9ee each surface (mobile / desktop / web
- * `completePairing`) runs this sequence inline: decrypt, then
- * `verifyPairingIdentityBinding` with the relay's /succession as the only
- * chain source. Modelled here verbatim so the matrix runs against it.
+ * Device B — the one acceptance path every surface's `completePairing` calls
+ * (`openPairingKeyTransfer`). At 96a5e9ee each surface ran the sequence
+ * inline: decrypt, then `verifyPairingIdentityBinding` with the relay's
+ * /succession as the only chain source.
  */
 async function deviceB(input: {
   motebitId: string;
@@ -235,26 +236,23 @@ async function deviceB(input: {
   relay: () => Promise<readonly unknown[]>;
   guardianKey?: string;
 }): Promise<Outcome> {
-  let seed: Uint8Array;
   try {
-    seed = await decryptKeyTransfer(
-      input.keyTransfer,
-      input.ephemeralPrivateKey,
-      input.pairingCode,
-    );
-  } catch {
+    const opened = await openPairingKeyTransfer({
+      motebitId: input.motebitId,
+      keyTransfer: input.keyTransfer,
+      ephemeralPrivateKey: input.ephemeralPrivateKey,
+      pairingCode: input.pairingCode,
+      fetchSuccessionChain: input.relay,
+      ...(input.guardianKey !== undefined ? { guardianKey: input.guardianKey } : {}),
+    });
     return {
-      accepted: false,
-      reason: "Pairing refused: the identity key transfer could not be verified",
+      accepted: true,
+      binding: opened.identityBinding,
+      seedHex: bytesToHex(opened.identitySeed),
     };
+  } catch (err) {
+    return { accepted: false, reason: err instanceof Error ? err.message : String(err) };
   }
-  const binding = await verifyPairingIdentityBinding(
-    input.motebitId,
-    input.keyTransfer.identity_pubkey_check,
-    { successionChain: input.relay as () => Promise<KeySuccessionRecord[]> },
-  );
-  if (!binding.accepted) return { accepted: false, reason: `Pairing refused: ${binding.reason}` };
-  return { accepted: true, binding: binding.identityBinding, seedHex: bytesToHex(seed) };
 }
 
 async function pair(opts: {
@@ -301,7 +299,16 @@ function expectedFor(
   relay: Relay,
 ): { accepted: boolean; binding?: string; reasonMatch?: RegExp } {
   if (who.kind === "guardian-recovered") {
-    return { accepted: false, reasonMatch: /guardian/i };
+    // Refused by design (no guardian key pinned on Device B). When the
+    // recovery link reaches Device B the refusal says why and what to do;
+    // when it never arrives, Device B cannot know and refuses generically.
+    const linkSeen = carry === "transfer" || (carry === "relay-only" && relay === "honest");
+    return {
+      accepted: false,
+      reasonMatch: linkSeen
+        ? /guardian.*motebit\.md and its current recovery seed/i
+        : /does not bind/,
+    };
   }
   if (who.kind === "legacy-v7") return { accepted: true, binding: "unverified" };
   if (who.heldChain.length === 0) return { accepted: true, binding: "sovereign" };
@@ -570,5 +577,85 @@ describe("pairing identity matrix — the transfer itself", () => {
       relay: () => Promise.resolve([]),
     });
     expect(out.accepted).toBe(false);
+  });
+});
+
+// ── Table 5: the shared path's edges ────────────────────────────────────
+
+describe("openPairingKeyTransfer — edges", () => {
+  it("no key transfer at all → refused", async () => {
+    const who = await identity("v8-never-rotated");
+    await expect(
+      openPairingKeyTransfer({
+        motebitId: who.motebitId,
+        keyTransfer: null,
+        ephemeralPrivateKey: generateX25519Keypair().privateKey,
+        pairingCode: "K7Q2ZP",
+      }),
+    ).rejects.toThrow(/^Pairing refused: the approval carried no identity key transfer/);
+  });
+
+  it("no relay fallback configured: a rotated identity binds only through the transfer", async () => {
+    const who = await identity("v8-rotated-once-offline");
+    const code = "K7Q2ZP";
+    for (const carried of [who.heldChain, undefined]) {
+      const b = generateX25519Keypair();
+      const keyTransfer = await deviceA(who.current, carried, b.publicKey, code);
+      const run = openPairingKeyTransfer({
+        motebitId: who.motebitId,
+        keyTransfer,
+        ephemeralPrivateKey: b.privateKey,
+        pairingCode: code,
+      });
+      if (carried) await expect(run).resolves.toMatchObject({ identityBinding: "sovereign" });
+      else await expect(run).rejects.toThrow(/does not bind/);
+    }
+  });
+
+  it("a sealed succession that is not a JSON array, or only some of the three fields, is ignored", async () => {
+    const who = await identity("v8-rotated-once-offline");
+    const code = "K7Q2ZP";
+    const b = generateX25519Keypair();
+    const kt = await deviceA(who.current, who.heldChain, b.publicKey, code);
+    // Re-seal a JSON object (not an array) under the same transfer key.
+    const shared = x25519SharedSecret(b.privateKey, hexToBytes(kt.x25519_pubkey));
+    const key = await deriveKeyTransferKey(shared, code);
+    const sealed = await encrypt(new TextEncoder().encode('{"not":"an array"}'), key);
+    const notArray: KeyTransferPayload = {
+      ...kt,
+      encrypted_succession: bytesToHex(sealed.ciphertext),
+      succession_nonce: bytesToHex(sealed.nonce),
+      succession_tag: bytesToHex(sealed.tag),
+    };
+    const partial: KeyTransferPayload = { ...kt };
+    delete partial.succession_tag;
+    for (const keyTransfer of [notArray, partial]) {
+      await expect(
+        openPairingKeyTransfer({
+          motebitId: who.motebitId,
+          keyTransfer,
+          ephemeralPrivateKey: b.privateKey,
+          pairingCode: code,
+          fetchSuccessionChain: () => Promise.resolve([]),
+        }),
+      ).rejects.toThrow(/does not bind/);
+    }
+    // The untouched transfer binds, so the refusals above are the fields'.
+    await expect(
+      openPairingKeyTransfer({
+        motebitId: who.motebitId,
+        keyTransfer: kt,
+        ephemeralPrivateKey: b.privateKey,
+        pairingCode: code,
+      }),
+    ).resolves.toMatchObject({ identityBinding: "sovereign" });
+  });
+
+  it("an empty chain sends no succession fields (the earlier payload shape)", async () => {
+    const who = await identity("v8-never-rotated");
+    const kt = await deviceA(who.current, [], generateX25519Keypair().publicKey, "K7Q2ZP");
+    expect(Object.keys(kt).sort()).toEqual(
+      ["encrypted_seed", "identity_pubkey_check", "nonce", "tag", "x25519_pubkey"].sort(),
+    );
   });
 });

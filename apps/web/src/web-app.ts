@@ -89,8 +89,7 @@ import {
   hexToBytes,
   generateX25519Keypair,
   buildKeyTransferPayload,
-  decryptKeyTransfer,
-  verifyPairingIdentityBinding,
+  openPairingKeyTransfer,
   checkPreTransferBalance,
   formatWalletWarning,
 } from "@motebit/encryption";
@@ -149,6 +148,7 @@ import { EncryptedKeyStore } from "./encrypted-keystore";
 import { rotateWebKey } from "./key-rotation";
 import {
   createWebMachineRoster,
+  ownSuccessionRecords,
   rosterAfterRotationCommit,
   type RosterLocks,
   type WebMachineRoster,
@@ -4406,6 +4406,9 @@ export class UnbootedWebApp {
             this._publicKeyHex,
             hexToBytes(session.claiming_x25519_pubkey),
             session.pairing_code,
+            // This browser's own chain, so Device B can bind a rotated
+            // sovereign id even when the relay has none (an offline rotation).
+            { successionRecords: await ownSuccessionRecords({ motebitId: this._motebitId }) },
           );
         } finally {
           secureErase(privKeyBytes);
@@ -4466,36 +4469,25 @@ export class UnbootedWebApp {
     let identitySeed: Uint8Array | undefined;
 
     try {
-      // Every in-tree Device B claims with an X25519 key and every Device A
-      // answers it with a key transfer, so an approval without one — or one
-      // that fails to decrypt — means the relay dropped or tampered with it.
-      // Refuse before anything — in memory or at rest — changes: the
-      // relay-supplied motebit_id is adopted only once the transferred key is
-      // shown to bind to it.
+      // The shared acceptance path (@motebit/encryption): the transfer is
+      // required, must decrypt to the key it names, and the relay-supplied
+      // motebit_id must bind to that key — through the succession chain
+      // Device A sealed inside the transfer, else the relay's public chain
+      // (verified here; withheld or forged, it only refuses). Refused ⇒
+      // throws before anything — in memory or at rest — changes.
       if (!keyTransferOpts) {
         throw new Error("Pairing refused: the approval carried no identity key transfer");
       }
-      const { keyTransfer, ephemeralPrivateKey, pairingCode, syncUrl } = keyTransferOpts;
-      try {
-        identitySeed = await decryptKeyTransfer(keyTransfer, ephemeralPrivateKey, pairingCode);
-      } catch (err) {
-        throw new Error("Pairing refused: the identity key transfer could not be verified", {
-          cause: err,
-        });
-      }
-      // The key arrived end-to-end from the paired device (identity_pubkey_check
-      // is verified against the seed during decryption). A rotated sovereign
-      // identity binds through its succession chain, fetched from the relay's
-      // public route and verified here — withheld or forged, it only refuses.
-      const binding = await verifyPairingIdentityBinding(
+      const { syncUrl } = keyTransferOpts;
+      const opened = await openPairingKeyTransfer({
         motebitId,
-        keyTransfer.identity_pubkey_check,
-        {
-          successionChain: () =>
-            new PairingClient({ relayUrl: syncUrl }).getSuccessionChain(motebitId),
-        },
-      );
-      if (!binding.accepted) throw new Error(`Pairing refused: ${binding.reason}`);
+        keyTransfer: keyTransferOpts.keyTransfer,
+        ephemeralPrivateKey: keyTransferOpts.ephemeralPrivateKey,
+        pairingCode: keyTransferOpts.pairingCode,
+        fetchSuccessionChain: () =>
+          new PairingClient({ relayUrl: syncUrl }).getSuccessionChain(motebitId),
+      });
+      identitySeed = opened.identitySeed;
 
       // Update in-memory identity state
       this._motebitId = motebitId;
@@ -4525,7 +4517,7 @@ export class UnbootedWebApp {
           await this.keyStore.storePrivateKey(newPrivHex);
 
           // The new public key is identity_pubkey_check (verified during decryption)
-          this._publicKeyHex = keyTransfer.identity_pubkey_check;
+          this._publicKeyHex = opened.publicKeyHex;
 
           // Update relay device registration
           const client = new PairingClient({ relayUrl: syncUrl });

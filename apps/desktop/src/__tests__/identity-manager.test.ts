@@ -49,6 +49,10 @@ const mockCtrl = vi.hoisted(() => ({
   // What the relay's public succession route serves (pairing, rotated identity).
   successionChain: [] as unknown[],
   successionFetches: [] as string[],
+  // What Device A sealed inside the key transfer (pairing, rotated identity).
+  transferSuccession: [] as unknown[],
+  // Device B's X25519 key as the relay's session shows it to Device A ("" = none).
+  claimingX25519: "",
   restoreValidateReason: null as string | null,
   writeRestoredIdentityCalls: [] as Array<{ bornAtMs: number; motebitId: string }>,
   lastBootstrapOpts: null as unknown,
@@ -104,6 +108,38 @@ vi.mock("@motebit/encryption", async (importOriginal) => ({
     if (mockCtrl.decryptShouldThrow) throw new Error("decrypt failed");
     return new Uint8Array(32);
   }),
+  // The shared acceptance path with decryption stubbed (the payloads here are
+  // not real ciphertext) — the binding decision itself stays REAL. The real
+  // path, decryption included, is exercised end to end by
+  // packages/encryption/src/__tests__/pairing-identity-matrix.test.ts.
+  openPairingKeyTransfer: vi.fn(
+    async (input: {
+      motebitId: string;
+      keyTransfer: { identity_pubkey_check: string } | null | undefined;
+      fetchSuccessionChain?: () => Promise<readonly unknown[]>;
+    }) => {
+      const real = await importOriginal<typeof import("@motebit/encryption")>();
+      if (input.keyTransfer == null) {
+        throw new Error("Pairing refused: the approval carried no identity key transfer");
+      }
+      if (mockCtrl.decryptShouldThrow) {
+        throw new Error("Pairing refused: the identity key transfer could not be verified");
+      }
+      const publicKeyHex = input.keyTransfer.identity_pubkey_check.toLowerCase();
+      const binding = await real.verifyPairingIdentityBinding(input.motebitId, publicKeyHex, {
+        successionSources: [
+          mockCtrl.transferSuccession,
+          ...(input.fetchSuccessionChain ? [input.fetchSuccessionChain] : []),
+        ],
+      });
+      if (!binding.accepted) throw new Error(`Pairing refused: ${binding.reason}`);
+      return {
+        identitySeed: new Uint8Array(32),
+        publicKeyHex,
+        identityBinding: binding.identityBinding,
+      };
+    },
+  ),
   checkPreTransferBalance: vi.fn(async () => ({
     hasAnyValue: mockCtrl.walletHasValue,
   })),
@@ -133,7 +169,7 @@ vi.mock("@motebit/sync-engine", () => {
     }));
     getSession = vi.fn(async (_id: string, _token: string) => ({
       pairing_code: "ABC123",
-      claiming_x25519_pubkey: "",
+      claiming_x25519_pubkey: mockCtrl.claimingX25519,
     }));
     approve = vi.fn(async () => ({ deviceId: "new-device-id" }));
     deny = vi.fn(async () => undefined);
@@ -250,6 +286,8 @@ beforeEach(() => {
   mockCtrl.decryptShouldThrow = false;
   mockCtrl.walletHasValue = false;
   mockCtrl.successionChain = [];
+  mockCtrl.transferSuccession = [];
+  mockCtrl.claimingX25519 = "";
   mockCtrl.successionFetches = [];
   mockCtrl.restoreValidateReason = null;
   mockCtrl.writeRestoredIdentityCalls = [];
@@ -941,6 +979,51 @@ describe("IdentityManager.approvePairing", () => {
   });
 });
 
+describe("IdentityManager.approvePairing — Device A sends its own succession chain", () => {
+  it("seals the bound identity file's chain into the key transfer (an offline rotation reaches Device B)", async () => {
+    const realIdf =
+      await vi.importActual<typeof import("@motebit/identity-file")>("@motebit/identity-file");
+    const genesis = await generateKeypair();
+    const next = await generateKeypair();
+    const id = await deriveSovereignMotebitId(bytesToHex(genesis.publicKey));
+    const file = await realIdf.generate(
+      { motebitId: id, ownerId: "owner", publicKeyHex: bytesToHex(genesis.publicKey) },
+      genesis.privateKey,
+    );
+    const record = await signKeySuccession(
+      genesis.privateKey,
+      next.privateKey,
+      next.publicKey,
+      genesis.publicKey,
+    );
+    const rotated = await realIdf.rotate({
+      existingContent: file,
+      newPublicKey: next.publicKey,
+      newPrivateKey: next.privateKey,
+      successionRecord: record,
+    });
+    // Whichever verify the kit resolves, it answers for this file.
+    mockCtrl.verifyIdentityResult = (await realIdf.verify(rotated, {
+      expectedType: "identity",
+    })) as typeof mockCtrl.verifyIdentityResult;
+    const mgr = new IdentityManager();
+    mgr.motebitId = id;
+    const invoke = makeInvoke({
+      device_public_key: bytesToHex(next.publicKey),
+      __keyring_device_private_key: bytesToHex(next.privateKey),
+      _identity_file: rotated,
+    });
+    mockCtrl.claimingX25519 = "11".repeat(32);
+    const { buildKeyTransferPayload } = await import("@motebit/encryption");
+    vi.mocked(buildKeyTransferPayload).mockClear();
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await mgr.approvePairing(invoke as any, "https://relay", "pid-1");
+    const call = vi.mocked(buildKeyTransferPayload).mock.calls[0]!;
+    const records = call[4]?.successionRecords ?? [];
+    expect(records.map((r) => r.new_public_key)).toContain(bytesToHex(next.publicKey));
+  });
+});
+
 describe("IdentityManager.denyPairing", () => {
   it("throws when no keypair", async () => {
     const mgr = new IdentityManager();
@@ -998,7 +1081,7 @@ describe("IdentityManager.completePairing", () => {
       mgr.completePairing(
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         invoke as any,
-        { motebitId: "new-mot", deviceId: "new-dev" },
+        { motebitId: "019e2aa5-7649-7fa3-ab27-2e4d9d4f0ffb", deviceId: "new-dev" },
       ),
     ).rejects.toThrow(/Pairing refused/);
     const writes = invoke.mock.calls.filter(
@@ -1037,6 +1120,41 @@ describe("IdentityManager.completePairing", () => {
       },
     );
     expect(mockCtrl.successionFetches).toEqual([id]);
+    expect(mgr.motebitId).toBe(id);
+    expect(mgr.publicKey).toBe(current);
+  });
+
+  it("adopts a sovereign identity rotated OFFLINE: the chain Device A sealed in the transfer binds it; the relay is never asked", async () => {
+    const genesis = await generateKeypair();
+    const next = await generateKeypair();
+    const id = await deriveSovereignMotebitId(bytesToHex(genesis.publicKey));
+    // The relay recorded nothing (rotation with no relay configured).
+    mockCtrl.successionChain = [];
+    mockCtrl.transferSuccession = [
+      await signKeySuccession(
+        genesis.privateKey,
+        next.privateKey,
+        next.publicKey,
+        genesis.publicKey,
+      ),
+    ];
+    const current = bytesToHex(next.publicKey);
+    const mgr = new IdentityManager();
+    const invoke = makeInvoke({ __keyring_device_private_key: "b".repeat(64) });
+    await mgr.completePairing(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      invoke as any,
+      { motebitId: id, deviceId: "new-dev" },
+      {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        keyTransfer: { ...mockCtrl.keyTransferPayload, identity_pubkey_check: current } as any,
+        ephemeralPrivateKey: new Uint8Array(32),
+        pairingCode: "ABC",
+        syncUrl: "https://relay",
+        pairingId: "pid-1",
+      },
+    );
+    expect(mockCtrl.successionFetches).toEqual([]);
     expect(mgr.motebitId).toBe(id);
     expect(mgr.publicKey).toBe(current);
   });
@@ -1088,7 +1206,7 @@ describe("IdentityManager.completePairing", () => {
     const result = await mgr.completePairing(
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       invoke as any,
-      { motebitId: "new-mot", deviceId: "new-dev" },
+      { motebitId: "019e2aa5-7649-7fa3-ab27-2e4d9d4f0ffb", deviceId: "new-dev" },
       {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         keyTransfer: mockCtrl.keyTransferPayload as any,
@@ -1111,7 +1229,7 @@ describe("IdentityManager.completePairing", () => {
     const result = await mgr.completePairing(
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       invoke as any,
-      { motebitId: "new-mot", deviceId: "new-dev" },
+      { motebitId: "019e2aa5-7649-7fa3-ab27-2e4d9d4f0ffb", deviceId: "new-dev" },
       {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         keyTransfer: mockCtrl.keyTransferPayload as any,
@@ -1189,7 +1307,7 @@ describe("IdentityManager.completePairing", () => {
       mgr.completePairing(
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         invoke as any,
-        { motebitId: "new-mot", deviceId: "new-dev" },
+        { motebitId: "019e2aa5-7649-7fa3-ab27-2e4d9d4f0ffb", deviceId: "new-dev" },
         {
           // eslint-disable-next-line @typescript-eslint/no-explicit-any
           keyTransfer: mockCtrl.keyTransferPayload as any,
@@ -1436,7 +1554,7 @@ describe("identity switch (C5 restore, C6 pairing)", () => {
     await mgr.completePairing(
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       invoke as any,
-      { motebitId: "new-mot", deviceId: "new-dev" },
+      { motebitId: "019e2aa5-7649-7fa3-ab27-2e4d9d4f0ffb", deviceId: "new-dev" },
       {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         keyTransfer: mockCtrl.keyTransferPayload as any,
@@ -1447,7 +1565,7 @@ describe("identity switch (C5 restore, C6 pairing)", () => {
       },
     );
     const cfg = JSON.parse((await invoke("read_config")) as string) as Record<string, unknown>;
-    expect(cfg.motebit_id).toBe("new-mot");
+    expect(cfg.motebit_id).toBe("019e2aa5-7649-7fa3-ab27-2e4d9d4f0ffb");
     expect(cfg.device_public_key).toBe(mockCtrl.keyTransferPayload.identity_pubkey_check);
     expect(cfg.__keyring_device_private_key).toBe("0".repeat(64));
     expect(cfg.__keyring_pending_rotation).toBeUndefined();

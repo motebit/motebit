@@ -304,3 +304,34 @@ export async function rosterAfterRotationCommit(opts: {
     // See above.
   }
 }
+
+/**
+ * This device's own key-succession records, for the key transfer when it
+ * approves a pairing (Device A): the identity file's chain — only when bound
+ * to `motebitId` and the key this device holds — and the roster replica's
+ * verified links. A rotation made with no relay configured uploads nothing,
+ * so these are what let Device B bind a rotated sovereign id. Best-effort;
+ * Device B verifies every record. Never throws.
+ */
+export async function ownSuccessionRecords(opts: {
+  motebitId: string;
+  identityFile: string | null;
+  heldPublicKeyHex: string;
+  kv?: RosterKV;
+}): Promise<KeySuccessionRecord[]> {
+  const records: KeySuccessionRecord[] = [];
+  try {
+    records.push(
+      ...(await identityFileRecords(opts.motebitId, opts.identityFile, opts.heldPublicKeyHex)),
+    );
+  } catch {
+    // No bound identity file: the replica and the relay remain.
+  }
+  try {
+    const replica = await loadReplica(opts.motebitId, opts.kv ?? defaultRosterKV);
+    if (replica.kind === "value") records.push(...replica.replica.succession);
+  } catch {
+    // No readable replica: see above.
+  }
+  return records;
+}

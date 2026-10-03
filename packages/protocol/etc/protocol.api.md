@@ -2646,8 +2646,11 @@ export interface KeySuccessionRecord {
 // @public
 export interface KeyTransferPayload {
     encrypted_seed: string;
+    encrypted_succession?: string;
     identity_pubkey_check: string;
     nonce: string;
+    succession_nonce?: string;
+    succession_tag?: string;
     tag: string;
     x25519_pubkey: string;
 }
