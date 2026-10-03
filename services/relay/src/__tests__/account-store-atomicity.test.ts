@@ -365,7 +365,6 @@ const WRITERS: Writer[] = [
             { balance: number } | undefined
         )?.balance ?? 0;
       commitDeparture(db, ownerOf(id), {
-        motebitId: id,
         tokenId: `tok-${k}`,
         expectedBalance: bal,
         waiver: bal > 0 ? { waivedAmount: 500_000, json: `{"waiver":"${k}"}` } : null,
@@ -469,4 +468,34 @@ describe("account store: every writer is atomic at every statement boundary", ()
       }
     });
   }
+
+  it("commitDeparture refuses a balance that moved since the route read it, writing nothing", () => {
+    const id = "mig-stale";
+    seed(clean, id, 500_000);
+    clean
+      .prepare(
+        `INSERT INTO relay_migrations (token_id, motebit_id, state, issued_at, expires_at, token_signature)
+         VALUES ('tok-stale', ?, 'settling', ?, ?, 'sig')`,
+      )
+      .run(id, Date.now(), Date.now() + 3_600_000);
+    const depart = (expectedBalance: number, waivedAmount: number | null) =>
+      commitDeparture(clean, ownerOf(id), {
+        tokenId: "tok-stale",
+        expectedBalance,
+        waiver: waivedAmount === null ? null : { waivedAmount, json: "{}" },
+      });
+    // Read 0 before an await; a credit landed since → no departure keeping a balance.
+    expect(() => depart(0, null)).toThrow(/Balance changed during depart/);
+    // Read 300k; the balance is 500k now → the stale waiver is not stretched over it.
+    expect(() => depart(300_000, 300_000)).toThrow(/Balance changed during depart/);
+    // A waiver that does not cover the balance is refused inside the transaction.
+    expect(() => depart(500_000, 100_000)).toThrow(/Balance changed during depart/);
+    const m = clean
+      .prepare(
+        "SELECT state, balance_waiver_json FROM relay_migrations WHERE token_id = 'tok-stale'",
+      )
+      .get() as { state: string; balance_waiver_json: string | null };
+    expect(m).toEqual({ state: "settling", balance_waiver_json: null });
+    expect(invariant(clean, id)).toEqual({ balance: 500_000, ledger: 500_000 });
+  });
 });

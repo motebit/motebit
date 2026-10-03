@@ -486,6 +486,30 @@ export class SqliteAccountStore implements AccountStore {
     };
   }
 
+  debitAndRecordWithdrawal(
+    w: NewWithdrawal,
+    description: string,
+  ): { record: WithdrawalRequest; newBalance: number } | { existing: WithdrawalRequest } | null {
+    // The key check, the debit (balance + ledger row) and the withdrawal row
+    // commit together or roll back together. `debit` nests as a savepoint;
+    // insufficient funds returns null with nothing written.
+    return this.db.transaction(() => {
+      if (w.idempotency_key != null) {
+        const existing = this.getWithdrawalByIdempotencyKey(w.motebit_id, w.idempotency_key);
+        if (existing) return { existing };
+      }
+      const newBalance = this.debit(
+        w.motebit_id,
+        w.amount,
+        "withdrawal",
+        w.withdrawal_id,
+        description,
+      );
+      if (newBalance === null) return null;
+      return { record: this.insertWithdrawal(w), newBalance };
+    });
+  }
+
   linkWithdrawalTransfer(id: string, payoutReference: string): boolean {
     const info = this.db
       .prepare(

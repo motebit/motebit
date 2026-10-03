@@ -155,55 +155,78 @@ export function updateMigrationState(
 }
 
 /**
- * Commit a departure (§7.3): the balance-waiver debit (when the balance is
- * non-zero), the waiver record, the `departed` transition and the agent
- * revoke. `waiver` is the verified BalanceWaiver (its covered amount and
- * canonical JSON), or null on the zero-balance path.
+ * Commit a departure (§7.3) as ONE transaction: the balance-waiver debit,
+ * the waiver record, the `departed` transition and the agent revoke land
+ * together or not at all — never a debit with no departure (whose retry would
+ * then depart with no waiver on record), never a departure that kept a
+ * balance. The balance is re-read HERE: the route's read precedes the
+ * signature verification's await, so a credit or debit landing in between is
+ * decided against the waiver inside the transaction, not against a stale
+ * number. `waiver` is the verified BalanceWaiver (its covered amount and
+ * canonical JSON), or null when the route saw a zero balance.
  */
 /** @internal exported for the ledger-atomicity harness. */
 export function commitDeparture(
   db: DatabaseDriver,
   owner: BoundIdentity,
   args: {
-    motebitId: string;
     tokenId: string;
     expectedBalance: number;
     waiver: { waivedAmount: number; json: string } | null;
   },
 ): void {
-  const { motebitId, tokenId, waiver } = args;
-  if (waiver !== null) {
-    // Debit the account to zero under the "waiver" transaction type.
-    // The waiver amount may exceed the current balance (the agent
-    // committed to forfeiting "at least" `waived_amount`) — we debit
-    // only what's on the books. Audit trail cites the migration token.
-    const debitResult = sqliteAccountStoreFor(db).debit(
-      motebitId,
-      args.expectedBalance,
-      "waiver",
-      tokenId,
-      `migration waiver: ${tokenId}`,
-    );
-    if (debitResult === null) {
-      // Insufficient funds between our read and debit — concurrent
-      // debit raced us. Surface a 409 and let the CLI re-check.
+  const motebitId = unwrapBound(owner);
+  const { tokenId, waiver } = args;
+  db.transaction(() => {
+    const row = db
+      .prepare("SELECT balance FROM relay_accounts WHERE motebit_id = ?")
+      .get(motebitId) as { balance: number } | undefined;
+    const balance = row?.balance ?? 0;
+    if (balance !== args.expectedBalance) {
       throw new HTTPException(409, {
         message: "Balance changed during depart; re-check balance and retry",
       });
     }
-    db.prepare("UPDATE relay_migrations SET balance_waiver_json = ? WHERE token_id = ?").run(
-      waiver.json,
-      tokenId,
-    );
-  }
-  updateMigrationState(db, owner, tokenId, "departed");
+    if (balance > 0) {
+      if (waiver === null || waiver.waivedAmount < balance) {
+        throw new HTTPException(409, {
+          message: "Balance changed during depart; re-check balance and retry",
+        });
+      }
+      // Debit the account to zero under the "waiver" transaction type.
+      // The waiver amount may exceed the current balance (the agent
+      // committed to forfeiting "at least" `waived_amount`) — we debit
+      // only what's on the books. Audit trail cites the migration token.
+      const debitResult = sqliteAccountStoreFor(db).debit(
+        motebitId,
+        balance,
+        "waiver",
+        tokenId,
+        `migration waiver: ${tokenId}`,
+      );
+      if (debitResult === null) {
+        throw new HTTPException(409, {
+          message: "Balance changed during depart; re-check balance and retry",
+        });
+      }
+      db.prepare(
+        "UPDATE relay_migrations SET balance_waiver_json = ? WHERE token_id = ? AND motebit_id = ?",
+      ).run(waiver.json, tokenId, motebitId);
+    }
+    // The `departed` transition, scoped to the bound identity (the shape of
+    // `updateMigrationState`, inline: the owner is read only through
+    // `unwrapBound`, never forwarded).
+    db.prepare(
+      "UPDATE relay_migrations SET state = 'departed', departed_at = ? WHERE token_id = ? AND motebit_id = ?",
+    ).run(Date.now(), tokenId, motebitId);
 
-  // Mark agent as inactive on this relay — and off the shelf, in the same
-  // statement (registry-delist.ts). The row stays: the identity now lives
-  // elsewhere, but its history here is still verifiable.
-  db.prepare(
-    "UPDATE agent_registry SET revoked = 1, delisted_at = COALESCE(delisted_at, ?), endpoint_url = '', capabilities = '[]' WHERE motebit_id = ?",
-  ).run(Date.now(), motebitId);
+    // Mark agent as inactive on this relay — and off the shelf, in the same
+    // statement (registry-delist.ts). The row stays: the identity now lives
+    // elsewhere, but its history here is still verifiable.
+    db.prepare(
+      "UPDATE agent_registry SET revoked = 1, delisted_at = COALESCE(delisted_at, ?), endpoint_url = '', capabilities = '[]' WHERE motebit_id = ?",
+    ).run(Date.now(), motebitId);
+  });
 }
 
 // === Migration Deps ===
@@ -900,7 +923,6 @@ export function registerMigrationRoutes(deps: MigrationDeps): void {
     }
 
     commitDeparture(db, owner, {
-      motebitId,
       tokenId: migration.token_id,
       expectedBalance: currentBalance,
       waiver:

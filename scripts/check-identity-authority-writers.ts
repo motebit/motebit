@@ -778,9 +778,9 @@ const WRITERS: readonly Writer[] = [
     file: R + "migration.ts",
     verb: "UPDATE",
     table: "relay_migrations",
-    count: 3,
+    count: 4,
     principal:
-      "`updateMigrationState(db, owner: BoundIdentity, …)`, scoped WHERE motebit_id = owner: /migrate (signature), attestation, export, cancel, depart (each `bindCaller` — #846: any identity's token cancelled, exported or departed B)",
+      "`updateMigrationState(db, owner: BoundIdentity, …)` and `commitDeparture(db, owner: BoundIdentity, …)` (depart's waiver record + `departed` transition, one transaction with the waiver debit), each scoped WHERE motebit_id = unwrapBound(owner): /migrate (signature), attestation, export, cancel, depart (each `bindCaller` — #846: any identity's token cancelled, exported or departed B)",
   },
   {
     file: R + "migration.ts",
@@ -1310,6 +1310,7 @@ const WRITER_HELPERS: ReadonlyArray<{ file: string; fn: string; param: string }>
   { file: R + "event-seq.ts", fn: "readEventsAfterSeq", param: "owner" },
   { file: R + "subscriptions.ts", fn: "setSubscriptionStatus", param: "owner" },
   { file: R + "migration.ts", fn: "updateMigrationState", param: "owner" },
+  { file: R + "migration.ts", fn: "commitDeparture", param: "owner" },
   { file: R + "key-rotation.ts", fn: "insertApproval", param: "owner" },
   { file: R + "credentials.ts", fn: "insertSubmittedCredential", param: "owner" },
   { file: R + "delegation-revocations.ts", fn: "insertDelegationRevocation", param: "owner" },
