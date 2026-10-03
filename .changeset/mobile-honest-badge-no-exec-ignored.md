@@ -1,0 +1,11 @@
+---
+"@motebit/mobile": patch
+"@motebit/spatial": patch
+"@motebit/render-engine": patch
+---
+
+Mobile: honest receipt badge + no delegated execution until the approval authority is proven independent.
+
+**L8 — false "verified" badge.** Mobile's `ReceiptArtifact` verified against `collectKnownKeys(receipt)` — the receipt's own embedded keys fed back in as the trust anchor — and showed two states, so a forged self-keyed receipt claiming any `motebit_id` badged "verified locally · chain intact". `@motebit/render-engine` now owns ONE verdict ladder (`verifyReceiptVerdict` / `receiptVerdictFor` / `RECEIPT_VERDICT_LABELS`: failed / task-failed / verified / integrity-only, judged over the whole delegation chain); the web+desktop DOM card, the spatial satellite (`verifyReceiptState`) and mobile (`deriveReceiptBadge`, new `receipt-badge.ts`) all route through it. Without an independent trusted anchor the best mobile can show is "signature verified · identity not anchored". The DOM card and spatial previously judged failure at the root only; a tampered delegation child now fails the chain on every surface, as the CLI already did. Locked by `apps/mobile/src/__tests__/receipt-badge.test.ts` and the cross-surface vector test `scripts/__tests__/receipt-verdict-cross-surface.test.ts` (python-verifier fixtures + verdict-corpus receipts through web/desktop, spatial, mobile and CLI).
+
+**Mobile is consent-first and non-executing (founder decision, option 1).** The background push-wake handler ran `task_request` through `handleAgentTask` without checking the serving flag, so the phone executed delegated work with `/serve` off. New `serving-gate.ts` is the single gate (`MOBILE_SERVING_ENABLED = false`, a compile-time constant no setting or `/serve` can flip); the push-wake handler, the foreground sync task loop and `startServing` all refuse while it is off, and `/serve` now says serving from mobile is not available yet. The serving scaffolding is kept (deletion policy). Locked by behavioural tests (push wake, `/serve`, sync controller, plus a gate-forced-ON control) and the static AST test `serving-gate-static.test.ts`, which fails on any `handleAgentTask` / `startServing` reference in apps/mobile not preceded by the gate.

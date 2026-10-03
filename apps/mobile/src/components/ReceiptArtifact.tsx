@@ -4,77 +4,67 @@
  * The DOM receipt card from @motebit/render-engine/buildReceiptArtifact
  * doesn't transplant: mobile uses React Native primitives (View/Text),
  * not HTML. What DOES port cleanly is the shared summary logic
- * (receiptSummary, collectKnownKeys) and the local verification
- * (verifyReceiptChain) — those are pure + cross-surface. This component
- * renders the same data in RN idioms.
+ * (receiptSummary) and the shared verdict ladder (receipt-badge.ts →
+ * render-engine's verifyReceiptVerdict) — those are pure + cross-surface.
+ * This component renders the same data in RN idioms.
  *
  * Paradigm consistency: the user on web taps a receipt card and sees a
  * signed chain they can verify locally. Same experience here, same
- * cryptographic guarantee — zero server round trip, pure-JS Ed25519.
+ * cryptographic guarantee — zero server round trip, pure-JS Ed25519 — and
+ * the same honesty: without a trusted anchor the badge says "identity not
+ * anchored", never "verified".
  */
 import React, { useEffect, useMemo, useState } from "react";
 import { View, Text, TouchableOpacity, StyleSheet } from "react-native";
 import type { ExecutionReceipt } from "@motebit/sdk";
-import { verifyReceiptChain } from "@motebit/encryption";
-import {
-  collectKnownKeys,
-  displayName,
-  priceFor,
-  receiptSummary,
-  type ReceiptSummary,
-} from "@motebit/render-engine";
+import { displayName, priceFor, receiptSummary, type ReceiptSummary } from "@motebit/render-engine";
+import { deriveReceiptBadge, PENDING_RECEIPT_BADGE, type ReceiptBadge } from "../receipt-badge";
 import { useTheme, type ThemeColors } from "../theme";
 
 interface ReceiptArtifactProps {
   receipt: ExecutionReceipt;
+  /**
+   * Independently-trusted keys (pinned transparency key / known-keys
+   * registry) keyed by motebit_id. Never the receipt's own embedded keys.
+   * Absent → the badge tops out at integrity-only.
+   */
+  trustedAnchor?: ReadonlyMap<string, Uint8Array>;
 }
 
-type VerifyState =
-  { kind: "pending" } | { kind: "verified" } | { kind: "failed-task" } | { kind: "unverified" };
-
-export function ReceiptArtifact({ receipt }: ReceiptArtifactProps): React.ReactElement {
+export function ReceiptArtifact({
+  receipt,
+  trustedAnchor,
+}: ReceiptArtifactProps): React.ReactElement {
   const colors = useTheme();
   const styles = useMemo(() => createStyles(colors), [colors]);
   const summary: ReceiptSummary = useMemo(() => receiptSummary(receipt), [receipt]);
   const children = receipt.delegation_receipts ?? [];
 
   const [expanded, setExpanded] = useState(false);
-  const [verify, setVerify] = useState<VerifyState>({ kind: "pending" });
+  const [badge, setBadge] = useState<ReceiptBadge>(PENDING_RECEIPT_BADGE);
 
   useEffect(() => {
     let cancelled = false;
-    const knownKeys = collectKnownKeys(receipt);
-    void verifyReceiptChain(receipt, knownKeys)
-      .then((tree) => {
-        if (cancelled) return;
-        if (!tree.verified) return setVerify({ kind: "unverified" });
-        if (receipt.status === "failed") return setVerify({ kind: "failed-task" });
-        setVerify({ kind: "verified" });
-      })
-      .catch(() => {
-        if (!cancelled) setVerify({ kind: "unverified" });
-      });
+    setBadge(PENDING_RECEIPT_BADGE);
+    void deriveReceiptBadge(receipt, trustedAnchor).then((next) => {
+      if (!cancelled) setBadge(next);
+    });
     return () => {
       cancelled = true;
     };
-  }, [receipt]);
+  }, [receipt, trustedAnchor]);
 
   const verifyColor =
-    verify.kind === "verified"
+    badge.tone === "accent"
       ? colors.accent
-      : verify.kind === "pending"
+      : badge.tone === "muted"
         ? colors.textMuted
-        : verify.kind === "failed-task"
-          ? "#c07040"
-          : "#d04050";
-  const verifyLabel =
-    verify.kind === "pending"
-      ? "verifying locally…"
-      : verify.kind === "verified"
-        ? "verified locally · chain intact"
-        : verify.kind === "failed-task"
-          ? "verified · completed: failed"
-          : "verification failed";
+        : badge.tone === "integrity"
+          ? "#4aa8c0"
+          : badge.tone === "warn"
+            ? "#c07040"
+            : "#d04050";
+  const verifyLabel = badge.label;
 
   return (
     <View style={styles.card}>

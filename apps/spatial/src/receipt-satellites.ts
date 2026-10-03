@@ -32,17 +32,20 @@
 
 import * as THREE from "three";
 import type { ExecutionReceipt } from "@motebit/sdk";
-import { verifyReceiptChain } from "@motebit/encryption";
-import type { SatelliteExpression, SatelliteItem, SpatialExpression } from "@motebit/render-engine";
-import { registerSpatialDataModule } from "@motebit/render-engine";
+import type {
+  ReceiptVerdict,
+  SatelliteExpression,
+  SatelliteItem,
+  SpatialExpression,
+} from "@motebit/render-engine";
+import { registerSpatialDataModule, verifyReceiptVerdict } from "@motebit/render-engine";
 
 export const RECEIPT_SATELLITES_MODULE = registerSpatialDataModule({
   kind: "satellite",
   name: "receipts",
 });
 
-export type ReceiptVerifyState =
-  "pending" | "verified" | "integrity-only" | "task-failed" | "failed";
+export type ReceiptVerifyState = "pending" | ReceiptVerdict;
 
 const BASE_RADIUS_M = 0.26;
 const RADIUS_STEP_M = 0.03;
@@ -108,20 +111,18 @@ export function collectKnownKeys(receipt: ExecutionReceipt): Map<string, Uint8Ar
   return keys;
 }
 
-interface VerifyNode {
-  verified: boolean;
-  keySource?: "external" | "embedded";
-  delegations?: VerifyNode[];
-}
-
-// A verified chain is "bound" only when every node resolved its key from the
-// trusted anchor (keySource === "external"), not the receipt's own embedded key.
-function allBound(tree: VerifyNode): boolean {
-  if (tree.keySource !== "external") return false;
-  for (const child of tree.delegations ?? []) {
-    if (!allBound(child)) return false;
-  }
-  return true;
+/**
+ * The orb's settled state — the shared verdict ladder (`verifyReceiptVerdict`
+ * in `@motebit/render-engine`), so the satellite and every other surface's
+ * badge can never disagree on the same receipt. "verified" (green) only when
+ * every signer resolved from the trusted anchor; embedded-key-only chains are
+ * "integrity-only" (cyan).
+ */
+export function verifyReceiptState(
+  receipt: ExecutionReceipt,
+  trustedAnchor?: ReadonlyMap<string, Uint8Array>,
+): Promise<ReceiptVerdict> {
+  return verifyReceiptVerdict(receipt, trustedAnchor);
 }
 
 /** Per-receipt projection the renderer consumes. Keeps the transform pure. */
@@ -323,25 +324,12 @@ export class ReceiptSatelliteCoordinator {
   }
 
   private async verify(receipt: ExecutionReceipt): Promise<void> {
-    try {
-      // Verify against the trusted anchor. With none, the embedded fallback
-      // still checks signatures, but the result is integrity-only — NOT proof
-      // the key belongs to the motebit_id.
-      const tree = await verifyReceiptChain(receipt, this.trustedAnchor);
-      if (!this.receipts.has(receipt.task_id)) return; // evicted during verify
-      if (!tree.verified) {
-        this.states.set(receipt.task_id, "failed");
-      } else if (receipt.status === "failed") {
-        this.states.set(receipt.task_id, "task-failed");
-      } else if (allBound(tree)) {
-        this.states.set(receipt.task_id, "verified");
-      } else {
-        this.states.set(receipt.task_id, "integrity-only");
-      }
-    } catch {
-      if (!this.receipts.has(receipt.task_id)) return;
-      this.states.set(receipt.task_id, "failed");
-    }
+    // Verify against the trusted anchor. With none, the embedded fallback
+    // still checks signatures, but the result is integrity-only — NOT proof
+    // the key belongs to the motebit_id. Never throws (errors → "failed").
+    const state = await verifyReceiptState(receipt, this.trustedAnchor);
+    if (!this.receipts.has(receipt.task_id)) return; // evicted during verify
+    this.states.set(receipt.task_id, state);
     this.flush();
   }
 

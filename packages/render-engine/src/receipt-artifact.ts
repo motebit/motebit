@@ -20,8 +20,8 @@
  */
 
 import type { ExecutionReceipt } from "@motebit/sdk";
-import { verifyReceiptChain } from "@motebit/encryption";
-import { bindingStatusFor, displayName, priceFor, shortHash } from "./receipt-summary.js";
+import { displayName, priceFor, shortHash } from "./receipt-summary.js";
+import { RECEIPT_VERDICT_LABELS, verifyReceiptVerdict } from "./receipt-verdict.js";
 
 /**
  * Build the receipt artifact DOM. The caller owns the element lifecycle
@@ -107,36 +107,20 @@ export function buildReceiptArtifact(
   // pulse is the calm-software signal that a check is in flight.
   root.classList.add("is-pending");
 
-  void verifyReceiptChain(receipt, trustedAnchor ?? new Map<string, Uint8Array>())
-    .then((tree) => {
-      root.classList.remove("is-pending");
-      const binding = bindingStatusFor(tree);
-      if (binding === "unverified") {
-        root.classList.add("is-unverified");
-        label.textContent = "verification failed";
-        return;
-      }
-      if (receipt.status === "failed") {
-        root.classList.add("is-failed");
-        label.textContent = "verified · completed: failed";
-        return;
-      }
-      if (binding === "bound") {
-        root.classList.add("is-verified");
-        label.textContent = "verified locally · chain intact";
-        return;
-      }
-      // integrity-only: the signature is valid, but it was checked against the
-      // receipt's own embedded key — identity is NOT bound without a trust
-      // anchor. Distinct class + honest label so no surface implies "from X".
-      root.classList.add("is-integrity-verified");
-      label.textContent = "signature verified · identity not anchored";
-    })
-    .catch(() => {
-      root.classList.remove("is-pending");
-      root.classList.add("is-unverified");
-      label.textContent = "verification failed";
-    });
+  // One ladder for every surface (receipt-verdict.ts): failed / task-failed /
+  // verified (identity bound via the trusted anchor) / integrity-only (signed
+  // against the receipt's own embedded key — identity NOT anchored).
+  const VERDICT_CLASS = {
+    failed: "is-unverified",
+    "task-failed": "is-failed",
+    verified: "is-verified",
+    "integrity-only": "is-integrity-verified",
+  } as const;
+  void verifyReceiptVerdict(receipt, trustedAnchor).then((verdict) => {
+    root.classList.remove("is-pending");
+    root.classList.add(VERDICT_CLASS[verdict]);
+    label.textContent = RECEIPT_VERDICT_LABELS[verdict];
+  });
 
   return root;
 }
