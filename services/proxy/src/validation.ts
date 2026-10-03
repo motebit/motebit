@@ -346,8 +346,10 @@ const MICRO = 1_000_000;
  *  Anthropic usage fields are disjoint buckets (not overlapping):
  *    input_tokens          = non-cached tokens (after last cache breakpoint)
  *    cache_read_input_tokens    = cached tokens read from cache (0.1x price)
- *    cache_creation_input_tokens = tokens written to cache (1.25x price)
- *    total_input = input_tokens + cache_read + cache_creation
+ *    cache_creation_input_tokens = tokens written to cache, priced by TTL:
+ *      5-minute writes 1.25x (`cacheCreationTokens`),
+ *      1-hour writes 2x (`cacheCreation1hTokens`) — the highest input rate
+ *    total_input = input_tokens + cache_read + cache_creation (5m + 1h)
  */
 export function calculateCostMicro(
   model: string,
@@ -355,13 +357,14 @@ export function calculateCostMicro(
   outputTokens: number,
   cacheReadTokens = 0,
   cacheCreationTokens = 0,
+  cacheCreation1hTokens = 0,
 ): number {
   const config = MODEL_CONFIG[model];
   if (config == null) return 0;
   // Cache-read discount is provider-specific: Anthropic reads cached input at
   // 0.1x (90% off), OpenAI at 0.5x (50% off). Cache CREATION is an Anthropic-only
-  // surcharge (1.25x) — OpenAI auto-caches with no creation charge, so its callers
-  // pass cacheCreationTokens=0. `extractUsage` normalizes inputTokens to the
+  // surcharge (1.25x for a 5-minute TTL, 2x for 1-hour) — OpenAI auto-caches
+  // with no creation charge, so its callers pass both creation counts as 0. `extractUsage` normalizes inputTokens to the
   // UNCACHED portion for every provider, so these terms are additive (no
   // double-count). See usage.ts.
   const cacheReadMultiplier = config.host === "openai" ? 0.5 : 0.1;
@@ -369,6 +372,7 @@ export function calculateCostMicro(
     (inputTokens / 1_000_000) * config.input +
     (cacheReadTokens / 1_000_000) * config.input * cacheReadMultiplier +
     (cacheCreationTokens / 1_000_000) * config.input * 1.25 +
+    (cacheCreation1hTokens / 1_000_000) * config.input * 2 +
     (outputTokens / 1_000_000) * config.output;
   return Math.ceil(rawCost * (1 + MARGIN) * MICRO);
 }

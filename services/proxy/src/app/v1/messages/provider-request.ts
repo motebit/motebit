@@ -13,6 +13,34 @@ export interface ProviderRequest {
   url: string;
   headers: Record<string, string>;
   body: string;
+  /**
+   * The exact `max_tokens` in `body` — the output upper bound for metering.
+   * Read from here, never re-derived: it includes the thinking-budget bump.
+   */
+  maxTokens: number;
+}
+
+/** Default output cap when the client sends none and the tier has no cap (BYOK). */
+export const UNCAPPED_DEFAULT_MAX_TOKENS = 4096;
+
+/**
+ * Validate the client's `max_tokens` and resolve the value to send upstream.
+ * Absent (undefined/null) takes the tier cap (or the BYOK default); anything
+ * else MUST be a positive safe integer — a string, negative, zero, float or
+ * non-finite value is refused, never coerced (`"abc"` once became
+ * `max_tokens: null` upstream, which openai/groq/google treat as NO cap while
+ * the meter's bound assumed the tier cap). A valid value is clamped to the
+ * tier cap (`cap <= 0` means no cap).
+ */
+export function resolveMaxTokens(
+  raw: unknown,
+  cap: number,
+): { ok: true; value: number } | { ok: false } {
+  if (raw === undefined || raw === null) {
+    return { ok: true, value: cap > 0 ? cap : UNCAPPED_DEFAULT_MAX_TOKENS };
+  }
+  if (typeof raw !== "number" || !Number.isSafeInteger(raw) || raw <= 0) return { ok: false };
+  return { ok: true, value: cap > 0 ? Math.min(raw, cap) : raw };
 }
 
 /**
@@ -171,14 +199,17 @@ export function buildProviderRequest(
   // (current ai-core AnthropicProvider). Anthropic upstream gets blocks;
   // OpenAI-shaped upstreams get flattened text.
   const system = systemToText(body.system);
-  const maxTokens =
-    maxTokensCap > 0
-      ? Math.min((body.max_tokens as number) || maxTokensCap, maxTokensCap)
-      : (body.max_tokens as number) || 4096;
+  const resolved = resolveMaxTokens(body.max_tokens, maxTokensCap);
+  // The route refuses an invalid max_tokens (400) before building; this is
+  // the backstop so no caller can ship an unvalidated cap upstream.
+  if (!resolved.ok) throw new Error("proxy.buildProviderRequest: invalid max_tokens");
+  const maxTokens = resolved.value;
 
   switch (provider) {
     case "anthropic": {
       const thinkingBudget = proxyExtendedThinkingBudget(model);
+      const anthropicMaxTokens =
+        thinkingBudget != null ? Math.max(maxTokens, thinkingBudget + 4096) : maxTokens;
       const anthropicBody: Record<string, unknown> = {
         model,
         messages: rawMessages,
@@ -191,7 +222,7 @@ export function buildProviderRequest(
         system: systemToAnthropicBlocks(body.system),
         // Thinking tokens count toward max_tokens, so reserve headroom above the
         // budget when enabled; otherwise the client/cap value stands.
-        max_tokens: thinkingBudget != null ? Math.max(maxTokens, thinkingBudget + 4096) : maxTokens,
+        max_tokens: anthropicMaxTokens,
         stream: true,
         ...(body.tools != null ? { tools: body.tools } : {}),
       };
@@ -210,6 +241,7 @@ export function buildProviderRequest(
           "anthropic-version": "2023-06-01",
         },
         body: JSON.stringify(anthropicBody),
+        maxTokens: anthropicMaxTokens,
       };
     }
 
@@ -236,6 +268,7 @@ export function buildProviderRequest(
           stream_options: { include_usage: true },
           ...(body.tools != null ? { tools: body.tools } : {}),
         }),
+        maxTokens,
       };
     }
 
@@ -256,6 +289,7 @@ export function buildProviderRequest(
           stream: true,
           stream_options: { include_usage: true },
         }),
+        maxTokens,
       };
     }
 
@@ -279,6 +313,7 @@ export function buildProviderRequest(
           stream_options: { include_usage: true },
           ...(body.tools != null ? { tools: body.tools } : {}),
         }),
+        maxTokens,
       };
     }
 

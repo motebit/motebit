@@ -45,10 +45,23 @@ export function resolveBillingConfig(
   return { ok: true, config: { relayUrl, secret } };
 }
 
-/** @internal — exported only for unit tests. */
+/** Relay-debit attempts (idempotent on `reference_id`, so retries are safe). */
 export const DEBIT_MAX_ATTEMPTS = 3;
-/** Per-attempt bound so a hung relay cannot hold the client's stream open. */
-const DEBIT_ATTEMPT_TIMEOUT_MS = 5_000;
+/**
+ * @internal — debit timing bounds, mutable only so tests can shorten them.
+ *
+ * Every attempt is bounded so a hung relay cannot hold the settlement open;
+ * the streamed turn's whole accounting tail (drain + KV + every attempt and
+ * backoff) must fit the platform's post-response budget — see
+ * `accountingTailWorstCaseMs` in `app/v1/messages/stream-accounting.ts`,
+ * which reads these values (it does not keep its own copy).
+ */
+export const DEBIT_TIMINGS = {
+  /** Bound on each relay-debit attempt (the fetch is aborted past it). */
+  attemptTimeoutMs: 3_000,
+  /** Retry backoff base (attempt × base). */
+  backoffMs: 250,
+};
 
 export type DebitFailureReason =
   /** RELAY_API_URL / RELAY_PROXY_SECRET missing at debit time. */
@@ -111,7 +124,7 @@ async function attemptDebit(
           reference_id: referenceId,
           description: "Cloud AI usage",
         }),
-        signal: AbortSignal.timeout(DEBIT_ATTEMPT_TIMEOUT_MS),
+        signal: AbortSignal.timeout(DEBIT_TIMINGS.attemptTimeoutMs),
       });
       if (res.ok) {
         let body: unknown = null;
@@ -164,7 +177,7 @@ async function attemptDebit(
     // The relay is idempotent on reference_id, so a retry after a lost 200
     // cannot double-charge.
     if (attempt < DEBIT_MAX_ATTEMPTS) {
-      await new Promise((resolve) => setTimeout(resolve, attempt * 250));
+      await new Promise((resolve) => setTimeout(resolve, attempt * DEBIT_TIMINGS.backoffMs));
     }
   }
   return last;

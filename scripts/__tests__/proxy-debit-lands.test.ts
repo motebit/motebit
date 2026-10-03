@@ -57,11 +57,14 @@ let relaySecret: string;
 let errors: string[];
 let logs: string[];
 
+/** The SSE the faked provider answers 200 with — the happy stream unless a case swaps it. */
+let providerSse: string[];
+
 function providerStream(): Response {
   const enc = new TextEncoder();
   const body = new ReadableStream<Uint8Array>({
     start(controller) {
-      for (const chunk of SSE) controller.enqueue(enc.encode(chunk));
+      for (const chunk of providerSse) controller.enqueue(enc.encode(chunk));
       controller.close();
     },
   });
@@ -106,12 +109,16 @@ function balance(motebitId: string): number {
   return row?.balance ?? 0;
 }
 
-function turn(token: string): Promise<Response> {
+function turn(token: string, extra: Record<string, unknown> = {}): Promise<Response> {
   return POST(
     new Request("http://proxy.test/v1/messages", {
       method: "POST",
       headers: { origin: ORIGIN, "content-type": "application/json", "x-proxy-token": token },
-      body: JSON.stringify({ model: MODEL, messages: [{ role: "user", content: "hello" }] }),
+      body: JSON.stringify({
+        model: MODEL,
+        messages: [{ role: "user", content: "hello" }],
+        ...extra,
+      }),
     }),
   );
 }
@@ -146,6 +153,7 @@ beforeEach(async () => {
   process.env.RELAY_API_URL = RELAY_URL;
   process.env.ANTHROPIC_API_KEY = "sk-ant-test-never-real";
   setSpendStoreForTests(memorySpendStore());
+  providerSse = SSE;
   providerCalls = 0;
   relayDebitCalls = 0;
   relaySecret = SECRET;
@@ -153,7 +161,7 @@ beforeEach(async () => {
   logs = [];
   vi.spyOn(console, "error").mockImplementation((s: unknown) => void errors.push(String(s)));
   vi.spyOn(console, "log").mockImplementation((s: unknown) => void logs.push(String(s)));
-  vi.spyOn(console, "warn").mockImplementation(() => {});
+  vi.spyOn(console, "warn").mockImplementation((s: unknown) => void logs.push(String(s)));
   vi.spyOn(console, "info").mockImplementation(() => {});
   const realFetch = globalThis.fetch;
   vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -304,5 +312,85 @@ describe("proxy debit lands in the relay ledger (production auth config)", () =>
     // The balance the next token carries is the post-debit one: refused.
     const next = await turn(await mintToken(mid));
     expect(next.status).toBe(402);
+  });
+
+  it("a 200 stream carrying only a provider error event (no message_start) is not billed for the provider", async () => {
+    const mid = await createIdentity();
+    fund(5);
+    providerSse = [
+      `event: error\ndata: ${JSON.stringify({ type: "error", error: { type: "overloaded_error", message: "Overloaded" } })}\n\n`,
+    ];
+
+    const res = await turn(await mintToken(mid));
+    expect(res.status).toBe(200);
+    await res.text();
+
+    // The provider never started a message, so it billed nothing — neither does the proxy.
+    expect(fees(mid)).toHaveLength(0);
+    expect(balance(mid)).toBe(5_000_000);
+    const unbilled = events("proxy.turn_unbilled_provider_error");
+    expect(unbilled).toHaveLength(1);
+    expect(unbilled[0]!.providerErrorType).toBe("overloaded_error");
+    expect(unbilled[0]!.requestId).toBe(res.headers.get("X-Motebit-Request-Id"));
+  });
+
+  it("an empty 200 body is not billed for the provider", async () => {
+    const mid = await createIdentity();
+    fund(5);
+    providerSse = [];
+
+    const res = await turn(await mintToken(mid));
+    expect(res.status).toBe(200);
+    await res.text();
+
+    expect(fees(mid)).toHaveLength(0);
+    expect(balance(mid)).toBe(5_000_000);
+    const unbilled = events("proxy.turn_unbilled_provider_error");
+    expect(unbilled).toHaveLength(1);
+    expect(unbilled[0]!.providerErrorType).toBe("empty_body");
+  });
+
+  it("a stream that started (message_start) and then lost usage is still billed the upper bound", async () => {
+    const mid = await createIdentity();
+    fund(5);
+    providerSse = [SSE[0]!, SSE[1]!];
+
+    const res = await turn(await mintToken(mid));
+    await res.text();
+
+    const rows = fees(mid);
+    expect(rows).toHaveLength(1);
+    expect(-rows[0]!.amount).toBeGreaterThan(EXPECTED_COST);
+    expect(events("proxy.turn_unbilled_provider_error")).toHaveLength(0);
+    expect(events("proxy.usage")[0]!.estimated).toBe(true);
+  });
+
+  it("refuses a server tool (web_search) with 400 unsupported_feature before the provider is called", async () => {
+    const mid = await createIdentity();
+    fund(5);
+
+    const res = await turn(await mintToken(mid), {
+      tools: [{ type: "web_search_20250305", name: "web_search", max_uses: 5 }],
+    });
+    expect(res.status).toBe(400);
+    const body = (await res.json()) as { error: string; feature: string };
+    expect(body.error).toBe("unsupported_feature");
+    expect(body.feature).toContain("web_search_20250305");
+    expect(providerCalls).toBe(0);
+    expect(fees(mid)).toHaveLength(0);
+    expect(balance(mid)).toBe(5_000_000);
+  });
+
+  it("refuses an unknown top-level request feature (mcp_servers) before the provider is called", async () => {
+    const mid = await createIdentity();
+    fund(5);
+
+    const res = await turn(await mintToken(mid), {
+      mcp_servers: [{ type: "url", url: "https://mcp.example", name: "x" }],
+    });
+    expect(res.status).toBe(400);
+    expect(((await res.json()) as { feature: string }).feature).toContain("mcp_servers");
+    expect(providerCalls).toBe(0);
+    expect(fees(mid)).toHaveLength(0);
   });
 });

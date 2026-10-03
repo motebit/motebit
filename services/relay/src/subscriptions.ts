@@ -21,7 +21,7 @@ import { createLogger } from "./logger.js";
 import { grantFreeCreditIfEligible } from "./free-credit.js";
 import { getClientIp } from "./middleware.js";
 import { EmergencyFrozenError } from "./errors.js";
-import { isEmergencyFrozenAbort } from "./freeze.js";
+import { isEmergencyFrozenAbort, isFrozenNow } from "./freeze.js";
 import {
   getAccountBalance,
   getOrCreateAccount,
@@ -277,8 +277,12 @@ export function registerProxyTokenRoutes(
     // (inert unless MOTEBIT_FREE_CREDIT_USD is set; one-time + per-IP + global-
     // budget capped — see free-credit.ts). This is the moment a brand-new
     // motebit first reaches for cloud inference, so it's where the credit lands;
-    // the balance read below then includes it and the token carries it.
-    grantFreeCreditIfEligible(db, motebitId, getClientIp(c));
+    // the balance read below then includes it and the token carries it. A
+    // grant the emergency freeze refused is stated in the body (`free_credit`)
+    // rather than silently minted as a zero balance; nothing was recorded, so
+    // the next mint after unfreeze grants it.
+    const freeCredit = grantFreeCreditIfEligible(db, motebitId, getClientIp(c));
+    const freeCreditDeferred = !freeCredit.granted && freeCredit.reason === "frozen";
 
     const account = getAccountBalance(db, motebitId);
     const balance = account?.balance ?? 0;
@@ -302,6 +306,9 @@ export function registerProxyTokenRoutes(
         balance_usd: fromMicro(balance),
         models,
         expires_at: Date.now() + PROXY_TOKEN_TTL_MS,
+        ...(freeCreditDeferred
+          ? { free_credit: { status: "deferred", reason: "EMERGENCY_FROZEN" } }
+          : {}),
       });
     } catch (err) {
       logger.error("proxy-token.failed", {
@@ -437,6 +444,11 @@ export function registerProxyTokenRoutes(
     const sessionId = c.req.query("session_id");
     if (!sessionId) return c.json({ error: "session_id required" }, 400);
 
+    // A GET passes the freeze middleware, but this one moves money: refused
+    // up front while frozen (the transaction below holds the same line if the
+    // freeze lands during the Stripe read).
+    if (isFrozenNow(db)) throw new EmergencyFrozenError();
+
     try {
       const stripe = getStripe();
       const session = await stripe.checkout.sessions.retrieve(sessionId);
@@ -457,41 +469,47 @@ export function registerProxyTokenRoutes(
           const email =
             (session.customer_details?.email ?? session.customer_email ?? "").toLowerCase() || null;
 
-          // Upsert subscription
-          const now = Date.now();
-          const existingRow = db
-            .prepare("SELECT motebit_id FROM relay_subscriptions WHERE motebit_id = ?")
-            .get(motebitId);
+          // The subscription row and its initial credit commit together: a
+          // credit the freeze refuses leaves no row behind (a GET is never
+          // refused at the entry check), and the replay after unfreeze does
+          // both once.
+          db.transaction(() => {
+            // Upsert subscription
+            const now = Date.now();
+            const existingRow = db
+              .prepare("SELECT motebit_id FROM relay_subscriptions WHERE motebit_id = ?")
+              .get(motebitId);
 
-          if (existingRow != null) {
-            db.prepare(
-              `UPDATE relay_subscriptions
-               SET email = COALESCE(?, email), stripe_customer_id = ?, stripe_subscription_id = ?, status = 'active', updated_at = ?
-               WHERE motebit_id = ?`,
-            ).run(email, customerId, subscriptionId, now, motebitId);
-          } else {
-            db.prepare(
-              `INSERT INTO relay_subscriptions (motebit_id, email, stripe_customer_id, stripe_subscription_id, status, created_at, updated_at)
-               VALUES (?, ?, ?, ?, 'active', ?, ?)`,
-            ).run(motebitId, email, customerId, subscriptionId, now, now);
-          }
+            if (existingRow != null) {
+              db.prepare(
+                `UPDATE relay_subscriptions
+                 SET email = COALESCE(?, email), stripe_customer_id = ?, stripe_subscription_id = ?, status = 'active', updated_at = ?
+                 WHERE motebit_id = ?`,
+              ).run(email, customerId, subscriptionId, now, motebitId);
+            } else {
+              db.prepare(
+                `INSERT INTO relay_subscriptions (motebit_id, email, stripe_customer_id, stripe_subscription_id, status, created_at, updated_at)
+                 VALUES (?, ?, ?, ?, 'active', ?, ?)`,
+              ).run(motebitId, email, customerId, subscriptionId, now, now);
+            }
 
-          // Credit account (idempotent via reference_id)
-          const refId = `sub:${subscriptionId}:initial`;
-          const existingTxn = db
-            .prepare("SELECT transaction_id FROM relay_transactions WHERE reference_id = ?")
-            .get(refId);
-          if (existingTxn == null) {
-            getOrCreateAccount(db, motebitId);
-            creditAccount(
-              db,
-              motebitId,
-              toMicro(MONTHLY_CREDIT_USD),
-              "deposit",
-              refId,
-              `Motebit Cloud subscription — $${MONTHLY_CREDIT_USD} credits`,
-            );
-          }
+            // Credit account (idempotent via reference_id)
+            const refId = `sub:${subscriptionId}:initial`;
+            const existingTxn = db
+              .prepare("SELECT transaction_id FROM relay_transactions WHERE reference_id = ?")
+              .get(refId);
+            if (existingTxn == null) {
+              getOrCreateAccount(db, motebitId);
+              creditAccount(
+                db,
+                motebitId,
+                toMicro(MONTHLY_CREDIT_USD),
+                "deposit",
+                refId,
+                `Motebit Cloud subscription — $${MONTHLY_CREDIT_USD} credits`,
+              );
+            }
+          });
 
           const account = getAccountBalance(db, motebitId);
           logger.info("session-status.activated", { motebitId, subscriptionId });
@@ -508,6 +526,12 @@ export function registerProxyTokenRoutes(
       if (session.status === "expired") return c.json({ status: "expired" });
       return c.json({ status: "open" });
     } catch (err) {
+      if (err instanceof EmergencyFrozenError || isEmergencyFrozenAbort(err)) {
+        logger.warn("session-status.refused_frozen", { sessionId });
+        throw err instanceof EmergencyFrozenError
+          ? err
+          : new EmergencyFrozenError(undefined, { cause: err });
+      }
       logger.error("session-status.failed", {
         sessionId,
         error: err instanceof Error ? err.message : String(err),
@@ -700,7 +724,16 @@ export function registerProxyTokenRoutes(
           }
 
           case "invoice_paid": {
-            // Monthly renewal — credit the account again.
+            // One credit per billing period. `billing_reason` says which
+            // period an invoice pays for (Stripe's Invoice.billing_reason):
+            //   - subscription_create: the FIRST period — the same period
+            //     checkout.session.completed and session-status credit, so it
+            //     shares their key `sub:<id>:initial` and whichever arrives
+            //     first credits it (webhook order is not guaranteed);
+            //   - subscription_cycle: a new period, keyed by its invoice;
+            //   - anything else (a subscription_update proration, manual,
+            //     subscription_threshold, …; or absent) opens no period and
+            //     credits nothing.
             const row = db
               .prepare(
                 "SELECT motebit_id FROM relay_subscriptions WHERE stripe_subscription_id = ?",
@@ -708,26 +741,44 @@ export function registerProxyTokenRoutes(
               .get(event.subscription_id) as { motebit_id: string } | undefined;
             if (!row) break;
 
-            // Idempotency: invoice id as reference.
-            const refId = `sub:${event.subscription_id}:${event.invoice_id}`;
+            let refId: string;
+            let description: string;
+            if (event.billing_reason === "subscription_create") {
+              refId = `sub:${event.subscription_id}:initial`;
+              description = `Motebit Cloud subscription — $${MONTHLY_CREDIT_USD} credits`;
+            } else if (event.billing_reason === "subscription_cycle") {
+              refId = `sub:${event.subscription_id}:${event.invoice_id}`;
+              description = `Motebit Cloud renewal — $${MONTHLY_CREDIT_USD} credits`;
+            } else {
+              logger.info("subscription.invoice_not_a_period", {
+                motebitId: row.motebit_id,
+                subscriptionId: event.subscription_id,
+                invoiceId: event.invoice_id,
+                billingReason: event.billing_reason,
+              });
+              break;
+            }
+
             const existingTxn = db
               .prepare("SELECT transaction_id FROM relay_transactions WHERE reference_id = ?")
               .get(refId);
             if (existingTxn != null) break;
 
+            getOrCreateAccount(db, row.motebit_id);
             creditAccount(
               db,
               row.motebit_id,
               toMicro(MONTHLY_CREDIT_USD),
               "deposit",
               refId,
-              `Motebit Cloud renewal — $${MONTHLY_CREDIT_USD} credits`,
+              description,
             );
 
             logger.info("subscription.renewed", {
               motebitId: row.motebit_id,
               subscriptionId: event.subscription_id,
               invoiceId: event.invoice_id,
+              billingReason: event.billing_reason,
               creditUsd: MONTHLY_CREDIT_USD,
             });
             break;
