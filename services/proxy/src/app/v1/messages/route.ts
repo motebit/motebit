@@ -14,15 +14,19 @@ import {
   CLASSIFIER_MODEL,
   AUTO_DEFAULT_MODEL,
 } from "../../../validation";
+import { after } from "next/server";
 import { isTaskShape, type RoutingConstraint } from "@motebit/protocol";
 import { dispatchRouting, applyBalanceFilter, REFERENCE_ROUTING_POLICY } from "@motebit/policy";
 // Provider request shaping (incl. Anthropic prompt-caching) lives in a pure,
 // unit-tested sibling module — the edge route is glue, the cost-critical request
 // shape is testable on its own.
-import { buildProviderRequest } from "./provider-request";
-// Streaming usage extraction (pure, unit-tested) — normalizes each provider's
-// token-usage shape for the cost calc, incl. OpenAI's cached_tokens split.
-import { extractUsage, type UsageAccumulator } from "./usage";
+import { buildProviderRequest, resolveMaxTokens } from "./provider-request";
+// Stream metering (pure, unit-tested) — forwards the provider stream and
+// meters what the provider consumed, client abort or not.
+import { meterStream } from "./stream-accounting";
+// Deny-by-default request-feature boundary: what the meter cannot price is
+// refused before anything spends, never under-billed.
+import { findUnsupportedFeature } from "./request-features";
 // Pre-stream failure classification + the shared one-event-per-failure surface.
 // Observation only (no recovery) — see `inference/classify.ts`.
 import {
@@ -34,7 +38,7 @@ import { failureResponse, emitProxyFailure } from "../../../inference/failure-re
 // Spend controls for the motebit-cloud path: live-ish balance (per-token spent
 // counter), per-identity rate and concurrency — enforced BEFORE anything spends.
 import { admitSpend, type SpendAdmission } from "../../../spend-controls";
-import { debitRelay, resolveBillingConfig } from "../../../billing";
+import { debitRelay, resolveBillingConfig, DEBIT_MAX_ATTEMPTS } from "../../../billing";
 
 const ALLOWED_ORIGINS = new Set([
   "https://motebit.com",
@@ -143,6 +147,33 @@ Message: ${message.slice(0, 500)}`,
     taskType: typeof text === "string" ? text.trim().toLowerCase() : "chat",
     costMicro: classifierCostFromUsage(data?.usage),
   };
+}
+
+/** @internal — exported only for unit tests (the stream-metering matrix counts attempts). */
+export { DEBIT_MAX_ATTEMPTS };
+
+/**
+ * Hold the isolate open for `task` via Next's `after` (the platform's
+ * `waitUntil` on Vercel, edge included). Outside a Next request scope (a bare
+ * host) `after` throws; the task still runs, unregistered — and says so.
+ */
+function keepAlive(task: Promise<void>, ids: { requestId: string; motebitId: string }): void {
+  try {
+    after(task);
+  } catch (err) {
+    // The task still runs, but the platform does not hold the isolate open
+    // for it: a teardown after the response can drop the debit. Loud, so an
+    // unregistered tail is a counted reconciliation event, never silent.
+    console.error(
+      JSON.stringify({
+        event: "proxy.accounting_unregistered",
+        requestId: ids.requestId,
+        motebitId: ids.motebitId,
+        errorName: err instanceof Error ? err.name : typeof err,
+        errorMessage: err instanceof Error ? err.message : String(err),
+      }),
+    );
+  }
 }
 
 /** Anthropic-shaped message roles the motebit-cloud wire accepts. */
@@ -442,6 +473,22 @@ async function serveAdmitted(ctx: {
     });
   }
 
+  // --- Validate max_tokens — before anything spends (the classifier included); it is
+  //     the output bound the meter relies on, so it is never coerced ---
+  if (!resolveMaxTokens(body.max_tokens, limits.maxTokens).ok) {
+    return failureResponse({
+      requestId,
+      status: 400,
+      bodyObj: {
+        error: "invalid_max_tokens",
+        message: "max_tokens must be a positive integer",
+      },
+      headers: cors,
+      mode: authMode,
+      failure: motebitFailure("motebit_request", "malformed_request", 400),
+    });
+  }
+
   // --- Validate and resolve model ---
   let resolvedModel = body.model as string | undefined;
   if (!resolvedModel) {
@@ -479,6 +526,31 @@ async function serveAdmitted(ctx: {
       mode: authMode,
       failure: motebitFailure("motebit_request", "malformed_request", 400),
     });
+  }
+
+  // --- Metered features only --- BEFORE the classifier: motebit-cloud bills
+  // what the provider reports, so a feature whose cost the stream's usage does
+  // not carry (server tools, MCP connectors, unknown keys or block types) is
+  // refused here, before anything spends. BYOK is not metered (the user's own
+  // key), so it is not gated.
+  if (authMode === "proxy-token") {
+    const unsupported = findUnsupportedFeature(body);
+    if (unsupported) {
+      return failureResponse({
+        requestId,
+        status: 400,
+        bodyObj: {
+          error: "unsupported_feature",
+          feature: unsupported.feature,
+          path: unsupported.path,
+          message: `${unsupported.feature} is not supported on motebit-cloud: its cost cannot be metered. Use BYOK for this feature.`,
+        },
+        headers: cors,
+        model: resolvedModel,
+        mode: authMode,
+        failure: motebitFailure("motebit_request", "malformed_request", 400),
+      });
+    }
   }
 
   // Resolve legacy/class aliases → current canonical model ID.
@@ -750,98 +822,52 @@ async function serveAdmitted(ctx: {
     });
   }
 
-  // --- Stream response and extract usage for debit ---
+  // --- Stream response and meter usage for the debit ---
   if (authMode === "proxy-token" && tokenPayload && providerRes.ok && providerRes.body) {
     const mid = tokenPayload.mid;
-    const model = resolvedModel;
-    const prov = resolvedProvider;
-    const usage: UsageAccumulator = { input: 0, output: 0, cacheRead: 0, cacheCreation: 0 };
     const classifierCost = bill.classifierCostMicro;
-
-    const { readable, writable } = new TransformStream<Uint8Array, Uint8Array>();
-    const writer = writable.getWriter();
-    const reader = providerRes.body.getReader();
-    const decoder = new TextDecoder();
-    // Built BEFORE the hand-off: once the pump owns the obligation, nothing
-    // between here and the return may throw (a throw would leave a pump
-    // writing into a stream no one reads, its settlement never reached).
+    // Headers are built BEFORE the hand-off — they are the one thing here that
+    // can throw (a non-ByteString value). From the hand-off to the return
+    // nothing throws, so the obligation is never both handed over and dropped.
+    const streamedHeaders = new Headers({
+      ...cors,
+      "Content-Type": providerRes.headers.get("Content-Type") ?? "text/event-stream",
+      "Cache-Control": "no-cache",
+      // The relay `fee` row's reference_id — correlates a turn to its debit.
+      "X-Motebit-Request-Id": requestId,
+      ...routingHeader,
+    });
+    // The metered pump's ONE debit carries `classifierCost` and it releases the
+    // slot — the obligation is handed over, POST's `finally` skips.
+    bill.handedOff = true;
+    // Metering (meter-before-forward, drain-on-abort, KV-bounded settlement)
+    // lives in a pure, unit-tested sibling module — see `stream-accounting.ts`.
+    // The debit is billing.ts's `debitRelay`, the turn's single settlement
+    // path: one debit per request, reference_id = request id.
+    const { readable, settled } = meterStream({
+      upstream: providerRes.body,
+      provider: resolvedProvider,
+      model: resolvedModel,
+      requestId,
+      motebitId: mid,
+      extraCostMicro: classifierCost,
+      providerRequestBody: providerReq.body,
+      maxOutputTokens: providerReq.maxTokens,
+      spend: spendAdmission
+        ? {
+            record: (cost) => spendAdmission.record(cost),
+            release: () => spendAdmission.release(),
+          }
+        : null,
+      debit: async (cost) => void (await debitRelay(mid, cost, requestId)),
+    });
+    // Register the post-response accounting with the platform's waitUntil so
+    // an isolate teardown after the response closes cannot drop the debit.
+    keepAlive(settled, { requestId, motebitId: mid });
     const streamed = new Response(readable, {
       status: providerRes.status,
-      headers: {
-        ...cors,
-        "Content-Type": providerRes.headers.get("Content-Type") ?? "text/event-stream",
-        "Cache-Control": "no-cache",
-        // The relay `fee` row's reference_id — correlates a turn to its debit.
-        "X-Motebit-Request-Id": requestId,
-        ...routingHeader,
-      },
+      headers: streamedHeaders,
     });
-    // The pump's debit below carries `classifierCost` and its `finally`
-    // releases the slot — the obligation is handed over, POST's `finally` skips.
-    bill.handedOff = true;
-
-    void (async () => {
-      try {
-        let buffer = "";
-        for (;;) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          await writer.write(value);
-
-          buffer += decoder.decode(value, { stream: true });
-          const lines = buffer.split("\n");
-          buffer = lines.pop() ?? "";
-          for (const line of lines) {
-            extractUsage(prov, line, usage);
-          }
-        }
-      } catch {
-        // Client disconnected (write rejected) or the upstream stream errored.
-        // Stop the upstream generation and bill what was metered — a dropped
-        // client is never a free turn.
-        await reader.cancel().catch(() => {});
-      } finally {
-        try {
-          const cost =
-            calculateCostMicro(
-              model,
-              usage.input,
-              usage.output,
-              usage.cacheRead,
-              usage.cacheCreation,
-            ) + classifierCost;
-          // Normalized token fields for billing verification. `extractUsage`
-          // normalizes every provider so `input` is UNCACHED and `cacheRead` is
-          // the cached/discounted portion (additive) — so calculateCostMicro
-          // (uncached + cacheRead·discount + cacheCreation·1.25) does not
-          // double-count. cacheRead > 0 here is the proof caching is landing.
-          console.log(
-            JSON.stringify({
-              event: "proxy.usage",
-              requestId,
-              model,
-              input: usage.input,
-              output: usage.output,
-              cacheRead: usage.cacheRead,
-              cacheCreation: usage.cacheCreation,
-              costMicro: cost,
-              motebitId: mid,
-            }),
-          );
-          // Debit BEFORE the client's stream ends: work after the response
-          // completes is not guaranteed to run on the edge runtime, so a debit
-          // scheduled after close is one the platform may drop. Always called —
-          // a zero cost is itself reported (`no_billable_amount`).
-          await debitRelay(mid, cost, requestId);
-          // Spend controls: charge this token's local counter so the NEXT
-          // request sees the live-ish balance.
-          await spendAdmission?.record(cost);
-        } finally {
-          await spendAdmission?.release();
-          await writer.close().catch(() => {});
-        }
-      }
-    })();
 
     return streamed;
   }

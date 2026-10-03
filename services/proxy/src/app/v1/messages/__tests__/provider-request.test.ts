@@ -9,6 +9,8 @@ import { describe, it, expect, afterEach } from "vitest";
 import {
   buildProviderRequest,
   proxyExtendedThinkingBudget,
+  resolveMaxTokens,
+  UNCAPPED_DEFAULT_MAX_TOKENS,
   systemToText,
   systemToAnthropicBlocks,
   type SystemBlock,
@@ -279,5 +281,54 @@ describe("extended-thinking switch (cloud path, off by default)", () => {
     const out = JSON.parse(req.body) as Record<string, unknown>;
     expect(out.thinking).toBeUndefined();
     expect(out.temperature).toBe(0.5);
+  });
+});
+
+describe("resolveMaxTokens — the output bound is validated, never coerced", () => {
+  it("absent takes the tier cap (or the BYOK default)", () => {
+    expect(resolveMaxTokens(undefined, 16_384)).toEqual({ ok: true, value: 16_384 });
+    expect(resolveMaxTokens(null, 16_384)).toEqual({ ok: true, value: 16_384 });
+    expect(resolveMaxTokens(undefined, 0)).toEqual({
+      ok: true,
+      value: UNCAPPED_DEFAULT_MAX_TOKENS,
+    });
+  });
+
+  it("a positive integer is kept and clamped to the cap", () => {
+    expect(resolveMaxTokens(2_000, 16_384)).toEqual({ ok: true, value: 2_000 });
+    expect(resolveMaxTokens(10_000_000, 16_384)).toEqual({ ok: true, value: 16_384 });
+    expect(resolveMaxTokens(100_000, 0)).toEqual({ ok: true, value: 100_000 });
+  });
+
+  it.each([
+    ["abc"],
+    ["2000"],
+    [-5],
+    [0],
+    [100.5],
+    [Number.NaN],
+    [Infinity],
+    [2 ** 60],
+    [true],
+    [{}],
+  ])("refuses %s", (raw) => {
+    expect(resolveMaxTokens(raw, 16_384)).toEqual({ ok: false });
+  });
+
+  it("buildProviderRequest refuses to ship an invalid cap, and reports the exact one it sent", () => {
+    expect(() =>
+      buildProviderRequest("openai", "k", "gpt-5.4", { messages: [], max_tokens: "abc" }, 16_384),
+    ).toThrow(/invalid max_tokens/);
+    for (const provider of ["anthropic", "openai", "groq", "google"] as const) {
+      const req = buildProviderRequest(
+        provider,
+        "k",
+        "m",
+        { messages: [], max_tokens: 777 },
+        16_384,
+      );
+      expect(req.maxTokens).toBe(777);
+      expect((JSON.parse(req.body) as { max_tokens: number }).max_tokens).toBe(777);
+    }
   });
 });

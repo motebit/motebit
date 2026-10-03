@@ -167,6 +167,43 @@ describe("grantFreeCreditIfEligible", () => {
       true,
     );
   });
+
+  // A failure that is NOT the emergency freeze is `reason: "error"`, never
+  // `"frozen"` (which promises a deferred grant), and the credit + per-IP bump
+  // roll back together. The counter write is failed after the credit already
+  // ran inside the transaction, so a half-committed grant would show here.
+  it.each([
+    ["an Error", new Error("disk I/O error")],
+    ["a non-Error value", "disk I/O error"],
+  ])("a non-freeze failure (%s) is an error, and records nothing", (_label, thrown) => {
+    const failing = new Proxy(db, {
+      get(target, prop, receiver) {
+        if (prop === "prepare") {
+          return (sql: string) => {
+            // eslint-disable-next-line @typescript-eslint/only-throw-error -- exercises the non-Error arm
+            if (sql.includes("INSERT INTO relay_free_grants")) throw thrown;
+            return target.prepare(sql);
+          };
+        }
+        const value: unknown = Reflect.get(target, prop, receiver);
+        return typeof value === "function" ? value.bind(target) : value;
+      },
+    });
+
+    expect(
+      grantFreeCreditIfEligible(failing, "m-err", "5.5.5.5", { config: CFG, nowMs: NOW }),
+    ).toEqual({ granted: false, reason: "error" });
+    expect(getAccountBalance(db, "m-err")?.balance ?? 0).toBe(0);
+    expect(
+      db.prepare("SELECT count FROM relay_free_grants WHERE ip = ?").get("5.5.5.5"),
+    ).toBeUndefined();
+
+    // Not consumed: the same motebit is granted once the failure clears.
+    expect(grantFreeCreditIfEligible(db, "m-err", "5.5.5.5", { config: CFG, nowMs: NOW })).toEqual({
+      granted: true,
+      amountMicro: toMicro(0.1),
+    });
+  });
 });
 
 describe("POST /api/v1/agents/:motebitId/proxy-token — free credit lands in the token", () => {
