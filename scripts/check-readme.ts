@@ -26,8 +26,12 @@
  *      equal the scaffold's PORT default.
  *   3. The "direct mode" parenthetical on the task-handler line must be
  *      backed by a `--direct` entry in the scaffold's serveArgs.
- *   4. The relay URL in `Registered with relay: <url>` must equal the
- *      exported `DEFAULT_SYNC_URL` constant in apps/cli/src/subcommands/_helpers.ts.
+ *   4. The relay-registration line `Discovery: registered with relay (<n> tools)`
+ *      must be the literal the CLI emits (apps/cli/src/relay-registration.ts),
+ *      and <n> must equal the number of tools the scaffold writes. (This claim
+ *      once locked a `Registered with relay: <url>` line to `DEFAULT_SYNC_URL`
+ *      — a line no code path printed, so the gate held a fabricated output
+ *      line to a real constant. It now locks the real line to its emitter.)
  *
  * This is the twenty-fourth synchronization invariant defense.
  *
@@ -43,7 +47,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const ROOT = resolve(__dirname, "..");
 const README_PATH = join(ROOT, "README.md");
 const SCAFFOLD_PATH = join(ROOT, "packages/create-motebit/src/index.ts");
-const RELAY_RESOLVER_PATH = join(ROOT, "apps/cli/src/subcommands/_helpers.ts");
+const RELAY_REGISTRATION_PATH = join(ROOT, "apps/cli/src/relay-registration.ts");
 
 interface Finding {
   loc: string;
@@ -118,9 +122,9 @@ function extractDirectModeClaim(block: string): boolean {
   return /\bdirect mode\b/.test(block);
 }
 
-function extractRelayUrlClaim(block: string): string | null {
-  const m = block.match(/^Registered with relay:\s*(\S+)\s*$/m);
-  return m ? m[1] : null;
+function extractRelayRegistrationClaim(block: string): number | null {
+  const m = block.match(/^Discovery: registered with relay \((\d+) tools\)\s*$/m);
+  return m ? Number(m[1]) : null;
 }
 
 // ── Source-of-truth extractors ────────────────────────────────────────
@@ -182,20 +186,13 @@ function extractScaffoldHasDirectFlag(): { hasDirect: boolean; locHint: string }
   };
 }
 
-function extractDefaultSyncUrl(): { url: string; locHint: string } {
-  // The ONE declaration (#702 client half): `runtime-factory.ts` and
-  // `index.ts` consume it through `resolveRelayUrl`, so this is the value
-  // every command actually falls back to.
-  const src = readFileSync(RELAY_RESOLVER_PATH, "utf-8");
-  const m = src.match(/export\s+const\s+DEFAULT_SYNC_URL\s*=\s*"([^"]+)"/);
-  if (!m) {
-    throw new Error(
-      "could not locate the exported DEFAULT_SYNC_URL in apps/cli/src/subcommands/_helpers.ts — if it moved, update this probe's extractor",
-    );
-  }
-  const idx = src.indexOf(m[0]);
-  const line = src.slice(0, idx).split("\n").length;
-  return { url: m[1], locHint: `${relative(ROOT, RELAY_RESOLVER_PATH)}:${line}` };
+function extractRelayRegistrationEmitter(): { found: boolean; locHint: string } {
+  // The line `motebit serve` logs once the relay accepts the registration.
+  const src = readFileSync(RELAY_REGISTRATION_PATH, "utf-8");
+  const literal = "log(`Discovery: registered with relay (${opts.toolNames.length} tools)`);";
+  const idx = src.indexOf(literal);
+  const line = idx === -1 ? 0 : src.slice(0, idx).split("\n").length;
+  return { found: idx !== -1, locHint: `${relative(ROOT, RELAY_REGISTRATION_PATH)}:${line}` };
 }
 
 // ── Assertions ────────────────────────────────────────────────────────
@@ -258,19 +255,26 @@ function main(): void {
     }
   }
 
-  // Claim 4: Registered with relay ↔ DEFAULT_SYNC_URL
-  const relayClaim = extractRelayUrlClaim(body);
-  if (!relayClaim) {
+  // Claim 4: relay-registration line ↔ the CLI's emitter + scaffold tool count
+  const registeredCount = extractRelayRegistrationClaim(body);
+  if (registeredCount === null) {
     findings.push({
       loc: `README.md:${startLine}`,
-      message: "missing 'Registered with relay: <url>' line",
+      message: "missing 'Discovery: registered with relay (<n> tools)' line",
     });
   } else {
-    const { url, locHint } = extractDefaultSyncUrl();
-    if (relayClaim !== url) {
+    const emitter = extractRelayRegistrationEmitter();
+    if (!emitter.found) {
       findings.push({
         loc: `README.md:${startLine}`,
-        message: `'Registered with relay: ${relayClaim}' disagrees with DEFAULT_SYNC_URL "${url}" at ${locHint}.`,
+        message: `'Discovery: registered with relay (<n> tools)' is no longer emitted by ${relative(ROOT, RELAY_REGISTRATION_PATH)} — update the README line to what the CLI now prints.`,
+      });
+    }
+    const { names, locHint } = extractScaffoldToolNames();
+    if (registeredCount !== names.length) {
+      findings.push({
+        loc: `README.md:${startLine}`,
+        message: `'registered with relay (${registeredCount} tools)' disagrees with the ${names.length} tools the scaffold writes at ${locHint}.`,
       });
     }
   }
@@ -288,8 +292,8 @@ function main(): void {
   }
   process.stderr.write(
     "Fix: the code is the source of truth — update each flagged README.md line to match\n" +
-      "     the named code value (tool names from create-motebit's agent template, PORT and\n" +
-      "     DEFAULT_SYNC_URL from apps/cli/src/subcommands/_helpers.ts). If the code value changed\n" +
+      "     the named code value (tool names and PORT from create-motebit's agent template, the\n" +
+      "     registration line from apps/cli/src/relay-registration.ts). If the code value changed\n" +
       "     intentionally, edit the README 'What you see:' block to match it; never the reverse.\n\n",
   );
   process.exit(1);
