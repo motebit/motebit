@@ -22,14 +22,14 @@ Every motebit-published image is signed via cosign keyless OIDC + Sigstore and c
 # Install cosign once: https://docs.sigstore.dev/cosign/installation/
 
 # Verify the keyless signature came from motebit's repo + this exact workflow.
-cosign verify ghcr.io/motebit/relay:1.0.1 \
+cosign verify ghcr.io/motebit/relay:1.1.0 \
   --certificate-identity-regexp 'https://github.com/motebit/motebit/.github/workflows/publish-images.yml@.*' \
   --certificate-oidc-issuer 'https://token.actions.githubusercontent.com'
 
 # Verify the build-provenance attestation (SLSA). `slsaprovenance1` is the v1
 # predicate the build emits; the bare `slsaprovenance` shorthand selects v0.2
 # and matches nothing here.
-cosign verify-attestation ghcr.io/motebit/relay:1.0.1 \
+cosign verify-attestation ghcr.io/motebit/relay:1.1.0 \
   --type slsaprovenance1 \
   --certificate-identity-regexp 'https://github.com/motebit/motebit/.github/workflows/.*' \
   --certificate-oidc-issuer 'https://token.actions.githubusercontent.com'
