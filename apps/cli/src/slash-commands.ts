@@ -14,6 +14,7 @@ import { createSolanaWalletRail } from "@motebit/wallet-solana";
 import { renderIdentityCard } from "./subcommands/id.js";
 import { DEFAULT_SOLANA_RPC_URL, WALLET_GUIDANCE_LINES } from "./subcommands/wallet.js";
 import { renderLedgerSummary } from "./subcommands/ledger.js";
+import { describeDelegateSubmit402 } from "./subcommands/delegate.js";
 import { RelayClient, RelayClientError } from "@motebit/relay-client";
 import { executeCommand, isServedTool } from "@motebit/runtime";
 import { narrateEconomicConsequences } from "@motebit/gradient";
@@ -1847,7 +1848,10 @@ export async function handleSlashCommand(
         taskId = submitResult.task_id;
         console.log(`Task submitted: ${taskId.slice(0, 12)}...`);
       } catch (err: unknown) {
-        if (err instanceof RelayClientError && err.kind === "http") {
+        if (err instanceof RelayClientError && err.kind === "http" && err.status === 402) {
+          // The same remedy `motebit delegate` names — never the raw body.
+          for (const line of describeDelegateSubmit402(err.body ?? "")) console.log(line);
+        } else if (err instanceof RelayClientError && err.kind === "http") {
           console.log(`Task submission failed (${err.status}): ${err.body ?? ""}`);
         } else {
           const message = err instanceof Error ? err.message : String(err);
