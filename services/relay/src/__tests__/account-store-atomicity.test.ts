@@ -37,6 +37,10 @@ import { processStripeCheckout } from "../stripe-credit.js";
 import { grantFreeCreditIfEligible } from "../free-credit.js";
 import { creditX402Settlement, recordX402Intent } from "../x402-settlements.js";
 import { proxyDebitByReference, creditSubscriptionByReference } from "../subscriptions.js";
+import { requestWithdrawal } from "../accounts.js";
+import { commitDeparture } from "../migration.js";
+import { bindCaller } from "../identity-binding.js";
+import type { Context } from "hono";
 import { TEST_RELAY_NETWORK } from "./test-helpers.js";
 
 class InjectedFault extends Error {}
@@ -96,6 +100,12 @@ interface Writer {
   applied(db: DatabaseDriver, k: string): { rows: number; sum: number };
   /** The expected `applied` after exactly one application. */
   once: { rows: number; sum: number };
+  /**
+   * Cross-table consistency the money write must keep with its companion
+   * record (checked after the fault AND after the replay), for writers whose
+   * debit has to land together with a non-ledger row.
+   */
+  consistent?(db: DatabaseDriver, k: string): void;
 }
 
 function refRows(db: DatabaseDriver, motebitId: string, ref: string, where = "1=1") {
@@ -294,7 +304,97 @@ const WRITERS: Writer[] = [
     applied: (db, k) => refRows(db, `sub-${k}`, `sub:sub_${k}:initial`),
     once: { rows: 1, sum: 0 }, // sum checked separately: > 0
   },
+  {
+    name: "requestWithdrawal (/withdraw + legacy sweep)",
+    setup: (db, k) => {
+      seed(db, `wd-${k}`, 10_000_000);
+      return `wd-${k}`;
+    },
+    op: (db, k) => {
+      requestWithdrawal(db, `wd-${k}`, 1_000_000, "dest", `idem-${k}`);
+    },
+    applied: (db, k) =>
+      db
+        .prepare(
+          `SELECT COUNT(*) AS rows, COALESCE(SUM(amount), 0) AS sum FROM relay_transactions
+           WHERE motebit_id = ? AND type = 'withdrawal'`,
+        )
+        .get(`wd-${k}`) as { rows: number; sum: number },
+    once: { rows: 1, sum: -1_000_000 },
+    consistent: (db, k) => {
+      // Every withdrawal debit has its withdrawal row, and vice versa.
+      const debits = db
+        .prepare(
+          "SELECT reference_id FROM relay_transactions WHERE motebit_id = ? AND type = 'withdrawal' ORDER BY reference_id",
+        )
+        .all(`wd-${k}`) as Array<{ reference_id: string }>;
+      const rows = db
+        .prepare(
+          "SELECT withdrawal_id FROM relay_withdrawals WHERE motebit_id = ? ORDER BY withdrawal_id",
+        )
+        .all(`wd-${k}`) as Array<{ withdrawal_id: string }>;
+      expect(
+        debits.map((d) => d.reference_id),
+        `${k}: debits ↔ withdrawal rows`,
+      ).toEqual(rows.map((r) => r.withdrawal_id));
+    },
+  },
+  {
+    name: "commitDeparture (migration balance waiver)",
+    setup: (db, k) => {
+      const id = `mig-${k}`;
+      seed(db, id, 500_000);
+      db.prepare(
+        `INSERT INTO relay_migrations (token_id, motebit_id, state, issued_at, expires_at, token_signature)
+         VALUES (?, ?, 'settling', ?, ?, 'sig')`,
+      ).run(`tok-${k}`, id, Date.now(), Date.now() + 3_600_000);
+      return id;
+    },
+    op: (db, k) => {
+      // The depart route, from its post-verification point: a departed
+      // migration is no longer active (404), and the balance it reads decides
+      // whether a waiver is needed.
+      const id = `mig-${k}`;
+      const m = db
+        .prepare("SELECT state FROM relay_migrations WHERE token_id = ?")
+        .get(`tok-${k}`) as { state: string };
+      if (m.state === "departed") return;
+      const bal =
+        (
+          db.prepare("SELECT balance FROM relay_accounts WHERE motebit_id = ?").get(id) as
+            { balance: number } | undefined
+        )?.balance ?? 0;
+      commitDeparture(db, ownerOf(id), {
+        motebitId: id,
+        tokenId: `tok-${k}`,
+        expectedBalance: bal,
+        waiver: bal > 0 ? { waivedAmount: 500_000, json: `{"waiver":"${k}"}` } : null,
+      });
+    },
+    applied: (db, k) => refRows(db, `mig-${k}`, `tok-${k}`, "type = 'waiver'"),
+    once: { rows: 1, sum: -500_000 },
+    consistent: (db, k) => {
+      // A waiver debit exists iff the migration departed with its waiver on record.
+      const m = db
+        .prepare("SELECT state, balance_waiver_json FROM relay_migrations WHERE token_id = ?")
+        .get(`tok-${k}`) as { state: string; balance_waiver_json: string | null };
+      const debited = refRows(db, `mig-${k}`, `tok-${k}`, "type = 'waiver'").rows > 0;
+      const departed = m.state === "departed";
+      expect({ debited, departed }, `${k}: waiver debit ↔ departure`).toEqual({
+        debited: departed,
+        departed,
+      });
+      if (departed) expect(m.balance_waiver_json, `${k}: waiver on record`).not.toBeNull();
+    },
+  },
 ];
+
+function ownerOf(motebitId: string) {
+  const c = {
+    get: (key: string) => (key === "callerMotebitId" ? motebitId : undefined),
+  } as unknown as Context;
+  return bindCaller(c, motebitId, { recordAuthEvent: undefined, reason: "test" });
+}
 
 function invariant(db: DatabaseDriver, id: string): { balance: number; ledger: number } {
   const acct = db.prepare("SELECT balance FROM relay_accounts WHERE motebit_id = ?").get(id) as
@@ -339,6 +439,7 @@ describe("account store: every writer is atomic at every statement boundary", ()
       if (w.name === "creditSubscriptionByReference") expect(probeApplied.sum).toBeGreaterThan(0);
       else expect(probeApplied.sum).toBe(w.once.sum);
       expect(invariant(clean, probeId).balance).toBe(invariant(clean, probeId).ledger);
+      w.consistent?.(clean, kProbe);
 
       for (let n = 1; n <= total; n++) {
         const k = `${w.name}-${n}`;
@@ -352,12 +453,14 @@ describe("account store: every writer is atomic at every statement boundary", ()
         }
         const after = invariant(clean, id);
         expect(after.balance, `${w.name}: fault at statement ${n}/${total}`).toBe(after.ledger);
+        w.consistent?.(clean, k);
 
         // Replay the same reference on a healthy driver: applied exactly once.
         w.op(clean, k);
         w.op(clean, k);
         const replayed = invariant(clean, id);
         expect(replayed.balance, `${w.name}: replay after fault ${n}`).toBe(replayed.ledger);
+        w.consistent?.(clean, k);
         const applied = w.applied(clean, k);
         expect(applied.rows, `${w.name}: rows after replay of fault ${n}`).toBe(w.once.rows);
         if (w.name !== "creditSubscriptionByReference") {
