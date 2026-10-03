@@ -24,7 +24,7 @@ import {
 import { handleSlashCommand, type ReplContext } from "../index.js";
 import type { MotebitRuntime } from "@motebit/runtime";
 import type { MotebitDatabase } from "@motebit/persistence";
-import type { CliConfig } from "../args.js";
+import { parseCliArgs, type CliConfig } from "../args.js";
 
 type Remedy = "fund" | "sovereign" | "relay-words";
 
@@ -144,6 +144,73 @@ function assertRemedy(text: string, remedy: Remedy, row: Row): void {
   }
 }
 
+type Path = "direct" | "plan" | "repl";
+
+const REPL_TARGET = "00000000-0000-4000-8000-000000000402";
+const REPL_PROMPT = 'do the "paid" thing';
+
+/** Split a shell command line into argv, honoring double quotes and backslash escapes. */
+function shellSplit(line: string): string[] {
+  const out: string[] = [];
+  let cur = "";
+  let inArg = false;
+  let quoted = false;
+  for (let i = 0; i < line.length; i++) {
+    const ch = line[i]!;
+    if (ch === "\\" && i + 1 < line.length) {
+      cur += line[++i];
+      inArg = true;
+    } else if (ch === '"') {
+      quoted = !quoted;
+      inArg = true;
+    } else if (ch === " " && !quoted) {
+      if (inArg) out.push(cur);
+      cur = "";
+      inArg = false;
+    } else {
+      cur += ch;
+      inArg = true;
+    }
+  }
+  expect(quoted, `unbalanced quotes in \`${line}\``).toBe(false);
+  if (inArg) out.push(cur);
+  return out;
+}
+
+/**
+ * Every remedy must be runnable on the path that printed it. A backticked
+ * `motebit ...` command must parse under the real CLI parser; a bare
+ * backticked `--flag` is advice to re-run THIS path with that flag, so the
+ * path must parse it — `motebit delegate` does, the REPL's `/delegate` (all
+ * text after the target id is the prompt) and a `--plan` step do not. On the
+ * REPL a `motebit delegate` remedy must carry the prompt and target typed.
+ */
+function assertRunnable(text: string, path: Path): void {
+  for (const [, fragment] of text.matchAll(/`([^`]+)`/g)) {
+    const frag = fragment!;
+    if (frag.startsWith("motebit ")) {
+      const argv = shellSplit(frag.slice("motebit ".length));
+      if (argv.some((a) => a.startsWith("<"))) continue; // a placeholder (`fund <amount>`)
+      const parsed = (() => {
+        try {
+          return parseCliArgs(argv);
+        } catch (err: unknown) {
+          throw new Error(`remedy \`${frag}\` does not parse: ${String(err)}`);
+        }
+      })();
+      if (path === "repl" && parsed.positionals[0] === "delegate") {
+        expect(parsed.positionals.slice(1).join(" "), `\`${frag}\` drops the prompt`).toBe(
+          REPL_PROMPT,
+        );
+        expect(parsed.target, `\`${frag}\` drops the target`).toBe(REPL_TARGET);
+      }
+    } else if (frag.startsWith("--")) {
+      expect(path, `\`${frag}\` is a flag the ${path} path does not parse`).toBe("direct");
+      expect(() => parseCliArgs(["delegate", "x", ...frag.split(" ")])).not.toThrow();
+    }
+  }
+}
+
 const step: PlanStep = {
   step_id: "step-1",
   plan_id: "plan-1" as PlanId,
@@ -226,7 +293,7 @@ async function replDelegateOutput(body: string): Promise<{ lines: string[]; post
   } as unknown as CliConfig;
   await handleSlashCommand(
     "delegate",
-    "00000000-0000-4000-8000-000000000402 do the paid thing",
+    `${REPL_TARGET} ${REPL_PROMPT}`,
     {} as MotebitRuntime,
     config,
     undefined,
@@ -244,12 +311,15 @@ describe("delegate 402 remedy table (relay code × CLI path)", () => {
   for (const row of ROWS) {
     describe(row.label, () => {
       it(`direct: ${row.direct}`, () => {
-        assertRemedy(describeDelegateSubmit402(row.body).join("\n"), row.direct, row);
+        const text = describeDelegateSubmit402(row.body).join("\n");
+        assertRemedy(text, row.direct, row);
+        assertRunnable(text, "direct");
       });
 
       it(`plan: ${row.plan}`, async () => {
         const { message, posts } = await planStepError(row.body);
         assertRemedy(message, row.plan, row);
+        assertRunnable(message, "plan");
         if (row.plan === "sovereign") {
           // `--plan` cannot pay P2P yet (#887): send the paid step on its own.
           expect(message).toContain("#887");
@@ -263,6 +333,7 @@ describe("delegate 402 remedy table (relay code × CLI path)", () => {
         const expected = describeDelegateSubmit402(row.body);
         expect(lines).toEqual(expect.arrayContaining(expected));
         assertRemedy(lines.join("\n"), row.direct, row);
+        assertRunnable(lines.join("\n"), "repl");
         expect(lines.join("\n"), "never the raw relay body").not.toMatch(/"status":\s*402/);
         expect(posts, "a 402 refusal is not retried").toBe(1);
       });
