@@ -87,7 +87,7 @@ describe("TaskClaims", () => {
     ).toBe(true);
   });
 
-  it("a lapsed lease returns the task to Pending and re-presents it to every socket", () => {
+  it("a lapsed lease leaves the task Claimed and UNDETERMINED — never Pending, never re-presented", () => {
     const { taskQueue, connections, claims } = setup();
     taskQueue.set("t", entry("t"));
     const frames: string[] = [];
@@ -95,15 +95,30 @@ describe("TaskClaims", () => {
     claims.claim("t", MID, peer("a"), { lease: true, now: 0 });
     expect(claims.sweep(99)).toEqual([]);
     expect(claims.sweep(100)).toEqual(["t"]);
-    expect(taskQueue.get("t")!.task.status).toBe(AgentTaskStatus.Pending);
-    expect(taskQueue.get("t")!.claim_lease).toBeUndefined();
-    expect(frames.map((f) => (JSON.parse(f) as { type: string }).type)).toEqual([
-      "task_request",
-      "task_request",
-    ]);
-    // Re-claimable, and swept only once.
+    const e = taskQueue.get("t")!;
+    expect(e.task.status).toBe(AgentTaskStatus.Claimed);
+    expect(e.task.claimed_by).toBe("a");
+    expect(e.claim_lease).toMatchObject({ device_id: "a", undetermined_at: 100 });
+    expect(frames).toEqual([]);
+    // Never re-claimable by another body, and marked only once.
     expect(claims.sweep(1000)).toEqual([]);
-    expect(claims.claim("t", MID, peer("b"), { lease: true, now: 1000 }).granted).toBe(true);
+    expect(claims.claim("t", MID, peer("b"), { lease: true, now: 1000 })).toEqual({
+      granted: false,
+      reason: "already_claimed",
+    });
+  });
+
+  it("the claimer's renewal after it was lost clears the undetermined mark", () => {
+    const { taskQueue, claims } = setup();
+    taskQueue.set("t", entry("t"));
+    claims.claim("t", MID, peer("a"), { lease: true, now: 0 });
+    claims.sweep(100);
+    expect(claims.renew("t", MID, "b", 120)).toBe(false);
+    expect(taskQueue.get("t")!.claim_lease?.undetermined_at).toBe(100);
+    expect(claims.renew("t", MID, "a", 120)).toBe(true);
+    expect(taskQueue.get("t")!.claim_lease?.undetermined_at).toBeUndefined();
+    expect(claims.sweep(219)).toEqual([]);
+    expect(claims.sweep(220)).toEqual(["t"]);
   });
 
   it("only the holder's renewals extend the lease", () => {
@@ -115,7 +130,6 @@ describe("TaskClaims", () => {
     expect(claims.renew("t", MID, "a", 90)).toBe(true);
     expect(claims.sweep(150)).toEqual([]);
     expect(claims.sweep(190)).toEqual(["t"]);
-    expect(claims.renew("t", MID, "a", 200)).toBe(false);
   });
 
   it("a claim made without a lease never lapses (main's behaviour)", () => {
@@ -147,7 +161,7 @@ describe("TaskClaims", () => {
     expect(again.sweep(100)).toEqual(["t"]);
   });
 
-  it("the verified claimer is the only device that may answer", () => {
+  it("the claimer is the only device that may answer, verified or not", () => {
     const { taskQueue, claims } = setup();
     taskQueue.set("t", entry("t"));
     expect(claimRefusesAnswer(taskQueue.get("t")!, "b")).toBe(false); // unclaimed
@@ -156,8 +170,23 @@ describe("TaskClaims", () => {
     expect(claimRefusesAnswer(e, "a")).toBe(false);
     expect(claimRefusesAnswer(e, "b")).toBe(true);
     expect(claimRefusesAnswer(e, undefined)).toBe(false); // master token
+    claims.sweep(1000); // undetermined: still only the claimer
+    expect(claimRefusesAnswer(e, "a")).toBe(false);
+    expect(claimRefusesAnswer(e, "b")).toBe(true);
+    // An unverified claimer: its declared id, or the device its token proved.
     taskQueue.set("u", entry("u"));
-    claims.claim("u", MID, peer("anon", false), { lease: true, now: 0 });
-    expect(claimRefusesAnswer(taskQueue.get("u")!, "b")).toBe(false); // unverified claimer
+    claims.claim(
+      "u",
+      MID,
+      { ...peer("declared", false), authenticatedDid: "proved" },
+      {
+        lease: true,
+        now: 0,
+      },
+    );
+    const u = taskQueue.get("u")!;
+    expect(claimRefusesAnswer(u, "b")).toBe(true);
+    expect(claimRefusesAnswer(u, "declared")).toBe(false);
+    expect(claimRefusesAnswer(u, "proved")).toBe(false);
   });
 });

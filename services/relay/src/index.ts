@@ -505,6 +505,7 @@ export interface SyncRelayConfig {
   maxTasksPerSubmitter?: number;
   /**
    * How long a serving body's leased task claim holds without a renewal
+   * before the claimer counts as lost and the task as undetermined
    * (`task-claim.ts`). Default: `TASK_CLAIM_LEASE_MS` (30 s).
    */
   taskClaimLeaseMs?: number;
@@ -1382,7 +1383,7 @@ export async function createSyncRelay(config: SyncRelayConfig): Promise<SyncRela
     );
   });
 
-  // --- Task claims: one body per broadcast task, a lapsed lease re-presents ---
+  // --- Task claims: one body per broadcast task; a lapsed lease marks it undetermined, never re-presents ---
   const taskClaims = new TaskClaims({
     taskQueue,
     connections,

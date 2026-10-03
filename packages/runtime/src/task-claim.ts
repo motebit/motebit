@@ -13,18 +13,23 @@
  *
  *   - `offer(taskId, run)` sends `task_claim` (asking for a lease) and calls
  *     `run` only on the grant. A task already being claimed or run here is a
- *     duplicate (the relay re-presents a task whose lease lapsed to every
- *     body, this one included) and is ignored.
+ *     duplicate (reconnect recovery can present a still-Pending task again)
+ *     and is ignored.
  *   - `handleFrame(frame)` takes every relay frame; it consumes the claim
  *     answers for tasks it is claiming.
  *   - While `run` is pending the coordinator renews the lease
  *     (`task_claim_renew`) at a third of the granted `lease_ms`, through the
  *     current `send` — so a body whose socket is rebuilt mid-task keeps it.
- *     A body that dies stops renewing, and the relay re-presents the task to
- *     the identity's other bodies.
+ *     The lease is a liveness signal, never a re-dispatch timer: a granted
+ *     claim means the task may have started, so the relay never hands it to
+ *     another body. A body that dies stops renewing and the relay marks the
+ *     task UNDETERMINED for its delegator; only this body's own result (or
+ *     renewal) resolves it.
  *
  * A grant that never arrives (the frame lost with a socket) drops the claim
- * after `grantTimeoutMs`; the relay's lease returns the task to the identity.
+ * after `grantTimeoutMs`; if the relay did grant it, the task is held by this
+ * body unrun and goes undetermined when the lease lapses — never re-run
+ * elsewhere.
  */
 
 /** The relay frames this protocol reads. */
@@ -170,8 +175,8 @@ export class TaskClaimCoordinator {
     try {
       this.send(JSON.stringify(frame));
     } catch {
-      // A closed socket: the claim's grant timeout or the relay's lease
-      // settles what this frame would have.
+      // A closed socket: the claim's grant timeout, or the relay's lease
+      // (which marks a lost claimer's task undetermined), settles it.
     }
   }
 }

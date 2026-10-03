@@ -2686,25 +2686,41 @@ TaskManager.defineTask(BACKGROUND_TASK_WAKE, async () => {
 
       const task = msg.task;
 
+      // Not enough budget left to run it: do not claim. Only an unclaimed
+      // task may go to another body (or this phone's next wake) — once the
+      // relay grants this phone's claim, no other body will ever run it.
+      if (deadline - Date.now() < 5000) return;
+
       // Claim the task; execute with the time budget only on the grant
       claims.offer(task.task_id, async () => {
+        // The claim is granted: this phone may have started the task, so it
+        // is this phone's to answer and nobody else's (one task, one body).
+        const postReceipt = async (receipt: ExecutionReceipt): Promise<void> => {
+          // The result route verifies `task:result`; `task:submit` was
+          // refused, so no receipt this phone served reached the relay (#827).
+          const freshToken = await app.createSyncToken("task:result");
+          await fetch(`${syncUrl}/agent/${app.motebitId}/task/${task.task_id}/result`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${freshToken}`,
+            },
+            body: JSON.stringify(receipt),
+            signal: AbortSignal.timeout(3000),
+          });
+        };
         try {
           let privKeyBytes: Uint8Array;
           try {
             privKeyBytes = await app.getPrivKeyBytes();
           } catch {
+            // Granted but never started: the relay cannot tell, so its lease
+            // lapses into an undetermined task, never a re-run elsewhere.
             done();
             return;
           }
 
           const remainingMs = deadline - Date.now();
-          if (remainingMs < 5000) {
-            // Not enough time to execute — let it expire for next foreground
-            secureErase(privKeyBytes);
-            done();
-            return;
-          }
-
           let receipt: ExecutionReceipt | undefined;
 
           // Race execution against remaining budget
@@ -2723,35 +2739,31 @@ TaskManager.defineTask(BACKGROUND_TASK_WAKE, async () => {
           })();
 
           const timeoutPromise = new Promise<"timeout">(
-            (r) => setTimeout(() => r("timeout"), remainingMs - 3000), // 3s margin for receipt POST
+            (r) => setTimeout(() => r("timeout"), Math.max(0, remainingMs - 3000)), // 3s margin for receipt POST
           );
 
           const result = await Promise.race([executionPromise, timeoutPromise]);
 
-          secureErase(privKeyBytes);
-
-          // POST receipt if we got one (even on timeout — partial work is valuable)
-          if (receipt) {
-            // The result route verifies `task:result`; `task:submit` was
-            // refused, so no receipt this phone served reached the relay (#827).
-            const freshToken = await app.createSyncToken("task:result");
-            await fetch(`${syncUrl}/agent/${app.motebitId}/task/${task.task_id}/result`, {
-              method: "POST",
-              headers: {
-                "Content-Type": "application/json",
-                Authorization: `Bearer ${freshToken}`,
-              },
-              body: JSON.stringify(receipt),
-              signal: AbortSignal.timeout(3000),
-            });
-          }
-
           if (result === "timeout") {
-            // Execution timed out — receipt may or may not have been posted
-            // Task stays in relay queue for retry on next wake
+            // The budget ran out mid-task. The task stays this phone's claim:
+            // the relay never hands it to another body (it may have started
+            // here). The claim's renewals stop with this wake, so the relay
+            // marks it undetermined for the delegator; if the OS lets the
+            // execution finish later, this phone's own signed result
+            // resolves it — the only thing that may.
+            void executionPromise
+              .then(() => (receipt ? postReceipt(receipt) : undefined))
+              .catch(() => {})
+              .finally(() => secureErase(privKeyBytes));
+            return;
           }
+
+          secureErase(privKeyBytes);
+          if (receipt) await postReceipt(receipt);
         } catch {
-          // Background execution failed — task stays in queue
+          // Execution or the receipt POST failed after the grant: the task is
+          // not retried by another body — the relay holds it undetermined
+          // until this phone's result arrives.
         } finally {
           claims.dispose();
           ws.close();

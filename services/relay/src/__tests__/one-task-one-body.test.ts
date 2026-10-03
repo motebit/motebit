@@ -8,10 +8,10 @@
  * the identity, and its claim is atomic (`websocket.ts`, `task_claim`): one
  * body is granted, the rest are answered `task_claim_rejected`. The body is
  * the second half of that contract — it must WAIT for the grant before it
- * executes, and drop the task on a rejection. And a granted claim is a
- * LEASE: a body that dies (socket gone) or stops renewing before it answers
- * loses the claim, and the task goes back to the identity's other bodies —
- * still answered once, with the late result of the dead claimer refused.
+ * executes, and drop the task on a rejection. A granted claim means the
+ * task may have started, so it is never handed to a second body: a claimer
+ * that dies or stops renewing leaves the task UNDETERMINED (surfaced on the
+ * delegator's poll), resolved only by the claimer's own late result.
  *
  * Each `Body` below is one real WebSocket device of the identity, under its
  * own verified device id, posting its result with its own `task:result`
@@ -284,8 +284,35 @@ describe("one task, one body — every serving body of an identity", () => {
   });
 });
 
-describe("a claim is a lease — a dead claimer's task goes to another body", () => {
-  it("claimer DISCONNECTS before answering: re-dispatched within the lease, answered once", async () => {
+/** The submitter's poll: the task's status and any undetermined reason. */
+async function pollOf(
+  id: Identity,
+  taskId: string,
+): Promise<{ status: string; undetermined: { reason: string } | null; result: string | null }> {
+  const res = await id.relay.app.request(`/agent/${id.motebitId}/task/${taskId}`, {
+    headers: JSON_AUTH,
+  });
+  expect(res.status).toBe(200);
+  const j = (await res.json()) as {
+    task: { status: string };
+    undetermined?: { reason: string } | null;
+    receipt?: { result?: string } | null;
+  };
+  return {
+    status: j.task.status,
+    undetermined: j.undetermined ?? null,
+    result: j.receipt?.result ?? null,
+  };
+}
+
+/**
+ * THE LAW: at most one execution per task. A body executes the moment its
+ * claim is granted, so a granted claim means "may have started". Losing the
+ * claimer after the grant makes the task UNDETERMINED — surfaced to the
+ * delegator, never Pending again, never handed to another body.
+ */
+describe("a granted claim is never re-dispatched — a lost claimer leaves the task undetermined", () => {
+  it("claimer DISCONNECTS before answering: no other body runs it; the delegator sees undetermined", async () => {
     const id = await identityWithDevices(2);
     const a = new Body(id, id.devices[0]!, { neverAnswer: true });
     await a.open();
@@ -293,23 +320,28 @@ describe("a claim is a lease — a dead claimer's task goes to another body", ()
     expect(await waitFor(() => a.executions === 1)).toBe(true);
     await sleep(50); // the claim lands
 
-    // The second body comes up while A holds the claim: recovery skips a
-    // claimed task, so B sees nothing — yet.
     const b = new Body(id, id.devices[1]!);
     await b.open();
     a.ws.terminate();
 
-    const started = Date.now();
-    expect(await waitFor(() => b.executions === 1, LEASE_MS * 6)).toBe(true);
-    expect(Date.now() - started).toBeLessThan(LEASE_MS * 6);
-    expect(await waitFor(() => b.resultStatuses.length === 1)).toBe(true);
-    expect(b.resultStatuses).toEqual([200]);
-    expect(await answerOf(id, t.task_id)).toBe(`done by ${b.deviceId}`);
-    await sleep(LEASE_MS * 2);
-    expect(b.executions).toBe(1);
+    // Well past the lease: the claimer is lost.
+    await sleep(LEASE_MS * 4);
+    expect(b.requests).toBe(0);
+    expect(b.executions).toBe(0);
+    const poll = await pollOf(id, t.task_id);
+    expect(poll.status).not.toBe("pending");
+    expect(poll.undetermined?.reason).toBe("claimer_lost");
+    expect(poll.result).toBeNull();
+    expect(settlementRows(id, t.task_id)).toBe(0);
+
+    // A body that connects later is not handed it either (recovery).
+    const c = new Body(id, id.devices[1]!);
+    await c.open();
+    await sleep(LEASE_MS);
+    expect(c.requests + c.executions).toBe(0);
   });
 
-  it("claimer STOPS RENEWING (socket open, frames lost): re-dispatched, its late result refused", async () => {
+  it("claimer STOPS RENEWING (alive, partitioned): never a second execution; its late result resolves the task", async () => {
     const id = await identityWithDevices(2);
     const a = new Body(id, id.devices[0]!);
     a.hold();
@@ -321,23 +353,42 @@ describe("a claim is a lease — a dead claimer's task goes to another body", ()
 
     const b = new Body(id, id.devices[1]!);
     await b.open();
+    await sleep(LEASE_MS * 4);
 
-    expect(await waitFor(() => b.executions === 1, LEASE_MS * 6)).toBe(true);
-    expect(await waitFor(() => b.resultStatuses.length === 1)).toBe(true);
-    expect(b.resultStatuses).toEqual([200]);
+    // No concurrent execution: B was never granted.
+    expect(b.executions).toBe(0);
+    expect((await pollOf(id, t.task_id)).undetermined?.reason).toBe("claimer_lost");
 
-    // A finally finishes: the task was answered by the lease's new holder.
+    // A finally finishes: the claimer's signed result resolves the uncertainty.
     a.muted = false;
     a.finish();
     expect(await waitFor(() => a.resultStatuses.length === 1)).toBe(true);
-    expect(a.resultStatuses[0]).toBe(409);
-    expect(await answerOf(id, t.task_id)).toBe(`done by ${b.deviceId}`);
+    expect(a.resultStatuses).toEqual([200]);
+    const poll = await pollOf(id, t.task_id);
+    expect(poll.result).toBe(`done by ${a.deviceId}`);
+    expect(poll.undetermined).toBeNull();
+    expect(a.executions + b.executions).toBe(1);
     expect(settlementRows(id, t.task_id)).toBeLessThanOrEqual(1);
-    // A never ran it twice (the re-dispatch reached it too).
-    expect(a.executions).toBe(1);
   });
 
-  it("a claimer that keeps renewing keeps the task past many leases — no second body runs it", async () => {
+  it("a result from a non-claimer device is refused while the task is claimed or undetermined", async () => {
+    const id = await identityWithDevices(2);
+    const a = new Body(id, id.devices[0]!, { neverAnswer: true });
+    await a.open();
+    const t = await submit(id);
+    expect(await waitFor(() => a.executions === 1)).toBe(true);
+    await sleep(50);
+
+    const b = new Body(id, id.devices[1]!);
+    await b.answer(t); // while A holds the claim
+    a.ws.terminate();
+    await sleep(LEASE_MS * 4);
+    await b.answer(t); // while the task is undetermined
+    expect(b.resultStatuses).toEqual([409, 409]);
+    expect((await pollOf(id, t.task_id)).result).toBeNull();
+  });
+
+  it("a claimer that keeps renewing is never marked undetermined, and no second body runs it", async () => {
     const id = await identityWithDevices(2);
     const a = new Body(id, id.devices[0]!, { runMs: LEASE_MS * 4 });
     const b = new Body(id, id.devices[1]!);
@@ -345,6 +396,8 @@ describe("a claim is a lease — a dead claimer's task goes to another body", ()
     const t = await submit(id);
     expect(await waitFor(() => a.executions === 1)).toBe(true);
     await b.open();
+    await sleep(LEASE_MS * 2);
+    expect((await pollOf(id, t.task_id)).undetermined).toBeNull();
 
     expect(await waitFor(() => a.resultStatuses.length === 1, LEASE_MS * 10)).toBe(true);
     expect(a.resultStatuses).toEqual([200]);

@@ -8,30 +8,41 @@
  * (`task_claim_rejected`). The body executes only on the grant — the client
  * half is `TaskClaimCoordinator` in `@motebit/runtime`.
  *
- * A claim made with `lease: true` is a LEASE (`TASK_CLAIM_LEASE_MS`): the
- * winner renews it (`task_claim_renew`) while it runs, from any socket of
- * its device id (a desktop rebuilds its socket every few minutes). A
- * claimer that dies, or whose renewals stop reaching the relay, loses the
- * claim when the lease lapses: the task goes back to Pending and is handed
- * again to every serving socket of the motebit, so another body — or the
- * same one, reconnected — takes it. A claim without `lease` (a client that
- * predates leases) never lapses: main's behaviour, so a long task on an old
- * client is never presented twice.
+ * THE LAW: at most one execution per task. A body executes the moment its
+ * claim is granted, so a granted claim means "may have started". The relay
+ * therefore never grants a second claim on a task: failover to another body
+ * happens only BEFORE any grant (every body that was presented the task and
+ * lost the race simply drops it). Nothing marks a task idempotent today, so
+ * no task is ever re-dispatched after a grant.
+ *
+ * A claim made with `lease: true` is a LEASE (`TASK_CLAIM_LEASE_MS`) — a
+ * liveness signal, not a re-dispatch timer. The winner renews it
+ * (`task_claim_renew`) while it runs, from any socket of its device id (a
+ * desktop rebuilds its socket every few minutes). A claimer that dies, or
+ * whose renewals stop reaching the relay, has its lease lapse: the task
+ * stays Claimed by that body and becomes UNDETERMINED (`undetermined_at`) —
+ * the claimer may have run it, may still be running it, or never started.
+ * The delegator's poll surfaces it (`undeterminedOf`, reason
+ * `claimer_lost`); it is never Pending again and never handed to another
+ * body. No body converts that uncertainty into an assumed failure. It
+ * resolves only by the claimer itself: a later renewal clears the mark (the
+ * claimer is alive), and the claimer's signed result answers the task. A
+ * claim without `lease` (a client that predates leases) never lapses.
  *
  * The claim also names who may answer: a result POSTed under a device token
- * for a task whose verified claimer is a DIFFERENT device is refused
- * (`claimRefusesAnswer`), so a lapsed claimer that finishes late cannot
- * answer the task its successor holds. The answer itself stays
- * `answerTask`'s (task-answer.ts) — write-once, settled once.
+ * of any device other than the claimer — whether or not the claiming
+ * socket's device id was verified — is refused (`claimRefusesAnswer`). The
+ * answer itself stays `answerTask`'s (task-answer.ts) — write-once, settled
+ * once.
  *
- * The Pending ⇄ Claimed transitions live here and only here (the static
- * answer-writer scan in `receipt-doors-890.test.ts` exempts exactly them).
+ * The Pending → Claimed transition and the lease's marks live here and only
+ * here (the static answer-writer scan in `receipt-doors-890.test.ts` exempts
+ * exactly them).
  */
 
 import { AgentTaskStatus } from "@motebit/sdk";
 import type { TaskQueueEntry } from "./tasks.js";
 import type { ConnectedDevice } from "./websocket.js";
-import { routeToSockets } from "./task-presentation.js";
 
 /** How long a leased claim holds without a renewal. */
 export const TASK_CLAIM_LEASE_MS = 30_000;
@@ -42,14 +53,32 @@ export interface TaskClaimLease {
   device_id: string;
   /** The device id was proven by the token that admitted the socket. */
   device_verified: boolean;
+  /**
+   * The device the claiming socket's token proved, when that differs from
+   * an unverified declared `device_id` — it may answer too.
+   */
+  authenticated_did?: string;
   /** When the lease lapses; absent for a claim made without `lease`. */
   expires_at?: number;
+  /**
+   * When the lease lapsed with no answer: the claimer is lost and the
+   * task's outcome is undetermined. Cleared by the claimer's own renewal.
+   */
+  undetermined_at?: number;
+}
+
+/** Why a task's outcome is undetermined, as the delegator's poll reads it. */
+export interface TaskUndetermined {
+  reason: "claimer_lost";
+  detail: string;
+  since: number;
 }
 
 export type ClaimVerdict =
   { granted: true; lease_ms?: number } | { granted: false; reason: string };
 
-type ClaimingPeer = Pick<ConnectedDevice, "deviceId" | "deviceIdVerified" | "capabilities">;
+type ClaimingPeer = Pick<ConnectedDevice, "deviceId" | "deviceIdVerified" | "capabilities"> &
+  Partial<Pick<ConnectedDevice, "authenticatedDid">>;
 
 interface Logger {
   info(event: string, ctx: Record<string, unknown>): void;
@@ -109,6 +138,9 @@ export class TaskClaims {
     entry.claim_lease = {
       device_id: peer.deviceId,
       device_verified: peer.deviceIdVerified === true,
+      ...(peer.authenticatedDid != null && peer.authenticatedDid !== peer.deviceId
+        ? { authenticated_did: peer.authenticatedDid }
+        : {}),
       ...(opts.lease ? { expires_at: opts.now + this.leaseMs } : {}),
     };
     taskQueue.set(taskId, entry);
@@ -121,7 +153,9 @@ export class TaskClaims {
 
   /**
    * `task_claim_renew` from a socket of `motebitId` under `deviceId`: extend
-   * the lease when that device still holds it. Returns whether it did.
+   * the lease when that device holds it. A renewal from a claimer whose
+   * lease had lapsed clears the undetermined mark — the claimer is alive.
+   * Returns whether it renewed.
    */
   renew(taskId: string, motebitId: string, deviceId: string, now: number): boolean {
     const { taskQueue } = this.deps;
@@ -136,20 +170,22 @@ export class TaskClaims {
     ) {
       return false;
     }
-    entry.claim_lease = { ...lease, expires_at: now + this.leaseMs };
+    const { undetermined_at: _lost, ...held } = lease;
+    entry.claim_lease = { ...held, expires_at: now + this.leaseMs };
     taskQueue.set(taskId, entry);
+    this.leased.add(taskId);
     return true;
   }
 
   /**
-   * Lapse every lease past its expiry: the task returns to Pending and is
-   * handed again to every serving socket of its motebit. With none open it
-   * stays Pending, and reconnect recovery hands it to the next socket.
-   * Returns the task ids re-presented.
+   * Lapse every lease past its expiry: the claimer is lost, so the task —
+   * still Claimed by it — is marked UNDETERMINED. It is never returned to
+   * Pending and never handed to another body: the claimer may have started
+   * it. Returns the task ids marked.
    */
   sweep(now: number): string[] {
-    const { taskQueue, connections, logger } = this.deps;
-    const lapsed: string[] = [];
+    const { taskQueue, logger } = this.deps;
+    const lost: string[] = [];
     for (const taskId of [...this.leased]) {
       const entry = taskQueue.get(taskId);
       const lease = entry?.claim_lease;
@@ -157,42 +193,51 @@ export class TaskClaims {
         entry == null ||
         entry.receipt != null ||
         entry.task.status !== AgentTaskStatus.Claimed ||
-        lease?.expires_at == null
+        lease?.expires_at == null ||
+        lease.undetermined_at != null
       ) {
         this.leased.delete(taskId);
         continue;
       }
       if (lease.expires_at > now) continue;
       this.leased.delete(taskId);
-      entry.task.status = AgentTaskStatus.Pending;
-      entry.task.claimed_by = undefined;
-      entry.claim_lease = undefined;
+      entry.claim_lease = { ...lease, undetermined_at: now };
       taskQueue.set(taskId, entry);
-      const route = routeToSockets(
-        connections.get(entry.task.motebit_id),
-        JSON.stringify({ type: "task_request", task: entry.task }),
-      );
-      logger.info("task.claim_lease_lapsed", {
+      logger.info("task.claim_undetermined", {
         correlationId: taskId,
         motebitId: entry.task.motebit_id,
         deviceId: lease.device_id,
-        route,
       });
-      lapsed.push(taskId);
+      lost.push(taskId);
     }
-    return lapsed;
+    return lost;
   }
 }
 
 /**
+ * The task's undetermined outcome, for the delegator's poll: set while the
+ * claimer is lost and no answer has arrived.
+ */
+export function undeterminedOf(entry: TaskQueueEntry): TaskUndetermined | null {
+  const since = entry.claim_lease?.undetermined_at;
+  if (since == null || entry.receipt != null) return null;
+  return {
+    reason: "claimer_lost",
+    detail:
+      "The body that claimed this task stopped answering after its claim was granted; it may have executed the task. The task is not re-dispatched — it resolves only when that body posts its result.",
+    since,
+  };
+}
+
+/**
  * Whether the task's claim refuses an answer presented under device `did`:
- * true exactly when a VERIFIED device holds the claim and `did` is another
- * device. A master-token presentation (no `did`) and an unverified claim
- * (a socket that declared no device id, or one its token did not prove)
- * are not refused here.
+ * true whenever a device holds the claim and `did` is any other device —
+ * whether or not the claiming socket's device id was verified (an
+ * unverified claim also admits the device its token proved). A
+ * master-token presentation (no `did`) is not refused here.
  */
 export function claimRefusesAnswer(entry: TaskQueueEntry, did: string | undefined): boolean {
   const lease = entry.claim_lease;
-  if (lease == null || !lease.device_verified || did == null) return false;
-  return lease.device_id !== did;
+  if (lease == null || did == null) return false;
+  return did !== lease.device_id && did !== lease.authenticated_did;
 }

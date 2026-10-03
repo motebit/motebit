@@ -96,7 +96,7 @@ import {
 import type { ConnectedDevice } from "./index.js";
 import { sendToEach } from "./ws-send.js";
 import { routeToSockets } from "./task-presentation.js";
-import { claimRefusesAnswer } from "./task-claim.js";
+import { claimRefusesAnswer, undeterminedOf } from "./task-claim.js";
 import {
   bindIdempotencyClaimToTask,
   bindP2pProofToTask,
@@ -4860,7 +4860,14 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<TaskRoutesHan
       }
     }
 
-    return c.json({ task: entry.task, receipt: entry.receipt ?? null });
+    // One task, one body (task-claim.ts): a claimer lost after its grant
+    // leaves the outcome undetermined — said explicitly, never "pending".
+    const undetermined = undeterminedOf(entry);
+    return c.json({
+      task: entry.task,
+      receipt: entry.receipt ?? null,
+      ...(undetermined != null ? { undetermined } : {}),
+    });
   });
 
   // --- POST /agent/:motebitId/task/:taskId/result — device posts signed receipt ---
@@ -4922,10 +4929,10 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<TaskRoutesHan
       );
     }
 
-    // One task, one body (task-claim.ts): while a verified device holds the
-    // task's claim, no other device of the identity answers it — a claimer
-    // whose lease lapsed and that finished late is refused, never a second
-    // answer beside its successor's.
+    // One task, one body (task-claim.ts): while a device holds the task's
+    // claim — running it, or lost and undetermined — no other device of the
+    // identity answers it. The claimer's own late result is accepted: it
+    // resolves the uncertainty.
     if (claimRefusesAnswer(entry, presentingDid)) {
       logger.warn("task.result_claimed_by_other", {
         correlationId: taskId,

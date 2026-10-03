@@ -916,8 +916,10 @@ export function registerWebSocketRoutes(deps: WebSocketDeps): void {
             }
 
             // Agent protocol: task_claim — one body wins, the rest are
-            // refused (task-claim.ts). A `lease: true` claim lapses unless
-            // renewed; the grant names the lease so the body knows its cadence.
+            // refused (task-claim.ts). A `lease: true` claim is renewed while
+            // the body runs (a lapse marks the task undetermined, never
+            // re-presents it); the grant names the lease so the body knows
+            // its cadence.
             if (msg.type === "task_claim" && typeof msg.task_id === "string" && msg.task_id) {
               const taskId = msg.task_id;
               const claimer = registeredPeer ?? {
@@ -943,8 +945,8 @@ export function registerWebSocketRoutes(deps: WebSocketDeps): void {
             }
 
             // Agent protocol: task_claim_renew — the lease holder is still
-            // running the task. No answer: a renewal that no longer holds
-            // (the lease lapsed and another body took it) changes nothing.
+            // running the task. No answer: a renewal from any device but the
+            // holder changes nothing; the holder's clears an undetermined mark.
             if (msg.type === "task_claim_renew" && typeof msg.task_id === "string" && msg.task_id) {
               taskClaims.renew(msg.task_id, motebitId, deviceId, Date.now());
             }
