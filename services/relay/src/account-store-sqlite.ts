@@ -2,9 +2,14 @@
  * SqliteAccountStore — the production AccountStore implementation.
  *
  * Implements `@motebit/virtual-accounts`'s `AccountStore` interface over a
- * `@motebit/persistence` DatabaseDriver. Every atomic compound method
- * (`credit`, `debit`) uses a single SQL statement with balance-guarded
- * UPDATE to preserve Rule 12's "never partial" contract.
+ * `@motebit/persistence` DatabaseDriver. Every method that moves a balance
+ * (`credit`, `debit`, `debitSpendable`, `debitAndEnqueuePending`,
+ * `failWithdrawalAndRefund`) runs its balance UPDATE and its ledger INSERT in
+ * ONE `DatabaseDriver.transaction`, so a failed ledger write rolls the balance
+ * back — Rule 12's "never partial" contract. A caller's enclosing
+ * transaction nests (a savepoint), so a check-then-credit by reference in the
+ * caller commits with the credit. Pinned at every statement boundary by
+ * `__tests__/account-store-atomicity.test.ts`.
  *
  * The DDL for `relay_accounts`, `relay_transactions`, `relay_withdrawals`,
  * `relay_agent_wallets`, and the post-install ALTER TABLE for legacy
@@ -255,38 +260,40 @@ export class SqliteAccountStore implements AccountStore {
     const now = Date.now();
     const transactionId = crypto.randomUUID();
 
-    // Ensure the row exists before the atomic UPDATE.
-    this.getOrCreateAccount(motebitId);
+    return this.db.transaction(() => {
+      // Ensure the row exists before the atomic UPDATE.
+      this.getOrCreateAccount(motebitId);
 
-    this.db
-      .prepare(
-        "UPDATE relay_accounts SET balance = balance + ?, updated_at = ? WHERE motebit_id = ?",
-      )
-      .run(amount, now, motebitId);
+      this.db
+        .prepare(
+          "UPDATE relay_accounts SET balance = balance + ?, updated_at = ? WHERE motebit_id = ?",
+        )
+        .run(amount, now, motebitId);
 
-    const updated = this.db
-      .prepare("SELECT balance FROM relay_accounts WHERE motebit_id = ?")
-      .get(motebitId) as { balance: number } | undefined;
-    const newBalance = updated?.balance ?? 0;
+      const updated = this.db
+        .prepare("SELECT balance FROM relay_accounts WHERE motebit_id = ?")
+        .get(motebitId) as { balance: number } | undefined;
+      const newBalance = updated?.balance ?? 0;
 
-    this.db
-      .prepare(
-        `INSERT INTO relay_transactions (transaction_id, motebit_id, type, amount, balance_after, reference_id, description, created_at${stampCols(stamp)})
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?${stampVals(stamp)})`,
-      )
-      .run(
-        transactionId,
-        motebitId,
-        type,
-        amount,
-        newBalance,
-        referenceId,
-        description,
-        now,
-        ...stampArgs(stamp),
-      );
+      this.db
+        .prepare(
+          `INSERT INTO relay_transactions (transaction_id, motebit_id, type, amount, balance_after, reference_id, description, created_at${stampCols(stamp)})
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?${stampVals(stamp)})`,
+        )
+        .run(
+          transactionId,
+          motebitId,
+          type,
+          amount,
+          newBalance,
+          referenceId,
+          description,
+          now,
+          ...stampArgs(stamp),
+        );
 
-    return newBalance;
+      return newBalance;
+    });
   }
 
   debit(
@@ -301,41 +308,43 @@ export class SqliteAccountStore implements AccountStore {
     const now = Date.now();
     const transactionId = crypto.randomUUID();
 
-    this.getOrCreateAccount(motebitId);
+    return this.db.transaction(() => {
+      this.getOrCreateAccount(motebitId);
 
-    // Atomic: debit only if balance >= amount. No read-then-write race even
-    // under multi-process; `changes === 0` is the "insufficient funds" signal.
-    const info = this.db
-      .prepare(
-        "UPDATE relay_accounts SET balance = balance - ?, updated_at = ? WHERE motebit_id = ? AND balance >= ?",
-      )
-      .run(amount, now, motebitId, amount);
+      // Atomic: debit only if balance >= amount. No read-then-write race even
+      // under multi-process; `changes === 0` is the "insufficient funds" signal.
+      const info = this.db
+        .prepare(
+          "UPDATE relay_accounts SET balance = balance - ?, updated_at = ? WHERE motebit_id = ? AND balance >= ?",
+        )
+        .run(amount, now, motebitId, amount);
 
-    if (info.changes === 0) return null;
+      if (info.changes === 0) return null;
 
-    const updated = this.db
-      .prepare("SELECT balance FROM relay_accounts WHERE motebit_id = ?")
-      .get(motebitId) as { balance: number } | undefined;
-    const newBalance = updated?.balance ?? 0;
+      const updated = this.db
+        .prepare("SELECT balance FROM relay_accounts WHERE motebit_id = ?")
+        .get(motebitId) as { balance: number } | undefined;
+      const newBalance = updated?.balance ?? 0;
 
-    this.db
-      .prepare(
-        `INSERT INTO relay_transactions (transaction_id, motebit_id, type, amount, balance_after, reference_id, description, created_at${stampCols(stamp)})
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?${stampVals(stamp)})`,
-      )
-      .run(
-        transactionId,
-        motebitId,
-        type,
-        -amount,
-        newBalance,
-        referenceId,
-        description,
-        now,
-        ...stampArgs(stamp),
-      );
+      this.db
+        .prepare(
+          `INSERT INTO relay_transactions (transaction_id, motebit_id, type, amount, balance_after, reference_id, description, created_at${stampCols(stamp)})
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?${stampVals(stamp)})`,
+        )
+        .run(
+          transactionId,
+          motebitId,
+          type,
+          -amount,
+          newBalance,
+          referenceId,
+          description,
+          now,
+          ...stampArgs(stamp),
+        );
 
-    return newBalance;
+      return newBalance;
+    });
   }
 
   debitSpendable(
@@ -350,44 +359,46 @@ export class SqliteAccountStore implements AccountStore {
     const transactionId = crypto.randomUUID();
 
     assertMicroUnits(amount, "debitWithHold");
-    this.getOrCreateAccount(motebitId);
+    return this.db.transaction(() => {
+      this.getOrCreateAccount(motebitId);
 
-    // Compute the escrow hold first (synchronous), then debit atomically with
-    // `balance >= amount + hold`. better-sqlite3 is synchronous, so nothing
-    // interleaves between the read and the conditional UPDATE — funds under
-    // the hold (recent-settlement window + active disputes) cannot be spent.
-    const hold = this.getUnwithdrawableHold(motebitId);
-    const info = this.db
-      .prepare(
-        "UPDATE relay_accounts SET balance = balance - ?, updated_at = ? WHERE motebit_id = ? AND balance >= ?",
-      )
-      .run(amount, now, motebitId, amount + hold);
+      // Compute the escrow hold first (synchronous), then debit atomically with
+      // `balance >= amount + hold`. better-sqlite3 is synchronous, so nothing
+      // interleaves between the read and the conditional UPDATE — funds under
+      // the hold (recent-settlement window + active disputes) cannot be spent.
+      const hold = this.getUnwithdrawableHold(motebitId);
+      const info = this.db
+        .prepare(
+          "UPDATE relay_accounts SET balance = balance - ?, updated_at = ? WHERE motebit_id = ? AND balance >= ?",
+        )
+        .run(amount, now, motebitId, amount + hold);
 
-    if (info.changes === 0) return null;
+      if (info.changes === 0) return null;
 
-    const updated = this.db
-      .prepare("SELECT balance FROM relay_accounts WHERE motebit_id = ?")
-      .get(motebitId) as { balance: number } | undefined;
-    const newBalance = updated?.balance ?? 0;
+      const updated = this.db
+        .prepare("SELECT balance FROM relay_accounts WHERE motebit_id = ?")
+        .get(motebitId) as { balance: number } | undefined;
+      const newBalance = updated?.balance ?? 0;
 
-    this.db
-      .prepare(
-        `INSERT INTO relay_transactions (transaction_id, motebit_id, type, amount, balance_after, reference_id, description, created_at${stampCols(stamp)})
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?${stampVals(stamp)})`,
-      )
-      .run(
-        transactionId,
-        motebitId,
-        type,
-        -amount,
-        newBalance,
-        referenceId,
-        description,
-        now,
-        ...stampArgs(stamp),
-      );
+      this.db
+        .prepare(
+          `INSERT INTO relay_transactions (transaction_id, motebit_id, type, amount, balance_after, reference_id, description, created_at${stampCols(stamp)})
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?${stampVals(stamp)})`,
+        )
+        .run(
+          transactionId,
+          motebitId,
+          type,
+          -amount,
+          newBalance,
+          referenceId,
+          description,
+          now,
+          ...stampArgs(stamp),
+        );
 
-    return newBalance;
+      return newBalance;
+    });
   }
 
   getTransactions(motebitId: string, limit = 50): AccountTransaction[] {
@@ -475,6 +486,30 @@ export class SqliteAccountStore implements AccountStore {
     };
   }
 
+  debitAndRecordWithdrawal(
+    w: NewWithdrawal,
+    description: string,
+  ): { record: WithdrawalRequest; newBalance: number } | { existing: WithdrawalRequest } | null {
+    // The key check, the debit (balance + ledger row) and the withdrawal row
+    // commit together or roll back together. `debit` nests as a savepoint;
+    // insufficient funds returns null with nothing written.
+    return this.db.transaction(() => {
+      if (w.idempotency_key != null) {
+        const existing = this.getWithdrawalByIdempotencyKey(w.motebit_id, w.idempotency_key);
+        if (existing) return { existing };
+      }
+      const newBalance = this.debit(
+        w.motebit_id,
+        w.amount,
+        "withdrawal",
+        w.withdrawal_id,
+        description,
+      );
+      if (newBalance === null) return null;
+      return { record: this.insertWithdrawal(w), newBalance };
+    });
+  }
+
   linkWithdrawalTransfer(id: string, payoutReference: string): boolean {
     const info = this.db
       .prepare(
@@ -534,10 +569,10 @@ export class SqliteAccountStore implements AccountStore {
     // not at all. The UPDATE is a compare-and-set on the non-terminal
     // statuses, so of two callers racing (a retried handler, a sweeper, an
     // admin replay) exactly one sees `changes === 1` and refunds; the other
-    // refunds nothing. `credit` runs INSIDE this transaction (a nested
-    // `transaction()` would be a savepoint; `credit` issues plain statements
-    // on the same connection), so a throw anywhere — the balance UPDATE or
-    // the ledger INSERT — rolls the status back to where it was.
+    // refunds nothing. `credit` runs INSIDE this transaction (its own
+    // `transaction()` nests as a savepoint), so a throw anywhere — the
+    // balance UPDATE or the ledger INSERT — rolls the status back to where
+    // it was.
     //
     // #921: the CAS is on exactly `from`. The operator's manual fail names
     // `pending`, so it can never refund a `processing` withdrawal whose
@@ -556,6 +591,44 @@ export class SqliteAccountStore implements AccountStore {
       if (!w) throw new Error(`failWithdrawalAndRefund: withdrawal ${id} vanished mid-transaction`);
       this.credit(w.motebit_id, w.amount, "withdrawal", id, `Withdrawal failed: ${reason}`);
       return { motebitId: w.motebit_id, amount: w.amount };
+    });
+  }
+
+  /**
+   * Refund a batched withdrawal whose payout provably never left
+   * (batch-withdrawals.ts): the queue row's `refund_owed → refunded`
+   * compare-and-set and the credit (referenced by the pending_id) commit
+   * together or not at all, so of any number of callers exactly one refunds.
+   * Only a row the fire path parked `refund_owed` qualifies — never one whose
+   * outcome is unknown. Returns true when THIS call refunded.
+   */
+  refundPendingWithdrawal(pendingId: string, refundedAt: number = Date.now()): boolean {
+    return this.db.transaction(() => {
+      const info = this.db
+        .prepare(
+          `UPDATE relay_pending_withdrawals
+           SET status = 'refunded', last_attempt_at = ?
+           WHERE pending_id = ? AND status = 'refund_owed'`,
+        )
+        .run(refundedAt, pendingId);
+      if (info.changes === 0) return false;
+      const row = this.db
+        .prepare(
+          "SELECT motebit_id, amount_micro, last_error FROM relay_pending_withdrawals WHERE pending_id = ?",
+        )
+        .get(pendingId) as
+        { motebit_id: string; amount_micro: number; last_error: string | null } | undefined;
+      if (!row) {
+        throw new Error(`refundPendingWithdrawal: ${pendingId} vanished mid-transaction`);
+      }
+      this.credit(
+        row.motebit_id,
+        row.amount_micro,
+        "withdrawal",
+        pendingId,
+        `Pending withdrawal ${pendingId} not sent: ${row.last_error ?? "refunded"}`,
+      );
+      return true;
     });
   }
 
@@ -745,40 +818,40 @@ export class SqliteAccountStore implements AccountStore {
     description?: string;
   }): { pendingId: string; newBalance: number } | null {
     assertMicroUnits(args.amountMicro, "debitAndEnqueuePending");
-    // Idempotent replay — sibling of `requestWithdrawal`'s
-    // `getWithdrawalByIdempotencyKey` check. The partial UNIQUE INDEX
-    // on (motebit_id, idempotency_key) added in migration v12 is the
-    // belt-and-suspenders against a concurrent-writer race.
-    if (args.idempotencyKey !== null) {
-      const existing = this.db
-        .prepare(
-          "SELECT pending_id FROM relay_pending_withdrawals WHERE motebit_id = ? AND idempotency_key = ?",
-        )
-        .get(args.motebitId, args.idempotencyKey) as { pending_id: string } | undefined;
-      if (existing) {
-        const account = this.db
-          .prepare("SELECT balance FROM relay_accounts WHERE motebit_id = ?")
-          .get(args.motebitId) as { balance: number } | undefined;
-        return { pendingId: existing.pending_id, newBalance: account?.balance ?? 0 };
-      }
-    }
-
     const pendingId = args.pendingId ?? crypto.randomUUID();
     const transactionId = crypto.randomUUID();
     const now = Date.now();
     const description =
       args.description ?? `Pending withdrawal ${pendingId} → ${args.destination} via ${args.rail}`;
 
-    // Ensure the account row exists before the atomic UPDATE.
-    this.getOrCreateAccount(args.motebitId);
-
-    // Rule 12 compound atomicity: debit + transaction-log entry + pending
-    // row commit together or roll back together. Delegates to
+    // Rule 12 compound atomicity: the replay check, debit, transaction-log
+    // entry and pending row commit together or roll back together. Delegates to
     // DatabaseDriver.transaction — it handles BEGIN/COMMIT/ROLLBACK plus
     // nested-call savepoint semantics. Insufficient funds returns null
     // from the fn; the (empty) transaction commits harmlessly. Any other
     // throw inside the fn rolls back and rethrows to the caller.
     return this.db.transaction(() => {
+      // Idempotent replay — sibling of `requestWithdrawal`'s
+      // `getWithdrawalByIdempotencyKey` check. The partial UNIQUE INDEX
+      // on (motebit_id, idempotency_key) added in migration v12 is the
+      // belt-and-suspenders against a concurrent-writer race.
+      if (args.idempotencyKey !== null) {
+        const existing = this.db
+          .prepare(
+            "SELECT pending_id FROM relay_pending_withdrawals WHERE motebit_id = ? AND idempotency_key = ?",
+          )
+          .get(args.motebitId, args.idempotencyKey) as { pending_id: string } | undefined;
+        if (existing) {
+          const account = this.db
+            .prepare("SELECT balance FROM relay_accounts WHERE motebit_id = ?")
+            .get(args.motebitId) as { balance: number } | undefined;
+          return { pendingId: existing.pending_id, newBalance: account?.balance ?? 0 };
+        }
+      }
+
+      // Ensure the account row exists before the atomic UPDATE.
+      this.getOrCreateAccount(args.motebitId);
+
       const info = this.db
         .prepare(
           "UPDATE relay_accounts SET balance = balance - ?, updated_at = ? WHERE motebit_id = ? AND balance >= ?",

@@ -540,11 +540,22 @@ const WRITERS: readonly Writer[] = [
       "`enqueuePendingWithdrawal` — /withdraw under `requireFirstPerson`, or the relay's sweep loop for an identity's own configured threshold",
   },
   {
+    file: R + "account-store-sqlite.ts",
+    verb: "UPDATE",
+    table: "relay_pending_withdrawals",
+    count: 1,
+    principal:
+      LOOP +
+      ": `refundPendingWithdrawal` — the batch-withdrawal refund of a payout that provably never left: the `refund_owed → refunded` CAS committed with its ledger credit, at most once",
+  },
+  {
     file: R + "batch-withdrawals.ts",
     verb: "UPDATE",
     table: "relay_pending_withdrawals",
-    count: 3,
-    principal: LOOP + ": the batch-withdrawal fire path",
+    count: 6,
+    principal:
+      LOOP +
+      ": the batch-withdrawal fire path — the claim (`pending → firing` CAS), and each outcome FROM `firing` only: `fired` (with its withdrawal row, one transaction), `unknown` (the payout may have left: a `processing` withdrawal row in the same transaction, never a refund), `refund_owed` (proven not sent: `PayoutNotSentError` or a manual rail; refunded by the account store's `refundPendingWithdrawal`)",
   },
   {
     file: R + "batch-withdrawals.ts",
@@ -553,7 +564,7 @@ const WRITERS: readonly Writer[] = [
     count: 1,
     principal:
       LOOP +
-      ": the batch-withdrawal fire path, for a queue row it claimed (`pending → firing` CAS) before calling the rail; a fired payout the rail has not confirmed is recorded `processing` (claimed_at = fire time, payout_valid_until = the rail's declared validity or a 24h floor), never `pending`, so only the operator's reconcile settles it — except a rail that declares itself manual (`payoutMode: manual`, Stripe), whose fire sends nothing and is recorded `pending` for the ordinary admin complete/fail (#921)",
+      ": the batch-withdrawal fire path, for a queue row it claimed (`pending → firing` CAS) before calling the rail; a fired payout the rail has not confirmed is recorded `processing` (claimed_at = fire time, payout_valid_until = the rail's declared validity or a 24h floor), never `pending`, so only the operator's reconcile settles it — except a rail that declares itself manual (`payoutMode: manual`, Stripe), whose fire sends nothing and is recorded `pending` for the ordinary admin complete/fail (#921); a failure whose outcome is unknown (any throw but `PayoutNotSentError` on a non-manual rail, a per-item batch failure, a send the process died in) is recorded the same `processing` way with an unresolved-payout note, never refunded",
   },
   {
     file: R + "deposit-detector.ts",
@@ -778,9 +789,9 @@ const WRITERS: readonly Writer[] = [
     file: R + "migration.ts",
     verb: "UPDATE",
     table: "relay_migrations",
-    count: 3,
+    count: 4,
     principal:
-      "`updateMigrationState(db, owner: BoundIdentity, …)`, scoped WHERE motebit_id = owner: /migrate (signature), attestation, export, cancel, depart (each `bindCaller` — #846: any identity's token cancelled, exported or departed B)",
+      "`updateMigrationState(db, owner: BoundIdentity, …)` and `commitDeparture(db, owner: BoundIdentity, …)` (depart's waiver record + `departed` transition, one transaction with the waiver debit), each scoped WHERE motebit_id = unwrapBound(owner): /migrate (signature), attestation, export, cancel, depart (each `bindCaller` — #846: any identity's token cancelled, exported or departed B)",
   },
   {
     file: R + "migration.ts",
@@ -1310,6 +1321,7 @@ const WRITER_HELPERS: ReadonlyArray<{ file: string; fn: string; param: string }>
   { file: R + "event-seq.ts", fn: "readEventsAfterSeq", param: "owner" },
   { file: R + "subscriptions.ts", fn: "setSubscriptionStatus", param: "owner" },
   { file: R + "migration.ts", fn: "updateMigrationState", param: "owner" },
+  { file: R + "migration.ts", fn: "commitDeparture", param: "owner" },
   { file: R + "key-rotation.ts", fn: "insertApproval", param: "owner" },
   { file: R + "credentials.ts", fn: "insertSubmittedCredential", param: "owner" },
   { file: R + "delegation-revocations.ts", fn: "insertDelegationRevocation", param: "owner" },

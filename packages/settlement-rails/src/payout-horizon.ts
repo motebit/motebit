@@ -38,3 +38,29 @@ export function payoutValidityMsOf(rail: object): number | null {
   const v = (rail as PayoutHorizonDeclaration).payoutValidityMs;
   return typeof v === "number" && Number.isFinite(v) && v > 0 ? v : null;
 }
+
+/**
+ * Thrown by a rail's `withdraw()` / `withdrawBatch()` ONLY when it can prove
+ * the payout never left: it rejected the payout before signing or
+ * broadcasting anything (a malformed request, a terminal pre-submission
+ * refusal). The relay refunds a debited payout on this error and on nothing
+ * else — any other throw is "outcome unknown" and is held for the operator's
+ * reconcile (#921). Never throw it after a payload was signed or handed to
+ * a provider: a refund on a payout that then lands pays twice.
+ */
+export class PayoutNotSentError extends Error {
+  readonly payoutNotSent = true as const;
+  constructor(message: string, options?: { cause?: unknown }) {
+    super(message, options);
+    this.name = "PayoutNotSentError";
+  }
+}
+
+/**
+ * True for a rail's proof that a payout never left. Structural (the
+ * `payoutNotSent` brand, not `instanceof`) so a rail built against another
+ * copy of this package is still read correctly.
+ */
+export function isPayoutNotSent(err: unknown): boolean {
+  return err instanceof Error && (err as { payoutNotSent?: unknown }).payoutNotSent === true;
+}
