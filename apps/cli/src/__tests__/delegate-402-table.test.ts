@@ -9,6 +9,9 @@
  *   - direct    — `motebit delegate` (the submission's 402 body, via the helper)
  *   - plan      — `motebit delegate --plan`, driven through the real step adapter
  *   - sovereign — `motebit delegate --sovereign` (the runtime's `DelegationError`)
+ *   - repl      — the REPL's `/delegate`, driven through `handleSlashCommand`
+ *                 against a relay answering the submission with the 402 body;
+ *                 it must print exactly the lines `motebit delegate` prints
  */
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { DeviceCapability, StepStatus } from "@motebit/sdk";
@@ -18,6 +21,10 @@ import {
   describeDelegateSubmit402,
   describeSovereignDelegationRefusal,
 } from "../subcommands/delegate.js";
+import { handleSlashCommand, type ReplContext } from "../index.js";
+import type { MotebitRuntime } from "@motebit/runtime";
+import type { MotebitDatabase } from "@motebit/persistence";
+import type { CliConfig } from "../args.js";
 
 type Remedy = "fund" | "sovereign" | "relay-words";
 
@@ -192,8 +199,45 @@ async function planStepError(body: string): Promise<{ message: string; posts: nu
   throw new Error("expected the step to be refused");
 }
 
+/** Drive the REPL's `/delegate` against a relay answering the submission with `body` at 402. */
+async function replDelegateOutput(body: string): Promise<{ lines: string[]; posts: number }> {
+  let posts = 0;
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (_url: string, init?: RequestInit) => {
+      if (init?.method === "POST") posts++;
+      return new Response(body, { status: 402 });
+    }),
+  );
+  const lines: string[] = [];
+  const capture = (...args: unknown[]): void => {
+    lines.push(args.map(String).join(" "));
+  };
+  vi.spyOn(console, "log").mockImplementation(capture);
+  vi.spyOn(console, "error").mockImplementation(capture);
+  const repl: ReplContext = {
+    moteDb: {} as MotebitDatabase,
+    motebitId: "mote-repl402",
+    mcpAdapters: [],
+  };
+  const config = {
+    syncUrl: "http://relay.test",
+    syncToken: "operator-token",
+  } as unknown as CliConfig;
+  await handleSlashCommand(
+    "delegate",
+    "00000000-0000-4000-8000-000000000402 do the paid thing",
+    {} as MotebitRuntime,
+    config,
+    undefined,
+    repl,
+  );
+  return { lines, posts };
+}
+
 afterEach(() => {
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
 });
 
 describe("delegate 402 remedy table (relay code × CLI path)", () => {
@@ -211,6 +255,15 @@ describe("delegate 402 remedy table (relay code × CLI path)", () => {
           expect(message).toContain("#887");
           expect(message).toContain("motebit delegate --sovereign");
         }
+        expect(posts, "a 402 refusal is not retried").toBe(1);
+      });
+
+      it(`repl /delegate: ${row.direct}, the same lines as \`motebit delegate\``, async () => {
+        const { lines, posts } = await replDelegateOutput(row.body);
+        const expected = describeDelegateSubmit402(row.body);
+        expect(lines).toEqual(expect.arrayContaining(expected));
+        assertRemedy(lines.join("\n"), row.direct, row);
+        expect(lines.join("\n"), "never the raw relay body").not.toMatch(/"status":\s*402/);
         expect(posts, "a 402 refusal is not retried").toBe(1);
       });
 
