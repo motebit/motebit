@@ -1,5 +1,36 @@
 # create-motebit Changelog
 
+## 1.2.8
+
+### Patch Changes
+
+- 9e32cf9: `create-motebit` writes the same `config.json` the `motebit` CLI keeps its identity key in, so it now obeys the same three rules — for the operator's `~/.motebit/config.json` and for a scaffolded agent's own `<agent>/.motebit/config.json`.
+
+  - **Absence is not damage.** A config that exists but cannot be read is refused rather than read as empty. That mattered twice over: the guard that refuses to replace an existing identity decides from `motebit_id` alone, so an unreadable config looked like a fresh machine and was overwritten.
+  - **Damage is never overwritten.** With `--force`, the scaffold proceeds and the damaged bytes are kept as `config.json.clobbered-<time>` first; without it, it refuses and changes nothing.
+  - **Atomic and owner-only.** Configs (including the scaffolded agent's, which holds its only key copy and was written world-readable) are staged `0600`, fsynced and renamed into place; a pre-existing world-readable config is narrowed to `0600` when read.
+
+  `create-motebit rotate` no longer has a failure point that loses a key. Before any file that names or holds a key is replaced, the current config (the old key) is kept as `config.json.pre-rotation-<time>` and the next config (the new key) is written as `config.json.rotation-next-<time>`, both `0600`. Only then are `motebit.md.backup`, `motebit.md` and the config replaced, each atomically; on success the next-config copy is removed and the old key's copy is KEPT (see the build-3 changeset). If a step fails, the command says which key `motebit.md` names, where each key is held, and the one `mv` that finishes the job (naming the config's real path, so a symlinked config keeps its link). The rotated file is verified before anything is written. (Previously an interrupted rotate could leave `motebit.md` naming a key whose private half existed nowhere.)
+
+  The agent-identity guard now applies to interactive runs too: `create-motebit <dir> --agent` refuses when `<dir>/.motebit/config.json` already exists, unless `--force`. With `--force` — here and when a guided scaffold replaces an existing identity — the replaced config is kept as `config.json.clobbered-<time>` before anything is written.
+
+  Deliberate edges: a symlinked config is replaced at the file it points to (the link survives), and every preserved copy is of the real file's bytes (a byte copy created `0600` from the start; a hard link only for a file this process cannot read), never a second name for the symlink; a config readable by group or others is narrowed to `0600` when read, even if that was deliberate; an empty config is damage, not a first run.
+
+- 9e32cf9: Key-file durability, build 3 (`docs/proposals/key-file-durability-v1.md`, lane A).
+
+  - **`create-motebit rotate` refuses an identity with a relay configured** (`sync_url`, a pinned `relay_public_key`, or `MOTEBIT_SYNC_URL`) and points at `motebit rotate`: this command never talks to a relay, so it would move the key locally while the relay kept the old one. It also refuses while a `motebit rotate` is in flight (`pending-rotation.json`) or an earlier `create-motebit rotate` left its new key stranded in `config.json.rotation-next-*`.
+  - **The retired key is kept.** After a successful rotation the old key stays at `config.json.pre-rotation-<time>` (`0600`) and the command says so. The founder's ruling: a retired key is erased only after a relay accepted the succession, which this command cannot know.
+  - **No lost update.** Writes compare the identity against what was read and take the same `config.json.lock` the `motebit` CLI takes: a save that does not change the identity keeps a newer key another process committed; a replacement decided on a state that no longer exists is refused.
+  - **Replacing an identity keeps its rotation in flight.** A guided replace or `--agent --force` moves the replaced identity's `pending-rotation.json` aside as `pending-rotation.json.clobbered-<time>` instead of leaving it for the next `motebit rotate` to delete.
+  - **`motebit.md`** files (project, agent, `~/.motebit` snapshot) are written atomically, and one that names another identity is kept as `motebit.md.clobbered-<time>`. An agent's key is written before the files that name it.
+  - A damaged config readable by others is narrowed to `0600` by the read that refuses it; a config symlink whose target is missing is refused, never replaced; preserved copies are byte copies; config directories are created `0700`.
+
+  A kept copy is refused, rather than attempted, when the file to keep cannot be resolved at all (a dangling or looping link, or nothing there): nothing is changed.
+
+  An identity-changing config write also keeps a replaced `motebit_id` / `device_id` / `device_public_key`, and a stale config lock is broken atomically.
+
+  The config lock identifies a lock by its content (`<pid> <nonce>`), never its inode (Linux reuses inodes); a holder releases only its own lock.
+
 ## 1.2.7
 
 ### Patch Changes
