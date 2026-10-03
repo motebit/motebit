@@ -733,7 +733,7 @@ pnpm --filter @motebit/runtime test
 pnpm --filter @motebit/api build
 ```
 
-Requires: Node >= 20, pnpm 9.15.
+Requires: Node >= 22, pnpm 9.15.
 
 ### Turbo remote cache
 

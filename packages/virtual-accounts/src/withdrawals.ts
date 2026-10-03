@@ -124,24 +124,29 @@ export function requestWithdrawal(
   const withdrawalId = (args.newId ?? (() => crypto.randomUUID()))();
   const now = (args.now ?? (() => Date.now()))();
 
-  const newBalance = store.debit(
-    args.motebitId,
-    args.amountMicro,
-    "withdrawal",
-    withdrawalId,
+  // The key check, the debit and the withdrawal row are ONE store operation:
+  // a failure anywhere leaves neither, so the same-key replay debits once.
+  const result = store.debitAndRecordWithdrawal(
+    {
+      withdrawal_id: withdrawalId,
+      motebit_id: args.motebitId,
+      amount: args.amountMicro,
+      currency: "USD",
+      destination,
+      idempotency_key: args.idempotencyKey ?? null,
+      requested_at: now,
+    },
     `Withdrawal request: $${fromMicro(args.amountMicro).toFixed(6)} to ${destination}`,
   );
-  if (newBalance === null) return null;
-
-  const record = store.insertWithdrawal({
-    withdrawal_id: withdrawalId,
-    motebit_id: args.motebitId,
-    amount: args.amountMicro,
-    currency: "USD",
-    destination,
-    idempotency_key: args.idempotencyKey ?? null,
-    requested_at: now,
-  });
+  if (result === null) return null;
+  if ("existing" in result) {
+    logger.info("withdrawal.idempotent", {
+      motebitId: args.motebitId,
+      idempotencyKey: args.idempotencyKey,
+    });
+    return result;
+  }
+  const { record, newBalance } = result;
 
   logger.info("withdrawal.requested", {
     motebitId: args.motebitId,

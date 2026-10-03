@@ -3,7 +3,7 @@ title: Architecture
 description: Monorepo structure, enforced layers, services, specs, and data flow
 ---
 
-Motebit is a pnpm monorepo orchestrated by Turborepo. TypeScript throughout, Node 20+, pnpm 9.15. Every I/O boundary is an adapter so the interior never binds to a specific platform.
+Motebit is a pnpm monorepo orchestrated by Turborepo. TypeScript throughout, Node 22+, pnpm 9.15. Every I/O boundary is an adapter so the interior never binds to a specific platform.
 
 The shape is **53 packages · 7 architectural layers · 5 surfaces + 6 supporting apps · 11 services · 36 open specs**. Layer membership is enforced by `pnpm check-deps` in CI — violations break the build.
 

@@ -164,6 +164,23 @@ export interface AccountStore {
     failedAt?: number,
   ): { motebitId: string; amount: number } | null;
   /**
+   * Debit a withdrawal AND record it, **atomically**: the idempotency-key
+   * check, the balance debit, its `withdrawal`-type ledger row (reference =
+   * `withdrawal_id`) and the `pending` withdrawal row commit together or not
+   * at all — never a debit with no withdrawal (which the same-key replay
+   * would then debit again), never a withdrawal with no debit.
+   *
+   * Returns `{ existing }` when `idempotency_key` is non-null and a
+   * withdrawal for `(motebit_id, key)` already exists (nothing debited),
+   * `null` on insufficient funds (nothing written), else the new record and
+   * the balance after. The caller owns the withdrawable-hold policy check;
+   * the store honors the raw balance invariant (`balance >= amount`).
+   */
+  debitAndRecordWithdrawal(
+    w: NewWithdrawal,
+    description: string,
+  ): { record: WithdrawalRequest; newBalance: number } | { existing: WithdrawalRequest } | null;
+  /**
    * Record why a withdrawal's automated payout is UNRESOLVED, leaving it
    * `processing` and its balance debited (issue #920/#921): e.g. the last
    * broadcast landed-and-failed but an earlier broadcast of the same payout
@@ -218,9 +235,9 @@ export interface AccountStore {
    *
    * This is the Rule 12 invariant expressed at the interface level:
    * "Aggregated withdrawals debit at enqueue time; the fire path does
-   * NOT re-debit; a rail failure parks the row as `failed` with the
-   * debit still in place — the debit is the audit trail that funds
-   * were claimed." Breaking that ordering opens a double-spend window
+   * NOT re-debit." A rail failure is refunded only when the payout
+   * provably never left, else held for the operator's reconcile (the
+   * relay's `batch-withdrawals.ts`). Breaking that ordering opens a double-spend window
    * against concurrent sweeps. The store implementation MUST preserve
    * cross-table atomicity; a generic `withTransaction(fn)` leak is
    * explicitly NOT part of this interface.
@@ -598,6 +615,27 @@ export class InMemoryAccountStore implements AccountStore {
 
   getUnspentGrantHold(motebitId: string): number {
     return this._unspentGrantHold(motebitId);
+  }
+
+  debitAndRecordWithdrawal(
+    w: NewWithdrawal,
+    description: string,
+  ): { record: WithdrawalRequest; newBalance: number } | { existing: WithdrawalRequest } | null {
+    // In-memory: the event loop serializes, so the key check, the debit and
+    // the withdrawal row happen on one continuous tick.
+    if (w.idempotency_key != null) {
+      const existing = this.getWithdrawalByIdempotencyKey(w.motebit_id, w.idempotency_key);
+      if (existing) return { existing };
+    }
+    const newBalance = this.debit(
+      w.motebit_id,
+      w.amount,
+      "withdrawal",
+      w.withdrawal_id,
+      description,
+    );
+    if (newBalance === null) return null;
+    return { record: this.insertWithdrawal(w), newBalance };
   }
 
   debitAndEnqueuePending(args: {

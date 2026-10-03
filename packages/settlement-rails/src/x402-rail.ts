@@ -10,7 +10,7 @@
  * client interface. Does not reimplement the protocol.
  */
 
-import { X402_WITHDRAWAL_VALIDITY_SECONDS } from "./payout-horizon.js";
+import { PayoutNotSentError, X402_WITHDRAWAL_VALIDITY_SECONDS } from "./payout-horizon.js";
 import { toMicro } from "@motebit/protocol";
 import type { WithdrawableGuestRail, PaymentProof, WithdrawalResult } from "@motebit/sdk";
 import { type RailLogger, NOOP_LOGGER } from "./logger.js";
@@ -99,10 +99,10 @@ export class X402SettlementRail implements WithdrawableGuestRail {
     idempotencyKey: string,
   ): Promise<WithdrawalResult> {
     if (amount <= 0) {
-      throw new Error("Withdrawal amount must be positive");
+      throw new PayoutNotSentError("Withdrawal amount must be positive");
     }
     if (!destination) {
-      throw new Error("Destination address is required for x402 withdrawal");
+      throw new PayoutNotSentError("Destination address is required for x402 withdrawal");
     }
 
     // Construct x402 payment payload for facilitator settlement.
