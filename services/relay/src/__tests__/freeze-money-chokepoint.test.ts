@@ -116,15 +116,23 @@ const hook = vi.hoisted(() => ({
   beforeSign: null as null | (() => Promise<void>),
   /** The anchoring cut's await before its batch write (its Merkle build). */
   beforeMerkle: null as null | (() => Promise<void>),
+  /**
+   * The raw `sign` await — the settlement forward signs its body with it right
+   * before the send, after the forward's money already committed.
+   */
+  beforeRawSign: null as null | (() => Promise<void>),
 }));
 vi.mock("@motebit/encryption", async (importOriginal) => {
   const m = await importOriginal<typeof import("@motebit/encryption")>();
   const wrap =
-    <A extends unknown[], R>(f: (...a: A) => Promise<R>) =>
+    <A extends unknown[], R>(
+      f: (...a: A) => Promise<R>,
+      slot: "beforeSign" | "beforeRawSign" = "beforeSign",
+    ) =>
     async (...a: A): Promise<R> => {
-      const before = hook.beforeSign;
+      const before = hook[slot];
       if (before != null) {
-        hook.beforeSign = null;
+        hook[slot] = null;
         await before();
       }
       return f(...a);
@@ -142,6 +150,7 @@ vi.mock("@motebit/encryption", async (importOriginal) => {
     buildMerkleTree,
     signSettlement: wrap(m.signSettlement),
     signFederationSettlement: wrap(m.signFederationSettlement),
+    sign: wrap(m.sign, "beforeRawSign"),
   };
 });
 vi.mock(
@@ -170,12 +179,14 @@ afterAll(async () => {
 beforeEach(() => {
   hook.beforeSign = null;
   hook.beforeMerkle = null;
+  hook.beforeRawSign = null;
   facilitator.reset();
   vi.spyOn(console, "warn").mockImplementation(() => {});
 });
 afterEach(() => {
   hook.beforeSign = null;
   hook.beforeMerkle = null;
+  hook.beforeRawSign = null;
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
@@ -1222,6 +1233,108 @@ describe("freeze — the background writers a pass can carry past the freeze", (
       expect(retryRow().status).toBe("failed");
       expect(forwardOf(db, fwd!.settlementId)?.status).toBe("failed");
       expect(balance(relay, payer), "RESUME: refunded once").toBe(1_000_000);
+    } finally {
+      await relay.close();
+    }
+  });
+
+  // The forward lifecycle's send claim sits AFTER the body's signing await
+  // (`beginForwardSend`), on the first send and on every retry. A freeze that
+  // lands inside that await reaches neither peerFetch nor a settlement signer,
+  // so only these two tests see each call site: without the claim the send
+  // goes out while frozen.
+  const recordingPeer = (sent: string[]) => async (_url: string, init?: RequestInit) => {
+    sent.push((JSON.parse(init?.body as string) as { task_id: string }).task_id);
+    return new Response("{}", { status: 200 });
+  };
+  const retryRowOf = (relay: SyncRelay, taskId: string) =>
+    relay.moteDb.db
+      .prepare(
+        "SELECT settlement_id, status, attempts FROM relay_settlement_retries WHERE task_id = ?",
+      )
+      .get(taskId) as { settlement_id: string; status: string; attempts: number };
+
+  it("settlement forward, first send: a freeze landing while the body is signed sends nothing; the retry after unfreeze sends it once", async () => {
+    const relay = await createTestRelay({ enableDeviceAuth: false });
+    try {
+      const db = relay.moteDb.db;
+      const peer = await addPeer(relay);
+      const { taskId } = heldAllocation(relay, "sign-payer", "sign-worker", 1_000_000);
+      const sent: string[] = [];
+      const peerFetch = recordingPeer(sent);
+      hook.beforeRawSign = () => freeze(relay);
+      const r = await forwardOriginSettlement(db, relayIdentityOf(relay), {
+        taskId,
+        peerRelayId: peer.id,
+        grossAmount: 1_000_000,
+        platformFeeRate: 0.05,
+        receiptHash: `rh-${taskId}`,
+        x402TxHash: null,
+        x402Network: null,
+        peerFetch: peerFetch as never,
+      });
+      expect(hook.beforeRawSign, "the freeze landed during the signing await").toBeNull();
+      expect(r, "deferred to the committed retry row").toBe("queued");
+      expect(sent, "FROZEN: nothing sent").toHaveLength(0);
+      const row = retryRowOf(relay, taskId);
+      expect(row.status).toBe("pending");
+      expect(forwardOf(db, row.settlement_id)?.status).toBe("pending");
+
+      db.prepare("UPDATE relay_settlement_retries SET next_retry_at = 0").run();
+      const pass = () =>
+        processSettlementRetries(
+          db,
+          relayIdentityOf(relay),
+          undefined,
+          undefined,
+          peerFetch as never,
+        );
+      await pass();
+      expect(sent, "a pass while frozen sends nothing").toHaveLength(0);
+
+      await unfreeze(relay);
+      await pass();
+      expect(sent, "RESUME: sent once").toEqual([taskId]);
+      expect(forwardOf(db, row.settlement_id)?.status).toBe("delivered");
+      await pass();
+      expect(sent, "never twice").toEqual([taskId]);
+    } finally {
+      await relay.close();
+    }
+  });
+
+  it("settlement-forward retry: a freeze landing while the retry body is signed sends nothing and leaves the retry as it was; after unfreeze it is sent once", async () => {
+    const relay = await createTestRelay({ enableDeviceAuth: false });
+    try {
+      const db = relay.moteDb.db;
+      const peer = await addPeer(relay);
+      const [fwd] = await queuedForwards(relay, peer, 1);
+      const sent: string[] = [];
+      const peerFetch = recordingPeer(sent);
+      const pass = () =>
+        processSettlementRetries(
+          db,
+          relayIdentityOf(relay),
+          undefined,
+          undefined,
+          peerFetch as never,
+        );
+      hook.beforeRawSign = () => freeze(relay);
+      await pass();
+      expect(hook.beforeRawSign, "the freeze landed during the signing await").toBeNull();
+      expect(sent, "FROZEN: nothing sent").toHaveLength(0);
+      expect(retryRowOf(relay, fwd!.taskId), "the retry is left as it was").toMatchObject({
+        status: "pending",
+        attempts: 0,
+      });
+      expect(forwardOf(db, fwd!.settlementId)?.status).toBe("pending");
+
+      await unfreeze(relay);
+      await pass();
+      expect(sent, "RESUME: sent once").toEqual([fwd!.taskId]);
+      expect(forwardOf(db, fwd!.settlementId)?.status).toBe("delivered");
+      await pass();
+      expect(sent, "never twice").toEqual([fwd!.taskId]);
     } finally {
       await relay.close();
     }

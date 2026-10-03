@@ -22,6 +22,9 @@
  *      — the hard backstop on total give-away per day regardless of IP rotation.
  *
  * Best-effort: any failure returns "not granted" and never breaks token issuance.
+ * A grant refused by the emergency freeze (the money guards abort the credit)
+ * is `reason: "frozen"` — deferred, not denied: nothing is recorded, so the
+ * next eligible call after unfreeze grants it once.
  *
  * INFERENCE-ONLY, non-withdrawable. The grant is spendable on cloud inference
  * (the proxy usage debit) but can never leave as cash: its unspent remainder is
@@ -40,6 +43,7 @@ import {
   FREE_CREDIT_REFERENCE_PREFIX,
 } from "./accounts.js";
 import { createLogger } from "./logger.js";
+import { isEmergencyFrozenAbort } from "./freeze.js";
 
 const logger = createLogger({ service: "free-credit" });
 
@@ -72,7 +76,7 @@ export type FreeCreditResult =
   | { granted: true; amountMicro: number }
   | {
       granted: false;
-      reason: "disabled" | "already_granted" | "ip_cap" | "daily_budget" | "error";
+      reason: "disabled" | "already_granted" | "ip_cap" | "daily_budget" | "frozen" | "error";
     };
 
 /** UTC day key (YYYY-MM-DD) for the per-IP daily counter + budget window. */
@@ -185,9 +189,72 @@ export function grantFreeCreditIfEligible(
         grantedMicro: cfg.amountMicro,
         day,
       });
+<<<<<<< HEAD
       return { granted: true, amountMicro: cfg.amountMicro };
+=======
+      return { granted: false, reason: "daily_budget" };
+    }
+
+    // 3. Per-IP daily cap.
+    const ipRow = db
+      .prepare("SELECT count FROM relay_free_grants WHERE ip = ? AND day = ?")
+      .get(ip, day) as { count: number } | undefined;
+    if ((ipRow?.count ?? 0) >= cfg.ipDailyCap) {
+      // Activation signal: shared/NAT IPs exhausting the per-IP grant cap.
+      // Previously silent — now the cap is observable.
+      logger.warn("free_credit.grant_decision", {
+        schemaVersion: 1,
+        outcome: "denied",
+        reason: "ip_cap",
+        motebitId,
+        day,
+      });
+      return { granted: false, reason: "ip_cap" };
+    }
+
+    // Grant: credit the account and bump the per-IP counter, together — a
+    // credit the freeze refuses counts no grant against the IP.
+    db.transaction(() => {
+      getOrCreateAccount(db, motebitId);
+      creditAccount(
+        db,
+        motebitId,
+        cfg.amountMicro,
+        "deposit",
+        ref,
+        "Welcome credit — free first taste of motebit cloud",
+      );
+      db.prepare(
+        `INSERT INTO relay_free_grants (ip, day, count) VALUES (?, ?, 1)
+         ON CONFLICT(ip, day) DO UPDATE SET count = count + 1`,
+      ).run(ip, day);
+    });
+
+    // `motebitId` is the in-service join key (relay is identity's home; consistent
+    // with `account.debit`). Raw `ip` is deliberately NOT logged — the per-IP cap
+    // counter lives in `relay_free_grants`; activation telemetry doesn't need the
+    // network identifier.
+    logger.info("free_credit.grant_decision", {
+      schemaVersion: 1,
+      outcome: "granted",
+      reason: "granted",
+      motebitId,
+      grantedMicro: cfg.amountMicro,
+      day,
+>>>>>>> origin/main
     });
   } catch (err) {
+    if (isEmergencyFrozenAbort(err)) {
+      // Deferred, not denied: nothing committed, so the next eligible call
+      // after unfreeze grants it.
+      logger.warn("free_credit.grant_decision", {
+        schemaVersion: 1,
+        outcome: "deferred",
+        reason: "emergency_frozen",
+        motebitId,
+      });
+      return { granted: false, reason: "frozen" };
+    }
     logger.warn("free_credit.grant_decision", {
       schemaVersion: 1,
       outcome: "error",
