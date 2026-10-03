@@ -4548,12 +4548,17 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<TaskRoutesHan
                   (requiredCaps as readonly string[]).includes(p.capability),
                 );
                 if (fedPrice != null && fedPrice.unit_cost > 0) {
-                  // The routing catch rethrows HTTPException (see "Re-throw
-                  // intentional HTTP errors" below) → surfaces as 402.
-                  throw new HTTPException(402, {
-                    message:
-                      "Paid federated delegation requires a 3-leg P2P payment_proof (submit with target_agent + payment_proof). Deposit-funded cross-operator settlement is closed. See off-ramp-as-user-action.md.",
-                  });
+                  // The same refusal as the Arc 3.5 gate (paid delegation to
+                  // another agent without a P2P proof), so the same stable
+                  // code: a client tells "pay P2P" from "deposit" by it. A
+                  // bare HTTPException serialized with no code, and clients
+                  // fell back to the deposit remedy. The routing catch
+                  // rethrows RelayError → surfaces as 402.
+                  throw new TaskError(
+                    "TASK_P2P_PROOF_REQUIRED",
+                    "Paid federated delegation requires a 3-leg P2P payment_proof (submit with target_agent + payment_proof). Deposit-funded cross-operator settlement is closed. See off-ramp-as-user-action.md.",
+                    402,
+                  );
                 }
 
                 try {
@@ -4645,8 +4650,8 @@ export async function registerTaskRoutes(deps: TasksDeps): Promise<TaskRoutesHan
           }
         }
       } catch (err) {
-        // Re-throw intentional HTTP errors (e.g. 402 insufficient budget)
-        if (err instanceof HTTPException) throw err;
+        // Re-throw intentional errors (e.g. 402 TASK_P2P_PROOF_REQUIRED)
+        if (err instanceof RelayError || err instanceof HTTPException) throw err;
         // Scoring failed — fall through to broadcast
       }
     }

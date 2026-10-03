@@ -312,26 +312,75 @@ async function handleDelegatePlan(
 // motebit delegate "<prompt>" — delegate a task to a worker agent
 // ---------------------------------------------------------------------------
 
+/** The CLI paths that submit a task: `delegate`, and `delegate --plan`. */
+export type DelegateSubmitPath = "direct" | "plan";
+
+const P2P_SETTLES_LINE =
+  "Paid delegation to another agent settles P2P: the relay does not take deposit-funded payment for it.";
+
 /**
- * The remedy for a 402 on task submission. The relay answers 402 both for an
- * empty virtual account and for the Arc 3.5 gate `TASK_P2P_PROOF_REQUIRED`:
- * paid delegation to another agent must settle P2P, so depositing with
- * `motebit fund` can never clear it (off-ramp-as-user-action.md § Arc 3.5).
+ * The remedy for a 402 on task submission — the one reading every delegate
+ * path routes its 402 through. The relay answers 402 for different refusals
+ * (`{ error, code, status }`, services/relay/src/errors.ts), and only one of
+ * them is cleared by a deposit:
+ *   - `INSUFFICIENT_FUNDS`, or a codeless 402 (the x402 challenge, a
+ *     facilitator outage, a non-JSON body: the spendable balance is below the
+ *     price) — `motebit fund`.
+ *   - `TASK_P2P_PROOF_REQUIRED` — paid delegation to another agent, local or
+ *     on a federated peer, must settle P2P (off-ramp-as-user-action.md
+ *     § Arc 3.5), so `motebit fund` can never clear it — `--sovereign`.
+ *   - any other code (an x402 settlement refusal, an outcome to reconcile, a
+ *     code this client does not know) — the relay's own words, never `fund`.
  */
-export function describeDelegateSubmit402(bodyText: string): string[] {
+export function describeDelegateSubmit402(
+  bodyText: string,
+  path: DelegateSubmitPath = "direct",
+): string[] {
   let code: unknown;
+  let error: unknown;
   try {
-    code = (JSON.parse(bodyText) as { code?: unknown }).code;
+    ({ code, error } = JSON.parse(bodyText) as { code?: unknown; error?: unknown });
   } catch {
     code = undefined;
   }
   if (code === "TASK_P2P_PROOF_REQUIRED") {
-    return [
-      "Paid delegation to another agent settles P2P: the relay does not take deposit-funded payment for it.",
-      "Re-run with `--sovereign` to pay the worker directly from your Solana wallet.",
-    ];
+    return path === "plan"
+      ? [
+          P2P_SETTLES_LINE,
+          "`delegate --plan` cannot pay P2P yet (#887): send the paid step on its own with `motebit delegate --sovereign`.",
+        ]
+      : [
+          P2P_SETTLES_LINE,
+          "Re-run with `--sovereign` to pay the worker directly from your Solana wallet.",
+        ];
+  }
+  if (typeof code === "string" && code !== "INSUFFICIENT_FUNDS") {
+    const words = typeof error === "string" ? error : bodyText;
+    return [`The relay refused payment (${code}): ${sanitizeRelayText(words).slice(0, 300)}`];
   }
   return ["Insufficient balance. Run `motebit fund <amount>` to deposit."];
+}
+
+/**
+ * The remedy for a 402 on `delegate --sovereign`, read from the runtime's
+ * `DelegationError`. That path pays from the Solana wallet and never draws
+ * on a relay deposit, so a deposit is never the remedy, whatever the code.
+ * Empty for any other status.
+ */
+export function describeSovereignDelegationRefusal(error: {
+  code: string;
+  message: string;
+  status?: number;
+}): string[] {
+  if (error.status !== 402) return [];
+  if (error.code === "payment_proof_required") {
+    return [
+      "The relay found no usable P2P payment proof on this submission. `--sovereign` pays from your Solana wallet, so a relay deposit cannot clear this.",
+    ];
+  }
+  return [
+    "`--sovereign` pays from your Solana wallet, not a relay deposit, so depositing cannot clear this 402.",
+  ];
 }
 
 export async function handleDelegate(config: CliConfig): Promise<void> {
@@ -474,6 +523,7 @@ export async function handleDelegate(config: CliConfig): Promise<void> {
           "Hint: a pair with no trust history needs `--pay-new-agents` (cold-start acknowledgment).",
         );
       }
+      for (const line of describeSovereignDelegationRefusal(result.error)) console.error(line);
       process.exit(1);
     }
 
@@ -812,7 +862,8 @@ export function createHttpPollingDelegationAdapter(
     );
 
     if (resp.status === 402) {
-      const err: StepAttemptError = new Error("Insufficient balance (HTTP 402)");
+      const remedy = describeDelegateSubmit402(await resp.text(), "plan").join(" ");
+      const err: StepAttemptError = new Error(`${remedy} (HTTP 402)`);
       err.conclusive = true; // refused before admission
       throw err;
     }
