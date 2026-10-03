@@ -2026,11 +2026,11 @@ export const CORPUS_INDEX: CorpusIndex = {
       source: "README.md",
       title: "Development",
       content:
-        "```bash\npnpm install           # Node >= 20, pnpm 9.15\npnpm run build         # Build all packages\npnpm run test          # Run all tests\npnpm run typecheck     # Type-check all packages\npnpm run lint          # Lint all packages\n```",
+        "```bash\npnpm install           # Node >= 22, pnpm 9.15\npnpm run build         # Build all packages\npnpm run test          # Run all tests\npnpm run typecheck     # Type-check all packages\npnpm run lint          # Lint all packages\n```",
       termFrequencies: {
         "9": 1,
         "15": 1,
-        "20": 1,
+        "22": 1,
         bash: 1,
         pnpm: 6,
         install: 1,
@@ -6490,8 +6490,7 @@ export const CORPUS_INDEX: CorpusIndex = {
     "11": 4,
     "12": 2,
     "15": 2,
-    "20": 1,
-    "22": 1,
+    "22": 2,
     "26": 1,
     "36": 4,
     "42": 1,
@@ -8761,6 +8760,6 @@ export const CORPUS_INDEX: CorpusIndex = {
   },
   averageLength: 94.66666666666667,
   totalDocuments: 84,
-  sourceHash: "8abec8b852164fccb9c65e6c7828653d9fcc41136b8bb0b4e5f7823a3fdc1564",
-  generatedAt: "sha256:8abec8b852164fcc",
+  sourceHash: "f7d5380ed48b6c0338c27ac02b5787808b5ca9de669b47a5f5f8635c537b9c48",
+  generatedAt: "sha256:f7d5380ed48b6c03",
 };

@@ -102,64 +102,67 @@ export function grantFreeCreditIfEligible(
   if (cfg.amountMicro <= 0) return { granted: false, reason: "disabled" };
 
   try {
-    const ref = `${FREE_CREDIT_REFERENCE_PREFIX}${motebitId}`;
+    // The one-time check, the caps, the credit and the per-IP counter are ONE
+    // transaction: a failure anywhere leaves no credit without its counter and
+    // no counter without its credit, and the reference check sees exactly what
+    // committed (a credit whose ledger row failed is rolled back with it).
+    return db.transaction((): FreeCreditResult => {
+      const ref = `${FREE_CREDIT_REFERENCE_PREFIX}${motebitId}`;
 
-    // 1. One-time per motebit — the grant reference is unique per identity.
-    const existing = db
-      .prepare("SELECT 1 AS n FROM relay_transactions WHERE reference_id = ? LIMIT 1")
-      .get(ref) as { n: number } | undefined;
-    if (existing) return { granted: false, reason: "already_granted" };
+      // 1. One-time per motebit — the grant reference is unique per identity.
+      const existing = db
+        .prepare("SELECT 1 AS n FROM relay_transactions WHERE reference_id = ? LIMIT 1")
+        .get(ref) as { n: number } | undefined;
+      if (existing) return { granted: false, reason: "already_granted" };
 
-    const day = dayKey(nowMs);
+      const day = dayKey(nowMs);
 
-    // 2. Global daily budget — total of today's free-credit grants, counted
-    //    from `relay_free_grants` (keyed by the SAME logical `day` as the
-    //    per-IP cap below). Every grant is exactly `cfg.amountMicro`, so the
-    //    grant count × amount equals the dollars granted today. Counting by the
-    //    logical day (not the ledger's wall-clock `created_at`) keeps the
-    //    budget consistent with the day boundary even when an injected clock
-    //    (tests, replay) diverges from real time — the ledger's `created_at`
-    //    is real-wall-clock, so a `created_at >= dayStart` sum mis-attributed
-    //    a prior simulated day's grants whenever the real clock crossed a UTC
-    //    midnight relative to the injected `nowMs`.
-    const grantsRow = db
-      .prepare("SELECT COALESCE(SUM(count), 0) AS grants FROM relay_free_grants WHERE day = ?")
-      .get(day) as { grants: number } | undefined;
-    const spent = (grantsRow?.grants ?? 0) * cfg.amountMicro;
-    if (spent + cfg.amountMicro > cfg.dailyBudgetMicro) {
-      // Activation signal: a NEW motebit got zero credit because the global
-      // give-away budget is drained — it hits the setup wall on message one.
-      logger.warn("free_credit.grant_decision", {
-        schemaVersion: 1,
-        outcome: "denied",
-        reason: "daily_budget",
-        motebitId,
-        spent,
-        day,
-      });
-      return { granted: false, reason: "daily_budget" };
-    }
+      // 2. Global daily budget — total of today's free-credit grants, counted
+      //    from `relay_free_grants` (keyed by the SAME logical `day` as the
+      //    per-IP cap below). Every grant is exactly `cfg.amountMicro`, so the
+      //    grant count × amount equals the dollars granted today. Counting by the
+      //    logical day (not the ledger's wall-clock `created_at`) keeps the
+      //    budget consistent with the day boundary even when an injected clock
+      //    (tests, replay) diverges from real time — the ledger's `created_at`
+      //    is real-wall-clock, so a `created_at >= dayStart` sum mis-attributed
+      //    a prior simulated day's grants whenever the real clock crossed a UTC
+      //    midnight relative to the injected `nowMs`.
+      const grantsRow = db
+        .prepare("SELECT COALESCE(SUM(count), 0) AS grants FROM relay_free_grants WHERE day = ?")
+        .get(day) as { grants: number } | undefined;
+      const spent = (grantsRow?.grants ?? 0) * cfg.amountMicro;
+      if (spent + cfg.amountMicro > cfg.dailyBudgetMicro) {
+        // Activation signal: a NEW motebit got zero credit because the global
+        // give-away budget is drained — it hits the setup wall on message one.
+        logger.warn("free_credit.grant_decision", {
+          schemaVersion: 1,
+          outcome: "denied",
+          reason: "daily_budget",
+          motebitId,
+          spent,
+          day,
+        });
+        return { granted: false, reason: "daily_budget" };
+      }
 
-    // 3. Per-IP daily cap.
-    const ipRow = db
-      .prepare("SELECT count FROM relay_free_grants WHERE ip = ? AND day = ?")
-      .get(ip, day) as { count: number } | undefined;
-    if ((ipRow?.count ?? 0) >= cfg.ipDailyCap) {
-      // Activation signal: shared/NAT IPs exhausting the per-IP grant cap.
-      // Previously silent — now the cap is observable.
-      logger.warn("free_credit.grant_decision", {
-        schemaVersion: 1,
-        outcome: "denied",
-        reason: "ip_cap",
-        motebitId,
-        day,
-      });
-      return { granted: false, reason: "ip_cap" };
-    }
+      // 3. Per-IP daily cap.
+      const ipRow = db
+        .prepare("SELECT count FROM relay_free_grants WHERE ip = ? AND day = ?")
+        .get(ip, day) as { count: number } | undefined;
+      if ((ipRow?.count ?? 0) >= cfg.ipDailyCap) {
+        // Activation signal: shared/NAT IPs exhausting the per-IP grant cap.
+        // Previously silent — now the cap is observable.
+        logger.warn("free_credit.grant_decision", {
+          schemaVersion: 1,
+          outcome: "denied",
+          reason: "ip_cap",
+          motebitId,
+          day,
+        });
+        return { granted: false, reason: "ip_cap" };
+      }
 
-    // Grant: credit the account and bump the per-IP counter, together — a
-    // credit the freeze refuses counts no grant against the IP.
-    db.transaction(() => {
+      // Grant: credit the account, then bump the per-IP counter.
       getOrCreateAccount(db, motebitId);
       creditAccount(
         db,
@@ -173,21 +176,21 @@ export function grantFreeCreditIfEligible(
         `INSERT INTO relay_free_grants (ip, day, count) VALUES (?, ?, 1)
          ON CONFLICT(ip, day) DO UPDATE SET count = count + 1`,
       ).run(ip, day);
-    });
 
-    // `motebitId` is the in-service join key (relay is identity's home; consistent
-    // with `account.debit`). Raw `ip` is deliberately NOT logged — the per-IP cap
-    // counter lives in `relay_free_grants`; activation telemetry doesn't need the
-    // network identifier.
-    logger.info("free_credit.grant_decision", {
-      schemaVersion: 1,
-      outcome: "granted",
-      reason: "granted",
-      motebitId,
-      grantedMicro: cfg.amountMicro,
-      day,
+      // `motebitId` is the in-service join key (relay is identity's home; consistent
+      // with `account.debit`). Raw `ip` is deliberately NOT logged — the per-IP cap
+      // counter lives in `relay_free_grants`; activation telemetry doesn't need the
+      // network identifier.
+      logger.info("free_credit.grant_decision", {
+        schemaVersion: 1,
+        outcome: "granted",
+        reason: "granted",
+        motebitId,
+        grantedMicro: cfg.amountMicro,
+        day,
+      });
+      return { granted: true, amountMicro: cfg.amountMicro };
     });
-    return { granted: true, amountMicro: cfg.amountMicro };
   } catch (err) {
     if (isEmergencyFrozenAbort(err)) {
       // Deferred, not denied: nothing committed, so the next eligible call

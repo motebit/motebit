@@ -5,7 +5,7 @@
  */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { X402SettlementRail } from "../x402-rail.js";
-import { SettlementRailRegistry } from "../index.js";
+import { SettlementRailRegistry, isPayoutNotSent, PayoutNotSentError } from "../index.js";
 import { isDepositableRail } from "@motebit/sdk";
 import type { X402FacilitatorClient } from "../x402-rail.js";
 
@@ -121,6 +121,30 @@ describe("X402SettlementRail", () => {
       await expect(rail.withdraw("agent-001", 5.0, "USDC", "", "k3")).rejects.toThrow(
         "Destination address is required",
       );
+    });
+
+    it("a rejection before anything is signed is a PayoutNotSentError; a facilitator answer never is", async () => {
+      const zero = await rail.withdraw("agent-001", 0, "USDC", "0xDest", "k5").catch((e) => e);
+      expect(zero).toBeInstanceOf(PayoutNotSentError);
+      expect(isPayoutNotSent(zero)).toBe(true);
+      const noDest = await rail.withdraw("agent-001", 5.0, "USDC", "", "k6").catch((e) => e);
+      expect(isPayoutNotSent(noDest)).toBe(true);
+      expect(facilitator.settle).not.toHaveBeenCalled();
+
+      (facilitator.settle as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+        success: false,
+        transaction: "",
+        network: "eip155:84532",
+        errorReason: "insufficient_funds",
+      });
+      const refused = await rail.withdraw("agent-001", 5.0, "USDC", "0xDest", "k7").catch((e) => e);
+      expect(isPayoutNotSent(refused)).toBe(false);
+      (facilitator.settle as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error("timeout"));
+      const timedOut = await rail
+        .withdraw("agent-001", 5.0, "USDC", "0xDest", "k8")
+        .catch((e) => e);
+      expect(isPayoutNotSent(timedOut)).toBe(false);
+      expect(isPayoutNotSent({ payoutNotSent: true })).toBe(false);
     });
 
     it("throws on facilitator settlement failure", async () => {

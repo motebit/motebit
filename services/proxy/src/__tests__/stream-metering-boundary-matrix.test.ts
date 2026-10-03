@@ -95,12 +95,24 @@ const GEMINI_PRO = "gemini-2.5-pro";
 /** Gemini thinking tokens — billed as output, reported only in total_tokens. */
 const THINKING = 3_000;
 /** $/MTok, restated here so the TRUE cost is independent of the route's pricing code. */
-const RATES: Record<string, { input: number; output: number }> = {
+/** List rates; `longContext` is the whole-turn rate once the prompt exceeds its threshold. */
+const RATES: Record<
+  string,
+  {
+    input: number;
+    output: number;
+    longContext?: { abovePromptTokens: number; input: number; output: number };
+  }
+> = {
   "claude-sonnet-4-6": { input: 3.0, output: 15.0 },
   "gpt-5.4": { input: 2.5, output: 15.0 },
   "llama-3.3-70b-versatile": { input: 0.59, output: 0.79 },
   "gemini-2.5-flash": { input: 0.3, output: 2.5 },
-  "gemini-2.5-pro": { input: 1.25, output: 10.0 },
+  "gemini-2.5-pro": {
+    input: 1.25,
+    output: 10.0,
+    longContext: { abovePromptTokens: 200_000, input: 2.5, output: 15.0 },
+  },
 };
 const MAX_TOKENS: Record<MaxTok, unknown> = {
   absent: undefined,
@@ -124,7 +136,12 @@ interface Truth {
  * 1.25x input, 1-hour cache write 2x input), plus the proxy's 20% margin.
  */
 function trueCostMicro(model: string, t: Truth): number {
-  const r = RATES[model]!;
+  const listed = RATES[model]!;
+  const prompt = t.input + t.cacheWrite5m + t.cacheWrite1h;
+  const r =
+    listed.longContext != null && prompt > listed.longContext.abovePromptTokens
+      ? listed.longContext
+      : listed;
   const usd =
     (t.input * r.input +
       t.cacheWrite5m * r.input * 1.25 +
@@ -556,11 +573,17 @@ describe("stream metering boundary matrix — charged for what the provider cons
 
   it("the restated rates match the route's price table", () => {
     for (const [model, r] of Object.entries(RATES)) {
-      expect(validation.calculateCostMicro(model, 1_000_000, 0)).toBe(
-        Math.ceil(r.input * 1.2 * 1_000_000),
+      // Base tier: 100k prompt tokens (inside every tier threshold).
+      expect(validation.calculateCostMicro(model, 100_000, 0)).toBe(
+        Math.ceil(r.input * 0.1 * 1.2 * 1_000_000),
       );
       expect(validation.calculateCostMicro(model, 0, 1_000_000)).toBe(
         Math.ceil(r.output * 1.2 * 1_000_000),
+      );
+      // Long-context tier: 1M prompt tokens bill the whole turn at the tier rate.
+      const lc = r.longContext ?? r;
+      expect(validation.calculateCostMicro(model, 1_000_000, 1_000_000)).toBe(
+        Math.ceil((lc.input + lc.output) * 1.2 * 1_000_000),
       );
     }
   });
