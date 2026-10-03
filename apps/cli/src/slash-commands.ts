@@ -1849,8 +1849,12 @@ export async function handleSlashCommand(
         console.log(`Task submitted: ${taskId.slice(0, 12)}...`);
       } catch (err: unknown) {
         if (err instanceof RelayClientError && err.kind === "http" && err.status === 402) {
-          // The same remedy `motebit delegate` names — never the raw body.
-          for (const line of describeDelegateSubmit402(err.body ?? "")) console.log(line);
+          // The shared 402 reading — never the raw body. `/delegate` parses no
+          // flags, so a P2P remedy names the full shell command.
+          const remedy = describeDelegateSubmit402(err.body ?? "", {
+            repl: { prompt: delegatePrompt, target: targetMotebitId },
+          });
+          for (const line of remedy) console.log(line);
         } else if (err instanceof RelayClientError && err.kind === "http") {
           console.log(`Task submission failed (${err.status}): ${err.body ?? ""}`);
         } else {

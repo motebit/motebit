@@ -312,8 +312,17 @@ async function handleDelegatePlan(
 // motebit delegate "<prompt>" — delegate a task to a worker agent
 // ---------------------------------------------------------------------------
 
-/** The CLI paths that submit a task: `delegate`, and `delegate --plan`. */
-export type DelegateSubmitPath = "direct" | "plan";
+/**
+ * The CLI paths that submit a task: `delegate`, `delegate --plan`, and the
+ * REPL's `/delegate` (which carries what was typed, so its remedy can name
+ * the full shell command — `/delegate` parses no flags).
+ */
+export type DelegateSubmitPath = "direct" | "plan" | { repl: { prompt: string; target: string } };
+
+/** Double-quote `text` for a POSIX shell. */
+function shellQuote(text: string): string {
+  return `"${text.replace(/[\\"$`]/g, "\\$&")}"`;
+}
 
 const P2P_SETTLES_LINE =
   "Paid delegation to another agent settles P2P: the relay does not take deposit-funded payment for it.";
@@ -344,6 +353,13 @@ export function describeDelegateSubmit402(
     code = undefined;
   }
   if (code === "TASK_P2P_PROOF_REQUIRED") {
+    if (typeof path === "object") {
+      const { prompt, target } = path.repl;
+      return [
+        P2P_SETTLES_LINE,
+        `\`/delegate\` cannot pay P2P: exit the REPL and run \`motebit delegate --sovereign ${shellQuote(prompt)} --target ${target}\` to pay the worker directly from your Solana wallet.`,
+      ];
+    }
     return path === "plan"
       ? [
           P2P_SETTLES_LINE,

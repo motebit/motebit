@@ -11,7 +11,8 @@
  *   - sovereign — `motebit delegate --sovereign` (the runtime's `DelegationError`)
  *   - repl      — the REPL's `/delegate`, driven through `handleSlashCommand`
  *                 against a relay answering the submission with the 402 body;
- *                 it must print exactly the lines `motebit delegate` prints
+ *                 it prints `motebit delegate`'s lines, except that a P2P
+ *                 remedy names the shell command (`/delegate` parses no flags)
  */
 import { describe, it, expect, vi, afterEach } from "vitest";
 import { DeviceCapability, StepStatus } from "@motebit/sdk";
@@ -328,10 +329,21 @@ describe("delegate 402 remedy table (relay code × CLI path)", () => {
         expect(posts, "a 402 refusal is not retried").toBe(1);
       });
 
-      it(`repl /delegate: ${row.direct}, the same lines as \`motebit delegate\``, async () => {
+      it(`repl /delegate: ${row.direct}, a remedy runnable from the REPL`, async () => {
         const { lines, posts } = await replDelegateOutput(row.body);
-        const expected = describeDelegateSubmit402(row.body);
+        const expected = describeDelegateSubmit402(row.body, {
+          repl: { prompt: REPL_PROMPT, target: REPL_TARGET },
+        });
         expect(lines).toEqual(expect.arrayContaining(expected));
+        if (row.direct === "sovereign") {
+          // `/delegate` parses no flags: the remedy is the shell command, filled in.
+          expect(lines.join("\n")).toContain(
+            `\`motebit delegate --sovereign "do the \\"paid\\" thing" --target ${REPL_TARGET}\``,
+          );
+        } else {
+          // Off the P2P row, the REPL prints exactly what `motebit delegate` prints.
+          expect(expected).toEqual(describeDelegateSubmit402(row.body));
+        }
         assertRemedy(lines.join("\n"), row.direct, row);
         assertRunnable(lines.join("\n"), "repl");
         expect(lines.join("\n"), "never the raw relay body").not.toMatch(/"status":\s*402/);
