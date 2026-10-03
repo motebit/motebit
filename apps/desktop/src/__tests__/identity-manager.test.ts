@@ -1,5 +1,10 @@
 import { describe, it, expect, vi, beforeAll, beforeEach } from "vitest";
-import { deriveSovereignMotebitId } from "@motebit/crypto";
+import {
+  deriveSovereignMotebitId,
+  generateKeypair,
+  bytesToHex,
+  signKeySuccession,
+} from "@motebit/crypto";
 
 // ---------------------------------------------------------------------------
 // Hoisted mock state
@@ -41,6 +46,9 @@ const mockCtrl = vi.hoisted(() => ({
   },
   decryptShouldThrow: false,
   walletHasValue: false,
+  // What the relay's public succession route serves (pairing, rotated identity).
+  successionChain: [] as unknown[],
+  successionFetches: [] as string[],
   restoreValidateReason: null as string | null,
   writeRestoredIdentityCalls: [] as Array<{ bornAtMs: number; motebitId: string }>,
   lastBootstrapOpts: null as unknown,
@@ -132,6 +140,10 @@ vi.mock("@motebit/sync-engine", () => {
     claim = vi.fn(async () => ({ pairingId: "pid-2", motebitId: "adopted-id" }));
     pollStatus = vi.fn(async () => ({ status: "approved" as const }));
     updateDeviceKey = vi.fn(async () => undefined);
+    getSuccessionChain = vi.fn(async (id: string) => {
+      mockCtrl.successionFetches.push(id);
+      return mockCtrl.successionChain;
+    });
   }
   return {
     PairingClient,
@@ -237,6 +249,8 @@ beforeEach(() => {
   };
   mockCtrl.decryptShouldThrow = false;
   mockCtrl.walletHasValue = false;
+  mockCtrl.successionChain = [];
+  mockCtrl.successionFetches = [];
   mockCtrl.restoreValidateReason = null;
   mockCtrl.writeRestoredIdentityCalls = [];
   mockCtrl.bootstrapResult = {
@@ -976,17 +990,94 @@ describe("IdentityManager.pollPairingStatus", () => {
 });
 
 describe("IdentityManager.completePairing", () => {
-  it("stores motebitId + deviceId without key transfer", async () => {
+  it("REFUSES an approval that carries no key transfer (dropped by the relay) — nothing written", async () => {
     const mgr = new IdentityManager();
+    const before = { motebitId: mgr.motebitId, deviceId: mgr.deviceId };
     const invoke = makeInvoke({});
-    const result = await mgr.completePairing(
+    await expect(
+      mgr.completePairing(
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        invoke as any,
+        { motebitId: "new-mot", deviceId: "new-dev" },
+      ),
+    ).rejects.toThrow(/Pairing refused/);
+    const writes = invoke.mock.calls.filter(
+      ([cmd]) => cmd !== "read_config" && cmd !== "keyring_get",
+    );
+    expect(writes).toEqual([]);
+    expect({ motebitId: mgr.motebitId, deviceId: mgr.deviceId }).toEqual(before);
+  });
+
+  it("adopts a ROTATED sovereign identity through the relay-served succession chain", async () => {
+    const genesis = await generateKeypair();
+    const next = await generateKeypair();
+    const id = await deriveSovereignMotebitId(bytesToHex(genesis.publicKey));
+    mockCtrl.successionChain = [
+      await signKeySuccession(
+        genesis.privateKey,
+        next.privateKey,
+        next.publicKey,
+        genesis.publicKey,
+      ),
+    ];
+    const current = bytesToHex(next.publicKey);
+    const mgr = new IdentityManager();
+    const invoke = makeInvoke({ __keyring_device_private_key: "b".repeat(64) });
+    await mgr.completePairing(
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       invoke as any,
-      { motebitId: "new-mot", deviceId: "new-dev" },
+      { motebitId: id, deviceId: "new-dev" },
+      {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        keyTransfer: { ...mockCtrl.keyTransferPayload, identity_pubkey_check: current } as any,
+        ephemeralPrivateKey: new Uint8Array(32),
+        pairingCode: "ABC",
+        syncUrl: "https://relay",
+        pairingId: "pid-1",
+      },
     );
-    expect(result).toBeUndefined();
-    expect(mgr.motebitId).toBe("new-mot");
-    expect(mgr.deviceId).toBe("new-dev");
+    expect(mockCtrl.successionFetches).toEqual([id]);
+    expect(mgr.motebitId).toBe(id);
+    expect(mgr.publicKey).toBe(current);
+  });
+
+  it("refuses a rotated sovereign identity whose served chain is forged — nothing written", async () => {
+    const genesis = await generateKeypair();
+    const next = await generateKeypair();
+    const id = await deriveSovereignMotebitId(bytesToHex(genesis.publicKey));
+    const rec = await signKeySuccession(
+      genesis.privateKey,
+      next.privateKey,
+      next.publicKey,
+      genesis.publicKey,
+    );
+    mockCtrl.successionChain = [{ ...rec, old_key_signature: "00".repeat(64) }];
+    const mgr = new IdentityManager();
+    const before = { motebitId: mgr.motebitId, deviceId: mgr.deviceId };
+    const invoke = makeInvoke({ __keyring_device_private_key: "b".repeat(64) });
+    await expect(
+      mgr.completePairing(
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        invoke as any,
+        { motebitId: id, deviceId: "new-dev" },
+        {
+          keyTransfer: {
+            ...mockCtrl.keyTransferPayload,
+            identity_pubkey_check: bytesToHex(next.publicKey),
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          } as any,
+          ephemeralPrivateKey: new Uint8Array(32),
+          pairingCode: "ABC",
+          syncUrl: "https://relay",
+          pairingId: "pid-1",
+        },
+      ),
+    ).rejects.toThrow(/does not bind/);
+    const writes = invoke.mock.calls.filter(
+      ([cmd]) => cmd !== "read_config" && cmd !== "keyring_get",
+    );
+    expect(writes).toEqual([]);
+    expect({ motebitId: mgr.motebitId, deviceId: mgr.deviceId }).toEqual(before);
   });
 
   it("installs identity key when no existing wallet balance", async () => {
@@ -1087,28 +1178,33 @@ describe("IdentityManager.completePairing", () => {
     expect(mgr.publicKey).toBe(mockCtrl.keyTransferPayload.identity_pubkey_check);
   });
 
-  it("swallows decrypt failure", async () => {
+  it("REFUSES when the key transfer fails to decrypt — nothing written", async () => {
     mockCtrl.decryptShouldThrow = true;
     const mgr = new IdentityManager();
+    const before = { motebitId: mgr.motebitId, deviceId: mgr.deviceId };
     const invoke = makeInvoke({
       __keyring_device_private_key: "b".repeat(64),
     });
-    const result = await mgr.completePairing(
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      invoke as any,
-      { motebitId: "new-mot", deviceId: "new-dev" },
-      {
+    await expect(
+      mgr.completePairing(
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        keyTransfer: mockCtrl.keyTransferPayload as any,
-        ephemeralPrivateKey: new Uint8Array(32),
-        pairingCode: "ABC",
-        syncUrl: "https://relay",
-        pairingId: "pid-1",
-      },
+        invoke as any,
+        { motebitId: "new-mot", deviceId: "new-dev" },
+        {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          keyTransfer: mockCtrl.keyTransferPayload as any,
+          ephemeralPrivateKey: new Uint8Array(32),
+          pairingCode: "ABC",
+          syncUrl: "https://relay",
+          pairingId: "pid-1",
+        },
+      ),
+    ).rejects.toThrow(/Pairing refused/);
+    const writes = invoke.mock.calls.filter(
+      ([cmd]) => cmd !== "read_config" && cmd !== "keyring_get",
     );
-    // Best-effort — completes without crashing
-    expect(mgr.motebitId).toBe("new-mot");
-    expect(result).toBeUndefined();
+    expect(writes).toEqual([]);
+    expect({ motebitId: mgr.motebitId, deviceId: mgr.deviceId }).toEqual(before);
   });
 });
 

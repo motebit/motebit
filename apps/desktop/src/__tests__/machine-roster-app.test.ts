@@ -3,7 +3,7 @@
  * one roster per identity; disposed BEFORE a restore or a pairing touches
  * the key slot; latched off from stop() until start(); read on connect.
  */
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, afterEach } from "vitest";
 
 // Real, except the restore validator (it is not what these tests are about).
 vi.mock("@motebit/identity-file", async (importOriginal) => ({
@@ -11,8 +11,18 @@ vi.mock("@motebit/identity-file", async (importOriginal) => ({
   validateRestoreRequest: vi.fn(() => Promise.resolve(null)),
 }));
 
+import {
+  buildKeyTransferPayload,
+  bytesToHex,
+  generateKeypair,
+  generateX25519Keypair,
+} from "@motebit/encryption";
 import { DesktopApp, type InvokeFn } from "../index";
 import { DISPOSED, type DesktopMachineRoster } from "../machine-roster";
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
 
 const MID_A = "0190f1a2-0000-7000-8000-00000000000a";
 const MID_B = "0190f1a2-0000-7000-8000-00000000000b";
@@ -40,6 +50,33 @@ function recorder(onCall?: (cmd: string, args?: Record<string, unknown>) => void
     if (cmd === "read_config") return "{}";
     return null;
   }) as InvokeFn;
+}
+
+/**
+ * A genuine key transfer (pairing refuses an approval without one). MID_B is
+ * a legacy id, so it binds at `unverified` to any transferred key. The relay
+ * device-key update is answered OK.
+ */
+async function keyTransferOpts() {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async () => new Response("{}", { status: 200 })),
+  );
+  const identity = await generateKeypair();
+  const eph = generateX25519Keypair();
+  const keyTransfer = await buildKeyTransferPayload(
+    identity.privateKey,
+    bytesToHex(identity.publicKey),
+    eph.publicKey,
+    "ABC123",
+  );
+  return {
+    keyTransfer,
+    ephemeralPrivateKey: eph.privateKey,
+    pairingCode: "ABC123",
+    syncUrl: "https://relay.test",
+    pairingId: "pid-1",
+  };
 }
 
 /** A disposed roster refuses every act before any I/O. */
@@ -106,7 +143,11 @@ describe("DesktopApp.machineRoster", () => {
       if (cmd === "keyring_set") during.push(app.machineRoster(invoke) != null);
     });
     const before = app.machineRoster(invoke)!;
-    await app.completePairing(invoke, { motebitId: MID_B, deviceId: "desk-2" });
+    await app.completePairing(
+      invoke,
+      { motebitId: MID_B, deviceId: "desk-2" },
+      await keyTransferOpts(),
+    );
     expect(during.length).toBeGreaterThan(0);
     expect(during.every((live) => !live)).toBe(true);
     expect(await disposed(before)).toBe(true);
@@ -126,7 +167,11 @@ describe("DesktopApp.machineRoster", () => {
     }) as InvokeFn;
     app.machineRoster(invoke);
     await expect(
-      app.completePairing(invoke, { motebitId: MID_B, deviceId: "desk-2" }),
+      app.completePairing(
+        invoke,
+        { motebitId: MID_B, deviceId: "desk-2" },
+        await keyTransferOpts(),
+      ),
     ).rejects.toThrow("disk full");
     expect(app.machineRoster(invoke)).toBeNull();
     app.stop();

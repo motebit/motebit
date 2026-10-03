@@ -188,4 +188,24 @@ export class PairingClient {
       throw new Error(sanitizeRelayText(err.error ?? `Device key update failed: ${res.status}`));
     }
   }
+  /**
+   * Device B: fetch the identity's key-succession chain from the relay's public
+   * succession route. The chain is self-verifying — the caller verifies it
+   * (`verifyPairingIdentityBinding`); this method only transports it, so a
+   * relay that withholds or forges it can only cause a refusal.
+   */
+  async getSuccessionChain(
+    motebitId: string,
+  ): Promise<import("@motebit/protocol").KeySuccessionRecord[]> {
+    const res = await fetch(
+      `${this.relayUrl}/api/v1/agents/${encodeURIComponent(motebitId)}/succession`,
+    );
+    if (!res.ok) {
+      const err = (await res.json().catch(() => ({ error: res.statusText }))) as { error?: string };
+      throw new Error(sanitizeRelayText(err.error ?? `Succession fetch failed: ${res.status}`));
+    }
+    const { chain } = (await res.json()) as { chain?: unknown };
+    if (!Array.isArray(chain)) throw new Error("Succession response carries no chain");
+    return chain as import("@motebit/protocol").KeySuccessionRecord[];
+  }
 }

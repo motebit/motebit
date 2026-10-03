@@ -2140,7 +2140,9 @@ export interface VerifyOptions {
 }
 
 // @public
-export function verifyPairingIdentityBinding(motebitId: string, transferredPublicKeyHex: string): Promise<PairingIdentityBindingResult>;
+export function verifyPairingIdentityBinding(motebitId: string, transferredPublicKeyHex: string, options?: {
+    successionChain?: readonly SuccessionRecord[] | (() => Promise<readonly SuccessionRecord[]>);
+}): Promise<PairingIdentityBindingResult>;
 
 // @public
 export function verifyReceipt(receipt: ExecutionReceipt, options?: VerifyOptions): Promise<ReceiptVerifyResult>;

@@ -6,7 +6,7 @@
  * Both now read the shared `identityVerifyOutcome` from @motebit/crypto.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { bytesToHex, generateKeypair } from "@motebit/encryption";
@@ -14,6 +14,7 @@ import { generate, rotate } from "@motebit/identity-file";
 
 import { handleVerify } from "../subcommands/verify.js";
 import { performRotation, type RotationDeps } from "../rotation.js";
+import { assertRotatedIdentityIntact } from "../identity.js";
 
 async function forgedChainIdentityFile(): Promise<string> {
   const oldKp = await generateKeypair();
@@ -82,5 +83,33 @@ describe("motebit rotate", () => {
       syncUrl: "http://127.0.0.1:1",
     } as unknown as RotationDeps;
     await expect(performRotation(deps)).rejects.toThrow(/succession/i);
+  });
+});
+
+describe("motebit verify <bundle dir>", () => {
+  it("rejects (exit 1) a bundle whose motebit.md has a validly signed file over an invalid succession chain", async () => {
+    const dir = join(tmp, "bundle");
+    mkdirSync(dir);
+    writeFileSync(join(dir, "motebit.md"), await forgedChainIdentityFile(), "utf-8");
+    const exit = vi.spyOn(process, "exit").mockImplementation(((code?: number) => {
+      throw new Error(`exit:${code}`);
+    }) as never);
+    const out: string[] = [];
+    vi.spyOn(console, "log").mockImplementation((...a: unknown[]) => void out.push(a.join(" ")));
+    vi.spyOn(console, "error").mockImplementation((...a: unknown[]) => void out.push(a.join(" ")));
+
+    await expect(handleVerify(dir)).rejects.toThrow("exit:1");
+    expect(exit).toHaveBeenCalledWith(1);
+    const text = out.join("\n");
+    expect(text).toMatch(/Identity \(motebit\.md\):\s+INVALID — succession/i);
+    expect(text).not.toMatch(/PASSED/);
+  });
+});
+
+describe("post-rotation self-check", () => {
+  it("refuses a rotated file whose signature is valid but whose succession chain is not", async () => {
+    await expect(assertRotatedIdentityIntact(await forgedChainIdentityFile())).rejects.toThrow(
+      /self-verification.*succession/i,
+    );
   });
 });

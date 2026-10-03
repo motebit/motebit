@@ -137,7 +137,9 @@ export class MobilePairingManager {
    */
   /**
    * @returns A wallet warning string if key transfer was skipped due to
-   * existing funds, or undefined if wallet was unified (or no transfer attempted).
+   * existing funds, or undefined if wallet was unified. Throws ("Pairing refused…")
+   * with nothing written when the transfer is missing, undecryptable, or does not
+   * bind to the relay-supplied motebit_id.
    */
   async completePairing(
     result: { motebitId: string; deviceId: string },
@@ -154,68 +156,77 @@ export class MobilePairingManager {
     let identitySeed: Uint8Array | undefined;
 
     try {
-      if (keyTransferOpts) {
-        const { keyTransfer, ephemeralPrivateKey, pairingCode } = keyTransferOpts;
-        try {
-          identitySeed = await decryptKeyTransfer(keyTransfer, ephemeralPrivateKey, pairingCode);
-        } catch (err) {
-          // eslint-disable-next-line no-console -- operator diagnostic: recoverable key-transfer degradation
-          console.warn("Key transfer failed, device keeps its own keypair:", err);
-        }
-        if (identitySeed !== undefined) {
-          // The relay names the motebit_id; the key arrived end-to-end from
-          // the paired device (identity_pubkey_check is verified against the
-          // seed during decryption). An id the key contradicts is refused
-          // before anything is written.
-          const binding = await verifyPairingIdentityBinding(
-            result.motebitId,
-            keyTransfer.identity_pubkey_check,
-          );
-          if (!binding.accepted) throw new Error(`Pairing refused: ${binding.reason}`);
-        }
+      // Every in-tree Device B claims with an X25519 key and every Device A
+      // answers it with a key transfer, so an approval without one — or one
+      // that fails to decrypt — means the relay dropped or tampered with it.
+      // Refuse before anything is written: the relay-supplied motebit_id is
+      // only adopted once the transferred key is shown to bind to it.
+      if (!keyTransferOpts) {
+        throw new Error("Pairing refused: the approval carried no identity key transfer");
       }
+      const { keyTransfer, ephemeralPrivateKey, pairingCode } = keyTransferOpts;
+      try {
+        identitySeed = await decryptKeyTransfer(keyTransfer, ephemeralPrivateKey, pairingCode);
+      } catch (err) {
+        throw new Error("Pairing refused: the identity key transfer could not be verified", {
+          cause: err,
+        });
+      }
+      // The key arrived end-to-end from the paired device (identity_pubkey_check
+      // is verified against the seed during decryption). A rotated sovereign
+      // identity binds through its succession chain, fetched from the relay's
+      // public route and verified here — withheld or forged, it only refuses.
+      const binding = await verifyPairingIdentityBinding(
+        result.motebitId,
+        keyTransfer.identity_pubkey_check,
+        {
+          successionChain: () => {
+            if (syncUrl == null || syncUrl === "") return Promise.resolve([]);
+            return new PairingClient({ relayUrl: syncUrl }).getSuccessionChain(result.motebitId);
+          },
+        },
+      );
+      if (!binding.accepted) throw new Error(`Pairing refused: ${binding.reason}`);
 
       await keyring.set(KEYRING_KEYS.motebitId, result.motebitId);
       await keyring.set("device_id", result.deviceId);
 
       // Install the transferred identity key
-      if (keyTransferOpts && identitySeed !== undefined) {
-        const { keyTransfer, pairingId } = keyTransferOpts;
-        try {
-          // Safety check: refuse key transfer if old wallet has funds
-          const oldPrivKeyHex = await keyring.get("device_private_key");
-          if (oldPrivKeyHex) {
-            const oldSeedBytes = hexToBytes(oldPrivKeyHex);
-            try {
-              const walletCheck = await checkPreTransferBalance(oldSeedBytes, identitySeed);
-              if (walletCheck.hasAnyValue) {
-                walletWarning = formatWalletWarning(walletCheck);
-                // Don't replace the key — user must sweep first
-                // Fall through to finalize identity + sync without key transfer
-              }
-            } finally {
-              secureErase(oldSeedBytes);
+      const { pairingId } = keyTransferOpts;
+      try {
+        // Safety check: refuse key transfer if old wallet has funds
+        const oldPrivKeyHex = await keyring.get("device_private_key");
+        if (oldPrivKeyHex) {
+          const oldSeedBytes = hexToBytes(oldPrivKeyHex);
+          try {
+            const walletCheck = await checkPreTransferBalance(oldSeedBytes, identitySeed);
+            if (walletCheck.hasAnyValue) {
+              walletWarning = formatWalletWarning(walletCheck);
+              // Don't replace the key — user must sweep first
+              // Fall through to finalize identity + sync without key transfer
             }
+          } finally {
+            secureErase(oldSeedBytes);
           }
-
-          if (!walletWarning) {
-            const newPrivHex = bytesToHex(identitySeed);
-            await keyring.set("device_private_key", newPrivHex);
-
-            // The new public key is identity_pubkey_check (verified during decryption)
-            const newPubHex = keyTransfer.identity_pubkey_check;
-            this.deps.setPublicKey(newPubHex);
-
-            // Update relay device registration with new public key
-            if (syncUrl) {
-              const client = new PairingClient({ relayUrl: syncUrl });
-              await client.updateDeviceKey(pairingId, newPubHex);
-            }
-          }
-        } catch (err) {
-          // eslint-disable-next-line no-console -- operator diagnostic: recoverable key-transfer degradation
-          console.warn("Key transfer failed, device keeps its own keypair:", err);
         }
+
+        if (!walletWarning) {
+          const newPrivHex = bytesToHex(identitySeed);
+          await keyring.set("device_private_key", newPrivHex);
+
+          // The new public key is identity_pubkey_check (verified during decryption)
+          const newPubHex = keyTransfer.identity_pubkey_check;
+          this.deps.setPublicKey(newPubHex);
+
+          // Update relay device registration with new public key
+          if (syncUrl) {
+            const client = new PairingClient({ relayUrl: syncUrl });
+            await client.updateDeviceKey(pairingId, newPubHex);
+          }
+        }
+      } catch (err) {
+        // eslint-disable-next-line no-console -- operator diagnostic: recoverable key-transfer degradation
+        console.warn("Key transfer failed, device keeps its own keypair:", err);
       }
     } finally {
       if (identitySeed !== undefined) secureErase(identitySeed);

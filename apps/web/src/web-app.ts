@@ -4446,8 +4446,11 @@ export class UnbootedWebApp {
   }
 
   /**
-   * Complete pairing on Device B. If key transfer payload + ephemeral key are provided,
-   * decrypts the identity seed and replaces the device's private key.
+   * Complete pairing on Device B. The key transfer is required: it is
+   * decrypted and the relay-supplied motebitId is checked to bind to the
+   * transferred key before anything changes; the seed then replaces the
+   * device's private key. Throws ("Pairing refused…") with nothing changed
+   * when the transfer is missing, undecryptable, or does not bind.
    */
   async completePairing(
     { motebitId, deviceId }: { motebitId: string; deviceId: string },
@@ -4463,25 +4466,36 @@ export class UnbootedWebApp {
     let identitySeed: Uint8Array | undefined;
 
     try {
-      if (keyTransferOpts) {
-        const { keyTransfer, ephemeralPrivateKey, pairingCode } = keyTransferOpts;
-        try {
-          identitySeed = await decryptKeyTransfer(keyTransfer, ephemeralPrivateKey, pairingCode);
-        } catch {
-          // Key transfer failed — device keeps its own keypair, wallet warning stays undefined
-        }
-        if (identitySeed !== undefined) {
-          // The relay names the motebit_id; the key arrived end-to-end from
-          // the paired device (identity_pubkey_check is verified against the
-          // seed during decryption). An id the key contradicts is refused
-          // before anything — in memory or at rest — changes.
-          const binding = await verifyPairingIdentityBinding(
-            motebitId,
-            keyTransfer.identity_pubkey_check,
-          );
-          if (!binding.accepted) throw new Error(`Pairing refused: ${binding.reason}`);
-        }
+      // Every in-tree Device B claims with an X25519 key and every Device A
+      // answers it with a key transfer, so an approval without one — or one
+      // that fails to decrypt — means the relay dropped or tampered with it.
+      // Refuse before anything — in memory or at rest — changes: the
+      // relay-supplied motebit_id is adopted only once the transferred key is
+      // shown to bind to it.
+      if (!keyTransferOpts) {
+        throw new Error("Pairing refused: the approval carried no identity key transfer");
       }
+      const { keyTransfer, ephemeralPrivateKey, pairingCode, syncUrl } = keyTransferOpts;
+      try {
+        identitySeed = await decryptKeyTransfer(keyTransfer, ephemeralPrivateKey, pairingCode);
+      } catch (err) {
+        throw new Error("Pairing refused: the identity key transfer could not be verified", {
+          cause: err,
+        });
+      }
+      // The key arrived end-to-end from the paired device (identity_pubkey_check
+      // is verified against the seed during decryption). A rotated sovereign
+      // identity binds through its succession chain, fetched from the relay's
+      // public route and verified here — withheld or forged, it only refuses.
+      const binding = await verifyPairingIdentityBinding(
+        motebitId,
+        keyTransfer.identity_pubkey_check,
+        {
+          successionChain: () =>
+            new PairingClient({ relayUrl: syncUrl }).getSuccessionChain(motebitId),
+        },
+      );
+      if (!binding.accepted) throw new Error(`Pairing refused: ${binding.reason}`);
 
       // Update in-memory identity state
       this._motebitId = motebitId;
@@ -4490,37 +4504,35 @@ export class UnbootedWebApp {
       this._machineRoster?.dispose();
       this._machineRoster = null;
 
-      if (keyTransferOpts && identitySeed !== undefined) {
-        const { keyTransfer, syncUrl, pairingId } = keyTransferOpts;
-        try {
-          // Safety check: refuse key transfer if old wallet has funds
-          const oldPrivKeyHex = await this.keyStore.loadPrivateKey();
-          if (oldPrivKeyHex) {
-            const oldSeedBytes = hexToBytes(oldPrivKeyHex);
-            try {
-              const walletCheck = await checkPreTransferBalance(oldSeedBytes, identitySeed);
-              if (walletCheck.hasAnyValue) {
-                walletWarning = formatWalletWarning(walletCheck);
-              }
-            } finally {
-              secureErase(oldSeedBytes);
+      const { pairingId } = keyTransferOpts;
+      try {
+        // Safety check: refuse key transfer if old wallet has funds
+        const oldPrivKeyHex = await this.keyStore.loadPrivateKey();
+        if (oldPrivKeyHex) {
+          const oldSeedBytes = hexToBytes(oldPrivKeyHex);
+          try {
+            const walletCheck = await checkPreTransferBalance(oldSeedBytes, identitySeed);
+            if (walletCheck.hasAnyValue) {
+              walletWarning = formatWalletWarning(walletCheck);
             }
+          } finally {
+            secureErase(oldSeedBytes);
           }
-
-          if (!walletWarning) {
-            const newPrivHex = bytesToHex(identitySeed);
-            await this.keyStore.storePrivateKey(newPrivHex);
-
-            // The new public key is identity_pubkey_check (verified during decryption)
-            this._publicKeyHex = keyTransfer.identity_pubkey_check;
-
-            // Update relay device registration
-            const client = new PairingClient({ relayUrl: syncUrl });
-            await client.updateDeviceKey(pairingId, this._publicKeyHex);
-          }
-        } catch {
-          // Key transfer failed — device keeps its own keypair, wallet warning stays undefined
         }
+
+        if (!walletWarning) {
+          const newPrivHex = bytesToHex(identitySeed);
+          await this.keyStore.storePrivateKey(newPrivHex);
+
+          // The new public key is identity_pubkey_check (verified during decryption)
+          this._publicKeyHex = keyTransfer.identity_pubkey_check;
+
+          // Update relay device registration
+          const client = new PairingClient({ relayUrl: syncUrl });
+          await client.updateDeviceKey(pairingId, this._publicKeyHex);
+        }
+      } catch {
+        // Key transfer failed — device keeps its own keypair, wallet warning stays undefined
       }
     } finally {
       if (identitySeed !== undefined) secureErase(identitySeed);

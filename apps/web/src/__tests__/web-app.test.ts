@@ -1017,8 +1017,11 @@ describe("Identity integrity — succession chain + pairing binding", () => {
         app as unknown as { keyStore: { loadPrivateKey(): Promise<string | null> } }
       ).keyStore.loadPrivateKey(),
     ).toBe(before.privateKey);
-    // The relay was never told this device now holds the identity key.
-    expect(fetchSpy).not.toHaveBeenCalled();
+    // The relay was never told this device now holds the identity key (the
+    // only call is the read-only succession lookup the refusal consulted).
+    expect(fetchSpy.mock.calls.map((c: unknown[]) => String(c[0]))).toEqual([
+      `https://relay.test/api/v1/agents/${wrongId}/succession`,
+    ]);
     app.stop();
   });
 
@@ -1054,5 +1057,114 @@ describe("Identity integrity — succession chain + pairing binding", () => {
     expect(app.motebitId).toBe(boundId);
     expect(app.publicKeyHex).toBe(identityPubHex);
     app.stop();
+  });
+  async function pairingFixture(enc: typeof import("@motebit/encryption")) {
+    const app = new WebApp();
+    await app.bootstrap();
+    const keyStore = (app as unknown as { keyStore: { loadPrivateKey(): Promise<string | null> } })
+      .keyStore;
+    const before = {
+      motebitId: app.motebitId,
+      deviceId: app.deviceId,
+      publicKeyHex: app.publicKeyHex,
+      privateKey: await keyStore.loadPrivateKey(),
+    };
+    const unchanged = async () => {
+      expect(app.motebitId).toBe(before.motebitId);
+      expect(app.deviceId).toBe(before.deviceId);
+      expect(app.publicKeyHex).toBe(before.publicKeyHex);
+      expect(await keyStore.loadPrivateKey()).toBe(before.privateKey);
+    };
+    // A sovereign identity that has rotated once; Device A transfers its CURRENT key.
+    const genesis = await enc.generateKeypair();
+    const current = await enc.generateKeypair();
+    const id = await enc.deriveSovereignMotebitId(enc.bytesToHex(genesis.publicKey));
+    const chain = [
+      await enc.signKeySuccession(
+        genesis.privateKey,
+        current.privateKey,
+        current.publicKey,
+        genesis.publicKey,
+      ),
+    ];
+    const claimer = enc.generateX25519Keypair();
+    const keyTransfer = await enc.buildKeyTransferPayload(
+      current.privateKey,
+      enc.bytesToHex(current.publicKey),
+      claimer.publicKey,
+      "ABC123",
+    );
+    const opts = {
+      keyTransfer,
+      ephemeralPrivateKey: claimer.privateKey,
+      pairingCode: "ABC123",
+      syncUrl: "https://relay.test",
+      pairingId: "pid-1",
+    };
+    return { app, unchanged, id, chain, current: enc.bytesToHex(current.publicKey), opts };
+  }
+
+  function relayServing(chain: unknown[]) {
+    const fetchSpy = vi.fn(async (url: string) =>
+      url.endsWith("/succession")
+        ? new Response(JSON.stringify({ chain }), { status: 200 })
+        : new Response("{}", { status: 200 }),
+    );
+    vi.stubGlobal("fetch", fetchSpy);
+    return fetchSpy;
+  }
+
+  it("completePairing adopts a ROTATED sovereign identity through the relay-served succession chain", async () => {
+    const enc = await import("@motebit/encryption");
+    const f = await pairingFixture(enc);
+    const fetchSpy = relayServing(f.chain);
+    await f.app.completePairing({ motebitId: f.id, deviceId: "dev-paired" }, f.opts);
+    expect(fetchSpy.mock.calls.map(([u]) => u)).toContain(
+      `https://relay.test/api/v1/agents/${f.id}/succession`,
+    );
+    expect(f.app.motebitId).toBe(f.id);
+    expect(f.app.publicKeyHex).toBe(f.current);
+    f.app.stop();
+  });
+
+  it("completePairing refuses a rotated sovereign identity whose served chain is forged — nothing written", async () => {
+    const enc = await import("@motebit/encryption");
+    const f = await pairingFixture(enc);
+    relayServing([{ ...f.chain[0]!, old_key_signature: "00".repeat(64) }]);
+    await expect(
+      f.app.completePairing({ motebitId: f.id, deviceId: "dev-paired" }, f.opts),
+    ).rejects.toThrow(/does not bind/);
+    await f.unchanged();
+    f.app.stop();
+  });
+
+  it("completePairing REFUSES an approval that carries no key transfer (dropped by the relay) — nothing written", async () => {
+    const enc = await import("@motebit/encryption");
+    const f = await pairingFixture(enc);
+    const fetchSpy = relayServing([]);
+    await expect(
+      f.app.completePairing({ motebitId: f.id, deviceId: "dev-paired" }),
+    ).rejects.toThrow(/Pairing refused/);
+    await f.unchanged();
+    expect(fetchSpy).not.toHaveBeenCalled();
+    f.app.stop();
+  });
+
+  it("completePairing REFUSES a key transfer that fails to decrypt (tampered) — nothing written", async () => {
+    const enc = await import("@motebit/encryption");
+    const f = await pairingFixture(enc);
+    const fetchSpy = relayServing(f.chain);
+    await expect(
+      f.app.completePairing(
+        { motebitId: "019e2aa5-7649-7fa3-ab27-2e4d9d4f0ffb", deviceId: "dev-paired" },
+        {
+          ...f.opts,
+          keyTransfer: { ...f.opts.keyTransfer, identity_pubkey_check: "ab".repeat(32) },
+        },
+      ),
+    ).rejects.toThrow(/Pairing refused/);
+    await f.unchanged();
+    expect(fetchSpy).not.toHaveBeenCalled();
+    f.app.stop();
   });
 });

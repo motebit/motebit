@@ -1389,6 +1389,27 @@ export function identityVerifyOutcome(result: VerifyResult): { valid: boolean; e
   return { valid: true };
 }
 
+// Does a verified succession chain link the genesis key `motebitId` commits to
+// to `currentKeyHex`? Fail-closed: any load error, empty chain, guardian link,
+// bad signature, break, or mismatched endpoint → false.
+async function rotatedKeyBindsSovereignId(
+  motebitId: string,
+  currentKeyHex: string,
+  source: readonly SuccessionRecord[] | (() => Promise<readonly SuccessionRecord[]>),
+): Promise<boolean> {
+  try {
+    const chain = [...(typeof source === "function" ? await source() : source)];
+    if (chain.length === 0 || chain.some((r) => r.recovery === true)) return false;
+    const terminal = chain[chain.length - 1]!.new_public_key;
+    if (terminal.toLowerCase() !== currentKeyHex.toLowerCase()) return false;
+    const chk = await verifySuccessionChain(chain, terminal);
+    if (!chk.valid) return false;
+    return await verifySovereignBinding(motebitId, chain[0]!.old_public_key);
+  } catch {
+    return false;
+  }
+}
+
 /** Outcome of {@link verifyPairingIdentityBinding}. */
 export interface PairingIdentityBindingResult {
   /** False ⇒ the device MUST NOT persist the id (nor the transferred key under it). */
@@ -1409,11 +1430,19 @@ const SELF_CERTIFYING_UUID =
  * offline, with no operator trust:
  *
  *  - the id is the self-certifying commitment to the key → accepted (`sovereign`);
- *  - the id is self-certifying (UUIDv8 / `did:key`) but commits to a DIFFERENT
- *    key → refused (`invalid`): adopting it would pin the device to an identity
- *    the transferred key contradicts. (A rotated self-certifying identity's
- *    current key also lands here — its succession chain is not carried by
- *    pairing, so the binding cannot be shown and the pairing fails closed.)
+ *  - the id is self-certifying (UUIDv8 / `did:key`) and the key is its CURRENT
+ *    key after rotation → accepted (`sovereign`) only through
+ *    `options.successionChain`: the chain must verify (every link signed by the
+ *    key it departs, continuous, temporally ordered), its genesis must be the
+ *    key the id commits to, and its terminal key must be the transferred key.
+ *    The chain is self-verifying, so its source (typically the relay's public
+ *    `GET /api/v1/agents/:motebitId/succession`) is untrusted: a withheld,
+ *    failed or forged chain only refuses, never accepts. Guardian-recovery
+ *    links are refused here (no guardian key is pinned at pairing; a
+ *    source-supplied one would let that source forge the lineage).
+ *  - the id is self-certifying but no verified lineage reaches the key → refused
+ *    (`invalid`): adopting it would pin the device to an identity the
+ *    transferred key contradicts.
  *  - the id commits to no key (a legacy UUIDv7 or keyless mint) → accepted at
  *    `unverified`, the rung such an id reads at everywhere else. No offline
  *    check can confirm or contradict it.
@@ -1423,15 +1452,25 @@ const SELF_CERTIFYING_UUID =
 export async function verifyPairingIdentityBinding(
   motebitId: string,
   transferredPublicKeyHex: string,
+  options?: {
+    /** The id's key-succession chain, or a loader consulted only when the direct derivation fails. */
+    successionChain?: readonly SuccessionRecord[] | (() => Promise<readonly SuccessionRecord[]>);
+  },
 ): Promise<PairingIdentityBindingResult> {
   if (await verifySovereignBinding(motebitId, transferredPublicKeyHex)) {
     return { accepted: true, identityBinding: "sovereign" };
   }
+  const malformedKey = !/^[0-9a-f]{64}$/i.test(transferredPublicKeyHex);
+  const selfCertifying = motebitId.startsWith("did:key:") || SELF_CERTIFYING_UUID.test(motebitId);
   if (
-    motebitId.startsWith("did:key:") ||
-    SELF_CERTIFYING_UUID.test(motebitId) ||
-    !/^[0-9a-f]{64}$/i.test(transferredPublicKeyHex)
+    selfCertifying &&
+    !malformedKey &&
+    options?.successionChain !== undefined &&
+    (await rotatedKeyBindsSovereignId(motebitId, transferredPublicKeyHex, options.successionChain))
   ) {
+    return { accepted: true, identityBinding: "sovereign" };
+  }
+  if (selfCertifying || malformedKey) {
     return {
       accepted: false,
       identityBinding: "invalid",

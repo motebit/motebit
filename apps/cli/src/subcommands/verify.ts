@@ -241,13 +241,15 @@ async function verifyBundle(dirPath: string): Promise<void> {
     }
     if (content !== "") {
       const result = await verify(content, { expectedType: "identity" });
-      if (result.type === "identity" && result.valid && result.identity) {
+      // Intact = signature AND succession chain (the shared fold).
+      const intact = identityVerifyOutcome(result);
+      if (result.type === "identity" && intact.valid && result.identity) {
         motebitId = result.identity.motebit_id;
         identityDid = result.did ?? null;
         const idShort = motebitId.length > 12 ? motebitId.slice(0, 12) + "..." : motebitId;
         console.log(`  Identity (motebit.md):     valid — motebit_id: ${idShort}`);
       } else {
-        const msg = result.errors?.[0]?.message ?? "signature verification failed";
+        const msg = intact.error ?? "signature verification failed";
         console.log(`  Identity (motebit.md):     INVALID — ${sanitizeRelayText(msg)}`);
         passed = false;
       }

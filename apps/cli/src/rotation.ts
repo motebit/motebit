@@ -22,7 +22,7 @@ import {
   type IdentityChange,
 } from "./config.js";
 import { currentModeOr, writeFileAtomic } from "./durable-file.js";
-import { decryptPrivateKey, encryptPrivateKey } from "./identity.js";
+import { assertRotatedIdentityIntact, decryptPrivateKey, encryptPrivateKey } from "./identity.js";
 import type { PendingRotation, PendingRotationPort } from "./pending-rotation.js";
 
 export interface RotationDeps {
@@ -182,12 +182,7 @@ export async function performRotation(deps: RotationDeps): Promise<RotationOutco
           newPrivateKey: hexToBytes(privateKeyHex),
           successionRecord: record,
         });
-        const check = await verify(rotated, { expectedType: "identity" });
-        if (!check.valid) {
-          throw new Error(
-            `rotated identity file failed self-verification; nothing was changed: ${check.errors?.[0]?.message ?? "invalid"}`,
-          );
-        }
+        await assertRotatedIdentityIntact(rotated);
         // Atomic: a torn write would leave the succession's only signed record unparseable.
         writeFileAtomic(deps.identityPath, rotated, currentModeOr(deps.identityPath, 0o644));
       }
